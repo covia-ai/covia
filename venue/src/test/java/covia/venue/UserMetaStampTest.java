@@ -33,7 +33,7 @@ import convex.core.lang.RT;
  */
 public class UserMetaStampTest {
 
-	/** The venue's write clock. Tests may share it, since it only moves forward. */
+	/** The venue's write clock. Tests may share it, since they only move it forward. */
 	private static final DrivenClock CLOCK = DrivenClock.at(Instant.ofEpochMilli(1_000));
 	private static Engine engine;
 

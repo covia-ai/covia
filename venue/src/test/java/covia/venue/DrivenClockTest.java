@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.io.IOException;
 import java.time.Instant;
+import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -24,9 +25,10 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
+import covia.adapter.TestAdapter;
 import covia.api.Fields;
-import covia.exception.InvalidInputException;
 import covia.grid.Job;
+import covia.grid.Status;
 import covia.grid.hitl.Hitl;
 import covia.lattice.CoviaPath;
 
@@ -67,24 +69,46 @@ class DrivenClockTest {
 	}
 
 	@Test
-	void theClockMovesForwardOrStandsStillAndNeverBack() {
+	void theClockMovesEitherWayOrStandsStill() {
 		Instant start = Instant.parse("2024-06-01T00:00:00Z");
 		DrivenClock clock = DrivenClock.at(start);
 		long t = start.toEpochMilli();
 		assertEquals(t, clock.millis());
 		assertEquals(t + MINUTE, clock.advance(MINUTE));
 		assertEquals(t + MINUTE, clock.advance(0), "a step of zero is allowed");
-		long later = t + 2 * MINUTE;
-		clock.set(later);
-		clock.set(later);
-		assertEquals(later, clock.millis());
-		assertEquals(CVMLong.create(later), clock.policy().currentTimestamp(), "its policy reads the same time");
+		assertEquals(t, clock.advance(-MINUTE), "and a step back");
+		clock.set(t + 2 * MINUTE);
+		assertEquals(t + 2 * MINUTE, clock.millis());
+		clock.set(t - MINUTE);
+		assertEquals(t - MINUTE, clock.millis(), "it can be set earlier");
+		assertEquals(CVMLong.create(t - MINUTE), clock.policy().currentTimestamp(), "its policy reads the same time");
+	}
 
-		assertEquals(DrivenClock.BACKWARDS.formatted(later, t),
-			assertThrows(InvalidInputException.class, () -> clock.set(t)).getMessage());
-		assertEquals(DrivenClock.BACKWARDS.formatted(later, later - 1),
-			assertThrows(InvalidInputException.class, () -> clock.advance(-1)).getMessage());
-		assertEquals(later, clock.millis(), "a refused step leaves the time alone");
+	@Test
+	void theVenueCarriesOnWhenTheClockStepsBack(TestInfo info) throws Exception {
+		RequestContext ctx = RequestContext.of(TestEngine.uniqueDID(info));
+		String name = "clock-back-" + ctx.getUserDID();
+		try (TestAdapter.TestGate gate = TestAdapter.createGate(name)) {
+			long late = CLOCK.advance(10 * MINUTE);
+			Job held = engine.jobs().invokeOperation("v/test/ops/hold", Maps.of("gate", name), ctx);
+			assertTrue(gate.awaitEntered(10, TimeUnit.SECONDS), "the job is running");
+			Job before = engine.jobs().invokeOperation("v/test/ops/echo", Maps.of("n", 1), ctx);
+			before.awaitResult(5000);
+
+			long early = CLOCK.advance(-5 * MINUTE);
+			Job after = engine.jobs().invokeOperation("v/test/ops/echo", Maps.of("n", 2), ctx);
+			after.awaitResult(5000);
+			assertEquals(early, time(engine.jobs().getJobData(after.getID(), ctx), Fields.CREATED),
+				"a job is created at the time the clock reads");
+			assertTrue(before.getID().compareTo(after.getID()) < 0, "job IDs keep increasing");
+			assertEquals(late, time(engine.getVenueState().users().user(ctx.getUserDID()).get(), "meta", "updated"),
+				"a stamp a later write has to beat does not go back");
+
+			gate.release();
+			held.awaitResult(5000);
+			assertEquals(Status.COMPLETE, engine.jobs().getJobData(held.getID(), ctx).get(Fields.STATUS),
+				"a job begun before the step back still finishes");
+		}
 	}
 
 	@Test

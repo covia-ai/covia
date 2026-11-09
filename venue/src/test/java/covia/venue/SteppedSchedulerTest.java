@@ -131,6 +131,21 @@ class SteppedSchedulerTest {
 	}
 
 	@Test
+	void aStepBackStartsOnlyWhatIsDueByTheEarlierTime(TestInfo info) throws Exception {
+		RequestContext ctx = user(engine, info);
+		Scheduler scheduler = engine.gridScheduler();
+		step(application, 2 * HOUR).get(10, TimeUnit.SECONDS);
+		CLOCK.advance(-HOUR);
+		scheduler.schedule(ECHO, Strings.create("between"), ctx, CLOCK.millis() + HOUR / 2);
+
+		application.update().get(10, TimeUnit.SECONDS);
+		assertEquals(1, scheduler.list(ctx).count(), "not yet due by the clock, however late an earlier update ran");
+
+		step(application, HOUR / 2).get(10, TimeUnit.SECONDS);
+		assertTrue(scheduler.list(ctx).isEmpty(), "it starts when the clock reaches its time again");
+	}
+
+	@Test
 	void dueEventsStartInIndexOrderTwoAtOnce(TestInfo info) throws Exception {
 		RequestContext ctx = user(engine, info);
 		Scheduler scheduler = engine.gridScheduler();
