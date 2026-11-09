@@ -323,6 +323,30 @@ public class GoalTreeContextTest {
 	}
 
 	@Test
+	public void testAFailedToolResultIsStoredWholeAndCutOnlyForTheModel() {
+		int limit = ConversationRenderer.MAX_TOOL_FAILURE_CHARS;
+		String whole = "Error: " + "x".repeat(limit * 3);
+		AMap<AString, ACell> failed = AbstractLLMAdapter.toolResultMessage(Strings.create("call-1"), "op", Strings.create(whole));
+		AMap<AString, ACell> frame = legacyFrame("test").assoc(GoalTreeContext.K_CONVERSATION, Vectors.of(failed));
+
+		ACell shown = ConversationRenderer.renderFull(frame).get(0);
+		assertEquals(whole.substring(0, limit) + ConversationRenderer.TOOL_FAILURE_CUT.formatted(whole.length() - limit),
+			RT.getIn(shown, "content").toString());
+		assertEquals(CVMBool.TRUE, RT.getIn(shown, "isError"), "still marked as a failure");
+		assertEquals(whole, RT.getIn(GoalTreeContext.activeConversation(frame).get(0), "content").toString(),
+			"the stored turn keeps every character");
+
+		String shortFailure = "Error: " + "x".repeat(limit - 7);
+		ACell shortTurn = AbstractLLMAdapter.toolResultMessage(Strings.create("call-2"), "op", Strings.create(shortFailure));
+		String longSuccess = "y".repeat(limit * 3);
+		ACell success = AbstractLLMAdapter.toolResultMessage(Strings.create("call-3"), "op", Strings.create(longSuccess));
+		AMap<AString, ACell> others = legacyFrame("test").assoc(GoalTreeContext.K_CONVERSATION, Vectors.of(shortTurn, success));
+		AVector<ACell> rendered = ConversationRenderer.renderFull(others);
+		assertEquals(shortFailure, RT.getIn(rendered.get(0), "content").toString(), "a failure within the limit is untouched");
+		assertEquals(longSuccess, RT.getIn(rendered.get(1), "content").toString(), "only failures are cut");
+	}
+
+	@Test
 	public void testRenderConversationEmpty() {
 		AMap<AString, ACell> frame = legacyFrame("test");
 		AVector<ACell> messages = ConversationRenderer.renderFull(frame);

@@ -152,6 +152,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Fixed
 
+- An agent's session history keeps a failed tool call's whole message; the model is shown the first 1024 characters and how many more there are.
 - A model provider's HTTP 403 no longer reports a refused API key, and model call failures carry the provider's error code and message exactly as sent.
 - A HITL request fails with a message saying why when the person asked loses their account, and the agent that asked is told (#674).
 - A HITL grant reaches the audit log only once the answer carrying it commits (#674).

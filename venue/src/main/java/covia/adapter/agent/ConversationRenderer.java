@@ -31,6 +31,11 @@ public final class ConversationRenderer {
 	private static final AString K_FROM = Strings.intern("from");
 	private static final AString K_TO = Strings.intern("to");
 
+	/** The most of a failed tool result's text the model is shown; the history keeps it all. */
+	public static final int MAX_TOOL_FAILURE_CHARS = 1024;
+	/** Follows a failed tool result cut for the model: how many characters are not shown. */
+	public static final String TOOL_FAILURE_CUT = "\n… (%d more characters not shown)";
+
 	private ConversationRenderer() {}
 
 	/**
@@ -299,10 +304,28 @@ public final class ConversationRenderer {
 			if (GoalTreeContext.isSegment(entry)) {
 				messages = messages.conj(renderSegment(entry, dialect));
 			} else if (GoalTreeContext.isLiveTurn(entry)) {
-				messages = messages.conj(entry);
+				messages = messages.conj(withFailureCut(entry));
 			}
 		}
 		return messages;
+	}
+
+	/**
+	 * A stored turn as the model sees it: a failed tool result longer than
+	 * {@link #MAX_TOOL_FAILURE_CHARS} is cut, saying how much is not shown.
+	 * The cut depends only on the turn, so every request renders it alike.
+	 */
+	private static ACell withFailureCut(ACell turn) {
+		if (!GoalTreeContext.ROLE_TOOL.equals(RT.getIn(turn, GoalTreeContext.K_ROLE))
+				|| !CVMBool.TRUE.equals(RT.getIn(turn, AbstractLLMAdapter.K_IS_ERROR))) return turn;
+		AString content = RT.ensureString(RT.getIn(turn, GoalTreeContext.K_CONTENT));
+		if (content == null) return turn;
+		String text = content.toString();
+		if (text.length() <= MAX_TOOL_FAILURE_CHARS) return turn;
+		int cut = MAX_TOOL_FAILURE_CHARS;
+		if (Character.isHighSurrogate(text.charAt(cut - 1))) cut--;
+		return RT.ensureMap(turn).assoc(GoalTreeContext.K_CONTENT,
+			Strings.create(text.substring(0, cut) + TOOL_FAILURE_CUT.formatted(text.length() - cut)));
 	}
 
 	/**
