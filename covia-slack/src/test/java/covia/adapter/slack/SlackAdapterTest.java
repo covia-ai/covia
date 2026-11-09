@@ -4,7 +4,6 @@ import static org.junit.jupiter.api.Assertions.*;
 import static covia.adapter.slack.TestSupport.*;
 
 import java.nio.charset.StandardCharsets;
-import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
