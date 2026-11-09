@@ -1074,7 +1074,7 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 			// session. Direct/API callers retain the ordinary parked-Job contract.
 			if ("v/ops/hitl/request".equals(operation.toString())
 					&& ctx.getAgentId() != null && ctx.getSessionId() != null) {
-				Job job = engine.jobs().invokeOperation(operation, input, ctx);
+				Job job = engine.jobs().callOperation(operation.toString(), input, ctx);
 				String error = job.getErrorMessage();
 				if (error != null) return Strings.create("Error: " + error);
 				AMap<AString, ACell> receipt = Maps.of(

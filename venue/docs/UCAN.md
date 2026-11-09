@@ -132,8 +132,7 @@ Abilities follow UCAN's slash-delimited convention with no leading slash. `*` is
 | `crud/read` | — | Read data |
 | `crud/write` | — | Write data |
 | `crud/delete` | — | Delete data |
-| `invoke` | `invoke/async` | Execute operations |
-| `invoke/async` | — | Fire-and-forget execution |
+| `invoke` | — | Look up and run an operation from an authorised location; no resource authority is implied |
 | `agent` | every `agent/*` | All agent operations |
 | `agent/create` | — | Create a new agent |
 | `agent/request` | — | Submit a request task to an agent |
@@ -1013,9 +1012,9 @@ attributed to the agent, and acting with its controller's authority as it
 stands that cycle. An agent controller's is read from its caps at each check,
 and is none once it is gone; a controller whose account is gone stops the
 run. The controller chose the operation when it configured the agent, so it
-needs no grant in the agent's caps. A controller agent's caps must cover
-`invoke` on the transition and model operations, or the agents it controls
-cannot run. The transition operation defines where the agent acts: it
+needs no invocation grant in the agent's caps. These configured transition
+and model calls are bound framework calls; their resource checks use the
+controller's current authority. The transition operation defines where the agent acts: it
 switches what it does on the agent's behalf to the agent's own context
 (`Engine.stepContext`), its controller's authority under its current
 `config.caps`. A transition operation that never switches is not bounded by
@@ -1193,49 +1192,49 @@ stands, on every tool call.
 
 #### The `invoke` ability under a scope (#211)
 
-Invoke-classed operations (compute, LLM, external I/O, federation — anything
-that does not act on a specific named lattice resource) require the `invoke`
-ability. An operation that also reads lattice data needs `crud/read` on it,
-and a listing needs it on the whole collection it lists (§5.3 table). Under a
-restricted `config.caps` scope:
+`invoke` authorises looking up an operation at a permitted location and
+starting a Job to run it. The grant's `with` names that operation reference or
+a tree containing it; matching uses whole path segments. For example,
+`{with: "v/ops/http", can: "invoke"}` covers `v/ops/http/get`, but not
+`v/ops/http-extra/get`. It does not grant access to resources the operation
+reads, writes, or otherwise uses, and never lends the authority of the
+operation's author, publisher, or executing venue.
 
-- **Full tool access** is a one-liner: `{"can": "invoke"}` (or the equivalent
-  `{"with": "", "can": "invoke"}`) — an empty/absent `with` is a match-any
-  wildcard in the grant-scope path. The standard restricted-but-tool-capable
-  recipe is therefore:
+A directly bound tool calls its particular operation without an `invoke`
+grant. The binding comes from the serving tool registry or agent's available
+tool palette, not a caller-supplied operation reference. Its action still
+needs the appropriate authority: a direct write tool needs `crud/write` on
+its target. Passing that same operation reference to a generic invocation
+surface needs `invoke` on the reference **as well as** the write authority.
+Creating a Job is not by itself a reason to require `invoke`.
 
-  ```json
-  "caps": [
-    { "with": "w/kill-switch", "can": "crud" },
-    { "can": "invoke" }
-  ]
-  ```
+Generic invocation surfaces include REST `/invoke` and `/run`, and the
+`grid:invoke` and `grid:run` tools. A direct call to `grid:run` is a bound
+tool call, but that tool's action is to invoke the operation in its `operation`
+argument: the `invoke` grant must cover that target, not merely
+`v/ops/grid/run`. Scheduled reference invocations check the target when they
+fire. The target's resource checks apply in every case. An invocation may be
+accepted as a Job and then fail an authority check before its action.
 
-`invoke` authorises execution, not discovery of private operation metadata. If
-an agent declares a user-scoped operation path in `config.tools`, its scope must
-also include `crud/read` over that definition path so the runtime can obtain the
-tool description and input schema. Missing metadata-read authority is visible as
-an `unavailableTools` diagnostic; the operation is not silently advertised with
-an invented or incomplete schema. Venue catalog definitions under `v/ops/...`
-are shared public metadata and do not need an additional read grant.
+Within an agent's `caps`, `{can: "invoke"}` (equivalently
+`{with: "", can: "invoke"}`) permits arbitrary operation locations. It grants
+no additional resource authority. A caller can instead name one location or
+subtree, such as `o/reports` or `did:web:publisher.example/o/reports`.
 
-- **Scoped invoke** pins the grant to an op-path prefix, attenuating *which*
-  operations the agent may invoke: `{"with": "v/ops/getmine", "can": "invoke"}`
-  admits `v/ops/getmine/*` and denies every other invoke-classed op. The
-  checked resource is the operation reference as the caller supplied it
-  (`RequestContext.getOp()`), captured at dispatch — the same path form the
-  agent's `config.tools` entries use, so tool-loop calls match naturally.
+Reading a private definition is a separate check. A binding in `config.tools`
+must be readable so the runtime can obtain its metadata; an invocation grant
+alone does not make that metadata readable. Venue catalog definitions under
+`v/ops` are public. Hash references are checked in the form supplied: a grant
+on `o/reports` does not follow a hash or another alias to the same definition.
+An internal call already bound to a definition does not gain arbitrary lookup
+authority from that definition or from its recorded `op` field.
 
-- **Caveat:** invoking by hex hash (or from resolved metadata directly)
-  carries no path, so only the wildcard grant covers it — a path-scoped
-  invoke grant denies hash-form invocation by design (fail-closed).
-
-- **Another principal's operation.** Invoking is a choice of what to run, not
-  access to the namespace that publishes it: the operation runs with the
-  invoker's own authority, and reading its definition needs read on it as any
-  read does. So `invoke` on `<did>/o/<op>` is checked against the invoker's
-  scope, or a grant it presents, whoever publishes it
-  (`Engine.requireInvoke`).
+The definition resolved for a call is the definition executed. A location
+grant follows later changes to its binding on subsequent calls; it does not
+pin an adapter or immutable content. An adapter restriction could be added as
+a future caveat, intersecting location permission with the resolved adapter.
+There is no adapter caveat today: unknown caveats fail closed. A directory
+named `http` is not evidence of which adapter a definition uses.
 
 ### 5.6 Trust Anchors and Federation
 

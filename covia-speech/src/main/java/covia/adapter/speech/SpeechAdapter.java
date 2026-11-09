@@ -360,7 +360,6 @@ public class SpeechAdapter extends AAdapter implements AutoCloseable {
 
 	@Override
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
-		requireInvoke(ctx);
 		String op = getSubOperation(meta);
 		AMap<AString, ACell> in = input instanceof AMap<?, ?> map ? RT.castMap(map) : Maps.empty();
 		Settings current = settings;

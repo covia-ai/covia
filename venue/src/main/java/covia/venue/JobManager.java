@@ -216,9 +216,9 @@ public class JobManager {
 
 	/**
 	 * Invoke an operation given a reference. Supports hex hash, DID URL,
-	 * operation name, and adapter:operation strings. Resolves the reference
-	 * to metadata (fetching remote DID-URL definitions if necessary), then
-	 * calls the canonical {@link #invokeOperation(AMap, ACell, RequestContext)}.
+	 * or catalog path. Resolves the reference (fetching remote DID-URL
+	 * definitions if necessary) and requires invoke on that reference before
+	 * executing it with the caller's resource authority.
 	 *
 	 * @param ref Operation reference (AString)
 	 * @param input Input parameters
@@ -237,7 +237,36 @@ public class JobManager {
 		// Scope the context to the caller-supplied reference — the only point
 		// the human path form still exists — so requireInvoke can check a
 		// resource-precise invoke capability (#211).
-		return invokeOperation(resolveOperation(ref, ctx).meta(), input, ctx.withOp(ref));
+		return dispatchOperation(resolveOperation(ref, ctx).meta(), input, ctx.withOp(ref), false, Invocation.INVOKE);
+	}
+
+	/**
+	 * Calls a server-bound operation with a durable Job. The binding must come
+	 * from the trusted endpoint or tool configuration, never an arbitrary
+	 * operation argument. Resource checks remain in force; no invoke grant is
+	 * needed merely to dispatch a bound call.
+	 */
+	public Job callOperation(String ref, ACell input, RequestContext ctx) {
+		AString operation = Strings.create(ref);
+		return dispatchOperation(resolveOperation(operation, ctx).meta(), input,
+			ctx.withOp(operation), false, Invocation.CALL);
+	}
+
+	/**
+	 * Authorises an explicit remote invocation against the target reference and
+	 * the input being sent. The executing venue applies its defaults and checks
+	 * its own invocation and resource authority independently.
+	 */
+	public void requireRemoteInvoke(AString ref, ACell input, RequestContext ctx) {
+		if (ref == null) throw operationRequired();
+		engine.requireInvoke(invocationContext(ctx.withOp(ref), input), ref);
+	}
+
+	private RequestContext invocationContext(RequestContext ctx, ACell input) {
+		return ctx.isGateEvaluation()
+			? ctx.withInvocation(input, null)
+			: ctx.withInvocation(input, (gateOp, opRef, gateInput, caller) ->
+				evaluateGate(gateOp, opRef, gateInput, caller, ctx));
 	}
 
 	/** HTTP submission: acknowledge a durable handle independently of adapter execution. */
@@ -278,7 +307,7 @@ public class JobManager {
 	 */
 	Prepared prepareTracked(AString ref, ACell input, RequestContext ctx) {
 		return prepareOperation(resolveOperation(ref, ctx).meta(), input, ctx.withOp(ref),
-			false, Invocation.TRACKED);
+			false, Invocation.SCHEDULED);
 	}
 
 	/** Prepare a durable backend job so its parent can checkpoint the handle before submission. */
@@ -289,7 +318,7 @@ public class JobManager {
 	/** Bind even an untracked scheduled fire to the account lifecycle at claim time. */
 	Prepared prepareUntracked(AString ref, ACell input, RequestContext ctx) {
 		return prepareOperation(resolveOperation(ref, ctx).meta(), input, ctx.withOp(ref),
-			true, Invocation.INTERNAL);
+			true, Invocation.SCHEDULED_TRANSIENT);
 	}
 
 	/**
@@ -298,21 +327,23 @@ public class JobManager {
 	 * record the Job's ID in its next atomic state update and only then hand the
 	 * work to the adapter. {@link #start()} runs exactly once.
 	 */
-	public static final class Prepared {
+	public final class Prepared {
 		private final Job job;
 		private final AAdapter adapter;
 		private final RequestContext jobCtx;
 		private final AMap<AString, ACell> meta;
 		private final ACell input;
+		private final boolean lookup;
 		private boolean started;
 
 		Prepared(Job job, AAdapter adapter, RequestContext jobCtx,
-				AMap<AString, ACell> meta, ACell input) {
+				AMap<AString, ACell> meta, ACell input, boolean lookup) {
 			this.job = job;
 			this.adapter = adapter;
 			this.jobCtx = jobCtx;
 			this.meta = meta;
 			this.input = input;
+			this.lookup = lookup;
 		}
 
 		/** The Job, already visible in the owner's history if durable. */
@@ -334,6 +365,9 @@ public class JobManager {
 			if (job.isFinished()) return job;
 			try {
 				if (job instanceof VenueJob venueJob) venueJob.requireAccount();
+				// Only a generic reference invocation needs invoke. A bound tool
+				// calls its operation directly and retains every resource gate.
+				if (lookup) engine.requireInvoke(jobCtx, jobCtx.getOp());
 			} catch (covia.exception.AuthException e) {
 				job.fail(e);
 				return job;
@@ -392,18 +426,22 @@ public class JobManager {
 	 * @return Job tracking the execution
 	 */
 	public Job invokeOperation(AMap<AString, ACell> meta, ACell input, RequestContext ctx) {
-		return dispatchOperation(meta, input, ctx, false, Invocation.INVOKE);
+		return dispatchOperation(meta, input, ctx, false, Invocation.CALL);
 	}
 
 	/** Trusted dispatch intent; never supplied by operation metadata. */
 	private enum Invocation {
-		INVOKE(true, false), RUN(true, true), TOOL(true, true),
-		INTERNAL(false, true), TRACKED(false, false);
+		INVOKE(true, false, true), RUN(true, true, true), TOOL(true, true, false),
+		CALL(true, false, false), CALL_RUN(true, true, false),
+		INTERNAL(false, true, false), TRACKED(false, false, false),
+		SCHEDULED(false, false, true), SCHEDULED_TRANSIENT(false, true, true);
 		final boolean admission;
 		final boolean result;
-		Invocation(boolean admission, boolean result) {
+		final boolean lookup;
+		Invocation(boolean admission, boolean result, boolean lookup) {
 			this.admission = admission;
 			this.result = result;
+			this.lookup = lookup;
 		}
 	}
 
@@ -432,16 +470,12 @@ public class JobManager {
 		// invocation can evaluate nb.gate-caveated grants against exactly this
 		// op + input. Installed here because dispatch is the one place with the
 		// engine, the reference and the input together.
-		RequestContext authorityCtx = ctx;
-		ctx = ctx.isGateEvaluation()
-			? ctx.withInvocation(input, null)
-			: ctx.withInvocation(input, (gateOp, opRef, gateInput, caller) ->
-				evaluateGate(gateOp, opRef, gateInput, caller, authorityCtx));
-		// Capability enforcement is the executing adapter's responsibility: each
-		// op asserts its exact (resource, ability) at its own enforcement point
-		// (requireCapability / requireInvoke), before any side effect. There is
-		// no central name-keyed pre-dispatch check — a denial surfaces as the
-		// adapter failing this Job.
+		ctx = invocationContext(ctx, input);
+		// Resource authority is always enforced by the executing operation.
+		// A generic lookup additionally checks invoke on its reference when the
+		// prepared job starts, with these defaults and capability gates in place.
+		// Tool and framework bindings do not acquire lookup authority just by
+		// creating a Job. No metadata field can choose this dispatch intent.
 		AAdapter adapter = prepareInvocation(meta, input, ctx);
 		// Jobs are owned by, quota'd against, and persisted into the USER's
 		// namespace. An agent sub-principal runs inside its owner's account: it
@@ -471,7 +505,7 @@ public class JobManager {
 		try {
 			job = submitJob(jobID, ts, opID, meta, input, ownerDID, ctx.getCallerDID(),
 				parentID, memoryOnly, resultOriented,
-				invocation == Invocation.RUN && ctx.getJob() == null && ctx.getJobId() == null, adapter);
+				(invocation == Invocation.RUN || invocation == Invocation.CALL_RUN) && ctx.getJob() == null && ctx.getJobId() == null, adapter);
 		} catch (RuntimeException e) {
 			releaseJobPermit(jobID);
 			throw e;
@@ -485,7 +519,7 @@ public class JobManager {
 		if (jobCtx.getJobId() == null && job.isRecorded()) {
 			jobCtx = jobCtx.withJobId(job.getID());
 		}
-		return new Prepared(job, adapter, jobCtx, meta, input);
+		return new Prepared(job, adapter, jobCtx, meta, input, invocation.lookup);
 	}
 
 	/**
@@ -597,7 +631,7 @@ public class JobManager {
 
 	public CompletableFuture<ACell> runOperation(AMap<AString, ACell> meta,
 			ACell input, RequestContext ctx, boolean privateJob) {
-		return runOperation(meta, input, ctx, privateJob, Invocation.RUN);
+		return runOperation(meta, input, ctx, privateJob, Invocation.CALL_RUN);
 	}
 
 	private CompletableFuture<ACell> runOperation(AMap<AString, ACell> meta,
@@ -628,8 +662,8 @@ public class JobManager {
 	 * its result. A transient Job wrapper provides the complete adapter lifecycle
 	 * without adding a durable sub-Job to the caller's history.
 	 *
-	 * <p>Performs the same resolve / caps / schema / adapter-lookup plumbing
-	 * as {@link #invokeOperation(AString, ACell, RequestContext)}, but is exempt
+	 * <p>Uses a trusted framework binding, retaining resource checks and the
+	 * schema / adapter lifecycle without a generic invoke check. It is exempt
 	 * from top-level admission and normally skips persistence and venue-wide Job
 	 * notifications. An explicit {@code operation.internal:false} forces a
 	 * durable Job. Read-only operations are also recorded when the venue sets

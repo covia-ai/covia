@@ -79,7 +79,6 @@ public class UCANAdapter extends AAdapter {
 
 	@Override
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
-		requireInvoke(ctx);
 		if (ctx.getCallerDID() == null) {
 			return CompletableFuture.failedFuture(new AuthException("Authentication required"));
 		}

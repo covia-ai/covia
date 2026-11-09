@@ -222,7 +222,6 @@ public class P2PAdapter extends AAdapter implements AutoCloseable {
 	@Override
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
 		try {
-			requireInvoke(ctx);
 			String sub = getSubOperation(meta);
 			switch (sub) {
 				case "peers":

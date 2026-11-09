@@ -109,7 +109,7 @@ public class RequestContext {
 	 *  (e.g. the catalog path {@code "v/ops/langchain/openai"}), or null when
 	 *  the invocation was made directly from resolved metadata. Set by the
 	 *  JobManager ref-form dispatch overloads; consumed by
-	 *  {@code AAdapter.requireInvoke} so an {@code invoke} capability can be
+	 *  {@code Engine.requireInvoke} so an {@code invoke} capability can be
 	 *  scoped to specific operations (#211). */
 	private final AString op;
 	/** The input of the invocation this context executes, set by the JobManager
@@ -508,7 +508,7 @@ public class RequestContext {
 	 * the form the caller supplied (e.g. {@code "v/ops/langchain/openai"}). Set
 	 * by the JobManager ref-form dispatch overloads — the only point where the
 	 * human-authored reference still exists (the resolved metadata does not
-	 * carry its own catalog path). Consumed by {@code AAdapter.requireInvoke}
+	 * carry its own catalog path). Consumed by {@code Engine.requireInvoke}
 	 * so an {@code invoke} capability can be scoped to specific operations
 	 * (#211): {@code {"with": "v/ops/getmine", "can": "invoke"}}.
 	 */
@@ -518,9 +518,8 @@ public class RequestContext {
 
 	/**
 	 * Gets the operation reference being invoked as supplied by the caller, or
-	 * null when the invocation was made directly from resolved metadata (in
-	 * which case invoke-gating falls back to a resource-less check, coverable
-	 * only by a wildcard {@code invoke} grant).
+	 * null when the call was made directly from resolved metadata. Direct calls
+	 * enforce resource authority without an additional invoke check.
 	 */
 	public AString getOp() {
 		return op;

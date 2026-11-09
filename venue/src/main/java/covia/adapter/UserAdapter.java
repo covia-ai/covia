@@ -100,7 +100,6 @@ public class UserAdapter extends AAdapter {
 	@Override
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx,
 			AMap<AString, ACell> meta, ACell input) {
-		requireInvoke(ctx);
 		String subOperation = getSubOperation(meta);
 		String event = switch (subOperation) {
 			case "create" -> Audit.USER_CREATE;

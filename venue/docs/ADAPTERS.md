@@ -77,8 +77,12 @@ Terminal cleanup releases job resources before existing result-future
 continuations run.
 
 Capability checks belong at the point of action, before any side effect.
-Invoke-class adapters normally begin with `requireInvoke(ctx)` and add
-resource-specific checks through the relevant `Engine.require*` method. Do
+A directly bound operation checks the resources its action uses through the
+relevant `Engine.require*` methods; it does not require `invoke` merely because
+it runs as a Job. A generic invocation surface additionally checks `invoke`
+on the operation reference its caller asks it to look up. REST reference
+submission is checked by JobManager; a direct grid tool still invokes its
+target and must respect the target's invocation scope. Do
 not infer authority from an operation name or confuse `ctx.getCallerDID()`
 (who acted) with `ctx.getUserDID()` (whose namespace the action uses). See
 [UCAN.md](UCAN.md) for the authority model.
@@ -1044,8 +1048,11 @@ are bounded and in memory, so a restart loses only messages not yet collected.
 1. Create a class extending `AAdapter` in a `covia.<module>.<feature>` package.
 2. Implement `getName()` and an LLM-friendly `getDescription()`.
 3. Implement `invokeFuture`, or the job-aware `invoke` when the adapter owns
-   the job lifecycle. Call `requireInvoke(ctx)` or the correct resource gate
-   before effects, and use `getSubOperation(meta)` for dispatch. Refuse what
+   the job lifecycle. Apply the resource gates its action needs before
+   effects, and use `getSubOperation(meta)` for dispatch. If it accepts an
+   arbitrary operation reference to execute, use the generic invocation path
+   (or enforce `Engine.requireInvoke` on that target before remote submission);
+   do not substitute an invocation check for the target's resource checks. Refuse what
    the caller can fix with the Covia type for it, such as
    `InvalidInputException` for bad input, whose message says what is wrong
    ([ERRORS.md](ERRORS.md#types)); catch a library's exceptions where they are

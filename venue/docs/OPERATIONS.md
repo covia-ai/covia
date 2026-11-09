@@ -509,6 +509,14 @@ A small fixed set of primitives covers all interaction with operations and the c
 
 #### `grid:` — operation invocation
 
+`grid:run` and `grid:invoke` look up their `operation` argument under the
+caller's authority. They need `invoke` on that target reference or a containing
+tree, not merely permission naming the grid wrapper. The chosen operation
+independently checks its resource authority. A directly exposed tool for that
+same operation needs only its action authority; the difference is arbitrary
+reference lookup, not whether execution creates a Job.
+
+
 | Op | Args | Returns | Purpose |
 |----|------|---------|---------|
 | `grid:run` | `operation`, `input`, `venue?` | Job result | Run an operation; wait for completion |

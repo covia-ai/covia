@@ -57,7 +57,6 @@ public class AuthAdapter extends AAdapter implements AuthenticationMethods, Venu
 	public static final String IDENTITY_AUDIENCE = "aud must be a target venue DID without a path, query or fragment";
 	public static final String IDENTITY_LIFETIME = "lifetime must be a whole number of seconds, at least 1, with an expiry time that can be represented";
 	public static final String IDENTITY_OVERWRITE = "overwrite must be a boolean";
-	private static final AString IDENTITY_OP = Strings.intern("v/ops/auth/identity-token");
 	private static final AString LIFETIME = Strings.intern("lifetime");
 	private static final AString OVERWRITE = Strings.intern("overwrite");
 	private static final AString SECRET = Strings.intern("secret");
@@ -193,10 +192,6 @@ public class AuthAdapter extends AAdapter implements AuthenticationMethods, Venu
 		if (ctx.getCaps() != null && !ctx.isSubPrincipal()) {
 			throw new AuthException(IDENTITY_DIRECT_ONLY);
 		}
-		// Pin the signing action, so custom metadata/aliases cannot bypass its grant.
-		// Checked before the signing key is opened: a refused request uses no key
-		// and learns nothing about which keys are held.
-		engine.requireInvoke(ctx, IDENTITY_OP);
 		AKeyPair signer = identitySigner(ctx, caller);
 		if (signer == null) throw new AuthException(IDENTITY_NOT_OWNED);
 		if (!(input instanceof AMap<?, ?> params)) throw new InvalidInputException(IDENTITY_INPUT);

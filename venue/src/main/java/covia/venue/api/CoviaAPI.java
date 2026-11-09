@@ -1002,7 +1002,11 @@ public class CoviaAPI extends ACoviaAPI {
 			methods = HttpMethod.POST,
 			tags = { "Covia"},
 			summary = "Invoke a Covia operation",
-			description = "Invokes an operation, creating a Job that tracks its execution. "
+			description = "Looks up an operation reference and creates a Job that tracks its execution. "
+					+ "Requires invoke on that reference or a containing operation tree. This grants "
+					+ "no authority over resources used by the operation, which checks the caller's "
+					+ "authority independently. Directly bound tools need their action authority "
+					+ "without this arbitrary-reference permission. "
 					+ "EVERY invocation is asynchronous by default: the response is the job "
 					+ "record (201, with a Location header for the job), which the caller polls "
 					+ "via GET /jobs/{id} (or subscribes via /jobs/{id}/sse) until it reaches a "
@@ -2420,7 +2424,7 @@ public class CoviaAPI extends ACoviaAPI {
 		// PUT already expresses replacement intent at the HTTP resource boundary.
 		ACell input = Maps.of("name", name, "value", value,
 			Fields.OVERWRITE, convex.core.data.prim.CVMBool.TRUE);
-		Job job = engine().jobs().invokeOperation(Strings.create("v/ops/secret/set"), input, rctx);
+		Job job = engine().jobs().callOperation("v/ops/secret/set", input, rctx);
 		ACell result = job.awaitResult();
 		if (result == null) {
 			buildError(ctx, 500, "Failed to store secret");

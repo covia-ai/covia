@@ -357,12 +357,9 @@ public class CapabilityGateTest {
 	}
 
 	@Test
-	public void testAgentConfigCapsWithGate() {
-		// The #216 target surface: an AGENT whose config caps carry a gate.
-		// The tool loop dispatches tool calls under the capsCtx; the gate
-		// rules on each call. denygate → the denial reaches the model as the
-		// tool result and the agent handles it in one cycle (no suspension,
-		// mirroring the #211 denial contract).
+	public void testBoundAgentToolDoesNotExerciseInvokeGate() {
+		// A bound pure tool does not exercise an arbitrary-invocation grant,
+		// including a denying caveat attached to that unused grant.
 		engine.jobs().invokeOperation(
 			"v/ops/agent/create",
 			Maps.of(
@@ -382,15 +379,15 @@ public class CapabilityGateTest {
 				RequestContext.of(ALICE_DID));
 			ACell result = chatJob.awaitResult(10000);
 			String response = convex.core.lang.RT.getIn(result, Fields.RESPONSE).toString();
-			assertTrue(response.contains("v/test/ops/echo"),
-				"the gate denial must reach the model as the tool result: " + response);
+			assertTrue(response.contains("Tool returned"),
+				"the bound tool must execute without an invoke grant: " + response);
 			watch.awaitRest(1);
 		}
 
 		covia.venue.User user = engine.getVenueState().users().user(ALICE_DID);
 		Agent agent = user.agent("gated-agent");
 		assertEquals(Agent.SLEEPING, agent.getStatus(),
-			"a handled gate denial is not an agent failure");
+			"the bound tool completed normally");
 	}
 
 	@Test

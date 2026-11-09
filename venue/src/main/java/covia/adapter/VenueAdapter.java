@@ -155,7 +155,6 @@ public class VenueAdapter extends AAdapter {
 				engine.requireResourceAccess(ctx, Strings.create("v/config"), Capability.CRUD_READ);
 				return CompletableFuture.completedFuture(showConfig());
 			}
-			requireInvoke(ctx);
 			if ("gc".equals(subOperation)) {
 				engine.requireVenueAuthority(ctx, STORE_RESOURCE, Abilities.VENUE_GC);
 				return audited(Audit.VENUE_GC, ctx, subOperation, input, gc(ctx, input));

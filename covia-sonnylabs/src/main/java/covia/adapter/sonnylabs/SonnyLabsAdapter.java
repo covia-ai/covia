@@ -127,7 +127,6 @@ public class SonnyLabsAdapter extends AAdapter {
 	@Override
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx,
 			AMap<AString, ACell> meta, ACell input) {
-		requireInvoke(ctx);
 		String subOp = getSubOperation(meta);
 		if (!"scan".equals(subOp)) {
 			throw new NotSupportedException("Unsupported SonnyLabs operation: " + subOp);

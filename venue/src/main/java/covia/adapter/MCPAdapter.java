@@ -72,7 +72,6 @@ public class MCPAdapter extends AAdapter {
 
 	@Override
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
-		requireInvoke(ctx);
 		// getSubOperation returns everything after "mcp:", e.g. "tools:call" or "tools:list"
 		String subOp = getSubOperation(meta);
 		if (subOp == null) {

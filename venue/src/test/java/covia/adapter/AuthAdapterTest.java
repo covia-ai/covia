@@ -175,19 +175,18 @@ class AuthAdapterTest {
 		assertThrows(covia.exception.AuthException.class, () -> new VenueAuthenticator(engine).verify(refreshed));
 	}
 
-	@Test void customMetadataCannotBypassIdentityInvokeGrant() {
-		// An agent holding invoke on another op and secret/write: a sub-principal,
-		// so it passes the scoped-self refusal and reaches the pinned invoke check.
+	@Test void directIdentityToolNeedsSecretWriteButNotInvoke() {
 		RequestContext owner = localCaller();
-		RequestContext ctx = RequestContext.ofAgent(owner.getUserDID(), Strings.create("worker")).withCaps(Vectors.of(
-			Capability.create(Strings.create("v/ops/auth/whoami"), AAdapter.INVOKE),
-			Capability.create(Strings.create("s/IDENTITY"), Abilities.SECRET_WRITE)))
-			.withOp(Strings.create("v/ops/auth/whoami"));
+		RequestContext agent = RequestContext.ofAgent(owner.getUserDID(), Strings.create("worker"));
 		AuthAdapter adapter = (AuthAdapter) TestEngine.ENGINE.getAdapter("auth");
-		String message = assertThrows(Exception.class, () -> adapter.invokeFuture(ctx,
-			Maps.of("operation", Maps.of("adapter", "auth:identity-token")), identityInput()).join()).getMessage();
-		assertFalse(message.contains(AuthAdapter.IDENTITY_DIRECT_ONLY), message);
+		AMap<AString, ACell> meta = Maps.of("operation", Maps.of("adapter", "auth:identity-token"));
+		assertThrows(Exception.class, () -> adapter.invokeFuture(agent.withCaps(Vectors.empty()),
+			meta, identityInput()).join());
 		assertNull(TestEngine.ENGINE.resolveSecret("s/IDENTITY", owner));
+		RequestContext writer = agent.withCaps(Vectors.of(
+			Capability.create(Strings.create("s/IDENTITY"), Abilities.SECRET_WRITE)));
+		adapter.invokeFuture(writer, meta, identityInput()).join();
+		assertNotNull(TestEngine.ENGINE.resolveSecret("s/IDENTITY", owner));
 	}
 
 	@Test void theInvokeGrantIsCheckedBeforeTheSigningKey() {

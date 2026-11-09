@@ -123,7 +123,6 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 
 	@Override
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
-		requireInvoke(ctx);
 		return CompletableFuture.supplyAsync(() -> processChat(ctx, input), VIRTUAL_EXECUTOR);
 	}
 

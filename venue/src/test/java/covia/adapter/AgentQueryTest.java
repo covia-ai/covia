@@ -72,7 +72,6 @@ public class AgentQueryTest {
 		}
 		@Override public CompletableFuture<ACell> invokeFuture(RequestContext ctx,
 				AMap<AString, ACell> meta, ACell input) {
-			requireInvoke(ctx);
 			seenContext = ctx;
 			seenInput = input;
 			invocations.incrementAndGet();
