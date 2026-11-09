@@ -621,8 +621,6 @@ A yield with none of these could never resume, so the task fails at once with a 
 
 **Iteration budget.** A task presented for a run's whole iteration budget without resolving is failed ([AGENT_LOOP.md §4.4](./AGENT_LOOP.md)).
 
-**Optional task timeout.** Tasks may carry an optional `timeout` field (caller-settable on `agent_request`); default very long (e.g. weeks) or absent. The framework checks `timeout` at pick time — if exceeded, the task is auto-failed with `timeout` error before invoking the agent. Callers that want a tight deadline set their own; the framework imposes none by default.
-
 **Technical errors.** If the transition adapter throws or returns an `error` (e.g., a request the provider refused, an LLM call past `llmTimeoutMs`), the framework catches it. If a task or chat was picked, the Job is failed with a *technical* error (distinct from `agent:fail_task`'s semantic failure), and the agent carries on with its other work. The difference is recorded in the Job's failure reason. When the agent cannot continue (its model setup is wrong, its provider cannot be reached, or the venue fails), the agent is suspended instead and the picked task stays queued for after resume ([AGENT_LOOP.md §3.4](./AGENT_LOOP.md)).
 
 **Layering: framework vs tool loop.** The framework only sees venue ops being invoked (`agent:complete_task`, `agent:fail_task`) and the adapter's return value. There is no LLM-specific concept at the framework layer. Inside an LLM adapter, the tool loop wraps these as named tools the LLM can call:

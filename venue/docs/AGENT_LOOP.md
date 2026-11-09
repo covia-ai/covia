@@ -628,8 +628,8 @@ and `fail_task` tools, any other transition by invoking the operation itself.
 The call is scoped to the cycle's task and refused once a continuation has
 arrived that the cycle has not shown. In one transaction it moves the task
 out of the queue and records its outcome under `resolved`
-(`Agent.resolveTask`), so a resolved task can be neither cancelled nor
-resolved again, and the outcome survives a restart. The cycle's merge hands
+(`Agent.resolveTask`), so a resolved task cannot be resolved again or reached
+by `agent:cancelTask`, and the outcome survives a restart. The cycle's merge hands
 it back (§4.4 step 6): its request Job settles in the merge's transaction,
 so its caller sees the cycle's writes first. The timeline entry records each
 outcome in `taskResults`.

@@ -41,9 +41,10 @@ An agent can be asked in three ways:
 | `outputPath` | Write the result here, as the asker. The Job then ends with a receipt `{status, outputPath, bytes}` instead of the result. A write that fails fails the task; a failed or cancelled task writes nothing |
 | `timeout` | How long a synchronous call waits for the result, in milliseconds (default 5000; 0 does not wait), before returning the Job's id and status. It does not affect the task: tasks have no deadline |
 
-A request needs the `agent/request` ability ([UCAN.md](./UCAN.md)), and is
-refused if the agent does not exist or is suspended. Any other agent accepts
-it; nothing checks whether that agent can resolve a task (§5.3).
+A request is refused if the asker may not ask the agent (`config.accepts`, or
+the `agent/request` ability in [UCAN.md](./UCAN.md)), if the agent does not
+exist, or if it is suspended. Otherwise it is accepted; nothing checks whether
+the agent can resolve a task (§5.3).
 
 An external agent, such as one on `remoteagent`, handles the request through
 its own adapter, and the rest of this document does not apply to it.
@@ -76,10 +77,12 @@ An agent that cannot continue is suspended instead, and the task stays queued
 for after it resumes ([AGENT_LOOP.md](./AGENT_LOOP.md) §3.4).
 
 Resolving moves the task out of the queue and records its outcome on the agent
-in one transaction, so it cannot then be cancelled or resolved again, and the
-outcome survives a restart or a later failure of the same cycle. The Job
-settles when the cycle's work merges, so the asker sees the cycle's writes
-first. The cycle's timeline entry records the outcome in `taskResults`.
+in one transaction, so it cannot be resolved again or reached by
+`agent:cancelTask`, and the outcome survives a restart or a later failure of
+the same cycle. The Job settles when the cycle's work merges, so the asker sees
+the cycle's writes first; cancelling the Job before then still cancels it and
+discards the outcome. The cycle's timeline entry records the outcome in
+`taskResults`.
 
 ## 5. Resolving a task
 
@@ -111,7 +114,7 @@ Both runtimes wrap the operations as the harness tools `complete_task` and
 
 | | `llmagent` | `goaltree` |
 |-|------------|------------|
-| After a successful call | One more inference, with every tool still available. Its text stays in the session's history; the task's result and the cycle's response are unaffected | The frame ends with no further inference |
+| After a successful call | The loop carries on with every tool still available, until the model replies in text: at least one more inference. The task's result is what the call delivered and is also the cycle's response; the closing text goes only to the session's history | The frame ends with no further inference |
 | A final text reply with the task open | The task yields (§6) | The text completes the task |
 
 ### 5.3 Agents that cannot resolve a task
