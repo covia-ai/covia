@@ -10,6 +10,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestInfo;
 
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -18,7 +19,6 @@ import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
-import covia.adapter.TestAdapter;
 import covia.api.Fields;
 import covia.exception.UnavailableException;
 import covia.grid.Job;
@@ -26,8 +26,7 @@ import covia.grid.Status;
 
 class RemoteJobsTest {
 	@Test void transportFailureRetainsOnlySafeEvidence() throws Exception {
-		Engine engine = Engine.createTemp(null);
-		try (RemoteJobs observer = new RemoteJobs(engine, 1, 2)) {
+		try (RemoteJobs observer = new RemoteJobs(TestEngine.ENGINE, 1, 2)) {
 			Job job = job(j -> observer.attemptCancellation(j, "remote", () -> {
 				throw new java.io.IOException("private-token at secret URL");
 			}));
@@ -40,7 +39,7 @@ class RemoteJobsTest {
 			assertEquals(Strings.create("IOException"), convex.core.lang.RT.getIn(job.getData(), Fields.CANCELLATION, RemoteJobs.CANCELLATION_ERROR_TYPE));
 			assertFalse(job.getData().toString().contains("private-token"));
 			assertEquals(Status.CANCELLED, job.getStatus());
-		} finally { engine.close(); }
+		}
 	}
 
 	private static final AMap<AString, ACell> STARTED_JOB = Maps.of(Fields.ID, Blob.fromHex("00112233445566778899aabbccddeeff"), Fields.STATUS, Status.STARTED);
@@ -56,16 +55,14 @@ class RemoteJobsTest {
 		};
 	}
 
-	/** A job the venue recorded, with an entry to keep its connection in. */
-	private static Job recorded(Engine engine) {
-		engine.registerAdapter(new TestAdapter());
-		return engine.jobs().invokeOperation(Maps.of(Fields.OPERATION, Maps.of(Fields.ADAPTER, "test:never")),
-			Maps.empty(), engine.venueContext());
+	/** A job the venue recorded for this test's user, with an entry to keep its connection in. */
+	private static Job recorded(TestInfo info) {
+		return TestEngine.ENGINE.jobs().invokeOperation(Maps.of(Fields.OPERATION, Maps.of(Fields.ADAPTER, "test:never")),
+			Maps.empty(), RequestContext.of(TestEngine.uniqueDID(info)));
 	}
 
 	@Test void repeatedTimeoutsDoNotFailExecutionAndOnlyChangesEnterHistory() throws Exception {
-		Engine engine = Engine.createTemp(null);
-		try (RemoteJobs observer = new RemoteJobs(engine, 1, 2)) {
+		try (RemoteJobs observer = new RemoteJobs(TestEngine.ENGINE, 1, 2)) {
 			Job job = job();
 			observer.prepare(job, "test", "test://peer", Maps.empty());
 			observer.accepted(job, "remote");
@@ -79,13 +76,12 @@ class RemoteJobsTest {
 			assertEquals(Strings.create("done"), job.future().get(5, TimeUnit.SECONDS));
 			assertEquals(101, polls.get());
 			assertTrue(updates.get() < 5, "unchanged failures must not grow the durable history");
-		} finally { engine.close(); }
+		}
 	}
 
-	@Test void suspensionFencesOldResponseAndReattachmentCanComplete() throws Exception {
-		Engine engine = Engine.createTemp(null);
-		try (RemoteJobs observer = new RemoteJobs(engine, 1, 2)) {
-			Job job = recorded(engine);
+	@Test void suspensionFencesOldResponseAndReattachmentCanComplete(TestInfo info) throws Exception {
+		try (RemoteJobs observer = new RemoteJobs(TestEngine.ENGINE, 1, 2)) {
+			Job job = recorded(info);
 			observer.prepare(job, "test", "test://peer", Maps.empty());
 			observer.accepted(job, "remote");
 			CompletableFuture<AMap<AString, ACell>> stale = new CompletableFuture<>();
@@ -101,7 +97,7 @@ class RemoteJobsTest {
 			assertFalse(late.get(), "a late callback is fenced");
 			observer.observe(job, () -> CompletableFuture.completedFuture(Maps.empty()), data -> job.completeWith(Strings.create("fresh")));
 			assertEquals(Strings.create("fresh"), job.future().get(5, TimeUnit.SECONDS));
-		} finally { engine.close(); }
+		}
 	}
 
 	@Test void closeLetsAPollInFlightRunWithinTheGraceWindow() throws Exception {
@@ -195,29 +191,28 @@ class RemoteJobsTest {
 		}
 	}
 
-	@Test void theConnectionIsKeptOffTheRecordAndItsLossDoesNotChangeTheOutcome() {
-		Engine engine = Engine.createTemp(null);
-		try (RemoteJobs observer = new RemoteJobs(engine, 1, 2)) {
-			Job job = recorded(engine);
+	@Test void theConnectionIsKeptOffTheRecordAndItsLossDoesNotChangeTheOutcome(TestInfo info) {
+		try (RemoteJobs observer = new RemoteJobs(TestEngine.ENGINE, 1, 2)) {
+			Job job = recorded(info);
 			AMap<AString, ACell> saved = Maps.of("token", "private-token");
 			observer.prepare(job, "test", "test://peer", saved);
 			assertEquals(saved, observer.connection(job));
 			assertEquals(Strings.create("test://peer"), observer.target(job));
 			assertFalse(job.getData().toString().contains("private-token"));
 			assertNull(RemoteJobs.descriptor(job), "how the venue follows the job is its own, never on the record");
-			engine.jobs().updateAdapterData(job, kept -> null);
+			TestEngine.ENGINE.jobs().updateAdapterData(job, kept -> null);
 			assertEquals(RemoteJobs.NO_CONNECTION,
 				assertThrows(UnavailableException.class, () -> observer.connection(job)).getMessage());
 			observer.unavailable(job, new IllegalStateException("private-token"));
 			assertEquals(Status.STARTED, job.getStatus());
 			assertFalse(job.getData().toString().contains("private-token"));
-		} finally { engine.close(); }
+			TestEngine.ENGINE.jobs().cancelJob(job.getID()); // the never-job would outlive the test on the shared venue
+		}
 	}
 
-	@Test void terminalEvidenceAndConnectionRemovalPrecedeResultContinuation() {
-		Engine engine = Engine.createTemp(null);
-		try (RemoteJobs observer = new RemoteJobs(engine, 1, 2)) {
-			Job job = recorded(engine);
+	@Test void terminalEvidenceAndConnectionRemovalPrecedeResultContinuation(TestInfo info) {
+		try (RemoteJobs observer = new RemoteJobs(TestEngine.ENGINE, 1, 2)) {
+			Job job = recorded(info);
 			observer.prepare(job, "test", "test://peer", Maps.of("token", "private-token"));
 			observer.accepted(job, "remote");
 			CompletableFuture<Void> checked = job.future().thenAccept(result -> {
@@ -226,6 +221,6 @@ class RemoteJobsTest {
 			});
 			job.completeWith(Strings.create("done"), data -> RemoteJobs.observed(data, Status.COMPLETE));
 			checked.join();
-		} finally { engine.close(); }
+		}
 	}
 }

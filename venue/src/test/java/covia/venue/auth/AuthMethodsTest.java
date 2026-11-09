@@ -205,29 +205,31 @@ class AuthMethodsTest {
 	}
 
 	@Test void verificationDoesNotHoldLifecycleLockAndCompletesAsItBegan() throws Exception {
-		for (String change : List.of("cycle", "configure", "replace", "remove")) {
-			Engine engine = Engine.createTemp(config(fixtureBindings()));
-			Fixture fixture = new Fixture(true);
-			fixture.entered = new CountDownLatch(1);
-			fixture.release = new CountDownLatch(1);
-			try {
-				engine.registerAdapter(fixture);
-				VenueAuthenticator service = new VenueAuthenticator(engine);
-				CompletableFuture<AuthResult> pending = CompletableFuture.supplyAsync(() -> call(service, FIRST));
-				assertTrue(fixture.entered.await(5, TimeUnit.SECONDS));
-				CompletableFuture.runAsync(() -> {
-					switch (change) {
-						case "cycle" -> { engine.disableAdapter("auth-fixture"); engine.enableAdapter("auth-fixture"); }
-						case "configure" -> engine.configureAdapter("auth-fixture", Maps.of("label", "changed"));
-						case "replace" -> engine.registerAdapter(new Fixture(true));
-						case "remove" -> engine.removeAdapter("auth-fixture");
-					}
-				}).get(5, TimeUnit.SECONDS);
-				fixture.release.countDown();
-				assertEquals(ALICE, pending.get(5, TimeUnit.SECONDS).userDID(),
-					"a verification under way when the adapter changes (" + change + ") completes as it began");
-			} finally { fixture.release.countDown(); engine.close(); }
-		}
+		Engine engine = Engine.createTemp(config(fixtureBindings()));
+		try {
+			for (String change : List.of("cycle", "configure", "replace", "remove")) {
+				Fixture fixture = new Fixture(true);
+				fixture.entered = new CountDownLatch(1);
+				fixture.release = new CountDownLatch(1);
+				try {
+					engine.registerAdapter(fixture);
+					VenueAuthenticator service = new VenueAuthenticator(engine);
+					CompletableFuture<AuthResult> pending = CompletableFuture.supplyAsync(() -> call(service, FIRST));
+					assertTrue(fixture.entered.await(5, TimeUnit.SECONDS));
+					CompletableFuture.runAsync(() -> {
+						switch (change) {
+							case "cycle" -> { engine.disableAdapter("auth-fixture"); engine.enableAdapter("auth-fixture"); }
+							case "configure" -> engine.configureAdapter("auth-fixture", Maps.of("label", "changed"));
+							case "replace" -> engine.registerAdapter(new Fixture(true));
+							case "remove" -> engine.removeAdapter("auth-fixture");
+						}
+					}).get(5, TimeUnit.SECONDS);
+					fixture.release.countDown();
+					assertEquals(ALICE, pending.get(5, TimeUnit.SECONDS).userDID(),
+						"a verification under way when the adapter changes (" + change + ") completes as it began");
+				} finally { fixture.release.countDown(); }
+			}
+		} finally { engine.close(); }
 	}
 
 	@Test void malformedBindingsFailEvenWithoutStrictConfig() {

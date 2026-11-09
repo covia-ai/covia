@@ -32,6 +32,7 @@ import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.SecretStore;
 import covia.venue.User;
+import covia.venue.TestEngine;
 import covia.venue.TestServer;
 
 @TestInstance(Lifecycle.PER_CLASS)
@@ -296,15 +297,8 @@ public class OAuthTest {
 
 	@Test
 	void testPublicAccessDefaultEnabled() {
-		// Engine with no auth config should default to public access enabled
-		Engine tempEngine = Engine.createTemp(Maps.of(
-			"name", "no-auth-venue"
-		));
-		try {
-			assertTrue(tempEngine.getAuth().isPublicAccessEnabled());
-		} finally {
-			tempEngine.close();
-		}
+		// The shared engine has no auth config, so it takes the default: public access enabled
+		assertTrue(TestEngine.ENGINE.getAuth().isPublicAccessEnabled());
 	}
 
 	@Test

@@ -30,8 +30,9 @@ import covia.lattice.CapabilityChecker;
  * boot-time disabling via {@code adapters.<name>.enabled}, the kernel set,
  * and the venue-owned {@code v/ops/venue/*} operations that drive it.
  *
- * <p>Uses throwaway engines — disabling adapters on the shared TestEngine
- * would race every other test.</p>
+ * <p>A test that changes adapters or needs its own config takes a throwaway
+ * engine — disabling adapters on the shared TestEngine would race every
+ * other test.</p>
  */
 public class AdapterLifecycleTest {
 
@@ -544,51 +545,42 @@ public class AdapterLifecycleTest {
 
 	@Test
 	public void testVenueOpsRequireVenueAuthority() throws Exception {
-		Engine engine = boot(null);
-		try {
-			AString caller = UCAN.toDIDKey(AKeyPair.generate().getAccountKey());
-			engine.getVenueState().users().create(caller);
-			for (String op : new String[] {"v/ops/venue/adapters", "v/ops/venue/adapter/disable",
-					"v/ops/venue/adapter/enable", "v/ops/venue/adapter/configure",
-					"v/ops/venue/module/load", "v/ops/venue/module/unload",
-					"v/ops/venue/restart", "v/ops/venue/gc"}) {
-				ExecutionException denied = assertThrows(ExecutionException.class,
-					() -> engine.jobs().invokeInternal(op,
-						Maps.of(Strings.create("name"), Strings.create("test"),
-							Strings.create("module"), Strings.create("x.jar"),
-							Strings.create("config"), Maps.empty()),
-						RequestContext.of(caller)).get(10, TimeUnit.SECONDS), op);
-				assertInstanceOf(AuthException.class, denied.getCause(), op);
-				assertTrue(denied.getCause().getMessage().contains("venue-issued delegation"), op);
-				if (op.endsWith("/restart")) {
-					assertTrue(denied.getCause().getMessage().contains("venue/restart"), op);
-					assertTrue(denied.getCause().getMessage().contains("/process"), op);
-				} else if (op.endsWith("/gc")) {
-					assertTrue(denied.getCause().getMessage().contains("venue/gc"), op);
-					assertTrue(denied.getCause().getMessage().contains("/store"), op);
-				} else {
-					assertTrue(denied.getCause().getMessage().contains("adapter/manage"), op);
-					assertTrue(denied.getCause().getMessage().contains("/adapters"), op);
-				}
+		Engine engine = TestEngine.ENGINE;
+		AString caller = UCAN.toDIDKey(AKeyPair.generate().getAccountKey());
+		engine.getVenueState().users().create(caller);
+		for (String op : new String[] {"v/ops/venue/adapters", "v/ops/venue/adapter/disable",
+				"v/ops/venue/adapter/enable", "v/ops/venue/adapter/configure",
+				"v/ops/venue/module/load", "v/ops/venue/module/unload",
+				"v/ops/venue/restart", "v/ops/venue/gc"}) {
+			ExecutionException denied = assertThrows(ExecutionException.class,
+				() -> engine.jobs().invokeInternal(op,
+					Maps.of(Strings.create("name"), Strings.create("test"),
+						Strings.create("module"), Strings.create("x.jar"),
+						Strings.create("config"), Maps.empty()),
+					RequestContext.of(caller)).get(10, TimeUnit.SECONDS), op);
+			assertInstanceOf(AuthException.class, denied.getCause(), op);
+			assertTrue(denied.getCause().getMessage().contains("venue-issued delegation"), op);
+			if (op.endsWith("/restart")) {
+				assertTrue(denied.getCause().getMessage().contains("venue/restart"), op);
+				assertTrue(denied.getCause().getMessage().contains("/process"), op);
+			} else if (op.endsWith("/gc")) {
+				assertTrue(denied.getCause().getMessage().contains("venue/gc"), op);
+				assertTrue(denied.getCause().getMessage().contains("/store"), op);
+			} else {
+				assertTrue(denied.getCause().getMessage().contains("adapter/manage"), op);
+				assertTrue(denied.getCause().getMessage().contains("/adapters"), op);
 			}
-			// Nothing changed
-			assertNotNull(engine.getAdapter("test"));
-		} finally {
-			engine.close();
 		}
+		// Nothing changed
+		assertNotNull(engine.getAdapter("test"));
 	}
 
 	@Test
 	public void testRestartRequiresStandaloneMainVenueProcess() throws Exception {
-		Engine engine = boot(null);
-		try {
-			ExecutionException unavailable = assertThrows(ExecutionException.class,
-				() -> asVenue(engine, "v/ops/venue/restart", Maps.empty()));
-			assertTrue(unavailable.getCause().getMessage().contains("not managed by MainVenue"),
-				String.valueOf(unavailable.getCause()));
-		} finally {
-			engine.close();
-		}
+		ExecutionException unavailable = assertThrows(ExecutionException.class,
+			() -> asVenue(TestEngine.ENGINE, "v/ops/venue/restart", Maps.empty()));
+		assertTrue(unavailable.getCause().getMessage().contains("not managed by MainVenue"),
+			String.valueOf(unavailable.getCause()));
 	}
 
 	private static boolean hasAdapterEntry(ACell listing, String name, boolean enabled) {

@@ -2,8 +2,6 @@ package covia.adapter;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-import org.junit.jupiter.api.AfterAll;
-import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -35,20 +33,15 @@ import covia.grid.Principals;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.SecretStore;
+import covia.venue.TestEngine;
 
 /** Keyrings through real Jobs: what each identity holds, and who may use it (HELD_KEYS.md). */
 class HeldKeysTest {
 
 	private static final String PHRASE = "abandon ".repeat(11) + "about";
-	private static Engine engine;
+	private static final Engine engine = TestEngine.ENGINE;
 	private RequestContext ctx;
 	private AKeyPair identity;
-
-	@BeforeAll static void start() {
-		engine = Engine.createTemp(null);
-		Engine.addDemoAssets(engine);
-	}
-	@AfterAll static void stop() { if (engine != null) engine.close(); }
 
 	@BeforeEach void caller() {
 		identity = AKeyPair.generate();
@@ -130,7 +123,7 @@ class HeldKeysTest {
 		// A literal, or another's secret even when lent, never enters a keyring.
 		assertEquals(CryptoAdapter.SECRET_REF_REQUIRED, failure("add-key", Maps.of("seed", seed.getSeed().toHexString())));
 		assertEquals(CryptoAdapter.ADD_OWN_SECRETS_ONLY,
-			failure("add-key", Maps.of("seed", "did:key:zOther/s/seed")));
+			failure("add-key", Maps.of("seed", TestEngine.uniqueDID("HeldKeysTest-other") + "/s/seed")));
 		assertEquals(CryptoAdapter.SEED_OR_MNEMONIC, failure("add-key", Maps.empty()));
 	}
 

@@ -33,25 +33,15 @@ import covia.lattice.ValuePath;
  * Tests for operation resolution: /a/ hash paths, /o/ user-scoped names,
  * and the venue operation registry.
  *
- * <p>Uses its OWN {@link Engine}, not the shared {@link TestEngine#ENGINE}.
- * These tests do write-then-read resolution. The shared engine is concurrently
- * mutated by other parallel test classes whose HTTP requests trigger
- * {@code syncState()} → {@code lattice.sync()}; a concurrent flush of the
- * shared Etch store can transiently fault a lazily-loaded cell during a read
- * (the de-swallowed navigation exception in #145/#146). Reads themselves are
- * lock-free and navigate an immutable snapshot — there is no read-logic race —
- * so the correct fix is isolation, not locking. This class never calls
- * {@code syncState()}, so its own store stays quiescent and its reads are
- * deterministic regardless of what other classes do. Per-test {@code alice}
- * DIDs keep this class's own concurrent methods from colliding on
- * {@code /o/} and {@code /w/}.</p>
+ * <p>Uses its OWN {@link Engine}, not the shared {@link TestEngine#ENGINE}:
+ * the {@code /v/} tests write the venue's own {@code w/global}, which every
+ * test on the shared venue reads through {@code v/}. Per-test {@code alice}
+ * DIDs keep this class's concurrent methods from colliding on {@code /o/} and
+ * {@code /w/}, and each {@code w/global} write has a path of its own.</p>
  */
 public class OperationResolutionTest {
 
-	// Own engine, isolated from the shared TestEngine.ENGINE — see class doc.
-	// Built once for the class; this class's operations are all in-memory and
-	// lock-free (it never triggers syncState), so its concurrent methods share
-	// it safely.
+	// Built once for the class; see the class doc for why it is not the shared one.
 	private static Engine engine;
 
 	@BeforeAll

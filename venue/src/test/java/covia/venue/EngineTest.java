@@ -667,13 +667,8 @@ public class EngineTest {
 
 	@Test
 	public void testProvisionConfiguredSecretsAbsent() {
-		Engine e = Engine.createTemp(null);
-		try {
-			assertEquals(0, e.provisionConfiguredSecrets(),
-				"No secrets configured → returns 0, no error");
-		} finally {
-			e.close();
-		}
+		assertEquals(0, venue.provisionConfiguredSecrets(),
+			"No secrets configured → returns 0, no error");
 	}
 
 	// ========== Secret field redaction ==========

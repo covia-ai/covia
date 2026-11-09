@@ -39,8 +39,9 @@ import covia.grid.Status;
  * ONLY in the jar), declared in config, and must come up as an ordinary
  * adapter — registered, catalog-materialised, invocable.
  *
- * <p>Uses throwaway engines (bespoke config), not the shared TestEngine —
- * per the TestEngine guidance.</p>
+ * <p>A test that declares or loads a module takes a throwaway engine
+ * (bespoke config), not the shared TestEngine — per the TestEngine
+ * guidance.</p>
  */
 public class ModuleLoaderTest {
 
@@ -377,22 +378,17 @@ public class ModuleLoaderTest {
 	@Test
 	public void testRuntimeLoadDisabledByDefault(@TempDir Path dir) throws Exception {
 		Path jar = buildModuleJar(dir);
-		Engine engine = Engine.createTemp(null);
-		Engine.addDemoAssets(engine);
-		try {
-			ExecutionException e = assertThrows(ExecutionException.class,
-				() -> asVenue(engine, "v/ops/venue/module/load",
-					Maps.of(Strings.create("module"), Strings.create(jar.toString()))));
-			assertTrue(rootCause(e).getMessage().contains("dynamicModules.enabled"), rootCause(e).getMessage());
-			assertNull(engine.getAdapter("modtest"));
-			// Unload is gated by the same switch
-			e = assertThrows(ExecutionException.class,
-				() -> asVenue(engine, "v/ops/venue/module/unload",
-					Maps.of(Strings.create("name"), Strings.create("whatever"))));
-			assertTrue(rootCause(e).getMessage().contains("dynamicModules.enabled"), rootCause(e).getMessage());
-		} finally {
-			engine.close();
-		}
+		Engine engine = TestEngine.ENGINE;
+		ExecutionException e = assertThrows(ExecutionException.class,
+			() -> asVenue(engine, "v/ops/venue/module/load",
+				Maps.of(Strings.create("module"), Strings.create(jar.toString()))));
+		assertTrue(rootCause(e).getMessage().contains("dynamicModules.enabled"), rootCause(e).getMessage());
+		assertNull(engine.getAdapter("modtest"));
+		// Unload is gated by the same switch
+		e = assertThrows(ExecutionException.class,
+			() -> asVenue(engine, "v/ops/venue/module/unload",
+				Maps.of(Strings.create("name"), Strings.create("whatever"))));
+		assertTrue(rootCause(e).getMessage().contains("dynamicModules.enabled"), rootCause(e).getMessage());
 	}
 
 	@Test

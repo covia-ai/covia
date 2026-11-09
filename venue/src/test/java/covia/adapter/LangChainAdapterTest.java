@@ -106,57 +106,47 @@ public class LangChainAdapterTest {
 	 */
 	@Test
 	public void testAnthropicUnresolvedSecretRefReturnsClearError() throws Exception {
-		Engine engine = Engine.createTemp(null);
-		try {
-			Engine.addDemoAssets(engine);
-			RequestContext ctx = RequestContext.of(Strings.create("did:key:zTestNoSecret"));
+		Engine engine = covia.venue.TestEngine.ENGINE;
+		RequestContext ctx = RequestContext.of(covia.venue.TestEngine.uniqueDID("unresolved-secret-ref"));
 
-			AMap<AString, ACell> meta = Maps.of(
-				Strings.create("operation"), Maps.of(
-					Strings.create("adapter"), Strings.create("langchain:anthropic")
-				)
-			);
-			ACell input = Maps.of(
-				Strings.create("prompt"), Strings.create("hi"),
-				Strings.create("apiKey"), Strings.create("/s/anthropic"),
-				Strings.create("url"), Strings.create("http://127.0.0.1:1/")
-			);
+		AMap<AString, ACell> meta = Maps.of(
+			Strings.create("operation"), Maps.of(
+				Strings.create("adapter"), Strings.create("langchain:anthropic")
+			)
+		);
+		ACell input = Maps.of(
+			Strings.create("prompt"), Strings.create("hi"),
+			Strings.create("apiKey"), Strings.create("/s/anthropic"),
+			Strings.create("url"), Strings.create("http://127.0.0.1:1/")
+		);
 
-			LangChainAdapter adapter = (LangChainAdapter) engine.getAdapter("langchain");
-			ACell result = adapter.invokeFuture(ctx, meta, input)
-				.get(5, java.util.concurrent.TimeUnit.SECONDS);
-			assertFailureMentioning(result, "/s/anthropic");
-		} finally {
-			engine.close();
-		}
+		LangChainAdapter adapter = (LangChainAdapter) engine.getAdapter("langchain");
+		ACell result = adapter.invokeFuture(ctx, meta, input)
+			.get(5, java.util.concurrent.TimeUnit.SECONDS);
+		assertFailureMentioning(result, "/s/anthropic");
 	}
 
 	private static void assertMissingSecretReportsClearly(String adapterOp, String secretName) throws Exception {
-		Engine engine = Engine.createTemp(null);
-		try {
-			Engine.addDemoAssets(engine);
-			RequestContext ctx = RequestContext.of(Strings.create("did:key:zTestNoSecret"));
+		Engine engine = covia.venue.TestEngine.ENGINE;
+		RequestContext ctx = RequestContext.of(covia.venue.TestEngine.uniqueDID("missing-secret-" + secretName));
 
-			AMap<AString, ACell> meta = Maps.of(
-				Strings.create("operation"), Maps.of(
-					Strings.create("adapter"), Strings.create(adapterOp),
-					Strings.create("secretKey"), Strings.create(secretName)
-				)
-			);
-			ACell input = Maps.of(
-				Strings.create("prompt"), Strings.create("hi"),
-				// Closed port so an accidental HTTP call would fail fast — but the
-				// fix should make the adapter fail BEFORE attempting any dial.
-				Strings.create("url"), Strings.create("http://127.0.0.1:1/")
-			);
+		AMap<AString, ACell> meta = Maps.of(
+			Strings.create("operation"), Maps.of(
+				Strings.create("adapter"), Strings.create(adapterOp),
+				Strings.create("secretKey"), Strings.create(secretName)
+			)
+		);
+		ACell input = Maps.of(
+			Strings.create("prompt"), Strings.create("hi"),
+			// Closed port so an accidental HTTP call would fail fast — but the
+			// fix should make the adapter fail BEFORE attempting any dial.
+			Strings.create("url"), Strings.create("http://127.0.0.1:1/")
+		);
 
-			LangChainAdapter adapter = (LangChainAdapter) engine.getAdapter("langchain");
-			ACell result = adapter.invokeFuture(ctx, meta, input)
-				.get(5, java.util.concurrent.TimeUnit.SECONDS);
-			assertFailureMentioning(result, secretName);
-		} finally {
-			engine.close();
-		}
+		LangChainAdapter adapter = (LangChainAdapter) engine.getAdapter("langchain");
+		ACell result = adapter.invokeFuture(ctx, meta, input)
+			.get(5, java.util.concurrent.TimeUnit.SECONDS);
+		assertFailureMentioning(result, secretName);
 	}
 
 	private static void assertFailureMentioning(ACell result, String hint) {
@@ -631,7 +621,7 @@ public class LangChainAdapterTest {
 		// Store a tiny "PNG" as a content asset, reference it from a message,
 		// and check the adapter inlines it (base64 + contentType) at call time.
 		var engine = covia.venue.TestEngine.ENGINE;
-		var ctx = covia.venue.RequestContext.of(convex.core.data.Strings.create("did:key:zImgTest"));
+		var ctx = covia.venue.RequestContext.of(covia.venue.TestEngine.uniqueDID("image-asset-ref"));
 		byte[] bytes = new byte[] {(byte)0x89, 0x50, 0x4E, 0x47, 1, 2, 3};
 		var meta = Maps.of("name", "scan", "contentType", "image/png");
 		var stored = engine.jobs().invokeOperation("v/ops/asset/store",
@@ -668,7 +658,7 @@ public class LangChainAdapterTest {
 	public void testImageRefViaWorkspacePath() {
 		// A workspace slot holding an asset reference string resolves via one hop.
 		var engine = covia.venue.TestEngine.ENGINE;
-		var ctx = covia.venue.RequestContext.of(convex.core.data.Strings.create("did:key:zImgWsTest"));
+		var ctx = covia.venue.RequestContext.of(covia.venue.TestEngine.uniqueDID("image-workspace-ref"));
 		byte[] bytes = new byte[] {(byte)0xFF, (byte)0xD8, (byte)0xFF, (byte)0xE0, 9};
 		var stored = engine.jobs().invokeOperation("v/ops/asset/store",
 			Maps.of("metadata", Maps.of("name", "snap", "contentType", "image/jpeg"),
@@ -697,7 +687,7 @@ public class LangChainAdapterTest {
 		// A vault/drive file referenced by its DID-scoped DLFS path feeds a
 		// vision call directly — no asset:store hop.
 		var engine = covia.venue.TestEngine.ENGINE;
-		var ctx = covia.venue.RequestContext.of(convex.core.data.Strings.create("did:key:zDlfsImg"));
+		var ctx = covia.venue.RequestContext.of(covia.venue.TestEngine.uniqueDID("image-dlfs-ref"));
 		byte[] bytes = new byte[] {(byte)0x89, 0x50, 0x4E, 0x47, 7, 7};
 		String b64 = java.util.Base64.getEncoder().encodeToString(bytes);
 		engine.jobs().invokeOperation("v/ops/dlfs/create-drive",
@@ -763,7 +753,7 @@ public class LangChainAdapterTest {
 	@Test
 	public void testUnresolvableImageRefFailsLoudly() {
 		var engine = covia.venue.TestEngine.ENGINE;
-		var ctx = covia.venue.RequestContext.of(convex.core.data.Strings.create("did:key:zImgMissing"));
+		var ctx = covia.venue.RequestContext.of(covia.venue.TestEngine.uniqueDID("image-missing-ref"));
 		var messages = Vectors.of(
 			Maps.of("role", "user", "content", Vectors.of(
 				Maps.of("type", "image", "source", Maps.of("type", "asset", "ref", "w/nothing/here")))));

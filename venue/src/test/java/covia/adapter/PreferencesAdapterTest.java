@@ -39,7 +39,7 @@ import covia.venue.User;
  * rules, the size limit, authority, concurrent edits, the read-only
  * {@code x/preferences} view, the pin, account deletion and configuration.
  * Uses the shared {@link TestEngine#ENGINE} with a fresh user per test; the
- * size-limit tests configure a venue of their own.
+ * test of configured size limits has a venue of its own.
  */
 public class PreferencesAdapterTest {
 
@@ -310,8 +310,9 @@ public class PreferencesAdapterTest {
 		assertNull(adapter.checkStateMigration(List.of(state)));
 	}
 
-	// ========== size limit (a venue of its own: it changes adapter configuration) ==========
+	// ========== size limit ==========
 
+	/** A venue of its own: it changes adapter configuration. */
 	@Test
 	public void testSizeLimitDefaultsOverridesAndShrinking() {
 		String did = alice.getUserDID().toString();
@@ -342,14 +343,8 @@ public class PreferencesAdapterTest {
 
 	@Test
 	public void testDefaultLimitWithoutConfiguration() {
-		Engine venue = Engine.createTemp(Maps.empty());
-		try {
-			PreferencesAdapter adapter = new PreferencesAdapter();
-			venue.registerAdapter(adapter);
-			assertEquals(PreferencesAdapter.DEFAULT_MAX_BYTES, adapter.limitFor(alice.getUserDID()));
-		} finally {
-			venue.close();
-		}
+		PreferencesAdapter adapter = (PreferencesAdapter) engine.getAdapter("preferences");
+		assertEquals(PreferencesAdapter.DEFAULT_MAX_BYTES, adapter.limitFor(alice.getUserDID()));
 	}
 
 	private static ACell call(PreferencesAdapter adapter, RequestContext ctx, Object... input) {

@@ -5,6 +5,8 @@ import static org.junit.jupiter.api.Assertions.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -40,7 +42,25 @@ import org.junit.jupiter.api.TestInfo;
 public class OrchestratorTest {
 
 	private final Engine engine = TestEngine.ENGINE;
+	/**
+	 * A venue whose operator allows loopback targets, for steps naming a venue
+	 * on this machine; the shared engine keeps the outbound guard's default.
+	 */
+	private static Engine loopback;
 	private AString ALICE_DID;
+
+	@BeforeAll
+	static void startLoopback() {
+		loopback = Engine.createTemp(Maps.of(
+			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
+			Config.ADAPTERS, Maps.of("http", Maps.of("allowedHosts", Vectors.of("127.0.0.1")))));
+		Engine.addDemoAssets(loopback);
+	}
+
+	@AfterAll
+	static void closeLoopback() {
+		loopback.close();
+	}
 
 	@BeforeEach
 	public void setup(TestInfo info) {
@@ -772,7 +792,7 @@ public class OrchestratorTest {
 			Config.AUTH, Maps.of(Config.PUBLIC, Maps.of(
 				Config.ENABLED, CVMBool.TRUE,
 				Config.CAPS, Strings.create("unrestricted")))));
-		Engine local = loopbackFederatingEngine();
+		Engine local = loopback;
 		try {
 			// Give the remote echo binding a schema that deliberately differs from
 			// the local venue's echo metadata. The remote still returns its input;
@@ -812,7 +832,6 @@ public class OrchestratorTest {
 				job.getErrorMessage());
 		} finally {
 			remote.close();
-			local.close();
 		}
 	}
 
@@ -827,7 +846,7 @@ public class OrchestratorTest {
 				Config.CAPS, Vectors.of(
 					Capability.create(Strings.create("v/test/ops/echo"), Strings.create("invoke")),
 					Capability.create(Strings.create("j"), Capability.CRUD_READ))))));
-		Engine local = loopbackFederatingEngine();
+		Engine local = loopback;
 		try {
 			String remoteUrl = "http://127.0.0.1:" + remote.port();
 			String nonStrict = storeJsonOrchestration(local, """
@@ -882,20 +901,7 @@ public class OrchestratorTest {
 				"strict metadata resolution must fail before a remote child job is submitted");
 		} finally {
 			remote.close();
-			local.close();
 		}
-	}
-
-	/**
-	 * An engine whose operator allows loopback targets, for steps naming a venue
-	 * on this machine; the shared engine keeps the outbound guard's default.
-	 */
-	private static Engine loopbackFederatingEngine() {
-		Engine local = Engine.createTemp(Maps.of(
-			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
-			Config.ADAPTERS, Maps.of("http", Maps.of("allowedHosts", Vectors.of("127.0.0.1")))));
-		Engine.addDemoAssets(local);
-		return local;
 	}
 
 	@Test

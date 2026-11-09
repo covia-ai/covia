@@ -13,6 +13,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
 
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.parallel.Execution;
@@ -67,38 +68,44 @@ public class VenueProofsTest {
 		}
 	}
 
-	private static final Engine ENGINE = Engine.createTemp(Maps.of(Config.AUTH, Maps.of(VenueProofs.VENUE_PROOF,
-		Vectors.of(Maps.of(AuthMethods.ADAPTER, "proof-probe", AuthMethods.IMPLEMENTATION, "probe")))));
-	private static final Probe PROBE = new Probe();
-	static { ENGINE.registerAdapter(PROBE); }
+	private static Engine engine;
+	private static Probe probe;
 
 	private static final Supplier<Venue> NO_DIAL = () -> { throw new AssertionError("the probe dials nothing"); };
 
 	private final AtomicLong now = new AtomicLong(1_000_000);
 	private VenueProofs proofs;
 
+	@BeforeAll
+	static void startEngine() {
+		engine = Engine.createTemp(Maps.of(Config.AUTH, Maps.of(VenueProofs.VENUE_PROOF,
+			Vectors.of(Maps.of(AuthMethods.ADAPTER, "proof-probe", AuthMethods.IMPLEMENTATION, "probe")))));
+		probe = new Probe();
+		engine.registerAdapter(probe);
+	}
+
 	@AfterAll
-	static void closeEngine() { ENGINE.close(); }
+	static void closeEngine() { engine.close(); }
 
 	@BeforeEach
 	void reset() {
-		PROBE.asked.set(0);
-		PROBE.reason = null;
-		proofs = new VenueProofs(ENGINE, now::get);
+		probe.asked.set(0);
+		probe.reason = null;
+		proofs = new VenueProofs(engine, now::get);
 	}
 
 	@Test
 	void anAdapterContributedMechanismIsWithdrawnWhileItsAdapterIsDisabled() {
 		assertNull(proofs.prove(TARGET, DID, NO_DIAL));
-		assertEquals(1, PROBE.asked.get());
-		assertTrue(ENGINE.disableAdapter(PROBE.getName()));
+		assertEquals(1, probe.asked.get());
+		assertTrue(engine.disableAdapter(probe.getName()));
 		try {
 			String reason = proofs.prove(TARGET, DID, NO_DIAL);
 			assertTrue(reason != null && reason.contains(VenueProofs.UNAVAILABLE), reason);
-			assertEquals(1, PROBE.asked.get(), "a withdrawn mechanism is not asked, nor its earlier proof reused");
+			assertEquals(1, probe.asked.get(), "a withdrawn mechanism is not asked, nor its earlier proof reused");
 			assertThrows(ConfigurationException.class, proofs::validate, "a listed mechanism must be available at startup");
 		} finally {
-			ENGINE.enableAdapter(PROBE.getName());
+			engine.enableAdapter(probe.getName());
 		}
 		assertDoesNotThrow(proofs::validate);
 	}
@@ -108,20 +115,20 @@ public class VenueProofsTest {
 		assertNull(proofs.prove(TARGET, DID, NO_DIAL));
 		now.addAndGet(REUSE_SECONDS * 1000 - 1);
 		assertNull(proofs.prove(TARGET, DID, NO_DIAL));
-		assertEquals(1, PROBE.asked.get());
+		assertEquals(1, probe.asked.get());
 		now.addAndGet(1);
 		assertNull(proofs.prove(TARGET, DID, NO_DIAL));
-		assertEquals(2, PROBE.asked.get());
+		assertEquals(2, probe.asked.get());
 		assertNull(proofs.prove("https://other.example", DID, NO_DIAL));
-		assertEquals(3, PROBE.asked.get(), "a proof is reused only for the same target");
+		assertEquals(3, probe.asked.get(), "a proof is reused only for the same target");
 	}
 
 	@Test
 	void aFailureIsNeverReused() {
-		PROBE.reason = "not proven";
+		probe.reason = "not proven";
 		assertEquals("proof-probe/probe: not proven", proofs.prove(TARGET, DID, NO_DIAL));
 		assertEquals("proof-probe/probe: not proven", proofs.prove(TARGET, DID, NO_DIAL));
-		assertEquals(2, PROBE.asked.get());
+		assertEquals(2, probe.asked.get());
 	}
 
 	@Test

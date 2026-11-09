@@ -38,6 +38,7 @@ import covia.lattice.CoviaPath;
 import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
+import covia.venue.TestEngine;
 import covia.venue.User;
 
 class UserAdapterTest {
@@ -159,21 +160,18 @@ class UserAdapterTest {
 
 	@Test
 	void didKeyVenueIsRootForIdentitiesNestedBelowIt() {
-		Engine personal = Engine.createTemp(Maps.empty());
-		try {
-			RootAuthorityPolicy policy = personal.rootAuthorityPolicy();
-			AString venue = personal.getDIDString();
-			AString issued = Strings.create(venue + ":u:alice");
-			AString external = Strings.create(
-				UCAN.toDIDKey(AKeyPair.generate().getAccountKey()) + ":u:alice");
+		// The class's own venue has a hostname; the shared one is a did:key venue
+		Engine didKeyVenue = TestEngine.ENGINE;
+		RootAuthorityPolicy policy = didKeyVenue.rootAuthorityPolicy();
+		AString venue = didKeyVenue.getDIDString();
+		AString issued = Strings.create(venue + ":u:alice");
+		AString external = Strings.create(
+			UCAN.toDIDKey(AKeyPair.generate().getAccountKey()) + ":u:alice");
 
-			assertTrue(policy.acceptsRoot(venue, Strings.create(issued + "/w/notes")));
-			assertTrue(policy.acceptsRoot(venue, Strings.create(issued + ":admin/w/notes")));
-			assertFalse(policy.acceptsRoot(venue, Strings.create(external + "/w/notes")),
-				"another did:key's nested identity is not the venue's");
-		} finally {
-			personal.close();
-		}
+		assertTrue(policy.acceptsRoot(venue, Strings.create(issued + "/w/notes")));
+		assertTrue(policy.acceptsRoot(venue, Strings.create(issued + ":admin/w/notes")));
+		assertFalse(policy.acceptsRoot(venue, Strings.create(external + "/w/notes")),
+			"another did:key's nested identity is not the venue's");
 	}
 
 	@Test

@@ -17,6 +17,8 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
 
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 import convex.auth.ucan.UCAN;
@@ -34,6 +36,21 @@ import covia.venue.api.ApiErrors;
 import covia.venue.server.VenueServer;
 
 class UserAdmissionTest {
+
+	/** A venue with {@code users.autoCreate} off, which the shared one has on. */
+	private static Engine engine;
+
+	@BeforeAll
+	static void startEngine() {
+		engine = Engine.createTemp(Maps.of(
+			Config.USERS, Maps.of(Config.AUTO_CREATE, false)));
+		Engine.addDemoAssets(engine);
+	}
+
+	@AfterAll
+	static void closeEngine() {
+		engine.close();
+	}
 
 	@Test
 	void httpAuthenticationDoesNotProvisionWhenAutoCreateIsOff() {
@@ -100,47 +117,33 @@ class UserAdmissionTest {
 
 	@Test
 	void unknownAuthenticatedDIDIsRejectedWithoutCreatingState() {
-		Engine engine = configuredEngine(false);
-		try {
-			AString did = newDID();
-			ExecutionException failure = assertThrows(ExecutionException.class,
-				() -> engine.jobs().invokeInternal("v/test/ops/echo", Maps.of(),
-					RequestContext.of(did)).get(5, TimeUnit.SECONDS));
-			assertInstanceOf(AuthException.class, failure.getCause());
-			assertTrue(failure.getCause().getMessage().contains("user:create"));
-			assertNull(engine.getVenueState().users().user(did));
-		} finally {
-			engine.close();
-		}
+		AString did = newDID();
+		ExecutionException failure = assertThrows(ExecutionException.class,
+			() -> engine.jobs().invokeInternal("v/test/ops/echo", Maps.of(),
+				RequestContext.of(did)).get(5, TimeUnit.SECONDS));
+		assertInstanceOf(AuthException.class, failure.getCause());
+		assertTrue(failure.getCause().getMessage().contains("user:create"));
+		assertNull(engine.getVenueState().users().user(did));
 	}
 
 	@Test
 	void explicitlyProvisionedDIDCanInvoke() throws Exception {
-		Engine engine = configuredEngine(false);
-		try {
-			AString did = newDID();
-			engine.getVenueState().users().create(did);
-			ACell input = Maps.of("hello", "world");
-			ACell output = engine.jobs().invokeInternal("v/test/ops/echo", input,
-				RequestContext.of(did)).get(5, TimeUnit.SECONDS);
-			assertEquals(input, output);
-		} finally {
-			engine.close();
-		}
+		AString did = newDID();
+		engine.getVenueState().users().create(did);
+		ACell input = Maps.of("hello", "world");
+		ACell output = engine.jobs().invokeInternal("v/test/ops/echo", input,
+			RequestContext.of(did)).get(5, TimeUnit.SECONDS);
+		assertEquals(input, output);
 	}
 
 	@Test
 	void autoCreateOptInRegistersUnknownDIDOnFirstInvocation() throws Exception {
-		Engine engine = configuredEngine(true);
-		try {
-			AString did = newDID();
-			assertNull(engine.getVenueState().users().user(did));
-			engine.jobs().invokeInternal("v/test/ops/echo", Maps.of(),
-				RequestContext.of(did)).get(5, TimeUnit.SECONDS);
-			assertNotNull(engine.getVenueState().users().user(did));
-		} finally {
-			engine.close();
-		}
+		Engine open = TestEngine.ENGINE;
+		AString did = newDID();
+		assertNull(open.getVenueState().users().user(did));
+		open.jobs().invokeInternal("v/test/ops/echo", Maps.of(),
+			RequestContext.of(did)).get(5, TimeUnit.SECONDS);
+		assertNotNull(open.getVenueState().users().user(did));
 	}
 
 	@Test
@@ -150,44 +153,28 @@ class UserAdmissionTest {
 		// boundary, so the guard belongs there and nowhere else. Rejected even with
 		// autoCreate on, the configuration where an unknown DID would otherwise
 		// self-register.
-		Engine engine = configuredEngine(true);
-		try {
-			AString owner = newDID();
-			engine.getVenueState().users().ensure(owner);
-			AString impostor = Principals.agentDID(owner, Strings.create("pwn"));
+		Engine open = TestEngine.ENGINE;
+		AString owner = newDID();
+		open.getVenueState().users().ensure(owner);
+		AString impostor = Principals.agentDID(owner, Strings.create("pwn"));
 
-			assertThrows(AuthException.class, () -> engine.admitUser(impostor));
-			assertNull(engine.getVenueState().users().user(impostor),
-				"an agent-shaped DID must never gain a user record");
+		assertThrows(AuthException.class, () -> open.admitUser(impostor));
+		assertNull(open.getVenueState().users().user(impostor),
+			"an agent-shaped DID must never gain a user record");
 
-			// The name alone is its own namespace. The venue builds an agent's
-			// context in its owner's namespace (as AgentAdapter.wakeAgent does), so
-			// that context admits through its OWNER: an agent runs inside an
-			// account that already exists.
-			assertEquals(impostor, RequestContext.of(impostor).getUserDID());
-			assertEquals(owner, RequestContext.ofAgent(owner, Strings.create("pwn")).getUserDID());
-		} finally {
-			engine.close();
-		}
+		// The name alone is its own namespace. The venue builds an agent's
+		// context in its owner's namespace (as AgentAdapter.wakeAgent does), so
+		// that context admits through its OWNER: an agent runs inside an
+		// account that already exists.
+		assertEquals(impostor, RequestContext.of(impostor).getUserDID());
+		assertEquals(owner, RequestContext.ofAgent(owner, Strings.create("pwn")).getUserDID());
 	}
 
 	@Test
 	void frameworkPrincipalsAreBootstrappedWithoutAutoCreate() {
-		Engine engine = configuredEngine(false);
-		try {
-			assertNotNull(engine.getVenueState().users().user(engine.getDIDString()));
-			assertNotNull(engine.getVenueState().users().user(
-				engine.getDIDString().toString() + ":public"));
-		} finally {
-			engine.close();
-		}
-	}
-
-	private static Engine configuredEngine(boolean autoCreate) {
-		Engine engine = Engine.createTemp(Maps.of(
-			Config.USERS, Maps.of(Config.AUTO_CREATE, autoCreate)));
-		Engine.addDemoAssets(engine);
-		return engine;
+		assertNotNull(engine.getVenueState().users().user(engine.getDIDString()));
+		assertNotNull(engine.getVenueState().users().user(
+			engine.getDIDString().toString() + ":public"));
 	}
 
 	private static AString newDID() {

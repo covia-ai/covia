@@ -41,6 +41,8 @@ public class FileAdapterTest {
 	@TempDir static Path other;
 
 	private static Engine engine;
+	/** A root over DLFS for each test that does not depend on the list of roots. */
+	private static Engine dlfsRoots;
 	private static final String DID = "did:key:z6Mk-test-FileAdapterTest";
 
 	@BeforeAll
@@ -59,10 +61,21 @@ public class FileAdapterTest {
 			)
 		));
 		Engine.addDemoAssets(engine);
+		dlfsRoots = Engine.createTemp(Maps.of(
+			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
+			"file", Maps.of("roots", Maps.of(
+				"docs", Maps.of("dlfs", "docs-drive"),
+				"reports", Maps.of("dlfs", "work", "subpath", "out/reports"),
+				"private", Maps.of("dlfs", "private-drive"),
+				"shared", Maps.of("dlfs", "ro-drive", "subpath", "docs", "readOnly", true)
+			))
+		));
+		Engine.addDemoAssets(dlfsRoots);
 	}
 
 	@AfterAll
 	static void teardown() throws IOException {
+		dlfsRoots.close();
 		try {
 			engine.close();
 		} finally {
@@ -1101,47 +1114,42 @@ public class FileAdapterTest {
 
 	@Test
 	public void testCanonicalDLFSPathsThroughFileSurface() {
-		Engine eng = Engine.createTemp(Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true)));
-		Engine.addDemoAssets(eng);
-		AString did = Strings.create("did:key:z6Mk-test-FileAdapterTest-direct-dlfs");
+		Engine eng = TestEngine.ENGINE;
+		AString did = TestEngine.uniqueDID("FileAdapterTest-direct-dlfs");
 		RequestContext free = RequestContext.of(did);
-		try {
-			eng.jobs().invokeOperation("v/ops/dlfs/create-drive",
-				Maps.of("name", "direct"), free).awaitResult(2000);
-			eng.jobs().invokeOperation("v/ops/file/mkdir",
-				Maps.of("path", "dlfs/direct/docs"), free).awaitResult(2000);
-			eng.jobs().invokeOperation("v/ops/file/write", Maps.of(
-				"path", "dlfs/direct/docs/note.txt", "content", "canonical"), free)
-				.awaitResult(2000);
+		eng.jobs().invokeOperation("v/ops/dlfs/create-drive",
+			Maps.of("name", "direct"), free).awaitResult(5000);
+		eng.jobs().invokeOperation("v/ops/file/mkdir",
+			Maps.of("path", "dlfs/direct/docs"), free).awaitResult(5000);
+		eng.jobs().invokeOperation("v/ops/file/write", Maps.of(
+			"path", "dlfs/direct/docs/note.txt", "content", "canonical"), free)
+			.awaitResult(5000);
 
-			ACell read = eng.jobs().invokeOperation("v/ops/file/read",
-				Maps.of("path", "dlfs/direct/docs/note.txt"), free).awaitResult(2000);
-			assertEquals("canonical", RT.getIn(read, "content").toString());
-			ACell list = eng.jobs().invokeOperation("v/ops/file/list",
-				Maps.of("path", "dlfs/direct/docs"), free).awaitResult(2000);
-			assertEquals(1, RT.ensureVector(RT.getIn(list, "entries")).count());
+		ACell read = eng.jobs().invokeOperation("v/ops/file/read",
+			Maps.of("path", "dlfs/direct/docs/note.txt"), free).awaitResult(5000);
+		assertEquals("canonical", RT.getIn(read, "content").toString());
+		ACell list = eng.jobs().invokeOperation("v/ops/file/list",
+			Maps.of("path", "dlfs/direct/docs"), free).awaitResult(5000);
+		assertEquals(1, RT.ensureVector(RT.getIn(list, "entries")).count());
 
-			ACell moved = eng.jobs().invokeOperation("v/ops/file/move", Maps.of(
-				"from", "dlfs/direct/docs/note.txt",
-				"to", "dlfs/direct/docs/moved.txt"), free).awaitResult(2000);
-			assertEquals("dlfs/direct/docs/moved.txt", RT.getIn(moved, "to").toString());
-			eng.jobs().invokeOperation("v/ops/file/copy", Maps.of(
-				"from", "dlfs/direct/docs/moved.txt",
-				"to", "dlfs/direct/docs/copy.txt"), free).awaitResult(2000);
+		ACell moved = eng.jobs().invokeOperation("v/ops/file/move", Maps.of(
+			"from", "dlfs/direct/docs/note.txt",
+			"to", "dlfs/direct/docs/moved.txt"), free).awaitResult(5000);
+		assertEquals("dlfs/direct/docs/moved.txt", RT.getIn(moved, "to").toString());
+		eng.jobs().invokeOperation("v/ops/file/copy", Maps.of(
+			"from", "dlfs/direct/docs/moved.txt",
+			"to", "dlfs/direct/docs/copy.txt"), free).awaitResult(5000);
 
-			RequestContext scoped = RequestContext.of(did).withCaps(Vectors.of(
-				Capability.create(Strings.create("dlfs/direct/docs/"), Capability.CRUD_READ)));
-			ACell scopedRead = eng.jobs().invokeOperation("v/ops/file/read",
-				Maps.of("path", "dlfs/direct/docs/copy.txt"), scoped).awaitResult(2000);
-			assertEquals("canonical", RT.getIn(scopedRead, "content").toString());
+		RequestContext scoped = RequestContext.of(did).withCaps(Vectors.of(
+			Capability.create(Strings.create("dlfs/direct/docs/"), Capability.CRUD_READ)));
+		ACell scopedRead = eng.jobs().invokeOperation("v/ops/file/read",
+			Maps.of("path", "dlfs/direct/docs/copy.txt"), scoped).awaitResult(5000);
+		assertEquals("canonical", RT.getIn(scopedRead, "content").toString());
 
-			Job escaped = eng.jobs().invokeOperation("v/ops/file/read",
-				Maps.of("path", "dlfs/direct/../other.txt"), free);
-			assertThrows(Exception.class, () -> escaped.awaitResult(2000));
-			assertTrue(escaped.getErrorMessage().contains("escapes DLFS drive"));
-		} finally {
-			eng.close();
-		}
+		Job escaped = eng.jobs().invokeOperation("v/ops/file/read",
+			Maps.of("path", "dlfs/direct/../other.txt"), free);
+		assertThrows(Exception.class, () -> escaped.awaitResult(5000));
+		assertTrue(escaped.getErrorMessage().contains("escapes DLFS drive"));
 	}
 
 	@Test
@@ -1150,59 +1158,49 @@ public class FileAdapterTest {
 		// file: surface's direct NIO dispatch works natively on a DLFS root — a
 		// rename is a drive metadata operation, never a byte round-trip through
 		// the caller (covia#321).
-		Engine eng = Engine.createTemp(Maps.of(
-			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
-			"file", Maps.of("roots", Maps.of(
-				"docs", Maps.of("dlfs", "docs-drive")
-			))
-		));
-		Engine.addDemoAssets(eng);
-		try {
-			RequestContext ctx = RequestContext.of(convex.core.data.Strings.create(
-				"did:key:z6Mk-test-FileAdapterTest-dlfs-move"));
+		Engine eng = dlfsRoots;
+		RequestContext ctx = RequestContext.of(convex.core.data.Strings.create(
+			"did:key:z6Mk-test-FileAdapterTest-dlfs-move"));
 
-			Job write = eng.jobs().invokeOperation("v/ops/file/write",
-				Maps.of("root", "docs", "path", "draft.txt", "content", "final text"), ctx);
-			write.awaitResult(2000);
-			assertEquals(Status.COMPLETE, write.getStatus());
-			eng.jobs().invokeOperation("v/ops/file/mkdir",
-				Maps.of("root", "docs", "path", "filed"), ctx).awaitResult(2000);
+		Job write = eng.jobs().invokeOperation("v/ops/file/write",
+			Maps.of("root", "docs", "path", "draft.txt", "content", "final text"), ctx);
+		write.awaitResult(2000);
+		assertEquals(Status.COMPLETE, write.getStatus());
+		eng.jobs().invokeOperation("v/ops/file/mkdir",
+			Maps.of("root", "docs", "path", "filed"), ctx).awaitResult(2000);
 
-			// Native move: source gone, destination carries the content.
-			Job move = eng.jobs().invokeOperation("v/ops/file/move",
-				Maps.of("root", "docs", "from", "draft.txt", "to", "filed/letter.txt"), ctx);
-			move.awaitResult(2000);
-			assertEquals(Status.COMPLETE, move.getStatus());
-			assertTrue(RT.bool(RT.getIn(move.getOutput(), "moved")));
+		// Native move: source gone, destination carries the content.
+		Job move = eng.jobs().invokeOperation("v/ops/file/move",
+			Maps.of("root", "docs", "from", "draft.txt", "to", "filed/letter.txt"), ctx);
+		move.awaitResult(2000);
+		assertEquals(Status.COMPLETE, move.getStatus());
+		assertTrue(RT.bool(RT.getIn(move.getOutput(), "moved")));
 
-			Job readMoved = eng.jobs().invokeOperation("v/ops/file/read",
-				Maps.of("root", "docs", "path", "filed/letter.txt"), ctx);
-			readMoved.awaitResult(2000);
+		Job readMoved = eng.jobs().invokeOperation("v/ops/file/read",
+			Maps.of("root", "docs", "path", "filed/letter.txt"), ctx);
+		readMoved.awaitResult(2000);
+		assertEquals("final text",
+			RT.ensureString(RT.getIn(readMoved.getOutput(), "content")).toString());
+
+		Job listRoot = eng.jobs().invokeOperation("v/ops/file/list",
+			Maps.of("root", "docs", "path", ""), ctx);
+		listRoot.awaitResult(2000);
+		AVector<?> entries = RT.ensureVector(RT.getIn(listRoot.getOutput(), "entries"));
+		assertEquals(1, entries.count(), "the moved source must be gone: " + entries);
+
+		// Native copy: both endpoints carry the content afterwards.
+		Job copy = eng.jobs().invokeOperation("v/ops/file/copy",
+			Maps.of("root", "docs", "from", "filed/letter.txt",
+				"to", "filed/letter-backup.txt"), ctx);
+		copy.awaitResult(2000);
+		assertEquals(Status.COMPLETE, copy.getStatus());
+		assertTrue(RT.bool(RT.getIn(copy.getOutput(), "copied")));
+		for (String p : new String[] {"filed/letter.txt", "filed/letter-backup.txt"}) {
+			Job read = eng.jobs().invokeOperation("v/ops/file/read",
+				Maps.of("root", "docs", "path", p), ctx);
+			read.awaitResult(2000);
 			assertEquals("final text",
-				RT.ensureString(RT.getIn(readMoved.getOutput(), "content")).toString());
-
-			Job listRoot = eng.jobs().invokeOperation("v/ops/file/list",
-				Maps.of("root", "docs", "path", ""), ctx);
-			listRoot.awaitResult(2000);
-			AVector<?> entries = RT.ensureVector(RT.getIn(listRoot.getOutput(), "entries"));
-			assertEquals(1, entries.count(), "the moved source must be gone: " + entries);
-
-			// Native copy: both endpoints carry the content afterwards.
-			Job copy = eng.jobs().invokeOperation("v/ops/file/copy",
-				Maps.of("root", "docs", "from", "filed/letter.txt",
-					"to", "filed/letter-backup.txt"), ctx);
-			copy.awaitResult(2000);
-			assertEquals(Status.COMPLETE, copy.getStatus());
-			assertTrue(RT.bool(RT.getIn(copy.getOutput(), "copied")));
-			for (String p : new String[] {"filed/letter.txt", "filed/letter-backup.txt"}) {
-				Job read = eng.jobs().invokeOperation("v/ops/file/read",
-					Maps.of("root", "docs", "path", p), ctx);
-				read.awaitResult(2000);
-				assertEquals("final text",
-					RT.ensureString(RT.getIn(read.getOutput(), "content")).toString());
-			}
-		} finally {
-			eng.close();
+				RT.ensureString(RT.getIn(read.getOutput(), "content")).toString());
 		}
 	}
 
@@ -1315,101 +1313,71 @@ public class FileAdapterTest {
 	public void testDLFSSubpathRootReadsCreateNothing() {
 		// Reads under a DLFS root's configured subtree find nothing until a write
 		// creates it, through file: and archive: alike.
-		Engine eng = Engine.createTemp(Maps.of(
-			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
-			"file", Maps.of("roots", Maps.of(
-				"reports", Maps.of("dlfs", "work", "subpath", "out/reports")
-			))
-		));
-		Engine.addDemoAssets(eng);
-		try {
-			RequestContext ctx = RequestContext.of(
-				Strings.create("did:key:z6Mk-test-FileAdapterTest-dlfs-subpath"));
-			eng.jobs().invokeOperation("v/ops/dlfs/create-drive",
-				Maps.of("name", "work"), ctx).awaitResult(2000);
-			for (String op : new String[] {"v/ops/file/read", "v/ops/archive/list"}) {
-				Job read = eng.jobs().invokeOperation(op,
-					Maps.of("root", "reports", "path", "bundle.zip"), ctx);
-				assertThrows(Exception.class, () -> read.awaitResult(2000), op);
-			}
-			ACell out = eng.jobs().invokeOperation("v/ops/dlfs/stat",
-				Maps.of("drive", "work", "path", "out"), ctx).awaitResult(2000);
-			assertFalse(RT.bool(RT.getIn(out, "exists")), "a read must not create the subtree");
-
-			eng.jobs().invokeOperation("v/ops/file/write",
-				Maps.of("root", "reports", "path", "q4.txt", "content", "done"), ctx).awaitResult(2000);
-			ACell written = eng.jobs().invokeOperation("v/ops/dlfs/stat",
-				Maps.of("drive", "work", "path", "out/reports/q4.txt"), ctx).awaitResult(2000);
-			assertTrue(RT.bool(RT.getIn(written, "exists")), "a write creates the subtree");
-		} finally {
-			eng.close();
+		Engine eng = dlfsRoots;
+		RequestContext ctx = RequestContext.of(
+			Strings.create("did:key:z6Mk-test-FileAdapterTest-dlfs-subpath"));
+		eng.jobs().invokeOperation("v/ops/dlfs/create-drive",
+			Maps.of("name", "work"), ctx).awaitResult(2000);
+		for (String op : new String[] {"v/ops/file/read", "v/ops/archive/list"}) {
+			Job read = eng.jobs().invokeOperation(op,
+				Maps.of("root", "reports", "path", "bundle.zip"), ctx);
+			assertThrows(Exception.class, () -> read.awaitResult(2000), op);
 		}
+		ACell out = eng.jobs().invokeOperation("v/ops/dlfs/stat",
+			Maps.of("drive", "work", "path", "out"), ctx).awaitResult(2000);
+		assertFalse(RT.bool(RT.getIn(out, "exists")), "a read must not create the subtree");
+
+		eng.jobs().invokeOperation("v/ops/file/write",
+			Maps.of("root", "reports", "path", "q4.txt", "content", "done"), ctx).awaitResult(2000);
+		ACell written = eng.jobs().invokeOperation("v/ops/dlfs/stat",
+			Maps.of("drive", "work", "path", "out/reports/q4.txt"), ctx).awaitResult(2000);
+		assertTrue(RT.bool(RT.getIn(written, "exists")), "a write creates the subtree");
 	}
 
 	@Test
 	public void testDLFSRootIsolatesPerCaller() {
 		// Each caller's drive view is signed with their own key — writes by
 		// one DID must not be visible to another.
-		Engine eng = Engine.createTemp(Maps.of(
-			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
-			"file", Maps.of("roots", Maps.of(
-				"private", Maps.of("dlfs", "private-drive")
-			))
-		));
-		Engine.addDemoAssets(eng);
-		try {
-			convex.core.data.AString alice = convex.core.data.Strings.create(
-				"did:key:z6Mk-test-FileAdapterTest-alice");
-			convex.core.data.AString bob = convex.core.data.Strings.create(
-				"did:key:z6Mk-test-FileAdapterTest-bob");
+		Engine eng = dlfsRoots;
+		convex.core.data.AString alice = convex.core.data.Strings.create(
+			"did:key:z6Mk-test-FileAdapterTest-alice");
+		convex.core.data.AString bob = convex.core.data.Strings.create(
+			"did:key:z6Mk-test-FileAdapterTest-bob");
 
-			eng.jobs().invokeOperation("v/ops/file/write",
-				Maps.of("root", "private", "path", "secret.txt", "content", "alice's note"),
-				RequestContext.of(alice)).awaitResult(2000);
+		eng.jobs().invokeOperation("v/ops/file/write",
+			Maps.of("root", "private", "path", "secret.txt", "content", "alice's note"),
+			RequestContext.of(alice)).awaitResult(2000);
 
-			// Bob has no drive of that name: his list finds none, not Alice's.
-			Job bobList = eng.jobs().invokeOperation(
-				"v/ops/file/list", Maps.of("root", "private"),
-				RequestContext.of(bob));
-			assertThrows(Exception.class, () -> bobList.awaitResult(2000));
-			assertTrue(bobList.getErrorMessage().contains(DLFSAdapter.DRIVE_NOT_FOUND),
-				bobList.getErrorMessage());
+		// Bob has no drive of that name: his list finds none, not Alice's.
+		Job bobList = eng.jobs().invokeOperation(
+			"v/ops/file/list", Maps.of("root", "private"),
+			RequestContext.of(bob));
+		assertThrows(Exception.class, () -> bobList.awaitResult(2000));
+		assertTrue(bobList.getErrorMessage().contains(DLFSAdapter.DRIVE_NOT_FOUND),
+			bobList.getErrorMessage());
 
-			// Once Bob writes, his view of the drive holds only his own file.
-			eng.jobs().invokeOperation("v/ops/file/write",
-				Maps.of("root", "private", "path", "bob.txt", "content", "bob's note"),
-				RequestContext.of(bob)).awaitResult(2000);
-			AVector<?> entries = RT.ensureVector(RT.getIn(eng.jobs().invokeOperation(
-				"v/ops/file/list", Maps.of("root", "private"),
-				RequestContext.of(bob)).awaitResult(2000), "entries"));
-			assertEquals(1, entries.count(), "Bob should not see Alice's drive contents");
-			assertEquals("bob.txt", RT.getIn(entries.get(0), "name").toString());
-		} finally {
-			eng.close();
-		}
+		// Once Bob writes, his view of the drive holds only his own file.
+		eng.jobs().invokeOperation("v/ops/file/write",
+			Maps.of("root", "private", "path", "bob.txt", "content", "bob's note"),
+			RequestContext.of(bob)).awaitResult(2000);
+		AVector<?> entries = RT.ensureVector(RT.getIn(eng.jobs().invokeOperation(
+			"v/ops/file/list", Maps.of("root", "private"),
+			RequestContext.of(bob)).awaitResult(2000), "entries"));
+		assertEquals(1, entries.count(), "Bob should not see Alice's drive contents");
+		assertEquals("bob.txt", RT.getIn(entries.get(0), "name").toString());
 	}
 
 	@Test
 	public void testReadOnlyDLFSRootCreatesNoDrive() {
 		// A refused write creates nothing, the root's own drive included.
-		Engine eng = Engine.createTemp(Maps.of(
-			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
-			"file", Maps.of("roots", Maps.of(
-				"shared", Maps.of("dlfs", "ro-drive", "subpath", "docs", "readOnly", true)
-			))
-		));
-		Engine.addDemoAssets(eng);
-		try {
-			RequestContext alice = RequestContext.of(Strings.create("did:key:z6Mk-test-FileAdapterTest-ro"));
-			Job write = eng.jobs().invokeOperation("v/ops/file/write",
-				Maps.of("root", "shared", "path", "note.txt", "content", "x"), alice);
-			assertThrows(Exception.class, () -> write.awaitResult(2000));
-			AVector<?> drives = RT.ensureVector(RT.getIn(eng.jobs().invokeOperation(
-				"v/ops/dlfs/list-drives", Maps.empty(), alice).awaitResult(2000), "drives"));
-			assertEquals(0, drives.count(), "a refused write must not create the drive: " + drives);
-		} finally {
-			eng.close();
-		}
+		Engine eng = dlfsRoots;
+		RequestContext alice = RequestContext.of(Strings.create("did:key:z6Mk-test-FileAdapterTest-ro"));
+		Job write = eng.jobs().invokeOperation("v/ops/file/write",
+			Maps.of("root", "shared", "path", "note.txt", "content", "x"), alice);
+		assertThrows(Exception.class, () -> write.awaitResult(2000));
+		AVector<?> drives = RT.ensureVector(RT.getIn(eng.jobs().invokeOperation(
+			"v/ops/dlfs/list-drives", Maps.empty(), alice).awaitResult(2000), "drives"));
+		assertEquals(0, drives.count(), "a refused write must not create the drive: " + drives);
 	}
 
 	@Test
@@ -1417,7 +1385,7 @@ public class FileAdapterTest {
 		// With no file.roots configured, the adapter defaults to creating an
 		// ephemeral 'tmp' root. Agents get a usable scratch space immediately.
 		Engine bare = TestEngine.ENGINE;
-		convex.core.data.AString did = convex.core.data.Strings.create(DID);
+		convex.core.data.AString did = TestEngine.uniqueDID("FileAdapterTest-temp-root");
 
 		Job rootsJob = bare.jobs().invokeOperation(
 			"v/ops/file/roots", Maps.empty(), RequestContext.of(did));

@@ -7,9 +7,11 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 
-import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestInfo;
 
 import convex.auth.ucan.Capability;
 import convex.core.data.ACell;
@@ -35,17 +37,24 @@ import covia.venue.RequestContext;
 import covia.venue.Session;
 import covia.venue.TestEngine;
 
-/** Queries and cached summaries use real dispatch and LLM runtimes, with a deterministic provider. */
+/**
+ * Queries and cached summaries use real dispatch and LLM runtimes, with a
+ * deterministic provider. One venue for the class, since each test registers a
+ * provider of its own, under its own name.
+ */
 public class AgentQueryTest {
 
 	private static final AString AGENT = Strings.create("queried");
 	private static final String FAILURE = "injected query failure";
 	private static final Blob SUMMARY_SESSION = Blob.fromHex("1234abcd");
+	private static final java.util.concurrent.atomic.AtomicInteger MODELS = new java.util.concurrent.atomic.AtomicInteger();
+	private static Engine venue;
 	private Engine engine;
 	private RequestContext owner;
 	private QueryModel model;
 
 	private static class QueryModel extends AAdapter {
+		private final String name;
 		volatile RequestContext seenContext;
 		volatile ACell seenInput;
 		final CountDownLatch entered = new CountDownLatch(1);
@@ -53,11 +62,13 @@ public class AgentQueryTest {
 		Function<ACell, CompletableFuture<ACell>> reply = input ->
 			CompletableFuture.completedFuture(Maps.of("role", "assistant", "content", "answer"));
 
-		@Override public String getName() { return "query-test"; }
+		QueryModel(String name) { this.name = name; }
+
+		@Override public String getName() { return name; }
 		@Override public String getDescription() { return "Query test provider"; }
 		@Override protected void installAssets() {
-			installAsset("query-test/model", Maps.of(Fields.NAME, "Query test model",
-				Fields.OPERATION, Maps.of(Fields.ADAPTER, "query-test:model")));
+			installAsset(name + "/model", Maps.of(Fields.NAME, "Query test model",
+				Fields.OPERATION, Maps.of(Fields.ADAPTER, name + ":model")));
 		}
 		@Override public CompletableFuture<ACell> invokeFuture(RequestContext ctx,
 				AMap<AString, ACell> meta, ACell input) {
@@ -71,22 +82,30 @@ public class AgentQueryTest {
 		}
 	}
 
+	@BeforeAll
+	public static void start() {
+		venue = Engine.createTemp(Maps.empty());
+		Engine.addDemoAssets(venue);
+	}
+
+	@AfterAll
+	public static void stop() { venue.close(); }
+
 	@BeforeEach
-	public void setup() {
-		engine = Engine.createTemp(Maps.empty());
-		Engine.addDemoAssets(engine);
-		owner = engine.venueContext();
-		model = new QueryModel();
+	public void setup(TestInfo info) {
+		engine = venue;
+		owner = RequestContext.of(TestEngine.uniqueDID(info));
+		engine.getVenueState().users().ensure(owner.getUserDID());
+		model = new QueryModel("query-test-" + MODELS.incrementAndGet());
 		engine.registerAdapter(model);
 	}
 
-	@AfterEach
-	public void close() { engine.close(); }
+	private String modelOperation() { return "v/ops/" + model.getName() + "/model"; }
 
 	private Agent create(String runtime, AMap<AString, ACell> extra) {
 		AMap<AString, ACell> config = Maps.of(
 			Fields.OPERATION, "v/ops/" + runtime + "/chat",
-			"llmOperation", "v/ops/query-test/model", "systemPrompt", "query persona");
+			"llmOperation", modelOperation(), "systemPrompt", "query persona");
 		for (var e : extra.entrySet()) config = config.assoc(e.getKey(), e.getValue());
 		engine.jobs().invokeOperation("v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, AGENT, Fields.CONFIG, config), owner).awaitResult(5000);
@@ -233,7 +252,7 @@ public class AgentQueryTest {
 
 	@Test
 	public void queryHonoursAdmissionAndUsesFreshAgentAuthority() {
-		RequestContext other = RequestContext.of(Strings.create("did:key:query-caller"));
+		RequestContext other = RequestContext.of(TestEngine.uniqueDID("AgentQueryTest-caller"));
 		engine.getVenueState().users().ensure(other.getUserDID());
 		Agent agent = create("llmagent", Maps.empty());
 		AString address = Strings.create(owner.getUserDID() + "/g/" + AGENT);
@@ -283,7 +302,7 @@ public class AgentQueryTest {
 
 	@Test
 	public void structuredAnswerIsReturnedWithoutMergingTransitionState() {
-		Agent agent = create("llmagent", Maps.of(Fields.OPERATION, "v/ops/query-test/model"));
+		Agent agent = create("llmagent", Maps.of(Fields.OPERATION, modelOperation()));
 		ACell before = agent.getRecord();
 		ACell answer = Maps.of("answer", 42);
 		model.reply = input -> CompletableFuture.completedFuture(Maps.of(
@@ -698,8 +717,8 @@ public class AgentQueryTest {
 	@Test public void detailedSummaryAndItsCacheSurviveStoreReopen() throws Exception { summarySurvivesStoreReopen(true); }
 
 	private void summarySurvivesStoreReopen(boolean includeSteps) throws Exception {
-		var key = engine.getKeyPair();
-		engine.close();
+		var key = convex.core.crypto.AKeyPair.generate();
+		String modelName = model.getName();
 		java.io.File file;
 		ACell expected;
 		Blob jobId;
@@ -709,7 +728,7 @@ public class AgentQueryTest {
 			try {
 				Engine.addDemoAssets(engine);
 				owner = engine.venueContext();
-				model = new QueryModel();
+				model = new QueryModel(modelName);
 				engine.registerAdapter(model);
 				createSummarisable("llmagent");
 				Job job = summarise(includeSteps);
@@ -722,7 +741,7 @@ public class AgentQueryTest {
 			try {
 				Engine.addDemoAssets(engine);
 				owner = engine.venueContext();
-				model = new QueryModel();
+				model = new QueryModel(modelName);
 				engine.registerAdapter(model);
 				Agent agent = engine.getVenueState().users().user(owner.getUserDID()).agent(AGENT);
 				assertEquals(expected, savedSummary(agent));

@@ -10,6 +10,8 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
@@ -152,77 +154,70 @@ public class JobManagerTest {
 	}
 
 	private void synchronousAdapterErrorsSettleDurableJobs() {
-		Engine eng = Engine.createTemp(null);
-		try {
-			var invoked = new java.util.concurrent.atomic.AtomicReference<Job>();
-			eng.registerAdapter(new AAdapter() {
-				@Override public String getName() { return "broken-module"; }
-				@Override public String getDescription() { return "test"; }
-				@Override public CompletableFuture<ACell> invokeFuture(RequestContext c,
-						AMap<AString, ACell> m, ACell in) {
-					invoked.set(c.getJob());
-					throw new NoClassDefFoundError("missing/library/Class");
-				}
-				@Override public void invoke(Job job, RequestContext c, AMap<AString, ACell> m, ACell in) {
-					if (Strings.create("custom").equals(in)) {
-						invoked.set(job);
-						throw new NoClassDefFoundError("custom/adapter/Class");
-					}
-					super.invoke(job, c, m, in);
-				}
-			});
-			AMap<AString, ACell> meta = Maps.of(Fields.OPERATION,
-				Maps.of(Fields.ADAPTER, Strings.create("broken-module:run")));
-			for (ACell input : new ACell[] { null, Strings.create("custom") }) {
-				// The caller receives the Job's report: the adapter's fault, the error chained
-				covia.exception.FaultException thrown = assertThrows(covia.exception.FaultException.class,
-					() -> eng.jobs().invokeOperation(meta, input, eng.venueContext()));
-				assertTrue(thrown.getCause() instanceof NoClassDefFoundError, String.valueOf(thrown.getCause()));
-				Job job = invoked.get();
-				assertEquals(Status.FAILED, job.getStatus());
-				assertEquals(thrown.getMessage(), job.getErrorMessage());
-				assertTrue(job.future().isCompletedExceptionally());
-				assertEquals(Status.FAILED, eng.jobs().getJobData(job.getID(), eng.venueContext()).get(Fields.STATUS));
+		Engine eng = ownAdapters;
+		var invoked = new java.util.concurrent.atomic.AtomicReference<Job>();
+		eng.registerAdapter(new AAdapter() {
+			@Override public String getName() { return "broken-module"; }
+			@Override public String getDescription() { return "test"; }
+			@Override public CompletableFuture<ACell> invokeFuture(RequestContext c,
+					AMap<AString, ACell> m, ACell in) {
+				invoked.set(c.getJob());
+				throw new NoClassDefFoundError("missing/library/Class");
 			}
-		} finally { eng.close(); }
+			@Override public void invoke(Job job, RequestContext c, AMap<AString, ACell> m, ACell in) {
+				if (Strings.create("custom").equals(in)) {
+					invoked.set(job);
+					throw new NoClassDefFoundError("custom/adapter/Class");
+				}
+				super.invoke(job, c, m, in);
+			}
+		});
+		AMap<AString, ACell> meta = Maps.of(Fields.OPERATION,
+			Maps.of(Fields.ADAPTER, Strings.create("broken-module:run")));
+		for (ACell input : new ACell[] { null, Strings.create("custom") }) {
+			// The caller receives the Job's report: the adapter's fault, the error chained
+			covia.exception.FaultException thrown = assertThrows(covia.exception.FaultException.class,
+				() -> eng.jobs().invokeOperation(meta, input, eng.venueContext()));
+			assertTrue(thrown.getCause() instanceof NoClassDefFoundError, String.valueOf(thrown.getCause()));
+			Job job = invoked.get();
+			assertEquals(Status.FAILED, job.getStatus());
+			assertEquals(thrown.getMessage(), job.getErrorMessage());
+			assertTrue(job.future().isCompletedExceptionally());
+			assertEquals(Status.FAILED, eng.jobs().getJobData(job.getID(), eng.venueContext()).get(Fields.STATUS));
+		}
 	}
 
 	@Test
 	public void testCancellationDuringInvokeFutureCancelsReturnedFuture() {
-		Engine eng = Engine.createTemp(null);
-		try {
-			CompletableFuture<ACell> processing = new CompletableFuture<>();
-			eng.registerAdapter(new AAdapter() {
-				@Override public String getName() { return "cancel-during-invoke"; }
-				@Override public String getDescription() { return "test"; }
-				@Override public CompletableFuture<ACell> invokeFuture(RequestContext c,
-						AMap<AString, ACell> m, ACell in) {
-					c.getJob().cancel();
-					return processing;
-				}
-			});
-			AMap<AString, ACell> meta = Maps.of(Fields.OPERATION,
-				Maps.of(Fields.ADAPTER, Strings.create("cancel-during-invoke:run")));
-			Job job = eng.jobs().invokeOperation(meta, null, eng.venueContext());
-			assertEquals(Status.CANCELLED, job.getStatus());
-			assertTrue(processing.isCancelled());
-			assertTrue(job.future().isCompletedExceptionally());
-		} finally { eng.close(); }
+		Engine eng = ownAdapters;
+		CompletableFuture<ACell> processing = new CompletableFuture<>();
+		eng.registerAdapter(new AAdapter() {
+			@Override public String getName() { return "cancel-during-invoke"; }
+			@Override public String getDescription() { return "test"; }
+			@Override public CompletableFuture<ACell> invokeFuture(RequestContext c,
+					AMap<AString, ACell> m, ACell in) {
+				c.getJob().cancel();
+				return processing;
+			}
+		});
+		AMap<AString, ACell> meta = Maps.of(Fields.OPERATION,
+			Maps.of(Fields.ADAPTER, Strings.create("cancel-during-invoke:run")));
+		Job job = eng.jobs().invokeOperation(meta, null, eng.venueContext());
+		assertEquals(Status.CANCELLED, job.getStatus());
+		assertTrue(processing.isCancelled());
+		assertTrue(job.future().isCompletedExceptionally());
 	}
 
 	@Test
 	public void testDelayedPersistenceCannotOverwriteCancellation() throws Exception {
-		Engine eng = Engine.createTemp(null);
-		eng.registerAdapter(new TestAdapter());
 		CountDownLatch entered = new CountDownLatch(1);
 		CountDownLatch release = new CountDownLatch(1);
 		try {
-			RequestContext owner = eng.venueContext();
 			AMap<AString, ACell> meta = Maps.of(Fields.OPERATION,
 				Maps.of(Fields.ADAPTER, Strings.create("test:never")));
-			Job original = eng.jobs().invokeOperation(meta, null, owner);
-			JobRecord record = eng.getVenueState().users().user(owner.getUserDID()).jobs().job(original.getID());
-			Job job = new VenueJob(record, original.getData(), OutputRules.of(meta), owner.getUserDID(), eng.jobs(), null) {
+			Job original = engine.jobs().invokeOperation(meta, null, ctx);
+			JobRecord record = engine.getVenueState().users().user(did).jobs().job(original.getID());
+			Job job = new VenueJob(record, original.getData(), OutputRules.of(meta), did, engine.jobs(), null) {
 				@Override public void onUpdate(AMap<AString, ACell> next) {
 					if (Status.PAUSED.equals(next.get(Fields.STATUS))) {
 						entered.countDown();
@@ -239,13 +234,31 @@ public class JobManagerTest {
 			} finally { release.countDown(); }
 			delayed.get(5, TimeUnit.SECONDS);
 			assertEquals(Status.CANCELLED,
-				eng.jobs().getJobData(job.getID(), owner).get(Fields.STATUS));
-		} finally { release.countDown(); eng.close(); }
+				engine.jobs().getJobData(job.getID(), ctx).get(Fields.STATUS));
+		} finally { release.countDown(); }
 	}
 
 	private final Engine engine = TestEngine.ENGINE;
 	private AString did;
 	private RequestContext ctx;
+
+	/** For the tests that register an adapter, which every test on the shared venue would see. */
+	private static Engine ownAdapters;
+
+	/** Output validation in strict mode, for the tests that need it. */
+	private static Engine strict;
+
+	@BeforeAll
+	static void startVenues() {
+		ownAdapters = Engine.createTemp(null);
+		strict = Engine.createTemp(Maps.of(Config.OUTPUT_VALIDATION, Strings.create("strict")));
+	}
+
+	@AfterAll
+	static void closeVenues() {
+		ownAdapters.close();
+		strict.close();
+	}
 
 	@BeforeEach
 	public void setup(TestInfo info) {
@@ -603,25 +616,15 @@ public class JobManagerTest {
 	public void testOutputValidationOffIgnoresBadResult() {
 		// Default config → outputValidation off → a non-object result (which
 		// violates the schema) must NOT raise. No validation, no logging.
-		Engine eng = Engine.createTemp(null);
-		try {
-			eng.jobs().validateOutput(OutputRules.of(metaWithObjectOutput()), Strings.create("not an object"));
-		} finally {
-			eng.close();
-		}
+		engine.jobs().validateOutput(OutputRules.of(metaWithObjectOutput()), Strings.create("not an object"));
 	}
 
 	@Test
 	public void testOutputValidationStrictFailsBadResult() {
-		Engine eng = Engine.createTemp(Maps.of(Config.OUTPUT_VALIDATION, Strings.create("strict")));
-		try {
-			assertThrows(CoviaException.class,
-				() -> eng.jobs().validateOutput(OutputRules.of(metaWithObjectOutput()), Strings.create("not an object")));
-			// A conforming result (an object) passes.
-			eng.jobs().validateOutput(OutputRules.of(metaWithObjectOutput()), Maps.empty());
-		} finally {
-			eng.close();
-		}
+		assertThrows(CoviaException.class,
+			() -> strict.jobs().validateOutput(OutputRules.of(metaWithObjectOutput()), Strings.create("not an object")));
+		// A conforming result (an object) passes.
+		strict.jobs().validateOutput(OutputRules.of(metaWithObjectOutput()), Maps.empty());
 	}
 
 	@Test
@@ -638,75 +641,62 @@ public class JobManagerTest {
 	@Test
 	public void testOutputValidationNoSchemaIsNoop() {
 		// An operation with no output schema is never validated, even in strict.
-		Engine eng = Engine.createTemp(Maps.of(Config.OUTPUT_VALIDATION, Strings.create("strict")));
-		try {
-			AMap<AString, ACell> meta = Maps.of(Fields.OPERATION,
-				Maps.of(Fields.ADAPTER, Strings.create("test:out")));
-			eng.jobs().validateOutput(OutputRules.of(meta), Strings.create("anything"));
-		} finally {
-			eng.close();
-		}
+		AMap<AString, ACell> meta = Maps.of(Fields.OPERATION,
+			Maps.of(Fields.ADAPTER, Strings.create("test:out")));
+		strict.jobs().validateOutput(OutputRules.of(meta), Strings.create("anything"));
 	}
 
 	@Test
 	public void testStrictOutputValidationCoversJobAwareAdapterOverride() {
-		Engine eng = Engine.createTemp(Maps.of(Config.OUTPUT_VALIDATION, Strings.create("strict")));
-		try {
-			eng.registerAdapter(new AAdapter() {
-				@Override public String getName() { return "custom-output"; }
-				@Override public String getDescription() { return "test"; }
-				@Override public CompletableFuture<ACell> invokeFuture(RequestContext c,
-						AMap<AString, ACell> m, ACell in) {
-					return CompletableFuture.completedFuture(Strings.create("bad"));
-				}
-				@Override public void invoke(Job job, RequestContext c,
-						AMap<AString, ACell> m, ACell in) {
-					job.setStatus(Status.STARTED);
-					job.completeWith(Strings.create("not an object"));
-				}
-			});
-			AMap<AString, ACell> meta = Maps.of(Fields.OPERATION, Maps.of(
-				Fields.ADAPTER, Strings.create("custom-output:run"),
-				Fields.OUTPUT, Maps.of(Strings.create("type"), Strings.create("object"))));
-			Job job = eng.jobs().invokeOperation(meta, Maps.empty(), eng.venueContext());
-			assertThrows(Exception.class, () -> job.awaitResult(1000));
-			assertEquals(Status.FAILED, job.getStatus());
-			assertTrue(job.getErrorMessage().contains("Output schema violation"));
-		} finally {
-			eng.close();
-		}
+		Engine eng = strict;
+		eng.registerAdapter(new AAdapter() {
+			@Override public String getName() { return "custom-output"; }
+			@Override public String getDescription() { return "test"; }
+			@Override public CompletableFuture<ACell> invokeFuture(RequestContext c,
+					AMap<AString, ACell> m, ACell in) {
+				return CompletableFuture.completedFuture(Strings.create("bad"));
+			}
+			@Override public void invoke(Job job, RequestContext c,
+					AMap<AString, ACell> m, ACell in) {
+				job.setStatus(Status.STARTED);
+				job.completeWith(Strings.create("not an object"));
+			}
+		});
+		AMap<AString, ACell> meta = Maps.of(Fields.OPERATION, Maps.of(
+			Fields.ADAPTER, Strings.create("custom-output:run"),
+			Fields.OUTPUT, Maps.of(Strings.create("type"), Strings.create("object"))));
+		Job job = eng.jobs().invokeOperation(meta, Maps.empty(), eng.venueContext());
+		assertThrows(Exception.class, () -> job.awaitResult(1000));
+		assertEquals(Status.FAILED, job.getStatus());
+		assertTrue(job.getErrorMessage().contains("Output schema violation"));
 	}
 
 	@Test
 	public void testInputSecretsRemainRedactedOnLaterJobUpdates() {
-		Engine eng = Engine.createTemp(null);
-		try {
-			eng.registerAdapter(new AAdapter() {
-				@Override public String getName() { return "secret-update"; }
-				@Override public String getDescription() { return "test"; }
-				@Override public CompletableFuture<ACell> invokeFuture(RequestContext c,
-						AMap<AString, ACell> m, ACell in) {
-					return CompletableFuture.completedFuture(in);
-				}
-				@Override public void invoke(Job job, RequestContext c,
-						AMap<AString, ACell> m, ACell in) {
-					job.setStatus(Status.STARTED);
-					job.update(data -> data.assoc(Fields.INPUT, in));
-					job.completeWith(Maps.empty());
-				}
-			});
-			AString token = Strings.create("token");
-			AMap<AString, ACell> meta = Maps.of(Fields.OPERATION, Maps.of(
-				Fields.ADAPTER, Strings.create("secret-update:run"),
-				Strings.create("secretFields"), Vectors.of(token)));
-			Job job = eng.jobs().invokeOperation(meta,
-				Maps.of(token, Strings.create("plaintext")), eng.venueContext());
-			job.awaitResult(1000);
-			AMap<AString, ACell> durable = eng.jobs().getJobData(job.getID(), eng.venueContext());
-			assertEquals(Fields.HIDDEN, RT.getIn(durable, Fields.INPUT, token));
-		} finally {
-			eng.close();
-		}
+		Engine eng = ownAdapters;
+		eng.registerAdapter(new AAdapter() {
+			@Override public String getName() { return "secret-update"; }
+			@Override public String getDescription() { return "test"; }
+			@Override public CompletableFuture<ACell> invokeFuture(RequestContext c,
+					AMap<AString, ACell> m, ACell in) {
+				return CompletableFuture.completedFuture(in);
+			}
+			@Override public void invoke(Job job, RequestContext c,
+					AMap<AString, ACell> m, ACell in) {
+				job.setStatus(Status.STARTED);
+				job.update(data -> data.assoc(Fields.INPUT, in));
+				job.completeWith(Maps.empty());
+			}
+		});
+		AString token = Strings.create("token");
+		AMap<AString, ACell> meta = Maps.of(Fields.OPERATION, Maps.of(
+			Fields.ADAPTER, Strings.create("secret-update:run"),
+			Strings.create("secretFields"), Vectors.of(token)));
+		Job job = eng.jobs().invokeOperation(meta,
+			Maps.of(token, Strings.create("plaintext")), eng.venueContext());
+		job.awaitResult(1000);
+		AMap<AString, ACell> durable = eng.jobs().getJobData(job.getID(), eng.venueContext());
+		assertEquals(Fields.HIDDEN, RT.getIn(durable, Fields.INPUT, token));
 	}
 
 	// ========== deleteJob ==========
@@ -807,40 +797,36 @@ public class JobManagerTest {
 	/** Settling jobs in a venue transaction: waiters wake only on the notification, and a refused result fails its job there. */
 	@Test
 	public void testCompleteInAndFailInSettleInATransaction() throws Exception {
-		Engine eng = Engine.createTemp(Maps.of(Config.OUTPUT_VALIDATION, Strings.create("strict")));
-		try {
-			eng.registerAdapter(new AAdapter() {
-				@Override public String getName() { return "held"; }
-				@Override public String getDescription() { return "test"; }
-				@Override public CompletableFuture<ACell> invokeFuture(RequestContext c,
-						AMap<AString, ACell> m, ACell in) {
-					return new CompletableFuture<>();
-				}
-				@Override public void invoke(Job job, RequestContext c, AMap<AString, ACell> m, ACell in) {
-					job.setStatus(Status.STARTED);
-				}
-			});
-			AMap<AString, ACell> meta = Maps.of(Fields.OPERATION, Maps.of(Fields.ADAPTER, "held:run",
-				Fields.OUTPUT, Maps.of(Strings.create("type"), Strings.create("object"))));
-			VenueJob completed = (VenueJob) eng.jobs().invokeOperation(meta, Maps.empty(), eng.venueContext());
-			VenueJob refused = (VenueJob) eng.jobs().invokeOperation(meta, Maps.empty(), eng.venueContext());
-			VenueJob failed = (VenueJob) eng.jobs().invokeOperation(meta, Maps.empty(), eng.venueContext());
-			java.util.List<Runnable> after = eng.getVenueState().transact(draft -> java.util.List.of(
-				completed.completeIn(draft, Maps.of("ok", "yes")),
-				refused.completeIn(draft, Strings.create("not an object")),
-				failed.failIn(draft, "gave up")));
-			assertEquals(Status.COMPLETE, completed.getStatus());
-			assertFalse(completed.future().isDone(), "waiters wake only when the notification runs");
-			after.forEach(Runnable::run);
-			assertEquals(Maps.of("ok", "yes"), completed.future().get(5, TimeUnit.SECONDS));
-			assertEquals(Status.FAILED, refused.getStatus(), "a refused result fails its job instead of aborting the transaction");
-			assertTrue(refused.getErrorMessage().startsWith(JobManager.OUTPUT_SCHEMA_VIOLATION));
-			assertEquals(Status.FAILED, failed.getStatus());
-			assertEquals("gave up", failed.getErrorMessage());
-			eng.getVenueState().execute(draft -> assertNull(completed.failIn(draft, "late"), "a finished job is left as it is"));
-		} finally {
-			eng.close();
-		}
+		Engine eng = strict;
+		eng.registerAdapter(new AAdapter() {
+			@Override public String getName() { return "held"; }
+			@Override public String getDescription() { return "test"; }
+			@Override public CompletableFuture<ACell> invokeFuture(RequestContext c,
+					AMap<AString, ACell> m, ACell in) {
+				return new CompletableFuture<>();
+			}
+			@Override public void invoke(Job job, RequestContext c, AMap<AString, ACell> m, ACell in) {
+				job.setStatus(Status.STARTED);
+			}
+		});
+		AMap<AString, ACell> meta = Maps.of(Fields.OPERATION, Maps.of(Fields.ADAPTER, "held:run",
+			Fields.OUTPUT, Maps.of(Strings.create("type"), Strings.create("object"))));
+		VenueJob completed = (VenueJob) eng.jobs().invokeOperation(meta, Maps.empty(), eng.venueContext());
+		VenueJob refused = (VenueJob) eng.jobs().invokeOperation(meta, Maps.empty(), eng.venueContext());
+		VenueJob failed = (VenueJob) eng.jobs().invokeOperation(meta, Maps.empty(), eng.venueContext());
+		java.util.List<Runnable> after = eng.getVenueState().transact(draft -> java.util.List.of(
+			completed.completeIn(draft, Maps.of("ok", "yes")),
+			refused.completeIn(draft, Strings.create("not an object")),
+			failed.failIn(draft, "gave up")));
+		assertEquals(Status.COMPLETE, completed.getStatus());
+		assertFalse(completed.future().isDone(), "waiters wake only when the notification runs");
+		after.forEach(Runnable::run);
+		assertEquals(Maps.of("ok", "yes"), completed.future().get(5, TimeUnit.SECONDS));
+		assertEquals(Status.FAILED, refused.getStatus(), "a refused result fails its job instead of aborting the transaction");
+		assertTrue(refused.getErrorMessage().startsWith(JobManager.OUTPUT_SCHEMA_VIOLATION));
+		assertEquals(Status.FAILED, failed.getStatus());
+		assertEquals("gave up", failed.getErrorMessage());
+		eng.getVenueState().execute(draft -> assertNull(completed.failIn(draft, "late"), "a finished job is left as it is"));
 	}
 
 	@Test

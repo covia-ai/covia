@@ -4,7 +4,6 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import convex.core.data.*;
 import covia.api.Fields;
@@ -13,12 +12,13 @@ import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
+import covia.venue.TestEngine;
 
 class ARemoteAgentAdapterTest {
-	private final Engine engine = Engine.createTemp(null);
+	private static final Engine engine = TestEngine.ENGINE;
 	private final Probe adapter = new Probe();
-	ARemoteAgentAdapterTest() { engine.registerAdapter(adapter); }
-	@AfterEach void close() { engine.close(); }
+	/** Bound to the shared venue, not registered on it: each test calls its own adapter directly. */
+	ARemoteAgentAdapterTest() { adapter.install(engine); }
 
 	static class Interaction implements RemoteInteraction {
 		final AtomicInteger cancelled = new AtomicInteger();

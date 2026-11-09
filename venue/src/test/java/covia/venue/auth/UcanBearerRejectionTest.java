@@ -5,7 +5,6 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
@@ -24,6 +23,7 @@ import convex.core.data.prim.CVMLong;
 import covia.exception.AuthException;
 import covia.venue.Config;
 import covia.venue.Engine;
+import covia.venue.TestEngine;
 import covia.venue.UcanJwtValidator;
 
 /**
@@ -37,22 +37,16 @@ import covia.venue.UcanJwtValidator;
  */
 public class UcanBearerRejectionTest {
 
-	private static Engine engine;
+	private static final Engine engine = TestEngine.ENGINE;
 	private static VenueAuthenticator authenticator;
 	private static AKeyPair caller;
 	private static AString callerDID;
 
 	@BeforeAll
 	static void setUp() {
-		engine = Engine.createTemp(Maps.empty());
 		authenticator = new VenueAuthenticator(engine);
 		caller = AKeyPair.generate();
 		callerDID = UCAN.toDIDKey(caller.getAccountKey());
-	}
-
-	@AfterAll
-	static void tearDown() {
-		if (engine != null) engine.close();
 	}
 
 	private static AMap<AString, ACell> bearerClaims(ACell exp) {

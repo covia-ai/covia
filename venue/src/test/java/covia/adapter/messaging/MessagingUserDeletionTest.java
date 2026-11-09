@@ -7,7 +7,11 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestInfo;
 
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -20,11 +24,25 @@ import covia.adapter.messaging.MessagingBot.Managed;
 import covia.venue.AdapterState;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
+import covia.venue.TestEngine;
 
 class MessagingUserDeletionTest {
-	private static final AString OWNER = Strings.create("did:test:bot-owner");
-	private static final AString OTHER = Strings.create("did:test:other-owner");
 	private static final AString VALUE = Strings.create("session");
+	/** One venue for the class: each test registers an adapter of its own and disables it or deletes through it. */
+	private static Engine engine;
+	private AString owner;
+	private AString other;
+	private Adapter adapter;
+
+	@BeforeAll static void start() { engine = Engine.createTemp(Maps.empty()); }
+	@AfterAll static void stop() { engine.close(); }
+
+	@BeforeEach void perTest(TestInfo info) {
+		owner = TestEngine.uniqueDID(info);
+		other = Strings.create(owner + "-other");
+		adapter = new Adapter(info.getTestMethod().orElseThrow().getName().toLowerCase(), owner);
+	}
+
 	private record Spec(String name, String userRef) implements MessagingBotSpec {
 		@Override public String agent() { return null; }
 		@Override public String operation() { return "v/test/ops/echo"; }
@@ -46,9 +64,12 @@ class MessagingUserDeletionTest {
 		@Override public AMap<AString, ACell> status() { return Maps.of("running", running); }
 	}
 	private static class Adapter extends AMessagingAdapter<Spec, Bot> {
+		private final String name;
+		private final AString owner;
 		Runnable creating = () -> { };
 		Runnable deleting = () -> { };
-		@Override public String getName() { return "test-messaging"; }
+		Adapter(String name, AString owner) { this.name = name; this.owner = owner; }
+		@Override public String getName() { return name; }
 		@Override public String getDescription() { return "In-memory messaging lifecycle test"; }
 		@Override protected Spec parseBot(String name, ACell settings, boolean strict) {
 			return new Spec(name, RT.getIn(settings, Strings.create("user")).toString());
@@ -62,53 +83,49 @@ class MessagingUserDeletionTest {
 		@Override public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
 			return CompletableFuture.completedFuture(handleCreate(ctx, input));
 		}
+		/** Every adapter on the venue hears of every deletion: another test's account is none of this one's business. */
 		@Override public void onUserDeleted(AString did, AMap<AString, ACell> previousUser) {
+			if (!did.equals(owner)) return;
 			deleting.run();
 			super.onUserDeleted(did, previousUser);
 		}
-		void configureOwner() { configureBots(Map.of("configured", new Spec("configured", OWNER.toString()))); }
-		void create(AString owner) { handleCreate(RequestContext.of(owner), Maps.of("name", "runtime", "token", "s/token")); }
+		void configureOwner() { configureBots(Map.of("configured", new Spec("configured", owner.toString()))); }
+		void create(AString user) { handleCreate(RequestContext.of(user), Maps.of("name", "runtime", "token", "s/token")); }
 	}
 
 	@Test void deletionStopsDisabledBotsErasesPrivateStateAndPreventsRestart() {
-		Engine engine = Engine.createTemp(Maps.empty());
-		try {
-			engine.getVenueState().users().create(OWNER);
-			engine.getVenueState().users().create(OTHER);
-			Adapter adapter = new Adapter();
-			adapter.configureOwner();
-			engine.registerAdapter(adapter);
-			adapter.create(OWNER);
-			adapter.create(OTHER);
-			Bot configured = adapter.runner("configured"), runtime = adapter.runner(OWNER, "runtime");
-			for (String region : new String[] { "sessions", "inbox", "files", "resolved", "relay" }) {
-				runtime.state.write(adapter.userStatePath(OWNER, region + "/runtime/entry"), VALUE);
-				configured.state.write("config/configured/" + region + "/entry", VALUE);
-			}
-			engine.disableAdapter(adapter.getName());
-			engine.deleteUser(engine.venueContext(), OWNER);
-			assertFalse(runtime.running);
-			assertFalse(configured.running);
-			assertTrue(adapter.runner(OTHER, "runtime").running);
-			assertNull(adapter.state().read(adapter.userStatePath(OWNER, "")));
-			assertNull(adapter.state().read("config/configured"));
-			engine.enableAdapter(adapter.getName());
-			assertNull(adapter.runner(OWNER, "runtime"));
-			assertNull(adapter.runner("configured"));
-			engine.getVenueState().users().create(OWNER);
-			assertThrows(AuthException.class, () -> runtime.state.write(adapter.userStatePath(OWNER, "sessions/late"), VALUE));
-			assertThrows(AuthException.class, () -> configured.state.write("config/configured/sessions/late", VALUE));
-			adapter.create(OWNER);
-			assertTrue(adapter.runner(OWNER, "runtime").running);
-		} finally { engine.close(); }
+		engine.getVenueState().users().create(owner);
+		engine.getVenueState().users().create(other);
+		adapter.configureOwner();
+		engine.registerAdapter(adapter);
+		adapter.create(owner);
+		adapter.create(other);
+		Bot configured = adapter.runner("configured"), runtime = adapter.runner(owner, "runtime");
+		for (String region : new String[] { "sessions", "inbox", "files", "resolved", "relay" }) {
+			runtime.state.write(adapter.userStatePath(owner, region + "/runtime/entry"), VALUE);
+			configured.state.write("config/configured/" + region + "/entry", VALUE);
+		}
+		engine.disableAdapter(adapter.getName());
+		engine.deleteUser(engine.venueContext(), owner);
+		assertFalse(runtime.running);
+		assertFalse(configured.running);
+		assertTrue(adapter.runner(other, "runtime").running);
+		assertNull(adapter.state().read(adapter.userStatePath(owner, "")));
+		assertNull(adapter.state().read("config/configured"));
+		engine.enableAdapter(adapter.getName());
+		assertNull(adapter.runner(owner, "runtime"));
+		assertNull(adapter.runner("configured"));
+		engine.getVenueState().users().create(owner);
+		assertThrows(AuthException.class, () -> runtime.state.write(adapter.userStatePath(owner, "sessions/late"), VALUE));
+		assertThrows(AuthException.class, () -> configured.state.write("config/configured/sessions/late", VALUE));
+		adapter.create(owner);
+		assertTrue(adapter.runner(owner, "runtime").running);
 	}
 
 	@Test void createRacingDeletionCannotPersistOrStartAnOrphan() throws Exception {
-		Engine engine = Engine.createTemp(Maps.empty());
 		CountDownLatch creating = new CountDownLatch(1), revoked = new CountDownLatch(1), release = new CountDownLatch(1);
 		try {
-			engine.getVenueState().users().create(OWNER);
-			Adapter adapter = new Adapter();
+			engine.getVenueState().users().create(owner);
 			engine.registerAdapter(adapter);
 			adapter.creating = () -> {
 				creating.countDown();
@@ -116,29 +133,27 @@ class MessagingUserDeletionTest {
 				catch (InterruptedException e) { throw new AssertionError(e); }
 			};
 			adapter.deleting = revoked::countDown;
-			CompletableFuture<Void> create = CompletableFuture.runAsync(() -> adapter.create(OWNER));
+			CompletableFuture<Void> create = CompletableFuture.runAsync(() -> adapter.create(owner));
 			assertTrue(creating.await(5, TimeUnit.SECONDS));
-			CompletableFuture<ACell> delete = CompletableFuture.supplyAsync(() -> engine.deleteUser(engine.venueContext(), OWNER));
+			CompletableFuture<ACell> delete = CompletableFuture.supplyAsync(() -> engine.deleteUser(engine.venueContext(), owner));
 			assertTrue(revoked.await(5, TimeUnit.SECONDS));
-			assertTrue(engine.getVenueState().users().isDeleted(OWNER));
+			assertTrue(engine.getVenueState().users().isDeleted(owner));
 			release.countDown();
 			assertInstanceOf(AuthException.class,
 				assertThrows(java.util.concurrent.ExecutionException.class, () -> create.get(5, TimeUnit.SECONDS)).getCause());
 			delete.get(5, TimeUnit.SECONDS);
-			assertNull(adapter.runner(OWNER, "runtime"));
-			assertNull(adapter.state().read(adapter.userStatePath(OWNER, "")));
-		} finally { release.countDown(); engine.close(); }
+			assertNull(adapter.runner(owner, "runtime"));
+			assertNull(adapter.state().read(adapter.userStatePath(owner, "")));
+		} finally { release.countDown(); }
 	}
 
 	@Test void queuedCallbacksCannotActAsARecreatedAccount() throws Exception {
-		Engine engine = Engine.createTemp(Maps.empty());
 		CountDownLatch busy = new CountDownLatch(1), release = new CountDownLatch(1);
 		try {
-			engine.getVenueState().users().create(OWNER);
-			Adapter adapter = new Adapter();
+			engine.getVenueState().users().create(owner);
 			engine.registerAdapter(adapter);
-			var router = new ConversationRouter(engine, new Spec("runtime", OWNER.toString()),
-				new ConversationSessions(adapter.state(OWNER), "users/" + OWNER + "/sessions/runtime"));
+			var router = new ConversationRouter(engine, new Spec("runtime", owner.toString()),
+				new ConversationSessions(adapter.state(owner), "users/" + owner + "/sessions/runtime"));
 			var first = router.enqueue("chat", () -> {
 				busy.countDown();
 				try { assertTrue(release.await(5, TimeUnit.SECONDS)); }
@@ -146,13 +161,13 @@ class MessagingUserDeletionTest {
 			});
 			assertTrue(busy.await(5, TimeUnit.SECONDS));
 			var queued = router.enqueue("chat", () -> fail("A callback from the deleted account ran"));
-			engine.deleteUser(engine.venueContext(), OWNER);
-			engine.getVenueState().users().create(OWNER);
+			engine.deleteUser(engine.venueContext(), owner);
+			engine.getVenueState().users().create(owner);
 			release.countDown();
 			first.get(5, TimeUnit.SECONDS);
 			assertInstanceOf(AuthException.class,
 				assertThrows(java.util.concurrent.ExecutionException.class, () -> queued.get(5, TimeUnit.SECONDS)).getCause());
 			assertThrows(AuthException.class, router::context);
-		} finally { release.countDown(); engine.close(); }
+		} finally { release.countDown(); }
 	}
 }

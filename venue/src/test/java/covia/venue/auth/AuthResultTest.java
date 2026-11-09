@@ -53,6 +53,8 @@ import io.javalin.http.Context;
 /** Credential/evidence boundaries, without contacting an external identity provider. */
 class AuthResultTest {
 	private static Engine engine;
+	/** A venue that accepts tokens with no expiry. */
+	private static Engine relaxed;
 	private static VenueAuthenticator auth;
 	private static AKeyPair key;
 	private static AString did;
@@ -63,6 +65,7 @@ class AuthResultTest {
 	static void setup() {
 		engine = Engine.createTemp(Maps.of(Config.HOSTNAME, "auth-result.example"));
 		Engine.addDemoAssets(engine);
+		relaxed = Engine.createTemp(Maps.of(Config.AUTH, Maps.of("requireExp", false)));
 		auth = new VenueAuthenticator(engine);
 		key = AKeyPair.generate();
 		did = UCAN.toDIDKey(key.getAccountKey());
@@ -73,6 +76,7 @@ class AuthResultTest {
 	@AfterAll
 	static void close() {
 		if (engine != null) engine.close();
+		if (relaxed != null) relaxed.close();
 	}
 
 	private static AMap<AString, ACell> claims() {
@@ -330,42 +334,34 @@ class AuthResultTest {
 
 	@Test
 	void uncheckedOrMissingMetadataDoesNotChangeAcceptance() {
-		Engine relaxed = Engine.createTemp(Maps.of(Config.AUTH, Maps.of("requireExp", false)));
-		try {
-			VenueAuthenticator verifier = new VenueAuthenticator(relaxed);
-			AString token = JWT.signPublic(Maps.of("sub", did, "aud", relaxed.getDIDString(),
-				"iat", "not-a-time", "auth_time", now, "amr", Vectors.of("mfa")), key);
-			AuthResult result = verifier.verify(token);
-			assertNull(result.credential().expiresAt());
-			assertUnknownEvidence(result);
-			assertEquals(did, verifier.authenticate(token));
-		} finally {
-			relaxed.close();
-		}
+		VenueAuthenticator verifier = new VenueAuthenticator(relaxed);
+		AString token = JWT.signPublic(Maps.of("sub", did, "aud", relaxed.getDIDString(),
+			"iat", "not-a-time", "auth_time", now, "amr", Vectors.of("mfa")), key);
+		AuthResult result = verifier.verify(token);
+		assertNull(result.credential().expiresAt());
+		assertUnknownEvidence(result);
+		assertEquals(did, verifier.authenticate(token));
 	}
 
 	@Test
 	void optionalExpiryDoesNotMakeMalformedTemporalClaimsOptional() {
-		Engine relaxed = Engine.createTemp(Maps.of(Config.AUTH, Maps.of("requireExp", false)));
-		try {
-			VenueAuthenticator verifier = new VenueAuthenticator(relaxed);
-			for (boolean venueSigned : new boolean[] {false, true}) {
-				AKeyPair signer = venueSigned ? relaxed.getKeyPair() : key;
-				AMap<AString, ACell> base = Maps.of("sub", did,
-					"iss", venueSigned ? relaxed.getDIDString() : did, "exp", expiry);
-				for (String field : new String[] {"exp", "nbf"}) {
-					for (ACell invalid : new ACell[] {Strings.create("tomorrow"), Maps.empty(), Vectors.empty()}) {
-						AString token = JWT.signPublic(base.assoc(Strings.create(field), invalid), signer);
-						String prefix = venueSigned ? VenueAuthenticator.VENUE_TOKEN_REJECTED_PREFIX
-							: VenueAuthenticator.SELF_ISSUED_REJECTED_PREFIX;
-						String reason = field.equals("exp") ? VenueAuthenticator.Reason.MALFORMED_EXP
-							: VenueAuthenticator.Reason.MALFORMED_NBF;
-						assertEquals(prefix + reason,
-							assertThrows(AuthException.class, () -> verifier.verify(token), field).getMessage());
-					}
+		VenueAuthenticator verifier = new VenueAuthenticator(relaxed);
+		for (boolean venueSigned : new boolean[] {false, true}) {
+			AKeyPair signer = venueSigned ? relaxed.getKeyPair() : key;
+			AMap<AString, ACell> base = Maps.of("sub", did,
+				"iss", venueSigned ? relaxed.getDIDString() : did, "exp", expiry);
+			for (String field : new String[] {"exp", "nbf"}) {
+				for (ACell invalid : new ACell[] {Strings.create("tomorrow"), Maps.empty(), Vectors.empty()}) {
+					AString token = JWT.signPublic(base.assoc(Strings.create(field), invalid), signer);
+					String prefix = venueSigned ? VenueAuthenticator.VENUE_TOKEN_REJECTED_PREFIX
+						: VenueAuthenticator.SELF_ISSUED_REJECTED_PREFIX;
+					String reason = field.equals("exp") ? VenueAuthenticator.Reason.MALFORMED_EXP
+						: VenueAuthenticator.Reason.MALFORMED_NBF;
+					assertEquals(prefix + reason,
+						assertThrows(AuthException.class, () -> verifier.verify(token), field).getMessage());
 				}
 			}
-		} finally { relaxed.close(); }
+		}
 	}
 
 	@Test

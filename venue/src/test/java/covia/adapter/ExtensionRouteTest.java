@@ -5,9 +5,13 @@ import static org.junit.jupiter.api.Assertions.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.parallel.Execution;
+import org.junit.jupiter.api.parallel.ExecutionMode;
 
 import convex.auth.ucan.Capability;
 import convex.auth.ucan.UCAN;
@@ -36,9 +40,15 @@ import covia.lattice.Workspace;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 
+/**
+ * One venue for the class. Tests take turns, since they compare the whole venue
+ * state and load and unload adapters; each has users of its own and starts
+ * with only the covia adapter and its own probe registered.
+ */
+@Execution(ExecutionMode.SAME_THREAD)
 class ExtensionRouteTest {
-	private Engine engine;
-	private CoviaAdapter covia;
+	private static Engine engine;
+	private static CoviaAdapter covia;
 	private Probe probe;
 	private AKeyPair aliceKey;
 	private AString aliceDID, bobDID;
@@ -66,10 +76,15 @@ class ExtensionRouteTest {
 		}
 	}
 
-	@BeforeEach void setup() {
+	@BeforeAll static void start() {
 		engine = Engine.createTemp(Maps.empty());
 		covia = new CoviaAdapter();
 		engine.registerAdapter(covia);
+	}
+
+	@AfterAll static void stop() { engine.close(); }
+
+	@BeforeEach void setup() {
 		probe = new Probe();
 		engine.registerAdapter(probe);
 		aliceKey = AKeyPair.generate();
@@ -84,7 +99,10 @@ class ExtensionRouteTest {
 				bobDID, Maps.of("label", "bob"))));
 	}
 
-	@AfterEach void close() { engine.close(); }
+	@AfterEach void unload() {
+		engine.removeAdapter(probe.getName());
+		engine.removeAdapter("test");
+	}
 
 	private ACell run(String op, ACell input, RequestContext ctx) {
 		return covia.invokeFuture(ctx, Maps.of(Fields.OPERATION, Maps.of(Fields.ADAPTER, "covia:" + op)), input).join();

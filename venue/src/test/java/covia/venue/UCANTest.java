@@ -34,11 +34,12 @@ import covia.lattice.CapabilityChecker;
  * Tests for the UCAN capability flow: issue tokens, present as proofs,
  * verify cross-user access.
  *
- * <p>Uses {@link TestEngine#ENGINE}. Per-test key pairs (and therefore
- * per-test Alice/Bob/Carol DIDs) isolate user namespaces — Alice's
- * {@code w/shared/doc} and {@code w/private/secret} written in setup
+ * <p>One venue for the class, with a public hostname: the custodial (managed)
+ * users here need one and {@link TestEngine#ENGINE} has none. Per-test key
+ * pairs (and therefore per-test Alice/Bob/Carol DIDs) isolate user namespaces —
+ * Alice's {@code w/shared/doc} and {@code w/private/secret} written in setup
  * live under a different DID for each test method, so writes don't
- * collide across tests on the shared engine.</p>
+ * collide across tests.</p>
  */
 public class UCANTest {
 

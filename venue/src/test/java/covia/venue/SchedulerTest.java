@@ -291,7 +291,7 @@ public class SchedulerTest {
 		sched.schedule(s("v/test/ops/echo"), s("b"), ctx, base + 1000);
 
 		// A different owner's event must not appear in this caller's list.
-		RequestContext other = RequestContext.of(s("did:test:scheduler-other"));
+		RequestContext other = RequestContext.of(TestEngine.uniqueDID("SchedulerTest-other"));
 		sched.schedule(s("v/test/ops/echo"), s("z"), other, base + 500);
 
 		AVector<ACell> list = sched.list(ctx);
@@ -448,7 +448,7 @@ public class SchedulerTest {
 	@Test
 	public void testOwnershipEnforced() {
 		Blob handle = sched.schedule(s("v/test/ops/echo"), s("x"), ctx, future());
-		RequestContext intruder = RequestContext.of(s("did:test:scheduler-intruder"));
+		RequestContext intruder = RequestContext.of(TestEngine.uniqueDID("SchedulerTest-intruder"));
 
 		// Cancel by a non-owner is rejected and leaves the event in place.
 		assertThrows(AuthException.class, () -> sched.cancel(handle, intruder));

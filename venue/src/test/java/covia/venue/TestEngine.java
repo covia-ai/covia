@@ -40,9 +40,11 @@ import convex.lattice.cursor.Root;
 	 * {@link EngineSchedulerRebuildTest}. Tests that need bespoke engine
 	 * config (e.g. {@code FileAdapterTest} with custom {@code @TempDir}
 	 * jail roots, or {@code OAuthTest}'s inline {@code createTemp} for
-	 * auth-config variants), and tests that install permanent engine
-	 * callbacks (e.g. {@code DLFSAdapterTest}'s {@code onSync} hook),
-	 * also belong in this category.</p>
+	 * auth-config variants), tests that change the adapters others see, and
+	 * tests that write adapter state under a name no adapter owns also belong
+	 * in this category: such a name leaves every later user deletion on the
+	 * venue pending that adapter. A class that needs its own venue for one of
+	 * these shares one across its tests unless a test needs it fresh.</p>
  *
  * <p><b>Per-test isolation pattern:</b></p>
  * <pre>{@code

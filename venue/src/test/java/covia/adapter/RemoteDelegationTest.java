@@ -36,6 +36,8 @@ class RemoteDelegationTest {
 	private static final class CancellationPeer implements AutoCloseable {
 		final HttpServer server;
 		final Engine engine;
+		/** Whether {@link #engine} is this peer's own, to close with it. */
+		private final boolean ownsEngine;
 		final String protocol;
 		/** Requests that hand the peer work or a message: never a status read or a cancel. */
 		final AtomicInteger sends = new AtomicInteger();
@@ -50,10 +52,24 @@ class RemoteDelegationTest {
 		volatile boolean malformed;
 		volatile boolean wrongId;
 		volatile String a2aCancelState;
-		CancellationPeer(String protocol) throws Exception { this(protocol, null); }
-		CancellationPeer(String protocol, AMap<AString, ACell> config) throws Exception {
+		/** A peer of the shared venue, whose own context may dial loopback. */
+		CancellationPeer(String protocol) throws Exception { this(protocol, TestEngine.ENGINE, false); }
+		/** A peer with a venue of its own, for a test that closes the venue. */
+		CancellationPeer(String protocol, AMap<AString, ACell> config) throws Exception { this(protocol, ownVenue(config), true); }
+		private static Engine ownVenue(AMap<AString, ACell> config) {
+			Engine engine = Engine.createTemp(config);
+			engine.registerAdapter(new GridAdapter());
+			engine.registerAdapter(new RemoteAgentAdapter());
+			engine.registerAdapter(new A2AAdapter());
+			HTTPAdapter http = new HTTPAdapter();
+			engine.registerAdapter(http);
+			http.addAllowedHost("127.0.0.1");
+			return engine;
+		}
+		private CancellationPeer(String protocol, Engine engine, boolean ownsEngine) throws Exception {
 			this.protocol = protocol;
-			engine = Engine.createTemp(config);
+			this.engine = engine;
+			this.ownsEngine = ownsEngine;
 			server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
 			server.setExecutor(AAdapter.VIRTUAL_EXECUTOR);
 			server.createContext("/", exchange -> {
@@ -84,12 +100,6 @@ class RemoteDelegationTest {
 				try (var out = exchange.getResponseBody()) { out.write(bytes); }
 			});
 			server.start();
-			engine.registerAdapter(new GridAdapter());
-			engine.registerAdapter(new RemoteAgentAdapter());
-			engine.registerAdapter(new A2AAdapter());
-			HTTPAdapter http = new HTTPAdapter();
-			engine.registerAdapter(http);
-			http.addAllowedHost("127.0.0.1");
 		}
 		String url() { return "http://127.0.0.1:" + server.getAddress().getPort(); }
 		Job submit() { return engine.jobs().invokeOperation(operation(), input(), engine.venueContext()); }
@@ -103,7 +113,7 @@ class RemoteDelegationTest {
 				Fields.AGENT_ID, "g/worker", Fields.INPUT, Maps.of("task", "work"), Fields.MESSAGE, message);
 		}
 		@Override public void close() {
-			acceptance.countDown(); cancelResponse.countDown(); engine.close(); server.stop(0);
+			acceptance.countDown(); cancelResponse.countDown(); if (ownsEngine) engine.close(); server.stop(0);
 		}
 	}
 
@@ -242,7 +252,7 @@ class RemoteDelegationTest {
 	}
 
 	@Test void cancellingExistingJobObserverDoesNotCancelRemoteWork() throws Exception {
-		try (CancellationPeer peer = new CancellationPeer("grid")) {
+		try (CancellationPeer peer = new CancellationPeer("grid", null)) {
 			Job job = peer.engine.jobs().invokeOperation(Maps.of(Fields.OPERATION, Maps.of(Fields.ADAPTER, "grid:jobResult")),
 				Maps.of(Fields.VENUE, peer.url(), Fields.ID, ID), peer.engine.venueContext());
 			awaitRemoteId(job);
@@ -455,40 +465,34 @@ class RemoteDelegationTest {
 
 	@Test void remoteRunSubmitsWithoutKeyAndUsesJobStatusNotRunEndpoint() throws Exception {
 		try (Peer peer = new Peer()) {
-			Engine engine = Engine.createTemp(null);
-			engine.registerAdapter(new GridAdapter());
-			try {
-				peer.brokenPoll = true;
-				Job job = engine.jobs().invokeOperation(META, peer.input(), engine.venueContext());
-				peer.handled.await("a status poll", () -> peer.polls.get() > 0);
-				assertEquals(Status.STARTED, job.getStatus());
-				peer.brokenPoll = false;
-				peer.complete.set(true);
-				assertEquals(Strings.create("remote-output"), job.future().get(5, TimeUnit.SECONDS));
-				assertEquals(1, peer.submits.get());
-				assertEquals(Strings.create(ID), RemoteJobs.descriptor(job).get(RemoteJobs.REMOTE_ID));
-			} finally { engine.close(); }
+			Engine engine = TestEngine.ENGINE;
+			peer.brokenPoll = true;
+			Job job = engine.jobs().invokeOperation(META, peer.input(), engine.venueContext());
+			peer.handled.await("a status poll", () -> peer.polls.get() > 0);
+			assertEquals(Status.STARTED, job.getStatus());
+			peer.brokenPoll = false;
+			peer.complete.set(true);
+			assertEquals(Strings.create("remote-output"), job.future().get(5, TimeUnit.SECONDS));
+			assertEquals(1, peer.submits.get());
+			assertEquals(Strings.create(ID), RemoteJobs.descriptor(job).get(RemoteJobs.REMOTE_ID));
 		}
 	}
 
 	@Test void lostAcknowledgementIsNonTerminalAndNeverResubmitted() throws Exception {
 		try (Peer peer = new Peer()) {
 			peer.loseAck = true;
-			Engine engine = Engine.createTemp(null);
-			engine.registerAdapter(new GridAdapter());
-			try {
-				Job job = engine.jobs().invokeOperation(META, peer.input(), engine.venueContext());
-				await(job, j -> RT.getIn(j.getData(), RemoteJobs.DELEGATION, RemoteJobs.NOT_FOLLOWED) != null);
-				assertEquals(Maps.of(RemoteJobs.NOT_FOLLOWED, RemoteJobs.ACCEPTANCE_UNKNOWN.formatted(engine.remoteJobs().target(job))),
-					RemoteJobs.descriptor(job), "the record says why the venue stopped following, and nothing of how it follows");
-				assertEquals(Strings.create("acceptance-unknown"), engine.remoteJobs().kept(job).get(RemoteJobs.OBSERVATION));
-				assertEquals(Status.STARTED, job.getStatus());
-				assertFalse(job.future().isDone());
-				assertEquals(1, peer.submits.get());
-				assertEquals(0, peer.polls.get());
-				engine.getAdapter("grid").recoverJob(job);
-				assertEquals(1, peer.submits.get());
-			} finally { engine.close(); }
+			Engine engine = TestEngine.ENGINE;
+			Job job = engine.jobs().invokeOperation(META, peer.input(), engine.venueContext());
+			await(job, j -> RT.getIn(j.getData(), RemoteJobs.DELEGATION, RemoteJobs.NOT_FOLLOWED) != null);
+			assertEquals(Maps.of(RemoteJobs.NOT_FOLLOWED, RemoteJobs.ACCEPTANCE_UNKNOWN.formatted(engine.remoteJobs().target(job))),
+				RemoteJobs.descriptor(job), "the record says why the venue stopped following, and nothing of how it follows");
+			assertEquals(Strings.create("acceptance-unknown"), engine.remoteJobs().kept(job).get(RemoteJobs.OBSERVATION));
+			assertEquals(Status.STARTED, job.getStatus());
+			assertFalse(job.future().isDone());
+			assertEquals(1, peer.submits.get());
+			assertEquals(0, peer.polls.get());
+			engine.getAdapter("grid").recoverJob(job);
+			assertEquals(1, peer.submits.get());
 		}
 	}
 
@@ -567,23 +571,20 @@ class RemoteDelegationTest {
 
 	@Test void remoteAdapterUnableToRecoverExecutionFailsTheMirrorWithoutResubmission() throws Exception {
 		try (Peer peer = new Peer()) {
-			Engine engine = Engine.createTemp(null);
-			engine.registerAdapter(new GridAdapter());
-			try {
-				Job mirror = engine.jobs().invokeOperation(META, peer.input(), engine.venueContext());
-				peer.handled.await("a status poll", () -> peer.polls.get() > 0);
-				// Model the executing venue restarting: its ordinary adapter cannot
-				// restore the computation, although the Job record survived.
-				Job remote = Job.create(Maps.of(Fields.ID, ID, Fields.STATUS, Status.STARTED));
-				AAdapter.defaultRecover(remote);
-				peer.recoveredSnapshot = remote.getData();
-				assertThrows(java.util.concurrent.ExecutionException.class,
-					() -> mirror.future().get(5, TimeUnit.SECONDS));
-				assertEquals(Status.FAILED, mirror.getStatus());
-				assertEquals(AAdapter.RESTARTED_DURING_EXECUTION, mirror.getErrorMessage());
-				assertEquals(Status.FAILED, RemoteJobs.descriptor(mirror).get(RemoteJobs.REMOTE_STATUS));
-				assertEquals(1, peer.submits.get());
-			} finally { engine.close(); }
+			Engine engine = TestEngine.ENGINE;
+			Job mirror = engine.jobs().invokeOperation(META, peer.input(), engine.venueContext());
+			peer.handled.await("a status poll", () -> peer.polls.get() > 0);
+			// Model the executing venue restarting: its ordinary adapter cannot
+			// restore the computation, although the Job record survived.
+			Job remote = Job.create(Maps.of(Fields.ID, ID, Fields.STATUS, Status.STARTED));
+			AAdapter.defaultRecover(remote);
+			peer.recoveredSnapshot = remote.getData();
+			assertThrows(java.util.concurrent.ExecutionException.class,
+				() -> mirror.future().get(5, TimeUnit.SECONDS));
+			assertEquals(Status.FAILED, mirror.getStatus());
+			assertEquals(AAdapter.RESTARTED_DURING_EXECUTION, mirror.getErrorMessage());
+			assertEquals(Status.FAILED, RemoteJobs.descriptor(mirror).get(RemoteJobs.REMOTE_STATUS));
+			assertEquals(1, peer.submits.get());
 		}
 	}
 
@@ -621,11 +622,7 @@ class RemoteDelegationTest {
 			try (var out = exchange.getResponseBody()) { out.write(response); }
 		});
 		peer.start();
-		Engine engine = Engine.createTemp(null);
-		engine.registerAdapter(new A2AAdapter());
-		HTTPAdapter http = new HTTPAdapter();
-		engine.registerAdapter(http);
-		http.addAllowedHost("127.0.0.1");
+		Engine engine = TestEngine.ENGINE;
 		try {
 			AMap<AString, ACell> meta = Maps.of(Fields.OPERATION, Maps.of(Fields.ADAPTER, "a2a:rawSend"));
 			ACell message = Maps.of("role", "user", "parts", convex.core.data.Vectors.of(Maps.of("type", "text", "text", "hello")));
@@ -642,6 +639,6 @@ class RemoteDelegationTest {
 			job.future().get(5, TimeUnit.SECONDS);
 			assertEquals(Status.COMPLETE, RemoteJobs.descriptor(job).get(RemoteJobs.REMOTE_STATUS));
 			assertEquals(1, submits.get());
-		} finally { engine.close(); peer.stop(0); }
+		} finally { peer.stop(0); }
 	}
 }

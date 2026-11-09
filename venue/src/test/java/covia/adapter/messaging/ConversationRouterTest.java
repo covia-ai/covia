@@ -9,7 +9,10 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestInfo;
 
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -27,6 +30,25 @@ import covia.grid.Job;
 import covia.grid.Status;
 
 class ConversationRouterTest {
+	/**
+	 * One venue for the tests that need nothing else of their own. Not the shared
+	 * one: adapter state under a name no registered adapter has would leave every
+	 * later account deletion there pending.
+	 */
+	private static Engine venue;
+
+	@BeforeAll static void start() {
+		venue = Engine.createTemp(Maps.empty());
+		Engine.addDemoAssets(venue);
+	}
+
+	@AfterAll static void stop() { venue.close(); }
+
+	/** A name for this test's own adapter state: adapter names are lower-case, so not a DID as it stands. */
+	private static String stateName(TestInfo info) {
+		return TestEngine.uniqueDID(info).toString().toLowerCase().replaceAll("[^a-z0-9-]", "-");
+	}
+
 	@Test void recoveryUsesOnlyTheAgentCodeRegardlessOfWording() {
 		Job missing = Job.create(Maps.of(Fields.STATUS, Status.STARTED));
 		missing.fail(AgentAdapter.UNKNOWN_SESSION_CODE, "This conversation has expired");
@@ -38,51 +60,46 @@ class ConversationRouterTest {
 		assertFalse(ConversationRouter.isUnknownSession(new JobFailedException(other)));
 	}
 
-	@Test void staleSessionIsReplacedThroughTheRealAgentFailure() {
-		Engine engine = Engine.createTemp(Maps.empty());
-		try {
-			Engine.addDemoAssets(engine);
-			engine.getVenueState().users().ensure(Strings.create("did:test:owner"));
-			var sessions = new ConversationSessions(engine.adapterState("messaging-test"), "config/bot/sessions");
-			var router = new ConversationRouter(engine, new Spec("bot", "did:test:owner", "retry-agent", null, null), sessions);
-			router.runOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "retry-agent",
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/test/ops/llm")));
-			String stale = "00000000000000000000000000000000";
-			sessions.put("chat", stale);
-			assertNotNull(router.chat("chat", Strings.create("hello"), LISTED));
-			assertNotNull(sessions.get("chat"));
-			assertNotEquals(stale, sessions.get("chat"));
-		} finally { engine.close(); }
+	@Test void staleSessionIsReplacedThroughTheRealAgentFailure(TestInfo info) {
+		Engine engine = venue;
+		var owner = TestEngine.uniqueDID(info);
+		engine.getVenueState().users().ensure(owner);
+		var sessions = new ConversationSessions(engine.adapterState(stateName(info)), "config/bot/sessions");
+		var router = new ConversationRouter(engine, new Spec("bot", owner.toString(), "retry-agent", null, null), sessions);
+		router.runOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "retry-agent",
+			Fields.CONFIG, Maps.of(Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/test/ops/llm")));
+		String stale = "00000000000000000000000000000000";
+		sessions.put("chat", stale);
+		assertNotNull(router.chat("chat", Strings.create("hello"), LISTED));
+		assertNotNull(sessions.get("chat"));
+		assertNotEquals(stale, sessions.get("chat"));
 	}
 
-	@Test void agentsThatCannotTakeInputAreRefusedBeforeAnyJob() {
-		Engine engine = Engine.createTemp(Maps.empty());
-		try {
-			Engine.addDemoAssets(engine);
-			var owner = Strings.create("did:test:refusal");
-			engine.getVenueState().users().ensure(owner);
-			var state = engine.adapterState("messaging-test");
-			var router = new ConversationRouter(engine, new Spec("bot", owner.toString(), "resting", null, null),
-				new ConversationSessions(state, "refusal/sessions"));
-			var listed = LISTED;
-			assertEquals(AgentAdapter.DELIVERY_AGENT_MISSING.formatted("resting"), router.deliveryRefusal(listed));
-			assertTrue(router.supportsSessionDelivery(listed), "a missing agent is refused by session delivery, not chatted to");
-			router.runOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "resting",
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/test/ops/llm")));
-			assertNull(router.deliveryRefusal(listed));
-			assertTrue(router.supportsSessionDelivery(listed));
-			router.runOperation("v/ops/agent/suspend", Maps.of(Fields.AGENT_ID, "resting"));
-			long jobs = engine.jobs().getJobs(router.context()).count();
-			assertEquals(AgentAdapter.DELIVERY_AGENT_SUSPENDED.formatted("resting"), router.deliveryRefusal(listed));
-			assertTrue(router.supportsSessionDelivery(listed));
-			assertEquals(jobs, engine.jobs().getJobs(router.context()).count(), "checking mints no Job");
+	@Test void agentsThatCannotTakeInputAreRefusedBeforeAnyJob(TestInfo info) {
+		Engine engine = venue;
+		var owner = TestEngine.uniqueDID(info);
+		engine.getVenueState().users().ensure(owner);
+		var state = engine.adapterState(stateName(info));
+		var router = new ConversationRouter(engine, new Spec("bot", owner.toString(), "resting", null, null),
+			new ConversationSessions(state, "refusal/sessions"));
+		var listed = LISTED;
+		assertEquals(AgentAdapter.DELIVERY_AGENT_MISSING.formatted("resting"), router.deliveryRefusal(listed));
+		assertTrue(router.supportsSessionDelivery(listed), "a missing agent is refused by session delivery, not chatted to");
+		router.runOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "resting",
+			Fields.CONFIG, Maps.of(Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/test/ops/llm")));
+		assertNull(router.deliveryRefusal(listed));
+		assertTrue(router.supportsSessionDelivery(listed));
+		router.runOperation("v/ops/agent/suspend", Maps.of(Fields.AGENT_ID, "resting"));
+		long jobs = engine.jobs().getJobs(router.context()).count();
+		assertEquals(AgentAdapter.DELIVERY_AGENT_SUSPENDED.formatted("resting"), router.deliveryRefusal(listed));
+		assertTrue(router.supportsSessionDelivery(listed));
+		assertEquals(jobs, engine.jobs().getJobs(router.context()).count(), "checking mints no Job");
 
-			var strangerDID = Strings.create("did:test:stranger");
-			engine.getVenueState().users().ensure(strangerDID);
-			var stranger = new ConversationRouter(engine, new Spec("bot", strangerDID.toString(), owner + "/g/resting", null, null),
-				new ConversationSessions(state, "refusal/stranger"));
-			assertNotNull(stranger.deliveryRefusal(listed), "another user's agent that does not admit the caller");
-		} finally { engine.close(); }
+		var strangerDID = Strings.create(owner + "-stranger");
+		engine.getVenueState().users().ensure(strangerDID);
+		var stranger = new ConversationRouter(engine, new Spec("bot", strangerDID.toString(), owner + "/g/resting", null, null),
+			new ConversationSessions(state, "refusal/stranger"));
+		assertNotNull(stranger.deliveryRefusal(listed), "another user's agent that does not admit the caller");
 	}
 	@Test void deliveryCommitsInputReceiptAndMappingTogetherAndRollsBackOnFailure() throws Exception {
 		Engine engine = Engine.createTemp(Maps.empty());
@@ -407,76 +424,67 @@ class ConversationRouterTest {
 		} finally { engine.close(); }
 	}
 
-	@Test void aBindingRefusesSendersItNeitherListsNorIsOpenTo() {
-		Engine engine = Engine.createTemp(Maps.empty());
-		try {
-			Engine.addDemoAssets(engine);
-			var owner = Strings.create("did:test:closed-binding");
-			engine.getVenueState().users().ensure(owner);
-			var router = new ConversationRouter(engine, new Spec("bot", owner.toString(), "agent", null, null),
-				new ConversationSessions(engine.adapterState("messaging-test"), "closed-binding/sessions"));
-			assertEquals(ChannelAuthentication.NOT_ADMITTED, router.deliveryRefusal(STRANGER));
-			var thrown = assertThrows(covia.exception.AuthException.class, () -> router.context(STRANGER));
-			assertEquals(ChannelAuthentication.NOT_ADMITTED, thrown.getMessage());
-			assertNull(router.context().getAuthentication(), "the binding's own work carries no record");
-		} finally { engine.close(); }
+	@Test void aBindingRefusesSendersItNeitherListsNorIsOpenTo(TestInfo info) {
+		Engine engine = venue;
+		var owner = TestEngine.uniqueDID(info);
+		engine.getVenueState().users().ensure(owner);
+		var router = new ConversationRouter(engine, new Spec("bot", owner.toString(), "agent", null, null),
+			new ConversationSessions(engine.adapterState(stateName(info)), "closed-binding/sessions"));
+		assertEquals(ChannelAuthentication.NOT_ADMITTED, router.deliveryRefusal(STRANGER));
+		var thrown = assertThrows(covia.exception.AuthException.class, () -> router.context(STRANGER));
+		assertEquals(ChannelAuthentication.NOT_ADMITTED, thrown.getMessage());
+		assertNull(router.context().getAuthentication(), "the binding's own work carries no record");
 	}
 
-	@Test void aBindingAnAgentSetUpIdentifiesItsSendersAsThatAgent() {
-		Engine engine = Engine.createTemp(Maps.empty());
-		try {
-			Engine.addDemoAssets(engine);
-			var owner = Strings.create("did:test:agent-binding");
-			engine.getVenueState().users().ensure(owner);
-			var ownerContext = covia.venue.RequestContext.of(owner);
-			var caps = convex.core.data.Vectors.of(convex.auth.ucan.Capability.create(
-				Strings.create(owner + "/w/shared"), convex.auth.ucan.Capability.CRUD_READ));
-			engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "keeper",
+	@Test void aBindingAnAgentSetUpIdentifiesItsSendersAsThatAgent(TestInfo info) {
+		Engine engine = venue;
+		var owner = TestEngine.uniqueDID(info);
+		engine.getVenueState().users().ensure(owner);
+		var ownerContext = covia.venue.RequestContext.of(owner);
+		var caps = convex.core.data.Vectors.of(convex.auth.ucan.Capability.create(
+			Strings.create(owner + "/w/shared"), convex.auth.ucan.Capability.CRUD_READ));
+		engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "keeper",
+			Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete", "caps", caps)), ownerContext).awaitResult(5000);
+		var keeper = covia.grid.Principals.agentDID(owner, Strings.create("keeper"));
+		var router = new ConversationRouter(engine, new Spec("bot", owner.toString(), "keeper", null, null), keeper,
+			new ConversationSessions(engine.adapterState(stateName(info)), "keeper/sessions"));
+		var context = router.context();
+		assertEquals(keeper, context.getCallerDID(), "the agent, never its owner");
+		assertEquals(caps, context.getCaps(), "bounded by the agent's own caps");
+
+		engine.jobs().invokeOperation("v/ops/agent/delete", Maps.of(Fields.AGENT_ID, "keeper"), ownerContext).awaitResult(5000);
+		assertEquals(convex.core.data.Vectors.empty(), router.context().getCaps(), "a deleted agent holds nothing");
+	}
+
+	@Test void aBindingsWorkForItsAgentRunsAsTheAgentOnlyWhenItsPrincipalControlsIt(TestInfo info) {
+		Engine engine = venue;
+		var owner = TestEngine.uniqueDID(info);
+		var stranger = Strings.create(owner + "-stranger");
+		engine.getVenueState().users().ensure(owner);
+		engine.getVenueState().users().ensure(stranger);
+		var ownerContext = covia.venue.RequestContext.of(owner);
+		var caps = convex.core.data.Vectors.of(convex.auth.ucan.Capability.create(
+			Strings.create(owner + "/w/media"), convex.auth.ucan.Capability.CRUD_WRITE));
+		for (String id : new String[] {"helper", "sibling"}) {
+			engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, id,
 				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete", "caps", caps)), ownerContext).awaitResult(5000);
-			var keeper = covia.grid.Principals.agentDID(owner, Strings.create("keeper"));
-			var router = new ConversationRouter(engine, new Spec("bot", owner.toString(), "keeper", null, null), keeper,
-				new ConversationSessions(engine.adapterState("messaging-test"), "keeper/sessions"));
-			var context = router.context();
-			assertEquals(keeper, context.getCallerDID(), "the agent, never its owner");
-			assertEquals(caps, context.getCaps(), "bounded by the agent's own caps");
+		}
+		var helper = covia.grid.Principals.agentDID(owner, Strings.create("helper"));
+		var state = engine.adapterState(stateName(info));
 
-			engine.jobs().invokeOperation("v/ops/agent/delete", Maps.of(Fields.AGENT_ID, "keeper"), ownerContext).awaitResult(5000);
-			assertEquals(convex.core.data.Vectors.empty(), router.context().getCaps(), "a deleted agent holds nothing");
-		} finally { engine.close(); }
-	}
+		// The owner's own bot works for its agent as that agent, within its caps.
+		var own = new ConversationRouter(engine, new Spec("bot", owner.toString(), "helper", null, null),
+			new ConversationSessions(state, "work/own"));
+		assertEquals(helper, own.agentContext().getCallerDID());
+		assertEquals(caps, own.agentContext().getCaps());
 
-	@Test void aBindingsWorkForItsAgentRunsAsTheAgentOnlyWhenItsPrincipalControlsIt() {
-		Engine engine = Engine.createTemp(Maps.empty());
-		try {
-			Engine.addDemoAssets(engine);
-			var owner = Strings.create("did:test:agent-work");
-			var stranger = Strings.create("did:test:agent-work-stranger");
-			engine.getVenueState().users().ensure(owner);
-			engine.getVenueState().users().ensure(stranger);
-			var ownerContext = covia.venue.RequestContext.of(owner);
-			var caps = convex.core.data.Vectors.of(convex.auth.ucan.Capability.create(
-				Strings.create(owner + "/w/media"), convex.auth.ucan.Capability.CRUD_WRITE));
-			for (String id : new String[] {"helper", "sibling"}) {
-				engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, id,
-					Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete", "caps", caps)), ownerContext).awaitResult(5000);
-			}
-			var helper = covia.grid.Principals.agentDID(owner, Strings.create("helper"));
-			var state = engine.adapterState("messaging-test");
-
-			// The owner's own bot works for its agent as that agent, within its caps.
-			var own = new ConversationRouter(engine, new Spec("bot", owner.toString(), "helper", null, null),
-				new ConversationSessions(state, "work/own"));
-			assertEquals(helper, own.agentContext().getCallerDID());
-			assertEquals(caps, own.agentContext().getCaps());
-
-			// Nobody else can make the agent act: another user's bot, or a sibling agent's, works as itself.
-			var foreign = new ConversationRouter(engine, new Spec("bot", stranger.toString(), owner + "/g/helper", null, null),
-				new ConversationSessions(state, "work/foreign"));
-			assertEquals(stranger, foreign.agentContext().getCallerDID());
-			var sibling = new ConversationRouter(engine, new Spec("bot", owner.toString(), "sibling", null, null), helper,
-				new ConversationSessions(state, "work/sibling"));
-			assertEquals(helper, sibling.agentContext().getCallerDID(), "the helper's bot, not the sibling it talks to");
-		} finally { engine.close(); }
+		// Nobody else can make the agent act: another user's bot, or a sibling agent's, works as itself.
+		var foreign = new ConversationRouter(engine, new Spec("bot", stranger.toString(), owner + "/g/helper", null, null),
+			new ConversationSessions(state, "work/foreign"));
+		assertEquals(stranger, foreign.agentContext().getCallerDID());
+		var sibling = new ConversationRouter(engine, new Spec("bot", owner.toString(), "sibling", null, null), helper,
+			new ConversationSessions(state, "work/sibling"));
+		assertEquals(helper, sibling.agentContext().getCallerDID(), "the helper's bot, not the sibling it talks to");
 	}
 
 	@Test void anonymousSendersNeedPublicAccess() {
@@ -513,12 +521,12 @@ class ConversationRouterTest {
 	/** A sender the binding lists, and one it does not. */
 	private static final ChannelAuthentication.Channel LISTED = channel("listed"), STRANGER = channel("stranger");
 
-	@Test void ordersTurnsAndResetsDespiteFailureOrObserverCancellation() throws Exception {
-		Engine engine = Engine.createTemp(Maps.empty());
+	@Test void ordersTurnsAndResetsDespiteFailureOrObserverCancellation(TestInfo info) throws Exception {
+		Engine engine = venue;
 		CountDownLatch release = new CountDownLatch(1);
 		try {
-			var sessions = new ConversationSessions(engine.adapterState("messaging-test"), "config/bot/sessions");
-			var router = new ConversationRouter(engine, new Spec("bot", "did:test:owner", "agent", null, null), sessions);
+			var sessions = new ConversationSessions(engine.adapterState(stateName(info)), "config/bot/sessions");
+			var router = new ConversationRouter(engine, new Spec("bot", TestEngine.uniqueDID(info).toString(), "agent", null, null), sessions);
 			List<String> calls = Collections.synchronizedList(new ArrayList<>());
 			CountDownLatch entered = new CountDownLatch(1);
 			CompletableFuture<Void> first = router.enqueue("chat", () -> {
@@ -540,49 +548,44 @@ class ConversationRouterTest {
 			last.get(5, TimeUnit.SECONDS);
 			assertEquals(List.of("other", "first", "reset", "last"), calls);
 			assertTrue(router.isIdle("chat"));
-		} finally { release.countDown(); engine.close(); }
+		} finally { release.countDown(); }
 	}
 
-	@Test void persistsOpaqueKeysWithoutCrossingInstallationsThreadsOrOwners() {
-		Engine engine = Engine.createTemp(Maps.empty());
-		try {
-			var state = engine.adapterState("slack-test");
-			String root = state.userPath(Strings.create("did:test:owner"), "sessions/bot");
-			var sessions = new ConversationSessions(state, root);
-			String thread = ConversationRouter.key("T1", "C1", "1700000000.123456");
-			String otherThread = ConversationRouter.key("T1", "C1", "1700000000.123457");
-			sessions.put(thread, "session-a");
-			sessions.put(otherThread, "session-b");
-			var restored = new ConversationSessions(state, root);
-			assertEquals("session-a", restored.get(thread));
-			assertEquals("session-b", restored.get(otherThread));
-			assertNull(restored.get(ConversationRouter.key("T2", "C1", "1700000000.123456")));
-			assertNull(new ConversationSessions(state, "config/bot/sessions").get(thread));
-			assertNull(new ConversationSessions(state, state.userPath(Strings.create("did:test:other"), "sessions/bot")).get(thread));
-			assertNotEquals(ConversationRouter.key("a/b", "c"), ConversationRouter.key("a", "b/c"));
-			sessions.put("../../escape", "safe");
-			assertEquals("safe", restored.get("../../escape"));
-			assertNull(state.read("escape"));
-			sessions.put("-123", "telegram");
-			assertEquals(Strings.create("telegram"), state.read(root + "/-123"));
-		} finally { engine.close(); }
+	@Test void persistsOpaqueKeysWithoutCrossingInstallationsThreadsOrOwners(TestInfo info) {
+		var owner = TestEngine.uniqueDID(info);
+		var state = venue.adapterState(stateName(info));
+		String root = state.userPath(owner, "sessions/bot");
+		var sessions = new ConversationSessions(state, root);
+		String thread = ConversationRouter.key("T1", "C1", "1700000000.123456");
+		String otherThread = ConversationRouter.key("T1", "C1", "1700000000.123457");
+		sessions.put(thread, "session-a");
+		sessions.put(otherThread, "session-b");
+		var restored = new ConversationSessions(state, root);
+		assertEquals("session-a", restored.get(thread));
+		assertEquals("session-b", restored.get(otherThread));
+		assertNull(restored.get(ConversationRouter.key("T2", "C1", "1700000000.123456")));
+		assertNull(new ConversationSessions(state, "config/bot/sessions").get(thread));
+		assertNull(new ConversationSessions(state, state.userPath(Strings.create(owner + "-other"), "sessions/bot")).get(thread));
+		assertNotEquals(ConversationRouter.key("a/b", "c"), ConversationRouter.key("a", "b/c"));
+		sessions.put("../../escape", "safe");
+		assertEquals("safe", restored.get("../../escape"));
+		assertNull(state.read("escape"));
+		sessions.put("-123", "telegram");
+		assertEquals(Strings.create("telegram"), state.read(root + "/-123"));
 	}
 
-	@Test void migratesLegacySessionsWithCanonicalPrecedenceAndDeletesBoth() {
-		Engine engine = Engine.createTemp(Maps.empty());
-		try {
-			var state = engine.adapterState("messaging-test");
-			var legacy = new java.util.HashMap<String, String>();
-			legacy.put("1", "legacy-session");
-			var sessions = new ConversationSessions(state, "sessions", legacy::get, legacy::remove);
-			assertEquals("legacy-session", sessions.get("1"));
-			assertEquals(Strings.create("legacy-session"), state.read("sessions/1"));
-			sessions.put("1", "current-session");
-			assertEquals("current-session", sessions.get("1"));
-			sessions.remove("1");
-			assertNull(sessions.get("1"));
-			assertTrue(legacy.isEmpty());
-		} finally { engine.close(); }
+	@Test void migratesLegacySessionsWithCanonicalPrecedenceAndDeletesBoth(TestInfo info) {
+		var state = venue.adapterState(stateName(info));
+		var legacy = new java.util.HashMap<String, String>();
+		legacy.put("1", "legacy-session");
+		var sessions = new ConversationSessions(state, "sessions", legacy::get, legacy::remove);
+		assertEquals("legacy-session", sessions.get("1"));
+		assertEquals(Strings.create("legacy-session"), state.read("sessions/1"));
+		sessions.put("1", "current-session");
+		assertEquals("current-session", sessions.get("1"));
+		sessions.remove("1");
+		assertNull(sessions.get("1"));
+		assertTrue(legacy.isEmpty());
 	}
 
 	private static void await(CountDownLatch latch) {
