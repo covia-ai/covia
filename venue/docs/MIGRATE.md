@@ -136,7 +136,12 @@ A step's parts apply in the order listed.
   messaging adapters' shapes. Each
   versioned bundled adapter starts at its oldest state. The test migrates the
   venue in process. A new venue step or older shape is seeded there; raising
-  `CURRENT_VERSION` fails the test until the new step's shapes are.
+  `CURRENT_VERSION` fails the test until the new step's shapes are. It also
+  seeds agents configured as releases configured them
+  (`src/test/resources/migrations/released-agents.json`, which says what each
+  may do): the upgrade leaves their records as they were and each acts as
+  configured (`ReleasedAgents`). A form of configuration an upgrade must keep
+  working is added there.
 - **Release-line fixtures.** Each release line (0.9, 0.10, …) has one store,
   written by a published jar of that line and never regenerated
   ([README](../src/test/resources/migrations/README.md)). The failsafe
