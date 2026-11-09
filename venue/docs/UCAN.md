@@ -113,7 +113,7 @@ Resources are **DID URLs** — the DID identifies the authority (user/owner), th
 
 This aligns with `DIDURL` from convex-core — the DID is the authority, the path is the namespace scope.
 
-**Canonical vs. shorthand.** A canonical `with` is absolute (owner-named) as above; a **bare** lattice path is shorthand whose owner is implied by context, always the same principal: **the authority whose grant it is**.
+**Canonical vs. shorthand.** A canonical `with` is absolute (owner-named) as above. A **bare** lattice path is shorthand, resolved in a namespace the context supplies, as [GRID_LATTICE_DESIGN.md](GRID_LATTICE_DESIGN.md) §3.2 sets out for every name. That namespace is only where the name is resolved, and need not be the authority using it: an agent's `n/` is in the agent's own namespace, whatever its controller's authority. A leading slash changes nothing, and a capability is stored without one.
 
 - **Agent caps (config scopes)**: a bare `w/projects/foo` is in the namespace the request acts in, an agent's owner's; enforcement canonicalises it to `<ownerDID>/w/projects/foo` before matching, so bare and DID-URL grants compare identically. The same applies to bare `dlfs/<drive>/…` paths. A bare `n/…` names the agent's own notes, `<ownerDID>/g/<id>/n/…`, as `n/` does in any path it uses (`CapabilityChecker.inAgent`). An agent's own DID is named explicitly (`<ownerDID>:g:<id>/x/crypto/keys/`).
 - **Signed UCAN tokens**: a bare `with` means the **token issuer's own** namespace, resolved at evaluation against the token's signed `iss` (`CapabilityChecker.normaliseProofs`, applied inside `proofsCover` recursively per chain hop — a bare path in a re-delegation binds to the re-delegator). A self-sovereign owner can therefore sign bare paths naturally; they can never be reinterpreted against the presenter or the target.
@@ -802,8 +802,8 @@ checks (a *grant* of access to someone else's resource). A caller running under
 a **narrower Authority** — an agent started with `config.caps` (§5.4) — has the
 same capability check applied to its **own** operations as a *scope*: the op's
 resource and each grant's `with` are canonicalised to absolute owner-scoped form
-(a bare `w/records/item` → `<callerDID>/w/records/item`; DID-URL and `file://`/`dlfs://`
-left as-is), then matched with `Capability.covers`. Own and cross-user resources
+(a bare `w/records/item` → `<callerDID>/w/records/item`; DID-URL and `file://`
+left as-is, `dlfs://` normalised as above), then matched with `Capability.covers`. Own and cross-user resources
 thus match by one rule. A caller with no scope (the null-caps fast path) holds
 the full implicit grant and is unaffected.
 

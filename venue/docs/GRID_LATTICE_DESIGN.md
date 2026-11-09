@@ -55,20 +55,29 @@ settles payments; grid data flows over the lattice, not through consensus.
 
 ### 3.2 Where a Path Starts
 
-Every path is resolved in a request's context, and its first element decides
-where it starts. One parser reads paths on every route (`CoviaAdapter`):
+Every name is resolved in a namespace, and its first element decides where it
+starts. The namespace is only where the name is resolved, not whose authority
+uses it. These rules hold on every route, for a path and for a capability's
+`with` alike, and have one implementation each: `CoviaPath` for the syntax of
+a path, `CapabilityChecker.canonicalResource` for a name resolved in a
+namespace, `Engine.ownerOf` for the owner of a DID URL and
+`AssetAdapter.parseAssetId` for an asset's hash. `ResourceNamesTest` tests
+them.
 
+- **Leading slashes change nothing**, however many there are and before a DID
+  as well: `/w/notes` is `w/notes`. A trailing slash adds nothing to a path.
 - **A DID starts at that principal's own namespaces:** `w`, `o`, `g`, `j`,
   `s`, `h`, `a`, and `x/<adapter>`, the adapter's view for that principal.
   The DID is everything up to the first `/`, exactly as written, so a
-  `did:web` DID keeps its colons and `%3A`.
+  `did:web` DID keeps its colons and `%3A`, and another spelling of a DID is
+  another DID.
 - **Any other path starts at the request's root:** the request's user's
   namespaces, plus the context-rooted namespaces `n`, `c`, `t` and `v`, whose
-  root the request's context supplies (§4.5). One leading slash names that
-  root and is optional: `/w/notes` is `w/notes`.
-- **A DID sets where a path starts only as its first element.** With a slash
-  before it, the path starts at the request's root, where a DID names
-  nothing.
+  root the request's context supplies (§4.5).
+- **Every segment is kept as written**, with an owner or without: `.` and
+  `..` never navigate, an empty segment is a key, and `%`, `?` and `#` are
+  ordinary characters. DLFS paths are the exception, being filesystem paths
+  ([ADAPTERS.md](ADAPTERS.md)).
 - **A context-rooted namespace after a DID names no place**, because no
   principal's data holds one: an agent's workspace is
   `<did>/g/<agent>/n/…`, and the venue's view shows `<venue>/w/global/…`.
@@ -76,16 +85,16 @@ where it starts. One parser reads paths on every route (`CoviaAdapter`):
   whose first element is a DID is that DID URL.
 - **A content hash names an asset, not a place.** `a/<hash>` is in the
   caller's asset store; a bare hash is the caller's own asset when its store
-  holds it, and otherwise the venue catalog's (§4.3).
+  holds it, and otherwise the venue catalog's (§4.3). Only those forms and
+  `<did>/a/<hash>` name an asset: an `a` further along a path is just a key.
 
 | Path | Names |
 |------|-------|
-| `w/notes`, `/w/notes`, `["w", "notes"]` | the request's user's `w/notes` |
-| `did:key:zBob…/o/transform`, `["did:key:zBob…", "o", "transform"]` | Bob's `o/transform` |
+| `w/notes`, `/w/notes`, `//w/notes`, `["w", "notes"]` | the request's user's `w/notes` |
+| `did:key:zBob…/o/transform`, `/did:key:zBob…/o/transform`, `["did:key:zBob…", "o", "transform"]` | Bob's `o/transform` |
 | `n/memory` | the request's agent's `g/<agent>/n/memory` |
 | `v/ops/json/merge` | the venue's `w/global/ops/json/merge`, as every request sees it |
 | `did:key:zBob…/x/preferences` | the `preferences` adapter's view for Bob |
-| `/did:key:zBob…/w/notes` | no place |
 | `did:key:zBob…/n/memory`, `<venue DID>/v/ops` | no place |
 
 A path that names no place is refused with `CoviaPath.NO_SUCH_PATH`,

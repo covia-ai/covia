@@ -173,7 +173,7 @@ A write-side argument is constrained because you can't write to a content-addres
 
 The resolver returns the **literal value** at the resolved location. It does NOT chase references, follow indirections, or interpret the value in any way. It is a single-step navigation primitive. A path that names no place data could be, such as `wrok/notes`, resolves to nothing here; the covia read operations refuse it.
 
-**A leading slash is optional sugar.** Every form above except a DID URL resolves identically with or without a leading slash: `/v/ops/json/merge` is the same as `v/ops/json/merge`, and `/w/notes` the same as `w/notes`. The slash names the request's root, so the `/v/`, `/o/`, `/a/` notation used throughout this document and the bare `v/`, `o/`, `a/` forms are interchangeable. A DID sets where a path starts only as its first element, so `/did:…` names no place (GRID_LATTICE_DESIGN §3.2).
+**A leading slash changes nothing.** Every form above resolves identically with or without one: `/v/ops/json/merge` is the same as `v/ops/json/merge`, and `/w/notes` the same as `w/notes`, so the `/v/`, `/o/`, `/a/` notation used throughout this document and the bare `v/`, `o/`, `a/` forms are interchangeable ([GRID_LATTICE_DESIGN.md](GRID_LATTICE_DESIGN.md) §3.2).
 
 ### HTTP and SDK asset resolution
 
