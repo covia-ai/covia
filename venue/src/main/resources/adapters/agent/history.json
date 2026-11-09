@@ -1,6 +1,6 @@
 {
 	"name": "Agent Session History",
-	"description": "Reads a session's history exactly as stored, by position: user and assistant turns, tool calls, tool results in full, unanswered turns, diagnostics and compaction summaries. Position 0 is the oldest entry and entries[i] is at start + i. With no range you get the newest entries; to go further back, pass the returned start as end. If next is present, the range was longer than limit: pass next as start to continue. A summary marked [Compacted: turns a–b] stands for positions a to b, so read those with start=a and end=b+1. A summary among them names its own range, read the same way. limit counts entries and each entry comes back whole, so a long tool result comes back at full length. An agent may omit agentId to read itself, and omitting sessionId then reads the session it is in; an owner or authorised caller supplies agentId, and omitting sessionId then reads the newest visible session. Missing sessions and sessions hidden by venue policy return exactly {found:false}.",
+	"description": "Reads part of a session's history, every entry exactly as stored: turns, tool calls, full tool results, diagnostics and compaction summaries. A missing or hidden session returns {found:false}.",
 	"dateCreated": "2026-11-09T00:00:00Z",
 	"operation": {
 		"adapter": "agent:history",
@@ -9,26 +9,22 @@
 		"input": {
 			"type": "object",
 			"properties": {
-				"agentId": { "type": "string", "description": "Optional target agent id or g/<id> path. Omit only from that agent's own execution context. Reading an explicit target requires agent read access." },
-				"sessionId": { "type": "string", "description": "Optional 16-byte hex session id, with or without a 0x prefix. Omit for the session you are in, or outside a session for the newest visible one." },
-				"start": { "type": "integer", "minimum": 0, "description": "Position of the first entry to read. Omit with end for the newest entries." },
-				"end": { "type": "integer", "minimum": 0, "description": "Position to stop before: this entry is not included. Alone, reads the newest limit entries before it." },
-				"limit": { "type": "integer", "minimum": 1, "maximum": 100, "description": "Most entries to return. Default 20." }
+				"agentId": { "type": "string", "description": "The agent to read, as an id or g/<id> path. Required unless you are that agent. Naming another agent needs read access to it." },
+				"sessionId": { "type": "string", "description": "The session to read, as 16-byte hex with or without 0x. If omitted: the session you are in, or outside a session the newest visible one." },
+				"start": { "type": "integer", "minimum": 0, "description": "Position of the first entry to read; 0 is the oldest. If omitted: as many entries as limit allows, ending at end. To continue after a result with next, pass next here." },
+				"end": { "type": "integer", "minimum": 0, "description": "Position to stop before; that entry is not read. If omitted or past the last entry: the end of the history. To read further back, pass the start of your last result here. For a compaction summary naming turns a to b, use start=a and end=b+1." },
+				"limit": { "type": "integer", "minimum": 1, "maximum": 100, "description": "Most entries to return. Default 20. It counts entries, not size: each entry comes back whole." }
 			}
 		},
 		"output": {
 			"type": "object",
 			"required": ["found"],
 			"properties": {
-				"found": { "type": "boolean" },
-				"sessionId": { "type": "string" },
-				"title": { "type": "string" },
-				"size": { "type": "integer", "description": "Entries in the whole history." },
-				"contextStart": { "type": "integer", "description": "Position where the entries now in the agent's context begin. Earlier entries are outside it, standing behind compaction summaries." },
+				"found": { "type": "boolean", "description": "False when the session is missing or hidden; no other field is then present." },
+				"sessionId": { "type": "string", "description": "The session read." },
 				"start": { "type": "integer", "description": "Position of the first entry returned." },
-				"end": { "type": "integer", "description": "End of the range read, not included." },
-				"next": { "type": "integer", "description": "Present when the range was longer than limit: the position to continue from." },
-				"entries": { "type": "array", "items": { "type": "object" }, "description": "The stored entries, unchanged." }
+				"next": { "type": "integer", "description": "Present only when the range held more than limit entries: the position to continue from." },
+				"entries": { "type": "array", "items": { "type": "object" }, "description": "The stored entries, unchanged, oldest first. entries[i] is at position start + i." }
 			}
 		}
 	}

@@ -212,8 +212,6 @@ public class AgentAdapter extends AAdapter {
 	private static final AString K_FOUND            = Strings.intern("found");
 	private static final AString K_COUNT            = Strings.intern("count");
 	private static final AString K_TURN_COUNT       = Strings.intern("turnCount");
-	private static final AString K_SIZE             = Strings.intern("size");
-	private static final AString K_CONTEXT_START    = Strings.intern("contextStart");
 	private static final AString K_NEXT             = Strings.intern("next");
 	private static final AString K_ENTRIES          = Strings.intern("entries");
 	private static final AString K_META            = Strings.intern("meta");
@@ -2512,20 +2510,13 @@ public class AgentAdapter extends AAdapter {
 		}
 		if (session == null || !isVisibleToPolicies(ctx, access, sid, session)) return sessionNotFound();
 
-		AMap<AString, ACell> frame = rootFrame(session);
-		ConversationHistory history = ConversationHistory.open(frame);
-		ConversationHistory.Page page = readHistory(history, start, end, limit);
+		ConversationHistory.Page page = readHistory(ConversationHistory.open(rootFrame(session)), start, end, limit);
 		AMap<AString, ACell> result = Maps.of(
 			K_FOUND, CVMBool.TRUE,
 			Fields.SESSION_ID, Strings.create(sid.toHexString()),
-			K_SIZE, CVMLong.create(history.size()),
-			K_CONTEXT_START, CVMLong.create(history.contextStart()),
 			K_START, CVMLong.create(page.start()),
-			K_END, CVMLong.create(page.end()),
 			K_ENTRIES, page.entries());
-		if (page.hasMore()) result = result.assoc(K_NEXT, CVMLong.create(page.next()));
-		AString title = sessionTitle(session, ConversationRenderer.overview(frame));
-		return (title != null) ? result.assoc(K_TITLE, title) : result;
+		return page.hasMore() ? result.assoc(K_NEXT, CVMLong.create(page.next())) : result;
 	}
 
 	/**
@@ -2612,14 +2603,9 @@ public class AgentAdapter extends AAdapter {
 		long updated = overview.updated();
 		if (updated == 0 && meta != null) updated = longValue(meta.get(Fields.UPDATED), created);
 		if (updated == 0) updated = created;
-		return new SessionSummary(sid, session, sessionTitle(session, overview), created, updated, overview.turnCount());
-	}
-
-	/** A session's stored title, or else its first words. */
-	private static AString sessionTitle(AMap<AString, ACell> session, ConversationRenderer.SessionOverview overview) {
-		AMap<AString, ACell> meta = RT.ensureMap(session.get(K_META));
 		AString title = cleanTitle((meta != null) ? RT.ensureString(meta.get(K_TITLE)) : null);
-		return (title != null) ? title : cleanTitle(overview.firstUserContent());
+		if (title == null) title = cleanTitle(overview.firstUserContent());
+		return new SessionSummary(sid, session, title, created, updated, overview.turnCount());
 	}
 
 	private boolean isVisibleToPolicies(RequestContext ctx, SessionAccess access, Blob sid,
