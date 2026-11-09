@@ -10,7 +10,6 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicLong;
 
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -48,14 +47,12 @@ import covia.grid.hitl.Hitl;
 @Execution(ExecutionMode.SAME_THREAD) // the tests share the venue's clock and move it
 class SteppedSchedulerTest {
 
-	/** A time no system clock reads while this test runs. */
-	private static final long START = Instant.parse("2021-01-01T00:00:00Z").toEpochMilli();
 	private static final long HOUR = 3_600_000L;
 	private static final AString HOLD_START = Strings.create("v/test/ops/holdstart");
 	private static final AString ECHO = Strings.create("v/test/ops/echo");
 
-	/** The venues' clock. Only ever moves forward, so tests may share it. */
-	private static final AtomicLong CLOCK = new AtomicLong(START);
+	/** The venues' clock, at a time no system clock reads while this test runs. Tests may share it. */
+	private static final DrivenClock CLOCK = DrivenClock.at(Instant.parse("2021-01-01T00:00:00Z"));
 
 	/** A venue with the default {@code scheduler.maxConcurrency}, 2, and no update timer. */
 	private static CoviaApplication application;
@@ -63,17 +60,13 @@ class SteppedSchedulerTest {
 
 	@BeforeAll
 	static void launch() throws IOException {
-		application = CoviaApplication.create(policy());
+		application = CoviaApplication.create(CLOCK.policy());
 		engine = application.mount(AKeyPair.generate(), config(null)).launch();
 	}
 
 	@AfterAll
 	static void close() {
 		application.close();
-	}
-
-	private static VenueContext policy() {
-		return VenueContext.create(() -> CVMLong.create(CLOCK.get()));
 	}
 
 	/** Auto-created users, and {@code scheduler.maxConcurrency} when not null. */
@@ -101,7 +94,7 @@ class SteppedSchedulerTest {
 
 	/** Moves the clock on by {@code ms} and updates the application. */
 	private static CompletableFuture<List<Job>> step(CoviaApplication app, long ms) {
-		CLOCK.addAndGet(ms);
+		CLOCK.advance(ms);
 		return app.update();
 	}
 
@@ -111,7 +104,7 @@ class SteppedSchedulerTest {
 		Scheduler scheduler = engine.gridScheduler();
 		String name = "stepped-due-" + ctx.getUserDID();
 		try (TestAdapter.TestGate gate = TestAdapter.createGate(name)) {
-			scheduler.schedule(HOLD_START, gate(name), ctx, CLOCK.get());
+			scheduler.schedule(HOLD_START, gate(name), ctx, CLOCK.millis());
 			assertFalse(gate.awaitEntered(0, TimeUnit.SECONDS), "no update has run, so nothing has started");
 			assertEquals(1, scheduler.list(ctx).count(), "a due event waits in the schedule until an update");
 
@@ -125,11 +118,24 @@ class SteppedSchedulerTest {
 	}
 
 	@Test
+	void movingTheClockStartsNothingByItself(TestInfo info) throws Exception {
+		RequestContext ctx = user(engine, info);
+		Scheduler scheduler = engine.gridScheduler();
+		scheduler.schedule(ECHO, Strings.create("later"), ctx, CLOCK.millis() + HOUR);
+
+		CLOCK.advance(HOUR);
+		assertEquals(1, scheduler.list(ctx).count(), "the clock only holds the time: the event waits for an update");
+
+		application.update().get(10, TimeUnit.SECONDS);
+		assertTrue(scheduler.list(ctx).isEmpty(), "the update reads the moved clock and starts the event");
+	}
+
+	@Test
 	void dueEventsStartInIndexOrderTwoAtOnce(TestInfo info) throws Exception {
 		RequestContext ctx = user(engine, info);
 		Scheduler scheduler = engine.gridScheduler();
 		String prefix = "stepped-two-" + ctx.getUserDID() + "-";
-		long t = CLOCK.get();
+		long t = CLOCK.millis();
 		try (TestAdapter.TestGate a = TestAdapter.createGate(prefix + "a");
 				TestAdapter.TestGate b = TestAdapter.createGate(prefix + "b");
 				TestAdapter.TestGate c = TestAdapter.createGate(prefix + "c")) {
@@ -158,13 +164,13 @@ class SteppedSchedulerTest {
 
 	@Test
 	void aLimitOfOneStartsDueEventsOneAfterAnother(TestInfo info) throws Exception {
-		CoviaApplication single = CoviaApplication.create(policy());
+		CoviaApplication single = CoviaApplication.create(CLOCK.policy());
 		try {
 			Engine venue = single.mount(AKeyPair.generate(), config(1)).launch();
 			RequestContext ctx = user(venue, info);
 			Scheduler scheduler = venue.gridScheduler();
 			String prefix = "stepped-one-" + ctx.getUserDID() + "-";
-			long t = CLOCK.get();
+			long t = CLOCK.millis();
 			try (TestAdapter.TestGate a = TestAdapter.createGate(prefix + "a");
 					TestAdapter.TestGate b = TestAdapter.createGate(prefix + "b")) {
 				scheduler.schedule(HOLD_START, gate(prefix + "b"), ctx, t + 2);
@@ -181,7 +187,7 @@ class SteppedSchedulerTest {
 
 				// Overlapping updates each get the Jobs started that were due by their own time.
 				try (TestAdapter.TestGate first = TestAdapter.createGate(prefix + "first")) {
-					long at = CLOCK.get();
+					long at = CLOCK.millis();
 					scheduler.schedule(HOLD_START, gate(prefix + "first"), ctx, at + 1);
 					scheduler.schedule(ECHO, Strings.create("later"), ctx, at + 20);
 					CompletableFuture<List<Job>> earlier = step(single, 10);
@@ -200,8 +206,8 @@ class SteppedSchedulerTest {
 
 				// A closing venue starts nothing more: an update waiting on it fails.
 				try (TestAdapter.TestGate held = TestAdapter.createGate(prefix + "held")) {
-					scheduler.schedule(HOLD_START, gate(prefix + "held"), ctx, CLOCK.get());
-					scheduler.schedule(ECHO, Strings.create("never started"), ctx, CLOCK.get());
+					scheduler.schedule(HOLD_START, gate(prefix + "held"), ctx, CLOCK.millis());
+					scheduler.schedule(ECHO, Strings.create("never started"), ctx, CLOCK.millis());
 					CompletableFuture<List<Job>> waiting = single.update();
 					entered(held, "the first event takes the only place");
 					scheduler.shutdown();
@@ -222,7 +228,7 @@ class SteppedSchedulerTest {
 		application.update().get(10, TimeUnit.SECONDS);
 		String name = "stepped-past-" + ctx.getUserDID();
 		try (TestAdapter.TestGate gate = TestAdapter.createGate(name)) {
-			scheduler.schedule(HOLD_START, gate(name), ctx, CLOCK.get() - 1_000);
+			scheduler.schedule(HOLD_START, gate(name), ctx, CLOCK.millis() - 1_000);
 			CompletableFuture<List<Job>> update = step(application, 0);
 			entered(gate, "a step that leaves the time unchanged still starts what is due");
 			gate.release();
@@ -236,7 +242,7 @@ class SteppedSchedulerTest {
 		RequestContext ctx = user(engine, info);
 		Scheduler scheduler = engine.gridScheduler();
 		application.update().get(10, TimeUnit.SECONDS);
-		long t = CLOCK.get();
+		long t = CLOCK.millis();
 		scheduler.schedule(ECHO, Strings.create("untracked"), ctx, t + 2, null, false);
 		scheduler.schedule(ECHO, Strings.create("tracked"), ctx, t + 1, null, true);
 		scheduler.schedule(Strings.create("v/test/ops/no-such-operation"), Maps.empty(), ctx, t + 3);
@@ -255,7 +261,7 @@ class SteppedSchedulerTest {
 	void aRecurringEventMovesToItsNextSlotSkippingMissedOnes(TestInfo info) throws Exception {
 		RequestContext ctx = user(engine, info);
 		Scheduler scheduler = engine.gridScheduler();
-		long t = CLOCK.get();
+		long t = CLOCK.millis();
 		AMap<AString, ACell> everySecond = Maps.of(Schedule.K_EVERY, CVMLong.create(1_000));
 		Blob handle = scheduler.schedule(ECHO, Strings.create("tick"), ctx, t + 1_000, everySecond, true);
 
@@ -275,14 +281,14 @@ class SteppedSchedulerTest {
 	@Test
 	void anEventDueWhileTheVenueIsClosingStaysForItsNextStart(TestInfo info) throws Exception {
 		AtomicBoolean closing = new AtomicBoolean();
-		CoviaApplication closable = CoviaApplication.create(policy());
+		CoviaApplication closable = CoviaApplication.create(CLOCK.policy());
 		try {
 			Engine venue = closable.mount(AKeyPair.generate(), config(null), (cfg, app, key) -> new Engine(cfg, app, key) {
 				@Override public boolean isClosing() { return closing.get() || super.isClosing(); }
 			}).launch();
 			RequestContext ctx = user(venue, info);
 			Scheduler scheduler = venue.gridScheduler();
-			scheduler.schedule(ECHO, Strings.create("due"), ctx, CLOCK.get());
+			scheduler.schedule(ECHO, Strings.create("due"), ctx, CLOCK.millis());
 			closing.set(true);
 			closable.update().get(10, TimeUnit.SECONDS);
 			assertEquals(1, scheduler.list(ctx).count(), "a closing venue neither starts nor consumes it");
@@ -359,7 +365,7 @@ class SteppedSchedulerTest {
 		AString did = TestEngine.uniqueDID(info);
 		Blob kept;
 		Blob lost;
-		CoviaApplication first = CoviaApplication.open(store, policy());
+		CoviaApplication first = CoviaApplication.open(store, CLOCK.policy());
 		try {
 			Engine venue = first.mount(key, config(null)).launch();
 			venue.getVenueState().users().ensure(did);
@@ -374,8 +380,8 @@ class SteppedSchedulerTest {
 		} finally {
 			first.close();
 		}
-		CLOCK.addAndGet(60_000); // both fall due while the venue is down
-		CoviaApplication second = CoviaApplication.open(store, policy());
+		CLOCK.advance(60_000); // both fall due while the venue is down
+		CoviaApplication second = CoviaApplication.open(store, CLOCK.policy());
 		try {
 			Engine venue = second.mount(key, config(null)).launch();
 			Job keptJob = venue.jobs().getJob(kept);

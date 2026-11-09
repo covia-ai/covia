@@ -10,6 +10,7 @@ import org.junit.jupiter.api.TestInfo;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Instant;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
@@ -40,9 +41,9 @@ import covia.lattice.Covia;
 import covia.venue.CoviaApplication;
 import covia.venue.Engine;
 import covia.venue.Config;
+import covia.venue.DrivenClock;
 import covia.venue.RequestContext;
 import covia.venue.TestEngine;
-import covia.venue.VenueContext;
 
 public class DLFSAdapterTest {
 
@@ -333,9 +334,8 @@ public class DLFSAdapterTest {
 	@SuppressWarnings("unchecked")
 	public void testDriveDeletionWinsOlderSnapshot() throws Exception {
 		var key = AKeyPair.generate();
-		var time = new java.util.concurrent.atomic.AtomicLong(System.currentTimeMillis());
-		var application = CoviaApplication.create(
-			VenueContext.create(() -> convex.core.data.prim.CVMLong.create(time.get())));
+		var time = DrivenClock.at(Instant.now());
+		var application = CoviaApplication.create(time.policy());
 		Engine isolated = application.mount(key, Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true))).start();
 		try {
 			Engine.addDemoAssets(isolated);
@@ -347,7 +347,7 @@ public class DLFSAdapterTest {
 			assertEquals("legacy content", Files.readString(drive.getPath("/old.txt")));
 			// A strictly newer deletion wins in either merge direction; equal times
 			// deliberately keep the local operand in Convex (covered by the save race).
-			time.incrementAndGet();
+			time.advance(1);
 			isolated.jobs().invokeOperation("v/ops/dlfs/delete-drive", Maps.of("name", "legacy"),
 				RequestContext.of(ALICE_DID)).awaitResult(5000);
 			var deleted = root.get();
@@ -716,9 +716,8 @@ public class DLFSAdapterTest {
 	@SuppressWarnings("unchecked")
 	public void testLongLivedDriveUsesCurrentVenueClockAndOwnerKey() throws Exception {
 		AKeyPair venueKey = AKeyPair.generate();
-		var time = new java.util.concurrent.atomic.AtomicLong(System.currentTimeMillis());
-		CoviaApplication application = CoviaApplication.create(
-			VenueContext.create(() -> convex.core.data.prim.CVMLong.create(time.get())));
+		var time = DrivenClock.at(Instant.now());
+		CoviaApplication application = CoviaApplication.create(time.policy());
 		Engine isolated = application.mount(venueKey, Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true))).start();
 		try {
 			Engine.addDemoAssets(isolated);
@@ -726,7 +725,7 @@ public class DLFSAdapterTest {
 			var drive = writableDrive(adapter, "clock");
 			Files.writeString(drive.getPath("/first"), "first");
 			long before = Files.getLastModifiedTime(drive.getPath("/first")).toMillis();
-			time.addAndGet(100);
+			time.advance(100);
 			Files.writeString(drive.getPath("/second"), "second");
 			assertEquals(before + 100, Files.getLastModifiedTime(drive.getPath("/second")).toMillis());
 			var owners = (AMap<ACell, ACell>) application.cursor().get().get(Covia.DLFS);

@@ -11,7 +11,6 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicLong;
 
 import org.junit.jupiter.api.Test;
 
@@ -331,7 +330,7 @@ class WhatsAppAdapterTest {
 		var input = agent.inputs.poll(5, TimeUnit.SECONDS); assertNotNull(input); return input;
 	}
 	@Test void appliesInboundAgeAndFutureSkewLimits() throws Exception {
-		AtomicLong clock = venueClock(); long now = clock.get() / 1000;
+		DrivenClock clock = venueClock(); long now = clock.millis() / 1000;
 		try (Fixture f = new Fixture(spec().assoc(Strings.intern("token"), Strings.create("s/LATE")), clock)) {
 			for (long offset : new long[] {-86401, -86399, 300, 301}) {
 				String id = "offset-" + offset;
@@ -343,7 +342,7 @@ class WhatsAppAdapterTest {
 		}
 	}
 	@Test void repliesUntilButNotAtThe24HourBoundary() throws Exception {
-		AtomicLong clock = venueClock(); long timestamp = clock.get() / 1000;
+		DrivenClock clock = venueClock(); long timestamp = clock.millis() / 1000;
 		try (Fixture f = new Fixture(spec(), clock)) {
 			AMap<AString, ACell> event = Maps.of("to", "441234567890", "messageId", "boundary", "timestamp", Long.toString(timestamp));
 			clock.set((timestamp + 86399) * 1000);
@@ -357,15 +356,15 @@ class WhatsAppAdapterTest {
 		}
 	}
 	@Test void rechecksTheReplyWindowAfterTheAgentCompletes() throws Exception {
-		AtomicLong clock = venueClock();
+		DrivenClock clock = venueClock();
 		var agentSpec = spec().dissoc(Strings.intern("operation")).dissoc(Strings.intern("reply")).assoc(Strings.intern("agent"), Strings.create("slow-agent"));
 		try (Fixture f = new Fixture(agentSpec, clock)) {
 			FakeAgent agent = new FakeAgent(); agent.blocked = new CompletableFuture<>(); f.engine.registerAdapter(agent);
 			try {
-				var message = message("slow").assoc(Strings.intern("timestamp"), Strings.create(Long.toString(clock.get() / 1000)));
+				var message = message("slow").assoc(Strings.intern("timestamp"), Strings.create(Long.toString(clock.millis() / 1000)));
 				assertEquals(200, f.webhook(payload(message)).status());
 				assertNotNull(agent.inputs.poll(5, TimeUnit.SECONDS));
-				clock.addAndGet(86_400_000);
+				clock.advance(86_400_000);
 				agent.blocked.complete(Maps.of(Fields.SESSION_ID, "late-session", Fields.RESPONSE, "too late"));
 				long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
 				while (f.bot().status().get(Fields.ERROR) == null && System.nanoTime() < deadline) Thread.sleep(10);
@@ -418,8 +417,8 @@ class WhatsAppAdapterTest {
 		}
 	}
 	/** A venue clock the test moves, in epoch milliseconds. */
-	private static AtomicLong venueClock() {
-		return new AtomicLong(Instant.parse("2026-10-06T12:00:00Z").toEpochMilli());
+	private static DrivenClock venueClock() {
+		return DrivenClock.at(Instant.parse("2026-10-06T12:00:00Z"));
 	}
 	private static final class FakeAgent extends AAdapter {
 		final LinkedBlockingQueue<AMap<AString, ACell>> inputs = new LinkedBlockingQueue<>();
