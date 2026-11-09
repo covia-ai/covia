@@ -80,7 +80,7 @@ public class GoalTreeContextTest {
 		AMap<AString, ACell> legacy = legacyFrame("root");
 		AMap<AString, ACell> current = GoalTreeContext.createFrame("root");
 		AVector<ACell> expected = Vectors.empty();
-		// Deep nesting: raw embedder access has no depth limit.
+		// Beyond sessionRead's depth limit: raw embedder access has no such cap.
 		for (int i = 0; i < 12; i++) {
 			AVector<ACell> turns = Vectors.of(
 				Maps.of("role", "user", "content", Maps.of("text", "question " + i, "via", "phone"),
@@ -114,8 +114,11 @@ public class GoalTreeContextTest {
 			assertSame(unanswered, compatible.get(compatible.count() - 1));
 			assertSame(cached, withCache.get(GoalTreeContext.K_RENDERED_CONTEXT));
 			assertEquals(ConversationRenderer.renderFull(legacy), ConversationRenderer.renderFull(withCache));
-			assertEquals(ConversationRenderer.overview(legacy), ConversationRenderer.overview(withCache),
-				"session listings read the same across storage formats");
+			for (int depth : new int[] {0, 1, 8}) {
+				assertEquals(ConversationRenderer.historical(legacy, 20, 1000, depth),
+					ConversationRenderer.historical(withCache, 20, 1000, depth),
+					"existing filtered callers retain their bounds and projection");
+			}
 		}
 	}
 
@@ -482,23 +485,23 @@ public class GoalTreeContextTest {
 	}
 
 	@Test
-	public void testOverviewTitleIsTheWordsOfTheFirstMessage() {
+	public void testHistoricalTitleIsTheWordsOfTheFirstMessage() {
 		AMap<AString, ACell> voiced = withConversation(
 			Maps.of("role", "user", "content", Maps.of("text", "are you hearing me?",
 				"via", Maps.of("channel", "voice")), "ts", 1L),
 			Maps.of("role", "assistant", "content", "yes", "ts", 2L));
 		assertEquals("are you hearing me?",
-			ConversationRenderer.overview(voiced).firstUserContent().toString());
+			ConversationRenderer.historical(voiced, 0, 0).firstUserContent().toString());
 		AMap<AString, ACell> requested = withConversation(
 			Maps.of("role", "user", "content", Maps.of("task", "Daily check-in", "format", "bullets"), "ts", 1L),
 			Maps.of("role", "assistant", "content", "done", "ts", 2L));
 		assertEquals("Daily check-in",
-			ConversationRenderer.overview(requested).firstUserContent().toString());
+			ConversationRenderer.historical(requested, 0, 0).firstUserContent().toString());
 		assertNull(GoalTreeContext.turnText(Maps.of("data", "no words")));
 	}
 
 	@Test
-	public void testOverviewCountsOnlyCompletedConversation() {
+	public void testHistoricalProjectionKeepsOnlyCompletedConversation() {
 		AMap<AString, ACell> frame = withConversation(
 			Maps.of("role", "user", "content", "first question", "ts", 1L),
 			assistantToolCall("lookup"),
@@ -508,14 +511,50 @@ public class GoalTreeContextTest {
 			Maps.of("role", "user", "content", "unfinished", "ts", 4L),
 			assistantToolCall("still-working"));
 
-		ConversationRenderer.SessionOverview overview = ConversationRenderer.overview(frame);
-		assertEquals(2, overview.turnCount());
-		assertEquals("first question", overview.firstUserContent().toString());
-		assertEquals(3, overview.updated());
+		ConversationRenderer.HistoricalView view =
+			ConversationRenderer.historical(frame, 20, 1000);
+		assertEquals(2, view.turnCount());
+		assertEquals(2, view.messages().count());
+		assertEquals("first question", view.firstUserContent().toString());
+		assertEquals(3, view.updated());
+		assertFalse(view.truncated());
+		assertEquals("first question",
+			RT.ensureString(RT.getIn(view.messages().get(0), "content")).toString());
+		assertEquals("first answer",
+			RT.ensureString(RT.getIn(view.messages().get(1), "content")).toString());
+		for (ACell message : view.messages()) {
+			assertNull(RT.getIn(message, "ts"));
+			assertNull(RT.getIn(message, "toolCalls"));
+		}
 	}
 
 	@Test
-	public void testOverviewCountsCompactedTurns() {
+	public void testHistoricalProjectionBoundsNewestContentIncludingOversizedTurn() {
+		AMap<AString, ACell> frame = withConversation(
+			Maps.of("role", "user", "content", "question-one", "ts", 1L),
+			Maps.of("role", "assistant", "content", "answer-one", "ts", 2L),
+			Maps.of("role", "user", "content", "question-two", "ts", 3L),
+			Maps.of("role", "assistant", "content", "answer-two", "ts", 4L));
+
+		ConversationRenderer.HistoricalView byTurns =
+			ConversationRenderer.historical(frame, 2, 1000);
+		assertEquals(4, byTurns.turnCount());
+		assertEquals(2, byTurns.messages().count());
+		assertTrue(byTurns.truncated());
+		assertEquals("question-two",
+			RT.ensureString(RT.getIn(byTurns.messages().get(0), "content")).toString());
+
+		ConversationRenderer.HistoricalView byChars =
+			ConversationRenderer.historical(frame, 20, 4);
+		assertEquals(1, byChars.messages().count());
+		assertEquals("-two",
+			RT.ensureString(RT.getIn(byChars.messages().get(0), "content")).toString());
+		assertEquals(Boolean.TRUE, RT.jvm(RT.getIn(byChars.messages().get(0), "truncated")));
+		assertTrue(byChars.truncated());
+	}
+
+	@Test
+	public void testHistoricalProjectionOpensCompactedArchivesSafely() {
 		AMap<AString, ACell> frame = withConversation(
 			Maps.of("role", "user", "content", "archived question", "ts", 1L),
 			assistantToolCall("lookup"),
@@ -523,10 +562,23 @@ public class GoalTreeContextTest {
 			Maps.of("role", "assistant", "content", "archived answer", "ts", 3L));
 		frame = GoalTreeContext.compactFrame(frame, "Question answered");
 
-		ConversationRenderer.SessionOverview overview = ConversationRenderer.overview(frame);
-		assertEquals(4, overview.turnCount());
-		assertEquals("archived question", overview.firstUserContent().toString());
-		assertEquals(3, overview.updated());
+		ConversationRenderer.HistoricalView summary =
+			ConversationRenderer.historical(frame, 20, 1000);
+		assertEquals(1, summary.messages().count());
+		assertEquals("assistant", RT.getIn(summary.messages().get(0), "role").toString());
+		assertTrue(RT.getIn(summary.messages().get(0), "content").toString()
+			.contains("Question answered"));
+
+		ConversationRenderer.HistoricalView expanded =
+			ConversationRenderer.historical(frame, 20, 1000, 1);
+		assertEquals(2, expanded.messages().count());
+		assertEquals("archived question",
+			RT.getIn(expanded.messages().get(0), "content").toString());
+		assertEquals("archived answer",
+			RT.getIn(expanded.messages().get(1), "content").toString());
+		assertEquals("archived question", expanded.firstUserContent().toString());
+		assertEquals(3, expanded.updated());
+		assertFalse(expanded.messages().toString().contains("private scratch"));
 	}
 
 	// ========== Ancestor rendering ==========

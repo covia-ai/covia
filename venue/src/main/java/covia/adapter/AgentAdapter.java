@@ -212,6 +212,15 @@ public class AgentAdapter extends AAdapter {
 	private static final AString K_FOUND            = Strings.intern("found");
 	private static final AString K_COUNT            = Strings.intern("count");
 	private static final AString K_TURN_COUNT       = Strings.intern("turnCount");
+	private static final AString K_MAX_TURNS        = Strings.intern("maxTurns");
+	private static final AString K_MAX_CHARS        = Strings.intern("maxChars");
+	private static final AString K_ARCHIVE_DEPTH    = Strings.intern("archiveDepth");
+	private static final AString K_TRUNCATED        = Strings.intern("truncated");
+	private static final AString K_CURRENT          = Strings.intern("current");
+	private static final AString K_SKIP             = Strings.intern("skip");
+	private static final AString K_OLDER            = Strings.intern("older");
+	private static final AString K_FROM_TURN        = Strings.intern("from");
+	private static final AString K_TO_TURN          = Strings.intern("to");
 	private static final AString K_NEXT             = Strings.intern("next");
 	private static final AString K_ENTRIES          = Strings.intern("entries");
 	private static final AString K_META            = Strings.intern("meta");
@@ -633,6 +642,7 @@ public class AgentAdapter extends AAdapter {
 		installAsset("agent/reload-context", BASE + "reloadContext.json");
 		installAsset("agent/sessions",       BASE + "sessions.json");
 		installAsset("agent/history",        BASE + "history.json");
+		installAsset("agent/session-read",   BASE + "sessionRead.json");
 
 		// Install standard agent templates at v/agents/templates/<name>.
 		// Discoverable via covia_list path=v/agents/templates and usable in
@@ -703,6 +713,9 @@ public class AgentAdapter extends AAdapter {
 				}
 				case "history" -> {
 					return CompletableFuture.completedFuture(doHistory(ctx, input));
+				}
+				case "sessionRead" -> {
+					return CompletableFuture.completedFuture(doSessionRead(ctx, input));
 				}
 				default -> {
 					// Everything else — create, update, fork, chat, message,
@@ -870,6 +883,7 @@ public class AgentAdapter extends AAdapter {
 				case "reloadContext" -> handleReloadContext(job, input, ctx);
 				case "sessions"      -> handleSessions(job, input, ctx);
 				case "history"       -> handleHistory(job, input, ctx);
+				case "sessionRead"   -> handleSessionRead(job, input, ctx);
 				case "completeTask" -> handleCompleteTask(job, input, ctx);
 				case "failTask"     -> handleFailTask(job, input, ctx);
 				default             -> job.fail("Unknown agent operation: " + getSubOperation(meta));
@@ -2436,6 +2450,11 @@ public class AgentAdapter extends AAdapter {
 	private static final int MAX_SESSION_LIMIT = 100;
 	private static final int DEFAULT_HISTORY_ENTRIES = 20;
 	private static final int MAX_HISTORY_ENTRIES = 100;
+	private static final int DEFAULT_HISTORY_TURNS = 20;
+	private static final int MAX_HISTORY_TURNS = 100;
+	private static final int DEFAULT_HISTORY_CHARS = 8_000;
+	private static final int MAX_HISTORY_CHARS = 100_000;
+	private static final int MAX_ARCHIVE_DEPTH = 8;
 	private static final int MAX_SESSION_TITLE_CHARS = 120;
 
 	private record SessionSummary(Blob id, AMap<AString, ACell> session,
@@ -2446,6 +2465,11 @@ public class AgentAdapter extends AAdapter {
 	private void handleSessions(Job job, ACell input, RequestContext ctx) {
 		job.setStatus(Status.STARTED);
 		job.completeWith(doSessions(ctx, input));
+	}
+
+	private void handleSessionRead(Job job, ACell input, RequestContext ctx) {
+		job.setStatus(Status.STARTED);
+		job.completeWith(doSessionRead(ctx, input));
 	}
 
 	private void handleHistory(Job job, ACell input, RequestContext ctx) {
@@ -2494,10 +2518,7 @@ public class AgentAdapter extends AAdapter {
 		Blob sid;
 		AMap<AString, ACell> session;
 		if (requested != null) {
-			sid = parseSessionId(requested);
-			if (sid == null || sid.count() != 16) {
-				throw new InvalidInputException("sessionId must be a 16-byte hex string");
-			}
+			sid = requiredSessionId(requested);
 			session = access.agent().getSession(sid);
 		} else if (access.excludedSession() != null) {
 			sid = access.excludedSession();
@@ -2540,6 +2561,98 @@ public class AgentAdapter extends AAdapter {
 			throw new InvalidInputException(HISTORY_POSITION_INVALID.formatted(field));
 		}
 		return number.longValue();
+	}
+
+	/**
+	 * Legacy read for existing callers: a bounded projection of one session, or
+	 * the newest visible when omitted. New callers use {@link #doHistory}.
+	 */
+	private AMap<AString, ACell> doSessionRead(RequestContext ctx, ACell input) {
+		SessionAccess access = resolveSessionAccess(ctx, input);
+		int maxTurns = boundedInt(input, K_MAX_TURNS,
+			DEFAULT_HISTORY_TURNS, 1, MAX_HISTORY_TURNS);
+		int maxChars = boundedInt(input, K_MAX_CHARS,
+			DEFAULT_HISTORY_CHARS, 1, MAX_HISTORY_CHARS);
+		int archiveDepth = boundedInt(input, K_ARCHIVE_DEPTH, 0, 0, MAX_ARCHIVE_DEPTH);
+		int skip = boundedInt(input, K_SKIP, 0, 0, Integer.MAX_VALUE);
+		ACell current = RT.getIn(input, K_CURRENT);
+		if (current != null && !(current instanceof CVMBool)) {
+			throw new InvalidInputException("current must be a boolean");
+		}
+		if (CVMBool.TRUE.equals(current)) return doCurrentSessionRead(ctx, access, input, maxTurns, maxChars, archiveDepth, skip);
+
+		AString requested = RT.ensureString(RT.getIn(input, Fields.SESSION_ID));
+		SessionSummary summary;
+		if (requested == null) {
+			List<SessionSummary> summaries = visibleSessionSummaries(ctx, access);
+			if (summaries.isEmpty()) return sessionNotFound();
+			summary = summaries.get(0);
+		} else {
+			Blob sid = requiredSessionId(requested);
+			summary = summarizeSession(ctx, access, sid, access.agent().getSession(sid));
+			if (summary == null) return sessionNotFound();
+		}
+
+		AMap<AString, ACell> frame = rootFrame(summary.session());
+		ConversationRenderer.HistoricalView view = ConversationRenderer.historical(
+			frame, maxTurns, maxChars, archiveDepth, skip);
+		AMap<AString, ACell> result = Maps.of(
+			K_FOUND, CVMBool.TRUE,
+			Fields.SESSION_ID, Strings.create(summary.id().toHexString()),
+			K_CREATED, CVMLong.create(summary.created()),
+			Fields.UPDATED, CVMLong.create(summary.updated()),
+			K_TURN_COUNT, CVMLong.create(summary.turnCount()),
+			Fields.MESSAGES, view.messages(),
+			K_TRUNCATED, CVMBool.create(view.truncated()),
+			K_OLDER, CVMBool.create(view.older()));
+		if (summary.title() != null) result = result.assoc(K_TITLE, summary.title());
+		return result;
+	}
+
+	/**
+	 * The caller's own current session, as far as it is no longer in the
+	 * caller's context: the turns its compaction summaries stand for. Live
+	 * turns are never served again; a session never compacted has nothing to
+	 * read. Same projection, bounds and paging as any other session.
+	 */
+	private AMap<AString, ACell> doCurrentSessionRead(RequestContext ctx, SessionAccess access, ACell input,
+			int maxTurns, int maxChars, int archiveDepth, int skip) {
+		Blob sid = ctx.getSessionId();
+		if (RT.getIn(input, Fields.SESSION_ID) != null) {
+			throw new InvalidInputException("current reads the caller's own session; omit sessionId");
+		}
+		if (sid == null || access.excludedSession() == null || !sid.equals(access.excludedSession())) {
+			throw new InvalidInputException("current is only for an agent reading the session it is in");
+		}
+		AMap<AString, ACell> session = access.agent().getSession(sid);
+		AMap<AString, ACell> frame = (session != null) ? rootFrame(session) : null;
+		if (frame == null) return sessionNotFound();
+		ACell from = RT.getIn(input, K_FROM_TURN), to = RT.getIn(input, K_TO_TURN);
+		if ((from == null) != (to == null)) throw new InvalidInputException("from and to go together");
+		if (from != null && (!(from instanceof CVMLong) || !(to instanceof CVMLong))) {
+			throw new InvalidInputException("from and to must be turn numbers");
+		}
+		ConversationRenderer.HistoricalView view = (from != null)
+			? ConversationRenderer.historicalTurns(frame, ((CVMLong) from).longValue(), ((CVMLong) to).longValue(),
+				maxTurns, maxChars, skip)
+			: ConversationRenderer.historicalBeforeContext(frame, maxTurns, maxChars, archiveDepth, skip);
+		return Maps.of(
+			K_FOUND, CVMBool.TRUE,
+			K_CURRENT, CVMBool.TRUE,
+			Fields.SESSION_ID, Strings.create(sid.toHexString()),
+			K_TURN_COUNT, CVMLong.create(view.turnCount()),
+			Fields.MESSAGES, view.messages(),
+			K_TRUNCATED, CVMBool.create(view.truncated()),
+			K_OLDER, CVMBool.create(view.older()));
+	}
+
+	/** A session id the caller named, which must be well formed. */
+	private static Blob requiredSessionId(AString requested) {
+		Blob sid = parseSessionId(requested);
+		if (sid == null || sid.count() != 16) {
+			throw new InvalidInputException("sessionId must be a 16-byte hex string");
+		}
+		return sid;
 	}
 
 	private SessionAccess resolveSessionAccess(RequestContext ctx, ACell input) {
@@ -2597,16 +2710,16 @@ public class AgentAdapter extends AAdapter {
 		Blob excluded = access.excludedSession();
 		if (session == null || (excluded != null && sid.equals(excluded))
 				|| !isVisibleToPolicies(ctx, access, sid, session)) return null;
-		ConversationRenderer.SessionOverview overview = ConversationRenderer.overview(rootFrame(session));
-		if (overview.turnCount() == 0) return null;
+		ConversationRenderer.HistoricalView view = ConversationRenderer.historical(rootFrame(session), 0, 0);
+		if (view.turnCount() == 0) return null;
 		AMap<AString, ACell> meta = RT.ensureMap(session.get(K_META));
 		long created = longValue((meta != null) ? meta.get(K_CREATED) : null, 0);
-		long updated = overview.updated();
+		long updated = view.updated();
 		if (updated == 0 && meta != null) updated = longValue(meta.get(Fields.UPDATED), created);
 		if (updated == 0) updated = created;
 		AString title = cleanTitle((meta != null) ? RT.ensureString(meta.get(K_TITLE)) : null);
-		if (title == null) title = cleanTitle(overview.firstUserContent());
-		return new SessionSummary(sid, session, title, created, updated, overview.turnCount());
+		if (title == null) title = cleanTitle(view.firstUserContent());
+		return new SessionSummary(sid, session, title, created, updated, view.turnCount());
 	}
 
 	private boolean isVisibleToPolicies(RequestContext ctx, SessionAccess access, Blob sid,

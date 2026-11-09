@@ -204,7 +204,8 @@ without interpretation. A provider edge may restore it only when both
 changes, malformed state and unknown block types ignore it. It is currently
 used for Anthropic signed and redacted thinking blocks on assistant tool-use
 turns. It is not assistant content and is not duplicated in `renderedContext`;
-`agent:history` returns it with the rest of the stored entry. Compaction keeps it in
+`agent:history` returns it with the rest of the stored entry and the legacy
+`agent:sessionRead` leaves it out. Compaction keeps it in
 the exact archived `items` but does not replay archived state through the
 provider-visible summary.
 

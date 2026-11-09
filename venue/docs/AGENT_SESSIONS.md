@@ -338,6 +338,7 @@ historical execution checkpoints are not required.
 |----|---------|
 | `agent:sessions` | List bounded session metadata, newest first; owners pass `agentId`, the running agent may omit it |
 | `agent:history` | Read a session's history exactly as stored, by position |
+| `agent:sessionRead` | Legacy, for existing callers: a bounded transcript of completed turns |
 | `agent:renameSession` | Set or clear a session's human-facing title (owner management surface) |
 | `agent:compactSession` | Select owner-supplied assistant memory for an idle session while retaining the covered history |
 | `agent:reloadContext` | Clear an idle session's materialised provider prefix so the next inference rebuilds current prompt/tools/pinned context; conversation and loads stay exact |
@@ -350,6 +351,8 @@ The listing and history operations have two explicit modes. From an agent execut
 The result is `{found, sessionId, start?, next?, entries}`. `start` is present only when the input had none, and is the position of the first entry returned. `entries[i]` is at position `start + i`, and `next`, present when the range was longer than `limit`, is the position to continue from. To go further back, pass the position the last read began at as `end`.
 
 A compaction summary stands for the range in its `historyRange`. In an agent's context it reads `[Compacted: turns a–b] …`, and `start=a, end=b+1` reads those entries back; a summary among them names its own range, read the same way.
+
+`agent:sessionRead` is the legacy read for existing callers; new callers use `agent:history`. It returns `{found, sessionId, title?, created, updated, turnCount, messages, truncated, older}`, holding completed user and final-assistant turns and compaction summaries, each summary marked `compacted` with the `turns` it stands for and their `from` and `to`. Tool calls, tool results, diagnostics, unanswered turns and provider continuation data are left out. `maxTurns` (default 20, at most 100) and `maxChars` (default 8000, at most 100000) bound the result, keeping the newest; `skip` passes over that many of the newest messages and `older` says whether earlier ones remain; `archiveDepth` (at most 8) opens nested compaction records. The caller's current session and unfinished sessions return exactly `{"found":false}`. With `current: true`, an agent instead reads the session it is in, only what is no longer in its context, with `from` and `to` naming the turns of a summary, both included.
 
 `agent:compactSession` is the explicit owner management surface and requires agent-write authority. It only mutates a quiescent session. Versioned frames append a summary with `historyRange` coverage and advance `contextStart`; legacy frames retain the replaced vector under `items`. Provenance is stamped on the summary, and the Job returns only bounded metadata rather than a second copy of the transcript. Future turns append after the summary normally. The in-band `compact` harness tool applies the same transform from either built-in LLM runtime.
 
@@ -372,6 +375,7 @@ can call these existing functions directly; no new REST endpoint is required.
 | Read `frame.conversation`, including nested summary `items`, for an existing inspector, export or archive walker | `GoalTreeContext.archivedConversation(frame)` |
 | Read the selected entries for current model context, leaving summaries unexpanded | `GoalTreeContext.activeConversation(frame)` |
 | Render selected entries as native messages and summary memory | `ConversationRenderer.renderFull(frame, dialect)` |
+| Preserve the current bounded, completed-cycle retrospective projection | `ConversationRenderer.historical(frame, maxTurns, maxChars, archiveDepth)` |
 | Read a frame's history by position, unchanged | `ConversationHistory.open(frame).read(start, end, limit)` |
 | Append stored turns without knowing the frame format | `GoalTreeContext.appendTurn(frame, turn)` / `appendTurns(frame, turns)` |
 | Read a session transcript through the TypeScript SDK | `(await agent.getSession(id)).conversation`, or `await agent.transcript(id)` |
