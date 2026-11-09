@@ -31,6 +31,7 @@ import covia.venue.server.VenueServer;
  *   SLEEP &lt;ms&gt;                        PROTO OK
  *   HALT                              (no response — Runtime.halt)
  *   EXIT                              (no response — orderly close + exit 0)
+ *   SYSTEM_EXIT                       (no response — exit 0; the shutdown hook closes)
  * </pre>
  *
  * <p>WRITE invokes {@code v/ops/dlfs/write} then calls {@code engine.flush()}
@@ -80,6 +81,7 @@ public class HardKillTestChild {
 			return;
 		}
 		Engine engine = server.getEngine();
+		MainVenue.closeOnJvmShutdown(java.util.List.of(server));
 
 		out.println(PROTO + " READY " + server.port());
 
@@ -104,6 +106,8 @@ public class HardKillTestChild {
 					Runtime.getRuntime().halt(137);
 				} else if ("EXIT".equals(line)) {
 					server.close();
+					System.exit(0);
+				} else if ("SYSTEM_EXIT".equals(line)) {
 					System.exit(0);
 				} else {
 					out.println(PROTO + " ERR unknown_command " + line);

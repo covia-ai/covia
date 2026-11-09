@@ -208,6 +208,31 @@ public class HardKillPersistenceTest {
 		}
 	}
 
+	/** A JVM exit closes the venue through its shutdown hook, inside Convex's own shutdown. */
+	@Test
+	public void testJvmExitClosesTheVenueAndKeepsItsState() throws Exception {
+		String storePath = newTempEtch().getAbsolutePath().replace('\\', '/');
+		String seedHex = AKeyPair.createSeeded(5001).getSeed().toHexString();
+
+		try (Child child = spawn(storePath, seedHex)) {
+			String ready = child.readProto();
+			assertTrue(ready.startsWith("READY "), "child should announce READY: got '" + ready + "'");
+			assertEquals("OK", child.send("WRITE_NOFLUSH test-drive exit.txt saved-at-exit"));
+
+			child.stdin.println("SYSTEM_EXIT");
+			child.stdin.flush();
+			assertTrue(child.process.waitFor(30, TimeUnit.SECONDS), "child should finish closing and exit");
+			assertEquals(0, child.process.exitValue());
+		}
+
+		VenueServer reader = VenueServer.launch(readerConfig(storePath, seedHex));
+		try {
+			assertEquals("saved-at-exit", readDLFS(reader, "test-drive", "exit.txt"));
+		} finally {
+			reader.close();
+		}
+	}
+
 	// ========================================================================
 	// One comprehensive hard-kill resilience test driving TWO child JVMs in
 	// sequence (peak one child alive at a time, vs the previous five parallel
