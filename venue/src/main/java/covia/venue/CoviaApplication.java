@@ -168,6 +168,23 @@ public final class CoviaApplication
 	}
 
 	/**
+	 * Publishes the application through its host, then has each venue's copy read
+	 * back what the host persisted, so the copy does not go on holding those cells
+	 * in memory. Whoever runs the host's sync runs this in place of {@link #sync()}.
+	 *
+	 * <p>Interim (covia#678): a copy takes up the host's persisted value only when
+	 * it has no changes since its last sync, so this syncs each copy again straight
+	 * after the host persists. A write landing in between misses that cycle. The
+	 * issue says which Convex changes let callers go back to {@code sync()} and
+	 * {@code host().sync()} and this be deleted.</p>
+	 */
+	public void publish() {
+		sync();
+		host.sync();
+		for (Mounted venue : mounted.values()) venue.state().sync();
+	}
+
+	/**
 	 * Mounts a venue: the application takes its key pair, holds its working copy
 	 * at once, and builds its engine, inert until launched or started. The venue
 	 * signs with this application's policy and its own key.

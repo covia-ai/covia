@@ -36,7 +36,7 @@ Convex lattice service:
 var host = LatticeHost.open(store);
 var application = host.addApplication(new CoviaApplication(host)); // or (host, clock), see Time
 Engine engine = application.mount(keyPair, config).start();
-host.autoSync(VenueServer.SYNC_INTERVAL, application::sync);
+host.autoSync(VenueServer.SYNC_INTERVAL, application::publish);
 host.autoFlush(VenueServer.FLUSH_INTERVAL);
 ```
 

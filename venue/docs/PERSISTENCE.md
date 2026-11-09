@@ -101,13 +101,16 @@ and persistence. Covia registers its live `CoviaApplication` on that host;
 clock and signing policy and share storage; there is no component-parent policy
 inheritance. `application.sync()` only reconciles application working state.
 `application.host().sync()` publishes the current root, and
-`application.host().flush()` supplies the durability barrier. Engine calls these
-in order for an explicit `flush()` and on close. A concurrent write remains pending
+`application.host().flush()` supplies the durability barrier.
+`application.publish()` runs the first two and then syncs each venue's copy
+again, so the copy reads back the references the host persisted rather than
+holding those cells in memory (interim, #678). Engine calls `publish()` and then
+the barrier for an explicit `flush()` and on close. A concurrent write remains pending
 when the host finishes publishing an older snapshot; the host does not merge
 that stale snapshot back into current state.
 
 Whoever opens the host decides when state is published and saved, and runs the
-host's workers for it: `host.autoSync(interval, application::sync)` publishes the
+host's workers for it: `host.autoSync(interval, application::publish)` publishes the
 application on an interval, and `host.autoFlush(interval)` forces the store to
 disk on another. `VenueServer` starts both once its venue is running, every
 `VenueServer.SYNC_INTERVAL` (100 ms) and `VenueServer.FLUSH_INTERVAL` (10 s), so
@@ -262,13 +265,11 @@ The current model triggers persistence with one line in `VenueServer.java:386`:
 app.after("/api/*", ctx -> engine.syncState());
 ```
 
-This has structural problems on at least four axes:
+This has structural problems on at least three axes:
 
 1. **API layer knows about engine internals.** HTTP routes call into `engine.syncState()`. Pure transport layers should not.
 2. **Per-route opt-in.** Any new endpoint (`/mcp`, `/a2a`, `/dlfs/*`, `/auth/*`, future) silently bypasses persistence until someone remembers to add an `after` hook.
 3. **Non-HTTP mutations are not covered.** The agent run loop's `mergeRunResult`, `JobManager.persistJobRecord`, scheduled wakes, federated grid sub-jobs, and `Auth.putUser` all mutate lattice state outside an HTTP request and rely on the next request to flush.
-4. **A long-lived `venueState` fork created a second working copy.** Root readers could observe stale state until `venueState.sync()` ran, and persistence needed an otherwise-unnecessary two-stage sync. Engine now keeps its `VenueState` connected; forks are reserved for bounded transactions.
-
 (`LatticePropagator.persistInterval` is **not** a relevant bound here, despite the name. Cross-check below; it's a boolean enable flag, not a time throttle, so it doesn't add any latency.)
 
 **The persistence pipeline already exists.** `NodeServer` + `LatticePropagator` is a fully-formed lattice persistence layer:
@@ -452,6 +453,7 @@ Signing, publication and durability are separate operations:
 | component mutation | atomically updates the venue's working copy |
 | `application.sync()` | signs each venue's copy into its record, then publishes Covia's regions |
 | `application.host().sync()` | publishes the hosted root through the host policy |
+| `application.publish()` | runs both of the above, then syncs each copy again to read back what the host persisted (interim, #678) |
 | `application.host().flush()` | invokes the store's physical durability barrier |
 
 Local mutations do not compete through the LWW merge. The atomic update order
@@ -459,8 +461,7 @@ of the copy decides the current value, including writes sharing a millisecond
 stamp. The wall-clock timestamp is only evidence for external snapshot
 reconciliation; it is not a logical local sequence number.
 
-`Engine.syncState()` runs the first two steps and the host's sync. It is a
-publication hint, not a state commit: a mutation is committed once it is in
+`Engine.syncState()` runs `application.publish()`. It is a publication hint, not a state commit: a mutation is committed once it is in
 the copy.
 
 `VenueState.fork()` remains available for an explicit bounded transaction, but
@@ -675,7 +676,7 @@ Plus:
 | `VenueServer` sync interval | **100 ms** | 10 sync calls/sec on idle venues, indistinguishable from zero. Worst-case latency on bursts ≤ 100 ms. |
 | `persistInterval` (LatticePropagator) | **No change.** Stock 30 000 default is fine. | Cross-check showed it's a boolean gate, not a throttle — lowering it does nothing. See §5.5. |
 | Synchronous durability | **Opt-in `engine.flush()`** | Most writes don't need fsync. Critical writes call `flush()` explicitly. |
-| Engine `VenueState` model | **Connected by default.** | Engine is the live representative of venue state; it should not hide a second long-lived working copy beneath itself. |
+| Engine `VenueState` model | **The application's one working copy.** | Edits sign nothing until publication, so an edit does not re-sign the whole venue record. |
 | Component-internal forks | **Allowed for bounded transactional multi-write atomicity.** Component is responsible for its own sync. | Forks are appropriate when N writes must become visible together, not as a general request or persistence boundary. |
 | `engine.syncState()` visibility | **Package-private.** Public API is `engine.flush()`. |
 
@@ -685,7 +686,7 @@ Plus:
 
 All resolved through review:
 
-1. **Trunk cursor enumeration.** ✅ Resolved: Engine has no long-lived forked trunk. Connected component writes update the application root directly; `application.sync()` publishes that root. Bounded transaction forks are committed by their owning component, not by the host's workers.
+1. **Trunk cursor enumeration.** ✅ Resolved: each mounted venue has one long-lived working copy, and `application.sync()` signs it into its record. Bounded transaction forks are committed by their owning component, not by the host's workers.
 
 2. **`LatticePropagator.persistInterval` default for venues.** ✅ Resolved: no change. Cross-check found the field is a boolean gate, not a time throttle — lowering it does nothing functional. Filed as a separate convex-peer cleanup task (rename + actually thread NodeConfig through), not a Phase 1 dependency. See §5.5.
 

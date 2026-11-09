@@ -819,7 +819,10 @@ public class VenueServer {
 	 * Closing the host stops them. Each reports its first failure.
 	 */
 	private void startHostWorkers() {
-		host.autoSync(SYNC_INTERVAL, application::sync).failure()
+		// Interim (covia#678): publish, not sync, because reading back what the host
+		// persisted needs a step after the host's sync, which the worker does not
+		// offer. The worker's own host sync then repeats with nothing new.
+		host.autoSync(SYNC_INTERVAL, application::publish).failure()
 			.thenAccept(e -> log.error("Venue persistence: the host's sync worker failed", e));
 		host.autoFlush(FLUSH_INTERVAL).failure()
 			.thenAccept(e -> log.error("Venue persistence: the host's flush worker failed", e));
