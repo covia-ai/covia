@@ -69,8 +69,8 @@ data, a URL that may carry a credential, or a stack trace. A failure from a
 remote service says what failed and its status; the response stays on the
 exception (`ResponseException.response`) for code that needs it. A remote is
 named by its URL's origin (`AAdapter.origin`), since a path or query may carry
-a credential. A remote's error code or request id is quoted only when it is an
-identifier (`AAdapter.identifier`).
+a credential. Except for a model provider's, a remote's error code or request
+id is quoted only when it is an identifier (`AAdapter.identifier`).
 
 A model provider's error is passed on exactly as the provider sent it, on every
 status and whichever key was used, after the venue's words and the status
