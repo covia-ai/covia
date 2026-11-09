@@ -8,9 +8,11 @@ are the governed operation surfaces used by agents.
 
 1. **DLFS provider** — mutable, path-addressed CRDT filesystem state in the
    venue lattice. Each user's drives are signed with that user's DLFS key.
-2. **WebDAV** — authenticated streaming transport mounted at `/dlfs/` when
-   enabled. It is appropriate for large byte uploads/downloads, not structured
-   agent operations.
+2. **WebDAV** — streaming transport mounted at `/dlfs/` when enabled. It is
+   appropriate for large byte uploads/downloads, not structured agent
+   operations. The venue does not authenticate these requests: each acts as
+   the venue's public identity, outside the adapters' checks, so whoever
+   enables WebDAV controls access in front of `/dlfs/`.
 3. **Adapters** — `file`, `dlfs`, and `vault`, all using the same
    backend-neutral `FileOperations` implementation for shared file behavior.
 
@@ -39,7 +41,7 @@ configured-root discovery. DLFS additionally exposes drive lifecycle operations.
 - `bytes`: base64 `content` with `encoding: "base64"`.
 - `json`: parsed `value`.
 - `auto`: UTF-8 `content` for text. For binary DLFS content it returns an
-  authenticated WebDAV `url` when that URL addresses the caller's own drive;
+  WebDAV `url` when that URL addresses the caller's own drive;
   otherwise it returns inline base64.
 
 ## DLFS addressing and authority

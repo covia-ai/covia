@@ -2015,7 +2015,10 @@ no execution history. See `GRID_SCHEDULER.md` §7.
 }
 ```
 
-Mounts WebDAV at `/dlfs/` for file access to DLFS drives. Off by default.
+Mounts WebDAV at `/dlfs/` for file access to DLFS drives. Off by default. The
+venue does not authenticate these requests: each acts as the venue's public
+identity, outside the `dlfs` operations' capability checks. Whoever enables it
+controls access in front of `/dlfs/`.
 
 ## MCP tool bridging
 
