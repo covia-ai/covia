@@ -36,6 +36,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 ### Changed
 
 - Requires Convex 0.8.19.
+- `agent:message`, `agent:cancelTask` and a job named in an agent's context take an id with or without `0x`, as other id inputs do (#669).
 - A leading slash changes nothing in any resource name, including a capability's `with` and before a DID.
 - `asset:get`, `asset:getContent` and `asset:pin` check a path as a path: reading one needs `crud/read`.
 - `covia:read`, `list`, `slice`, `inspect` and `aggregate`, and the `/values` routes, refuse an empty path, `/` or a DID alone, naming the namespaces to use instead: a user's record is never returned whole.

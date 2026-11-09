@@ -209,7 +209,7 @@ An agent may end a turn without a reply: a final message with nothing in it. Tha
 
 Session ids are always venue-minted — callers never supply their own. Per-op rules are detailed in §5.5; summary:
 
-Session-id inputs accept both canonical hexadecimal and the `0x`-prefixed representation emitted by CVM/lattice reads. Operation responses use canonical hexadecimal.
+Session-id inputs take the form every id does ([OPERATIONS.md](OPERATIONS.md)). Operation responses use canonical hexadecimal.
 
 - `sessionId` supplied + session known → continue that session (caller echoes the id, A2A/MCP-style)
 - `sessionId` supplied + session unknown → error
