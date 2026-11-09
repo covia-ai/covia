@@ -784,6 +784,10 @@ How it is spent:
 - The **working turn** is committed to `frame.conversation`. Explicit compaction
   rebuilds the prefix when space must be reclaimed (§5.6).
 - The **tail** is small; it is charged like everything else and never cached.
+- A **failed tool result** is stored whole in the history. The model is shown
+  its first 1024 characters and how many more there are
+  (`ConversationRenderer.renderFull`). The cut depends only on the entry, not on
+  the budget, so every request renders it alike.
 
 What the budget does, and nothing else:
 

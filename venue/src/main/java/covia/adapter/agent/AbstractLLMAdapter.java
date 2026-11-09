@@ -1169,13 +1169,14 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	 * reported where it happened. Anything else is a fault in the code handling
 	 * the call, reported here as the tool's failure in {@code owner}'s code
 	 * ({@link FaultException#within}): logged at ERROR, named only by its type.
+	 * The text is whole, as the history stores it; {@link ConversationRenderer}
+	 * decides how much of it the model is shown.
 	 *
 	 * @param owner whose code handled the call: {@link FaultException#VENUE} for
 	 *        the venue's tool dispatch, or the adapter running the agent
 	 */
 	public static String toolFailure(Throwable failure, String toolName, String owner) {
-		CoviaException reported = FaultException.within(TOOL.formatted(toolName), owner, failure);
-		return conciseDetail(reported.getMessage(), MAX_FAILURE_CHARS);
+		return FaultException.within(TOOL.formatted(toolName), owner, failure).getMessage();
 	}
 
 	/** The result of a tool call whose operation outran its budget. */

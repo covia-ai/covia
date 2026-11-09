@@ -49,6 +49,12 @@ public class ToolFailureTest {
 	}
 
 	@Test
+	public void testAFailureIsWholeHoweverLong() {
+		String reason = "first line\n\n   " + "x".repeat(ConversationRenderer.MAX_TOOL_FAILURE_CHARS * 5);
+		assertEquals(reason, AbstractLLMAdapter.toolFailure(new InvalidInputException(reason), "op", OWNER));
+	}
+
+	@Test
 	public void testAsyncWrappersAreRemoved() throws Exception {
 		// A failed future's get() throws ExecutionException, whose own message
 		// is the cause's toString — the class name the model must never see.
