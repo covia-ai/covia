@@ -34,8 +34,13 @@ public final class Inbox extends MapComponent<AString, AMap<AString, ACell>>
 	}
 
 	@Override
-	public Inbox withCursor(AForkableCursor<AHashMap<AString, AMap<AString, ACell>>> draft) {
-		return new Inbox(draft);
+	public Inbox rebind(AForkableCursor<AHashMap<AString, AMap<AString, ACell>>> cursor) {
+		return new Inbox(cursor);
+	}
+
+	@Override
+	public Inbox withCursor(AForkableCursor<AHashMap<AString, AMap<AString, ACell>>> cursor) {
+		return rebind(cursor);
 	}
 
 	/** A request id and the fields below it name data in a record, read-only. */

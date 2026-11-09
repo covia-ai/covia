@@ -27,8 +27,13 @@ import convex.core.lang.RT;
  */
 public class Users extends MapComponent<AString, ACell> implements TransactionalComponent<AHashMap<AString, ACell>, Users> {
 	@Override
-	public Users withCursor(AForkableCursor<AHashMap<AString, ACell>> draft) {
-		return new Users(context, draft);
+	public Users rebind(AForkableCursor<AHashMap<AString, ACell>> cursor) {
+		return new Users(context, cursor);
+	}
+
+	@Override
+	public Users withCursor(AForkableCursor<AHashMap<AString, ACell>> cursor) {
+		return rebind(cursor);
 	}
 
 	private final VenueContext context;

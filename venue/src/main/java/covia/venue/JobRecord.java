@@ -49,9 +49,10 @@ public final class JobRecord extends ALatticeComponent<ACell>
 	}
 
 	@Override public AForkableCursor<ACell> cursor() { return edits; }
-	@Override public JobRecord withCursor(AForkableCursor<ACell> draft) {
-		return new JobRecord(context, draft, owner, id);
+	@Override public JobRecord rebind(AForkableCursor<ACell> cursor) {
+		return new JobRecord(context, cursor, owner, id);
 	}
+	@Override public JobRecord withCursor(AForkableCursor<ACell> cursor) { return rebind(cursor); }
 
 	/**
 	 * Work running in a job reaches its {@code temp} of right; anything else in

@@ -39,9 +39,10 @@ public final class Schedule extends ALatticeComponent<ACell>
 	}
 
 	@Override public AForkableCursor<ACell> cursor() { return edits; }
-	@Override public Schedule withCursor(AForkableCursor<ACell> draft) {
-		return new Schedule(context, draft);
+	@Override public Schedule rebind(AForkableCursor<ACell> cursor) {
+		return new Schedule(context, cursor);
 	}
+	@Override public Schedule withCursor(AForkableCursor<ACell> cursor) { return rebind(cursor); }
 
 	public record Entry(Blob key, AMap<AString, ACell> rec) {}
 

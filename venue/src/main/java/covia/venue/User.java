@@ -47,8 +47,13 @@ import convex.lattice.cursor.StampedCursor;
  */
 public class User extends ALatticeComponent<ACell> implements TransactionalComponent<ACell, User>, Owner {
 	@Override
-	public User withCursor(AForkableCursor<ACell> draft) {
-		return new User(context, draft, did);
+	public User rebind(AForkableCursor<ACell> cursor) {
+		return new User(context, cursor, did);
+	}
+
+	@Override
+	public User withCursor(AForkableCursor<ACell> cursor) {
+		return rebind(cursor);
 	}
 
 	private final VenueContext context;

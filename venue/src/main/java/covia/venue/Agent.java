@@ -39,8 +39,13 @@ import covia.api.Fields;
  */
 public class Agent extends ALatticeComponent<ACell> implements TransactionalComponent<ACell, Agent>, Owner {
 	@Override
-	public Agent withCursor(AForkableCursor<ACell> draft) {
-		return new Agent(context, draft, owner, agentId);
+	public Agent rebind(AForkableCursor<ACell> cursor) {
+		return new Agent(context, cursor, owner, agentId);
+	}
+
+	@Override
+	public Agent withCursor(AForkableCursor<ACell> cursor) {
+		return rebind(cursor);
 	}
 
 	private final VenueContext context;
