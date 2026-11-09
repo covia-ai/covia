@@ -193,8 +193,9 @@ public class TelegramAdapterTest {
 			"toString must not leak the token: " + spec);
 
 		// Outbound: an allow-listed bot addresses only its listed ids, however written
-		assertTrue(spec.allowsTarget(5L) && spec.allowsTarget("77") && spec.allowsTarget(" 5 "),
+		assertTrue(spec.allowsTarget(5L) && spec.allowsTarget("77"),
 			"listed ids as numbers or numeric strings");
+		assertFalse(spec.allowsTarget(" 5 "), "what is checked is what is sent, so padding is no listed id");
 		assertFalse(spec.allowsTarget(1L), "an unlisted id");
 		assertFalse(spec.allowsTarget("@bob"), "a username is never a target, even a listed one");
 		assertFalse(spec.allowsTarget("@channel") || spec.allowsTarget(null) || spec.allowsTarget("5x"));
