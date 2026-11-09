@@ -378,6 +378,13 @@ public class LangChainAdapter extends AAdapter {
 
 		// Get URL parameter
 		AString urlParam = RT.ensureString(RT.getIn(input, "url"));
+		if (urlParam != null) {
+			try {
+				urlParam = Strings.create(covia.utils.HTTPURLs.normalize(urlParam.toString()).toString());
+			} catch (InvalidInputException e) {
+				return CompletableFuture.completedFuture(Status.failure(e.getMessage()));
+			}
+		}
 
 		// Get model parameter from subParts[1] if provided, otherwise from input
 		String modelName = (subParts.length > 1) ? subParts[1] : null;

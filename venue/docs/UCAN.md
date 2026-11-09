@@ -250,8 +250,18 @@ A grant of `secret/use` may name where the value may go:
   nb: { url: "https://safe.com/api" } }
 ```
 
-The adapter about to send the secret supplies the request url, and the
-capability applies iff that url falls under the prefix: the same scheme, host
+The API boundary normalises the destination before checking authority, and the
+adapter sends that same normalised URL. Normalisation decodes unreserved path
+characters before removing `.` and `..` segments, including `%2e` spellings.
+For example, `/api/../admin` is checked and sent as `/admin`, so a grant for
+`/api` does not cover it. Encoded path separators, backslashes, nested percent
+encoding and ambiguous dot parameters are refused; paths cannot traverse above
+the URL root. Queries and fragments do not participate in path normalisation.
+The caveat prefix uses the same normal form. The matcher also normalises
+defensively for callers outside the HTTP API.
+
+The adapter about to send the secret supplies that request URL, and the
+capability applies iff that URL falls under the prefix: the same scheme, host
 and effective port, and a path equal to the caveat's or below it at a `/`
 boundary (a caveat path ending in `/` covers everything under it; query and
 fragment never matter). A use that supplies no destination, such as signing

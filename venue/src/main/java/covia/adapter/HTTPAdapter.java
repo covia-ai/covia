@@ -45,6 +45,7 @@ import covia.exception.NotFoundException;
 import covia.exception.NotSupportedException;
 import covia.exception.ResponseException;
 import covia.exception.UnavailableException;
+import covia.utils.HTTPURLs;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 
@@ -237,16 +238,7 @@ public class HTTPAdapter extends AAdapter {
 	 * @throws InvalidInputException if malformed, blocked or private
 	 */
 	public void requireSafeUrl(String url) {
-		URI uri;
-		try {
-			uri = URI.create(url);
-		} catch (Exception e) {
-			throw new InvalidInputException("Malformed URL: " + url);
-		}
-		String scheme = uri.getScheme();
-		if (!"http".equalsIgnoreCase(scheme) && !"https".equalsIgnoreCase(scheme)) {
-			throw new InvalidInputException("URL must be http(s): " + url);
-		}
+		URI uri = HTTPURLs.normalize(url);
 		validateURL(uri, false);
 	}
 
@@ -508,12 +500,16 @@ public class HTTPAdapter extends AAdapter {
 				}
 
 				if (queryString.length() > 0) {
-					finalUrl += (finalUrl.contains("?") ? "&" : "?") + queryString.toString();
+					int fragmentAt = finalUrl.indexOf('#');
+					String fragment = fragmentAt < 0 ? "" : finalUrl.substring(fragmentAt);
+					String requestUrl = fragmentAt < 0 ? finalUrl : finalUrl.substring(0, fragmentAt);
+					finalUrl = requestUrl + (requestUrl.contains("?") ? "&" : "?") + queryString + fragment;
 				}
 			}
 
 			// Validate URL for SSRF safety
-			URI targetUri = new URI(finalUrl);
+			URI targetUri = HTTPURLs.normalize(new URI(finalUrl));
+			finalUrl = targetUri.toString();
 			boolean unrestricted = outboundUnrestricted(ctx);
 			validateURL(targetUri, unrestricted);
 
@@ -584,7 +580,7 @@ public class HTTPAdapter extends AAdapter {
 			return send(targetUri, request, follow, maxRedirects, Vectors.empty(), visited, urlRedactions, unrestricted);
 
 		} catch (URISyntaxException e) {
-			throw new InvalidInputException("Bad URI syntax: "+url,e);
+			throw new InvalidInputException(HTTPURLs.INVALID_URL);
 		}
 	}
 
@@ -604,10 +600,10 @@ public class HTTPAdapter extends AAdapter {
 				}
 				URI next;
 				try {
-					next = uri.resolve(location.trim());
-				} catch (IllegalArgumentException e) {
+					next = HTTPURLs.normalize(uri.resolve(location.trim()));
+				} catch (IllegalArgumentException | InvalidInputException e) {
 					throw new ResponseException("Redirect from " + redact(uri.toString(), redactions)
-						+ " has a malformed Location: " + location, response);
+						+ " has a malformed or ambiguous Location", response);
 				}
 				AMap<AString, ACell> hop = Maps.of(
 					Fields.STATUS, CVMLong.create(code),
@@ -708,10 +704,12 @@ public class HTTPAdapter extends AAdapter {
 	/** Inline URL credential placeholder: {s/NAME}, resolved to the stored secret. */
 	private static final Pattern URL_SECRET = Pattern.compile("\\{(s/[^}{]+)\\}");
 
+	public static final String URL_SECRET_STRUCTURE = "URL secrets must be in the path or query and preserve the normalized URL";
+
 	/**
 	 * Substitutes every {@code {s/NAME}} placeholder in the URL with its
-	 * resolved secret, in a single pass. A URL with no placeholder is returned
-	 * unchanged (the common case). The resolved value is spliced in verbatim —
+	 * resolved secret after normalising the template. The resolved value must
+	 * survive normalisation verbatim, so it can always be redacted —
 	 * like {@code bearerSecret}/{@code secretHeaders} do for header values — so
 	 * a token keeps whatever literal form the API expects (e.g. Telegram's
 	 * {@code <id>:<hash>}). Place a URL secret in the path or query, never the
@@ -720,20 +718,47 @@ public class HTTPAdapter extends AAdapter {
 	 */
 	private String resolveUrlSecrets(String rawUrl, RequestContext ctx, Map<String, String> redactions) {
 		Matcher m = URL_SECRET.matcher(rawUrl);
-		if (!m.find()) return rawUrl;
-		// The destination a grant is checked against is the url itself with its
-		// placeholders blanked, which still names the host and path.
-		String destination = m.replaceAll("secret");
-		StringBuilder out = new StringBuilder();
+		if (!m.find()) return HTTPURLs.normalize(rawUrl).toString();
+		// Normalise the template before resolving credentials. Unique path-safe
+		// markers keep placeholder braces out of the URI parser and let dot
+		// processing remove an unused placeholder without resolving its secret.
+		Map<String, String> placeholders = new LinkedHashMap<>();
+		StringBuilder template = new StringBuilder();
 		m.reset();
 		while (m.find()) {
-			String placeholder = m.group();
-			String resolved = resolveSecret(Strings.create(m.group(1)), ctx, "url secret", destination);
-			redactions.put(resolved, placeholder);
-			m.appendReplacement(out, Matcher.quoteReplacement(resolved));
+			String marker = "covia-secret-" + java.util.UUID.randomUUID();
+			placeholders.put(marker, m.group());
+			m.appendReplacement(template, marker);
 		}
-		m.appendTail(out);
-		return out.toString();
+		m.appendTail(template);
+		URI templateUri = HTTPURLs.normalize(template.toString());
+		String destination = templateUri.toString();
+		for (String marker : placeholders.keySet()) {
+			if (templateUri.getRawAuthority().contains(marker)
+					|| (templateUri.getRawFragment() != null && templateUri.getRawFragment().contains(marker))) {
+				throw new InvalidInputException(URL_SECRET_STRUCTURE);
+			}
+			destination = destination.replace(marker, "secret");
+		}
+		String resolvedUrl = templateUri.toString();
+		String reportedUrl = resolvedUrl;
+		for (var entry : placeholders.entrySet()) {
+			if (!resolvedUrl.contains(entry.getKey())) continue;
+			String placeholder = entry.getValue();
+			String ref = placeholder.substring(1, placeholder.length() - 1);
+			String resolved = resolveSecret(Strings.create(ref), ctx, "url secret", destination);
+			if (resolved.isEmpty()) throw new InvalidInputException(URL_SECRET_STRUCTURE);
+			redactions.put(resolved, placeholder);
+			resolvedUrl = resolvedUrl.replace(entry.getKey(), resolved);
+			reportedUrl = reportedUrl.replace(entry.getKey(), placeholder);
+		}
+		String normalized = HTTPURLs.normalize(resolvedUrl).toString();
+		// A credential containing dot segments or encoded unreserved characters
+		// must not be transformed into an unredactable fragment in job output.
+		if (!redact(normalized, redactions).equals(reportedUrl)) {
+			throw new InvalidInputException(URL_SECRET_STRUCTURE);
+		}
+		return normalized;
 	}
 
 	/**

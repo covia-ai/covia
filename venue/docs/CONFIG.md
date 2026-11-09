@@ -1401,6 +1401,12 @@ Currently defined:
   `InetAddressResolverProvider` found first), only allowed hosts pass. The
   guard belongs to the `http` adapter: with it disabled, every such target is
   refused. Both lists are published at `v/info/adapters/http`.
+  HTTP, MCP, A2A and caller-selected model URLs are normalised before checks
+  and sent in that form, including literal and encoded dot segments. Ambiguous
+  encoded path separators or nested path encoding are refused. This also
+  applies with `outbound/any`. URL secret placeholders must occur in the path
+  or query, and their values must survive normalisation unchanged so that
+  reported URLs can still redact them.
 - `http.maxRedirects` — the longest redirect chain `http:*` follows (default
   `5`, at most `20`; `0` returns 3xx responses unfollowed). Every hop is
   checked by the SSRF guard as the first request is, credentials are dropped

@@ -43,6 +43,7 @@ import covia.exception.NotFoundException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.grid.client.VenueHTTP;
+import covia.utils.HTTPURLs;
 import covia.venue.Engine;
 import covia.venue.TestEngine;
 import covia.venue.TestServer;
@@ -294,7 +295,7 @@ public class HTTPTest {
 		try {
 			ACell input = Maps.of(
 				Fields.URL, "http://localhost:" + echo.getAddress().getPort()
-					+ "/bot{s/TG_TOKEN}/getMe");
+					+ "/ignored/%2e%2e/bot{s/TG_TOKEN}/getMe");
 			Job job = TestServer.ENGINE.jobs().invokeOperation(
 				"v/ops/http/get", input, RequestContext.of(caller));
 			ACell output = job.awaitResult(5000);
@@ -308,6 +309,20 @@ public class HTTPTest {
 			assertTrue(durable.contains("{s/TG_TOKEN}"), durable);
 		} finally {
 			echo.stop(0);
+		}
+	}
+
+	@Test public void testUrlSecretCannotBePartiallyExposedByNormalization() {
+		AString caller = covia.venue.TestEngine.uniqueDID("http-url-secret-normalization");
+		User user = TestServer.ENGINE.getVenueState().users().ensure(caller);
+		SecretStore.Keys key = SecretStore.keys(TestServer.ENGINE.getKeyPair());
+		for (String token : new String[] {"private%2etoken", "private/../token"}) {
+			user.secrets().store("TOKEN", token, key);
+			InvalidInputException error = assertThrows(InvalidInputException.class,
+				() -> TestServer.ENGINE.jobs().invokeOperation("v/ops/http/get", Maps.of(
+					Fields.URL, "http://localhost:1/bot{s/TOKEN}/getMe"), RequestContext.of(caller)));
+			assertEquals(HTTPAdapter.URL_SECRET_STRUCTURE, error.getMessage());
+			assertNull(error.getCause(), "parser diagnostics must not expose the credential");
 		}
 	}
 
@@ -559,17 +574,16 @@ public class HTTPTest {
 	}
 
 	@Test public void testInvalidURLFormat() {
-		assertTrue(failureOf(Maps.of("url", "not a valid url at all %%% {}"))
-			.startsWith("Bad URI syntax:"), "Invalid URL format should be reported as such");
+		assertEquals(HTTPURLs.INVALID_URL, failureOf(Maps.of("url", "not a valid url at all %%% {}")));
 	}
 
 	@Test public void testURLWithNoHost() {
-		assertEquals("URL has no host: http:///path/only",
+		assertEquals(HTTPURLs.INVALID_URL,
 			failureOf(Maps.of("url", "http:///path/only")));
 	}
 
 	@Test public void testEmptyURLString() {
-		assertEquals("URL has no host: ", failureOf(Maps.of("url", "")));
+		assertEquals(HTTPURLs.INVALID_URL, failureOf(Maps.of("url", "")));
 	}
 
 	// ====================================================================
@@ -938,7 +952,7 @@ public class HTTPTest {
 		HttpServer s = localServer();
 		String root = base(s);
 		s.createContext("/start", x -> redirect(x, 302, "/second"));          // relative Location
-		s.createContext("/second", x -> redirect(x, 301, root + "/final"));   // absolute Location
+		s.createContext("/second", x -> redirect(x, 301, root + "/ignored/%2e%2e/final"));   // absolute Location
 		s.createContext("/final", x -> respond(x, 200, "done"));
 		s.start();
 		try {

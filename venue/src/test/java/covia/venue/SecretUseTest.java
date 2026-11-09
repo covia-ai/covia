@@ -75,6 +75,13 @@ public class SecretUseTest {
 		assertFalse(CapabilityChecker.urlCovers("https://safe.com/api", "https://user@safe.com@evil.com/api"));
 		assertFalse(CapabilityChecker.urlCovers("https://safe.com/api", "not a url"));
 		assertFalse(CapabilityChecker.urlCovers("not a url", "https://safe.com/api"));
+		for (String path : new String[] {"/api/../admin", "/api/%2e%2E/admin", "/api/.%2e/admin",
+				"/api%2f..%2fadmin", "/api/%252e%252e/admin", "/api/%5c../admin", "/api/..;x/admin"}) {
+			assertFalse(CapabilityChecker.urlCovers("https://safe.com/api", "https://safe.com" + path), path);
+		}
+		assertTrue(CapabilityChecker.urlCovers("https://safe.com/api", "https://safe.com/other/../%61pi/items"));
+		assertTrue(CapabilityChecker.urlCovers("https://safe.com/other/../api", "https://safe.com/api/items"));
+
 		// A trailing slash means "everything under", the bare path included.
 		assertTrue(CapabilityChecker.urlCovers("https://safe.com/api/", "https://safe.com/api"));
 		assertTrue(CapabilityChecker.urlCovers("https://safe.com/api/", "https://safe.com/api/x"));
@@ -256,8 +263,10 @@ public class SecretUseTest {
 		engine.getVenueState().users().ensure(bobDID);   // a registered caller, no auto-create on this venue
 
 		AtomicReference<String> seen = new AtomicReference<>();
+		AtomicReference<String> pathSeen = new AtomicReference<>();
 		HttpServer echo = HttpServer.create(new InetSocketAddress("localhost", 0), 0);
 		echo.createContext("/", exchange -> {
+			pathSeen.set(exchange.getRequestURI().toString());
 			String bearer = exchange.getRequestHeaders().getFirst("Authorization");
 			seen.set(bearer != null ? bearer : exchange.getRequestHeaders().getFirst("X-Api-Key"));
 			byte[] body = "ok".getBytes(java.nio.charset.StandardCharsets.UTF_8);
@@ -286,17 +295,36 @@ public class SecretUseTest {
 				.awaitResult(10_000);
 			assertEquals("alice-token", seen.get());
 
-			seen.set(null);
-			Job refused = engine.jobs().invokeOperation("v/ops/http/get",
-				Maps.of("url", base + "/other", "bearerSecret", ref), bob);
-			try {
-				refused.awaitResult(10_000);
-			} catch (RuntimeException expected) {
-				// the job failed, which is the point
+			// Policy sees the canonical destination, and the receiver sees exactly
+			// that path. Removing a dot segment into the permitted tree is legal.
+			for (String path : new String[] {"/other/../api/items", "/api/temp/%2e%2e/items", "/%61pi/./items"}) {
+				Job normalized = engine.jobs().invokeOperation("v/ops/http/get",
+					Maps.of("url", base + path + "?q=%2F#fragment", "bearerSecret", ref,
+						"queryParams", Maps.of("extra", "a b")), bob);
+				normalized.awaitResult(10_000);
+				assertEquals("Bearer alice-token", seen.get());
+				assertEquals("/api/items?q=%2F&extra=a+b", pathSeen.get());
 			}
-			assertFalse(refused.isComplete(), "the token must not go where the grant does not point");
-			assertTrue(refused.getErrorMessage().contains("secret/use"), refused.getErrorMessage());
-			assertNull(seen.get());
+
+			for (String path : new String[] {"/other", "/api/../admin", "/api/%2e%2e/admin", "/api/.%2E/admin"}) {
+				for (String field : new String[] {"bearerSecret", "secretHeaders"}) {
+					seen.set(null);
+					pathSeen.set(null);
+					Job refused = engine.jobs().invokeOperation("v/ops/http/get",
+						Maps.of("url", base + path, field,
+							field.equals("bearerSecret") ? ref : Maps.of("X-Api-Key", ref)), bob);
+					try {
+						refused.awaitResult(10_000);
+					} catch (RuntimeException expected) {
+						// A denied request must never reach the receiver.
+					}
+					assertFalse(refused.isComplete(), path);
+					assertTrue(refused.getErrorMessage().contains("secret/use"), refused.getErrorMessage());
+					assertNull(seen.get());
+					assertNull(pathSeen.get());
+				}
+			}
+
 		} finally {
 			echo.stop(0);
 		}

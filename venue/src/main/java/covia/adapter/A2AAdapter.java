@@ -327,7 +327,7 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 		// Card-named schemes are resolved only after the public card is known.
 		RequestAuth discoveryAuth;
 		try {
-			discoveryAuth = directBearerAuth(storedAuth, ctx, cardBase);
+			discoveryAuth = directBearerAuth(storedAuth, ctx, normaliseAgentCardUrl(cardBase));
 		} catch (RuntimeException e) {
 			return CompletableFuture.failedFuture(e);
 		}
@@ -338,7 +338,7 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 			}
 			AMap<AString, ACell> card = (AMap<AString, ACell>) cardCell;
 			String endpoint = endpointFromCard(card);
-			engine.requireSafeUrl(ctx, endpoint);
+			endpoint = engine.outboundUrl(ctx, endpoint);
 			// Validate the stored scheme and secret now, while importing, so a bad
 			// binding cannot become a dormant asset that fails only during a task.
 			resolveAssetAuth(storedAuth, card, ctx, endpoint);
@@ -448,7 +448,7 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 		if (endpoint == null || card == null) {
 			throw new InvalidDefinitionException("A2A agent asset requires a card and endpoint");
 		}
-		engine.requireSafeUrl(ctx, endpoint.toString());
+		endpoint = Strings.create(engine.outboundUrl(ctx, endpoint.toString()));
 		AMap<AString, ACell> authBinding = RT.ensureMap(a2a.get(K_AUTH));
 		RequestAuth auth = resolveAssetAuth(authBinding, card, ctx, endpoint.toString());
 		return new AgentTarget(endpoint.toString(), card, auth, metadata.getHash());
@@ -457,8 +457,7 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 	private AgentTarget resolveRawTarget(ACell input, RequestContext ctx) {
 		AString url = RT.ensureString(RT.getIn(input, Fields.URL));
 		if (url == null) throw new InvalidInputException("'agent' is required (or 'url' on a raw A2A operation)");
-		String rpcUrl = normaliseRpcUrl(url.toString());
-		engine.requireSafeUrl(ctx, rpcUrl);
+		String rpcUrl = engine.outboundUrl(ctx, normaliseRpcUrl(url.toString()));
 		return new AgentTarget(rpcUrl, null, bearerAuth(input, ctx, rpcUrl), null);
 	}
 
@@ -556,15 +555,15 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 				"'url' is required (remote A2A base or RPC URL)"));
 		}
 		try {
-			return fetchAgentCardUrl(ctx, urlCell.toString(), bearerAuth(input, ctx, urlCell.toString()));
+			String url = engine.outboundUrl(ctx, normaliseAgentCardUrl(urlCell.toString()));
+			return fetchAgentCardUrl(ctx, url, bearerAuth(input, ctx, url));
 		} catch (RuntimeException e) {
 			return CompletableFuture.failedFuture(e);
 		}
 	}
 
 	private CompletableFuture<ACell> fetchAgentCardUrl(RequestContext ctx, String baseUrl, RequestAuth auth) {
-		String url = normaliseAgentCardUrl(baseUrl);
-		engine.requireSafeUrl(ctx, url);
+		String url = engine.outboundUrl(ctx, normaliseAgentCardUrl(baseUrl));
 		HttpRequest.Builder builder = HttpRequest.newBuilder(authUri(url, auth))
 				.GET()
 				.timeout(Duration.ofSeconds(30));
@@ -589,6 +588,7 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 		if (url == null || url.isBlank()) {
 			throw new InvalidInputException("url must not be empty");
 		}
+		url = covia.utils.HTTPURLs.normalize(url).toString();
 		if (url.endsWith(AGENT_CARD_PATH)) return url;
 		// Strip a single trailing slash so we don't double it.
 		if (url.endsWith("/")) url = url.substring(0, url.length() - 1);
@@ -673,6 +673,7 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 		if (url == null || url.isBlank()) {
 			throw new InvalidInputException("url must not be empty");
 		}
+		url = covia.utils.HTTPURLs.normalize(url).toString();
 		if (url.endsWith("/")) url = url.substring(0, url.length() - 1);
 		// Already an A2A endpoint — the venue front door (…/a2a) or a
 		// per-agent endpoint below it (…/a2a/<ownerDID>/g/<agentId>): use it

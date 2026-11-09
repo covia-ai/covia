@@ -173,21 +173,22 @@ public class CapabilityChecker {
 	 * Whether a {@code nb.url} caveat covers a destination: the same scheme,
 	 * host and effective port, and a path equal to the caveat's or below it at
 	 * a {@code /} boundary. A caveat path ending in {@code /} covers everything
-	 * under it. Query and fragment never matter; anything unparseable is not
+	 * under it. Both URLs use the outbound normal form, defensively even for
+	 * non-HTTP adapters. Query and fragment never matter; ambiguous or invalid input is not
 	 * covered.
 	 */
 	public static boolean urlCovers(String prefix, String destination) {
 		try {
-			java.net.URI p = new java.net.URI(prefix);
-			java.net.URI d = new java.net.URI(destination);
+			java.net.URI p = covia.utils.HTTPURLs.normalize(prefix);
+			java.net.URI d = covia.utils.HTTPURLs.normalize(destination);
 			if (p.getScheme() == null || p.getHost() == null || d.getScheme() == null || d.getHost() == null) return false;
 			if (!p.getScheme().equalsIgnoreCase(d.getScheme()) || !p.getHost().equalsIgnoreCase(d.getHost())) return false;
 			if (effectivePort(p) != effectivePort(d)) return false;
-			String pp = (p.getPath() == null || p.getPath().isEmpty()) ? "/" : p.getPath();
-			String dp = (d.getPath() == null || d.getPath().isEmpty()) ? "/" : d.getPath();
+			String pp = (p.getRawPath() == null || p.getRawPath().isEmpty()) ? "/" : p.getRawPath();
+			String dp = (d.getRawPath() == null || d.getRawPath().isEmpty()) ? "/" : d.getRawPath();
 			if (pp.endsWith("/")) return dp.startsWith(pp) || (dp + "/").equals(pp);
 			return dp.equals(pp) || dp.startsWith(pp + "/");
-		} catch (java.net.URISyntaxException e) {
+		} catch (covia.exception.InvalidInputException e) {
 			return false;
 		}
 	}

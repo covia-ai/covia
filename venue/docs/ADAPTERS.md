@@ -170,6 +170,24 @@ Telegram can retry a different filename without risking existing content.
 DID-scoped DLFS references use URL-encoded paths, decoded once before path
 normalisation and authorization; relative DLFS paths retain their literal spelling.
 
+### Outbound URL handling
+
+An adapter that accepts an HTTP destination normalises it before host or
+capability checks, then uses exactly that URL for transport and credential
+resolution. `.` and `..` path segments, including percent-encoded spellings,
+name their resolved destination; ambiguous encoded separators, nested path
+encoding, dot parameters and traversal above the root are refused. Normalisation
+preserves reserved path escapes and query data. A grant for `/api` therefore
+cannot send a credential to `/api/../admin`. The rule applies to redirect targets
+as well as initial requests. `outbound/any` exempts host restrictions, not URL
+syntax or normalisation.
+
+Use `engine.outboundUrl(ctx, url)` for caller-selected destinations: its return
+value is the normalised URL after the host guard. `HTTPURLs.normalize` is the
+shared normaliser for configured endpoints and URL prefixes. Do not merely check
+a transformed URL and then pass the original spelling to an HTTP library.
+
+
 ## Lifecycle and configuration
 
 The significant lifecycle is:
