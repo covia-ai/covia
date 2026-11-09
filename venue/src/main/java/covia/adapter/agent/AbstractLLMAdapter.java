@@ -88,10 +88,10 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	 * the refusal by it.
 	 */
 	public static final String CONTEXT_TOO_LARGE = "The context is larger than the model accepts";
-	/** What the agent is told when its context was refused as too large: operation, then encoded bytes. */
+	/** What the agent is told when its context was refused as too large: operation, encoded bytes, then the refusal. */
 	public static final String CONTEXT_TOO_LARGE_ADVICE = "LLM provider rejected the context as too large"
 		+ " (%s, approximately %d encoded bytes). Loaded references are not truncated automatically because"
-		+ " provider tokenisation varies; inspect agent:context and context_unload unused paths, then retry.";
+		+ " provider tokenisation varies; inspect agent:context and context_unload unused paths, then retry. %s";
 	public static final AString K_URL           = Strings.intern("url");
 	public static final AString K_API_KEY         = Strings.intern("apiKey");
 	public static final AString K_CACHE           = Strings.intern("cache");
@@ -546,7 +546,7 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 			// Reported once here, so the record and the transition carry the same report
 			CoviaException reported = FaultException.within(LLM_CALL.formatted(model.operationRef()),
 				FaultException.ADAPTER.formatted(getName()), e);
-			if (record != null) record.failInference(conciseDetail(reported.getMessage(), MAX_FAILURE_CHARS));
+			if (record != null) record.failInference(reported.getMessage());
 			throw reported;
 		}
 	}
@@ -583,7 +583,7 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 			String reason = CoviaException.reasonOf(cause);
 			if (reason != null && reason.startsWith(CONTEXT_TOO_LARGE)) {
 				JobFailedException failure = new JobFailedException(CONTEXT_TOO_LARGE_ADVICE.formatted(
-					llmOperation, Cells.storageSize(messages)));
+					llmOperation, Cells.storageSize(messages), reason));
 				failure.initCause(cause);
 				throw failure;
 			}

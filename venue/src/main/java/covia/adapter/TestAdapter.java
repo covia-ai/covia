@@ -1801,13 +1801,16 @@ public class TestAdapter extends AAdapter {
 
     /** The reason {@code failllm} gives for each failure it scripts. */
     public static final String FAILLLM_REASON = "failllm scripted failure: %s";
+    /** What {@code failllm}'s {@code long-setup} says: longer than any summary, over several lines. */
+    public static final String FAILLLM_LONG = "first line\n\n   " + "x".repeat(5000);
 
     /**
      * A level-3 LLM that fails the way its {@code model} names, for the
      * agent run loop's failure rules (AGENT_LOOP.md §3.4): {@code setup}
      * ({@code ConfigurationException}), {@code unavailable}, {@code value} (a
-     * failure value), {@code content} ({@code InvalidInputException}) or
-     * {@code bug} ({@code IllegalStateException}). A {@code :<gate>} suffix
+     * failure value), {@code content} ({@code InvalidInputException}),
+     * {@code bug} ({@code IllegalStateException}) or {@code long-setup} (as
+     * {@code setup}, saying {@link #FAILLLM_LONG}). A {@code :<gate>} suffix
      * waits at that {@link TestGate} first, so a test can queue more work
      * while the cycle is held. Any other model replies with text.
      */
@@ -1827,6 +1830,7 @@ public class TestAdapter extends AAdapter {
                 case "value" -> Status.failure(reason);
                 case "content" -> throw new InvalidInputException(reason);
                 case "bug" -> throw new IllegalStateException(reason);
+                case "long-setup" -> throw new covia.exception.ConfigurationException(FAILLLM_LONG);
                 default -> Maps.of("role", Strings.create("assistant"), "content", Strings.create("ok"));
             };
         }, VIRTUAL_EXECUTOR);

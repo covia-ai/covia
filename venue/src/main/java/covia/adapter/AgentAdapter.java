@@ -4890,8 +4890,9 @@ public class AgentAdapter extends AAdapter {
 	 * where.
 	 */
 	private AMap<AString, ACell> failedTransition(Throwable reason, CycleRecord.Failure carried) {
+		String said = covia.exception.CoviaException.reasonOf(reason);
 		String failure = covia.exception.FaultException.isFault(reason) ? reason.getMessage()
-			: TRANSITION_FAILED + describeFailure(reason);
+			: TRANSITION_FAILED + ((said != null) ? said : describeFailure(reason));
 		AMap<AString, ACell> failed = Maps.of(Fields.ERROR, Strings.create(failure));
 		if (carried == null) return failed;
 		failed = failed.assoc(Fields.CYCLE, carried.result().cycle());
@@ -5614,7 +5615,7 @@ public class AgentAdapter extends AAdapter {
 		AString stop = Agent.suspensionDetail(record);
 		ACell error = record.get(Agent.KEY_ERROR);
 		return stop != null ? ": " + stop
-			: error != null ? ": " + conciseDetail(error, 512) : "";
+			: error != null ? ": " + error : "";
 	}
 
 	private Agent requireAgent(AString callerDID, AString agentId) {

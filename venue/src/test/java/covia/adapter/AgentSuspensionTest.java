@@ -171,4 +171,24 @@ public class AgentSuspensionTest {
 			chat.getErrorMessage());
 		assertEquals(Agent.SUSPENDED, agent.getStatus(), "the agent is suspended before its caller hears");
 	}
+
+	@Test
+	public void aFailuresWholeMessageReachesEveryoneWaitingOnTheAgent(TestInfo info) throws Exception {
+		RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));
+		Agent agent = create(owner, "long-message", "long-setup");
+		String whole = TestAdapter.FAILLLM_LONG;
+
+		Job chat = engine.jobs().invokeOperation("v/ops/agent/chat",
+			Maps.of(Fields.AGENT_ID, "long-message", Fields.MESSAGE, Strings.create("hello")), owner);
+		assertThrows(Exception.class, () -> chat.awaitResult(10_000));
+		assertTrue(chat.getErrorMessage().contains(whole), "the chat it failed");
+
+		assertEquals(Agent.SUSPENDED, agent.getStatus());
+		assertTrue(agent.getError().toString().contains(whole), "the suspended agent's error");
+
+		Job refused = engine.jobs().invokeOperation("v/ops/agent/chat",
+			Maps.of(Fields.AGENT_ID, "long-message", Fields.MESSAGE, Strings.create("again")), owner);
+		assertThrows(Exception.class, () -> refused.awaitResult(10_000));
+		assertTrue(refused.getErrorMessage().contains(whole), "a request refused while it is suspended");
+	}
 }

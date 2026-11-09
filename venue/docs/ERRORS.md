@@ -72,17 +72,18 @@ named by its URL's origin (`AAdapter.origin`), since a path or query may carry
 a credential. Except for a model provider's, a remote's error code or request
 id is quoted only when it is an identifier (`AAdapter.identifier`).
 
-A model provider's error is passed on exactly as the provider sent it, on every
-status and whichever key was used, after the venue's words and the status
-(`LangChainAdapter.providerNote`). Whoever may use a key may see what the
-provider says about it, and a provider that puts a secret in an error message
-has made its own mistake, so the venue neither edits nor shortens the text.
+A model provider's error is passed through to the caller exactly as the provider
+sent it, on every status and whichever key was used, after the venue's words and
+the status (`LangChainAdapter.providerNote`). It stays in the failure's message
+through jobs and agents: a failed chat or task, a suspended agent's `error` and
+what a request to that agent is told all carry it whole. Whoever may use a key
+may see what the provider says about it, and a provider that puts a secret in an
+error message has made its own mistake, so the venue neither edits nor shortens
+the text.
 
-What the provider answered stays as the cause of the exception the adapter
-raises: langchain4j's `HttpException`, with the status and the whole response,
-is in its cause chain, in process only, for an adapter that wants to read it.
-The venue's own failure handling knows only its own exceptions and never reads
-that cause.
+The whole answer also stays as the cause of the exception the adapter raises:
+langchain4j's `HttpException`, with the status and the response, is in its cause
+chain, in process only, for an adapter that wants more than the message.
 
 A database's error text may quote stored values, so the `sql` adapter never
 passes it on. The caller gets what failed, the SQLState and vendor code, and,
