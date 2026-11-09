@@ -57,6 +57,7 @@ import covia.adapter.agent.ExternalAgents;
 import covia.grid.Job;
 import covia.grid.Principals;
 import covia.grid.Status;
+import covia.lattice.CapabilityChecker;
 import covia.venue.Admission;
 import covia.venue.Agent;
 import covia.venue.Session;
@@ -394,8 +395,8 @@ public class AgentAdapter extends AAdapter {
 		if (ref == null || ref.isEmpty()) {
 			throw new InvalidInputException("agentId is required");
 		}
-		String value = ref.toString();
-		AString path = (value.startsWith("did:") || value.startsWith("g/") || value.startsWith("/g/"))
+		String value = CapabilityChecker.canonicalResource(ref.toString(), null);
+		AString path = (value.startsWith("did:") || value.startsWith("g/"))
 			? ref : Strings.create("g/" + value);
 		Engine.UserPathTarget resolved = engine.requireUserPath(ctx, path, ability, createOwner);
 		convex.core.data.Path agentPath = resolved.path();
@@ -5643,7 +5644,22 @@ public class AgentAdapter extends AAdapter {
 	 */
 	private AMap<AString, ACell> parseConfigArg(ACell configArg, RequestContext ctx) {
 		if (configArg == null) return null;
-		return resolveConfigValue(configArg, ctx, new ArrayList<>(), 0, "config");
+		return canonicalCaps(resolveConfigValue(configArg, ctx, new ArrayList<>(), 0, "config"));
+	}
+
+	/** {@code config} with each capability's {@code with} in the form it is stored in ({@link CapabilityChecker#canonicalResource}). */
+	private static AMap<AString, ACell> canonicalCaps(AMap<AString, ACell> config) {
+		AVector<ACell> caps = (config == null) ? null : RT.ensureVector(config.get(K_CAPS));
+		if (caps == null) return config;
+		AVector<ACell> canonical = caps;
+		for (long i = 0; i < caps.count(); i++) {
+			AMap<AString, ACell> grant = RT.castMap(caps.get(i));
+			AString with = (grant == null) ? null : RT.ensureString(grant.get(Capability.WITH));
+			if (with == null) continue;
+			String stored = CapabilityChecker.canonicalResource(with.toString(), null);
+			if (!stored.equals(with.toString())) canonical = canonical.assoc(i, grant.assoc(Capability.WITH, Strings.create(stored)));
+		}
+		return (canonical == caps) ? config : config.assoc(K_CAPS, canonical);
 	}
 
 	/**

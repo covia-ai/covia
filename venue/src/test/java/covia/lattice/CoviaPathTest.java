@@ -39,6 +39,22 @@ public class CoviaPathTest {
 	}
 
 	@Test
+	public void testLeadingAndTrailingSlashesAreIgnored() {
+		Path path = CoviaPath.parse("w/notes");
+		for (String written : new String[] {"/w/notes", "//w/notes", "w/notes/", "w/notes//", "///w/notes///"}) {
+			assertEquals(path, CoviaPath.parse(written), written);
+		}
+		assertSame(CoviaPath.EMPTY, CoviaPath.parse("//"));
+	}
+
+	@Test
+	public void testEverySegmentBetweenThemIsKeptAsWritten() {
+		assertEquals(Vectors.of("w", "", "b"), CoviaPath.parse("w//b").toVector());
+		assertEquals(Vectors.of("w", ".", "..", "b"), CoviaPath.parse("w/./../b").toVector(), "a path never navigates");
+		assertEquals(Vectors.of("w", "a%20b", "c#d", "e?f"), CoviaPath.parse("w/a%20b/c#d/e?f").toVector(), "nothing is decoded");
+	}
+
+	@Test
 	public void testACallersArrayIsSegmentsWithNoSlash() {
 		assertEquals(CoviaPath.parse("w/a//b"), CoviaPath.of(Vectors.of("w", "a", "", "b")));
 		assertEquals(CoviaPath.parse("w/notes"), CoviaPath.of(s("w/notes")));

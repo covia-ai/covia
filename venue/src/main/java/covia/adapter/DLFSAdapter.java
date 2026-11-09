@@ -40,6 +40,7 @@ import covia.lattice.CapabilityChecker;
 import covia.lattice.Covia;
 import covia.utils.MimeUtils;
 import covia.venue.Config;
+import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.SecretStore;
 import covia.venue.User;
@@ -511,12 +512,13 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 	 */
 	static DlfsFileRef parseDlfsFileRef(String ref) {
 		if (ref == null) return null;
+		ref = CapabilityChecker.canonicalResource(ref, null);
 		AString owner = null;
 		String rest = ref;
 		if (ref.startsWith("did:")) {
 			if (!ref.contains("/dlfs/")) return null;
 			DIDURL didURL = DIDURL.create(ref);
-			owner = Strings.create(didURL.getDID().toString());
+			owner = Engine.ownerOf(Strings.create(ref));
 			// DIDURL exposes a raw URL path. Decode once before normalisation and
 			// authority checks; unlike form decoding, URI paths preserve literal '+'.
 			rest = didURL.getPath();
@@ -719,7 +721,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 		String s = driveCell.toString();
 		if (!s.startsWith("did:")) return new DriveTarget(null, s, false);
 		DIDURL didURL = DIDURL.create(s);
-		AString ownerDID = Strings.create(didURL.getDID().toString());
+		AString ownerDID = Engine.ownerOf(driveCell);
 		String drive = didURL.getPath();
 		if (drive != null && drive.startsWith("/")) drive = drive.substring(1);
 		if (drive == null || drive.isEmpty()) {

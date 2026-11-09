@@ -146,9 +146,13 @@ public class CapabilityChecker {
 	 * Parse the caveats Covia knows how to enforce: {@code gate}, an operation
 	 * that must succeed for the invocation, and {@code url}, a prefix the use's
 	 * destination must fall under. Unknown or malformed caveats are invalid
-	 * rather than silently becoming an unconditional grant.
+	 * rather than silently becoming an unconditional grant, and so is a
+	 * {@code with} that is not a string, which names no resource.
 	 */
 	private static Caveats caveatsOf(AMap<AString, ACell> cap) {
+		if (cap != null && cap.get(Capability.WITH) != null && !(cap.get(Capability.WITH) instanceof AString)) {
+			return Caveats.INVALID;
+		}
 		if (cap == null || !cap.containsKey(Capability.NB)) return Caveats.NONE;
 		AMap<AString, ACell> nb = RT.castMap(cap.get(Capability.NB));
 		if (nb == null) return Caveats.INVALID;
@@ -608,7 +612,7 @@ public class CapabilityChecker {
 		if (name == null) return false;
 		String relative = CoviaPath.relative(name);
 		int slash = relative.indexOf('/');
-		return slash > 0 && relative.charAt(slash - 1) == ':' && relative.startsWith("//", slash);
+		return slash > 1 && relative.charAt(slash - 1) == ':' && relative.startsWith("//", slash);
 	}
 
 	/**

@@ -150,7 +150,7 @@
   {
     "id": "released-malformed",
     "why": "Only the caps vector is validated, so entries that are not capabilities can be stored; they grant nothing",
-    "config": {"caps": ["w/", {"with": "w/reports/"}]},
+    "config": {"caps": ["w/", {"with": "w/reports/"}, {"with": 42, "can": "crud/read"}]},
     "may": [],
     "mayNot": [["crud/read", "w/reports/a"], ["crud/read", "w/report"], ["crud/write", "w/report"]]
   },
