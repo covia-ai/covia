@@ -15,12 +15,12 @@ import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
-import convex.core.data.Hash;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import covia.api.Abilities;
+import covia.grid.HexId;
 
 /**
  * Checks agent tool calls against declared capability attenuations.
@@ -300,7 +300,7 @@ public class CapabilityChecker {
 	static boolean isBareGate(AString gate) {
 		String g = CoviaPath.relative(gate.toString());
 		if (g.isEmpty() || g.startsWith("did:") || isScheme(g) || g.startsWith("v/")) return false;
-		return Hash.parse(g) == null;
+		return HexId.parseHash(Strings.create(g)) == null;
 	}
 
 	/** Normalises one token map — full {@code {header, payload, sig}} form or a

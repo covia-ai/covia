@@ -90,6 +90,7 @@ import covia.grid.AContent;
 import covia.grid.Asset;
 import covia.grid.Attribution;
 import covia.grid.Grid;
+import covia.grid.HexId;
 import covia.grid.Job;
 import covia.grid.Operation;
 import covia.grid.Venue;
@@ -3999,7 +4000,7 @@ public class Engine {
 	 */
 	public void requireMetadataRead(RequestContext ctx, AString resource) {
 		if (resource == null) return;
-		Hash bare = Hash.parse(resource);
+		Hash bare = HexId.parseHash(resource);
 		if (bare != null) {
 			AString user = (ctx == null) ? null : ctx.getUserDID();
 			if (getAssetRecord(bare, user) == null) return;   // the venue's catalog, or nothing

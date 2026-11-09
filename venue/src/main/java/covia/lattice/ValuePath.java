@@ -16,6 +16,7 @@ import convex.core.data.prim.CVMLong;
 import convex.core.util.Utils;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
+import covia.grid.HexId;
 
 /**
  * Walks a value along a {@link Path}. Each segment is read by the value it
@@ -112,7 +113,7 @@ public final class ValuePath {
 
 	/** The Blob id a segment writes in hex, such as a job's or a session's; null when it is not hex. */
 	public static Blob blobKey(AString segment) {
-		return Blob.parse(segment.toString());
+		return HexId.parse(segment);
 	}
 
 	/** A segment as a non-negative list position, from a string of digits; -1 when it is not one. */

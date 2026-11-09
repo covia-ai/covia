@@ -64,6 +64,16 @@ public class CoviaReadIndexNavTest {
 	}
 
 	@Test
+	public void testWhitespaceAroundAHexKeyNamesNothing() {
+		Blob sid = Blob.fromHex("0000019e921a468d0000000000000000");
+		ACell root = fixture(sid);
+		for (String segment : new String[] {" " + sid.toHexString(), sid.toHexString() + " ", "0x " + sid.toHexString()}) {
+			assertNull(ValuePath.get(root, CoviaPath.segments(s("sessions"), s(segment), s("wakeTime"))),
+				"'" + segment + "' is not that key");
+		}
+	}
+
+	@Test
 	public void testUnknownKeyMisses() {
 		Blob sid = Blob.fromHex("0000019e921a468d0000000000000000");
 		ACell root = fixture(sid);

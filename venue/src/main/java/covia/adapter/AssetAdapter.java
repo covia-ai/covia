@@ -27,6 +27,7 @@ import covia.exception.NotFoundException;
 import covia.exception.NotSupportedException;
 import covia.exception.UnavailableException;
 import covia.grid.Asset;
+import covia.grid.HexId;
 import covia.lattice.CapabilityChecker;
 import covia.lattice.CoviaPath;
 import covia.lattice.Namespace;
@@ -241,8 +242,8 @@ public class AssetAdapter extends AAdapter {
 		AString owner = Engine.ownerOf(idStr);
 		String name = CapabilityChecker.canonicalResource(idStr.toString(), null);
 		Path path = CoviaPath.parse((owner == null) ? name : name.substring(owner.toString().length()));
-		if (path.count() == 2 && Namespace.A.equals(path.get(0))) return Hash.parse(path.get(1));
-		return (path.count() == 1 && owner == null) ? Hash.parse(path.get(0)) : null;
+		if (path.count() == 2 && Namespace.A.equals(path.get(0))) return HexId.parseHash(path.get(1));
+		return (path.count() == 1 && owner == null) ? HexId.parseHash(path.get(0)) : null;
 	}
 
 	/**

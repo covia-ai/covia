@@ -8,6 +8,7 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 
 import convex.core.data.Blob;
+import convex.core.data.Hash;
 import convex.core.data.Strings;
 
 public class HexIdTest {
@@ -41,5 +42,18 @@ public class HexIdTest {
 	@Test
 	public void noTextIsNoId() {
 		assertNull(HexId.parse(null));
+		assertNull(HexId.parseHash(null));
+	}
+
+	@Test
+	public void aHashIsAWholeHashWithOrWithoutThePrefix() {
+		String hex = "ab".repeat(Hash.LENGTH);
+		Hash hash = Hash.fromHex(hex);
+		assertEquals(hash, HexId.parseHash(Strings.create(hex)));
+		assertEquals(hash, HexId.parseHash(Strings.create("0x" + hex)));
+
+		for (String text : List.of(" " + hex, hex + " ", "ab", hex + "ab")) {
+			assertNull(HexId.parseHash(Strings.create(text)), "'" + text + "' is not a hash");
+		}
 	}
 }

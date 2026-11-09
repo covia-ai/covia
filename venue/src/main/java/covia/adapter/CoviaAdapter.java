@@ -13,7 +13,6 @@ import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Blob;
 import convex.core.data.Cells;
-import convex.core.data.Hash;
 import convex.core.data.ASet;
 import convex.core.data.Maps;
 import convex.core.data.Path;
@@ -31,6 +30,7 @@ import covia.exception.NotFoundException;
 import covia.exception.NotSupportedException;
 import covia.exception.UnavailableException;
 import covia.exception.WrongScopeException;
+import covia.grid.HexId;
 import convex.lattice.ALatticeComponent;
 import convex.lattice.NoSuchPathException;
 import covia.lattice.Access;
@@ -292,7 +292,7 @@ public class CoviaAdapter extends AAdapter {
 	/** The path as a content hash when it is one: a hash names an asset, not a place in the lattice. */
 	private static AString contentHash(ACell path) {
 		AString ref = RT.ensureString(path);
-		return (ref != null && Hash.parse(ref) != null) ? ref : null;
+		return (HexId.parseHash(ref) != null) ? ref : null;
 	}
 
 	/**

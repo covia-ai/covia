@@ -175,7 +175,7 @@ The resolver returns the **literal value** at the resolved location. It does NOT
 
 **A leading slash changes nothing.** Every form above resolves identically with or without one: `/v/ops/json/merge` is the same as `v/ops/json/merge`, and `/w/notes` the same as `w/notes`, so the `/v/`, `/o/`, `/a/` notation used throughout this document and the bare `v/`, `o/`, `a/` forms are interchangeable ([GRID_LATTICE_DESIGN.md](GRID_LATTICE_DESIGN.md) §3.2).
 
-**Ids are hex.** A job, task, session, event or asset id given as text is hex digits, with or without a leading `0x`.
+**Ids are hex.** A job, task, session, event or asset id given as text is hex digits, with or without a leading `0x`. In a path or an asset reference nothing else counts as the id: whitespace around it makes it a different name.
 
 ### HTTP and SDK asset resolution
 

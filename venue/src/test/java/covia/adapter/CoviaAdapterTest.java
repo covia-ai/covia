@@ -242,6 +242,23 @@ public class CoviaAdapterTest {
 	}
 
 	@Test
+	public void testWhitespaceAroundAHashNamesNoAsset() {
+		convex.core.data.Hash echoHash = engine.resolveAsset(Strings.create("v/test/ops/echo")).getID();
+		String hex = echoHash.toHexString();
+
+		assertEquals(echoHash, AssetAdapter.parseAssetId(Strings.create(hex)));
+		assertEquals(echoHash, AssetAdapter.parseAssetId(Strings.create("0x" + hex)));
+		assertEquals(echoHash, AssetAdapter.parseAssetId(Strings.create("a/" + hex)));
+		assertNull(AssetAdapter.parseAssetId(Strings.create(" " + hex)));
+		assertNull(AssetAdapter.parseAssetId(Strings.create(hex + " ")));
+		assertNull(AssetAdapter.parseAssetId(Strings.create("a/ " + hex)));
+
+		Job job = engine.jobs().invokeOperation("v/ops/covia/read",
+			Maps.of(Fields.PATH, Strings.create(" " + hex)), ALICE);
+		assertThrows(RuntimeException.class, () -> job.awaitResult(5000));
+	}
+
+	@Test
 	public void testReadBySlashAHash() {
 		convex.core.data.Hash echoHash = engine.resolveAsset(Strings.create("v/test/ops/echo")).getID();
 

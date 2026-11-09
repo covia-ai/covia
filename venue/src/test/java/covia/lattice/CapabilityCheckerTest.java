@@ -640,4 +640,14 @@ public class CapabilityCheckerTest {
 		assertTrue(CapabilityChecker.intersect(caveated("w/", "unknown", "x"), A, caps("w/", "crud/read"), A).isEmpty(),
 			"a malformed grant allows nothing");
 	}
+
+	@Test
+	public void aGateIsAHashOnlyWhenItIsExactlyOne() {
+		AString owner = Strings.create("did:key:zGateOwner");
+		String hex = "ab".repeat(32);
+		AString hash = Strings.create(hex);
+		assertEquals(hash, CapabilityChecker.bindGate(hash, owner), "a hash names the same gate for anyone");
+		assertEquals(Strings.create(owner + "/ " + hex), CapabilityChecker.bindGate(Strings.create(" " + hex), owner),
+			"anything else is a bare path, bound to its owner");
+	}
 }
