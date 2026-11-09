@@ -201,7 +201,7 @@ public class EngineTest {
 		Root<Index<Keyword, ACell>> cursor = Cursors.root(convex.core.data.Index.<convex.core.data.Keyword, ACell>none());
 
 		AKeyPair key = AKeyPair.generate();
-		var application = CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null),
+		var application = TestEngine.application(new convex.lattice.LatticeHost<>(cursor, null),
 			DrivenClock.at(java.time.Instant.ofEpochMilli(1_000L)));
 		LifecycleTestEngine engine = LifecycleTestEngine.mount(application, key, false);
 		AString did = Strings.create("did:test:connected-engine-state");

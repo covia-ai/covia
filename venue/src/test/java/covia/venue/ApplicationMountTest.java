@@ -38,7 +38,7 @@ public class ApplicationMountTest {
 
 	@Test
 	public void eachMountedVenueSignsItsOwnRecord() {
-		CoviaApplication application = CoviaApplication.create();
+		CoviaApplication application = TestEngine.application();
 		AKeyPair a = AKeyPair.generate();
 		AKeyPair b = AKeyPair.generate();
 		application.mount(a, DEFAULT);
@@ -57,7 +57,7 @@ public class ApplicationMountTest {
 
 	@Test
 	public void aVenueMountsOnceAtATime() {
-		CoviaApplication application = CoviaApplication.create();
+		CoviaApplication application = TestEngine.application();
 		AKeyPair key = AKeyPair.generate();
 		Engine engine = application.mount(key, DEFAULT);
 		assertSame(engine, application.engine(key.getAccountKey()));
@@ -69,7 +69,7 @@ public class ApplicationMountTest {
 
 	@Test
 	public void unmountingSignsTheVenueAndForgetsIt() {
-		CoviaApplication application = CoviaApplication.create();
+		CoviaApplication application = TestEngine.application();
 		AKeyPair key = AKeyPair.generate();
 		AccountKey venueKey = key.getAccountKey();
 		application.mount(key, DEFAULT);
@@ -92,7 +92,7 @@ public class ApplicationMountTest {
 
 	@Test
 	public void closingAnEngineUnmountsItsVenueSoItCanRunAgain() throws Exception {
-		CoviaApplication application = CoviaApplication.create();
+		CoviaApplication application = TestEngine.application();
 		AKeyPair key = AKeyPair.generate();
 		AString did = Strings.create("did:test:mount-restart");
 		Engine first = application.mount(key, DEFAULT).start();
@@ -113,7 +113,7 @@ public class ApplicationMountTest {
 	public void closingTheApplicationUnmountsEveryVenueAndLeavesTheHostOpen() throws Exception {
 		MemoryStore store = new MemoryStore();
 		LatticeHost<Index<convex.core.data.Keyword, ACell>> host = LatticeHost.create(Index.none(), store);
-		CoviaApplication application = CoviaApplication.connect(host);
+		CoviaApplication application = TestEngine.application(host);
 		AKeyPair running = AKeyPair.generate();
 		AKeyPair inert = AKeyPair.generate();
 		application.mount(running, DEFAULT).start();
@@ -129,7 +129,7 @@ public class ApplicationMountTest {
 
 	@Test
 	public void anApplicationWithoutVenuesRunsNone() {
-		CoviaApplication application = CoviaApplication.create();
+		CoviaApplication application = TestEngine.application();
 		AccountKey venueKey = AKeyPair.generate().getAccountKey();
 		ConfigurationException refused = assertThrows(ConfigurationException.class, () -> application.engine(venueKey));
 		assertEquals(String.format(CoviaApplication.NOT_MOUNTED, venueKey), refused.getMessage());

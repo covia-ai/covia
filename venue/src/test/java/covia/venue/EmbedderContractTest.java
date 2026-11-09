@@ -3,6 +3,8 @@ package covia.venue;
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.io.File;
+import java.time.Instant;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
 import org.junit.jupiter.api.Test;
@@ -14,12 +16,15 @@ import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.AccountKey;
 import convex.core.data.Blob;
+import convex.core.data.Index;
+import convex.core.data.Keyword;
 import convex.core.data.Maps;
 import convex.core.data.Path;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.etch.EtchStore;
+import convex.lattice.LatticeHost;
 import covia.adapter.AAdapter;
 import covia.adapter.agent.GoalTreeContext;
 import covia.lattice.CoviaPath;
@@ -131,12 +136,14 @@ class EmbedderContractTest {
 		VenueState.StoredVersions versions = VenueState.peekVersions(reopened, venueKey).orElseThrow();
 		assertEquals(VenueState.CURRENT_VERSION, versions.venue());
 		assertEquals(new covia.adapter.TestAdapter().stateVersion(), versions.adapters().get("test"));
-		CoviaApplication beforeLaunch = CoviaApplication.open(reopened, AKeyPair.create(Blob.fromHex(SEED)));
+		LatticeHost<Index<Keyword, ACell>> offlineHost = LatticeHost.open(reopened);
+		CoviaApplication beforeLaunch = offlineHost.addApplication(new CoviaApplication(offlineHost));
+		beforeLaunch.mount(AKeyPair.create(Blob.fromHex(SEED)), Maps.empty());
 		VenueState offline = beforeLaunch.venue(venueKey);
 		ACell current = offline.get();
 		offline.migrate(NO_SECRETS, java.util.List.of(new EmbedderAdapter().stateMigration()));
 		assertSame(current, offline.get(), "migrating a current store writes nothing");
-		beforeLaunch.host().close(); // whoever opens a host closes it; the store stays open
+		offlineHost.close(); // whoever opens a host closes it; the store stays open
 		VenueServer again = VenueServer.launch(config(), reopened);
 		try {
 			Engine engine = again.getEngine();
@@ -148,11 +155,22 @@ class EmbedderContractTest {
 		}
 	}
 
+	@Test void embedderLaunchesAVenueOnAClockOfItsOwn() throws Exception {
+		DrivenClock clock = DrivenClock.at(Instant.parse("2025-03-01T00:00:00Z"));
+		VenueServer venue = VenueServer.launch(config(), TestTemp.etch("embedder-clock"), List.of(), null, clock);
+		try {
+			clock.advance(1_000);
+			assertEquals(clock.get(), venue.getEngine().currentTimestamp(), "the venue reads the embedder's clock");
+		} finally {
+			venue.close();
+		}
+	}
+
 	@Test void anEngineOnAnEmbeddersHostLeavesClosingItToTheEmbedder() throws Exception {
 		try (EtchStore store = TestTemp.etch("own-host")) {
 			AKeyPair key = AKeyPair.create(Blob.fromHex(SEED));
-			CoviaApplication application = CoviaApplication.open(store);
-			var host = application.host();
+			var host = LatticeHost.open(store);
+			CoviaApplication application = host.addApplication(new CoviaApplication(host));
 			Engine engine = application.mount(key, Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true))).start();
 			Workspace workspace = engine.getVenueState().users().ensure(ALICE).workspace();
 			workspace.createPath(AREA);

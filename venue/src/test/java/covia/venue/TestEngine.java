@@ -13,6 +13,7 @@ import convex.core.data.Strings;
 import convex.core.data.Maps;
 import convex.core.data.AString;
 import convex.core.store.AStore;
+import convex.core.store.MemoryStore;
 import convex.lattice.LatticeHost;
 import convex.lattice.cursor.Cursors;
 import convex.lattice.cursor.Root;
@@ -206,14 +207,19 @@ public class TestEngine {
 
 	// ========== Venues of a test's own ==========
 
-	/** The clock of a venue a test makes for itself: held at the current time, with no update timer. */
+	/** The clock of a venue a test makes for itself: held at the current time, so nothing fires by itself. */
 	private static DrivenClock heldClock() {
 		return DrivenClock.at(Instant.now());
 	}
 
 	/** An in-memory application of a test's own, on a held clock, with no venue mounted. */
 	public static CoviaApplication application() {
-		return CoviaApplication.create(heldClock());
+		return application(heldClock());
+	}
+
+	/** As {@link #application()}, on this clock. */
+	public static CoviaApplication application(VenueClock clock) {
+		return application(LatticeHost.create(new MemoryStore()), clock);
 	}
 
 	/** As {@link #application()}, with this key pair's venue mounted in the default configuration. */
@@ -225,7 +231,12 @@ public class TestEngine {
 
 	/** An application of a test's own over this store, on a held clock, with no venue mounted. */
 	public static CoviaApplication application(AStore store) throws IOException {
-		return CoviaApplication.open(store, heldClock());
+		return application(store, heldClock());
+	}
+
+	/** As {@link #application(AStore)}, on this clock. */
+	public static CoviaApplication application(AStore store, VenueClock clock) throws IOException {
+		return application(LatticeHost.open(store), clock);
 	}
 
 	/** As {@link #application(AStore)}, with this key pair's venue mounted in the default configuration. */
@@ -237,7 +248,12 @@ public class TestEngine {
 
 	/** An application of a test's own on this host, on a held clock, with no venue mounted. */
 	public static CoviaApplication application(LatticeHost<Index<Keyword, ACell>> host) {
-		return CoviaApplication.connect(host, heldClock());
+		return application(host, heldClock());
+	}
+
+	/** As {@link #application(LatticeHost)}, on this clock: every other form comes here. */
+	public static CoviaApplication application(LatticeHost<Index<Keyword, ACell>> host, VenueClock clock) {
+		return host.addApplication(new CoviaApplication(host, clock));
 	}
 
 	/** As {@link #application(LatticeHost)}, with this key pair's venue mounted in the default configuration. */
@@ -286,7 +302,7 @@ public class TestEngine {
 
 		/** As {@link #mount()}, with different configuration for this run. */
 		public Engine mount(AMap<AString, ACell> runConfig) {
-			return CoviaApplication.connect(new LatticeHost<>(state, null), clock).mount(key, runConfig);
+			return application(new LatticeHost<>(state, null), clock).mount(key, runConfig);
 		}
 
 		/** The venue as its state stands now, as a crash would leave it: this one's later writes do not reach it. */

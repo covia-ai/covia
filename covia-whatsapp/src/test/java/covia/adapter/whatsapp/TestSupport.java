@@ -11,7 +11,6 @@ import java.util.concurrent.TimeUnit;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import com.sun.net.httpserver.HttpServer;
-import convex.core.crypto.AKeyPair;
 import convex.core.data.*;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
@@ -131,8 +130,7 @@ final class TestSupport {
     }
     /** A venue on {@code clock}, which the test moves. */
     Fixture(AMap<AString,ACell> spec, DrivenClock clock) throws Exception {
-      this(CoviaApplication.create(clock)
-        .mount(AKeyPair.generate(), CONFIG).start(), spec, new WhatsAppAdapter());
+      this(Engine.createTemp(clock, CONFIG), spec, new WhatsAppAdapter());
     }
     private Fixture(Engine engine, AMap<AString,ACell> spec, WhatsAppAdapter adapter) throws Exception {
       this.engine = engine;

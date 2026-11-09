@@ -2,6 +2,8 @@ package covia.venue;
 
 import java.time.Instant;
 import java.util.Objects;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicLong;
 
 import convex.core.data.prim.CVMLong;
@@ -11,18 +13,15 @@ import convex.core.data.prim.CVMLong;
  * of its own choosing (EMBEDDING.md, Time). It reads the time it was last moved
  * to, and moves either way, so a test can also reproduce a clock stepping back.
  *
- * <p>The clock only holds the time. Moving it tells nothing else: a venue acts
- * on the new time when its application is next updated
- * ({@link CoviaApplication#update()}).</p>
+ * <p>The clock only holds the time and wakes nothing: a venue acts on the new
+ * time when its holder next calls {@link CoviaApplication#update()}.</p>
  */
-public final class DrivenClock {
+public final class DrivenClock implements VenueClock {
 
 	private final AtomicLong time;
-	private final VenueContext policy;
 
 	private DrivenClock(long start) {
 		this.time = new AtomicLong(start);
-		this.policy = VenueContext.create(() -> CVMLong.create(time.get()));
 	}
 
 	/**
@@ -33,6 +32,18 @@ public final class DrivenClock {
 	 */
 	public static DrivenClock at(Instant start) {
 		return new DrivenClock(Objects.requireNonNull(start, "start").toEpochMilli());
+	}
+
+	/** The time this clock reads, as a timestamp. */
+	@Override
+	public CVMLong get() {
+		return CVMLong.create(time.get());
+	}
+
+	/** Never runs the task: the holder updates the application instead. */
+	@Override
+	public Future<?> schedule(long delayMillis, Runnable task) {
+		return CompletableFuture.completedFuture(null);
 	}
 
 	/** The time this clock reads, in epoch milliseconds. */
@@ -57,10 +68,5 @@ public final class DrivenClock {
 	 */
 	public long advance(long ms) {
 		return time.addAndGet(ms);
-	}
-
-	/** The application policy whose write clock is this clock. */
-	VenueContext policy() {
-		return policy;
 	}
 }

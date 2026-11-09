@@ -60,6 +60,7 @@ import covia.lattice.Covia;
 import covia.venue.Config;
 import covia.venue.CoviaApplication;
 import covia.venue.Engine;
+import covia.venue.VenueClock;
 import covia.venue.StoreControl;
 import covia.venue.LocalVenue;
 import convex.dlfs.DLFSDriveManager;
@@ -162,17 +163,17 @@ public class VenueServer {
 	private RateLimiter rateLimiter;
 
 	public VenueServer(AMap<AString,ACell> config) {
-		this(config, null);
+		this(config, null, VenueClock.SYSTEM);
 	}
 
 	/**
-	 * Constructs a venue around an optional caller-opened store.
+	 * Assembles a venue around an optional caller-opened store, on the given clock.
 	 *
 	 * <p>When {@code adoptedStore} is non-null, ownership transfers immediately:
 	 * this constructor closes it if construction fails, and {@link #close()} closes
 	 * it after a successful launch.</p>
 	 */
-	private VenueServer(AMap<AString,ACell> config, AStore adoptedStore) {
+	private VenueServer(AMap<AString,ACell> config, AStore adoptedStore, VenueClock clock) {
 		this.config=new Config(config);
 
 		// Create NodeServer with Covia lattice (local-only, no network port)
@@ -193,8 +194,8 @@ public class VenueServer {
 				this.store = createStore(this.config);
 			}
 			AKeyPair keyPair = resolveKeyPair(this.config, storePreexisted);
-			this.application = CoviaApplication.open(store);
-			this.host = application.host();
+			this.host = LatticeHost.open(store);
+			this.application = host.addApplication(new CoviaApplication(host, clock));
 			this.nodeServer = new NodeServer<>(host, NodeConfig.port(-1));
 			nodeServer.launch();
 			engine = application.mount(keyPair, this.config);
@@ -669,6 +670,24 @@ public class VenueServer {
 		return launchInternal(config, Objects.requireNonNull(store, "store"), extraRoutes, beforeStart);
 	}
 
+	/**
+	 * Launches on a clock of the caller's choosing instead of the system clock.
+	 * The hook and routes are as for {@link #launch(AMap, List, Function)}.
+	 *
+	 * @param config Config, or null for default test config.
+	 * @param store Open store to adopt, with the ownership of {@link #launch(AMap, AStore)},
+	 *        or null to open the store the config names.
+	 * @param extraRoutes Additional route registrars, or null/empty for none.
+	 * @param beforeStart Pre-start hook, or null for none.
+	 * @param clock The venue's time; must not be null.
+	 * @return Launched Venue Server instance.
+	 */
+	public static VenueServer launch(AMap<AString,ACell> config, AStore store,
+			List<Consumer<RoutesConfig>> extraRoutes,
+			Function<Engine, ? extends CompletionStage<?>> beforeStart, VenueClock clock) {
+		return launchInternal(config, store, extraRoutes, beforeStart, null, Objects.requireNonNull(clock, "clock"));
+	}
+
 	/** Launches on a virtual thread; completes when the venue is serving requests. */
 	public static CompletableFuture<VenueServer> launchAsync(AMap<AString,ACell> config) {
 		return launchAsync(config, List.of(), null);
@@ -708,7 +727,7 @@ public class VenueServer {
 		CompletableFuture<Void> cancelled = new CompletableFuture<>();
 		Thread startup = Thread.ofVirtual().name("venue-startup").unstarted(() -> {
 			try {
-				VenueServer server = launchInternal(config, adoptedStore, extraRoutes, beforeStart, cancelled);
+				VenueServer server = launchInternal(config, adoptedStore, extraRoutes, beforeStart, cancelled, VenueClock.SYSTEM);
 				// Cancellation can race the final listener start. Never orphan a server.
 				if (!ready.complete(server)) server.close();
 			} catch (Throwable failure) {
@@ -727,13 +746,13 @@ public class VenueServer {
 	private static VenueServer launchInternal(AMap<AString,ACell> config,
 			AStore adoptedStore, List<Consumer<RoutesConfig>> extraRoutes,
 			Function<Engine, ? extends CompletionStage<?>> beforeStart) {
-		return launchInternal(config, adoptedStore, extraRoutes, beforeStart, null);
+		return launchInternal(config, adoptedStore, extraRoutes, beforeStart, null, VenueClock.SYSTEM);
 	}
 
 	private static VenueServer launchInternal(AMap<AString,ACell> config,
 			AStore adoptedStore, List<Consumer<RoutesConfig>> extraRoutes,
 			Function<Engine, ? extends CompletionStage<?>> beforeStart,
-			CompletableFuture<?> cancelled) {
+			CompletableFuture<?> cancelled, VenueClock clock) {
 		if (config==null) {
 			config=Maps.of(
 					Fields.NAME,"Test Venue",
@@ -750,7 +769,7 @@ public class VenueServer {
 
 		VenueServer server = null;
 		try {
-			server = new VenueServer(config, adoptedStore);
+			server = new VenueServer(config, adoptedStore, clock);
 			checkCancellation(cancelled);
 			if (extraRoutes != null) server.extraRouteRegistrars.addAll(extraRoutes);
 

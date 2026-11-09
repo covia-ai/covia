@@ -1,6 +1,5 @@
 package covia.venue;
 
-import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -24,7 +23,6 @@ import convex.core.data.Index;
 import convex.core.data.Keyword;
 import convex.core.data.SignedData;
 import convex.core.store.AStore;
-import convex.core.store.MemoryStore;
 import convex.dlfs.DLFSRegion;
 import convex.lattice.ALatticeApplication;
 import convex.lattice.LatticeComponent;
@@ -41,24 +39,24 @@ import covia.lattice.Covia;
 /**
  * Covia's application on a lattice host: the venue state of COG-004's grid.
  *
+ * <p>The service's main class opens the host and builds and registers this in
+ * one expression, {@code host.addApplication(new CoviaApplication(host, clock))}.
+ * It sits at the host root, as COG-004 does, and owns neither the host nor the
+ * store: whoever opened them closes them.</p>
+ *
  * <p>Its regions are {@code :grid}, holding {@code :venues} (each venue's record,
  * signed by that venue's key) and {@code :meta} (shared content-addressed
- * metadata). Incoming state and path deliveries go to those components, and
- * other regions are left alone both ways. The application is built over the
- * cursor its service gives it and assumes nothing about where that is; the
- * factories here place it at the host root, as COG-004 does.</p>
- *
- * <p>DLFS drives live in a shared region at the host root, {@code :dlfs}, which
- * the service registers with the host and hands to the application
- * ({@link #dlfs()}); Covia never resolves it from its own position.</p>
+ * metadata), and {@code :dlfs}, the DLFS drives ({@link #dlfs()}). Incoming
+ * state and path deliveries go to those components, and other regions are left
+ * alone both ways.</p>
  *
  * <p>The application runs the venues mounted in it ({@link #mount}). Each is
  * its key pair, its one working copy ({@link #venue}) and its engine
  * ({@link #engine}), and signs with the application's policy and its own key.
- * The policy's clock is every venue's time. An application runs on the system
- * clock and starts each scheduled event when it falls due, by a timer of its
- * own. On a {@link DrivenClock} there is no timer: whoever moves the clock
- * calls {@link #update()} to start what is due.
+ * The application's {@link VenueClock} is every venue's time, and wakes the
+ * application when the earliest scheduled event across them falls due. On a
+ * {@link DrivenClock} nothing wakes it: whoever moves the clock calls
+ * {@link #update()} to start what is due.
  * Edits to a copy are unsigned; {@link #sync()} signs each venue's record once
  * and then publishes the regions. Unmounting a venue signs its copy and closes
  * its engine; its records stay. Whole-venue LWW selects recovery/replication
@@ -94,26 +92,43 @@ public final class CoviaApplication
 	private final ConcurrentHashMap<AccountKey, Mounted> mounted = new ConcurrentHashMap<>();
 	/** The order the next venue mounts in. Guarded by this. */
 	private long mounts = 0;
-	/** The update timer; null on a driven clock, whose holder calls {@link #update()}. */
+	/** Wakes the application through its clock when something falls due. */
 	private final AutoUpdate timer;
 	private final DLFSRegion dlfs;
-	/** The host the factory opened or connected to; it owns storage and durability. */
+	/** The host this application was built on; it owns storage and durability. */
 	private final LatticeHost<Index<Keyword, ACell>> host;
 	/** The application's policy, its clock: each mounted venue adds its own signer. */
 	private final VenueContext venueContext;
 
-	private CoviaApplication(AForkableCursor<Index<Keyword, ACell>> cursor, VenueContext venueContext, boolean timed,
-			DLFSRegion dlfs, LatticeHost<Index<Keyword, ACell>> host) {
-		super(cursor);
-		this.venueContext = Objects.requireNonNull(venueContext, "venueContext");
-		this.dlfs = Objects.requireNonNull(dlfs, "dlfs");
+	/**
+	 * Builds the application on a host, on the system clock. Register it with
+	 * {@link LatticeHost#addApplication}.
+	 *
+	 * @param host The host, already opened; its root holds the application
+	 */
+	public CoviaApplication(LatticeHost<Index<Keyword, ACell>> host) {
+		this(host, VenueClock.SYSTEM);
+	}
+
+	/**
+	 * Builds the application on a host, on the given clock. Register it with
+	 * {@link LatticeHost#addApplication}. Nothing runs until a venue starts.
+	 *
+	 * @param host The host, already opened; its root holds the application
+	 * @param clock The time of every venue mounted here
+	 */
+	public CoviaApplication(LatticeHost<Index<Keyword, ACell>> host, VenueClock clock) {
+		super(host.cursor());
+		Objects.requireNonNull(clock, "clock");
 		this.host = host;
-		this.regions = new Regions(cursor);
+		this.venueContext = VenueContext.create(clock);
+		this.regions = new Regions(host.cursor());
 		this.venues = venueRecords(regions);
-		this.timer = timed ? new AutoUpdate(this) : null;
-		if (timer != null) {
-			timer.failure().thenAccept(e -> log.error("Venue scheduler: the application's update timer failed", e));
-		}
+		this.dlfs = regions.create(Covia.DLFS,
+			(AForkableCursor<AHashMap<ACell, SignedData<AHashMap<AString, AVector<ACell>>>>> cursor)
+				-> DLFSRegion.connect(cursor, host.store(), null, clock));
+		this.timer = new AutoUpdate(this, clock);
+		timer.failure().thenAccept(e -> log.error("Venue scheduler: the application's update timer failed", e));
 	}
 
 	/** Registers :grid and its regions under {@code regions}, returning the venue records. */
@@ -150,94 +165,6 @@ public final class CoviaApplication
 	protected void syncChildren() {
 		for (Mounted venue : mounted.values()) venue.state().sync();
 		regions.sync();
-	}
-
-	/**
-	 * Connects Covia to the root of an existing local or NodeServer-hosted host,
-	 * registering its application and a DLFS region at {@code :dlfs}, on the
-	 * system clock with no venue mounted.
-	 */
-	public static CoviaApplication connect(
-			LatticeHost<Index<Keyword, ACell>> host) {
-		return install(host, VenueContext.SYSTEM, true);
-	}
-
-	/**
-	 * As {@link #connect(LatticeHost)}, mounting the venue whose key pair is
-	 * given with the default configuration.
-	 */
-	public static CoviaApplication connect(
-			LatticeHost<Index<Keyword, ACell>> host, AKeyPair keyPair) {
-		return connect(host).mountDefault(keyPair);
-	}
-
-	/** As {@link #connect(LatticeHost)}, on a clock its holder moves: nothing fires until {@link #update()}. */
-	public static CoviaApplication connect(
-			LatticeHost<Index<Keyword, ACell>> host, DrivenClock clock) {
-		return install(host, clock.policy(), false);
-	}
-
-	/** Creates an in-memory application on the system clock with no venue mounted. */
-	public static CoviaApplication create() {
-		return install(LatticeHost.create(Index.none(), new MemoryStore()), VenueContext.SYSTEM, true);
-	}
-
-	/**
-	 * Creates an in-memory application, for tests and embedded ephemeral use,
-	 * mounting the venue whose key pair is given with the default configuration.
-	 */
-	public static CoviaApplication create(AKeyPair keyPair) {
-		return create().mountDefault(keyPair);
-	}
-
-	/** As {@link #create()}, on a clock its holder moves: nothing fires until {@link #update()}. */
-	public static CoviaApplication create(DrivenClock clock) {
-		return install(LatticeHost.create(Index.none(), new MemoryStore()), clock.policy(), false);
-	}
-
-	/**
-	 * Opens Covia from a caller-owned store, on the system clock with no venue
-	 * mounted.
-	 */
-	public static CoviaApplication open(AStore store) throws IOException {
-		return install(LatticeHost.open(Index.none(), store), VenueContext.SYSTEM, true);
-	}
-
-	/** As {@link #open(AStore)}, on a clock its holder moves: nothing fires until {@link #update()}. */
-	public static CoviaApplication open(AStore store, DrivenClock clock) throws IOException {
-		return install(LatticeHost.open(Index.none(), store), clock.policy(), false);
-	}
-
-	/**
-	 * As {@link #open(AStore)}, mounting the venue whose key pair is given with
-	 * the default configuration.
-	 */
-	public static CoviaApplication open(AStore store, AKeyPair keyPair)
-			throws IOException {
-		return open(store).mountDefault(keyPair);
-	}
-
-	/** Mounts a venue with the default configuration, for the factories that take its key pair. */
-	private CoviaApplication mountDefault(AKeyPair keyPair) {
-		mount(keyPair, new Config(null));
-		return this;
-	}
-
-	/**
-	 * Acts as the service for a host at whose root Covia lives: registers the
-	 * shared DLFS region and the application, and hands the region over.
-	 */
-	private static CoviaApplication install(LatticeHost<Index<Keyword, ACell>> host,
-			VenueContext context, boolean timed) {
-		Regions shared = new Regions(host.cursor());
-		DLFSRegion dlfs = shared.create(Covia.DLFS,
-			(AForkableCursor<AHashMap<ACell, SignedData<AHashMap<AString, AVector<ACell>>>>> cursor)
-				-> DLFSRegion.connect(cursor, host.store()));
-		// Live over the host's root, so Engine's state and the host's are one.
-		CoviaApplication application = new CoviaApplication(host.cursor(), context, timed, dlfs, host);
-		host.addApplication(application);
-		host.addApplication(shared);
-		return application;
 	}
 
 	/**
@@ -283,8 +210,9 @@ public final class CoviaApplication
 	 * what is due, such as an event added since with a past time. A venue not
 	 * yet started, or closing, takes no part.
 	 *
-	 * <p>The application's timer calls this whenever a venue has something due.
-	 * Whoever moves a {@link DrivenClock} calls it after each step instead.</p>
+	 * <p>The application's clock wakes it to call this whenever a venue has
+	 * something due. Whoever moves a {@link DrivenClock} calls it after each
+	 * step instead.</p>
 	 */
 	public CompletableFuture<List<Job>> update() {
 		long now = venueContext.currentTimestamp().longValue();
@@ -305,7 +233,7 @@ public final class CoviaApplication
 		});
 	}
 
-	/** The update timer, or null on a driven clock. */
+	/** The update timer. */
 	AutoUpdate timer() {
 		return timer;
 	}
@@ -323,10 +251,10 @@ public final class CoviaApplication
 
 	/**
 	 * Called by a venue, holding none of its locks, when its next event is
-	 * due at {@code time}: the timer, if there is one, wakes by then.
+	 * due at {@code time}: the timer asks the clock to wake it by then.
 	 */
 	void dueAt(long time) {
-		if (timer != null) timer.dueAt(time);
+		timer.dueAt(time);
 	}
 
 	/**
@@ -341,12 +269,12 @@ public final class CoviaApplication
 	}
 
 	/**
-	 * Stops the update timer, if there is one, and unmounts every venue, leaving
-	 * the host and its store open: whoever opened the host closes it after this.
+	 * Stops the update timer and unmounts every venue, leaving the host and its
+	 * store open: whoever opened the host closes it after this.
 	 */
 	@Override
 	public void close() {
-		if (timer != null) timer.close();
+		timer.close();
 		RuntimeException failure = null;
 		for (Mounted venue : mounted.values()) {
 			try {
@@ -405,8 +333,8 @@ public final class CoviaApplication
 	}
 
 	/**
-	 * The shared DLFS region: incoming drives are delivered to it, and a user's
-	 * drives are authored over its cursor with that user's key.
+	 * The DLFS region: incoming drives are delivered to it, and a user's drives
+	 * are authored over its cursor with that user's key.
 	 */
 	public DLFSRegion dlfs() {
 		return dlfs;
@@ -417,7 +345,7 @@ public final class CoviaApplication
 		return venueContext;
 	}
 
-	/** Returns the caller-owned host store for internal adapter integration. */
+	/** Returns the host's store for internal adapter integration. */
 	AStore hostStore() {
 		return host.store();
 	}

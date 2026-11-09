@@ -6,8 +6,11 @@ import java.io.IOException;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -41,8 +44,8 @@ import covia.grid.hitl.Hitl;
  * The scheduler on a clock the test drives (GRID_SCHEDULER.md, Updates):
  * nothing fires until the application is updated, and an update starts what
  * is due by its time, in index order and at most {@code scheduler.maxConcurrency}
- * at once. HITL timeouts expire through the same schedule. The last test runs
- * the update timer on the system clock.
+ * at once. HITL timeouts expire through the same schedule. The last tests run
+ * the update timer, on the system clock and on a clock of an embedder's own.
  */
 @Execution(ExecutionMode.SAME_THREAD) // the tests share the venue's clock and move it
 class SteppedSchedulerTest {
@@ -54,13 +57,13 @@ class SteppedSchedulerTest {
 	/** The venues' clock, at a time no system clock reads while this test runs. Tests may share it. */
 	private static final DrivenClock CLOCK = DrivenClock.at(Instant.parse("2021-01-01T00:00:00Z"));
 
-	/** A venue with the default {@code scheduler.maxConcurrency}, 2, and no update timer. */
+	/** A venue with the default {@code scheduler.maxConcurrency}, 2, updated only by the test. */
 	private static CoviaApplication application;
 	private static Engine engine;
 
 	@BeforeAll
 	static void launch() throws IOException {
-		application = CoviaApplication.create(CLOCK);
+		application = TestEngine.application(CLOCK);
 		engine = application.mount(AKeyPair.generate(), config(null)).launch();
 	}
 
@@ -179,7 +182,7 @@ class SteppedSchedulerTest {
 
 	@Test
 	void aLimitOfOneStartsDueEventsOneAfterAnother(TestInfo info) throws Exception {
-		CoviaApplication single = CoviaApplication.create(CLOCK);
+		CoviaApplication single = TestEngine.application(CLOCK);
 		try {
 			Engine venue = single.mount(AKeyPair.generate(), config(1)).launch();
 			RequestContext ctx = user(venue, info);
@@ -296,7 +299,7 @@ class SteppedSchedulerTest {
 	@Test
 	void anEventDueWhileTheVenueIsClosingStaysForItsNextStart(TestInfo info) throws Exception {
 		AtomicBoolean closing = new AtomicBoolean();
-		CoviaApplication closable = CoviaApplication.create(CLOCK);
+		CoviaApplication closable = TestEngine.application(CLOCK);
 		try {
 			Engine venue = closable.mount(AKeyPair.generate(), config(null), (cfg, app, key) -> new Engine(cfg, app, key) {
 				@Override public boolean isClosing() { return closing.get() || super.isClosing(); }
@@ -380,7 +383,7 @@ class SteppedSchedulerTest {
 		AString did = TestEngine.uniqueDID(info);
 		Blob kept;
 		Blob lost;
-		CoviaApplication first = CoviaApplication.open(store, CLOCK);
+		CoviaApplication first = TestEngine.application(store, CLOCK);
 		try {
 			Engine venue = first.mount(key, config(null)).launch();
 			venue.getVenueState().users().ensure(did);
@@ -396,7 +399,7 @@ class SteppedSchedulerTest {
 			first.close();
 		}
 		CLOCK.advance(60_000); // both fall due while the venue is down
-		CoviaApplication second = CoviaApplication.open(store, CLOCK);
+		CoviaApplication second = TestEngine.application(store, CLOCK);
 		try {
 			Engine venue = second.mount(key, config(null)).launch();
 			Job keptJob = venue.jobs().getJob(kept);
@@ -418,7 +421,7 @@ class SteppedSchedulerTest {
 
 	@Test
 	void theTimerStartsADueEventAndWakesForAnEarlierOne(TestInfo info) throws Exception {
-		CoviaApplication timed = CoviaApplication.create();
+		CoviaApplication timed = TestEngine.application(VenueClock.SYSTEM);
 		try {
 			Engine venue = timed.mount(AKeyPair.generate(), config(null)).launch();
 			RequestContext ctx = user(venue, info);
@@ -445,7 +448,7 @@ class SteppedSchedulerTest {
 		AKeyPair key = AKeyPair.generate();
 		String name = "timer-at-start-" + TestEngine.uniqueDID(info);
 		try (TestAdapter.TestGate gate = TestAdapter.createGate(name)) {
-			CoviaApplication first = CoviaApplication.open(store, CLOCK);
+			CoviaApplication first = TestEngine.application(store, CLOCK);
 			try {
 				Engine venue = first.mount(key, config(null)).launch();
 				// Long past by the system clock the venue runs on next
@@ -453,7 +456,7 @@ class SteppedSchedulerTest {
 			} finally {
 				first.close();
 			}
-			CoviaApplication second = CoviaApplication.open(store);
+			CoviaApplication second = TestEngine.application(store, VenueClock.SYSTEM);
 			try {
 				second.mount(key, config(null)).launch();
 				entered(gate, "the timer starts the event the venue already had due");
@@ -461,6 +464,46 @@ class SteppedSchedulerTest {
 			} finally {
 				second.close();
 			}
+		}
+	}
+
+	/** A clock an embedder might bring: it keeps what it is asked to run until the test runs it. */
+	private static final class QueueingClock implements VenueClock {
+		final DrivenClock time = DrivenClock.at(Instant.parse("2023-01-01T00:00:00Z"));
+		final Queue<Long> delays = new ConcurrentLinkedQueue<>();
+		final Queue<Runnable> tasks = new ConcurrentLinkedQueue<>();
+
+		@Override public CVMLong get() {
+			return time.get();
+		}
+
+		@Override public Future<?> schedule(long delayMillis, Runnable task) {
+			delays.add(delayMillis);
+			tasks.add(task);
+			return new CompletableFuture<Void>();
+		}
+	}
+
+	@Test
+	void aClockOfAnEmbeddersOwnIsAskedToWakeTheApplication(TestInfo info) throws Exception {
+		QueueingClock own = new QueueingClock();
+		CoviaApplication waking = TestEngine.application(own);
+		try {
+			Engine venue = waking.mount(AKeyPair.generate(), config(null)).launch();
+			RequestContext ctx = user(venue, info);
+			String name = "own-clock-" + ctx.getUserDID();
+			try (TestAdapter.TestGate gate = TestAdapter.createGate(name)) {
+				venue.gridScheduler().schedule(HOLD_START, gate(name), ctx, own.time.millis() + HOUR);
+				assertEquals(HOUR, own.delays.poll(), "the clock is told how long until the event is due");
+
+				own.time.advance(HOUR);
+				own.tasks.poll().run();
+				entered(gate, "waking the application starts the due event");
+				gate.release();
+			}
+			assertFalse(waking.timer().failure().toCompletableFuture().isDone(), "the timer reported no failure");
+		} finally {
+			waking.close();
 		}
 	}
 }
