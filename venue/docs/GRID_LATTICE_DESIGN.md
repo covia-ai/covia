@@ -78,6 +78,9 @@ them.
   `..` never navigate, an empty segment is a key, and `%`, `?` and `#` are
   ordinary characters. DLFS paths are the exception, being filesystem paths
   ([ADAPTERS.md](ADAPTERS.md)).
+- **A path reaches a namespace.** An empty path, `/` or a DID alone names no
+  place, because a principal's record is never one value to hand out. As a
+  capability's `with`, `/` and a DID alone are scopes: the whole namespace.
 - **A context-rooted namespace after a DID names no place**, because no
   principal's data holds one: an agent's workspace is
   `<did>/g/<agent>/n/…`, and the venue's view shows `<venue>/w/global/…`.

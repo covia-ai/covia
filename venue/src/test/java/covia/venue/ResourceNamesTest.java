@@ -15,6 +15,7 @@ import convex.core.data.Hash;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
+import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.adapter.AssetAdapter;
 import covia.api.Abilities;
@@ -230,6 +231,26 @@ public class ResourceNamesTest {
 		Job stored = run("v/ops/asset/store", Maps.of("metadata", Maps.of("name", "private")), ALICE);
 		String id = RT.getIn(stored.getOutput(), Fields.ID).toString();
 		return id.substring(id.lastIndexOf('/') + 1);
+	}
+
+	@Test
+	void aRecordIsNeverReadWhole() {
+		complete("v/ops/covia/write", Maps.of(Fields.PATH, "w/doc", Fields.VALUE, Maps.of("k", "v")), ALICE);
+		for (ACell path : new ACell[] {s(""), s("/"), s("//"), alice, s("/" + alice), s(alice + "/"), Vectors.empty(), Vectors.of(alice), CVMLong.ONE}) {
+			for (String op : new String[] {"read", "list", "slice", "aggregate"}) {
+				Job job = run("v/ops/covia/" + op, Maps.of(Fields.PATH, path), ALICE);
+				assertEquals(Status.FAILED, job.getStatus(), op + " " + path);
+				assertEquals(Engine.USER_PATH_NO_NAMESPACE, job.getErrorMessage(), op + " " + path);
+			}
+		}
+		for (String name : new String[] {"", "/", alice.toString()}) {
+			Job inspected = run("v/ops/covia/inspect", Maps.of(Fields.PATH, name), ALICE);
+			assertEquals(Status.FAILED, inspected.getStatus(), name);
+			assertEquals(Engine.USER_PATH_NO_NAMESPACE, inspected.getErrorMessage(), name);
+			assertNull(engine.resolvePath(s(name), ALICE), name);
+			assertNull(RT.getIn(run("v/ops/asset/get", Maps.of(Fields.ID, name), ALICE).getOutput(), Fields.VALUE), name);
+		}
+		assertNotNull(value(run("v/ops/covia/read", Maps.of(Fields.PATH, "w"), ALICE)), "a namespace is a place");
 	}
 
 	@Test

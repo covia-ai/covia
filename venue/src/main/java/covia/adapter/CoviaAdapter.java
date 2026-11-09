@@ -1282,7 +1282,9 @@ public class CoviaAdapter extends AAdapter {
 			return Located.below(state.users().at(target.ownerDID()), below);
 		}
 		Path segments = CoviaPath.of(path);
-		AString namespace = segments.isEmpty() ? null : segments.get(0);
+		// A principal's record is never one value to hand out: a path reaches a namespace
+		if (segments.isEmpty()) throw new InvalidInputException(Engine.USER_PATH_NO_NAMESPACE);
+		AString namespace = segments.get(0);
 		if (Namespace.X.equals(namespace)) {
 			AString owner = (ctx == null) ? null : ctx.getUserDID();
 			Workspace view = AdapterView.view(ctx, this, owner, segments, ability);
