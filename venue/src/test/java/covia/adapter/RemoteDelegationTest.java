@@ -409,6 +409,61 @@ class RemoteDelegationTest {
 		} finally { second.close(); peer.stop(0); }
 	}
 
+	/**
+	 * Asking an imported A2A agent is its harness's work, done with its
+	 * controller's authority: an agent its owner caps to its notes sends the
+	 * credential its definition names, and after a restart its backend job
+	 * follows the remote task with that authority again, sending the secret
+	 * as it then stands.
+	 */
+	@Test void anImportedAgentFollowsItsTaskWithItsCredentialAcrossARestart() throws Exception {
+		java.util.List<String> authorizations = new java.util.concurrent.CopyOnWriteArrayList<>();
+		TestSignal received = new TestSignal();
+		HttpServer peer = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+		peer.createContext("/a2a", exchange -> {
+			exchange.getRequestBody().readAllBytes();
+			authorizations.add(String.valueOf(exchange.getRequestHeaders().getFirst("Authorization")));
+			byte[] response = ("{\"jsonrpc\":\"2.0\",\"id\":\"reply\",\"result\":{\"task\":{\"id\":\"agent-task\","
+				+ "\"contextId\":\"ctx\",\"status\":{\"state\":\"TASK_STATE_WORKING\"}}}}").getBytes(StandardCharsets.UTF_8);
+			exchange.sendResponseHeaders(200, response.length);
+			try (var out = exchange.getResponseBody()) { out.write(response); }
+			received.signal();
+		});
+		peer.start();
+		String url = "http://127.0.0.1:" + peer.getAddress().getPort();
+		AMap<AString, ACell> config = Maps.of(Config.SHUTDOWN, Maps.of(Config.GRACE_MS, 0),
+			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
+			Config.ADAPTERS, Maps.of("http", Maps.of("allowedHosts", Vectors.of("127.0.0.1"))));
+		TestEngine.Restartable venue = TestEngine.restartable(config);
+		RequestContext user = RequestContext.of(Strings.create(covia.grid.auth.UcanTokens.did(AKeyPair.generate())));
+		Engine first = venue.start();
+		Engine.addDemoAssets(first);
+		Job backend;
+		try {
+			setSecret(first, user, "first-token");
+			first.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "partner",
+				"agent", Maps.of(Fields.ADAPTER, "a2a", "endpoint", url + "/a2a", "card", Maps.empty(),
+					"auth", Maps.of("kind", "bearer", "secret", "s/PARTNER")),
+				Fields.CONFIG, Maps.of("caps", Vectors.of(convex.auth.ucan.Capability.create(
+					Strings.create("w/notes/"), convex.auth.ucan.Capability.CRUD_READ)))), user).awaitResult(5000);
+			Job task = first.jobs().invokeOperation("v/ops/agent/request",
+				Maps.of(Fields.AGENT_ID, "partner", Fields.INPUT, Maps.of("task", "work")), user);
+			ACell child = RT.getIn(first.jobs().adapterData(task), covia.adapter.agent.ExternalAgents.CHILD);
+			assertNotNull(child, () -> "no backend job: " + task.getData());
+			backend = first.jobs().getJob(Job.parseID(child), user);
+			awaitRemoteId(backend);
+			assertTrue(authorizations.contains("Bearer first-token"), authorizations.toString());
+			setSecret(first, user, "second-token");
+		} finally { first.close(); }
+		Engine second = venue.start();
+		try {
+			Engine.addDemoAssets(second);
+			second.jobs().recoverJobs();
+			received.await("a poll carrying the rotated secret", () -> authorizations.contains("Bearer second-token"));
+			assertFalse(second.jobs().getJob(backend.getID(), user).isFinished());
+		} finally { second.close(); peer.stop(0); }
+	}
+
 	/** Stores, or replaces, the caller's secret {@code PARTNER}. */
 	private static void setSecret(Engine engine, RequestContext caller, String value) {
 		engine.jobs().invokeOperation("v/ops/secret/set",

@@ -34,12 +34,11 @@ class AgentFacetTest {
         return invoke(operation, input).awaitResult(5000);
     }
     private AMap<AString, ACell> target() { return Maps.of(Fields.AGENT_ID, "external"); }
+    /** An external agent with no caps: asking its backend is its harness's work, which they do not bound. */
     private void create() throws Exception {
-        run("create", target().assoc(Agent.KEY_AGENT, facet()).assoc(Fields.CONFIG, UNRESTRICTED));
+        run("create", target().assoc(Agent.KEY_AGENT, facet()));
     }
 
-    /** An external agent's backend turn runs under the agent's own authority, which these agents have whole. */
-    private static final ACell UNRESTRICTED = Maps.of("caps", "unrestricted");
     private Agent agent(String id) { return engine.getVenueState().users().user(ctx.getUserDID()).agent(Strings.create(id)); }
 
     static class Probe extends ARemoteAgentAdapter<RemoteInteraction> {
@@ -166,13 +165,29 @@ class AgentFacetTest {
         assertEquals(0, probe.starts.get());
     }
 
-    @Test void configuredAgentCapsBoundBackendResources() throws Exception {
+    /**
+     * The backend turn acts with the agent's controller's authority, as its
+     * harness: the agent's caps do not bound it, and its controller's do.
+     */
+    @Test void backendTurnActsWithTheControllersAuthority() throws Exception {
         probe.requiresRead = true;
         run("create", target().assoc(Agent.KEY_AGENT, facet())
             .assoc(Fields.CONFIG, Maps.of("caps", Vectors.empty())));
-        Job denied = invoke("chat", target().assoc(Fields.MESSAGE, Strings.create("hello")));
+        run("chat", target().assoc(Fields.MESSAGE, Strings.create("hello")));
+        assertEquals(1, probe.starts.get());
+
+        // An agent that may create agents but read nothing controls the one it creates
+        run("create", Maps.of(Fields.AGENT_ID, "creator", Fields.CONFIG, Maps.of("caps", Vectors.of(
+            convex.auth.ucan.Capability.create(Strings.create("g/"), covia.api.Abilities.AGENT_CREATE),
+            Maps.of(convex.auth.ucan.Capability.CAN, covia.api.Abilities.INVOKE)))));
+        RequestContext creator = engine.context(ctx.getUserDID(),
+            Principals.agentDID(ctx.getUserDID(), Strings.create("creator")));
+        engine.jobs().invokeOperation("v/ops/agent/create",
+            Maps.of(Fields.AGENT_ID, "managed", Agent.KEY_AGENT, facet()), creator).awaitResult(5000);
+        assertEquals(creator.getCallerDID(), agent("managed").getController());
+        Job denied = invoke("chat", Maps.of(Fields.AGENT_ID, "managed", Fields.MESSAGE, Strings.create("hello")));
         assertEquals(Status.FAILED, denied.getStatus());
-        assertEquals(0, probe.starts.get());
+        assertEquals(1, probe.starts.get());
     }
 
     @Test void suspensionAndDeletionCancelBackendAndDoNotWakeNativeLoop() throws Exception {
@@ -225,8 +240,7 @@ class AgentFacetTest {
         server.start();
         try {
             run("create", target().assoc(Agent.KEY_AGENT, Maps.of(Fields.ADAPTER, "a2a",
-                "endpoint", "http://127.0.0.1:" + server.getAddress().getPort() + "/rpc", "card", Maps.empty()))
-                .assoc(Fields.CONFIG, UNRESTRICTED));
+                "endpoint", "http://127.0.0.1:" + server.getAddress().getPort() + "/rpc", "card", Maps.empty())));
             Job firstJob = invoke("chat", target().assoc(Fields.MESSAGE, Strings.create("first")));
             ACell first;
             try { first = firstJob.awaitResult(5000); }
@@ -244,8 +258,7 @@ class AgentFacetTest {
 
     @Test void realNativeProxyUsesExistingAgentRequestSurface() throws Exception {
         run("create", Maps.of(Fields.AGENT_ID, "native", Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")));
-        run("create", target().assoc(Agent.KEY_AGENT, Maps.of(Fields.ADAPTER, "remoteagent", Fields.AGENT_ID, "native"))
-            .assoc(Fields.CONFIG, UNRESTRICTED));
+        run("create", target().assoc(Agent.KEY_AGENT, Maps.of(Fields.ADAPTER, "remoteagent", Fields.AGENT_ID, "native")));
         ACell output = run("request", target().assoc(Fields.INPUT, Maps.of("task", "via proxy")));
         assertEquals(Strings.create("via proxy"), RT.getIn(output, Fields.OUTPUT, "completed", "task"));
     }

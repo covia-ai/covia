@@ -5602,6 +5602,10 @@ public class AgentAdapter extends AAdapter {
 	 * sees, and no agent woken early in the scan can run beneath another's
 	 * recovery. Calls still running are watched only once the scan is over.</p>
 	 *
+	 * <p>Each agent is recovered on its own: one that cannot be is reported and
+	 * left as it is ({@link #notRecovered}), and the scan goes on with the
+	 * rest, so no agent stops the venue starting.</p>
+	 *
 	 * @return the number of agents woken
 	 */
 	public int wakeAgentsWithWork() {
@@ -5620,36 +5624,52 @@ public class AgentAdapter extends AAdapter {
 			if (agents == null) continue;
 			for (var agentEntry : agents.entrySet()) {
 				AString agentId = agentEntry.getKey();
-				Agent agent = getAgent(did, agentId);
-				if (agent == null) continue;   // terminated / missing
-				if (externalAgents().isExternal(agent)) { externalAgents().reconcile(agent); continue; }
-				// This method is a startup hook, but keep it safe if an embedding
-				// invokes it after launch: never reconcile beneath a live executor.
-				if (isRunning(new AgentKey(did, agentId))) continue;
-				idle.add(new BootAgent(did, user, agent));
+				try {
+					Agent agent = getAgent(did, agentId);
+					if (agent == null) continue;   // terminated / missing
+					if (externalAgents().isExternal(agent)) { externalAgents().reconcile(agent); continue; }
+					// This method is a startup hook, but keep it safe if an embedding
+					// invokes it after launch: never reconcile beneath a live executor.
+					if (isRunning(new AgentKey(did, agentId))) continue;
+					idle.add(new BootAgent(did, user, agent));
+				} catch (RuntimeException failure) {
+					notRecovered(did, agentId, failure);
+				}
 			}
 		}
 		List<Runnable> afterScan = new ArrayList<>();
-		for (BootAgent b : idle) recoverTrackedCalls(b.did(), b.user(), b.agent(), afterScan);
+		List<BootAgent> recovered = new ArrayList<>();
 		for (BootAgent b : idle) {
+			try {
+				recoverTrackedCalls(b.did(), b.user(), b.agent(), afterScan);
+				recovered.add(b);
+			} catch (RuntimeException failure) {
+				notRecovered(b.did(), b.agent().getAgentId(), failure);
+			}
+		}
+		for (BootAgent b : recovered) {
 			AString did = b.did();
 			Agent agent = b.agent();
 			AString agentId = agent.getAgentId();
-			// An agent woken earlier in this scan may have started this one.
-			if (isRunning(new AgentKey(did, agentId))) continue;
-			// No executor survives venue startup. Clear the durable dirty
-			// marker before deciding whether remaining queued work merits a
-			// fresh attempt; recoverJobs has settled interrupted Jobs and kept
-			// queued request/chat Jobs for this wake to complete.
-			if (Agent.RUNNING.equals(agent.getStatus())) {
-				agent.sleep();
-				staleRuns++;
-			}
-			reconcileAgentAfterRestart(did, b.user(), agent);
-			if (hasWork(agent)) {
-				log.info("Waking agent {} — durable work found on boot", agentId);
-				wakeAgent(did, agentId, true);
-				woken++;
+			try {
+				// An agent woken earlier in this scan may have started this one.
+				if (isRunning(new AgentKey(did, agentId))) continue;
+				// No executor survives venue startup. Clear the durable dirty
+				// marker before deciding whether remaining queued work merits a
+				// fresh attempt; recoverJobs has settled interrupted Jobs and kept
+				// queued request/chat Jobs for this wake to complete.
+				if (Agent.RUNNING.equals(agent.getStatus())) {
+					agent.sleep();
+					staleRuns++;
+				}
+				reconcileAgentAfterRestart(did, b.user(), agent);
+				if (hasWork(agent)) {
+					log.info("Waking agent {} — durable work found on boot", agentId);
+					wakeAgent(did, agentId, true);
+					woken++;
+				}
+			} catch (RuntimeException failure) {
+				notRecovered(did, agentId, failure);
 			}
 		}
 		afterScan.forEach(Runnable::run);
@@ -5657,6 +5677,23 @@ public class AgentAdapter extends AAdapter {
 			log.info("Agent startup recovery: cleared {} stale RUNNING marker(s)", staleRuns);
 		}
 		return woken;
+	}
+
+	/** What failed when an agent is not recovered at startup; its address follows. */
+	public static final String NOT_RECOVERED = "Recovering agent %s at startup";
+
+	/**
+	 * Reports that agent {@code agentId} could not be recovered at startup,
+	 * which leaves it as it is: its controller could not act, say, or its
+	 * record is broken. Its work stays queued for a later wake. An expected
+	 * failure is logged with its reason; a fault, once at ERROR with its stack,
+	 * as the venue's.
+	 */
+	private static void notRecovered(AString ownerDID, AString agentId, RuntimeException failure) {
+		String what = NOT_RECOVERED.formatted(ownerDID + "/g/" + agentId);
+		String reason = covia.exception.FaultException.describe(covia.exception.FaultException.VENUE, failure);
+		if (CoviaException.reasonOf(failure) != null) log.warn("{} failed: {}", what, reason);
+		else log.error(what + " failed: " + reason, failure);
 	}
 
 	/**
@@ -5675,7 +5712,13 @@ public class AgentAdapter extends AAdapter {
 			Blob jobId = entry.getKey();
 			Job live = engine.jobs().getJob(jobId);
 			if (live != null) {
-				afterScan.add(() -> deliverWhenFinished(ownerDID, agentId, live));
+				afterScan.add(() -> {
+					try {
+						deliverWhenFinished(ownerDID, agentId, live);
+					} catch (RuntimeException failure) {
+						notRecovered(ownerDID, agentId, failure);
+					}
+				});
 				continue;
 			}
 			AMap<AString, ACell> record = user.jobs().getRecord(jobId);

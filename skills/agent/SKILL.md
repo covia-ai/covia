@@ -44,9 +44,10 @@ agent_create
 Ask for the system prompt if not provided, and for the agent's authority: add
 `caps` to that layer, a list of `{with, can}` capabilities or `"unrestricted"`
 for everything you can do. An agent created without caps still answers, but
-every tool call it makes is refused. An agent you control thinks with your model key, but
-uses one of your secrets itself (a `bearerSecret`, a model it calls as a tool,
-an MCP or A2A credential, a secret-backed signing key) only with
+every tool call it makes is refused. An agent you control thinks with your model key,
+and an external agent (A2A, Claude Code) reaches its backend with your authority,
+but an agent uses one of your secrets itself (a `bearerSecret`, a model it calls
+as a tool, an MCP or A2A credential, a secret-backed signing key) only with
 `{"with": "s/NAME", "can": "secret/use", "nb": {"url": "<destination prefix>"}}`
 in its caps; leave out `nb` for a local use such as signing. Call `langchain_models` first when
 provider readiness matters; the template is provider-neutral and otherwise uses

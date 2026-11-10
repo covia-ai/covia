@@ -243,4 +243,60 @@ public class AgentRestartTest {
 			second.close();
 		}
 	}
+
+	/** {@link #config()} with the public principal's access on or off, unrestricted while on. */
+	private static AMap<AString, ACell> withPublicAccess(boolean on) {
+		return config().assoc(Config.AUTH, Maps.of(Config.PUBLIC, Maps.of(Config.ENABLED, on, Config.CAPS, Config.UNRESTRICTED)));
+	}
+
+	/**
+	 * Each agent is recovered at boot on its own. One that cannot run then,
+	 * here because its record names a controller that cannot act, is left
+	 * asleep with its work queued, and the venue still starts and wakes the
+	 * others.
+	 */
+	@Test
+	public void anAgentThatCannotRunDoesNotStopTheVenueStarting() throws Exception {
+		TestEngine.Restartable venue = TestEngine.restartable(withPublicAccess(true));
+		RequestContext alice = RequestContext.of(ALICE);
+		String gateName = "agent-boot-" + System.nanoTime();
+		Job request, stranded;
+		try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName)) {
+			Engine first = venue.mount(withPublicAccess(true)).launch();
+			try {
+				Engine.addDemoAssets(first);
+				first.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "worker",
+					Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete",
+						"testGate", gateName, Fields.DELAY, 0L)), alice).awaitResult(5000);
+				first.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "stray",
+					Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/never")), alice).awaitResult(5000);
+				// A record no request could write: the public principal controls Alice's agent
+				Agent stray = first.getVenueState().users().user(ALICE).agent("stray");
+				stray.putRecord(stray.getRecord().assoc(Agent.KEY_CONTROLLER, first.publicPrincipal()));
+				stranded = first.jobs().invokeOperation("v/ops/agent/request",
+					Maps.of(Fields.AGENT_ID, "stray", Fields.INPUT, Maps.of("ask", "wait")), alice);
+				request = first.jobs().invokeOperation("v/ops/agent/request",
+					Maps.of(Fields.AGENT_ID, "worker", Fields.INPUT, Maps.of("ask", "outlive the venue")), alice);
+				assertTrue(gate.awaitEntered(10, TimeUnit.SECONDS), "the task transition never reached its test gate");
+				first.syncState();
+			} finally {
+				first.close();
+			}
+		}
+
+		try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName)) {
+			gate.release();
+			// With public access off, the stray agent's controller cannot act
+			Engine second = venue.mount(withPublicAccess(false)).launch();
+			try {
+				Job live = second.jobs().getJob(request.getID(), alice);
+				live.awaitResult(10_000);
+				assertEquals(Status.COMPLETE, live.getStatus(), "the venue started and woke the agent that can run");
+				assertEquals(Agent.SLEEPING, second.getVenueState().users().user(ALICE).agent("stray").getStatus());
+				assertFalse(second.jobs().getJob(stranded.getID(), alice).isFinished(), "its work stays queued");
+			} finally {
+				second.close();
+			}
+		}
+	}
 }

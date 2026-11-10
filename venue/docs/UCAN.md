@@ -960,7 +960,8 @@ who acted, its namespace is where its names resolve (with the agent, session
 and task its work belongs to), and its authority is what it may do. A request
 usually acts with its caller's own authority in the namespace it acts in. An
 agent acts with its controller's instead. Where that is a principal from
-another namespace it is a separate authority
+another namespace, and always for the agent's harness, its owner's authority
+included, it is a separate authority
 (`RequestContext.withAuthorityOf`): access checks decide under it, on names
 resolved in the agent's namespace (`RequestContext.authorityContext`,
 `inNamespace`). State a namespace keeps with no capability of its own, such as
@@ -969,8 +970,12 @@ acting with that namespace's authority. A recorded job and a scheduled event
 keep a separate authority with the work and act with it again.
 
 **Each agent has a controller:** the principal whose authority it acts with.
-Its harness acts with that authority as it stands, and its tool calls with that
-authority narrowed by its `config.caps`. Read as a delegation, the controller
+Its harness acts with that authority as it stands, as that principal's own
+request would hold it (`Engine.context`), and its tool calls with that
+authority narrowed by its `config.caps`. The harness does not hold the
+controller's authority for choosing a controller or configuring agents
+(`Engine.holdsAuthorityOf`), and does not reach what is held under the agent's
+own DID. Read as a delegation, the controller
 is the issuer, the agent the audience and the caps the capabilities, with
 `"unrestricted"` passing on all the controller has, so an agent never exceeds its
 controller, at any depth (`Engine.agentContext`). Each point of action reads
@@ -1057,6 +1062,13 @@ configured tools' definitions and keeping the session's frames. The switch takes
 agent from the step's input, never its authority, whoever invokes the runtime
 and whatever `config` its input carries. Only the agent's own run or its
 owner may make an agent act, and only an agent that exists.
+
+An external agent (AGENT_LOOP.md §2.2.1) has no transition operation. Asking
+its backend (an A2A endpoint, a Claude Code project, another Covia agent) is
+its harness's work under the same context, since its definition, fixed when it
+was created, chose the backend, so its `config.caps` do not bound it. The
+backend job keeps that authority across a restart (JOBS.md, Kept caller
+context).
 
 **Best for:** Pipeline agents, task workers, scoped automations — anything that
 operates within one user's namespace with restricted permissions.
