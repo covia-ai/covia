@@ -82,8 +82,12 @@ message wording or exception type. Adapters opt in with
 For example, the agent adapter supplies `agent:unknown-session` when chat,
 query or context rejects a supplied session that does not exist. A client that
 understands that specific contract can choose to start a fresh conversation.
-Other agent failures are not automatically coded; `agent:message` can create a
-missing session and does not reject it on that basis.
+It also supplies `agent:suspended` for a request or chat to a suspended agent
+([AGENT_LOOP.md](./AGENT_LOOP.md)), and `agent:tasks-unsupported` for a
+request to an agent that cannot take tasks, which a client can ask with
+`agent:chat` instead ([AGENT_TASKS.md](./AGENT_TASKS.md) §2). Other agent
+failures carry no code; `agent:message` can create a missing session and does
+not reject it on that basis.
 
 The code travels with the persisted job record and REST job snapshots.
 `Job.getErrorCode()` and `JobFailedException.getErrorCode()` return it, or

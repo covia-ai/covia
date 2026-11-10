@@ -125,7 +125,7 @@ resolving what it holds and passing the rest to its parent:
 | Component | Looks up |
 |-----------|----------|
 | `Agent` | `n/`, in its own workspace |
-| `User` | its own namespaces, and a DID URL or asset hash naming them |
+| `User` | its `o/`, `w/` and `a/`, and a DID URL or asset hash naming them; never its secrets, inbox, jobs or agents |
 | `VenueState` | `v/`, the venue's assets by hash, and a DID URL naming either by the DID the venue goes by |
 
 A reference in an operation's form resolves as `Engine.resolveAsset`

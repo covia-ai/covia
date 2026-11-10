@@ -22,6 +22,7 @@ import covia.lattice.ValuePath;
 import convex.lattice.NoSuchPathException;
 import covia.lattice.Workspace;
 import convex.lattice.cursor.StampedCursor;
+import covia.adapter.AssetAdapter;
 
 /**
  * Per-user domain state, with atomic mutations and compound transactions.
@@ -77,11 +78,13 @@ public class User extends ALatticeComponent<ACell> implements TransactionalCompo
 
 	/**
 	 * The value a reference names, as this user looks it up: a path in one of
-	 * this user's namespaces, an asset by its hash in this user's asset store,
-	 * or either named by a DID URL of this user's DID. The rest, a {@code v/}
-	 * path or an asset only the venue holds, is looked up by the venue that
-	 * hosts this user ({@link VenueState#lookup}). Another user's data is
-	 * never looked up. Reads check no authority and change nothing.
+	 * the namespaces that hold this user's definitions and data ({@code o/},
+	 * {@code w/} and {@code a/}), an asset by its hash in this user's asset
+	 * store, or either named by a DID URL of this user's DID. The rest, a
+	 * {@code v/} path or an asset only the venue holds, is looked up by the
+	 * venue that hosts this user ({@link VenueState#lookup}). Another user's
+	 * data, and this user's secrets, inbox, jobs and agents, are never looked
+	 * up. Reads check no authority and change nothing.
 	 *
 	 * @param ref A reference, as a config holds it
 	 * @return The value there, an asset's metadata for an asset, or null when
@@ -92,17 +95,18 @@ public class User extends ALatticeComponent<ACell> implements TransactionalCompo
 		Reference reference = Reference.of(ref);
 		boolean own = (did != null) && did.equals(reference.owner());
 		if (reference.owner() == null || own) {
-			Hash asset = reference.asset();
+			Hash asset = AssetAdapter.parseAssetId(ref);
 			if (asset != null) {
 				AMap<AString, ACell> meta = assets().meta(asset);
 				if (meta != null || own) return meta;
-			} else if (!reference.in(Namespace.V)) {
-				if (reference.path().isEmpty()) return null;
+			} else if (reference.in(Namespace.O) || reference.in(Namespace.W) || reference.in(Namespace.A)) {
 				try {
 					return readInternalPath(reference.path());
 				} catch (NoSuchPathException e) {
 					return null;
 				}
+			} else if (own || !reference.in(Namespace.V)) {
+				return null;
 			}
 		}
 		return (venue == null) ? null : venue.lookup(ref);

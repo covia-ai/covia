@@ -1244,7 +1244,7 @@ public class AgentAdapterTest {
 			Maps.of(Fields.AGENT_ID, "no-tool-calling", Fields.CONFIG, config),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 		AVector<ACell> warnings = RT.ensureVector(RT.getIn(created, Fields.WARNINGS));
-		assertTrue(warnings.contains(Strings.create(AgentAdapter.CANNOT_TAKE_TASKS_WARNING)),
+		assertTrue(warnings.contains(AgentAdapter.CANNOT_TAKE_TASKS_WARNING),
 			"create advises: " + warnings);
 
 		AMap<AString, ACell> context = RT.ensureMap(engine.jobs().invokeOperation("v/ops/agent/context",

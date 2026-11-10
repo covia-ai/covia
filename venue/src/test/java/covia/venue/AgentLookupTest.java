@@ -64,9 +64,29 @@ public class AgentLookupTest {
 		assertNotNull(asset, "the venue's catalogue holds the definition as an asset");
 		assertEquals(asset, agent.lookup(ref("a/", llm.getHash().toHexString())), "the venue's assets by hash");
 
+		assertNotNull(agent.getRecord());
+		assertNull(agent.lookup(ref("g/looker")), "only the namespaces that hold definitions and data");
+		assertNull(agent.lookup(ref(user.getDID(), "/g/looker")));
 		assertNull(agent.lookup(ref("o/missing")));
 		assertNull(agent.lookup(ref("c/scratch")), "no session to look in");
 		assertNull(agent.lookup(ref("v/test/ops/missing")));
+	}
+
+	/** A malformed reference looks up nothing, so it is left to whoever uses it to report. */
+	@Test
+	public void testMalformedReferencesLookUpNothing(TestInfo info) {
+		User user = user(TestEngine.uniqueDID(info));
+		for (String junk : new String[] {"", "/", "//", "did:", "did:web:", "did:key:/o/tiny", "a/zz", "a/", "zz", "v/", "n/"}) {
+			Agent agent = agent(user, "junk-" + Integer.toHexString(junk.hashCode()),
+				Maps.of(Models.K_LLM_OPERATION, junk));
+			if (!junk.equals("v/") && !junk.equals("n/")) assertNull(agent.lookup(Strings.create(junk)), junk);
+			assertNull(Models.operation(agent.lookup(Strings.create(junk))), junk);
+			assertNull(agent.taskRefusal(), junk);
+			assertNull(Agent.taskRefusal(agent.getConfig(), ref -> {
+				covia.grid.Asset asset = ENGINE.resolveAsset(ref, RequestContext.ofAgent(user.getDID(), agent.getAgentId()));
+				return (asset == null) ? null : asset.meta();
+			}), junk);
+		}
 	}
 
 	@Test

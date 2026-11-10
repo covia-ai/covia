@@ -1292,9 +1292,9 @@ public class AgentAdapter extends AAdapter {
 	 * The create/update advisory for an agent that cannot take tasks
 	 * ({@link Agent#taskRefusal()}): tool calling is off for its model.
 	 */
-	public static final String CANNOT_TAKE_TASKS_WARNING = "Tool calling is off for the agent's model, so no tool "
-		+ "is presented to it and it cannot take tasks: agent:request to it fails with " + TASKS_UNSUPPORTED_CODE
-		+ ", while agent:chat works. This is only a warning.";
+	public static final AString CANNOT_TAKE_TASKS_WARNING = Strings.intern("Tool calling is off for the agent's "
+		+ "model, so no tool is presented to it and it cannot take tasks: agent:request to it fails with "
+		+ TASKS_UNSUPPORTED_CODE + ", while agent:chat works. This is only a warning.");
 
 	/**
 	 * Tool-capability advisory for a freshly-configured agent (#205). Declared
@@ -1310,7 +1310,7 @@ public class AgentAdapter extends AAdapter {
 	private AString toolCapabilityWarning(AMap<AString, ACell> config, RequestContext ctx) {
 		if (config == null) return null;
 		if (Agent.taskRefusal(config, operationLookup(() -> ctx)) != null) {
-			return Strings.create(CANNOT_TAKE_TASKS_WARNING);
+			return CANNOT_TAKE_TASKS_WARNING;
 		}
 		AVector<ACell> tools = RT.ensureVector(config.get(Fields.TOOLS));
 		boolean usesTools = tools != null && !tools.isEmpty();

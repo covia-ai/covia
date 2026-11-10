@@ -38,6 +38,7 @@ import convex.lattice.OwnedMap;
 import convex.lattice.Timestamped;
 import convex.lattice.cursor.AForkableCursor;
 import convex.lattice.cursor.Cursors;
+import covia.adapter.AssetAdapter;
 import covia.adapter.CoviaAdapter;
 import covia.lattice.Covia;
 import covia.lattice.CoviaPath;
@@ -287,7 +288,7 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 		if (ref == null) return null;
 		Reference reference = Reference.of(ref);
 		if (reference.owner() != null && !reference.owner().equals(did)) return null;
-		Hash asset = reference.asset();
+		Hash asset = AssetAdapter.parseAssetId(ref);
 		if (asset != null) return assets().meta(asset);
 		if (did == null || !reference.in(Namespace.V)) return null;
 		try {
