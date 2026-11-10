@@ -132,7 +132,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - A `claudecode:session` takes no pool slot until its first turn.
 - Connected accounts complete from the account that started the connect.
 - Every user turn in an agent's history keeps its caller; `config.recordCaller` is gone.
-- A DLFS drive is created before use; only `createDrive` and WebDAV `MKCOL` create one (#641).
+- A DLFS drive is created before use; only `createDrive`, WebDAV `MKCOL`, and built-in features that need their own drive (on their first write) create one (#641).
 - `dlfs:createDrive` and `deleteDrive` take the drive in `drive`; `name` stays an alias.
 - `file:move` needs `crud/read` and `crud/delete` on its source.
 - Creating a workspace key, file, directory or drive needs `crud/write` on what holds it.

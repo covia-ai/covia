@@ -18,7 +18,7 @@ We don't have a formal code of conduct. We expect **professional, good-faith beh
 
 ## Prerequisites
 
-- **Java 21+** (JDK)
+- **Java 21 to 24, or 25.0.3 and later**
 - **Maven 3.7+** (enforced by `maven-enforcer-plugin`)
 - **Git**
 - For the documentation sites: **Node.js 18+** and **pnpm**

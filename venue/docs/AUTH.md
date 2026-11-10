@@ -132,7 +132,7 @@ and compare bounds without overflowing claim arithmetic. Missing/null expiry
 still follows `requireExp`; existing 60-second skew boundaries are preserved.
 This changes neither the method architecture nor evidence propagation.
 
-After correction, `mvn test -pl venue -am` reports 102 core and 3,027 venue tests,
+After correction, `mvn test -pl venue -am` reports 102 core and 3,027 venue tests (as of 22 Oct 2026),
 zero failures/errors and 47 skips. Focused regressions cover key and venue-signed
 credentials, malformed bounds, extreme timestamps, the lifetime cap and leeway.
 These are regression results, not certification of every authentication flow.
@@ -154,7 +154,7 @@ PKCE. Its sources were checked: the OIDC verifier covers required issuer,
 subject, audience, expiry, issuance time and requested nonce; the standard JWT
 verifier adds optional `nbf`. Covia supplies the client-specific `azp` check,
 explicit provider configuration and local account mapping. The former local
-`JWKSClient` is removed. Convex **0.8.17** still owns venue JWTs and immutable
+`JWKSClient` is removed. Convex **0.8.17** (as of 22 Oct 2026) still owns venue JWTs and immutable
 lattice data; its generic temporal-validator request remains upstream #766.
 
 Browser callbacks and direct RS256 provider-token verification share the same
@@ -306,7 +306,7 @@ storage or new credential wire format. The result is available to direct callers
 embedders; propagation into action-policy contexts belongs to the enforcement
 phase, not implicit evidence inheritance through jobs or agent delegation.
 
-**Upstream audit.** Reviewed the installed Convex **0.8.17 sources** (the
+**Upstream audit.** Reviewed the installed Convex **0.8.17 sources** (as of 22 Oct 2026; the
 dependency selected by the POM, not the neighbouring 0.8.18-SNAPSHOT checkout).
 `JWT.verifyPublic` returns signature-verified claims; `JWT.validateClaims`
 checks configured issuer/audience and optional NumericDate expiry, not

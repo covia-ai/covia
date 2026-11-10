@@ -305,7 +305,8 @@ Per venue (`logging`, both default `false`):
 - `audit` — the security audit trail, on the logger `AUDIT`: sign-ins and
   refused credentials (`auth.success`, `auth.failure`, `auth.throttled`),
   logins (`login`), token issue (`token.issued`), user and key administration
-  (`user.create`, `user.sudo`, `auth.key.add`, `auth.key.revoke`), secret
+  (`user.create`, `user.sudo`, `user.delete`, `user.export`, `user.import`,
+  `user.clone`, `auth.key.add`, `auth.key.revoke`), secret
   writes, deletions and extraction attempts (`secret.write`, `secret.delete`,
   `secret.extract`, names and outcomes only), held keys put into, removed
   from or used from a keyring (`keyring.add`, `keyring.remove`,
@@ -1528,7 +1529,7 @@ the agent instruction/tool bundle is `v/skills/crypto/crypto`.
   SHA3-256 is the FIPS SHA-3 variant used by Convex; Ethereum's Keccak-256 has
   different padding and produces different hashes. `hash` hashes raw bytes,
   not a CAD3 value. SHA-1 and MD5 are deliberately absent.
-- ECIES delegates directly to `convex.core.crypto.ECIES` in Convex 0.8.17:
+- ECIES delegates directly to `convex.core.crypto.ECIES` in Convex 0.8.17 (as of 22 Oct 2026):
   [RFC 9180 HPKE](https://www.rfc-editor.org/rfc/rfc9180) Base mode with
   DHKEM(X25519, HKDF-SHA256), HKDF-SHA256 and AES-128-GCM. Convex converts
   Ed25519 account keys to X25519 using its libsodium-compatible conversion.
