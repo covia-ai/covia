@@ -77,8 +77,12 @@ Terminal cleanup releases job resources before existing result-future
 continuations run.
 
 Capability checks belong at the point of action, before any side effect.
-Invoke-class adapters normally begin with `requireInvoke(ctx)` and add
-resource-specific checks through the relevant `Engine.require*` method. Do
+A directly bound operation checks the resources its action uses through the
+relevant `Engine.require*` methods; it does not require `invoke` merely because
+it runs as a Job. A generic invocation surface additionally checks `invoke`
+on the operation reference its caller asks it to look up. REST reference
+submission is checked by JobManager; a direct grid tool still invokes its
+target and must respect the target's invocation scope. Do
 not infer authority from an operation name or confuse `ctx.getCallerDID()`
 (who acted) with `ctx.getUserDID()` (whose namespace the action uses). See
 [UCAN.md](UCAN.md) for the authority model.
@@ -165,6 +169,27 @@ it as an existence check followed by an overwriting write, or fall back to
 Telegram can retry a different filename without risking existing content.
 DID-scoped DLFS references use URL-encoded paths, decoded once before path
 normalisation and authorization; relative DLFS paths retain their literal spelling.
+
+### Outbound URL handling
+
+An adapter that accepts an HTTP destination normalises it before host or
+capability checks, then uses exactly that URL for transport and credential
+resolution. `.` and `..` path segments, including percent-encoded spellings,
+name their resolved destination; ambiguous encoded separators, nested path
+encoding, dot parameters and traversal above the root are refused. Normalisation
+preserves reserved path escapes and query data. A grant for `/api` therefore
+cannot send a credential to `/api/../admin`. The rule applies to redirect targets
+as well as initial requests. The HTTP adapter rechecks authority for retained
+credential headers on every hop and refuses the redirect before sending when
+a grant no longer covers the destination. Requests with URL secret placeholders
+remain within those grants for their entire redirect chain. `outbound/any` exempts host restrictions, not URL
+syntax or normalisation.
+
+Use `engine.outboundUrl(ctx, url)` for caller-selected destinations: its return
+value is the normalised URL after the host guard. `HTTPURLs.normalize` is the
+shared normaliser for configured endpoints and URL prefixes. Do not merely check
+a transformed URL and then pass the original spelling to an HTTP library.
+
 
 ## Lifecycle and configuration
 
@@ -710,8 +735,8 @@ proxies. External means execution controlled outside Covia's own agent loop;
 the transport may be HTTP, a local CLI, or an SDK.
 
 Subclasses select interaction operations with `isInteractionOperation` and
-implement `startInteraction`. The base claims `Job.start` once, checks invoke
-authority, routes messages, binds cancellation and removes live bindings on
+implement `startInteraction`. The base claims `Job.start` once, routes
+messages, binds cancellation and removes live bindings on
 terminal completion. Administrative operations retain `invokeFuture` dispatch.
 Providers validate their target, credentials, options and resource authority
 before effects. Construct a passive `RemoteInteraction` and bind it with
@@ -1044,8 +1069,12 @@ are bounded and in memory, so a restart loses only messages not yet collected.
 1. Create a class extending `AAdapter` in a `covia.<module>.<feature>` package.
 2. Implement `getName()` and an LLM-friendly `getDescription()`.
 3. Implement `invokeFuture`, or the job-aware `invoke` when the adapter owns
-   the job lifecycle. Call `requireInvoke(ctx)` or the correct resource gate
-   before effects, and use `getSubOperation(meta)` for dispatch. Refuse what
+   the job lifecycle. Apply the resource gates its action needs before
+   effects, and use `getSubOperation(meta)` for dispatch. If it accepts an
+   arbitrary operation reference to execute, use the generic invocation path
+   (or use `JobManager.requireRemoteInvoke` with the target and submitted input
+   before remote submission);
+   do not substitute an invocation check for the target's resource checks. Refuse what
    the caller can fix with the Covia type for it, such as
    `InvalidInputException` for bad input, whose message says what is wrong
    ([ERRORS.md](ERRORS.md#types)); catch a library's exceptions where they are

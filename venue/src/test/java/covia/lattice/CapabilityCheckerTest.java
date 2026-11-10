@@ -88,6 +88,7 @@ public class CapabilityCheckerTest {
 		Engine engine = TestEngine.ENGINE;
 
 		AVector<ACell> caps = Vectors.of(
+			Capability.create(Strings.create("v/ops/covia/"), covia.api.Abilities.INVOKE),
 			Capability.create(Strings.create("w/allowed/"), Capability.CRUD_WRITE),
 			Capability.create(Strings.create("w/"), Capability.CRUD_READ)
 		);
@@ -125,11 +126,12 @@ public class CapabilityCheckerTest {
 	@Test
 	public void testInvokeInternalEnforcesContextScope() {
 		// Trust is a property of the context's authority, not the call path.
-		// invokeInternal differs from invokeOperation only in Job creation — both
-		// enforce whatever scope the context carries via the adapter's pin.
+		// Both paths enforce resource authority. Generic invoke additionally
+		// requires permission to look up the operation reference.
 		Engine engine = TestEngine.ENGINE;
 
 		AVector<ACell> caps = Vectors.of(
+			Capability.create(Strings.create("v/ops/covia/"), covia.api.Abilities.INVOKE),
 			Capability.create(Strings.create("w/allowed/"), Capability.CRUD_WRITE)
 		);
 		AString did = convex.auth.ucan.UCAN.toDIDKey(convex.core.crypto.AKeyPair.generate().getAccountKey());
@@ -551,21 +553,21 @@ public class CapabilityCheckerTest {
 		RequestContext ctx = RequestContext.of(did).withCaps(CapabilityChecker.readOnlyScope(did));
 
 		// Read under a read-only scope is allowed (absent path → exists:false).
-		Job read = engine.jobs().invokeOperation("v/ops/covia/read",
-			Maps.of(Fields.PATH, "w/x"), ctx);
+		Job read = engine.jobs().startToolOperation(Strings.create("v/ops/covia/read"),
+			Maps.of(Fields.PATH, "w/x"), ctx).job();
 		assertNotNull(read.awaitResult(5000), "read is allowed under a read-only scope");
 
 		// Mutations are denied — the adapter fails the Job (observed at awaitResult).
-		assertThrows(Exception.class, () -> engine.jobs().invokeOperation("v/ops/covia/write",
-			Maps.of(Fields.PATH, "w/x", Fields.VALUE, Strings.create("v")), ctx).awaitResult(5000),
+		assertThrows(Exception.class, () -> engine.jobs().startToolOperation(Strings.create("v/ops/covia/write"),
+			Maps.of(Fields.PATH, "w/x", Fields.VALUE, Strings.create("v")), ctx).job().awaitResult(5000),
 			"write must be denied under a read-only scope");
-		assertThrows(Exception.class, () -> engine.jobs().invokeOperation("v/ops/covia/delete",
-			Maps.of(Fields.PATH, "w/x"), ctx).awaitResult(5000),
+		assertThrows(Exception.class, () -> engine.jobs().startToolOperation(Strings.create("v/ops/covia/delete"),
+			Maps.of(Fields.PATH, "w/x"), ctx).job().awaitResult(5000),
 			"delete must be denied under a read-only scope");
 		// s/ deletes take the delete-only namespace branch (#166) — the capability
 		// gate must still apply there (access is checked before the namespace rule).
-		assertThrows(Exception.class, () -> engine.jobs().invokeOperation("v/ops/covia/delete",
-			Maps.of(Fields.PATH, "s/x"), ctx).awaitResult(5000),
+		assertThrows(Exception.class, () -> engine.jobs().startToolOperation(Strings.create("v/ops/covia/delete"),
+			Maps.of(Fields.PATH, "s/x"), ctx).job().awaitResult(5000),
 			"secret delete must be denied under a read-only scope");
 	}
 

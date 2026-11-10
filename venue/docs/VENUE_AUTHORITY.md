@@ -163,9 +163,10 @@ here contains it. What this design bounds is how far untrusted principals
 Elevation reaches them only as an allowance they hold, activated explicitly,
 within its ceiling.
 
-Under it, Brightside's gods hold allowances and Brightside activates the
-privileges each call needs, instead of signing grants to itself. GetMine and
-provisioning services hold allowances the venue issued.
+Under it, agents an embedder runs in the process (Brightside's gods, for
+one) hold allowances, and the embedder's code activates the privileges each
+call needs instead of signing grants to itself. Administrators and
+provisioning services outside the process hold allowances the venue issued.
 
 ## Precedents
 
@@ -215,8 +216,8 @@ provisioning services hold allowances the venue issued.
 6. Deferred work keeps presented grants but not the base. Agents are safe
    because their caps are read again; any other context with a scope would
    lose it.
-7. Moving Brightside, GetMine and provisioning services to allowances, and
-   what becomes of the grants they hold or sign.
+7. How code that signs or holds grants today, in embedders and provisioning
+   services, moves to allowances, and what becomes of those grants.
 8. Whether to refuse grants the venue signs over its own resources once
    allowances replace them, as covia#660 first proposed. Refusing every token
    bearing the venue's signature would also refuse its custodial users'

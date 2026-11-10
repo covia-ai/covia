@@ -97,9 +97,6 @@ public class HITLAdapter extends AAdapter {
 	/** In a request job's adapter data: the handle of the scheduled event that expires it. */
 	static final AString EXPIRY_EVENT = Strings.intern("expiryEvent");
 
-	/** The operation whose authority a grant is minted with. */
-	private static final AString ISSUE_OPERATION = Strings.intern("v/ops/ucan/issue");
-
 	/** Refusal of {@code hitl:expire} from anyone but the venue, which schedules it. */
 	public static final String EXPIRE_VENUE_ONLY = "Only the venue expires HITL requests, as their timeouts fall due";
 
@@ -155,7 +152,6 @@ public class HITLAdapter extends AAdapter {
 
 	@Override
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
-		requireInvoke(ctx);
 		String subOp = getSubOperation(meta);
 		try {
 			switch (subOp == null ? "" : subOp) {
@@ -187,7 +183,6 @@ public class HITLAdapter extends AAdapter {
 			super.invoke(job, ctx, meta, input); // one-shot ops via invokeFuture
 			return;
 		}
-		requireInvoke(ctx);
 		handleRequest(job, ctx, input); // throws -> JobManager fails the job
 	}
 
@@ -628,7 +623,6 @@ public class HITLAdapter extends AAdapter {
 		}
 		if (!(engine.getAdapter("ucan") instanceof UCANAdapter ucan)) throw new ConfigurationException(GRANTS_UNAVAILABLE);
 		RequestContext issuer = engine.context(responder);
-		engine.requireInvoke(issuer, ISSUE_OPERATION);
 		return ucan.mint(issuer, Maps.of(UCAN.AUD, requester, UCAN.ATT, approved,
 			UCAN.EXP, (exp == null) ? null : CVMLong.create(exp)));
 	}

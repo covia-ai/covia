@@ -444,6 +444,17 @@ public class OAuthAdapterTest {
 					Maps.of("url", fake.base() + "/token", "bearerSecret", "oauth/fake"), bound));
 				assertTrue(elsewhere.contains(Abilities.OAUTH_USE.toString()), elsewhere);
 
+				fake.server.createContext("/api/redirect", x -> {
+					x.getResponseHeaders().set("Location", "/api/%2e%2e/token");
+					x.sendResponseHeaders(302, -1);
+					x.close();
+				});
+				int tokenRequests = fake.tokenRequests.size();
+				String redirected = failed(run(engine, "v/ops/http/get",
+					Maps.of("url", fake.base() + "/api/redirect", "bearerSecret", "oauth/fake"), bound));
+				assertTrue(redirected.contains(Abilities.OAUTH_USE.toString()), redirected);
+				assertEquals(tokenRequests, fake.tokenRequests.size(), "the denied hop must never reach /token");
+
 				// The owner uses their own connection as of right.
 				assertEquals("Bearer access-1", RT.getIn(ok(run(engine, "v/ops/http/get", me, alice)), "body").toString());
 			} finally {
@@ -909,8 +920,15 @@ public class OAuthAdapterTest {
 				assertEquals("no-store", page.headers().firstValue("Cache-Control").orElse(null));
 				Matcher shown = PAGE_CODE.matcher(page.body());
 				assertTrue(shown.find(), page.body());
-				assertTrue(failed(run(engine, "v/ops/oauth/complete", Maps.of("code", shown.group(1)),
-					RequestContext.of(Strings.create("did:test:oauth:bob")))).contains(OAuthAdapter.ANOTHER_ACCOUNT));
+				RequestContext bob = RequestContext.of(Strings.create("did:test:oauth:bob"));
+				int tokenRequests = fake.tokenRequests.size();
+				assertTrue(failed(run(engine, "v/ops/oauth/complete", Maps.of("code", shown.group(1)), bob))
+					.contains(OAuthAdapter.ANOTHER_ACCOUNT));
+				assertEquals(tokenRequests, fake.tokenRequests.size(), "nothing was exchanged");
+				assertEquals(1, connections(engine, alice).count(), "Alice keeps only her earlier connection");
+				assertEquals(0, connections(engine, bob).count());
+				assertTrue(failed(run(engine, "v/ops/oauth/complete", Maps.of("code", shown.group(1)), alice))
+					.contains(OAuthAdapter.UNKNOWN_COMPLETION), "Bob's attempt spent the code");
 			} finally {
 				server.close();
 			}

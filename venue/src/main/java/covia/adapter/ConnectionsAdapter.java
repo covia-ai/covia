@@ -116,7 +116,6 @@ public class ConnectionsAdapter extends AAdapter {
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx,
 			AMap<AString, ACell> meta, ACell input) {
 		try {
-			requireInvoke(ctx);
 			return switch (getSubOperation(meta)) {
 				case "list" -> CompletableFuture.completedFuture(handleList(ctx));
 				case "status" -> CompletableFuture.completedFuture(handleStatus(ctx, input));

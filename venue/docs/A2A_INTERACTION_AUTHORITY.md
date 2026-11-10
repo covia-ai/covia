@@ -42,11 +42,13 @@ its allow-list names the sender, and is anonymous otherwise
 ([CONFIG.md](./CONFIG.md#who-a-chat-message-comes-from)). A binding an agent
 set up identifies its senders as that agent, never its owner.
 
-The asker's own authority still applies to the act of asking: it must allow
-invoking the operation that asks. An anonymous caller asks as the venue's
-public principal, under the operator's `auth.public.caps`; the read-only
-default grants no `invoke`, so anonymous askers are refused until the operator
-opts in ([CONFIG.md](./CONFIG.md#a2a-protocol)).
+The action requires `agent/request` or `agent/message` on the target. A
+bound A2A endpoint or chat binding does not additionally require `invoke`.
+An anonymous caller asks as the venue's public principal when public access
+is enabled; the target's `accepts: "anyone"` grants admission even without an
+invocation grant in `auth.public.caps`. Generic `/invoke` and `/run` calls
+additionally need `invoke` on their operation reference
+([CONFIG.md](./CONFIG.md#a2a-protocol)).
 
 An admission policy is part of the agent's config, so whoever may create or
 configure the agent (`agent/create`, `agent/write`) sets it, with its owner's

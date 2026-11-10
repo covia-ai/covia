@@ -475,7 +475,8 @@ public class SchedulerTest {
 	public void testCapsReplayDeniesUncoveredOp() {
 		AVector<ACell> caps = Vectors.of(Maps.of(
 			s("with"), s("w/allowed"),
-			s("can"),  s("crud/read")));
+			s("can"),  s("crud/read")),
+			Maps.of("with", "v/ops/covia/read", "can", "invoke"));
 		RequestContext capCtx = agent("scoped", caps);
 
 		Blob handle = sched.schedule(s("v/ops/covia/read"),
@@ -491,7 +492,8 @@ public class SchedulerTest {
 	public void testCapsReplayAllowsCoveredOp() throws Exception {
 		AVector<ACell> caps = Vectors.of(Maps.of(
 			s("with"), s("w/allowed"),
-			s("can"),  s("crud/read")));
+			s("can"),  s("crud/read")),
+			Maps.of("with", "v/ops/covia/read", "can", "invoke"));
 		RequestContext capCtx = agent("scoped", caps);
 
 		Blob handle = sched.schedule(s("v/ops/covia/read"),

@@ -549,7 +549,6 @@ public class ClaudeCodeAdapter extends ARemoteAgentAdapter<RemoteInteraction> im
 
 	@Override
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
-		requireInvoke(ctx);
 		String subOp = getSubOperation(meta);
 		if (subOp == null) throw new InvalidDefinitionException("Insufficient specification for claudecode operation");
 		return switch (subOp) {

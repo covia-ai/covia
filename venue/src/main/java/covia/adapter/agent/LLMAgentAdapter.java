@@ -123,7 +123,6 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 
 	@Override
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
-		requireInvoke(ctx);
 		return CompletableFuture.supplyAsync(() -> processChat(ctx, input), VIRTUAL_EXECUTOR);
 	}
 
@@ -194,8 +193,11 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 		// through withLoads and watched values through the frame observation — so an inspected
 		// context matches a live inference by construction.
 		Loads.Snapshot loads = frameTools.refreshLoadSnapshot();
-		spec = spec.withLoads(loads, concatTools(fixedTools, loads.tools()))
-			.withTask(frameTools.tasks.message());
+		AVector<ACell> previewTools = concatTools(fixedTools, loads.tools());
+		ACell previewTask = frameTools.tasks.message();
+		spec = spec.withLoads(loads, previewTools)
+			.withNotice(replyNotice(previewTask, previewTools))
+			.withTask(previewTask);
 		if (!frameTools.store.observe(0, ContextAssembler.observations(spec, loads),
 				engine.currentTimestamp().longValue())) {
 			throw new IllegalStateException("Could not preview watched context observations");

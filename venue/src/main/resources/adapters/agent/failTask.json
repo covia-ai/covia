@@ -1,6 +1,6 @@
 {
     "name": "Fail Agent Task",
-    "description": "Reject or fail the in-scope task when the request cannot be fulfilled, for example because it is outside the agent's capabilities or its input is invalid. The agent and task are determined from the current request context — no id is passed. Without a task in scope the call fails. Side effects: fails the pending task Job with the supplied error and removes the task from the agent's task queue.",
+    "description": "Use only for an assigned task shown in the current task context. For ordinary chat, send a normal assistant reply instead of calling this tool. Reject or fail the in-scope task when the request cannot be fulfilled, for example because it is outside the agent's capabilities or its input is invalid. The agent and task are determined from the current request context — no id is passed. Without a task in scope the call fails. Side effects: fails the pending task Job with the supplied error and removes the task from the agent's task queue.",
     "dateCreated": "2026-04-16T00:00:00Z",
     "operation": {
         "adapter": "agent:failTask",

@@ -81,7 +81,6 @@ public class Orchestrator extends AAdapter {
 
 	@Override
 	public void invoke(Job job, RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
-		requireInvoke(ctx);
 		AMap<AString, ACell> operation = RT.getIn(meta, Fields.OPERATION);
 		AVector<?> steps=RT.ensureVector(operation.get(Fields.STEPS));
 		if (steps == null) {

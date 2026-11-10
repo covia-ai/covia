@@ -424,7 +424,7 @@ public class A2A extends ACoviaAPI {
 		}
 		Job job;
 		try {
-			job = engine().jobs().invokeOperation("v/ops/agent/request", input, rctx);
+			job = engine().jobs().callOperation("v/ops/agent/request", input, rctx);
 		} catch (CoviaException e) {
 			writeError(ctx, id, A2AErrorCodes.INVALID_AGENT_RESPONSE, AGENT_INTAKE_FAILED + reason(e));
 			return;
@@ -622,7 +622,7 @@ public class A2A extends ACoviaAPI {
 		}
 		Job job;
 		try {
-			job = engine().jobs().invokeOperation(defaultChatOp, Maps.of(Fields.MESSAGE, record), rctx);
+			job = engine().jobs().callOperation(defaultChatOp.toString(), Maps.of(Fields.MESSAGE, record), rctx);
 		} catch (CoviaException e) {
 			writeError(ctx, id, A2AErrorCodes.INVALID_AGENT_RESPONSE, CHAT_OP_REFUSED + reason(e));
 			return null;

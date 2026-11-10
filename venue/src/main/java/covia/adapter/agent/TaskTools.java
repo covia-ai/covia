@@ -37,6 +37,7 @@ final class TaskTools {
 
 	static final String COMPLETE = "complete_task";
 	static final String FAIL = "fail_task";
+	static final String NO_TASK = "Error: no task in scope — %s resolves the task this cycle was started for. Reply normally to chat messages.";
 	static final Set<String> NAMES = Set.of(COMPLETE, FAIL);
 
 	/** Stands in for the task job id a live cycle carries ({@code agent:context}, {@code agent:step}). */
@@ -160,7 +161,7 @@ final class TaskTools {
 			AString jobId = scope();
 			if (jobId == null) {
 				return ToolCycleEngine.ToolOutcome.result(Strings.create(
-					"Error: no task in scope — " + tool + " resolves the task this cycle was started for"));
+					NO_TASK.formatted(tool)));
 			}
 			Completion completion = failed
 				? Completion.of(RT.getIn(call.input(), Fields.ERROR), turnText, null, tool)

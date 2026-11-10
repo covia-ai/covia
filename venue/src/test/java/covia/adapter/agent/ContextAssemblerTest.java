@@ -138,6 +138,33 @@ public class ContextAssemblerTest {
 	}
 
 	@Test
+	public void testTaskStateIsExplicitWithoutChangingTheCachedPalette() {
+		for (boolean cached : new boolean[] {true, false}) {
+			Spec chat = spec(Maps.empty(), null, null, Vectors.of((ACell) Strings.create("Are you there?")), true)
+				.withLoads(Loads.Snapshot.EMPTY, TaskTools.DEFINITIONS).withCachePrefix(cached);
+			Prompt chatPrompt = ContextAssembler.assemble(chat);
+			assertTrue(tail(chatPrompt).contains(ContextAssembler.NO_TASK_NOTICE));
+			assertFalse(ContextAssembler.initialise(chat).messages().toString().contains(ContextAssembler.NO_TASK_NOTICE),
+				"current task status must not enter the cached prefix");
+
+			TaskTools.Tasks tasks = new TaskTools.Tasks(engine, ctx,
+				Vectors.of(Maps.of(Fields.JOB_ID, TaskTools.PREVIEW_JOB_ID, Fields.INPUT, "Do the assigned work")), 5000, true);
+			Prompt assigned = ContextAssembler.assemble(chat.withTask(tasks.message()));
+			assertFalse(allContent(assigned).contains(ContextAssembler.NO_TASK_NOTICE));
+			assertEquals(tasks.message(), assigned.messages().get(assigned.messages().count() - 1));
+			assertEquals(chatPrompt.tools(), assigned.tools(), "task changes do not mutate the tool definitions");
+			assertEquals(ContextAssembler.initialise(chat).messages(),
+				ContextAssembler.initialise(chat.withTask(tasks.message())).messages());
+
+			Prompt afterTask = ContextAssembler.assemble(chat.withTask(null));
+			assertTrue(tail(afterTask).contains(ContextAssembler.NO_TASK_NOTICE));
+			assertEquals(chatPrompt.tools(), afterTask.tools());
+		}
+		assertFalse(allContent(ContextAssembler.assemble(spec(Maps.empty())))
+			.contains(ContextAssembler.NO_TASK_NOTICE), "frames without task controls receive no task-tool instruction");
+	}
+
+	@Test
 	public void testTaskIsRenderedLast() {
 		ACell task = ContextAssembler.user("[Tasks assigned to you]\n- Task 1: do it");
 		Spec s = new Spec(engine, ctx, null, null, null, null, 0, null, null, null, null,

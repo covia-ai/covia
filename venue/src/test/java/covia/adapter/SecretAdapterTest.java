@@ -66,7 +66,9 @@ class SecretAdapterTest {
 		return engine.getAdapter("secret").getOperations().get(Strings.create(op));
 	}
 	private CompletableFuture<ACell> run(String op, ACell input, RequestContext ctx) {
-		return engine.jobs().runOperation("v/ops/secret/" + op, input, ctx);
+		return "extract".equals(op)
+			? engine.jobs().runOperation("v/ops/secret/" + op, input, ctx)
+			: engine.jobs().runToolOperation(Strings.create("v/ops/secret/" + op), input, ctx);
 	}
 	private ACell run(String op, ACell input) {
 		ACell result = run(op, input, owner).join();
@@ -145,7 +147,9 @@ class SecretAdapterTest {
 		engine.jobs().addJobUpdateListener(listener);
 		try {
 			assertEquals(Strings.create(VALUE), RT.getIn(run("extract", Maps.of("name", "KEY")), "value"));
-			assertEquals(Strings.create(VALUE), RT.getIn(run("extract", Maps.of("name", "KEY"), scope("s/KEY", Abilities.SECRET_EXTRACT)).join(), "value"));
+			assertEquals(Strings.create(VALUE), RT.getIn(run("extract", Maps.of("name", "KEY"), scope("s/KEY", Abilities.SECRET_EXTRACT).withCaps(Vectors.of(
+				Capability.create(Strings.create("s/KEY"), Abilities.SECRET_EXTRACT),
+				Capability.create(Strings.create("v/ops/secret/extract"), Abilities.INVOKE)))).join(), "value"));
 			assertEquals(before, engine.jobs().getJobs(owner));
 			assertTrue(events.isEmpty());
 			assertFalse(engine.getVenueState().users().user(owner.getUserDID()).get().toString().contains(VALUE));

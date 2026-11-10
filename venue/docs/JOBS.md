@@ -541,8 +541,13 @@ guarantees that the executing adapter can survive its own venue restarting.
 
 ## invokeOperation, runOperation, and invokeInternal
 
-Three dispatch paths with **identical trust, capability, defaults, and gate
-handling**. All execute through a Job; they differ in audience, admission, and
+All dispatch paths preserve the caller's authority, apply defaults and arm
+capability gates. Every operation enforces its resource authority, whether its
+Job is durable or transient. Generic reference invocation additionally checks
+`invoke` on the requested operation location; a bound tool or framework call
+does not need that lookup permission. Job creation alone confers no authority.
+
+The dispatch paths differ in audience, lookup permission, admission and
 whether the Job is durable:
 
 - `invokeOperation` — creates and persists a tracked Job (the caller-facing
@@ -550,9 +555,18 @@ whether the Job is durable:
   Its `submitOperation` variant, used by HTTP `/invoke`, checkpoints the handle
   and dispatches execution on a virtual thread before returning the handle;
   local `invokeOperation` retains its existing immediate-start behavior.
-- `runOperation` — public result-oriented dispatch. Returns the operation
+- `runOperation` — public result-oriented reference invocation, with the same
+  location-scoped `invoke` check as `invokeOperation`. Returns the operation
   result rather than a Job handle and applies normal top-level admission.
-- `invokeInternal` — in-process framework composition for agent transitions,
+- `callOperation` — a trusted endpoint or tool binding with a durable Job.
+  It retains resource checks without an arbitrary-lookup permission check.
+  Metadata-direct dispatch likewise already has a selected definition.
+- `runToolOperation` — a call to a tool binding selected by the serving
+  registry, not an arbitrary reference chosen in the call's input. No blanket
+  `invoke` check; all action-specific checks still apply.
+- `invokeReference` — the agent loop's raw-reference fallback, with an
+  `invoke` check and internal composition's observation and recording rules.
+- `invokeInternal` — trusted in-process framework composition for agent transitions,
   LLM calls, tool calls, and capability gates. Returns the operation result
   future and is exempt from top-level admission.
 

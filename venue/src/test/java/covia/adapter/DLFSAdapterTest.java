@@ -54,14 +54,14 @@ public class DLFSAdapterTest {
 	}
 
 	private ACell run(String op, ACell input) {
-		return engine.jobs().invokeOperation(
+		return engine.jobs().callOperation(
 			op, input, RequestContext.of(ALICE_DID)
 		).awaitResult(5000);
 	}
 
 	/** The error message of an operation that must fail. */
 	private String failure(String op, ACell input, RequestContext ctx) {
-		Job job = engine.jobs().invokeOperation(op, input, ctx);
+		Job job = engine.jobs().callOperation(op, input, ctx);
 		assertThrows(Exception.class, () -> job.awaitResult(5000), op + " " + input);
 		return job.getErrorMessage();
 	}
@@ -290,7 +290,7 @@ public class DLFSAdapterTest {
 			}));
 			try {
 				assertTrue(saving.await(5, TimeUnit.SECONDS));
-				isolated.jobs().invokeOperation("v/ops/dlfs/delete-drive", Maps.of("name", "deleted"),
+				isolated.jobs().callOperation("v/ops/dlfs/delete-drive", Maps.of("name", "deleted"),
 					RequestContext.of(ALICE_DID)).awaitResult(5000);
 				assertFalse(convex.lattice.fs.DLFSNode.isDirectory(drive.getCursor().get()));
 			} finally {
@@ -331,7 +331,7 @@ public class DLFSAdapterTest {
 			// A strictly newer deletion wins in either merge direction; equal times
 			// deliberately keep the local operand in Convex (covered by the save race).
 			time.advance(1);
-			isolated.jobs().invokeOperation("v/ops/dlfs/delete-drive", Maps.of("name", "legacy"),
+			isolated.jobs().callOperation("v/ops/dlfs/delete-drive", Maps.of("name", "legacy"),
 				RequestContext.of(ALICE_DID)).awaitResult(5000);
 			var deleted = root.get();
 			assertEquals(deleted.get(Covia.DLFS), application.dlfs().getLattice().merge(
@@ -457,7 +457,7 @@ public class DLFSAdapterTest {
 
 		RequestContext maker = RequestContext.ofAgent(ALICE_DID, Strings.create("maker"))
 			.withCaps(Vectors.of(Capability.create(Strings.create("dlfs"), Capability.CRUD_WRITE)));
-		engine.jobs().invokeOperation("v/ops/dlfs/create-drive",
+		engine.jobs().callOperation("v/ops/dlfs/create-drive",
 			Maps.of("name", "reports"), maker).awaitResult(5000);
 		assertEquals(Vectors.of("reports"), driveNames());
 	}
@@ -499,7 +499,7 @@ public class DLFSAdapterTest {
 			Capability.create(Strings.create("dlfs/docs/old.txt"), Capability.CRUD_WRITE),
 			Capability.create(Strings.create("dlfs/docs/new.txt"), Capability.CRUD_WRITE),
 			Capability.create(Strings.create("dlfs/docs/sub"), Capability.CRUD_WRITE)));
-		engine.jobs().invokeOperation("v/ops/dlfs/write",
+		engine.jobs().callOperation("v/ops/dlfs/write",
 			Maps.of("drive", "docs", "path", "old.txt", "content", "changed"), leaf).awaitResult(5000);
 		failure("v/ops/dlfs/write", Maps.of("drive", "docs", "path", "new.txt", "content", "x"), leaf);
 		failure("v/ops/dlfs/append", Maps.of("drive", "docs", "path", "new.txt", "content", "x"), leaf);
@@ -509,9 +509,9 @@ public class DLFSAdapterTest {
 
 		RequestContext dir = RequestContext.ofAgent(ALICE_DID, Strings.create("dir")).withCaps(Vectors.of(
 			Capability.create(Strings.create("dlfs/docs/"), Capability.CRUD_WRITE)));
-		engine.jobs().invokeOperation("v/ops/dlfs/mkdir",
+		engine.jobs().callOperation("v/ops/dlfs/mkdir",
 			Maps.of("drive", "docs", "path", "a/b", "parents", true), dir).awaitResult(5000);
-		engine.jobs().invokeOperation("v/ops/dlfs/write",
+		engine.jobs().callOperation("v/ops/dlfs/write",
 			Maps.of("drive", "docs", "path", "a/b/new.txt", "content", "new"), dir).awaitResult(5000);
 
 		AVector<?> entries = RT.ensureVector(RT.getIn(
@@ -558,12 +558,12 @@ public class DLFSAdapterTest {
 		failure("v/ops/dlfs/list-drives", Maps.of("path", "shared"), oneDrive);
 		RequestContext allDrives = RequestContext.ofAgent(ALICE_DID, Strings.create("all-drives"))
 			.withCaps(Vectors.of(Capability.create(Strings.create("dlfs"), Capability.CRUD_READ)));
-		assertEquals(Vectors.of("shared"), RT.getIn(engine.jobs().invokeOperation("v/ops/dlfs/list-drives",
+		assertEquals(Vectors.of("shared"), RT.getIn(engine.jobs().callOperation("v/ops/dlfs/list-drives",
 			Maps.of("drive", "shared"), allDrives).awaitResult(5000), "drives"));
 
 		RequestContext dropper = RequestContext.ofAgent(ALICE_DID, Strings.create("dropper"))
 			.withCaps(Vectors.of(Capability.create(Strings.create("dlfs/shared"), Capability.CRUD_DELETE)));
-		engine.jobs().invokeOperation("v/ops/dlfs/delete-drive",
+		engine.jobs().callOperation("v/ops/dlfs/delete-drive",
 			Maps.of("drive", "shared", "path", "tmp"), dropper).awaitResult(5000);
 		assertEquals(0, driveNames().count());
 	}
@@ -579,7 +579,7 @@ public class DLFSAdapterTest {
 		RequestContext reader = RequestContext.ofAgent(ALICE_DID, Strings.create("reader"))
 			.withCaps(Vectors.of(Capability.create(Strings.create("dlfs/"), Capability.CRUD_READ)));
 
-		ACell read = engine.jobs().invokeOperation("v/ops/dlfs/read",
+		ACell read = engine.jobs().callOperation("v/ops/dlfs/read",
 			Maps.of("drive", "notes", "path", "a.txt"), reader).awaitResult(5000);
 		assertEquals("hello", RT.getIn(read, "content").toString());
 		for (String drive : new String[] {"missing", "gone"}) {

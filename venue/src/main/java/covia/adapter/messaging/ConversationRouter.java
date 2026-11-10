@@ -269,7 +269,7 @@ public final class ConversationRouter {
 	}
 
 	private ACell run(String operation, ACell input, RequestContext ctx) {
-		Job job = engine.jobs().invokeOperation(operation, input, ctx);
+		Job job = engine.jobs().callOperation(operation, input, ctx);
 		ACell result = job.awaitResult();
 		if (job.getStatus() != Status.COMPLETE) {
 			throw new JobFailedException(job);

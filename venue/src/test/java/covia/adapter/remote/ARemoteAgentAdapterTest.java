@@ -29,11 +29,13 @@ class ARemoteAgentAdapterTest {
 	static class Probe extends ARemoteAgentAdapter<Interaction> {
 		final AtomicInteger starts = new AtomicInteger();
 		final AtomicInteger ordinary = new AtomicInteger();
+		boolean requiresRead;
 		@Override public String getName() { return "remoteprobe"; }
 		@Override public String getDescription() { return "Test interaction lifecycle"; }
 		@Override protected boolean isInteractionOperation(String operation) { return !"admin".equals(operation); }
 		@Override protected boolean returnsFirstReply(String operation) { return "session".equals(operation); }
 		@Override protected void startInteraction(Job job, RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
+			if (requiresRead) engine.requireAuthority(ctx, Strings.create("w/backend"), convex.auth.ucan.Capability.CRUD_READ);
 			starts.incrementAndGet(); bindInteraction(job, new Interaction());
 		}
 		@Override public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
@@ -106,7 +108,8 @@ class ARemoteAgentAdapterTest {
 		assertEquals(1, adapter.ordinary.get()); assertEquals(0, adapter.starts.get());
 	}
 
-	@Test void deniedAuthorityCannotStartExternalWork() {
+	@Test void deniedResourceAuthorityCannotStartExternalWork() {
+		adapter.requiresRead = true;
 		Job job = job();
 		assertThrows(RuntimeException.class, () -> adapter.invoke(job, engine.venueContext().withCaps(Vectors.empty()), meta("task"), null));
 		assertEquals(Status.FAILED, job.getStatus()); assertEquals(0, adapter.starts.get());

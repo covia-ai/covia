@@ -69,7 +69,6 @@ public class GridAdapter extends AAdapter {
 
 	@Override
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
-		requireInvoke(ctx);
 		String gridOp = getSubOperation(meta);
 		if (("run".equals(gridOp) || ("jobResult".equals(gridOp) && parseTimeoutMs(input) <= 0))
 				&& resolveVenue(meta, input) != null) {
@@ -92,7 +91,6 @@ public class GridAdapter extends AAdapter {
 		String operation = getSubOperation(meta);
 		if (("run".equals(operation) || ("jobResult".equals(operation) && parseTimeoutMs(input) <= 0))
 				&& resolveVenue(meta, input) != null) {
-			requireInvoke(ctx);
 			job.start(() -> delegate(job, ctx, meta, input));
 		} else {
 			super.invoke(job, ctx, meta, input);
@@ -108,6 +106,7 @@ public class GridAdapter extends AAdapter {
 		// Observing an existing job only reads; submitting one sends
 		if (!existing) engine.remoteJobs().requireNotClosing();
 		AString target = resolveVenue(meta, input);
+		if (!existing) engine.jobs().requireRemoteInvoke(operation, RT.getIn(input, Fields.INPUT), ctx);
 		VenueConnection remote = remoteConnection(ctx, target, input);
 		RemoteJobs observer = engine.remoteJobs();
 		observer.prepare(job, "covia", target.toString(), remote.credentials(), !existing);
@@ -235,6 +234,7 @@ public class GridAdapter extends AAdapter {
         ACell operationInput = RT.getIn(input, Fields.INPUT);
         AString venueSpec = resolveVenue(meta, input);
 
+        if (venueSpec != null) engine.jobs().requireRemoteInvoke(targetOperation, operationInput, ctx);
         Venue venue = selectVenue(ctx, venueSpec, input);
 
 		return venue.run(targetOperation.toString(), operationInput);
@@ -259,6 +259,7 @@ public class GridAdapter extends AAdapter {
         AString venueSpec = resolveVenue(meta, input);
         if (venueSpec != null) engine.remoteJobs().requireNotClosing();
 
+        if (venueSpec != null) engine.jobs().requireRemoteInvoke(targetOperation, operationInput, ctx);
         Venue venue = selectVenue(ctx, venueSpec, input);
 
         CompletableFuture<Job> jobFuture = venue.invoke(targetOperation.toString(), operationInput);

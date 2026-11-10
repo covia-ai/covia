@@ -224,7 +224,6 @@ public class TestAdapter extends AAdapter {
 
     @Override
     public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
-        requireInvoke(ctx);
         String testOp = getSubOperation(meta);
 
         // Handle different test operations
@@ -385,7 +384,6 @@ public class TestAdapter extends AAdapter {
     
     @Override
     public void invoke(Job job, RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
-        requireInvoke(ctx);
         String subOp = getSubOperation(meta);
         if ("chat".equals(subOp)) {
             // Multi-turn: set INPUT_REQUIRED and wait for messages
@@ -499,7 +497,7 @@ public class TestAdapter extends AAdapter {
 				// On JDK 25 before 25.0.3 (JDK-8370887) this virtual-thread sleep
 				// can overrun by tens of seconds.
 				Thread.sleep(delay.longValue());
-				ACell result = engine.jobs().invokeInternal(RT.ensureString(op), opInput, ctx).join();
+				ACell result = engine.jobs().runOperation(RT.ensureString(op), opInput, ctx, false).join();
 				job.completeWith(result);
     		} catch (InterruptedException e) {
     			// cancelled — Job.cancel already updated lattice status

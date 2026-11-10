@@ -103,6 +103,11 @@ EC2, venue-4 on Azure), and a push to `master` the stable GCP venues
 - **CHANGELOG:** one short headline per change, optionally with `(#issue)`.
   List what operators and API users see (operations, abilities, config keys,
   REST, MCP and A2A behaviour, modules), never Java API changes.
+- **Naming embedders:** tracked files name only a public embedder, one that
+  has announced it uses Covia (GetMine) or is open source (Brightside), and
+  only as an example or as a user of a feature. A requirement is stated as
+  Covia's own, never as an embedder's need, and nothing says what an
+  embedder's project should do.
 
 ### Adding a New Adapter
 

@@ -36,8 +36,8 @@ import covia.venue.server.VenueServer;
  * <p>Verifies the three properties of the secure-by-default public profile:
  * <ol>
  *   <li>an unauthenticated (public) caller may <b>read</b> but may not
- *       <b>mutate</b> or <b>invoke</b> — invoking any operation creates a job
- *       and is therefore resource-consuming, so the read-only scope denies it;</li>
+ *       <b>mutate</b> or look up arbitrary operations through <b>invoke</b>;
+ *       bound read tools still need only their resource permissions;</li>
  *   <li>authenticating (with no token attenuation) lifts the scope;</li>
  *   <li>an operator can opt out via {@code auth.public.caps = "unrestricted"}.</li>
  * </ol>
@@ -140,8 +140,8 @@ public class PublicScopeTest {
 
 	@Test
 	public void anonymousInvokeDeniedByDefault() throws Exception {
-		// Invoking any op creates a job (resource-consuming), so the read-only
-		// scope denies it — even an otherwise-harmless echo.
+		// The read-only scope does not grant arbitrary-operation invocation,
+		// even for an otherwise-harmless echo.
 		VenueHTTP pub = anon(secureBase);
 		Job job = pub.invokeAndWait(OP_ECHO, Maps.of(Strings.create("hi"), Strings.create("there")));
 		assertEquals(Status.FAILED, job.getStatus(), "public invoke must be denied");
@@ -152,19 +152,21 @@ public class PublicScopeTest {
 	public void anonymousReadAllowedByDefault() throws Exception {
 		VenueHTTP pub = anon(secureBase);
 		Job job = pub.invokeAndWait(OP_READ, Maps.of(Strings.create("path"), Strings.create("w/x")));
-		assertEquals(Status.COMPLETE, job.getStatus(),
-			"public read of own/venue lattice is allowed under the read-only default");
+		assertEquals(Status.FAILED, job.getStatus(), "generic invocation requires invoke");
+		assertEquals(200, get(secureBase + "/api/v1/values/read?path=w/x").statusCode(),
+			"the direct read endpoint needs only resource authority");
 	}
 
 	@Test
 	public void anonymousShowConfigAllowedByDefault() throws Exception {
 		VenueHTTP pub = anon(secureBase);
 		Job job = pub.invokeAndWait(OP_SHOW_CONFIG, Maps.empty());
-		assertEquals(Status.COMPLETE, job.getStatus(),
-			"the curated venue configuration is public discovery under the read-only default");
-		assertEquals(secureServer.getEngine().getDIDString(),
-			convex.core.lang.RT.getIn(job.getOutput(), "venue", "did"));
-		assertNotNull(convex.core.lang.RT.getIn(job.getOutput(), "notice"));
+		assertEquals(Status.FAILED, job.getStatus(), "generic invocation requires invoke");
+		Engine engine = secureServer.getEngine();
+		var result = engine.jobs().runToolOperation(OP_SHOW_CONFIG, Maps.empty(),
+			engine.context(Strings.create(engine.getDIDString() + ":public"))).join();
+		assertEquals(engine.getDIDString(), convex.core.lang.RT.getIn(result, "venue", "did"));
+		assertNotNull(convex.core.lang.RT.getIn(result, "notice"));
 	}
 
 	@Test

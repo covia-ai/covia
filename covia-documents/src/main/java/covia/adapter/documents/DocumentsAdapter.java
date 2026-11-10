@@ -439,7 +439,6 @@ public class DocumentsAdapter extends AAdapter implements TextExtractor {
 
 	@Override
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
-		requireInvoke(ctx);
 		String subOp = getSubOperation(meta);
 		if (!"extract".equals(subOp)) {
 			return CompletableFuture.failedFuture(

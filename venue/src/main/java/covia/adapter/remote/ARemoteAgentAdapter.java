@@ -93,7 +93,6 @@ public abstract class ARemoteAgentAdapter<I extends RemoteInteraction> extends A
 		}
 		job.start(() -> {
 			try {
-				requireInvoke(ctx);
 				startInteraction(job, ctx, meta, input);
 			} catch (RuntimeException | Error e) {
 				settleJob(job, null, e);

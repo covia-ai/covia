@@ -488,7 +488,6 @@ public final class PythonAdapter extends AAdapter implements AutoCloseable {
 	@Override
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx,
 			AMap<AString, ACell> meta, ACell input) {
-		requireInvoke(ctx);
 		String id = getSubOperation(meta);
 		Operation operation = operations.get(id);
 		if (operation == null && !(instanceConfig.enabled() && INSTANCE_OPERATIONS.contains(id))) {

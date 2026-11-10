@@ -457,7 +457,7 @@ Venue-installed skills ship as classpath resources registered by an adapter via 
 | **Hierarchies** | `skill.skills` contributes more source refs while loaded, applying the same progressive-disclosure mechanism recursively without recursively loading anything. |
 | **MCP bridging (#80)** | Bridged MCP tools are ordinary catalog ops — referenced from `skill.tools`, or made skills themselves via facet composition (§3.4). |
 | **A2A agent cards** | A2A `AgentSkill` entries describe what an *agent* offers outward; these skills describe what an agent can *load* inward. Unrelated surfaces; the A2A card could later advertise loaded skills. |
-| **UCAN / caps** | Skill reads pin `crud/read` / `asset/read`. An unadvertised direct skill or tool additionally needs explicit `skill/load` / `tool/load`; null (ordinarily unrestricted) caps do not opt into those trust-surface expansions. A loaded tool is still checked separately for `invoke`. |
+| **UCAN / caps** | Skill reads pin `crud/read` / `asset/read`. An unadvertised direct skill or tool additionally needs explicit `skill/load` / `tool/load`; null (ordinarily unrestricted) caps do not opt into those trust-surface expansions. A loaded tool still enforces its resource authority; only generic invocation additionally checks `invoke` on its target reference. |
 
 ---
 

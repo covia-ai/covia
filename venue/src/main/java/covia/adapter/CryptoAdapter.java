@@ -181,7 +181,6 @@ public class CryptoAdapter extends AAdapter {
 
 	@Override public CompletableFuture<ACell> invokeFuture(RequestContext ctx,
 			AMap<AString, ACell> meta, ACell input) {
-		requireInvoke(ctx);
 		return CompletableFuture.supplyAsync(() -> {
 			if (!(input instanceof AMap<?, ?>)) throw new InvalidInputException(INVALID_INPUT);
 			return switch (getSubOperation(meta)) {

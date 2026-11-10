@@ -163,7 +163,7 @@ final class ReleasedAgents {
 	}
 
 	private static Job run(Engine engine, String operation, ACell input, RequestContext ctx) {
-		Job job = engine.jobs().invokeOperation(operation, input, ctx);
+		Job job = engine.jobs().callOperation(operation, input, ctx);
 		try {
 			job.awaitResult(20_000);
 		} catch (Exception refused) {
