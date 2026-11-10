@@ -124,11 +124,10 @@ Walk through tool calls:
 
 ### Caps not enforced
 
-Check that config has caps at the record level:
-
-```
-covia_read  path=g/<name>/config/caps
-```
+Check the agent's caps with `agent_info agentId=<name>`: `config.caps` is a list of
+capabilities, `[]` for none, or `"unrestricted"`. (A raw read of
+`g/<name>/config/caps` shows nothing for an unrestricted agent: that is how its
+record stores it.)
 
 If caps are present but not enforced, check the timeline for tool results — denied operations return `"Error: Capability denied: ..."` as the tool result.
 

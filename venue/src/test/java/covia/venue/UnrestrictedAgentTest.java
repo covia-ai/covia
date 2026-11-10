@@ -26,8 +26,8 @@ import covia.grid.Status;
 
 /**
  * An agent acts with its controller's authority, narrowed by its caps, and is
- * unrestricted only when its owner says {@code caps: "unrestricted"}: no way of
- * making or changing an agent leaves it unrestricted otherwise. An agent with
+ * unrestricted only when its owner says {@code caps: "unrestricted"}: no
+ * operation that makes or changes an agent leaves it unrestricted otherwise. An agent with
  * no authority of its own still runs, and the venue's own agents administer
  * the venue as far as their caps reach, by any route.
  */

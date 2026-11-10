@@ -248,6 +248,31 @@ public class SkillsLibraryTest {
 	}
 
 	@Test
+	public void testEveryTemplateSkillAndLoadResolves() {
+		for (String template : new String[] {"minimal", "skilled", "reader", "worker",
+				"analyst", "manager", "goaltree", "full", "admin"}) {
+			ACell config = RT.getIn(engine.resolvePath(
+				Strings.create("v/agents/templates/" + template), ctx), "agent", "config");
+			AVector<ACell> skills = RT.ensureVector(RT.getIn(config, "skills"));
+			if (skills != null) {
+				for (long i = 0; i < skills.count(); i++) {
+					AString ref = RT.ensureString(skills.get(i));
+					assertNotNull(covia.adapter.agent.Skills.resolveRef(engine, ctx, ref),
+						template + " names a skill that does not resolve: " + ref);
+				}
+			}
+			AMap<AString, ACell> loads = RT.ensureMap(RT.getIn(config, "loads"));
+			if (loads != null) {
+				for (long i = 0; i < loads.count(); i++) {
+					AString ref = loads.entryAt(i).getKey();
+					assertNotNull(covia.adapter.agent.Skills.resolveRef(engine, ctx, ref),
+						template + " pins a skill that does not resolve: " + ref);
+				}
+			}
+		}
+	}
+
+	@Test
 	public void testStandardSkillGuidanceMatchesCurrentAgentContract() {
 		String agents = skillBody("agents");
 		String tasks = skillBody("tasks");

@@ -47,7 +47,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Requires Convex 0.8.19.
 - `agent:message`, `agent:cancelTask` and a job named in an agent's context take an id with or without `0x`, as other id inputs do (#669).
 - Whitespace around a hash or hex id in a path or asset reference no longer names the same thing.
-- An agent of the venue's holds venue authority as far as its caps reach, all of it when unrestricted; `agent:info` and `agent:list` show `caps: "unrestricted"`.
+- An agent of the venue's holds venue authority as far as its caps reach, all of it when unrestricted; `agent:info` shows `caps: "unrestricted"`.
 - Padded values are refused where they were trimmed: `http` `method`, `wait` and integer query parameters, `pages`, `skills:import` `skillset`, MCP server URLs, venue references, `oauth:connect` `scopes` and `returnTo`, `telegram:call` `method`, Telegram targets and speech voice numbers.
 - Configuration values are read exactly as written: whitespace around one is no longer removed.
 - A leading slash changes nothing in any resource name, including a capability's `with` and before a DID.
