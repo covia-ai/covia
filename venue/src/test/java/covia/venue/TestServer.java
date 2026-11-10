@@ -4,6 +4,7 @@ import java.net.URI;
 
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.util.Shutdown;
 import covia.api.Fields;
 import covia.adapter.HTTPAdapter;
 import covia.grid.client.VenueHTTP;
@@ -37,6 +38,8 @@ public class TestServer {
 				// rapidly as one (public) caller, so disable rate limiting here.
 				// Rate-limit behaviour is covered by RateLimiterTest + RateLimitIT.
 				Config.RATE_LIMIT,Maps.of(Config.ENABLED,false),
+				// Closed only at JVM exit, when nothing in flight is waited on.
+				Config.SHUTDOWN,Maps.of(Config.GRACE_MS,0),
 				Config.AUTH,Maps.of(
 					Config.PUBLIC,Maps.of(
 						Config.ENABLED,true,
@@ -59,10 +62,11 @@ public class TestServer {
 		// invokeAndWait(opID, input, timeoutMs) override.
 		COVIA.setTimeout(5000);
 
-		// Close the shared server cleanly on JVM exit so Jetty/Javalin
-		// non-daemon worker threads don't outlive the test session.
-		Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+		// Close the shared server on JVM exit in Convex's shutdown sequence, as
+		// MainVenue does, so it saves before Convex closes its store
+		// (TestEngine says why that order matters).
+		Shutdown.addHook(Shutdown.SERVICE, () -> {
 			try { SERVER.close(); } catch (Exception ignored) {}
-		}, "test-server-shutdown"));
+		});
 	}
 }
