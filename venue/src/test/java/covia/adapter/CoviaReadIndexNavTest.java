@@ -57,7 +57,7 @@ public class CoviaReadIndexNavTest {
 	public void testZeroXPrefixAlsoResolves() {
 		Blob sid = Blob.fromHex("0000019e921a468d0000000000000000");
 		ACell root = fixture(sid);
-		// keys render outward as "0x…" via ALattice.toJSONKey — accept that form
+		// keys render outward as "0x…" (Convex's JSON.jsonKey) — accept that form
 		ACell wt = ValuePath.get(root,
 			CoviaPath.segments(s("sessions"), s("0x" + sid.toHexString()), s("wakeTime")));
 		assertEquals(CVMLong.create(1790000000000L), wt, "0x-prefixed hex must resolve too");
