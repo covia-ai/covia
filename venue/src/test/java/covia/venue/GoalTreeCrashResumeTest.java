@@ -100,6 +100,7 @@ public class GoalTreeCrashResumeTest {
 					Fields.OPERATION, Strings.create("v/ops/goaltree/chat"),
 					Strings.create("llmOperation"), Strings.create("v/test/ops/nevertoolllm"),
 					Strings.create("systemPrompt"), Strings.create("Test agent."),
+					Strings.create("caps"), Config.UNRESTRICTED,
 					Strings.create("toolCallTimeoutMs"), CVMLong.create(60_000))),
 			RequestContext.of(ALICE)).awaitResult(5000);
 	}
