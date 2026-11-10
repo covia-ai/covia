@@ -49,7 +49,9 @@ public class TaskSettlementTest {
 
 	@BeforeAll
 	static void launch() {
-		engine = Engine.createTemp(CLOCK, Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true)));
+		// No shutdown grace: tests leave tasks waiting, and closing need not wait for them.
+		engine = Engine.createTemp(CLOCK, Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true),
+			Config.SHUTDOWN, Maps.of(Config.GRACE_MS, 0)));
 		Engine.addDemoAssets(engine);
 	}
 

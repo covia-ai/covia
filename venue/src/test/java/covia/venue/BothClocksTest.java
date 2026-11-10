@@ -42,7 +42,9 @@ class BothClocksTest {
 
 	@BeforeAll
 	static void launch() {
-		AMap<AString, ACell> config = Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true));
+		// No shutdown grace: scenarios leave work waiting, and closing need not wait for it.
+		AMap<AString, ACell> config = Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true),
+			Config.SHUTDOWN, Maps.of(Config.GRACE_MS, 0));
 		driven = Engine.createTemp(DrivenClock.at(Instant.parse("2022-01-01T00:00:00Z")), config);
 		Engine.addDemoAssets(driven);
 		realTime = Engine.createRealTime(config);

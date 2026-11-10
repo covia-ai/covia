@@ -72,6 +72,8 @@ public class MCPToolCallWaitTest {
 		server = VenueServer.launch(Maps.of(
 			Strings.create("port"), 0, Config.STORE, "memory",
 			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
+			// No shutdown grace: tool calls left running need not finish at close.
+			Config.SHUTDOWN, Maps.of(Config.GRACE_MS, 0),
 			Fields.MCP, Maps.of(
 				Strings.create("includePathPrefixes"), Vectors.of(Strings.create("v/ops/"), Strings.create("v/test/ops/")),
 				Strings.create("includeAdapters"), Vectors.of(Strings.create("*")),
