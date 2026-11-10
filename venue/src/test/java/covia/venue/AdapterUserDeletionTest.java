@@ -128,6 +128,46 @@ class AdapterUserDeletionTest {
 		} finally { engine.close(); }
 	}
 
+	/**
+	 * An adapter that registers while a deletion is under way, after the
+	 * deletion listed the venue's adapters, is marked by the deletion but ran
+	 * its own retry at registration before that mark. The deletion finishes its
+	 * entry rather than leave it pending. The deletion is held inside its
+	 * transaction, so the registration's writes make that transaction run
+	 * again and see the new adapter.
+	 */
+	@Test void anAdapterRegisteredDuringADeletionIsCleanedUpByIt() throws Exception {
+		Engine engine = Engine.createTemp(Maps.empty());
+		CountDownLatch entered = new CountDownLatch(1), release = new CountDownLatch(1);
+		try {
+			Probe first = new Probe();
+			first.duringState = state -> {
+				if (entered.getCount() == 0) return;
+				entered.countDown();
+				try { assertTrue(release.await(5, TimeUnit.SECONDS)); }
+				catch (InterruptedException e) { throw new AssertionError(e); }
+			};
+			engine.registerAdapter(first);
+			seed(engine);
+			CompletableFuture<ACell> deletion = CompletableFuture.supplyAsync(
+				() -> engine.deleteUser(engine.venueContext(), OWNER));
+			assertTrue(entered.await(5, TimeUnit.SECONDS));
+			Probe late = new Probe();
+			late.name = "late-cleanup-test";
+			engine.registerAdapter(late);
+			AdapterState lateState = engine.adapterState(late.name);
+			lateState.write(lateState.userPath(OWNER, "bots/late"), VALUE);
+			release.countDown();
+			deletion.get(5, TimeUnit.SECONDS);
+			assertEquals(1, late.stopped);
+			assertNull(lateState.read(lateState.userPath(OWNER, "")));
+			assertTrue(engine.getVenueState().users().create(OWNER), "nothing is left pending");
+		} finally {
+			release.countDown();
+			engine.close();
+		}
+	}
+
 	@Test void unloadedAdapterCleanupRemainsPendingUntilReactivation() {
 		Engine engine = Engine.createTemp(Maps.empty());
 		try {

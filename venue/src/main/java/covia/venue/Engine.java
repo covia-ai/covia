@@ -3401,6 +3401,26 @@ public class Engine {
 				if (failure == null) failure = e; else failure.addSuppressed(e);
 			}
 		}
+		// An adapter registered since the list above was taken has state, so
+		// the deletion marked it too, but its own retry at registration ran
+		// before that mark. Retry for it now. A registration holds the engine
+		// monitor throughout, so this list includes every one begun before the mark.
+		java.util.List<AAdapter> joined = new java.util.ArrayList<>();
+		synchronized (this) {
+			for (AAdapter adapter : adapters.values()) {
+				if (registered.get(adapter.getName()) != adapter) joined.add(adapter);
+			}
+			for (AAdapter adapter : disabledAdapters.values()) {
+				if (registered.get(adapter.getName()) != adapter) joined.add(adapter);
+			}
+		}
+		for (AAdapter adapter : joined) {
+			try {
+				resumeAdapterUserDeletions(adapter);
+			} catch (RuntimeException e) {
+				if (failure == null) failure = e; else failure.addSuppressed(e);
+			}
+		}
 		flush();
 		if (failure != null) throw failure;
 		if (venueState.users().isDeleting(did)) {
