@@ -145,8 +145,8 @@ All fields are optional. Missing fields get platform defaults.
 > `invoke`; its action still requires authority over the resources it uses.
 > The runtime must read the operation metadata to build the provider tool name,
 > description, and input schema. A definition that is missing or unreadable is
-> omitted from the provider palette and reported in `agent:create` warnings,
-> `agent:info.unavailableTools`, and the model's assembled context. Shared
+> omitted from the provider palette and reported in `agent:create` warnings
+> and the model's assembled context. Shared
 > `v/ops/...` catalog metadata remains publicly discoverable.
 
 ### Example templates

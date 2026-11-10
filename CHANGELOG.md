@@ -166,11 +166,12 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - The `venue/relay` ability: users hop with `authenticateAs: "caller"` and grants.
 - `auth.audience`: replaced by `auth.requireAud`.
 - `FileAdapter.resolve`, which resolved a root path without authorising it.
+- `agent:info`'s `unavailableTools`: reading an agent no longer resolves its tools. `agent:create` still warns of configured tools the agent cannot use, and the agent's context names them.
 
 ### Fixed
 
 - A venue starts when one of its agents cannot be recovered, such as one whose controller cannot act: that agent is logged and left asleep with its work queued.
-- `agent:info`, `GET /agents/{id}` and an agent's event stream answer for an agent whose tools cannot be checked, such as one whose controller cannot act: each configured tool is listed in `unavailableTools` with why.
+- `agent:info`, `GET /agents/{id}` and an agent's event stream answer for every agent, one whose controller cannot act included.
 - An asset's metadata by hash is read with `asset/read` or `crud/read` over it on every route, however the reference is written: `asset:get`, `GET /assets/{ref}` and operation definitions, as `covia:read` already did.
 - A venue told to stop (SIGTERM, `docker stop`) stops taking requests before its final save, then closes completely, as the tray's Close and Exit do.
 - An agent's session history keeps a failed tool call's whole message; the model is shown the first 1024 characters and how many more there are.

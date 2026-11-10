@@ -999,17 +999,6 @@ public class AgentAdapterTest {
 		assertTrue(warnings.toString().contains(toolPath), warnings.toString());
 		assertTrue(warnings.toString().contains("crud/read"), warnings.toString());
 
-		ACell info = engine.jobs().invokeOperation("v/ops/agent/info",
-			Maps.of(Fields.AGENT_ID, "metadata-blind"), RequestContext.of(ALICE_DID))
-			.awaitResult(5000);
-		AVector<ACell> unavailable = RT.ensureVector(
-			RT.getIn(info, Fields.UNAVAILABLE_TOOLS));
-		assertNotNull(unavailable, "agent:info must expose configured tools omitted at runtime");
-		assertEquals(1, unavailable.count());
-		assertEquals(Strings.create(toolPath),
-			RT.getIn(unavailable.get(0), Fields.OPERATION));
-		assertTrue(RT.getIn(unavailable.get(0), Fields.REASON).toString().contains("crud/read"));
-
 		ACell context = engine.jobs().invokeOperation("v/ops/agent/context",
 			Maps.of(Fields.AGENT_ID, "metadata-blind"), RequestContext.of(ALICE_DID))
 			.awaitResult(5000);
@@ -1043,11 +1032,6 @@ public class AgentAdapterTest {
 			Maps.of(Fields.AGENT_ID, "metadata-reader", Fields.CONFIG, config),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 		assertNull(RT.getIn(created, Fields.WARNINGS));
-
-		ACell info = engine.jobs().invokeOperation("v/ops/agent/info",
-			Maps.of(Fields.AGENT_ID, "metadata-reader"), RequestContext.of(ALICE_DID))
-			.awaitResult(5000);
-		assertNull(RT.getIn(info, Fields.UNAVAILABLE_TOOLS));
 
 		String context = engine.jobs().invokeOperation("v/ops/agent/context",
 			Maps.of(Fields.AGENT_ID, "metadata-reader"), RequestContext.of(ALICE_DID))

@@ -226,31 +226,12 @@ public final class ToolPalette {
 	/**
 	 * Configured tools that do not resolve under the agent's authority, as
 	 * {@code {operation, reason}} — the author-time diagnostic used by
-	 * {@code agent:create} warnings and {@code agent:info}.
+	 * {@code agent:create} warnings.
 	 */
 	public static AVector<ACell> unavailableConfigTools(Engine engine, RequestContext ctx,
 			AMap<AString, ACell> config, Set<String> skipNames) {
 		if (config == null || RT.ensureVector(config.get(K_TOOLS)) == null) return Vectors.empty();
 		return resolve(engine, ctx, config, skipNames).unavailable();
-	}
-
-	/**
-	 * Every operation tool {@code config} names, each unavailable for
-	 * {@code reason}, in the form of {@link #unavailableConfigTools}: what is
-	 * reported when the tools could not be checked at all.
-	 */
-	public static AVector<ACell> configToolsUnavailable(AMap<AString, ACell> config, Set<String> skipNames,
-			String reason) {
-		AVector<ACell> entries = (config == null) ? null : RT.ensureVector(config.get(K_TOOLS));
-		List<AMap<AString, ACell>> unavailable = new java.util.ArrayList<>();
-		if (entries != null) {
-			for (long i = 0; i < entries.count(); i++) {
-				AString[] parsed = parseConfigToolEntry(entries.get(i));
-				if (parsed == null || skipNames.contains(parsed[0].toString())) continue;
-				record(unavailable, parsed[0], reason);
-			}
-		}
-		return vector(unavailable);
 	}
 
 	/** Resolves load-owned tools without parallel route/label projections. */

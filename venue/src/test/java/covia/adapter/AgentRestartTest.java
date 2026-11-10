@@ -15,7 +15,6 @@ import convex.auth.ucan.Capability;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
-import convex.core.data.AVector;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
@@ -307,7 +306,7 @@ public class AgentRestartTest {
 	 * Each agent is recovered at boot on its own. One that cannot run then,
 	 * here because its record names a controller that cannot act, is left
 	 * asleep with its work queued, and the venue still starts and wakes the
-	 * others. Its info still reads, saying why its tools could not be checked.
+	 * others. Its info still reads.
 	 */
 	@Test
 	public void anAgentThatCannotRunDoesNotStopTheVenueStarting() throws Exception {
@@ -349,16 +348,12 @@ public class AgentRestartTest {
 				assertEquals(Status.COMPLETE, live.getStatus(), "the venue started and woke the agent that can run");
 				assertFalse(second.jobs().getJob(stranded.getID(), alice).isFinished(), "its work stays queued");
 
-				// Its info still reads, saying its tools could not be checked
+				// Its info still reads: reading it runs nothing as the agent
 				AMap<AString, ACell> info = ((AgentAdapter) second.getAdapter("agent"))
 					.agentInfo(alice, Strings.create("stray"));
 				assertEquals(Agent.SLEEPING, info.get(Fields.STATUS));
 				assertEquals(second.publicPrincipal(), info.get(Fields.CONTROLLER));
-				AVector<ACell> unavailable = RT.ensureVector(info.get(Fields.UNAVAILABLE_TOOLS));
-				assertEquals(1, unavailable.count(), info.toString());
-				assertEquals(Strings.create("v/ops/json/merge"), RT.getIn(unavailable.get(0), Fields.OPERATION));
-				assertEquals(Strings.create(AgentAdapter.TOOLS_UNCHECKED.formatted(Engine.PUBLIC_ACCESS_OFF)),
-					RT.getIn(unavailable.get(0), Fields.REASON));
+				assertEquals(Vectors.of(Strings.create("v/ops/json/merge")), RT.getIn(info, Fields.CONFIG, "tools"));
 			} finally {
 				second.close();
 			}

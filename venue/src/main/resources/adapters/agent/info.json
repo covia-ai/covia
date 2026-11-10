@@ -33,7 +33,6 @@
 					},
 					"required": ["input", "auth"]
 				},
-				"unavailableTools": { "type": "array", "description": "Configured operation tools currently missing or unreadable, with a reason for each; when they cannot be checked, as when the agent's controller cannot act, each with why" },
 				"error": { "type": "string", "description": "Last fault, if suspended" },
 				"suspension": {
 					"type": "object", "description": "Present for a deliberate stop, absent for a fault; cleared on resume",

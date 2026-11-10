@@ -2218,7 +2218,8 @@ public class AgentAdapter extends AAdapter {
 
 	/**
 	 * Builds the {@code agent:info} summary from a resolved agent — a lightweight
-	 * view; full state, history, and timeline are read via
+	 * view of what is stored, worked out without resolving or running anything;
+	 * full state, history, and timeline are read via
 	 * {@code covia:read path=g/<agentId>/state} etc.
 	 */
 	@SuppressWarnings("unchecked")
@@ -2241,35 +2242,7 @@ public class AgentAdapter extends AAdapter {
 		if (error != null) summary = summary.assoc(Agent.KEY_ERROR, error);
 		ACell suspension = record.get(Agent.KEY_SUSPENSION);
 		if (suspension != null) summary = summary.assoc(Agent.KEY_SUSPENSION, suspension);
-		@SuppressWarnings("unchecked")
-		AMap<AString, ACell> config = (record.get(Agent.KEY_CONFIG) instanceof AMap<?, ?> m)
-			? (AMap<AString, ACell>) m : null;
-		AVector<ACell> unavailable = unavailableTools(target, config);
-		if (!unavailable.isEmpty()) {
-			summary = summary.assoc(Fields.UNAVAILABLE_TOOLS, unavailable);
-		}
 		return summary;
-	}
-
-	/** Why each of an agent's tools is reported unavailable when they could not be checked; the reason follows. */
-	public static final String TOOLS_UNCHECKED = "its tools could not be checked: %s";
-
-	/**
-	 * The configured tools agent {@code target}'s harness could not use now
-	 * ({@link ToolPalette#unavailableConfigTools}). Working that out is no part
-	 * of reading the agent, so a failure never fails the read: each tool is
-	 * reported unavailable, saying why they could not be checked, such as its
-	 * controller being unable to act. An unexpected failure is logged once at
-	 * ERROR as the venue's.
-	 */
-	private AVector<ACell> unavailableTools(AgentTarget target, AMap<AString, ACell> config) {
-		java.util.Set<String> harnessTools = AbstractLLMAdapter.allHarnessToolNames();
-		try {
-			return ToolPalette.unavailableConfigTools(engine, harnessContext(target), config, harnessTools);
-		} catch (RuntimeException failure) {
-			String reason = covia.exception.FaultException.cause(covia.exception.FaultException.VENUE, failure);
-			return ToolPalette.configToolsUnavailable(config, harnessTools, TOOLS_UNCHECKED.formatted(reason));
-		}
 	}
 
 	/** Only visits this agent's pending job IDs; never scans venue jobs or history. */
