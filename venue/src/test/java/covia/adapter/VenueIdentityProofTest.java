@@ -297,6 +297,7 @@ public class VenueIdentityProofTest {
 			TestEngine.Restartable venue = TestEngine.restartable(config);
 			Engine first = venue.start();
 			Engine.addDemoAssets(first);
+			peer.verifier = first;
 			Job job;
 			try {
 				job = first.jobs().invokeOperation(GRID_RUN, input(peer.url(), "venue"), first.venueContext());
@@ -334,6 +335,7 @@ public class VenueIdentityProofTest {
 			TestEngine.Restartable venue = TestEngine.restartable(config);
 			Engine first = venue.start();
 			Engine.addDemoAssets(first);
+			peer.verifier = first;
 			Job job;
 			try {
 				String credential = UcanTokens.identityToken(venue.key(), peer.claims, 300);
@@ -347,6 +349,7 @@ public class VenueIdentityProofTest {
 			peer.holdStatus.countDown();
 			int requests = peer.discoveries.get() + peer.challenges.get() + peer.calls.get();
 			Engine second = venue.start();
+			peer.verifier = second;
 			try {
 				Engine.addDemoAssets(second);
 				second.jobs().recoverJobs();
@@ -404,7 +407,7 @@ public class VenueIdentityProofTest {
 	private static String bearerRefusal(Engine signer, Engine verifier) {
 		AKeyPair key = signer.getKeyPair();
 		String did = UCAN.toDIDKey(key.getAccountKey()).toString();
-		String proof = sign(key, header(did), claims(did, "http://127.0.0.1:8080", VenueChallenge.nonce()));
+		String proof = sign(key, header(did), claims(did, "http://127.0.0.1:8080", VenueChallenge.nonce(), verifier));
 		AuthException refused = assertThrows(AuthException.class,
 			() -> new VenueAuthenticator(verifier).authenticate(Strings.create(proof)));
 		return refused.getMessage();
@@ -415,8 +418,13 @@ public class VenueIdentityProofTest {
 			JWT.KID, did + "#" + did.substring("did:key:".length()));
 	}
 
-	private static AMap<AString, ACell> claims(String did, String base, String nonce) {
-		long now = System.currentTimeMillis() / 1000;
+	/**
+	 * Proof claims issued now on {@code verifier}'s clock, as a venue whose
+	 * clock agrees with the verifier's would: a test venue's clock is held, so
+	 * the system clock drifts from it as the run goes on.
+	 */
+	private static AMap<AString, ACell> claims(String did, String base, String nonce, Engine verifier) {
+		long now = verifier.currentTimestamp().longValue() / 1000;
 		return Maps.of(JWT.ISS, did, VenueChallenge.BASE, base, VenueChallenge.NONCE, nonce,
 			JWT.IAT, now, JWT.EXP, now + 60);
 	}
@@ -456,6 +464,8 @@ public class VenueIdentityProofTest {
 		volatile CountDownLatch holdStatus;
 		volatile String claims;
 		volatile AKeyPair key;
+		/** The venue that checks this peer's proofs, whose clock they are issued on. */
+		volatile Engine verifier = ENGINE;
 		volatile String replay;
 		volatile boolean acceptsJobs;
 		volatile Peer forwardTo;
@@ -525,7 +535,7 @@ public class VenueIdentityProofTest {
 
 		/** A proof for {@code nonce}, signed by this peer's key and naming its own address. */
 		String proof(String nonce) {
-			return sign(key, header(claims), VenueIdentityProofTest.claims(claims, url(), nonce));
+			return sign(key, header(claims), VenueIdentityProofTest.claims(claims, url(), nonce, verifier));
 		}
 
 		/** Passes the request on to {@code target}, which sees its own host as the request's. */
