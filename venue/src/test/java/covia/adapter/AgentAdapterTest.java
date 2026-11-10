@@ -958,6 +958,63 @@ public class AgentAdapterTest {
 	}
 
 	@Test
+	public void testCreateWarnsOfToolsOnAnotherVenueWithoutFetchingThem() {
+		// The other venue cannot be reached: had create fetched the tool to check
+		// it, the failed fetch would be reported as an unavailable tool too.
+		String elsewhere = "did:web:tools.invalid/v/ops/json/merge";
+		RequestContext caller = RequestContext.of(ALICE_DID);
+		Hash list = engine.resolveAsset(Strings.create("v/ops/covia/list"), caller).getID();
+		ACell result = engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(
+			Fields.AGENT_ID, "remote-tools",
+			Fields.CONFIG, Maps.of(
+				"operation", "v/ops/llmagent/chat",
+				"llmOperation", "v/ops/langchain/openai",
+				"tools", Vectors.of(engine.assetDIDURL(list), Strings.create(elsewhere)))),
+			caller).awaitResult(5000);
+
+		assertEquals(Vectors.of(Strings.create(AgentAdapter.REMOTE_TOOLS.formatted(elsewhere))),
+			RT.getIn(result, Fields.WARNINGS),
+			"only the tool on another venue is flagged, and it is not fetched");
+	}
+
+	@Test
+	public void testCreateResolvesAToolNamedByThisVenuesOwnDIDHere() {
+		// The shared engine's public hostname resolves to no venue: a fetch
+		// would fail and be reported as an unavailable tool.
+		ACell result = engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(
+			Fields.AGENT_ID, "own-did-tool",
+			Fields.CONFIG, Maps.of(
+				"operation", "v/ops/llmagent/chat",
+				"llmOperation", "v/ops/langchain/openai",
+				"tools", Vectors.of(engine.config().getWebDID() + "/v/ops/covia/list"))),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		assertNull(RT.getIn(result, Fields.WARNINGS), "the tool resolves here, unfetched");
+	}
+
+	@Test
+	public void testCreateReportsAToolOfAnUnhostedDIDKeyAsUnavailable() {
+		// A did:key has no address, so its definition is never fetched: the tool
+		// works only if this venue holds it, and is reported as any missing tool.
+		RequestContext caller = RequestContext.of(ALICE_DID);
+		Hash list = engine.resolveAsset(Strings.create("v/ops/covia/list"), caller).getID();
+		String unhosted = TestEngine.uniqueDID("unhosted-tool-owner") + "/a/" + list.toHexString();
+		ACell result = engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(
+			Fields.AGENT_ID, "unhosted-key-tool",
+			Fields.CONFIG, Maps.of(
+				"operation", "v/ops/llmagent/chat",
+				"llmOperation", "v/ops/langchain/openai",
+				"tools", Vectors.of(unhosted))),
+			caller).awaitResult(5000);
+
+		AVector<ACell> warnings = RT.ensureVector(RT.getIn(result, Fields.WARNINGS));
+		assertNotNull(warnings, "a tool that cannot resolve is reported: " + result);
+		assertEquals(1, warnings.count(), warnings.toString());
+		assertNotEquals(Strings.create(AgentAdapter.REMOTE_TOOLS.formatted(unhosted)), warnings.get(0));
+		assertTrue(warnings.get(0).toString().contains(unhosted), warnings.toString());
+	}
+
+	@Test
 	public void testUpdateSharesCreateWarningsForMergedConfig() {
 		RequestContext caller = RequestContext.of(ALICE_DID);
 		ACell created = engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(
@@ -1005,17 +1062,6 @@ public class AgentAdapterTest {
 		assertTrue(warnings.toString().contains(toolPath), warnings.toString());
 		assertTrue(warnings.toString().contains("crud/read"), warnings.toString());
 
-		ACell info = engine.jobs().invokeOperation("v/ops/agent/info",
-			Maps.of(Fields.AGENT_ID, "metadata-blind"), RequestContext.of(ALICE_DID))
-			.awaitResult(5000);
-		AVector<ACell> unavailable = RT.ensureVector(
-			RT.getIn(info, Fields.UNAVAILABLE_TOOLS));
-		assertNotNull(unavailable, "agent:info must expose configured tools omitted at runtime");
-		assertEquals(1, unavailable.count());
-		assertEquals(Strings.create(toolPath),
-			RT.getIn(unavailable.get(0), Fields.OPERATION));
-		assertTrue(RT.getIn(unavailable.get(0), Fields.REASON).toString().contains("crud/read"));
-
 		ACell context = engine.jobs().invokeOperation("v/ops/agent/context",
 			Maps.of(Fields.AGENT_ID, "metadata-blind"), RequestContext.of(ALICE_DID))
 			.awaitResult(5000);
@@ -1049,11 +1095,6 @@ public class AgentAdapterTest {
 			Maps.of(Fields.AGENT_ID, "metadata-reader", Fields.CONFIG, config),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 		assertNull(RT.getIn(created, Fields.WARNINGS));
-
-		ACell info = engine.jobs().invokeOperation("v/ops/agent/info",
-			Maps.of(Fields.AGENT_ID, "metadata-reader"), RequestContext.of(ALICE_DID))
-			.awaitResult(5000);
-		assertNull(RT.getIn(info, Fields.UNAVAILABLE_TOOLS));
 
 		String context = engine.jobs().invokeOperation("v/ops/agent/context",
 			Maps.of(Fields.AGENT_ID, "metadata-reader"), RequestContext.of(ALICE_DID))

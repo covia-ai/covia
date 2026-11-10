@@ -159,6 +159,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - `covia:list`, `covia:slice` and `covia:aggregate` name a blob key in `0x` hex, as a value's JSON shows it.
 - A connection opened for a `did:web` DID compares it as did:web writes it: a port is `%3A8080`, while `:8080` names a path.
 - An agent cycle stopped by `agent:suspend` or `agent:delete` can no longer complete or fail its task, and its result is not merged; the task runs again after resume.
+- `agent:create` and `agent:update` warn of tools that name an operation on another venue, and no longer fetch them to check them.
 
 ### Deprecated
 
@@ -170,10 +171,13 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - `auth.audience`: replaced by `auth.requireAud`.
 - `FileAdapter.resolve`, which resolved a root path without authorising it.
 - `answered` in `agent:chat` results: each reply answers one chat.
+- `agent:info`'s `unavailableTools`: reading an agent no longer resolves its tools. `agent:create` still warns of configured tools the agent cannot use, and the agent's context names them.
 
 ### Fixed
 
 - A venue starts when one of its agents cannot be recovered, such as one whose controller cannot act: that agent is logged and left asleep with its work queued.
+- `agent:info`, `GET /agents/{id}` and an agent's event stream answer for every agent, one whose controller cannot act included.
+- A DID URL naming this venue, by its `did:web` too, or a user it hosts resolves here and is never fetched over the network.
 - An asset's metadata by hash is read with `asset/read` or `crud/read` over it on every route, however the reference is written: `asset:get`, `GET /assets/{ref}` and operation definitions, as `covia:read` already did.
 - A venue told to stop (SIGTERM, `docker stop`) stops taking requests before its final save, then closes completely, as the tray's Close and Exit do.
 - An agent's session history keeps a failed tool call's whole message; the model is shown the first 1024 characters and how many more there are.

@@ -226,7 +226,7 @@ public final class ToolPalette {
 	/**
 	 * Configured tools that do not resolve under the agent's authority, as
 	 * {@code {operation, reason}} — the author-time diagnostic used by
-	 * {@code agent:create} warnings and {@code agent:info}.
+	 * {@code agent:create} warnings.
 	 */
 	public static AVector<ACell> unavailableConfigTools(Engine engine, RequestContext ctx,
 			AMap<AString, ACell> config, Set<String> skipNames) {

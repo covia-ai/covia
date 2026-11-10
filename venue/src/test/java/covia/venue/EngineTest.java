@@ -465,6 +465,32 @@ public class EngineTest {
 	}
 
 	@Test
+	public void testReferencesThisVenueHostsResolveHereAlone() {
+		// The shared engine's public hostname resolves to no venue, so any of
+		// these that went over the network would throw rather than answer.
+		RequestContext ctx = venue.venueContext();
+		AString web = venue.config().getWebDID();
+		Hash elsewhere = Hashing.sha3("held by no venue".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+		AString ownName = Strings.create(web + "/v/test/ops/echo");
+		AString ownHash = Strings.create(web + "/a/" + echoOpId.toHexString());
+		AString ownMiss = Strings.create(web + "/a/" + elsewhere.toHexString());
+		AString user = TestEngine.uniqueManagedDID("hosted-ref-owner");
+		AString userMiss = Strings.create(user + "/a/" + elsewhere.toHexString());
+
+		assertEquals(echoOpId, venue.resolveAsset(ownName, ctx).getID());
+		assertEquals(echoOpId, venue.resolveAsset(ownHash, ctx).getID());
+		assertNull(venue.resolveAsset(ownMiss, ctx));
+		assertNull(venue.resolveAsset(userMiss, RequestContext.of(user)));
+		assertNull(venue.fetchRemoteContent(ctx, ownHash));
+		for (AString hosted : java.util.List.of(ownName, ownHash, ownMiss, userMiss)) {
+			assertFalse(venue.isRemoteDefinition(hosted), hosted.toString());
+		}
+		assertTrue(venue.isRemoteDefinition(Strings.create("did:web:venue.example.com/v/ops/elsewhere")));
+		assertFalse(venue.isRemoteDefinition(Strings.create("did:key:z6MkUnhosted/a/" + elsewhere.toHexString())),
+			"a did:key has no address to fetch from");
+	}
+
+	@Test
 	public void testMalformedUserPathsAreInvalidInput() {
 		RequestContext ctx = venue.venueContext();
 		InvalidInputException empty = assertThrows(InvalidInputException.class,
