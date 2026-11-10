@@ -71,6 +71,7 @@ import covia.exception.NotSupportedException;
 import covia.exception.ResponseException;
 import covia.exception.UnavailableException;
 import covia.grid.Asset;
+import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -2575,9 +2576,8 @@ public class LangChainAdapterTest {
 	 * needs a secret/use grant and goes only where that grant's url caveat
 	 * points it.
 	 */
-	@Test
-	public void testApiKeyGoesOnlyWhereItsOwnerPointedIt() throws Exception {
-		AtomicReference<String> keySeen = new AtomicReference<>();
+	/** An Anthropic messages endpoint on loopback that answers "ok" and records the key each call sent. */
+	private static HttpServer anthropicStub(AtomicReference<String> keySeen) throws java.io.IOException {
 		HttpServer proxy = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
 		proxy.createContext("/v1/messages", exchange -> {
 			keySeen.set(exchange.getRequestHeaders().getFirst("x-api-key"));
@@ -2593,6 +2593,45 @@ public class LangChainAdapterTest {
 			}
 		});
 		proxy.start();
+		return proxy;
+	}
+
+	/** Calling the model is the harness's: a capped agent its owner controls thinks with her key. */
+	@Test
+	public void testCappedAgentThinksWithItsOwnersKey() throws Exception {
+		AtomicReference<String> keySeen = new AtomicReference<>();
+		HttpServer proxy = anthropicStub(keySeen);
+		Engine engine = Engine.createTemp(null);
+		try {
+			Engine.addDemoAssets(engine);
+			((HTTPAdapter) engine.getAdapter("http")).addAllowedHost("127.0.0.1");
+			AString owner = convex.auth.ucan.UCAN.toDIDKey(convex.core.crypto.AKeyPair.generate().getAccountKey());
+			engine.getVenueState().users().ensure(owner).secrets()
+				.store("ANTHROPIC_API_KEY", "owner-key", covia.venue.SecretStore.keys(engine.getKeyPair()));
+			RequestContext ctx = RequestContext.of(owner);
+			Job created = engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "thinker",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/ops/llmagent/chat",
+					"llmOperation", "v/ops/langchain/anthropic", "model", "claude-sonnet-5-5",
+					"url", "http://127.0.0.1:" + proxy.getAddress().getPort() + "/v1/",
+					covia.venue.Config.CAPS, Vectors.of(Maps.of("with", "w/notes/", "can", "crud/read")))), ctx);
+			created.awaitResult(5000);
+			assertEquals(Status.COMPLETE, created.getStatus(), created.getErrorMessage());
+
+			Job chat = engine.jobs().invokeOperation("v/ops/agent/chat",
+				Maps.of(Fields.AGENT_ID, "thinker", Fields.MESSAGE, "hi"), ctx);
+			chat.awaitResult(10000);
+			assertEquals(Status.COMPLETE, chat.getStatus(), chat.getErrorMessage());
+			assertEquals("owner-key", keySeen.get());
+		} finally {
+			engine.close();
+			proxy.stop(0);
+		}
+	}
+
+	@Test
+	public void testApiKeyGoesOnlyWhereItsOwnerPointedIt() throws Exception {
+		AtomicReference<String> keySeen = new AtomicReference<>();
+		HttpServer proxy = anthropicStub(keySeen);
 		Engine engine = Engine.createTemp(null);
 		try {
 			Engine.addDemoAssets(engine);
@@ -2660,6 +2699,13 @@ public class LangChainAdapterTest {
 			assertEquals(Status.FAILED, RT.getIn(cappedElsewhere, "status"), cappedElsewhere.toString());
 			assertTrue(RT.getIn(cappedElsewhere, "message").toString().contains(covia.api.Abilities.SECRET_USE.toString()),
 				cappedElsewhere.toString());
+			assertNull(keySeen.get());
+
+			// The caller itself, acting under a narrowed scope, is bound the same way.
+			ACell narrowed = adapter.invokeFuture(caller.withCaps(Vectors.of(invokeAny)), meta,
+				base.assoc(apiKey, Strings.create("s/MY_TOKEN"))).get(10, TimeUnit.SECONDS);
+			assertEquals(Status.FAILED, RT.getIn(narrowed, "status"), narrowed.toString());
+			assertTrue(RT.getIn(narrowed, "message").toString().contains(covia.api.Abilities.SECRET_USE.toString()), narrowed.toString());
 			assertNull(keySeen.get());
 
 			// No apiKey: the operation's default is the caller's own ANTHROPIC_API_KEY,
