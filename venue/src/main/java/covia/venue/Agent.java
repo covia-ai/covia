@@ -847,8 +847,12 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 	 * its session.
 	 */
 	public boolean hasNewWorkFor(ACell taskData, long now) {
+		return Task.hasOwnWork(taskData, now) || hasSessionWorkFor(taskData);
+	}
+
+	/** Whether messages are waiting in a task's session. */
+	public boolean hasSessionWorkFor(ACell taskData) {
 		if (!(taskData instanceof AMap<?, ?> task)) return false;
-		if (Task.hasOwnWork(task, now)) return true;
 		AString sid = RT.ensureString(task.get(Fields.SESSION_ID));
 		Blob sessionId = (sid == null) ? null : Blob.fromHex(sid.toString());
 		AMap<AString, ACell> session = (sessionId == null) ? null : getSession(sessionId);

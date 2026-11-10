@@ -147,8 +147,9 @@ A task can stay open across cycles. It is parked, and the run loop passes over
 it until something new arrives for it, when a cycle ends with it open and any
 of these will bring it back:
 
-- a wake time: one set by `agent:park-task` during the cycle, or returned by
-  the transition;
+- a wake time: one set by `agent:park-task` during the cycle, one returned by
+  the transition, or one set earlier that had not come when the cycle took
+  the task;
 - an open human ask made for it;
 - a call from its cycle still running past its time limit;
 - input or session messages that arrived during the cycle.
@@ -159,8 +160,11 @@ The cycle's reply then goes to the session's conversation, not to the task.
 optional `reason`, which becomes the task Job's progress for its requester to
 see. Like the §5.1 operations it takes no id and needs a task in scope. It
 returns `{agentId, taskId, status: "STARTED", wakeTime}`, and the task comes
-back at `wakeTime`, or sooner if new input arrives for it. A task resolved,
-failed or cancelled first is not brought back: its wake goes with it.
+back at `wakeTime`, or sooner if new input arrives for it. Brought back
+sooner, it keeps its revisit unless that cycle resolves it or parks it again,
+so a reply there goes to the conversation; at the revisit, a reply settles it
+(§5.2). A task resolved, failed or cancelled first is not brought back: its
+wake goes with it.
 
 ## 7. Restarts
 

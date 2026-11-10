@@ -123,12 +123,74 @@ public class TaskSettlementTest {
 			assertFalse(job.isFinished(), "the reply after a park goes to the conversation, not the task");
 			assertEquals(Status.STARTED, job.getStatus());
 
+			// Brought back with nothing new, the stub replies rather than parking
+			// again, and that reply is the result: the revisit was the park's.
 			CLOCK.advance(MINUTE);
 			engine.application().update().get(10, TimeUnit.SECONDS);
-			watch.awaitRest(2);
+			ACell result = job.awaitResult(10_000);
+			assertEquals(Status.COMPLETE, job.getStatus());
+			assertNotNull(RT.getIn(result, Fields.OUTPUT, "saw"), "the revisit's reply is the result: " + result);
 			assertNotNull(RT.getIn(agent.getTimeline().get(1), Fields.TASKS),
 				"the end of its delay presents the task again");
 		}
+		AgentWatch.awaitIdle(engine, owner.getUserDID(), agent);
+		assertEquals(2, agent.getTimeline().count(), "one cycle to park and one to settle, and no other");
+		assertEquals(0, agent.getTasks().count());
+	}
+
+	@Test
+	public void aTaskBroughtBackEarlyKeepsItsRevisitUnlessItIsSettled(TestInfo info) throws Exception {
+		RequestContext owner = owner(info);
+		Agent agent = stepAgent(owner, "early");
+		try (AgentWatch watch = AgentWatch.open(engine, owner.getUserDID(), "early")) {
+			long parkedAt = now();
+			Job job = request(owner, "early", "park:" + MINUTE);
+			watch.awaitRest(1);
+
+			// New input brings it back before its delay ends. The stub only
+			// replies, which settles nothing: the task waits for its revisit.
+			message(owner, "early", job, "news");
+			watch.awaitRest(2);
+			ACell row = agent.getTasks().get(job.getID());
+			assertTrue(Task.isParked(row), "a reply in the meantime goes to the conversation: " + job.getData());
+			assertEquals(CVMLong.create(parkedAt + MINUTE), RT.getIn(row, Fields.WAKE_TIME), "the revisit stands");
+			assertFalse(job.isFinished());
+
+			CLOCK.advance(MINUTE);
+			engine.application().update().get(10, TimeUnit.SECONDS);
+			job.awaitResult(10_000);
+			assertEquals(Status.COMPLETE, job.getStatus());
+		}
+		AgentWatch.awaitIdle(engine, owner.getUserDID(), agent);
+		assertEquals(3, agent.getTimeline().count());
+	}
+
+	@Test
+	public void aTaskCompletedWhenBroughtBackEarlyIsNotRevisited(TestInfo info) throws Exception {
+		RequestContext owner = owner(info);
+		Agent agent = stepAgent(owner, "early-done");
+		try (AgentWatch watch = AgentWatch.open(engine, owner.getUserDID(), "early-done")) {
+			Job job = request(owner, "early-done", "park:" + MINUTE);
+			watch.awaitRest(1);
+			message(owner, "early-done", job, "complete");
+			job.awaitResult(10_000);
+			assertEquals(Status.COMPLETE, job.getStatus());
+			watch.awaitRest(2);
+
+			CLOCK.advance(MINUTE);
+			engine.application().update().get(10, TimeUnit.SECONDS);
+			engine.jobs().invokeOperation("v/ops/agent/trigger",
+				Maps.of(Fields.AGENT_ID, "early-done", Fields.FORCE, false), owner).awaitResult(5000);
+			assertEquals(2, agent.getTimeline().count(), "the revisit found nothing to do");
+		}
+	}
+
+	/** Sends {@code text} to the task {@code job} is the request of, as its next input. */
+	private static void message(RequestContext owner, String agentId, Job job, String text) {
+		engine.jobs().invokeOperation("v/ops/agent/message", Maps.of(
+			Fields.AGENT_ID, agentId,
+			Fields.TASK_ID, job.getID().toHexString(),
+			Fields.MESSAGE, text), owner).awaitResult(5000);
 	}
 
 	@Test

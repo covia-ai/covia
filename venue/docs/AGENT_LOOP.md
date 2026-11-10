@@ -1241,16 +1241,17 @@ A cycle that leaves its picked task queued, neither completed nor failed and
 without a transition error, has left it open. The task is parked
 (`parked: true` on its row) when something will bring it back:
 
-- a `wakeTime` on the task, set during the cycle by `agent:park-task` or
-  returned by the transition;
+- a `wakeTime` on the task still to come: set during the cycle by
+  `agent:park-task`, returned by the transition, or set before the cycle and
+  not yet due when it took the task;
 - a HITL ask from its cycle that is still open (the ask's entry in the agent's
   `pending` index names the task);
 - a tool call from its cycle still running past its time limit (§3.4.2),
   tracked in the agent's `pending` index;
 - input or session messages that arrived during the cycle.
 
-With none of these the merge settles it with the cycle's reply, in the same
-transaction (`AgentAdapter.replyCompletion`): the task completes with the reply
+The merge decides, in its transaction (`AgentAdapter.settleOpenTask`). With
+none of these it settles the task with the cycle's reply: the task completes with the reply
 as its result, judged as `agent:complete-task` judges one, so a `strict` task
 whose reply does not conform fails with the reason; with no reply it fails
 with `AgentAdapter.TASK_YIELDED_IDLE`. Claiming a task for a cycle clears
@@ -1273,9 +1274,10 @@ agent, so a sleep on one session never delays another. A session or task
 record may carry `wakeTime` (absolute millis): "this thread wants to wake at
 T". Only the framework writes it, never the `n/`, `c/` or `t/` scratch
 namespaces. On merge, `mergeAndPostProcess` installs the `wakeTime` a
-transition returns on the thread it picked, or clears the one that thread
-carried when picked and the transition returns none; a wake set during the
-cycle, by `agent:park-task`, stays. The last writer wins, with no
+transition returns on the thread it picked. When the transition returns
+none, it clears the wake the cycle spent: a session's, or a task's that was
+due when the cycle took it. A task's wake still to come stands, as does one
+set during the cycle by `agent:park-task`. The last writer wins, with no
 min-merge, so a short retry cannot clobber an explicit long sleep. Intake
 operations write `pending` or `tasks`, never `wakeTime`: new work runs at once
 through `hasWork`.

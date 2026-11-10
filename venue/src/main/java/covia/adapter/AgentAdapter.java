@@ -4472,7 +4472,7 @@ public class AgentAdapter extends AAdapter {
 				// Pick at most one task per cycle: the oldest by created timestamp
 				// that has something to run on. Multi-task agents fan out across
 				// cycles; parked tasks wait for what they are waiting on.
-				Map.Entry<Blob, ACell> pickedTask = pickOldestReadyTask(agent, tasks);
+				Map.Entry<Blob, ACell> pickedTask = pickOldestReadyTask(agent, tasks, startTs);
 				if (pickedTask != null) {
 					if (stuckTaskId != null && stuckTaskId.equals(pickedTask.getKey())) {
 						stuckCount++;
@@ -4874,9 +4874,8 @@ public class AgentAdapter extends AAdapter {
 			if (failsPickedTask) {
 				current.resolveTask(pickedTask.getKey(), -1, completion(pickedTask.getKey(),
 					pickedTask.getValue(), Status.FAILED, Fields.ERROR, leanError));
-			} else if (pickedTask != null && leanError == null && !wakeRequested) {
-				AMap<AString, ACell> answer = replyCompletion(current, callerDID, agentId, pickedTask.getKey(), leanResponse);
-				if (answer != null) current.resolveTask(pickedTask.getKey(), -1, answer);
+			} else if (pickedTask != null && leanError == null) {
+				settleOpenTask(current, pickedTask, leanResponse, wakeRequested, startTs);
 			}
 			AMap<AString, ACell> results = run.taskResults(current);
 			AMap<AString, ACell> record = current.mergeRunResult(snapshotState, newState, results,
@@ -4915,13 +4914,14 @@ public class AgentAdapter extends AAdapter {
 		// Per-thread scheduled wake. Transition result may carry a
 		// `wakeTime` (absolute millis on the venue's clock) requesting a future fire on
 		// the picked thread. If present, install it via setThreadWakeTime
-		// (lattice-first, then scheduler). If absent but the picked record
-		// still carries the `wakeTime` it had when picked, such as one from a
-		// just-consumed scheduler fire, clear it so the scheduler rebuild on
-		// restart doesn't re-fire a wake that's already been serviced. A wake
-		// set during the cycle, by agent:park-task, is the cycle's own and
-		// stays. Lattice is authoritative; the scheduler index is rebuilt from
-		// it on boot.
+		// (lattice-first, then scheduler). If absent, clear the wake the
+		// cycle spent so the scheduler rebuild on restart doesn't re-fire a
+		// wake that's already been serviced: for a session, the one it had
+		// when picked; for a task, the one that was due when picked
+		// (spentWake, as the merge decided). A task's wake still to come
+		// stands, and one set during the cycle, by agent:park-task, is the
+		// cycle's own and stays. Lattice is authoritative; the scheduler
+		// index is rebuilt from it on boot.
 		Scheduler scheduler = engine.gridScheduler();
 		if (scheduler != null && leanError == null) {
 			Blob pickedThreadId = null;
@@ -4946,25 +4946,13 @@ public class AgentAdapter extends AAdapter {
 				ACell wtCell = RT.getIn(transitionResult, Fields.WAKE_TIME);
 				long requestedWake = (wtCell instanceof CVMLong cl) ? cl.longValue() : 0L;
 				ACell wakeNow = (pickedRecord != null) ? pickedRecord.get(Fields.WAKE_TIME) : null;
-				boolean hasExisting = wakeNow instanceof CVMLong && wakeNow.equals(wakeAtPick);
-				if (requestedWake > 0 || hasExisting) {
+				boolean spent = (pickedKind == Agent.ThreadKind.TASK)
+					? spentWake(wakeNow, wakeAtPick, startTs)
+					: (wakeNow instanceof CVMLong && wakeNow.equals(wakeAtPick));
+				if (requestedWake > 0 || spent) {
 					scheduler.setThreadWakeTime(callerDID, agent,
 						pickedKind, pickedThreadId, requestedWake);
 				}
-			}
-		}
-
-		// A task the cycle left queued waits on something that will bring it
-		// back — a wake time (park_task), a person's answer, a call still
-		// running past its time limit, or input that arrived during the cycle —
-		// and is parked until then (AGENT_LOOP.md §4.6). With none of these
-		// the merge settled it with the cycle's reply (replyCompletion).
-		if (pickedTask != null && leanError == null) {
-			Blob taskId = pickedTask.getKey();
-			ACell row = agent.getTasks().get(taskId);
-			if (row != null && agent.getResolved().get(taskId) == null
-					&& yieldIsBacked(agent, callerDID, agentId, taskId, row)) {
-				agent.tasks().task(taskId).park(Task.revision(pickedTask.getValue()));
 			}
 		}
 
@@ -5303,9 +5291,8 @@ public class AgentAdapter extends AAdapter {
 	 * keeps the first. Returns null if no task is ready.
 	 */
 	@SuppressWarnings("unchecked")
-	private Map.Entry<Blob, ACell> pickOldestReadyTask(Agent agent, Index<Blob, ACell> tasks) {
+	private Map.Entry<Blob, ACell> pickOldestReadyTask(Agent agent, Index<Blob, ACell> tasks, long now) {
 		if (tasks == null || tasks.count() == 0) return null;
-		long now = engine.currentTimestamp().longValue();
 		Map.Entry<Blob, ACell> oldest = null;
 		long oldestTs = Long.MAX_VALUE;
 		for (var entry : tasks.entrySet()) {
@@ -5424,9 +5411,9 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	/**
-	 * Whether a task that yielded has something that will bring it back:
-	 * a wake time, an open HITL ask or a call still running past its time
-	 * limit from its cycle, or input or messages that arrived during the cycle.
+	 * Whether a parked task has something that will bring it back: a wake
+	 * time, an open HITL ask or a call still running past its time limit from
+	 * its cycle, or input or messages waiting for it.
 	 */
 	private boolean yieldIsBacked(Agent agent, AString ownerDID, AString agentId,
 			Blob taskId, ACell row) {
@@ -5436,18 +5423,45 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	/**
-	 * What a task the cycle took settles with when the agent neither resolved
-	 * nor parked it (AGENT_TASKS.md §5.2): the cycle's reply is its result,
-	 * judged as {@code complete_task} judges one, and it fails when there is no
-	 * reply or a strict schema rejects it. Null when it needs nothing: it is
-	 * gone or resolved already, or something will bring it back
-	 * ({@link #yieldIsBacked}). Read from the merge's draft.
+	 * Settles or parks the task a cycle took and left open, in the merge's
+	 * draft (AGENT_TASKS.md §5.2, §6). It parks when something will bring it
+	 * back: a wake time the transition asks for or the cycle set, or one from
+	 * before the cycle still to come; an open ask or running call from its
+	 * cycle; input it has not been shown; or messages waiting in its session.
+	 * Otherwise the cycle's reply settles it. A wake already due when the
+	 * cycle took the task is what brought it here, so it brings nothing back.
+	 * Nothing happens to a task that is gone or resolved already.
 	 */
-	private AMap<AString, ACell> replyCompletion(Agent agent, AString ownerDID, AString agentId,
-			Blob taskId, ACell reply) {
+	private static void settleOpenTask(Agent agent, Map.Entry<Blob, ACell> picked, ACell reply,
+			boolean wakeRequested, long startTs) {
+		Blob taskId = picked.getKey();
 		ACell row = agent.getTasks().get(taskId);
-		if (row == null || agent.getResolved().get(taskId) != null) return null;
-		if (yieldIsBacked(agent, ownerDID, agentId, taskId, row)) return null;
+		if (row == null || agent.getResolved().get(taskId) != null) return;
+		boolean comesBack = wakeRequested
+			|| (RT.getIn(row, Fields.WAKE_TIME) instanceof CVMLong wake
+				&& !spentWake(wake, RT.getIn(picked.getValue(), Fields.WAKE_TIME), startTs))
+			|| agent.hasPendingFor(taskId)
+			|| Task.hasUnshownInput(row)
+			|| agent.hasSessionWorkFor(row);
+		if (comesBack) {
+			agent.tasks().task(taskId).park(Task.revision(picked.getValue()));
+		} else {
+			agent.resolveTask(taskId, -1, replyCompletion(taskId, row, reply));
+		}
+	}
+
+	/** Whether {@code wake} is the one that was due when the cycle starting at {@code startTs} took its thread: that cycle spent it. */
+	private static boolean spentWake(ACell wake, ACell wakeAtPick, long startTs) {
+		return wakeAtPick instanceof CVMLong picked && picked.longValue() <= startTs && picked.equals(wake);
+	}
+
+	/**
+	 * What a task settles with when its cycle ends with it neither resolved
+	 * nor parked and nothing to bring it back (AGENT_TASKS.md §5.2): the
+	 * cycle's reply is its result, judged as {@code complete_task} judges one,
+	 * and it fails when there is no reply or a strict schema rejects it.
+	 */
+	private static AMap<AString, ACell> replyCompletion(Blob taskId, ACell row, ACell reply) {
 		if (reply == null || (reply instanceof AString text && text.toString().isBlank())) {
 			return completion(taskId, row, Status.FAILED, Fields.ERROR, Strings.create(TASK_YIELDED_IDLE));
 		}

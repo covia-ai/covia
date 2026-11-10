@@ -1846,7 +1846,8 @@ public class TestAdapter extends AAdapter {
      * order: {@code hold:<gate>} waits at that
      * {@link TestGate}, then stops if the cycle was cancelled meanwhile;
      * {@code complete} and {@code failtask} resolve the task;
-     * {@code park:<ms>} parks it for that many milliseconds; {@code fail},
+     * {@code park:<ms>} parks it for that many milliseconds when the script is
+     * new input (a task brought back with nothing new replies instead); {@code fail},
      * {@code cannot} and {@code bug} fail the cycle as a failure of the work,
      * as one the agent cannot continue from, and as a venue fault; and
      * {@code yield} ends the cycle without a reply. Otherwise it replies with
@@ -1870,6 +1871,7 @@ public class TestAdapter extends AAdapter {
             }
         }
         boolean reply = true;
+        boolean fresh = taskInput != null || !saw.isEmpty();
         for (String word : String.valueOf(script).split("\\s+")) {
             if (word.startsWith("hold:")) {
                 TestGate gate = TEST_GATES.get(word.substring(5));
@@ -1880,7 +1882,7 @@ public class TestAdapter extends AAdapter {
                 continue;
             }
             if (word.startsWith("park:")) {
-                engine.jobs().invokeInternal("v/ops/agent/park-task",
+                if (fresh) engine.jobs().invokeInternal("v/ops/agent/park-task",
                     Maps.of(Fields.DELAY, CVMLong.create(Long.parseLong(word.substring(5)))), ctx).join();
                 continue;
             }
