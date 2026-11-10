@@ -2641,7 +2641,7 @@ public class LLMAgentAdapterTest {
 		var parked = chat.park(new ToolCycleEngine.ToolCall(Strings.create("p1"), TaskTools.PARK,
 			Maps.of(Fields.DELAY, 1000L), 0));
 		assertEquals(TaskTools.NO_TASK.formatted(TaskTools.PARK), parked.result().toString());
-		assertFalse(chat.settled(), "misusing a task control cannot settle unrelated work");
+		assertFalse(chat.resolved(), "misusing a task control cannot settle unrelated work");
 	}
 
 	@Test
@@ -2661,8 +2661,8 @@ public class LLMAgentAdapterTest {
 			Maps.of(Fields.DELAY, 60_000L), 0));
 		assertNull(parked.terminalStatus(), "a park is not terminal: the turn carries on to a reply");
 		assertTrue(parked.result().toString().startsWith(TaskTools.PARKED.split("%s")[0]));
-		assertTrue(preview.settled(), "the parked task is settled for this cycle, so the reply is not its result");
-		assertFalse(preview.outstanding());
+		assertFalse(preview.resolved(), "a parked task stays open");
+		assertFalse(preview.outstanding(), "but it is no longer the agent's to settle this cycle");
 		assertNull(preview.message(), "the parked task leaves the outstanding-task message");
 	}
 

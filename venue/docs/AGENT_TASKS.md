@@ -142,7 +142,7 @@ and says that a plain reply is the task's result.
 | | `llmagent` | `goaltree` |
 |-|------------|------------|
 | After a successful call | The loop carries on with every tool still available, until the model replies in text: at least one more inference. The task's result is what the call delivered and is also the cycle's response; the closing text goes only to the session's history | The frame ends with no further inference |
-| A final text reply with the task neither resolved nor parked | The run loop settles the task with it (§5.2), unless something will bring the task back (§6) | The runtime completes the task with it through `agent:complete-task`, even when something would bring the task back |
+| A final reply with the task neither resolved nor parked | The run loop settles the task with it (§5.2), unless something will bring the task back (§6) | The same: the root frame's reply |
 
 ## 6. Parking
 
@@ -157,11 +157,16 @@ of these will bring it back:
 - a call from its cycle still running past its time limit;
 - input or session messages that arrived during the cycle.
 
-The cycle's reply then goes to the session's conversation, not to the task.
+The cycle's reply then goes to the session's conversation, not to the task,
+and becomes the task Job's progress: where the work stands, which its
+requester sees as the task's working state (an A2A client, as its status
+message). A parked task goes to the back of the agent's queue, and is taken
+from there when it comes back ([AGENT_SESSIONS.md](./AGENT_SESSIONS.md)
+§5.5.2), so a task that keeps coming back cannot hold up the rest.
 
 `agent:park-task` takes `delay`, a positive number of milliseconds, and an
 optional `reason`, which becomes the task Job's progress for its requester to
-see. Like the §5.1 operations it takes no id and needs a task in scope. It
+see until the cycle's reply replaces it. Like the §5.1 operations it takes no id and needs a task in scope. It
 returns `{agentId, taskId, status: "STARTED", wakeTime}`, and the task comes
 back at `wakeTime`, or sooner if new input arrives for it. Brought back
 sooner, it keeps its revisit unless that cycle resolves it or parks it again,

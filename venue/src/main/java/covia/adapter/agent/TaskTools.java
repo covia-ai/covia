@@ -109,11 +109,6 @@ final class TaskTools {
 			return results != null && !results.isEmpty();
 		}
 
-		/** Whether the agent settled a task this cycle: resolved it, or parked it. A final reply is then not its result. */
-		boolean settled() {
-			return resolved() || !parked.isEmpty();
-		}
-
 		/** What was resolved this cycle: jobId → {status, output | error}; null when nothing. */
 		AMap<AString, ACell> results() {
 			return results;

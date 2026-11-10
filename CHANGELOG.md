@@ -33,7 +33,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Audit events `keyring.add`, `keyring.remove` and `keyring.use`.
 - `scheduler.maxConcurrency` bounds how many due scheduled events a venue starts at once, 2 by default (#671).
 - `hitl:expire`, which the venue alone invokes when a HITL request's timeout falls due (#671).
-- `agent:park-task` and the LLM agent tool `park_task` keep a task open and bring it back after a delay, or sooner when new input arrives for it.
+- `agent:park-task` and the LLM agent tool `park_task` keep a task open and bring it back after a delay, or sooner when new input arrives for it; the agent's reply after a park is the task's progress, its working state over A2A, and the task goes to the back of the agent's queue.
 
 ### Changed
 
@@ -86,7 +86,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - A user's `meta`, `generation`, `deleting` and `deleted` are venue bookkeeping that no path reads (#617).
 - `user:info` and `/users/{did}` show a user's `meta` to operators only, and `user:export` leaves it out.
 - A task an agent leaves open waits for a wake time, its HITL ask or a late tool call; with none, the agent's reply is the task's result, judged against a strict `responseSchema`, and a cycle with no reply fails it.
-- An agent takes one chat per cycle, with the messages queued ahead of it in its session, and its reply answers that chat alone; a task's cycle takes no chat, and a chat whose cycle ends without a reply fails.
+- An agent takes one chat per cycle, with the messages queued ahead of it in its session, and its reply answers that chat alone; a task's cycle takes no chat, and a chat whose cycle ends without a reply completes with no `response`.
+- A `goaltree` agent's task is settled as an `llmagent` agent's: its final reply completes the task only when nothing, such as an open HITL ask, will bring the task back.
 - An agent takes its work oldest first across tasks and chats; tasks used to go first.
 - A forced `agent:trigger` no longer presents a parked task.
 - An LLM agent's job results show an open HITL ask as still waiting, not as ended with no reason.

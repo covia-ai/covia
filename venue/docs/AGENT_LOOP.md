@@ -567,7 +567,7 @@ The contract between level 1 and level 2:
 | Field | Type | Description |
 |-------|------|-------------|
 | `state` | any | Updated user-defined state. Written back to the agent record; absent leaves it unchanged. |
-| `response` | any? | The reply on the session. It answers the chat the cycle took (§4.4), which fails when it is absent. A picked task the cycle left neither resolved nor parked takes it as its result (§4.6). |
+| `response` | any? | The reply on the session. It answers the chat the cycle took (§4.4); absent, the chat completes with no `response`. A picked task the cycle left neither resolved nor parked takes it as its result, and one that parked takes it as its progress (§4.6). |
 | `error` | any? | The cycle failed (see below). |
 | `turns` | vector? | Assistant and tool turns to append to the session's conversation, for a transition that does not write its frames itself. |
 | `wakeTime` | long? | When to wake the picked task or session again (§4.6). |
@@ -1110,9 +1110,10 @@ run's `finally` block.
      stays resolved until the write ends, and its request then settles and
      the task goes in one transaction.
 7. Release the callers of the requests the merge settled, and complete the
-   chat the cycle took, if any, with the reply; a cycle without a reply
-   fails it (`AgentAdapter.CHAT_UNANSWERED`). Both happen strictly AFTER
-   the merge, so external awaiters see timeline and state writes first.
+   chat the cycle took, if any, with the reply, or with no `response` when
+   there is none. A task the cycle parked takes the reply as its progress.
+   All of this happens strictly AFTER the merge, so external awaiters see
+   timeline and state writes first.
 8. Loop back to step 1. The top-of-loop check at step 2 is the sole
    exit gate.
 9. On failure, thrown or returned as the output's `error` (§3.4):
@@ -1246,8 +1247,9 @@ takes the oldest work: the oldest ready task, unless a session's oldest
 queued envelope arrived before it ([AGENT_SESSIONS.md §5.5.2](./AGENT_SESSIONS.md)).
 
 A cycle that leaves its picked task queued, neither completed nor failed and
-without a transition error, has left it open. The task is parked
-(`parked: true` on its row) when something will bring it back:
+without a transition error, has left it open, whatever its runtime. The task
+is parked (`parked: true` on its row, and `queued` where it then stands, at
+the back of the queue) when something will bring it back:
 
 - a `wakeTime` on the task still to come: set during the cycle by
   `agent:park-task`, returned by the transition, or set before the cycle and
@@ -1258,7 +1260,10 @@ without a transition error, has left it open. The task is parked
   tracked in the agent's `pending` index;
 - input or session messages that arrived during the cycle.
 
-The merge decides, in its transaction (`AgentAdapter.settleOpenTask`). With
+The merge decides, in its transaction (`AgentAdapter.settleOpenTask`). A
+task that parks takes the cycle's reply, if any, as its request Job's
+progress once the merge commits: where the work stands, which its requester
+sees as its working state. With
 none of these it settles the task with the cycle's reply: the task completes with the reply
 as its result, judged as `agent:complete-task` judges one, so a `strict` task
 whose reply does not conform fails with the reason; with no reply it fails

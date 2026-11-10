@@ -57,7 +57,7 @@ public class TasksTest {
 	public void testATaskThatIsNotQueuedAcceptsNothing() {
 		assertNull(task.getRecord());
 		assertFalse(task.appendContinuation(SESSION, envelope("m"), null));
-		assertFalse(task.park(0));
+		assertFalse(task.park(0, 1));
 		assertFalse(task.setWakeTime(5));
 		assertFalse(task.present());
 		assertNull(tasks.take(TASK, -1));
@@ -104,8 +104,9 @@ public class TasksTest {
 	public void testAParkedTaskWaitsForSomethingNew() {
 		queue();
 		task.present();
-		assertTrue(task.park(0));
+		assertTrue(task.park(0, 42));
 		assertTrue(task.isParked());
+		assertEquals(42, Task.queueKey(task.getID(), task.getRecord()), "a task that parks goes where it is told in the queue");
 		assertFalse(task.isReady(1000));
 
 		assertTrue(task.setWakeTime(500));
@@ -124,7 +125,7 @@ public class TasksTest {
 	public void testParkingAtAStaleRevisionDoesNothing() {
 		queue();
 		task.appendContinuation(SESSION, envelope("m"), null);
-		assertFalse(task.park(0));
+		assertFalse(task.park(0, 1));
 		assertFalse(task.isParked());
 	}
 

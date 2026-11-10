@@ -611,12 +611,11 @@ public class AgentCycleTest {
 	// ========== Chats ==========
 
 	@Test
-	public void aChatWhoseCycleEndsWithoutAReplyFails(TestInfo info) throws Exception {
+	public void aChatWhoseCycleEndsWithoutAReplyIsAnsweredWithNothing(TestInfo info) throws Exception {
 		RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));
 		Agent agent = stepAgent(owner, "yielding-chat");
 		Job first = chat(owner, "yielding-chat", null, "yield");
-		assertThrows(JobFailedException.class, () -> first.awaitResult(10_000));
-		assertEquals(AgentAdapter.CHAT_UNANSWERED, first.getErrorMessage(), "a chat expects the reply of its own cycle");
+		assertNull(reply(first), "saying nothing is the reply of the chat's own cycle, not a failure");
 		Blob sid = sessionOf(first);
 		assertEquals(Agent.SLEEPING, awaitRest(agent, owner));
 		assertEquals(0, pendingCount(agent, sid), "its message was taken");
@@ -707,6 +706,39 @@ public class AgentCycleTest {
 		assertEquals(Strings.create("fyi"), RT.getIn(agent.getTimeline().get(2), Fields.MESSAGES, 0L, Fields.MESSAGE));
 		assertTrue(Task.isParked(agent.getTasks().get(task.getID())), "its revisit still to come, it parks again");
 		assertFalse(task.isFinished());
+	}
+
+	@Test
+	public void aTaskThatParksGoesToTheBackOfTheQueue(TestInfo info) throws Exception {
+		RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));
+		String first = gateName("back-first");
+		String second = gateName("back-second");
+		try (TestAdapter.TestGate firstGate = TestAdapter.createGate(first);
+				TestAdapter.TestGate secondGate = TestAdapter.createGate(second)) {
+			Agent agent = stepAgent(owner, "back");
+			Job opening = chat(owner, "back", null, "hold:" + first + " reply");
+			awaitGate(firstGate);
+			// Queued behind the held cycle, in order: a task that parks, a chat
+			// that holds its cycle, and another chat
+			Job task = request(owner, "back", "park:3600000");
+			Job held = chat(owner, "back", null, "hold:" + second + " reply");
+			Job last = chat(owner, "back", null, "last");
+
+			firstGate.release();
+			awaitGate(secondGate);
+			assertTrue(Task.isParked(agent.getTasks().get(task.getID())), "the task ran first, and parked");
+			// New input brings the task back while the held chat's cycle runs
+			message(owner, "back", Maps.of(Fields.TASK_ID, hex(task), Fields.MESSAGE, "news"));
+
+			secondGate.release();
+			assertEquals(3, cycleOf(agent, last),
+				"the chat that arrived before the task parked goes first: the task went to the back");
+			assertEquals(Agent.SLEEPING, awaitRest(agent, owner));
+			assertEquals(5, timelineCount(agent));
+			assertNotNull(RT.getIn(agent.getTimeline().get(4), Fields.TASKS), "then the task, from the back");
+			assertNotNull(reply(opening));
+			assertNotNull(reply(held));
+		}
 	}
 
 	@Test

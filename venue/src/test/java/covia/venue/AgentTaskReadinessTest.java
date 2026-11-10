@@ -54,7 +54,7 @@ public class AgentTaskReadinessTest {
 	/** Shows the task its input and parks it, as a cycle that yields does. */
 	private void presentAndPark() {
 		startCycle();
-		agent.tasks().task(TASK).park(0);
+		agent.tasks().task(TASK).park(0, 1);
 		assertTrue(Task.isParked(row()));
 	}
 
@@ -107,7 +107,7 @@ public class AgentTaskReadinessTest {
 	@Test
 	public void parkingWithAStaleRevisionDoesNothing() {
 		startCycle();
-		agent.tasks().task(TASK).park(7);
+		agent.tasks().task(TASK).park(7, 1);
 		assertFalse(Task.isParked(row()));
 	}
 

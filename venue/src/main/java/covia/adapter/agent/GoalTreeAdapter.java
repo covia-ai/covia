@@ -636,11 +636,11 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		// the runtime reads config, never writes it.
 		AMap<AString, ACell> newState = Maps.empty();
 
-		// Lean transition output: emit {response | error}. When a task was
-		// picked this cycle, complete it explicitly via the venue op
-		// (agent:complete-task / agent:fail-task), which records the task as
-		// resolved on the agent. The run loop's merge hands it back and builds
-		// taskResults from it.
+		// Lean transition output: emit {response | error}. A task the agent
+		// resolved itself (complete_task / fail_task) has reached its job
+		// already. One it left open the run loop settles, as for every
+		// runtime: with the root frame's reply, unless something will bring
+		// it back, and a root frame that fails fails it (AGENT_TASKS.md §5).
 		//
 		// Sessioned (lattice-resident) runs do NOT emit frames: the session
 		// record is the single authoritative copy — every mutation already
@@ -648,14 +648,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		// merge out of frames entirely. Only the local-store paths
 		// (unsessioned / direct-invoke) return the stack in the output,
 		// where the caller is the only consumer.
-		// A task the agent resolved itself (complete_task / fail_task) has
-		// reached its job already; one still open when the root frame
-		// completes takes the frame's outcome — in this runtime a reply is
-		// the answer, where llmagent would yield (AGENT_SESSIONS.md §6.3).
 		boolean failed = "failed".equals(result.status());
-		if (tasks != null && tasks.count() > 0 && ctx.getTaskId() != null && !cycle.tasks().settled()) {
-			completeTaskViaVenueOp(ctx, failed, result.value());
-		}
 		AMap<AString, ACell> output = Maps.of(Agent.KEY_STATE, newState);
 		if (store instanceof FrameStore.LocalFrameStore) {
 			output = output.assoc(Fields.FRAMES, result.frames());
@@ -667,33 +660,6 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		}
 		// Per-call usage also rides each assistant turn in the frame conversation.
 		return CycleRecord.endInto(output);
-	}
-
-	/**
-	 * Completes (or fails) the in-scope task via the venue op. The framework
-	 * passes a cycle ctx scoped with both agentId and taskId; the op reads
-	 * those from the RequestContext, parks a completion envelope into the
-	 * framework's deferred-completion map, and removes the task entry.
-	 *
-	 * <p>Failures (agent missing, task gone, op rejected) propagate up to
-	 * {@link #processGoal}, which in turn propagates to {@link #invoke},
-	 * which fails the transition Job. The framework's outer catch then
-	 * fails the caller's pending task Job — without that, the caller would
-	 * block on {@code awaitResult} forever.</p>
-	 */
-	private void completeTaskViaVenueOp(RequestContext ctx, boolean failed, ACell value) {
-		AMap<AString, ACell> opInput;
-		AString opPath;
-		if (failed) {
-			AString errorStr = (value instanceof AString s) ? s
-				: Strings.create(value == null ? "Task failed" : value.toString());
-			opInput = Maps.of(Fields.ERROR, errorStr);
-			opPath = TaskTools.FAIL_TASK_OP;
-		} else {
-			opInput = (value != null) ? Maps.of(Fields.RESULT, value) : Maps.empty();
-			opPath = TaskTools.COMPLETE_TASK_OP;
-		}
-		engine.jobs().invokeInternal(opPath, opInput, ctx).join();
 	}
 
 	// ========== Frame execution ==========

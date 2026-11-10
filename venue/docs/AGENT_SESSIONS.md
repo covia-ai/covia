@@ -510,9 +510,9 @@ g/<agent>/sessions/<sid>/
 
 The rest waits for later cycles, so the messages before a chat are read with it, and every later chat sees them in the conversation. This preserves ordering per-session and prevents interleaving across sessions — conversation A can't disrupt conversation B's turn assembly.
 
-**The agent's queue.** Each cycle takes the oldest work the agent has: a ready task, or a session's queued envelopes, whichever arrived first, a task winning a tie. A task stands in the queue by its request Job id, a chat by its chat Job id, and a message by the `queued` value stamped on it at intake; all three come from the venue's one increasing sequence, so the queue is in order of arrival across tasks and sessions.
+**The agent's queue.** Each cycle takes the oldest work the agent has: a ready task, or a session's queued envelopes, whichever arrived first, a task winning a tie. A task stands in the queue by its request Job id, a chat by its chat Job id, and a message by the `queued` value stamped on it at intake; all three come from the venue's one increasing sequence, so the queue is in order of arrival across tasks and sessions. A task that parks ([AGENT_TASKS.md](./AGENT_TASKS.md) §6) goes to the back of the queue: `queued` on its row records where it stood when it parked, and it is taken from there when it is ready again, so a task that keeps coming back cannot hold up the rest.
 
-**Chats are not serialised.** A session may hold several `agent_chat` calls awaiting at once — a caller sending three messages before a reply arrives is never rejected. Each is a waiter: an envelope in `pending` carrying its chat Job id, and the Job, PENDING while the envelope is queued. Taking a chat's message makes its Job STARTED, and the reply of the cycle that took it completes it: one reply per chat, each to its own message. A cycle that ends without a reply fails its chat (`AgentAdapter.CHAT_UNANSWERED`), as one that fails does with the reason. Cancelling a chat Job stops that caller awaiting; the message was still delivered. `deleteSession` fails every waiter on the session. The in-memory waiter set is a convenience: the durable record is the envelope and the chat Job, and a chat whose envelope is still queued is registered again at boot ([AGENT_LOOP.md §6.1](./AGENT_LOOP.md)).
+**Chats are not serialised.** A session may hold several `agent_chat` calls awaiting at once — a caller sending three messages before a reply arrives is never rejected. Each is a waiter: an envelope in `pending` carrying its chat Job id, and the Job, PENDING while the envelope is queued. Taking a chat's message makes its Job STARTED, and the reply of the cycle that took it completes it: one reply per chat, each to its own message. A cycle that ends without a reply has said nothing, which is an outcome, not a failure: its chat completes with no `response`. Only a failed cycle fails its chat, with the reason. Cancelling a chat Job stops that caller awaiting; the message was still delivered. `deleteSession` fails every waiter on the session. The in-memory waiter set is a convenience: the durable record is the envelope and the chat Job, and a chat whose envelope is still queued is registered again at boot ([AGENT_LOOP.md §6.1](./AGENT_LOOP.md)).
 
 #### 5.5.3 Agent-to-agent messages (pipelines)
 
@@ -607,7 +607,7 @@ The framework around the transition:
 7. On adapter return:
    - Append adapter-emitted non-terminal `turns`, if any, to `frames[0].conversation`
    - If return value non-null → append one terminal turn to `frames[0].conversation`
-   - Complete the chat the cycle took, if any, with the return value, or fail it when the return value is null (§5.5.2)
+   - Complete the chat the cycle took, if any, with the return value, or with no `response` when it is null (§5.5.2)
    - If task picked and neither resolved nor parked: parked if something will bring it back, otherwise settled with the return value (§6.3)
    - If message picked: no completion concept (return value already emitted to history)
 8. On adapter throw → the picked task's Job or the chat the cycle took → FAILED with *technical* error (distinct from `fail_task` semantic failure), unless the agent cannot continue (§6.3)
@@ -617,7 +617,7 @@ Stateless adapters (pure extraction, one-shot classifiers) just invoke `agent:co
 
 ### 6.3 Settling a task, and timeouts
 
-Queue state is authoritative — the Job is the system of record (set by the completion op), the task entry is the in-flight instruction (removed by the completion op). For chat work, completion is determined by the return value: non-null completes the chat the cycle took, null fails it.
+Queue state is authoritative — the Job is the system of record (set by the completion op), the task entry is the in-flight instruction (removed by the completion op). For chat work, the return value completes the chat the cycle took; null completes it with no `response`.
 
 A task cycle that exits with its task neither completed nor failed leaves it open. The task stays in the `tasks` Index, parked, while something will bring it back — a wake time (`agent:park-task`, or one the transition returns), an open HITL ask from its cycle, or a tool call from its cycle still running past its time limit — and runs again when that arrives. With none of these, the return value is the task's result, and a cycle without one fails it ([AGENT_TASKS.md](./AGENT_TASKS.md) §5–§6, [AGENT_LOOP.md §4.6](./AGENT_LOOP.md)).
 

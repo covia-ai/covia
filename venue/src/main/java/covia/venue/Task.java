@@ -41,8 +41,8 @@ public final class Task extends ALatticeComponent<ACell>
 	private static final AString K_CONTINUATIONS = Strings.intern("continuations");
 	/** Number of original and continuation inputs already shown to cycles. */
 	private static final AString K_PRESENTED_INPUTS = Strings.intern("presentedInputs");
-	/** Set when the task yielded with something outstanding: it runs again only
-	 *  when something new arrives for it. */
+	/** Set when its cycle left the task open with something to bring it back:
+	 *  it runs again only when something new arrives for it. */
 	private static final AString K_PARKED = Strings.intern("parked");
 
 	private final Blob id;
@@ -178,20 +178,32 @@ public final class Task extends ALatticeComponent<ACell>
 	}
 
 	/**
-	 * Parks a task that yielded with something outstanding, so the run loop
-	 * passes it over until something new arrives for it.
+	 * Parks a task its cycle left open with something to bring it back, so the
+	 * run loop passes it over until something new arrives for it. It goes to
+	 * the back of the agent's queue: {@code queued} is where it then stands
+	 * ({@link #queueKey}).
 	 *
-	 * @param expectedRevision The revision the yield saw
+	 * @param expectedRevision The revision the cycle saw
+	 * @param queued The venue sequence value the task now stands at
 	 * @return whether it parked: false when the task is not queued or the
 	 *         revision moved, since a continuation arrived and the task is ready anyway
 	 */
-	public boolean park(long expectedRevision) {
+	public boolean park(long expectedRevision, long queued) {
 		return transact(draft -> {
 			AMap<AString, ACell> task = draft.getRecord();
 			if (task == null || revision(task) != expectedRevision) return false;
-			draft.cursor().set(task.assoc(K_PARKED, CVMBool.TRUE));
+			draft.cursor().set(task.assoc(K_PARKED, CVMBool.TRUE).assoc(Fields.QUEUED, CVMLong.create(queued)));
 			return true;
 		});
+	}
+
+	/**
+	 * Where a task stands in its agent's queue (AGENT_SESSIONS.md §5.5.2): where
+	 * it went when it last parked, else its request Job id's place
+	 * ({@link Session#queueKey(Blob)}), since it has stood there since it arrived.
+	 */
+	public static long queueKey(Blob id, ACell row) {
+		return (RT.getIn(row, Fields.QUEUED) instanceof CVMLong queued) ? queued.longValue() : Session.queueKey(id);
 	}
 
 	/**

@@ -167,7 +167,8 @@ A `SendMessage` carrying a `contextId` but no `taskId` is likewise an
 `agent:request` on that session — a new task, one cycle, its own reply — and
 a `taskId` continues that task. A plain reply completes the task
 (AGENT_TASKS.md §5.2), as A2A expects of a task-generating agent, and a task
-the agent parks stays `TASK_STATE_WORKING`. The per-agent surface never uses
+the agent parks stays `TASK_STATE_WORKING`, with the agent's reply after the
+park as its status message (AGENT_TASKS.md §6). The per-agent surface never uses
 `agent:chat`: a message without `taskId` is a new unit of work in A2A, which
 a task represents, with its own lifecycle, cancellation and resubscription,
 where a chat has only its reply. The front door is whatever

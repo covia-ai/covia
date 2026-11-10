@@ -146,9 +146,6 @@ public class AgentAdapter extends AAdapter {
 	public static final String TASK_YIELDED_IDLE = "The agent ended its turn with no reply, without completing, "
 		+ "failing or parking the task, and nothing it waits on (a person's answer, a running call or a wake time) "
 		+ "would resume it; inspect the agent timeline for what it did, and re-submit if appropriate";
-	/** Why a chat failed after the cycle that took it ended without a reply. */
-	public static final String CHAT_UNANSWERED = "The agent ended its turn without a reply to this message; "
-		+ "inspect the agent timeline for what it did, and send it again if appropriate";
 	/** Why a parked task failed at startup: what it waited on ran only in memory. */
 	public static final String TASK_WAIT_LOST = "The venue restarted while the task waited on a call that "
 		+ "had passed its time limit, so its result was lost; re-submit if appropriate";
@@ -4873,30 +4870,33 @@ public class AgentAdapter extends AAdapter {
 		// the cycle wholly done or not done at all. All of it only while the
 		// cycle's claim is current: a stopped cycle records its entry and
 		// changes nothing it took.
-		record Merge(AMap<AString, ACell> record, Handback handback, boolean stopped) {}
+		record Merge(AMap<AString, ACell> record, Handback handback, boolean stopped, boolean parked) {}
 		Map<Blob, WriteContext> writeContexts = new java.util.HashMap<>();
 		AMap<AString, ACell> cycleEntry = timelineEntry;
 		AVector<ACell> cycleTurns = turnsToAppend;
+		// Where a task that parks goes in the queue: to the back, as it is now
+		long parkedAt = (pickedTask != null && leanError == null) ? engine.jobs().nextSequence() : 0L;
 		Merge merge = engine.getVenueState().transact(draft -> {
 			Handback run = new Handback(callerDID, agentId, writeContexts);
 			Agent current = draft.users().at(callerDID).agentAt(agentId);
 			if (!current.holdsClaim(claim)) {
 				AMap<AString, ACell> record = (current.getRecord() == null) ? null : current.recordStoppedCycle(
 					cycleEntry.assoc(Fields.RESULT, Strings.create(TRANSITION_CANCELLED)).assoc(Fields.CANCELLED, CVMBool.TRUE));
-				return new Merge(record, run, true);
+				return new Merge(record, run, true, false);
 			}
+			boolean parked = false;
 			if (failsPickedTask) {
 				current.resolveTask(pickedTask.getKey(), -1, completion(pickedTask.getKey(),
 					pickedTask.getValue(), Status.FAILED, Fields.ERROR, leanError));
 			} else if (pickedTask != null && leanError == null) {
-				settleOpenTask(current, pickedTask, leanResponse, wakeRequested, startTs);
+				parked = settleOpenTask(current, pickedTask, leanResponse, wakeRequested, startTs, parkedAt);
 			}
 			AMap<AString, ACell> results = run.taskResults(current);
 			AMap<AString, ACell> record = current.mergeRunResult(snapshotState, newState, results,
 				(results == null) ? cycleEntry : cycleEntry.assoc(Fields.TASK_RESULTS, results),
 				pickedSessionBlob, cycleTurns, cycleTokens);
 			run.settleAll(draft, current);
-			return new Merge(record, run, false);
+			return new Merge(record, run, false, parked);
 		});
 		AMap<AString, ACell> merged = merge.record();
 		if (merge.stopped()) {
@@ -4975,24 +4975,30 @@ public class AgentAdapter extends AAdapter {
 		// caller sees the completed cycle's writes.
 		handback.afterCommit();
 
+		// A task the cycle parked is still being worked on, and the cycle's
+		// reply says where it stands: it becomes the task's progress, which
+		// its requester sees as its working state (AGENT_TASKS.md §6).
+		if (merge.parked() && leanResponse != null) {
+			Job request = engine.jobs().getJob(pickedTask.getKey());
+			if (request != null) {
+				AString text = RT.ensureString(leanResponse);
+				request.progress((text != null) ? text.toString() : JSON.print(leanResponse).toString(),
+					(text != null) ? null : leanResponse);
+			}
+		}
+
 		// Answer the chat this cycle took with its reply: a session's cycle
 		// takes at most one, and a task's none (Session.taken), so a chat's
 		// reply is its own. Same post-merge ordering as task completion. A
-		// cycle that ends without a reply leaves the chat unanswered, and it
-		// fails; a failed cycle fails it instead, below.
+		// cycle that ends without a reply has said nothing, which answers the
+		// chat with no response; a failed cycle fails it instead, below.
 		if (leanError == null && pickedSessionBlob != null) {
 			ConcurrentHashMap<Blob, Job> waiters = sessionChats(key, pickedSessionBlob);
 			if (waiters != null) {
 				for (Job chatJob : removeTakenChats(waiters).values()) {
 					if (cycleTokens != null) attachTokens(chatJob, cycleTokens);
-					if (leanResponse == null) {
-						chatJob.fail(CHAT_UNANSWERED);
-					} else {
-						chatJob.completeWith(Maps.of(
-							Fields.AGENT_ID,   agentId,
-							Fields.SESSION_ID, pickedSession,
-							Fields.RESPONSE,   leanResponse));
-					}
+					AMap<AString, ACell> answer = Maps.of(Fields.AGENT_ID, agentId, Fields.SESSION_ID, pickedSession);
+					chatJob.completeWith((leanResponse == null) ? answer : answer.assoc(Fields.RESPONSE, leanResponse));
 				}
 			}
 		}
@@ -5291,23 +5297,26 @@ public class AgentAdapter extends AAdapter {
 	 * Picks the oldest work in the agent's queue (AGENT_SESSIONS.md §5.5.2):
 	 * the oldest ready task ({@link Agent#isTaskReady}) or the session whose
 	 * oldest queued envelope is older, a task winning a tie. A task stands in
-	 * the queue by its request Job id and an envelope by its stamp
-	 * ({@link Session#queueKey}), both from the venue's one sequence, so the
-	 * queue is in order of arrival. Tasks are keyed by their ids, so the first
-	 * ready one in key order is the oldest.
+	 * the queue by its request Job id, or where it went when it last parked
+	 * ({@link Task#queueKey}), and an envelope by its stamp
+	 * ({@link Session#queueKey}), all from the venue's one sequence, so the
+	 * queue is in order of arrival.
 	 */
 	private static Pick pickNext(Agent agent, Index<Blob, ACell> tasks, long now) {
 		Map.Entry<Blob, ACell> task = null;
+		long taskKey = Long.MAX_VALUE;
 		for (var entry : (tasks == null) ? Index.<Blob, ACell>none().entrySet() : tasks.entrySet()) {
-			if (agent.isTaskReady(entry.getValue(), now)) {
+			if (!agent.isTaskReady(entry.getValue(), now)) continue;
+			long key = Task.queueKey(entry.getKey(), entry.getValue());
+			if (task == null || key < taskKey) {
 				task = entry;
-				break;
+				taskKey = key;
 			}
 		}
 		Blob sid = agent.oldestSessionWithPending();
 		if (sid != null && task != null) {
 			AVector<ACell> pending = Session.taken(agent.getSession(sid), true);
-			if (pending.count() == 0 || Session.queueKey(pending.get(0)) >= Session.queueKey(task.getKey())) sid = null;
+			if (pending.count() == 0 || Session.queueKey(pending.get(0)) >= taskKey) sid = null;
 		}
 		if (task == null || sid != null) {
 			return new Pick(null, (sid == null) ? null : Strings.create(sid.toHexString()));
@@ -5409,24 +5418,25 @@ public class AgentAdapter extends AAdapter {
 	 * cycle; input it has not been shown; or messages waiting in its session.
 	 * Otherwise the cycle's reply settles it. A wake already due when the
 	 * cycle took the task is what brought it here, so it brings nothing back.
+	 * A task that parks goes to the back of the queue, at {@code parkedAt}.
 	 * Nothing happens to a task that is gone or resolved already.
+	 *
+	 * @return whether the task parked
 	 */
-	private static void settleOpenTask(Agent agent, Map.Entry<Blob, ACell> picked, ACell reply,
-			boolean wakeRequested, long startTs) {
+	private static boolean settleOpenTask(Agent agent, Map.Entry<Blob, ACell> picked, ACell reply,
+			boolean wakeRequested, long startTs, long parkedAt) {
 		Blob taskId = picked.getKey();
 		ACell row = agent.getTasks().get(taskId);
-		if (row == null || agent.getResolved().get(taskId) != null) return;
+		if (row == null || agent.getResolved().get(taskId) != null) return false;
 		boolean comesBack = wakeRequested
 			|| (RT.getIn(row, Fields.WAKE_TIME) instanceof CVMLong wake
 				&& !spentWake(wake, RT.getIn(picked.getValue(), Fields.WAKE_TIME), startTs))
 			|| agent.hasPendingFor(taskId)
 			|| Task.hasUnshownInput(row)
 			|| agent.hasSessionWorkFor(row);
-		if (comesBack) {
-			agent.tasks().task(taskId).park(Task.revision(picked.getValue()));
-		} else {
-			agent.resolveTask(taskId, -1, replyCompletion(taskId, row, reply));
-		}
+		if (comesBack) return agent.tasks().task(taskId).park(Task.revision(picked.getValue()), parkedAt);
+		agent.resolveTask(taskId, -1, replyCompletion(taskId, row, reply));
+		return false;
 	}
 
 	/** Whether {@code wake} is the one that was due when the cycle starting at {@code startTs} took its thread: that cycle spent it. */

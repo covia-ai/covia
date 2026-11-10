@@ -288,7 +288,7 @@ public class A2AAgentCardTest {
 	/**
 	 * A per-agent send is a task, as A2A's task-generating agents work: an
 	 * agent's plain reply completes it, and a task the agent parks stays
-	 * working, its reason the status message (A2A_AGENTS.md).
+	 * working, the reply after the park its status message (A2A_AGENTS.md).
 	 */
 	@Test
 	public void aPlainReplyCompletesTheTaskAndAParkedTaskStaysWorking() throws Exception {
@@ -324,8 +324,8 @@ public class A2AAgentCardTest {
 		Task polled = extractTask(parse(post(parker,
 				rpcEnvelope("park-get", "GetTask", new TaskQueryParams(sent.id(), null)), jwt)));
 		assertEquals(TaskState.TASK_STATE_WORKING, polled.status().state());
-		assertTrue(JsonUtil.OBJECT_MAPPER.toJson(polled.status().message()).contains(TestAdapter.PARK_TEST_REASON),
-				"the park's reason is the status message: " + JsonUtil.OBJECT_MAPPER.toJson(polled.status()));
+		assertTrue(JsonUtil.OBJECT_MAPPER.toJson(polled.status().message()).contains(TestAdapter.PARK_TEST_REPLY),
+				"the reply after the park is the status message: " + JsonUtil.OBJECT_MAPPER.toJson(polled.status()));
 	}
 
 	@Test
