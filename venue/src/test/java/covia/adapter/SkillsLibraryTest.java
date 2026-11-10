@@ -202,7 +202,7 @@ public class SkillsLibraryTest {
 		// see the whole venue library; specialists use stable single-skill paths
 		// so they do not pay for an irrelevant 22-line index on every inference.
 		for (String t : new String[] {"minimal", "skilled", "reader", "worker", "analyst",
-				"manager", "goaltree", "full"}) {
+				"manager", "goaltree", "full", "admin"}) {
 			ACell asset = engine.resolvePath(Strings.create("v/agents/templates/" + t), ctx);
 			ACell config = RT.getIn(asset, "agent", "config");
 			AVector<ACell> sets = RT.ensureVector(RT.getIn(config, "skillsets"));
@@ -231,7 +231,7 @@ public class SkillsLibraryTest {
 			"subgoal", "complete", "fail", "compact", "context_load",
 			"context_unload", "more_tools", "skill_load");
 		for (String template : new String[] {"minimal", "skilled", "reader", "worker",
-				"analyst", "manager", "goaltree", "full"}) {
+				"analyst", "manager", "goaltree", "full", "admin"}) {
 			ACell asset = engine.resolvePath(
 				Strings.create("v/agents/templates/" + template), ctx);
 			AVector<ACell> tools = RT.ensureVector(
@@ -295,7 +295,7 @@ public class SkillsLibraryTest {
 		}
 
 		String[] templates = {"minimal", "skilled", "reader", "worker",
-			"analyst", "manager", "goaltree", "full"};
+			"analyst", "manager", "goaltree", "full", "admin"};
 		for (String template : templates) {
 			ACell meta = convex.core.util.JSON.parse(
 				readResource("/agent-templates/" + template + ".json"));

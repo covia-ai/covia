@@ -338,6 +338,9 @@ palette assembled for the current provider call.
 | `v/agents/templates/analyst` | `v/ops/covia/{inspect,read,list,slice,aggregate}`, schema ops; analysis skills | Evidence and schema analysis |
 | `v/agents/templates/goaltree` | Curated covia + grid + asset ops + all 7 harness tools | Goal-tree agent with full decomposition support |
 | `v/agents/templates/full` | Broad agent/asset/covia/schema/grid palette plus context tools, `more_tools` and complete skill index | Context-heavy development and exploration |
+| `v/agents/templates/admin` | HITL request/list, venue and user reads, agent and covia reads; HITL, user, adapter and capability skills; `caps: "unrestricted"` | Administration with all of its controller's authority, asking its owner through HITL before anything dangerous |
+
+**Templates give no authority, except `admin`.** An agent acts with its controller's authority narrowed by its `caps`, and an agent created without `caps` has none ([UCAN.md §5.4](./UCAN.md)). `reader` declares read caps and `admin` declares `"unrestricted"`; every other template declares none, so whoever creates from it chooses the agent's authority in a later layer, a list of capabilities or `"unrestricted"`. Without that, the agent still runs and answers, but its tool calls are refused.
 
 **Tools are opt-in, on every runtime.** Each template explicitly lists the tools it needs in `config.tools`; `defaultTools: true` adds only the deliberately small inspect/read/list pack. Harness tools are opt-in by name under the same rule: the shared ones (`context_load`, `context_unload`, `more_tools`, `skill_load`, `compact`) work on both runtimes, while hierarchy controls (`subgoal`, `complete`, `fail`) are goal-tree-specific. What a configuration implies without listing, and what each frame is offered, is in [AGENT_LOOP.md §3.6](./AGENT_LOOP.md#36-tool-palette). An agent that declares none of this has only the task tools.
 
@@ -450,7 +453,7 @@ the handoff caps are mandatory, not optional.
 
 ### Phase 3a: Ship standard templates ✓ DONE
 
-- Provider-neutral template assets in `venue/src/main/resources/agent-templates/` (minimal, skilled, reader, worker, manager, analyst, full, goaltree)
+- Provider-neutral template assets in `venue/src/main/resources/agent-templates/` (minimal, skilled, reader, worker, manager, analyst, full, goaltree, admin)
 - `AgentAdapter.installAgentTemplate(name, path)` materialises each to `v/agents/templates/<name>` at venue startup
 - No special-case lookup — `resolveConfigRef` uses standard `engine.resolvePath` which handles `v/agents/templates/<name>` like any other venue path
 - Templates are content-addressed assets and discoverable pins via `covia_list path=v/agents/templates`

@@ -40,9 +40,9 @@ Walk the user through these steps; each is idempotent.
 
 6. **Create the agent** (skip for an operation handler) from the module's template — it knows the venue's `[From: …]` element, per-DM and per-thread sessions, plain-text replies, memory and `slack:send`:
    ```
-   agent_create  agentId="SlackAssistant"  config=["v/agents/templates/slack", {"llmOperation": "v/ops/langchain/anthropic", "model": "claude-sonnet-5-5"}]
+   agent_create  agentId="SlackAssistant"  config=["v/agents/templates/slack", {"llmOperation": "v/ops/langchain/anthropic", "model": "claude-sonnet-5-5", "caps": "unrestricted"}]
    ```
-   The agent's owner needs an LLM key it may use (e.g. `ANTHROPIC_API_KEY` in its own secrets). Tell it who is who as memory, as the binding's user: `grid_run operation=v/ops/memory input={"command": "remember", "text": "Slack U0123ABC is Mike, my owner."}`. Slack supplies IDs, not names; the template trusts such a note only when the From element's sender matches.
+   `caps` decides what the agent may do, so ask the user: `"unrestricted"` is everything its owner can do, a list of `{with, can}` capabilities narrows it, and without caps it still replies but cannot use memory, receive files or send messages itself. The agent's owner needs an LLM key it may use (e.g. `ANTHROPIC_API_KEY` in its own secrets). Tell it who is who as memory, as the binding's user: `grid_run operation=v/ops/memory input={"command": "remember", "text": "Slack U0123ABC is Mike, my owner."}`. Slack supplies IDs, not names; the template trusts such a note only when the From element's sender matches.
 
 7. **Create the binding.** Preferred — one op, no restart; allow-listed senders come from you:
    ```

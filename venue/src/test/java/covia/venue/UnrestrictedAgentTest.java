@@ -86,6 +86,20 @@ public class UnrestrictedAgentTest {
 		assertFalse(unrestricted(alice.getUserDID(), "templated"));
 	}
 
+	/** The administrator template says {@code caps: "unrestricted"}; a later layer naming caps replaces it. */
+	@Test
+	public void theAdministratorTemplateMakesAnUnrestrictedAgent(TestInfo info) {
+		RequestContext alice = owner(info);
+		complete("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "admin",
+			Fields.CONFIG, "v/agents/templates/admin"), alice);
+		assertTrue(unrestricted(alice.getUserDID(), "admin"));
+		assertEquals(Config.UNRESTRICTED, shownCaps(alice, "admin"));
+
+		complete("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "narrowed",
+			Fields.CONFIG, Vectors.of(Strings.create("v/agents/templates/admin"), Maps.of(Config.CAPS, INVOKE_ONLY))), alice);
+		assertEquals(INVOKE_ONLY, shownCaps(alice, "narrowed"));
+	}
+
 	@Test
 	public void anOwnerMakesAnAgentUnrestrictedBySayingSo(TestInfo info) {
 		RequestContext alice = owner(info);

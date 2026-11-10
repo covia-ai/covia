@@ -41,7 +41,10 @@ agent_create
   ]
 ```
 
-Ask for the system prompt if not provided. Call `langchain_models` first when
+Ask for the system prompt if not provided, and for the agent's authority: add
+`caps` to that layer, a list of `{with, can}` capabilities or `"unrestricted"`
+for everything you can do. An agent created without caps still answers, but
+every tool call it makes is refused. Call `langchain_models` first when
 provider readiness matters; the template is provider-neutral and otherwise uses
 the venue default.
 
@@ -55,8 +58,12 @@ agent_create  agentId="Bob"  config="v/agents/templates/worker"
 
 Available: `minimal` (on-demand only), `skilled` (recommended lean default),
 `reader` (capability-enforced read-only), `worker` (data processing), `analyst`
-(evidence + schema), `manager` / `goaltree` (goal-tree planners), and `full`
-(broad, context-heavy core palette).
+(evidence + schema), `manager` / `goaltree` (goal-tree planners), `full`
+(broad, context-heavy core palette), and `admin` (unrestricted administrator
+that asks its owner through HITL before anything dangerous).
+
+Only `reader` and `admin` set `caps`; with any other template, pass `caps` in a
+later layer as above.
 
 Templates are provider-neutral. Compose the provider at create time so the agent
 never starts under an unintended backend:

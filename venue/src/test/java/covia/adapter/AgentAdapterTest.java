@@ -6098,12 +6098,12 @@ public class AgentAdapterTest {
 			RequestContext.of(ALICE_DID));
 		ACell result = job.awaitResult(5000);
 		assertNotNull(result);
-		assertEquals(CVMLong.create(8), RT.getIn(result, Strings.create("count")));
 		AVector<ACell> keys = RT.ensureVector(RT.getIn(result, Strings.create("keys")));
+		assertEquals(CVMLong.create(keys.count()), RT.getIn(result, Strings.create("count")));
 		java.util.Set<String> names = new java.util.HashSet<>();
 		for (long i = 0; i < keys.count(); i++) names.add(keys.get(i).toString());
 		assertTrue(names.containsAll(java.util.List.of(
-			"minimal", "skilled", "reader", "worker", "manager", "analyst", "full", "goaltree")));
+			"minimal", "skilled", "reader", "worker", "manager", "analyst", "full", "goaltree", "admin")));
 
 		// The catalog pin exposes ordinary metadata with a functional agent facet;
 		// it is not merely a flat anonymous config map.

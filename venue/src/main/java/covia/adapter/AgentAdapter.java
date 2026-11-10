@@ -656,6 +656,7 @@ public class AgentAdapter extends AAdapter {
 		installAgentTemplate("analyst",  "/agent-templates/analyst.json");
 		installAgentTemplate("full",     "/agent-templates/full.json");
 		installAgentTemplate("goaltree", "/agent-templates/goaltree.json");
+		installAgentTemplate("admin",    "/agent-templates/admin.json");
 	}
 
 	@Override

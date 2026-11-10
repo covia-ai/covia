@@ -93,9 +93,9 @@ The requester presents that token through the transport `ucans` grant channel wh
 
 ### `agent` — teach a resident Covia agent to use HITL
 
-Resident agents get HITL from the venue skill library (`v/skills/hitl`) — every standard template already declares `skills: ["w/skills", "v/skills"]`, so the skill appears in the agent's `[Skills]` index and `skill_load` activates the `hitl_request`/`hitl_list` tools mid-transition. Agents ask and watch; they **cannot** answer — `hitl_respond` is refused for an agent sub-principal, since resolving an ask issues grants under the inbox owner's authority (see `venue/docs/UCAN.md` §5.4). To make an agent actually use it:
+Resident agents get HITL from the venue skill library (`v/skills/agents/hitl`) — the general templates declare `skillsets: ["w/skills", "v/skills/root"]` and `manager` and `admin` name the skill itself, so it appears in the agent's `[Skills]` index and `skill_load` activates the `hitl_request`/`hitl_list` tools mid-transition. The `admin` template also pins it and is told to ask its owner before anything dangerous. Agents ask and watch; they **cannot** answer — `hitl_respond` is refused for an agent sub-principal, since resolving an ask issues grants under the inbox owner's authority (see `venue/docs/UCAN.md` §5.4). To make an agent actually use it:
 
-1. **Check the skill is visible** — `agent_context` (or ask the agent "what skills do you see?") should list `hitl` in the index. If the agent's config overrides `skills`, ensure `v/skills` is in the sources.
+1. **Check the skill is visible** — `agent_context` (or ask the agent "what skills do you see?") should list `hitl` in the index. If the agent's config overrides its skill sources, keep `v/skills/root` in `skillsets` or `v/skills/agents/hitl` in `skills`.
 2. **Instruct it in the system prompt** — add HITL policy to `config.systemPrompt` at creation (see `/agent` for creation mechanics):
 
    > "For any action that is irreversible, spends money, or exceeds your authority: load the `hitl` skill and send a `hitl_request` to your owner FIRST. Put the full decision context in the description. Batch related questions into one request. The request returns immediately; continue independent work and wait for the verified answer to arrive in this session. If rejected, accept it — never retry."
