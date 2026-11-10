@@ -2,7 +2,7 @@
 
 Design for User Controlled Authorisation Networks (UCAN) in Covia, using lattice data structures instead of IPLD/DAG-CBOR.
 
-**Status:** Draft — March 2026
+**Status:** in use. See section 6 for what is built and what is not.
 
 ---
 
@@ -163,8 +163,8 @@ Abilities follow UCAN's slash-delimited convention with no leading slash. `*` is
 | `key/sign/raw` | — | Sign content the caller chooses (`crypto:sign`, `crypto:jwt-sign`), which can produce any other signature |
 | `key/decrypt` | — | Decrypt with a held key (`crypto:decrypt`) |
 | `key/derive` | — | Derive keys from a held phrase into its holder's keyring (`crypto:derive-key`) |
-| `ucan/delegate` | — | Sub-delegate capabilities |
-| `ucan/revoke` | — | Revoke a UCAN |
+
+To pass on part of a grant you hold, sign a narrower grant with your own key and attach yours as proof. Through the venue (`ucan:issue`), you need a `grant/<ability>` right to grant on someone else's data. Agents cannot pass on grants. A grant cannot be withdrawn before it expires.
 
 **Attenuation rule:** An ability is a valid attenuation of a parent if it is equal to or has the parent as a prefix. `crud/read` attenuates `crud`. `*` proves any ability.
 
@@ -775,7 +775,6 @@ record is an entry no grant of theirs covers.
 | `asset:get` | `{ with: "<ref>", can: "asset/read" }` or `crud/read` over the same hash; a path is read as data ([GRID_LATTICE_DESIGN.md](GRID_LATTICE_DESIGN.md) §4.6) |
 | `asset:list` | `{ with: "<any>", can: "asset/read" }` |
 | Grid operation invoke | `{ with: "/o/<op>", can: "invoke" }` |
-| Sub-delegation | `{ with: "<path>", can: "ucan/delegate" }` |
 
 **Target-side admission (#447).** Before proofs are consulted, the two "talk"
 rows — `agent/request` (`agent:request`, `agent:trigger`) and `agent/message`
@@ -1491,20 +1490,15 @@ the authentication channel. The three concerns never infer one another:
   so diagnostics match enforcement
 - Verification remains grant-agnostic — `grant/…` binds production only
 
-### Phase C2: Delegation Chains
+### Phase C2: Delegation Chains (partly done)
 
-- Proof chain walking (`prf` field with embedded parent tokens)
-- Attenuation validation at each chain link
-- Revocation support (signed records referencing UCAN hash)
+- ✓ Proof chains are checked at every link
+- ✓ Each link can only narrow access
+- Not built: withdrawing grants (see §4.6)
 
 ### Phase C2a: Agent Capability Scoping (Model A)
 
-- `caps` field in agent create specifies attenuations
-- Venue issues scoped UCAN at agent creation (issuer = user, audience = agent DID)
-- Token stored in agent record
-- Level 2 wraps tool call RequestContext with agent's token
-- CoviaAdapter enforces write/read restrictions via token verification
-- Own-namespace writes become capability-gated (not just namespace-prefixed)
+C2a done, in a different way: an agent's `caps` limit it at every action. No token is issued.
 
 ### Phase C2b: Independent Agent Identity (Model B)
 

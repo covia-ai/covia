@@ -28,7 +28,7 @@
 
 ## What is Covia?
 
-Covia is an open-source runtime for **federated AI orchestration**. You run a **venue** — a grid node that hosts *operations* (executable, self-describing capabilities) and keeps an immutable, content-addressed record of every job. Venues talk to each other, so a workflow can call an operation on a partner's venue, in another cloud or jurisdiction, while the data stays where it's governed and only results cross the boundary.
+Covia is an open-source runtime for **federated AI orchestration**. You run a **venue** — a grid node that hosts *operations* (executable, self-describing capabilities) and keeps a permanent record of every job that changes something. Venues talk to each other, so a workflow can call an operation on a partner's venue, in another cloud or jurisdiction, while the data stays where it's governed and only results cross the boundary.
 
 It's built on the [Convex](https://github.com/Convex-Dev/convex) lattice platform for decentralised, cryptographically-verifiable state, and it speaks the protocols your tools already use: **REST**, **MCP**, **A2A**, and **DID**.
 
@@ -130,15 +130,17 @@ print(result)  # {'schema': {'type': 'object', ...}}
 A venue is a single self-contained server. With Docker:
 
 ```bash
-docker run --rm -p 127.0.0.1:8080:8080 ghcr.io/covia-ai/covia:latest
+docker run --rm -p 127.0.0.1:8080:8080 ghcr.io/covia-ai/covia:0.11.0
 ```
+
+`:latest` is the newest unreleased build.
 
 The default venue has a read-only anonymous capability scope. For a throwaway,
 invoke-capable local venue, select the image's explicit ephemeral test config:
 
 ```bash
 docker run --rm -p 127.0.0.1:8080:8080 \
-  ghcr.io/covia-ai/covia:latest /app/config/docker-local.json
+  ghcr.io/covia-ai/covia:0.11.0 /app/config/docker-local.json
 ```
 
 That config grants unrestricted anonymous capabilities and deletes its state on
