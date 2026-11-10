@@ -30,6 +30,7 @@ import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.Agent;
 import covia.venue.Engine;
+import covia.venue.Models;
 import covia.venue.RequestContext;
 
 /**
@@ -528,7 +529,7 @@ public final class ContextAssembler {
 	private static final AString K_REMAINING = Strings.intern("remaining");
 	private static final AString K_MARKS     = Strings.intern("marks");
 	private static final AString K_LABELS    = AbstractLLMAdapter.OPT_LABELS;
-	private static final AString K_TOOL_CALLING = AbstractLLMAdapter.OPT_TOOL_CALLING;
+	private static final AString K_TOOL_CALLING = Models.OPT_TOOL_CALLING;
 	private static final AString K_PALETTE       = Strings.intern("palette");
 	private static final AString K_LOADS         = Fields.LOADS;
 	private static final AString K_UNAVAILABLE   = Strings.intern("unavailable");

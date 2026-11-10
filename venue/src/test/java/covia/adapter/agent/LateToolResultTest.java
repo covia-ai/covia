@@ -33,6 +33,7 @@ import covia.venue.Task;
 import covia.venue.AgentWatch;
 import covia.venue.Config;
 import covia.venue.Engine;
+import covia.venue.Models;
 import covia.venue.RequestContext;
 import covia.venue.TestEngine;
 import covia.venue.User;
@@ -86,8 +87,8 @@ public class LateToolResultTest {
 	public void aCallPastItsLimitDeliversItsOutcomeToTheSession(TestInfo info) {
 		AString did = TestEngine.uniqueDID(info);
 		RequestContext owner = RequestContext.of(did);
-		createAgent(engine, owner, "late-step", "v/test/ops/llm", AbstractLLMAdapter.K_MODEL_PROFILE,
-			Maps.of(AbstractLLMAdapter.K_OPTIONS, Maps.of(AbstractLLMAdapter.OPT_LATE_TOOL_RESULTS,
+		createAgent(engine, owner, "late-step", "v/test/ops/llm", Models.K_MODEL_PROFILE,
+			Maps.of(Models.K_OPTIONS, Maps.of(AbstractLLMAdapter.OPT_LATE_TOOL_RESULTS,
 				AbstractLLMAdapter.LATE_RESULTS_TOOL)));
 		User user = engine.getVenueState().users().user(did);
 		Agent agent = user.agent("late-step");

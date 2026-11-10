@@ -301,10 +301,12 @@ operation; authored assets should follow the same convention:
 | `budget.bytes`, `toolCalling`, `labels`, tags and model-specific default inputs | model asset |
 | this agent's assembly overrides (`options`, `budget`) | `config.modelProfile` |
 
-The existing pure map helpers remain useful for legacy provider metadata, but
-following `model.provider` requires the engine, caller context and resolved
-operation asset; it is not added implicitly to the static
-`modelProfile(meta, modelId, config)` signature.
+`Models.resolve` follows `model.provider` through a lookup its caller
+supplies: a cycle resolves each reference through the engine under its
+context, and an agent deciding whether it can take tasks through its owner
+and venue ([GRID_LATTICE_DESIGN.md](./GRID_LATTICE_DESIGN.md) §3.3), so both
+reach the same profile. A profile with `toolCalling: false` serves chat but
+no tasks ([AGENT_TASKS.md](./AGENT_TASKS.md) §5.3).
 
 ### 5.2 Defaults at dispatch
 

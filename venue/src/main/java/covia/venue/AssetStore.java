@@ -72,6 +72,18 @@ public class AssetStore extends IndexComponent<ABlob, AVector<ACell>> implements
 		return id;
 	}
 
+	/** The metadata of the asset with {@code id}, or null when this store holds none. */
+	public AMap<AString, ACell> meta(Hash id) {
+		AVector<ACell> record = get(id);
+		if (record == null) return null;
+		if (record.count() > POS_META) {
+			AMap<AString, ACell> meta = RT.ensureMap(record.get(POS_META));
+			if (meta != null) return meta;
+		}
+		AString json = RT.ensureString(record.get(POS_JSON));
+		return (json == null) ? null : RT.ensureMap(JSON.parse(json));
+	}
+
 	/**
 	 * Gets all assets as a map from Hash to record vector.
 	 *

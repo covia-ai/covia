@@ -38,6 +38,7 @@ import covia.exception.UnavailableException;
 import covia.grid.Asset;
 import covia.grid.Status;
 import covia.venue.Engine;
+import covia.venue.Models;
 import covia.venue.RequestContext;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.agent.tool.ToolSpecification;
@@ -232,26 +233,26 @@ public class LangChainAdapter extends AAdapter {
 
 			AMap<AString, ACell> executable = withModelDefault(readJsonMap(resource.toString()), defaultModel);
 			String providerOp = "v/ops/langchain/" + provider;
-			AMap<AString, ACell> providerFacet = AbstractLLMAdapter.modelFacet(executable)
+			AMap<AString, ACell> providerFacet = Models.modelFacet(executable)
 				.assoc(Fields.DEFAULT, modelPath(provider, defaultModel))
 				.assoc(K_RECOMMENDED, modelPaths(provider, RT.ensureMap(spec.get(K_RECOMMENDED))));
 			// Provider+model calls and caller model overrides use the same defaults
 			// as directly invoked presets; definitions remain the single source.
-			AMap<AString, ACell> byModel = RT.ensureMap(providerFacet.get(AbstractLLMAdapter.K_BY_MODEL));
+			AMap<AString, ACell> byModel = RT.ensureMap(providerFacet.get(Models.K_BY_MODEL));
 			if (byModel == null) byModel = Maps.empty();
 			for (long j = 0; j < models.count(); j++) {
 				ACell modelSpec = models.get(j);
 				AString id = RT.ensureString(RT.getIn(modelSpec, K_ID));
-				AMap<AString, ACell> options = RT.ensureMap(RT.getIn(modelSpec, AbstractLLMAdapter.K_OPTIONS));
+				AMap<AString, ACell> options = RT.ensureMap(RT.getIn(modelSpec, Models.K_OPTIONS));
 				if (id != null && options != null) {
 					AMap<AString, ACell> old = RT.ensureMap(byModel.get(id));
 					byModel = byModel.assoc(id, layerModelProfile(old == null ? Maps.empty() : old,
-						Maps.of(AbstractLLMAdapter.K_OPTIONS, options)));
+						Maps.of(Models.K_OPTIONS, options)));
 				}
 			}
-			providerFacet = providerFacet.assoc(AbstractLLMAdapter.K_BY_MODEL, byModel);
+			providerFacet = providerFacet.assoc(Models.K_BY_MODEL, byModel);
 			AMap<AString, ACell> providerMeta = executable.assoc(
-				AbstractLLMAdapter.K_MODEL_FACET, providerFacet);
+				Models.K_MODEL_FACET, providerFacet);
 			installAsset("langchain/" + provider, providerMeta);
 
 			for (long j = 0; j < models.count(); j++) {
@@ -261,9 +262,9 @@ public class LangChainAdapter extends AAdapter {
 					"Invalid model at providers[" + i + "].models[" + j + "]");
 				AMap<AString, ACell> facet = modelSpecificProfile(executable, id);
 				AMap<AString, ACell> declaredFacet = Maps.empty();
-				ACell options = modelSpec.get(AbstractLLMAdapter.K_OPTIONS);
+				ACell options = modelSpec.get(Models.K_OPTIONS);
 				ACell budget = modelSpec.get(AbstractLLMAdapter.K_BUDGET);
-				if (options != null) declaredFacet = declaredFacet.assoc(AbstractLLMAdapter.K_OPTIONS, options);
+				if (options != null) declaredFacet = declaredFacet.assoc(Models.K_OPTIONS, options);
 				if (budget != null) declaredFacet = declaredFacet.assoc(AbstractLLMAdapter.K_BUDGET, budget);
 				facet = layerModelProfile(facet, declaredFacet)
 					.assoc(K_ID, id)
@@ -277,7 +278,7 @@ public class LangChainAdapter extends AAdapter {
 						Strings.create(provider + " / " + id)))
 					.assoc(Fields.DESCRIPTION, valueOr(modelSpec.get(Fields.DESCRIPTION), Strings.create(
 						"Model preset for " + id + " through the " + provider + " provider operation.")))
-					.assoc(AbstractLLMAdapter.K_MODEL_FACET, facet);
+					.assoc(Models.K_MODEL_FACET, facet);
 				installModel(provider + "/" + id, modelMeta);
 			}
 		}
@@ -318,7 +319,7 @@ public class LangChainAdapter extends AAdapter {
 	private static AMap<AString, ACell> modelSpecificProfile(AMap<AString, ACell> providerMeta,
 			AString modelId) {
 		AMap<AString, ACell> byModel = RT.ensureMap(
-			AbstractLLMAdapter.modelFacet(providerMeta).get(AbstractLLMAdapter.K_BY_MODEL));
+			Models.modelFacet(providerMeta).get(Models.K_BY_MODEL));
 		AMap<AString, ACell> profile = (byModel != null) ? RT.ensureMap(byModel.get(modelId)) : null;
 		return (profile != null) ? profile : Maps.empty();
 	}
@@ -392,7 +393,7 @@ public class LangChainAdapter extends AAdapter {
 			AString modelParam = RT.ensureString(RT.getIn(input, "model"));
 			modelName = (modelParam != null) ? modelParam.toString() : null;
 		}
-		final AbstractLLMAdapter.ResolvedModel resolvedModel;
+		final Models.Resolved resolvedModel;
 		try {
 			resolvedModel = AbstractLLMAdapter.resolveModel(engine, Asset.fromMeta(meta),
 				(modelName != null) ? Strings.create(modelName) : null, null, ctx);
@@ -1075,17 +1076,17 @@ public class LangChainAdapter extends AAdapter {
 
 	private AMap<AString, ACell> providerEntry(String providerName,
 			List<ModelDefinition> definitions, RequestContext ctx) {
-		AMap<AString, ACell> firstFacet = AbstractLLMAdapter.modelFacet(definitions.get(0).meta);
-		AString providerRef = RT.ensureString(firstFacet.get(AbstractLLMAdapter.K_MODEL_PROVIDER));
+		AMap<AString, ACell> firstFacet = Models.modelFacet(definitions.get(0).meta);
+		AString providerRef = RT.ensureString(firstFacet.get(Models.K_MODEL_PROVIDER));
 		Asset provider = (providerRef != null) ? engine.resolveAsset(providerRef, ctx) : null;
 		AMap<AString, ACell> providerMeta = (provider != null) ? provider.meta() : definitions.get(0).meta;
-		AMap<AString, ACell> providerFacet = AbstractLLMAdapter.modelFacet(providerMeta);
+		AMap<AString, ACell> providerFacet = Models.modelFacet(providerMeta);
 
 		AVector<ACell> ids = Vectors.empty();
 		AVector<ACell> entries = Vectors.empty();
 		for (ModelDefinition definition : definitions) {
-			AMap<AString, ACell> facet = AbstractLLMAdapter.modelFacet(definition.meta);
-			AString id = RT.ensureString(facet.get(AbstractLLMAdapter.K_MODEL_ID));
+			AMap<AString, ACell> facet = Models.modelFacet(definition.meta);
+			AString id = RT.ensureString(facet.get(Models.K_MODEL_ID));
 			if (id == null) continue;
 			String canonical = "v/models/" + providerName + "/" + id;
 			String primary = definition.paths.contains(canonical) ? canonical : definition.paths.get(0);
@@ -1099,9 +1100,9 @@ public class LangChainAdapter extends AAdapter {
 			try {
 				AMap<AString, ACell> profile = AbstractLLMAdapter.resolveModel(engine,
 					Asset.fromMeta(definition.meta), null, null, ctx).executionProfile();
-				ACell options = profile.get(AbstractLLMAdapter.K_OPTIONS);
+				ACell options = profile.get(Models.K_OPTIONS);
 				ACell budget = profile.get(AbstractLLMAdapter.K_BUDGET);
-				if (options != null) item = item.assoc(AbstractLLMAdapter.K_OPTIONS, options);
+				if (options != null) item = item.assoc(Models.K_OPTIONS, options);
 				if (budget != null) item = item.assoc(AbstractLLMAdapter.K_BUDGET, budget);
 			} catch (RuntimeException e) {
 				// The definition remains discoverable even if its provider is broken.
@@ -1132,7 +1133,7 @@ public class LangChainAdapter extends AAdapter {
 			Strings.intern("ready"), CVMBool.create(ready),
 			K_MODELS, ids,
 			Strings.intern("entries"), entries,
-			AbstractLLMAdapter.K_MODEL_FACET, providerFacet);
+			Models.K_MODEL_FACET, providerFacet);
 		if (keySecret != null) entry = entry.assoc(Strings.intern("keySecret"), keySecret);
 		if (defaultPath != null) {
 			entry = entry.assoc(Fields.DEFAULT, defaultPath)

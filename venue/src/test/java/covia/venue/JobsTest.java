@@ -43,7 +43,7 @@ public class JobsTest {
 
 	private static User user(Supplier<CVMLong> clock) {
 		return new User(VenueContext.create(clock), Cursors.<ACell>root(Maps.empty()),
-			Strings.create("did:key:jobs"));
+			Strings.create("did:key:jobs"), null);
 	}
 
 	private static ACell read(ALatticeComponent<?> component) {

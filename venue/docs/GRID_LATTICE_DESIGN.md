@@ -108,6 +108,33 @@ Validity follows only the path's shape, so the refusal comes before any
 access check and says nothing about the data. `AddressingTest` covers this
 section.
 
+### 3.3 A Component's References
+
+Some of what the venue decides about a component depends on data above it.
+Whether an agent can take tasks depends on the model its config names, which
+its owner or the venue defines ([AGENT_TASKS.md](AGENT_TASKS.md) §5.3). Such
+a component reaches its parent through a link it is given when it is built:
+the venue gives itself to `Users` and to each `User`, and a `User` gives
+itself to each `Agent` it builds. A component rebound to another cursor keeps
+its parent, so one built from a transaction's draft of the venue sees that
+draft. Links are added where a decision needs one, not to every component.
+
+`lookup(ref)` resolves a reference as a config holds it, each component
+resolving what it holds and passing the rest to its parent:
+
+| Component | Looks up |
+|-----------|----------|
+| `Agent` | `n/`, in its own workspace |
+| `User` | its own namespaces, and a DID URL or asset hash naming them |
+| `VenueState` | `v/`, the venue's assets by hash, and a DID URL naming either by the DID the venue goes by |
+
+A reference in an operation's form resolves as `Engine.resolveAsset`
+resolves it locally: `<venue DID>/v/…` is the venue's own definition, and a
+bare hash or `a/<hash>` the owner's asset, else the catalog's. Another user's
+data and another venue's names look up nothing. A lookup checks no authority
+and changes nothing; it serves a decision whose outcome is all a caller sees.
+`AgentLookupTest` covers this section.
+
 ---
 
 ## 4. Namespaces

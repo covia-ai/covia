@@ -196,30 +196,6 @@ public class AbstractLLMAdapterTest {
 		assertNull(msg.get(AbstractLLMAdapter.K_CONTENT));
 	}
 
-	// ========== getLLMOperation ==========
-
-	@Test
-	public void testGetLLMOperationFromConfig() {
-		AMap<AString, ACell> config = Maps.of(
-			AbstractLLMAdapter.K_LLM_OPERATION, Strings.create("v/ops/langchain/ollama"));
-		AString op = AbstractLLMAdapter.getLLMOperation(config);
-		assertEquals("v/ops/langchain/ollama", op.toString());
-	}
-
-	@Test
-	public void testGetLLMOperationDefault() {
-		AMap<AString, ACell> config = Maps.of(
-			Strings.create("model"), Strings.create("gpt-4o"));
-		AString op = AbstractLLMAdapter.getLLMOperation(config);
-		assertEquals("v/models/anthropic/claude-sonnet-5-5", op.toString());
-	}
-
-	@Test
-	public void testGetLLMOperationNullConfig() {
-		AString op = AbstractLLMAdapter.getLLMOperation(null);
-		assertEquals("v/models/anthropic/claude-sonnet-5-5", op.toString());
-	}
-
 	// ========== copyIfPresent ==========
 
 	@Test

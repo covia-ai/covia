@@ -3037,12 +3037,7 @@ public class Engine {
 	}
 
 	public AString getDIDString() {
-		AString s=config.getDID();
-		if (s==null) {
-			AString key=Multikey.encodePublicKey(keyPair.getAccountKey());
-			s=Strings.create("did:key:"+key);
-		}
-		return s;
+		return config.venueDID(keyPair.getAccountKey());
 	}
 
 	/**

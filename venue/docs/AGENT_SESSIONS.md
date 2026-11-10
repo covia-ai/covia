@@ -200,7 +200,7 @@ agent_trigger   agentId=X  sessionId=Y?                 — wake the agent. No p
 
 | Op | Queue | Caller waits? | Completion semantics |
 |----|-------|---------------|----------------------|
-| `agent_request` | `tasks` Index | yes (Job) | Agent completes or fails the task (`complete_task` / `fail_task`; a goaltree root reply completes it), or yields: the task waits while a HITL ask, a late tool call or a wake time will bring it back, and fails otherwise (§6.3) |
+| `agent_request` | `tasks` Index | yes (Job) | Agent completes or fails the task (`complete_task` / `fail_task`; a goaltree root reply completes it), or yields: the task waits while a HITL ask, a late tool call or a wake time will bring it back, and fails otherwise (§6.3). Refused by an agent that cannot take tasks ([AGENT_TASKS.md](./AGENT_TASKS.md) §5.3) |
 | `agent_chat` | session `pending` (as an awaiting waiter) | yes (Job) | Agent's next `response` on this session completes every chat whose message a cycle has taken (§5.5.2). Not serialised — several may await one session. Typically continues an existing session (`sessionId` supplied); mints a new one on first contact |
 | `agent_message` | session `pending` | no | Agent processes whenever; any `response` lands in session history |
 | `agent_trigger` | none | block on cycle quiesce/yield | **Fallback kick** — nudges the run loop, no payload, no result-await. Callers wanting output should wait on a task/chat Job from `agent_request` / `agent_chat`. |

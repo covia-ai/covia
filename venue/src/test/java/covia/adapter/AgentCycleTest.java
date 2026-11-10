@@ -30,6 +30,7 @@ import covia.grid.Status;
 import covia.venue.Agent;
 import covia.venue.Engine;
 import covia.venue.JobManager;
+import covia.venue.Models;
 import covia.venue.RequestContext;
 import covia.venue.TestEngine;
 
@@ -344,9 +345,9 @@ public class AgentCycleTest {
 		Hash preset = engine.storeAsset(JSON.printPretty(Maps.of(
 			Fields.NAME, "Model without a provider",
 			Fields.OPERATION, Maps.of(Fields.ADAPTER, "test:failllm"),
-			AbstractLLMAdapter.K_MODEL_FACET, Maps.of(
-				AbstractLLMAdapter.K_MODEL_ID, "absent-model",
-				AbstractLLMAdapter.K_MODEL_PROVIDER, "v/test/ops/absent"))), null);
+			Models.K_MODEL_FACET, Maps.of(
+				Models.K_MODEL_ID, "absent-model",
+				Models.K_MODEL_PROVIDER, "v/test/ops/absent"))), null);
 		String ref = "a/" + preset.toHexString();
 		Agent agent = create(owner, "no-provider", Maps.of(
 			Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", ref));

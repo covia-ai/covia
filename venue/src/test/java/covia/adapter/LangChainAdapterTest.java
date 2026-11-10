@@ -2222,9 +2222,9 @@ public class LangChainAdapterTest {
 		assertEquals("multiple", covia.adapter.agent.AbstractLLMAdapter.modelOptionText(
 			router.meta(), Strings.create("google/gemini-3.5-flash"), Strings.create("systemMessages")));
 		// byModel never leaks into a resolved profile.
-		assertNull(covia.adapter.agent.AbstractLLMAdapter.modelProfile(
+		assertNull(covia.venue.Models.modelProfile(
 			router.meta(), Strings.create("google/gemini-3.5-flash"))
-			.get(covia.adapter.agent.AbstractLLMAdapter.K_BY_MODEL));
+			.get(covia.venue.Models.K_BY_MODEL));
 	}
 
 	/** Overrides merge one key deep: an option override keeps its siblings. */

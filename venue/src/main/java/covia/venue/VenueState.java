@@ -21,6 +21,7 @@ import convex.core.data.Maps;
 import convex.core.data.AccountKey;
 import convex.core.data.Index;
 import convex.core.data.Keyword;
+import convex.core.data.Hash;
 import convex.core.data.MapEntry;
 import convex.core.data.Path;
 import convex.core.data.SignedData;
@@ -30,14 +31,17 @@ import convex.core.lang.RT;
 import convex.core.store.AStore;
 import convex.core.store.MemoryStore;
 import convex.lattice.LatticeHost;
+import convex.lattice.NoSuchPathException;
 import convex.lattice.ALatticeComponent;
 import convex.lattice.TransactionalComponent;
 import convex.lattice.OwnedMap;
 import convex.lattice.Timestamped;
 import convex.lattice.cursor.AForkableCursor;
 import convex.lattice.cursor.Cursors;
+import covia.adapter.CoviaAdapter;
 import covia.lattice.Covia;
 import covia.lattice.CoviaPath;
+import covia.lattice.Namespace;
 import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.exception.NotFoundException;
@@ -88,7 +92,7 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 	public static final String INVALID_STATE_VERSION = "Adapter state version must not be negative: ";
 	@Override
 	public VenueState rebind(AForkableCursor<ACell> cursor) {
-		return new VenueState(cursor, ownerKey, context);
+		return new VenueState(cursor, ownerKey, did, context);
 	}
 
 	@Override
@@ -97,6 +101,8 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 	}
 
 	private final AccountKey ownerKey;
+	/** The DID the venue goes by, under which its own user holds its catalogue; null for a copy that does not know it. */
+	private final AString did;
 	private final VenueContext context;
 	/** The venue value as one timestamped record: local edits stamp it, merges keep the newest. */
 	private final Timestamped<ACell> record;
@@ -117,9 +123,10 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 	}
 
 	/** Binds working storage and the policy its components share. */
-	private VenueState(AForkableCursor<ACell> cursor, AccountKey ownerKey, VenueContext context) {
+	private VenueState(AForkableCursor<ACell> cursor, AccountKey ownerKey, AString did, VenueContext context) {
 		super(cursor);
 		this.ownerKey = ownerKey;
+		this.did = did;
 		this.context = context;
 		this.record = new Timestamped<>(cursor, Covia.VENUE, context::currentTimestamp, Covia::stampVenue);
 	}
@@ -138,9 +145,9 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 		return application.venue(kp.getAccountKey());
 	}
 
-	/** The application's copy of a venue, signing with the context's signer. */
-	static VenueState draft(OwnedMap<ACell, ACell> venues, AccountKey ownerKey, VenueContext context) {
-		return draft(venues, ownerKey, context::sign, context);
+	/** The application's copy of a venue going by {@code did}, signing with the context's signer. */
+	static VenueState draft(OwnedMap<ACell, ACell> venues, AccountKey ownerKey, AString did, VenueContext context) {
+		return draft(venues, ownerKey, did, context::sign, context);
 	}
 
 	/**
@@ -161,13 +168,13 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 	public static VenueState fromRoot(AForkableCursor<?> root, AccountKey ownerKey,
 			Function<ACell, SignedData<ACell>> signer, VenueContext context) {
 		var venues = CoviaApplication.venueRecords((AForkableCursor<Index<Keyword, ACell>>) root);
-		return draft(venues, ownerKey, signer, context);
+		return draft(venues, ownerKey, null, signer, context);
 	}
 
 	/** An unsigned copy of the venue's record that signs into it on sync. */
-	private static VenueState draft(OwnedMap<ACell, ACell> venues, AccountKey ownerKey,
+	private static VenueState draft(OwnedMap<ACell, ACell> venues, AccountKey ownerKey, AString did,
 			Function<ACell, SignedData<ACell>> signer, VenueContext context) {
-		return new VenueState(venues.draft(ownerKey, signer).storage(), ownerKey, context);
+		return new VenueState(venues.draft(ownerKey, signer).storage(), ownerKey, did, context);
 	}
 
 	/**
@@ -256,7 +263,38 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 	 * @return Users cursor wrapper
 	 */
 	public Users users() {
-		return new Users(context, level(Covia.USER_DATA));
+		return new Users(this, context, level(Covia.USER_DATA));
+	}
+
+	/** The DID the venue goes by, or null for a copy that does not know it ({@link #fromRoot}). */
+	public AString getDID() {
+		return did;
+	}
+
+	/**
+	 * The value a reference names in the venue's own data: a {@code v/} path
+	 * in the venue's definitions, an asset by its hash in the venue's asset
+	 * store, or either named by a DID URL of the venue's DID. Each component
+	 * on the way to an agent looks up what it holds and asks its parent for
+	 * the rest ({@link User#lookup}), so this is where such a lookup ends.
+	 * Reads check no authority and change nothing.
+	 *
+	 * @param ref A reference, as a config holds it
+	 * @return The value there, an asset's metadata for an asset, or null when
+	 *         nothing is there or the reference names nothing the venue holds
+	 */
+	public ACell lookup(AString ref) {
+		if (ref == null) return null;
+		Reference reference = Reference.of(ref);
+		if (reference.owner() != null && !reference.owner().equals(did)) return null;
+		Hash asset = reference.asset();
+		if (asset != null) return assets().meta(asset);
+		if (did == null || !reference.in(Namespace.V)) return null;
+		try {
+			return users().at(did).readInternalPath(CoviaAdapter.venueGlobals(reference.path()));
+		} catch (NoSuchPathException e) {
+			return null;
+		}
 	}
 
 	/**

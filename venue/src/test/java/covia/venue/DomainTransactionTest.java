@@ -327,7 +327,7 @@ class DomainTransactionTest {
 			clockReads.incrementAndGet();
 			return CVMLong.create(ticks.get());
 		});
-		var agent = new Agent(context, Cursors.root(null), null, Strings.create("assistant"));
+		var agent = new Agent(context, Cursors.root(null), null, Strings.create("assistant"), null);
 		agent.initialise(Maps.empty(), null);
 		assertEquals(1, clockReads.getAndSet(0));
 		ticks.set(200);

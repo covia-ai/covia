@@ -43,8 +43,10 @@ An agent can be asked in three ways:
 
 A request is refused if the asker may not ask the agent (`config.accepts`, or
 the `agent/request` ability in [UCAN.md](./UCAN.md)), if the agent does not
-exist, or if it is suspended. Otherwise it is accepted; nothing checks whether
-the agent can resolve a task (§5.3).
+exist, if it is suspended, or if it cannot take tasks (§5.3). An agent that
+cannot take tasks fails the Job with `errorCode` `agent:tasks-unsupported`;
+nothing is queued and no session is made, and `agent:chat` still reaches it.
+Otherwise the request is accepted.
 
 An external agent, such as one on `remoteagent`, handles the request through
 its own adapter, and the rest of this document does not apply to it.
@@ -68,6 +70,7 @@ a reason, and the task runs again.
 | Completed | `COMPLETE` | The agent resolved it with a result (§5) |
 | Failed by the agent | `FAILED` | The agent resolved it with an error (§5) |
 | Cycle failed | `FAILED` | The cycle working on it failed, for example at the tool-call iteration limit or on a request the provider refused ([AGENT_LOOP.md](./AGENT_LOOP.md) §3.4) |
+| Cannot take tasks | `FAILED` | Before a cycle took it, the agent was found unable to take tasks (§5.3); `errorCode` `agent:tasks-unsupported` |
 | Nothing to resume it | `FAILED` | A cycle ended with the task open and nothing to bring it back (§6) |
 | Stuck | `FAILED` | A run presented it for its whole iteration budget without resolving it |
 | Wait lost | `FAILED` | It was parked on something that a restart or a session's removal ended |
@@ -101,7 +104,8 @@ Both runtimes wrap the operations as the harness tools `complete_task` and
 - **Offered** at the root frame on every inference, whether or not a task is
   in play, because the tool list is the start of the cached prompt. Never in a
   child frame. With no task in scope, a call is refused.
-- **With tool calling off** for the model, no tools are presented.
+- **With tool calling off** for the model, no tools are presented, and the
+  agent takes no tasks (§5.3).
 - **Written as text**, a call is honoured while a task is outstanding, when
   the text is the tool's name, alone or followed by a JSON object.
 - **An empty `result` or `error`** falls back to the text of the same turn. With
@@ -117,13 +121,26 @@ Both runtimes wrap the operations as the harness tools `complete_task` and
 | After a successful call | The loop carries on with every tool still available, until the model replies in text: at least one more inference. The task's result is what the call delivered and is also the cycle's response; the closing text goes only to the session's history | The frame ends with no further inference |
 | A final text reply with the task open | The task yields (§6) | The text completes the task |
 
-### 5.3 Agents that cannot resolve a task
+### 5.3 Agents that cannot take tasks
 
-Acceptance (§2) does not depend on any of this. An agent can accept a task it
-has no dependable way to resolve: an `llmagent` agent with tool calling off,
-which can resolve one only by writing the call as text, or a custom transition
-that never calls the §5 operations. Such a task fails when its first cycle ends
-(§6).
+An agent resolves a task by calling a tool, so an agent whose model cannot
+call tools takes no tasks. Its model is the one its config names: the LLM
+operation `llmOperation` (or the default), `model`, and the agent's own
+`modelProfile`, layered as in [MODELS.md](./MODELS.md). Tool calling is off
+when that profile says `options.toolCalling: false`, whether the provider,
+the model or the agent says it. `agent:create` and `agent:update` warn when
+it is.
+
+The agent decides when a request arrives, in the transaction that would queue
+the task, from its config and the definitions it can look up: its own `n/`,
+its owner's namespaces, and the venue's `v/` and assets
+([GRID_LATTICE_DESIGN.md](./GRID_LATTICE_DESIGN.md) §3.3). A model it cannot
+look up there, such as one on another venue, is decided before a cycle takes
+the task, as the cycle would resolve it; so is a model changed after the task
+was accepted. Either way the task fails as in §2, without a cycle.
+
+A custom transition that never calls the §5 operations can still accept a
+task it does not resolve. Such a task fails when its first cycle ends (§6).
 
 ## 6. Yielding
 

@@ -14,8 +14,10 @@ import java.util.Set;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import convex.core.crypto.util.Multikey;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
+import convex.core.data.AccountKey;
 import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Maps;
@@ -1052,6 +1054,16 @@ public class Config {
 	 */
 	public AString getDID() {
 		return RT.ensureString(config.get(DID));
+	}
+
+	/**
+	 * The DID the venue with {@code key} goes by: the configured one, else its key's {@code did:key}.
+	 * @param key The venue's account key
+	 * @return The venue's DID, never null
+	 */
+	public AString venueDID(AccountKey key) {
+		AString did = getDID();
+		return (did != null) ? did : Strings.create("did:key:" + Multikey.encodePublicKey(key));
 	}
 
 	/** Config key: whether this venue allows a desktop tray icon in its process (default true). */

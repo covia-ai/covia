@@ -4,7 +4,8 @@ import convex.core.data.AString;
 import convex.core.data.Strings;
 
 /**
- * Namespace constants for user-level lattice keys.
+ * Namespace constants for user-level lattice keys, and for the namespaces a
+ * path starts at in the context that reads it.
  *
  * <p>Each constant is an interned AString matching the single-letter
  * namespace prefix from the Grid addressing scheme (§4.1 of
@@ -38,6 +39,21 @@ public final class Namespace {
 
 	/** Adapter views — {@code x/<adapter>}, each adapter's view of the user's data, held in adapter state */
 	public static final AString X = Strings.intern("x");
+
+	// Context-rooted namespaces (GRID_LATTICE_DESIGN.md §4.5–4.6): not keys in
+	// a user's record, but where a path starts in the context that reads it.
+
+	/** The agent's own workspace (/n/), within an agent */
+	public static final AString N = Strings.intern("n");
+
+	/** The session's scratch (/c/), within a session */
+	public static final AString C = Strings.intern("c");
+
+	/** The task's or job's scratch (/t/), within a task or job */
+	public static final AString T = Strings.intern("t");
+
+	/** The venue's definitions (/v/), the venue user's {@code w/global} */
+	public static final AString V = Strings.intern("v");
 
 	private Namespace() {}
 }

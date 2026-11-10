@@ -24,6 +24,7 @@ import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.Agent;
 import covia.venue.Engine;
+import covia.venue.Models;
 import covia.venue.RequestContext;
 import covia.venue.TestEngine;
 
@@ -278,20 +279,20 @@ public class ContextAssemblerTest {
 			"budget", Maps.of("bytes", 100L),
 			"byModel", Maps.of("tiny", Maps.of("options", Maps.of("toolCalling", CVMBool.FALSE)))));
 		AbstractLLMAdapter.ModelProfile provider = AbstractLLMAdapter.ModelProfile.of(
-			AbstractLLMAdapter.modelProfile(meta, null, null));
+			Models.modelProfile(meta, null, null));
 		assertTrue(provider.toolCalling());
 		assertTrue(provider.cachePrefix(), "models cache unless explicitly disabled");
 		assertEquals(Strings.create("xml"), provider.labels());
 		assertEquals(100L, provider.budget());
 		AbstractLLMAdapter.ModelProfile tiny = AbstractLLMAdapter.ModelProfile.of(
-			AbstractLLMAdapter.modelProfile(meta, Strings.create("tiny"), null));
+			Models.modelProfile(meta, Strings.create("tiny"), null));
 		assertFalse(tiny.toolCalling(), "the model's entry overrides the provider");
 		assertEquals(Strings.create("xml"), tiny.labels(), "what it does not state survives");
 		AMap<AString, ACell> config = Maps.of("modelProfile", Maps.of(
 			"options", Maps.of("toolCalling", CVMBool.TRUE, "cachePrefix", CVMBool.FALSE),
 			"budget", Maps.of("bytes", 50L)));
 		AbstractLLMAdapter.ModelProfile agent = AbstractLLMAdapter.ModelProfile.of(
-			AbstractLLMAdapter.modelProfile(meta, Strings.create("tiny"), config));
+			Models.modelProfile(meta, Strings.create("tiny"), config));
 		assertTrue(agent.toolCalling(), "the agent's override wins");
 		assertEquals(50L, agent.budget());
 		assertEquals(Strings.create("xml"), agent.labels());
@@ -309,19 +310,19 @@ public class ContextAssemblerTest {
 		AString message = AbstractLLMAdapter.LATE_RESULTS_MESSAGE;
 		AMap<AString, ACell> meta = Maps.of("model", Maps.of("options", Maps.of(option, tool)));
 		assertEquals(message, AbstractLLMAdapter.ModelProfile.of(
-			AbstractLLMAdapter.modelProfile(Maps.empty(), null, null)).lateToolResults(), "a message unless declared");
+			Models.modelProfile(Maps.empty(), null, null)).lateToolResults(), "a message unless declared");
 		assertEquals(tool, AbstractLLMAdapter.ModelProfile.of(
-			AbstractLLMAdapter.modelProfile(meta, null, null)).lateToolResults(), "the model declares it");
+			Models.modelProfile(meta, null, null)).lateToolResults(), "the model declares it");
 		AMap<AString, ACell> choose = Maps.of("modelProfile", Maps.of("options", Maps.of(option, message)));
 		assertEquals(message, AbstractLLMAdapter.ModelProfile.of(
-			AbstractLLMAdapter.modelProfile(meta, null, choose)).lateToolResults(), "the agent's choice wins");
+			Models.modelProfile(meta, null, choose)).lateToolResults(), "the agent's choice wins");
 		AMap<AString, ACell> optIn = Maps.of("modelProfile", Maps.of("options", Maps.of(option, tool)));
 		assertEquals(tool, AbstractLLMAdapter.ModelProfile.of(
-			AbstractLLMAdapter.modelProfile(Maps.empty(), null, optIn)).lateToolResults(), "an agent opts in alone");
+			Models.modelProfile(Maps.empty(), null, optIn)).lateToolResults(), "an agent opts in alone");
 		for (String bad : new String[] { "Tool", "tools", "result", "" }) {
 			AMap<AString, ACell> typo = Maps.of("modelProfile", Maps.of("options", Maps.of(option, bad)));
 			assertEquals(message, AbstractLLMAdapter.ModelProfile.of(
-				AbstractLLMAdapter.modelProfile(Maps.empty(), null, typo)).lateToolResults(), bad);
+				Models.modelProfile(Maps.empty(), null, typo)).lateToolResults(), bad);
 		}
 	}
 

@@ -168,10 +168,10 @@ public class CoviaAdapter extends AAdapter {
 	private static final Set<String> WRITABLE_NAMESPACES = Set.of("w", "o");
 
 	/** The context-rooted namespaces: the request names the component each starts at. */
-	private static final AString N = Strings.intern("n");
-	private static final AString C = Strings.intern("c");
-	private static final AString T = Strings.intern("t");
-	private static final AString V = Strings.intern("v");
+	private static final AString N = Namespace.N;
+	private static final AString C = Namespace.C;
+	private static final AString T = Namespace.T;
+	private static final AString V = Namespace.V;
 
 	/** The venue user's path that {@code v/} stands for. */
 	public static final Path VENUE_GLOBALS = CoviaPath.parse("w/global");
@@ -1291,7 +1291,7 @@ public class CoviaAdapter extends AAdapter {
 			return new Located(view, AdapterView.inView(segments), AdapterView.ownership(owner, segments));
 		}
 		if (V.equals(namespace)) {
-			Workspace global = state.users().at(engine.getDIDString()).workspace();
+			Workspace global = state.users().at(state.getDID()).workspace();
 			return new Located(global, venueGlobals(segments).slice(1), new Owner.Ownership(VIEW_POLICY, segments));
 		}
 		AString agentId = (ctx == null) ? null : ctx.getAgentId();
