@@ -149,6 +149,14 @@ All fields are optional. Missing fields get platform defaults.
 > and the model's assembled context. Shared
 > `v/ops/...` catalog metadata remains publicly discoverable.
 
+> **Tools on another venue depend on that venue.** A tool may name another
+> venue's operation by DID URL (`did:web:other.host/v/ops/...`, or
+> `/a/<hash>`). The runtime fetches its definition from that venue whenever
+> this venue holds no copy, and always for one named by path, so while that
+> venue cannot be reached the tool is left out of the agent's turns and each
+> turn waits on the fetch. `agent:create` and `agent:update` warn of such
+> tools and never fetch them to check them. Prefer an operation on this venue.
+
 ### Example templates
 
 For brevity these examples show config layer maps. When publishing one as an

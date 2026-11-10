@@ -156,6 +156,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - `covia:list`, `covia:slice` and `covia:aggregate` name a blob key in `0x` hex, as a value's JSON shows it.
 - A connection opened for a `did:web` DID compares it as did:web writes it: a port is `%3A8080`, while `:8080` names a path.
 - An agent cycle stopped by `agent:suspend` or `agent:delete` can no longer complete or fail its task, and its result is not merged; the task runs again after resume.
+- `agent:create` and `agent:update` warn of tools that name an operation on another venue, and no longer fetch them to check them.
 
 ### Deprecated
 

@@ -952,6 +952,26 @@ public class AgentAdapterTest {
 	}
 
 	@Test
+	public void testCreateWarnsOfToolsOnAnotherVenueWithoutFetchingThem() {
+		// The other venue cannot be reached: had create fetched the tool to check
+		// it, the failed fetch would be reported as an unavailable tool too.
+		String elsewhere = "did:web:tools.invalid/v/ops/json/merge";
+		RequestContext caller = RequestContext.of(ALICE_DID);
+		Hash list = engine.resolveAsset(Strings.create("v/ops/covia/list"), caller).getID();
+		ACell result = engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(
+			Fields.AGENT_ID, "remote-tools",
+			Fields.CONFIG, Maps.of(
+				"operation", "v/ops/llmagent/chat",
+				"llmOperation", "v/ops/langchain/openai",
+				"tools", Vectors.of(engine.assetDIDURL(list), Strings.create(elsewhere)))),
+			caller).awaitResult(5000);
+
+		assertEquals(Vectors.of(Strings.create(AgentAdapter.REMOTE_TOOLS.formatted(elsewhere))),
+			RT.getIn(result, Fields.WARNINGS),
+			"only the tool on another venue is flagged, and it is not fetched");
+	}
+
+	@Test
 	public void testUpdateSharesCreateWarningsForMergedConfig() {
 		RequestContext caller = RequestContext.of(ALICE_DID);
 		ACell created = engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(

@@ -1099,7 +1099,9 @@ public class AgentAdapter extends AAdapter {
 		AVector<ACell> warnings = Vectors.empty();
 		AString toolWarn = toolCapabilityWarning(config, ctx);
 		if (toolWarn != null) warnings = warnings.conj(toolWarn);
-		AString unavailableWarn = unavailableToolsWarning(config, ctx);
+		java.util.List<String> remote = remoteTools(config);
+		if (!remote.isEmpty()) warnings = warnings.conj(Strings.create(REMOTE_TOOLS.formatted(String.join(", ", remote))));
+		AString unavailableWarn = unavailableToolsWarning(config, ctx, remote);
 		if (unavailableWarn != null) warnings = warnings.conj(unavailableWarn);
 		warnings = warnings.concat(skillSourceWarnings(ctx, config));
 		AString keyWarn = rawApiKeyWarning(config);
@@ -1261,18 +1263,45 @@ public class AgentAdapter extends AAdapter {
 			+ " persisted in the agent record.");
 	}
 
+	/** Warning for configured tools naming operations this venue does not host; the references follow. */
+	public static final String REMOTE_TOOLS = "agent declares tool operation(s) on another venue: %s."
+		+ " The agent fetches such a definition from that venue whenever this venue holds no copy of it,"
+		+ " and always for one named by path, so while that venue cannot be reached the tool is left out"
+		+ " of the agent's turns and each turn waits on the fetch. Prefer an operation on this venue;"
+		+ " this is only a warning.";
+
+	/**
+	 * The operations {@code config}'s tools name on another venue
+	 * ({@link Engine#isRemote}), as written. They are never fetched to check them.
+	 */
+	private java.util.List<String> remoteTools(AMap<AString, ACell> config) {
+		java.util.List<String> remote = new java.util.ArrayList<>();
+		AVector<ACell> tools = (config == null) ? null : RT.ensureVector(config.get(Fields.TOOLS));
+		if (tools == null) return remote;
+		for (long i = 0; i < tools.count(); i++) {
+			AString[] parsed = ToolPalette.parseConfigToolEntry(tools.get(i));
+			AString operation = (parsed == null) ? null : parsed[0];
+			if (operation != null && engine.isRemote(operation)) {
+				remote.add(operation.toString());
+			}
+		}
+		return remote;
+	}
+
 	/**
 	 * Advisory for configured operation tools whose metadata is missing,
 	 * unreachable, or unreadable under the agent's own {@code config.caps}
 	 * (#317). Resolution is live every turn, so fixing the path, remote venue, or
 	 * read grant makes the tool available without recreating the agent. Harness
 	 * pseudo-tools ({@code subgoal}, {@code complete}, …) are not operations and
-	 * are never flagged.
+	 * are never flagged, and {@code remote} ones, which have a warning of their
+	 * own, are not fetched to check them.
 	 */
-	private AString unavailableToolsWarning(AMap<AString, ACell> config, RequestContext ctx) {
+	private AString unavailableToolsWarning(AMap<AString, ACell> config, RequestContext ctx, java.util.List<String> remote) {
 		if (config == null) return null;
-		AVector<ACell> unavailable = ToolPalette.unavailableConfigTools(
-			engine, ctx, config, AbstractLLMAdapter.allHarnessToolNames());
+		java.util.Set<String> skipped = new java.util.HashSet<>(AbstractLLMAdapter.allHarnessToolNames());
+		skipped.addAll(remote);
+		AVector<ACell> unavailable = ToolPalette.unavailableConfigTools(engine, ctx, config, skipped);
 		if (unavailable.isEmpty()) return null;
 		java.util.List<String> details = new java.util.ArrayList<>();
 		for (long i = 0; i < unavailable.count(); i++) {

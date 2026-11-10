@@ -3249,6 +3249,15 @@ public class Engine {
 		return covia.grid.Principals.isAgentDID(owner) && isLocalDIDResource(covia.grid.Principals.userOf(owner));
 	}
 
+	/**
+	 * Whether {@code resource} is a DID URL whose owner this venue does not
+	 * host ({@link #isHosted}): it names something held on another venue.
+	 * A bare path is never remote.
+	 */
+	public boolean isRemote(AString resource) {
+		return ownerOf(resource) != null && !isHosted(resource);
+	}
+
 	/** Evaluate presented proofs under this venue's complete root policy. */
 	public boolean proofsCover(RequestContext ctx, AString resource, AString ability, long now) {
 		return proofsCover(ctx, resource, ability, now, null);
