@@ -410,6 +410,35 @@ public class OAuthAdapterTest {
 		return RequestContext.ofAgent(owner, Strings.create("worker")).withCaps(caps);
 	}
 
+	/** A stored token is a credential as a connection's is: an agent sends its owner's only under secret/use. */
+	@Test
+	public void testStoredTokenIsASecretUse() throws Exception {
+		try (FakeProvider fake = new FakeProvider()) {
+			Engine engine = engine(fake);
+			try {
+				AString aliceDID = Strings.create("did:test:oauth:alice");
+				engine.getVenueState().users().ensure(aliceDID).secrets()
+					.store("BANK_TOKEN", "alice-bank-token", SecretStore.keys(engine.getKeyPair()));
+				AMap<AString, ACell> me = Maps.of("url", fake.base() + "/api/me", "bearerSecret", "s/BANK_TOKEN");
+
+				// An agent of Alice's with only invoke cannot send her token anywhere.
+				String refused = failed(run(engine, "v/ops/http/get", me, agent(aliceDID)));
+				assertTrue(refused.contains(Abilities.SECRET_USE.toString()), refused);
+
+				// A secret/use grant bound to a url prefix releases it there only.
+				RequestContext bound = agent(aliceDID, Capability.create(Strings.create("s/BANK_TOKEN"),
+					Abilities.SECRET_USE, Maps.of("url", fake.base() + "/api/")));
+				assertEquals("Bearer alice-bank-token",
+					RT.getIn(ok(run(engine, "v/ops/http/get", me, bound)), "body").toString());
+				String elsewhere = failed(run(engine, "v/ops/http/get",
+					Maps.of("url", fake.base() + "/token", "bearerSecret", "s/BANK_TOKEN"), bound));
+				assertTrue(elsewhere.contains(Abilities.SECRET_USE.toString()), elsewhere);
+			} finally {
+				engine.close();
+			}
+		}
+	}
+
 	@Test
 	public void testConnectionTokenIsAnOAuthUse() throws Exception {
 		try (FakeProvider fake = new FakeProvider()) {

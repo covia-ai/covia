@@ -18,12 +18,14 @@ import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import covia.api.Abilities;
 import covia.api.Fields;
+import covia.exception.AuthException;
 import covia.grid.Job;
 import covia.grid.Principals;
 import covia.grid.Status;
 import covia.venue.Agent;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
+import covia.venue.SecretStore;
 import covia.venue.TestEngine;
 import covia.venue.UserExports;
 
@@ -142,6 +144,33 @@ public class AgentControllerTest {
 		Job list = run("v/ops/agent/list", Maps.empty(), ALICE);
 		assertComplete(list);
 		assertTrue(list.getOutput().toString().contains(agentDID("parent").toString()), "listed with its controller");
+	}
+
+	/** Calling the model is the harness's: an agent thinks with a key its controller may use, whatever its own caps. */
+	@Test
+	public void testAnAgentsHarnessUsesTheSecretsItsControllerMayUse() {
+		engine.getVenueState().users().ensure(alice).secrets()
+			.store("API_KEY", "alice-key", SecretStore.keys(engine.getKeyPair()));
+		String provider = "https://api.example/";
+
+		// Capped by its owner, an agent's harness uses her key; its tool calls do not.
+		assertComplete(create("solo", Vectors.of(Maps.of(Capability.CAN, Abilities.INVOKE)), ALICE));
+		assertEquals("alice-key", engine.resolveSecret("s/API_KEY", engine.harnessContext(alice, Strings.create("solo")), provider));
+		RequestContext soloTools = engine.context(alice, agentDID("solo"));
+		assertThrows(AuthException.class, () -> engine.resolveSecret("s/API_KEY", soloTools, provider));
+
+		// Controlled by a capped agent, it uses only what its controller may.
+		assertComplete(create("child", null, parent()));
+		RequestContext child = engine.harnessContext(alice, Strings.create("child"));
+		assertThrows(AuthException.class, () -> engine.resolveSecret("s/API_KEY", child, provider));
+
+		// A controller's caps may grant the use, bound to the provider.
+		assertComplete(create("lead", Vectors.of(cap("g/", Abilities.AGENT_CREATE), Maps.of(Capability.CAN, Abilities.INVOKE),
+			Capability.create(Strings.create("s/API_KEY"), Abilities.SECRET_USE, Maps.of("url", provider))), ALICE));
+		assertComplete(create("member", null, engine.context(alice, agentDID("lead"))));
+		RequestContext member = engine.harnessContext(alice, Strings.create("member"));
+		assertEquals("alice-key", engine.resolveSecret("s/API_KEY", member, provider));
+		assertThrows(AuthException.class, () -> engine.resolveSecret("s/API_KEY", member, "https://elsewhere.example/"));
 	}
 
 	@Test

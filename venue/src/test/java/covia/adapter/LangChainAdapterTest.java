@@ -2110,6 +2110,22 @@ public class LangChainAdapterTest {
 		assertFalse(after.toString().contains("sk-test-dummy"),
 			"secret values must never surface in discovery output");
 
+		// The caller's capped agent: ready only when its caps let it use the key
+		// where the provider's calls go.
+		AMap<AString, ACell> invoke = Maps.of(Strings.create("can"), Strings.create("invoke"));
+		covia.venue.RequestContext capped = covia.venue.RequestContext.ofAgent(did, Strings.create("bot"))
+			.withCaps(Vectors.of(invoke));
+		covia.venue.RequestContext granted = covia.venue.RequestContext.ofAgent(did, Strings.create("bot"))
+			.withCaps(Vectors.of(invoke, convex.auth.ucan.Capability.create(Strings.create("s/ANTHROPIC_API_KEY"),
+				covia.api.Abilities.SECRET_USE, Maps.of(Strings.create("url"), Strings.create("https://api.anthropic.com/")))));
+		for (var agent : new covia.venue.RequestContext[] {capped, granted}) {
+			ACell seen = engine.jobs().invokeInternal("v/ops/langchain/models",
+				Maps.of(Strings.create("provider"), Strings.create("anthropic")), agent)
+				.get(10, java.util.concurrent.TimeUnit.SECONDS);
+			assertEquals(convex.core.data.prim.CVMBool.create(agent == granted),
+				RT.getIn(RT.ensureVector(RT.getIn(seen, "providers")).get(0), "ready"));
+		}
+
 		ACell other = engine.jobs().invokeInternal("v/ops/langchain/models",
 			Maps.of(Strings.create("provider"), Strings.create("anthropic")),
 			covia.venue.RequestContext.of(covia.venue.TestEngine.uniqueDID("models-other")))
@@ -2554,9 +2570,10 @@ public class LangChainAdapterTest {
 
 	/**
 	 * #568: a caller's own stored key goes wherever the caller points it, as
-	 * GetMine does with its token and its proxy. Someone else's key, the
-	 * venue's included, needs a secret/use grant and goes only where that
-	 * grant's url caveat points it.
+	 * GetMine does with its token and its proxy. A capped agent's use of its
+	 * owner's key, and anyone's use of someone else's, the venue's included,
+	 * needs a secret/use grant and goes only where that grant's url caveat
+	 * points it.
 	 */
 	@Test
 	public void testApiKeyGoesOnlyWhereItsOwnerPointedIt() throws Exception {
@@ -2618,14 +2635,32 @@ public class LangChainAdapterTest {
 			adapter.invokeFuture(caller, meta, base.assoc(apiKey, Strings.create("sk-literal"))).get(10, TimeUnit.SECONDS);
 			assertEquals("sk-literal", keySeen.get());
 
-			// A capped agent of the caller still uses its owner's own key: the
-			// owner's secrets are the owner's, and its agents', as of right.
+			// A capped agent of the caller uses its owner's key only as its caps allow.
 			keySeen.set(null);
+			AMap<AString, ACell> invokeAny = Maps.of("with", Strings.create(""), "can", Strings.create("invoke"));
 			RequestContext readOnly = RequestContext.ofAgent(callerDID, Strings.create("bot"))
-				.withCaps(Vectors.of(Maps.of("with", Strings.create(""), "can", Strings.create("invoke")),
-					Maps.of("with", Strings.create(""), "can", Strings.create("crud/read"))));
-			adapter.invokeFuture(readOnly, meta, base.assoc(apiKey, Strings.create("s/MY_TOKEN"))).get(10, TimeUnit.SECONDS);
+				.withCaps(Vectors.of(invokeAny, Maps.of("with", Strings.create(""), "can", Strings.create("crud/read"))));
+			ACell capped = adapter.invokeFuture(readOnly, meta, base.assoc(apiKey, Strings.create("s/MY_TOKEN")))
+				.get(10, TimeUnit.SECONDS);
+			assertEquals(Status.FAILED, RT.getIn(capped, "status"), capped.toString());
+			assertTrue(RT.getIn(capped, "message").toString().contains(covia.api.Abilities.SECRET_USE.toString()), capped.toString());
+			assertNull(keySeen.get());
+
+			// Its caps may grant the use, bound to where the key may go...
+			RequestContext mayUse = RequestContext.ofAgent(callerDID, Strings.create("bot")).withCaps(Vectors.of(invokeAny,
+				convex.auth.ucan.Capability.create(Strings.create("s/MY_TOKEN"), covia.api.Abilities.SECRET_USE,
+					Maps.of(Strings.create("url"), Strings.create(proxyUrl)))));
+			adapter.invokeFuture(mayUse, meta, base.assoc(apiKey, Strings.create("s/MY_TOKEN"))).get(10, TimeUnit.SECONDS);
 			assertEquals("caller-token", keySeen.get());
+
+			// ...and nowhere else.
+			keySeen.set(null);
+			ACell cappedElsewhere = adapter.invokeFuture(mayUse, meta,
+				base.dissoc(Strings.create("url")).assoc(apiKey, Strings.create("s/MY_TOKEN"))).get(10, TimeUnit.SECONDS);
+			assertEquals(Status.FAILED, RT.getIn(cappedElsewhere, "status"), cappedElsewhere.toString());
+			assertTrue(RT.getIn(cappedElsewhere, "message").toString().contains(covia.api.Abilities.SECRET_USE.toString()),
+				cappedElsewhere.toString());
+			assertNull(keySeen.get());
 
 			// No apiKey: the operation's default is the caller's own ANTHROPIC_API_KEY,
 			// which the caller has not stored. Nothing falls back to anyone else's.
@@ -2665,6 +2700,9 @@ public class LangChainAdapterTest {
 				LangChainAdapter.defaultBaseUrl("anthropic"));
 			assertEquals("caller-key", own.value());
 			assertFalse(own.operators(), "the caller's own key is the caller's");
+			// The key the operation names is a use too: a capped agent needs a grant for it.
+			assertThrows(covia.exception.AuthException.class, () -> adapter.resolveApiKey(meta, Maps.empty(), readOnly,
+				LangChainAdapter.defaultBaseUrl("anthropic")));
 			// The venue's key, used under a grant, is still the operator's.
 			LangChainAdapter.ApiKey venues = adapter.resolveApiKey(meta, Maps.of(apiKey, venueKey), granted, proxyUrl);
 			assertEquals("venue-key", venues.value());

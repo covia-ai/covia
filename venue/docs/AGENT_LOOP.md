@@ -878,7 +878,10 @@ in order:
 The agent's `config` holds no key material: a `config.apiKey` is a secret reference (`s/NAME`) resolved at the call. The operation metadata owns the
 credential concern — the agent specifies which operation to use, and the
 operation declares which secret it needs. This keeps agent configuration clean
-and credentials in the encrypted secret store.
+and credentials in the encrypted secret store. Using the secret is checked
+against whoever invokes the operation: when the agent thinks, its harness,
+with its controller's authority; when the agent calls a model as a tool, the
+agent under its caps (UCAN.md §5.4).
 
 Credentials are primarily a level 3 concern — the LLM call operation needs
 the API key, not the agent transition. In the current implementation level 2

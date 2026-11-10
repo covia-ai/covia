@@ -450,8 +450,9 @@ may contain `/`. The `models` vector of ids is retained for compatibility;
 }
 ```
 
-Readiness stays caller-relative (the provider's key in the caller's secret
-store or the venue environment; a local server's live reachability) and is
+Readiness stays caller-relative (a provider key in the caller's secret store
+or the venue environment that the caller may use where the profile's calls go;
+a local server's live reachability) and is
 computed per serving profile, since two deployments of one vendor can differ.
 The endpoint and secret-name convention come from that profile's operation,
 not a provider-name branch in Java.

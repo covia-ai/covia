@@ -361,6 +361,51 @@ public class MCPBridgeTest {
 		assertThrows(covia.exception.AuthException.class, () -> adapter.resolveAuthRef(bob, ref, null));
 	}
 
+	/** A secret an operation names is used by whoever invokes it: an agent needs secret/use, whoever wrote the operation. */
+	@Test
+	public void testOperationsSecretIsTheInvokersUse() throws Exception {
+		HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
+		AtomicReference<String> seen = new AtomicReference<>();
+		server.createContext("/mcp", x -> {
+			seen.compareAndSet(null, x.getRequestHeaders().getFirst("Authorization"));
+			x.getRequestBody().readAllBytes();
+			x.sendResponseHeaders(401, -1);
+			x.close();
+		});
+		server.start();
+		try {
+			engine.getVenueState().users().ensure(ALICE_DID).secrets()
+				.store("BANK_TOKEN", "alice-bank-token", covia.venue.SecretStore.keys(engine.getKeyPair()));
+			// Caps: invoke, and read and write in her o/; nothing about her secrets.
+			AMap<AString, ACell> invoke = Maps.of(Capability.CAN, Strings.create("invoke"));
+			AMap<AString, ACell> ops = Maps.of(Capability.WITH, Strings.create("o/"), Capability.CAN, Strings.create("crud"));
+			RequestContext agent = RequestContext.ofAgent(ALICE_DID, Strings.create("worker")).withCaps(Vectors.of(invoke, ops));
+			String origin = "http://localhost:" + server.getAddress().getPort();
+			AMap<AString, ACell> op = Maps.of("name", "Lookup", "operation", Maps.of(
+				"adapter", "mcp:tools:call", "server", origin + "/mcp", "remoteToolName", "lookup",
+				"auth", "s/BANK_TOKEN"));
+			Job wrote = engine.jobs().invokeOperation("v/ops/covia/write",
+				Maps.of(Fields.PATH, "o/lookup", Fields.VALUE, op), agent);
+			wrote.awaitResult(10000);
+			assertEquals(Status.COMPLETE, wrote.getStatus(), wrote.getErrorMessage());
+
+			Job refused = engine.jobs().invokeOperation("o/lookup", Maps.empty(), agent);
+			try { refused.awaitResult(15000); } catch (Exception ignored) { /* status tells */ }
+			assertEquals(Status.FAILED, refused.getStatus());
+			assertTrue(refused.getErrorMessage().contains(Abilities.SECRET_USE.toString()), refused.getErrorMessage());
+			assertNull(seen.get(), "the server received: " + seen.get());
+
+			// Granted for that server, the secret goes there.
+			RequestContext granted = RequestContext.ofAgent(ALICE_DID, Strings.create("worker")).withCaps(Vectors.of(invoke, ops,
+				Capability.create(Strings.create("s/BANK_TOKEN"), Abilities.SECRET_USE, Maps.of("url", origin + "/"))));
+			Job sent = engine.jobs().invokeOperation("o/lookup", Maps.empty(), granted);
+			try { sent.awaitResult(15000); } catch (Exception ignored) { /* the server refuses the call */ }
+			assertEquals("Bearer alice-bank-token", seen.get());
+		} finally {
+			server.stop(0);
+		}
+	}
+
 	@Test
 	public void testToolsListInitializationFailureIsActionable() throws Exception {
 		// Addressed as localhost, the test venue's allow-listed host: caller-named

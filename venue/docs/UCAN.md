@@ -752,7 +752,7 @@ record is an entry no grant of theirs covers.
 | `GET /api/v1/jobs`, and the caller's job count in `/status` | `{ with: "j/", can: "crud/read" }`; `/status` leaves out the count without it |
 | `secret:delete` | `{ with: "s/<name>", can: "crud/delete" }` |
 | `secret:extract` | `{ with: "s/<name>", can: "secret/extract" }`, plus the direct-owner restriction in *Secret extraction* above |
-| Any adapter sending a secret (`apiKey`, `bearerSecret`, `secretHeaders`, `{s/NAME}`, MCP `auth`, A2A auth) | `{ with: "<ownerDID>/s/<name>", can: "secret/use" }`, its `nb.url` checked against the request's destination |
+| Any adapter sending a secret (`apiKey`, `bearerSecret`, `secretHeaders`, `{s/NAME}`, an operation's `secretKey`, MCP `auth`, A2A auth) | `{ with: "<ownerDID>/s/<name>", can: "secret/use" }`, its `nb.url` checked against the request's destination |
 | `http:*` with `bearerSecret: "oauth/<provider>"` | `{ with: "<ownerDID>/x/oauth/<provider>", can: "oauth/use" }`, its `nb.url` checked against the request's destination |
 | `oauth:status` | `{ with: "x/oauth/", can: "crud/read" }`, or `x/oauth/<provider>` for one provider |
 | `oauth:connect` | `{ with: "x/oauth/<provider>", can: "oauth/connect" }` |
@@ -1026,7 +1026,9 @@ leaves `caps` out keeps them, and a fork copies its source's unless it names
 others. `accepts` admits others to talk to it (an older
 public `a2a.caps` reads as `accepts: "anyone"`). Configuring mints no token,
 and caps reach nothing of another identity's, which a request reaches only by
-what it holds (§5.3).
+what it holds (§5.3). The owner's secrets are part of its namespace like any
+other: an agent sends one only under `secret/use` in its caps, whether its
+input names the secret or the operation it invokes does.
 
 **The transition operation is the harness.** Each cycle, the run loop invokes
 the agent's transition operation (`config.operation`) as a harness step, under
@@ -1047,7 +1049,8 @@ The built-in runtimes, `llmagent:chat` and `goaltree:chat`, switch at each
 tool call and for each load the agent makes or a caller adds (a session's
 `loads`). Everything else they do is the harness's: assembling the context the
 config names (the system prompt, `config.context`, `config.loads` and the
-skills index), resolving the model setup, calling the model, reading the
+skills index), resolving the model setup, calling the model with the key its
+operation names, reading the
 configured tools' definitions and keeping the session's frames. The switch takes the
 agent from the step's input, never its authority, whoever invokes the runtime
 and whatever `config` its input carries. Only the agent's own run or its

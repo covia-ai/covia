@@ -3315,13 +3315,15 @@ Top-level keys resolve as follows:
 
 Each named secret overwrites any existing value under that name for that user — config is the source of truth at launch. Names not listed are left untouched. Per-secret failures log a warning but do not fail startup. Values are never logged.
 
-A user, and its agents, use the user's own secrets as of right; a delegate
-acting for the user (`user/sudo`) needs a grant like anyone else. A reference a
-caller writes (`s/NAME` in an input, `bearerSecret`,
-`secretHeaders`, a `{s/NAME}` url placeholder, an operation's `secretKey`
-default) names the caller's own secret, which it may send anywhere the SSRF
-guard allows. Using anyone else's is an action on `<owner>/s/NAME` requiring
-the `secret/use` ability, checked wherever a secret is resolved. Another
+Using a secret is an action on `<owner>/s/NAME` requiring the `secret/use`
+ability, checked wherever a secret is resolved, whoever names it: the caller
+(`s/NAME` in an input, `bearerSecret`, `secretHeaders`, a `{s/NAME}` url
+placeholder) or the operation it invokes (an operation's `secretKey` default,
+an MCP bridge's `auth`). A plain `s/NAME` is the caller's own secret. A user
+holds the ability over its own secrets and may send them anywhere the SSRF
+guard allows; an agent holds it as far as its caps reach, and its harness as
+far as its controller's authority does (UCAN.md §5.4); a delegate acting for
+the user (`user/sudo`) needs a grant like anyone else. Another
 principal's secret is named as `<did>/s/NAME` and needs a `secret/use` grant
 from its owner, which may be bound to a destination: a UCAN whose capability
 carries `nb: {url: "https://api.example/"}` lets the holder use the secret
@@ -3332,8 +3334,9 @@ a grant says so.
 The venue's own secrets are the `"venue"` store above plus the venue process
 environment under the same conventional names (`ANTHROPIC_API_KEY`,
 `OPENAI_API_KEY`, etc.), which supports process/container secret injection
-without persisting a credential in Covia config. Venue-owned agents and
-operations use them as their own; anyone else needs a grant from the venue.
+without persisting a credential in Covia config. The venue uses them as its
+own, and its agents as far as their caps reach; anyone else needs a grant from
+the venue.
 To share a key with every caller, provision it under `"public"` and grant its
 use in `auth.public.caps`, bound to the provider:
 

@@ -4804,16 +4804,20 @@ public class Engine {
 	/**
 	 * Resolves a secret reference for use, under the caller's authority.
 	 *
-	 * <p>A user and its agents use the user's own secrets ({@code s/NAME},
-	 * {@code /s/NAME} or a bare {@code NAME}) as of right; a delegate acting for
-	 * the user needs a grant. Using anyone else's, named {@code <did>/s/NAME}, is an action on
-	 * that resource requiring {@link Abilities#SECRET_USE}, checked here and
-	 * nowhere else: a presented proof, or the public scope for the public store,
-	 * whose operator-provisioned secrets are nobody's own. A grant may be bound to a
-	 * destination with {@code nb.url}; {@link #resolveSecret(String,
+	 * <p>Using a secret is an action on {@code <owner>/s/NAME} requiring
+	 * {@link Abilities#SECRET_USE}, checked here and nowhere else, whoever named
+	 * it: the caller in its input, or an operation in its metadata. The owner's
+	 * own secrets ({@code s/NAME}, {@code /s/NAME} or a bare {@code NAME}) are
+	 * covered as the rest of its namespace is: of right for the owner, and for
+	 * an agent as far as its caps reach (UCAN.md §5.4). Anyone else's, named
+	 * {@code <did>/s/NAME}, needs a presented proof, or the public scope for the
+	 * public store, whose operator-provisioned secrets are nobody's own. A grant
+	 * may be bound to a destination with {@code nb.url}; {@link #resolveSecret(String,
 	 * RequestContext, String)} is the form adapters use when they know where the
 	 * value is going, and a use with no destination never satisfies such a
-	 * caveat. The venue's own secrets are its configured store and its process
+	 * caveat. An operation that uses a secret under its owner's authority, such
+	 * as a credential an operator configured, resolves it with that owner's
+	 * context. The venue's own secrets are its configured store and its process
 	 * environment. There is no fallback of any kind.</p>
 	 *
 	 * @param secretRef Secret name, {@code s/NAME} or {@code <did>/s/NAME}
@@ -4839,20 +4843,19 @@ public class Engine {
 		String name = (named == null) ? secretName(secretRef)
 			: CapabilityChecker.canonicalResource(secretRef, null).substring(named.toString().length() + 3);
 		if (name.isEmpty() || name.indexOf('/') >= 0) return null;   // one secret name, as secret:set requires
-		if (!isOwnSecret(owner, ctx.authorityContext())) {
-			requireLocalAccess(ctx, Strings.create(owner + "/s/" + name), Abilities.SECRET_USE,
-				destination != null ? Strings.create(destination) : null);
-		}
+		requireLocalAccess(ctx, Strings.create(owner + "/s/" + name), Abilities.SECRET_USE,
+			destination != null ? Strings.create(destination) : null);
 		return decryptSecret(owner, name);
 	}
 
 	/**
-	 * Whether {@code secretRef} names a secret in the caller's own store, which
-	 * the caller and its agents use without a grant. False for another
+	 * Whether {@code secretRef} names a secret in the caller's own store, the
+	 * caller being the store's user or one of its agents. False for another
 	 * principal's store, the public store and a malformed reference. An
 	 * operation whose result would leave the caller holding material derived
 	 * from a secret accepts only the caller's own: a {@code secret/use} grant
-	 * is use without seeing the value, never possession.
+	 * is use without seeing the value, never possession. Using the secret is
+	 * still checked where it is resolved.
 	 */
 	public boolean isOwnSecretRef(String secretRef, RequestContext ctx) {
 		if (secretRef == null || ctx == null || ctx.getUserDID() == null) return false;
@@ -4881,12 +4884,10 @@ public class Engine {
 		return CapabilityChecker.canonicalResource(secretRef, null).startsWith("/s/", owner.toString().length()) ? owner : null;
 	}
 
-	/** A user's own secrets are its own to use, and so its agents' (UCAN.md
-	 *  §5.1): the caller must be the user or one of its agents. A delegate
-	 *  acting for the user ({@code user/sudo}) works in the user's namespace
-	 *  but is neither, so it needs a grant like anyone else. The public
-	 *  principal's store is provisioned by the operator and nobody's own, so it
-	 *  needs a grant like any other principal's. */
+	/** Whether {@code owner}'s store is the caller's own: the caller is the user
+	 *  or one of its agents. A delegate acting for the user ({@code user/sudo})
+	 *  works in the user's namespace but is neither. The public principal's
+	 *  store is provisioned by the operator and nobody's own. */
 	private boolean isOwnSecret(AString owner, RequestContext ctx) {
 		if (!owner.equals(ctx.getUserDID()) || isPublicPrincipal(owner)) return false;
 		// By the caller, not the namespace: a delegate's namespace is the user's too.

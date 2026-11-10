@@ -220,6 +220,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - An agent's pinned context and skills index show only what its caps cover.
 - An agent is unrestricted only when its config says `caps: "unrestricted"`; one created without `caps`, or given `caps: null`, has no authority.
 - `agent:step` needs the new `admin/agent` ability on the agent; admission to talk to an agent and `agent/…` grants do not cover it.
+- Using a secret needs `secret/use` on it whoever names it, the caller or the operation it invokes: an agent uses its owner's secrets only as its caps allow, and its harness as its controller may.
 - Every route to data at a path checks it as the data's owner decides, by its DID address: a grant on `<owner>/g/<agent>/n/` covers that agent's `n/`, and one on `<owner>/j/<job>` that job's record and `t/` (#617).
 
 ### Migration
@@ -233,7 +234,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - A delegate that acts for a user through `user:sudo` needs that user's `secret/use` grant for each secret it uses.
 - Changing the config or controller of an agent its owner controls needs the owner's authority: `agent/write` alone no longer allows it for a capped agent or a delegate, including one acting through `user:sudo`.
 - A `user:sudo` delegate holding `agent/create` creates agents its target controls: grant the pair only where you would grant that user's own authority.
-- An agent created by another agent, or by a delegate in another user's namespace without `user:sudo`, is controlled by its creator: it acts with the creator's authority narrowed by its `caps`, not the owner's, so a creating agent's caps must cover `invoke` on the new agent's transition and model operations, and bound what the new agent's tool calls can do.
+- An agent created by another agent, or by a delegate in another user's namespace without `user:sudo`, is controlled by its creator: it acts with the creator's authority narrowed by its `caps`, not the owner's, so a creating agent's caps must cover `invoke` on the new agent's transition and model operations and `secret/use` on the model's key, and bound what the new agent's tool calls can do.
+- Every narrowed context, an agent with caps or a request under a restricted token, needs `secret/use` on each of its owner's secrets it sends: a `bearerSecret`, an `apiKey`, a model's key when it calls a model as a tool, a speech key, an MCP bridge's or an A2A agent's credential. Grant it in the agent's caps, bound to the destination with `nb.url`. An agent its owner controls still thinks with its owner's keys.
 - Pass `caps: "unrestricted"` to `agent:create` (and `agent:fromSkills`, or with a template other than `reader` or `admin`) for an agent that acts with its controller's full authority; existing agents keep the authority they had.
 - To let someone other than its owner step an agent, grant them `admin/agent` on it.
 - Anonymous callers need `auth.public.caps` to grant `invoke` on `v/ops/agent/request`

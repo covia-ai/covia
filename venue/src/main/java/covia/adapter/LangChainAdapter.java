@@ -1121,7 +1121,7 @@ public class LangChainAdapter extends AAdapter {
 		boolean ready = keySecret == null;
 		if (keySecret != null) {
 			try {
-				ready = engine.resolveSecret(keyReference(providerMeta), ctx) != null;
+				ready = engine.resolveSecret(keyReference(providerMeta), ctx, keyDestination(providerMeta)) != null;
 			} catch (RuntimeException e) {
 				ready = false;
 			}
@@ -1242,6 +1242,15 @@ public class LangChainAdapter extends AAdapter {
 	static String keyReference(AMap<AString, ACell> meta) {
 		AString secretKey = RT.ensureString(RT.getIn(meta, Fields.OPERATION, "secretKey"));
 		return (secretKey != null) ? "s/" + secretKey : null;
+	}
+
+	/** Where a call that names no url of its own sends the key: the
+	 *  operation's default url, else its provider's own endpoint. */
+	static String keyDestination(AMap<AString, ACell> meta) {
+		AString url = RT.ensureString(RT.getIn(meta, Fields.OPERATION, Fields.DEFAULT, Fields.URL));
+		if (url != null) return covia.utils.HTTPURLs.normalize(url.toString()).toString();
+		String subOp = getSubOperation(meta);
+		return (subOp == null) ? null : defaultBaseUrl(subOp.split(":", 2)[0]);
 	}
 
 	/** The provider's own endpoint, used when the caller names no url. */
