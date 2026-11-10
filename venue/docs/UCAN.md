@@ -969,9 +969,11 @@ its Python instances, dictations and bot list, is reachable only by a request
 acting with that namespace's authority. A recorded job and a scheduled event
 keep a separate authority with the work and act with it again.
 
-**Each agent has a controller:** the principal whose authority it acts with.
-Its harness acts with that authority as it stands, as that principal's own
-request would hold it (`Engine.context`), and its tool calls with that
+**Each agent has a controller:** the principal whose authority it acts with,
+as that principal's own request would hold it (`Engine.context`), the owner's
+included: a user's is unrestricted in its namespace, and the public
+principal's is the public caps, none while public access is off. Its harness
+acts with that authority as it stands, and its tool calls with that
 authority narrowed by its `config.caps`. The harness does not hold the
 controller's authority for choosing a controller or configuring agents
 (`Engine.holdsAuthorityOf`), and does not reach what is held under the agent's

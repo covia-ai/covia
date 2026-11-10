@@ -4154,7 +4154,10 @@ public class Engine {
 
 	/**
 	 * Agent {@code agentId} as it acts now: in its owner's namespace, with its
-	 * controller's authority narrowed by its caps. Its owner's agents narrow one
+	 * controller's authority narrowed by its caps. A controller's authority is
+	 * what its own request would hold ({@link #context(AString, AString)}),
+	 * the owner's included: unrestricted in its namespace for a user, the
+	 * public caps for the public principal. Its owner's agents narrow one
 	 * scope along the chain of controllers, read at each point of action. A
 	 * controller from another namespace is a separate authority
 	 * ({@link RequestContext#withAuthorityOf}), since it holds nothing of the
@@ -4166,14 +4169,14 @@ public class Engine {
 	 * its own caps.</p>
 	 *
 	 * @param seen the agents already on this chain of controllers
+	 * @throws AuthException when a controller on the chain could not act now
 	 */
 	private RequestContext agentContext(AString owner, AString agentId, Set<AString> seen) {
 		RequestContext agent = RequestContext.ofAgent(owner, agentId);
 		AString self = covia.grid.Principals.agentDID(owner, agentId);
 		RequestContext.ScopeSource caps = resource -> withControl(agentScope(owner, agentId), self, resource, owner);
 		Agent state = getAgent(owner, agentId);
-		AString controller = (state == null) ? null : state.getController();
-		if (controller == null || controller.equals(owner)) return agent.readingScope(caps);
+		AString controller = (state == null) ? owner : state.getController();
 
 		Set<AString> chain = new HashSet<>(seen);
 		chain.add(self);

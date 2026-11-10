@@ -23,6 +23,7 @@ import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.grid.Job;
+import covia.grid.Principals;
 import covia.grid.Status;
 import covia.venue.Agent;
 import covia.venue.Task;
@@ -260,12 +261,13 @@ public class AgentRestartTest {
 	}
 
 	/**
-	 * The harness of an agent the venue's public principal owns acts with that
-	 * principal's authority: what the public caps cover, and nothing while
-	 * public access is off.
+	 * An agent the venue's public principal owns acts with that principal's
+	 * authority, as any owner's agent acts with its owner's: its harness and
+	 * its tool calls alike, even unrestricted, reach what the public caps
+	 * cover, and nothing while public access is off.
 	 */
 	@Test
-	public void aPublicAgentsHarnessActsWithThePublicPrincipalsAuthority() throws Exception {
+	public void aPublicAgentActsWithThePublicPrincipalsAuthority() throws Exception {
 		ACell caps = Vectors.of(
 			Capability.create(Strings.create("g/"), Abilities.AGENT_CREATE),
 			Maps.of(Capability.CAN, Abilities.INVOKE),
@@ -274,22 +276,27 @@ public class AgentRestartTest {
 		AString lobby = Strings.create("lobby");
 		Engine first = venue.mount(withPublicAccess(true, caps)).launch();
 		AString owner = first.publicPrincipal();
+		AString agent = Principals.agentDID(owner, lobby);
 		try {
 			Engine.addDemoAssets(first);
 			first.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, lobby,
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/never")), first.context(owner)).awaitResult(5000);
-			RequestContext harness = first.harnessContext(owner, lobby);
-			assertTrue(first.authorityCovers(harness, Strings.create("w/open/doc"), Capability.CRUD_READ));
-			assertFalse(first.authorityCovers(harness, Strings.create("w/closed/doc"), Capability.CRUD_READ),
-				"no more than the public caps give");
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/never", Config.CAPS, Config.UNRESTRICTED)),
+				first.context(owner)).awaitResult(5000);
+			for (RequestContext acting : new RequestContext[] {first.harnessContext(owner, lobby), first.context(owner, agent)}) {
+				assertTrue(first.authorityCovers(acting, Strings.create("w/open/doc"), Capability.CRUD_READ));
+				assertFalse(first.authorityCovers(acting, Strings.create("w/closed/doc"), Capability.CRUD_READ),
+					"no more than the public caps give");
+			}
 		} finally {
 			first.close();
 		}
 
 		Engine second = venue.mount(withPublicAccess(false, caps)).launch();
 		try {
-			AuthException off = assertThrows(AuthException.class, () -> second.harnessContext(owner, lobby));
-			assertEquals(Engine.PUBLIC_ACCESS_OFF, off.getMessage());
+			AuthException harness = assertThrows(AuthException.class, () -> second.harnessContext(owner, lobby));
+			assertEquals(Engine.PUBLIC_ACCESS_OFF, harness.getMessage());
+			AuthException tools = assertThrows(AuthException.class, () -> second.context(owner, agent));
+			assertEquals(Engine.PUBLIC_ACCESS_OFF, tools.getMessage());
 		} finally {
 			second.close();
 		}
