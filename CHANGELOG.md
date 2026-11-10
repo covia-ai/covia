@@ -223,7 +223,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Changing the config or controller of an agent its owner controls needs the owner's authority: `agent/write` alone no longer allows it for a capped agent or a delegate, including one acting through `user:sudo`.
 - A `user:sudo` delegate holding `agent/create` creates agents its target controls: grant the pair only where you would grant that user's own authority.
 - An agent created by another agent, or by a delegate in another user's namespace without `user:sudo`, is controlled by its creator: it acts with the creator's authority narrowed by its `caps`, not the owner's, so a creating agent's caps must cover `invoke` on the new agent's transition and model operations, and bound what the new agent's tool calls can do.
-- Pass `caps: "unrestricted"` to `agent:create` (and `agent:fromSkills`, or with a template other than `reader`) for an agent that acts with its controller's full authority; existing agents keep the authority they had, and an existing agent of the venue's without caps now holds venue authority.
+- Pass `caps: "unrestricted"` to `agent:create` (and `agent:fromSkills`, or with a template other than `reader`) for an agent that acts with its controller's full authority; existing agents keep the authority they had.
 - Anonymous callers need `auth.public.caps` to grant `invoke` on `v/ops/agent/request`
   and `v/ops/agent/message`, and `crud/read` on `j` to follow their jobs.
 - An open chat bot's agent needs `accepts: "anyone"`, and the public scope `invoke` on
