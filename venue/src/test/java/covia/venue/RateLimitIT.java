@@ -20,9 +20,10 @@ import covia.venue.server.VenueServer;
  * {@code blockMs = 0} sheds immediately, so the outcome does not depend on
  * request rate, refill, or load. The token-bucket and admission mechanisms
  * themselves are unit-tested by {@code RateLimiterTest} / {@code JobConcurrencyCapTest};
- * the enable/default logic by {@code ConfigRateLimitTest}.
+ * the enable/default logic by {@code ConfigRateLimitTest}. It needs a venue of
+ * its own with limits on, so it is a failsafe integration test.
  */
-public class RateLimitTest {
+public class RateLimitIT {
 
 	@Test
 	public void testConcurrentJobCap429() throws Exception {

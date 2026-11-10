@@ -290,6 +290,9 @@ Adapter-owned state uses `AdapterState`; see
   identity) gets it from `TestTemp.etch` or `TestTemp.etchFile`, never
   `@TempDir` or `EtchStore.createTemp` (`TestTemp` says why); a test server
   names its store, `"memory"` unless persistence is under test
+- Rate-limit wiring tests, which need a venue of their own with limits on,
+  are failsafe `*IT`s (`RateLimitIT`); the limiter itself is unit-tested on an
+  injected clock (`RateLimiterTest`)
 - A test that opens a release-written store fixture (`src/test/resources/migrations`)
   is a failsafe `*IT`, run by `mvn verify`; migration unit tests build their
   older states in code (`docs/MIGRATE.md`, Testing), and a new venue version or

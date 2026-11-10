@@ -19,9 +19,10 @@ import covia.venue.server.VenueServer;
  * {@link RateLimitException} through {@link VenueHTTP}. Deterministic — a
  * never-completing job holds the single job slot and the client is configured
  * with a no-retry policy, so the second invoke fails immediately with no
- * sleeping or timing dependence.
+ * sleeping or timing dependence. It needs a venue of its own with limits on, so
+ * it is a failsafe integration test.
  */
-public class VenueHTTPRateLimitTest {
+public class VenueHTTPRateLimitIT {
 
 	@Test
 	public void testInvokeGets429AsRateLimitException() throws Exception {
