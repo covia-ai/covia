@@ -8,6 +8,8 @@ import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Stream;
 import java.util.zip.ZipInputStream;
 
@@ -43,6 +45,8 @@ class VenueUpgradeIT {
 	private static final AString K_CONVERSATION = Strings.create("conversation");
 	private static final AString K_HISTORY_VERSION = Strings.create("historyVersion");
 	private static final AString K_KEY_VERSION = Strings.create("keyVersion");
+	private static final AString K_PREV = Strings.create("prev");
+	private static final AString K_ACTOR = Strings.create("actor");
 
 	/** Every release fixture, oldest release first: covia-0.9.11.zip before covia-0.10.0.zip. */
 	static List<String> fixtures() throws Exception {
@@ -85,7 +89,23 @@ class VenueUpgradeIT {
 			assertEquals(RELEASE_ADAPTER_VERSIONS.get(text(manifest, "coviaVersion")), stored.adapters());
 			assertEquals(released, store.getRootData(), "peeking writes nothing");
 
-			Engine engine = TestEngine.application(store).mount(key, VenueStoreFixture.config(file)).launch();
+			// An embedder runs its own data steps in the launch hook: Covia's
+			// migration has finished by then, every release record converted.
+			AtomicBoolean hookRan = new AtomicBoolean();
+			AVector<ACell> releaseUsers = RT.ensureVector(manifest.get(Strings.create("users")));
+			Engine engine = TestEngine.application(store).mount(key, VenueStoreFixture.config(file)).launch(prepared -> {
+				assertEquals(VenueState.CURRENT_VERSION, prepared.getVenueState().version(),
+					"the venue is migrated before the embedder's hook runs");
+				for (ACell user : releaseUsers) {
+					AMap<AString, ACell> job = prepared.getVenueState().users().user(Strings.create(text(user, "did")))
+						.jobs().getRecord(Blob.fromHex(text(user, "jobId")));
+					assertFalse(job.containsKey(K_PREV) || job.containsKey(K_ACTOR),
+						"a release job record is in the current shape when the hook runs: " + job.keySet());
+				}
+				hookRan.set(true);
+				return CompletableFuture.completedFuture(null);
+			});
+			assertTrue(hookRan.get(), "launch ran the hook");
 			try {
 				VenueState venue = engine.getVenueState();
 				assertEquals(VenueState.CURRENT_VERSION, venue.version());

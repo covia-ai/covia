@@ -86,13 +86,15 @@ schema versions, Covia's and each adapter's, without starting a venue.
   what it carries over from the venue's secrets. Launch then finds the state
   current.
 - Launch itself migrates the venue with the built-in and configured-module
-  adapters, and an adapter you register later migrates as it registers.
+  adapters before it calls the launch hook, and an adapter you register later,
+  in the hook or after, migrates as it registers.
 - Stored state newer than the build fails with `UnsupportedVersionException`,
   with nothing written. From `VenueServer.launch` it is the cause of the
   exception thrown: walk `getCause()`.
 
 Covia never runs your own migration steps: run them after Covia's, in your
-own code. See [MIGRATE.md](MIGRATE.md).
+own code. The launch hook is one place: the stored state is current there, and
+recovered work starts only after the hook returns. See [MIGRATE.md](MIGRATE.md).
 
 ## Time
 
