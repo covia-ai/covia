@@ -120,7 +120,7 @@ covia_read  path=g/<name>/sessions/<sid>/frames
 Walk through tool calls:
 1. Did it read the right data?
 2. Did it pass the right values to the next tool?
-3. Did it call `complete_task` with the right output?
+3. Did it settle the task with the right output (`complete_task`, or its closing reply)?
 
 ### Caps not enforced
 
@@ -131,11 +131,11 @@ record stores it.)
 
 If caps are present but not enforced, check the timeline for tool results — denied operations return `"Error: Capability denied: ..."` as the tool result.
 
-### Agent didn't call complete_task
+### Task completed with prose instead of a structured result
 
-The LLM sometimes produces a text response instead of calling `complete_task`. Look for the last message in history — if it's `{"role": "assistant", "content": "..."}` without `toolCalls`, the LLM chose to respond conversationally instead of completing the task.
+An agent that ends its turn with text, without calling `complete_task`, `fail_task` or `park_task`, completes the task with that text as its result. Look for the last message in history — if it's `{"role": "assistant", "content": "..."}` without `toolCalls`, the LLM answered in prose.
 
-Fix: strengthen the system prompt with "You MUST call complete_task for every task" or use structured output (`responseFormat`) to force the schema.
+Fix: send the request with a `responseSchema` and `strict: true`, so a reply that does not conform fails the task with the reason; strengthen the system prompt to call `complete_task` with the structured result; or use structured output (`responseFormat`) to force the schema.
 
 ## Caps testing
 

@@ -1508,7 +1508,7 @@ Pure duplication. The record's `K_CONFIG` is canonical and is already passed int
 
 #### 8.3.2 Cycle scope is over-fitted to "a picked task"
 
-The framework picks at most one task and at most one session per cycle, then bakes them into the step input via `formatPickedTask` / `pickSessionForCycle`. This fits `agent:request` cleanly, but distorts every other wake event:
+The framework picks at most one task and at most one session per cycle, then bakes them into the step input via `pickNext` / `formatPickedTask`. This fits `agent:request` cleanly, but distorts every other wake event:
 
 - **Trigger** fires with no task and no session — the framework synthesises empty inputs.
 - **Scheduled fire** fires with no payload — the agent is woken to "think now."
