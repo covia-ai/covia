@@ -1272,7 +1272,8 @@ public class AgentAdapter extends AAdapter {
 
 	/**
 	 * The operations {@code config}'s tools name on another venue
-	 * ({@link Engine#isRemote}), as written. They are never fetched to check them.
+	 * ({@link Engine#isRemoteDefinition}), as written. They are never fetched
+	 * to check them.
 	 */
 	private java.util.List<String> remoteTools(AMap<AString, ACell> config) {
 		java.util.List<String> remote = new java.util.ArrayList<>();
@@ -1281,7 +1282,7 @@ public class AgentAdapter extends AAdapter {
 		for (long i = 0; i < tools.count(); i++) {
 			AString[] parsed = ToolPalette.parseConfigToolEntry(tools.get(i));
 			AString operation = (parsed == null) ? null : parsed[0];
-			if (operation != null && engine.isRemote(operation)) {
+			if (operation != null && engine.isRemoteDefinition(operation)) {
 				remote.add(operation.toString());
 			}
 		}
@@ -1289,13 +1290,13 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	/**
-	 * Advisory for configured operation tools whose metadata is missing,
-	 * unreachable, or unreadable under the agent's own {@code config.caps}
-	 * (#317). Resolution is live every turn, so fixing the path, remote venue, or
-	 * read grant makes the tool available without recreating the agent. Harness
-	 * pseudo-tools ({@code subgoal}, {@code complete}, …) are not operations and
-	 * are never flagged, and {@code remote} ones, which have a warning of their
-	 * own, are not fetched to check them.
+	 * Advisory for configured operation tools whose metadata is missing or
+	 * unreadable under the agent's own {@code config.caps} (#317). Resolution
+	 * is live every turn, so fixing the path or read grant makes the tool
+	 * available without recreating the agent. Harness pseudo-tools
+	 * ({@code subgoal}, {@code complete}, …) are not operations and are never
+	 * flagged, and tools on another venue ({@code remote}), which have a
+	 * warning of their own, are not fetched to check them.
 	 */
 	private AString unavailableToolsWarning(AMap<AString, ACell> config, RequestContext ctx, java.util.List<String> remote) {
 		if (config == null) return null;

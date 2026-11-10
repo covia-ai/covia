@@ -2267,7 +2267,7 @@ public class Engine {
 		if (r.name() != null) {
 			// Named refs are publisher-scoped bindings — OUR v/ops/x is not
 			// THEIR v/ops/x, so there is no local-copy shortcut.
-			return (fetch && "web".equals(r.method()))
+			return (fetch && fetchable(r))
 				? fetchRemoteNamedAsset(ctx, r.didString(), r.name()) : null;
 		}
 		Asset local = lookupLocalAsset(r);
@@ -2279,7 +2279,24 @@ public class Engine {
 			if (checked) requireMetadataRead(ctx, ref);
 			return local;
 		}
-		return (fetch && "web".equals(r.method())) ? fetchRemoteAsset(ctx, r.didString(), r.hash()) : null;
+		return (fetch && fetchable(r)) ? fetchRemoteAsset(ctx, r.didString(), r.hash()) : null;
+	}
+
+	/** Whether a definition {@code r} names can be fetched from its owner: only a did:web has an address. */
+	private static boolean fetchable(AssetRef r) {
+		return "web".equals(r.method());
+	}
+
+	/**
+	 * Whether {@code ref} names a definition held on another venue, which
+	 * {@link #resolveAsset} fetches from there whenever this venue holds no
+	 * copy: an asset or catalog reference ({@link #parseAssetRef}) whose owner
+	 * is remote ({@link #isRemote}) and can be fetched from. Nothing is
+	 * resolved or fetched to answer.
+	 */
+	public boolean isRemoteDefinition(AString ref) {
+		AssetRef r = parseAssetRef(ref);
+		return r != null && fetchable(r) && isRemote(ref);
 	}
 
 	/**

@@ -972,6 +972,28 @@ public class AgentAdapterTest {
 	}
 
 	@Test
+	public void testCreateReportsAToolOfAnUnhostedDIDKeyAsUnavailable() {
+		// A did:key has no address, so its definition is never fetched: the tool
+		// works only if this venue holds it, and is reported as any missing tool.
+		RequestContext caller = RequestContext.of(ALICE_DID);
+		Hash list = engine.resolveAsset(Strings.create("v/ops/covia/list"), caller).getID();
+		String unhosted = TestEngine.uniqueDID("unhosted-tool-owner") + "/a/" + list.toHexString();
+		ACell result = engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(
+			Fields.AGENT_ID, "unhosted-key-tool",
+			Fields.CONFIG, Maps.of(
+				"operation", "v/ops/llmagent/chat",
+				"llmOperation", "v/ops/langchain/openai",
+				"tools", Vectors.of(unhosted))),
+			caller).awaitResult(5000);
+
+		AVector<ACell> warnings = RT.ensureVector(RT.getIn(result, Fields.WARNINGS));
+		assertNotNull(warnings, "a tool that cannot resolve is reported: " + result);
+		assertEquals(1, warnings.count(), warnings.toString());
+		assertNotEquals(Strings.create(AgentAdapter.REMOTE_TOOLS.formatted(unhosted)), warnings.get(0));
+		assertTrue(warnings.get(0).toString().contains(unhosted), warnings.toString());
+	}
+
+	@Test
 	public void testUpdateSharesCreateWarningsForMergedConfig() {
 		RequestContext caller = RequestContext.of(ALICE_DID);
 		ACell created = engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(
