@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
@@ -424,6 +425,11 @@ final class BotRunner implements MessagingBot<BotSpec> {
 	/** Whether queued intake for one chat has finished (replies may still be pending). */
 	boolean isChatIdle(long chatId) {
 		return conversations.isIdle(Long.toString(chatId));
+	}
+
+	/** Completes when the intake queued so far for one chat has finished (replies may still be pending). */
+	CompletableFuture<Void> whenChatIdle(long chatId) {
+		return conversations.whenIdle(Long.toString(chatId));
 	}
 
 	private void pollError(String why) {

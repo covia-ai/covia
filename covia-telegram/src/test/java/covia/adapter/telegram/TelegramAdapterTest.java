@@ -696,10 +696,8 @@ public class TelegramAdapterTest {
 			assertEquals(covia.adapter.webhook.WebhookInbox.COMPLETE, inbox.get(first).get(Fields.STATUS));
 			assertEquals(covia.adapter.webhook.WebhookInbox.COMPLETE, inbox.get(second).get(Fields.STATUS));
 			int calls = modelCalls.get();
-			configureBots(Maps.empty());
-			configureBots(Maps.of("echo", config));
-			awaitState("echo", BotRunner.State.RUNNING, 10_000);
-			assertNull(telegram.awaitSent(600));
+			restartEcho(config, chat);
+			assertNull(telegram.awaitSent(0));
 			assertEquals(calls, modelCalls.get(), "a failed outbound reply must not redeliver session input");
 		} finally {
 			response.complete(Maps.of("role", "assistant", "content", "Generated response"));
@@ -726,10 +724,8 @@ public class TelegramAdapterTest {
 		assertTrue(reply.text().contains("Recover this pending turn"), reply.text());
 		await(() -> covia.adapter.webhook.WebhookInbox.COMPLETE.equals(inbox.get("900001").get(Fields.STATUS)), 10_000, () -> "receipt did not complete");
 		inbox.accept("900001", update);
-		configureBots(Maps.empty());
-		configureBots(Maps.of("echo", echoBotConfig()));
-		awaitState("echo", BotRunner.State.RUNNING, 10_000);
-		assertNull(telegram.awaitSent(600), "completed or uncertain receipts must not run again");
+		restartEcho(echoBotConfig(), 15002);
+		assertNull(telegram.awaitSent(0), "completed or uncertain receipts must not run again");
 		assertEquals(covia.adapter.webhook.WebhookInbox.STARTED, inbox.get("900002").get(Fields.STATUS));
 	}
 
@@ -756,12 +752,11 @@ public class TelegramAdapterTest {
 		String lastError = receipt.get(covia.adapter.webhook.WebhookInbox.LAST_ERROR).toString();
 		assertEquals(BotRunner.UNDELIVERED.formatted(lastError), notice.text());
 		assertEquals(1, telegram.getFileCalls.get("never-uploaded").get());
-		assertNull(telegram.awaitSent(400), "one notice per update");
+		adapter.runner("echo").whenChatIdle(17101).get(10, java.util.concurrent.TimeUnit.SECONDS);
+		assertNull(telegram.awaitSent(0), "one notice per update");
 
-		configureBots(Maps.empty());
-		configureBots(Maps.of("echo", echoBotConfig()));
-		awaitState("echo", BotRunner.State.RUNNING, 10_000);
-		assertNull(telegram.awaitSent(600), "a FAILED update is neither retried nor reported again after restart");
+		restartEcho(echoBotConfig(), 17101);
+		assertNull(telegram.awaitSent(0), "a FAILED update is neither retried nor reported again after restart");
 		assertEquals(receipt, inbox.get(id));
 		assertEquals(1, telegram.getFileCalls.get("never-uploaded").get());
 		assertTrue(((CVMLong) adapter.runner("echo").status().get(Strings.intern("failedUpdates"))).longValue() >= 1);
@@ -787,7 +782,8 @@ public class TelegramAdapterTest {
 			var receipt = echoInbox().get(id);
 			assertEquals(covia.adapter.webhook.WebhookInbox.FAILED, receipt.get(Fields.STATUS));
 			assertEquals(Strings.create(BotRunner.DELIVERY_FAILED), receipt.get(Fields.REASON));
-			assertNull(telegram.awaitSent(400));
+			adapter.runner("echo").whenChatIdle(17102).get(10, java.util.concurrent.TimeUnit.SECONDS);
+			assertNull(telegram.awaitSent(0), "one notice per update");
 			assertEquals(jobs, engine.jobs().getJobs(RequestContext.of(OWNER)).count(), "a suspended agent gets no failed chat Job");
 		} finally {
 			configureBots(Maps.of("echo", echoBotConfig()));
@@ -1444,15 +1440,19 @@ public class TelegramAdapterTest {
 		long group = -4001L;
 		// An allowed user writes in a group: a reply there would be read by everyone
 		// present, so the update is ignored — commands included…
-		telegram.push(FakeTelegramServer.TOKEN, group, "supergroup", ALLOWED_ID, "alice", "hey bot, in the group");
-		telegram.push(FakeTelegramServer.TOKEN, group, "group", ALLOWED_ID, "alice", "/id");
+		int inGroup = telegram.push(FakeTelegramServer.TOKEN, group, "supergroup", ALLOWED_ID, "alice", "hey bot, in the group");
+		int command = telegram.push(FakeTelegramServer.TOKEN, group, "group", ALLOWED_ID, "alice", "/id");
 		// …while their private chat is answered as usual.
 		telegram.push(ALLOWED_ID, ALLOWED_ID, "alice", "and in private");
 		FakeTelegramServer.Sent reply = telegram.awaitSent(15_000);
 		assertNotNull(reply);
 		assertEquals(ALLOWED_ID, reply.chatId(), "only the private chat is answered: " + reply.text());
 		assertTrue(reply.text().contains("and in private"), reply.text());
-		assertNull(telegram.awaitSent(1_000), "no reply in the group, not even to a command");
+		// The group updates came first and were dropped as they were read, with
+		// no receipt, so nothing was queued that could reply later.
+		assertNull(echoInbox().get(Integer.toString(inGroup)), "nothing is queued for the group");
+		assertNull(echoInbox().get(Integer.toString(command)), "nothing is queued for a command in the group");
+		assertNull(telegram.awaitSent(0), "no reply in the group, not even to a command");
 		assertNull(readSession("echo", group), "no conversation is started for the group");
 	}
 
@@ -1645,6 +1645,19 @@ public class TelegramAdapterTest {
 	private static AMap<AString, ACell> echoBotConfig() {
 		return botConfig(FakeTelegramServer.TOKEN, OWNER.toString(), "agent", AGENT,
 			Vectors.of(CVMLong.create(ALLOWED_ID), Strings.create("@alice")));
+	}
+
+	/**
+	 * Restarts the echo bot with {@code config} and waits until the new runner
+	 * has replayed what it recovered for {@code chat}: it queues that replay
+	 * before its first poll, and the chat's queue then drains it.
+	 */
+	private static void restartEcho(AMap<AString, ACell> config, long chat) throws Exception {
+		configureBots(Maps.empty());
+		int polls = telegram.polls(FakeTelegramServer.TOKEN);
+		configureBots(Maps.of("echo", config));
+		telegram.awaitPoll(FakeTelegramServer.TOKEN, polls, 10_000);
+		adapter.runner("echo").whenChatIdle(chat).get(10, java.util.concurrent.TimeUnit.SECONDS);
 	}
 
 	private static void configureBots(AMap<AString, ACell> bots) {

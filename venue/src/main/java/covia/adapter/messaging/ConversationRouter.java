@@ -97,6 +97,12 @@ public final class ConversationRouter {
 		return tail == null || tail.isDone();
 	}
 
+	/** Completes when the work queued for this conversation so far has finished, whether or not it failed. */
+	public CompletableFuture<Void> whenIdle(String conversation) {
+		CompletableFuture<Void> tail = tails.get(conversation);
+		return (tail == null) ? CompletableFuture.completedFuture(null) : tail.handle((result, failure) -> null);
+	}
+
 	/** Whether the agent already holds this conversation: a stored session, or a turn queued or running. */
 	public boolean holds(String conversation) {
 		return spec.routesToAgent() && (!isIdle(conversation) || sessions.get(conversation) != null);

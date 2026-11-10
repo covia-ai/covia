@@ -52,6 +52,8 @@ final class FakeTelegramServer implements AutoCloseable {
 		final List<Map<String, Object>> updates = new ArrayList<>();
 		final BlockingQueue<Sent> sent = new LinkedBlockingQueue<>();
 		final AtomicInteger getMeCalls = new AtomicInteger();
+		/** getUpdates requests so far; guarded by {@code updates}, whose waiters it wakes. */
+		int polls;
 		Bot(String username) { this.username = username; }
 	}
 
@@ -189,6 +191,31 @@ final class FakeTelegramServer implements AutoCloseable {
 		return bot(token).sent.poll(timeoutMs, TimeUnit.MILLISECONDS);
 	}
 
+	/** getUpdates requests the bot has made so far. */
+	int polls(String token) {
+		Bot b = bot(token);
+		synchronized (b.updates) {
+			return b.polls;
+		}
+	}
+
+	/**
+	 * Waits for the bot's next getUpdates request after the first {@code seen}.
+	 * A runner replays what it recovered before it first polls, so its first
+	 * request after a start means that replay has been queued.
+	 */
+	void awaitPoll(String token, int seen, long timeoutMs) throws InterruptedException {
+		Bot b = bot(token);
+		long deadline = System.currentTimeMillis() + timeoutMs;
+		synchronized (b.updates) {
+			while (b.polls <= seen) {
+				long left = deadline - System.currentTimeMillis();
+				if (left <= 0) throw new AssertionError("the bot did not poll");
+				b.updates.wait(left);
+			}
+		}
+	}
+
 	/** Drain any already-observed outbound messages of the default bot. */
 	List<Sent> drainSent() {
 		List<Sent> out = new ArrayList<>();
@@ -264,6 +291,8 @@ final class FakeTelegramServer implements AutoCloseable {
 					long deadline = System.currentTimeMillis() + Math.min(timeoutSecs * 1000, 500);
 					List<Map<String, Object>> result = new ArrayList<>();
 					synchronized (bot.updates) {
+						bot.polls++;
+						bot.updates.notifyAll();
 						bot.updates.removeIf(u -> ((Integer) u.get("update_id")) < offset);
 						while (bot.updates.isEmpty()) {
 							long left = deadline - System.currentTimeMillis();
