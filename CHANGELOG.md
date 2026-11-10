@@ -8,6 +8,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-10
+
 ### Added
 
 - Agents have a `controller`, the principal whose authority they act with, narrowed by their `caps`: whoever creates or forks the agent, or one it names that the creator holds the authority of. Changing an agent's config or controller needs that controller's authority; `agent:info` and `agent:list` show it.
@@ -38,13 +40,9 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 ### Changed
 
 - Agents explicitly distinguish ordinary chat from assigned tasks before using task-completion tools; context previews include the live reply guidance.
-
 - HTTP redirects recheck credential grants at each destination, preventing same-origin redirects from escaping a granted URL path.
-
 - Outbound HTTP URLs are normalised before destination checks and sending, preventing dot-segment escapes from URL-scoped credential grants.
-
 - `invoke` scopes generic operation lookup by location; direct tools use their action permissions without an invocation grant. Rebuild adapter modules with the venue.
-
 - Requires Convex 0.8.19.
 - `agent:message`, `agent:cancelTask` and a job named in an agent's context take an id with or without `0x`, as other id inputs do (#669).
 - Whitespace around a hash or hex id in a path or asset reference no longer names the same thing.
@@ -115,7 +113,6 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - An A2A send's job names its remote task only as `delegation.remoteId`; `remoteTaskId` is gone.
 - A remote job's record shows only `delegation.remoteId`, `delegation.remoteStatus` and, once the venue stops following the remote job, `delegation.notFollowed` saying why; `protocol`, `target`, `ownsRemote` and observation health are gone, from older records too (venue version 2).
 - The venue keeps no `remote-job-<id>` secrets; upgrading removes them, those left by a crash included.
-
 - Every DID is its own namespace; scheduled fires and restored contexts keep the one they recorded.
 - `Engine.context` replaces `principalContext` and `publicContext`.
 - `RequestContext.of(did, proofs)` removed; use `of(did).withProofs(proofs)`.
@@ -1001,7 +998,8 @@ Initial public release: venue server with the adapter framework, lattice-backed
 content-addressed assets, the async job model with SSE, multi-protocol surface
 (REST / MCP / A2A / DID), and strategy-based authentication.
 
-[Unreleased]: https://github.com/covia-ai/covia/compare/0.10.0...HEAD
+[Unreleased]: https://github.com/covia-ai/covia/compare/0.11.0...HEAD
+[0.11.0]: https://github.com/covia-ai/covia/compare/0.10.0...0.11.0
 [0.10.0]: https://github.com/covia-ai/covia/compare/0.9.11...0.10.0
 [0.9.11]: https://github.com/covia-ai/covia/compare/0.9.10...0.9.11
 [0.9.10]: https://github.com/covia-ai/covia/compare/0.9.9...0.9.10

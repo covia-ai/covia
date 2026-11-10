@@ -229,7 +229,7 @@ public abstract class AAdapter {
 	 * @deprecated Give the steps as {@link #stateSteps()}, and do not override
 	 *             {@link #stateVersion()}.
 	 */
-	@Deprecated(since = "0.10.1", forRemoval = true)
+	@Deprecated(since = "0.11.0", forRemoval = true)
 	public ACell migrateState(long version, ACell state) {
 		java.util.List<covia.venue.migration.MigrationStep> steps = stateSteps();
 		if (version < 0 || version >= steps.size()) {
