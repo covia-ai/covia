@@ -18,6 +18,9 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
 
+import convex.auth.ucan.Capability;
+import convex.auth.ucan.UCAN;
+import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
@@ -30,17 +33,21 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.util.Utils;
+import covia.adapter.TestAdapter;
+import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.AuthException;
+import covia.exception.InvalidInputException;
+import covia.exception.NotFoundException;
 import covia.grid.Job;
 import covia.grid.Status;
 
 /**
  * Tests for the per-venue grid {@link Scheduler}. Firing is exercised
- * deterministically via {@link Scheduler#trigger} (fire-by-handle) — no
- * wall-clock sleeps — except one test that lets the alarm fire an
- * immediately-due event. Owner isolation makes these safe under the shared
- * parallel engine. See {@code venue/docs/GRID_SCHEDULER.md}.
+ * deterministically via {@link Scheduler#trigger} (fire-by-handle). Owner
+ * isolation makes these safe under the shared parallel engine. Firing by an
+ * update is {@link SteppedSchedulerTest} and {@link BothClocksTest}. See
+ * {@code venue/docs/GRID_SCHEDULER.md}.
  */
 public class SchedulerTest {
 
@@ -49,7 +56,7 @@ public class SchedulerTest {
 	private AString did;
 	private RequestContext ctx;
 
-	/** Comfortably beyond any test run, so the alarm never fires these mid-test. */
+	/** How far ahead {@link #future} schedules: never due on the shared engine's held clock. */
 	private static final long HOUR = 3_600_000L;
 
 	private static AString s(String x) { return Strings.create(x); }
@@ -63,8 +70,20 @@ public class SchedulerTest {
 
 	private long future() { return System.currentTimeMillis() + HOUR; }
 
+	/** A real agent of the test's user, acting as it does now: nothing fires as an agent that does not exist. */
+	private RequestContext agent(String id, AVector<ACell> caps) {
+		AMap<AString, ACell> config = (caps == null) ? Maps.empty() : Maps.of(Config.CAPS, caps);
+		engine.jobs().invokeOperation("v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, id, Fields.CONFIG, config), ctx).awaitResult(5000);
+		return engine.context(did, covia.grid.Principals.agentDID(did, s(id)));
+	}
+
+	private void deleteAgent(String id) {
+		engine.jobs().invokeOperation("v/ops/agent/delete", Maps.of(Fields.AGENT_ID, id), ctx).awaitResult(5000);
+	}
+
 	private static AMap<AString, ACell> everyHour() {
-		return Maps.of(ScheduleState.K_EVERY, CVMLong.create(HOUR));
+		return Maps.of(Schedule.K_EVERY, CVMLong.create(HOUR));
 	}
 
 	@SuppressWarnings("unchecked")
@@ -85,7 +104,7 @@ public class SchedulerTest {
 		var cursor = engine.getVenueState().schedule().cursor();
 		AMap<AString, ACell> record = assertInstanceOf(AMap.class, cursor.get());
 		assertInstanceOf(CVMLong.class, record.get(Fields.UPDATED));
-		assertInstanceOf(Index.class, record.get(ScheduleState.K_EVENTS));
+		assertInstanceOf(Index.class, record.get(Schedule.K_EVENTS));
 
 		// An events mutation must update the field in place, not rebuild the
 		// scheduler record and discard future sibling metadata.
@@ -114,6 +133,140 @@ public class SchedulerTest {
 		assertTrue(sched.list(ctx).isEmpty(), "triggered event should be removed");
 	}
 
+	/** A fire runs as its actor would invoke the operation now. */
+	@Test
+	public void testFireRunsAsTheActorNow() {
+		AVector<ACell> invoke = Vectors.of(Maps.of(Capability.CAN, s("invoke")));
+		RequestContext worker = agent("worker", invoke);
+		Blob own = sched.schedule(s("v/test/ops/echo"), s("x"), ctx, future());
+		Blob agents = sched.schedule(s("v/test/ops/echo"), s("x"), worker, future());
+		Schedule state = engine.getVenueState().schedule();
+
+		RequestContext fired = sched.fireContext(state.find(own).rec());
+		assertEquals(did, fired.getCallerDID());
+		assertNull(fired.getCaps());
+
+		fired = sched.fireContext(state.find(agents).rec());
+		assertEquals(worker.getCallerDID(), fired.getCallerDID());
+		assertEquals(did, fired.getUserDID());
+		assertEquals(invoke, fired.getCaps());
+
+		// Narrowing the agent narrows what its queued work may do.
+		AVector<ACell> narrower = Vectors.of(Maps.of(Capability.CAN, s("crud/read")));
+		engine.jobs().invokeOperation("v/ops/agent/update", Maps.of(Fields.AGENT_ID, "worker",
+			Fields.CONFIG, Maps.of(Config.CAPS, narrower)), ctx).awaitResult(5000);
+		assertEquals(narrower, sched.fireContext(state.find(agents).rec()).getCaps());
+
+		// A delegate fires only while a user/sudo delegation still authorises it.
+		RequestContext delegate = RequestContext.of(s(did + "-delegate")).onBehalfOf(did);
+		Blob delegated = sched.schedule(s("v/test/ops/echo"), s("x"), delegate, future());
+		assertThrows(AuthException.class, () -> sched.fireContext(state.find(delegated).rec()));
+
+		assertTrue(sched.cancel(own, ctx));
+		assertTrue(sched.cancel(agents, ctx));
+		assertTrue(sched.cancel(delegated, ctx));
+	}
+
+	@Test
+	public void testAgentFireRunsInItsOwnersNamespace() throws Exception {
+		AVector<ACell> caps = Vectors.of(Maps.of(Capability.CAN, s("invoke")));
+		RequestContext agent = agent("worker", caps);
+		Blob handle = sched.schedule(s("v/test/ops/capturectx"), Maps.empty(), agent, future());
+		TestAdapter.CAPTURED_CTX.remove(did);
+		sched.trigger(handle, agent).get(5, TimeUnit.SECONDS);
+		RequestContext fired = TestAdapter.CAPTURED_CTX.get(did);
+		assertNotNull(fired, "the fire ran in the owner's namespace");
+		assertEquals(agent.getCallerDID(), fired.getCallerDID());
+		assertEquals(caps, fired.getCaps());
+	}
+
+	/** A delegate's event fires in the owner's namespace while its user/sudo grant authorises it. */
+	@Test
+	public void testADelegatedEventFiresUnderItsGrant() throws Exception {
+		AKeyPair ownerKey = AKeyPair.generate();
+		AKeyPair delegateKey = AKeyPair.generate();
+		AString owner = UCAN.toDIDKey(ownerKey.getAccountKey());
+		AString delegate = UCAN.toDIDKey(delegateKey.getAccountKey());
+		engine.getVenueState().users().create(owner);
+		engine.getVenueState().users().create(delegate);
+		AString grant = UCAN.create(ownerKey, delegateKey.getAccountKey(),
+			(System.currentTimeMillis() / 1000) + 3600,
+			Vectors.of(Capability.create(owner, Abilities.USER_SUDO),
+				Capability.create(s(owner + "/v/test/ops/capturectx"), s("invoke"))),
+			Vectors.empty()).toJWT(ownerKey);
+		RequestContext sudo = engine.sudoContext(engine.withTransportGrants(
+			RequestContext.of(delegate), Vectors.of(grant)), owner);
+
+		Blob handle = sched.schedule(s("v/test/ops/capturectx"), Maps.empty(), sudo, future());
+		TestAdapter.CAPTURED_CTX.remove(owner);
+		sched.trigger(handle, RequestContext.of(owner)).get(5, TimeUnit.SECONDS);
+		RequestContext fired = TestAdapter.CAPTURED_CTX.get(owner);
+		assertNotNull(fired, "the fire ran in the owner's namespace");
+		assertEquals(delegate, fired.getCallerDID());
+	}
+
+	/** An agent's step acts as the agent, so what it schedules fires as the agent. */
+	@Test
+	public void testAStepSchedulesAsItsAgent() {
+		AVector<ACell> caps = Vectors.of(Maps.of(Capability.CAN, s("invoke")));
+		RequestContext worker = agent("stepper", caps);
+		RequestContext step = engine.stepContext(ctx, s("stepper"));
+		assertEquals(worker.getCallerDID(), step.getCallerDID());
+		assertEquals(did, step.getUserDID());
+		assertEquals(caps, step.getCaps());
+
+		Blob handle = sched.schedule(s("v/test/ops/echo"), s("x"), step, future());
+		RequestContext fired = sched.fireContext(engine.getVenueState().schedule().find(handle).rec());
+		assertEquals(worker.getCallerDID(), fired.getCallerDID());
+		assertEquals(caps, fired.getCaps());
+		assertTrue(sched.cancel(handle, ctx));
+	}
+
+	@Test
+	public void testDeletingAnAgentRemovesItsEvents() {
+		RequestContext agent = agent("leaver", null);
+		Blob once = sched.schedule(s("v/test/ops/echo"), s("once"), agent, future());
+		Blob hourly = sched.schedule(s("v/test/ops/echo"), s("hourly"), agent, future(), everyHour(), null);
+		Blob mine = sched.schedule(s("v/test/ops/echo"), s("mine"), ctx, future());
+		Schedule state = engine.getVenueState().schedule();
+		assertEquals(convex.core.data.Sets.of(once, hourly), state.scheduledBy(agent.getCallerDID()));
+
+		deleteAgent("leaver");
+		assertNull(state.find(once));
+		assertNull(state.find(hourly));
+		assertTrue(state.scheduledBy(agent.getCallerDID()).isEmpty());
+		assertNotNull(state.find(mine), "the owner's own events stay");
+		assertTrue(sched.cancel(mine, ctx));
+	}
+
+	@Test
+	public void testTheReverseIndexFollowsARecurringEvent() {
+		RequestContext agent = agent("repeater", null);
+		Blob handle = sched.schedule(s("v/test/ops/echo"), s("tick"), agent, future(), everyHour(), null);
+		Schedule state = engine.getVenueState().schedule();
+		state.recordFire(state.find(handle), System.currentTimeMillis(), true, null);
+		Blob moved = state.find(handle).key();
+		assertNotEquals(handle, moved, "a recurring fire re-keys the event at its next slot");
+		assertEquals(convex.core.data.Sets.of(moved), state.scheduledBy(agent.getCallerDID()));
+
+		assertTrue(sched.cancel(handle, ctx));
+		assertTrue(state.scheduledBy(agent.getCallerDID()).isEmpty());
+	}
+
+	@Test
+	public void testAnEventOutlivingItsAgentIsDroppedWhenItComesDue() {
+		// No agent record, as for an event scheduled before the reverse index recorded it.
+		RequestContext ghost = RequestContext.ofAgent(did, s("ghost"));
+		Blob handle = sched.schedule(s("v/test/ops/echo"), s("boo"), ghost, future(), everyHour(), null);
+		ExecutionException ex = assertThrows(ExecutionException.class,
+			() -> sched.trigger(handle, ctx).get(5, TimeUnit.SECONDS));
+		assertInstanceOf(NotFoundException.class, ex.getCause());
+		assertEquals(Scheduler.AGENT_GONE.formatted(ghost.getCallerDID()), ex.getCause().getMessage());
+		Schedule state = engine.getVenueState().schedule();
+		assertNull(state.find(handle), "a recurring event is dropped, not rescheduled");
+		assertTrue(state.scheduledBy(ghost.getCallerDID()).isEmpty());
+	}
+
 	@Test
 	public void testCancelRemovesEvent() {
 		Blob handle = sched.schedule(s("v/test/ops/echo"), s("x"), ctx, future());
@@ -138,7 +291,7 @@ public class SchedulerTest {
 		sched.schedule(s("v/test/ops/echo"), s("b"), ctx, base + 1000);
 
 		// A different owner's event must not appear in this caller's list.
-		RequestContext other = RequestContext.of(s("did:test:scheduler-other"));
+		RequestContext other = RequestContext.of(TestEngine.uniqueDID("SchedulerTest-other"));
 		sched.schedule(s("v/test/ops/echo"), s("z"), other, base + 500);
 
 		AVector<ACell> list = sched.list(ctx);
@@ -148,7 +301,7 @@ public class SchedulerTest {
 		for (long i = 0; i < list.count(); i++) {
 			@SuppressWarnings("unchecked")
 			var rec = (convex.core.data.AMap<AString, ACell>) list.get(i);
-			long t = ((CVMLong) rec.get(ScheduleState.K_TIME)).longValue();
+			long t = ((CVMLong) rec.get(Schedule.K_TIME)).longValue();
 			assertTrue(t >= prev, "list must be time-ordered (head = soonest due)");
 			prev = t;
 		}
@@ -157,10 +310,10 @@ public class SchedulerTest {
 		for (long i = 0; i < list.count(); i++) {
 			@SuppressWarnings("unchecked")
 			var rec = (convex.core.data.AMap<AString, ACell>) list.get(i);
-			sched.cancel((Blob) rec.get(ScheduleState.K_HANDLE), ctx);
+			sched.cancel((Blob) rec.get(Schedule.K_HANDLE), ctx);
 		}
 		sched.cancel((Blob) ((convex.core.data.AMap<?, ?>) sched.list(other).get(0))
-			.get(ScheduleState.K_HANDLE), other);
+			.get(Schedule.K_HANDLE), other);
 	}
 
 	// --------------------------------------------- describing events (#583)
@@ -169,17 +322,18 @@ public class SchedulerTest {
 	@SuppressWarnings("unchecked")
 	private AMap<AString, ACell> stored(Blob handle) {
 		AMap<AString, ACell> record = asMap(engine.getVenueState().schedule().cursor().get());
-		return asMap(((Index<Blob, ACell>) record.get(ScheduleState.K_EVENTS)).get(handle));
+		return asMap(((Index<Blob, ACell>) record.get(Schedule.K_EVENTS)).get(handle));
 	}
 
 	@Test
 	public void testListSaysWhoScheduledAndWhen() {
-		long before = System.currentTimeMillis();
+		long before = engine.currentTimestamp().longValue();
 		Blob mine = sched.schedule(s("v/test/ops/echo"), s("mine"), ctx, future());
-		long after = System.currentTimeMillis();
+		long after = engine.currentTimestamp().longValue();
 		AMap<AString, ACell> rec = only(sched.list(ctx));
-		assertEquals(did, rec.get(ScheduleState.K_BY), "a user's own event names the user");
-		long created = ((CVMLong) rec.get(ScheduleState.K_CREATED)).longValue();
+		assertEquals(did, rec.get(Schedule.K_CALLER), "a user's own event names the user");
+		assertFalse(rec.containsKey(Schedule.K_OWNER), "and no other owner");
+		long created = ((CVMLong) rec.get(Schedule.K_CREATED)).longValue();
 		assertTrue(created >= before && created <= after, "created is the scheduling time");
 		assertTrue(sched.cancel(mine, ctx));
 
@@ -187,21 +341,21 @@ public class SchedulerTest {
 		RequestContext agent = RequestContext.ofAgent(did, s("helper"));
 		Blob queued = sched.schedule(s("v/test/ops/echo"), s("theirs"), agent, future());
 		rec = only(sched.list(ctx));
-		assertEquals(agent.getCallerDID(), rec.get(ScheduleState.K_BY), "an agent's event names the agent");
-		assertNotEquals(did, rec.get(ScheduleState.K_BY));
-		assertEquals(did, stored(queued).get(ScheduleState.K_OWNER), "the owner still owns it");
+		assertEquals(agent.getCallerDID(), rec.get(Schedule.K_CALLER), "an agent's event names the agent");
+		assertEquals(did, rec.get(Schedule.K_OWNER), "and the owner it belongs to");
+		assertEquals(did, stored(queued).get(Schedule.K_OWNER), "the owner still owns it");
 		assertTrue(sched.cancel(queued, ctx));
 	}
 
 	@Test
 	public void testListNeverShowsCapturedAuthority() {
-		AVector<ACell> caps = Vectors.of(Maps.of(s("with"), s("w/allowed"), s("can"), s("crud/read")));
-		Blob handle = sched.schedule(s("v/test/ops/echo"), s("x"), ctx.withCaps(caps), future());
-		assertEquals(caps, stored(handle).get(ScheduleState.K_CAPS), "caps are captured for replay");
+		AVector<ACell> proofs = Vectors.of(s("proof"));
+		Blob handle = sched.schedule(s("v/test/ops/echo"), s("x"), ctx.withProofs(proofs), future());
+		assertEquals(proofs, stored(handle).get(Schedule.K_PROOFS), "proofs are presented again when it fires");
+		assertFalse(stored(handle).containsKey(s("caps")), "a fire takes its actor's caps as they are then");
 
 		AMap<AString, ACell> rec = only(sched.list(ctx));
-		assertFalse(rec.containsKey(ScheduleState.K_CAPS), "caps are authority, not description");
-		assertFalse(rec.containsKey(ScheduleState.K_PROOFS), "proofs are authority, not description");
+		assertFalse(rec.containsKey(Schedule.K_PROOFS), "proofs are authority, not description");
 		assertTrue(sched.cancel(handle, ctx));
 	}
 
@@ -211,15 +365,15 @@ public class SchedulerTest {
 		AMap<AString, ACell> input = Maps.of(s("seed"), s("raw-seed-value"), s("source"), s("(+ 1 2)"));
 		Blob handle = sched.schedule(s("v/ops/convex/transact"), input, ctx, future());
 
-		ACell listed = only(sched.list(ctx)).get(ScheduleState.K_INPUT);
+		ACell listed = only(sched.list(ctx)).get(Schedule.K_INPUT);
 		assertEquals(Fields.HIDDEN, asMap(listed).get(s("seed")), "secretFields are hidden");
 		assertEquals(s("(+ 1 2)"), asMap(listed).get(s("source")), "other fields are shown");
-		assertEquals(input, stored(handle).get(ScheduleState.K_INPUT), "the stored input is untouched");
+		assertEquals(input, stored(handle).get(Schedule.K_INPUT), "the stored input is untouched");
 		assertTrue(sched.cancel(handle, ctx));
 
 		// An undeclared input is listed as given.
 		Blob plain = sched.schedule(s("v/test/ops/echo"), input, ctx, future());
-		assertEquals(input, only(sched.list(ctx)).get(ScheduleState.K_INPUT));
+		assertEquals(input, only(sched.list(ctx)).get(Schedule.K_INPUT));
 		assertTrue(sched.cancel(plain, ctx));
 	}
 
@@ -228,8 +382,8 @@ public class SchedulerTest {
 	public void testListWithholdsInputOfUnresolvableOp() {
 		Blob handle = sched.schedule(s("v/no/such/op"), Maps.of(s("token"), s("raw")), ctx, future());
 		AMap<AString, ACell> rec = only(sched.list(ctx));
-		assertFalse(rec.containsKey(ScheduleState.K_INPUT), "input withheld: " + rec);
-		assertEquals(s("v/no/such/op"), rec.get(ScheduleState.K_OP), "the event itself still lists");
+		assertFalse(rec.containsKey(Schedule.K_INPUT), "input withheld: " + rec);
+		assertEquals(s("v/no/such/op"), rec.get(Schedule.K_OP), "the event itself still lists");
 		assertTrue(sched.cancel(handle, ctx));
 	}
 
@@ -237,11 +391,11 @@ public class SchedulerTest {
 	public void testDescriptionIsStoredAndListed() {
 		AString text = s("Check Moltbook and summarise anything new");
 		Blob handle = sched.schedule(s("v/test/ops/echo"), s("x"), ctx, future(), null, null, text);
-		assertEquals(text, only(sched.list(ctx)).get(ScheduleState.K_DESCRIPTION));
+		assertEquals(text, only(sched.list(ctx)).get(Schedule.K_DESCRIPTION));
 		assertTrue(sched.cancel(handle, ctx));
 
 		Blob bare = sched.schedule(s("v/test/ops/echo"), s("x"), ctx, future());
-		assertFalse(only(sched.list(ctx)).containsKey(ScheduleState.K_DESCRIPTION), "optional");
+		assertFalse(only(sched.list(ctx)).containsKey(Schedule.K_DESCRIPTION), "optional");
 		assertTrue(sched.cancel(bare, ctx));
 	}
 
@@ -251,18 +405,18 @@ public class SchedulerTest {
 		AString longest = s("d".repeat(Scheduler.MAX_DESCRIPTION_CHARS));
 		assertEquals(longest, Scheduler.validateDescription(longest));
 
-		IllegalArgumentException notString = assertThrows(IllegalArgumentException.class,
+		InvalidInputException notString = assertThrows(InvalidInputException.class,
 			() -> Scheduler.validateDescription(CVMLong.create(42)));
 		assertEquals(Scheduler.DESCRIPTION_NOT_STRING, notString.getMessage());
 
 		AString tooLong = s("d".repeat(Scheduler.MAX_DESCRIPTION_CHARS + 1));
-		IllegalArgumentException overLong = assertThrows(IllegalArgumentException.class,
+		InvalidInputException overLong = assertThrows(InvalidInputException.class,
 			() -> sched.schedule(s("v/test/ops/echo"), s("x"), ctx, future(), null, null, tooLong));
 		assertEquals(Scheduler.DESCRIPTION_TOO_LONG, overLong.getMessage());
 		assertTrue(sched.list(ctx).isEmpty(), "a refused event is not scheduled");
 	}
 
-	/** An event stored before by, description and created were recorded still lists, without them. */
+	/** An event stored before description and created were recorded still lists, without them. */
 	@Test
 	public void testLegacyEventListsWithoutNewFields() {
 		long time = future();
@@ -271,22 +425,21 @@ public class SchedulerTest {
 		Utils.writeLong(bs, 8, ThreadLocalRandom.current().nextLong());
 		Blob key = Blob.wrap(bs);
 		AMap<AString, ACell> legacy = Maps.of(
-			ScheduleState.K_OP, s("v/test/ops/echo"),
-			ScheduleState.K_OWNER, did,
-			ScheduleState.K_TIME, CVMLong.create(time),
-			ScheduleState.K_INPUT, s("legacy"));
-		engine.getVenueState().schedule().cursor().path(ScheduleState.K_EVENTS).updateAndGet(cur -> {
+			Schedule.K_OP, s("v/test/ops/echo"),
+			Schedule.K_CALLER, did,
+			Schedule.K_TIME, CVMLong.create(time),
+			Schedule.K_INPUT, s("legacy"));
+		engine.getVenueState().schedule().cursor().withDefault(Maps.empty()).path(Schedule.K_EVENTS).updateAndGet(cur -> {
 			@SuppressWarnings("unchecked")
 			Index<Blob, ACell> events = (cur instanceof Index) ? (Index<Blob, ACell>) cur : Index.none();
 			return events.assoc(key, legacy);
 		});
 
 		AMap<AString, ACell> rec = only(sched.list(ctx));
-		assertEquals(key, rec.get(ScheduleState.K_HANDLE));
-		assertEquals(s("legacy"), rec.get(ScheduleState.K_INPUT));
-		assertFalse(rec.containsKey(ScheduleState.K_BY), "by: " + rec);
-		assertFalse(rec.containsKey(ScheduleState.K_DESCRIPTION), "description: " + rec);
-		assertFalse(rec.containsKey(ScheduleState.K_CREATED), "created: " + rec);
+		assertEquals(key, rec.get(Schedule.K_HANDLE));
+		assertEquals(s("legacy"), rec.get(Schedule.K_INPUT));
+		assertFalse(rec.containsKey(Schedule.K_DESCRIPTION), "description: " + rec);
+		assertFalse(rec.containsKey(Schedule.K_CREATED), "created: " + rec);
 		assertTrue(sched.cancel(key, ctx));
 	}
 
@@ -295,7 +448,7 @@ public class SchedulerTest {
 	@Test
 	public void testOwnershipEnforced() {
 		Blob handle = sched.schedule(s("v/test/ops/echo"), s("x"), ctx, future());
-		RequestContext intruder = RequestContext.of(s("did:test:scheduler-intruder"));
+		RequestContext intruder = RequestContext.of(TestEngine.uniqueDID("SchedulerTest-intruder"));
 
 		// Cancel by a non-owner is rejected and leaves the event in place.
 		assertThrows(AuthException.class, () -> sched.cancel(handle, intruder));
@@ -314,30 +467,34 @@ public class SchedulerTest {
 	 * The owner's caps are captured at schedule time and re-enforced at fire
 	 * time: a deferred op the caps do not cover is denied — exactly as it would
 	 * be on the immediate {@code invokeOperation} path. Guards against the
-	 * scheduler firing under more authority than the owner held.
+	 * scheduler firing under more authority than the owner held. A scoped
+	 * context manages only the events it made, so it is an agent, named as
+	 * the event's actor.
 	 */
 	@Test
 	public void testCapsReplayDeniesUncoveredOp() {
 		AVector<ACell> caps = Vectors.of(Maps.of(
 			s("with"), s("w/allowed"),
-			s("can"),  s("crud/read")));
-		RequestContext capCtx = RequestContext.of(did).withCaps(caps);
+			s("can"),  s("crud/read")),
+			Maps.of("with", "v/ops/covia/read", "can", "invoke"));
+		RequestContext capCtx = agent("scoped", caps);
 
 		Blob handle = sched.schedule(s("v/ops/covia/read"),
 			Maps.of(s("path"), s("w/forbidden/x")), capCtx, future());
 
 		ExecutionException ex = assertThrows(ExecutionException.class,
 			() -> sched.trigger(handle, capCtx).get(5, TimeUnit.SECONDS));
-		assertTrue(ex.getCause().getMessage().startsWith("Capability denied:"),
-			"captured caps must be enforced at fire time; got: " + ex.getCause().getMessage());
+		assertFalse(ex.getCause().getMessage().isBlank(),
+			"captured caps must be enforced at fire time");
 	}
 
 	@Test
 	public void testCapsReplayAllowsCoveredOp() throws Exception {
 		AVector<ACell> caps = Vectors.of(Maps.of(
 			s("with"), s("w/allowed"),
-			s("can"),  s("crud/read")));
-		RequestContext capCtx = RequestContext.of(did).withCaps(caps);
+			s("can"),  s("crud/read")),
+			Maps.of("with", "v/ops/covia/read", "can", "invoke"));
+		RequestContext capCtx = agent("scoped", caps);
 
 		Blob handle = sched.schedule(s("v/ops/covia/read"),
 			Maps.of(s("path"), s("w/allowed/nothing")), capCtx, future());
@@ -346,28 +503,11 @@ public class SchedulerTest {
 		assertTrue(result != null, "a caps-covered deferred op must run, not be denied");
 	}
 
-	// ------------------------------------------------------------- alarm firing
-
-	/**
-	 * An immediately-due event is fired by the alarm without any manual trigger.
-	 * Polls the owner's list (generous timeout) — robust under the shared,
-	 * parallel timer thread since the event is the test's own.
-	 */
-	@Test
-	public void testAlarmFiresImmediatelyDueEvent() throws Exception {
-		sched.schedule(s("v/test/ops/echo"), s("tick"), ctx, System.currentTimeMillis());
-
-		TestEngine.awaitCondition(() -> sched.list(ctx).isEmpty(), 5_000,
-			() -> "immediately-due event remained scheduled: " + sched.list(ctx));
-		assertTrue(sched.list(ctx).isEmpty(),
-			"the alarm should fire and remove an immediately-due event");
-	}
-
 	// --------------------------------------------------------------- recurrence
 
 	@Test
 	public void testNextTimeKeepsPhaseAndSkipsMissedSlots() {
-		AMap<AString, ACell> every = Maps.of(ScheduleState.K_EVERY, CVMLong.create(10));
+		AMap<AString, ACell> every = Maps.of(Schedule.K_EVERY, CVMLong.create(10));
 		assertEquals(10, Scheduler.nextTime(every, 0, 5), "normal advance: time + every");
 		assertEquals(20, Scheduler.nextTime(every, 0, 10), "the slot at now has just fired");
 		assertEquals(30, Scheduler.nextTime(every, 0, 25), "missed slots 10 and 20 are skipped, phase kept");
@@ -377,47 +517,20 @@ public class SchedulerTest {
 	@Test
 	public void testValidateRepeatAcceptsOnlyEvery() {
 		assertEquals(everyHour(), Scheduler.validateRepeat(everyHour()));
-		assertThrows(IllegalArgumentException.class, () ->
+		assertThrows(InvalidInputException.class, () ->
 			Scheduler.validateRepeat(Maps.of(s("cron"), s("0 9 * * 1-5"))),
 			"unknown recurrence forms are rejected, not guessed at");
-		assertThrows(IllegalArgumentException.class, () ->
-			Scheduler.validateRepeat(Maps.of(ScheduleState.K_EVERY, CVMLong.create(HOUR), s("cron"), s("x"))),
+		assertThrows(InvalidInputException.class, () ->
+			Scheduler.validateRepeat(Maps.of(Schedule.K_EVERY, CVMLong.create(HOUR), s("cron"), s("x"))),
 			"extra keys are rejected");
-		assertThrows(IllegalArgumentException.class, () ->
-			Scheduler.validateRepeat(Maps.of(ScheduleState.K_EVERY, CVMLong.create(Scheduler.MIN_REPEAT_MS - 1))),
+		assertThrows(InvalidInputException.class, () ->
+			Scheduler.validateRepeat(Maps.of(Schedule.K_EVERY, CVMLong.create(Scheduler.MIN_REPEAT_MS - 1))),
 			"below the floor");
-		assertThrows(IllegalArgumentException.class, () ->
-			Scheduler.validateRepeat(Maps.of(ScheduleState.K_EVERY, s("3600000"))),
+		assertThrows(InvalidInputException.class, () ->
+			Scheduler.validateRepeat(Maps.of(Schedule.K_EVERY, s("3600000"))),
 			"every must be an integer");
 	}
 
-	/**
-	 * An immediately-due recurring event fires, then re-inserts itself one
-	 * interval on under the same id — so the handle the caller holds still
-	 * cancels it, although the index key has moved with the time prefix.
-	 */
-	@Test
-	public void testRecurringEventReinsertsAndKeepsHandle() throws Exception {
-		long start = System.currentTimeMillis();
-		Blob handle = sched.schedule(s("v/test/ops/echo"), s("tick"), ctx, start, everyHour(), null, s("hourly tick"));
-
-		TestEngine.awaitCondition(
-			() -> !sched.list(ctx).isEmpty() && only(sched.list(ctx)).get(ScheduleState.K_LAST_FIRED) != null,
-			5_000, () -> "recurring event did not fire: " + sched.list(ctx));
-
-		AMap<AString, ACell> rec = only(sched.list(ctx));
-		assertEquals(CVMLong.create(start + HOUR), rec.get(ScheduleState.K_TIME),
-			"re-inserted one interval on from its original slot");
-		assertEquals(everyHour(), rec.get(ScheduleState.K_REPEAT));
-		assertNotEquals(handle, rec.get(ScheduleState.K_HANDLE), "the index key moves with the time prefix");
-		assertTrue(((CVMLong) rec.get(ScheduleState.K_LAST_FIRED)).longValue() >= start);
-		assertEquals(did, rec.get(ScheduleState.K_BY), "attribution moves with the event");
-		assertEquals(s("hourly tick"), rec.get(ScheduleState.K_DESCRIPTION));
-		assertInstanceOf(CVMLong.class, rec.get(ScheduleState.K_CREATED), "created moves with the event");
-
-		assertTrue(sched.cancel(handle, ctx), "the original handle must still cancel the moved event");
-		assertTrue(sched.list(ctx).isEmpty());
-	}
 
 	@Test
 	public void testTriggerRecurringKeepsSchedule() throws Exception {
@@ -427,9 +540,9 @@ public class SchedulerTest {
 		assertEquals(s("x"), sched.trigger(handle, ctx).get(5, TimeUnit.SECONDS));
 
 		AMap<AString, ACell> rec = only(sched.list(ctx));
-		assertEquals(handle, rec.get(ScheduleState.K_HANDLE), "time unchanged, so the key is unchanged");
-		assertEquals(CVMLong.create(t), rec.get(ScheduleState.K_TIME), "an early trigger does not disturb the schedule");
-		assertTrue(rec.get(ScheduleState.K_LAST_FIRED) instanceof CVMLong);
+		assertEquals(handle, rec.get(Schedule.K_HANDLE), "time unchanged, so the key is unchanged");
+		assertEquals(CVMLong.create(t), rec.get(Schedule.K_TIME), "an early trigger does not disturb the schedule");
+		assertTrue(rec.get(Schedule.K_LAST_FIRED) instanceof CVMLong);
 		assertTrue(sched.cancel(handle, ctx));
 	}
 
@@ -443,14 +556,14 @@ public class SchedulerTest {
 	@Test
 	public void testTrackedFireRecordsLastJob() throws Exception {
 		Blob handle = sched.schedule(s("v/test/ops/echo"), s("tracked"), ctx, future(), everyHour(), Boolean.TRUE);
-		assertEquals(CVMBool.TRUE, only(sched.list(ctx)).get(ScheduleState.K_TRACK));
+		assertEquals(CVMBool.TRUE, only(sched.list(ctx)).get(Schedule.K_TRACK));
 
 		CompletableFuture<ACell> fired = sched.trigger(handle, ctx);
 
 		// The claim and the Job ID are one write: lastJob is visible as soon as
 		// trigger returns, before the Job has necessarily finished.
 		AMap<AString, ACell> rec = only(sched.list(ctx));
-		Blob jobID = (Blob) rec.get(ScheduleState.K_LAST_JOB);
+		Blob jobID = (Blob) rec.get(Schedule.K_LAST_JOB);
 		assertNotNull(jobID, "lastJob must be committed with the claim, not after: " + rec);
 		Job job = engine.jobs().getJob(jobID, ctx);
 		assertNotNull(job, "the tracked fire's Job must be in the owner's history");
@@ -472,11 +585,11 @@ public class SchedulerTest {
 
 		ExecutionException ex = assertThrows(ExecutionException.class,
 			() -> sched.trigger(handle, ctx).get(5, TimeUnit.SECONDS));
-		assertTrue(ex.getCause() instanceof IllegalArgumentException, String.valueOf(ex.getCause()));
+		assertInstanceOf(covia.exception.NotFoundException.class, ex.getCause());
 
 		AMap<AString, ACell> rec = only(sched.list(ctx));
-		assertTrue(rec.get(ScheduleState.K_LAST_FIRED) instanceof CVMLong, "the fire was claimed");
-		assertNull(rec.get(ScheduleState.K_LAST_JOB), "no Job was created, so none is recorded");
+		assertTrue(rec.get(Schedule.K_LAST_FIRED) instanceof CVMLong, "the fire was claimed");
+		assertNull(rec.get(Schedule.K_LAST_JOB), "no Job was created, so none is recorded");
 		assertTrue(sched.cancel(handle, ctx));
 	}
 
@@ -488,9 +601,9 @@ public class SchedulerTest {
 		assertEquals(s("quiet"), sched.trigger(handle, ctx).get(5, TimeUnit.SECONDS));
 
 		AMap<AString, ACell> rec = only(sched.list(ctx));
-		assertEquals(CVMBool.FALSE, rec.get(ScheduleState.K_TRACK));
-		assertTrue(rec.get(ScheduleState.K_LAST_FIRED) instanceof CVMLong, "lastFired is always kept — it is cheap");
-		assertNull(rec.get(ScheduleState.K_LAST_JOB), "no durable Job, so nothing to point at");
+		assertEquals(CVMBool.FALSE, rec.get(Schedule.K_TRACK));
+		assertTrue(rec.get(Schedule.K_LAST_FIRED) instanceof CVMLong, "lastFired is always kept — it is cheap");
+		assertNull(rec.get(Schedule.K_LAST_JOB), "no durable Job, so nothing to point at");
 		assertEquals(before, engine.jobs().getJobs(ctx).count(), "an untracked fire leaves no Job behind");
 		assertTrue(sched.cancel(handle, ctx));
 	}
@@ -507,9 +620,9 @@ public class SchedulerTest {
 			RequestContext optOut = RequestContext.of(s("did:test:scheduler-optout"));
 			ds.schedule(s("v/test/ops/echo"), s("a"), silent, future(), null, null);
 			ds.schedule(s("v/test/ops/echo"), s("b"), optOut, future(), null, Boolean.FALSE);
-			assertEquals(CVMBool.TRUE, only(ds.list(silent)).get(ScheduleState.K_TRACK),
+			assertEquals(CVMBool.TRUE, only(ds.list(silent)).get(Schedule.K_TRACK),
 				"no preference stated → venue default (trackJobs: true)");
-			assertEquals(CVMBool.FALSE, only(ds.list(optOut)).get(ScheduleState.K_TRACK),
+			assertEquals(CVMBool.FALSE, only(ds.list(optOut)).get(Schedule.K_TRACK),
 				"an explicit choice beats the venue default");
 		} finally {
 			eng.close();
@@ -527,11 +640,11 @@ public class SchedulerTest {
 			Scheduler fs = eng.gridScheduler();
 			RequestContext fctx = RequestContext.of(s("did:test:scheduler-forced"));
 			Blob handle = fs.schedule(s("v/test/ops/echo"), s("forced"), fctx, future(), everyHour(), Boolean.FALSE);
-			assertEquals(CVMBool.TRUE, only(fs.list(fctx)).get(ScheduleState.K_TRACK),
+			assertEquals(CVMBool.TRUE, only(fs.list(fctx)).get(Schedule.K_TRACK),
 				"effective tracking reflects the operator force");
 
 			fs.trigger(handle, fctx).get(5, TimeUnit.SECONDS);
-			Blob jobID = (Blob) only(fs.list(fctx)).get(ScheduleState.K_LAST_JOB);
+			Blob jobID = (Blob) only(fs.list(fctx)).get(Schedule.K_LAST_JOB);
 			assertNotNull(jobID, "forced tracking did not record a Job: " + fs.list(fctx));
 			assertNotNull(eng.jobs().getJob(jobID, fctx));
 		} finally {

@@ -3,22 +3,19 @@ package covia.venue;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.Test;
 
-import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
-import convex.core.data.Index;
-import convex.core.data.Keyword;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
-import convex.lattice.cursor.Cursors;
-import convex.lattice.cursor.Root;
 import covia.adapter.AAdapter;
+import covia.adapter.TestAdapter;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
@@ -32,9 +29,11 @@ import covia.grid.Status;
  * launched.
  */
 public class JobShutdownTest {
-	private static final AString DELAY = Strings.create("v/test/ops/delay");
+	private static final AString HOLD = Strings.create("v/test/ops/hold");
 	private static final AString NEVER = Strings.create("v/test/ops/never");
-	private static final AString ECHO = Strings.create("v/test/ops/echo");
+
+	/** A grace window no test outlasts: a close that waited it out would never return. */
+	private static final long GRACE_FOREVER = TimeUnit.DAYS.toMillis(1);
 
 	private static AMap<AString, ACell> config(long graceMs) {
 		return Maps.of(
@@ -48,21 +47,21 @@ public class JobShutdownTest {
 		return e;
 	}
 
-	private static Job delay(Engine e, RequestContext ctx, long ms) {
-		return e.jobs().invokeOperation(DELAY, Maps.of(
-			Fields.OPERATION, ECHO, Fields.DELAY, ms, Fields.INPUT, Maps.empty()), ctx);
+	/** In-process work that runs until the test releases {@code gate}. */
+	private static Job held(Engine e, RequestContext ctx, TestAdapter.TestGate gate, String gateName) throws Exception {
+		Job job = e.jobs().invokeOperation(HOLD, Maps.of("gate", gateName), ctx);
+		assertTrue(gate.awaitEntered(10, TimeUnit.SECONDS), "the work is running");
+		awaitStatus(job, Status.STARTED);
+		return job;
 	}
 
-	private static long closeTimed(Engine e) {
-		long started = System.nanoTime();
-		e.close();
-		return TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
+	/** Closes the engine on its own thread, so the test can act while close runs. */
+	private static CompletableFuture<Void> closeAsync(Engine e) {
+		return CompletableFuture.runAsync(e::close, r -> Thread.ofVirtual().start(r));
 	}
 
-	private static void awaitStatus(Job job, AString status) throws InterruptedException {
-		long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-		while (!status.equals(job.getStatus()) && System.nanoTime() < deadline) Thread.sleep(5);
-		assertEquals(status, job.getStatus());
+	private static void awaitStatus(Job job, AString status) {
+		TestEngine.awaitJob(job, j -> status.equals(j.getStatus()), 10_000, () -> "job did not reach " + status);
 	}
 
 	private static String error(Job job) {
@@ -72,47 +71,57 @@ public class JobShutdownTest {
 
 	@Test
 	public void shutdownWaitsOnlyAsLongAsWorkNeeds() throws Exception {
-		Engine e = engine(10_000);
+		Engine e = engine(GRACE_FOREVER);
 		RequestContext alice = RequestContext.of(Strings.create("did:key:zAliceShutdownQuick"));
-		Job quick = delay(e, alice, 150);
-		long closeMs = closeTimed(e);
+		String gateName = "shutdown-quick-" + System.identityHashCode(e);
+		Job quick;
+		CompletableFuture<Void> closed;
+		try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName)) {
+			quick = held(e, alice, gate, gateName);
+			closed = closeAsync(e);
+			gate.release();
+			// With a grace window of a day, close returns only because the work finished.
+			closed.get(10, TimeUnit.SECONDS);
+		}
 		assertEquals(Status.COMPLETE, quick.getStatus(),
 			"work finishing inside the grace window keeps its real outcome");
-		assertTrue(closeMs < 5000,
-			"close returned when the work finished, not after the full grace: " + closeMs + " ms");
 	}
 
 	@Test
 	public void inFlightWorkIsCancelledWhenGraceExpires() throws Exception {
 		Engine e = engine(100);
 		RequestContext alice = RequestContext.of(Strings.create("did:key:zAliceShutdownSlow"));
-		Job slow = delay(e, alice, 60_000);
-		awaitStatus(slow, Status.STARTED);
-		long closeMs = closeTimed(e);
-		assertEquals(Status.CANCELLED, slow.getStatus(), "bounded in-process work is cancelled at shutdown");
-		assertEquals(AAdapter.VENUE_SHUT_DOWN, error(slow), "the cancellation names its reason");
-		assertTrue(closeMs < 5000, "close did not wait out the 60 s delay: " + closeMs + " ms");
+		String gateName = "shutdown-slow-" + System.identityHashCode(e);
+		try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName)) {
+			Job slow = held(e, alice, gate, gateName);
+			// The work never finishes on its own, so close returns only once the grace expires.
+			closeAsync(e).get(10, TimeUnit.SECONDS);
+			assertEquals(Status.CANCELLED, slow.getStatus(), "bounded in-process work is cancelled at shutdown");
+			assertEquals(AAdapter.VENUE_SHUT_DOWN, error(slow), "the cancellation names its reason");
+		}
 	}
 
 	@Test
 	public void pausableJobIsPausedAndRestoredAtBoot() throws Exception {
 		AMap<AString, ACell> config = config(0);
-		Root<Index<Keyword, ACell>> cursor = Cursors.root(convex.core.data.Index.<convex.core.data.Keyword, ACell>none());
-		AKeyPair keyPair = AKeyPair.generate();
+		TestEngine.Restartable venue = TestEngine.restartable(config);
 		RequestContext alice = RequestContext.of(Strings.create("did:key:zAliceShutdownParked"));
 
-		Engine first = new Engine(config, covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)), keyPair).start();
+		Engine first = venue.start();
 		Engine.addDemoAssets(first);
-		Job parked = first.jobs().invokeOperation(NEVER, Maps.empty(), alice); // registers a pause hook
-		Job slow = delay(first, alice, 60_000);
-		awaitStatus(parked, Status.STARTED);
-		awaitStatus(slow, Status.STARTED);
-		first.syncState();
-		first.close();
+		Job parked = first.jobs().invokeOperation(NEVER, Maps.empty(), alice); // its adapter can suspend it
+		Job slow;
+		String gateName = "shutdown-parked-" + System.identityHashCode(first);
+		try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName)) {
+			slow = held(first, alice, gate, gateName);
+			awaitStatus(parked, Status.STARTED);
+			first.syncState();
+			first.close();
+		}
 		assertEquals(Status.PAUSED, parked.getStatus(), "a pausable job is suspended, not cancelled");
 		assertEquals(Status.CANCELLED, slow.getStatus(), "in-process work is cancelled with zero grace");
 
-		Engine second = new Engine(config, covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)), keyPair).start();
+		Engine second = venue.start();
 		try {
 			Engine.addDemoAssets(second);
 			second.jobs().recoverJobs();

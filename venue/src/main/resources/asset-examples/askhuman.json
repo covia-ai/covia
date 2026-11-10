@@ -1,0 +1,11 @@
+{
+	"name": "Ask Human Test Transition",
+	"description": "Test task transition that asks its owner a question through hitl:request and yields, then completes the task with the answer once it arrives in the task's session.",
+	"dateCreated": "2026-11-01T00:00:00Z",
+	"operation": {
+		"adapter": "test:askhuman",
+		"readOnly": false,
+		"input": { "type": "object" },
+		"output": { "type": "object" }
+	}
+}

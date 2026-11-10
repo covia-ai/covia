@@ -60,7 +60,7 @@
         "mediaOperation": {
           "type": "string",
           "minLength": 1,
-          "description": "Agent bindings only: an operation run once per attachment (for example a transcription) with the attachment plus caption and via; it returns {} or an object whose non-empty text joins the attachment."
+          "description": "Agent bindings only: an operation run once per attachment (for example a transcription) with the attachment plus caption and authentication (how the binding authenticated the sender); it returns {} or an object whose non-empty text joins the attachment."
         },
         "number": {
           "type": "string",

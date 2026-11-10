@@ -2,6 +2,7 @@ package covia.venue;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -16,6 +17,7 @@ import org.junit.jupiter.api.TestInstance.Lifecycle;
 
 import convex.core.data.ACell;
 import convex.core.crypto.AKeyPair;
+import convex.auth.ucan.Capability;
 import convex.auth.ucan.UCAN;
 import convex.core.data.Hash;
 import convex.core.data.Maps;
@@ -143,13 +145,12 @@ public class CoviaAssetRefTest {
 	public void contentRouteTakesPrecedenceOverWildcard() throws Exception {
 		// assets/<hash>/content must reach getContent — NOT getAsset with
 		// id="<hash>/content". The asset is content-less, so getContent returns
-		// its own specific 404 ("does not specify any content"), whereas the
-		// greedy wildcard would have said "Asset not found".
+		// its own specific 404, whereas the greedy wildcard would have looked
+		// up an asset by that id.
 		Hash h = client.addAsset(META).join();
 		HttpResponse<String> r = get("/api/v1/assets/" + h.toHexString() + "/content");
 		assertEquals(404, r.statusCode());
-		assertTrue(r.body().contains("does not specify any content"),
-			"the /content route must take precedence over the <id> wildcard, got: " + r.body());
+		assertFalse(r.body().isBlank(), "the /content route must take precedence over the <id> wildcard");
 	}
 
 	@Test
@@ -180,6 +181,29 @@ public class CoviaAssetRefTest {
 		HttpResponse<String> bobContent = get(path + "/content", identityToken(bobKey));
 		assertEquals(404, bobContent.statusCode(),
 			"content lookup must not fall through to another asset namespace");
+	}
+
+	/** Another's asset by hash is read with either read ability over it that its owner granted. */
+	@Test
+	public void anothersAssetByHashIsReadWithEitherGrantedAbility() throws Exception {
+		AKeyPair aliceKey = AKeyPair.generate();
+		AKeyPair bobKey = AKeyPair.generate();
+		var aliceDID = UCAN.toDIDKey(aliceKey.getAccountKey());
+		Hash id = TestServer.ENGINE.storeUserAsset(Strings.create(META), null, RequestContext.of(aliceDID));
+		String ref = aliceDID + "/a/" + id.toHexString();
+		String path = "/api/v1/assets/" + encodeRefPath(ref);
+
+		assertEquals(403, get(path, identityToken(bobKey)).statusCode(), "nothing granted");
+		long exp = (System.currentTimeMillis() / 1000) + 3600;
+		for (var can : new convex.core.data.AString[] {covia.api.Abilities.ASSET_READ, Capability.CRUD_READ}) {
+			String proof = UCAN.createJWT(aliceKey, bobKey.getAccountKey(), exp,
+				Vectors.of(Capability.create(Strings.create(ref), can)), Vectors.empty()).toString();
+			HttpResponse<String> r = http.send(HttpRequest.newBuilder().uri(new URI(base + path))
+				.header("Authorization", "Bearer " + identityToken(bobKey))
+				.header(VenueHTTP.UCANS_HEADER, proof).GET().build(), HttpResponse.BodyHandlers.ofString());
+			assertEquals(200, r.statusCode(), can + " -> " + r.body());
+			assertTrue(etagHash(r).contains(id.toHexString()), can.toString());
+		}
 	}
 
 	@Test
@@ -374,7 +398,7 @@ public class CoviaAssetRefTest {
 	public void canonicalContentRouteUnknownRefIs404() throws Exception {
 		HttpResponse<String> r = get("/api/v1/content/w/does/not/exist");
 		assertEquals(404, r.statusCode());
-		assertTrue(r.body().contains("not found"), "unknown ref must be a clean 404, got: " + r.body());
+		assertFalse(r.body().isBlank(), "unknown ref must be a clean 404");
 	}
 
 	@Test

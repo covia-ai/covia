@@ -1,6 +1,7 @@
 package covia.grid.auth;
 
 import java.net.http.HttpRequest;
+import java.util.function.Supplier;
 
 /**
  * Static bearer token authentication.
@@ -18,7 +19,7 @@ class BearerAuth extends VenueAuth {
 	}
 
 	@Override
-	public void apply(HttpRequest.Builder builder) {
+	public void apply(HttpRequest.Builder builder, Supplier<String> venueDID) {
 		builder.header("Authorization", "Bearer " + token);
 	}
 }

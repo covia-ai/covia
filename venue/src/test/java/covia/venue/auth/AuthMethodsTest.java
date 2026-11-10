@@ -6,7 +6,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.Test;
@@ -23,6 +22,7 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import covia.adapter.AAdapter;
 import covia.exception.AuthException;
+import covia.exception.ConfigurationException;
 import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -123,7 +123,8 @@ class AuthMethodsTest {
 			try {
 				VenueAuthenticator service = new VenueAuthenticator(engine);
 				AString did = UCAN.toDIDKey(key.getAccountKey());
-				AMap<AString, ACell> claims = Maps.of("sub", did, "exp", System.currentTimeMillis()/1000 + 300);
+				AMap<AString, ACell> claims = Maps.of("sub", did, "aud", engine.getDIDString(),
+					"exp", System.currentTimeMillis()/1000 + 300);
 				AString token = JWT.signPublic(claims, key);
 				AString legacy = JWT.signPublic(claims.assoc(UCAN.ISS, engine.getDIDString()), engine.getKeyPair());
 				if (explicit) {
@@ -169,14 +170,14 @@ class AuthMethodsTest {
 		try {
 			Fixture working = new Fixture(false);
 			engine.registerAdapter(working);
-			assertEquals(AuthMethods.AMBIGUOUS + "auth-fixture", assertThrows(IllegalArgumentException.class,
+			assertEquals(AuthMethods.AMBIGUOUS + "auth-fixture", assertThrows(ConfigurationException.class,
 				() -> engine.registerAdapter(new Fixture(true))).getMessage());
 			assertSame(working, engine.getAdapter("auth-fixture"));
 			assertEquals(ALICE, call(new VenueAuthenticator(engine), FIRST).userDID());
 		} finally { engine.close(); }
 		Engine missing = Engine.createTemp(config(Maps.of(FIRST, reference("auth-fixture", Strings.create("missing")))));
 		try {
-			assertEquals(AuthMethods.UNAVAILABLE + "auth-fixture/missing", assertThrows(IllegalArgumentException.class,
+			assertEquals(AuthMethods.UNAVAILABLE + "auth-fixture/missing", assertThrows(ConfigurationException.class,
 				() -> missing.registerAdapter(new Fixture(true))).getMessage());
 			assertNull(missing.getAdapter("auth-fixture"));
 		} finally { missing.close(); }
@@ -188,7 +189,7 @@ class AuthMethodsTest {
 			engine.registerAdapter(new Fixture(true));
 			VenueAuthenticator service = new VenueAuthenticator(engine);
 			long version = engine.adapterRegistryVersion();
-			assertThrows(IllegalArgumentException.class,
+			assertThrows(covia.exception.InvalidInputException.class,
 				() -> engine.configureAdapter("auth-fixture", Maps.of("label", 123)));
 			assertEquals(version, engine.adapterRegistryVersion());
 			assertEquals(Strings.create("original"), call(service, FIRST).authentication().details().get(Strings.create("label")));
@@ -203,46 +204,47 @@ class AuthMethodsTest {
 		} finally { engine.close(); }
 	}
 
-	@Test void verificationDoesNotHoldLifecycleLockAndRejectsStaleCompletion() throws Exception {
-		for (String change : List.of("cycle", "configure", "replace", "remove")) {
-			Engine engine = Engine.createTemp(config(fixtureBindings()));
-			Fixture fixture = new Fixture(true);
-			fixture.entered = new CountDownLatch(1);
-			fixture.release = new CountDownLatch(1);
-			try {
-				engine.registerAdapter(fixture);
-				VenueAuthenticator service = new VenueAuthenticator(engine);
-				CompletableFuture<AuthResult> pending = CompletableFuture.supplyAsync(() -> call(service, FIRST));
-				assertTrue(fixture.entered.await(5, TimeUnit.SECONDS));
-				CompletableFuture.runAsync(() -> {
-					switch (change) {
-						case "cycle" -> { engine.disableAdapter("auth-fixture"); engine.enableAdapter("auth-fixture"); }
-						case "configure" -> engine.configureAdapter("auth-fixture", Maps.of("label", "changed"));
-						case "replace" -> engine.registerAdapter(new Fixture(true));
-						case "remove" -> engine.removeAdapter("auth-fixture");
-					}
-				}).get(5, TimeUnit.SECONDS);
-				fixture.release.countDown();
-				ExecutionException failure = assertThrows(ExecutionException.class, () -> pending.get(5, TimeUnit.SECONDS));
-				assertInstanceOf(AuthException.class, failure.getCause());
-				assertEquals(AuthMethods.CHANGED, failure.getCause().getMessage());
-			} finally { fixture.release.countDown(); engine.close(); }
-		}
+	@Test void verificationDoesNotHoldLifecycleLockAndCompletesAsItBegan() throws Exception {
+		Engine engine = Engine.createTemp(config(fixtureBindings()));
+		try {
+			for (String change : List.of("cycle", "configure", "replace", "remove")) {
+				Fixture fixture = new Fixture(true);
+				fixture.entered = new CountDownLatch(1);
+				fixture.release = new CountDownLatch(1);
+				try {
+					engine.registerAdapter(fixture);
+					VenueAuthenticator service = new VenueAuthenticator(engine);
+					CompletableFuture<AuthResult> pending = CompletableFuture.supplyAsync(() -> call(service, FIRST));
+					assertTrue(fixture.entered.await(5, TimeUnit.SECONDS));
+					CompletableFuture.runAsync(() -> {
+						switch (change) {
+							case "cycle" -> { engine.disableAdapter("auth-fixture"); engine.enableAdapter("auth-fixture"); }
+							case "configure" -> engine.configureAdapter("auth-fixture", Maps.of("label", "changed"));
+							case "replace" -> engine.registerAdapter(new Fixture(true));
+							case "remove" -> engine.removeAdapter("auth-fixture");
+						}
+					}).get(5, TimeUnit.SECONDS);
+					fixture.release.countDown();
+					assertEquals(ALICE, pending.get(5, TimeUnit.SECONDS).userDID(),
+						"a verification under way when the adapter changes (" + change + ") completes as it began");
+				} finally { fixture.release.countDown(); }
+			}
+		} finally { engine.close(); }
 	}
 
 	@Test void malformedBindingsFailEvenWithoutStrictConfig() {
 		for (ACell methods : new ACell[] {null, Strings.create("wrong"), Maps.of("", Maps.empty()),
 			Maps.of(FIRST, Maps.of("adapter", "")), Maps.of(FIRST, Maps.of("adapter", "auth", "enabled", true)),
 			Maps.of(FIRST, Maps.of("adapter", "auth", "implementation", null))}) {
-			IllegalArgumentException failure = assertThrows(IllegalArgumentException.class, () -> new Config(config(methods)));
+			ConfigurationException failure = assertThrows(ConfigurationException.class, () -> new Config(config(methods)));
 			assertTrue(failure.getMessage().startsWith(AuthMethods.INVALID_CONFIG));
 		}
 	}
 
 	@Test void startupResolvesAfterHostHookAndBeforeServing() {
-		AMap<AString, ACell> cfg = config(fixtureBindings()).assoc(Config.STORE, Strings.create("temp"))
+		AMap<AString, ACell> cfg = config(fixtureBindings()).assoc(Config.STORE, Strings.create("memory"))
 			.assoc(Strings.intern("port"), convex.core.data.prim.CVMLong.ZERO);
-		assertThrows(IllegalArgumentException.class, () -> VenueServer.launch(cfg));
+		assertThrows(ConfigurationException.class, () -> VenueServer.launch(cfg));
 		VenueServer server = VenueServer.launch(cfg, List.of(), engine -> {
 			engine.registerAdapter(new Fixture(true));
 			return CompletableFuture.completedFuture(null);
@@ -253,7 +255,7 @@ class AuthMethodsTest {
 
 	@Test void hostCanReplaceDefaultAdapterBeforeReferenceValidation() {
 		AMap<AString, ACell> cfg = config(Maps.of(FIRST, reference("auth", FIRST)))
-			.assoc(Config.STORE, Strings.create("temp"))
+			.assoc(Config.STORE, Strings.create("memory"))
 			.assoc(Strings.intern("port"), convex.core.data.prim.CVMLong.ZERO);
 		VenueServer server = VenueServer.launch(cfg, List.of(), engine -> {
 			engine.registerAdapter(new Fixture(false) {

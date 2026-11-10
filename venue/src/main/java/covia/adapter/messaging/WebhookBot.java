@@ -19,8 +19,13 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.adapter.AAdapter;
+import covia.adapter.messaging.ChannelAuthentication.Channel;
 import covia.adapter.webhook.WebhookInbox;
 import covia.api.Fields;
+import covia.exception.ConfigurationException;
+import covia.exception.NotSupportedException;
+import covia.exception.UnavailableException;
+import covia.venue.RequestContext;
 
 /**
  * A durable binding fed by signed HTTP callbacks, a provider connection, or
@@ -32,7 +37,10 @@ public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<
 	private static final Logger log = LoggerFactory.getLogger(WebhookBot.class);
 	public static final String REPLY_FAILED = "Reply failed after session delivery";
 	public static final String RECONFIGURED = "Bot settings changed after this message was accepted";
+	public static final String UNVERIFIED = "This message was accepted without the channel that identifies its sender";
 	public static final AString VERSION = Strings.intern("bindingVersion");
+	/** An accepted event's verified channel ({@link Channel#toData()}), recorded by the provider adapter. */
+	public static final AString K_CHANNEL = Strings.intern("verifiedChannel");
 	public static final String PROCESSING_FAILED = "Processing failed; inspect the receipt before any manual retry";
 	public static final String CONNECTED = "CONNECTED", CONNECTING = "CONNECTING", RETRYING = "RETRYING";
 	private final AWebhookMessagingAdapter<S> adapter;
@@ -66,7 +74,7 @@ public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<
 		String relayRoot = managed == Managed.CONFIG ? "config/" + spec.name() + "/relay/" + identity
 			: adapter.userStatePath(owner, "relay/" + spec.name() + "/" + identity);
 		inbox = new WebhookInbox(adapter.engine, state, inboxRoot);
-		router = new ConversationRouter(adapter.engine, spec, new ConversationSessions(state, sessionsRoot + "/" + version,
+		router = new ConversationRouter(adapter.engine, spec, adapter.principalOf(spec, managed), new ConversationSessions(state, sessionsRoot + "/" + version,
 			this, () -> running && adapter.isActive()));
 		relay = spec.routesToRelay() ? new RelayBinding<>(this, adapter, relayRoot) : null;
 	}
@@ -95,10 +103,10 @@ public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<
 		return adapter.resolveCredential(MessagingSettings.required(spec.settings(), field), this, destination);
 	}
 	public void requireReady() {
-		if (!running || !adapter.isActive()) throw new IllegalStateException(AWebhookMessagingAdapter.UNAVAILABLE);
+		if (!running || !adapter.isActive()) throw new UnavailableException(AWebhookMessagingAdapter.UNAVAILABLE);
 		for (String field : spec.credentialFields()) {
 			String value = credential(field);
-			if (value == null || value.isBlank()) throw new IllegalStateException(MessagingHttp.UNAVAILABLE);
+			if (value == null || value.isBlank()) throw new UnavailableException(MessagingHttp.UNAVAILABLE);
 		}
 	}
 	boolean ready() {
@@ -161,7 +169,7 @@ public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<
 	 */
 	public void accept(String id, AMap<AString, ACell> event) {
 		if (relay != null) {
-			if (!running || !adapter.isActive()) throw new IllegalStateException(AWebhookMessagingAdapter.UNAVAILABLE);
+			if (!running || !adapter.isActive()) throw new UnavailableException(AWebhookMessagingAdapter.UNAVAILABLE);
 			relay.accept(id, event);
 			return;
 		}
@@ -170,7 +178,7 @@ public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<
 		// cannot return while an acceptance is still able to recreate deleted state.
 		synchronized (adapter.engine) {
 			synchronized (this) {
-				if (!running || !adapter.isActive()) throw new IllegalStateException(AWebhookMessagingAdapter.UNAVAILABLE);
+				if (!running || !adapter.isActive()) throw new UnavailableException(AWebhookMessagingAdapter.UNAVAILABLE);
 				receipt = inbox.accept(id, event.assoc(VERSION, version));
 			}
 		}
@@ -217,25 +225,32 @@ public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<
 		// Reconfiguration cannot execute old accepted work using a different handler
 		// or admission policy. Fail it once; the receipt stays visible for the operator.
 		if (!version.equals(event.get(VERSION))) {
-			if (guarded(() -> inbox.fail(id, RECONFIGURED, null, System.currentTimeMillis())) != null) lastError = RECONFIGURED;
+			if (guarded(() -> inbox.fail(id, RECONFIGURED, null, adapter.engine.currentTimestamp().longValue())) != null) lastError = RECONFIGURED;
+			return;
+		}
+		// A message accepted without its verified channel (by an earlier version)
+		// cannot say who it comes from. Fail it once, as for a reconfiguration.
+		Channel channel = Channel.fromData(event.get(K_CHANNEL));
+		if (channel == null) {
+			if (guarded(() -> inbox.fail(id, UNVERIFIED, null, adapter.engine.currentTimestamp().longValue())) != null) lastError = UNVERIFIED;
 			return;
 		}
 		String conversation = MessagingSettings.required(event, "conversation");
 		if (!queued.add(id)) return;
-		boolean localSession = spec.routesToAgent() && router.supportsSessionDelivery();
+		boolean localSession = spec.routesToAgent() && router.supportsSessionDelivery(channel);
 		router.enqueue(conversation, () -> {
 			if (!claim(id)) return;
 			if (localSession) {
-				String refusal = router.deliveryRefusal();
-				if (refusal != null) throw new IllegalStateException(refusal);
-				deliverSession(id, event, conversation);
+				String refusal = router.deliveryRefusal(channel);
+				if (refusal != null) throw new NotSupportedException(refusal);
+				deliverSession(id, event, channel, conversation);
 				return;
 			}
 			ACell input = event.get(Fields.INPUT);
 			String reply;
 			if (spec.routesToAgent()) {
-				reply = ConversationRouter.responseText(router.chat(conversation, agentMessage(event)));
-			} else reply = router.operationReply(router.runOperation(spec.operation(), input));
+				reply = ConversationRouter.responseText(router.chat(conversation, agentMessage(event, channel), channel));
+			} else reply = router.operationReply(router.runOperation(spec.operation(), input, channel));
 			if (!running || !adapter.isActive()) return;
 			if (reply != null) adapter.sendReply(this, event, reply);
 			complete(id);
@@ -243,28 +258,32 @@ public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<
 			queued.remove(id);
 			if (failure != null) {
 				lastError = PROCESSING_FAILED;
-				log.warn("{} bot '{}': {}: {}", adapter.getName(), spec.name(), PROCESSING_FAILED, AAdapter.describeFailure(failure));
-				try { if (localSession) guarded(() -> inbox.fail(id, PROCESSING_FAILED, AAdapter.describeFailure(failure), System.currentTimeMillis())); }
+				// A fault is logged where it is reported; an expected failure here
+				String cause = adapter.describeFailure(failure);
+				if (AAdapter.isExpectedFailure(failure)) {
+					log.warn("{} bot '{}': {}: {}", adapter.getName(), spec.name(), PROCESSING_FAILED, cause);
+				}
+				try { if (localSession) guarded(() -> inbox.fail(id, PROCESSING_FAILED, cause, adapter.engine.currentTimestamp().longValue())); }
 				catch (RuntimeException writeFailure) { log.warn("Could not record processing failure: {}", writeFailure.toString()); }
 			}
 		});
 	}
 	/**
-	 * An agent's turn: {@code {text, via, attachments?, content?}}. Each item of the
-	 * event's {@code media} is fetched by the provider and stored in the owner's
-	 * private drive named for the provider, then given to the binding's
-	 * {@code mediaOperation}; images also become image blocks. The text is the
-	 * caption, empty for a bare voice note. A failed fetch fails the turn like any
-	 * other processing failure.
+	 * An agent's turn: the sender's text, or {@code {text, attachments, content?}}
+	 * for a message with media. Each item of the event's {@code media} is fetched
+	 * by the provider and stored in the owner's private drive named for the
+	 * provider, then given to the binding's {@code mediaOperation} with the
+	 * message's {@code authentication} record; images also become image blocks.
+	 * The text is the caption, empty for a bare voice note. A failed fetch fails
+	 * the turn like any other processing failure.
 	 */
-	private AMap<AString, ACell> agentMessage(AMap<AString, ACell> event) {
+	private ACell agentMessage(AMap<AString, ACell> event, Channel channel) {
 		String text = MessagingSettings.optional(event, "text");
-		ACell via = event.get(MessagingSettings.key("via"));
-		AMap<AString, ACell> message = Maps.of(Fields.TEXT, text == null ? "" : text, "via", via);
 		AVector<ACell> media = RT.ensureVector(event.get(MessagingMedia.K_MEDIA));
-		if (media == null || media.isEmpty()) return message;
+		if (media == null || media.isEmpty()) return Strings.create(text == null ? "" : text);
+		AMap<AString, ACell> message = Maps.of(Fields.TEXT, text == null ? "" : text);
+		AMap<AString, ACell> authentication = router.context(channel).getAuthentication();
 		AVector<ACell> attachments = Vectors.empty(), content = Vectors.empty();
-		String directory = MessagingMedia.ownerDirectory(spec.userDID(adapter.engine), adapter.getName());
 		for (ACell cell : media) {
 			AMap<AString, ACell> item = MessagingSettings.object(cell);
 			MessagingMedia.Fetched fetched = adapter.fetchMedia(this, item);
@@ -272,16 +291,22 @@ public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<
 			if (type == null) type = fetched.contentType();
 			String name = MessagingSettings.optional(item, "fileName");
 			if (!MessagingMedia.safeFileName(name)) name = MessagingMedia.fallbackName(spec.name(), MessagingSettings.required(item, "id"), type);
+			RequestContext writer = router.agentContext();
+			String directory = MessagingMedia.ensureOwnerDirectory(adapter.engine, spec.userDID(adapter.engine),
+				adapter.getName(), writer);
 			AMap<AString, ACell> attachment;
 			try {
 				// The stored name, ref and size win over the provider's own description.
-				attachment = item.merge(MessagingMedia.store(adapter.engine, fetched.bytes(), type, directory, name, router.context()));
+				attachment = item.merge(MessagingMedia.store(adapter.engine, fetched.bytes(), type, directory, name, writer));
 			} catch (java.io.IOException e) {
-				throw new IllegalStateException(MessagingMedia.UNSUPPORTED_DESTINATION + ": " + directory);
+				throw new UnavailableException(MessagingMedia.UNSUPPORTED_DESTINATION + ": " + directory, e);
+			} catch (IllegalArgumentException e) {
+				// No content provider takes the owner's media drive: the venue's setup.
+				throw new ConfigurationException(e.getMessage(), e);
 			}
 			if (spec.mediaOperation() != null) {
-				attachment = MessagingMedia.processed(attachment, router.runOperation(spec.mediaOperation(),
-					attachment.assoc(MessagingMedia.K_CAPTION, Strings.create(text == null ? "" : text)).assoc(MessagingSettings.key("via"), via)));
+				attachment = MessagingMedia.processed(attachment, router.runForAgent(spec.mediaOperation(),
+					attachment.assoc(MessagingMedia.K_CAPTION, Strings.create(text == null ? "" : text)).assoc(Fields.AUTHENTICATION, authentication)));
 			}
 			attachments = attachments.conj(attachment);
 			AMap<AString, ACell> image = MessagingMedia.imageBlock(attachment);
@@ -291,13 +316,13 @@ public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<
 		return content.isEmpty() ? message : message.assoc(Fields.CONTENT, content);
 	}
 	/** One atomic handoff: input, session mapping and COMPLETE receipt commit together. */
-	private void deliverSession(String id, AMap<AString, ACell> event, String conversation) {
-		ACell message = agentMessage(event);
+	private void deliverSession(String id, AMap<AString, ACell> event, Channel channel, String conversation) {
+		ACell message = agentMessage(event, channel);
 		covia.grid.Job job;
 		synchronized (adapter.engine) {
 			synchronized (this) {
-				if (!ready()) throw new IllegalStateException(AWebhookMessagingAdapter.UNAVAILABLE);
-				job = router.deliver(conversation, message, (draft, sid, jid) -> inbox.deliver(draft, id, sid, jid));
+				if (!ready()) throw new UnavailableException(AWebhookMessagingAdapter.UNAVAILABLE);
+				job = router.deliver(conversation, message, channel, (draft, sid, jid) -> inbox.deliver(draft, id, sid, jid));
 			}
 		}
 		ConversationRouter.onResponse(job, response -> {

@@ -38,14 +38,15 @@ Run all setup steps — secret, reference data, artifacts, orchestration, agents
 2. **Seed reference data** — three vendors (Acme Corp, Globex Ltd, Initech Systems) and their purchase orders (see [setup.md](setup.md)). Initech is suspended/sanctioned to enable rejection demos.
 3. **Write shared documents** — read `assets/ap-policy-rules.md` and `assets/ap-data-guide.md`, write each to its workspace path with `covia_write`: `w/docs/policy-rules` and `w/docs/data-guide`.
 4. **Pin the pipeline orchestration** — read `assets/ap-pipeline.json` and `covia_write path=o/ap-pipeline value=<contents>`. The pipeline is now invokable by name as `grid_run operation=o/ap-pipeline` — no hash dereferencing.
-5. **Create all four agents** in parallel (see [setup.md](setup.md) for full config). If a named demo agent already exists, delete it first with `remove=true`; create is exclusive and never overwrites. Agent prompts are short — reference material loads from context. Each agent has `caps` scoping their workspace access.
-6. **Verify** with `agent_list` — Alice, Bob, Carol, Dave all SLEEPING
-7. **Confirm context and caps** — query Bob or Carol and verify `config.context` and `config.caps` are present
+5. **Create the agents' folders** — for each of `w/invoices`, `w/enrichments` and `w/decisions` that `covia_read` reports absent, `covia_write` an empty map `{}`. Creating a key needs write on the map that holds it, and the agents' grants cover what is inside their folders, not `w/`.
+6. **Create all four agents** in parallel (see [setup.md](setup.md) for full config). If a named demo agent already exists, delete it first with `remove=true`; create is exclusive and never overwrites. Agent prompts are short — reference material loads from context. Each agent has `caps` scoping their workspace access.
+7. **Verify** with `agent_list` — Alice, Bob, Carol, Dave all SLEEPING
+8. **Confirm context and caps** — query Bob or Carol and verify `config.context` and `config.caps` are present
 
 Key config rules:
 - `config.operation` must be a **plain string** `"v/ops/goaltree/chat"`, not a map
 - `config.context` is an array of asset hashes or workspace paths — loaded as system messages before each run
-- `config.caps` is an array of `{with, can}` attenuations — enforced on every tool call. No caps = full access.
+- `config.caps` is an array of `{with, can}` attenuations — enforced on every tool call. `"unrestricted"` gives full access; leaving caps out gives none.
 - `config.responseFormat` must have `additionalProperties: false` at every object level for OpenAI strict mode
 - Use `agent_request` with `input` parameter (not `task`) for submitting work
 
@@ -111,7 +112,7 @@ agent_delete  agentId=Bob    remove=true
 agent_delete  agentId=Carol  remove=true
 ```
 
-Then re-run setup (step 3 only — secret and reference data persist).
+Then re-run setup (step 6 only — secret, reference data and folders persist).
 
 ### `status`
 

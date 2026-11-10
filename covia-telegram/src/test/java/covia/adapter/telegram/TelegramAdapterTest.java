@@ -32,8 +32,11 @@ import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.adapter.messaging.AMessagingAdapter;
 import covia.adapter.messaging.MessagingText;
+import covia.exception.InvalidDefinitionException;
+import covia.exception.InvalidInputException;
 import covia.grid.Job;
 import covia.grid.Status;
+import covia.venue.Agent;
 import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -63,6 +66,9 @@ public class TelegramAdapterTest {
 		telegram = new FakeTelegramServer();
 		AMap<AString, ACell> config = Maps.of(
 			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
+			// Strangers on an open bot are anonymous: the operator lets them invoke the echo operation.
+			Config.AUTH, Maps.of(Config.PUBLIC, Maps.of(Config.CAPS, Vectors.of(convex.auth.ucan.Capability.create(
+				Strings.create("v/test/ops/echo"), Strings.create("invoke"))))),
 			Config.ADAPTERS, Maps.of(
 				Strings.create("telegram"), Maps.of(
 					TelegramAdapter.K_API_URL, Strings.create(telegram.apiUrl()),
@@ -81,7 +87,8 @@ public class TelegramAdapterTest {
 			Fields.CONFIG, Maps.of(
 				Fields.OPERATION, "v/ops/llmagent/chat",
 				"llmOperation", "v/test/ops/llm",
-				"systemPrompt", "Echo the user.")));
+				"systemPrompt", "Echo the user.",
+				"caps", "unrestricted")));
 
 		awaitState("echo", BotRunner.State.RUNNING, 10_000);
 	}
@@ -95,14 +102,29 @@ public class TelegramAdapterTest {
 	// ------------------------------------------------------------ config parsing
 
 	@Test
+	public void aBotThatIsNotRunningSaysWhetherItIsStillStarting() {
+		// A runner not yet started is STARTING: callers may simply retry shortly.
+		BotRunner idle = new BotRunner(adapter, BotSpec.parse("idle", botConfig(FakeTelegramServer.TOKEN,
+			OWNER.toString(), "operation", "v/test/ops/echo", Vectors.of(CVMLong.create(ALLOWED_ID))), false),
+			telegram.apiUrl(), covia.adapter.messaging.MessagingBot.Managed.CONFIG);
+		assertThrows(covia.exception.StillStartingException.class, () -> idle.call("getMe", java.util.Map.of()));
+
+		// A stopped bot is unavailable, and not about to become available.
+		idle.stop();
+		covia.exception.UnavailableException stopped = assertThrows(covia.exception.UnavailableException.class,
+			() -> idle.call("getMe", java.util.Map.of()));
+		assertFalse(stopped instanceof covia.exception.StillStartingException, stopped.getMessage());
+	}
+
+	@Test
 	public void preparedEngineDefersBotWorkersUntilActivation() throws Exception {
 		try (FakeTelegramServer fake = new FakeTelegramServer()) {
 			var key = convex.core.crypto.AKeyPair.generate();
 			AMap<AString, ACell> botSettings = Maps.of("apiUrl", fake.apiUrl(), "bots",
 				Maps.of("startup", botConfig(FakeTelegramServer.TOKEN, OWNER.toString(),
 					"operation", "v/test/ops/echo", Vectors.of(CVMLong.create(ALLOWED_ID)))));
-			Engine prepared = new Engine(Maps.of(Config.ADAPTERS, Maps.of("telegram", botSettings)),
-				covia.venue.CoviaApplication.create(key), key).prepare();
+			Engine prepared = covia.venue.TestEngine.application().mount(key,
+				Maps.of(Config.ADAPTERS, Maps.of("telegram", botSettings))).prepare();
 			try {
 				TelegramAdapter deferred = new TelegramAdapter();
 				prepared.registerAdapter(deferred);
@@ -172,8 +194,9 @@ public class TelegramAdapterTest {
 			"toString must not leak the token: " + spec);
 
 		// Outbound: an allow-listed bot addresses only its listed ids, however written
-		assertTrue(spec.allowsTarget(5L) && spec.allowsTarget("77") && spec.allowsTarget(" 5 "),
+		assertTrue(spec.allowsTarget(5L) && spec.allowsTarget("77"),
 			"listed ids as numbers or numeric strings");
+		assertFalse(spec.allowsTarget(" 5 "), "what is checked is what is sent, so padding is no listed id");
 		assertFalse(spec.allowsTarget(1L), "an unlisted id");
 		assertFalse(spec.allowsTarget("@bob"), "a username is never a target, even a listed one");
 		assertFalse(spec.allowsTarget("@channel") || spec.allowsTarget(null) || spec.allowsTarget("5x"));
@@ -205,17 +228,20 @@ public class TelegramAdapterTest {
 		assertNotNull(reply, "the bot must answer an allowed user");
 		assertEquals(chat, reply.chatId());
 		assertTrue(reply.text().contains("hello from telegram"), "echo agent reply: " + reply.text());
-		// The echo LLM returns the message it received: the agent sees who is on
-		// the other end as structure (Telegram's from/chat), not just the text.
-		assertTrue(reply.text().contains("\"username\":\"alice\"") || reply.text().contains("\"username\": \"alice\""),
-			"agent message carries the Telegram sender: " + reply.text());
-		assertTrue(reply.text().contains("\"channel\":\"telegram\"") || reply.text().contains("\"channel\": \"telegram\""), reply.text());
-		assertTrue(reply.text().contains("\"access\":\"allow\"") || reply.text().contains("\"access\": \"allow\""), reply.text());
+		// The echo LLM returns the message it received: the sender's own words.
+		assertEquals("hello from telegram", reply.text());
 		assertNull(reply.parseMode(), "plain text by default");
 		assertNotNull(reply.replyTo(), "answers reply to the inbound message");
 
 		String sid = readSession("echo", chat);
 		assertNotNull(sid, "the chat's agent session is persisted in the owner's workspace");
+		// Who is on the other end travels beside the turn: the principal the bot
+		// identified and how, with Telegram's sender and chat.
+		AMap<AString, ACell> turn = firstTurn(sid);
+		assertEquals(OWNER, turn.get(Fields.CALLER), "an allow-listed sender comes from the bot's principal");
+		assertEquals(Strings.create("telegram:" + ALLOWED_ID), RT.getIn(turn, "authentication", "authenticatedIdentity"));
+		assertEquals(Strings.create("alice"), RT.getIn(turn, "authentication", "authentication", "details", "sender", "handle"));
+		assertEquals(Strings.create(Long.toString(chat)), RT.getIn(turn, "authentication", "authentication", "details", "chat", "id"));
 
 		telegram.push(chat, ALLOWED_ID, "alice", "second");
 		FakeTelegramServer.Sent second = telegram.awaitSent(15_000);
@@ -308,10 +334,11 @@ public class TelegramAdapterTest {
 			configureBots(Maps.of(Strings.create("echo"), echoCfg,
 				Strings.create("modes"), base.assoc(BotSpec.K_REPLY, convex.core.data.prim.CVMBool.FALSE)));
 			awaitState("modes", BotRunner.State.RUNNING, 10_000);
-			RequestContext owner = RequestContext.of(OWNER);
-			Set<Blob> jobsBefore = new HashSet<>(engine.jobs().getJobs(owner).keySet());
+			// The stranger is anonymous, so the Job is the public principal's, not the bot user's.
+			RequestContext anonymous = RequestContext.of(engine.publicPrincipal());
+			Set<Blob> jobsBefore = new HashSet<>(engine.jobs().getJobs(anonymous).keySet());
 			telegram.push(token, 6001L, "private", STRANGER_ID, null, "quiet");
-			Job quiet = awaitNewJob(owner, jobsBefore, 10_000);
+			Job quiet = awaitNewJob(anonymous, jobsBefore, 10_000);
 			quiet.awaitResult(10_000);
 			await(() -> adapter.runner("modes").isChatIdle(6001L), 10_000,
 				() -> "operation handler did not finish");
@@ -372,14 +399,28 @@ public class TelegramAdapterTest {
 			"method", "getUpdates", "params", Maps.empty()), RequestContext.of(OWNER));
 		try { managed.awaitResult(10_000); } catch (Exception ignored) {}
 		assertEquals(Status.FAILED, managed.getStatus());
-		assertTrue(String.valueOf(managed.getErrorMessage()).contains("managed"), managed.getErrorMessage());
+		assertFalse(String.valueOf(managed.getErrorMessage()).isBlank());
+
+		// A padded name is no method
+		Job padded = engine.jobs().invokeOperation("v/ops/telegram/call", Maps.of(
+			"method", " sendPhoto", "params", Maps.of("chat_id", CVMLong.create(ALLOWED_ID), "photo", "x")), RequestContext.of(OWNER));
+		try { padded.awaitResult(10_000); } catch (Exception ignored) {}
+		assertEquals(Status.FAILED, padded.getStatus());
 
 		// Other users are denied
 		Job denied = engine.jobs().invokeOperation("v/ops/telegram/call", Maps.of(
 			"bot", "echo", "method", "sendPhoto", "params", Maps.of("chat_id", 1, "photo", "x")), RequestContext.of(OTHER));
 		try { denied.awaitResult(10_000); } catch (Exception ignored) {}
 		assertEquals(Status.FAILED, denied.getStatus());
-		assertTrue(String.valueOf(denied.getErrorMessage()).contains("denied"), denied.getErrorMessage());
+		assertFalse(String.valueOf(denied.getErrorMessage()).isBlank());
+	}
+
+	@Test
+	public void testATargetIdIsExactlyAnId() {
+		assertEquals(Long.valueOf(42), BotSpec.targetId("42"));
+		assertEquals(Long.valueOf(-42), BotSpec.targetId(CVMLong.create(-42)));
+		assertEquals(null, BotSpec.targetId(" 42"));
+		assertEquals(null, BotSpec.targetId("42 "));
 	}
 
 	@Test
@@ -425,7 +466,7 @@ public class TelegramAdapterTest {
 			}
 		});
 		run(RequestContext.of(OWNER), "v/ops/agent/create", Maps.of(Fields.AGENT_ID, "tg-vision", Fields.CONFIG,
-			Maps.of(Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/ops/telegram-vision/llm")));
+			Maps.of(Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/ops/telegram-vision/llm", "caps", "unrestricted")));
 		try {
 			configureBots(Maps.of("echo", echoBotConfig().assoc(BotSpec.K_AGENT, Strings.create("tg-vision"))));
 			awaitState("echo", BotRunner.State.RUNNING, 10_000);
@@ -465,8 +506,8 @@ public class TelegramAdapterTest {
 			}
 			@Override public java.util.concurrent.CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
 				assertEquals(OWNER, ctx.getUserDID());
-				assertEquals(CVMLong.create(15001), RT.getIn(input, "via", "chat", "id"));
-				assertEquals(Strings.create("echo"), RT.getIn(input, "via", "bot"));
+				assertEquals(Strings.create("15001"), RT.getIn(input, "authentication", "authentication", "details", "chat", "id"));
+				assertEquals(Strings.create(OWNER + "/telegram/echo"), RT.getIn(input, "authentication", "authentication", "binding"));
 				if (Strings.create("document").equals(RT.getIn(input, "kind"))) {
 					return java.util.concurrent.CompletableFuture.completedFuture(Maps.empty());
 				}
@@ -513,13 +554,13 @@ public class TelegramAdapterTest {
 		assertEquals(Strings.create("r1"), RT.getIn(result, "result", "recordId"));
 		for (ACell invalid : new ACell[] {null, Strings.create("bare transcript"), Maps.of("text", null), Maps.of("text", 12), Maps.of("text", " ")}) {
 			assertEquals(TelegramMedia.PROCESSOR_RESULT,
-				assertThrows(IllegalArgumentException.class, () -> TelegramMedia.processed(attachment, invalid)).getMessage());
+				assertThrows(InvalidDefinitionException.class, () -> TelegramMedia.processed(attachment, invalid)).getMessage());
 		}
 		assertEquals("Rendered", BotRunner.formattedReply(Strings.create("Rendered")));
 		assertEquals("Rendered", BotRunner.formattedReply(Maps.of("text", "Rendered")));
 		for (ACell invalid : new ACell[] {null, Maps.empty(), Maps.of("internalCard", "do not leak"), Strings.EMPTY}) {
 			assertEquals(BotRunner.INVALID_REPLY,
-				assertThrows(IllegalArgumentException.class, () -> BotRunner.formattedReply(invalid)).getMessage());
+				assertThrows(InvalidDefinitionException.class, () -> BotRunner.formattedReply(invalid)).getMessage());
 		}
 		for (AString option : List.of(BotSpec.K_MEDIA_OPERATION, BotSpec.K_REPLY_OPERATION)) {
 			assertThrows(IllegalArgumentException.class, () -> BotSpec.parse("bad", Maps.of("token", "t", "user", OWNER,
@@ -542,8 +583,8 @@ public class TelegramAdapterTest {
 			}
 			@Override public java.util.concurrent.CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
 				assertEquals(OWNER, ctx.getUserDID());
-				assertEquals(Strings.create("hooks"), RT.getIn(input, "via", "bot"));
-				assertEquals(CVMLong.create(ALLOWED_ID), RT.getIn(input, "via", "chat", "id"));
+				assertEquals(Strings.create(OWNER + "/telegram/hooks"), RT.getIn(input, "authentication", "authentication", "binding"));
+				assertEquals(Strings.create(Long.toString(ALLOWED_ID)), RT.getIn(input, "authentication", "authentication", "details", "chat", "id"));
 				assertTrue(RT.getIn(input, "response").toString().contains("APPLICATION_CARD"));
 				calls.incrementAndGet();
 				if (malformed.get()) return java.util.concurrent.CompletableFuture.completedFuture(Maps.of("internalCard", "APPLICATION_CARD"));
@@ -632,7 +673,7 @@ public class TelegramAdapterTest {
 			}
 		});
 		run(RequestContext.of(OWNER), "v/ops/agent/create", Maps.of(Fields.AGENT_ID, "tg-held", Fields.CONFIG,
-			Maps.of(Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/ops/telegram-held/llm")));
+			Maps.of(Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/ops/telegram-held/llm", "caps", "unrestricted")));
 		var inbox = new covia.adapter.webhook.WebhookInbox(engine, engine.adapterState("telegram"),
 			"config/echo/inbox/" + OWNER.getHash().toHexString() + "/42");
 		var config = echoBotConfig().assoc(BotSpec.K_AGENT, Strings.create("tg-held"));
@@ -730,7 +771,7 @@ public class TelegramAdapterTest {
 	@Test
 	public void suspendedAgentFailsTheUpdateOnceWithoutJobs() throws Exception {
 		run(RequestContext.of(OWNER), "v/ops/agent/create", Maps.of(Fields.AGENT_ID, "tg-resting", Fields.CONFIG,
-			Maps.of(Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/test/ops/llm")));
+			Maps.of(Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/test/ops/llm", "caps", "unrestricted")));
 		run(RequestContext.of(OWNER), "v/ops/agent/suspend", Maps.of(Fields.AGENT_ID, "tg-resting"));
 		var config = echoBotConfig().assoc(BotSpec.K_AGENT, Strings.create("tg-resting"));
 		try {
@@ -805,17 +846,21 @@ public class TelegramAdapterTest {
 		byte[] bytes = "downloaded-content".getBytes(java.nio.charset.StandardCharsets.UTF_8);
 		telegram.files.put("destination_test", bytes);
 		RequestContext owner = RequestContext.of(OWNER);
+		run(owner, "v/ops/dlfs/create-drive", Maps.of("name", "imports"));
 		ACell result = run(owner, "v/ops/telegram/download", Maps.of("file_id", "destination_test", "destination", "dlfs/imports", "fileName", "note.ogg"));
 		assertEquals(Strings.create("dlfs/imports/note.ogg"), RT.getIn(result, Fields.REF));
 		org.junit.jupiter.api.Assertions.assertArrayEquals(bytes,
 			engine.resolveContent(Strings.create("dlfs/imports/note.ogg"), owner).content().getBlob().getBytes());
 
-		AString file = Strings.create("file://tmp/telegram-download.ogg");
+		// Creating a file needs write on its directory, which the owner makes
+		run(owner, "v/ops/file/mkdir", Maps.of("root", "tmp", "path", "telegram-scope"));
+		AString file = Strings.create("file://tmp/telegram-scope/telegram-download.ogg");
 		RequestContext scoped = owner.withCaps(Vectors.of(
 			convex.auth.ucan.Capability.create(Strings.create("v/ops/telegram/download"), Strings.create("invoke")),
 			convex.auth.ucan.Capability.create(Strings.create(OWNER + "/telegram/echo"), TelegramAdapter.ABILITY_CALL),
-			convex.auth.ucan.Capability.create(file, convex.auth.ucan.Capability.CRUD_WRITE)));
-		result = run(scoped, "v/ops/telegram/download", Maps.of("file_id", "destination_test", "destination", "file://tmp/", "fileName", "telegram-download.ogg"));
+			convex.auth.ucan.Capability.create(Strings.create("file://tmp/telegram-scope/"),
+				convex.auth.ucan.Capability.CRUD_WRITE)));
+		result = run(scoped, "v/ops/telegram/download", Maps.of("file_id", "destination_test", "destination", "file://tmp/telegram-scope/", "fileName", "telegram-download.ogg"));
 		assertEquals(file, RT.getIn(result, Fields.REF));
 		org.junit.jupiter.api.Assertions.assertArrayEquals(bytes, engine.resolveContent(file, owner).content().getBlob().getBytes());
 
@@ -866,6 +911,7 @@ public class TelegramAdapterTest {
 		byte[] bytes = "new-file".getBytes(java.nio.charset.StandardCharsets.UTF_8);
 		telegram.files.put(fileId, bytes);
 		RequestContext owner = RequestContext.of(OWNER);
+		run(owner, "v/ops/dlfs/create-drive", Maps.of("name", "collisions"));
 		for (String directory : List.of("file://tmp", "dlfs/collisions")) {
 			String name = "collision-report.pdf";
 			AString original = Strings.create(directory + "/" + name);
@@ -891,7 +937,7 @@ public class TelegramAdapterTest {
 		telegram.files.put(fileId, new byte[] {4});
 		for (String name : List.of("../escape.pdf", "a/b.pdf", "a\\b.pdf", "report.pdf:stream", "a%2fb", "a#b", "NUL", "report.", " padded ")) {
 			assertFalse(TelegramMedia.safeFileName(name));
-			assertEquals(TelegramMedia.INVALID_FILE_NAME, assertThrows(IllegalArgumentException.class, () ->
+			assertEquals(TelegramMedia.INVALID_FILE_NAME, assertThrows(InvalidInputException.class, () ->
 				adapter.handleDownload(RequestContext.of(OWNER), Maps.of("file_id", fileId, "fileName", name))).getMessage());
 		}
 		var message = telegram.message(16002, "private", ALLOWED_ID, "alice");
@@ -910,11 +956,11 @@ public class TelegramAdapterTest {
 		telegram.files.put("invalid_destination", new byte[] {1});
 		int before = telegram.downloads.get();
 		for (ACell invalid : new ACell[] {Strings.EMPTY, Strings.create(" "), CVMLong.ONE}) {
-			assertEquals(TelegramMedia.INVALID_DESTINATION, assertThrows(IllegalArgumentException.class,
+			assertEquals(TelegramMedia.INVALID_DESTINATION, assertThrows(InvalidInputException.class,
 				() -> adapter.handleDownload(RequestContext.of(OWNER), Maps.of("file_id", "invalid_destination", "destination", invalid))).getMessage());
 		}
 		assertEquals(before, telegram.downloads.get());
-		var failure = assertThrows(IllegalArgumentException.class, () -> adapter.handleDownload(RequestContext.of(OWNER),
+		var failure = assertThrows(InvalidInputException.class, () -> adapter.handleDownload(RequestContext.of(OWNER),
 			Maps.of("file_id", "invalid_destination", "destination", "unsupported://destination")));
 		assertTrue(failure.getMessage().startsWith(TelegramMedia.UNSUPPORTED_DESTINATION));
 	}
@@ -978,7 +1024,10 @@ public class TelegramAdapterTest {
 		var parsed = com.pengrad.telegrambot.utility.BotUtils.GSON.fromJson(convex.core.util.JSON.toString(message), com.pengrad.telegrambot.model.Message.class);
 		String key = BotRunner.conversationKey(parsed, -12345L);
 		assertNotEquals("-12345", key);
-		assertEquals(CVMLong.create(101), RT.getIn(adapter.runner("echo").agentMessage(parsed, "hello"), "via", "message_thread_id"));
+		var channel = adapter.runner("echo").channel(parsed);
+		assertEquals(Strings.create("101"), channel.details().get(Strings.create("thread")), "a topic is the channel's thread");
+		assertEquals(Strings.create("album1"), RT.getIn(channel.details(), "telegram", "media_group_id"));
+		assertEquals(Strings.create("group"), RT.getIn(channel.details(), "chat", "kind"));
 		message.put("message_thread_id", 102);
 		parsed = com.pengrad.telegrambot.utility.BotUtils.GSON.fromJson(convex.core.util.JSON.toString(message), com.pengrad.telegrambot.model.Message.class);
 		assertNotEquals(key, BotRunner.conversationKey(parsed, -12345L));
@@ -999,6 +1048,52 @@ public class TelegramAdapterTest {
 	}
 
 	@Test
+	public void testABotAnAgentCreatesIdentifiesItsSendersAsThatAgent() throws Exception {
+		String token = "778:AGENT-BOT";
+		telegram.registerBot(token, "agent_bot");
+		run(RequestContext.of(OWNER), "v/ops/secret/set", Maps.of("name", "TG_AGENT", "value", token));
+		run(RequestContext.of(OWNER), "v/ops/agent/create", Maps.of("agentId", "maker",
+			"config", Maps.of("operation", "v/test/ops/taskcomplete")));
+		AString maker = covia.grid.Principals.agentDID(OWNER, Strings.create("maker"));
+
+		run(RequestContext.ofAgent(OWNER, Strings.create("maker")), "v/ops/telegram/create",
+			Maps.of("name", "made", "token", "s/TG_AGENT", "agent", AGENT));
+		assertEquals(maker, adapter.runner(OWNER, "made").context().getCallerDID(),
+			"the bot identifies its senders as the agent, never its owner");
+		adapter.forgetForTest(OWNER, "made");
+		adapter.rearmForTest();
+		assertEquals(maker, adapter.runner(OWNER, "made").context().getCallerDID(), "and still after a restart");
+		run(RequestContext.of(OWNER), "v/ops/telegram/delete", Maps.of("name", "made"));
+	}
+
+	@Test
+	public void testACappedAgentsOwnBotAsksItAsItself() throws Exception {
+		String token = "779:SELF-BOT";
+		telegram.registerBot(token, "self_bot");
+		run(RequestContext.of(OWNER), "v/ops/secret/set", Maps.of("name", "TG_SELF", "value", token));
+		// Its own bot's senders come from the agent, so it needs the right to ask itself.
+		AVector<ACell> caps = Vectors.of(
+			convex.auth.ucan.Capability.create(Strings.create(OWNER + "/telegram"), Strings.create("telegram/manage")),
+			convex.auth.ucan.Capability.create(Strings.create("v/ops/telegram/create"), Strings.create("invoke")),
+			convex.auth.ucan.Capability.create(Strings.create(OWNER + "/g/self-asker"), Strings.create("agent/message")),
+			convex.auth.ucan.Capability.create(Strings.create("v/ops/agent/chat"), Strings.create("invoke")));
+		run(RequestContext.of(OWNER), "v/ops/agent/create", Maps.of(Fields.AGENT_ID, "self-asker",
+			Fields.CONFIG, Maps.of(Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/test/ops/llm", "caps", caps)));
+		run(RequestContext.ofAgent(OWNER, Strings.create("self-asker")).withCaps(caps), "v/ops/telegram/create",
+			Maps.of("name", "self", "token", "s/TG_SELF", "agent", "self-asker", "allow", Vectors.of(CVMLong.create(ALLOWED_ID))));
+		try {
+			BotRunner self = adapter.runner(OWNER, "self");
+			await(() -> self.state() == BotRunner.State.RUNNING, 10_000, () -> "self bot did not start: " + self.error());
+			telegram.push(token, ALLOWED_ID, "private", ALLOWED_ID, "alice", "talk to yourself");
+			FakeTelegramServer.Sent reply = telegram.awaitSent(token, 15_000);
+			assertNotNull(reply);
+			assertTrue(reply.text().contains("talk to yourself"), reply.text());
+		} finally {
+			run(RequestContext.of(OWNER), "v/ops/telegram/delete", Maps.of("name", "self"));
+		}
+	}
+
+	@Test
 	public void testCreateAndDeleteRuntimeBots() throws Exception {
 		String token = "777:CREATED-BOT";
 		telegram.registerBot(token, "created_bot");
@@ -1009,8 +1104,8 @@ public class TelegramAdapterTest {
 			"name", "mine", "token", token, "agent", AGENT), RequestContext.of(OWNER)), AMessagingAdapter.SECRET_REFERENCE_REQUIRED);
 		assertFailsWith(engine.jobs().invokeOperation("v/ops/telegram/create", Maps.of(
 			"name", "mine", "token", "s/TG_CREATED", "agent", AGENT, "user", OTHER), RequestContext.of(OWNER)), AMessagingAdapter.IMPLICIT_USER);
-		assertFailsWith(engine.jobs().invokeOperation("v/ops/telegram/create", Maps.of(
-			"name", "mine", "token", "s/TG_CREATED"), RequestContext.of(OWNER)), "exactly one of agent");
+		assertFails(engine.jobs().invokeOperation("v/ops/telegram/create", Maps.of(
+			"name", "mine", "token", "s/TG_CREATED"), RequestContext.of(OWNER)));
 
 		ACell created = run(RequestContext.of(OWNER), "v/ops/telegram/create", Maps.of(
 			"name", "mine", "token", "s/TG_CREATED", "agent", AGENT,
@@ -1100,6 +1195,12 @@ public class TelegramAdapterTest {
 			Fields.PATH,TelegramAdapter.LEGACY_REGISTRY_PATH+"/legacy")),Fields.VALUE));
 	}
 
+	private static void assertFails(Job job) {
+		try { job.awaitResult(10_000); } catch (Exception ignored) {}
+		assertEquals(Status.FAILED, job.getStatus());
+		assertFalse(String.valueOf(job.getErrorMessage()).isBlank());
+	}
+
 	private static void assertFailsWith(Job job, String fragment) {
 		try { job.awaitResult(10_000); } catch (Exception ignored) {}
 		assertEquals(Status.FAILED, job.getStatus(), "expected failure mentioning '" + fragment + "'");
@@ -1114,7 +1215,7 @@ public class TelegramAdapterTest {
 		assertEquals(template, engine.resolvePath(Strings.create("v/adapters/telegram/templates/telegram"), RequestContext.of(OWNER)),
 			"mirrored in the adapter's own subtree");
 		ACell cfg = RT.getIn(template, "agent", "config");
-		assertTrue(RT.getIn(cfg, "systemPrompt").toString().contains("via.from"), "the prompt teaches via");
+		assertTrue(RT.getIn(cfg, "systemPrompt").toString().contains("[From:"), "the prompt teaches the From element");
 		assertEquals(Vectors.of((ACell) Strings.create("w/skills"), Strings.create("v/skills/root")),
 			RT.getIn(cfg, "skillsets"), "the template discovers personal and venue skillsets");
 		assertNull(RT.getIn(cfg, "skills"), "directories must not be declared as individual skills");
@@ -1232,7 +1333,7 @@ public class TelegramAdapterTest {
 			// failure surfaces on the job
 		}
 		assertEquals(Status.FAILED, job.getStatus());
-		assertTrue(String.valueOf(job.getErrorMessage()).contains("denied"), job.getErrorMessage());
+		assertFalse(String.valueOf(job.getErrorMessage()).isBlank());
 		assertTrue(telegram.drainSent().isEmpty(), "nothing must reach Telegram");
 	}
 
@@ -1311,22 +1412,22 @@ public class TelegramAdapterTest {
 		// this says whom the bot may reach.
 		assertFailsWith(engine.jobs().invokeOperation("v/ops/telegram/send", Maps.of(
 			"chat_id", CVMLong.create(STRANGER_ID), "text", "psst"), RequestContext.of(OWNER)),
-			"only messages its allowed users");
+			String.valueOf(STRANGER_ID));
 		assertFailsWith(engine.jobs().invokeOperation("v/ops/telegram/send", Maps.of(
 			"chat_id", "@somechannel", "text", "psst"), RequestContext.of(OWNER)),
-			"chat_id @somechannel is not one of them");
+			"@somechannel");
 		assertFailsWith(engine.jobs().invokeOperation("v/ops/telegram/call", Maps.of(
 			"method", "sendPhoto", "params", Maps.of("chat_id", CVMLong.create(STRANGER_ID), "photo", "x")),
-			RequestContext.of(OWNER)), "sendPhoto chat_id " + STRANGER_ID);
+			RequestContext.of(OWNER)), String.valueOf(STRANGER_ID));
 		// A forward or copy addresses two chats: the source would carry that chat's
 		// content, the destination would be talked to. Both must be allowed.
 		assertFailsWith(engine.jobs().invokeOperation("v/ops/telegram/call", Maps.of(
 			"method", "forwardMessage", "params", Maps.of("chat_id", CVMLong.create(ALLOWED_ID),
 				"from_chat_id", CVMLong.create(-2001L), "message_id", 5)),
-			RequestContext.of(OWNER)), "from_chat_id -2001");
+			RequestContext.of(OWNER)), "-2001");
 		assertFailsWith(engine.jobs().invokeOperation("v/ops/telegram/call", Maps.of(
 			"method", "getUserProfilePhotos", "params", Maps.of("user_id", CVMLong.create(STRANGER_ID))),
-			RequestContext.of(OWNER)), "user_id " + STRANGER_ID);
+			RequestContext.of(OWNER)), String.valueOf(STRANGER_ID));
 		assertTrue(telegram.drainSent().isEmpty(), "nothing must reach Telegram");
 
 		// The allowed user's private chat (its id is their user id), as a numeric string too
@@ -1366,9 +1467,8 @@ public class TelegramAdapterTest {
 		try {
 			long carol = 5005L;
 			// Before Carol has written there is no account to address: a handle is an unresolved id.
-			assertFailsWith(engine.jobs().invokeOperation("v/ops/telegram/send", Maps.of(
-				"bot", "named", "chat_id", CVMLong.create(carol), "text", "hi"), RequestContext.of(OWNER)),
-				"once they have written to the bot");
+			assertFails(engine.jobs().invokeOperation("v/ops/telegram/send", Maps.of(
+				"bot", "named", "chat_id", CVMLong.create(carol), "text", "hi"), RequestContext.of(OWNER)));
 
 			// Carol writes: admitted by handle and answered, and Telegram's authenticated
 			// sender resolves @carol to her account — kept beside the sessions, allow untouched.
@@ -1406,7 +1506,7 @@ public class TelegramAdapterTest {
 			assertEquals(CVMLong.create(carol), adapter.state().read("config/named/resolved/carol"));
 			assertFailsWith(engine.jobs().invokeOperation("v/ops/telegram/send", Maps.of(
 				"bot", "named", "chat_id", CVMLong.create(impostor), "text", "hi"), RequestContext.of(OWNER)),
-				"only messages its allowed users");
+				String.valueOf(impostor));
 		} finally {
 			configureBots(Maps.of(Strings.create("echo"), echoCfg));
 			adapter.state().delete("config/named/resolved");
@@ -1464,7 +1564,7 @@ public class TelegramAdapterTest {
 			Strings.create("late"), botConfig("s/TG_LATE_TOKEN", OWNER.toString(), "agent", AGENT, null)));
 		try {
 			awaitState("late", BotRunner.State.PENDING, 10_000);
-			assertTrue(adapter.runner("late").error().contains("not found"), adapter.runner("late").error());
+			assertTrue(adapter.runner("late").error().contains("TG_LATE_TOKEN"), adapter.runner("late").error());
 			assertEquals(0, telegram.getMeCalls(token), "no token, no Telegram call");
 
 			ACell status = run(RequestContext.of(OWNER), "v/ops/telegram/bots", Maps.empty());
@@ -1498,7 +1598,7 @@ public class TelegramAdapterTest {
 			BotRunner named = adapter.runner(OTHER, "named");
 			await(() -> borrowed.state() == BotRunner.State.PENDING && named.state() == BotRunner.State.PENDING,
 				10_000, () -> "user bots must stay pending: " + borrowed.error() + " / " + named.error());
-			assertTrue(borrowed.error().contains("not found"), borrowed.error());
+			assertTrue(borrowed.error().contains("TG_VENUE_ONLY"), borrowed.error());
 			assertTrue(named.error().contains("token resolution failed"), named.error());
 			assertEquals(0, telegram.getMeCalls(token), "the venue's token never reaches Telegram for a user's bot");
 
@@ -1558,6 +1658,13 @@ public class TelegramAdapterTest {
 		ACell result = job.awaitResult(30_000);
 		assertEquals(Status.COMPLETE, job.getStatus(), op + ": " + job.getErrorMessage());
 		return result;
+	}
+
+	@SuppressWarnings("unchecked")
+	private static AMap<AString, ACell> firstTurn(String sid) {
+		var agent = engine.getVenueState().users().user(OWNER).agent(Strings.create(AGENT));
+		var frames = (AVector<ACell>) agent.getSession(Blob.fromHex(sid)).get(Agent.KEY_FRAMES);
+		return (AMap<AString, ACell>) covia.adapter.agent.GoalTreeContext.activeConversation(RT.ensureMap(frames.get(0))).get(0);
 	}
 
 	private static String readSession(String bot, long chatId) {

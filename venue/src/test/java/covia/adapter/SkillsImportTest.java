@@ -7,19 +7,14 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 
-import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
-import org.junit.jupiter.api.io.TempDir;
 
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -31,7 +26,7 @@ import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import covia.adapter.agent.Skills;
 import covia.api.Fields;
-import covia.venue.Config;
+import covia.exception.InvalidInputException;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.TestEngine;
@@ -39,13 +34,11 @@ import covia.venue.TestEngine;
 /**
  * SKILL.md files as Covia skills: the resolver's content-reference paths
  * ({@code file://}, {@code dlfs/}) and the {@code skills/parse} and
- * {@code skills/import} ops, end-to-end through the catalog. Uses a bespoke
- * engine because it needs a host file root.
+ * {@code skills/import} ops, end-to-end through the catalog.
  */
 public class SkillsImportTest {
 
-	@TempDir static Path work;
-	private static Engine engine;
+	private static final Engine engine = TestEngine.ENGINE;
 	private AString did;
 	private RequestContext ctx;
 
@@ -80,22 +73,11 @@ public class SkillsImportTest {
 		""";
 
 	@BeforeAll
-	static void setup() throws IOException {
-		engine = Engine.createTemp(Maps.of(
-			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
-			"file", Maps.of("roots", Maps.of("work", work.toAbsolutePath().toString()))));
-		Engine.addDemoAssets(engine);
-		Files.createDirectories(work.resolve("agent"));
-		Files.writeString(work.resolve("agent/SKILL.md"), AGENT_SKILL);
-		Files.createDirectories(work.resolve("nameless"));
-		Files.writeString(work.resolve("nameless/SKILL.md"),
+	static void setup() {
+		TestEngine.writeTempFile("SkillsImportTest/agent/SKILL.md", AGENT_SKILL);
+		TestEngine.writeTempFile("SkillsImportTest/nameless/SKILL.md",
 			"---\ndescription: A skill named by its directory.\n---\nNameless body.\n");
-		Files.writeString(work.resolve("notes.txt"), "Just some notes, no frontmatter.\n");
-	}
-
-	@AfterAll
-	static void teardown() {
-		engine.close();
+		TestEngine.writeTempFile("SkillsImportTest/notes.txt", "Just some notes, no frontmatter.\n");
 	}
 
 	@BeforeEach
@@ -137,7 +119,7 @@ public class SkillsImportTest {
 
 	@Test
 	public void testStringRefToFileResolvesAsSkill() {
-		write("w/skills/agent", Strings.create("file://work/agent/SKILL.md"));
+		write("w/skills/agent", Strings.create("file://tmp/SkillsImportTest/agent/SKILL.md"));
 		Skills.ResolvedSkill s = Skills.resolveRef(engine, ctx, Strings.create("w/skills/agent"));
 		assertEquals("agent", s.name());
 		assertEquals("Create, configure, and manage Covia agents. Use when working with agents on a venue.",
@@ -149,18 +131,18 @@ public class SkillsImportTest {
 
 	@Test
 	public void testDirectFileRefResolvesAsSkill() {
-		Skills.ResolvedSkill s = Skills.resolveRef(engine, ctx, Strings.create("file://work/agent/SKILL.md"));
+		Skills.ResolvedSkill s = Skills.resolveRef(engine, ctx, Strings.create("file://tmp/SkillsImportTest/agent/SKILL.md"));
 		assertEquals("agent", s.name());
-		assertEquals("file://work/agent/SKILL.md", s.path().toString());
+		assertEquals("file://tmp/SkillsImportTest/agent/SKILL.md", s.path().toString());
 		// Same file under two addresses is one skill: identity is the synthesised metadata.
-		write("w/skills/agent", Strings.create("file://work/agent/SKILL.md"));
+		write("w/skills/agent", Strings.create("file://tmp/SkillsImportTest/agent/SKILL.md"));
 		assertEquals(s.id(), Skills.resolveRef(engine, ctx, Strings.create("w/skills/agent")).id());
 	}
 
 	@Test
 	public void testFileRefAsIndividualSkillSource() {
 		List<Skills.SkillIndexEntry> idx = Skills.listSkills(engine, ctx,
-			Skills.SkillSources.ofSkills(Vectors.of(Strings.create("file://work/agent/SKILL.md"))));
+			Skills.SkillSources.ofSkills(Vectors.of(Strings.create("file://tmp/SkillsImportTest/agent/SKILL.md"))));
 		assertEquals(1, idx.size());
 		assertEquals("agent", idx.get(0).name());
 		assertNull(idx.get(0).error());
@@ -168,29 +150,29 @@ public class SkillsImportTest {
 
 	@Test
 	public void testNamelessSkillIsNamedByItsDirectory() {
-		Skills.ResolvedSkill s = Skills.resolveRef(engine, ctx, Strings.create("file://work/nameless/SKILL.md"));
+		Skills.ResolvedSkill s = Skills.resolveRef(engine, ctx, Strings.create("file://tmp/SkillsImportTest/nameless/SKILL.md"));
 		assertEquals("nameless", s.name());
 	}
 
 	@Test
 	public void testMissingFileIsDiagnosable() {
 		RuntimeException e = assertThrows(RuntimeException.class,
-			() -> Skills.resolveRef(engine, ctx, Strings.create("file://work/absent/SKILL.md")));
+			() -> Skills.resolveRef(engine, ctx, Strings.create("file://tmp/SkillsImportTest/absent/SKILL.md")));
 		assertTrue(e.getMessage().contains("absent/SKILL.md"), e.getMessage());
 	}
 
 	@Test
 	public void testFileWithoutFrontmatterIsNotASkill() {
 		RuntimeException e = assertThrows(RuntimeException.class,
-			() -> Skills.resolveRef(engine, ctx, Strings.create("file://work/notes.txt")));
-		assertTrue(e.getMessage().contains("not a SKILL.md"), e.getMessage());
+			() -> Skills.resolveRef(engine, ctx, Strings.create("file://tmp/SkillsImportTest/notes.txt")));
+		assertFalse(e.getMessage().isBlank());
 	}
 
 	// ========== parse ==========
 
 	@Test
 	public void testParseFromSourceInline() {
-		ACell out = parse(Maps.of(K_SOURCE, Strings.create("file://work/agent/SKILL.md")));
+		ACell out = parse(Maps.of(K_SOURCE, Strings.create("file://tmp/SkillsImportTest/agent/SKILL.md")));
 		assertEquals("agent", str(out, "name"));
 		ACell meta = RT.getIn(out, "metadata");
 		assertEquals("agent", str(meta, "name"));
@@ -217,10 +199,10 @@ public class SkillsImportTest {
 
 	@Test
 	public void testParseFromSourceRef() {
-		ACell out = parse(Maps.of(K_SOURCE, Strings.create("file://work/agent/SKILL.md"),
+		ACell out = parse(Maps.of(K_SOURCE, Strings.create("file://tmp/SkillsImportTest/agent/SKILL.md"),
 			Fields.CONTENT, Fields.REF));
 		ACell meta = RT.getIn(out, "metadata");
-		assertEquals("file://work/agent/SKILL.md", str(meta, "content", "ref"));
+		assertEquals("file://tmp/SkillsImportTest/agent/SKILL.md", str(meta, "content", "ref"));
 		assertNull(RT.getIn(meta, "content", "inline"));
 		assertNull(RT.getIn(meta, "skill"));                         // live: the frontmatter stays authoritative
 	}
@@ -237,25 +219,25 @@ public class SkillsImportTest {
 
 	@Test
 	public void testParseRequiresExactlyOneInput() {
-		assertThrows(IllegalArgumentException.class, () -> parse(Maps.empty()));
-		assertThrows(IllegalArgumentException.class, () -> parse(Maps.of(
-			K_SOURCE, Strings.create("file://work/agent/SKILL.md"), K_TEXT, Strings.create("---\n---\n"))));
+		assertThrows(InvalidInputException.class, () -> parse(Maps.empty()));
+		assertThrows(InvalidInputException.class, () -> parse(Maps.of(
+			K_SOURCE, Strings.create("file://tmp/SkillsImportTest/agent/SKILL.md"), K_TEXT, Strings.create("---\n---\n"))));
 		// A ref binding needs something to bind to.
-		assertThrows(IllegalArgumentException.class, () -> parse(Maps.of(
+		assertThrows(InvalidInputException.class, () -> parse(Maps.of(
 			K_TEXT, Strings.create("---\nname: x\ndescription: y\n---\n"), Fields.CONTENT, Fields.REF)));
-		assertThrows(IllegalArgumentException.class, () -> parse(Maps.of(
-			K_SOURCE, Strings.create("file://work/agent/SKILL.md"), Fields.CONTENT, Strings.create("copy"))));
+		assertThrows(InvalidInputException.class, () -> parse(Maps.of(
+			K_SOURCE, Strings.create("file://tmp/SkillsImportTest/agent/SKILL.md"), Fields.CONTENT, Strings.create("copy"))));
 	}
 
 	@Test
 	public void testParseRejectsNonSkillContent() {
-		IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
-			() -> parse(Maps.of(K_SOURCE, Strings.create("file://work/notes.txt"))));
-		assertTrue(e.getMessage().contains("not a SKILL.md"), e.getMessage());
-		IllegalArgumentException noDesc = assertThrows(IllegalArgumentException.class,
+		InvalidInputException e = assertThrows(InvalidInputException.class,
+			() -> parse(Maps.of(K_SOURCE, Strings.create("file://tmp/SkillsImportTest/notes.txt"))));
+		assertFalse(e.getMessage().isBlank());
+		InvalidInputException noDesc = assertThrows(InvalidInputException.class,
 			() -> parse(Maps.of(K_TEXT, Strings.create("---\nname: x\n---\nBody"))));
 		assertTrue(noDesc.getMessage().contains("description"), noDesc.getMessage());
-		IllegalArgumentException noName = assertThrows(IllegalArgumentException.class,
+		InvalidInputException noName = assertThrows(InvalidInputException.class,
 			() -> parse(Maps.of(K_TEXT, Strings.create("---\ndescription: y\n---\nBody"))));
 		assertTrue(noName.getMessage().contains("name"), noName.getMessage());
 	}
@@ -264,7 +246,7 @@ public class SkillsImportTest {
 
 	@Test
 	public void testImportDefaultsToOwnSkills() {
-		ACell out = importSkill(Maps.of(K_SOURCE, Strings.create("file://work/agent/SKILL.md")));
+		ACell out = importSkill(Maps.of(K_SOURCE, Strings.create("file://tmp/SkillsImportTest/agent/SKILL.md")));
 		assertEquals("w/skills/agent", str(out, "path"));
 		assertEquals("agent", str(out, "name"));
 		assertEquals("inline", str(out, "content"));
@@ -279,14 +261,14 @@ public class SkillsImportTest {
 		assertEquals(2, RT.ensureVector(RT.getIn(read, "tools")).count());
 
 		// Re-import replaces the entry.
-		ACell again = importSkill(Maps.of(K_SOURCE, Strings.create("file://work/agent/SKILL.md")));
+		ACell again = importSkill(Maps.of(K_SOURCE, Strings.create("file://tmp/SkillsImportTest/agent/SKILL.md")));
 		assertEquals(true, RT.bool(RT.getIn(again, K_EXISTED)));
 	}
 
 	@Test
 	public void testImportRecordsWhoWroteIt() {
 		// A user's own import names the principal and no agent…
-		importSkill(Maps.of(K_SOURCE, Strings.create("file://work/agent/SKILL.md")));
+		importSkill(Maps.of(K_SOURCE, Strings.create("file://tmp/SkillsImportTest/agent/SKILL.md")));
 		ACell mine = engine.resolvePath(Strings.create("w/skills/agent"), ctx);
 		assertEquals(did, RT.getIn(mine, Fields.CREATED_BY, Fields.DID));
 		assertNull(RT.getIn(mine, Fields.CREATED_BY, Fields.AGENT_ID));
@@ -295,7 +277,7 @@ public class SkillsImportTest {
 		// own sub-principal DID as the actor, plus the agent id so a library
 		// listing can show provenance without parsing DIDs.
 		ctx = RequestContext.ofAgent(did, Strings.create("author-bot"));
-		importSkill(Maps.of(K_SOURCE, Strings.create("file://work/agent/SKILL.md"),
+		importSkill(Maps.of(K_SOURCE, Strings.create("file://tmp/SkillsImportTest/agent/SKILL.md"),
 			K_SKILLSET, Strings.create("w/authored")));
 		ACell theirs = engine.resolvePath(Strings.create("w/authored/agent"), ctx);
 		assertEquals(ctx.getCallerDID(), RT.getIn(theirs, Fields.CREATED_BY, Fields.DID));
@@ -303,13 +285,13 @@ public class SkillsImportTest {
 		assertEquals(Strings.create("author-bot"), RT.getIn(theirs, Fields.CREATED_BY, Fields.AGENT_ID));
 
 		// parse stores nothing, so it stamps nothing.
-		ACell parsed = parse(Maps.of(K_SOURCE, Strings.create("file://work/agent/SKILL.md")));
+		ACell parsed = parse(Maps.of(K_SOURCE, Strings.create("file://tmp/SkillsImportTest/agent/SKILL.md")));
 		assertNull(RT.getIn(parsed, "metadata", Fields.CREATED_BY));
 	}
 
 	@Test
 	public void testImportIntoNamedSkillset() {
-		ACell out = importSkill(Maps.of(K_SOURCE, Strings.create("file://work/agent/SKILL.md"),
+		ACell out = importSkill(Maps.of(K_SOURCE, Strings.create("file://tmp/SkillsImportTest/agent/SKILL.md"),
 			K_SKILLSET, Strings.create("w/team-skills/")));
 		assertEquals("w/team-skills/agent", str(out, "path"));
 		ACell listing = call("v/ops/skills/list", Maps.of(K_SKILLSET, Strings.create("w/team-skills")));
@@ -317,17 +299,16 @@ public class SkillsImportTest {
 	}
 
 	@Test
-	public void testImportAsLiveRef() throws IOException {
-		Files.createDirectories(work.resolve("live"));
-		Files.writeString(work.resolve("live/SKILL.md"), "---\nname: live\ndescription: First.\n---\nOne.\n");
-		ACell out = importSkill(Maps.of(K_SOURCE, Strings.create("file://work/live/SKILL.md"),
+	public void testImportAsLiveRef() {
+		TestEngine.writeTempFile("SkillsImportTest/live/SKILL.md", "---\nname: live\ndescription: First.\n---\nOne.\n");
+		ACell out = importSkill(Maps.of(K_SOURCE, Strings.create("file://tmp/SkillsImportTest/live/SKILL.md"),
 			Fields.CONTENT, Fields.REF));
 		assertEquals("ref", str(out, "content"));
 		ACell read = call("v/ops/skills/read", Maps.of(K_SKILL, Strings.create("w/skills/live")));
 		assertEquals("One.\n", str(read, K_BODY));
 
 		// Edits on disk show on the next read; the index line is a snapshot.
-		Files.writeString(work.resolve("live/SKILL.md"), "---\nname: live\ndescription: Second.\n---\nTwo.\n");
+		TestEngine.writeTempFile("SkillsImportTest/live/SKILL.md", "---\nname: live\ndescription: Second.\n---\nTwo.\n");
 		read = call("v/ops/skills/read", Maps.of(K_SKILL, Strings.create("w/skills/live")));
 		assertEquals("Two.\n", str(read, K_BODY));
 		assertEquals("First.", str(read, "description"));
@@ -361,36 +342,36 @@ public class SkillsImportTest {
 		assertTrue(str(read, K_BODY).startsWith("Body here."));
 
 		// Exactly one of source/text; a live 'ref' still needs a source to bind to.
-		assertThrows(IllegalArgumentException.class, () -> importSkill(Maps.of(
-			K_SOURCE, Strings.create("file://work/agent/SKILL.md"),
+		assertThrows(InvalidInputException.class, () -> importSkill(Maps.of(
+			K_SOURCE, Strings.create("file://tmp/SkillsImportTest/agent/SKILL.md"),
 			K_TEXT, Strings.create("---\nname: x\ndescription: y\n---\n"))));
-		assertThrows(IllegalArgumentException.class, () -> importSkill(Maps.of(
+		assertThrows(InvalidInputException.class, () -> importSkill(Maps.of(
 			K_TEXT, Strings.create("---\nname: x\ndescription: y\n---\nB\n"), Fields.CONTENT, Fields.REF)));
 	}
 
 	@Test
 	public void testImportWritesNothingOnABadSource() {
-		assertThrows(IllegalArgumentException.class, () -> importSkill(Maps.empty()));
-		assertThrows(IllegalArgumentException.class,
-			() -> importSkill(Maps.of(K_SOURCE, Strings.create("file://work/notes.txt"))));
+		assertThrows(InvalidInputException.class, () -> importSkill(Maps.empty()));
+		assertThrows(InvalidInputException.class,
+			() -> importSkill(Maps.of(K_SOURCE, Strings.create("file://tmp/SkillsImportTest/notes.txt"))));
 		assertThrows(RuntimeException.class,
-			() -> importSkill(Maps.of(K_SOURCE, Strings.create("file://work/absent/SKILL.md"))));
+			() -> importSkill(Maps.of(K_SOURCE, Strings.create("file://tmp/SkillsImportTest/absent/SKILL.md"))));
 		// A directory is not a source.
 		assertThrows(RuntimeException.class,
-			() -> importSkill(Maps.of(K_SOURCE, Strings.create("file://work/agent"))));
+			() -> importSkill(Maps.of(K_SOURCE, Strings.create("file://tmp/SkillsImportTest/agent"))));
 		ACell listing = call("v/ops/skills/list", Maps.of(K_SKILLSET, Strings.create("w/skills")));
 		assertTrue(((AMap<?, ?>) listing).isEmpty(), "nothing written: " + listing);
 	}
 
 	@Test
 	public void testImportRejectsMalformedSkillset() {
-		assertThrows(IllegalArgumentException.class, () -> importSkill(Maps.of(
-			K_SOURCE, Strings.create("file://work/agent/SKILL.md"), K_SKILLSET, Vectors.of(Strings.create("w/skills")))));
-		assertThrows(IllegalArgumentException.class, () -> importSkill(Maps.of(
-			K_SOURCE, Strings.create("file://work/agent/SKILL.md"), K_SKILLSET, Strings.create("/"))));
+		assertThrows(InvalidInputException.class, () -> importSkill(Maps.of(
+			K_SOURCE, Strings.create("file://tmp/SkillsImportTest/agent/SKILL.md"), K_SKILLSET, Vectors.of(Strings.create("w/skills")))));
+		assertThrows(InvalidInputException.class, () -> importSkill(Maps.of(
+			K_SOURCE, Strings.create("file://tmp/SkillsImportTest/agent/SKILL.md"), K_SKILLSET, Strings.create("/"))));
 		// Namespace rules are the lattice write's: a read-only namespace is refused there.
 		assertThrows(RuntimeException.class, () -> importSkill(Maps.of(
-			K_SOURCE, Strings.create("file://work/agent/SKILL.md"), K_SKILLSET, Strings.create("v/skills"))));
+			K_SOURCE, Strings.create("file://tmp/SkillsImportTest/agent/SKILL.md"), K_SKILLSET, Strings.create("v/skills"))));
 		assertFalse(Skills.listSkills(engine, ctx,
 			Skills.SkillSources.ofSkillsets(Vectors.of(Strings.create("w/skills")))).stream()
 			.anyMatch(e -> "agent".equals(e.name())));

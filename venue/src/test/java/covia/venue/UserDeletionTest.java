@@ -10,7 +10,6 @@ import org.junit.jupiter.api.Test;
 
 import convex.auth.ucan.Capability;
 import convex.auth.ucan.UCAN;
-import convex.auth.did.DIDVerifier;
 import convex.core.crypto.AKeyPair;
 import convex.core.data.*;
 import convex.core.lang.RT;
@@ -18,9 +17,10 @@ import covia.adapter.UserAdapter;
 import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.AuthException;
+import covia.exception.InvalidInputException;
+import covia.exception.NotFoundException;
 import covia.grid.Job;
 import covia.grid.Status;
-import covia.venue.server.AuthMiddleware;
 
 class UserDeletionTest {
 	private static Engine engine;
@@ -52,10 +52,10 @@ class UserDeletionTest {
 			RequestContext.ofAgent(target, Strings.create("agent"))}) {
 			assertThrows(AuthException.class, () -> engine.deleteUser(ctx, target));
 		}
-		assertNotNull(engine.getVenueState().users().get(target));
-		assertThrows(IllegalArgumentException.class,
+		assertNotNull(engine.getVenueState().users().user(target));
+		assertThrows(InvalidInputException.class,
 			() -> engine.deleteUser(engine.venueContext(), engine.getDIDString()));
-		assertThrows(IllegalArgumentException.class, () -> engine.deleteUser(engine.venueContext(),
+		assertThrows(InvalidInputException.class, () -> engine.deleteUser(engine.venueContext(),
 			Strings.create(engine.getDIDString() + ":public")));
 	}
 
@@ -67,16 +67,16 @@ class UserDeletionTest {
 			System.currentTimeMillis() / 1000 + 3600,
 			Vectors.of(Capability.create(Strings.create(engine.getDIDString() + "/users"), Abilities.USER_DELETE)),
 			Vectors.empty()).toJWT(engine.getKeyPair());
-		RequestContext ctx = AuthMiddleware.withTransportGrants(RequestContext.of(did), Vectors.of(proof), DIDVerifier.CONVEX);
+		RequestContext ctx = engine.withTransportGrants(RequestContext.of(did), Vectors.of(proof));
 		ACell result = engine.jobs().invokeInternal("v/ops/user/delete", Maps.of(Fields.DID, did), ctx).get(5, TimeUnit.SECONDS);
 		assertEquals(did, RT.getIn(result, "deletedBy"));
-		assertNull(engine.getVenueState().users().get(did));
+		assertNull(engine.getVenueState().users().user(did));
 	}
 
 	@Test void deletionErasesNamespaceCancelsJobsAndSchedulesAndIsIdempotent() throws Exception {
 		AString did = user();
 		RequestContext ctx = RequestContext.of(did);
-		User retained = engine.getVenueState().users().get(did);
+		User retained = engine.getVenueState().users().user(did);
 		retained.cursor().path(Strings.create("w")).set(Maps.of("private", "personal-data"));
 		retained.secrets().store("credential", "secret-value", SecretStore.keys(engine.getKeyPair()));
 		retained.ensureAgent("old-agent", Maps.empty(), Strings.create("old-state"));
@@ -85,10 +85,10 @@ class UserDeletionTest {
 			ctx, System.currentTimeMillis() + 86400000, null, false);
 		ACell first = delete(did);
 		assertEquals(Status.CANCELLED, pending.getStatus());
-		assertNull(engine.getVenueState().users().get(did));
+		assertNull(engine.getVenueState().users().user(did));
 		assertFalse(engine.getVenueState().users().getAll().containsKey(did));
 		assertTrue(engine.gridScheduler().list(ctx).isEmpty());
-		assertThrows(IllegalArgumentException.class, () -> ((UserAdapter) engine.getAdapter("user"))
+		assertThrows(NotFoundException.class, () -> ((UserAdapter) engine.getAdapter("user"))
 			.info(engine.venueContext(), Maps.of(Fields.DID, did)));
 		assertThrows(AuthException.class, () -> engine.admitUser(did));
 		assertThrows(AuthException.class, () -> retained.cursor().path(Strings.create("w")).set(Maps.of("late", true)));
@@ -96,15 +96,15 @@ class UserDeletionTest {
 
 		// Explicit operator recreation follows normal provisioning, never an old job cursor.
 		engine.jobs().invokeInternal("v/ops/user/create", Maps.of(Fields.DID, did), engine.venueContext()).get(5, TimeUnit.SECONDS);
-		User fresh = engine.getVenueState().users().get(did);
+		User fresh = engine.getVenueState().users().user(did);
 		assertNotNull(fresh);
-		assertTrue(fresh.getJobs().isEmpty());
+		assertTrue(fresh.jobs().getAll().isEmpty());
 		assertTrue(fresh.secrets().list().isEmpty());
 		assertNull(fresh.getAgents());
 		assertThrows(AuthException.class, () -> retained.cursor().path(Strings.create("w")).set(Maps.of("late", true)));
 		pending.updateData(pending.getData().assoc(Fields.OUTPUT, Strings.create("late-output")));
-		assertTrue(fresh.getJobs().isEmpty());
-		assertNull(fresh.cursor().path(Strings.create("w")).get());
+		assertTrue(fresh.jobs().getAll().isEmpty());
+		assertFalse(fresh.cursor().path(Strings.create("w")).exists());
 	}
 
 	@Test void automaticAdmissionCanRecreateAnEmptyAccount() throws Exception {
@@ -129,7 +129,7 @@ class UserDeletionTest {
 			delete(did);
 			engine.getVenueState().users().create(did);
 			assertEquals(Status.CANCELLED, prepared.start().getStatus());
-			assertNull(engine.getVenueState().users().get(did).cursor().path(Strings.create("w")).get());
+			assertFalse(engine.getVenueState().users().user(did).cursor().path(Strings.create("w")).exists());
 		}
 	}
 
@@ -148,8 +148,8 @@ class UserDeletionTest {
 			assertEquals(Status.CANCELLED, request.getStatus());
 			engine.getVenueState().users().create(did);
 			gate.release();
-			assertNull(engine.getVenueState().users().get(did).getAgents());
-			assertTrue(engine.getVenueState().users().get(did).getJobs().isEmpty());
+			assertNull(engine.getVenueState().users().user(did).getAgents());
+			assertTrue(engine.getVenueState().users().user(did).jobs().getAll().isEmpty());
 		}
 	}
 
@@ -161,7 +161,7 @@ class UserDeletionTest {
 		AString did = RT.ensureString(RT.getIn(record, Fields.DID));
 		AString key = UCAN.toDIDKey(AKeyPair.generate().getAccountKey());
 		engine.getAuth().addAuthenticationKey(id, key, did, Strings.create("private-label"));
-		User old = engine.getVenueState().users().get(did);
+		User old = engine.getVenueState().users().user(did);
 		old.ensureAgent("private-agent", Maps.empty(), null);
 		delete(did);
 		assertNull(engine.getAuth().getUser(id));
@@ -172,7 +172,7 @@ class UserDeletionTest {
 		}
 		ACell replacement = engine.getAuth().provisionLogin(id, profile);
 		assertEquals(did, RT.getIn(replacement, Fields.DID));
-		assertNull(engine.getVenueState().users().get(did).getAgents());
+		assertNull(engine.getVenueState().users().user(did).getAgents());
 		assertFalse(engine.getAuth().isAuthenticationKeyActive(id, key));
 		assertThrows(AuthException.class, old::get);
 	}

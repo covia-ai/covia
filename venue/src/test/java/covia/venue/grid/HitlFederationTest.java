@@ -26,6 +26,7 @@ import covia.grid.auth.UcanTokens;
 import covia.grid.client.VenueHTTP;
 import covia.grid.hitl.Hitl;
 import covia.venue.RequestContext;
+import covia.venue.TestEngine;
 import covia.venue.TwoVenueTestServer;
 import covia.venue.UcanJwtValidator;
 
@@ -60,26 +61,24 @@ public class HitlFederationTest {
 		return UcanTokens.identityToken(kp, venueDID, 300);
 	}
 
-	/** Polls the remote job through venue A until it reaches {@code wanted}
-	 *  (or times out); returns the last status map seen. */
+	/** Waits for the remote job on venue B to reach {@code wanted}, then observes
+	 *  it through venue A's federation job surface; returns the status map seen. */
 	private static AMap<AString, ACell> awaitRemoteStatus(VenueHTTP viaA, String remoteId,
-			AString wanted, long timeoutMs) throws Exception {
-		long deadline = System.currentTimeMillis() + timeoutMs;
-		ACell lastSeen = null;
-		while (System.currentTimeMillis() < deadline) {
-			Job probe = viaA.invokeAndWait(OP_GRID_JOB_STATUS, Maps.of(
-				Fields.VENUE, TwoVenueTestServer.BASE_URL_B,
-				"authenticateAs", "caller",
-				"id", remoteId));
-			lastSeen = probe.getData();
-			if (Status.COMPLETE.equals(probe.getStatus())) {
-				AMap<AString, ACell> status = RT.castMap(probe.getOutput());
-				if (status != null && wanted.equals(RT.ensureString(status.get(Fields.STATUS)))) return status;
-			}
-			Thread.sleep(100);
+			AString wanted) throws Exception {
+		Job remote = TwoVenueTestServer.ENGINE_B.jobs().getJob(Job.parseID(remoteId));
+		if (remote != null) {
+			TestEngine.awaitJob(remote, j -> wanted.equals(j.getStatus()), 10_000,
+				() -> "remote job did not reach " + wanted);
 		}
-		throw new AssertionError("remote job did not reach " + wanted + " within " + timeoutMs
-			+ "ms; last probe: " + lastSeen);
+		Job probe = viaA.invokeAndWait(OP_GRID_JOB_STATUS, Maps.of(
+			Fields.VENUE, TwoVenueTestServer.BASE_URL_B,
+			"authenticateAs", "caller",
+			"id", remoteId));
+		assertEquals(Status.COMPLETE, probe.getStatus(), "the status probe through venue A: " + probe.getData());
+		AMap<AString, ACell> status = RT.castMap(probe.getOutput());
+		assertNotNull(status, "the probe returns the remote status: " + probe.getData());
+		assertEquals(wanted, RT.ensureString(status.get(Fields.STATUS)), "remote job status seen through venue A");
+		return status;
 	}
 
 	private static String bare(String id) {
@@ -91,6 +90,7 @@ public class HitlFederationTest {
 		return JWT.signPublic(Maps.of(
 			"sub", userDID,
 			"iss", TwoVenueTestServer.ENGINE_B.getDIDString(),
+			"aud", TwoVenueTestServer.ENGINE_B.getDIDString(),
 			"iat", now,
 			"exp", now + 300), TwoVenueTestServer.ENGINE_B.getKeyPair()).toString();
 	}
@@ -147,15 +147,15 @@ public class HitlFederationTest {
 		String remoteId = RT.ensureString(remote.get(Strings.intern("id"))).toString();
 		// grid:invoke reports the remote record as it stood when the hop
 		// returned, which can still be PENDING; the park is observed durably.
-		assertNotNull(awaitRemoteStatus(bobOnA, remoteId, Status.INPUT_REQUIRED, 10_000),
+		assertNotNull(awaitRemoteStatus(bobOnA, remoteId, Status.INPUT_REQUIRED),
 			"the remote HITL job parks INPUT_REQUIRED awaiting Alice");
 
 		// The record landed in Alice's inbox ON VENUE B, attributed to Bob.
 		AMap<AString, ACell> record = TwoVenueTestServer.ENGINE_B.getVenueState()
-			.users().ensure(aliceDID).getHitlRequest(Strings.create(bare(remoteId)));
+			.users().ensure(aliceDID).inbox().get(Strings.create(bare(remoteId)));
 		assertNotNull(record, "delivery must land in Alice's inbox on venue B");
-		assertEquals(bobDID, record.get(Hitl.FROM),
-			"from is the requester's verified cross-venue identity");
+		assertEquals(bobDID, record.get(Hitl.CALLER),
+			"caller is the requester's verified cross-venue identity");
 		assertEquals(Hitl.OPEN, record.get(Hitl.STATUS));
 
 		// Alice answers ON VENUE B, approving and echoing the offered grant.
@@ -172,7 +172,7 @@ public class HitlFederationTest {
 
 		// Bob observes completion through venue A's federation job surface and
 		// receives the granted token in the output.
-		AMap<AString, ACell> done = awaitRemoteStatus(bobOnA, remoteId, Status.COMPLETE, 10_000);
+		AMap<AString, ACell> done = awaitRemoteStatus(bobOnA, remoteId, Status.COMPLETE);
 		assertNotNull(done, "remote job status must be observable through venue A");
 		assertEquals(Status.COMPLETE, RT.ensureString(done.get(Fields.STATUS)));
 		AMap<AString, ACell> output = RT.castMap(done.get(Fields.OUTPUT));
@@ -222,7 +222,7 @@ public class HitlFederationTest {
 		AMap<AString, ACell> remote = RT.castMap(hop.getOutput());
 		String remoteId = RT.ensureString(remote.get(Strings.intern("id"))).toString();
 
-		AMap<AString, ACell> failed = awaitRemoteStatus(bobOnA, remoteId, Status.FAILED, 10_000);
+		AMap<AString, ACell> failed = awaitRemoteStatus(bobOnA, remoteId, Status.FAILED);
 		assertNotNull(failed);
 		assertEquals(Status.FAILED, RT.ensureString(failed.get(Fields.STATUS)),
 			"delivery without the hitl/request delegation must fail the remote job");
@@ -232,7 +232,7 @@ public class HitlFederationTest {
 
 		// And nothing landed in Alice's inbox on B.
 		assertNull(TwoVenueTestServer.ENGINE_B.getVenueState()
-			.users().ensure(aliceDID).getHitlRequest(Strings.create(bare(remoteId))),
+			.users().ensure(aliceDID).inbox().get(Strings.create(bare(remoteId))),
 			"a denied delivery must leave no record");
 	}
 }

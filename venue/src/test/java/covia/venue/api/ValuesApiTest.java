@@ -109,7 +109,7 @@ public class ValuesApiTest {
 
 		// Seed all three execution-scoped stores without creating extra Jobs.
 		// In particular, task scratch is backed by the existing task Job record.
-		User scopedUser = TestServer.ENGINE.getVenueState().users().get(callerDID);
+		User scopedUser = TestServer.ENGINE.getVenueState().users().user(callerDID);
 		scopedUser.ensureAgent(scopedAgentId, Maps.empty(), null)
 			.ensureSession(scopedSessionId, callerDID);
 		RequestContext base = RequestContext.of(callerDID).withAgentId(scopedAgentId);
@@ -177,8 +177,8 @@ public class ValuesApiTest {
 	}
 
 	private long jobCount() {
-		User u = TestServer.ENGINE.getVenueState().users().get(callerDID);
-		return (u == null) ? 0 : u.getJobs().count();
+		User u = TestServer.ENGINE.getVenueState().users().user(callerDID);
+		return (u == null) ? 0 : u.jobs().size();
 	}
 
 	// ===================== functional =====================
@@ -197,6 +197,16 @@ public class ValuesApiTest {
 		HttpResponse<String> r = get("read", "w/vDoesNotExist");
 		assertEquals(200, r.statusCode(), r.body());
 		assertEquals(CVMBool.FALSE, RT.getIn(JSON.parse(r.body()), "exists"));
+	}
+
+	@Test
+	public void testAPathThatNamesNoPlaceIsABadRequest() throws Exception {
+		for (String route : new String[] {"read", "list", "slice", "inspect", "aggregate"}) {
+			HttpResponse<String> r = get(route, "wrok/vNotes");
+			assertEquals(400, r.statusCode(), route + ": " + r.body());
+			assertTrue(r.body().contains(String.format(covia.lattice.CoviaPath.NO_SUCH_PATH, "/wrok/vNotes", "/wrok")),
+				route + ": " + r.body());
+		}
 	}
 
 	@Test

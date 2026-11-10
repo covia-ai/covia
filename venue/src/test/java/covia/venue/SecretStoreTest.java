@@ -52,6 +52,25 @@ public class SecretStoreTest {
 			"Decrypted value should match original plaintext");
 	}
 
+	// ========== Sealed values ==========
+
+	@Test
+	public void testSealedValueOpensOnlyUnderItsVenuesKeys() {
+		AKeyPair kp = AKeyPair.generate();
+		SecretStore.Keys keys = SecretStore.keys(kp);
+		AMap<AString, ACell> sealed = SecretStore.seal(Strings.create(SECRET_VALUE), keys);
+
+		assertFalse(sealed.toString().contains(SECRET_VALUE), "a sealed value carries no plaintext");
+		assertEquals(CVMLong.create(SecretStore.CURRENT_KEY_VERSION), sealed.get(KEY_VERSION));
+		assertEquals(SECRET_VALUE, SecretStore.unseal(sealed, keys).toString());
+		assertNull(SecretStore.unseal(null, keys));
+		assertThrows(RuntimeException.class, () -> SecretStore.unseal(sealed, SecretStore.keys(AKeyPair.generate())),
+			"another venue's keys open nothing");
+		IllegalStateException notSealed = assertThrows(IllegalStateException.class,
+			() -> SecretStore.unseal(Strings.create(SECRET_VALUE), keys));
+		assertEquals(SecretStore.INVALID_RECORD, notSealed.getMessage());
+	}
+
 	// ========== Multiple Secrets ==========
 
 	@Test
@@ -249,7 +268,7 @@ public class SecretStoreTest {
 		// Venue 1: user writes a job
 		VenueState vs1 = VenueState.create(kp);
 		User user1 = vs1.users().ensure(did);
-		user1.persistJob(Blob.parse("0x0001"), Maps.of(
+		user1.jobs().create(Blob.parse("0x0001"), Maps.of(
 			covia.api.Fields.STATUS, covia.grid.Status.PENDING,
 			covia.api.Fields.UPDATED, convex.core.data.prim.CVMLong.create(1000L)));
 
@@ -261,7 +280,7 @@ public class SecretStoreTest {
 		// After merge, both should be present
 		// We verify by reading through component wrappers, not raw Index equality
 		// (which would fail due to AString/Keyword key type normalisation)
-		assertEquals(1, user1.getJobs().count(), "Jobs should be accessible via wrapper");
+		assertEquals(1, user1.jobs().size(), "Jobs should be accessible via wrapper");
 		assertTrue(user2.secrets().exists("key1"), "Secrets should be accessible via wrapper");
 	}
 
@@ -299,8 +318,8 @@ public class SecretStoreTest {
 		assertNull(user.agent("my-agent"),
 			"Agent should be null before creation");
 
-		AgentState agent = user.ensureAgent("my-agent", null, null);
-		assertNotNull(agent, "ensureAgent should return non-null AgentState");
+		Agent agent = user.ensureAgent("my-agent", null, null);
+		assertNotNull(agent, "ensureAgent should return non-null Agent");
 		assertTrue(agent.exists(), "Agent should exist after ensureAgent");
 	}
 
@@ -323,13 +342,13 @@ public class SecretStoreTest {
 		User user = vs.users().ensure("did:key:zAlice");
 
 		// Jobs should still work with the extended USER lattice
-		user.persistJob(
+		user.jobs().create(
 			convex.core.data.Blob.parse("0x0001"),
 			convex.core.data.Maps.of(
 				covia.api.Fields.STATUS, covia.grid.Status.PENDING,
 				covia.api.Fields.UPDATED, convex.core.data.prim.CVMLong.create(1000L)));
 
-		assertEquals(1, user.getJobs().count(), "Jobs should work in extended USER lattice");
+		assertEquals(1, user.jobs().size(), "Jobs should work in extended USER lattice");
 	}
 
 	// ========== Key Derivation ==========
@@ -397,7 +416,7 @@ public class SecretStoreTest {
 	// ========== Key Versions ==========
 
 	/** Writes a record exactly as a venue did before key versions existed. */
-	private static void storeVersion1(User user, String name, String plaintext, AKeyPair kp) {
+	static void storeVersion1(User user, String name, String plaintext, AKeyPair kp) {
 		byte[] v1 = Hashing.sha256(kp.getSeed().getBytes()).getBytes();
 		Blob encrypted = Blob.wrap(AESGCM.encrypt(v1, plaintext.getBytes(StandardCharsets.UTF_8)));
 		user.secrets().cursor().withDefault(Maps.empty()).path(Strings.create(name)).set(Maps.of(

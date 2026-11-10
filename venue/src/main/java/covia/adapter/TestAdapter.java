@@ -1,7 +1,11 @@
 package covia.adapter;
 
 import java.security.SecureRandom;
+import java.util.List;
+import java.util.Set;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
@@ -12,6 +16,7 @@ import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
+import convex.core.data.Blob;
 import convex.core.data.Hash;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
@@ -23,12 +28,19 @@ import convex.lattice.cursor.AForkableCursor;
 import convex.lattice.cursor.ATransformCursor;
 import covia.adapter.agent.ContextAssembler;
 import covia.api.Fields;
+import covia.exception.AuthException;
+import covia.exception.InvalidInputException;
+import covia.exception.JobFailedException;
+import covia.exception.NotFoundException;
+import covia.exception.NotSupportedException;
+import covia.exception.UnavailableException;
 import covia.grid.Job;
 import covia.grid.Status;
+import covia.venue.Agent;
 import covia.venue.RequestContext;
-import covia.venue.AgentState;
 import covia.venue.AdapterState;
 import covia.venue.api.A2ACodec;
+import covia.venue.migration.MigrationStep;
 
 public class TestAdapter extends AAdapter {
 	
@@ -61,18 +73,41 @@ public class TestAdapter extends AAdapter {
 		return Maps.of(K_LATTICE, LATTICE_INFO);
 	}
 
+	/** The versions the synthetic steps reached, in the order they ran. */
+	public static final AString K_MIGRATIONS = Strings.intern("migrations");
+	public static final String UNRECOGNISED_STATE = "Test adapter state is not in version %d's shape";
+
 	/**
 	 * Version 1 is version 0's shape, {@code users/<did>/scratch}, unchanged.
-	 * The test adapter versions its state so every venue, and the
-	 * release-written fixtures, run adapter state migration at start-up.
+	 * Versions 2 and 3 are synthetic, so every venue and the release-written
+	 * fixtures run real steps in order at start-up. State first written at
+	 * version 3 has no log.
 	 */
-	@Override public long stateVersion() {
-		return 1;
+	private static final List<MigrationStep> STATE_STEPS = List.of(
+		state -> state,		// 0 → 1
+		new LogStep(2),		// 1 → 2
+		new LogStep(3));	// 2 → 3
+
+	@Override public List<MigrationStep> stateSteps() {
+		return STATE_STEPS;
 	}
 
-	@Override public ACell migrateState(long version, ACell state) {
-		if (version == 0) return state;
-		return super.migrateState(version, state);
+	/**
+	 * A synthetic step to version {@code reached}: appends it to
+	 * {@link #K_MIGRATIONS}, and refuses state whose log does not hold exactly
+	 * the versions from 2 to the one before it.
+	 */
+	private record LogStep(long reached) implements MigrationStep {
+		@Override public ACell apply(ACell state) {
+			AVector<ACell> before = Vectors.empty();
+			for (long v = 2; v < reached; v++) before = before.conj(CVMLong.create(v));
+			AMap<AString, ACell> record = RT.ensureMap(state);
+			ACell log = (record == null) ? null : record.get(K_MIGRATIONS);
+			if (record == null || !before.equals(log == null ? Vectors.empty() : log)) {
+				throw new IllegalStateException(UNRECOGNISED_STATE.formatted(reached - 1));
+			}
+			return record.assoc(K_MIGRATIONS, before.conj(CVMLong.create(reached)));
+		}
 	}
 
 	/** A small connected view: diagnostics are computed, only scratch is persisted. */
@@ -82,8 +117,9 @@ public class TestAdapter extends AAdapter {
 			Fields.CALLER, ctx.getCallerDID(), K_USER, ctx.getUserDID(), K_VENUE, engine.getDIDString(),
 			K_EXECUTION, Maps.of("owner", scope.ownerDID(), Fields.AGENT_ID, scope.agentId(),
 				Fields.SESSION_ID, scope.sessionId(), Fields.JOB_ID, scope.jobId(), Fields.TASK_ID, scope.taskId()));
+		// The diagnostics are computed, so the view has a value before any scratch is stored.
 		AForkableCursor<ACell> scratch = adapterState(ctx.getUserDID()).cursor().withDefault(Maps.empty())
-			.path(K_USERS).withDefault(Maps.empty()).path(ctx.getUserDID());
+			.path(K_USERS).withDefault(Maps.empty()).path(ctx.getUserDID()).withDefault(Maps.empty());
 		return new ATransformCursor<ACell, ACell>(scratch) {
 			@Override protected ACell view(ACell stored) {
 				AMap<AString, ACell> result = Maps.of(K_CONTEXT, context, K_SAMPLES, SAMPLES);
@@ -99,9 +135,9 @@ public class TestAdapter extends AAdapter {
 		};
 	}
 
-	@Override public String latticeWriteDenial(RequestContext ctx, ACell[] path) {
+	@Override public String latticeWriteDenial(RequestContext ctx, convex.core.data.Path path) {
 		// Replacing/deleting the view root could otherwise bypass read-only children.
-		return path.length > 0 && K_SCRATCH.equals(path[0]) ? null : SCRATCH_ONLY;
+		return !path.isEmpty() && K_SCRATCH.equals(path.get(0)) ? null : SCRATCH_ONLY;
 	}
 
 	@Override public void deleteUserState(AString did, AdapterState state) {
@@ -188,7 +224,6 @@ public class TestAdapter extends AAdapter {
 
     @Override
     public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
-        requireInvoke(ctx);
         String testOp = getSubOperation(meta);
 
         // Handle different test operations
@@ -202,6 +237,8 @@ public class TestAdapter extends AAdapter {
                     return CompletableFuture.completedFuture(handleTaskComplete(ctx, input));
                 case "wakeresponse":
                     return CompletableFuture.completedFuture(handleWakeResponse(input));
+                case "askhuman":
+                    return CompletableFuture.completedFuture(handleAskHuman(ctx, input));
                 case "llm":
 					if (ctx.getAgentId() != null) CAPTURED_LLM_INPUT.put(ctx.getAgentId(), input);
                     return CompletableFuture.completedFuture(withMockTokens(handleLlm(input), input));
@@ -220,12 +257,15 @@ public class TestAdapter extends AAdapter {
                 case "neverfailllm": {
                     ACell r = handleNeverToolLlm(input, true);
                     return (r == null)
-                        ? CompletableFuture.failedFuture(new IllegalStateException("scripted L3 failure"))
+                        ? CompletableFuture.failedFuture(new UnavailableException("scripted L3 failure"))
                         : CompletableFuture.completedFuture(withMockTokens(r, input));
                 }
                 case "subgoalllm":
                     return CompletableFuture.completedFuture(withMockTokens(handleSubgoalLlm(input), input));
                 case "subgoalechollm":
+                    if (SUBGOAL_CHILD_FAILS.equals(RT.getIn(input, Fields.MODEL)) && inSubgoalChild(input)) {
+                        return CompletableFuture.failedFuture(new InvalidInputException(SUBGOAL_CHILD_FAILED));
+                    }
                     return CompletableFuture.completedFuture(withMockTokens(handleSubgoalEchoLlm(input), input));
                 case "taskllm":
                     return CompletableFuture.completedFuture(withMockTokens(handleTaskLlm(input), input));
@@ -250,11 +290,20 @@ public class TestAdapter extends AAdapter {
                     // Capability gate that always fails — the capability it gates
                     // never applies. Useful for verifying deny paths end-to-end.
                     return CompletableFuture.failedFuture(
-                        new IllegalStateException("denied by test policy gate"));
+                        new AuthException("denied by test policy gate"));
                 case "amountgate":
                     return handleAmountGate(input);
                 case "never":
                     return new CompletableFuture<>();
+                case "hold":
+                    return CompletableFuture.supplyAsync(() -> handleHold(input), VIRTUAL_EXECUTOR);
+                case "holdstart":
+                    // Holds in the invocation itself, so whoever starts it waits too.
+                    return CompletableFuture.completedFuture(handleHold(input));
+                case "failllm":
+                    return handleFailLlm(input);
+                case "step":
+                    return CompletableFuture.supplyAsync(() -> handleStep(ctx, input), VIRTUAL_EXECUTOR);
                 case "delay":
                     // Handled via invoke() override for caller DID propagation
                     return CompletableFuture.failedFuture(
@@ -271,7 +320,7 @@ public class TestAdapter extends AAdapter {
                     );
                 default:
                     return CompletableFuture.failedFuture(
-                        new IllegalArgumentException("Unknown test operation: " + testOp)
+                        new NotSupportedException("Unknown test operation: " + testOp)
                     );
             }
         } catch (Exception e) {
@@ -295,6 +344,8 @@ public class TestAdapter extends AAdapter {
 			installTestAsset("loopllm",      BASE+"testloopllm.json");
 			installTestAsset("nevertoolllm", BASE+"testnevertoolllm.json");
 			installTestAsset("neverfailllm", BASE+"testneverfailllm.json");
+			installTestAsset("failllm",      BASE+"testfailllm.json");
+			installTestAsset("step",         BASE+"teststep.json");
 			installTestAsset("subgoalllm",   BASE+"testsubgoalllm.json");
 			installTestAsset("subgoalechollm", BASE+"testsubgoalechollm.json");
 			installTestAsset("taskllm",      BASE+"testtaskllm.json");
@@ -307,6 +358,9 @@ public class TestAdapter extends AAdapter {
 			installTestAsset("denygate",     BASE+"testdenygate.json");
 			installTestAsset("amountgate",   BASE+"testamountgate.json");
 			installTestAsset("never",        BASE+"neverop.json");
+			installTestAsset("hold",         BASE+"holdop.json");
+			installTestAsset("holdstart",    BASE+"holdstartop.json");
+			installTestAsset("holdread",     BASE+"holdreadop.json");
 			installTestAsset("delay",        BASE+"delayop.json");
 			installTestAsset("progress",     BASE+"progressop.json");
 			installTestAsset("error",        BASE+"failop.json");
@@ -314,6 +368,7 @@ public class TestAdapter extends AAdapter {
 			installTestAsset("pause",        BASE+"pauseop.json");
 			installTestAsset("taskcomplete", BASE+"taskcomplete.json");
 			installTestAsset("wakeresponse", BASE+"wakeresponse.json");
+			installTestAsset("askhuman",     BASE+"askhuman.json");
 
 			// Demos and content fixtures — stored in CAS only, not in any catalog.
 			installExampleAsset(BASE+"empty.json");
@@ -329,7 +384,6 @@ public class TestAdapter extends AAdapter {
     
     @Override
     public void invoke(Job job, RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
-        requireInvoke(ctx);
         String subOp = getSubOperation(meta);
         if ("chat".equals(subOp)) {
             // Multi-turn: set INPUT_REQUIRED and wait for messages
@@ -355,17 +409,30 @@ public class TestAdapter extends AAdapter {
                 if (!hold) job.completeWith(Maps.of("done", Strings.create("all steps")));
             });
         } else if ("never".equals(subOp)) {
-            // Never completes. Run the default one-shot path (starts the
-            // never-completing future and wires the cancel hook), then register
-            // pause/resume hooks so the generic lifecycle endpoints work. There
-            // is no real work to suspend, so the hooks are status-only markers.
+            // Never completes. Marked suspendable so the generic pause and resume
+            // endpoints work; there is no real work to suspend. Marked before the
+            // default one-shot path starts it, so it is pausable once STARTED.
+            Blob id = job.getID();
+            suspendable.add(id);
+            job.future().whenComplete((result, error) -> suspendable.remove(id));
             super.invoke(job, ctx, meta, input);
-            job.setPauseHook(() -> {});
-            job.setResumeHook(() -> {});
         } else {
             // Default one-shot path
             super.invoke(job, ctx, meta, input);
         }
+    }
+
+    /** The running {@code never} jobs, which can pause and resume. Lost on restart. */
+    private final Set<Blob> suspendable = ConcurrentHashMap.newKeySet();
+
+    @Override
+    public boolean canPause(Job job) {
+        return suspendable.contains(job.getID());
+    }
+
+    @Override
+    public boolean canResume(Job job) {
+        return suspendable.contains(job.getID());
     }
 
     @Override
@@ -419,7 +486,7 @@ public class TestAdapter extends AAdapter {
 
     private void handleDelay(Job job, RequestContext ctx, ACell input) {
     	// Use submit() (not CompletableFuture.runAsync) so the returned Future
-    	// is interruptible — the cancel hook below calls f.cancel(true), which
+    	// is interruptible — cancelling the Job calls f.cancel(true), which
     	// interrupts Thread.sleep. CompletableFuture from runAsync ignores
     	// mayInterruptIfRunning and would leave the sleep running.
     	java.util.concurrent.Future<?> f = VIRTUAL_EXECUTOR.submit(() -> {
@@ -430,16 +497,16 @@ public class TestAdapter extends AAdapter {
 				// On JDK 25 before 25.0.3 (JDK-8370887) this virtual-thread sleep
 				// can overrun by tens of seconds.
 				Thread.sleep(delay.longValue());
-				ACell result = engine.jobs().invokeInternal(RT.ensureString(op), opInput, ctx).join();
+				ACell result = engine.jobs().runOperation(RT.ensureString(op), opInput, ctx, false).join();
 				job.completeWith(result);
     		} catch (InterruptedException e) {
     			// cancelled — Job.cancel already updated lattice status
     			Thread.currentThread().interrupt();
     		} catch (Exception e) {
-    			job.fail(describeFailure(e));
+    			job.fail(e);
     		}
     	});
-    	job.setCancelHook(() -> f.cancel(true));
+    	runs(job, f);
 	}
 
 	private ACell handleEcho(ACell input) {
@@ -468,7 +535,7 @@ public class TestAdapter extends AAdapter {
      */
     private ACell handleTaskComplete(RequestContext ctx, ACell input) {
         ACell newInput = RT.getIn(input, Fields.NEW_INPUT);
-		AString gateName = RT.ensureString(RT.getIn(input, AgentState.KEY_CONFIG, "testGate"));
+		AString gateName = RT.ensureString(RT.getIn(input, Agent.KEY_CONFIG, "testGate"));
 		if (gateName != null) {
 			TestGate gate = TEST_GATES.get(gateName.toString());
 			if (gate == null) throw new IllegalStateException("Unknown test gate: " + gateName);
@@ -477,21 +544,22 @@ public class TestAdapter extends AAdapter {
         ACell delayCell = RT.getIn(newInput, Fields.DELAY);
 		// Agent/A2A integration tests can hold a transition open without shaping
 		// the user message around this test adapter's private delay control.
-		if (delayCell == null) delayCell = RT.getIn(input, AgentState.KEY_CONFIG, Fields.DELAY);
+		if (delayCell == null) delayCell = RT.getIn(input, Agent.KEY_CONFIG, Fields.DELAY);
         if (delayCell instanceof CVMLong delay && delay.longValue() > 0) {
             try {
                 Thread.sleep(delay.longValue());
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                throw new RuntimeException("taskcomplete interrupted", e);
+                throw new CancellationException("taskcomplete interrupted");
             }
         }
         AString readPath = RT.ensureString(RT.getIn(newInput, "readPath"));
+        if (readPath == null) readPath = RT.ensureString(RT.getIn(input, Agent.KEY_CONFIG, "readPath"));
         if (readPath != null) {
             ACell read = ((CoviaAdapter) engine.getAdapter("covia"))
                 .handleRead(ctx, Maps.of(Fields.PATH, readPath));
             if (!convex.core.data.prim.CVMBool.TRUE.equals(RT.getIn(read, "exists"))) {
-                throw new IllegalArgumentException("taskcomplete input path not found: " + readPath);
+                throw new NotFoundException("taskcomplete input path not found: " + readPath, readPath.toString());
             }
             newInput = RT.getIn(read, Fields.VALUE);
         }
@@ -527,6 +595,30 @@ public class TestAdapter extends AAdapter {
     }
 
     /**
+     * Test task transition that asks its owner a question and yields. On its
+     * task's first input it calls {@code hitl:request} under the cycle's
+     * context and leaves the task queued; once the answer arrives (as the
+     * task's next input, or for a chat as a message in its session), it
+     * completes the task with that answer.
+     */
+    private ACell handleAskHuman(RequestContext ctx, ACell input) {
+        AVector<ACell> inbox = RT.ensureVector(RT.getIn(input, Fields.SESSION, Agent.KEY_PENDING));
+        ACell answer = (ctx.getTaskRevision() > 0) ? RT.getIn(input, Fields.NEW_INPUT)
+            : (inbox != null && inbox.count() > 0) ? RT.getIn(inbox.get(inbox.count() - 1), Fields.MESSAGE) : null;
+        if (answer != null) {
+            if (ctx.getTaskId() != null) {
+                engine.jobs().invokeInternal("v/ops/agent/complete-task",
+                    Maps.of(Fields.RESULT, answer), ctx).join();
+            }
+            return Maps.of(Fields.RESPONSE, Strings.create("answered"));
+        }
+        engine.jobs().invokeOperation("v/ops/hitl/request", Maps.of(
+            "title", "Need a decision",
+            "asks", Vectors.of(Maps.of("id", "next", "type", "text", "prompt", "What next?"))), ctx);
+        return Maps.of(Fields.RESPONSE, Strings.create("asked"));
+    }
+
+    /**
      * Test LLM operation: reads the messages array, echoes the last user message
      * as a response. Returns an assistant message map matching the level 3 contract.
      */
@@ -543,6 +635,11 @@ public class TestAdapter extends AAdapter {
 			hasToolResult |= role != null && "tool".equals(role.toString());
 			sameSessionFollowup |= role != null && "user".equals(role.toString())
 				&& content != null && content.toString().contains("same session followup");
+		}
+		if (model != null && "context-too-large-test".equals(model.toString())) {
+			// As a provider refuses a context larger than its model's window.
+			throw new covia.exception.InvalidInputException(
+				LangChainAdapter.PROVIDER_CONTEXT_TOO_LARGE.formatted("test", model, ""));
 		}
 		if (model != null && ("length-then-answer-test".equals(model.toString())
 				|| "always-length-test".equals(model.toString()))) {
@@ -742,9 +839,18 @@ public class TestAdapter extends AAdapter {
             // through the agent tool loop while keeping the L3 provider fully
             // deterministic. LangChain's provider boundary has separate tests
             // for its provider-only JSON rendering.
+            int hold = lastUserMsg.indexOf("hold:");
             if (lastUserMsg.contains("progress-relay")) {
                 toolName = "v/test/ops/progress";
                 arguments = "{}";
+            } else if (hold >= 0) {
+                // A call the test finishes by releasing the named gate.
+                String gate = lastUserMsg.substring(hold + 5).split("[\\s\"]", 2)[0];
+                toolName = "v/test/ops/hold";
+                arguments = "{\"gate\":\"" + gate + "\",\"result\":\"late\"}";
+            } else if (lastUserMsg.contains("ask-human")) {
+                toolName = "v/ops/hitl/request";
+                arguments = "{\"title\":\"Need a decision\",\"asks\":[{\"id\":\"next\",\"type\":\"text\",\"prompt\":\"What next?\"}]}";
             } else if (lastUserMsg.contains("issue-334-read")) {
                 toolName = "covia_read";
                 arguments = "{\"path\":\"w/issue-334/signals\"}";
@@ -1080,13 +1186,36 @@ public class TestAdapter extends AAdapter {
     }
 
     /**
-     * Test LLM that calls the never-completing op v/test/ops/never as its
-     * first tool call — with a short toolCallTimeoutMs the dispatch blocks
-     * for a deterministic window, letting tests observe mid-run lattice state
-     * (dangling toolCall, inCycle claim, live frames). After the tool result
-     * (a timeout error) arrives: returns text, or — {@code failAfterTool} —
-     * signals the caller to fail the L3 call (scripted mid-cycle failure).
-     * Returns null in the fail case.
+     * The blocking tool call the {@code nevertoolllm}, {@code neverfailllm}
+     * and {@code subgoalllm} test LLMs make, keeping the frame loop inside
+     * the tool dispatch so tests can observe mid-run lattice state. With a
+     * {@code hold:<gate>} model it calls {@code v/test/ops/hold}, which
+     * finishes when the test releases that {@link TestGate}; otherwise
+     * {@code v/test/ops/never}, which only the agent's
+     * {@code toolCallTimeoutMs} ends.
+     */
+    private static AMap<AString, ACell> blockingToolCall(String id, ACell input) {
+        AString model = RT.ensureString(RT.getIn(input, Fields.MODEL));
+        String name = "v/test/ops/never";
+        ACell arguments = Strings.create("{}");
+        if (model != null && model.toString().startsWith("hold:")) {
+            name = "v/test/ops/hold";
+            arguments = Maps.of("gate", model.toString().substring(5), Fields.RESULT, "released");
+        }
+        return Maps.of(
+            "role", Strings.create("assistant"),
+            "toolCalls", Vectors.of(Maps.of(
+                "id", Strings.create(id),
+                "name", Strings.create(name),
+                "arguments", arguments
+            )));
+    }
+
+    /**
+     * Test LLM whose first turn makes the {@link #blockingToolCall}. After the
+     * tool result arrives: returns text, or — {@code failAfterTool} — signals
+     * the caller to fail the L3 call (scripted mid-cycle failure). Returns
+     * null in the fail case.
      */
     private ACell handleNeverToolLlm(ACell input, boolean failAfterTool) {
         if (hasToolResultMessage(input)) {
@@ -1095,22 +1224,16 @@ public class TestAdapter extends AAdapter {
                 "role", Strings.create("assistant"),
                 "content", Strings.create("gave up on the slow tool"));
         }
-        return Maps.of(
-            "role", Strings.create("assistant"),
-            "toolCalls", Vectors.of(Maps.of(
-                "id", Strings.create("call_never"),
-                "name", Strings.create("v/test/ops/never"),
-                "arguments", Strings.create("{}")
-            )));
+        return blockingToolCall("call_never", input);
     }
 
     /**
      * Test LLM for subgoal recursion with an observable mid-run window: the
      * ROOT frame's first turn issues a subgoal; the CHILD frame (recognised
-     * by its goal text) calls the never op (blocking for toolCallTimeoutMs),
-     * then completes with text; the root then completes on seeing the
-     * subgoal's tool result. Drives push → live child frame (with callId)
-     * → atomic pop, all observable on the lattice during the block.
+     * by its goal text) makes the {@link #blockingToolCall}, then completes
+     * with text; the root then completes on seeing the subgoal's tool
+     * result. Drives push → live child frame (with callId) → atomic pop,
+     * all observable on the lattice during the block.
      */
     @SuppressWarnings("unchecked")
     private ACell handleSubgoalLlm(ACell input) {
@@ -1131,15 +1254,7 @@ public class TestAdapter extends AAdapter {
                 "role", Strings.create("assistant"),
                 "content", Strings.create(inChild ? "sub done" : "root done"));
         }
-        if (inChild) {
-            return Maps.of(
-                "role", Strings.create("assistant"),
-                "toolCalls", Vectors.of(Maps.of(
-                    "id", Strings.create("call_child_never"),
-                    "name", Strings.create("v/test/ops/never"),
-                    "arguments", Strings.create("{}")
-                )));
-        }
+        if (inChild) return blockingToolCall("call_child_never", input);
         return Maps.of(
             "role", Strings.create("assistant"),
             "toolCalls", Vectors.of(Maps.of(
@@ -1149,39 +1264,69 @@ public class TestAdapter extends AAdapter {
             )));
     }
 
+    /** The model that makes {@code subgoalechollm}'s child fail its model call. */
+    public static final AString SUBGOAL_CHILD_FAILS = Strings.intern("child-fails");
+    /** The reason the child's model call gives when it fails. */
+    public static final String SUBGOAL_CHILD_FAILED = "subgoalechollm scripted child failure";
+    /** The model that makes every {@code subgoalechollm} frame issue a subgoal. */
+    public static final AString SUBGOAL_DEEPEN = Strings.intern("deepen");
+    /** The model that makes {@code subgoalechollm}'s child return with {@code complete}. */
+    public static final AString SUBGOAL_CHILD_COMPLETES = Strings.intern("child-completes");
+    /** The model that makes {@code subgoalechollm}'s child call {@code complete_task}. */
+    public static final AString SUBGOAL_CHILD_RESOLVES_TASK = Strings.intern("child-resolves-task");
+    /** What the child's {@code complete} or {@code complete_task} returns. */
+    public static final String SUBGOAL_CHILD_RESULT = "from the child";
+
+    /** Whether a {@code subgoalechollm} call is the child's, recognised by its goal text. */
+    @SuppressWarnings("unchecked")
+    private static boolean inSubgoalChild(ACell input) {
+        ACell messagesCell = RT.getIn(input, "messages");
+        if (!(messagesCell instanceof AVector)) return false;
+        AVector<ACell> messages = (AVector<ACell>) messagesCell;
+        for (long i = 0; i < messages.count(); i++) {
+            AString content = RT.ensureString(RT.getIn(messages.get(i), "content"));
+            if (content != null && content.toString().contains("run the sub-task")) return true;
+        }
+        return false;
+    }
+
     /**
      * Test LLM for a subgoal that completes: the ROOT issues a subgoal; the
      * CHILD (recognised by its goal text) calls echo once, then answers
      * "sub done"; the root answers "root done" on seeing the subgoal's
      * result. Push, run, pop — the child's exchange survives only in the
-     * cycle record (#392).
+     * cycle record (#392). With model {@link #SUBGOAL_CHILD_FAILS} the
+     * child's model call fails instead, as a refusal of its content; with
+     * {@link #SUBGOAL_CHILD_COMPLETES} the child returns
+     * {@code {answer: SUBGOAL_CHILD_RESULT}} with {@code complete}; with
+     * {@link #SUBGOAL_CHILD_RESOLVES_TASK} it calls {@code complete_task};
+     * with {@link #SUBGOAL_DEEPEN} every frame issues a subgoal of its own
+     * until one is not offered it.
      */
-    @SuppressWarnings("unchecked")
     private ACell handleSubgoalEchoLlm(ACell input) {
-        boolean inChild = false;
-        ACell messagesCell = RT.getIn(input, "messages");
-        if (messagesCell instanceof AVector) {
-            AVector<ACell> messages = (AVector<ACell>) messagesCell;
-            for (long i = 0; i < messages.count(); i++) {
-                AString content = RT.ensureString(RT.getIn(messages.get(i), "content"));
-                if (content != null && content.toString().contains("run the sub-task")) {
-                    inChild = true;
-                    break;
-                }
-            }
-        }
+        boolean inChild = inSubgoalChild(input);
         if (hasToolResultMessage(input)) {
             return Maps.of(
                 "role", Strings.create("assistant"),
                 "content", Strings.create(inChild ? "sub done" : "root done"));
         }
-        if (inChild) {
+        ACell model = RT.getIn(input, Fields.MODEL);
+        if (inChild && !SUBGOAL_DEEPEN.equals(model)) {
+            String name = "v/test/ops/echo";
+            String arguments = "{\"echo\":\"" + SUBGOAL_CHILD_RESULT + "\"}";
+            if (SUBGOAL_CHILD_COMPLETES.equals(model)) {
+                name = "complete";
+                arguments = "{\"answer\":\"" + SUBGOAL_CHILD_RESULT + "\"}";
+            } else if (SUBGOAL_CHILD_RESOLVES_TASK.equals(model)) {
+                name = "complete_task";
+                arguments = "{\"result\":\"" + SUBGOAL_CHILD_RESULT + "\"}";
+            }
             return Maps.of(
                 "role", Strings.create("assistant"),
                 "toolCalls", Vectors.of(Maps.of(
-                    "id", Strings.create("call_child_echo"),
-                    "name", Strings.create("v/test/ops/echo"),
-                    "arguments", Strings.create("{\"echo\":\"from the child\"}")
+                    "id", Strings.create("call_child"),
+                    "name", Strings.create(name),
+                    "arguments", Strings.create(arguments)
                 )));
         }
         return Maps.of(
@@ -1221,11 +1366,11 @@ public class TestAdapter extends AAdapter {
         ACell amountCell = RT.getIn(input, Fields.INPUT, "amount");
         CVMLong amount = RT.ensureLong(amountCell);
         if (amount == null) {
-            return CompletableFuture.failedFuture(new IllegalStateException(
+            return CompletableFuture.failedFuture(new AuthException(
                 "amount gate: no numeric 'amount' in the invocation input — denying by default"));
         }
         if (amount.longValue() > 2000) {
-            return CompletableFuture.failedFuture(new IllegalStateException(
+            return CompletableFuture.failedFuture(new AuthException(
                 "amount gate: " + amount + " exceeds the limit of 2000"));
         }
         return CompletableFuture.completedFuture(Maps.of(
@@ -1310,6 +1455,11 @@ public class TestAdapter extends AAdapter {
             "content", Strings.create("(no task)"));
     }
 
+    /** The reason the {@code taskllm} model {@code park-task-test} parks its task with. */
+    public static final String PARK_TEST_REASON = "waiting for the report";
+    /** What the {@code taskllm} model {@code park-task-test} replies after parking its task. */
+    public static final String PARK_TEST_REPLY = "I have parked this and will come back to it.";
+
     /**
      * Test LLM for task completion: looks for "[Tasks assigned to you]" in user
      * messages, extracts the first job ID, and calls complete_task. After seeing
@@ -1365,6 +1515,21 @@ public class TestAdapter extends AAdapter {
 				"toolCalls", Vectors.of(
 					Maps.of("id", "call_freestyle_complete", "name", "complete_task",
 						"arguments", "{\"result\":\"a freestyle prose answer\"}")));
+		}
+		if (model != null && "park-task-test".equals(model.toString())) {
+			// Parks the task for an hour with a reason, then replies to the
+			// conversation once the park's result is in
+			for (long i = 0; i < messages.count(); i++) {
+				if ("tool".equals(String.valueOf(RT.getIn(messages.get(i), "role")))) {
+					return Maps.of("role", Strings.create("assistant"),
+						"content", Strings.create(PARK_TEST_REPLY));
+				}
+			}
+			return Maps.of(
+				"role", Strings.create("assistant"),
+				"toolCalls", Vectors.of(
+					Maps.of("id", "call_park_task", "name", "park_task",
+						"arguments", "{\"delay\":3600000,\"reason\":\"" + PARK_TEST_REASON + "\"}")));
 		}
         // Check if tool results already present — return text summary
         for (long i = 0; i < messages.count(); i++) {
@@ -1636,31 +1801,151 @@ public class TestAdapter extends AAdapter {
             "content", Strings.create("kicked self-message"));
     }
 
-    private RuntimeException handleError(ACell input) {
+    /**
+     * Holds until the test releases the named {@link TestGate}, then returns
+     * {@code result}, or fails with {@code error} when one is given. The test
+     * decides exactly when the call finishes, so nothing waits on a clock.
+     */
+    private ACell handleHold(ACell input) {
+        AString gateName = RT.ensureString(RT.getIn(input, "gate"));
+        if (gateName == null) throw new InvalidInputException("hold requires a 'gate' name");
+        TestGate gate = TEST_GATES.get(gateName.toString());
+        if (gate == null) throw new IllegalStateException("Unknown test gate: " + gateName);
+        gate.pass();
+        AString error = RT.ensureString(RT.getIn(input, Fields.ERROR));
+        if (error != null) throw new JobFailedException(error.toString());
+        return RT.getIn(input, Fields.RESULT);
+    }
+
+    /** The reason {@code failllm} gives for each failure it scripts. */
+    public static final String FAILLLM_REASON = "failllm scripted failure: %s";
+    /** What {@code failllm}'s {@code long-setup} says: longer than any summary, over several lines. */
+    public static final String FAILLLM_LONG = "first line\n\n   " + "x".repeat(5000);
+
+    /**
+     * A level-3 LLM that fails the way its {@code model} names, for the
+     * agent run loop's failure rules (AGENT_LOOP.md §3.4): {@code setup}
+     * ({@code ConfigurationException}), {@code unavailable}, {@code value} (a
+     * failure value), {@code content} ({@code InvalidInputException}),
+     * {@code bug} ({@code IllegalStateException}) or {@code long-setup} (as
+     * {@code setup}, saying {@link #FAILLLM_LONG}). A {@code :<gate>} suffix
+     * waits at that {@link TestGate} first, so a test can queue more work
+     * while the cycle is held. Any other model replies with text.
+     */
+    private CompletableFuture<ACell> handleFailLlm(ACell input) {
+        AString modelCell = RT.ensureString(RT.getIn(input, Fields.MODEL));
+        String[] model = (modelCell != null) ? modelCell.toString().split(":", 2) : new String[] {""};
+        return CompletableFuture.supplyAsync(() -> {
+            if (model.length > 1) {
+                TestGate gate = TEST_GATES.get(model[1]);
+                if (gate == null) throw new IllegalStateException("Unknown test gate: " + model[1]);
+                gate.pass();
+            }
+            String reason = FAILLLM_REASON.formatted(model[0]);
+            return switch (model[0]) {
+                case "setup" -> throw new covia.exception.ConfigurationException(reason);
+                case "unavailable" -> throw new UnavailableException(reason);
+                case "value" -> Status.failure(reason);
+                case "content" -> throw new InvalidInputException(reason);
+                case "bug" -> throw new IllegalStateException(reason);
+                case "long-setup" -> throw new covia.exception.ConfigurationException(FAILLLM_LONG);
+                default -> Maps.of("role", Strings.create("assistant"), "content", Strings.create("ok"));
+            };
+        }, VIRTUAL_EXECUTOR);
+    }
+
+    /** The reason the {@code step} transition gives when its script fails the cycle. */
+    public static final String STEP_FAILED = "step scripted failure";
+
+    /**
+     * An agent transition for run-loop tests that leaves the conversation to
+     * the run loop (it is not {@code FramesOwning}). Its script is the text of
+     * the cycle's newest input: the task's input, else the last message the
+     * cycle took, else (a task run again after an interruption, its input
+     * already shown) the conversation's last user turn. It is read as words in
+     * order: {@code hold:<gate>} waits at that
+     * {@link TestGate}, then stops if the cycle was cancelled meanwhile;
+     * {@code complete} and {@code failtask} resolve the task;
+     * {@code park:<ms>} parks it for that many milliseconds when the script is
+     * new input (a task brought back with nothing new replies instead); {@code fail},
+     * {@code cannot} and {@code bug} fail the cycle as a failure of the work,
+     * as one the agent cannot continue from, and as a venue fault; and
+     * {@code yield} ends the cycle without a reply. Otherwise it replies with
+     * what it saw: {@code {saw: [message text...], input?: task input}}.
+     */
+    private ACell handleStep(RequestContext ctx, ACell input) {
+        AVector<ACell> messages = AgentAdapter.effectiveMessages(input);
+        AVector<ACell> saw = Vectors.empty();
+        for (long i = 0; i < messages.count(); i++) saw = saw.conj(RT.getIn(messages.get(i), Fields.MESSAGE));
+        ACell taskInput = RT.getIn(input, Fields.NEW_INPUT);
+        AMap<AString, ACell> seen = Maps.of("saw", saw);
+        if (taskInput != null) seen = seen.assoc(Fields.INPUT, taskInput);
+        ACell script = (taskInput != null) ? taskInput : (saw.isEmpty() ? null : saw.get(saw.count() - 1));
+        if (script == null) {
+            AMap<AString, ACell> root = RT.ensureMap(RT.getIn(input, Fields.SESSION, Agent.KEY_FRAMES, CVMLong.ZERO));
+            AVector<ACell> turns = (root == null) ? null : covia.adapter.agent.GoalTreeContext.activeConversation(root);
+            for (long i = (turns == null) ? -1 : turns.count() - 1; i >= 0 && script == null; i--) {
+                if (Agent.ROLE_USER.equals(RT.getIn(turns.get(i), Agent.K_ROLE))) {
+                    script = RT.getIn(turns.get(i), Agent.K_CONTENT);
+                }
+            }
+        }
+        boolean reply = true;
+        boolean fresh = taskInput != null || !saw.isEmpty();
+        for (String word : String.valueOf(script).split("\\s+")) {
+            if (word.startsWith("hold:")) {
+                TestGate gate = TEST_GATES.get(word.substring(5));
+                if (gate == null) throw new IllegalStateException("Unknown test gate: " + word.substring(5));
+                gate.pass();
+                java.util.concurrent.atomic.AtomicBoolean cancelled = ctx.getCancellation();
+                if (cancelled != null && cancelled.get()) throw new CancellationException("step cancelled");
+                continue;
+            }
+            if (word.startsWith("park:")) {
+                if (fresh) engine.jobs().invokeInternal("v/ops/agent/park-task",
+                    Maps.of(Fields.DELAY, CVMLong.create(Long.parseLong(word.substring(5)))), ctx).join();
+                continue;
+            }
+            switch (word) {
+                case "complete" -> engine.jobs().invokeInternal("v/ops/agent/complete-task",
+                    Maps.of(Fields.RESULT, seen), ctx).join();
+                case "failtask" -> engine.jobs().invokeInternal("v/ops/agent/fail-task",
+                    Maps.of(Fields.ERROR, Strings.create(STEP_FAILED)), ctx).join();
+                case "fail" -> throw new InvalidInputException(STEP_FAILED);
+                case "cannot" -> throw new covia.adapter.agent.CannotContinueException(STEP_FAILED, null);
+                case "bug" -> throw new IllegalStateException(STEP_FAILED);
+                case "yield" -> reply = false;
+                default -> {}
+            }
+        }
+        return reply ? Maps.of(Fields.RESPONSE, seen) : Maps.empty();
+    }
+
+    private JobFailedException handleError(ACell input) {
         // Always throw an error with the input message
         ACell message = RT.getIn(input, "message");
         if (message == null) {
-            throw new IllegalArgumentException("Error operation requires a 'message' parameter");
+            throw new InvalidInputException("Error operation requires a 'message' parameter");
         }
-        return new RuntimeException(RT.ensureString(message).toString());
+        return new JobFailedException(RT.ensureString(message).toString());
     }
     
     private ACell handleRandom(ACell input) {
         // Get length parameter
         ACell lengthCell = RT.getIn(input, "length");
         if (lengthCell == null) {
-            throw new IllegalArgumentException("Random operation requires a 'length' parameter");
+            throw new InvalidInputException("Random operation requires a 'length' parameter");
         }
-        
+
         // Parse length
         int length;
         try {
             length = (int)CVMLong.parse(lengthCell).longValue();
             if (length <= 0 || length > 1024) {
-                throw new IllegalArgumentException("Length must be between 1 and 1024");
+                throw new InvalidInputException("Length must be between 1 and 1024");
             }
         } catch (NumberFormatException | NullPointerException e) {
-            throw new IllegalArgumentException("Length must be a valid number");
+            throw new InvalidInputException("Length must be a valid number");
         }
         
         // Generate random bytes

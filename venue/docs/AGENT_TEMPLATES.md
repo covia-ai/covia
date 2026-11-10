@@ -140,13 +140,22 @@ All fields are optional. Missing fields get platform defaults.
 > this page.
 
 > **Private tool definitions need metadata read access.** Adding a user-scoped
-> operation such as `w/ops/risk/issue-limit` to `tools` requires both `invoke`
-> authority for the operation and `crud/read` authority for its definition path.
+> operation such as `w/ops/risk/issue-limit` to `tools` requires `crud/read`
+> authority for its definition path. Calling that bound tool does not require
+> `invoke`; its action still requires authority over the resources it uses.
 > The runtime must read the operation metadata to build the provider tool name,
 > description, and input schema. A definition that is missing or unreadable is
-> omitted from the provider palette and reported in `agent:create` warnings,
-> `agent:info.unavailableTools`, and the model's assembled context. Shared
+> omitted from the provider palette and reported in `agent:create` warnings
+> and the model's assembled context. Shared
 > `v/ops/...` catalog metadata remains publicly discoverable.
+
+> **Tools on another venue depend on that venue.** A tool may name another
+> venue's operation by DID URL (`did:web:other.host/v/ops/...`, or
+> `/a/<hash>`). The runtime never fetches it to describe it: the model sees
+> the entry's `name` and `description`, or a name made from the reference,
+> and the tool takes any input. Its definition is fetched when the agent calls
+> it, so the call fails while that venue cannot be reached. `agent:create`
+> and `agent:update` warn of such tools. Prefer an operation on this venue.
 
 ### Example templates
 
@@ -338,8 +347,11 @@ palette assembled for the current provider call.
 | `v/agents/templates/analyst` | `v/ops/covia/{inspect,read,list,slice,aggregate}`, schema ops; analysis skills | Evidence and schema analysis |
 | `v/agents/templates/goaltree` | Curated covia + grid + asset ops + all 7 harness tools | Goal-tree agent with full decomposition support |
 | `v/agents/templates/full` | Broad agent/asset/covia/schema/grid palette plus context tools, `more_tools` and complete skill index | Context-heavy development and exploration |
+| `v/agents/templates/admin` | HITL request/list, venue and user reads, agent and covia reads; HITL, user, adapter and capability skills; `caps: "unrestricted"` | Administration with all of its controller's authority, asking its owner through HITL before anything dangerous |
 
-**Tools are opt-in, on every runtime.** Each template explicitly lists the tools it needs in `config.tools`; `defaultTools: true` adds only the deliberately small inspect/read/list pack. Harness tools are opt-in by name under the same rule: the shared ones (`context_load`, `context_unload`, `more_tools`, `skill_load`, `compact`) work on both runtimes, while hierarchy controls (`subgoal`, `complete`, `fail`) are goal-tree-specific. What the situation implies is offered without listing: declared skills imply `skill_load` and `context_unload` (the index is rendered, so loading from it and removing a load are implied); an outstanding task offers `complete_task`/`fail_task`; typed goaltree `outputs` inject `complete`/`fail`. An agent that declares none of this has no tools at all — and no capability notice.
+**Templates give no authority, except `admin`.** An agent acts with its controller's authority narrowed by its `caps`, and an agent created without `caps` has none ([UCAN.md §5.4](./UCAN.md)). `reader` declares read caps and `admin` declares `"unrestricted"`; every other template declares none, so whoever creates from it chooses the agent's authority in a later layer, a list of capabilities or `"unrestricted"`. Without that, the agent still runs and answers, but its tool calls are refused.
+
+**Tools are opt-in, on every runtime.** Each template explicitly lists the tools it needs in `config.tools`; `defaultTools: true` adds only the deliberately small inspect/read/list pack. Harness tools are opt-in by name under the same rule: the shared ones (`context_load`, `context_unload`, `more_tools`, `skill_load`, `compact`) work on both runtimes, while hierarchy controls (`subgoal`, `complete`, `fail`) are goal-tree-specific. What a configuration implies without listing, and what each frame is offered, is in [AGENT_LOOP.md §3.6](./AGENT_LOOP.md#36-tool-palette). An agent that declares none of this has only the task tools.
 
 **Namespace literacy is a pinned skill, not prompt text.** Every template with lattice tools pins `v/skills/data/lattice` through `config.loads` (as a skill entry), so the namespace and addressing reference renders as a loaded element the agent can mask rather than as a line in every head; `minimal` has no tools and carries none (AGENT_CONTEXT.md §5.1).
 
@@ -389,12 +401,20 @@ A `manager` agent decides the pipeline at runtime by calling `agent_request` on 
 (`w/`, `t/`, `c/`, `n/`) resolve in the requesting manager's captured context;
 authorised owner-scoped DID URLs use the same cross-user checks as `covia:write`;
 and foreign `did:web` paths dispatch the write to the destination venue. Both
-venues enforce the requester's authority at write time. Failed or cancelled tasks
-write nothing.
+venues enforce the requester's authority at write time, as the requester
+stands then: an agent under its current `config.caps`, a delegate through the
+grant it presented. The write completes the request's job, so it is made in
+the request's context: as the request arrived, or after a restart as the
+caller the job keeps acts now ([JOBS.md](JOBS.md#kept-caller-context)). The
+worker's task records neither the path nor anything of the requester. A
+write in this venue commits in one transaction with the cycle that resolved
+the task and with the request's completion ([AGENT_LOOP.md](AGENT_LOOP.md)
+§4.4 step 6); a write to another venue follows that cycle. Failed or
+cancelled tasks write nothing.
 
 ### Capabilities for handoff
 
-A worker can read a handoff path **only if its capability scope covers it** — sharing the owner's namespace is not sufficient. An agent's `config.caps` narrows it to exactly the listed `{with, can}` grants (`AbstractLLMAdapter.capsContext` applies `ctx.withCaps(caps)` to the transition context); an agent with **no** `caps` runs with the owner's full authority and can read any of the owner's paths.
+A worker can read a handoff path **only if its capability scope covers it** — sharing the owner's namespace is not sufficient. An agent's `config.caps` narrows it to exactly the listed `{with, can}` grants (each step runs as the agent under them, `Engine.stepContext`); an unrestricted agent (`caps: "unrestricted"`) runs with its owner's full authority and can read any of the owner's paths, and one created without `caps` reads none.
 
 So for a pipeline of *capped* workers, provision the handoff area explicitly:
 
@@ -411,9 +431,9 @@ So for a pipeline of *capped* workers, provision the handoff area explicitly:
 
 Every stage can read the shared `w/pipeline/` area. With structural handoff the
 **manager** needs `crud/write` on each `outputPath`, because the framework writes
-under the requester's captured capability scope; each consumer needs `crud/read` on its
+as the requester; each consumer needs `crud/read` on its
 input path. The producing worker does not need write authority merely to return
-its result. Uncapped agents need none of these explicit grants — but capping is
+its result. Unrestricted agents need none of these explicit grants — but capping is
 the least-privilege posture for untrusted or externally-facing work, and there
 the handoff caps are mandatory, not optional.
 
@@ -438,11 +458,11 @@ the handoff caps are mandatory, not optional.
 - Resets status to SLEEPING; tasks, pending, and sessions are fresh
 - Optional `config` override (inline map or string reference) is merged on top of source config per-field
 - Source must exist and not be TERMINATED; target must not already exist
-- Implementation: `User.forkAgent` + `AgentState.initialiseFromFork`
+- Implementation: `User.forkAgent` + `Agent.initialiseFromFork`
 
 ### Phase 3a: Ship standard templates ✓ DONE
 
-- Provider-neutral template assets in `venue/src/main/resources/agent-templates/` (minimal, skilled, reader, worker, manager, analyst, full, goaltree)
+- Provider-neutral template assets in `venue/src/main/resources/agent-templates/` (minimal, skilled, reader, worker, manager, analyst, full, goaltree, admin)
 - `AgentAdapter.installAgentTemplate(name, path)` materialises each to `v/agents/templates/<name>` at venue startup
 - No special-case lookup — `resolveConfigRef` uses standard `engine.resolvePath` which handles `v/agents/templates/<name>` like any other venue path
 - Templates are content-addressed assets and discoverable pins via `covia_list path=v/agents/templates`

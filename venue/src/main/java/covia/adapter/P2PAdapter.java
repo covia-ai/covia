@@ -44,6 +44,8 @@ import convex.p2p.P2PNode;
 import convex.p2p.P2PUser;
 import covia.api.Abilities;
 import covia.api.Fields;
+import covia.exception.InvalidInputException;
+import covia.exception.NotSupportedException;
 import covia.venue.Config;
 import covia.venue.RequestContext;
 
@@ -220,7 +222,6 @@ public class P2PAdapter extends AAdapter implements AutoCloseable {
 	@Override
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
 		try {
-			requireInvoke(ctx);
 			String sub = getSubOperation(meta);
 			switch (sub) {
 				case "peers":
@@ -230,7 +231,7 @@ public class P2PAdapter extends AAdapter implements AutoCloseable {
 					engine.requireVenueAuthority(ctx, RESOURCE, Abilities.P2P_MANAGE);
 					return connect(input);
 				default:
-					throw new IllegalArgumentException("Unknown p2p operation: " + sub);
+					throw new NotSupportedException("Unknown p2p operation: " + sub);
 			}
 		} catch (Exception e) {
 			return CompletableFuture.failedFuture(e);
@@ -249,10 +250,16 @@ public class P2PAdapter extends AAdapter implements AutoCloseable {
 
 	private CompletableFuture<ACell> connect(ACell input) {
 		Running r = running;
-		if (r == null) return CompletableFuture.failedFuture(new IllegalStateException(NOT_JOINED));
-		Peer peer = peer(input, "input");
+		if (r == null) return CompletableFuture.failedFuture(new NotSupportedException(NOT_JOINED));
+		Peer peer;
+		try {
+			peer = peer(input, "input");
+		} catch (IllegalArgumentException e) {
+			// The peer parser also reads operator config; here it read this call's input
+			throw new InvalidInputException(e.getMessage(), e);
+		}
 		if (peer.key().equals(engine.getAccountKey())) {
-			return CompletableFuture.failedFuture(new IllegalArgumentException(SELF_CONNECT));
+			return CompletableFuture.failedFuture(new InvalidInputException(SELF_CONNECT));
 		}
 		return dial(r.node, peer).thenApply(c -> Maps.of(
 			Fields.DID, UCAN.toDIDKey(peer.key()), K_CONNECTED, CVMBool.TRUE));
@@ -310,7 +317,7 @@ public class P2PAdapter extends AAdapter implements AutoCloseable {
 		AccountKey self = engine.getAccountKey();
 		AString declared = engine.getDIDString();
 		AHashMap<Keyword, ACell> metadata = declared.equals(UCAN.toDIDKey(self)) ? null : Maps.of(ID_DID, declared);
-		long timestamp = convex.core.util.Utils.getCurrentTimestamp();
+		long timestamp = engine.currentTimestamp().longValue();
 		P2PUser user = node.p2p();
 		user.setIdentity(P2PLattice.createIdentity(engine.config().getName(), Vectors.of(self), metadata, timestamp));
 		user.sync();
@@ -478,7 +485,7 @@ public class P2PAdapter extends AAdapter implements AutoCloseable {
 
 	@SuppressWarnings("unchecked")
 	private static AHashMap<ACell, SignedData<ACell>> owners(P2PNode node, Keyword... path) {
-		ACell value = node.getCursor().get(path);
+		ACell value = node.getCursor().getOrDefault(null, path);
 		return (value instanceof AHashMap<?, ?> map) ? (AHashMap<ACell, SignedData<ACell>>) map : null;
 	}
 
@@ -560,7 +567,7 @@ public class P2PAdapter extends AAdapter implements AutoCloseable {
 		if (key == null) throw new IllegalArgumentException(where + ".did must be a did:key, got: " + did);
 		AString address = RT.ensureString(RT.getIn(raw, K_ADDRESS));
 		if (address == null) throw new IllegalArgumentException(where + ".address must be host:port");
-		String text = address.toString().trim();
+		String text = address.toString();
 		try {
 			URI uri = new URI(text.contains("://") ? text : "tcp://" + text);
 			if (!"tcp".equals(uri.getScheme()) || uri.getHost() == null || uri.getPort() <= 0) {

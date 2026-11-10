@@ -8,6 +8,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BooleanSupplier;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestInfo;
 import com.sun.net.httpserver.HttpServer;
 import convex.auth.ucan.Capability;
 import convex.auth.ucan.UCAN;
@@ -20,6 +21,7 @@ import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.grid.auth.UcanTokens;
+import covia.grid.hitl.Hitl;
 import covia.venue.*;
 
 class RemoteAgentAdapterTest {
@@ -63,8 +65,12 @@ class RemoteAgentAdapterTest {
 		assertNotNull(session);
 		VenueRemoteAgent proxy = new VenueRemoteAgent(TwoVenueTestServer.COVIA_B, address);
 		Job next = proxy.request(Maps.of(Fields.INPUT, Maps.of("task", "next"), Fields.SESSION_ID, session)).get(5, TimeUnit.SECONDS);
-		await(() -> Status.COMPLETE.equals(proxy.task(next.getID()).join().get(Fields.STATUS)));
-		assertEquals(session, proxy.task(next.getID()).join().get(Fields.SESSION_ID));
+		// The task runs on venue B: wait on its Job there, then read it through the proxy.
+		Job served = TwoVenueTestServer.ENGINE_B.jobs().getJob(next.getID());
+		if (served != null) await(served, Job::isFinished);
+		AMap<AString, ACell> task = proxy.task(next.getID()).join();
+		assertEquals(Status.COMPLETE, task.get(Fields.STATUS));
+		assertEquals(session, task.get(Fields.SESSION_ID));
 	}
 
 	@Test void remotePrivateAgentRequiresTheExplicitCallerCredential() throws Exception {
@@ -113,86 +119,83 @@ class RemoteAgentAdapterTest {
 				} else if (path.endsWith("/cancel")) {
 					cancels.incrementAndGet(); status = Status.CANCELLED; response = snapshot();
 				} else { polls.incrementAndGet(); response = snapshot(); }
+				handled();
 				byte[] bytes = response.getBytes(StandardCharsets.UTF_8);
 				exchange.sendResponseHeaders(code, bytes.length);
 				try (var out = exchange.getResponseBody()) { out.write(bytes); }
 			});
 			server.start();
 		}
+		/** Signalled as each request is handled. */
+		final TestSignal handledSignal = new TestSignal();
+		private void handled() { handledSignal.signal(); }
+		/** Waits until {@code condition} over the peer's counters holds, checked as each request is handled. */
+		void await(BooleanSupplier condition) { handledSignal.await("the peer to be asked", condition); }
 		String snapshot() { return JSON.toString(Maps.of(Fields.ID, ID, Fields.STATUS, status,
 			Fields.SESSION_ID, "conversation", Fields.OUTPUT, Maps.of("reply", "native"))); }
 		AMap<AString, ACell> input() { return Maps.of(Fields.VENUE, "http://127.0.0.1:" + server.getAddress().getPort(),
 			Fields.AGENT_ID, "did:test:owner/g/worker", Fields.INPUT, Maps.of("task", "do work")); }
 		@Override public void close() { server.stop(0); }
 	}
-	private static Engine engine() {
-		Engine engine = Engine.createTemp(null); Engine.addDemoAssets(engine); return engine;
-	}
 
 	@Test void continuationAcknowledgementAndRecoveryKeepTheSameTask() throws Exception {
 		try (Peer peer = new Peer()) {
-			Engine engine = engine();
-			try {
-				Job mirror = engine.jobs().invokeOperation(OP, peer.input(), engine.venueContext());
-				await(() -> Status.INPUT_REQUIRED.equals(mirror.getStatus()));
-				assertFalse(mirror.future().isDone());
-				assertEquals(Strings.create("v/ops/agent/request"), RT.getIn(peer.submitted, Fields.OPERATION));
-				assertEquals(Strings.create("conversation"), mirror.getData().get(Fields.SESSION_ID));
-				RemoteAgentAdapter adapter = (RemoteAgentAdapter) engine.getAdapter("remoteagent");
-				adapter.suspendJob(mirror);
-				int polls = peer.polls.get();
-				adapter.recoverJob(mirror);
-				await(() -> peer.polls.get() > polls);
-				peer.refuseMessage = true;
-				assertThrows(RuntimeException.class, () -> engine.jobs().deliverMessage(mirror.getID(), Maps.of("content", "continue"), engine.venueContext()));
-				assertEquals(Status.INPUT_REQUIRED, mirror.getStatus());
-				peer.refuseMessage = false;
-				engine.jobs().deliverMessage(mirror.getID(), Maps.of("content", "continue"), engine.venueContext());
-				mirror.future().get(5, TimeUnit.SECONDS);
-				assertEquals(1, peer.submits.get()); assertEquals(2, peer.deliveries.get());
-				assertEquals(Strings.create("continue"), RT.getIn(peer.delivered, "content"));
-			} finally { engine.close(); }
+			Engine engine = TestEngine.ENGINE;
+			Job mirror = engine.jobs().invokeOperation(OP, peer.input(), engine.venueContext());
+			await(mirror, j -> Status.INPUT_REQUIRED.equals(j.getStatus()));
+			assertFalse(mirror.future().isDone());
+			assertEquals(Strings.create("v/ops/agent/request"), RT.getIn(peer.submitted, Fields.OPERATION));
+			assertEquals(Strings.create("conversation"), mirror.getData().get(Fields.SESSION_ID));
+			RemoteAgentAdapter adapter = (RemoteAgentAdapter) engine.getAdapter("remoteagent");
+			adapter.suspendJob(mirror);
+			int polls = peer.polls.get();
+			adapter.recoverJob(mirror);
+			peer.await(() -> peer.polls.get() > polls);
+			peer.refuseMessage = true;
+			assertThrows(RuntimeException.class, () -> engine.jobs().deliverMessage(mirror.getID(), Maps.of("content", "continue"), engine.venueContext()));
+			assertEquals(Status.INPUT_REQUIRED, mirror.getStatus());
+			peer.refuseMessage = false;
+			engine.jobs().deliverMessage(mirror.getID(), Maps.of("content", "continue"), engine.venueContext());
+			mirror.future().get(5, TimeUnit.SECONDS);
+			assertEquals(1, peer.submits.get()); assertEquals(2, peer.deliveries.get());
+			assertEquals(Strings.create("continue"), RT.getIn(peer.delivered, "content"));
 		}
 	}
 
 	@Test void cancellationReachesTheAcceptedTask() throws Exception {
 		try (Peer peer = new Peer()) {
-			Engine engine = engine();
-			try {
-				Job mirror = engine.jobs().invokeOperation(OP, peer.input(), engine.venueContext());
-				await(() -> Status.INPUT_REQUIRED.equals(mirror.getStatus()));
-				mirror.cancel(); await(() -> peer.cancels.get() == 1);
-				assertEquals(Status.CANCELLED, mirror.getStatus()); assertEquals(1, peer.submits.get());
-			} finally { engine.close(); }
+			Engine engine = TestEngine.ENGINE;
+			Job mirror = engine.jobs().invokeOperation(OP, peer.input(), engine.venueContext());
+			await(mirror, j -> Status.INPUT_REQUIRED.equals(j.getStatus()));
+			mirror.cancel(); peer.await(() -> peer.cancels.get() == 1);
+			assertEquals(Status.CANCELLED, mirror.getStatus()); assertEquals(1, peer.submits.get());
 		}
 	}
 
 	@Test void lostAcknowledgementIsNeverReplayedOnRecovery() throws Exception {
 		try (Peer peer = new Peer()) {
-			peer.loseAck = true; Engine engine = engine();
-			try {
-				Job mirror = engine.jobs().invokeOperation(OP, peer.input(), engine.venueContext());
-				await(() -> Strings.create("acceptance-unknown").equals(RemoteJobs.descriptor(mirror).get(RemoteJobs.OBSERVATION)));
-				engine.getAdapter("remoteagent").recoverJob(mirror);
-				assertFalse(mirror.isFinished()); assertEquals(1, peer.submits.get()); assertEquals(0, peer.polls.get());
-			} finally { engine.close(); }
+			peer.loseAck = true; Engine engine = TestEngine.ENGINE;
+			Job mirror = engine.jobs().invokeOperation(OP, peer.input(), engine.venueContext());
+			await(mirror, j -> RT.getIn(j.getData(), RemoteJobs.DELEGATION, RemoteJobs.NOT_FOLLOWED) != null);
+			assertEquals(Strings.create("acceptance-unknown"), engine.remoteJobs().kept(mirror).get(RemoteJobs.OBSERVATION));
+			engine.getAdapter("remoteagent").recoverJob(mirror);
+			assertFalse(mirror.isFinished()); assertEquals(1, peer.submits.get()); assertEquals(0, peer.polls.get());
 		}
 	}
 
 	@Test void freshEngineReattachesWithoutResubmitting() throws Exception {
 		try (Peer peer = new Peer()) {
-			var cursor = convex.lattice.cursor.Cursors.root(convex.core.data.Index.<convex.core.data.Keyword, ACell>none());
-			AKeyPair key = AKeyPair.generate();
 			AMap<AString, ACell> config = Maps.of(Config.SHUTDOWN, Maps.of(Config.GRACE_MS, 0));
-			Engine first = new Engine(config, covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)), key).start();
+			TestEngine.Restartable venue = TestEngine.restartable(config);
+			Engine first = venue.start();
 			Engine.addDemoAssets(first);
 			Job original;
 			try {
 				original = first.jobs().invokeOperation(OP, peer.input(), first.venueContext());
-				await(() -> Status.INPUT_REQUIRED.equals(original.getStatus()));
+				await(original, j -> Status.INPUT_REQUIRED.equals(j.getStatus()));
 			} finally { first.close(); }
 			assertFalse(original.isFinished()); assertEquals(0, peer.cancels.get());
-			Engine second = new Engine(config, covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)), key).start();
+			Engine second = venue.start();
 			try {
 				Engine.addDemoAssets(second);
 				second.jobs().recoverJobs();
@@ -208,21 +211,24 @@ class RemoteAgentAdapterTest {
 
 	@Test void agentFacadeRecoversParentAndChildWithoutResubmission() throws Exception {
 		try (Peer peer = new Peer()) {
-			var cursor = convex.lattice.cursor.Cursors.root(convex.core.data.Index.<convex.core.data.Keyword, ACell>none());
-			AKeyPair key = AKeyPair.generate();
-			AMap<AString, ACell> config = Maps.of(Config.SHUTDOWN, Maps.of(Config.GRACE_MS, 0));
-			Engine first = new Engine(config, covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)), key).start();
+			// The venue's own agent dials the loopback peer, and agents pass the
+			// outbound guard, so the operator allows the peer's host
+			AMap<AString, ACell> config = Maps.of(Config.SHUTDOWN, Maps.of(Config.GRACE_MS, 0),
+				Config.ADAPTERS, Maps.of("http", Maps.of("allowedHosts", Vectors.of("127.0.0.1"))));
+			TestEngine.Restartable venue = TestEngine.restartable(config);
+			Engine first = venue.start();
 			Engine.addDemoAssets(first);
 			Job original;
 			try {
 				first.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "proxy",
-					"agent", peer.input().dissoc(Fields.INPUT).assoc(Fields.ADAPTER, Strings.create("remoteagent"))),
+					"agent", peer.input().dissoc(Fields.INPUT).assoc(Fields.ADAPTER, Strings.create("remoteagent")),
+					Fields.CONFIG, Maps.of(Config.CAPS, Config.UNRESTRICTED)),
 					first.venueContext()).awaitResult(5000);
 				original = first.jobs().invokeOperation("v/ops/agent/request", Maps.of(Fields.AGENT_ID, "proxy", Fields.INPUT, Maps.empty()), first.venueContext());
-				await(() -> Status.INPUT_REQUIRED.equals(original.getStatus()));
+				await(original, j -> Status.INPUT_REQUIRED.equals(j.getStatus()));
 			} finally { first.close(); }
 			assertFalse(original.isFinished());
-			Engine second = new Engine(config, covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)), key).start();
+			Engine second = venue.start();
 			try {
 				Engine.addDemoAssets(second);
 				second.jobs().recoverJobs();
@@ -238,41 +244,142 @@ class RemoteAgentAdapterTest {
 		}
 	}
 
-	@Test void localRecoveryRefusesToReconstructAuthorityFromIdentity() throws Exception {
-		Engine engine = engine();
+	/**
+	 * Calls to agents on this venue resume after a restart as their callers,
+	 * in the context their jobs kept: each follows the same task to its end,
+	 * an external agent served by one answers, and cancelling one reaches its
+	 * task. A call whose caller cannot act after the restart ends, naming its
+	 * task, which it leaves as it is.
+	 */
+	@Test void localCallsResumeAfterARestartAsTheirCallers() throws Exception {
+		TestEngine.Restartable venue = TestEngine.restartable(config(true));
+		AString user = TestEngine.uniqueDID("RemoteAgentResume");
+		RequestContext ctx = RequestContext.of(user);
+		Job asked, waited, served, anonymous;
+		Engine first = start(venue, true);
 		try {
-			RequestContext ctx = engine.venueContext();
-			engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "waiting",
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/never")), ctx).awaitResult(5000);
-			Job mirror = engine.jobs().invokeOperation(OP, Maps.of(Fields.AGENT_ID, "waiting", Fields.INPUT, Maps.of("task", "wait")), ctx);
-			await(() -> RemoteJobs.descriptor(mirror).get(RemoteJobs.REMOTE_ID) != null);
-			ACell id = RemoteJobs.descriptor(mirror).get(RemoteJobs.REMOTE_ID);
-			engine.getAdapter("remoteagent").recoverJob(mirror);
-			assertEquals(Status.FAILED, mirror.getStatus());
-			assertEquals(RemoteAgentAdapter.LOCAL_INTERRUPTED, mirror.getErrorMessage());
-			assertEquals(id, RemoteJobs.descriptor(mirror).get(RemoteJobs.REMOTE_ID));
-		} finally { engine.close(); }
+			agent(first, ctx, "asker", "v/test/ops/askhuman");
+			agent(first, ctx, "waiter", "v/test/ops/never");
+			agent(first, ctx, "helper", "v/test/ops/askhuman");
+			first.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "front",
+				"agent", Maps.of(Fields.ADAPTER, "remoteagent", Fields.AGENT_ID, "helper"),
+				Fields.CONFIG, Maps.of(Config.CAPS, Config.UNRESTRICTED)), ctx).awaitResult(5000);
+			RequestContext anon = first.context(first.publicPrincipal());
+			agent(first, anon, "lobby", "v/test/ops/never");
+			try (AgentWatch asker = AgentWatch.open(first, user, "asker");
+					AgentWatch helper = AgentWatch.open(first, user, "helper")) {
+				asked = first.jobs().invokeOperation(OP, Maps.of(Fields.AGENT_ID, "asker", Fields.INPUT, Maps.of("ask", "decide")), ctx);
+				served = first.jobs().invokeOperation("v/ops/agent/request", Maps.of(Fields.AGENT_ID, "front",
+					Fields.INPUT, Maps.of("ask", "decide too")), ctx);
+				waited = first.jobs().invokeOperation(OP, Maps.of(Fields.AGENT_ID, "waiter", Fields.INPUT, Maps.of("task", "wait")), ctx);
+				anonymous = first.jobs().invokeOperation(OP, Maps.of(Fields.AGENT_ID, "lobby", Fields.INPUT, Maps.of("task", "wait")), anon);
+				asker.awaitRest(1);
+				helper.awaitRest(1);
+			}
+			for (Job call : new Job[] {asked, waited, anonymous}) await(call, RemoteAgentAdapterTest::following);
+		} finally { first.close(); }
+
+		Engine second = start(venue, false);
+		try {
+			Job resumed = second.jobs().getJob(asked.getID(), ctx);
+			assertFalse(resumed.isFinished(), "the call follows its task again");
+			assertEquals(RemoteJobs.descriptor(asked).get(RemoteJobs.REMOTE_ID), RemoteJobs.descriptor(resumed).get(RemoteJobs.REMOTE_ID));
+			answer(second, ctx, "asker", "carry on");
+			assertTrue(resumed.future().get(10, TimeUnit.SECONDS).toString().contains("carry on"),
+				"the call finishes with its task's output: " + resumed.getOutput());
+
+			answer(second, ctx, "helper", "go ahead");
+			Job answered = second.jobs().getJob(served.getID(), ctx);
+			assertTrue(answered.future().get(10, TimeUnit.SECONDS).toString().contains("go ahead"),
+				"an external agent the call serves answers: " + answered.getOutput());
+
+			Job cancelled = second.jobs().getJob(waited.getID(), ctx);
+			Job waiting = second.jobs().getJob(taskOf(waited), ctx);
+			assertFalse(waiting.isFinished());
+			assertDoesNotThrow(() -> second.jobs().deliverMessage(cancelled.getID(), Maps.of("content", "still there?"), ctx),
+				"a message reaches the task as the call's caller");
+			cancelled.cancel();
+			assertEquals(Status.CANCELLED, waiting.getStatus(), "cancelling the call reaches its task");
+
+			// Public access is off now, so the anonymous caller cannot act, nor read its job
+			AMap<AString, ACell> ended = second.getVenueState().users().user(second.publicPrincipal()).jobs().getRecord(anonymous.getID());
+			assertEquals(Status.FAILED, ended.get(Fields.STATUS));
+			assertEquals(Strings.create(RemoteAgentAdapter.CALLER_CANNOT_ACT.formatted(Engine.PUBLIC_ACCESS_OFF,
+				taskOf(anonymous).toHexString())), ended.get(Fields.ERROR));
+			assertFalse(second.jobs().getJob(taskOf(anonymous)).isFinished(), "a call that ended leaves its task as it is");
+		} finally { second.close(); }
 	}
 
-	@Test void localCancellationHasReachedTheChildWhenItReturns() throws Exception {
-		Engine engine = engine();
-		try {
-			RequestContext ctx = engine.venueContext();
-			engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "waiting",
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/never")), ctx).awaitResult(5000);
-			Job mirror = engine.jobs().invokeOperation(OP, Maps.of(Fields.AGENT_ID, "waiting", Fields.INPUT, Maps.of("task", "wait")), ctx);
-			await(() -> RemoteJobs.descriptor(mirror) != null && RemoteJobs.descriptor(mirror).get(RemoteJobs.REMOTE_STATUS) != null);
-			Job child = engine.jobs().getJob(Job.parseID(RemoteJobs.descriptor(mirror).get(RemoteJobs.REMOTE_ID)), ctx);
-			mirror.cancel();
-			assertEquals(Status.CANCELLED, child.getStatus());
-			assertTrue(child.future().isDone());
-			assertEquals(Status.CANCELLED, mirror.getStatus());
-		} finally { engine.close(); }
+	/** A call that had not recorded its task when the venue stopped cannot be followed: it ends, and its task runs on. */
+	@Test void localCallWithNoRecordedTaskEndsAtRecovery(TestInfo info) throws Exception {
+		Engine engine = TestEngine.ENGINE;
+		RequestContext ctx = RequestContext.of(TestEngine.uniqueDID(info));
+		agent(engine, ctx, "waiting", "v/test/ops/never");
+		Job mirror = engine.jobs().invokeOperation(OP, Maps.of(Fields.AGENT_ID, "waiting", Fields.INPUT, Maps.of("task", "wait")), ctx);
+		await(mirror, RemoteAgentAdapterTest::following);
+		Job task = engine.jobs().getJob(taskOf(mirror), ctx);
+		RemoteAgentAdapter adapter = (RemoteAgentAdapter) engine.getAdapter("remoteagent");
+		adapter.suspendJob(mirror);
+		// As if the venue had stopped before the agent's task was recorded
+		mirror.update(d -> d.assoc(RemoteJobs.DELEGATION, RemoteJobs.descriptor(mirror).dissoc(RemoteJobs.REMOTE_ID)));
+		adapter.recoverJob(mirror);
+		assertEquals(Status.FAILED, mirror.getStatus());
+		assertEquals(RemoteAgentAdapter.LOCAL_INTERRUPTED, mirror.getErrorMessage());
+		assertFalse(task.isFinished(), "the agent's task runs on");
 	}
 
-	private static void await(BooleanSupplier condition) throws Exception {
-		long end = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
-		while (!condition.getAsBoolean() && System.nanoTime() < end) Thread.sleep(10);
-		assertTrue(condition.getAsBoolean());
+	/** Configuration with public access on or off. */
+	private static AMap<AString, ACell> config(boolean publicAccess) {
+		return Maps.of(Config.SHUTDOWN, Maps.of(Config.GRACE_MS, 0),
+			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
+			Config.AUTH, Maps.of(Config.PUBLIC, Maps.of(Config.ENABLED, publicAccess, Config.CAPS, "unrestricted")));
+	}
+
+	/** {@code venue}, launched as it is at boot, with public access on or off. */
+	private static Engine start(TestEngine.Restartable venue, boolean publicAccess) throws Exception {
+		return venue.mount(config(publicAccess)).launch();
+	}
+
+	private static void agent(Engine engine, RequestContext ctx, String id, String operation) {
+		engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, id,
+			Fields.CONFIG, Maps.of(Fields.OPERATION, operation, Config.CAPS, Config.UNRESTRICTED)), ctx).awaitResult(5000);
+	}
+
+	/** Answers the one open ask of {@code ctx}'s agent {@code id}. */
+	private static void answer(Engine engine, RequestContext ctx, String id, String answer) {
+		Agent agent = engine.getVenueState().users().user(ctx.getUserDID()).agent(id);
+		assertEquals(1, agent.getPending().count(), "the agent has one open ask");
+		String ask = agent.getPending().entrySet().iterator().next().getKey().toHexString();
+		engine.jobs().invokeOperation("v/ops/hitl/respond",
+			Hitl.answer(ask).answer("next", answer).build(), ctx).awaitResult(5000);
+	}
+
+	/** Whether a call has its agent's task and has seen it. */
+	private static boolean following(Job call) {
+		AMap<AString, ACell> delegation = RemoteJobs.descriptor(call);
+		return delegation != null && delegation.get(RemoteJobs.REMOTE_ID) != null && delegation.get(RemoteJobs.REMOTE_STATUS) != null;
+	}
+
+	private static Blob taskOf(Job call) {
+		return Job.parseID(RemoteJobs.descriptor(call).get(RemoteJobs.REMOTE_ID));
+	}
+
+	@Test void localCancellationHasReachedTheChildWhenItReturns(TestInfo info) throws Exception {
+		Engine engine = TestEngine.ENGINE;
+		RequestContext ctx = RequestContext.of(TestEngine.uniqueDID(info));
+		engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "waiting",
+			Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/never")), ctx).awaitResult(5000);
+		Job mirror = engine.jobs().invokeOperation(OP, Maps.of(Fields.AGENT_ID, "waiting", Fields.INPUT, Maps.of("task", "wait")), ctx);
+		await(mirror, j -> RemoteJobs.descriptor(j) != null && RemoteJobs.descriptor(j).get(RemoteJobs.REMOTE_STATUS) != null);
+		Job child = engine.jobs().getJob(Job.parseID(RemoteJobs.descriptor(mirror).get(RemoteJobs.REMOTE_ID)), ctx);
+		mirror.cancel();
+		assertEquals(Status.CANCELLED, child.getStatus());
+		assertTrue(child.future().isDone());
+		assertEquals(Status.CANCELLED, mirror.getStatus());
+	}
+
+	/** Waits until {@code job} satisfies {@code condition}, checked as the Job is updated. */
+	private static void await(Job job, java.util.function.Predicate<Job> condition) {
+		TestEngine.awaitJob(job, condition, 10_000, () -> "job did not reach the expected state: " + job.getData());
 	}
 }

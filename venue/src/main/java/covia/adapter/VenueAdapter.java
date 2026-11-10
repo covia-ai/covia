@@ -18,6 +18,8 @@ import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
 import covia.api.Abilities;
 import covia.api.Fields;
+import covia.exception.InvalidInputException;
+import covia.exception.NotSupportedException;
 import covia.venue.Audit;
 import covia.venue.Config;
 import covia.venue.Modules;
@@ -153,7 +155,6 @@ public class VenueAdapter extends AAdapter {
 				engine.requireResourceAccess(ctx, Strings.create("v/config"), Capability.CRUD_READ);
 				return CompletableFuture.completedFuture(showConfig());
 			}
-			requireInvoke(ctx);
 			if ("gc".equals(subOperation)) {
 				engine.requireVenueAuthority(ctx, STORE_RESOURCE, Abilities.VENUE_GC);
 				return audited(Audit.VENUE_GC, ctx, subOperation, input, gc(ctx, input));
@@ -197,7 +198,7 @@ public class VenueAdapter extends AAdapter {
 			case "module-load" -> moduleLoad(input);
 			case "module-unload" -> moduleUnload(input);
 			case "restart" -> restart(ctx, input);
-			default -> throw new IllegalArgumentException(
+			default -> throw new NotSupportedException(
 				"Unknown venue operation: " + getSubOperation(meta));
 		});
 	}
@@ -350,7 +351,7 @@ public class VenueAdapter extends AAdapter {
 		String name = requireName(input, "name");
 		ACell cfgCell = RT.getIn(input, K_CONFIG);
 		if (!(cfgCell instanceof AMap)) {
-			throw new IllegalArgumentException("config is required and must be an object");
+			throw new InvalidInputException("config is required and must be an object");
 		}
 		AMap<AString, ACell> cfg = (AMap<AString, ACell>) cfgCell;
 		if (RT.bool(RT.getIn(input, K_MERGE))) {
@@ -369,15 +370,21 @@ public class VenueAdapter extends AAdapter {
 		AString sha = RT.ensureString(RT.getIn(input, K_SHA256));
 		ACell cfgCell = RT.getIn(input, K_CONFIG);
 		AMap<AString, ACell> cfg = (cfgCell instanceof AMap) ? (AMap<AString, ACell>) cfgCell : Maps.empty();
-		Modules.LoadedModule module = Modules.load(engine, jar,
-			(sha != null) ? sha.toString() : null, cfg);
+		Modules.LoadedModule module;
+		try {
+			module = Modules.load(engine, jar, (sha != null) ? sha.toString() : null, cfg);
+		} catch (IllegalStateException | IllegalArgumentException e) {
+			// The jar, its digest and its settings are the caller's: a jar that is
+			// missing, unverified or holds no adapters, or a setting it refuses
+			throw new InvalidInputException(e.getMessage(), e);
+		}
 		return moduleEntry(module);
 	}
 
 	ACell moduleUnload(ACell input) {
 		String name = requireName(input, "name");
 		if (!engine.config().isDynamicModulesEnabled()) {
-			throw new IllegalStateException(
+			throw new NotSupportedException(
 				"Dynamic module loading is disabled on this venue (set dynamicModules.enabled)");
 		}
 		Modules.LoadedModule module = Modules.unload(engine, name);
@@ -396,17 +403,17 @@ public class VenueAdapter extends AAdapter {
 	 */
 	private CompletableFuture<ACell> gc(RequestContext ctx, ACell input) throws IOException {
 		ACell retainCell = RT.getIn(input, K_RETAIN_SUPERSEDED);
-		if (retainCell != null && !(retainCell instanceof CVMBool)) throw new IllegalArgumentException(INVALID_RETENTION);
+		if (retainCell != null && !(retainCell instanceof CVMBool)) throw new InvalidInputException(INVALID_RETENTION);
 		Boolean retain = retainCell == null ? null : CVMBool.TRUE.equals(retainCell);
 		ACell backupCell = RT.getIn(input, K_BACKUP_FILE);
 		AString backup = RT.ensureString(backupCell);
 		if (backupCell != null && (backup == null || backup.toString().isBlank())) {
-			throw new IllegalArgumentException(INVALID_BACKUP_FILE);
+			throw new InvalidInputException(INVALID_BACKUP_FILE);
 		}
-		if (backup != null && Boolean.FALSE.equals(retain)) throw new IllegalArgumentException(BACKUP_RETENTION_DISABLED);
+		if (backup != null && Boolean.FALSE.equals(retain)) throw new InvalidInputException(BACKUP_RETENTION_DISABLED);
 		if ((backup != null || retain != null) && (CVMBool.TRUE.equals(RT.getIn(input, K_STATUS))
 				|| CVMBool.TRUE.equals(RT.getIn(input, K_CANCEL)))) {
-			throw new IllegalArgumentException(BACKUP_WITH_STATUS);
+			throw new InvalidInputException(BACKUP_WITH_STATUS);
 		}
 		StoreControl control = engine.storeControl();
 		if (CVMBool.TRUE.equals(RT.getIn(input, K_STATUS))) {
@@ -421,13 +428,13 @@ public class VenueAdapter extends AAdapter {
 		if (restart) {
 			engine.requireVenueAuthority(ctx, PROCESS_RESOURCE, Abilities.VENUE_RESTART);
 			if (!engine.hasProcessControl()) {
-				throw new IllegalStateException(
+				throw new NotSupportedException(
 					"Process restart is unavailable: this venue is not managed by MainVenue");
 			}
 			ACell timeoutCell = RT.getIn(input, K_STARTUP_TIMEOUT);
 			if (timeoutCell != null) {
 				convex.core.data.prim.CVMLong value = RT.ensureLong(timeoutCell);
-				if (value == null) throw new IllegalArgumentException("startupTimeout must be an integer");
+				if (value == null) throw new InvalidInputException("startupTimeout must be an integer");
 				startupTimeout = value.longValue();
 			}
 		}
@@ -503,7 +510,7 @@ public class VenueAdapter extends AAdapter {
 		ACell timeoutCell = RT.getIn(input, K_STARTUP_TIMEOUT);
 		if (timeoutCell != null) {
 			convex.core.data.prim.CVMLong value = RT.ensureLong(timeoutCell);
-			if (value == null) throw new IllegalArgumentException("startupTimeout must be an integer");
+			if (value == null) throw new InvalidInputException("startupTimeout must be an integer");
 			timeout = value.longValue();
 		}
 		var plan = engine.requestProcessRestart(
@@ -520,7 +527,7 @@ public class VenueAdapter extends AAdapter {
 
 	private static String requireName(ACell input, String field) {
 		AString v = RT.ensureString(RT.getIn(input, field));
-		if (v == null || v.isEmpty()) throw new IllegalArgumentException(field + " is required");
+		if (v == null || v.isEmpty()) throw new InvalidInputException(field + " is required");
 		return v.toString();
 	}
 }

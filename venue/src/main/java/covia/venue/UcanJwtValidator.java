@@ -159,10 +159,9 @@ public final class UcanJwtValidator {
 	}
 
 	/** Parse transport proof JWTs through the same compatibility boundary. */
-	public static AVector<ACell> parseTransportUCANs(AVector<ACell> ucans,
+	public static AVector<ACell> parseTransportUCANs(AVector<ACell> ucans, long now,
 			DIDVerifier verifier) {
 		if (ucans == null || ucans.isEmpty() || verifier == null) return null;
-		long now = System.currentTimeMillis() / 1000;
 		AVector<ACell> result = Vectors.empty();
 		for (long i = 0; i < ucans.count(); i++) {
 			AString jwt = RT.ensureString(ucans.get(i));

@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.parallel.Isolated;
 
 import convex.core.data.Hash;
 import convex.core.data.ACell;
@@ -16,9 +17,13 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMBool;
 import covia.api.Fields;
+import covia.exception.CoviaException;
+import covia.exception.FaultException;
+import covia.exception.InvalidInputException;
 import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.TestEngine;
+import covia.venue.TestLogs;
 
 /**
  * Adapter asset installation is fail-loud (#89 sweep): a missing or
@@ -26,7 +31,14 @@ import covia.venue.TestEngine;
  * silently missing ops is broken — same policy as
  * {@code Engine.materialiseVOps}. {@code strictAssets: false} downgrades to
  * a warning, for test/debug scaffolding only.
+ *
+ * <p>Isolated because the schema-warning test raises the process-wide
+ * {@code AAdapter} logger to WARN to capture its events. A logging call checks
+ * the level first and additivity later, so a WARN another test provokes on
+ * that logger meanwhile can slip onto the console as the level is restored, or
+ * inflate the captured count; no ordering of the restore closes that.</p>
  */
+@Isolated("mutates the shared AAdapter logger level")
 public class AAdapterInstallTest {
 
 	@Test
@@ -89,16 +101,40 @@ public class AAdapterInstallTest {
 	}
 
 	@Test
-	public void testAsyncResultProcessingErrorFailsJob() {
-		covia.grid.Job job = new covia.grid.Job(Maps.of(Fields.STATUS, covia.grid.Status.PENDING)) {
+	public void testAsyncResultProcessingErrorFailsJob() throws Exception {
+		covia.grid.Job job = new covia.grid.Job(Maps.of(Fields.ID, convex.core.data.Blob.fromHex("00112233445566778899aabbccddeeff"),
+				Fields.STATUS, covia.grid.Status.PENDING)) {
 			@Override public void completeWith(ACell result) {
 				throw new NoClassDefFoundError("output/validator/Class");
 			}
 		};
-		new ProbeAdapter().invoke(job, null, Maps.empty(), null);
+		TestLogs.quiet(FaultException.class, () -> new ProbeAdapter().invoke(job, null, Maps.empty(), null));
 		assertEquals(covia.grid.Status.FAILED, job.getStatus());
 		assertTrue(job.future().isCompletedExceptionally());
-		assertTrue(job.getErrorMessage().contains("output/validator/Class"));
+		assertEquals(FaultException.FAILED.formatted(AAdapter.RECORDING_OUTCOME, "NoClassDefFoundError", FaultException.VENUE),
+			job.getErrorMessage(),
+			"recording the outcome is the venue's fault, reported by its type, never its text");
+	}
+
+	/** An adapter's unexpected exception is its operation's fault, and the Job's caller is told so. */
+	@Test
+	public void testAdapterExceptionIsItsOperationsFault() throws Exception {
+		covia.grid.Job job = new covia.grid.Job(Maps.of(Fields.STATUS, covia.grid.Status.PENDING,
+			Fields.OP, Strings.create("probe:fail"), Fields.ADAPTER, Strings.create("probe"))) {};
+		ProbeAdapter adapter = new ProbeAdapter() {
+			@Override public java.util.concurrent.CompletableFuture<ACell> invokeFuture(
+					covia.venue.RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
+				throw new IllegalArgumentException("probe requires x");
+			}
+		};
+		CoviaException thrown = assertThrows(CoviaException.class,
+			() -> TestLogs.quiet(FaultException.class, () -> adapter.invoke(job, null, Maps.empty(), null)));
+		String report = FaultException.FAILED.formatted(covia.grid.Job.OPERATION.formatted("probe:fail"),
+			"IllegalArgumentException", FaultException.ADAPTER.formatted("probe"));
+		assertEquals(covia.grid.Status.FAILED, job.getStatus());
+		assertEquals(report, job.getErrorMessage());
+		assertEquals(report, thrown.getMessage(), "the starter receives the Job's report");
+		assertTrue(FaultException.isFault(thrown));
 	}
 
 	/** Minimal adapter exposing the protected installAsset for the test. */
@@ -121,7 +157,6 @@ public class AAdapterInstallTest {
 					Fields.READ_ONLY, CVMBool.FALSE));
 			return installModel(path, meta);
 		}
-		static String probeFailure(Throwable error) { return describeFailure(error); }
 	}
 
 	@Test
@@ -218,11 +253,13 @@ public class AAdapterInstallTest {
 	}
 
 	@Test
-	public void testFailureDescriptionIsNonBlankSingleLineAndBounded() {
-		assertEquals("RuntimeException (no detail)",
-			ProbeAdapter.probeFailure(new RuntimeException()));
-		String detail = ProbeAdapter.probeFailure(
-			new RuntimeException("first line\n" + "x".repeat(2000)));
+	public void testFailureDescriptionIsNonBlankSingleLineAndBounded() throws Exception {
+		ProbeAdapter adapter = new ProbeAdapter();
+		TestLogs.quiet(FaultException.class, () -> assertEquals(
+			FaultException.UNEXPECTED.formatted("RuntimeException", adapter.faultOwner()),
+			adapter.describeFailure(new RuntimeException())));
+		String detail = adapter.describeFailure(
+			new InvalidInputException("first line\n" + "x".repeat(2000)));
 		assertTrue(!detail.contains("\n"), detail);
 		assertTrue(detail.startsWith("first line "), detail);
 		assertTrue(detail.length() <= 1025, "bounded diagnostic was " + detail.length() + " chars");
@@ -236,7 +273,7 @@ public class AAdapterInstallTest {
 			() -> adapter.probeInstall("/no/such/resource.json"));
 		assertTrue(ex.getMessage().contains("/no/such/resource.json"),
 			"the failure must name the broken resource, got: " + ex.getMessage());
-		assertTrue(ex.getMessage().contains(AAdapter.describeFailure(ex.getCause())),
+		assertTrue(ex.getMessage().contains(FaultException.describe(adapter.faultOwner(), ex.getCause())),
 			"and say why: " + ex.getMessage());
 	}
 
@@ -250,12 +287,9 @@ public class AAdapterInstallTest {
 		adapter.engine = TestEngine.ENGINE;
 		IllegalStateException ex = assertThrows(IllegalStateException.class,
 			() -> adapter.probeInstall("/broken-asset.json"));
-		assertTrue(ex.getMessage().startsWith("Failed to install adapter asset from /broken-asset.json: "),
-			ex.getMessage());
-		assertTrue(ex.getMessage().contains(AAdapter.describeFailure(ex.getCause())),
+		assertTrue(ex.getMessage().contains("/broken-asset.json"), ex.getMessage());
+		assertTrue(ex.getMessage().contains(FaultException.describe(adapter.faultOwner(), ex.getCause())),
 			"the cause's detail rides in the message: " + ex.getMessage());
-		assertTrue(ex.getMessage().length() > "Failed to install adapter asset from /broken-asset.json: ".length() + 5,
-			"the reason is not blank: " + ex.getMessage());
 	}
 
 	@Test

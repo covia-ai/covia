@@ -54,6 +54,11 @@ public final class RequestLog {
 		MDC.put(MDC_KEY, id);
 	}
 
+	/** The id {@link #begin} gave the request; null before it ran. */
+	static String id(Context ctx) {
+		return ctx.attribute(ATTR);
+	}
+
 	/** After the response: one access line when enabled, then clear the MDC. */
 	void end(Context ctx, Float millis, boolean logAccess) {
 		try {

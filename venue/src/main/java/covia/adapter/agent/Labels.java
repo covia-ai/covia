@@ -41,13 +41,16 @@ public final class Labels {
 		LOADED_SKILL("Loaded skill: %s — unload key: %s", "loaded-skill", false, "name", "unload-key"),
 		PINNED_CONTEXT("Pinned context: %s", "pinned-context", false, "label"),
 		COMPACTED("Compacted: %s turns", "compacted", true, "turns"),
+		COMPACTED_TURNS("Compacted: turns %s–%s", "compacted", true, "from", "to"),
 		ANCESTORS("Ancestor Context", "ancestors", false),
 		TOOL_FAILURE("Tool failure: %s", "tool-failure", false, "name"),
 		PENDING("Pending job results", "pending-results", false),
 		TASKS("Tasks assigned to you", "tasks", false),
 		NO_INPUT("No input", "no-input", false),
 		BUDGET("Context budget", "context-budget", true),
-		UNAVAILABLE_TOOLS("Unavailable tools", "unavailable-tools", false);
+		UNAVAILABLE_TOOLS("Unavailable tools", "unavailable-tools", false),
+		/** Who the following turn came from ({@link TurnProvenance}); attributes vary by turn. */
+		FROM("From: %s", "from", true);
 
 		final String pattern;
 		final String tag;
@@ -75,6 +78,23 @@ public final class Labels {
 		}
 		if (body == null) return "[" + label + "]";
 		return "[" + label + "]" + (kind.inline ? " " : "\n") + body;
+	}
+
+	/**
+	 * A label-only element whose attributes vary by instance: the bracket and header
+	 * label is the kind's pattern filled with {@code summary}; xml carries each
+	 * {@code name, value} pair given, in order, escaped.
+	 */
+	public static String renderAttributed(AString dialect, Kind kind, String summary, String... namesAndValues) {
+		if (XML.equals(dialect)) {
+			StringBuilder sb = new StringBuilder("<").append(kind.tag);
+			for (int i = 0; i + 1 < namesAndValues.length; i += 2) {
+				sb.append(' ').append(namesAndValues[i]).append("=\"").append(attr(namesAndValues[i + 1])).append('"');
+			}
+			return sb.append("/>").toString();
+		}
+		String label = String.format(kind.pattern, summary);
+		return HEADER.equals(dialect) ? "## " + label : "[" + label + "]";
 	}
 
 	/** An element whose source failed: the label carries the reason, there is no body. */

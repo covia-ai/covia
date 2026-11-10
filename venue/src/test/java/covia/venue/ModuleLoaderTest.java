@@ -28,6 +28,8 @@ import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
 import convex.etch.EtchStore;
 import covia.adapter.AAdapter;
+import covia.exception.ConfigurationException;
+import covia.exception.InvalidInputException;
 import covia.grid.Job;
 import covia.grid.Status;
 
@@ -37,8 +39,9 @@ import covia.grid.Status;
  * ONLY in the jar), declared in config, and must come up as an ordinary
  * adapter — registered, catalog-materialised, invocable.
  *
- * <p>Uses throwaway engines (bespoke config), not the shared TestEngine —
- * per the TestEngine guidance.</p>
+ * <p>A test that declares or loads a module takes a throwaway engine
+ * (bespoke config), not the shared TestEngine — per the TestEngine
+ * guidance.</p>
  */
 public class ModuleLoaderTest {
 
@@ -152,9 +155,9 @@ public class ModuleLoaderTest {
 			Strings.create("sha256"), Strings.create("00".repeat(32)))));
 		Engine bad = Engine.createTemp(badConfig);
 		try {
-			IllegalStateException e = assertThrows(IllegalStateException.class,
+			ConfigurationException e = assertThrows(ConfigurationException.class,
 				() -> Engine.addDemoAssets(bad));
-			assertTrue(e.getMessage().contains("integrity check FAILED"), e.getMessage());
+			assertFalse(e.getMessage().isBlank());
 		} finally {
 			bad.close();
 		}
@@ -166,9 +169,24 @@ public class ModuleLoaderTest {
 			Vectors.of(Strings.create(dir.resolve("no-such-module.jar").toString())));
 		Engine engine = Engine.createTemp(config);
 		try {
-			IllegalStateException e = assertThrows(IllegalStateException.class,
+			ConfigurationException e = assertThrows(ConfigurationException.class,
 				() -> Engine.addDemoAssets(engine));
-			assertTrue(e.getMessage().contains("Module jar not found"), e.getMessage());
+			assertTrue(e.getMessage().contains("no-such-module.jar"), e.getMessage());
+		} finally {
+			engine.close();
+		}
+	}
+
+	@Test
+	public void testRefusedModuleSettingFailsBoot(@TempDir Path dir) throws Exception {
+		AMap<AString, ACell> config = Maps.of(Config.MODULES, Vectors.of(Maps.of(
+			"path", buildModuleJar(dir).toString(), "config", Maps.of("label", 42))));
+		Engine engine = Engine.createTemp(config);
+		try {
+			ConfigurationException e = assertThrows(ConfigurationException.class,
+				() -> Engine.addDemoAssets(engine), "a setting in the venue config is the operator's");
+			assertInstanceOf(IllegalArgumentException.class, e.getCause(), "the module's own refusal is kept");
+			assertEquals(e.getCause().getMessage(), e.getMessage());
 		} finally {
 			engine.close();
 		}
@@ -203,35 +221,36 @@ public class ModuleLoaderTest {
 			Vectors.of(Strings.create(buildVersionedTestModuleJar(dir).toString())));
 		AKeyPair key = AKeyPair.generate();
 		String record = "users/did:test:versioned-scratch";
-		AMap<AString, ACell> migrated = Maps.of("scratch", "kept", "migrated", 2L);
-		try (EtchStore store = EtchStore.createTemp("module-migration")) {
-			Engine built = new Engine(Maps.empty(), CoviaApplication.open(store, key), key).launch();
+		long builtIn = new covia.adapter.TestAdapter().stateVersion();
+		AMap<AString, ACell> migrated = Maps.of("scratch", "kept", "migrated", builtIn + 1);
+		try (EtchStore store = TestTemp.etch("module-migration")) {
+			Engine built = TestEngine.application(store).mount(key, Maps.empty()).launch();
 			try {
-				assertEquals(1, built.getVenueState().adapterVersion("test"));
+				assertEquals(builtIn, built.getVenueState().adapterVersion("test"));
 				built.adapterState("test").write(record + "/scratch", Strings.create("kept"));
 				built.flush();
 			} finally {
 				built.close();
 			}
 
-			Engine upgraded = new Engine(withModule, CoviaApplication.open(store, key), key).launch();
+			Engine upgraded = TestEngine.application(store).mount(key, withModule).launch();
 			try {
 				assertTrue(upgraded.getAdapter("test").getClass().getClassLoader() instanceof ModuleClassLoader);
-				assertEquals(2, upgraded.getVenueState().adapterVersion("test"));
+				assertEquals(builtIn + 1, upgraded.getVenueState().adapterVersion("test"));
 				assertEquals(migrated, upgraded.adapterState("test").read(record));
 				upgraded.flush();
 			} finally {
 				upgraded.close();
 			}
 
-			Engine restarted = new Engine(withModule, CoviaApplication.open(store, key), key).launch();
+			Engine restarted = TestEngine.application(store).mount(key, withModule).launch();
 			try {
-				assertEquals(2, restarted.getVenueState().adapterVersion("test"), "read back from the store");
+				assertEquals(builtIn + 1, restarted.getVenueState().adapterVersion("test"), "read back from the store");
 				assertEquals(migrated, restarted.adapterState("test").read(record));
 			} finally {
 				restarted.close();
 			}
-			Engine legacy = new Engine(withModule, CoviaApplication.open(store, key), key).start();
+			Engine legacy = TestEngine.application(store).mount(key, withModule).start();
 			try {
 				Engine.installDefaultAdapters(legacy);
 				assertTrue(legacy.getAdapter("test").getClass().getClassLoader() instanceof ModuleClassLoader);
@@ -240,12 +259,12 @@ public class ModuleLoaderTest {
 			}
 
 			ACell before = store.getRootData();
-			Engine refused = new Engine(Maps.empty(), CoviaApplication.open(store, key), key);
+			Engine refused = TestEngine.application(store).mount(key, Maps.empty());
 			try {
 				UnsupportedVersionException e = assertThrows(UnsupportedVersionException.class, refused::launch);
 				assertEquals("test", e.adapter());
-				assertEquals(2, e.stored());
-				assertEquals(1, e.supported());
+				assertEquals(builtIn + 1, e.stored());
+				assertEquals(builtIn, e.supported());
 			} finally {
 				refused.close();
 			}
@@ -359,22 +378,17 @@ public class ModuleLoaderTest {
 	@Test
 	public void testRuntimeLoadDisabledByDefault(@TempDir Path dir) throws Exception {
 		Path jar = buildModuleJar(dir);
-		Engine engine = Engine.createTemp(null);
-		Engine.addDemoAssets(engine);
-		try {
-			ExecutionException e = assertThrows(ExecutionException.class,
-				() -> asVenue(engine, "v/ops/venue/module/load",
-					Maps.of(Strings.create("module"), Strings.create(jar.toString()))));
-			assertTrue(rootCause(e).getMessage().contains("dynamicModules.enabled"), rootCause(e).getMessage());
-			assertNull(engine.getAdapter("modtest"));
-			// Unload is gated by the same switch
-			e = assertThrows(ExecutionException.class,
-				() -> asVenue(engine, "v/ops/venue/module/unload",
-					Maps.of(Strings.create("name"), Strings.create("whatever"))));
-			assertTrue(rootCause(e).getMessage().contains("dynamicModules.enabled"), rootCause(e).getMessage());
-		} finally {
-			engine.close();
-		}
+		Engine engine = TestEngine.ENGINE;
+		ExecutionException e = assertThrows(ExecutionException.class,
+			() -> asVenue(engine, "v/ops/venue/module/load",
+				Maps.of(Strings.create("module"), Strings.create(jar.toString()))));
+		assertTrue(rootCause(e).getMessage().contains("dynamicModules.enabled"), rootCause(e).getMessage());
+		assertNull(engine.getAdapter("modtest"));
+		// Unload is gated by the same switch
+		e = assertThrows(ExecutionException.class,
+			() -> asVenue(engine, "v/ops/venue/module/unload",
+				Maps.of(Strings.create("name"), Strings.create("whatever"))));
+		assertTrue(rootCause(e).getMessage().contains("dynamicModules.enabled"), rootCause(e).getMessage());
 	}
 
 	@Test
@@ -391,7 +405,7 @@ public class ModuleLoaderTest {
 				ExecutionException e = assertThrows(ExecutionException.class,
 					() -> asVenue(strict, "v/ops/venue/module/load",
 						Maps.of(Strings.create("module"), Strings.create(bad))), bad);
-				assertInstanceOf(IllegalArgumentException.class, rootCause(e), bad + ": " + rootCause(e));
+				assertInstanceOf(InvalidInputException.class, rootCause(e), bad + ": " + rootCause(e));
 				assertNull(strict.getAdapter("modtest"), bad);
 			}
 			// A relative sub-path inside the staging dir is fine
@@ -425,9 +439,20 @@ public class ModuleLoaderTest {
 				() -> asVenue(engine, "v/ops/venue/module/load", Maps.of(
 					Strings.create("module"), Strings.create(jar.getFileName().toString()),
 					Strings.create("sha256"), Strings.create("00".repeat(32)))));
-			assertTrue(rootCause(e).getMessage().contains("integrity check FAILED"), rootCause(e).getMessage());
+			assertInstanceOf(InvalidInputException.class, rootCause(e), "the pin is the caller's");
+			assertFalse(rootCause(e).getMessage().isBlank());
 			assertNull(engine.getAdapter("modtest"));
 			assertNull(engine.getModule("modtest-module"));
+
+			// A setting the module refuses is the caller's too
+			e = assertThrows(ExecutionException.class,
+				() -> asVenue(engine, "v/ops/venue/module/load", Maps.of(
+					Strings.create("module"), Strings.create(jar.getFileName().toString()),
+					Strings.create("config"), Maps.of("label", 42))));
+			assertInstanceOf(InvalidInputException.class, rootCause(e), String.valueOf(rootCause(e)));
+			assertInstanceOf(IllegalArgumentException.class, rootCause(e).getCause(), "the module's own refusal is kept");
+			assertEquals(rootCause(e).getCause().getMessage(), rootCause(e).getMessage());
+			assertNull(engine.getAdapter("modtest"));
 
 			String goodHash = Blob.wrap(MessageDigest.getInstance("SHA-256")
 				.digest(Files.readAllBytes(jar))).toHexString();

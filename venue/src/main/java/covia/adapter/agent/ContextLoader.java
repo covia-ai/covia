@@ -1,6 +1,8 @@
 package covia.adapter.agent;
 
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.CompletableFuture;
 
 import convex.auth.ucan.Capability;
 import convex.core.data.ABlob;
@@ -13,11 +15,16 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
-import covia.adapter.AssetAdapter;
+import covia.adapter.AAdapter;
 import covia.adapter.CoviaAdapter;
-import covia.api.Abilities;
 import covia.api.Fields;
+import covia.exception.InvalidDefinitionException;
+import covia.exception.InvalidInputException;
+import covia.exception.NotFoundException;
+import covia.exception.UnavailableException;
 import covia.grid.Asset;
+import covia.grid.HexId;
+import covia.lattice.CapabilityChecker;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 
@@ -135,7 +142,7 @@ public class ContextLoader {
 			result = resolveMapEntry(map, ctx);
 		}
 		if (result != null || !includeAbsent || resolution != Resolution.ABSENT) return result;
-		return absent(entry);
+		return absent(entry, ctx);
 	}
 
 	private Resolved resolved(String label, String content, AMap<AString, ACell> provenance) {
@@ -149,11 +156,11 @@ public class ContextLoader {
 	}
 
 	/** Metadata-only value for an optional declaration whose source is absent. */
-	private Resolved absent(ACell entry) {
+	private Resolved absent(ACell entry, RequestContext ctx) {
 		String label = null;
 		AMap<AString, ACell> provenance = Maps.empty();
 		if (entry instanceof AString ref) {
-			boolean reference = isNamespacePath(ref.toString()) || isAssetReference(ref.toString());
+			boolean reference = isReference(engine, ctx, ref.toString());
 			label = reference ? deriveLabel(ref.toString()) : null;
 			provenance = reference ? Maps.of(K_REF, ref) : Maps.of(K_SOURCE, SOURCE_TEXT);
 		} else if (entry instanceof AMap<?, ?> raw) {
@@ -190,12 +197,12 @@ public class ContextLoader {
 	}
 
 	/**
-	 * Resolves a string context entry. Interprets as workspace path, asset
-	 * reference, or literal text based on prefix.
+	 * Resolves a string context entry: content, a lattice path, or literal
+	 * text ({@link #resolveReference}).
 	 */
 	Resolved resolveStringEntry(AString ref, RequestContext ctx) {
 		String str = ref.toString();
-		boolean reference = isNamespacePath(str) || isAssetReference(str);
+		boolean reference = isReference(engine, ctx, str);
 		String label = reference ? deriveLabel(str) : null;
 		AMap<AString, ACell> provenance = reference
 			? Maps.of(K_REF, ref) : Maps.of(K_SOURCE, SOURCE_TEXT);
@@ -231,33 +238,26 @@ public class ContextLoader {
 		AString ref = RT.ensureString(entry.get(K_REF));
 		if (ref != null) {
 			String content = resolveReference(ref, ctx);
-			if (content == null) throw new RuntimeException("not found: " + ref);
+			if (content == null) throw new NotFoundException("not found: " + ref, ref.toString());
 			return content;
 		}
 		AString op = RT.ensureString(entry.get(K_OP));
 		if (op != null) {
-			ACell result;
-			try {
-				result = engine.jobs().invokeInternal(op, entry.get(K_INPUT), ctx)
-					.get(10_000, java.util.concurrent.TimeUnit.MILLISECONDS);
-			} catch (Exception e) {
-				throw new RuntimeException("operation " + op + " failed: " + rootMessage(e), e);
-			}
+			ACell result = await(engine.jobs().invokeInternal(op, entry.get(K_INPUT), ctx), op);
 			AString s = RT.ensureString(result);
 			if (s == null) {
-				throw new RuntimeException("operation " + op + " returned "
+				throw new InvalidDefinitionException("operation " + op + " returned "
 					+ ((result == null) ? "nothing" : result.getClass().getSimpleName()) + ", not text");
 			}
 			return s.toString();
 		}
 		AString jobId = RT.ensureString(entry.get(K_JOB));
 		if (jobId != null) {
-			AMap<AString, ACell> jobData = engine.jobs().getJobData(
-				convex.core.data.Blob.fromHex(jobId.toString()), ctx);
-			if (jobData == null) throw new RuntimeException("job not found: " + jobId);
+			AMap<AString, ACell> jobData = namedJob(jobId, ctx);
+			if (jobData == null) throw new NotFoundException("job not found: " + jobId, jobId.toString());
 			ACell status = jobData.get(Fields.STATUS);
 			if (!Strings.create("COMPLETE").equals(status)) {
-				throw new RuntimeException("job " + jobId + " is not complete (" + status + ")");
+				throw new UnavailableException("job " + jobId + " is not complete (" + status + ")");
 			}
 			ACell output = jobData.get(Fields.OUTPUT);
 			AString path = RT.ensureString(entry.get(K_PATH));
@@ -268,10 +268,10 @@ public class ContextLoader {
 				}
 			}
 			AString s = RT.ensureString(output);
-			if (s == null) throw new RuntimeException("job " + jobId + " output is not text");
+			if (s == null) throw new InvalidDefinitionException("job " + jobId + " output is not text");
 			return s.toString();
 		}
-		throw new IllegalArgumentException("entry declares none of ref, text, op, job");
+		throw new InvalidInputException("entry declares none of ref, text, op, job");
 	}
 
 	Resolved resolveMapEntry(AMap<AString, ACell> map, RequestContext ctx) {
@@ -308,7 +308,7 @@ public class ContextLoader {
 			try {
 				String content = resolveReference(ref, ctx);
 				if (content == null) {
-					if (required) throw new RuntimeException("Required context entry not found: " + ref);
+					if (required) throw new NotFoundException("Required context entry not found: " + ref, ref.toString());
 					return null;                          // absent/empty → skip
 				}
 				return resolved(labelStr, content, provenance);
@@ -328,71 +328,61 @@ public class ContextLoader {
 		if (ref == null) return null;
 		String refStr = ref.toString();
 
-		// Workspace/namespace path
-		if (isNamespacePath(refStr)) {
-			return resolveWorkspacePath(refStr, ctx);
-		}
+		// Content: a hash, an asset path, a DID URL, a file, DLFS or a catalog path
+		if (isAssetReference(refStr)) return resolveAssetContent(ref, ctx);
 
-		// Try as a content/asset reference (hash, lattice path, file, DLFS, DID URL)
-		return resolveAssetContent(ref, ctx);
+		// A value in the lattice
+		if (isLatticePath(engine, ctx, refStr)) return resolveWorkspacePath(refStr, ctx);
+
+		return refStr;                                    // literal text
+	}
+
+	/** Whether a string is a reference rather than text: content ({@link #isAssetReference}) or a lattice path ({@link #isLatticePath}). */
+	public static boolean isReference(Engine engine, RequestContext ctx, String ref) {
+		return isAssetReference(ref) || isLatticePath(engine, ctx, ref);
 	}
 
 	/**
-	 * Returns true if the string starts with a known namespace prefix.
+	 * Whether a string is a path into the lattice rather than text: it holds a
+	 * {@code /} after an optional leading one, and names a place that could
+	 * hold data, as {@code covia:read} resolves it
+	 * ({@link CoviaAdapter#isLatticePath}). {@code "w/docs/rules"} is a path
+	 * even when nothing is there; {@code "Be brief"} and {@code "foo/bar"} are
+	 * text.
 	 */
-	public static boolean isNamespacePath(String ref) {
+	public static boolean isLatticePath(Engine engine, RequestContext ctx, String ref) {
 		if (ref == null) return false;
-		// A leading slash is optional sugar (mirrors Engine.resolvePath): "/w/x"
-		// resolves like "w/x". Normalise it before matching namespace prefixes —
-		// without this, a context entry like "/w/docs/rules" fell through to
-		// literal text instead of resolving the workspace path.
-		String s = ref.startsWith("/") ? ref.substring(1) : ref;
-		return s.startsWith("w/") || s.startsWith("g/") || s.startsWith("o/")
-			|| s.startsWith("j/") || s.startsWith("s/") || s.startsWith("h/")
-			|| s.startsWith("n/") || s.startsWith("t/") || s.startsWith("c/") || s.startsWith("x/");
+		if (CapabilityChecker.canonicalResource(ref, null).indexOf('/') < 0) return false;
+		return engine.getAdapter("covia") instanceof CoviaAdapter covia && covia.isLatticePath(ctx, Strings.create(ref));
 	}
 
 	/**
-	 * Returns true if the string looks like an asset reference rather than literal text.
+	 * Returns true if the string is a reference read as content rather than
+	 * as a lattice value.
 	 *
-	 * <p>References include hex hashes, /a/ and /o/ paths, DID URLs, file/DLFS
-	 * content references, lattice
-	 * namespace paths (w/, g/, j/, s/, h/, n/, t/, o/), and venue catalog
-	 * paths under /v/. Strings with spaces are treated as literal text.</p>
+	 * <p>These are hex hashes, asset paths ({@code a/}, {@code /a/}), DID
+	 * URLs, file and DLFS content references, and venue catalog paths
+	 * ({@code v/}), whose entries read as the assets they describe. Strings
+	 * with spaces are treated as literal text.</p>
 	 */
 	public static boolean isAssetReference(String ref) {
 		if (ref == null || ref.isEmpty() || ref.contains(" ")) return false;
-		if (ref.startsWith("/a/") || ref.startsWith("/o/")) return true;
-		if (ref.startsWith("did:")) return true;
-		if (ref.startsWith("file:/") || ref.startsWith("dlfs/") || ref.startsWith("dlfs://")) return true;
-		if (ref.length() == 64 && ref.matches("[0-9a-fA-F]+")) return true; // hex hash
-		// Lattice namespace paths — leading slash optional (mirrors resolvePath).
-		// a/ is the bare asset-ref form (matches AssetAdapter.parseAssetId).
-		String s = ref.startsWith("/") ? ref.substring(1) : ref;
-		if (s.startsWith("a/") || s.startsWith("w/") || s.startsWith("o/") || s.startsWith("g/")
-			|| s.startsWith("j/") || s.startsWith("s/") || s.startsWith("h/")
-			|| s.startsWith("n/") || s.startsWith("t/") || s.startsWith("c/") || s.startsWith("x/")
-			|| s.startsWith("v/")) return true;
-		return false;
+		String s = CapabilityChecker.canonicalResource(ref, null);
+		if (s.startsWith("did:") || s.startsWith("file:/") || s.startsWith("dlfs/")) return true;
+		if (s.length() == 64 && s.matches("[0-9a-fA-F]+")) return true; // hex hash
+		return s.startsWith("a/") || s.startsWith("v/");
 	}
 
 	/**
-	 * Reads a value from the user's lattice namespace using the internal
-	 * cursor-based path resolution (same as WorkspaceRoot.read).
+	 * Reads a value from the user's lattice namespace using the same path
+	 * resolution as {@code covia:read}.
 	 */
 	String resolveWorkspacePath(String path, RequestContext ctx) {
-		try {
-			requireReadAccess(Strings.create(path), ctx);
-			CoviaAdapter covia = (CoviaAdapter) engine.getAdapter("covia");
-			if (covia == null) return null;
-			ACell value = covia.readContextValue(ctx, Strings.create(path));
-			if (value == null) return null;              // path absent → caller skips
-			return renderValue(value);
-		} catch (RuntimeException e) {
-			throw e;                                      // genuine read error → caller makes it visible
-		} catch (Exception e) {
-			throw new RuntimeException(e);
-		}
+		CoviaAdapter covia = (CoviaAdapter) engine.getAdapter("covia");
+		if (covia == null) return null;
+		ACell value = covia.readContextValue(ctx, Strings.create(path));
+		if (value == null) return null;              // path absent → caller skips
+		return renderValue(value);
 	}
 
 	/**
@@ -445,25 +435,27 @@ public class ContextLoader {
 			}
 
 			return null;                                  // nothing usable → caller skips
-		} catch (RuntimeException e) {
-			throw e;                                      // genuine resolution error → caller makes it visible
-		} catch (Exception e) {
-			throw new RuntimeException(e);
+		} catch (IOException e) {
+			throw new UnavailableException("Could not read content of " + ref + ": " + e.getMessage(), e);
 		}
 	}
 
 	/**
 	 * Enforces the read represented by a dynamic context reference. Harness
 	 * tools do not pass through an adapter, so this is their equivalent
-	 * point-of-action gate.
+	 * point-of-action gate: a file or DLFS reference needs its provider's
+	 * {@code crud/read}, and anything else is read as {@link Engine#resolvePath}
+	 * reads it.
 	 */
 	void requireReadAccess(AString ref, RequestContext ctx) {
 		if (ref == null) return;
 		String value = ref.toString();
-		if (!isNamespacePath(value) && !isAssetReference(value)) return; // literal text
-		AString ability = (AssetAdapter.parseAssetId(ref) != null)
-			? Abilities.ASSET_READ : Capability.CRUD_READ;
-		engine.requireResourceAccess(ctx, ref, ability);
+		if (!isReference(engine, ctx, value)) return; // literal text
+		if (value.startsWith("file:/") || value.startsWith("dlfs/") || value.startsWith("dlfs://")) {
+			engine.requireResourceAccess(ctx, ref, Capability.CRUD_READ);
+		} else {
+			engine.requireReadable(ctx, ref);
+		}
 	}
 
 	/**
@@ -475,11 +467,11 @@ public class ContextLoader {
 		if (input != null) provenance = provenance.assoc(K_INPUT, input);
 		try {
 			Asset asset = engine.resolveAsset(op, ctx);
-			if (asset == null) throw new IllegalArgumentException(
-				"Cannot resolve context operation: " + op);
+			if (asset == null) throw new NotFoundException(
+				"Cannot resolve context operation: " + op, op.toString());
 			ACell readOnly = RT.getIn(asset.meta(), Fields.OPERATION, Fields.READ_ONLY);
 			if (CVMBool.FALSE.equals(readOnly)) {
-				throw new IllegalArgumentException(
+				throw new InvalidInputException(
 					"Context operation declares operation.readOnly=false: " + op);
 			}
 			if (readOnly == null) {
@@ -487,28 +479,32 @@ public class ContextLoader {
 				// Agent create/update surfaces the missing classification to the
 				// operator; inference context stays free of authoring diagnostics.
 			} else if (!(readOnly instanceof CVMBool)) {
-				throw new IllegalArgumentException(
+				throw new InvalidInputException(
 					"Context operation has non-boolean operation.readOnly: " + op);
 			}
-			// Context loading is framework infrastructure: entries are
-			// declared in the agent's config (visible to the caller before
-			// invocation) and run pre-transition under the caller's identity.
-			// invokeInternal is the framework dispatch path — no cap check
-			// applied. Caps stay on ctx for audit.
-			ACell result = engine.jobs().invokeInternal(asset.meta(), input, ctx.withOp(op))
-				.get(10_000, java.util.concurrent.TimeUnit.MILLISECONDS);
+			// The operation runs under ctx, with its adapter's own checks: the
+			// harness's context for what the config names, the agent's for what
+			// it or a caller added (UCAN.md §5.4).
+			ACell result = await(engine.jobs().invokeInternal(asset.meta(), input, ctx.withOp(op)), op);
 			if (result == null) {
-				if (required) throw new RuntimeException("Required context operation returned null: " + op);
+				if (required) throw new NotFoundException("Required context operation returned null: " + op, op.toString());
 				return null;                              // produced nothing → skip
 			}
 			return resolved(labelStr, renderValue(result), provenance);
 		} catch (RuntimeException e) {
 			if (required) throw e;
 			return failed(labelStr, rootMessage(e), provenance);   // errored → visible
-		} catch (Exception e) {
-			if (required) throw new RuntimeException("Context operation failed: " + op + " — " + e.getMessage(), e);
-			return failed(labelStr, rootMessage(e), provenance);   // errored → visible
 		}
+	}
+
+	private static ACell await(CompletableFuture<ACell> result, AString op) {
+		return AAdapter.await(result, 10_000, "Context operation " + op);
+	}
+
+	/** The record of the job a context entry names; null when no job has that id, as text that is no id never does. */
+	private AMap<AString, ACell> namedJob(AString jobId, RequestContext ctx) {
+		convex.core.data.Blob id = HexId.parse(jobId);
+		return (id == null) ? null : engine.jobs().getJobData(id, ctx);
 	}
 
 	/**
@@ -519,16 +515,15 @@ public class ContextLoader {
 		AMap<AString, ACell> provenance = Maps.of(K_JOB, jobId);
 		if (path != null) provenance = provenance.assoc(K_PATH, path);
 		try {
-			AMap<AString, ACell> jobData = engine.jobs().getJobData(
-				convex.core.data.Blob.fromHex(jobId.toString()), ctx);
+			AMap<AString, ACell> jobData = namedJob(jobId, ctx);
 			if (jobData == null) {
-				if (required) throw new RuntimeException("Required context job not found: " + jobId);
+				if (required) throw new NotFoundException("Required context job not found: " + jobId, jobId.toString());
 				return null;
 			}
 
 			ACell status = jobData.get(Fields.STATUS);
 			if (!Strings.create("COMPLETE").equals(status)) {
-				if (required) throw new RuntimeException("Required context job not complete: " + jobId + " status=" + status);
+				if (required) throw new UnavailableException("Required context job not complete: " + jobId + " status=" + status);
 				return null;
 			}
 
@@ -542,7 +537,7 @@ public class ContextLoader {
 			}
 
 			if (output == null) {
-				if (required) throw new RuntimeException("Required context job output is null: " + jobId);
+				if (required) throw new NotFoundException("Required context job output is null: " + jobId, jobId.toString());
 				return null;
 			}
 
@@ -565,7 +560,6 @@ public class ContextLoader {
 	 * Derives a label from a reference string.
 	 */
 	public static String deriveLabel(String ref) {
-		if (isNamespacePath(ref)) return ref;
 		if (ref.length() == 64 && ref.matches("[0-9a-fA-F]+")) return ref.substring(0, 12) + "...";
 		return ref;
 	}

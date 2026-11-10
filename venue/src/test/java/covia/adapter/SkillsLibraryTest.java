@@ -20,6 +20,7 @@ import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
+import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
 import covia.adapter.agent.ToolPalette;
 import covia.adapter.agent.Skills;
@@ -201,7 +202,7 @@ public class SkillsLibraryTest {
 		// see the whole venue library; specialists use stable single-skill paths
 		// so they do not pay for an irrelevant 22-line index on every inference.
 		for (String t : new String[] {"minimal", "skilled", "reader", "worker", "analyst",
-				"manager", "goaltree", "full"}) {
+				"manager", "goaltree", "full", "admin"}) {
 			ACell asset = engine.resolvePath(Strings.create("v/agents/templates/" + t), ctx);
 			ACell config = RT.getIn(asset, "agent", "config");
 			AVector<ACell> sets = RT.ensureVector(RT.getIn(config, "skillsets"));
@@ -230,7 +231,7 @@ public class SkillsLibraryTest {
 			"subgoal", "complete", "fail", "compact", "context_load",
 			"context_unload", "more_tools", "skill_load");
 		for (String template : new String[] {"minimal", "skilled", "reader", "worker",
-				"analyst", "manager", "goaltree", "full"}) {
+				"analyst", "manager", "goaltree", "full", "admin"}) {
 			ACell asset = engine.resolvePath(
 				Strings.create("v/agents/templates/" + template), ctx);
 			AVector<ACell> tools = RT.ensureVector(
@@ -242,6 +243,31 @@ public class SkillsLibraryTest {
 				if (harness.contains(op.toString())) continue;
 				assertNotNull(engine.resolveAsset(op, ctx),
 					template + " declares unresolvable tool: " + op);
+			}
+		}
+	}
+
+	@Test
+	public void testEveryTemplateSkillAndLoadResolves() {
+		for (String template : new String[] {"minimal", "skilled", "reader", "worker",
+				"analyst", "manager", "goaltree", "full", "admin"}) {
+			ACell config = RT.getIn(engine.resolvePath(
+				Strings.create("v/agents/templates/" + template), ctx), "agent", "config");
+			AVector<ACell> skills = RT.ensureVector(RT.getIn(config, "skills"));
+			if (skills != null) {
+				for (long i = 0; i < skills.count(); i++) {
+					AString ref = RT.ensureString(skills.get(i));
+					assertNotNull(covia.adapter.agent.Skills.resolveRef(engine, ctx, ref),
+						template + " names a skill that does not resolve: " + ref);
+				}
+			}
+			AMap<AString, ACell> loads = RT.ensureMap(RT.getIn(config, "loads"));
+			if (loads != null) {
+				for (long i = 0; i < loads.count(); i++) {
+					AString ref = loads.entryAt(i).getKey();
+					assertNotNull(covia.adapter.agent.Skills.resolveRef(engine, ctx, ref),
+						template + " pins a skill that does not resolve: " + ref);
+				}
 			}
 		}
 	}
@@ -294,7 +320,7 @@ public class SkillsLibraryTest {
 		}
 
 		String[] templates = {"minimal", "skilled", "reader", "worker",
-			"analyst", "manager", "goaltree", "full"};
+			"analyst", "manager", "goaltree", "full", "admin"};
 		for (String template : templates) {
 			ACell meta = convex.core.util.JSON.parse(
 				readResource("/agent-templates/" + template + ".json"));
@@ -413,10 +439,15 @@ public class SkillsLibraryTest {
 		ACell config = RT.getIn(skilledAsset, "agent", "config");
 		assertNotNull(config, "skilled template should materialise");
 		AVector<ACell> tools = RT.ensureVector(RT.getIn(config, "tools"));
-		assertEquals(3, tools.count(), "lean base: inspect + read + list");
+		assertEquals(4, tools.count(), "lean base: inspect + read + list + preferences");
 		assertTrue(tools.contains(Strings.create("v/ops/covia/inspect")));
+		assertTrue(tools.contains(Strings.create("v/ops/preferences")));
 		AVector<ACell> context = RT.ensureVector(RT.getIn(config, "context"));
-		assertEquals(1, context.count(), "default agent should pin one agent-local memory source");
+		assertEquals(2, context.count(), "default agent pins its own memory and the user's preferences");
+		ACell preferences = context.get(1);
+		assertEquals("x/preferences", RT.getIn(preferences, "ref").toString());
+		assertEquals(CVMBool.FALSE, RT.getIn(preferences, "trusted"), "preferences are data, not instruction");
+		assertEquals(CVMBool.TRUE, RT.getIn(preferences, "volatile"), "an edit shows before the next model call");
 		ACell memory = context.get(0);
 		assertEquals("v/ops/memory-recall", RT.getIn(memory, "op").toString());
 		assertEquals("n/memory", RT.getIn(memory, "input", "path").toString());

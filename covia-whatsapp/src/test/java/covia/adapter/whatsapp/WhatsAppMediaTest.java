@@ -43,8 +43,17 @@ class WhatsAppMediaTest {
 
 	static AMap<AString, ACell> agentSpec(ACell mediaOperation) {
 		AMap<AString, ACell> spec = Maps.of("user", OWNER, "token", "s/TOKEN", "appSecret", "s/SIGNING", "verifyToken", "s/VERIFY",
-			"businessAccountId", "123", "phoneNumberId", "456", "apiVersion", "v25.0", "agent", "media-agent", "open", CVMBool.TRUE);
+			"businessAccountId", "123", "phoneNumberId", "456", "apiVersion", "v25.0", "agent", "media-agent", "allow", Vectors.of(FROM));
 		return mediaOperation == null ? spec : spec.assoc(MessagingSettings.key("mediaOperation"), mediaOperation);
+	}
+
+	/** The owner's agent the binding serves: a real record, whose turns the fixture adapter then takes. */
+	static Agent agent(Fixture f) throws Exception {
+		run(f.engine, OWNER, "v/ops/agent/create", Maps.of(Fields.AGENT_ID, "media-agent",
+			Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/echo", "caps", "unrestricted")));
+		Agent agent = new Agent();
+		f.engine.registerAdapter(agent);
+		return agent;
 	}
 
 	static ACell payload(ACell message) {
@@ -59,7 +68,7 @@ class WhatsAppMediaTest {
 
 	@Test void aVoiceNoteReachesTheAgentAsAnAttachment_transcribedByTheMediaOperation() throws Exception {
 		try (Fixture f = new Fixture(agentSpec(Strings.create("v/ops/transcriber/run")))) {
-			Agent agent = new Agent(); f.engine.registerAdapter(agent);
+			Agent agent = agent(f);
 			Transcriber transcriber = new Transcriber(); f.engine.registerAdapter(transcriber);
 			f.api.media.put("90001", new Media(VOICE, "audio/ogg"));
 			assertEquals(200, f.webhook(payload(media("wamid.voice", "audio",
@@ -81,7 +90,8 @@ class WhatsAppMediaTest {
 				"the owner's whatsapp drive holds it");
 			AMap<AString, ACell> hookInput = transcriber.inputs.poll(1, TimeUnit.SECONDS);
 			assertEquals(ref, RT.getIn(hookInput, "ref").toString(), "the hook sees the stored reference");
-			assertEquals(FROM, RT.getIn(hookInput, "via", "from").toString());
+			assertEquals(FROM, RT.getIn(hookInput, "authentication", "authentication", "details", "sender", "id").toString(),
+				"the hook learns who sent it from the authentication record");
 
 			Sent lookup = f.api.gets.poll(1, TimeUnit.SECONDS);
 			Sent download = f.api.gets.poll(1, TimeUnit.SECONDS);
@@ -96,7 +106,7 @@ class WhatsAppMediaTest {
 
 	@Test void aCaptionedPhotoArrivesAsTextAndAnImageBlock() throws Exception {
 		try (Fixture f = new Fixture(agentSpec(null))) {
-			Agent agent = new Agent(); f.engine.registerAdapter(agent);
+			Agent agent = agent(f);
 			f.api.media.put("90002", new Media(PHOTO, "image/jpeg"));
 			f.webhook(payload(media("wamid.photo", "image", Maps.of("id", "90002", "mime_type", "image/jpeg", "caption", "What is this?"))));
 			AMap<AString, ACell> message = RT.ensureMap(agent.inputs.poll(8, TimeUnit.SECONDS).get(Fields.MESSAGE));
@@ -111,7 +121,7 @@ class WhatsAppMediaTest {
 
 	@Test void aDocumentKeepsASafeNameButNeverAPath() throws Exception {
 		try (Fixture f = new Fixture(agentSpec(null))) {
-			Agent agent = new Agent(); f.engine.registerAdapter(agent);
+			Agent agent = agent(f);
 			f.api.media.put("90003", new Media(PHOTO, "application/pdf"));
 			f.api.media.put("90004", new Media(PHOTO, "application/pdf"));
 			f.webhook(payload(media("wamid.doc1", "document", Maps.of("id", "90003", "mime_type", "application/pdf", "filename", "report.pdf"))));
@@ -125,7 +135,7 @@ class WhatsAppMediaTest {
 
 	@Test void blankSenderDescriptionsNeverRefuseTheBatch() throws Exception {
 		try (Fixture f = new Fixture(agentSpec(null))) {
-			Agent agent = new Agent(); f.engine.registerAdapter(agent);
+			Agent agent = agent(f);
 			f.api.media.put("90006", new Media(PHOTO, "application/pdf"));
 			assertEquals(200, f.webhook(payload(media("wamid.blank", "document",
 				Maps.of("id", "90006", "mime_type", "", "caption", " ", "filename", "")))).status());

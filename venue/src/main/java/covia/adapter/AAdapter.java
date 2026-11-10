@@ -2,7 +2,11 @@ package covia.adapter;
 
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -16,10 +20,15 @@ import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Hash;
 import convex.core.data.Index;
+import convex.core.data.Path;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import convex.lattice.cursor.AForkableCursor;
+import covia.api.Abilities;
 import covia.api.Fields;
+import covia.exception.CoviaException;
+import covia.exception.FaultException;
+import covia.exception.UnavailableException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.Engine;
@@ -43,19 +52,20 @@ public abstract class AAdapter {
 	}
 
 	/**
-	 * Additional write/delete policy for a path relative to this adapter's view.
+	 * Additional write/delete policy for a path relative to this adapter's view:
+	 * {@code path} is the stretch of the caller's path below the view root.
 	 * Ordinary CRUD capabilities are enforced by the router as well. Keep this
 	 * pure: it can run again during an atomic update. Writable views must commit
-	 * to their authoritative lattice state, not to a disposable snapshot.
-	 * Return null to allow, or a refusal reason that reaches the caller unchanged.
-	 * The adapter also owns value validation in its cursor write transformation.
+	 * to their authoritative lattice state, not to a disposable snapshot. Return
+	 * null to allow, or a refusal reason that reaches the caller unchanged. The
+	 * adapter also owns value validation in its cursor write transformation.
 	 */
-	public String latticeWriteDenial(RequestContext ctx, ACell[] path) {
+	public String latticeWriteDenial(RequestContext ctx, Path path) {
 		return LATTICE_READ_ONLY;
 	}
 
 	private static final Logger log=LoggerFactory.getLogger(AAdapter.class);
-	private static final int MAX_FAILURE_CHARS = 1024;
+	protected static final int MAX_FAILURE_CHARS = 1024;
 
 	/**
 	 * Virtual thread executor for IO-bound blocking operations.
@@ -177,40 +187,55 @@ public abstract class AAdapter {
 	public static final String NO_STATE_MIGRATION = "Adapter '%s' has no state migration from version %d";
 
 	/**
-	 * Version of the private state schema this adapter reads and writes at
-	 * {@code :adapters/<name>}. 0, the default, means the adapter does not
-	 * version its state. Raise it when the stored shape changes, and give the
-	 * step from the previous version in {@link #migrateState}. The venue records
-	 * the version each adapter's state has reached, so a step runs once per
-	 * venue. Stored state recorded at a version above this one is refused with a
-	 * {@link covia.venue.UnsupportedVersionException}.
+	 * The steps of the private state schema this adapter reads and writes at
+	 * {@code :adapters/<name>}, in order: step {@code i} takes state at version
+	 * {@code i} to version {@code i + 1}. None, the default, means the adapter
+	 * does not version its state. When the stored shape changes, add a step at
+	 * the end; a released step never changes. Each step is a
+	 * {@link covia.venue.migration.MigrationStep}, and cannot depend on this
+	 * adapter's configuration.
+	 *
+	 * <p>Steps run in order from the recorded version, enabled or disabled,
+	 * before {@link #configure}, install and any deletion hook. A built-in or
+	 * configured-module adapter migrates at launch, after the venue's own steps,
+	 * in the one transaction that opens the venue; an adapter registered later
+	 * migrates in its own transaction as it registers. The new version is
+	 * recorded with the steps. A venue holding no state for this adapter records
+	 * its version, lower or higher, without running them.</p>
 	 */
-	public long stateVersion() {
-		return 0;
+	public java.util.List<covia.venue.migration.MigrationStep> stateSteps() {
+		return java.util.List.of();
 	}
 
 	/**
-	 * Migrates this adapter's state from {@code version} to {@code version + 1}.
-	 * Steps run in order from the recorded version to {@link #stateVersion()},
-	 * enabled or disabled, before {@link #configure}, install and any deletion
-	 * hook. A built-in or configured-module adapter migrates at launch, after the
-	 * venue's own steps, in the one transaction that opens the venue; an adapter
-	 * registered later migrates in its own transaction as it registers. The new
-	 * version is recorded with the steps. A venue holding no state for this
-	 * adapter records its version, lower or higher, without calling it.
-	 *
-	 * <p>Must be a pure function of its arguments: no I/O, no engine calls, no
-	 * clock, no runtime changes, no configuration. The transaction may run it
-	 * again or discard its result. Return the same cell when nothing changes.
-	 * Throw for a shape it does not recognise: the state and its version then
-	 * stay as they were, and the start or registration fails.</p>
+	 * Version of this adapter's state schema: the number of
+	 * {@link #stateSteps()}. The venue records the version each adapter's state
+	 * has reached, so a step runs once per venue. Stored state recorded at a
+	 * version above this one is refused with a
+	 * {@link covia.venue.UnsupportedVersionException}. Overriding it, with
+	 * {@link #migrateState}, is the deprecated form of {@link #stateSteps()}.
+	 */
+	public long stateVersion() {
+		return stateSteps().size();
+	}
+
+	/**
+	 * Migrates this adapter's state from {@code version} to {@code version + 1}
+	 * by running that step of {@link #stateSteps()}.
 	 *
 	 * @param version the version {@code state} is at, below {@link #stateVersion()}
 	 * @param state this adapter's state at that version, never null
 	 * @return the state at {@code version + 1}
+	 * @deprecated Give the steps as {@link #stateSteps()}, and do not override
+	 *             {@link #stateVersion()}.
 	 */
+	@Deprecated(since = "0.11.0", forRemoval = true)
 	public ACell migrateState(long version, ACell state) {
-		throw new IllegalStateException(NO_STATE_MIGRATION.formatted(getName(), version));
+		java.util.List<covia.venue.migration.MigrationStep> steps = stateSteps();
+		if (version < 0 || version >= steps.size()) {
+			throw new IllegalStateException(NO_STATE_MIGRATION.formatted(getName(), version));
+		}
+		return steps.get((int) version).apply(state);
 	}
 
 	/**
@@ -265,8 +290,21 @@ public abstract class AAdapter {
 	}
 
 	/**
+	 * Remove what this adapter holds for an agent's own DID
+	 * ({@code <owner>:g:<id>}) when the agent is deleted, in the transaction
+	 * that runs it ({@link Engine#deleteAgentState}). The same rules as
+	 * {@link #deleteUserState}: only the supplied draft component, no I/O, and
+	 * idempotent, since every deletion of the agent calls it. State an adapter
+	 * keeps for the agent under its owner's DID goes with the owner instead.
+	 */
+	public void deleteAgentState(AString agentDID, AdapterState state) {
+		// Default for adapters with no agent-associated state.
+	}
+
+	/**
 	 * Stop user-owned workers and release external resources after deletion commits.
-	 * Must be idempotent; failures retain a durable retry marker and bar account
+	 * Must be idempotent, including when runs overlap, as a repeated deletion or
+	 * the adapter's replacement can make them; failures retain a durable retry marker and bar account
 	 * recreation. Previous user state is supplied on first deletion only, and is
 	 * null on recovery. Never use it to restore data. Called on disabled adapters
 	 * too; an instance that has never been installed has no runtime to clean up.
@@ -281,8 +319,9 @@ public abstract class AAdapter {
 	 *
 	 * <p>User-managed content does not belong here. Adapters should accept an
 	 * ordinary caller-authorised path for that data (with a sane {@code w/...}
-	 * default). Credentials remain in {@code s/}; this component stores secret
-	 * references only.</p>
+	 * default). Credentials a user supplies remain in {@code s/}, referred to
+	 * here as {@code s/NAME}; credentials the adapter obtains and rotates itself
+	 * belong here, sealed with {@link covia.venue.SecretStore#seal}.</p>
 	 */
 	protected final AdapterState adapterState() {
 		AdapterState state=adapterState;
@@ -324,8 +363,9 @@ public abstract class AAdapter {
 			// matching the Engine.materialiseVOps policy; strictAssets=false
 			// downgrades to a warning for test/debug scaffolding only.
 			if (engine == null || engine.config().isStrictAssets()) {
-				throw new IllegalStateException(
-					"Failed to install adapter asset from " + resourcePath + ": " + describeFailure(e), e);
+				// For the operator, who reads it where the venue's start fails
+				throw new IllegalStateException("Failed to install adapter asset from " + resourcePath + ": "
+					+ FaultException.describe(faultOwner(), e), e);
 			}
 			log.warn("Failed to install asset from {} (tolerated: strictAssets=false)", resourcePath, e);
 			return null;
@@ -789,39 +829,8 @@ public abstract class AAdapter {
         return scheme + "://" + authority + "/" + p;
     }
 
-    /** The baseline op-invocation ability — "the right to run an operation".
-     *  Required by adapters that do not act on a specific named lattice resource
-     *  (compute, LLM, external I/O, federation, scheduling, …). */
-    protected static final AString INVOKE = Strings.intern("invoke");
-
-    /**
-     * Asserts the baseline {@link #INVOKE} capability at the adapter's enforcement
-     * point. An invoke-class adapter calls this at the top of its dispatch — before
-     * any side effect — so the capability check happens where the op actually
-     * runs, with no central name-keyed mapping. A {@code null} grant scope
-     * (authenticated/internal) is unrestricted (no-op); a restricted scope
-     * (e.g. the public read-only profile, which withholds {@code invoke}) denies.
-     *
-     * <p>The checked resource is the caller-supplied operation reference from
-     * {@link RequestContext#getOp()} (e.g. {@code "v/ops/langchain/openai"}),
-     * so an {@code invoke} grant can be scoped to specific operations:
-     * {@code {"with": "v/ops/getmine", "can": "invoke"}} (#211). A wildcard
-     * grant — {@code {"can": "invoke"}} or {@code {"with": "", "can": "invoke"}}
-     * — covers every invoke, including metadata-direct and hash-form
-     * invocations where no reference path is available ({@code getOp() == null}
-     * → resource-less check, coverable only by the wildcard).</p>
-     */
-    protected void requireInvoke(RequestContext ctx) {
-        // The framework always supplies a context (at minimum ANONYMOUS); a null
-        // ctx only occurs in direct unit-test calls that bypass dispatch — treat
-        // as no enforcement context. Route through the single authority seam so an
-        // invoke grant may be satisfied by a config grant OR a presented proof
-        // (additive); fall back to the scope-only check when no engine is wired
-        // (adapters constructed directly in unit tests).
-        if (ctx == null) return;
-        if (engine != null) engine.requireAuthority(ctx, ctx.getOp(), INVOKE);
-        else ctx.requireCapability(ctx.getOp(), INVOKE);
-    }
+    /** Permission to look up and run an arbitrary operation reference. */
+    protected static final AString INVOKE = Abilities.INVOKE;
 
     /**
      * Extracts the full {@code adapter:operation} string from operation metadata.
@@ -895,12 +904,15 @@ public abstract class AAdapter {
 			try {
 				invocation = invokeFuture(ctx, meta, input);
 				if (invocation == null) invocation = CompletableFuture.completedFuture(null);
-			} catch (RuntimeException | Error e) {
-				try { settleJob(job, null, e); }
-				catch (RuntimeException | Error reporting) {
-					if (reporting != e) e.addSuppressed(reporting);
-				}
+			} catch (CancellationException e) {
+				job.cancel();
 				throw e;
+			} catch (RuntimeException | Error e) {
+				// The adapter's own failure, reported once by its Job; the caller
+				// that started the Job receives the same report
+				CoviaException reported = job.report(e);
+				job.fail(reported);
+				throw reported;
 			}
 			bridgeToJob(job, invocation);
 		});
@@ -954,8 +966,8 @@ public abstract class AAdapter {
 	 * owns and which is still in flight once the grace window has passed.
 	 * In-process execution is bounded and ends with the process; a wait on
 	 * something outside it is state, not a thread. The default pauses a Job
-	 * whose adapter registered a pause hook — its declaration that the work
-	 * can be suspended — and cancels any other {@code PENDING}/{@code STARTED}
+	 * this adapter can suspend ({@link #canPause}) and cancels any other
+	 * {@code PENDING}/{@code STARTED}
 	 * Job with {@link #VENUE_SHUT_DOWN}; the paused family is left as is.
 	 * Override to record a durable wait and let the thread go; whatever
 	 * remains non-terminal is handed to {@link #recoverJob} at the next boot.
@@ -989,33 +1001,140 @@ public abstract class AAdapter {
 	// ===== Shared future -> Job completion bridge =====
 
 	/**
-	 * Bridge a future to a Job's lifecycle: wire the standard cancel hook
-	 * ({@code future.cancel(true)}), then settle the job when the future
-	 * completes. The canonical one-shot completion path. Adapters that manage
-	 * their own cancellation (e.g. a remote cancel) set their own hook and call
-	 * {@link #completeFromJobFuture} instead.
+	 * Bridge a future to a Job's lifecycle: record it as the Job's running work
+	 * ({@link #runs}), so cancelling the Job cancels it, then settle the Job
+	 * when the future completes. The canonical one-shot completion path.
+	 * Adapters that manage their own cancellation (e.g. a remote cancel) stop
+	 * it in {@link #stop} and call {@link #completeFromJobFuture} instead.
 	 */
-	protected static void bridgeToJob(Job job, CompletableFuture<ACell> future) {
-		job.setCancelHook(() -> future.cancel(true));
+	protected void bridgeToJob(Job job, CompletableFuture<ACell> future) {
+		runs(job, future);
 		completeFromJobFuture(job, future);
 	}
 
+	// ===== Ending a job: its links and its running work =====
+
+	/** Work this adapter is running for its jobs, by job id: what {@link #stop} cancels. */
+	private final java.util.concurrent.ConcurrentHashMap<convex.core.data.Blob, java.util.concurrent.Future<?>> work =
+		new java.util.concurrent.ConcurrentHashMap<>();
+
 	/**
-	 * Settle a Job when {@code future} completes, without touching the cancel
-	 * hook. Use when the adapter has already wired a bespoke cancel hook.
+	 * Records {@code future} as the work this adapter is running for
+	 * {@code job}, until the job ends. Cancelling the job cancels it, with
+	 * interruption: pass a {@link java.util.concurrent.Future} from
+	 * {@code ExecutorService.submit} for work that must be interrupted, since a
+	 * {@link CompletableFuture} ignores it. A job that has already been
+	 * cancelled stops the work at once.
+	 */
+	protected final void runs(Job job, java.util.concurrent.Future<?> future) {
+		convex.core.data.Blob id = job.getID();
+		work.put(id, future);
+		if (job.isFinished()) {
+			stopWork(job);
+			return;
+		}
+		job.future().whenComplete((result, error) -> work.remove(id, future));
+	}
+
+	private void stopWork(Job job) {
+		java.util.concurrent.Future<?> future = work.remove(job.getID());
+		if (future != null) future.cancel(true);
+	}
+
+	/**
+	 * Ends what this adapter linked to {@code job}, in the transaction that
+	 * cancels it: a request it opened, a task it queued. The job's handle calls
+	 * it once, with the data this adapter keeps for the job
+	 * ({@link covia.venue.JobManager#adapterData}), or null when it keeps none.
+	 * It must be a pure edit of {@code draft}, since the transaction may be
+	 * retried; work to stop belongs in {@link #stop}. The default links nothing.
+	 *
+	 * @param draft The cancelling transaction's venue
+	 * @param job The job being cancelled
+	 * @param adapterData What this adapter keeps for the job, or null
+	 */
+	public void cancelIn(covia.venue.VenueState draft, Job job, AMap<AString, ACell> adapterData) {
+		// Nothing linked by default
+	}
+
+	/**
+	 * Stops {@code job}'s running work once its cancellation has committed.
+	 * The job's handle calls it once. The default cancels the work recorded by
+	 * {@link #runs}; an adapter with other running work stops that too and
+	 * calls this.
+	 *
+	 * @param job The cancelled job
+	 */
+	public void stop(Job job) {
+		stopWork(job);
+	}
+
+	// ===== Suspending a job's work =====
+
+	/**
+	 * Whether this adapter can suspend {@code job}'s work and restart it later.
+	 * Saying so makes the job pausable, and venue shutdown pauses it rather than
+	 * cancelling it. The default suspends nothing.
+	 *
+	 * @param job The job
+	 * @return true when {@link #pause} would suspend its work
+	 */
+	public boolean canPause(Job job) {
+		return false;
+	}
+
+	/**
+	 * Suspends {@code job}'s work, once its pause has committed. The job's handle
+	 * calls it once for each pause; a throw fails the job.
+	 *
+	 * @param job The paused job
+	 */
+	public void pause(Job job) {
+		// Nothing to suspend by default
+	}
+
+	/**
+	 * Whether this adapter can restart {@code job}'s suspended work through the
+	 * generic resume path. A job it cannot restart advances only by message
+	 * delivery. The default restarts nothing.
+	 *
+	 * @param job The job
+	 * @return true when {@link #resume} would restart its work
+	 */
+	public boolean canResume(Job job) {
+		return false;
+	}
+
+	/**
+	 * Restarts {@code job}'s suspended work, once its resume has committed. It
+	 * sees the job STARTED and may complete or suspend it again at once. The
+	 * job's handle calls it once for each resume; a throw fails the job.
+	 *
+	 * @param job The resumed job
+	 */
+	public void resume(Job job) {
+		// Nothing to restart by default
+	}
+
+	/**
+	 * Settle a Job when {@code future} completes, without recording it as the
+	 * Job's running work. Use when the adapter stops the work itself.
 	 */
 	protected static void completeFromJobFuture(Job job, CompletableFuture<ACell> future) {
 		future.whenComplete((result, error) -> {
 			try {
 				settleJob(job, result, error);
 			} catch (RuntimeException | Error failure) {
-				// A completion hook (e.g. output validation) can fail before it
-				// commits. Do not strand the Job on an ignored dependent future.
-				log.warn("Failed to settle job {}", job.getID(), failure);
-				job.fail(failure);
+				// Recording the outcome can fail before it commits. That is the
+				// venue's fault, not the adapter's; do not strand the Job on an
+				// ignored dependent future.
+				job.fail(FaultException.within(RECORDING_OUTCOME, FaultException.VENUE, failure));
 			}
 		});
 	}
+
+	/** What failed, when the venue cannot record an operation's outcome. */
+	public static final String RECORDING_OUTCOME = "Recording the operation's outcome";
 
 	/**
 	 * Map a completed {@code (result, error)} pair onto Job verbs — the single
@@ -1028,7 +1147,8 @@ public abstract class AAdapter {
 		} else if (unwrap(error) instanceof CancellationException) {
 			job.cancel();
 		} else {
-			job.fail(unwrap(error));
+			// A fault in the adapter is reported, and logged, by the Job (Job.report)
+			job.fail(error);
 		}
 	}
 
@@ -1044,42 +1164,90 @@ public abstract class AAdapter {
 	}
 
 	/**
-	 * Render a Throwable into a non-empty diagnostic string for {@link Job#fail}:
-	 * unwrap async wrappers, use the message when present, else fall back to the
-	 * exception's {@code toString()} so a failure never surfaces as a blank error.
+	 * Awaits an internal call's result for up to {@code timeoutMs}. A failure
+	 * the call states passes on as its own type; no answer in time is
+	 * {@link UnavailableException}; an interrupt cancels the wait. A checked
+	 * failure passes on wrapped, as the venue fault it is.
+	 *
+	 * @param what the call awaited, as named in the timeout's reason
 	 */
-	public static String describeFailure(Throwable t) {
+	public static <T> T await(CompletableFuture<T> result, long timeoutMs, String what) {
+		try {
+			return result.get(timeoutMs, TimeUnit.MILLISECONDS);
+		} catch (ExecutionException e) {
+			if (e.getCause() instanceof RuntimeException failure) throw failure;
+			throw new CompletionException(e.getCause());
+		} catch (TimeoutException e) {
+			throw new UnavailableException(what + " did not answer within " + timeoutMs + "ms", e);
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+			throw new CancellationException("Interrupted awaiting " + what);
+		}
+	}
+
+	/** Follows an unexpected class-loading failure's description: what the operator can do. */
+	public static final String CLASS_NOT_LOADED = " — a class could not be loaded; if a jar was rebuilt or "
+		+ "replaced while the venue was running, restart the venue";
+
+	/**
+	 * The cause of a failure as this adapter states it, after its own words for
+	 * what failed: a Covia exception's reason, or an unexpected exception in
+	 * this adapter by its type, never its text, logged here once
+	 * ({@link FaultException#cause}). To fail a Job, pass the failure to
+	 * {@link Job#fail(Throwable)}, which names the operation too.
+	 */
+	public String describeFailure(Throwable t) {
 		if (t == null) return "Operation failed without an error detail";
 		Throwable cause = unwrap(t);
-		String msg = cause.getMessage();
-		String text;
-		if (msg == null || msg.isBlank()) {
-			text = cause.getClass().getSimpleName() + " (no detail)";
-		} else if (isSelfDescribing(cause)) {
-			text = msg;
-		} else {
-			// A JVM error's or library exception's message alone can be opaque —
-			// NoClassDefFoundError's is just a class name — so name the type.
-			text = cause.getClass().getSimpleName() + ": " + msg;
-		}
-		if (cause instanceof LinkageError) {
-			text += " — a class could not be loaded; if a jar was rebuilt or replaced while the venue "
-				+ "was running, restart the venue";
-		}
+		String text = FaultException.cause(faultOwner(), cause);
+		if (cause instanceof LinkageError) text += CLASS_NOT_LOADED;
 		return conciseDetail(text, MAX_FAILURE_CHARS);
 	}
 
 	/**
-	 * Whether a throwable's message reads as a complete diagnostic on its own:
-	 * Covia's own exceptions and the standard argument/state/unsupported
-	 * families are written for humans; everything else is named by type too.
+	 * Whose code it is, as this adapter's fault reports name it
+	 * ({@link FaultException#ADAPTER}). A scope that logs a failure itself
+	 * describes it with {@code FaultException.describe(faultOwner(), e)}.
 	 */
-	public static boolean isSelfDescribing(Throwable t) {
-		return t instanceof covia.exception.CoviaException
-			|| t.getClass() == RuntimeException.class      // used as a plain message carrier throughout
-			|| t instanceof IllegalArgumentException
-			|| t instanceof IllegalStateException
-			|| t instanceof UnsupportedOperationException;
+	public String faultOwner() {
+		return FaultException.ADAPTER.formatted(getName());
+	}
+
+	/** A remote's code or request id fit to quote in a message: an identifier, never free text. */
+	private static final java.util.regex.Pattern IDENTIFIER = java.util.regex.Pattern.compile("[A-Za-z0-9._:-]{1,80}");
+
+	/**
+	 * A remote's error code or request id if it reads as an identifier, else
+	 * null (ERRORS.md).
+	 */
+	public static String identifier(String value) {
+		return (value != null && IDENTIFIER.matcher(value).matches()) ? value : null;
+	}
+
+	/**
+	 * A URL as a message may name it: its scheme, host and port, never the
+	 * userinfo, path or query, any of which may carry a credential
+	 * (ERRORS.md). Null when {@code url} names no host.
+	 */
+	public static String origin(String url) {
+		if (url == null) return null;
+		try {
+			java.net.URI uri = new java.net.URI(url.trim());
+			if (uri.getScheme() == null || uri.getHost() == null) return null;
+			String origin = uri.getScheme().toLowerCase(java.util.Locale.ROOT) + "://" + uri.getHost();
+			return (uri.getPort() >= 0) ? origin + ":" + uri.getPort() : origin;
+		} catch (java.net.URISyntaxException e) {
+			return null;
+		}
+	}
+
+	/**
+	 * Whether a failure is one its caller can cause or act on: a Covia
+	 * exception carrying its reason that is not a reported fault, looking
+	 * through async wrappers. A fault, or anything not yet reported, is not.
+	 */
+	public static boolean isExpectedFailure(Throwable t) {
+		return CoviaException.reasonOf(t) != null && !FaultException.isFault(t);
 	}
 
 	/**

@@ -14,19 +14,24 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReference;
 
 import org.junit.jupiter.api.Test;
 
 import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
+import convex.core.data.AString;
+import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.auth.VenueAuth;
+import covia.venue.api.ApiErrors;
+import covia.venue.server.SseServer;
+import io.javalin.http.HttpStatus;
 
 /**
  * #200 — the job SSE route must be reachable.
@@ -68,7 +73,10 @@ public class JobRoutesTest {
 			assertTrue(!handle.isFinished());
 			release.countDown();
 			assertEquals(Strings.create("simple request"), TestServer.COVIA.awaitJobResult(handle.getID()).get(5, TimeUnit.SECONDS));
-		} finally { release.countDown(); }
+		} finally {
+			release.countDown();
+			TestServer.ENGINE.removeAdapter("blocking-submission-test");
+		}
 	}
 
 	private final String base = TestServer.BASE_URL;
@@ -168,6 +176,46 @@ public class JobRoutesTest {
 		}
 	}
 
+	/**
+	 * A stream is read as its subscriber for its whole life, not only when it
+	 * opens. Once GET /jobs/{id} would refuse the caller — here the owner has
+	 * deleted the job while its handle runs on — the stream ends with a
+	 * not-found frame instead of carrying the detached job's updates. An
+	 * expired delegation ends a delegate's stream the same way.
+	 */
+	@Test
+	public void jobSseEndsWhenTheJobCanNoLongerBeRead() throws Exception {
+		VenueAuth auth = VenueAuth.keyPair(AKeyPair.generate());
+		RequestContext owner = RequestContext.of(Strings.create(auth.getDID()));
+		Job job = TestServer.ENGINE.jobs().invokeOperation("v/test/ops/never",
+			Maps.of(Fields.MESSAGE, "deleted-while-streaming"), owner);
+		String id = job.getID().toHexString();
+		try {
+			HttpResponse<InputStream> sse = http.send(HttpRequest.newBuilder()
+				.uri(new URI(base + "/api/v1/jobs/" + id + "/sse"))
+				.header("Accept", "text/event-stream")
+				.header("Authorization", "Bearer " + auth.mintToken(TestServer.ENGINE.getDIDString().toString()))
+				.GET().build(), HttpResponse.BodyHandlers.ofInputStream());
+			try (InputStream in = sse.body()) {
+				assertEquals(200, sse.statusCode());
+				assertTrue(!readUntil(in, "status").get(10, TimeUnit.SECONDS).isEmpty(),
+					"the stream opens with the job record");
+
+				assertTrue(TestServer.ENGINE.jobs().deleteJob(job.getID(), owner));
+				CompletableFuture<java.util.List<String>> after = readUntil(in, SseServer.JOB_NOT_FOUND);
+				job.cancel(); // the detached handle still publishes this update
+				java.util.List<String> frames = after.get(10, TimeUnit.SECONDS);
+				assertTrue(frames.stream().anyMatch(l -> l.contains(SseServer.JOB_NOT_FOUND)
+						&& l.contains("\"status\": 404")),
+					"the stream must end as GET would answer: " + frames);
+				assertTrue(frames.stream().noneMatch(l -> l.contains("CANCELLED")),
+					"a deleted job's update must not reach the stream: " + frames);
+			}
+		} finally {
+			job.cancel();
+		}
+	}
+
 	private static void assertCurrentStates(java.util.List<String> frames) {
 		for (String frame : frames) {
 			var record = RT.ensureMap(JSON.parse(frame.substring("data:".length()).strip()));
@@ -199,24 +247,15 @@ public class JobRoutesTest {
 		}
 	}
 
-	private void awaitHttpStatus(String id, String wanted) {
-		AtomicReference<String> lastBody = new AtomicReference<>();
-		TestEngine.awaitCondition(() -> {
-			try {
-				HttpResponse<String> status = http.send(
-					HttpRequest.newBuilder().uri(URI.create(base + "/api/v1/jobs/" + id)).GET().build(),
-					HttpResponse.BodyHandlers.ofString());
-				lastBody.set(status.body());
-				return status.statusCode() == 200 && status.body().contains(wanted);
-			} catch (IOException e) {
-				lastBody.set(e.toString());
-				return false;
-			} catch (InterruptedException e) {
-				Thread.currentThread().interrupt();
-				throw new AssertionError("interrupted while polling job " + id, e);
-			}
-		}, 5000, () -> "job " + id + " did not reach " + wanted
-			+ "; last response=" + lastBody.get());
+	/** Waits for the venue's Job to finish, then checks its status route reports the terminal {@code wanted}. */
+	private void awaitHttpStatus(String id, String wanted) throws Exception {
+		Job job = TestServer.ENGINE.jobs().getJob(Job.parseID(id));
+		if (job != null) TestEngine.awaitJob(job, Job::isFinished, 10_000, () -> "job " + id + " did not finish");
+		HttpResponse<String> status = http.send(
+			HttpRequest.newBuilder().uri(URI.create(base + "/api/v1/jobs/" + id)).GET().build(),
+			HttpResponse.BodyHandlers.ofString());
+		assertEquals(200, status.statusCode(), status.body());
+		assertTrue(status.body().contains(wanted), "job " + id + " did not reach " + wanted + ": " + status.body());
 	}
 
 	/**
@@ -228,12 +267,12 @@ public class JobRoutesTest {
 	@Test
 	public void jobSseAcceptsBearerAuthenticationAndUsesCallerOwnership() throws Exception {
 		AKeyPair keyPair = AKeyPair.generate();
-		VenueAuth auth = VenueAuth.keyPair(keyPair, TestServer.ENGINE.getDIDString().toString());
+		VenueAuth auth = VenueAuth.keyPair(keyPair);
 		RequestContext owner = RequestContext.of(Strings.create(auth.getDID()));
 		Job job = TestServer.ENGINE.jobs().invokeOperation("v/test/ops/never",
 			Maps.of(Fields.MESSAGE, "authenticated-sse"), owner);
 		String id = job.getID().toHexString();
-		String token = auth.mintToken();
+		String token = auth.mintToken(TestServer.ENGINE.getDIDString().toString());
 
 		try {
 			HttpResponse<String> anonymous = http.send(HttpRequest.newBuilder()
@@ -280,11 +319,8 @@ public class JobRoutesTest {
 		String id = invoke("v/test/ops/echo");
 		awaitHttpStatus(id, "COMPLETE");
 		var jobId = Job.parseID(id);
-		var user = TestServer.ENGINE.getVenueState().users().get(TestServer.ENGINE.getDIDString() + ":public");
-		var current = user.getJob(jobId);
-		var storage = user.cursor().path(covia.lattice.Namespace.J, jobId);
-		var legacy = current.assoc(Strings.intern("prev"), Maps.of(Fields.STATUS, "STARTED"));
-		storage.set(legacy);
+		var user = TestServer.ENGINE.getVenueState().users().user(TestServer.ENGINE.getDIDString() + ":public");
+		var current = user.jobs().getRecord(jobId);
 		HttpResponse<String> status = http.send(
 			HttpRequest.newBuilder().uri(URI.create(base + "/api/v1/jobs/" + id)).GET().build(),
 			HttpResponse.BodyHandlers.ofString());
@@ -304,7 +340,78 @@ public class JobRoutesTest {
 			assertTrue(frames.stream().anyMatch(l -> l.contains("COMPLETE")),
 				"terminal record must be delivered to a late subscriber: " + frames);
 		}
-		assertEquals(legacy, storage.get(), "REST and SSE reads must not rewrite an old record");
+		assertEquals(current, user.jobs().getRecord(jobId), "REST and SSE reads must not rewrite the record");
+	}
+
+	/** The REST error body (COG-21): RFC 9457 problem details whose {@code detail} is the reason. */
+	private static String errorOf(HttpResponse<String> r) {
+		assertTrue(r.headers().firstValue("Content-Type").orElse("").startsWith(ApiErrors.PROBLEM_JSON),
+			"error bodies are problem details: " + r.body());
+		ACell body = JSON.parse(r.body());
+		assertEquals(CVMLong.create(r.statusCode()), RT.getIn(body, "status"), r.body());
+		assertEquals(HttpStatus.forStatus(r.statusCode()).getMessage(), RT.getIn(body, "title").toString());
+		AString detail = RT.ensureString(RT.getIn(body, "detail"));
+		assertNotNull(detail, "error body carries its reason: " + r.body());
+		assertEquals(detail, RT.getIn(body, "error"), "error repeats detail");
+		return detail.toString();
+	}
+
+	private HttpResponse<String> send(HttpRequest.Builder request) throws Exception {
+		return http.send(request.build(), HttpResponse.BodyHandlers.ofString());
+	}
+
+	@Test
+	public void refusalsShareTheErrorBody() throws Exception {
+		String unknown = "00112233445566778899aabbccddeeff";
+		HttpResponse<String> cancel = send(HttpRequest.newBuilder()
+			.uri(new URI(base + "/api/v1/jobs/" + unknown + "/cancel"))
+			.PUT(HttpRequest.BodyPublishers.noBody()));
+		assertEquals(404, cancel.statusCode(), cancel.body());
+		assertTrue(errorOf(cancel).startsWith(JobManager.JOB_NOT_FOUND), cancel.body());
+
+		HttpResponse<String> message = send(HttpRequest.newBuilder()
+			.uri(new URI(base + "/api/v1/jobs/not-a-job-id"))
+			.header("Content-Type", "application/json")
+			.POST(HttpRequest.BodyPublishers.ofString("{\"content\":\"hi\"}")));
+		assertEquals(400, message.statusCode(), message.body());
+		errorOf(message);
+
+		// A refusal Javalin raises inside a handler gets the same body
+		HttpResponse<String> limit = send(HttpRequest.newBuilder()
+			.uri(new URI(base + "/api/v1/jobs?limit=-1")).GET());
+		assertEquals(400, limit.statusCode(), limit.body());
+		errorOf(limit);
+	}
+
+	@Test
+	public void nonArrayUcansIs400() throws Exception {
+		for (String route : new String[] {"invoke", "run"}) {
+			HttpResponse<String> r = send(HttpRequest.newBuilder()
+				.uri(new URI(base + "/api/v1/" + route))
+				.header("Content-Type", "application/json")
+				.POST(HttpRequest.BodyPublishers.ofString(
+					"{\"operation\":\"v/test/ops/echo\",\"input\":{},\"ucans\":\"not-an-array\"}")));
+			assertEquals(400, r.statusCode(), route + ": " + r.body());
+			assertEquals(covia.venue.server.AuthMiddleware.UCANS_NOT_ARRAY, errorOf(r), route);
+		}
+	}
+
+	@Test
+	public void cancelOfFinishedJobAnswersItsRecord() throws Exception {
+		String id = invoke("v/test/ops/echo");
+		awaitHttpStatus(id, "COMPLETE");
+		TestServer.ENGINE.jobs().evictActive(Blob.parse(id));
+		HttpResponse<String> cancel = send(HttpRequest.newBuilder()
+			.uri(new URI(base + "/api/v1/jobs/" + id + "/cancel"))
+			.PUT(HttpRequest.BodyPublishers.noBody()));
+		assertEquals(200, cancel.statusCode(), cancel.body());
+		assertEquals("COMPLETE", RT.ensureString(RT.getIn(JSON.parse(cancel.body()), "status")).toString());
+
+		HttpResponse<String> pause = send(HttpRequest.newBuilder()
+			.uri(new URI(base + "/api/v1/jobs/" + id + "/pause"))
+			.PUT(HttpRequest.BodyPublishers.noBody()));
+		assertEquals(409, pause.statusCode(), pause.body());
+		assertTrue(errorOf(pause).startsWith(JobManager.JOB_TERMINAL), pause.body());
 	}
 
 	/** An unparseable job id is a plain 400, before any stream is committed. */

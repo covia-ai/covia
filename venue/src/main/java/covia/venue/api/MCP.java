@@ -39,6 +39,7 @@ import convex.restapi.mcp.McpServer;
 import convex.restapi.mcp.McpSession;
 import convex.restapi.mcp.SseConnection;
 import covia.api.Fields;
+import covia.exception.FaultException;
 import covia.grid.Job;
 import covia.grid.Venue;
 import covia.venue.Engine;
@@ -69,8 +70,9 @@ import jakarta.servlet.http.HttpServletResponse;
  * <ul>
  *   <li>a ceiling, {@code mcp.toolCallTimeout} (ms, default an hour) for an
  *       authenticated caller and {@code mcp.anonymousToolCallTimeout} (default
- *       two minutes) for an anonymous one. Past it the call ends with the job's
- *       id, so the result can still be collected with {@code grid_job_result};
+ *       two minutes) for an anonymous one. Past it the call ends with the id of
+ *       a recorded job (the call's own, or a mirror of an unrecorded read-only
+ *       call), so the result can still be collected with {@code grid_job_result};
  *       the job itself runs on.</li>
  *   <li>at most {@code mcp.maxConcurrentToolCalls} (default 16) calls in
  *       progress per caller.</li>
@@ -145,6 +147,9 @@ public class MCP extends McpServer {
 
 	/** Wildcard token in {@code includeAdapters} meaning "expose all groups". */
 	private static final String INCLUDE_ALL = "*";
+
+	/** What failed, when the venue fails handling an MCP tool call: the tool's name follows. */
+	public static final String TOOL_CALL = "MCP tool call %s";
 
 	/**
 	 * Adapter-name groups (the path segment under {@code v/ops/}) eligible
@@ -648,8 +653,8 @@ public class MCP extends McpServer {
 
 				// Authentication selected the caller before dispatch. The `ucans`
 				// argument carries additive grants only.
-				AVector<ACell> ucans = RT.getIn(arguments, Fields.UCANS);
-				rctx = AuthMiddleware.withTransportGrants(rctx, ucans, engine().didVerifier());
+				AVector<ACell> ucans = AuthMiddleware.bodyUcans(arguments);
+				rctx = engine().withTransportGrants(rctx, ucans);
 				// `ucans` is transport authority, not operation input. Never let
 				// raw proof JWTs enter durable Job records, adapter logs, or agent
 				// timelines merely because MCP carries them inside tool arguments.
@@ -684,7 +689,11 @@ public class MCP extends McpServer {
 				return protocolError(-32602, "Unknown tool: " + toolName);
 			}
 		} catch (Exception e) {
-			return toolError(messageOf(e));
+			// A failure is reported where it happened; anything not yet reported
+			// is the venue's own in handling the tool call, logged here and named
+			// only by its type
+			return toolError(FaultException.within(
+				TOOL_CALL.formatted(RT.getIn(params, Fields.NAME)), FaultException.VENUE, e).getMessage());
 		}
 	}
 
@@ -699,7 +708,7 @@ public class MCP extends McpServer {
 		long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(limitMs);
 		while (!result.isDone()) {
 			long left = deadline - System.nanoTime();
-			if (left <= 0) return stillRunning(run, "it has not finished within " + limitMs / 1000 + "s");
+			if (left <= 0) return stillRunning(recordedJob(run), "it has not finished within " + limitMs / 1000 + "s");
 			try {
 				resultOrClose.get(Math.min(left, TimeUnit.MILLISECONDS.toNanos(keepAliveMs)), TimeUnit.NANOSECONDS);
 			} catch (TimeoutException e) {
@@ -708,7 +717,9 @@ public class MCP extends McpServer {
 			} catch (ExecutionException | java.util.concurrent.CancellationException e) {
 				// the result failed or was cancelled: reported below
 			}
-			if (!result.isDone()) return stillRunning(run, "the venue is shutting down");
+			// Nothing new is written while the venue closes: an unrecorded call leaves no job
+			if (!result.isDone()) return stillRunning((run.job() != null && run.job().isRecorded()) ? run.job() : null,
+				"the venue is shutting down");
 		}
 		try {
 			// Scalar (non-map) results render as an MCP text result in the
@@ -717,8 +728,10 @@ public class MCP extends McpServer {
 		} catch (java.util.concurrent.CancellationException e) {
 			return toolError("Cancelled");
 		} catch (java.util.concurrent.CompletionException e) {
-			Throwable cause = (e.getCause() != null) ? e.getCause() : e;
-			return toolError(cause.toString()); // as a failed get() has always said it
+			// The operation's outcome, which its job reported; a call refused
+			// before it had a job is the caller's to report
+			if (run.job() == null) throw e;
+			return toolError(run.job().report(e).getMessage());
 		}
 	}
 
@@ -727,9 +740,24 @@ public class MCP extends McpServer {
 		return (run.job() == null) ? null : Job.progressMessage(run.job().getData().get(Fields.PROGRESS));
 	}
 
+	/**
+	 * The recorded job a call that stopped waiting can be collected from: the
+	 * call's own, or a mirror of an unrecorded one ({@link JobManager#mirror});
+	 * null when there is none.
+	 */
+	private Job recordedJob(JobManager.Run run) {
+		if (run.job() == null) return null;
+		try {
+			return engine().jobs().mirror(run.job());
+		} catch (RuntimeException e) {
+			log.warn("No job recorded for a tool call still running: {}", e.toString());
+			return null;
+		}
+	}
+
 	/** A call that stopped waiting, with where its result will be. */
-	private static AMap<AString, ACell> stillRunning(JobManager.Run run, String why) {
-		String id = (run.job() == null) ? null : run.job().getID().toHexString();
+	private static AMap<AString, ACell> stillRunning(Job job, String why) {
+		String id = (job == null) ? null : job.getID().toHexString();
 		String message = "Still running: " + why + ". " + ((id == null)
 			? "It left no job to collect the result from."
 			: "Collect the result with grid_job_result {\"id\": \"" + id + "\"}, or see how it is going with grid_job_status.");
@@ -737,10 +765,6 @@ public class MCP extends McpServer {
 	}
 
 	/** An exception's message, never null: a bare toolError(null) tells the caller nothing. */
-	private static String messageOf(Throwable e) {
-		return (e.getMessage() != null) ? e.getMessage() : e.toString();
-	}
-
 	/**
 	 * A long tool call's response as an SSE stream, opened only when the call
 	 * outlasts one keep-alive interval, so a quick call is answered as before.

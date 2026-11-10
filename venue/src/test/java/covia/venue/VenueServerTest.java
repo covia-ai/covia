@@ -30,6 +30,7 @@ import org.junit.jupiter.api.TestInstance.Lifecycle;
 import org.junit.jupiter.api.io.TempDir;
 
 import convex.auth.ucan.UCAN;
+import convex.core.crypto.AKeyPair;
 import convex.core.crypto.Hashing;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -50,6 +51,7 @@ import covia.exception.ResponseException;
 import covia.grid.AContent;
 import covia.grid.Job;
 import covia.grid.Status;
+import covia.grid.auth.VenueAuth;
 import covia.grid.client.VenueHTTP;
 import covia.grid.impl.BlobContent;
 import covia.venue.server.SecurityHeaders;
@@ -119,7 +121,7 @@ public class VenueServerTest {
 				return CompletableFuture.completedFuture(input);
 			}
 		}
-		VenueServer server = VenueServer.launch(Maps.of(Config.PORT, 0,
+		VenueServer server = VenueServer.launch(Maps.of(Config.PORT, 0, Config.STORE, "memory",
 			Config.BIND_ADDRESS, "127.0.0.1"));
 		try {
 			Engine engine = server.getEngine();
@@ -148,8 +150,28 @@ public class VenueServerTest {
 	}
 
 	@Test
+	public void aVenueShuttingDownAnswers503() throws Exception {
+		VenueServer server = VenueServer.launch(Maps.of(Config.PORT, 0, Config.STORE, "memory",
+			Config.BIND_ADDRESS, "127.0.0.1"));
+		try {
+			// Admission closes first in a shutdown, while the listener may still answer.
+			server.getEngine().jobs().beginShutdown();
+			for (String route : new String[] { "invoke", "run" }) {
+				HttpRequest request = HttpRequest.newBuilder()
+					.uri(new URI("http://127.0.0.1:" + server.port() + "/api/v1/" + route))
+					.header("Content-Type", "application/json")
+					.POST(HttpRequest.BodyPublishers.ofString(
+						"{\"operation\":\"v/ops/covia/read\",\"input\":{\"path\":\"w/x\"}}"))
+					.timeout(Duration.ofSeconds(5)).build();
+				HttpResponse<String> resp = TestHTTP.CLIENT.send(request, HttpResponse.BodyHandlers.ofString());
+				assertEquals(503, resp.statusCode(), route + ": " + resp.body());
+			}
+		} finally { server.close(); }
+	}
+
+	@Test
 	public void closingAVenueClosesTheHostItOpened() throws Exception {
-		VenueServer server = VenueServer.launch(Maps.of(Config.PORT, 0,
+		VenueServer server = VenueServer.launch(Maps.of(Config.PORT, 0, Config.STORE, "memory",
 			Config.BIND_ADDRESS, "127.0.0.1",
 			Config.AUTH, Maps.of(Config.PUBLIC, Maps.of(Config.ENABLED, false))));
 		var host = server.getHost();
@@ -164,7 +186,7 @@ public class VenueServerTest {
 
 	@Test
 	public void adapterOperationDiscoveryRequiresAuthenticationOnPrivateVenues() throws Exception {
-		VenueServer server = VenueServer.launch(Maps.of(Config.PORT, 0,
+		VenueServer server = VenueServer.launch(Maps.of(Config.PORT, 0, Config.STORE, "memory",
 			Config.BIND_ADDRESS, "127.0.0.1",
 			Config.AUTH, Maps.of(Config.PUBLIC, Maps.of(Config.ENABLED, false))));
 		try {
@@ -180,7 +202,7 @@ public class VenueServerTest {
 	@Test
 	public void testOperatorRootPageRedirectKeepsBuiltInIndex() throws Exception {
 		VenueServer server = VenueServer.launch(Maps.of(
-			Config.PORT, CVMLong.create(0),
+			Config.PORT, CVMLong.create(0), Config.STORE, "memory",
 			Config.BIND_ADDRESS, Strings.create("127.0.0.1"),
 			Config.ROOT_PAGE, Maps.of(
 				Config.REDIRECT, Strings.create("https://operator.example/"))));
@@ -210,7 +232,7 @@ public class VenueServerTest {
 		Path page = tempDir.resolve("operator-index.html");
 		Files.writeString(page, "<!doctype html><title>Operator</title><h1>Mine</h1>");
 		VenueServer server = VenueServer.launch(Maps.of(
-			Config.PORT, CVMLong.create(0),
+			Config.PORT, CVMLong.create(0), Config.STORE, "memory",
 			Config.BIND_ADDRESS, Strings.create("127.0.0.1"),
 			Config.ROOT_PAGE, Maps.of(
 				Config.FILE, Strings.create(page.toString()))));
@@ -229,21 +251,14 @@ public class VenueServerTest {
 		}
 	}
 
-	private void awaitClientStatus(Job job, AString expected, long timeoutMs) {
-		TestEngine.awaitCondition(() -> {
-			try {
-				covia.updateJobStatus(job);
-				return expected.equals(job.getStatus());
-			} catch (InterruptedException e) {
-				Thread.currentThread().interrupt();
-				throw new AssertionError("interrupted while polling remote job", e);
-			} catch (ExecutionException | TimeoutException e) {
-				return false;
-			} catch (RuntimeException e) {
-				return false;
-			}
-		}, timeoutMs, () -> "remote job did not reach " + expected
-			+ " (status=" + job.getStatus() + ")");
+	/** Waits for the venue's Job to reach {@code expected}, then has the client read it. */
+	private void awaitClientStatus(Job job, AString expected) throws Exception {
+		Job served = venue.jobs().getJob(job.getID());
+		assertNotNull(served, "the venue holds the started Job");
+		TestEngine.awaitJob(served, j -> expected.equals(j.getStatus()), 10_000,
+			() -> "venue job did not reach " + expected);
+		covia.updateJobStatus(job);
+		assertEquals(expected, job.getStatus());
 	}
 
 	@Test
@@ -251,7 +266,7 @@ public class VenueServerTest {
 		String clientId = "oauth-client-id-marker";
 		String clientSecret = "oauth-client-secret-marker";
 		VenueServer server = VenueServer.launch(Maps.of(
-			Config.PORT, 0,
+			Config.PORT, 0, Config.STORE, "memory",
 			Config.BIND_ADDRESS, "127.0.0.1",
 			Config.NAME, "redaction-test-venue",
 			Config.AUTH, Maps.of(
@@ -316,7 +331,7 @@ public class VenueServerTest {
 	 */
 	@Test public void testLoopbackVenueAnswersPnaPreflight() throws Exception {
 		VenueServer server = VenueServer.launch(Maps.of(
-			Config.PORT, CVMLong.create(0),
+			Config.PORT, CVMLong.create(0), Config.STORE, "memory",
 			Config.BIND_ADDRESS, Strings.create("127.0.0.1")));
 		try {
 			HttpResponse<String> preflight = corsPreflight(server, "https://demo.example");
@@ -331,7 +346,7 @@ public class VenueServerTest {
 
 	@Test public void testCorsOriginListAndPreflight() throws Exception {
 		VenueServer server = VenueServer.launch(Maps.of(
-			Config.PORT, CVMLong.create(0),
+			Config.PORT, CVMLong.create(0), Config.STORE, "memory",
 			Config.CORS_ORIGINS, Vectors.of(
 				Strings.create("https://app.example"),
 				Strings.create("https://admin.example"))));
@@ -346,7 +361,8 @@ public class VenueServerTest {
 			for (String origin : new String[] {"https://evil.example", "null"}) {
 				HttpResponse<String> denied = corsGet(server, origin);
 				assertEquals(403, denied.statusCode(), origin);
-				assertEquals("CORS origin denied", denied.body());
+				assertEquals(VenueServer.CORS_ORIGIN_DENIED,
+					RT.ensureString(RT.getIn(JSON.parse(denied.body()), "detail")).toString());
 				assertTrue(denied.headers().firstValue("access-control-allow-origin").isEmpty());
 			}
 
@@ -370,7 +386,7 @@ public class VenueServerTest {
 
 	@Test public void testCorsLoopbackIsLiteralAndAllowsAnyPort() throws Exception {
 		VenueServer server = VenueServer.launch(Maps.of(
-			Config.PORT, CVMLong.create(0),
+			Config.PORT, CVMLong.create(0), Config.STORE, "memory",
 			Config.CORS_ORIGINS, Strings.create("loopback")));
 		try {
 			for (String origin : new String[] {
@@ -415,7 +431,7 @@ public class VenueServerTest {
 			});
 		};
 		VenueServer server = VenueServer.launch(
-			Maps.of(Config.PORT, CVMLong.create(0), Config.AUTH, login), List.of(embedder));
+			Maps.of(Config.PORT, CVMLong.create(0), Config.STORE, "memory", Config.AUTH, login), List.of(embedder));
 		try {
 			// The venue's sign-in page carries the defaults.
 			HttpResponse<String> page = plainGet(server, "/login");
@@ -457,7 +473,7 @@ public class VenueServerTest {
 		}
 
 		VenueServer off = VenueServer.launch(Maps.of(
-			Config.PORT, CVMLong.create(0),
+			Config.PORT, CVMLong.create(0), Config.STORE, "memory",
 			Config.AUTH, login,
 			Config.SECURITY_HEADERS, CVMBool.FALSE));
 		try {
@@ -479,7 +495,7 @@ public class VenueServerTest {
 
 	@Test public void testCorsCanBeDisabledEntirely() throws Exception {
 		VenueServer server = VenueServer.launch(Maps.of(
-			Config.PORT, CVMLong.create(0),
+			Config.PORT, CVMLong.create(0), Config.STORE, "memory",
 			Config.CORS_ORIGINS, CVMBool.FALSE));
 		try {
 			HttpResponse<String> response = corsGet(server, "https://app.example");
@@ -676,9 +692,9 @@ public class VenueServerTest {
 		
 		// Start the operation via the client. Should start but not complete.
 		// The 201 record is whatever had committed when it was serialised, so
-		// the run is observed by polling rather than off that first snapshot.
+		// the run is observed on the venue's Job rather than off that first snapshot.
 		Job job = covia.startJob(TestOps.NEVER, input);
-		awaitClientStatus(job, Status.STARTED, 5000);
+		awaitClientStatus(job, Status.STARTED);
 		assertFalse(job.isFinished());
 	}
 	
@@ -693,7 +709,7 @@ public class VenueServerTest {
 		Job job=covia.startJob(TestOps.NEVER, input);
 
 		// Step 2: Read the durable status without relying on timing.
-		awaitClientStatus(job, Status.STARTED, 5000);
+		awaitClientStatus(job, Status.STARTED);
 
 		Blob jobId = job.getID();
 		assertNotNull(jobId, "Job ID should be returned");
@@ -728,7 +744,7 @@ public class VenueServerTest {
 	public void testPauseAndResumeNeverOp() throws Exception {
 		// Start a never-completing job
 		Job job = covia.startJob(TestOps.NEVER, Maps.of(Fields.MESSAGE, "pause test"));
-		awaitClientStatus(job, Status.STARTED, 5000);
+		awaitClientStatus(job, Status.STARTED);
 		String jobId = job.getID().toHexString();
 
 		// Pause the running job via API
@@ -753,7 +769,7 @@ public class VenueServerTest {
 	public void testPauseOpResumeViaAPI() throws Exception {
 		// Start the auto-pausing operation
 		Job job = covia.startJob(TestOps.PAUSE, Maps.of(Fields.MESSAGE, "pause op test"));
-		awaitClientStatus(job, Status.PAUSED, 5000);
+		awaitClientStatus(job, Status.PAUSED);
 		assertEquals(Status.PAUSED, job.getStatus(), "Pause op should auto-pause");
 		String jobId = job.getID().toHexString();
 
@@ -806,8 +822,7 @@ public class VenueServerTest {
 		AContent retrievedContent = getContentFuture.get(5, TimeUnit.SECONDS);
 		
 		assertNotNull(retrievedContent, "Retrieved content should not be null");
-		assertTrue(retrievedContent instanceof BlobContent, "Retrieved content should be BlobContent");
-		
+
 		// Verify the content matches
 		convex.core.data.ABlob retrievedBlob = retrievedContent.getBlob();
 		assertNotNull(retrievedBlob, "Retrieved blob should not be null");
@@ -929,7 +944,7 @@ public class VenueServerTest {
 		org.junit.jupiter.api.Assumptions.assumeTrue(ipv6LoopbackAvailable(),
 			"no IPv6 loopback on this machine");
 		VenueServer server = VenueServer.launch(Maps.of(
-			Strings.create("port"), CVMLong.create(0),
+			Strings.create("port"), CVMLong.create(0), Config.STORE, "memory",
 			Strings.create("bindAddress"), Strings.create("127.0.0.1")));
 		try {
 			int port = server.port();
@@ -1010,6 +1025,37 @@ public class VenueServerTest {
 		ACell body = JSON.parse(resp.body());
 		assertNotNull(RT.getIn(body, "asset"),
 			"operations/{name} must return the resolved asset id for a slashed catalog name");
+	}
+
+	/**
+	 * An encoded name is any lattice path, so operations/{name} resolves it as
+	 * the caller, exactly like assets/{ref}: the caller's own o/ entry is found,
+	 * and another user's private entry is a denial rather than a server error.
+	 */
+	@Test
+	public void testOperationNameResolvesAsCaller() throws Exception {
+		VenueAuth alice = VenueAuth.keyPair(AKeyPair.generate());
+		AString aliceDID = Strings.create(alice.getDID());
+		venue.jobs().invokeOperation("v/ops/covia/write", Maps.of(Fields.PATH, "o/private-op",
+			Fields.VALUE, Maps.of("name", "Private op", "operation", Maps.of("adapter", "test:echo"))),
+			RequestContext.of(aliceDID)).awaitResult(5000);
+		VenueAuth bob = VenueAuth.keyPair(AKeyPair.generate());
+
+		HttpResponse<String> own = getOperation("o/private-op", alice);
+		assertEquals(200, own.statusCode(), own.body());
+		assertNotNull(RT.getIn(JSON.parse(own.body()), "asset"), own.body());
+
+		HttpResponse<String> foreign = getOperation(aliceDID + "/o/private-op", bob);
+		assertEquals(403, foreign.statusCode(), foreign.body());
+		assertFalse(foreign.body().contains("test:echo"), foreign.body());
+	}
+
+	private HttpResponse<String> getOperation(String name, VenueAuth auth) throws Exception {
+		String encoded = java.net.URLEncoder.encode(name, java.nio.charset.StandardCharsets.UTF_8);
+		return TestHTTP.CLIENT.send(HttpRequest.newBuilder()
+			.uri(new URI(BASE_URL + "/api/v1/operations/" + encoded))
+			.header("Authorization", "Bearer " + auth.mintToken(venue.getDIDString().toString()))
+			.GET().timeout(Duration.ofSeconds(10)).build(), HttpResponse.BodyHandlers.ofString());
 	}
 
 	/**

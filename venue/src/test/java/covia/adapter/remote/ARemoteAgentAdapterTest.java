@@ -4,20 +4,21 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import convex.core.data.*;
 import covia.api.Fields;
+import covia.exception.NotSupportedException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
+import covia.venue.TestEngine;
 
 class ARemoteAgentAdapterTest {
-	private final Engine engine = Engine.createTemp(null);
+	private static final Engine engine = TestEngine.ENGINE;
 	private final Probe adapter = new Probe();
-	ARemoteAgentAdapterTest() { engine.registerAdapter(adapter); }
-	@AfterEach void close() { engine.close(); }
+	/** Bound to the shared venue, not registered on it: each test calls its own adapter directly. */
+	ARemoteAgentAdapterTest() { adapter.install(engine); }
 
 	static class Interaction implements RemoteInteraction {
 		final AtomicInteger cancelled = new AtomicInteger();
@@ -28,18 +29,25 @@ class ARemoteAgentAdapterTest {
 	static class Probe extends ARemoteAgentAdapter<Interaction> {
 		final AtomicInteger starts = new AtomicInteger();
 		final AtomicInteger ordinary = new AtomicInteger();
+		boolean requiresRead;
 		@Override public String getName() { return "remoteprobe"; }
 		@Override public String getDescription() { return "Test interaction lifecycle"; }
 		@Override protected boolean isInteractionOperation(String operation) { return !"admin".equals(operation); }
 		@Override protected boolean returnsFirstReply(String operation) { return "session".equals(operation); }
 		@Override protected void startInteraction(Job job, RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
+			if (requiresRead) engine.requireAuthority(ctx, Strings.create("w/backend"), convex.auth.ucan.Capability.CRUD_READ);
 			starts.incrementAndGet(); bindInteraction(job, new Interaction());
 		}
 		@Override public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
 			ordinary.incrementAndGet(); return CompletableFuture.completedFuture(Strings.create("admin"));
 		}
 	}
-	private static Job job() { return Job.create(Maps.of(Fields.ID, Blob.fromHex("00112233445566778899aabbccddeeff"), Fields.STATUS, Status.PENDING)); }
+	/** A job whose cancellation stops its adapter's work, as a venue job's does. */
+	private Job job() {
+		return new Job(Maps.of(Fields.ID, Blob.fromHex("00112233445566778899aabbccddeeff"), Fields.STATUS, Status.PENDING)) {
+			@Override protected void onCancelled() { adapter.stop(this); }
+		};
+	}
 	private static AMap<AString, ACell> meta(String operation) { return Maps.of(Fields.OPERATION, Maps.of(Fields.ADAPTER, "remoteprobe:" + operation)); }
 
 	@Test void startsOnceAndReleasesTerminalBindings() {
@@ -56,7 +64,7 @@ class ARemoteAgentAdapterTest {
 		assertNull(adapter.interaction(job));
 		ARemoteAgentAdapter.publishProgress(job, "late", Maps.of("late", true));
 		assertNull(job.getData().get(ARemoteAgentAdapter.PROGRESS));
-		assertThrows(IllegalStateException.class, () -> adapter.handleMessage(job, record));
+		assertThrows(NotSupportedException.class, () -> adapter.handleMessage(job, record));
 	}
 
 	@Test void cancellationBeforeAndAfterAcceptance() {
@@ -94,13 +102,14 @@ class ARemoteAgentAdapterTest {
 	@Test void refusesMissingBindingsAndPreservesAdministrativeDispatch() {
 		Job job = job();
 		assertEquals(ARemoteAgentAdapter.NO_INTERACTION,
-			assertThrows(IllegalStateException.class, () -> adapter.handleMessage(job, Maps.empty())).getMessage());
+			assertThrows(NotSupportedException.class, () -> adapter.handleMessage(job, Maps.empty())).getMessage());
 		adapter.invoke(job, engine.venueContext(), meta("admin"), null);
 		assertEquals(Strings.create("admin"), job.future().join());
 		assertEquals(1, adapter.ordinary.get()); assertEquals(0, adapter.starts.get());
 	}
 
-	@Test void deniedAuthorityCannotStartExternalWork() {
+	@Test void deniedResourceAuthorityCannotStartExternalWork() {
+		adapter.requiresRead = true;
 		Job job = job();
 		assertThrows(RuntimeException.class, () -> adapter.invoke(job, engine.venueContext().withCaps(Vectors.empty()), meta("task"), null));
 		assertEquals(Status.FAILED, job.getStatus()); assertEquals(0, adapter.starts.get());

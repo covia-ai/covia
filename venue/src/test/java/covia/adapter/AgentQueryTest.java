@@ -7,9 +7,11 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 
-import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestInfo;
 
 import convex.auth.ucan.Capability;
 import convex.core.data.ACell;
@@ -25,25 +27,34 @@ import convex.core.lang.RT;
 import covia.adapter.agent.GoalTreeContext;
 import covia.api.Fields;
 import covia.exception.JobFailedException;
+import covia.exception.UnavailableException;
 import covia.grid.Job;
 import covia.grid.Principals;
 import covia.grid.Status;
-import covia.venue.AgentState;
-import covia.venue.SessionState;
+import covia.venue.Agent;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
+import covia.venue.Session;
+import covia.venue.TestEngine;
 
-/** Queries and cached summaries use real dispatch and LLM runtimes, with a deterministic provider. */
+/**
+ * Queries and cached summaries use real dispatch and LLM runtimes, with a
+ * deterministic provider. One venue for the class, since each test registers a
+ * provider of its own, under its own name.
+ */
 public class AgentQueryTest {
 
 	private static final AString AGENT = Strings.create("queried");
 	private static final String FAILURE = "injected query failure";
 	private static final Blob SUMMARY_SESSION = Blob.fromHex("1234abcd");
+	private static final java.util.concurrent.atomic.AtomicInteger MODELS = new java.util.concurrent.atomic.AtomicInteger();
+	private static Engine venue;
 	private Engine engine;
 	private RequestContext owner;
 	private QueryModel model;
 
 	private static class QueryModel extends AAdapter {
+		private final String name;
 		volatile RequestContext seenContext;
 		volatile ACell seenInput;
 		final CountDownLatch entered = new CountDownLatch(1);
@@ -51,15 +62,16 @@ public class AgentQueryTest {
 		Function<ACell, CompletableFuture<ACell>> reply = input ->
 			CompletableFuture.completedFuture(Maps.of("role", "assistant", "content", "answer"));
 
-		@Override public String getName() { return "query-test"; }
+		QueryModel(String name) { this.name = name; }
+
+		@Override public String getName() { return name; }
 		@Override public String getDescription() { return "Query test provider"; }
 		@Override protected void installAssets() {
-			installAsset("query-test/model", Maps.of(Fields.NAME, "Query test model",
-				Fields.OPERATION, Maps.of(Fields.ADAPTER, "query-test:model")));
+			installAsset(name + "/model", Maps.of(Fields.NAME, "Query test model",
+				Fields.OPERATION, Maps.of(Fields.ADAPTER, name + ":model")));
 		}
 		@Override public CompletableFuture<ACell> invokeFuture(RequestContext ctx,
 				AMap<AString, ACell> meta, ACell input) {
-			requireInvoke(ctx);
 			seenContext = ctx;
 			seenInput = input;
 			invocations.incrementAndGet();
@@ -69,26 +81,34 @@ public class AgentQueryTest {
 		}
 	}
 
+	@BeforeAll
+	public static void start() {
+		venue = Engine.createTemp(Maps.empty());
+		Engine.addDemoAssets(venue);
+	}
+
+	@AfterAll
+	public static void stop() { venue.close(); }
+
 	@BeforeEach
-	public void setup() {
-		engine = Engine.createTemp(Maps.empty());
-		Engine.addDemoAssets(engine);
-		owner = engine.venueContext();
-		model = new QueryModel();
+	public void setup(TestInfo info) {
+		engine = venue;
+		owner = RequestContext.of(TestEngine.uniqueDID(info));
+		engine.getVenueState().users().ensure(owner.getUserDID());
+		model = new QueryModel("query-test-" + MODELS.incrementAndGet());
 		engine.registerAdapter(model);
 	}
 
-	@AfterEach
-	public void close() { engine.close(); }
+	private String modelOperation() { return "v/ops/" + model.getName() + "/model"; }
 
-	private AgentState create(String runtime, AMap<AString, ACell> extra) {
+	private Agent create(String runtime, AMap<AString, ACell> extra) {
 		AMap<AString, ACell> config = Maps.of(
 			Fields.OPERATION, "v/ops/" + runtime + "/chat",
-			"llmOperation", "v/ops/query-test/model", "systemPrompt", "query persona");
+			"llmOperation", modelOperation(), "systemPrompt", "query persona");
 		for (var e : extra.entrySet()) config = config.assoc(e.getKey(), e.getValue());
 		engine.jobs().invokeOperation("v/ops/agent/create",
-			Maps.of(Fields.AGENT_ID, AGENT, Fields.CONFIG, config), owner).awaitResult(5000);
-		return engine.getVenueState().users().get(owner.getUserDID()).agent(AGENT);
+			Maps.of(Fields.AGENT_ID, AGENT, Fields.CONFIG, TestEngine.unrestricted(config)), owner).awaitResult(5000);
+		return engine.getVenueState().users().user(owner.getUserDID()).agent(AGENT);
 	}
 
 	private Job query(Object message) {
@@ -102,14 +122,14 @@ public class AgentQueryTest {
 			.awaitResult(10000));
 	}
 
-	private AgentState createSummarisable(String runtime) {
-		AgentState agent = create(runtime, Maps.empty());
+	private Agent createSummarisable(String runtime) {
+		Agent agent = create(runtime, Maps.empty());
 		agent.ensureSession(SUMMARY_SESSION, owner.getCallerDID());
 		addSummaryTurn(agent, "initial discussion");
 		return agent;
 	}
 
-	private void addSummaryTurn(AgentState agent, String content) {
+	private void addSummaryTurn(Agent agent, String content) {
 		assertTrue(agent.session(SUMMARY_SESSION).updateQuiescentFrames(frames ->
 			frames.assoc(0, GoalTreeContext.appendTurn(RT.ensureMap(frames.get(0)),
 				Maps.of("role", "user", "content", content, Fields.TS, 7)))));
@@ -124,8 +144,8 @@ public class AgentQueryTest {
 		return engine.jobs().invokeOperation("v/ops/agent/summarise", summaryInput(includeSteps), owner);
 	}
 
-	private AMap<AString, ACell> savedSummary(AgentState agent) {
-		return SessionState.sessionSummary(agent.getSession(SUMMARY_SESSION),
+	private AMap<AString, ACell> savedSummary(Agent agent) {
+		return Session.sessionSummary(agent.getSession(SUMMARY_SESSION),
 			Strings.create(AgentAdapter.DEFAULT_SUMMARISE_INSTRUCTION));
 	}
 
@@ -152,7 +172,7 @@ public class AgentQueryTest {
 	@Test public void freshGoalTreeQuery() { freshQueryUsesAgentConfigWithoutChangingItsRecord("goaltree"); }
 
 	private void freshQueryUsesAgentConfigWithoutChangingItsRecord(String runtime) {
-		AgentState agent = create(runtime, Maps.empty());
+		Agent agent = create(runtime, Maps.empty());
 		ACell before = agent.getRecord();
 		assertEquals(Strings.create("answer"), query("one-off question").awaitResult(5000));
 		assertEquals(before, agent.getRecord());
@@ -169,7 +189,7 @@ public class AgentQueryTest {
 	@Test public void goalTreeSessionSnapshot() { sessionQuerySnapshotsRootHistoryAndLeavesLiveWorkAlone("goaltree"); }
 
 	private void sessionQuerySnapshotsRootHistoryAndLeavesLiveWorkAlone(String runtime) {
-		AgentState agent = create(runtime, Maps.empty());
+		Agent agent = create(runtime, Maps.empty());
 		Blob sid = Blob.fromHex("0123456789abcdef");
 		AMap<AString, ACell> session = agent.ensureSession(sid, owner.getCallerDID(),
 			Maps.of("note", Maps.of("text", "session-only context")));
@@ -183,7 +203,7 @@ public class AgentQueryTest {
 		// Preserve the seeded loads when replacing the empty root for this fixture.
 		root = root.assoc(Fields.LOADS, Maps.of("note", Maps.of("text", "session-only context")));
 		session = session.assoc(Fields.FRAMES, Vectors.of(root, child));
-		agent.putRecord(agent.getRecord().assoc(AgentState.KEY_SESSIONS,
+		agent.putRecord(agent.getRecord().assoc(Agent.KEY_SESSIONS,
 			agent.getSessions().assoc(sid, session)));
 		agent.appendSessionPending(sid, owner.getCallerDID(), null,
 			Maps.of(Fields.MESSAGE, "queued live message"), false);
@@ -216,7 +236,7 @@ public class AgentQueryTest {
 	@Test public void goalTreeQueryTools() { queryRunsToolsAndKeepsDynamicLoadsLocal("goaltree"); }
 
 	private void queryRunsToolsAndKeepsDynamicLoadsLocal(String runtime) {
-		AgentState agent = create(runtime, Maps.of(
+		Agent agent = create(runtime, Maps.of(
 			"llmOperation", "v/test/ops/moretoolsllm",
 			Fields.TOOLS, Vectors.of(Strings.create("more_tools")),
 			"caps", Vectors.of(
@@ -231,15 +251,15 @@ public class AgentQueryTest {
 
 	@Test
 	public void queryHonoursAdmissionAndUsesFreshAgentAuthority() {
-		RequestContext other = RequestContext.of(Strings.create("did:key:query-caller"));
+		RequestContext other = RequestContext.of(TestEngine.uniqueDID("AgentQueryTest-caller"));
 		engine.getVenueState().users().ensure(other.getUserDID());
-		AgentState agent = create("llmagent", Maps.empty());
+		Agent agent = create("llmagent", Maps.empty());
 		AString address = Strings.create(owner.getUserDID() + "/g/" + AGENT);
 		AMap<AString, ACell> input = Maps.of(Fields.AGENT_ID, address, Fields.MESSAGE, "question");
 		Job denied = engine.jobs().invokeOperation("v/ops/agent/query", input, other);
 		assertThrows(JobFailedException.class, () -> denied.awaitResult(5000));
 		assertNull(model.seenInput, "denial precedes the model call");
-		agent.putRecord(agent.getRecord().assoc(AgentState.KEY_CONFIG,
+		agent.putRecord(agent.getRecord().assoc(Agent.KEY_CONFIG,
 			agent.getConfig().assoc(Fields.ACCEPTS, Vectors.of(other.getCallerDID()))));
 		ACell before = agent.getRecord();
 		engine.jobs().invokeOperation("v/ops/agent/query", input,
@@ -255,7 +275,7 @@ public class AgentQueryTest {
 
 	@Test
 	public void badSessionIsRejectedBeforeInference() {
-		AgentState agent = create("llmagent", Maps.empty());
+		Agent agent = create("llmagent", Maps.empty());
 		ACell before = agent.getRecord();
 		for (String sid : new String[] {"not-hex", "0123456789abcdef"}) {
 			Job job = engine.jobs().invokeOperation("v/ops/agent/query",
@@ -270,9 +290,9 @@ public class AgentQueryTest {
 
 	@Test
 	public void providerFailureDoesNotSuspendAgent() {
-		AgentState agent = create("llmagent", Maps.empty());
+		Agent agent = create("llmagent", Maps.empty());
 		ACell before = agent.getRecord();
-		model.reply = input -> CompletableFuture.failedFuture(new IllegalStateException(FAILURE));
+		model.reply = input -> CompletableFuture.failedFuture(new UnavailableException(FAILURE));
 		Job job = query("question");
 		assertThrows(JobFailedException.class, () -> job.awaitResult(5000));
 		assertTrue(job.getErrorMessage().contains(FAILURE));
@@ -281,11 +301,11 @@ public class AgentQueryTest {
 
 	@Test
 	public void structuredAnswerIsReturnedWithoutMergingTransitionState() {
-		AgentState agent = create("llmagent", Maps.of(Fields.OPERATION, "v/ops/query-test/model"));
+		Agent agent = create("llmagent", Maps.of(Fields.OPERATION, modelOperation()));
 		ACell before = agent.getRecord();
 		ACell answer = Maps.of("answer", 42);
 		model.reply = input -> CompletableFuture.completedFuture(Maps.of(
-			Fields.RESPONSE, answer, AgentState.KEY_STATE, Maps.of("changed", true)));
+			Fields.RESPONSE, answer, Agent.KEY_STATE, Maps.of("changed", true)));
 		assertEquals(answer, query(Maps.of("question", "structured input")).awaitResult(5000));
 		AMap<AString, ACell> detailed = queryWithSteps("custom transition");
 		assertEquals(answer, detailed.get(Fields.RESPONSE));
@@ -296,7 +316,7 @@ public class AgentQueryTest {
 		Job failed = query("error value");
 		assertThrows(JobFailedException.class, () -> failed.awaitResult(5000));
 		assertTrue(failed.getErrorMessage().contains(FAILURE));
-		model.reply = input -> CompletableFuture.completedFuture(Maps.of(AgentState.KEY_STATE, Maps.empty()));
+		model.reply = input -> CompletableFuture.completedFuture(Maps.of(Agent.KEY_STATE, Maps.empty()));
 		Job yielded = query("no answer");
 		assertThrows(JobFailedException.class, () -> yielded.awaitResult(5000));
 		assertTrue(yielded.getErrorMessage().contains(AgentAdapter.QUERY_NO_RESPONSE));
@@ -317,7 +337,7 @@ public class AgentQueryTest {
 
 	@Test
 	public void queryCannotLoadToolsBeyondAgentCaps() {
-		AgentState agent = create("llmagent", Maps.of(
+		Agent agent = create("llmagent", Maps.of(
 			"llmOperation", "v/test/ops/moretoolsllm",
 			Fields.TOOLS, Vectors.of(Strings.create("more_tools")), "caps", Vectors.empty()));
 		ACell before = agent.getRecord();
@@ -327,7 +347,7 @@ public class AgentQueryTest {
 
 	@Test
 	public void concurrentSessionChangesSurviveQueryCompletion() throws Exception {
-		AgentState agent = create("llmagent", Maps.empty());
+		Agent agent = create("llmagent", Maps.empty());
 		Blob sid = Blob.fromHex("12345678");
 		agent.ensureSession(sid, owner.getCallerDID());
 		CompletableFuture<ACell> held = new CompletableFuture<>();
@@ -347,7 +367,7 @@ public class AgentQueryTest {
 
 	@Test
 	public void cancellationIsIndependentOfAgentRunLoop() throws Exception {
-		AgentState agent = create("llmagent", Maps.empty());
+		Agent agent = create("llmagent", Maps.empty());
 		ACell before = agent.getRecord();
 		CompletableFuture<ACell> held = new CompletableFuture<>();
 		model.reply = input -> held;
@@ -364,7 +384,7 @@ public class AgentQueryTest {
 	@Test public void goalTreeQueryIncludesGeneratedSteps() { queryIncludesGeneratedSteps("goaltree"); }
 
 	private void queryIncludesGeneratedSteps(String runtime) {
-		AgentState agent = create(runtime, Maps.of(
+		Agent agent = create(runtime, Maps.of(
 			Fields.TOOLS, Vectors.of(Strings.create("v/test/ops/echo"))));
 		ACell before = agent.getRecord();
 		java.util.concurrent.atomic.AtomicInteger calls = new java.util.concurrent.atomic.AtomicInteger();
@@ -399,7 +419,7 @@ public class AgentQueryTest {
 
 	@Test
 	public void queryIncludesChildGoalStepsAfterTheirFramesArePopped() {
-		AgentState agent = create("goaltree", Maps.of(
+		Agent agent = create("goaltree", Maps.of(
 			"llmOperation", "v/test/ops/subgoalechollm",
 			Fields.TOOLS, Vectors.of(Strings.create("subgoal"))));
 		ACell before = agent.getRecord();
@@ -422,9 +442,9 @@ public class AgentQueryTest {
 	@Test public void goalTreeSummaryIsPersistedAndReused() { summaryIsPersistedAndReused("goaltree"); }
 
 	private void summaryIsPersistedAndReused(String runtime) {
-		AgentState agent = createSummarisable(runtime);
+		Agent agent = createSummarisable(runtime);
 		ACell sessionBefore = agent.getSession(SUMMARY_SESSION);
-		ACell stateBefore = agent.getRecord().get(AgentState.KEY_STATE);
+		ACell stateBefore = agent.getRecord().get(Agent.KEY_STATE);
 		ACell timelineBefore = agent.getTimeline();
 		Job job = engine.jobs().invokeOperation("v/ops/agent/summarise",
 			summaryInput(false).dissoc(Strings.intern("includeSteps")), owner);
@@ -434,8 +454,8 @@ public class AgentQueryTest {
 		assertNull(first.get(Fields.STEPS));
 		assertTrue(model.seenInput.toString().contains(AgentAdapter.DEFAULT_SUMMARISE_INSTRUCTION));
 		assertTrue(model.seenInput.toString().contains("initial discussion"));
-		assertEquals(sessionBefore, agent.getSession(SUMMARY_SESSION).dissoc(AgentState.KEY_SUMMARIES));
-		assertEquals(stateBefore, agent.getRecord().get(AgentState.KEY_STATE));
+		assertEquals(sessionBefore, agent.getSession(SUMMARY_SESSION).dissoc(Agent.KEY_SUMMARIES));
+		assertEquals(stateBefore, agent.getRecord().get(Agent.KEY_STATE));
 		assertEquals(timelineBefore, agent.getTimeline());
 		AMap<AString, ACell> saved = savedSummary(agent);
 		assertEquals(first, saved, "summary memory is exactly the returned Job result");
@@ -461,7 +481,7 @@ public class AgentQueryTest {
 	@Test public void goalTreeSummaryStepsAreOptIn() { summaryStepsAreOptIn("goaltree"); }
 
 	private void summaryStepsAreOptIn(String runtime) {
-		AgentState agent = createSummarisable(runtime);
+		Agent agent = createSummarisable(runtime);
 		Job job = summarise(true);
 		AMap<AString, ACell> first = RT.ensureMap(job.awaitResult(5000));
 		assertEquals(1, RT.ensureVector(first.get(Fields.STEPS)).count());
@@ -481,7 +501,7 @@ public class AgentQueryTest {
 
 	@Test
 	public void newTurnsRefreshSummaryEvenWithTheSameTurnTimestamp() {
-		AgentState agent = createSummarisable("llmagent");
+		Agent agent = createSummarisable("llmagent");
 		summarise(false).awaitResult(5000);
 		ACell first = savedSummary(agent);
 		ACell updated = RT.getIn(agent.getSession(SUMMARY_SESSION), "meta", "updated");
@@ -496,7 +516,7 @@ public class AgentQueryTest {
 
 	@Test
 	public void summariseRetainsIndependentResultsByExactMetadataInstruction() {
-		AgentState agent = createSummarisable("llmagent");
+		Agent agent = createSummarisable("llmagent");
 		AMap<AString, ACell> concise = summariseMetadata(Strings.create("Summarise as three bullets."));
 		ACell first = engine.jobs().invokeOperation(concise, summaryInput(false), owner).awaitResult(5000);
 		assertTrue(model.seenInput.toString().contains("Summarise as three bullets."));
@@ -508,7 +528,7 @@ public class AgentQueryTest {
 		assertTrue(model.seenInput.toString().contains("Summarise the agreed actions."));
 		assertEquals(first, engine.jobs().invokeOperation(concise, summaryInput(false), owner).awaitResult(5000));
 		assertEquals(actionResult, engine.jobs().invokeOperation(actions, summaryInput(false), owner).awaitResult(5000));
-		assertEquals(2, RT.ensureMap(agent.getSession(SUMMARY_SESSION).get(AgentState.KEY_SUMMARIES)).count());
+		assertEquals(2, RT.ensureMap(agent.getSession(SUMMARY_SESSION).get(Agent.KEY_SUMMARIES)).count());
 		ACell beforeInvalid = agent.getRecord();
 		Job bad = engine.jobs().invokeOperation(summariseMetadata(CVMLong.ONE), summaryInput(false), owner);
 		assertThrows(JobFailedException.class, () -> bad.awaitResult(5000));
@@ -518,21 +538,21 @@ public class AgentQueryTest {
 		addSummaryTurn(agent, "newly agreed action");
 		engine.jobs().invokeOperation(actions, summaryInput(false), owner).awaitResult(5000);
 		assertEquals(3, model.invocations.get());
-		assertEquals(first, SessionState.sessionSummary(agent.getSession(SUMMARY_SESSION),
+		assertEquals(first, Session.sessionSummary(agent.getSession(SUMMARY_SESSION),
 			Strings.create("Summarise as three bullets.")),
 			"refreshing one instruction preserves the other result and its timestamp");
-		assertEquals(CVMLong.create(2), SessionState.sessionSummary(agent.getSession(SUMMARY_SESSION),
+		assertEquals(CVMLong.create(2), Session.sessionSummary(agent.getSession(SUMMARY_SESSION),
 			Strings.create("Summarise the agreed actions.")).get(Fields.TURNS));
 	}
 
 	@Test
 	public void compactionPreservesCoveredTurnCountAndNewTurnsStillRefresh() {
-		AgentState agent = createSummarisable("llmagent");
+		Agent agent = createSummarisable("llmagent");
 		addSummaryTurn(agent, "second discussion turn");
 		ACell first = summarise(false).awaitResult(5000);
 		assertTrue(agent.session(SUMMARY_SESSION).updateQuiescentFrames(frames ->
 			frames.assoc(0, GoalTreeContext.compactFrame(RT.ensureMap(frames.get(0)), "earlier discussion"))));
-		assertEquals(2, SessionState.sessionTurnCount(agent.getSession(SUMMARY_SESSION)));
+		assertEquals(2, Session.sessionTurnCount(agent.getSession(SUMMARY_SESSION)));
 		assertEquals(first, summarise(false).awaitResult(5000));
 		assertEquals(1, model.invocations.get());
 		addSummaryTurn(agent, "discussion after compaction");
@@ -543,7 +563,7 @@ public class AgentQueryTest {
 
 	@Test
 	public void conversationCanAdvanceWhileSummaryIsGenerated() throws Exception {
-		AgentState agent = createSummarisable("llmagent");
+		Agent agent = createSummarisable("llmagent");
 		summarise(false).awaitResult(5000);
 		addSummaryTurn(agent, "before the second summary");
 		CompletableFuture<ACell> held = new CompletableFuture<>();
@@ -554,13 +574,13 @@ public class AgentQueryTest {
 		agent.appendSessionPending(SUMMARY_SESSION, owner.getCallerDID(), null,
 			Maps.of(Fields.MESSAGE, "arrived during summarisation"), false);
 		addSummaryTurn(agent, "new conversation during summarisation");
-		ACell afterConcurrentWrite = agent.getSession(SUMMARY_SESSION).dissoc(AgentState.KEY_SUMMARIES);
+		ACell afterConcurrentWrite = agent.getSession(SUMMARY_SESSION).dissoc(Agent.KEY_SUMMARIES);
 		held.complete(Maps.of("role", "assistant", "content", "summary through the second turn"));
 		AMap<AString, ACell> result = RT.ensureMap(job.awaitResult(5000));
 		assertEquals(CVMLong.create(2), result.get(Fields.TURNS));
 		assertEquals(result, savedSummary(agent));
-		assertEquals(afterConcurrentWrite, agent.getSession(SUMMARY_SESSION).dissoc(AgentState.KEY_SUMMARIES));
-		assertEquals(3, SessionState.sessionTurnCount(agent.getSession(SUMMARY_SESSION)));
+		assertEquals(afterConcurrentWrite, agent.getSession(SUMMARY_SESSION).dissoc(Agent.KEY_SUMMARIES));
+		assertEquals(3, Session.sessionTurnCount(agent.getSession(SUMMARY_SESSION)));
 		model.reply = input -> CompletableFuture.completedFuture(Maps.of("role", "assistant", "content", "refreshed"));
 		AMap<AString, ACell> refreshed = RT.ensureMap(summarise(false).awaitResult(5000));
 		assertEquals(CVMLong.create(3), refreshed.get(Fields.TURNS));
@@ -570,7 +590,7 @@ public class AgentQueryTest {
 
 	@Test
 	public void concurrentEquivalentSummariesPublishOneStableResult() throws Exception {
-		AgentState agent = createSummarisable("llmagent");
+		Agent agent = createSummarisable("llmagent");
 		CompletableFuture<ACell> firstReply = new CompletableFuture<>();
 		CompletableFuture<ACell> secondReply = new CompletableFuture<>();
 		CountDownLatch entered = new CountDownLatch(2);
@@ -597,7 +617,7 @@ public class AgentQueryTest {
 
 	@Test
 	public void deletedSessionIsNotRecreatedByLateSummary() throws Exception {
-		AgentState agent = createSummarisable("llmagent");
+		Agent agent = createSummarisable("llmagent");
 		CompletableFuture<ACell> held = new CompletableFuture<>();
 		model.reply = input -> held;
 		Job job = summarise(false);
@@ -611,9 +631,9 @@ public class AgentQueryTest {
 
 	@Test
 	public void summariseFailureOrCancellationDoesNotPublish() throws Exception {
-		AgentState agent = createSummarisable("llmagent");
+		Agent agent = createSummarisable("llmagent");
 		ACell before = agent.getRecord();
-		model.reply = input -> CompletableFuture.failedFuture(new IllegalStateException(FAILURE));
+		model.reply = input -> CompletableFuture.failedFuture(new UnavailableException(FAILURE));
 		Job failed = summarise(false);
 		assertThrows(JobFailedException.class, () -> failed.awaitResult(5000));
 		assertEquals(before, agent.getRecord());
@@ -642,7 +662,7 @@ public class AgentQueryTest {
 
 	@Test
 	public void concurrentDifferentInstructionsBothPersist() throws Exception {
-		AgentState agent = createSummarisable("llmagent");
+		Agent agent = createSummarisable("llmagent");
 		CompletableFuture<ACell> held = new CompletableFuture<>();
 		model.reply = input -> input.toString().contains("slow instruction") ? held
 			: CompletableFuture.completedFuture(Maps.of("role", "assistant", "content", "current summary"));
@@ -653,16 +673,16 @@ public class AgentQueryTest {
 			summaryInput(false), owner).awaitResult(5000);
 		held.complete(Maps.of("role", "assistant", "content", "slow summary"));
 		ACell slowResult = slow.awaitResult(5000);
-		assertEquals(slowResult, SessionState.sessionSummary(agent.getSession(SUMMARY_SESSION),
+		assertEquals(slowResult, Session.sessionSummary(agent.getSession(SUMMARY_SESSION),
 			Strings.create("slow instruction")));
-		assertEquals(fastResult, SessionState.sessionSummary(agent.getSession(SUMMARY_SESSION),
+		assertEquals(fastResult, Session.sessionSummary(agent.getSession(SUMMARY_SESSION),
 			Strings.create("different instruction")));
-		assertEquals(2, RT.ensureMap(agent.getSession(SUMMARY_SESSION).get(AgentState.KEY_SUMMARIES)).count());
+		assertEquals(2, RT.ensureMap(agent.getSession(SUMMARY_SESSION).get(Agent.KEY_SUMMARIES)).count());
 	}
 
 	@Test
 	public void olderGenerationCannotReplaceSummaryOfNewerConversation() throws Exception {
-		AgentState agent = createSummarisable("llmagent");
+		Agent agent = createSummarisable("llmagent");
 		CompletableFuture<ACell> held = new CompletableFuture<>();
 		model.reply = input -> held;
 		Job slow = summarise(false);
@@ -679,11 +699,11 @@ public class AgentQueryTest {
 
 	@Test
 	public void agentChangesAndQueuedMessagesLeaveSavedResultsUsable() {
-		AgentState agent = createSummarisable("llmagent");
+		Agent agent = createSummarisable("llmagent");
 		ACell first = summarise(false).awaitResult(5000);
 		agent.putRecord(agent.getRecord()
-			.assoc(AgentState.KEY_STATE, Maps.of("progress", "changed"))
-			.assoc(AgentState.KEY_CONFIG, RT.ensureMap(agent.getRecord().get(AgentState.KEY_CONFIG))
+			.assoc(Agent.KEY_STATE, Maps.of("progress", "changed"))
+			.assoc(Agent.KEY_CONFIG, RT.ensureMap(agent.getRecord().get(Agent.KEY_CONFIG))
 				.assoc(Strings.intern("systemPrompt"), Strings.create("updated persona"))));
 		agent.appendSessionPending(SUMMARY_SESSION, Maps.of(Fields.MESSAGE, "not yet presented"));
 		ACell before = agent.getRecord();
@@ -696,18 +716,18 @@ public class AgentQueryTest {
 	@Test public void detailedSummaryAndItsCacheSurviveStoreReopen() throws Exception { summarySurvivesStoreReopen(true); }
 
 	private void summarySurvivesStoreReopen(boolean includeSteps) throws Exception {
-		var key = engine.getKeyPair();
-		engine.close();
+		var key = convex.core.crypto.AKeyPair.generate();
+		String modelName = model.getName();
 		java.io.File file;
 		ACell expected;
 		Blob jobId;
-		try (convex.etch.EtchStore store = convex.etch.EtchStore.createTemp("summarise-persist")) {
+		try (convex.etch.EtchStore store = covia.venue.TestTemp.etch("summarise-persist")) {
 			file = store.getFile();
-			engine = new Engine(Maps.empty(), covia.venue.CoviaApplication.open(store, key), key).start();
+			engine = TestEngine.application(store).mount(key, Maps.empty()).start();
 			try {
 				Engine.addDemoAssets(engine);
 				owner = engine.venueContext();
-				model = new QueryModel();
+				model = new QueryModel(modelName);
 				engine.registerAdapter(model);
 				createSummarisable("llmagent");
 				Job job = summarise(includeSteps);
@@ -716,13 +736,13 @@ public class AgentQueryTest {
 			} finally { engine.close(); }
 		}
 		try (convex.etch.EtchStore store = convex.etch.EtchStore.create(file)) {
-			engine = new Engine(Maps.empty(), covia.venue.CoviaApplication.open(store, key), key).start();
+			engine = TestEngine.application(store).mount(key, Maps.empty()).start();
 			try {
 				Engine.addDemoAssets(engine);
 				owner = engine.venueContext();
-				model = new QueryModel();
+				model = new QueryModel(modelName);
 				engine.registerAdapter(model);
-				AgentState agent = engine.getVenueState().users().get(owner.getUserDID()).agent(AGENT);
+				Agent agent = engine.getVenueState().users().user(owner.getUserDID()).agent(AGENT);
 				assertEquals(expected, savedSummary(agent));
 				assertEquals(expected, engine.jobs().getJob(jobId, owner).getOutput());
 				assertEquals(includeSteps, savedSummary(agent).containsKey(Fields.STEPS));

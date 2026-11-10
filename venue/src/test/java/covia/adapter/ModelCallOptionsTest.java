@@ -22,6 +22,8 @@ import convex.core.data.Strings;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.adapter.agent.AbstractLLMAdapter;
+import covia.exception.InvalidInputException;
+import covia.exception.NotSupportedException;
 import covia.venue.TestEngine;
 import dev.langchain4j.agent.tool.ToolSpecification;
 import dev.langchain4j.data.message.ToolExecutionResultMessage;
@@ -41,20 +43,22 @@ class ModelCallOptionsTest {
 		assertTrue(options.automaticCaching());
 		assertEquals("1h", options.cacheTtl());
 		for (String feature : List.of("compaction", "preserveThinking", "inlineToolChanges")) {
-			var error = assertThrows(IllegalArgumentException.class, () -> ModelCallOptions.resolve(
+			var error = assertThrows(NotSupportedException.class, () -> ModelCallOptions.resolve(
 				Maps.empty(), Maps.of("modelOptions", Maps.of(feature, true))));
 			assertEquals(feature + ModelCallOptions.UPSTREAM_REQUIRED, error.getMessage());
 		}
 		for (String invalid : List.of("{\"cacheTtl\":\"2h\"}", "{\"automaticCaching\":\"true\"}",
-				"{\"unknown\":true}", "{\"thinkingPrefixMismatch\":\"ignore\"}")) {
-			assertThrows(IllegalArgumentException.class, () -> ModelCallOptions.resolve(
+				"{\"thinkingPrefixMismatch\":\"ignore\"}")) {
+			assertThrows(InvalidInputException.class, () -> ModelCallOptions.resolve(
 				Maps.empty(), Maps.of("modelOptions", JSON.parse(invalid))));
 		}
+		assertThrows(InvalidInputException.class, () -> ModelCallOptions.resolve(
+			Maps.empty(), Maps.of("modelOptions", JSON.parse("{\"unknown\":true}"))));
 		for (String raw : List.of("{\"compaction\":{\"type\":\"summarize\"}}",
 				"{\"context_management\":{\"edits\":[{\"type\":\"compact_20260112\"}]}}")) {
 			var tuning = LangChainAdapter.extractTuning(Maps.of("maxTokens", 100,
 				"providerOptions", JSON.parse(raw)));
-			var error = assertThrows(IllegalArgumentException.class, () -> LangChainAdapter.buildAnthropicModel(
+			var error = assertThrows(NotSupportedException.class, () -> LangChainAdapter.buildAnthropicModel(
 				"key", "https://api.anthropic.com/v1/", "model", Duration.ofSeconds(5), tuning));
 			assertEquals("compaction" + ModelCallOptions.UPSTREAM_REQUIRED, error.getMessage());
 		}
@@ -91,7 +95,7 @@ class ModelCallOptionsTest {
 		assertEquals("system", RT.getIn(nativeMessages.messages(), 4L, "role").toString());
 		assertEquals(Set.of(1L, 3L), nativeMessages.cacheMarks());
 		assertEquals("update", RT.getIn(messages, 3L, "content").toString());
-		var error = assertThrows(IllegalArgumentException.class,
+		var error = assertThrows(InvalidInputException.class,
 			() -> LangChainAdapter.normaliseNativeSystemMessages(messages.subVector(0, 4), Set.of()));
 		assertEquals(ModelCallOptions.INVALID_SYSTEM_POSITION, error.getMessage());
 	}

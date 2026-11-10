@@ -22,24 +22,26 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.exception.AuthException;
 import covia.lattice.Covia;
-import covia.lattice.WorkspaceRoot;
+import covia.lattice.CoviaPath;
 
 class AdapterStateTest {
+	/** The venue's secret store keys: these venues keep no secret a migration step carries over. */
+	private static final SecretStore.Keys NO_SECRETS = SecretStore.keys(AKeyPair.generate());
 	private static final AString HOST = Strings.create("did:test:venue");
 	private static final AString OWNER = Strings.create("did:test:owner");
 
 	private static VenueState venue() {
 		VenueState venue = VenueState.create(AKeyPair.generate());
-		venue.initialise(HOST);
+		venue.initialise(HOST, NO_SECRETS);
 		return venue;
 	}
 
 	private static void legacy(VenueState venue, String name, ACell value) {
-		venue.users().ensure(HOST).writeInternalPath(WorkspaceRoot.parseStringPath("w/adapters/" + name), value);
+		venue.users().ensure(HOST).writeInternalPath(CoviaPath.parse("w/adapters/" + name), value);
 	}
 	private static ACell legacy(VenueState venue, String name) {
-		User host = venue.users().get(HOST);
-		return host == null ? null : host.readInternalPath(WorkspaceRoot.parseStringPath("w/adapters/" + name));
+		User host = venue.users().user(HOST);
+		return host == null ? null : host.readInternalPath(CoviaPath.parse("w/adapters/" + name));
 	}
 
 	@Test void adapterValuesHaveNoWorkspaceEnvelopeOrUserActivitySideEffects() {
@@ -70,10 +72,10 @@ class AdapterStateTest {
 		state.write("1", CVMLong.create(3));
 		assertEquals(Vectors.of(1L, 3L), state.get());
 		state.set(CVMLong.ZERO);
-		state.transact(draft -> draft.update(value -> CVMLong.create(((CVMLong)value).longValue() + 1)));
+		state.execute(draft -> draft.update(value -> CVMLong.create(((CVMLong)value).longValue() + 1)));
 		assertEquals(CVMLong.ONE, state.get());
 		AtomicReference<AdapterState> retained = new AtomicReference<>();
-		venue.transact(draft -> {
+		venue.execute(draft -> {
 			AdapterState first = draft.adapterState("opaque");
 			first.set(Maps.of("count", 2L));
 			draft.adapterState("second").set(Vectors.of("committed"));
@@ -85,7 +87,7 @@ class AdapterStateTest {
 		retained.get().set(Strings.create("detached"));
 		assertEquals(Maps.of("count", 2L), state.get());
 		ACell before = venue.get();
-		assertThrows(IllegalStateException.class, () -> venue.transact(draft -> {
+		assertThrows(IllegalStateException.class, () -> venue.execute(draft -> {
 			draft.adapterState("opaque").set(CVMLong.ZERO);
 			draft.adapterState("second").set(null);
 			draft.users().create(Strings.create("did:test:rollback"));
@@ -129,7 +131,7 @@ class AdapterStateTest {
 		VenueState venue = venue();
 		legacy(venue, "one", Maps.of("old", true));
 		ACell before = venue.get();
-		assertThrows(IllegalStateException.class, () -> venue.transact(draft -> {
+		assertThrows(IllegalStateException.class, () -> venue.execute(draft -> {
 			draft.adapterState("one").write("new", CVMLong.ONE);
 			throw new IllegalStateException("test rollback");
 		}));
@@ -142,7 +144,7 @@ class AdapterStateTest {
 		CountDownLatch staged = new CountDownLatch(1), release = new CountDownLatch(1);
 		AtomicInteger attempts = new AtomicInteger();
 		try {
-			var migrate = CompletableFuture.runAsync(() -> venue.transact(draft -> {
+			var migrate = CompletableFuture.runAsync(() -> venue.execute(draft -> {
 				draft.adapterState("one");
 				if (attempts.incrementAndGet() == 1) {
 					staged.countDown();
@@ -166,7 +168,7 @@ class AdapterStateTest {
 		worker.set(CVMLong.ONE);
 		CountDownLatch staged = new CountDownLatch(1), release = new CountDownLatch(1);
 		try {
-			var write = CompletableFuture.runAsync(() -> worker.transact(draft -> {
+			var write = CompletableFuture.runAsync(() -> worker.execute(draft -> {
 				draft.set(CVMLong.create(2));
 				staged.countDown();
 				await(release);
@@ -190,7 +192,7 @@ class AdapterStateTest {
 		worker.set(CVMLong.ONE);
 		CountDownLatch staged = new CountDownLatch(1), release = new CountDownLatch(1);
 		try {
-			var write = CompletableFuture.runAsync(() -> venue.transact(draft -> {
+			var write = CompletableFuture.runAsync(() -> venue.execute(draft -> {
 				worker.inVenue(draft).set(CVMLong.create(2));
 				draft.adapterState("other").set(CVMLong.ONE);
 				staged.countDown();
@@ -205,7 +207,7 @@ class AdapterStateTest {
 				() -> write.get(5, TimeUnit.SECONDS)).getCause());
 			assertEquals(CVMLong.ONE, venue.adapterState("worker").get());
 			assertNull(venue.adapterState("other").get(), "the whole delivery draft must roll back");
-			assertThrows(AuthException.class, () -> venue.transact(draft -> worker.inVenue(draft).set(CVMLong.ZERO)));
+			assertThrows(AuthException.class, () -> venue.execute(draft -> worker.inVenue(draft).set(CVMLong.ZERO)));
 			assertThrows(AuthException.class, () -> worker.cursor().set(CVMLong.ZERO));
 		} finally { release.countDown(); }
 	}

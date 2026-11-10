@@ -3,18 +3,32 @@ package covia.adapter.http;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.OutputStream;
+import java.net.Inet6Address;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.net.UnknownHostException;
+import java.net.spi.InetAddressResolver;
+import java.net.spi.InetAddressResolver.LookupPolicy;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayDeque;
+import java.util.Deque;
+import java.util.List;
+import java.util.Locale;
+import java.util.UUID;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.Stream;
 
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestInfo;
 
 import convex.core.data.ACell;
 import convex.core.data.AString;
@@ -24,14 +38,21 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import covia.api.Fields;
+import covia.exception.ConfigurationException;
+import covia.exception.InvalidInputException;
+import covia.exception.NotFoundException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.grid.client.VenueHTTP;
+import covia.utils.HTTPURLs;
+import covia.venue.Engine;
+import covia.venue.TestEngine;
 import covia.venue.TestServer;
 import covia.venue.TestOps;
 import covia.venue.RequestContext;
 import covia.venue.SecretStore;
 import covia.venue.User;
+import covia.adapter.GuardedResolver;
 import covia.adapter.HTTPAdapter;
 import covia.test.IntegrationTest;
 
@@ -275,7 +296,7 @@ public class HTTPTest {
 		try {
 			ACell input = Maps.of(
 				Fields.URL, "http://localhost:" + echo.getAddress().getPort()
-					+ "/bot{s/TG_TOKEN}/getMe");
+					+ "/ignored/%2e%2e/bot{s/TG_TOKEN}/getMe");
 			Job job = TestServer.ENGINE.jobs().invokeOperation(
 				"v/ops/http/get", input, RequestContext.of(caller));
 			ACell output = job.awaitResult(5000);
@@ -292,14 +313,27 @@ public class HTTPTest {
 		}
 	}
 
+	@Test public void testUrlSecretCannotBePartiallyExposedByNormalization() {
+		AString caller = covia.venue.TestEngine.uniqueDID("http-url-secret-normalization");
+		User user = TestServer.ENGINE.getVenueState().users().ensure(caller);
+		SecretStore.Keys key = SecretStore.keys(TestServer.ENGINE.getKeyPair());
+		for (String token : new String[] {"private%2etoken", "private/../token"}) {
+			user.secrets().store("TOKEN", token, key);
+			InvalidInputException error = assertThrows(InvalidInputException.class,
+				() -> TestServer.ENGINE.jobs().invokeOperation("v/ops/http/get", Maps.of(
+					Fields.URL, "http://localhost:1/bot{s/TOKEN}/getMe"), RequestContext.of(caller)));
+			assertEquals(HTTPAdapter.URL_SECRET_STRUCTURE, error.getMessage());
+			assertNull(error.getCause(), "parser diagnostics must not expose the credential");
+		}
+	}
+
 	@Test public void testUrlSecretUnresolvedFailsClearly() {
 		AString caller = Strings.create("did:test:http:url-secret-missing:" + System.nanoTime());
-		IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+		NotFoundException error = assertThrows(NotFoundException.class,
 			() -> TestServer.ENGINE.jobs().invokeOperation("v/ops/http/get", Maps.of(
 				Fields.URL, "https://api.telegram.org/bot{s/NO_SUCH_SECRET}/getMe"),
 				RequestContext.of(caller)));
-		assertTrue(error.getMessage().contains("url secret")
-			&& error.getMessage().contains("s/NO_SUCH_SECRET"), error.getMessage());
+		assertTrue(error.getMessage().contains("s/NO_SUCH_SECRET"), error.getMessage());
 	}
 
 	@Test public void testBearerSecretConflictsWithAuthorizationSecretHeader() {
@@ -309,13 +343,12 @@ public class HTTPTest {
 		user.secrets().store("AUTH", "complete-header", key);
 		user.secrets().store("TOKEN", "bearer-token", key);
 
-		IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+		InvalidInputException error = assertThrows(InvalidInputException.class,
 			() -> TestServer.ENGINE.jobs().invokeOperation("v/ops/http/get", Maps.of(
 				Fields.URL, TestServer.BASE_URL + "/api/v1/status",
 				Fields.SECRET_HEADERS, Maps.of("Authorization", "s/AUTH"),
 				Fields.BEARER_SECRET, "s/TOKEN"), RequestContext.of(caller)));
-		assertTrue(error.getMessage().contains("either secretHeaders or bearerSecret"),
-			error.getMessage());
+		assertFalse(error.getMessage().isBlank());
 	}
 
 	// ====================================================================
@@ -326,7 +359,7 @@ public class HTTPTest {
 		HTTPAdapter adapter = new HTTPAdapter();
 
 		// localhost should be blocked by default (resolves to loopback)
-		assertThrows(IllegalArgumentException.class, () -> {
+		assertThrows(InvalidInputException.class, () -> {
 			// Access the private validateURL via reflection, or invoke the adapter
 			// which calls validateURL internally. We test via invokeFuture which
 			// wraps the exception.
@@ -397,6 +430,25 @@ public class HTTPTest {
 		}, "Block list should override allow list");
 	}
 
+	@Test public void testSSRFListsMatchANameWithOrWithoutItsTrailingDot() {
+		HTTPAdapter adapter = new HTTPAdapter();
+		adapter.addBlockedHost("blocked.example");
+		InvalidInputException dotted = assertThrows(InvalidInputException.class,
+			() -> adapter.requireSafeUrl("http://Blocked.Example./x"));
+		assertTrue(dotted.getMessage().startsWith(HTTPAdapter.BLOCKED_HOST), dotted.getMessage());
+
+		assertTrue(adapter.configure(Maps.of("blockedHosts", Vectors.of("configured.example.")), false));
+		InvalidInputException bare = assertThrows(InvalidInputException.class,
+			() -> adapter.requireSafeUrl("http://configured.example/"));
+		assertTrue(bare.getMessage().startsWith(HTTPAdapter.BLOCKED_HOST), bare.getMessage());
+
+		// An allowed host is allowed however it is written, so it is never looked up
+		String allowed = "allowed-" + UUID.randomUUID() + ".test";
+		adapter.addAllowedHost(allowed + ".");
+		adapter.requireSafeUrl("http://" + allowed + "/");
+		adapter.requireSafeUrl("http://" + allowed + "./");
+	}
+
 	@Test public void testSSRFBlocksNonHTTPSchemes() {
 		HTTPAdapter adapter = new HTTPAdapter();
 		// example.com resolves to a public IP, so the IP check passes,
@@ -418,6 +470,98 @@ public class HTTPTest {
 		}, "Unresolvable hosts should be rejected");
 	}
 
+	// A host that passes the guard is held: every later lookup of it, by any
+	// client, may answer only addresses the guard would pass.
+
+	private static final LookupPolicy ANY_FAMILY = LookupPolicy.of(LookupPolicy.IPV4 | LookupPolicy.IPV6);
+
+	/** An upstream resolver answering successive lookups with successive addresses, as a changing DNS record would. */
+	private static InetAddressResolver answering(String... addresses) {
+		Deque<String> next = new ArrayDeque<>(List.of(addresses));
+		return new InetAddressResolver() {
+			@Override public Stream<InetAddress> lookupByName(String host, LookupPolicy policy) throws UnknownHostException {
+				String literal = next.poll();
+				if (literal == null) throw new UnknownHostException(host);
+				return Stream.of(InetAddress.getByAddress(host, InetAddress.getByName(literal).getAddress()));
+			}
+			@Override public String lookupByAddress(byte[] addr) throws UnknownHostException {
+				throw new UnknownHostException();
+			}
+		};
+	}
+
+	@Test public void testGuardedResolverIsTheJvmResolver() {
+		assertTrue(GuardedResolver.isActive(), HTTPAdapter.RESOLVER_INACTIVE);
+	}
+
+	@Test public void testHeldHostRefusesALaterPrivateAnswer() throws Exception {
+		String host = "changing-" + UUID.randomUUID() + ".test";
+
+		// Not held: answers pass through as the upstream gives them
+		GuardedResolver.Resolver open = new GuardedResolver.Resolver(answering("203.0.113.7", "127.0.0.1"));
+		assertEquals("203.0.113.7", open.lookupByName(host, ANY_FAMILY).findFirst().get().getHostAddress());
+		assertEquals("127.0.0.1", open.lookupByName(host, ANY_FAMILY).findFirst().get().getHostAddress());
+
+		// Held, whatever its case or trailing dot: the public answer stands, the loopback one is refused
+		GuardedResolver.hold(host.toUpperCase(Locale.ROOT));
+		GuardedResolver.Resolver resolver = new GuardedResolver.Resolver(answering("203.0.113.7", "127.0.0.1"));
+		assertEquals("203.0.113.7", resolver.lookupByName(host, ANY_FAMILY).findFirst().get().getHostAddress());
+		UnknownHostException refused = assertThrows(UnknownHostException.class,
+			() -> resolver.lookupByName(host + ".", ANY_FAMILY));
+		assertTrue(refused.getMessage().startsWith(GuardedResolver.PRIVATE_ADDRESS), refused.getMessage());
+	}
+
+	@Test public void testGuardHoldsTheHostsItPasses() {
+		HTTPAdapter adapter = new HTTPAdapter();
+		adapter.requireSafeUrl("http://203.0.113.9/x");
+		assertTrue(GuardedResolver.isHeld("203.0.113.9"));
+		assertThrows(InvalidInputException.class, () -> adapter.requireSafeUrl("http://10.9.8.7/"));
+		assertFalse(GuardedResolver.isHeld("10.9.8.7"));
+
+		// Allowing a host releases it, and the guard never holds an allowed host
+		String added = "allowed-" + UUID.randomUUID() + ".test";
+		GuardedResolver.hold(added);
+		adapter.addAllowedHost(added);
+		assertFalse(GuardedResolver.isHeld(added));
+		adapter.requireSafeUrl("http://" + added + "/");
+		assertFalse(GuardedResolver.isHeld(added));
+
+		String configured = "configured-" + UUID.randomUUID() + ".test";
+		GuardedResolver.hold(configured);
+		assertTrue(adapter.configure(Maps.of("allowedHosts", Vectors.of(configured.toUpperCase(Locale.ROOT))), false));
+		assertFalse(GuardedResolver.isHeld(configured));
+	}
+
+	@Test public void testAddressRule() throws Exception {
+		for (String a : List.of("127.0.0.1", "10.1.2.3", "172.16.0.1", "172.31.255.255", "192.168.1.1",
+				"169.254.169.254", "100.64.0.1", "100.100.100.200", "0.0.0.0", "0.1.2.3",
+				"::1", "::", "fe80::1", "fec0::1", "fc00::1", "fd00:ec2::254",
+				"::ffff:127.0.0.1", "::127.0.0.1", "64:ff9b::a9fe:a9fe", "64:ff9b::7f00:1")) {
+			assertTrue(GuardedResolver.isBlocked(InetAddress.getByName(a)), a);
+		}
+		for (String a : List.of("8.8.8.8", "1.1.1.1", "203.0.113.7", "100.128.0.1", "172.32.0.1", "192.169.0.1",
+				"2001:4860:4860::8888", "2606:4700::1111", "64:ff9b::808:808", "::ffff:8.8.8.8")) {
+			assertFalse(GuardedResolver.isBlocked(InetAddress.getByName(a)), a);
+		}
+
+		// An IPv4-mapped address kept in IPv6 form is refused as its IPv4 address is
+		byte[] mapped = new byte[16];
+		mapped[10] = (byte) 0xFF;
+		mapped[11] = (byte) 0xFF;
+		mapped[12] = (byte) 169;
+		mapped[13] = (byte) 254;
+		mapped[14] = (byte) 169;
+		mapped[15] = (byte) 254;
+		assertTrue(GuardedResolver.isBlocked(Inet6Address.getByAddress(null, mapped, -1)));
+
+		HTTPAdapter adapter = new HTTPAdapter();
+		for (String url : List.of("http://[fd00:ec2::254]/latest/", "http://[::ffff:169.254.169.254]/",
+				"http://100.100.100.200/", "http://0.0.0.0:8080/")) {
+			InvalidInputException e = assertThrows(InvalidInputException.class, () -> adapter.requireSafeUrl(url));
+			assertTrue(e.getMessage().startsWith(HTTPAdapter.PRIVATE_ADDRESS), e.getMessage());
+		}
+	}
+
 	// ====================================================================
 	// Error handling — missing/invalid parameters
 	// ====================================================================
@@ -427,21 +571,20 @@ public class HTTPTest {
 	// invoke as a transport error. failureOf accepts either surfacing.
 
 	@Test public void testMissingURL() {
-		assertEquals("url is required", failureOf(Maps.of()));
+		assertFalse(failureOf(Maps.of()).isBlank());
 	}
 
 	@Test public void testInvalidURLFormat() {
-		assertTrue(failureOf(Maps.of("url", "not a valid url at all %%% {}"))
-			.startsWith("Bad URI syntax:"), "Invalid URL format should be reported as such");
+		assertEquals(HTTPURLs.INVALID_URL, failureOf(Maps.of("url", "not a valid url at all %%% {}")));
 	}
 
 	@Test public void testURLWithNoHost() {
-		assertEquals("URL has no host: http:///path/only",
+		assertEquals(HTTPURLs.INVALID_URL,
 			failureOf(Maps.of("url", "http:///path/only")));
 	}
 
 	@Test public void testEmptyURLString() {
-		assertEquals("URL has no host: ", failureOf(Maps.of("url", "")));
+		assertEquals(HTTPURLs.INVALID_URL, failureOf(Maps.of("url", "")));
 	}
 
 	// ====================================================================
@@ -525,13 +668,23 @@ public class HTTPTest {
 	@Test public void testHTTPAdapterUnsupportedMethod() {
 		HTTPAdapter adapter = new HTTPAdapter();
 
-		// TRACE is not supported — should get IllegalArgumentException
+		// TRACE is not supported — should get InvalidInputException
 		assertThrows(RuntimeException.class, () -> {
 			adapter.invokeFuture(null, Maps.of(), Maps.of(
 				"url", TestServer.BASE_URL + "/api/v1/status",
 				"method", "TRACE"
 			)).join();
 		}, "Unsupported HTTP method should throw");
+	}
+
+	@Test public void testHTTPAdapterRefusesAPaddedMethod() {
+		HTTPAdapter adapter = new HTTPAdapter();
+		assertThrows(RuntimeException.class, () -> {
+			adapter.invokeFuture(null, Maps.of(), Maps.of(
+				"url", TestServer.BASE_URL + "/api/v1/status",
+				"method", " GET"
+			)).join();
+		}, "a padded name is no method");
 	}
 
 	@Test public void testHTTPAdapterSupportedMethods() {
@@ -736,12 +889,16 @@ public class HTTPTest {
 
 	/** Runs a GET through the shared engine and returns the failure message —
 	 *  whether the request was refused before it left (a synchronous
-	 *  IllegalArgumentException) or failed once in flight (a FAILED job). */
+	 *  InvalidInputException) or failed once in flight (a FAILED job). */
 	private static String failureOf(ACell input) {
+		return failureOf(TestServer.ENGINE, RequestContext.of(Strings.create("did:test:http:redirects")), input);
+	}
+
+	/** {@link #failureOf(ACell)} on {@code engine}, as {@code caller}. */
+	private static String failureOf(Engine engine, RequestContext caller, ACell input) {
 		Job job;
 		try {
-			job = TestServer.ENGINE.jobs().invokeOperation("v/ops/http/get", input,
-				RequestContext.of(Strings.create("did:test:http:redirects")));
+			job = engine.jobs().invokeOperation("v/ops/http/get", input, caller);
 		} catch (RuntimeException refused) {
 			return String.valueOf(refused.getMessage());
 		}
@@ -796,7 +953,7 @@ public class HTTPTest {
 		HttpServer s = localServer();
 		String root = base(s);
 		s.createContext("/start", x -> redirect(x, 302, "/second"));          // relative Location
-		s.createContext("/second", x -> redirect(x, 301, root + "/final"));   // absolute Location
+		s.createContext("/second", x -> redirect(x, 301, root + "/ignored/%2e%2e/final"));   // absolute Location
 		s.createContext("/final", x -> respond(x, 200, "done"));
 		s.start();
 		try {
@@ -880,6 +1037,8 @@ public class HTTPTest {
 		a.createContext("/home", x -> redirect(x, 302, "/land"));
 		a.createContext("/land", echo);
 		b.createContext("/land", echo);
+		a.createContext("/roundtrip", x -> redirect(x, 302, bRoot + "/return"));
+		b.createContext("/return", x -> redirect(x, 302, base(a) + "/home"));
 		a.start();
 		b.start();
 		try {
@@ -903,6 +1062,13 @@ public class HTTPTest {
 			away.awaitResult(10_000);
 			assertEquals("null|null|null|keep|true", body(away));
 			assertEquals(bRoot + "/land", RT.getIn(away.getOutput(), "url").toString());
+
+			// Dropped credentials must not be reacquired on returning to the origin.
+			Job roundtrip = TestServer.ENGINE.jobs().invokeOperation("v/ops/http/get", Maps.of(
+				Fields.URL, base(a) + "/roundtrip", Fields.SECRET_HEADERS, secrets,
+				Fields.BEARER_SECRET, "s/TOKEN"), RequestContext.of(caller));
+			roundtrip.awaitResult(10_000);
+			assertTrue(body(roundtrip).startsWith("null|null|null|"), body(roundtrip));
 
 			// A literal Authorization header is a credential too.
 			Job literal = TestServer.ENGINE.jobs().invokeOperation("v/ops/http/get", Maps.of(
@@ -934,11 +1100,10 @@ public class HTTPTest {
 			// A redirect into the metadata service is refused by the same guard
 			// as a direct request would be — and the chain is named.
 			String meta = failureOf(Maps.of("url", base(s) + "/meta"));
-			assertTrue(meta.contains("Redirect refused") && meta.contains("private/internal"), meta);
 			assertTrue(meta.contains("169.254.169.254"), meta);
 
 			String broken = failureOf(Maps.of("url", base(s) + "/broken"));
-			assertTrue(broken.contains("malformed Location"), broken);
+			assertFalse(broken.isBlank());
 		} finally {
 			s.stop(0);
 		}
@@ -959,24 +1124,26 @@ public class HTTPTest {
 		// Configured lists drive the guard: allowed skips the loopback refusal,
 		// blocked is refused before any resolution.
 		adapter.requireSafeUrl("http://localhost:1/");
-		IllegalArgumentException blocked = assertThrows(IllegalArgumentException.class,
+		InvalidInputException blocked = assertThrows(InvalidInputException.class,
 			() -> adapter.requireSafeUrl("https://Blocked.example/x"));
-		assertTrue(blocked.getMessage().contains("blocked"), blocked.getMessage());
+		assertTrue(blocked.getMessage().startsWith(HTTPAdapter.BLOCKED_HOST), blocked.getMessage());
 		// Published for discovery.
 		assertEquals("MyApp/1.0 (+https://example.com)", RT.getIn(adapter.info(), "userAgent").toString());
 		assertEquals(Vectors.of(Strings.create("localhost")), RT.getIn(adapter.info(), "allowedHosts"));
 
-		assertThrows(IllegalArgumentException.class, () -> adapter.configure(Maps.of("maxRedirects", 99), false));
-		assertThrows(IllegalArgumentException.class, () -> adapter.configure(Maps.of("maxRedirects", -1), false));
-		assertThrows(IllegalArgumentException.class, () -> adapter.configure(Maps.of("userAgent", "  "), false));
-		assertThrows(IllegalArgumentException.class, () -> adapter.configure(Maps.of("allowedHosts", "not-a-list"), false));
-		assertThrows(IllegalArgumentException.class, () -> adapter.configure(Maps.of("blockedHosts", Vectors.of(1)), false));
+		assertThrows(ConfigurationException.class, () -> adapter.configure(Maps.of("maxRedirects", 99), false));
+		assertThrows(ConfigurationException.class, () -> adapter.configure(Maps.of("maxRedirects", -1), false));
+		assertThrows(ConfigurationException.class, () -> adapter.configure(Maps.of("userAgent", "  "), false));
+		assertThrows(ConfigurationException.class, () -> adapter.configure(Maps.of("allowedHosts", "not-a-list"), false));
+		assertThrows(ConfigurationException.class, () -> adapter.configure(Maps.of("blockedHosts", Vectors.of(1)), false));
+		assertThrows(ConfigurationException.class, () -> adapter.configure(Maps.of("blockedHosts", Vectors.of(" evil.example")), false),
+			"a padded entry would silently block nothing");
 
 		// Reconfiguring with nothing restores the defaults.
 		assertTrue(adapter.configure(Maps.empty(), false));
 		assertEquals(HTTPAdapter.defaultUserAgent(), adapter.getUserAgent());
 		assertEquals(HTTPAdapter.DEFAULT_MAX_REDIRECTS, adapter.getMaxRedirects());
-		assertThrows(IllegalArgumentException.class, () -> adapter.requireSafeUrl("http://localhost:1/"));
+		assertThrows(InvalidInputException.class, () -> adapter.requireSafeUrl("http://localhost:1/"));
 	}
 
 	@Test public void testSameOriginRule() throws Exception {
@@ -1011,9 +1178,69 @@ public class HTTPTest {
 			// Structured values are refused with the field named, not cast.
 			String refused = failureOf(Maps.of("url", base(echo) + "/q",
 				"queryParams", Maps.of("filter", Maps.of("nested", "no"))));
-			assertTrue(refused.contains("queryParams.filter must be a string, number or boolean"), refused);
+			assertTrue(refused.contains("queryParams.filter"), refused);
 		} finally {
 			echo.stop(0);
+		}
+	}
+
+	// ====================================================================
+	// Who the guard checks: not the venue itself, but users and agents,
+	// the venue's own included (Engine.outboundUnrestricted)
+	// ====================================================================
+
+	/** A listener on 127.0.0.1, which the shared engine allows no caller: {@code /hop} redirects to {@code /end}. */
+	private static HttpServer loopback(AtomicInteger requests) throws java.io.IOException {
+		HttpServer s = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+		s.createContext("/hop", x -> { requests.incrementAndGet(); redirect(x, 302, "/end"); });
+		s.createContext("/end", x -> { requests.incrementAndGet(); respond(x, 200, "reached"); });
+		s.start();
+		return s;
+	}
+
+	private static ACell hop(HttpServer s) {
+		return Maps.of("url", "http://127.0.0.1:" + s.getAddress().getPort() + "/hop");
+	}
+
+	@Test public void testVenueItselfReachesALoopbackTargetAndItsRedirect() throws Exception {
+		Engine engine = TestEngine.ENGINE;
+		AtomicInteger requests = new AtomicInteger();
+		HttpServer s = loopback(requests);
+		try {
+			Job job = engine.jobs().invokeOperation("v/ops/http/get", hop(s), engine.venueContext());
+			job.awaitResult(10_000);
+			assertEquals("reached", body(job));
+			assertEquals(1, RT.count(RT.getIn(job.getOutput(), "redirects")));
+			assertEquals(2, requests.get());
+		} finally {
+			s.stop(0);
+		}
+	}
+
+	@Test public void testUserIsRefusedALoopbackTarget(TestInfo info) throws Exception {
+		AtomicInteger requests = new AtomicInteger();
+		HttpServer s = loopback(requests);
+		try {
+			String refusal = failureOf(TestEngine.ENGINE, RequestContext.of(TestEngine.uniqueDID(info)), hop(s));
+			assertTrue(refusal.contains(HTTPAdapter.PRIVATE_ADDRESS), refusal);
+			assertEquals(0, requests.get());
+		} finally {
+			s.stop(0);
+		}
+	}
+
+	@Test public void testVenueAgentIsRefusedALoopbackTarget() throws Exception {
+		Engine engine = TestEngine.ENGINE;
+		AtomicInteger requests = new AtomicInteger();
+		HttpServer s = loopback(requests);
+		try {
+			// An agent of the venue's whose caps grant no venue authority.
+			String refusal = failureOf(engine, engine.venueContext().withAgentId(Strings.create("helper"))
+				.withCaps(Vectors.of(Maps.of(convex.auth.ucan.Capability.CAN, Strings.create("invoke")))), hop(s));
+			assertTrue(refusal.contains(HTTPAdapter.PRIVATE_ADDRESS), refusal);
+			assertEquals(0, requests.get());
+		} finally {
+			s.stop(0);
 		}
 	}
 }

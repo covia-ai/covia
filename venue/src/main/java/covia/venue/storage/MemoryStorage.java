@@ -13,7 +13,7 @@ import covia.grid.impl.BlobContent;
  * Simple in-memory storage implementation for testing and demonstration.
  * This is not suitable for production use as data is lost when the application stops.
  */
-public class MemoryStorage extends AStorage {
+public class MemoryStorage implements ContentStorage {
     
     private final Map<Hash, AContent> storage = new HashMap<>();
     

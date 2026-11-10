@@ -2,6 +2,7 @@ package covia.adapter;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -24,6 +25,7 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
+import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.json.schema.JsonSchema;
 import convex.core.util.JSON;
@@ -136,7 +138,7 @@ class AuthAdapterTest {
 				identityFailure(ctx, Maps.of("aud", aud, "name", "IDENTITY")).getErrorMessage());
 		}
 		assertEquals(AuthAdapter.IDENTITY_AUDIENCE, identityFailure(ctx, Maps.of("name", "IDENTITY")).getErrorMessage());
-		for (Object seconds : new Object[] {0, -1, 3601, Long.MAX_VALUE, 1.5, "300"}) {
+		for (Object seconds : new Object[] {0, -1, Long.MAX_VALUE, 1.5, "300"}) {
 			assertEquals(AuthAdapter.IDENTITY_LIFETIME, identityFailure(ctx,
 				Maps.of("aud", TestEngine.ENGINE.getDIDString(), "name", "IDENTITY", "lifetime", seconds)).getErrorMessage());
 		}
@@ -146,6 +148,15 @@ class AuthAdapterTest {
 		assertEquals(SecretAdapter.INVALID_NAME, identityFailure(ctx,
 			identityInput().assoc(Strings.create("name"), Strings.create("../escape"))).getErrorMessage());
 		assertNull(TestEngine.ENGINE.resolveSecret("s/IDENTITY", ctx));
+	}
+
+	@Test void identityTokenLastsAsLongAsTheCallerChooses() {
+		RequestContext ctx = localCaller();
+		long thirtyDays = 30L * 24 * 3600;
+		identityJob(ctx, identityInput().assoc(Strings.create("lifetime"), CVMLong.create(thirtyDays))).awaitResult(5000);
+		AMap<AString, ACell> claims = JWT.parse(Strings.create(TestEngine.ENGINE.resolveSecret("s/IDENTITY", ctx))).getClaims();
+		assertEquals(thirtyDays,
+			RT.ensureLong(claims.get(JWT.EXP)).longValue() - RT.ensureLong(claims.get(JWT.IAT)).longValue());
 	}
 
 	@Test void identityTokenRequiresExplicitRefreshAndBindsNewAudience() {
@@ -164,15 +175,52 @@ class AuthAdapterTest {
 		assertThrows(covia.exception.AuthException.class, () -> new VenueAuthenticator(engine).verify(refreshed));
 	}
 
-	@Test void customMetadataCannotBypassIdentityInvokeGrant() {
-		RequestContext ctx = localCaller().withCaps(Vectors.of(
-			Capability.create(Strings.create("v/ops/auth/whoami"), AAdapter.INVOKE),
-			Capability.create(Strings.create("s/IDENTITY"), Abilities.SECRET_WRITE)))
-			.withOp(Strings.create("v/ops/auth/whoami"));
+	@Test void directIdentityToolNeedsSecretWriteButNotInvoke() {
+		RequestContext owner = localCaller();
+		RequestContext agent = RequestContext.ofAgent(owner.getUserDID(), Strings.create("worker"));
 		AuthAdapter adapter = (AuthAdapter) TestEngine.ENGINE.getAdapter("auth");
-		assertThrows(Exception.class, () -> adapter.invokeFuture(ctx,
-			Maps.of("operation", Maps.of("adapter", "auth:identity-token")), identityInput()).join());
-		assertNull(TestEngine.ENGINE.resolveSecret("s/IDENTITY", RequestContext.of(ctx.getCallerDID())));
+		AMap<AString, ACell> meta = Maps.of("operation", Maps.of("adapter", "auth:identity-token"));
+		assertThrows(Exception.class, () -> adapter.invokeFuture(agent.withCaps(Vectors.empty()),
+			meta, identityInput()).join());
+		assertNull(TestEngine.ENGINE.resolveSecret("s/IDENTITY", owner));
+		RequestContext writer = agent.withCaps(Vectors.of(
+			Capability.create(Strings.create("s/IDENTITY"), Abilities.SECRET_WRITE)));
+		adapter.invokeFuture(writer, meta, identityInput()).join();
+		assertNotNull(TestEngine.ENGINE.resolveSecret("s/IDENTITY", owner));
+	}
+
+	@Test void theInvokeGrantIsCheckedBeforeTheSigningKey() {
+		// A did:key user holding no key of its own: no key signs for its agent.
+		// Without the invoke grant the agent is refused for the grant, not told
+		// whether a key is held; with it, it learns that none is.
+		RequestContext owner = RequestContext.of(UCAN.toDIDKey(AKeyPair.generate().getAccountKey()));
+		TestEngine.ENGINE.getVenueState().users().ensure(owner.getUserDID());
+		RequestContext agent = RequestContext.ofAgent(owner.getUserDID(), Strings.create("worker"));
+		var write = Capability.create(Strings.create("s/IDENTITY"), Abilities.SECRET_WRITE);
+		String refused = identityFailure(agent.withCaps(Vectors.of(write)), identityInput()).getErrorMessage();
+		assertNotEquals(AuthAdapter.IDENTITY_NOT_OWNED, refused);
+		assertEquals(AuthAdapter.IDENTITY_NOT_OWNED, identityFailure(agent.withCaps(Vectors.of(write,
+			Capability.create(IDENTITY_OP, AAdapter.INVOKE))), identityInput()).getErrorMessage());
+	}
+
+	@Test void aScopedSelfCannotMintItsWholeIdentity() {
+		// The owner's own DID as caller, narrowed by a scope (a scoped credential,
+		// say). Even a scope covering both abilities must not mint a bearer for the
+		// whole identity, which would carry it beyond the scope.
+		RequestContext owner = localCaller();
+		RequestContext scoped = owner.withCaps(Vectors.of(
+			Capability.create(IDENTITY_OP, AAdapter.INVOKE),
+			Capability.create(Strings.create("s/IDENTITY"), Abilities.SECRET_WRITE)));
+		assertFalse(scoped.isSubPrincipal());
+		assertEquals(AuthAdapter.IDENTITY_DIRECT_ONLY, identityFailure(scoped, identityInput()).getErrorMessage());
+		assertNull(TestEngine.ENGINE.resolveSecret("s/IDENTITY", owner));
+		// The owner's own unrestricted authority, and a scoped agent of the owner, still mint.
+		assertEquals(owner.getCallerDID(), RT.getIn(identityJob(owner, identityInput()).awaitResult(5000), "sub"));
+		RequestContext agent = RequestContext.ofAgent(owner.getUserDID(), Strings.create("worker")).withCaps(Vectors.of(
+			Capability.create(IDENTITY_OP, AAdapter.INVOKE),
+			Capability.create(Strings.create("s/AGENT"), Abilities.SECRET_WRITE)));
+		assertEquals(agent.getCallerDID(), RT.getIn(identityJob(agent,
+			identityInput().assoc(Strings.create("name"), Strings.create("AGENT"))).awaitResult(5000), "sub"));
 	}
 
 	@Test
@@ -221,6 +269,7 @@ class AuthAdapterTest {
 		AString jwt = JWT.signPublic(Maps.of(
 			Strings.intern("sub"), innerDidStr,
 			Strings.intern("iss"), innerDidStr,
+			Strings.intern("aud"), engine.getDIDString(),
 			Strings.intern("iat"), now,
 			Strings.intern("exp"), now + 300
 		), innerKp);

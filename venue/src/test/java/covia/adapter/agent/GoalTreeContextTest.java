@@ -15,6 +15,8 @@ import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.api.Fields;
+import covia.exception.ConflictException;
+import covia.exception.InvalidInputException;
 
 /**
  * Tests for GoalTreeContext — the pure rendering functions for the goal tree.
@@ -135,15 +137,15 @@ public class GoalTreeContextTest {
 	public void historyRejectsDowngradesRewritesAndForwardReferences() {
 		AMap<AString, ACell> first = GoalTreeContext.appendTurn(GoalTreeContext.createFrame(""), Maps.of("content", "first"));
 		AMap<AString, ACell> later = GoalTreeContext.appendTurn(first, Maps.of("content", "later"));
-		assertEquals(GoalTreeContext.HISTORY_REWRITE, assertThrows(IllegalArgumentException.class,
+		assertEquals(GoalTreeContext.HISTORY_REWRITE, assertThrows(ConflictException.class,
 			() -> GoalTreeContext.validateFrameUpdate(later, first)).getMessage());
-		assertThrows(IllegalArgumentException.class, () -> GoalTreeContext.validateFrameUpdate(first, legacyFrame("")));
+		assertThrows(ConflictException.class, () -> GoalTreeContext.validateFrameUpdate(first, legacyFrame("")));
 		AMap<AString, ACell> invalid = GoalTreeContext.appendTurn(first,
 			Maps.of("summary", "invalid", "turns", 1L, "historyRange", Vectors.of(0L, 2L)));
-		assertEquals(GoalTreeContext.INVALID_HISTORY_RANGE, assertThrows(IllegalArgumentException.class,
+		assertEquals(GoalTreeContext.INVALID_HISTORY_RANGE, assertThrows(InvalidInputException.class,
 			() -> GoalTreeContext.migrateFrame(invalid)).getMessage());
-		assertThrows(IllegalArgumentException.class, () -> GoalTreeContext.validateFrameUpdate(first, invalid));
-		assertEquals(GoalTreeContext.INVALID_HISTORY_VERSION, assertThrows(IllegalArgumentException.class,
+		assertThrows(InvalidInputException.class, () -> GoalTreeContext.validateFrameUpdate(first, invalid));
+		assertEquals(GoalTreeContext.INVALID_HISTORY_VERSION, assertThrows(InvalidInputException.class,
 			() -> GoalTreeContext.migrateFrame(first.assoc(GoalTreeContext.K_HISTORY_VERSION, CVMLong.create(2)))).getMessage());
 	}
 
@@ -321,6 +323,30 @@ public class GoalTreeContextTest {
 	}
 
 	@Test
+	public void testAFailedToolResultIsStoredWholeAndCutOnlyForTheModel() {
+		int limit = ConversationRenderer.MAX_TOOL_FAILURE_CHARS;
+		String whole = "Error: " + "x".repeat(limit * 3);
+		AMap<AString, ACell> failed = AbstractLLMAdapter.toolResultMessage(Strings.create("call-1"), "op", Strings.create(whole));
+		AMap<AString, ACell> frame = legacyFrame("test").assoc(GoalTreeContext.K_CONVERSATION, Vectors.of(failed));
+
+		ACell shown = ConversationRenderer.renderFull(frame).get(0);
+		assertEquals(whole.substring(0, limit) + ConversationRenderer.TOOL_FAILURE_CUT.formatted(whole.length() - limit),
+			RT.getIn(shown, "content").toString());
+		assertEquals(CVMBool.TRUE, RT.getIn(shown, "isError"), "still marked as a failure");
+		assertEquals(whole, RT.getIn(GoalTreeContext.activeConversation(frame).get(0), "content").toString(),
+			"the stored turn keeps every character");
+
+		String shortFailure = "Error: " + "x".repeat(limit - 7);
+		ACell shortTurn = AbstractLLMAdapter.toolResultMessage(Strings.create("call-2"), "op", Strings.create(shortFailure));
+		String longSuccess = "y".repeat(limit * 3);
+		ACell success = AbstractLLMAdapter.toolResultMessage(Strings.create("call-3"), "op", Strings.create(longSuccess));
+		AMap<AString, ACell> others = legacyFrame("test").assoc(GoalTreeContext.K_CONVERSATION, Vectors.of(shortTurn, success));
+		AVector<ACell> rendered = ConversationRenderer.renderFull(others);
+		assertEquals(shortFailure, RT.getIn(rendered.get(0), "content").toString(), "a failure within the limit is untouched");
+		assertEquals(longSuccess, RT.getIn(rendered.get(1), "content").toString(), "only failures are cut");
+	}
+
+	@Test
 	public void testRenderConversationEmpty() {
 		AMap<AString, ACell> frame = legacyFrame("test");
 		AVector<ACell> messages = ConversationRenderer.renderFull(frame);
@@ -356,23 +382,23 @@ public class GoalTreeContextTest {
 		for (ACell start : new ACell[] {null, CVMLong.create(-1), CVMLong.create(2),
 				CVMLong.create(Long.MAX_VALUE), Strings.create("0")}) {
 			assertEquals(GoalTreeContext.INVALID_CONTEXT_START,
-				assertThrows(IllegalArgumentException.class, () -> GoalTreeContext.activeConversation(
+				assertThrows(InvalidInputException.class, () -> GoalTreeContext.activeConversation(
 					frame.assoc(GoalTreeContext.K_CONTEXT_START, start))).getMessage());
 		}
 		assertEquals(GoalTreeContext.INVALID_CONTEXT_START,
-			assertThrows(IllegalArgumentException.class, () -> GoalTreeContext.activeConversation(frame)).getMessage());
+			assertThrows(InvalidInputException.class, () -> GoalTreeContext.activeConversation(frame)).getMessage());
 		for (ACell history : new ACell[] {null, Strings.create("not a sequence")}) {
 			assertEquals(GoalTreeContext.INVALID_HISTORY,
-				assertThrows(IllegalArgumentException.class, () -> GoalTreeContext.activeConversation(
+				assertThrows(InvalidInputException.class, () -> GoalTreeContext.activeConversation(
 					Maps.of(GoalTreeContext.K_HISTORY, history, GoalTreeContext.K_CONTEXT_START, CVMLong.ZERO)))
 					.getMessage());
 		}
 		assertEquals(GoalTreeContext.INVALID_HISTORY,
-			assertThrows(IllegalArgumentException.class, () -> GoalTreeContext.activeConversation(
+			assertThrows(InvalidInputException.class, () -> GoalTreeContext.activeConversation(
 				frame.assoc(GoalTreeContext.K_CONTEXT_START, CVMLong.ZERO)
 					.assoc(GoalTreeContext.K_CONVERSATION, Vectors.empty()))).getMessage());
 		assertEquals(GoalTreeContext.CONTEXT_START_WITHOUT_HISTORY,
-			assertThrows(IllegalArgumentException.class, () -> GoalTreeContext.activeConversation(
+			assertThrows(InvalidInputException.class, () -> GoalTreeContext.activeConversation(
 				legacyFrame("legacy").assoc(GoalTreeContext.K_CONTEXT_START, CVMLong.ZERO)))
 				.getMessage());
 	}
@@ -410,7 +436,7 @@ public class GoalTreeContextTest {
 		assertEquals("assistant", RT.ensureString(RT.getIn(messages.get(0), "role")).toString());
 		String content = RT.ensureString(RT.getIn(messages.get(0), "content")).toString();
 		assertTrue(content.contains("Compacted"));
-		assertTrue(content.contains("2 turns"));
+		assertTrue(content.contains("turns 0–1"), "a summary names the turns it stands for: " + content);
 		assertTrue(content.contains("Did steps 1 and 2"));
 		// Second is the live turn
 		assertEquals("assistant", RT.ensureString(RT.getIn(messages.get(1), "role")).toString());
@@ -456,6 +482,22 @@ public class GoalTreeContextTest {
 		assertEquals("assistant", String.valueOf(RT.getIn(rendered.get(1), "role")));
 		assertEquals("tool", String.valueOf(RT.getIn(rendered.get(2), "role")));
 		assertEquals("tc-1", String.valueOf(RT.getIn(rendered.get(2), "id")));
+	}
+
+	@Test
+	public void testHistoricalTitleIsTheWordsOfTheFirstMessage() {
+		AMap<AString, ACell> voiced = withConversation(
+			Maps.of("role", "user", "content", Maps.of("text", "are you hearing me?",
+				"via", Maps.of("channel", "voice")), "ts", 1L),
+			Maps.of("role", "assistant", "content", "yes", "ts", 2L));
+		assertEquals("are you hearing me?",
+			ConversationRenderer.historical(voiced, 0, 0).firstUserContent().toString());
+		AMap<AString, ACell> requested = withConversation(
+			Maps.of("role", "user", "content", Maps.of("task", "Daily check-in", "format", "bullets"), "ts", 1L),
+			Maps.of("role", "assistant", "content", "done", "ts", 2L));
+		assertEquals("Daily check-in",
+			ConversationRenderer.historical(requested, 0, 0).firstUserContent().toString());
+		assertNull(GoalTreeContext.turnText(Maps.of("data", "no words")));
 	}
 
 	@Test

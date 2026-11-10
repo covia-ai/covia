@@ -6,7 +6,8 @@
 > `count` as the single cardinality word, camelCase fields, and no request echo;
 > `inspect` is the render route (`{result}`). `aggregate` ships as **count
 > (optionally grouped)**; `covia:aggregate` is also an op. Absence is
-> `200 {exists:false}`. `read` supports ETag/`304` conditional reads (value hash).
+> `200 {exists:false}`, and a path that names no place data could be is a `400`.
+> `read` supports ETag/`304` conditional reads (value hash).
 > `list` supports **field projection** (#191, see below).
 > **Still TODO:** numeric reductions (`sum`/`min`/`max`, pending a consumer).
 
@@ -70,8 +71,8 @@ persistence.
 ## Architecture
 
 The read cores are lifted from `private ACell handleX(...)` on `CoviaAdapter` to
-callable synchronous accessors (same bodies, same `requireCap(ctx, input,
-CRUD_READ)`, zero side effects):
+callable synchronous accessors (same bodies, the same `crud/read` check through
+the data's owner, zero side effects):
 
 ```
 CoviaAdapter
@@ -91,7 +92,7 @@ CoviaAdapter
   ```java
   RequestContext rctx = AuthMiddleware.callerContext(ctx);
   AVector<ACell> grants = AuthMiddleware.headerUcans(ctx);
-  rctx = AuthMiddleware.withTransportGrants(rctx, grants, engine.didVerifier());
+  rctx = engine.withTransportGrants(rctx, grants);
   ```
 
   — calls the accessor, and serialises via `buildResult(ctx, 200, value)`. No job,
@@ -309,16 +310,17 @@ Unchanged from the invoke path; only the job is dropped.
 
 - `AuthMiddleware` already runs `before("/api/*")`, so caller identity, the
   public-read scope, and any presented UCAN are attached before the handler.
-- The accessor calls `ctx.requireCapability(path, "crud/read")`. Unauthenticated
-  callers carry the read-only public scope (`crud/read` + `asset/read`), so they
-  can read public / their-own data and are denied cross-user paths unless a UCAN
-  proof covers them — **exactly** as `covia:read` via invoke behaves today.
+- Each route calls the covia operation's own handler, so a read asks the owner
+  of the data at the path for `crud/read`, exactly as `covia:read` via invoke
+  does (GRID_LATTICE_DESIGN §4.6). Unauthenticated callers act as the venue's
+  public principal, under its read-only public scope (`crud/read` +
+  `asset/read`).
 - Cap denied → **403**. Auth required (no token, public access disabled) → **401**.
 
 ## Namespace scope
 
-`path` accepts two equivalent forms, both resolved by the same shared accessor
-(`Engine.resolvePath`, OPERATIONS.md §4):
+`path` accepts two equivalent forms, both resolved by the covia operations
+(the grammar is in GRID_LATTICE_DESIGN §3):
 
 - **Own-namespace (relative):** `w/…`, `o/…`, `g/…`, `s/…`, `j/…`, `a/…` — resolved
   against the **caller's** user data.
@@ -335,12 +337,13 @@ a fully-qualified path works anywhere a relative one does.
 > identity (the `did:web` ⇄ `did:key` mapping from #167). It does not mean "fetch
 > from `<host>`" — resolution stays local.
 
-**Capability enforcement is what differs, not the plumbing.** The accessor calls
-`requireCapability` with the full DID-URL resource, so:
+**Access is what differs, not the plumbing.** The owner of the data decides,
+by the DID-URL address of the data, so:
 
 - own DID (relative or qualified) → allowed under the normal scope;
 - another user's DID → **denied (403)** unless the caller presents a UCAN proof
-  whose resource covers that DID-URL path — identical to `covia:read` today.
+  whose resource covers that DID-URL path — identical to `covia:read`;
+- `v/…` → open to any principal, the venue's public read-only view.
 
 **Local resolution only.** A DID-qualified path resolves against *this venue's*
 state for that DID. If the DID is not hosted here the result is ordinary absence
@@ -348,7 +351,8 @@ state for that DID. If the DID is not hosted here the result is ordinary absence
 venue (Principle 5). Cross-**venue** reads remain a federation concern (grid ops),
 not part of this surface.
 
-Execution-scoped virtual namespaces use explicit query selectors:
+The context-rooted namespaces `n/`, `t/` and `c/` use explicit query selectors,
+since a values request carries no agent, task or session of its own:
 
 - `n/<path>&agent=<agent>` — agent scratch. `agent` is either a bare id under
   the authenticated caller's user namespace or a full agent DID.
@@ -380,14 +384,18 @@ restricting) is deferred to a **separate later review**.
 |------|------|
 | 200 | Success, **including** absence (`{exists:false}`) and truncation — parity with the ops |
 | 304 | `read` only: `If-None-Match` matches the value's CAD3 hash (conditional read) |
-| 400 | Malformed `path`/params or missing/contradictory execution-scope selectors |
+| 400 | Malformed `path`/params, a path that names no place data could be, or missing/contradictory execution-scope selectors |
 | 401 | Authentication required (no token, public access disabled) |
 | 403 | Capability denied for the requested path |
 
 **Absence is `200 {exists:false}`**, matching `covia:read` — GET and invoke agree,
 callers have one absence check, and a missing path is a normal read result, not an
-error. (No 5xx on this path: reads are local-only, so there is no remote-fetch
-failure to surface — see Principle 5.)
+error. That includes a path into a user, agent, session or job that does not
+exist. A path that could hold nothing at all, such as `wrok/notes` or a job id
+that is not hex, is a `400` naming the path and the part of it where nothing can
+be ([GRID_LATTICE_DESIGN.md](GRID_LATTICE_DESIGN.md) §3). (No 5xx on this path:
+reads are local-only, so there is no remote-fetch failure to surface — see
+Principle 5.)
 
 ## Compatibility — field renames (breaking, 0.3.0 window)
 

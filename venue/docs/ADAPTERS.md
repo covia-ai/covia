@@ -39,14 +39,17 @@ adapter cannot hold the job-handle response until execution completes.
 
 Remote Grid runs and A2A sends use the engine's `RemoteJobs` observer. An
 accepted remote handle survives individual request failures; a lost submission
-acknowledgement records uncertainty and is never blindly replayed. See
+acknowledgement records uncertainty and is never blindly replayed. Before it
+contacts another venue to hand it new work, a message or a write, an adapter
+calls `RemoteJobs.requireNotClosing()`, which refuses once the venue has begun
+shutting down. See
 [JOBS.md](JOBS.md#remote-delegation) for the implemented lifecycle and
 [REMOTE_JOBS_DESIGN.md](REMOTE_JOBS_DESIGN.md) for the further protocol design.
 
 The default invocation path claims `PENDING → STARTED` with `Job.start` before
 calling `invokeFuture`. Job transitions commit atomically; only the winning
-transition triggers its continuation. Start, pause, and resume hooks see the
-committed state and may immediately advance it again. Hooks should schedule
+transition triggers its continuation. Start, pause and resume continuations see
+the committed state and may immediately advance it again. They should schedule
 their next step promptly. A synchronous exception or JVM error fails the Job
 before propagating; late completion cannot replace a terminal state. Typed
 failure causes are committed together with the failure record.
@@ -74,8 +77,12 @@ Terminal cleanup releases job resources before existing result-future
 continuations run.
 
 Capability checks belong at the point of action, before any side effect.
-Invoke-class adapters normally begin with `requireInvoke(ctx)` and add
-resource-specific checks through the relevant `Engine.require*` method. Do
+A directly bound operation checks the resources its action uses through the
+relevant `Engine.require*` methods; it does not require `invoke` merely because
+it runs as a Job. A generic invocation surface additionally checks `invoke`
+on the operation reference its caller asks it to look up. REST reference
+submission is checked by JobManager; a direct grid tool still invokes its
+target and must respect the target's invocation scope. Do
 not infer authority from an operation name or confuse `ctx.getCallerDID()`
 (who acted) with `ctx.getUserDID()` (whose namespace the action uses). See
 [UCAN.md](UCAN.md) for the authority model.
@@ -104,8 +111,12 @@ Messaging adapters can use `ConversationRouter.deliver` with a trusted
 `VenueState.transact` draft, so the session input, adapter receipt and conversation
 mapping and Job admission state publish together. The callback must use only draft-bound components,
 perform no I/O, and tolerate retries. Returning false discards the draft as a
-duplicate. The engine flushes before waking the agent and returns the chat Job
-without waiting for its result. A flush failure propagates to the caller; no
+duplicate. The engine flushes before waking the agent, and `deliver` returns
+without waiting for the agent's reply: the chat Job when the agent took the
+message, whatever has become of the Job since; null when the participant had
+taken it already; and otherwise a `JobFailedException` saying why the agent
+refused it, after one retry on a new session when the conversation's saved
+session has gone. A flush failure propagates to the caller; no
 background retry is started and already committed input is not rolled back.
 `ConversationRouter.onResponse` observes replies
 on the shared virtual executor, handles failed Jobs and skips duplicate deliveries.
@@ -159,6 +170,27 @@ Telegram can retry a different filename without risking existing content.
 DID-scoped DLFS references use URL-encoded paths, decoded once before path
 normalisation and authorization; relative DLFS paths retain their literal spelling.
 
+### Outbound URL handling
+
+An adapter that accepts an HTTP destination normalises it before host or
+capability checks, then uses exactly that URL for transport and credential
+resolution. `.` and `..` path segments, including percent-encoded spellings,
+name their resolved destination; ambiguous encoded separators, nested path
+encoding, dot parameters and traversal above the root are refused. Normalisation
+preserves reserved path escapes and query data. A grant for `/api` therefore
+cannot send a credential to `/api/../admin`. The rule applies to redirect targets
+as well as initial requests. The HTTP adapter rechecks authority for retained
+credential headers on every hop and refuses the redirect before sending when
+a grant no longer covers the destination. Requests with URL secret placeholders
+remain within those grants for their entire redirect chain. `outbound/any` exempts host restrictions, not URL
+syntax or normalisation.
+
+Use `engine.outboundUrl(ctx, url)` for caller-selected destinations: its return
+value is the normalised URL after the host guard. `HTTPURLs.normalize` is the
+shared normaliser for configured endpoints and URL prefixes. Do not merely check
+a transformed URL and then pass the original spelling to an HTTP library.
+
+
 ## Lifecycle and configuration
 
 The significant lifecycle is:
@@ -201,6 +233,41 @@ disable, configure, load, and unload changes are not persisted. Full operator
 semantics and authority requirements are in
 [CONFIG.md, “Runtime adapter lifecycle”](CONFIG.md#runtime-adapter-lifecycle).
 
+### Ending a job
+
+Every job is run by one adapter, fixed when the job is created, and that
+adapter ends what it started when the job is cancelled. The job calls it once:
+
+- `cancelIn(draft, job, adapterData)` runs inside the transaction that cancels
+  the job. It ends what the adapter linked to the job (a request it opened, a
+  task it queued), so the job and its links change together. It must be a pure
+  edit of `draft`, since the transaction may be retried. The default links
+  nothing.
+- `stop(job)` runs after the cancellation commits and stops the job's running
+  work. The default cancels what was recorded with `runs`. An override that
+  has other running work stops it and calls `super.stop(job)`. Holding work in
+  a map keyed by job id is enough: register the work, then call `stop` if the
+  job is already cancelled, so a cancel that came first still stops it.
+
+`runs(job, future)` records a future as the job's running work until the job
+ends. `bridgeToJob` calls it, so an adapter on the `invokeFuture` path gets
+cancellation for nothing. Pass the `Future` from `ExecutorService.submit` for
+work that must be interrupted: cancelling a `CompletableFuture` interrupts
+nothing.
+
+What `cancelIn` needs to find its links goes in the job's **adapter data**
+(`JobManager.updateAdapterData`), kept with the unfinished job outside its
+status record. Only the job's adapter reads it, callers never see it, and it
+goes when the job finishes. Keep it before the link exists, or check
+`job.isFinished()` after making the link, so a cancel in between leaves nothing
+behind. Adapters hold work and data this way, never callbacks: a job has no
+mutable hooks.
+
+An adapter whose work can be suspended answers `canPause(job)` and implements
+`pause(job)`, and likewise `canResume(job)` and `resume(job)`. Both default to
+refusing, and the job refuses with them. `pause` and `resume` run after the
+change commits, so each sees the new status.
+
 There are two distinct configuration hooks:
 
 - `configureModule` receives module bootstrap configuration exactly once and
@@ -212,7 +279,8 @@ There are two distinct configuration hooks:
 An override of `configure` should validate the whole proposed configuration
 before changing live fields, throw `IllegalArgumentException` with an
 actionable message for malformed known settings, and reject unknown settings
-when `strict` is true. Security boundaries and reserved settings must remain
+when `strict` is true. The Engine reports it as the failure of whoever supplied
+the settings ([ERRORS.md](ERRORS.md)). Security boundaries and reserved settings must remain
 enforced even in lenient mode. Return `false` only to decline a valid but
 unavailable configuration. The reserved `enabled` key is owned by the
 framework.
@@ -222,6 +290,15 @@ explicit allow-list and defaults to publishing nothing; the helper
 `publicConfig("key", ...)` selects named top-level fields. Credentials,
 private endpoints, allow-lists, and other operator-private values must not
 appear there.
+
+Adapters can implement `covia.venue.auth.VenueProofMethods` to contribute named
+venue identity proof mechanisms for operators to list in `auth.venueProof`
+(CONFIG.md). A mechanism returns null when the venue reached at a target holds
+a DID, or the reason it does not, and may let a success be reused for a period.
+It dials the target only through the connection it is given, which passes the
+outbound guard. Any listed mechanism suffices, so each must be sound on its
+own. Declarations are immutable for the installed instance, and a disabled
+adapter's mechanisms are withdrawn.
 
 Adapters can implement `covia.venue.auth.AuthenticationMethods` to contribute
 named trusted verifiers (`Map<AString, Verifier>`). Each verifier receives the
@@ -350,26 +427,31 @@ There are three separate concerns:
 2. **Adapter-owned state.** Each adapter has its own value at
    `:adapters/<name>` within the venue. `adapterState()` returns its lattice
    component; this is not a user workspace or a caller-addressable path.
-3. **Secrets.** Secret material remains in `s/`. Adapter records contain only
-   `s/NAME` references. Resolve secrets against their destination
-   (`engine.resolveSecret(ref, ctx, url)`) so URL-bound `secret/use` grants apply.
+3. **Secrets.** Credentials a user supplies remain in `s/`, and adapter records
+   refer to them only as `s/NAME` references. Resolve secrets against their
+   destination (`engine.resolveSecret(ref, ctx, url)`) so URL-bound
+   `secret/use` grants apply. Credentials an adapter obtains and rotates on a
+   user's behalf, such as OAuth grants, are its own state instead, sealed with
+   `SecretStore.seal` under the same keys: no secret operation then reaches
+   them, and the adapter gates their use with abilities of its own.
 
 `AdapterState` uses upstream `ALatticeComponent` and `TransactionalComponent`.
 The value may be any CAD3 cell: there is no mandatory map, user prefix,
 workspace envelope or per-adapter merge rule. An adapter owns its schema and
 may wrap the component's cursor in its own typed domain components. For simple
 map/vector records, `read`, `write` and `delete` offer type-aware relative paths;
-`get`, `set`, `update` and `transact` operate on the complete value. `rootPath`
-and `path` are diagnostic locations, not workspace API addresses.
+`get`, `set`, `update`, `execute` and `transact` operate on the complete value;
+`transact` returns what its callback returned in the run that committed.
+`rootPath` and `path` are diagnostic locations, not workspace API addresses.
 
 ```java
 AdapterState state = adapterState();
-state.transact(draft -> {
+state.execute(draft -> {
     draft.write("settings/theme", Strings.create("dark"));
     draft.write("settings/version", CVMLong.ONE);
 });
 
-engine.getVenueState().transact(draft -> {
+engine.getVenueState().execute(draft -> {
     draft.adapterState("telegram").write("settings/enabled", CVMBool.TRUE);
     draft.adapterState("slack").write("settings/enabled", CVMBool.FALSE);
     // User, schedule and other domain operations can join this same commit.
@@ -413,25 +495,30 @@ than the adapter understands is refused instead of misread. Built-in adapters,
 modules, and adapters an operator or embedder adds all use the same hook.
 
 ```java
-@Override public long stateVersion() { return 2; }
+private static final List<MigrationStep> STATE_STEPS = List.of(
+    new BotsUnderKey(),     // 0 → 1
+    new LimitsAdded());     // 1 → 2
 
-@Override public ACell migrateState(long version, ACell state) {
-    return switch ((int) version) {
-        case 0 -> Maps.of("bots", state);                                  // 0 → 1
-        case 1 -> RT.ensureMap(state).assoc(Strings.create("limits"), Maps.empty()); // 1 → 2
-        default -> super.migrateState(version, state);
-    };
+@Override public List<MigrationStep> stateSteps() { return STATE_STEPS; }
+
+/** Version 1: the bot registry, version 0's whole state, moves under "bots". */
+static final class BotsUnderKey implements MigrationStep {
+    @Override public ACell apply(ACell state) { return Maps.of("bots", state); }
 }
 ```
 
+- Each step is a `MigrationStep` (`covia.venue.migration`), a class of its
+  own with its own tests. Step `i` takes state at version `i` to version
+  `i + 1`, so `stateVersion()` is the number of steps. A schema change adds a
+  step at the end; a released step never changes.
 - The venue records the version each adapter's state has reached in its
-  `:adapter-versions` region. An adapter that does not override
-  `stateVersion()` is at version 0 and records nothing.
-- Steps run in order from the recorded version up to `stateVersion()`, and the
-  new version is recorded with them. A legacy `w/adapters/<name>` value moves
-  first. A venue with no state for the adapter records the adapter's own
-  version, lower or higher, without calling `migrateState`: with nothing
-  stored, there is nothing to misread.
+  `:adapter-versions` region. An adapter with no steps is at version 0 and
+  records nothing.
+- Steps run in order from the recorded version, and the new version is
+  recorded with them. A legacy `w/adapters/<name>` value moves first. A venue
+  with no state for the adapter records the adapter's own version, lower or
+  higher, without running a step: with nothing stored, there is nothing to
+  misread.
 - At launch, the built-in adapters and every configured module's adapters
   migrate together, after the venue's own steps, in the one transaction that
   opens the venue and before any bootstrap write. A refusal or a failing step in
@@ -445,16 +532,19 @@ modules, and adapters an operator or embedder adds all use the same hook.
 - Migration is not only a start-up event. `Engine.migrate()` migrates the
   venue and every installed adapter at any time, in one transaction, and an
   embedder migrating a store itself passes each adapter's `stateMigration()` to
-  `VenueState.migrate(adapters)`. An adapter installed after a migration
+  `VenueState.migrate(keys, adapters)`. An adapter installed after a migration
   migrates as it registers.
 - Either way, steps run whether the adapter is enabled or disabled, and before
   `configure`, install or any deletion hook sees the state. A step cannot depend
   on the adapter's configuration.
-- Each step is a pure function of its arguments: no I/O, no engine calls, no
+- Each step is a pure function of its argument: no I/O, no engine calls, no
   clock, no runtime changes. The transaction may run it again, or discard its
   result. It returns the same cell when nothing changes, and throws for a shape
   it does not recognise. The state and version then stay as they were, and the
   start or registration fails.
+- The form released in 0.10.0, overriding `stateVersion()` and
+  `migrateState(version, state)`, still migrates as before. It is deprecated
+  for removal; give `stateSteps()` instead.
 - Stored state recorded at a newer version than the adapter supports is
   refused with an `UnsupportedVersionException` naming the adapter, including a
   disabled adapter, so the start or registration fails. To run an older build without
@@ -463,8 +553,11 @@ modules, and adapters an operator or embedder adds all use the same hook.
 - A replaced instance keeps running until its replacement has registered. When
   loading a module at runtime that raises its state version, disable the old
   instance first.
-- The built-in test adapter is at version 1, with version 0's shape unchanged,
-  so every venue and the release-written fixtures run this path.
+- The built-in test adapter is at version 3, so every venue, both release
+  fixtures and `VenueMigrationEndToEndTest` run this path. Version 1 keeps
+  version 0's shape. Versions 2 and 3 are synthetic: each step adds the
+  version it reaches to the state's `migrations` log, and refuses state not in
+  its version's shape, so a test sees which steps ran, in what order.
 
 ### User-visible extension routes
 
@@ -567,14 +660,17 @@ disposable test data, not included in user exports.
   conflict. The adapter owns all schema-specific cleanup; the default hook is
   for adapters without user-associated state.
 - `onUserDeleted(did, previousUser)` runs after the commit is flushed. Stop
-  workers and release external resources here. It must be idempotent and throw
-  on incomplete cleanup so the venue can retry. The previous user record is
+  workers and release external resources here. It must be idempotent, including
+  when runs overlap, and throw on incomplete cleanup so the venue can retry. The previous user record is
   available only on initial deletion, never retained for recovery. Tolerate null
   on retry and an instance that was boot-disabled and never installed.
 
 An adapter needing durable external cleanup identifiers must maintain its own
 cleanup records outside the data it erases and consume them idempotently in the runtime
 hook. Recovery cannot depend on the erased namespace or an in-memory snapshot.
+
+Deletions take no lock: they may overlap each other and adapter registration,
+and each pending entry is finished against its tombstone.
 
 Both hooks apply to disabled adapters. Incomplete work is indexed privately at
 `:user-deletions/<adapter>/<did>` within the venue; `_venue` covers core
@@ -586,6 +682,14 @@ recreation. Repeat `user:delete` to retry; loading an unavailable adapter also
 reconciles its queue. Normal startup checks only these small pending queues,
 with no sweep of user or job records. Repeating deletion repairs adapter data
 left by tombstones from older venues as well.
+
+`deleteAgentState(agentDID, state)` is the agent counterpart, for state an
+adapter keeps under an agent's own DID (`<owner>:g:<id>`), such as the crypto
+adapter's keyrings. `Engine.deleteAgentState` runs it for every registered
+adapter, enabled or disabled, in one transaction each time the agent is
+deleted, under the same rules as `deleteUserState`. A module adapter not loaded
+at the time is not called and keeps what it holds. State kept for an agent
+under its owner's DID goes with the owner.
 
 The messaging base implements both hooks for runtime and configured bots. It
 records configured-bot ownership, removes sessions/inboxes/caches, stops runners,
@@ -607,7 +711,7 @@ State schemas need explicit tests. Cover the exact canonical paths, venue
 ownership, restart recovery, deletion, config/runtime separation, malformed
 records, and any migration from an older layout. A new schema should define
 which version wins during migration and make repeated migration idempotent.
-Version it with `stateVersion` and `migrateState`
+Version it with `stateSteps`
 ([Versioned state and migration](#versioned-state-and-migration)), and test each
 step: older state converts, a current state comes back as the same cell, and an
 unknown shape is refused.
@@ -631,14 +735,14 @@ proxies. External means execution controlled outside Covia's own agent loop;
 the transport may be HTTP, a local CLI, or an SDK.
 
 Subclasses select interaction operations with `isInteractionOperation` and
-implement `startInteraction`. The base claims `Job.start` once, checks invoke
-authority, routes messages, binds cancellation and removes live bindings on
+implement `startInteraction`. The base claims `Job.start` once, routes
+messages, binds cancellation and removes live bindings on
 terminal completion. Administrative operations retain `invokeFuture` dispatch.
 Providers validate their target, credentials, options and resource authority
 before effects. Construct a passive `RemoteInteraction` and bind it with
 `bindInteraction` before starting work, or on remote acceptance when its handle
-first becomes known. Late acceptance after local cancellation still invokes
-the binding's cancel hook.
+first becomes known. Late acceptance after local cancellation still cancels
+the interaction.
 
 An interaction implements `deliver(messageRecord)` and `cancel()`. Delivery
 receives the original structured Job message; it must throw on unsupported or
@@ -653,11 +757,15 @@ the Job's record as its current state (JOBS.md, Progress). Provider-native
 results, message parts and session/task identifiers are preserved.
 
 Recovery stays explicit. A2A and `remoteagent` compose `RemoteJobs` for durable
-submission intent, protected transport authority and reattachment to an
-accepted task. Observation failure cannot manufacture execution failure or
+submission intent, what is needed to reach the task again (never a sign-in
+credential or a secret's value; JOBS.md) and reattachment to an accepted task.
+How a job follows its task is kept in the job's entry (`RemoteJobs.kept`);
+its record shows the task's `delegation.remoteId` and `remoteStatus`, and
+`delegation.notFollowed` once the venue stops following it. Observation failure cannot manufacture execution failure or
 authorize replay. Claude may reconstruct an idle conversation through
-`restoreInteraction`; resuming a transcript does not recover an interrupted
-turn. There is no default resubmission, polling loop or lifetime timeout in
+`restoreInteraction`, as the job's caller in the context the job kept
+(`JobManager.callerContext`); resuming a transcript does not recover an
+interrupted turn. There is no default resubmission, polling loop or lifetime timeout in
 the base. Cancellation is a request, not proof of remote cessation.
 
 `VenueRemoteAgent` is a Java proxy over any authenticated `Venue`, including
@@ -673,10 +781,19 @@ that task. The Job records `sessionId` separately from `delegation.remoteId`.
 Native remote connections share `VenueConnection` with Grid: anonymous by
 default, explicit target-bound caller identity, or an explicitly delegated
 venue relay. Omitting `venue` carries the complete current RequestContext to
-the local agent. A local proxy cannot reconstruct that attenuated context from
-a caller DID after restart, so its recovery fails explicitly and leaves the
-original task ID for inspection; it never substitutes venue authority. Remote
-proxies recover their saved transport authority and observe the same task.
+the local agent, and the job keeps its caller's context in its entry
+(JOBS.md, Kept caller context). After a restart such a local proxy follows
+the same task again exactly as it first did, as its caller acts now
+(`JobManager.callerContext`): its status, messages and cancellation reach
+that task, and it finishes with the task's outcome. It ends instead when it
+keeps no context or had not recorded the task
+(`RemoteAgentAdapter.LOCAL_INTERRUPTED`), or when its
+caller cannot act now (`RemoteAgentAdapter.CALLER_CANNOT_ACT`, naming the
+task). The task then runs on: the venue never acts on it without its
+caller's authority. A remote proxy reconnects as it first connected and
+observes the same task, except one that signed in as its caller: the venue
+keeps no such credential, so its recovery fails, naming the remote task and
+its venue.
 
 ### Agent dispatch hooks
 
@@ -779,7 +896,8 @@ committed with the inbox. This is not an exactly-once guarantee. Claims coordina
 one Engine, not multiple independently running replicas. Memory/temp venues
 retain their normal ephemeral durability. `pruneCompleted(cutoff)` removes only
 completed receipts; the provider chooses retention beyond its retry window and
-must clean binding-owned inbox/checkpoint data in `deleteRuntimeState`.
+must clean binding-owned inbox/checkpoint data in `deleteRuntimeState`, which
+runs in the transaction that removes the bot's shared records.
 
 ### HTTP messaging workers
 
@@ -951,8 +1069,21 @@ are bounded and in memory, so a restart loses only messages not yet collected.
 1. Create a class extending `AAdapter` in a `covia.<module>.<feature>` package.
 2. Implement `getName()` and an LLM-friendly `getDescription()`.
 3. Implement `invokeFuture`, or the job-aware `invoke` when the adapter owns
-   the job lifecycle. Call `requireInvoke(ctx)` or the correct resource gate
-   before effects, and use `getSubOperation(meta)` for dispatch.
+   the job lifecycle. Apply the resource gates its action needs before
+   effects, and use `getSubOperation(meta)` for dispatch. If it accepts an
+   arbitrary operation reference to execute, use the generic invocation path
+   (or use `JobManager.requireRemoteInvoke` with the target and submitted input
+   before remote submission);
+   do not substitute an invocation check for the target's resource checks. Refuse what
+   the caller can fix with the Covia type for it, such as
+   `InvalidInputException` for bad input, whose message says what is wrong
+   ([ERRORS.md](ERRORS.md#types)); catch a library's exceptions where they are
+   called. Anything else that escapes the operation, `IllegalArgumentException`
+   included, is the adapter's fault: its Job fails with `Operation <op> failed:
+   unexpected <ClassName> in adapter <name>`, logged at ERROR, and the caller
+   is told nothing more ([ERRORS.md](ERRORS.md#scopes)). A job-aware adapter
+   fails its Job with the exception itself, `job.fail(e)`, so the report names
+   the operation.
 4. Override `configure` when settings need validation or cached runtime state.
    Override `info` and `publicConfig` only for intentionally public facts.
 5. Override `installAssets()` and create JSON operation definitions under
@@ -1024,7 +1155,9 @@ resolution, and full metadata rules.
 Optional adapters should be separate Maven modules when operators may choose
 whether to install their dependency tree. A module:
 
-- depends on `venue` with `provided` scope;
+- depends on `venue` with `provided` scope, and may take the venue's test jar
+  (`<type>test-jar</type>`, `test` scope) for shared test support, such as
+  `TestTemp` for a store that must survive a restart;
 - shades only its own runtime dependencies into a `*-module.jar` written beside the slim jar (not attached, so Maven Central receives only the slim jar);
 - excludes Covia, Convex, SLF4J, and Logback platform classes;
 - excludes every library `covia.jar` already ships (Kotlin, Jackson, Gson,

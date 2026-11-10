@@ -35,11 +35,13 @@ import convex.core.lang.RT;
 import covia.adapter.UserAdapter;
 import covia.api.Fields;
 import covia.exception.AuthException;
+import covia.grid.Attribution;
 import covia.grid.Job;
 import covia.grid.Status;
+import covia.grid.hitl.Hitl;
 import covia.lattice.Covia;
 import covia.lattice.Namespace;
-import covia.lattice.WorkspaceRoot;
+import covia.lattice.CoviaPath;
 
 /** Export, import and clone of a user's whole stored state, through the user operations. */
 class UserExportsTest {
@@ -69,16 +71,20 @@ class UserExportsTest {
 		Users users = engine.getVenueState().users();
 		users.create(did);
 		User user = users.ensure(did);
-		user.workspaceRoot().write(WorkspaceRoot.parseStringPath("w/notes/today"), Strings.create("buy milk"));
-		user.workspaceRoot().write(WorkspaceRoot.parseStringPath("o/greet"), Maps.of("adapter", "test:echo"));
-		user.putHitlRequest(Strings.create("req-1"), Maps.of(Fields.STATUS, "OPEN"));
+		user.writeInternalPath(CoviaPath.parse("w/notes/today"), Strings.create("buy milk"));
+		user.writeInternalPath(CoviaPath.parse("o/greet"), Maps.of("adapter", "test:echo"));
+		user.inbox().put(Strings.create("req-1"), Maps.of(Fields.STATUS, "OPEN"));
 		user.assets().store(Strings.create("{\"name\":\"note\"}"), Strings.create("asset content"));
 		user.secrets().store("API_KEY", SECRET, KEYS);
 		Blob jobID = Blob.fromHex("0a".repeat(16));
-		user.persistJob(jobID, Maps.of(Fields.ID, jobID, Fields.STATUS, Status.COMPLETE, Fields.OUTPUT, "done"));
-		AgentState agent = user.ensureAgent(HELPER, Maps.of("model", "test"), Strings.create("state"));
+		user.jobs().create(jobID, Maps.of(Fields.ID, jobID, Fields.STATUS, Status.COMPLETE, Fields.OUTPUT, "done"));
+		Agent agent = user.ensureAgent(HELPER, Maps.of("model", "test"), Strings.create("state"));
 		agent.ensureSession(Blob.fromHex("aa"), did);
 		return user;
+	}
+
+	private static Users users() {
+		return engine.getVenueState().users();
 	}
 
 	private CompletableFuture<ACell> start(String op, ACell input, RequestContext ctx) {
@@ -116,19 +122,25 @@ class UserExportsTest {
 		assertNull(JsonSchema.validate(RT.getIn(published, Fields.OPERATION, Fields.OUTPUT), exported));
 		assertEquals(CVMLong.create(UserExports.VERSION), RT.getIn(exported, Fields.VERSION));
 		AString hex = RT.getIn(exported, EXPORT);
+		assertEquals(users().content(source).get(Namespace.J),
+			RT.getIn(UserExports.decode(Blobs.parse(hex)), UserExports.K_USER, Namespace.J),
+			"an export keeps the calls the user made");
 		String plaintextHex = Blob.wrap(SECRET.getBytes(StandardCharsets.UTF_8)).toHexString();
 		assertFalse(hex.toString().contains(plaintextHex), "secrets travel sealed");
+		assertNotNull(RT.getIn(users().user(source).get(), Covia.K_META), "the source has activity times");
+		assertNull(RT.getIn(UserExports.decode(Blobs.parse(hex)), Covia.K_META), "an export carries no venue bookkeeping");
 
 		// As a JSON caller sends it back: hex, through a recorded job.
 		Job job = engine.jobs().invokeOperation("v/ops/user/import", Maps.of(Fields.DID, target,
 			EXPORT, hex, Fields.SEED, seedRef(seal)), venue);
 		assertEquals(CVMBool.TRUE, RT.getIn(job.awaitResult(10_000), Fields.CREATED));
-		AMap<AString, ACell> record = engine.getVenueState().users().get(engine.getDIDString()).getJob(job.getID());
+		AMap<AString, ACell> record = engine.getVenueState().users().user(engine.getDIDString()).jobs().getRecord(job.getID());
 		assertEquals(Fields.HIDDEN, RT.getIn(record, Fields.INPUT, EXPORT), "the export never reaches a job record");
 
 		Users users = engine.getVenueState().users();
-		assertEquals(users.content(source).dissoc(Namespace.S), users.content(target).dissoc(Namespace.S));
-		User imported = users.get(target);
+		assertEquals(users.content(source).dissoc(Namespace.S).dissoc(Namespace.J), users.content(target).dissoc(Namespace.S),
+			"an import holds everything but the calls, which the account it fills has not made");
+		User imported = users.user(target);
 		assertEquals(SECRET, imported.secrets().decrypt("API_KEY", KEYS).toString());
 		assertNotNull(RT.getIn(imported.get(), Covia.K_META, Covia.K_CREATED), "the import is the account's first activity");
 	}
@@ -139,11 +151,11 @@ class UserExportsTest {
 		ABlob blob = export(source, SECRETS, CVMBool.FALSE);
 		Users users = engine.getVenueState().users();
 		users.create(target);
-		users.ensure(target).workspaceRoot().write(WorkspaceRoot.parseStringPath("w/old"), Strings.create("gone"));
-		User old = users.get(target);
+		users.ensure(target).writeInternalPath(CoviaPath.parse("w/old"), Strings.create("gone"));
+		User old = users.user(target);
 		engine.deleteUser(venue, target);
 		assertEquals(CVMBool.TRUE, RT.getIn(run("import", Maps.of(Fields.DID, target, EXPORT, blob), venue), Fields.CREATED));
-		assertEquals(users.content(source).dissoc(Namespace.S), users.content(target));
+		assertEquals(users.content(source).dissoc(Namespace.S).dissoc(Namespace.J), users.content(target));
 		assertThrows(AuthException.class, old::get, "a cursor from the deleted lifecycle stays fenced off");
 	}
 
@@ -173,7 +185,7 @@ class UserExportsTest {
 		assertEquals(UserExports.SECRETS_NEED_KEY, failure(start("export", Maps.of(Fields.DID, source), venue)));
 		ABlob blob = export(source, SECRETS, CVMBool.FALSE);
 		run("import", Maps.of(Fields.DID, target, EXPORT, blob), venue);
-		assertTrue(engine.getVenueState().users().get(target).secrets().list().isEmpty());
+		assertTrue(engine.getVenueState().users().user(target).secrets().list().isEmpty());
 		assertNotNull(engine.getVenueState().users().content(target).get(Namespace.W));
 	}
 
@@ -188,7 +200,7 @@ class UserExportsTest {
 			Maps.of(Fields.DID, target, EXPORT, blob, Fields.SEED, seedRef(AKeyPair.generate())), venue)));
 		assertEquals(UserAdapter.SEED_REF_REQUIRED, failure(start("import",
 			Maps.of(Fields.DID, target, EXPORT, blob, Fields.SEED, seal.getSeed().toHexString()), venue)));
-		assertNull(engine.getVenueState().users().get(target), "a refused import registers nothing");
+		assertNull(engine.getVenueState().users().user(target), "a refused import registers nothing");
 	}
 
 	@Test
@@ -196,7 +208,7 @@ class UserExportsTest {
 		fill(source);
 		ABlob blob = export(source, SECRETS, CVMBool.FALSE);
 		Users users = engine.getVenueState().users();
-		users.ensure(target).workspaceRoot().write(WorkspaceRoot.parseStringPath("w/x"), Strings.create("y"));
+		users.ensure(target).writeInternalPath(CoviaPath.parse("w/x"), Strings.create("y"));
 		assertEquals(Users.NOT_EMPTY, failure(start("import", Maps.of(Fields.DID, target, EXPORT, blob), venue)));
 
 		AString registered = Strings.create(source + "-registered");
@@ -223,46 +235,72 @@ class UserExportsTest {
 		ABlob foreign = Format.encodeMultiCell(Maps.of(UserExports.K_FORMAT, "something-else"), true);
 		assertEquals(UserExports.NOT_AN_EXPORT, failure(start("import", Maps.of(Fields.DID, target, EXPORT, foreign), venue)));
 		assertEquals(UserExports.NOT_AN_EXPORT, failure(start("import", Maps.of(Fields.DID, target, EXPORT, "0x00ff"), venue)));
-		assertNull(engine.getVenueState().users().get(target));
+		assertNull(engine.getVenueState().users().user(target));
 	}
 
 	@Test
 	void importBringsOlderShapesToTheirCurrentForm() {
-		// A job record as Covia wrote it before #611: its earlier states chained under prev.
+		// A version 1 export: its HITL requests name the asker as from, with
+		// requesterUser for an agent's ask, and it holds the user's jobs.
 		Blob jobID = Blob.fromHex("0c".repeat(16));
-		AMap<AString, ACell> current = Maps.of(Fields.ID, jobID, Fields.STATUS, Status.COMPLETE, Fields.OUTPUT, "done");
-		AMap<AString, ACell> legacy = current.assoc(Strings.create("prev"), Maps.of(Fields.ID, jobID, Fields.STATUS, Status.STARTED));
+		AString asker = Strings.create(source + ":g:" + HELPER);
+		AString stranger = TestEngine.uniqueDID("import-stranger");
+		AMap<AString, ACell> fromAgent = Maps.of(Hitl.ID, "req-agent", Hitl.STATUS, Hitl.OPEN,
+			Strings.create("from"), asker, Strings.create("requesterUser"), source);
+		AMap<AString, ACell> fromUser = Maps.of(Hitl.ID, "req-user", Hitl.STATUS, Hitl.OPEN,
+			Strings.create("from"), stranger);
 		ABlob older = Format.encodeMultiCell(Maps.of(UserExports.K_FORMAT, UserExports.FORMAT,
 			Fields.VERSION, 1, Fields.DID, source,
-			UserExports.K_USER, Maps.of(Namespace.J, Index.of(jobID, legacy))), true);
+			UserExports.K_USER, Maps.of(
+				Namespace.J, Index.of(jobID, Maps.of(Fields.ID, jobID, Fields.STATUS, Status.COMPLETE)),
+				Namespace.H, Maps.of(Covia.WORKSPACE_DATA, Maps.of("req-agent", fromAgent, "req-user", fromUser)))), true);
 		run("import", Maps.of(Fields.DID, target, EXPORT, older), venue);
-		assertEquals(current, engine.getVenueState().users().get(target).getJob(jobID));
+
+		User imported = users().user(target);
+		assertEquals(Maps.of(Hitl.ID, "req-agent", Hitl.STATUS, Hitl.OPEN, Hitl.CALLER, asker, Hitl.OWNER, source),
+			imported.inbox().get(Strings.create("req-agent")));
+		assertEquals(Maps.of(Hitl.ID, "req-user", Hitl.STATUS, Hitl.OPEN, Hitl.CALLER, stranger),
+			imported.inbox().get(Strings.create("req-user")));
+		assertNull(imported.jobs().getRecord(jobID), "an import leaves out the calls");
+	}
+
+	@Test
+	void aVersionOneSecretArrivesUnderTheCurrentKey() {
+		User user = fill(source);
+		SecretStoreTest.storeVersion1(user, "OLD_KEY", SECRET, engine.getKeyPair());
+		AKeyPair seal = AKeyPair.generate();
+		ABlob blob = export(source, ACCOUNT_KEY, seal.getAccountKey());
+		run("import", Maps.of(Fields.DID, target, EXPORT, blob, Fields.SEED, seedRef(seal)), venue);
+		User imported = engine.getVenueState().users().user(target);
+		assertEquals(CVMLong.create(SecretStore.CURRENT_KEY_VERSION), RT.getIn(imported.get(), Namespace.S, "OLD_KEY", "keyVersion"));
+		assertEquals(SECRET, imported.secrets().decrypt("OLD_KEY", KEYS).toString());
 	}
 
 	@Test
 	void refusesUnfinishedWork() {
 		User user = fill(source);
 		Blob running = Blob.fromHex("0b".repeat(16));
-		user.persistJob(running, Maps.of(Fields.ID, running, Fields.STATUS, Status.STARTED));
+		user.jobs().create(running, Maps.of(Fields.ID, running, Fields.STATUS, Status.STARTED));
 		try {
 			assertEquals(UserExports.BUSY, failure(start("export", Maps.of(Fields.DID, source, SECRETS, CVMBool.FALSE), venue)));
-			assertEquals(UserExports.BUSY, failure(start("clone", Maps.of(Fields.FROM, source, Fields.TO, target), venue)));
-			assertNull(engine.getVenueState().users().get(target));
+			// A clone leaves the calls behind, so an unfinished one is live in one place only.
+			assertEquals(CVMBool.TRUE, RT.getIn(run("clone", Maps.of(Fields.FROM, source, Fields.TO, target), venue), Fields.CREATED));
+			assertNull(users().content(target).get(Namespace.J));
 		} finally {
-			user.persistJob(running, Maps.of(Fields.ID, running, Fields.STATUS, Status.CANCELLED));
+			user.jobs().job(running).update(job -> job.assoc(Fields.STATUS, Status.CANCELLED));
 		}
 		// An outstanding agent task is unfinished work, wherever its job is recorded.
 		assertEquals(UserExports.BUSY, UserExports.unfinishedWork(Maps.of(Namespace.G,
-			Maps.of(HELPER, Maps.of(AgentState.KEY_TASKS, Maps.of("task", Maps.empty()))))));
+			Maps.of(HELPER, Maps.of(Agent.KEY_TASKS, Maps.of("task", Maps.empty()))))));
 		assertNull(UserExports.unfinishedWork(Maps.of(Namespace.G,
-			Maps.of(HELPER, Maps.of(AgentState.KEY_TASKS, Maps.empty())))));
+			Maps.of(HELPER, Maps.of(Agent.KEY_TASKS, Maps.empty())))));
 	}
 
 	@Test
 	void cloneCopiesAsStoredAndRearmsWakes() {
 		User user = fill(source);
 		Blob sid = Blob.fromHex("aa");
-		engine.getVenueState().setAgentThreadWakeTime(source, HELPER, AgentState.ThreadKind.SESSION, sid,
+		engine.getVenueState().setAgentThreadWakeTime(source, HELPER, Agent.ThreadKind.SESSION, sid,
 			System.currentTimeMillis() + 86_400_000L);
 		Blob sourceWake = user.agent(HELPER).wakeHandle();
 		assertNotNull(sourceWake);
@@ -272,17 +310,18 @@ class UserExportsTest {
 		Users users = engine.getVenueState().users();
 		AMap<AString, ACell> original = users.content(source);
 		AMap<AString, ACell> copy = users.content(target);
-		assertEquals(original.dissoc(Namespace.G), copy.dissoc(Namespace.G));
-		User clone = users.get(target);
+		assertEquals(original.dissoc(Namespace.G).dissoc(Namespace.J), copy.dissoc(Namespace.G),
+			"a clone holds everything but the calls, which the account it fills has not made");
+		User clone = users.user(target);
 		assertEquals(SECRET, clone.secrets().decrypt("API_KEY", KEYS).toString());
-		AgentState agent = clone.agent(HELPER);
+		Agent agent = clone.agent(HELPER);
 		assertEquals(user.agent(HELPER).getSession(sid), agent.getSession(sid));
 
 		Blob cloneWake = agent.wakeHandle();
 		assertNotNull(cloneWake);
 		assertNotEquals(sourceWake, cloneWake);
-		ScheduleState schedule = engine.getVenueState().schedule();
-		assertEquals(target, schedule.find(cloneWake).rec().get(ScheduleState.K_OWNER));
+		Schedule schedule = engine.getVenueState().schedule();
+		assertEquals(target, Attribution.owner(schedule.find(cloneWake).rec()));
 		assertNotNull(schedule.find(sourceWake), "the source keeps its own wake");
 
 		assertEquals(UserExports.SAME_USER, failure(start("clone", Maps.of(Fields.FROM, source, Fields.TO, source), venue)));

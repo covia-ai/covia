@@ -24,9 +24,9 @@ agent that cannot do the intended work:
 
 4. **Conversation history is session-scoped** — a changed declarative config makes each existing session's materialised prompt/tool prefix stale; its next inference re-renders that config-owned prefix while preserving rendered conversation and load events verbatim. Ambient source changes alone do nothing. Use `agent_reload_context` to force a same-config refresh of an idle session. Omit `sessionId` to start a new conversation, and delete/recreate only when you explicitly need a completely fresh identity and audit record. Config updates apply to future transitions — a transition already running keeps the snapshot it fired with (`agent_update` reports `running: true`) — so never suspend just to update; suspend only to halt a run now.
 
-5. **Operation references are lattice paths, not adapter shorthand** — `config.operation`, `llmOperation`, and operation entries in `tools` must be resolvable paths such as `v/ops/covia/write`, never `covia:write`. Create returns warnings for unavailable configured tools. Harness tools (`subgoal`, `complete`, `fail`, `compact`, `context_load`, `context_unload`, `more_tools`, and `skill_load` when `config.skills` or `config.skillsets` is non-empty) are bare names. A custom read/write agent must declare those operations or start from `worker`.
+5. **Operation references are lattice paths, not adapter shorthand** — `config.operation`, `llmOperation`, and operation entries in `tools` must be resolvable paths such as `v/ops/covia/write`, never `covia:write`. Create returns warnings for unavailable configured tools, and for tools naming another venue's operation, which the agent can use only while that venue can be reached; prefer an operation on this venue. Harness tools (`subgoal`, `complete`, `fail`, `compact`, `context_load`, `context_unload`, `more_tools`, and `skill_load` when `config.skills` or `config.skillsets` is non-empty) are bare names. A custom read/write agent must declare those operations or start from `worker`.
 
-6. **Another user's agent needs admission or a delegation (#447)** — `agent_request` / `agent_message` on `<ownerDID>/g/<id>` is refused unless the target's `config.accepts` admits the caller (`"venue"` = the venue operator and its agents only; or an exact list of principal DIDs — `<userDID>:g:<agentId>` for one agent, a user DID for that user only, no prefixes) or the caller presents a UCAN for `agent/request`. Admission covers talking only; reads, updates and control still need a delegation. A malformed `accepts` is rejected at create/update.
+6. **Another user's agent needs admission or a delegation (#447)** — `agent_request` / `agent_message` on `<ownerDID>/g/<id>` is refused unless the target's `config.accepts` admits the caller (`"venue"` = the venue operator and its agents only; `"anyone"` = every caller, anonymous ones included; or an exact list of principal DIDs — `<userDID>:g:<agentId>` for one agent, a user DID for that user only, no prefixes) or the caller presents a UCAN for `agent/request`. Admission covers talking only; reads, updates and control still need a delegation. A malformed `accepts` is rejected at create/update.
 
 ## Commands
 
@@ -41,7 +41,15 @@ agent_create
   ]
 ```
 
-Ask for the system prompt if not provided. Call `langchain_models` first when
+Ask for the system prompt if not provided, and for the agent's authority: add
+`caps` to that layer, a list of `{with, can}` capabilities or `"unrestricted"`
+for everything you can do. An agent created without caps still answers, but
+every tool call it makes is refused. An agent you control thinks with your model key,
+and an external agent (A2A, Claude Code) reaches its backend with your authority,
+but an agent uses one of your secrets itself (a `bearerSecret`, a model it calls
+as a tool, an MCP or A2A credential, a secret-backed signing key) only with
+`{"with": "s/NAME", "can": "secret/use", "nb": {"url": "<destination prefix>"}}`
+in its caps; leave out `nb` for a local use such as signing. Call `langchain_models` first when
 provider readiness matters; the template is provider-neutral and otherwise uses
 the venue default.
 
@@ -55,8 +63,12 @@ agent_create  agentId="Bob"  config="v/agents/templates/worker"
 
 Available: `minimal` (on-demand only), `skilled` (recommended lean default),
 `reader` (capability-enforced read-only), `worker` (data processing), `analyst`
-(evidence + schema), `manager` / `goaltree` (goal-tree planners), and `full`
-(broad, context-heavy core palette).
+(evidence + schema), `manager` / `goaltree` (goal-tree planners), `full`
+(broad, context-heavy core palette), and `admin` (unrestricted administrator
+that asks its owner through HITL before anything dangerous).
+
+Only `reader` and `admin` set `caps`; with any other template, pass `caps` in a
+later layer as above.
 
 Templates are provider-neutral. Compose the provider at create time so the agent
 never starts under an unintended backend:
@@ -163,7 +175,7 @@ sources you trust.
 | Read one without loading it | `skills_read skill=<path or a/hash>` |
 | Import a SKILL.md from a file root or DLFS drive | `skills_import source=file://<root>/<dir>/SKILL.md` — one file per call, lands at `w/skills/<name>`; the venue's `v/skills/building/skill-import` skill covers the options |
 | See exactly what an agent would send its model | `agent_context agentId=<name> message="…"` (or `task=…`, `sessionId=…`) — the level-3 input for that call with budget and band marks, plus cache marks when enabled |
-| List/read safe past conversations | `agent_sessions agentId=<name>` then `agent_session_read agentId=<name> sessionId=<id>`; add `archiveDepth=N` to open nested compactions within the normal safety and size bounds |
+| List sessions and read their history | `agent_sessions agentId=<name>` then `agent_history agentId=<name> sessionId=<id>`; entries come back exactly as stored, oldest to newest; with no range you get the newest page, and `start`/`end`/`limit` select one by position |
 | Compact an idle session as its owner | `agent_compact_session agentId=<name> sessionId=<id> summary="…"` — keeps the exact old vector under the compaction record and returns metadata only |
 | Rebuild an idle session's cached provider prefix | `agent_reload_context agentId=<name> sessionId=<id>` — forces a same-config refresh on the next cached inference while preserving conversation and loads; uncached models retain no prefix |
 | Audit what an agent did in a cycle | `covia_read path=g/<name>/timeline` — each entry holds the cycle's `context`, `tools` and `inferences` (per call: `sent`, `reply`, `calls` with results and `ms`; a `subgoal` call carries its child `frame`) |

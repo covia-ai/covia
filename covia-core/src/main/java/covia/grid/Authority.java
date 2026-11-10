@@ -40,8 +40,9 @@ public final class Authority {
 	private final AString did;
 
 	/** The user whose namespace this authority acts within, when that differs
-	 *  from {@link #did} (an agent sub-principal). {@code null} = the principal
-	 *  is its own user. Read through {@link #getUserDID()}, never directly. */
+	 *  from {@link #did} (an agent, or a delegate acting for that user).
+	 *  {@code null} = the principal is its own user. Read through
+	 *  {@link #getUserDID()}, never directly. */
 	private final AString user;
 
 	/** The caller's own held capability scope. {@code null} = unrestricted. */
@@ -66,32 +67,31 @@ public final class Authority {
 	 * An authority for the given identity, unrestricted ({@code null} scope) and
 	 * carrying no presented proofs.
 	 *
-	 * <p>The namespace is <b>recovered from the DID</b> ({@link Principals#userOf}),
-	 * so reconstructing a context from a stored identity is lossless: a scheduled
-	 * event, a recovered job or a capability gate that replays as
-	 * {@code <owner>:g:<agent>} still resolves in the owner's namespace. This is
-	 * the point of a syntactically nested sub-principal — the relation travels
-	 * with the name and survives persistence, where an out-of-band field would
-	 * not. A DID that names no agent is its own user, so this is a no-op for
-	 * every ordinary principal.</p>
+	 * <p>The DID is <b>its own namespace</b>, whatever its name looks like: an
+	 * agent-shaped DID names no owner relationship by itself. Only the venue puts
+	 * a principal in another namespace, from a relationship it holds — running
+	 * its own agent ({@link #ofAgent}) or acting on a delegation
+	 * ({@link #onBehalfOf}). Whatever stores an authority stores that namespace
+	 * beside the DID and rebuilds from both
+	 * ({@link #of(AString, AString, AVector)}).</p>
 	 *
 	 * @param did Caller DID, or null for anonymous
 	 */
 	public static Authority of(AString did) {
-		return (did == null) ? ANONYMOUS : new Authority(did, Principals.userOf(did), null, null);
+		return (did == null) ? ANONYMOUS : new Authority(did, null, null, null);
 	}
 
 	/**
 	 * An authority for the given identity bound to the given capability scope.
 	 * A {@code null} scope is unrestricted; a non-null scope binds the principal
-	 * to exactly those capabilities (an agent's {@code config.caps}). The
-	 * namespace is recovered from the DID, as in {@link #of(AString)}.
+	 * to exactly those capabilities (an agent's {@code config.caps}). The DID is
+	 * its own namespace, as in {@link #of(AString)}.
 	 * @param did Caller DID, or null for anonymous
 	 * @param grants the held capability scope, or null for unrestricted
 	 */
 	public static Authority of(AString did, AVector<ACell> grants) {
 		return (did == null && grants == null) ? ANONYMOUS
-			: new Authority(did, Principals.userOf(did), grants, null);
+			: new Authority(did, null, grants, null);
 	}
 
 	/**
@@ -110,7 +110,21 @@ public final class Authority {
 	 */
 	public static Authority ofAgent(AString userDID, AString agentId) {
 		if (userDID == null) return ANONYMOUS;
-		return new Authority(Principals.agentDID(userDID, agentId), userDID, null, null);
+		return of(Principals.agentDID(userDID, agentId), userDID, null);
+	}
+
+	/**
+	 * An authority for {@code did} acting in the namespace of {@code userDID}
+	 * under the given scope. This states a relationship rather than finding one,
+	 * so it is for one the venue holds or recorded: its own agent's, or a stored
+	 * context being rebuilt. Proofs, if any, are attached with {@link #withProofs}.
+	 *
+	 * @param did Caller DID, or null for anonymous
+	 * @param userDID the namespace it acts in; null or {@code did} for its own
+	 * @param grants the held capability scope, or null for unrestricted
+	 */
+	public static Authority of(AString did, AString userDID, AVector<ACell> grants) {
+		return (did == null) ? ANONYMOUS : new Authority(did, userDID, grants, null);
 	}
 
 	/**
@@ -139,7 +153,8 @@ public final class Authority {
 
 	/**
 	 * The user whose namespace this authority acts within — the owner for an agent
-	 * sub-principal, and {@link #getDID()} for every other principal.
+	 * sub-principal, the delegating user for a delegate ({@link #onBehalfOf}),
+	 * and {@link #getDID()} for every other principal.
 	 *
 	 * <p>This is the DID that resolves bare lattice paths and per-user state
 	 * (workspace, secrets, jobs, inbox). It is <b>not</b> an identity: use

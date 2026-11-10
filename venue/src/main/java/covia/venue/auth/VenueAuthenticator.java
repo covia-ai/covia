@@ -51,6 +51,7 @@ public final class VenueAuthenticator {
 	private static final String AUTHENTICATED_IDENTITY_ATTR = "authenticatedIdentity";
 	private static final String VENUE_USER_ATTR = "callerDID";
 	private static final String AUTH_RESULT_ATTR = "covia.authResult";
+	private static final String ENGINE_ATTR = "covia.engine";
 
 	private static final AString SUB = Fields.SUB;
 	private static final AString KID = Fields.KID;
@@ -92,7 +93,8 @@ public final class VenueAuthenticator {
 	private final AString venueDID;
 	private final Auth venueAuth;
 	private final Map<String, OAuthConfig> externalProviders;
-	private final String audiencePolicy;
+	/** Bearer credentials must name this venue in {@code aud} ({@code auth.requireAud}). */
+	private final boolean requireAud;
 	private final Set<String> acceptedAudienceStrings;
 	private final Set<AString> acceptedAudiences;
 	private final Engine engine;
@@ -142,7 +144,7 @@ public final class VenueAuthenticator {
 		this.externalProviders = providers != null ? Map.copyOf(providers)
 			: venueAuth.getLoginProviders().hasProviders()
 				? venueAuth.getLoginProviders().getProviders() : null;
-		this.audiencePolicy = venueAuth.getAudiencePolicy();
+		this.requireAud = venueAuth.isRequireAud();
 		this.requireExp = engine.config().isRequireExp();
 		this.maxLifetimeSeconds = engine.config().getMaxTokenLifetime();
 
@@ -199,6 +201,20 @@ public final class VenueAuthenticator {
 	public void bindIdentity(Context context, AString authenticatedIdentity,
 			AString venueUserDID) {
 		setRequestIdentity(context, authenticatedIdentity, venueUserDID);
+		bindEngine(context, engine);
+	}
+
+	/**
+	 * Binds the venue serving a request, through whose {@link Engine#context}
+	 * its caller acts.
+	 */
+	public static void bindEngine(Context context, Engine engine) {
+		context.attribute(ENGINE_ATTR, engine);
+	}
+
+	/** Returns the venue serving a request, or null when none is bound. */
+	public static Engine engineOf(Context context) {
+		return context.attribute(ENGINE_ATTR);
 	}
 
 	/** Shared identity-only binding for the legacy middleware and embedder APIs. */
@@ -225,6 +241,7 @@ public final class VenueAuthenticator {
 		if (result == null) throw new IllegalArgumentException(RESULT_REQUIRED);
 		setRequestIdentity(context, result.authenticatedIdentity(), result.userDID());
 		context.attribute(AUTH_RESULT_ATTR, result);
+		bindEngine(context, engine);
 	}
 
 	/** Returns request authentication evidence, or null when none is bound. */
@@ -272,7 +289,7 @@ public final class VenueAuthenticator {
 		public static final String MALFORMED_NBF = "malformed nbf: expected an integer Unix timestamp";
 		public static final String NON_EXPIRING = "non-expiring credential: this venue requires bearer credentials to expire (auth.requireExp)";
 		public static final String LIFETIME_EXCEEDS = "token expires further ahead than this venue allows (auth.maxTokenLifetime): ";
-		public static final String AUDIENCE_REQUIRED = "audience (aud) is required but absent";
+		public static final String AUDIENCE_REQUIRED = "missing aud: this venue requires bearer credentials to name it as audience (auth.requireAud)";
 		public static final String AUDIENCE_NOT_THIS_VENUE = "token audience is not this venue: ";
 		public static final String AUDIENCE_LIST_EXCLUDES_VENUE = "token audience list does not include this venue";
 		public static final String MALFORMED_AUDIENCE = "malformed audience (aud) claim";
@@ -291,6 +308,7 @@ public final class VenueAuthenticator {
 		public static final String ISSUED_BY_SUBJECT = "token is issued by its subject (iss = sub)";
 		public static final String MALFORMED_SUBJECT = "malformed subject DID: ";
 		public static final String MISSING_SUBJECT = "missing sub claim";
+		public static final String PUBLIC_SUBJECT = "the venue's public principal is a shared namespace, not an identity that authenticates: ";
 		public static final String NO_VENUE_KEY = "this venue has no signing key, so it cannot have issued this token";
 		public static final String VENUE_SIGNATURE_FAILS = "signature does not verify for this venue's key";
 		public static final String NO_PROVIDERS = "no external identity provider is configured on this venue";
@@ -412,7 +430,7 @@ public final class VenueAuthenticator {
 
 	/** A UCAN-shaped bearer: valid, audience-bound, and with empty {@code att}. */
 	private Verdict verifyUCAN(AString jwt) {
-		long now = System.currentTimeMillis() / 1000;
+		long now = engine.currentTimestamp().longValue() / 1000;
 		// Signature + temporal bounds under the venue's DID verifier, so a
 		// did:web-identified issuer (covia#343) verifies exactly like did:key.
 		// The validator's reason describes only the token's own bytes and
@@ -454,14 +472,17 @@ public final class VenueAuthenticator {
 		AString sub = RT.ensureString(claims.get(SUB));
 		AString iss = RT.ensureString(claims.get(ISS));
 		String subject = sub.toString();
-		long now = System.currentTimeMillis() / 1000;
+		long now = engine.currentTimestamp().longValue() / 1000;
+		// The venue key could sign its own public principal as a nested subject;
+		// nothing authenticates as the anonymous namespace.
+		if (engine.isPublicPrincipal(sub)) return Verdict.fail(Reason.PUBLIC_SUBJECT + sub);
 
 		if (subject.startsWith("did:key:")) {
 			// Self-certifying key, or an identity in that key's exact namespace.
 			// Only the subject becomes the caller; it inherits no signer authority.
 			KeyRef key = signingKeyOf(parsed, sub);
 			if (key.reason() != null) return Verdict.fail(key.reason());
-			if (!sub.equals(key.did()) && !isNestedIdentity(sub, key.did())) {
+			if (!signsInAs(key.did(), sub)) {
 				return Verdict.fail("kid names key " + key.did() + " " + Reason.WRONG_KEY_FOR_SUBJECT + sub
 					+ Reason.WRONG_KEY_HINT);
 			}
@@ -541,7 +562,7 @@ public final class VenueAuthenticator {
 		if (venueKey == null) return Verdict.fail(Reason.NO_VENUE_KEY);
 		AMap<AString, ACell> claims = JWT.verifyPublic(jwt, venueKey);
 		if (claims == null) return Verdict.fail(Reason.VENUE_SIGNATURE_FAILS);
-		String when = temporalProblem(claims, System.currentTimeMillis() / 1000);
+		String when = temporalProblem(claims, engine.currentTimestamp().longValue() / 1000);
 		if (when != null) return Verdict.fail(when);
 		String audience = audienceProblem(claims.get(AUD));
 		if (audience != null) return Verdict.fail(audience);
@@ -552,6 +573,7 @@ public final class VenueAuthenticator {
 		} catch (RuntimeException e) {
 			return Verdict.fail(Reason.MALFORMED_SUBJECT + sub);
 		}
+		if (engine.isPublicPrincipal(sub)) return Verdict.fail(Reason.PUBLIC_SUBJECT + sub);
 		// A venue signature identifies the credential issuer, not the login
 		// method. Legacy login and OAuth-issued JWTs share this verifier.
 		return Verdict.ok(sub, sub, VENUE_JWT, expiryMetadata(claims),
@@ -586,6 +608,20 @@ public final class VenueAuthenticator {
 	// ------------------------------------------------------------- the checks
 	// Each returns null when it passes and the reason when it does not, the
 	// convention CapabilityChecker.allows and UcanJwtValidator.Validation use.
+
+	/** A bare did:key: one multibase Ed25519 key, nothing nested. */
+	private static final Pattern BARE_DID_KEY = Pattern.compile("did:key:z[1-9A-HJ-NP-Za-km-z]+");
+
+	/**
+	 * Whether this venue accepts a token signed by {@code signer} as signing in
+	 * as {@code subject}: a bare {@code did:key} signs in as itself and as every
+	 * identity nested below it. The one rule that authentication and grant roots
+	 * ({@code Engine.rootAuthorityPolicy}) share; it grants no permission.
+	 */
+	public static boolean signsInAs(AString signer, AString subject) {
+		if (signer == null || subject == null || !BARE_DID_KEY.matcher(signer.toString()).matches()) return false;
+		return subject.equals(signer) || isNestedIdentity(subject, signer);
+	}
 
 	/** Whether a subject uses valid nested segments below the exact signing identity.
 	 * Shared by authentication and issuance; this establishes no permissions. */
@@ -655,7 +691,7 @@ public final class VenueAuthenticator {
 	/** Null when the audience names this venue (or is absent and not required); otherwise why not. */
 	private String audienceProblem(ACell aud) {
 		if (aud == null) {
-			return "require".equals(audiencePolicy) ? Reason.AUDIENCE_REQUIRED : null;
+			return requireAud ? Reason.AUDIENCE_REQUIRED : null;
 		}
 		if (aud instanceof AString s) {
 			return acceptedAudienceStrings.contains(s.toString()) ? null : Reason.AUDIENCE_NOT_THIS_VENUE + s;

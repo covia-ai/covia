@@ -136,25 +136,20 @@ public class PrincipalsTest {
 	}
 
 	@Test
-	public void testReconstructionFromStoredDIDIsLossless() {
-		// The scheduler, job recovery and capability gates all persist a bare DID
-		// and later rebuild an authority from it. If the namespace were carried
-		// ONLY as an out-of-band field, every one of those replays would silently
-		// relocate an agent into a namespace that does not exist — reads would
-		// return nothing rather than fail. Recovering it from the name is what
-		// makes the nested form worth having.
+	public void testAnAgentShapedNameIsItsOwnNamespace() {
+		// Anyone may present a DID shaped like an agent's, so the name alone never
+		// places it in the owner's namespace; only ofAgent, built by the venue
+		// that runs the agent, does.
 		AString agent = Principals.agentDID(ALICE_WEB, CAROL);
-		Authority rebuilt = Authority.of(agent);
-		assertEquals(agent, rebuilt.getDID());
-		assertEquals(ALICE_WEB, rebuilt.getUserDID(), "owner must survive a round trip through the DID alone");
-		assertTrue(rebuilt.isSubPrincipal());
-
-		// Equivalent to the in-memory construction it replaces.
-		assertEquals(Authority.ofAgent(ALICE_WEB, CAROL), rebuilt);
-
-		// And with a scope, as the scheduler replays it.
-		Authority scoped = Authority.of(agent, convex.core.data.Vectors.empty());
-		assertEquals(ALICE_WEB, scoped.getUserDID());
+		Authority named = Authority.of(agent);
+		assertEquals(agent, named.getDID());
+		assertEquals(agent, named.getUserDID());
+		assertFalse(named.isSubPrincipal());
+		assertNotEquals(Authority.ofAgent(ALICE_WEB, CAROL), named);
+		assertEquals(agent, Authority.of(agent, convex.core.data.Vectors.empty()).getUserDID());
+		// The relationship is stated, never parsed.
+		assertEquals(Authority.ofAgent(ALICE_WEB, CAROL), Authority.of(agent, ALICE_WEB, null));
+		assertEquals(named, Authority.of(agent, agent, null));
 	}
 
 	@Test

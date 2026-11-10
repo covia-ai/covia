@@ -8,7 +8,7 @@ argument-hint: "<setup|create|delete|status|send|allow|test|teach> <bot-name>"
 
 **Prerequisite:** The venue must be running and connected as an MCP server (`http://localhost:8080/mcp`). If MCP tools are not available, tell the user to run `/venue-setup local` first. Telegram support comes from the **covia-telegram** module (`telegram` adapter) — it is not in `covia.jar`; `setup` covers loading it.
 
-A bot is either **created by its user** with `v/ops/telegram/create` (acts as that user, persisted in the venue-private adapter state under `users/<did>/bots/<name>`, survives restarts, removed with `v/ops/telegram/delete`) or **declared by the operator** in `adapters.telegram.bots.<name>` (needed when a bot must act as a different identity, e.g. `"user": "public"` on a shared dev venue). Full reference: `venue/docs/CONFIG.md` "Telegram bots". `/adapters` explains the module and runtime-lifecycle mechanics this skill relies on.
+A bot is either **created by its user** with `v/ops/telegram/create` (its allow-listed senders come from its creator — an agent as itself, never its owner — persisted in the venue-private adapter state under `users/<did>/bots/<name>`, survives restarts, removed with `v/ops/telegram/delete`) or **declared by the operator** in `adapters.telegram.bots.<name>` (needed when its senders must come from a different identity, e.g. `"user": "public"` on a shared dev venue). Full reference: `venue/docs/CONFIG.md` "Telegram bots". `/adapters` explains the module and runtime-lifecycle mechanics this skill relies on.
 
 ## `setup <bot-name>` — Bring a bot up
 
@@ -28,7 +28,7 @@ Walk the user through these steps; each is idempotent. Steps 1–3 are common; s
    ```
    grid_run  operation=v/ops/telegram/create  input={"name": "<bot-name>", "token": "s/TELEGRAM_BOT_TOKEN", "agent": "<agentId>", "allow": []}
    ```
-   The bot acts as **you** (the MCP caller — the public user on a local dev venue). Use `"operation": "<ref>"` instead of `agent` for a deterministic handler (see below), `"open": true` to admit anyone, `"reply"`, `"parseMode"`, `"greeting"` as documented on the op. Needs `telegram/manage` in your scope (unrestricted on `dev/local-open.json`-style venues; the committed `local-dev.json` public scope is read-only — use `/venue-setup` guidance to widen it or authenticate).
+   Messages from the senders on its `allow` list come from **you** (the MCP caller — the public user on a local dev venue). Use `"operation": "<ref>"` instead of `agent` for a deterministic handler (see below), `"open": true` to also admit everyone else as anonymous senders (they may ask only an agent whose `accepts` is `"anyone"`, and only if the operator lets anonymous callers invoke it), `"reply"`, `"parseMode"`, `"greeting"` as documented on the op. Needs `telegram/manage` in your scope (unrestricted on `dev/local-open.json`-style venues; the committed `local-dev.json` public scope is read-only — use `/venue-setup` guidance to widen it or authenticate).
 
    Operator alternative — declare it in the venue config and restart (or apply live with `v/ops/venue/adapter/configure`, venue authority, not persisted); required when the bot must act as an identity other than the caller:
    ```json
@@ -45,13 +45,13 @@ Walk the user through these steps; each is idempotent. Steps 1–3 are common; s
      }
    }
    ```
-   - `user` (config only) is the identity the bot acts as — the **owner of the agent**. `"public"` is right for a local dev venue whose agents were created over MCP; on a real venue name the owner's DID. The bot has that user's full authority, so choose deliberately. Created bots always act as their creator.
-   - **Pick the inbound handler** (ask the user which they want; exactly one). Every inbound message runs as a Job in the bot user's job index — that is the record of the interaction; a private durable inbox tracks update intake and delivery:
-     - `"agent": "<agentId>"` — each Telegram chat or forum topic is one `agent:chat` conversation with that agent. Always replies. **Create the agent from the module's template** — it already knows the phone-chat register, `via`, per-chat sessions, memory (pinned into context) and the telegram/venue/covia skills:
+   - `user` (config only) is who the bot's allow-listed senders come from — the **owner of the agent**. `"public"` is right for a local dev venue whose agents were created over MCP; on a real venue name the owner's DID. Those senders have that user's full authority, so choose deliberately. A created bot's senders come from its creator.
+   - **Pick the inbound handler** (ask the user which they want; exactly one). Every inbound message runs as a Job of the principal it comes from (the bot user for an allow-listed sender, the anonymous principal for any other) — that is the record of the interaction; a private durable inbox tracks update intake and delivery:
+     - `"agent": "<agentId>"` — each Telegram chat or forum topic is one `agent:chat` conversation with that agent. Always replies. **Create the agent from the module's template** — it already knows the phone-chat register, the venue's `[From: …]` element, per-chat sessions, memory (pinned into context) and the telegram/venue/covia skills:
        ```
-       agent_create  agentId="Assistant"  config=["v/agents/templates/telegram", {"llmOperation": "v/ops/langchain/anthropic", "model": "claude-sonnet-5-5"}]
+       agent_create  agentId="Assistant"  config=["v/agents/templates/telegram", {"llmOperation": "v/ops/langchain/anthropic", "model": "claude-sonnet-5-5", "caps": "unrestricted"}]
        ```
-       Then tell it who is who as memory, not prompt surgery — as the bot's user: `grid_run operation=v/ops/memory input={"command": "remember", "text": "Telegram @mikera (id 648055019) is Mike, my owner."}` (memory is per user and pinned into every turn; the template trusts such a note only when `via.from` matches it). The module states facts (`via`), the venue states who submitted (attribution note), memory states who they are.
+       `caps` decides what the agent may do, so ask the user: `"unrestricted"` is everything its owner can do, a list of `{with, can}` capabilities narrows it, and without caps it still replies but cannot use memory, receive photos or files, or send messages itself. Then tell it who is who as memory, not prompt surgery — as the bot's user: `grid_run operation=v/ops/memory input={"command": "remember", "text": "Telegram @mikera (id 648055019) is Mike, my owner."}` (memory is per user and pinned into every turn; the template trusts such a note only when the From element's sender id matches it). The bot authenticates the sender, the venue's From element states who the message comes from and through which chat, and memory states who they are.
      - `"operation": "<ref>"` — every update invokes that operation with the **Telegram `Update` exactly as sent** (snake_case: `update.message.text`, `update.message.photo[].file_id`, `update.callback_query.data`, …) plus `bot`. For a deterministic target whose input is *not* an Update (a `sql/execute` insert, an HTTP webhook, a classify-then-store step) point it at a small **mapping op the user owns** — an orchestration (`/orchestrate create`), a pinned op — that takes the record and does the work; the same goes for logging messages somewhere (an op that appends to the path its metadata names). Operation handlers receive the SDK-decoded Telegram shape; delivery receipts are retained privately. `"reply": true` (default) sends the result rendered as text, `false` sends nothing, `"Recorded."` sends that fixed acknowledgement.
    - Leave `allow` empty for now; step 6 fills it. Do **not** set `"open": true` unless anyone on Telegram should be able to reach this handler (defensible for a bot whose operation is safe for strangers; dangerous for an agent with authority).
    - Optional: for an agent bot, `"replyOperation": "v/ops/telegram/format"` so the agent's Markdown arrives formatted (Telegram's own Markdown modes do not render a model's Markdown as written; the formatter's HTML parse mode wins over `parseMode`); `"greeting": "…"` for `/start`.
@@ -67,14 +67,15 @@ DLFS `telegram` drive. Turns contain `attachments` with `kind`, `file_id`, `ref`
 `mediaType` and Telegram metadata. Photos/image documents also become image blocks
 for a vision-capable LLM; grant the agent `crud/read` on the relevant DLFS files.
 For speech or document extraction configure `mediaOperation` on the bot: it runs
-as the owner per attachment, with its descriptor plus `caption` and `via` context.
+as the owner per attachment, with its descriptor plus `caption` and `authentication`,
+how the bot authenticated the sender.
 Return an object: `{}` passes an attachment through; optional non-empty `text`
 supplies transcription/extraction. Structured output is retained under
 `attachment.result`; it cannot replace original file references or provider metadata.
 There is no implicit speech provider; with the speech module loaded,
 `"mediaOperation": "v/ops/speech/transcribe"` transcribes voice notes and passes
 other media through. `replyOperation` optionally takes
-`{response, via}` and returns a non-empty string or `{text: "formatted reply"}`,
+`{response, authentication}` and returns a non-empty string or `{text: "formatted reply"}`,
 optionally with a `parse_mode` that wins over the bot's `parseMode`.
 Use it for application reply rendering; formatting failures never send raw
 application output as a fallback. `v/ops/telegram/format` is the stock one:
@@ -86,7 +87,8 @@ and fileName are optional: destination is a directory reference such as
 `dlfs/imports` or `file://inbox`, with or without a trailing slash. Omit it for
 the bot owner's DLFS `telegram` drive. Explicit destinations use the caller's
 write authority and a content provider supporting create-only writes; parent
-directories must exist. DLFS and configured file roots support this contract.
+directories, and a DLFS destination's drive, must exist. DLFS and configured file
+roots support this contract.
 The name is explicit fileName, then a safe original name retained from an
 admitted Telegram message, then a generated fallback. Original names and MIME
 types survive bot restarts; `getFile` alone does not preserve them. Conflicts
@@ -149,7 +151,7 @@ grid_run  operation=v/ops/telegram/call  input={"method": "editMessageText", "pa
 
 ## `allow <bot-name>` — Manage who the bot talks to
 
-Access is fail-closed in both directions: `allow` is a list of Telegram user ids and/or `@usernames`; `open: true` admits everyone. An allow-listed bot is its user's channel to the people on the list and nobody else: it converses only in private chats (an allowed user writing in a group is ignored), and `send`/`call` may only address its allowed users. A Telegram id is the identity (permanent, the same for every bot); a username is an alias that can change hands. So an `@username` entry resolves to the person's account the first time they write to the bot: the binding is kept beside the bot's sessions as `resolved/<handle>` in the bot's adapter state and shown by `status`, `allow` itself is never rewritten, and from then on the handle means that account — the bot may message it, and anyone who later takes the same handle is refused. To rebind, delete that record or list the id. For a created bot, `delete` and `create` again with the new list. For a config bot, edit the config and restart, or apply live:
+Access is fail-closed in both directions: `allow` is a list of Telegram user ids and/or `@usernames`; `open: true` also admits everyone else, as anonymous senders. An allow-listed bot is its user's channel to the people on the list and nobody else: it converses only in private chats (an allowed user writing in a group is ignored), and `send`/`call` may only address its allowed users. A Telegram id is the identity (permanent, the same for every bot); a username is an alias that can change hands. So an `@username` entry resolves to the person's account the first time they write to the bot: the binding is kept beside the bot's sessions as `resolved/<handle>` in the bot's adapter state and shown by `status`, `allow` itself is never rewritten, and from then on the handle means that account — the bot may message it, and anyone who later takes the same handle is refused. To rebind, delete that record or list the id. For a created bot, `delete` and `create` again with the new list. For a config bot, edit the config and restart, or apply live:
 ```
 grid_run  operation=v/ops/venue/adapter/configure
           input={"name": "telegram", "config": {"bots": {"<bot-name>": {…full bot entry…}}}, "merge": true}

@@ -4,10 +4,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import static covia.adapter.whatsapp.TestSupport.*;
 
 import java.nio.charset.StandardCharsets;
-import java.time.Clock;
 import java.time.Instant;
-import java.time.ZoneId;
-import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -26,6 +23,9 @@ import covia.adapter.AAdapter;
 import covia.adapter.AgentAdapter;
 import covia.adapter.webhook.*;
 import covia.api.Fields;
+import covia.exception.InvalidInputException;
+import covia.exception.NotSupportedException;
+import covia.exception.ResponseException;
 import covia.venue.*;
 import covia.venue.server.VenueServer;
 
@@ -59,8 +59,8 @@ class WhatsAppAdapterTest {
 			String status = f.run("bots", Maps.empty()).toString();
 			assertFalse(status.contains(TOKEN)); assertFalse(status.contains("s/SIGNING"));
 			assertTrue(status.contains("/webhooks/whatsapp/c-main"));
-			assertThrows(IllegalArgumentException.class, () -> f.engine.configureAdapter(NAME, Maps.of("statePath", "w/other")));
-			assertThrows(IllegalArgumentException.class, () -> f.engine.configureAdapter(NAME, Maps.of("apiUrl", "https://token@example.com")));
+			assertThrows(InvalidInputException.class, () -> f.engine.configureAdapter(NAME, Maps.of("statePath", "w/other")));
+			assertThrows(InvalidInputException.class, () -> f.engine.configureAdapter(NAME, Maps.of("apiUrl", "https://token@example.com")));
 			assertEquals(200, f.webhook(payload(message("still-live"))).status());
 			assertEquals("Bearer " + TOKEN, f.api.take().authorization());
 		}
@@ -171,7 +171,7 @@ class WhatsAppAdapterTest {
 				}
 			});
 			TestSupport.run(f.engine, OWNER, "v/ops/agent/create", Maps.of(Fields.AGENT_ID, "local-agent", Fields.CONFIG,
-				Maps.of(Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/ops/held/llm")));
+				Maps.of(Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/ops/held/llm", "caps", "unrestricted")));
 			assertEquals(200, f.webhook(payload(message("local-first"))).status());
 			assertTrue(entered.await(8, TimeUnit.SECONDS));
 			awaitStatus(f.bot(), "local-first", WebhookInbox.COMPLETE);
@@ -181,7 +181,7 @@ class WhatsAppAdapterTest {
 			assertEquals(sid, f.bot().inbox().get("local-second").get(Fields.SESSION_ID));
 			assertFalse(response.isDone());
 			assertTrue(f.api.sends.isEmpty());
-			var agent = f.engine.getVenueState().users().get(OWNER).agent("local-agent");
+			var agent = f.engine.getVenueState().users().user(OWNER).agent("local-agent");
 			var before = agent.getRecord();
 			assertEquals(200, f.webhook(payload(message("local-second"))).status());
 			assertEquals(before, agent.getRecord(), "duplicate callbacks must not append input");
@@ -204,7 +204,7 @@ class WhatsAppAdapterTest {
 	}
 	static void createAgent(Engine engine, String agent) throws Exception {
 		TestSupport.run(engine, OWNER, "v/ops/agent/create", Maps.of(Fields.AGENT_ID, agent, Fields.CONFIG,
-			Maps.of(Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/test/ops/llm")));
+			Maps.of(Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/test/ops/llm", "caps", "unrestricted")));
 	}
 
 	@Test void failingSessionDeliveryRunsOnce() throws Exception {
@@ -248,7 +248,7 @@ class WhatsAppAdapterTest {
 	}
 	@Test void restartDoesNotReplayFailedDelivery() throws Exception {
 		try (FakeAPI api = new FakeAPI()) {
-			AMap<AString, ACell> config = Maps.of(Config.PORT, 0, Config.BIND_ADDRESS, "127.0.0.1", Config.STORE, storeDir("whatsapp-failed").resolve("failed.etch").toString(),
+			AMap<AString, ACell> config = Maps.of(Config.PORT, 0, Config.BIND_ADDRESS, "127.0.0.1", Config.STORE, TestTemp.etchFile("whatsapp-failed").toString(),
 				Config.SEED, AKeyPair.createSeeded(9133).getSeed().toHexString(), Config.USERS, Maps.of(Config.AUTO_CREATE, true),
 				Config.ADAPTERS, Maps.of(NAME, Maps.of("apiUrl", api.url(), "bots", Maps.of("main", agentSpec("durable-agent")))));
 			var firstAgents = new FlakyAgents(Integer.MAX_VALUE);
@@ -296,9 +296,17 @@ class WhatsAppAdapterTest {
 				"second", agentSpec.assoc(Strings.intern("phoneNumberId"), Strings.create("54321")))));
 			var first = agentTurn(f, f.adapter, agent, "main", "12345", "441234567890", "first");
 			assertNull(first.get(Fields.SESSION_ID));
-			assertEquals(Strings.create("hello"), RT.getIn(first, Fields.MESSAGE, Fields.TEXT));
-			assertEquals(Maps.of("channel", "whatsapp", "bot", "main", "from", "441234567890", "chat", "441234567890",
-				"message_id", "first", "phoneNumberId", "12345", "access", "allow"), RT.getIn(first, Fields.MESSAGE, Strings.intern("via")));
+			assertEquals(Strings.create("hello"), first.get(Fields.MESSAGE), "the message is the sender's own words");
+			assertEquals(Maps.of(
+				"authenticatedIdentity", "whatsapp:441234567890",
+				"credential", Maps.of("type", "signed-callback"),
+				"authentication", Maps.of("method", "whatsapp", "binding", OWNER + "/whatsapp/main",
+					"properties", Sets.empty(), "details", Maps.of(
+						"sender", Maps.of("id", "441234567890"),
+						"chat", Maps.of("id", "441234567890", "kind", "direct"),
+						"space", Maps.of("id", "12345"),
+						"message", "first"))),
+				agent.authentication, "a listed sender is authenticated through the binding, in the standard channel shape");
 			assertEquals(OWNER, agent.owner);
 			assertNull(agentTurn(f, f.adapter, agent, "main", "12345", "441234567891", "other-sender").get(Fields.SESSION_ID));
 			assertNull(agentTurn(f, f.adapter, agent, "second", "54321", "441234567890", "other-phone").get(Fields.SESSION_ID));
@@ -322,8 +330,8 @@ class WhatsAppAdapterTest {
 		var input = agent.inputs.poll(5, TimeUnit.SECONDS); assertNotNull(input); return input;
 	}
 	@Test void appliesInboundAgeAndFutureSkewLimits() throws Exception {
-		var clock = new MutableClock(); long now = clock.instant().getEpochSecond();
-		try (Fixture f = new Fixture(spec().assoc(Strings.intern("token"), Strings.create("s/LATE")), new WhatsAppAdapter(clock))) {
+		DrivenClock clock = venueClock(); long now = clock.millis() / 1000;
+		try (Fixture f = new Fixture(spec().assoc(Strings.intern("token"), Strings.create("s/LATE")), clock)) {
 			for (long offset : new long[] {-86401, -86399, 300, 301}) {
 				String id = "offset-" + offset;
 				assertEquals(200, f.webhook(payload(message(id).assoc(Strings.intern("timestamp"), Strings.create(Long.toString(now + offset))))).status());
@@ -334,29 +342,29 @@ class WhatsAppAdapterTest {
 		}
 	}
 	@Test void repliesUntilButNotAtThe24HourBoundary() throws Exception {
-		var clock = new MutableClock(); long timestamp = clock.instant().getEpochSecond();
-		try (Fixture f = new Fixture(spec(), new WhatsAppAdapter(clock))) {
+		DrivenClock clock = venueClock(); long timestamp = clock.millis() / 1000;
+		try (Fixture f = new Fixture(spec(), clock)) {
 			AMap<AString, ACell> event = Maps.of("to", "441234567890", "messageId", "boundary", "timestamp", Long.toString(timestamp));
-			clock.now = Instant.ofEpochSecond(timestamp + 86399);
+			clock.set((timestamp + 86399) * 1000);
 			f.adapter.sendReply(f.bot(), event, "still in window"); f.api.take();
 			for (long age : new long[] {86400, 86401}) {
-				clock.now = Instant.ofEpochSecond(timestamp + age);
-				assertEquals(WhatsAppAdapter.WINDOW_EXPIRED, assertThrows(IllegalStateException.class,
+				clock.set((timestamp + age) * 1000);
+				assertEquals(WhatsAppAdapter.WINDOW_EXPIRED, assertThrows(NotSupportedException.class,
 					() -> f.adapter.sendReply(f.bot(), event, "expired")).getMessage());
 			}
 			assertTrue(f.api.sends.isEmpty());
 		}
 	}
 	@Test void rechecksTheReplyWindowAfterTheAgentCompletes() throws Exception {
-		var clock = new MutableClock();
+		DrivenClock clock = venueClock();
 		var agentSpec = spec().dissoc(Strings.intern("operation")).dissoc(Strings.intern("reply")).assoc(Strings.intern("agent"), Strings.create("slow-agent"));
-		try (Fixture f = new Fixture(agentSpec, new WhatsAppAdapter(clock))) {
+		try (Fixture f = new Fixture(agentSpec, clock)) {
 			FakeAgent agent = new FakeAgent(); agent.blocked = new CompletableFuture<>(); f.engine.registerAdapter(agent);
 			try {
-				var message = message("slow").assoc(Strings.intern("timestamp"), Strings.create(Long.toString(clock.instant().getEpochSecond())));
+				var message = message("slow").assoc(Strings.intern("timestamp"), Strings.create(Long.toString(clock.millis() / 1000)));
 				assertEquals(200, f.webhook(payload(message)).status());
 				assertNotNull(agent.inputs.poll(5, TimeUnit.SECONDS));
-				clock.now = clock.now.plusSeconds(86400);
+				clock.advance(86_400_000);
 				agent.blocked.complete(Maps.of(Fields.SESSION_ID, "late-session", Fields.RESPONSE, "too late"));
 				long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
 				while (f.bot().status().get(Fields.ERROR) == null && System.nanoTime() < deadline) Thread.sleep(10);
@@ -377,7 +385,7 @@ class WhatsAppAdapterTest {
 		try (Fixture f = new Fixture(spec())) {
 			for (String response : new String[] {"{}", "{\"messages\":[]}", "{\"messages\":[{\"id\":42}]}"}) {
 				f.api.response = response;
-				assertEquals(WhatsAppAdapter.INVALID_RESPONSE, assertThrows(IllegalStateException.class,
+				assertEquals(WhatsAppAdapter.INVALID_RESPONSE, assertThrows(ResponseException.class,
 					() -> f.adapter.send(f.bot(), Maps.of("to", "441234567890", "text", "test receipt"))).getMessage());
 				f.api.take();
 			}
@@ -386,7 +394,7 @@ class WhatsAppAdapterTest {
 	}
 	@Test void durablePendingRecoversAfterRestartButStartedDoesNotReplay() throws Exception {
 		try (FakeAPI api = new FakeAPI()) {
-			AMap<AString, ACell> config = Maps.of(Config.PORT, 0, Config.BIND_ADDRESS, "127.0.0.1", Config.STORE, storeDir("whatsapp-restart").resolve("whatsapp.etch").toString(),
+			AMap<AString, ACell> config = Maps.of(Config.PORT, 0, Config.BIND_ADDRESS, "127.0.0.1", Config.STORE, TestTemp.etchFile("whatsapp-restart").toString(),
 				Config.SEED, AKeyPair.createSeeded(9131).getSeed().toHexString(), Config.USERS, Maps.of(Config.AUTO_CREATE, true),
 				Config.ADAPTERS, Maps.of(NAME, Maps.of("apiUrl", api.url(), "bots", Maps.of("main", spec()))));
 			WhatsAppAdapter firstAdapter = new WhatsAppAdapter(); firstAdapter.retryMillis = 25;
@@ -408,22 +416,21 @@ class WhatsAppAdapterTest {
 			} finally { second.close(); }
 		}
 	}
-	private static final class MutableClock extends Clock {
-		volatile Instant now = Instant.parse("2026-10-06T12:00:00Z");
-		@Override public ZoneId getZone() { return ZoneOffset.UTC; }
-		@Override public Clock withZone(ZoneId zone) { return Clock.fixed(now, zone); }
-		@Override public Instant instant() { return now; }
+	/** A venue clock the test moves, in epoch milliseconds. */
+	private static DrivenClock venueClock() {
+		return DrivenClock.at(Instant.parse("2026-10-06T12:00:00Z"));
 	}
 	private static final class FakeAgent extends AAdapter {
 		final LinkedBlockingQueue<AMap<AString, ACell>> inputs = new LinkedBlockingQueue<>();
 		final AtomicInteger sessions = new AtomicInteger();
 		volatile AString owner;
+		volatile AMap<AString, ACell> authentication;
 		volatile CompletableFuture<ACell> blocked;
 		@Override public String getName() { return "agent"; }
 		@Override public String getDescription() { return "Deterministic WhatsApp chat fixture"; }
 		@Override protected void installAssets() { installAsset("agent/chat", Maps.of("name", "Fixture chat", "operation", Maps.of("adapter", "agent:chat"))); }
 		@Override public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
-			var in = MessagingSettings.object(input); owner = ctx.getUserDID(); inputs.add(in);
+			var in = MessagingSettings.object(input); owner = ctx.getUserDID(); authentication = ctx.getAuthentication(); inputs.add(in);
 			if (blocked != null) return blocked;
 			ACell sid = in.get(Fields.SESSION_ID);
 			if (sid == null) sid = Strings.create("session-" + sessions.incrementAndGet());

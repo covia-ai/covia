@@ -1,6 +1,7 @@
 package covia.venue.api;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.net.URI;
@@ -62,8 +63,8 @@ public class DlfsApiTest {
 	}
 
 	private long jobCount() {
-		User u = TestServer.ENGINE.getVenueState().users().get(Strings.create(callerDID));
-		return (u == null) ? 0 : u.getJobs().count();
+		User u = TestServer.ENGINE.getVenueState().users().user(Strings.create(callerDID));
+		return (u == null) ? 0 : u.jobs().size();
 	}
 
 	/** Creates a drive with one file, via the ordinary op form, and returns the drive name. */
@@ -105,6 +106,17 @@ public class DlfsApiTest {
 	public void testListRequiresDriveParam() throws Exception {
 		HttpResponse<String> r = get("dlfs/list", true);
 		assertEquals(400, r.statusCode(), r.body());
+	}
+
+	@Test
+	public void testListOfMissingDriveIsNotFoundAndCreatesNothing() throws Exception {
+		String drive = "api-missing-" + System.nanoTime();
+		HttpResponse<String> r = get("dlfs/list?drive=" + drive, true);
+		assertEquals(404, r.statusCode(), r.body());
+		AVector<?> drives = (AVector<?>) RT.getIn(JSON.parse(get("dlfs/drives", true).body()), "drives");
+		for (long i = 0; i < drives.count(); i++) {
+			assertNotEquals(Strings.create(drive), drives.get(i), "a listing creates no drive");
+		}
 	}
 
 	@Test

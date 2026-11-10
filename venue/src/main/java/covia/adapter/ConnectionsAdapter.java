@@ -13,6 +13,10 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
 import covia.api.Fields;
+import covia.exception.AuthException;
+import covia.exception.InvalidInputException;
+import covia.exception.NotFoundException;
+import covia.exception.NotSupportedException;
 import covia.grid.Asset;
 import covia.venue.RequestContext;
 import covia.venue.User;
@@ -28,9 +32,10 @@ import covia.venue.User;
  * connection state store.</p>
  *
  * <p>Transport and authority stay with their existing owners: HTTP executes
- * requests, OAuth owns grants, and the user's {@code s/} namespace owns
- * credentials. Status checks only whether named encrypted records exist; it
- * never resolves or decrypts a secret.</p>
+ * requests, the oauth adapter owns connected accounts, and the user's
+ * {@code s/} namespace owns the credentials a user supplies. Status checks
+ * only whether a named secret or connection exists; it never resolves or
+ * decrypts one.</p>
  */
 public class ConnectionsAdapter extends AAdapter {
 
@@ -111,11 +116,10 @@ public class ConnectionsAdapter extends AAdapter {
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx,
 			AMap<AString, ACell> meta, ACell input) {
 		try {
-			requireInvoke(ctx);
 			return switch (getSubOperation(meta)) {
 				case "list" -> CompletableFuture.completedFuture(handleList(ctx));
 				case "status" -> CompletableFuture.completedFuture(handleStatus(ctx, input));
-				default -> CompletableFuture.failedFuture(new IllegalArgumentException(
+				default -> CompletableFuture.failedFuture(new NotSupportedException(
 					"Unknown connections operation: " + getSubOperation(meta)));
 			};
 		} catch (Exception e) {
@@ -139,7 +143,7 @@ public class ConnectionsAdapter extends AAdapter {
 		ACell rawProvider = RT.getIn(input, Fields.PROVIDER);
 		AString only = RT.ensureString(rawProvider);
 		if (rawProvider != null && (only == null || only.isEmpty())) {
-			throw new IllegalArgumentException("provider must be a non-empty string");
+			throw new InvalidInputException("provider must be a non-empty string");
 		}
 
 		Provider selected = (only != null) ? provider(only.toString()) : null;
@@ -156,13 +160,13 @@ public class ConnectionsAdapter extends AAdapter {
 		for (Provider provider : PROVIDERS) {
 			if (provider.name().equals(name)) return provider;
 		}
-		throw new IllegalArgumentException("Unknown connection provider '" + name
-			+ "'; available: " + PROVIDERS.stream().map(Provider::name).toList());
+		throw new NotFoundException("Unknown connection provider '" + name
+			+ "'; available: " + PROVIDERS.stream().map(Provider::name).toList(), name);
 	}
 
 	private static AString requireUser(RequestContext ctx) {
 		if (ctx == null || ctx.isAnonymous() || ctx.getUserDID() == null) {
-			throw new IllegalArgumentException(
+			throw new AuthException(
 				"connections:status needs an authenticated caller — connection status belongs to a venue user");
 		}
 		return ctx.getUserDID();
@@ -273,20 +277,25 @@ public class ConnectionsAdapter extends AAdapter {
 	}
 
 	private CredentialPresence credentialPresence(AString userDID, String ref) {
+		// A connected account is the oauth adapter's to report, by presence only.
+		if (ref.startsWith(TokenSource.PREFIX)) {
+			TokenSource source = engine.findAdapter(TokenSource.class);
+			return (source != null && source.connected(userDID, ref.substring(TokenSource.PREFIX.length())))
+				? new CredentialPresence(true, "oauth") : CredentialPresence.missing();
+		}
 		String name = secretName(ref);
 		if (name == null) return CredentialPresence.missing();
 
 		// A credential reference resolves in the caller's own store only.
-		User user = engine.getVenueState().users().get(userDID);
+		User user = engine.getVenueState().users().user(userDID);
 		return (user != null && user.secrets().exists(name))
 			? new CredentialPresence(true, "user") : CredentialPresence.missing();
 	}
 
-	/** The secret-record name corresponding to an HTTP/OAuth credential ref. */
+	/** The secret-record name corresponding to an HTTP credential ref. */
 	private static String secretName(String ref) {
 		if (ref.startsWith("/s/")) return nonEmpty(ref.substring(3));
 		if (ref.startsWith("s/")) return nonEmpty(ref.substring(2));
-		if (ref.startsWith(TokenSource.PREFIX)) return nonEmpty(ref);
 		return null;
 	}
 

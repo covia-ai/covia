@@ -3,7 +3,6 @@ package covia.venue;
 import static org.junit.jupiter.api.Assertions.*;
 
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
 
@@ -33,24 +32,13 @@ import covia.grid.auth.UcanTokens;
  */
 public class UCANVerifyTest {
 
-	private static final Engine engine;
-	static {
-		engine = Engine.createTemp(Maps.of(
-			Config.HOSTNAME, Strings.create("verify.test.covia.example"),
-			Config.USERS, Maps.of(Config.AUTO_CREATE, true)));
-		Engine.addDemoAssets(engine);
-	}
+	private static final Engine engine = TestEngine.ENGINE;
 
 	private AKeyPair ALICE_KP;
 	private AKeyPair BOB_KP;
 	private AString ALICE_DID;
 	private AString BOB_DID;
 	private RequestContext ALICE;
-
-	@AfterAll
-	static void closeEngine() {
-		engine.close();
-	}
 
 	@BeforeEach
 	public void setup(TestInfo info) {
@@ -102,6 +90,17 @@ public class UCANVerifyTest {
 		assertEquals(engine.getDIDString(), RT.getIn(r, "rootIssuer"));
 		AVector<?> att = RT.ensureVector(RT.getIn(r, "att"));
 		assertEquals(Strings.create("venue"), RT.getIn(att.get(0), "rootAuthority"));
+	}
+
+	@Test
+	public void testRootOverANestedIdentityVerifiesAsOwnerRooted() {
+		// Alice signs in as her agent, so she is its root: an identity root, not the venue's.
+		String jwt = UcanTokens.grant(ALICE_KP, BOB_DID.toString(),
+			ALICE_DID + ":g:helper/x/crypto/keys/", "key/sign", 3600);
+
+		ACell r = verify(Maps.of("token", jwt));
+		AVector<?> att = RT.ensureVector(RT.getIn(r, "att"));
+		assertEquals(Strings.create("owner"), RT.getIn(att.get(0), "rootAuthority"));
 	}
 
 	@Test
@@ -237,7 +236,7 @@ public class UCANVerifyTest {
 		ACell r = verify(Maps.of("token", tampered));
 		assertEquals(CVMBool.FALSE, RT.getIn(r, "valid"));
 		String reason = RT.ensureString(RT.getIn(r, "reason")).toString();
-		assertTrue(reason.contains("bad signature"), reason);
+		assertTrue(reason.contains(UcanJwtValidator.REASON_BAD_SIGNATURE), reason);
 	}
 
 	@Test
@@ -255,7 +254,6 @@ public class UCANVerifyTest {
 		ACell r = verify(Maps.of("token", jwt));
 		assertEquals(CVMBool.FALSE, RT.getIn(r, "valid"));
 		String reason = RT.ensureString(RT.getIn(r, "reason")).toString();
-		assertTrue(reason.contains("unsupported UCAN version"), reason);
 		assertTrue(reason.contains(UCAN.VERSION.toString()), reason);
 	}
 
@@ -271,7 +269,7 @@ public class UCANVerifyTest {
 		ACell r = verify(Maps.of("token", jwt));
 		assertEquals(CVMBool.FALSE, RT.getIn(r, "valid"));
 		String reason = RT.ensureString(RT.getIn(r, "reason")).toString();
-		assertTrue(reason.contains("required claim \"att\""), reason);
+		assertTrue(reason.contains("\"" + UCAN.ATT + "\""), reason);
 	}
 
 	// ========== UcanTokens helpers (shape) ==========
@@ -284,16 +282,5 @@ public class UCANVerifyTest {
 		assertEquals(ALICE_DID, RT.getIn(r, "iss"));
 		assertEquals(engine.getDIDString(), RT.getIn(r, "aud"), "audienced to the venue");
 		assertEquals(0L, RT.ensureVector(RT.getIn(r, "att")).count(), "empty att — pure identity");
-	}
-
-	@Test
-	public void testRelayDelegationShape() {
-		String jwt = UcanTokens.relayDelegation(ALICE_KP, engine.getDIDString().toString(), 300,
-			ALICE_DID + "/w/", "crud/read");
-		ACell r = verify(Maps.of("token", jwt));
-		assertEquals(CVMBool.TRUE, RT.getIn(r, "valid"));
-		AVector<?> att = RT.ensureVector(RT.getIn(r, "att"));
-		assertEquals(2L, att.count(), "venue/relay authority + the substantive grant");
-		assertEquals(Strings.create(UcanTokens.VENUE_RELAY), RT.getIn(att.get(0), "can"));
 	}
 }

@@ -26,7 +26,7 @@ import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
-import covia.venue.AgentState;
+import covia.venue.Agent;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.test.Rendezvous;
@@ -63,7 +63,7 @@ public class AgentConcurrencyTest {
 	 * to reach a rest state (SLEEPING/SUSPENDED/TERMINATED) and returns it; fails
 	 * the test if it is still RUNNING after 10s.
 	 */
-	private AString awaitFinished(AgentState agent) {
+	private AString awaitFinished(Agent agent) {
 		try {
 			return ((AgentAdapter) engine.getAdapter("agent"))
 				.awaitRunFinished(agent.getAgentId(), RequestContext.of(ALICE_DID), 10_000);
@@ -73,19 +73,19 @@ public class AgentConcurrencyTest {
 		}
 	}
 
-	// ========== Unit: AgentState CAS operations ==========
+	// ========== Unit: Agent CAS operations ==========
 
 	@Test
 	public void testExclusiveCreateHasExactlyOneConcurrentWinner() throws Exception {
 		User user = engine.getVenueState().users().ensure(ALICE_DID);
 		AString id = Strings.create("exclusive-create");
-		java.util.function.Function<String, AgentState> create = marker ->
+		java.util.function.Function<String, Agent> create = marker ->
 			user.createAgent(id, Maps.of("marker", marker), null);
-		List<AgentState> raced = Rendezvous.all(
+		List<Agent> raced = Rendezvous.all(
 			() -> create.apply("first"),
 			() -> create.apply("second"));
-		AgentState a = raced.get(0);
-		AgentState b = raced.get(1);
+		Agent a = raced.get(0);
+		Agent b = raced.get(1);
 		assertEquals(1, (a != null ? 1 : 0) + (b != null ? 1 : 0));
 		assertEquals(a != null ? Strings.create("first") : Strings.create("second"),
 			user.agent(id).getConfig().get(Strings.create("marker")));
@@ -95,19 +95,19 @@ public class AgentConcurrencyTest {
 	public void testExclusiveForkHasExactlyOneConcurrentWinner() throws Exception {
 		User user = engine.getVenueState().users().ensure(ALICE_DID);
 		AString id = Strings.create("exclusive-fork");
-		java.util.function.Function<String, AgentState> fork = marker ->
+		java.util.function.Function<String, Agent> fork = marker ->
 			user.forkAgent(id,
 				Maps.of("marker", marker),
 				Maps.of("stateMarker", marker),
 				Vectors.of(Maps.of("timelineMarker", marker)));
-		List<AgentState> raced = Rendezvous.all(
+		List<Agent> raced = Rendezvous.all(
 			() -> fork.apply("first"),
 			() -> fork.apply("second"));
-		AgentState a = raced.get(0);
-		AgentState b = raced.get(1);
+		Agent a = raced.get(0);
+		Agent b = raced.get(1);
 		assertEquals(1, (a != null ? 1 : 0) + (b != null ? 1 : 0));
 		AString winner = Strings.create(a != null ? "first" : "second");
-		AgentState persisted = user.agent(id);
+		Agent persisted = user.agent(id);
 		assertEquals(winner, persisted.getConfig().get(Strings.create("marker")));
 		assertEquals(winner, RT.getIn(persisted.getState(), "stateMarker"));
 		assertEquals(winner, RT.getIn(persisted.getTimeline(), CVMLong.ZERO, "timelineMarker"));
@@ -116,22 +116,22 @@ public class AgentConcurrencyTest {
 	@Test
 	public void testSessionLoadsAndTaskLandInOneExclusiveIntake() throws Exception {
 		User user = engine.getVenueState().users().ensure(ALICE_DID);
-		AgentState agent = user.ensureAgent("session-intake", Maps.empty(), null);
+		Agent agent = user.ensureAgent("session-intake", Maps.empty(), null);
 		Blob sid = Blob.fromHex("99990001999900019999000199990001");
 		Blob firstTask = Blob.fromHex("1001");
 		Blob secondTask = Blob.fromHex("1002");
-		java.util.function.BiFunction<Blob, String, AgentState.SessionIntake> intake = (task, marker) ->
+		java.util.function.BiFunction<Blob, String, Agent.SessionIntake> intake = (task, marker) ->
 			agent.addTaskInSession(sid, ALICE_DID,
 				Maps.of("load", marker), task, Maps.of("marker", marker));
-		List<AgentState.SessionIntake> raced = Rendezvous.all(
+		List<Agent.SessionIntake> raced = Rendezvous.all(
 			() -> intake.apply(firstTask, "first"),
 			() -> intake.apply(secondTask, "second"));
-		AgentState.SessionIntake a = raced.get(0);
-		AgentState.SessionIntake b = raced.get(1);
-		assertEquals(1, (a == AgentState.SessionIntake.APPLIED ? 1 : 0)
-			+ (b == AgentState.SessionIntake.APPLIED ? 1 : 0));
-		assertEquals(1, (a == AgentState.SessionIntake.LOADS_ON_EXISTING ? 1 : 0)
-			+ (b == AgentState.SessionIntake.LOADS_ON_EXISTING ? 1 : 0));
+		Agent.SessionIntake a = raced.get(0);
+		Agent.SessionIntake b = raced.get(1);
+		assertEquals(1, (a == Agent.SessionIntake.APPLIED ? 1 : 0)
+			+ (b == Agent.SessionIntake.APPLIED ? 1 : 0));
+		assertEquals(1, (a == Agent.SessionIntake.LOADS_ON_EXISTING ? 1 : 0)
+			+ (b == Agent.SessionIntake.LOADS_ON_EXISTING ? 1 : 0));
 		assertEquals(1, agent.getTasks().count());
 		assertNotNull(agent.getSession(sid));
 	}
@@ -139,38 +139,60 @@ public class AgentConcurrencyTest {
 	@Test
 	public void testPendingIntakeExposesMissingCreateAndLoadsOutcomes() {
 		User user = engine.getVenueState().users().ensure(ALICE_DID);
-		AgentState agent = user.ensureAgent("pending-intake", Maps.empty(), null);
+		Agent agent = user.ensureAgent("pending-intake", Maps.empty(), null);
 		Blob sid = Blob.fromHex("99990002999900029999000299990002");
 		ACell firstEnvelope = Maps.of("content", "first");
 
-		assertEquals(AgentState.SessionIntake.MISSING,
+		assertEquals(Agent.SessionIntake.MISSING,
 			agent.appendSessionPending(sid, ALICE_DID, null, firstEnvelope, false));
 		assertNull(agent.getSession(sid),
 			"a supplied/strict session path must not mint a missing session");
 
 		AMap<AString, ACell> loads = Maps.of("seed", Strings.create("initial"));
-		assertEquals(AgentState.SessionIntake.APPLIED,
+		assertEquals(Agent.SessionIntake.APPLIED,
 			agent.appendSessionPending(sid, ALICE_DID, loads, firstEnvelope, true));
 		assertEquals(Strings.create("initial"), RT.getIn(agent.getSession(sid),
-			AgentState.KEY_FRAMES, CVMLong.ZERO, Fields.LOADS, "seed"));
+			Agent.KEY_FRAMES, CVMLong.ZERO, Fields.LOADS, "seed"));
 		assertEquals(1, agent.getSessionPending(sid).count());
 
-		assertEquals(AgentState.SessionIntake.LOADS_ON_EXISTING,
+		assertEquals(Agent.SessionIntake.LOADS_ON_EXISTING,
 			agent.appendSessionPending(sid, ALICE_DID, Maps.empty(),
 				Maps.of("content", "rejected"), true));
 		assertEquals(1, agent.getSessionPending(sid).count(),
 			"loads against an existing session reject the whole append");
 
-		assertEquals(AgentState.SessionIntake.APPLIED,
+		assertEquals(Agent.SessionIntake.APPLIED,
 			agent.appendSessionPending(sid, ALICE_DID, null,
 				Maps.of("content", "second"), false));
 		assertEquals(2, agent.getSessionPending(sid).count());
 	}
 
 	@Test
+	public void testATaskRacingTerminationIsGivenBackOrRefused() throws Exception {
+		User user = engine.getVenueState().users().ensure(ALICE_DID);
+		Agent agent = user.ensureAgent("terminate-intake", Maps.empty(), null);
+		Blob sid = Blob.fromHex("99990003999900039999000399990003");
+		Blob task = Blob.fromHex("1003");
+		List<Object> raced = Rendezvous.all(
+			() -> agent.terminate(),
+			() -> agent.addTaskInSession(sid, ALICE_DID, null, task, Maps.of("input", "work")));
+		@SuppressWarnings("unchecked")
+		AMap<AString, ACell> before = (AMap<AString, ACell>) raced.get(0);
+		boolean givenBack = RT.getIn(before, Agent.KEY_TASKS, task) != null;
+		boolean refused = raced.get(1) == Agent.SessionIntake.MISSING;
+		assertTrue(givenBack != refused, "the task is in the record termination gives back, or intake refused it");
+		assertEquals(Agent.SessionIntake.MISSING,
+			agent.addTaskInSession(sid, ALICE_DID, null, Blob.fromHex("1004"), Maps.of("input", "late")),
+			"a terminated agent takes no task");
+		assertEquals(Agent.SessionIntake.MISSING,
+			agent.appendSessionPending(sid, ALICE_DID, null, Maps.of("content", "late"), true),
+			"nor a message");
+	}
+
+	@Test
 	public void testMediatedDeliveryUsesStrictAtomicSessionIntake() {
 		User user = engine.getVenueState().users().ensure(ALICE_DID);
-		AgentState agent = user.ensureAgent("mediated-intake", Maps.empty(), null);
+		Agent agent = user.ensureAgent("mediated-intake", Maps.empty(), null);
 		AgentAdapter adapter = (AgentAdapter) engine.getAdapter("agent");
 		Blob missing = Blob.fromHex("99990003999900039999000399990003");
 
@@ -193,47 +215,57 @@ public class AgentConcurrencyTest {
 	public void testTryResumeIdempotence() {
 		Users users = engine.getVenueState().users();
 		User user = users.ensure(ALICE_DID);
-		AgentState agent = user.ensureAgent("resume-test", Maps.empty(), null);
+		Agent agent = user.ensureAgent("resume-test", Maps.empty(), null);
 
 		agent.suspend(Strings.create("test error"));
-		assertEquals(AgentState.SUSPENDED, agent.getStatus());
+		assertEquals(Agent.SUSPENDED, agent.getStatus());
 
 		assertTrue(agent.tryResume(), "Resume should succeed from SUSPENDED");
-		assertEquals(AgentState.SLEEPING, agent.getStatus());
+		assertEquals(Agent.SLEEPING, agent.getStatus());
 
 		assertFalse(agent.tryResume(), "Resume should fail from SLEEPING");
 	}
 
 	@Test
-	public void testDeliberateStopSurvivesLateFaultAndCancellationDoesNotUndoResume() {
-		AgentState agent = engine.getVenueState().users().ensure(ALICE_DID)
+	public void testAHandleToADeletedAgentNeitherResumesNorRuns() {
+		User user = engine.getVenueState().users().ensure(ALICE_DID);
+		Agent agent = user.ensureAgent("deleted-under-handle", Maps.empty(), null);
+		agent.suspend(Strings.create("test error"));
+		user.removeAgent(agent.getAgentId());
+		assertFalse(agent.tryResume());
+		assertFalse(agent.tryRun());
+		assertNull(user.agent(agent.getAgentId()), "neither call recreates the agent");
+	}
+
+	@Test
+	public void testDeliberateStopSurvivesLateFaultAndAStoppedCycleDoesNotUndoResume() {
+		Agent agent = engine.getVenueState().users().ensure(ALICE_DID)
 			.ensureAgent("stop-race", Maps.empty(), null);
 		agent.suspend(ALICE_DID, Strings.create("review"));
-		ACell stop = agent.getRecord().get(AgentState.KEY_SUSPENSION);
+		ACell stop = agent.getRecord().get(Agent.KEY_SUSPENSION);
 		agent.suspend(Strings.create("late failure"));
-		agent.suspendAndDrain(Strings.create("late failed cycle"));
-		assertEquals(stop, agent.getRecord().get(AgentState.KEY_SUSPENSION));
+		assertEquals(stop, agent.getRecord().get(Agent.KEY_SUSPENSION));
 		assertNull(agent.getError());
 		assertTrue(agent.tryResume());
-		assertNull(agent.finishSuspendedCycle(Maps.of(Fields.CANCELLED, true), null));
-		assertEquals(AgentState.SLEEPING, agent.getStatus());
-		assertTrue(agent.getTimeline().isEmpty());
+		agent.recordStoppedCycle(Maps.of(Fields.CANCELLED, true));
+		assertEquals(Agent.SLEEPING, agent.getStatus());
+		assertEquals(1, agent.getTimeline().count(), "the stopped cycle is recorded");
 		agent.suspend(Strings.create("new fault after resume"));
-		assertNull(agent.getRecord().get(AgentState.KEY_SUSPENSION));
+		assertNull(agent.getRecord().get(Agent.KEY_SUSPENSION));
 		assertEquals(Strings.create("new fault after resume"), agent.getError());
-		agent.setStatus(AgentState.TERMINATED);
+		agent.setStatus(Agent.TERMINATED);
 		assertNull(agent.suspend(ALICE_DID, Strings.create("too late")));
-		assertEquals(AgentState.TERMINATED, agent.getStatus());
+		assertEquals(Agent.TERMINATED, agent.getStatus());
 	}
 
 	@Test
 	public void testTakeTaskHasExactlyOneConcurrentWinner() throws Exception {
 		Users users = engine.getVenueState().users();
 		User user = users.ensure(ALICE_DID);
-		AgentState agent = user.ensureAgent("take-task-test", Maps.empty(), null);
+		Agent agent = user.ensureAgent("take-task-test", Maps.empty(), null);
 		Blob taskId = Blob.fromHex("cafe");
 		ACell task = Maps.of(Fields.MESSAGE, Strings.create("claim once"));
-		agent.addTask(taskId, task);
+		agent.tasks().add(taskId, task);
 
 		CountDownLatch ready = new CountDownLatch(2);
 		CountDownLatch start = new CountDownLatch(1);
@@ -271,20 +303,20 @@ public class AgentConcurrencyTest {
 		// liveness is not part of the merge result.
 		Users users = engine.getVenueState().users();
 		User user = users.ensure(ALICE_DID);
-		AgentState agent = user.ensureAgent("merge-msg", Maps.empty(), null);
+		Agent agent = user.ensureAgent("merge-msg", Maps.empty(), null);
 
 		Blob sid = Blob.fromHex("66660001666600016666000166660001");
 		agent.ensureSession(sid, ALICE_DID);
 		agent.appendSessionPending(sid, Maps.of("content", "hello"));
 		Blob taskId = Blob.fromHex("0001");
-		agent.addTask(taskId, Strings.create("new work"));
+		agent.tasks().add(taskId, Strings.create("new work"));
 
 		AMap<AString, ACell> merged = agent.mergeRunResult(
 			null, null, null, Maps.of("ts", CVMLong.create(1)),
-			sid, null, 0, null, null);
+			sid, null, null);
 
-		assertEquals(AgentState.SLEEPING,
-			RT.ensureString(merged.get(AgentState.KEY_STATUS)));
+		assertEquals(Agent.SLEEPING,
+			RT.ensureString(merged.get(Agent.KEY_STATUS)));
 		assertEquals(1, agent.getSessionPending(sid).count(),
 			"pending work remains available to the live loop");
 		assertNotNull(agent.getTasks().get(taskId),
@@ -304,8 +336,8 @@ public class AgentConcurrencyTest {
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		// Deliver message directly to avoid auto-wake
-		User user = engine.getVenueState().users().get(ALICE_DID);
-		AgentState concAgent = user.agent("conc-trig");
+		User user = engine.getVenueState().users().user(ALICE_DID);
+		Agent concAgent = user.agent("conc-trig");
 		Blob concSid = Blob.fromHex("77770001777700017777000177770001");
 		concAgent.ensureSession(concSid, ALICE_DID);
 		concAgent.appendSessionPending(concSid, Maps.of(
@@ -330,9 +362,9 @@ public class AgentConcurrencyTest {
 		assertNotNull(r2);
 
 		// Agent should be SLEEPING with processed session pending
-		AgentState agent = user.agent("conc-trig");
-		assertEquals(AgentState.SLEEPING, awaitFinished(agent));
-		assertEquals(AgentState.SLEEPING, agent.getStatus());
+		Agent agent = user.agent("conc-trig");
+		assertEquals(Agent.SLEEPING, awaitFinished(agent));
+		assertEquals(Agent.SLEEPING, agent.getStatus());
 		assertFalse(agent.hasSessionPending(), "Session pending should be drained");
 		// At least 1 timeline entry (possibly 2 if both triggered separate loops)
 		assertTrue(agent.getTimeline().count() >= 1, "At least one run should have executed");
@@ -355,8 +387,8 @@ public class AgentConcurrencyTest {
 				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/echo")),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
-		User user = engine.getVenueState().users().get(ALICE_DID);
-		AgentState agent = user.agent("rapid");
+		User user = engine.getVenueState().users().user(ALICE_DID);
+		Agent agent = user.agent("rapid");
 		Blob rapidSid = Blob.fromHex("88880001888800018888000188880001");
 		agent.ensureSession(rapidSid, ALICE_DID);
 		AString rapidSidHex = Strings.create(rapidSid.toHexString());
@@ -386,7 +418,7 @@ public class AgentConcurrencyTest {
 		}
 
 		// Eventually quiesce — all messages processed, agent SLEEPING
-		assertEquals(AgentState.SLEEPING, awaitFinished(agent));
+		assertEquals(Agent.SLEEPING, awaitFinished(agent));
 		assertFalse(agent.hasSessionPending(), "All messages should be processed");
 	}
 
@@ -403,8 +435,8 @@ public class AgentConcurrencyTest {
 				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/echo")),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
-		User user = engine.getVenueState().users().get(ALICE_DID);
-		AgentState agent = user.agent("barrage");
+		User user = engine.getVenueState().users().user(ALICE_DID);
+		Agent agent = user.agent("barrage");
 		Blob barrageSid = Blob.fromHex("99990001999900019999000199990001");
 		agent.ensureSession(barrageSid, ALICE_DID);
 		AString barrageSidHex = Strings.create(barrageSid.toHexString());
@@ -433,7 +465,7 @@ public class AgentConcurrencyTest {
 				"trigger " + i + " job must complete, not fail");
 		}
 
-		assertEquals(AgentState.SLEEPING, awaitFinished(agent));
+		assertEquals(Agent.SLEEPING, awaitFinished(agent));
 		assertFalse(agent.hasSessionPending(), "All messages should be processed");
 	}
 
@@ -449,8 +481,8 @@ public class AgentConcurrencyTest {
 				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/echo")),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
-		User user = engine.getVenueState().users().get(ALICE_DID);
-		AgentState overlapAgent = user.agent("overlap");
+		User user = engine.getVenueState().users().user(ALICE_DID);
+		Agent overlapAgent = user.agent("overlap");
 		Blob overlapSid = Blob.fromHex("aabb0001aabb0001aabb0001aabb0001");
 		overlapAgent.ensureSession(overlapSid, ALICE_DID);
 		overlapAgent.appendSessionPending(overlapSid, Maps.of(
@@ -462,7 +494,7 @@ public class AgentConcurrencyTest {
 			Maps.of(Fields.AGENT_ID, "overlap", Fields.WAIT, CVMBool.FALSE),
 			RequestContext.of(ALICE_DID));
 		ACell r1 = t1.awaitResult(5000);
-		assertEquals(AgentState.RUNNING, RT.getIn(r1, Fields.STATUS));
+		assertEquals(Agent.RUNNING, RT.getIn(r1, Fields.STATUS));
 
 		// Second trigger: default wait (blocking). Should either:
 		// - join existing future (agent still RUNNING from first trigger's loop), or
@@ -507,10 +539,10 @@ public class AgentConcurrencyTest {
 		fTrig.join();
 
 		// Agent should be SLEEPING, message processed
-		User user = engine.getVenueState().users().get(ALICE_DID);
-		AgentState agent = user.agent("msg-trig");
-		assertEquals(AgentState.SLEEPING, awaitFinished(agent));
-		assertEquals(AgentState.SLEEPING, agent.getStatus());
+		User user = engine.getVenueState().users().user(ALICE_DID);
+		Agent agent = user.agent("msg-trig");
+		assertEquals(Agent.SLEEPING, awaitFinished(agent));
+		assertEquals(Agent.SLEEPING, agent.getStatus());
 		assertFalse(agent.hasSessionPending(), "Session pending should be drained");
 	}
 
@@ -528,10 +560,10 @@ public class AgentConcurrencyTest {
 
 		engine.syncState();
 
-		User user = engine.getVenueState().users().get(ALICE_DID);
-		AgentState agent = user.agent("sync-create");
+		User user = engine.getVenueState().users().user(ALICE_DID);
+		Agent agent = user.agent("sync-create");
 		assertNotNull(agent, "Agent should exist after syncState");
-		assertEquals(AgentState.SLEEPING, agent.getStatus());
+		assertEquals(Agent.SLEEPING, agent.getStatus());
 		AMap<AString, ACell> config = agent.getConfig();
 		assertNotNull(config);
 		assertEquals(Strings.create("You are sync test."),
@@ -549,8 +581,8 @@ public class AgentConcurrencyTest {
 				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/echo")),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
-		User user = engine.getVenueState().users().get(ALICE_DID);
-		AgentState syncRunAgent = user.agent("sync-run");
+		User user = engine.getVenueState().users().user(ALICE_DID);
+		Agent syncRunAgent = user.agent("sync-run");
 		Blob syncSid = Blob.fromHex("bbcc0001bbcc0001bbcc0001bbcc0001");
 		syncRunAgent.ensureSession(syncSid, ALICE_DID);
 		syncRunAgent.appendSessionPending(syncSid, Maps.of(
@@ -568,10 +600,10 @@ public class AgentConcurrencyTest {
 		// Wait deterministically for the run loop to reach SLEEPING.
 		// The CAS fix ensures syncState doesn't clobber the run loop's
 		// SLEEPING write.
-		AgentState agent = user.agent("sync-run");
-		assertEquals(AgentState.SLEEPING, awaitFinished(agent));
+		Agent agent = user.agent("sync-run");
+		assertEquals(Agent.SLEEPING, awaitFinished(agent));
 
-		assertEquals(AgentState.SLEEPING, agent.getStatus(),
+		assertEquals(Agent.SLEEPING, agent.getStatus(),
 			"Agent should reach SLEEPING after run loop completes — syncState must not clobber");
 		assertFalse(agent.hasSessionPending(), "Session pending should be drained");
 		assertTrue(agent.getTimeline().count() >= 1, "Run loop should have executed");
@@ -611,10 +643,10 @@ public class AgentConcurrencyTest {
 		// transitions the agent back to SLEEPING asynchronously after the
 		// awaited task jobs complete — wait deterministically for that
 		// transition via awaitFinished() (the run-loop completion future).
-		User user = engine.getVenueState().users().get(ALICE_DID);
-		AgentState agent = user.agent("conc-req");
-		assertEquals(AgentState.SLEEPING, awaitFinished(agent));
-		assertEquals(AgentState.SLEEPING, agent.getStatus());
+		User user = engine.getVenueState().users().user(ALICE_DID);
+		Agent agent = user.agent("conc-req");
+		assertEquals(Agent.SLEEPING, awaitFinished(agent));
+		assertEquals(Agent.SLEEPING, agent.getStatus());
 		assertEquals(0, agent.getTasks().count(), "All tasks should be processed");
 		assertTrue(agent.getTimeline().count() >= 1, "At least one run loop should have executed");
 	}
@@ -630,8 +662,8 @@ public class AgentConcurrencyTest {
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		// Deliver messages directly (no auto-wake since agent isn't SLEEPING for wakeAgent)
-		User user = engine.getVenueState().users().get(ALICE_DID);
-		AgentState agent = user.agent("resume-wake");
+		User user = engine.getVenueState().users().user(ALICE_DID);
+		Agent agent = user.agent("resume-wake");
 		Blob resumeSid = Blob.fromHex("ccdd0001ccdd0001ccdd0001ccdd0001");
 		agent.ensureSession(resumeSid, ALICE_DID);
 		AString resumeSidHex = Strings.create(resumeSid.toHexString());
@@ -644,7 +676,7 @@ public class AgentConcurrencyTest {
 
 		// Suspend the agent
 		agent.suspend(Strings.create("maintenance"));
-		assertEquals(AgentState.SUSPENDED, agent.getStatus());
+		assertEquals(Agent.SUSPENDED, agent.getStatus());
 		assertTrue(agent.hasSessionPending(), "Messages should be pending");
 
 		// Resume with autoWake=true
@@ -654,7 +686,7 @@ public class AgentConcurrencyTest {
 
 		// Wait on the live executor, not the stable lattice status (which stays
 		// SLEEPING throughout the attempt).
-		assertEquals(AgentState.SLEEPING, awaitFinished(agent),
+		assertEquals(Agent.SLEEPING, awaitFinished(agent),
 			"Agent should complete run loop after resume auto-wake");
 		assertFalse(agent.hasSessionPending(),
 			"Messages should be processed by auto-wake");

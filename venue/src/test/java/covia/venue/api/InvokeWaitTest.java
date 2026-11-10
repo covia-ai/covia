@@ -18,7 +18,9 @@ import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
+import covia.adapter.TestAdapter;
 import covia.api.Fields;
+import covia.exception.InvalidInputException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.TestServer;
@@ -46,6 +48,13 @@ public class InvokeWaitTest {
 	}
 
 	@Test
+	public void testPaddedFormsAreRefused() {
+		assertThrows(covia.exception.InvalidInputException.class, () -> CoviaAPI.parseWaitMs(" true", null));
+		assertThrows(covia.exception.InvalidInputException.class, () -> CoviaAPI.parseWaitMs("5000 ", null));
+		assertThrows(covia.exception.InvalidInputException.class, () -> CoviaAPI.parseWaitMs(null, Strings.create(" 2500")));
+	}
+
+	@Test
 	public void testBodyFieldForms() {
 		assertEquals(CoviaAPI.MAX_WAIT_MS, CoviaAPI.parseWaitMs(null, CVMBool.TRUE));
 		assertEquals(0L, CoviaAPI.parseWaitMs(null, CVMBool.FALSE));
@@ -59,11 +68,11 @@ public class InvokeWaitTest {
 	@Test
 	public void testMalformedWaitRejected() {
 		// Bad inputs are rejected, never silently treated as absent.
-		assertThrows(IllegalArgumentException.class, () -> CoviaAPI.parseWaitMs("soon", null));
-		assertThrows(IllegalArgumentException.class, () -> CoviaAPI.parseWaitMs("-5", null));
-		assertThrows(IllegalArgumentException.class, () -> CoviaAPI.parseWaitMs(null, Strings.create("whenever")));
-		assertThrows(IllegalArgumentException.class, () -> CoviaAPI.parseWaitMs(null, CVMLong.create(-1)));
-		assertThrows(IllegalArgumentException.class, () -> CoviaAPI.parseWaitMs(null, convex.core.data.Maps.of("ms", CVMLong.create(5))));
+		assertThrows(InvalidInputException.class, () -> CoviaAPI.parseWaitMs("soon", null));
+		assertThrows(InvalidInputException.class, () -> CoviaAPI.parseWaitMs("-5", null));
+		assertThrows(InvalidInputException.class, () -> CoviaAPI.parseWaitMs(null, Strings.create("whenever")));
+		assertThrows(InvalidInputException.class, () -> CoviaAPI.parseWaitMs(null, CVMLong.create(-1)));
+		assertThrows(InvalidInputException.class, () -> CoviaAPI.parseWaitMs(null, convex.core.data.Maps.of("ms", CVMLong.create(5))));
 	}
 
 	@Test
@@ -110,6 +119,56 @@ public class InvokeWaitTest {
 	}
 
 	@Test
+	public void testRunOperationFailureIsBadRequestWithItsReason() throws Exception {
+		// The operation ran and failed for its own stated reason: the request
+		// gets 400 with that reason, as documented, not a server error.
+		HttpResponse<String> resp = run(
+			"{\"operation\":\"v/test/ops/error\",\"input\":{\"message\":\"deliberate failure\"}}");
+		assertEquals(400, resp.statusCode(), resp.body());
+		assertTrue(resp.body().contains("deliberate failure"), resp.body());
+	}
+
+	@Test
+	public void testRunRefusedInsideTheOperationIsAJobFailure() throws Exception {
+		// The venue accepted the run; the operation's own authority check then
+		// refused it. That is the job's failure, answered like any other, not 403.
+		String path = TestServer.ENGINE.getDIDString() + "/w/run-refused";
+		HttpResponse<String> resp = run(
+			"{\"operation\":\"v/ops/covia/write\",\"input\":{\"path\":\"" + path + "\",\"value\":1}}");
+		assertEquals(400, resp.statusCode(), resp.body());
+		assertTrue(resp.body().contains("Error running operation"), resp.body());
+	}
+
+	@Test
+	public void testInvokeOfUnresolvableOperationIsBadRequest() throws Exception {
+		HttpResponse<String> resp = invoke("", "{\"operation\":\"v/does/not/exist\",\"input\":{}}");
+		assertEquals(400, resp.statusCode(), resp.body());
+		assertFalse(resp.body().contains("Exception"), "no exception class in the message: " + resp.body());
+	}
+
+	@Test
+	public void testMessageStatusesNameTheJobResource() throws Exception {
+		// No such job → 404; a finished job refuses messages → 409.
+		assertEquals(404, message("0x00112233445566778899aabbccddeeff").statusCode());
+
+		HttpResponse<String> done = invoke("?wait=5000",
+			"{\"operation\":\"v/test/ops/echo\",\"input\":{\"m\":1}}");
+		assertEquals(200, done.statusCode(), done.body());
+		String id = RT.getIn(JSON.parse(done.body()), "id").toString();
+		HttpResponse<String> late = message(id);
+		assertEquals(409, late.statusCode(), late.body());
+	}
+
+	private static HttpResponse<String> message(String jobId) throws Exception {
+		HttpRequest req = HttpRequest.newBuilder()
+			.uri(URI.create(TestServer.BASE_URL + "/api/v1/jobs/" + jobId))
+			.header("Content-Type", "application/json")
+			.POST(HttpRequest.BodyPublishers.ofString("{\"content\":\"more\"}"))
+			.build();
+		return covia.venue.TestHTTP.CLIENT.send(req, HttpResponse.BodyHandlers.ofString());
+	}
+
+	@Test
 	public void testIntegerWaitReturnsFinishedRecord() throws Exception {
 		HttpResponse<String> resp = invoke("?wait=5000",
 			"{\"operation\":\"v/test/ops/echo\",\"input\":{\"m\":1}}");
@@ -136,10 +195,12 @@ public class InvokeWaitTest {
 	public void testShortWaitOnSlowJobReturnsCurrentRecord() throws Exception {
 		// A wait window shorter than the job: graceful degradation to the
 		// asynchronous contract — current record, 201, caller keeps polling.
-		HttpResponse<String> resp = invoke("?wait=100",
-			"{\"operation\":\"v/test/ops/delay\",\"input\":"
-			+ "{\"delay\":3000,\"operation\":\"v/test/ops/echo\",\"input\":{\"m\":4}}}");
-		assertEquals(201, resp.statusCode(), "timeout inside the window degrades to poll");
+		// The job is held at a gate until after the window has closed.
+		try (TestAdapter.TestGate gate = TestAdapter.createGate("invoke-wait-short")) {
+			HttpResponse<String> resp = invoke("?wait=100",
+				"{\"operation\":\"v/test/ops/hold\",\"input\":{\"gate\":\"invoke-wait-short\"}}");
+			assertEquals(201, resp.statusCode(), "timeout inside the window degrades to poll");
+		}
 	}
 
 	@Test

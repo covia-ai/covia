@@ -9,6 +9,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.TreeMap;
+import java.util.function.Function;
 
 import convex.core.crypto.AKeyPair;
 import convex.core.data.ABlob;
@@ -21,38 +22,51 @@ import convex.core.data.AccountKey;
 import convex.core.data.Index;
 import convex.core.data.Keyword;
 import convex.core.data.MapEntry;
+import convex.core.data.Path;
+import convex.core.data.SignedData;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.store.AStore;
+import convex.core.store.MemoryStore;
+import convex.lattice.LatticeHost;
 import convex.lattice.ALatticeComponent;
 import convex.lattice.TransactionalComponent;
-import static convex.lattice.LatticeComponent.resolve;
-import convex.lattice.LatticeContext;
+import convex.lattice.OwnedMap;
 import convex.lattice.Timestamped;
-import convex.lattice.cursor.SignedCursor;
 import convex.lattice.cursor.AForkableCursor;
 import convex.lattice.cursor.Cursors;
+import convex.lattice.cursor.Persister;
 import covia.lattice.Covia;
+import covia.lattice.CoviaPath;
 import covia.api.Fields;
 import covia.exception.AuthException;
-import covia.venue.storage.LatticeStorage;
+import covia.exception.NotFoundException;
+import covia.venue.migration.MigrationStep;
+import covia.venue.migration.VenueMigrations;
 
 /**
  * Authoritative state of a running venue application and its domain components.
  *
+ * <p>A VenueState is a working copy of the venue's signed record. Its edits are
+ * unsigned: {@link #sync()} signs the reconciled venue into the record once, and
+ * publishing the record further belongs to the application and host. Within an
+ * application, {@link CoviaApplication#venue} gives the venue's one copy.</p>
+ *
  * <p>Ordinary domain mutations are atomic and immediately visible locally.
- * Use {@link #transact} for compound changes: its callback receives an isolated
- * venue with the same domain API, including children bound to that draft.
- * Success commits the whole change; exceptions discard it and conflicts retry
- * the callback. Use only the supplied draft and keep external I/O outside it.
- * Local commit does not imply host publication or physical durability.</p>
+ * Use {@link #execute} for compound changes, or {@link #transact} when the
+ * change returns a result: the callback receives an isolated venue with the
+ * same domain API, including children bound to that draft. Success commits the
+ * whole change; exceptions discard it and conflicts retry the callback, so
+ * {@code transact} returns what the committed run returned. Use only the
+ * supplied draft and keep external I/O outside it. Local commit does not imply
+ * host publication or physical durability.</p>
  *
  * <pre>{@code
- * venue.transact(draft -> {
+ * venue.execute(draft -> {
  *     var user = draft.users().ensure(did);
  *     user.ensureAgent("assistant", config, null);
- *     user.workspaceRoot().write(path, value);
+ *     user.workspace().write(CoviaPath.parse("assistant/ready"), value);
  * });
  * }</pre>
  *
@@ -61,12 +75,12 @@ import covia.venue.storage.LatticeStorage;
  * invariants and external effects cannot in general be merged. One authoritative
  * running instance owns a venue; failover must fence the previous writer.
  * {@link #fork()} creates an independent snapshot, and {@link #sync()} selects
- * a snapshot rather than replaying operations. Live work uses {@code transact}.
+ * a snapshot rather than replaying operations. Live work uses transactions.
  * Children have no independent publication or merge boundary.</p>
  */
 public class VenueState extends ALatticeComponent<ACell> implements TransactionalComponent<ACell, VenueState> {
-	/** Version 1 permits lazy legacy adapter records; it does not imply a full rewrite. */
-	public static final long CURRENT_VERSION = 1;
+	/** The venue schema version: the number of {@link VenueMigrations#steps}. */
+	public static final long CURRENT_VERSION = VenueMigrations.VERSION;
 	public static final String INVALID_STATE = "Venue state must be a keyword-keyed Index";
 	public static final String INVALID_VERSION = "Venue :version must be a non-negative integer";
 	public static final String UNSUPPORTED_VERSION = "Venue version %d is newer than supported version %d";
@@ -74,16 +88,21 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 	public static final String INVALID_ADAPTER_VERSION = "Adapter state version must be a non-negative integer: ";
 	public static final String INVALID_STATE_VERSION = "Adapter state version must not be negative: ";
 	@Override
-	public VenueState withCursor(AForkableCursor<ACell> draft) {
-		return new VenueState(draft, ownerKey, context);
+	public VenueState rebind(AForkableCursor<ACell> cursor) {
+		return new VenueState(cursor, ownerKey, context);
+	}
+
+	@Override
+	public VenueState withCursor(AForkableCursor<ACell> cursor) {
+		return rebind(cursor);
 	}
 
 	private final AccountKey ownerKey;
-	private final LatticeContext context;
+	private final VenueContext context;
 	/** The venue value as one timestamped record: local edits stamp it, merges keep the newest. */
 	private final Timestamped<ACell> record;
 
-	public LatticeContext getContext() { return context; }
+	public VenueContext getContext() { return context; }
 
 	@Override
 	public AForkableCursor<ACell> cursor() { return record.cursor(); }
@@ -98,9 +117,18 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 		return record.getLattice().merge(own, other);
 	}
 
-	/** Binds storage and its explicit signing/clock policy. */
-	private VenueState(AForkableCursor<ACell> cursor, AccountKey ownerKey, LatticeContext context) {
-		super(cursor);
+	/** Binds working storage and the policy its components share. */
+	private VenueState(AForkableCursor<ACell> cursor, AccountKey ownerKey, VenueContext context) {
+		this(cursor, ownerKey, context, null);
+	}
+
+	/**
+	 * Binds working storage of its own, persisted through {@code persister}
+	 * ({@link #persist()}), or with its parent when {@code persister} is null.
+	 */
+	private VenueState(AForkableCursor<ACell> cursor, AccountKey ownerKey, VenueContext context,
+			Persister<ACell> persister) {
+		super(cursor, persister);
 		this.ownerKey = ownerKey;
 		this.context = context;
 		this.record = new Timestamped<>(cursor, Covia.VENUE, context::currentTimestamp, Covia::stampVenue);
@@ -114,39 +142,48 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 	 * @return New VenueState instance
 	 */
 	public static VenueState create(AKeyPair kp) {
-		return CoviaApplication.create(kp).venue(kp.getAccountKey());
+		var host = LatticeHost.create(new MemoryStore());
+		var application = host.addApplication(new CoviaApplication(host));
+		application.mount(kp, new Config(null));
+		return application.venue(kp.getAccountKey());
 	}
 
 	/**
-	 * Connects a venue component beneath a containing Covia application.
-	 * The component copies its parent's policy and explicitly composes the
-	 * signing and timestamp boundaries. Publication belongs to the host.
+	 * The application's copy of a venue, signing with the context's signer and
+	 * persisted through {@code persister}, the host's, so that once saved it holds
+	 * its cells softly.
 	 */
-	public static VenueState connect(CoviaApplication parent,
-			AccountKey ownerKey) {
-		if (parent == null) {
-			throw new IllegalArgumentException("Parent component must not be null");
-		}
-		if (ownerKey == null) {
-			throw new IllegalArgumentException("Venue owner key must not be null");
-		}
-		return fromRoot(parent.cursor(), ownerKey, parent.getContext());
+	static VenueState draft(OwnedMap<ACell, ACell> venues, AccountKey ownerKey, VenueContext context,
+			Persister<ACell> persister) {
+		return new VenueState(venues.draft(ownerKey, context::sign).storage(), ownerKey, context,
+			Objects.requireNonNull(persister, "persister"));
 	}
 
 	/**
-	 * Connects to an existing root lattice cursor by navigating to the
-	 * venue level. The root cursor is typically held by Engine.
+	 * A standalone working copy of a venue under a Covia container, such as a
+	 * root cursor held by a test or a store snapshot. Its edits reach the root
+	 * only when the caller syncs it. Two copies of one venue do not share
+	 * edits, so a venue in an application is reached through
+	 * {@link CoviaApplication#venue} instead.
 	 *
-	 * @param root Root lattice cursor
+	 * @param root Cursor at the container holding {@code :grid}
 	 * @param ownerKey Venue owner's account key
-	 * @param context Signing and timestamp policy for this component
-	 * @return VenueState connected to the root cursor
+	 * @param signer Signs a venue value as the owner, or returns null when it
+	 *        cannot; the owner's signing rule checks each result
+	 * @param context Policy shared by the venue's components
+	 * @return Working copy of the venue in the root
 	 */
-	public static VenueState fromRoot(AForkableCursor<?> root, AccountKey ownerKey, LatticeContext context) {
-		var owners = resolve(root, Covia.ROOT, Covia.GRID, Covia.VENUES);
-		var signing = Covia.VENUE_OWNERS.signingFor(ownerKey);
-		var signed = SignedCursor.<ACell>create(resolve(owners, Covia.VENUE_OWNERS, ownerKey), value -> signing.sign(context, value));
-		return new VenueState(signed, ownerKey, context);
+	@SuppressWarnings("unchecked")
+	public static VenueState fromRoot(AForkableCursor<?> root, AccountKey ownerKey,
+			Function<ACell, SignedData<ACell>> signer, VenueContext context) {
+		var venues = CoviaApplication.venueRecords((AForkableCursor<Index<Keyword, ACell>>) root);
+		return draft(venues, ownerKey, signer, context);
+	}
+
+	/** An unsigned copy of the venue's record that signs into it on sync. */
+	private static VenueState draft(OwnedMap<ACell, ACell> venues, AccountKey ownerKey,
+			Function<ACell, SignedData<ACell>> signer, VenueContext context) {
+		return new VenueState(venues.draft(ownerKey, signer).storage(), ownerKey, context);
 	}
 
 	/**
@@ -163,9 +200,9 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 	@SuppressWarnings("unchecked")
 	public static Set<AccountKey> peekVenueKeys(AStore store) throws IOException {
 		ACell root = Objects.requireNonNull(store, "store").getRootData();
-		if (root == null) return Set.of();
+		if (!(root instanceof Index<?, ?> index)) return Set.of();
 
-		ACell value = RT.getIn(root, Covia.GRID, Covia.VENUES);
+		ACell value = CoviaApplication.venueRecords(Cursors.root((Index<Keyword, ACell>) index)).cursor().getOrDefault(null);
 		if (!(value instanceof AMap<?, ?> venues) || venues.isEmpty()) return Set.of();
 
 		LinkedHashSet<AccountKey> keys = new LinkedHashSet<>();
@@ -208,9 +245,9 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 	 */
 	public static Optional<StoredVersions> peekVersions(AStore store, AccountKey ownerKey) throws IOException {
 		ACell root = Objects.requireNonNull(store, "store").getRootData();
-		if (root == null) return Optional.empty();
+		if (!(root instanceof Index<?, ?>)) return Optional.empty();
 		VenueState venue = fromRoot(Cursors.root(root), Objects.requireNonNull(ownerKey, "ownerKey"),
-			LatticeContext.create(null, null));
+			value -> null, VenueContext.SYSTEM);
 		if (venue.get() == null) return Optional.empty();
 		return Optional.of(new StoredVersions(venue.version(), venue.adapterVersions()));
 	}
@@ -221,7 +258,12 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 	 * @return AssetStore cursor wrapper
 	 */
 	public AssetStore assets() {
-		return new AssetStore(resolve(cursor(), Covia.VENUE, Covia.ASSETS));
+		return new AssetStore(level(Covia.ASSETS));
+	}
+
+	/** One level of the venue record; a change through an absent record creates it. */
+	private <T extends ACell> AForkableCursor<T> level(Keyword key) {
+		return cursor().withDefault(Index.none()).path(key);
 	}
 
 	/**
@@ -230,7 +272,16 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 	 * @return Users cursor wrapper
 	 */
 	public Users users() {
-		return new Users(context, resolve(cursor(), Covia.VENUE, Covia.USER_DATA));
+		return new Users(context, level(Covia.USER_DATA));
+	}
+
+	/**
+	 * A path from the venue starts with its owner's DID, as an address does
+	 * ({@code <DID>/<namespace>/<path>}), and {@link Users} resolves it.
+	 */
+	@Override
+	public ALatticeComponent<?> resolve(AString[] segments, int start, int end) {
+		return (start == end) ? this : users().resolve(segments, start, end);
 	}
 
 	/** Atomically provisions account state and its login directory row. */
@@ -239,18 +290,16 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 		Objects.requireNonNull(id);
 		Objects.requireNonNull(defaultDID);
 		Objects.requireNonNull(profile);
-		var result = new java.util.concurrent.atomic.AtomicReference<AMap<AString, ACell>>();
-		transact(draft -> {
-			AMap<AString, ACell> previous = draft.auth().getUser(id);
+		return transact(draft -> {
+			AMap<AString, ACell> previous = draft.managedUsers().get(id);
 			AString did = previous == null ? null : RT.ensureString(previous.get(Fields.DID));
 			if (did == null) did = defaultDID;
 			draft.users().create(did);
 			AMap<AString, ACell> updated = previous == null ? Maps.empty() : previous;
 			for (var entry : profile.entrySet()) updated = updated.assoc(entry.getKey(), entry.getValue());
-			draft.auth().putUser(id, updated.assoc(Fields.DID, did));
-			result.set(draft.auth().getUser(id));
+			draft.managedUsers().putUser(id, updated.assoc(Fields.DID, did));
+			return draft.managedUsers().get(id);
 		});
-		return result.get();
 	}
 
 	/**
@@ -258,21 +307,21 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 	 * touched, including when called inside an enclosing venue transaction.
 	 */
 	public void setAgentThreadWakeTime(AString owner, AString agentId,
-			AgentState.ThreadKind kind, Blob threadId, long wakeTime) {
-		User user = users().get(owner);
+			Agent.ThreadKind kind, Blob threadId, long wakeTime) {
+		User user = users().user(owner);
 		if (user == null) return;
 		setAgentThreadWakeTime(owner, agentId, kind, threadId, wakeTime, RT.getIn(user.get(), Users.GENERATION));
 	}
 
 	/** Runtime calls retain the generation observed before handing work to the timer. */
 	void setAgentThreadWakeTime(AString owner, AString agentId,
-			AgentState.ThreadKind kind, Blob threadId, long wakeTime, ACell generation) {
-		transact(draft -> {
-			User user = draft.users().get(owner);
+			Agent.ThreadKind kind, Blob threadId, long wakeTime, ACell generation) {
+		execute(draft -> {
+			User user = draft.users().user(owner);
 			if (user == null || !Objects.equals(generation, RT.getIn(user.get(), Users.GENERATION))) {
 				throw new AuthException(Users.ACCOUNT_DELETED);
 			}
-			AgentState agent = user.agent(agentId);
+			Agent agent = user.agent(agentId);
 			if (agent != null && agent.setThreadWakeTime(kind, threadId, wakeTime)) {
 				draft.reconcileAgentWake(owner, agent);
 			}
@@ -281,17 +330,15 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 
 	/** Rebuilds the event from existing wake intent, atomically with its handle. */
 	public boolean rescheduleAgentWake(AString owner, AString agentId) {
-		boolean[] armed = {false};
-		transact(draft -> {
-			User user = draft.users().get(owner);
-			AgentState agent = user == null ? null : user.agent(agentId);
-			armed[0] = agent != null && draft.reconcileAgentWake(owner, agent);
+		return transact(draft -> {
+			User user = draft.users().user(owner);
+			Agent agent = user == null ? null : user.agent(agentId);
+			return agent != null && draft.reconcileAgentWake(owner, agent);
 		});
-		return armed[0];
 	}
 
 	/** Agent intent and event replacement share this private venue draft. */
-	private boolean reconcileAgentWake(AString owner, AgentState agent) {
+	private boolean reconcileAgentWake(AString owner, Agent agent) {
 		Blob handle = schedule().replaceAgentWake(owner, agent.getAgentId(), agent.wakeHandle(), agent.earliestWake());
 		agent.setWakeHandle(handle);
 		return handle != null;
@@ -306,7 +353,7 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 			AMap<ACell, ACell> venue = (AMap<ACell, ACell>) value;
 			AMap<AString, ACell> users = RT.ensureMap(venue.get(Covia.USER_DATA));
 			ACell previous = users == null ? null : users.get(did);
-			if (previous == null) throw new IllegalArgumentException(UNKNOWN_USER);
+			if (previous == null) throw new NotFoundException(UNKNOWN_USER, did.toString());
 			if (RT.getIn(previous, Covia.K_DELETED) != null) {
 				AMap<AString, ACell> record = RT.ensureMap(previous);
 				return venue.assoc(Covia.USER_DATA, users.assoc(did,
@@ -315,7 +362,7 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 			venue = venue.assoc(Covia.USER_DATA, users.assoc(did, Maps.of(Covia.K_DELETED, tombstone,
 				Users.DELETING, convex.core.data.prim.CVMBool.TRUE)));
 			AMap<AString, ACell> directory = RT.ensureMap(venue.get(Covia.USERS));
-			if (directory != null) venue = venue.assoc(Covia.USERS, AuthState.eraseUser(directory, did, actor, now));
+			if (directory != null) venue = venue.assoc(Covia.USERS, ManagedUsers.eraseUser(directory, did, actor, now));
 			return venue;
 		});
 		ACell previous = RT.getIn(before, Covia.USER_DATA, did);
@@ -334,59 +381,58 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 	/** A worker view guarded against deletion or recreation of its owner. */
 	public AdapterState adapterState(String name, AString owner) {
 		AdapterState.validateName(name);
-		migrateLegacyState("w/adapters/" + name, Covia.ADAPTERS, convex.core.data.Strings.create(name));
+		moveLegacyAdapterState(name);
 		return AdapterState.bind(this, name, owner);
 	}
 
 	private User venueUser() {
 		AString did = RT.ensureString(RT.getIn(get(), Covia.DID));
-		return did == null ? null : users().get(did);
+		return did == null ? null : users().user(did);
 	}
 
 	private ACell legacyState(String path) {
 		User host = venueUser();
-		return host == null ? null : host.readInternalPath(covia.lattice.WorkspaceRoot.parseStringPath(path));
+		return host == null ? null : host.readInternalPath(CoviaPath.parse(path));
 	}
 
 	public static final String LEGACY_STATE_CONFLICT = "Conflicting legacy venue state at ";
 
-	/** Move one legacy value exactly, removing its old copy in the same commit. */
-	private void migrateLegacyState(String path, Keyword region, AString key) {
+	/**
+	 * Moves an adapter's value at the legacy {@code w/adapters/<name>} to
+	 * {@code :adapters/<name>} exactly, removing the old copy in the same commit.
+	 */
+	private void moveLegacyAdapterState(String name) {
+		String path = "w/adapters/" + name;
+		AString key = Strings.create(name);
 		requireSupportedVersion();
 		if (legacyState(path) == null) return;
-		transact(draft -> {
+		execute(draft -> {
 			draft.requireSupportedVersion();
 			ACell legacy = draft.legacyState(path);
 			if (legacy == null) return;
-			AMap<ACell, ACell> parent = RT.ensureMap(key == null ? draft.get() : RT.getIn(draft.get(), region));
-			ACell target = key == null ? region : key;
-			boolean present = parent != null && parent.containsKey(target);
-			if (present && !Objects.equals(parent.get(target), legacy)) {
+			AMap<ACell, ACell> adapters = RT.ensureMap(RT.getIn(draft.get(), Covia.ADAPTERS));
+			boolean present = adapters != null && adapters.containsKey(key);
+			if (present && !Objects.equals(adapters.get(key), legacy)) {
 				// There is no generic merge for arbitrary adapter-owned values.
 				throw new IllegalStateException(LEGACY_STATE_CONFLICT + path);
 			}
-			if (!present) {
-				AForkableCursor<ACell> destination = draft.cursor().path(region);
-				if (key != null) destination = destination.withDefault(Maps.empty()).path(key);
-				destination.set(legacy);
-			}
-			draft.venueUser().deleteInternalPath(covia.lattice.WorkspaceRoot.parseStringPath(path));
+			if (!present) draft.cursor().path(Covia.ADAPTERS).withDefault(Maps.empty()).path(key).set(legacy);
+			draft.venueUser().deleteInternalPath(CoviaPath.parse(path));
 		});
 	}
 
 	/** Only unfinished work is indexed here; no user/job scan is needed on startup. */
 	AMap<AString, ACell> pendingUserDeletions(String name) {
-		migrateLegacyState("w/user-deletions", Covia.USER_DELETIONS, null);
 		AMap<AString, ACell> pending = RT.ensureMap(RT.getIn(get(), Covia.USER_DELETIONS, convex.core.data.Strings.create(name)));
 		return pending == null ? Maps.empty() : pending;
 	}
 
 	DeletedUser beginUserDeletion(AString did, AString actor,
 			java.util.Map<String, java.util.function.Consumer<AdapterState>> cleanups) {
-		DeletedUser[] result = new DeletedUser[1];
-		transact(draft -> {
+		return transact(draft -> {
 			DeletedUser deleted = draft.deleteUser(did, actor);
-			result[0] = deleted;
+			// The user's job records go with the account, so their entries do too.
+			draft.jobIndex().removeOwner(did);
 			Set<String> names = new LinkedHashSet<>(cleanups.keySet());
 			AMap<AString, ACell> stored = RT.ensureMap(RT.getIn(draft.get(), Covia.ADAPTERS));
 			if (stored != null) for (AString name : stored.keySet()) names.add(name.toString());
@@ -400,8 +446,8 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 				draft.markUserDeletion(name, did, deleted.tombstone());
 			}
 			draft.markUserDeletion("_venue", did, deleted.tombstone());
+			return deleted;
 		});
-		return result[0];
 	}
 
 	private void markUserDeletion(String name, AString did, ACell tombstone) {
@@ -411,7 +457,7 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 
 	/** Acknowledge exactly this deletion, opening recreation only when all work is done. */
 	void finishUserDeletion(String name, AString did, ACell tombstone) {
-		transact(draft -> {
+		execute(draft -> {
 			AMap<AString, ACell> pending = draft.pendingUserDeletions(name);
 			if (!Objects.equals(tombstone, pending.get(did))) return;
 			pending = pending.dissoc(did);
@@ -428,23 +474,24 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 
 	public static final String UNKNOWN_USER = "User is not registered at this venue";
 
-	/** Stored authentication directory; provider/runtime policy belongs to Auth. */
-	public AuthState auth() {
-		return new AuthState(context, resolve(cursor(), Covia.VENUE, Covia.USERS));
+	/** The users whose name and sign-in keys this venue manages; provider/runtime policy belongs to Auth. */
+	public ManagedUsers managedUsers() {
+		return new ManagedUsers(context, level(Covia.USERS));
+	}
+
+	/** The entries of unfinished jobs; the jobs themselves belong to JobManager. */
+	public JobIndex jobIndex() {
+		return new JobIndex(level(Covia.JOBS));
 	}
 
 	/** Stored schedule; timer and execution lifecycle belong to Scheduler. */
-	public ScheduleState schedule() {
-		return new ScheduleState(context, resolve(cursor(), Covia.VENUE, Covia.SCHEDULE));
+	public Schedule schedule() {
+		return new Schedule(context, level(Covia.SCHEDULE));
 	}
 
-	/**
-	 * Gets the venue's content-addressed blob storage.
-	 *
-	 * @return LatticeStorage instance backed by this venue's cursor
-	 */
-	public LatticeStorage contentStorage() {
-		return new LatticeStorage(resolve(cursor(), Covia.VENUE, Covia.STORAGE));
+	/** The venue's content, by SHA-256 ({@code :storage}). */
+	public ContentStore contents() {
+		return new ContentStore(level(Covia.STORAGE));
 	}
 
 	/**
@@ -453,7 +500,7 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 	 * @return Map-shaped venue value, or null if uninitialised
 	 */
 	public ACell get() {
-		return cursor().get();
+		return cursor().getOrDefault(null);
 	}
 
 	/** Stored format version. An absent field (or a fresh venue) is legacy version 0. */
@@ -548,7 +595,7 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 	 */
 	public void migrateAdapter(AdapterMigration migration) {
 		if (adapterVersion(migration.name()) == migration.supported()) return;
-		transact(draft -> draft.migrateAdapterInPlace(migration));
+		execute(draft -> draft.migrateAdapterInPlace(migration));
 	}
 
 	/**
@@ -577,10 +624,13 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 	 * Apply ordered venue migrations and their version changes in one transaction.
 	 * Current venues are a no-op. Callbacks are pure and may retry; failures leave
 	 * the entire original value intact. Bulk record migrations remain lazy.
-	 * Adapters' state is not migrated: use {@link #migrate(List)}.
+	 * Adapters' state is not migrated: use {@link #migrate(SecretStore.Keys, List)}.
+	 *
+	 * @param keys The venue's secret store keys ({@link SecretStore#keys}), which
+	 *        read what a step carries over from the venue's secrets
 	 */
-	public void migrate() {
-		migrate(List.of());
+	public void migrate(SecretStore.Keys keys) {
+		migrate(keys, List.of());
 	}
 
 	/**
@@ -591,34 +641,36 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 	 * exactly as it was; current state is not rewritten. Where two migrations
 	 * name the same adapter, the caller passes only the one that applies.
 	 *
+	 * @param keys The venue's secret store keys ({@link SecretStore#keys}), which
+	 *        read what a step carries over from the venue's secrets
 	 * @param adapters Migration rules of the adapters to migrate with the venue,
 	 *        from {@code AAdapter.stateMigration()}
 	 * @throws UnsupportedVersionException if the venue, or an adapter's stored
 	 *         state, is at a newer version than supported
 	 */
-	public void migrate(List<AdapterMigration> adapters) {
-		transact(draft -> draft.migrateInPlace(adapters));
+	public void migrate(SecretStore.Keys keys, List<AdapterMigration> adapters) {
+		execute(draft -> draft.migrateInPlace(keys, adapters));
 	}
 
 	/** Only called on a transaction draft: the venue's steps, then each adapter's. */
-	private void migrateInPlace(List<AdapterMigration> adapters) {
-		migrateInPlace();
+	private void migrateInPlace(SecretStore.Keys keys, List<AdapterMigration> adapters) {
+		migrateInPlace(keys);
 		for (AdapterMigration migration : adapters) migrateAdapterInPlace(migration);
 	}
 
-	/** Only called on a transaction draft; add each future upgrade here. */
-	private void migrateInPlace() {
+	/**
+	 * Only called on a transaction draft: each venue step from the stored
+	 * version, recording each version reached. Steps are in
+	 * {@link VenueMigrations#steps}.
+	 */
+	private void migrateInPlace(SecretStore.Keys keys) {
 		long version = requireSupportedVersion();
+		if (version == CURRENT_VERSION) return;
+		List<MigrationStep> steps = VenueMigrations.steps(keys);
 		while (version < CURRENT_VERSION) {
-			switch ((int) version) {
-				case 0 -> {
-					// Version 1 introduces adapter-owned components and a framework
-					// cleanup index. Only the small pending index moves at startup;
-					// adapter values still move exactly on first access.
-					migrateLegacyState("w/user-deletions", Covia.USER_DELETIONS, null);
-				}
-				default -> throw unsupportedVersion(version);
-			}
+			ACell value = get();
+			ACell migrated = steps.get((int) version).apply(value);
+			if (migrated != value) cursor().set(migrated);
 			cursor().withDefault(Index.none()).path(Covia.VERSION).set(CVMLong.create(++version));
 		}
 	}
@@ -627,24 +679,26 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 	 * Validate compatibility, migrate and initialise identity atomically, before
 	 * Engine bootstrap or adapter activation. Existing identity is preserved.
 	 * @param did The venue's DID string
+	 * @param keys The venue's secret store keys ({@link SecretStore#keys})
 	 */
-	public void initialise(ACell did) {
-		initialise(did, List.of());
+	public void initialise(ACell did, SecretStore.Keys keys) {
+		initialise(did, keys, List.of());
 	}
 
 	/**
-	 * As {@link #initialise(ACell)}, also migrating the given adapters' state.
+	 * As {@link #initialise(ACell, SecretStore.Keys)}, also migrating the given adapters' state.
 	 * The venue's steps run first, then each adapter's in order, then identity is
 	 * initialised, all in one transaction: a refusal or a failing step leaves the
 	 * venue exactly as it was. Where two migrations name the same adapter, the
 	 * caller passes only the one that applies.
 	 *
 	 * @param did The venue's DID string
+	 * @param keys The venue's secret store keys ({@link SecretStore#keys})
 	 * @param adapters Migration rules of the adapters starting with the venue
 	 */
-	public void initialise(ACell did, List<AdapterMigration> adapters) {
-		transact(draft -> {
-			draft.migrateInPlace(adapters);
+	public void initialise(ACell did, SecretStore.Keys keys, List<AdapterMigration> adapters) {
+		execute(draft -> {
+			draft.migrateInPlace(keys, adapters);
 			@SuppressWarnings("unchecked")
 			Index<Keyword, ACell> value = (Index<Keyword, ACell>) draft.get();
 			if (!value.containsKey(Covia.DID)) draft.cursor().set(value.assoc(Covia.DID, did));
@@ -661,13 +715,13 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 	}
 
 	/**
-	 * Creates independent working state. Sync reconciles it with the destination
-	 * using whole-venue LWW, which may select one complete concurrent version.
-	 * For compound local edits with conflict retry, use {@link #transact}.
+	 * Creates independent working state. Its sync reconciles it with this copy,
+	 * unsigned, using whole-venue LWW, which may select one complete concurrent version.
+	 * For compound local edits with conflict retry, use {@link #execute} or {@link #transact}.
 	 */
 	@Override
 	public VenueState fork() {
-		return withCursor(storage.fork());
+		return rebind(storage.fork());
 	}
 
 }

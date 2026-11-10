@@ -1,6 +1,7 @@
 package covia.venue.api;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -37,22 +38,29 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.TestInstance.Lifecycle;
 
+import convex.auth.ucan.Capability;
 import convex.auth.ucan.UCAN;
 import convex.core.crypto.AKeyPair;
+import convex.core.data.ACell;
+import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Blob;
 import convex.core.data.prim.CVMBool;
+import convex.core.data.prim.CVMLong;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
+import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.adapter.TestAdapter;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.grid.auth.VenueAuth;
 import covia.grid.client.VenueHTTP;
+import covia.venue.Admission;
+import covia.venue.Agent;
+import covia.venue.RequestContext;
 import covia.venue.TestServer;
-import covia.venue.AgentState;
 
 /**
  * #183 — per-agent Agent Card over A2A (COG-14): {@code GET /a2a/<ownerDID>/g/<agentId>}.
@@ -220,22 +228,21 @@ public class A2AAgentCardTest {
 	}
 
 	@Test
-	public void publicAgentWithCaps_acceptsAnonMessage_withoutCapsDenies() throws Exception {
+	public void agentAdmittingAnyone_answersAnonymousAskers_cardOnlyDoesNot() throws Exception {
 		AKeyPair kp = AKeyPair.generate();
 		AString ownerDid = didOf(kp);
 		VenueHTTP client = VenueHTTP.create(URI.create(BASE_URL), VenueAuth.bearer(bearerFor(kp)));
 		client.setTimeout(5000);
 
-		// Public agent WITH an explicit a2a.caps scope ("unrestricted" for the
-		// test) → an anonymous message/send runs under the owner, bounded by caps.
-		Job withCaps = client.invokeAndWait(Strings.create("v/ops/agent/create"), Maps.of(
+		// accepts "anyone" lets an anonymous caller ask; a2a.public only
+		// publishes the card.
+		Job open = client.invokeAndWait(Strings.create("v/ops/agent/create"), Maps.of(
 				Strings.create("agentId"), Strings.create("PubChat"),
 				Strings.create("config"), Maps.of(
 						Strings.create("operation"), Strings.create("v/test/ops/echo"),
-						Strings.create("a2a"), Maps.of(
-								Strings.create("public"), CVMBool.TRUE,
-								Strings.create("caps"), Strings.create("unrestricted")))));
-		assertEquals(Status.COMPLETE, withCaps.getStatus(), "create: " + withCaps.getErrorMessage());
+						Fields.ACCEPTS, Admission.ANYONE,
+						Strings.create("a2a"), Maps.of(Strings.create("public"), CVMBool.TRUE))));
+		assertEquals(Status.COMPLETE, open.getStatus(), "create: " + open.getErrorMessage());
 
 		Object env = rpcEnvelope("pm1", "SendMessage", new MessageSendParams(userMessage("hi public"), null, null));
 
@@ -246,27 +253,288 @@ public class A2AAgentCardTest {
 		Task anonTask = extractTask(parsed);
 		assertNotNull(anonTask);
 
-		// The anonymous sender polls its own task by id on the same endpoint.
-		// The lookup runs under the gated dispatch (owner) context, so a task
-		// minted through this endpoint stays visible to the remote sender —
-		// without this, the outbound a2a:send mirror can never observe
-		// completion of a task it created on a public agent.
+		// The anonymous asker polls its own task by id on the same endpoint;
+		// the outbound a2a:send mirror relies on this to observe completion.
 		Map<String, Object> polled = JsonUtil.OBJECT_MAPPER.fromJson(
 				post("/a2a/" + ownerDid + "/g/PubChat",
 						rpcEnvelope("pg1", "GetTask", new TaskQueryParams(anonTask.id(), null)), null).body(),
 				Map.class);
-		assertNull(polled.get("error"), "anonymous sender must be able to poll its task: " + polled.get("error"));
+		assertNull(polled.get("error"), "anonymous asker must be able to poll its task: " + polled.get("error"));
 		assertEquals(anonTask.id(), extractTask(polled).id());
 
-		// Public agent WITHOUT a2a.caps → discoverable, but an anonymous
-		// message/send is denied (card-only; the owner hasn't bounded a run).
-		Job noCaps = client.invokeAndWait(Strings.create("v/ops/agent/create"), Maps.of(
+		// A public card alone admits nobody: discoverable, but asking is denied.
+		Job cardOnly = client.invokeAndWait(Strings.create("v/ops/agent/create"), Maps.of(
 				Strings.create("agentId"), Strings.create("PubNoCaps"),
 				Strings.create("config"), Maps.of(
 						Strings.create("operation"), Strings.create("v/test/ops/echo"),
 						Strings.create("a2a"), Maps.of(Strings.create("public"), CVMBool.TRUE))));
-		assertEquals(Status.COMPLETE, noCaps.getStatus());
+		assertEquals(Status.COMPLETE, cardOnly.getStatus());
 		assertEquals(404, post("/a2a/" + ownerDid + "/g/PubNoCaps", env, null).statusCode());
+
+		// The older shape, a public agent with a2a.caps, reads as accepts "anyone".
+		Job legacy = client.invokeAndWait(Strings.create("v/ops/agent/create"), Maps.of(
+				Strings.create("agentId"), Strings.create("PubLegacy"),
+				Strings.create("config"), Maps.of(
+						Strings.create("operation"), Strings.create("v/test/ops/echo"),
+						Strings.create("a2a"), Maps.of(
+								Strings.create("public"), CVMBool.TRUE,
+								Strings.create("caps"), Strings.create("unrestricted")))));
+		assertEquals(Status.COMPLETE, legacy.getStatus(), "create: " + legacy.getErrorMessage());
+		HttpResponse<String> legacyAsk = post("/a2a/" + ownerDid + "/g/PubLegacy", env, null);
+		assertEquals(200, legacyAsk.statusCode(), legacyAsk.body());
+		assertNull(parse(legacyAsk).get("error"), legacyAsk.body());
+	}
+
+	/**
+	 * A per-agent send is a task, as A2A's task-generating agents work: an
+	 * agent's plain reply completes it, and a task the agent parks stays
+	 * working, the reply after the park its status message (A2A_AGENTS.md).
+	 */
+	@Test
+	public void aPlainReplyCompletesTheTaskAndAParkedTaskStaysWorking() throws Exception {
+		AKeyPair kp = AKeyPair.generate();
+		AString ownerDid = didOf(kp);
+		String jwt = bearerFor(kp);
+		VenueHTTP client = VenueHTTP.create(URI.create(BASE_URL), VenueAuth.bearer(jwt));
+		client.setTimeout(5000);
+		assertEquals(Status.COMPLETE, client.invokeAndWait(Strings.create("v/ops/agent/create"), Maps.of(
+				Fields.AGENT_ID, Strings.create("Replier"),
+				Fields.CONFIG, Maps.of(Fields.OPERATION, Strings.create("v/ops/llmagent/chat"),
+					"llmOperation", Strings.create("v/test/ops/stubbornllm")))).getStatus());
+		assertEquals(Status.COMPLETE, client.invokeAndWait(Strings.create("v/ops/agent/create"), Maps.of(
+				Fields.AGENT_ID, Strings.create("Parker"),
+				Fields.CONFIG, Maps.of(Fields.OPERATION, Strings.create("v/ops/llmagent/chat"),
+					"llmOperation", Strings.create("v/test/ops/taskllm"),
+					"model", Strings.create("park-task-test")))).getStatus());
+
+		String replier = "/a2a/" + ownerDid + "/g/Replier";
+		Task replied = extractTask(parse(post(replier, rpcEnvelope("reply", "SendMessage",
+				new MessageSendParams(userMessage("hello"), null, null)), jwt)));
+		assertNotNull(replied);
+		awaitTask(replier, replied.id(), jwt, TaskState.TASK_STATE_COMPLETED);
+
+		String parker = "/a2a/" + ownerDid + "/g/Parker";
+		Task sent;
+		try (covia.venue.AgentWatch watch = covia.venue.AgentWatch.open(TestServer.ENGINE, ownerDid, "Parker")) {
+			sent = extractTask(parse(post(parker, rpcEnvelope("park", "SendMessage",
+					new MessageSendParams(userMessage("write the report"), null, null)), jwt)));
+			assertNotNull(sent);
+			watch.awaitRest(1);
+		}
+		Task polled = extractTask(parse(post(parker,
+				rpcEnvelope("park-get", "GetTask", new TaskQueryParams(sent.id(), null)), jwt)));
+		assertEquals(TaskState.TASK_STATE_WORKING, polled.status().state());
+		assertTrue(JsonUtil.OBJECT_MAPPER.toJson(polled.status().message()).contains(TestAdapter.PARK_TEST_REPLY),
+				"the reply after the park is the status message: " + JsonUtil.OBJECT_MAPPER.toJson(polled.status()));
+	}
+
+	@Test
+	public void anonymousAskIsTheAskersOwn_andTheAgentActsAsItself() throws Exception {
+		AKeyPair kp = AKeyPair.generate();
+		AString ownerDid = didOf(kp);
+		VenueHTTP client = VenueHTTP.create(URI.create(BASE_URL), VenueAuth.bearer(bearerFor(kp)));
+		client.setTimeout(5000);
+		assertEquals(Status.COMPLETE, client.invokeAndWait(Strings.create("v/ops/covia/write"), Maps.of(
+				Fields.PATH, Strings.create("w/private-note"),
+				Fields.VALUE, Strings.create("alice only"))).getStatus());
+
+		String agentId = "Lender";
+		Job created = client.invokeAndWait(Strings.create("v/ops/agent/create"), Maps.of(
+				Fields.AGENT_ID, Strings.create(agentId),
+				Fields.CONFIG, Maps.of(
+						Fields.OPERATION, Strings.create("v/test/ops/taskcomplete"),
+						"readPath", Strings.create("w/private-note"),
+						Fields.ACCEPTS, Admission.ANYONE)));
+		assertEquals(Status.COMPLETE, created.getStatus(), "create: " + created.getErrorMessage());
+
+		String endpoint = "/a2a/" + ownerDid + "/g/" + agentId;
+		Task sent = extractTask(parse(post(endpoint, rpcEnvelope("lend", "SendMessage",
+				new MessageSendParams(userMessage("what is in your notes?"), null, null)), null)));
+		assertNotNull(sent);
+		awaitTask(endpoint, sent.id(), null, TaskState.TASK_STATE_COMPLETED);
+		HttpResponse<String> polled = post(endpoint,
+				rpcEnvelope("lend-get", "GetTask", new TaskQueryParams(sent.id(), null)), null);
+		assertTrue(polled.body().contains("alice only"),
+				"the agent served the request as itself, with its own authority: " + polled.body());
+		AString publicDid = Strings.create(TestServer.ENGINE.getDIDString() + ":public");
+		assertEquals(publicDid, TestServer.ENGINE.jobs()
+				.getJobData(Blob.fromHex(sent.id()), covia.venue.RequestContext.of(publicDid)).get(Fields.CALLER),
+				"the request is the anonymous asker's own");
+	}
+
+	@Test
+	public void callerAdmittedByAcceptsAsksThroughA2A() throws Exception {
+		AKeyPair ownerKp = AKeyPair.generate();
+		AString ownerDid = didOf(ownerKp);
+		AKeyPair bobKp = AKeyPair.generate();
+		AString bobDid = didOf(bobKp);
+		String bobJwt = bearerFor(bobKp);
+		VenueHTTP client = VenueHTTP.create(URI.create(BASE_URL), VenueAuth.bearer(bearerFor(ownerKp)));
+		client.setTimeout(5000);
+		Job created = client.invokeAndWait(Strings.create("v/ops/agent/create"), Maps.of(
+				Fields.AGENT_ID, Strings.create("Desk"),
+				Fields.CONFIG, Maps.of(
+						Fields.OPERATION, Strings.create("v/test/ops/echo"),
+						Fields.ACCEPTS, Vectors.of(bobDid))));
+		assertEquals(Status.COMPLETE, created.getStatus(), "create: " + created.getErrorMessage());
+
+		// The one check every door shares: accepts admits Bob over A2A too.
+		String endpoint = "/a2a/" + ownerDid + "/g/Desk";
+		assertEquals(200, get(endpoint + "/.well-known/agent-card.json", bobJwt).statusCode(),
+				"whoever may ask sees the card");
+		Map<String, Object> asked = parse(post(endpoint, rpcEnvelope("bob", "SendMessage",
+				new MessageSendParams(userMessage("hello desk"), null, null)), bobJwt));
+		assertNull(asked.get("error"), "Bob is admitted: " + asked);
+		Task task = extractTask(asked);
+		assertEquals(bobDid, TestServer.ENGINE.jobs()
+				.getJobData(Blob.fromHex(task.id()), covia.venue.RequestContext.of(bobDid)).get(Fields.CALLER),
+				"the request is Bob's own");
+		assertNull(parse(post(endpoint, rpcEnvelope("bob-get", "GetTask",
+				new TaskQueryParams(task.id(), null)), bobJwt)).get("error"), "Bob follows his own task");
+
+		// Anyone accepts does not name is still refused.
+		assertEquals(403, post(endpoint, rpcEnvelope("carol", "SendMessage",
+				new MessageSendParams(userMessage("hello desk"), null, null)),
+				bearerFor(AKeyPair.generate())).statusCode());
+	}
+
+	@Test
+	public void ucanDelegateAsksThroughA2A() throws Exception {
+		AKeyPair ownerKp = AKeyPair.generate();
+		AString ownerDid = didOf(ownerKp);
+		AKeyPair carolKp = AKeyPair.generate();
+		AString carolDid = didOf(carolKp);
+		String carolJwt = bearerFor(carolKp);
+		VenueHTTP client = VenueHTTP.create(URI.create(BASE_URL), VenueAuth.bearer(bearerFor(ownerKp)));
+		client.setTimeout(5000);
+		Job created = client.invokeAndWait(Strings.create("v/ops/agent/create"), Maps.of(
+				Fields.AGENT_ID, Strings.create("Delegated"),
+				Fields.CONFIG, Maps.of(Fields.OPERATION, Strings.create("v/test/ops/echo"))));
+		assertEquals(Status.COMPLETE, created.getStatus(), "create: " + created.getErrorMessage());
+
+		String endpoint = "/a2a/" + ownerDid + "/g/Delegated";
+		Object env = rpcEnvelope("carol", "SendMessage",
+				new MessageSendParams(userMessage("hello delegated"), null, null));
+		assertEquals(403, post(endpoint, env, carolJwt).statusCode(), "no admission, no proof");
+
+		// The owner's agent/request grant, presented in X-Covia-Ucans, admits Carol.
+		long exp = (System.currentTimeMillis() / 1000) + 3600;
+		AString proof = UCAN.createJWT(ownerKp, carolKp.getAccountKey(), exp,
+				Vectors.of(Capability.create(Strings.create(ownerDid + "/g/Delegated"),
+						covia.api.Abilities.AGENT_REQUEST)),
+				Vectors.empty());
+		HttpRequest request = HttpRequest.newBuilder(URI.create(BASE_URL + endpoint))
+				.header("Content-Type", "application/json")
+				.header("Authorization", "Bearer " + carolJwt)
+				.header(VenueHTTP.UCANS_HEADER, proof.toString())
+				.POST(HttpRequest.BodyPublishers.ofString(JsonUtil.OBJECT_MAPPER.toJson(env)))
+				.timeout(Duration.ofSeconds(10))
+				.build();
+		HttpResponse<String> asked = http.send(request, HttpResponse.BodyHandlers.ofString());
+		assertEquals(200, asked.statusCode(), asked.body());
+		Map<String, Object> parsed = parse(asked);
+		assertNull(parsed.get("error"), "the delegate is admitted: " + parsed);
+		assertEquals(carolDid, TestServer.ENGINE.jobs()
+				.getJobData(Blob.fromHex(extractTask(parsed).id()), covia.venue.RequestContext.of(carolDid))
+				.get(Fields.CALLER), "the request is the delegate's own");
+	}
+
+	/**
+	 * A per-agent endpoint reaches only the asker's own tasks for that agent: an
+	 * anonymous asker never the owner's other jobs nor the owner's own tasks on
+	 * the same agent, and the owner never a stranger's task or a job of theirs
+	 * that is no task of this agent, whatever job ids either holds.
+	 */
+	@Test
+	public void aPerAgentEndpointReachesOnlyTheAskersOwnTasksForThatAgent() throws Exception {
+		AKeyPair kp = AKeyPair.generate();
+		AString ownerDid = didOf(kp);
+		String jwt = bearerFor(kp);
+		VenueHTTP client = VenueHTTP.create(URI.create(BASE_URL), VenueAuth.bearer(jwt));
+		client.setTimeout(5000);
+		String agentId = "PubGate" + Long.toUnsignedString(System.nanoTime(), 36);
+		String endpoint = "/a2a/" + ownerDid + "/g/" + agentId;
+
+		try (TestAdapter.TestGate gate = TestAdapter.createGate(agentId)) {
+			Job created = client.invokeAndWait(Strings.create("v/ops/agent/create"), Maps.of(
+				Fields.AGENT_ID, Strings.create(agentId),
+				Fields.CONFIG, Maps.of(
+					Fields.OPERATION, Strings.create("v/test/ops/taskcomplete"),
+					"testGate", Strings.create(agentId),
+					Fields.ACCEPTS, Admission.ANYONE)));
+			assertEquals(Status.COMPLETE, created.getStatus(), created.getErrorMessage());
+
+			// An owner job unrelated to the agent, still running.
+			Job unrelated = client.invoke(Strings.create("v/test/ops/never"), Maps.of())
+				.get(5, TimeUnit.SECONDS);
+			// The public caller's first task holds the agent at the gate, so the
+			// owner's own task on this agent (submitted natively) and a second
+			// public task both stay queued and non-terminal.
+			Task held = publicSend(endpoint, "held");
+			assertTrue(gate.awaitEntered(5, TimeUnit.SECONDS), "public task did not reach the gate");
+			Job ownTask = client.invoke(Strings.create("v/ops/agent/request"), Maps.of(
+				Fields.AGENT_ID, Strings.create(agentId),
+				Fields.INPUT, Maps.of("task", Strings.create("the owner's own task")),
+				"timeout", CVMLong.create(0))).get(5, TimeUnit.SECONDS);
+			Task queued = publicSend(endpoint, "queued");
+
+			// Provenance in the agent's own books: while held, the task row names
+			// the public principal as its caller, not the owner.
+			AString publicDid = Strings.create(TestServer.ENGINE.getDIDString() + ":public");
+			Agent Agent = TestServer.ENGINE.getVenueState().users().user(ownerDid).agent(agentId);
+			assertEquals(publicDid, RT.getIn(Agent.getTasks().get(Blob.fromHex(held.id())), Fields.CALLER));
+
+			// Foreign to the public caller: the unrelated job, and the owner's own
+			// task on this very agent. Read, cancel and subscribe are all refused
+			// with one wording, and nothing happens to either job.
+			for (String foreign : List.of(unrelated.getID().toHexString(), ownTask.getID().toHexString())) {
+				assertAgentTaskRefused(post(endpoint, rpcEnvelope("fg", "GetTask",
+					new TaskQueryParams(foreign, null)), null));
+				assertAgentTaskRefused(post(endpoint, rpcEnvelope("fc", "CancelTask",
+					new CancelTaskParams(foreign)), null));
+				assertAgentTaskRefused(post(endpoint, rpcEnvelope("fs", "SubscribeToTask",
+					new TaskIdParams(foreign)), null));
+			}
+			assertFalse(TestServer.ENGINE.jobs().getJob(unrelated.getID()).isFinished(),
+				"the unrelated job was touched");
+			assertFalse(TestServer.ENGINE.jobs().getJob(ownTask.getID()).isFinished(),
+				"the owner's task was touched");
+
+			// The public caller's own tasks: readable, cancellable, subscribable.
+			Map<String, Object> polled = parse(post(endpoint, rpcEnvelope("pg", "GetTask",
+				new TaskQueryParams(held.id(), null)), null));
+			assertNull(polled.get("error"), "own task must be readable: " + polled.get("error"));
+			assertEquals(held.id(), extractTask(polled).id());
+			Map<String, Object> cancelled = parse(post(endpoint, rpcEnvelope("pc", "CancelTask",
+				new CancelTaskParams(queued.id())), null));
+			assertNull(cancelled.get("error"), "own task must be cancellable: " + cancelled.get("error"));
+			assertEquals(TaskState.TASK_STATE_CANCELED, extractTask(cancelled).status().state());
+			TaskStatusUpdateEvent streamed = awaitFinalStatusUpdate(endpoint, held.id(), null,
+				7000, gate::release);
+			assertEquals(TaskState.TASK_STATE_COMPLETED, streamed.status().state());
+
+			// The task is the anonymous asker's own job, acted by no one else.
+			AMap<AString, ACell> record = TestServer.ENGINE.jobs().getJobData(Blob.fromHex(held.id()),
+				RequestContext.of(publicDid));
+			assertEquals(publicDid, record.get(Fields.CALLER));
+			assertNull(record.get(Fields.OWNER));
+
+			// The owner addresses its own tasks for this agent here, and every job
+			// of theirs on the front door. A stranger's task is the stranger's job,
+			// which the owner sees in the agent's tasks, not here; and a per-agent
+			// endpoint is not a second front door for the owner's other jobs.
+			assertNull(parse(post(endpoint, rpcEnvelope("og", "GetTask",
+				new TaskQueryParams(ownTask.getID().toHexString(), null)), jwt)).get("error"));
+			assertAgentTaskRefused(post(endpoint, rpcEnvelope("oh", "GetTask",
+				new TaskQueryParams(held.id(), null)), jwt));
+			assertAgentTaskRefused(post(endpoint, rpcEnvelope("on", "GetTask",
+				new TaskQueryParams(unrelated.getID().toHexString(), null)), jwt));
+			assertNull(parse(post("/a2a", rpcEnvelope("ou", "GetTask",
+				new TaskQueryParams(unrelated.getID().toHexString(), null)), jwt)).get("error"));
+			Map<String, Object> ownerCancel = parse(post("/a2a", rpcEnvelope("oc", "CancelTask",
+				new CancelTaskParams(unrelated.getID().toHexString())), jwt));
+			assertNull(ownerCancel.get("error"), "owner cancel: " + ownerCancel.get("error"));
+		}
 	}
 
 	@Test
@@ -329,12 +597,12 @@ public class A2AAgentCardTest {
 			Task completed = awaitTask(endpoint, initial.id(), jwt, TaskState.TASK_STATE_COMPLETED);
 			assertEquals(3, completed.history().size(),
 				"retrying the same messageId must not duplicate Task history");
-			AgentState continued = TestServer.ENGINE.getVenueState().users().get(ownerDid)
+			Agent continued = TestServer.ENGINE.getVenueState().users().user(ownerDid)
 				.agent("Continuer");
 			assertEquals(3, continued.getTimeline().count(),
 				"the stale cycle and both distinct continuations each run exactly once");
 			var session = continued.getSession(Blob.fromHex(initial.contextId()));
-			var frames = (convex.core.data.AVector<?>) session.get(AgentState.KEY_FRAMES);
+			var frames = (convex.core.data.AVector<?>) session.get(Agent.KEY_FRAMES);
 			var conversation = covia.adapter.agent.GoalTreeContext.activeConversation(convex.core.lang.RT.ensureMap(frames.get(0)));
 			assertEquals(6, conversation.count(),
 				"three user turns and three agent turns must be recorded without duplicate frames");
@@ -398,13 +666,13 @@ public class A2AAgentCardTest {
 
 			// Two contextId sends overlapping in one session are two tasks, two
 			// cycles and two replies — never one shared chat reply (#416).
-			AgentState agentState = TestServer.ENGINE.getVenueState().users().get(ownerDid).agent("Continuer");
+			Agent Agent = TestServer.ENGINE.getVenueState().users().user(ownerDid).agent("Continuer");
 			String queuedGateName = "queued-" + UUID.randomUUID();
 			try (TestAdapter.TestGate queuedGate = TestAdapter.createGate(queuedGateName)) {
-				agentState.updateConfigAndState(
-					agentState.getConfig().assoc(Strings.intern("testGate"), Strings.create(queuedGateName)),
-					agentState.getState());
-				long cyclesBefore = agentState.getTimeline().count();
+				Agent.updateConfigAndState(
+					config -> config.assoc(Strings.intern("testGate"), Strings.create(queuedGateName)),
+					Agent.getState());
+				long cyclesBefore = Agent.getTimeline().count();
 				Message fifthTurn = Message.builder().role(Message.Role.ROLE_USER)
 					.parts(List.<Part<?>>of(new TextPart("fifth", null))).messageId("context-fifth")
 					.contextId(initial.contextId()).build();
@@ -423,7 +691,7 @@ public class A2AAgentCardTest {
 				queuedGate.release();
 				awaitTask(endpoint, fifth.id(), jwt, TaskState.TASK_STATE_COMPLETED);
 				awaitTask(endpoint, sixth.id(), jwt, TaskState.TASK_STATE_COMPLETED);
-				assertEquals(cyclesBefore + 2, agentState.getTimeline().count(),
+				assertEquals(cyclesBefore + 2, Agent.getTimeline().count(),
 					"each queued send is its own task and runs its own cycle");
 			}
 		}
@@ -524,6 +792,31 @@ public class A2AAgentCardTest {
 	}
 
 	@SuppressWarnings("unchecked")
+	private static String errorMessage(Map<String, Object> rpcResp) {
+		return (String) ((Map<String, Object>) rpcResp.get("error")).get("message");
+	}
+
+	/** A per-agent by-id call refused as addressing no task of this caller's. */
+	private static void assertAgentTaskRefused(HttpResponse<String> response) {
+		assertEquals(200, response.statusCode(), response.body());
+		Map<String, Object> rpc = parse(response);
+		assertNull(rpc.get("result"), "must not expose the task: " + response.body());
+		assertEquals(org.a2aproject.sdk.spec.A2AErrorCodes.TASK_NOT_FOUND.code(), errorCode(rpc),
+			response.body());
+		assertEquals(A2A.AGENT_TASK_NOT_FOUND, errorMessage(rpc));
+	}
+
+	/** An anonymous SendMessage on a per-agent endpoint; the task it created. */
+	private Task publicSend(String endpoint, String text) throws Exception {
+		Map<String, Object> sent = parse(post(endpoint, rpcEnvelope("send-" + text, "SendMessage",
+			new MessageSendParams(userMessage(text), null, null)), null));
+		assertNull(sent.get("error"), "public send: " + sent.get("error"));
+		Task task = extractTask(sent);
+		assertNotNull(task);
+		return task;
+	}
+
+	@SuppressWarnings("unchecked")
 	private static Map<String, Object> parse(HttpResponse<String> response) {
 		return JsonUtil.OBJECT_MAPPER.fromJson(response.body(), Map.class);
 	}
@@ -554,7 +847,7 @@ public class A2AAgentCardTest {
 
 	private Object agentDiagnostics(String endpoint) {
 		String[] address = endpoint.substring("/a2a/".length()).split("/g/", 2);
-		var user = TestServer.ENGINE.getVenueState().users().get(Strings.create(address[0]));
+		var user = TestServer.ENGINE.getVenueState().users().user(Strings.create(address[0]));
 		var agent = user == null ? null : user.agent(address[1]);
 		return agent == null ? null : agent.getRecord();
 	}

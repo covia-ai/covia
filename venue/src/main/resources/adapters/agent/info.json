@@ -19,6 +19,7 @@
 				"agentId": { "type": "string" },
 				"address": { "type": "string", "description": "Canonical <ownerDID>/g/<agentId> address" },
 				"status": { "type": "string", "description": "SLEEPING, RUNNING, SUSPENDED, or TERMINATED" },
+				"controller": { "type": "string", "description": "DID of the principal whose authority the agent acts with: its owner unless another controls it" },
 				"config": { "type": "object", "description": "Canonical merged agent config: transition/provider selection, prompt, tools, skills, context, loads, caps, outputs, and definition provenance where present" },
 				"agent": { "type": "object", "description": "External adapter definition when present; absent for the native Covia agent runtime." },
 				"timelineLength": { "type": "integer", "description": "Number of completed runs" },
@@ -32,7 +33,6 @@
 					},
 					"required": ["input", "auth"]
 				},
-				"unavailableTools": { "type": "array", "description": "Configured operation tools currently missing or unreadable, with a reason for each" },
 				"error": { "type": "string", "description": "Last fault, if suspended" },
 				"suspension": {
 					"type": "object", "description": "Present for a deliberate stop, absent for a fault; cleared on resume",

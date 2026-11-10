@@ -35,7 +35,8 @@ import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.api.Fields;
-import covia.exception.ConversionException;
+import covia.exception.NotFoundException;
+import covia.exception.NotSupportedException;
 import covia.exception.RateLimitException;
 import covia.exception.ResponseException;
 import covia.grid.AContent;
@@ -44,7 +45,9 @@ import covia.grid.Assets;
 import covia.grid.Job;
 import covia.grid.Venue;
 import covia.grid.auth.VenueAuth;
-import covia.grid.impl.BlobContent;
+import covia.grid.auth.VenueChallenge;
+import covia.grid.auth.VenueDID;
+import covia.grid.impl.StreamContent;
 
 public class VenueHTTP extends Venue {
 
@@ -86,6 +89,10 @@ public class VenueHTTP extends Venue {
 	private final HttpClient httpClient;
 	private final URI baseURI;
 	private final VenueAuth auth;
+	/** The DID this connection was opened for, or null when opened by URL alone. */
+	private final String expectedDID;
+	/** The venue DID credentials are audienced to, once established ({@link VenueDID#establish}). */
+	private volatile String venueDID;
 
 	// ---- 429 backpressure handling ----
 
@@ -156,9 +163,24 @@ public class VenueHTTP extends Venue {
 	}
 
 	public VenueHTTP(URI host, VenueAuth auth) {
+		this(host, null, auth);
+	}
+
+	/**
+	 * A connection to the venue at {@code host} opened for the DID
+	 * {@code venueDID}: credentials it signs are audienced to that DID, and
+	 * none is sent unless the venue there presents it.
+	 *
+	 * @param host Venue address
+	 * @param venueDID The venue's DID, or null to take the DID the venue
+	 *        proves at {@code host}
+	 * @param auth Authentication strategy
+	 */
+	public VenueHTTP(URI host, String venueDID, VenueAuth auth) {
 		this.baseURI = host.resolve("/api/v1/");
 		this.httpClient = HTTP_CLIENT;
 		this.auth = auth;
+		this.expectedDID = venueDID;
 
 		// Auto-set user identity from auth if available
 		String did = auth.getDID();
@@ -166,12 +188,30 @@ public class VenueHTTP extends Venue {
 			setUser(did);
 		}
 	}
-	
+
 	/**
-	 * Gets the base URI for API requests
+	 * The DID of the venue this connection reaches, as credentials name it:
+	 * established on first use and kept for the connection's life.
+	 *
+	 * @return The venue's DID
+	 * @throws covia.exception.AuthException if the venue presents another DID
+	 *         than the connection was opened for, or one its address does not prove
+	 */
+	public String venueDID() {
+		String did = venueDID;
+		if (did == null) {
+			did = VenueDID.establish(baseURI, expectedDID);
+			venueDID = did;
+		}
+		return did;
+	}
+
+	/**
+	 * Gets the base URI for API requests. Every request this client makes
+	 * resolves against it, so its host is the only one the client dials.
 	 * @return The base URI
 	 */
-	protected URI getBaseURI() {
+	public URI getBaseURI() {
 		return baseURI;
 	}
 
@@ -197,7 +237,7 @@ public class VenueHTTP extends Venue {
 		// floor so large content transfers and slow LLM-backed invokes still
 		// complete; grows with the caller's configured job-wait timeout.
 		builder.timeout(Duration.ofMillis(Math.max(timeout, 120_000L)));
-		auth.apply(builder);
+		auth.apply(builder, this::venueDID);
 		// Proofs also ride a header so body-less requests (GET /jobs/{id} and
 		// friends) carry the caller's authority — without this, a federated
 		// hop can invoke a remote job but never observe it. Authentication is
@@ -359,12 +399,12 @@ public class VenueHTTP extends Venue {
 		
 		return dispatch(req, HttpResponse.BodyHandlers.ofString()).thenApplyAsync(response -> {
 			if (response.statusCode() != 201) {
-				throw new ResponseException("Failed to add asset: " + response.statusCode() + " - " + response.body(), response);
+				throw new ResponseException("Failed to add asset: HTTP " + response.statusCode(), response);
 			}
 			ACell body=JSON.parseJSON5(response.body());
 			Hash v=Hash.parse(body);
 			if (v!=null) return v;
-			throw new ConversionException("Result did not contain a valid Hash: got "+body); 
+			throw new ResponseException("Result did not contain a valid Hash", response);
 		});
 	} 
 
@@ -385,6 +425,17 @@ public class VenueHTTP extends Venue {
 	 */
 	public static VenueHTTP create(URI host, VenueAuth auth) {
 		return new VenueHTTP(host, auth);
+	}
+
+	/**
+	 * Create a Covia grid client for the venue with a known DID
+	 * @param host Host Venue
+	 * @param venueDID The venue's DID, or null to take the DID it proves at {@code host}
+	 * @param auth Authentication provider
+	 * @return Covia client instance
+	 */
+	public static VenueHTTP create(URI host, String venueDID, VenueAuth auth) {
+		return new VenueHTTP(host, venueDID, auth);
 	}
 
 	/**
@@ -419,6 +470,30 @@ public class VenueHTTP extends Venue {
 				throw new ResponseException("getStatus returned code: "+code,response);
 			}
 			return RT.castMap(JSON.parse(response.body()));
+		});
+	}
+
+	/**
+	 * Asks the connected venue to prove its DID for a nonce
+	 * ({@link VenueChallenge}). The request carries no credential and no
+	 * grants, whatever this connection authenticates as, since the venue's
+	 * identity is not yet proven.
+	 *
+	 * @param nonce A fresh nonce ({@link VenueChallenge#nonce})
+	 * @return Future for the proof the venue answers with, or null if its answer has none
+	 */
+	public CompletableFuture<String> challenge(String nonce) {
+		String body = JSON.print(Maps.of(VenueChallenge.NONCE, Strings.create(nonce))).toString();
+		HttpRequest request = HttpRequest.newBuilder(getBaseURI().resolve(VenueChallenge.PATH))
+			.timeout(Duration.ofMillis(Math.max(timeout, 120_000L)))
+			.header("Content-Type", "application/json")
+			.POST(HttpRequest.BodyPublishers.ofString(body))
+			.build();
+		return dispatch(request, HttpResponse.BodyHandlers.ofString()).thenApply(response -> {
+			int code = response.statusCode();
+			if (code != 200) throw new ResponseException("challenge returned HTTP " + code, response);
+			AString proof = RT.ensureString(RT.getIn(JSON.parse(response.body()), VenueChallenge.PROOF));
+			return proof == null ? null : proof.toString();
 		});
 	}
 
@@ -502,7 +577,7 @@ public class VenueHTTP extends Venue {
 		return dispatch(req, HttpResponse.BodyHandlers.ofString()).thenApply(response -> {
 			if (response.statusCode() != 200) {
 				throw new ResponseException(
-					"Failed to run operation: " + response + " = " + response.body(), response);
+					"Failed to run operation: HTTP " + response.statusCode(), response);
 			}
 			return JSON.parseJSON5(response.body());
 		});
@@ -652,7 +727,7 @@ public class VenueHTTP extends Venue {
 			int code = response.statusCode();
 			// 201 = job submitted; 200 = wait window closed with the finished record
 			if (code != 201 && code != 200) {
-				throw new ResponseException("Failed to start operation: " + response+" = "+response.body(),response);
+				throw new ResponseException("Failed to start operation: HTTP " + response.statusCode(), response);
 			}
 			AMap<AString,ACell> body=RT.ensureMap(JSON.parseJSON5(response.body()));
 			if (body==null) {
@@ -726,7 +801,7 @@ public class VenueHTTP extends Venue {
 		return dispatch(req, HttpResponse.BodyHandlers.ofString()).thenApply(response -> {
 			int code=response.statusCode();
 			if (code != 200) {
-				throw new ConversionException("assets API returned status: "+code);
+				throw new ResponseException("assets API returned status: "+code, response);
 			}
 			ACell body=JSON.parseJSON5(response.body());
 			AVector<?> items=null;
@@ -738,14 +813,14 @@ public class VenueHTTP extends Venue {
 			} 
 			
 			if (items==null) {
-				throw new ConversionException("assets API did not return a list of assets");
+				throw new ResponseException("assets API did not return a list of assets", response);
 			}
 			
 			ArrayList<String> al=new ArrayList<>();
 			long n=items.count();
 			for (int i=0; i<n; i++) {
 				AString ref=RT.ensureString(items.get(i));
-				if (ref==null) throw new ConversionException("assets API returned a non-string reference");
+				if (ref==null) throw new ResponseException("assets API returned a non-string reference", response);
 				al.add(ref.toString());
 			}
 			return al;
@@ -879,7 +954,7 @@ public class VenueHTTP extends Venue {
 		
 		HttpRequest req = bodyRequestBuilder("assets/" + h.toHexString() + "/content")
 			.header("Content-Type", "application/octet-stream")
-			.PUT(HttpRequest.BodyPublishers.ofByteArray(content.getBlob().getBytes()))
+			.PUT(contentBody(content))
 			.build();
 		
 		return dispatch(req, HttpResponse.BodyHandlers.ofString()).thenApplyAsync(response -> {
@@ -891,17 +966,51 @@ public class VenueHTTP extends Venue {
 						return hash;
 					}
 				}
-				throw new ConversionException("Failed to parse content hash from response: " + response.body());
+				throw new ResponseException("Failed to parse content hash from response", response);
 			} else {
-				throw new ResponseException("Failed to add content: " + response.statusCode() + " - " + response.body(), response);
+				throw new ResponseException("Failed to add content: HTTP " + response.statusCode(), response);
 			}
 		});
-	
+
 	}
-	
+
 	/**
-	 * Gets content for an asset using the GET API endpoint.
-	 * 
+	 * Streams content as a request body, with its length when known. Each send
+	 * reopens the content, so a rate-limited (429) retry resends it in full; a
+	 * one-shot {@link StreamContent} cannot be reopened, so its retry fails.
+	 */
+	private static HttpRequest.BodyPublisher contentBody(AContent content) {
+		HttpRequest.BodyPublisher body = HttpRequest.BodyPublishers.ofInputStream(() -> {
+			InputStream in = content.getInputStream();
+			if (in == null) throw new java.io.UncheckedIOException(new IOException("Content is not available"));
+			return in;
+		});
+		long size = content.getSize();
+		return (size > 0) ? HttpRequest.BodyPublishers.fromPublisher(body, size) : body;
+	}
+
+	/** A content response body, streamed rather than read into memory. */
+	private static AContent streamedContent(HttpResponse<InputStream> response) {
+		return StreamContent.of(response.body(),
+			response.headers().firstValueAsLong("Content-Length").orElse(-1));
+	}
+
+	/**
+	 * Closes a failed response's body so the connection is released. The body
+	 * is never read into a message: it is the remote's text, not ours.
+	 */
+	private static void release(HttpResponse<InputStream> response) {
+		try {
+			response.body().close();
+		} catch (IOException e) {
+			// the connection is released either way
+		}
+	}
+
+	/**
+	 * Gets content for an asset using the GET API endpoint. The content is
+	 * streamed: it can be read once, as a stream or as a blob.
+	 *
 	 * @param assetID The asset ID to get content for
 	 * @return Future containing the content as an AContent, or null if not found
 	 */
@@ -910,19 +1019,21 @@ public class VenueHTTP extends Venue {
 			.GET()
 			.build();
 
-		return dispatch(req, HttpResponse.BodyHandlers.ofByteArray()).thenApply(response -> {
+		return dispatch(req, HttpResponse.BodyHandlers.ofInputStream()).thenApply(response -> {
 			int code=response.statusCode();
 			if (code != 200) {
+				release(response);
 				throw new ResponseException("Content get failed with status: " + code
 					+ " -- asset reference: " + assetID);
 			}
-			return BlobContent.of(convex.core.data.Blob.wrap(response.body()));
+			return streamedContent(response);
 		});
 	}
 	
 	/**
-	 * Gets content for an asset using the GET API endpoint.
-	 * 
+	 * Gets content for an asset using the GET API endpoint. The content is
+	 * streamed: it can be read once, as a stream or as a blob.
+	 *
 	 * @param assetID The asset ID to get content for
 	 * @return Future containing the content as an AContent, or null if not found
 	 */
@@ -932,31 +1043,32 @@ public class VenueHTTP extends Venue {
 			.GET()
 			.build();
 
-		return dispatch(req, HttpResponse.BodyHandlers.ofByteArray()).thenApply(response -> {
+		return dispatch(req, HttpResponse.BodyHandlers.ofInputStream()).thenApply(response -> {
 			int code=response.statusCode();
 			if (code != 200) {
+				release(response);
 				throw new ResponseException("Content get failed with status: " +code+" -- asset ID: "+assetID);
 			}
-
-			byte[] data = response.body();
-			convex.core.data.Blob blob = convex.core.data.Blob.wrap(data);
-			return BlobContent.of(blob);
+			return streamedContent(response);
 		});
 	}
 
-	/** Fetches content explicitly from the connected venue's published catalog. */
+	/**
+	 * Fetches content explicitly from the connected venue's published catalog.
+	 * The content is streamed: it can be read once, as a stream or as a blob.
+	 */
 	public CompletableFuture<AContent> getVenueContent(Hash assetID) {
 		HttpRequest req = requestBuilder(
 			"assets/" + assetID.toHexString() + "/content?namespace=venue")
 			.GET().build();
-		return dispatch(req, HttpResponse.BodyHandlers.ofByteArray()).thenApply(response -> {
+		return dispatch(req, HttpResponse.BodyHandlers.ofInputStream()).thenApply(response -> {
 			int code=response.statusCode();
 			if (code != 200) {
+				release(response);
 				throw new ResponseException("Venue content get failed with status: " +code
-					+" -- asset ID: "+assetID+" -- "
-					+new String(response.body(), java.nio.charset.StandardCharsets.UTF_8));
+					+" -- asset ID: "+assetID);
 			}
-			return BlobContent.of(convex.core.data.Blob.wrap(response.body()));
+			return streamedContent(response);
 		});
 	}
 	
@@ -1001,7 +1113,7 @@ public class VenueHTTP extends Venue {
 			} else if (code == 404) {
 				throw new ResponseException("Job not found: " + jobId, response);
 			} else {
-				throw new ResponseException("Failed to cancel job: " + code + " - " + response.body(), response);
+				throw new ResponseException("Failed to cancel job: HTTP " + code, response);
 			}
 		});
 	}
@@ -1023,7 +1135,7 @@ public class VenueHTTP extends Venue {
 			} else if (code == 404) {
 				throw new ResponseException("Job not found: " + jobId, response);
 			} else {
-				throw new ResponseException("Failed to pause job: " + code + " - " + response.body(), response);
+				throw new ResponseException("Failed to pause job: HTTP " + code, response);
 			}
 		});
 	}
@@ -1045,7 +1157,7 @@ public class VenueHTTP extends Venue {
 			} else if (code == 404) {
 				throw new ResponseException("Job not found: " + jobId, response);
 			} else {
-				throw new ResponseException("Failed to resume job: " + code + " - " + response.body(), response);
+				throw new ResponseException("Failed to resume job: HTTP " + code, response);
 			}
 		});
 	}
@@ -1067,7 +1179,7 @@ public class VenueHTTP extends Venue {
 			} else if (code == 404) {
 				throw new ResponseException("Job not found: " + jobId, response);
 			} else {
-				throw new ResponseException("Failed to delete job: " + code + " - " + response.body(), response);
+				throw new ResponseException("Failed to delete job: HTTP " + code, response);
 			}
 		});
 	}
@@ -1088,7 +1200,7 @@ public class VenueHTTP extends Venue {
 			} else if (code == 404) {
 				return null;
 			} else {
-				throw new ResponseException("Failed to get job status: " + response.statusCode() + " - " + response.body(), response);
+				throw new ResponseException("Failed to get job status: HTTP " + response.statusCode(), response);
 			}
 		});
 	}
@@ -1233,10 +1345,10 @@ public class VenueHTTP extends Venue {
 
 	@Override
 	public Hash putAssetContent(Asset asset, InputStream content) throws IOException {
-		byte[] data = content.readAllBytes();
-		convex.core.data.Blob blob = convex.core.data.Blob.wrap(data);
-		AContent acontent = BlobContent.of(blob);
-		return addContent(asset.getID().toHexString(), acontent).join();
+		// Sent as it is read. The stream cannot be replayed, so a rate-limited
+		// (429) upload fails rather than retrying; addContent with content that
+		// can be reopened (PathContent, BlobContent) retries.
+		return addContent(asset.getID().toHexString(), StreamContent.of(content, -1)).join();
 	}
 
 	@Override
@@ -1305,10 +1417,11 @@ public class VenueHTTP extends Venue {
 			HttpResponse<String> response = sendSync(req);
 			int code = response.statusCode();
 			if (code == 202) return;
+			// The same types the venue's own JobManager.deliverMessage throws.
 			if (code == 404) {
-				throw new IllegalArgumentException("Job not found: " + jobId);
+				throw new NotFoundException("Job not found: " + jobId, jobId);
 			} else if (code == 409) {
-				throw new IllegalStateException("Job is in terminal state: " + jobId);
+				throw new NotSupportedException("Job is in terminal state: " + jobId);
 			}
 			throw new ResponseException("Failed to send message: HTTP " + code);
 		} catch (IOException | InterruptedException e) {
@@ -1336,7 +1449,7 @@ public class VenueHTTP extends Venue {
 			.build();
 		return dispatch(req, HttpResponse.BodyHandlers.ofString()).thenApply(response -> {
 			if (response.statusCode() != 200) {
-				throw new ResponseException("Value read failed: " + response + " = " + response.body(), response);
+				throw new ResponseException("Value read failed: HTTP " + response.statusCode(), response);
 			}
 			return RT.castMap(JSON.parse(response.body()));
 		});
@@ -1353,7 +1466,7 @@ public class VenueHTTP extends Venue {
 		HttpRequest req = requestBuilder("agents").GET().build();
 		return dispatch(req, HttpResponse.BodyHandlers.ofString()).thenApply(response -> {
 			if (response.statusCode() != 200) {
-				throw new ResponseException("Agent list failed: " + response + " = " + response.body(), response);
+				throw new ResponseException("Agent list failed: HTTP " + response.statusCode(), response);
 			}
 			return RT.castMap(JSON.parse(response.body()));
 		});
@@ -1371,7 +1484,7 @@ public class VenueHTTP extends Venue {
 		HttpRequest req = requestBuilder("agents/" + agentId).GET().build();
 		return dispatch(req, HttpResponse.BodyHandlers.ofString()).thenApply(response -> {
 			if (response.statusCode() != 200) {
-				throw new ResponseException("Agent info failed: " + response + " = " + response.body(), response);
+				throw new ResponseException("Agent info failed: HTTP " + response.statusCode(), response);
 			}
 			return RT.castMap(JSON.parse(response.body()));
 		});

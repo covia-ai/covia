@@ -181,6 +181,13 @@ public final class VenueDIDVerifier implements DIDVerifier {
 
 		String url = didWebDocumentURL(did);
 		if (url == null) return null;   // not resolvable by shape: nothing to fetch, nothing to remember
+		try {
+			// The document host is the token's choice: it passes the venue's outbound guard
+			engine.requireSafeUrl(url);
+		} catch (RuntimeException e) {
+			log.debug("did:web resolution refused for {}: {}", did, e.getMessage());
+			return unresolved(did, cached, now);
+		}
 		remoteFetches.incrementAndGet();
 		try {
 			HttpResponse<String> resp = HTTP.send(

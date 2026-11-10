@@ -39,6 +39,7 @@ import covia.adapter.messaging.MessagingText;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
+import covia.venue.Agent;
 import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -58,12 +59,22 @@ class DiscordAdapterTest {
 	@AfterAll static void close(){if(engine!=null)engine.close();if(api!=null)api.close();}
 	@BeforeEach void clearRequests(){api.requests.clear();}
 
+	@Test void aBotThatIsNotRunningSaysWhetherItIsStillStarting(){
+		// A runner not yet started is STARTING; once stopped it is unavailable and stays so.
+		BotRunner idle=new BotRunner(adapter,BotSpec.parse("idle",Maps.of("token","idle-token","user",OWNER,"operation","v/test/ops/echo","allow",Vectors.of("alice")),false),
+			api.url(),covia.adapter.messaging.MessagingBot.Managed.CONFIG);
+		assertThrows(covia.exception.StillStartingException.class,()->idle.call("GET","/users/@me",null));
+		idle.stop();
+		var stopped=assertThrows(covia.exception.UnavailableException.class,()->idle.call("GET","/users/@me",null));
+		assertFalse(stopped instanceof covia.exception.StillStartingException,stopped.getMessage());
+	}
+
 	@Test void preparedEngineDefersGatewayUntilActivation() throws Exception {
 		var key=convex.core.crypto.AKeyPair.generate();
 		AMap<AString,ACell> settings=Maps.of("apiUrl",api.url(),"bots",Maps.of("startup",
 			Maps.of("token","startup-token","user",OWNER,"operation","v/test/ops/echo","allow",Vectors.of("alice"))));
-		Engine prepared=new Engine(Maps.of(Config.ADAPTERS,Maps.of("discord",settings)),
-			covia.venue.CoviaApplication.create(key),key).prepare();
+		Engine prepared=covia.venue.TestEngine.application().mount(key,
+			Maps.of(Config.ADAPTERS,Maps.of("discord",settings))).prepare();
 		FakeGatewayHub isolatedGateway=new FakeGatewayHub();
 		try {
 			DiscordAdapter deferred=new DiscordAdapter();
@@ -156,15 +167,15 @@ class DiscordAdapterTest {
 			}
 		});
 		run(OWNER,"v/ops/agent/create",Maps.of(Fields.AGENT_ID,"discord-agent",Fields.CONFIG,
-			Maps.of(Fields.OPERATION,"v/ops/llmagent/chat","llmOperation","v/ops/discord-held/llm")));
+			Maps.of(Fields.OPERATION,"v/ops/llmagent/chat","llmOperation","v/ops/discord-held/llm","caps","unrestricted")));
 		run(OWNER,"v/ops/secret/set",Maps.of("name","DISCORD_AGENT","value","agent-token"));
 		try {
-			run(OWNER,"v/ops/discord/create",Maps.of("name","agent-bot","token","s/DISCORD_AGENT","agent","discord-agent","open",true));
+			run(OWNER,"v/ops/discord/create",Maps.of("name","agent-bot","token","s/DISCORD_AGENT","agent","discord-agent","allow",Vectors.of("alice")));
 			for(int n=0;n<100&&!gateway.sinks.containsKey("agent-token");n++) Thread.sleep(20);
 			var sink=gateway.sinks.get("agent-token"); assertNotNull(sink);
 			sink.accept(message("first","agent-channel","alice","first input",true,false));
 			assertTrue(entered.await(10,TimeUnit.SECONDS));
-			var agent=engine.getVenueState().users().get(OWNER).agent("discord-agent");
+			var agent=engine.getVenueState().users().user(OWNER).agent("discord-agent");
 			var sid=agent.getSessions().entryAt(0).getKey();
 			sink.accept(message("second","agent-channel","alice","second input",true,false));
 			long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(8);

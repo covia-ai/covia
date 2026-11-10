@@ -38,7 +38,7 @@ public class LatticeContent extends AContent {
 
 	@Override
 	public ABlob getBlob() throws IOException {
-		ACell data=cursor.get(Keywords.DATA, hash);
+		ACell data=cursor.getOrDefault(null, Keywords.DATA, hash);
 		if (data instanceof ABlob b) {
 			return b;
 		} else {
@@ -49,6 +49,9 @@ public class LatticeContent extends AContent {
 	@Override
 	public InputStream getInputStream() {
 		try {
+			// Interim (covia#629): ABlob.getInputStream copies a multi-chunk blob
+			// into one array first; Convex's streaming reader
+			// (Convex-Dev/convex#790) would walk it chunk by chunk.
 			return getBlob().getInputStream();
 		} catch (IOException e) {
 			// In this context, not being able to get the Blob implies content not available

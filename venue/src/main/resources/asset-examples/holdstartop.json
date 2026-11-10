@@ -1,0 +1,19 @@
+{
+	"name": "Hold Start Operation",
+	"description": "Test operation that holds inside its own invocation until the test releases the named gate, then returns its result, or fails with its error when one is given. Unlike hold, whoever starts it waits too, so a test can keep a start in progress.",
+	"dateCreated": "2026-11-08T00:00:00Z",
+	"operation": {
+		"adapter": "test:holdstart",
+		"readOnly": false,
+		"input": {
+			"type": "object",
+			"properties": {
+				"gate": { "type": "string" },
+				"result": {},
+				"error": { "type": "string" }
+			},
+			"required": ["gate"]
+		},
+		"output": {}
+	}
+}

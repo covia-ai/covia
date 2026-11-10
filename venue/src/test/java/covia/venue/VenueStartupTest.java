@@ -69,7 +69,6 @@ public class VenueStartupTest {
 		}
 		@Override public CompletableFuture<ACell> invokeFuture(RequestContext ctx,
 				AMap<AString, ACell> metadata, ACell input) {
-			requireInvoke(ctx);
 			assertTrue(recovered, "embedder recovery must precede the overdue fire");
 			assertEquals(1, starts.get());
 			calls.incrementAndGet();
@@ -77,6 +76,16 @@ public class VenueStartupTest {
 			return CompletableFuture.completedFuture(input);
 		}
 		@Override public void close() { closed.countDown(); }
+	}
+
+	/** A job a previous run left STARTED: its record and the venue's entry for it, as admission writes them. */
+	private static void leaveStarted(Engine engine) {
+		AString owner = engine.getDIDString();
+		engine.getVenueState().execute(draft -> {
+			draft.users().ensure(owner).jobs().create(RECOVERED_JOB, Maps.of(Fields.ID, RECOVERED_JOB, Fields.OP, OP,
+				Fields.STATUS, Status.STARTED, Fields.CALLER, owner, Fields.INPUT, Maps.empty()));
+			draft.jobIndex().put(RECOVERED_JOB, Maps.of(JobIndex.OWNER, owner));
+		});
 	}
 
 	@Test
@@ -115,7 +124,7 @@ public class VenueStartupTest {
 			assertEquals("hook", engine.resolveSecret("s/bootstrap", engine.venueContext()),
 				"configured secrets must not overwrite application setup afterwards");
 			assertEquals(Strings.create("new"), RT.getIn(engine.getVenueState().users()
-				.get(engine.getDIDString()).agent("mina").getConfig(), "release"));
+				.user(engine.getDIDString()).agent("mina").getConfig(), "release"));
 		} finally {
 			server.close();
 		}
@@ -160,7 +169,7 @@ public class VenueStartupTest {
 	@Test
 	public void asyncHookCompletesBeforeRecoveryWorkersSchedulesAndListener() throws Exception {
 		AKeyPair key = AKeyPair.generate();
-		EtchStore store = EtchStore.createTemp("startup-order");
+		EtchStore store = TestTemp.etch("startup-order");
 		CompletableFuture<Void> release = new CompletableFuture<>();
 		CompletableFuture<Engine> prepared = new CompletableFuture<>();
 		StartupAdapter adapter = new StartupAdapter();
@@ -168,13 +177,11 @@ public class VenueStartupTest {
 		VenueServer server = null;
 		try (ServerSocket reserved = new ServerSocket(0)) {
 			AMap<AString, ACell> config = config(key, reserved.getLocalPort());
-			Engine seed = new Engine(config, CoviaApplication.open(store, key), key).prepare();
+			Engine seed = TestEngine.application(store).mount(key, config).prepare();
 			try {
 				seed.registerAdapter(new StartupAdapter());
 				seed.materialiseBootstrapState();
-				seed.getVenueState().users().ensure(seed.getDIDString()).persistJob(RECOVERED_JOB,
-					Maps.of(Fields.ID, RECOVERED_JOB, Fields.OP, OP, Fields.STATUS, Status.STARTED,
-						Fields.CALLER, seed.getDIDString(), Fields.INPUT, Maps.empty()));
+				leaveStarted(seed);
 				seed.gridScheduler().schedule(OP, Strings.create("due"), seed.venueContext(), 1L);
 			} finally {
 				seed.close();
@@ -189,8 +196,8 @@ public class VenueStartupTest {
 			assertEquals(0, adapter.starts.get());
 			assertEquals(0, adapter.calls.get());
 			assertEquals(1, engine.gridScheduler().list(engine.venueContext()).count());
-			assertEquals(Status.STARTED, engine.getVenueState().users().get(engine.getDIDString())
-				.getJob(RECOVERED_JOB).get(Fields.STATUS));
+			assertEquals(Status.STARTED, engine.getVenueState().users().user(engine.getDIDString())
+				.jobs().getRecord(RECOVERED_JOB).get(Fields.STATUS));
 			// The reserved port prevents accidental early HTTP publication.
 			reserved.close();
 			release.complete(null);
@@ -201,8 +208,8 @@ public class VenueStartupTest {
 			assertEquals(Strings.create("due"), adapter.fired.get(5, TimeUnit.SECONDS));
 			assertEquals(1, adapter.calls.get());
 			assertEquals(0, engine.gridScheduler().list(engine.venueContext()).count());
-			assertEquals(Status.COMPLETE, engine.getVenueState().users().get(engine.getDIDString())
-				.getJob(RECOVERED_JOB).get(Fields.STATUS));
+			assertEquals(Status.COMPLETE, engine.getVenueState().users().user(engine.getDIDString())
+				.jobs().getRecord(RECOVERED_JOB).get(Fields.STATUS));
 		} finally {
 			if (server != null) server.close();
 			else if (launch != null) launch.cancel(true);
@@ -213,12 +220,12 @@ public class VenueStartupTest {
 	@Test
 	public void queuedAgentRunsOnceWithConfigAndSkillsAppliedByAsyncHook() throws Exception {
 		AKeyPair key = AKeyPair.generate();
-		EtchStore store = EtchStore.createTemp("startup-agent-config");
+		EtchStore store = TestTemp.etch("startup-agent-config");
 		AMap<AString, ACell> cfg = config(key, 0);
-		Engine seed = new Engine(cfg, CoviaApplication.open(store, key), key).prepare();
+		Engine seed = TestEngine.application(store).mount(key, cfg).prepare();
 		try {
 			AString owner = seed.getDIDString();
-			AgentState agent = seed.getVenueState().users().ensure(owner).ensureAgent(
+			Agent agent = seed.getVenueState().users().ensure(owner).ensureAgent(
 				"startup-agent", Maps.of(Fields.OPERATION, OP, "release", "old"), null);
 			Blob sid = Blob.fromHex("05640001");
 			agent.ensureSession(sid, owner);
@@ -228,7 +235,7 @@ public class VenueStartupTest {
 			seed.close();
 		}
 		CompletableFuture<Void> release = new CompletableFuture<>();
-		CompletableFuture<AgentState> queued = new CompletableFuture<>();
+		CompletableFuture<Agent> queued = new CompletableFuture<>();
 		StartupAdapter adapter = new StartupAdapter() {
 			@Override public CompletableFuture<ACell> invokeFuture(RequestContext ctx,
 					AMap<AString, ACell> metadata, ACell input) {
@@ -242,7 +249,7 @@ public class VenueStartupTest {
 		CompletableFuture<VenueServer> launch = VenueServer.launchAsync(cfg, store,
 			List.of(), engine -> {
 				AString owner = engine.getDIDString();
-				AgentState agent = engine.getVenueState().users().get(owner).agent("startup-agent");
+				Agent agent = engine.getVenueState().users().user(owner).agent("startup-agent");
 				engine.registerAdapter(adapter);
 				engine.jobs().invokeOperation("v/ops/covia/write",
 					Maps.of(Fields.PATH, "w/mina/skills/release", Fields.VALUE, "new skills"), engine.venueContext())
@@ -255,13 +262,13 @@ public class VenueStartupTest {
 			});
 		VenueServer server = null;
 		try {
-			AgentState agent = queued.get(10, TimeUnit.SECONDS);
+			Agent agent = queued.get(10, TimeUnit.SECONDS);
 			assertTrue(agent.hasSessionPending());
 			assertFalse(adapter.fired.isDone());
 			release.complete(null);
 			server = launch.get(10, TimeUnit.SECONDS);
 			assertNotNull(adapter.fired.get(5, TimeUnit.SECONDS));
-			TestEngine.awaitAgentIdle(agent, 5_000);
+			AgentWatch.awaitIdle(server.getEngine(), server.getEngine().getDIDString(), agent);
 			assertNull(agent.getError());
 			assertEquals(1, adapter.calls.get(), "queued input must run exactly once after setup");
 		} finally {
@@ -273,7 +280,7 @@ public class VenueStartupTest {
 	@Test
 	public void failedHookPreservesCauseAndReleasesOwnedStore() throws Exception {
 		AKeyPair key = AKeyPair.generate();
-		EtchStore store = EtchStore.createTemp("startup-failure");
+		EtchStore store = TestTemp.etch("startup-failure");
 		java.io.File file = store.getFile();
 		StartupAdapter adapter = new StartupAdapter();
 		AtomicReference<Job> hookJob = new AtomicReference<>();
@@ -302,12 +309,14 @@ public class VenueStartupTest {
 	@Test
 	public void launchRefusesNewerAdapterStateWithTheStoreUntouched() throws Exception {
 		AKeyPair key = AKeyPair.generate();
-		EtchStore store = EtchStore.createTemp("startup-newer-adapter");
+		EtchStore store = TestTemp.etch("startup-newer-adapter");
 		java.io.File file = store.getFile();
-		CoviaApplication application = CoviaApplication.open(store, key);
+		CoviaApplication application = TestEngine.application(store, key);
+		long supported = new covia.adapter.TestAdapter().stateVersion();
 		application.venue(key.getAccountKey()).cursor().set(convex.core.data.Index.<convex.core.data.Keyword, ACell>none()
 			.assoc(covia.lattice.Covia.ADAPTERS, Maps.of("test", Maps.of("users", Maps.empty())))
-			.assoc(covia.lattice.Covia.ADAPTER_VERSIONS, Maps.of("test", 2L)));
+			.assoc(covia.lattice.Covia.ADAPTER_VERSIONS, Maps.of("test", supported + 1)));
+		application.sync();
 		application.host().sync();
 		application.host().flush();
 		ACell before = store.getRootData();
@@ -318,8 +327,8 @@ public class VenueStartupTest {
 		while (cause != null && !(cause instanceof UnsupportedVersionException)) cause = cause.getCause();
 		UnsupportedVersionException refused = assertInstanceOf(UnsupportedVersionException.class, cause);
 		assertEquals("test", refused.adapter());
-		assertEquals(2, refused.stored());
-		assertEquals(1, refused.supported());
+		assertEquals(supported + 1, refused.stored());
+		assertEquals(supported, refused.supported());
 		try (EtchStore reopened = EtchStore.create(file)) {
 			assertEquals(before, reopened.getRootData(), "the refused start wrote nothing");
 		}
@@ -328,7 +337,7 @@ public class VenueStartupTest {
 	@Test
 	public void failedWorkerActivationClosesAdapterAndStore() throws Exception {
 		AKeyPair key = AKeyPair.generate();
-		EtchStore store = EtchStore.createTemp("startup-worker-failure");
+		EtchStore store = TestTemp.etch("startup-worker-failure");
 		java.io.File file = store.getFile();
 		StartupAdapter adapter = new StartupAdapter();
 		adapter.failStart = true;
@@ -347,7 +356,7 @@ public class VenueStartupTest {
 	@Test
 	public void cancellationDuringHookClosesResourcesWithoutStartingWorkers() throws Exception {
 		AKeyPair key = AKeyPair.generate();
-		EtchStore store = EtchStore.createTemp("startup-cancel");
+		EtchStore store = TestTemp.etch("startup-cancel");
 		StartupAdapter adapter = new StartupAdapter();
 		CompletableFuture<Void> hook = new CompletableFuture<>();
 		CompletableFuture<Engine> prepared = new CompletableFuture<>();
@@ -363,7 +372,8 @@ public class VenueStartupTest {
 			Engine engine = prepared.get(10, TimeUnit.SECONDS);
 			assertTrue(launch.cancel(true));
 			assertTrue(adapter.closed.await(5, TimeUnit.SECONDS));
-			TestEngine.awaitCondition(engine::isClosing, 5_000, () -> "Engine was not closed");
+			// The engine is marked closing before it closes its adapters.
+			assertTrue(engine.isClosing(), "Engine was not closed");
 			assertEquals(0, adapter.starts.get());
 			assertEquals(Status.PAUSED, hookJob.get().getStatus(), "cancelled launch must suspend hook work");
 			assertFalse(hook.isDone(), "the embedder owns the supplied stage");
@@ -375,19 +385,17 @@ public class VenueStartupTest {
 	@Test
 	public void embeddedLaunchUsesSharedRecoveryBeforeActivationAndKeepsHostStoreOpen() throws Exception {
 		AKeyPair key = AKeyPair.generate();
-		try (EtchStore store = EtchStore.createTemp("embedded-startup")) {
+		try (EtchStore store = TestTemp.etch("embedded-startup")) {
 			AMap<AString, ACell> config = config(key, 0);
-			CoviaApplication application = CoviaApplication.open(store, key);
-			Engine seed = new Engine(config, application, key).prepare();
+			CoviaApplication application = TestEngine.application(store);
+			Engine seed = application.mount(key, config).prepare();
 			seed.registerAdapter(new StartupAdapter());
 			seed.materialiseBootstrapState();
-			seed.getVenueState().users().ensure(seed.getDIDString()).persistJob(RECOVERED_JOB,
-				Maps.of(Fields.ID, RECOVERED_JOB, Fields.OP, OP, Fields.STATUS, Status.STARTED,
-					Fields.CALLER, seed.getDIDString(), Fields.INPUT, Maps.empty()));
+			leaveStarted(seed);
 			seed.gridScheduler().schedule(OP, Strings.create("embedded due"), seed.venueContext(), 1L);
 			seed.close();
 
-			Engine engine = new Engine(config, application, key);
+			Engine engine = application.mount(key, config);
 			StartupAdapter adapter = new StartupAdapter();
 			CompletableFuture<Void> release = new CompletableFuture<>();
 			CompletableFuture<Void> inHook = new CompletableFuture<>();
@@ -409,15 +417,17 @@ public class VenueStartupTest {
 				release.complete(null);
 				assertSame(engine, ready.get(10, TimeUnit.SECONDS));
 				assertTrue(adapter.recovered);
+				// No update timer runs here: the embedder steps the application.
+				application.update().get(10, TimeUnit.SECONDS);
 				assertEquals(Strings.create("embedded due"), adapter.fired.get(5, TimeUnit.SECONDS));
-				assertEquals(Status.COMPLETE, engine.getVenueState().users().get(engine.getDIDString())
-					.getJob(RECOVERED_JOB).get(Fields.STATUS));
+				assertEquals(Status.COMPLETE, engine.getVenueState().users().user(engine.getDIDString())
+					.jobs().getRecord(RECOVERED_JOB).get(Fields.STATUS));
 			} finally {
 				engine.close();
 			}
 			// Engine borrows the application/host/store, unlike VenueServer's adopted store.
 			application.host().flush();
-			Engine probe = new Engine(config, application, key).prepare();
+			Engine probe = application.mount(key, config).prepare();
 			try {
 				assertSame(probe, probe.launch());
 				assertNotNull(probe.resolveAsset(Strings.create("v/ops/covia/read"), probe.venueContext()));
@@ -430,9 +440,9 @@ public class VenueStartupTest {
 	@Test
 	public void embeddedLaunchFailureReleasesWorkersButKeepsCallerStore() throws Exception {
 		AKeyPair key = AKeyPair.generate();
-		try (EtchStore store = EtchStore.createTemp("embedded-failure")) {
-			CoviaApplication application = CoviaApplication.open(store, key);
-			Engine engine = new Engine(config(key, 0), application, key);
+		try (EtchStore store = TestTemp.etch("embedded-failure")) {
+			CoviaApplication application = TestEngine.application(store);
+			Engine engine = application.mount(key, config(key, 0));
 			StartupAdapter adapter = new StartupAdapter();
 			IllegalStateException failure = new IllegalStateException(HOOK_FAILURE);
 			try {
@@ -453,9 +463,9 @@ public class VenueStartupTest {
 	@Test
 	public void failedEmbeddedActivationSuspendsRecoveredJobsBeforeClosingAdapters() throws Exception {
 		AKeyPair key = AKeyPair.generate();
-		try (EtchStore store = EtchStore.createTemp("embedded-recovered-failure")) {
-			CoviaApplication application = CoviaApplication.open(store, key);
-			Engine engine = new Engine(config(key, 0), application, key);
+		try (EtchStore store = TestTemp.etch("embedded-recovered-failure")) {
+			CoviaApplication application = TestEngine.application(store);
+			Engine engine = application.mount(key, config(key, 0));
 			AtomicInteger suspended = new AtomicInteger();
 			StartupAdapter adapter = new StartupAdapter() {
 				@Override public void recoverJob(Job job) { recovered = true; }
@@ -470,17 +480,15 @@ public class VenueStartupTest {
 				assertEquals(START_FAILURE, assertThrows(IllegalStateException.class,
 					() -> engine.launch(prepared -> {
 						prepared.registerAdapter(adapter);
-						prepared.getVenueState().users().ensure(prepared.getDIDString()).persistJob(RECOVERED_JOB,
-							Maps.of(Fields.ID, RECOVERED_JOB, Fields.OP, OP, Fields.STATUS, Status.STARTED,
-								Fields.CALLER, prepared.getDIDString(), Fields.INPUT, Maps.empty()));
+						leaveStarted(prepared);
 						return CompletableFuture.completedFuture(null);
 					})).getMessage());
 				assertTrue(adapter.recovered);
 				assertEquals(1, suspended.get());
 				assertEquals(0, adapter.closed.getCount());
 				assertTrue(engine.isClosing());
-				assertNotEquals(Status.STARTED, engine.getVenueState().users().get(engine.getDIDString())
-					.getJob(RECOVERED_JOB).get(Fields.STATUS));
+				assertNotEquals(Status.STARTED, engine.getVenueState().users().user(engine.getDIDString())
+					.jobs().getRecord(RECOVERED_JOB).get(Fields.STATUS));
 			} finally {
 				engine.close();
 			}
@@ -491,9 +499,9 @@ public class VenueStartupTest {
 	@Test
 	public void cancellingEmbeddedLaunchReleasesHookWaitWithoutOwningHookOrStore() throws Exception {
 		AKeyPair key = AKeyPair.generate();
-		try (EtchStore store = EtchStore.createTemp("embedded-cancel")) {
-			CoviaApplication application = CoviaApplication.open(store, key);
-			Engine engine = new Engine(config(key, 0), application, key);
+		try (EtchStore store = TestTemp.etch("embedded-cancel")) {
+			CoviaApplication application = TestEngine.application(store);
+			Engine engine = application.mount(key, config(key, 0));
 			StartupAdapter adapter = new StartupAdapter();
 			CompletableFuture<Void> hook = new CompletableFuture<>();
 			CompletableFuture<Void> inHook = new CompletableFuture<>();
@@ -518,8 +526,8 @@ public class VenueStartupTest {
 	@Test
 	public void closingEmbeddedEngineReleasesPendingLaunch() throws Exception {
 		AKeyPair key = AKeyPair.generate();
-		try (EtchStore store = EtchStore.createTemp("embedded-close")) {
-			Engine engine = new Engine(config(key, 0), CoviaApplication.open(store, key), key);
+		try (EtchStore store = TestTemp.etch("embedded-close")) {
+			Engine engine = TestEngine.application(store).mount(key, config(key, 0));
 			CompletableFuture<Void> inHook = new CompletableFuture<>();
 			CompletableFuture<Engine> ready = engine.launchAsync(prepared -> {
 				inHook.complete(null);

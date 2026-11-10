@@ -67,7 +67,7 @@ public class VenueRestartTest {
 	public void testRestartFromEtchStore() throws Exception {
 
 		// Use a single Etch store that survives across "restarts"
-		store = EtchStore.createTemp();
+		store = TestTemp.etch("venue-restart");
 
 		// Fixed DID so both engines use the same lattice path
 		AKeyPair kp = AKeyPair.generate();
@@ -89,10 +89,10 @@ public class VenueRestartTest {
 		// ========== Stage 1: Create engine via NodeServer, register adapters, run operations ==========
 
 		{
-			NodeServer<Index<Keyword, ACell>> ns = new NodeServer<>(CoviaApplication.open(store, kp).host(), NodeConfig.port(-1));
+			NodeServer<Index<Keyword, ACell>> ns = new NodeServer<>(TestEngine.application(store).host(), NodeConfig.port(-1));
 			activeNode = ns;
 			ns.launch();
-			Engine engine = new Engine(config, CoviaApplication.connect(ns.getHost()), kp).start();
+			Engine engine = TestEngine.application(ns.getHost()).mount(kp, config).start();
 			activeEngine = engine;
 			Engine.addDemoAssets(engine);
 
@@ -136,16 +136,16 @@ public class VenueRestartTest {
 			// Run test:never → should stay STARTED (never completes)
 			Job neverJob = engine.jobs().invokeOperation(neverOpId.toCVMHexString(),
 					Maps.of(Fields.MESSAGE, "never finishes"), engine.venueContext());
-			TestEngine.awaitCondition(() -> Status.STARTED.equals(neverJob.getStatus()), 5000,
-				() -> "never job did not start (status=" + neverJob.getStatus() + ")");
+			TestEngine.awaitJob(neverJob, j -> Status.STARTED.equals(j.getStatus()), 10_000,
+				() -> "never job did not start");
 			assertEquals(Status.STARTED, neverJob.getStatus(), "Never job should be STARTED");
 			neverJobId = neverJob.getID().toHexString();
 
 			// Run test:pause → should auto-pause itself
 			Job pauseJob = engine.jobs().invokeOperation(pauseOpId.toCVMHexString(),
 					Maps.of(Fields.MESSAGE, "pause me"), engine.venueContext());
-			TestEngine.awaitCondition(() -> Status.PAUSED.equals(pauseJob.getStatus()), 5000,
-				() -> "pause job did not pause (status=" + pauseJob.getStatus() + ")");
+			TestEngine.awaitJob(pauseJob, j -> Status.PAUSED.equals(j.getStatus()), 10_000,
+				() -> "pause job did not pause");
 			assertEquals(Status.PAUSED, pauseJob.getStatus(), "Pause job should be PAUSED");
 			pauseJobId = pauseJob.getID().toHexString();
 
@@ -162,10 +162,10 @@ public class VenueRestartTest {
 		// ========== Stage 3: Restart with the same store ==========
 
 		{
-			NodeServer<Index<Keyword, ACell>> ns2 = new NodeServer<>(CoviaApplication.open(store, kp).host(), NodeConfig.port(-1));
+			NodeServer<Index<Keyword, ACell>> ns2 = new NodeServer<>(TestEngine.application(store).host(), NodeConfig.port(-1));
 			activeNode = ns2;
 			ns2.launch(); // restores from store
-			Engine engine2 = new Engine(config, CoviaApplication.connect(ns2.getHost()), kp).start();
+			Engine engine2 = TestEngine.application(ns2.getHost()).mount(kp, config).start();
 			activeEngine = engine2;
 			Engine.addDemoAssets(engine2);
 			engine2.jobs().recoverJobs();
@@ -211,11 +211,10 @@ public class VenueRestartTest {
 			assertEquals(Status.FAILED, RT.ensureString(errorData.get(Fields.STATUS)),
 					"Error job should still be FAILED");
 
-			// 4g: an in-flight job that registered a pause hook is SUSPENDED at
-			// graceful shutdown, not left to fail. test:never wires a pause hook
-			// (so the lifecycle endpoints work), which under the shutdown
-			// contract (4e3b4cf1) is its declaration that the work can be
-			// suspended: defaultSuspend pauses it, and boot recovery restores the
+			// 4g: an in-flight job its adapter can suspend is SUSPENDED at
+			// graceful shutdown, not left to fail. The test adapter says it can
+			// suspend test:never (so the lifecycle endpoints work), so
+			// defaultSuspend pauses it, and boot recovery restores the
 			// paused family live. A non-pausable in-flight job is instead
 			// cancelled with "Venue shut down", and a true STARTED-at-crash record
 			// takes the FAILED default — both covered in JobShutdownTest.
@@ -231,12 +230,10 @@ public class VenueRestartTest {
 					"Pause job should still be PAUSED after restart");
 
 			// 4i: Unpause the job by delivering a message → should complete
+			Job resumed = engine2.jobs().getJob(Blob.parse(pauseJobId));
+			assertNotNull(resumed, "the paused job is live after restart");
 			engine2.jobs().deliverMessage(Blob.parse(pauseJobId), Maps.of("content", "resume"), engine2.venueContext());
-			TestEngine.awaitCondition(() -> {
-				AMap<AString, ACell> data = engine2.jobs().getJobData(
-					Blob.parse(pauseJobId), engine2.venueContext());
-				return data != null && Status.COMPLETE.equals(RT.ensureString(data.get(Fields.STATUS)));
-			}, 5000, () -> "resumed pause job did not complete");
+			TestEngine.awaitJob(resumed, Job::isFinished, 10_000, () -> "resumed pause job did not complete");
 			// Job completes and is evicted from activeJobs — use lattice fallback
 			AMap<AString, ACell> unpausedData = engine2.jobs().getJobData(Blob.parse(pauseJobId), engine2.venueContext());
 			assertNotNull(unpausedData, "Unpaused job data should exist in lattice");

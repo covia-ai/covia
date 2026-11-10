@@ -80,8 +80,8 @@ public class PathReadAuthorityTest {
 	}
 
 	private ACell agentPrompt(AString owner, String id) {
-		var user = engine.getVenueState().users().get(owner);
-		AgentState agent = (user == null) ? null : user.agent(id);
+		var user = engine.getVenueState().users().user(owner);
+		Agent agent = (user == null) ? null : user.agent(id);
 		return (agent == null) ? null : RT.getIn(agent.getConfig(), "systemPrompt");
 	}
 
@@ -128,6 +128,36 @@ public class PathReadAuthorityTest {
 	}
 
 	@Test
+	public void testInvokingAPrivateOperationInAnyShapeNeedsRead() {
+		Job slashed = run("/" + alice + "/o/priv", Maps.of("echo", "x"), BOB);
+		assertEquals(Status.FAILED, slashed.getStatus(), "Bob invoked Alice's private operation");
+	}
+
+	@Test
+	public void testAToolListInAnyShapeNeedsRead() {
+		AMap<AString, ACell> own = toolAgent("o/priv");
+		assertEquals(Status.COMPLETE, createAgent("tools-own", own, ALICE).getStatus());
+		assertTrue(shown(run("v/ops/agent/context", Maps.of(Fields.AGENT_ID, "tools-own"), ALICE)).contains(SECRET),
+			"an agent's context shows its tools' descriptions");
+
+		String[] shapes = {alice + "/o/priv", "/" + alice + "/o/priv"};
+		for (int i = 0; i < shapes.length; i++) {
+			String id = "tools-probe-" + i;
+			Job created = createAgent(id, toolAgent(shapes[i]), BOB);
+			assertFalse(shown(created).contains(SECRET), shapes[i] + ": " + shown(created));
+			for (String op : new String[] {"v/ops/agent/context", "v/ops/agent/info"}) {
+				String shown = shown(run(op, Maps.of(Fields.AGENT_ID, id), BOB));
+				assertFalse(shown.contains(SECRET), op + " with tool " + shapes[i] + ": " + shown);
+			}
+		}
+	}
+
+	private static AMap<AString, ACell> toolAgent(String tool) {
+		return TestEngine.unrestricted(Maps.of(Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/test/ops/toolllm",
+			Fields.TOOLS, Vectors.of(Strings.create(tool))));
+	}
+
+	@Test
 	public void testDIDQualifiedAssetNeedsRead() {
 		Job stored = run("v/ops/asset/store", Maps.of("metadata",
 			Maps.of("name", "private asset", "description", SECRET)), ALICE);
@@ -163,6 +193,18 @@ public class PathReadAuthorityTest {
 			"a context entry must not render a path its agent cannot read");
 	}
 
+	@Test
+	public void testAContextEntryInAnyShapeNeedsRead() {
+		AString slashed = Strings.create("/" + alice + "/w/cfg");
+		Job created = createAgent("ctx-shape-probe", Maps.of(
+			Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/test/ops/toolllm",
+			"context", Vectors.of(slashed, Maps.of("ref", slashed))), BOB);
+		assertEquals(Status.COMPLETE, created.getStatus(), created.getErrorMessage());
+		Job context = run("v/ops/agent/context", Maps.of(Fields.AGENT_ID, "ctx-shape-probe"), BOB);
+		assertFalse(String.valueOf(context.getOutput()).contains(SECRET),
+			"a context entry must not render a path its agent cannot read");
+	}
+
 	// ========== path shapes ==========
 
 	@Test
@@ -183,6 +225,25 @@ public class PathReadAuthorityTest {
 			Job copy = createAgent("escape", ref, publicOnly);
 			assertFalse(String.valueOf(agentPrompt(bob, "escape")).contains(SECRET), escape + " " + copy.getErrorMessage());
 		}
+	}
+
+	@Test
+	public void testEveryCoviaReadChecksTheAddressItReads() {
+		for (String shape : new String[] {alice + "/w/cfg", "/" + alice + "/w/cfg"}) {
+			for (ACell input : new ACell[] {Maps.of(Fields.PATH, shape), Maps.of("paths", Vectors.of(shape))}) {
+				String shown = shown(run("v/ops/covia/inspect", input, BOB));
+				assertFalse(shown.contains(SECRET), "inspect " + input + ": " + shown);
+			}
+			for (String op : new String[] {"read", "slice"}) {
+				String shown = shown(run("v/ops/covia/" + op, Maps.of(Fields.PATH, shape), BOB));
+				assertFalse(shown.contains(SECRET), op + " " + shape + ": " + shown);
+			}
+		}
+	}
+
+	/** What a job showed its caller: its output, or nothing when it was refused. */
+	private static String shown(Job job) {
+		return (job.getStatus() == Status.COMPLETE) ? String.valueOf(job.getOutput()) : "";
 	}
 
 	@Test
@@ -208,12 +269,52 @@ public class PathReadAuthorityTest {
 		RequestContext parent = RequestContext.ofAgent(alice, Strings.create("parent")).withCaps(Vectors.of(
 			Capability.create(Strings.create("g/"), Abilities.AGENT_CREATE),
 			Capability.create(Strings.create("w/data/"), Capability.CRUD),
+			Capability.create(Strings.create("w/data/"), Strings.create("grant/crud")),
 			Maps.of(Capability.CAN, Strings.create("invoke"))));
 		assertReadDenied(createAgent("peek", Strings.create("w/cfg"), parent));
 		assertNull(agentPrompt(alice, "peek"));
 		Job within = createAgent("within", Strings.create("w/data/cfg"), parent);
 		assertEquals(Status.COMPLETE, within.getStatus(), within.getErrorMessage());
 		assertEquals(Strings.create("DATA"), agentPrompt(alice, "within"));
+	}
+
+	/**
+	 * Context assembly is the harness's: the context an agent's config names
+	 * shows what its controller can read, whatever the agent's own caps
+	 * (UCAN.md §5.4). An agent its owner created shows the owner's; one a capped
+	 * agent created shows only what that agent can read.
+	 */
+	@Test
+	public void testConfiguredContextIsAssembledByTheHarness() {
+		AMap<AString, ACell> pinning = Maps.of(
+			Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/test/ops/toolllm",
+			"caps", Vectors.of(Capability.create(Strings.create("g/"), Capability.CRUD_READ)),
+			"context", Vectors.of(Strings.create("w/cfg")));
+		Job pinned = createAgent("pinned", pinning, ALICE);
+		assertEquals(Status.COMPLETE, pinned.getStatus(), pinned.getErrorMessage());
+		assertTrue(shown(run("v/ops/agent/context", Maps.of(Fields.AGENT_ID, "pinned"), ALICE)).contains(SECRET),
+			"a pinned entry outside the agent's caps is assembled by the harness");
+
+		Job loaded = createAgent("loaded", Maps.of(
+			Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/test/ops/toolllm",
+			"caps", Vectors.of(Capability.create(Strings.create("g/"), Capability.CRUD_READ)),
+			"loads", Maps.of("w/cfg", Maps.empty())), ALICE);
+		assertEquals(Status.COMPLETE, loaded.getStatus(), loaded.getErrorMessage());
+		assertTrue(shown(run("v/ops/agent/context", Maps.of(Fields.AGENT_ID, "loaded"), ALICE)).contains(SECRET),
+			"so is a configured load");
+
+		Job parentAgent = createAgent("parent", Maps.of(
+			Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/test/ops/toolllm",
+			"caps", Vectors.of(
+				Capability.create(Strings.create("g/"), Abilities.AGENT_CREATE),
+				Capability.create(Strings.create("g/"), Capability.CRUD_READ),
+				Maps.of(Capability.CAN, Strings.create("invoke")))), ALICE);
+		assertEquals(Status.COMPLETE, parentAgent.getStatus(), parentAgent.getErrorMessage());
+		RequestContext parent = engine.context(alice, covia.grid.Principals.agentDID(alice, Strings.create("parent")));
+		Job bounded = createAgent("bounded", pinning, parent);
+		assertEquals(Status.COMPLETE, bounded.getStatus(), bounded.getErrorMessage());
+		assertFalse(shown(run("v/ops/agent/context", Maps.of(Fields.AGENT_ID, "bounded"), ALICE)).contains(SECRET),
+			"the harness of an agent a capped agent controls reads only what that agent can");
 	}
 
 	@Test

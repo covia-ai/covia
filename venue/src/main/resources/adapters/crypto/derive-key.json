@@ -10,11 +10,11 @@
       "properties": {
         "mnemonic": {
           "type": "string",
-          "description": "Secret reference holding an English BIP39 phrase. Full words required; case and whitespace are normalised. Never pass the phrase inline."
+          "description": "Reference to your own secret holding an English BIP39 phrase: s/NAME. Another principal's secret is refused, since the derived key is stored where you can extract it. Full words required; case and whitespace are normalised. Never pass the phrase inline. Or a held mnemonic, by its ID (did:key, multibase or 0x account key) or as <did>/x/crypto/mnemonics/<id>: needs key/derive on it, and the derived key goes only into that holder's keyring."
         },
         "passphraseSecret": {
           "type": "string",
-          "description": "Optional secret reference for a BIP39 passphrase (NFKD-normalised); omitted means empty. Different passphrases produce different keys."
+          "description": "Optional reference to your own secret holding a BIP39 passphrase (NFKD-normalised); omitted means empty. Another principal's secret is refused. Different passphrases produce different keys."
         },
         "path": {
           "type": "string",
@@ -29,12 +29,21 @@
         "overwrite": {
           "type": "boolean",
           "default": false,
-          "description": "Explicitly replace an existing destination secret. Otherwise collisions fail atomically."
+          "description": "Explicitly replace an existing destination secret, or the label of a key already in the keyring. Otherwise collisions fail atomically."
+        },
+        "keyring": {
+          "type": "boolean",
+          "default": false,
+          "description": "Store the derived key in a keyring instead of a secret (give this or name): its private key can never be read."
+        },
+        "label": {
+          "type": "string",
+          "maxLength": 256,
+          "description": "Your own name for the key in the keyring."
         }
       },
       "required": [
-        "mnemonic",
-        "name"
+        "mnemonic"
       ],
       "additionalProperties": false
     },
@@ -60,7 +69,6 @@
         }
       },
       "required": [
-        "secret",
         "accountKey",
         "did",
         "path"

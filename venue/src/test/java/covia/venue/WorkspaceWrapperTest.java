@@ -17,13 +17,11 @@ import convex.core.data.Strings;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
-import convex.lattice.LatticeContext;
 import convex.lattice.cursor.AForkableCursor;
 import convex.lattice.cursor.Cursors;
 import covia.api.Fields;
 import covia.lattice.Covia;
 import covia.lattice.Namespace;
-import covia.lattice.WorkspaceRoot;
 
 /**
  * The {@code w}/{@code o}/{@code h} namespaces are stored as a
@@ -134,10 +132,8 @@ public class WorkspaceWrapperTest {
 	public void testWrapperPreservesMetadataAndRatchetsContextClock() {
 		var userRoot = Cursors.<ACell>root(convex.core.data.Maps.empty());
 		var policy = new java.util.concurrent.atomic.AtomicLong(200);
-		LatticeContext context = new LatticeContext() {
-			@Override public CVMLong currentTimestamp() { return CVMLong.create(policy.get()); }
-		};
-		AForkableCursor<ACell> data = new WorkspaceRoot(userRoot, context, true).child(Namespace.W);
+		var context = VenueContext.create(() -> CVMLong.create(policy.get()));
+		AForkableCursor<ACell> data = new User(context, userRoot, DID).workspace().cursor();
 		AForkableCursor<ACell> container = userRoot.path(Namespace.W);
 		data.set(Maps.of("a", CVMLong.ONE));
 
@@ -161,22 +157,22 @@ public class WorkspaceWrapperTest {
 	}
 
 	@Test
-	public void testCoviaChildReturnsTheCallerVisibleWrappedValue() {
+	public void testWorkspaceCursorReachesTheCallerVisibleWrappedValue() {
 		User user = engine.getVenueState().users().ensure(DID);
-		AForkableCursor<ACell> workspace = user.workspaceRoot().child(Namespace.W);
+		AForkableCursor<ACell> workspace = user.workspace().cursor();
 		workspace.withDefault(Maps.empty()).path(Strings.intern("through-child")).set(CVMLong.create(9));
 
 		assertEquals(CVMLong.create(9), workspace.path(Strings.intern("through-child")).get());
 		assertEquals(CVMLong.create(9), RT.getIn(user.cursor().get(),
 			"w", Covia.WORKSPACE_DATA, "through-child"));
 		assertTrue(RT.getIn(user.cursor().get(), "w", Fields.UPDATED) instanceof CVMLong,
-			"the public child accessor must cross the wrapper's stamping boundary");
+			"the workspace's cursor must cross the wrapper's stamping boundary");
 	}
 
 	@Test
 	public void testWrapperBoundaryAppliesOnlyAtNamespaceRoot() {
 		var userRoot = Cursors.<ACell>root(convex.core.data.Maps.empty());
-		var data = new WorkspaceRoot(userRoot, LatticeContext.create(CVMLong.create(300), null), true).child(Namespace.W);
+		var data = new User(VenueContext.create(() -> CVMLong.create(300)), userRoot, DID).workspace().cursor();
 		AForkableCursor<ACell> container = userRoot.path(Namespace.W);
 
 		AForkableCursor<ACell> nested = data.withDefault(convex.core.data.Maps.empty()).path(Strings.intern("nested"))

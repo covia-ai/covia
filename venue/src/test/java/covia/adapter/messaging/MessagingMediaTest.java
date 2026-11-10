@@ -7,12 +7,17 @@ import java.nio.charset.StandardCharsets;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
 
+import convex.auth.ucan.Capability;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Maps;
+import convex.core.data.Strings;
+import convex.core.data.Vectors;
 import convex.core.lang.RT;
+import covia.adapter.DLFSAdapter;
 import covia.api.Fields;
+import covia.exception.InvalidDefinitionException;
 import covia.venue.RequestContext;
 import covia.venue.TestEngine;
 
@@ -39,7 +44,7 @@ class MessagingMediaTest {
 
 	@Test void storesNeverOverwrite(TestInfo info) throws Exception {
 		AString owner = TestEngine.uniqueDID(info);
-		String directory = MessagingMedia.ownerDirectory(owner, "media-test");
+		String directory = MessagingMedia.ensureOwnerDirectory(TestEngine.ENGINE, owner, "media-test", RequestContext.of(owner));
 		byte[] first = "first".getBytes(StandardCharsets.UTF_8), second = "second".getBytes(StandardCharsets.UTF_8);
 		AMap<AString, ACell> a = MessagingMedia.store(TestEngine.ENGINE, first, "audio/ogg", directory, "note.ogg", RequestContext.of(owner));
 		AMap<AString, ACell> b = MessagingMedia.store(TestEngine.ENGINE, second, "audio/ogg", directory, "note.ogg", RequestContext.of(owner));
@@ -51,6 +56,23 @@ class MessagingMediaTest {
 			() -> MessagingMedia.store(TestEngine.ENGINE, first, null, " ", "x.bin", RequestContext.of(owner))).getMessage());
 	}
 
+	@Test void theOwnersMediaDriveNeedsWriteOverTheDrive(TestInfo info) throws Exception {
+		// A provider creates the owner's media drive when its writer may write over
+		// that drive, dlfs/<drive>/; a grant over one file in it is not enough.
+		AString owner = TestEngine.uniqueDID(info);
+		DLFSAdapter dlfs = (DLFSAdapter) TestEngine.ENGINE.getAdapter("dlfs");
+		RequestContext fileWriter = RequestContext.of(owner).withCaps(Vectors.of(
+			Capability.create(Strings.create("dlfs/media-grant/note.ogg"), Capability.CRUD_WRITE)));
+		assertThrows(Exception.class,
+			() -> MessagingMedia.ensureOwnerDirectory(TestEngine.ENGINE, owner, "media-grant", fileWriter));
+		assertEquals(0, RT.ensureVector(RT.getIn(dlfs.listDrives(RequestContext.of(owner)), "drives")).count());
+
+		RequestContext driveWriter = RequestContext.of(owner).withCaps(Vectors.of(
+			Capability.create(Strings.create("dlfs/media-grant/"), Capability.CRUD_WRITE)));
+		MessagingMedia.ensureOwnerDirectory(TestEngine.ENGINE, owner, "media-grant", driveWriter);
+		assertEquals(Vectors.of("media-grant"), RT.getIn(dlfs.listDrives(RequestContext.of(owner)), "drives"));
+	}
+
 	@Test void theMediaHookAddsTextButNeverReplacesTheReference() {
 		AMap<AString, ACell> attachment = RT.castMap(Maps.of("ref", "dlfs/whatsapp/note.ogg", "kind", "audio", "mediaType", "audio/ogg"));
 		assertEquals(attachment, MessagingMedia.processed(attachment, Maps.empty()), "{} passes it through");
@@ -59,7 +81,7 @@ class MessagingMediaTest {
 		assertEquals("dlfs/whatsapp/note.ogg", RT.getIn(heard, "ref").toString(), "the stored reference stays");
 		assertEquals("elsewhere", RT.getIn(heard, "result", "ref").toString(), "the hook's own output is kept apart");
 		for (ACell invalid : new ACell[] {null, Maps.of("text", ""), Maps.of("text", 42)}) {
-			assertEquals(MessagingMedia.PROCESSOR_RESULT, assertThrows(IllegalArgumentException.class,
+			assertEquals(MessagingMedia.PROCESSOR_RESULT, assertThrows(InvalidDefinitionException.class,
 				() -> MessagingMedia.processed(attachment, invalid)).getMessage());
 		}
 		assertNull(MessagingMedia.imageBlock(attachment), "audio is no image block");

@@ -15,18 +15,21 @@ import convex.core.data.AString;
 import convex.core.data.Index;
 import convex.core.data.Keyword;
 import convex.core.data.Maps;
+import convex.core.data.Path;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMDouble;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.lattice.Covia;
-import covia.lattice.WorkspaceRoot;
+import covia.lattice.CoviaPath;
 
 class VenueMigrationTest {
+	/** The venue's secret store keys: these venues keep no secret a migration step carries over. */
+	private static final SecretStore.Keys NO_SECRETS = SecretStore.keys(AKeyPair.generate());
 	private static final AString DID = Strings.create("did:test:migrations");
-	private static final ACell[] OLD_QUEUE = WorkspaceRoot.parseStringPath("w/user-deletions");
-	private static final ACell[] OLD_ADAPTER = WorkspaceRoot.parseStringPath("w/adapters/unloaded");
+	private static final Path OLD_QUEUE = CoviaPath.parse("w/user-deletions");
+	private static final Path OLD_ADAPTER =CoviaPath.parse("w/adapters/unloaded");
 	private static final ACell PENDING = Maps.of("unloaded", Maps.of("did:test:deleted", CVMLong.ONE));
 
 	private static VenueState legacy() {
@@ -40,22 +43,22 @@ class VenueMigrationTest {
 	@Test void freshAndExistingVenuesUseTheSameMigrationEntryPoint() {
 		VenueState fresh = VenueState.create(AKeyPair.generate());
 		assertEquals(0, fresh.version());
-		fresh.initialise(DID);
+		fresh.initialise(DID, NO_SECRETS);
 		assertEquals(VenueState.CURRENT_VERSION, fresh.version());
 		assertEquals(CVMLong.create(VenueState.CURRENT_VERSION), RT.getIn(fresh.get(), Covia.VERSION));
 
 		VenueState venue = legacy();
 		assertEquals(0, venue.version());
-		venue.initialise(Strings.create("did:test:ignored"));
+		venue.initialise(Strings.create("did:test:ignored"), NO_SECRETS);
 		assertEquals(DID, RT.getIn(venue.get(), Covia.DID));
 		assertEquals(VenueState.CURRENT_VERSION, venue.version());
 		assertEquals(PENDING, RT.getIn(venue.get(), Covia.USER_DELETIONS));
-		assertNull(venue.users().get(DID).readInternalPath(OLD_QUEUE));
-		assertEquals(Vectors.of("opaque", 42L), venue.users().get(DID).readInternalPath(OLD_ADAPTER));
+		assertNull(venue.users().user(DID).readInternalPath(OLD_QUEUE));
+		assertEquals(Vectors.of("opaque", 42L), venue.users().user(DID).readInternalPath(OLD_ADAPTER));
 		assertNull(RT.getIn(venue.get(), Covia.ADAPTERS), "migration must not scan adapter records");
 		ACell before = venue.get();
-		venue.migrate();
-		venue.initialise(DID);
+		venue.migrate(NO_SECRETS);
+		venue.initialise(DID, NO_SECRETS);
 		assertSame(before, venue.get(), "current state is neither rewritten nor re-stamped");
 		assertEquals(Vectors.of("opaque", 42L), venue.adapterState("unloaded").get());
 	}
@@ -63,7 +66,7 @@ class VenueMigrationTest {
 	@Test void explicitZeroUsesTheLegacyMigration() {
 		VenueState venue = legacy();
 		venue.cursor().path(Covia.VERSION).set(CVMLong.ZERO);
-		venue.migrate();
+		venue.migrate(NO_SECRETS);
 		assertEquals(VenueState.CURRENT_VERSION, venue.version());
 		assertEquals(PENDING, RT.getIn(venue.get(), Covia.USER_DELETIONS));
 	}
@@ -72,8 +75,8 @@ class VenueMigrationTest {
 		VenueState venue = legacy();
 		venue.cursor().path(Covia.USER_DELETIONS).set(Maps.of("conflicting", true));
 		ACell before = venue.get();
-		var error = assertThrows(IllegalStateException.class, () -> venue.initialise(DID));
-		assertEquals(VenueState.LEGACY_STATE_CONFLICT + "w/user-deletions", error.getMessage());
+		var error = assertThrows(IllegalStateException.class, () -> venue.initialise(DID, NO_SECRETS));
+		assertEquals(covia.venue.migration.UserDeletionsRegion.CONFLICT, error.getMessage());
 		assertSame(before, venue.get());
 		assertEquals(0, venue.version());
 	}
@@ -81,8 +84,8 @@ class VenueMigrationTest {
 	@Test void migrationRollsBackWithItsContainingTransaction() {
 		VenueState venue = legacy();
 		ACell before = venue.get();
-		assertThrows(IllegalArgumentException.class, () -> venue.transact(draft -> {
-			draft.migrate();
+		assertThrows(IllegalArgumentException.class, () -> venue.execute(draft -> {
+			draft.migrate(NO_SECRETS);
 			assertEquals(VenueState.CURRENT_VERSION, draft.version());
 			throw new IllegalArgumentException("test rollback");
 		}));
@@ -95,8 +98,8 @@ class VenueMigrationTest {
 		AtomicInteger attempts = new AtomicInteger();
 		ACell latest = Maps.of("unloaded", Maps.of("did:test:deleted", CVMLong.create(2)));
 		try {
-			var migration = CompletableFuture.runAsync(() -> venue.transact(draft -> {
-				draft.migrate();
+			var migration = CompletableFuture.runAsync(() -> venue.execute(draft -> {
+				draft.migrate(NO_SECRETS);
 				if (attempts.incrementAndGet() == 1) {
 					staged.countDown();
 					try { assertTrue(release.await(5, TimeUnit.SECONDS)); }
@@ -105,13 +108,13 @@ class VenueMigrationTest {
 			}));
 			assertTrue(staged.await(5, TimeUnit.SECONDS));
 			assertEquals(0, venue.version(), "staged version is not yet visible");
-			venue.users().get(DID).writeInternalPath(OLD_QUEUE, latest);
+			venue.users().user(DID).writeInternalPath(OLD_QUEUE, latest);
 			release.countDown();
 			migration.get(5, TimeUnit.SECONDS);
 			assertTrue(attempts.get() >= 2);
 			assertEquals(VenueState.CURRENT_VERSION, venue.version());
 			assertEquals(latest, RT.getIn(venue.get(), Covia.USER_DELETIONS));
-			assertNull(venue.users().get(DID).readInternalPath(OLD_QUEUE));
+			assertNull(venue.users().user(DID).readInternalPath(OLD_QUEUE));
 		} finally { release.countDown(); }
 	}
 
@@ -135,13 +138,14 @@ class VenueMigrationTest {
 
 	@Test void storedVersionsAreReadWithoutWriting() throws Exception {
 		AKeyPair key = AKeyPair.generate();
-		CoviaApplication application = CoviaApplication.create(key);
+		CoviaApplication application = TestEngine.application(key);
 		try (var store = application.hostStore()) {
 			assertTrue(VenueState.peekVersions(store, key.getAccountKey()).isEmpty(), "a fresh store holds no venue");
 			ACell record = Index.<Keyword, ACell>none()
 				.assoc(Covia.VERSION, CVMLong.create(VenueState.CURRENT_VERSION + 1))
 				.assoc(Covia.ADAPTER_VERSIONS, Maps.of("telegram", 2L, "example", 7L));
 			application.venue(key.getAccountKey()).cursor().set(record);
+			application.sync();
 			application.host().sync();
 			ACell before = store.getRootData();
 
@@ -156,21 +160,22 @@ class VenueMigrationTest {
 	@Test void malformedRawStateCannotBeSilentlyReinitialised() {
 		for (ACell value : new ACell[] {Vectors.of("bad root"), Maps.of("version", 1)}) {
 			VenueState venue = VenueState.create(AKeyPair.generate())
-				.withCursor(convex.lattice.cursor.Cursors.root(value));
+				.rebind(convex.lattice.cursor.Cursors.root(value));
 			assertEquals(VenueState.INVALID_STATE,
-				assertThrows(IllegalStateException.class, () -> venue.initialise(DID)).getMessage());
+				assertThrows(IllegalStateException.class, () -> venue.initialise(DID, NO_SECRETS)).getMessage());
 			assertSame(value, venue.get());
 		}
 	}
 
 	private static IllegalStateException assertStartupRejected(ACell record, String reason) throws Exception {
 		AKeyPair key = AKeyPair.generate();
-		CoviaApplication application = CoviaApplication.create(key);
+		CoviaApplication application = TestEngine.application();
 		try (var store = application.hostStore()) {
+			Engine engine = application.mount(key, Maps.empty());
 			application.venue(key.getAccountKey()).cursor().set(record);
+			application.sync();
 			application.host().sync();
 			ACell before = application.cursor().get();
-			Engine engine = new Engine(Maps.empty(), application, key);
 			IllegalStateException error;
 			try {
 				error = assertThrows(IllegalStateException.class, engine::prepare);
@@ -185,20 +190,24 @@ class VenueMigrationTest {
 
 	@Test void eachVenueOwnsItsVersionAndUnknownFieldsSurviveMigration() {
 		AKeyPair key = AKeyPair.generate();
-		CoviaApplication application = CoviaApplication.create(key);
+		CoviaApplication application = TestEngine.application(key);
 		VenueState local = application.venue(key.getAccountKey());
 		AKeyPair peerKey = AKeyPair.generate();
-		application.setContext(application.getContext().withSigningKey(peerKey));
-		VenueState peer = application.venue(peerKey.getAccountKey());
+		VenueState peer = VenueState.fromRoot(application.cursor(), peerKey.getAccountKey(),
+			peerKey::signData, application.venueContext());
 		peer.cursor().set(Index.<Keyword, ACell>none().assoc(Covia.VERSION, CVMLong.create(99)));
+		peer.sync();
 		ACell peerBefore = peer.get();
 		Keyword extension = Keyword.intern("extension");
 		local.cursor().set(Index.<Keyword, ACell>none().assoc(extension, Vectors.of("keep")));
-		local.initialise(DID);
+		local.initialise(DID, NO_SECRETS);
+		application.sync();
 		assertEquals(Vectors.of("keep"), RT.getIn(local.get(), extension));
 		assertEquals(VenueState.CURRENT_VERSION, local.version());
-		assertEquals(peerBefore, peer.get());
-		assertThrows(IllegalStateException.class, () -> peer.adapterState("unloaded"));
-		assertEquals(peerBefore, peer.get());
+		VenueState published = VenueState.fromRoot(application.cursor(), peerKey.getAccountKey(),
+			peerKey::signData, application.venueContext());
+		assertEquals(peerBefore, published.get());
+		assertThrows(IllegalStateException.class, () -> published.adapterState("unloaded"));
+		assertEquals(peerBefore, published.get());
 	}
 }

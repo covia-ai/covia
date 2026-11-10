@@ -7,6 +7,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
+import java.util.function.Supplier;
 
 import org.slf4j.Logger;
 
@@ -17,7 +18,11 @@ import convex.core.data.AVector;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
+import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
+import covia.api.Fields;
+import covia.exception.FaultException;
+import covia.exception.InvalidInputException;
 import covia.venue.AgentEvents;
 
 /**
@@ -63,6 +68,9 @@ import covia.venue.AgentEvents;
  */
 final class ToolCycleEngine {
 
+	/** The result of a call after a terminal one in the same batch: the terminal status. */
+	static final String NOT_EXECUTED = "Error: not executed — an earlier call in this tool batch was terminal (%s).";
+
 	private ToolCycleEngine() {}
 
 	/** A decoded provider tool call. */
@@ -70,13 +78,14 @@ final class ToolCycleEngine {
 
 	/**
 	 * The tool call dispatching on this thread, with the live tap to report it
-	 * on — set by {@link #execute} around the handler, so an operation the
-	 * call invokes can relay what it publishes as it runs. Null outside a call,
-	 * and where the cycle has no tap.
+	 * on if the cycle has one — set by {@link #execute} around the handler, so
+	 * an operation the call invokes can relay what it publishes as it runs, and
+	 * a call still running at its limit can say which call it was. Null outside
+	 * a call.
 	 */
 	private static final ThreadLocal<Running> RUNNING = new ThreadLocal<>();
 
-	/** A running tool call and where its activity is announced. */
+	/** A running tool call and where its activity is announced, if anywhere. */
 	private record Running(AgentEvents.Cycle tap, AString id, String name, int depth) {}
 
 	/**
@@ -86,7 +95,18 @@ final class ToolCycleEngine {
 	 */
 	static ProgressRelay relayForRunningCall() {
 		Running call = RUNNING.get();
-		return (call != null) ? new ProgressRelay(call) : null;
+		return (call != null && call.tap() != null) ? new ProgressRelay(call) : null;
+	}
+
+	/**
+	 * The tool call dispatching on this thread as the model made it:
+	 * {@code {toolCallId, toolName}}, or null outside a call.
+	 */
+	static AMap<AString, ACell> runningCall() {
+		Running call = RUNNING.get();
+		if (call == null) return null;
+		AMap<AString, ACell> out = Maps.of(Fields.TOOL_NAME, Strings.create(call.name()));
+		return (call.id() != null) ? out.assoc(Fields.TOOL_CALL_ID, call.id()) : out;
 	}
 
 	/**
@@ -158,10 +178,6 @@ final class ToolCycleEngine {
 			return new ToolOutcome(result, null, null, true, false, events);
 		}
 
-		static ToolOutcome recorded() {
-			return recorded(null);
-		}
-
 		/** A handler that persisted its result itself; {@code result} is what
 		 *  it recorded, kept for the cycle record. */
 		static ToolOutcome recorded(ACell result) {
@@ -180,7 +196,6 @@ final class ToolCycleEngine {
 	/** Outcome of a complete provider batch. */
 	record BatchResult(String terminalStatus, ACell terminalValue, boolean aborted) {
 		boolean isTerminal() { return terminalStatus != null; }
-		boolean isAborted() { return aborted; }
 	}
 
 	@FunctionalInterface
@@ -190,14 +205,15 @@ final class ToolCycleEngine {
 
 	/**
 	 * Name-to-handler registry with one fallback for ordinary operation tools.
-	 * A name with its own handler is a harness tool — a barrier in a batch;
-	 * everything else is an operation call and may run alongside its
-	 * neighbours.
+	 * A name with its own handler is a harness tool — a barrier in a batch —
+	 * when the context offers it; everything else goes to the fallback and
+	 * may run alongside its neighbours.
 	 */
 	static final class Registry<C> {
 		private final Map<String, ToolHandler<C>> handlers = new HashMap<>();
 		private ToolHandler<C> fallback;
 		private java.util.function.BiFunction<String, C, String> activityLabels;
+		private java.util.function.BiPredicate<String, C> offered = (name, context) -> true;
 
 		Registry<C> register(String name, ToolHandler<C> handler) {
 			handlers.put(name, handler);
@@ -206,6 +222,12 @@ final class ToolCycleEngine {
 
 		Registry<C> fallback(ToolHandler<C> handler) {
 			fallback = handler;
+			return this;
+		}
+
+		/** Which harness tools the context offers; without it, every one. */
+		Registry<C> offered(java.util.function.BiPredicate<String, C> offered) {
+			this.offered = offered;
 			return this;
 		}
 
@@ -219,14 +241,13 @@ final class ToolCycleEngine {
 			return (label != null && !label.isBlank()) ? label : name;
 		}
 
-		/** True for a tool the harness handles itself. */
-		boolean isHarnessTool(String name) {
-			return handlers.containsKey(name);
+		/** True for a tool the harness handles itself and the context offers. */
+		boolean isHarnessTool(String name, C context) {
+			return handlers.containsKey(name) && offered.test(name, context);
 		}
 
 		ToolOutcome dispatch(ToolCall call, C context) throws Exception {
-			ToolHandler<C> handler = handlers.get(call.name());
-			if (handler == null) handler = fallback;
+			ToolHandler<C> handler = isHarnessTool(call.name(), context) ? handlers.get(call.name()) : fallback;
 			if (handler == null) {
 				return ToolOutcome.result(Strings.create("Error: unknown tool: " + call.name()));
 			}
@@ -253,10 +274,13 @@ final class ToolCycleEngine {
 	 * see the class comment for the wave model. Every call is decoded first,
 	 * so a malformed argument string costs its own call an error result and
 	 * nothing else.
+	 *
+	 * @param clock the venue's clock, which stamps each tool result and event
+	 *        the batch produces
 	 */
 	@SuppressWarnings("unchecked")
 	static <C> BatchResult executeBatch(AVector<ACell> toolCalls, int iteration,
-			Registry<C> registry, C context, BatchSink sink, Logger log) {
+			Registry<C> registry, C context, BatchSink sink, Supplier<CVMLong> clock, Logger log) {
 		List<Decoded> decoded = new ArrayList<>();
 		for (long i = 0; i < toolCalls.count(); i++) {
 			decoded.add(decode(toolCalls.get(i), iteration, log));
@@ -275,8 +299,9 @@ final class ToolCycleEngine {
 		while (i < decoded.size()) {
 			// The next wave: one harness tool alone, or every adjacent operation call.
 			int end = i + 1;
-			if (!registry.isHarnessTool(decoded.get(i).call().name())) {
-				while (end < decoded.size() && !registry.isHarnessTool(decoded.get(end).call().name())) end++;
+			if (!registry.isHarnessTool(decoded.get(i).call().name(), context)) {
+				while (end < decoded.size()
+					&& !registry.isHarnessTool(decoded.get(end).call().name(), context)) end++;
 			}
 			List<Decoded> wave = decoded.subList(i, end);
 			i = end;
@@ -286,8 +311,7 @@ final class ToolCycleEngine {
 			if (terminalStatus != null) {
 				for (Decoded d : wave) {
 					sink.append(stamped(AbstractLLMAdapter.toolResultMessage(d.call().id(), d.call().name(),
-						Strings.create("Error: not executed — an earlier call in this tool batch was terminal ("
-							+ terminalStatus + ")."))));
+						Strings.create(NOT_EXECUTED.formatted(terminalStatus))), clock));
 				}
 				continue;
 			}
@@ -309,11 +333,11 @@ final class ToolCycleEngine {
 
 				if (e.outcome().appendResult()) {
 					ACell result = (e.outcome().result() != null) ? e.outcome().result() : Maps.empty();
-					sink.append(stamped(AbstractLLMAdapter.toolResultMessage(e.call().id(), e.call().name(), result)));
+					sink.append(stamped(AbstractLLMAdapter.toolResultMessage(e.call().id(), e.call().name(), result), clock));
 				}
 				for (long eventIndex = 0; eventIndex < e.outcome().events().count(); eventIndex++) {
 					AMap<AString, ACell> event = RT.ensureMap(e.outcome().events().get(eventIndex));
-					if (event != null) deferredEvents.add(stamped(event));
+					if (event != null) deferredEvents.add(stamped(event, clock));
 				}
 
 				if (e.outcome().terminalStatus() != null) {
@@ -340,8 +364,8 @@ final class ToolCycleEngine {
 		try {
 			toolInput = AbstractLLMAdapter.parseToolArguments(
 				RT.getIn(rawCall, AbstractLLMAdapter.K_ARGUMENTS));
-		} catch (IllegalArgumentException e) {
-			String detail = describe(e);
+		} catch (InvalidInputException e) {
+			String detail = AbstractLLMAdapter.toolFailure(e, name, FaultException.VENUE);
 			early = ToolOutcome.result(Strings.create("Error: " + detail));
 			log.warn("Tool call {} has malformed arguments: {}", name, detail);
 		}
@@ -362,7 +386,7 @@ final class ToolCycleEngine {
 			// operation it invokes can report progress against it. A subgoal's
 			// calls run nested on this same thread; each restores the one it found.
 			Running outer = RUNNING.get();
-			RUNNING.set((tap != null) ? new Running(tap, call.id(), call.name(), depth) : null);
+			RUNNING.set(new Running(tap, call.id(), call.name(), depth));
 			try {
 				outcome = registry.dispatch(call, context);
 				if (outcome == null) {
@@ -370,7 +394,7 @@ final class ToolCycleEngine {
 						"Error: tool handler returned no outcome: " + call.name()));
 				}
 			} catch (Exception e) {
-				String detail = describe(e);
+				String detail = AbstractLLMAdapter.toolFailure(e, call.name(), FaultException.VENUE);
 				outcome = ToolOutcome.result(Strings.create("Error: " + detail));
 				log.warn("Tool execution failed: {} — {}", call.name(), detail);
 			} finally {
@@ -415,7 +439,7 @@ final class ToolCycleEngine {
 			} catch (ExecutionException e) {
 				// execute() turns handler exceptions into outcomes; only an Error
 				// escapes to here. Report it like any other failed call.
-				String detail = describe((e.getCause() != null) ? e.getCause() : e);
+				String detail = AbstractLLMAdapter.toolFailure(e, call.name(), FaultException.VENUE);
 				log.warn("Tool call {} failed outside its handler: {}", call.name(), detail);
 				out.add(failed(call, "Error: " + detail, tap, depth));
 			}
@@ -480,14 +504,7 @@ final class ToolCycleEngine {
 	}
 
 	@SuppressWarnings("unchecked")
-	private static AMap<AString, ACell> stamped(AMap<AString, ACell> message) {
-		return (AMap<AString, ACell>) AbstractLLMAdapter.stampTs(message);
-	}
-
-	private static String describe(Throwable failure) {
-		Throwable cause = AbstractLLMAdapter.unwrap(failure);
-		String message = cause.getMessage();
-		return (message == null || message.isBlank())
-			? cause.getClass().getSimpleName() : message;
+	private static AMap<AString, ACell> stamped(AMap<AString, ACell> message, Supplier<CVMLong> clock) {
+		return (AMap<AString, ACell>) AbstractLLMAdapter.stampTs(message, clock.get());
 	}
 }

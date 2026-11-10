@@ -39,7 +39,8 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import covia.api.Fields;
-import covia.exception.CoviaException;
+import covia.exception.ConfigurationException;
+import covia.exception.NotSupportedException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.grid.auth.VenueAuth;
@@ -90,7 +91,7 @@ public class AuditLogTest {
 
 	private static VenueServer launch(String hostname, boolean logging) {
 		return VenueServer.launch(Maps.of(
-			Config.PORT, 0,
+			Config.PORT, 0, Config.STORE, "memory",
 			Config.HOSTNAME, Strings.create(hostname),
 			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
 			Config.RATE_LIMIT, Maps.of(Config.ENABLED, false),
@@ -243,7 +244,7 @@ public class AuditLogTest {
 			direct.close();
 		}
 		VenueServer proxied = VenueServer.launch(Maps.of(
-			Config.PORT, 0, Config.HOSTNAME, Strings.create("rid-proxied.example"),
+			Config.PORT, 0, Config.STORE, "memory", Config.HOSTNAME, Strings.create("rid-proxied.example"),
 			Config.TRUSTED_PROXIES, Vectors.of(Strings.create(TrustedProxies.LOOPBACK))));
 		try {
 			assertEquals("edge-1234", get(proxied, "/api/v1/status", null, "edge-1234").headers()
@@ -282,7 +283,8 @@ public class AuditLogTest {
 		assertEquals(v2Value, engine.resolveSecret("MIGRATING", ctx));
 
 		user.secrets().store("FOREIGN", v2Value, SecretStore.keys(AKeyPair.generate()));
-		assertThrows(CoviaException.class, () -> engine.resolveSecret("FOREIGN", ctx));
+		NotSupportedException unreadable = assertThrows(NotSupportedException.class, () -> engine.resolveSecret("FOREIGN", ctx));
+		assertEquals(Engine.SECRET_UNREADABLE + "FOREIGN", unreadable.getMessage());
 		assertTrue(List.copyOf(captured.list).stream().anyMatch(e -> e.getLevel() == Level.WARN
 			&& Engine.class.getName().equals(e.getLoggerName())), "the failed resolution is logged");
 
@@ -298,11 +300,11 @@ public class AuditLogTest {
 
 	@Test
 	public void loggingConfigIsValidated() {
-		assertThrows(IllegalArgumentException.class, () -> new Config(Maps.of(
+		assertThrows(ConfigurationException.class, () -> new Config(Maps.of(
 			Config.STRICT_CONFIG, true, Config.LOGGING, Maps.of(Strings.create("everything"), true))));
-		assertThrows(IllegalArgumentException.class, () -> new Config(Maps.of(
+		assertThrows(ConfigurationException.class, () -> new Config(Maps.of(
 			Config.LOGGING, Maps.of(Config.AUDIT, Strings.create("yes")))));
-		assertThrows(IllegalArgumentException.class, () -> Config.validateServerConfig(Maps.of(
+		assertThrows(ConfigurationException.class, () -> Config.validateServerConfig(Maps.of(
 			Config.OPERATIONS, Maps.of(Config.LOG_FORMAT, Strings.create("xml")),
 			Config.VENUES, Vectors.of(Maps.empty()))));
 		assertFalse(new Config(Maps.empty()).isAuditLogging());

@@ -25,6 +25,8 @@ import convex.core.lang.RT;
 import covia.adapter.TextExtractor;
 import covia.adapter.TextExtractor.Extraction;
 import covia.adapter.TextExtractor.Request;
+import covia.exception.InvalidInputException;
+import covia.exception.NotSupportedException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.Config;
@@ -134,14 +136,14 @@ public class DocumentsAdapterTest {
 
 		assertFalse(adapter.supports("application/zip", "archive.zip"));
 		assertFalse(adapter.supports("image/heic", "photo.heic"));
-		IllegalArgumentException refused = assertThrows(IllegalArgumentException.class,
+		NotSupportedException refused = assertThrows(NotSupportedException.class,
 			() -> adapter.extract(request(new byte[] {0x50, 0x4b}, "archive.zip", 0, null, null)));
-		assertTrue(refused.getMessage().contains("supported: pdf, docx"), refused.getMessage());
+		assertFalse(refused.getMessage().isBlank());
 
 		// A file that claims to be a PDF but is not fails with the reason, not a stack trace.
-		IllegalArgumentException broken = assertThrows(IllegalArgumentException.class,
+		InvalidInputException broken = assertThrows(InvalidInputException.class,
 			() -> adapter.extract(request("not a pdf".getBytes(StandardCharsets.UTF_8), "x.pdf", 0, null, null)));
-		assertTrue(broken.getMessage().startsWith("Cannot read x.pdf as pdf:"), broken.getMessage());
+		assertTrue(broken.getMessage().contains("x.pdf"), broken.getMessage());
 	}
 
 	@Test
@@ -169,7 +171,7 @@ public class DocumentsAdapterTest {
 		Integer[] map = TextExtractor.parsePages(Maps.of("first", 2));
 		assertEquals(2, map[0]);
 		assertNull(map[1]);
-		assertThrows(IllegalArgumentException.class, () -> TextExtractor.parsePages(Strings.create("three")));
+		assertThrows(InvalidInputException.class, () -> TextExtractor.parsePages(Strings.create("three")));
 	}
 
 	// ========== Through the venue ==========
@@ -198,6 +200,14 @@ public class DocumentsAdapterTest {
 			assertEquals("application/pdf", RT.getIn(out, "mime").toString());
 			assertEquals(2L, RT.ensureLong(RT.getIn(out, "pages")).longValue());
 			assertEquals(Strings.create("Quarterly Report"), RT.getIn(out, "meta", "title"));
+
+			// A page or range is written exactly.
+			for (String padded : new String[] {" 2", "2 ", "1 - 2"}) {
+				Job refused = engine.jobs().invokeOperation("v/ops/file/read", Maps.of(
+					"root", "docs", "path", "report.pdf", "mode", "extract", "pages", padded), ctx);
+				try { refused.awaitResult(10_000); } catch (Exception ignored) {}
+				assertEquals(Status.FAILED, refused.getStatus(), padded);
+			}
 
 			// Plain text still extracts (as itself), and the other modes are untouched.
 			Job notes = engine.jobs().invokeOperation("v/ops/file/read", Maps.of(

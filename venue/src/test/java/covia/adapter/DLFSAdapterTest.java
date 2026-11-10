@@ -2,14 +2,13 @@ package covia.adapter;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-import org.junit.jupiter.api.BeforeAll;
-import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Instant;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
@@ -17,6 +16,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
+import convex.auth.ucan.Capability;
 import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -25,35 +25,28 @@ import convex.core.data.AVector;
 import convex.core.data.Index;
 import convex.core.data.Keyword;
 import convex.core.data.Maps;
+import convex.core.data.Strings;
+import convex.core.data.Vectors;
 import convex.core.lang.RT;
-import convex.lattice.LatticeContext;
+import convex.core.data.AHashMap;
+import convex.core.data.SignedData;
 import convex.lattice.cursor.AForkableCursor;
+import convex.lattice.fs.impl.DLFSLocal;
+import covia.exception.InvalidInputException;
+import covia.exception.NotFoundException;
+import covia.grid.Job;
 import covia.lattice.Covia;
 import covia.venue.CoviaApplication;
 import covia.venue.Engine;
 import covia.venue.Config;
+import covia.venue.DrivenClock;
 import covia.venue.RequestContext;
 import covia.venue.TestEngine;
 
 public class DLFSAdapterTest {
 
-	// Class-local engine (not TestEngine.ENGINE) so onSync callbacks added by
-	// testDLFSSyncReachesRootOnSyncCallback don't accumulate across all venue
-	// tests. Per-method DID still required since methods run in parallel.
-	static Engine engine;
+	private static final Engine engine = TestEngine.ENGINE;
 	private AString ALICE_DID;
-
-	@BeforeAll
-	static void setup() {
-		engine = Engine.createTemp(Maps.of(
-			Config.USERS, Maps.of(Config.AUTO_CREATE, true)));
-		Engine.addDemoAssets(engine);
-	}
-
-	@AfterAll
-	static void teardown() {
-		engine.close();
-	}
 
 	@BeforeEach
 	public void setupDID(TestInfo info) {
@@ -61,9 +54,27 @@ public class DLFSAdapterTest {
 	}
 
 	private ACell run(String op, ACell input) {
-		return engine.jobs().invokeOperation(
+		return engine.jobs().callOperation(
 			op, input, RequestContext.of(ALICE_DID)
 		).awaitResult(5000);
+	}
+
+	/** The error message of an operation that must fail. */
+	private String failure(String op, ACell input, RequestContext ctx) {
+		Job job = engine.jobs().callOperation(op, input, ctx);
+		assertThrows(Exception.class, () -> job.awaitResult(5000), op + " " + input);
+		return job.getErrorMessage();
+	}
+
+	private AVector<?> driveNames() {
+		return RT.ensureVector(RT.getIn(run("v/ops/dlfs/list-drives", Maps.empty()), "drives"));
+	}
+
+	/** A drive view to write into, creating the drive if needed. */
+	private DLFSLocal writableDrive(DLFSAdapter adapter, String name) {
+		RequestContext alice = RequestContext.of(ALICE_DID);
+		adapter.ensureDrive(alice, "dlfs/" + name);
+		return adapter.getDrive(alice, name);
 	}
 
 	@Test
@@ -255,14 +266,14 @@ public class DLFSAdapterTest {
 	@Test
 	public void testDriveDeleteSurvivesSaveInFlight() throws Exception {
 		var key = AKeyPair.generate();
-		var application = CoviaApplication.create(key);
-		Engine isolated = new Engine(Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true)), application, key).start();
+		var application = TestEngine.application();
+		Engine isolated = application.mount(key, Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true))).start();
 		try {
 			Engine.addDemoAssets(isolated);
 			DLFSAdapter adapter = (DLFSAdapter) isolated.getAdapter("dlfs");
-			var drive = adapter.getDriveForIdentity(ALICE_DID.toString(), "deleted");
+			var drive = writableDrive(adapter, "deleted");
 			Files.writeString(drive.getPath("/old.txt"), "must stay deleted");
-			var kept = adapter.getDriveForIdentity(ALICE_DID.toString(), "kept");
+			var kept = writableDrive(adapter, "kept");
 			Files.writeString(kept.getPath("/keep.txt"), "keep");
 			var root = isolated.getRootCursor();
 			CountDownLatch saving = new CountDownLatch(1);
@@ -279,7 +290,7 @@ public class DLFSAdapterTest {
 			}));
 			try {
 				assertTrue(saving.await(5, TimeUnit.SECONDS));
-				isolated.jobs().invokeOperation("v/ops/dlfs/delete-drive", Maps.of("name", "deleted"),
+				isolated.jobs().callOperation("v/ops/dlfs/delete-drive", Maps.of("name", "deleted"),
 					RequestContext.of(ALICE_DID)).awaitResult(5000);
 				assertFalse(convex.lattice.fs.DLFSNode.isDirectory(drive.getCursor().get()));
 			} finally {
@@ -292,7 +303,7 @@ public class DLFSAdapterTest {
 			assertEquals(convex.core.data.Vectors.of("kept"), RT.getIn(
 				adapter.listDrives(RequestContext.of(ALICE_DID)), "drives"));
 			var deleted = root.get();
-			var recreated = adapter.getDriveForIdentity(ALICE_DID.toString(), "deleted");
+			var recreated = writableDrive(adapter, "deleted");
 			Files.writeString(recreated.getPath("/new.txt"), "new");
 			application.merge(deleted);
 			assertEquals("new", Files.readString(recreated.getPath("/new.txt")));
@@ -303,31 +314,29 @@ public class DLFSAdapterTest {
 	}
 
 	@Test
+	@SuppressWarnings("unchecked")
 	public void testDriveDeletionWinsOlderSnapshot() throws Exception {
 		var key = AKeyPair.generate();
-		var application = CoviaApplication.create(key);
-		var time = new java.util.concurrent.atomic.AtomicLong(System.currentTimeMillis());
-		application.setContext(new LatticeContext() {
-			@Override public convex.core.data.prim.CVMLong getTimestamp() {
-				return convex.core.data.prim.CVMLong.create(time.get());
-			}
-		}.withSigningKey(key));
-		Engine isolated = new Engine(Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true)), application, key).start();
+		var time = DrivenClock.at(Instant.now());
+		var application = TestEngine.application(time);
+		Engine isolated = application.mount(key, Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true))).start();
 		try {
 			Engine.addDemoAssets(isolated);
 			DLFSAdapter adapter = (DLFSAdapter) isolated.getAdapter("dlfs");
-			var drive = adapter.getDriveForIdentity(ALICE_DID.toString(), "legacy");
+			var drive = writableDrive(adapter, "legacy");
 			Files.writeString(drive.getPath("/old.txt"), "legacy content");
 			var root = isolated.getRootCursor();
 			var legacy = root.get();
 			assertEquals("legacy content", Files.readString(drive.getPath("/old.txt")));
 			// A strictly newer deletion wins in either merge direction; equal times
 			// deliberately keep the local operand in Convex (covered by the save race).
-			time.incrementAndGet();
-			isolated.jobs().invokeOperation("v/ops/dlfs/delete-drive", Maps.of("name", "legacy"),
+			time.advance(1);
+			isolated.jobs().callOperation("v/ops/dlfs/delete-drive", Maps.of("name", "legacy"),
 				RequestContext.of(ALICE_DID)).awaitResult(5000);
 			var deleted = root.get();
-			assertEquals(deleted.get(Covia.DLFS), Covia.ROOT.merge(isolated.getLatticeContext(), legacy, deleted).get(Covia.DLFS));
+			assertEquals(deleted.get(Covia.DLFS), application.dlfs().getLattice().merge(
+				(AHashMap<ACell, SignedData<AHashMap<AString, AVector<ACell>>>>) legacy.get(Covia.DLFS),
+				(AHashMap<ACell, SignedData<AHashMap<AString, AVector<ACell>>>>) deleted.get(Covia.DLFS)));
 			application.merge(legacy);
 			assertFalse(convex.lattice.fs.DLFSNode.isDirectory(drive.getCursor().get()));
 		} finally {
@@ -338,12 +347,12 @@ public class DLFSAdapterTest {
 	@Test
 	public void testIndependentFileEditsStillMerge() throws Exception {
 		var key = AKeyPair.generate();
-		var application = CoviaApplication.create(key);
-		Engine isolated = new Engine(Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true)), application, key).start();
+		var application = TestEngine.application();
+		Engine isolated = application.mount(key, Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true))).start();
 		try {
 			Engine.addDemoAssets(isolated);
 			DLFSAdapter adapter = (DLFSAdapter) isolated.getAdapter("dlfs");
-			var drive = adapter.getDriveForIdentity(ALICE_DID.toString(), "shared");
+			var drive = writableDrive(adapter, "shared");
 			var root = isolated.getRootCursor();
 			var base = root.get();
 			Files.writeString(drive.getPath("/left.txt"), "left");
@@ -351,10 +360,10 @@ public class DLFSAdapterTest {
 			root.set(base);
 			Files.writeString(drive.getPath("/right.txt"), "right");
 			// The owner signs the merged map, retaining both independently edited files.
-			AKeyPair dlfsKey = AKeyPair.create(convex.core.data.Blob.fromHex(isolated.getVenueState().users().get(ALICE_DID).secrets()
+			AKeyPair dlfsKey = AKeyPair.create(convex.core.data.Blob.fromHex(isolated.getVenueState().users().user(ALICE_DID).secrets()
 				.decrypt("DLFS_KEY", covia.venue.SecretStore.keys(isolated.getKeyPair())).toString()));
 			convex.dlfs.DLFSRegion.connect(root.path(Covia.DLFS), null,
-				dlfsKey::signData, isolated.getLatticeContext()::currentTimestamp)
+				dlfsKey::signData, isolated.getVenueState().getContext()::currentTimestamp)
 				.merge(convex.core.lang.RT.getIn(left, Covia.DLFS));
 			assertEquals("left", Files.readString(drive.getPath("/left.txt")));
 			assertEquals("right", Files.readString(drive.getPath("/right.txt")));
@@ -367,7 +376,7 @@ public class DLFSAdapterTest {
 	public void testUpstreamRejectedDriveNamesAreNotCreated() throws Exception {
 		DLFSAdapter adapter = (DLFSAdapter) engine.getAdapter("dlfs");
 		for (String name : new String[] {".", "..", " padded ", "x".repeat(129)}) {
-			var error = assertThrows(IllegalArgumentException.class,
+			var error = assertThrows(InvalidInputException.class,
 				() -> adapter.getDriveForIdentity(ALICE_DID.toString(), name));
 			assertEquals(DLFSAdapter.INVALID_DRIVE_NAME, error.getMessage());
 		}
@@ -382,19 +391,227 @@ public class DLFSAdapterTest {
 
 		ACell result = run("v/ops/dlfs/delete-drive", Maps.of("name", "test-remove"));
 		assertTrue(RT.bool(RT.getIn(result, "deleted")));
-		assertEquals(0, RT.ensureVector(RT.getIn(
-			run("v/ops/dlfs/list-drives", Maps.empty()), "drives")).count());
+		assertEquals(0, driveNames().count());
 
-		// Re-accessing creates a fresh empty drive.
+		// Reading the deleted drive does not bring it back.
+		assertTrue(failure("v/ops/dlfs/list", Maps.of("drive", "test-remove"),
+			RequestContext.of(ALICE_DID)).contains(DLFSAdapter.DRIVE_NOT_FOUND));
+		assertEquals(0, driveNames().count());
+
+		// Creating it again gives a fresh empty drive.
+		run("v/ops/dlfs/create-drive", Maps.of("name", "test-remove"));
 		result = run("v/ops/dlfs/list", Maps.of("drive", "test-remove"));
 		AVector<?> entries = RT.ensureVector(RT.getIn(result, "entries"));
-		assertEquals(0, entries.count(), "Deleted drive should be empty when re-accessed");
+		assertEquals(0, entries.count(), "Recreated drive should be empty");
+	}
+
+	@Test
+	public void testOperationsNeedALiveDrive() throws Exception {
+		// Only createDrive creates a drive the caller names. Every other operation,
+		// writes included, fails on a drive that is absent or deleted, and leaves it so.
+		RequestContext alice = RequestContext.of(ALICE_DID);
+		run("v/ops/dlfs/create-drive", Maps.of("name", "kept"));
+		run("v/ops/dlfs/create-drive", Maps.of("name", "gone"));
+		run("v/ops/dlfs/write", Maps.of("drive", "gone", "path", "a.txt", "content", "old"));
+		run("v/ops/dlfs/delete-drive", Maps.of("name", "gone"));
+
+		for (String drive : new String[] {"missing", "gone"}) {
+			for (String op : new String[] {"list", "tree", "stat", "read", "delete", "create", "mkdir"}) {
+				assertTrue(failure("v/ops/dlfs/" + op, Maps.of("drive", drive, "path", "a.txt"), alice)
+					.contains(DLFSAdapter.DRIVE_NOT_FOUND), op + " on " + drive);
+			}
+			for (String op : new String[] {"write", "append"}) {
+				assertTrue(failure("v/ops/dlfs/" + op,
+					Maps.of("drive", drive, "path", "a.txt", "content", "new"), alice)
+					.contains(DLFSAdapter.DRIVE_NOT_FOUND), op + " on " + drive);
+			}
+			String ref = "dlfs/" + drive + "/a.txt";
+			assertTrue(failure("v/ops/file/read", Maps.of("path", ref), alice)
+				.contains(DLFSAdapter.DRIVE_NOT_FOUND), "file:read on " + drive);
+			assertTrue(failure("v/ops/file/write", Maps.of("path", ref, "content", "new"), alice)
+				.contains(DLFSAdapter.DRIVE_NOT_FOUND), "file:write on " + drive);
+			var put = assertThrows(NotFoundException.class, () -> engine.putContent(
+				Strings.create(ref), new java.io.ByteArrayInputStream(new byte[] {1}), null, alice));
+			assertTrue(put.getMessage().contains(DLFSAdapter.DRIVE_NOT_FOUND), "content write on " + drive);
+		}
+		assertEquals(Vectors.of("kept"), driveNames());
+	}
+
+	@Test
+	public void testCreatingADriveNeedsWriteOnTheDrives() {
+		// Creating a drive adds it to its owner's drives, so dlfs:createDrive needs
+		// crud/write over dlfs. A grant over the drive itself, over a file inside
+		// it, or crud/read over every drive creates none.
+		RequestContext driveOnly = RequestContext.ofAgent(ALICE_DID, Strings.create("drive-only"))
+			.withCaps(Vectors.of(Capability.create(Strings.create("dlfs/reports"), Capability.CRUD_WRITE)));
+		failure("v/ops/dlfs/create-drive", Maps.of("name", "reports"), driveOnly);
+
+		RequestContext fileWriter = RequestContext.ofAgent(ALICE_DID, Strings.create("logger"))
+			.withCaps(Vectors.of(Capability.create(Strings.create("dlfs/logs/today.txt"), Capability.CRUD_WRITE)));
+		failure("v/ops/dlfs/create-drive", Maps.of("name", "logs"), fileWriter);
+
+		RequestContext reader = RequestContext.ofAgent(ALICE_DID, Strings.create("reader"))
+			.withCaps(Vectors.of(Capability.create(Strings.create("dlfs/"), Capability.CRUD_READ)));
+		failure("v/ops/dlfs/create-drive", Maps.of("name", "notes"), reader);
+		assertEquals(0, driveNames().count());
+
+		RequestContext maker = RequestContext.ofAgent(ALICE_DID, Strings.create("maker"))
+			.withCaps(Vectors.of(Capability.create(Strings.create("dlfs"), Capability.CRUD_WRITE)));
+		engine.jobs().callOperation("v/ops/dlfs/create-drive",
+			Maps.of("name", "reports"), maker).awaitResult(5000);
+		assertEquals(Vectors.of("reports"), driveNames());
+	}
+
+	@Test
+	public void testEnsureDriveCreatesOnlyForAnAuthorisedWrite() {
+		// A component's drive counts as present, like a user's namespaces: it is
+		// created, as its owner, for a write its caller may make there. Writing a
+		// new file at the drive's root needs crud/write over the drive, so a grant
+		// over one file creates nothing until that file exists.
+		DLFSAdapter adapter = (DLFSAdapter) engine.getAdapter("dlfs");
+		RequestContext reader = RequestContext.of(ALICE_DID).withCaps(Vectors.of(
+			Capability.create(Strings.create("dlfs/"), Capability.CRUD_READ)));
+		RequestContext fileWriter = RequestContext.of(ALICE_DID).withCaps(Vectors.of(
+			Capability.create(Strings.create("dlfs/owned/a.txt"), Capability.CRUD_WRITE)));
+		RequestContext driveWriter = RequestContext.of(ALICE_DID).withCaps(Vectors.of(
+			Capability.create(Strings.create("dlfs/owned/"), Capability.CRUD_WRITE)));
+		assertThrows(Exception.class, () -> adapter.ensureDrive(reader, "dlfs/owned"));
+		assertThrows(Exception.class, () -> adapter.ensureDrive(fileWriter, "dlfs/owned/a.txt"));
+		assertEquals(0, driveNames().count());
+
+		adapter.ensureDrive(driveWriter, "dlfs/owned/a.txt");
+		adapter.ensureDrive(RequestContext.of(ALICE_DID), "dlfs/owned");
+		assertEquals(Vectors.of("owned"), driveNames());
+		assertThrows(Exception.class, () -> adapter.ensureDrive(fileWriter, "dlfs/owned/a.txt"));
+
+		run("v/ops/dlfs/write", Maps.of("drive", "owned", "path", "a.txt", "content", "a"));
+		adapter.ensureDrive(fileWriter, "dlfs/owned/a.txt");
+	}
+
+	@Test
+	public void testCreatingAnEntryNeedsWriteOnItsDirectory() {
+		// Creating an entry changes the directory that holds it. A grant over a
+		// file changes it while it exists; creating a file or directory needs
+		// crud/write on the directory, or the nearest one that exists.
+		run("v/ops/dlfs/create-drive", Maps.of("drive", "docs"));
+		run("v/ops/dlfs/write", Maps.of("drive", "docs", "path", "old.txt", "content", "old"));
+		RequestContext leaf = RequestContext.ofAgent(ALICE_DID, Strings.create("leaf")).withCaps(Vectors.of(
+			Capability.create(Strings.create("dlfs/docs/old.txt"), Capability.CRUD_WRITE),
+			Capability.create(Strings.create("dlfs/docs/new.txt"), Capability.CRUD_WRITE),
+			Capability.create(Strings.create("dlfs/docs/sub"), Capability.CRUD_WRITE)));
+		engine.jobs().callOperation("v/ops/dlfs/write",
+			Maps.of("drive", "docs", "path", "old.txt", "content", "changed"), leaf).awaitResult(5000);
+		failure("v/ops/dlfs/write", Maps.of("drive", "docs", "path", "new.txt", "content", "x"), leaf);
+		failure("v/ops/dlfs/append", Maps.of("drive", "docs", "path", "new.txt", "content", "x"), leaf);
+		failure("v/ops/dlfs/create", Maps.of("drive", "docs", "path", "new.txt"), leaf);
+		failure("v/ops/dlfs/mkdir", Maps.of("drive", "docs", "path", "sub"), leaf);
+		failure("v/ops/file/write", Maps.of("path", "dlfs/docs/new.txt", "content", "x"), leaf);
+
+		RequestContext dir = RequestContext.ofAgent(ALICE_DID, Strings.create("dir")).withCaps(Vectors.of(
+			Capability.create(Strings.create("dlfs/docs/"), Capability.CRUD_WRITE)));
+		engine.jobs().callOperation("v/ops/dlfs/mkdir",
+			Maps.of("drive", "docs", "path", "a/b", "parents", true), dir).awaitResult(5000);
+		engine.jobs().callOperation("v/ops/dlfs/write",
+			Maps.of("drive", "docs", "path", "a/b/new.txt", "content", "new"), dir).awaitResult(5000);
+
+		AVector<?> entries = RT.ensureVector(RT.getIn(
+			run("v/ops/dlfs/list", Maps.of("drive", "docs")), "entries"));
+		assertEquals(2, entries.count(), "only old.txt and a: " + entries);
+		assertEquals("changed", RT.getIn(
+			run("v/ops/dlfs/read", Maps.of("drive", "docs", "path", "old.txt")), "content").toString());
+		assertEquals("new", RT.getIn(
+			run("v/ops/dlfs/read", Maps.of("drive", "docs", "path", "a/b/new.txt")), "content").toString());
+	}
+
+	@Test
+	public void testDriveOperationsNameTheDriveInDrive() {
+		// createDrive and deleteDrive take the drive in `drive`, as every other
+		// operation does; `name` is an alias for a bare name.
+		run("v/ops/dlfs/create-drive", Maps.of("drive", "by-drive"));
+		run("v/ops/dlfs/create-drive", Maps.of("name", "by-name"));
+		assertEquals(Vectors.of("by-drive", "by-name"), driveNames());
+
+		assertTrue(failure("v/ops/dlfs/create-drive", Maps.of("drive", "one", "name", "two"),
+			RequestContext.of(ALICE_DID)).contains(DLFSAdapter.DRIVE_NAME_CONFLICT));
+
+		run("v/ops/dlfs/delete-drive", Maps.of("drive", "by-drive"));
+		run("v/ops/dlfs/delete-drive", Maps.of("name", "by-name"));
+		assertEquals(0, driveNames().count());
+	}
+
+	@Test
+	public void testDriveOperationsCheckTheDrivesTheyActOn() {
+		// deleteDrive acts on the drive and listDrives on every drive, so each
+		// checks that, whatever path or drive its input names: a grant over part
+		// of a drive deletes no drive and lists none.
+		run("v/ops/dlfs/create-drive", Maps.of("name", "shared"));
+		run("v/ops/dlfs/mkdir", Maps.of("drive", "shared", "path", "tmp"));
+		run("v/ops/dlfs/write", Maps.of("drive", "shared", "path", "tmp/a.txt", "content", "a"));
+		RequestContext tmpCleaner = RequestContext.ofAgent(ALICE_DID, Strings.create("cleaner"))
+			.withCaps(Vectors.of(Capability.create(Strings.create("dlfs/shared/tmp"), Capability.CRUD_DELETE)));
+		failure("v/ops/dlfs/delete-drive", Maps.of("drive", "shared", "path", "tmp"), tmpCleaner);
+		assertEquals(Vectors.of("shared"), driveNames());
+
+		RequestContext oneDrive = RequestContext.ofAgent(ALICE_DID, Strings.create("one-drive"))
+			.withCaps(Vectors.of(Capability.create(Strings.create("dlfs/shared"), Capability.CRUD_READ)));
+		failure("v/ops/dlfs/list-drives", Maps.of("drive", "shared"), oneDrive);
+		failure("v/ops/dlfs/list-drives", Maps.of("path", "shared"), oneDrive);
+		RequestContext allDrives = RequestContext.ofAgent(ALICE_DID, Strings.create("all-drives"))
+			.withCaps(Vectors.of(Capability.create(Strings.create("dlfs"), Capability.CRUD_READ)));
+		assertEquals(Vectors.of("shared"), RT.getIn(engine.jobs().callOperation("v/ops/dlfs/list-drives",
+			Maps.of("drive", "shared"), allDrives).awaitResult(5000), "drives"));
+
+		RequestContext dropper = RequestContext.ofAgent(ALICE_DID, Strings.create("dropper"))
+			.withCaps(Vectors.of(Capability.create(Strings.create("dlfs/shared"), Capability.CRUD_DELETE)));
+		engine.jobs().callOperation("v/ops/dlfs/delete-drive",
+			Maps.of("drive", "shared", "path", "tmp"), dropper).awaitResult(5000);
+		assertEquals(0, driveNames().count());
+	}
+
+	@Test
+	public void testReadOnlyAgentCannotCreateDrives() {
+		// An agent whose caps allow only crud/read on its owner's drives reads
+		// them, but brings no drive into being, new or deleted.
+		run("v/ops/dlfs/create-drive", Maps.of("name", "notes"));
+		run("v/ops/dlfs/write", Maps.of("drive", "notes", "path", "a.txt", "content", "hello"));
+		run("v/ops/dlfs/create-drive", Maps.of("name", "gone"));
+		run("v/ops/dlfs/delete-drive", Maps.of("name", "gone"));
+		RequestContext reader = RequestContext.ofAgent(ALICE_DID, Strings.create("reader"))
+			.withCaps(Vectors.of(Capability.create(Strings.create("dlfs/"), Capability.CRUD_READ)));
+
+		ACell read = engine.jobs().callOperation("v/ops/dlfs/read",
+			Maps.of("drive", "notes", "path", "a.txt"), reader).awaitResult(5000);
+		assertEquals("hello", RT.getIn(read, "content").toString());
+		for (String drive : new String[] {"missing", "gone"}) {
+			assertTrue(failure("v/ops/dlfs/stat", Maps.of("drive", drive, "path", "a.txt"), reader)
+				.contains(DLFSAdapter.DRIVE_NOT_FOUND), "stat on " + drive);
+			assertTrue(failure("v/ops/dlfs/list", Maps.of("drive", drive), reader)
+				.contains(DLFSAdapter.DRIVE_NOT_FOUND), "list on " + drive);
+		}
+		assertEquals(Vectors.of("notes"), driveNames());
+	}
+
+	@Test
+	public void testReadsMintNoDriveKey() {
+		// A user who has never created a drive has none. Listing, reading, writing
+		// and deleting a drive find none, and none of them generates the user's DLFS key.
+		RequestContext alice = RequestContext.of(ALICE_DID);
+		assertEquals(0, driveNames().count());
+		assertTrue(failure("v/ops/dlfs/list", Maps.of("drive", "docs"), alice)
+			.contains(DLFSAdapter.DRIVE_NOT_FOUND));
+		assertTrue(failure("v/ops/dlfs/write", Maps.of("drive", "docs", "path", "a.txt", "content", "x"), alice)
+			.contains(DLFSAdapter.DRIVE_NOT_FOUND));
+		run("v/ops/dlfs/delete-drive", Maps.of("name", "docs"));
+		var user = engine.getVenueState().users().user(ALICE_DID);
+		assertTrue(user == null || user.secrets().list().longIndexOf(
+			Strings.create(DLFSAdapter.DLFS_KEY_SECRET)) < 0, "no DLFS key");
 	}
 
 	@Test
 	@SuppressWarnings("unchecked")
 	public void testWriteReachesRootCursor() {
 		// Write a file via DLFS adapter
+		run("v/ops/dlfs/create-drive", Maps.of("name", "sync-test"));
 		run("v/ops/dlfs/write", Maps.of("drive", "sync-test", "path", "hello.txt", "content", "sync check"));
 
 		// Verify the root cursor has DLFS data
@@ -406,12 +623,12 @@ public class DLFSAdapterTest {
 	@Test
 	public void testDLFSWritesPublishThroughHost() throws Exception {
 		var key = AKeyPair.generate();
-		var application = CoviaApplication.create(key);
-		Engine isolated = new Engine(Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true)), application, key).start();
+		var application = TestEngine.application();
+		Engine isolated = application.mount(key, Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true))).start();
 		try {
 			Engine.addDemoAssets(isolated);
 			DLFSAdapter dlfs = (DLFSAdapter) isolated.getAdapter("dlfs");
-			var drive = dlfs.getDriveForIdentity(ALICE_DID.toString(), "publish");
+			var drive = writableDrive(dlfs, "publish");
 			Files.writeString(drive.getPath("/test.txt"), "host publication");
 			isolated.flush();
 			assertEquals(application.cursor().get(), application.host().store().getRootData());
@@ -424,8 +641,8 @@ public class DLFSAdapterTest {
 	@Test
 	public void testRecreateSurvivesConcurrentStaleSync() throws Exception {
 		var key = AKeyPair.generate();
-		var application = CoviaApplication.create(key);
-		Engine isolated = new Engine(Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true)), application, key).start();
+		var application = TestEngine.application();
+		Engine isolated = application.mount(key, Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true))).start();
 		CountDownLatch syncEntered = new CountDownLatch(1);
 		CountDownLatch releaseSync = new CountDownLatch(1);
 		AtomicBoolean blockNextSync = new AtomicBoolean();
@@ -434,8 +651,7 @@ public class DLFSAdapterTest {
 		try {
 			Engine.addDemoAssets(isolated);
 			DLFSAdapter adapter = (DLFSAdapter) isolated.getAdapter("dlfs");
-			Path file = adapter.getDriveForIdentity(
-				ALICE_DID.toString(), "recreate-under-sync").getPath("/entry.txt");
+			Path file = writableDrive(adapter, "recreate-under-sync").getPath("/entry.txt");
 
 			Files.writeString(file, "first");
 			Files.delete(file);
@@ -483,21 +699,16 @@ public class DLFSAdapterTest {
 	@SuppressWarnings("unchecked")
 	public void testLongLivedDriveUsesCurrentVenueClockAndOwnerKey() throws Exception {
 		AKeyPair venueKey = AKeyPair.generate();
-		var time = new java.util.concurrent.atomic.AtomicLong(System.currentTimeMillis());
-		CoviaApplication application = CoviaApplication.create(venueKey);
-		application.setContext(new LatticeContext() {
-			@Override public convex.core.data.prim.CVMLong getTimestamp() {
-				return convex.core.data.prim.CVMLong.create(time.get());
-			}
-		}.withSigningKey(venueKey));
-		Engine isolated = new Engine(Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true)), application, venueKey).start();
+		var time = DrivenClock.at(Instant.now());
+		CoviaApplication application = TestEngine.application(time);
+		Engine isolated = application.mount(venueKey, Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true))).start();
 		try {
 			Engine.addDemoAssets(isolated);
 			var adapter = (DLFSAdapter) isolated.getAdapter("dlfs");
-			var drive = adapter.getDriveForIdentity(ALICE_DID.toString(), "clock");
+			var drive = writableDrive(adapter, "clock");
 			Files.writeString(drive.getPath("/first"), "first");
 			long before = Files.getLastModifiedTime(drive.getPath("/first")).toMillis();
-			time.addAndGet(100);
+			time.advance(100);
 			Files.writeString(drive.getPath("/second"), "second");
 			assertEquals(before + 100, Files.getLastModifiedTime(drive.getPath("/second")).toMillis());
 			var owners = (AMap<ACell, ACell>) application.cursor().get().get(Covia.DLFS);
@@ -511,9 +722,8 @@ public class DLFSAdapterTest {
 
 	@Test
 	public void testDriveNotFound() {
-		assertThrows(Exception.class, () ->
-			run("v/ops/dlfs/read", Maps.of("drive", "nonexistent", "path", "foo.txt"))
-		);
+		assertTrue(failure("v/ops/dlfs/read", Maps.of("drive", "nonexistent", "path", "foo.txt"),
+			RequestContext.of(ALICE_DID)).contains(DLFSAdapter.DRIVE_NOT_FOUND));
 	}
 
 	@Test
@@ -732,6 +942,7 @@ public class DLFSAdapterTest {
 	@Test
 	public void didContentReferencesDecodeNamesBeforeAccessChecks() throws Exception {
 		var ctx = covia.venue.RequestContext.of(ALICE_DID);
+		run("v/ops/dlfs/create-drive", Maps.of("name", "names"));
 		String name = "Lab report+日本語(1).txt";
 		String encoded = java.net.URLEncoder.encode(name, java.nio.charset.StandardCharsets.UTF_8).replace("+", "%20");
 		var ref = convex.core.data.Strings.create(ALICE_DID + "/dlfs/names/" + encoded);
@@ -742,7 +953,7 @@ public class DLFSAdapterTest {
 		assertEquals("*", RT.getIn(read, "content").toString());
 		assertThrows(java.nio.file.FileAlreadyExistsException.class, () -> engine.createContent(ref,
 			new java.io.ByteArrayInputStream(new byte[] {9}), null, ctx));
-		assertThrows(IllegalArgumentException.class, () -> engine.resolveContent(
+		assertThrows(InvalidInputException.class, () -> engine.resolveContent(
 			convex.core.data.Strings.create(ALICE_DID + "/dlfs/names/%2e%2e/escape"), ctx));
 		var scoped = ctx.withCaps(convex.core.data.Vectors.of(convex.auth.ucan.Capability.create(
 			convex.core.data.Strings.create("dlfs/names/" + name), convex.auth.ucan.Capability.CRUD_READ)));

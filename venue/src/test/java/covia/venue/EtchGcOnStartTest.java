@@ -18,6 +18,7 @@ import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import convex.etch.EtchStore;
 import covia.api.Fields;
+import covia.exception.ConfigurationException;
 import covia.venue.server.VenueServer;
 
 /**
@@ -47,10 +48,6 @@ public class EtchGcOnStartTest {
 			Config.USERS, Maps.of(Config.AUTO_CREATE, true));
 		if (gcOnStart) cfg = cfg.assoc(Config.ETCH, Maps.of(GC, Maps.of(ON_START, true)));
 		return cfg;
-	}
-
-	private static File storeFile(String prefix) throws Exception {
-		return new File(TestTemp.dir(prefix).toFile(), "venue.etch");
 	}
 
 	private static void write(VenueServer v, String path, ACell value) throws Exception {
@@ -92,7 +89,7 @@ public class EtchGcOnStartTest {
 
 	@Test
 	public void collectsAtStartupAndKeepsState() throws Exception {
-		File file = storeFile("etch-gc-onstart");
+		File file = TestTemp.etchFile("etch-gc-onstart");
 		String storePath = file.getAbsolutePath().replace('\\', '/');
 		long garbage = addGarbage(file);
 		AString value = Strings.create("survives collection");
@@ -141,7 +138,7 @@ public class EtchGcOnStartTest {
 
 	@Test
 	public void storeWithoutARootIsSkipped() throws Exception {
-		File f = storeFile("etch-gc-fresh");
+		File f = TestTemp.etchFile("etch-gc-fresh");
 		EtchStore store = EtchStore.create(f);
 		try {
 			assertSame(store, VenueServer.collectAtStartup(store, f, null),
@@ -154,7 +151,7 @@ public class EtchGcOnStartTest {
 
 	@Test
 	public void startupRetentionKeepsIndependentRecoveryName() throws Exception {
-		File file = storeFile("etch-gc-retained");
+		File file = TestTemp.etchFile("etch-gc-retained");
 		AMap<AString, ACell> cfg = config(file.getAbsolutePath(), false);
 		VenueServer original = VenueServer.launch(cfg);
 		try { write(original, "w/checkpoint", Strings.create("before")); }
@@ -186,17 +183,17 @@ public class EtchGcOnStartTest {
 		assertTrue(new Config(Maps.of(Config.ETCH, Maps.of(GC, Maps.of(ON_START, true)))).isEtchGcOnStart());
 		assertFalse(new Config(Maps.of(Config.ETCH, Maps.of(GC, Maps.of(ON_START, false)))).isEtchGcOnStart());
 		assertFalse(new Config(Maps.empty()).isEtchGcOnStart());
-		assertThrows(IllegalArgumentException.class, () -> new Config(
+		assertThrows(ConfigurationException.class, () -> new Config(
 			Maps.of(Config.ETCH, Maps.of(GC, Maps.of(ON_START, Strings.create("yes"))))));
-		assertThrows(IllegalArgumentException.class, () -> new Config(
+		assertThrows(ConfigurationException.class, () -> new Config(
 			Maps.of(Config.ETCH, Maps.of(GC, Maps.of(Strings.intern("onstart"), true)))));
-		assertThrows(IllegalArgumentException.class, () -> new Config(
+		assertThrows(ConfigurationException.class, () -> new Config(
 			Maps.of(Config.ETCH, Maps.of(GC, true))));
 	}
 
 	@Test
 	public void deletedProfileLeavesCollectedStoreAndStaysDeletedOnRestart() throws Exception {
-		File file = storeFile("user-erasure-gc");
+		File file = TestTemp.etchFile("user-erasure-gc");
 		String marker = "erased-" + java.util.UUID.randomUUID() + "@example.test";
 		AString id = Strings.create("erasure");
 		var key = convex.auth.ucan.UCAN.toDIDKey(convex.core.crypto.AKeyPair.generate().getAccountKey());
@@ -221,7 +218,7 @@ public class EtchGcOnStartTest {
 		VenueServer collected = VenueServer.launch(gcConfig);
 		File live;
 		try {
-			assertNull(collected.getEngine().getVenueState().users().get(did));
+			assertNull(collected.getEngine().getVenueState().users().user(did));
 			assertNull(collected.getEngine().getAuth().getUser(id));
 			assertThrows(covia.exception.AuthException.class, () -> collected.getEngine().admitUser(did));
 			live = ((EtchStore) collected.getStore()).getFile();
@@ -236,7 +233,7 @@ public class EtchGcOnStartTest {
 		} finally { recreated.close(); }
 		VenueServer restarted = VenueServer.launch(cfg);
 		try {
-			assertNotNull(restarted.getEngine().getVenueState().users().get(did));
+			assertNotNull(restarted.getEngine().getVenueState().users().user(did));
 			assertFalse(restarted.getEngine().getAuth().isAuthenticationKeyActive(id, key),
 				"an old bootstrap declaration cannot reinstall the erased account's key");
 		} finally { restarted.close(); }

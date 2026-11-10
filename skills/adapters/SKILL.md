@@ -95,11 +95,11 @@ loop retrying; explain and pick a route:
 1. **Call as the venue** — authenticate with the venue's own key pair (config `seed`, `keystore`, or the auto-generated `venue.key` beside a persistent store; an ephemeral `local-dev.json` venue has a fresh random key each start, so this route needs a persistent config such as `dev/local.json`). From the Java SDK:
    ```java
    AKeyPair kp = AKeyPair.create(Blob.fromHex(seedHex));
-   Venue v = Grid.connect("http://localhost:8080", VenueAuth.keyPair(kp, venueDID));      // did:key venue
-   // did:web venue: VenueAuth.identityKeyPair(kp, venueDID, venueDID)
+   Venue v = Grid.connect("http://localhost:8080", VenueAuth.keyPair(kp));      // did:key venue
+   // did:web venue: VenueAuth.namedKeyPair(kp, venueDID)
    v.run("v/ops/venue/adapters", Maps.empty()).get();
    ```
-   The same strategy's `mintToken()` gives a bearer JWT for `curl … -H "Authorization: Bearer <jwt>" POST /api/v1/run` or an MCP client `headers` block. Never paste the seed into chat or commit it.
+   The same strategy's `mintToken(venueDID)` gives a bearer JWT for `curl … -H "Authorization: Bearer <jwt>" POST /api/v1/run` or an MCP client `headers` block. Never paste the seed into chat or commit it.
 2. **In-process operator code** — anything holding the `Engine` uses `engine.jobs().invokeOperation("v/ops/venue/...", input, engine.venueContext())`. This is how tests and embedded venues do it.
 3. **Venue-issued delegation** — for a standing admin identity, mint a UCAN *as the venue* (route 1 or 2, `v/ops/ucan/issue` with `att: [{"with": "<venueDID>/adapters", "can": "adapter/manage"}]`, `aud` = the admin's DID); the admin then presents it through the `ucans` grant channel. Authentication remains a separate bearer credential. Same model as `user:create`. See `/ucan`.
 

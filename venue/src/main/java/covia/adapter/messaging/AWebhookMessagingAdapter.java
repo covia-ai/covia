@@ -4,6 +4,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Supplier;
 
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -18,6 +19,10 @@ import covia.adapter.relay.RelayHandler;
 import covia.adapter.webhook.WebhookHandler;
 import covia.adapter.webhook.WebhookRequest;
 import covia.adapter.webhook.WebhookResponse;
+import covia.exception.InvalidInputException;
+import covia.exception.NotSupportedException;
+import covia.exception.UnavailableException;
+import covia.venue.AdapterState;
 import covia.venue.RequestContext;
 
 /**
@@ -116,30 +121,41 @@ public abstract class AWebhookMessagingAdapter<S extends WebhookBotSpec>
 		String template = "/agent-templates/" + getName() + ".json";
 		if (getClass().getResource(template) != null) installAgentTemplate(getName(), template);
 	}
-	@Override protected final void deleteRuntimeState(RequestContext ctx, String name) {
-		state(ctx.getUserDID()).delete(userStatePath(ctx.getUserDID(), "inbox/" + name));
-		state(ctx.getUserDID()).delete(userStatePath(ctx.getUserDID(), "relay/" + name));
+	@Override protected final void deleteRuntimeState(AdapterState draft, AString owner, String name) {
+		draft.delete(userStatePath(owner, "inbox/" + name));
+		draft.delete(userStatePath(owner, "relay/" + name));
 	}
 	@Override public final CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
-		requireInvoke(ctx);
 		String op = getSubOperation(meta);
 		return CompletableFuture.supplyAsync(() -> switch (op == null ? "" : op) {
 			case "create" -> handleCreate(ctx, input);
 			case "delete" -> handleDelete(ctx, input);
 			case "bots" -> handleBots(ctx);
-			case "send" -> {
-				var in = MessagingSettings.object(input);
-				WebhookBot<S> bot = selectBot(ctx, RT.ensureString(in.get(MessagingSettings.key("bot"))));
-				requireBotAccess(ctx, bot, MessagingSettings.key(getName() + "/send"));
-				bot.requireReady();
-				yield send(bot, in);
-			}
+			case "send" -> callerInput(() -> handleSend(ctx, MessagingSettings.object(input)));
 			case "download" -> {
-				if (!offersDownload()) throw new UnsupportedOperationException(UNSUPPORTED.formatted(op));
-				yield handleDownload(ctx, MessagingSettings.object(input));
+				if (!offersDownload()) throw new NotSupportedException(UNSUPPORTED.formatted(op));
+				yield callerInput(() -> handleDownload(ctx, MessagingSettings.object(input)));
 			}
-			default -> throw new UnsupportedOperationException(UNSUPPORTED.formatted(op));
+			default -> throw new NotSupportedException(UNSUPPORTED.formatted(op));
 		}, VIRTUAL_EXECUTOR);
+	}
+	/**
+	 * Runs an operation on the caller's fields: the shared settings parser
+	 * ({@link MessagingSettings}) refuses them with IllegalArgumentException,
+	 * which here means the caller's input is wrong.
+	 */
+	private static ACell callerInput(Supplier<ACell> operation) {
+		try {
+			return operation.get();
+		} catch (IllegalArgumentException e) {
+			throw new InvalidInputException(e.getMessage(), e);
+		}
+	}
+	private ACell handleSend(RequestContext ctx, AMap<AString, ACell> in) {
+		WebhookBot<S> bot = selectBot(ctx, RT.ensureString(in.get(MessagingSettings.key("bot"))));
+		requireBotAccess(ctx, bot, MessagingSettings.key(getName() + "/send"));
+		bot.requireReady();
+		return send(bot, in);
 	}
 	private String downloadResource() { return "/adapters/" + getName() + "/download.json"; }
 	private boolean offersDownload() { return getClass().getResource(downloadResource()) != null; }
@@ -159,20 +175,22 @@ public abstract class AWebhookMessagingAdapter<S extends WebhookBotSpec>
 		requireBotAccess(ctx, bot, MessagingSettings.key(getName() + "/download"));
 		String id = MessagingSettings.required(in, "media_id");
 		ACell destination = in.get(MessagingSettings.key("destination"));
-		if (destination != null && (!(destination instanceof AString d) || d.isBlank())) throw new IllegalArgumentException(MessagingMedia.INVALID_DESTINATION);
+		if (destination != null && (!(destination instanceof AString d) || d.isBlank())) throw new InvalidInputException(MessagingMedia.INVALID_DESTINATION);
 		ACell fileName = in.get(MessagingSettings.key("fileName"));
 		if (fileName != null && !(fileName instanceof AString f && MessagingMedia.safeFileName(f.toString()))) {
-			throw new IllegalArgumentException(MessagingMedia.INVALID_FILE_NAME);
+			throw new InvalidInputException(MessagingMedia.INVALID_FILE_NAME);
 		}
 		MessagingMedia.Fetched fetched = fetchMedia(bot, Maps.of("id", id));
 		AString owner = bot.spec().userDID(engine);
-		String directory = destination == null ? MessagingMedia.ownerDirectory(owner, getName()) : destination.toString();
+		RequestContext writer = destination == null ? engine.context(owner) : ctx;
+		String directory = destination == null
+			? MessagingMedia.ensureOwnerDirectory(engine, owner, getName(), writer) : destination.toString();
 		String name = fileName == null ? MessagingMedia.fallbackName(bot.spec().name(), id, fetched.contentType()) : fileName.toString();
 		try {
 			return MessagingMedia.store(engine, fetched.bytes(), fetched.contentType(), directory, name,
-				destination == null ? RequestContext.of(owner) : ctx).assoc(MessagingSettings.key("media_id"), Strings.create(id));
+				writer).assoc(MessagingSettings.key("media_id"), Strings.create(id));
 		} catch (java.io.IOException e) {
-			throw new IllegalStateException(MessagingMedia.UNSUPPORTED_DESTINATION + ": " + directory);
+			throw new UnavailableException(MessagingMedia.UNSUPPORTED_DESTINATION + ": " + directory, e);
 		}
 	}
 	@Override public final WebhookResponse handleWebhook(String binding, WebhookRequest request) {

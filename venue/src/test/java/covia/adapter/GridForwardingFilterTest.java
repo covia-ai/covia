@@ -14,16 +14,19 @@ import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
+import covia.venue.Engine;
 import covia.venue.RequestContext;
+import covia.venue.TestEngine;
 
 /**
  * Deterministic unit tests for the grid hop's token relay filter (covia#100
  * C3a): relay only what could be admissible at the target, drop the provably
- * inert (expired / unparseable / wrong audience), keep identity credentials
- * out of the grant channel, and validate {@code venue/relay} only as authority.
+ * inert (expired / unparseable / wrong audience), and keep identity credentials
+ * out of the grant channel.
  */
 public class GridForwardingFilterTest {
 
+	private final Engine engine = TestEngine.ENGINE;
 	private final AKeyPair aliceKP = AKeyPair.generate();
 	private final AKeyPair bobKP = AKeyPair.generate();
 	private final AKeyPair venueKP = AKeyPair.generate();
@@ -50,12 +53,11 @@ public class GridForwardingFilterTest {
 		String grantToBob = token(aliceKP, BOB, ALICE + "/w/", "crud/read", 3600);
 		String identityForTarget = token(bobKP, VENUE, null, null, 300);
 		RequestContext ctx = ctxWith(BOB, grantToBob, identityForTarget);
-		List<UCAN> parsed = GridAdapter.parsedRawUcans(ctx,
-			convex.auth.did.DIDVerifier.CONVEX);
+		List<UCAN> parsed = VenueConnection.parsedRawUcans(engine, ctx);
 
 		assertEquals(identityForTarget,
-			GridAdapter.identityCredential(ctx, parsed, BOB, VENUE));
-		assertEquals(List.of(grantToBob), GridAdapter.admissibleGrants(ctx, parsed, BOB),
+			VenueConnection.identityCredential(engine, ctx, parsed, BOB, VENUE));
+		assertEquals(List.of(grantToBob), VenueConnection.admissibleGrants(engine, ctx, parsed, BOB),
 			"the identity credential travels as authentication, never as a grant");
 	}
 
@@ -68,8 +70,8 @@ public class GridForwardingFilterTest {
 		String chainToVenue = token(aliceKP, VENUE, ALICE + "/w/", "crud/read", 3600);
 		RequestContext ctx = ctxWith(BOB, grantToBob, chainToVenue);
 
-		List<String> out = GridAdapter.admissibleGrants(ctx,
-			GridAdapter.parsedRawUcans(ctx, convex.auth.did.DIDVerifier.CONVEX), VENUE);
+		List<String> out = VenueConnection.admissibleGrants(engine, ctx,
+			VenueConnection.parsedRawUcans(engine, ctx), VENUE);
 		assertNotNull(out);
 		assertEquals(List.of(chainToVenue), out,
 			"only the venue-audienced token is relayed when the venue is the principal");
@@ -79,35 +81,9 @@ public class GridForwardingFilterTest {
 	public void testExpiredAndGarbageDropped() {
 		String expired = token(aliceKP, BOB, ALICE + "/w/", "crud/read", -3600);
 		RequestContext ctx = ctxWith(BOB, expired, "not-a-jwt");
-		assertNull(GridAdapter.admissibleGrants(ctx,
-			GridAdapter.parsedRawUcans(ctx, convex.auth.did.DIDVerifier.CONVEX), BOB),
+		assertNull(VenueConnection.admissibleGrants(engine, ctx,
+			VenueConnection.parsedRawUcans(engine, ctx), BOB),
 			"expired and unparseable tokens are provably inert — nothing to relay");
 	}
 
-	@Test
-	public void testRelayGrantRecognisedOnlyFromCaller() {
-		String bobRelay = token(bobKP, VENUE, BOB.toString(), "venue/relay", 3600);
-		// This answers only whether an explicit venue-mode request is authorised.
-		RequestContext bobCtx = ctxWith(BOB, bobRelay);
-		assertTrue(GridAdapter.hasRelayGrant(
-			GridAdapter.parsedRawUcans(bobCtx, convex.auth.did.DIDVerifier.CONVEX), BOB, VENUE));
-		// Carol cannot exercise Bob's grant.
-		AString CAROL = UCAN.toDIDKey(AKeyPair.generate().getAccountKey());
-		RequestContext carolCtx = ctxWith(CAROL, bobRelay);
-		assertFalse(GridAdapter.hasRelayGrant(
-			GridAdapter.parsedRawUcans(carolCtx, convex.auth.did.DIDVerifier.CONVEX), CAROL, VENUE));
-	}
-
-	@Test
-	public void testRelayGrantRequiresExactResourceAndAbility() {
-		String grantOnly = token(bobKP, VENUE, ALICE + "/w/", "crud/read", 3600);
-		RequestContext ctx = ctxWith(BOB, grantOnly);
-		assertFalse(GridAdapter.hasRelayGrant(
-			GridAdapter.parsedRawUcans(ctx, convex.auth.did.DIDVerifier.CONVEX), BOB, VENUE));
-
-		String wrongResource = token(bobKP, VENUE, ALICE.toString(), "venue/relay", 3600);
-		RequestContext wrong = ctxWith(BOB, wrongResource);
-		assertFalse(GridAdapter.hasRelayGrant(
-			GridAdapter.parsedRawUcans(wrong, convex.auth.did.DIDVerifier.CONVEX), BOB, VENUE));
-	}
 }

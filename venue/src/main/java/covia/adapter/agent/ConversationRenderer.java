@@ -13,7 +13,7 @@ import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.api.Fields;
-import covia.venue.AgentState;
+import covia.exception.InvalidInputException;
 
 /**
  * Provider-neutral rendering policy for persisted agent conversations.
@@ -27,6 +27,14 @@ import covia.venue.AgentState;
 public final class ConversationRenderer {
 
 	private static final AString K_TRUNCATED = Strings.intern("truncated");
+	private static final AString K_COMPACTED = Strings.intern("compacted");
+	private static final AString K_FROM = Strings.intern("from");
+	private static final AString K_TO = Strings.intern("to");
+
+	/** The most of a failed tool result's text the model is shown; the history keeps it all. */
+	public static final int MAX_TOOL_FAILURE_CHARS = 1024;
+	/** Follows a failed tool result cut for the model: how many characters are not shown. */
+	public static final String TOOL_FAILURE_CUT = "\n… (%d more characters not shown)";
 
 	private ConversationRenderer() {}
 
@@ -39,7 +47,12 @@ public final class ConversationRenderer {
 	 * system authority merely because the venue persisted it.
 	 */
 	public record HistoricalView(AVector<ACell> messages, AString firstUserContent,
-			long updated, long turnCount, boolean truncated) {}
+			long updated, long turnCount, boolean truncated, boolean older) {
+		public HistoricalView(AVector<ACell> messages, AString firstUserContent,
+				long updated, long turnCount, boolean truncated) {
+			this(messages, firstUserContent, updated, turnCount, truncated, false);
+		}
+	}
 
 	/**
 	 * Builds the historical projection while retaining at most {@code maxTurns}
@@ -55,9 +68,22 @@ public final class ConversationRenderer {
 	/** Historical projection with bounded recursive expansion of compacted
 	 * archives. Depth zero shows summaries; each higher level opens one nested
 	 * {@code items} vector before applying the same safe turn projection. */
-	@SuppressWarnings("unchecked")
 	public static HistoricalView historical(AMap<AString, ACell> frame,
 			int maxTurns, int maxChars, int archiveDepth) {
+		return historical(frame, maxTurns, maxChars, archiveDepth, 0);
+	}
+
+	/**
+	 * As above, a page further back: the newest {@code skip} projected messages
+	 * are passed over, and {@link HistoricalView#older} says whether messages
+	 * older than the page remain, so a reader can page back to the start. A
+	 * compacted summary in the projection is marked {@code compacted} with the
+	 * {@code turns} it stands for, so it is never taken for something said.
+	 */
+	@SuppressWarnings("unchecked")
+	public static HistoricalView historical(AMap<AString, ACell> frame,
+			int maxTurns, int maxChars, int archiveDepth, int skip) {
+		if (skip < 0) throw new IllegalArgumentException("Historical view skip must be non-negative");
 		if (maxTurns < 0 || maxChars < 0) {
 			throw new IllegalArgumentException("Historical view limits must be non-negative");
 		}
@@ -70,6 +96,9 @@ public final class ConversationRenderer {
 		}
 
 		conversation = expandArchives(conversation, archiveDepth);
+		// The page plus everything newer than it; the newer part is dropped below.
+		int keep = (maxTurns == 0) ? 0 : (int) Math.min((long) maxTurns + skip, Integer.MAX_VALUE);
+		long kept = 0;
 		ArrayDeque<AMap<AString, ACell>> tail = new ArrayDeque<>();
 		ArrayDeque<AMap<AString, ACell>> pending = new ArrayDeque<>();
 		long pendingCount = 0;
@@ -86,7 +115,15 @@ public final class ConversationRenderer {
 				turnCount += (archivedTurns instanceof CVMLong n) ? n.longValue() : 1;
 				if (firstCompletedUser == null) firstCompletedUser = firstUser(entry);
 				updated = Math.max(updated, latestTimestamp(entry));
-				retain(tail, renderSegment(entry, Labels.BRACKET), maxTurns);
+				AMap<AString, ACell> marked = renderSegment(entry, Labels.BRACKET)
+					.assoc(K_COMPACTED, CVMBool.TRUE)
+					.assoc(GoalTreeContext.K_TURNS, (archivedTurns != null) ? archivedTurns : CVMLong.ONE);
+				long[] covered = coveredTurns(entry);
+				if (covered != null) {
+					marked = marked.assoc(K_FROM, CVMLong.create(covered[0])).assoc(K_TO, CVMLong.create(covered[1]));
+				}
+				retain(tail, marked, keep);
+				kept++;
 				continue;
 			}
 			if (!GoalTreeContext.isLiveTurn(entry)) continue;
@@ -95,11 +132,10 @@ public final class ConversationRenderer {
 			if (GoalTreeContext.ROLE_USER.equals(role)) {
 				AMap<AString, ACell> message = toHistoricalMessage(turn);
 				if (message == null) continue;
-				AString content = RT.ensureString(message.get(GoalTreeContext.K_CONTENT));
-				if (pendingFirst == null) pendingFirst = content;
+				if (pendingFirst == null) pendingFirst = firstWords(turn, message);
 				pendingCount++;
 				pendingUpdated = Math.max(pendingUpdated, timestamp(turn));
-				retain(pending, message, maxTurns);
+				retain(pending, message, keep);
 				continue;
 			}
 			if (!GoalTreeContext.ROLE_ASSISTANT.equals(role) || hasToolCalls(turn)
@@ -108,9 +144,11 @@ public final class ConversationRenderer {
 			if (firstCompletedUser == null) firstCompletedUser = pendingFirst;
 			turnCount += pendingCount + 1;
 			for (AMap<AString, ACell> message : pending) {
-				retain(tail, message, maxTurns);
+				retain(tail, message, keep);
+				kept++;
 			}
-			retain(tail, toHistoricalMessage(turn), maxTurns);
+			retain(tail, toHistoricalMessage(turn), keep);
+			kept++;
 			updated = Math.max(updated, Math.max(pendingUpdated, timestamp(turn)));
 			pending.clear();
 			pendingCount = 0;
@@ -118,7 +156,9 @@ public final class ConversationRenderer {
 			pendingFirst = null;
 		}
 
-		boolean truncated = turnCount > tail.size();
+		boolean older = keep > 0 && kept > keep;
+		for (int i = 0; i < skip && !tail.isEmpty(); i++) tail.removeLast();
+		boolean truncated = older || (skip == 0 && turnCount > tail.size());
 		ArrayDeque<AMap<AString, ACell>> bounded = new ArrayDeque<>();
 		int remaining = maxChars;
 		Object[] selected = tail.toArray();
@@ -144,7 +184,43 @@ public final class ConversationRenderer {
 
 		AVector<ACell> messages = Vectors.empty();
 		for (AMap<AString, ACell> message : bounded) messages = messages.conj(message);
-		return new HistoricalView(messages, firstCompletedUser, updated, turnCount, truncated);
+		return new HistoricalView(messages, firstCompletedUser, updated, turnCount, truncated, older);
+	}
+
+	/**
+	 * The {@link #historical} projection of what a frame holds outside its
+	 * current context: the turns its compaction summaries stand for, at their
+	 * positions, earlier summaries among them. The entries in the context are
+	 * left out, so a frame never compacted projects nothing.
+	 */
+	public static HistoricalView historicalBeforeContext(AMap<AString, ACell> frame,
+			int maxTurns, int maxChars, int archiveDepth, int skip) {
+		AVector<ACell> conversation = GoalTreeContext.archivedConversation(frame);
+		AVector<ACell> outside = Vectors.empty();
+		for (long i = 0; conversation != null && i < conversation.count(); i++) {
+			ACell entry = conversation.get(i);
+			if (!GoalTreeContext.isSegment(entry)) continue;
+			AVector<ACell> items = RT.ensureVector(RT.getIn(entry, GoalTreeContext.K_ITEMS));
+			if (items != null) outside = outside.concat(items);
+		}
+		return historical(Maps.of(GoalTreeContext.K_CONVERSATION, outside), maxTurns, maxChars, archiveDepth, skip);
+	}
+
+	/**
+	 * The {@link #historical} projection of turns {@code from} to {@code to} of
+	 * a frame's history, both included, numbered as a compaction summary names
+	 * them; they must lie before the frame's current context. A summary among
+	 * them names its own turns, to be read the same way.
+	 */
+	public static HistoricalView historicalTurns(AMap<AString, ACell> frame, long from, long to,
+			int maxTurns, int maxChars, int skip) {
+		ConversationHistory history = ConversationHistory.open(frame);
+		if (from < 0 || to < from) throw new InvalidInputException("Turns run from a first to a last, from 0");
+		if (to >= history.contextStart()) {
+			throw new InvalidInputException("Turns from " + history.contextStart() + " on are in the current context");
+		}
+		AVector<ACell> entries = history.read(from, to + 1, Integer.MAX_VALUE).entries();
+		return historical(Maps.of(GoalTreeContext.K_CONVERSATION, entries), maxTurns, maxChars, 0, skip);
 	}
 
 	@SuppressWarnings("unchecked")
@@ -175,7 +251,14 @@ public final class ConversationRenderer {
 			return null;
 		}
 		if (!GoalTreeContext.ROLE_USER.equals(RT.getIn(entry, GoalTreeContext.K_ROLE))) return null;
-		return RT.ensureString(RT.getIn(entry, GoalTreeContext.K_CONTENT));
+		return firstWords(entry, null);
+	}
+
+	/** A user turn's words where it has them, else its projected content. */
+	private static AString firstWords(ACell turn, AMap<AString, ACell> projected) {
+		AString words = GoalTreeContext.turnText(RT.getIn(turn, GoalTreeContext.K_CONTENT));
+		if (words != null) return words;
+		return (projected != null) ? RT.ensureString(projected.get(GoalTreeContext.K_CONTENT)) : null;
 	}
 
 	private static long latestTimestamp(ACell entry) {
@@ -209,6 +292,9 @@ public final class ConversationRenderer {
 	}
 
 	public static AVector<ACell> renderFull(AMap<AString, ACell> frame, AString dialect) {
+		// A legacy frame renders as it will once migrated, so that migration never
+		// changes what the model is given: summaries name their turns either way.
+		if (frame != null && !frame.containsKey(GoalTreeContext.K_HISTORY)) frame = GoalTreeContext.migrateFrame(frame);
 		AVector<ACell> conversation = GoalTreeContext.activeConversation(frame);
 		if (conversation == null || conversation.count() == 0) return Vectors.empty();
 
@@ -218,10 +304,28 @@ public final class ConversationRenderer {
 			if (GoalTreeContext.isSegment(entry)) {
 				messages = messages.conj(renderSegment(entry, dialect));
 			} else if (GoalTreeContext.isLiveTurn(entry)) {
-				messages = messages.conj(entry);
+				messages = messages.conj(withFailureCut(entry));
 			}
 		}
 		return messages;
+	}
+
+	/**
+	 * A stored turn as the model sees it: a failed tool result longer than
+	 * {@link #MAX_TOOL_FAILURE_CHARS} is cut, saying how much is not shown.
+	 * The cut depends only on the turn, so every request renders it alike.
+	 */
+	private static ACell withFailureCut(ACell turn) {
+		if (!GoalTreeContext.ROLE_TOOL.equals(RT.getIn(turn, GoalTreeContext.K_ROLE))
+				|| !CVMBool.TRUE.equals(RT.getIn(turn, AbstractLLMAdapter.K_IS_ERROR))) return turn;
+		AString content = RT.ensureString(RT.getIn(turn, GoalTreeContext.K_CONTENT));
+		if (content == null) return turn;
+		String text = content.toString();
+		if (text.length() <= MAX_TOOL_FAILURE_CHARS) return turn;
+		int cut = MAX_TOOL_FAILURE_CHARS;
+		if (Character.isHighSurrogate(text.charAt(cut - 1))) cut--;
+		return RT.ensureMap(turn).assoc(GoalTreeContext.K_CONTENT,
+			Strings.create(text.substring(0, cut) + TOOL_FAILURE_CUT.formatted(text.length() - cut)));
 	}
 
 	/**
@@ -272,7 +376,7 @@ public final class ConversationRenderer {
 					for (ACell block : blocks) {
 						ACell type = RT.getIn(block, "type");
 						if (!Strings.create("text").equals(type) && !Strings.create("image").equals(type)) {
-							throw new IllegalArgumentException("User content blocks must have type text or image");
+							throw new InvalidInputException("User content blocks must have type text or image");
 						}
 						rendered = rendered.conj(block);
 					}
@@ -319,9 +423,28 @@ public final class ConversationRenderer {
 	private static AMap<AString, ACell> renderSegment(ACell entry, AString dialect) {
 		AMap<AString, ACell> segment = (AMap<AString, ACell>) entry;
 		AString summary = RT.ensureString(segment.get(GoalTreeContext.K_SUMMARY));
-		ACell turns = segment.get(GoalTreeContext.K_TURNS);
-		return Labels.message(GoalTreeContext.ROLE_ASSISTANT, dialect, Labels.Kind.COMPACTED,
-			(summary != null) ? summary.toString() : "",
-			(turns != null) ? turns.toString() : "?");
+		String body = (summary != null) ? summary.toString() : "";
+		long[] turns = coveredTurns(segment);
+		if (turns != null) {
+			// The turns it stands for, by their numbers in the session's history,
+			// so a reader can ask for exactly those turns back.
+			return Labels.message(GoalTreeContext.ROLE_ASSISTANT, dialect, Labels.Kind.COMPACTED_TURNS, body,
+				Long.toString(turns[0]), Long.toString(turns[1]));
+		}
+		ACell count = segment.get(GoalTreeContext.K_TURNS);
+		return Labels.message(GoalTreeContext.ROLE_ASSISTANT, dialect, Labels.Kind.COMPACTED, body,
+			(count != null) ? count.toString() : "?");
+	}
+
+	/**
+	 * The first and last turn a summary stands for, numbered by position in
+	 * its frame's history ({@code historyRange} is half-open), or null for a
+	 * legacy segment, which keeps its turns nested instead.
+	 */
+	public static long[] coveredTurns(ACell entry) {
+		AVector<ACell> range = RT.ensureVector(RT.getIn(entry, GoalTreeContext.K_HISTORY_RANGE));
+		if (range == null || range.count() != 2 || !(range.get(0) instanceof CVMLong start)
+				|| !(range.get(1) instanceof CVMLong end) || end.longValue() <= start.longValue()) return null;
+		return new long[] {start.longValue(), end.longValue() - 1};
 	}
 }

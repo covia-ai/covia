@@ -13,6 +13,7 @@ import convex.core.data.Strings;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
+import covia.exception.ConfigurationException;
 import covia.venue.Engine;
 import covia.adapter.messaging.MessagingBotSpec;
 
@@ -93,13 +94,13 @@ public record BotSpec(
 	 * call time, because the public principal's DID is only known once the
 	 * adapter is installed.
 	 *
-	 * @throws IllegalStateException when the spec names the public principal
+	 * @throws ConfigurationException when the spec names the public principal
 	 *         but the venue has public access disabled
 	 */
 	public AString userDID(Engine engine) {
 		if (!PUBLIC_USER.equals(userRef)) return Strings.create(userRef);
 		if (engine == null || !engine.config().isPublicAccess()) {
-			throw new IllegalStateException("bot '" + name + "' acts as \"public\" but public access "
+			throw new ConfigurationException("bot '" + name + "' acts as \"public\" but public access "
 				+ "is disabled on this venue (auth.public.enabled) — name an explicit DID");
 		}
 		return Strings.create(engine.getDIDString() + ":public");
@@ -133,7 +134,7 @@ public record BotSpec(
 	/** A Bot API chat or user target as a Telegram id; null for anything else ({@code @channel}, blank…). */
 	static Long targetId(Object target) {
 		if (target == null) return null;
-		String s = String.valueOf(target).trim();
+		String s = String.valueOf(target);
 		if (!s.matches("-?\\d+")) return null;
 		try {
 			return Long.parseLong(s);
@@ -221,7 +222,7 @@ public record BotSpec(
 				if (id != null) {
 					ids.add(id.longValue());
 				} else if (e instanceof AString s) {
-					String v = s.toString().trim();
+					String v = s.toString();
 					if (v.matches("-?\\d+")) {
 						ids.add(Long.parseLong(v));
 					} else {

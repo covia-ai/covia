@@ -21,6 +21,7 @@ import convex.core.data.AString;
 import convex.core.data.Maps;
 import convex.core.util.JSON;
 import covia.adapter.AAdapter;
+import covia.adapter.messaging.ChannelAuthentication;
 import covia.adapter.messaging.MessagingConnection;
 import covia.adapter.messaging.MessagingSettings;
 import covia.adapter.messaging.WebhookBot;
@@ -108,7 +109,7 @@ final class SocketModeConnection implements MessagingConnection, WebSocket.Liste
 				try {
 					var payload = MessagingSettings.object(envelope.get(MessagingSettings.key("payload")));
 					boolean bound = false;
-					for (WebhookBot<BotSpec> bot : bots) bound |= adapter.admit(bot, payload);
+					for (WebhookBot<BotSpec> bot : bots) bound |= adapter.admit(bot, payload, ChannelAuthentication.PROVIDER_SESSION);
 					if (!bound) log.debug("Slack Socket Mode: dropped an event for an installation without a binding");
 				} catch (IllegalArgumentException e) {
 					log.debug("Slack Socket Mode: dropped a malformed event");

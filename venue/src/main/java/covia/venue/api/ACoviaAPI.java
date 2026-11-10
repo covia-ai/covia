@@ -5,6 +5,7 @@ import org.slf4j.LoggerFactory;
 
 import convex.api.ContentTypes;
 import convex.core.util.JSON;
+import covia.exception.FaultException;
 import covia.grid.Venue;
 import covia.venue.Engine;
 import covia.venue.LocalVenue;
@@ -125,10 +126,12 @@ public abstract class ACoviaAPI  {
 	}
 	
 	public void buildError(Context ctx,int status,String message) {
-		if (status<400) throw new IllegalArgumentException("Unlikely HTTP error code: "+status);
-		buildRawResult(ctx,"{\"error\": \""+JSON.escape(message)+"\"}");
-		ctx.header("Content-type", ContentTypes.JSON);
-		ctx.status(status);
+		ApiErrors.write(ctx, status, message);
+	}
+
+	/** Answers a storage failure: the venue's fault, logged once, its text never sent. */
+	protected void storageFailure(Context ctx, String what, java.io.IOException e) {
+		buildError(ctx, 500, FaultException.within(what, FaultException.VENUE, e).getMessage());
 	}
 
 }

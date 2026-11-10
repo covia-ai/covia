@@ -3,6 +3,7 @@ package covia.venue.api;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
@@ -285,23 +286,6 @@ public class A2ACodecTest {
 		assertEquals("ctx-default", m.contextId());
 		assertEquals("task-default", m.taskId());
 		assertNotNull(m.messageId()); // auto-generated UUID
-	}
-
-	// ======== extractTaskId ========
-
-	@Test
-	public void extractTaskId_absentReturnsNull() {
-		Map<String, Object> params = Map.of("message", Map.of("role", "user"));
-		assertNull(A2ACodec.extractTaskId(params));
-	}
-
-	@Test
-	public void extractTaskId_presentReturnsBlob() {
-		Map<String, Object> params = Map.of("message",
-				Map.of("role", "user", "taskId", "000000000000000000000000deadbeef"));
-		Blob id = A2ACodec.extractTaskId(params);
-		assertNotNull(id);
-		assertEquals("000000000000000000000000deadbeef", id.toHexString());
 	}
 
 	// ======== History ========

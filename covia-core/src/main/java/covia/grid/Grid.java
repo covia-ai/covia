@@ -68,6 +68,19 @@ public class Grid {
 	}
 
 	private static Venue connectWebDID(DID did, VenueAuth auth) {
+		return VenueHTTP.create(webDIDAddress(did), did.toString(), auth);
+	}
+
+	/**
+	 * The address a did:web venue is reached at, and so the one place it can
+	 * prove its DID: {@code https://<host>[:port]}, or plain http for
+	 * {@code localhost} and {@code 127.0.0.1}.
+	 *
+	 * @param did A did:web DID naming a host, e.g. {@code did:web:venue.example.com%3A3000}
+	 * @return The venue's base address
+	 * @throws IllegalArgumentException if the DID does not name a host
+	 */
+	public static URI webDIDAddress(DID did) {
 		// did:web encodes an optional port with a percent-encoded colon
 		// (did:web:example.com%3A3000) — decode it for the URL form.
 		String host = did.getID().replace("%3A", ":").replace("%3a", ":");
@@ -76,7 +89,7 @@ public class Grid {
 		String hostName = host.contains(":") ? host.substring(0, host.indexOf(':')) : host;
 		String scheme = (hostName.equals("localhost") || hostName.equals("127.0.0.1"))
 			? "http" : "https";
-		return VenueHTTP.create(URI.create(scheme + "://" + host), auth);
+		return URI.create(scheme + "://" + host);
 	}
 
 	/**
@@ -95,14 +108,30 @@ public class Grid {
 	 * @return Venue instance
 	 */
 	public static Venue connect(String conn, VenueAuth auth) {
+		return connect(conn, null, auth);
+	}
+
+	/**
+	 * Connect to a grid venue whose DID is known. Credentials are audienced to
+	 * that DID, and none is sent unless the venue reached presents it.
+	 *
+	 * @param conn Connection string (URL or DID)
+	 * @param venueDID The venue's DID, or null to take the DID the venue
+	 *        proves at its address; a DID connection string must equal it
+	 * @param auth Authentication provider
+	 * @return Venue instance
+	 */
+	public static Venue connect(String conn, String venueDID, VenueAuth auth) {
 		if (conn == null || conn.isBlank()) {
 			throw new IllegalArgumentException("Venue reference is required");
 		}
-		conn=conn.trim();
 		if (conn.startsWith("http")) {
 			URI uri=URI.create(conn);
-			return VenueHTTP.create(uri, auth);
+			return VenueHTTP.create(uri, venueDID, auth);
 		} else if (conn.startsWith("did")){
+			if (venueDID != null && !venueDID.equals(conn)) {
+				throw new IllegalArgumentException("Venue " + conn + " is not " + venueDID);
+			}
 			return connect(DID.fromString(conn), auth);
 		}
 		if (!conn.contains(":")) {

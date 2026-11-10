@@ -66,11 +66,10 @@ public class NamedUserAuthTest {
 		bobKeyDID = UCAN.toDIDKey(bobKey.getAccountKey());
 		rotationKeyDID = UCAN.toDIDKey(rotationKey.getAccountKey());
 		server = VenueServer.launch(Maps.of(
-			Config.PORT, 0,
+			Config.PORT, 0, Config.STORE, "memory",
 			Config.HOSTNAME, "named-auth.example",
 			Config.AUTH, Maps.of(
-				Config.PUBLIC, Maps.of(Config.ENABLED, false),
-				Config.AUDIENCE, "require"),
+				Config.PUBLIC, Maps.of(Config.ENABLED, false)),
 			Config.USERS, Maps.of(
 				Config.AUTO_CREATE, false,
 				Config.BOOTSTRAP, Maps.of(
@@ -91,7 +90,7 @@ public class NamedUserAuthTest {
 	@Test
 	void bootstrapCreatesNamedAccountsAndAuthenticatorRecords() {
 		Engine engine = server.getEngine();
-		assertNotNull(engine.getVenueState().users().get(aliceDID));
+		assertNotNull(engine.getVenueState().users().user(aliceDID));
 		assertEquals(aliceDID, engine.getAuth().getUser(Strings.create("alice")).get(Fields.DID));
 		assertTrue(engine.getAuth().isAuthenticationKeyActive(
 			Strings.create("alice"), aliceKeyDID));
@@ -130,8 +129,7 @@ public class NamedUserAuthTest {
 		server.getEngine().jobs().invokeInternal("v/ops/covia/write",
 			Maps.of(Fields.PATH, "w/auth-subject-private", Fields.VALUE, value),
 			RequestContext.of(aliceDID)).get(5, TimeUnit.SECONDS);
-		VenueAuth auth = VenueAuth.namedKeyPair(
-			aliceKey, aliceDID.toString(), server.getEngine().getDIDString().toString());
+		VenueAuth auth = VenueAuth.namedKeyPair(aliceKey, aliceDID.toString());
 		assertEquals(aliceDID.toString(), auth.getDID());
 		Job read = client(auth).invokeAndWait(Strings.create("v/ops/covia/read"),
 			Maps.of(Fields.PATH, "w/auth-subject-private"));
@@ -192,18 +190,18 @@ public class NamedUserAuthTest {
 		AString userDID = Strings.create(installDID + ":u:alice");
 		engine.getVenueState().users().create(installDID);
 		String audience = engine.getDIDString().toString();
-		VenueAuth installAuth = VenueAuth.keyPair(installKey, audience);
-		VenueAuth userAuth = VenueAuth.namedKeyPair(installKey, userDID.toString(), audience, 300);
-		assertEquals(userDID, server.authenticator().authenticate(Strings.create(userAuth.mintToken())));
+		VenueAuth installAuth = VenueAuth.keyPair(installKey);
+		VenueAuth userAuth = VenueAuth.namedKeyPair(installKey, userDID.toString(), 300);
+		assertEquals(userDID, server.authenticator().authenticate(Strings.create(userAuth.mintToken(audience))));
 		assertTrue(reason(namedToken(installKey, userDID, userDID, null))
 			.contains(VenueAuthenticator.Reason.AUDIENCE_REQUIRED));
 		try (HttpClient http = HttpClient.newHttpClient()) {
 			URI status = URI.create("http://localhost:" + server.port() + "/api/v1/status");
 			HttpRequest.Builder root = HttpRequest.newBuilder(status);
-			installAuth.apply(root);
+			installAuth.apply(root, () -> audience);
 			assertEquals(200, http.send(root.build(), HttpResponse.BodyHandlers.ofString()).statusCode());
 			HttpRequest.Builder child = HttpRequest.newBuilder(status);
-			userAuth.apply(child);
+			userAuth.apply(child, () -> audience);
 			assertEquals(403, http.send(child.build(), HttpResponse.BodyHandlers.ofString()).statusCode(),
 				"valid child authentication must not borrow the installation's membership");
 			engine.getVenueState().users().create(userDID);
@@ -325,6 +323,7 @@ public class NamedUserAuthTest {
 		assertAccepted(token);
 		engine.deleteUser(engine.venueContext(), did);
 		assertRejected(token);
+		assertThrows(AuthException.class, () -> engine.getAuth().ensureManagedUser(id, did));
 		engine.jobs().invokeInternal("v/ops/user/create", Maps.of("username", id),
 			engine.venueContext()).get(5, TimeUnit.SECONDS);
 		assertRejected(token);

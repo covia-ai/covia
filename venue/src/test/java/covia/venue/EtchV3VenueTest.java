@@ -28,6 +28,7 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.adapter.DLFSAdapter;
 import covia.api.Fields;
+import covia.exception.ConfigurationException;
 import covia.venue.server.VenueServer;
 
 /**
@@ -62,8 +63,7 @@ public class EtchV3VenueTest {
 
 	@Test
 	public void encryptedEtchV3VenuePersistsAcrossRestart() throws Exception {
-		File dir = TestTemp.dir("etch-v3-venue").toFile();
-		String storePath = new File(dir, "venue.etch").getAbsolutePath().replace('\\', '/');
+		String storePath = TestTemp.etchFile("etch-v3-venue").getAbsolutePath().replace('\\', '/');
 		AString value = Strings.create("survives encrypted restart");
 		AString userDID = Strings.create("did:key:z6Mk-test-etch-v3");
 
@@ -94,8 +94,7 @@ public class EtchV3VenueTest {
 
 	@Test
 	public void wrongKeyAndPlainOpenFailClosed() throws Exception {
-		File dir = TestTemp.dir("etch-v3-keys").toFile();
-		String storePath = new File(dir, "venue.etch").getAbsolutePath().replace('\\', '/');
+		String storePath = TestTemp.etchFile("etch-v3-keys").getAbsolutePath().replace('\\', '/');
 
 		VenueServer server = VenueServer.launch(config(storePath, KEY_HEX));
 		try {
@@ -110,7 +109,7 @@ public class EtchV3VenueTest {
 		Exception wrongKey = assertThrows(Exception.class,
 			() -> VenueServer.launch(config(storePath, WRONG_KEY_HEX)).close(),
 			"a wrong Etch encryption key must fail the launch");
-		assertTrue(failureContains(wrongKey, "encrypted under key"),
+		assertTrue(failureHasCause(wrongKey, ConfigurationException.class),
 			"wrong key must fail at hint identification with a diagnostic, got: " + wrongKey);
 
 		// Opening without any etch policy must not succeed either — the file
@@ -127,9 +126,9 @@ public class EtchV3VenueTest {
 		again.close();
 	}
 
-	private static boolean failureContains(Throwable failure, String text) {
+	private static boolean failureHasCause(Throwable failure, Class<? extends Throwable> type) {
 		for (Throwable current = failure; current != null; current = current.getCause()) {
-			if (String.valueOf(current.getMessage()).contains(text)) return true;
+			if (type.isInstance(current)) return true;
 		}
 		return false;
 	}
@@ -139,8 +138,7 @@ public class EtchV3VenueTest {
 		// An explicit publicKeyHint passes through as-is: the file is stamped
 		// with the operator's label and the key function verifies against it,
 		// so create → reopen round-trips under the pinned hint.
-		File dir = TestTemp.dir("etch-v3-hint").toFile();
-		String storePath = new File(dir, "venue.etch").getAbsolutePath().replace('\\', '/');
+		String storePath = TestTemp.etchFile("etch-v3-hint").getAbsolutePath().replace('\\', '/');
 		String pinnedHint =
 			"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 		java.util.function.Function<String, AMap<AString, ACell>> cfg = path -> Maps.of(
@@ -233,8 +231,7 @@ public class EtchV3VenueTest {
 		// embedder's code (KMS / passphrase-derived), the etch policy compiles
 		// with a key FUNCTION, the embedder opens the store itself and adopts
 		// it into the venue. No key ever touches config, env, or disk.
-		File dir = TestTemp.dir("etch-v3-embedder").toFile();
-		File storeFile = new File(dir, "vault.etch");
+		File storeFile = TestTemp.etchFile("etch-v3-vault");
 		byte[] vaultKey = convex.core.data.Blob.fromHex(KEY_HEX).getBytes();
 
 		AMap<AString, ACell> etchPolicy = Maps.of(
@@ -290,8 +287,7 @@ public class EtchV3VenueTest {
 	 */
 	@Test
 	public void concurrentDlfsPromotionsRemainReadableAcrossSyncAndRestart() throws Exception {
-		File dir = TestTemp.dir("etch-v3-dlfs-promotions").toFile();
-		String storePath = new File(dir, "venue.etch").getAbsolutePath().replace('\\', '/');
+		String storePath = TestTemp.etchFile("etch-v3-dlfs-promotions").getAbsolutePath().replace('\\', '/');
 		AString userDID = Strings.create("did:key:z6Mk-test-dlfs-promotions");
 		String driveName = "drive";
 		int writerCount = 6;
@@ -314,6 +310,7 @@ public class EtchV3VenueTest {
 		try {
 			Engine engine = first.getEngine();
 			DLFSAdapter dlfs = (DLFSAdapter) engine.getAdapter("dlfs");
+			dlfs.ensureDrive(RequestContext.of(userDID), "dlfs/" + driveName);
 			Path uploads = driveRoot(dlfs, userDID, driveName).resolve("Uploads");
 			Files.createDirectories(uploads);
 

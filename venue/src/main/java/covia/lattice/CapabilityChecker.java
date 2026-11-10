@@ -3,6 +3,7 @@ package covia.lattice;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.function.Predicate;
 
@@ -14,11 +15,12 @@ import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
-import convex.core.data.Hash;
+import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import covia.api.Abilities;
+import covia.grid.HexId;
 
 /**
  * Checks agent tool calls against declared capability attenuations.
@@ -144,9 +146,13 @@ public class CapabilityChecker {
 	 * Parse the caveats Covia knows how to enforce: {@code gate}, an operation
 	 * that must succeed for the invocation, and {@code url}, a prefix the use's
 	 * destination must fall under. Unknown or malformed caveats are invalid
-	 * rather than silently becoming an unconditional grant.
+	 * rather than silently becoming an unconditional grant, and so is a
+	 * {@code with} that is not a string, which names no resource.
 	 */
 	private static Caveats caveatsOf(AMap<AString, ACell> cap) {
+		if (cap != null && cap.get(Capability.WITH) != null && !(cap.get(Capability.WITH) instanceof AString)) {
+			return Caveats.INVALID;
+		}
 		if (cap == null || !cap.containsKey(Capability.NB)) return Caveats.NONE;
 		AMap<AString, ACell> nb = RT.castMap(cap.get(Capability.NB));
 		if (nb == null) return Caveats.INVALID;
@@ -167,21 +173,22 @@ public class CapabilityChecker {
 	 * Whether a {@code nb.url} caveat covers a destination: the same scheme,
 	 * host and effective port, and a path equal to the caveat's or below it at
 	 * a {@code /} boundary. A caveat path ending in {@code /} covers everything
-	 * under it. Query and fragment never matter; anything unparseable is not
+	 * under it. Both URLs use the outbound normal form, defensively even for
+	 * non-HTTP adapters. Query and fragment never matter; ambiguous or invalid input is not
 	 * covered.
 	 */
 	public static boolean urlCovers(String prefix, String destination) {
 		try {
-			java.net.URI p = new java.net.URI(prefix);
-			java.net.URI d = new java.net.URI(destination);
+			java.net.URI p = covia.utils.HTTPURLs.normalize(prefix);
+			java.net.URI d = covia.utils.HTTPURLs.normalize(destination);
 			if (p.getScheme() == null || p.getHost() == null || d.getScheme() == null || d.getHost() == null) return false;
 			if (!p.getScheme().equalsIgnoreCase(d.getScheme()) || !p.getHost().equalsIgnoreCase(d.getHost())) return false;
 			if (effectivePort(p) != effectivePort(d)) return false;
-			String pp = (p.getPath() == null || p.getPath().isEmpty()) ? "/" : p.getPath();
-			String dp = (d.getPath() == null || d.getPath().isEmpty()) ? "/" : d.getPath();
+			String pp = (p.getRawPath() == null || p.getRawPath().isEmpty()) ? "/" : p.getRawPath();
+			String dp = (d.getRawPath() == null || d.getRawPath().isEmpty()) ? "/" : d.getRawPath();
 			if (pp.endsWith("/")) return dp.startsWith(pp) || (dp + "/").equals(pp);
 			return dp.equals(pp) || dp.startsWith(pp + "/");
-		} catch (java.net.URISyntaxException e) {
+		} catch (covia.exception.InvalidInputException e) {
 			return false;
 		}
 	}
@@ -247,8 +254,8 @@ public class CapabilityChecker {
 	/**
 	 * Normalises verified UCAN token maps so a bare capability resource means
 	 * <b>the token issuer's own namespace</b>: each bare (non-DID, non-scheme),
-	 * non-empty {@code att[i].with} is rewritten to {@code "<iss>/<path>"} (one
-	 * leading slash stripped). Applied recursively through map-form {@code prf}
+	 * non-empty {@code att[i].with} is resolved there ({@link #canonicalResource}).
+	 * Applied recursively through map-form {@code prf}
 	 * chains, each hop against its own issuer — so a bare path in a
 	 * re-delegation binds to the re-delegator, and passing another principal's
 	 * authority onward still requires the absolute form.
@@ -287,17 +294,14 @@ public class CapabilityChecker {
 	 */
 	public static AString bindGate(AString gate, AString owner) {
 		if (gate == null || owner == null || !isBareGate(gate)) return gate;
-		String path = gate.toString();
-		while (path.startsWith("/")) path = path.substring(1);
-		return Strings.create(owner + "/" + path);
+		return Strings.create(canonicalResource(gate.toString(), owner));
 	}
 
 	/** Whether a gate reference is a bare path whose meaning depends on its owner. */
 	static boolean isBareGate(AString gate) {
-		String g = gate.toString();
-		while (g.startsWith("/")) g = g.substring(1);
-		if (g.isEmpty() || g.startsWith("did:") || g.contains("://") || g.startsWith("v/")) return false;
-		return Hash.parse(g) == null;
+		String g = CoviaPath.relative(gate.toString());
+		if (g.isEmpty() || g.startsWith("did:") || isScheme(g) || g.startsWith("v/")) return false;
+		return HexId.parseHash(Strings.create(g)) == null;
 	}
 
 	/** Normalises one token map — full {@code {header, payload, sig}} form or a
@@ -324,10 +328,10 @@ public class CapabilityChecker {
 				AMap<AString, ACell> cap = RT.castMap(capCell);
 				AString with = (cap != null) ? RT.ensureString(cap.get(Capability.WITH)) : null;
 				String w = (with != null) ? with.toString() : null;
-				if (w != null && !w.isEmpty() && !w.startsWith("did:") && !w.contains("://")) {
-					String path = w.startsWith("/") ? w.substring(1) : w;
-					if (!path.isEmpty()) {
-						cap = cap.assoc(Capability.WITH, Strings.create(iss + "/" + path));
+				if (w != null && !isScheme(w)) {
+					String bound = canonicalResource(w, iss);
+					if (!bound.equals(w)) {
+						cap = cap.assoc(Capability.WITH, Strings.create(bound));
 						capCell = cap;
 						changed = true;
 					}
@@ -385,7 +389,7 @@ public class CapabilityChecker {
 	 * @return {@code null} if allowed, else an actionable denial message
 	 */
 	public static String allows(AVector<ACell> caps, AString resource, AString ability, AString ownerDID) {
-		return allows(caps, resource, ability, ownerDID, null, null, null);
+		return allows(caps, resource, ability, ownerDID, ownerDID, null, null, null);
 	}
 
 	/**
@@ -398,6 +402,8 @@ public class CapabilityChecker {
 	 * Fail-closed: with no {@code gate} evaluator in scope, gated grants
 	 * cannot authorise anything.
 	 *
+	 * @param callerDID the principal that acted, for the gate's {@code caller}
+	 *              field; {@code ownerDID} is the namespace it acted in
 	 * @param opRef the operation reference being invoked (for the gate's
 	 *              {@code operation} field; may be null)
 	 * @param invocationInput the invocation input the gate rules on
@@ -405,8 +411,8 @@ public class CapabilityChecker {
 	 *              in this context
 	 */
 	public static String allows(AVector<ACell> caps, AString resource, AString ability, AString ownerDID,
-			AString opRef, ACell invocationInput, CapabilityGate gate) {
-		return allows(caps, resource, ability, ownerDID, opRef, invocationInput, gate, null);
+			AString callerDID, AString opRef, ACell invocationInput, CapabilityGate gate) {
+		return allows(caps, resource, ability, ownerDID, callerDID, opRef, invocationInput, gate, null);
 	}
 
 	/**
@@ -415,7 +421,7 @@ public class CapabilityChecker {
 	 * grant authorises only when every caveat it carries is satisfied.
 	 */
 	public static String allows(AVector<ACell> caps, AString resource, AString ability, AString ownerDID,
-			AString opRef, ACell invocationInput, CapabilityGate gate, AString destination) {
+			AString callerDID, AString opRef, ACell invocationInput, CapabilityGate gate, AString destination) {
 		if (caps == null) return null;              // no scope = unrestricted (no bounding grants)
 		String canonResource = canonicalResource(resource != null ? resource.toString() : null, ownerDID);
 		if (canonResource == null) canonResource = "";
@@ -443,7 +449,7 @@ public class CapabilityChecker {
 				AString gateOp = bindGate(caveats.gate(), ownerDID);
 				detail = (gate == null)
 					? "gate " + gateOp + " cannot be evaluated in this context"
-					: gate.evaluate(gateOp, opRef, invocationInput, ownerDID);
+					: gate.evaluate(gateOp, opRef, invocationInput, callerDID);
 			}
 			if (detail == null) return null;                    // every caveat holds — authorised
 			if (denials == null) denials = new StringBuilder();
@@ -571,35 +577,185 @@ public class CapabilityChecker {
 	}
 
 	/**
-	 * Canonicalises a resource to its absolute, owner-scoped form for matching.
+	 * The canonical form of a resource name: the one place a name is resolved
+	 * in a namespace.
 	 *
-	 * <p>A capability resource is absolute: it names its owner. A bare lattice
-	 * path ({@code "w/health/bp"}) is the owner's own resource and is prefixed
-	 * with the owner DID → {@code "<owner>/w/health/bp"}. A resource that is
-	 * already a DID URL (a cross-user path, {@code "did:key:…/w/…"}, or the
-	 * DID-scoped {@code "did:key:…/dlfs/…"}) or scheme-qualified ({@code "file://…"})
-	 * is absolute as-is and returned unchanged. With no owner context ({@code ownerDID == null})
-	 * the resource is returned as given (compare-as-is).</p>
+	 * <p>Leading slashes change nothing. A bare name ({@code "w/health/bp"}) is
+	 * resolved in {@code namespace} → {@code "<namespace>/w/health/bp"}, and
+	 * {@code "/"} is that namespace's root. A DID URL or scheme reference
+	 * ({@code "file://…"}) already says where it is. With a null
+	 * {@code namespace} a bare name stays bare, which is the form it is stored
+	 * in. The empty name has no canonical form and is returned as it is.</p>
 	 *
-	 * <p>Applied identically to the op's resource and each cap's {@code with}, so
-	 * an absolute (token) grant and a bare (agent-config) grant match a bare
-	 * own-namespace operation the same way.</p>
+	 * <p>The namespace is only where the name is resolved, not whose authority
+	 * uses it. Applied identically to an operation's resource and each grant's
+	 * {@code with}, so an absolute and a bare grant match alike.</p>
 	 */
-	public static String canonicalResource(String resource, AString ownerDID) {
+	public static String canonicalResource(String resource, AString namespace) {
 		if (resource == null || resource.isEmpty()) return resource;
-		if (resource.startsWith("did:")) return resource;   // already owner-qualified (DID URL)
+		String name = CoviaPath.relative(resource);
+		if (name.isEmpty()) return (namespace == null) ? "/" : namespace + "/";
+		if (name.startsWith("did:")) return name;
 		// Legacy own-drive shorthand: "dlfs://<drive>/…" is accepted and normalised
-		// to the DID-scoped path form "dlfs/<drive>/…" (then owner-scoped below), so
-		// existing agent caps written in the scheme form keep working. Cross-user
-		// UCAN grants use the path form only — the scheme form never reaches the
-		// fail-closed proof path.
-		if (resource.startsWith("dlfs://")) {
-			resource = "dlfs/" + resource.substring("dlfs://".length());
-		} else if (resource.contains("://")) {
-			return resource;                                  // scheme-qualified (file://)
+		// to the DID-scoped path form "dlfs/<drive>/…", so existing agent caps
+		// written in the scheme form keep working. Cross-user UCAN grants use the
+		// path form only — the scheme form never reaches the fail-closed proof path.
+		if (name.startsWith("dlfs://")) {
+			name = "dlfs/" + name.substring("dlfs://".length());
+		} else if (isScheme(name)) {
+			return name;
 		}
-		if (ownerDID == null) return resource;               // no owner context — compare as given
-		return ownerDID + "/" + resource;                    // bare lattice path → owner-scoped
+		return (namespace == null) ? name : namespace + "/" + name;
+	}
+
+	/** Whether {@code name} is a scheme reference ({@code scheme://…}), once any leading slashes are ignored. */
+	public static boolean isScheme(String name) {
+		if (name == null) return false;
+		String relative = CoviaPath.relative(name);
+		int slash = relative.indexOf('/');
+		return slash > 1 && relative.charAt(slash - 1) == ':' && relative.startsWith("//", slash);
+	}
+
+	/**
+	 * {@code caps} as agent {@code agentId} means them: a bare {@code n/} names
+	 * its own notes, as {@code n/} does in any path it uses, so a capability
+	 * over it is one over {@code g/<agentId>/n/}. Paths naming an owner, and
+	 * every other bare path, are unchanged. {@code c/} and {@code t/} need no
+	 * capability, so name nothing here.
+	 *
+	 * @return {@code caps} itself when nothing names {@code n/}, or when there is no agent
+	 */
+	public static AVector<ACell> inAgent(AVector<ACell> caps, AString agentId) {
+		if (caps == null || agentId == null) return caps;
+		AVector<ACell> resolved = caps;
+		for (long i = 0; i < caps.count(); i++) {
+			AMap<AString, ACell> grant = RT.castMap(caps.get(i));
+			AString with = (grant == null) ? null : RT.ensureString(grant.get(Capability.WITH));
+			if (with == null) continue;
+			String value = CoviaPath.relative(with.toString());
+			if (!value.equals("n") && !value.startsWith("n/")) continue;
+			resolved = resolved.assoc(i, grant.assoc(Capability.WITH, Strings.create(Namespace.G + "/" + agentId + "/" + value)));
+		}
+		return resolved;
+	}
+
+	/**
+	 * The scope allowing exactly what both {@code a} and {@code b} allow, for
+	 * authority narrowed twice, as an agent's is by its controller's authority
+	 * and its own caps. A null scope is unrestricted, so the other scope is the
+	 * answer. Two grants covering one request are nested, since both are
+	 * segment-boundary prefixes of its resource and ability, so the narrower
+	 * {@code with} and narrower {@code can} of each pair cover just what the pair
+	 * does together.
+	 *
+	 * <p>Every caveat of a pair still binds, so the result carries them all. A
+	 * pair asking different things of the same caveat cannot be carried on one
+	 * grant and allows nothing. A malformed grant allows nothing.</p>
+	 *
+	 * <p>Each scope's bare paths and gates are its own owner's. When the owners
+	 * differ the result names them absolutely, so it reads the same wherever it
+	 * is evaluated; the venue's {@code v/} view is the same from every namespace
+	 * and stays as written.</p>
+	 *
+	 * @param aOwner the namespace {@code a}'s bare paths name
+	 * @param bOwner the namespace {@code b}'s bare paths name
+	 */
+	public static AVector<ACell> intersect(AVector<ACell> a, AString aOwner, AVector<ACell> b, AString bOwner) {
+		boolean sameOwner = Objects.equals(aOwner, bOwner);
+		if (a == null) return sameOwner ? b : absoluteScope(b, bOwner);
+		if (b == null) return sameOwner ? a : absoluteScope(a, aOwner);
+		AVector<ACell> met = Vectors.empty();
+		for (long i = 0; i < a.count(); i++) {
+			for (long j = 0; j < b.count(); j++) {
+				AMap<AString, ACell> grant = meet(a.get(i), aOwner, b.get(j), bOwner, sameOwner);
+				if (grant != null) met = met.conj(grant);
+			}
+		}
+		return met;
+	}
+
+	/** The grant covering what both grants cover, or null when they share nothing or their caveats conflict. */
+	private static AMap<AString, ACell> meet(ACell a, AString aOwner, ACell b, AString bOwner, boolean sameOwner) {
+		AMap<AString, ACell> p = RT.castMap(a);
+		AMap<AString, ACell> q = RT.castMap(b);
+		if (p == null || q == null || !caveatsOf(p).valid() || !caveatsOf(q).valid()) return null;
+
+		AString pCan = RT.ensureString(p.get(Capability.CAN));
+		AString qCan = RT.ensureString(q.get(Capability.CAN));
+		if (pCan == null || qCan == null) return null;
+		AString can;
+		if (Capability.abilityCovers(pCan, qCan)) can = qCan;
+		else if (Capability.abilityCovers(qCan, pCan)) can = pCan;
+		else return null;
+
+		AString pWith = comparableWith(p, aOwner);
+		AString qWith = comparableWith(q, bOwner);
+		boolean pNarrower;
+		if (pWith.count() == 0) pNarrower = false;
+		else if (qWith.count() == 0) pNarrower = true;
+		else if (Capability.resourceCovers(pWith, qWith)) pNarrower = false;
+		else if (Capability.resourceCovers(qWith, pWith)) pNarrower = true;
+		else return null;
+
+		AMap<AString, ACell> nb = carriedCaveats(caveatMap(p, aOwner, sameOwner), caveatMap(q, bOwner, sameOwner));
+		if (nb == null) return null;
+		AString with;
+		if (sameOwner) {
+			with = RT.ensureString((pNarrower ? p : q).get(Capability.WITH));
+			if (with == null) with = Strings.EMPTY;
+		} else {
+			with = pNarrower ? pWith : qWith;
+		}
+		AMap<AString, ACell> grant = Maps.of(Capability.WITH, with, Capability.CAN, can);
+		return nb.isEmpty() ? grant : grant.assoc(Capability.NB, nb);
+	}
+
+	/** A grant's resource in the form two scopes compare: empty for match-any, absolute in its owner's namespace otherwise. */
+	private static AString comparableWith(AMap<AString, ACell> grant, AString owner) {
+		AString with = RT.ensureString(grant.get(Capability.WITH));
+		if (with == null || with.count() == 0) return Strings.EMPTY;
+		return absoluteWith(with, owner);
+	}
+
+	/** {@code with} made absolute in {@code owner}'s namespace, except the venue's {@code v/} view, which is every namespace's. */
+	private static AString absoluteWith(AString with, AString owner) {
+		String value = CoviaPath.relative(with.toString());
+		if (value.equals("v") || value.startsWith("v/")) return with;
+		return Strings.create(canonicalResource(value, owner));
+	}
+
+	/** A grant's caveats as a map, its gate bound to its owner when the result will be read in another namespace. */
+	private static AMap<AString, ACell> caveatMap(AMap<AString, ACell> grant, AString owner, boolean sameOwner) {
+		AMap<AString, ACell> nb = RT.castMap(grant.get(Capability.NB));
+		if (nb == null) return Maps.empty();
+		if (sameOwner) return nb;
+		AString gate = RT.ensureString(nb.get(GATE));
+		return (gate == null) ? nb : nb.assoc(GATE, bindGate(gate, owner));
+	}
+
+	/** Both grants' caveats together, or null when they ask different things of the same one. */
+	private static AMap<AString, ACell> carriedCaveats(AMap<AString, ACell> a, AMap<AString, ACell> b) {
+		AMap<AString, ACell> carried = a;
+		for (var entry : b.entrySet()) {
+			ACell held = carried.get(entry.getKey());
+			if (held != null && !held.equals(entry.getValue())) return null;
+			carried = carried.assoc(entry.getKey(), entry.getValue());
+		}
+		return carried;
+	}
+
+	/** {@code scope} with its paths and gates named absolutely in {@code owner}'s namespace; null stays unrestricted. */
+	private static AVector<ACell> absoluteScope(AVector<ACell> scope, AString owner) {
+		if (scope == null) return null;
+		AVector<ACell> absolute = Vectors.empty();
+		for (long i = 0; i < scope.count(); i++) {
+			AMap<AString, ACell> grant = RT.castMap(scope.get(i));
+			if (grant == null || !caveatsOf(grant).valid()) continue;
+			AMap<AString, ACell> nb = caveatMap(grant, owner, false);
+			AMap<AString, ACell> named = grant.assoc(Capability.WITH, comparableWith(grant, owner));
+			absolute = absolute.conj(nb.isEmpty() ? named : named.assoc(Capability.NB, nb));
+		}
+		return absolute;
 	}
 
 }

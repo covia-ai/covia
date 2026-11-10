@@ -540,7 +540,7 @@ public class A2ACodec {
 		ACell id = jobData.get(Fields.ID);
 		if (id instanceof Blob b) return b;
 		if (id instanceof convex.core.data.ABlob b) return b.toFlatBlob();
-		if (id instanceof AString s) return Blob.parse(s.toString());
+		if (id instanceof AString s) return Blob.fromHex(s.toString());
 		throw new IllegalArgumentException("Job record has no id");
 	}
 
@@ -567,23 +567,4 @@ public class A2ACodec {
 		return s == null ? null : s.toString();
 	}
 
-	// ==================== Inbound parsing helpers ====================
-
-	/**
-	 * Extract the taskId from the `message` field of a SendMessage params map.
-	 * Returns null if the message has no taskId (i.e. this is a new task).
-	 */
-	@SuppressWarnings("unchecked")
-	public static Blob extractTaskId(Map<String, Object> messageParams) {
-		if (messageParams == null) return null;
-		Object mObj = messageParams.get("message");
-		if (!(mObj instanceof Map)) return null;
-		Object taskId = ((Map<String, Object>) mObj).get("taskId");
-		if (taskId == null) return null;
-		try {
-			return Blob.parse(taskId.toString());
-		} catch (Exception e) {
-			throw new IllegalArgumentException("Invalid taskId: " + taskId);
-		}
-	}
 }

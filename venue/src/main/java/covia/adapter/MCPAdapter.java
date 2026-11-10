@@ -20,14 +20,20 @@ import convex.core.data.prim.AInteger;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.api.Fields;
+import covia.exception.CoviaException;
+import covia.exception.InvalidDefinitionException;
+import covia.exception.InvalidInputException;
 import covia.exception.JobFailedException;
+import covia.exception.NotFoundException;
+import covia.exception.NotSupportedException;
+import covia.exception.UnavailableException;
 import covia.api.Abilities;
+import covia.lattice.CoviaPath;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import io.modelcontextprotocol.client.McpSyncClient;
 import io.modelcontextprotocol.spec.McpSchema.CallToolRequest;
 import io.modelcontextprotocol.spec.McpSchema.CallToolResult;
-import io.modelcontextprotocol.spec.McpSchema.ListToolsResult;
 import io.modelcontextprotocol.spec.McpSchema.Tool;
 
 public class MCPAdapter extends AAdapter {
@@ -66,11 +72,10 @@ public class MCPAdapter extends AAdapter {
 
 	@Override
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
-		requireInvoke(ctx);
 		// getSubOperation returns everything after "mcp:", e.g. "tools:call" or "tools:list"
 		String subOp = getSubOperation(meta);
 		if (subOp == null) {
-			throw new IllegalArgumentException("Insufficient specification for MCP operation");
+			throw new InvalidDefinitionException("Insufficient specification for MCP operation");
 		}
 
 		String[] subParts = subOp.split(":");
@@ -78,146 +83,116 @@ public class MCPAdapter extends AAdapter {
 
 		if (feature.equals("tools")) {
 			if (subParts.length < 2) {
-				throw new IllegalArgumentException("MCP tools operation requires function (call/list)");
+				throw new InvalidDefinitionException("MCP tools operation requires function (call/list)");
 			}
 			String function = subParts[1];
 
 			if (function.equals("call")) {
 				// Standard MCP tool call
 				return CompletableFuture.supplyAsync(() -> {
-					try {
-						// Remote tool name is from input if provided
-						AString remoteToolName=RT.getIn(input, Fields.TOOL_NAME);
+					// Remote tool name is from input if provided
+					AString remoteToolName=RT.getIn(input, Fields.TOOL_NAME);
 
-						// Extract operation name from "mcp:tools:call:operationName" format
-						if ((remoteToolName==null)&&(subParts.length>=3)) {
-							remoteToolName=Strings.create(subParts[2]);
-						}
-
-						// Fallback: see if "remoteToolName" is specified in operation
-						if (remoteToolName==null) {
-							remoteToolName=RT.getIn(meta, Fields.OPERATION,Fields.REMOTE_TOOL_NAME);
-						}
-
-						if (remoteToolName==null) {
-							throw new JobFailedException("No remote tool name provided (either in input or operation metadata)");
-						}
-
-						// Get MCP server URL from metadata or input
-						AString serverUrl =getServerUrl(meta, input);
-						if (serverUrl == null) {
-							throw new JobFailedException("No server URL provided in input (or asset metadata fallback)");
-						}
-						// The caller may name the server: the same outbound policy as http.
-						engine.requireSafeUrl(serverUrl.toString());
-
-						// Bridged form (#80): when the OPERATION metadata pins the
-						// remote tool, the op's declared input IS the tool's own
-						// schema — the whole invocation input is the arguments.
-						// The generic tools-call op keeps the wrapped
-						// {server, toolName, arguments} form; explicit
-						// input.arguments always wins for back-compat.
-						AMap<AString,ACell> toolArguments=RT.getIn(input, Fields.ARGUMENTS);
-						if (toolArguments == null
-								&& RT.getIn(meta, Fields.OPERATION, Fields.REMOTE_TOOL_NAME) != null) {
-							toolArguments = (input instanceof AMap)
-								? (AMap<AString,ACell>) input : Maps.empty();
-						}
-						if (toolArguments == null) {
-							throw new JobFailedException("Tool call requires arguments as a JSON object");
-						}
-
-						// Access token: explicit input wins; else the operation
-						// metadata's auth reference (secret ref, possibly
-						// DID-qualified) resolved at call time — never persisted
-						// as a raw value in the bridged asset.
-						AString token=RT.getIn(input, Fields.TOKEN);
-						String accessToken=(token!=null)?token.toString()
-							: resolveAuthRef(ctx, RT.ensureString(
-								RT.getIn(meta, Fields.OPERATION, K_AUTH)), serverUrl);
-
-						// Make the MCP tool call
-						return callMCPTool(serverUrl, remoteToolName.toString(), toolArguments, accessToken);
-
-					} catch (JobFailedException e) {
-						throw e;
-					} catch (Exception e) {
-						throw new JobFailedException(e);
+					// Extract operation name from "mcp:tools:call:operationName" format
+					if ((remoteToolName==null)&&(subParts.length>=3)) {
+						remoteToolName=Strings.create(subParts[2]);
 					}
+
+					// Fallback: see if "remoteToolName" is specified in operation
+					if (remoteToolName==null) {
+						remoteToolName=RT.getIn(meta, Fields.OPERATION,Fields.REMOTE_TOOL_NAME);
+					}
+
+					if (remoteToolName==null) {
+						throw new InvalidInputException("No remote tool name provided (either in input or operation metadata)");
+					}
+
+					// Get MCP server URL from metadata or input
+					AString serverUrl =getServerUrl(meta, input);
+					if (serverUrl == null) {
+						throw new InvalidInputException("No server URL provided in input (or asset metadata fallback)");
+					}
+					// The caller may name the server: the same outbound policy as http.
+					serverUrl = Strings.create(engine.outboundUrl(ctx, serverUrl.toString()));
+
+					// Bridged form (#80): when the OPERATION metadata pins the
+					// remote tool, the op's declared input IS the tool's own
+					// schema — the whole invocation input is the arguments.
+					// The generic tools-call op keeps the wrapped
+					// {server, toolName, arguments} form; explicit
+					// input.arguments always wins for back-compat.
+					AMap<AString,ACell> toolArguments=RT.getIn(input, Fields.ARGUMENTS);
+					if (toolArguments == null
+							&& RT.getIn(meta, Fields.OPERATION, Fields.REMOTE_TOOL_NAME) != null) {
+						toolArguments = (input instanceof AMap)
+							? (AMap<AString,ACell>) input : Maps.empty();
+					}
+					if (toolArguments == null) {
+						throw new InvalidInputException("Tool call requires arguments as a JSON object");
+					}
+
+					// Access token: explicit input wins; else the operation
+					// metadata's auth reference (secret ref, possibly
+					// DID-qualified) resolved at call time — never persisted
+					// as a raw value in the bridged asset.
+					AString token=RT.getIn(input, Fields.TOKEN);
+					String accessToken=(token!=null)?token.toString()
+						: resolveAuthRef(ctx, RT.ensureString(
+							RT.getIn(meta, Fields.OPERATION, K_AUTH)), serverUrl);
+
+					// Make the MCP tool call
+					return callMCPTool(serverUrl, remoteToolName.toString(), toolArguments, accessToken);
 				}, VIRTUAL_EXECUTOR);
 
 			} else if (function.equals("list")) {
 				// List available MCP tools
 				return CompletableFuture.supplyAsync(() -> {
-					try {
-						// Get MCP server URL from metadata or input
-						AString serverUrl = getServerUrl(meta, input);
-						if (serverUrl == null) {
-							throw new JobFailedException("No server URL provided in input (or asset metadata fallback)");
-						}
-						engine.requireSafeUrl(serverUrl.toString());
-
-						// Get API access token, if provided
-						AString token = RT.getIn(input, Fields.TOKEN);
-						String accessToken = (token == null) ? null : token.toString();
-
-						// List the MCP tools
-						return listMCPTools(serverUrl, accessToken);
-
-					} catch (JobFailedException e) {
-						throw e;
-					} catch (Exception e) {
-						throw new JobFailedException(e);
+					// Get MCP server URL from metadata or input
+					AString serverUrl = getServerUrl(meta, input);
+					if (serverUrl == null) {
+						throw new InvalidInputException("No server URL provided in input (or asset metadata fallback)");
 					}
+					serverUrl = Strings.create(engine.outboundUrl(ctx, serverUrl.toString()));
+
+					// Get API access token, if provided
+					AString token = RT.getIn(input, Fields.TOKEN);
+					String accessToken = (token == null) ? null : token.toString();
+
+					// List the MCP tools
+					return listMCPTools(serverUrl, accessToken);
 				}, VIRTUAL_EXECUTOR);
 			} else {
-				throw new UnsupportedOperationException("Unsupported tools function: " + function);
+				throw new NotSupportedException("Unsupported tools function: " + function);
 			}
 		} else if (feature.equals("server")) {
 			// Server bridging (#80): register / refresh / remove external MCP
 			// servers whose tools materialise as ordinary catalog operations.
 			if (subParts.length < 2) {
-				throw new IllegalArgumentException("MCP server operation requires function (add/remove/refresh)");
+				throw new InvalidDefinitionException("MCP server operation requires function (add/remove/refresh)");
 			}
 			String function = subParts[1];
-			return CompletableFuture.supplyAsync(() -> {
-				try {
-					return switch (function) {
-						case "add" -> handleAddServer(ctx, input);
-						case "remove" -> handleRemoveServer(ctx, input);
-						case "refresh" -> handleRefresh(ctx, input);
-						default -> throw new UnsupportedOperationException(
-							"Unsupported server function: " + function);
-					};
-				} catch (JobFailedException | IllegalArgumentException e) {
-					throw e;
-				} catch (Exception e) {
-					throw new JobFailedException(e);
-				}
+			return CompletableFuture.supplyAsync(() -> switch (function) {
+				case "add" -> handleAddServer(ctx, input);
+				case "remove" -> handleRemoveServer(ctx, input);
+				case "refresh" -> handleRefresh(ctx, input);
+				default -> throw new NotSupportedException(
+					"Unsupported server function: " + function);
 			}, VIRTUAL_EXECUTOR);
 		} else if (feature.equals("tool")) {
 			// Tool-level bridging (#80): curate individual tools from any
 			// server at any catalog path — the tool is the entity, the server
 			// is just where it happens to live.
 			if (subParts.length < 2) {
-				throw new IllegalArgumentException("MCP tool operation requires function (add)");
+				throw new InvalidDefinitionException("MCP tool operation requires function (add)");
 			}
 			String function = subParts[1];
-			return CompletableFuture.supplyAsync(() -> {
-				try {
-					return switch (function) {
-						case "add" -> handleAddTool(ctx, input);
-						default -> throw new UnsupportedOperationException(
-							"Unsupported tool function: " + function);
-					};
-				} catch (JobFailedException | IllegalArgumentException e) {
-					throw e;
-				} catch (Exception e) {
-					throw new JobFailedException(e);
-				}
+			return CompletableFuture.supplyAsync(() -> switch (function) {
+				case "add" -> handleAddTool(ctx, input);
+				default -> throw new NotSupportedException(
+					"Unsupported tool function: " + function);
 			}, VIRTUAL_EXECUTOR);
 		} else {
-			throw new UnsupportedOperationException("Unsupported MCP feature: " + feature);
+			throw new NotSupportedException("Unsupported MCP feature: " + feature);
 		}
 	}
 
@@ -227,18 +202,34 @@ public class MCPAdapter extends AAdapter {
 	private AString getServerUrl(AMap<AString, ACell> meta, ACell input) {
 		// First try to get from input parameters
 		AString url = RT.ensureString(RT.getIn(input, Fields.SERVER));
-		if (url != null) return url;
+		if (url != null) return checkedUrl(url, InvalidInputException::new);
 
 		// Then check metadata — the operation block (bridged ops, #80), then
 		// the legacy top-level position.
 		if (meta != null) {
 			url = RT.ensureString(RT.getIn(meta, Fields.OPERATION, Fields.SERVER));
-			if (url != null) return url;
+			if (url != null) return checkedUrl(url, InvalidDefinitionException::new);
 			url = RT.ensureString(meta.get(Fields.SERVER));
-			if (url != null) return url;
+			if (url != null) return checkedUrl(url, InvalidDefinitionException::new);
 		}
 
 		return null;
+	}
+
+	/**
+	 * A server URL that names an MCP endpoint. {@link McpClientSession} refuses
+	 * a malformed one without knowing where it came from; {@code refusal} says
+	 * whose it is to fix: the call's input, or a stored definition (a bridged
+	 * operation or a server registration).
+	 */
+	private static AString checkedUrl(AString url,
+			java.util.function.BiFunction<String, Throwable, ? extends CoviaException> refusal) {
+		try {
+			McpClientSession.endpointUrl(url.toString());
+			return url;
+		} catch (IllegalArgumentException e) {
+			throw refusal.apply(e.getMessage(), e);
+		}
 	}
 
 	/**
@@ -261,7 +252,7 @@ public class MCPAdapter extends AAdapter {
 		String ref = auth.toString();
 		if (!Engine.isSecretRef(ref)) return ref; // literal token
 		String value = engine.resolveSecret(ref, ctx, serverUrl != null ? serverUrl.toString() : null);
-		if (value == null) throw new JobFailedException("MCP server auth secret not found: " + ref);
+		if (value == null) throw new NotFoundException("MCP server auth secret not found: " + ref, ref);
 		return value;
 	}
 	
@@ -280,9 +271,9 @@ public class MCPAdapter extends AAdapter {
 	 * @param baseURL Server base URL
 	 * @param accessToken Optional bearer token
 	 * @return McpSyncClient instance (session-managed)
-	 * @throws Exception on connection failure
+	 * @throws CoviaException if the session cannot be opened
 	 */
-	public McpSyncClient connect(String baseURL, String accessToken) throws Exception {
+	public McpSyncClient connect(String baseURL, String accessToken) {
 		return getOrConnect(baseURL, accessToken).getClient();
 	}
 
@@ -290,42 +281,28 @@ public class MCPAdapter extends AAdapter {
 	 * Makes an MCP tool call to the specified server using a persistent session.
 	 *
 	 * <p>Failure surfacing is designed for LLM consumption (agents call bridged
-	 * tools directly): transport failures name the tool, the server and the
-	 * root cause with a remedy; a tool-level error ({@code isError: true} per
-	 * the MCP spec) fails the job with the remote error text so the model can
-	 * self-correct — never a silent success with an error-shaped payload.</p>
+	 * tools directly): a transport or protocol failure is the Covia type for
+	 * it, naming the server and the tool and never quoting the server
+	 * ({@link McpClientSession#failure}); a tool-level error ({@code isError:
+	 * true} per the MCP spec) fails the job with the remote error text so the
+	 * model can self-correct — never a silent success with an error-shaped
+	 * payload.</p>
 	 *
 	 * @param serverUrl MCP server URL
 	 * @param toolName Tool name to call
 	 * @param input Tool arguments
 	 * @param accessToken Optional access token
 	 */
-	public ACell callMCPTool(AString serverUrl, String toolName, ACell input, String accessToken) throws Exception {
+	public ACell callMCPTool(AString serverUrl, String toolName, ACell input, String accessToken) {
 		McpClientSession session = getOrConnect(serverUrl.toString(), accessToken);
-		McpSyncClient client;
-		try {
-			client = session.getClient();
-		} catch (Exception e) {
-			session.invalidate();
-			throw new JobFailedException("Cannot connect to MCP server at " + serverUrl
-				+ ": " + rootCauseMessage(e)
-				+ " — check the server is reachable and the auth credential is valid");
-		}
 
 		@SuppressWarnings("unchecked")
 		CallToolRequest request = CallToolRequest.builder(toolName)
 			.arguments((Map<String,Object>)JSON.json(RT.castMap(input)))
 			.build();
 
-		CallToolResult response;
-		try {
-			response = client.callTool(request);
-		} catch (Exception e) {
-			session.invalidate();
-			throw new JobFailedException("MCP tool '" + toolName + "' on server " + serverUrl
-				+ " failed: " + rootCauseMessage(e)
-				+ " — check the server is reachable, or re-sync the bridged tool with v/ops/mcp/refresh");
-		}
+		CallToolResult response = session.request(McpClientSession.TOOL_CALL.formatted(toolName),
+			client -> client.callTool(request));
 
 		// Tool-level error: the session is healthy, the TOOL reported failure.
 		String err = errorText(response);
@@ -388,23 +365,6 @@ public class MCPAdapter extends AAdapter {
 		return (sb.length() > 0) ? sb.toString() : null;
 	}
 
-	/**
-	 * The most diagnosable message in a cause chain: the deepest cause with a
-	 * non-null message (skipping wrapper noise like CompletionException), or
-	 * the deepest cause's class name when nothing carries a message.
-	 */
-	static String rootCauseMessage(Throwable e) {
-		Throwable best = null;
-		for (Throwable t = e; t != null; t = t.getCause()) {
-			if (t.getMessage() != null) best = t;
-			if (t.getCause() == t) break;
-		}
-		if (best != null) return best.getMessage();
-		Throwable deepest = e;
-		while (deepest.getCause() != null && deepest.getCause() != deepest) deepest = deepest.getCause();
-		return deepest.getClass().getSimpleName();
-	}
-	
 	/**
 	 * Converts an MCP tool's input schema to Convex ACell format.
 	 *
@@ -477,45 +437,26 @@ public class MCPAdapter extends AAdapter {
 	 * @param serverUrl The MCP server URL
 	 * @param accessToken Optional access token for authentication
 	 * @return ACell containing the list of tools
-	 * @throws Exception if the operation fails
+	 * @throws CoviaException if the server cannot be reached or does not list its tools
 	 */
-	public ACell listMCPTools(AString serverUrl, String accessToken) throws Exception {
-		McpClientSession session = getOrConnect(serverUrl.toString(), accessToken);
-		McpSyncClient client;
-		try {
-			client = session.getClient();
-		} catch (Exception e) {
-			session.invalidate();
-			throw new JobFailedException("Cannot initialize MCP client for server " + serverUrl
-				+ ": " + rootCauseMessage(e)
-				+ " — check that the URL names the MCP endpoint and that its credentials and "
-				+ "protocol version are valid; include a trailing / for an exact root endpoint");
-		}
-		try {
-			ListToolsResult result = client.listTools();
-			List<Tool> tools = result.tools();
+	public ACell listMCPTools(AString serverUrl, String accessToken) {
+		List<Tool> tools = listRemoteTools(serverUrl, accessToken);
 
-			AVector<AMap<AString, ACell>> toolsVector = Vectors.empty();
-			for (Tool tool : tools) {
-				ACell inputSchema = getInputSchema(tool.inputSchema());
-				AMap<AString, ACell> toolMap = Maps.of(
-					Fields.NAME, Strings.create(tool.name()),
-					Fields.DESCRIPTION, Strings.create(tool.description()),
-					Fields.INPUT_SCHEMA, RT.cvm(inputSchema)
-				);
-				toolsVector = toolsVector.conj(toolMap);
-			}
-
-			return Maps.of(
-				"tools", toolsVector,
-				Fields.TOTAL, AInteger.create(tools.size())
+		AVector<AMap<AString, ACell>> toolsVector = Vectors.empty();
+		for (Tool tool : tools) {
+			ACell inputSchema = getInputSchema(tool.inputSchema());
+			AMap<AString, ACell> toolMap = Maps.of(
+				Fields.NAME, Strings.create(tool.name()),
+				Fields.DESCRIPTION, Strings.create(tool.description()),
+				Fields.INPUT_SCHEMA, RT.cvm(inputSchema)
 			);
-		} catch (Exception e) {
-			session.invalidate();
-			throw new JobFailedException("MCP tools/list failed for server " + serverUrl
-				+ ": " + rootCauseMessage(e)
-				+ " — the MCP session initialized, but the server did not return its tool catalog");
+			toolsVector = toolsVector.conj(toolMap);
 		}
+
+		return Maps.of(
+			"tools", toolsVector,
+			Fields.TOTAL, AInteger.create(tools.size())
+		);
 	}
 
 	// ========== Server bridging (#80) ==========
@@ -539,15 +480,16 @@ public class MCPAdapter extends AAdapter {
 	 * self-contained — they work without the registry entry; the registry
 	 * exists for refresh/remove bookkeeping.</p>
 	 */
-	ACell handleAddServer(RequestContext ctx, ACell input) throws Exception {
+	ACell handleAddServer(RequestContext ctx, ACell input) {
 		String name = requireServerName(input);
 		AString url = RT.ensureString(RT.getIn(input, K_URL));
-		if (url == null) throw new IllegalArgumentException("url is required");
+		if (url == null) throw new InvalidInputException("url is required");
+		checkedUrl(url, InvalidInputException::new);
 		AString auth = RT.ensureString(RT.getIn(input, K_AUTH));
 		boolean venueScope = isVenueScope(ctx, input);
 
 		// SSRF guard — shared with the http adapter, including its allowlist.
-		engine.requireSafeUrl(url.toString());
+		url = Strings.create(engine.outboundUrl(ctx, url.toString()));
 
 		// Discover tools under the REGISTRAR's auth (resolved now, not stored raw)
 		String token = resolveAuthRef(ctx, auth, url);
@@ -565,8 +507,7 @@ public class MCPAdapter extends AAdapter {
 			K_URL, url,
 			K_AUTH, storedAuth,
 			Fields.CALLER, ctx.getCallerDID(),
-			Strings.intern("added"), convex.core.data.prim.CVMLong.create(
-				convex.core.util.Utils.getCurrentTimestamp()),
+			Strings.intern("added"), engine.currentTimestamp(),
 			Fields.TOTAL, AInteger.create(toolNames.count())));
 
 		AMap<AString, ACell> result = Maps.of(
@@ -605,13 +546,14 @@ public class MCPAdapter extends AAdapter {
 	 * {@code v/ops/...} requires the {@code mcp/manage} ability. Removal is
 	 * plain {@code covia:delete} on the path — nothing resurrects it.
 	 */
-	ACell handleAddTool(RequestContext ctx, ACell input) throws Exception {
+	ACell handleAddTool(RequestContext ctx, ACell input) {
 		AString url = RT.ensureString(RT.getIn(input, Fields.SERVER));
-		if (url == null) throw new IllegalArgumentException(
+		if (url == null) throw new InvalidInputException(
 			"server is required — the MCP server's base URL, e.g. https://host/mcp");
+		checkedUrl(url, InvalidInputException::new);
 		AString toolName = RT.ensureString(RT.getIn(input, Fields.TOOL));
 		if (toolName == null || !toolName.toString().matches("[A-Za-z0-9_-]{1,128}")) {
-			throw new IllegalArgumentException(
+			throw new InvalidInputException(
 				"tool is required — the remote tool's name exactly as the server lists it"
 				+ " (see v/ops/mcp/tools-list)");
 		}
@@ -620,7 +562,7 @@ public class MCPAdapter extends AAdapter {
 		if (venuePath) requireVenueManage(ctx);
 
 		// SSRF guard — shared with the http adapter, including its allowlist.
-		engine.requireSafeUrl(url.toString());
+		url = Strings.create(engine.outboundUrl(ctx, url.toString()));
 
 		AString auth = RT.ensureString(RT.getIn(input, K_AUTH));
 		String token = resolveAuthRef(ctx, auth, url);
@@ -630,8 +572,8 @@ public class MCPAdapter extends AAdapter {
 			if (toolName.toString().equals(t.name())) { tool = t; break; }
 		}
 		if (tool == null) {
-			throw new JobFailedException("Tool '" + toolName + "' not found on MCP server at "
-				+ url + ". Available tools: " + availableNames(tools));
+			throw new NotFoundException("Tool '" + toolName + "' not found on MCP server at "
+				+ origin(url.toString()) + ". Available tools: " + availableNames(tools), toolName.toString());
 		}
 
 		AString storedAuth = qualifyAuthRef(auth, ctx);
@@ -646,7 +588,7 @@ public class MCPAdapter extends AAdapter {
 		ACell defsCell = RT.getIn(input, Fields.DEFAULT);
 		if (defsCell != null) {
 			AMap<AString, ACell> defaults = RT.ensureMap(defsCell);
-			if (defaults == null) throw new IllegalArgumentException(
+			if (defaults == null) throw new InvalidInputException(
 				"default must be an object of argument values to fill in when the caller omits them");
 			if (defaults.count() > 0) opMeta = withDefaults(opMeta, defaults);
 		}
@@ -669,14 +611,14 @@ public class MCPAdapter extends AAdapter {
 	 *  {@code o/} or the venue's {@code v/ops/}, naming the op itself. */
 	private static String requireToolPath(ACell input) {
 		AString p = RT.ensureString(RT.getIn(input, Fields.PATH));
-		if (p == null) throw new IllegalArgumentException(
+		if (p == null) throw new InvalidInputException(
 			"path is required — the catalog location for the bridged tool,"
 			+ " e.g. o/research/search_papers (your own operations)"
 			+ " or v/ops/... (venue catalog, needs the mcp/manage ability)");
 		String path = p.toString();
 		boolean ok = (path.startsWith("o/") && path.length() > 2 && !path.endsWith("/"))
 			|| (path.startsWith("v/ops/") && path.length() > 6 && !path.endsWith("/"));
-		if (!ok) throw new IllegalArgumentException(
+		if (!ok) throw new InvalidInputException(
 			"path must be under o/ (your operations) or v/ops/ (venue catalog),"
 			+ " naming the op itself — e.g. o/research/search_papers. Got: " + path);
 		return path;
@@ -727,10 +669,10 @@ public class MCPAdapter extends AAdapter {
 	 *       picked it, removal is their call via covia:delete.</li>
 	 * </ul>
 	 */
-	ACell handleRefresh(RequestContext ctx, ACell input) throws Exception {
+	ACell handleRefresh(RequestContext ctx, ACell input) {
 		AString path = RT.ensureString(RT.getIn(input, Fields.PATH));
 		AString nameArg = RT.ensureString(RT.getIn(input, Fields.NAME));
-		if (path != null && nameArg != null) throw new IllegalArgumentException(
+		if (path != null && nameArg != null) throw new InvalidInputException(
 			"Provide either name (refresh a mirrored server) or path (refresh curated tools), not both");
 		if (path != null) return refreshPath(ctx, path.toString());
 
@@ -741,8 +683,9 @@ public class MCPAdapter extends AAdapter {
 
 		ACell reg = readLattice(writeCtx, registryPath(venueScope, name));
 		AString url = RT.ensureString(RT.getIn(reg, K_URL));
-		if (url == null) throw new JobFailedException("Unknown MCP server: " + name
-			+ " (no registry entry at " + registryPath(venueScope, name) + ")");
+		if (url == null) throw new NotFoundException("Unknown MCP server: " + name
+			+ " (no registry entry at " + registryPath(venueScope, name) + ")", name);
+		checkedUrl(url, InvalidDefinitionException::new);
 		AString auth = RT.ensureString(RT.getIn(reg, K_AUTH));
 
 		String token = resolveAuthRef(ctx, auth, url);
@@ -784,10 +727,10 @@ public class MCPAdapter extends AAdapter {
 		ACell root = readLattice(writeCtx, path);
 		java.util.LinkedHashMap<String, AMap<AString, ACell>> ops = new java.util.LinkedHashMap<>();
 		collectBridgedOps(root, path, ops, 0);
-		if (ops.isEmpty()) throw new JobFailedException(
+		if (ops.isEmpty()) throw new NotFoundException(
 			"No bridged MCP tools found at path: " + path
 			+ " — bridged ops carry operation.adapter = mcp:tools:call;"
-			+ " curate one with v/ops/mcp/add-tool");
+			+ " curate one with v/ops/mcp/add-tool", path);
 
 		// Group by server + auth so each server is listed once
 		java.util.LinkedHashMap<String, java.util.List<String>> groups = new java.util.LinkedHashMap<>();
@@ -812,10 +755,10 @@ public class MCPAdapter extends AAdapter {
 			try {
 				String token = resolveAuthRef(ctx, auth, url);
 				for (Tool t : listRemoteTools(url, token)) fresh.put(t.name(), t);
-			} catch (Exception e) {
+			} catch (CoviaException e) {
 				errors = errors.conj(Maps.of(
 					Fields.SERVER, url,
-					Fields.ERROR, Strings.create(rootCauseMessage(e))));
+					Fields.ERROR, Strings.create(describeFailure(e))));
 				continue;
 			}
 
@@ -857,7 +800,7 @@ public class MCPAdapter extends AAdapter {
 		}
 
 		if (updated == 0 && unchanged == 0 && missing.count() == 0) {
-			throw new JobFailedException("Could not refresh any bridged tools at " + path
+			throw new UnavailableException("Could not refresh any bridged tools at " + path
 				+ ": " + JSON.print(errors));
 		}
 		AMap<AString, ACell> result = Maps.of(
@@ -1000,17 +943,9 @@ public class MCPAdapter extends AAdapter {
 	}
 
 	/** Lists a remote server's tools over a pooled session. */
-	private List<Tool> listRemoteTools(AString url, String token) throws Exception {
-		McpClientSession session = getOrConnect(url.toString(), token);
-		try {
-			return session.getClient().listTools().tools();
-		} catch (Exception e) {
-			session.invalidate();
-			throw new JobFailedException("Cannot list tools from MCP server at " + url
-				+ ": " + rootCauseMessage(e)
-				+ " — check the URL points at the exact MCP endpoint and any auth credential is valid;"
-				+ " include a trailing / for an exact root endpoint");
-		}
+	private List<Tool> listRemoteTools(AString url, String token) {
+		return getOrConnect(url.toString(), token)
+			.request(McpClientSession.TOOLS_LIST, client -> client.listTools().tools());
 	}
 
 	// ---- scope / path / lattice helpers ----
@@ -1018,7 +953,7 @@ public class MCPAdapter extends AAdapter {
 	private static String requireServerName(ACell input) {
 		AString name = RT.ensureString(RT.getIn(input, Fields.NAME));
 		if (name == null || !name.toString().matches("[a-z0-9-]{1,64}")) {
-			throw new IllegalArgumentException(
+			throw new InvalidInputException(
 				"Server name is required and must match [a-z0-9-]{1,64}");
 		}
 		return name.toString();
@@ -1064,12 +999,22 @@ public class MCPAdapter extends AAdapter {
 
 	private void writeLattice(RequestContext ctx, String path, ACell value) {
 		engine.jobs().invokeInternal(Strings.create("v/ops/covia/write"),
-			Maps.of(Fields.PATH, Strings.create(path), Fields.VALUE, value), ctx).join();
+			Maps.of(Fields.PATH, storedPath(path), Fields.VALUE, value), ctx).join();
 	}
 
 	private void deleteLattice(RequestContext ctx, String path) {
 		engine.jobs().invokeInternal(Strings.create("v/ops/covia/delete"),
-			Maps.of(Fields.PATH, Strings.create(path)), ctx).join();
+			Maps.of(Fields.PATH, storedPath(path)), ctx).join();
+	}
+
+	/**
+	 * Where a change to {@code path} is made. {@code v/} is the venue's
+	 * read-only view of its {@code w/global}, so a venue entry is changed
+	 * there, by the venue.
+	 */
+	private static AString storedPath(String path) {
+		if (!path.startsWith("v/")) return Strings.create(path);
+		return Strings.create(CoviaPath.address(CoviaAdapter.venueGlobals(CoviaPath.parse(path))).substring(1));
 	}
 
 	private ACell readLattice(RequestContext ctx, String path) {

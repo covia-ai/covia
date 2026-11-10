@@ -3,7 +3,8 @@ package covia.venue;
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.io.File;
-import java.io.IOException;
+import java.time.Instant;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
 import org.junit.jupiter.api.Test;
@@ -15,14 +16,19 @@ import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.AccountKey;
 import convex.core.data.Blob;
+import convex.core.data.Index;
+import convex.core.data.Keyword;
 import convex.core.data.Maps;
+import convex.core.data.Path;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.etch.EtchStore;
+import convex.lattice.LatticeHost;
 import covia.adapter.AAdapter;
 import covia.adapter.agent.GoalTreeContext;
-import covia.lattice.WorkspaceRoot;
+import covia.lattice.CoviaPath;
+import covia.lattice.Workspace;
 import covia.test.DurabilityTest;
 import covia.venue.server.VenueServer;
 
@@ -33,22 +39,16 @@ import covia.venue.server.VenueServer;
  */
 @DurabilityTest
 class EmbedderContractTest {
+	/** The venue's secret store keys: these venues keep no secret a migration step carries over. */
+	private static final SecretStore.Keys NO_SECRETS = SecretStore.keys(AKeyPair.generate());
 
 	static final AString ALICE = Strings.create("did:key:z6MkEmbedderContractAlice");
 	static final AString BOB = Strings.create("did:key:z6MkEmbedderContractBob");
 	static final String SEED = "7a".repeat(32);
 	static final String ADAPTER = "embedder";
-	static final ACell[] RECORD_PATH = WorkspaceRoot.parseStringPath("w/embedder/record");
+	static final Path AREA = CoviaPath.parse("embedder");
+	static final Path RECORD_PATH = CoviaPath.parse("embedder/record");
 	static final ACell RECORD = Maps.of("name", "embedded", "count", 3);
-
-	/**
-	 * Not a JUnit @TempDir: on Java 21 (no FFM mapper) Etch cannot unmap on
-	 * close, so on Windows the store file stays pinned until the buffers are
-	 * garbage-collected and @TempDir's mandatory cleanup fails the test.
-	 */
-	static File storeFile(String name) throws IOException {
-		return TestTemp.dir("embedder-contract").resolve(name).toFile();
-	}
 
 	/** An embedder's own adapter, keeping per-user state as GetMine's and Brightside's do. */
 	static final class EmbedderAdapter extends AAdapter {
@@ -73,8 +73,8 @@ class EmbedderContractTest {
 	}
 
 	@Test void embedderRunsAVenueOnItsOwnStoreAndReopensIt() throws Exception {
-		File file = storeFile("embedder.etch");
-		EtchStore store = EtchStore.create(file);
+		EtchStore store = TestTemp.etch("embedder");
+		File file = store.getFile();
 		assertTrue(VenueState.peekVenueKeys(store).isEmpty(), "a fresh store holds no venue");
 		AccountKey venueKey;
 
@@ -87,13 +87,16 @@ class EmbedderContractTest {
 			// Migration is a call, at any time: the venue and every installed adapter.
 			engine.migrate();
 
-			// Writes that must land together go in one user transaction.
+			// Writes that must land together go in one user transaction; a
+			// workspace write creates no missing levels, so they are made first.
 			User alice = engine.getVenueState().users().ensure(ALICE);
-			alice.transact(draft -> {
-				draft.workspaceRoot().write(RECORD_PATH, RECORD);
-				draft.workspaceRoot().write(WorkspaceRoot.parseStringPath("w/embedder/stamp"), CVMLong.ONE);
+			alice.execute(draft -> {
+				Workspace workspace = draft.workspace();
+				workspace.createPath(AREA);
+				workspace.write(RECORD_PATH, RECORD);
+				workspace.write(CoviaPath.parse("embedder/stamp"), CVMLong.ONE);
 			});
-			assertEquals(RECORD, alice.workspaceRoot().read(RECORD_PATH));
+			assertEquals(RECORD, alice.workspace().read(RECORD_PATH));
 
 			// Secrets under the venue's current keys.
 			SecretStore.Keys keys = SecretStore.keys(engine.getKeyPair());
@@ -107,7 +110,7 @@ class EmbedderContractTest {
 			ACell chat = run(engine, ALICE, "agent/chat", Maps.of("agentId", "helper", "message", "hello from the embedder"));
 			Blob sid = Blob.fromHex(RT.ensureString(RT.getIn(chat, "sessionId")).toString());
 			AMap<AString, ACell> session = alice.agent("helper").getSession(sid);
-			AMap<AString, ACell> frame = RT.ensureMap(RT.ensureVector(session.get(AgentState.KEY_FRAMES)).get(0));
+			AMap<AString, ACell> frame = RT.ensureMap(RT.ensureVector(session.get(Agent.KEY_FRAMES)).get(0));
 			AVector<ACell> conversation = GoalTreeContext.archivedConversation(frame);
 			assertTrue(conversation.toString().contains("hello from the embedder"), conversation.toString());
 
@@ -133,30 +136,45 @@ class EmbedderContractTest {
 		VenueState.StoredVersions versions = VenueState.peekVersions(reopened, venueKey).orElseThrow();
 		assertEquals(VenueState.CURRENT_VERSION, versions.venue());
 		assertEquals(new covia.adapter.TestAdapter().stateVersion(), versions.adapters().get("test"));
-		CoviaApplication beforeLaunch = CoviaApplication.open(reopened, AKeyPair.create(Blob.fromHex(SEED)));
+		LatticeHost<Index<Keyword, ACell>> offlineHost = LatticeHost.open(reopened);
+		CoviaApplication beforeLaunch = offlineHost.addApplication(new CoviaApplication(offlineHost));
+		beforeLaunch.mount(AKeyPair.create(Blob.fromHex(SEED)), Maps.empty());
 		VenueState offline = beforeLaunch.venue(venueKey);
 		ACell current = offline.get();
-		offline.migrate(java.util.List.of(new EmbedderAdapter().stateMigration()));
+		offline.migrate(NO_SECRETS, java.util.List.of(new EmbedderAdapter().stateMigration()));
 		assertSame(current, offline.get(), "migrating a current store writes nothing");
-		beforeLaunch.host().close(); // whoever opens a host closes it; the store stays open
+		offlineHost.close(); // whoever opens a host closes it; the store stays open
 		VenueServer again = VenueServer.launch(config(), reopened);
 		try {
 			Engine engine = again.getEngine();
 			assertEquals(venueKey, engine.getAccountKey());
-			assertEquals(RECORD, engine.getVenueState().users().get(ALICE).workspaceRoot().read(RECORD_PATH));
+			assertEquals(RECORD, engine.getVenueState().users().user(ALICE).workspace().read(RECORD_PATH));
 			assertTrue(engine.getVenueState().users().isDeleted(BOB));
 		} finally {
 			again.close();
 		}
 	}
 
+	@Test void embedderLaunchesAVenueOnAClockOfItsOwn() throws Exception {
+		DrivenClock clock = DrivenClock.at(Instant.parse("2025-03-01T00:00:00Z"));
+		VenueServer venue = VenueServer.launch(config(), TestTemp.etch("embedder-clock"), List.of(), null, clock);
+		try {
+			clock.advance(1_000);
+			assertEquals(clock.get(), venue.getEngine().currentTimestamp(), "the venue reads the embedder's clock");
+		} finally {
+			venue.close();
+		}
+	}
+
 	@Test void anEngineOnAnEmbeddersHostLeavesClosingItToTheEmbedder() throws Exception {
-		try (EtchStore store = EtchStore.create(storeFile("own-host.etch"))) {
+		try (EtchStore store = TestTemp.etch("own-host")) {
 			AKeyPair key = AKeyPair.create(Blob.fromHex(SEED));
-			CoviaApplication application = CoviaApplication.open(store, key);
-			var host = application.host();
-			Engine engine = new Engine(Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true)), application, key).start();
-			engine.getVenueState().users().ensure(ALICE).workspaceRoot().write(RECORD_PATH, RECORD);
+			var host = LatticeHost.open(store);
+			CoviaApplication application = host.addApplication(new CoviaApplication(host));
+			Engine engine = application.mount(key, Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true))).start();
+			Workspace workspace = engine.getVenueState().users().ensure(ALICE).workspace();
+			workspace.createPath(AREA);
+			workspace.write(RECORD_PATH, RECORD);
 			engine.close(); // its final flush is the engine's last save
 
 			host.checkpoint(); // still open: whoever opened the host closes it

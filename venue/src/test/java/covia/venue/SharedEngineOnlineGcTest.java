@@ -1,6 +1,7 @@
 package covia.venue;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -33,6 +34,9 @@ import covia.api.Fields;
  */
 public class SharedEngineOnlineGcTest {
 
+	/** Set by the one cycle this JVM runs; a later run of the class skips. */
+	private static final AtomicBoolean COLLECTED = new AtomicBoolean();
+
 	private static AString big(String tag) {
 		return Strings.create(tag + "-" + "y".repeat(200));
 	}
@@ -50,6 +54,7 @@ public class SharedEngineOnlineGcTest {
 
 	@Test
 	public void collectsTheSharedStoreWhileTheSuiteRuns() throws Exception {
+		assumeTrue(COLLECTED.compareAndSet(false, true), "the shared store is collected once per JVM");
 		Engine engine = TestEngine.ENGINE;
 		EtchStore store = TestEngine.STORE;
 		assertFalse(store.isGCInProgress(), "only this test collects the shared store");

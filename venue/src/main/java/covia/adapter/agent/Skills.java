@@ -22,6 +22,11 @@ import convex.core.lang.RT;
 import covia.adapter.AssetAdapter;
 import covia.api.Abilities;
 import covia.api.Fields;
+import covia.exception.InvalidDefinitionException;
+import covia.exception.InvalidInputException;
+import covia.exception.NotFoundException;
+import covia.exception.NotSupportedException;
+import covia.exception.UnavailableException;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 
@@ -69,6 +74,9 @@ public final class Skills {
 
 	/** The venue's skill library root — a directory of skillsets, never of skills. */
 	public static final String VENUE_SKILLS = "v/skills";
+
+	/** What failed, when finding a tool's providers meets a fault in a skill: the skill and the tool follow. */
+	public static final String PROVIDER_SEARCH = "Finding providers of %2$s in skill %1$s";
 
 	/** The skill facet key on asset metadata, and the flag key on loads entries. */
 	public static final AString K_SKILL = Strings.intern("skill");
@@ -284,11 +292,44 @@ public final class Skills {
 		return false;
 	}
 
+	/** The skills on the effective advertised surface that provide the tool
+	 * {@code toolName}, by index name, sorted. A skill provides it when one of
+	 * its tool entries binds exactly that name, named as the palette names it.
+	 * Answers a call to a tool whose skill is not loaded (#643). Only a hint,
+	 * so it stays cheap: skills resolve without their bodies, and operation
+	 * definitions only from this venue, never fetched from another. */
+	static List<String> providersOf(Engine engine, RequestContext ctx,
+			SkillSources configured, AMap<AString, ACell> effectiveLoads,
+			String toolName) {
+		SkillSources effective = effectiveSources(engine, ctx, configured, effectiveLoads);
+		java.util.TreeSet<String> out = new java.util.TreeSet<>();
+		for (SkillIndexEntry entry : listSkills(engine, ctx, effective)) {
+			if (entry.error() != null) continue;
+			try {
+				ResolvedSkill skill = isContentRef(entry.path().toString())
+					? resolveRef(engine, ctx, entry.path())
+					: resolveRefLight(engine, ctx, entry.path());
+				for (long i = 0; i < skill.toolOps().count(); i++) {
+					if (toolName.equals(ToolPalette.localToolName(engine, ctx, skill.toolOps().get(i)))) {
+						out.add(entry.name());
+						break;
+					}
+				}
+			} catch (RuntimeException e) {
+				// A skill that cannot be resolved or bound now is not hinted. A
+				// failure not yet reported is a fault in this search, reported here
+				covia.exception.FaultException.within(
+					PROVIDER_SEARCH.formatted(entry.path(), toolName), covia.exception.FaultException.VENUE, e);
+			}
+		}
+		return List.copyOf(out);
+	}
+
 	/** A source ref must be a string; anything else is a configuration error. */
 	private static AString sourceRef(ACell raw) {
 		AString source = RT.ensureString(raw);
 		if (source == null) {
-			throw new IllegalArgumentException("skills sources must be strings — got: " + raw);
+			throw new InvalidInputException("skills sources must be strings — got: " + raw);
 		}
 		return source;
 	}
@@ -426,7 +467,7 @@ public final class Skills {
 				}
 			}
 		}
-		throw new RuntimeException("skill '" + name + "' not found. " + availability(engine, ctx, sources));
+		throw new NotFoundException("skill '" + name + "' not found. " + availability(engine, ctx, sources), name);
 	}
 
 	/** How many names a not-found error lists before it stops being useful. */
@@ -503,7 +544,7 @@ public final class Skills {
 	private static ResolvedSkill resolveValue(Engine engine, RequestContext ctx,
 			AString path, AString opRef, ACell value, boolean needBody) {
 		if (value == null) {
-			throw new RuntimeException("skill not found: " + path);
+			throw new NotFoundException("skill not found: " + path, path.toString());
 		}
 
 		if (value instanceof AString s) {
@@ -513,18 +554,18 @@ public final class Skills {
 				// lattice metadata, so it never goes through resolvePath.
 				return resolveContentSkill(engine, ctx, path, s);
 			}
-			if (ContextLoader.isAssetReference(str)) {
+			if (ContextLoader.isReference(engine, ctx, str)) {
 				// String reference — one hop to the skill asset (no chains,
 				// matching Engine.resolveContent's one-hop rule).
 				requireRead(engine, ctx, s);
 				ACell target = engine.resolvePathUnchecked(s, ctx);
-				if (target == null) throw new RuntimeException("skill reference does not resolve: " + str);
+				if (target == null) throw new NotFoundException("skill reference does not resolve: " + str, str);
 				if (target instanceof AString) {
-					throw new RuntimeException("skill reference chains are not followed: " + path + " → " + str);
+					throw new NotSupportedException("skill reference chains are not followed: " + path + " → " + str);
 				}
 				return resolveValue(engine, ctx, path, s, target, needBody);
 			}
-			throw new RuntimeException("skill at " + path
+			throw new InvalidDefinitionException("skill at " + path
 				+ " is not a skill (expected asset metadata or a reference; inline bodies go in content.inline)");
 		}
 
@@ -543,7 +584,7 @@ public final class Skills {
 			// The skill facet — loadable extras, mirroring the operation facet.
 			ACell facetCell = meta.get(K_SKILL);
 			if (facetCell != null && !(facetCell instanceof AMap)) {
-				throw new RuntimeException("skill facet at " + path + " must be a map");
+				throw new InvalidDefinitionException("skill facet at " + path + " must be a map");
 			}
 			@SuppressWarnings("unchecked")
 			AMap<AString, ACell> facet = (AMap<AString, ACell>) facetCell;
@@ -554,7 +595,7 @@ public final class Skills {
 			long budget = (facet != null && facet.get(K_BUDGET) instanceof CVMLong l) ? l.longValue() : 0;
 			for (long i = 0; i < tools.count(); i++) {
 				if (RT.ensureString(tools.get(i)) == null) {
-					throw new RuntimeException("skill.tools entries at " + path + " must be operation ref strings");
+					throw new InvalidDefinitionException("skill.tools entries at " + path + " must be operation ref strings");
 				}
 			}
 			requireRefStrings(childSkills, K_SKILLS, path);
@@ -600,7 +641,7 @@ public final class Skills {
 				childSkills, childSkillsets, budget, path, meta.getHash());
 		}
 
-		throw new RuntimeException("skill at " + path
+		throw new InvalidDefinitionException("skill at " + path
 			+ " is not a skill (expected asset metadata, a reference, or markdown text)");
 	}
 
@@ -621,7 +662,7 @@ public final class Skills {
 		ACell v = facet.get(key);
 		if (v == null) return Vectors.empty();
 		AVector<ACell> vec = RT.ensureVector(v);
-		if (vec == null) throw new RuntimeException("skill." + key + " at " + path + " must be an array");
+		if (vec == null) throw new InvalidDefinitionException("skill." + key + " at " + path + " must be an array");
 		return vec;
 	}
 
@@ -636,12 +677,12 @@ public final class Skills {
 			if (blob == null || blob.count() == 0) return null;
 			return new String(blob.getBytes(), StandardCharsets.UTF_8);
 		} catch (java.io.IOException e) {
-			throw new RuntimeException("skill content read failed for " + ref + ": " + e.getMessage(), e);
+			throw new UnavailableException("skill content read failed for " + ref + ": " + e.getMessage(), e);
 		}
 	}
 
-	private static RuntimeException missingDescription(AString path) {
-		return new RuntimeException("missing description");
+	private static InvalidDefinitionException missingDescription(AString path) {
+		return new InvalidDefinitionException("missing description");
 	}
 
 	// ========== SKILL.md frontmatter ==========
@@ -889,31 +930,31 @@ public final class Skills {
 	 *        address
 	 * @param inline copy the body into {@code content.inline} (self-contained)
 	 *        rather than bind it live through {@code content.ref}
-	 * @throws IllegalArgumentException when the text is not a skill — no
+	 * @throws InvalidInputException when the text is not a skill — no
 	 *         frontmatter, no description, or no name and no source to derive
 	 *         one from — with the reason
 	 */
 	public static ParsedSkill parseSkillText(String text, AString source, boolean inline) {
 		Frontmatter fm = parseFrontmatter(text);
 		if (fm == null) {
-			throw new IllegalArgumentException("not a SKILL.md: expected a leading '---' frontmatter block"
+			throw new InvalidInputException("not a SKILL.md: expected a leading '---' frontmatter block"
 				+ " declaring name and description");
 		}
 		String description = fm.description();
 		if (description == null || description.isEmpty()) {
-			throw new IllegalArgumentException("SKILL.md frontmatter declares no description");
+			throw new InvalidInputException("SKILL.md frontmatter declares no description");
 		}
 		String name = fm.name();
 		if (name == null || name.isEmpty()) name = (source != null) ? nameFromSource(source.toString()) : null;
 		if (name == null) {
-			throw new IllegalArgumentException("SKILL.md frontmatter declares no name,"
+			throw new InvalidInputException("SKILL.md frontmatter declares no name,"
 				+ " and none can be derived from the source");
 		}
 		if (name.contains("/") || name.chars().anyMatch(Character::isWhitespace)) {
-			throw new IllegalArgumentException("skill name must be one path segment, got '" + name + "'");
+			throw new InvalidInputException("skill name must be one path segment, got '" + name + "'");
 		}
 		if (!inline && source == null) {
-			throw new IllegalArgumentException("a content.ref binding needs a source to reference");
+			throw new InvalidInputException("a content.ref binding needs a source to reference");
 		}
 
 		AMap<AString, ACell> content = Maps.of(Fields.CONTENT_TYPE, MARKDOWN);
@@ -977,7 +1018,7 @@ public final class Skills {
 	private static ResolvedSkill resolveContentSkill(Engine engine, RequestContext ctx,
 			AString path, AString ref) {
 		String text = contentOf(engine, ctx, ref);
-		if (text == null) throw new RuntimeException("skill not found: " + ref);
+		if (text == null) throw new NotFoundException("skill not found: " + ref, ref.toString());
 		ParsedSkill p = parseSkillText(text, ref, false);
 		return new ResolvedSkill(p.name(), p.description(), p.body(), p.tools(), Vectors.empty(),
 			p.skills(), p.skillsets(), 0, path, p.metadata().getHash());
@@ -989,7 +1030,7 @@ public final class Skills {
 	private static void requireRefStrings(AVector<ACell> refs, AString key, AString path) {
 		for (long i = 0; i < refs.count(); i++) {
 			if (RT.ensureString(refs.get(i)) == null) {
-				throw new RuntimeException("skill." + key + " entries at " + path
+				throw new InvalidDefinitionException("skill." + key + " entries at " + path
 					+ " must be " + (K_SKILLSETS.equals(key) ? "skillset" : "skill") + " ref strings");
 			}
 		}
@@ -997,18 +1038,19 @@ public final class Skills {
 
 	/**
 	 * Builds the loads-entry spec for a loaded skill:
-	 * {@code {skill: true, budget, ts, label, tools?, skills?, skillsets?}}. A
+	 * {@code {skill: true, budget, ts, label, tools?, skills?, skillsets?}}, where
+	 * {@code ts} is the load time from the venue's clock. A
 	 * plain map — fully compatible with ContextChain (tombstones, masking),
 	 * context_unload and the loads snapshot. The body itself is carried by the
 	 * appended load event; tool and child refs are snapshotted onto the entry,
 	 * including empty vectors, so later inference never consults a mutated skill
 	 * merely to rediscover that it contributed nothing.
 	 */
-	public static AMap<AString, ACell> buildSkillLoadMeta(long budget, ResolvedSkill skill) {
+	public static AMap<AString, ACell> buildSkillLoadMeta(long budget, ResolvedSkill skill, CVMLong ts) {
 		AMap<AString, ACell> meta = Maps.of(
 			K_SKILL, CVMBool.TRUE,
 			K_BUDGET, CVMLong.create(budget),
-			K_TS, CVMLong.create(System.currentTimeMillis()),
+			K_TS, ts,
 			Loads.K_AGENT_MANAGED, CVMBool.TRUE,
 			Loads.K_TRUSTED, CVMBool.FALSE,
 			K_LABEL, Strings.create(skill.name()),
@@ -1118,7 +1160,7 @@ public final class Skills {
 		}
 		AVector<ACell> refs = RT.ensureVector(raw);
 		if (refs == null) {
-			throw new RuntimeException("loaded skill." + key + " at " + entryKey + " must be an array");
+			throw new InvalidDefinitionException("loaded skill." + key + " at " + entryKey + " must be an array");
 		}
 		return appendSources(out, refs, seen, "loaded skill." + key + " at " + entryKey, key);
 	}
@@ -1129,7 +1171,7 @@ public final class Skills {
 		for (long i = 0; i < sources.count(); i++) {
 			AString source = RT.ensureString(sources.get(i));
 			if (source == null) {
-				throw new RuntimeException(label + " entries must be "
+				throw new InvalidDefinitionException(label + " entries must be "
 					+ (K_SKILLSETS.equals(kind) ? "skillset" : "skill") + " ref strings");
 			}
 			if (seen.add(source.toString())) out = out.conj(source);
@@ -1374,7 +1416,7 @@ public final class Skills {
 	 */
 	public static int validateVenueLibrary(Engine engine) {
 		if (engine == null) return 0;
-		return validateLibrary(engine, RequestContext.of(engine.getDIDString()), VENUE_SKILLS);
+		return validateLibrary(engine, engine.venueContext(), VENUE_SKILLS);
 	}
 
 	/**
@@ -1520,13 +1562,13 @@ public final class Skills {
 		if (raw == null) return Vectors.empty();
 		String kind = K_SKILLSETS.equals(key) ? "skillset" : "skill";
 		if (!(raw instanceof AVector)) {
-			throw new RuntimeException("config." + key + " must be an array of " + kind
+			throw new InvalidDefinitionException("config." + key + " must be an array of " + kind
 				+ " refs, got " + convex.core.data.type.Types.get(raw) + " — fix the agent config");
 		}
 		AVector<ACell> sources = (AVector<ACell>) raw;
 		for (long i = 0; i < sources.count(); i++) {
 			if (RT.ensureString(sources.get(i)) == null) {
-				throw new RuntimeException("config." + key + " entries must be " + kind
+				throw new InvalidDefinitionException("config." + key + " entries must be " + kind
 					+ " ref strings, got " + convex.core.data.type.Types.get(sources.get(i))
 					+ " — fix the agent config");
 			}
@@ -1592,7 +1634,7 @@ public final class Skills {
 		AString name = RT.ensureString(RT.getIn(toolInput, Fields.NAME));
 		AString ref = RT.ensureString(RT.getIn(toolInput, AbstractLLMAdapter.K_REF));
 		if ((name == null) == (ref == null)) {
-			throw new IllegalArgumentException("skill_load requires exactly one of 'name' or 'ref'");
+			throw new InvalidInputException("skill_load requires exactly one of 'name' or 'ref'");
 		}
 		SkillSources effective = effectiveSources(engine, ctx, sources, effectiveLoads);
 		if (ref != null && !isAdvertised(engine, ctx, effective, effectiveLoads, ref)) {
@@ -1620,10 +1662,10 @@ public final class Skills {
 		long budget = AbstractLLMAdapter.clampLoadBudget(
 			RT.getIn(toolInput, K_BUDGET), defaultBudget);
 
-		AMap<AString, ACell> entryMeta = buildSkillLoadMeta(budget, skill);
+		AMap<AString, ACell> entryMeta = buildSkillLoadMeta(budget, skill, engine.currentTimestamp());
 		ACell volatileCell = RT.getIn(toolInput, Loads.K_VOLATILE);
 		if (volatileCell != null && !(volatileCell instanceof CVMBool)) {
-			throw new IllegalArgumentException("skill_load volatile must be a boolean");
+			throw new InvalidInputException("skill_load volatile must be a boolean");
 		}
 		if (volatileCell != null) entryMeta = entryMeta.assoc(Loads.K_VOLATILE, volatileCell);
 

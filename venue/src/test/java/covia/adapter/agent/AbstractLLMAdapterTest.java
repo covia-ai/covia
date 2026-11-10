@@ -13,6 +13,7 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
+import covia.exception.InvalidInputException;
 
 /**
  * Tests for AbstractLLMAdapter — the shared base for LLM-backed agent adapters.
@@ -143,9 +144,9 @@ public class AbstractLLMAdapterTest {
 	public void testParseToolArgumentsGarbageThrows() {
 		// Outright garbage is a visible error the LLM can correct — never a
 		// silent Maps.empty() substitution or a pass-through.
-		assertThrows(IllegalArgumentException.class,
+		assertThrows(InvalidInputException.class,
 			() -> AbstractLLMAdapter.parseToolArguments(Strings.create("not json")));
-		assertThrows(IllegalArgumentException.class,
+		assertThrows(InvalidInputException.class,
 			() -> AbstractLLMAdapter.parseToolArguments(Strings.create("{broken")));
 	}
 
@@ -193,30 +194,6 @@ public class AbstractLLMAdapterTest {
 		assertSame(data, msg.get(AbstractLLMAdapter.K_STRUCTURED_CONTENT),
 			"the canonical agent turn must retain the exact operation result");
 		assertNull(msg.get(AbstractLLMAdapter.K_CONTENT));
-	}
-
-	// ========== getLLMOperation ==========
-
-	@Test
-	public void testGetLLMOperationFromConfig() {
-		AMap<AString, ACell> config = Maps.of(
-			AbstractLLMAdapter.K_LLM_OPERATION, Strings.create("v/ops/langchain/ollama"));
-		AString op = AbstractLLMAdapter.getLLMOperation(config);
-		assertEquals("v/ops/langchain/ollama", op.toString());
-	}
-
-	@Test
-	public void testGetLLMOperationDefault() {
-		AMap<AString, ACell> config = Maps.of(
-			Strings.create("model"), Strings.create("gpt-4o"));
-		AString op = AbstractLLMAdapter.getLLMOperation(config);
-		assertEquals("v/models/anthropic/claude-sonnet-5-5", op.toString());
-	}
-
-	@Test
-	public void testGetLLMOperationNullConfig() {
-		AString op = AbstractLLMAdapter.getLLMOperation(null);
-		assertEquals("v/models/anthropic/claude-sonnet-5-5", op.toString());
 	}
 
 	// ========== copyIfPresent ==========

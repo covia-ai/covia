@@ -76,7 +76,7 @@ public final class TrustedProxies {
 		List<Range> ranges = new ArrayList<>();
 		boolean loopback = false;
 		for (String raw : entries) {
-			String entry = (raw == null) ? "" : raw.trim();
+			String entry = (raw == null) ? "" : raw;
 			if (entry.isEmpty()) throw new IllegalArgumentException("trustedProxies: empty entry");
 			if (LOOPBACK.equalsIgnoreCase(entry)) {
 				loopback = true;
@@ -112,7 +112,7 @@ public final class TrustedProxies {
 	/** Whether this address is one of the trusted proxies. */
 	public boolean trusts(String ip) {
 		if (ip == null) return false;
-		byte[] address = literal(ip.trim());
+		byte[] address = literal(ip);
 		if (address == null) return false;
 		if (loopback && isLoopback(address)) return true;
 		for (Range r : ranges) {

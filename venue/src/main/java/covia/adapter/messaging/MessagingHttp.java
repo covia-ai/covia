@@ -12,6 +12,8 @@ import java.util.concurrent.TimeoutException;
 
 import convex.core.data.ACell;
 import convex.core.util.JSON;
+import covia.exception.ResponseException;
+import covia.exception.UnavailableException;
 
 /** Bounded JSON transport. Sends are never automatically retried after uncertain delivery. */
 public final class MessagingHttp {
@@ -35,7 +37,11 @@ public final class MessagingHttp {
 			return value.replaceAll("/+$", "");
 		} catch (IllegalArgumentException e) { throw new IllegalArgumentException(INVALID_URL); }
 	}
-	/** A provider-issued event socket URL. Its query may carry a single-use connection ticket. */
+	/**
+	 * A provider-issued event socket URL. Its query may carry a single-use connection ticket.
+	 *
+	 * @throws ResponseException when the provider issued an unusable URL
+	 */
 	public static URI socket(String value) {
 		try {
 			URI uri = URI.create(value);
@@ -43,7 +49,7 @@ public final class MessagingHttp {
 			if (host == null || uri.getUserInfo() != null || uri.getFragment() != null
 				|| !("wss".equals(uri.getScheme()) || (loopback(host) && "ws".equals(uri.getScheme())))) throw new IllegalArgumentException();
 			return uri;
-		} catch (IllegalArgumentException | NullPointerException e) { throw new IllegalArgumentException(INVALID_SOCKET_URL); }
+		} catch (IllegalArgumentException | NullPointerException e) { throw new ResponseException(INVALID_SOCKET_URL); }
 	}
 	private static boolean loopback(String host) {
 		return "localhost".equalsIgnoreCase(host) || "127.0.0.1".equals(host) || "[::1]".equals(host);
@@ -51,6 +57,8 @@ public final class MessagingHttp {
 	/**
 	 * A provider-issued download URL, such as a short-lived media link. Unlike
 	 * {@link #endpoint} its query is kept, since it may carry the link's signature.
+	 *
+	 * @throws ResponseException when the provider issued an unusable URL
 	 */
 	public static URI download(String value) {
 		try {
@@ -59,7 +67,7 @@ public final class MessagingHttp {
 			if (host == null || uri.getUserInfo() != null || uri.getFragment() != null
 				|| !("https".equals(uri.getScheme()) || (loopback(host) && "http".equals(uri.getScheme())))) throw new IllegalArgumentException();
 			return uri;
-		} catch (IllegalArgumentException | NullPointerException e) { throw new IllegalArgumentException(INVALID_DOWNLOAD_URL); }
+		} catch (IllegalArgumentException | NullPointerException e) { throw new ResponseException(INVALID_DOWNLOAD_URL); }
 	}
 	public static ACell post(String url, String token, ACell body) {
 		return post(url, token, body, Duration.ofSeconds(30));
@@ -82,14 +90,20 @@ public final class MessagingHttp {
 		return new MessagingMedia.Fetched(response.body(), response.headers().firstValue("Content-Type").orElse(null));
 	}
 	private static HttpRequest.Builder authorised(String url, String token, Duration timeout) {
-		if (token == null || token.isBlank() || token.contains("\r") || token.contains("\n")) throw new IllegalStateException(UNAVAILABLE);
+		if (token == null || token.isBlank() || token.contains("\r") || token.contains("\n")) throw new UnavailableException(UNAVAILABLE);
 		return HttpRequest.newBuilder(URI.create(url)).timeout(timeout).header("Authorization", "Bearer " + token);
 	}
 	private static ACell json(HttpResponse<byte[]> response) {
 		try { return MessagingSettings.object(JSON.parse(new String(response.body(), StandardCharsets.UTF_8))); }
-		catch (RuntimeException e) { throw new IllegalStateException(RESPONSE_ERROR); }
+		catch (RuntimeException e) { throw new ResponseException(RESPONSE_ERROR); }
 	}
-	/** @param oversize the failure for a body over {@code max}: a send's receipt stays uncertain, a download is too large */
+	/**
+	 * Failures carry no cause, so a provider's response body never leaks through them.
+	 *
+	 * @param oversize the failure for a body over {@code max}: a send's receipt stays uncertain, a download is too large
+	 * @throws ResponseException when the provider answers with an error status or an oversized body
+	 * @throws UnavailableException when the provider cannot be reached in time
+	 */
 	private static HttpResponse<byte[]> exchange(HttpRequest request, Duration timeout, int max, String oversize) {
 		try {
 			// HttpRequest.timeout does not bound a stalled response body. Bound the
@@ -98,17 +112,17 @@ public final class MessagingHttp {
 			HttpResponse<byte[]> response;
 			try { response = pending.get(timeout.toNanos(), TimeUnit.NANOSECONDS); }
 			finally { if (!pending.isDone()) pending.cancel(true); }
-			if (response.statusCode() < 200 || response.statusCode() >= 300) throw new IllegalStateException(HTTP_ERROR.formatted(response.statusCode()));
+			if (response.statusCode() < 200 || response.statusCode() >= 300) throw new ResponseException(HTTP_ERROR.formatted(response.statusCode()));
 			return response;
 		} catch (InterruptedException e) {
-			Thread.currentThread().interrupt(); throw new IllegalStateException(IO_ERROR);
+			Thread.currentThread().interrupt(); throw new UnavailableException(IO_ERROR);
 		} catch (ExecutionException e) {
 			// The subscriber's refusal is the cause, or (JDK 27 on) wrapped in an IOException beneath it.
 			for (Throwable t = e.getCause(); t != null; t = t.getCause()) {
-				if (t instanceof IllegalStateException s && RESPONSE_ERROR.equals(s.getMessage())) throw new IllegalStateException(oversize);
+				if (t instanceof IllegalStateException s && RESPONSE_ERROR.equals(s.getMessage())) throw new ResponseException(oversize);
 			}
-			throw new IllegalStateException(IO_ERROR);
-		} catch (TimeoutException e) { throw new IllegalStateException(IO_ERROR); }
+			throw new UnavailableException(IO_ERROR);
+		} catch (TimeoutException e) { throw new UnavailableException(IO_ERROR); }
 	}
 	private static final class LimitedBodySubscriber implements HttpResponse.BodySubscriber<byte[]> {
 		private final java.util.concurrent.CompletableFuture<byte[]> result = new java.util.concurrent.CompletableFuture<>();

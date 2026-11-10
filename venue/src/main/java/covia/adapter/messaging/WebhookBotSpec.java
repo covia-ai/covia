@@ -30,4 +30,5 @@ public interface WebhookBotSpec extends MessagingBotSpec {
 	 * as written, never this default.
 	 */
 	default boolean admitsAnySender() { return MessagingSettings.bool(settings(), "open", routesToRelay()); }
+	@Override default boolean open() { return admitsAnySender(); }
 }

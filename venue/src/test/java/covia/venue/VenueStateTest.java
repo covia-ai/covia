@@ -7,24 +7,26 @@ import org.junit.jupiter.api.Test;
 import convex.core.crypto.AKeyPair;
 import convex.core.cvm.Keywords;
 import convex.core.lang.RT;
+import covia.lattice.Covia;
 import convex.core.data.ABlob;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
+import convex.core.data.AccountKey;
 import convex.core.data.Blob;
 import convex.core.data.Hash;
 import convex.core.data.Index;
 import convex.core.data.Maps;
+import convex.core.data.SignedData;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
 import convex.core.store.MemoryStore;
-import convex.lattice.LatticeContext;
+import covia.exception.ConfigurationException;
 import convex.lattice.LatticeHost;
 import convex.lattice.cursor.Cursors;
 import covia.api.Fields;
 import covia.grid.Status;
-import covia.venue.AgentState;
 
 /**
  * Tests for the cursor-based VenueState application API.
@@ -32,6 +34,8 @@ import covia.venue.AgentState;
  * no raw lattice data construction.
  */
 public class VenueStateTest {
+	/** The venue's secret store keys: these venues keep no secret a migration step carries over. */
+	private static final SecretStore.Keys NO_SECRETS = SecretStore.keys(AKeyPair.generate());
 
 	// ========== Factory Methods ==========
 
@@ -49,13 +53,41 @@ public class VenueStateTest {
 	public void testFromRoot() {
 		AKeyPair kp = AKeyPair.generate();
 		var root = Cursors.root(convex.core.data.Index.<convex.core.data.Keyword, ACell>none());
-		var context = convex.lattice.LatticeContext.create(
-			CVMLong.create(convex.core.util.Utils.getCurrentTimestamp()), kp);
+		var now = CVMLong.create(convex.core.util.Utils.getCurrentTimestamp());
+		var context = VenueContext.create(() -> now);
 
-		VenueState vs = VenueState.fromRoot(root, kp.getAccountKey(), context);
+		VenueState vs = VenueState.fromRoot(root, kp.getAccountKey(), kp::signData, context);
 
 		assertNotNull(vs);
 		assertEquals(kp.getAccountKey(), vs.getOwnerKey());
+	}
+
+	@Test
+	public void testApplicationHoldsOneCopyOfEachMountedVenue() {
+		AKeyPair kp = AKeyPair.generate();
+		CoviaApplication application = TestEngine.application(kp);
+		VenueState venue = application.venue(kp.getAccountKey());
+		assertSame(venue, application.venue(kp.getAccountKey()), "every caller shares the venue's one copy");
+
+		AccountKey other = AKeyPair.generate().getAccountKey();
+		ConfigurationException refused = assertThrows(ConfigurationException.class, () -> application.venue(other));
+		assertEquals(String.format(CoviaApplication.NOT_MOUNTED, other), refused.getMessage());
+	}
+
+	@Test
+	public void testApplicationSyncSignsTheVenueIntoItsRecord() {
+		AKeyPair kp = AKeyPair.generate();
+		CoviaApplication application = TestEngine.application(kp);
+		VenueState venue = application.venue(kp.getAccountKey());
+		venue.assets().store(Strings.create("{\"name\":\"Published\"}"), null);
+		assertNull(RT.getIn(application.cursor().get(), Covia.GRID, Covia.VENUES, kp.getAccountKey()),
+			"an edit stays in the venue's copy until the application syncs");
+
+		application.sync();
+		ACell record = RT.getIn(application.cursor().get(), Covia.GRID, Covia.VENUES, kp.getAccountKey());
+		assertInstanceOf(SignedData.class, record);
+		assertEquals(venue.get(), ((SignedData<?>) record).getValue());
+		assertTrue(((SignedData<?>) record).checkSignature(), "the record is signed by the venue's key");
 	}
 
 	@Test
@@ -64,11 +96,10 @@ public class VenueStateTest {
 		try (MemoryStore store = new MemoryStore()) {
 			LatticeHost<Index<convex.core.data.Keyword, ACell>> root =
 				LatticeHost.create(Index.none(), store);
-			CoviaApplication application = CoviaApplication.connect(root);
-			application.setContext(LatticeContext.create(null, kp));
+			CoviaApplication application = TestEngine.application(root, kp);
 			VenueState venue = application.venue(kp.getAccountKey());
 
-			venue.initialise(Strings.create("did:key:test"));
+			venue.initialise(Strings.create("did:key:test"), NO_SECRETS);
 			AssetStore assets = venue.assets();
 			assets.store(Strings.create("{\"name\":\"Hosted\"}"), null);
 
@@ -89,15 +120,15 @@ public class VenueStateTest {
 		VenueState vs = VenueState.create(kp);
 		AssetStore assets = vs.assets();
 
-		assertEquals(0, assets.count());
+		assertEquals(0, assets.size());
 
 		AString meta = Strings.create("{\"name\":\"Test Asset\"}");
 		Hash id = assets.store(meta, null);
 
 		assertNotNull(id);
-		assertEquals(1, assets.count());
+		assertEquals(1, assets.size());
 
-		AVector<?> record = assets.getRecord(id);
+		AVector<?> record = assets.get(id);
 		assertNotNull(record);
 		assertEquals(meta, record.get(AssetStore.POS_JSON));
 		assertNull(record.get(AssetStore.POS_CONTENT));
@@ -113,7 +144,7 @@ public class VenueStateTest {
 		ACell content = Strings.create("binary-data-here");
 		Hash id = assets.store(meta, content);
 
-		AVector<?> record = assets.getRecord(id);
+		AVector<?> record = assets.get(id);
 		assertEquals(content, record.get(AssetStore.POS_CONTENT));
 	}
 
@@ -127,7 +158,7 @@ public class VenueStateTest {
 		assets.store(Strings.create("{\"name\":\"Asset 2\"}"), null);
 		assets.store(Strings.create("{\"name\":\"Asset 3\"}"), null);
 
-		assertEquals(3, assets.count());
+		assertEquals(3, assets.size());
 	}
 
 	@Test
@@ -141,7 +172,7 @@ public class VenueStateTest {
 		Hash id2 = assets.store(meta, null);
 
 		assertEquals(id1, id2, "Same metadata should produce same ID");
-		assertEquals(1, assets.count(), "Duplicate store should not create new entry");
+		assertEquals(1, assets.size(), "Duplicate store should not create new entry");
 	}
 
 	@Test
@@ -180,16 +211,16 @@ public class VenueStateTest {
 		VenueState vs = VenueState.create(kp);
 		User user = vs.users().ensure("did:key:zAlice");
 
-		assertEquals(0, user.getJobs().count());
+		assertEquals(0, user.jobs().size());
 
 		Blob jobID = Blob.parse("0x0001");
 		AMap<AString, ACell> record = Maps.of(
 			Fields.STATUS, Status.PENDING,
 			Fields.UPDATED, CVMLong.create(1000L));
-		user.persistJob(jobID, record);
+		user.jobs().create(jobID, record);
 
-		assertEquals(1, user.getJobs().count());
-		AMap<AString, ACell> retrieved = user.getJob(jobID);
+		assertEquals(1, user.jobs().size());
+		AMap<AString, ACell> retrieved = user.jobs().getRecord(jobID);
 		assertNotNull(retrieved);
 		assertEquals(Status.PENDING, retrieved.get(Fields.STATUS));
 	}
@@ -201,63 +232,41 @@ public class VenueStateTest {
 		User user = vs.users().ensure("did:key:zAlice");
 
 		Blob jobID = Blob.parse("0x0001");
-		user.persistJob(jobID, Maps.of(
+		user.jobs().create(jobID, Maps.of(
 			Fields.STATUS, Status.PENDING,
 			Fields.UPDATED, CVMLong.create(1000L)));
 
-		user.persistJob(jobID, Maps.of(
-			Fields.STATUS, Status.COMPLETE,
-			Fields.UPDATED, CVMLong.create(2000L)));
+		assertNull(user.jobs().create(jobID, Maps.of(Fields.STATUS, Status.FAILED)),
+			"an existing job is not created again");
+		user.jobs().job(jobID).update(job -> job.assoc(Fields.STATUS, Status.COMPLETE));
 
-		assertEquals(1, user.getJobs().count(), "Should still be one job");
-		assertEquals(Status.COMPLETE, user.getJob(jobID).get(Fields.STATUS));
+		assertEquals(1, user.jobs().size(), "Should still be one job");
+		assertEquals(Status.COMPLETE, user.jobs().getRecord(jobID).get(Fields.STATUS));
 	}
 
 	@Test
-	public void testUserJobUpdatePreservesExplicitNullTemp() {
-		VenueState vs = VenueState.create(AKeyPair.generate());
-		User user = vs.users().ensure("did:key:zNullTemp");
-		Blob jobID = Blob.parse("0x0001");
-		AString temp = Strings.intern("temp");
-		user.persistJob(jobID, Maps.of(
-			Fields.STATUS, Status.PENDING,
-			temp, null));
-
-		user.persistJob(jobID, Maps.of(Fields.STATUS, Status.COMPLETE));
-
-		AMap<AString, ACell> record = user.getJob(jobID);
-		assertTrue(record.containsKey(temp));
-		assertNull(record.get(temp));
-	}
-
-	@Test
-	public void testUpdateJobIfPresentNeverCreatesOrResurrectsARow() throws Exception {
+	public void testJobUpdateNeverCreatesOrResurrectsARow() throws Exception {
 		VenueState vs = VenueState.create(AKeyPair.generate());
 		User user = vs.users().ensure("did:key:zConditionalJobUpdate");
 		Blob jobID = Blob.parse("0x0001");
 		AString marker = Strings.intern("marker");
+		assertNull(user.jobs().job(jobID), "there is no job before it is created");
 
-		assertFalse(user.updateJobIfPresent(jobID,
-			record -> record.assoc(marker, Strings.create("missing"))));
-		assertNull(user.getJob(jobID), "an absent conditional update must not create a row");
-
-		user.persistJob(jobID, Maps.of(Fields.STATUS, Status.PENDING));
-		assertTrue(user.updateJobIfPresent(jobID,
-			record -> record.assoc(marker, Strings.create("present"))));
-		assertEquals(Strings.create("present"), user.getJob(jobID).get(marker));
+		JobRecord job = user.jobs().create(jobID, Maps.of(Fields.STATUS, Status.PENDING));
+		assertNotNull(job.update(record -> record.assoc(marker, Strings.create("present"))));
+		assertEquals(Strings.create("present"), job.getRecord().get(marker));
 
 		// either linearisation order is valid for the update; the delete must win
 		java.util.List<Boolean> raced = covia.test.Rendezvous.all(
-			() -> user.updateJobIfPresent(jobID,
-				record -> record.assoc(marker, Strings.create("raced"))),
-			() -> user.removeJob(jobID));
+			() -> job.update(record -> record.assoc(marker, Strings.create("raced"))) != null,
+			() -> user.jobs().remove(jobID) != null);
 		assertTrue(raced.get(1));
 
-		assertNull(user.getJob(jobID),
-			"delete and conditional update must linearise without resurrection");
-		assertFalse(user.updateJobIfPresent(jobID,
-			record -> record.assoc(marker, Strings.create("late"))));
-		assertNull(user.getJob(jobID));
+		assertNull(job.getRecord(),
+			"delete and update must linearise without resurrection");
+		assertNull(job.update(record -> record.assoc(marker, Strings.create("late"))));
+		assertNull(job.getRecord());
+		assertNull(user.jobs().job(jobID), "an update to a removed job must not create a row");
 	}
 
 	@Test
@@ -266,7 +275,8 @@ public class VenueStateTest {
 		VenueState vs = VenueState.create(kp);
 		User user = vs.users().ensure("did:key:zAlice");
 
-		assertNull(user.getJob(Blob.parse("0xFFFF")));
+		assertNull(user.jobs().job(Blob.parse("0xFFFF")));
+		assertNull(user.jobs().getRecord(Blob.parse("0xFFFF")));
 	}
 
 	// ========== Child Cursor Accessors ==========
@@ -278,7 +288,7 @@ public class VenueStateTest {
 
 		assertNotNull(vs.assets(), "Assets component should be available");
 		assertNotNull(vs.users(), "Users component should be available");
-		assertNotNull(vs.contentStorage(), "Storage component should be available");
+		assertNotNull(vs.contents(), "Content component should be available");
 	}
 
 	// ========== State Bootstrapping ==========
@@ -293,7 +303,7 @@ public class VenueStateTest {
 
 		// Bootstrap via the atomic init path (raw set() was removed — app code
 		// mutates through cursor atomics only)
-		vs.initialise(Strings.create("did:key:test"));
+		vs.initialise(Strings.create("did:key:test"), NO_SECRETS);
 
 		assertNotNull(vs.get());
 	}
@@ -301,18 +311,20 @@ public class VenueStateTest {
 	// ========== Write Propagation ==========
 
 	@Test
-	public void testWritesPropagateToRoot() {
+	public void testWritesReachRootWhenSynced() {
 		AKeyPair kp = AKeyPair.generate();
 		var root = Cursors.root(convex.core.data.Index.<convex.core.data.Keyword, ACell>none());
-		var context = convex.lattice.LatticeContext.create(
-			CVMLong.create(convex.core.util.Utils.getCurrentTimestamp()), kp);
+		var now = CVMLong.create(convex.core.util.Utils.getCurrentTimestamp());
+		var context = VenueContext.create(() -> now);
 
-		VenueState vs = VenueState.fromRoot(root, kp.getAccountKey(), context);
+		VenueState vs = VenueState.fromRoot(root, kp.getAccountKey(), kp::signData, context);
 		vs.assets().store(Strings.create("{\"name\":\"Propagated\"}"), null);
+		assertNull(RT.getIn(root.get(), Covia.GRID, Covia.VENUES, kp.getAccountKey()),
+			"edits stay in the venue's unsigned copy until it syncs");
 
-		// Root cursor should have data
-		ACell rootValue = root.get();
-		assertNotNull(rootValue, "Root cursor should contain data after store");
+		vs.sync();
+		assertEquals(vs.get(), RT.getIn(root.get(), Covia.GRID, Covia.VENUES, kp.getAccountKey(), Keywords.VALUE),
+			"sync signs the venue into its record");
 	}
 
 	// ========== Fork / Sync ==========
@@ -321,13 +333,10 @@ public class VenueStateTest {
 	public void testForkStampsPrivateWritesBeforePublication() {
 		AKeyPair kp = AKeyPair.generate();
 		var clock = new java.util.concurrent.atomic.AtomicLong(1000);
-		var context = new convex.lattice.LatticeContext() {
-			@Override
-			public CVMLong currentTimestamp() { return CVMLong.create(clock.get()); }
-		}.withSigningKey(kp);
+		var context = VenueContext.create(() -> CVMLong.create(clock.get()));
 		var root = Cursors.root(convex.core.data.Index.<convex.core.data.Keyword, ACell>none());
-		VenueState connected = VenueState.fromRoot(root, kp.getAccountKey(), context);
-		connected.initialise(Strings.create("did:key:fork-clock"));
+		VenueState connected = VenueState.fromRoot(root, kp.getAccountKey(), kp::signData, context);
+		connected.initialise(Strings.create("did:key:fork-clock"), NO_SECRETS);
 		VenueState forked = connected.fork();
 
 		clock.set(2000);
@@ -338,17 +347,17 @@ public class VenueStateTest {
 			"the parent must remain unchanged until sync");
 		forked.sync();
 		assertEquals(CVMLong.create(2000), RT.getIn(connected.get(), Keywords.TIMESTAMP));
-		assertEquals(1, connected.assets().count());
+		assertEquals(1, connected.assets().size());
 	}
 
 	@Test
 	public void testForkWritesNotVisibleBeforeSync() {
 		AKeyPair kp = AKeyPair.generate();
 		var root = Cursors.root(convex.core.data.Index.<convex.core.data.Keyword, ACell>none());
-		var context = convex.lattice.LatticeContext.create(
-			CVMLong.create(convex.core.util.Utils.getCurrentTimestamp()), kp);
+		var now = CVMLong.create(convex.core.util.Utils.getCurrentTimestamp());
+		var context = VenueContext.create(() -> now);
 
-		VenueState connected = VenueState.fromRoot(root, kp.getAccountKey(), context);
+		VenueState connected = VenueState.fromRoot(root, kp.getAccountKey(), kp::signData, context);
 		ACell rootBefore = root.get();
 
 		// Fork and write to the fork
@@ -356,7 +365,7 @@ public class VenueStateTest {
 		forked.assets().store(Strings.create("{\"name\":\"Invisible\"}"), null);
 
 		// Forked writes should be visible through the fork
-		assertEquals(1, forked.assets().count());
+		assertEquals(1, forked.assets().size());
 
 		// Parent root cursor should be unchanged (no leakage before sync)
 		ACell rootAfter = root.get();
@@ -368,17 +377,17 @@ public class VenueStateTest {
 	public void testForkSyncPropagates() {
 		AKeyPair kp = AKeyPair.generate();
 		var root = Cursors.root(convex.core.data.Index.<convex.core.data.Keyword, ACell>none());
-		var context = convex.lattice.LatticeContext.create(
-			CVMLong.create(convex.core.util.Utils.getCurrentTimestamp()), kp);
+		var now = CVMLong.create(convex.core.util.Utils.getCurrentTimestamp());
+		var context = VenueContext.create(() -> now);
 
-		VenueState connected = VenueState.fromRoot(root, kp.getAccountKey(), context);
+		VenueState connected = VenueState.fromRoot(root, kp.getAccountKey(), kp::signData, context);
 		VenueState forked = connected.fork();
 
 		// Write asset and job through the fork
 		Hash assetId = forked.assets().store(
 			Strings.create("{\"name\":\"Synced Asset\"}"), null);
 		User forkedAlice = forked.users().ensure("did:key:zAlice");
-		forkedAlice.persistJob(Blob.parse("0x0001"), Maps.of(
+		forkedAlice.jobs().create(Blob.parse("0x0001"), Maps.of(
 			Fields.STATUS, Status.PENDING,
 			Fields.UPDATED, CVMLong.create(1000L)));
 
@@ -386,12 +395,12 @@ public class VenueStateTest {
 		forked.sync();
 
 		// Verify changes visible through the connected VenueState
-		assertNotNull(connected.assets().getRecord(assetId),
+		assertNotNull(connected.assets().get(assetId),
 			"Asset should be visible through connected cursor after sync");
-		User connectedAlice = connected.users().get("did:key:zAlice");
+		User connectedAlice = connected.users().user("did:key:zAlice");
 		assertNotNull(connectedAlice,
 			"User should be visible through connected cursor after sync");
-		assertNotNull(connectedAlice.getJob(Blob.parse("0x0001")),
+		assertNotNull(connectedAlice.jobs().getRecord(Blob.parse("0x0001")),
 			"Job should be visible through connected cursor after sync");
 	}
 
@@ -399,10 +408,10 @@ public class VenueStateTest {
 	public void testForkMultipleWritesSingleSync() {
 		AKeyPair kp = AKeyPair.generate();
 		var root = Cursors.root(convex.core.data.Index.<convex.core.data.Keyword, ACell>none());
-		var context = convex.lattice.LatticeContext.create(
-			CVMLong.create(convex.core.util.Utils.getCurrentTimestamp()), kp);
+		var now = CVMLong.create(convex.core.util.Utils.getCurrentTimestamp());
+		var context = VenueContext.create(() -> now);
 
-		VenueState connected = VenueState.fromRoot(root, kp.getAccountKey(), context);
+		VenueState connected = VenueState.fromRoot(root, kp.getAccountKey(), kp::signData, context);
 		VenueState forked = connected.fork();
 
 		// Multiple asset writes
@@ -412,20 +421,20 @@ public class VenueStateTest {
 
 		// Multiple job writes to a user
 		User forkedAlice = forked.users().ensure("did:key:zAlice");
-		forkedAlice.persistJob(Blob.parse("0x0001"), Maps.of(
+		forkedAlice.jobs().create(Blob.parse("0x0001"), Maps.of(
 			Fields.STATUS, Status.PENDING,
 			Fields.UPDATED, CVMLong.create(1000L)));
-		forkedAlice.persistJob(Blob.parse("0x0002"), Maps.of(
+		forkedAlice.jobs().create(Blob.parse("0x0002"), Maps.of(
 			Fields.STATUS, Status.COMPLETE,
 			Fields.UPDATED, CVMLong.create(2000L)));
 
 		// Single sync propagates all 5 writes
 		forked.sync();
 
-		assertEquals(3, connected.assets().count(),
+		assertEquals(3, connected.assets().size(),
 			"All 3 assets should be visible after single sync");
-		User connectedAlice = connected.users().get("did:key:zAlice");
-		assertEquals(2, connectedAlice.getJobs().count(),
+		User connectedAlice = connected.users().user("did:key:zAlice");
+		assertEquals(2, connectedAlice.jobs().size(),
 			"All 2 jobs should be visible after single sync");
 	}
 
@@ -436,7 +445,7 @@ public class VenueStateTest {
 		AKeyPair kp = AKeyPair.generate();
 		VenueState vs = VenueState.create(kp);
 
-		assertNull(vs.users().get("did:key:zUnknown"),
+		assertNull(vs.users().user("did:key:zUnknown"),
 			"user() should return null when no data exists for that DID");
 	}
 
@@ -453,7 +462,7 @@ public class VenueStateTest {
 		assertNotNull(alice.get(), "User state should be initialised");
 
 		// Subsequent user() call should also return non-null
-		User aliceAgain = vs.users().get(did);
+		User aliceAgain = vs.users().user(did);
 		assertNotNull(aliceAgain, "user() should return non-null after ensureUser");
 	}
 
@@ -468,20 +477,20 @@ public class VenueStateTest {
 		User bob = vs.users().ensure(bobDID);
 
 		// Alice writes a job reference
-		alice.persistJob(Blob.parse("0x0001"), Maps.of(
+		alice.jobs().create(Blob.parse("0x0001"), Maps.of(
 			Fields.STATUS, Status.PENDING,
 			Fields.UPDATED, CVMLong.create(1000L)));
 
 		// Bob writes a job reference
-		bob.persistJob(Blob.parse("0x0002"), Maps.of(
+		bob.jobs().create(Blob.parse("0x0002"), Maps.of(
 			Fields.STATUS, Status.COMPLETE,
 			Fields.UPDATED, CVMLong.create(2000L)));
 
 		// Each sees only their own data
-		assertEquals(1, alice.getJobs().count(), "Alice should see only her job");
-		assertEquals(1, bob.getJobs().count(), "Bob should see only his job");
-		assertNotNull(alice.getJob(Blob.parse("0x0001")));
-		assertNull(alice.getJob(Blob.parse("0x0002")));
+		assertEquals(1, alice.jobs().size(), "Alice should see only her job");
+		assertEquals(1, bob.jobs().size(), "Bob should see only his job");
+		assertNotNull(alice.jobs().getRecord(Blob.parse("0x0001")));
+		assertNull(alice.jobs().getRecord(Blob.parse("0x0002")));
 	}
 
 	@Test
@@ -490,12 +499,12 @@ public class VenueStateTest {
 		VenueState vs = VenueState.create(kp);
 
 		assertNull(vs.get(), "Uninitialised venue should have null state");
-		vs.initialise(Strings.create("did:key:zTest"));
+		vs.initialise(Strings.create("did:key:zTest"), NO_SECRETS);
 		assertNotNull(vs.get(), "Initialised venue should have non-null state");
 
 		// Calling initialise again should be a no-op
 		ACell state = vs.get();
-		vs.initialise(Strings.create("did:key:zDifferent"));
+		vs.initialise(Strings.create("did:key:zDifferent"), NO_SECRETS);
 		assertEquals(state, vs.get(), "Second initialise should be no-op");
 	}
 
@@ -518,9 +527,9 @@ public class VenueStateTest {
 		assertNull(user.agent("agent-1"),
 			"User agent() should return null for non-existent agent");
 
-		// ensureAgent() creates and returns a non-null AgentState
-		AgentState agent = user.ensureAgent("agent-1", null, null);
-		assertNotNull(agent, "User ensureAgent() should return non-null AgentState");
+		// ensureAgent() creates and returns a non-null Agent
+		Agent agent = user.ensureAgent("agent-1", null, null);
+		assertNotNull(agent, "User ensureAgent() should return non-null Agent");
 		assertTrue(agent.exists(), "ensureAgent() should initialise the agent");
 	}
 
@@ -533,9 +542,9 @@ public class VenueStateTest {
 	public void testConcurrentEnsureSameUser() throws Exception {
 		AKeyPair kp = AKeyPair.generate();
 		var root = Cursors.root(convex.core.data.Index.<convex.core.data.Keyword, ACell>none());
-		var context = convex.lattice.LatticeContext.create(
-			CVMLong.create(convex.core.util.Utils.getCurrentTimestamp()), kp);
-		VenueState vs = VenueState.fromRoot(root, kp.getAccountKey(), context);
+		var now = CVMLong.create(convex.core.util.Utils.getCurrentTimestamp());
+		var context = VenueContext.create(() -> now);
+		VenueState vs = VenueState.fromRoot(root, kp.getAccountKey(), kp::signData, context);
 
 		String did = "did:key:zRace";
 		int writers = 8;
@@ -550,7 +559,7 @@ public class VenueStateTest {
 					start.await();
 					User u = vs.users().ensure(did);
 					Blob jobID = Blob.parse(String.format("0x%04x", idx + 1));
-					u.persistJob(jobID, Maps.of(
+					u.jobs().create(jobID, Maps.of(
 						Fields.STATUS, Status.PENDING,
 						Fields.UPDATED, CVMLong.create(1000L + idx)));
 				} catch (Throwable t) {
@@ -565,9 +574,9 @@ public class VenueStateTest {
 			"ensure writers did not finish in time");
 		assertTrue(errors.isEmpty(), "writer errors: " + errors);
 
-		User finalUser = vs.users().get(did);
+		User finalUser = vs.users().user(did);
 		assertNotNull(finalUser, "user should exist after concurrent ensure");
-		assertEquals(writers, finalUser.getJobs().count(),
+		assertEquals(writers, finalUser.jobs().size(),
 			"all jobs from concurrent ensure() callers must survive");
 	}
 
@@ -575,19 +584,21 @@ public class VenueStateTest {
 	public void testForkSyncIdempotent() {
 		AKeyPair kp = AKeyPair.generate();
 		var root = Cursors.root(convex.core.data.Index.<convex.core.data.Keyword, ACell>none());
-		var context = convex.lattice.LatticeContext.create(
-			CVMLong.create(convex.core.util.Utils.getCurrentTimestamp()), kp);
+		var now = CVMLong.create(convex.core.util.Utils.getCurrentTimestamp());
+		var context = VenueContext.create(() -> now);
 
-		VenueState connected = VenueState.fromRoot(root, kp.getAccountKey(), context);
+		VenueState connected = VenueState.fromRoot(root, kp.getAccountKey(), kp::signData, context);
 		VenueState forked = connected.fork();
 
 		forked.assets().store(Strings.create("{\"name\":\"Once\"}"), null);
 		forked.sync();
+		connected.sync();
 
 		ACell stateAfterFirstSync = root.get();
 
 		// Second sync with no new writes should be a no-op
 		forked.sync();
+		connected.sync();
 
 		ACell stateAfterSecondSync = root.get();
 		assertEquals(stateAfterFirstSync, stateAfterSecondSync,

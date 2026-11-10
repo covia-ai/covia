@@ -1,205 +1,163 @@
 package covia.venue;
 
-import java.util.function.UnaryOperator;
-
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
-import convex.core.data.Blob;
-import convex.core.data.Index;
+import convex.core.data.Cells;
+import convex.core.data.Maps;
+import convex.core.data.Path;
 import convex.core.data.Strings;
+import convex.core.lang.RT;
+import covia.lattice.AccessPolicy;
+import covia.lattice.CoviaValue;
 import convex.lattice.ALatticeComponent;
 import convex.lattice.TransactionalComponent;
-import convex.lattice.LatticeContext;
 import convex.lattice.cursor.AForkableCursor;
 import covia.lattice.Covia;
 import covia.lattice.Namespace;
-import covia.lattice.WorkspaceRoot;
+import covia.lattice.Entry;
+import covia.lattice.Owner;
+import covia.lattice.ValuePath;
+import convex.lattice.NoSuchPathException;
+import covia.lattice.Workspace;
 import convex.lattice.cursor.StampedCursor;
-import covia.grid.Job;
 
 /**
  * Per-user domain state, with atomic mutations and compound transactions.
  *
  * <p>Wraps a lattice cursor at {@code :user-data → <did>} within the
  * venue state. Provides typed accessors for per-user data. Created by
- * {@link Users#get(AString)} (returns null if the user doesn't exist) or
- * {@link Users#ensure(AString)} (creates if needed).</p>
+ * {@link Users#user(AString)} (returns null if the user doesn't exist),
+ * {@link Users#ensure(AString)} (creates if needed) or, for a path,
+ * {@link Users#at(AString)} (whether or not the account is live).</p>
  *
  * <p>The per-user lattice uses short AString-compatible keys from
  * {@link Namespace} for JSON compliance:</p>
  * <ul>
- *   <li>{@code "j"} — user's job references</li>
- *   <li>{@code "g"} — user's agents</li>
+ *   <li>{@code "j"} — user's jobs ({@link Jobs})</li>
+ *   <li>{@code "g"} — user's agents ({@link Agent})</li>
  *   <li>{@code "s"} — user's encrypted credentials</li>
- *   <li>{@code "w"} — user's workspace data ({@link covia.lattice.Covia#WORKSPACE_RECORD})</li>
- *   <li>{@code "o"} — user's operations ({@link covia.lattice.Covia#WORKSPACE_RECORD})</li>
- *   <li>{@code "h"} — HITL requests ({@link covia.lattice.Covia#WORKSPACE_RECORD})</li>
+ *   <li>{@code "w"} — user's workspace data ({@link Workspace}, in a {@link covia.lattice.Covia#WORKSPACE_RECORD})</li>
+ *   <li>{@code "o"} — user's operations ({@link Workspace}, in a {@link covia.lattice.Covia#WORKSPACE_RECORD})</li>
+ *   <li>{@code "h"} — HITL requests ({@link Inbox}, in a {@link covia.lattice.Covia#WORKSPACE_RECORD})</li>
  *   <li>{@code "a"} — content-addressed assets</li>
  * </ul>
  * Merge is whole-value at the venue {@code :value}; these namespaces are
  * navigation structure only.
  */
-public class User extends ALatticeComponent<ACell> implements TransactionalComponent<ACell, User> {
+public class User extends ALatticeComponent<ACell> implements TransactionalComponent<ACell, User>, Owner {
 	@Override
-	public User withCursor(AForkableCursor<ACell> draft) {
-		return new User(context, draft, did);
+	public User rebind(AForkableCursor<ACell> cursor) {
+		return new User(context, cursor, did);
 	}
 
-	private final LatticeContext context;
+	@Override
+	public User withCursor(AForkableCursor<ACell> cursor) {
+		return rebind(cursor);
+	}
+
+	private final VenueContext context;
 	private final AForkableCursor<ACell> edits;
 
 	@Override
 	public AForkableCursor<ACell> cursor() { return edits; }
 
-	public LatticeContext getContext() { return context; }
+	public VenueContext getContext() { return context; }
 
 	private final AString did;
 
-	/** Framework-internal navigation for trusted venue-owned workspace state. */
-	ACell readInternalPath(ACell[] keys) {
-		return workspaceRoot().read(keys);
+	/** Who may use this user's data: whoever holds authority over {@code <did>/<path>}. */
+	private final AccessPolicy policy;
+
+	/** Framework-internal read of a path in this user's record. */
+	ACell readInternalPath(Path path) {
+		return resolve(path).cursor().getOrDefault(null);
 	}
 
-	/** Framework-internal atomic write; authority is possession of this user cursor. */
-	void writeInternalPath(ACell[] keys, ACell value) {
-		workspaceRoot().write(keys, value);
+	/**
+	 * Framework-internal atomic write to a workspace path, creating the levels
+	 * above it; authority is possession of this user cursor.
+	 */
+	void writeInternalPath(Path path, ACell value) {
+		Entry.of(resolve(path)).execute(draft -> {
+			draft.createLevels();
+			draft.write(value);
+		});
 	}
 
-	/** Framework-internal atomic delete; authority is possession of this user cursor. */
-	boolean deleteInternalPath(ACell[] keys) {
-		return workspaceRoot().delete(keys);
+	/** Framework-internal atomic delete of a workspace path; authority is possession of this user cursor. */
+	boolean deleteInternalPath(Path path) {
+		return Entry.of(resolve(path)).delete();
 	}
 
-	User(LatticeContext context, AForkableCursor<ACell> cursor, AString did) {
+	User(VenueContext context, AForkableCursor<ACell> cursor, AString did) {
 		super(cursor);
 		this.context = context;
 		this.did = did;
+		this.policy = (did == null) ? null : AccessPolicy.principal(did);
 		this.edits = StampedCursor.create(cursor, context::currentTimestamp, Covia::stampUserMeta);
 	}
 
-	/** Caller-visible workspace namespaces with this user's write policy. */
-	public WorkspaceRoot workspaceRoot() {
-		return new WorkspaceRoot(cursor(), getContext(), true);
+	/** This user's workspace ({@code w}). */
+	public Workspace workspace() {
+		return new Workspace(wrapped(Namespace.W));
 	}
 
-	/** Internal namespace-resolution bridge; domain callers use agent and job methods. */
-	public AForkableCursor<ACell> recordCursor(ACell namespace, ACell id) {
-		if (Namespace.G.equals(namespace)) return new AgentState(context, agentStorage(id), (AString) id).cursor();
-		if (Namespace.J.equals(namespace)) return job((Blob) id).cursor();
-		throw new IllegalArgumentException("Not an agent or job namespace: " + namespace);
+	/**
+	 * Storage size, in bytes, of the data this user and their agents write as
+	 * they choose: the workspace ({@code w}) and each agent's own workspace
+	 * ({@code n}). It is measured as stored, so a value held in two places
+	 * counts twice. Session and job scratch are not counted.
+	 *
+	 * @return Bytes, zero for a user with no workspace data
+	 */
+	public long workspaceSize() {
+		long size = storedSize(cursor().path(Namespace.W).getOrDefault(null));
+		AMap<AString, ACell> agents = getAgents();
+		if (agents != null) {
+			for (AString agentId : agents.keySet()) {
+				Agent agent = agent(agentId);
+				if (agent != null) size += storedSize(agent.workspace().cursor().getOrDefault(null));
+			}
+		}
+		return size;
 	}
 
+	private static long storedSize(ACell value) {
+		return (value == null) ? 0 : Cells.storageSize(value);
+	}
+
+	/** This user's operation definitions ({@code o}), held as a workspace. */
+	public Workspace operations() {
+		return new Workspace(wrapped(Namespace.O));
+	}
+
+	/** The data of a namespace held in an {@code {updated, data}} record, which a change stamps. */
+	private <T extends ACell> AForkableCursor<T> wrapped(AString namespace) {
+		return StampedCursor.create(cursor().withDefault(Maps.empty()).path(namespace),
+				context::currentTimestamp, Covia::stampUpdated)
+			.withDefault(Maps.empty()).path(Covia.WORKSPACE_DATA);
+	}
+
+	/**
+	 * The agent at {@code agentId}, whether or not its record exists, for a path
+	 * that names it: a missing agent reads as absent, and its workspaces refuse
+	 * changes. Domain callers use {@link #agent}, which is null for a missing
+	 * agent.
+	 */
+	public Agent agentAt(AString agentId) {
+		return new Agent(context, agentStorage(agentId), did, agentId);
+	}
+
+	/** An agent's record in {@code g}, a map the first agent creates. */
 	private AForkableCursor<ACell> agentStorage(ACell id) {
-		return convex.lattice.LatticeComponent.resolve(cursor(), Covia.USER_RECORD, Namespace.G, id);
+		return cursor().withDefault(Maps.empty()).path(Namespace.G).withDefault(Maps.empty()).path(id);
 	}
 
 	/** Gets the user's DID string. */
 	public AString getDID() {
 		return did;
 	}
-
-	/**
-	 * Gets all of this user's jobs as an Index keyed by Job ID. Never null.
-	 *
-	 * @return Index of job records, empty if the user has no jobs
-	 */
-	@SuppressWarnings("unchecked")
-	public Index<Blob, ACell> getJobs() {
-		ACell value = cursor().path(Namespace.J).get();
-		return (value instanceof Index) ? Job.currentStates((Index<Blob, ACell>) value) : Index.none();
-	}
-
-	/** Counts entries without reading or normalising their records. */
-	public long countJobs() {
-		ACell value = cursor().path(Namespace.J).get();
-		return value instanceof Index<?, ?> index ? index.count() : 0;
-	}
-
-	/**
-	 * Gets a single job record from this user's job index.
-	 *
-	 * @param jobID Job ID
-	 * @return Job record map, or null if not found
-	 */
-	@SuppressWarnings("unchecked")
-	public AMap<AString, ACell> getJob(Blob jobID) {
-		return job(jobID).getRecord();
-	}
-
-	/** Existing job view, bound to this user or transaction draft. */
-	public JobState job(Blob jobID) {
-		return new JobState(context,
-			convex.lattice.LatticeComponent.resolve(cursor(), Covia.USER_RECORD, Namespace.J, jobID));
-	}
-
-	/** Admission creates a record exactly once; subsequent updates use its component. */
-	boolean createJob(Blob jobID, AMap<AString, ACell> record) {
-		AMap<AString, ACell> current = Job.currentState(record);
-		ACell before = cursor().path(Namespace.J).getAndUpdate(value -> {
-			Index<Blob, ACell> jobs = value instanceof Index<?, ?> index
-				? (Index<Blob, ACell>) index : Index.none();
-			return jobs.containsKey(jobID) ? value : jobs.assoc(jobID, current);
-		});
-		return !(before instanceof Index<?, ?> index) || !index.containsKey(jobID);
-	}
-
-	/**
-	 * Removes a job record from this user's job index, if present. The
-	 * removal is durable: the venue merge is whole-value LWW, so the
-	 * post-delete snapshot wins and the record is not resurrected on sync.
-	 *
-	 * @param jobID Job ID
-	 * @return true if the row existed and was removed
-	 */
-	@SuppressWarnings("unchecked")
-	public boolean removeJob(Blob jobID) {
-		ACell old = cursor().path(Namespace.J).getAndUpdate(jobs -> {
-			if (!(jobs instanceof Index)) return jobs;
-			return ((Index<Blob, ACell>) jobs).dissoc(jobID);
-		});
-		return old instanceof Index<?, ?> index && index.containsKey(jobID);
-	}
-
-	/**
-	 * Imports/replaces a job record (bootstrap and migration). Runtime transitions
-	 * use {@link #job(Blob)} instead. Preserves the {@code temp}
-	 * field from any existing record at the same ID (goal-scoped scratch).
-	 *
-	 * @param jobID Job ID (16-byte Blob: timestamp + counter + random)
-	 * @param record Job status record map
-	 */
-	@SuppressWarnings("unchecked")
-	public void persistJob(Blob jobID, AMap<AString, ACell> record) {
-		final AMap<AString, ACell> rec = Job.currentState(record);
-		cursor().path(Namespace.J).updateAndGet(jobs -> {
-			Index<Blob, ACell> idx = (jobs instanceof Index)
-				? (Index<Blob, ACell>) jobs
-				: Index.none();
-			AMap<AString, ACell> merged = rec;
-			ACell existing = idx.get(jobID);
-			if (existing instanceof AMap<?,?> existingMap) {
-				AMap<AString, ACell> existingRecord = (AMap<AString, ACell>) existingMap;
-				if (existingRecord.containsKey(K_TEMP)) {
-					merged = merged.assoc(K_TEMP, existingRecord.get(K_TEMP));
-				}
-			}
-			return idx.assoc(jobID, merged);
-		});
-	}
-
-	/**
-	 * Atomically updates an existing job without ever recreating a deleted row.
-	 *
-	 * @return true when the job existed at the mutation point
-	 */
-	@SuppressWarnings("unchecked")
-	public boolean updateJobIfPresent(Blob jobID,
-			UnaryOperator<AMap<AString, ACell>> updater) {
-		return job(jobID).update(updater) != null;
-	}
-
-	private static final AString K_TEMP = Strings.intern("temp");
 
 	/**
 	 * Gets the user's asset store (per-user content-addressed assets).
@@ -224,16 +182,16 @@ public class User extends ALatticeComponent<ACell> implements TransactionalCompo
 	 * Gets a specific agent's state, or null if the agent doesn't exist.
 	 *
 	 * @param agentId Agent identifier
-	 * @return AgentState wrapper, or null if not initialised
+	 * @return Agent wrapper, or null if not initialised
 	 */
-	public AgentState agent(String agentId) {
+	public Agent agent(String agentId) {
 		return agent(Strings.create(agentId));
 	}
 
-	public AgentState agent(AString agentId) {
+	public Agent agent(AString agentId) {
 		AForkableCursor<ACell> c = agentStorage(agentId);
-		if (c.get() == null) return null;
-		return new AgentState(context, c, agentId);
+		if (c.getOrDefault(null) == null) return null;
+		return new Agent(context, c, did, agentId);
 	}
 
 	/**
@@ -242,15 +200,15 @@ public class User extends ALatticeComponent<ACell> implements TransactionalCompo
 	 * @param agentId Agent identifier
 	 * @param config Optional framework configuration map, may be null
 	 * @param initialState Optional initial state for the transition function, may be null
-	 * @return AgentState wrapper (never null)
+	 * @return Agent wrapper (never null)
 	 */
-	public AgentState ensureAgent(String agentId, AMap<AString, ACell> config, ACell initialState) {
+	public Agent ensureAgent(String agentId, AMap<AString, ACell> config, ACell initialState) {
 		return ensureAgent(Strings.create(agentId), config, initialState);
 	}
 
-	public AgentState ensureAgent(AString agentId, AMap<AString, ACell> config, ACell initialState) {
+	public Agent ensureAgent(AString agentId, AMap<AString, ACell> config, ACell initialState) {
 		AForkableCursor<ACell> c = agentStorage(agentId);
-		AgentState state = new AgentState(context, c, agentId);
+		Agent state = new Agent(context, c, did, agentId);
 		state.initialiseIfAbsent(config, initialState);
 		return state;
 	}
@@ -260,16 +218,27 @@ public class User extends ALatticeComponent<ACell> implements TransactionalCompo
 	 *
 	 * @return the new agent, or null if the id already existed
 	 */
-	public AgentState createAgent(AString agentId, AMap<AString, ACell> config,
+	public Agent createAgent(AString agentId, AMap<AString, ACell> config,
 			ACell initialState) {
 		return createAgent(agentId, config, initialState, null);
 	}
 
-	public AgentState createAgent(AString agentId, AMap<AString, ACell> config,
+	public Agent createAgent(AString agentId, AMap<AString, ACell> config,
 			ACell initialState, AMap<AString, ACell> definition) {
+		return createAgent(agentId, config, initialState, definition, null);
+	}
+
+	/**
+	 * Creates an agent under {@code controller}, the principal whose authority
+	 * its harness runs under (null for this user).
+	 *
+	 * @return the new agent, or null if the id already existed
+	 */
+	public Agent createAgent(AString agentId, AMap<AString, ACell> config,
+			ACell initialState, AMap<AString, ACell> definition, AString controller) {
 		AForkableCursor<ACell> c = agentStorage(agentId);
-		AgentState state = new AgentState(context, c, agentId);
-		return state.initialiseIfAbsent(config, initialState, definition) ? state : null;
+		Agent state = new Agent(context, c, did, agentId);
+		return state.initialiseIfAbsent(config, initialState, definition, controller) ? state : null;
 	}
 
 	/**
@@ -281,13 +250,22 @@ public class User extends ALatticeComponent<ACell> implements TransactionalCompo
 	 * @param config Config map to use (typically merged source+override)
 	 * @param state Initial state (typically source state)
 	 * @param timeline Optional timeline to copy, or null for empty
-	 * @return the new AgentState wrapper, or null if the id already existed
+	 * @return the new Agent wrapper, or null if the id already existed
 	 */
-	public AgentState forkAgent(AString agentId, AMap<AString, ACell> config,
+	public Agent forkAgent(AString agentId, AMap<AString, ACell> config,
 			ACell state, convex.core.data.AVector<ACell> timeline) {
+		return forkAgent(agentId, config, state, timeline, null);
+	}
+
+	/**
+	 * As above, under {@code controller}: the principal whose authority the
+	 * fork's harness runs under, or null for this user.
+	 */
+	public Agent forkAgent(AString agentId, AMap<AString, ACell> config,
+			ACell state, convex.core.data.AVector<ACell> timeline, AString controller) {
 		AForkableCursor<ACell> c = agentStorage(agentId);
-		AgentState fork = new AgentState(context, c, agentId);
-		return fork.initialiseFromForkIfAbsent(config, state, timeline) ? fork : null;
+		Agent fork = new Agent(context, c, did, agentId);
+		return fork.initialiseFromForkIfAbsent(config, state, timeline, controller) ? fork : null;
 	}
 
 	/**
@@ -311,7 +289,7 @@ public class User extends ALatticeComponent<ACell> implements TransactionalCompo
 	 */
 	@SuppressWarnings("unchecked")
 	public AMap<AString, ACell> getAgents() {
-		ACell value = cursor().path(Namespace.G).get();
+		ACell value = cursor().path(Namespace.G).getOrDefault(null);
 		return (value instanceof AMap) ? (AMap<AString, ACell>) value : null;
 	}
 
@@ -321,49 +299,55 @@ public class User extends ALatticeComponent<ACell> implements TransactionalCompo
 	 * @return User state, or null if uninitialised
 	 */
 	public ACell get() {
-		return cursor().get();
+		return cursor().getOrDefault(null);
 	}
 
-	// ========== HITL inbox (h/ namespace, COG-16) ==========
+	/** This user's HITL inbox ({@code h/}). */
+	public Inbox inbox() {
+		return new Inbox(wrapped(Namespace.H));
+	}
 
-	/**
-	 * Gets this user's HITL request records ({@code h/} inbox) keyed by
-	 * request id. Never null.
-	 */
-	@SuppressWarnings("unchecked")
-	public AMap<AString, ACell> getHitlRequests() {
-		ACell v = workspaceRoot().child(Namespace.H).get();
-		return (v instanceof AMap) ? (AMap<AString, ACell>) v : convex.core.data.Maps.empty();
+	/** This user's jobs ({@code j/}), bound to this user or transaction draft. */
+	public Jobs jobs() {
+		return new Jobs(context, cursor().withDefault(Maps.empty()).path(Namespace.J), did);
+	}
+
+	/** Whoever holds authority over {@code <did>/<path>}; none outside any user. */
+	@Override
+	public AccessPolicy policy() {
+		return policy;
+	}
+
+	/** The user's jobs ({@code j}), and an agent ({@code g/<id>}) whether or not it exists. */
+	@Override
+	public Route route(AString[] segments, int start, int end) {
+		if (start == end) return null;
+		AString segment = segments[start];
+		if (Namespace.J.equals(segment)) return new Route(jobs(), 1);
+		if (Namespace.G.equals(segment) && end - start > 1) return new Route(agentAt(segments[start + 1]), 2);
+		return null;
 	}
 
 	/**
-	 * Gets a single HITL request record from this user's inbox.
-	 *
-	 * @param id Request id (job id hex)
-	 * @return Record map, or null if absent
+	 * A user's namespaces ({@code w}, {@code o}, {@code h}, {@code j},
+	 * {@code s}, {@code a}, {@code g}) are each resolved by their component, and
+	 * {@code g/<id>} by that agent whether or not it exists. Any other name,
+	 * the venue's own bookkeeping in the record among them, names no data.
+	 * The user's policy covers whatever no owner below claims.
 	 */
-	@SuppressWarnings("unchecked")
-	public AMap<AString, ACell> getHitlRequest(AString id) {
-		ACell v = getHitlRequests().get(id);
-		return (v instanceof AMap) ? (AMap<AString, ACell>) v : null;
-	}
-
-	/**
-	 * Writes a HITL request record into this user's inbox. Venue-mediated —
-	 * records are created and resolved only by the framework (the {@code h/}
-	 * namespace is not writable via {@code covia:write}).
-	 *
-	 * @param id Request id (job id hex)
-	 * @param record Request record map
-	 */
-	@SuppressWarnings("unchecked")
-	public void putHitlRequest(AString id, AMap<AString, ACell> record) {
-		workspaceRoot().child(Namespace.H).updateAndGet(data -> {
-			AMap<AString, ACell> m = (data instanceof AMap)
-				? (AMap<AString, ACell>) data
-				: convex.core.data.Maps.empty();
-			return m.assoc(id, record);
-		});
+	@Override
+	public ALatticeComponent<?> resolve(AString[] segments, int start, int end) {
+		if (start == end) return this;
+		Route route = route(segments, start, end);
+		if (route != null) return route.child().resolve(segments, start + route.taken(), end);
+		AString segment = segments[start];
+		if (Namespace.W.equals(segment)) return workspace().resolve(segments, start + 1, end);
+		if (Namespace.O.equals(segment)) return operations().resolve(segments, start + 1, end);
+		if (Namespace.H.equals(segment)) return inbox().resolve(segments, start + 1, end);
+		if (Namespace.S.equals(segment)) return secrets().resolve(segments, start + 1, end);
+		if (Namespace.A.equals(segment)) return assets().resolve(segments, start + 1, end);
+		if (Namespace.G.equals(segment)) return CoviaValue.within(this, segments, start, end);
+		throw new NoSuchPathException(segments, start, end);
 	}
 
 }

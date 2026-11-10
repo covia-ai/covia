@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CyclicBarrier;
@@ -30,7 +31,9 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
+import covia.adapter.TestAdapter;
 import covia.api.Fields;
+import covia.exception.NotSupportedException;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.TestEngine;
@@ -102,18 +105,15 @@ public class ToolCycleEngineTest {
 				return ok("ran " + c.id());
 			});
 		Sink sink = new Sink();
-		long started = System.nanoTime();
 		ToolCycleEngine.BatchResult batch = ToolCycleEngine.executeBatch(
-			Vectors.of(call("a", "op"), call("b", "op"), call("c", "op")), 0, registry, new Object(), sink, log);
-		long millis = (System.nanoTime() - started) / 1_000_000;
+			Vectors.of(call("a", "op"), call("b", "op"), call("c", "op")), 0, registry, new Object(), sink, engine::currentTimestamp, log);
 
 		assertFalse(batch.isTerminal());
-		assertFalse(batch.isAborted());
+		assertFalse(batch.aborted());
 		assertEquals(List.of("a", "b", "c"), sink.messages.stream().map(ToolCycleEngineTest::id).toList());
 		for (AMap<AString, ACell> m : sink.messages) {
 			assertEquals("ran " + id(m), content(m), "every call passed the barrier");
 		}
-		assertTrue(millis < 4000, "the wave must not have serialised (took " + millis + "ms)");
 	}
 
 	@Test
@@ -131,7 +131,7 @@ public class ToolCycleEngineTest {
 				return ok("b first");
 			});
 		Sink sink = new Sink();
-		ToolCycleEngine.executeBatch(Vectors.of(call("a", "op"), call("b", "op")), 0, registry, new Object(), sink, log);
+		ToolCycleEngine.executeBatch(Vectors.of(call("a", "op"), call("b", "op")), 0, registry, new Object(), sink, engine::currentTimestamp, log);
 
 		assertEquals(List.of("a", "b"), sink.messages.stream().map(ToolCycleEngineTest::id).toList());
 		assertEquals("a after b", content(sink.messages.get(0)));
@@ -143,12 +143,16 @@ public class ToolCycleEngineTest {
 	public void testHarnessToolIsAnOrderedBarrier() throws Exception {
 		// [op1, op2, control, op3]: the operation wave before the control tool
 		// finishes before it runs, and the one after it does not start until
-		// it has returned — the control tool keeps its position.
+		// it has returned — the control tool keeps its position. The test holds
+		// the first wave open with both calls in flight, so a control tool that
+		// did not wait for it would run while it is held.
 		ConcurrentLinkedQueue<String> events = new ConcurrentLinkedQueue<>();
-		Thread caller = Thread.currentThread();
+		CountDownLatch waveStarted = new CountDownLatch(2);
+		CountDownLatch releaseWave = new CountDownLatch(1);
+		CompletableFuture<Thread> caller = new CompletableFuture<>();
 		ToolCycleEngine.Registry<Object> registry = new ToolCycleEngine.Registry<Object>()
 			.register(CONTROL, (c, ctx) -> {
-				assertSame(caller, Thread.currentThread(), "harness tools run on the calling thread");
+				assertSame(caller.getNow(null), Thread.currentThread(), "harness tools run on the calling thread");
 				events.add("control");
 				return ToolCycleEngine.ToolOutcome.result(Strings.create("loaded"), Vectors.of(
 					Maps.of(AbstractLLMAdapter.K_ROLE, AbstractLLMAdapter.ROLE_SYSTEM,
@@ -156,14 +160,32 @@ public class ToolCycleEngineTest {
 			})
 			.fallback((c, ctx) -> {
 				events.add(c.id() + ":start");
-				Thread.sleep(50);
+				if (!"3".equals(c.id().toString())) {
+					waveStarted.countDown();
+					assertTrue(releaseWave.await(10, TimeUnit.SECONDS), "the test releases the first wave");
+				}
 				events.add(c.id() + ":end");
 				return ok("ran");
 			});
 		Sink sink = new Sink();
-		ToolCycleEngine.executeBatch(
-			Vectors.of(call("1", "op"), call("2", "op"), call("ctl", CONTROL), call("3", "op")),
-			0, registry, new Object(), sink, log);
+		CompletableFuture<ToolCycleEngine.BatchResult> batch = new CompletableFuture<>();
+		Thread.ofVirtual().start(() -> {
+			caller.complete(Thread.currentThread());
+			try {
+				batch.complete(ToolCycleEngine.executeBatch(
+					Vectors.of(call("1", "op"), call("2", "op"), call("ctl", CONTROL), call("3", "op")),
+					0, registry, new Object(), sink, engine::currentTimestamp, log));
+			} catch (Throwable t) {
+				batch.completeExceptionally(t);
+			}
+		});
+		try {
+			assertTrue(waveStarted.await(10, TimeUnit.SECONDS), "both calls of the first wave are in flight");
+			assertFalse(events.contains("control"), "the control tool waits for the wave: " + events);
+		} finally {
+			releaseWave.countDown();
+		}
+		batch.get(10, TimeUnit.SECONDS);
 
 		List<String> seq = new ArrayList<>(events);
 		int control = seq.indexOf("control");
@@ -176,6 +198,32 @@ public class ToolCycleEngineTest {
 			"every result in the assistant batch precedes load events");
 		assertEquals(AbstractLLMAdapter.ROLE_SYSTEM,
 			sink.messages.get(4).get(AbstractLLMAdapter.K_ROLE));
+	}
+
+	@Test
+	public void testAnUnofferedHarnessToolGoesToTheFallbackInItsWave() throws Exception {
+		// [op, control, op] with the control tool not offered: its handler
+		// never runs, and it is no barrier — all three meet at the fallback's
+		// barrier, which they can only do together.
+		CyclicBarrier barrier = new CyclicBarrier(3);
+		AtomicInteger handled = new AtomicInteger();
+		ToolCycleEngine.Registry<Object> registry = new ToolCycleEngine.Registry<Object>()
+			.offered((name, ctx) -> !CONTROL.equals(name))
+			.register(CONTROL, (c, ctx) -> {
+				handled.incrementAndGet();
+				return ok("handled");
+			})
+			.fallback((c, ctx) -> {
+				barrier.await(5, TimeUnit.SECONDS);
+				return ok("answered " + c.name());
+			});
+		Sink sink = new Sink();
+		ToolCycleEngine.executeBatch(
+			Vectors.of(call("a", "op"), call("ctl", CONTROL), call("b", "op")), 0, registry, new Object(), sink, engine::currentTimestamp, log);
+
+		assertEquals(0, handled.get(), "an unoffered harness tool's handler never runs");
+		assertEquals(List.of("answered op", "answered " + CONTROL, "answered op"),
+			sink.messages.stream().map(ToolCycleEngineTest::content).toList());
 	}
 
 	@Test
@@ -192,7 +240,7 @@ public class ToolCycleEngineTest {
 						AbstractLLMAdapter.K_CONTENT, Strings.create("event"))));
 			});
 		Sink sink = new Sink();
-		ToolCycleEngine.executeBatch(Vectors.of(call("only", "op")), 0, registry, new Object(), sink, log);
+		ToolCycleEngine.executeBatch(Vectors.of(call("only", "op")), 0, registry, new Object(), sink, engine::currentTimestamp, log);
 		assertEquals(1, seen.size());
 		assertSame(caller, seen.get(0));
 		assertEquals(2, sink.messages.size());
@@ -213,14 +261,14 @@ public class ToolCycleEngineTest {
 		Sink sink = new Sink();
 		ToolCycleEngine.BatchResult batch = ToolCycleEngine.executeBatch(
 			Vectors.of(call("1", "op"), call("done", COMPLETE), call("2", "op"), call("3", "op")),
-			0, registry, new Object(), sink, log);
+			0, registry, new Object(), sink, engine::currentTimestamp, log);
 
 		assertTrue(batch.isTerminal());
 		assertEquals("completed", batch.terminalStatus());
 		assertEquals(1, dispatched.get(), "only the call before the terminal ran");
 		assertEquals(List.of("1", "done", "2", "3"), sink.messages.stream().map(ToolCycleEngineTest::id).toList());
-		assertTrue(content(sink.messages.get(2)).startsWith("Error: not executed"));
-		assertTrue(content(sink.messages.get(3)).startsWith("Error: not executed"));
+		assertEquals(ToolCycleEngine.NOT_EXECUTED.formatted("completed"), content(sink.messages.get(2)));
+		assertEquals(ToolCycleEngine.NOT_EXECUTED.formatted("completed"), content(sink.messages.get(3)));
 		assertEquals(List.of("1", "done"), sink.recorded, "fenced calls are never recorded as executed");
 	}
 
@@ -233,8 +281,8 @@ public class ToolCycleEngineTest {
 		Sink sink = new Sink();
 		ToolCycleEngine.BatchResult batch = ToolCycleEngine.executeBatch(
 			Vectors.of(call("1", "op"), call("stop", CONTROL), call("2", "op")),
-			0, registry, new Object(), sink, log);
-		assertTrue(batch.isAborted());
+			0, registry, new Object(), sink, engine::currentTimestamp, log);
+		assertTrue(batch.aborted());
 		assertEquals(1, dispatched.get());
 		assertEquals(List.of("1"), sink.messages.stream().map(ToolCycleEngineTest::id).toList());
 	}
@@ -246,7 +294,7 @@ public class ToolCycleEngineTest {
 		// order is kept.
 		ToolCycleEngine.Registry<Object> registry = new ToolCycleEngine.Registry<Object>()
 			.fallback((c, ctx) -> switch (c.id().toString()) {
-				case "throws" -> throw new IllegalStateException("boom");
+				case "throws" -> throw new NotSupportedException("boom");
 				case "nothing" -> null;
 				default -> ok("ran " + c.id());
 			});
@@ -256,7 +304,7 @@ public class ToolCycleEngineTest {
 		Sink sink = new Sink();
 		ToolCycleEngine.executeBatch(
 			Vectors.of(call("a", "op"), malformed, call("throws", "op"), call("nothing", "op"), call("z", "op")),
-			0, registry, new Object(), sink, log);
+			0, registry, new Object(), sink, engine::currentTimestamp, log);
 
 		assertEquals(List.of("a", "bad", "throws", "nothing", "z"),
 			sink.messages.stream().map(ToolCycleEngineTest::id).toList());
@@ -270,31 +318,38 @@ public class ToolCycleEngineTest {
 	// ========== end to end: a real batch through agent:step ==========
 
 	@Test
-	public void testStepRunsAParallelBatchConcurrently() {
-		// Two 400ms delays requested in one reply: sequential execution takes
-		// at least 800ms, concurrent about 400ms. The per-call ms in the step
-		// result still reports each call's own wall clock.
+	public void testStepRunsAParallelBatchConcurrently() throws Exception {
+		// Two held calls requested in one reply, each at its own gate: both
+		// reach their gates before either is released, which a batch run one
+		// call at a time could never do. Each call's entry reports its time.
 		engine.jobs().invokeOperation("v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "parallel-step-agent",
 				Fields.CONFIG, Maps.of(
 					Fields.OPERATION, "v/ops/llmagent/chat",
 					"llmOperation", "v/test/ops/llm",
 					"systemPrompt", "You step.",
-					Fields.TOOLS, Vectors.of(Strings.create("v/test/ops/delay")))),
+					"caps", "unrestricted",
+					Fields.TOOLS, Vectors.of(Strings.create("v/test/ops/hold")))),
 			RequestContext.of(did)).awaitResult(5000);
 
-		AMap<AString, ACell> delayed = Maps.of(
-			Fields.OPERATION, Strings.create("v/test/ops/echo"),
-			Fields.DELAY, CVMLong.create(400),
-			Fields.INPUT, Maps.of(Strings.create("x"), CVMLong.create(1)));
-		long started = System.nanoTime();
-		AMap<AString, ACell> stepped = RT.ensureMap(engine.jobs().invokeOperation("v/ops/agent/step",
-			Maps.of(Fields.AGENT_ID, "parallel-step-agent", Fields.MESSAGE, "wait twice",
-				"assistant", Maps.of("content", "Waiting.", "toolCalls", Vectors.of(
-					Maps.of("id", "d1", "name", "test_delay", "arguments", delayed),
-					Maps.of("id", "d2", "name", "test_delay", "arguments", delayed)))),
-			RequestContext.of(did)).awaitResult(10000));
-		long millis = (System.nanoTime() - started) / 1_000_000;
+		String[] gateNames = {"parallel-step-d1-" + did, "parallel-step-d2-" + did};
+		AMap<AString, ACell> stepped;
+		try (TestAdapter.TestGate d1 = TestAdapter.createGate(gateNames[0]);
+				TestAdapter.TestGate d2 = TestAdapter.createGate(gateNames[1])) {
+			// agent:step runs on the invoking thread, so it gets one of its own.
+			CompletableFuture<ACell> step = CompletableFuture.supplyAsync(() -> engine.jobs().invokeOperation(
+				"v/ops/agent/step",
+				Maps.of(Fields.AGENT_ID, "parallel-step-agent", Fields.MESSAGE, "wait twice",
+					"assistant", Maps.of("content", "Waiting.", "toolCalls", Vectors.of(
+						Maps.of("id", "d1", "name", "test_hold", "arguments", held(gateNames[0])),
+						Maps.of("id", "d2", "name", "test_hold", "arguments", held(gateNames[1]))))),
+				RequestContext.of(did)).awaitResult(10000), r -> Thread.ofVirtual().start(r));
+			assertTrue(d1.awaitEntered(10, TimeUnit.SECONDS), "d1 reaches its gate");
+			assertTrue(d2.awaitEntered(10, TimeUnit.SECONDS), "d2 reaches its gate while d1 is held");
+			d1.release();
+			d2.release();
+			stepped = RT.ensureMap(step.get(10, TimeUnit.SECONDS));
+		}
 
 		AVector<ACell> calls = RT.ensureVector(stepped.get(Strings.intern("calls")));
 		assertNotNull(calls, stepped.toString());
@@ -302,11 +357,14 @@ public class ToolCycleEngineTest {
 		for (long i = 0; i < calls.count(); i++) {
 			assertNull(RT.getIn(calls.get(i), "isError"), calls.get(i).toString());
 			assertEquals(CVMLong.create(1), RT.getIn(calls.get(i), "result", "x"));
-			long ms = RT.ensureLong(RT.getIn(calls.get(i), "ms")).longValue();
-			assertTrue(ms >= 350, "each call reports its own wall clock: " + ms);
+			assertNotNull(RT.ensureLong(RT.getIn(calls.get(i), "ms")), "each call reports its time: " + calls.get(i));
 		}
 		assertEquals("d1", RT.getIn(calls.get(0), "id").toString());
 		assertEquals("d2", RT.getIn(calls.get(1), "id").toString());
-		assertTrue(millis < 750, "two 400ms calls must overlap, took " + millis + "ms");
+	}
+
+	/** {@code v/test/ops/hold} arguments: wait at the gate, then return {@code {x: 1}}. */
+	private static AMap<AString, ACell> held(String gate) {
+		return Maps.of("gate", gate, Fields.RESULT, Maps.of(Strings.create("x"), CVMLong.create(1)));
 	}
 }

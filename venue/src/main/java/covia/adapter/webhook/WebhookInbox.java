@@ -63,7 +63,7 @@ public final class WebhookInbox {
 			AMap<AString, ACell> record = get(eventId);
 			if (record == null) {
 				record = Maps.of(Fields.ID, Strings.create(eventId), Fields.INPUT, input,
-					Fields.STATUS, PENDING, RECEIVED_AT, CVMLong.create(System.currentTimeMillis()));
+					Fields.STATUS, PENDING, RECEIVED_AT, engine.currentTimestamp());
 				workspace.write(path(eventId), record);
 			}
 			// Flush duplicates too: the original write may have survived in memory
@@ -91,7 +91,7 @@ public final class WebhookInbox {
 			if (COMPLETE.equals(record.get(Fields.STATUS))) { engine.flush(); return; }
 			if (!STARTED.equals(record.get(Fields.STATUS))) throw new IllegalStateException(NOT_STARTED);
 			workspace.write(path(eventId), record.assoc(Fields.STATUS, COMPLETE)
-				.assoc(COMPLETED_AT, CVMLong.create(System.currentTimeMillis())));
+				.assoc(COMPLETED_AT, engine.currentTimestamp()));
 			engine.flush();
 		}
 	}
@@ -106,7 +106,7 @@ public final class WebhookInbox {
 		if (!PENDING.equals(record.get(Fields.STATUS)) && !STARTED.equals(record.get(Fields.STATUS))) throw new IllegalStateException(NOT_PENDING);
 		state.write(path(eventId), record.assoc(Fields.STATUS, COMPLETE)
 			.assoc(Fields.SESSION_ID, sessionId).assoc(Fields.JOB_ID, jobId)
-			.assoc(COMPLETED_AT, CVMLong.create(System.currentTimeMillis())));
+			.assoc(COMPLETED_AT, engine.currentTimestamp()));
 		return true;
 	}
 

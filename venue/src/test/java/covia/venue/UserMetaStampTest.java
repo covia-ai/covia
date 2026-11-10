@@ -2,10 +2,16 @@ package covia.venue;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.io.IOException;
+import java.time.Instant;
+
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
 
+import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
 import convex.core.data.AString;
 import convex.core.data.Blob;
@@ -21,12 +27,32 @@ import convex.core.lang.RT;
  * record's stamped cursor ({@code Covia.stampUserMeta}) on EVERY deep write anywhere in the user's
  * subtree — the activity signal for future identity-lifecycle (TTL) policy.
  * No application code writes these fields; the lattice layer does.
+ *
+ * <p>The venue runs on a write clock that moves only when a test ticks it, so
+ * whether a write stamps does not depend on the wall clock moving.</p>
  */
 public class UserMetaStampTest {
 
-	private final Engine engine = TestEngine.ENGINE;
+	/** The venue's write clock. Tests may share it, since they only move it forward. */
+	private static final DrivenClock CLOCK = DrivenClock.at(Instant.ofEpochMilli(1_000));
+	private static Engine engine;
+
 	private AString ALICE_DID;
 	private User user;
+
+	@BeforeAll
+	public static void launch() throws IOException {
+		AKeyPair key = AKeyPair.generate();
+		CoviaApplication application = TestEngine.application(CLOCK);
+		engine = application.mount(key,
+			new Config(Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true)))).start();
+		Engine.addDemoAssets(engine);
+	}
+
+	@AfterAll
+	public static void close() {
+		engine.close();
+	}
 
 	@BeforeEach
 	public void setup(TestInfo info) {
@@ -39,10 +65,10 @@ public class UserMetaStampTest {
 		return (v instanceof CVMLong l) ? l.longValue() : -1;
 	}
 
-	/** Advances wall time past the current stamp. The application's live
-	 *  LatticeContext resolves this clock at the next logical write. */
+	/** Advances the write clock past the current stamp. The venue reads it at
+	 *  the next logical write. */
 	private void tick() {
-		try { Thread.sleep(3); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+		CLOCK.advance(1);
 	}
 
 	@Test
@@ -60,7 +86,7 @@ public class UserMetaStampTest {
 
 	@Test
 	public void testDeepAgentWriteBumpsUpdatedNotCreated() {
-		AgentState agent = user.ensureAgent("meta-agent", Maps.empty(), null);
+		Agent agent = user.ensureAgent("meta-agent", Maps.empty(), null);
 		long created = metaField("created");
 		long before = metaField("updated");
 		assertTrue(created > 0);
@@ -68,7 +94,7 @@ public class UserMetaStampTest {
 
 		// The existing long-lived wrapper shares the application's live policy;
 		// it does not need to be reconstructed with a fresh context snapshot.
-		agent.setStatus(AgentState.SUSPENDED);
+		agent.setStatus(Agent.SUSPENDED);
 
 		assertTrue(metaField("updated") > before,
 			"a deep agent write must bump meta.updated");
@@ -87,7 +113,7 @@ public class UserMetaStampTest {
 		// A frame write four levels down the subtree still refreshes the
 		// user-level stamp (StampedCursor deep-write re-stamp). Fresh wrapper
 		// after the clock advance, as real per-access derivation gives.
-		AgentState agent = engine.getVenueState().users().get(ALICE_DID).agent("frame-agent");
+		Agent agent = engine.getVenueState().users().user(ALICE_DID).agent("frame-agent");
 		assertTrue(agent.session(sid).updateFrames(null,
 			frames -> frames.conj(Maps.of(Strings.create("description"), Strings.create("x")))));
 		assertTrue(metaField("updated") > before,
@@ -96,26 +122,26 @@ public class UserMetaStampTest {
 
 	@Test
 	public void testReadDoesNotBump() {
-		AgentState agent = user.ensureAgent("read-agent", Maps.empty(), null);
+		Agent agent = user.ensureAgent("read-agent", Maps.empty(), null);
 		long before = metaField("updated");
 		tick();
 
 		agent.getRecord();
 		agent.getTasks();
 		user.getAgents();
-		engine.getVenueState().users().get(ALICE_DID).cursor().get();
+		engine.getVenueState().users().user(ALICE_DID).cursor().get();
 
 		assertEquals(before, metaField("updated"), "reads must not bump meta.updated");
 	}
 
 	@Test
 	public void testUnchangedWriteDoesNotBump() {
-		AgentState agent = user.ensureAgent("noop-agent", Maps.empty(), null);
-		agent.setStatus(AgentState.SLEEPING);   // already SLEEPING at creation
+		Agent agent = user.ensureAgent("noop-agent", Maps.empty(), null);
+		agent.setStatus(Agent.SLEEPING);   // already SLEEPING at creation
 		long before = metaField("updated");
 		tick();
 
-		agent.setStatus(AgentState.SLEEPING);   // no-change write
+		agent.setStatus(Agent.SLEEPING);   // no-change write
 		assertEquals(before, metaField("updated"),
 			"an unchanged write must not bump meta.updated");
 	}
@@ -123,27 +149,27 @@ public class UserMetaStampTest {
 	@Test
 	@SuppressWarnings("unchecked")
 	public void testAgentTimestampNeverMovesBackward() {
-		AgentState agent = user.ensureAgent("ratchet-agent", Maps.empty(), null);
+		Agent agent = user.ensureAgent("ratchet-agent", Maps.empty(), null);
 		AString ts = Strings.intern("ts");
-		CVMLong future = CVMLong.create(System.currentTimeMillis() + 60_000);
+		CVMLong future = CVMLong.create(CLOCK.millis() + 60_000);
 		agent.cursor().updateAndGet(value ->
 			((convex.core.data.AMap<AString, ACell>) value).assoc(ts, future));
 
-		agent.setStatus(AgentState.SUSPENDED);
+		agent.setStatus(Agent.SUSPENDED);
 
 		assertEquals(future, agent.getRecord().get(ts));
 	}
 
 	@Test
-	public void testMetaReadableViaOrdinaryReadPath() {
-		// The doc promises meta is readable (covia:read <did>/meta) though
-		// framework-owned (not a writable namespace).
+	public void testMetaIsNotUserData() {
+		// meta is the venue's bookkeeping: no path reaches it.
 		user.ensureAgent("readable-agent", Maps.empty(), null);
-		ACell result = engine.jobs().invokeOperation("v/ops/covia/read",
+		assertTrue(metaField("updated") > 0, "the record has its meta");
+		covia.grid.Job read = engine.jobs().invokeOperation("v/ops/covia/read",
 			Maps.of(Strings.create("path"), Strings.create("meta")),
-			RequestContext.of(ALICE_DID)).awaitResult(5000);
-		assertTrue(RT.getIn(result, "value", "updated") instanceof CVMLong,
-			"meta must be readable via covia:read: " + result);
+			RequestContext.of(ALICE_DID));
+		assertThrows(Exception.class, () -> read.awaitResult(5000));
+		assertEquals(String.format(covia.lattice.CoviaPath.NO_SUCH_PATH, "/meta", "/meta"), read.getErrorMessage());
 	}
 
 	@Test

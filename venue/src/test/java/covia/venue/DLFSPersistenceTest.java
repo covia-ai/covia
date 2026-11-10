@@ -60,23 +60,25 @@ public class DLFSPersistenceTest {
 
 	@Test
 	public void testDLFSDataSurvivesRestart() throws Exception {
-		File etchFile = File.createTempFile("venue-test-", ".etch");
-		etchFile.delete(); // EtchStore.create needs non-existent file
-		etchFile.deleteOnExit();
+		File etchFile = TestTemp.etchFile("dlfs-persist");
 		AKeyPair venueKey = AKeyPair.generate();
 
 		// === Phase 1: Write data ===
 		{
 			store = EtchStore.create(etchFile);
 			node =
-				new NodeServer<>(CoviaApplication.open(store, venueKey).host(), NodeConfig.port(-1));
+				new NodeServer<>(TestEngine.application(store).host(), NodeConfig.port(-1));
 			node.launch();
 
-			engine = new Engine(Maps.of(
-				Config.USERS, Maps.of(Config.AUTO_CREATE, true)), CoviaApplication.connect(node.getHost()), venueKey).start();
+			engine = TestEngine.application(node.getHost()).mount(venueKey, Maps.of(
+				Config.USERS, Maps.of(Config.AUTO_CREATE, true))).start();
 			Engine.addDemoAssets(engine);
 
 			// Write via DLFS adapter
+			for (String drive : new String[] {"test-drive", "deleted-drive"}) {
+				engine.jobs().invokeOperation("v/ops/dlfs/create-drive", Maps.of("name", drive),
+					RequestContext.of(ALICE_DID)).awaitResult(5000);
+			}
 			ACell result = engine.jobs().invokeOperation(
 				"v/ops/dlfs/write",
 				Maps.of("drive", "test-drive", "path", "test.txt", "content", "persistent!"),
@@ -129,7 +131,7 @@ public class DLFSPersistenceTest {
 		{
 			store = EtchStore.create(etchFile);
 			node =
-				new NodeServer<>(CoviaApplication.open(store, venueKey).host(), NodeConfig.port(-1));
+				new NodeServer<>(TestEngine.application(store).host(), NodeConfig.port(-1));
 			node.launch();
 
 			// Verify restore — root level
@@ -139,8 +141,8 @@ public class DLFSPersistenceTest {
 			assertNotNull(dlfs, ":dlfs region should survive restart");
 
 			// Check the cursor chain that DLFSAdapter would use
-			engine = new Engine(Maps.of(
-				Config.USERS, Maps.of(Config.AUTO_CREATE, true)), CoviaApplication.connect(node.getHost()), venueKey).start();
+			engine = TestEngine.application(node.getHost()).mount(venueKey, Maps.of(
+				Config.USERS, Maps.of(Config.AUTO_CREATE, true))).start();
 			Engine.addDemoAssets(engine);
 
 			// Navigate the same path DLFSAdapter.getUserDLFSCursor() takes

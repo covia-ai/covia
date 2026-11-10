@@ -30,6 +30,12 @@ import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.adapter.AAdapter;
 import covia.exception.AuthException;
+import covia.exception.ConfigurationException;
+import covia.exception.InvalidInputException;
+import covia.exception.NotFoundException;
+import covia.exception.NotSupportedException;
+import covia.exception.ResponseException;
+import covia.exception.UnavailableException;
 import covia.python.PythonException;
 import covia.python.PythonRuntime;
 import covia.python.PythonScript;
@@ -101,13 +107,15 @@ public final class PythonAdapter extends AAdapter implements AutoCloseable {
 
 		private ACell call(String function, List<? extends ACell> arguments) {
 			if (!functions.contains(function)) {
-				throw new IllegalArgumentException("Function is not allowed by Python template "
+				throw new InvalidInputException("Function is not allowed by Python template "
 					+ template + ": " + function);
 			}
 			lifecycle.readLock().lock();
 			try {
-				if (closed) throw new IllegalStateException("Python instance is closed: " + id);
+				if (closed) throw new NotSupportedException("Python instance is closed: " + id);
 				return script.call(function, arguments);
+			} catch (PythonException e) {
+				throw pythonFailure(e);
 			} finally {
 				lifecycle.readLock().unlock();
 			}
@@ -355,7 +363,7 @@ public final class PythonAdapter extends AAdapter implements AutoCloseable {
 			if (runtime == null) throw new IllegalStateException("Python module was not configured");
 			for (Definition definition : definitions.values()) {
 				if (!Files.isRegularFile(definition.script())) {
-					throw new IllegalStateException(
+					throw new ConfigurationException(
 						"Python script not found: " + definition.script());
 				}
 				String source = Files.readString(definition.script());
@@ -367,7 +375,7 @@ public final class PythonAdapter extends AAdapter implements AutoCloseable {
 				Map<String, PreparedTemplate> prepared = new LinkedHashMap<>();
 				for (TemplateDefinition definition : instanceConfig.templates().values()) {
 					if (!Files.isRegularFile(definition.script())) {
-						throw new IllegalStateException(
+						throw new ConfigurationException(
 							"Python instance template not found: " + definition.script());
 					}
 					prepared.put(definition.id(), new PreparedTemplate(definition,
@@ -376,7 +384,10 @@ public final class PythonAdapter extends AAdapter implements AutoCloseable {
 				templates = Map.copyOf(prepared);
 				installInstanceAssets();
 			}
-		} catch (IOException | RuntimeException e) {
+		} catch (IOException | PythonException | ConfigurationException | IllegalArgumentException e) {
+			close();
+			throw new ConfigurationException("Failed to install Python operations", e);
+		} catch (RuntimeException e) {
 			close();
 			throw new IllegalStateException("Failed to install Python operations", e);
 		}
@@ -477,19 +488,22 @@ public final class PythonAdapter extends AAdapter implements AutoCloseable {
 	@Override
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx,
 			AMap<AString, ACell> meta, ACell input) {
-		requireInvoke(ctx);
 		String id = getSubOperation(meta);
 		Operation operation = operations.get(id);
 		if (operation == null && !(instanceConfig.enabled() && INSTANCE_OPERATIONS.contains(id))) {
 			return CompletableFuture.failedFuture(
-				new IllegalArgumentException("Unknown configured Python operation: " + id));
+				new NotSupportedException("Unknown configured Python operation: " + id));
 		}
 		return CompletableFuture.supplyAsync(() -> {
 			lifecycle.readLock().lock();
 			try {
-				if (closed) throw new IllegalStateException("Python adapter is closed");
+				if (closed) throw new UnavailableException("Python adapter is closed");
 				if (operation == null) return invokeInstance(id, ctx, input);
-				return operation.script().call(operation.definition().function(), input);
+				try {
+					return operation.script().call(operation.definition().function(), input);
+				} catch (PythonException e) {
+					throw pythonFailure(e);
+				}
 			} finally {
 				lifecycle.readLock().unlock();
 			}
@@ -509,7 +523,7 @@ public final class PythonAdapter extends AAdapter implements AutoCloseable {
 				arguments(parameters.get(ARGS)));
 			case INSTANCE_CLOSE -> closeInstance(owner,
 				requiredString(parameters, ID, "id"));
-			default -> throw new IllegalArgumentException(
+			default -> throw new NotSupportedException(
 				"Unknown Python instance operation: " + operation);
 		};
 	}
@@ -517,22 +531,27 @@ public final class PythonAdapter extends AAdapter implements AutoCloseable {
 	private ACell createInstance(AString owner, AString createdBy, String templateId) {
 		PreparedTemplate template = templates.get(templateId);
 		if (template == null) {
-			throw new IllegalArgumentException("Unknown Python instance template: " + templateId);
+			throw new NotFoundException("Unknown Python instance template: " + templateId, templateId);
 		}
 		synchronized (instances) {
 			long owned = instances.keySet().stream()
 				.filter(key -> key.owner().equals(owner)).count();
 			if (owned >= instanceConfig.maxPerUser()) {
-				throw new IllegalStateException("Python instance limit reached for user ("
+				throw new UnavailableException("Python instance limit reached for user ("
 					+ instanceConfig.maxPerUser() + ")");
 			}
 			if (instances.size() >= instanceConfig.maxTotal()) {
-				throw new IllegalStateException("Venue Python instance limit reached ("
+				throw new UnavailableException("Venue Python instance limit reached ("
 					+ instanceConfig.maxTotal() + ")");
 			}
 			String id = UUID.randomUUID().toString();
-			PythonScript script = runtime.load(template.source(),
-				template.definition().script() + "#instance-" + id);
+			PythonScript script;
+			try {
+				script = runtime.load(template.source(),
+					template.definition().script() + "#instance-" + id);
+			} catch (PythonException e) {
+				throw pythonFailure(e);
+			}
 			Instance instance = new Instance(id, createdBy, template, script);
 			instances.put(new InstanceKey(owner, id), instance);
 			return instance.descriptor();
@@ -570,8 +589,13 @@ public final class PythonAdapter extends AAdapter implements AutoCloseable {
 		return Maps.of(ID, Strings.create(id), Strings.intern("closed"), CVMBool.TRUE);
 	}
 
-	private static IllegalArgumentException instanceNotFound(String id) {
-		return new IllegalArgumentException("Python instance not found: " + id);
+	private static NotFoundException instanceNotFound(String id) {
+		return new NotFoundException("Python instance not found: " + id, id);
+	}
+
+	/** An error raised by the operator's Python code, which the caller is told in Python's words. */
+	private static ResponseException pythonFailure(PythonException e) {
+		return new ResponseException(e.getMessage(), e);
 	}
 
 	private AString requireOwner(RequestContext ctx) {
@@ -579,13 +603,14 @@ public final class PythonAdapter extends AAdapter implements AutoCloseable {
 		if (owner == null || (engine != null && engine.isPublicPrincipal(owner))) {
 			throw new AuthException("Authenticated non-public identity required for Python instances");
 		}
+		if (!ctx.actsWithNamespaceAuthority()) throw new AuthException(RequestContext.NOT_NAMESPACE_AUTHORITY + owner);
 		return owner;
 	}
 
 	@SuppressWarnings("unchecked")
 	private static AMap<AString, ACell> requireInputMap(ACell input) {
 		if (!(input instanceof AMap<?, ?>)) {
-			throw new IllegalArgumentException("Python instance input must be an object");
+			throw new InvalidInputException("Python instance input must be an object");
 		}
 		return (AMap<AString, ACell>) input;
 	}
@@ -594,7 +619,7 @@ public final class PythonAdapter extends AAdapter implements AutoCloseable {
 			AString key, String label) {
 		ACell value = input.get(key);
 		if (!(value instanceof AString string) || string.isEmpty()) {
-			throw new IllegalArgumentException(label + " must be a non-empty string");
+			throw new InvalidInputException(label + " must be a non-empty string");
 		}
 		return string.toString();
 	}
@@ -602,7 +627,7 @@ public final class PythonAdapter extends AAdapter implements AutoCloseable {
 	private static List<ACell> arguments(ACell raw) {
 		if (raw == null) return List.of();
 		if (!(raw instanceof AVector<?> vector)) {
-			throw new IllegalArgumentException("args must be an array");
+			throw new InvalidInputException("args must be an array");
 		}
 		List<ACell> result = new ArrayList<>((int) vector.count());
 		for (long i = 0; i < vector.count(); i++) result.add((ACell) vector.get(i));

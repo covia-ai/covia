@@ -104,8 +104,8 @@ public class AgentApiTest {
 	}
 
 	private long jobCount() {
-		User u = TestServer.ENGINE.getVenueState().users().get(callerDID);
-		return (u == null) ? 0 : u.getJobs().count();
+		User u = TestServer.ENGINE.getVenueState().users().user(callerDID);
+		return (u == null) ? 0 : u.jobs().size();
 	}
 
 	/** True if the {@code {agents:[...]}} payload lists agentId (ids or annotated form). */
@@ -186,6 +186,21 @@ public class AgentApiTest {
 			"anonymous cannot fetch the caller's agent by id");
 	}
 
+	/** An encoded id may name another owner's agent or no agent at all: either is
+	 *  the caller's error, answered as such, on the read and the stream alike. */
+	@Test
+	public void testForeignOrMalformedAgentIdIsRefused() throws Exception {
+		String foreign = java.net.URLEncoder.encode(callerDID + "/g/AgentAlpha",
+			java.nio.charset.StandardCharsets.UTF_8);
+		HttpResponse<String> read = get("agents/" + foreign, false);
+		assertEquals(403, read.statusCode(), read.body());
+		assertFalse(read.body().contains("dummy test agent"), read.body());
+		assertEquals(403, get("agents/" + foreign + "/sse", false).statusCode());
+
+		assertEquals(400, get("agents/a%2Fb", true).statusCode());
+		assertEquals(400, get("agents/a%2Fb/sse", true).statusCode());
+	}
+
 	@Test
 	public void testIncludeTerminated() throws Exception {
 		createAgent("AgentTerm");
@@ -222,12 +237,13 @@ public class AgentApiTest {
 		AKeyPair delegateKey = AKeyPair.generate();
 		AString owner = UCAN.toDIDKey(ownerKey.getAccountKey());
 		AString delegate = UCAN.toDIDKey(delegateKey.getAccountKey());
-		long exp = (System.currentTimeMillis() / 1000) + 3600;
-		AString createGrant = UCAN.create(ownerKey, delegateKey.getAccountKey(), exp,
+		// The delegate gives the agent caps, which last, so its right to grant them does too.
+		AString createGrant = UCAN.create(ownerKey, delegateKey.getAccountKey(), (Long) null,
 			Vectors.of(
 				Capability.create(owner, Abilities.USER_SUDO),
 				Capability.create(Strings.create(owner + "/v/ops/agent/create"), Strings.create("invoke")),
-				Capability.create(Strings.create(owner + "/g/"), Abilities.AGENT_CREATE)),
+				Capability.create(Strings.create(owner + "/g/"), Abilities.AGENT_CREATE),
+				Capability.create(Strings.create(owner + "/g/"), Strings.create("grant/" + Abilities.AGENT_CREATE))),
 			Vectors.empty()).toJWT(ownerKey);
 
 		VenueHTTP delegated = VenueHTTP.create(
@@ -242,7 +258,7 @@ public class AgentApiTest {
 			RT.getIn(direct.getData(), Fields.OUTPUT, Fields.ADDRESS),
 			"presenting a sudo grant must not itself select the owner's namespace");
 
-		// The delegate confers only caps it holds: an unrestricted agent in the
+		// The delegate confers only caps it may grant: an unrestricted agent in the
 		// owner's namespace would exceed its grant.
 		Job created = delegated.invokeAndWait(OP_SUDO, Maps.of(
 			Fields.DID, owner,
@@ -256,15 +272,16 @@ public class AgentApiTest {
 			RT.getIn(created.getData(), Fields.OUTPUT, Fields.ADDRESS));
 		assertEquals(delegate, RT.getIn(created.getData(), Fields.CALLER),
 			"the explicit sudo wrapper remains the authenticated delegate's job");
-		assertNull(RT.getIn(created.getData(), Fields.ACTOR),
-			"authentication is unchanged; the wrapper caller and actor are the delegate");
-		assertNotNull(TestServer.ENGINE.getVenueState().users().get(owner).agent("delegated-agent"));
-		User delegateUser = TestServer.ENGINE.getVenueState().users().get(delegate);
+		assertNull(RT.getIn(created.getData(), Fields.OWNER),
+			"authentication is unchanged; the wrapper belongs to the delegate that made it");
+		assertNotNull(TestServer.ENGINE.getVenueState().users().user(owner).agent("delegated-agent"));
+		User delegateUser = TestServer.ENGINE.getVenueState().users().user(delegate);
 		assertTrue(delegateUser == null || delegateUser.agent("delegated-agent") == null,
 			"an implicit agent id must never land in the intermediary's namespace");
 
 		// Namespace selection cannot confer ambient owner authority: the token
 		// permits invocation but omits the action's agent/create capability.
+		long exp = (System.currentTimeMillis() / 1000) + 3600;
 		AString invokeOnly = UCAN.create(ownerKey, delegateKey.getAccountKey(), exp,
 			Vectors.of(Capability.create(owner, Abilities.USER_SUDO),
 				Capability.create(Strings.create(owner + "/v/ops/agent/create"), Strings.create("invoke"))),
@@ -276,7 +293,7 @@ public class AgentApiTest {
 			Fields.INPUT, Maps.of(Fields.AGENT_ID, "not-authorised")));
 		assertEquals(Status.FAILED, denied.getStatus());
 		assertTrue(denied.getErrorMessage().contains("agent/create"), denied.getErrorMessage());
-		assertNull(TestServer.ENGINE.getVenueState().users().get(owner).agent("not-authorised"),
+		assertNull(TestServer.ENGINE.getVenueState().users().user(owner).agent("not-authorised"),
 			"namespace selection must not bypass the signed capability limit");
 	}
 }

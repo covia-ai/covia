@@ -29,6 +29,9 @@ public class BlobContent extends AContent {
      * @throws IOException if reading from the stream fails
      */
     public static BlobContent from(InputStream inputStream) throws IOException {
+        // Interim (covia#629): Blobs.fromStream holds the whole content in
+        // memory; Convex's streaming blob writer (Convex-Dev/convex#790) would
+        // save chunks to a store as they arrive.
         ABlob blob = Blobs.fromStream(inputStream);
         return new BlobContent(blob);
     }
@@ -40,6 +43,9 @@ public class BlobContent extends AContent {
     
     @Override
     public InputStream getInputStream() {
+        // Interim (covia#629): ABlob.getInputStream copies a multi-chunk blob
+        // into one array first; Convex's streaming reader
+        // (Convex-Dev/convex#790) would walk it chunk by chunk.
         return blob.getInputStream();
     }
     

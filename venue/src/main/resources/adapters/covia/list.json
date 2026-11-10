@@ -10,7 +10,7 @@
 			"type": "object",
 			"properties": {
 				"path": {
-					"description": "Any resolvable lattice path. Examples: 'v/ops' (venue catalog), 'o' (your pins), 'v/info/adapters' (installed adapters), 'g/my-agent' (agent record), 'w/notes'. Omit to describe the top-level of your namespace."
+					"description": "Any resolvable lattice path. Examples: 'v/ops' (venue catalog), 'o' (your pins), 'v/info/adapters' (installed adapters), 'g/my-agent' (agent record), 'w/notes'."
 				},
 				"limit": {
 					"type": "integer",
@@ -23,7 +23,8 @@
 				"fields": {
 					"description": "Optional field projection (partial response): subpaths to read from each listed child, e.g. [\"status\", \"meta/updated\"] or one comma-separated string. Adds a 'values' map to the response with each field's read result per key. Max 16 fields; applies after limit/offset; requires a keyed node. Output shape only — no filtering or ordering."
 				}
-			}
+			},
+			"required": ["path"]
 		},
 		"output": {
 			"type": "object",

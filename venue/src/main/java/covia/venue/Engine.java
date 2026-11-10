@@ -1,13 +1,15 @@
 package covia.venue;
 
-import covia.lattice.WorkspaceRoot;
+import covia.lattice.CoviaPath;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.time.Instant;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CancellationException;
@@ -15,8 +17,6 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 
@@ -42,7 +42,8 @@ import convex.core.data.Hash;
 import convex.core.data.Index;
 import convex.core.cvm.Keywords;
 import convex.core.data.Keyword;
-import convex.core.data.MapEntry;
+import convex.core.store.MemoryStore;
+import convex.lattice.LatticeHost;
 import convex.core.data.Maps;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.Strings;
@@ -50,8 +51,6 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
-import convex.core.util.Utils;
-import convex.lattice.LatticeContext;
 import convex.lattice.cursor.AForkableCursor;
 import convex.lattice.fs.DLFS;
 import convex.lattice.fs.DLFileSystem;
@@ -81,19 +80,30 @@ import covia.adapter.UCANAdapter;
 import covia.adapter.TestAdapter;
 import covia.api.Abilities;
 import covia.api.Fields;
-import covia.exception.CoviaException;
 import covia.exception.AuthException;
+import covia.exception.ConfigurationException;
+import covia.exception.InvalidInputException;
+import covia.exception.NotFoundException;
+import covia.exception.NotSupportedException;
 import covia.exception.RemoteFetchException;
+import covia.exception.UnavailableException;
 import covia.exception.WrongScopeException;
 import covia.grid.AContent;
 import covia.grid.Asset;
+import covia.grid.Attribution;
 import covia.grid.Grid;
+import covia.grid.HexId;
+import covia.grid.Job;
 import covia.grid.Operation;
 import covia.grid.Venue;
+import covia.grid.auth.VenueAuth;
 import covia.grid.client.VenueHTTP;
+import covia.lattice.CapabilityChecker;
 import covia.lattice.Covia;
+import covia.lattice.Namespace;
 import covia.venue.api.CoviaAPI;
-import covia.venue.storage.AStorage;
+import covia.venue.auth.VenueAuthenticator;
+import covia.venue.storage.ContentStorage;
 import covia.venue.storage.FileStorage;
 import covia.venue.storage.MemoryStorage;
 
@@ -113,14 +123,13 @@ public class Engine {
 	/**
 	 * Storage instance for content associated with assets
 	 */
-	protected AStorage contentStorage;
+	protected ContentStorage contentStorage;
 
 	/**
-	 * Venue lattice using Covia.ROOT structure see COG-004.
+	 * The application's state, laid out as COG-004's root lattice.
 	 * Components supply merge policy; the cursor supplies atomic updates and sync.
- 	 */
+	 */
 	protected AForkableCursor<Index<Keyword,ACell>> lattice;
-	protected LatticeContext latticeContext = LatticeContext.EMPTY;
 
 	/** Venue state wrapper providing typed access to assets, jobs, and child cursors */
 	protected VenueState venueState;
@@ -146,12 +155,12 @@ public class Engine {
 	/**
 	 * Per-venue grid scheduler. Fires any deferred grid operation at a future
 	 * wall-clock time; an agent wake is one consumer (a scheduled
-	 * {@code agent:wake}). See {@code venue/docs/GRID_SCHEDULER.md}.
+	 * {@code agent:trigger}). See {@code venue/docs/GRID_SCHEDULER.md}.
 	 */
 	private final Scheduler gridScheduler;
 	/** The live agent tap (#394): run-loop, cycle, inference, tool and status
 	 *  events for every agent hosted here. */
-	private final AgentEvents agentEvents = new AgentEvents();
+	private final AgentEvents agentEvents = new AgentEvents(this);
 	/** Guards an embedding host registers on agents' tool calls. */
 	private final ToolGuards toolGuards = new ToolGuards();
 
@@ -211,13 +220,6 @@ public class Engine {
 	public static final java.util.Set<String> KERNEL_ADAPTERS = java.util.Set.of(
 		"covia", "agent", "dlfs", "hitl", "http", "file", "grid", "venue");
 
-	/**
-	 * Background sweep daemon — periodically publishes the connected venue
-	 * state and invokes the store durability barrier. See
-	 * {@code venue/docs/PERSISTENCE.md}.
-	 */
-	private ScheduledExecutorService persistenceSweep;
-
 	/** Explicit lifecycle: construction is inert; start/close own active resources. */
 	private enum Lifecycle { NEW, STARTING, PREPARED, STARTED, FAILED, CLOSING, CLOSED }
 	private volatile Lifecycle lifecycle = Lifecycle.NEW;
@@ -227,48 +229,21 @@ public class Engine {
 	public static final String LAUNCH_ALREADY_CLAIMED = "Engine launch requires a new or prepared engine and may be called only once";
 	public static final String START_DURING_LAUNCH = "Engine activation is owned by the in-progress launch";
 
-	/** How often the persistence sweep daemon runs (ms). */
-	private static final long SWEEP_INTERVAL_MS = 100;
-
 	/**
-	 * How often the sweep forces a store-level fsync. The sweep runs every
-	 * {@link #SWEEP_INTERVAL_MS} but only crosses the host's durability barrier
-	 * if at least this many ms have elapsed since the last flush. Bounds the
-	 * data-loss window on unclean shutdown (kernel panic, power loss, hard
-	 * VM stop) to roughly this interval. App-requested {@link #flush()} resets
-	 * the counter, so explicit flushes naturally suppress the periodic one.
-	 *
-	 * <p>Package-private (non-final, volatile) so tests can shrink the
-	 * interval to exercise the cadence quickly. Tests must restore the
-	 * original value. Volatile ensures the sweep daemon thread sees the
-	 * change without a synchronisation primitive — without this, the JIT
-	 * may cache the field per thread and tests changing it from the test
-	 * thread won't affect the sweep.</p>
+	 * Assembles the inert runtime of a venue mounted in {@code application}: only
+	 * {@link CoviaApplication#mount} builds one. Call launch() for a complete
+	 * venue, or start() for a manually assembled runtime. Closing the engine
+	 * unmounts its venue; close it before its host and store.
 	 */
-	static volatile long FLUSH_INTERVAL_MS = 10_000;
-
-	/** Timestamp of the last completed flush. Initialised at construction. */
-	private volatile long lastFlushMillis;
-
-	/**
-	 * Assembles an inert runtime over a caller-owned application. The host must
-	 * restore its root first. Call launch() for a complete venue, or start() for
-	 * a manually assembled runtime. Close the engine before its host/store.
-	 */
-	public Engine(Config config, CoviaApplication application, AKeyPair keyPair) throws IOException {
+	Engine(Config config, CoviaApplication application, AKeyPair keyPair) {
 		this.config = java.util.Objects.requireNonNull(config, "config");
 		this.application = java.util.Objects.requireNonNull(application, "application");
 		this.keyPair = java.util.Objects.requireNonNull(keyPair, "keyPair");
 		validateDeclaredIdentity();
 		this.lattice = application.cursor();
-		this.lastFlushMillis = System.currentTimeMillis();
 		this.jobManager = new JobManager(this);
 		this.gridScheduler = new Scheduler(this);
-	}
-
-	/** Accepts the external JSON configuration form. */
-	public Engine(AMap<AString, ACell> config, CoviaApplication application, AKeyPair keyPair) throws IOException {
-		this(new Config(config), application, keyPair);
+		this.venueProofs = new covia.venue.auth.VenueProofs(this);
 	}
 
 	/**
@@ -299,7 +274,7 @@ public class Engine {
 		lifecycle = Lifecycle.STARTING;
 		try {
 			resumeCoreUserDeletions();
-			// Reconcile wake handles while the alarm is still disarmed. Hosts
+			// Reconcile wake handles before the scheduler takes part in updates. Hosts
 			// prepare the catalog and recover Jobs before activating this engine.
 			rebuildSchedulerFromLattice();
 			for (String name : getAdapterNamesInRegistrationOrder()) {
@@ -349,9 +324,8 @@ public class Engine {
 	 * explicitly invoked by the hook execute immediately; await their results when
 	 * subsequent setup or recovered work depends on them. Do not start workers,
 	 * recover work, publish the catalogue or call start/launch from the hook.
-	 * Do not wait for work that requires a running worker or scheduler. The
-	 * persistence sweep may run while setup is pending, but
-	 * inbound adapter workers and scheduled operations remain paused. Configured
+	 * Do not wait for work that requires a running worker or scheduler. Inbound
+	 * adapter workers and scheduled operations remain paused. Configured
 	 * secrets and available configured MCP tools are in place before the hook.</p>
 	 *
 	 * <p>Recovered work may execute after the hook completes, before this method
@@ -480,9 +454,9 @@ public class Engine {
 			}
 			checkLaunchCancellation();
 			new covia.venue.auth.AuthMethods(this).validate();
+			venueProofs.validate();
 			jobs().recoverJobs();
 			if (getAdapter("agent") instanceof AgentAdapter agents) agents.wakeAgentsWithWork();
-			if (getAdapter("hitl") instanceof covia.adapter.HITLAdapter hitl) hitl.rearmExpiries();
 			checkLaunchCancellation();
 			return activate();
 		} catch (IOException | RuntimeException | Error failure) {
@@ -519,8 +493,8 @@ public class Engine {
 	 * Restores state and opens storage without firing schedules or starting
 	 * adapter-owned workers. This is a low-level assembly seam; prefer
 	 * {@link #launch(Function)} for the complete shared startup sequence.
-	 * Preparation starts the persistence sweep but does not install adapters or
-	 * recover work. Closing a prepared engine releases all engine-owned resources.
+	 * Preparation does not install adapters or recover work. Closing a prepared
+	 * engine releases all engine-owned resources.
 	 *
 	 * @return this engine
 	 * @throws IOException if content storage cannot be initialised
@@ -583,13 +557,6 @@ public class Engine {
 		}
 		lifecycle = Lifecycle.STARTING;
 		try {
-			// Set signing context only when active startup begins.
-			// Preserve application owner verification and clock policy, overriding
-			// only Covia's signing capability.
-			LatticeContext ctx = application.getContext()
-				.withSigningKey(this.keyPair);
-			this.latticeContext = ctx;
-			application.setContext(ctx);
 			// Authentication also serves manually assembled engines without a
 			// public operation catalogue. Its availability follows normal lifecycle.
 			AuthAdapter auth = new AuthAdapter();
@@ -603,7 +570,6 @@ public class Engine {
 
 			bootstrapUsers();
 			registerAdapter(auth);
-			startPersistenceSweep();
 			lifecycle = Lifecycle.PREPARED;
 			return this;
 		} catch (IOException | RuntimeException | Error failure) {
@@ -649,21 +615,25 @@ public class Engine {
 			AMap<AString, ACell> existingUser = auth.getUser(id);
 			if (existingUser != null
 					&& !did.equals(RT.ensureString(existingUser.get(Fields.DID)))) {
-				throw new IllegalStateException("Named user " + id
+				throw new ConfigurationException("Named user " + id
 					+ " is already bound to a different DID");
 			}
 			AMap<AString, ACell> spec = RT.ensureMap(entry.getValue());
 			AVector<ACell> keys = (spec != null)
 				? RT.ensureVector(spec.get(Fields.AUTHENTICATION_KEYS)) : null;
 			if (keys == null || keys.isEmpty()) {
-				throw new IllegalArgumentException("users.bootstrap." + id
+				throw new ConfigurationException("users.bootstrap." + id
 					+ " requires a non-empty authenticationKeys array");
 			}
 			for (long i = 0; i < keys.count(); i++) {
 				AString key = RT.ensureString(keys.get(i));
-				AuthState.requireValidAuthenticationKey(key);
+				try {
+					ManagedUsers.requireValidAuthenticationKey(key);
+				} catch (IllegalArgumentException e) {
+					throw new ConfigurationException(e.getMessage(), e);
+				}
 				if (!declaredKeys.add(key)) {
-					throw new IllegalArgumentException(
+					throw new ConfigurationException(
 						"One authentication key cannot bootstrap two named users");
 				}
 				AMap<AString, AMap<AString, ACell>> known = auth.getUsers();
@@ -673,7 +643,7 @@ public class Engine {
 						AMap<AString, ACell> otherKeys = RT.ensureMap(
 							other.getValue().get(Fields.AUTHENTICATION_KEYS));
 						if (otherKeys != null && otherKeys.containsKey(key)) {
-							throw new IllegalArgumentException(
+							throw new ConfigurationException(
 								Auth.KEY_ALREADY_BOUND
 								+ other.getKey());
 						}
@@ -694,30 +664,16 @@ public class Engine {
 				RT.ensureVector(spec.get(Fields.AUTHENTICATION_KEYS));
 			venueState.users().ensure(did);
 			auth.ensureManagedUser(id, did);
-			if (!auth.getAuthenticationKeys(id).isEmpty()) continue;
-			auth.addAuthenticationKeys(id, keys, getDIDString());
+			auth.installFirstAuthenticationKeys(id, keys, getDIDString());
 		}
 	}
-
-	private void startPersistenceSweep() {
-		// In-memory engines have nothing external to flush and get no daemon.
-		if (application.isEphemeral() || application.host().store() == null) return;
-		this.persistenceSweep = Executors.newSingleThreadScheduledExecutor(r -> {
-			Thread t = new Thread(r, "covia-persistence-sweep");
-			t.setDaemon(true);
-			return t;
-		});
-		this.persistenceSweep.scheduleWithFixedDelay(
-			this::sweep, SWEEP_INTERVAL_MS, SWEEP_INTERVAL_MS, TimeUnit.MILLISECONDS);
-	}
-
 
 	/**
 	 * Creates the appropriate storage instance based on configuration.
 	 *
 	 * <p>Reads the "storage" config entry to determine storage type:
 	 * <ul>
-	 *   <li>"lattice" - Uses LatticeStorage backed by venue lattice cursor (default)</li>
+	 *   <li>"lattice" - The venue's own {@link ContentStore} (default)</li>
 	 *   <li>"memory" - Uses simple in-memory storage</li>
 	 *   <li>"file" - Uses FileStorage with configured path</li>
 	 *   <li>"dlfs" - Uses FileStorage backed by local DLFS filesystem</li>
@@ -725,7 +681,7 @@ public class Engine {
 	 *
 	 * @return Configured storage instance
 	 */
-	protected AStorage createStorage() {
+	protected ContentStorage createStorage() {
 		AString storageType = config.getStorageType();
 		String storagePath = config.getStoragePath();
 
@@ -735,14 +691,14 @@ public class Engine {
 			return new MemoryStorage();
 		} else if (Config.STORAGE_TYPE_FILE.equals(storageType)) {
 			if (storagePath == null || storagePath.isEmpty()) {
-				throw new IllegalArgumentException("File storage requires 'path' configuration");
+				throw new ConfigurationException("File storage requires 'path' configuration");
 			}
 			Path path = Paths.get(storagePath);
 			if (!Files.exists(path)) {
 				try {
 					Files.createDirectories(path);
 				} catch (IOException e) {
-					throw new IllegalArgumentException("Failed to create storage directory: " + storagePath, e);
+					throw new ConfigurationException("Failed to create storage directory: " + storagePath, e);
 				}
 			}
 			log.info("Using file storage at: {}", storagePath);
@@ -763,7 +719,7 @@ public class Engine {
 			if (!Config.STORAGE_TYPE_LATTICE.equals(storageType)) {
 				log.warn("Unknown storage type '{}', defaulting to lattice", storageType);
 			}
-			return venueState.contentStorage();
+			return venueState.contents();
 		}
 	}
 
@@ -772,7 +728,7 @@ public class Engine {
 	 * Ensures the venue entry exists at [:grid :venues &lt;accountKey&gt; :value].
 	 * Venues are keyed by AccountKey in OwnerLattice; the DID is stored inside venue state.
 	 *
-	 * <p>The Engine keeps this state connected to the application root. A
+	 * <p>This state is the application's one working copy of the venue. A
 	 * successful component mutation therefore updates the venue's authoritative
 	 * in-memory state immediately. Components may still create a short-lived
 	 * {@link VenueState#transact} when a bounded group of writes must commit or be
@@ -789,13 +745,12 @@ public class Engine {
 		// can sign for its own persisted state is broken; fail before writing.
 		requireKeyMatchesStore();
 
-		// Keep the Engine's authoritative state connected to the application.
-		// Writes cross the signed owner boundary immediately; explicit forks are
-		// reserved for bounded component transactions.
+		// The Engine works on the application's copy of its venue: edits stay
+		// unsigned until publication signs the record (publishApplicationRoot).
 		VenueState connected = application.venue(getAccountKey());
 		// Version validation and every start-up migration, the venue's and its
 		// adapters', precede every bootstrap write and worker, in one transaction.
-		connected.initialise(getDIDString(), migrationsOf(adapters));
+		connected.initialise(getDIDString(), SecretStore.keys(getKeyPair()), migrationsOf(adapters));
 		migratedAtStart.addAll(adapters);
 		this.venueState = connected;
 
@@ -815,22 +770,20 @@ public class Engine {
 	 * {@code :venues}, a first boot on a pre-replicated store would need this
 	 * check refined (our-entry-absent would no longer imply a wrong key).</p>
 	 */
-	@SuppressWarnings("unchecked")
 	private void requireKeyMatchesStore() {
-		// The :venues level is an OwnerLattice: AHashMap<AccountKey, SignedData>.
-		ACell venuesVal = lattice.path(Covia.GRID, Covia.VENUES).get();
-		if (!(venuesVal instanceof AMap<?, ?> venues) || venues.isEmpty()) return;   // fresh store
-		AMap<ACell, ACell> vs = (AMap<ACell, ACell>) venues;
-		if (vs.containsKey(getAccountKey())) return;                                  // normal restart
+		var venues = application.venues();
+		var vs = venues.cursor().getOrDefault(null);
+		if (vs == null || vs.isEmpty()) return;                                  // fresh store
+		if (venues.get(getAccountKey()) != null) return;                         // normal restart
 
 		StringBuilder sb = new StringBuilder();
 		for (long i = 0; i < vs.count(); i++) {
-			MapEntry<ACell, ACell> e = vs.entryAt(i);
+			var e = vs.entryAt(i);
 			if (i > 0) sb.append(", ");
 			ACell did = RT.getIn(e.getValue(), Keywords.VALUE, Covia.DID);
 			sb.append(did != null ? did : "key " + e.getKey());
 		}
-		throw new IllegalStateException(
+		throw new ConfigurationException(
 			"Venue key mismatch: this store already holds venue state for [" + sb
 			+ "] but the configured key gives " + getDIDString()
 			+ ". Starting anyway would create a fresh empty venue and orphan the existing"
@@ -839,15 +792,15 @@ public class Engine {
 	}
 
 	/**
-	 * Publishes the Engine's connected venue state through the hosted application
-	 * boundary. This is a publication hint,
-	 * not a transaction commit: successful mutations are already present in the
-	 * authoritative in-memory root.
+	 * Publishes the Engine's venue state through the hosted application
+	 * boundary, signing the venue's record. This is a publication hint, not a
+	 * transaction commit: successful mutations are already present in the
+	 * venue's working copy.
 	 *
 	 * <p>Retained for request-boundary publication by VenueServer and embedded
 	 * venue routes carrying {@code VenueRouteFeature.LATTICE_SYNC}. Physical
-	 * durability remains the responsibility of {@link #flush()} and the
-	 * background sweep.</p>
+	 * durability remains the responsibility of {@link #flush()} and of the
+	 * flush worker run by whoever opened the host.</p>
 	 */
 	public void syncState() {
 		if (lifecycle == Lifecycle.CLOSING || lifecycle == Lifecycle.CLOSED || lifecycle == Lifecycle.FAILED) {
@@ -859,10 +812,13 @@ public class Engine {
 		publishApplicationRoot();
 	}
 
-	/** Publishes the application through its caller-owned host. */
+	/**
+	 * Publishes the application through its caller-owned host: the application
+	 * signs the venue's working copy into its record, the host publishes, and
+	 * the copy is persisted through the host ({@link CoviaApplication#publish}).
+	 */
 	private void publishApplicationRoot() {
-		application.sync();
-		application.host().sync();
+		application.publish();
 	}
 
 	// ========================================================================
@@ -870,39 +826,14 @@ public class Engine {
 	// ========================================================================
 
 	/**
-	 * Background sweep step. Publishes the already-connected root through the
-	 * host policy, then periodically invokes the physical durability barrier.
-	 *
-	 * <p>Called from the persistence sweep daemon. Publishing an unchanged root
-	 * is cheap on idle venues.</p>
-	 */
-	private void sweep() {
-		if (lifecycle != Lifecycle.STARTED) return;
-		try {
-			publishApplicationRoot();
-			// Periodic durability barrier. The propagator's setRootData
-			// writes new root data to the mmap'd Etch but does not fsync;
-			// the OS may take minutes to write dirty pages out on its own.
-			// Forcing fsync every FLUSH_INTERVAL_MS bounds the unclean-
-			// shutdown data-loss window. Cheap on idle venues — fsync of
-			// an unchanged file is a no-op below the kernel.
-			if (System.currentTimeMillis() - lastFlushMillis >= FLUSH_INTERVAL_MS) {
-				flushStore();
-				lastFlushMillis = System.currentTimeMillis();
-			}
-		} catch (Exception e) {
-			log.warn("Persistence sweep failed", e);
-		}
-	}
-
-	/**
 	 * Publishes the complete hosted root and invokes the host store's physical
 	 * durability barrier.
 	 *
-	 * <p>Use sparingly — most writes don't need this. The background sweep
-	 * publishes every {@code SWEEP_INTERVAL_MS} (100 ms), so a process crash
-	 * loses at most that much, and forces the store to disk every
-	 * {@code FLUSH_INTERVAL_MS} (10 s), which bounds the loss on a machine crash.
+	 * <p>Use sparingly — most writes don't need this. Whoever opened the host
+	 * runs its sync and flush workers ({@code VenueServer} every
+	 * {@link covia.venue.server.VenueServer#SYNC_INTERVAL} and
+	 * {@link covia.venue.server.VenueServer#FLUSH_INTERVAL}), which bound what a
+	 * process crash and a machine crash lose.
 	 * Commit state in transactions; call {@code flush()} where Covia promises
 	 * durability to someone outside: before acknowledging (an accepted job
 	 * handle, a webhook receipt, a login) and before an external effect that
@@ -913,9 +844,8 @@ public class Engine {
 			publishApplicationRoot();
 			flushStore();
 		} catch (java.io.IOException e) {
-			throw new RuntimeException("flush failed", e);
+			throw new java.io.UncheckedIOException("flush failed", e);
 		}
-		lastFlushMillis = System.currentTimeMillis();
 	}
 
 	private void flushStore() throws IOException {
@@ -923,8 +853,9 @@ public class Engine {
 	}
 
 	/**
-	 * Stops the persistence sweep, runs a final flush, and releases engine
-	 * resources. After close, the engine cannot be used.
+	 * Runs a final flush, releases engine resources and unmounts the venue from
+	 * its application, leaving the host and its store open. After close, the
+	 * engine cannot be used; mount the venue again for a new one.
 	 *
 	 * <p>Must be called BEFORE {@code nodeServer.close()} so final publication
 	 * and durability complete while the host is still available.
@@ -932,7 +863,8 @@ public class Engine {
 	 *
 	 * <p>In-flight jobs first get {@code shutdown.graceMs} to finish, then
 	 * their adapters suspend them ({@link covia.adapter.AAdapter#suspendJob});
-	 * see {@link JobManager#shutdown}.</p>
+	 * see {@link JobManager#shutdown}. Requests already sent to remote venues
+	 * may run until the same window ends ({@link RemoteJobs#close(long)}).</p>
 	 *
 	 * <p>Idempotent — calling close more than once is safe.</p>
 	 */
@@ -945,17 +877,24 @@ public class Engine {
 			if (launchInProgress) launchCancelled.completeExceptionally(new CancellationException());
 		}
 		// Jobs first, outside the engine monitor: work finishing inside the
-		// grace window may need engine services that synchronise on it.
+		// grace window may need engine services that synchronise on it. So may
+		// a request already sent to a remote venue, which may run until the
+		// same window ends.
+		long graceEnds = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(config.getShutdownGraceMs());
 		if (flush) jobManager.shutdown(config.getShutdownGraceMs());
+		remoteJobs.close(graceEnds);
 		synchronized (this) {
 			closeStartedResources(flush, null);
 			lifecycle = Lifecycle.CLOSED;
 		}
+		// The venue leaves its application, which signs its working copy.
+		application.unmounted(this);
 	}
 
 	/** Releases resources in the reverse of {@link #start()} acquisition order. */
 	private void closeStartedResources(boolean flush, Throwable startupFailure) {
 		jobManager.closeAdmission();
+		// Already closed outside the monitor by close(); this covers a failed start
 		remoteJobs.close();
 
 		// Release adapter-owned native/session resources before module classloaders.
@@ -1002,22 +941,6 @@ public class Engine {
 			launchBuiltIns = null;
 		}
 
-		// Persistence sweep is acquired last, so it is stopped first.
-		ScheduledExecutorService sweepExecutor = persistenceSweep;
-		persistenceSweep = null;
-		if (sweepExecutor != null) {
-			sweepExecutor.shutdown();
-			try {
-				if (!sweepExecutor.awaitTermination(2, TimeUnit.SECONDS)) {
-					sweepExecutor.shutdownNow();
-				}
-			} catch (InterruptedException e) {
-				sweepExecutor.shutdownNow();
-				Thread.currentThread().interrupt();
-				recordCloseFailure(startupFailure, "Interrupted while stopping persistence sweep", e);
-			}
-		}
-
 		// Stop timers before the final durability barrier so no new jobs or
 		// lattice writes can race with that barrier.
 		try {
@@ -1034,7 +957,7 @@ public class Engine {
 			}
 		}
 
-		AStorage storage = contentStorage;
+		ContentStorage storage = contentStorage;
 		contentStorage = null;
 		if (storage != null) {
 			try {
@@ -1076,7 +999,7 @@ public class Engine {
 			String sha256, long startupTimeoutMillis, covia.grid.Job job) {
 		VenueProcess control = processControl;
 		if (control == null) {
-			throw new IllegalStateException(
+			throw new NotSupportedException(
 				"Process restart is unavailable: this venue is not managed by MainVenue");
 		}
 		return control.requestRestart(successor, sha256, startupTimeoutMillis, job);
@@ -1098,12 +1021,12 @@ public class Engine {
 	/**
 	 * The host's store maintenance seam, for venue-owned operations.
 	 *
-	 * @throws IllegalStateException when the host installed none
+	 * @throws NotSupportedException when the host installed none
 	 */
 	public StoreControl storeControl() {
 		StoreControl control = storeControl;
 		if (control == null) {
-			throw new IllegalStateException(
+			throw new NotSupportedException(
 				"Store maintenance is unavailable: this venue's host installed no store control");
 		}
 		return control;
@@ -1165,6 +1088,7 @@ public class Engine {
 			new LangChainAdapter(),
 			new CoviaAdapter(),
 			new covia.adapter.UserMemoryAdapter(),
+			new covia.adapter.PreferencesAdapter(),
 			new covia.adapter.SkillsAdapter(),
 			new AssetAdapter(),
 			new GridAdapter(),
@@ -1194,8 +1118,8 @@ public class Engine {
 
 	/**
 	 * Materialises the adapter catalog and {@code /v/info/} snapshot together.
-	 * The complete snapshot is built and validated on a child fork, then
-	 * committed to the Engine's connected state with one atomic update. A
+	 * The complete snapshot is built and validated in a transaction's draft,
+	 * then committed to the Engine's connected state with one atomic update. A
 	 * failure before that point leaves the live state unchanged and creates no
 	 * Jobs.
 	 */
@@ -1324,6 +1248,8 @@ public class Engine {
 	 * @param adapter The adapter instance to register
 	 * @throws UnsupportedVersionException if the adapter's state is recorded at
 	 *         a newer version than it supports; nothing is registered or written
+	 * @throws ConfigurationException if the adapter refuses a setting in its
+	 *         venue configuration
 	 */
 	public synchronized void registerAdapter(AAdapter adapter) {
 		if (venueState == null) throw new IllegalStateException(ADAPTER_BEFORE_PREPARE);
@@ -1334,7 +1260,7 @@ public class Engine {
 		if (previous == null) previous = disabledAdapters.get(name);
 		AMap<AString, ACell> cfg = adapterConfig(name);
 		boolean disabled = CVMBool.FALSE.equals(cfg.get(Config.ENABLED));
-		if (disabled || !adapter.configure(cfg, config.isStrictConfig())) {
+		if (disabled || !configureStatic(adapter, cfg)) {
 			retractAdapter(name);
 			disabledAdapters.put(name, adapter);
 			if (previous != null) adapterRegistryVersion.incrementAndGet();
@@ -1346,6 +1272,19 @@ public class Engine {
 	}
 
 	public static final String ADAPTER_BEFORE_PREPARE = "Adapters are registered once the engine is prepared";
+
+	/**
+	 * Offers an adapter its effective configuration from the venue config. An
+	 * adapter refuses a malformed setting with {@link IllegalArgumentException}
+	 * (docs/ADAPTERS.md); in static configuration that is the operator's setup.
+	 */
+	private boolean configureStatic(AAdapter adapter, AMap<AString, ACell> cfg) {
+		try {
+			return adapter.configure(cfg, config.isStrictConfig());
+		} catch (IllegalArgumentException e) {
+			throw new ConfigurationException(e.getMessage(), e);
+		}
+	}
 
 	/** Start-up adapters whose state the venue's start-up transaction migrated, until they register. */
 	private final java.util.Set<AAdapter> migratedAtStart =
@@ -1375,7 +1314,7 @@ public class Engine {
 			if (adapter != null) installed.add(adapter);
 		}
 		installed.addAll(disabledAdapters.values());
-		venueState.migrate(migrationsOf(installed));
+		venueState.migrate(SecretStore.keys(getKeyPair()), migrationsOf(installed));
 	}
 
 	public static final String MIGRATE_BEFORE_PREPARE = "A venue is migrated once the engine is prepared";
@@ -1424,6 +1363,7 @@ public class Engine {
 		java.util.List<String> previousOrder = java.util.List.copyOf(adapterRegistrationOrder);
 		if (adapter.engine == null) adapter.install(this);
 		new covia.venue.auth.AuthMethods(this).validateAdapter(adapter);
+		covia.venue.auth.VenueProofs.validateAdapter(adapter);
 		if (catalogPublished) {
 			if (previous == null) {
 				VenueBootstrapMaterializer.materialiseAdapter(this, adapter);
@@ -1492,6 +1432,17 @@ public class Engine {
 		return adapterRegistryVersion.get();
 	}
 
+	/** An adapter name this venue has not registered; the name follows. */
+	public static final String UNKNOWN_ADAPTER = "Unknown adapter: ";
+	/** The venue's own configuration, refused by the adapter it is for. */
+	public static final String ADAPTER_DECLINED_CONFIG = "Adapter '%s' declined its configuration";
+	/** A configuration supplied for an adapter, refused by it. */
+	public static final String ADAPTER_REJECTED_CONFIG = "Adapter '%s' rejected the configuration";
+
+	private static NotFoundException unknownAdapter(String name) {
+		return new NotFoundException(UNKNOWN_ADAPTER + name, name);
+	}
+
 	/**
 	 * Disable an active adapter: retract its {@code v/info/adapters/<name>}
 	 * record and stop dispatching to it. Durable catalog metadata remains. The instance
@@ -1503,13 +1454,13 @@ public class Engine {
 	 * @param name Adapter name
 	 * @return true if the adapter was active and is now disabled; false if it
 	 *         was already disabled
-	 * @throws IllegalArgumentException if the adapter is unknown
+	 * @throws NotFoundException if the adapter is unknown
 	 */
 	public synchronized boolean disableAdapter(String name) {
 		AAdapter adapter = adapters.get(name);
 		if (adapter == null) {
 			if (disabledAdapters.containsKey(name)) return false;
-			throw new IllegalArgumentException("Unknown adapter: " + name);
+			throw unknownAdapter(name);
 		}
 		retractAdapter(name);
 		disabledAdapters.put(name, adapter);
@@ -1525,17 +1476,18 @@ public class Engine {
 	 * @param name Adapter name
 	 * @return true if the adapter was disabled and is now active; false if it
 	 *         was already active
-	 * @throws IllegalArgumentException if the adapter is unknown
-	 * @throws IllegalStateException if the adapter declines its configuration
+	 * @throws NotFoundException if the adapter is unknown
+	 * @throws ConfigurationException if the adapter declines the venue's configuration
+	 *         for it or refuses a setting in it
 	 */
 	public synchronized boolean enableAdapter(String name) {
 		AAdapter adapter = disabledAdapters.get(name);
 		if (adapter == null) {
 			if (adapters.containsKey(name)) return false;
-			throw new IllegalArgumentException("Unknown adapter: " + name);
+			throw unknownAdapter(name);
 		}
-		if (adapter.engine == null && !adapter.configure(adapterConfig(name), config.isStrictConfig())) {
-			throw new IllegalStateException("Adapter '" + name + "' declined its configuration");
+		if (adapter.engine == null && !configureStatic(adapter, adapterConfig(name))) {
+			throw new ConfigurationException(String.format(ADAPTER_DECLINED_CONFIG, name));
 		}
 		activate(adapter, null);
 		return true;
@@ -1549,15 +1501,24 @@ public class Engine {
 	 *
 	 * @param name Adapter name
 	 * @param cfg The complete new effective configuration
-	 * @throws IllegalArgumentException if the adapter is unknown or rejects the config
+	 * @throws NotFoundException if the adapter is unknown
+	 * @throws InvalidInputException if the adapter rejects the configuration or
+	 *         a setting in it
 	 */
 	public synchronized void configureAdapter(String name, AMap<AString, ACell> cfg) {
 		AAdapter adapter = adapters.get(name);
 		if (adapter == null) adapter = disabledAdapters.get(name);
-		if (adapter == null) throw new IllegalArgumentException("Unknown adapter: " + name);
+		if (adapter == null) throw unknownAdapter(name);
 		if (cfg == null) cfg = Maps.empty();
-		if (!adapter.configure(cfg, config.isStrictConfig())) {
-			throw new IllegalArgumentException("Adapter '" + name + "' rejected the configuration");
+		boolean accepted;
+		try {
+			accepted = adapter.configure(cfg, config.isStrictConfig());
+		} catch (IllegalArgumentException e) {
+			// A malformed setting in the operator's request (docs/ADAPTERS.md)
+			throw new InvalidInputException(e.getMessage(), e);
+		}
+		if (!accepted) {
+			throw new InvalidInputException(String.format(ADAPTER_REJECTED_CONFIG, name));
 		}
 		runtimeAdapterConfig.put(name, cfg);
 		// Authentication finishing under the previous configuration must retry.
@@ -1720,12 +1681,14 @@ public class Engine {
 		return id;
 	}
 
+	public static final String STORE_UNAUTHENTICATED = "Authentication required to store assets";
+
 	/**
 	 * Stores an asset in the caller's per-user CAS namespace.
 	 */
 	public Hash storeUserAsset(AString meta, ACell content, RequestContext ctx) {
 		AString callerDID = ctx.getUserDID();
-		if (callerDID == null) throw new IllegalArgumentException("Authentication required to store assets");
+		if (callerDID == null) throw new AuthException(STORE_UNAUTHENTICATED);
 		User user = getVenueState().users().ensure(callerDID);
 		Hash id = user.assets().store(meta, content);
 		log.info("Stored user asset {} : {} (user: {})", id, RT.getIn(JSON.parse(meta), Fields.NAME), callerDID);
@@ -1747,14 +1710,37 @@ public class Engine {
 		return auth;
 	}
 
+	/**
+	 * A started venue with a fresh key pair, mounted in an in-memory
+	 * application of its own, on a clock held at the current time and with no
+	 * update timer: nothing fires unless its application is updated. For unit
+	 * tests and throwaway use.
+	 */
 	public static Engine createTemp(AMap<AString,ACell> config) {
+		return createTemp(DrivenClock.at(Instant.now()), config);
+	}
+
+	/**
+	 * As {@link #createTemp(AMap)}, on the given clock. On a {@link DrivenClock}
+	 * move it, then update the {@linkplain #application() application} to act
+	 * on the new time.
+	 */
+	public static Engine createTemp(VenueClock clock, AMap<AString,ACell> config) {
+		var host = LatticeHost.create(new MemoryStore());
+		var application = host.addApplication(new CoviaApplication(host, clock));
 		try {
-			AKeyPair keyPair = AKeyPair.generate();
-			CoviaApplication application = CoviaApplication.create(keyPair);
-			return new Engine(config, application, keyPair).start();
+			return application.mount(AKeyPair.generate(), config).start();
 		} catch (IOException e) {
 			throw new Error(e);
 		}
+	}
+
+	/**
+	 * As {@link #createTemp(AMap)}, on the system clock, so scheduled events
+	 * fire by themselves. For integration and smoke tests.
+	 */
+	public static Engine createRealTime(AMap<AString,ACell> config) {
+		return createTemp(VenueClock.SYSTEM, config);
 	}
 
 	/**
@@ -1772,7 +1758,7 @@ public class Engine {
 		// Compatibility for internal operation resolution: many installed
 		// definitions are invoked by their hash. User-facing REST resolution does
 		// not use this fallback; it calls the exact-DID overload above.
-		return venueState.assets().getRecord(assetID);
+		return venueState.assets().get(assetID);
 	}
 
 	/**
@@ -1782,11 +1768,11 @@ public class Engine {
 	 */
 	public AVector<?> getAssetRecord(Hash assetID, AString userDID) {
 		if (assetID == null || userDID == null) return null;
-		if (userDID.equals(getDIDString())) return venueState.assets().getRecord(assetID);
+		if (userDID.equals(getDIDString())) return venueState.assets().get(assetID);
 		AString webDID = config.getWebDID();
-		if (webDID != null && userDID.equals(webDID)) return venueState.assets().getRecord(assetID);
-		User user = getVenueState().users().get(userDID);
-		return (user != null) ? user.assets().getRecord(assetID) : null;
+		if (webDID != null && userDID.equals(webDID)) return venueState.assets().get(assetID);
+		User user = getVenueState().users().user(userDID);
+		return (user != null) ? user.assets().get(assetID) : null;
 	}
 
 	/**
@@ -1804,7 +1790,7 @@ public class Engine {
 	 * Get an Asset by its Hash ID from venue-level store (no user context).
 	 */
 	public Asset getAsset(Hash assetID) {
-		AVector<?> arec=venueState.assets().getRecord(assetID);
+		AVector<?> arec=venueState.assets().get(assetID);
 		if (arec==null) return null;
 		AString metaString = RT.ensureString(arec.get(AssetStore.POS_JSON));
 		if (metaString==null) return null;
@@ -1817,7 +1803,7 @@ public class Engine {
 	 * @return Metadata string for the given Asset ID, or null if not found
 	 */
 	public AString getMetadata(Hash assetID) {
-		AVector<?> arec=venueState.assets().getRecord(assetID);
+		AVector<?> arec=venueState.assets().get(assetID);
 		if (arec==null) return null;
 		return RT.ensureString(arec.get(AssetStore.POS_JSON));
 	}
@@ -1829,7 +1815,7 @@ public class Engine {
 	 */
 	@SuppressWarnings("unchecked")
 	public AMap<AString,ACell> getMetaValue(Hash assetID) {
-		AVector<?> arec=venueState.assets().getRecord(assetID);
+		AVector<?> arec=venueState.assets().get(assetID);
 		if (arec==null) return null;
 		// instanceof — RT.castMap(null) returns an empty map, which would
 		// violate the "null if not valid metadata" contract.
@@ -1862,34 +1848,14 @@ public class Engine {
 	// without an "operation" field) is opaque data, not a reference. This
 	// keeps the resolver primitive simple and explicit.
 
-	/** Namespace prefix for immutable content-addressed assets (leading slash optional: a/ or /a/) */
-	private static final AString NS_ASSET = Strings.intern("a/");
-	/** Namespace prefix for DID URLs */
-	private static final AString NS_DID   = Strings.intern("did:");
-	/** Optional leading-slash sugar, stripped before virtual/workspace resolution */
-	private static final AString SLASH    = Strings.intern("/");
-
-	/** Strips a single optional leading slash: {@code "/w/x"} → {@code "w/x"}; {@code "w/x"} unchanged. */
-	private static AString stripLeadingSlash(AString ref) {
-		return ref.startsWith(SLASH) ? ref.slice(1) : ref;
-	}
 
 	/**
 	 * A physical path in a user's local namespace. Relative paths belong to the
 	 * caller; DID URL paths name their owner explicitly.
 	 */
-	public record UserPathTarget(AString ownerDID, User user, ACell[] pathKeys, AString resource) {
-		public UserPathTarget {
-			pathKeys = pathKeys.clone();
-		}
+	public record UserPathTarget(AString ownerDID, User user, convex.core.data.Path path, AString resource) {}
 
-		@Override
-		public ACell[] pathKeys() {
-			return pathKeys.clone();
-		}
-	}
-
-	private record ParsedUserPath(AString ownerDID, ACell[] pathKeys, AString resource) {}
+	private record ParsedUserPath(AString ownerDID, convex.core.data.Path path, AString resource) {}
 
 	/**
 	 * Resolves a physical user path without applying an access policy. This is
@@ -1914,40 +1880,59 @@ public class Engine {
 		return locateUserPath(parsed, create);
 	}
 
+	public static final String USER_PATH_UNAUTHENTICATED = "User path resolution requires an authenticated user";
+	/** The wording of {@link #noNamespaceMessage}: the namespaces a caller can use (GRID_LATTICE_DESIGN.md §4.1). */
+	private static final String USER_PATH_NO_NAMESPACE = "A path must start at a namespace: w (workspace), o (operations), "
+		+ "a (assets), g (agents), j (jobs), s (secrets), h (human-in-the-loop requests), v (venue definitions), "
+		+ "x/<adapter> (adapter views), and within a running agent, session or job n, c or t";
+	/** Opening of the refusal for a did: path that is not a valid DID URL. */
+	public static final String INVALID_DID_URL = "Invalid DID URL: ";
+
+	/**
+	 * The refusal for a path that reaches no namespace. Every route that
+	 * refuses one builds its message here, so the message can follow the request.
+	 *
+	 * @param ctx The request being refused, or null if there is none
+	 * @return The message for that request
+	 */
+	public static String noNamespaceMessage(RequestContext ctx) {
+		return USER_PATH_NO_NAMESPACE;
+	}
+
 	private ParsedUserPath parseUserPath(RequestContext ctx, AString ref) {
 		if (ctx == null || ctx.getUserDID() == null) {
-			throw new IllegalArgumentException("User path resolution requires an authenticated user");
+			throw new AuthException(USER_PATH_UNAUTHENTICATED);
 		}
 		if (ref == null || ref.isEmpty()) {
-			throw new IllegalArgumentException("User path must not be empty");
+			throw new InvalidInputException(noNamespaceMessage(ctx));
 		}
 
-		AString ownerDID;
-		ACell[] pathKeys;
-		if (ref.startsWith(NS_DID)) {
-			DIDURL didURL = DIDURL.create(ref.toString());
-			ownerDID = Strings.create(didURL.getDID().toString());
-			pathKeys = WorkspaceRoot.parseStringPath(didURL.getPath());
+		// The owner is the DID as written (ownerOf); what follows it is a path
+		// read as a bare path is, so a name means the same with its owner or without.
+		AString ownerDID = ownerOf(ref);
+		convex.core.data.Path path;
+		if (ownerDID != null) {
+			try {
+				DIDURL.create(ownerDID.toString());
+			} catch (IllegalArgumentException e) {
+				throw new InvalidInputException(INVALID_DID_URL + ref + " (" + e.getMessage() + ")", e);
+			}
+			path = CoviaPath.parse(CapabilityChecker.canonicalResource(ref.toString(), null).substring(ownerDID.toString().length()));
 		} else {
 			ownerDID = ctx.getUserDID();
-			pathKeys = WorkspaceRoot.parseStringPath(stripLeadingSlash(ref).toString());
+			path = CoviaPath.parse(ref.toString());
 		}
 
-		if (pathKeys.length == 0) {
-			throw new IllegalArgumentException("User path must include a namespace");
+		if (path.isEmpty()) {
+			throw new InvalidInputException(noNamespaceMessage(ctx));
 		}
-
-		StringBuilder resource = new StringBuilder(ownerDID.toString());
-		for (ACell key : pathKeys) {
-			resource.append('/').append(key);
-		}
-		return new ParsedUserPath(ownerDID, pathKeys, Strings.create(resource.toString()));
+		return new ParsedUserPath(ownerDID, path, Strings.create(ownerDID + CoviaPath.address(path)));
 	}
 
 	private UserPathTarget locateUserPath(ParsedUserPath parsed, boolean create) {
 		Users users = venueState.users();
-		User user = create ? users.ensure(parsed.ownerDID()) : users.get(parsed.ownerDID());
-		return new UserPathTarget(parsed.ownerDID(), user, parsed.pathKeys(), parsed.resource());
+		User user = create ? users.ensure(parsed.ownerDID()) : users.user(parsed.ownerDID());
+		return new UserPathTarget(parsed.ownerDID(), user, parsed.path(), parsed.resource());
 	}
 
 	/** Opening of every refusal to read a referenced path the caller may not read. */
@@ -1965,34 +1950,49 @@ public class Engine {
 	}
 
 	/**
-	 * The read check of {@link #resolvePath}. A physical user path, bare or
-	 * DID-qualified, and a DID-qualified asset reference on this venue need read
-	 * authority ({@link #requireMetadataRead}: {@code crud/read}, or
-	 * {@code asset/read} for a content hash), so another user's needs a grant and
-	 * a capability scope must cover the caller's own. A bare hash names the
-	 * caller's own store, then the venue catalog. The virtual namespaces
-	 * ({@code v/}, {@code n/}, {@code t/}, {@code c/}) apply their resolvers' own
-	 * policy, and a remote DID URL is never read here.
+	 * The read check of {@link #resolvePath}, as {@link #requireMetadataRead}
+	 * makes it: a path is read where its data lives, as the component that owns
+	 * it allows, and a content-addressed reference as an asset. A remote DID URL
+	 * is never read here.
 	 *
 	 * @throws covia.exception.AuthException when the caller may not read {@code ref}
 	 */
 	public void requireReadable(RequestContext ctx, AString ref) {
 		if (ref == null) return;
-		AString resource = ref.startsWith(NS_DID) ? ref : stripLeadingSlash(ref);
-		boolean checked;
+		if (ownerOf(ref) != null && !isLocalDIDResource(ref)) return;
 		try {
-			checked = ref.startsWith(NS_DID)
-				? isLocalDIDResource(ref)
-				: isPhysicalUserNamespace(WorkspaceRoot.parseStringPath(resource.toString()));
+			requireMetadataRead(ctx, ref);
 		} catch (IllegalArgumentException malformed) {
 			return;   // navigation rejects the same path
-		}
-		if (!checked) return;
-		try {
-			requireMetadataRead(ctx, resource);
 		} catch (covia.exception.AuthException e) {
 			throw new covia.exception.AuthException(READ_DENIED + ref + " — " + e.getMessage());
 		}
+	}
+
+	/**
+	 * The read check of a path a request names, read as data
+	 * ({@code crud/read}): the component that owns the data there decides,
+	 * however the path is written ({@link CoviaAdapter#resolve}). Another
+	 * venue's path is read by asking that venue, so here it needs only the
+	 * request's own scope. A path that names no place, or starts in a scope the
+	 * request does not have, holds nothing to read and passes.
+	 *
+	 * @throws covia.exception.AuthException when the caller may not read {@code path}
+	 */
+	public void requirePathRead(RequestContext ctx, AString path) {
+		if (path == null) return;
+		if (!(getAdapter("covia") instanceof CoviaAdapter covia)
+				|| (ownerOf(path) != null && !isLocalDIDResource(path))) {
+			requireResourceAccess(ctx, path, Capability.CRUD_READ);
+			return;
+		}
+		covia.lattice.Access access;
+		try {
+			access = covia.resolve(ctx, path);
+		} catch (WrongScopeException | InvalidInputException nothingThere) {
+			return;
+		}
+		if (access.isValid()) access.require(Capability.CRUD_READ);
 	}
 
 	/**
@@ -2010,15 +2010,15 @@ public class Engine {
 	 * <ul>
 	 *   <li>Bare hex hash → asset metadata from CAS</li>
 	 *   <li>{@code a/<hash>} or {@code /a/<hash>} → asset metadata from CAS</li>
-	 *   <li>{@code /o/<name>} → caller's own /o/ entry value</li>
 	 *   <li>Local DID URL with {@code /a/<hash>} path → asset metadata</li>
-	 *   <li>DID-qualified physical user path ({@code <did>/w/...},
-	 *       {@code <did>/g/...}, etc.) → that user's cursor value</li>
-	 *   <li>Workspace path ({@code w/...}, {@code g/...}, etc.) → cursor value</li>
+	 *   <li>Any other path, with or without an owner DID → the value there,
+	 *       resolved from the component its request names
+	 *       ({@link CoviaAdapter#resolve})</li>
 	 * </ul>
 	 *
-	 * <p>Returns null for unresolvable refs, remote DID URLs, and refs that
-	 * resolve to a missing lattice cell. Remote DID URLs are handled by
+	 * <p>Returns null for unresolvable refs, remote DID URLs, paths that name no
+	 * place data could be, paths whose scope the request does not have, and
+	 * refs that resolve to nothing. Remote DID URLs are handled by
 	 * {@link #resolveAsset(AString, RequestContext)} via definition fetch —
 	 * resolvePath itself never touches the network.</p>
 	 *
@@ -2029,80 +2029,50 @@ public class Engine {
 	public ACell resolvePathUnchecked(AString ref, RequestContext ctx) {
 		if (ref == null) return null;
 
-		// 1. Bare hex hash → look up in CAS
-		Hash h = Hash.parse(ref);
-		if (h != null) {
-			Asset asset = getAsset(h, ctx);
-			return (asset != null) ? asset.meta() : null;
-		}
-
-		// 2. a/<hash> or /a/<hash> → look up in CAS (leading slash optional)
-		AString localRef = stripLeadingSlash(ref);
-		if (localRef.startsWith(NS_ASSET)) {
-			Hash ah = Hash.parse(localRef.slice(2));
-			if (ah == null) return null;
-			Asset asset = getAsset(ah, ctx);
-			return (asset != null) ? asset.meta() : null;
-		}
-
-		// 3. DID URL — local cases only; remote asset fetch is handled by
-		// resolveAsset. Asset catalog refs and physical user paths share the
-		// platform DID-path grammar.
-		if (ref.startsWith(NS_DID)) {
+		if (ownerOf(ref) != null) {
+			// A DID URL — a local asset; remote asset fetch is handled by
+			// resolveAsset. Asset catalog refs and user paths share the platform
+			// DID-path grammar, so any other DID URL is a path into a user here.
 			Asset local = resolveLocalDIDURL(ref, ctx);
 			if (local != null) return local.meta();
-			UserPathTarget target;
 			try {
-				target = resolveUserPath(ctx, ref, false);
-			} catch (IllegalArgumentException e) {
+				resolveUserPath(ctx, ref, false);
+			} catch (AuthException | InvalidInputException | IllegalArgumentException e) {
 				return null;
 			}
-			if (covia.adapter.CoviaAdapter.isExtensionPath(target.pathKeys())) {
-				var adapter = (covia.adapter.CoviaAdapter) getAdapter("covia");
-				return adapter == null ? null : adapter.readExtensionNamespace(ctx, target.ownerDID(), target.pathKeys());
+		} else {
+			Hash hash = AssetAdapter.parseAssetId(ref);
+			if (hash != null) {
+				Asset asset = getAsset(hash, ctx);
+				return (asset != null) ? asset.meta() : null;
 			}
-			if (!isPhysicalUserNamespace(target.pathKeys())) return null;
-			return readUserPathValue(target);
+			if (CoviaPath.parse(ref.toString()).isEmpty()) return null;   // names no namespace
 		}
 
-		// Steps 4–5 cover the virtual and workspace namespaces, where a
-		// leading slash is optional sugar. Normalise it away once so "/w/notes" resolves exactly
-		// like "w/notes" and "/v/ops/x" like "v/ops/x".
-		AString navRef = localRef;
-
-		// 4. Virtual namespace prefix (n/, v/, t/, c/, ...) — delegate to the
-		// registered resolver via CoviaAdapter.
-		ACell virtualValue = resolveVirtualNamespace(navRef, ctx);
-		if (virtualValue != null) return virtualValue;
-
-		// 5. Workspace path (w/, g/, o/, j/, s/, h/) → caller's lattice
-		if (isUserNamespacePath(navRef)) {
-			return readWorkspacePathValue(navRef, ctx);
-		}
-
-		return null;
+		// A lattice path, from the component its request names
+		return readLatticePath(ref, ctx);
 	}
 
 	/**
-	 * Delegates resolution of a virtual-namespace path to the
-	 * {@link covia.adapter.CoviaAdapter}'s registered resolvers. Returns
-	 * the literal value at the resolved location, or null if the path
-	 * doesn't match a registered virtual prefix.
+	 * The value at a lattice path ({@link CoviaAdapter#resolve}), or null when
+	 * nothing is there, when the path names no place data could be, or when it
+	 * starts in a scope the request does not have.
 	 */
-	private ACell resolveVirtualNamespace(AString ref, RequestContext ctx) {
-		covia.adapter.CoviaAdapter coviaAdapter =
-			(covia.adapter.CoviaAdapter) getAdapter("covia");
-		if (coviaAdapter == null) return null;
+	private ACell readLatticePath(AString ref, RequestContext ctx) {
+		CoviaAdapter covia = (CoviaAdapter) getAdapter("covia");
+		if (covia == null) return null;
+		convex.lattice.ALatticeComponent<?> target;
 		try {
-			return coviaAdapter.readVirtualNamespace(ctx, ref);
+			target = covia.locate(ctx, ref);
 		} catch (WrongScopeException e) {
-			// The only resolver condition that is a genuine absence for a read: the
-			// prefix (n/, c/) names a scope this context doesn't provide, so there
-			// is no such path here. Everything ELSE — an auth failure, a malformed
-			// path, a lower-level store fault, an abnormal navigation bug — is NOT
-			// absence and propagates rather than being masked as "not found" (#175).
+			// The one resolution failure that is an absence for a read: the path
+			// starts in a scope (an agent, session, job or user) this request does
+			// not have, so there is no such path here. Anything else, such as an
+			// authority refusal, a store fault or an abnormal navigation bug, is
+			// not absence and propagates rather than being masked as "not found" (#175).
 			return null;
 		}
+		return (target == null) ? null : target.cursor().getOrDefault(null);
 	}
 
 	/**
@@ -2119,8 +2089,8 @@ public class Engine {
 	 * remote {@code did:web} reference, the publisher is reachable but has no
 	 * such asset / does not bind the name). It <b>throws</b>
 	 * {@link covia.exception.RemoteFetchException} when a remote fetch fails
-	 * <em>operationally</em> (venue unreachable, remote error, malformed venue
-	 * reference, or metadata that fails the content-addressing check) — a down
+	 * <em>operationally</em> (venue unreachable, remote error, malformed or refused
+	 * venue reference, or metadata that fails the content-addressing check) — a down
 	 * venue is not the same as a missing operation. Callers on a single-ref
 	 * path let it propagate (invoke → HTTP 502, job-aware adapter → job failure);
 	 * aggregate callers that resolve many refs (tool/context assembly) catch it
@@ -2147,14 +2117,27 @@ public class Engine {
 		return resolveAsset(ref, ctx, false);
 	}
 
+	/**
+	 * {@link #resolveAsset} from what this venue holds, never fetching from
+	 * another venue: a remote DID URL resolves only to a definition held here,
+	 * and is otherwise null. For lookups that must stay cheap, such as hints.
+	 */
+	public Asset resolveLocalAsset(AString ref, RequestContext ctx) {
+		return resolveAsset(ref, ctx, true, false);
+	}
+
 	private Asset resolveAsset(AString ref, RequestContext ctx, boolean checked) {
+		return resolveAsset(ref, ctx, checked, true);
+	}
+
+	private Asset resolveAsset(AString ref, RequestContext ctx, boolean checked, boolean fetch) {
 		if (ref == null) return null;
 
 		// Remote DID URLs: fetch the content-addressed definition from the
 		// publishing venue (hash-verified). The returned Asset carries no
 		// venue — execution, if any, is local. See resolveDIDURL.
-		if (ref.startsWith(NS_DID)) {
-			Asset asset = resolveDIDURL(ref, ctx, checked);
+		if (ownerOf(ref) != null) {
+			Asset asset = resolveDIDURL(ref, ctx, checked, fetch);
 			if (asset != null) return asset;
 			// Fall through — DID URL might be unresolvable but other forms
 			// could match (rare; defensive).
@@ -2174,48 +2157,6 @@ public class Engine {
 		}
 
 		return null;
-	}
-
-	/**
-	 * Returns true if {@code ref} starts with a known user-namespace prefix
-	 * (w/, g/, o/, j/, s/, n/, h/, c/) without a leading slash. Mirrors
-	 * {@link covia.adapter.agent.ContextLoader} so the two resolvers stay aligned.
-	 */
-	static boolean isUserNamespacePath(AString ref) {
-		if (ref == null || ref.count() < 2) return false;
-		String s = ref.toString();
-		return s.startsWith("w/") || s.startsWith("g/") || s.startsWith("o/")
-			|| s.startsWith("j/") || s.startsWith("s/") || s.startsWith("h/")
-			|| s.startsWith("n/") || s.startsWith("c/");
-	}
-
-	/**
-	 * Reads the literal value at a workspace path through the caller's
-	 * lattice cursor. Returns whatever's there, with no interpretation.
-	 */
-	private ACell readWorkspacePathValue(AString ref, RequestContext ctx) {
-		if (ctx == null || ctx.getUserDID() == null) return null;
-		return readUserPathValue(resolveUserPath(ctx, ref, false));
-	}
-
-	private static boolean isPhysicalUserNamespace(ACell[] pathKeys) {
-		if (pathKeys.length == 0) return false;
-		return switch (pathKeys[0].toString()) {
-			case "w", "g", "o", "j", "s", "h" -> true;
-			default -> false;
-		};
-	}
-
-	private ACell readUserPathValue(UserPathTarget target) {
-		User user = target.user();
-		if (user == null) return null;
-		ACell[] pathKeys = target.pathKeys();
-
-		// Absence is a null return (no user, empty path, or readPath finding
-		// nothing — none of which throw). Anything that throws is a real failure —
-		// an abnormal navigation error, or a lower-level store fault — and it
-		// propagates rather than collapsing to a phantom "path not found" (#175).
-		return user.workspaceRoot().read(pathKeys);
 	}
 
 	/**
@@ -2267,9 +2208,9 @@ public class Engine {
 	 *       taking the publisher's word for the name → hash binding (the
 	 *       definition itself is still hash-verified on fetch).</li>
 	 * </ul>
-	 * Exactly one of {@code hash} / {@code name} is non-null. The DID
-	 * string is kept unescaped ({@code did:key:VENUE:public}, not
-	 * URL-encoded) to match user-record keying.
+	 * Exactly one of {@code hash} / {@code name} is non-null. The DID is
+	 * {@link #ownerOf the owner as written}, as user records are keyed, so
+	 * the read looks in the store its access check was made against.
 	 */
 	private record AssetRef(String didString, String method, Hash hash, String name) {}
 
@@ -2278,29 +2219,18 @@ public class Engine {
 	 * {@code /v/…} (named catalog) path. Returns null for any other shape.
 	 */
 	private AssetRef parseAssetRef(AString ref) {
-		DIDURL didurl;
+		AString owner = ownerOf(ref);
+		if (owner == null) return null;
+		String method;
 		try {
-			didurl = DIDURL.create(ref.toString());
+			method = DIDURL.create(owner.toString()).getDID().getMethod();
 		} catch (IllegalArgumentException e) {
 			return null;
 		}
-		String path = didurl.getPath();
-		if (path == null) return null;
-
-		// Reconstruct the unescaped DID string — DID.toString() URL-encodes
-		// colons in the id, which would break sub-id keys like "VENUE:public".
-		DID did = didurl.getDID();
-		String didString = "did:" + did.getMethod() + ":" + did.getID();
-
-		if (path.startsWith("/a/")) {
-			Hash hash = Hash.parse(path.substring(3));
-			if (hash == null) return null;
-			return new AssetRef(didString, did.getMethod(), hash, null);
-		}
-		if (path.startsWith("/v/")) {
-			return new AssetRef(didString, did.getMethod(), null, path.substring(1));
-		}
-		return null;
+		Hash hash = AssetAdapter.parseAssetId(ref);
+		if (hash != null) return new AssetRef(owner.toString(), method, hash, null);
+		String path = CapabilityChecker.canonicalResource(ref.toString(), null).substring(owner.toString().length());
+		return path.startsWith("/v/") ? new AssetRef(owner.toString(), method, null, path.substring(1)) : null;
 	}
 
 	/** Looks up a parsed asset reference in exactly the named DID's store. */
@@ -2327,26 +2257,53 @@ public class Engine {
 	 * other resolution forms or surface a clean error.</p>
 	 */
 	private Asset resolveDIDURL(AString ref, RequestContext ctx) {
-		return resolveDIDURL(ref, ctx, true);
+		return resolveDIDURL(ref, ctx, true, true);
 	}
 
-	private Asset resolveDIDURL(AString ref, RequestContext ctx, boolean checked) {
+	/** {@code fetch} false resolves only a definition held here. */
+	private Asset resolveDIDURL(AString ref, RequestContext ctx, boolean checked, boolean fetch) {
 		AssetRef r = parseAssetRef(ref);
 		if (r == null) return null;
 		if (r.name() != null) {
 			// Named refs are publisher-scoped bindings — OUR v/ops/x is not
-			// THEIR v/ops/x, so there is no local-copy shortcut.
-			return "web".equals(r.method()) ? fetchRemoteNamedAsset(r.didString(), r.name()) : null;
+			// THEIR v/ops/x, so there is no local-copy shortcut. A name this
+			// venue hosts is looked up here, by resolvePath (resolveLocalDIDURL).
+			return (fetch && fetchedRemotely(r))
+				? fetchRemoteNamedAsset(ctx, r.didString(), r.name()) : null;
 		}
 		Asset local = lookupLocalAsset(r);
 		if (local != null) {
 			// Definition resolution precedes adapter dispatch, so it must enforce
-			// the private /a/ read itself. A later invoke capability is a separate
-			// right and cannot retroactively authorise this lookup.
-			if (checked) requireResourceAccess(ctx, ref, Abilities.ASSET_READ);
+			// the private /a/ read itself, as any read of an asset's metadata, so
+			// a/<hash> and its DID URL need the same. A later invoke capability is
+			// a separate right and cannot retroactively authorise this lookup.
+			if (checked) requireMetadataRead(ctx, ref);
 			return local;
 		}
-		return "web".equals(r.method()) ? fetchRemoteAsset(r.didString(), r.hash()) : null;
+		return (fetch && fetchedRemotely(r)) ? fetchRemoteAsset(ctx, r.didString(), r.hash()) : null;
+	}
+
+	/**
+	 * Whether what {@code r} names is fetched from its owner's venue rather
+	 * than looked up here. An owner this venue hosts ({@link #isHosted}) is
+	 * looked up in this venue's state alone, found or not, and never over the
+	 * network; another owner is fetched from only if it has an address, which
+	 * only a did:web does.
+	 */
+	private boolean fetchedRemotely(AssetRef r) {
+		return "web".equals(r.method()) && isRemote(Strings.create(r.didString()));
+	}
+
+	/**
+	 * Whether {@code ref} names a definition held on another venue, which
+	 * {@link #resolveAsset} fetches from there whenever this venue holds no
+	 * copy: an asset or catalog reference ({@link #parseAssetRef}) whose owner
+	 * is remote ({@link #isRemote}) and can be fetched from. Nothing is
+	 * resolved or fetched to answer.
+	 */
+	public boolean isRemoteDefinition(AString ref) {
+		AssetRef r = parseAssetRef(ref);
+		return r != null && fetchedRemotely(r);
 	}
 
 	/**
@@ -2363,8 +2320,8 @@ public class Engine {
 	 * @return Verified Asset with metadata, or null if the asset is genuinely
 	 *         absent (the venue is reachable but holds no such asset)
 	 * @throws covia.exception.RemoteFetchException if the venue is unreachable,
-	 *         returns an error, the connection string is malformed, or the
-	 *         returned metadata fails the content-addressing check (#174)
+	 *         returns an error, the connection string is malformed or refused,
+	 *         or the returned metadata fails the content-addressing check (#174)
 	 */
 	/**
 	 * Fetched remote definitions, keyed by content hash. Definitions are
@@ -2389,19 +2346,34 @@ public class Engine {
 		definitionCache.put(fetched.getID(), fetched.getMetadata());
 	}
 
-	public Asset fetchRemoteAsset(String venueConn, Hash id) {
+	/**
+	 * The publisher a remote fetch for {@code ctx} dials, anonymously and through
+	 * {@link #connectVenue(RequestContext, String, VenueAuth)}. Without the http
+	 * adapter every guarded target is refused, as a fetch failure like any other.
+	 */
+	private Venue publisherVenue(RequestContext ctx, String venueConn) {
+		try {
+			return connectVenue(ctx, venueConn, VenueAuth.none());
+		} catch (InvalidInputException | ConfigurationException
+				| IllegalArgumentException | IllegalStateException e) {
+			throw RemoteFetchException.invalidVenue(venueConn, e);
+		}
+	}
+
+	/**
+	 * Fetches an asset definition from a remote venue for {@code ctx}, verified
+	 * against its hash. See {@link #fetchRemoteAsset(Venue, Hash)}.
+	 *
+	 * @param ctx The caller whose reference names the publisher
+	 */
+	public Asset fetchRemoteAsset(RequestContext ctx, String venueConn, Hash id) {
 		// Cache first: the hash IS the identity, so for a definition we
 		// already hold the connection string is irrelevant — a venue in a
 		// reference is a retrieval hint, not part of the name.
 		Asset cached = cachedDefinition(id);
 		if (cached != null) return cached;
 
-		Venue remote;
-		try {
-			remote = Grid.connect(venueConn);
-		} catch (IllegalArgumentException e) {
-			throw RemoteFetchException.malformedVenue(venueConn, e);
-		}
+		Venue remote = publisherVenue(ctx, venueConn);
 		Asset fetched = fetchRemoteAsset(remote, id);   // throws on unreachable/integrity; null on a genuine 404
 		cacheDefinition(fetched);
 		return fetched;
@@ -2419,20 +2391,16 @@ public class Engine {
 	 * record an invocation creates (the job's op field records the hash
 	 * the name resolved to at invoke time).</p>
 	 *
+	 * @param ctx The caller whose reference names the publisher
 	 * @param venueConn Remote venue connection string (did:web or URL)
 	 * @param name Catalog operation name, e.g. "v/ops/json/merge"
 	 * @return Verified Asset with metadata, or null if the venue is reachable
 	 *         but does not bind the name (a genuine absence)
 	 * @throws covia.exception.RemoteFetchException if the venue is unreachable,
-	 *         returns an error, or the connection string is malformed (#174)
+	 *         returns an error, or the connection string is malformed or refused (#174)
 	 */
-	public Asset fetchRemoteNamedAsset(String venueConn, String name) {
-		Venue remote;
-		try {
-			remote = Grid.connect(venueConn);
-		} catch (IllegalArgumentException e) {
-			throw RemoteFetchException.malformedVenue(venueConn, e);
-		}
+	public Asset fetchRemoteNamedAsset(RequestContext ctx, String venueConn, String name) {
+		Venue remote = publisherVenue(ctx, venueConn);
 		// Resolve the name to an id AT THE PUBLISHER. An operational failure here
 		// (venue down / error) is a real error naming the venue — NOT "operation
 		// not found". A reachable venue that simply does not bind the name
@@ -2456,26 +2424,22 @@ public class Engine {
 	/**
 	 * Fetches the binary content of a remote asset reference, for adoption
 	 * by {@code asset:pin}. Returns null when there is genuinely nothing to
-	 * fetch: the reference is not a fetchable remote ref, the asset/name is
+	 * fetch: the reference is not a fetchable remote ref ({@link #isRemoteDefinition}), the asset/name is
 	 * absent, or the metadata declares no content. When the metadata declares
 	 * a sha256, the fetched bytes are verified against it — substituted content
 	 * throws rather than being adopted. Operational failures (venue unreachable,
-	 * error, malformed reference) also throw (#174).
+	 * error, malformed or refused reference) also throw (#174).
 	 *
+	 * @param ctx The caller whose reference names the publisher
 	 * @param ref Remote DID URL reference (hash or named form)
 	 * @return Content blob, or null if there is genuinely none to fetch
 	 * @throws covia.exception.RemoteFetchException on operational fetch failure
 	 *         or a content sha256 mismatch (#174)
 	 */
-	public ACell fetchRemoteContent(AString ref) {
+	public ACell fetchRemoteContent(RequestContext ctx, AString ref) {
 		AssetRef r = parseAssetRef(ref);
-		if (r == null || !"web".equals(r.method())) return null;   // not a fetchable remote ref
-		Venue remote;
-		try {
-			remote = Grid.connect(r.didString());
-		} catch (IllegalArgumentException e) {
-			throw RemoteFetchException.malformedVenue(r.didString(), e);
-		}
+		if (r == null || !fetchedRemotely(r)) return null;   // not a fetchable remote ref
+		Venue remote = publisherVenue(ctx, r.didString());
 		try {
 			Hash id = (r.hash() != null) ? r.hash() : remote.getOperationId(r.name());
 			if (id == null) return null;   // genuine absence: name not bound
@@ -2497,6 +2461,10 @@ public class Engine {
 				content = handle.getContent();
 			}
 			if (content == null) return null;
+			// Interim (covia#629): the fetched content is held in memory, flat, to
+			// check its hash. With Convex's streaming blob writer and reader
+			// (Convex-Dev/convex#790) it would stream into the store, hashed as
+			// it arrives.
 			ABlob blob = content.getBlob().toFlatBlob();
 
 			ACell declared = RT.getIn(contentMeta, Fields.SHA256);
@@ -2517,7 +2485,7 @@ public class Engine {
 
 	/**
 	 * Fetches and verifies an asset definition from an already-connected
-	 * remote venue. See {@link #fetchRemoteAsset(String, Hash)}.
+	 * remote venue. See {@link #fetchRemoteAsset(RequestContext, String, Hash)}.
 	 *
 	 * @param remote Remote venue
 	 * @param id Asset id (CAD3 value hash of the metadata)
@@ -2573,31 +2541,11 @@ public class Engine {
 	public Hash resolveHash(AString ref) {
 		if (ref == null) return null;
 
-		// 1. Bare hex hash
-		Hash h = Hash.parse(ref);
+		Hash h = AssetAdapter.parseAssetId(ref);
 		if (h != null) return h;
+		if (ownerOf(ref) != null) return null;   // local only — no remote dispatch
 
-		// 2. Namespace prefix (leading slash is optional, as in resolvePath)
-		AString assetRef = stripLeadingSlash(ref);
-		if (assetRef.startsWith(NS_ASSET)) {
-			return Hash.parse(assetRef.slice(2));
-		}
-
-		// 3. DID URL (local only — no remote dispatch)
-		if (ref.startsWith(NS_DID)) {
-			try {
-				DIDURL didurl = DIDURL.create(ref.toString());
-				String path = didurl.getPath();
-				if (path != null && path.startsWith("/a/")) {
-					return Hash.parse(path.substring(3));
-				}
-			} catch (IllegalArgumentException e) {
-				return null;
-			}
-			return null;
-		}
-
-		// 4. Catalog path or other resolvable form — go through resolveAsset
+		// Catalog path or other resolvable form — go through resolveAsset
 		// to get the canonical hash from the resolved asset metadata.
 		Asset asset = resolveAsset(ref);
 		return (asset != null) ? asset.getID() : null;
@@ -2702,10 +2650,10 @@ public class Engine {
 		if (ref == null) return null;
 		String refString = ref.toString();
 		if (resolving.size() >= 32) {
-			throw new IllegalArgumentException("Content reference chain exceeds 32 hops at: " + refString);
+			throw new InvalidInputException("Content reference chain exceeds 32 hops at: " + refString);
 		}
 		if (!resolving.add(refString)) {
-			throw new IllegalArgumentException("Cyclic content reference: " + refString);
+			throw new InvalidInputException("Cyclic content reference: " + refString);
 		}
 		try {
 
@@ -2717,16 +2665,23 @@ public class Engine {
 		// namespace and enforce the native ability for it (for example crud/read on
 		// file:// and dlfs/); imposing asset/read on those references would make the
 		// same file behave differently through the content API and its native op.
-		requireResourceAccess(ctx, ref, Abilities.ASSET_READ);
+		// An asset is read as an asset; a path into the lattice is read as data
+		// where it lives, and what it holds is then resolved as content.
+		if (covia.adapter.AssetAdapter.parseAssetId(ref) != null
+				|| (ownerOf(ref) != null && !isLocalDIDResource(ref))) {
+			requireResourceAccess(ctx, ref, Abilities.ASSET_READ);
+		} else {
+			requirePathRead(ctx, ref);
+		}
 
 		// An explicit remote DID URL is a fetch address, just as it is for asset
 		// metadata. Keep the fetch transient: asset:pin remains the operation that
 		// adopts metadata + bytes into the caller's local CAS. did:key references
 		// with no locally held owner cannot be fetched and resolve as absent.
-		if (ref.startsWith(NS_DID) && !isLocalDIDResource(ref)) {
+		if (ownerOf(ref) != null && !isLocalDIDResource(ref)) {
 			Asset remoteAsset = resolveDIDURL(ref, ctx);
 			if (remoteAsset == null) return null;
-			ACell remoteContent = fetchRemoteContent(ref);
+			ACell remoteContent = fetchRemoteContent(ctx, ref);
 			if (remoteContent instanceof convex.core.data.ABlob b) {
 				return new covia.venue.storage.ContentProvider.Resolved(
 					covia.grid.impl.BlobContent.of(b), declaredContentType(remoteAsset.meta()));
@@ -2810,18 +2765,18 @@ public class Engine {
 			ACell block, RequestContext ctx, Set<String> resolving) throws IOException {
 		if (block == null) return null;
 		if (!(block instanceof AMap<?, ?>)) {
-			throw new IllegalArgumentException("content must be an object");
+			throw new InvalidInputException("content must be an object");
 		}
 		AMap<AString, ACell> descriptor = (AMap<AString, ACell>) block;
 		AString inline = descriptorString(descriptor, Fields.INLINE);
 		AString ref = descriptorString(descriptor, Fields.REF);
 		AString dlfs = descriptorString(descriptor, Strings.intern("dlfs"));
 		if (ref != null && dlfs != null && !ref.equals(dlfs)) {
-			throw new IllegalArgumentException("content.ref conflicts with legacy content.dlfs");
+			throw new InvalidInputException("content.ref conflicts with legacy content.dlfs");
 		}
 		if (ref == null) ref = dlfs;
 		if (inline != null && ref != null) {
-			throw new IllegalArgumentException("content must specify only one of inline or ref");
+			throw new InvalidInputException("content must specify only one of inline or ref");
 		}
 
 		AString shaString = descriptorString(descriptor, Fields.SHA256);
@@ -2829,7 +2784,7 @@ public class Engine {
 		if (shaString != null) {
 			declaredHash = Hash.parse(shaString);
 			if (declaredHash == null) {
-				throw new IllegalArgumentException("content.sha256 must be a valid SHA-256 hash");
+				throw new InvalidInputException("content.sha256 must be a valid SHA-256 hash");
 			}
 		}
 		AString typeString = descriptorString(descriptor, Fields.CONTENT_TYPE);
@@ -2846,7 +2801,7 @@ public class Engine {
 		} else if (ref != null) {
 			resolved = resolveContent(ref, ctx, resolving);
 			if (resolved == null) {
-				throw new IllegalArgumentException("No content at ref: " + ref);
+				throw new NotFoundException("No content at ref: " + ref, ref.toString());
 			}
 			source = "content at '" + ref + "'";
 		} else if (declaredHash != null) {
@@ -2859,10 +2814,14 @@ public class Engine {
 		}
 
 		if (declaredHash != null && (inline != null || ref != null)) {
+			// Interim (covia#629): checked by reading the content into memory.
+			// Convex's streaming reader (Convex-Dev/convex#790) would let it be
+			// hashed as it streams.
 			ABlob bytes = resolved.content().getBlob();
 			Hash actual = Hashing.sha256(bytes.getBytes());
 			if (!actual.equals(declaredHash)) {
-				throw new IllegalStateException("Content hash mismatch for " + source
+				// The declared hash does not describe the content it names.
+				throw new InvalidInputException("Content hash mismatch for " + source
 					+ ": expected " + declaredHash + ", got " + actual);
 			}
 			resolved = new covia.venue.storage.ContentProvider.Resolved(
@@ -2882,7 +2841,7 @@ public class Engine {
 		if (!descriptor.containsKey(field)) return null;
 		AString value = RT.ensureString(descriptor.get(field));
 		if (value == null) {
-			throw new IllegalArgumentException("content." + field + " must be a string");
+			throw new InvalidInputException("content." + field + " must be a string");
 		}
 		return value;
 	}
@@ -2958,44 +2917,76 @@ public class Engine {
 
 	public Hash putContent(Hash assetID, InputStream is) throws IOException {
 		AMap<AString, ACell> meta = getMetaValue(assetID);
-		if (meta==null) throw new IllegalArgumentException("No metadata");
+		if (meta==null) throw new InvalidInputException("No metadata");
 		return putContent(meta,is);
 	}
 
 	public Hash putContent(AMap<AString, ACell> meta, InputStream is) throws IOException {
-		if (meta==null) throw new IllegalArgumentException("No metadata");
+		if (meta==null) throw new InvalidInputException("No metadata");
 		AMap<AString,ACell> content=RT.ensureMap(meta.get(Fields.CONTENT));
-		if (content==null) throw new IllegalArgumentException("Metadata does not have content object specified");
+		if (content==null) throw new InvalidInputException("Metadata does not have content object specified");
 		Hash expectedHash=Hash.parse(RT.ensureString(content.get(Fields.SHA256)));
 		if (expectedHash==null) {
-			throw new IllegalArgumentException("Metadata does not have valid content hash");
+			throw new InvalidInputException("Metadata does not have valid content hash");
 		}
 
-		// Read with size limit to prevent OOM from oversized uploads
+		// The storage checks the SHA-256 as the content streams in and stores
+		// nothing that does not match; the size limit is enforced as it reads.
 		long maxSize = config.getMaxContentSize();
-		byte[] data = is.readNBytes((int) Math.min(maxSize + 1, Integer.MAX_VALUE));
-		if (data.length > maxSize) {
-			throw new IllegalArgumentException("Content exceeds maximum size of " + maxSize + " bytes");
+		try {
+			contentStorage.storeVerified(expectedHash, new SizeLimitedStream(is, maxSize));
+		} catch (ContentTooLarge e) {
+			throw new InvalidInputException(CONTENT_TOO_LARGE + maxSize + " bytes");
+		} catch (IllegalArgumentException e) {
+			// The storage refuses content that does not match its hash (ContentStorage.HASH_MISMATCH)
+			throw new InvalidInputException(e.getMessage(), e);
 		}
-		Blob contentBlob = Blob.wrap(data);
-		Hash actualHash = Hashing.sha256(contentBlob.getBytes());
+		log.debug("Stored content with SHA256: "+expectedHash);
+		return expectedHash;
+	}
 
-		// Verify the actual hash matches the expected hash from metadata
-		if (!actualHash.equals(expectedHash)) {
-			throw new IllegalArgumentException("Content hash mismatch. Expected: " + expectedHash.toHexString() + ", Actual: " + actualHash.toHexString());
+	/** Refusal for an upload larger than the venue's {@code maxContentSize}. */
+	public static final String CONTENT_TOO_LARGE = "Content exceeds maximum size of ";
+
+	/** Raised by {@link SizeLimitedStream} when its limit is passed. */
+	private static final class ContentTooLarge extends IOException {
+		private static final long serialVersionUID = 1L;
+	}
+
+	/** Passes a stream through, failing with {@link ContentTooLarge} once more than {@code limit} bytes are read. */
+	private static final class SizeLimitedStream extends java.io.FilterInputStream {
+		private long remaining;
+
+		SizeLimitedStream(InputStream in, long limit) {
+			super(in);
+			this.remaining = limit;
 		}
 
-		// Store the content using the verified hash
-		contentStorage.store(actualHash, new ByteArrayInputStream(data));
-		log.debug("Stored content with SHA256: "+actualHash);
-		return actualHash;
+		@Override
+		public int read() throws IOException {
+			int b = super.read();
+			if (b >= 0) count(1);
+			return b;
+		}
+
+		@Override
+		public int read(byte[] buf, int off, int len) throws IOException {
+			int n = super.read(buf, off, len);
+			if (n > 0) count(n);
+			return n;
+		}
+
+		private void count(int n) throws ContentTooLarge {
+			remaining -= n;
+			if (remaining < 0) throw new ContentTooLarge();
+		}
 	}
 
 	private AMap<AString,ACell> STATUS_MAP=Maps.of(Fields.STATUS,Fields.OK);
 
 	public AMap<AString,ACell> getStatus() {
 		AMap<AString,ACell> status=STATUS_MAP;
-		status=status.assoc(Fields.TS, CVMLong.create(Utils.getCurrentTimestamp()));
+		status=status.assoc(Fields.TS, currentTimestamp());
 		status=status.assoc(Fields.DID, getDIDString());
 
 		AString name=getName();
@@ -3046,7 +3037,7 @@ public class Engine {
 	 * and all auth paths just work against the venue's DID directly.</p>
 	 */
 	public RequestContext venueContext() {
-		return RequestContext.of(getDIDString());
+		return context(getDIDString());
 	}
 
 	/**
@@ -3095,14 +3086,14 @@ public class Engine {
 			AString derived = Strings.create("did:key:"
 				+ Multikey.encodePublicKey(keyPair.getAccountKey()));
 			if (!derived.equals(declared)) {
-				throw new IllegalStateException("Declared venue identity " + declared
+				throw new ConfigurationException("Declared venue identity " + declared
 					+ " does not match the venue key pair (" + derived
 					+ ") — wrong seed or keystore?");
 			}
 		} else if (d.startsWith("did:web:")) {
 			AString web = config.getWebDID();
 			if (!declared.equals(web)) {
-				throw new IllegalStateException("Declared venue identity " + declared
+				throw new ConfigurationException("Declared venue identity " + declared
 					+ " does not match the venue's did:web form ("
 					+ (web == null ? "no public hostname" : web) + ")");
 			}
@@ -3151,6 +3142,46 @@ public class Engine {
 	}
 
 	/**
+	 * Attaches transport-presented UCAN grants to a request context: the single
+	 * seam every transport (REST, MCP, A2A, SSE) uses. Each token is verified
+	 * with the venue's DID verifier and judged by the venue's clock.
+	 * Capability-bearing tokens are attached only for capability checks
+	 * (UCAN.md §5.2). Proofs are additive grants: their presence never
+	 * authenticates a caller, selects an execution namespace or instructs an
+	 * operation. Empty-att target credentials remain only in the raw relay
+	 * envelope. With no token presented, nothing is attached.
+	 *
+	 * @param rctx context for the authenticated caller (caller DID already set)
+	 * @param ucans transport {@code ucans} vector, or null
+	 * @return rctx with the presented proofs attached
+	 */
+	public RequestContext withTransportGrants(RequestContext rctx, AVector<ACell> ucans) {
+		AVector<ACell> parsed = UcanJwtValidator.parseTransportUCANs(ucans,
+			currentTimestamp().longValue() / 1000, didVerifier());
+		if (parsed == null) return rctx;
+
+		AVector<ACell> grants = Vectors.empty();
+		for (long i = 0; i < parsed.count(); i++) {
+			AMap<AString, ACell> map = RT.castMap(parsed.get(i));
+			UCAN token = (map != null) ? UCAN.parse(map) : null;
+			AVector<ACell> capabilities = (token != null) ? token.getCapabilities() : null;
+			if (capabilities != null && !capabilities.isEmpty()) {
+				grants = grants.conj(parsed.get(i));
+			}
+		}
+		if (!grants.isEmpty()) rctx = rctx.withProofs(grants);
+		// Retain the raw transport envelope for cross-venue forwarding (C3a):
+		// proofs are self-verifying, but only the original signed JWTs verify at
+		// the next hop, not the parsed maps. A target credential may be carried
+		// here, but it remains inert and never enters the proof channel.
+		if (ucans != null && !ucans.isEmpty()) rctx = rctx.withRawUcans(ucans);
+		// Presented proofs are additive and never subtractive. To act with reduced
+		// authority, hand the callee a narrower Authority (Authority.of(did, grants))
+		// or present only the UCANs the request needs.
+		return rctx;
+	}
+
+	/**
 	 * Converts a venue-managed username to its canonical user DID. Publicly
 	 * named venues use their did:web alias (for example
 	 * {@code did:web:venue.example.com:u:alice}). A public hostname is required
@@ -3159,15 +3190,15 @@ public class Engine {
 	 */
 	public AString managedUserDID(AString username) {
 		if (username == null || username.isEmpty()) {
-			throw new IllegalArgumentException("username is required");
+			throw new InvalidInputException("username is required");
 		}
 		if (!username.toString().matches("[A-Za-z0-9._-]+")) {
-			throw new IllegalArgumentException(
+			throw new InvalidInputException(
 				"username may contain only letters, numbers, '.', '_' and '-'");
 		}
 		AString base = config.getWebDID();
 		if (base == null) {
-			throw new IllegalStateException("Venue-managed usernames require a public hostname "
+			throw new ConfigurationException("Venue-managed usernames require a public hostname "
 				+ "so they can use did:web; pass a full user DID instead");
 		}
 		return Strings.create(base + ":u:" + username);
@@ -3196,16 +3227,6 @@ public class Engine {
 		return userNameBelow(did, base);
 	}
 
-	/**
-	 * A venue-issued user below this venue's actual identity. Personal venues
-	 * sign login identities such as {@code did:key:...:u:alice}; this does not
-	 * make did:key a generally routable namespace, but it does make the venue
-	 * authoritative for the exact subjects it issued itself.
-	 */
-	private boolean isVenueIssuedUserDID(AString did) {
-		return userNameBelow(did, getDIDString()) != null;
-	}
-
 	/** One valid username segment immediately below an exact DID base. */
 	private static AString userNameBelow(AString did, AString base) {
 		if (base == null || did == null) return null;
@@ -3218,23 +3239,52 @@ public class Engine {
 	}
 
 	/**
-	 * Root-authority policy for resources enforced by this venue.
+	 * Root-authority policy for resources enforced by this venue: who may sign
+	 * the root of a grant over a resource (UCAN.md, "Roots"). There are two
+	 * kinds of root and no others:
 	 *
-	 * <p>Self-sovereign owners root their own grants. The venue may additionally
-	 * attest only for user DIDs it issued directly below its own identity. This
-	 * includes the venue-signed {@code did:key:...:u:name} subjects used by a
-	 * personal venue as well as named {@code did:web} users. Merely registering
-	 * an arbitrary external DID does not transfer control of that identity.</p>
+	 * <ul>
+	 * <li><b>An identity</b>, for its own resources and those of every identity
+	 * this venue accepts it as signing in as: a {@code did:key} and the
+	 * identities nested below it ({@link VenueAuthenticator#signsInAs}).</li>
+	 * <li><b>This venue</b>, for everything it hosts ({@link #isHosted}). Its
+	 * grants count only here: no other venue accepts it as a root.</li>
+	 * </ul>
+	 *
+	 * <p>Being a root confers nothing by itself: a root reaches another
+	 * identity's resources only by presenting a grant it signed.</p>
 	 */
 	public RootAuthorityPolicy rootAuthorityPolicy() {
 		AString venueDID = getDIDString();
 		return RootAuthorityPolicy.SELF_SOVEREIGN.or((root, resource) -> {
-			if (!venueDID.equals(root) || resource == null) return false;
-			DID owner = RootAuthorityPolicy.ownerDID(resource);
-			if (owner == null) return false;
-			AString ownerDID = Strings.create("did:" + owner.getMethod() + ":" + owner.getID());
-			return isManagedUserDID(ownerDID) || isVenueIssuedUserDID(ownerDID);
+			// The owner as written, as users are keyed and grants are matched:
+			// a differently encoded DID names nothing hosted here.
+			AString owner = ownerOf(resource);
+			if (root == null || owner == null) return false;
+			if (VenueAuthenticator.signsInAs(root, owner)) return true;
+			return venueDID.equals(root) && isHosted(owner);
 		});
+	}
+
+	/**
+	 * Whether this venue hosts the owner of {@code resource} (a DID or a DID
+	 * URL): it keeps a user record for it, or it is one of the venue's own
+	 * namespaces ({@link #isLocalDIDResource}), or it is an agent of one of those.
+	 */
+	public boolean isHosted(AString resource) {
+		AString owner = ownerOf(resource);
+		if (owner == null) return false;
+		if (isLocalDIDResource(owner)) return true;
+		return covia.grid.Principals.isAgentDID(owner) && isLocalDIDResource(covia.grid.Principals.userOf(owner));
+	}
+
+	/**
+	 * Whether {@code resource} is a DID URL whose owner this venue does not
+	 * host ({@link #isHosted}): it names something held on another venue.
+	 * A bare path is never remote.
+	 */
+	public boolean isRemote(AString resource) {
+		return ownerOf(resource) != null && !isHosted(resource);
 	}
 
 	/** Evaluate presented proofs under this venue's complete root policy. */
@@ -3247,6 +3297,9 @@ public class Engine {
 	public boolean proofsCover(RequestContext ctx, AString resource, AString ability, long now,
 			AString destination) {
 		if (ctx == null) return false;
+		if (ctx.hasSeparateAuthority()) {
+			return proofsCover(ctx.authorityContext(), ctx.inNamespace(resource), ability, now, destination);
+		}
 		return ctx.delegatedProofsCover(rootAuthorityPolicy(), resource, ability, now, destination);
 	}
 
@@ -3259,6 +3312,9 @@ public class Engine {
 	public boolean proofsStructurallyCover(RequestContext ctx, AString resource,
 			AString ability, long now) {
 		if (ctx == null) return false;
+		if (ctx.hasSeparateAuthority()) {
+			return proofsStructurallyCover(ctx.authorityContext(), ctx.inNamespace(resource), ability, now);
+		}
 		return covia.lattice.CapabilityChecker.proofsStructurallyCover(
 			ctx.getProofs(), ctx.getCallerDID(), rootAuthorityPolicy(),
 			resource, ability, now);
@@ -3273,7 +3329,7 @@ public class Engine {
 		if (did == null) throw new AuthException("Authentication required");
 		requireNotSubPrincipal(did);
 		Users users = venueState.users();
-		User user = users.get(did);
+		User user = users.user(did);
 		if (user != null) return user;
 		if (config.isUserAutoCreate()) {
 			users.create(did);
@@ -3285,23 +3341,23 @@ public class Engine {
 	}
 
 	public static final String PROTECTED_USER = "The venue and public principals cannot be deleted";
-	private final java.util.concurrent.locks.ReentrantLock userDeletionLock = new java.util.concurrent.locks.ReentrantLock();
-	public static final String USER_DELETION_IN_PROGRESS = "User deletion is in progress; retry adapter activation";
 	public static final String USER_DELETION_PENDING = "User access revoked; cleanup is pending unavailable adapters";
 
-	/** Operator account deletion, with no implicit self-service authority. */
+	/**
+	 * Operator account deletion, with no implicit self-service authority. It
+	 * needs no lock: the deletion commits in one transaction, a repeated
+	 * deletion reuses the account's tombstone, each adapter's entry is finished
+	 * against that tombstone, and the hooks for what lies outside the lattice
+	 * are idempotent. So deletions may overlap each other and adapter
+	 * activation.
+	 */
 	public ACell deleteUser(RequestContext ctx, AString did) {
 		requireVenueAuthority(ctx, "users", Abilities.USER_DELETE);
 		requireNotSubPrincipal(did);
 		if (isVenuePrincipal(did) || Strings.create(getDIDString() + ":public").equals(did)) {
-			throw new IllegalArgumentException(PROTECTED_USER);
+			throw new InvalidInputException(PROTECTED_USER);
 		}
-		userDeletionLock.lock();
-		try {
-			return eraseUser(ctx, did);
-		} finally {
-			userDeletionLock.unlock();
-		}
+		return eraseUser(ctx, did);
 	}
 
 	private ACell eraseUser(RequestContext ctx, AString did) {
@@ -3312,10 +3368,7 @@ public class Engine {
 		}
 		java.util.Map<String, java.util.function.Consumer<AdapterState>> cleanups = new java.util.LinkedHashMap<>();
 		registered.forEach((name, adapter) -> cleanups.put(name, state -> adapter.deleteUserState(did, state)));
-		VenueState.DeletedUser deleted;
-		synchronized (getAuth()) {
-			deleted = venueState.beginUserDeletion(did, ctx.getCallerDID(), cleanups);
-		}
+		VenueState.DeletedUser deleted = venueState.beginUserDeletion(did, ctx.getCallerDID(), cleanups);
 		// Persist revocation and retry evidence before invoking external effects.
 		flush();
 		RuntimeException failure = null;
@@ -3334,10 +3387,27 @@ public class Engine {
 		flush();
 		if (failure != null) throw failure;
 		if (venueState.users().isDeleting(did)) {
-			throw new IllegalStateException(USER_DELETION_PENDING);
+			throw new UnavailableException(USER_DELETION_PENDING);
 		}
 		log.info("user.delete did={} by={}", did, ctx.getCallerDID());
 		return deleted.tombstone();
+	}
+
+	/**
+	 * Removes, in one transaction, what every registered adapter, enabled or
+	 * not, holds for the deleted agent {@code agentDID}
+	 * ({@link AAdapter#deleteAgentState}): its own keyring, for one. Agent
+	 * deletion calls it each time, so a later agent given the same id starts
+	 * with nothing of its predecessor's.
+	 */
+	public void deleteAgentState(AString agentDID) {
+		java.util.Map<String, AAdapter> registered;
+		synchronized (this) {
+			registered = new java.util.LinkedHashMap<>(disabledAdapters);
+			registered.putAll(adapters);
+		}
+		venueState.execute(draft -> registered.forEach((name, adapter) ->
+			adapter.deleteAgentState(agentDID, draft.adapterState(name))));
 	}
 
 	private void finishCoreUserDeletion(AString did, covia.grid.Job deletingJob) {
@@ -3354,37 +3424,42 @@ public class Engine {
 		if (!pending.isEmpty()) flush();
 	}
 
-	/** Activation holds the registry monitor: never wait for a deletion that needs it. */
+	/**
+	 * Finishes the deletions still waiting on {@code adapter}. A deletion in
+	 * progress may finish the same entry first, so each step holds only while
+	 * the entry is pending: the state is removed in a transaction that checks
+	 * it, and so can't touch an account recreated since.
+	 */
 	private void resumeAdapterUserDeletions(AAdapter adapter) {
-		if (!userDeletionLock.tryLock()) throw new IllegalStateException(USER_DELETION_IN_PROGRESS);
-		try {
-			String name = adapter.getName();
-			AMap<AString, ACell> pending = venueState.pendingUserDeletions(name);
-			for (var entry : pending.entrySet()) {
-				AString did = entry.getKey();
-				venueState.transact(draft -> adapter.deleteUserState(did, draft.adapterState(name)));
-				flush();
-				adapter.onUserDeleted(did, null);
-				venueState.finishUserDeletion(name, did, entry.getValue());
-			}
-			if (!pending.isEmpty()) flush();
-		} finally {
-			userDeletionLock.unlock();
+		String name = adapter.getName();
+		AMap<AString, ACell> pending = venueState.pendingUserDeletions(name);
+		for (var entry : pending.entrySet()) {
+			AString did = entry.getKey();
+			ACell tombstone = entry.getValue();
+			venueState.execute(draft -> {
+				if (java.util.Objects.equals(tombstone, draft.pendingUserDeletions(name).get(did))) {
+					adapter.deleteUserState(did, draft.adapterState(name));
+				}
+			});
+			flush();
+			if (!venueState.pendingUserDeletions(name).containsKey(did)) continue;
+			adapter.onUserDeleted(did, null);
+			venueState.finishUserDeletion(name, did, tombstone);
 		}
+		if (!pending.isEmpty()) flush();
 	}
 
 	/**
 	 * Rejects an agent-shaped DID where a <em>user</em> identity is required.
 	 *
-	 * <p>An agent DID is {@code <owner>:g:<agentId>}, and that nesting is
-	 * load-bearing: {@code Principals.userOf} resolves it to the owner's
-	 * namespace. Admitting such a DID as a user in its own right would therefore
-	 * hand its bearer the namespace of whoever the prefix names. Agents are
-	 * minted by the venue as sub-principals of an existing account, never
-	 * registered as users. A credential may authenticate an agent-shaped subject
-	 * on an identity-only route, but that does not admit a user or establish a
-	 * local owner relationship. This admission guard keeps such subjects out of
-	 * native user routes and records.</p>
+	 * <p>An agent DID is {@code <owner>:g:<agentId>}, and that name also
+	 * addresses agent {@code agentId} of the owner its prefix names. Admitting
+	 * such a DID as a user in its own right would make one name mean two
+	 * principals. Agents are minted by the venue as sub-principals of an existing
+	 * account, never registered as users. A credential may authenticate an
+	 * agent-shaped subject on an identity-only route, but that does not admit a
+	 * user or establish a local owner relationship. This admission guard keeps
+	 * such subjects out of native user routes and records.</p>
 	 *
 	 * <p>Self-issued subjects may use any installed DID method, so this check is
 	 * an intentional method-independent admission invariant rather than an
@@ -3481,31 +3556,36 @@ public class Engine {
 	}
 
 	/**
+	 * The venue's clock: the application's time, for every timestamp the venue
+	 * and its adapters write and every check against one. It may give several
+	 * writes the same time. Elapsed time (intervals, timeouts, rate limits)
+	 * stays on the system timer.
+	 */
+	public CVMLong currentTimestamp() {
+		return application.venueContext().currentTimestamp();
+	}
+
+	/**
 	 * Looks up an agent's lattice state by owner DID and agent ID.
 	 *
 	 * <p>Returns null if the user doesn't exist, the agent isn't initialised,
-	 * or the agent is {@link AgentState#TERMINATED}. Used by the harness to
+	 * or the agent is {@link Agent#TERMINATED}. Used by the harness to
 	 * read agent record fields (config, tasks, pending, sessions) directly
 	 * from the lattice instead of plumbing them through the step input.</p>
 	 *
 	 * @param callerDID Agent owner's DID (never null)
 	 * @param agentId   Agent identifier (never null)
-	 * @return AgentState wrapper, or null if not found / terminated
+	 * @return Agent wrapper, or null if not found / terminated
 	 */
-	public AgentState getAgent(AString callerDID, AString agentId) {
+	public Agent getAgent(AString callerDID, AString agentId) {
 		if (callerDID == null || agentId == null) return null;
 		Users users = venueState.users();
-		User user = users.get(callerDID);
+		User user = users.user(callerDID);
 		if (user == null) return null;
-		AgentState agent = user.agent(agentId);
+		Agent agent = user.agent(agentId);
 		if (agent == null) return null;
-		if (AgentState.TERMINATED.equals(agent.getStatus())) return null;
+		if (Agent.TERMINATED.equals(agent.getStatus())) return null;
 		return agent;
-	}
-
-	/** Signing and live write-clock policy supplied to venue components. */
-	public LatticeContext getLatticeContext() {
-		return latticeContext;
 	}
 
 	/** Gets the live root cursor for top-level lattice regions. */
@@ -3520,10 +3600,11 @@ public class Engine {
 	 * <p>Hosts without a store retain heap-backed behaviour.</p>
 	 */
 	public convex.dlfs.DLFSDrives getDLFSDrives(AKeyPair ownerKey) {
-		var region = convex.dlfs.DLFSRegion.connect(
-			convex.lattice.LatticeComponent.resolve(lattice, Covia.ROOT, Covia.DLFS),
+		// Authored over the shared region's cursor with this owner's key; the
+		// region the host delivers to holds no signer.
+		var region = convex.dlfs.DLFSRegion.connect(application.dlfs().cursor(),
 			application.hostStore(), ownerKey::signData,
-			latticeContext::currentTimestamp);
+			application.venueContext()::currentTimestamp);
 		return region.drives(ownerKey.getAccountKey());
 	}
 
@@ -3554,8 +3635,8 @@ public class Engine {
 		if (userData == null) return 0;
 		long total = 0;
 		for (var entry : userData.entrySet()) {
-			User user = getVenueState().users().get((AString) entry.getKey());
-			if (user != null) total += user.countJobs();
+			User user = getVenueState().users().user((AString) entry.getKey());
+			if (user != null) total += user.jobs().size();
 		}
 		return total;
 	}
@@ -3578,6 +3659,29 @@ public class Engine {
 	}
 
 	/**
+	 * Starts what this venue has due by {@code now}: its part of
+	 * {@link CoviaApplication#update()}. Until the venue has started, and from
+	 * its close on, nothing starts and the future is complete at once. The
+	 * future gives the Jobs started.
+	 */
+	CompletableFuture<List<Job>> update(long now) {
+		return gridScheduler.update(now);
+	}
+
+	/**
+	 * When this venue next needs an update ({@link Scheduler#nextDue}), or
+	 * {@link Long#MAX_VALUE} for none.
+	 */
+	long nextDue() {
+		return gridScheduler.nextDue();
+	}
+
+	/** The application this venue is mounted in. */
+	public CoviaApplication application() {
+		return application;
+	}
+
+	/**
 	 * The live agent event tap (#394). In-process consumers subscribe here —
 	 * per agent or venue-wide — and see the same ordered events the REST
 	 * stream {@code GET /agents/{id}/sse} carries. See AGENT_LOOP.md §2.6.
@@ -3597,7 +3701,7 @@ public class Engine {
 	}
 
 	/**
-	 * Re-derives every agent's single {@code agent:wake} event from the
+	 * Re-derives every agent's single {@code agent:trigger} wake event from the
 	 * authoritative per-thread {@code wakeTime} fields in the lattice. Called
 	 * once during {@link #start()}: the {@code :schedule} index already
 	 * persists across restarts, but a crash could leave a stored handle stale,
@@ -3611,14 +3715,14 @@ public class Engine {
 		int count = 0;
 		for (var userEntry : userData.entrySet()) {
 			AString userDid = (AString) userEntry.getKey();
-			User user = venueState.users().get(userDid);
+			User user = venueState.users().user(userDid);
 			if (user == null) continue;
 			AMap<AString, ACell> agents = user.getAgents();
 			if (agents == null || agents.isEmpty()) continue;
 			for (var agentEntry : agents.entrySet()) {
 				AString agentId = (AString) agentEntry.getKey();
 				if (!(agentEntry.getValue() instanceof AMap)) continue;
-				AgentState agent = user.agent(agentId);
+				Agent agent = user.agent(agentId);
 				if (agent == null) continue;
 				if (gridScheduler.rescheduleAgentWake(userDid, agentId)) count++;
 			}
@@ -3645,9 +3749,9 @@ public class Engine {
 	 *   <li><b>Target-side admission</b> (covia#447) — an agent record's
 	 *       {@code config.accepts}: the owner's standing policy for who may
 	 *       talk to that agent ({@code agent/request}, {@code agent/message})
-	 *       without a delegation — the venue operator, or exact principal
-	 *       DIDs. Consulted for that one resource shape and those abilities
-	 *       only; never admits the public principal. See {@link Admission}.</li>
+	 *       without a delegation — the venue operator, exact principal DIDs,
+	 *       or anyone. Consulted for that one resource shape and those
+	 *       abilities only. See {@link Admission}.</li>
 	 *   <li><b>Presented UCAN proofs</b> — the pure fail-closed delegation
 	 *       check ({@link covia.lattice.CapabilityChecker#proofsCover}).</li>
 	 * </ol>
@@ -3660,6 +3764,9 @@ public class Engine {
 	 *  {@code nb.url} caveat, in the public scope or a presented proof, must cover it. */
 	public boolean crossUserAllows(RequestContext ctx, AString resource, AString ability, AString destination) {
 		if (ctx == null || resource == null || ability == null) return false;
+		if (ctx.hasSeparateAuthority()) {
+			return crossUserAllows(ctx.authorityContext(), ctx.inNamespace(resource), ability, destination);
+		}
 		// The venue's explicitly addressed asset catalog is public. This is NOT
 		// true of another user's /a/: knowing a hash is not authorisation to read
 		// someone else's asset. On user-facing APIs a bare hash names the caller's
@@ -3680,7 +3787,7 @@ public class Engine {
 			}
 		}
 		if (admissionAllows(ctx, resource, ability)) return true;
-		return proofsCover(ctx, resource, ability, System.currentTimeMillis() / 1000, destination);
+		return proofsCover(ctx, resource, ability, currentTimestamp().longValue() / 1000, destination);
 	}
 
 	/** The abilities that mean "talk to this agent": submit a request or a message. */
@@ -3693,24 +3800,22 @@ public class Engine {
 	 * for who may talk to their agent, consulted for exactly one resource shape —
 	 * an agent record {@code <owner>/g/<id>} — and the two talk abilities. The
 	 * policy algebra is {@link Admission}; this method only locates the record.
-	 * The public principal is never admitted here: anonymous exposure stays
-	 * A2A's {@code a2a.public} + {@code a2a.caps}.
 	 */
 	private boolean admissionAllows(RequestContext ctx, AString resource, AString ability) {
 		if (!isTalkAbility(ability)) return false;
 		AString caller = ctx.getCallerDID();
-		if (caller == null || isPublicPrincipal(caller)) return false;
+		if (caller == null) return false;
 		AString owner = ownerOf(resource);
 		if (owner == null) return false;
 		String rest = resource.toString().substring(owner.toString().length());
 		if (!rest.startsWith("/g/")) return false;
 		String agentId = rest.substring(3);
 		if (agentId.isEmpty() || agentId.indexOf('/') >= 0) return false;
-		User user = venueState.users().get(owner);
-		AgentState agent = (user != null) ? user.agent(agentId) : null;
+		User user = venueState.users().user(owner);
+		Agent agent = (user != null) ? user.agent(agentId) : null;
 		if (agent == null) return false;
-		ACell accepts = RT.getIn(agent.getConfig(), Fields.ACCEPTS);
-		return Admission.admits(accepts, caller, isVenuePrincipal(ctx.getUserDID()));
+		return Admission.admits(Admission.policy(agent.getConfig()), caller,
+			isVenuePrincipal(ctx.getUserDID()), isPublicPrincipal(caller));
 	}
 
 	/**
@@ -3741,7 +3846,7 @@ public class Engine {
 				|| isPublicPrincipal(ctx.getCallerDID())) {
 			throw new AuthException("Authentication required for user/sudo");
 		}
-		if (userDID == null) throw new IllegalArgumentException("Target user DID is required");
+		if (userDID == null) throw new InvalidInputException("Target user DID is required");
 		requireNotSubPrincipal(userDID);
 		if (userDID.equals(ctx.getUserDID())) return ctx;
 		if (!crossUserAllows(ctx, userDID, Abilities.USER_SUDO)) {
@@ -3753,17 +3858,15 @@ public class Engine {
 
 	/** A read of the venue's explicitly addressed content catalog
 	 *  ({@code <venueDID>/a/…}). It is public only for reads and only for the
-	 *  venue's own DID; bare hashes and another user's {@code /a/} are private. */
+	 *  venue's own DID; bare hashes and another user's {@code /a/} are private.
+	 *  The venue's view {@code v/} is every request's own, read of right, so
+	 *  {@code <venueDID>/v/…} names no place. */
 	private boolean isVenueCatalogRead(AString resource, AString ability) {
 		if (!Capability.CRUD_READ.equals(ability) && !Abilities.ASSET_READ.equals(ability)) return false;
 		String value = resource.toString();
-		if (isVenueReference(value, getDIDString().toString())) return true;
+		if (value.startsWith(getDIDString() + "/a/")) return true;
 		AString web = config.getWebDID();
-		return web != null && isVenueReference(value, web.toString());
-	}
-
-	private static boolean isVenueReference(String resource, String did) {
-		return resource.startsWith(did + "/a/") || resource.startsWith(did + "/v/");
+		return web != null && value.startsWith(web + "/a/");
 	}
 
 	/**
@@ -3771,20 +3874,24 @@ public class Engine {
 	 * {@code s/}, {@code g/}, {@code j/}, …), governed uniformly for reads and
 	 * mutations alike — an asset ({@code a/}) exactly like a workspace path
 	 * ({@code w/}). The caller's own resource goes through the capability scope
-	 * seam; another user's needs {@code ability} rights (a presented proof, or
-	 * public / venue-catalog policy). A cross-user resource the caller has no
-	 * rights to is a <b>denial</b>, never a silent miss.
+	 * seam; another user's needs {@code ability} rights it holds (a presented
+	 * proof, admission, or public / venue-catalog policy), as
+	 * {@link #authorityCovers} rules for any identity this venue hosts. A local
+	 * path under a DID this venue does not host is refused the same way. A
+	 * cross-user resource the caller has no rights to is a <b>denial</b>, never
+	 * a silent miss.
 	 *
-	 * <p>Returns the DID whose namespace the operation targets — the caller's own
-	 * for an own/bare resource, the named owner for an authorised cross-user
-	 * access — so a read serves, and a write lands in, exactly the right store.
+	 * <p>Returns the DID whose namespace the operation targets — the named owner
+	 * of an explicit {@code did:…/} resource (the caller's own, an agent's own
+	 * DID, or another principal's it is authorised for), the request's namespace
+	 * for a bare one — so a read serves, and a write lands in, exactly the right store.
 	 * Callers that locate the target separately (e.g. via {@code resolveDIDURL})
 	 * may ignore the return.</p>
 	 *
 	 * <p>This is the LOCAL access gate. It is not the invoke path (invoking an
-	 * operation is a capability, not access to its owner's namespace) and it is
-	 * not for remote references (another venue's DID), which federation resolves
-	 * by asking that venue.</p>
+	 * operation is a choice of what to run, {@link #requireInvoke}, not access
+	 * to its owner's namespace) and it is not for remote references (another
+	 * venue's DID), which federation resolves by asking that venue.</p>
 	 */
 	public AString requireLocalAccess(RequestContext ctx, AString resource, AString ability) {
 		return requireLocalAccess(ctx, resource, ability, null);
@@ -3794,31 +3901,29 @@ public class Engine {
 	 *  (a secret into an outbound request): a grant's {@code nb.url} caveat must
 	 *  cover it. */
 	public AString requireLocalAccess(RequestContext ctx, AString resource, AString ability, AString destination) {
-		if (ownedByCaller(ctx, resource)) {
-			requireAuthority(ctx, resource, ability, destination);   // own namespace → scope seam
-			return (ctx != null) ? ctx.getUserDID() : null;
+		if (ctx != null && ctx.hasSeparateAuthority()) {
+			requireStanding(ctx);
+			return requireLocalAccess(ctx.authorityContext(), ctx.inNamespace(resource), ability, destination);
 		}
+		if (ownedByCaller(ctx, resource) || (ctx != null && controlsAgentAt(ctx, resource))) {
+			requireAuthority(ctx, resource, ability, destination);   // own namespace → scope seam
+			AString owner = ownerOf(resource);
+			return (owner != null) ? owner : (ctx != null) ? ctx.getUserDID() : null;
+		}
+		// Any other DID, hosted here or not: a local path under a DID this venue
+		// does not host names nothing here, and is refused as any other's is.
 		if (!crossUserAllows(ctx, resource, ability, destination)) {
-			convex.core.data.AVector<ACell> proofs = (ctx != null) ? ctx.getProofs() : null;
-			throw new covia.exception.AuthException("Access denied: " + ability + " on " + resource
-				+ " — accessing another user's resource requires " + ability + " rights"
-				+ ((proofs == null || proofs.isEmpty())
-					? " (no proof presented)" : " (the presented proofs do not cover it)")
-				+ (isTalkAbility(ability)
-					? "; the target's accepts policy does not admit this caller" : ""));
+			throw anothersDenial(ctx, resource, ability);
 		}
 		return ownerOf(resource);                               // authorised cross-user → the owner's store
 	}
 
 	/**
-	 * Common point-of-action gate for a resource that may be either caller-owned,
-	 * another principal on this venue, or a remote/scheme reference.
-	 *
-	 * <p>Absolute DID resources belonging to a principal whose user record lives
-	 * here go through {@link #requireLocalAccess}; this prevents the null-scope
-	 * own-resource fast path from authorising a different local user's data.
-	 * Bare, scheme-qualified and genuinely remote resources use the normal
-	 * capability seam.</p>
+	 * Point-of-action gate for a resource that may be the caller's own, another
+	 * principal's on this venue, or a remote or scheme reference. A resource
+	 * this venue hosts goes through {@link #requireLocalAccess}; a remote or
+	 * scheme reference through the capability seam, which reaches no hosted
+	 * identity's resource by scope alone ({@link #authorityCovers}).
 	 */
 	public void requireResourceAccess(RequestContext ctx, AString resource, AString ability) {
 		requireResourceAccess(ctx, resource, ability, null);
@@ -3826,62 +3931,81 @@ public class Engine {
 
 	/** As above for a use that sends the resource's value to {@code destination}. */
 	public void requireResourceAccess(RequestContext ctx, AString resource, AString ability, AString destination) {
-		if (isLocalDIDResource(resource)) {
+		if (isHosted(resource)) {
 			requireLocalAccess(ctx, resource, ability, destination);
 		} else {
 			requireAuthority(ctx, resource, ability, destination);
 		}
 	}
 
-	/** Opening of every {@link #requireConferrable} denial. */
-	public static final String CONFERRAL_DENIED = "Cannot confer authority the caller does not hold";
+	/** Why a principal may not grant what it is root of: its scope leaves out the right to grant it. */
+	public static final String GRANT_BEYOND_SCOPE = "Your scope does not include the right to grant";
+
+	/** Why a principal may not grant what it is not root of: it presents no right to grant it. */
+	public static final String NO_GRANTING_RIGHT = "Not yours to grant, and your presented grants hold no right to grant";
+
+	/** Why a principal may not grant beyond the granting right it grants under. */
+	public static final String GRANT_OUTLIVES_RIGHT = "What you grant must not outlive the granting right it is "
+		+ "granted under: grant it for a shorter time, or present a right that lasts";
 
 	/**
-	 * Attenuation where authority is handed on: may {@code ctx} confer {@code scope}
-	 * on a principal acting in {@code ownerDID}'s namespace, such as an agent's
-	 * {@code config.caps}? Each conferred capability must be covered by the
-	 * caller's own authority, so conferring only ever narrows: an agent may
-	 * create a sub-agent, never one more capable than itself.
+	 * May {@code ctx} grant {@code can} on {@code resource}? The check on every
+	 * grant the venue signs ({@code ucan:issue}): you pass on only what you
+	 * could grant.
 	 *
-	 * <p>A {@code null} scope is unrestricted, so only a caller unrestricted in that
-	 * namespace may confer it. A bare resource names {@code ownerDID}'s namespace, as
-	 * it will when the scope is used, and an empty one covers any resource. A
-	 * capability's {@code nb.url} is the destination its use is checked against;
-	 * other caveats only narrow it further.</p>
+	 * <ul>
+	 * <li>A principal is root of its own resources, of an identity's it signs in
+	 * as, and of its agents' (UCAN.md, "Roots"), and so is anything acting with
+	 * its authority: an agent with its owner's, a request under {@code user/sudo}
+	 * with the target's. That is the authority it has of its own, never what
+	 * others have granted it. Its scope must include {@code grant/<can>} there,
+	 * as having no scope does.</li>
+	 * <li>Over anything else, its presented grants must hold {@code grant/<can>},
+	 * through {@code exp} as well as now.</li>
+	 * </ul>
 	 *
-	 * @throws AuthException naming the first capability the caller cannot confer
+	 * <p>Nobody here is root of what the venue does not host, such as another
+	 * venue's resources or a file: a capability over it only bounds what its
+	 * holder may ask for, so it is granted as part of {@code namespace}.</p>
+	 *
+	 * @param namespace the namespace bare and match-any resources are in
+	 * @param resource an absolute resource, or null for every resource in {@code namespace}
+	 * @param exp when what is granted expires, or null for never
+	 * @param destination the {@code nb.url} its use is checked against, if any
+	 * @throws AuthException saying why not
 	 */
-	public void requireConferrable(RequestContext ctx, AString ownerDID, AVector<ACell> scope) {
-		if (scope == null) {
-			requireConferred(ctx, ownerDID, null, Capability.TOP, null);
+	public void requireGrantable(RequestContext ctx, AString namespace, AString resource, AString can,
+			Long exp, AString destination) {
+		if (ctx.hasSeparateAuthority()) {
+			requireGrantable(ctx.authorityContext(), namespace, ctx.inNamespace(resource), can, exp, destination);
 			return;
 		}
-		for (long i = 0; i < scope.count(); i++) {
-			AMap<AString, ACell> cap = RT.ensureMap(scope.get(i));
-			AString can = (cap == null) ? null : RT.ensureString(cap.get(Capability.CAN));
-			if (can == null) throw new AuthException(CONFERRAL_DENIED + ": capability " + i + " names no ability");
-			requireConferred(ctx, ownerDID, RT.ensureString(cap.get(Capability.WITH)), can,
-				RT.ensureString(RT.getIn(cap, Capability.NB, Fields.URL)));
+		AString grant = Strings.create("grant/" + can);
+		AString owner = isHosted(resource) ? ownerOf(resource) : namespace;
+		// Presented grants are checked against the whole namespace for a match-any resource.
+		AString target = (resource != null) ? resource : namespace;
+		boolean root = isRootOf(ctx.getCallerDID(), owner) || isRootOf(ctx.getUserDID(), owner);
+		if (root) {
+			AVector<ACell> scope = ctx.getCaps();
+			if (scope == null || ctx.denialUnder(scope, resource, grant, ctx.getUserDID(), destination) == null) return;
+		}
+		if (!proofsCover(ctx, target, grant, currentTimestamp().longValue() / 1000, destination)) {
+			throw new AuthException((root ? GRANT_BEYOND_SCOPE : NO_GRANTING_RIGHT) + " " + can + " on " + target);
+		}
+		// Granted under presented rights: they must still hold at the horizon,
+		// unbounded for what never expires. Dynamic gates rule on the grant
+		// happening now (above); they do not run again against a future use.
+		long horizon = (exp == null) ? Long.MAX_VALUE : exp - 1;
+		if (!proofsStructurallyCover(ctx, target, grant, horizon)) {
+			throw new AuthException(GRANT_OUTLIVES_RIGHT + " (" + grant + " on " + target + ")");
 		}
 	}
 
-	private void requireConferred(RequestContext ctx, AString ownerDID, AString with, AString can,
-			AString destination) {
-		String resource = (with == null) ? "" : with.toString();
-		while (resource.startsWith("/")) resource = resource.substring(1);
-		try {
-			if (!resource.isEmpty()) {
-				requireResourceAccess(ctx, Strings.create(
-					covia.lattice.CapabilityChecker.canonicalResource(resource, ownerDID)), can, destination);
-			} else if (ownerDID.equals(ctx.getUserDID())) {
-				requireAuthority(ctx, (AString) null, can, destination);   // only a match-any grant covers
-			} else {
-				requireLocalAccess(ctx, ownerDID, can, destination);       // the whole other namespace
-			}
-		} catch (AuthException e) {
-			throw new AuthException(CONFERRAL_DENIED + ": " + can + " on "
-				+ (resource.isEmpty() ? "(any)" : resource) + " — " + e.getMessage());
-		}
+	/** Whether {@code principal} is root of {@code owner}: it, an identity it signs in as, or one of its agents. */
+	private static boolean isRootOf(AString principal, AString owner) {
+		if (principal == null || owner == null) return false;
+		return principal.equals(owner) || VenueAuthenticator.signsInAs(principal, owner)
+			|| (covia.grid.Principals.isAgentDID(owner) && principal.equals(covia.grid.Principals.userOf(owner)));
 	}
 
 	/**
@@ -3905,6 +4029,11 @@ public class Engine {
 	 * turn it into a licence to read every user's workspace metadata, so a path
 	 * still requires {@code crud/read} over that path and nothing else.</p>
 	 *
+	 * <p>A path is read as data, where it lives ({@link #requirePathRead}). A
+	 * bare hash names no place: it is the caller's own asset when the caller's
+	 * store holds it, and otherwise one in the venue's catalog, which every
+	 * principal reads.</p>
+	 *
 	 * <p>Content bytes are not covered here — {@link #resolveContent} keeps its
 	 * own {@code asset/read} pin.</p>
 	 *
@@ -3913,19 +4042,46 @@ public class Engine {
 	 */
 	public void requireMetadataRead(RequestContext ctx, AString resource) {
 		if (resource == null) return;
-		if (AssetAdapter.parseAssetId(resource) == null) {
-			// A path: namespace-scoped read only.
-			requireResourceAccess(ctx, resource, Capability.CRUD_READ);
+		Hash bare = HexId.parseHash(resource);
+		if (bare != null) {
+			AString user = (ctx == null) ? null : ctx.getUserDID();
+			if (getAssetRecord(bare, user) == null) return;   // the venue's catalog, or nothing
+		} else if (AssetAdapter.parseAssetId(resource) == null) {
+			requirePathRead(ctx, resource);
 			return;
 		}
-		// Content-addressed: either ability over this hash is enough.
+		assetRead(can -> {
+			requireResourceAccess(ctx, resource, can);
+			return null;
+		});
+	}
+
+	/**
+	 * As {@link #requireMetadataRead}, for an asset's metadata by a
+	 * content-addressed reference to a store this venue holds:
+	 * {@code asset/read}, or {@code crud/read} over that hash, through
+	 * {@link #requireLocalAccess}.
+	 *
+	 * @return the owner whose store it is read from ({@link #requireLocalAccess})
+	 * @throws covia.exception.AuthException naming {@code asset/read} when neither is held
+	 */
+	public AString requireLocalAssetRead(RequestContext ctx, AString ref) {
+		return assetRead(can -> requireLocalAccess(ctx, ref, can));
+	}
+
+	/**
+	 * {@code check} with {@code asset/read}, else with {@code crud/read}: either
+	 * ability over a hash is enough to read the asset's metadata. Reports the
+	 * refusal of the expected ability.
+	 */
+	private static <T> T assetRead(java.util.function.Function<AString, T> check) {
 		try {
-			requireResourceAccess(ctx, resource, Abilities.ASSET_READ);
+			return check.apply(Abilities.ASSET_READ);
 		} catch (covia.exception.AuthException denied) {
 			try {
-				requireResourceAccess(ctx, resource, Capability.CRUD_READ);
+				return check.apply(Capability.CRUD_READ);
 			} catch (covia.exception.AuthException alsoDenied) {
-				throw denied;                     // report the expected ability
+				throw denied;
 			}
 		}
 	}
@@ -3942,7 +4098,7 @@ public class Engine {
 	public boolean isLocalDIDResource(AString resource) {
 		AString owner = ownerOf(resource);
 		if (owner == null) return false;
-		if (venueState.users().get(owner) != null) return true;
+		if (venueState.users().user(owner) != null) return true;
 
 		String value = owner.toString();
 		String venue = getDIDString().toString();
@@ -3971,40 +4127,416 @@ public class Engine {
 		return web != null && value.equals(web + ":public");
 	}
 
+	/** The venue's public (anonymous) principal, {@code <venue>:public}. */
+	public AString publicPrincipal() {
+		return Strings.create(getDIDString() + ":public");
+	}
+
+	/**
+	 * The context {@code principal} acts under now, in its own namespace. This
+	 * and {@link #context(AString, AString)} are where the venue decides, from
+	 * its own state, what a principal may do; {@link RequestContext#of} only
+	 * builds a context already decided or recorded.
+	 *
+	 * <ul>
+	 *   <li>The public principal, as every door presents it
+	 *       ({@code <venue>:public}), holds the operator's public scope
+	 *       ({@code auth.public.caps}).</li>
+	 *   <li>An agent-shaped DID holds nothing: its name establishes no
+	 *       relationship with the owner it names, so its authority comes only
+	 *       from proofs it presents.</li>
+	 *   <li>Any other principal, the venue included, is unrestricted in its own
+	 *       namespace.</li>
+	 * </ul>
+	 *
+	 * @param principal the acting DID, or null for anonymous
+	 * @throws AuthException for the public principal while public access is off
+	 */
+	public RequestContext context(AString principal) {
+		if (principal == null) return RequestContext.ANONYMOUS;
+		if (isPublicPrincipal(principal)) {
+			if (!auth.isPublicAccessEnabled()) throw new AuthException(PUBLIC_ACCESS_OFF);
+			AString publicDID = publicPrincipal();
+			return RequestContext.of(publicDID, null, auth.getPublicScope(publicDID));
+		}
+		if (covia.grid.Principals.isAgentDID(principal)) {
+			return RequestContext.of(principal, null, Vectors.empty());
+		}
+		return RequestContext.of(principal);
+	}
+
+	/**
+	 * The context {@code principal} acts under now for {@code owner}, whose
+	 * record (a binding, say) names it: the owner itself; one of the owner's
+	 * agents, as itself in the owner's namespace; or the public principal, which
+	 * acts only as itself. The owner comes from the record, never from the
+	 * principal's name.
+	 *
+	 * <p>An agent's context carries the agent, not a copy of its caps: each
+	 * point of action reads its {@code config.caps} as they stand then
+	 * ({@link #agentScope}), so narrowing or deleting an agent bounds work it
+	 * already has running. An agent acts with its controller's authority
+	 * narrowed by those caps ({@link #agentContext}).</p>
+	 *
+	 * @throws AuthException for any other principal, or for the public principal
+	 *         while public access is off
+	 */
+	public RequestContext context(AString owner, AString principal) {
+		if (principal == null || principal.equals(owner) || isPublicPrincipal(principal)) {
+			return context(principal);
+		}
+		AString agentId = agentIdIn(owner, principal);
+		if (agentId == null) throw new AuthException(FOREIGN_PRINCIPAL.formatted(principal, owner));
+		return agentContext(owner, agentId, Set.of());
+	}
+
+	/**
+	 * Agent {@code agentId} as it acts now: in its owner's namespace, with its
+	 * controller's authority narrowed by its caps. A controller's authority is
+	 * what its own request would hold ({@link #context(AString, AString)}),
+	 * the owner's included: unrestricted in its namespace for a user, the
+	 * public caps for the public principal. Its owner's agents narrow one
+	 * scope along the chain of controllers, read at each point of action. A
+	 * controller from another namespace is a separate authority
+	 * ({@link RequestContext#withAuthorityOf}), since it holds nothing of the
+	 * owner's own. A chain of controllers that loops has no authority at its
+	 * root, so grants nothing.
+	 *
+	 * <p>What control gives is not narrowed by the controller's own caps
+	 * ({@link #withControl}), and an agent under that controller has it within
+	 * its own caps.</p>
+	 *
+	 * @param seen the agents already on this chain of controllers
+	 * @throws AuthException when a controller on the chain could not act now
+	 */
+	private RequestContext agentContext(AString owner, AString agentId, Set<AString> seen) {
+		RequestContext agent = RequestContext.ofAgent(owner, agentId);
+		AString self = covia.grid.Principals.agentDID(owner, agentId);
+		RequestContext.ScopeSource caps = resource -> withControl(agentScope(owner, agentId), self, resource, owner);
+		Agent state = getAgent(owner, agentId);
+		AString controller = (state == null) ? owner : state.getController();
+
+		Set<AString> chain = new HashSet<>(seen);
+		chain.add(self);
+		if (chain.contains(controller)) return agent.readingScope(resource -> Vectors.empty());
+
+		AString controllerOwner = covia.grid.Principals.isAgentDID(controller)
+			? covia.grid.Principals.userOf(controller) : controller;
+		AString controllerAgent = agentIdIn(controllerOwner, controller);
+		RequestContext bound = (controllerAgent != null)
+			? agentContext(controllerOwner, controllerAgent, chain)
+			: context(controllerOwner, controller);
+		if (controllerOwner.equals(owner) && !bound.hasSeparateAuthority()) {
+			return agent.readingScope(resource -> withControl(
+				CapabilityChecker.intersect(agentScope(owner, agentId), owner, bound.scopeFor(resource), owner),
+				self, resource, owner));
+		}
+		return agent.withAuthorityOf(bound.narrowedBy(caps, owner));
+	}
+
+	/**
+	 * Agent {@code agentId}'s capability scope as it stands now: its
+	 * {@code config.caps}, with {@code n/} naming its own notes, unrestricted
+	 * without them, and none once the agent is gone or terminated.
+	 */
+	AVector<ACell> agentScope(AString owner, AString agentId) {
+		Agent agent = getAgent(owner, agentId);
+		return (agent == null) ? Vectors.empty()
+			: CapabilityChecker.inAgent(RT.ensureVector(RT.getIn(agent.getConfig(), Config.CAPS)), agentId);
+	}
+
+	/**
+	 * {@code scope} with what {@code principal} has by control for a check on
+	 * {@code resource}: all of the namespace of an agent it controls. A controller
+	 * has authority over its agents' namespaces whatever its own caps say, so this
+	 * joins the scope rather than narrowing it. It is worked out for the resource
+	 * being checked, so nothing lists the agents a principal controls.
+	 *
+	 * @param owner the namespace a bare {@code resource} is in
+	 */
+	private AVector<ACell> withControl(AVector<ACell> scope, AString principal, AString resource, AString owner) {
+		if (scope == null) return null;
+		AgentPlace place = AgentPlace.of(resource, owner);
+		return (place != null && controls(principal, place))
+			? scope.conj(Capability.create(place.address(), Capability.TOP)) : scope;
+	}
+
+	/**
+	 * The namespace of agent {@code agentId} in {@code owner}'s record,
+	 * {@code <owner>/g/<agentId>/}. It is not what is held under the agent's own
+	 * DID, such as its keyring, which is the agent's alone.
+	 */
+	private record AgentPlace(AString owner, AString agentId) {
+		/** The agent namespace {@code resource} lies in, a bare path being in {@code owner}'s; null when it lies in none. */
+		static AgentPlace of(AString resource, AString owner) {
+			if (resource == null) return null;
+			String value = CapabilityChecker.canonicalResource(resource.toString(), owner);
+			if (value == null || !value.startsWith("did:")) return null;
+			int slash = value.indexOf('/');
+			if (slash < 0 || !value.startsWith(Namespace.G + "/", slash + 1)) return null;
+			int start = value.indexOf('/', slash + 1) + 1;
+			int end = value.indexOf('/', start);
+			String id = (end < 0) ? value.substring(start) : value.substring(start, end);
+			return id.isEmpty() ? null : new AgentPlace(Strings.create(value.substring(0, slash)), Strings.create(id));
+		}
+
+		AString address() {
+			return Strings.create(owner + "/" + Namespace.G + "/" + agentId + "/");
+		}
+	}
+
+	/**
+	 * Whether {@code principal} controls the agent at {@code place}: it is that
+	 * agent's controller, or the controller of an agent on the chain above it.
+	 */
+	private boolean controls(AString principal, AgentPlace place) {
+		if (principal == null) return false;
+		Set<AString> seen = new HashSet<>();
+		AString owner = place.owner();
+		AString agentId = place.agentId();
+		while (true) {
+			Agent state = getAgent(owner, agentId);
+			AString controller = (state == null) ? null : state.getController();
+			if (controller == null) return false;
+			if (controller.equals(principal)) return true;
+			if (!seen.add(controller) || !covia.grid.Principals.isAgentDID(controller)) return false;
+			owner = covia.grid.Principals.userOf(controller);
+			agentId = agentIdIn(owner, controller);
+			if (agentId == null) return false;
+		}
+	}
+
+	/** Whether the request's caller or namespace controls the agent {@code resource} belongs to. */
+	private boolean controlsAgentAt(RequestContext ctx, AString resource) {
+		AgentPlace place = AgentPlace.of(resource, ctx.getUserDID());
+		return place != null && (controls(ctx.getCallerDID(), place) || controls(ctx.getUserDID(), place));
+	}
+
+	/**
+	 * The context {@code principal} acts under now for {@code owner}, presenting
+	 * {@code proofs}, as a live request of its own would: the owner, one of its
+	 * agents or the public principal as {@link #context(AString, AString)}, and
+	 * any other principal only as a {@code user/sudo} delegate whose proofs still
+	 * authorise it ({@link #sudoContext}). A recorded request, such as a
+	 * scheduled event, is rebuilt this way when it runs.
+	 *
+	 * @throws AuthException as {@link #context(AString, AString)} or {@link #sudoContext}
+	 */
+	public RequestContext context(AString owner, AString principal, AVector<ACell> proofs) {
+		boolean own = principal == null || principal.equals(owner) || isPublicPrincipal(principal)
+			|| agentIdIn(owner, principal) != null;
+		RequestContext ctx = own ? context(owner, principal) : context(principal);
+		if (proofs != null) ctx = ctx.withProofs(proofs);
+		return own ? ctx : sudoContext(ctx, owner);
+	}
+
+	/**
+	 * What a stored context keeps of {@code ctx}'s separate authority
+	 * ({@link RequestContext#withAuthorityOf}), beside its caller, owner and
+	 * proofs, so that work continuing later acts with the same authority: its
+	 * principal as {@link Fields#CALLER}, namespace as {@link Fields#OWNER} and
+	 * presented {@link Fields#PROOFS}. Null when it acts with its caller's own.
+	 */
+	public static AMap<AString, ACell> keptAuthority(RequestContext ctx) {
+		if (ctx == null || !ctx.hasSeparateAuthority()) return null;
+		RequestContext authority = ctx.authorityContext();
+		AMap<AString, ACell> kept = Attribution.attribute(Maps.empty(), authority.getCallerDID(), authority.getUserDID());
+		AVector<ACell> proofs = authority.getProofs();
+		return (proofs == null || proofs.isEmpty()) ? kept : kept.assoc(Fields.PROOFS, proofs);
+	}
+
+	/** Why a request may not change an agent another principal controls; the agent and its controller follow. */
+	public static final String NOT_CONTROLLERS = "Changing %s needs the authority of its controller, %s";
+
+	/** Why a request may not make a principal an agent's controller; the principal follows. */
+	public static final String CONTROLLER_NOT_HELD = "Cannot make %s an agent's controller: the request does not hold its authority";
+
+	/**
+	 * Whether {@code ctx} acts with {@code principal}'s whole authority, as
+	 * making it an agent's controller, or changing an agent it controls, needs.
+	 * The authority the request acts with ({@link RequestContext#authorityContext})
+	 * must be that principal, an identity it signs in as, or its owner if it is
+	 * an agent; acting in a namespace that is root of it counts only with an
+	 * unrestricted scope. So a user holds its own and its agents' authority, an
+	 * agent its own, and a capped agent not its owner's or a sibling's. A
+	 * {@code user/sudo} delegate, whose scope is its presented grants, holds no
+	 * other principal's.
+	 *
+	 * <p>A request made as an agent holds that agent's authority, however it is
+	 * derived, and its owner's only when it acts with its own authority and
+	 * nothing narrows it. The authority of a controller it derives from is
+	 * narrowed by the agent's caps, so is not that controller's whole
+	 * authority, and its harness ({@link #harnessContext}) acts with its
+	 * controller's authority without holding it.</p>
+	 */
+	public boolean holdsAuthorityOf(RequestContext ctx, AString principal) {
+		if (ctx == null || principal == null) return false;
+		AString caller = ctx.getCallerDID();
+		if (agentIdIn(ctx.getUserDID(), caller) != null) {
+			if (isRootOf(caller, principal)) return true;
+			return !ctx.hasSeparateAuthority() && ctx.getCaps() == null && isRootOf(ctx.getUserDID(), principal);
+		}
+		RequestContext authority = ctx.authorityContext();
+		if (isRootOf(authority.getCallerDID(), principal)) return true;
+		return authority.getCaps() == null && isRootOf(authority.getUserDID(), principal);
+	}
+
+	/**
+	 * The principal whose authority {@code ctx} acts with, which an agent it
+	 * creates or forks takes for its controller: an agent acting in its owner's
+	 * namespace, whatever its authority derives from, so that what it creates
+	 * stays within it; the authority's own principal when it acts in its own
+	 * namespace; and otherwise the namespace it acts for, as a {@code user/sudo}
+	 * delegate acts for its target.
+	 */
+	public static AString actingPrincipal(RequestContext ctx) {
+		if (agentIdIn(ctx.getUserDID(), ctx.getCallerDID()) != null) return ctx.getCallerDID();
+		RequestContext authority = ctx.authorityContext();
+		AString caller = authority.getCallerDID();
+		AString user = authority.getUserDID();
+		if (caller == null || caller.equals(user) || agentIdIn(user, caller) != null) return caller;
+		return user;
+	}
+
+	/**
+	 * The context agent {@code agentId}'s harness runs under: the agent in its
+	 * owner's namespace, attributed to the agent, acting with its controller's
+	 * authority as it stands now ({@link RequestContext#withAuthorityOf}), its
+	 * owner's included, as that principal's own request would hold it
+	 * ({@link #context(AString, AString)}). An agent controller's is read from
+	 * its caps at each check and is none once it is gone. Being a separate
+	 * authority, it is what a job the harness starts keeps
+	 * ({@link #keptAuthority}), so that job acts with it again after a restart.
+	 * What is held under the agent's own DID, such as its keyring, is the
+	 * agent's, not its controller's, so the harness does not reach it.
+	 *
+	 * @throws AuthException when the controller could not act now
+	 */
+	public RequestContext harnessContext(AString owner, AString agentId) {
+		Agent agent = getAgent(owner, agentId);
+		AString controller = (agent == null) ? owner : agent.getController();
+		AString controllerOwner = covia.grid.Principals.isAgentDID(controller)
+			? covia.grid.Principals.userOf(controller) : controller;
+		return RequestContext.ofAgent(owner, agentId).withAuthorityOf(context(controllerOwner, controller));
+	}
+
+	/**
+	 * As {@link #context(AString, AString, AVector)}, acting with the authority
+	 * {@link #keptAuthority} kept, if any, rebuilt as it would act now: an
+	 * authority that could not act now fails as its own request would.
+	 *
+	 * @throws AuthException as {@link #context(AString, AString, AVector)}, for
+	 *         the caller or the kept authority
+	 */
+	public RequestContext context(AString owner, AString principal, AVector<ACell> proofs,
+			AMap<AString, ACell> authority) {
+		RequestContext ctx = context(owner, principal, proofs);
+		if (authority == null) return ctx;
+		RequestContext held = context(Attribution.owner(authority), Attribution.caller(authority),
+			RT.ensureVector(authority.get(Fields.PROOFS)));
+		return ctx.withAuthorityOf(held);
+	}
+
+	/**
+	 * The context agent {@code agentId}'s step runs under: the agent itself as it
+	 * stands now ({@link #context(AString, AString)}), carrying on {@code ctx}'s
+	 * execution. A step runs only for an agent that exists, and only the agent's
+	 * own run or its owner may make it act. A step's input never sets its
+	 * authority.
+	 *
+	 * @throws AuthException when the caller may not make that agent act, or it does not exist
+	 */
+	public RequestContext stepContext(RequestContext ctx, AString agentId) {
+		AString owner = ctx.getUserDID();
+		AString caller = ctx.getCallerDID();
+		AString agentDID = (owner == null || agentId == null) ? null
+			: covia.grid.Principals.agentDID(owner, agentId);
+		if (agentDID == null || !(agentDID.equals(caller) || owner.equals(caller))) {
+			throw new AuthException(NOT_AGENTS_STEP.formatted(caller, agentId));
+		}
+		if (getAgent(owner, agentId) == null) throw new AuthException(NO_SUCH_AGENT.formatted(agentDID));
+		return ctx.actingAs(context(owner, agentDID)).withAgentId(agentId);
+	}
+
+	/**
+	 * The id of {@code principal} as one of {@code owner}'s agents, or null when
+	 * it is not one. The owner comes from a record or a context, never from the
+	 * principal's name: an agent-shaped DID names an agent of {@code owner} only
+	 * when it is exactly {@code <owner>:g:<id>}.
+	 */
+	public static AString agentIdIn(AString owner, AString principal) {
+		if (owner == null || principal == null) return null;
+		AString agentId = covia.grid.Principals.agentIdOf(principal);
+		return (agentId != null && principal.equals(covia.grid.Principals.agentDID(owner, agentId)))
+			? agentId : null;
+	}
+
+	/**
+	 * The context a request authenticated through {@code owner}'s channel
+	 * binding runs under (COG-3 §7): its identified principal as it acts now
+	 * ({@link #context(AString, AString)}), carrying the result's record without
+	 * its {@code userDID}. The one place a request context gains an
+	 * authentication record.
+	 *
+	 * @throws AuthException as {@link #context(AString, AString)}
+	 */
+	public RequestContext channelContext(AString owner, covia.venue.auth.AuthResult result) {
+		return context(owner, result.userDID())
+			.withAuthentication(result.toData().dissoc(covia.venue.auth.AuthResult.USER_DID));
+	}
+
+	/** Why the public principal cannot act: the operator has public access off. */
+	public static final String PUBLIC_ACCESS_OFF = "Anonymous callers are not served: the venue's public access is off";
+
+	/** Why a record cannot act as a principal: it is neither the owner nor one of the owner's agents. */
+	public static final String FOREIGN_PRINCIPAL = "%s acts neither as %s nor as one of its agents";
+
+	/** Why a step did not run: only the agent's own run, or its owner, may make an agent act. */
+	public static final String NOT_AGENTS_STEP = "%s cannot run a step of agent %s: only the agent's own run or its owner can make it act";
+
+	/** Why a step did not run: it names no agent that exists here. */
+	public static final String NO_SUCH_AGENT = "%s is not an agent here";
+
 	/** True when {@code resource} is the caller's own: a bare/relative/scheme path,
-	 *  a resource-less check ({@code null}), or an explicit {@code did:<self>/…}. A
-	 *  {@code did:<other>/…} path is another principal's. Owner = the DID prefix
-	 *  before the first {@code /}, compared to the caller's namespace by equality. */
+	 *  a resource-less check ({@code null}), or an explicit {@code did:<self>/…},
+	 *  where self is the namespace the request acts in or the principal that
+	 *  acts (an agent's own DID). A {@code did:<other>/…} path is another
+	 *  principal's. Owner = the DID prefix before the first {@code /}, compared
+	 *  by equality. */
 	private static boolean ownedByCaller(RequestContext ctx, AString resource) {
 		if (resource == null || ctx == null) return true;
-		String s = resource.toString();
-		if (!s.startsWith("did:")) return true;
-		int slash = s.indexOf('/');
-		AString owner = Strings.create(slash < 0 ? s : s.substring(0, slash));
-		return owner.equals(ctx.getUserDID());
+		AString owner = ownerOf(resource);
+		if (owner == null) return true;
+		return owner.equals(ctx.getUserDID()) || owner.equals(ctx.getCallerDID());
 	}
 
 	/** The owner DID of a {@code did:<owner>/…} resource (prefix before the first
 	 *  {@code /}), or null for a bare/relative resource. */
-	private static AString ownerOf(AString resource) {
+	public static AString ownerOf(AString resource) {
 		if (resource == null) return null;
-		String s = resource.toString();
+		String s = CapabilityChecker.canonicalResource(resource.toString(), null);
 		if (!s.startsWith("did:")) return null;
 		int slash = s.indexOf('/');
 		return Strings.create(slash < 0 ? s : s.substring(0, slash));
 	}
 
 	/**
-	 * The single authorisation seam. Does the caller's authority cover
-	 * {@code (resource, ability)}? Grants are <b>additive</b> — <em>either you
-	 * have the right or you don't</em>: an inherent (unrestricted, own-namespace)
-	 * grant, an agent {@code config.caps} grant, or a cross-user proof each
-	 * independently authorise; nothing subtracts. Callers pass the credential (the
-	 * {@link RequestContext}, wrapping an {@code Authority}) and the exact
-	 * resource+ability they guard. This method is the own/scoped authority seam;
-	 * a resource that may name another local principal must enter through
-	 * {@link #requireResourceAccess}, which classifies ownership before reaching
-	 * the {@code null}-scope fast path.
+	 * The single authorisation seam. Does the request's authority cover
+	 * {@code (resource, ability)}? One rule for every principal: its scope over
+	 * its own namespaces, plus what it holds.
+	 *
+	 * <ul>
+	 * <li>Its own namespaces are the one it acts in, its own DID's (an agent's),
+	 * and resources this venue does not host (scheme and remote references).
+	 * There a {@code null} scope is unrestricted, and any other scope covers
+	 * what its grants cover.</li>
+	 * <li>Another identity's resource that this venue hosts is reached only by
+	 * what the request holds ({@link #crossUserAllows}: a presented proof, an
+	 * agent's admission, the public scope), never by its scope, unrestricted or
+	 * not. No caller need classify a resource before asking.</li>
+	 * </ul>
+	 *
+	 * <p>Grants are additive: nothing subtracts.</p>
 	 */
 	public boolean authorityCovers(RequestContext ctx, AString resource, AString ability) {
 		return authorityCovers(ctx, resource, ability, null);
@@ -4014,19 +4546,29 @@ public class Engine {
 	 *  {@code nb.url} caveat must cover it. */
 	public boolean authorityCovers(RequestContext ctx, AString resource, AString ability, AString destination) {
 		if (ctx == null) return false;
-		// Fast path FIRST — the common case by far. A null scope is unrestricted:
-		// the caller carries no capability restriction, so they are authorised over
-		// their OWN namespace with no proof/public evaluation at all. Every ordinary
-		// authenticated user is null-scope; their cross-user reach is gated
-		// separately by the adapter (which calls crossUserAllows directly), never by
-		// this fast path — so returning here is correct AND skips the string
-		// building, clock read and proof walk that crossUserAllows would do.
-		if (ctx.getCaps() == null) return true;
-		// Restricted (agent) scope. Grants are additive: a presented cross-user
-		// proof (or the public read grant) authorises independently of the caller's
-		// scope; otherwise a grant in the scope must cover the resource.
+		if (ctx.hasSeparateAuthority()) {
+			return authorityCovers(ctx.authorityContext(), ctx.inNamespace(resource), ability, destination);
+		}
+		if (isAnothers(ctx, resource)) return crossUserAllows(ctx, resource, ability, destination);
+		return scopeOrHeldCovers(ctx, resource, ability, destination);
+	}
+
+	/** Whether {@code resource} is another identity's that this venue hosts, and not in the namespace of an agent the request controls. */
+	private boolean isAnothers(RequestContext ctx, AString resource) {
+		return !ownedByCaller(ctx, resource) && isHosted(resource) && !controlsAgentAt(ctx, resource);
+	}
+
+	/**
+	 * Whether the request's scope, or what it holds, covers
+	 * {@code (resource, ability)}. A null scope covers everything, with no proof
+	 * or public evaluation: the common case by far. An agent's scope is read as
+	 * it stands now, once for this check.
+	 */
+	private boolean scopeOrHeldCovers(RequestContext ctx, AString resource, AString ability, AString destination) {
+		AVector<ACell> scope = ctx.scopeFor(resource);
+		if (scope == null) return true;
 		if (crossUserAllows(ctx, resource, ability, destination)) return true;
-		return ctx.grantsDenial(resource, ability, destination) == null;
+		return ctx.denialUnder(scope, resource, ability, ctx.getUserDID(), destination) == null;
 	}
 
 	/**
@@ -4040,14 +4582,83 @@ public class Engine {
 
 	/** As above for a use that sends a value to {@code destination}. */
 	public void requireAuthority(RequestContext ctx, AString resource, AString ability, AString destination) {
-		if (ctx != null && ctx.getJob() instanceof VenueJob job) job.requireAccount();
-		if (ctx != null) venueState.users().requireNotDeleted(ctx.getUserDID());
+		requireStanding(ctx);
+		if (ctx != null && ctx.hasSeparateAuthority()) {
+			requireAuthority(ctx.authorityContext(), ctx.inNamespace(resource), ability, destination);
+			return;
+		}
 		if (authorityCovers(ctx, resource, ability, destination)) return;
+		if (ctx != null && isAnothers(ctx, resource)) throw anothersDenial(ctx, resource, ability);
+		throw scopeDenial(ctx, resource, ability, destination);
+	}
+
+	/** The refusal of another principal's resource the request holds no rights to. */
+	private static covia.exception.AuthException anothersDenial(RequestContext ctx, AString resource, AString ability) {
+		AVector<ACell> proofs = (ctx != null) ? ctx.getProofs() : null;
+		return RequestContext.denied(ctx, "Access denied: " + ability + " on " + resource
+			+ " — accessing another user's resource requires " + ability + " rights"
+			+ ((proofs == null || proofs.isEmpty())
+				? " (no proof presented)" : " (the presented proofs do not cover it)")
+			+ (isTalkAbility(ability)
+				? "; the target's accepts policy does not admit this caller" : ""),
+			resource, ability);
+	}
+
+	/**
+	 * Requires that the request may run {@code operation}, the reference as the
+	 * caller gave it. Choosing what to run is not access to the namespace that
+	 * publishes it: the operation runs with the request's own authority, and
+	 * reading its definition is checked when it is resolved. So the request's
+	 * scope, or a grant it presents, must cover {@code invoke} on the reference,
+	 * whoever publishes it.
+	 *
+	 * @throws covia.exception.AuthException when neither covers it
+	 */
+	public void requireInvoke(RequestContext ctx, AString operation) {
+		requireStanding(ctx);
+		if (ctx != null && ctx.hasSeparateAuthority()) {
+			// A reference, checked as given against the authority's scope.
+			requireInvoke(ctx.authorityContext(), operation);
+			return;
+		}
+		if (ctx != null && scopeOrHeldCovers(ctx, operation, Abilities.INVOKE, null)) return;
+		throw scopeDenial(ctx, operation, Abilities.INVOKE, null);
+	}
+
+	/** The refusal of {@code (resource, ability)} that the request's scope does not cover. */
+	private static covia.exception.AuthException scopeDenial(RequestContext ctx, AString resource, AString ability,
+			AString destination) {
 		String denial = (ctx != null && ctx.getCaps() != null) ? ctx.grantsDenial(resource, ability, destination) : null;
-		throw new covia.exception.AuthException(denial != null ? denial
+		return RequestContext.denied(ctx, denial != null ? denial
 			: "Capability denied: requires " + (ability != null ? ability : "(any ability)")
 				+ " on " + (resource != null ? resource : "(any)")
-				+ (ctx == null || ctx.getCallerDID() == null ? " (authenticate to act as an identity)" : ""));
+				+ (ctx == null || ctx.getCallerDID() == null ? " (authenticate to act as an identity)" : ""),
+			resource, ability);
+	}
+
+	/**
+	 * What every request must still have, even where it acts of right: an
+	 * account that has not been deleted, and, for work in a job, the job's
+	 * account as it was when the job began.
+	 *
+	 * @throws AuthException when the request's account is gone
+	 */
+	public void requireStanding(RequestContext ctx) {
+		if (ctx != null && ctx.getJob() instanceof VenueJob job) job.requireAccount();
+		if (ctx != null) venueState.users().requireNotDeleted(ctx.getUserDID());
+		// A separate authority acts only while its own account stands too.
+		if (ctx != null && ctx.hasSeparateAuthority()) {
+			venueState.users().requireNotDeleted(ctx.authorityContext().getUserDID());
+		}
+	}
+
+	/**
+	 * Whether the request is the venue acting directly as itself: the venue's
+	 * own DID, not one of its agents. No delegation makes another caller this.
+	 */
+	public boolean isDirectVenue(RequestContext ctx) {
+		return ctx != null && getDIDString().equals(ctx.getCallerDID())
+			&& ctx.getExecutionScope().agentId() == null;
 	}
 
 	/** Opening of every {@link #requireVenueAuthority} denial. */
@@ -4055,10 +4666,8 @@ public class Engine {
 
 	/**
 	 * Venue-administration gate. Administrative operations (user provisioning,
-	 * adapter and module lifecycle) are venue-owned: a null capability scope is
-	 * deliberately NOT enough. Only direct execution as the venue identity, or
-	 * a presented venue-rooted delegation covering
-	 * {@code <venue DID>/<resource>} for {@code ability}, authorises them.
+	 * adapter and module lifecycle) are the venue's, authorised by the rule for
+	 * every resource ({@link #hasVenueAuthority}).
 	 *
 	 * @param ctx Request context
 	 * @param resource Venue-relative resource segment (e.g. {@code "users"}, {@code "adapters"})
@@ -4066,13 +4675,21 @@ public class Engine {
 	 * @throws covia.exception.AuthException when the caller lacks the authority
 	 */
 	public void requireVenueAuthority(RequestContext ctx, String resource, AString ability) {
-		AString caller = (ctx != null) ? ctx.getCallerDID() : null;
-		if (getDIDString().equals(caller) && ctx.getExecutionScope().agentId() == null) return;
-		AString full = Strings.create(getDIDString() + "/" + resource);
-		if (crossUserAllows(ctx, full, ability)) return;
+		if (hasVenueAuthority(ctx, resource, ability)) return;
 		throw new covia.exception.AuthException(VENUE_AUTHORITY_DENIED + ": requires " + ability
-			+ " on " + full + " from the venue (call as the venue or present "
-			+ "a venue-issued delegation)");
+			+ " on " + getDIDString() + "/" + resource + " from the venue (call as the venue, as one of "
+			+ "its agents whose caps include it, or present a venue-issued delegation)");
+	}
+
+	/**
+	 * Whether the request's authority covers {@code <venue DID>/<resource>} for
+	 * {@code ability} ({@link #authorityCovers}): the venue itself; one of its
+	 * agents within its caps, so an agent its owner made unrestricted holds all
+	 * of it; or a request presenting a venue-rooted delegation. The check behind
+	 * {@link #requireVenueAuthority}.
+	 */
+	public boolean hasVenueAuthority(RequestContext ctx, String resource, AString ability) {
+		return authorityCovers(ctx, Strings.create(getDIDString() + "/" + resource), ability);
 	}
 
 	/**
@@ -4088,21 +4705,152 @@ public class Engine {
 	}
 
 	/**
-	 * Outbound-target policy for every adapter that dials a caller-chosen URL
-	 * (an MCP server, an A2A peer, a model endpoint): the http adapter's SSRF
-	 * guard with the operator's allow and block lists, so no adapter can reach
-	 * what a direct HTTP call could not (#234). Fails closed when the http
-	 * adapter is absent.
+	 * Outbound-target policy for a URL the venue dials that no caller vouches
+	 * for (a did:web document a presented token names): the http adapter's SSRF
+	 * guard with the operator's allow and block lists, so nothing can reach what
+	 * a direct HTTP call could not (#234). Fails closed when the http adapter is
+	 * absent, or when the JVM does not resolve names through
+	 * {@link covia.adapter.GuardedResolver}. A target a caller chose goes through
+	 * {@link #requireSafeUrl(RequestContext, String)}.
 	 *
 	 * @param url URL string to validate
-	 * @throws IllegalArgumentException naming the rule when the URL is refused
-	 * @throws IllegalStateException when the http adapter is not registered
+	 * @throws InvalidInputException naming the rule when the URL is refused
+	 * @throws ConfigurationException when the guard cannot be enforced
 	 */
 	public void requireSafeUrl(String url) {
-		if (!(getAdapter("http") instanceof HTTPAdapter http)) {
-			throw new IllegalStateException("SSRF validation unavailable: http adapter not registered");
+		ssrfGuard().requireSafeUrl(url);
+	}
+
+	/**
+	 * Outbound-target policy for every caller-chosen URL the venue dials (an MCP
+	 * server, an A2A peer, a model endpoint): {@link #requireSafeUrl(String)},
+	 * unless the caller may have the venue dial anywhere
+	 * ({@link #outboundUnrestricted}).
+	 *
+	 * @param ctx The caller that chose the target
+	 * @param url URL string to validate
+	 * @throws InvalidInputException naming the rule when the URL is refused
+	 * @throws ConfigurationException when the guard cannot be enforced
+	 */
+	public void requireSafeUrl(RequestContext ctx, String url) {
+		outboundUrl(ctx, url);
+	}
+
+	/** Normalises a caller-chosen HTTP URL before the outbound guard. Adapters
+	 * must use the returned URL for both credential checks and transport. */
+	public String outboundUrl(RequestContext ctx, String url) {
+		String normalized = covia.utils.HTTPURLs.normalize(url).toString();
+		if (!outboundUnrestricted(ctx)) requireSafeUrl(normalized);
+		return normalized;
+	}
+
+	/**
+	 * {@link #requireSafeUrl(RequestContext, String)} for a caller-chosen target
+	 * that is a host rather than a URL (a Convex peer): the same guard and lists,
+	 * without the scheme.
+	 *
+	 * @param ctx The caller that chose the target
+	 * @param host Host name or address literal
+	 * @throws InvalidInputException naming the rule when the host is refused
+	 * @throws ConfigurationException when the guard cannot be enforced
+	 */
+	public void requireSafeHost(RequestContext ctx, String host) {
+		if (!outboundUnrestricted(ctx)) ssrfGuard().requireSafeHost(host);
+	}
+
+	/** Venue-relative resource on which {@link Abilities#OUTBOUND_ANY} is delegated. */
+	public static final String OUTBOUND = "outbound";
+
+	/**
+	 * Whether the caller may have the venue dial any target, unchecked by the
+	 * outbound guard: whoever has venue authority for
+	 * {@link Abilities#OUTBOUND_ANY} on {@code <venue DID>/outbound}, which an
+	 * unrestricted agent of the venue's has. Every other caller is checked.
+	 */
+	public boolean outboundUnrestricted(RequestContext ctx) {
+		return hasVenueAuthority(ctx, OUTBOUND, Abilities.OUTBOUND_ANY);
+	}
+
+	/** Opening of the refusal for a venue reached by a transport the outbound guard cannot check. */
+	public static final String UNGUARDED_VENUE_TRANSPORT = "Venue transport cannot be checked by the outbound guard: ";
+
+	/**
+	 * Connects to a venue this venue dials on a caller's behalf — a grid or
+	 * remote-agent target, an orchestration step's venue, the publisher of a
+	 * remote asset reference. Whatever spelled the target (a URL or a DID), the
+	 * address the connection will dial passes {@link #requireSafeUrl(String)}
+	 * before any request is made, and a transport other than HTTP is refused,
+	 * unless the caller may have the venue dial anywhere
+	 * ({@link #outboundUnrestricted}).
+	 *
+	 * @param ctx The caller that chose the target
+	 * @param spec Venue URL or DID
+	 * @param auth Authentication the connection presents
+	 * @return The connected venue, not yet contacted
+	 * @throws IllegalArgumentException when the spec is malformed
+	 * @throws InvalidInputException when its address is refused or its transport cannot be checked
+	 * @throws ConfigurationException when the guard cannot be enforced
+	 */
+	public Venue connectVenue(RequestContext ctx, String spec, VenueAuth auth) {
+		return connectVenue(spec, null, auth, outboundUnrestricted(ctx));
+	}
+
+	/**
+	 * {@link #connectVenue(RequestContext, String, VenueAuth)} for a caller whose
+	 * standing was decided when the connection was first authorised, such as a
+	 * recovered job's, to a venue whose DID may already be known.
+	 *
+	 * @param venueDID The target's DID, as the hop proved it; credentials the
+	 *        connection signs are audienced to it. Null when none is signed.
+	 * @param unrestricted Whether that caller could have the venue dial anywhere
+	 */
+	public Venue connectVenue(String spec, String venueDID, VenueAuth auth, boolean unrestricted) {
+		Venue venue = Grid.connect(spec, venueDID, auth);
+		if (unrestricted) return venue;
+		if (!(venue instanceof VenueHTTP http)) {
+			throw new InvalidInputException(UNGUARDED_VENUE_TRANSPORT + spec);
 		}
-		http.requireSafeUrl(url);
+		requireSafeUrl(http.getBaseURI().toString());
+		return venue;
+	}
+
+	private final covia.venue.auth.VenueProofs venueProofs;
+
+	/**
+	 * Why a credential audienced to {@code did} may not be sent to the venue
+	 * reached at {@code target}, or null when it may: the venue there is
+	 * proven to hold {@code did} by one of the operator's proof mechanisms,
+	 * tried in order ({@code auth.venueProof}). A mechanism dials the target
+	 * only through {@link #connectVenue}, so the outbound guard applies unless
+	 * the caller may have the venue dial anywhere. With
+	 * {@code auth.requireVenueProof} off, every target may.
+	 *
+	 * @param ctx The caller that chose the target
+	 * @param target Venue URL or DID
+	 * @param did The DID the credential is audienced to
+	 * @return null, or every mechanism's reason for not proving {@code did}
+	 */
+	public String venueProof(RequestContext ctx, String target, String did) {
+		return venueProof(target, did, outboundUnrestricted(ctx));
+	}
+
+	/**
+	 * {@link #venueProof(RequestContext, String, String)} for a caller whose
+	 * standing was decided when the connection was first authorised, such as
+	 * a recovered job's.
+	 *
+	 * @param unrestricted Whether that caller could have the venue dial anywhere
+	 */
+	public String venueProof(String target, String did, boolean unrestricted) {
+		if (!config().isRequireVenueProof()) return null;
+		return venueProofs.prove(target, did, () -> connectVenue(target, null, VenueAuth.none(), unrestricted));
+	}
+
+	private HTTPAdapter ssrfGuard() {
+		if (!(getAdapter("http") instanceof HTTPAdapter http)) {
+			throw new ConfigurationException("SSRF validation unavailable: http adapter not registered");
+		}
+		return http;
 	}
 
 	// ========== Secret resolution ==========
@@ -4111,30 +4859,34 @@ public class Engine {
 	 *  {@code s/NAME} or {@code /s/NAME} (the caller's own), or {@code <did>/s/NAME}
 	 *  (another principal's, usable under a {@code secret/use} grant). */
 	public static boolean isSecretRef(String value) {
-		return value != null && (value.startsWith("s/") || value.startsWith("/s/")
-			|| (value.startsWith("did:") && value.contains("/s/")));
+		if (value == null) return false;
+		String name = CapabilityChecker.canonicalResource(value, null);
+		return name.startsWith("s/") || (name.startsWith("did:") && name.contains("/s/"));
 	}
 
 	/** The secret name a reference points at: {@code s/} or {@code /s/} stripped, a bare name unchanged. */
 	public static String secretName(String secretRef) {
-		return secretRef.startsWith("/s/") ? secretRef.substring(3)
-			: secretRef.startsWith("s/") ? secretRef.substring(2)
-			: secretRef;
+		String name = CapabilityChecker.canonicalResource(secretRef, null);
+		return name.startsWith("s/") ? name.substring(2) : name;
 	}
 
 	/**
 	 * Resolves a secret reference for use, under the caller's authority.
 	 *
-	 * <p>A user, and the agents acting in its namespace, use the user's own
-	 * secrets ({@code s/NAME}, {@code /s/NAME} or a bare {@code NAME}) as of
-	 * right. Using anyone else's, named {@code <did>/s/NAME}, is an action on
-	 * that resource requiring {@link Abilities#SECRET_USE}, checked here and
-	 * nowhere else: a presented proof, or the public scope for the public store,
-	 * whose operator-provisioned secrets are nobody's own. A grant may be bound to a
-	 * destination with {@code nb.url}; {@link #resolveSecret(String,
+	 * <p>Using a secret is an action on {@code <owner>/s/NAME} requiring
+	 * {@link Abilities#SECRET_USE}, checked here and nowhere else, whoever named
+	 * it: the caller in its input, or an operation in its metadata. The owner's
+	 * own secrets ({@code s/NAME}, {@code /s/NAME} or a bare {@code NAME}) are
+	 * covered as the rest of its namespace is: of right for the owner, and for
+	 * an agent as far as its caps reach (UCAN.md §5.4). Anyone else's, named
+	 * {@code <did>/s/NAME}, needs a presented proof, or the public scope for the
+	 * public store, whose operator-provisioned secrets are nobody's own. A grant
+	 * may be bound to a destination with {@code nb.url}; {@link #resolveSecret(String,
 	 * RequestContext, String)} is the form adapters use when they know where the
 	 * value is going, and a use with no destination never satisfies such a
-	 * caveat. The venue's own secrets are its configured store and its process
+	 * caveat. An operation that uses a secret under its owner's authority, such
+	 * as a credential an operator configured, resolves it with that owner's
+	 * context. The venue's own secrets are its configured store and its process
 	 * environment. There is no fallback of any kind.</p>
 	 *
 	 * @param secretRef Secret name, {@code s/NAME} or {@code <did>/s/NAME}
@@ -4154,42 +4906,83 @@ public class Engine {
 	 */
 	public String resolveSecret(String secretRef, RequestContext ctx, String destination) {
 		if (secretRef == null || ctx == null || ctx.getUserDID() == null) return null;
-		AString owner = ctx.getUserDID();
-		String name;
-		if (secretRef.startsWith("did:")) {
-			// <did>/s/NAME: the owner is the whole DID, never a path under one.
-			int idx = secretRef.indexOf("/s/");
-			if (idx < 0 || secretRef.lastIndexOf('/', idx - 1) >= 0) return null;
-			owner = Strings.create(secretRef.substring(0, idx));
-			name = secretRef.substring(idx + 3);
-		} else {
-			name = secretName(secretRef);
-		}
+		AString owner = secretOwner(secretRef, ctx.getUserDID());
+		if (owner == null) return null;
+		AString named = ownerOf(Strings.create(secretRef));
+		String name = (named == null) ? secretName(secretRef)
+			: CapabilityChecker.canonicalResource(secretRef, null).substring(named.toString().length() + 3);
 		if (name.isEmpty() || name.indexOf('/') >= 0) return null;   // one secret name, as secret:set requires
-		// A user's own secrets are its own to use, and so its agents' (UCAN.md
-		// §5.1). The public principal's store is provisioned by the operator and
-		// nobody's own, so it needs a grant like any other principal's.
-		if (!owner.equals(ctx.getUserDID()) || isPublicPrincipal(owner)) {
-			requireLocalAccess(ctx, Strings.create(owner + "/s/" + name), Abilities.SECRET_USE,
-				destination != null ? Strings.create(destination) : null);
-		}
+		requireLocalAccess(ctx, Strings.create(owner + "/s/" + name), Abilities.SECRET_USE,
+			destination != null ? Strings.create(destination) : null);
 		return decryptSecret(owner, name);
 	}
+
+	/**
+	 * Whether {@code secretRef} names a secret in the caller's own store, the
+	 * caller being the store's user or one of its agents. False for another
+	 * principal's store, the public store and a malformed reference. An
+	 * operation whose result would leave the caller holding material derived
+	 * from a secret accepts only the caller's own: a {@code secret/use} grant
+	 * is use without seeing the value, never possession. Using the secret is
+	 * still checked where it is resolved.
+	 */
+	public boolean isOwnSecretRef(String secretRef, RequestContext ctx) {
+		if (secretRef == null || ctx == null || ctx.getUserDID() == null) return false;
+		AString owner = secretOwner(secretRef, ctx.getUserDID());
+		return owner != null && isOwnSecret(owner, ctx.authorityContext());
+	}
+
+	/**
+	 * Whether {@code secretRef} names a secret the operator provisions: one in
+	 * the venue's own store (its configured secrets and process environment)
+	 * or the public principal's. A credential from there that a remote service
+	 * refuses is the operator's to fix, not the caller's.
+	 */
+	public boolean isOperatorSecretRef(String secretRef, RequestContext ctx) {
+		if (secretRef == null || ctx == null || ctx.getUserDID() == null) return false;
+		AString owner = secretOwner(secretRef, ctx.getUserDID());
+		return owner != null && (isVenuePrincipal(owner) || isPublicPrincipal(owner));
+	}
+
+	/** The DID whose store {@code secretRef} names: {@code caller} for the own
+	 *  forms, the whole DID of {@code <did>/s/NAME}; null when malformed. */
+	private static AString secretOwner(String secretRef, AString caller) {
+		AString owner = ownerOf(Strings.create(secretRef));
+		if (owner == null) return caller;
+		// <did>/s/NAME: the owner is the whole DID, never a path under one.
+		return CapabilityChecker.canonicalResource(secretRef, null).startsWith("/s/", owner.toString().length()) ? owner : null;
+	}
+
+	/** Whether {@code owner}'s store is the caller's own: the caller is the user
+	 *  or one of its agents. A delegate acting for the user ({@code user/sudo})
+	 *  works in the user's namespace but is neither. The public principal's
+	 *  store is provisioned by the operator and nobody's own. */
+	private boolean isOwnSecret(AString owner, RequestContext ctx) {
+		if (!owner.equals(ctx.getUserDID()) || isPublicPrincipal(owner)) return false;
+		// By the caller, not the namespace: a delegate's namespace is the user's too.
+		AString caller = ctx.getCallerDID();
+		return owner.equals(caller) || agentIdIn(owner, caller) != null;
+	}
+
+	/** Refusal for a stored secret the venue cannot decrypt; the secret's name follows. */
+	public static final String SECRET_UNREADABLE = "Secret cannot be decrypted: it is damaged or was sealed under a key "
+		+ "this venue no longer holds. Its owner can set it again with secret:set: ";
 
 	/** One user's secret of one name, decrypted; null when the user or the secret
 	 *  is absent. The venue's own secrets also come from its process environment. */
 	private String decryptSecret(AString userDID, String name) {
-		User user = venueState.users().get(userDID);
+		User user = venueState.users().user(userDID);
 		if (user == null) return isVenuePrincipal(userDID) ? environmentSecret(name) : null;
 		AString value;
 		try {
 			value = user.secrets().decrypt(Strings.create(name), SecretStore.keys(keyPair));
-		} catch (Exception e) {
+		} catch (RuntimeException e) {
 			// A decrypt/key failure is NOT the same as "secret not set". Collapsing
 			// both to null masked #91-class identity/key misconfigurations as
-			// absence. Surface it loudly instead. Values are never logged.
-			log.warn("Secret '{}' resolution errored for {}: {}", name, userDID, e.toString());
-			throw new CoviaException("Secret resolution failed for '" + name + "'", e);
+			// absence. The operator is told too, as a lost venue key is theirs to
+			// restore. Values are never logged.
+			log.warn("Secret '{}' of {} cannot be decrypted: {}", name, userDID, e.toString());
+			throw new NotSupportedException(SECRET_UNREADABLE + name);
 		}
 		if (value != null) return value.toString();
 		return isVenuePrincipal(userDID) ? environmentSecret(name) : null;   // null == genuinely absent

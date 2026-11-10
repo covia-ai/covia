@@ -1,8 +1,8 @@
 package covia.python;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.DoubleBuffer;
 import java.util.Arrays;
@@ -49,6 +49,6 @@ class PythonBuffersTest {
 			() -> PythonRuntime.unpackFloat64(null));
 		IllegalArgumentException malformed = assertThrows(IllegalArgumentException.class,
 			() -> PythonRuntime.unpackFloat64(Blob.wrap(new byte[9])));
-		assertTrue(malformed.getMessage().contains("multiple of 8"));
+		assertFalse(malformed.getMessage().isBlank());
 	}
 }

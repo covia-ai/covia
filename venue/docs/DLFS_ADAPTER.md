@@ -8,9 +8,11 @@ are the governed operation surfaces used by agents.
 
 1. **DLFS provider** — mutable, path-addressed CRDT filesystem state in the
    venue lattice. Each user's drives are signed with that user's DLFS key.
-2. **WebDAV** — authenticated streaming transport mounted at `/dlfs/` when
-   enabled. It is appropriate for large byte uploads/downloads, not structured
-   agent operations.
+2. **WebDAV** — streaming transport mounted at `/dlfs/` when enabled. It is
+   appropriate for large byte uploads/downloads, not structured agent
+   operations. The venue does not authenticate these requests: each acts as
+   the venue's public identity, outside the adapters' checks, so whoever
+   enables WebDAV controls access in front of `/dlfs/`.
 3. **Adapters** — `file`, `dlfs`, and `vault`, all using the same
    backend-neutral `FileOperations` implementation for shared file behavior.
 
@@ -39,7 +41,7 @@ configured-root discovery. DLFS additionally exposes drive lifecycle operations.
 - `bytes`: base64 `content` with `encoding: "base64"`.
 - `json`: parsed `value`.
 - `auto`: UTF-8 `content` for text. For binary DLFS content it returns an
-  authenticated WebDAV `url` when that URL addresses the caller's own drive;
+  WebDAV `url` when that URL addresses the caller's own drive;
   otherwise it returns inline base64.
 
 ## DLFS addressing and authority
@@ -58,6 +60,32 @@ under its custodial key occurs only after that check.
 
 Paths are normalised and jailed at the drive root before filesystem access.
 Drive names are one non-empty segment and cannot contain `/`, `\`, or `:`.
+
+A drive the caller names must exist: only `createDrive` creates one (over
+WebDAV, `MKCOL /dlfs/<drive>/`). Every other operation, writes included, fails
+with no such drive on a drive that is absent or deleted, and leaves the owner's
+drives and keys as they were; over WebDAV it answers 404. This holds for `dlfs`
+operations, content references to `dlfs/<drive>/<path>`, and a caller's
+`destination`.
+
+Creating an entry changes the directory that holds it. A write that creates a
+file or directory therefore needs `crud/write` on that directory, or on the
+nearest one that exists when several levels are missing, as well as on the
+entry. A grant over an existing file changes it but creates nothing. Likewise,
+creating a drive adds it to its owner's drives, so `createDrive` needs
+`crud/write` over `[<owner>/]dlfs`; a grant over the drive alone does not
+create it. Operations name the drive in `drive`: a bare name, or
+`<ownerDID>/<drive>` for another user's drive under their grant. `createDrive`
+and `deleteDrive` also accept `name` as an alias for a bare name.
+
+A component that names its own drive creates it, as the drive's owner, with
+its first write there. These drives are Vault's configured drive, a DLFS-backed
+`file` root (with its subpath), and the drive a messaging provider or speech
+stores media in by default (`<owner>/dlfs/<provider>/`). Like a user's
+namespaces, such a root counts as present. The write is authorised as usual:
+a new file at the drive's root needs `crud/write` over the drive. Only then is
+the root created. Messaging and speech go through `DLFSAdapter.ensureDrive`.
+Reads never create a drive.
 
 ## File adapter
 
@@ -79,7 +107,8 @@ injects the operator-configured `adapters.vault.drive`, which defaults to
 `vault`. Runtime behavior delegates through DLFS's typed operation boundary;
 there is no separate vault filesystem implementation or permission model.
 
-The configured vault drive is created on first use. Enabling Vault without a
+Vault creates its configured drive with its first write; until then a read
+finds no drive. Enabling Vault without a
 declared encrypted Etch policy emits an operator warning because DLFS content
 may otherwise be stored unencrypted at rest.
 

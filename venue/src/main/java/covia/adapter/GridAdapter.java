@@ -1,15 +1,10 @@
 package covia.adapter;
 
-import java.util.ArrayList;
-import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
-import convex.auth.did.DIDVerifier;
 import convex.auth.ucan.Capability;
-import convex.auth.ucan.UCAN;
-import convex.auth.ucan.UCANValidator;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
@@ -21,6 +16,11 @@ import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.api.Fields;
+import covia.exception.InvalidDefinitionException;
+import covia.exception.InvalidInputException;
+import covia.exception.NotSupportedException;
+import covia.exception.ResponseException;
+import covia.exception.UnavailableException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.grid.Venue;
@@ -28,7 +28,6 @@ import covia.venue.LocalVenue;
 import covia.venue.RequestContext;
 import covia.venue.RemoteJobs;
 import covia.grid.client.VenueHTTP;
-import covia.venue.UcanJwtValidator;
 
 /**
  * Adapter that proxies Covia grid operations to the local engine or a remote venue.
@@ -70,21 +69,20 @@ public class GridAdapter extends AAdapter {
 
 	@Override
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
-		requireInvoke(ctx);
 		String gridOp = getSubOperation(meta);
 		if (("run".equals(gridOp) || ("jobResult".equals(gridOp) && parseTimeoutMs(input) <= 0))
 				&& resolveVenue(meta, input) != null) {
 			return engine.jobs().invokeInternal(meta, input, ctx);
 		}
 		if (gridOp == null) {
-			return CompletableFuture.failedFuture(new IllegalArgumentException("Invalid grid operation: no sub-operation in metadata"));
+			return CompletableFuture.failedFuture(new InvalidDefinitionException("Invalid grid operation: no sub-operation in metadata"));
 		}
 		return switch (gridOp) {
 			case "run"       -> invokeRun(ctx, meta, input);
 			case "invoke"    -> invokeAsync(ctx, meta, input);
 			case "jobStatus" -> invokeJobStatus(ctx, meta, input);
 			case "jobResult" -> invokeJobResult(ctx, meta, input);
-			default          -> CompletableFuture.failedFuture(new IllegalArgumentException("Unrecognised grid operation: " + gridOp));
+			default          -> CompletableFuture.failedFuture(new NotSupportedException("Unrecognised grid operation: " + gridOp));
 		};
 	}
 
@@ -93,7 +91,6 @@ public class GridAdapter extends AAdapter {
 		String operation = getSubOperation(meta);
 		if (("run".equals(operation) || ("jobResult".equals(operation) && parseTimeoutMs(input) <= 0))
 				&& resolveVenue(meta, input) != null) {
-			requireInvoke(ctx);
 			job.start(() -> delegate(job, ctx, meta, input));
 		} else {
 			super.invoke(job, ctx, meta, input);
@@ -104,9 +101,12 @@ public class GridAdapter extends AAdapter {
 		AString operation = RT.ensureString(RT.getIn(input, Fields.OPERATION));
 		boolean existing = "jobResult".equals(getSubOperation(RT.ensureMap(meta)));
 		Blob existingID = existing ? parseJobId(RT.getIn(input, Fields.ID)) : null;
-		if (existing && existingID == null) throw new IllegalArgumentException("'id' is required");
-		if (!existing && operation == null) throw new IllegalArgumentException("'operation' is required");
+		if (existing && existingID == null) throw new InvalidInputException("'id' is required");
+		if (!existing && operation == null) throw new InvalidInputException("'operation' is required");
+		// Observing an existing job only reads; submitting one sends
+		if (!existing) engine.remoteJobs().requireNotClosing();
 		AString target = resolveVenue(meta, input);
+		if (!existing) engine.jobs().requireRemoteInvoke(operation, RT.getIn(input, Fields.INPUT), ctx);
 		VenueConnection remote = remoteConnection(ctx, target, input);
 		RemoteJobs observer = engine.remoteJobs();
 		observer.prepare(job, "covia", target.toString(), remote.credentials(), !existing);
@@ -132,7 +132,7 @@ public class GridAdapter extends AAdapter {
 			} catch (RuntimeException | Error failure) {
 				observer.submissionUnknown(job, failure);
 			} finally {
-				ACell id = RemoteJobs.descriptor(job).get(RemoteJobs.REMOTE_ID);
+				AString id = RemoteJobs.remoteId(job);
 				if (id != null) watch(job, remote.venue(), Job.parseID(id));
 			}
 			});
@@ -143,17 +143,44 @@ public class GridAdapter extends AAdapter {
 		engine.remoteJobs().observe(job, () -> venue.getJobStatus(id), snapshot -> applyRemote(job, snapshot));
 	}
 
+	/** A running job's remote job: what cancelling the local job cancels. */
+	private record RemoteCall(Venue venue, Blob id) { }
+
+	/** The remote job each running job is watching, by local job id. */
+	private final java.util.concurrent.ConcurrentHashMap<Blob, RemoteCall> remoteCalls =
+		new java.util.concurrent.ConcurrentHashMap<>();
+
+	/** Records the remote job {@code job} runs on. A job already cancelled cancels it at once. */
 	private void bindCancellation(Job job, Venue venue, Blob id) {
-		job.setCancelHook(() -> engine.remoteJobs().attemptCancellation(job, id.toHexString(),
-			() -> RemoteJobs.cancellationResult(id, venue.cancelJob(id))));
+		Blob localId = job.getID();
+		RemoteCall call = new RemoteCall(venue, id);
+		remoteCalls.put(localId, call);
+		if (Status.CANCELLED.equals(job.getStatus())) {
+			cancelRemote(job);
+			return;
+		}
+		job.future().whenComplete((result, error) -> remoteCalls.remove(localId, call));
+	}
+
+	private void cancelRemote(Job job) {
+		RemoteCall call = remoteCalls.remove(job.getID());
+		if (call == null) return;
+		engine.remoteJobs().attemptCancellation(job, call.id().toHexString(),
+			() -> RemoteJobs.cancellationResult(call.id(), call.venue().cancelJob(call.id())));
+	}
+
+	/** Cancelling a local job asks its venue to cancel the remote one. */
+	@Override
+	public void stop(Job job) {
+		cancelRemote(job);
+		super.stop(job);
 	}
 
 	private void applyRemote(Job job, AMap<AString, ACell> snapshot) {
 		AString status = RT.ensureString(snapshot.get(Fields.STATUS));
-		if (status == null) throw new IllegalArgumentException("Remote Job has no status");
-		AMap<AString, ACell> record = RemoteJobs.descriptor(job);
-		Blob expected = Job.parseID(record.get(RemoteJobs.REMOTE_ID));
-		if (!expected.equals(Job.parseID(snapshot.get(Fields.ID)))) throw new IllegalArgumentException("Remote Job ID mismatch");
+		if (status == null) throw new ResponseException("Remote Job has no status");
+		Blob expected = Job.parseID(RemoteJobs.remoteId(job));
+		if (expected == null || !expected.equals(Job.parseID(snapshot.get(Fields.ID)))) throw new ResponseException("Remote Job ID mismatch");
 		if (Status.COMPLETE.equals(status)) {
 			job.completeWith(snapshot.get(Fields.OUTPUT), data -> RemoteJobs.observed(data, status));
 			return;
@@ -162,7 +189,7 @@ public class GridAdapter extends AAdapter {
 			|| Status.PAUSED.equals(status) || Status.INPUT_REQUIRED.equals(status)
 			|| Status.AUTH_REQUIRED.equals(status) || Status.FAILED.equals(status)
 			|| Status.CANCELLED.equals(status) || Status.REJECTED.equals(status))) {
-			throw new IllegalArgumentException("Invalid remote Job status");
+			throw new ResponseException("Invalid remote Job status");
 		}
 		// Local processing is STARTED even while the remote worker is queued.
 		AString localStatus = Status.PENDING.equals(status) ? Status.STARTED : status;
@@ -174,13 +201,15 @@ public class GridAdapter extends AAdapter {
 	}
 
 	@Override public void recoverJob(Job job) {
-		AMap<AString, ACell> record = RemoteJobs.descriptor(job);
-		if (record == null) { super.recoverJob(job); return; }
-		ACell id = record.get(RemoteJobs.REMOTE_ID);
+		AMap<AString, ACell> kept = engine.remoteJobs().kept(job);
+		if (kept == null) { super.recoverJob(job); return; }
+		AString id = RemoteJobs.remoteId(job);
 		if (id == null) { engine.remoteJobs().submissionUnknown(job, null); return; }
 		try {
-			Venue venue = restoreConnection(RT.ensureString(record.get(RemoteJobs.TARGET)), engine.remoteJobs().credentials(job));
-			if (convex.core.data.prim.CVMBool.TRUE.equals(record.get(RemoteJobs.OWNS_REMOTE))) {
+			AMap<AString, ACell> saved = engine.remoteJobs().connection(job);
+			if (!VenueConnection.resumable(saved)) { engine.remoteJobs().credentialNotKept(job); return; }
+			Venue venue = restoreConnection(RT.ensureString(kept.get(RemoteJobs.TARGET)), saved);
+			if (convex.core.data.prim.CVMBool.TRUE.equals(kept.get(RemoteJobs.OWNS_REMOTE))) {
 				bindCancellation(job, venue, Job.parseID(id));
 			}
 			watch(job, venue, Job.parseID(id));
@@ -188,7 +217,7 @@ public class GridAdapter extends AAdapter {
 	}
 
 	@Override public void suspendJob(Job job) {
-		if (RemoteJobs.descriptor(job) != null) engine.remoteJobs().suspend(job);
+		if (engine.remoteJobs().kept(job) != null) engine.remoteJobs().suspend(job);
 		else super.suspendJob(job);
 	}
 
@@ -198,13 +227,14 @@ public class GridAdapter extends AAdapter {
 	private CompletableFuture<ACell> invokeRun(RequestContext ctx, ACell meta, ACell input) {
 		AString targetOperation = RT.ensureString(RT.getIn(input, Fields.OPERATION));
 		if (targetOperation == null) {
-			return CompletableFuture.failedFuture(new IllegalArgumentException(
+			return CompletableFuture.failedFuture(new InvalidInputException(
 				"'operation' is required; pass an operation path or asset hash"));
 		}
 
         ACell operationInput = RT.getIn(input, Fields.INPUT);
         AString venueSpec = resolveVenue(meta, input);
 
+        if (venueSpec != null) engine.jobs().requireRemoteInvoke(targetOperation, operationInput, ctx);
         Venue venue = selectVenue(ctx, venueSpec, input);
 
 		return venue.run(targetOperation.toString(), operationInput);
@@ -216,7 +246,7 @@ public class GridAdapter extends AAdapter {
 	private CompletableFuture<ACell> invokeAsync(RequestContext ctx, ACell meta, ACell input) {
 		AString targetOperation = RT.ensureString(RT.getIn(input, Fields.OPERATION));
 		if (targetOperation == null) {
-			return CompletableFuture.failedFuture(new IllegalArgumentException(
+			return CompletableFuture.failedFuture(new InvalidInputException(
 				"'operation' is required; pass an operation path or asset hash"));
 		}
 
@@ -227,7 +257,9 @@ public class GridAdapter extends AAdapter {
         // (tool-call arguments at the MCP and provider boundaries, #508).
         ACell operationInput = RT.getIn(input, Fields.INPUT);
         AString venueSpec = resolveVenue(meta, input);
+        if (venueSpec != null) engine.remoteJobs().requireNotClosing();
 
+        if (venueSpec != null) engine.jobs().requireRemoteInvoke(targetOperation, operationInput, ctx);
         Venue venue = selectVenue(ctx, venueSpec, input);
 
         CompletableFuture<Job> jobFuture = venue.invoke(targetOperation.toString(), operationInput);
@@ -237,7 +269,7 @@ public class GridAdapter extends AAdapter {
 	private CompletableFuture<ACell> invokeJobStatus(RequestContext ctx, ACell meta, ACell input) {
 		Blob jobId = parseJobId(RT.getIn(input, Fields.ID));
 		if (jobId == null) {
-			return CompletableFuture.failedFuture(new IllegalArgumentException(
+			return CompletableFuture.failedFuture(new InvalidInputException(
 				"'id' is required; use the job ID returned by grid:invoke"));
 		}
 
@@ -248,7 +280,7 @@ public class GridAdapter extends AAdapter {
 	private CompletableFuture<ACell> invokeJobResult(RequestContext ctx, ACell meta, ACell input) {
 		Blob jobId = parseJobId(RT.getIn(input, Fields.ID));
 		if (jobId == null) {
-			return CompletableFuture.failedFuture(new IllegalArgumentException(
+			return CompletableFuture.failedFuture(new InvalidInputException(
 				"'id' is required; use the job ID returned by grid:invoke"));
 		}
 
@@ -265,8 +297,9 @@ public class GridAdapter extends AAdapter {
 				.orTimeout(timeoutMs, TimeUnit.MILLISECONDS)
 				.exceptionallyCompose(ex -> {
 					if (ex instanceof TimeoutException || ex.getCause() instanceof TimeoutException) {
+						// The caller's wait ran out; the job itself may still finish
 						return CompletableFuture.failedFuture(
-							new TimeoutException("grid:jobResult timed out after " + timeoutMs + "ms waiting for job " + jobId.toHexString()));
+							new UnavailableException("grid:jobResult timed out after " + timeoutMs + "ms waiting for job " + jobId.toHexString()));
 					}
 					return CompletableFuture.failedFuture(ex);
 				});
@@ -278,9 +311,6 @@ public class GridAdapter extends AAdapter {
 		return 0;
 	}
 
-	/** Ability authorising an explicit {@code authenticateAs:"venue"} request. */
-	static final AString RELAY_ABILITY = Strings.intern("venue/relay");
-
 	/**
 	 * Resolves the target venue for a grid op. The operation input explicitly
 	 * chooses authentication behaviour with {@code authenticateAs}; credentials
@@ -290,9 +320,9 @@ public class GridAdapter extends AAdapter {
 	 *   <li>{@code caller}: requires a target-audienced, empty-att identity
 	 *       credential from the caller; it travels in Authorization, while only
 	 *       non-empty grants audienced to that caller travel in {@code ucans}.</li>
-	 *   <li>{@code venue}: explicitly asks this venue to authenticate as itself;
-	 *       a caller-issued {@code venue/relay} grant must authorise that request.
-	 *       Only grants audienced to this venue are forwarded.</li>
+	 *   <li>{@code venue}: this venue authenticates as itself, and only when the
+	 *       venue itself is the caller; no grant lends it to anyone else. Only
+	 *       grants audienced to this venue are forwarded.</li>
 	 * </ul>
 	 * A local target carries the complete caller context because there is no
 	 * transport boundary at which to reconstruct it.
@@ -335,6 +365,7 @@ public class GridAdapter extends AAdapter {
 		// A foreign output path is itself an explicit request to write remotely as
 		// the current caller. The identity credential authenticates that caller;
 		// its mere presence still cannot select this behaviour.
+		engine.remoteJobs().requireNotClosing();
 		Venue venue = connectRemote(ctx, venueSpec,
 			Maps.of(AUTHENTICATE_AS, Strings.create("caller")));
 		return venue.invoke("v/ops/covia/write",
@@ -342,116 +373,16 @@ public class GridAdapter extends AAdapter {
 			.thenCompose(Job::future);
 	}
 
-	/**
-	 * True when the caller has granted this venue permission to relay as itself.
-	 * This is an authorisation predicate only; callers must separately request
-	 * {@code authenticateAs:"venue"} in the grid operation input.
-	 */
-	static boolean hasRelayGrant(List<UCAN> tokens, AString caller, AString venueDID) {
-		if (tokens == null || caller == null) return false;
-		long now = System.currentTimeMillis() / 1000;
-		for (UCAN token : tokens) {
-			if (!caller.equals(token.getIssuer())) continue;      // grant must come from OUR caller
-			if (!venueDID.equals(token.getAudience())) continue;  // ...and be addressed to US
-			if (!UCANValidator.checkTemporalBounds(token, now)) continue;
-			AVector<ACell> att = token.getCapabilities();
-			if (att == null) continue;
-			for (long i = 0; i < att.count(); i++) {
-				AMap<AString, ACell> cap = RT.castMap(att.get(i));
-				if (cap == null) continue;
-				if (!caller.equals(RT.ensureString(cap.get(Capability.WITH)))) continue;
-				AString can = RT.ensureString(cap.get(Capability.CAN));
-				if (Capability.abilityCovers(can, RELAY_ABILITY)) return true;
-			}
-		}
-		return false;
-	}
-
-	/**
-	 * Filters raw tokens down to in-date, non-empty capability grants whose
-	 * audience is exactly the principal authenticated at the target. Identity
-	 * credentials never enter the grant channel. Returns raw JWT strings;
-	 * {@code tokens} is index-aligned with {@link RequestContext#getRawUcans()}.
-	 */
-	static List<String> admissibleGrants(RequestContext ctx,
-			List<UCAN> tokens, AString principal) {
-		AVector<ACell> raw = ctx.getRawUcans();
-		if (raw == null || tokens == null || principal == null) return null;
-		long now = System.currentTimeMillis() / 1000;
-		List<String> out = new ArrayList<>();
-		for (int i = 0; i < raw.count(); i++) {
-			AString jwt = RT.ensureString(raw.get(i));
-			UCAN token = (i < tokens.size()) ? tokens.get(i) : null;
-			if (jwt == null || token == null) continue;                    // unparseable → don't relay
-			if (!UCANValidator.checkTemporalBounds(token, now)) continue;  // expired → inert
-			AString aud = token.getAudience();
-			AVector<ACell> capabilities = token.getCapabilities();
-			if (aud == null || !aud.equals(principal)
-					|| capabilities == null || capabilities.isEmpty()) continue;
-			out.add(jwt.toString());
-		}
-		return out.isEmpty() ? null : out;
-	}
-
-	/** Finds the caller's explicit, target-audienced identity credential. */
-	static String identityCredential(RequestContext ctx, List<UCAN> tokens,
-			AString caller, AString targetVenueDID) {
-		AVector<ACell> raw = ctx.getRawUcans();
-		if (raw == null || tokens == null || caller == null || targetVenueDID == null) return null;
-		long now = System.currentTimeMillis() / 1000;
-		String found = null;
-		for (int i = 0; i < raw.count(); i++) {
-			AString jwt = RT.ensureString(raw.get(i));
-			UCAN token = (i < tokens.size()) ? tokens.get(i) : null;
-			if (jwt == null || token == null
-					|| !UCANValidator.checkTemporalBounds(token, now)
-					|| !caller.equals(token.getIssuer())
-					|| !targetVenueDID.equals(token.getAudience())) continue;
-			AVector<ACell> capabilities = token.getCapabilities();
-			if (capabilities == null || !capabilities.isEmpty()) continue;
-			if (found != null && !found.equals(jwt.toString())) {
-				throw new IllegalArgumentException(
-					"Multiple caller identity credentials were supplied for " + targetVenueDID);
-			}
-			found = jwt.toString();
-		}
-		return found;
-	}
-
-	/**
-	 * Parses the caller's raw transport tokens for audience/issuer inspection;
-	 * null-padded on failure so indices align with {@link RequestContext#getRawUcans()}.
-	 */
-	static List<UCAN> parsedRawUcans(RequestContext ctx, DIDVerifier verifier) {
-		AVector<ACell> raw = ctx.getRawUcans();
-		if (raw == null || raw.isEmpty()) return null;
-		List<UCAN> out = new ArrayList<>();
-		long now = System.currentTimeMillis() / 1000;
-		for (long i = 0; i < raw.count(); i++) {
-			UCAN token = null;
-			AString jwt = RT.ensureString(raw.get(i));
-			if (jwt != null) {
-				try {
-					token = UcanJwtValidator.validateJWT(jwt, now, verifier);
-				} catch (Exception e) {
-					// Defective token: null slot, grants nothing.
-				}
-			}
-			out.add(token);
-		}
-		return out;
-	}
-
     private Blob parseJobId(ACell jobIdCell) {
         if (jobIdCell == null) return null;
         try {
             Blob id = Job.parseID(jobIdCell);
             if (id == null) {
-                throw new IllegalArgumentException("Invalid job ID format: " + jobIdCell);
+                throw new InvalidInputException("Invalid job ID format: " + jobIdCell);
             }
             return id;
         } catch (IllegalArgumentException e) {
-            throw new IllegalArgumentException("Invalid job ID format: " + jobIdCell, e);
+            throw new InvalidInputException("Invalid job ID format: " + jobIdCell, e);
         }
     }
 

@@ -2,6 +2,7 @@ package covia.adapter.agent;
 
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -12,33 +13,50 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
+import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
+import covia.adapter.AgentAdapter;
 import covia.api.Fields;
+import covia.exception.FaultException;
 import covia.grid.Status;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 
 /**
- * The task boundary, shared by both harnesses. The framework's contract
- * (AGENT_SESSIONS.md §6.3) is that a picked task completes only when the
- * agent says so — {@code complete_task} / {@code fail_task}, resolved at
- * tool time through the venue op — and otherwise yields. This class owns
-	 * what that takes: two stable harness definitions; the outstanding-task
-	 * message rendered last on every
- * inference; and the resolution itself, judged by {@link Completion} against
- * the requester's strict schema (#376). The harness supplies the cycle's
- * tasks and the turn's text, and decides what a resolution means for its own
- * loop — llmagent carries on to a closing reply, goaltree ends the frame.
+ * The task boundary, shared by both harnesses (AGENT_TASKS.md). The agent
+ * settles a picked task with {@code complete_task} / {@code fail_task},
+ * resolved at tool time through the venue op, or keeps it open with
+ * {@code park_task}, which brings it back later; when it does none of these
+ * the run loop takes the cycle's reply as the task's result. This class owns
+ * what that takes: three stable harness definitions; the outstanding-task
+ * message rendered last on every inference; and the resolution itself, judged
+ * by {@link Completion} against the requester's strict schema (#376). The
+ * harness supplies the cycle's tasks and the turn's text, and decides what a
+ * resolution means for its own loop — llmagent carries on to a closing reply,
+ * goaltree ends the frame.
  */
 final class TaskTools {
 
 	static final String COMPLETE = "complete_task";
 	static final String FAIL = "fail_task";
-	static final Set<String> NAMES = Set.of(COMPLETE, FAIL);
+	static final String PARK = "park_task";
+	static final String NO_TASK = "Error: no task in scope — %s resolves the task this cycle was started for. Reply normally to chat messages.";
+	static final Set<String> NAMES = Set.of(COMPLETE, FAIL, PARK);
+	/** The close of the outstanding-task message: how a task is settled, and what a plain reply does. */
+	static final String RESOLVE_GUIDANCE = "Use complete_task or fail_task to resolve each task, or park_task "
+		+ "to keep it open and have it brought back later. If you end your turn with a reply instead, "
+		+ "that reply is the task's result.";
+	/** What a park tells the model: when the task comes back, and where its reply now goes. */
+	static final String PARKED = "Task parked: it comes back to you at %s, or sooner if new input arrives for it. "
+		+ "Reply as usual to finish this turn; your reply goes to the conversation, not to the task.";
 
 	/** Stands in for the task job id a live cycle carries ({@code agent:context}, {@code agent:step}). */
 	static final AString PREVIEW_JOB_ID = Strings.intern("preview");
+	/** The venue operations that resolve the in-scope task. */
+	static final AString COMPLETE_TASK_OP = Strings.intern("v/ops/agent/complete-task");
+	static final AString FAIL_TASK_OP = Strings.intern("v/ops/agent/fail-task");
+	static final AString PARK_TASK_OP = Strings.intern("v/ops/agent/park-task");
 
 	private static final String BASE = "/adapters/agent/";
 
@@ -48,9 +66,12 @@ final class TaskTools {
 	private static final AMap<AString, ACell> DEF_FAIL =
 		HarnessTools.definition(BASE + "failTask.json", FAIL);
 
-	/** Both tools. They remain in the immutable harness palette; without an
+	private static final AMap<AString, ACell> DEF_PARK =
+		HarnessTools.definition(BASE + "parkTask.json", PARK);
+
+	/** The task tools. They remain in the immutable harness palette; without an
 	 * outstanding task their handlers return a scoped error. */
-	static final AVector<ACell> DEFINITIONS = Vectors.of((ACell) DEF_COMPLETE, (ACell) DEF_FAIL);
+	static final AVector<ACell> DEFINITIONS = Vectors.of((ACell) DEF_COMPLETE, (ACell) DEF_FAIL, (ACell) DEF_PARK);
 
 	private TaskTools() {}
 
@@ -67,6 +88,8 @@ final class TaskTools {
 		private final boolean preview;
 		/** jobId → {status, output | error}, as each task is resolved. */
 		private AMap<AString, ACell> results;
+		/** The tasks parked this cycle: open, and no longer the agent's to resolve now. */
+		private final java.util.Set<AString> parked = new java.util.HashSet<>();
 
 		Tasks(Engine engine, RequestContext ctx, AVector<ACell> tasks, long timeoutMs, boolean preview) {
 			this.engine = engine;
@@ -108,12 +131,12 @@ final class TaskTools {
 			for (long i = 0; i < tasks.count(); i++) {
 				ACell task = tasks.get(i);
 				AString jobId = RT.ensureString(RT.getIn(task, Fields.JOB_ID));
-				if (jobId != null && results != null && results.get(jobId) != null) continue;
+				if (jobId != null && !open(jobId)) continue;
 				if (outstanding == 0) sb.append("[Tasks assigned to you]\n");
 				outstanding++;
-				ACell caller = RT.getIn(task, Fields.CALLER);
+				String from = TurnProvenance.summary(engine, ctx, task);
 				sb.append("- Task ").append(jobId);
-				if (caller != null) sb.append(" (from: ").append(caller).append(")");
+				if (from != null) sb.append(" (from: ").append(from).append(")");
 				sb.append(": ").append(renderTaskText(RT.getIn(task, Fields.INPUT))).append("\n");
 				// The requester's declared result shape (#376) — advisory unless
 				// the requester opted into enforcement.
@@ -127,7 +150,7 @@ final class TaskTools {
 				}
 			}
 			if (outstanding == 0) return null;
-			sb.append("Use complete_task or fail_task to resolve each task.");
+			sb.append(RESOLVE_GUIDANCE);
 			return Maps.of(AbstractLLMAdapter.K_ROLE, AbstractLLMAdapter.ROLE_USER,
 				AbstractLLMAdapter.K_CONTENT, Strings.create(sb.toString()));
 		}
@@ -143,6 +166,39 @@ final class TaskTools {
 		}
 
 		/**
+		 * {@code park_task}: the task stays open and is brought back after the
+		 * delay ({@code agent:park-task}). Not terminal: the turn carries on, and
+		 * its reply goes to the conversation rather than the task.
+		 */
+		ToolCycleEngine.ToolOutcome park(ToolCycleEngine.ToolCall call) {
+			AString jobId = scope();
+			if (jobId == null || !open(jobId)) {
+				return ToolCycleEngine.ToolOutcome.result(Strings.create(NO_TASK.formatted(PARK)));
+			}
+			if (!(RT.getIn(call.input(), Fields.DELAY) instanceof CVMLong delay) || delay.longValue() <= 0) {
+				return ToolCycleEngine.ToolOutcome.result(Strings.create("Error: " + AgentAdapter.PARK_DELAY_REQUIRED));
+			}
+			long wakeTime = engine.currentTimestamp().longValue() + delay.longValue();
+			if (!preview) {
+				try {
+					ACell r = engine.jobs().invokeInternal(PARK_TASK_OP, call.input(), ctx)
+						.get(timeoutMs, TimeUnit.MILLISECONDS);
+					if (RT.getIn(r, Fields.WAKE_TIME) instanceof CVMLong w) wakeTime = w.longValue();
+				} catch (TimeoutException e) {
+					return ToolCycleEngine.ToolOutcome.result(AbstractLLMAdapter.toolTimeout(timeoutMs));
+				} catch (InterruptedException e) {
+					return ToolCycleEngine.ToolOutcome.result(AbstractLLMAdapter.toolInterrupted());
+				} catch (Exception e) {
+					return ToolCycleEngine.ToolOutcome.result(
+						Strings.create("Error: " + AbstractLLMAdapter.toolFailure(e, PARK, FaultException.VENUE)));
+				}
+			}
+			parked.add(jobId);
+			return ToolCycleEngine.ToolOutcome.result(Strings.create(PARKED.formatted(
+				java.time.Instant.ofEpochMilli(wakeTime))));
+		}
+
+		/**
 		 * Resolves the in-scope task. The venue op ({@code agent:complete-task}
 		 * / {@code agent:fail-task}) reads the agent and task from the request
 		 * context, completes the caller's job and removes the task entry; the
@@ -155,7 +211,7 @@ final class TaskTools {
 			AString jobId = scope();
 			if (jobId == null) {
 				return ToolCycleEngine.ToolOutcome.result(Strings.create(
-					"Error: no task in scope — " + tool + " resolves the task this cycle was started for"));
+					NO_TASK.formatted(tool)));
 			}
 			Completion completion = failed
 				? Completion.of(RT.getIn(call.input(), Fields.ERROR), turnText, null, tool)
@@ -167,13 +223,17 @@ final class TaskTools {
 			if (!preview) {
 				try {
 					ACell r = engine.jobs().invokeInternal(
-						failed ? "v/ops/agent/fail-task" : "v/ops/agent/complete-task",
+						failed ? FAIL_TASK_OP : COMPLETE_TASK_OP,
 						Maps.of(failed ? Fields.ERROR : Fields.RESULT, value), ctx)
 						.get(timeoutMs, TimeUnit.MILLISECONDS);
 					if (r != null) opResult = r;
+				} catch (TimeoutException e) {
+					return ToolCycleEngine.ToolOutcome.result(AbstractLLMAdapter.toolTimeout(timeoutMs));
+				} catch (InterruptedException e) {
+					return ToolCycleEngine.ToolOutcome.result(AbstractLLMAdapter.toolInterrupted());
 				} catch (Exception e) {
 					return ToolCycleEngine.ToolOutcome.result(
-						Strings.create("Error: " + AbstractLLMAdapter.unwrap(e).getMessage()));
+						Strings.create("Error: " + AbstractLLMAdapter.toolFailure(e, tool, FaultException.VENUE)));
 				}
 			}
 			if (results == null) results = Maps.empty();
@@ -210,9 +270,14 @@ final class TaskTools {
 		private AString firstOutstanding() {
 			for (long i = 0; tasks != null && i < tasks.count(); i++) {
 				AString jobId = RT.ensureString(RT.getIn(tasks.get(i), Fields.JOB_ID));
-				if (jobId != null && (results == null || results.get(jobId) == null)) return jobId;
+				if (jobId != null && open(jobId)) return jobId;
 			}
 			return null;
+		}
+
+		/** Whether a task is still the agent's to settle this cycle: neither resolved nor parked. */
+		private boolean open(AString jobId) {
+			return (results == null || results.get(jobId) == null) && !parked.contains(jobId);
 		}
 
 		/** The contract in force for a task: the requester's response schema

@@ -8,9 +8,10 @@ This document describes how to build the Covia project using Maven.
 - **Maven 3.7+**: Minimum Maven version required (enforced by maven-enforcer-plugin)
 - **Git**: For cloning the repository
 
-Covia builds against Convex 0.8.18, from Maven Central. The upstream
-cursor/component/DLFS checks can be run in a Convex checkout of the `0.8.18` tag
-(use `mvnw.cmd` on Windows) with:
+Covia builds against the Convex release that `convex.version` in the root
+`pom.xml` names, from Maven Central. The upstream cursor/component/DLFS checks
+can be run in a Convex checkout of that release's tag (use `mvnw.cmd` on
+Windows) with:
 
 ```sh
 ./mvnw test -pl convex-core,convex-dlfs -am '-Dtest=*CursorTest,*ComponentTest,*ApplicationTest,*HostTest,DLFS*Test' '-Dsurefire.failIfNoSpecifiedTests=false'
@@ -41,16 +42,17 @@ persisted jobs, writes a fresh marker, and flushes before closing. The probe use
 a fixed public test seed and must never open a real venue store. No schema rewrite
 is intended by this migration; the rehearsal verifies actual cross-version reads.
 
-The repeatable API regression is `VenueStoreMigrationTest`. It starts from a
-checked-in store written by the published 0.9.11 jar, upgrades a copy, exercises
-authenticated operations and reopens it twice. It runs with the ordinary
-durability gate and requires no old jar or network download in CI:
+The repeatable API regression is `VenueStoreMigrationIT`. It starts from each
+checked-in store written by a published release jar, one per release line,
+upgrades a copy, exercises authenticated operations and reopens it twice. It is
+a failsafe integration test, so `mvn verify` and CI run it, and it needs no old
+jar or network download:
 
 ```sh
-mvn test -pl venue -am '-Dtest=VenueStoreMigrationTest' '-Dsurefire.failIfNoSpecifiedTests=false' '-Dcovia.tests.durability=true'
+mvn verify -pl venue -am '-Dit.test=VenueStoreMigrationIT' '-Dtest=none' '-Dsurefire.failIfNoSpecifiedTests=false'
 ```
 
-Add `-Dcovia.migration.output=/absolute/path/to/NEW-directory` to retain the
+Add `-Dcovia.migration.output=/absolute/path/to/directory` to retain each
 upgraded store, report and a loopback launch config for manual API testing.
 See the [fixture guide](venue/src/test/resources/migrations/README.md) for
 contents, provenance, candidate-jar checks and generation instructions.
@@ -389,8 +391,10 @@ packaging and publication.
 The reactor modules are published to Maven Central under the `ai.covia`
 groupId. `ai.covia:covia-core`, `ai.covia:covia-python`, `ai.covia:venue`, and
 `ai.covia:workbench` are ordinary library artifacts (along with the
-`ai.covia:covia` parent POM). The operator-facing `covia-python-adapter`,
-`covia-sql`, `covia-telegram`, `covia-discord`, `covia-whatsapp`, `covia-slack`,
+`ai.covia:covia` parent POM). The venue also publishes its test jar
+(`venue-<version>-tests.jar`), which module tests take as a test-scoped
+dependency for shared test support such as `TestTemp`. The operator-facing
+`covia-python-adapter`, `covia-sql`, `covia-telegram`, `covia-discord`, `covia-whatsapp`, `covia-slack`,
 `covia-sonnylabs`, `covia-documents`, `covia-speech` and
 `covia-claude-code` artifacts are loadable venue modules rather than dependencies of
 the standard venue. Their slim jars are published so an embedding host can

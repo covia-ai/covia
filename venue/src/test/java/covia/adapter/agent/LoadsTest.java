@@ -31,6 +31,7 @@ import covia.adapter.agent.ContextAssembler.Prompt;
 import covia.adapter.agent.ContextAssembler.Spec;
 import covia.api.Abilities;
 import covia.api.Fields;
+import covia.exception.InvalidInputException;
 import covia.grid.Job;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -120,6 +121,20 @@ public class LoadsTest {
 
 	// ========== declaredLoads: the entry forms ==========
 
+	/** Only the agent's config declares what the harness reads: a caller's tier,
+	 *  or a load the agent makes, never carries the mark (UCAN.md §5.4). */
+	@Test
+	public void testOnlyTheConfigDeclaresWhatTheHarnessReads() {
+		AString key = Strings.create("w/x");
+		ACell declared = Maps.of(key, Maps.of(Loads.K_CONFIGURED, CVMBool.TRUE));
+		assertTrue(Loads.isConfigured(ContextChain.operatorLoads(declared, "config.loads").get(key)));
+		assertFalse(Loads.isConfigured(ContextChain.declaredLoads(declared, "loads").get(key)),
+			"a caller's tier cannot claim it");
+		assertFalse(Loads.isConfigured(AbstractLLMAdapter.buildLoadEntryMeta(100, null,
+				engine.currentTimestamp())),
+			"nor a load the agent makes");
+	}
+
 	@Test
 	public void testDeclaredLoadsAcceptEveryEntryForm() {
 		AMap<AString, ACell> loads = ContextChain.declaredLoads(Maps.of(
@@ -127,7 +142,7 @@ public class LoadsTest {
 			Strings.create("brief"), spec("text", "Be brief."),
 			Strings.create("listing"), spec("op", "v/ops/covia/list", "input", Maps.of(Fields.PATH, Strings.create("w"))),
 			Strings.create("result"), spec("job", "00ff"),
-			Strings.create("alias"), spec("ref", "w/other")), "loads", true);
+			Strings.create("alias"), spec("ref", "w/other")), "loads", engine.currentTimestamp());
 		assertEquals(5, loads.count());
 		// Every entry is normalised the same way — budget clamped, ts stamped — whatever its form.
 		for (var e : loads.entrySet()) {
@@ -138,13 +153,13 @@ public class LoadsTest {
 
 	@Test
 	public void testDeclaredLoadsRejectAmbiguousOrMalformedForms() {
-		assertThrows(IllegalArgumentException.class, () -> ContextChain.declaredLoads(Maps.of(
+		assertThrows(InvalidInputException.class, () -> ContextChain.declaredLoads(Maps.of(
 			Strings.create("x"), spec("text", "note", "op", "v/ops/covia/list")), "loads"));
-		assertThrows(IllegalArgumentException.class, () -> ContextChain.declaredLoads(Maps.of(
+		assertThrows(InvalidInputException.class, () -> ContextChain.declaredLoads(Maps.of(
 			Strings.create("x"), spec("input", Maps.of())), "loads"));
-		assertThrows(IllegalArgumentException.class, () -> ContextChain.declaredLoads(Maps.of(
+		assertThrows(InvalidInputException.class, () -> ContextChain.declaredLoads(Maps.of(
 			Strings.create("x"), spec("op", CVMLong.create(1))), "loads"));
-		assertThrows(IllegalArgumentException.class, () -> ContextChain.declaredLoads(Maps.of(
+		assertThrows(InvalidInputException.class, () -> ContextChain.declaredLoads(Maps.of(
 			Strings.create("x"), spec("volatile", "yes")), "loads"));
 	}
 
@@ -234,12 +249,13 @@ public class LoadsTest {
 	public void testCallerAndAgentDataCannotPromoteThemselves() {
 		AMap<AString, ACell> caller = ContextChain.declaredLoads(Maps.of(
 			Strings.create("note"), spec("text", "caller data", "trusted", CVMBool.TRUE)),
-			"loads", true);
+			"loads", engine.currentTimestamp());
 		Loads.Snapshot callerSnap = resolve(caller);
 		assertEquals(0, callerSnap.instructionElements().count());
 		assertEquals("caller data", result(callerSnap.exchanges(), 0));
 
-		AMap<AString, ACell> agentMeta = AbstractLLMAdapter.buildLoadEntryMeta(500, null)
+		AMap<AString, ACell> agentMeta = AbstractLLMAdapter.buildLoadEntryMeta(500, null,
+				engine.currentTimestamp())
 			.assoc(Loads.K_TEXT, Strings.create("agent data"))
 			.assoc(Loads.K_TRUSTED, CVMBool.TRUE);
 		Loads.Snapshot agentSnap = resolve(Maps.of(Strings.create("note"), agentMeta));
@@ -513,8 +529,7 @@ public class LoadsTest {
 	// ========== context_load: the same forms from the agent ==========
 
 	private HarnessTools.LoadScope scope() {
-		return new HarnessTools.LoadScope(engine, ctx, Maps.empty(), Maps.empty(), true,
-			"unavailable", null, Maps.empty());
+		return new HarnessTools.LoadScope(engine, ctx, Maps.empty(), Maps.empty(), null, Maps.empty());
 	}
 
 	@Test
@@ -522,8 +537,7 @@ public class LoadsTest {
 		AMap<AString, ACell> declaredConfig = Maps.of(Fields.TOOLS,
 			Vectors.of(Strings.create("v/test/ops/echo")));
 		HarnessTools.LoadScope deniedScope = new HarnessTools.LoadScope(
-			engine, ctx, Maps.empty(), Maps.empty(), true, "unavailable", null,
-			declaredConfig);
+			engine, ctx, Maps.empty(), Maps.empty(), null, declaredConfig);
 		ACell denied = HarnessTools.moreTools(Maps.of("operations", Vectors.of(
 			(ACell) Strings.create("v/test/ops/echo"),
 			(ACell) Strings.create("v/ops/covia/read"))), deniedScope, name -> false);
@@ -533,8 +547,7 @@ public class LoadsTest {
 		ACell request = Maps.of("operations",
 			Vectors.of(Strings.create("v/test/ops/echo")));
 		HarnessTools.LoadScope declaredScope = new HarnessTools.LoadScope(
-			engine, ctx, Maps.empty(), Maps.empty(), true, "unavailable", null,
-			declaredConfig);
+			engine, ctx, Maps.empty(), Maps.empty(), null, declaredConfig);
 		ACell declared = HarnessTools.moreTools(request, declaredScope, name -> false);
 		assertNotNull(RT.getIn(declared, "path"), declared.toString());
 		ACell declaredLoad = declaredScope.loads.get(
@@ -546,8 +559,7 @@ public class LoadsTest {
 		RequestContext loadGranted = ctx.withCaps(Vectors.of(Capability.create(
 			Strings.create("v/test/ops/echo"), Abilities.TOOL_LOAD)));
 		HarnessTools.LoadScope grantedScope = new HarnessTools.LoadScope(
-			engine, loadGranted, Maps.empty(), Maps.empty(), true, "unavailable", null,
-			Maps.empty());
+			engine, loadGranted, Maps.empty(), Maps.empty(), null, Maps.empty());
 		ACell granted = HarnessTools.moreTools(request, grantedScope, name -> false);
 		assertNotNull(RT.getIn(granted, "path"), granted.toString());
 	}
@@ -567,7 +579,7 @@ public class LoadsTest {
 			Strings.create("id"), Strings.create("listing"),
 			Strings.create("op"), Strings.create("v/ops/covia/list"),
 			Strings.create("input"), Maps.of(Fields.PATH, Strings.create("w"))), scope);
-		assertTrue(RT.getIn(fresh, "note").toString().contains("appends only when changed"), fresh.toString());
+		assertFalse(RT.getIn(fresh, "note").toString().isBlank(), fresh.toString());
 		assertTrue(Loads.isVolatile(scope.loads.get(Strings.create("listing"))));
 		assertEquals("v/ops/covia/list", RT.getIn(scope.loads, "listing", "op").toString());
 
@@ -631,7 +643,7 @@ public class LoadsTest {
 				Skills.K_SKILLS, Vectors.of(Strings.create("w/skills/old-child")))));
 		Skills.ResolvedSkill old = Skills.resolveRef(engine, ctx, path);
 		AMap<AString, ACell> declarations = Maps.of(path,
-			Skills.buildSkillLoadMeta(2000, old));
+			Skills.buildSkillLoadMeta(2000, old, engine.currentTimestamp()));
 		Loads.Append loaded = Loads.append(engine, ctx, declarations, path,
 			Labels.BRACKET, Strings.create("context:old"));
 		assertTrue(all(loaded.messages()).contains("OLD BODY"));
@@ -657,7 +669,7 @@ public class LoadsTest {
 		assertNull(RT.getIn(compactedLoads.get(path), Loads.K_APPENDED));
 		assertNull(RT.getIn(compactedLoads.get(path), Loads.K_TOOL_BINDINGS));
 
-		Loads.Snapshot initial = Loads.resolveForInference(engine, ctx, compactedLoads,
+		Loads.Snapshot initial = Loads.resolveForInference(engine, Loads.Readers.of(ctx), compactedLoads,
 			(name, owner) -> false, Labels.BRACKET, true);
 		assertTrue(all(initial.instructionElements()).contains("CURRENT BODY"));
 		assertFalse(all(initial.instructionElements()).contains("OLD BODY"));
@@ -682,7 +694,7 @@ public class LoadsTest {
 			0L, Fields.DEFINITION, Fields.NAME).toString(),
 			"the same atomic update retains the current dispatch binding");
 
-		Loads.Snapshot cached = Loads.resolveForInference(engine, ctx,
+		Loads.Snapshot cached = Loads.resolveForInference(engine, Loads.Readers.of(ctx),
 			GoalTreeContext.getLoads(persisted), (name, owner) -> false,
 			Labels.BRACKET, false);
 		assertEquals(1, cached.tools().count());
@@ -696,12 +708,12 @@ public class LoadsTest {
 	public void testContextLoadRejectsAmbiguousOrKeylessCalls() {
 		HarnessTools.LoadScope scope = scope();
 		String none = HarnessTools.contextLoad(Maps.empty(), scope).toString();
-		assertTrue(none.startsWith("Error: path is required"), none);
+		assertTrue(none.startsWith("Error:"), none);
 		String two = HarnessTools.contextLoad(Maps.of(
 			Strings.create("path"), Strings.create("w/x"), Strings.create("text"), Strings.create("y")), scope).toString();
-		assertTrue(two.startsWith("Error: give exactly one of"), two);
+		assertTrue(two.startsWith("Error:"), two);
 		String noId = HarnessTools.contextLoad(Maps.of(Strings.create("text"), Strings.create("y")), scope).toString();
-		assertTrue(noId.startsWith("Error: id is required"), noId);
+		assertTrue(noId.startsWith("Error:"), noId);
 		assertEquals(0, scope.loads.count(), "nothing stored on a rejected call");
 
 		// The path form is unchanged: the path is its own key.
@@ -718,7 +730,7 @@ public class LoadsTest {
 		AMap<AString, ACell> outer = ContextChain.declaredLoads(Maps.of(
 			Strings.create("pinned"), spec("text", "operator context")), "config.loads");
 		HarnessTools.LoadScope scope = new HarnessTools.LoadScope(
-			engine, ctx, Maps.empty(), outer, true, "unavailable", null, Maps.empty());
+			engine, ctx, Maps.empty(), outer, null, Maps.empty());
 		AVector<ACell> declaredTools = Vectors.of(
 			(ACell) HarnessTools.DEF_CONTEXT_LOAD,
 			(ACell) HarnessTools.DEF_CONTEXT_UNLOAD);

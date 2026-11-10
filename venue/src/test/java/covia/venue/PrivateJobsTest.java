@@ -44,9 +44,9 @@ public class PrivateJobsTest {
 	}
 
 	private long jobCount() {
-		User u = engine.getVenueState().users().get(ALICE);
+		User u = engine.getVenueState().users().user(ALICE);
 		if (u == null) return 0;
-		Index<Blob, ACell> jobs = u.getJobs();
+		Index<Blob, ACell> jobs = u.jobs().getAll();
 		return (jobs == null) ? 0 : jobs.count();
 	}
 
@@ -128,21 +128,15 @@ public class PrivateJobsTest {
 
 	@Test
 	public void testPrivateRunFailsClosedWithoutVenueOptIn() {
-		Engine disabled = Engine.createTemp(Maps.of(
-				Config.USERS, Maps.of(Config.AUTO_CREATE, true)));
-		try {
-			Engine.addDemoAssets(disabled);
-			RequestContext ctx = RequestContext.of(Strings.create("did:key:zPrivateDisabled"));
-			long before = disabled.jobs().getJobs(ctx).count();
-			Exception error = assertThrows(Exception.class, () -> disabled.jobs().runOperation(
-				"v/test/ops/echo", Maps.of("value", "secret"), ctx, true).get());
-			assertTrue(String.valueOf(error.getCause()).contains("Private runs are disabled"),
-				String.valueOf(error));
-			assertEquals(before, disabled.jobs().getJobs(ctx).count(),
-				"a disabled private request must not silently downgrade to persistence");
-		} finally {
-			disabled.close();
-		}
+		Engine shared = TestEngine.ENGINE;   // private jobs are off here
+		RequestContext ctx = RequestContext.of(TestEngine.uniqueDID("PrivateJobsTest-disabled"));
+		long before = shared.jobs().getJobs(ctx).count();
+		Exception error = assertThrows(Exception.class, () -> shared.jobs().runOperation(
+			"v/test/ops/echo", Maps.of("value", "secret"), ctx, true).get());
+		assertTrue(String.valueOf(error.getCause()).contains("Private runs are disabled"),
+			String.valueOf(error));
+		assertEquals(before, shared.jobs().getJobs(ctx).count(),
+			"a disabled private request must not silently downgrade to persistence");
 	}
 
 	/** The legacy REST wire field is rejected: invoke always means durable. */

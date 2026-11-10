@@ -8,16 +8,21 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
 
+import convex.auth.ucan.Capability;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
+import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.grid.Job;
 import covia.grid.Status;
+import covia.lattice.CapabilityChecker;
 
 public class AccessControlTest {
 
@@ -123,6 +128,30 @@ public class AccessControlTest {
 		assertFalse(ac.canAccessJob(RequestContext.of(ALICE_LITERAL), null));
 	}
 
+	@Test
+	public void testScopedSubPrincipalReachesOnlyJobsItLaunched() {
+		AccessControl ac = engine.getAccessControl();
+		// An agent of Alice's under its own caps: a sub-principal in her namespace.
+		RequestContext dispatch = RequestContext.ofAgent(ALICE_LITERAL, Strings.create("helper"))
+			.withCaps(Vectors.empty());
+		assertTrue(dispatch.isSubPrincipal());
+		assertEquals(ALICE_LITERAL, dispatch.getUserDID());
+
+		AMap<AString, ACell> launched = Maps.of(
+			Fields.ID, Blob.fromHex("00112233445566778899aabbccddeeff"),
+			Fields.STATUS, Status.PENDING,
+			Fields.CALLER, dispatch.getCallerDID(),
+			Fields.OWNER, ALICE_LITERAL,
+			Fields.UPDATED, CVMLong.create(1000L));
+		assertTrue(ac.canAccessJob(dispatch, launched), "reaches the job it launched (caller match)");
+		assertTrue(ac.canAccessJob(dispatch, launched, Capability.CRUD_WRITE));
+		AMap<AString, ACell> alicesOwn = launched.dissoc(Fields.OWNER).assoc(Fields.CALLER, ALICE_LITERAL);
+		assertFalse(ac.canAccessJob(dispatch, alicesOwn),
+			"sharing Alice's namespace is proximity, not permission");
+		assertFalse(ac.canAccessJob(dispatch, alicesOwn, Capability.CRUD_WRITE));
+		assertTrue(ac.canAccessJob(RequestContext.of(ALICE_LITERAL), launched), "the owner reaches both");
+	}
+
 	// ========== RequestContext Properties ==========
 
 	@Test
@@ -195,6 +224,22 @@ public class AccessControlTest {
 	}
 
 	@Test
+	public void testListingJobsNeedsReadOnTheJobs() {
+		RequestContext aliceCtx = RequestContext.of(alice);
+		Job job = engine.jobs().invokeOperation("v/test/ops/echo", Maps.of("message", "listed"), aliceCtx);
+		RequestContext invokeOnly = aliceCtx.withCaps(Vectors.of(
+			Capability.create(Strings.create(""), Strings.create("invoke"))));
+		assertThrows(AuthException.class, () -> engine.jobs().getJobs(invokeOnly),
+			"a caller who may not read its jobs may not list them");
+		assertThrows(AuthException.class, () -> engine.jobs().countJobs(invokeOnly));
+
+		RequestContext readsJobs = aliceCtx.withCaps(Vectors.of(
+			Capability.create(Strings.create("j/"), Capability.CRUD_READ)));
+		assertNotNull(engine.jobs().getJobs(readsJobs).get(job.getID()));
+		assertEquals(1, engine.jobs().countJobs(readsJobs));
+	}
+
+	@Test
 	public void testInternalSeesVenueJobs() {
 		// Internal requests see the venue's own DID jobs
 		Job venueJob = engine.jobs().invokeOperation(
@@ -232,16 +277,13 @@ public class AccessControlTest {
 		RequestContext bobCtx = RequestContext.of(bob);
 
 		Job aliceJob = engine.jobs().invokeOperation(
-			"v/test/ops/delay", Maps.of("delay", 10000), aliceCtx);
+			"v/test/ops/never", Maps.empty(), aliceCtx);
 
 		// Bob cannot cancel Alice's job
 		assertThrows(AuthException.class,
 			() -> engine.jobs().cancelJob(aliceJob.getID(), bobCtx));
 
-		// Alice can cancel her own job — this MUST also interrupt the
-		// underlying delay thread, otherwise the JVM stalls at the end of
-		// the test waiting for the orphaned sleep to drain (see
-		// TestAdapter.handleDelay + Job.cancel + Job.setCancelHook).
+		// Alice can cancel her own job
 		assertNotNull(engine.jobs().cancelJob(aliceJob.getID(), aliceCtx));
 	}
 
@@ -262,5 +304,38 @@ public class AccessControlTest {
 		var internalJobs = engine.jobs().getJobs(engine.venueContext());
 		assertNotNull(internalJobs.get(venueJob.getID()),
 			"Internal should see venue's own jobs");
+	}
+
+	@Test
+	public void testPublicScopeBoundsSharedAnonymousJobs() {
+		// Every anonymous caller is the one public principal, so its jobs are
+		// shared: the operator's public scope decides what any of them may do.
+		AString pub = Strings.create(engine.getDIDString() + ":public");
+		Job job = engine.jobs().invokeOperation("v/test/ops/never", Maps.of(Fields.MESSAGE, "anon-a"),
+			RequestContext.of(pub));
+		RequestContext readOnly = RequestContext.of(pub).withCaps(CapabilityChecker.readOnlyScope(pub));
+		try {
+			assertNotNull(engine.jobs().getJobData(job.getID(), readOnly), "a read is within the scope");
+			assertThrows(AuthException.class, () -> engine.jobs().cancelJob(job.getID(), readOnly),
+				"a read-only public caller must not cancel another anonymous caller's job");
+		} finally {
+			job.cancel();
+		}
+	}
+
+	@Test
+	public void testScopeBoundsAccessToTheUsersOwnJobs() {
+		// Only an unscoped context is the owner outright; a scope counts here as
+		// at every other check.
+		Job job = engine.jobs().invokeOperation("v/test/ops/never", Maps.of(Fields.MESSAGE, "alice"),
+			RequestContext.of(alice));
+		RequestContext narrowed = RequestContext.of(alice).withCaps(Vectors.of(
+			Maps.of("with", Strings.create("g/Helper"), "can", Abilities.AGENT_REQUEST)));
+		try {
+			assertThrows(AuthException.class, () -> engine.jobs().getJobData(job.getID(), narrowed));
+			assertThrows(AuthException.class, () -> engine.jobs().cancelJob(job.getID(), narrowed));
+		} finally {
+			job.cancel();
+		}
 	}
 }

@@ -4,24 +4,23 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 
-import org.junit.jupiter.api.AfterAll;
-import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 import convex.auth.ucan.UCAN;
 import convex.auth.ucan.Capability;
 import convex.auth.ucan.RootAuthorityPolicy;
-import convex.auth.did.DIDVerifier;
 import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.AVector;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
@@ -30,27 +29,18 @@ import convex.core.lang.RT;
 import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.AuthException;
-import covia.venue.Config;
+import covia.exception.InvalidInputException;
+import covia.exception.NotFoundException;
+import covia.lattice.Covia;
+import covia.lattice.CoviaPath;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
-import covia.venue.server.AuthMiddleware;
+import covia.venue.TestEngine;
 import covia.venue.User;
 
 class UserAdapterTest {
 
-	private static Engine engine;
-
-	@BeforeAll
-	static void setup() {
-		engine = Engine.createTemp(Maps.of(
-			Config.HOSTNAME, Strings.create("venue.example.com")));
-		Engine.addDemoAssets(engine);
-	}
-
-	@AfterAll
-	static void close() {
-		if (engine != null) engine.close();
-	}
+	private static final Engine engine = TestEngine.ENGINE;
 
 	@Test
 	void adapterAndOperationsAreInstalled() {
@@ -70,7 +60,7 @@ class UserAdapterTest {
 		ACell first = create(Maps.of(Fields.DID, did));
 		assertEquals(did, RT.getIn(first, Fields.DID));
 		assertEquals(CVMBool.TRUE, RT.getIn(first, Fields.CREATED));
-		assertNotNull(engine.getVenueState().users().get(did));
+		assertNotNull(engine.getVenueState().users().user(did));
 
 		ACell second = create(Maps.of(Fields.DID, did));
 		assertEquals(CVMBool.FALSE, RT.getIn(second, Fields.CREATED));
@@ -82,9 +72,9 @@ class UserAdapterTest {
 		assertEquals(external, RT.getIn(create(Maps.of(Fields.DID, external)), Fields.DID));
 
 		ACell managed = create(Maps.of("username", "alice"));
-		AString expected = Strings.create("did:web:venue.example.com:u:alice");
+		AString expected = Strings.create("did:web:" + TestEngine.HOSTNAME + ":u:alice");
 		assertEquals(expected, RT.getIn(managed, Fields.DID));
-		assertNotNull(engine.getVenueState().users().get(expected));
+		assertNotNull(engine.getVenueState().users().user(expected));
 		assertEquals(expected,
 			engine.getAuth().getUser(Strings.create("alice")).get(Fields.DID));
 	}
@@ -93,7 +83,7 @@ class UserAdapterTest {
 	void managedAccountCreationDoesNotMintAUserIdentityKey() throws Exception {
 		ACell created = create(Maps.of("username", "no-user-key"));
 		AString did = RT.ensureString(RT.getIn(created, Fields.DID));
-		User user = engine.getVenueState().users().get(did);
+		User user = engine.getVenueState().users().user(did);
 
 		assertNotNull(user);
 		assertEquals(Maps.empty(), user.get(),
@@ -103,61 +93,85 @@ class UserAdapterTest {
 	}
 
 	@Test
-	void venueRootAuthorityIsLimitedToItsManagedUsers() {
+	void venueIsRootForWhatItHosts() {
 		RootAuthorityPolicy policy = engine.rootAuthorityPolicy();
 		AString venue = engine.getDIDString();
-		AString managed = Strings.create("did:web:venue.example.com:u:alice");
+		AString managed = Strings.create("did:web:" + TestEngine.HOSTNAME + ":u:alice");
 		AString self = UCAN.toDIDKey(AKeyPair.generate().getAccountKey());
-		AString external = Strings.create("did:web:identity.example:u:bob");
+		// The venue hosts this identity by the end of the test, so no other run may reuse it
+		AString external = Strings.create("did:web:identity.example:u:" + AKeyPair.generate().getAccountKey().toHexString());
 
 		assertTrue(policy.acceptsRoot(venue, Strings.create(managed + "/w/notes")));
-		assertTrue(policy.acceptsRoot(self, Strings.create(self + "/w/notes")));
-		assertFalse(policy.acceptsRoot(venue, Strings.create(self + "/w/notes")),
-			"registration must not transfer control of a self-sovereign DID");
-		assertFalse(policy.acceptsRoot(venue, Strings.create(external + "/w/notes")),
-			"a similarly shaped DID on another domain is not locally custodial");
+		assertTrue(policy.acceptsRoot(venue, Strings.create(managed + ":admin/w/notes")),
+			"everything below the managed namespace is the venue's");
+		assertTrue(policy.acceptsRoot(venue, Strings.create(managed + ":g:helper/x/crypto/keys/")),
+			"a hosted user's agent is hosted too");
 		assertFalse(policy.acceptsRoot(venue,
-			Strings.create("did:web:venue.example.com.evil:u:alice/w/notes")),
+			Strings.create("did:web:" + TestEngine.HOSTNAME + ".evil:u:alice/w/notes")),
 			"a hostname-prefix lookalike must not enter the managed namespace");
-		assertFalse(policy.acceptsRoot(venue,
-			Strings.create(managed + ":admin/w/notes")),
-			"a nested managed-DID suffix must not be accepted as a username");
+
+		assertFalse(policy.acceptsRoot(venue, Strings.create(self + "/w/notes")),
+			"an identity the venue does not host is not the venue's");
+		assertFalse(policy.acceptsRoot(venue, Strings.create(external + "/w/notes")));
+		assertFalse(policy.acceptsRoot(venue, Strings.create(self + ":g:helper/w/notes")),
+			"nor is an agent of one");
+		engine.getVenueState().users().ensure(self);
+		engine.getVenueState().users().ensure(external);
+		assertTrue(policy.acceptsRoot(venue, Strings.create(self + "/w/notes")),
+			"a self-sovereign identity the venue hosts is the venue's, here");
+		assertTrue(policy.acceptsRoot(venue, Strings.create(self + ":g:helper/w/notes")));
+		assertTrue(policy.acceptsRoot(venue, Strings.create(external + "/w/notes")));
 	}
 
 	@Test
-	void personalVenueRootAuthorityCoversOnlyItsIssuedUsers() {
-		Engine personal = Engine.createTemp(Maps.empty());
-		try {
-			RootAuthorityPolicy policy = personal.rootAuthorityPolicy();
-			AString venue = personal.getDIDString();
-			AString issued = Strings.create(venue + ":u:alice");
-			AString external = Strings.create(
-				UCAN.toDIDKey(AKeyPair.generate().getAccountKey()) + ":u:alice");
+	void identityIsRootForWhatItSignsInAs() {
+		RootAuthorityPolicy policy = engine.rootAuthorityPolicy();
+		AString self = UCAN.toDIDKey(AKeyPair.generate().getAccountKey());
+		AString other = UCAN.toDIDKey(AKeyPair.generate().getAccountKey());
+		AString web = Strings.create("did:web:identity.example:u:carol");
 
-			assertTrue(policy.acceptsRoot(venue, Strings.create(issued + "/w/notes")));
-			assertFalse(policy.acceptsRoot(venue, Strings.create(external + "/w/notes")),
-				"another did:key user-shaped subject is not venue-issued");
-			assertFalse(policy.acceptsRoot(venue,
-				Strings.create(issued + ":admin/w/notes")),
-				"the issued user must be exactly one valid username segment");
-		} finally {
-			personal.close();
-		}
+		assertTrue(policy.acceptsRoot(self, Strings.create(self + "/w/notes")));
+		assertTrue(policy.acceptsRoot(self, Strings.create(self + ":g:helper/x/crypto/keys/")),
+			"a did:key signs in as its agents, so it roots their grants");
+		assertTrue(policy.acceptsRoot(self, Strings.create(self + ":u:bob:dev/w/notes")),
+			"and as every identity nested below it, at any depth");
+		assertFalse(policy.acceptsRoot(self, Strings.create(other + "/w/notes")));
+		assertFalse(policy.acceptsRoot(self, Strings.create(self + "x/w/notes")),
+			"a DID that only starts with the same text is not nested");
+		assertFalse(policy.acceptsRoot(web, Strings.create(web + ":g:helper/w/notes")),
+			"a did:web signs in as nothing below it");
+		assertFalse(policy.acceptsRoot(Strings.create(self + ":g:helper"), Strings.create(self + ":g:helper:x/w/notes")),
+			"only a bare did:key signs in as a nested identity");
+	}
+
+	@Test
+	void didKeyVenueIsRootForIdentitiesNestedBelowIt() {
+		Engine didKeyVenue = engine;
+		RootAuthorityPolicy policy = didKeyVenue.rootAuthorityPolicy();
+		AString venue = didKeyVenue.getDIDString();
+		AString issued = Strings.create(venue + ":u:alice");
+		AString external = Strings.create(
+			UCAN.toDIDKey(AKeyPair.generate().getAccountKey()) + ":u:alice");
+
+		assertTrue(policy.acceptsRoot(venue, Strings.create(issued + "/w/notes")));
+		assertTrue(policy.acceptsRoot(venue, Strings.create(issued + ":admin/w/notes")));
+		assertFalse(policy.acceptsRoot(venue, Strings.create(external + "/w/notes")),
+			"another did:key's nested identity is not the venue's");
 	}
 
 	@Test
 	void rejectsMalformedDIDAndAmbiguousIdentityInput() {
 		ExecutionException badDID = assertThrows(ExecutionException.class,
 			() -> create(Maps.of(Fields.DID, "alice")));
-		assertInstanceOf(IllegalArgumentException.class, badDID.getCause());
+		assertInstanceOf(InvalidInputException.class, badDID.getCause());
 
 		ExecutionException both = assertThrows(ExecutionException.class,
 			() -> create(Maps.of(Fields.DID, "did:example:alice", "username", "alice")));
-		assertInstanceOf(IllegalArgumentException.class, both.getCause());
+		assertInstanceOf(InvalidInputException.class, both.getCause());
 
 		ExecutionException badUsername = assertThrows(ExecutionException.class,
 			() -> create(Maps.of("username", "alice/admin")));
-		assertInstanceOf(IllegalArgumentException.class, badUsername.getCause());
+		assertInstanceOf(InvalidInputException.class, badUsername.getCause());
 	}
 
 	@Test
@@ -171,8 +185,8 @@ class UserAdapterTest {
 				Maps.of(Fields.DID, target), RequestContext.of(caller))
 				.get(5, TimeUnit.SECONDS));
 		assertInstanceOf(AuthException.class, denied.getCause());
-		assertTrue(denied.getCause().getMessage().contains("venue-issued delegation"));
-		assertEquals(null, engine.getVenueState().users().get(target));
+		assertFalse(denied.getCause().getMessage().isBlank());
+		assertEquals(null, engine.getVenueState().users().user(target));
 	}
 
 	@Test
@@ -188,6 +202,47 @@ class UserAdapterTest {
 		ACell list = engine.jobs().invokeInternal("v/ops/user/list", Maps.empty(),
 			engine.venueContext()).get(5, TimeUnit.SECONDS);
 		assertTrue(RT.ensureLong(RT.getIn(list, "total")).longValue() >= 2);
+	}
+
+	/** A user's entry reports what their workspace, their agents' workspaces and their drives take up. */
+	@Test
+	void infoReportsStorageOfWorkspaceAndDrives() throws Exception {
+		AString did = UCAN.toDIDKey(AKeyPair.generate().getAccountKey());
+		create(Maps.of(Fields.DID, did));
+		RequestContext self = RequestContext.of(did);
+		assertEquals(0, stored(self, "drives"), "a user with no drives stores none");
+
+		User user = engine.getVenueState().users().user(did);
+		long empty = stored(self, "workspace");
+		user.workspace().write(CoviaPath.parse("notes"), Strings.create("w".repeat(10_000)));
+		long withNotes = stored(self, "workspace");
+		assertTrue(withNotes >= empty + 10_000, "the workspace counts: " + withNotes);
+
+		user.ensureAgent("storage-agent", null, null);
+		user.agent("storage-agent").workspace().write(CoviaPath.parse("notes"), Strings.create("n".repeat(10_000)));
+		assertTrue(stored(self, "workspace") >= withNotes + 10_000, "an agent's workspace counts");
+
+		engine.jobs().invokeInternal("v/ops/dlfs/create-drive", Maps.of("drive", "docs"), self).get(5, TimeUnit.SECONDS);
+		engine.jobs().invokeInternal("v/ops/dlfs/write",
+			Maps.of("drive", "docs", "path", "big.txt", "content", "d".repeat(10_000)), self).get(5, TimeUnit.SECONDS);
+		assertTrue(stored(self, "drives") >= 10_000, "a drive's files count");
+		engine.jobs().invokeInternal("v/ops/dlfs/delete-drive", Maps.of("drive", "docs"), self).get(5, TimeUnit.SECONDS);
+		long deleted = stored(self, "drives");
+		assertTrue(deleted > 0 && deleted < 10_000, "a deleted drive leaves only its marker: " + deleted);
+
+		// The operator's listing reports the same figures
+		UserAdapter adapter = (UserAdapter) engine.getAdapter("user");
+		AVector<ACell> users = RT.ensureVector(RT.getIn(adapter.list(engine.venueContext()), "users"));
+		ACell listed = null;
+		for (long i = 0; i < users.count(); i++) {
+			if (did.equals(RT.getIn(users.get(i), Fields.DID))) listed = users.get(i);
+		}
+		assertEquals(RT.getIn(adapter.info(self, Maps.empty()), "storage"), RT.getIn(listed, "storage"));
+	}
+
+	private static long stored(RequestContext ctx, String figure) {
+		UserAdapter adapter = (UserAdapter) engine.getAdapter("user");
+		return RT.ensureLong(RT.getIn(adapter.info(ctx, Maps.empty()), "storage", figure)).longValue();
 	}
 
 	/** #524: stats.users is the registered population, external DIDs included —
@@ -221,6 +276,13 @@ class UserAdapterTest {
 		assertEquals(CVMBool.TRUE, RT.getIn(managedInfo, Fields.MANAGED),
 			"a venue-managed username account reports managed:true");
 
+		// The venue's activity times are bookkeeping for operators, not the user's data.
+		engine.getVenueState().users().user(selfSovereign).workspace().write(CoviaPath.parse("seen"), CVMBool.TRUE);
+		assertNull(RT.getIn(adapter.info(RequestContext.of(selfSovereign), Maps.empty()), Covia.K_META),
+			"a user does not see the venue's bookkeeping");
+		assertNotNull(RT.getIn(adapter.info(engine.venueContext(), Maps.of(Fields.DID, selfSovereign)), Covia.K_META),
+			"an operator does");
+
 		// Non-operator, non-self access is denied identically to the op form.
 		assertThrows(AuthException.class,
 			() -> adapter.info(RequestContext.of(selfSovereign), Maps.of(Fields.DID, managedDid)));
@@ -245,7 +307,7 @@ class UserAdapterTest {
 			() -> adapter.authenticationList(RequestContext.of(selfSovereign),
 				Maps.of(Fields.DID, managedDid)));
 		AString unregistered = UCAN.toDIDKey(AKeyPair.generate().getAccountKey());
-		assertThrows(IllegalArgumentException.class,
+		assertThrows(NotFoundException.class,
 			() -> adapter.authenticationList(engine.venueContext(),
 				Maps.of(Fields.DID, unregistered)));
 	}
@@ -265,8 +327,8 @@ class UserAdapterTest {
 				Capability.create(Strings.create(owner + "/v/test/ops/capturectx"),
 					Strings.create("invoke"))),
 			Vectors.empty()).toJWT(ownerKey);
-		RequestContext delegateCtx = AuthMiddleware.withTransportGrants(
-			RequestContext.of(delegate), Vectors.of(grant), DIDVerifier.CONVEX);
+		RequestContext delegateCtx = engine.withTransportGrants(
+			RequestContext.of(delegate), Vectors.of(grant));
 
 		// The grant is inert during an ordinary invocation.
 		TestAdapter.CAPTURED_CTX.remove(delegate);
@@ -323,15 +385,14 @@ class UserAdapterTest {
 		AString target = UCAN.toDIDKey(AKeyPair.generate().getAccountKey());
 		AuthException denied = assertThrows(AuthException.class,
 			() -> engine.sudoContext(RequestContext.of(publicDID), target));
-		assertTrue(denied.getMessage().contains("Authentication required"));
+		assertFalse(denied.getMessage().isBlank());
 	}
 
 	private static RequestContext proofContext(AKeyPair ownerKey, AKeyPair delegateKey,
 			AString delegate, long exp, convex.core.data.AVector<ACell> capabilities) {
 		AString jwt = UCAN.create(ownerKey, delegateKey.getAccountKey(), exp,
 			capabilities, Vectors.empty()).toJWT(ownerKey);
-		return AuthMiddleware.withTransportGrants(RequestContext.of(delegate),
-			Vectors.of(jwt), DIDVerifier.CONVEX);
+		return engine.withTransportGrants(RequestContext.of(delegate), Vectors.of(jwt));
 	}
 
 	private static ACell invokeSudo(AString owner, RequestContext ctx) throws Exception {

@@ -10,6 +10,8 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
+import covia.exception.InvalidInputException;
+import covia.exception.NotSupportedException;
 
 /** Provider-independent inference options. Model definitions supply defaults;
 * a call (including an agent's config.modelOptions) can override each key. */
@@ -31,9 +33,9 @@ record ModelCallOptions(boolean nativeSystemMessages, boolean automaticCaching,
 		ACell overrides = RT.getIn(input, KEY);
 		if (overrides != null) {
 			AMap<AString, ACell> map = RT.ensureMap(overrides);
-			if (map == null) throw new IllegalArgumentException(INVALID + "modelOptions must be an object");
+			if (map == null) throw new InvalidInputException(INVALID + "modelOptions must be an object");
 			for (var e : map.entrySet()) {
-				if (!KEYS.contains(e.getKey().toString())) throw new IllegalArgumentException(INVALID + e.getKey());
+				if (!KEYS.contains(e.getKey().toString())) throw new InvalidInputException(INVALID + e.getKey());
 				merged = merged.assoc(e.getKey(), e.getValue());
 			}
 		}
@@ -42,7 +44,7 @@ record ModelCallOptions(boolean nativeSystemMessages, boolean automaticCaching,
 		String ttl = choice(values, "cacheTtl", "5m", Set.of("5m", "1h"));
 		boolean nativeSystem = flag(values, "nativeSystemMessages", false);
 		for (String feature : Set.of("preserveThinking", "inlineToolChanges", "compaction")) {
-			if (flag(values, feature, false)) throw new IllegalArgumentException(feature + UPSTREAM_REQUIRED);
+			if (flag(values, feature, false)) throw new NotSupportedException(feature + UPSTREAM_REQUIRED);
 		}
 		return new ModelCallOptions(nativeSystem, flag(values, "automaticCaching", false), mismatch, ttl);
 	}
@@ -50,14 +52,14 @@ record ModelCallOptions(boolean nativeSystemMessages, boolean automaticCaching,
 	private static boolean flag(Map<String, Object> values, String key, boolean fallback) {
 		if (!values.containsKey(key)) return fallback;
 		Object v = values.get(key);
-		if (!(v instanceof Boolean b)) throw new IllegalArgumentException(INVALID + key + " must be boolean");
+		if (!(v instanceof Boolean b)) throw new InvalidInputException(INVALID + key + " must be boolean");
 		return b;
 	}
 
 	private static String choice(Map<String, Object> values, String key, String fallback, Set<String> choices) {
 		Object v = values.getOrDefault(key, fallback);
 		if (!(v instanceof String s) || !choices.contains(s)) {
-			throw new IllegalArgumentException(INVALID + key + " must be one of " + choices);
+			throw new InvalidInputException(INVALID + key + " must be one of " + choices);
 		}
 		return s;
 	}

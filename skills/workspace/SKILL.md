@@ -23,13 +23,13 @@ Navigate and manage data in the venue's lattice namespace.
 
 ## Commands
 
-### `browse [path]` — Explore structure
+### `browse <path>` — Explore structure
 
 ```
 covia_list  path=<path>
 ```
 
-Omit path for top-level. Returns type, keys (for maps), count (for vectors/countables), or values (for sets).
+A path starts at a namespace such as `w`, `g` or `o`; there is no listing above them. Returns type, keys (for maps), count (for vectors/countables), or values (for sets).
 
 For deeper exploration, follow keys:
 ```
@@ -52,7 +52,7 @@ For large values, use `covia_slice` with offset/limit for pagination.
 ### `write <path> <value>` — Write a value
 
 ```
-covia_write  path=w/<key>  value=<json>
+covia_write  path=w/<key>  value=<value>
 ```
 
 `w/` and `o/` are writable; scoped virtual paths and `x/<adapter>/` views

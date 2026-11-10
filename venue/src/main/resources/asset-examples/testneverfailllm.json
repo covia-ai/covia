@@ -1,6 +1,6 @@
 {
 	"name": "Test neverfailllm",
-	"description": "Test LLM that calls v/test/ops/never as its first tool, then FAILS the L3 call after the tool result \u2014 a scripted mid-cycle transition failure for lattice-frames durability tests.",
+	"description": "Test LLM whose first tool call blocks (v/test/ops/hold at the gate a 'hold:<gate>' model names, else v/test/ops/never), then FAILS the L3 call after the tool result \u2014 a scripted mid-cycle transition failure for lattice-frames durability tests.",
 	"dateCreated": "2026-07-14T00:00:00Z",
 	"operation": {
 		"adapter": "test:neverfailllm",
@@ -13,6 +13,10 @@
 				},
 				"tools": {
 					"type": "array"
+				},
+				"model": {
+					"type": "string",
+					"description": "'hold:<gate>' to block at that test gate instead of calling v/test/ops/never"
 				}
 			}
 		},

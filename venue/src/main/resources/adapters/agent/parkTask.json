@@ -1,0 +1,34 @@
+{
+    "name": "Park Agent Task",
+    "description": "Use only for an assigned task shown in the current task context. Keep the in-scope task open and have it brought back to you after a delay, when you cannot finish it now: you are waiting for something, or you have asked the requester a question. The requester sees the reason. New input for the task brings it back sooner, and if the task is completed, failed or cancelled first the revisit does nothing. Not terminal: reply as usual afterwards, and that reply goes to the conversation, not to the task. The agent and task are determined from the current request context — no id is passed. Without a task in scope the call fails.",
+    "dateCreated": "2026-11-10T00:00:00Z",
+    "operation": {
+        "adapter": "agent:parkTask",
+        "readOnly": false,
+        "toolName": "agent_park_task",
+        "input": {
+            "type": "object",
+            "properties": {
+                "delay": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "How long to wait before the task is brought back, in milliseconds."
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "Why the task is parked, shown to the requester while it waits."
+                }
+            },
+            "required": ["delay"]
+        },
+        "output": {
+            "type": "object",
+            "properties": {
+                "agentId":  { "type": "string" },
+                "taskId":   { "type": "string" },
+                "status":   { "type": "string", "description": "Always 'STARTED': the task stays open." },
+                "wakeTime": { "type": "integer", "description": "When the task is brought back, in milliseconds on the venue's clock." }
+            }
+        }
+    }
+}

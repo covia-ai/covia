@@ -17,6 +17,7 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import covia.adapter.AAdapter;
 import covia.exception.AuthException;
+import covia.exception.UnavailableException;
 
 class AdapterUserDeletionTest {
 	private static final AString OWNER = Strings.create("did:test:deleted-owner");
@@ -26,11 +27,13 @@ class AdapterUserDeletionTest {
 
 	static class Probe extends AAdapter {
 		Consumer<AdapterState> duringState = state -> { };
-		int stopped;
+		Runnable duringStop = () -> { };
+		String name = NAME;
+		volatile int stopped;
 		boolean failStop;
 		boolean started;
 		boolean sawPreviousUser;
-		@Override public String getName() { return NAME; }
+		@Override public String getName() { return name; }
 		@Override public String getDescription() { return "Deletion hook test"; }
 		@Override public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
 			return CompletableFuture.completedFuture(input);
@@ -46,11 +49,12 @@ class AdapterUserDeletionTest {
 				assertNull(engine.adapterState(NAME).read("custom/" + did));
 			}
 			sawPreviousUser |= previousUser != null;
+			duringStop.run();
 			stopped++;
 			if (failStop) throw new IllegalStateException("test stop failure");
 		}
 		@Override public void start() {
-			assertTrue(engine.getVenueState().pendingUserDeletions(NAME).isEmpty());
+			assertTrue(engine.getVenueState().pendingUserDeletions(name).isEmpty());
 			started = true;
 		}
 	}
@@ -116,7 +120,7 @@ class AdapterUserDeletionTest {
 			engine.registerAdapter(adapter);
 			assertNull(adapter.engine);
 			AdapterState state = seed(engine);
-			engine.getVenueState().users().get(OWNER).ensureAgent("old", Maps.empty(), VALUE);
+			engine.getVenueState().users().user(OWNER).ensureAgent("old", Maps.empty(), VALUE);
 			engine.deleteUser(engine.venueContext(), OWNER);
 			assertEquals(1, adapter.stopped);
 			assertNull(state.read("custom/" + OWNER));
@@ -130,7 +134,7 @@ class AdapterUserDeletionTest {
 			engine.registerAdapter(new Probe());
 			AdapterState state = seed(engine);
 			engine.removeAdapter(NAME);
-			IllegalStateException pending = assertThrows(IllegalStateException.class,
+			UnavailableException pending = assertThrows(UnavailableException.class,
 				() -> engine.deleteUser(engine.venueContext(), OWNER));
 			assertEquals(Engine.USER_DELETION_PENDING, pending.getMessage());
 			assertEquals(VALUE, state.read(state.userPath(OWNER, "bots/old")), "only the adapter can interpret its data");
@@ -154,7 +158,7 @@ class AdapterUserDeletionTest {
 			AdapterState state = seed(engine);
 			adapter.duringState = draft -> { throw new IllegalStateException("test rollback"); };
 			assertThrows(IllegalStateException.class, () -> engine.deleteUser(engine.venueContext(), OWNER));
-			assertNotNull(engine.getVenueState().users().get(OWNER));
+			assertNotNull(engine.getVenueState().users().user(OWNER));
 			assertEquals(VALUE, state.read(state.userPath(OWNER, "bots/old")));
 			assertEquals(VALUE, state.read("custom/" + OWNER));
 			assertTrue(engine.getVenueState().pendingUserDeletions(NAME).isEmpty());
@@ -187,6 +191,82 @@ class AdapterUserDeletionTest {
 			assertTrue(attempts.get() >= 2);
 			assertNull(state.read(state.userPath(OWNER, "")));
 			assertEquals(1, adapter.stopped, "runtime effects must not repeat with CAS retries");
+		} finally { release.countDown(); engine.close(); }
+	}
+
+	/** Holds the first run of {@code adapter}'s stop hook until released, signalling {@code entered}. */
+	private static void holdFirstStop(Probe adapter, CountDownLatch entered, CountDownLatch release) {
+		AtomicInteger runs = new AtomicInteger();
+		adapter.duringStop = () -> {
+			if (runs.incrementAndGet() > 1) return;
+			entered.countDown();
+			try { assertTrue(release.await(5, TimeUnit.SECONDS)); }
+			catch (InterruptedException e) { throw new AssertionError(e); }
+		};
+	}
+
+	@Test void anAdapterRegistersWhileAUserIsBeingDeleted() throws Exception {
+		Engine engine = Engine.createTemp(Maps.empty());
+		CountDownLatch entered = new CountDownLatch(1), release = new CountDownLatch(1);
+		try {
+			Probe adapter = new Probe();
+			engine.registerAdapter(adapter);
+			seed(engine);
+			holdFirstStop(adapter, entered, release);
+			CompletableFuture<ACell> deletion = CompletableFuture.supplyAsync(() -> engine.deleteUser(engine.venueContext(), OWNER));
+			assertTrue(entered.await(5, TimeUnit.SECONDS));
+
+			Probe other = new Probe();
+			other.name = "cleanup-other";
+			engine.registerAdapter(other);
+			assertTrue(other.started, "a deletion in progress does not hold up an unrelated adapter");
+
+			release.countDown();
+			deletion.get(5, TimeUnit.SECONDS);
+			assertTrue(engine.getVenueState().users().create(OWNER));
+		} finally { release.countDown(); engine.close(); }
+	}
+
+	@Test void anAdapterReplacedDuringItsOwnCleanupFinishesItOnce() throws Exception {
+		Engine engine = Engine.createTemp(Maps.empty());
+		CountDownLatch entered = new CountDownLatch(1), release = new CountDownLatch(1);
+		try {
+			Probe adapter = new Probe();
+			engine.registerAdapter(adapter);
+			AdapterState state = seed(engine);
+			holdFirstStop(adapter, entered, release);
+			CompletableFuture<ACell> deletion = CompletableFuture.supplyAsync(() -> engine.deleteUser(engine.venueContext(), OWNER));
+			assertTrue(entered.await(5, TimeUnit.SECONDS));
+
+			Probe replacement = new Probe();
+			engine.registerAdapter(replacement);
+			assertEquals(1, replacement.stopped, "the entry was still pending, so the replacement finishes it");
+			assertFalse(engine.getVenueState().pendingUserDeletions(NAME).containsKey(OWNER));
+
+			release.countDown();
+			deletion.get(5, TimeUnit.SECONDS);
+			assertEquals(1, adapter.stopped);
+			assertNull(state.read("custom/" + OWNER));
+			assertTrue(engine.getVenueState().users().create(OWNER));
+		} finally { release.countDown(); engine.close(); }
+	}
+
+	@Test void overlappingDeletionsOfOneUserAgree() throws Exception {
+		Engine engine = Engine.createTemp(Maps.empty());
+		CountDownLatch entered = new CountDownLatch(1), release = new CountDownLatch(1);
+		try {
+			Probe adapter = new Probe();
+			engine.registerAdapter(adapter);
+			seed(engine);
+			holdFirstStop(adapter, entered, release);
+			CompletableFuture<ACell> first = CompletableFuture.supplyAsync(() -> engine.deleteUser(engine.venueContext(), OWNER));
+			assertTrue(entered.await(5, TimeUnit.SECONDS));
+
+			ACell second = engine.deleteUser(engine.venueContext(), OWNER);
+			release.countDown();
+			assertEquals(second, first.get(5, TimeUnit.SECONDS), "one account, one tombstone");
+			assertFalse(engine.getVenueState().users().isDeleting(OWNER));
+			assertTrue(engine.getVenueState().users().create(OWNER));
 		} finally { release.countDown(); engine.close(); }
 	}
 

@@ -1,9 +1,11 @@
 package covia.adapter.messaging;
 
 import convex.core.data.ACell;
+import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMBool;
+import covia.exception.ConfigurationException;
 import covia.venue.Engine;
 
 /** Provider-independent identity and routing of a messaging binding. */
@@ -19,13 +21,21 @@ public interface MessagingBotSpec {
 	default AString userDID(Engine engine) {
 		if (!"public".equals(userRef())) return Strings.create(userRef());
 		if (engine == null || !engine.config().isPublicAccess()) {
-			throw new IllegalStateException("bot '" + name() + "'" + PUBLIC_ACCESS_DISABLED);
+			throw new ConfigurationException("bot '" + name() + "'" + PUBLIC_ACCESS_DISABLED);
 		}
 		return Strings.create(engine.getDIDString() + ":public");
 	}
 
 	/** The binding's {@code relay} settings when it relays to principals ({@link RelayBinding}); null otherwise. */
 	default ACell relay() { return null; }
+	/**
+	 * Whether the binding lists this verified sender ({@code {id, handle?, name?}},
+	 * {@link ChannelAuthentication#sender}): its messages then come from the
+	 * binding's principal. Matches the provider's identifiers exactly.
+	 */
+	default boolean lists(AMap<AString, ACell> sender) { return false; }
+	/** Whether any other sender is admitted, as the venue's public principal. */
+	default boolean open() { return false; }
 
 	default boolean routesToAgent() { return agent() != null; }
 	default boolean routesToOperation() { return operation() != null; }

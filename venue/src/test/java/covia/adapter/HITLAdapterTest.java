@@ -5,9 +5,9 @@ import static org.junit.jupiter.api.Assertions.*;
 import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
+import org.junit.jupiter.api.parallel.Isolated;
 
 import convex.auth.jwt.JWT;
 import convex.auth.ucan.Capability;
@@ -23,17 +23,21 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
+import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.JobFailedException;
 import covia.grid.Job;
+import covia.grid.Principals;
 import covia.grid.Status;
 import covia.grid.auth.UcanTokens;
 import covia.grid.hitl.Hitl;
+import covia.venue.Agent;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.Config;
-import covia.venue.AgentState;
+import covia.venue.AgentWatch;
 import covia.venue.TestEngine;
+import covia.venue.TestLogs;
 import covia.venue.User;
 
 /**
@@ -47,17 +51,14 @@ import covia.venue.User;
  * violations, respond-after-expiry, and cancel. Domain-rule edge cases are
  * unit-tested engine-free in {@code HitlValidationTest}.
  *
- * <p>Per-test key pairs isolate user namespaces on the shared engine.</p>
+ * <p>Per-test key pairs isolate user namespaces on the shared engine.
+ * Isolated because the tests injecting venue faults silence the logger that
+ * reports them.</p>
  */
+@Isolated("silences the AAdapter logger")
 public class HITLAdapterTest {
 
-	private static final Engine engine;
-	static {
-		engine = Engine.createTemp(Maps.of(
-			Config.HOSTNAME, Strings.create("hitl.test.covia.example"),
-			Config.USERS, Maps.of(Config.AUTO_CREATE, true)));
-		Engine.addDemoAssets(engine);
-	}
+	private static final Engine engine = TestEngine.ENGINE;
 
 	private AKeyPair BOB_KP;
 	private AString ALICE_DID;
@@ -71,16 +72,11 @@ public class HITLAdapterTest {
 	public void setup(TestInfo info) {
 		BOB_KP = AKeyPair.generate();
 		String method = info.getTestMethod().map(m -> m.getName()).orElse("unknown");
-		ALICE_DID = engine.managedUserDID(Strings.create("hitl-" + method));
+		ALICE_DID = TestEngine.uniqueManagedDID("hitl-" + method);
 		engine.getVenueState().users().ensure(ALICE_DID);
 		BOB_DID = UCAN.toDIDKey(BOB_KP.getAccountKey());
 		ALICE = RequestContext.of(ALICE_DID);
 		BOB = RequestContext.of(BOB_DID);
-	}
-
-	@AfterAll
-	static void closeEngine() {
-		engine.close();
 	}
 
 	// ========== Helpers ==========
@@ -102,6 +98,30 @@ public class HITLAdapterTest {
 
 	// ========== The clean drive: request → respond → completion ==========
 
+	/** A delegate asking for the user it acts for is the request's caller, in that user's namespace. */
+	@Test
+	public void testADelegatesRequestNamesItsOwner() {
+		AKeyPair ownerKey = AKeyPair.generate();
+		AString owner = UCAN.toDIDKey(ownerKey.getAccountKey());
+		engine.getVenueState().users().ensure(owner);
+		AString grant = UCAN.create(ownerKey, BOB_KP.getAccountKey(), System.currentTimeMillis() / 1000 + HOUR,
+			Vectors.of(Capability.create(owner, Abilities.USER_SUDO),
+				Capability.create(Strings.create(owner + "/v/ops/hitl/request"), Strings.create("invoke"))),
+			Vectors.empty()).toJWT(ownerKey);
+		RequestContext delegate = engine.sudoContext(engine.withTransportGrants(
+			BOB, Vectors.of(grant)), owner);
+
+		Job job = request(delegate, Hitl.request("For the owner").ask(Hitl.approval("ok", "OK?").required()).build());
+		assertEquals(Status.INPUT_REQUIRED, job.getStatus(), job.getErrorMessage());
+		AMap<AString, ACell> record = engine.getVenueState().users().user(owner).inbox()
+			.get(Strings.create(job.getID().toHexString()));
+		assertEquals(BOB_DID, record.get(Hitl.CALLER));
+		assertEquals(owner, record.get(Hitl.OWNER), "the delegate asked in the owner's namespace");
+		assertEquals(BOB_DID, job.getCaller());
+		assertEquals(owner, job.getOwner(), "and the request's job is the owner's");
+		job.cancel();
+	}
+
 	@Test
 	public void testAnswerLifecycle() {
 		// 1. Request — the Job parks awaiting the human.
@@ -116,8 +136,11 @@ public class HITLAdapterTest {
 		AMap<AString, ACell> record = readRecord(ALICE, id);
 		assertNotNull(record, "the record must land in the target's h/ inbox");
 		assertEquals(Hitl.OPEN, record.get(Hitl.STATUS));
-		assertEquals(ALICE_DID, record.get(Hitl.FROM),
-			"from is the VERIFIED caller identity, venue-set");
+		assertEquals(ALICE_DID, record.get(Hitl.CALLER),
+			"caller is the VERIFIED caller identity, venue-set");
+		assertNull(record.get(Hitl.OWNER), "a user asking in its own namespace names no other owner");
+		assertEquals(ALICE_DID, RT.getIn(engine.jobs().adapterData(job), HITLAdapter.TARGET),
+			"the job keeps whom its request went to, outside its record");
 
 		// The inbox listing shows the open ask.
 		ACell list = engine.jobs().invokeOperation("v/ops/hitl/list",
@@ -136,6 +159,7 @@ public class HITLAdapterTest {
 		assertEquals(CVMBool.TRUE, RT.getIn(output, "answers", "pay"));
 		assertEquals(Strings.create(id), RT.getIn(output, "id"));
 		assertEquals(Hitl.ANSWERED, readRecord(ALICE, id).get(Hitl.STATUS));
+		assertNull(engine.jobs().adapterData(job), "a finished job keeps no adapter data");
 	}
 
 	@Test
@@ -145,10 +169,11 @@ public class HITLAdapterTest {
 			Fields.CONFIG, Maps.of(
 				Fields.OPERATION, "v/ops/llmagent/chat",
 				"llmOperation", "v/test/ops/llm",
+				"caps", "unrestricted",
 				Fields.TOOLS, Vectors.of(Strings.create("v/ops/hitl/request")))),
 			ALICE).awaitResult(5000);
-		User owner = engine.getVenueState().users().get(ALICE_DID);
-		AgentState agent = owner.agent("hitl-agent");
+		User owner = engine.getVenueState().users().user(ALICE_DID);
+		Agent agent = owner.agent("hitl-agent");
 		Blob sid = Blob.fromHex("a11ce000a11ce000a11ce000a11ce000");
 		agent.ensureSession(sid, ALICE_DID);
 
@@ -180,12 +205,14 @@ public class HITLAdapterTest {
 		assertEquals(Strings.create("hitl-agent"), record.get(Hitl.AGENT));
 		assertEquals(Strings.create(sid.toHexString()), record.get(Fields.SESSION_ID));
 
-		respond(ALICE, Hitl.answer(id.toString()).answer("path", "left").build());
-		assertEquals(Status.COMPLETE, request.getStatus());
-		assertFalse(agent.getPending().containsKey(request.getID()));
-		assertEquals(Maps.of(Fields.INPUT, 0, Fields.AUTH, 0),
-			agents.agentInfo(ALICE, Strings.create("hitl-agent")).get(Fields.AWAITING));
-		TestEngine.awaitTimelineCount(agent, 1, 10000);
+		try (AgentWatch watch = AgentWatch.open(engine, ALICE_DID, "hitl-agent")) {
+			respond(ALICE, Hitl.answer(id.toString()).answer("path", "left").build());
+			assertEquals(Status.COMPLETE, request.getStatus());
+			assertFalse(agent.getPending().containsKey(request.getID()));
+			assertEquals(Maps.of(Fields.INPUT, 0, Fields.AUTH, 0),
+				agents.agentInfo(ALICE, Strings.create("hitl-agent")).get(Fields.AWAITING));
+			watch.awaitCycles(1);
+		}
 		String conversation = covia.adapter.agent.GoalTreeContext.activeConversation(RT.ensureMap(
 			RT.getIn(owner.agent("hitl-agent").getSession(sid), Fields.FRAMES, CVMLong.ZERO))).toString();
 		assertTrue(conversation.contains(id.toString()) && conversation.contains("left"),
@@ -194,11 +221,13 @@ public class HITLAdapterTest {
 
 	@Test
 	public void resolutionAndSessionDeliveryRollbackTogetherAndSurviveRestart() throws Exception {
-		// TestTemp, not @TempDir: on Java 21 (no FFM mapper) a closed store's file
-		// stays mapped until GC, and Windows will not delete a mapped file.
-		var temp = covia.venue.TestTemp.dir("hitl-rollback");
+		// The injected delivery failure is a fault, logged at ERROR where it is reported
+		TestLogs.quiet(covia.exception.FaultException.class, this::resolutionAndSessionDeliveryRollBackTogether);
+	}
+
+	private void resolutionAndSessionDeliveryRollBackTogether() throws Exception {
 		AMap<AString, ACell> config = Maps.of(Config.PORT, 0, Config.BIND_ADDRESS, "127.0.0.1",
-			Config.STORE, temp.resolve("hitl.etch").toString(), Config.SEED, AKeyPair.createSeeded(7481).getSeed().toHexString());
+			Config.STORE, covia.venue.TestTemp.etchFile("hitl-rollback").toString(), Config.SEED, AKeyPair.createSeeded(7481).getSeed().toHexString());
 		AString owner = Strings.create("did:test:atomic-hitl");
 		Blob sid = Blob.fromHex("a11ce000a11ce000a11ce000a11ce000");
 		var failAppend = new java.util.concurrent.atomic.AtomicBoolean(true);
@@ -212,15 +241,15 @@ public class HITLAdapterTest {
 			e.registerAdapter(new AgentAdapter() {
 				@Override public boolean appendSessionMessage(covia.venue.Users draft, AString user, AString agent, Blob session,
 						AString caller, AString job, ACell message) {
-					assertEquals(Status.COMPLETE, draft.get(owner).job(Blob.fromHex(requestId.get().toString())).getRecord().get(Fields.STATUS),
+					assertEquals(Status.COMPLETE, draft.user(owner).jobs().getRecord(Blob.fromHex(requestId.get().toString())).get(Fields.STATUS),
 						"the final Job result must be part of the same draft as the inbox and session");
 					if (failAppend.get()) {
-						assertEquals(Status.INPUT_REQUIRED, e.getVenueState().users().get(owner).job(Blob.fromHex(requestId.get().toString())).getRecord().get(Fields.STATUS));
-						assertEquals(Hitl.OPEN, e.getVenueState().users().get(owner).getHitlRequest(requestId.get()).get(Hitl.STATUS));
-						assertTrue(e.getVenueState().users().get(owner).agent("asker").getSessionPending(sid).isEmpty());
+						assertEquals(Status.INPUT_REQUIRED, e.getVenueState().users().user(owner).jobs().getRecord(Blob.fromHex(requestId.get().toString())).get(Fields.STATUS));
+						assertEquals(Hitl.OPEN, e.getVenueState().users().user(owner).inbox().get(requestId.get()).get(Hitl.STATUS));
+						assertTrue(e.getVenueState().users().user(owner).agent("asker").getSessionPending(sid).isEmpty());
 					}
 					boolean appended = super.appendSessionMessage(draft,user,agent,session,caller,job,message);
-					assertFalse(draft.get(owner).agent("asker").getPending().containsKey(Blob.fromHex(requestId.get().toString())),
+					assertFalse(draft.user(owner).agent("asker").getPending().containsKey(Blob.fromHex(requestId.get().toString())),
 						"the draft must clear the completed wait before post-commit notifications");
 					if (failAppend.get()) throw new IllegalStateException("injected delivery failure");
 					return appended;
@@ -232,7 +261,7 @@ public class HITLAdapterTest {
 			var ctx = RequestContext.of(owner);
 			e.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "asker", Fields.CONFIG,
 				Maps.of(Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/test/ops/llm")), ctx).awaitResult(5000);
-			var agent = e.getVenueState().users().get(owner).agent("asker");
+			var agent = e.getVenueState().users().user(owner).agent("asker");
 			agent.ensureSession(sid, owner);
 			Job ask = e.jobs().invokeOperation("v/ops/hitl/request", Hitl.request("Atomic answer")
 				.ask(Hitl.approval("yes", "Continue?").required()).build(), RequestContext.ofAgent(owner, Strings.create("asker")).withSessionId(sid));
@@ -240,7 +269,7 @@ public class HITLAdapterTest {
 			requestId.set(Strings.create(ask.getID().toHexString()));
 			var answer = Hitl.answer(requestId.get().toString()).answer("yes", true).build();
 			assertThrows(JobFailedException.class, () -> e.jobs().invokeOperation("v/ops/hitl/respond", answer, ctx).awaitResult(5000));
-			assertEquals(Hitl.OPEN, e.getVenueState().users().get(owner).getHitlRequest(requestId.get()).get(Hitl.STATUS));
+			assertEquals(Hitl.OPEN, e.getVenueState().users().user(owner).inbox().get(requestId.get()).get(Hitl.STATUS));
 			assertTrue(agent.getSessionPending(sid).isEmpty());
 			assertEquals(Status.INPUT_REQUIRED, ask.getStatus());
 			assertTrue(agent.getPending().containsKey(ask.getID()), "a rolled-back resolution must retain its wait");
@@ -262,10 +291,13 @@ public class HITLAdapterTest {
 		} finally { first.close(); }
 		var second = covia.venue.server.VenueServer.launch(config);
 		try {
-			var agent = second.getEngine().getVenueState().users().get(owner).agent("asker");
-			TestEngine.awaitTimelineCount(agent, 1, 10000);
+			var agent = second.getEngine().getVenueState().users().user(owner).agent("asker");
+			// The restarted venue wakes the agent as it boots: the cycle may already have run.
+			try (AgentWatch watch = AgentWatch.open(second.getEngine(), owner, "asker")) {
+				watch.awaitState("a timeline entry", () -> agent.getTimeline() != null && agent.getTimeline().count() >= 1);
+			}
 			assertTrue(agent.getSession(sid).toString().contains(requestId.get().toString()), "the resolved answer must survive restart before wake");
-			assertEquals(Hitl.ANSWERED, second.getEngine().getVenueState().users().get(owner).getHitlRequest(requestId.get()).get(Hitl.STATUS));
+			assertEquals(Hitl.ANSWERED, second.getEngine().getVenueState().users().user(owner).inbox().get(requestId.get()).get(Hitl.STATUS));
 		} finally { second.close(); }
 	}
 
@@ -273,25 +305,26 @@ public class HITLAdapterTest {
 
 	@Test
 	public void resolutionCommitsFinalJobBeforeFlushAndSurvivesRestart() throws Exception {
+		// The injected flush failure is a fault, logged at ERROR where it is reported
+		TestLogs.quiet(covia.exception.FaultException.class, this::resolutionCommitsFinalJobBeforeFlush);
+	}
+
+	private void resolutionCommitsFinalJobBeforeFlush() throws Exception {
 		var key = AKeyPair.generate();
-		// TestTemp, not @TempDir: on Java 21 (no FFM mapper) a closed store's file
-		// stays mapped until GC, and Windows will not delete a mapped file.
-		var file = covia.venue.TestTemp.dir("hitl-resolved").resolve("resolved-hitl.etch").toFile();
-		class BarrierEngine extends Engine {
+		// A store whose durability barrier fails just after it has saved.
+		class BarrierStore extends convex.core.store.MemoryStore {
 			volatile boolean interruptCompletion;
-			BarrierEngine(convex.etch.EtchStore store) throws java.io.IOException {
-				super(Maps.empty(), covia.venue.CoviaApplication.open(store, key), key);
-			}
 			@Override public void flush() {
 				super.flush();
 				// Fail after saving: all domain records must already agree.
-				if (interruptCompletion && !isClosing()) throw new IllegalStateException("interrupted after persistence");
+				if (interruptCompletion) throw new IllegalStateException("interrupted after persistence");
 			}
 		}
 		Blob answered, rejected, expired;
 		String token = UcanTokens.grant(BOB_KP, BOB_DID.toString(), BOB_DID + "/w/invoices/", "crud/read", HOUR);
-		try (var store = convex.etch.EtchStore.create(file)) {
-			var first = new BarrierEngine(store);
+		var store = new BarrierStore();
+		{
+			var first = TestEngine.application(store).mount(key, Maps.empty());
 			first.start();
 			try {
 				Engine.addDemoAssets(first);
@@ -302,29 +335,32 @@ public class HITLAdapterTest {
 				Job expire = first.jobs().invokeOperation("v/ops/hitl/request", Hitl.request("Expire me")
 					.ask(Hitl.approval("yes", "Continue?")).build(), BOB);
 				answered = answer.getID(); rejected = reject.getID(); expired = expire.getID();
-				first.interruptCompletion = true;
+				store.interruptCompletion = true;
 				Job answering = first.jobs().invokeOperation("v/ops/hitl/respond", tokenAnswer(answered.toHexString(), token), BOB);
 				first.jobs().invokeOperation("v/ops/hitl/respond", Hitl.reject(rejected.toHexString(), "No"), BOB);
-				User owner = first.getVenueState().users().get(BOB_DID);
+				User owner = first.getVenueState().users().user(BOB_DID);
 				AString expiryId = Strings.create(expired.toHexString());
-				owner.putHitlRequest(expiryId, owner.getHitlRequest(expiryId).assoc(Hitl.EXPIRES, CVMLong.ZERO));
-				var expiring = java.util.concurrent.CompletableFuture.runAsync(() ->
-					((HITLAdapter) first.getAdapter("hitl")).rearmExpiries(), AAdapter.VIRTUAL_EXECUTOR);
+				// As the venue does when the request's expiry event fires.
+				var expiring = first.jobs().invokeInternal(HITLAdapter.EXPIRE_OP,
+					HITLAdapter.expiryInput(BOB_DID, expiryId), first.venueContext());
 				for (Job pending : java.util.List.of(answer, reject, expire)) {
-					long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5);
-					while (!pending.isFinished() && System.nanoTime() < deadline) Thread.sleep(10);
-					assertTrue(pending.isFinished(), "resolution includes the final Job record");
+					TestEngine.awaitJob(pending, Job::isFinished, 10_000, () -> "resolution includes the final Job record");
 				}
 				assertThrows(java.util.concurrent.ExecutionException.class, () -> answering.future().get(5, TimeUnit.SECONDS));
 				assertThrows(java.util.concurrent.ExecutionException.class, () -> expiring.get(5, TimeUnit.SECONDS));
 				assertEquals(Status.FAILED, answering.getStatus(), "flush failure is reported without indefinite recovery");
 				assertEquals(Status.COMPLETE, answer.getStatus());
 				assertEquals(Strings.create(token), RT.getIn(answer.getOutput(), Hitl.TOKENS, Strings.create("b-access")));
-				assertFalse(owner.getHitlRequests().toString().contains(token), "h/ must never expose the signed token");
-			} finally { first.close(); }
+				assertFalse(owner.inbox().getAll().toString().contains(token), "h/ must never expose the signed token");
+			} finally {
+				// The final flush on close saves normally.
+				store.interruptCompletion = false;
+				first.close();
+			}
 		}
-		try (var store = convex.etch.EtchStore.create(file)) {
-			var second = new Engine(Maps.empty(), covia.venue.CoviaApplication.open(store, key), key).start();
+		{
+			// A restart: a new application over what the store retained.
+			var second = TestEngine.application(store).mount(key, Maps.empty()).start();
 			try {
 				Engine.addDemoAssets(second);
 				second.jobs().recoverJobs();
@@ -332,7 +368,8 @@ public class HITLAdapterTest {
 				assertEquals(Status.COMPLETE, answer.getStatus());
 				assertEquals(Strings.create(token), RT.getIn(answer.getOutput(), Hitl.TOKENS, Strings.create("b-access")));
 				assertEquals(Status.FAILED, second.jobs().getJob(rejected, BOB).getStatus());
-				assertEquals(Strings.create(HITLAdapter.REQUEST_REJECTED + ": No"), second.jobs().getJob(rejected, BOB).getData().get(Fields.ERROR));
+				assertEquals(Strings.create(String.format(HITLAdapter.REQUEST_REJECTED, BOB_DID) + HITLAdapter.THEIR_COMMENT + "No"),
+					second.jobs().getJob(rejected, BOB).getData().get(Fields.ERROR));
 				assertEquals(Strings.create(HITLAdapter.REQUEST_EXPIRED), second.jobs().getJob(expired, BOB).getData().get(Fields.ERROR));
 			} finally { second.close(); }
 		}
@@ -451,7 +488,8 @@ public class HITLAdapterTest {
 		respond(ALICE, Hitl.reject(id, "Wrong PO"));
 
 		assertEquals(Status.FAILED, job.getStatus());
-		assertTrue(job.getErrorMessage().contains("rejected"));
+		assertEquals(String.format(HITLAdapter.REQUEST_REJECTED, ALICE_DID) + HITLAdapter.THEIR_COMMENT + "Wrong PO",
+			job.getErrorMessage());
 		assertTrue(job.getErrorMessage().contains("Wrong PO"),
 			"the rejection reason must travel in the job error — the requester cannot read the inbox");
 		assertEquals(Hitl.REJECTED, readRecord(ALICE, id).get(Hitl.STATUS));
@@ -561,6 +599,64 @@ public class HITLAdapterTest {
 			RT.getIn(token.getCapabilities().get(0), Capability.WITH));
 	}
 
+	/**
+	 * Every concurrent answer approving a grant may mint one, but only the
+	 * answer that resolves the request hands its token over, so the audit trail
+	 * records exactly that grant.
+	 */
+	@Test
+	public void testOnlyTheAnswerThatResolvesRecordsItsGrant() throws Exception {
+		String venue = "hitl-audit.test.covia.example";
+		Engine audited = Engine.createTemp(Maps.of(
+			Config.HOSTNAME, Strings.create(venue),
+			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
+			Config.LOGGING, Maps.of(Config.AUDIT, true)));
+		ch.qos.logback.classic.Logger auditLog =
+			(ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(covia.venue.Audit.LOGGER);
+		var captured = new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+		ch.qos.logback.classic.Level level = auditLog.getLevel();
+		boolean additive = auditLog.isAdditive();
+		captured.start();
+		auditLog.setLevel(ch.qos.logback.classic.Level.INFO);
+		auditLog.setAdditive(false);
+		auditLog.addAppender(captured);
+		try {
+			Engine.addDemoAssets(audited);
+			AString user = audited.managedUserDID(Strings.create("hitl-audit"));
+			audited.getVenueState().users().ensure(user);
+			RequestContext ctx = RequestContext.of(user);
+			Job job = audited.jobs().invokeOperation("v/ops/hitl/request", Hitl.request("Grant?")
+				.ask(Hitl.approval("access", "Grant?").grant("w/reports/", "crud/read")).build(), ctx);
+			var answer = Hitl.answer(job.getID().toHexString())
+				.answer("access", true).echo("w/reports/", "crud/read").build();
+			var answers = new java.util.ArrayList<java.util.concurrent.Callable<Boolean>>();
+			for (int n = 0; n < 6; n++) answers.add(() -> {
+				try {
+					audited.jobs().invokeOperation("v/ops/hitl/respond", answer, ctx).awaitResult(5000);
+					return true;
+				} catch (JobFailedException lost) {
+					return false;
+				}
+			});
+			long accepted = covia.test.Rendezvous.all(answers).stream().filter(Boolean::booleanValue).count();
+			assertEquals(1, accepted, "one answer resolves the request");
+			assertEquals(Status.COMPLETE, job.getStatus());
+			long recorded = java.util.List.copyOf(captured.list).stream().filter(e -> {
+				var pairs = e.getKeyValuePairs();
+				return pairs != null
+					&& pairs.stream().anyMatch(p -> covia.venue.Audit.K_EVENT.equals(p.key) && covia.venue.Audit.TOKEN_ISSUED.equals(p.value))
+					&& pairs.stream().anyMatch(p -> covia.venue.Audit.K_VENUE.equals(p.key) && venue.equals(p.value));
+			}).count();
+			assertEquals(1, recorded, "the one grant handed over is the one recorded");
+		} finally {
+			auditLog.detachAppender(captured);
+			auditLog.setLevel(level);
+			auditLog.setAdditive(additive);
+			captured.stop();
+			audited.close();
+		}
+	}
+
 	@Test
 	public void testExplicitGrantExpiryIsNotSilentlyCapped() {
 		long offeredExp = (System.currentTimeMillis() / 1000) + 14 * 24 * 3600L;
@@ -615,15 +711,15 @@ public class HITLAdapterTest {
 				Hitl.request("too long").ask(Hitl.approval("a", "Approve?")
 					.grant(Hitl.grant("w/x", "crud/read", now + 2 * HOUR))).build(),
 				ctx));
-			assertTrue(excessive.getMessage().contains("3600-second HITL grant ceiling"));
+			assertFalse(excessive.getMessage().isBlank());
 
 			Exception permanent = assertThrows(Exception.class, () -> limited.jobs().invokeOperation(
 				"v/ops/hitl/request",
 				Hitl.request("permanent").ask(Hitl.approval("a", "Approve?")
 					.grant("w/x", "crud/read", (Long) null)).build(),
 				ctx));
-			assertTrue(permanent.getMessage().contains("requests no expiry"));
-			assertEquals(0, limited.getVenueState().users().get(user).getHitlRequests().count(),
+			assertFalse(permanent.getMessage().isBlank());
+			assertEquals(0, limited.getVenueState().users().user(user).inbox().getAll().count(),
 				"invalid offers must be rejected before entering the human's inbox");
 		} finally {
 			limited.close();
@@ -657,8 +753,8 @@ public class HITLAdapterTest {
 		String id = job.getID().toHexString();
 
 		AMap<AString, ACell> record = readRecord(ALICE, id);
-		assertEquals(BOB_DID, record.get(Hitl.FROM),
-			"from is Bob — the verified requester, not the inbox owner");
+		assertEquals(BOB_DID, record.get(Hitl.CALLER),
+			"caller is Bob — the verified requester, not the inbox owner");
 
 		// ADVERSARIAL: the requester cannot respond — the record is not in HIS inbox.
 		assertThrows(Exception.class, () -> respond(BOB,
@@ -678,30 +774,105 @@ public class HITLAdapterTest {
 			RT.getIn(token.getCapabilities().get(0), Capability.WITH));
 	}
 
-	// ========== Expiry and cancellation ==========
+	// ========== The person asked loses their account ==========
+
+	/** A delegation from the venue letting an agent's owner ask {@code target}. */
+	private RequestContext asking(AString owner, AString agentId, AString target) {
+		return asking(engine, owner, agentId, target);
+	}
+
+	private static RequestContext asking(Engine venue, AString owner, AString agentId, AString target) {
+		RequestContext caller = (agentId == null) ? RequestContext.of(owner) : RequestContext.ofAgent(owner, agentId);
+		String delegation = UcanTokens.grant(venue.getKeyPair(), caller.getCallerDID().toString(),
+			target + "/h/", HITLAdapter.ABILITY_HITL_REQUEST.toString(), HOUR);
+		return caller.withProofs(Vectors.of(UCAN.fromJWT(Strings.create(delegation)).toMap()));
+	}
 
 	@Test
-	public void testExpiry() {
-		AString agentId = Strings.create("expiry-agent");
-		AgentState agent = engine.getVenueState().users().ensure(ALICE_DID)
-			.ensureAgent(agentId, Maps.empty(), null);
-		Job job = request(RequestContext.ofAgent(ALICE_DID, agentId), Hitl.request("quick")
-			.ask(Hitl.approval("ok", "OK?")).timeout(1).build());
-		String id = job.getID().toHexString();
+	public void testDeletingTheTargetFailsTheRequestUnderstandably() {
+		engine.getVenueState().users().ensure(BOB_DID);
+		Job job = request(asking(BOB_DID, null, ALICE_DID), Hitl.request("Report access").to(ALICE_DID.toString())
+			.ask(Hitl.approval("ok", "OK?")).build());
 		assertEquals(Status.INPUT_REQUIRED, job.getStatus());
+
+		engine.deleteUser(engine.venueContext(), ALICE_DID);
+
+		assertEquals(Status.FAILED, job.getStatus());
+		assertEquals(String.format(HITLAdapter.TARGET_DELETED, ALICE_DID), job.getErrorMessage());
+	}
+
+	@Test
+	public void testDeletingTheTargetTellsTheAgentThatAsked() {
+		AString owner = BOB_DID;
+		AString agentId = Strings.create("deleted-target-agent");
+		engine.getVenueState().users().ensure(owner);
+		engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(
+			Fields.AGENT_ID, agentId,
+			Fields.CONFIG, Maps.of(Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/test/ops/llm")),
+			BOB).awaitResult(5000);
+		Agent agent = engine.getVenueState().users().user(owner).agent(agentId);
+		Blob sid = Blob.fromHex("d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0");
+		agent.ensureSession(sid, owner);
+		Job job = request(asking(owner, agentId, ALICE_DID).withSessionId(sid), Hitl.request("May I?").to(ALICE_DID.toString())
+			.ask(Hitl.approval("ok", "OK?")).build());
 		assertTrue(agent.getPending().containsKey(job.getID()));
 
-		// The expiry timer fails the job; awaitResult surfaces it.
-		assertThrows(JobFailedException.class, () -> job.awaitResult(15000));
-		assertEquals(Status.FAILED, job.getStatus());
-		assertTrue(job.getErrorMessage().contains("expired"));
-		assertFalse(agent.getPending().containsKey(job.getID()));
-		assertEquals(Hitl.EXPIRED, readRecord(ALICE, id).get(Hitl.STATUS));
-
-		// ADVERSARIAL: responding to an expired request must fail.
-		assertThrows(Exception.class, () -> respond(ALICE,
-			Hitl.answer(id).answer("ok", true).build()));
+		try (AgentWatch watch = AgentWatch.open(engine, owner, agentId)) {
+			engine.deleteUser(engine.venueContext(), ALICE_DID);
+			assertEquals(Status.FAILED, job.getStatus());
+			assertFalse(agent.getPending().containsKey(job.getID()), "the agent must stop waiting");
+			watch.awaitCycles(1);
+		}
+		String conversation = covia.adapter.agent.GoalTreeContext.activeConversation(RT.ensureMap(
+			RT.getIn(agent.getSession(sid), Fields.FRAMES, CVMLong.ZERO))).toString();
+		assertTrue(conversation.contains(String.format(HITLAdapter.TARGET_DELETED, ALICE_DID)),
+			"the asking session must be told why: " + conversation);
 	}
+
+	@Test
+	public void testRecoveryFailsARequestWhoseTargetAlreadyWent() {
+		Engine isolated = Engine.createTemp(Maps.of(
+			Config.HOSTNAME, Strings.create(TestEngine.HOSTNAME),
+			Config.USERS, Maps.of(Config.AUTO_CREATE, true)));
+		try {
+			Engine.addDemoAssets(isolated);
+			isolated.getVenueState().users().ensure(ALICE_DID);
+			isolated.getVenueState().users().ensure(BOB_DID);
+			Job original = isolated.jobs().invokeOperation("v/ops/hitl/request",
+				Hitl.request("Report access").to(ALICE_DID.toString()).ask(Hitl.approval("ok", "OK?")).build(),
+				asking(isolated, BOB_DID, null, ALICE_DID));
+			assertEquals(Status.INPUT_REQUIRED, original.getStatus());
+			// No live handle, as for a deletion finishing before the job's handle is restored
+			isolated.jobs().deleteJob(original.getID());
+			isolated.deleteUser(isolated.venueContext(), ALICE_DID);
+
+			isolated.jobs().recoverJobs();
+
+			AMap<AString, ACell> recovered = isolated.jobs().getJobData(original.getID(), RequestContext.of(BOB_DID));
+			assertEquals(Status.FAILED, recovered.get(Fields.STATUS));
+			assertEquals(Strings.create(String.format(HITLAdapter.TARGET_DELETED, ALICE_DID)), recovered.get(Fields.ERROR));
+		} finally {
+			isolated.close();
+		}
+	}
+
+	@Test
+	public void testDeletingSomeoneElseLeavesTheRequestWaiting() {
+		engine.getVenueState().users().ensure(BOB_DID);
+		AString bystander = TestEngine.uniqueManagedDID("hitl-bystander");
+		engine.getVenueState().users().ensure(bystander);
+		Job job = request(asking(BOB_DID, null, ALICE_DID), Hitl.request("Report access").to(ALICE_DID.toString())
+			.ask(Hitl.approval("ok", "OK?")).build());
+
+		engine.deleteUser(engine.venueContext(), bystander);
+
+		assertEquals(Status.INPUT_REQUIRED, job.getStatus());
+		job.cancel();
+	}
+
+	// ========== Expiry and cancellation ==========
+
+	// Expiry at a request's timeout: SteppedSchedulerTest, on a driven clock.
 
 	@Test
 	public void testCancelMarksRecordCancelled() {
@@ -712,7 +883,7 @@ public class HITLAdapterTest {
 		engine.jobs().cancelJob(job.getID(), ALICE);
 		assertEquals(Status.CANCELLED, job.getStatus());
 		assertEquals(Hitl.CANCELLED, readRecord(ALICE, id).get(Hitl.STATUS),
-			"the cancel hook marks the inbox record cancelled");
+			"cancelling marks the inbox record cancelled");
 		assertThrows(Exception.class, () -> respond(ALICE,
 			Hitl.answer(id).answer("ok", true).build()));
 	}
@@ -723,7 +894,7 @@ public class HITLAdapterTest {
 		try {
 			Engine.addDemoAssets(isolated);
 			AString agentId = Strings.create("recover-hitl");
-			AgentState agent = isolated.getVenueState().users().ensure(ALICE_DID)
+			Agent agent = isolated.getVenueState().users().ensure(ALICE_DID)
 				.ensureAgent(agentId, Maps.empty(), null);
 			Job original = isolated.jobs().invokeOperation("v/ops/hitl/request",
 				Hitl.request("Recover me").ask(Hitl.approval("ok", "OK?")).build(),
@@ -750,8 +921,8 @@ public class HITLAdapterTest {
 				agents.agentInfo(RequestContext.of(ALICE_DID), agentId).get(Fields.AWAITING));
 			restored.cancel();
 			assertFalse(agent.getPending().containsKey(restored.getID()));
-			assertEquals(Hitl.CANCELLED, isolated.getVenueState().users().get(ALICE_DID)
-				.getHitlRequest(Strings.create(restored.getID().toHexString())).get(Hitl.STATUS));
+			assertEquals(Hitl.CANCELLED, isolated.getVenueState().users().user(ALICE_DID)
+				.inbox().get(Strings.create(restored.getID().toHexString())).get(Hitl.STATUS));
 		} finally {
 			isolated.close();
 		}

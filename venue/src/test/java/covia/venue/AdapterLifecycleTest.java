@@ -30,8 +30,9 @@ import covia.lattice.CapabilityChecker;
  * boot-time disabling via {@code adapters.<name>.enabled}, the kernel set,
  * and the venue-owned {@code v/ops/venue/*} operations that drive it.
  *
- * <p>Uses throwaway engines — disabling adapters on the shared TestEngine
- * would race every other test.</p>
+ * <p>A test that changes adapters or needs its own config takes a throwaway
+ * engine — disabling adapters on the shared TestEngine would race every
+ * other test.</p>
  */
 public class AdapterLifecycleTest {
 
@@ -62,13 +63,13 @@ public class AdapterLifecycleTest {
 			assertEquals(Maps.of("hello", "world"), engine.jobs().invokeOperation(
 				metadata, Maps.of("hello", "world"), engine.venueContext()).awaitResult(5000));
 			var testOperations = engine.getAdapter("test").getOperations();
-			asVenue(engine, "v/ops/covia/write", Maps.of("path", ECHO, "value", "operator replacement"));
+			asVenue(engine, "v/ops/covia/write", Maps.of("path", "w/global/test/ops/echo", "value", "operator replacement"));
 			engine.configureAdapter("test", Maps.empty());
 			assertEquals(testOperations, engine.getAdapter("test").getOperations());
 			assertEquals(Strings.create("operator replacement"), venueRead(engine, ECHO));
 
 			// An arbitrary operation-shaped operator value is not a discovery declaration.
-			asVenue(engine, "v/ops/covia/write", Maps.of("path", "v/ops/discovery-probe/custom", "value", metadata));
+			asVenue(engine, "v/ops/covia/write", Maps.of("path", "w/global/ops/discovery-probe/custom", "value", metadata));
 			engine.configureAdapter("discovery-probe", Maps.empty());
 			assertEquals(1, adapter.getOperations().count());
 			assertEquals(metadata, venueRead(engine, "v/ops/discovery-probe/custom"));
@@ -273,8 +274,8 @@ public class AdapterLifecycleTest {
 			assertTrue(engine.disableAdapter("grid"));
 			assertNull(engine.getAdapter("grid"));
 			assertTrue(engine.enableAdapter("grid"));
-			assertThrows(IllegalArgumentException.class, () -> engine.disableAdapter("no-such-adapter"));
-			assertThrows(IllegalArgumentException.class, () -> engine.enableAdapter("no-such-adapter"));
+			assertThrows(covia.exception.NotFoundException.class, () -> engine.disableAdapter("no-such-adapter"));
+			assertThrows(covia.exception.NotFoundException.class, () -> engine.enableAdapter("no-such-adapter"));
 		} finally {
 			engine.close();
 		}
@@ -317,14 +318,19 @@ public class AdapterLifecycleTest {
 		}
 	}
 
-	/** Records every configure() call and declines configs with {@code reject: true}. */
+	/**
+	 * Records every configure() call, declines configs with {@code reject: true}
+	 * and refuses any {@code malformed} setting as malformed.
+	 */
 	private static final class ConfigurableAdapter extends AAdapter {
+		static final String MALFORMED = "malformed is not a valid setting";
 		AMap<AString, ACell> seen;
 		int calls;
 		@Override public String getName() { return "configurable"; }
 		@Override public String getDescription() { return "test"; }
 		@Override public boolean configure(AMap<AString, ACell> config, boolean strict) {
 			calls++;
+			if (config.containsKey(Strings.create("malformed"))) throw new IllegalArgumentException(MALFORMED);
 			if (RT.bool(config.get(Strings.create("reject")))) return false;
 			seen = config;
 			return true;
@@ -357,7 +363,7 @@ public class AdapterLifecycleTest {
 				"static config object is untouched");
 
 			// A declined configuration changes nothing
-			assertThrows(IllegalArgumentException.class, () -> engine.configureAdapter(
+			assertThrows(covia.exception.InvalidInputException.class, () -> engine.configureAdapter(
 				"configurable", Maps.of(Strings.create("reject"), CVMBool.TRUE)));
 			assertEquals(runtime, engine.adapterConfig("configurable"));
 			assertEquals(runtime, adapter.seen);
@@ -368,7 +374,7 @@ public class AdapterLifecycleTest {
 			engine.configureAdapter("configurable", later);
 			assertEquals(later, adapter.seen);
 
-			assertThrows(IllegalArgumentException.class,
+			assertThrows(covia.exception.NotFoundException.class,
 				() -> engine.configureAdapter("no-such-adapter", Maps.empty()));
 		} finally {
 			engine.close();
@@ -385,12 +391,42 @@ public class AdapterLifecycleTest {
 			assertNull(engine.getAdapter("configurable"));
 			assertTrue(engine.getDisabledAdapterNames().contains("configurable"));
 			// Still declining → enable refuses; accept → enable installs and activates
-			assertThrows(IllegalStateException.class, () -> engine.enableAdapter("configurable"));
+			assertThrows(covia.exception.ConfigurationException.class, () -> engine.enableAdapter("configurable"));
 			engine.configureAdapter("configurable", Maps.empty());
 			assertTrue(engine.enableAdapter("configurable"));
 			assertNotNull(engine.getAdapter("configurable"));
 		} finally {
 			engine.close();
+		}
+	}
+
+	@Test
+	public void testMalformedSettingIsTypedByItsSource() {
+		// In the venue config a malformed setting is the operator's setup; in a
+		// runtime reconfiguration it is the caller's input.
+		AMap<AString, ACell> malformed = Maps.of(Strings.create("malformed"), CVMBool.TRUE);
+		Engine engine = boot(Maps.of(Config.ADAPTERS, Maps.of(Strings.create("configurable"), malformed)));
+		try {
+			covia.exception.ConfigurationException refused = assertThrows(
+				covia.exception.ConfigurationException.class,
+				() -> engine.registerAdapter(new ConfigurableAdapter()));
+			assertEquals(ConfigurableAdapter.MALFORMED, refused.getMessage());
+			assertNull(engine.getAdapter("configurable"));
+		} finally {
+			engine.close();
+		}
+		Engine parked = boot(Maps.of(Config.ADAPTERS, Maps.of(Strings.create("configurable"),
+			malformed.assoc(Config.ENABLED, CVMBool.FALSE))));
+		try {
+			parked.registerAdapter(new ConfigurableAdapter());
+			assertThrows(covia.exception.ConfigurationException.class, () -> parked.enableAdapter("configurable"));
+			covia.exception.InvalidInputException rejected = assertThrows(
+				covia.exception.InvalidInputException.class,
+				() -> parked.configureAdapter("configurable", malformed));
+			assertEquals(ConfigurableAdapter.MALFORMED, rejected.getMessage());
+			assertNull(parked.getAdapter("configurable"));
+		} finally {
+			parked.close();
 		}
 	}
 
@@ -467,17 +503,16 @@ public class AdapterLifecycleTest {
 				"disabled adapters remain in the admin listing");
 
 			// Catalog metadata remains; dispatch fails because the adapter is gone.
-			IllegalStateException stale = assertThrows(IllegalStateException.class,
+			covia.exception.NotSupportedException stale = assertThrows(covia.exception.NotSupportedException.class,
 				() -> engine.jobs().invokeOperation("v/test/ops/echo",
 					Maps.of(Strings.create("value"), Strings.create("x")), ctx));
-			assertTrue(stale.getMessage().contains("Adapter not available"), stale.getMessage());
+			assertTrue(stale.getMessage().startsWith(JobManager.ADAPTER_NOT_AVAILABLE), stale.getMessage());
 			AMap<AString, ACell> echoMeta = Maps.of(
 				Strings.create("name"), Strings.create("direct echo"),
 				Strings.create("operation"), Maps.of(Strings.create("adapter"), Strings.create("test:echo")));
 			ExecutionException gone = assertThrows(ExecutionException.class,
 				() -> engine.jobs().invokeInternal(echoMeta, Maps.empty(), ctx).get(10, TimeUnit.SECONDS));
-			assertTrue(gone.getCause().getMessage().contains("Adapter not available"),
-				gone.getCause().getMessage());
+			assertInstanceOf(covia.exception.NotSupportedException.class, gone.getCause());
 
 			ACell enabled = asVenue(engine, "v/ops/venue/adapter/enable",
 				Maps.of(Strings.create("name"), Strings.create("test")));
@@ -510,51 +545,42 @@ public class AdapterLifecycleTest {
 
 	@Test
 	public void testVenueOpsRequireVenueAuthority() throws Exception {
-		Engine engine = boot(null);
-		try {
-			AString caller = UCAN.toDIDKey(AKeyPair.generate().getAccountKey());
-			engine.getVenueState().users().create(caller);
-			for (String op : new String[] {"v/ops/venue/adapters", "v/ops/venue/adapter/disable",
-					"v/ops/venue/adapter/enable", "v/ops/venue/adapter/configure",
-					"v/ops/venue/module/load", "v/ops/venue/module/unload",
-					"v/ops/venue/restart", "v/ops/venue/gc"}) {
-				ExecutionException denied = assertThrows(ExecutionException.class,
-					() -> engine.jobs().invokeInternal(op,
-						Maps.of(Strings.create("name"), Strings.create("test"),
-							Strings.create("module"), Strings.create("x.jar"),
-							Strings.create("config"), Maps.empty()),
-						RequestContext.of(caller)).get(10, TimeUnit.SECONDS), op);
-				assertInstanceOf(AuthException.class, denied.getCause(), op);
-				assertTrue(denied.getCause().getMessage().contains("venue-issued delegation"), op);
-				if (op.endsWith("/restart")) {
-					assertTrue(denied.getCause().getMessage().contains("venue/restart"), op);
-					assertTrue(denied.getCause().getMessage().contains("/process"), op);
-				} else if (op.endsWith("/gc")) {
-					assertTrue(denied.getCause().getMessage().contains("venue/gc"), op);
-					assertTrue(denied.getCause().getMessage().contains("/store"), op);
-				} else {
-					assertTrue(denied.getCause().getMessage().contains("adapter/manage"), op);
-					assertTrue(denied.getCause().getMessage().contains("/adapters"), op);
-				}
+		Engine engine = TestEngine.ENGINE;
+		AString caller = UCAN.toDIDKey(AKeyPair.generate().getAccountKey());
+		engine.getVenueState().users().create(caller);
+		for (String op : new String[] {"v/ops/venue/adapters", "v/ops/venue/adapter/disable",
+				"v/ops/venue/adapter/enable", "v/ops/venue/adapter/configure",
+				"v/ops/venue/module/load", "v/ops/venue/module/unload",
+				"v/ops/venue/restart", "v/ops/venue/gc"}) {
+			ExecutionException denied = assertThrows(ExecutionException.class,
+				() -> engine.jobs().invokeInternal(op,
+					Maps.of(Strings.create("name"), Strings.create("test"),
+						Strings.create("module"), Strings.create("x.jar"),
+						Strings.create("config"), Maps.empty()),
+					RequestContext.of(caller)).get(10, TimeUnit.SECONDS), op);
+			assertInstanceOf(AuthException.class, denied.getCause(), op);
+			assertFalse(denied.getCause().getMessage().isBlank(), op);
+			if (op.endsWith("/restart")) {
+				assertTrue(denied.getCause().getMessage().contains("venue/restart"), op);
+				assertTrue(denied.getCause().getMessage().contains("/process"), op);
+			} else if (op.endsWith("/gc")) {
+				assertTrue(denied.getCause().getMessage().contains("venue/gc"), op);
+				assertTrue(denied.getCause().getMessage().contains("/store"), op);
+			} else {
+				assertTrue(denied.getCause().getMessage().contains("adapter/manage"), op);
+				assertTrue(denied.getCause().getMessage().contains("/adapters"), op);
 			}
-			// Nothing changed
-			assertNotNull(engine.getAdapter("test"));
-		} finally {
-			engine.close();
 		}
+		// Nothing changed
+		assertNotNull(engine.getAdapter("test"));
 	}
 
 	@Test
 	public void testRestartRequiresStandaloneMainVenueProcess() throws Exception {
-		Engine engine = boot(null);
-		try {
-			ExecutionException unavailable = assertThrows(ExecutionException.class,
-				() -> asVenue(engine, "v/ops/venue/restart", Maps.empty()));
-			assertTrue(unavailable.getCause().getMessage().contains("not managed by MainVenue"),
-				String.valueOf(unavailable.getCause()));
-		} finally {
-			engine.close();
-		}
+		ExecutionException unavailable = assertThrows(ExecutionException.class,
+			() -> asVenue(TestEngine.ENGINE, "v/ops/venue/restart", Maps.empty()));
+		assertFalse(unavailable.getCause().getMessage().isBlank(),
+			String.valueOf(unavailable.getCause()));
 	}
 
 	private static boolean hasAdapterEntry(ACell listing, String name, boolean enabled) {

@@ -67,9 +67,9 @@ User-owned, mutable, per-user. Each user has their own `/o/` lattice region unde
 
 Semantics, access control, and pin-to-`/a/`-on-invoke behaviour are as already specified in `GRID_LATTICE_DESIGN.md` §4.3 and §4.4. **This document does not change `/o/`.**
 
-### `/v/` — venue globals (new virtual namespace)
+### `/v/` — venue globals
 
-`/v/` is a **virtual namespace prefix**, registered alongside the existing `n/` and `t/` resolvers (GRID_LATTICE_DESIGN §4.5). It is not a new top-level lattice region; it is convenience syntax over an existing storage location.
+`/v/` is a **context-rooted namespace**, like `n/` and `t/` (GRID_LATTICE_DESIGN §4.5). It is not a top-level lattice region; it is a read-only view of an existing storage location.
 
 **Resolution.** `/v/<rest>` resolves to the venue user's workspace at `w/global/<rest>`. Concretely: `v/ops/json/merge` is the same lattice cell as the venue user's workspace path `w/global/ops/json/merge`. The venue is treated as a user — it has its own DID (already used for JWT signing, UCAN issuance, and DID document publication) and therefore has a user record with a `/w/` workspace. Its `/w/global/` sub-tree is the place it publishes public data.
 
@@ -100,32 +100,21 @@ Semantics, access control, and pin-to-`/a/`-on-invoke behaviour are as already s
 
 A single `covia:slice v/info` round trip gives an agent or tool a complete venue introspection view.
 
-### `/v/` is a venue-scoped resolver — a new pattern
+### `/v/` names the venue's own data
 
-The existing virtual namespaces (`n/` and `t/`) are **caller-scoped**: they navigate to a sub-region inside the *caller's own* user data based on `RequestContext` (`agentId` for `n/`, `jobId` for `t/`). Both implementations call `adapter.ensureUserCursor(ctx)` to get the caller's cursor, then rewrite or navigate within it.
-
-`/v/` is **venue-scoped**: it navigates to a *fixed user* — the venue user — regardless of who is calling. `v/ops/json/merge` always resolves to `<venue-DID>/w/global/ops/json/merge`, whether read by Alice, Bob, or an anonymous client.
-
-This is a new pattern in the resolver framework. To support it, two small interface extensions are required:
-
-1. **`CoviaAdapter.ensureUserCursor(AString did)`** — a parallel to the existing `ensureUserCursor(ctx)`, returning the cursor for a *named* user rather than the calling user. Used by the `/v/` resolver to get the venue user's cursor.
-
-2. **`NamespaceResolver.canWrite(RequestContext ctx)`** — a per-call write check. Existing resolvers have `boolean isWritable()` which is a static yes/no, fine for caller-scoped namespaces (the caller writes to their own data; if they're authorised at all, they're authorised). Venue-scoped `/v/` needs to check the calling identity at write time. Existing resolvers get a default implementation that defers to `isWritable()`, so no behavioural change for `n/` and `t/`.
-
-The existing access pattern for `n/` and `t/` is implicit ("the cursor IS your own data, so writes are inherently authorised"). The new pattern for `/v/` is explicit ("the cursor is someone else's data, so the resolver checks authorisation against the caller's identity"). Both patterns coexist; `/v/` is the first member of the new family.
+`n/`, `c/` and `t/` name places in the caller's own data, picked by the request's agent, session or job. `/v/` names a fixed user's data, the venue's, whoever is calling: `v/ops/json/merge` shows `<venue-DID>/w/global/ops/json/merge` whether Alice, Bob or an anonymous client reads it. A `/v/` path is resolved from the venue's user (GRID_LATTICE_DESIGN §4.6). The view is every request's own, so `<venue-DID>/v/…` names no place.
 
 ### Access control
 
-`/v/` access is **enforced by the namespace resolver**, not by stored UCAN proofs:
+`/v/` is the venue's public read-only view, under its own policy rather than stored UCAN proofs:
 
 | Operation | Caller | Result |
 |-----------|--------|--------|
-| Read `/v/...` (any sub-namespace) | Anyone (anonymous, authenticated, internal) | Allowed |
-| Write `/v/...` | `RequestContext.INTERNAL` (engine code) | Allowed |
-| Write `/v/...` | JWT signed by venue keypair (operator) | Allowed |
-| Write `/v/...` | Anyone else | Rejected with permission error |
+| Read `/v/...` (any sub-namespace) | Any principal on the venue, whatever its caps | Allowed |
+| Change `/v/...` | Anyone, the venue included | Refused (`CoviaAdapter.VIEW_READ_ONLY`) |
+| Change `<venue-DID>/w/global/...` | The venue, or a principal it granted | Allowed; `/v/` shows the change |
 
-The `/v/` resolver short-circuits the standard user-workspace access check for reads, and verifies the caller is the venue identity for writes via the new `canWrite(ctx)` method. There is **no UCAN issued at startup** for public reads; the policy is intrinsic to the namespace. This is a more explicit version of the implicit access policy that the existing `n/` and `t/` resolvers rely on (where the caller's identity is the cursor's owner by construction).
+Engine code writes the catalog directly at startup; the MCP adapter's venue-scope tools are written to the venue's `w/global` by the venue. There is **no UCAN issued at startup** for public reads; the policy is intrinsic to the namespace.
 
 User `/o/` capability semantics are unchanged from GRID_LATTICE_DESIGN §6.
 
@@ -145,11 +134,12 @@ Any operation argument that accepts a lattice address — `path`, `from`, `ref`,
 | Explicit `/a/<hash>` | `/a/abc123...` | CAS lookup |
 | User namespace path | `o/merge`, `w/notes`, `g/alice/state` | Caller's own lattice region |
 | DID-qualified user path | `did:key:zAlice…/w/notes`, `did:key:zAlice…/g/Manager` | The named local user's physical lattice region, subject to capability checks |
-| Virtual prefix | `n/notes`, `t/draft`, `v/ops/json/merge`, `x/<adapter>/...` | Resolved by registered `NamespaceResolver`; extension views are provided by the active adapter for this user |
+| Context-rooted prefix | `n/notes`, `t/draft`, `v/ops/json/merge` | Resolved from the component the request names (GRID_LATTICE_DESIGN §4.5, §4.6) |
+| Adapter view | `x/<adapter>/...`, `did:key:zAlice…/x/<adapter>/...` | The active adapter's view for the caller, or for the named principal |
 | DID URL (hash) | `did:key:z6Mk…/a/<hash>`, `did:web:venue.host/a/<hash>` | Asset as published by a principal — self-verifying. Read-side: local copies only. Invocation-side: a local copy if held, else a hash-verified metadata fetch from the publishing venue (`did:web` only) |
 | DID URL (named) | `did:web:venue.host/v/ops/json/merge` | Catalog binding maintained by the publishing venue — mutable, trusted at fetch time. Invocation-side only: name → id resolved at the publisher, then the same hash-verified definition fetch. The job record carries the resolved hash |
 
-A read-side argument never needs to know "is this a hash or a path or a DID?" — the resolver figures it out. Capability checks happen during resolution: the caller needs read access to whatever resolves.
+A read-side argument never needs to know "is this a hash or a path or a DID?" — the resolver figures it out. Access is checked before the value is read: a path is read as data where it lives, as the component that owns it allows, and a content-addressed reference as an asset (GRID_LATTICE_DESIGN §4.6). The grammar of paths is in GRID_LATTICE_DESIGN §3.
 
 > **Not accepted: the `adapter:op` dispatch string.** An operation's
 > `operation.adapter` field (e.g. `test:echo`, `covia:write`) is the adapter's
@@ -170,7 +160,7 @@ Op arguments fall into two classes:
 | **Content reference** (read-side bytes) | Any asset/lattice form above, plus `file://<root>/<path>`, `dlfs/<drive>/<path>`, and `<ownerDID>/dlfs/<drive>/<path>` | `asset:content ref`; `file:write`, `file:append`, `dlfs:write`, `dlfs:append`, and `vault:write` `contentRef`; `archive:list` and `archive:extract` `contentRef` |
 | **Mutable target** (write-side) | Writable lattice paths: `o/...`, `w/...`, virtual writable namespaces (`n/`, `t/`, `c/`, and adapter-permitted `x/<adapter>/...`); `s/NAME` permits whole-record deletion only. Physical paths and extension views also accept owner-scoped DID URLs when authority permits the mutation | `covia:write path`, `covia:append path`, `covia:delete path`, `covia:copy to` |
 
-A write-side argument is constrained because you can't write to a content-addressed location (`/a/` is hash-determined), to a read-only namespace (`/v/` from non-venue callers), or to another user's namespace without UCAN delegation.
+A write-side argument is constrained because you can't write to a content-addressed location (`/a/` is hash-determined), to a read-only view (`/v/`, through which nothing changes), or to another user's namespace without UCAN delegation.
 
 ### The resolution chain
 
@@ -178,14 +168,14 @@ A write-side argument is constrained because you can't write to a content-addres
 
 1. **Bare hex hash** → fetch from CAS
 2. **`/a/<hash>`** → fetch from CAS
-3. **`/o/<name>`** → caller's own `/o/`
-4. **Virtual prefixes** → registered cursor views: `/v/<path>` for venue globals, `/n/`, `/c/` and `/t/` for execution scopes, `/x/<adapter>/...` for explicit adapter views
-5. **DID URL** → asset refs (`did:.../a/<hash>`) resolve local copies only; physical user refs (`did:.../w/...`, `did:.../g/...`, etc.) resolve through the named local user's cursor. `<owner-did>/x/<adapter>/...` selects that owner's adapter view under normal delegation checks. `resolvePath` never touches the network
-6. **Workspace path** (`w/`, `g/`, `o/`, `j/`, etc.) → caller's lattice cursor
+3. **DID URL naming an asset** (`did:.../a/<hash>`) → a local copy only; `resolvePath` never touches the network
+4. **Lattice path** → the value there, resolved from the component the request names ([GRID_LATTICE_DESIGN.md](GRID_LATTICE_DESIGN.md) §4.6): a path with an owner DID (`did:.../w/...`, `did:.../g/...`) through that local user, `<owner-did>/x/<adapter>/...` through that owner's adapter view under normal delegation checks, `/v/<path>` through the venue's globals, `/n/`, `/c/` and `/t/` through the request's execution scopes, and any other path, such as `/o/<name>` or `w/...`, through the caller's own data
 
-The resolver returns the **literal value** at the resolved location. It does NOT chase references, follow indirections, or interpret the value in any way. It is a single-step navigation primitive.
+The resolver returns the **literal value** at the resolved location. It does NOT chase references, follow indirections, or interpret the value in any way. It is a single-step navigation primitive. A path that names no place data could be, such as `wrok/notes`, resolves to nothing here; the covia read operations refuse it.
 
-**A leading slash is optional sugar.** Every form above resolves identically with or without a leading slash: `/v/ops/json/merge` is the same as `v/ops/json/merge`, and `/w/notes` the same as `w/notes`. The slash is normalised away before resolution, so the `/v/`, `/o/`, `/a/` notation used throughout this document and the bare `v/`, `o/`, `a/` forms are interchangeable.
+**A leading slash changes nothing.** Every form above resolves identically with or without one: `/v/ops/json/merge` is the same as `v/ops/json/merge`, and `/w/notes` the same as `w/notes`, so the `/v/`, `/o/`, `/a/` notation used throughout this document and the bare `v/`, `o/`, `a/` forms are interchangeable ([GRID_LATTICE_DESIGN.md](GRID_LATTICE_DESIGN.md) §3.2).
+
+**Ids are hex.** A job, task, session, event or asset id given as text is hex digits, with or without a leading `0x`. In a path or an asset reference nothing else counts as the id: whitespace around it makes it a different name.
 
 ### HTTP and SDK asset resolution
 
@@ -219,7 +209,7 @@ archive:list|extract          {contentRef} -> consume those bytes as an archive
 
 Content type is carried independently of the bytes. For assets, `metadata.content.contentType` is canonical, with the historical top-level `metadata.contentType` accepted as a fallback. File and DLFS providers infer a MIME type from the filename. The HTTP content API writes it to `Content-Type`; `asset:content` returns it as `contentType`. Unknown types remain valid binary content and use the HTTP fallback `application/octet-stream`.
 
-`Engine.resolveAsset(ref, ctx)` is a thin composition: `Asset.fromMeta(resolvePath(ref, ctx))`, plus one invocation-side addition: a remote DID URL reference whose definition is not held locally is **fetched** from the publishing venue — metadata only. For a hash reference (`did:web:…/a/<hash>`) the fetch is verified to hash to the requested id; for a named catalog reference (`did:web:…/v/ops/…`) the name is first resolved to an id *at the publisher* (the one step taken on the namer's word — names are mutable bindings), then the definition travels over the same hash-verified path. It returns an `Asset` if the resolved value is a map with an `operation` field, and `null` otherwise. Op-invocation paths (`grid:run`, agent loop) call `resolveAsset` and expect a non-null result; if the resolved value isn't asset-shaped, the op fails explicitly with "operation not found".
+`Engine.resolveAsset(ref, ctx)` is a thin composition: `Asset.fromMeta(resolvePath(ref, ctx))`, plus one invocation-side addition: a remote DID URL reference whose definition is not held locally is **fetched** from the publishing venue — metadata only. A reference is remote when this venue does not host its owner (`Engine.isRemote`). One it hosts (its own `did:key` or `did:web`, a user it keeps a record for, or an agent of one) is looked up in this venue's state alone, found or not, and is never fetched (`Engine.isRemoteDefinition`). For a hash reference (`did:web:…/a/<hash>`) the fetch is verified to hash to the requested id; for a named catalog reference (`did:web:…/v/ops/…`) the name is first resolved to an id *at the publisher* (the one step taken on the namer's word — names are mutable bindings), then the definition travels over the same hash-verified path. It returns an `Asset` if the resolved value is a map with an `operation` field, and `null` otherwise. Op-invocation paths (`grid:run`, agent loop) call `resolveAsset` and expect a non-null result; if the resolved value isn't asset-shaped, the op fails explicitly with "operation not found".
 
 **References denote definitions, never execution sites.** A DID prefix says where a definition can be *fetched from*; whatever is invoked with it executes on the venue that accepted the invoke, as an ordinary local job with local adapters and context. Cross-venue *execution* is always explicit — `grid:run` / `grid:invoke` with a `venue` argument — and produces a job record on each venue: one on the delegating venue for the grid op it accepted, one on the executing venue for the invoke *it* accepted. A definition fetch is a read and creates no job anywhere. (Semantics pinned by `RemoteAssetFetchTest` and `RemoteOperationTest`.)
 
@@ -227,7 +217,7 @@ Content type is carried independently of the bytes. For assets, `metadata.conten
 
 Resolution distinguishes a **genuine absence** from an **operational failure**, and never lets one masquerade as the other (#174):
 
-- **Absence is `null`.** A reference that does not resolve — a local miss, or a remote `did:web` reference whose publisher is *reachable but holds no such asset / does not bind the name* — returns `null`. This is an expected outcome; callers handle it. On the invoke path it becomes an explicit **"operation not found"** (HTTP 400 / `IllegalArgumentException`). `resolvePath` never touches the network, so it never fails operationally — its misses are always genuine absences.
+- **Absence is `null`.** A reference that does not resolve — a local miss, or a remote `did:web` reference whose publisher is *reachable but holds no such asset / does not bind the name* — returns `null`. This is an expected outcome; callers handle it. On the invoke path it becomes an explicit **"operation not found"** (`NotFoundException`, HTTP 400). `resolvePath` never touches the network, so it never fails operationally — its misses are always genuine absences.
 - **Operational failure throws.** When a remote fetch fails for an operational reason — the venue is **unreachable**, returns an **error**, the venue reference is **malformed**, or it returns **metadata that fails the content-addressing check** — `resolveAsset` / the fetch family throw a `RemoteFetchException` naming the venue. A down venue is *not* a missing operation.
 
 **Where the error surfaces** follows one rule: `null` is fine wherever absence is expected; the error is raised where the result is *used* for something that can't work with absence.
@@ -237,9 +227,10 @@ Resolution distinguishes a **genuine absence** from an **operational failure**, 
 | Direct invoke of a `did:web` op | HTTP **502** (an upstream fetch failed, not a 404), no job created |
 | Job-aware adapter (e.g. `agent:create` resolving a remote `definition`) | the **job fails** cleanly with the message (via the adapter's exception→`job.fail`), never orphaned |
 | `asset:pin` / `asset:get` of a remote ref | the op fails with the meaningful message |
-| Aggregate assembly (agent tool list, `config.context` entries) | **caught and degraded visibly** — the one unreachable ref is skipped / marked unavailable; the rest of the turn proceeds |
+| Aggregate assembly (`config.context` entries) | **caught and degraded visibly** — the one unreachable ref is skipped / marked unavailable; the rest of the turn proceeds |
+| An agent's tool on another venue | not fetched to build the tool list; fetched when the agent calls it, and a failure is that call's error result |
 
-This is why remote fetch can throw without breaking speculative resolution: the multi-form `resolvePath` chain is local-only, and the network is touched exclusively for an *explicit* `did:web` reference on the invocation/adoption path — where an operational failure is genuinely the answer, not an absence to fall through.
+This is why remote fetch can throw without breaking speculative resolution: the multi-form `resolvePath` chain is local-only, and the network is touched exclusively for an *explicit* `did:web` reference to another venue on the invocation/adoption path — where an operational failure is genuinely the answer, not an absence to fall through.
 
 > Known limitation: `VenueHTTP.getAsset` (covia-core) currently folds a remote **5xx** into `null` before the Engine sees it, so a *reachable-but-errored* venue is not yet distinct from a 404 end-to-end. Unreachable / malformed / integrity failures are all distinguishable today; the 404-vs-5xx client split is a separate covia-core follow-up.
 
@@ -400,8 +391,9 @@ meaning of validating the orchestration's own input against its input schema.
 Strict step validation resolves the target operation metadata before submitting
 the child job. Resolution and invocation use the same target: the local venue
 when the step omits `venue`, or the connected remote venue when it supplies one.
-The caller therefore needs `asset/read` as well as `invoke` authority for each
-strict step. Missing, unreadable, or operationally unresolvable metadata fails
+The caller therefore needs read authority over the definition
+([GRID_LATTICE_DESIGN.md](GRID_LATTICE_DESIGN.md) §4.6) as well as `invoke`
+authority for each strict step. Missing, unreadable, or operationally unresolvable metadata fails
 the step before it can apply side effects. If the resolved operation declares no
 output schema, there is no output constraint to enforce.
 
@@ -469,7 +461,7 @@ MCP `tools/list` identifies each advertised tool's operation reference in the
 standard tool `_meta` extension map (#558):
 
 ```json
-{"name": "agent_session_read", "_meta": {"ai.covia/operation": "v/ops/agent/session-read"}}
+{"name": "agent_history", "_meta": {"ai.covia/operation": "v/ops/agent/history"}}
 ```
 
 The value is the exact venue-relative reference in the MCP dispatch registry,
@@ -480,9 +472,17 @@ disabled or excluded tools are not listed. Older venues may omit this metadata:
 treat absence as unknown, not as evidence that an operation is unavailable.
 
 This is runtime discovery metadata, not part of the immutable operation asset.
-Exposure does not grant permission to invoke an operation: the normal capability
-checks still apply. REST/native invocation remains subject to its own checks
+Exposure binds a direct tool; it grants no authority over the resources the
+operation uses. Those resource checks still apply, without a blanket `invoke`
+requirement for a bound tool. Generic REST/native invocation additionally
+checks `invoke` on the requested reference and remains subject to its own checks
 and operation restrictions, independently of MCP exposure.
+
+A `tools/call` that the venue accepts and that then fails answers a tool result
+marked `isError`. Its text is the failure's reason, or, for a fault, the
+report of the scope it happened in, naming whose code it was and the
+exception's type ([ERRORS.md](ERRORS.md#scopes)). A malformed request or an
+unknown tool answers a JSON-RPC error instead.
 
 ### Lattice primitives
 
@@ -512,6 +512,14 @@ A small fixed set of primitives covers all interaction with operations and the c
 | `asset:list` | `limit?`, `offset?` | Caller's `/a/` | — | Asset summaries | List assets in the caller's CAS |
 
 #### `grid:` — operation invocation
+
+`grid:run` and `grid:invoke` look up their `operation` argument under the
+caller's authority. They need `invoke` on that target reference or a containing
+tree, not merely permission naming the grid wrapper. The chosen operation
+independently checks its resource authority. A directly exposed tool for that
+same operation needs only its action authority; the difference is arbitrary
+reference lookup, not whether execution creates a Job.
+
 
 | Op | Args | Returns | Purpose |
 |----|------|---------|---------|
@@ -586,21 +594,22 @@ Engine startup:
          # installAsset stores immutable meta in /a/<hash> and records the
          # catalog declaration for publication after every adapter is present.
 
-  2. Build the venue-owned bootstrap snapshot on a child w/global workspace fork
+  2. Build the venue-owned bootstrap snapshot in one transaction over v/
      for each catalog declaration:
-       write and read-validate its full v/... path on the child fork
+       write and read-validate its full v/... path in the transaction's draft
      write and read-validate v/info/name, did, version, started, protocols
      replace v/info/adapters with summaries of the registered adapters
 
-  3. Publish with one childFork.sync()
+  3. Commit the transaction
      # This is the only visibility point. A build or validation failure
-     # discards the child fork and leaves the live venue state unchanged.
+     # discards the draft and leaves the live venue state unchanged; a
+     # concurrent change to v/ rebuilds the snapshot on the new state.
 
   4. Connect config-declared MCP servers
      # External connection side effects happen after lattice publication.
 ```
 
-The materialisation step is **re-run on every startup** and is idempotent (modulo `started`, which legitimately reflects the current boot time): same adapters and same config produce the same paths. It uses direct lattice cursor writes, not operation invocation, so bootstrap creates no Jobs. There is no parallel catalog representation: the child lattice fork is both the build target and the value being validated.
+The materialisation step is **re-run on every startup** and is idempotent (modulo `started`, which legitimately reflects the current boot time): same adapters and same config produce the same paths. It uses direct lattice cursor writes, not operation invocation, so bootstrap creates no Jobs. There is no parallel catalog representation: the transaction's draft is both the build target and the value being validated.
 
 ### `installAsset` API
 
@@ -643,20 +652,21 @@ A separate `installTestAsset(catalogPath, resourcePath)` method writes to `/v/te
 
 ## 8. Capability model
 
-`/v/` access is enforced by the namespace resolver, not by stored UCAN proofs.
+`/v/` access is decided by the view's own policy, not by stored UCAN proofs. The catalog behind it is the venue user's `w/global`, under the same owner rule as any user's workspace (GRID_LATTICE_DESIGN §4.6).
 
 | Operation | Mechanism |
 |-----------|-----------|
-| Read `/v/...` | Resolver returns the value unconditionally. No UCAN required. |
-| Write `/v/...` (startup) | Engine owns the venue-user cursor and writes to a narrow `w/global` workspace fork before one `sync()`; no external authorization surface or Job is involved. |
-| Write `/v/...` (operator) | JWT signed by the venue keypair. The auth middleware identifies the caller as the venue's own DID; the resolver allows the write. |
-| Write `/v/...` (anyone else) | Resolver rejects with a permission error. |
+| Read `/v/...` | Of right for any principal. No UCAN required. |
+| Change `/v/...` | Refused for everyone, the venue included (`CoviaAdapter.VIEW_READ_ONLY`). |
+| Change the catalog at startup | The engine writes the venue's `w/global` directly, in one transaction; no external authorization surface or Job is involved. |
+| Change the catalog (operator) | A request as the venue's own DID (JWT signed by the venue keypair) changes `<venue-DID>/w/global/...`, its own data. |
+| Change the catalog (anyone else) | Needs a grant from the venue over the path in `<venue-DID>/w/global/`; refused otherwise. |
 
-**No new auth machinery.** No "default proofs" registry, no UCAN issuance at startup, no special-case in `AccessControl.canAccess`. The special case lives where it belongs — inside the namespace resolver that owns the prefix.
+**No new auth machinery.** No "default proofs" registry and no UCAN issuance at startup: the view's policy lives with the view.
 
 User `/o/` capability semantics are unchanged from GRID_LATTICE_DESIGN §6.
 
-**Admin UCAN delegation.** If an operator needs to grant write access to `/v/` to a specific admin user without sharing the venue keypair, the venue can issue a UCAN granting `{with: did:web:venue/v/, can: crud}` to that admin. The admin then signs requests with their own keypair and presents the UCAN as a proof. This is an extension beyond the base design, not part of the core model.
+**Admin delegation.** To let an admin change the catalog without sharing the venue keypair, the venue grants them `crud/write` over `<venue-DID>/w/global/` (or a narrower path under it). The admin signs requests with their own keypair, presents the grant as a proof, and writes the `w/global` path; `/v/` shows the change.
 
 ---
 
@@ -678,7 +688,6 @@ The refresh does **not** touch `/o/` — user pins are sacred, and a user can pi
 - Search / indexing over operation catalogs (client-side filter is sufficient).
 - Cross-venue capability negotiation (different doc).
 - The `/v/config/` sub-namespace (reserved but unused).
-- Admin UCAN delegation for `/v/` writes (venue keypair is the sole admin authority).
 - Other potential `/v/info/` fields (`/v/info/peers`, `/v/info/host`, runtime metrics) — added as concrete consumers appear.
 - Unifying budget / overflow semantics across `covia:read`, `covia:slice`, `covia:inspect` — tracked separately as [covia-ai/covia#78](https://github.com/covia-ai/covia/issues/78).
 - Toolsets (named bundles of operations) — tracked separately as [covia-ai/covia#79](https://github.com/covia-ai/covia/issues/79).
@@ -690,7 +699,7 @@ The refresh does **not** touch `/o/` — user pins are sacred, and a user can pi
 
 The design adds **one virtual namespace prefix (`/v/`)** and **removes one global registry (`engine.operations`)**, with everything else flowing from the existing lattice primitives:
 
-- `/v/` is a virtual prefix mapping `/v/<rest>` → `<venue-DID>/w/global/<rest>`. Storage reuses the venue user's workspace; access is enforced by the resolver (read open, write venue-only).
+- `/v/` is a read-only view mapping `/v/<rest>` → `<venue-DID>/w/global/<rest>`. Storage reuses the venue user's workspace; anyone reads through the view, nothing changes through it, and the venue changes its `w/global`.
 - `/v/ops/` holds venue-provided operation defaults as inline asset metadata. Catalog entries ARE assets, not descriptors.
 - `/v/info/` holds venue introspection: name, DID, version, started time, protocols, and per-adapter summaries.
 - `/o/` continues to hold per-user operation pins, unchanged from `GRID_LATTICE_DESIGN.md`.
@@ -735,6 +744,7 @@ declares what *differs*.
 | `toolCalling` | `false` declares a model that cannot call tools. The assembler honours it — no tool is presented, no capability notice, no skills index — and `agent:create` warns when an agent declares tools or skills against it. Absent means tool calling is available. |
 | `toolCallingByModel` | Tool support varies per model rather than per provider, so it cannot be assumed from the provider alone — where a probe exists (Ollama advertises model capabilities), `agent:create` asks it. |
 | `labels` | `"bracket"` (default), `"xml"` or `"header"`: the dialect in which context elements are labelled — `[Label …]` lines, XML-style elements with explicit closing tags, or markdown headings. One renderer applies it; see [AGENT_CONTEXT.md](./AGENT_CONTEXT.md) §1.2. |
+| `lateToolResults` | `"message"` (default) or `"tool"`: how the outcome of a tool call that outlasted `toolCallTimeoutMs` is shown when it arrives — a user message from the agent that made the call, or a `tool_call_outcome` tool result. Anything else is the default. See [AGENT_CONTEXT.md](./AGENT_CONTEXT.md) §5.7. |
 
 ### `budget` — context size
 
@@ -790,7 +800,7 @@ path, a tighter context budget for a cheap agent, or a different label dialect:
 
 It is layered last — provider level, then `byModel`, then this — with the same
 one-key-deep merge, and it speaks to assembly only (`options.toolCalling`,
-`options.labels`, `budget.bytes`); the provider edge reads the operation's own
+`options.labels`, `options.lateToolResults`, `budget.bytes`); the provider edge reads the operation's own
 facet, so `systemMessages` and its kind are the operation's to declare. Read
 the full chain with `AbstractLLMAdapter.modelProfile(meta, modelId, config)`.
 `cachePrefix` is also an assembly option; call-level `cache: false` disables the

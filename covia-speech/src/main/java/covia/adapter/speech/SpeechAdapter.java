@@ -27,7 +27,11 @@ import convex.core.lang.RT;
 import covia.adapter.AAdapter;
 import covia.adapter.messaging.MessagingMedia;
 import covia.api.Fields;
+import covia.exception.InvalidInputException;
 import covia.exception.JobFailedException;
+import covia.exception.NotFoundException;
+import covia.exception.NotSupportedException;
+import covia.exception.UnavailableException;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.storage.ContentProvider;
@@ -356,7 +360,6 @@ public class SpeechAdapter extends AAdapter implements AutoCloseable {
 
 	@Override
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
-		requireInvoke(ctx);
 		String op = getSubOperation(meta);
 		AMap<AString, ACell> in = input instanceof AMap<?, ?> map ? RT.castMap(map) : Maps.empty();
 		Settings current = settings;
@@ -368,7 +371,7 @@ public class SpeechAdapter extends AAdapter implements AutoCloseable {
 			case "prepare" -> prepare(ctx, current, in);
 			case "listen" -> listen(ctx, current, in);
 			case "hear" -> hear(ctx, in);
-			default -> throw new UnsupportedOperationException(UNSUPPORTED.formatted(op));
+			default -> throw new NotSupportedException(UNSUPPORTED.formatted(op));
 		}, VIRTUAL_EXECUTOR);
 	}
 
@@ -381,24 +384,24 @@ public class SpeechAdapter extends AAdapter implements AutoCloseable {
 		if ((kind != null || declared != null) && !isAudio(kind, declared)) return Maps.empty();
 		String ref = string(in, "ref");
 		String inline = string(in, "bytes");
-		if (ref == null && inline == null) throw new IllegalArgumentException(REF_REQUIRED);
-		if (ref != null && inline != null) throw new IllegalArgumentException(ONE_SOURCE);
+		if (ref == null && inline == null) throw new InvalidInputException(REF_REQUIRED);
+		if (ref != null && inline != null) throw new InvalidInputException(ONE_SOURCE);
 		byte[] bytes;
 		String mediaType = declared;
 		if (inline != null) {
 			// Audio the caller holds: decoded here and never stored.
-			if (mediaType == null) throw new IllegalArgumentException(TYPE_REQUIRED);
+			if (mediaType == null) throw new InvalidInputException(TYPE_REQUIRED);
 			bytes = inline(inline);
 		} else {
 			try {
 				ContentProvider.Resolved resolved = engine.resolveContent(Strings.create(ref), ctx);
-				if (resolved == null) throw new IllegalArgumentException(NOT_FOUND.formatted(ref));
-				if (resolved.content().getSize() > MAX_BYTES) throw new IllegalArgumentException(TOO_LARGE);
+				if (resolved == null) throw new NotFoundException(NOT_FOUND.formatted(ref), ref);
+				if (resolved.content().getSize() > MAX_BYTES) throw new InvalidInputException(TOO_LARGE);
 				try (InputStream stream = resolved.content().getInputStream()) { bytes = stream.readNBytes(MAX_BYTES + 1); }
-				if (bytes.length > MAX_BYTES) throw new IllegalArgumentException(TOO_LARGE);
+				if (bytes.length > MAX_BYTES) throw new InvalidInputException(TOO_LARGE);
 				if (mediaType == null) mediaType = resolved.contentType();
 			} catch (IOException e) {
-				throw new IllegalArgumentException(NOT_FOUND.formatted(ref));
+				throw new NotFoundException(NOT_FOUND.formatted(ref), ref);
 			}
 		}
 		String base = baseType(mediaType);
@@ -429,9 +432,9 @@ public class SpeechAdapter extends AAdapter implements AutoCloseable {
 
 	/** Inline base64 audio, at most {@link #MAX_BYTES} of it. */
 	private static byte[] inline(String base64) {
-		if (base64.length() > (MAX_BYTES + 2) / 3 * 4) throw new IllegalArgumentException(TOO_LARGE);
+		if (base64.length() > (MAX_BYTES + 2) / 3 * 4) throw new InvalidInputException(TOO_LARGE);
 		try { return Base64.getDecoder().decode(base64); }
-		catch (IllegalArgumentException e) { throw new IllegalArgumentException(INVALID_BYTES); }
+		catch (IllegalArgumentException e) { throw new InvalidInputException(INVALID_BYTES, e); }
 	}
 
 	/** The audio type a reference's extension names, or null. */
@@ -465,7 +468,7 @@ public class SpeechAdapter extends AAdapter implements AutoCloseable {
 				}
 			}
 		}
-		if (rate < 8000 || rate > 48_000) throw new IllegalArgumentException(INVALID_RATE);
+		if (rate < 8000 || rate > 48_000) throw new InvalidInputException(INVALID_RATE);
 		return (int) rate;
 	}
 
@@ -488,16 +491,20 @@ public class SpeechAdapter extends AAdapter implements AutoCloseable {
 	/** Speech stored under the caller's authority, by default in their private drive; nothing is overwritten. */
 	ACell speak(RequestContext ctx, Settings s, AMap<AString, ACell> in) {
 		String fileName = string(in, "fileName");
-		if (fileName != null && !MessagingMedia.safeFileName(fileName)) throw new IllegalArgumentException(MessagingMedia.INVALID_FILE_NAME);
+		if (fileName != null && !MessagingMedia.safeFileName(fileName)) throw new InvalidInputException(MessagingMedia.INVALID_FILE_NAME);
 		Synthesised said = synthesise(ctx, s, in);
 		String destination = string(in, "destination");
-		String directory = destination != null ? destination : MessagingMedia.ownerDirectory(ctx.getUserDID(), DRIVE);
+		String directory = destination != null ? destination
+			: MessagingMedia.ensureOwnerDirectory(engine, ctx.getUserDID(), DRIVE, ctx);
 		String name = fileName != null ? fileName : MessagingMedia.fallbackName(DRIVE, UUID.randomUUID().toString(), said.mediaType());
 		AMap<AString, ACell> stored;
 		try {
 			stored = MessagingMedia.store(engine, said.speech().bytes(), said.mediaType(), directory, name, ctx);
+		} catch (IllegalArgumentException e) {
+			// The destination is the caller's
+			throw new InvalidInputException(e.getMessage(), e);
 		} catch (IOException e) {
-			throw new JobFailedException(MessagingMedia.UNSUPPORTED_DESTINATION + ": " + directory);
+			throw new UnavailableException(MessagingMedia.UNSUPPORTED_DESTINATION + ": " + directory, e);
 		}
 		return said.describe(stored);
 	}
@@ -527,14 +534,14 @@ public class SpeechAdapter extends AAdapter implements AutoCloseable {
 	/** The request checked and given to the engine that speaks; the local one makes WAV unless told otherwise. */
 	private Synthesised synthesise(RequestContext ctx, Settings s, AMap<AString, ACell> in) {
 		String text = string(in, "text");
-		if (text == null || text.isBlank() || text.codePointCount(0, text.length()) > MAX_TEXT) throw new IllegalArgumentException(TEXT_REQUIRED);
+		if (text == null || text.isBlank() || text.codePointCount(0, text.length()) > MAX_TEXT) throw new InvalidInputException(TEXT_REQUIRED);
 		String format = optional(in, "format", s.speaker() instanceof LocalSpeechEngine ? "wav" : DEFAULT_FORMAT);
 		String mediaType = OpenAiSpeechEngine.FORMATS.get(format);
-		if (mediaType == null) throw new IllegalArgumentException(INVALID_FORMAT);
+		if (mediaType == null) throw new InvalidInputException(INVALID_FORMAT);
 		Double speed = null;
 		ACell speedCell = in.get(Strings.intern("speed"));
 		if (speedCell != null) {
-			if (!(speedCell instanceof ANumeric n) || n.doubleValue() < 0.25 || n.doubleValue() > 4) throw new IllegalArgumentException(INVALID_SPEED);
+			if (!(speedCell instanceof ANumeric n) || n.doubleValue() < 0.25 || n.doubleValue() > 4) throw new InvalidInputException(INVALID_SPEED);
 			speed = n.doubleValue();
 		}
 		String voice = optional(in, "voice", s.voice());
@@ -586,7 +593,7 @@ public class SpeechAdapter extends AAdapter implements AutoCloseable {
 		switch (direction) {
 			case "transcribe" -> { if (s.transcriber() instanceof LocalSpeechEngine local) local.prepare(); }
 			case "speak" -> { if (s.speaker() instanceof LocalSpeechEngine local) local.prepareVoice(); }
-			default -> throw new IllegalArgumentException(INVALID_FOR);
+			default -> throw new InvalidInputException(INVALID_FOR);
 		}
 		return engines(ctx, s);
 	}
@@ -594,6 +601,7 @@ public class SpeechAdapter extends AAdapter implements AutoCloseable {
 	// ---- live dictation ----
 
 	ACell listen(RequestContext ctx, Settings s, AMap<AString, ACell> in) {
+		requireNamespaceAuthority(ctx);
 		if (!(s.transcriber() instanceof LocalSpeechEngine local)) throw new JobFailedException(LIVE_UNAVAILABLE);
 		int rate = sampleRate(in, null);
 		for (var entry : dictations.entrySet()) {
@@ -607,13 +615,21 @@ public class SpeechAdapter extends AAdapter implements AutoCloseable {
 		return Maps.of("id", id);
 	}
 
+	/** A dictation is its namespace's, reached only with that namespace's authority. */
+	private static void requireNamespaceAuthority(RequestContext ctx) {
+		if (!ctx.actsWithNamespaceAuthority()) {
+			throw new covia.exception.AuthException(RequestContext.NOT_NAMESPACE_AUTHORITY + ctx.getUserDID());
+		}
+	}
+
 	ACell hear(RequestContext ctx, AMap<AString, ACell> in) {
+		requireNamespaceAuthority(ctx);
 		String id = string(in, "id");
-		if (id == null) throw new IllegalArgumentException(ID_REQUIRED);
+		if (id == null) throw new InvalidInputException(ID_REQUIRED);
 		Listening l = dictations.get(id);
-		if (l == null || !java.util.Objects.equals(l.owner(), ctx.getUserDID())) throw new IllegalArgumentException(NO_DICTATION.formatted(id));
+		if (l == null || !java.util.Objects.equals(l.owner(), ctx.getUserDID())) throw new NotFoundException(NO_DICTATION.formatted(id), id);
 		ACell endCell = in.get(Strings.intern("end"));
-		if (endCell != null && !(endCell instanceof CVMBool)) throw new IllegalArgumentException(INVALID_END);
+		if (endCell != null && !(endCell instanceof CVMBool)) throw new InvalidInputException(INVALID_END);
 		boolean end = CVMBool.TRUE.equals(endCell);
 		String given = string(in, "bytes");
 		byte[] pcm = given == null ? new byte[0] : inline(given);
@@ -641,7 +657,7 @@ public class SpeechAdapter extends AAdapter implements AutoCloseable {
 		if (endpoint == null) return null;
 		String callerRef = string(in, "apiKey");
 		if (callerRef != null) {
-			if (!Engine.isSecretRef(callerRef) || callerRef.endsWith("/")) throw new IllegalArgumentException(INVALID_SECRET_REF.formatted("apiKey"));
+			if (!Engine.isSecretRef(callerRef) || callerRef.endsWith("/")) throw new InvalidInputException(INVALID_SECRET_REF.formatted("apiKey"));
 			String value = engine.resolveSecret(callerRef, ctx, endpoint);
 			if (value == null || value.isBlank()) throw new JobFailedException(KEY_UNRESOLVED.formatted(callerRef));
 			return value;
@@ -658,7 +674,7 @@ public class SpeechAdapter extends AAdapter implements AutoCloseable {
 	private static String string(AMap<AString, ACell> in, String field) {
 		ACell value = in.get(Strings.intern(field));
 		if (value == null) return null;
-		if (!(value instanceof AString s) || s.isBlank()) throw new IllegalArgumentException(INVALID_STRING.formatted(field));
+		if (!(value instanceof AString s) || s.isBlank()) throw new InvalidInputException(INVALID_STRING.formatted(field));
 		return s.toString();
 	}
 

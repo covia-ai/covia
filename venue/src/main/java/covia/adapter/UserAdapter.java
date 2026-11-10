@@ -22,12 +22,17 @@ import covia.api.Abilities;
 import covia.api.Fields;
 import covia.venue.Audit;
 import covia.exception.AuthException;
+import covia.exception.ConflictException;
+import covia.exception.InvalidInputException;
+import covia.exception.NotFoundException;
+import covia.exception.NotSupportedException;
 import covia.lattice.Covia;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.User;
 import covia.venue.UserExports;
 import covia.venue.Users;
+import covia.venue.VenueState;
 import covia.venue.VenueJob;
 
 /**
@@ -42,6 +47,9 @@ public class UserAdapter extends AAdapter {
 
 	private static final AString USERNAME = Strings.intern("username");
 	private static final AString REGISTERED = Strings.intern("registered");
+	private static final AString STORAGE = Strings.intern("storage");
+	private static final AString WORKSPACE = Strings.intern("workspace");
+	private static final AString DRIVES = Strings.intern("drives");
 	private static final AString CREATED = Fields.CREATED;
 	private static final AString USERS = Strings.intern("users");
 	private static final AString TOTAL = Strings.intern("total");
@@ -51,7 +59,10 @@ public class UserAdapter extends AAdapter {
 	private static final AString ACCOUNT_KEY = Strings.intern("accountKey");
 	private static final AString SECRETS = Strings.intern("secrets");
 
-	public static final String EXPORT_DIRECT_ONLY = "User export requires a direct run with no recorded job, agent or session context";
+	/** Refusal of user:create's keys for a named user who already has others. */
+	public static final String AUTHENTICATOR_HISTORY =
+		"Named user already has authenticator history; use user:authentication-add for rotation";
+	public static final String EXPORT_DIRECT_ONLY ="User export requires a direct run with no recorded job, agent or session context";
 	public static final String EXPORT_DEFINITION_REQUIRED = "User export requires the published operation definition";
 	public static final String INVALID_ACCOUNT_KEY = "accountKey must be a 32-byte Ed25519 public key";
 	public static final String INVALID_SECRETS = "secrets must be a boolean";
@@ -89,7 +100,6 @@ public class UserAdapter extends AAdapter {
 	@Override
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx,
 			AMap<AString, ACell> meta, ACell input) {
-		requireInvoke(ctx);
 		String subOperation = getSubOperation(meta);
 		String event = switch (subOperation) {
 			case "create" -> Audit.USER_CREATE;
@@ -117,7 +127,7 @@ public class UserAdapter extends AAdapter {
 				case "authentication-add" -> authenticationAdd(ctx, input);
 				case "authentication-revoke" -> authenticationRevoke(ctx, input);
 				case "authentication-list" -> authenticationList(ctx, input);
-				default -> throw new IllegalArgumentException(
+				default -> throw new NotSupportedException(
 					"Unknown user operation: " + subOperation);
 			});
 		} catch (Exception e) {
@@ -140,9 +150,9 @@ public class UserAdapter extends AAdapter {
 		try {
 			AString userDID = requireDID(RT.ensureString(RT.getIn(input, Fields.DID)));
 			AString operation = RT.ensureString(RT.getIn(input, Fields.OPERATION));
-			if (operation == null) throw new IllegalArgumentException("operation is required");
+			if (operation == null) throw new InvalidInputException("operation is required");
 			RequestContext sudo = engine.sudoContext(ctx, userDID);
-			return engine.jobs().invokeInternal(operation, RT.getIn(input, Fields.INPUT), sudo);
+			return engine.jobs().runOperation(operation, RT.getIn(input, Fields.INPUT), sudo, false);
 		} catch (Exception e) {
 			return CompletableFuture.failedFuture(e);
 		}
@@ -155,11 +165,11 @@ public class UserAdapter extends AAdapter {
 		AVector<ACell> authenticationKeys =
 			RT.ensureVector(RT.getIn(input, Fields.AUTHENTICATION_KEYS));
 		if ((suppliedDID == null) == (username == null)) {
-			throw new IllegalArgumentException(
+			throw new InvalidInputException(
 				"Specify exactly one of 'did' or 'username'");
 		}
 		if (suppliedDID != null && authenticationKeys != null) {
-			throw new IllegalArgumentException(
+			throw new InvalidInputException(
 				"authenticationKeys are supported only for venue-managed usernames");
 		}
 
@@ -177,22 +187,14 @@ public class UserAdapter extends AAdapter {
 		boolean created = engine.getVenueState().users().create(did);
 		if (username != null) {
 			engine.getAuth().ensureManagedUser(username, did);
-			if (authenticationKeys != null) {
-				AMap<AString, ACell> existing =
-					engine.getAuth().getAuthenticationKeys(username);
-				if (existing.isEmpty()) {
-					engine.getAuth().addAuthenticationKeys(
-						username, authenticationKeys, ctx.getCallerDID());
-				} else {
-					// Preserve create's idempotency: a repeated identical request
-					// is harmless, but rotation uses the explicit add operation.
-					for (long i = 0; i < authenticationKeys.count(); i++) {
-						AString key = RT.ensureString(authenticationKeys.get(i));
-						if (!engine.getAuth().isAuthenticationKeyActive(username, key)) {
-							throw new IllegalArgumentException(
-								"Named user already has authenticator history; "
-								+ "use user:authentication-add for rotation");
-						}
+			if (authenticationKeys != null && !engine.getAuth().installFirstAuthenticationKeys(
+					username, authenticationKeys, ctx.getCallerDID())) {
+				// Preserve create's idempotency: a repeated identical request
+				// is harmless, but rotation uses the explicit add operation.
+				for (long i = 0; i < authenticationKeys.count(); i++) {
+					AString key = RT.ensureString(authenticationKeys.get(i));
+					if (!engine.getAuth().isAuthenticationKeyActive(username, key)) {
+						throw new ConflictException(AUTHENTICATOR_HISTORY);
 					}
 				}
 			}
@@ -219,12 +221,12 @@ public class UserAdapter extends AAdapter {
 		AString did = requireDID(targetDID(ctx, input));
 		requireSelfOrVenueUserAuthority(ctx, did, Abilities.USER_EXPORT);
 		ACell secrets = RT.getIn(input, SECRETS);
-		if (secrets != null && !(secrets instanceof CVMBool)) throw new IllegalArgumentException(INVALID_SECRETS);
+		if (secrets != null && !(secrets instanceof CVMBool)) throw new InvalidInputException(INVALID_SECRETS);
 		AccountKey recipient = null;
 		ACell suppliedKey = RT.getIn(input, ACCOUNT_KEY);
 		if (suppliedKey != null) {
 			ABlob key = Blobs.parse(suppliedKey);
-			if (key == null || key.count() != AccountKey.LENGTH) throw new IllegalArgumentException(INVALID_ACCOUNT_KEY);
+			if (key == null || key.count() != AccountKey.LENGTH) throw new InvalidInputException(INVALID_ACCOUNT_KEY);
 			recipient = AccountKey.create(key);
 		}
 		Blob export = new UserExports(engine).exportUser(did, recipient, !CVMBool.FALSE.equals(secrets));
@@ -241,7 +243,7 @@ public class UserAdapter extends AAdapter {
 		AString did = requireDID(RT.ensureString(RT.getIn(input, Fields.DID)));
 		requireVenueUserAuthority(ctx, Abilities.USER_IMPORT);
 		ABlob export = Blobs.parse(RT.getIn(input, EXPORT));
-		if (export == null) throw new IllegalArgumentException(UserExports.NOT_AN_EXPORT);
+		if (export == null) throw new InvalidInputException(UserExports.NOT_AN_EXPORT);
 		boolean created = new UserExports(engine).importUser(export, did, seed(ctx, input));
 		return Maps.of(Fields.DID, did, CREATED, CVMBool.create(created));
 	}
@@ -260,28 +262,30 @@ public class UserAdapter extends AAdapter {
 		ACell supplied = RT.getIn(input, Fields.SEED);
 		if (supplied == null) return null;
 		AString ref = RT.ensureString(supplied);
-		if (ref == null || !Engine.isSecretRef(ref.toString())) throw new IllegalArgumentException(SEED_REF_REQUIRED);
+		if (ref == null || !Engine.isSecretRef(ref.toString())) throw new InvalidInputException(SEED_REF_REQUIRED);
 		String value = engine.resolveSecret(ref.toString(), ctx);
 		ABlob seed = (value == null) ? null : Blobs.parse(value);
-		if (seed == null || seed.count() != AKeyPair.SEED_LENGTH) throw new IllegalArgumentException(INVALID_SEED);
+		if (seed == null || seed.count() != AKeyPair.SEED_LENGTH) throw new InvalidInputException(INVALID_SEED);
 		return AKeyPair.create(seed.toFlatBlob());
 	}
 
 	/** Job-free REST reads (#255) call this directly, reusing the same
-	 *  capability checks as the {@code user:info} operation. */
+	 *  capability checks as the {@code user:info} operation. A user reading
+	 *  their own entry sees no venue bookkeeping; an operator sees its {@code meta}. */
 	public ACell info(RequestContext ctx, ACell input) {
 		AString did = RT.ensureString(RT.getIn(input, Fields.DID));
 		if (did == null) did = ctx.getCallerDID();
 		if (did == null) throw new AuthException("Authentication required");
 		did = requireDID(did);
-		if (!did.equals(ctx.getCallerDID())) {
+		boolean operator = engine.hasVenueAuthority(ctx, USERS_RESOURCE, Abilities.USER_READ);
+		if (!operator && !did.equals(ctx.getCallerDID())) {
 			requireVenueUserAuthority(ctx, Abilities.USER_READ);
 		}
-		User user = engine.getVenueState().users().get(did);
+		User user = engine.getVenueState().users().user(did);
 		if (user == null) {
-			throw new IllegalArgumentException("User is not registered at this venue: " + did);
+			throw new NotFoundException(VenueState.UNKNOWN_USER + ": " + did, did.toString());
 		}
-		return summary(user);
+		return summary(user, operator);
 	}
 
 	/** Job-free REST reads (#255) call this directly, reusing the same
@@ -293,8 +297,8 @@ public class UserAdapter extends AAdapter {
 		AVector<ACell> result = Vectors.empty();
 		if (all != null) {
 			for (var entry : all.entrySet()) {
-				User user = store.get(entry.getKey());
-				if (user != null) result = result.conj(summary(user));
+				User user = store.user(entry.getKey());
+				if (user != null) result = result.conj(summary(user, true));
 			}
 		}
 		return Maps.of(USERS, result, TOTAL, CVMLong.create(result.count()));
@@ -305,7 +309,7 @@ public class UserAdapter extends AAdapter {
 		AString id = engine.managedUserName(did);
 		AString key = RT.ensureString(RT.getIn(input, Fields.KEY));
 		AString label = RT.ensureString(RT.getIn(input, Fields.LABEL));
-		if (key == null) throw new IllegalArgumentException("key is required");
+		if (key == null) throw new InvalidInputException("key is required");
 		boolean added = engine.getAuth().addAuthenticationKey(
 			id, key, ctx.getCallerDID(), label);
 		engine.flush();
@@ -319,11 +323,9 @@ public class UserAdapter extends AAdapter {
 		AString did = targetManagedUser(ctx, input, Abilities.USER_AUTH_MANAGE);
 		AString id = engine.managedUserName(did);
 		AString key = RT.ensureString(RT.getIn(input, Fields.KEY));
-		if (key == null) throw new IllegalArgumentException("key is required");
-		boolean directVenue = engine.getDIDString().equals(ctx.getCallerDID())
-			&& ctx.getExecutionScope().agentId() == null;
+		if (key == null) throw new InvalidInputException("key is required");
 		boolean revoked = engine.getAuth().revokeAuthenticationKey(
-			id, key, ctx.getCallerDID(), directVenue);
+			id, key, ctx.getCallerDID(), engine.isDirectVenue(ctx));
 		engine.flush();
 		return Maps.of(
 			Fields.DID, did,
@@ -345,8 +347,8 @@ public class UserAdapter extends AAdapter {
 		// A registered external DID authenticates with its own key, so the venue
 		// holds no authenticators for it: the answer is empty, not an error, and
 		// clients list every user's authenticators uniformly (#524).
-		if (engine.getVenueState().users().get(did) == null) {
-			throw new IllegalArgumentException("User is not registered at this venue: " + did);
+		if (engine.getVenueState().users().user(did) == null) {
+			throw new NotFoundException(VenueState.UNKNOWN_USER + ": " + did, did.toString());
 		}
 		return Maps.of(
 			Fields.DID, did,
@@ -361,7 +363,7 @@ public class UserAdapter extends AAdapter {
 	private AString targetManagedUser(RequestContext ctx, ACell input, AString ability) {
 		AString did = targetDID(ctx, input);
 		if (engine.managedUserName(did) == null) {
-			throw new IllegalArgumentException(
+			throw new NotSupportedException(
 				"Authentication keys belong only to venue-managed named users");
 		}
 		requireSelfOrVenueUserAuthority(ctx, did, ability);
@@ -381,17 +383,22 @@ public class UserAdapter extends AAdapter {
 		requireVenueUserAuthority(ctx, ability);
 	}
 
-	private AMap<AString, ACell> summary(User user) {
+	/** A user's entry; {@code withMeta} adds the venue's activity times for them, for an operator. */
+	private AMap<AString, ACell> summary(User user, boolean withMeta) {
 		AMap<AString, ACell> out = Maps.of(
 			Fields.DID, user.getDID(),
 			REGISTERED, CVMBool.TRUE,
-			Fields.MANAGED, CVMBool.create(engine.managedUserName(user.getDID()) != null));
-		ACell state = user.get();
-		if (state instanceof AMap<?, ?> map) {
-			ACell metadata = ((AMap<?, ?>) map).get(Covia.K_META);
-			if (metadata != null) out = out.assoc(Covia.K_META, metadata);
-		}
-		return out;
+			Fields.MANAGED, CVMBool.create(engine.managedUserName(user.getDID()) != null),
+			STORAGE, storage(user));
+		ACell metadata = withMeta ? RT.getIn(user.get(), Covia.K_META) : null;
+		return (metadata == null) ? out : out.assoc(Covia.K_META, metadata);
+	}
+
+	/** What a user's data takes up as stored, in bytes: their workspace and, where the dlfs adapter runs, their drives. */
+	private AMap<AString, ACell> storage(User user) {
+		AMap<AString, ACell> out = Maps.of(WORKSPACE, CVMLong.create(user.workspaceSize()));
+		DLFSAdapter dlfs = engine.findAdapter(DLFSAdapter.class);
+		return (dlfs == null) ? out : out.assoc(DRIVES, CVMLong.create(dlfs.storageSize(user.getDID())));
 	}
 
 	private AString requireDID(AString value) {
@@ -400,15 +407,14 @@ public class UserAdapter extends AAdapter {
 		} catch (RuntimeException ignored) {
 			// Converted below into a short, caller-recoverable validation error.
 		}
-		throw new IllegalArgumentException("Invalid user DID: " + value);
+		throw new InvalidInputException("Invalid user DID: " + value);
 	}
 
-	/**
-	 * Administrative user operations are venue-owned. A null capability scope
-	 * is intentionally not enough: only direct venue execution or a presented
-	 * venue-rooted delegation over {@code <venue DID>/users} can authorise them.
-	 */
+	/** The venue resource whose authority makes a caller an operator over users. */
+	private static final String USERS_RESOURCE = "users";
+
+	/** Administrative user operations are the venue's ({@link Engine#requireVenueAuthority}). */
 	private void requireVenueUserAuthority(RequestContext ctx, AString ability) {
-		engine.requireVenueAuthority(ctx, "users", ability);
+		engine.requireVenueAuthority(ctx, USERS_RESOURCE, ability);
 	}
 }

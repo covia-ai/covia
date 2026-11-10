@@ -17,6 +17,7 @@ import org.junit.jupiter.api.TestInstance.Lifecycle;
 
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import covia.venue.Config;
 import covia.venue.server.VenueServer;
 
 /**
@@ -34,7 +35,7 @@ public class A2ANotConfiguredTest {
 	@BeforeAll
 	public void setup() {
 		// No `a2a` block → A2A routes are not registered by the A2A handler.
-		server = VenueServer.launch(Maps.of(Strings.create("port"), 0));
+		server = VenueServer.launch(Maps.of(Strings.create("port"), 0, Config.STORE, "memory"));
 		baseUrl = "http://localhost:" + server.port();
 		http = covia.venue.TestHTTP.CLIENT;
 	}

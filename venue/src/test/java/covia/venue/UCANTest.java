@@ -3,14 +3,12 @@ package covia.venue;
 import static org.junit.jupiter.api.Assertions.*;
 
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
 
 import convex.auth.ucan.Capability;
 import convex.auth.ucan.UCAN;
 import convex.auth.ucan.UCANValidator;
-import convex.auth.did.DIDVerifier;
 import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -22,32 +20,27 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
+import covia.adapter.UCANAdapter;
 import covia.api.Fields;
 import covia.api.Abilities;
 import covia.exception.AuthException;
 import covia.grid.Job;
+import covia.grid.auth.UcanTokens;
 import covia.lattice.CapabilityChecker;
-import covia.venue.server.AuthMiddleware;
 
 /**
  * Tests for the UCAN capability flow: issue tokens, present as proofs,
  * verify cross-user access.
  *
- * <p>Uses {@link TestEngine#ENGINE}. Per-test key pairs (and therefore
- * per-test Alice/Bob/Carol DIDs) isolate user namespaces — Alice's
- * {@code w/shared/doc} and {@code w/private/secret} written in setup
- * live under a different DID for each test method, so writes don't
- * collide across tests on the shared engine.</p>
+ * <p>Per-test key pairs (and therefore per-test Alice/Bob/Carol DIDs) isolate
+ * user namespaces — Alice's {@code w/shared/doc} and {@code w/private/secret}
+ * written in setup live under a different DID for each test method, so writes
+ * don't collide across tests.</p>
  */
 public class UCANTest {
 
-	private static final Engine engine;
-	static {
-		engine = Engine.createTemp(Maps.of(
-			Config.HOSTNAME, Strings.create("ucan.test.covia.example"),
-			Config.USERS, Maps.of(Config.AUTO_CREATE, true)));
-		Engine.addDemoAssets(engine);
-	}
+	private static final Engine engine = TestEngine.ENGINE;
+
 	private final AKeyPair venueKP = engine.getKeyPair();
 	private final AString venueDID = engine.getDIDString();
 
@@ -73,7 +66,7 @@ public class UCANTest {
 		BOB_DID = UCAN.toDIDKey(BOB_KP.getAccountKey());
 		CAROL_DID = UCAN.toDIDKey(CAROL_KP.getAccountKey());
 		String method = info.getTestMethod().map(m -> m.getName()).orElse("unknown");
-		CUSTODIAL_DID = engine.managedUserDID(Strings.create("ucan-" + method));
+		CUSTODIAL_DID = TestEngine.uniqueManagedDID("ucan-" + method);
 		engine.getVenueState().users().ensure(CUSTODIAL_DID);
 		ALICE = RequestContext.of(ALICE_DID);
 		BOB = RequestContext.of(BOB_DID);
@@ -90,18 +83,13 @@ public class UCANTest {
 
 	private static final long HOUR = 3600;
 
-	@AfterAll
-	static void closeEngine() {
-		engine.close();
-	}
-
 	@Test
 	public void testNoTokenIsUnrestricted() {
 		// No bearer/ucans → no scope → full authority over own namespace.
 		// Presented proofs are additive grants, never subtractive: to act with
 		// reduced authority, use a narrower Authority (Authority.of(did, grants))
 		// or present only the UCANs the request needs.
-		RequestContext rctx = AuthMiddleware.withTransportGrants(
+		RequestContext rctx = engine.withTransportGrants(
 			RequestContext.of(ALICE_DID), null);
 		assertNull(rctx.getCaps());
 		engine.jobs().invokeOperation("v/ops/covia/write",
@@ -117,8 +105,8 @@ public class UCANTest {
 				Capability.create(Strings.create(ALICE_DID + "/w/shared"), Capability.CRUD_READ)),
 			Vectors.empty());
 
-		RequestContext ctx = AuthMiddleware.withTransportGrants(
-			BOB, Vectors.of(delegation), DIDVerifier.CONVEX);
+		RequestContext ctx = engine.withTransportGrants(
+			BOB, Vectors.of(delegation));
 		assertEquals(BOB_DID, ctx.getCallerDID());
 		assertEquals(BOB_DID, ctx.getUserDID(),
 			"a grant cannot instruct the venue to enter its issuer's namespace");
@@ -136,8 +124,8 @@ public class UCANTest {
 				Strings.create(ALICE_DID + "/w/"), Capability.CRUD_READ)),
 			Vectors.empty());
 
-		RequestContext ctx = AuthMiddleware.withTransportGrants(
-			RequestContext.ANONYMOUS, Vectors.of(identity, wrongAudience), DIDVerifier.CONVEX);
+		RequestContext ctx = engine.withTransportGrants(
+			RequestContext.ANONYMOUS, Vectors.of(identity, wrongAudience));
 		assertNull(ctx.getCallerDID(),
 			"proof-channel tokens cannot establish authentication");
 		assertEquals(1, ctx.getProofs().count(),
@@ -153,8 +141,8 @@ public class UCANTest {
 			Vectors.of(Capability.create(
 				Strings.create(ALICE_DID + "/w/"), Capability.CRUD_READ)), Vectors.empty());
 
-		RequestContext ctx = AuthMiddleware.withTransportGrants(
-			BOB, Vectors.of(readGrant), DIDVerifier.CONVEX);
+		RequestContext ctx = engine.withTransportGrants(
+			BOB, Vectors.of(readGrant));
 		assertEquals(BOB_DID, ctx.getUserDID(),
 			"a data grant alone must not relocate the caller's jobs or implicit paths");
 		assertNull(ctx.getCaps(), "the caller keeps ambient authority over its own namespace");
@@ -171,8 +159,8 @@ public class UCANTest {
 			Vectors.of(Capability.create(CAROL_DID, Abilities.USER_SUDO),
 				Capability.create(Strings.create(CAROL_DID + "/w/"), Capability.CRUD_READ)), Vectors.empty());
 
-		RequestContext ctx = AuthMiddleware.withTransportGrants(
-			BOB, Vectors.of(alice, carol), DIDVerifier.CONVEX);
+		RequestContext ctx = engine.withTransportGrants(
+			BOB, Vectors.of(alice, carol));
 		assertEquals(BOB_DID, ctx.getUserDID());
 		assertEquals(2, ctx.getProofs().count(),
 			"even several grants cannot select an execution target");
@@ -256,21 +244,27 @@ public class UCANTest {
 		assertThrows(Exception.class, () -> job.awaitResult(5000));
 	}
 
+	/** The venue roots grants over everything it hosts, a self-sovereign
+	 *  user's included: Alice has it sign one over her own w/, valid here. */
 	@Test
-	public void testIssueRejectsVenueRootForSelfSovereignCaller() {
+	public void testVenueRootsGrantForHostedSelfSovereignCaller() {
 		long exp = (System.currentTimeMillis() / 1000) + HOUR;
-		Job job = engine.jobs().invokeOperation("v/ops/ucan/issue",
+		AMap<AString, ACell> issued = RT.ensureMap(engine.jobs().invokeOperation("v/ops/ucan/issue",
 			Maps.of(UCAN.AUD, BOB_DID,
 				UCAN.ATT, Vectors.of(Capability.create(
 					Strings.create(ALICE_DID + "/w/"), Capability.CRUD_READ)),
 				UCAN.EXP, CVMLong.create(exp)),
-			ALICE);
-		Exception denied = assertThrows(Exception.class, () -> job.awaitResult(5000));
-		assertTrue(denied.getMessage().contains("must sign the UCAN with their own key"));
+			ALICE).awaitResult(5000));
+		assertEquals(venueDID, issued.get(UCAN.ISS));
+
+		Job read = engine.jobs().invokeOperation("v/ops/covia/read",
+			Maps.of(Fields.PATH, ALICE_DID + "/w/shared/doc"),
+			withProofs(BOB, UCAN.fromJWT(RT.ensureString(issued.get(Strings.create("token")))).toMap()));
+		assertEquals(Strings.create("shared content"), RT.getIn(read.awaitResult(5000), "value"));
 	}
 
 	@Test
-	public void testIssueRejectsVenueRootForExternalDidWebCaller() {
+	public void testVenueRootsGrantForHostedExternalDidWebCaller() {
 		AString external = Strings.create("did:web:identity.example:u:eve");
 		engine.getVenueState().users().ensure(external);
 		long exp = (System.currentTimeMillis() / 1000) + HOUR;
@@ -280,12 +274,13 @@ public class UCANTest {
 					Strings.create(external + "/w/"), Capability.CRUD_READ)),
 				UCAN.EXP, CVMLong.create(exp)),
 			RequestContext.of(external));
-		Exception denied = assertThrows(Exception.class, () -> job.awaitResult(5000));
-		assertTrue(denied.getMessage().contains("not controlled by this venue"));
+		assertNotNull(RT.getIn(job.awaitResult(5000), "token"));
 	}
 
+	/** A granting right from a hosted owner lets the venue root the grant it
+	 *  passes on, as for a managed user. */
 	@Test
-	public void testGrantingProofCannotTurnVenueIntoSelfSovereignRoot() {
+	public void testGrantingRightOverHostedSelfSovereignIdentity() {
 		long now = System.currentTimeMillis() / 1000;
 		UCAN ownerGrantingRight = UCAN.create(ALICE_KP, UCAN.fromDIDKey(BOB_DID), now + 2 * HOUR,
 			Vectors.of(Capability.create(
@@ -298,10 +293,29 @@ public class UCANTest {
 					Strings.create(ALICE_DID + "/w/"), Capability.CRUD_READ)),
 				UCAN.EXP, CVMLong.create(now + HOUR)),
 			withProofs(BOB, ownerGrantingRight.toMap()));
+		assertNotNull(RT.getIn(job.awaitResult(5000), "token"));
+	}
 
+	/** No granting right makes the venue the root of an identity it does not
+	 *  host: that identity signs its own grants. */
+	@Test
+	public void testGrantingRightCannotMakeVenueRootOfUnhostedIdentity() {
+		long now = System.currentTimeMillis() / 1000;
+		AKeyPair zedKP = AKeyPair.generate();
+		AString zed = UCAN.toDIDKey(zedKP.getAccountKey());
+		UCAN zedGrantingRight = UCAN.create(zedKP, UCAN.fromDIDKey(BOB_DID), now + 2 * HOUR,
+			Vectors.of(Capability.create(
+				Strings.create(zed + "/w/"), Strings.create("grant/crud/read"))),
+			Vectors.empty());
+
+		Job job = engine.jobs().invokeOperation("v/ops/ucan/issue",
+			Maps.of(UCAN.AUD, CAROL_DID,
+				UCAN.ATT, Vectors.of(Capability.create(
+					Strings.create(zed + "/w/"), Capability.CRUD_READ)),
+				UCAN.EXP, CVMLong.create(now + HOUR)),
+			withProofs(BOB, zedGrantingRight.toMap()));
 		Exception denied = assertThrows(Exception.class, () -> job.awaitResult(5000));
-		assertTrue(denied.getMessage().contains("must sign the UCAN with their own key"),
-			"even a valid granting proof cannot make the venue a root for a self-sovereign DID");
+		assertTrue(denied.getMessage().contains(UCANAdapter.NOT_HOSTED));
 	}
 
 	@Test
@@ -645,6 +659,106 @@ public class UCANTest {
 			RT.getIn(readJob.awaitResult(5000), "value"));
 	}
 
+	// ========== Passing on a held grant (prf) ==========
+	//
+	// A token whose prf is empty is a root. With prf, ucan:issue signs the next
+	// link of a chain: the venue passes on part of a grant made to it, so only
+	// the venue itself may ask, and every entry must be covered by those proofs
+	// now and through the new token's expiry.
+
+	/** The venue passes on part of Alice's grant to it; Bob reads with the chain. */
+	@Test
+	public void testIssueWithProofPassesOnAHeldGrant() {
+		String held = heldGrant(ALICE_DID + "/w/", "crud/read", 2 * HOUR);
+		long now = System.currentTimeMillis() / 1000;
+		AString jwt = RT.ensureString(RT.getIn(passOn(engine.venueContext(), held,
+			ALICE_DID + "/w/shared/", "crud/read", now + HOUR).awaitResult(5000), "token"));
+		UCAN token = UCAN.fromJWT(jwt);
+		assertEquals(venueDID, token.getIssuer());
+		assertEquals(BOB_DID, token.getAudience());
+		assertEquals(Vectors.of(Strings.create(held)), token.getProofs());
+
+		RequestContext bob = engine.withTransportGrants(BOB, Vectors.of(jwt));
+		ACell read = engine.jobs().invokeOperation("v/ops/covia/read",
+			Maps.of(Fields.PATH, ALICE_DID + "/w/shared/doc"), bob).awaitResult(5000);
+		assertEquals(Strings.create("shared content"), RT.getIn(read, "value"));
+		Job secret = engine.jobs().invokeOperation("v/ops/covia/read",
+			Maps.of(Fields.PATH, ALICE_DID + "/w/private/secret"), bob);
+		assertThrows(Exception.class, () -> secret.awaitResult(5000),
+			"the chain conveys only what the venue passed on");
+	}
+
+	/** ADVERSARIAL: the authority passed on is the venue's, so only the venue asks. */
+	@Test
+	public void testIssueWithProofOnlyForTheVenue() {
+		String held = heldGrant(ALICE_DID + "/w/", "crud/read", 2 * HOUR);
+		long now = System.currentTimeMillis() / 1000;
+		Exception denied = assertThrows(Exception.class, () -> passOn(BOB, held,
+			ALICE_DID + "/w/shared/", "crud/read", now + HOUR).awaitResult(5000));
+		assertTrue(denied.getMessage().contains(UCANAdapter.PRF_VENUE_ONLY));
+	}
+
+	/** ADVERSARIAL: a passed-on grant narrows; it never widens resource or ability. */
+	@Test
+	public void testIssueWithProofCannotWiden() {
+		String held = heldGrant(ALICE_DID + "/w/shared/", "crud/read", 2 * HOUR);
+		long now = System.currentTimeMillis() / 1000;
+		Exception wider = assertThrows(Exception.class, () -> passOn(engine.venueContext(), held,
+			ALICE_DID + "/w/", "crud/read", now + HOUR).awaitResult(5000));
+		assertTrue(wider.getMessage().contains(UCANAdapter.PRF_NOT_COVERED));
+		Exception write = assertThrows(Exception.class, () -> passOn(engine.venueContext(), held,
+			ALICE_DID + "/w/shared/", "crud/write", now + HOUR).awaitResult(5000));
+		assertTrue(write.getMessage().contains(UCANAdapter.PRF_NOT_COVERED));
+	}
+
+	/** ADVERSARIAL: a passed-on grant cannot outlive the grant it came from. */
+	@Test
+	public void testIssueWithProofCannotOutliveIt() {
+		String held = heldGrant(ALICE_DID + "/w/", "crud/read", HOUR);
+		long now = System.currentTimeMillis() / 1000;
+		Exception longer = assertThrows(Exception.class, () -> passOn(engine.venueContext(), held,
+			ALICE_DID + "/w/", "crud/read", now + 2 * HOUR).awaitResult(5000));
+		assertTrue(longer.getMessage().contains(UCANAdapter.PRF_OUTLIVED));
+		Exception forever = assertThrows(Exception.class, () -> passOn(engine.venueContext(), held,
+			ALICE_DID + "/w/", "crud/read", null).awaitResult(5000));
+		assertTrue(forever.getMessage().contains(UCANAdapter.PRF_OUTLIVED));
+	}
+
+	/** ADVERSARIAL: a token with prf is never a root, so it cannot also grant
+	 *  the venue's own resources; those need a token without prf. */
+	@Test
+	public void testIssueWithProofIsNeverARoot() {
+		String held = heldGrant(ALICE_DID + "/w/", "crud/read", 2 * HOUR);
+		long now = System.currentTimeMillis() / 1000;
+		Job mixed = engine.jobs().invokeOperation("v/ops/ucan/issue",
+			Maps.of(UCAN.AUD, BOB_DID,
+				UCAN.ATT, Vectors.of(
+					Capability.create(Strings.create(ALICE_DID + "/w/shared/"), Capability.CRUD_READ),
+					Capability.create(Strings.create("w/venue-notes/"), Capability.CRUD_READ)),
+				UCAN.EXP, CVMLong.create(now + HOUR),
+				UCAN.PRF, Vectors.of(Strings.create(held))),
+			engine.venueContext());
+		Exception denied = assertThrows(Exception.class, () -> mixed.awaitResult(5000));
+		assertTrue(denied.getMessage().contains(UCANAdapter.PRF_NOT_COVERED));
+	}
+
+	/** ADVERSARIAL: every proof must be a valid grant made to this venue, or
+	 *  the chain would be refused wherever it is presented. */
+	@Test
+	public void testIssueWithProofNeedsValidGrantsToTheVenue() {
+		long now = System.currentTimeMillis() / 1000;
+		String toBob = UcanTokens.grant(ALICE_KP, BOB_DID.toString(), ALICE_DID + "/w/", "crud/read", 2 * HOUR);
+		Exception notOurs = assertThrows(Exception.class, () -> passOn(engine.venueContext(), toBob,
+			ALICE_DID + "/w/shared/", "crud/read", now + HOUR).awaitResult(5000));
+		assertTrue(notOurs.getMessage().contains(UCANAdapter.PRF_NOT_TO_VENUE));
+
+		String held = heldGrant(ALICE_DID + "/w/", "crud/read", 2 * HOUR);
+		String tampered = tamperSignature(held);
+		Exception invalid = assertThrows(Exception.class, () -> passOn(engine.venueContext(), tampered,
+			ALICE_DID + "/w/shared/", "crud/read", now + HOUR).awaitResult(5000));
+		assertTrue(invalid.getMessage().contains(UCANAdapter.PRF_INVALID));
+	}
+
 	@Test
 	public void testCrossUserReadWithValidProof() {
 		AMap<AString, ACell> token = issueToken(BOB_DID, ALICE_DID, "/w/", "crud/read", 3600);
@@ -847,11 +961,7 @@ public class UCANTest {
 				Strings.create(ALICE_DID + "/w/"), Capability.CRUD_READ)),
 			Vectors.empty()).toString();
 
-		// Flip a character in the signature segment (last dot-separated part)
-		int lastDot = jwt.lastIndexOf('.');
-		char c = jwt.charAt(lastDot + 1);
-		char flipped = (c == 'A') ? 'B' : 'A';
-		String tampered = jwt.substring(0, lastDot + 1) + flipped + jwt.substring(lastDot + 2);
+		String tampered = tamperSignature(jwt);
 
 		AVector<ACell> proofs = UCANValidator.parseTransportUCANs(
 			Vectors.of(Strings.create(tampered)));
@@ -900,6 +1010,31 @@ public class UCANTest {
 			Vectors.of(Capability.create(Strings.create(withURI), Strings.create(ability))),
 			Vectors.empty());
 		return token.toMap();
+	}
+
+	/** Alice's root grant to this venue over one of her resources, as a JWT. */
+	private String heldGrant(String with, String can, long ttlSeconds) {
+		return UcanTokens.grant(ALICE_KP, venueDID.toString(), with, can, ttlSeconds);
+	}
+
+	/**
+	 * The JWT with its signature's first character flipped, so the signature
+	 * bytes always change: its last character also carries slack bits the
+	 * base64url decoder discards, so changing that one may change nothing.
+	 */
+	private static String tamperSignature(String jwt) {
+		int sig = jwt.lastIndexOf('.') + 1;
+		return jwt.substring(0, sig) + ((jwt.charAt(sig) == 'A') ? 'B' : 'A') + jwt.substring(sig + 1);
+	}
+
+	/** Asks for a token to Bob over {@code (with, can)} carrying {@code parent} in prf. */
+	private Job passOn(RequestContext ctx, String parent, String with, String can, Long exp) {
+		return engine.jobs().invokeOperation("v/ops/ucan/issue",
+			Maps.of(UCAN.AUD, BOB_DID,
+				UCAN.ATT, Vectors.of(Capability.create(Strings.create(with), Strings.create(can))),
+				UCAN.EXP, (exp == null) ? null : CVMLong.create(exp),
+				UCAN.PRF, Vectors.of(Strings.create(parent))),
+			ctx);
 	}
 
 	/**

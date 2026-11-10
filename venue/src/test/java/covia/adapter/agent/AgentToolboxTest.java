@@ -13,10 +13,12 @@ import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
+import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
+import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.venue.Engine;
@@ -198,7 +200,7 @@ public class AgentToolboxTest {
 					Maps.of("path", PINNED_PATH)), null);
 			exercisedHarness.add(HarnessTools.CONTEXT_UNLOAD);
 			assertTrue(RT.getIn(firstCall(unloaded), Fields.RESULT).toString()
-				.contains("pinned_context and cannot be unloaded"), where);
+				.contains(PINNED_PATH), where);
 			assertTrue(messages(unloaded).toString().contains(PINNED_MARKER),
 				where + " context_unload removed pinned context: " + unloaded);
 
@@ -271,6 +273,10 @@ public class AgentToolboxTest {
 				assistantCall("call_compact", HarnessTools.COMPACT,
 					Maps.of("summary", "TOOLBOX_COMPACT_SUMMARY")), null);
 			exercisedHarness.add(HarnessTools.COMPACT);
+			String[] reply = FrameTools.COMPACTED.split("%d");
+			String compacted = String.valueOf(result(compact, "call_compact"));
+			assertTrue(compacted.startsWith(reply[0]) && compacted.endsWith(reply[1]),
+				where + " answers compact as every runtime does: " + compacted);
 			assertTrue(messages(compact).toString().contains("TOOLBOX_COMPACT_SUMMARY"),
 				where + " compact summary missing from next inference: " + compact);
 			assertFalse(hasSystemContent(compact, "TOOLBOX_COMPACT_SUMMARY"),
@@ -288,12 +294,156 @@ public class AgentToolboxTest {
 					Maps.of("error", "cannot complete")), Strings.create("produce an answer"));
 			exercisedTaskTools.add(TaskTools.FAIL);
 			assertTerminal(failed, "failed", Strings.create("cannot complete"), where);
+
+			// park_task keeps the task open: its answer is not terminal, so the
+			// turn carries on to a reply that goes to the conversation.
+			AMap<AString, ACell> parked = step(agent, null,
+				assistantCall("call_park_task", TaskTools.PARK,
+					Maps.of("delay", 60_000L, "reason", "waiting for the report")), Strings.create("produce an answer"));
+			exercisedTaskTools.add(TaskTools.PARK);
+			assertNull(RT.getIn(parked, AbstractLLMAdapter.K_TERMINAL), where + " park is not terminal: " + parked);
+			String parkedReply = String.valueOf(result(parked, "call_park_task"));
+			assertTrue(parkedReply.startsWith(TaskTools.PARKED.split("%s")[0]),
+				where + " answers park as every runtime does: " + parkedReply);
 		}
 
 		assertEquals(HarnessTools.SHARED.keySet(), exercisedHarness,
 			"every shared harness tool needs a valid-reply behavioural case");
 		assertEquals(TaskTools.NAMES, exercisedTaskTools,
 			"every conditional task tool needs a valid-reply behavioural case");
+	}
+
+	/**
+	 * A name the session cannot call is answered with what would make it
+	 * callable, and nothing runs (#643): the regression was a skill tool called
+	 * before its skill was loaded falling through to grid dispatch.
+	 */
+	@Test
+	public void unboundToolNamesAreAnsweredWithoutRunning() {
+		for (AgentRuntime runtime : RUNTIMES) {
+			RunningAgent agent = start(runtime, runtime.name() + "-unbound", sharedConfig(runtime));
+			String where = runtime.name();
+			AMap<AString, ACell> step = step(agent, "call tools by name",
+				Maps.of("toolCalls", Vectors.of(
+					invoke("call_unloaded", "covia_read", Maps.of("path", CONTEXT_PATH)),
+					invoke("call_near_miss", "test-echo", Maps.of("ok", true)),
+					invoke("call_unknown", "records_read", Maps.empty()),
+					invoke("call_harness", HarnessTools.CONTEXT_LOAD, Maps.of("path", CONTEXT_PATH)),
+					invoke("call_reference", "v/test/ops/echo", Maps.of("ok", true)))), null);
+
+			assertEquals(Strings.create("Error: " + String.format(HarnessTools.TOOL_NOT_LOADED,
+				"covia_read", "[alpha, beta]")), result(step, "call_unloaded"), where);
+			assertEquals(Strings.create("Error: " + String.format(HarnessTools.TOOL_NEAR_MISS,
+				"test-echo", "test_echo")), result(step, "call_near_miss"), where);
+			assertEquals(Strings.create("Error: " + String.format(HarnessTools.NO_SUCH_TOOL, "records_read")
+				+ "; " + HarnessTools.USE_TOOL_LIST), result(step, "call_unknown"), where);
+			assertEquals(Strings.create("Error: " + String.format(AbstractLLMAdapter.CALL_HARNESS_DIRECTLY,
+				HarnessTools.CONTEXT_LOAD)), result(step, "call_harness"), where);
+			assertFalse(messages(step).toString().contains(CONTEXT_MARKER),
+				where + " a refused call loaded or read the context: " + step);
+			// A full operation reference still dispatches as one.
+			assertEquals(Maps.of("ok", true), result(step, "call_reference"), where);
+		}
+	}
+
+	/** A harness tool runs only where it is offered: one the agent was not
+	 *  given is refused as such, named directly or through invoke_tool, and
+	 *  nothing runs. */
+	@Test
+	public void unofferedHarnessToolsAreRefused() {
+		String notOffered = "Error: " + AbstractLLMAdapter.HARNESS_NOT_OFFERED;
+		for (AgentRuntime runtime : RUNTIMES) {
+			// more_tools brings invoke_tool and context_unload; not context_load or compact.
+			AMap<AString, ACell> config = Maps.of(
+				Fields.OPERATION, runtime.operation(),
+				"llmOperation", "v/test/ops/llm",
+				Fields.TOOLS, Vectors.of(Strings.create(HarnessTools.MORE_TOOLS)));
+			RunningAgent agent = start(runtime, runtime.name() + "-unoffered", config);
+			String where = runtime.name();
+			AMap<AString, ACell> step = step(agent, "call tools it was not given",
+				Maps.of("toolCalls", Vectors.of(
+					Maps.of("id", "call_load", "name", HarnessTools.CONTEXT_LOAD,
+						"arguments", Maps.of("path", CONTEXT_PATH)),
+					invoke("call_compact", HarnessTools.COMPACT, Maps.of("summary", "earlier work")))), null);
+
+			assertEquals(Strings.create(String.format(notOffered, HarnessTools.CONTEXT_LOAD)),
+				result(step, "call_load"), where);
+			assertEquals(Strings.create(String.format(notOffered, HarnessTools.COMPACT)),
+				result(step, "call_compact"), where);
+			assertFalse(messages(step).toString().contains(CONTEXT_MARKER),
+				where + " a refused call loaded the context: " + step);
+		}
+	}
+
+	/** agent:step answers compact with the count a live cycle gives: its frame
+	 *  takes the reply and each earlier result as they arrive. compactllm's first
+	 *  reply calls test_echo, then compact. */
+	@Test
+	public void stepAnswersCompactAsALiveCycleDoes() {
+		for (AgentRuntime runtime : RUNTIMES) {
+			String id = runtime.name() + "-compact-count";
+			engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, id,
+				Fields.CONFIG, Maps.of(
+					Fields.OPERATION, runtime.operation(),
+					"caps", "unrestricted",
+					"llmOperation", "v/test/ops/compactllm",
+					Fields.TOOLS, Vectors.of(
+						Strings.create(HarnessTools.COMPACT), Strings.create("v/test/ops/echo")))),
+				user).awaitResult(5000);
+			AMap<AString, ACell> stepped = step(new RunningAgent(id, null), "compact this",
+				Maps.of("toolCalls", Vectors.of(
+					Maps.of("id", "call_e1", "name", "test_echo", "arguments", Maps.of("input", "hello")),
+					Maps.of("id", "call_c1", "name", HarnessTools.COMPACT,
+						"arguments", Maps.of("summary", "Made an echo call.")))), null);
+
+			ACell chat = engine.jobs().invokeOperation("v/ops/agent/chat",
+				Maps.of(Fields.AGENT_ID, id, Fields.MESSAGE, "compact this"), user).awaitResult(10000);
+			Blob sid = Blob.fromHex(RT.getIn(chat, Fields.SESSION_ID).toString());
+			AMap<AString, ACell> root = RT.ensureMap(RT.getIn(engine.getVenueState().users().user(userDid)
+				.agent(id).getSession(sid), Fields.FRAMES, CVMLong.ZERO));
+			ACell live = archivedToolResult(GoalTreeContext.archivedConversation(root), "call_c1");
+			assertNotNull(live, runtime.name() + " live cycle did not record compact: " + root);
+			assertEquals(live, result(stepped, "call_c1"), runtime.name());
+		}
+	}
+
+	/** A tool call's result in a conversation, looking inside compacted segments. */
+	private static ACell archivedToolResult(AVector<ACell> conversation, String id) {
+		for (long i = 0; conversation != null && i < conversation.count(); i++) {
+			ACell turn = conversation.get(i);
+			ACell found = GoalTreeContext.isSegment(turn)
+				? archivedToolResult(RT.ensureVector(RT.getIn(turn, GoalTreeContext.K_ITEMS)), id)
+				: ("tool".equals(String.valueOf(RT.getIn(turn, "role")))
+					&& id.equals(String.valueOf(RT.getIn(turn, "id")))) ? RT.getIn(turn, "content") : null;
+			if (found != null) return found;
+		}
+		return null;
+	}
+
+	/** With few tools, a name nothing provides is answered with all of them. */
+	@Test
+	public void unknownNameListsAShortToolList() {
+		for (AgentRuntime runtime : RUNTIMES) {
+			AMap<AString, ACell> config = Maps.of(
+				Fields.OPERATION, runtime.operation(),
+				"llmOperation", "v/test/ops/llm",
+				Fields.TOOLS, Vectors.of(Strings.create("v/test/ops/echo")));
+			RunningAgent agent = start(runtime, runtime.name() + "-short-list", config);
+			AMap<AString, ACell> step = step(agent, "call a tool that does not exist",
+				assistantCall("call_unknown", "records_read", Maps.empty()), null);
+			assertEquals(Strings.create("Error: " + HarnessTools.noSuchTool("records_read",
+				Set.of(TaskTools.COMPLETE, TaskTools.FAIL, TaskTools.PARK, "test_echo"))),
+				result(step, "call_unknown"), runtime.name());
+		}
+	}
+
+	private static ACell invoke(String id, String name, ACell input) {
+		return Maps.of("id", id, "name", HarnessTools.INVOKE_TOOL,
+			"arguments", Maps.of("name", name, "input", input));
+	}
+
+	private static ACell result(AMap<AString, ACell> step, String id) {
+		return RT.getIn(call(step, id), Fields.RESULT);
 	}
 
 	@Test
@@ -325,7 +475,7 @@ public class AgentToolboxTest {
 			assistantCall("call_subgoal", GoalTreeAdapter.TOOL_SUBGOAL,
 				Maps.of("description", "do the sub-task")), null);
 		exercised.add(GoalTreeAdapter.TOOL_SUBGOAL);
-		assertTrue(RT.getIn(firstCall(subgoal), Fields.RESULT).toString().contains("not executed"),
+		assertTrue(RT.getIn(firstCall(subgoal), Fields.RESULT).toString().contains(GoalTreeAdapter.STEP_SUBGOAL_NOTE),
 			"agent:step must state its subgoal boundary: " + subgoal);
 
 		Set<String> expected = new HashSet<>(GoalTreeAdapter.HARNESS_TOOL_REGISTRY.keySet());
@@ -408,7 +558,7 @@ public class AgentToolboxTest {
 
 	private RunningAgent start(AgentRuntime runtime, String id, AMap<AString, ACell> config) {
 		engine.jobs().invokeOperation("v/ops/agent/create",
-			Maps.of(Fields.AGENT_ID, id, Fields.CONFIG, config), user).awaitResult(5000);
+			Maps.of(Fields.AGENT_ID, id, Fields.CONFIG, TestEngine.unrestricted(config)), user).awaitResult(5000);
 		ACell chat = engine.jobs().invokeOperation("v/ops/agent/chat",
 			Maps.of(Fields.AGENT_ID, id, Fields.MESSAGE, "establish deterministic session"),
 			user).awaitResult(10000);

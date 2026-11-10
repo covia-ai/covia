@@ -32,8 +32,8 @@ public class RequestContextAuthorityTest {
 
 	@Test
 	public void testWrapsPresentedProofs() {
-		// of(did, proofs) attaches PRESENTED proofs; the caller stays unrestricted.
-		RequestContext ctx = RequestContext.of(ALICE, Vectors.of(PROOF));
+		// withProofs attaches PRESENTED proofs; the caller stays unrestricted.
+		RequestContext ctx = RequestContext.of(ALICE).withProofs(Vectors.of(PROOF));
 		Authority a = ctx.getAuthority();
 		assertEquals(ALICE, a.getDID());
 		assertEquals(1, a.getProofs().count());
@@ -98,17 +98,19 @@ public class RequestContextAuthorityTest {
 		Blob session = Blob.fromHex("1234");
 		Blob job = Blob.fromHex("5678");
 		Blob task = Blob.fromHex("9abc");
+		Blob claim = Blob.fromHex("def0");
 		RequestContext original = RequestContext.ofAgent(DELEGATE, agent)
-			.withSessionId(session).withJobId(job).withTaskId(task, 7L);
+			.withSessionId(session).withJobId(job).withTaskId(task, 7L).withClaim(claim);
 		RequestContext delegated = original.onBehalfOf(ALICE);
 		assertSame(original.getExecutionScope(), delegated.getExecutionScope());
-		assertEquals(new RequestContext.ExecutionScope(DELEGATE, agent, job, session, task, 7L),
+		assertEquals(new RequestContext.ExecutionScope(DELEGATE, agent, job, session, task, 7L, claim),
 			delegated.getExecutionScope());
 		assertNull(delegated.getAgentId());
 		assertNull(delegated.getSessionId());
 		assertNull(delegated.getJobId());
 		assertNull(delegated.getTaskId());
 		assertEquals(-1L, delegated.getTaskRevision());
+		assertNull(delegated.getClaim());
 
 		RequestContext copied = delegated.withCaps(Vectors.empty()).withProofs(Vectors.of(PROOF))
 			.withRawUcans(Vectors.empty()).withOp(Strings.create("test:echo"))
@@ -180,11 +182,11 @@ public class RequestContextAuthorityTest {
 		assertNull(gateCtx.getProofs(),
 			"gate policy code must not inherit additive cross-user delegations");
 		assertNull(CapabilityChecker.allows(gateCtx.getCaps(), gateOp,
-			Strings.create("invoke"), ALICE, gateOp, null, null),
+			Strings.create("invoke"), ALICE, ALICE, gateOp, null, null),
 			"the gate receives only the synthetic right to invoke itself");
 		assertNotNull(CapabilityChecker.allows(gateCtx.getCaps(),
 			Strings.create("w/private"), Strings.create("crud/write"),
-			ALICE, gateOp, null, null),
+			ALICE, ALICE, gateOp, null, null),
 			"the original gated grant stays fail-closed during gate execution");
 	}
 }

@@ -10,6 +10,9 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.core.data.util.CellExplorer;
 import convex.core.lang.RT;
+import covia.exception.ConflictException;
+import covia.exception.InvalidInputException;
+import covia.venue.Agent;
 
 /**
  * Renders a goal tree frame stack into LLM context messages.
@@ -111,6 +114,11 @@ public class GoalTreeContext {
 	}
 
 	// ========== Interrupted-conversation repair (pure) ==========
+
+	/** The tool result a cycle start gives each call an interrupted cycle left without one. */
+	public static final AString TOOL_CALL_DID_NOT_RETURN = Strings.intern(
+		"Error: this tool call did not return — its effects may or may not "
+		+ "have applied; verify before retrying.");
 
 	/**
 	 * Repairs an interrupted frame stack: every dangling toolCall — an
@@ -278,6 +286,22 @@ public class GoalTreeContext {
 		return withLoads(createFrame(description), loads);
 	}
 
+	/**
+	 * The words of a turn's content, for a person to read: a string as it is,
+	 * a structured message's {@code text} (as a channel or voice delivers it),
+	 * or an agent request's {@code task}, the field
+	 * {@code agent:request} names for free-form instructions. Null for
+	 * anything else.
+	 */
+	public static AString turnText(ACell content) {
+		if (content instanceof AString s) return s;
+		AString text = RT.ensureString(RT.getIn(content, K_MESSAGE_TEXT));
+		return (text != null) ? text : RT.ensureString(RT.getIn(content, K_TASK_TEXT));
+	}
+
+	private static final AString K_MESSAGE_TEXT = Strings.intern("text");
+	private static final AString K_TASK_TEXT = Strings.intern("task");
+
 	// ========== Root goal description generators ==========
 
 	/**
@@ -420,29 +444,29 @@ public class GoalTreeContext {
 	 *
 	 * @return the selected vector, or null when the frame/conversation is absent;
 	 *         absence is distinct from an empty vector in ancestor rendering
-	 * @throws IllegalArgumentException for an incomplete, mixed or invalid history selection
+	 * @throws InvalidInputException for an incomplete, mixed or invalid history selection
 	 */
 	@SuppressWarnings("unchecked")
 	public static AVector<ACell> activeConversation(AMap<AString, ACell> frame) {
 		if (frame == null) return null;
 		if (!frame.containsKey(K_HISTORY)) {
 			if (frame.containsKey(K_CONTEXT_START)) {
-				throw new IllegalArgumentException(CONTEXT_START_WITHOUT_HISTORY);
+				throw new InvalidInputException(CONTEXT_START_WITHOUT_HISTORY);
 			}
-			if (frame.containsKey(K_HISTORY_VERSION)) throw new IllegalArgumentException(INVALID_HISTORY_VERSION);
+			if (frame.containsKey(K_HISTORY_VERSION)) throw new InvalidInputException(INVALID_HISTORY_VERSION);
 			ACell legacy = frame.get(K_CONVERSATION);
-			if (legacy != null && !(legacy instanceof AVector<?>)) throw new IllegalArgumentException(INVALID_CONVERSATION);
+			if (legacy != null && !(legacy instanceof AVector<?>)) throw new InvalidInputException(INVALID_CONVERSATION);
 			return (AVector<ACell>) legacy;
 		}
 		ACell version = frame.get(K_HISTORY_VERSION);
-		if (frame.containsKey(K_HISTORY_VERSION) && !HISTORY_VERSION.equals(version)) throw new IllegalArgumentException(INVALID_HISTORY_VERSION);
+		if (frame.containsKey(K_HISTORY_VERSION) && !HISTORY_VERSION.equals(version)) throw new InvalidInputException(INVALID_HISTORY_VERSION);
 		if (!(frame.get(K_HISTORY) instanceof AVector<?> history)
 				|| frame.containsKey(K_CONVERSATION)) {
-			throw new IllegalArgumentException(INVALID_HISTORY);
+			throw new InvalidInputException(INVALID_HISTORY);
 		}
 		if (!(frame.get(K_CONTEXT_START) instanceof CVMLong start)
 				|| start.longValue() < 0 || start.longValue() > history.count()) {
-			throw new IllegalArgumentException(INVALID_CONTEXT_START);
+			throw new InvalidInputException(INVALID_CONTEXT_START);
 		}
 		return (AVector<ACell>) history.slice(start.longValue(), history.count());
 	}
@@ -487,7 +511,7 @@ public class GoalTreeContext {
 				|| turns.longValue() < 0 || !(range.get(0) instanceof CVMLong start)
 				|| !(range.get(1) instanceof CVMLong end) || start.longValue() < 0
 				|| end.longValue() < start.longValue() || end.longValue() > position) {
-			throw new IllegalArgumentException(INVALID_HISTORY_RANGE);
+			throw new InvalidInputException(INVALID_HISTORY_RANGE);
 		}
 		return range;
 	}
@@ -507,7 +531,7 @@ public class GoalTreeContext {
 		AMap<AString, ACell> migrated = frame.dissoc(K_CONVERSATION)
 			.assoc(K_HISTORY_VERSION, HISTORY_VERSION).assoc(K_HISTORY, builder.entries)
 			.assoc(K_CONTEXT_START, CVMLong.create(start));
-		if (!active.equals(archivedConversation(migrated))) throw new IllegalArgumentException(INVALID_HISTORY_RANGE);
+		if (!active.equals(archivedConversation(migrated))) throw new InvalidInputException(INVALID_HISTORY_RANGE);
 		return migrated;
 	}
 
@@ -519,12 +543,12 @@ public class GoalTreeContext {
 			AVector<ACell> selected = Vectors.empty();
 			for (ACell entry : original) {
 				if (entry instanceof AMap<?, ?> raw && raw.containsKey(K_HISTORY_RANGE)) {
-					throw new IllegalArgumentException(INVALID_HISTORY_RANGE); // never reinterpret legacy metadata
+					throw new InvalidInputException(INVALID_HISTORY_RANGE); // never reinterpret legacy metadata
 				}
 				if (isSegment(entry)) {
 					@SuppressWarnings("unchecked") AMap<AString, ACell> segment = (AMap<AString, ACell>) entry;
 					AVector<ACell> items = RT.ensureVector(segment.get(K_ITEMS));
-					if (items == null) throw new IllegalArgumentException(INVALID_HISTORY_RANGE);
+					if (items == null) throw new InvalidInputException(INVALID_HISTORY_RANGE);
 					long start = append(items);
 					entry = segment.dissoc(K_ITEMS).assoc(K_HISTORY_RANGE, Vectors.of(start, entries.count()));
 				}
@@ -540,7 +564,7 @@ public class GoalTreeContext {
 		AVector<ACell> result = frames;
 		for (long i = 0; i < frames.count(); i++) {
 			AMap<AString, ACell> frame = RT.ensureMap(frames.get(i));
-			if (frame == null) throw new IllegalArgumentException(INVALID_FRAME);
+			if (frame == null) throw new InvalidInputException(INVALID_FRAME);
 			AMap<AString, ACell> migrated = migrateFrame(frame);
 			if (migrated != frame) result = result.assoc(i, migrated);
 		}
@@ -552,7 +576,7 @@ public class GoalTreeContext {
 	public static void validateFramesUpdate(AVector<ACell> before, AVector<ACell> after) {
 		if (after.isEmpty() && before != null && !before.isEmpty()) {
 			AMap<AString, ACell> root = RT.ensureMap(before.get(0));
-			if (root != null && root.containsKey(K_HISTORY)) throw new IllegalArgumentException(HISTORY_REWRITE);
+			if (root != null && root.containsKey(K_HISTORY)) throw new ConflictException(HISTORY_REWRITE);
 		}
 		for (long i = 0; i < after.count(); i++) {
 			validateFrameUpdate(before != null && i < before.count() ? RT.ensureMap(before.get(i)) : null,
@@ -562,7 +586,7 @@ public class GoalTreeContext {
 
 	/** Validates one retained frame; child-frame retirement is owned by the runtime. */
 	public static void validateFrameUpdate(AMap<AString, ACell> before, AMap<AString, ACell> after) {
-		if (after == null) throw new IllegalArgumentException(INVALID_FRAME);
+		if (after == null) throw new InvalidInputException(INVALID_FRAME);
 		if (before == after) return;
 		AVector<ACell> next = history(after);
 		long retained = 0;
@@ -570,7 +594,7 @@ public class GoalTreeContext {
 			AVector<ACell> previous = history(before);
 			if (!after.containsKey(K_HISTORY) || next.count() < previous.count()
 					|| !previous.equals(next.slice(0, previous.count()))) {
-				throw new IllegalArgumentException(HISTORY_REWRITE);
+				throw new ConflictException(HISTORY_REWRITE);
 			}
 			retained = previous.count();
 		}
@@ -836,11 +860,11 @@ public class GoalTreeContext {
 			AMap<AString, ACell> message = (AMap<AString, ACell>) raw;
 			AString role = RT.ensureString(message.get(K_ROLE));
 			AString source = ROLE_TOOL.equals(role)
-				? covia.venue.AgentState.SOURCE_TOOL
-				: covia.venue.AgentState.SOURCE_TRANSITION;
+				? Agent.SOURCE_TOOL
+				: Agent.SOURCE_TRANSITION;
 			stamped = stamped.conj(message
-				.assoc(covia.venue.AgentState.K_TURN_TS, CVMLong.create(timestamp))
-				.assoc(covia.venue.AgentState.K_SOURCE, source));
+				.assoc(Agent.K_TURN_TS, CVMLong.create(timestamp))
+				.assoc(Agent.K_SOURCE, source));
 		}
 		return stamped;
 	}

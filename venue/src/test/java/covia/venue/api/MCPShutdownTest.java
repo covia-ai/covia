@@ -45,7 +45,7 @@ public class MCPShutdownTest {
 	@Test
 	public void closeEndsOpenStreamsBeforeReleasingTheEngine() throws Exception {
 		VenueServer server = VenueServer.launch(Maps.of(
-			Strings.create("port"), 0,
+			Strings.create("port"), 0, Config.STORE, "memory",
 			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
 			Fields.MCP, Maps.of(
 				Strings.create("includePathPrefixes"), Vectors.of(Strings.create("v/ops/")),

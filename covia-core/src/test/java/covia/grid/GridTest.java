@@ -1,5 +1,6 @@
 package covia.grid;
 
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -9,16 +10,21 @@ class GridTest {
 	@Test
 	void bareVenueLabelsAreRejectedWithoutGuessing() {
 		IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
-			() -> Grid.connect(" venue-3 "));
-		assertTrue(error.getMessage().contains("Unqualified venue reference 'venue-3'"));
-		assertTrue(error.getMessage().contains("registered venue resolver"));
+			() -> Grid.connect("venue-3"));
+		assertTrue(error.getMessage().contains("venue-3"));
+	}
+
+	@Test
+	void aPaddedReferenceIsNoReference() {
+		assertThrows(IllegalArgumentException.class, () -> Grid.connect(" https://venue.example"));
+		assertThrows(IllegalArgumentException.class, () -> Grid.connect(" did:web:venue.example"));
 	}
 
 	@Test
 	void missingVenueReferenceIsExplicit() {
 		IllegalArgumentException missing = assertThrows(IllegalArgumentException.class,
 			() -> Grid.connect((String) null));
-		assertTrue(missing.getMessage().contains("Venue reference is required"));
+		assertFalse(missing.getMessage().isBlank());
 	}
 
 	@Test

@@ -19,8 +19,9 @@ lattice path to a *provider* operation (`v/ops/langchain/anthropic`), and
 `model` is that provider's bare id (`claude-sonnet-5-5`). Everything the venue
 knows about a particular model lives wherever it happened to be put:
 
-- assembly facts — context budget, tool calling, label dialect — on the
-  provider operation's `model` facet, per model under `byModel`;
+- assembly facts — context budget, tool calling, label dialect, how late tool
+  results are shown — on the provider operation's `model` facet, per model
+  under `byModel`;
 - the model lists, default model and recommendations that `llm:models`
   reported — in Java (`LangChainAdapter.HOSTED_PROVIDERS`);
 - default inputs for a model — `maxTokens`, a `url`, a deployment's key —
@@ -300,10 +301,9 @@ operation; authored assets should follow the same convention:
 | `budget.bytes`, `toolCalling`, `labels`, tags and model-specific default inputs | model asset |
 | this agent's assembly overrides (`options`, `budget`) | `config.modelProfile` |
 
-The existing pure map helpers remain useful for legacy provider metadata, but
-following `model.provider` requires the engine, caller context and resolved
-operation asset; it is not added implicitly to the static
-`modelProfile(meta, modelId, config)` signature.
+`Models.resolve` follows `model.provider` through a lookup its caller
+supplies: a cycle resolves each reference through the engine under its own
+context. The static `modelProfile(meta, modelId, config)` does not follow it.
 
 ### 5.2 Defaults at dispatch
 
@@ -447,8 +447,9 @@ may contain `/`. The `models` vector of ids is retained for compatibility;
 }
 ```
 
-Readiness stays caller-relative (the provider's key in the caller's secret
-store or the venue environment; a local server's live reachability) and is
+Readiness stays caller-relative (a provider key in the caller's secret store
+or the venue environment that the caller may use where the profile's calls go;
+a local server's live reachability) and is
 computed per serving profile, since two deployments of one vendor can differ.
 The endpoint and secret-name convention come from that profile's operation,
 not a provider-name branch in Java.
@@ -497,8 +498,8 @@ and discovery now come exclusively from declared assets.
 
 An operator publishes a model by storing the asset and writing its metadata at
 the catalog name while authenticated as the venue identity (`asset:store`,
-then `covia:write v/models/...`) — the operator form of the same CAS plus
-declaration performed at boot. A user publishes an owned operation under
+then `covia:write w/global/models/...`, which `v/models/...` shows) — the
+operator form of the same CAS plus declaration performed at boot. A user publishes an owned operation under
 `/o/`.
 
 Ollama is the case where model facts may be discovered rather than known, but

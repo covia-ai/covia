@@ -5,6 +5,7 @@ import java.io.BufferedWriter;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
+import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -33,8 +34,8 @@ import convex.core.data.prim.CVMDouble;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
-import covia.adapter.AAdapter;
 import covia.api.Fields;
+import covia.exception.UnavailableException;
 
 /**
  * One Claude Code process: a conversation (Claude Code session) in a project
@@ -132,6 +133,8 @@ final class ClaudeSession {
 	final long created = System.currentTimeMillis();
 
 	private volatile String sessionId;
+	/** Whether a process has announced {@link #sessionId}: until then a resume's id is only asked for. */
+	private volatile boolean announced;
 	private volatile String model;
 	private volatile State state = State.NEW;
 	private volatile long lastUsed = created;
@@ -156,6 +159,8 @@ final class ClaudeSession {
 
 	/** The Claude Code session id — known once the process has announced it (or from the start when resuming). */
 	String sessionId() { return sessionId; }
+	/** True once Claude Code has announced the session, so it runs in this project. */
+	boolean announced() { return announced; }
 	State state() { return state; }
 	boolean isLive() { return state == State.IDLE || state == State.BUSY; }
 	boolean isIdle() { return state == State.IDLE; }
@@ -242,10 +247,11 @@ final class ClaudeSession {
 				}
 			}
 			current = null;
-			next.future.completeExceptionally(new RuntimeException("Could not start Claude Code turn: " + AAdapter.describeFailure(e), e));
+			String cause = adapter.describeFailure(e);
+			next.future.completeExceptionally(new UnavailableException("Could not start Claude Code turn: " + cause, e));
 			stopLocked("start failed");
 			// The remaining queue fails too: nothing will drain it.
-			failQueue("Claude Code session could not start: " + AAdapter.describeFailure(e));
+			failQueue("Claude Code session could not start: " + cause);
 			adapter.onSlotFreed(this);
 		}
 	}
@@ -274,7 +280,7 @@ final class ClaudeSession {
 
 	private void failQueue(String reason) {
 		Turn t;
-		while ((t = queue.poll()) != null) t.future.completeExceptionally(new RuntimeException(reason));
+		while ((t = queue.poll()) != null) t.future.completeExceptionally(new UnavailableException(reason));
 	}
 
 	// ---------------------------------------------------------------- process
@@ -314,7 +320,7 @@ final class ClaudeSession {
 			tempFiles.add(f);
 			return f.toString();
 		} catch (IOException e) {
-			throw new RuntimeException("Could not write Claude Code option file: " + e.getMessage(), e);
+			throw new UncheckedIOException("Could not write Claude Code option file: " + e.getMessage(), e);
 		}
 	}
 
@@ -367,7 +373,10 @@ final class ClaudeSession {
 			case "system" -> {
 				if ("init".equals(str(ev.get(J_SUBTYPE)))) {
 					String sid = str(ev.get(J_SESSION_ID));
-					if (sid != null) sessionId = sid;
+					if (sid != null) {
+						sessionId = sid;
+						announced = true;
+					}
 					String m = str(RT.getIn(ev, J_MODEL));
 					if (m != null) model = m;
 					adapter.onSessionAnnounced(this);
@@ -517,7 +526,7 @@ final class ClaudeSession {
 			state = State.STOPPED;
 			String tail = stderrTail();
 			if (failed != null && !failed.future.isDone()) {
-				failed.future.completeExceptionally(new RuntimeException(
+				failed.future.completeExceptionally(new UnavailableException(
 					"Claude Code exited (code " + code + ") before finishing the turn"
 					+ (tail.isEmpty() ? "" : ": " + tail)
 					+ (sessionId != null ? " [session " + sessionId + "]" : "")));
@@ -547,7 +556,10 @@ final class ClaudeSession {
 
 	/** Stop the process (the session stays resumable). Idempotent. */
 	synchronized void stop(String reason) {
+		boolean spawned = process != null;
 		stopLocked(reason);
+		// Without a process, no exit follows to tell the pool
+		if (!spawned) adapter.onSlotFreed(this);
 	}
 
 	private void stopLocked(String reason) {
@@ -563,7 +575,7 @@ final class ClaudeSession {
 		}
 		log.info("Stopping Claude Code process {} in project '{}': {}", p.pid(), project.name(), reason);
 		if (current != null && !current.future.isDone()) {
-			current.future.completeExceptionally(new RuntimeException("Claude Code session stopped: " + reason));
+			current.future.completeExceptionally(new UnavailableException("Claude Code session stopped: " + reason));
 			current = null;
 		}
 		failQueue("Claude Code session stopped: " + reason);

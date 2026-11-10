@@ -35,10 +35,10 @@ See GRID_LATTICE_DESIGN.md for: per-user namespace layout (§4.3), agent address
    stateless invocation. Each level is a grid operation, pluggable independently.
    The framework never inspects user state; lower levels never manage framework fields.
 
-5. **Transition function must succeed.** A failing transition function is a severe
-   bug — it suspends the entire agent. The agent update restores the queues and
-   records the error. The transition function is responsible for its own error
-   handling; if it wants the agent to continue running, it must return successfully.
+5. **A failure lands on what failed.** A failed transition fails the work it took
+   — the picked task, or the chat it was answering — and the agent carries on with
+   the rest. Only an agent that cannot continue is suspended, and it keeps its
+   queue (§3.4).
 
 ### 1.1 Agent references
 
@@ -66,14 +66,13 @@ An agent lives at `:user-data → <owner-DID> → "g" → <agent-id>`.
 ```
 signed venue :value
   → Timestamped venue record (:timestamp, whole-value LWW)
-  → typed venue interior
-      :user-data → MapLattice (DID → stamped user record)
-        "g" → MapLattice (agent-id → stamped agent record)
-          <agent-id> → stamped cursor (ts) → JSONLattice
+      :user-data → map (DID → stamped user record)
+        "g" → map (agent-id → agent record)
+          <agent-id> → stamped cursor (ts)
 ```
 
-The inner agent component supplies typed navigation and maintains `ts` when a
-deep cursor write enters the record (including `n/` and `c/`). It adds no stored
+The agent component maintains `ts` when a deep cursor write enters the record
+(including `n/` and `c/`). It adds no stored
 envelope: the physical value remains the same plain map. Merge stops at the outer
 venue LWW and therefore never combines individual agents or their fields.
 
@@ -86,15 +85,17 @@ The agent's value is a plain map. Every write replaces the entire map atomically
 | `ts` | long | Ratcheted timestamp of the last write to the agent record. Metadata, not a merge discriminator. |
 | `status` | string | `"SLEEPING"` \| `"RUNNING"` \| `"SUSPENDED"` \| `"TERMINATED"`. `RUNNING` is a persisted execution marker, validated against the live executor by the hosting venue. |
 | `agent` | map? | Optional external implementation selector; absent for the native Covia runtime. See §2.2.1. |
-| `config` | map | Framework-level configuration. Includes `operation` (default transition op). |
+| `controller` | string? | DID of the principal whose authority the agent acts with, and whose authority configuring the agent needs; absent for its owner ([UCAN.md §5.4](./UCAN.md)). |
+| `config` | map | Framework-level configuration. Includes `operation` (default transition op) and `caps`, the agent's capability scope ([UCAN.md §5.4](./UCAN.md): Model A, user-scoped). The record stores `caps` only when they bound the agent: an unrestricted agent's record has none, which `agent:info` shows as `"unrestricted"`, and one given no authority stores `[]`. |
 | `state` | any | User-defined state. Opaque to the framework. Passed to and returned from the transition function. Transition-function configuration (LLM operation, model, system prompt, tools, caps) lives in `config`, not here (#144). Set at creation via optional initial state. Conversation content lives on the session record (`session.frames[0].conversation`), not here. |
 | `tasks` | index | `Index<Blob, ACell>` of inbound request Job IDs. Persistent until resolved. Ordered by Job ID. |
+| `resolved` | index? | Tasks the agent has resolved whose requests are not settled yet, by Job ID: each holds `{id, status, output \| error, sessionId?}`, what its request settles with (§3.4.1). |
 | `pending` | index | `Index<Blob, ACell>` of outbound Job IDs the agent is waiting on. Ordered by Job ID. |
 | `sessions` | index | `Index<Blob, ACell>` of sessions. Each session contains `frames` (the goal-tree frame stack — `frames[0].conversation` is the canonical transcript), pending messages, metadata, and per-session state (`c/`). See AGENT_SESSIONS.md and GOAL_TREE.md. |
 | `timeline` | vector | Append-only log of cycle records (§2.4), one per cycle whose transition ran — the complete record of each cycle's exchange with the model. |
-| `caps` | map | Capability attenuations — UCAN scoping for agent tool calls. See [UCAN.md §5.4](./UCAN.md) for Model A (user-scoped) vs Model B (independent DID). |
 | `error` | string? | Last error message, or null. Set when the transition function fails. |
 | `suspension` | map? | Deliberate stop: `{by: <actual caller DID>, reason?: <up to 512 characters>, ts: <epoch millis>}`. Set by `agent:suspend`, separate from faults; cleared on resume. |
+| `inCycle` | map? | The running cycle's claim, `{epoch, sessionId?}` (§2.5.1). Present only while a cycle runs. |
 
 All fields are framework-managed except `state`, which is owned by the transition
 function. CAD3 structural sharing means the timeline (which only appends) shares
@@ -153,9 +154,13 @@ Supported definitions:
 | `remoteagent` | Destination `agentId`, optional `venue` and `authenticateAs`; omitted venue uses the local venue |
 
 `agent:chat` and `agent:request` preserve their existing result envelopes.
-The common dispatcher checks normal agent admission and executes as the resident
-agent with its `config.caps`. Requester credentials do not become the agent's
-authority. Provider-specific project, secret and destination checks still apply.
+The common dispatcher checks normal agent admission. Asking the backend is the
+agent's harness at work, as calling the model is a native agent's: it acts as
+the agent with its controller's authority as it stands, which the agent's
+`config.caps` do not narrow (UCAN.md §5.4). The backend job keeps that
+authority, so work it carries on after a restart acts with it again. Requester
+credentials do not become the agent's authority. Provider-specific project,
+secret and destination checks apply under the controller's authority.
 See [AGENT_SESSIONS.md §2.2](./AGENT_SESSIONS.md#22-external-agent-sessions)
 for conversation mapping, turn execution, messages and recovery.
 
@@ -181,16 +186,21 @@ until the agent completes or rejects them — they survive restarts and can span
 days or weeks. Tasks can come from humans (via MCP), other agents, or the system.
 
 **Messages** are delivered to `session.pending` — a per-session queue. Each
-message is an envelope with content and caller metadata. Messages are drained
-by the run loop on the next transition cycle for that session and appended to
-`session.frames[0].conversation` as user turns. See AGENT_SESSIONS.md for the
-session model.
+message is an envelope with content and caller metadata; a chat's names the
+chat Job waiting for the reply. A cycle on that session takes the head of the
+queue as it starts, up to and including the first chat for the session's own
+cycle and short of it for a task's: in one transaction those leave the queue
+and become user turns in `session.frames[0].conversation` (§4.4). See
+AGENT_SESSIONS.md §5.5.2 for the session model.
 
 The **pending** outbound-Job index holds job references for outstanding waits.
 HITL registers its request there until settlement, including after recovery;
-the Job owns the current status. HITL still delivers its answer through the
-session inbox, because its immediate receipt already completes the original
-tool exchange. No generic async-invoke tool is exposed yet (§3.4.2).
+the Job owns the current status. HITL still delivers its answer as a new
+input, because its immediate receipt already completes the original tool
+exchange: to the task whose cycle asked, else to the session inbox (§6.3). A
+tool call still running past its time limit is tracked there too, with the
+session and task its outcome goes to (§3.4.2); a cycle is not shown such an
+entry as a job result. No generic async-invoke tool is exposed yet.
 
 ### 2.4 Timeline Entry
 
@@ -199,8 +209,9 @@ exchange with the model: what the cycle was given, what the model was told
 beyond the conversation, every inference it made, and what came of it. The
 session keeps the conversation the next cycle continues from; the entry keeps
 what happened. An entry is written for every cycle whose transition ran,
-success or failure — a failure's entry carries the error and the inferences
-that ran before it.
+success, failure or stop — a failure's entry carries the error and the
+inferences that ran before it, and a stopped cycle's entry says it was stopped
+(§2.5.1).
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -211,8 +222,10 @@ that ran before it.
 | `context` | vector | The root frame's standing context as rendered for its first inference — the head and live surface (system prompt, skills index, loads): the prompt minus the conversation. |
 | `tools` | vector | Names of the tools offered to the first inference. |
 | `inferences` | vector | One record per model call, in order — see below. |
-| `result` | any | The cycle's response, or its error. |
+| `result` | any | The cycle's response, or its error, or for a stopped cycle why it stopped. |
 | `taskResults` | map? | Task completions, `{<jobId>: {status, output}}`. |
+| `cancelled` | boolean? | `true` for a stopped cycle (§2.5.1). |
+| `suspension` | map? | On a stopped cycle, the `agent:suspend` that stopped it. |
 
 An inference record:
 
@@ -283,9 +296,9 @@ stale; startup clears it before scheduling durable work.
 
 | Status | Meaning | Run loop | Mutations allowed |
 |--------|---------|----------|-------------------|
-| `SLEEPING` | Durable runnable/idle state. | `wakeAgent` may start a live attempt. | All except config mutation while a live attempt exists. |
+| `SLEEPING` | Durable runnable/idle state. | `wakeAgent` may start a live attempt. | All. |
 | `RUNNING` | Persisted dirty marker: an attempt was launched. The hosting venue validates it against the live launcher slot. | Running when the matching slot is live; otherwise stale until startup cleanup. | Task/session appends are allowed. `agent:update` applies to future transitions; a started transition keeps its fire-time config. |
-| `SUSPENDED` | Deliberately stopped (`suspension`) or last run failed (`error`). Dormant — does not auto-retry. State, pending messages, sessions, and history are preserved; interrupted tasks are drained. | Not running. Resume via `tryResume` to keep the record, or delete it with `remove:true` before creating a replacement. | All. |
+| `SUSPENDED` | Deliberately stopped (`suspension`) or last run failed (`error`). Dormant — does not auto-retry. State, tasks, pending messages, sessions and history are preserved (§3.4). | Not running. Resume via `tryResume` to keep the record, or delete it with `remove:true` before creating a replacement. | All. |
 | `TERMINATED` | Logically deleted. Slot still occupies the namespace key (so the ID is reserved) but the agent is dead. | Cannot run. `agent:request` / `agent:message` / `agent:trigger` all fail. | None. Remove the record explicitly with `agent:delete remove:true` before reusing the ID. |
 
 **Durable state transitions** are documented in §4: `create` (→SLEEPING), a
@@ -301,9 +314,48 @@ status. They do not assert that the viewer is the intended responder. The counts
 are derived on each read: each pending ID gets one in-memory Job lookup. No
 derived counts are persisted or separately maintained. Cost is O(pending jobs)
 per agent, independent of other venue jobs and completed history, with no payload
-traversal. HITL removes the pending reference on settlement before delivering its
-session response. Existing job notifications can trigger a summary refresh; this adds no
+traversal. HITL removes the pending reference in the transaction that delivers
+its response. Existing job notifications can trigger a summary refresh; this adds no
 new agent status or event type.
+
+### 2.5.1 Cycle claim
+
+**A cycle's writes take effect only while its claim is current.**
+
+- **Issued** when the cycle takes its input (§4.4 step 4), in that
+  transaction: a fresh epoch at `inCycle.epoch` on the agent record, with the
+  session the cycle took at `inCycle.sessionId` and the same epoch at that
+  session's `inCycle`. An agent that is SUSPENDED or TERMINATED is issued
+  none, and the cycle does not run.
+- **Revoked** by every write that sets SUSPENDED or TERMINATED or removes the
+  record, in that same write: `agent:suspend`, `agent:delete`, account
+  deletion and a fault suspension alike. So an agent holds a claim only while
+  it is neither SUSPENDED nor TERMINATED. Startup revokes every claim (§6.1),
+  and resume issues none.
+- **Checked** by each of the cycle's own writes, in that write's transaction:
+  the session's frames as the step writes them live, completing or failing its
+  task (`agent:completeTask`, `agent:failTask`), and the merge (§4.4 step 6).
+  A write whose claim is no longer current is refused.
+- **Ended** by the cycle's merge.
+
+A cycle whose claim was revoked is stopped, however its step ended: with a
+result, a failure or a cancellation. Its merge changes nothing the cycle took:
+the task stays queued and runs again after resume, and its state change and
+turns are discarded. A suspension settles the chats it took as any suspension
+does (§3.4). The timeline records the cycle with `cancelled: true`, except on a
+TERMINATED agent, which is written no more.
+
+The claim covers the cycle's record of its work, not the step's effects:
+workspace writes (`n/`, `c/`, `t/`), operations the step invoked, asks and
+tracked calls. A stop does not undo those, and a stopped task that runs again
+may repeat them.
+
+Stopping promptly is separate from being correct. After its write, a stop also
+cancels the step's Job and its request context's cancellation, so a step that
+watches them ends early. A stop that comes before the step has started finds
+no Job to cancel, so the step, once started, checks its claim and cancels
+itself if it is gone. A step the stop does not reach ends at its next refused
+write or when it returns, and its merge records it as stopped.
 
 ### 2.6 Live events
 
@@ -445,8 +497,9 @@ For LLM agents (`llmagent:chat`), level 2:
 - Invokes level 3 (LLM call) as a grid operation
 - Handles tool call responses: execute tools, feed results back, call level 3
   again (loop until the LLM returns a text response or a limit is reached)
-- The shared frame store appends assistant and tool turns live, under the same
-  cycle epoch fence used for interruption repair and input presentation.
+- The shared frame store appends assistant and tool turns live under the
+  cycle's claim (§2.5.1), handed to it as `session.inCycle`. Once the claim is
+  revoked or replaced, its writes are refused.
 - The session frame stack is the canonical conversation record. Its rendered
   prefix is persisted and reused exactly; dynamic loads and tool-state changes
   append events. Only explicit boundaries such as compaction rebuild it.
@@ -462,9 +515,9 @@ The level 3 operation to invoke is specified in `config.llmOperation`
 strategy (level 2) and the LLM backend (level 3).
 
 The goal-tree level 2 adapter is documented separately in
-[GOAL_TREE.md](./GOAL_TREE.md). It uses the same frame store, input presentation,
-interruption repair, compact operation and shared harness registry as
-`llmagent:chat`, then adds child-frame hierarchy and typed subgoal completion.
+[GOAL_TREE.md](./GOAL_TREE.md). It uses the same frame store, interruption
+repair, compact operation and shared harness registry as `llmagent:chat`, then
+adds child-frame hierarchy and typed subgoal completion.
 
 ### 3.3 Level 3 — LLM Call (Single Step)
 
@@ -505,63 +558,95 @@ The contract between level 1 and level 2:
 | `state` | any | Current `state` from the agent record. Null on first run. |
 | `tasks` | vector | Inbound task data resolved from the `tasks` index (jobId, input, status). |
 | `pending` | vector | Outbound job data resolved from the `pending` index (jobId, status, output, error when the job did not complete). |
-| `session` | map | The picked session record: `{id, parties, meta, c, frames, pending}`. See AGENT_SESSIONS.md §6.1. |
+| `newInput` | any? | The picked task's input this cycle shows: its original input, then each continuation once. |
+| `jobId` | string? | With `newInput`: the task's request Job id. |
+| `session` | map? | The picked session record: `{id, parties, meta, c, frames, pending, inCycle}`. `pending` lists the messages this cycle took; they and `newInput` are already user turns in `frames` (§4.4). `inCycle` is the cycle's claim (§2.5.1). See AGENT_SESSIONS.md §6.1. |
 
 **Output:**
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `state` | any | Updated user-defined state. Written back to the agent record. |
-| `result` | any | Summary of what happened. Recorded in the timeline entry and returned to callers. |
-| `taskResults` | map? | Optional task completions: `{<jobId>: {status, output}}`. See §3.4.1. |
+| `state` | any | Updated user-defined state. Written back to the agent record; absent leaves it unchanged. |
+| `response` | any? | The reply on the session. It answers the chat the cycle took (§4.4); absent, the chat completes with no `response`. A picked task the cycle left neither resolved nor parked takes it as its result, and one that parked takes it as its progress (§4.6). |
+| `error` | any? | The cycle failed (see below). |
+| `turns` | vector? | Assistant and tool turns to append to the session's conversation, for a transition that does not write its frames itself. |
+| `wakeTime` | long? | When to wake the picked task or session again (§4.6). |
+| `cycle`, `tokens` | map? | The cycle's exchange with the model and its token usage, recorded in the timeline entry (§2.4). |
 
 The ordinary transition contract does not require an adapter to manage ts,
-status, timeline, sessions or scheduling. The built-in LLM adapters explicitly
-implement `FramesOwning`: they write the selected session's frames live under
-its cycle fence, and the framework skips the duplicate frame/turn/pending merge.
-Status, timeline, task settlement and scheduling remain framework-owned.
+status, timeline, sessions or scheduling. The run loop writes the cycle's input
+into the conversation before the transition runs, and appends the transition's
+`turns` and reply after it. The built-in LLM adapters implement `FramesOwning`:
+they write their turns into the session's frames live under the cycle's claim,
+and the run loop appends none of its own. Status, timeline, task settlement and
+scheduling remain framework-owned.
+
+**Authority.** The transition is a harness step, acting with the agent's
+controller's authority as it stands that cycle, and decides where the agent's
+caps apply; [UCAN.md §5.4](./UCAN.md) defines the boundary and where the LLM
+runtimes draw it.
 
 Pending outbound jobs are not declared in transition output. The field is a
 reserved framework surface; the built-in harnesses currently have no generic
 writer for it (§3.4.2).
 
-The transition function must handle its own errors internally. If it throws, the
-agent update treats this as a severe failure: the agent is suspended, all queues
-are preserved, and the error is recorded. No timeline entry is written.
+**Transition failures.** A transition fails by throwing, or by returning an
+`error` in its output. The cycle's timeline entry records the error either way.
+What happens next depends on what failed:
 
-#### 3.4.1 Task Completion — Two Mechanisms
+- **The work.** An expected failure ([ERRORS.md](ERRORS.md)) belongs to the work
+  the cycle took. The model gave up on the task (`fail_task`), reached the
+  tool-call iteration limit, sent a conversation too big for the model or a
+  request the provider refused, or an LLM call outlasted `llmTimeoutMs`. The
+  cycle's picked task fails, or the chat it was answering. Work it never
+  took stays queued, and the agent carries on with it. A task the agent already
+  resolved keeps its own outcome.
+- **The agent cannot continue.** A transition raises `CannotContinueException`
+  when the next unit of work would fail the same way. Both LLM runtimes raise
+  it at the start of a cycle when the agent's model setup does not resolve:
+  its `systemPrompt` entry, its LLM operation, or the provider a model
+  operation names ([AGENT_CONTEXT.md](AGENT_CONTEXT.md) §4). Every cycle
+  resolves the setup again, and `agent:context` and `agent:step` fail with the
+  same reason. During the cycle they raise it when a model call fails with
+  `ConfigurationException` (a refused key, a provider's 403, a missing model, an invalid
+  setting) or `UnavailableException` (the provider cannot be reached, or keeps
+  failing after the provider library's own retries), or returns a failure
+  value, which a level-3 operation returns only for a setup problem. A fault,
+  reported and logged at ERROR where it happened
+  ([ERRORS.md](ERRORS.md#scopes)), counts the same. The agent is suspended
+  with the reason or report as its `error` (#88: an agent whose key is missing
+  stops after one cycle).
 
-Tasks can be completed via two complementary mechanisms:
+A suspended agent keeps its queue, whether a fault or a deliberate
+`agent:suspend` stopped it. The task the stopped cycle took stays queued and
+runs again after resume. A chat whose message a cycle had already taken into
+its conversation fails with the reason, since it would never be presented again.
+Every Job still waiting on the agent, a queued task or a chat caller, carries a
+progress note (`AgentAdapter.SUSPENDED_WAITING`) saying the agent is suspended
+and why, until `agent:resume` clears it. New requests and chats are refused
+while the agent is suspended (§4.5).
 
-**1. Tool call during execution (LLM agents).** The transition function (level 2)
-exposes `agent:completeTask` as a tool available to the LLM. When the LLM
-decides to complete a task, it calls the tool during the tool call loop. The tool
-completes the Job via JobManager immediately. This is the natural path for LLM
-agents — task completion is just another tool call.
+#### 3.4.1 Task Completion
 
-**2. Output declaration (non-LLM agents).** The transition function returns a
-`taskResults` map in its output. The framework reads this after the transition
-completes and applies each result to the corresponding Job via JobManager. This
-path suits rule engines, workflows, and other transition functions that do not
-use the tool call loop.
+A transition resolves its task by calling `agent:complete-task` or
+`agent:fail-task` during the cycle: an LLM agent through its `complete_task`
+and `fail_task` tools, any other transition by invoking the operation itself.
+The call is scoped to the cycle's task and refused once a continuation has
+arrived that the cycle has not shown. In one transaction it moves the task
+out of the queue and records its outcome under `resolved`
+(`Agent.resolveTask`), so a resolved task cannot be resolved again or reached
+by `agent:cancelTask`, and the outcome survives a restart. The cycle's merge hands
+it back (§4.4 step 6): its request Job settles in the merge's transaction,
+so its caller sees the cycle's writes first. The timeline entry records each
+outcome in `taskResults`.
 
-Both mechanisms may be used in the same run — tool-call completions happen during
-execution, output-declared completions happen after. If the same task appears in
-both, the tool-call result wins (it was applied first).
+A transition can instead keep its task open with `agent:park-task`, which sets
+the task's `wakeTime` (§4.6), and a task it leaves neither resolved nor parked
+is settled by the cycle's reply (§4.6, [AGENT_TASKS.md](./AGENT_TASKS.md) §5).
 
-**Timeline capture:** All task completions from both mechanisms are merged and
-recorded in the timeline entry's `taskResults` field. This ensures the timeline
-is the complete record of what the agent accomplished in each run, regardless
-of which mechanism was used. The framework collects tool-call completions during
-execution and merges them with output-declared completions before writing the
-timeline entry.
-
-**Side effect semantics:** Task completions via tool calls are side effects —
-they take effect immediately and are not rolled back if the transition function
-subsequently fails. This is intentional: if the agent told a caller "done" then
-crashed, the task *was* completed. The timeline entry will be missing (since the
-run failed), but the Job result is durable. This matches how other side effects
-(tool calls that send emails, invoke external APIs) behave.
+A resolved task keeps its outcome when the cycle then fails: if the agent told
+a caller "done", the task was done. This matches how other side effects (tool
+calls that send emails, invoke external APIs) behave.
 
 #### 3.4.2 Deferred results
 
@@ -569,6 +654,38 @@ The transition input and context assembler understand an agent-level `pending`
 Job index and render resolved entries as `get_job_results`, but Covia does not
 currently expose a generic async-invoke harness tool.
 Ordinary operation tools remain synchronous and bounded by `toolCallTimeoutMs`.
+
+A call still running at that limit is not cancelled. It runs as a recorded
+job: the call's own when the agent sets `recordToolCalls` (or the venue
+default does), otherwise a mirror of the unrecorded call (JOBS.md § Mirrors).
+The model's tool result is an error naming that job, saying the call is still
+running and should not be repeated unless that is safe
+(`AbstractLLMAdapter.TOOL_STILL_RUNNING`), so it can carry on.
+
+In a session, the job is tracked in the agent's pending index with the
+session, the task whose cycle made the call, and the call's id and tool name
+as the model made it. When the job ends, one transaction removes the entry
+and delivers the outcome
+`{jobId, toolCallId, toolName, operation, status, result | error}`, marked
+by the venue as a tool call's outcome and attributed to the principal that
+made the call (the job's `caller`, normally the agent itself), which wakes the
+agent. It goes to the task as its next input, so it runs that task and no
+other in the session; when the call came from no task, or the task has
+finished, it goes to the session. The model sees it as a message, or as a
+`tool_call_outcome` tool result when its profile's `lateToolResults` asks
+(AGENT_CONTEXT.md §5.7). A task that yields meanwhile
+waits for it (§4.6), and one that receives it during its own cycle cannot
+complete in that cycle (§3.4.1), so it runs again. Shutdown leaves the entry, and the restart delivers the job's outcome
+instead (§6.1), so it is delivered exactly once. If the session has gone by
+then, the entry goes with nothing delivered, and a task left parked on it
+with nothing else to wait on fails (`AgentAdapter.TASK_OUTCOME_UNDELIVERED`).
+A call with no session is told only its job (`TOOL_STILL_RUNNING_UNTRACKED`);
+nothing follows, and `grid_job_status` gives the outcome.
+
+Delivery follows the job's own status, not its result future, which a waiter
+can cancel before the job has finished. The job ends in one commit and the
+delivery is the next; between them the entry still backs a waiting task, and
+a restart in between delivers from the job's record.
 
 HITL is the deliberate long-lived exception (§6.3). A sessioned agent receives
 the durable request ID immediately and the job is tracked in its pending index;
@@ -600,42 +717,66 @@ contract, the banded section sequence, entry grammar, and the scope chain.
 
 ### 3.6 Tool Palette
 
-Agents declare their tools in `config.tools` — a curated list of
-operation paths and harness tool names. Zero tools by default — a bare
-chatbot just responds with text. Agents that want the built-in tool set
-opt in via `defaultTools: true`.
+Agents declare their tools in `config.tools`: operation references and
+harness tool names. With none, a bare chatbot answers with text.
+`defaultTools: true` adds a read-only pack (`v/ops/covia/inspect`, `read` and
+`list`).
 
 ```json
 "tools": ["v/ops/covia/read", "v/ops/covia/write", "subgoal", "compact"]
 ```
 
-Entries are either **operation paths** (resolved to LLM tool definitions
-from the asset metadata: name, description, parameters) or **harness tool
-names** (resolved to built-in tool definitions provided by the adapter).
+An operation reference becomes a tool definition from the operation's
+metadata (name, description, parameters); a harness tool name becomes the
+runtime's own definition.
 
 #### Harness tools
 
-All opt-in — include by name in `config.tools` if needed.
+A harness tool is run by the agent runtime itself rather than dispatched as
+an operation. This section defines them for both runtimes; GOAL_TREE.md
+describes goaltree's frame controls in use.
 
-| Tool | Purpose |
-|------|---------|
-| `subgoal` | Delegate a sub-task to an isolated child frame |
-| `complete` | Return structured result (auto-injected with typed outputs) |
-| `fail` | Report failure with structured error (auto-injected with typed outputs) |
-| `compact` | Archive conversation to a summary, freeing context space |
-| `context_load` | Pin workspace data in context across turns |
-| `context_unload` | Remove pinned data |
-| `more_tools` | Discover and add operations at runtime |
+| Tool | Runtime | Purpose |
+|------|---------|---------|
+| `complete_task`, `fail_task`, `park_task` | both | Resolve or fail the agent's task, or park it to come back later (§3.4.1) |
+| `context_load` | both | Pin workspace data, an asset or an operation's result in context across turns |
+| `context_unload` | both | Remove loads by the keys `context_load`, `skill_load` or `more_tools` returned |
+| `skill_load` | both | Load a skill: its instructions and its tools |
+| `more_tools` | both | Add operations as tools, as a load |
+| `invoke_tool` | both | Call a tool a load added after the initial tool list |
+| `compact` | both | Archive the conversation into a summary the agent writes, freeing context space |
+| `subgoal` | goaltree | Delegate a sub-task to a child frame |
+| `complete` | goaltree | End the frame with a result |
+| `fail` | goaltree | End the frame with a structured error |
 
-**Typed outputs:** When `config.outputs` is set, `complete` and `fail`
-are auto-injected with schema-enforced parameters — no need to list them in
-`tools`. The LLM's tool call arguments must match the declared schema (enforced
-by OpenAI `strictTools`). Text-only responses are rejected. Flattened: the
-entire tool input IS the result — `complete({field: val})`, not
+A frame is offered the harness tools listed in `config.tools`, and:
+
+| Tool | Also offered | Never offered |
+|------|--------------|---------------|
+| `complete_task`, `fail_task`, `park_task` | At the root frame, always; an explicit current-turn notice says when no task is assigned, and calls then are refused | In a child frame: the task is the root's |
+| `skill_load` | When the agent declares skills or skillsets | |
+| `context_unload` | When the agent declares skills or skillsets, or with `more_tools`, whose results are loads | |
+| `invoke_tool` | With `skill_load` or `more_tools`, which add tools later | |
+| `complete`, `fail` | At the root with typed outputs, with schema-typed parameters; in every child frame, untyped, since they are how a subgoal returns | |
+| `subgoal` | | In a frame at the depth limit: a stack holds the root and at most nine nested subgoals |
+
+**Only offered tools run.** A call to a harness tool the frame is not offered
+runs nothing and is answered as an unbound name (below); it is no barrier in
+its batch. The check is one lookup in the set of names the frame is sent.
+
+Loads made by `context_load`, `skill_load` and `more_tools` last as long as
+the conversation they were made in. A call with no stored session has a
+conversation of its own, so its loads last for that call.
+
+**Typed outputs:** When `config.outputs` is set, the root frame's `complete`
+and `fail` take schema-enforced parameters — no need to list them in `tools`.
+The LLM's tool call arguments must match the declared schema (enforced by
+OpenAI `strictTools`). Text-only responses are rejected. Flattened: the entire
+tool input IS the result — `complete({field: val})`, not
 `complete({result: {field: val}})`.
 
-**Auto-compact:** When conversation exceeds 20 turns and the agent has `compact`
-in its tool set, a system hint nudges the LLM to compact before context overflow.
+**Compaction:** the agent decides when to `compact`. Both runtimes prompt it
+only through the context-budget warning (AGENT_CONTEXT.md §3.4).
 
 #### Operation tools
 
@@ -655,8 +796,10 @@ they are not repeated in every provider-facing tool schema.
 
 #### Capability enforcement
 
-Tool calls are checked against the agent's `caps` before dispatch. Denied calls
-return an error listing the agent's actual capabilities. The system prompt
+The operation a tool call runs checks the agent's `config.caps` itself, as they
+stand when it checks, so new caps bound a cycle already running and a call past
+its timeout; the runtime has no name-keyed gate. A denied call returns an error listing the agent's
+actual capabilities. The system prompt
 includes a caps section so the LLM knows its boundaries upfront.
 
 See [UCAN.md](./UCAN.md) for the capability model.
@@ -666,9 +809,8 @@ See [UCAN.md](./UCAN.md) for the capability model.
 A reply may request several tool calls at once. The batch runs as ordered
 **waves** (`ToolCycleEngine`): ordinary operation calls that sit next to each
 other in the batch run **concurrently**, one virtual thread each, so a model's
-parallel reads and writes overlap instead of queueing; a harness tool
-(`complete`, `fail`, `subgoal`, `compact`, `context_load`/`unload`,
-`skill_load`, `more_tools`) is a **barrier** — it runs alone, on the loop
+parallel reads and writes overlap instead of queueing; a harness tool the
+frame is offered is a **barrier** — it runs alone, on the loop
 thread, after the wave before it has finished and before the wave after it
 starts, because it mutates the harness context or ends the cycle and its
 position in the batch is its meaning. Whatever order calls finish in, results
@@ -679,15 +821,44 @@ timeout, so a wave takes as long as its slowest member; and the timeline's
 `calls[].ms` is each call's own wall clock. A single-call batch runs on the
 loop thread with no hop.
 
+#### Tool failures and unbound names
+
+Every failed call returns an `"Error: …"` result the model can act on
+(`AbstractLLMAdapter.toolFailure`). A failure already reported is given as it
+is: an expected failure's reason, or the fault an operation reported, such as
+`Operation crown:query failed: unexpected IllegalArgumentException in adapter
+crown`. Anything else is a fault in the code handling the call: it is logged at
+ERROR with its stack, and the result is `Tool <name> failed: unexpected
+<ClassName> in the venue` ([ERRORS.md](ERRORS.md#scopes)). Timeouts and
+interruptions have their own results.
+
+A name the palette binds to no route (`dispatchUnbound`) runs nothing unless
+it resolves to an operation, which is dispatched as one. Otherwise the result
+says why, and what would make it callable when that is certain:
+
+| Name | Answer |
+|---|---|
+| A harness tool of this runtime the frame is offered, through `invoke_tool` | Call it directly |
+| A harness tool of this runtime the frame is not offered | It is not among the tools offered here |
+| Another runtime's harness tool | Not available under this runtime |
+| Equal to a callable tool up to case and `-`/`_` | The callable name |
+| Provided by an advertised skill, with `skill_load` offered | `skill_load` one of the skills that provide it |
+| Anything else | No such tool, and not an operation reference; then that no tools are available, the tools by name when there are at most five, or to use the tool list |
+
+A skill counts as providing a tool when one of its tool entries binds exactly
+that name, named as the palette names it. The lookup is only a hint, so it
+stays cheap: skills resolve without their bodies, and operation definitions
+only from this venue (`Engine.resolveLocalAsset`), never fetched from another.
+An operation reference is resolved once and dispatched as resolved.
+
 #### Additional tools
 
 Level 2 also passes through any **external MCP tools** configured for the agent
-(via `config.tools` or MCP server bindings). These are treated identically to
-default tools in the tool call loop — the LLM sees a flat list of all available
-tools regardless of source.
+(via `config.tools` or MCP server bindings). These are treated like any other
+tool in the tool call loop — the LLM sees a flat list of all available tools
+regardless of source.
 
 The agent creator controls the tool set:
-- Default tools are always present (cannot be removed)
 - External MCP tools are added via agent configuration
 - Capability-gated tools appear only when the agent has the required `caps`
 
@@ -717,7 +888,10 @@ in order:
 The agent's `config` holds no key material: a `config.apiKey` is a secret reference (`s/NAME`) resolved at the call. The operation metadata owns the
 credential concern — the agent specifies which operation to use, and the
 operation declares which secret it needs. This keeps agent configuration clean
-and credentials in the encrypted secret store.
+and credentials in the encrypted secret store. Using the secret is checked
+against whoever invokes the operation: when the agent thinks, its harness,
+with its controller's authority; when the agent calls a model as a tool, the
+agent under its caps (UCAN.md §5.4).
 
 Credentials are primarily a level 3 concern — the LLM call operation needs
 the API key, not the agent transition. In the current implementation level 2
@@ -785,19 +959,19 @@ SLEEPING, SUSPENDED, and TERMINATED records.
 
 **Trigger:** `agent:request`
 
-Submits a persistent task to an agent. The request Job itself IS the task — it
-is left in STARTED state and its Job ID is added to the agent's `tasks` index.
-No separate Job is created.
+Submits a persistent task to an agent. The request Job itself IS the task — its
+Job ID is added to the agent's `tasks` index, and it is PENDING until a cycle
+takes the task, then STARTED. No separate Job is created.
 
 The agent decides when and how to fulfil the request. When the agent completes
-the task (via `taskResults` output or a tool call), the framework completes
-the request Job with the result. The caller can poll or SSE-subscribe to the
-Job for status — the same Job they received from `invoke()`.
+or fails the task (§3.4.1), the framework settles the request Job with the
+result. The caller can poll or SSE-subscribe to the Job for status — the same
+Job they received from `invoke()`.
 
 **Input:** `{agentId, input, ...}` — the `input` is stored in the Job.
 
-**Output:** The Job stays in STARTED until the agent completes it. The caller
-tracks progress via the Job ID returned by `invoke()`.
+**Output:** The Job stays open until the agent completes or fails it. The
+caller tracks progress via the Job ID returned by `invoke()`.
 
 **Side effect:** The agent is woken immediately via `wakeAgent` (§4.6). If the
 agent has a `config.operation` and is SLEEPING, the run loop starts. If the
@@ -831,18 +1005,25 @@ Trigger nudges the run loop so a cycle executes; it carries no payload and
 makes no guarantees about agent output. Callers who want results should
 submit work via `agent:request` (task Job) or `agent:chat` (chat Job) and
 await that Job. Use trigger only when the normal intake path isn't enough
-(manual state edit, diagnostics, resuming a stuck agent).
+(manual state edit, diagnostics, resuming a stuck agent). Trigger creates no
+session: a supplied `sessionId` is resolved and echoed back, and without one
+the trigger runs unsessioned.
+
+`force` (default `true`) runs a cycle even when the agent has no work, so an
+agent may act proactively on a trigger. The forced cycle takes a ready task if
+there is one, and never a parked one (§4.6). `force: false` runs a cycle only
+when there is work, and an idle agent with none returns its status rather than
+failing; the scheduler's wake events pass `false`.
 
 The `wait` parameter on trigger is a block on the loop's completion
-future, not a result-await: it returns when the loop drains all
-outstanding work and exits to SLEEPING. A transition that awaits an ordinary
+future, not a result-await. `true` or absent blocks until the loop drains
+all outstanding work and exits to SLEEPING, `false` returns at once, and a
+number of milliseconds is a bounded block. A transition that awaits an ordinary
 async op (LLM or HTTP) simply keeps its virtual thread blocked on `.join()` —
 there is no yield/resume handoff. Sessioned HITL requests return their durable
-handle immediately and re-enter through the asking session (§6.3). A `SLEEPING` return means
+handle immediately and re-enter through the asking task or session (§6.3). A `SLEEPING` return means
 the loop fully drained; a `RUNNING` snapshot from a bounded `wait` means
-the loop is still processing. The transition always runs once per
-trigger, even with no pending work, so an agent may act proactively on
-a trigger.
+the loop is still processing.
 
 Cancelling the trigger Job ends its `wait` immediately: `job.cancel()`
 completes a per-caller signal raced against the loop's completion future,
@@ -856,7 +1037,7 @@ for whether a loop is live. Launch is serialised by an atomic CAS via
 `ConcurrentHashMap.compute` — the first wake installs a fresh future,
 subsequent wakes observe the existing one and return it. A virtual
 thread is started only by the winning wake. Mutations to the agent
-record (`addTask`, `appendSessionPending`, run loop writes) use atomic
+record (`addTaskInSession`, `appendSessionPending`, run loop writes) use atomic
 cursor updates directly — no shared lock.
 
 The lattice `status` field supplies remote observability; `runningLoops` is the
@@ -872,21 +1053,45 @@ run's `finally` block.
    session with pending messages and no scheduled wake due): break out
    of the loop. Pending jobs are passed through but do not alone
    trigger a run.
-3. Resolve job data from JobManager.
-4. Invoke the transition function (§3.2) with `agent-id`, current `state`,
-   `tasks`, `pending` (with resolved statuses), and the picked `session`.
-   The virtual thread blocks on `.join()` of the returned future — no
-   lock is held; other agents' loops run independently.
-5. On success — **merge with current state** atomically on the agent record:
+3. Pick the oldest work in the agent's queue: the oldest ready task, in its
+   session, or the session whose oldest queued envelope arrived before it
+   ([AGENT_SESSIONS.md §5.5.2](./AGENT_SESSIONS.md)). Resolve job data from
+   JobManager. A picked task whose request Job has already finished is
+   removed, and the loop goes back to step 1.
+4. **Take the cycle's input**, in one transaction on the agent record:
+   - Issue the cycle's claim (§2.5.1). An agent that is SUSPENDED or
+     TERMINATED is issued none: take nothing and go back to step 1.
+   - Mark the task's next input shown: its original input, then each
+     continuation once. If a continuation arrived since the pick, take
+     nothing and go back to step 1.
+   - Close any tool call an interrupted cycle left without a result, with a
+     result saying it did not return.
+   - Append what the cycle takes from `pending` and the task's input to
+     `frames[0].conversation` as user turns, and remove exactly those
+     envelopes from `pending`: the messages ahead of the first chat, and for
+     a session's own cycle that chat too. Anything after them, or arriving
+     later, waits for a later cycle.
+
+   A task whose session has gone takes only its input and runs without one.
+   Each chat whose message was taken becomes STARTED; a chat still queued
+   stays PENDING. Nothing after this step abandons the cycle, so only its
+   outcome settles what it took.
+5. Invoke the transition function (§3.4) with `agent-id`, current `state`,
+   `tasks`, `pending` (with resolved statuses), the task's `newInput` and
+   the picked `session`. The virtual thread blocks on `.join()` of the
+   returned future — no lock is held; other agents' loops run
+   independently. However the step ends, the merge first checks the
+   cycle's claim in its transaction: a revoked claim settles the cycle as
+   stopped (§2.5.1) and the loop goes back to step 1. Steps 6–9 apply to a
+   cycle whose claim is current.
+6. On success — **merge with current state** atomically on the agent record:
    - Re-read the record inside the merge (not the stale snapshot from step 1).
    - Remove completed tasks from the **current** `tasks` index. This prevents
      overwriting tasks added by concurrent task submissions during the
      transition.
-   - Drain the presented count of pending messages from the picked
-     session's `pending` queue. Messages appended concurrently during the
-     transition (including the agent's own self-chat / self-message) are
-     preserved beyond the presented count and picked up by the next
-     iteration's work check.
+   - Append the transition's `turns` and its reply to the session's
+     conversation, unless the transition writes its frames itself, and end
+     the cycle's claim.
    - Update `state` from the returned value.
    - Append the cycle record (§2.4). The cycle's token usage — the sum
      over its inferences, provider-measured (#217) — is added to the picked
@@ -894,24 +1099,39 @@ run's `finally` block.
      task/chat job record; the final assistant turn carries its own
      inference's usage. Absent means "not measured", never zero.
    - Do not write executor status; the launcher slot remains the liveness truth.
-6. Complete any picked chat Job and drain parked task completions from
-   `agent:complete-task` / `agent:fail-task` calls made during the
-   transition — both strictly AFTER the merge, so external awaiters see
+   - Settle the picked task with the reply when the transition left it
+     neither resolved nor parked (§4.6).
+   - Hand back every task the transition resolved (§3.4.1), in the same
+     venue transaction: the task leaves `resolved`, its request's
+     `outputPath`, when it names one in this venue's lattice, is written as
+     its requester, and its request Job settles. A refused write fails only
+     that request. A request cancelled before the merge writes nothing. A
+     write to another venue or a view cannot join the transaction: its task
+     stays resolved until the write ends, and its request then settles and
+     the task goes in one transaction.
+7. Release the callers of the requests the merge settled, and complete the
+   chat the cycle took, if any, with the reply, or with no `response` when
+   there is none. A task the cycle parked takes the reply as its progress.
+   All of this happens strictly AFTER the merge, so external awaiters see
    timeline and state writes first.
-7. Loop back to step 1. The top-of-loop check at step 2 is the sole
+8. Loop back to step 1. The top-of-loop check at step 2 is the sole
    exit gate.
-8. On exception:
+9. On failure, thrown or returned as the output's `error` (§3.4):
    - Append the cycle record with the error and the inferences that ran
      before it (§2.4).
-   - Leave `tasks`, `pending`, and `sessions` unchanged.
-   - Set status → `"SUSPENDED"`, set `error`.
-   - Fail all pending task Jobs and clear parked completions for this
-     agent.
+   - If the agent can continue, fail the picked task's Job or the chat the
+     cycle took, then loop back to step 1 for the remaining work.
+   - If it cannot (a `CannotContinueException` or an unexpected failure),
+     set status → `"SUSPENDED"` and `error`, keep the queue, fail the
+     chats a cycle took, and give every waiting Job the suspension note.
    - Note: task completions made via tool calls during execution are
      **not** rolled back (§3.4.1).
 
 **Iteration budget.** A single loop runs at most `MAX_LOOP_ITERATIONS`
 (20) cycles before forcing sleep — a runaway backstop, not a normal exit.
+A task left open with nothing to bring it back is settled at once (§4.6), so the cap
+is reached only by a task that is ready again every cycle, such as one whose
+wake time is always already past.
 A cap hit on genuinely varied work (a long task queue, chat traffic) is
 benign: remaining work re-wakes a fresh loop via the post-exit re-check.
 But if the **same task** was presented for the entire budget without
@@ -939,11 +1159,11 @@ the response visible to callers without querying agent state separately.
 
 | Operation | Trigger | Effect | Allowed status | New status |
 |-----------|---------|--------|----------------|------------|
-| **Suspend** | run loop error (§4.4) | Set `error`, set status → SUSPENDED. State, tasks, pending, sessions unchanged. | RUNNING (internal) | SUSPENDED |
-| **Resume** | `agent:resume` | CAS SUSPENDED→SLEEPING via `tryResume`, clear `error` and `suspension`. Then wake via §4.6 if there is work. | SUSPENDED only | SLEEPING |
-| **Suspend (manual)** | `agent:suspend` | Atomically set SUSPENDED and `suspension`, clear `error`; latest stop replaces previous actor/reason. Cancel an active transition, recording the stop on its timeline and notifying waiting callers. | SLEEPING, RUNNING, SUSPENDED | SUSPENDED |
+| **Suspend** | the agent cannot continue, or the run loop fails unexpectedly (§3.4) | Set `error`, set status → SUSPENDED. State, tasks, pending, sessions unchanged; waiting Jobs carry the suspension note. | RUNNING (internal) | SUSPENDED |
+| **Resume** | `agent:resume` | CAS SUSPENDED→SLEEPING via `tryResume`, clear `error` and `suspension`, clear waiting Jobs' suspension notes. Then wake via §4.6 if there is work. | SUSPENDED only | SLEEPING |
+| **Suspend (manual)** | `agent:suspend` | Atomically set SUSPENDED and `suspension`, clear `error`, and revoke the running cycle's claim, so that cycle is recorded as stopped (§2.5.1); latest stop replaces previous actor/reason. The queue is kept as for any suspension (§3.4). | SLEEPING, RUNNING, SUSPENDED | SUSPENDED |
 | **Trigger** | `agent:trigger` | Wake the agent and (optionally) wait for the run loop to drain. Fails on TERMINATED. See §4.6. | SLEEPING, RUNNING | RUNNING then SLEEPING |
-| **Cancel task** | `agent:cancelTask` | Remove a pending task from the agent's `tasks` index. Does not affect the run loop directly. | any except TERMINATED | unchanged |
+| **Cancel task** | `agent:cancelTask`, or cancelling the request Job | Remove a pending task from the agent's `tasks` index, so the agent never runs it. Does not affect the run loop directly. | any except TERMINATED | unchanged |
 | **Delete** | `agent:delete` | Accepts exactly one `agentId` or an exact `agentIds` list (maximum 100; no prefixes/wildcards). One Job halts each named agent. Default: set status → TERMINATED (record retained for audit). With `remove:true`: physically remove each lattice slot, making unreachable storage eligible for Etch GC. The full list is validated before deletion starts. | any | TERMINATED (or absent) |
 | **Fork** | `agent:fork` | Create a NEW agent at a different `agentId` from this one's config + optional state + optional timeline. The source is untouched and the target slot must be empty. | source must not be TERMINATED | new agent SLEEPING |
 
@@ -962,7 +1182,7 @@ is a read → transition → merge sequence; concurrency with external
 mutations is handled by reading the current record inside the merge
 (not the pre-transition snapshot) so late writes are never lost. That
 holds for `state` too: the transition's result is applied as its *change*
-against the snapshot it fired with (`AgentState.applyStateChange`) — keys it
+against the snapshot it fired with (`Agent.applyStateChange`) — keys it
 changed or removed win, keys it left alone keep the record's current value.
 So `agent:update` never waits for, or refuses, a running agent: config
 applies to future transitions (a started transition keeps its fire-time
@@ -975,11 +1195,10 @@ is halted.
   the record with `agent:delete remove:true` before creating a new agent with
   the same ID; there is no "un-terminate".
 - RUNNING is persisted while a launcher future exists, but the stored value is
-  not a concurrency lock or resume checkpoint. Config mutations consult the
-  live future and are rejected while it exists.
-- SUSPENDED preserves session/history state but failed transition tasks and
-  cycle claims are settled before suspension. `agent:resume` preserves that
-  record; explicit delete with `remove:true` discards it.
+  not a concurrency lock or resume checkpoint.
+- A SUSPENDED or TERMINATED agent holds no cycle claim (§2.5.1). SUSPENDED
+  preserves session and history state; `agent:resume` preserves that record,
+  and explicit delete with `remove:true` discards it.
 
 ### 4.6 Scheduling — `wakeAgent`
 
@@ -987,9 +1206,11 @@ Scheduling combines durable work (`sessions`/`tasks`) with one process-local
 launcher slot. Stable lattice status gates suspended/terminated agents; the
 launcher slot provides exclusion and observable liveness.
 
-**`wakeAgent(agentId, ctx)`** is the single entry point for all agent wakes.
-It is called by `agent:request`, `agent:message`, and async job completion
-callbacks. The logic (atomic CAS on `runningLoops: ConcurrentHashMap` via
+**`wakeAgent(ownerDID, agentId, force)`** is the single entry point for all
+agent wakes. It is called by the intake operations (`agent:request`,
+`agent:message`, `agent:chat`), HITL answers, `agent:resume`, `agent:trigger`
+(including the scheduler's wake events), boot recovery and the run loop's own
+exit re-check. The logic (atomic CAS on `runningLoops: ConcurrentHashMap` via
 `compute()`):
 
 1. Inside `runningLoops.compute(agentId, ...)`:
@@ -999,8 +1220,8 @@ callbacks. The logic (atomic CAS on `runningLoops: ConcurrentHashMap` via
    - Otherwise → read the stable agent status from the lattice.
    - A stale persisted `RUNNING` is allowed through defensively; normal startup
      has already cleared it.
-   - If no work (no session with pending messages and no tasks) → return null
-     (leave slot empty).
+   - Unless `force`, if there is no work (no session with pending messages
+     and no ready task) → return null (leave slot empty).
    - Resolve `config.operation` → if null, return null.
    - Create a fresh `CompletableFuture<ACell>` and atomically put it in the slot.
    - Persist `RUNNING`, then launch `executeRunLoop` on a
@@ -1010,11 +1231,47 @@ callbacks. The logic (atomic CAS on `runningLoops: ConcurrentHashMap` via
 
 An agent is eligible to run when any of:
 
-- A new task has been added to `tasks` (via `agent:request`)
-- A pending outbound job has completed or failed
-- A new message has been delivered to a session's `pending` queue (via `agent:message`)
+- A session has a message in its `pending` queue (via `agent:message` or
+  `agent:chat`, or a HITL answer or the outcome of a tool call that passed its
+  time limit when no queued task waits for it)
+- A task is ready (below)
 
-**No lost wakeups.** `addTask` / `appendSessionPending` write to the lattice
+**Task readiness and parking.** A task is ready unless it is parked. A parked
+task is ready again once something new is there for it: an input it has not
+been shown (a continuation through `agent:message` with its `taskId`, or the
+answer or outcome its cycle waited for), a message in its session that its
+cycle would take (one ahead of any chat, `Session.taken`), or its
+`wakeTime` having come. The work check and the
+choice of task both use this test (`Agent.isTaskReady`), and the cycle
+takes the oldest work: the oldest ready task, unless a session's oldest
+queued envelope arrived before it ([AGENT_SESSIONS.md §5.5.2](./AGENT_SESSIONS.md)).
+
+A cycle that leaves its picked task queued, neither completed nor failed and
+without a transition error, has left it open, whatever its runtime. The task
+is parked (`parked: true` on its row, and `queued` where it then stands, at
+the back of the queue) when something will bring it back:
+
+- a `wakeTime` on the task still to come: set during the cycle by
+  `agent:park-task`, returned by the transition, or set before the cycle and
+  not yet due when it took the task;
+- a HITL ask from its cycle that is still open (the ask's entry in the agent's
+  `pending` index names the task);
+- a tool call from its cycle still running past its time limit (§3.4.2),
+  tracked in the agent's `pending` index;
+- input or session messages that arrived during the cycle.
+
+The merge decides, in its transaction (`AgentAdapter.settleOpenTask`). A
+task that parks takes the cycle's reply, if any, as its request Job's
+progress once the merge commits: where the work stands, which its requester
+sees as its working state. With
+none of these it settles the task with the cycle's reply: the task completes with the reply
+as its result, judged as `agent:complete-task` judges one, so a `strict` task
+whose reply does not conform fails with the reason; with no reply it fails
+with `AgentAdapter.TASK_YIELDED_IDLE`. Claiming a task for a cycle clears
+`parked`, so a task that is not parked but has been shown its input was
+interrupted mid-cycle, and runs again (§6.1).
+
+**No lost wakeups.** `addTaskInSession` / `appendSessionPending` write to the lattice
 atomically, then call `wakeAgent`. The loop's top-of-iteration `hasWork` check
 reads the current lattice. If work landed while a loop was running, the next
 iteration sees it. If work landed while the loop removed its slot, the
@@ -1025,11 +1282,26 @@ the next `wakeAgent` from the writer finds the slot empty and launches.
 empty-slot → launch transition. Only one thread can populate the slot; all
 others observe it populated and return the existing completion.
 
-**Scheduled wakes:** a transition may return a `wakeTime` on its session/task; the
-framework arms one `agent:trigger` event for the agent in the per-venue grid
-scheduler at the earliest such time (see [SCHEDULER.md](./SCHEDULER.md) and
-[GRID_SCHEDULER.md](./GRID_SCHEDULER.md)). There is no fixed periodic sleep
-interval. A `sleep` harness tool and idle backoff are deferred (SCHEDULER.md §7).
+**Scheduled wakes.** Wake times are kept per session and per task, not per
+agent, so a sleep on one session never delays another. A session or task
+record may carry `wakeTime` (absolute millis): "this thread wants to wake at
+T". Only the framework writes it, never the `n/`, `c/` or `t/` scratch
+namespaces. On merge, `mergeAndPostProcess` installs the `wakeTime` a
+transition returns on the thread it picked. When the transition returns
+none, it clears the wake the cycle spent: a session's, or a task's that was
+due when the cycle took it. A task's wake still to come stands, as does one
+set during the cycle by `agent:park-task`. The last writer wins, with no
+min-merge, so a short retry cannot clobber an explicit long sleep. Intake
+operations write `pending` or `tasks`, never `wakeTime`: new work runs at once
+through `hasWork`.
+
+The venue keeps one `agent:trigger {force: false}` event per agent in the grid
+scheduler, at the earliest `wakeTime` across its threads
+([GRID_SCHEDULER.md §8](./GRID_SCHEDULER.md)). When it fires, a parked task
+whose `wakeTime` has come is ready and runs. Readiness applies to tasks only:
+a session's own `wakeTime` firing with nothing pending runs nothing. No
+production transition returns a `wakeTime`; an LLM agent sets its task's with
+`park_task`, and there is no fixed periodic sleep interval.
 
 The scheduler is an internal venue concern — its implementation may change
 without affecting the agent contract or MCP interface.
@@ -1071,16 +1343,38 @@ the winner is always a state that genuinely existed on the hosting venue.
 ### 6.1 Recovery
 
 A venue restart has no live launcher slots, so startup clears every persisted
-RUNNING marker before scheduling remaining work.
+RUNNING marker and revokes every cycle claim (§2.5.1) before scheduling
+remaining work. Each agent is recovered on its own: one that cannot be, such
+as one whose controller cannot act, is logged and left asleep with its work
+queued, and the venue starts and recovers the rest.
 Durable Jobs, queued inputs, stable lifecycle state, and external interaction
 records survive independently. Recovery may start a fresh attempt from a
 durable boundary; it never treats a persisted executor bit as resumable state.
 
 Request and chat Jobs survive a restart: the adapter's `recoverJob` keeps a
-request whose task is still in `tasks` and a chat whose envelope is
-still pending on its session, so the boot wake completes them. Venue shutdown
-likewise leaves them `STARTED` (`suspendJob`) and stops the run loop without
-relaunching it (see JOBS.md § Shutdown).
+request whose task is still in `tasks` or `resolved`, and a chat whose
+envelope is still pending on its session, so the boot wake completes them. A
+task the agent resolved in a cycle the restart stopped before its merge is
+handed back at boot as the merge would have done (§4.4 step 6), with no
+timeline entry for that cycle. Its request's `outputPath` is written as its
+caller acts now (JOBS.md, Kept caller context); a write to another venue
+needs the caller's sign-in credential, which is never stored, so that
+request fails. Venue shutdown
+likewise leaves them as they are (`suspendJob`) and stops the run loop without
+relaunching it (see JOBS.md § Shutdown). A chat whose message a cycle had
+already taken is not kept, since no cycle would take it again: shutdown
+cancels it, and after a crash it fails at boot.
+
+A parked task (§4.6) keeps waiting across a restart only while what it waits
+on survives one. A wake time, an open HITL ask and a tool call tracked in the
+pending index (§3.4.2) are durable. Before any agent is woken, every agent's
+tracked calls are recovered: one whose job has ended has its outcome
+delivered to its session (a mirror always has, since the restart fails it, so
+the waiting task runs again on that failure); one whose job is live is
+delivered when it ends; one whose job is gone has nothing to deliver. A
+parked task then left with nothing to wait on fails at boot
+(`AgentAdapter.TASK_WAIT_LOST`). A task that was not parked but had been shown
+its input was interrupted mid-cycle, and the boot wake runs it again.
 
 ### 6.2 Effects
 
@@ -1098,22 +1392,19 @@ When an agent needs human input, `hitl:request` creates a durable Job and record
 in the target user's **request queue** at `/h/<job-id>`. From a sessioned agent
 tool call it returns `{id, status: INPUT_REQUIRED, title}` immediately. The
 record stores the verified requester, agent and session. When the human answers,
-rejects, or the request expires, HITL resolves the Job, appends the outcome to
-that exact session as a provenance-bearing message, and wakes the agent. The
-Job remains the polling and audit fallback; no model turn waits for the human.
+rejects, or the request expires, HITL resolves the Job, delivers the outcome
+with the responder's provenance, and wakes the agent. The outcome goes to the
+task whose cycle asked as its next input, so it runs that task and no other in
+the session; when no task asked, or the task has finished, it goes to that
+exact session as a message. The Job remains the polling and audit fallback; no
+model turn waits for the human.
 
 External callers keep the standard Job contract: the returned Job remains
 `INPUT_REQUIRED` until it completes or fails.
 
-**User request namespace:**
-
-```
-:user-data → <DID> → "h" → <job-id> → job reference
-```
-
-The `/h/` namespace is analogous to `/g/` (agents) and `/s/` (secrets) but
-holds Job IDs for requests that the human user is expected to complete. MCP
-clients can list and respond to these requests.
+The target's `h/` namespace is their inbox (`Inbox`): each request is a record
+(`HitlRequest`) keyed by its job's id in hex, holding the asks and how they
+were resolved. MCP clients can list and respond to these requests.
 
 The MCP-facing operations are `hitl:list`, `hitl:respond`, and the ordinary Job
 read/status surfaces.
@@ -1145,8 +1436,6 @@ fallback — credentials must be in the secret store for production use.
 ---
 
 ## 7. Phasing
-
-See GRID_LATTICE_DESIGN.md §12 for the full roadmap.
 
 | Phase | Focus | Status |
 |-------|-------|--------|
@@ -1213,7 +1502,7 @@ L3: LLM call (provider) — single model invocation, no agent semantics
 | Message arrival | `agent:message` appends to `session.pending` | yes | no |
 | Chat arrival | `agent:chat` reserves a chat slot | yes | yes (the chat Job) |
 | Pending completion | An outbound Job in `pending` finishes; completion callback wakes the agent | result of the outbound Job | no |
-| Scheduled fire | Grid scheduler fires the agent's `agent:trigger` event at the earliest thread `wakeTime` (SCHEDULER.md §4) | no | no |
+| Scheduled fire | Grid scheduler fires the agent's `agent:trigger` event at the earliest thread `wakeTime` (§4.6) | no | no |
 | **Trigger** | `agent:trigger` MCP op | no | optional loop-drain `wait`, not a result-await |
 | Self-wake | A previous step wrote new work to the agent's own queues | (whatever the previous step wrote) | n/a |
 
@@ -1230,7 +1519,7 @@ Pure duplication. The record's `K_CONFIG` is canonical and is already passed int
 
 #### 8.3.2 Cycle scope is over-fitted to "a picked task"
 
-The framework picks at most one task and at most one session per cycle, then bakes them into the step input via `formatPickedTask` / `pickSessionForCycle`. This fits `agent:request` cleanly, but distorts every other wake event:
+The framework picks at most one task and at most one session per cycle, then bakes them into the step input via `pickNext` / `formatPickedTask`. This fits `agent:request` cleanly, but distorts every other wake event:
 
 - **Trigger** fires with no task and no session — the framework synthesises empty inputs.
 - **Scheduled fire** fires with no payload — the agent is woken to "think now."
@@ -1241,7 +1530,24 @@ The step adapter ends up branching on "do I have a task? a session? neither?" �
 
 #### 8.3.3 Wire shapes leak framework concerns into adapters
 
-`formattedTasks`, `resolvedPending`, `effectiveMessages`, `presentedSessionPendingCount` are framework-internal scheduling artefacts. Step adapters depend on them. Changing the framework's wire format changes every step adapter. The right boundary is: framework gives the adapter a context, adapter reads typed lattice data via accessors.
+`formattedTasks`, `resolvedPending`, `effectiveMessages` are framework-internal scheduling artefacts. Step adapters depend on them. Changing the framework's wire format changes every step adapter. The right boundary is: framework gives the adapter a context, adapter reads typed lattice data via accessors.
+
+#### 8.3.4 Wake features not built
+
+- **Session sleep** — let an LLM defer its session, as `park_task` defers its
+  task (§4.6).
+- **Async invoke** — a harness tool that starts an operation without waiting
+  and delivers its outcome to the asking task or session when it ends. Today
+  only sessioned HITL asks (§6.3) and tool calls past their time limit
+  (§3.4.2) re-enter this way. Retrying slow work belongs inside the operation's own Job, not in the
+  run loop or the scheduler.
+- **Session readiness** — a session's own `wakeTime` running a cycle with
+  nothing pending, as a task's does (§4.6).
+- **Task/session unification** — one `threads` shape with a single
+  `pickReadyThread`, replacing separate tasks and sessions. A large refactor
+  needing its own design.
+- **Observability** — each thread's `wakeTime`, whether a task is parked and
+  on what, and the agent's next wake, in `agent:info`.
 
 ### 8.4 Target principles
 
@@ -1252,7 +1558,7 @@ The step adapter ends up branching on "do I have a task? a session? neither?" �
 3. **Single venue writes.** Unchanged.
 4. **Two layers, not three.** L1 (run loop) drives cycles and persists results. L2 (step adapter) does one cycle's worth of reasoning. L3 is outside the harness — a step adapter may invoke an L3 provider, but that's the adapter's business, not a layer of the contract. The framework never inspects the step adapter's reasoning; the step adapter never manages framework fields.
 5. **Lattice is the state.** No FSM accumulator threaded through the step. Persistent agent state (config, sessions, tasks, pending, timeline) lives on the lattice. The step adapter reads what it needs via context and writes via venue ops.
-6. **Step must succeed.** A failing step suspends the agent (#88). Same fail-fast semantics; the step adapter can return `error` to fail explicitly.
+6. **A failure lands on what failed.** Unchanged (§3.4): a failing step fails the work it took, and suspends the agent only when the agent cannot continue. The step adapter can return `error` to fail explicitly.
 
 ### 8.5 Target step contract
 
@@ -1292,23 +1598,19 @@ No `state`, no `tasks`, no `pending`, no `messages`, no `session`, no `config`. 
 ```
 {
   response?: ACell,          // recorded as the cycle's timeline result
-  error?:    ACell,          // fail-fast — suspend, drain queue, fail callers (#88)
+  error?:    ACell,          // fails the work this step took (§3.4)
   frames?:   AVector<ACell>, // optional session-frames replacement (goal-tree pattern)
   done?:     boolean         // explicit "no more work to do this run" signal
 }
 ```
 
-No `state` field. No `taskResults` field — task completions go through the existing `agent:complete-task` venue op (one mechanism, not two — see §8.5.5).
+No `state` field. Task completions go through `agent:complete-task` and `agent:fail-task`, as they already do (§3.4.1).
 
 #### 8.5.4 Stop condition
 
 Currently the run loop iterates while `hasWork(agent)`. Target: the step adapter signals `done: true` when it has nothing left to do. The framework re-invokes the step until `done: true` arrives, with `MAX_LOOP_ITERATIONS` retained as a misbehaving-agent safety cap.
 
 Why adapter-driven: the framework cannot reliably tell "is there more work?" from lattice state alone. A scheduled-fire step might decide nothing changed and return immediately. A multi-task step might process several queued tasks per cycle and signal done when the queue empties. A goal-tree harness might need to plan even with no queued work.
-
-#### 8.5.5 Task completion — one mechanism
-
-§3.4.1 currently describes two mechanisms (tool-call during execution; output declaration). Target: only the tool-call mechanism. Step adapters that don't run a tool-call loop call the same venue op (`agent:complete-task`) directly. The output `taskResults` field is retired, removing `buildTaskResultsFromDeferred` and the two-source merge.
 
 ### 8.6 Target run loop
 
@@ -1324,7 +1626,7 @@ Per cycle:
    4. Invoke the step: `engine.jobs().invokeInternal(stepOp, {cause}, ctx)`.
    5. On success: write timeline entry from `response` / `error`; replace `frames` if emitted.
    6. On `done: true` or after `MAX_LOOP_ITERATIONS`: exit.
-   7. On `error`: fail-fast (existing #88 path — suspend, drain, fail callers).
+   7. On `error`: fail the work the step took; on `CannotContinueException` or an unexpected failure, suspend the agent with its queue kept (§3.4).
 3. After loop exits, mark SLEEPING (or honour SUSPENDED/TERMINATED), release `runningLoops` slot, re-check for wakes.
 
 The framework no longer:
@@ -1342,12 +1644,10 @@ The framework no longer:
 | Step input field `state` | removed | Adapter reads from lattice |
 | Step input fields `tasks`, `pending`, `messages`, `session`, `config` | removed | Adapter reads via `agent.*` accessors |
 | Step output field `state` | removed | No round-trip |
-| Step output field `taskResults` | removed | Use `agent:complete-task` venue op |
 | `state.config` (LLM/goaltree) | ~~merged into record `K_CONFIG`~~ DONE (#144) | Collapse shipped: single config slot, state.config rejected at create/update |
 | `state.loads` (LLM) | dedicated slot (`K_LOADS` or adapter namespace) | Only legitimate per-agent persistent state |
 | Framework picks task/session each cycle | adapter reads queue and decides | Cycle scope is the agent, not a task |
 | Loop exits on `hasWork == false` | loop exits on `done: true` from step | Adapter-driven stop condition |
-| Two task-completion mechanisms (§3.4.1) | one mechanism (venue op) | Simpler bookkeeping |
 | `RequestContext` carries `taskId`, `sessionId` | dropped | Adapter resolves these from the lattice |
 
 ### 8.8 Phased plan
@@ -1359,16 +1659,15 @@ Each phase is a self-contained PR with a doc commit that promotes its content fr
 - Drop `tasks`, `pending`, `messages`, `session`, `config` from the step input wire shape.
 - Step adapters read via `agent.*` accessors and `RequestContext`.
 - Keep `state` in the step input/output for now to bound the change.
-- Doc: rewrite §3.4 input table; update §4.4 step 4.
+- Doc: rewrite §3.4 input table; update §4.4 step 5.
 - Tests: `LLMAgentAdapterTest`, `AgentAdapterTest` exercise the new wire shape.
 
 #### Phase D-2 — Output narrowing + done signal
 
 - Step output becomes `{response?, error?, frames?, done?}`.
 - Drop `state` from the output.
-- Retire `taskResults` declaration; step adapters use `agent:complete-task` directly.
 - Loop stops on `done: true` (or `MAX_LOOP_ITERATIONS`).
-- Doc: rewrite §3.4 output table; simplify §3.4.1.
+- Doc: rewrite §3.4 output table.
 - Tests: cover the done signal, no-task scheduled wake, multi-task cycle.
 
 #### Phase D-3 — Retire `K_STATE`

@@ -7,9 +7,9 @@ import java.net.URI;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -45,13 +45,15 @@ public class AuthThrottleTest {
 	private static VenueServer server;
 	private static AString venueDID;
 	private static final AtomicInteger verifications = new AtomicInteger();
-	private static final AtomicInteger inFlight = new AtomicInteger();
-	private static final AtomicInteger maxInFlight = new AtomicInteger();
+	/** A permit for each did:held verification that has begun. */
+	private static final Semaphore heldIn = new Semaphore(0);
+	/** What each did:held verification waits for before it answers. */
+	private static volatile CountDownLatch heldRelease = new CountDownLatch(0);
 
 	@BeforeAll
 	static void launch() {
 		server = VenueServer.launch(Maps.of(
-			Config.PORT, 0,
+			Config.PORT, 0, Config.STORE, "memory",
 			Config.BIND_ADDRESS, Strings.create("127.0.0.1"),
 			Config.TRUSTED_PROXIES, Vectors.of(Strings.create(TrustedProxies.LOOPBACK)),
 			Config.AUTH, Maps.of(Config.PUBLIC, Maps.of(Config.ENABLED, true)),
@@ -64,27 +66,23 @@ public class AuthThrottleTest {
 				Strings.create("authFailuresPerMinute"), 60L,
 				Strings.create("authFailureBurst"), FAILURE_BURST,
 				Strings.create("authConcurrency"), 1L,
-				// Generous: the test is about one-in-flight, not shedding. Under a
-				// loaded suite queued attempts can wait seconds; only a deadlock
-				// should fail this.
-				Strings.create("blockMs"), 60_000L)));
+				// No wait for a slot: a further attempt while one is in flight is
+				// shed at once, so the test sees the gate rather than timing it.
+				Strings.create("blockMs"), 0L)));
 		venueDID = server.getEngine().getDIDString();
 		VenueDIDVerifier verifier = server.getEngine().didVerifier();
 		// Stand-ins for a remote DID method: one counts how often it is asked,
-		// one is slow enough to observe overlap.
+		// one stays in flight until the test releases it.
 		verifier.registerMethod("counting", (did, message, signature) -> {
 			verifications.incrementAndGet();
 			return false;
 		});
-		verifier.registerMethod("slow", (did, message, signature) -> {
-			int now = inFlight.incrementAndGet();
-			maxInFlight.accumulateAndGet(now, Math::max);
+		verifier.registerMethod("held", (did, message, signature) -> {
+			heldIn.release();
 			try {
-				Thread.sleep(300);
+				heldRelease.await();
 			} catch (InterruptedException e) {
 				Thread.currentThread().interrupt();
-			} finally {
-				inFlight.decrementAndGet();
 			}
 			return false;
 		});
@@ -114,12 +112,10 @@ public class AuthThrottleTest {
 	}
 
 	private static HttpRequest status(String fromIp, String bearer) {
-		// Outlasts the venue's 60s queue wait (blockMs), so a slow queue under load
-		// answers rather than timing out client-side; a deadlock still fails as a 429.
 		HttpRequest.Builder b = HttpRequest.newBuilder(
 				URI.create("http://127.0.0.1:" + server.port() + "/api/v1/status"))
 			.header("X-Forwarded-For", fromIp)
-			.timeout(Duration.ofSeconds(75)).GET();
+			.timeout(Duration.ofSeconds(10)).GET();
 		if (bearer != null) b.header("Authorization", "Bearer " + bearer);
 		return b.build();
 	}
@@ -162,20 +158,24 @@ public class AuthThrottleTest {
 
 	@Test
 	public void oneAuthenticationInFlightPerAddress() throws Exception {
-		maxInFlight.set(0);
-		List<CompletableFuture<HttpResponse<String>>> sent = new ArrayList<>();
-		for (int i = 0; i < FAILURE_BURST; i++) sent.add(sendAsync("203.0.113.20", remoteToken("did:slow:a")));
-		for (CompletableFuture<HttpResponse<String>> f : sent) {
-			HttpResponse<String> r = f.get(90, TimeUnit.SECONDS);
-			assertEquals(401, r.statusCode(), r.body());
-		}
-		assertEquals(1, maxInFlight.get(), "a further attempt from the same address waits for the one in flight");
+		heldRelease = new CountDownLatch(1);
+		CompletableFuture<HttpResponse<String>> first = sendAsync("203.0.113.20", remoteToken("did:held:a"));
+		assertTrue(heldIn.tryAcquire(10, TimeUnit.SECONDS), "the first attempt is verifying");
+		HttpResponse<String> second = send("203.0.113.20", remoteToken("did:held:a"));
+		assertEquals(429, second.statusCode(), "a further attempt from the same address gets no slot: " + second.body());
+		assertTrue(second.body().contains(AuthThrottle.TOO_MANY_CONCURRENT), second.body());
+		heldRelease.countDown();
+		assertEquals(401, first.get(10, TimeUnit.SECONDS).statusCode());
+		HttpResponse<String> after = send("203.0.113.20", remoteToken("did:held:a"));
+		assertEquals(401, after.statusCode(), "the slot is free once the attempt in flight is done: " + after.body());
+		heldIn.drainPermits();
 
-		maxInFlight.set(0);
-		CompletableFuture<HttpResponse<String>> a = sendAsync("203.0.113.21", remoteToken("did:slow:a"));
-		CompletableFuture<HttpResponse<String>> b = sendAsync("203.0.113.22", remoteToken("did:slow:a"));
-		assertEquals(401, a.get(90, TimeUnit.SECONDS).statusCode());
-		assertEquals(401, b.get(90, TimeUnit.SECONDS).statusCode());
-		assertEquals(2, maxInFlight.get(), "the gate is per address: two addresses verify in parallel");
+		heldRelease = new CountDownLatch(1);
+		CompletableFuture<HttpResponse<String>> a = sendAsync("203.0.113.21", remoteToken("did:held:a"));
+		CompletableFuture<HttpResponse<String>> b = sendAsync("203.0.113.22", remoteToken("did:held:a"));
+		assertTrue(heldIn.tryAcquire(2, 10, TimeUnit.SECONDS), "the gate is per address: two addresses verify in parallel");
+		heldRelease.countDown();
+		assertEquals(401, a.get(10, TimeUnit.SECONDS).statusCode());
+		assertEquals(401, b.get(10, TimeUnit.SECONDS).statusCode());
 	}
 }

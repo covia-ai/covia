@@ -20,6 +20,12 @@ import covia.adapter.messaging.AMessagingAdapter;
 import covia.adapter.messaging.MessagingBot.Managed;
 import covia.adapter.messaging.ConversationRouter;
 import covia.api.Fields;
+import covia.exception.InvalidDefinitionException;
+import covia.exception.InvalidInputException;
+import covia.exception.NotFoundException;
+import covia.exception.NotSupportedException;
+import covia.exception.UnavailableException;
+import covia.venue.AdapterState;
 import covia.venue.RequestContext;
 
 /**
@@ -243,9 +249,8 @@ public class TelegramAdapter extends AMessagingAdapter<BotSpec, BotRunner> {
 
 	@Override
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
-		requireInvoke(ctx);
 		String subOp = getSubOperation(meta);
-		if (subOp == null) throw new IllegalArgumentException("Insufficient specification for telegram operation");
+		if (subOp == null) throw new InvalidDefinitionException("Insufficient specification for telegram operation");
 		return switch (subOp) {
 			case "send" -> CompletableFuture.supplyAsync(() -> handleSend(ctx, input), VIRTUAL_EXECUTOR);
 			case "download" -> CompletableFuture.supplyAsync(() -> handleDownload(ctx, input), VIRTUAL_EXECUTOR);
@@ -254,7 +259,7 @@ public class TelegramAdapter extends AMessagingAdapter<BotSpec, BotRunner> {
 			case "delete" -> CompletableFuture.supplyAsync(() -> handleDelete(ctx, input), VIRTUAL_EXECUTOR);
 			case "bots" -> CompletableFuture.supplyAsync(() -> handleBots(ctx), VIRTUAL_EXECUTOR);
 			case "format" -> CompletableFuture.supplyAsync(() -> handleFormat(input), VIRTUAL_EXECUTOR);
-			default -> throw new UnsupportedOperationException("Unsupported telegram operation: " + subOp);
+			default -> throw new NotSupportedException("Unsupported telegram operation: " + subOp);
 		};
 	}
 
@@ -263,20 +268,20 @@ public class TelegramAdapter extends AMessagingAdapter<BotSpec, BotRunner> {
 	static final AString K_MARKDOWN = Strings.intern("markdown");
 	/** {@code telegram:format} given nothing to convert. */
 	public static final String NOTHING_TO_FORMAT =
-		"format expects markdown or text, or a reply hook's {response, via}";
+		"format expects markdown or text, or a reply hook's {response, authentication}";
 
 	/**
 	 * {@code telegram:format}: Markdown to Telegram HTML ({@link TelegramMarkdown}).
 	 * Takes {@code {markdown}} (or, when that is absent or blank, {@code {text}}), a
 	 * bare string from a Java caller, or the reply hook's own
-	 * input {@code {response, via}}, whose response is read as the adapter reads
+	 * input {@code {response, authentication}}, whose response is read as the adapter reads
 	 * any agent reply ({@link ConversationRouter#responseText}). Returns
 	 * {@code {text, parse_mode: "HTML"}}: as a reply hook's result, the reply is
 	 * {@code text}, sent under that {@code parse_mode} whatever the bot's own.
 	 */
 	static ACell handleFormat(ACell input) {
 		String markdown = formatSource(input);
-		if (markdown == null || markdown.isBlank()) throw new IllegalArgumentException(NOTHING_TO_FORMAT);
+		if (markdown == null || markdown.isBlank()) throw new InvalidInputException(NOTHING_TO_FORMAT);
 		String html = TelegramMarkdown.toHtml(markdown);
 		// Markdown that renders to nothing (an empty link, say) is sent as its own text.
 		if (html.isBlank()) html = TelegramMarkdown.escape(markdown.strip());
@@ -303,7 +308,7 @@ public class TelegramAdapter extends AMessagingAdapter<BotSpec, BotRunner> {
 	 */
 	ACell handleSend(RequestContext ctx, ACell input) {
 		AMap<AString, ACell> in = RT.castMap(input);
-		if (in == null) throw new IllegalArgumentException("send expects an object of sendMessage parameters");
+		if (in == null) throw new InvalidInputException("send expects an object of sendMessage parameters");
 		BotRunner runner = selectBot(ctx, RT.ensureString(in.get(K_BOT)));
 		requireBotAccess(ctx, runner, ABILITY_SEND);
 		Map<String, Object> params = telegramParams(in.dissoc(K_BOT));
@@ -323,44 +328,44 @@ public class TelegramAdapter extends AMessagingAdapter<BotSpec, BotRunner> {
 		requireBotAccess(ctx, runner, ABILITY_CALL);
 		AString methodCell = RT.ensureString(RT.getIn(input, K_METHOD));
 		if (methodCell == null || methodCell.isEmpty()) {
-			throw new IllegalArgumentException("method is required: a Bot API method name such as sendPhoto");
+			throw new InvalidInputException("method is required: a Bot API method name such as sendPhoto");
 		}
-		String method = methodCell.toString().trim();
-		if (!method.matches("[A-Za-z]+")) throw new IllegalArgumentException("method must be a Bot API method name: " + method);
+		String method = methodCell.toString();
+		if (!method.matches("[A-Za-z]+")) throw new InvalidInputException("method must be a Bot API method name: " + method);
 		if (MANAGED_METHODS.contains(method)) {
-			throw new IllegalArgumentException("Bot API method " + method + " is managed by the venue's own "
+			throw new NotSupportedException("Bot API method " + method + " is managed by the venue's own "
 				+ "update loop for this bot and cannot be called");
 		}
 		ACell paramsCell = RT.getIn(input, K_PARAMS);
 		AMap<AString, ACell> paramsMap = (paramsCell == null) ? Maps.empty() : RT.castMap(paramsCell);
-		if (paramsMap == null) throw new IllegalArgumentException("params must be an object of Bot API parameters");
+		if (paramsMap == null) throw new InvalidInputException("params must be an object of Bot API parameters");
 		Map<String, Object> params = telegramParams(paramsMap);
 		runner.requireAllowedTarget(method, params);
 		ACell files = RT.getIn(input, "files");
 		if (files == null) return runner.call(method, params);
-		if (!(files instanceof AMap<?, ?> map) || map.isEmpty()) throw new IllegalArgumentException("files must be a non-empty object");
-		if (map.count() > 10) throw new IllegalArgumentException("At most 10 file parts are supported");
+		if (!(files instanceof AMap<?, ?> map) || map.isEmpty()) throw new InvalidInputException("files must be a non-empty object");
+		if (map.count() > 10) throw new InvalidInputException("At most 10 file parts are supported");
 		long totalBytes = 0;
 		Map<String, BotRunner.Upload> uploads = new LinkedHashMap<>();
 		for (var entry : map.entrySet()) {
 			String part = entry.getKey().toString();
-			if (!part.matches("[A-Za-z][A-Za-z0-9_]*") || params.containsKey(part) || BotRunner.TARGET_PARAMS.contains(part)) throw new IllegalArgumentException("Invalid or duplicate file part: " + part);
+			if (!part.matches("[A-Za-z][A-Za-z0-9_]*") || params.containsKey(part) || BotRunner.TARGET_PARAMS.contains(part)) throw new InvalidInputException("Invalid or duplicate file part: " + part);
 			AString ref = RT.ensureString(RT.getIn(entry.getValue(), Fields.REF));
-			if (ref == null) throw new IllegalArgumentException("Each file requires ref");
+			if (ref == null) throw new InvalidInputException("Each file requires ref");
 			try {
 				var content = engine.resolveContent(ref, ctx); // caller authority, never the bot owner's
-				if (content == null) throw new IllegalArgumentException("File reference did not resolve");
+				if (content == null) throw new NotFoundException("File reference did not resolve", ref.toString());
 				byte[] bytes;
 				try (var stream = content.content().getInputStream()) {
 					bytes = stream.readNBytes(TelegramMedia.MAX_BYTES + 1);
 				}
 				totalBytes += bytes.length;
-				if (totalBytes > TelegramMedia.MAX_BYTES) throw new IllegalArgumentException(TelegramMedia.TOO_LARGE);
+				if (totalBytes > TelegramMedia.MAX_BYTES) throw new InvalidInputException(TelegramMedia.TOO_LARGE);
 				AString filename = RT.ensureString(RT.getIn(entry.getValue(), "filename"));
 				String name = filename == null ? "attachment" : filename.toString();
-				if (name.isBlank() || name.contains("/") || name.contains("\\") || name.contains("\r") || name.contains("\n")) throw new IllegalArgumentException("filename must be a plain file name");
+				if (name.isBlank() || name.contains("/") || name.contains("\\") || name.contains("\r") || name.contains("\n")) throw new InvalidInputException("filename must be a plain file name");
 				uploads.put(part, new BotRunner.Upload(name, content.contentType(), bytes));
-			} catch (java.io.IOException e) { throw new IllegalArgumentException("Could not read upload content", e); }
+			} catch (java.io.IOException e) { throw new UnavailableException("Could not read upload content", e); }
 		}
 		return runner.call(method, params, uploads);
 	}
@@ -369,17 +374,22 @@ public class TelegramAdapter extends AMessagingAdapter<BotSpec, BotRunner> {
 		BotRunner runner = selectBot(ctx, RT.ensureString(RT.getIn(input, K_BOT)));
 		requireBotAccess(ctx, runner, ABILITY_CALL);
 		AString fileId = RT.ensureString(RT.getIn(input, "file_id"));
-		if (fileId == null || fileId.isEmpty()) throw new IllegalArgumentException("file_id is required");
+		if (fileId == null || fileId.isEmpty()) throw new InvalidInputException("file_id is required");
 		ACell destination = RT.getIn(input, "destination");
 		if (destination != null && (!(destination instanceof AString) || destination.toString().isBlank())) {
-			throw new IllegalArgumentException(TelegramMedia.INVALID_DESTINATION);
+			throw new InvalidInputException(TelegramMedia.INVALID_DESTINATION);
 		}
 		ACell fileName = RT.getIn(input, Fields.FILE_NAME);
 		if (fileName != null && (!(fileName instanceof AString) || !TelegramMedia.safeFileName(fileName.toString()))) {
-			throw new IllegalArgumentException(TelegramMedia.INVALID_FILE_NAME);
+			throw new InvalidInputException(TelegramMedia.INVALID_FILE_NAME);
 		}
-		return runner.download(fileId.toString(), (AString) destination,
-			fileName == null ? null : fileName.toString(), destination == null ? runner.context() : ctx);
+		try {
+			return runner.download(fileId.toString(), (AString) destination,
+				fileName == null ? null : fileName.toString(), destination == null ? runner.context() : ctx);
+		} catch (IllegalArgumentException e) {
+			// MessagingMedia.store refuses a destination no content provider takes.
+			throw new InvalidInputException(e.getMessage(), e);
+		}
 	}
 
 	/** Cells → the plain Java values the HTTP layer encodes (scalars as text, maps/lists as JSON). */
@@ -394,10 +404,14 @@ public class TelegramAdapter extends AMessagingAdapter<BotSpec, BotRunner> {
 	}
 
 	@Override
-	protected void deleteRuntimeState(RequestContext ctx, String name) {
-		state(ctx.getUserDID()).delete(userStatePath(ctx.getUserDID(), "resolved/" + name));
-		state(ctx.getUserDID()).delete(userStatePath(ctx.getUserDID(), "inbox/" + name));
-		state(ctx.getUserDID()).delete(userStatePath(ctx.getUserDID(), "files/" + name));
+	protected void deleteRuntimeState(AdapterState draft, AString owner, String name) {
+		draft.delete(userStatePath(owner, "resolved/" + name));
+		draft.delete(userStatePath(owner, "inbox/" + name));
+		draft.delete(userStatePath(owner, "files/" + name));
+	}
+
+	@Override
+	protected void deleteLegacyState(RequestContext ctx, String name) {
 		deleteLegacyPath(ctx, LEGACY_REGISTRY_PATH + "/" + name);
 		deleteLegacyPath(ctx, BotRunner.legacySessionsPath(name));
 	}

@@ -26,7 +26,7 @@ A **session** is a scoped interaction between parties with its own history and c
 - **Own history / context** — turns, tool calls, tool results, pinned context entries
 - **Jointly owned** — every listed party holds read/append capability; neither is subordinate
 
-`meta.parties` records *who is present*; per-turn *who-sent-which* attribution is opt-in via agent `config.recordCaller: true` (#84), which stamps each user turn with its sender's DID (`caller`). Off by default — for single-party sessions the caller is the owner, so the field is redundant; it earns its keep on multi-party sessions such as A2A-exposed agents. Assistant turns are never caller-stamped (they are the agent's own output).
+`meta.parties` records *who is present*. Each user turn records *who sent it*: `caller`, the principal the venue authenticated for that request (the owner, another agent, a stranger, or the venue's public principal). It is identity, not namespace: an agent asking is recorded as itself, not as its owner. When a channel binding authenticated the caller, the turn also records `authentication`, how it did (AUTH.md §5.3). Assistant turns carry neither (they are the agent's own output). The LLM runtimes' context assembly renders both as a `From` element ([AGENT_CONTEXT.md §1.2](./AGENT_CONTEXT.md#12-instruction-labels-and-data-boundaries), COG-20 §4) before a turn whenever who is talking changes.
 
 Sessions live at `g/<agent>/sessions/<sid>/` in the agent's lattice namespace. The hosting venue mints the id; counterparties echo it on subsequent requests, exactly as in MCP.
 
@@ -68,7 +68,7 @@ creates new Jobs while retaining the conversation identity. A task ID and a
 session ID have different lifetimes.
 
 The local session records the initial input and returned reply in its frames.
-`agent:sessions` and `agent:session-read` expose those local records, not the
+`agent:sessions` and `agent:history` expose those local records, not the
 provider's complete internal history or every continuation message. The provider
 owns its working context; subsequent calls use its saved conversation ID rather
 than replaying the local transcript.
@@ -84,9 +84,11 @@ continue with another chat or request using the same Covia `sessionId`.
 the backend task; it does not erase the conversation or prove remote cessation.
 On restart, the parent reattaches to its recorded backend Job, and the provider
 adapter determines whether that Job can be recovered. Missing handles and
-uncertain submissions are not replayed. Remote Covia proxies recover saved
-transport authority; a local proxy currently fails recovery explicitly because
-its attenuated execution context cannot be reconstructed from a caller DID.
+uncertain submissions are not replayed. A remote Covia proxy reconnects as it
+first connected, unless it signed in as its caller, whose credential the venue
+does not keep: its recovery fails, naming the remote task and its venue. A local
+proxy follows its task again as the agent it acts for, in the context its job
+kept (ADAPTERS.md, External agent interactions).
 Resuming a provider conversation on a later turn does not recover an interrupted
 turn. Any provider session identity extractable on failure or cancellation is
 retained for later calls.
@@ -145,7 +147,7 @@ The exact context-bearing cells under `frames` and the session/frame load tiers
 are defined only by [AGENT_CONTEXT.md §1.1](./AGENT_CONTEXT.md#11-durable-context-state-contract);
 this document does not repeat them.
 
-Other framework-managed fields on the agent record (status, scheduling, error, caps, timeline entries) are documented where they are authoritative — see [GRID_LATTICE_DESIGN.md §4.3](./GRID_LATTICE_DESIGN.md) for the top-level shape, [SCHEDULER.md](./SCHEDULER.md) for wake state, and [AGENT_LOOP.md](./AGENT_LOOP.md) for timeline entry structure.
+Other framework-managed fields on the agent record (status, scheduling, error, caps, timeline entries) are documented where they are authoritative — see [GRID_LATTICE_DESIGN.md §4.3](./GRID_LATTICE_DESIGN.md) for the top-level shape, and [AGENT_LOOP.md](./AGENT_LOOP.md) for wake state (§4.6) and timeline entry structure.
 
 **User scratch space** for the agent, session, and task lives in the virtual namespaces `n/`, `c/`, and `t/` respectively — see [GRID_LATTICE_DESIGN.md §4.5](./GRID_LATTICE_DESIGN.md). Task scratch is stored once on the task Job at `j/<taskId>/temp/`; it is not duplicated on the transient `g/<agent>/tasks` queue row. These are for arbitrary user data; framework-managed state (status, `wakeTime`, task input/result, etc.) is accessed through dedicated APIs, not via these shortcuts.
 
@@ -198,8 +200,8 @@ agent_trigger   agentId=X  sessionId=Y?                 — wake the agent. No p
 
 | Op | Queue | Caller waits? | Completion semantics |
 |----|-------|---------------|----------------------|
-| `agent_request` | `tasks` Index | yes (Job) | Agent must produce `response` (auto-completes task) or `error`, or yield (task stays pending until external wake) |
-| `agent_chat` | session `pending` (as an awaiting waiter) | yes (Job) | Agent's next `response` on this session completes every chat whose message it had already seen (§5.5.2). Not serialised — several may await one session. Typically continues an existing session (`sessionId` supplied); mints a new one on first contact |
+| `agent_request` | `tasks` Index | yes (Job) | Agent completes, fails or parks the task (`complete_task` / `fail_task` / `park_task`); a task left open waits while a wake time, a HITL ask or a late tool call will bring it back, and otherwise the cycle's reply is its result (§6.3) |
+| `agent_chat` | session `pending` (as an awaiting waiter) | yes (Job) | Agent's next `response` on this session completes every chat whose message a cycle has taken (§5.5.2). Not serialised — several may await one session. Typically continues an existing session (`sessionId` supplied); mints a new one on first contact |
 | `agent_message` | session `pending` | no | Agent processes whenever; any `response` lands in session history |
 | `agent_trigger` | none | block on cycle quiesce/yield | **Fallback kick** — nudges the run loop, no payload, no result-await. Callers wanting output should wait on a task/chat Job from `agent_request` / `agent_chat`. |
 
@@ -207,7 +209,7 @@ An agent may end a turn without a reply: a final message with nothing in it. Tha
 
 Session ids are always venue-minted — callers never supply their own. Per-op rules are detailed in §5.5; summary:
 
-Session-id inputs accept both canonical hexadecimal and the `0x`-prefixed representation emitted by CVM/lattice reads. Operation responses use canonical hexadecimal.
+Session-id inputs take the form every id does ([OPERATIONS.md](OPERATIONS.md)). Operation responses use canonical hexadecimal.
 
 - `sessionId` supplied + session known → continue that session (caller echoes the id, A2A/MCP-style)
 - `sessionId` supplied + session unknown → error
@@ -323,7 +325,7 @@ side effects and pending messages are not consumed. Because this operation
 writes session metadata, it requires `agent/write` authority, including when
 the saved result is already current.
 
-### 5.2 Agent-safe retrospective operations
+### 5.2 Session listing and history
 
 This section describes the current operations. The common history foundation
 for [#597](https://github.com/covia-ai/covia/issues/597) is specified in
@@ -335,15 +337,22 @@ historical execution checkpoints are not required.
 | Op | Purpose |
 |----|---------|
 | `agent:sessions` | List bounded session metadata, newest first; owners pass `agentId`, the running agent may omit it |
-| `agent:sessionRead` | Read a bounded safe transcript projection; `archiveDepth` optionally opens nested compaction records before applying the bounds |
+| `agent:history` | Read a session's history exactly as stored, by position |
+| `agent:sessionRead` | Legacy, for existing callers: a bounded transcript of completed turns |
 | `agent:renameSession` | Set or clear a session's human-facing title (owner management surface) |
 | `agent:compactSession` | Select owner-supplied assistant memory for an idle session while retaining the covered history |
 | `agent:reloadContext` | Clear an idle session's materialised provider prefix so the next inference rebuilds current prompt/tools/pinned context; conversation and loads stay exact |
 | `agent:deleteSession` | Permanently remove a session (owner management surface; audit-sensitive) |
 
-The retrospective operations have two explicit modes. From an agent execution context, omitting `agentId` self-scopes the call and requires only invocation capability for the exact operation asset. An owner or other authorised caller supplies `agentId`; normal `crud/read` resolution for `g/<agentId>` then applies. Neither mode confers generic `g/` read access. The in-scope caller session is excluded. Missing, current, unfinished and policy-vetoed sessions all produce exactly `{"found":false}` from `agent:sessionRead`, avoiding an existence oracle.
+The listing and history operations have two explicit modes. From an agent execution context, omitting `agentId` self-scopes the call and requires only invocation capability for the exact operation asset. An owner or other authorised caller supplies `agentId`; normal `crud/read` resolution for `g/<agentId>` then applies. Neither mode confers generic `g/` read access. `agent:sessions` leaves out the caller's own session. Missing and policy-vetoed sessions both produce exactly `{"found":false}` from `agent:history`, avoiding an existence oracle; venue policy applies to the session the caller is in as to any other.
 
-The projection contains completed user/final-assistant turns and, by default, compacted summaries. `archiveDepth` opens at most that many nested compaction records and then applies the same safe projection and response bounds. Provider tool calls, tool results, framework diagnostics and an unanswered tail remain in the durable audit transcript but are never exposed by this operation. Both turn count and total content are bounded, including a single oversized turn.
+`agent:history` returns a session's root-frame history exactly as stored, by position, 0 being the oldest entry: user and assistant turns, tool calls and results in full, unanswered turns, diagnostics, compaction summaries and opaque provider continuation data. `start` and `end` select a range, `end` not included, and `limit` (default 20, at most 100) bounds the entries returned; it counts entries, not bytes, and each entry comes back whole. With no range it returns the newest entries, with `end` alone the newest `limit` before it, and with `start` alone it reads forward. A position past the end of the history reads as the end. Omitting `sessionId` reads the session the caller is in or, outside one, the newest visible session.
+
+The result is `{found, sessionId, start?, next?, entries}`. `start` is present only when the input had none, and is the position of the first entry returned. `entries[i]` is at position `start + i`, and `next`, present when the range was longer than `limit`, is the position to continue from. To go further back, pass the position the last read began at as `end`.
+
+A compaction summary stands for the range in its `historyRange`. In an agent's context it reads `[Compacted: turns a–b] …`, and `start=a, end=b+1` reads those entries back; a summary among them names its own range, read the same way.
+
+`agent:sessionRead` is the legacy read for existing callers; new callers use `agent:history`. It returns `{found, sessionId, title?, created, updated, turnCount, messages, truncated, older}`, holding completed user and final-assistant turns and compaction summaries, each summary marked `compacted` with the `turns` it stands for and their `from` and `to`. Tool calls, tool results, diagnostics, unanswered turns and provider continuation data are left out. `maxTurns` (default 20, at most 100) and `maxChars` (default 8000, at most 100000) bound the result, keeping the newest; `skip` passes over that many of the newest messages and `older` says whether earlier ones remain; `archiveDepth` (at most 8) opens nested compaction records. The caller's current session and unfinished sessions return exactly `{"found":false}`. With `current: true`, an agent instead reads the session it is in, only what is no longer in its context, with `from` and `to` naming the turns of a summary, both included.
 
 `agent:compactSession` is the explicit owner management surface and requires agent-write authority. It only mutates a quiescent session. Versioned frames append a summary with `historyRange` coverage and advance `contextStart`; legacy frames retain the replaced vector under `items`. Provenance is stamped on the summary, and the Job returns only bounded metadata rather than a second copy of the transcript. Future turns append after the summary normally. The in-band `compact` harness tool applies the same transform from either built-in LLM runtime.
 
@@ -367,10 +376,11 @@ can call these existing functions directly; no new REST endpoint is required.
 | Read the selected entries for current model context, leaving summaries unexpanded | `GoalTreeContext.activeConversation(frame)` |
 | Render selected entries as native messages and summary memory | `ConversationRenderer.renderFull(frame, dialect)` |
 | Preserve the current bounded, completed-cycle retrospective projection | `ConversationRenderer.historical(frame, maxTurns, maxChars, archiveDepth)` |
+| Read a frame's history by position, unchanged | `ConversationHistory.open(frame).read(start, end, limit)` |
 | Append stored turns without knowing the frame format | `GoalTreeContext.appendTurn(frame, turn)` / `appendTurns(frame, turns)` |
 | Read a session transcript through the TypeScript SDK | `(await agent.getSession(id)).conversation`, or `await agent.transcript(id)` |
 
-For example, replace a direct `frame.get(AgentState.KEY_CONVERSATION)` read with:
+For example, replace a direct `frame.get(Agent.KEY_CONVERSATION)` read with:
 
 ```java
 AVector<ACell> conversation = GoalTreeContext.archivedConversation(frame);
@@ -396,7 +406,7 @@ writes, source refresh or cached-prefix changes and imposes no archive-depth cap
 These raw accessors do not authorise reads or filter content for a recipient.
 Existing hosts retain their access checks, private-session exclusions, audience
 rules and output budgets. Do not replace a filtered agent-facing view with a
-raw accessor. `AgentState.KEY_CONVERSATION` remains available for legacy data,
+raw accessor. `Agent.KEY_CONVERSATION` remains available for legacy data,
 but new frames no longer store that field. Clients reading raw lattice paths
 must update before venue migration; the TypeScript SDK's transcript accessor
 already handles both formats. General history navigation remains tracked in
@@ -416,7 +426,7 @@ covia_read  path=g/Assistant/sessions/<sid>/meta            — one session's me
 covia_read  path=g/Assistant/sessions/<sid>/frames/0        — frame record (check its storage format)
 ```
 
-These generic operations remain the owner/operator inspection surface and require the corresponding lattice capabilities. Agent configurations should receive the exact `agent:sessions` / `agent:sessionRead` invoke capabilities instead of broad `g/<agent>/sessions` read access.
+These generic operations remain the owner/operator inspection surface and require the corresponding lattice capabilities. Agent configurations should receive the exact `agent:sessions` / `agent:history` invoke capabilities instead of broad `g/<agent>/sessions` read access.
 
 ### 5.4 Default session rule
 
@@ -479,7 +489,7 @@ client → agent_message {agentId, sessionId: "s-01HX...",
 
 #### 5.5.1 Where messages live
 
-All conversational traffic is session-scoped. Messages land in `sessions/<sid>/pending` and are drained into `sessions/<sid>/frames/0/conversation` by the run loop on the next transition cycle for that session. There is no agent-level inbox — conversation lives with the conversation.
+All conversational traffic is session-scoped. Messages land in `sessions/<sid>/pending`, and the next cycle on that session takes them into `sessions/<sid>/frames/0/conversation` as it starts. There is no agent-level inbox — conversation lives with the conversation.
 
 #### 5.5.2 Multiple messages before the agent transitions
 
@@ -488,12 +498,21 @@ If a caller sends several messages on the same session while the agent is still 
 ```
 g/<agent>/sessions/<sid>/
   frames/0/conversation — appended turns (processed)
-  pending    — messages received but not yet presented to a transition
+  pending    — messages received but not yet taken by a cycle
 ```
 
-When the agent next transitions, claimed items in `pending` are appended to the root-frame conversation atomically as they are presented to the transition. This preserves ordering per-session and prevents interleaving across sessions — conversation A can't disrupt conversation B's turn assembly.
+`pending` holds two kinds of envelope: a **chat**, from `agent_chat`, which names its chat Job and waits for a reply, and a **message**, from `agent_message` or a venue delivery such as a HITL answer, which waits for none. A cycle takes the head of the queue, in order, into the root-frame conversation in one transaction, before the transition runs ([AGENT_LOOP.md §4.4](./AGENT_LOOP.md)):
 
-**Chats are not serialised.** A session may hold several `agent_chat` calls awaiting at once — a caller sending three messages before a reply arrives is never rejected. Each is a waiter (an envelope in `pending` carrying its chat Job id, plus a STARTED Job). A cycle drains every presented envelope into one prompt and produces one response, so completion resolves **every waiter the agent had already seen** — each whose envelope was drained (presented this cycle or an earlier one that yielded) completes with that same response; a waiter whose envelope is still `pending` arrived after the cycle's snapshot and awaits the next response. So N quick messages get the one reply the agent formed after reading all N — which is honest, not a dropped message. Each result names every chat it answered in `answered` (their Job ids, in presentation order), so a client can tell one reply to several messages from several replies and collapse the duplicates. Cancelling a chat Job stops that caller awaiting; the message was still delivered. A technical error or `deleteSession` fails every waiter on the session with the reason. The in-memory waiter set is a convenience: the durable record is the envelope plus the STARTED Job, recovered on restart by the stale-STARTED gate.
+| Cycle | Takes from `pending` |
+|-------|----------------------|
+| The session's own | The messages ahead of the first chat, and that chat |
+| A task's, in the session | The messages ahead of the first chat; a chat waits for a cycle of its own, since the task's cycle replies to the task |
+
+The rest waits for later cycles, so the messages before a chat are read with it, and every later chat sees them in the conversation. This preserves ordering per-session and prevents interleaving across sessions — conversation A can't disrupt conversation B's turn assembly.
+
+**The agent's queue.** Each cycle takes the oldest work the agent has: a ready task, or a session's queued envelopes, whichever arrived first, a task winning a tie. A task stands in the queue by its request Job id, a chat by its chat Job id, and a message by the `queued` value stamped on it at intake; all three come from the venue's one increasing sequence, so the queue is in order of arrival across tasks and sessions. A task that parks ([AGENT_TASKS.md](./AGENT_TASKS.md) §6) goes to the back of the queue: `queued` on its row records where it stood when it parked, and it is taken from there when it is ready again, so a task that keeps coming back cannot hold up the rest.
+
+**Chats are not serialised.** A session may hold several `agent_chat` calls awaiting at once — a caller sending three messages before a reply arrives is never rejected. Each is a waiter: an envelope in `pending` carrying its chat Job id, and the Job, PENDING while the envelope is queued. Taking a chat's message makes its Job STARTED, and the reply of the cycle that took it completes it: one reply per chat, each to its own message. A cycle that ends without a reply has said nothing, which is an outcome, not a failure: its chat completes with no `response`. Only a failed cycle fails its chat, with the reason. Cancelling a chat Job stops that caller awaiting; the message was still delivered. `deleteSession` fails every waiter on the session. The in-memory waiter set is a convenience: the durable record is the envelope and the chat Job, and a chat whose envelope is still queued is registered again at boot ([AGENT_LOOP.md §6.1](./AGENT_LOOP.md)).
 
 #### 5.5.3 Agent-to-agent messages (pipelines)
 
@@ -501,7 +520,7 @@ When one agent messages another as part of a shared pipeline run, the orchestrat
 
 When agents correspond outside an orchestration (Bob asks Carol a question on his own initiative), each participant's `agent_message` / `agent_request` still follows the mint-on-missing rule: the first outbound call mints a session, subsequent calls echo the id. The two agents share one session because they share the id, not because of any special "agent-to-agent" machinery.
 
-Across users, the target decides. An agent may talk to another user's agent when the target's owner has admitted it — `config.accepts` on the target record: `"venue"` for the venue operator and its agents, or an exact list of principal DIDs such as `<userDID>:g:<agentId>` — or when the caller presents a delegation for `agent/request` / `agent/message` on `<ownerDID>/g/<id>` (UCAN.md §5.3, #447). Either way the request stays the caller's own Job and the target agent runs as itself; the target sees who asked as venue-verified turn provenance (`relationship=other-user-agent:<id>; user=<did>; venue=<did>`), never as a claim inside the message.
+Across users, the target decides. An agent may talk to another user's agent when the target's owner has admitted it — `config.accepts` on the target record: `"venue"` for the venue operator and its agents, `"anyone"` for every caller, or an exact list of principal DIDs such as `<userDID>:g:<agentId>` — or when the caller presents a delegation for `agent/request` / `agent/message` on `<ownerDID>/g/<id>` (UCAN.md §5.3, #447). Either way the request stays the caller's own Job and the target agent runs as itself; the target sees who asked as venue-verified turn provenance (`relationship=other-user-agent:<id>; user=<did>; venue=<did>`), never as a claim inside the message.
 
 Shared pipeline sessions already have >2 parties in practice; formalising multi-party semantics is a future question (§9.3).
 
@@ -523,7 +542,8 @@ input: {
     sessionId, parties, meta,
     c,                 — session state snapshot (from sessions/<sid>/c/). Common updates.
     frames,            — root conversation plus any goal-tree child frames
-    pending            — messages queued since last transition (§5.5.2)
+    pending,           — the messages this cycle took, already user turns in frames (§5.5.2)
+    inCycle            — this cycle's claim on the session
   },
   task?: {             — present only when this transition is servicing a task
     taskId,
@@ -532,13 +552,13 @@ input: {
                          at g/<agent>/tasks/<taskId>)
     input              — the task's input payload
   },
-  newInput             — the new request/message that triggered this transition
+  newInput             — the task's input this cycle shows, already a user turn in frames
 }
 
 output: ACell           — the response value (or null), appended to frames[0].conversation
 ```
 
-If the return value is non-null, the framework appends it as the terminal turn in `frames[0].conversation`. A transition may also return `turns`: non-terminal assistant tool-call and tool-result messages that the framework inserts immediately before that terminal turn. This keeps one chronologically ordered audit transcript without making the framework understand provider-specific tool execution. For chat work, the return value also completes the chat Job. For task work, completion is **explicit**: the agent (or LLM tool loop) invokes `agent:complete_task` to finish; if no completion op was invoked during the transition, the task yields and stays in the queue.
+If the return value is non-null, the framework appends it as the terminal turn in `frames[0].conversation`. A transition may also return `turns`: non-terminal assistant tool-call and tool-result messages that the framework inserts immediately before that terminal turn. This keeps one chronologically ordered audit transcript without making the framework understand provider-specific tool execution. For chat work, the return value also completes the chat Job. For task work, the agent (or LLM tool loop) invokes `agent:complete-task`, `agent:fail-task` or `agent:park-task`; a task left open with nothing to bring it back takes the return value as its result (§6.3).
 
 **Stored history and model context.** The session retains and replays the complete transcript: user input, assistant tool calls, tool results, durable failure diagnostics, and the final assistant response. Existing history turns remain byte-identical and in order; compaction appends a summary and changes the active context selection. Tool calls therefore stay paired with their results, and a later inference extends the previous provider-shaped prefix instead of rebuilding a shorter projection of it.
 
@@ -554,10 +574,13 @@ If the return value is non-null, the framework appends it as the terminal turn i
 
 | Op | Effect |
 |---|---|
-| `agent:complete_task` (input: `result`) | Job → COMPLETE with `result`, task entry removed |
-| `agent:fail_task` (input: `error`) | Job → FAILED with `error`, task entry removed |
+| `agent:complete-task` (input: `result`) | Job → COMPLETE with `result`, task entry removed |
+| `agent:fail-task` (input: `error`) | Job → FAILED with `error`, task entry removed |
+| `agent:park-task` (input: `delay`, `reason?`) | Task stays open and comes back after `delay` ms, or sooner on new input ([AGENT_TASKS.md](./AGENT_TASKS.md) §6) |
 
-There is no `agent:yield` op — yield is the natural state when no completion op was invoked. There is no `agent:complete_chat` op — chat completes via the return value.
+All three are refused once the cycle's claim is revoked ([AGENT_LOOP.md §2.5.1](./AGENT_LOOP.md)): a stopped cycle's task stays queued.
+
+There is no `agent:complete_chat` op — chat completes via the return value.
 
 **Framework-populated scope.** The transition runs under a request context scoped to `(agent, session?, task?)`. Any venue op invoked from inside the transition — directly or via the LLM tool loop — sees the correct scope without having to pass IDs explicitly.
 
@@ -565,60 +588,51 @@ There is no `agent:yield` op — yield is the natural state when no completion o
 
 | Field | Writer | When |
 |-------|--------|------|
-| `pending` | intake (`appendSessionPending`) appends; the presenting cycle drains | drain happens in the same CAS that lands the drained envelopes' user turns — at cycle start for both built-in LLM runtimes |
-| `frames` | the owning cycle | live epoch-fenced writes for both built-in LLM runtimes; the framework merge never rewrites their frames. Context-bearing frame fields are defined only in [AGENT_CONTEXT.md](./AGENT_CONTEXT.md) §1.1 |
-| `inCycle` | the owning attempt sets it at claim; merge/suspend/startup clear it | write fence only; it is never a wake signal or resume checkpoint |
+| `pending` | intake (`appendSessionPending`) appends; the run loop takes | at cycle start, in the same CAS that lands the taken envelopes' user turns, for every runtime |
+| `frames` | the run loop and the owning cycle | the run loop writes the cycle's input at its start and, for a runtime that does not write frames itself, its turns at the merge; both built-in LLM runtimes write live, fenced by the claim. Nothing replaces the frames wholesale. Context-bearing frame fields are defined only in [AGENT_CONTEXT.md](./AGENT_CONTEXT.md) §1.1 |
+| `inCycle` | the cycle's claim ([AGENT_LOOP.md §2.5.1](./AGENT_LOOP.md)): issued as the cycle starts, ended by its merge, revoked by a stop and at startup | write fence only; it is never a wake signal or resume checkpoint |
 | `meta.turns` | the common frame store / framework append | bumped in the same CAS as a root-conversation append |
 | `meta.updated` | the common frame store / framework append | ratcheted to the newest persisted root-turn timestamp in the same CAS |
 
-**Completion ordering.** `agent:complete_task` / `agent:fail_task` do not finish the caller's pending Job inline. The completion envelope is parked and drained after the transition's timeline + state writes commit. Only then is the pending Job completed. This ordering is load-bearing: any caller awaiting its task observes the timeline and lattice writes for its task before its await returns. Without the deferral, the venue op would race the framework's timeline write and callers could see an empty `taskResults` immediately after unblocking.
+**Completion ordering.** `agent:complete-task` / `agent:fail-task` do not finish the caller's pending Job inline. The completion envelope is parked and drained after the transition's timeline + state writes commit. Only then is the pending Job completed. This ordering is load-bearing: any caller awaiting its task observes the timeline and lattice writes for its task before its await returns. Without the deferral, the venue op would race the framework's timeline write and callers could see an empty `taskResults` immediately after unblocking.
 
 The framework around the transition:
 
 1. Resolves or mints the session before invoking (§5.4)
 2. Reads `n/`, `c/`, `frames`, `pending` (and `t` if a task is focused) from the lattice
-3. Scopes the request context to `(agent, session, task?)` so writes and completion ops route correctly
-4. Provides the snapshots as transition input under their shorthand names
-5. Invokes the transition adapter
-6. On adapter return:
+3. Takes the cycle's input in one transaction: claims the session, and moves the head of `pending` (§5.5.2) and the task's next input into `frames[0].conversation` as user turns ([AGENT_LOOP.md §4.4](./AGENT_LOOP.md)). The chat it took, if any, becomes STARTED
+4. Scopes the request context to `(agent, session, task?)` so writes and completion ops route correctly
+5. Provides the snapshots as transition input under their shorthand names
+6. Invokes the transition adapter
+7. On adapter return:
    - Append adapter-emitted non-terminal `turns`, if any, to `frames[0].conversation`
    - If return value non-null → append one terminal turn to `frames[0].conversation`
-   - If chat picked: complete chat Job with return value (yield only if return is null — rare)
-   - If task picked: completed iff `agent:complete_task` / `agent:fail_task` was invoked during transition; otherwise yield, apply falloff (§6.3). (goaltree additionally completes a still-open task when its root frame completes — there, a reply is the answer; llmagent yields.)
+   - Complete the chat the cycle took, if any, with the return value, or with no `response` when it is null (§5.5.2)
+   - If task picked and neither resolved nor parked: parked if something will bring it back, otherwise settled with the return value (§6.3)
    - If message picked: no completion concept (return value already emitted to history)
-7. On adapter throw → if task/chat picked, Job → FAILED with *technical* error (distinct from `fail_task` semantic failure)
-8. Returns the sessionId in the response envelope (always)
+8. On adapter throw → the picked task's Job or the chat the cycle took → FAILED with *technical* error (distinct from `fail_task` semantic failure), unless the agent cannot continue (§6.3)
+9. Returns the sessionId in the response envelope (always)
 
-Stateless adapters (pure extraction, one-shot classifiers) just invoke `agent:complete_task(result)` and return. Their session becomes a one-turn audit record.
+Stateless adapters (pure extraction, one-shot classifiers) just invoke `agent:complete-task(result)` and return. Their session becomes a one-turn audit record.
 
-### 6.3 Yield, falloff, and timeouts
+### 6.3 Settling a task, and timeouts
 
-For task work, the framework distinguishes **completed** from **yield** by observing whether `agent:complete_task` / `agent:fail_task` was invoked during the transition. Queue state is authoritative — the Job is the system of record (set by the completion op), the task entry is the in-flight instruction (removed by the completion op). For chat work, completion is determined by the return value (non-null = complete; null = yield, rare).
+Queue state is authoritative — the Job is the system of record (set by the completion op), the task entry is the in-flight instruction (removed by the completion op). For chat work, the return value completes the chat the cycle took; null completes it with no `response`.
 
-**Yield semantics.** A task cycle that exits without invoking a completion op yields — the run loop exits the active wake, the agent returns to SLEEPING, and the task stays in the `tasks` Index for next time. Yield is the natural way to express:
+A task cycle that exits with its task neither completed nor failed leaves it open. The task stays in the `tasks` Index, parked, while something will bring it back — a wake time (`agent:park-task`, or one the transition returns), an open HITL ask from its cycle, or a tool call from its cycle still running past its time limit — and runs again when that arrives. With none of these, the return value is the task's result, and a cycle without one fails it ([AGENT_TASKS.md](./AGENT_TASKS.md) §5–§6, [AGENT_LOOP.md §4.6](./AGENT_LOOP.md)).
 
-- **Human input in progress** — a sessioned HITL request returned its durable
-  handle; the answer will append to this session and wake the task again (§3.4.2)
-- **Multi-step planning** — agent did internal work (lattice writes to `n` / `c` / `t`) but isn't ready to complete
-- **Agent had nothing useful to say** — transient false wake; loop exits cleanly
+**Iteration budget.** A task presented for a run's whole iteration budget without resolving is failed ([AGENT_LOOP.md §4.4](./AGENT_LOOP.md)).
 
-The picked task resumes on the next wake. The four wake paths (explicit trigger, work arrival, scheduled, async completion) are defined in [SCHEDULER.md §4](./SCHEDULER.md).
+**Technical errors.** If the transition adapter throws or returns an `error` (e.g., a request the provider refused, an LLM call past `llmTimeoutMs`), the framework catches it. If a task or chat was picked, the Job is failed with a *technical* error (distinct from `agent:fail-task`'s semantic failure), and the agent carries on with its other work. The difference is recorded in the Job's failure reason. When the agent cannot continue (its model setup is wrong, its provider cannot be reached, or the venue fails), the agent is suspended instead and the picked task stays queued for after resume ([AGENT_LOOP.md §3.4](./AGENT_LOOP.md)).
 
-**Per-task exponential backoff.** A task that yields without progress is not capped or auto-failed — it is rescheduled by the framework with growing delay between cycles. Any progress (completion, fail, message arrival, delegated op callback, explicit trigger) resets the backoff. Yielded tasks are dormant, not burning resources. See [SCHEDULER.md](./SCHEDULER.md) for wake semantics, field names, and backoff policy.
+**Layering: framework vs tool loop.** The framework only sees venue ops being invoked (`agent:complete-task`, `agent:fail-task`, `agent:park-task`) and the adapter's return value. There is no LLM-specific concept at the framework layer. Inside an LLM adapter, the tool loop wraps these as named tools the LLM can call:
 
-**Optional task timeout.** Tasks may carry an optional `timeout` field (caller-settable on `agent_request`); default very long (e.g. weeks) or absent. The framework checks `timeout` at pick time — if exceeded, the task is auto-failed with `timeout` error before invoking the agent. Callers that want a tight deadline set their own; the framework imposes none by default.
-
-**Technical errors.** If the transition adapter throws (e.g., LLM API failure, lattice error), the framework catches it. If a task or chat was picked, the Job is failed with a *technical* error (distinct from `agent:fail_task`'s semantic failure). The task entry is removed / chat slot cleared in both cases; the difference is recorded in the Job's failure reason.
-
-**Layering: framework vs tool loop.** The framework only sees venue ops being invoked (`agent:complete_task`, `agent:fail_task`) and the adapter's return value. There is no LLM-specific concept at the framework layer. Inside an LLM adapter, the tool loop wraps these as named tools the LLM can call:
-
-- `complete_task` tool → invokes `agent:complete_task`, exits loop with the result as the return value
-- `fail_task` tool → invokes `agent:fail_task`, exits loop
+- `complete_task` tool → invokes `agent:complete-task`, exits loop with the result as the return value
+- `fail_task` tool → invokes `agent:fail-task`, exits loop
+- `park_task` tool → invokes `agent:park-task`; the loop carries on
 - Plain text response from the LLM (no tool calls) → exits loop with the text as the return value
 
-For chat, plain text response naturally completes the chat Job (return value flows through). For tasks, plain text response does *not* complete the task — the LLM must call `complete_task` explicitly. This matches the explicit-completion model for tool-using LLMs.
-
-There is no separate `yield` tool. Yield is what happens when the loop exits for a task without `complete_task` having been called — purely emergent from tool-loop behaviour, not a framework primitive.
+A plain text response completes a chat Job, and completes a task the LLM neither resolved nor parked.
 
 Non-LLM adapters call the venue ops directly with no tool-loop layer.
 
@@ -637,7 +651,7 @@ The chat adapter is parameterised by two flags:
 
 Flat + persistent is a chatbot. Framed + persistent is a durable goal history across completed attempts. Framed + non-persistent is a one-shot decomposition.
 
-Harness tools (`more_tools`, `context_load`, `context_unload`, `compact`, typed `complete`/`fail`) use the same shared registry and conversation representation. Only hierarchy controls such as `subgoal` depend on multi-frame mode.
+Harness tools are defined in [AGENT_LOOP.md §3.6](./AGENT_LOOP.md#36-tool-palette). Both runtimes share their implementation and the conversation representation; only goaltree's frame controls (`subgoal`, `complete`, `fail`) depend on multi-frame mode.
 
 ---
 
@@ -686,7 +700,9 @@ Semantics and caveats:
 
 - **In-flight chat** — an awaiting `agent:chat` Job on the session is failed
   (`"Session deleted"`) and its slot cleared, so the blocked caller gets a
-  clean error rather than waiting forever.
+  clean error rather than waiting forever. The session goes first, so a chat
+  arriving during the deletion is either failed with the others or finds no
+  session and fails as an unknown one.
 - **Audit** — the deleteSession job itself persists only
   `{agentId, sessionId}`: a content-free record that a deletion happened.
 - **Operator kill-switch** — enabled by default; disable venue-wide with
@@ -747,7 +763,6 @@ A single session with multiple counterparties (e.g. a group chat). If supported,
 5. **Storage limits** — per-session size cap? Per-agent total cap? Auto-archive on overflow?
 6. **Session merge/fork** — should sessions support merge (combine two contexts) or fork (branch from a point)?
 7. **Visibility** — can other users/agents read sessions (with caps)? Default: only the agent and its owner.
-8. **Scheduling** — can a session declare "wake me at time T" without an external request? See [SCHEDULER.md](./SCHEDULER.md).
 
 ---
 
@@ -757,4 +772,4 @@ A single session with multiple counterparties (e.g. a group chat). If supported,
 - [GOAL_TREE.md](./GOAL_TREE.md) — frame stack abstraction; session-scoped when `persistent: true`
 - [LATTICE_CONTEXT.md](./LATTICE_CONTEXT.md) — context loading
 - [PROJECT.md](./PROJECT.md) — long-lived work state that sessions reference but don't own
-- [SCHEDULER.md](./SCHEDULER.md) — wake semantics and backoff policy
+- [GRID_SCHEDULER.md](./GRID_SCHEDULER.md) — scheduled events, including a session's or task's `wakeTime` (§8)

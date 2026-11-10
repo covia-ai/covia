@@ -62,14 +62,14 @@ The implementation is further along than #297/#296 suggest:
 | Key enrolment surface (#296) | `UserAdapter` (`user:create` keys, add/revoke ops), `Engine` creation path | Venue-authorised, audited (`addedBy`/`revokedBy`) |
 | Session minting | `LoginProviders` OAuth callback | Inline `JWT.signPublic` — no session id, no revocation, no amr/auth_time |
 | OAuth authorization server | `OAuthProvider` | Existing code/PKCE, token, refresh and revocation endpoints; scopes recorded for audit, not yet enforced as capability restrictions |
-| Audience policy | `Auth` config + `requireAudience` | `verify`/`require`, `acceptedAudiences`, did:web alias |
+| Audience policy | `Auth` config + `audienceProblem` | `requireAud` (default on), `acceptedAudiences`, did:web alias |
 | Public capability scope | `auth.public.*` (COG-10) | Unchanged by this design |
 
 **Gaps this design closes:** per-method enable/disable and policy
 config; a common method result (identity, evidence and typed method details);
 an optional central session service with revocation; provider
 account-linking/migration rules; route-class assurance enforcement. Basic
-issuer/subject binding is now implemented (�2.3).
+issuer/subject binding is now implemented (§2.3).
 
 ### 2.1 Consolidation review (2026-10-22)
 
@@ -91,7 +91,7 @@ from admission and capabilities. Challenge the following before extending them:
 | `Proof` contains only a timestamp and properties; the verifier takes only a method id and method-owned input. | Request binding/replay protection is currently a trusted-verifier obligation, not an enforced core mechanism. Before copying proof into execution contexts, demonstrate a concrete verifier binding it to its intended request/action. An age check alone does not prove that binding. Do not add guessed generic nonce/request fields. |
 | Policies accept arbitrary exact property names, while the target design promises validation of attainable evidence and central assurance caps. `AuthenticationMethods` declares verifier functions only. | Those promises are not implemented. Agree the meaning and trusted issuer of the first properties using a real method. Do not grow a declaration registry or assurance hierarchy merely to support speculative configuration validation. |
 | `RequestContext` already wraps authority and has explicit propagation into nested operations, jobs and agents. `CapabilityGate` already evaluates operation-based conditions on grants. | Trace the first protected action through these existing paths before adding another propagation/enforcement system. Capability caveats only constrain the grants carrying them, so they cannot automatically substitute for a venue-wide evidence requirement. Decide where the mandatory action condition belongs and which evidence survives each transition. |
-| The adapter revision check rejects verification across any adapter change, but returns no durable verifier/configuration provenance in the result. | This provides conservative in-flight invalidation only. It neither revokes returned results nor establishes session continuity across replacement. Keep that limit explicit; do not add per-method epochs or session migration machinery before a concrete consumer requires them. |
+| A verification uses the binding it resolved when it started, even if the adapter changes before it completes, and its result carries no durable verifier/configuration provenance. | A result is valid as of the verification's start, as if the request had arrived a moment earlier. Nothing revokes returned results or establishes session continuity across replacement. Keep that limit explicit; do not add per-method epochs or session migration machinery before a concrete consumer requires them. |
 | `toData()` gives results and requirements immutable Convex representations, including a projection of request proof. | Representation is not persistence policy or portable trust. Define authoritative ownership, allowed reads/writes, and what may be persisted for each actual record. Never restore request proof as fresh evidence from a stored projection. No new lattice region is needed for this review. |
 
 The `standard`/`strong`/`hard` profiles, `auth.policy` configuration and
@@ -142,7 +142,7 @@ fix. Reusable explicit-clock/skew `exp`/`nbf` validation is requested in
 [Convex #766](https://github.com/Convex-Dev/convex/issues/766), to replace existing
 local duplication rather than grow a new validator. External provider/browser
 login was still incomplete at that audit; the subsequent hardening is recorded
-in �2.3. Managed-session revocation and evidence-policy integration remain
+in §2.3. Managed-session revocation and evidence-policy integration remain
 unimplemented.
 
 ### 2.3 External login consolidation (#298, 2026-10-22)
@@ -287,7 +287,7 @@ earlier evidence, even when rebinding the same identity.
 
 The compatibility identity fields remain `AString`. Method-owned immutable
 `AMap<AString, ACell>` payloads carry provenance; the core declares no built-in
-method ids, protocol fields or Java payload subclasses. After �2.3, provider
+method ids, protocol fields or Java payload subclasses. After §2.3, provider
 `iss` and `sub` are verified and must match an existing issuer/subject account
 binding; email is never a lookup key.
 
@@ -386,7 +386,8 @@ and [OPERATIONS.md](OPERATIONS.md):
   duplicate names within that adapter fail validation. Reconfiguration
   validates the complete proposed bindings and contributions before publication;
   rejection leaves the previous configuration intact. Withdrawing a method takes effect
-  at the authentication boundary even for an in-flight ceremony completion.
+  for every verification that starts after it, including the completion of a
+  ceremony begun earlier.
   Policy declarations must be validated against available methods before
   serving requests; unknown methods and unattainable requirements fail closed.
 
@@ -402,10 +403,10 @@ is checked eagerly; `Engine.launch` resolves references after the host assembly
 hook and before recovery/workers/listeners. A manually assembled engine's host
 can call `VenueAuthenticator.validateMethods()` once installation is complete.
 Live replacement validates references before publishing the new adapter.
-Verification runs outside the engine monitor and rejects completion if the
-existing adapter revision changed, including disable/re-enable and successful
-reconfiguration. This conservative check also rejects a verification overlapping
-an unrelated adapter change; retry against the current configuration.
+Each verification resolves its binding under the engine monitor when it starts,
+then runs the verifier outside it. A verification under way when an adapter is
+disabled, replaced or reconfigured completes as it began; every later one uses
+the current configuration.
 
 The built-in `auth` adapter supplies `keyJwt`, `ucanBearer` and `providerToken`,
 delegating to the existing verifiers and Convex primitives. It is installed
@@ -632,6 +633,7 @@ remain separate from both login and the venue's authorization-server grants.
 | `email` | Magic link / OTP | Verified address on the user record | Address control; no MFA or phishing resistance inferred | Optional continuity | #299 |
 | `webauthn` | Passkey assertion | Registered credential id | Derived from verified flags and attestation; hardware never presumed | Optional continuity | #300 |
 | `password` | Password (+ recovery) | Stored verifier | Password verification; no MFA inferred | Optional continuity | #301 |
+| adapter name (`telegram`, `slack`, `whatsapp`, `discord`) | Provider-delivered message (`signed-callback`, `provider-session`) | Binding identification (§5.3) | The provider's sender identity; no human authentication time | No — per message | — |
 
 Named-user and `did:key` self-issued login share the `key` method
 deliberately: same credential class, same signature verification, same
@@ -659,7 +661,11 @@ Two notes:
    Enforcing `iss == sub` would conflate JWT claim semantics with
    Covia's separate subject-admission policy. (COG-3 §5's
    "MUST equal `sub` when present" wording is stricter than enforced
-   behaviour — a docs follow-up may reconcile them.)
+   behaviour — a docs follow-up may reconcile them.) One subject is
+   refused whoever signs for it: the venue's public principal
+   (`<venueDID>:public`) is a shared authorisation namespace, not an
+   identity, so no self-issued or venue-signed credential authenticates
+   as it.
 2. **Enrolment authorisation** (decided): add/revoke ops require the
    venue operator, or the user themselves meeting `policy.enrolment`
    via step-up (§9) — a live session alone is never enough to change
@@ -686,14 +692,17 @@ who is acting; admission and capabilities separately authorize actions.
 Issue the bearer with the existing client helper:
 
 ```java
-VenueAuth.namedKeyPair(installKey, installDID + ":u:alice:g:worker", targetDID, 300).mintToken();
+VenueAuth.namedKeyPair(installKey, installDID + ":u:alice:g:worker", 300).mintToken(targetDID);
 ```
 
 The signing key must match the exact base DID. Existing signature, audience,
 expiry and not-before checks still apply. As for a bare `did:key`, the
 `iss` claim does not confer authority. No subject register is needed for
-authentication at the receiving venue. This does not extend UCAN issuer
-resolution or grant an installation authority over descendant resources.
+authentication at the receiving venue. The same rule (`VenueAuthenticator.signsInAs`)
+makes the installation's `did:key` the root of grants over the nested
+identities' resources ([UCAN.md](./UCAN.md) §5.6, "Roots"): it can sign grants
+over them, and reaches them only under such a grant. Signing in confers no
+authority over them.
 
 `VenueAuthenticator.authenticatedIdentity(context)` returns the installation's
 `did:key`; `authenticatedUser(context)` and `AuthResult.userDID()` retain the
@@ -702,8 +711,9 @@ are compatibility APIs and do not imply admission as a local user. Relay
 handlers likewise receive the complete subject for their own authorization.
 Installation membership and grants do not transfer to descendants or siblings.
 
-For agent-shaped subjects, `AuthMiddleware.callerContext` binds both actor
-and namespace to the full subject and starts with an empty capability scope.
+For agent-shaped subjects, `AuthMiddleware.callerContext` (through
+`Engine.context`) binds both actor and namespace to the full subject and starts
+with an empty capability scope.
 It does not infer local agent execution or owner access from the name, even
 for ownership-only job checks. Verified transport grants can authorize the
 exact agent audience for specific resources; a sibling cannot reuse them.
@@ -728,13 +738,29 @@ Call `v/ops/auth/identity-token` on the signing venue:
 
 The operation derives `sub` and `iss` from the exact caller, including an
 agent's full nested identity. It accepts no subject, claims, capabilities or
-signing key from input. The caller must be the venue's signing `did:key` or a
-valid identity nested below it. An unrelated external key identity, a
-`did:web` identity, and anonymous/public callers are refused; an embedder
-holding a different installation key uses `VenueAuth.namedKeyPair` instead.
+signing key from input, so no caller can mint another identity's token, a
+root included. An agent's token is saved in its owner's secret store (below),
+where the owner, which controls its agents, can use or extract it. Code running
+in the venue gets a user's token by invoking the operation as that user
+(`Engine.context`).
 
-It requires `invoke` on `v/ops/auth/identity-token` and `secret/write` on
-`s/RELAY_TOKEN`. Agents write into their owner's secret store under their
+The token is signed by the caller's root: the venue's key for the venue's
+signing `did:key` and the identities nested below it, or,
+for a `did:key` that holds its own key in its own keyring
+([HELD_KEYS.md](./HELD_KEYS.md)), that held key, for the `did:key` itself and
+the identities nested below it. Minting a token for oneself is not a use of
+the root's key, so it needs no `key/…` ability. Any other external key
+identity, a `did:web` identity, and anonymous/public callers are refused; an
+embedder holding a key outside the venue uses `VenueAuth.namedKeyPair`
+instead.
+The caller must also be acting under its own authority or as a sub-principal.
+A restricted scope on a principal acting as itself bounds what the request may
+do, and a bearer for that identity would carry it beyond the bound, so the
+operation refuses that shape. A sub-principal (an agent, a delegate) mints only
+its own identity, which the venue bounds again wherever it is used.
+
+It requires `secret/write` on `s/RELAY_TOKEN`. A generic invocation also
+requires `invoke` on the operation reference; a bound identity tool does not. Agents write into their owner's secret store under their
 existing capability scope. The bearer is encrypted there; the result contains
 only `{secret, sub, aud, exp}`, never the token or private key. An agent can
 use `s/RELAY_TOKEN` as a model relay `apiKey`, subject to its separate
@@ -742,11 +768,130 @@ use `s/RELAY_TOKEN` as a model relay `apiKey`, subject to its separate
 the raw bearer can use `v/ops/secret/extract` under that operation's stricter
 rules.
 
-The audience is required. Lifetime defaults to 300 seconds and must be an
-integer from 1 to 3600. Refresh by invoking again with `overwrite:true` before
-expiry; there is no automatic refresh. The receiver still applies its own
-audience, lifetime and admission policies. The token conveys identity only:
+The audience is required. The caller chooses the lifetime, in whole seconds
+(default 300); the receiver applies its own limit when the token is presented
+(`auth.maxTokenLifetime` on a venue). Refresh by invoking again with
+`overwrite:true` before expiry; there is no automatic refresh. The receiver
+also applies its own audience and admission policies. The token conveys identity only:
 it contains no UCAN grants or proofs and adds no permissions.
+
+### 5.3 Channel methods (messaging bindings)
+
+A messaging binding — a Telegram or Discord bot, a Slack app installation, a
+WhatsApp number — is the authentication method for the messages it receives
+(COG-3 §7). The provider authenticates the sender; the binding verifies
+delivery, identifies the principal and produces an `AuthResult` like any other
+method. The request then runs as that principal, exactly as an HTTP request runs
+as its credential's user.
+
+**The result.**
+
+| Field | Value |
+|-------|-------|
+| `userDID` | The identified principal: the binding's principal for a listed sender, the venue public principal for any other sender on an open binding |
+| `authenticatedIdentity` | `<method>:<sender id>`, the id qualified as `<space>/<id>` where the provider scopes sender ids to a space (Slack: `slack:T0123/U0456`) |
+| `credential.type` | `signed-callback` (WhatsApp, the Slack Events API) or `provider-session` (Telegram polling, the Discord gateway, Slack Socket Mode) |
+| `authentication.method` | The adapter's name |
+| `authentication.binding` | The binding's resource, `<ownerDID>/<adapter>/<bot>` |
+| `authentication.authenticatedAt` | Absent: a message's time is when it was sent, not when its sender authenticated (§3) |
+| `authentication.properties` | Empty |
+| `authentication.details` | The channel (COG-3 §7): `sender {id, handle?, name?}`, `chat {id, kind, name?}` when sent in a chat, `thread?`, `space {id, name?}?`, `message?`, and provider extras under the adapter's name |
+| `proof`, `sessionId` | Absent |
+
+An open binding's other senders authenticate as the venue public principal. The
+identity invariant (§1.1) holds for that principal, a stable DID, while
+`authenticatedIdentity` keeps each sender distinct. Identification grants
+nothing: capabilities and agent admission decide what the principal may do.
+
+**Identification is shared.** `ChannelAuthentication.authenticate` in
+`covia.adapter.messaging` builds the result for every messaging adapter from
+the binding, its principal, whether it lists the sender and the channel, and
+refuses a sender the binding neither lists nor is open to (`NOT_ADMITTED`);
+`Engine.channelContext` refuses the public principal when the venue serves no
+anonymous callers (`PUBLIC_ACCESS_OFF`). `ConversationRouter.context(channel)`
+is the one call adapters make. An event with no sender, such as a Telegram poll
+update, is anonymous with no record on an open binding and refused otherwise.
+Each adapter does only what is provider-specific:
+
+1. verify delivery — the callback signature and replay window, or its own
+   authenticated connection — and that the message is for this binding's
+   account;
+2. build the `Channel` value (method, credential type and the standard details)
+   from the verified payload, ids as strings, never from message text;
+3. answer whether its binding lists the sender (`lists`), by the provider's
+   stable id or, where the provider restricts and reassigns handles, by handle.
+
+The binding supplies its principal (the owner, or the agent that created it)
+and whether it is open. Restricting where a binding serves, such as Slack's
+`allowChannels`, is the adapter's admission of a chat, not identification.
+
+**The request context.** `Engine.channelContext(owner, AuthResult)` is
+`Engine.context(owner, userDID)` with the result's data projection attached by
+`RequestContext.withAuthentication`. Only that seam sets it; an HTTP request's
+result stays on its HTTP context. The projection is attribution, not evidence: assurance policy
+never reads it from a context (§3.1), and contexts the venue starts for an
+agent's own work (`ofAgent`, `Engine.context`, the scheduler's replay) carry
+none, so nothing is inherited through jobs or agent delegation. A bot's own work
+for its agent — storing media, its media and reply operations — runs in such a
+context.
+
+**Recorded with the turn.** The agent's ingress (`agent:chat`, `agent:message`,
+`agent:request`) writes the request's `caller` and its `authentication` — the
+projection without `userDID`, which is the caller — onto the session envelope
+and the task record, from the request context only; a message to a task goes
+onto its continuation's envelope. Message content is never read for or
+rewritten with provenance. Both runtimes build input turns with
+`AgentAdapter.cycleInputTurns`, which copies both fields onto each user turn,
+and the task wire shape carries them, so a turn keeps its provenance for as long as
+history keeps the turn (COG-20 §4). A task's turn takes the record of the
+input it shows: the task's for its original input, its continuation's for each
+later one, so a follow-up is attributed to its sender rather than the
+requester; a cycle without a session is handed that record by the run loop
+(`inputSource`). A tracked tool call's late outcome is recorded as from the
+principal that made the call: its job's `caller`, normally the agent itself.
+
+**Rendered from the record.** `ContextAssembler` renders a `From` label element
+(`Labels.Kind.FROM`, AGENT_CONTEXT.md §1.2) in the agent's dialect:
+
+| Dialect | Owner over the API | Open-bot sender |
+|---------|-------------------|-----------------|
+| `bracket` | `[From: owner did:key:z6MkAlice]` | `[From: anonymous did:web:venue.example:public — telegram helper: sender 5551 @sam, direct chat 5551]` |
+| `xml` | `<from principal="did:key:z6MkAlice" relationship="owner"/>` | `<from principal="…:public" relationship="anonymous" method="telegram" binding="helper" sender="5551" handle="sam" chat="5551" chat-kind="direct"/>` |
+
+- **When.** Before a user turn whose key — caller, method, binding,
+  authenticated identity, chat id, thread, space id — differs from the last key
+  rendered, starting from the agent's own principal. Per-message fields
+  (`message`, adapter extras) are never part of the key. A user turn without a
+  recorded caller renders no element and leaves the key unchanged, as does a
+  late tool outcome shown as a tool result (AGENT_CONTEXT.md §5.7).
+- **What.** The relationship is computed from DIDs alone: the agent's own DID,
+  its owner's and the venue's. No venue state is consulted, so registering or
+  deleting a user never changes an earlier element. The channel part shows the
+  method, the binding's name, ids, the chat kind, a thread and a space id.
+  `name` fields are never rendered (COG-3 §7). Ids and handles render only when
+  they match a conservative identifier pattern; xml values are escaped.
+- **Cache.** The element is a pure function of the stored turns and the three
+  DIDs, and history is append-only within a frame, so each cycle's rendered
+  conversation extends the previous cycle's unchanged. Changing the element's
+  format rebuilds every session's prefix once.
+- **Tasks.** The outstanding-task message renders its requester through the same
+  element.
+
+**Released wires.** A relay binding identifies no principal; it forwards
+messages to the principals linked to it, and its wire projects the details onto
+its released fields (`channel` = method, `from` = `sender.id`, `chat` =
+`chat.id`, `thread`). A binding's media and reply hooks (`mediaOperation`,
+`replyOperation`) receive the record as `authentication`. A webhook message
+accepted before its binding recorded the channel with it is failed once rather
+than run unauthenticated (`WebhookBot.UNVERIFIED`).
+
+**Tests.** A forged record in message content stays content; listed, open,
+closed and public-access-off senders identify as specified for every adapter;
+envelope, task record and history turns keep `caller` and `authentication` in
+both runtimes; rendering a session twice, with a turn added in between, leaves
+the earlier output unchanged, also across a user's registration; `name` fields
+and malformed handles never render; the relay wire is unchanged; an agent's own
+contexts carry no `authentication`.
 
 ## 6. Configuration
 
@@ -763,7 +908,7 @@ method settings and validation. Reuse `configure`, enable/disable and module
 load/unload rather than adding a second management surface.
 
 The central `auth` block owns method bindings, shared policy and session settings.
-Existing `public`, `tokenExpiry`, `audience` and `acceptedAudiences` keep their current
+Existing `public`, `tokenExpiry`, `requireAud` and `acceptedAudiences` keep their current
 meaning during migration. Policy may refer to method ids without owning their
 implementation configuration.
 
@@ -944,6 +1089,16 @@ provider. It never binds a provider identity to the venue user, is stored in
 the user's secret store, and is consumed only by `http:*`
 (`bearerSecret: "oauth/<provider>"`). The two share OAuth plumbing and
 nothing else.
+
+A connection binds to the venue user who both starts and completes it.
+`oauth:connect` binds its one-time state to the caller. A connect starts
+from an API call, so no browser exists to bind to, and the venue never
+learns whose browser approves at the provider: approval stores nothing and
+yields a one-time completion code for that browser. `oauth:complete` with
+the code stores the grant only when the caller is the user who started the
+connect; any other caller is refused and the code is spent. Whoever holds
+the code can therefore finish the connect only as its starter. The flow's
+steps are in CONFIG.md "Connected accounts".
 
 ## 9. Assurance policy enforcement
 

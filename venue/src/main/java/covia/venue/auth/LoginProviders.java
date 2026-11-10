@@ -36,6 +36,9 @@ import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.api.Fields;
 import covia.exception.AuthException;
+import covia.exception.ConfigurationException;
+import covia.exception.ConflictException;
+import covia.exception.NotSupportedException;
 import covia.venue.Auth;
 import covia.venue.Config;
 import covia.venue.Engine;
@@ -81,7 +84,7 @@ public class LoginProviders {
 	private record Exchange(AString userDID, UserIdentity identity, String redirect, String challenge, long expiresAt) {}
 
 	public LoginProviders(Engine engine, AMap<AString, ACell> authConfig) {
-		this(engine, authConfig, configuredProviders(engine, authConfig), System::currentTimeMillis);
+		this(engine, authConfig, configuredProviders(engine, authConfig), () -> engine.currentTimestamp().longValue());
 	}
 
 	// Explicit clock and provider endpoints allow real HTTP contract tests without external accounts.
@@ -93,7 +96,7 @@ public class LoginProviders {
 		URI base = URI.create(engine.config().getBaseUrl());
 		secureCookie = "https".equals(base.getScheme());
 		if (!providers.isEmpty() && !secureCookie && !("http".equals(base.getScheme()) && isLoopback(base.getHost()))) {
-			throw new IllegalArgumentException(HTTPS_REQUIRED);
+			throw new ConfigurationException(HTTPS_REQUIRED);
 		}
 		cookieName = secureCookie ? "__Host-covia-login" : "covia-login";
 	}
@@ -121,7 +124,7 @@ public class LoginProviders {
 	String resolveClientSecret(OAuthConfig provider) {
 		if (!Engine.isSecretRef(provider.clientSecret)) return provider.clientSecret;
 		String secret = engine.resolveSecret(provider.clientSecret, engine.venueContext());
-		if (secret == null) throw new IllegalStateException("auth.oauth." + provider.name
+		if (secret == null) throw new ConfigurationException("auth.oauth." + provider.name
 				+ ".clientSecret references " + provider.clientSecret + ", which is not set in the venue's secret store");
 		return secret;
 	}
@@ -234,7 +237,7 @@ public class LoginProviders {
 				fail(ctx, INVALID_EXCHANGE); return;
 			}
 			issueCredential(ctx, exchange.userDID(), exchange.identity().email());
-		} catch (IllegalArgumentException | IllegalStateException | AuthException e) { fail(ctx, INVALID_EXCHANGE); }
+		} catch (IllegalArgumentException | IllegalStateException | AuthException | ConflictException e) { fail(ctx, INVALID_EXCHANGE); }
 	}
 
 	/** Current credential delivery seam. Managed-session issuance and assurance remain unimplemented. */
@@ -273,28 +276,28 @@ public class LoginProviders {
 				.header("Content-Type", "application/x-www-form-urlencoded").header("Accept", "application/json")
 				.POST(HttpRequest.BodyPublishers.ofString(body)).timeout(Duration.ofSeconds(30)).build();
 		HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
-		if (response.statusCode() != 200) throw new IllegalArgumentException(INVALID_LOGIN);
+		if (response.statusCode() != 200) throw new AuthException(INVALID_LOGIN);
 		return (Map<String, Object>) JSON.jvm(response.body());
 	}
 
 	@SuppressWarnings("unchecked")
 	private UserIdentity fetchUserInfo(OAuthConfig provider, String token) throws Exception {
-		if (token == null) throw new IllegalArgumentException(INVALID_LOGIN);
+		if (token == null) throw new AuthException(INVALID_LOGIN);
 		HttpRequest request = HttpRequest.newBuilder(URI.create(provider.userInfoUrl))
 				.header("Authorization", "Bearer " + token).header("Accept", "application/json")
 				.GET().timeout(Duration.ofSeconds(30)).build();
 		HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
-		if (response.statusCode() != 200) throw new IllegalArgumentException(INVALID_LOGIN);
+		if (response.statusCode() != 200) throw new AuthException(INVALID_LOGIN);
 		Map<String, Object> data = (Map<String, Object>) JSON.jvm(response.body());
 		// GitHub's numeric id is stable. Its /user email has no verified flag, so do not trust it as verified metadata.
 		Object id = data.get("id");
-		if (!(id instanceof Number) || ((Number) id).longValue() <= 0) throw new IllegalArgumentException(INVALID_LOGIN);
+		if (!(id instanceof Number) || ((Number) id).longValue() <= 0) throw new AuthException(INVALID_LOGIN);
 		return new UserIdentity(provider.issuer, id.toString(), null, string(data.get("name")));
 	}
 
 	record UserIdentity(String issuer, String sub, String email, String name) {
 		UserIdentity {
-			if (issuer == null || issuer.isBlank() || sub == null || sub.isBlank()) throw new IllegalArgumentException(INVALID_LOGIN);
+			if (issuer == null || issuer.isBlank() || sub == null || sub.isBlank()) throw new AuthException(INVALID_LOGIN);
 		}
 		AMap<AString, ACell> binding() { return Maps.of(ISS, issuer, SUB, sub); }
 		AString toUserId() { return Strings.create("external-" + Vectors.of(issuer, sub).getHash().toHexString()); }
@@ -303,39 +306,45 @@ public class LoginProviders {
 	/** Trusted provisioning; never selects or links a legacy account using email. */
 	AString provisionIdentity(String provider, UserIdentity identity) {
 		Auth auth = engine.getAuth();
-		synchronized (auth) {
-			AString existing = findIdentity(auth, identity.issuer(), identity.sub());
+		// One transaction, so two first logins for one identity cannot both pass the checks.
+		return engine.getVenueState().transact(draft -> {
+			AMap<AString, AMap<AString, ACell>> users = draft.managedUsers().getUsers();
+			AString existing = findIdentity(users, identity.issuer(), identity.sub());
 			AString id = identity.toUserId();
 			if (existing != null) {
-				for (var entry : auth.getUsers().entrySet()) {
+				for (var entry : users.entrySet()) {
 					if (matches(entry.getValue(), identity.issuer(), identity.sub())) { id = entry.getKey(); break; }
 				}
 			} else {
-				if (auth.getUser(id) != null) throw new IllegalStateException(IDENTITY_CONFLICT);
-				for (var record : auth.getUsers().values()) {
+				if (users.get(id) != null) throw new ConflictException(IDENTITY_CONFLICT);
+				for (var record : users.values()) {
 					if (record.get(EXTERNAL_IDENTITY) != null) continue;
 					if ((Strings.create(provider).equals(record.get(Fields.PROVIDER))
 							&& Strings.create(identity.sub()).equals(record.get(Fields.PROVIDER_SUB)))
 							|| (identity.email() != null && Strings.create(identity.email()).equals(record.get(Fields.EMAIL)))) {
-						throw new IllegalStateException(LEGACY_IDENTITY);
+						throw new NotSupportedException(LEGACY_IDENTITY);
 					}
 				}
 			}
 			AMap<AString, ACell> profile = Maps.of(EXTERNAL_IDENTITY,
 					identity.binding().assoc(Fields.PROVIDER, Strings.create(provider)),
 					Fields.EMAIL, identity.email(), Fields.NAME, identity.name());
-			return RT.ensureString(auth.provisionLogin(id, profile).get(Fields.DID));
-		}
+			return RT.ensureString(auth.provisionLogin(draft, id, profile).get(Fields.DID));
+		});
 	}
 
 	/** Lookup only: direct bearer presentation cannot provision or link an account. */
 	public static AString findIdentity(Auth auth, String issuer, String subject) {
+		return findIdentity(auth.getUsers(), issuer, subject);
+	}
+
+	private static AString findIdentity(AMap<AString, AMap<AString, ACell>> users, String issuer, String subject) {
 		if (issuer == null || subject == null) return null;
 		AString found = null;
-		for (var record : auth.getUsers().values()) {
+		for (var record : users.values()) {
 			if (!matches(record, issuer, subject)) continue;
 			AString did = RT.ensureString(record.get(Fields.DID));
-			if (did == null || (found != null && !found.equals(did))) throw new IllegalStateException(IDENTITY_CONFLICT);
+			if (did == null || (found != null && !found.equals(did))) throw new ConflictException(IDENTITY_CONFLICT);
 			found = did;
 		}
 		return found;
@@ -368,18 +377,18 @@ public class LoginProviders {
 
 	private static Set<String> redirectUris(AMap<AString, ACell> auth) {
 		if (auth == null) return Set.of();
-		if (auth.containsKey(Config.LOGIN_REDIRECT_ORIGINS)) throw new IllegalArgumentException(LEGACY_REDIRECT_CONFIG);
+		if (auth.containsKey(Config.LOGIN_REDIRECT_ORIGINS)) throw new ConfigurationException(LEGACY_REDIRECT_CONFIG);
 		AVector<ACell> configured = RT.ensureVector(auth.get(Config.LOGIN_REDIRECT_URIS));
 		Set<String> result = new HashSet<>();
 		if (configured != null) for (ACell cell : configured) {
-			if (!(cell instanceof AString value)) throw new IllegalArgumentException(INVALID_REDIRECT_CONFIG);
+			if (!(cell instanceof AString value)) throw new ConfigurationException(INVALID_REDIRECT_CONFIG);
 			String text = value.toString();
 			URI uri;
-			try { uri = URI.create(text); } catch (IllegalArgumentException e) { throw new IllegalArgumentException(INVALID_REDIRECT_CONFIG); }
+			try { uri = URI.create(text); } catch (IllegalArgumentException e) { throw new ConfigurationException(INVALID_REDIRECT_CONFIG, e); }
 			if (uri.getHost() == null || uri.getRawUserInfo() != null || uri.getRawQuery() != null || uri.getRawFragment() != null
 					|| !("https".equals(uri.getScheme()) || ("http".equals(uri.getScheme())
 					&& isLoopback(uri.getHost())))) {
-				throw new IllegalArgumentException(INVALID_REDIRECT_CONFIG);
+				throw new ConfigurationException(INVALID_REDIRECT_CONFIG);
 			}
 			result.add(text);
 		}

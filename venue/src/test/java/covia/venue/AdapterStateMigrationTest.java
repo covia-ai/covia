@@ -17,6 +17,7 @@ import convex.core.data.AString;
 import convex.core.data.Index;
 import convex.core.data.Keyword;
 import convex.core.data.Maps;
+import convex.core.data.Path;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
@@ -24,14 +25,23 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.adapter.AAdapter;
 import covia.lattice.Covia;
-import covia.lattice.WorkspaceRoot;
+import covia.lattice.CoviaPath;
+import covia.venue.migration.MigrationStep;
 
 /** Adapters migrate their own state schema when they register (#621). */
 class AdapterStateMigrationTest {
+	/** The venue's secret store keys: these venues keep no secret a migration step carries over. */
+	private static final SecretStore.Keys NO_SECRETS = SecretStore.keys(AKeyPair.generate());
 	private static final String NAME = "versioned";
 	private static final AString SCHEMA = Strings.create("schema");
 
-	/** State at version 0 is a vector; 1 wraps it as {items}; 2 adds {schema: 2}. */
+	private static final String REFUSED = "The test adapter's state has no version 3";
+
+	/**
+	 * State at version 0 is a vector; 1 wraps it as {items}; 2 adds {schema: 2};
+	 * the step to 3 refuses every state. Built with its first {@code version}
+	 * steps.
+	 */
 	private static final class Versioned extends AAdapter {
 		private final String name;
 		private final long version;
@@ -47,9 +57,35 @@ class AdapterStateMigrationTest {
 		@Override public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
 			return CompletableFuture.completedFuture(input);
 		}
-		@Override public long stateVersion() { return version; }
-		@Override public ACell migrateState(long from, ACell state) {
+		@Override public List<MigrationStep> stateSteps() {
+			List<MigrationStep> all = List.of(this::wrapItems, this::addSchema,
+				state -> { throw new IllegalStateException(REFUSED); });
+			return all.subList(0, (int) version);
+		}
+		private ACell wrapItems(ACell state) {
 			steps.incrementAndGet();
+			return Maps.of("items", state);
+		}
+		private ACell addSchema(ACell state) {
+			steps.incrementAndGet();
+			return RT.ensureMap(state).assoc(SCHEMA, CVMLong.create(2));
+		}
+	}
+
+	/** The same rules through the released form, {@code stateVersion} with {@code migrateState}. */
+	private static final class ReleasedHook extends AAdapter {
+		private final long version;
+
+		ReleasedHook(long version) { this.version = version; }
+
+		@Override public String getName() { return NAME; }
+		@Override public String getDescription() { return "Adapter with the released state hook, for tests"; }
+		@Override public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
+			return CompletableFuture.completedFuture(input);
+		}
+		@Override public long stateVersion() { return version; }
+		@SuppressWarnings("removal")
+		@Override public ACell migrateState(long from, ACell state) {
 			return switch ((int) from) {
 				case 0 -> Maps.of("items", state);
 				case 1 -> RT.ensureMap(state).assoc(SCHEMA, CVMLong.create(2));
@@ -60,22 +96,22 @@ class AdapterStateMigrationTest {
 
 	private static Engine prepared(AMap<AString, ACell> config) throws IOException {
 		AKeyPair key = AKeyPair.generate();
-		return new Engine(config, CoviaApplication.create(key), key).prepare();
+		return TestEngine.application().mount(key, config).prepare();
 	}
 
 	@Test void legacyStateMigratesOnceInOrderWithItsVersion() throws Exception {
 		Engine engine = prepared(Maps.empty());
 		try {
 			VenueState venue = engine.getVenueState();
-			ACell[] legacyPath = WorkspaceRoot.parseStringPath("w/adapters/" + NAME);
-			venue.users().get(engine.getDIDString()).writeInternalPath(legacyPath, Vectors.of("a", "b"));
+			Path legacyPath =CoviaPath.parse("w/adapters/" + NAME);
+			venue.users().user(engine.getDIDString()).writeInternalPath(legacyPath, Vectors.of("a", "b"));
 
 			Versioned adapter = new Versioned(NAME, 2);
 			engine.registerAdapter(adapter);
 			assertEquals(2, adapter.steps.get());
 			assertEquals(Maps.of("items", Vectors.of("a", "b")).assoc(SCHEMA, CVMLong.create(2)), venue.adapterState(NAME).get());
 			assertEquals(2, venue.adapterVersion(NAME));
-			assertNull(venue.users().get(engine.getDIDString()).readInternalPath(legacyPath), "the legacy route moves first");
+			assertNull(venue.users().user(engine.getDIDString()).readInternalPath(legacyPath), "the legacy route moves first");
 			assertSame(adapter, engine.getAdapter(NAME));
 
 			ACell state = venue.adapterState(NAME).get();
@@ -119,7 +155,7 @@ class AdapterStateMigrationTest {
 			ACell before = venue.get();
 
 			var error = assertThrows(IllegalStateException.class, () -> engine.registerAdapter(new Versioned(NAME, 3)));
-			assertEquals(AAdapter.NO_STATE_MIGRATION.formatted(NAME, 2L), error.getMessage());
+			assertEquals(REFUSED, error.getMessage());
 			assertSame(before, venue.get(), "earlier steps roll back with the failing one");
 			assertEquals(0, venue.adapterVersion(NAME));
 			assertNull(engine.getRegisteredAdapter(NAME));
@@ -167,18 +203,19 @@ class AdapterStateMigrationTest {
 
 	@Test void startUpMigrationIsOneTransactionWithTheVenue() throws Exception {
 		AKeyPair key = AKeyPair.generate();
-		CoviaApplication application = CoviaApplication.create(key);
+		CoviaApplication application = TestEngine.application();
 		try (var store = application.hostStore()) {
+			Engine refused = application.mount(key, Maps.empty());
 			// A legacy venue: no :version, old-shaped state for one adapter, and
 			// another adapter's state recorded at a version newer than its build.
 			application.venue(key.getAccountKey()).cursor().set(Index.<Keyword, ACell>none()
 				.assoc(Covia.ADAPTERS, Maps.of(NAME, Vectors.of("a"), "newer", Vectors.of("future")))
 				.assoc(Covia.ADAPTER_VERSIONS, Maps.of("newer", 3L)));
+			application.sync();
 			application.host().sync();
 			ACell before = application.cursor().get();
 
 			Versioned versioned = new Versioned(NAME, 2);
-			Engine refused = new Engine(Maps.empty(), application, key);
 			try {
 				var error = assertThrows(UnsupportedVersionException.class,
 					() -> refused.prepare(List.of(versioned, new Versioned("newer", 1))));
@@ -192,7 +229,7 @@ class AdapterStateMigrationTest {
 			assertEquals(before, store.getRootData(), "the refused start left the store untouched");
 
 			Versioned again = new Versioned(NAME, 2);
-			Engine engine = new Engine(Maps.empty(), application, key);
+			Engine engine = application.mount(key, Maps.empty());
 			try {
 				engine.prepare(List.of(again));
 				VenueState venue = engine.getVenueState();
@@ -220,7 +257,7 @@ class AdapterStateMigrationTest {
 			assertFalse(engine.hasAdapter("parked"));
 			// State in an older shape arriving after installation, as a restore,
 			// an import or another writer can bring it.
-			venue.transact(draft -> {
+			venue.execute(draft -> {
 				draft.adapterState(NAME).set(Vectors.of("a"));
 				draft.setAdapterVersion(NAME, 0);
 				draft.adapterState("parked").set(Vectors.of("b"));
@@ -248,7 +285,8 @@ class AdapterStateMigrationTest {
 
 	@Test void anEmbedderMigratesAStoreWithItsAdaptersBeforeLaunch() throws Exception {
 		AKeyPair key = AKeyPair.generate();
-		CoviaApplication application = CoviaApplication.create(key);
+		CoviaApplication application = TestEngine.application();
+		Engine engine = application.mount(key, Maps.empty());
 		VenueState venue = application.venue(key.getAccountKey());
 		venue.cursor().set(Index.<Keyword, ACell>none()
 			.assoc(Covia.ADAPTERS, Maps.of(NAME, Vectors.of("a"), "newer", Vectors.of("future")))
@@ -257,21 +295,41 @@ class AdapterStateMigrationTest {
 
 		Versioned embedded = new Versioned(NAME, 2);
 		assertThrows(UnsupportedVersionException.class,
-			() -> venue.migrate(List.of(embedded.stateMigration(), new Versioned("newer", 1).stateMigration())));
+			() -> venue.migrate(NO_SECRETS, List.of(embedded.stateMigration(), new Versioned("newer", 1).stateMigration())));
 		assertSame(before, venue.get(), "neither the venue nor the earlier adapter migrated");
 
-		venue.migrate(List.of(embedded.stateMigration(), new Versioned("newer", 3).stateMigration()));
+		venue.migrate(NO_SECRETS, List.of(embedded.stateMigration(), new Versioned("newer", 3).stateMigration()));
 		assertEquals(VenueState.CURRENT_VERSION, venue.version());
 		assertEquals(2, venue.adapterVersion(NAME));
 		assertEquals(Maps.of("items", Vectors.of("a")).assoc(SCHEMA, CVMLong.create(2)), venue.adapterState(NAME).get());
 
 		// A later launch finds both current and runs no step.
 		Versioned launched = new Versioned(NAME, 2);
-		Engine engine = new Engine(Maps.empty(), application, key);
 		try {
 			engine.prepare(List.of(launched));
 			engine.registerAdapter(launched);
 			assertEquals(0, launched.steps.get());
+		} finally {
+			engine.close();
+		}
+	}
+
+	@Test void anAdapterThisBuildLacksKeepsItsStateAndVersion() throws Exception {
+		AKeyPair key = AKeyPair.generate();
+		CoviaApplication application = TestEngine.application();
+		Engine engine = application.mount(key, Maps.empty());
+		// The state and version of an adapter from a module this venue no longer loads.
+		application.venue(key.getAccountKey()).cursor().set(Index.<Keyword, ACell>none()
+			.assoc(Covia.ADAPTERS, Maps.of("absent", Vectors.of("module state")))
+			.assoc(Covia.ADAPTER_VERSIONS, Maps.of("absent", 7L)));
+		try {
+			engine.launch();
+			VenueState venue = engine.getVenueState();
+			assertEquals(7, venue.adapterVersion("absent"), "a start checks only the adapters it registers");
+			assertEquals(Vectors.of("module state"), venue.adapterState("absent").get());
+			engine.migrate();
+			assertEquals(7, venue.adapterVersion("absent"));
+			assertEquals(Vectors.of("module state"), venue.adapterState("absent").get());
 		} finally {
 			engine.close();
 		}
@@ -285,14 +343,14 @@ class AdapterStateMigrationTest {
 		assertNull(adapter.checkStateMigration(List.of(v0, v1, v2)));
 		assertEquals(AAdapter.STATES_FOR_EVERY_VERSION.formatted(NAME, 2L, 2L), adapter.checkStateMigration(List.of(v0, v1)));
 		assertEquals(AAdapter.STEPS_MISS_CURRENT.formatted(NAME, 0, 2L), adapter.checkStateMigration(List.of(v0, v1, v1)));
-		assertEquals(AAdapter.STEP_FAILED.formatted(NAME, 0, AAdapter.NO_STATE_MIGRATION.formatted(NAME, 2L)),
+		assertEquals(AAdapter.STEP_FAILED.formatted(NAME, 0, REFUSED),
 			new Versioned(NAME, 3).checkStateMigration(List.of(v0, v1, v2, v2)));
 		assertNull(new Versioned("unversioned", 0).checkStateMigration(List.of(v0)), "an unversioned adapter gives its one shape");
 	}
 
 	@Test void registrationNeedsAPreparedEngineAndAValidVersion() throws Exception {
 		AKeyPair key = AKeyPair.generate();
-		Engine unprepared = new Engine(Maps.empty(), CoviaApplication.create(key), key);
+		Engine unprepared = TestEngine.application().mount(key, Maps.empty());
 		try {
 			assertEquals(Engine.ADAPTER_BEFORE_PREPARE,
 				assertThrows(IllegalStateException.class, () -> unprepared.registerAdapter(new Versioned(NAME, 1))).getMessage());
@@ -304,9 +362,33 @@ class AdapterStateMigrationTest {
 		Engine engine = prepared(Maps.empty());
 		try {
 			assertEquals(VenueState.INVALID_STATE_VERSION + NAME,
-				assertThrows(IllegalStateException.class, () -> engine.registerAdapter(new Versioned(NAME, -1))).getMessage());
+				assertThrows(IllegalStateException.class, () -> engine.registerAdapter(new ReleasedHook(-1))).getMessage());
 		} finally {
 			engine.close();
+		}
+	}
+
+	@Test void theReleasedHookStillMigrates() throws Exception {
+		Engine engine = prepared(Maps.empty());
+		try {
+			VenueState venue = engine.getVenueState();
+			venue.adapterState(NAME).set(Vectors.of("a"));
+			engine.registerAdapter(new ReleasedHook(2));
+			assertEquals(Maps.of("items", Vectors.of("a")).assoc(SCHEMA, CVMLong.create(2)), venue.adapterState(NAME).get());
+			assertEquals(2, venue.adapterVersion(NAME));
+		} finally {
+			engine.close();
+		}
+		Engine missing = prepared(Maps.empty());
+		try {
+			VenueState venue = missing.getVenueState();
+			venue.adapterState(NAME).set(Vectors.of("a"));
+			ACell before = venue.get();
+			var error = assertThrows(IllegalStateException.class, () -> missing.registerAdapter(new ReleasedHook(3)));
+			assertEquals(AAdapter.NO_STATE_MIGRATION.formatted(NAME, 2L), error.getMessage(), "a version with no step for it");
+			assertSame(before, venue.get());
+		} finally {
+			missing.close();
 		}
 	}
 }

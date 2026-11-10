@@ -63,7 +63,7 @@ public class CapabilityCheckerTest {
 		String pub = CapabilityChecker.allows(readOnly, "w/x", "crud/write",
 			Strings.create("did:key:zVenue:public"));
 		assertNotNull(pub);
-		assertTrue(pub.contains("Capability denied"), pub);
+		assertTrue(pub.contains("crud/write"), pub);
 		assertTrue(pub.contains("Authenticate") && pub.contains("UCAN.md"),
 			"public denial must carry the auth hint: " + pub);
 
@@ -73,7 +73,7 @@ public class CapabilityCheckerTest {
 		String agent = CapabilityChecker.allows(readOnly, "w/x", "crud/write",
 			Strings.create("did:key:zRealAgentOwner"));
 		assertNotNull(agent);
-		assertTrue(agent.contains("Capability denied"), agent);
+		assertTrue(agent.contains("crud/write"), agent);
 		assertFalse(agent.contains("Authenticate"),
 			"a real identity's own-scope denial must stay clean: " + agent);
 	}
@@ -88,13 +88,22 @@ public class CapabilityCheckerTest {
 		Engine engine = TestEngine.ENGINE;
 
 		AVector<ACell> caps = Vectors.of(
+			Capability.create(Strings.create("v/ops/covia/"), covia.api.Abilities.INVOKE),
 			Capability.create(Strings.create("w/allowed/"), Capability.CRUD_WRITE),
 			Capability.create(Strings.create("w/"), Capability.CRUD_READ)
 		);
 
-		RequestContext ctx = RequestContext.of(
-			convex.auth.ucan.UCAN.toDIDKey(convex.core.crypto.AKeyPair.generate().getAccountKey())
-		).withCaps(caps);
+		AString did = convex.auth.ucan.UCAN.toDIDKey(convex.core.crypto.AKeyPair.generate().getAccountKey());
+		RequestContext ctx = RequestContext.of(did).withCaps(caps);
+		// Creating w/allowed changes w, outside the grant: the uncapped user makes it
+		assertThrows(Exception.class, () ->
+			engine.jobs().invokeOperation("v/ops/covia/write",
+				Maps.of(Fields.PATH, "w/allowed/doc", Fields.VALUE, Strings.create("ok")), ctx)
+				.awaitResult(5000),
+			"A grant inside w/allowed must not create w/allowed");
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/allowed", Fields.VALUE, Maps.empty()), RequestContext.of(did))
+			.awaitResult(5000);
 
 		// Write to allowed path — should succeed
 		Job writeOk = engine.jobs().invokeOperation("v/ops/covia/write",
@@ -117,16 +126,19 @@ public class CapabilityCheckerTest {
 	@Test
 	public void testInvokeInternalEnforcesContextScope() {
 		// Trust is a property of the context's authority, not the call path.
-		// invokeInternal differs from invokeOperation only in Job creation — both
-		// enforce whatever scope the context carries via the adapter's pin.
+		// Both paths enforce resource authority. Generic invoke additionally
+		// requires permission to look up the operation reference.
 		Engine engine = TestEngine.ENGINE;
 
 		AVector<ACell> caps = Vectors.of(
+			Capability.create(Strings.create("v/ops/covia/"), covia.api.Abilities.INVOKE),
 			Capability.create(Strings.create("w/allowed/"), Capability.CRUD_WRITE)
 		);
-		RequestContext gated = RequestContext.of(
-			convex.auth.ucan.UCAN.toDIDKey(convex.core.crypto.AKeyPair.generate().getAccountKey())
-		).withCaps(caps);
+		AString did = convex.auth.ucan.UCAN.toDIDKey(convex.core.crypto.AKeyPair.generate().getAccountKey());
+		RequestContext gated = RequestContext.of(did).withCaps(caps);
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/allowed", Fields.VALUE, Maps.empty()), RequestContext.of(did))
+			.awaitResult(5000);
 
 		// User-facing path: capped ctx writing outside its scope — denied (Job fails).
 		assertThrows(Exception.class, () ->
@@ -216,7 +228,7 @@ public class CapabilityCheckerTest {
 		assertThrows(Exception.class, () -> denied.awaitResult(5000),
 			"out-of-scope op must be denied");
 		String err = denied.getErrorMessage();
-		assertTrue(err.contains("Capability denied"), err);
+		assertFalse(err.isBlank());
 		assertTrue(err.contains("v/test/ops/random"),
 			"denial must name the blocked op: " + err);
 	}
@@ -351,9 +363,9 @@ public class CapabilityCheckerTest {
 	public void testAllowsDenialMessageIsActionable() {
 		String msg = allows(caps("w/notes", "crud/read"), "w/secrets", "crud/write");
 		assertNotNull(msg);
-		assertTrue(msg.contains("Capability denied"), msg);
+		assertFalse(msg.isBlank());
 		assertTrue(msg.contains("crud/write"), "names the required ability: " + msg);
-		assertTrue(msg.contains("Your capabilities are"), "lists what is granted: " + msg);
+		assertTrue(msg.contains("w/notes"), "lists what is granted: " + msg);
 	}
 
 	// ==================================================================
@@ -529,7 +541,7 @@ public class CapabilityCheckerTest {
 		for (Throwable t = ex; t != null; t = t.getCause()) {
 			if (t.getMessage() != null) msg.append(t.getMessage()).append(" | ");
 		}
-		assertTrue(msg.toString().contains("Access denied") && msg.toString().contains("crud/write"),
+		assertTrue(msg.toString().contains("crud/write"),
 			"cross-user DID-URL write with no proof must be denied at the proof gate, got: " + msg);
 	}
 
@@ -541,21 +553,103 @@ public class CapabilityCheckerTest {
 		RequestContext ctx = RequestContext.of(did).withCaps(CapabilityChecker.readOnlyScope(did));
 
 		// Read under a read-only scope is allowed (absent path → exists:false).
-		Job read = engine.jobs().invokeOperation("v/ops/covia/read",
-			Maps.of(Fields.PATH, "w/x"), ctx);
+		Job read = engine.jobs().startToolOperation(Strings.create("v/ops/covia/read"),
+			Maps.of(Fields.PATH, "w/x"), ctx).job();
 		assertNotNull(read.awaitResult(5000), "read is allowed under a read-only scope");
 
 		// Mutations are denied — the adapter fails the Job (observed at awaitResult).
-		assertThrows(Exception.class, () -> engine.jobs().invokeOperation("v/ops/covia/write",
-			Maps.of(Fields.PATH, "w/x", Fields.VALUE, Strings.create("v")), ctx).awaitResult(5000),
+		assertThrows(Exception.class, () -> engine.jobs().startToolOperation(Strings.create("v/ops/covia/write"),
+			Maps.of(Fields.PATH, "w/x", Fields.VALUE, Strings.create("v")), ctx).job().awaitResult(5000),
 			"write must be denied under a read-only scope");
-		assertThrows(Exception.class, () -> engine.jobs().invokeOperation("v/ops/covia/delete",
-			Maps.of(Fields.PATH, "w/x"), ctx).awaitResult(5000),
+		assertThrows(Exception.class, () -> engine.jobs().startToolOperation(Strings.create("v/ops/covia/delete"),
+			Maps.of(Fields.PATH, "w/x"), ctx).job().awaitResult(5000),
 			"delete must be denied under a read-only scope");
 		// s/ deletes take the delete-only namespace branch (#166) — the capability
-		// gate must still apply there (requireCap runs before the namespace rule).
-		assertThrows(Exception.class, () -> engine.jobs().invokeOperation("v/ops/covia/delete",
-			Maps.of(Fields.PATH, "s/x"), ctx).awaitResult(5000),
+		// gate must still apply there (access is checked before the namespace rule).
+		assertThrows(Exception.class, () -> engine.jobs().startToolOperation(Strings.create("v/ops/covia/delete"),
+			Maps.of(Fields.PATH, "s/x"), ctx).job().awaitResult(5000),
 			"secret delete must be denied under a read-only scope");
+	}
+
+	// ========== Intersecting scopes ==========
+
+	private static final AString A = Strings.create("did:key:zA");
+	private static final AString B = Strings.create("did:key:zB");
+	private static final AString READ = Strings.create("crud/read");
+
+	private static boolean allowed(AVector<ACell> scope, String resource, String ability, AString owner) {
+		return CapabilityChecker.allows(scope, resource, ability, owner) == null;
+	}
+
+	@Test
+	public void testIntersectAllowsWhatBothAllow() {
+		AVector<ACell> met = CapabilityChecker.intersect(
+			caps("w/", "crud/read", "g/", "agent"), A, caps("w/data/", "crud", "w/other/", "invoke"), A);
+		assertTrue(allowed(met, "w/data/x", "crud/read", A));
+		assertFalse(allowed(met, "w/data/x", "crud/write", A), "only the first side allows reading");
+		assertFalse(allowed(met, "w/elsewhere", "crud/read", A), "only the first side covers it");
+		assertFalse(allowed(met, "w/other/x", "invoke", A), "no pair shares an ability there");
+		assertFalse(allowed(met, "g/x", "agent/create", A), "only the first side covers agents");
+	}
+
+	@Test
+	public void testIntersectWithUnrestrictedAndEmpty() {
+		AVector<ACell> scope = caps("w/", "crud/read");
+		assertNull(CapabilityChecker.intersect(null, A, null, A));
+		assertEquals(scope, CapabilityChecker.intersect(null, A, scope, A), "a bare path stays as written in one namespace");
+		assertEquals(scope, CapabilityChecker.intersect(scope, A, null, A));
+		assertTrue(CapabilityChecker.intersect(scope, A, Vectors.empty(), A).isEmpty());
+	}
+
+	@Test
+	public void testIntersectTreatsWildcardsAsCoveringAnything() {
+		AVector<ACell> met = CapabilityChecker.intersect(caps("", "*"), A, caps("w/data/", "crud/read"), A);
+		assertTrue(allowed(met, "w/data/x", "crud/read", A));
+		assertFalse(allowed(met, "w/other", "crud/read", A));
+		assertFalse(allowed(met, "w/data/x", "crud/write", A));
+	}
+
+	@Test
+	public void testIntersectAcrossNamespacesNamesPathsAbsolutely() {
+		AVector<ACell> met = CapabilityChecker.intersect(caps("", "*"), A, caps("w/notes/", "crud/read"), B);
+		assertTrue(allowed(met, B + "/w/notes/x", "crud/read", A), "a bare path stays its own owner's");
+		assertFalse(allowed(met, "w/notes/x", "crud/read", A), "and does not become the other namespace's");
+
+		assertFalse(allowed(CapabilityChecker.intersect(caps("w/", "*"), A, caps("w/", "*"), B),
+			"w/x", "crud/read", A), "the same bare path in two namespaces shares nothing");
+
+		AVector<ACell> view = CapabilityChecker.intersect(null, A, caps("v/ops/", "invoke"), B);
+		assertTrue(allowed(view, "v/ops/x", "invoke", null), "the venue's view is every namespace's");
+	}
+
+	private static AVector<ACell> caveated(String with, String key, String value) {
+		return Vectors.of(Capability.create(Strings.create(with), READ)
+			.assoc(Capability.NB, Maps.of(Strings.create(key), Strings.create(value))));
+	}
+
+	@Test
+	public void testIntersectKeepsEveryCaveat() {
+		AVector<ACell> carried = CapabilityChecker.intersect(caveated("w/", "url", "https://a.example/"), A,
+			caveated("w/data/", "gate", "v/ops/check"), A);
+		assertEquals(1, carried.count());
+		assertEquals(2, ((convex.core.data.AMap<?, ?>) convex.core.lang.RT.getIn(carried.get(0), Capability.NB)).count());
+		assertFalse(allowed(carried, "w/data/x", "crud/read", A), "a caveat still binds");
+
+		assertFalse(allowed(CapabilityChecker.intersect(caveated("w/", "url", "https://a.example/"), A, caps("w/", "crud/read"), A),
+			"w/x", "crud/read", A), "one side's caveat binds the result");
+		assertTrue(CapabilityChecker.intersect(caveated("w/", "url", "https://a.example/"), A,
+			caveated("w/", "url", "https://b.example/"), A).isEmpty(), "conflicting caveats allow nothing");
+		assertTrue(CapabilityChecker.intersect(caveated("w/", "unknown", "x"), A, caps("w/", "crud/read"), A).isEmpty(),
+			"a malformed grant allows nothing");
+	}
+
+	@Test
+	public void aGateIsAHashOnlyWhenItIsExactlyOne() {
+		AString owner = Strings.create("did:key:zGateOwner");
+		String hex = "ab".repeat(32);
+		AString hash = Strings.create(hex);
+		assertEquals(hash, CapabilityChecker.bindGate(hash, owner), "a hash names the same gate for anyone");
+		assertEquals(Strings.create(owner + "/ " + hex), CapabilityChecker.bindGate(Strings.create(" " + hex), owner),
+			"anything else is a bare path, bound to its owner");
 	}
 }

@@ -12,6 +12,7 @@ import convex.core.data.Strings;
 import covia.adapter.AAdapter;
 import covia.api.Fields;
 import covia.exception.JobFailedException;
+import covia.exception.NotSupportedException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.RequestContext;
@@ -43,14 +44,20 @@ public abstract class ARemoteAgentAdapter<I extends RemoteInteraction> extends A
 		Binding(Job job, I interaction) {
 			this.job = job;
 			this.interaction = interaction;
-			this.release = j -> { if (j.isFinished()) forgetInteraction(j.getID()); };
+			// A cancelled job's binding goes when its interaction is cancelled (stop)
+			this.release = j -> {
+				if (j.isFinished() && !Status.CANCELLED.equals(j.getStatus())) forgetInteraction(j.getID());
+			};
 		}
 	}
 
 	public static final String UNSUPPORTED_AGENT_OPERATION = "Agent adapter does not support this operation: ";
 	public static final String INVALID_AGENT_DEFINITION = "Invalid agent definition: ";
 
-	/** Validate adapter-specific data without contacting the provider or resolving secrets. */
+	/**
+	 * Validate adapter-specific data without contacting the provider or
+	 * resolving secrets, throwing {@code InvalidInputException} with the reason.
+	 */
 	public void validateAgent(AMap<AString, ACell> definition) {}
 
 	/** A private backend invocation, dispatched through the ordinary Job machinery. */
@@ -59,7 +66,7 @@ public abstract class ARemoteAgentAdapter<I extends RemoteInteraction> extends A
 	/** Translate the common agent API; provider configuration comes only from the definition. */
 	public AgentInvocation agentInvocation(String operation, AMap<AString, ACell> definition,
 		ACell content, ACell session) {
-		throw new UnsupportedOperationException(UNSUPPORTED_AGENT_OPERATION + operation);
+		throw new NotSupportedException(UNSUPPORTED_AGENT_OPERATION + operation);
 	}
 
 	/** Provider conversation identity, independent of the Covia session and task IDs. */
@@ -86,7 +93,6 @@ public abstract class ARemoteAgentAdapter<I extends RemoteInteraction> extends A
 		}
 		job.start(() -> {
 			try {
-				requireInvoke(ctx);
 				startInteraction(job, ctx, meta, input);
 			} catch (RuntimeException | Error e) {
 				settleJob(job, null, e);
@@ -105,7 +111,7 @@ public abstract class ARemoteAgentAdapter<I extends RemoteInteraction> extends A
 			Binding existing = interactions.putIfAbsent(job.getID(), binding);
 			if (existing != null) return existing.interaction;
 			try {
-				job.setCancelHook(interaction::cancel);
+				if (Status.CANCELLED.equals(job.getStatus())) stop(job);
 			} finally {
 				// Late cancellation may invoke provider code immediately. Even a
 				// throwing cancellation must release the terminal binding.
@@ -113,6 +119,20 @@ public abstract class ARemoteAgentAdapter<I extends RemoteInteraction> extends A
 				binding.release.accept(job);
 			}
 			return interaction;
+		}
+	}
+
+	/** Cancelling a job cancels its interaction with the provider, and releases the binding first. */
+	@Override
+	public void stop(Job job) {
+		Binding binding = interactions.remove(job.getID());
+		try {
+			if (binding != null) {
+				binding.job.unsubscribe(binding.release);
+				binding.interaction.cancel();
+			}
+		} finally {
+			super.stop(job);
 		}
 	}
 
@@ -143,14 +163,14 @@ public abstract class ARemoteAgentAdapter<I extends RemoteInteraction> extends A
 	public final void handleMessage(Job job, AMap<AString, ACell> messageRecord) {
 		I live;
 		synchronized (job) {
-			if (job.isFinished()) throw new IllegalStateException(INTERACTION_ENDED);
+			if (job.isFinished()) throw new NotSupportedException(INTERACTION_ENDED);
 			live = interaction(job);
 			if (live == null) {
 				live = restoreInteraction(job);
 				if (live != null) live = bindInteraction(job, live);
 			}
 		}
-		if (live == null) throw new IllegalStateException(NO_INTERACTION);
+		if (live == null) throw new NotSupportedException(NO_INTERACTION);
 		live.deliver(messageRecord);
 	}
 

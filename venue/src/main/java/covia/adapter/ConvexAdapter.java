@@ -1,6 +1,10 @@
 package covia.adapter;
 
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.nio.charset.StandardCharsets;
+import java.util.Locale;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.function.Function;
@@ -9,6 +13,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import convex.api.Convex;
+import convex.core.Constants;
 import convex.core.cpos.CPoSConstants;
 import convex.core.cvm.CVMEncoder;
 import convex.core.data.ACell;
@@ -31,8 +36,13 @@ import convex.core.Result;
 import convex.core.crypto.AKeyPair;
 import convex.core.crypto.ASignature;
 import convex.core.cvm.Address;
+import convex.net.Transports;
 import covia.api.Fields;
+import covia.exception.ConfigurationException;
+import covia.exception.InvalidInputException;
 import covia.exception.JobFailedException;
+import covia.exception.NotSupportedException;
+import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 
@@ -42,10 +52,38 @@ import covia.venue.RequestContext;
  * Provides network queries and transactions plus local CAD3 encoding, decoding,
  * Ed25519 key generation and signing. Private seeds remain in the caller's
  * encrypted secret store.
+ *
+ * <p><b>Peers.</b> Queries and transactions go to the operator's peer
+ * ({@code adapters.convex.peer}, default {@value #DEFAULT_PEER}). A call that
+ * names another peer, in its input or its operation's metadata, asks the venue
+ * to relay: refused unless the operator sets {@code adapters.convex.anyPeer},
+ * and then the peer's host passes the venue's outbound address guard
+ * ({@link Engine#requireSafeHost}).</p>
  */
 public class ConvexAdapter extends AAdapter {
 
 	private static final Logger log = LoggerFactory.getLogger(ConvexAdapter.class);
+
+	// Operator configuration keys (adapters.convex.*)
+	static final AString K_PEER = Fields.PEER;
+	static final AString K_ANY_PEER = Strings.intern("anyPeer");
+	private static final Set<AString> SETTINGS = Set.of(Config.ENABLED, K_PEER, K_ANY_PEER);
+
+	/** The peer a venue talks to when its operator names none. */
+	public static final String DEFAULT_PEER = "peer.convex.live:18888";
+
+	/** Why a call naming another peer is refused while relaying is off. */
+	public static final String OTHER_PEER =
+		"is not this venue's Convex peer, and the operator has not enabled relaying to other peers (adapters.convex.anyPeer)";
+
+	/** Why a peer value is refused before any policy applies. */
+	public static final String NOT_A_PEER = "must be a Convex peer endpoint: host:port, tcp://host:port or tls://host:port";
+
+	/** The operator's peer settings, replaced whole on every {@link #configure}. */
+	private record PeerPolicy(URI peer, boolean anyPeer) {}
+
+	private volatile PeerPolicy policy =
+		new PeerPolicy(peerEndpoint(Strings.create(DEFAULT_PEER), "adapters.convex.peer"), false);
 
 	/**
 	 * Backstop deadline for a Convex peer call (connect + query/transact). The
@@ -77,6 +115,32 @@ public class ConvexAdapter extends AAdapter {
 	}
 
 	@Override
+	public boolean configure(AMap<AString, ACell> config, boolean strict) {
+		if (config == null) config = Maps.empty();
+		if (strict) {
+			for (long i = 0; i < config.count(); i++) {
+				AString key = config.entryAt(i).getKey();
+				if (!SETTINGS.contains(key)) {
+					throw new ConfigurationException("adapters.convex: unknown setting '" + key + "'");
+				}
+			}
+		}
+		ACell rawPeer = config.get(K_PEER);
+		URI peer;
+		try {
+			peer = peerEndpoint((rawPeer != null) ? rawPeer : Strings.create(DEFAULT_PEER), "adapters.convex.peer");
+		} catch (InvalidInputException e) {
+			throw new ConfigurationException(e.getMessage(), e);
+		}
+		ACell rawAny = config.get(K_ANY_PEER);
+		if (rawAny != null && !(rawAny instanceof CVMBool)) {
+			throw new ConfigurationException("adapters.convex.anyPeer must be a boolean, got: " + rawAny);
+		}
+		policy = new PeerPolicy(peer, CVMBool.TRUE.equals(rawAny));
+		return true;
+	}
+
+	@Override
 	protected void installAssets() {
 		// The adapter's own skill: v/skills/convex lives and dies with this adapter.
 		installSkill("convex/convex", "/skills/convex.json");
@@ -90,10 +154,9 @@ public class ConvexAdapter extends AAdapter {
 
 	@Override
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
-		requireInvoke(ctx);
 		String op = getSubOperation(meta);
 		return switch (op) {
-			case "query" -> invokeQuery(meta, input);
+			case "query" -> invokeQuery(ctx, meta, input);
 			case "transact" -> invokeTransact(ctx, meta, input);
 			case "generate-key" -> CompletableFuture.supplyAsync(
 				() -> generateKey(ctx, input), VIRTUAL_EXECUTOR);
@@ -104,18 +167,18 @@ public class ConvexAdapter extends AAdapter {
 			case "encode-cad3" -> CompletableFuture.supplyAsync(
 				() -> encodeCAD3(input), VIRTUAL_EXECUTOR);
 			default -> CompletableFuture.failedFuture(
-				new UnsupportedOperationException("Unsupported Convex operation: " + op));
+				new NotSupportedException("Unsupported Convex operation: " + op));
 		};
 	}
 
-	private CompletableFuture<ACell> invokeQuery(AMap<AString, ACell> meta, ACell input) {
+	private CompletableFuture<ACell> invokeQuery(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
 		final Query request;
 		try {
 			request = query(input);
 		} catch (RuntimeException e) {
 			return CompletableFuture.failedFuture(e);
 		}
-		return withConvexClient(meta, input, convex -> executeQuery(convex, request));
+		return withConvexClient(ctx, meta, input, convex -> executeQuery(convex, request));
 	}
 
 	private CompletableFuture<ACell> invokeTransact(RequestContext ctx,
@@ -126,7 +189,7 @@ public class ConvexAdapter extends AAdapter {
 		} catch (RuntimeException e) {
 			return CompletableFuture.failedFuture(e);
 		}
-		return withConvexClient(meta, input, convex -> executeTransact(convex, request));
+		return withConvexClient(ctx, meta, input, convex -> executeTransact(convex, request));
 	}
 
 	private record Query(Address address, ACell code) {}
@@ -150,7 +213,7 @@ public class ConvexAdapter extends AAdapter {
 		if (source == null) throw new JobFailedException("No transaction source provided");
 		ACell code = Reader.read(source.toString());
 		if (code == null) throw new JobFailedException("Transaction source is empty");
-		return new Transaction(address, resolveKeyPair(ctx, input, false), code);
+		return new Transaction(address, transactionKeyPair(ctx, input), code);
 	}
 
 	private CompletableFuture<ACell> executeQuery(Convex convex, Query request) {
@@ -171,11 +234,11 @@ public class ConvexAdapter extends AAdapter {
 	private ACell generateKey(RequestContext ctx, ACell input) {
 		AString name = RT.ensureString(RT.getIn(input, Fields.NAME));
 		if (name == null || name.toString().isBlank()) {
-			throw new IllegalArgumentException("name is required");
+			throw new InvalidInputException("name is required");
 		}
 		ACell overwriteValue = RT.getIn(input, Fields.OVERWRITE);
 		if (overwriteValue != null && !(overwriteValue instanceof CVMBool)) {
-			throw new IllegalArgumentException("overwrite must be a boolean");
+			throw new InvalidInputException("overwrite must be a boolean");
 		}
 
 		AKeyPair keyPair = AKeyPair.generate();
@@ -189,13 +252,13 @@ public class ConvexAdapter extends AAdapter {
 
 	private ACell sign(RequestContext ctx, ACell input) {
 		AString message = RT.ensureString(RT.getIn(input, Fields.MESSAGE));
-		if (message == null) throw new IllegalArgumentException("message is required");
+		if (message == null) throw new InvalidInputException("message is required");
 		AString encodingValue = RT.ensureString(RT.getIn(input, K_ENCODING));
 		String encoding = (encodingValue != null) ? encodingValue.toString() : "utf8";
 		Blob bytes = switch (encoding) {
 			case "utf8" -> Blob.wrap(message.toString().getBytes(StandardCharsets.UTF_8));
 			case "hex" -> parseBlob(message, "message");
-			default -> throw new IllegalArgumentException("encoding must be 'utf8' or 'hex'");
+			default -> throw new InvalidInputException("encoding must be 'utf8' or 'hex'");
 		};
 		AKeyPair keyPair = resolveKeyPair(ctx, input, true);
 		ASignature signature = keyPair.sign(bytes);
@@ -208,15 +271,15 @@ public class ConvexAdapter extends AAdapter {
 		ACell supplied = RT.getIn(input, K_ENCODING);
 		if (supplied instanceof AString text
 				&& text.count() > (CPoSConstants.MAX_MESSAGE_LENGTH * 2L + 2L)) {
-			throw new IllegalArgumentException("CAD3 encoding exceeds the maximum message size of "
+			throw new InvalidInputException("CAD3 encoding exceeds the maximum message size of "
 				+ CPoSConstants.MAX_MESSAGE_LENGTH + " bytes");
 		}
 		ABlob parsed = Blobs.parse(supplied);
 		if (parsed == null) {
-			throw new IllegalArgumentException("encoding must be a hexadecimal CAD3 blob");
+			throw new InvalidInputException("encoding must be a hexadecimal CAD3 blob");
 		}
 		if (parsed.count() > CPoSConstants.MAX_MESSAGE_LENGTH) {
-			throw new IllegalArgumentException("CAD3 encoding exceeds the maximum message size of "
+			throw new InvalidInputException("CAD3 encoding exceeds the maximum message size of "
 				+ CPoSConstants.MAX_MESSAGE_LENGTH + " bytes");
 		}
 		try {
@@ -224,16 +287,16 @@ public class ConvexAdapter extends AAdapter {
 			// be carried by this encoding rather than resolved from ambient venue state.
 			return CVMEncoder.INSTANCE.decodeMultiCell(parsed.toFlatBlob());
 		} catch (PartialMessageException e) {
-			throw new IllegalArgumentException(
+			throw new InvalidInputException(
 				"Incomplete CAD3 encoding; missing referenced cell " + e.getMissingHash(), e);
 		} catch (BadFormatException e) {
-			throw new IllegalArgumentException("Invalid CAD3 encoding: " + e.getMessage(), e);
+			throw new InvalidInputException("Invalid CAD3 encoding: " + e.getMessage(), e);
 		}
 	}
 
 	private ACell encodeCAD3(ACell input) {
 		if (!(input instanceof AMap<?, ?> map) || !map.containsKey(Fields.VALUE)) {
-			throw new IllegalArgumentException("encode-cad3 requires a 'value' field");
+			throw new InvalidInputException("encode-cad3 requires a 'value' field");
 		}
 		ACell value = map.get(Fields.VALUE);
 		Blob encoding = Format.encodeMultiCell(value, true);
@@ -242,15 +305,25 @@ public class ConvexAdapter extends AAdapter {
 			// Never return a purported complete encoding that cannot stand alone.
 			ACell roundTrip = CVMEncoder.INSTANCE.decodeMultiCell(encoding);
 			if (!Cells.equals(value, roundTrip)) {
-				throw new IllegalArgumentException("CAD3 value did not round-trip exactly");
+				throw new InvalidInputException("CAD3 value did not round-trip exactly");
 			}
 		} catch (PartialMessageException e) {
-			throw new IllegalArgumentException(
+			throw new InvalidInputException(
 				"Value exceeds the maximum complete CAD3 message size", e);
 		} catch (BadFormatException e) {
 			throw new IllegalStateException("Generated invalid CAD3 encoding", e);
 		}
 		return Maps.of(K_ENCODING, Strings.create("0x" + encoding.toHexString()));
+	}
+
+	public static final String KEY_OR_SEED = "Give either seed or key, not both";
+
+	/** A transaction's signer: a held {@code key}, used under {@code key/sign/convex}, or its {@code seed}. */
+	private AKeyPair transactionKeyPair(RequestContext ctx, ACell input) {
+		ACell key = RT.getIn(input, Fields.KEY);
+		if (key == null) return resolveKeyPair(ctx, input, false);
+		if (RT.getIn(input, Fields.SEED) != null) throw new InvalidInputException(KEY_OR_SEED);
+		return CryptoAdapter.of(engine).heldKeyPair(ctx, key, covia.api.Abilities.KEY_SIGN_CONVEX);
 	}
 
 	/** Resolves a transaction/signing seed. Transactions retain literal-seed
@@ -262,7 +335,7 @@ public class ConvexAdapter extends AAdapter {
 		String value = supplied.toString();
 		boolean secretRef = Engine.isSecretRef(value);
 		if (requireSecretRef && !secretRef) {
-			throw new IllegalArgumentException("seed must be an s/<name> secret reference");
+			throw new InvalidInputException("seed must be an s/<name> secret reference");
 		}
 		if (secretRef) {
 			String resolved = engine.resolveSecret(value, ctx);
@@ -272,7 +345,7 @@ public class ConvexAdapter extends AAdapter {
 		}
 		Blob seed = parseBlob(Strings.create(value), "seed");
 		if (seed.count() != AKeyPair.SEED_LENGTH) {
-			throw new IllegalArgumentException("Ed25519 seed must be exactly "
+			throw new InvalidInputException("Ed25519 seed must be exactly "
 				+ AKeyPair.SEED_LENGTH + " bytes");
 		}
 		return AKeyPair.create(seed);
@@ -280,17 +353,19 @@ public class ConvexAdapter extends AAdapter {
 
 	private static Blob parseBlob(AString value, String field) {
 		ABlob parsed = Blobs.parse(value);
-		if (parsed == null) throw new IllegalArgumentException(
+		if (parsed == null) throw new InvalidInputException(
 			field + " must be a hexadecimal blob");
 		return parsed.toFlatBlob();
 	}
 
-	private CompletableFuture<ACell> withConvexClient(AMap<AString, ACell> meta, ACell input,
+	private CompletableFuture<ACell> withConvexClient(RequestContext ctx, AMap<AString, ACell> meta, ACell input,
 			Function<Convex, CompletableFuture<ACell>> action) {
 
 		return CompletableFuture.supplyAsync(() -> {
+			// Outside the connect wrapper: a refusal is the venue's answer, not a connection failure
+			URI endpoint = permittedPeer(ctx, meta, input);
 			try {
-				return openConvexClient(meta, input);
+				return Convex.connect(endpoint);
 			} catch (Exception e) {
 				throw new CompletionException(
 						new JobFailedException("Failed to connect to Convex peer: " + e.getMessage()));
@@ -310,26 +385,55 @@ public class ConvexAdapter extends AAdapter {
 		.orTimeout(CONVEX_CALL_TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS);
 	}
 
-	private Convex openConvexClient(AMap<AString, ACell> meta, ACell input) throws Exception {
-		AString endpoint = locateEndpoint(meta, input);
-		if (endpoint == null) {
-			throw new JobFailedException("No Convex endpoint provided (expected in input or metadata)");
-		}
-		return Convex.connect(endpoint.toString());
+	/**
+	 * The peer this call may reach: the venue's own, unless the caller names
+	 * another in its input or in its operation's metadata (operations are
+	 * user-creatable assets, so both are the caller's choice). Another peer is a
+	 * relay, refused unless the operator sets {@code anyPeer}; then its host
+	 * passes the venue's outbound address guard like any caller-chosen target.
+	 */
+	private URI permittedPeer(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
+		PeerPolicy p = policy;
+		ACell named = RT.getIn(input, Fields.PEER);
+		if (named == null && meta != null) named = RT.getIn(meta, Fields.OPERATION, Fields.PEER);
+		if (named == null) return p.peer();
+		URI target = peerEndpoint(named, "peer");
+		if (target.equals(p.peer())) return target;
+		if (!p.anyPeer()) throw new InvalidInputException("Peer " + target + " " + OTHER_PEER);
+		engine.requireSafeHost(ctx, target.getHost());
+		return target;
 	}
 
-	private AString locateEndpoint(AMap<AString, ACell> meta, ACell input) {
-		// Check input first
-		AString endpoint = RT.ensureString(RT.getIn(input, Fields.PEER));
-		if (endpoint != null) return endpoint;
-
-		// Then check metadata for default peer
-		if (meta != null) {
-			endpoint = RT.ensureString(RT.getIn(meta, Fields.OPERATION, Fields.PEER));
-			if (endpoint != null) return endpoint;
+	/**
+	 * A peer endpoint in one form, so two spellings of one peer compare equal:
+	 * scheme {@code tcp} or {@code tls} and an explicit port ({@link URI#equals}
+	 * ignores the case of scheme and host). Parsed by Convex's own
+	 * {@link Transports#endpoint}, without DNS.
+	 */
+	static URI peerEndpoint(ACell value, String field) {
+		AString text = RT.ensureString(value);
+		if (text == null) throw notAPeer(field, value);
+		URI uri;
+		try {
+			uri = Transports.endpoint(text.toString());
+		} catch (IllegalArgumentException e) {
+			throw notAPeer(field, value);
 		}
+		String scheme = uri.getScheme().toLowerCase(Locale.ROOT);
+		if (!scheme.equals("tcp") && !scheme.equals("tls")) throw notAPeer(field, value);
+		if ((uri.getRawPath() != null && !uri.getRawPath().isEmpty()) || uri.getRawQuery() != null) {
+			throw notAPeer(field, value);
+		}
+		int port = (uri.getPort() < 0) ? Constants.DEFAULT_PEER_PORT : uri.getPort();
+		try {
+			return new URI(scheme, null, uri.getHost(), port, null, null, null);
+		} catch (URISyntaxException e) {
+			throw notAPeer(field, value);
+		}
+	}
 
-		return null;
+	private static InvalidInputException notAPeer(String field, ACell value) {
+		return new InvalidInputException(field + " " + NOT_A_PEER + ", got: " + value);
 	}
 
 	private void closeQuietly(AutoCloseable closeable) {

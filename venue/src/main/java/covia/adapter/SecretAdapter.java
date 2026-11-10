@@ -15,6 +15,10 @@ import convex.auth.ucan.Capability;
 import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.exception.AuthException;
+import covia.exception.ConflictException;
+import covia.exception.InvalidInputException;
+import covia.exception.NotFoundException;
+import covia.exception.NotSupportedException;
 import covia.api.Abilities;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -49,7 +53,8 @@ public class SecretAdapter extends AAdapter {
 	public static final String EXTRACT_NOT_PUBLIC = "The public principal's secrets are provisioned by the operator: they can be used under a grant, never extracted";
 	public static final String SECRET_EXISTS = "Secret already exists; pass overwrite:true to replace it";
 	public static final String SECRET_UNAVAILABLE = "Secret does not exist";
-	public static final String SECRET_DECRYPT_FAILED = "Secret cannot be decrypted";
+	public static final String SECRET_DECRYPT_FAILED = "Secret cannot be decrypted: it is damaged or was sealed "
+		+ "under a key this venue no longer holds. Set it again with secret:set";
 
 	@Override
 	public String getName() {
@@ -83,7 +88,7 @@ public class SecretAdapter extends AAdapter {
 		String op = getSubOperation(meta);
 		try {
 			if (!(input instanceof AMap) && !(input == null && "list".equals(op))) {
-				throw new IllegalArgumentException(INVALID_INPUT);
+				throw new InvalidInputException(INVALID_INPUT);
 			}
 			switch (op) {
 				case "set":
@@ -96,7 +101,7 @@ public class SecretAdapter extends AAdapter {
 					return CompletableFuture.completedFuture(handleDelete(ctx, input));
 				default:
 					return CompletableFuture.failedFuture(
-						new IllegalArgumentException(UNKNOWN_OPERATION + op));
+						new NotSupportedException(UNKNOWN_OPERATION + op));
 			}
 		} catch (Exception e) {
 			return CompletableFuture.failedFuture(e);
@@ -107,10 +112,10 @@ public class SecretAdapter extends AAdapter {
 		AString name = name(input);
 
 		AString value = RT.ensureString(RT.getIn(input, Fields.VALUE));
-		if (value == null) throw new IllegalArgumentException(VALUE_REQUIRED);
+		if (value == null) throw new InvalidInputException(VALUE_REQUIRED);
 		ACell overwriteValue = RT.getIn(input, Fields.OVERWRITE);
 		if (overwriteValue != null && !(overwriteValue instanceof CVMBool)) {
-			throw new IllegalArgumentException(INVALID_OVERWRITE);
+			throw new InvalidInputException(INVALID_OVERWRITE);
 		}
 		boolean overwrite = CVMBool.TRUE.equals(overwriteValue);
 
@@ -118,16 +123,24 @@ public class SecretAdapter extends AAdapter {
 		return Maps.of(Fields.NAME, name, Fields.STORED, CVMBool.TRUE);
 	}
 
-	private ACell handleList(RequestContext ctx, ACell input) {
+	/**
+	 * Names in the caller's secret store, behind {@code secret:list}'s own read
+	 * check. Shared by the operation and the job-free {@code GET /api/v1/secrets}.
+	 */
+	public AVector<AString> listNames(RequestContext ctx) {
 		engine.requireResourceAccess(ctx, Strings.create("s/"), Capability.CRUD_READ);
+		User user = engine.getVenueState().users().user(ctx.getUserDID());
+		return user == null ? Vectors.empty() : user.secrets().list();
+	}
+
+	private ACell handleList(RequestContext ctx, ACell input) {
+		AVector<AString> names = listNames(ctx);
 		ACell filter = RT.getIn(input, K_PREFIX);
-		if (filter != null && !(filter instanceof AString)) throw new IllegalArgumentException(INVALID_PREFIX);
+		if (filter != null && !(filter instanceof AString)) throw new InvalidInputException(INVALID_PREFIX);
 		String prefix = filter == null ? "" : filter.toString();
 		long offset = pageNumber(input, Fields.OFFSET, 0, Long.MAX_VALUE);
 		long limit = pageNumber(input, Fields.LIMIT, 100, 1000);
-		if (limit == 0) throw new IllegalArgumentException(INVALID_PAGE);
-		User user = engine.getVenueState().users().get(ctx.getUserDID());
-		AVector<AString> names = user == null ? Vectors.empty() : user.secrets().list();
+		if (limit == 0) throw new InvalidInputException(INVALID_PAGE);
 		AVector<AString> page = Vectors.empty();
 		long total = 0;
 		for (AString name : names) {
@@ -139,17 +152,18 @@ public class SecretAdapter extends AAdapter {
 		return result;
 	}
 
-	private static long pageNumber(ACell input, AString key, long fallback, long maximum) {
+	/** A page bound of a listing: {@code key}'s value, or {@code fallback}; shared with {@code crypto:list-keys}. */
+	static long pageNumber(ACell input, AString key, long fallback, long maximum) {
 		ACell value = RT.getIn(input, key);
 		if (value == null) return fallback;
-		if (!(value instanceof CVMLong n) || n.longValue() < 0 || n.longValue() > maximum) throw new IllegalArgumentException(INVALID_PAGE);
+		if (!(value instanceof CVMLong n) || n.longValue() < 0 || n.longValue() > maximum) throw new InvalidInputException(INVALID_PAGE);
 		return n.longValue();
 	}
 
 	private ACell handleDelete(RequestContext ctx, ACell input) {
 		AString name = name(input);
 		engine.requireResourceAccess(ctx, resource(name), Capability.CRUD_DELETE);
-		User user = engine.getVenueState().users().get(ctx.getUserDID());
+		User user = engine.getVenueState().users().user(ctx.getUserDID());
 		boolean deleted = user != null && user.secrets().deleteIfPresent(name);
 		if (deleted) engine.audit().event(Audit.SECRET_DELETE, Audit.K_DID, ctx.getCallerDID(),
 			Audit.K_NAME, name, Audit.K_TARGET, ctx.getUserDID());
@@ -171,12 +185,12 @@ public class SecretAdapter extends AAdapter {
 			if (!getOperations().get(EXTRACT).get(Fields.OPERATION).equals(meta.get(Fields.OPERATION))) {
 				throw new AuthException(EXTRACT_DEFINITION_REQUIRED);
 			}
-			User user = engine.getVenueState().users().get(ctx.getUserDID());
+			User user = engine.getVenueState().users().user(ctx.getUserDID());
 			AString value;
 			try {
 				value = user == null ? null : user.secrets().decrypt(name, SecretStore.keys(engine.getKeyPair()));
-			} catch (RuntimeException e) { throw new IllegalStateException(SECRET_DECRYPT_FAILED); }
-			if (value == null) throw new IllegalStateException(SECRET_UNAVAILABLE);
+			} catch (RuntimeException e) { throw new NotSupportedException(SECRET_DECRYPT_FAILED); }
+			if (value == null) throw new NotFoundException(SECRET_UNAVAILABLE, name.toString());
 			engine.audit().event(Audit.SECRET_EXTRACT, Audit.K_DID, ctx.getCallerDID(), Audit.K_NAME, name, Audit.K_OUTCOME, Audit.OK);
 			return Maps.of(Fields.NAME, name, Fields.VALUE, value);
 		} catch (RuntimeException e) {
@@ -194,10 +208,10 @@ public class SecretAdapter extends AAdapter {
 	}
 
 	private static void validateName(AString name) {
-		if (name == null || name.toString().isBlank()) throw new IllegalArgumentException(NAME_REQUIRED);
+		if (name == null || name.toString().isBlank()) throw new InvalidInputException(NAME_REQUIRED);
 		String s = name.toString();
 		if (s.contains("/") || s.contains("\\") || s.equals(".") || s.equals("..")
-				|| s.codePoints().anyMatch(Character::isISOControl)) throw new IllegalArgumentException(INVALID_NAME);
+				|| s.codePoints().anyMatch(Character::isISOControl)) throw new InvalidInputException(INVALID_NAME);
 	}
 
 	/** Shared secret-write boundary for operations that generate credentials
@@ -206,7 +220,7 @@ public class SecretAdapter extends AAdapter {
 	static void storeSecret(Engine engine, RequestContext ctx, AString name,
 			AString value, boolean overwrite) {
 		if (ctx.getCallerDID() == null) {
-			throw new IllegalArgumentException(AUTH_REQUIRED);
+			throw new AuthException(AUTH_REQUIRED);
 		}
 		validateName(name);
 		// Pin the capability to the action: writing a secret requires
@@ -222,7 +236,7 @@ public class SecretAdapter extends AAdapter {
 		if (overwrite) {
 			user.secrets().store(name, value, keys);
 		} else if (!user.secrets().storeIfAbsent(name, value, keys)) {
-			throw new IllegalArgumentException(SECRET_EXISTS);
+			throw new ConflictException(SECRET_EXISTS);
 		}
 		// The name only, never the value.
 		engine.audit().event(covia.venue.Audit.SECRET_WRITE, covia.venue.Audit.K_DID, ctx.getCallerDID(),

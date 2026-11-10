@@ -19,10 +19,11 @@ import org.a2aproject.sdk.spec.AgentSkill;
 import org.a2aproject.sdk.spec.CancelTaskParams;
 import org.a2aproject.sdk.spec.Message;
 import org.a2aproject.sdk.spec.MessageSendParams;
-import org.a2aproject.sdk.spec.Task;
 import org.a2aproject.sdk.spec.TaskQueryParams;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import com.google.gson.JsonParseException;
 
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -34,13 +35,19 @@ import convex.core.data.Strings;
 import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
 import convex.core.util.Utils;
+import covia.api.Abilities;
 import covia.api.Fields;
+import covia.adapter.AAdapter;
 import covia.adapter.AgentAdapter;
 import covia.exception.AuthException;
+import covia.exception.CoviaException;
+import covia.exception.FaultException;
+import covia.exception.InvalidInputException;
+import covia.exception.NotFoundException;
+import covia.grid.Attribution;
 import covia.grid.Job;
 import covia.grid.Venue;
-import covia.lattice.CapabilityChecker;
-import covia.venue.AgentState;
+import covia.venue.Agent;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.User;
@@ -82,6 +89,65 @@ public class A2A extends ACoviaAPI {
 	/** The A2A well-known Agent Card path — at the origin for the venue front-door
 	 *  agent, and relative to a per-agent base endpoint for per-agent cards. */
 	static final String WELL_KNOWN_CARD_PATH = "/.well-known/agent-card.json";
+
+	/** Opening of a front-door refusal: the caller has no such job. */
+	static final String NO_SUCH_TASK = "Task not found: ";
+
+	/** Refusal of a per-agent by-id call: no task of the asker's for this agent —
+	 *  an unknown id, someone else's job, or a job that is no task of this agent.
+	 *  One wording for all, so the endpoint discloses nothing about other jobs. */
+	public static final String AGENT_TASK_NOT_FOUND = "Task not found for this agent";
+
+	/** Refusal of a request body that is not JSON. */
+	public static final String PARSE_ERROR = "Parse error";
+
+	/** Refusal of an empty request body. */
+	public static final String EMPTY_REQUEST = "Empty request";
+
+	/** Refusal of a request with no method name. */
+	public static final String MISSING_METHOD = "Missing or invalid method";
+
+	/** Opening of a refusal of a method A2A does not define; the method follows. */
+	public static final String METHOD_NOT_FOUND = "Method not found: ";
+
+	/** Opening of a refusal of an A2A method this venue does not implement; the method follows. */
+	public static final String NOT_IMPLEMENTED = "Not yet implemented: ";
+
+	/** Opening of a refusal of params that do not fit their method; the method follows. */
+	public static final String INVALID_PARAMS = "Invalid params for ";
+
+	/** Refusal of a send without a message. */
+	public static final String MESSAGE_REQUIRED = "message required";
+
+	/** Refusal of a by-id call without a task id. */
+	public static final String TASK_ID_REQUIRED = "id required";
+
+	/** Refusal of a task id that is not hex. */
+	public static final String INVALID_TASK_ID = "Invalid task id";
+
+	/** Refusal of a fresh front-door send on a venue with no chat operation. */
+	public static final String NO_CHAT_OP = "A2A defaultChatOp not configured on this venue";
+
+	/** Opening of a refusal by the front door's chat operation to start a task; the reason follows. */
+	public static final String CHAT_OP_REFUSED = "Default chat op did not take the message: ";
+
+	/** Opening of a refusal by a hosted agent to take a new task; the reason follows. */
+	public static final String AGENT_INTAKE_FAILED = "Agent intake failed: ";
+
+	/** Refusal of a continuation of an agent task that records no session. */
+	public static final String NO_AGENT_SESSION = "Task has no agent session";
+
+	/** Refusal of a continuation whose contextId is not its task's session. */
+	public static final String CONTEXT_MISMATCH = "contextId does not match taskId";
+
+	/** Opening of a refusal of a message to a finished task; its status follows. */
+	public static final String TASK_FINISHED = "Task is in terminal state: ";
+
+	/** Refusal of a cancel of a finished task. */
+	public static final String TASK_NOT_CANCELABLE = "Task is already in a terminal state";
+
+	/** Refusal of a subscription to a finished task. */
+	public static final String NO_FURTHER_UPDATES = "Task is in a terminal state; no further updates will be sent";
 
 	/** Required: operation reference invoked on a fresh SendMessage. */
 	private final AString defaultChatOp;
@@ -133,10 +199,24 @@ public class A2A extends ACoviaAPI {
 			AgentCard card = buildAgentCard(baseUrl);
 			writeJson(ctx, 200, card);
 		} catch (Exception e) {
-			log.error("Error generating agent card", e);
-			buildError(ctx, 500, "Error generating agent card: " + e.getMessage());
+			cardFailure(ctx, e);
 		}
 	}
+
+	/**
+	 * Answers a card request that failed: a 500 with its reason, or with the
+	 * venue's report of a fault ({@link FaultException#within}), never an
+	 * unexpected failure's text, which is logged at ERROR.
+	 */
+	private void cardFailure(Context ctx, Exception e) {
+		buildError(ctx, 500, FaultException.within(AGENT_CARD, FaultException.VENUE, e).getMessage());
+	}
+
+	/** What failed, when the venue fails building an agent card. */
+	public static final String AGENT_CARD = "Agent card";
+
+	/** What failed, when the venue fails answering an A2A method: its name follows. */
+	public static final String METHOD = "A2A %s";
 
 	private AgentCard buildAgentCard(String baseUrl) {
 		// The venue front-door agent. Per-agent cards share the same builder
@@ -147,37 +227,41 @@ public class A2A extends ACoviaAPI {
 	/**
 	 * Per-agent Agent Card (COG-14): {@code GET /a2a/<ownerDID>/g/<agentId>}.
 	 *
-	 * <p>Private by default — the card is disclosed only to the agent's owner.
-	 * A bad address, a non-owner caller, or a missing agent all get a uniform
-	 * {@code 404}, so the endpoint never reveals whether an agent exists.
-	 * Publicly-exposed agents and the authenticated-non-owner {@code 403} path
-	 * are layered on in later steps (#186 / #184).</p>
+	 * <p>Private by default — the card is disclosed to whoever may ask the agent,
+	 * and to anyone once {@code a2a.public} is set. A bad address or a missing
+	 * agent gets {@code 404}; a caller who may not see the card gets the uniform
+	 * per-agent denial, so the endpoint never reveals whether an agent exists to
+	 * an anonymous caller.</p>
 	 */
 	protected void getAgentCardFor(Context ctx) {
-		// The card lives at the A2A well-known path relative to the agent's base
-		// endpoint — /a2a/<ownerDID>/g/<agentId>/.well-known/agent-card.json — which
-		// is where a standard A2ACardResolver fetches it given the base URL. A bare
-		// GET on the base endpoint is not a card location.
-		String path = ctx.path();
-		if (!path.endsWith(WELL_KNOWN_CARD_PATH)) { buildError(ctx, 404, "Not found"); return; }
-		String base = path.substring(0, path.length() - WELL_KNOWN_CARD_PATH.length());
-		A2ACodec.AgentRef ref = A2ACodec.parseAgentEndpoint(base);
-		if (ref == null) { buildError(ctx, 404, "Not found"); return; }
+		try {
+			// The card lives at the A2A well-known path relative to the agent's base
+			// endpoint — /a2a/<ownerDID>/g/<agentId>/.well-known/agent-card.json — which
+			// is where a standard A2ACardResolver fetches it given the base URL. A bare
+			// GET on the base endpoint is not a card location.
+			String path = ctx.path();
+			if (!path.endsWith(WELL_KNOWN_CARD_PATH)) { buildError(ctx, 404, "Not found"); return; }
+			String base = path.substring(0, path.length() - WELL_KNOWN_CARD_PATH.length());
+			A2ACodec.AgentRef ref = A2ACodec.parseAgentEndpoint(base);
+			if (ref == null) { buildError(ctx, 404, "Not found"); return; }
 
-		AgentState agent = resolveAgentByOwner(ref);
-		if (agent == null) { buildError(ctx, 404, "Not found"); return; }
+			Agent agent = resolveAgentByOwner(ref);
+			if (agent == null) { buildError(ctx, 404, "Not found"); return; }
 
-		RequestContext rctx = AuthMiddleware.callerContext(ctx);
-		// Private by default: only the owner sees the card, unless the agent is
-		// explicitly marked public (#186). A non-owner denial still hides existence
-		// (404 anon, 403 authed).
-		if (!isOwner(rctx, ref) && !isPublic(agent)) { denyPerAgentAccess(ctx, rctx); return; }
+			RequestContext rctx = askerContext(ctx);
+			// Private by default: only whoever may ask the agent sees the card, unless
+			// the agent is explicitly marked public (#186). A denial still hides
+			// existence (404 anon, 403 authed).
+			if (!isPublic(agent) && !mayAsk(rctx, ref)) { denyPerAgentAccess(ctx, rctx); return; }
 
-		writeJson(ctx, 200, perAgentCard(ctx, ref, agent));
+			writeJson(ctx, 200, perAgentCard(ctx, ref, agent));
+		} catch (Exception e) {
+			cardFailure(ctx, e);
+		}
 	}
 
 	/** Render the per-agent Agent Card from the agent's config (#183). */
-	private AgentCard perAgentCard(Context ctx, A2ACodec.AgentRef ref, AgentState agent) {
+	private AgentCard perAgentCard(Context ctx, A2ACodec.AgentRef ref, Agent agent) {
 		AMap<AString, ACell> config = agent.getConfig();
 		String name = stringOr(config, "name", ref.agentId());
 		String description = stringOr(config, "description", "Covia agent " + ref.agentId());
@@ -187,16 +271,35 @@ public class A2A extends ACoviaAPI {
 
 	// ==================== Per-agent JSON-RPC (COG-14) ====================
 
-	/** True when the caller owns the addressed agent. */
-	private boolean isOwner(RequestContext rctx, A2ACodec.AgentRef ref) {
-		AString caller = rctx.getCallerDID();
-		return caller != null && ref.ownerDid().equals(caller.toString());
+	/**
+	 * The asker's own context: the authenticated caller, or the venue's public
+	 * principal for an anonymous one, with any UCAN proofs presented in the
+	 * {@code X-Covia-Ucans} header.
+	 */
+	private RequestContext askerContext(Context ctx) {
+		return engine().withTransportGrants(AuthMiddleware.callerContext(ctx),
+			AuthMiddleware.headerUcans(ctx));
+	}
+
+	/**
+	 * Whether the asker may ask the addressed agent: its owner, or a caller the
+	 * agent's admission policy ({@code config.accepts}) or a presented
+	 * {@code agent/request} proof admits. This is the check every way of asking
+	 * an agent shares.
+	 */
+	private boolean mayAsk(RequestContext asker, A2ACodec.AgentRef ref) {
+		try {
+			engine().requireLocalAccess(asker, Strings.create(ref.gridAddress()), Abilities.AGENT_REQUEST);
+			return true;
+		} catch (AuthException e) {
+			return false;
+		}
 	}
 
 	/** True for the venue's public (unauthenticated) caller identity, per AuthMiddleware. */
 	private boolean isAnonymousCaller(RequestContext rctx) {
 		AString caller = rctx.getCallerDID();
-		return caller == null || (engine().getDIDString() + ":public").equals(caller.toString());
+		return caller == null || engine().isPublicPrincipal(caller);
 	}
 
 	/**
@@ -209,143 +312,80 @@ public class A2A extends ACoviaAPI {
 	}
 
 	/** Resolve the addressed agent in its owner's namespace (from the URL), or null. */
-	private AgentState resolveAgentByOwner(A2ACodec.AgentRef ref) {
-		User user = engine().getVenueState().users().get(ref.ownerDid());
-		AgentState agent = (user == null) ? null : user.agent(ref.agentId());
+	private Agent resolveAgentByOwner(A2ACodec.AgentRef ref) {
+		User user = engine().getVenueState().users().user(ref.ownerDid());
+		Agent agent = (user == null) ? null : user.agent(ref.agentId());
 		return (agent != null && agent.exists()) ? agent : null;
 	}
 
 	/** True when the agent's config opts into public A2A exposure ({@code a2a.public = true}). */
-	private static boolean isPublic(AgentState agent) {
+	private static boolean isPublic(Agent agent) {
 		AMap<AString, ACell> config = agent.getConfig();
 		return config != null
 				&& CVMBool.TRUE.equals(RT.getIn(config, Strings.intern("a2a"), Strings.intern("public")));
 	}
 
 	/**
-	 * True when a non-owner may <em>interact</em> with a public agent — the agent
-	 * is public AND has an explicit {@code a2a.caps} grant scope (COG-14 §5). Public
-	 * without one is discoverable (card) but not anonymously interactable:
-	 * running the agent for anonymous callers requires the owner to deliberately
-	 * bound it.
-	 */
-	private static boolean publicInteractionAllowed(AgentState agent) {
-		return isPublic(agent)
-				&& RT.getIn(agent.getConfig(), Strings.intern("a2a"), Strings.intern("caps")) != null;
-	}
-
-	/**
-	 * The context under which a non-owner's message runs on a public agent: the
-	 * <em>owner's</em> identity (so it resolves the owner's agent) narrowed by the
-	 * {@code a2a.caps} grant scope. {@code "unrestricted"} → no scope (full owner
-	 * authority — the owner's explicit, logged choice); a malformed value falls
-	 * back to a read-only scope. A grant scope can only narrow what the caller may
-	 * do, so this is escalation-safe.
-	 */
-	private RequestContext ownerDispatchContext(A2ACodec.AgentRef ref, AgentState agent) {
-		AString ownerDid = Strings.create(ref.ownerDid());
-		ACell caps = RT.getIn(agent.getConfig(), Strings.intern("a2a"), Strings.intern("caps"));
-		if (caps instanceof AString s && "unrestricted".equals(s.toString())) {
-			log.warn("A2A: public agent {} runs anonymous callers under UNRESTRICTED owner authority", ref.gridAddress());
-			return RequestContext.of(ownerDid);
-		}
-		AVector<ACell> scope = RT.ensureVector(caps);
-		if (scope == null) {
-			log.warn("A2A: public agent {} has malformed a2a.caps; falling back to read-only", ref.gridAddress());
-			scope = CapabilityChecker.readOnlyScope(ownerDid);
-		}
-		return RequestContext.of(ownerDid).withCaps(scope);
-	}
-
-	/**
 	 * Per-agent A2A JSON-RPC endpoint: {@code POST /a2a/<ownerDID>/g/<agentId>}.
 	 *
-	 * <p>Access is private by default and is checked <em>before</em> the body is
-	 * read. Anonymous denials hide existence with 404; authenticated callers
-	 * without standing receive 403. {@code SendMessage} dispatches to
-	 * {@code agent:request} — whose own capability check enforces ownership too
-	 * (facade over the capability layer) — and the resulting task Job becomes the
-	 * A2A Task, with {@code contextId = session}. {@code GetTask} /
-	 * {@code CancelTask} reuse the front-door by-id handlers (a Task id is a
-	 * global, caller-scoped Job id). Incoming task continuation is tracked in
-	 * #306.</p>
+	 * <p>Access is checked <em>before</em> the body is read, with the check every
+	 * way of asking an agent shares ({@link #mayAsk}). Anonymous denials hide
+	 * existence with 404; authenticated callers without standing receive 403.
+	 * Every method then runs as the asker: {@code SendMessage} submits an
+	 * {@code agent:request} task that is the asker's own, and the agent serves
+	 * it as itself, under its own {@code config.caps}. The task Job becomes the
+	 * A2A Task, with {@code contextId = session}. The by-id methods
+	 * ({@code GetTask}, {@code CancelTask}, {@code SubscribeToTask}, a
+	 * {@code SendMessage} with a {@code taskId}) reach only the asker's own tasks
+	 * for this agent ({@link #agentTask}).</p>
 	 */
 	protected void handleAgentJsonRpc(Context ctx) {
 		A2ACodec.AgentRef ref = A2ACodec.parseAgentEndpoint(ctx.path());
 		if (ref == null) { buildError(ctx, 404, "Not found"); return; }
 
-		AgentState agent = resolveAgentByOwner(ref);
+		Agent agent = resolveAgentByOwner(ref);
 		if (agent == null) { buildError(ctx, 404, "Not found"); return; }
 
-		RequestContext caller = AuthMiddleware.callerContext(ctx);
-		boolean owner = isOwner(caller, ref);
-		// SendMessage runs under: the owner as themselves, or — for a
-		// public agent with an explicit a2a.caps grant scope — the owner's identity
-		// narrowed by that scope (COG-14 §5). Otherwise, no access (404/403).
-		RequestContext dispatch;
-		if (owner) {
-			dispatch = caller;
-		} else if (publicInteractionAllowed(agent)) {
-			dispatch = ownerDispatchContext(ref, agent);
-		} else {
-			denyPerAgentAccess(ctx, caller);
+		RequestContext asker = askerContext(ctx);
+		if (!mayAsk(asker, ref)) {
+			denyPerAgentAccess(ctx, asker);
 			return;
 		}
 
-		Map<?, ?> envelope;
+		Rpc rpc = readRequest(ctx);
+		if (rpc == null) return;
+		Object id = rpc.id();
 		try {
-			envelope = JsonUtil.OBJECT_MAPPER.fromJson(ctx.body(), Map.class);
-		} catch (Exception e) {
-			writeError(ctx, null, A2AErrorCodes.JSON_PARSE, "Parse error");
-			return;
-		}
-		if (envelope == null) { writeError(ctx, null, A2AErrorCodes.INVALID_REQUEST, "Empty request"); return; }
-
-		Object id = envelope.get("id");
-		Object methodObj = envelope.get("method");
-		Object paramsRaw = envelope.get("params");
-		if (!(methodObj instanceof String method)) {
-			writeError(ctx, id, A2AErrorCodes.INVALID_REQUEST, "Missing or invalid method");
-			return;
-		}
-
-		try {
-			switch (method) {
+			switch (rpc.method()) {
 				case A2AMethods.SEND_MESSAGE_METHOD -> {
-					MessageSendParams params = parseParams(paramsRaw, MessageSendParams.class);
-					doSendMessageToAgent(ctx, id, params, ref, dispatch);
+					MessageSendParams params = parseParams(rpc, MessageSendParams.class);
+					doSendMessageToAgent(ctx, id, params, ref, asker);
 				}
 				case A2AMethods.GET_TASK_METHOD -> {
-					// A Task is addressed by its (global) id, and access was decided
-					// by the per-agent gate above — so the lookup runs under the
-					// gated DISPATCH context. For a public-with-caps agent that is
-					// the owner's identity: tasks minted through this endpoint stay
-					// pollable by their remote (anonymous) senders, who hold the
-					// unguessable task id as their credential.
-					TaskQueryParams params = parseParams(paramsRaw, TaskQueryParams.class);
-					doGetTask(ctx, id, params, dispatch);
+					TaskQueryParams params = parseParams(rpc, TaskQueryParams.class);
+					TaskRecord task = agentTask(ctx, id, params == null ? null : params.id(), ref, asker);
+					if (task != null) writeResult(ctx, id, A2ACodec.toTask(task.data()));
 				}
 				case A2AMethods.CANCEL_TASK_METHOD -> {
-					CancelTaskParams params = parseParams(paramsRaw, CancelTaskParams.class);
-					doCancelTask(ctx, id, params, dispatch);
+					CancelTaskParams params = parseParams(rpc, CancelTaskParams.class);
+					TaskRecord task = agentTask(ctx, id, params == null ? null : params.id(), ref, asker);
+					if (task != null) cancelTask(ctx, id, task, asker);
 				}
 				case A2AMethods.SUBSCRIBE_TO_TASK_METHOD -> {
 					org.a2aproject.sdk.spec.TaskIdParams params =
-							parseParams(paramsRaw, org.a2aproject.sdk.spec.TaskIdParams.class);
-					doSubscribeToTask(ctx, id, params, dispatch, ref.agentId());
+							parseParams(rpc, org.a2aproject.sdk.spec.TaskIdParams.class);
+					TaskRecord task = agentTask(ctx, id, params == null ? null : params.id(), ref, asker);
+					if (task != null) subscribeTask(ctx, id, task, asker);
 				}
 				case A2AMethods.GET_EXTENDED_AGENT_CARD_METHOD ->
 					// The access gate already ran; the agent's extended card is
 					// its card — per-agent skills from offered ops are a later pass.
 					writeResult(ctx, id, perAgentCard(ctx, ref, agent));
 				default ->
-					writeError(ctx, id, A2AErrorCodes.METHOD_NOT_FOUND, "Method not found: " + method);
+					writeError(ctx, id, A2AErrorCodes.METHOD_NOT_FOUND, METHOD_NOT_FOUND + rpc.method());
 			}
-		} catch (IllegalArgumentException e) {
-			writeError(ctx, id, A2AErrorCodes.INVALID_PARAMS, "Invalid params: " + e.getMessage());
 		} catch (Exception e) {
-			log.error("Error handling per-agent A2A method {}", method, e);
-			writeError(ctx, id, A2AErrorCodes.INTERNAL, "Internal error: " + e.getMessage());
+			answerFailure(ctx, rpc, e);
 		}
 	}
 
@@ -361,7 +401,7 @@ public class A2A extends ACoviaAPI {
 	private void doSendMessageToAgent(Context ctx, Object id, MessageSendParams params,
 			A2ACodec.AgentRef ref, RequestContext rctx) {
 		if (params == null || params.message() == null) {
-			writeError(ctx, id, A2AErrorCodes.INVALID_PARAMS, "message required");
+			writeError(ctx, id, A2AErrorCodes.INVALID_PARAMS, MESSAGE_REQUIRED);
 			return;
 		}
 		Message incoming = params.message();
@@ -371,103 +411,69 @@ public class A2A extends ACoviaAPI {
 		}
 
 		AMap<AString, ACell> record = A2ACodec.toMessageRecord(incoming, false);
+		// Every per-agent send is an agent:request task: a contextId selects
+		// the session, the task Job is the A2A Task, and each message gets
+		// its own cycle and its own reply (#416). A message without taskId is
+		// a new unit of work in A2A, which a task represents with its own
+		// lifecycle; agent:chat has only a reply.
+		AMap<AString, ACell> input = Maps.of(
+			Fields.AGENT_ID, Strings.create(ref.gridAddress()),
+			Fields.INPUT, record);
+		if (incoming.contextId() != null) {
+			input = input.assoc(Fields.SESSION_ID, Strings.create(incoming.contextId()));
+		}
 		Job job;
 		try {
-			// Every per-agent send is an agent:request task: a contextId selects
-			// the session, the task Job is the A2A Task, and each message gets
-			// its own cycle and its own reply (#416). agent:chat would batch
-			// the messages queued on one session into one shared reply, which
-			// A2A cannot express — a message without taskId is a new task.
-			AMap<AString, ACell> input = Maps.of(
-				Fields.AGENT_ID, Strings.create(ref.agentId()),
-				Fields.INPUT, record);
-			if (incoming.contextId() != null) {
-				input = input.assoc(Fields.SESSION_ID, Strings.create(incoming.contextId()));
-			}
-			job = engine().jobs().invokeOperation("v/ops/agent/request", input, rctx);
-		} catch (IllegalArgumentException e) {
-			writeError(ctx, id, A2AErrorCodes.INVALID_AGENT_RESPONSE,
-				"Agent intake failed: " + e.getMessage());
+			job = engine().jobs().callOperation("v/ops/agent/request", input, rctx);
+		} catch (CoviaException e) {
+			writeError(ctx, id, A2AErrorCodes.INVALID_AGENT_RESPONSE, AGENT_INTAKE_FAILED + reason(e));
 			return;
 		}
-		try {
-			engine().jobs().appendToHistory(job.getID(), record, rctx);
-		} catch (Exception e) {
-			log.warn("Failed to append initial per-agent message to Task history", e);
-		}
-		writeResult(ctx, id, A2ACodec.toTask(engine().jobs().getJobData(job.getID(), rctx)));
+		// The endpoint records the ask it admitted; recording it is not the
+		// asker's own write to the task.
+		Blob taskId = job.getID();
+		AString asker = rctx.getUserDID();
+		recordFirstMessage(taskId, () -> engine().jobs().appendToHistory(taskId, asker, record));
+		writeResult(ctx, id, A2ACodec.toTask(engine().jobs().getJobData(taskId, rctx)));
 	}
 
-	/** Continue one exact non-terminal {@code agent:request} Job. */
+	/** Continue one exact non-terminal {@code agent:request} Job of this agent. */
 	private void continueAgentTask(Context ctx, Object id, Message incoming,
 			A2ACodec.AgentRef ref, RequestContext rctx) {
-		Blob taskId;
-		try {
-			taskId = Blob.parse(incoming.taskId());
-			if (taskId == null) throw new IllegalArgumentException("not a hex blob");
-		} catch (Exception e) {
-			writeError(ctx, id, A2AErrorCodes.INVALID_PARAMS, "Invalid taskId");
-			return;
-		}
-
-		AMap<AString, ACell> taskData;
-		try {
-			taskData = engine().jobs().getJobData(taskId, rctx);
-		} catch (AuthException e) {
-			writeError(ctx, id, A2AErrorCodes.TASK_NOT_FOUND, "Task not found");
-			return;
-		}
-		if (taskData == null) {
-			writeError(ctx, id, A2AErrorCodes.TASK_NOT_FOUND,
-				"Task not found: " + incoming.taskId());
-			return;
-		}
-
-		AString taskAgent = RT.ensureString(RT.getIn(taskData, Fields.INPUT, Fields.AGENT_ID));
-		if (taskAgent == null || !ref.agentId().equals(taskAgent.toString())) {
-			writeError(ctx, id, A2AErrorCodes.TASK_NOT_FOUND, "Task not found for this agent");
-			return;
-		}
+		TaskRecord task = agentTask(ctx, id, incoming.taskId(), ref, rctx);
+		if (task == null) return;
+		Blob taskId = task.id();
+		AMap<AString, ACell> taskData = task.data();
 		AString taskSession = RT.ensureString(taskData.get(Fields.SESSION_ID));
 		if (taskSession == null) {
-			writeError(ctx, id, A2AErrorCodes.TASK_NOT_FOUND, "Task has no agent session");
+			writeError(ctx, id, A2AErrorCodes.TASK_NOT_FOUND, NO_AGENT_SESSION);
 			return;
 		}
 		if (incoming.contextId() != null
 				&& !incoming.contextId().equals(taskSession.toString())) {
-			writeError(ctx, id, A2AErrorCodes.INVALID_PARAMS,
-				"contextId does not match taskId");
+			writeError(ctx, id, A2AErrorCodes.INVALID_PARAMS, CONTEXT_MISMATCH);
 			return;
 		}
 		AString status = RT.ensureString(taskData.get(Fields.STATUS));
 		if (isTerminalTaskStatus(status)) {
-			writeError(ctx, id, A2AErrorCodes.UNSUPPORTED_OPERATION,
-				"Task is in terminal state: " + status);
+			writeError(ctx, id, A2AErrorCodes.UNSUPPORTED_OPERATION, TASK_FINISHED + status);
 			return;
 		}
 
 		AMap<AString, ACell> record = A2ACodec.toMessageRecord(incoming, false);
+		ACell input = Maps.of(
+			Fields.AGENT_ID, Strings.create(ref.gridAddress()),
+			Fields.TASK_ID, Strings.create(taskId.toHexString()),
+			Fields.SESSION_ID, taskSession,
+			Fields.MESSAGE, record);
 		try {
-			ACell input = Maps.of(
-				Fields.AGENT_ID, taskAgent,
-				Fields.TASK_ID, Strings.create(taskId.toHexString()),
-				Fields.SESSION_ID, taskSession,
-				Fields.MESSAGE, record);
 			engine().jobs().invokeInternal("v/ops/agent/message", input, rctx).join();
-			engine().jobs().appendToHistory(taskId, record, rctx);
 		} catch (CompletionException e) {
-			Throwable cause = (e.getCause() != null) ? e.getCause() : e;
-			writeError(ctx, id, A2AErrorCodes.UNSUPPORTED_OPERATION,
-				cause.getMessage() != null ? cause.getMessage() : "Task no longer accepts messages");
-			return;
-		} catch (AuthException e) {
-			writeError(ctx, id, A2AErrorCodes.TASK_NOT_FOUND, "Task not found");
-			return;
-		} catch (RuntimeException e) {
-			writeError(ctx, id, A2AErrorCodes.UNSUPPORTED_OPERATION,
-				e.getMessage() != null ? e.getMessage() : "Task no longer accepts messages");
+			// The task did not take the message
+			writeError(ctx, id, A2AErrorCodes.UNSUPPORTED_OPERATION, reason(e));
 			return;
 		}
+		engine().jobs().appendToHistory(taskId, Attribution.owner(taskData), record);
 
 		AMap<AString, ACell> after = engine().jobs().getJobData(taskId, rctx);
 		writeResult(ctx, id, A2ACodec.toTask(after != null ? after : taskData));
@@ -484,49 +490,30 @@ public class A2A extends ACoviaAPI {
 	// ==================== JSON-RPC dispatch ====================
 
 	protected void handleJsonRpc(Context ctx) {
-		String body = ctx.body();
-		Map<?, ?> envelope;
+		Rpc rpc = readRequest(ctx);
+		if (rpc == null) return;
+		Object id = rpc.id();
 		try {
-			envelope = JsonUtil.OBJECT_MAPPER.fromJson(body, Map.class);
-		} catch (Exception e) {
-			writeError(ctx, null, A2AErrorCodes.JSON_PARSE, "Parse error");
-			return;
-		}
-		if (envelope == null) {
-			writeError(ctx, null, A2AErrorCodes.INVALID_REQUEST, "Empty request");
-			return;
-		}
-
-		Object id = envelope.get("id");
-		Object methodObj = envelope.get("method");
-		Object paramsRaw = envelope.get("params");
-
-		if (!(methodObj instanceof String method)) {
-			writeError(ctx, id, A2AErrorCodes.INVALID_REQUEST, "Missing or invalid method");
-			return;
-		}
-
-		try {
-			switch (method) {
+			switch (rpc.method()) {
 				case A2AMethods.SEND_MESSAGE_METHOD -> {
-					MessageSendParams params = parseParams(paramsRaw, MessageSendParams.class);
+					MessageSendParams params = parseParams(rpc, MessageSendParams.class);
 					doSendMessage(ctx, id, params);
 				}
 				case A2AMethods.GET_TASK_METHOD -> {
-					TaskQueryParams params = parseParams(paramsRaw, TaskQueryParams.class);
+					TaskQueryParams params = parseParams(rpc, TaskQueryParams.class);
 					doGetTask(ctx, id, params, AuthMiddleware.callerContext(ctx));
 				}
 				case A2AMethods.CANCEL_TASK_METHOD -> {
-					CancelTaskParams params = parseParams(paramsRaw, CancelTaskParams.class);
+					CancelTaskParams params = parseParams(rpc, CancelTaskParams.class);
 					doCancelTask(ctx, id, params, AuthMiddleware.callerContext(ctx));
 				}
 				case A2AMethods.SEND_STREAMING_MESSAGE_METHOD -> {
-					MessageSendParams params = parseParams(paramsRaw, MessageSendParams.class);
+					MessageSendParams params = parseParams(rpc, MessageSendParams.class);
 					doSendStreamingMessage(ctx, id, params);
 				}
 				case A2AMethods.SUBSCRIBE_TO_TASK_METHOD -> {
 					org.a2aproject.sdk.spec.TaskIdParams params =
-							parseParams(paramsRaw, org.a2aproject.sdk.spec.TaskIdParams.class);
+							parseParams(rpc, org.a2aproject.sdk.spec.TaskIdParams.class);
 					doSubscribeToTask(ctx, id, params);
 				}
 				case A2AMethods.GET_EXTENDED_AGENT_CARD_METHOD ->
@@ -536,165 +523,240 @@ public class A2A extends ACoviaAPI {
 				     A2AMethods.LIST_TASK_PUSH_NOTIFICATION_CONFIG_METHOD,
 				     A2AMethods.DELETE_TASK_PUSH_NOTIFICATION_CONFIG_METHOD,
 				     A2AMethods.LIST_TASK_METHOD ->
-					writeError(ctx, id, A2AErrorCodes.UNSUPPORTED_OPERATION, "Not yet implemented: " + method);
+					writeError(ctx, id, A2AErrorCodes.UNSUPPORTED_OPERATION, NOT_IMPLEMENTED + rpc.method());
 				default ->
-					writeError(ctx, id, A2AErrorCodes.METHOD_NOT_FOUND, "Method not found: " + method);
+					writeError(ctx, id, A2AErrorCodes.METHOD_NOT_FOUND, METHOD_NOT_FOUND + rpc.method());
 			}
-		} catch (IllegalArgumentException e) {
-			writeError(ctx, id, A2AErrorCodes.INVALID_PARAMS, "Invalid params: " + e.getMessage());
 		} catch (Exception e) {
-			log.error("Error handling A2A method {}", method, e);
-			writeError(ctx, id, A2AErrorCodes.INTERNAL, "Internal error: " + e.getMessage());
+			answerFailure(ctx, rpc, e);
 		}
+	}
+
+	/** A JSON-RPC request: its id, method name and raw params. */
+	private record Rpc(Object id, String method, Object params) {}
+
+	/**
+	 * The JSON-RPC request in the body, or null after writing its refusal: a
+	 * body that is not JSON, is empty, or names no method.
+	 */
+	private Rpc readRequest(Context ctx) {
+		String body = ctx.body();
+		Map<?, ?> envelope;
+		try {
+			envelope = JsonUtil.OBJECT_MAPPER.fromJson(body, Map.class);
+		} catch (JsonParseException e) {
+			writeError(ctx, null, A2AErrorCodes.JSON_PARSE, PARSE_ERROR);
+			return null;
+		}
+		if (envelope == null) {
+			writeError(ctx, null, A2AErrorCodes.INVALID_REQUEST, EMPTY_REQUEST);
+			return null;
+		}
+		Object id = envelope.get("id");
+		if (!(envelope.get("method") instanceof String method)) {
+			writeError(ctx, id, A2AErrorCodes.INVALID_REQUEST, MISSING_METHOD);
+			return null;
+		}
+		return new Rpc(id, method, envelope.get("params"));
+	}
+
+	/**
+	 * Answers a failure no step of the method answered itself: params that do
+	 * not fit the method are {@code INVALID_PARAMS}, and anything else is
+	 * {@code INTERNAL} with its reason, or with the venue's report of a fault
+	 * ({@link FaultException#within}), which names only an unexpected
+	 * failure's type and logs it at ERROR.
+	 */
+	private void answerFailure(Context ctx, Rpc rpc, Exception e) {
+		if (e instanceof InvalidInputException && CoviaException.reasonOf(e) != null) {
+			writeError(ctx, rpc.id(), A2AErrorCodes.INVALID_PARAMS, e.getMessage());
+			return;
+		}
+		writeError(ctx, rpc.id(), A2AErrorCodes.INTERNAL,
+			FaultException.within(METHOD.formatted(rpc.method()), FaultException.VENUE, e).getMessage());
+	}
+
+	/**
+	 * The reason an expected failure gives its caller. A fault, or anything
+	 * not yet reported, is rethrown for {@link #answerFailure} to answer as
+	 * {@code INTERNAL}: a step answers only the failures its situation explains.
+	 */
+	private static String reason(RuntimeException e) {
+		if (!AAdapter.isExpectedFailure(e)) throw e;
+		return CoviaException.reasonOf(e);
 	}
 
 	// ==================== Method handlers ====================
 
 	private void doSendMessage(Context ctx, Object id, MessageSendParams params) {
 		if (params == null || params.message() == null) {
-			writeError(ctx, id, A2AErrorCodes.INVALID_PARAMS, "message required");
+			writeError(ctx, id, A2AErrorCodes.INVALID_PARAMS, MESSAGE_REQUIRED);
 			return;
 		}
 		Message incoming = params.message();
 		RequestContext rctx = AuthMiddleware.callerContext(ctx);
-
 		AMap<AString, ACell> record = A2ACodec.toMessageRecord(incoming, false);
 
-		if (incoming.taskId() == null) {
-			// Fresh task — invoke the default chat op
-			if (defaultChatOp == null) {
-				writeError(ctx, id, A2AErrorCodes.UNSUPPORTED_OPERATION,
-						"A2A defaultChatOp not configured on this venue");
-				return;
-			}
-			Job job;
-			try {
-				ACell input = Maps.of(Fields.MESSAGE, record);
-				job = engine().jobs().invokeOperation(defaultChatOp, input, rctx);
-			} catch (IllegalArgumentException e) {
-				writeError(ctx, id, A2AErrorCodes.INVALID_AGENT_RESPONSE,
-						"Default chat op not resolvable: " + e.getMessage());
-				return;
-			}
-			// Persist the initiating message to Task history so subsequent
-			// GetTask sees it. The adapter already received it via the
-			// operation's input, so we do not additionally deliverMessage.
-			try {
-				engine().jobs().appendToHistory(job.getID(), record, rctx);
-			} catch (Exception e) {
-				log.warn("Failed to append initial message to Task history", e);
-			}
-			Task task = A2ACodec.toTask(engine().jobs().getJobData(job.getID(), rctx));
-			writeResult(ctx, id, task);
-			return;
-		}
-
-		// Continuation — deliver message to existing task
-		Blob taskId;
-		try {
-			taskId = Blob.parse(incoming.taskId());
-			if (taskId == null) throw new IllegalArgumentException("not a hex blob");
-		} catch (Exception e) {
-			writeError(ctx, id, A2AErrorCodes.INVALID_PARAMS, "Invalid taskId");
-			return;
-		}
-
-		try {
-			// Persist to Task history first, then dispatch to the adapter.
-			engine().jobs().appendToHistory(taskId, record, rctx);
-			engine().jobs().deliverMessage(taskId, record, rctx);
-		} catch (IllegalArgumentException e) {
-			writeError(ctx, id, A2AErrorCodes.TASK_NOT_FOUND, e.getMessage());
-			return;
-		} catch (IllegalStateException e) {
-			writeError(ctx, id, A2AErrorCodes.UNSUPPORTED_OPERATION, e.getMessage());
-			return;
-		} catch (AuthException e) {
-			writeError(ctx, id, A2AErrorCodes.TASK_NOT_FOUND, "Task not found");
-			return;
-		}
+		Blob taskId = (incoming.taskId() == null)
+			? startChatTask(ctx, id, record, rctx)
+			: deliverToTask(ctx, id, incoming.taskId(), record, rctx);
+		if (taskId == null) return;
 
 		AMap<AString, ACell> jobData = engine().jobs().getJobData(taskId, rctx);
 		if (jobData == null) {
-			writeError(ctx, id, A2AErrorCodes.TASK_NOT_FOUND, "Task not found: " + incoming.taskId());
+			writeError(ctx, id, A2AErrorCodes.TASK_NOT_FOUND, NO_SUCH_TASK + taskId.toHexString());
 			return;
 		}
 		writeResult(ctx, id, A2ACodec.toTask(jobData));
 	}
 
-	/** {@code rctx} is the context access was granted under: the caller for the
-	 *  front door, the gated dispatch context for a per-agent endpoint. */
+	/**
+	 * Starts a fresh front-door task: the configured chat operation, invoked
+	 * with the message. Returns the task's id, or null after writing the
+	 * refusal.
+	 */
+	private Blob startChatTask(Context ctx, Object id, AMap<AString, ACell> record, RequestContext rctx) {
+		if (defaultChatOp == null) {
+			writeError(ctx, id, A2AErrorCodes.UNSUPPORTED_OPERATION, NO_CHAT_OP);
+			return null;
+		}
+		Job job;
+		try {
+			job = engine().jobs().callOperation(defaultChatOp.toString(), Maps.of(Fields.MESSAGE, record), rctx);
+		} catch (CoviaException e) {
+			writeError(ctx, id, A2AErrorCodes.INVALID_AGENT_RESPONSE, CHAT_OP_REFUSED + reason(e));
+			return null;
+		}
+		// The operation took the message as its input; recording it gives the
+		// Task its history without delivering it a second time.
+		Blob taskId = job.getID();
+		recordFirstMessage(taskId, () -> engine().jobs().appendToHistory(taskId, record, rctx));
+		return taskId;
+	}
+
+	/**
+	 * Records a fresh task's first message in its history. The task exists and
+	 * is running by now, so a failure is logged, not answered: an asker told
+	 * the send failed would send again and start a second task.
+	 */
+	private static void recordFirstMessage(Blob taskId, Runnable append) {
+		try {
+			append.run();
+		} catch (RuntimeException e) {
+			log.error("Failed to record the first message of task {}", taskId, e);
+		}
+	}
+
+	/**
+	 * Delivers a continuation to one of the caller's own front-door tasks,
+	 * recording it in the task's history first. Returns the task's id, or null
+	 * after writing the refusal.
+	 */
+	private Blob deliverToTask(Context ctx, Object id, String taskIdHex,
+			AMap<AString, ACell> record, RequestContext rctx) {
+		Blob taskId = parseTaskId(ctx, id, taskIdHex);
+		if (taskId == null) return null;
+		try {
+			engine().jobs().appendToHistory(taskId, record, rctx);
+			engine().jobs().deliverMessage(taskId, record, rctx);
+		} catch (NotFoundException | AuthException e) {
+			// A job the caller may not write is not found: its existence is not disclosed
+			writeError(ctx, id, A2AErrorCodes.TASK_NOT_FOUND, NO_SUCH_TASK + taskIdHex);
+			return null;
+		} catch (CoviaException e) {
+			// The task did not take the message
+			writeError(ctx, id, A2AErrorCodes.UNSUPPORTED_OPERATION, reason(e));
+			return null;
+		}
+		return taskId;
+	}
+
+	/** A task addressed by id: the Job id and the record it resolved to. */
+	private record TaskRecord(Blob id, AMap<AString, ACell> data) {}
+
+	/**
+	 * The task a front-door by-id call addresses — one of the caller's own jobs —
+	 * or null after writing the refusal. A foreign job is "not found": its
+	 * existence is not disclosed.
+	 */
+	private TaskRecord callerTask(Context ctx, Object id, String taskIdHex, RequestContext rctx) {
+		Blob taskId = parseTaskId(ctx, id, taskIdHex);
+		if (taskId == null) return null;
+		AMap<AString, ACell> data = readableJob(taskId, rctx);
+		if (data == null) {
+			writeError(ctx, id, A2AErrorCodes.TASK_NOT_FOUND, NO_SUCH_TASK + taskIdHex);
+			return null;
+		}
+		return new TaskRecord(taskId, data);
+	}
+
+	/**
+	 * The task a per-agent by-id call addresses, or null after writing the
+	 * refusal: one of the asker's own jobs whose recorded agent address is this
+	 * agent's. Ownership confines the asker to its own jobs; the address confines
+	 * the endpoint to this agent's. An unknown id, someone else's job and a job
+	 * that is no task of this agent are refused alike
+	 * ({@link #AGENT_TASK_NOT_FOUND}): the endpoint is no oracle for other jobs.
+	 */
+	private TaskRecord agentTask(Context ctx, Object id, String taskIdHex,
+			A2ACodec.AgentRef ref, RequestContext asker) {
+		Blob taskId = parseTaskId(ctx, id, taskIdHex);
+		if (taskId == null) return null;
+		AMap<AString, ACell> data = readableJob(taskId, asker);
+		if (data == null || !Strings.create(ref.gridAddress()).equals(data.get(Fields.ADDRESS))) {
+			writeError(ctx, id, A2AErrorCodes.TASK_NOT_FOUND, AGENT_TASK_NOT_FOUND);
+			return null;
+		}
+		return new TaskRecord(taskId, data);
+	}
+
+	/** A job's record when {@code rctx} may read it, else null. */
+	private AMap<AString, ACell> readableJob(Blob taskId, RequestContext rctx) {
+		try {
+			return engine().jobs().getJobData(taskId, rctx);
+		} catch (AuthException e) {
+			return null;
+		}
+	}
+
+	/** Parses a task id, or writes INVALID_PARAMS and returns null. */
+	private Blob parseTaskId(Context ctx, Object id, String taskIdHex) {
+		if (taskIdHex == null) {
+			writeError(ctx, id, A2AErrorCodes.INVALID_PARAMS, TASK_ID_REQUIRED);
+			return null;
+		}
+		Blob taskId = Blob.parse(taskIdHex);
+		if (taskId == null) writeError(ctx, id, A2AErrorCodes.INVALID_PARAMS, INVALID_TASK_ID);
+		return taskId;
+	}
+
+	/** Front-door {@code GetTask}: one of the caller's own jobs. */
 	private void doGetTask(Context ctx, Object id, TaskQueryParams params, RequestContext rctx) {
-		if (params == null || params.id() == null) {
-			writeError(ctx, id, A2AErrorCodes.INVALID_PARAMS, "id required");
-			return;
-		}
-		Blob taskId;
-		try {
-			taskId = Blob.parse(params.id());
-			if (taskId == null) throw new IllegalArgumentException();
-		} catch (Exception e) {
-			writeError(ctx, id, A2AErrorCodes.INVALID_PARAMS, "Invalid task id");
-			return;
-		}
-
-		AMap<AString, ACell> jobData;
-		try {
-			jobData = engine().jobs().getJobData(taskId, rctx);
-		} catch (AuthException e) {
-			// Don't leak existence of foreign tasks.
-			writeError(ctx, id, A2AErrorCodes.TASK_NOT_FOUND, "Task not found: " + params.id());
-			return;
-		}
-		if (jobData == null) {
-			writeError(ctx, id, A2AErrorCodes.TASK_NOT_FOUND, "Task not found: " + params.id());
-			return;
-		}
-		writeResult(ctx, id, A2ACodec.toTask(jobData));
+		TaskRecord task = callerTask(ctx, id, params == null ? null : params.id(), rctx);
+		if (task != null) writeResult(ctx, id, A2ACodec.toTask(task.data()));
 	}
 
-	/** {@code rctx} is the context access was granted under: the caller for the
-	 *  front door, the gated dispatch context for a per-agent endpoint. */
+	/** Front-door {@code CancelTask}: one of the caller's own jobs. */
 	private void doCancelTask(Context ctx, Object id, CancelTaskParams params, RequestContext rctx) {
-		if (params == null || params.id() == null) {
-			writeError(ctx, id, A2AErrorCodes.INVALID_PARAMS, "id required");
-			return;
-		}
-		Blob taskId;
-		try {
-			taskId = Blob.parse(params.id());
-			if (taskId == null) throw new IllegalArgumentException();
-		} catch (Exception e) {
-			writeError(ctx, id, A2AErrorCodes.INVALID_PARAMS, "Invalid task id");
-			return;
-		}
+		TaskRecord task = callerTask(ctx, id, params == null ? null : params.id(), rctx);
+		if (task != null) cancelTask(ctx, id, task, rctx);
+	}
 
-		AMap<AString, ACell> before;
+	/** Cancels a resolved task under {@code rctx}, the context it was resolved under. */
+	private void cancelTask(Context ctx, Object id, TaskRecord task, RequestContext rctx) {
+		if (Job.isFinished(task.data())) {
+			writeError(ctx, id, A2AErrorCodes.TASK_NOT_CANCELABLE, TASK_NOT_CANCELABLE);
+			return;
+		}
 		try {
-			before = engine().jobs().getJobData(taskId, rctx);
-		} catch (AuthException e) {
-			writeError(ctx, id, A2AErrorCodes.TASK_NOT_FOUND, "Task not found: " + params.id());
+			engine().jobs().cancelJob(task.id(), rctx);
+		} catch (CoviaException e) {
+			// The venue would not cancel it: not live here, or not the caller's to cancel
+			writeError(ctx, id, A2AErrorCodes.TASK_NOT_CANCELABLE, reason(e));
 			return;
 		}
-		if (before == null) {
-			writeError(ctx, id, A2AErrorCodes.TASK_NOT_FOUND, "Task not found: " + params.id());
-			return;
-		}
-		if (Job.isFinished(before)) {
-			writeError(ctx, id, A2AErrorCodes.TASK_NOT_CANCELABLE,
-					"Task is already in a terminal state");
-			return;
-		}
-
-		try {
-			engine().jobs().cancelJob(taskId, rctx);
-		} catch (Exception e) {
-			writeError(ctx, id, A2AErrorCodes.INTERNAL, "Cancel failed: " + e.getMessage());
-			return;
-		}
-
-		AMap<AString, ACell> after = engine().jobs().getJobData(taskId, rctx);
-		writeResult(ctx, id, A2ACodec.toTask(after != null ? after : before));
+		AMap<AString, ACell> after = engine().jobs().getJobData(task.id(), rctx);
+		writeResult(ctx, id, A2ACodec.toTask(after != null ? after : task.data()));
 	}
 
 	/**
@@ -716,21 +778,25 @@ public class A2A extends ACoviaAPI {
 	 * One catalogue skill per agent the caller owns, via the job-free agent
 	 * list read (#180) — discovery must never mint jobs. The skill id is the
 	 * agent's grid address, which is also its A2A endpoint path under
-	 * {@code /a2a/}.
+	 * {@code /a2a/}. A caller who may not read its agents is offered none.
 	 */
 	private List<AgentSkill> catalogueSkills(RequestContext rctx) {
 		AgentAdapter agents = (AgentAdapter) engine().getAdapter("agent");
-		AVector<ACell> ids = RT.ensureVector(
-				RT.getIn(agents.listAgents(rctx, false, false), Strings.intern("agents")));
+		AVector<ACell> ids;
+		try {
+			ids = RT.ensureVector(RT.getIn(agents.listAgents(rctx, false, false), Strings.intern("agents")));
+		} catch (AuthException e) {
+			return List.of();
+		}
 		if (ids == null || ids.isEmpty()) return List.of();
 
 		String ownerDid = rctx.getCallerDID().toString();
-		User user = engine().getVenueState().users().get(rctx.getCallerDID());
+		User user = engine().getVenueState().users().user(rctx.getCallerDID());
 		List<AgentSkill> skills = new ArrayList<>((int) ids.count());
 		for (long i = 0; i < ids.count(); i++) {
 			AString agentId = RT.ensureString(ids.get(i));
 			if (agentId == null) continue;
-			AgentState agent = (user == null) ? null : user.agent(agentId.toString());
+			Agent agent = (user == null) ? null : user.agent(agentId.toString());
 			AMap<AString, ACell> config = (agent == null) ? null : agent.getConfig();
 			String name = stringOr(config, "name", agentId.toString());
 			String description = stringOr(config, "description", "Covia agent " + agentId);
@@ -744,117 +810,38 @@ public class A2A extends ACoviaAPI {
 
 	private void doSendStreamingMessage(Context ctx, Object id, MessageSendParams params) {
 		if (params == null || params.message() == null) {
-			writeError(ctx, id, A2AErrorCodes.INVALID_PARAMS, "message required");
+			writeError(ctx, id, A2AErrorCodes.INVALID_PARAMS, MESSAGE_REQUIRED);
 			return;
 		}
 		Message incoming = params.message();
 		RequestContext rctx = AuthMiddleware.callerContext(ctx);
-
 		AMap<AString, ACell> record = A2ACodec.toMessageRecord(incoming, false);
 
 		// Resolve the target Job ID before opening the SSE stream — the Job
 		// must exist (and be owned by caller) when A2ASseSession polls it.
-		final Blob taskId;
-		if (incoming.taskId() == null) {
-			if (defaultChatOp == null) {
-				writeError(ctx, id, A2AErrorCodes.UNSUPPORTED_OPERATION,
-						"A2A defaultChatOp not configured on this venue");
-				return;
-			}
-			Job job;
-			try {
-				ACell input = Maps.of(Fields.MESSAGE, record);
-				job = engine().jobs().invokeOperation(defaultChatOp, input, rctx);
-			} catch (IllegalArgumentException e) {
-				writeError(ctx, id, A2AErrorCodes.INVALID_AGENT_RESPONSE,
-						"Default chat op not resolvable: " + e.getMessage());
-				return;
-			}
-			try {
-				engine().jobs().appendToHistory(job.getID(), record, rctx);
-			} catch (Exception e) {
-				log.warn("Failed to append initial message to Task history", e);
-			}
-			taskId = job.getID();
-		} else {
-			try {
-				taskId = Blob.parse(incoming.taskId());
-				if (taskId == null) throw new IllegalArgumentException("not a hex blob");
-			} catch (Exception e) {
-				writeError(ctx, id, A2AErrorCodes.INVALID_PARAMS, "Invalid taskId");
-				return;
-			}
-			try {
-				engine().jobs().appendToHistory(taskId, record, rctx);
-				engine().jobs().deliverMessage(taskId, record, rctx);
-			} catch (IllegalArgumentException e) {
-				writeError(ctx, id, A2AErrorCodes.TASK_NOT_FOUND, e.getMessage());
-				return;
-			} catch (IllegalStateException e) {
-				writeError(ctx, id, A2AErrorCodes.UNSUPPORTED_OPERATION, e.getMessage());
-				return;
-			} catch (AuthException e) {
-				writeError(ctx, id, A2AErrorCodes.TASK_NOT_FOUND, "Task not found");
-				return;
-			}
-		}
-
-		openSseStream(ctx, id, taskId, rctx);
+		Blob taskId = (incoming.taskId() == null)
+			? startChatTask(ctx, id, record, rctx)
+			: deliverToTask(ctx, id, incoming.taskId(), record, rctx);
+		if (taskId != null) openSseStream(ctx, id, taskId, rctx);
 	}
 
+	/** Front-door {@code SubscribeToTask}: one of the caller's own jobs. */
 	private void doSubscribeToTask(Context ctx, Object id, org.a2aproject.sdk.spec.TaskIdParams params) {
-		doSubscribeToTask(ctx, id, params, AuthMiddleware.callerContext(ctx), null);
+		RequestContext rctx = AuthMiddleware.callerContext(ctx);
+		TaskRecord task = callerTask(ctx, id, params == null ? null : params.id(), rctx);
+		if (task != null) subscribeTask(ctx, id, task, rctx);
 	}
 
-	/**
-	 * Subscribe to the ordinary Covia Job backing an A2A Task. A non-null
-	 * {@code expectedAgentId} binds a per-agent endpoint to tasks created for
-	 * that exact agent; the endpoint must not become a general owner-wide Job
-	 * subscription surface.
-	 */
-	private void doSubscribeToTask(Context ctx, Object id,
-			org.a2aproject.sdk.spec.TaskIdParams params, RequestContext rctx,
-			String expectedAgentId) {
-		if (params == null || params.id() == null) {
-			writeError(ctx, id, A2AErrorCodes.INVALID_PARAMS, "id required");
-			return;
-		}
-		Blob taskId;
-		try {
-			taskId = Blob.parse(params.id());
-			if (taskId == null) throw new IllegalArgumentException();
-		} catch (Exception e) {
-			writeError(ctx, id, A2AErrorCodes.INVALID_PARAMS, "Invalid task id");
-			return;
-		}
-		AMap<AString, ACell> jobData;
-		try {
-			jobData = engine().jobs().getJobData(taskId, rctx);
-		} catch (AuthException e) {
-			writeError(ctx, id, A2AErrorCodes.TASK_NOT_FOUND, "Task not found: " + params.id());
-			return;
-		}
-		if (jobData == null) {
-			writeError(ctx, id, A2AErrorCodes.TASK_NOT_FOUND, "Task not found: " + params.id());
-			return;
-		}
-		if (expectedAgentId != null) {
-			AString taskAgent = RT.ensureString(RT.getIn(jobData, Fields.INPUT, Fields.AGENT_ID));
-			if (taskAgent == null || !expectedAgentId.equals(taskAgent.toString())) {
-				writeError(ctx, id, A2AErrorCodes.TASK_NOT_FOUND,
-					"Task not found for this agent");
-				return;
-			}
-		}
+	/** Subscribes to the ordinary Covia Job backing a resolved A2A Task, under
+	 *  {@code rctx}, the context it was resolved under. */
+	private void subscribeTask(Context ctx, Object id, TaskRecord task, RequestContext rctx) {
 		// Per spec §9.4.6: SubscribeToTask on a terminal task returns
 		// UnsupportedOperationError — there will never be more frames.
-		if (Job.isFinished(jobData)) {
-			writeError(ctx, id, A2AErrorCodes.UNSUPPORTED_OPERATION,
-					"Task is in a terminal state; no further updates will be sent");
+		if (Job.isFinished(task.data())) {
+			writeError(ctx, id, A2AErrorCodes.UNSUPPORTED_OPERATION, NO_FURTHER_UPDATES);
 			return;
 		}
-
-		openSseStream(ctx, id, taskId, rctx);
+		openSseStream(ctx, id, task.id(), rctx);
 	}
 
 	/**
@@ -874,13 +861,20 @@ public class A2A extends ACoviaAPI {
 
 	// ==================== Wire helpers ====================
 
-	private <T> T parseParams(Object raw, Class<T> cls) {
+	/**
+	 * The request's params as the method's SDK record, or null when there are
+	 * none.
+	 *
+	 * @throws InvalidInputException if the params do not fit the method
+	 */
+	private <T> T parseParams(Rpc rpc, Class<T> cls) {
 		// Re-serialise the loose params map, then parse into the typed record.
 		// Single round-trip through gson so polymorphic adapters (Part, etc.)
 		// are applied consistently.
 		// Inject tenant="" before parsing — the SDK's *Params records mark
 		// tenant @NonNull but gson doesn't know to pass "" through default
 		// convenience constructors. Clients typically omit tenant on the wire.
+		Object raw = rpc.params();
 		if (raw instanceof Map<?, ?> m) {
 			@SuppressWarnings("unchecked")
 			Map<String, Object> mutable = new LinkedHashMap<>((Map<String, Object>) m);
@@ -893,7 +887,17 @@ public class A2A extends ACoviaAPI {
 			raw = mutable;
 		}
 		String json = JsonUtil.OBJECT_MAPPER.toJson(raw);
-		return JsonUtil.OBJECT_MAPPER.fromJson(json, cls);
+		try {
+			return JsonUtil.OBJECT_MAPPER.fromJson(json, cls);
+		} catch (JsonParseException e) {
+			throw new InvalidInputException(INVALID_PARAMS + rpc.method(), e);
+		} catch (RuntimeException e) {
+			// The SDK's records refuse a missing required field or a bad value
+			// with IllegalArgumentException from their constructor, which gson
+			// reports as a bare RuntimeException caused by it
+			if (!(e.getCause() instanceof IllegalArgumentException)) throw e;
+			throw new InvalidInputException(INVALID_PARAMS + rpc.method(), e);
+		}
 	}
 
 	private void writeResult(Context ctx, Object id, Object result) {

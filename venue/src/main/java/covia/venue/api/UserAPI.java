@@ -13,6 +13,8 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.lang.RT;
+import covia.exception.ConfigurationException;
+import covia.exception.InvalidInputException;
 import covia.grid.Venue;
 import covia.venue.User;
 import io.javalin.config.RoutesConfig;
@@ -76,17 +78,17 @@ public class UserAPI extends ACoviaAPI {
 		final AString did;
 		try {
 			did = engine().managedUserDID(Strings.create(userId));
-		} catch (IllegalArgumentException e) {
+		} catch (InvalidInputException e) {
 			buildError(ctx, 400, e.getMessage());
 			return;
-		} catch (IllegalStateException e) {
+		} catch (ConfigurationException e) {
 			buildError(ctx, 404, "This venue does not publish managed user DIDs");
 			return;
 		}
 
-		// :user-data is the authoritative account registry. The OAuth directory
-		// stores login/provider metadata and must not decide whether a DID exists.
-		User user = engine().getVenueState().users().get(did);
+		// :user-data is the authoritative account registry. ManagedUsers holds
+		// login/provider metadata and must not decide whether a DID exists.
+		User user = engine().getVenueState().users().user(did);
 		if (user == null) {
 			buildError(ctx, 404, "User not found: " + userId);
 			return;

@@ -4,47 +4,48 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
 
+import convex.auth.ucan.Capability;
+import convex.auth.ucan.UCAN;
+import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Hash;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.api.Fields;
+import covia.exception.JobFailedException;
 import covia.grid.Asset;
 import covia.grid.Job;
+import covia.grid.Status;
+import covia.lattice.CoviaPath;
+import covia.lattice.ValuePath;
 
 /**
  * Tests for operation resolution: /a/ hash paths, /o/ user-scoped names,
  * and the venue operation registry.
  *
- * <p>Uses its OWN {@link Engine}, not the shared {@link TestEngine#ENGINE}.
- * These tests do write-then-read resolution. The shared engine is concurrently
- * mutated by other parallel test classes whose HTTP requests trigger
- * {@code syncState()} → {@code lattice.sync()}; a concurrent flush of the
- * shared Etch store can transiently fault a lazily-loaded cell during a read
- * (the de-swallowed navigation exception in #145/#146). Reads themselves are
- * lock-free and navigate an immutable snapshot — there is no read-logic race —
- * so the correct fix is isolation, not locking. This class never calls
- * {@code syncState()}, so its own store stays quiescent and its reads are
- * deterministic regardless of what other classes do. Per-test {@code alice}
- * DIDs keep this class's own concurrent methods from colliding on
- * {@code /o/} and {@code /w/}.</p>
+ * <p>Uses its OWN {@link Engine}, not the shared {@link TestEngine#ENGINE}:
+ * the {@code /v/} tests write the venue's own {@code w/global}, which every
+ * test on the shared venue reads through {@code v/}. Per-test {@code alice}
+ * DIDs keep this class's concurrent methods from colliding on {@code /o/} and
+ * {@code /w/}, and each {@code w/global} write has a path of its own.</p>
  */
 public class OperationResolutionTest {
 
-	// Own engine, isolated from the shared TestEngine.ENGINE — see class doc.
-	// Built once for the class; this class's operations are all in-memory and
-	// lock-free (it never triggers syncState), so its concurrent methods share
-	// it safely.
-	private static final Engine engine;
-	static {
+	// Built once for the class; see the class doc for why it is not the shared one.
+	private static Engine engine;
+
+	@BeforeAll
+	static void startEngine() {
 		engine = Engine.createTemp(Maps.of(
 			Config.USERS, Maps.of(Config.AUTO_CREATE, true)));
 		Engine.addDemoAssets(engine);
@@ -133,6 +134,19 @@ public class OperationResolutionTest {
 		ACell result = job.awaitResult(5000);
 		assertNotNull(result);
 		assertEquals(Strings.create("hello from /o/"), RT.getIn(result, "echo"));
+	}
+
+	@Test
+	public void testRecordedOpResolvesInTheRecordedNamespaceOnly() {
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "o/my-echo", Fields.VALUE, Maps.of(
+				"operation", Maps.of("adapter", "test:echo"))),
+			alice).awaitResult(5000);
+		AString opRef = Strings.create("o/my-echo");
+		assertNotNull(engine.jobs().resolveRecordedOp(opRef, aliceDID));
+		// A job record's caller is its namespace. An agent-shaped one is its own,
+		// never that of the user its name nests under.
+		assertNull(engine.jobs().resolveRecordedOp(opRef, Strings.create(aliceDID + ":g:worker")));
 	}
 
 	// ========== /o/<name> resolution — string values are NOT references ==========
@@ -497,21 +511,25 @@ public class OperationResolutionTest {
 			"resolveAsset should give the same metadata as resolvePath for inline ops");
 	}
 
-	// ========== /v/ namespace — venue globals via VenueGlobalsResolver ==========
+	// ========== /v/ namespace — venue globals ==========
 	//
-	// Per OPERATIONS.md §3, /v/ is a virtual prefix that resolves to the
-	// venue user's /w/global/ sub-tree. Reads are universally allowed; writes
-	// require the venue identity (engine.venueContext() or the venue's own
-	// DID). The venue user record exists at engine startup so /v/ paths
-	// always have a backing namespace to navigate.
+	// Per OPERATIONS.md §3, /v/ is the venue's read-only view of its user's
+	// w/global: v/<rest> shows w/global/<rest>. Every principal reads it;
+	// nothing changes through it, and the venue changes what it shows in its
+	// own w/global. The venue user record exists at engine startup so /v/
+	// paths always have a backing namespace to navigate.
+
+	/** Writes {@code value} at the venue's {@code w/global/<rest>}, which {@code v/<rest>} shows. */
+	private void writeVenueGlobal(String rest, ACell value) {
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/global/" + rest, Fields.VALUE, value),
+			engine.venueContext()).awaitResult(5000);
+	}
 
 	@Test
 	public void testWriteAndReadVenueGlobalAsInternal() {
-		// Internal context can write to /v/
 		ACell value = Maps.of("name", "test entry", "version", CVMLong.create(1));
-		engine.jobs().invokeOperation("v/ops/covia/write",
-			Maps.of(Fields.PATH, "v/test/entry", Fields.VALUE, value),
-			engine.venueContext()).awaitResult(5000);
+		writeVenueGlobal("test/entry", value);
 
 		// Any caller can read it
 		ACell readBack = engine.resolvePath(Strings.create("v/test/entry"), alice);
@@ -523,38 +541,29 @@ public class OperationResolutionTest {
 	}
 
 	@Test
-	public void testNonVenueCallerCannotWriteToV() {
-		// Alice (a regular user) cannot write to /v/
-		assertThrows(Exception.class, () -> {
-			engine.jobs().invokeOperation("v/ops/covia/write",
-				Maps.of(Fields.PATH, "v/test/forbidden", Fields.VALUE, Strings.create("nope")),
-				alice).awaitResult(5000);
-		}, "non-venue caller should be rejected when writing to /v/");
+	public void testNothingChangesThroughV() {
+		for (RequestContext ctx : new RequestContext[] {alice, engine.venueContext()}) {
+			Job write = engine.jobs().invokeOperation("v/ops/covia/write",
+				Maps.of(Fields.PATH, "v/test/forbidden", Fields.VALUE, Strings.create("nope")), ctx);
+			assertThrows(Exception.class, () -> write.awaitResult(5000));
+			assertEquals(covia.adapter.CoviaAdapter.VIEW_READ_ONLY, write.getErrorMessage());
+		}
+		assertNull(engine.resolvePath(Strings.create("v/test/forbidden"), alice));
 	}
 
 	@Test
 	public void testVenueGlobalsRouteThroughVenueUserWGlobal() {
-		// Verify the underlying storage location: writing to v/foo should be
-		// readable from <venue-DID>/w/global/foo by the venue itself.
-		engine.jobs().invokeOperation("v/ops/covia/write",
-			Maps.of(Fields.PATH, "v/foo", Fields.VALUE, Strings.create("hello")),
-			engine.venueContext()).awaitResult(5000);
-
-		// Read directly from the venue user's workspace via the venue's own
-		// internal context (which can read its own /w/).
-		AString venueDID = engine.getDIDString();
-		RequestContext venueCtx = RequestContext.of(venueDID);
-		ACell value = engine.resolvePath(Strings.create("w/global/foo"), venueCtx);
-		assertEquals(Strings.create("hello"), value,
-			"v/foo should physically live at <venue-DID>/w/global/foo");
+		// v/foo shows what the venue keeps at <venue-DID>/w/global/foo
+		writeVenueGlobal("foo", Strings.create("hello"));
+		assertEquals(Strings.create("hello"), engine.resolvePath(Strings.create("v/foo"), alice));
+		assertNull(engine.resolvePath(Strings.create(engine.getDIDString() + "/v/foo"), alice),
+			"the view is every request's own, so the venue's DID before it names no place");
 	}
 
 	@Test
 	public void testVenueGlobalsReadableViaCoviaRead() {
 		// Universal resolution: covia:read should accept v/ paths
-		engine.jobs().invokeOperation("v/ops/covia/write",
-			Maps.of(Fields.PATH, "v/welcome", Fields.VALUE, Strings.create("hi from venue")),
-			engine.venueContext()).awaitResult(5000);
+		writeVenueGlobal("welcome", Strings.create("hi from venue"));
 
 		Job job = engine.jobs().invokeOperation("v/ops/covia/read",
 			Maps.of(Fields.PATH, "v/welcome"), alice);
@@ -573,9 +582,7 @@ public class OperationResolutionTest {
 			"operation", Maps.of("adapter", "json:merge"),
 			"tags", convex.core.data.Vectors.of(Strings.create("data"), Strings.create("util"))
 		);
-		engine.jobs().invokeOperation("v/ops/covia/write",
-			Maps.of(Fields.PATH, "v/test-ops/structured", Fields.VALUE, complex),
-			engine.venueContext()).awaitResult(5000);
+		writeVenueGlobal("test-ops/structured", complex);
 
 		// Read via /v/ and verify it round-trips
 		ACell readBack = engine.resolvePath(Strings.create("v/test-ops/structured"), alice);
@@ -584,6 +591,41 @@ public class OperationResolutionTest {
 		// And it's resolvable as an Asset because it has an operation field
 		Asset asset = engine.resolveAsset(Strings.create("v/test-ops/structured"), alice);
 		assertNotNull(asset, "v/ops entry with operation field should resolve as Asset");
+	}
+
+	@Test
+	public void testVenueGlobalsAreAViewOfTheVenueUsersPath() {
+		writeVenueGlobal("test-scalar", Strings.create("leaf"));
+		User venue = engine.getVenueState().users().user(engine.getDIDString());
+		assertEquals(Strings.create("leaf"), venue.resolve(CoviaPath.parse("w/global/test-scalar")).cursor().getOrDefault(null));
+		assertEquals(Strings.create("leaf"), engine.resolvePath(Strings.create("v/test-scalar"), alice));
+		assertNull(engine.resolvePath(Strings.create("v/test-scalar/below"), alice), "nothing is below a scalar");
+	}
+
+	@Test
+	public void testTheVenueLetsAnotherPrincipalChangeItsCatalogByGrant() {
+		AKeyPair adminKP = AKeyPair.generate();
+		RequestContext admin = RequestContext.of(UCAN.toDIDKey(adminKP.getAccountKey()));
+		String folder = "test/delegated-" + adminKP.getAccountKey().toHexString();
+		writeVenueGlobal(folder + "/seed", Strings.create("seed"));
+		AString place = Strings.create(engine.getDIDString() + "/w/global/" + folder + "/entry");
+
+		Job refused = engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, place, Fields.VALUE, Strings.create("ungranted")), admin);
+		assertThrows(Exception.class, () -> refused.awaitResult(5000));
+		assertEquals(Status.FAILED, refused.getStatus());
+
+		long exp = System.currentTimeMillis() / 1000 + 3600;
+		RequestContext granted = admin.withProofs(Vectors.of(UCAN.create(engine.getKeyPair(),
+			adminKP.getAccountKey(), exp,
+			Vectors.of(Capability.create(Strings.create(engine.getDIDString() + "/w/global/" + folder),
+				Capability.CRUD_WRITE)),
+			Vectors.empty()).toMap()));
+		Job write = engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, place, Fields.VALUE, Strings.create("granted")), granted);
+		write.awaitResult(5000);
+		assertEquals(Strings.create("granted"), engine.resolvePath(Strings.create("v/" + folder + "/entry"), alice),
+			"v/ shows what the grantee wrote to the venue's w/global");
 	}
 
 	@Test

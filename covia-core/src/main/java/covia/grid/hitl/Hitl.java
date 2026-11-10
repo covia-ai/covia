@@ -9,6 +9,7 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
+import covia.api.Fields;
 
 /**
  * Human-in-the-Loop shapes (COG-16): the shared field vocabulary and fluent
@@ -48,7 +49,10 @@ public class Hitl {
 	// ========== Field names ==========
 
 	public static final AString ID          = Strings.intern("id");
-	public static final AString FROM        = Strings.intern("from");
+	/** On a request record: the principal that asked (a user, one of its agents or a delegate). */
+	public static final AString CALLER      = Fields.CALLER;
+	/** On a request record: the namespace the asker acted in, when it differs from the caller. */
+	public static final AString OWNER       = Fields.OWNER;
 	public static final AString AGENT       = Strings.intern("agent");
 	public static final AString TITLE       = Strings.intern("title");
 	public static final AString DESCRIPTION = Strings.intern("description");

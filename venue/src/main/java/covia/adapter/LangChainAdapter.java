@@ -28,9 +28,17 @@ import covia.adapter.agent.AbstractLLMAdapter;
 import covia.adapter.agent.ToolCallIds;
 import covia.api.Fields;
 import covia.exception.AuthException;
+import covia.exception.ConfigurationException;
+import covia.exception.CoviaException;
+import covia.exception.InvalidInputException;
+import covia.exception.NotFoundException;
+import covia.exception.NotSupportedException;
+import covia.exception.ResponseException;
+import covia.exception.UnavailableException;
 import covia.grid.Asset;
 import covia.grid.Status;
 import covia.venue.Engine;
+import covia.venue.Models;
 import covia.venue.RequestContext;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.agent.tool.ToolSpecification;
@@ -121,6 +129,7 @@ public class LangChainAdapter extends AAdapter {
 	static final AString K_RESPONSE_FORMAT = Strings.intern("responseFormat");
 	static final AString K_SCHEMA      = Strings.intern("schema");
 	static final AString K_TYPE        = Strings.intern("type");
+	private static final AString K_CODE = Strings.intern("code");
 	static final AString K_DESCRIPTION = Strings.intern("description");
 	static final AString K_ENUM        = Strings.intern("enum");
 	static final AString K_ITEMS       = Strings.intern("items");
@@ -141,6 +150,48 @@ public class LangChainAdapter extends AAdapter {
 	static final AString ROLE_USER      = Strings.intern("user");
 	static final AString ROLE_ASSISTANT = Strings.intern("assistant");
 	static final AString ROLE_TOOL      = Strings.intern("tool");
+
+	// ========== Provider failures (ERRORS.md) ==========
+	// Each names the provider and model and what failed. Where the provider
+	// answered, the %s after the model takes providerNote: its status and its
+	// error exactly as sent.
+
+	/** The provider refused the venue's own API key: the operator's to fix. */
+	public static final String OPERATOR_KEY_REFUSED =
+		"Model provider %s refused the venue's API key for model %s%s; the venue operator must configure a valid key";
+	/** The provider refused the API key the caller supplied, as input or from its own secrets. */
+	public static final String CALLER_KEY_REFUSED =
+		"Model provider %s refused the API key supplied for model %s%s; check the apiKey input or the secret it comes from";
+	public static final String PROVIDER_RATE_LIMITED =
+		"Model provider %s rate-limited the request for model %s%s; retry later";
+	public static final String PROVIDER_TIMED_OUT =
+		"Model provider %s did not answer in time for model %s%s; retry later";
+	public static final String PROVIDER_FAILED =
+		"Model provider %s failed to answer for model %s%s; retry later";
+	public static final String PROVIDER_UNREACHABLE =
+		"Could not reach model provider %s for model %s, or the connection failed; check the url and retry";
+	public static final String MODEL_NOT_FOUND =
+		"Model provider %s has no model %s%s, or the url names no model API; check the model id and the url";
+	public static final String FEATURE_NOT_SUPPORTED =
+		"Model provider %s does not support a feature this request uses for model %s";
+	public static final String CONTENT_FILTERED =
+		"Model provider %s declined the request for model %s: its content filter refused it";
+	public static final String REQUEST_REFUSED =
+		"Model provider %s refused the request for model %s%s";
+	public static final String MALFORMED_RESPONSE =
+		"Model provider %s answered for model %s with a response the venue could not read";
+	/** A context-size refusal, recognised by {@link AbstractLLMAdapter#CONTEXT_TOO_LARGE}. */
+	public static final String PROVIDER_CONTEXT_TOO_LARGE = AbstractLLMAdapter.CONTEXT_TOO_LARGE
+		+ ": model provider %s refused the request for model %s%s";
+	/** Ollama refused the connection: almost always topology, Docker against the host (#224). */
+	public static final String OLLAMA_UNREACHABLE = "Ollama not reachable at %s — if the venue runs in Docker,"
+		+ " set adapters.langchain.ollamaUrl in venue config (or the OLLAMA_BASE_URL environment variable)"
+		+ " to http://host.docker.internal:11434 and start Ollama with OLLAMA_HOST=0.0.0.0";
+
+	/** Provider wording for a context-window refusal, read only to recognise one. */
+	private static final List<String> CONTEXT_SIZE_MARKERS = List.of(
+		"context_length_exceeded", "maximum context length", "prompt is too long",
+		"input is too long", "too many input tokens", "request too large", "context window");
 
 	@Override
 	public String getName() {
@@ -182,26 +233,26 @@ public class LangChainAdapter extends AAdapter {
 
 			AMap<AString, ACell> executable = withModelDefault(readJsonMap(resource.toString()), defaultModel);
 			String providerOp = "v/ops/langchain/" + provider;
-			AMap<AString, ACell> providerFacet = AbstractLLMAdapter.modelFacet(executable)
+			AMap<AString, ACell> providerFacet = Models.modelFacet(executable)
 				.assoc(Fields.DEFAULT, modelPath(provider, defaultModel))
 				.assoc(K_RECOMMENDED, modelPaths(provider, RT.ensureMap(spec.get(K_RECOMMENDED))));
 			// Provider+model calls and caller model overrides use the same defaults
 			// as directly invoked presets; definitions remain the single source.
-			AMap<AString, ACell> byModel = RT.ensureMap(providerFacet.get(AbstractLLMAdapter.K_BY_MODEL));
+			AMap<AString, ACell> byModel = RT.ensureMap(providerFacet.get(Models.K_BY_MODEL));
 			if (byModel == null) byModel = Maps.empty();
 			for (long j = 0; j < models.count(); j++) {
 				ACell modelSpec = models.get(j);
 				AString id = RT.ensureString(RT.getIn(modelSpec, K_ID));
-				AMap<AString, ACell> options = RT.ensureMap(RT.getIn(modelSpec, AbstractLLMAdapter.K_OPTIONS));
+				AMap<AString, ACell> options = RT.ensureMap(RT.getIn(modelSpec, Models.K_OPTIONS));
 				if (id != null && options != null) {
 					AMap<AString, ACell> old = RT.ensureMap(byModel.get(id));
 					byModel = byModel.assoc(id, layerModelProfile(old == null ? Maps.empty() : old,
-						Maps.of(AbstractLLMAdapter.K_OPTIONS, options)));
+						Maps.of(Models.K_OPTIONS, options)));
 				}
 			}
-			providerFacet = providerFacet.assoc(AbstractLLMAdapter.K_BY_MODEL, byModel);
+			providerFacet = providerFacet.assoc(Models.K_BY_MODEL, byModel);
 			AMap<AString, ACell> providerMeta = executable.assoc(
-				AbstractLLMAdapter.K_MODEL_FACET, providerFacet);
+				Models.K_MODEL_FACET, providerFacet);
 			installAsset("langchain/" + provider, providerMeta);
 
 			for (long j = 0; j < models.count(); j++) {
@@ -211,9 +262,9 @@ public class LangChainAdapter extends AAdapter {
 					"Invalid model at providers[" + i + "].models[" + j + "]");
 				AMap<AString, ACell> facet = modelSpecificProfile(executable, id);
 				AMap<AString, ACell> declaredFacet = Maps.empty();
-				ACell options = modelSpec.get(AbstractLLMAdapter.K_OPTIONS);
+				ACell options = modelSpec.get(Models.K_OPTIONS);
 				ACell budget = modelSpec.get(AbstractLLMAdapter.K_BUDGET);
-				if (options != null) declaredFacet = declaredFacet.assoc(AbstractLLMAdapter.K_OPTIONS, options);
+				if (options != null) declaredFacet = declaredFacet.assoc(Models.K_OPTIONS, options);
 				if (budget != null) declaredFacet = declaredFacet.assoc(AbstractLLMAdapter.K_BUDGET, budget);
 				facet = layerModelProfile(facet, declaredFacet)
 					.assoc(K_ID, id)
@@ -227,7 +278,7 @@ public class LangChainAdapter extends AAdapter {
 						Strings.create(provider + " / " + id)))
 					.assoc(Fields.DESCRIPTION, valueOr(modelSpec.get(Fields.DESCRIPTION), Strings.create(
 						"Model preset for " + id + " through the " + provider + " provider operation.")))
-					.assoc(AbstractLLMAdapter.K_MODEL_FACET, facet);
+					.assoc(Models.K_MODEL_FACET, facet);
 				installModel(provider + "/" + id, modelMeta);
 			}
 		}
@@ -268,7 +319,7 @@ public class LangChainAdapter extends AAdapter {
 	private static AMap<AString, ACell> modelSpecificProfile(AMap<AString, ACell> providerMeta,
 			AString modelId) {
 		AMap<AString, ACell> byModel = RT.ensureMap(
-			AbstractLLMAdapter.modelFacet(providerMeta).get(AbstractLLMAdapter.K_BY_MODEL));
+			Models.modelFacet(providerMeta).get(Models.K_BY_MODEL));
 		AMap<AString, ACell> profile = (byModel != null) ? RT.ensureMap(byModel.get(modelId)) : null;
 		return (profile != null) ? profile : Maps.empty();
 	}
@@ -308,7 +359,6 @@ public class LangChainAdapter extends AAdapter {
 
 	@Override
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
-		requireInvoke(ctx);
 		String subOp = getSubOperation(meta);
 		if (subOp == null) {
 			return CompletableFuture.completedFuture(
@@ -329,6 +379,13 @@ public class LangChainAdapter extends AAdapter {
 
 		// Get URL parameter
 		AString urlParam = RT.ensureString(RT.getIn(input, "url"));
+		if (urlParam != null) {
+			try {
+				urlParam = Strings.create(covia.utils.HTTPURLs.normalize(urlParam.toString()).toString());
+			} catch (InvalidInputException e) {
+				return CompletableFuture.completedFuture(Status.failure(e.getMessage()));
+			}
+		}
 
 		// Get model parameter from subParts[1] if provided, otherwise from input
 		String modelName = (subParts.length > 1) ? subParts[1] : null;
@@ -336,12 +393,12 @@ public class LangChainAdapter extends AAdapter {
 			AString modelParam = RT.ensureString(RT.getIn(input, "model"));
 			modelName = (modelParam != null) ? modelParam.toString() : null;
 		}
-		final AbstractLLMAdapter.ResolvedModel resolvedModel;
+		final Models.Resolved resolvedModel;
 		try {
 			resolvedModel = AbstractLLMAdapter.resolveModel(engine, Asset.fromMeta(meta),
 				(modelName != null) ? Strings.create(modelName) : null, null, ctx);
 		} catch (RuntimeException e) {
-			return CompletableFuture.completedFuture(Status.failure("Cannot resolve model: " + e.getMessage()));
+			return CompletableFuture.completedFuture(Status.failure("Cannot resolve model: " + describeFailure(e)));
 		}
 		final String finalModelName = (resolvedModel.modelId() != null)
 			? resolvedModel.modelId().toString() : null;
@@ -350,12 +407,13 @@ public class LangChainAdapter extends AAdapter {
 		// named, else the provider's own. A granted key's url caveat is checked
 		// against that destination; a denial is a failure, never a thrown error.
 		final String destination = (urlParam != null) ? urlParam.toString() : defaultBaseUrl(provider);
-		final String apiKey;
+		final ApiKey key;
 		try {
-			apiKey = resolveApiKey(meta, input, ctx, destination);
+			key = resolveApiKey(meta, input, ctx, destination);
 		} catch (AuthException e) {
 			return CompletableFuture.completedFuture(Status.failure(e.getMessage()));
 		}
+		final String apiKey = key.value();
 
 		// Providers that need a key must fail fast with a clear message —
 		// without this, langchain4j's Anthropic builder throws synchronously
@@ -378,7 +436,7 @@ public class LangChainAdapter extends AAdapter {
 		}
 
 		// A url is an outbound target like any other: it passes the venue's SSRF guard.
-		String urlRefused = checkUrl(urlParam);
+		String urlRefused = checkUrl(ctx, urlParam);
 		if (urlRefused != null) return CompletableFuture.completedFuture(Status.failure(urlRefused));
 
 		// Optional sampling/bounds parameters (#218): temperature and topP pass
@@ -470,12 +528,7 @@ public class LangChainAdapter extends AAdapter {
 					result = callModel(provider, resolvedModelName, chatModel, resolvedMessages, tools,
 						responseFormatCell, cacheMarks);
 				} catch (RuntimeException e) {
-					// A connect failure against Ollama is almost always topology
-					// (Docker vs host) — turn the bare ConnectException into a
-					// 30-second self-serve diagnosis (#224).
-					String hint = (ollamaUrl != null) ? ollamaConnectHint(ollamaUrl, e) : null;
-					if (hint != null) throw new covia.exception.JobFailedException(hint);
-					throw e;
+					throw providerFailure(provider, resolvedModelName, key.operators(), ollamaUrl, e);
 				}
 				if (legacyOutput) {
 					// Wrap assistant message as {response: content}
@@ -522,7 +575,8 @@ public class LangChainAdapter extends AAdapter {
 	/** Reads maxTokens/temperature/topP from the op input. Numeric fields
 	 *  accept integers and doubles alike — {@code temperature: 0} arrives as
 	 *  a long from JSON and must not be dropped (it's the deterministic-
-	 *  extraction case that motivated #218). */
+	 *  extraction case that motivated #218). A bad setting is the setup the
+	 *  call runs under, so it is a {@code ConfigurationException}. */
 	static ModelTuning extractTuning(ACell input) {
 		return extractTuning(input, Maps.empty());
 	}
@@ -533,7 +587,7 @@ public class LangChainAdapter extends AAdapter {
 		Boolean cache = (cacheCell instanceof CVMBool b) ? b.booleanValue() : null;
 		ACell optionsCell = RT.getIn(input, AbstractLLMAdapter.K_PROVIDER_OPTIONS);
 		if (optionsCell != null && !(optionsCell instanceof AMap<?, ?>)) {
-			throw new IllegalArgumentException("providerOptions must be a map");
+			throw new ConfigurationException("providerOptions must be a map");
 		}
 		return new ModelTuning(maxTokens,
 			asDouble(RT.getIn(input, "temperature"), "temperature"),
@@ -544,11 +598,11 @@ public class LangChainAdapter extends AAdapter {
 	private static Integer asPositiveInt(ACell value, String field) {
 		if (value == null) return null;
 		if (!(value instanceof CVMLong number)) {
-			throw new IllegalArgumentException(field + " must be a positive integer, got: " + value);
+			throw new ConfigurationException(field + " must be a positive integer, got: " + value);
 		}
 		long n = number.longValue();
 		if (n <= 0 || n > Integer.MAX_VALUE) {
-			throw new IllegalArgumentException(field + " must be between 1 and "
+			throw new ConfigurationException(field + " must be between 1 and "
 				+ Integer.MAX_VALUE + ", got: " + n);
 		}
 		return (int) n;
@@ -580,7 +634,7 @@ public class LangChainAdapter extends AAdapter {
 	private static Double asDouble(ACell v, String field) {
 		if (v == null) return null;
 		convex.core.data.prim.CVMDouble d = RT.castDouble(v);
-		if (d == null) throw new IllegalArgumentException(field + " must be a number, got: " + v);
+		if (d == null) throw new ConfigurationException(field + " must be a number, got: " + v);
 		return d.doubleValue();
 	}
 
@@ -600,26 +654,155 @@ public class LangChainAdapter extends AAdapter {
 		return "http://localhost:11434";
 	}
 
-	/** A diagnosable message for an Ollama connect failure, or null when the
-	 *  failure isn't connectivity. Names the resolved URL and the venue-level
-	 *  knob — the usual cause is a Dockerised venue reaching for its own
-	 *  localhost (#224). */
-	static String ollamaConnectHint(String resolvedUrl, Throwable e) {
-		boolean connectivity = false;
-		for (Throwable t = e; t != null; t = (t.getCause() != t) ? t.getCause() : null) {
-			if (t instanceof java.net.ConnectException
-					|| t instanceof java.net.UnknownHostException
-					|| t instanceof java.net.NoRouteToHostException
-					|| t instanceof java.net.http.HttpConnectTimeoutException) {
-				connectivity = true;
-				break;
+	/**
+	 * The failure a provider call reports, typed for what went wrong
+	 * (ERRORS.md): a langchain4j or connection failure becomes the Covia type,
+	 * named by provider and model, with what the provider said where it
+	 * answered ({@link #providerNote}). Anything else, a cancellation
+	 * included, passes on unchanged.
+	 *
+	 * <p>The type says what failed. A refused key or a missing model is the
+	 * setup the call runs under, so {@code ConfigurationException}; a provider
+	 * that cannot be reached or keeps failing after langchain4j's retries is
+	 * {@code UnavailableException}; anything about this request's content is
+	 * {@code InvalidInputException}, {@code ResponseException} or
+	 * {@code NotSupportedException}. The agent harness relies on this split
+	 * (AGENT_LOOP.md §3.4).</p>
+	 *
+	 * @param operatorKey whether the API key sent is the venue's own, which
+	 *        says who can fix a refused key
+	 * @param ollamaUrl the Ollama base URL called, or null for a hosted provider
+	 */
+	static RuntimeException providerFailure(String provider, String model, boolean operatorKey,
+			String ollamaUrl, RuntimeException e) {
+		if (e instanceof CoviaException || causedBy(e, InterruptedException.class)) return e;
+		Integer status = httpStatus(e);
+		String note = providerNote(status, e);
+		RuntimeException failure;
+		if (ollamaUrl != null && isConnectFailure(e)) {
+			// Almost always topology: a Dockerised venue reaching for its own localhost (#224).
+			String at = origin(ollamaUrl);
+			failure = new UnavailableException(OLLAMA_UNREACHABLE.formatted(at != null ? at : "its configured url"));
+		} else if (e instanceof dev.langchain4j.exception.AuthenticationException) {
+			// langchain4j maps 401 and 403 alike; only a 401 says the key was not accepted.
+			String refused = Integer.valueOf(403).equals(status) ? REQUEST_REFUSED
+				: operatorKey ? OPERATOR_KEY_REFUSED : CALLER_KEY_REFUSED;
+			failure = new ConfigurationException(refused.formatted(provider, model, note));
+		} else if (e instanceof dev.langchain4j.exception.RateLimitException) {
+			failure = new UnavailableException(PROVIDER_RATE_LIMITED.formatted(provider, model, note));
+		} else if (e instanceof dev.langchain4j.exception.TimeoutException) {
+			failure = new UnavailableException(PROVIDER_TIMED_OUT.formatted(provider, model, note));
+		} else if (e instanceof dev.langchain4j.exception.InternalServerException) {
+			failure = new UnavailableException(PROVIDER_FAILED.formatted(provider, model, note));
+		} else if (e instanceof dev.langchain4j.exception.ModelNotFoundException) {
+			failure = new ConfigurationException(MODEL_NOT_FOUND.formatted(provider, model, note));
+		} else if (e instanceof dev.langchain4j.exception.UnsupportedFeatureException) {
+			failure = new NotSupportedException(FEATURE_NOT_SUPPORTED.formatted(provider, model));
+		} else if (e instanceof dev.langchain4j.exception.ContentFilteredException) {
+			failure = new ResponseException(CONTENT_FILTERED.formatted(provider, model));
+		} else if (e instanceof dev.langchain4j.exception.InvalidRequestException) {
+			failure = mentionsContextSize(e)
+				? new InvalidInputException(PROVIDER_CONTEXT_TOO_LARGE.formatted(provider, model, note))
+				: new ResponseException(REQUEST_REFUSED.formatted(provider, model, note));
+		} else if (e instanceof dev.langchain4j.exception.JsonReadException) {
+			failure = new ResponseException(MALFORMED_RESPONSE.formatted(provider, model));
+		} else if (status != null) {
+			failure = new ResponseException(REQUEST_REFUSED.formatted(provider, model, note));
+		} else if (e instanceof dev.langchain4j.exception.UnresolvedModelServerException
+				|| causedBy(e, java.io.IOException.class)
+				|| causedBy(e, java.nio.channels.UnresolvedAddressException.class)) {
+			// The HTTP client wraps every IOException in a bare RuntimeException.
+			failure = new UnavailableException(PROVIDER_UNREACHABLE.formatted(provider, model));
+		} else {
+			return e;
+		}
+		failure.initCause(e);
+		return failure;
+	}
+
+	/** A status for a message, from httpStatus: " (HTTP 400)", or nothing when unknown. */
+	static String httpNote(Integer status) {
+		return (status != null) ? " (HTTP " + status + ")" : "";
+	}
+
+	/**
+	 * The status and the provider's error exactly as it sent it, for a message:
+	 * " (HTTP 403, permission_error: This key may not use that model)". From
+	 * a JSON answer that is {@code message}, after {@code code} or {@code type}
+	 * beside it, from the {@code error} object or the answer itself, or an
+	 * {@code error} that is a string. Any other answer is passed on whole.
+	 * Nothing is edited or shortened (ERRORS.md).
+	 */
+	static String providerNote(Integer status, Throwable e) {
+		var http = httpFailure(e);
+		if (http == null) return httpNote(status);
+		String body = http.getMessage();
+		if (body == null || body.isBlank()) return httpNote(status);
+		AString code = null;
+		AString said = null;
+		AMap<AString, ACell> answer = jsonObject(body);
+		if (answer != null) {
+			if (answer.get(Fields.ERROR) instanceof AString error) {
+				said = error;
+			} else {
+				AMap<AString, ACell> detail = (answer.get(Fields.ERROR) instanceof AMap<?, ?> object) ? RT.ensureMap(object) : answer;
+				said = RT.ensureString(detail.get(Fields.MESSAGE));
+				code = RT.ensureString(detail.get(K_CODE));
+				if (code == null) code = RT.ensureString(detail.get(K_TYPE));
 			}
 		}
-		if (!connectivity) return null;
-		return "Ollama not reachable at " + resolvedUrl
-			+ " — if the venue runs in Docker, set adapters.langchain.ollamaUrl in venue config"
-			+ " (or the OLLAMA_BASE_URL environment variable) to http://host.docker.internal:11434"
-			+ " and start Ollama with OLLAMA_HOST=0.0.0.0";
+		if (said == null) return " (HTTP " + status + ": " + body + ")";
+		return " (HTTP " + status + ((code != null) ? ", " + code : "") + ": " + said + ")";
+	}
+
+	private static AMap<AString, ACell> jsonObject(String text) {
+		try {
+			return (JSON.parse(text) instanceof AMap<?, ?> object) ? RT.ensureMap(object) : null;
+		} catch (RuntimeException notJson) {
+			return null;
+		}
+	}
+
+	/** The status of the HTTP answer behind a langchain4j failure, or null when there was none. */
+	private static Integer httpStatus(Throwable e) {
+		var http = httpFailure(e);
+		return (http != null) ? http.statusCode() : null;
+	}
+
+	private static dev.langchain4j.exception.HttpException httpFailure(Throwable e) {
+		for (Throwable t = e; t != null; t = (t.getCause() != t) ? t.getCause() : null) {
+			if (t instanceof dev.langchain4j.exception.HttpException http) return http;
+		}
+		return null;
+	}
+
+	private static boolean causedBy(Throwable e, Class<? extends Throwable> type) {
+		for (Throwable t = e; t != null; t = (t.getCause() != t) ? t.getCause() : null) {
+			if (type.isInstance(t)) return true;
+		}
+		return false;
+	}
+
+	/** Whether the connection itself failed: refused, no route, no such host, or no connect in time. */
+	private static boolean isConnectFailure(Throwable e) {
+		return causedBy(e, java.net.ConnectException.class)
+			|| causedBy(e, java.net.UnknownHostException.class)
+			|| causedBy(e, java.net.NoRouteToHostException.class)
+			|| causedBy(e, java.net.http.HttpConnectTimeoutException.class)
+			|| causedBy(e, java.nio.channels.UnresolvedAddressException.class);
+	}
+
+	/** Whether the provider's own text says the context exceeded the model's window. */
+	private static boolean mentionsContextSize(Throwable e) {
+		for (Throwable t = e; t != null; t = (t.getCause() != t) ? t.getCause() : null) {
+			String message = t.getMessage();
+			if (message == null) continue;
+			String m = message.toLowerCase(java.util.Locale.ROOT);
+			for (String marker : CONTEXT_SIZE_MARKERS) {
+				if (m.contains(marker)) return true;
+			}
+		}
+		return false;
 	}
 
 	static boolean providerNeedsApiKey(String provider) {
@@ -685,7 +868,7 @@ public class LangChainAdapter extends AAdapter {
 	static ChatModel buildOllamaModel(String baseUrl, String model, Duration timeout, ModelTuning tuning) {
 		Map<String, Object> providerOptions = tuning.nativeOptions();
 		if (providerOptions != null) {
-			throw new IllegalArgumentException("providerOptions are not supported by the Ollama client");
+			throw new NotSupportedException("providerOptions are not supported by the Ollama client");
 		}
 		var builder = OllamaChatModel.builder()
 			.baseUrl(baseUrl)
@@ -743,7 +926,7 @@ public class LangChainAdapter extends AAdapter {
 		Map<String, Object> providerOptions = tuning.nativeOptions();
 		if (providerOptions != null && (providerOptions.containsKey("compaction")
 				|| String.valueOf(providerOptions.get("context_management")).contains("compact_20260112"))) {
-			throw new IllegalArgumentException("compaction" + ModelCallOptions.UPSTREAM_REQUIRED);
+			throw new NotSupportedException("compaction" + ModelCallOptions.UPSTREAM_REQUIRED);
 		}
 		// Thinking blocks are bound only under adaptive thinking: Anthropic refuses
 		// block_binding beside any other type (Sonnet 5.5's between_tools, Haiku
@@ -809,7 +992,7 @@ public class LangChainAdapter extends AAdapter {
 		// effective value here also keeps authored operations from silently falling
 		// through to langchain4j's hidden 1024-token default (#391).
 		if (tuning.maxTokens() == null) {
-			throw new IllegalArgumentException("Anthropic requires an effective maxTokens; "
+			throw new ConfigurationException("Anthropic requires an effective maxTokens; "
 				+ "declare operation.default.maxTokens or supply maxTokens in the call");
 		}
 		builder = builder.maxTokens(tuning.maxTokens());
@@ -893,17 +1076,17 @@ public class LangChainAdapter extends AAdapter {
 
 	private AMap<AString, ACell> providerEntry(String providerName,
 			List<ModelDefinition> definitions, RequestContext ctx) {
-		AMap<AString, ACell> firstFacet = AbstractLLMAdapter.modelFacet(definitions.get(0).meta);
-		AString providerRef = RT.ensureString(firstFacet.get(AbstractLLMAdapter.K_MODEL_PROVIDER));
+		AMap<AString, ACell> firstFacet = Models.modelFacet(definitions.get(0).meta);
+		AString providerRef = RT.ensureString(firstFacet.get(Models.K_MODEL_PROVIDER));
 		Asset provider = (providerRef != null) ? engine.resolveAsset(providerRef, ctx) : null;
 		AMap<AString, ACell> providerMeta = (provider != null) ? provider.meta() : definitions.get(0).meta;
-		AMap<AString, ACell> providerFacet = AbstractLLMAdapter.modelFacet(providerMeta);
+		AMap<AString, ACell> providerFacet = Models.modelFacet(providerMeta);
 
 		AVector<ACell> ids = Vectors.empty();
 		AVector<ACell> entries = Vectors.empty();
 		for (ModelDefinition definition : definitions) {
-			AMap<AString, ACell> facet = AbstractLLMAdapter.modelFacet(definition.meta);
-			AString id = RT.ensureString(facet.get(AbstractLLMAdapter.K_MODEL_ID));
+			AMap<AString, ACell> facet = Models.modelFacet(definition.meta);
+			AString id = RT.ensureString(facet.get(Models.K_MODEL_ID));
 			if (id == null) continue;
 			String canonical = "v/models/" + providerName + "/" + id;
 			String primary = definition.paths.contains(canonical) ? canonical : definition.paths.get(0);
@@ -917,9 +1100,9 @@ public class LangChainAdapter extends AAdapter {
 			try {
 				AMap<AString, ACell> profile = AbstractLLMAdapter.resolveModel(engine,
 					Asset.fromMeta(definition.meta), null, null, ctx).executionProfile();
-				ACell options = profile.get(AbstractLLMAdapter.K_OPTIONS);
+				ACell options = profile.get(Models.K_OPTIONS);
 				ACell budget = profile.get(AbstractLLMAdapter.K_BUDGET);
-				if (options != null) item = item.assoc(AbstractLLMAdapter.K_OPTIONS, options);
+				if (options != null) item = item.assoc(Models.K_OPTIONS, options);
 				if (budget != null) item = item.assoc(AbstractLLMAdapter.K_BUDGET, budget);
 			} catch (RuntimeException e) {
 				// The definition remains discoverable even if its provider is broken.
@@ -938,7 +1121,7 @@ public class LangChainAdapter extends AAdapter {
 		boolean ready = keySecret == null;
 		if (keySecret != null) {
 			try {
-				ready = engine.resolveSecret(keyReference(providerMeta), ctx) != null;
+				ready = engine.resolveSecret(keyReference(providerMeta), ctx, keyDestination(providerMeta)) != null;
 			} catch (RuntimeException e) {
 				ready = false;
 			}
@@ -950,7 +1133,7 @@ public class LangChainAdapter extends AAdapter {
 			Strings.intern("ready"), CVMBool.create(ready),
 			K_MODELS, ids,
 			Strings.intern("entries"), entries,
-			AbstractLLMAdapter.K_MODEL_FACET, providerFacet);
+			Models.K_MODEL_FACET, providerFacet);
 		if (keySecret != null) entry = entry.assoc(Strings.intern("keySecret"), keySecret);
 		if (defaultPath != null) {
 			entry = entry.assoc(Fields.DEFAULT, defaultPath)
@@ -1027,15 +1210,30 @@ public class LangChainAdapter extends AAdapter {
 	 * The API key for a call: the caller's {@code apiKey} (a literal, or a
 	 * reference resolved under the caller's authority for {@code destination}),
 	 * else the operation's default key reference ({@link #keyReference}).
-	 * A reference that does not resolve yields null rather than the literal:
+	 * A reference that does not resolve yields no value rather than the literal:
 	 * "/s/foo" sent as an API key produces a misleading 401 from the provider
 	 * (see #91).
 	 */
-	String resolveApiKey(AMap<AString, ACell> meta, ACell input, RequestContext ctx, String destination) {
+	ApiKey resolveApiKey(AMap<AString, ACell> meta, ACell input, RequestContext ctx, String destination) {
 		AString apiKeyParam = RT.ensureString(RT.getIn(input, "apiKey"));
-		if (apiKeyParam != null && !Engine.isSecretRef(apiKeyParam.toString())) return apiKeyParam.toString();
+		if (apiKeyParam != null && !Engine.isSecretRef(apiKeyParam.toString())) {
+			return new ApiKey(apiKeyParam.toString(), false);
+		}
 		String ref = (apiKeyParam != null) ? apiKeyParam.toString() : keyReference(meta);
-		return (ref != null) ? engine.resolveSecret(ref, ctx, destination) : null;
+		if (ref == null) return new ApiKey(null, false);
+		return new ApiKey(engine.resolveSecret(ref, ctx, destination), engine.isOperatorSecretRef(ref, ctx));
+	}
+
+	/**
+	 * An API key for a call, and whether it is the operator's: provisioned in
+	 * the venue's or the public store rather than supplied by the caller. A
+	 * key the provider refuses is then the operator's to fix, or the caller's.
+	 */
+	record ApiKey(String value, boolean operators) {
+		@Override
+		public String toString() {
+			return "ApiKey[operators=" + operators + "]";   // never the value
+		}
 	}
 
 	/** The operation's default key reference, {@code s/<operation.secretKey>}:
@@ -1044,6 +1242,15 @@ public class LangChainAdapter extends AAdapter {
 	static String keyReference(AMap<AString, ACell> meta) {
 		AString secretKey = RT.ensureString(RT.getIn(meta, Fields.OPERATION, "secretKey"));
 		return (secretKey != null) ? "s/" + secretKey : null;
+	}
+
+	/** Where a call that names no url of its own sends the key: the
+	 *  operation's default url, else its provider's own endpoint. */
+	static String keyDestination(AMap<AString, ACell> meta) {
+		AString url = RT.ensureString(RT.getIn(meta, Fields.OPERATION, Fields.DEFAULT, Fields.URL));
+		if (url != null) return covia.utils.HTTPURLs.normalize(url.toString()).toString();
+		String subOp = getSubOperation(meta);
+		return (subOp == null) ? null : defaultBaseUrl(subOp.split(":", 2)[0]);
 	}
 
 	/** The provider's own endpoint, used when the caller names no url. */
@@ -1066,14 +1273,15 @@ public class LangChainAdapter extends AAdapter {
 	 * the venue's SSRF guard. Which key may travel to it is the secret's
 	 * owner's decision, enforced where the key is resolved.
 	 *
+	 * @param ctx The caller that named the url
 	 * @return null when the url may be used, otherwise the reason it may not
 	 */
-	String checkUrl(AString urlParam) {
+	String checkUrl(RequestContext ctx, AString urlParam) {
 		if (urlParam == null) return null;
 		String url = urlParam.toString();
 		try {
-			engine.requireSafeUrl(url);
-		} catch (IllegalArgumentException e) {
+			engine.requireSafeUrl(ctx, url);
+		} catch (InvalidInputException e) {
 			return e.getMessage();
 		}
 		return null;
@@ -1398,7 +1606,7 @@ public class LangChainAdapter extends AAdapter {
 		if (pending.isEmpty()) return messages;
 		ACell preceding = messages.isEmpty() ? null : RT.getIn(messages.get(messages.count() - 1), K_ROLE);
 		if (!ROLE_USER.equals(preceding) && !ROLE_TOOL.equals(preceding)) {
-			throw new IllegalArgumentException(ModelCallOptions.INVALID_SYSTEM_POSITION);
+			throw new InvalidInputException(ModelCallOptions.INVALID_SYSTEM_POSITION);
 		}
 		for (ACell message : pending) messages = messages.conj(message);
 		pending.clear();
@@ -1519,30 +1727,30 @@ public class LangChainAdapter extends AAdapter {
 			String t = (type != null) ? type.toString() : null;
 			if ("text".equals(t)) {
 				AString text = RT.ensureString(RT.getIn(block, "text"));
-				if (text == null) throw new IllegalArgumentException(
+				if (text == null) throw new InvalidInputException(
 					"content[" + i + "]: text block requires a 'text' string");
 				contents.add(TextContent.from(text.toString()));
 			} else if ("image".equals(t)) {
 				AString srcType = RT.ensureString(RT.getIn(block, "source", "type"));
 				if (!"base64".equals(srcType != null ? srcType.toString() : null)) {
-					throw new IllegalArgumentException(
+					throw new InvalidInputException(
 						"content[" + i + "]: image source.type must be \"base64\" (got "
 						+ srcType + ")");
 				}
 				AString mediaType = RT.ensureString(RT.getIn(block, "source", "mediaType"));
 				AString data = RT.ensureString(RT.getIn(block, "source", "data"));
 				if (mediaType == null || data == null) {
-					throw new IllegalArgumentException(
+					throw new InvalidInputException(
 						"content[" + i + "]: image source requires 'mediaType' and 'data' (base64)");
 				}
 				contents.add(ImageContent.from(data.toString(), mediaType.toString()));
 			} else {
-				throw new IllegalArgumentException(
+				throw new InvalidInputException(
 					"content[" + i + "]: unknown block type '" + t
 					+ "' — supported: text, image");
 			}
 		}
-		if (contents.isEmpty()) throw new IllegalArgumentException(
+		if (contents.isEmpty()) throw new InvalidInputException(
 			"user content array must contain at least one block");
 		return contents;
 	}
@@ -1587,48 +1795,51 @@ public class LangChainAdapter extends AAdapter {
 		return out;
 	}
 
+	/** An image in the request that cannot be read: the ref and why. */
+	public static final String IMAGE_UNREADABLE = "image ref '%s' could not be read: %s";
+
 	/** Resolves one referenced-image block to an inline base64 block. Fail-loud: an
-	 *  unresolvable image is a wrong answer, not a degraded one. */
+	 *  unresolvable image is a wrong answer, not a degraded one. An image that
+	 *  cannot be read is this request's failure, never the provider's, so it is
+	 *  {@code InvalidInputException} even when its store is unavailable. */
 	private ACell resolveImageAsset(ACell block, RequestContext ctx) {
 		AString ref = RT.ensureString(RT.getIn(block, "source", "ref"));
-		if (ref == null) throw new IllegalArgumentException(
+		if (ref == null) throw new InvalidInputException(
 			"image asset source requires a content 'ref' (asset, workspace, file, DLFS, or DID URL)");
+		covia.venue.storage.ContentProvider.Resolved resolved;
+		byte[] bytes;
 		try {
 			// Unified reference-addressed content resolution (Engine.resolveContent):
 			// CAS assets, lattice values, and DLFS drive paths — every storage
 			// mechanism, under the caller's authority.
-			covia.venue.storage.ContentProvider.Resolved resolved =
-				engine.resolveContent(ref, ctx);
-			byte[] bytes = (resolved != null) ? resolved.content().getBlob().getBytes() : null;
-			String mime = (resolved != null) ? resolved.contentType() : null;
-			if (bytes == null || bytes.length == 0) {
-				throw new IllegalArgumentException(
-					"image ref '" + ref + "' did not resolve to content");
-			}
-
-			// Explicit mediaType on the block wins; else asset contentType; else sniff.
-			AString mtOverride = RT.ensureString(RT.getIn(block, "source", "mediaType"));
-			if (mtOverride != null) mime = mtOverride.toString();
-			if (mime == null) mime = covia.utils.MimeUtils.guess(ref.toString(), bytes);
-			if (mime == null || !mime.startsWith("image/")) {
-				throw new IllegalArgumentException(
-					"image ref '" + ref + "' has no image media type (got " + mime
-					+ ") — set source.mediaType explicitly");
-			}
-
-			String b64 = java.util.Base64.getEncoder().encodeToString(bytes);
-			return Maps.of(
-				K_TYPE, V_IMAGE,
-				K_SOURCE, Maps.of(
-					K_TYPE, V_BASE64,
-					K_MEDIA_TYPE, Strings.create(mime),
-					K_DATA, Strings.create(b64)));
-		} catch (RuntimeException e) {
-			throw e;
-		} catch (Exception e) {
-			throw new IllegalArgumentException(
-				"failed to read image ref '" + ref + "': " + e.getMessage(), e);
+			resolved = engine.resolveContent(ref, ctx);
+			bytes = (resolved != null) ? resolved.content().getBlob().getBytes() : null;
+		} catch (UnavailableException | java.io.IOException e) {
+			throw new InvalidInputException(IMAGE_UNREADABLE.formatted(ref, describeFailure(e)), e);
 		}
+		String mime = (resolved != null) ? resolved.contentType() : null;
+		if (bytes == null || bytes.length == 0) {
+			throw new NotFoundException(
+				"image ref '" + ref + "' did not resolve to content", ref.toString());
+		}
+
+		// Explicit mediaType on the block wins; else asset contentType; else sniff.
+		AString mtOverride = RT.ensureString(RT.getIn(block, "source", "mediaType"));
+		if (mtOverride != null) mime = mtOverride.toString();
+		if (mime == null) mime = covia.utils.MimeUtils.guess(ref.toString(), bytes);
+		if (mime == null || !mime.startsWith("image/")) {
+			throw new InvalidInputException(
+				"image ref '" + ref + "' has no image media type (got " + mime
+				+ ") — set source.mediaType explicitly");
+		}
+
+		String b64 = java.util.Base64.getEncoder().encodeToString(bytes);
+		return Maps.of(
+			K_TYPE, V_IMAGE,
+			K_SOURCE, Maps.of(
+				K_TYPE, V_BASE64,
+				K_MEDIA_TYPE, Strings.create(mime),
+				K_DATA, Strings.create(b64)));
 	}
 
 

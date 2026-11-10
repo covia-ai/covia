@@ -203,8 +203,9 @@ without interpretation. A provider edge may restore it only when both
 `provider` and `model` match the current inference; other providers, model
 changes, malformed state and unknown block types ignore it. It is currently
 used for Anthropic signed and redacted thinking blocks on assistant tool-use
-turns. It is not assistant content, is omitted from retrospective session
-projections, and is not duplicated in `renderedContext`. Compaction keeps it in
+turns. It is not assistant content and is not duplicated in `renderedContext`;
+`agent:history` returns it with the rest of the stored entry and the legacy
+`agent:sessionRead` leaves it out. Compaction keeps it in
 the exact archived `items` but does not replay archived state through the
 provider-visible summary.
 
@@ -260,9 +261,10 @@ The label renderer therefore handles only blocks that genuinely travel as instru
 | Agent-loaded skill — the path is its unload key | `[Loaded skill: <name> — unload key: <path>]` | `<loaded-skill name="…" unload-key="…">` | `## Loaded skill: <name> — unload key: <path>` |
 | Trusted operator context | `[Pinned context: <label>]` | `<pinned-context label="…">` | `## Pinned context: <label>` |
 | Late system message (§3.2.1) | `[system: …]` | `<system>` | `## System` |
-| Compacted conversation segment (assistant memory) | `[Compacted: <N> turns] <summary>` | `<compacted turns="…">` | `## Compacted: <N> turns` |
+| Compacted conversation segment (assistant memory): the first and last turn it stands for, by position in the frame's history, so `agent:history` can read exactly those back | `[Compacted: turns <from>–<to>] <summary>` | `<compacted from="…" to="…">` | `## Compacted: turns <from>–<to>` |
 | Ancestor context (goal tree) | `[Ancestor Context]` | `<ancestors>` | `## Ancestor context` |
 | Tool-failure diagnostic | `[Tool failure: <name>] <reason>` | `<tool-failure name="…">` | `## Tool failure: <name>` |
+| Who a turn comes from (COG-20 §4): before a user turn whose caller, binding, authenticated identity, chat, thread or space differs from the turn before it, rendered from the stored turn alone; names are never rendered | `[From: <relationship> <principal> — <method> <binding>: sender <id> @<handle>, <kind> chat <id>, thread <id>, space <id>]` | `<from principal="…" relationship="…" method="…" binding="…" sender="…" handle="…" chat="…" chat-kind="…" thread="…" space="…"/>` | `## From: …` |
 | Outstanding task | `[Tasks assigned to you]` | `<tasks>` | `## Tasks assigned to you` |
 | Empty-state signal | `[No pending tasks, messages, or job results. …]` | `<no-input>` | `## No input` |
 | Budget warning | `[Context budget] <pct>% …` | `<context-budget>` | `## Context budget` |
@@ -499,9 +501,9 @@ or null for an ordinary entry. Following coverage is explicit, not automatic
 expansion. Live appends and compaction do not change an existing snapshot.
 
 This preview may change before stabilisation. It does not replace the existing
-compatibility accessors or the policy-aware retrospective operations. It returns
-raw entries, including tool activity, unfinished turns and provider continuation
-data; hosts retain their authorisation, audience rules and response budgets.
+compatibility accessors. It returns raw entries, including tool activity,
+unfinished turns and provider continuation data; hosts retain their
+authorisation. `agent:history` is its authorised tool surface.
 Entry counts do not bound bytes or tokens. Opening may inspect the entire frame
 history; subsequent page reads use immutable vector slices. There is no external
 cursor registry, child-history navigation or REST endpoint in this preview.
@@ -515,7 +517,7 @@ state; the existing `agent:fork` continues to create fresh sessions.
 **Storage migration.** `GoalTreeContext.migrateFrame/migrateFrames` are pure,
 idempotent transforms. The normal cycle claim converts all frames in the same
 session CAS that fences the old executor; pending input is drained only after
-successful conversion. `SessionState.migrateHistory` also supports an idle
+successful conversion. `Session.migrateHistory` also supports an idle
 session with an exact expected frame snapshot. Busy/stale snapshots do not
 publish, and malformed data or unknown versions leave the entire session,
 pending input and epoch unchanged. Completed cycle snapshots need no eager
@@ -638,11 +640,11 @@ duplicate.
 | 5 | Initial persistent skills and data | initial messages | `system`, then `user` / `assistant` / `tool` | Skill bodies and trusted loads, then at most one aggregate `pinned_context` and one `loaded_context` data result (§5.5) |
 | 6 | Frame conversation | append-only vector | `system` / `user` / `assistant` / `tool` | Canonical prior turns and rendered context, skill and tool-state events, in chronological order |
 | 7 | Pending results | working turn | `user`, `assistant`, `tool` | Job results that arrived for this cycle: one request — *Get job results.* — one `get_job_results()` call, one result listing each job once (§5.7) |
-| 8 | Current input | working turn | `user` | The inbox message(s) driving this cycle |
+| 8 | Current input | working turn | `user` | The inbox message(s) driving this cycle; a late tool outcome renders as `assistant` / `tool` where the model's `lateToolResults` asks (§5.7) |
 | 9 | Tool-loop messages | working turn | `assistant` / `tool` | Assistant/tool turns and context events accumulated within this cycle |
 | 10 | Changed watched context | append-only conversation | `system` or `assistant` / `tool` | A new observation for a `volatile` declaration, emitted only when its canonical rendered value differs (§5.5) |
 | 11 | Budget warning | inference tail | `system` | **Only** when the budget is under pressure (§3.4) |
-| 12 | Runtime notice | inference tail | `system` | The runtime's word on this turn: goal-tree's compaction nudge, and, on a conversational turn with tools (no task, not a subgoal, no typed outputs), how it is answered — the final message is the reply, so text beside a tool call reaches no one |
+| 12 | Runtime notice | inference tail | `system` | The runtime's word on this turn: on a conversational turn with tools (no task, not a subgoal, no typed outputs), how it is answered — the final message is the reply, so text beside a tool call reaches no one |
 | 13 | Current date | inference tail | `system` | One line; changes daily |
 | 14 | Unavailable tools | inference tail | `system` | Configured tools that did not resolve this cycle |
 | 15 | Outstanding task | inference tail | `user` | The task the agent must complete or fail — the last thing before the reply |
@@ -688,7 +690,7 @@ Only notices and the outstanding task are rendered there. A volatile
 declaration opts into a pre-inference observation; its value becomes durable
 conversation only on a canonical change. Nothing else is made fresh implicitly.
 
-**Warnings are never conversation.** The budget warning, the compaction nudge, the date and the unavailable-tools notice describe the state of *this inference*. They belong in the tail, render once, and vanish when the condition does. A warning written into the conversation would be re-read on every later inference as though it were still true.
+**Warnings are never conversation.** The budget warning, the reply notice, the date and the unavailable-tools notice describe the state of *this inference*. They belong in the tail, render once, and vanish when the condition does. A warning written into the conversation would be re-read on every later inference as though it were still true.
 
 ### 3.2.3 Tool definitions
 
@@ -704,8 +706,8 @@ description lives at the asset root and their provider schema in
 asset parser and projected by the same `ToolPalette` path as catalog
 operations. They are not installed under `v/ops` merely to make them tools:
 the runtime owns their handlers and selects them from its fixed registry.
-Where a harness control is also a public operation (`complete_task` /
-`fail_task`), the harness reuses that operation resource and changes only the
+Where a harness control is also a public operation (`complete_task`,
+`fail_task`, `park_task`), the harness reuses that operation resource and changes only the
 cycle-local tool name. This keeps schema and prompt prose single-sourced.
 
 A tool becoming available later must not cause the venue to rebuild that array
@@ -729,7 +731,8 @@ advertised skill authorises adding that definition. Anything else requires an
 explicit resource-scoped `skill/load` or `tool/load` grant. For these two
 opt-ins a null capability scope is not consent. The ordinary read checks still
 apply while resolving metadata, and every eventual operation call independently
-requires `invoke` at its point of action.
+checks its resource authority. A bound tool needs no `invoke` grant; a generic
+invocation tool checks `invoke` on its target reference.
 
 In cached mode, if such a load is present while a context is first materialised
 (or explicitly rebuilt), its definitions enter `renderedContext.tools`. An
@@ -748,9 +751,13 @@ representations, in order:
 
 An adapter or plugin loading or unloading mutates the venue capability registry, not the fixed tool vector of an existing context. Revocation is always enforced at dispatch even if an earlier event remains visible to the model. A soft removal appends a removal event; only an explicit rebuild makes the historical definition absent.
 
-The same rule applies to conditional capabilities. The static `complete_task` /
-`fail_task` schemas stay in the fixed harness manifest and reject calls when no
-task is in scope. Skill and `more_tools` loads append exact addition/removal
+The same rule applies to conditional capabilities. The static `complete_task`,
+`fail_task` and `park_task` schemas stay in the fixed harness manifest and reject calls when no
+task is in scope. When those controls are offered without an outstanding task,
+the current-turn notices explicitly say that no task is assigned, that these
+controls must not be called, and that ordinary chat is answered with a normal
+reply. This status is re-rendered outside the cached prefix; it does not mutate
+the tool vector or enter conversation history. Skill and `more_tools` loads append exact addition/removal
 state and use the fixed `invoke_tool` dispatcher where the provider has no
 native representation. `context_unload`
 removes any agent-managed load, including a tool-only load, so it also retracts
@@ -783,6 +790,10 @@ How it is spent:
 - The **working turn** is committed to `frame.conversation`. Explicit compaction
   rebuilds the prefix when space must be reclaimed (§5.6).
 - The **tail** is small; it is charged like everything else and never cached.
+- A **failed tool result** is stored whole in the history. The model is shown
+  its first 1024 characters and how many more there are
+  (`ConversationRenderer.renderFull`). The cut depends only on the entry, not on
+  the budget, so every request renders it alike.
 
 What the budget does, and nothing else:
 
@@ -790,7 +801,7 @@ What the budget does, and nothing else:
 |----------|-----------|
 | any | per-entry render sizing: a structured entry is capped at a twentieth of what remains when it renders (§5.3) |
 | ≥ 70% | the tail carries one line — `[Context budget]`; it names exact `loaded_context` keys only when agent-managed entries exist, otherwise says the persistent material is pinned |
-| ≥ 90% | the line says compaction is required before further work; the harness offers `compact` |
+| ≥ 90% | the line says compaction is required before further work: to use `compact` when the agent is offered it, otherwise that it has none |
 | over | the prompt is sent anyway; if the provider rejects it the cycle fails with the size and the remedy (`agent:context`, `context_unload`, `compact`) |
 
 **Never silent.** Byte accounting is not a token bound across providers, so the runtime never removes or rewrites context on its own authority. A soft `context_unload` prevents future use but cannot reclaim already rendered bytes; explicit compaction or reset does that. An inventory of what is loaded does not belong in every prompt either: it restates the events already rendered and its byte counts would change every inference.
@@ -830,9 +841,18 @@ appendEvent(frame, resolvedChange)             →  frame.conversation'
 assemble(Spec)                                 →  Prompt
 ```
 
-- **Authority** first: everything that reads the lattice reads under the agent's capability-narrowed context.
+- **Authority** first: the context the config names (the system prompt,
+  `config.context`, `config.loads`, the skills index) is assembled by the
+  harness, with its controller's authority; the agent's tool calls, and the loads it
+  makes or a caller adds, read under its capability-narrowed context
+  ([UCAN.md §5.4](./UCAN.md)).
 - **Snapshot** fixes the declarative and effective config, session/frame state
-  and request authority used by the cycle.
+  and request authority used by the cycle. The model setup is resolved here,
+  once: the LLM operation, the effective config (the identity prompt as text,
+  the operation's model default added) and the model profile. Every inference
+  in the cycle uses it, and inspection resolves it the same way. A setup that
+  does not resolve fails the cycle and the inspection with the same reason
+  (AGENT_LOOP.md §3.4).
 - **Initialisation** records the declarative source-config cell in the returned
   value and renders the model profile, fixed palette, skills index and starting
   effective loads. Cached mode persists that value once per applicable config;
@@ -866,7 +886,7 @@ declaration is checked each inference but appends only a changed rendered value.
 ### 5.1 Identity prompt
 `config.systemPrompt`, else a default identity, followed by one line of session identity: the venue name, the model when configured, and the session id when one is in scope — the agent's handle for reporting back into this conversation from deferred work. It is rendered when context is initialised. A changed declarative config rebuilds this config-owned prefix on the next inference while preserving rendered session events; `agent:reloadContext` forces the same rebuild under equal config. A runtime may append a notice of its own — goaltree's subgoal notice for child frames — when that frame opens. Nothing inference-local belongs here.
 
-`systemPrompt` is the text itself, or **one context entry** in the grammar of §6 — `{ref: "w/prompts/mina"}`, `{ref: "dlfs/vault/prompts/mina.md"}`, `{text}`, `{op, input}`, `{job}` — resolved through the same loader as pinned context and loads (`ContextLoader.resolveText`). Three things differ from a load: it renders as the identity, with no header; it resolves **once at initialisation or explicit rebuild**; and it is required — an entry that does not resolve, or resolves to something that is not text, fails initialisation with the reason, because a missing identity is a configuration error. `agent:create` warns when the entry does not resolve for the creator. A workspace path is one lattice read and a DLFS file one content read; neither creates a job.
+`systemPrompt` is the text itself, or **one context entry** in the grammar of §6 — `{ref: "w/prompts/mina"}`, `{ref: "dlfs/vault/prompts/mina.md"}`, `{text}`, `{op, input}`, `{job}` — resolved through the same loader as pinned context and loads (`ContextLoader.resolveText`). Three things differ from a load: it renders as the identity, with no header; it is read **once per cycle**, at its start, and rendered into the head only when the context is initialised or rebuilt; and it is required. An entry that does not resolve, or resolves to something that is not text, is a configuration error that every later cycle would meet again, so the agent cannot continue: the cycle suspends it with the reason (AGENT_LOOP.md §3.4), and an inspection fails with the same reason. `agent:create` warns when the entry does not resolve for the creator. A workspace path is one lattice read and a DLFS file one content read; neither creates a job.
 
 **Head discipline:** the head holds what every inference of *this* persisted context needs and nothing more. It is cached, but providers without caching pay for it on every inference, and an agent that answers questions needs neither a namespace cheat sheet nor capability bounds. Depth belongs in skills, loaded when needed (SKILLS.md).
 
@@ -939,7 +959,7 @@ context and never needs `context_unload`.
 
 A loads entry is `key → spec`. By default the key **is** the entry's source — a lattice path, an asset, a content ref — and the spec carries only modifiers. A spec may instead declare exactly one of `ref`, `text`, `op` + `input`, or `job` + `path`, in which case the key is its identity. Ownership, not map shape or age, decides whether that identity is unloadable.
 
-Only agent-managed elements expose an **unload key**, in the `loaded_context` result map or a loaded-skill header. `context_unload` accepts one exact key or a `paths` array of exact keys. It rejects display labels, ordinary tool arguments, and pinned keys; it never manufactures a mask over pinned context. The base tool remains present whenever the scope has a writable tier, including while that tier is empty, so loading or unloading context does not mutate section 0.
+Only agent-managed elements expose an **unload key**, in the `loaded_context` result map or a loaded-skill header. `context_unload` accepts one exact key or a `paths` array of exact keys. It rejects display labels, ordinary tool arguments, and pinned keys; it never manufactures a mask over pinned context. The base tool remains present while it is offered (AGENT_LOOP.md §3.6), including while the frame holds no loads, so loading or unloading context does not mutate section 0.
 
 A successful soft unload appends a compact state event listing the affected keys and any skill/tool deactivations; it never repeats their content. When the agent called `context_unload`, its persisted tool result is that event. An owner-initiated change uses an attributed system event. Folding the newest event for a key determines whether it is active, while the prior bytes remain honest history until compaction or reset.
 
@@ -976,7 +996,7 @@ or the validated active history suffix. `history(frame)` returns retained storag
 `appendTurn/appendTurns` append to the correct field. Observation recording,
 interruption repair, counts and terminal-result checks use these same boundaries.
 `archivedConversation(frame)` reconstructs the exact legacy-shaped selection
-from backward ranges for retrospective readers and ancestor `CellExplorer`
+from backward ranges for session listings and ancestor `CellExplorer`
 rendering. It performs no IO and does not mutate cached context. This preserves
 ancestor prompt bytes as well as the active frame's model input.
 
@@ -991,9 +1011,16 @@ scratch-elision pass rewrites the conversation.
 Everything else is an append. Context state is obtained by folding its events in order; a repeated load makes its newest result current without pretending the model never saw the older one. That small amount of stale history is normal for an LLM conversation, while recency puts the relevant value nearest the reply. Compacted segments are `assistant` turns because their summaries are agent-authored and may describe untrusted tool data; persisting them never promotes them to operator instruction. Runtime diagnostics retain their own semantic role, and the edge keeps every event in place on every provider (§3.2.1).
 
 ### 5.7 Pending results
-Job results that completed for this cycle — the mechanism by which asynchronous work re-enters the conversation. A result is data, so it arrives as every result does (§5.5): one plain request — *Get job results.* — one `get_job_results()` call, and one tool result listing each job once: its id and status, then its output (strings verbatim, structured values bounded) or, for a job that did not complete, its recorded `error`. One call rather than one per job — the ids would only be repeated, and a listing is the natural answer to the plural request; a failed job is data about that job, not a failed fetch, so the result is not a tool error. Placed before the current input so that the input, the thing to act on, is closest to the reply.
+Job results for this cycle — the mechanism by which asynchronous work re-enters the conversation. A result is data, so it arrives as every result does (§5.5): one plain request — *Get job results.* — one `get_job_results()` call, and one tool result listing each job once: its id and status, then its output (strings verbatim, structured values bounded), for a job that did not complete its recorded `error`, or for one that has not finished, such as an open HITL ask, that it is still waiting with no result yet. One call rather than one per job — the ids would only be repeated, and a listing is the natural answer to the plural request; a failed job is data about that job, not a failed fetch, so the result is not a tool error. Placed before the current input so that the input, the thing to act on, is closest to the reply.
 
 The line this draws, once: **a result renders as a tool exchange; a request renders as a user turn.** Loaded context and job results are results. Tasks (§5.13) and inbox messages are requests from a principal — the user channel is theirs, with attribution.
+
+**Late tool outcomes.** A tool call still running at `toolCallTimeoutMs` was answered with the job it runs as (AGENT_LOOP.md §3.4.2). Its outcome arrives later as one input turn, stored once and marked by the venue as a tool call's outcome: `{jobId, toolCallId, toolName, operation, status, result | error}`, citing the call as the model made it. How it renders, on every inference, is the model profile's `lateToolResults` option (OPERATIONS.md), which an agent's `modelProfile` may set, so models that handle one form better than the other can each be given it:
+
+- `"message"`, the default — a user message, attributed to the principal that made the call, normally the agent itself (§1.2).
+- `"tool"` — a result, by the line above: one `tool_call_outcome` call whose arguments name the job and the original call, then its result, the outcome record unchanged and not a tool error, as for job results. There is no From element: these are the agent's own turns (§3.2.1). The exchange's id is derived from the job, never the original call's, which already has its result.
+
+Only the venue marks an outcome; a principal's message shaped like one stays theirs. Changing the option renders every outcome in the session the new way.
 
 ### 5.8 Current input
 The inbox message(s) driving this cycle; goaltree has none — its goal rides in the task slot (§5.13). When there is neither input nor pending results, the **empty-state signal** takes the slot: one `user` line saying so, so the agent can act on its role or report idle. It is content, not padding — its role as the message that keeps a system-only request legal (§3.2.1) is a consequence, not its purpose.
@@ -1011,7 +1038,7 @@ One line, changing daily, taken from the Spec's clock — never from the system 
 Tool resolution failures observed during initialisation or a current append — reported so the agent adapts rather than calling into a void. The adapter registry is not polled by assembly; a restored operation becomes available through an explicit tool-state event or prefix rebuild.
 
 ### 5.13 Outstanding task
-Present only when the agent has a task it must complete or fail. A `user` message rendered last on every inference — after the tool-loop messages and after the notices — so it is the thing nearest the reply, and never baked into history: the model sees only tasks still outstanding. The same on every runtime, with `complete_task` / `fail_task` offered only while it is present — the framework's task boundary (`TaskTools`). A goal-tree frame's *goal* is its opening turn, not this slot; see [GOAL_TREE.md](./GOAL_TREE.md), “Sessions and Frames”.
+Present only when the agent has a task to settle. A `user` message rendered last on every inference — after the tool-loop messages and after the notices — so it is the thing nearest the reply, and never baked into history: the model sees only tasks still outstanding, and its closing line names the three task tools and says that a plain reply is the task's result ([AGENT_TASKS.md](./AGENT_TASKS.md) §5). The same on every runtime, and `agent:context`, `agent:step` and live inferences render the same task status. `complete_task`, `fail_task` and `park_task` stay in the root frame's tools whether or not this message is present (§3.2.3). Their presence alone does not mean a task is assigned: a call with no task in scope is refused — the framework's task boundary (`TaskTools`) — and a frame that offers them with no task in scope gets a no-task notice among the notices instead, telling it to answer chat normally (`ContextAssembler.NO_TASK_NOTICE`). A frame without them gets no such notice. A goal-tree frame's *goal* is its opening turn, not this slot; see [GOAL_TREE.md](./GOAL_TREE.md), “Sessions and Frames”.
 
 ---
 
@@ -1135,7 +1162,7 @@ inner child frames. Rules:
 - **Unload is ownership-safe:** only an agent-managed entry in the innermost writable tier can be removed. Removing a local shadow reveals any pinned outer entry. Pinned entries cannot be hidden with `context_unload`.
 - **Frames read config, never mutate it** — one writer per durable frame.
 - **Budgets are advisory** — never a basis for silent eviction.
-- **No session in scope → no writable tier**: `context_load`/`unload` fail with a diagnosable result.
+- **Loads live in the conversation they were made in.** A run with no stored session has a conversation for the call, so its loads last for that call.
 
 The chain is resolved when initial context is rendered. Later loads and reloads
 resolve only their requested keys and append results to `frame.conversation`.
@@ -1173,7 +1200,7 @@ state.
 |------------|---------|
 | `config` | Effective configuration used for rendering and the L3 invocation |
 | `sourceConfig` | Declarative configuration used only to validate `renderedContext` |
-| `ctx` / `capsCtx` | Resolution context and capability-narrowed dispatch context |
+| `ctx` / `capsCtx` | The harness's context, under which the context the config names is assembled, and the agent's capability-narrowed context, under which its tool calls and the loads it or a caller adds resolve |
 | `sessionId`, `headNotice`, `budget`, `labels`, `toolCalling`, `cachePrefix` | Stable rendering parameters captured for this call; `cachePrefix` selects retained versus ephemeral initial rendering |
 | `tools` | Candidate initial manifest, persisted only when caching is enabled |
 | `loadElements`, `loadExchanges` | Candidate non-volatile starting loads, persisted only when caching is enabled |
@@ -1191,7 +1218,7 @@ the updated frame stack.
 Anything a runtime needs that is not in `Spec` is a missing input, not a reason
 to fork the assembly pipeline. Persistence is a separate boundary: the runtime
 computes a complete immutable rendering or event, then atomically associates it
-with the frame through `FrameStore` / `AgentState`.
+with the frame through `FrameStore` / `Agent`.
 
 `agent:context` reads the same durable frame and calls the same `assemble`, so an
 inspected existing context matches a live inference **by construction**. It
@@ -1219,7 +1246,8 @@ The same regions drive the timeline record (`AGENT_LOOP.md` §2.4): initial mess
 | Concern | Home |
 |---------|------|
 | `Spec`, `Rendered`, `Prompt`, concatenation and attribution | `ContextAssembler` |
-| Atomic session/frame persistence | `AgentState`, through `FrameStore` |
+| The `From` element (§1.2): relationship, channel and identity key | `TurnProvenance` |
+| Atomic session/frame persistence | `Agent`, through `FrameStore` |
 | Durable context cell contract | §1.1 of this document |
 | The label renderer (§1.2) | `Labels` |
 | Base manifest and dynamic-tool strategy (§3.2.3) | `ToolPalette` |
@@ -1229,7 +1257,8 @@ The same regions drive the timeline record (`AGENT_LOOP.md` §2.4): initial mess
 | Frame rendering, observation state, compaction and turn normalisation (§5.6) | `GoalTreeContext`, `ConversationRenderer` |
 | Current conversation selection for active and ancestor rendering (§5.6) | `GoalTreeContext.activeConversation` |
 | Skills index and skill elements | `Skills` |
-| Authority and the model profile: `capsContext`, `modelProfileFor` | `AbstractLLMAdapter` |
+| One frame's shared harness tools and the loads they write (AGENT_LOOP.md §3.6) | `FrameTools`, `HarnessTools` |
+| Authority and the model setup: `capsContext`, `modelSetup` | `AbstractLLMAdapter` |
 | The edge (§3.5): system normalisation, cache marks and native tool-state events | `LangChainAdapter` |
 | llmagent spec | `LLMAgentAdapter` |
 | goaltree spec | `GoalTreeAdapter` |
@@ -1241,10 +1270,10 @@ The storage/accessor foundation in §1.3 is implemented. Remaining divergences:
 - **History navigation and internal activity (#597).** Writers, rendering,
   retrospective reads and migration support versioned history and summary
   ranges. Existing embedders can use the compatibility accessors without a new
-  REST API. `ConversationHistory` offers frame-range reads as a preview Java API.
-  Tool-facing navigation, oversized-entry fragments and retained-child
-  links remain deferred under #597; `sessionRead` still excludes the caller's
-  current session and limits archive depth to eight. Existing cycle records retain completed
+  REST API. `agent:history` reads a frame's history by position, through
+  `ConversationHistory`. Search, navigation by time, a size budget in bytes,
+  oversized-entry fragments and retained-child links remain deferred under
+  #597. Existing cycle records retain completed
   children. Initialisation still combines source resolution with initial
   rendering; making resolved inputs explicit remains separate work.
 

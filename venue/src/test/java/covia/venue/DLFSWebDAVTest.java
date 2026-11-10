@@ -8,11 +8,15 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
 
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.TestInstance.Lifecycle;
 
+import convex.core.data.Maps;
+import convex.core.data.Strings;
+import covia.adapter.DLFSAdapter;
 import covia.venue.server.VenueServer;
 
 /**
@@ -27,9 +31,19 @@ public class DLFSWebDAVTest {
 	HttpClient http;
 
 	@BeforeAll
-	public void setup() {
+	public void setup() throws Exception {
 		server = TestServer.SERVER;
 		http = TestHTTP.CLIENT;
+		// Only MKCOL creates a drive; the tests below write into this one.
+		assertEquals(201, request("MKCOL", "test-drive/", null).statusCode(), "MKCOL should create the drive");
+	}
+
+	/** The drive is the shared server's public identity's, so it goes with this class. */
+	@AfterAll
+	public void removeDrive() {
+		RequestContext publicCtx = RequestContext.of(Strings.create(server.getEngine().getDIDString() + ":public"));
+		server.getEngine().jobs().invokeOperation("v/ops/dlfs/delete-drive",
+			Maps.of("drive", "test-drive"), publicCtx).awaitResult(5000);
 	}
 
 	private HttpResponse<String> request(String method, String path, String body) throws Exception {
@@ -126,6 +140,22 @@ public class DLFSWebDAVTest {
 	public void testGetNonexistent() throws Exception {
 		HttpResponse<String> res = request("GET", "test-drive/does-not-exist.txt", null);
 		assertEquals(404, res.statusCode());
+	}
+
+	@Test
+	public void testMissingDriveIsNotCreated() throws Exception {
+		// Requests to a drive that does not exist answer 404 and leave it so.
+		assertEquals(404, request("GET", "no-such-drive/a.txt", null).statusCode());
+		assertEquals(404, request("PROPFIND", "no-such-drive/", null).statusCode());
+		assertEquals(404, request("PUT", "no-such-drive/a.txt", "data").statusCode());
+		DLFSAdapter dlfs = (DLFSAdapter) server.getEngine().getAdapter("dlfs");
+		String publicDID = server.getEngine().getDIDString() + ":public";
+		assertNull(dlfs.getDriveForIdentity(publicDID, "no-such-drive"));
+	}
+
+	@Test
+	public void testMkcolOnExistingDriveIsRefused() throws Exception {
+		assertEquals(405, request("MKCOL", "test-drive/", null).statusCode());
 	}
 
 	@Test

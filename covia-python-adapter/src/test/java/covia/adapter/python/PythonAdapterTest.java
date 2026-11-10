@@ -28,6 +28,10 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import covia.exception.AuthException;
+import covia.exception.InvalidInputException;
+import covia.exception.NotFoundException;
+import covia.exception.ResponseException;
+import covia.exception.UnavailableException;
 import covia.grid.Asset;
 import covia.python.PythonRuntime;
 import covia.venue.Engine;
@@ -118,14 +122,17 @@ class PythonAdapterTest {
 					"id", id, "function", "add", "args", Vectors.of(5L, 7L)));
 			assertEquals(CVMLong.create(12), result.get(Strings.create("sum")));
 			assertEquals(CVMLong.create(1), result.get(Strings.create("calls")));
+			assertFutureCause(ResponseException.class, () -> invoke(adapter, call,
+				RequestContext.of(identities.alice), Maps.of(
+					"id", id, "function", "add", "args", Vectors.of("text", 1L))));
 
-			assertFutureCause(IllegalArgumentException.class, () -> invoke(adapter, call,
+			assertFutureCause(NotFoundException.class, () -> invoke(adapter, call,
 				RequestContext.of(identities.bob), Maps.of(
 					"id", id, "function", "add", "args", Vectors.empty())));
-			assertFutureCause(IllegalArgumentException.class, () -> invoke(adapter, call,
+			assertFutureCause(InvalidInputException.class, () -> invoke(adapter, call,
 				RequestContext.of(identities.alice), Maps.of(
 					"id", id, "function", "hidden", "args", Vectors.empty())));
-			assertFutureCause(IllegalStateException.class, () -> invoke(adapter, create,
+			assertFutureCause(UnavailableException.class, () -> invoke(adapter, create,
 				RequestContext.of(identities.alice), Maps.of("template", "worker")));
 			assertFutureCause(AuthException.class, () -> invoke(adapter, list,
 				RequestContext.ANONYMOUS, Maps.empty()));
@@ -136,7 +143,7 @@ class PythonAdapterTest {
 				RequestContext.ofAgent(identities.alice, Strings.create("closer")),
 				Maps.of("id", id));
 			assertEquals(CVMBool.TRUE, closed.get(Strings.create("closed")));
-			assertFutureCause(IllegalArgumentException.class, () -> invoke(adapter, call,
+			assertFutureCause(NotFoundException.class, () -> invoke(adapter, call,
 				RequestContext.of(identities.alice), Maps.of(
 					"id", id, "function", "add", "args", Vectors.empty())));
 		} finally {

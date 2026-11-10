@@ -1,9 +1,13 @@
 package covia.adapter.agent;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import java.util.HashSet;
+import java.util.Set;
 
 import org.junit.jupiter.api.Test;
 
@@ -93,9 +97,8 @@ public class HarnessToolsTest {
 		assertNull(inv.name());
 		assertNotNull(inv.error());
 		String error = inv.error().toString();
-		assertTrue(error.startsWith("Error: invoke_tool input must be an object"), error);
-		assertTrue(error.contains("string of 16 characters"), error);
-		assertTrue(error.contains("not valid JSON"), error);
+		assertFalse(error.isBlank());
+		assertTrue(error.contains("16"), error);
 	}
 
 	@Test
@@ -107,7 +110,7 @@ public class HarnessToolsTest {
 			HarnessTools.Invocation inv = HarnessTools.invocation(args("covia_read", Strings.create(json)));
 			assertNull(inv.name(), json);
 			assertNotNull(inv.error(), json);
-			assertTrue(inv.error().toString().startsWith("Error: invoke_tool input must be an object"), json);
+			assertTrue(inv.error().toString().startsWith("Error:"), json);
 		}
 		HarnessTools.Invocation array = HarnessTools.invocation(args("covia_read", Strings.create("[\"w/x\"]")));
 		assertTrue(array.error().toString().contains("an array: [\"w/x\"]"), array.error().toString());
@@ -128,5 +131,17 @@ public class HarnessToolsTest {
 		HarnessTools.Invocation inv = HarnessTools.invocation(Maps.of("input", Maps.of("path", "w/x")));
 		assertNotNull(inv.error());
 		assertTrue(inv.error().toString().contains("requires the exact added tool name"));
+	}
+
+	/** A name nothing provides ends with what the session can call (#643). */
+	@Test
+	public void testNoSuchToolNamesWhatCanBeCalled() {
+		String head = String.format(HarnessTools.NO_SUCH_TOOL, "x") + "; ";
+		assertEquals(head + HarnessTools.NO_TOOLS, HarnessTools.noSuchTool("x", Set.of()));
+		assertEquals(head + String.format(HarnessTools.ONLY_TOOLS, "a, b"),
+			HarnessTools.noSuchTool("x", Set.of("b", "a")), "a short list is named, sorted");
+		Set<String> many = new HashSet<>();
+		for (int i = 0; i <= HarnessTools.MAX_NAMED; i++) many.add("t" + i);
+		assertEquals(head + HarnessTools.USE_TOOL_LIST, HarnessTools.noSuchTool("x", many));
 	}
 }

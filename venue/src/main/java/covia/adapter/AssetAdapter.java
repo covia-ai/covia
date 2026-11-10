@@ -12,6 +12,7 @@ import convex.core.crypto.Hashing;
 import convex.core.data.Blob;
 import convex.core.data.Hash;
 import convex.core.data.Maps;
+import convex.core.data.Path;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
@@ -20,8 +21,18 @@ import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.api.Abilities;
 import covia.api.Fields;
+import covia.exception.AuthException;
+import covia.exception.InvalidInputException;
+import covia.exception.NotFoundException;
+import covia.exception.NotSupportedException;
+import covia.exception.UnavailableException;
 import covia.grid.Asset;
+import covia.grid.HexId;
+import covia.lattice.CapabilityChecker;
+import covia.lattice.CoviaPath;
+import covia.lattice.Namespace;
 import covia.venue.AssetStore;
+import covia.venue.Engine;
 import covia.venue.RequestContext;
 
 /**
@@ -59,7 +70,7 @@ public class AssetAdapter extends AAdapter {
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
 		if (ctx.getCallerDID() == null) {
 			return CompletableFuture.failedFuture(
-				new IllegalArgumentException("Asset operations require an authenticated caller"));
+				new AuthException("Asset operations require an authenticated caller"));
 		}
 
 		try {
@@ -70,7 +81,7 @@ public class AssetAdapter extends AAdapter {
 				case "list"    -> CompletableFuture.completedFuture(handleList(input, ctx));
 				case "pin"     -> CompletableFuture.completedFuture(handlePin(input, ctx));
 				default -> CompletableFuture.failedFuture(
-					new IllegalArgumentException("Unknown asset operation: " + getSubOperation(meta)));
+					new NotSupportedException("Unknown asset operation: " + getSubOperation(meta)));
 			};
 		} catch (Exception e) {
 			return CompletableFuture.failedFuture(e);
@@ -92,14 +103,14 @@ public class AssetAdapter extends AAdapter {
 			try {
 				parsed = convex.core.util.JSON.parse(s.toString());
 			} catch (Exception e) {
-				throw new IllegalArgumentException("metadata string is not valid JSON: " + e.getMessage());
+				throw new InvalidInputException("metadata string is not valid JSON: " + e.getMessage());
 			}
 			metadata = (parsed instanceof AMap) ? (AMap<AString, ACell>) parsed : null;
 		} else {
 			metadata = null;
 		}
 		if (metadata == null) {
-			throw new IllegalArgumentException("metadata is required and must be a JSON object or JSON string");
+			throw new InvalidInputException("metadata is required and must be a JSON object or JSON string");
 		}
 
 		// Optional content — two explicit paths, no inference:
@@ -108,12 +119,12 @@ public class AssetAdapter extends AAdapter {
 		ACell contentCell = RT.getIn(input, Fields.CONTENT);
 		ACell contentTextCell = RT.getIn(input, K_CONTENT_TEXT);
 		if (contentCell != null && contentTextCell != null) {
-			throw new IllegalArgumentException("Provide content (hex Blob) or contentText (string), not both");
+			throw new InvalidInputException("Provide content (hex Blob) or contentText (string), not both");
 		}
 		ABlob content;
 		if (contentTextCell != null) {
 			AString text = RT.ensureString(contentTextCell);
-			if (text == null) throw new IllegalArgumentException("contentText must be a string");
+			if (text == null) throw new InvalidInputException("contentText must be a string");
 			content = Blob.wrap(text.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
 		} else {
 			content = toBlob(contentCell);
@@ -137,18 +148,18 @@ public class AssetAdapter extends AAdapter {
 			} else if (contentField instanceof AMap) {
 				contentMeta = (AMap<AString, ACell>) contentField;
 			} else {
-				throw new IllegalArgumentException(
+				throw new InvalidInputException(
 					"metadata.content must be a JSON object when content bytes are supplied");
 			}
 
 			if (contentMeta.containsKey(Fields.SHA256)) {
 				AString existingHash = RT.ensureString(contentMeta.get(Fields.SHA256));
 				if (existingHash == null) {
-					throw new IllegalArgumentException(
+					throw new InvalidInputException(
 						"metadata.content.sha256 must be a hex string");
 				}
 				if (!existingHash.equals(hashHex)) {
-					throw new IllegalArgumentException(
+					throw new InvalidInputException(
 						"Content hash mismatch. Declared: " + existingHash + ", Actual: " + hashHex);
 				}
 				// Declared and matching — metadata is stored exactly as supplied.
@@ -185,9 +196,9 @@ public class AssetAdapter extends AAdapter {
 				Blob b = Blob.fromHex(str.substring(2));
 				if (b != null) return b;
 			}
-			throw new IllegalArgumentException("content string must be hex-encoded (0x...), got: " + str.substring(0, Math.min(20, str.length())) + "...");
+			throw new InvalidInputException("content string must be hex-encoded (0x...), got: " + str.substring(0, Math.min(20, str.length())) + "...");
 		}
-		throw new IllegalArgumentException("content must be a Blob (hex string 0x...), got: " + cell.getClass().getSimpleName());
+		throw new InvalidInputException("content must be a Blob (hex string 0x...), got: " + cell.getClass().getSimpleName());
 	}
 
 	private static final AString K_EXISTS = Strings.intern("exists");
@@ -207,11 +218,11 @@ public class AssetAdapter extends AAdapter {
 			AString value = RT.ensureString(RT.getIn(input, alias));
 			if (value == null) continue;
 			if (ref != null && !ref.equals(value)) {
-				throw new IllegalArgumentException("ref conflicts with legacy '" + alias + "'");
+				throw new InvalidInputException("ref conflicts with legacy '" + alias + "'");
 			}
 			ref = value;
 		}
-		if (ref == null) throw new IllegalArgumentException("ref is required");
+		if (ref == null) throw new InvalidInputException("ref is required");
 		return ref;
 	}
 
@@ -222,47 +233,49 @@ public class AssetAdapter extends AAdapter {
 	}
 
 	/**
-	 * Parses an asset hash from an ID string. Accepts bare hash, a/<hash>,
-	 * /a/<hash>, or did:key:.../a/<hash> formats.
+	 * The asset a reference names by hash: a bare hash, {@code a/<hash>} or
+	 * {@code <did>/a/<hash>}, and nothing else; null for any other name, such
+	 * as a path that merely has {@code a} among its segments.
 	 */
-	/** Parses hash-form asset references (bare hex, a/<hash>, DID URL /a/ forms).
-	 *  Public: the engine's reference-addressed content resolution uses it. */
 	public static Hash parseAssetId(AString idStr) {
 		if (idStr == null) return null;
-		String s = idStr.toString();
-		// Strip DID prefix if present: did:key:z6Mk.../a/<hash> → <hash>
-		int aPos = s.indexOf("/a/");
-		if (aPos >= 0) {
-			s = s.substring(aPos + 3);
-		} else if (s.startsWith("a/")) {
-			// Bare a/<hash> form — matches the user-namespace convention
-			// used by other prefixes (w/, o/, etc.) and the asset_list tool
-			// description.
-			s = s.substring(2);
-		}
-		return Hash.parse(s);
+		AString owner = Engine.ownerOf(idStr);
+		String name = CapabilityChecker.canonicalResource(idStr.toString(), null);
+		Path path = CoviaPath.parse((owner == null) ? name : name.substring(owner.toString().length()));
+		if (path.count() == 2 && Namespace.A.equals(path.get(0))) return HexId.parseHash(path.get(1));
+		return (path.count() == 1 && owner == null) ? HexId.parseHash(path.get(0)) : null;
+	}
+
+	/**
+	 * Whether {@code ctx} may read {@code id}, and the store to read it from:
+	 * an asset takes {@code asset/read} (a cross-user reference it can't cover
+	 * is a denial, not a silent miss), and a path is read as data, where it
+	 * lives ({@link Engine#requirePathRead}).
+	 */
+	private AString requireReadable(RequestContext ctx, AString id, Hash hash) {
+		if (hash != null) return engine.requireLocalAccess(ctx, id, Abilities.ASSET_READ);
+		engine.requirePathRead(ctx, id);
+		AString owner = Engine.ownerOf(id);
+		return (owner != null) ? owner : ctx.getUserDID();
 	}
 
 	@SuppressWarnings("unchecked")
 	private ACell handleGet(ACell input, RequestContext ctx) {
 		AString idStr = referenceArg(input, Fields.ID);
-		// An asset (a/) is per-DID exactly like a workspace path (w/): reading
-		// another user's asset needs read rights — a cross-user ref the caller
-		// can't cover is a denial, not a silent miss. readAs is the store to read
-		// from (own, or the owner's for an authorised cross-user read).
-		AString readAs = engine.requireLocalAccess(ctx, idStr, Abilities.ASSET_READ);
+		Hash hash = parseAssetId(idStr);
+		// Metadata by hash is read with either read ability over it, as every
+		// metadata read is; content takes asset/read alone
+		AString readAs = (hash != null) ? engine.requireLocalAssetRead(ctx, idStr) : requireReadable(ctx, idStr, null);
 
 		// Hash-form refs go through the CAS record (preserves the canonical
 		// metadata bytes). Other forms walk the universal resolver.
 		AMap<AString, ACell> meta = null;
-		Hash hash = parseAssetId(idStr);
 		if (hash != null) {
 			AVector<?> record = engine.getAssetRecord(hash, readAs);
 			if (record != null) {
 				meta = RT.ensureMap(record.get(AssetStore.POS_META));
 			}
 		} else {
-			// Read checked above (asset/read); crud/read must not be required too.
 			ACell value = engine.resolvePathUnchecked(idStr, ctx);
 			if (value instanceof AMap) meta = (AMap<AString, ACell>) value;
 		}
@@ -305,12 +318,12 @@ public class AssetAdapter extends AAdapter {
 				return withContentType(result, resolved.contentType());
 			}
 		} catch (java.io.IOException e) {
-			throw new IllegalArgumentException("Failed to read content at " + idStr + ": " + e.getMessage(), e);
+			throw new UnavailableException("Failed to read content at " + idStr + ": " + e.getMessage(), e);
 		}
 
-		// CAS fallback: an asset (a/) is per-DID like w — gate the cross-user read
-		// (deny, not a silent miss) and read the owner's record when authorised.
-		AString readAs = engine.requireLocalAccess(ctx, idStr, Abilities.ASSET_READ);
+		// CAS fallback: read the owner's record when authorised.
+		Hash hash = parseAssetId(idStr);
+		AString readAs = requireReadable(ctx, idStr, hash);
 
 		// Locate the CAS record for the source. Hash-form refs name the record
 		// directly. For non-hash refs we resolve the path, derive the CAD3 hash
@@ -318,16 +331,14 @@ public class AssetAdapter extends AAdapter {
 		// non-CAS workspace values that have never been stored as assets won't
 		// have a record, and the call returns exists: false.
 		AVector<?> record = null;
-		Hash hash = parseAssetId(idStr);
 		if (hash != null) {
 			record = engine.getAssetRecord(hash, readAs);
 		} else {
-			// Read checked above (asset/read).
 			ACell value = engine.resolvePathUnchecked(idStr, ctx);
 			if (value instanceof AMap) {
 				Hash derived = ((AMap<AString, ACell>) value).getHash();
-				String source = idStr.toString();
-				AString recordOwner = (source.startsWith("v/") || source.startsWith("/v/"))
+				String source = CapabilityChecker.canonicalResource(idStr.toString(), null);
+				AString recordOwner = source.startsWith("v/")
 					? engine.getDIDString() : readAs;
 				record = engine.getAssetRecord(derived, recordOwner);
 			}
@@ -399,7 +410,7 @@ public class AssetAdapter extends AAdapter {
 		// List the caller's own pinned assets — the per-user a/ namespace.
 		// Venue-level assets (the operation catalog) are discovered via
 		// covia:functions / covia:adapters / covia:inspect, not here.
-		covia.venue.User user = engine.getVenueState().users().get(ctx.getUserDID());
+		covia.venue.User user = engine.getVenueState().users().user(ctx.getUserDID());
 		AMap<ABlob, AVector<?>> userAssets = (user != null) ? user.assets().getAll() : null;
 		long rawTotal = (userAssets != null) ? userAssets.count() : 0;
 
@@ -460,9 +471,11 @@ public class AssetAdapter extends AAdapter {
 		// source, and may it create a durable asset in its own store? Do not ask
 		// for asset/store on the source path — that both misses private-read
 		// ownership and describes the wrong action.
-		AString readAbility = (parseAssetId(pathStr) != null)
-			? Abilities.ASSET_READ : Capability.CRUD_READ;
-		engine.requireResourceAccess(ctx, pathStr, readAbility);
+		if (parseAssetId(pathStr) != null) {
+			engine.requireResourceAccess(ctx, pathStr, Abilities.ASSET_READ);
+		} else {
+			engine.requirePathRead(ctx, pathStr);
+		}
 		engine.requireAuthority(ctx, Strings.create("a/"), Abilities.ASSET_STORE);
 
 		AString metaString;
@@ -474,23 +487,24 @@ public class AssetAdapter extends AAdapter {
 		// generic path resolver would only return the metadata.
 		Hash existingHash = parseAssetId(pathStr);
 		if (existingHash != null) {
-			boolean local = !pathStr.startsWith("did:") || engine.isLocalDIDResource(pathStr);
+			boolean explicitOwner = Engine.ownerOf(pathStr) != null;
+			boolean local = !explicitOwner || engine.isLocalDIDResource(pathStr);
 			AString owner = local
 				? engine.requireLocalAccess(ctx, pathStr, Abilities.ASSET_READ) : null;
 			AVector<?> record = local ? engine.getAssetRecord(existingHash, owner) : null;
 			if (record != null) {
 				metaString = RT.ensureString(record.get(AssetStore.POS_JSON));
 				content = record.get(AssetStore.POS_CONTENT);
-			} else if (pathStr.startsWith("did:")) {
+			} else if (explicitOwner) {
 				// Remote adoption — pin IS the explicit act that makes a
 				// remote definition durable. Metadata arrives hash-verified;
 				// content (if the metadata declares any) sha256-verified.
 				Asset fetched = engine.resolveAssetUnchecked(pathStr, ctx);   // source read checked above
-				if (fetched == null) throw new IllegalArgumentException("Asset not found: " + pathStr);
+				if (fetched == null) throw new NotFoundException("Asset not found: " + pathStr, pathStr.toString());
 				metaString = fetched.getMetadata();
-				content = engine.fetchRemoteContent(pathStr);
+				content = engine.fetchRemoteContent(ctx, pathStr);
 			} else {
-				throw new IllegalArgumentException("Asset not found: " + pathStr);
+				throw new NotFoundException("Asset not found: " + pathStr, pathStr.toString());
 			}
 		} else {
 			// Non-hash reference: walk the universal resolver. The resolved
@@ -499,21 +513,21 @@ public class AssetAdapter extends AAdapter {
 			ACell value = engine.resolvePathUnchecked(pathStr, ctx);
 			if (value != null) {
 				if (!(value instanceof AMap)) {
-					throw new IllegalArgumentException(
+					throw new InvalidInputException(
 						"Cannot pin non-map value at " + pathStr
 						+ " (got " + value.getClass().getSimpleName() + ")");
 				}
 				metaString = JSON.printPretty((AMap<AString, ACell>) value);
-			} else if (pathStr.startsWith("did:")) {
+			} else if (Engine.ownerOf(pathStr) != null) {
 				// Named remote reference (did:web:.../v/ops/...): adopt like
 				// any other remote definition. resolvePath is local-only, so
 				// a miss here is the expected route for remote bindings.
 				Asset fetched = engine.resolveAssetUnchecked(pathStr, ctx);
-				if (fetched == null) throw new IllegalArgumentException("Path not found: " + pathStr);
+				if (fetched == null) throw new NotFoundException("Path not found: " + pathStr, pathStr.toString());
 				metaString = fetched.getMetadata();
-				content = engine.fetchRemoteContent(pathStr);
+				content = engine.fetchRemoteContent(ctx, pathStr);
 			} else {
-				throw new IllegalArgumentException("Path not found: " + pathStr);
+				throw new NotFoundException("Path not found: " + pathStr, pathStr.toString());
 			}
 		}
 

@@ -16,8 +16,9 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
-import convex.core.util.Utils;
 import covia.api.Fields;
+import covia.exception.CoviaException;
+import covia.exception.FaultException;
 import covia.exception.JobFailedException;
 import covia.venue.AgentEvents;
 
@@ -147,6 +148,18 @@ public final class CycleRecord {
 		return new Result(r.frames.peekLast().toCell(), r.tokens());
 	}
 
+	/**
+	 * Closes the record and adds it to a cycle's {@code output}, with its
+	 * token totals when the provider measured any (absent means it reported
+	 * nothing, never zero). Every way a cycle ends goes through here.
+	 */
+	public static AMap<AString, ACell> endInto(AMap<AString, ACell> output) {
+		Result r = end();
+		if (r == null) return output;
+		output = output.assoc(Fields.CYCLE, r.cycle());
+		return (r.tokens() != null) ? output.assoc(Fields.TOKENS, r.tokens()) : output;
+	}
+
 	/** Adds a reply's provider-reported usage to the open record's totals, if any. */
 	public static void tally(ACell reply) {
 		CycleRecord r = CURRENT.get();
@@ -182,8 +195,9 @@ public final class CycleRecord {
 
 	// ========== Inferences ==========
 
-	/** Before a call: what this inference newly sends, by the bands the prompt marks. */
-	void beginInference(ContextAssembler.Prompt prompt, AString op, AString model) {
+	/** Before a call: what this inference newly sends, by the bands the prompt
+	 *  marks, stamped {@code ts} from the venue's clock. */
+	void beginInference(ContextAssembler.Prompt prompt, AString op, AString model, CVMLong ts) {
 		Frame f = frames.peek();
 		boolean first = f.inferences.isEmpty();
 		boolean child = frames.size() > 1;
@@ -212,7 +226,7 @@ public final class CycleRecord {
 		if (first) f.context = context;
 		AVector<ACell> tools = toolNames(prompt.tools());
 		AMap<AString, ACell> inference = Maps.of(
-			Fields.TS, CVMLong.create(Utils.getCurrentTimestamp()),
+			Fields.TS, ts,
 			Fields.OP, op);
 		if (model != null) inference = inference.assoc(AbstractLLMAdapter.K_MODEL, model);
 		if (!newly.isEmpty()) inference = inference.assoc(Fields.SENT, newly);
@@ -326,28 +340,39 @@ public final class CycleRecord {
 
 	// ========== Failure carrier ==========
 
+	/** What failed, when an agent's transition reports a fault in its own code. */
+	public static final String TRANSITION = "Transition";
+
 	/**
 	 * A transition failure carrying the record of what ran before it, so the
-	 * cycle's entry keeps its inferences. The message is the original's and
-	 * the original is the cause; the run loop unwraps it.
+	 * cycle's entry keeps its inferences. The cause is the failure as the
+	 * transition reports it ({@link FaultException#within}), and the message
+	 * is its message; the run loop unwraps it.
 	 */
 	public static final class Failure extends JobFailedException {
 		private static final long serialVersionUID = 1L;
 		private final transient Result result;
 
-		private Failure(RuntimeException cause, Result result) {
-			super((cause.getMessage() != null) ? cause.getMessage() : cause.toString());
-			initCause(cause);
+		private Failure(CoviaException reported, Result result) {
+			super(reported.getMessage());
+			initCause(reported);
 			this.result = result;
 		}
 
 		public Result result() { return result; }
 
-		/** Wraps when a record is open on this thread; otherwise the failure passes through. */
-		public static RuntimeException of(RuntimeException e) {
+		/**
+		 * Wraps when a record is open on this thread; otherwise the failure
+		 * passes through, for the transition's Job to report. A fault is
+		 * reported, and logged, here, where the cycle met it.
+		 *
+		 * @param owner whose code the transition is, such as {@code FaultException.ADAPTER.formatted("llmagent")}
+		 */
+		public static RuntimeException of(RuntimeException e, String owner) {
 			if (e instanceof Failure) return e;
 			Result r = end();
-			return (r == null) ? e : new Failure(e, r);
+			if (r == null) return e;
+			return new Failure(FaultException.within(TRANSITION, owner, e), r);
 		}
 
 		/** The carrier in a cause chain, or null. */

@@ -1,0 +1,19 @@
+{
+	"name": "Test step",
+	"description": "Test agent transition scripted by the text of the cycle's newest input: hold:<gate>, complete, failtask, fail, cannot, bug or yield; otherwise it replies with the messages it saw and the task's input. It leaves the conversation to the run loop.",
+	"dateCreated": "2026-11-01T00:00:00Z",
+	"operation": {
+		"adapter": "test:step",
+		"readOnly": false,
+		"input": { "type": "object" },
+		"output": {
+			"type": "object",
+			"properties": {
+				"response": {
+					"type": "object",
+					"description": "{saw: [message text...], input?: task input}"
+				}
+			}
+		}
+	}
+}

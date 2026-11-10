@@ -20,14 +20,16 @@ import urllib.request
 # --------------------------------------------------------------------------
 # The fleet: one agent per template family worth exercising.
 # --------------------------------------------------------------------------
+# (name, template, caps, purpose). Templates other than reader declare no caps,
+# so the fleet gives those agents their owner's full authority explicitly.
 FLEET = [
-    ("scout",  "v/agents/templates/skilled",
+    ("scout",  "v/agents/templates/skilled", "unrestricted",
      "General agent with the standard skill sources. Probes discovery and skills."),
-    ("worker", "v/agents/templates/worker",
+    ("worker", "v/agents/templates/worker", "unrestricted",
      "Data-processing agent. Probes workspace and asset operations."),
-    ("reader", "v/agents/templates/reader",
+    ("reader", "v/agents/templates/reader", None,
      "Capability-pinned read-only agent. Probes that enforcement is real, not prompt fiction."),
-    ("boss",   "v/agents/templates/manager",
+    ("boss",   "v/agents/templates/manager", "unrestricted",
      "Coordination agent. Probes delegation to another agent."),
 ]
 
@@ -142,13 +144,16 @@ def read_path(venue, path):
 
 def create_agents(venue, model):
     made = []
-    for name, template, purpose in FLEET:
+    for name, template, caps, purpose in FLEET:
         # Re-runnable: create never overwrites, so clear a previous drive first.
         try:
             invoke(venue, "v/ops/agent/delete", {"agentId": name, "remove": True})
         except Exception:
             pass
-        cfg = [template, {"llmOperation": "v/ops/langchain/anthropic", "model": model}]
+        layer = {"llmOperation": "v/ops/langchain/anthropic", "model": model}
+        if caps is not None:
+            layer["caps"] = caps
+        cfg = [template, layer]
         res = invoke(venue, "v/ops/agent/create",
                      {"agentId": name, "config": cfg})
         out = res.get("output") or {}

@@ -29,15 +29,16 @@ public final class SnapshotCompatibilityProbe {
             var ctx = RequestContext.of(did);
             var user = engine.getVenueState().users().ensure(did);
             var secrets = SecretStore.keys(key);
-            var drive = ((DLFSAdapter) engine.getAdapter("dlfs"))
-                .getDriveForIdentity(did.toString(), "rehearsal");
+            var dlfs = (DLFSAdapter) engine.getAdapter("dlfs");
+            dlfs.ensureDrive(ctx, "dlfs/rehearsal");
+            var drive = dlfs.getDrive(ctx, "rehearsal");
             if (!"-".equals(args[1])) {
                 equal(args[1], RT.getIn(run(engine, ctx, "covia/read",
                     Maps.of("path", "w/rehearsal")), "value").toString());
                 equal(args[1], user.secrets().decrypt("rehearsal", secrets).toString());
                 equal(args[1], Files.readString(drive.getPath("/marker.txt")));
                 equal(args[1], RT.getIn(user.agent("rehearsal").getRecord(), "config", "marker").toString());
-                if (user.getJobs().isEmpty()) throw new AssertionError("Persisted jobs missing");
+                if (engine.jobs().getJobs(ctx).isEmpty()) throw new AssertionError("Persisted jobs missing");
             }
             run(engine, ctx, "covia/write", Maps.of("path", "w/rehearsal", "value", args[2]));
             user.secrets().store("rehearsal", args[2], secrets);

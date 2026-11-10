@@ -20,6 +20,7 @@ import convex.core.data.Strings;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
+import covia.api.Fields;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.Scheduler;
@@ -102,7 +103,7 @@ public class SchedulerAdapterTest {
 	@Test
 	public void testScheduleRecurringDefaultsFirstFireOneIntervalOut() throws Exception {
 		ACell every = Maps.of(s("every"), CVMLong.create(HOUR));
-		long before = System.currentTimeMillis();
+		long before = engine.currentTimestamp().longValue();
 		ACell scheduled = invoke("v/ops/scheduler/schedule", Maps.of(
 			s("operation"), s("v/test/ops/echo"),
 			s("input"), s("tick"),
@@ -151,7 +152,7 @@ public class SchedulerAdapterTest {
 		AVector<ACell> events = (AVector<ACell>) RT.getIn(listed, s("events"));
 		assertEquals(1, events.count());
 		ACell event = events.get(0);
-		assertEquals(did, RT.getIn(event, s("by")));
+		assertEquals(did, RT.getIn(event, Fields.CALLER));
 		assertEquals(echoInput, RT.getIn(event, s("input")));
 		assertEquals(s("Say hello every so often"), RT.getIn(event, s("description")));
 		assertTrue(RT.getIn(event, s("created")) instanceof CVMLong);

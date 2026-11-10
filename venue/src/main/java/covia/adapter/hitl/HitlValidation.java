@@ -10,13 +10,14 @@ import convex.core.data.AVector;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
+import covia.exception.InvalidInputException;
 import covia.grid.hitl.Hitl;
 
 /**
  * Pure HITL domain rules (COG-16) — request/response validation and the
  * echo-consent grant intersection. No engine, no lattice, no side effects:
  * every function maps immutable inputs to a result or throws
- * {@link IllegalArgumentException} with an actionable message.
+ * {@link InvalidInputException} with an actionable message.
  *
  * <p>Kept separate from {@code HITLAdapter} (which owns authorisation,
  * persistence and job control) so the semantics are unit-testable in
@@ -36,34 +37,34 @@ public class HitlValidation {
 	 *
 	 * @param asksCell the raw {@code asks} input
 	 * @return the validated asks vector
-	 * @throws IllegalArgumentException on any violation — no record is written,
+	 * @throws InvalidInputException on any violation — no record is written,
 	 *         no job parks
 	 */
 	@SuppressWarnings("unchecked")
 	public static AVector<ACell> validateAsks(ACell asksCell) {
 		if (!(asksCell instanceof AVector) || ((AVector<ACell>) asksCell).count() == 0) {
-			throw new IllegalArgumentException("asks must be a non-empty array");
+			throw new InvalidInputException("asks must be a non-empty array");
 		}
 		AVector<ACell> asks = (AVector<ACell>) asksCell;
 		Set<String> ids = new HashSet<>();
 		for (long i = 0; i < asks.count(); i++) {
 			AMap<AString, ACell> ask = RT.castMap(asks.get(i));
-			if (ask == null) throw new IllegalArgumentException("asks[" + i + "] must be an object");
+			if (ask == null) throw new InvalidInputException("asks[" + i + "] must be an object");
 			AString id = RT.ensureString(ask.get(Hitl.ID));
 			AString type = RT.ensureString(ask.get(Hitl.TYPE));
 			AString prompt = RT.ensureString(ask.get(Hitl.PROMPT));
 			if (id == null || !ids.add(id.toString())) {
-				throw new IllegalArgumentException("asks[" + i + "].id is required and must be unique");
+				throw new InvalidInputException("asks[" + i + "].id is required and must be unique");
 			}
 			if (type == null || !ASK_TYPES.contains(type.toString())) {
-				throw new IllegalArgumentException("asks[" + i + "].type must be one of " + ASK_TYPES);
+				throw new InvalidInputException("asks[" + i + "].type must be one of " + ASK_TYPES);
 			}
-			if (prompt == null) throw new IllegalArgumentException("asks[" + i + "].prompt is required");
+			if (prompt == null) throw new InvalidInputException("asks[" + i + "].prompt is required");
 			boolean optionType = Hitl.CHOICE.equals(type) || Hitl.CHECKBOXES.equals(type);
 			ACell optionsCell = ask.get(Hitl.OPTIONS);
 			if (optionType) {
 				if (!(optionsCell instanceof AVector) || ((AVector<ACell>) optionsCell).count() == 0) {
-					throw new IllegalArgumentException("asks[" + i + "].options must be a non-empty array");
+					throw new InvalidInputException("asks[" + i + "].options must be a non-empty array");
 				}
 				Set<String> optionIds = new HashSet<>();
 				AVector<ACell> options = (AVector<ACell>) optionsCell;
@@ -71,17 +72,17 @@ public class HitlValidation {
 					AMap<AString, ACell> opt = RT.castMap(options.get(j));
 					AString optId = (opt != null) ? RT.ensureString(opt.get(Hitl.ID)) : null;
 					if (opt == null || optId == null || !optionIds.add(optId.toString())) {
-						throw new IllegalArgumentException("asks[" + i + "].options[" + j
+						throw new InvalidInputException("asks[" + i + "].options[" + j
 							+ "] must be an object with a unique id");
 					}
 					validateGrantList(opt.get(Hitl.GRANTS), "asks[" + i + "].options[" + j + "]");
 				}
 			} else if (optionsCell != null) {
-				throw new IllegalArgumentException("asks[" + i + "]: options only apply to choice/checkboxes");
+				throw new InvalidInputException("asks[" + i + "]: options only apply to choice/checkboxes");
 			}
 			ACell grants = ask.get(Hitl.GRANTS);
 			if (grants != null && !Hitl.APPROVAL.equals(type)) {
-				throw new IllegalArgumentException("asks[" + i + "]: grants only attach to approval "
+				throw new InvalidInputException("asks[" + i + "]: grants only attach to approval "
 					+ "asks and options — a grant must be the consequence of an explicit choice");
 			}
 			validateGrantList(grants, "asks[" + i + "]");
@@ -107,19 +108,19 @@ public class HitlValidation {
 	private static void validateTokenSpec(ACell specCell, String where) {
 		AMap<AString, ACell> spec = RT.castMap(specCell);
 		if (spec == null) {
-			throw new IllegalArgumentException(where + ".token spec is required for a token ask: "
+			throw new InvalidInputException(where + ".token spec is required for a token ask: "
 				+ "{caps:[{with,can}], exp?, audience?, venue?}");
 		}
 		ACell capsCell = spec.get(Hitl.CAPS);
 		if (!(capsCell instanceof AVector) || ((AVector<ACell>) capsCell).count() == 0) {
-			throw new IllegalArgumentException(where + ".token.caps must be a non-empty array of {with, can}");
+			throw new InvalidInputException(where + ".token.caps must be a non-empty array of {with, can}");
 		}
 		AVector<ACell> caps = (AVector<ACell>) capsCell;
 		for (long i = 0; i < caps.count(); i++) {
 			AMap<AString, ACell> c = RT.castMap(caps.get(i));
 			if (c == null || RT.ensureString(c.get(Hitl.WITH)) == null
 					|| RT.ensureString(c.get(Hitl.CAN)) == null) {
-				throw new IllegalArgumentException(where + ".token.caps[" + i + "] must be {with, can}");
+				throw new InvalidInputException(where + ".token.caps[" + i + "] must be {with, can}");
 			}
 		}
 	}
@@ -127,19 +128,19 @@ public class HitlValidation {
 	private static void validateGrantList(ACell grantsCell, String where) {
 		if (grantsCell == null) return;
 		if (!(grantsCell instanceof AVector)) {
-			throw new IllegalArgumentException(where + ".grants must be an array");
+			throw new InvalidInputException(where + ".grants must be an array");
 		}
 		AVector<ACell> grants = (AVector<ACell>) grantsCell;
 		for (long i = 0; i < grants.count(); i++) {
 			AMap<AString, ACell> g = RT.castMap(grants.get(i));
 			if (g == null || RT.ensureString(g.get(Hitl.WITH)) == null
 					|| RT.ensureString(g.get(Hitl.CAN)) == null) {
-				throw new IllegalArgumentException(where + ".grants[" + i + "] must be {with, can, exp?}");
+				throw new InvalidInputException(where + ".grants[" + i + "] must be {with, can, exp?}");
 			}
 			if (g.containsKey(Hitl.EXP)) {
 				ACell exp = g.get(Hitl.EXP);
 				if (exp != null && RT.ensureLong(exp) == null) {
-					throw new IllegalArgumentException(where + ".grants[" + i
+					throw new InvalidInputException(where + ".grants[" + i
 						+ "].exp must be unix seconds or null");
 				}
 			}
@@ -154,7 +155,7 @@ public class HitlValidation {
 	 * @param asks the request's validated asks
 	 * @param answers map of ask id → answer
 	 * @return the triggered offers (capability maps, as offered)
-	 * @throws IllegalArgumentException on any violation — the record stays
+	 * @throws InvalidInputException on any violation — the record stays
 	 *         open and the job unresolved
 	 */
 	@SuppressWarnings("unchecked")
@@ -169,13 +170,13 @@ public class HitlValidation {
 			ACell answer = answers.get(askId);
 			if (answer == null) {
 				if (CVMBool.TRUE.equals(ask.get(Hitl.REQUIRED))) {
-					throw new IllegalArgumentException("required ask '" + askId + "' is unanswered");
+					throw new InvalidInputException("required ask '" + askId + "' is unanswered");
 				}
 				continue;
 			}
 			if (Hitl.TEXT.equals(type)) {
 				if (RT.ensureString(answer) == null) {
-					throw new IllegalArgumentException("answer for '" + askId + "' must be a string");
+					throw new InvalidInputException("answer for '" + askId + "' must be a string");
 				}
 			} else if (Hitl.TOKEN_ASK.equals(type)) {
 				// The answer is a client-signed UCAN JWT. Its structure/signature/
@@ -184,12 +185,12 @@ public class HitlValidation {
 				// Token asks trigger NO grants — the signed token is transported,
 				// not minted.
 				if (RT.ensureString(answer) == null) {
-					throw new IllegalArgumentException("answer for '" + askId
+					throw new InvalidInputException("answer for '" + askId
 						+ "' must be a signed token (a UCAN JWT string)");
 				}
 			} else if (Hitl.APPROVAL.equals(type)) {
 				if (!(answer instanceof CVMBool)) {
-					throw new IllegalArgumentException("answer for '" + askId + "' must be a boolean");
+					throw new InvalidInputException("answer for '" + askId + "' must be a boolean");
 				}
 				if (CVMBool.TRUE.equals(answer)) {
 					triggered = appendGrants(triggered, ask.get(Hitl.GRANTS));
@@ -199,12 +200,12 @@ public class HitlValidation {
 				if (Hitl.CHOICE.equals(type)) {
 					AMap<AString, ACell> opt = findOption(options, RT.ensureString(answer));
 					if (opt == null) {
-						throw new IllegalArgumentException("answer for '" + askId + "' must name an option id");
+						throw new InvalidInputException("answer for '" + askId + "' must name an option id");
 					}
 					triggered = appendGrants(triggered, opt.get(Hitl.GRANTS));
 				} else {
 					if (!(answer instanceof AVector)) {
-						throw new IllegalArgumentException("answer for '" + askId + "' must be an array of option ids");
+						throw new InvalidInputException("answer for '" + askId + "' must be an array of option ids");
 					}
 					Set<String> seen = new HashSet<>();
 					AVector<ACell> selected = (AVector<ACell>) answer;
@@ -212,7 +213,7 @@ public class HitlValidation {
 						AString optId = RT.ensureString(selected.get(j));
 						AMap<AString, ACell> opt = findOption(options, optId);
 						if (opt == null || !seen.add(optId.toString())) {
-							throw new IllegalArgumentException("answer for '" + askId
+							throw new InvalidInputException("answer for '" + askId
 								+ "' contains an unknown or duplicate option id");
 						}
 						triggered = appendGrants(triggered, opt.get(Hitl.GRANTS));
@@ -224,7 +225,7 @@ public class HitlValidation {
 		for (long i = 0; i < answers.count(); i++) {
 			AString key = RT.ensureString(answers.entryAt(i).getKey());
 			if (key == null || !askIds.contains(key.toString())) {
-				throw new IllegalArgumentException("answers contains unknown ask id: " + key);
+				throw new InvalidInputException("answers contains unknown ask id: " + key);
 			}
 		}
 		return triggered;
@@ -239,13 +240,13 @@ public class HitlValidation {
 	 * @param echoedCell the response's {@code grants} field (may be null)
 	 * @param triggered the offers triggered by the answers
 	 * @return the approved grants to issue
-	 * @throws IllegalArgumentException if any echoed grant was not
+	 * @throws InvalidInputException if any echoed grant was not
 	 *         offered-and-triggered
 	 */
 	public static AVector<ACell> intersectEchoedGrants(ACell echoedCell, AVector<ACell> triggered) {
 		if (echoedCell == null) return Vectors.empty();
 		if (!(echoedCell instanceof AVector)) {
-			throw new IllegalArgumentException("grants must be an array of {with, can} capabilities");
+			throw new InvalidInputException("grants must be an array of {with, can} capabilities");
 		}
 		AVector<ACell> echoed = (AVector<ACell>) echoedCell;
 		AVector<ACell> approved = Vectors.empty();
@@ -265,7 +266,7 @@ public class HitlValidation {
 				}
 			}
 			if (match == null) {
-				throw new IllegalArgumentException("echoed grant " + i + " was not offered by the "
+				throw new InvalidInputException("echoed grant " + i + " was not offered by the "
 					+ "choices made — the venue issues only offered-and-triggered grants");
 			}
 			approved = approved.conj(match);

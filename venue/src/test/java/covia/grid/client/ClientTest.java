@@ -192,8 +192,7 @@ public class ClientTest {
 		
 		// Verify the content
 		assertNotNull(retrievedContent, "Retrieved content should not be null");
-		assertTrue(retrievedContent instanceof BlobContent, "Retrieved content should be BlobContent");
-		
+
 		// Verify the content matches
 		convex.core.data.ABlob retrievedBlob = retrievedContent.getBlob();
 		assertNotNull(retrievedBlob, "Retrieved blob should not be null");
@@ -297,5 +296,16 @@ public class ClientTest {
 		assertEquals(Vectors.empty(),result);
 		
 		assertEquals(Maps.empty(),a.run(Maps.empty()));
+	}
+
+	@Test
+	public void testAssetRunFailurePassesOnAsReported() throws IOException {
+		// A failed run reaches the caller as the type the venue reported it
+		// with, not rewrapped as a JobFailedException carrying its description.
+		Venue v = Grid.connect(TestServer.BASE_URL);
+		Asset a = v.resolveAsset("v/test/ops/error");
+		assertNotNull(a);
+		assertThrows(covia.exception.ResponseException.class,
+			() -> a.run(Maps.of("message", "boom")));
 	}
 }

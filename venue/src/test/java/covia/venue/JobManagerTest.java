@@ -10,9 +10,12 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
+import org.junit.jupiter.api.parallel.Isolated;
 
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -29,9 +32,15 @@ import covia.api.Fields;
 import covia.adapter.AAdapter;
 import covia.adapter.TestAdapter;
 import covia.exception.AuthException;
+import covia.exception.CoviaException;
+import covia.exception.InvalidInputException;
+import covia.exception.NotFoundException;
+import covia.exception.NotSupportedException;
+import covia.exception.UnavailableException;
 import covia.grid.Asset;
 import covia.grid.Job;
 import covia.grid.Status;
+import covia.lattice.CoviaPath;
 import covia.test.Rendezvous;
 
 /**
@@ -48,139 +57,167 @@ import covia.test.Rendezvous;
  * infrastructure. Real two-venue exercises live in
 	 * {@code covia.venue.grid.CrossVenueTest}; the loopback dispatch path
 	 * inside one venue is covered by {@code GridAdapterTest}.</p>
+ *
+ * <p>Isolated because a test provoking a venue fault silences the loggers
+ * that report it.</p>
  */
+@Isolated("silences the AAdapter and JobManager loggers")
 public class JobManagerTest {
+	/**
+	 * Every route that reads a job leaves it as it was: neither its record nor
+	 * the user's activity stamp changes, and a failed transaction writes
+	 * nothing.
+	 */
 	@Test
-	public void legacyJobReadsArePureAndNextWriteDropsOnlyTheChain() {
+	public void jobReadsArePure() {
 		User user = engine.getVenueState().users().ensure(did);
 		Blob id = Blob.fromHex("61106110611061106110611061106110");
-		AString prev = Strings.intern("prev");
-		AString temp = Strings.intern("temp");
-		AMap<AString, ACell> payload = Maps.of(prev, "payload field stays");
-		AMap<AString, ACell> current = Maps.of(Fields.ID, id, Fields.CALLER, did,
-			Fields.STATUS, Status.COMPLETE, Fields.OUTPUT, payload, Fields.UPDATED, 123L,
-			Fields.HISTORY, Vectors.of(Maps.of(Fields.MESSAGE_ID, "existing")), temp, payload);
-		AMap<AString, ACell> legacy = current.assoc(prev, Maps.of(Fields.STATUS, Status.STARTED,
-			prev, Maps.of(Fields.STATUS, Status.PENDING)));
-		// Simulate an old store or a legacy snapshot arriving after startup.
-		user.cursor().path(covia.lattice.Namespace.J).set(convex.core.data.Index.<Blob, ACell>none().assoc(id, legacy));
+		AMap<AString, ACell> output = Maps.of(Strings.create("answer"), 42L);
+		AMap<AString, ACell> record = Maps.of(Fields.ID, id, Fields.CALLER, did,
+			Fields.STATUS, Status.COMPLETE, Fields.OUTPUT, output, Fields.UPDATED, 123L,
+			Fields.HISTORY, Vectors.of(Maps.of(Fields.MESSAGE_ID, "existing")));
+		user.cursor().path(covia.lattice.Namespace.J).set(convex.core.data.Index.<Blob, ACell>none().assoc(id, record));
 		var storage = user.cursor().path(covia.lattice.Namespace.J, id);
 		ACell before = user.get();
 		String path = "j/" + id.toHexString();
-		assertEquals(current, user.job(id).getRecord());
-		assertEquals(current, engine.jobs().getJobData(id, ctx));
-		assertEquals(current, engine.jobs().getJobs(ctx).get(id));
+		assertEquals(record, user.jobs().getRecord(id));
+		assertEquals(record, engine.jobs().getJobData(id, ctx));
+		assertEquals(record, engine.jobs().getJobs(ctx).get(id));
 		assertEquals(1, engine.jobs().countJobs(ctx));
-		assertEquals(payload, engine.jobs().getJob(id, ctx).awaitResult());
-		assertEquals(current, engine.resolvePath(Strings.create(path), ctx));
-		assertEquals(current, RT.getIn(engine.resolvePath(Strings.create("j/"), ctx), id));
-		assertEquals(current, RT.getIn(user.workspaceRoot().read(), covia.lattice.Namespace.J, id));
-		assertNull(engine.resolvePath(Strings.create(path + "/prev"), ctx));
+		assertEquals(output, engine.jobs().getJob(id, ctx).awaitResult());
+		assertEquals(record, engine.resolvePath(Strings.create(path), ctx));
+		assertEquals(record, RT.getIn(engine.resolvePath(Strings.create("j/"), ctx), id));
+		assertEquals(record, RT.getIn(user.cursor().getOrDefault(null), covia.lattice.Namespace.J, id));
 		var adapter = (covia.adapter.CoviaAdapter) engine.getAdapter("covia");
-		assertEquals(current, RT.getIn(adapter.handleRead(ctx, Maps.of(Fields.PATH, path)), "value"));
-		assertEquals(CVMBool.FALSE,
-			RT.getIn(adapter.handleRead(ctx, Maps.of(Fields.PATH, path + "/prev")), "exists"));
+		assertEquals(record, RT.getIn(adapter.handleRead(ctx, Maps.of(Fields.PATH, path)), "value"));
 		// Equal, not identical: the shared engine's background sync may swap in
 		// persisted references for the same value (LatticeHost.sync).
 		assertEquals(before, user.get(), "reads must neither rewrite records nor stamp user activity");
-		assertEquals(legacy, storage.get());
 
-		// A failed transaction must not migrate the record either.
-		assertThrows(IllegalStateException.class, () -> user.transact(draft -> {
-			draft.job(id).appendHistory(Maps.of(Fields.MESSAGE_ID, "rollback"));
+		assertThrows(IllegalStateException.class, () -> user.execute(draft -> {
+			draft.jobs().job(id).appendHistory(Maps.of(Fields.MESSAGE_ID, "rollback"));
 			throw new IllegalStateException("rollback");
 		}));
-		assertEquals(legacy, storage.get());
+		assertEquals(record, storage.get());
 		AMap<AString, ACell> message = Maps.of(Fields.MESSAGE_ID, "new");
-		assertTrue(user.job(id).appendHistory(message));
-		AMap<AString, ACell> migrated = user.getJob(id);
-		assertEquals(migrated, storage.get(), "the next edit physically removes the legacy link");
-		assertFalse(migrated.containsKey(prev));
-		assertEquals(current.dissoc(Fields.UPDATED).dissoc(Fields.HISTORY),
-			migrated.dissoc(Fields.UPDATED).dissoc(Fields.HISTORY));
-		assertEquals(Vectors.of(Maps.of(Fields.MESSAGE_ID, "existing"), message), migrated.get(Fields.HISTORY));
+		assertTrue(user.jobs().job(id).appendHistory(message));
+		assertEquals(Vectors.of(Maps.of(Fields.MESSAGE_ID, "existing"), message), RT.getIn(storage.get(), Fields.HISTORY));
 		ACell after = storage.get();
-		assertFalse(user.job(id).appendHistory(message));
+		assertFalse(user.jobs().job(id).appendHistory(message));
 		assertEquals(after, storage.get(), "repeat edits remain idempotent");
+	}
 
-		storage.set(legacy);
-		user.recordCursor(covia.lattice.Namespace.J, id).path(temp, Strings.create("scratch")).set(CVMLong.ONE);
-		assertNull(RT.getIn(storage.get(), prev), "scratch edits also discard the obsolete link");
-		assertEquals(payload.assoc(Strings.create("scratch"), CVMLong.ONE), RT.getIn(storage.get(), temp));
-		user.persistJob(id, legacy);
-		assertNull(RT.getIn(storage.get(), prev), "imports cannot reintroduce chains");
-		assertEquals(CVMLong.ONE, RT.getIn(storage.get(), temp, "scratch"));
+	/**
+	 * Jobs a venue before 0.10.0 left unfinished, their earlier states chained
+	 * under prev, recover at start without the chain, which the venue's
+	 * migration drops: an interrupted job fails, and a paused job is restored
+	 * live.
+	 */
+	@Test
+	public void legacyUnfinishedJobsRecoverInTheirCurrentShape() throws Exception {
+		convex.core.crypto.AKeyPair key = convex.core.crypto.AKeyPair.generate();
+		CoviaApplication application = TestEngine.application();
+		Engine venue = application.mount(key, Maps.empty());
+		try {
+			AString caller = Strings.create("did:test:legacy-unfinished");
+			AString prev = Strings.intern("prev");
+			Blob started = Blob.fromHex("61136113611361136113611361136113");
+			Blob paused = Blob.fromHex("61146114611461146114611461146114");
+			AMap<AString, ACell> chain = Maps.of(Fields.STATUS, Status.PENDING);
+			application.venue(key.getAccountKey()).users().ensure(caller).cursor().path(covia.lattice.Namespace.J)
+				.set(convex.core.data.Index.<Blob, ACell>none()
+					.assoc(started, Maps.of(Fields.ID, started, Fields.CALLER, caller, Fields.STATUS, Status.STARTED, prev, chain))
+					.assoc(paused, Maps.of(Fields.ID, paused, Fields.CALLER, caller, Fields.STATUS, Status.PAUSED, prev, chain)));
+
+			venue.launch();
+			RequestContext ctx = RequestContext.of(caller);
+			User user = venue.getVenueState().users().user(caller);
+			assertEquals(AAdapter.RESTARTED_DURING_EXECUTION, venue.jobs().getJob(started, ctx).getErrorMessage());
+			assertNull(RT.getIn(user.cursor().path(covia.lattice.Namespace.J, started).get(), prev));
+
+			Job restored = venue.jobs().getJob(paused);
+			assertEquals(Status.PAUSED, restored.getStatus(), "restored live");
+			assertNull(restored.getData().get(prev));
+			venue.jobs().cancelJob(paused, ctx);
+			AMap<AString, ACell> stored = RT.ensureMap(user.cursor().path(covia.lattice.Namespace.J, paused).get());
+			assertEquals(Status.CANCELLED, stored.get(Fields.STATUS));
+			assertNull(stored.get(prev));
+		} finally {
+			venue.close();
+		}
 	}
 
 	@Test
-	public void testSynchronousAdapterErrorsSettleDurableJobs() {
-		Engine eng = Engine.createTemp(null);
-		try {
-			var invoked = new java.util.concurrent.atomic.AtomicReference<Job>();
-			eng.registerAdapter(new AAdapter() {
-				@Override public String getName() { return "broken-module"; }
-				@Override public String getDescription() { return "test"; }
-				@Override public CompletableFuture<ACell> invokeFuture(RequestContext c,
-						AMap<AString, ACell> m, ACell in) {
-					invoked.set(c.getJob());
-					throw new NoClassDefFoundError("missing/library/Class");
-				}
-				@Override public void invoke(Job job, RequestContext c, AMap<AString, ACell> m, ACell in) {
-					if (Strings.create("custom").equals(in)) {
-						invoked.set(job);
-						throw new NoClassDefFoundError("custom/adapter/Class");
-					}
-					super.invoke(job, c, m, in);
-				}
-			});
-			AMap<AString, ACell> meta = Maps.of(Fields.OPERATION,
-				Maps.of(Fields.ADAPTER, Strings.create("broken-module:run")));
-			for (ACell input : new ACell[] { null, Strings.create("custom") }) {
-				assertThrows(NoClassDefFoundError.class,
-					() -> eng.jobs().invokeOperation(meta, input, eng.venueContext()));
-				Job job = invoked.get();
-				assertEquals(Status.FAILED, job.getStatus());
-				assertTrue(job.future().isCompletedExceptionally());
-				assertEquals(Status.FAILED, eng.jobs().getJobData(job.getID(), eng.venueContext()).get(Fields.STATUS));
+	public void testSynchronousAdapterErrorsSettleDurableJobs() throws Exception {
+		// A linkage error is the adapter's fault, logged at ERROR where its Job reports it
+		TestLogs.quiet(covia.exception.FaultException.class, this::synchronousAdapterErrorsSettleDurableJobs);
+	}
+
+	private void synchronousAdapterErrorsSettleDurableJobs() {
+		Engine eng = ownAdapters;
+		var invoked = new java.util.concurrent.atomic.AtomicReference<Job>();
+		eng.registerAdapter(new AAdapter() {
+			@Override public String getName() { return "broken-module"; }
+			@Override public String getDescription() { return "test"; }
+			@Override public CompletableFuture<ACell> invokeFuture(RequestContext c,
+					AMap<AString, ACell> m, ACell in) {
+				invoked.set(c.getJob());
+				throw new NoClassDefFoundError("missing/library/Class");
 			}
-		} finally { eng.close(); }
+			@Override public void invoke(Job job, RequestContext c, AMap<AString, ACell> m, ACell in) {
+				if (Strings.create("custom").equals(in)) {
+					invoked.set(job);
+					throw new NoClassDefFoundError("custom/adapter/Class");
+				}
+				super.invoke(job, c, m, in);
+			}
+		});
+		AMap<AString, ACell> meta = Maps.of(Fields.OPERATION,
+			Maps.of(Fields.ADAPTER, Strings.create("broken-module:run")));
+		for (ACell input : new ACell[] { null, Strings.create("custom") }) {
+			// The caller receives the Job's report: the adapter's fault, the error chained
+			covia.exception.FaultException thrown = assertThrows(covia.exception.FaultException.class,
+				() -> eng.jobs().invokeOperation(meta, input, eng.venueContext()));
+			assertTrue(thrown.getCause() instanceof NoClassDefFoundError, String.valueOf(thrown.getCause()));
+			Job job = invoked.get();
+			assertEquals(Status.FAILED, job.getStatus());
+			assertEquals(thrown.getMessage(), job.getErrorMessage());
+			assertTrue(job.future().isCompletedExceptionally());
+			assertEquals(Status.FAILED, eng.jobs().getJobData(job.getID(), eng.venueContext()).get(Fields.STATUS));
+		}
 	}
 
 	@Test
 	public void testCancellationDuringInvokeFutureCancelsReturnedFuture() {
-		Engine eng = Engine.createTemp(null);
-		try {
-			CompletableFuture<ACell> processing = new CompletableFuture<>();
-			eng.registerAdapter(new AAdapter() {
-				@Override public String getName() { return "cancel-during-invoke"; }
-				@Override public String getDescription() { return "test"; }
-				@Override public CompletableFuture<ACell> invokeFuture(RequestContext c,
-						AMap<AString, ACell> m, ACell in) {
-					c.getJob().cancel();
-					return processing;
-				}
-			});
-			AMap<AString, ACell> meta = Maps.of(Fields.OPERATION,
-				Maps.of(Fields.ADAPTER, Strings.create("cancel-during-invoke:run")));
-			Job job = eng.jobs().invokeOperation(meta, null, eng.venueContext());
-			assertEquals(Status.CANCELLED, job.getStatus());
-			assertTrue(processing.isCancelled());
-			assertTrue(job.future().isCompletedExceptionally());
-		} finally { eng.close(); }
+		Engine eng = ownAdapters;
+		CompletableFuture<ACell> processing = new CompletableFuture<>();
+		eng.registerAdapter(new AAdapter() {
+			@Override public String getName() { return "cancel-during-invoke"; }
+			@Override public String getDescription() { return "test"; }
+			@Override public CompletableFuture<ACell> invokeFuture(RequestContext c,
+					AMap<AString, ACell> m, ACell in) {
+				c.getJob().cancel();
+				return processing;
+			}
+		});
+		AMap<AString, ACell> meta = Maps.of(Fields.OPERATION,
+			Maps.of(Fields.ADAPTER, Strings.create("cancel-during-invoke:run")));
+		Job job = eng.jobs().invokeOperation(meta, null, eng.venueContext());
+		assertEquals(Status.CANCELLED, job.getStatus());
+		assertTrue(processing.isCancelled());
+		assertTrue(job.future().isCompletedExceptionally());
 	}
 
 	@Test
 	public void testDelayedPersistenceCannotOverwriteCancellation() throws Exception {
-		Engine eng = Engine.createTemp(null);
-		eng.registerAdapter(new TestAdapter());
 		CountDownLatch entered = new CountDownLatch(1);
 		CountDownLatch release = new CountDownLatch(1);
 		try {
-			RequestContext owner = eng.venueContext();
 			AMap<AString, ACell> meta = Maps.of(Fields.OPERATION,
 				Maps.of(Fields.ADAPTER, Strings.create("test:never")));
-			Job original = eng.jobs().invokeOperation(meta, null, owner);
-			Job job = new VenueJob(original.getData(), meta, owner.getUserDID(), eng.jobs()) {
+			Job original = engine.jobs().invokeOperation(meta, null, ctx);
+			JobRecord record = engine.getVenueState().users().user(did).jobs().job(original.getID());
+			Job job = new VenueJob(record, original.getData(), OutputRules.of(meta), did, engine.jobs(), null) {
 				@Override public void onUpdate(AMap<AString, ACell> next) {
 					if (Status.PAUSED.equals(next.get(Fields.STATUS))) {
 						entered.countDown();
@@ -197,13 +234,31 @@ public class JobManagerTest {
 			} finally { release.countDown(); }
 			delayed.get(5, TimeUnit.SECONDS);
 			assertEquals(Status.CANCELLED,
-				eng.jobs().getJobData(job.getID(), owner).get(Fields.STATUS));
-		} finally { release.countDown(); eng.close(); }
+				engine.jobs().getJobData(job.getID(), ctx).get(Fields.STATUS));
+		} finally { release.countDown(); }
 	}
 
 	private final Engine engine = TestEngine.ENGINE;
 	private AString did;
 	private RequestContext ctx;
+
+	/** For the tests that register an adapter, which every test on the shared venue would see. */
+	private static Engine ownAdapters;
+
+	/** Output validation in strict mode, for the tests that need it. */
+	private static Engine strict;
+
+	@BeforeAll
+	static void startVenues() {
+		ownAdapters = Engine.createTemp(null);
+		strict = Engine.createTemp(Maps.of(Config.OUTPUT_VALIDATION, Strings.create("strict")));
+	}
+
+	@AfterAll
+	static void closeVenues() {
+		ownAdapters.close();
+		strict.close();
+	}
 
 	@BeforeEach
 	public void setup(TestInfo info) {
@@ -371,7 +426,7 @@ public class JobManagerTest {
 			(String) null, Maps.empty(), ctx);
 		assertTrue(f.isCompletedExceptionally());
 		ExecutionException ex = assertThrows(ExecutionException.class, f::get);
-		assertInstanceOf(IllegalArgumentException.class, ex.getCause());
+		assertInstanceOf(InvalidInputException.class, ex.getCause());
 	}
 
 	@Test
@@ -380,9 +435,8 @@ public class JobManagerTest {
 			"v/does/not/exist", Maps.empty(), ctx);
 		ExecutionException ex = assertThrows(ExecutionException.class,
 			() -> f.get(5, TimeUnit.SECONDS));
-		assertInstanceOf(IllegalArgumentException.class, ex.getCause());
-		assertTrue(ex.getCause().getMessage().contains("Cannot resolve")
-			|| ex.getCause().getMessage().contains("not an operation"));
+		NotFoundException missing = assertInstanceOf(NotFoundException.class, ex.getCause());
+		assertEquals("v/does/not/exist", missing.getRef());
 	}
 
 	// ========== Capability enforcement ==========
@@ -408,7 +462,7 @@ public class JobManagerTest {
 			capCtx);
 		ExecutionException ex = assertThrows(ExecutionException.class,
 			() -> denied.get(5, TimeUnit.SECONDS));
-		assertTrue(ex.getCause().getMessage().contains("Capability denied"),
+		assertFalse(ex.getCause().getMessage().isBlank(),
 			"invokeInternal must enforce the context scope");
 
 		// Within the scope — proceeds; absent path reads {exists: false}.
@@ -443,8 +497,9 @@ public class JobManagerTest {
 			Maps.of(Strings.create("path"), Strings.create("w/forbidden/x")),
 			capCtx);
 		assertThrows(Exception.class, () -> job.awaitResult(5000));
-		assertTrue(String.valueOf(job.getErrorMessage()).contains("Capability denied"),
-			"Expected capability-denied message, got: " + job.getErrorMessage());
+		assertEquals(Status.FAILED, job.getStatus());
+		assertFalse(String.valueOf(job.getErrorMessage()).isBlank(),
+			"Expected a capability-denied message");
 	}
 
 	@Test
@@ -483,8 +538,8 @@ public class JobManagerTest {
 
 		ExecutionException ex = assertThrows(ExecutionException.class,
 			() -> f.get(5, TimeUnit.SECONDS));
-		assertInstanceOf(IllegalArgumentException.class, ex.getCause());
-		assertTrue(ex.getCause().getMessage().contains("schema"),
+		assertInstanceOf(InvalidInputException.class, ex.getCause());
+		assertTrue(ex.getCause().getMessage().startsWith(JobManager.INPUT_SCHEMA_VIOLATION),
 			"Expected schema-violation message, got: " + ex.getCause().getMessage());
 	}
 
@@ -562,25 +617,15 @@ public class JobManagerTest {
 	public void testOutputValidationOffIgnoresBadResult() {
 		// Default config → outputValidation off → a non-object result (which
 		// violates the schema) must NOT raise. No validation, no logging.
-		Engine eng = Engine.createTemp(null);
-		try {
-			eng.jobs().validateOutput(metaWithObjectOutput(), Strings.create("not an object"));
-		} finally {
-			eng.close();
-		}
+		engine.jobs().validateOutput(OutputRules.of(metaWithObjectOutput()), Strings.create("not an object"));
 	}
 
 	@Test
 	public void testOutputValidationStrictFailsBadResult() {
-		Engine eng = Engine.createTemp(Maps.of(Config.OUTPUT_VALIDATION, Strings.create("strict")));
-		try {
-			assertThrows(IllegalArgumentException.class,
-				() -> eng.jobs().validateOutput(metaWithObjectOutput(), Strings.create("not an object")));
-			// A conforming result (an object) passes.
-			eng.jobs().validateOutput(metaWithObjectOutput(), Maps.empty());
-		} finally {
-			eng.close();
-		}
+		assertThrows(CoviaException.class,
+			() -> strict.jobs().validateOutput(OutputRules.of(metaWithObjectOutput()), Strings.create("not an object")));
+		// A conforming result (an object) passes.
+		strict.jobs().validateOutput(OutputRules.of(metaWithObjectOutput()), Maps.empty());
 	}
 
 	@Test
@@ -588,7 +633,7 @@ public class JobManagerTest {
 		// warn logs a mismatch but completes — must not raise.
 		Engine eng = Engine.createTemp(Maps.of(Config.OUTPUT_VALIDATION, Strings.create("warn")));
 		try {
-			eng.jobs().validateOutput(metaWithObjectOutput(), Strings.create("not an object"));
+			eng.jobs().validateOutput(OutputRules.of(metaWithObjectOutput()), Strings.create("not an object"));
 		} finally {
 			eng.close();
 		}
@@ -597,75 +642,62 @@ public class JobManagerTest {
 	@Test
 	public void testOutputValidationNoSchemaIsNoop() {
 		// An operation with no output schema is never validated, even in strict.
-		Engine eng = Engine.createTemp(Maps.of(Config.OUTPUT_VALIDATION, Strings.create("strict")));
-		try {
-			AMap<AString, ACell> meta = Maps.of(Fields.OPERATION,
-				Maps.of(Fields.ADAPTER, Strings.create("test:out")));
-			eng.jobs().validateOutput(meta, Strings.create("anything"));
-		} finally {
-			eng.close();
-		}
+		AMap<AString, ACell> meta = Maps.of(Fields.OPERATION,
+			Maps.of(Fields.ADAPTER, Strings.create("test:out")));
+		strict.jobs().validateOutput(OutputRules.of(meta), Strings.create("anything"));
 	}
 
 	@Test
 	public void testStrictOutputValidationCoversJobAwareAdapterOverride() {
-		Engine eng = Engine.createTemp(Maps.of(Config.OUTPUT_VALIDATION, Strings.create("strict")));
-		try {
-			eng.registerAdapter(new AAdapter() {
-				@Override public String getName() { return "custom-output"; }
-				@Override public String getDescription() { return "test"; }
-				@Override public CompletableFuture<ACell> invokeFuture(RequestContext c,
-						AMap<AString, ACell> m, ACell in) {
-					return CompletableFuture.completedFuture(Strings.create("bad"));
-				}
-				@Override public void invoke(Job job, RequestContext c,
-						AMap<AString, ACell> m, ACell in) {
-					job.setStatus(Status.STARTED);
-					job.completeWith(Strings.create("not an object"));
-				}
-			});
-			AMap<AString, ACell> meta = Maps.of(Fields.OPERATION, Maps.of(
-				Fields.ADAPTER, Strings.create("custom-output:run"),
-				Fields.OUTPUT, Maps.of(Strings.create("type"), Strings.create("object"))));
-			Job job = eng.jobs().invokeOperation(meta, Maps.empty(), eng.venueContext());
-			assertThrows(Exception.class, () -> job.awaitResult(1000));
-			assertEquals(Status.FAILED, job.getStatus());
-			assertTrue(job.getErrorMessage().contains("Output schema violation"));
-		} finally {
-			eng.close();
-		}
+		Engine eng = strict;
+		eng.registerAdapter(new AAdapter() {
+			@Override public String getName() { return "custom-output"; }
+			@Override public String getDescription() { return "test"; }
+			@Override public CompletableFuture<ACell> invokeFuture(RequestContext c,
+					AMap<AString, ACell> m, ACell in) {
+				return CompletableFuture.completedFuture(Strings.create("bad"));
+			}
+			@Override public void invoke(Job job, RequestContext c,
+					AMap<AString, ACell> m, ACell in) {
+				job.setStatus(Status.STARTED);
+				job.completeWith(Strings.create("not an object"));
+			}
+		});
+		AMap<AString, ACell> meta = Maps.of(Fields.OPERATION, Maps.of(
+			Fields.ADAPTER, Strings.create("custom-output:run"),
+			Fields.OUTPUT, Maps.of(Strings.create("type"), Strings.create("object"))));
+		Job job = eng.jobs().invokeOperation(meta, Maps.empty(), eng.venueContext());
+		assertThrows(Exception.class, () -> job.awaitResult(1000));
+		assertEquals(Status.FAILED, job.getStatus());
+		assertTrue(job.getErrorMessage().contains(JobManager.OUTPUT_SCHEMA_VIOLATION));
 	}
 
 	@Test
 	public void testInputSecretsRemainRedactedOnLaterJobUpdates() {
-		Engine eng = Engine.createTemp(null);
-		try {
-			eng.registerAdapter(new AAdapter() {
-				@Override public String getName() { return "secret-update"; }
-				@Override public String getDescription() { return "test"; }
-				@Override public CompletableFuture<ACell> invokeFuture(RequestContext c,
-						AMap<AString, ACell> m, ACell in) {
-					return CompletableFuture.completedFuture(in);
-				}
-				@Override public void invoke(Job job, RequestContext c,
-						AMap<AString, ACell> m, ACell in) {
-					job.setStatus(Status.STARTED);
-					job.update(data -> data.assoc(Fields.INPUT, in));
-					job.completeWith(Maps.empty());
-				}
-			});
-			AString token = Strings.create("token");
-			AMap<AString, ACell> meta = Maps.of(Fields.OPERATION, Maps.of(
-				Fields.ADAPTER, Strings.create("secret-update:run"),
-				Strings.create("secretFields"), Vectors.of(token)));
-			Job job = eng.jobs().invokeOperation(meta,
-				Maps.of(token, Strings.create("plaintext")), eng.venueContext());
-			job.awaitResult(1000);
-			AMap<AString, ACell> durable = eng.jobs().getJobData(job.getID(), eng.venueContext());
-			assertEquals(Fields.HIDDEN, RT.getIn(durable, Fields.INPUT, token));
-		} finally {
-			eng.close();
-		}
+		Engine eng = ownAdapters;
+		eng.registerAdapter(new AAdapter() {
+			@Override public String getName() { return "secret-update"; }
+			@Override public String getDescription() { return "test"; }
+			@Override public CompletableFuture<ACell> invokeFuture(RequestContext c,
+					AMap<AString, ACell> m, ACell in) {
+				return CompletableFuture.completedFuture(in);
+			}
+			@Override public void invoke(Job job, RequestContext c,
+					AMap<AString, ACell> m, ACell in) {
+				job.setStatus(Status.STARTED);
+				job.update(data -> data.assoc(Fields.INPUT, in));
+				job.completeWith(Maps.empty());
+			}
+		});
+		AString token = Strings.create("token");
+		AMap<AString, ACell> meta = Maps.of(Fields.OPERATION, Maps.of(
+			Fields.ADAPTER, Strings.create("secret-update:run"),
+			Strings.create("secretFields"), Vectors.of(token)));
+		Job job = eng.jobs().invokeOperation(meta,
+			Maps.of(token, Strings.create("plaintext")), eng.venueContext());
+		job.awaitResult(1000);
+		AMap<AString, ACell> durable = eng.jobs().getJobData(job.getID(), eng.venueContext());
+		assertEquals(Fields.HIDDEN, RT.getIn(durable, Fields.INPUT, token));
 	}
 
 	// ========== deleteJob ==========
@@ -684,11 +716,11 @@ public class JobManagerTest {
 			ctx);
 		job.awaitResult(5000);
 
-		User user = engine.getVenueState().users().get(did);
-		assertNotNull(user.getJob(job.getID()), "completed job record should be persisted");
+		User user = engine.getVenueState().users().user(did);
+		assertNotNull(user.jobs().getRecord(job.getID()), "completed job record should be persisted");
 
 		assertTrue(engine.jobs().deleteJob(job.getID(), ctx));
-		assertNull(user.getJob(job.getID()), "durable record should be removed");
+		assertNull(user.jobs().getRecord(job.getID()), "durable record should be removed");
 		assertNull(engine.jobs().getJobData(job.getID(), ctx),
 			"deleted job must not reappear via the lattice fallback");
 		assertFalse(engine.jobs().deleteJob(job.getID(), ctx),
@@ -698,13 +730,13 @@ public class JobManagerTest {
 	@Test
 	public void testLiveJobEditsPreservePrimaryRecordChanges() {
 		Job job = engine.jobs().invokeOperation("v/test/ops/never", Maps.empty(), ctx);
-		User user = engine.getVenueState().users().get(did);
+		User user = engine.getVenueState().users().user(did);
 		AMap<AString, ACell> message = Maps.of(Fields.MESSAGE_ID, "component-edit");
-		user.transact(draft -> {
-			draft.job(job.getID()).appendHistory(message);
-			draft.job(job.getID()).update(data -> data.assoc(Strings.intern("temp"), Maps.of("kept", true)));
+		user.execute(draft -> {
+			draft.jobs().job(job.getID()).appendHistory(message);
+			draft.jobs().job(job.getID()).update(data -> data.assoc(Strings.intern("temp"), Maps.of("kept", true)));
 		});
-		assertEquals(user.getJob(job.getID()), job.getData());
+		assertEquals(user.jobs().getRecord(job.getID()), job.getData());
 		job.setStatus(Status.INPUT_REQUIRED);
 		assertEquals(Vectors.of(message), job.getData().get(Fields.HISTORY));
 		assertEquals(Maps.of("kept", true), job.getData().get(Strings.intern("temp")));
@@ -722,7 +754,7 @@ public class JobManagerTest {
 		Job job = engine.jobs().invokeOperation(meta, input, ctx);
 		assertEquals(input, job.awaitResult(5000));
 		assertEquals(input, job.getOutput());
-		AMap<AString, ACell> primary = engine.getVenueState().users().get(did).job(job.getID()).getRecord();
+		AMap<AString, ACell> primary = engine.getVenueState().users().user(did).jobs().getRecord(job.getID());
 		assertEquals(primary, job.getData());
 		assertEquals(Fields.HIDDEN, RT.getIn(primary, Fields.INPUT, token));
 		assertEquals(Fields.HIDDEN, RT.getIn(primary, Fields.OUTPUT, token));
@@ -739,26 +771,63 @@ public class JobManagerTest {
 		job.subscribe(ignored -> notifications.incrementAndGet());
 		var future = job.future();
 		var output = Maps.of(token, "private-test-value");
-		var notification = new java.util.concurrent.atomic.AtomicReference<Runnable>();
-		var users = engine.getVenueState().users();
-		assertThrows(IllegalStateException.class, () -> users.transact(draft -> {
+		var venue = engine.getVenueState();
+		assertThrows(IllegalStateException.class, () -> venue.execute(draft -> {
 			assertNotNull(job.updateIn(draft, data -> data.assoc(Fields.STATUS, Status.COMPLETE).assoc(Fields.OUTPUT, output)));
+			assertNull(draft.jobIndex().entry(job.getID()), "the update that finishes the job removes its entry");
 			assertFalse(job.isFinished());
 			throw new IllegalStateException("rollback");
 		}));
 		assertFalse(job.isFinished());
 		assertFalse(future.isDone());
 		assertEquals(0, notifications.get());
-		users.transact(draft -> notification.set(job.updateIn(draft,
-			data -> data.assoc(Fields.STATUS, Status.COMPLETE).assoc(Fields.OUTPUT, output))));
+		assertNotNull(venue.jobIndex().entry(job.getID()), "a rolled back finish keeps the entry");
+		Runnable notification = venue.transact(draft -> job.updateIn(draft,
+			data -> data.assoc(Fields.STATUS, Status.COMPLETE).assoc(Fields.OUTPUT, output)));
 		assertEquals(Status.COMPLETE, job.getStatus());
-		assertEquals(Fields.HIDDEN, RT.getIn(users.get(did).getJob(job.getID()), Fields.OUTPUT, token));
+		assertNull(venue.jobIndex().entry(job.getID()));
+		assertEquals(Fields.HIDDEN, RT.getIn(venue.users().user(did).jobs().getRecord(job.getID()), Fields.OUTPUT, token));
 		assertFalse(future.isDone(), "draft edits cannot notify live waiters");
-		notification.get().run();
-		notification.get().run();
+		notification.run();
+		notification.run();
 		assertEquals(output, future.get(5, TimeUnit.SECONDS));
 		assertEquals(1, notifications.get(), "terminal lifecycle notifications run once");
-		users.transact(draft -> assertNull(job.updateIn(draft, data -> data.assoc(Fields.STATUS, Status.FAILED))));
+		venue.execute(draft -> assertNull(job.updateIn(draft, data -> data.assoc(Fields.STATUS, Status.FAILED))));
+	}
+
+	/** Settling jobs in a venue transaction: waiters wake only on the notification, and a refused result fails its job there. */
+	@Test
+	public void testCompleteInAndFailInSettleInATransaction() throws Exception {
+		Engine eng = strict;
+		eng.registerAdapter(new AAdapter() {
+			@Override public String getName() { return "held"; }
+			@Override public String getDescription() { return "test"; }
+			@Override public CompletableFuture<ACell> invokeFuture(RequestContext c,
+					AMap<AString, ACell> m, ACell in) {
+				return new CompletableFuture<>();
+			}
+			@Override public void invoke(Job job, RequestContext c, AMap<AString, ACell> m, ACell in) {
+				job.setStatus(Status.STARTED);
+			}
+		});
+		AMap<AString, ACell> meta = Maps.of(Fields.OPERATION, Maps.of(Fields.ADAPTER, "held:run",
+			Fields.OUTPUT, Maps.of(Strings.create("type"), Strings.create("object"))));
+		VenueJob completed = (VenueJob) eng.jobs().invokeOperation(meta, Maps.empty(), eng.venueContext());
+		VenueJob refused = (VenueJob) eng.jobs().invokeOperation(meta, Maps.empty(), eng.venueContext());
+		VenueJob failed = (VenueJob) eng.jobs().invokeOperation(meta, Maps.empty(), eng.venueContext());
+		java.util.List<Runnable> after = eng.getVenueState().transact(draft -> java.util.List.of(
+			completed.completeIn(draft, Maps.of("ok", "yes")),
+			refused.completeIn(draft, Strings.create("not an object")),
+			failed.failIn(draft, "gave up")));
+		assertEquals(Status.COMPLETE, completed.getStatus());
+		assertFalse(completed.future().isDone(), "waiters wake only when the notification runs");
+		after.forEach(Runnable::run);
+		assertEquals(Maps.of("ok", "yes"), completed.future().get(5, TimeUnit.SECONDS));
+		assertEquals(Status.FAILED, refused.getStatus(), "a refused result fails its job instead of aborting the transaction");
+		assertTrue(refused.getErrorMessage().startsWith(JobManager.OUTPUT_SCHEMA_VIOLATION));
+		assertEquals(Status.FAILED, failed.getStatus());
+		assertEquals("gave up", failed.getErrorMessage());
+		eng.getVenueState().execute(draft -> assertNull(completed.failIn(draft, "late"), "a finished job is left as it is"));
 	}
 
 	@Test
@@ -799,13 +868,13 @@ public class JobManagerTest {
 				try {
 					engine.jobs().appendToHistory(job.getID(), message, ctx);
 					return true;
-				} catch (IllegalArgumentException deletedFirst) {
+				} catch (NotFoundException deletedFirst) {
 					return false;
 				}
 			},
 			() -> engine.jobs().deleteJob(job.getID(), ctx));
 		assertTrue(raced.get(1));
-		assertNull(engine.getVenueState().users().get(did).getJob(job.getID()),
+		assertNull(engine.getVenueState().users().user(did).jobs().getRecord(job.getID()),
 			"the durable-history path must update-if-present, never recreate after delete");
 	}
 
@@ -819,15 +888,13 @@ public class JobManagerTest {
 		synchronized (venueJob) {
 			updater = Thread.ofVirtual().start(() ->
 				job.update(data -> data.assoc(marker, CVMLong.ONE)));
-			long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-			while (!CVMLong.ONE.equals(job.getData().get(marker))
-					&& System.nanoTime() < deadline) Thread.onSpinWait();
-			assertEquals(CVMLong.ONE, job.getData().get(marker));
+			TestEngine.awaitJob(job, j -> CVMLong.ONE.equals(j.getData().get(marker)), 10_000,
+				() -> "the late update did not commit");
 			assertTrue(engine.jobs().deleteJob(job.getID(), ctx));
 		}
 		updater.join(TimeUnit.SECONDS.toMillis(5));
 		assertFalse(updater.isAlive());
-		assertNull(engine.getVenueState().users().get(did).getJob(job.getID()),
+		assertNull(engine.getVenueState().users().user(did).jobs().getRecord(job.getID()),
 			"an update committed before deletion must not persist after deletion");
 		job.cancel("test cleanup");
 	}
@@ -838,7 +905,7 @@ public class JobManagerTest {
 		Callable<Boolean> delete = () -> engine.jobs().deleteJob(job.getID(), ctx);
 		assertEquals(1, Rendezvous.all(delete, delete).stream()
 			.filter(Boolean::booleanValue).count());
-		assertNull(engine.getVenueState().users().get(did).getJob(job.getID()));
+		assertNull(engine.getVenueState().users().user(did).jobs().getRecord(job.getID()));
 		job.cancel("test cleanup");
 	}
 
@@ -955,15 +1022,84 @@ public class JobManagerTest {
 		assertNull(engine.jobs().getJobData(job.getID()), "gone from the active cache");
 		assertNotNull(engine.jobs().getJobData(job.getID(), ctx), "still readable from the lattice");
 
-		IllegalStateException ex = assertThrows(IllegalStateException.class, () ->
+		NotSupportedException ex = assertThrows(NotSupportedException.class, () ->
 			engine.jobs().deliverMessage(job.getID(),
 				Maps.of(Strings.create("content"), Strings.create("more")), ctx));
-		assertTrue(ex.getMessage().contains("terminal"), ex.getMessage());
+		assertTrue(ex.getMessage().startsWith(JobManager.JOB_TERMINAL), ex.getMessage());
 
-		assertThrows(IllegalArgumentException.class, () ->
+		assertThrows(NotFoundException.class, () ->
 			engine.jobs().deliverMessage(Blob.parse("0x00112233445566778899aabbccddeeff"),
 				Maps.empty(), ctx),
 			"an id nobody has ever seen is still not found");
+	}
+
+	@Test
+	public void testControlOfEvictedTerminalJob() {
+		Job job = engine.jobs().invokeOperation("v/test/ops/echo", Maps.empty(), ctx);
+		job.awaitResult(5000);
+		engine.jobs().evictActive(job.getID());
+
+		AMap<AString, ACell> cancelled = engine.jobs().cancelJob(job.getID(), ctx);
+		assertNotNull(cancelled, "cancelling a finished job answers its record (COG-8)");
+		assertEquals(Status.COMPLETE, RT.ensureString(cancelled.get(Fields.STATUS)));
+
+		NotSupportedException pause = assertThrows(NotSupportedException.class,
+			() -> engine.jobs().pauseJob(job.getID(), ctx));
+		assertTrue(pause.getMessage().startsWith(JobManager.JOB_TERMINAL), pause.getMessage());
+		NotSupportedException resume = assertThrows(NotSupportedException.class,
+			() -> engine.jobs().resumeJob(job.getID(), ctx));
+		assertTrue(resume.getMessage().startsWith(JobManager.JOB_TERMINAL), resume.getMessage());
+	}
+
+	@Test
+	public void testDeliverMessageToSingleTurnJobIsRefused() {
+		engine.registerAdapter(new AAdapter() {
+			@Override public String getName() { return "single-turn-test"; }
+			@Override public String getDescription() { return "test"; }
+			@Override public CompletableFuture<ACell> invokeFuture(RequestContext c,
+					AMap<AString, ACell> m, ACell in) {
+				return new CompletableFuture<>();
+			}
+		});
+		AMap<AString, ACell> meta = Maps.of(Fields.OPERATION,
+			Maps.of(Fields.ADAPTER, Strings.create("single-turn-test:run")));
+		Job job = engine.jobs().invokeOperation(meta, null, ctx);
+		try {
+			assertFalse(job.isFinished());
+			NotSupportedException ex = assertThrows(NotSupportedException.class, () ->
+				engine.jobs().deliverMessage(job.getID(),
+					Maps.of(Strings.create("content"), Strings.create("more")), ctx),
+				"a message the job's operation cannot take is refused, not dropped");
+			assertTrue(ex.getMessage().startsWith(JobManager.JOB_NO_MESSAGES), ex.getMessage());
+		} finally {
+			job.cancel();
+		}
+	}
+
+	@Test
+	public void testDeliverMessageWithDisabledAdapterIsUnavailable() {
+		engine.registerAdapter(new AAdapter() {
+			@Override public String getName() { return "disabled-multiturn-test"; }
+			@Override public String getDescription() { return "test"; }
+			@Override public boolean supportsMultiTurn() { return true; }
+			@Override public CompletableFuture<ACell> invokeFuture(RequestContext c,
+					AMap<AString, ACell> m, ACell in) {
+				return new CompletableFuture<>();
+			}
+		});
+		AMap<AString, ACell> meta = Maps.of(Fields.OPERATION,
+			Maps.of(Fields.ADAPTER, Strings.create("disabled-multiturn-test:run")));
+		Job job = engine.jobs().invokeOperation(meta, null, ctx);
+		engine.disableAdapter("disabled-multiturn-test");
+		try {
+			UnavailableException ex = assertThrows(UnavailableException.class, () ->
+				engine.jobs().deliverMessage(job.getID(),
+					Maps.of(Strings.create("content"), Strings.create("more")), ctx),
+				"the job takes messages, but its backend is not enabled now");
+			assertTrue(ex.getMessage().startsWith(JobManager.ADAPTER_NOT_AVAILABLE), ex.getMessage());
+		} finally {
+			job.cancel();
+		}
 	}
 
 	@Test

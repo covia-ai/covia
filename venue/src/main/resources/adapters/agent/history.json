@@ -1,0 +1,31 @@
+{
+	"name": "Agent Session History",
+	"description": "Reads part of a session's history, every entry exactly as stored: turns, tool calls, full tool results, diagnostics and compaction summaries. A missing or hidden session returns {found:false}.",
+	"dateCreated": "2026-11-09T00:00:00Z",
+	"operation": {
+		"adapter": "agent:history",
+		"readOnly": true,
+		"toolName": "agent_history",
+		"input": {
+			"type": "object",
+			"properties": {
+				"agentId": { "type": "string", "description": "The agent to read, as an id or g/<id> path. Required unless you are that agent. Naming another agent needs read access to it." },
+				"sessionId": { "type": "string", "description": "The session to read, as 16-byte hex with or without 0x. If omitted: the session you are in, or outside a session the newest visible one." },
+				"start": { "type": "integer", "minimum": 0, "description": "Position of the first entry to read; 0 is the oldest. If omitted: as many entries as limit allows, ending at end. To continue after a result with next, pass next here." },
+				"end": { "type": "integer", "minimum": 0, "description": "Position to stop before; that entry is not read. If omitted or past the last entry: the end of the history. To read further back, pass here the start of your last read, which the result gives if you passed none. For a compaction summary naming turns a to b, use start=a and end=b+1." },
+				"limit": { "type": "integer", "minimum": 1, "maximum": 100, "description": "Most entries to return. Default 20. It counts entries, not size: each entry comes back whole." }
+			}
+		},
+		"output": {
+			"type": "object",
+			"required": ["found"],
+			"properties": {
+				"found": { "type": "boolean", "description": "False when the session is missing or hidden; no other field is then present." },
+				"sessionId": { "type": "string", "description": "The session read." },
+				"start": { "type": "integer", "description": "Present only when the input had no start: the position of the first entry returned." },
+				"next": { "type": "integer", "description": "Present only when the range held more than limit entries: the position to continue from." },
+				"entries": { "type": "array", "items": { "type": "object" }, "description": "The stored entries, unchanged, oldest first. entries[i] is at position start + i, with start as passed or returned." }
+			}
+		}
+	}
+}

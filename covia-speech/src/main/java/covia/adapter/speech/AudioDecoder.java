@@ -9,6 +9,9 @@ import java.util.List;
 import io.github.jaredmdobson.concentus.OpusDecoder;
 import io.github.jaredmdobson.concentus.OpusException;
 
+import covia.exception.InvalidInputException;
+import covia.exception.NotSupportedException;
+
 /**
  * Audio as the local engine hears it: 16 kHz mono samples from -1 to 1. Reads WAV
  * (16-bit or 32-bit float PCM, any rate and channel count; raw PCM reaches the engine
@@ -30,7 +33,7 @@ final class AudioDecoder {
 	static float[] decode(byte[] audio) {
 		if (startsWith(audio, 0, "RIFF") && startsWith(audio, 8, "WAVE")) return wav(audio);
 		if (startsWith(audio, 0, "OggS")) return opus(audio);
-		throw new IllegalArgumentException(UNSUPPORTED);
+		throw new NotSupportedException(UNSUPPORTED);
 	}
 
 	// ---- WAV ----
@@ -43,7 +46,7 @@ final class AudioDecoder {
 			while (at + 8 <= audio.length) {
 				String id = new String(audio, at, 4, StandardCharsets.US_ASCII);
 				int size = in.getInt(at + 4);
-				if (size < 0) throw new IllegalArgumentException(MALFORMED);
+				if (size < 0) throw new InvalidInputException(MALFORMED);
 				if (id.equals("fmt ")) {
 					format = in.getShort(at + 8) & 0xffff;
 					channels = in.getShort(at + 10) & 0xffff;
@@ -59,13 +62,13 @@ final class AudioDecoder {
 				at += 8 + size + (size & 1);
 			}
 		} catch (IndexOutOfBoundsException e) {
-			throw new IllegalArgumentException(MALFORMED);
+			throw new InvalidInputException(MALFORMED, e);
 		}
 		boolean pcm16 = format == 1 && bits == 16, float32 = format == 3 && bits == 32;
-		if (dataAt < 0 || channels < 1 || rate < 8000 || rate > 192_000 || !(pcm16 || float32)) throw new IllegalArgumentException(UNSUPPORTED);
+		if (dataAt < 0 || channels < 1 || rate < 8000 || rate > 192_000 || !(pcm16 || float32)) throw new NotSupportedException(UNSUPPORTED);
 		int frameBytes = channels * bits / 8;
 		long frames = dataLength / frameBytes;
-		if (frames / rate > MAX_SECONDS) throw new IllegalArgumentException(TOO_LONG);
+		if (frames / rate > MAX_SECONDS) throw new InvalidInputException(TOO_LONG);
 		float[] mono = new float[(int) frames];
 		for (int i = 0; i < mono.length; i++) {
 			float sum = 0;
@@ -110,16 +113,16 @@ final class AudioDecoder {
 	private static float[] opus(byte[] audio) {
 		List<byte[]> packets = OggReader.packets(audio);
 		if (packets.size() < 2 || !startsWith(packets.get(0), 0, "OpusHead") || packets.get(0).length < 19) {
-			throw new IllegalArgumentException(UNSUPPORTED);
+			throw new NotSupportedException(UNSUPPORTED);
 		}
 		byte[] head = packets.get(0);
 		int channels = head[9] & 0xff;
 		int preSkip = ((head[10] & 0xff) | (head[11] & 0xff) << 8) * RATE / 48_000;
 		int mapping = head[18] & 0xff;
-		if (channels < 1 || channels > 2 || mapping != 0) throw new IllegalArgumentException(UNSUPPORTED);
+		if (channels < 1 || channels > 2 || mapping != 0) throw new NotSupportedException(UNSUPPORTED);
 		OpusDecoder decoder;
 		try { decoder = new OpusDecoder(RATE, channels); }
-		catch (OpusException e) { throw new IllegalArgumentException(MALFORMED); }
+		catch (OpusException e) { throw new InvalidInputException(MALFORMED, e); }
 		short[] frame = new short[MAX_FRAME * channels];
 		float[] out = new float[RATE * 10];
 		int length = 0;
@@ -128,8 +131,8 @@ final class AudioDecoder {
 			byte[] packet = packets.get(p);
 			int samples;
 			try { samples = decoder.decode(packet, 0, packet.length, frame, 0, MAX_FRAME, false); }
-			catch (OpusException | RuntimeException e) { throw new IllegalArgumentException(MALFORMED); }
-			if (length + samples > MAX_SECONDS * RATE + preSkip) throw new IllegalArgumentException(TOO_LONG);
+			catch (OpusException | RuntimeException e) { throw new InvalidInputException(MALFORMED, e); }
+			if (length + samples > MAX_SECONDS * RATE + preSkip) throw new InvalidInputException(TOO_LONG);
 			if (length + samples > out.length) out = java.util.Arrays.copyOf(out, Math.max(out.length * 2, length + samples));
 			for (int i = 0; i < samples; i++) {
 				float sum = 0;
@@ -152,13 +155,13 @@ final class AudioDecoder {
 			Integer serial = null;
 			try {
 				while (at + 27 <= ogg.length) {
-					if (!startsWith(ogg, at, "OggS") || ogg[at + 4] != 0) throw new IllegalArgumentException(MALFORMED);
+					if (!startsWith(ogg, at, "OggS") || ogg[at + 4] != 0) throw new InvalidInputException(MALFORMED);
 					int pageSerial = ByteBuffer.wrap(ogg, at + 14, 4).order(ByteOrder.LITTLE_ENDIAN).getInt();
 					int segments = ogg[at + 26] & 0xff;
 					int body = at + 27 + segments;
 					int bodyLength = 0;
 					for (int s = 0; s < segments; s++) bodyLength += ogg[at + 27 + s] & 0xff;
-					if (body + bodyLength > ogg.length) throw new IllegalArgumentException(MALFORMED);
+					if (body + bodyLength > ogg.length) throw new InvalidInputException(MALFORMED);
 					if (serial == null) serial = pageSerial;
 					if (pageSerial == serial) {
 						int offset = body;
@@ -175,7 +178,7 @@ final class AudioDecoder {
 					at = body + bodyLength;
 				}
 			} catch (IndexOutOfBoundsException e) {
-				throw new IllegalArgumentException(MALFORMED);
+				throw new InvalidInputException(MALFORMED, e);
 			}
 			return packets;
 		}

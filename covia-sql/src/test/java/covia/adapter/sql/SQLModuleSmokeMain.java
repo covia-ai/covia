@@ -24,7 +24,7 @@ public final class SQLModuleSmokeMain {
 		AMap<AString, ACell> config = Maps.of(
 			Config.MODULES, Vectors.of(Maps.of("path", args[0])),
 			Config.USERS, Maps.of(Config.AUTO_CREATE, true));
-		Engine engine = Engine.createTemp(config);
+		Engine engine = Engine.createRealTime(config);
 		try {
 			Engine.addDemoAssets(engine);
 			AAdapter adapter = engine.getAdapter("sql");

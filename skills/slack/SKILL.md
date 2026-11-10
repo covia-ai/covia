@@ -8,7 +8,7 @@ argument-hint: "<setup|create|delete|status|send|allow|test|teach> <binding-name
 
 **Prerequisite:** The venue must be running and connected as an MCP server (`http://localhost:8080/mcp`). If MCP tools are not available, tell the user to run `/venue-setup local` first. Slack support comes from the **covia-slack** module (`slack` adapter), which is not in `covia.jar`; `setup` covers loading it.
 
-A binding connects one Slack app installation (app, workspace, bot user) to a handler. It is either **created by its user** with `v/ops/slack/create` (acts as that user, persisted in the venue-private adapter workspace, survives restarts, removed with `v/ops/slack/delete`) or **declared by the operator** in `adapters.slack.bots.<name>` (needed when it must act as another identity, e.g. `"user": "public"` on a local dev venue). Full reference: `covia-slack/README.md`.
+A binding connects one Slack app installation (app, workspace, bot user) to a handler. It is either **created by its user** with `v/ops/slack/create` (its allow-listed senders come from its creator — an agent as itself, never its owner — persisted in the venue-private adapter workspace, survives restarts, removed with `v/ops/slack/delete`) or **declared by the operator** in `adapters.slack.bots.<name>` (needed when its senders must come from another identity, e.g. `"user": "public"` on a local dev venue). Full reference: `covia-slack/README.md`.
 
 ## `setup <binding-name>` — Bring a binding up
 
@@ -38,13 +38,13 @@ Walk the user through these steps; each is idempotent.
 
 5. **Load the module.** Build once (`mvn -pl covia-slack -am package -DskipTests` produces `covia-slack/target/covia-slack-<ver>-module.jar`), then declare it in the venue config (`"modules": ["modules/covia-slack-<ver>-module.jar"]`) or load it at runtime with `v/ops/venue/module/load` (see `/adapters load`). Verify: `covia_read path=v/info/adapters/slack`.
 
-6. **Create the agent** (skip for an operation handler) from the module's template — it knows `via`, per-DM and per-thread sessions, plain-text replies, memory and `slack:send`:
+6. **Create the agent** (skip for an operation handler) from the module's template — it knows the venue's `[From: …]` element, per-DM and per-thread sessions, plain-text replies, memory and `slack:send`:
    ```
-   agent_create  agentId="SlackAssistant"  config=["v/agents/templates/slack", {"llmOperation": "v/ops/langchain/anthropic", "model": "claude-sonnet-5-5"}]
+   agent_create  agentId="SlackAssistant"  config=["v/agents/templates/slack", {"llmOperation": "v/ops/langchain/anthropic", "model": "claude-sonnet-5-5", "caps": "unrestricted"}]
    ```
-   The agent's owner needs an LLM key it may use (e.g. `ANTHROPIC_API_KEY` in its own secrets). Tell it who is who as memory, as the binding's user: `grid_run operation=v/ops/memory input={"command": "remember", "text": "Slack U0123ABC is Mike, my owner."}`. Slack supplies IDs, not names; the template trusts such a note only when `via.from` matches.
+   `caps` decides what the agent may do, so ask the user: `"unrestricted"` is everything its owner can do, a list of `{with, can}` capabilities narrows it, and without caps it still replies but cannot use memory, receive files or send messages itself. The agent's owner needs an LLM key it may use (e.g. `ANTHROPIC_API_KEY` in its own secrets). Tell it who is who as memory, as the binding's user: `grid_run operation=v/ops/memory input={"command": "remember", "text": "Slack U0123ABC is Mike, my owner."}`. Slack supplies IDs, not names; the template trusts such a note only when the From element's sender matches.
 
-7. **Create the binding.** Preferred — one op, no restart, acts as you:
+7. **Create the binding.** Preferred — one op, no restart; allow-listed senders come from you:
    ```
    grid_run  operation=v/ops/slack/create  input={"name": "<binding-name>", "token": "s/SLACK_BOT_TOKEN", "appToken": "s/SLACK_APP_TOKEN", "appId": "A…", "teamId": "T…", "botUserId": "U…", "agent": "SlackAssistant", "allow": ["U…"], "allowChannels": []}
    ```
@@ -75,7 +75,7 @@ Plain text only, up to 4000 characters: Markdown, `<@U…>` mentions and `<url|t
 
 ## `allow <binding-name>`
 
-Access is fail-closed. `allow` lists Slack user IDs (U…/W…); `open: true` admits anyone in the workspace. Channel mentions and channel sends additionally need the channel ID in `allowChannels` — even when open — and the bot invited (`/invite @Covia`). An admitted DM sender is answered in that DM without `allowChannels`. Find a user ID in their Slack profile (*⋮ → Copy member ID*), a channel ID at the bottom of its details pane. To change a created binding, delete and create it again; for a config binding edit the config and restart.
+Access is fail-closed. `allow` lists Slack user IDs (U…/W…); `open: true` also admits anyone else in the workspace, as anonymous senders (they may ask only an agent whose `accepts` is `"anyone"`). Channel mentions and channel sends additionally need the channel ID in `allowChannels` — even when open — and the bot invited (`/invite @Covia`). An admitted DM sender is answered in that DM without `allowChannels`. Find a user ID in their Slack profile (*⋮ → Copy member ID*), a channel ID at the bottom of its details pane. To change a created binding, delete and create it again; for a config binding edit the config and restart.
 
 ## `test <binding-name>`
 
@@ -86,7 +86,7 @@ Access is fail-closed. `allow` lists Slack user IDs (U…/W…); `open: true` ad
 
 ## `teach` — Let an agent use Slack
 
-The module ships the `slack` agent skill at `v/skills/adapters/slack` (send, status, `via` semantics), which reveals `slack-bot-management` (create, delete, status, and the `secrets` skill for tokens). Agents with the standard venue skillsets reach it through discovery; agents made from `v/agents/templates/slack` already hold `slack:send`. Reading Slack history or user names is the separate `slack` connection skill (Slack Web API over `http`, needing extra app scopes such as `channels:history` and `users:read`).
+The module ships the `slack` agent skill at `v/skills/adapters/slack` (send, status, who a message comes from), which reveals `slack-bot-management` (create, delete, status, and the `secrets` skill for tokens). Agents with the standard venue skillsets reach it through discovery; agents made from `v/agents/templates/slack` already hold `slack:send`. Reading Slack history or user names is the separate `slack` connection skill (Slack Web API over `http`, needing extra app scopes such as `channels:history` and `users:read`).
 
 ## Troubleshooting
 

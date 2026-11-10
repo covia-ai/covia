@@ -10,21 +10,25 @@ import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Hash;
 import convex.core.data.Maps;
+import convex.core.data.Path;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.util.JSON;
 import java.util.function.Consumer;
-import covia.lattice.WorkspaceRoot;
+import covia.lattice.CoviaPath;
+import covia.lattice.Entry;
 import covia.adapter.AAdapter;
+import covia.adapter.CoviaAdapter;
 import covia.api.Fields;
 
 /**
  * Materialises venue-owned bootstrap state as one native lattice transaction.
  *
- * <p>The {@link WorkspaceRoot} transaction supplies a private draft of the
- * venue-owned {@code w/global} workspace, retries conflicts and commits atomically.
+ * <p>A transaction over the venue user supplies a private draft, retries
+ * conflicts and commits atomically. Each {@code v/} path is reached as the
+ * venue user's path it stands for ({@link CoviaAdapter#venueGlobals}).
  * Catalog and introspection writes are validated against that draft; an exception
  * discards the entire attempt. No operation dispatch or Job records are involved.</p>
  *
@@ -38,8 +42,9 @@ final class VenueBootstrapMaterializer {
 
 	private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(VenueBootstrapMaterializer.class);
 
-	private static final AString K_W = Strings.intern("w");
-	private static final AString K_GLOBAL = Strings.intern("global");
+	/** A prepared engine always has its venue user, so this is a venue bug. */
+	private static final String NO_VENUE_USER = "Venue user does not exist: the engine is not prepared";
+
 	private static final AString K_OPERATIONS = Strings.intern("operations");
 	private static final AString K_KERNEL = Strings.intern("kernel");
 	private static final AString K_MODULE = Strings.intern("module");
@@ -48,25 +53,25 @@ final class VenueBootstrapMaterializer {
 	private static final AString K_SHA256 = Strings.intern("sha256");
 
 	private final Engine engine;
-	/** Live workspace or the callback-confined transaction draft. */
-	private final WorkspaceRoot workspace;
+	/** The venue user's callback-confined transaction draft. */
+	private final User venue;
 	private final List<String> adapterNames;
 	private final long startedAt;
 
-	private VenueBootstrapMaterializer(Engine engine, WorkspaceRoot draft, List<String> adapterNames, long startedAt) {
+	private VenueBootstrapMaterializer(Engine engine, User draft, List<String> adapterNames, long startedAt) {
 		this.engine = engine;
-		this.workspace = draft;
+		this.venue = draft;
 		this.adapterNames = adapterNames;
 		this.startedAt = startedAt;
 	}
 
 	private static void materialise(Engine engine, Consumer<VenueBootstrapMaterializer> action) {
-		var user = engine.getVenueState().users().ensure(engine.getDIDString());
-		var workspace = new WorkspaceRoot(user.workspaceRoot().child(K_W)
-			.withDefault(Maps.empty()).path(K_GLOBAL), engine.getLatticeContext(), false);
+		AString did = engine.getDIDString();
+		User venue = did == null ? null : engine.getVenueState().users().user(did);
+		if (venue == null) throw new IllegalStateException(NO_VENUE_USER);
 		var names = engine.getAdapterNamesInRegistrationOrder();
-		long started = System.currentTimeMillis();
-		workspace.transact(draft -> action.accept(new VenueBootstrapMaterializer(engine, draft, names, started)));
+		long started = engine.currentTimestamp().longValue();
+		venue.execute(draft -> action.accept(new VenueBootstrapMaterializer(engine, draft, names, started)));
 	}
 
 	/** Materialises catalog and venue information, then commits them together. */
@@ -332,10 +337,11 @@ final class VenueBootstrapMaterializer {
 		return summary;
 	}
 
-	/** Writes to the draft, then verifies the staged view immediately. */
+	/** Writes to the draft, creating the levels above, then verifies the staged view immediately. */
 	private void writeAndValidateVenuePath(String virtualPath, ACell value) {
-		ACell[] keys = toWorkspacePath(virtualPath);
-		workspace.write(keys, value);
+		Entry entry = Entry.of(venue.resolve(venuePath(virtualPath)));
+		entry.createLevels();
+		entry.write(value);
 		ACell actual = readVenuePath(virtualPath);
 		if (!Objects.equals(value, actual)) {
 			throw new IllegalStateException(
@@ -344,28 +350,25 @@ final class VenueBootstrapMaterializer {
 	}
 
 	private ACell readVenuePath(String virtualPath) {
-		return workspace.read(toWorkspacePath(virtualPath));
+		return venue.resolve(venuePath(virtualPath)).cursor().getOrDefault(null);
 	}
 
 	/** Deletes from the draft, then verifies the path is gone. */
 	private void deleteVenuePath(String virtualPath) {
-		ACell[] keys = toWorkspacePath(virtualPath);
-		workspace.delete(keys);
+		Entry.of(venue.resolve(venuePath(virtualPath))).delete();
 		if (readVenuePath(virtualPath) != null) {
 			throw new IllegalStateException(
 				"Bootstrap lattice delete validation failed at /" + virtualPath);
 		}
 	}
 
-	/** Rewrites caller-visible v/x to x relative to the transactional w/global root. */
-	private static ACell[] toWorkspacePath(String virtualPath) {
-		ACell[] virtualKeys = WorkspaceRoot.parseStringPath(virtualPath);
-		if (virtualKeys.length < 2 || !"v".equals(virtualKeys[0].toString())) {
+	/** The venue user's path that the caller-visible path {@code v/x} stands for. */
+	private static Path venuePath(String virtualPath) {
+		Path path = CoviaPath.parse(virtualPath);
+		if (path.count() < 2 || !"v".equals(path.get(0).toString())) {
 			throw new IllegalArgumentException("Venue bootstrap path must start with v/: " + virtualPath);
 		}
-		ACell[] workspaceKeys = new ACell[virtualKeys.length - 1];
-		System.arraycopy(virtualKeys, 1, workspaceKeys, 0, workspaceKeys.length);
-		return workspaceKeys;
+		return CoviaAdapter.venueGlobals(path);
 	}
 
 }

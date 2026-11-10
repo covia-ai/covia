@@ -23,6 +23,7 @@ import convex.core.data.Maps;
 import convex.etch.EtchStore;
 import convex.node.NodeConfig;
 import convex.node.NodeServer;
+import covia.exception.ConfigurationException;
 import covia.venue.server.VenueServer;
 
 /**
@@ -75,17 +76,17 @@ public class VenueIdentityGuardTest {
 
 	@Test
 	public void testWrongKeyOnExistingStoreFails() throws Exception {
-		EtchStore store = EtchStore.createTemp();
+		EtchStore store = TestTemp.etch("identity-wrong-key");
 		ownedStore = store;
 		AKeyPair kpA = AKeyPair.generate();
 		AKeyPair kpB = AKeyPair.generate();
 
 		// Stage 1: create the venue under key A and persist it.
 		{
-			NodeServer<Index<Keyword, ACell>> ns = new NodeServer<>(CoviaApplication.open(store, kpA).host(), NodeConfig.port(-1));
+			NodeServer<Index<Keyword, ACell>> ns = new NodeServer<>(TestEngine.application(store).host(), NodeConfig.port(-1));
 			activeNode = ns;
 			ns.launch();
-			Engine engine = new Engine(configFor(kpA), CoviaApplication.connect(ns.getHost()), kpA).start();
+			Engine engine = TestEngine.application(ns.getHost()).mount(kpA, configFor(kpA)).start();
 			activeEngine = engine;
 			assertEquals(didFor(kpA), engine.getDIDString().toString());
 			engine.flush();
@@ -94,12 +95,12 @@ public class VenueIdentityGuardTest {
 
 		// Stage 2: reopening with key B must fail, naming the store's real owner.
 		{
-			NodeServer<Index<Keyword, ACell>> ns = new NodeServer<>(CoviaApplication.open(store, kpA).host(), NodeConfig.port(-1));
+			NodeServer<Index<Keyword, ACell>> ns = new NodeServer<>(TestEngine.application(store).host(), NodeConfig.port(-1));
 			activeNode = ns;
 			ns.launch();
 			try {
-				IllegalStateException e = assertThrows(IllegalStateException.class,
-					() -> new Engine(configFor(kpB), CoviaApplication.connect(ns.getHost()), kpB).start());
+				ConfigurationException e = assertThrows(ConfigurationException.class,
+					() -> TestEngine.application(ns.getHost()).mount(kpB, configFor(kpB)).start());
 				assertTrue(e.getMessage().contains(didFor(kpA)),
 					"error names the owning identity: " + e.getMessage());
 				assertTrue(e.getMessage().contains(didFor(kpB)),
@@ -111,10 +112,10 @@ public class VenueIdentityGuardTest {
 
 		// Stage 3: the owning key still boots normally (guard passes on match).
 		{
-			NodeServer<Index<Keyword, ACell>> ns = new NodeServer<>(CoviaApplication.open(store, kpA).host(), NodeConfig.port(-1));
+			NodeServer<Index<Keyword, ACell>> ns = new NodeServer<>(TestEngine.application(store).host(), NodeConfig.port(-1));
 			activeNode = ns;
 			ns.launch();
-			Engine engine = new Engine(configFor(kpA), CoviaApplication.connect(ns.getHost()), kpA).start();
+			Engine engine = TestEngine.application(ns.getHost()).mount(kpA, configFor(kpA)).start();
 			activeEngine = engine;
 			assertEquals(didFor(kpA), engine.getDIDString().toString());
 			closeActivePhase();
@@ -123,19 +124,16 @@ public class VenueIdentityGuardTest {
 
 	@Test
 	public void failedVenueServerIdentityGuardReleasesEtchFileLock() throws Exception {
-		Path dir = Files.createTempDirectory("venue-identity-rollback-");
-		Path storePath = dir.resolve("venue.etch");
-		dir.toFile().deleteOnExit();
-		storePath.toFile().deleteOnExit();
+		Path storePath = TestTemp.etchFile("identity-rollback").toPath();
 		AKeyPair owner = AKeyPair.createSeeded(20801);
 		AKeyPair wrong = AKeyPair.createSeeded(20802);
 
 		VenueServer initial = VenueServer.launch(serverConfig(storePath, owner));
 		initial.close();
 
-		RuntimeException failure = assertThrows(RuntimeException.class,
+		ConfigurationException failure = assertThrows(ConfigurationException.class,
 				() -> VenueServer.launch(serverConfig(storePath, wrong)));
-		assertTrue(String.valueOf(failure.getCause()).contains("Venue key mismatch"),
+		assertTrue(failure.getMessage().contains(didFor(owner)),
 			"identity guard diagnostic must survive constructor rollback: " + failure);
 
 		EtchStore reopened = EtchStore.create(storePath.toFile());
@@ -149,10 +147,7 @@ public class VenueIdentityGuardTest {
 
 	@Test
 	public void peekKeysThenLaunchWithAdoptedStore() throws Exception {
-		Path dir = Files.createTempDirectory("venue-adopt-store-");
-		Path storePath = dir.resolve("venue.etch");
-		dir.toFile().deleteOnExit();
-		storePath.toFile().deleteOnExit();
+		Path storePath = TestTemp.etchFile("identity-adopt").toPath();
 		AKeyPair owner = AKeyPair.createSeeded(30701);
 
 		VenueServer initial = VenueServer.launch(serverConfig(storePath, owner));
@@ -172,10 +167,7 @@ public class VenueIdentityGuardTest {
 
 	@Test
 	public void failedLaunchClosesAdoptedStore() throws Exception {
-		Path dir = Files.createTempDirectory("venue-adopt-failure-");
-		Path storePath = dir.resolve("venue.etch");
-		dir.toFile().deleteOnExit();
-		storePath.toFile().deleteOnExit();
+		Path storePath = TestTemp.etchFile("identity-adopt-failure").toPath();
 		AKeyPair owner = AKeyPair.createSeeded(30702);
 		AKeyPair wrong = AKeyPair.createSeeded(30703);
 
@@ -183,9 +175,9 @@ public class VenueIdentityGuardTest {
 		initial.close();
 
 		EtchStore adopted = EtchStore.create(storePath.toFile());
-		RuntimeException failure = assertThrows(RuntimeException.class,
+		ConfigurationException failure = assertThrows(ConfigurationException.class,
 			() -> VenueServer.launch(serverConfig(storePath, wrong), adopted));
-		assertTrue(String.valueOf(failure.getCause()).contains("Venue key mismatch"));
+		assertTrue(failure.getMessage().contains(didFor(owner)));
 
 		EtchStore reopened = EtchStore.create(storePath.toFile());
 		reopened.close(); // failed venue launch also owns and releases the store

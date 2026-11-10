@@ -10,8 +10,9 @@ import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
 import java.io.PrintWriter;
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReference;
 
 import org.junit.jupiter.api.Test;
 
@@ -61,15 +62,32 @@ public class HardKillPersistenceTest {
 	 * logback etc.).
 	 */
 	private static final class Child implements AutoCloseable {
+		/** Queued after the last protocol line when the child's stdout closes. */
+		private static final String CLOSED = new String("closed");
+
 		final Process process;
-		final BufferedReader stdout;
 		final PrintWriter stdin;
+		final Thread stdoutPump;
 		final Thread stderrPump;
+		/** Protocol payloads (after the "PROTO " prefix), in order. */
+		final BlockingQueue<String> proto = new LinkedBlockingQueue<>();
 
 		Child(Process p) {
 			this.process = p;
-			this.stdout = new BufferedReader(new InputStreamReader(p.getInputStream(), StandardCharsets.UTF_8));
 			this.stdin = new PrintWriter(new OutputStreamWriter(p.getOutputStream(), StandardCharsets.UTF_8), true);
+			// Keep protocol lines; other stdout is log output.
+			this.stdoutPump = new Thread(() -> {
+				try (BufferedReader r = new BufferedReader(
+						new InputStreamReader(p.getInputStream(), StandardCharsets.UTF_8))) {
+					String l;
+					while ((l = r.readLine()) != null) {
+						if (l.startsWith(PROTO + " ")) proto.add(l.substring(PROTO.length() + 1));
+					}
+				} catch (IOException ignored) { /* child died */ }
+				proto.add(CLOSED);
+			}, "hardkill-child-stdout");
+			this.stdoutPump.setDaemon(true);
+			this.stdoutPump.start();
 			// Drain stderr so the child can't block on a full pipe.
 			this.stderrPump = new Thread(() -> {
 				try (BufferedReader r = new BufferedReader(
@@ -92,25 +110,16 @@ public class HardKillPersistenceTest {
 			return readProto();
 		}
 
-		/** Reads stdout lines until one starts with "PROTO ". Returns the suffix. */
+		/** Waits for the child's next protocol line and returns its payload. */
 		String readProto() throws Exception {
-			long deadline = System.currentTimeMillis() + PROTO_TIMEOUT_MS;
-			AtomicReference<String> result = new AtomicReference<>();
-			while (System.currentTimeMillis() < deadline) {
-				if (stdout.ready() || !process.isAlive()) {
-					String line = stdout.readLine();
-					if (line == null) {
-						throw new IOException("child stdout closed (exit=" + process.exitValue() + ")");
-					}
-					if (line.startsWith(PROTO + " ")) {
-						return line.substring(PROTO.length() + 1);
-					}
-					// Non-protocol line — log output. Ignore.
-				} else {
-					Thread.sleep(10);
-				}
+			String payload = proto.poll(PROTO_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+			if (payload == null) throw new IllegalStateException("Timed out waiting for PROTO response");
+			if (payload == CLOSED) {
+				proto.add(CLOSED);
+				throw new IOException("child stdout closed (exit="
+					+ (process.isAlive() ? "running" : process.exitValue()) + ")");
 			}
-			throw new IllegalStateException("Timed out waiting for PROTO response");
+			return payload;
 		}
 
 		@Override public void close() {
@@ -121,8 +130,10 @@ public class HardKillPersistenceTest {
 			} catch (InterruptedException e) {
 				Thread.currentThread().interrupt();
 			} catch (Exception ignored) {}
-			try { stdout.close(); } catch (Exception ignored) {}
-			try { stderrPump.join(5_000); } catch (InterruptedException e) {
+			try {
+				stdoutPump.join(5_000);
+				stderrPump.join(5_000);
+			} catch (InterruptedException e) {
 				Thread.currentThread().interrupt();
 			}
 		}
@@ -157,10 +168,7 @@ public class HardKillPersistenceTest {
 	}
 
 	private static File newTempEtch() throws IOException {
-		File f = File.createTempFile("hardkill-", ".etch");
-		f.delete();
-		f.deleteOnExit();
-		return f;
+		return TestTemp.etchFile("hardkill");
 	}
 
 	/**
@@ -200,6 +208,31 @@ public class HardKillPersistenceTest {
 		}
 	}
 
+	/** A JVM exit closes the venue through its shutdown hook, inside Convex's own shutdown. */
+	@Test
+	public void testJvmExitClosesTheVenueAndKeepsItsState() throws Exception {
+		String storePath = newTempEtch().getAbsolutePath().replace('\\', '/');
+		String seedHex = AKeyPair.createSeeded(5001).getSeed().toHexString();
+
+		try (Child child = spawn(storePath, seedHex)) {
+			String ready = child.readProto();
+			assertTrue(ready.startsWith("READY "), "child should announce READY: got '" + ready + "'");
+			assertEquals("OK", child.send("WRITE_NOFLUSH test-drive exit.txt saved-at-exit"));
+
+			child.stdin.println("SYSTEM_EXIT");
+			child.stdin.flush();
+			assertTrue(child.process.waitFor(30, TimeUnit.SECONDS), "child should finish closing and exit");
+			assertEquals(0, child.process.exitValue());
+		}
+
+		VenueServer reader = VenueServer.launch(readerConfig(storePath, seedHex));
+		try {
+			assertEquals("saved-at-exit", readDLFS(reader, "test-drive", "exit.txt"));
+		} finally {
+			reader.close();
+		}
+	}
+
 	// ========================================================================
 	// One comprehensive hard-kill resilience test driving TWO child JVMs in
 	// sequence (peak one child alive at a time, vs the previous five parallel
@@ -215,7 +248,7 @@ public class HardKillPersistenceTest {
 	//   Cycle 1 (child A), then SIGKILL:
 	//     • flushed write           → must survive (the core flush() guarantee)
 	//     • burst of flushed writes → all must survive (coalescing / no lost update)
-	//     • unflushed + sweep wait  → must survive (background sweep durability)
+	//     • unflushed + sync wait   → must survive (the host's sync worker)
 	//     • unflushed + immediate   → may or may not survive (corruption probe only)
 	//   Cycle 2 (child B), then SIGKILL:
 	//     • restore loads the whole cycle-1 dataset (proves no corruption), adds
@@ -245,12 +278,12 @@ public class HardKillPersistenceTest {
 					"burst write #" + i + " should succeed");
 			}
 
-			// Unflushed write, then wait out several sweep cycles (100ms interval)
-			// so the background sweep + propagator persist it before the kill.
+			// Unflushed write, then wait out several runs of the host's sync worker
+			// (VenueServer.SYNC_INTERVAL) so it persists the write before the kill.
 			assertEquals("OK", child.send("WRITE_NOFLUSH test-drive sweep.txt swept-content"));
 			assertEquals("OK", child.send("SLEEP 2000"));
 
-			// Unflushed write with NO sleep before the kill — races the sweep, so
+			// Unflushed write with NO sleep before the kill — races the sync worker, so
 			// survival is not asserted; this is the corruption probe (cycle 2's
 			// restore below proves the store is not corrupted by an aborted write).
 			assertEquals("OK", child.send("WRITE_NOFLUSH test-drive race.txt maybe-survives"));
@@ -287,7 +320,7 @@ public class HardKillPersistenceTest {
 					"burst write #" + i + " must survive both hard-kills");
 			}
 			assertEquals("swept-content", readDLFS(reader, "test-drive", "sweep.txt"),
-				"swept (unflushed) write must survive — sweep had 2s to propagate before the kill");
+				"unflushed write must survive — the sync worker had 2s to persist it before the kill");
 			assertEquals("second", readDLFS(reader, "test-drive", "cycle2.txt"),
 				"cycle-2 write must survive its hard-kill (accumulation across cycles)");
 

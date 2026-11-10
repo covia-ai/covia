@@ -29,6 +29,7 @@ import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.TestEngine;
+import covia.venue.TestSignal;
 
 /**
  * The venue's P2P node (covia#587). Off by default on the shared engine; two
@@ -182,8 +183,8 @@ public class P2PAdapterTest {
 			AKeyPair other = AKeyPair.generate();
 			AString otherDid = UCAN.toDIDKey(other.getAccountKey());
 			var cursor = adapter.node().getNodeServer().getCursor();
-			adapter.node().getApplication().mergeAt(convex.lattice.p2p.P2PLattice.createSignedEntry(other,
-				convex.lattice.p2p.P2PLattice.createNodeInfo(Vectors.empty(), Strings.create("test"), Strings.create("1"),
+			adapter.node().getApplication().mergeAt(P2PLattice.createSignedEntry(other,
+				P2PLattice.createNodeInfo(Vectors.empty(), Strings.create("test"), Strings.create("1"),
 					Vectors.empty(), false, convex.core.util.Utils.getCurrentTimestamp())), P2PLattice.KEY_P2P, P2PLattice.KEY_NODES);
 			adapter.node().getNodeServer().getHost().sync();
 			assertEquals(P2PAdapter.APPEARED, await(events, e -> otherDid.equals(e.did()), "the merged record").type());
@@ -208,6 +209,10 @@ public class P2PAdapterTest {
 			AString didB = UCAN.toDIDKey(b.getAccountKey());
 			BlockingQueue<P2PAdapter.PeerEvent> events = new LinkedBlockingQueue<>();
 			b.findAdapter(P2PAdapter.class).subscribe(events::add);
+			// Each venue reports a change to its peer list as an event: re-check both lists on each
+			TestSignal changed = new TestSignal();
+			a.findAdapter(P2PAdapter.class).subscribe(e -> changed.signal());
+			b.findAdapter(P2PAdapter.class).subscribe(e -> changed.signal());
 
 			ACell selfA = RT.getIn(peers(a), P2PAdapter.K_SELF);
 			assertEquals(didA, RT.getIn(selfA, Fields.DID));
@@ -218,15 +223,15 @@ public class P2PAdapterTest {
 				.get(WAIT_MS, TimeUnit.MILLISECONDS);
 			assertEquals(didA, RT.getIn(result, Fields.DID));
 
-			TestEngine.awaitCondition(() -> connected(a, didB) && connected(venueB, didA), WAIT_MS,
-				() -> "the venues never listed each other as connected");
+			changed.await("the venues to list each other as connected",
+				() -> connected(a, didB) && connected(venueB, didA));
 			assertEquals(P2PAdapter.OUTBOUND, entry(b, didA).get(P2PAdapter.K_REACH));
 			assertEquals(P2PAdapter.INBOUND, entry(a, didB).get(P2PAdapter.K_REACH));
 			assertEquals(0, RT.ensureVector(entry(a, didB).get(P2PAdapter.K_TRANSPORTS)).count(),
 				"B advertises no address");
-			TestEngine.awaitCondition(() -> Strings.create("Venue A").equals(entry(venueB, didA).get(Fields.NAME))
-					&& Strings.create("Venue B").equals(entry(a, didB).get(Fields.NAME)), WAIT_MS,
-				() -> "the venues never learnt each other's names");
+			changed.await("the venues to learn each other's names",
+				() -> Strings.create("Venue A").equals(entry(venueB, didA).get(Fields.NAME))
+					&& Strings.create("Venue B").equals(entry(a, didB).get(Fields.NAME)));
 			await(events, e -> didA.equals(e.did()) && CVMBool.TRUE.equals(e.peer().get(P2PAdapter.K_CONNECTED)),
 				"B told that A is connected");
 

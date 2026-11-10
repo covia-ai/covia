@@ -1,13 +1,9 @@
 package covia.adapter.whatsapp;
 
 import static org.junit.jupiter.api.Assertions.*;
-import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.time.Instant;
-import java.util.Comparator;
 import java.util.HexFormat;
 import java.util.Map;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -28,23 +24,6 @@ final class TestSupport {
   static final AString OTHER = Strings.create("did:test:whatsapp:other");
   static final String TOKEN = "test-outbound-token", SECRET = "test-signing-secret";
   static final String NAME = "whatsapp";
-  /**
-   * A directory for a venue store, deleted at JVM exit rather than by JUnit, as
-   * venue's TestTemp: on Java 21 (no FFM mapper) a closed store's file stays
-   * mapped until GC, and Windows will not delete a mapped file, so @TempDir's
-   * mandatory cleanup would fail the test.
-   */
-  static Path storeDir(String prefix) throws IOException {
-    Path dir = Files.createTempDirectory(prefix);
-    Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-      try (var walk = Files.walk(dir)) {
-        walk.sorted(Comparator.reverseOrder()).forEach(p -> p.toFile().delete());
-      } catch (IOException ignored) {
-        // best-effort at exit
-      }
-    }));
-    return dir;
-  }
   static ACell run(Engine engine, AString owner, String op, ACell input) throws Exception {
     return engine.jobs().invokeOperation(op, input, RequestContext.of(owner)).awaitResult(10000);
   }
@@ -81,7 +60,7 @@ final class TestSupport {
     final int failures;
     FlakyAgents(int failures) { this.failures = failures; }
     @Override public covia.grid.Job deliverSession(ACell input, RequestContext ctx) {
-      if (calls.incrementAndGet() <= failures) throw new IllegalStateException(FAILURE);
+      if (calls.incrementAndGet() <= failures) throw new covia.exception.UnavailableException(FAILURE);
       return super.deliverSession(input, ctx);
     }
     @Override public java.util.concurrent.CompletableFuture<ACell> wakeAgent(AString owner, AString agent, boolean force) {
@@ -139,13 +118,22 @@ final class TestSupport {
     @Override public void close() { server.stop(0); }
   }
   static final class Fixture implements AutoCloseable {
+    private static final AMap<AString,ACell> CONFIG = Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true));
     final FakeAPI api = new FakeAPI();
-    final Engine engine = Engine.createTemp(Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true)));
+    final Engine engine;
     final WhatsAppAdapter adapter;
     Fixture(AMap<AString,ACell> spec) throws Exception {
       this(spec, new WhatsAppAdapter());
     }
     Fixture(AMap<AString,ACell> spec, WhatsAppAdapter adapter) throws Exception {
+      this(Engine.createTemp(CONFIG), spec, adapter);
+    }
+    /** A venue on {@code clock}, which the test moves. */
+    Fixture(AMap<AString,ACell> spec, DrivenClock clock) throws Exception {
+      this(Engine.createTemp(clock, CONFIG), spec, new WhatsAppAdapter());
+    }
+    private Fixture(Engine engine, AMap<AString,ACell> spec, WhatsAppAdapter adapter) throws Exception {
+      this.engine = engine;
       this.adapter = adapter;
       Engine.addDemoAssets(engine);
       secret(engine, "TOKEN", TOKEN); secret(engine, "SIGNING", SECRET); secret(engine, "VERIFY", "test-verify");

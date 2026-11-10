@@ -451,7 +451,7 @@ groups accordingly.
 | `project:plan` | Effective assignee | `{node, plan?, registers?}` | Replaces `plan` and/or `registers`. No deep merge: the assignee owns these documents whole and re-writes them from its own context. |
 | `project:report` | Effective assignee | `{node, kind, summary, detail?, spend?, forecast?}` | Appends a `log` entry. `kind` is `checkpoint` (routine), `highlight` (periodic summary upward), or `exception`. Reported `spend.cost` and `spend.jobs` overwrite the framework's figures for the node's own spend (the assignee is the only source of cost); `spend.tokens` is framework-owned and ignored. An `exception` raises to the principal (§6.4) and moves the node to `EXCEPTION`. |
 | `project:deliver` | Effective assignee | `{node, product, location?, note?}` | Marks a product `DELIVERED` at `location` (default: its declared one), runs every `op`/`test` criterion and records the results on the log entry, then applies the product's `acceptance` rule (§6.5). Fails if an `op` criterion fails; the product stays `IN_PROGRESS` with the failures logged so the assignee can fix and retry. |
-| `project:wake` | Assignee | `{node, after}` | Asks to be woken sooner than the next checkpoint (one-shot scheduler event, replaces any earlier ask). The project-scoped stand-in for the deferred `sleep` harness tool (SCHEDULER.md §7). |
+| `project:wake` | Assignee | `{node, after}` | Asks to be woken sooner than the next checkpoint (one-shot scheduler event, replaces any earlier ask). The project-scoped stand-in for the unbuilt `sleep` harness tool (AGENT_LOOP.md §8.3.4). |
 
 ### 5.3 Governance — acting as a node's principal
 
@@ -483,7 +483,7 @@ groups accordingly.
    its node and everything above it), and `crud/write` on each of its
    products' `location`s — conventionally `w/projects/<pid>/out/<node path>/`.
    Where that comes from:
-   - **Root principal's own uncapped agent** — has it already.
+   - **Root principal's own unrestricted agent** — has it already.
    - **Root principal's capped agent** — the root principal's `assign`
      appends the scopes to the agent's `config.caps` (`agent/write` on their
      own agent).
@@ -647,7 +647,8 @@ showing which are accepted, and the skill makes the order explicit.
 
 ### 6.6 Capability enforcement
 
-No new abilities. Every operation is `invoke`-gated as usual, then:
+No new abilities. Generic invocation additionally requires `invoke` on the
+operation reference. Bound tools enforce the following action checks directly:
 
 | Operation | Requires |
 |-----------|----------|
@@ -795,9 +796,9 @@ answer with a location. Not in v1, but nothing in the record prevents it.
    to handle. This is the point of hiring a PM.
 5. **Session per assigned node, not per agent and not per task.**
    Commissioning with `agent:request` and letting the task Job stand for
-   the engagement was rejected: a standing task is perpetual `hasWork`, so
-   the loop would run continuously and trip the stuck-task guard, and
-   there is no `sleep` tool to park it (SCHEDULER.md §7). One session per
+   the engagement was rejected: a standing task that yields between
+   checkpoints with nothing outstanding fails at once (AGENT_LOOP.md §4.6),
+   and there is no `sleep` tool to park it (AGENT_LOOP.md §8.3.4). One session per
    assigned node gives each engagement its own context and its own
    checkpoint cadence, and lets one agent hold several nodes. When threads
    unification and `sleep` land, a task-backed commission becomes
@@ -874,7 +875,7 @@ answer with a location. Not in v1, but nothing in the record prevents it.
 
 - [AGENT_SESSIONS.md](./AGENT_SESSIONS.md) — sessions, `pending`, session metadata
 - [AGENT_LOOP.md](./AGENT_LOOP.md) — run loop, wake, timeline
-- [SCHEDULER.md](./SCHEDULER.md), [GRID_SCHEDULER.md](./GRID_SCHEDULER.md) — wakes and scheduled events
+- [GRID_SCHEDULER.md](./GRID_SCHEDULER.md) — scheduled events, including agent wakes (§8)
 - [AGENT_TEMPLATES.md](./AGENT_TEMPLATES.md) — templates, delegation, `outputPath` handoff
 - [UCAN.md](./UCAN.md) — capabilities, issuing, agent identity models
 - [ADAPTERS.md](./ADAPTERS.md) — adapter contract, catalog, private state

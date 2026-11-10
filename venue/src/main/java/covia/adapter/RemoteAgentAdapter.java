@@ -13,6 +13,10 @@ import covia.adapter.remote.ARemoteAgentAdapter;
 import covia.adapter.remote.RemoteInteraction;
 import covia.adapter.remote.VenueRemoteAgent;
 import covia.api.Fields;
+import covia.exception.AuthException;
+import covia.exception.InvalidInputException;
+import covia.exception.NotSupportedException;
+import covia.exception.ResponseException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.grid.Venue;
@@ -24,7 +28,18 @@ import covia.venue.RequestContext;
 public class RemoteAgentAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 	public static final String INVALID_INPUT = "Remote agent request requires an object input and agentId";
 	public static final String INVALID_TASK = "Remote agent returned an invalid task identity or status";
+	/**
+	 * Why a recovered call to an agent on this venue ended: it keeps no caller
+	 * context to resume in, or the restart came before it recorded the agent's
+	 * task.
+	 */
 	public static final String LOCAL_INTERRUPTED = "Local agent proxy interrupted by restart; inspect the original task before retrying";
+	/**
+	 * Why a recovered call to an agent on this venue ended: its caller cannot
+	 * act now. Formatted with the reason and the agent's task, which runs on.
+	 */
+	public static final String CALLER_CANNOT_ACT =
+		"This venue restarted and the caller of this job cannot act now (%s), so it no longer follows the agent's task %s; inspect that task before retrying";
 	public static final String UNKNOWN_OPERATION = "Unknown remoteagent operation";
 	private static final AString PROTOCOL = Strings.intern("covia-agent");
 	private static final AString LOCAL_PROTOCOL = Strings.intern("covia-agent-local");
@@ -38,14 +53,13 @@ public class RemoteAgentAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 	}
 	@Override protected boolean isInteractionOperation(String operation) { return "request".equals(operation) || "chat".equals(operation); }
 	@Override public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
-		requireInvoke(ctx);
-		if (!isInteractionOperation(getSubOperation(meta))) throw new IllegalArgumentException(UNKNOWN_OPERATION);
+		if (!isInteractionOperation(getSubOperation(meta))) throw new NotSupportedException(UNKNOWN_OPERATION);
 		return engine.jobs().invokeInternal(meta, input, ctx);
 	}
 
 	@Override public void validateAgent(AMap<AString, ACell> definition) {
 		AString id = RT.ensureString(definition.get(Fields.AGENT_ID));
-		if (id == null || id.toString().isBlank()) throw new IllegalArgumentException(INVALID_INPUT);
+		if (id == null || id.toString().isBlank()) throw new InvalidInputException(INVALID_INPUT);
 	}
 
 	@Override public AgentInvocation agentInvocation(String operation, AMap<AString, ACell> definition,
@@ -70,16 +84,17 @@ public class RemoteAgentAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 		AMap<AString, ACell> params = RT.ensureMap(input);
 		AString agent = RT.ensureString(RT.getIn(input, Fields.AGENT_ID));
 		if (params == null || agent == null || agent.toString().isBlank()
-			|| ("request".equals(getSubOperation(meta)) && RT.ensureMap(params.get(Fields.INPUT)) == null)) throw new IllegalArgumentException(INVALID_INPUT);
+			|| ("request".equals(getSubOperation(meta)) && RT.ensureMap(params.get(Fields.INPUT)) == null)) throw new InvalidInputException(INVALID_INPUT);
 		AString target = RT.ensureString(params.get(Fields.VENUE));
 		Venue venue;
 		AMap<AString, ACell> credentials;
 		if (target == null) {
-			LocalVenue local = new LocalVenue(engine);
-			local.setRequestContext(ctx);
-			venue = local;
+			venue = localVenue(ctx);
 			credentials = Maps.empty();
+			// The agent's task is followed as this caller after a restart too
+			engine.jobs().keepCallerContext(job, ctx);
 		} else {
+			engine.remoteJobs().requireNotClosing();
 			VenueConnection connection = VenueConnection.connect(engine, ctx, target, input);
 			venue = connection.venue();
 			credentials = connection.credentials();
@@ -99,12 +114,12 @@ public class RemoteAgentAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 				}
 				try {
 					observer.accepted(job, accepted.getID().toHexString());
-					bind(job, proxy, accepted.getID());
+					bind(job, proxy, accepted.getID(), target == null);
 					if (job.isFinished()) return;
 					apply(job, accepted.getData());
 				} catch (RuntimeException | Error failure) { observer.submissionUnknown(job, failure); }
 				finally {
-					ACell savedId = RemoteJobs.descriptor(job).get(RemoteJobs.REMOTE_ID);
+					AString savedId = RemoteJobs.remoteId(job);
 					Blob id = savedId == null ? null : Job.parseID(savedId);
 					if (id != null && !job.isFinished()) watch(job, proxy, id);
 				}
@@ -112,9 +127,14 @@ public class RemoteAgentAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 		});
 	}
 
-	private void bind(Job job, VenueRemoteAgent proxy, Blob id) {
+	/**
+	 * Binds the job's messages and cancellation to its task. A task on this
+	 * venue ({@code local}) is reached in process, whatever shutdown is doing.
+	 */
+	private void bind(Job job, VenueRemoteAgent proxy, Blob id, boolean local) {
 		bindInteraction(job, new RemoteInteraction() {
 			@Override public void deliver(AMap<AString, ACell> record) {
+				if (!local) engine.remoteJobs().requireNotClosing();
 				AMap<AString, ACell> message = RT.ensureMap(record.get(Fields.MESSAGE));
 				if (message == null) message = Maps.of(Fields.CONTENT, record.get(Fields.MESSAGE));
 				proxy.deliver(id, message);
@@ -122,7 +142,7 @@ public class RemoteAgentAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 				engine.remoteJobs().received(job, () -> { if (!job.isFinished()) watch(job, proxy, id); });
 			}
 			@Override public void cancel() {
-				if (LOCAL_PROTOCOL.equals(RemoteJobs.descriptor(job).get(RemoteJobs.PROTOCOL))) {
+				if (local) {
 					proxy.cancel(id); // In-process child: propagate before returning.
 					return;
 				}
@@ -137,13 +157,13 @@ public class RemoteAgentAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 	}
 
 	private void apply(Job job, AMap<AString, ACell> snapshot) {
-		Blob expected = Job.parseID(RemoteJobs.descriptor(job).get(RemoteJobs.REMOTE_ID));
+		Blob expected = Job.parseID(RemoteJobs.remoteId(job));
 		AString status = RT.ensureString(snapshot.get(Fields.STATUS));
 		if (expected == null || !expected.equals(Job.parseID(snapshot.get(Fields.ID)))
 			|| !(Status.PENDING.equals(status) || Status.STARTED.equals(status) || Status.PAUSED.equals(status)
 			|| Status.INPUT_REQUIRED.equals(status) || Status.AUTH_REQUIRED.equals(status) || Status.COMPLETE.equals(status)
 			|| Status.FAILED.equals(status) || Status.REJECTED.equals(status) || Status.CANCELLED.equals(status))) {
-			throw new IllegalArgumentException(INVALID_TASK);
+			throw new ResponseException(INVALID_TASK);
 		}
 		if (Status.COMPLETE.equals(status)) {
 			job.completeWith(snapshot.get(Fields.OUTPUT), data -> observation(data, snapshot, status));
@@ -155,7 +175,7 @@ public class RemoteAgentAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 				if (Job.isFinished(snapshot)) next = next.assoc(Fields.ERROR, snapshot.get(Fields.ERROR));
 				return next;
 			});
-			// The remote Job's progress is shown here as it is there: never recorded.
+			// The remote Job's progress, as it is there, replaces this Job's in its record.
 			job.setProgress(snapshot.get(PROGRESS));
 		}
 	}
@@ -167,28 +187,56 @@ public class RemoteAgentAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 		return next;
 	}
 
+	/** This venue, as {@code ctx}'s caller acts on it. */
+	private LocalVenue localVenue(RequestContext ctx) {
+		LocalVenue local = new LocalVenue(engine);
+		local.setRequestContext(ctx);
+		return local;
+	}
+
 	@Override public void recoverJob(Job job) {
-		AMap<AString, ACell> record = RemoteJobs.descriptor(job);
-		if (record == null) { super.recoverJob(job); return; }
-		if (LOCAL_PROTOCOL.equals(record.get(RemoteJobs.PROTOCOL))) {
-			// A caller DID alone cannot reconstruct the original attenuated local context.
-			job.fail(LOCAL_INTERRUPTED);
-			return;
-		}
-		ACell savedId = record.get(RemoteJobs.REMOTE_ID);
+		AMap<AString, ACell> kept = engine.remoteJobs().kept(job);
+		if (kept == null) { super.recoverJob(job); return; }
+		AString savedId = RemoteJobs.remoteId(job);
 		Blob id = savedId == null ? null : Job.parseID(savedId);
+		if (LOCAL_PROTOCOL.equals(kept.get(RemoteJobs.PROTOCOL))) { recoverLocal(job, id); return; }
 		if (id == null) { engine.remoteJobs().submissionUnknown(job, null); return; }
 		try {
-			Venue venue = VenueConnection.restore(engine, RT.ensureString(record.get(RemoteJobs.TARGET)),
-				engine.remoteJobs().credentials(job));
+			AMap<AString, ACell> saved = engine.remoteJobs().connection(job);
+			if (!VenueConnection.resumable(saved)) { engine.remoteJobs().credentialNotKept(job); return; }
+			Venue venue = VenueConnection.restore(engine, RT.ensureString(kept.get(RemoteJobs.TARGET)), saved);
 			VenueRemoteAgent proxy = new VenueRemoteAgent(venue, RT.ensureString(job.getData().get(AGENT)));
-			bind(job, proxy, id);
+			bind(job, proxy, id, false);
 			watch(job, proxy, id);
 		} catch (RuntimeException e) { engine.remoteJobs().unavailable(job, e); }
 	}
 
+	/**
+	 * Follows a call to an agent on this venue again, as its caller acts now
+	 * in the context the job kept, exactly as it first followed it. One that
+	 * kept no context, or recorded no task, cannot be followed; nor can one
+	 * whose caller cannot act now. Either way the agent's task runs on: the
+	 * venue never acts on it without its caller's authority.
+	 */
+	private void recoverLocal(Job job, Blob id) {
+		if (id == null || !engine.jobs().keepsCallerContext(job)) {
+			engine.remoteJobs().end(job, LOCAL_INTERRUPTED);
+			return;
+		}
+		RequestContext caller;
+		try {
+			caller = engine.jobs().callerContext(job);
+		} catch (AuthException cannot) {
+			engine.remoteJobs().end(job, CALLER_CANNOT_ACT.formatted(cannot.getMessage(), id.toHexString()));
+			return;
+		}
+		VenueRemoteAgent proxy = new VenueRemoteAgent(localVenue(caller), RT.ensureString(job.getData().get(AGENT)));
+		bind(job, proxy, id, true);
+		watch(job, proxy, id);
+	}
+
 	@Override public void suspendJob(Job job) {
-		if (RemoteJobs.descriptor(job) != null) engine.remoteJobs().suspend(job);
+		if (engine.remoteJobs().kept(job) != null) engine.remoteJobs().suspend(job);
 		else super.suspendJob(job);
 	}
 }

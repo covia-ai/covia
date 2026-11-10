@@ -9,7 +9,8 @@ ephemeral dev shape and the venue-setup skill for persistent personal configs).
 Core venue configuration is validated completely before storage or the HTTP
 listener is opened. A known field with the wrong type, an out-of-range value,
 or an unsupported enum value is always a fatal startup error; Covia never
-silently substitutes a default for malformed operator intent.
+silently substitutes a default for malformed operator intent. Values are read
+exactly as written, with no whitespace removed.
 
 Unknown core fields warn by default and are ignored. This keeps a configuration
 usable across mixed Covia versions while still making typos visible in operator
@@ -306,7 +307,9 @@ Per venue (`logging`, both default `false`):
   logins (`login`), token issue (`token.issued`), user and key administration
   (`user.create`, `user.sudo`, `auth.key.add`, `auth.key.revoke`), secret
   writes, deletions and extraction attempts (`secret.write`, `secret.delete`,
-  `secret.extract`, names and outcomes only), and venue administration
+  `secret.extract`, names and outcomes only), held keys put into, removed
+  from or used from a keyring (`keyring.add`, `keyring.remove`,
+  `keyring.use`, by holder and public key), and venue administration
   (`venue.gc`, `venue.restart`, `venue.admin`). Events carry DIDs, the client
   address, names, outcomes and refusal reasons — never a token, secret value,
   email or content — so they can be kept longer than operational logs.
@@ -317,7 +320,7 @@ Per venue (`logging`, both default `false`):
 Each line is tagged with the venue's hostname, so a process hosting several
 venues can be attributed. Every request gets an id either way: it is
 returned in `X-Request-Id` and carried by the audit and access lines of that
-request. An inbound `X-Request-Id` is kept only from a trusted proxy
+request, and by the ERROR line for a failure the venue did not expect. An inbound `X-Request-Id` is kept only from a trusted proxy
 (*Trusted proxies*) and only if it is a short plain token.
 
 Per process, in the server document's `operations` block — logging is one
@@ -417,7 +420,7 @@ venue never receives a PNA preflight anyway. Set `allowPrivateNetwork` explicitl
 to override in either direction — `true` to answer preflights on a non-loopback
 dev venue (accepting that a public origin may then reach it across the private
 network), or `false` to refuse them even on loopback. The checked-in
-`local-dev.json` sets it `true` so the demo flow works on its all-interfaces bind.
+`local-dev.json` binds loopback, so the demo flow works without setting it.
 
 > **Safari caveat:** Safari has no PNA opt-in and blocks localhost-from-https
 > regardless of this header. The universal answer for a hosted page reaching a
@@ -502,10 +505,11 @@ Embedded `VenueServer` instances have no process owner and reject this
 operation. Inside a container this restarts a jar already available in that
 container; it does not replace the container image.
 
-This is process-wide authority, distinct from adapter management. Direct venue
-execution is allowed; delegation requires `venue/restart` on
-`<venue DID>/process` (as well as `invoke` on the operation). There is no
-configuration bypass or enable flag.
+This is process-wide authority, distinct from adapter management: venue
+authority ([VENUE_AUTHORITY.md](./VENUE_AUTHORITY.md#how-it-works-today)) for
+`venue/restart` on `<venue DID>/process`, plus `invoke` on its reference when
+called through a generic invocation surface. There is no configuration bypass
+or enable flag.
 
 ## Shutdown (`shutdown.graceMs`)
 
@@ -517,7 +521,7 @@ How long `Engine.close()` lets in-flight jobs finish before their adapters
 are asked to suspend them. An upper bound: shutdown proceeds as soon as
 nothing is in flight. Default 2000; `0` suspends at once. What "suspend"
 means is the adapter's decision — bounded in-process work is cancelled
-("Venue shut down"), a job whose adapter registered a pause hook is paused,
+("Venue shut down"), a job whose adapter can suspend it is paused,
 and a durable wait is recorded and restored at the next boot. See
 [JOBS.md § Shutdown](JOBS.md#shutdown).
 
@@ -552,9 +556,8 @@ Job cancels the cycle. Constraints:
 - Needs free disk of about the current file size; about 2× disk is used until
   the superseded file is deleted, and reads cost a little more during the
   cycle. `temp`/`memory` stores are refused.
-- **Venue-owned**: `venue/gc` on `<venueDID>/store`, checked like
-  `venue/restart` — direct venue execution, or a venue-issued delegation;
-  the venue's own agents are not admitted without one. `restart: true`
+- **Venue-owned**: venue authority for `venue/gc` on `<venueDID>/store`,
+  checked like `venue/restart`. `restart: true`
   additionally requires `venue/restart` on `<venueDID>/process` and a
   `MainVenue`-managed process, both checked before any collection starts.
 
@@ -632,8 +635,9 @@ The hook receives a restored, prepared Engine with built-in and configured
 module adapters installed and their current catalogue published. Configured secrets
 and available configured MCP tools are provisioned before the hook. Adapters
 registered or replaced in the hook are published immediately. Its returned stage
-must finish before Jobs and queued agents are recovered. Scheduler alarms and adapter-owned
-inbound workers remain stopped during assembly. An already-completed stage
+must finish before Jobs and queued agents are recovered. Scheduled events and
+adapter-owned inbound workers stay idle during assembly: a venue takes part in
+the application's updates only once it has started. An already-completed stage
 (`CompletableFuture.completedFuture(null)`) is sufficient for synchronous setup.
 
 Actions that must precede live work belong in the hook's returned chain.
@@ -649,9 +653,10 @@ Applications that already own a lattice host use the same startup sequence
 without HTTP through `Engine.launch(...)` or `Engine.launchAsync(...)`:
 
 ```java
-// The host must restore its root before connecting the application.
-CoviaApplication application = CoviaApplication.connect(host);
-Engine engine = new Engine(config, application, keyPair);
+// The host must restore its root before the application is built on it,
+// which then mounts the venue with its key pair.
+CoviaApplication application = host.addApplication(new CoviaApplication(host));
+Engine engine = application.mount(keyPair, config);
 CompletableFuture<Engine> ready = engine.launchAsync(prepared -> {
     backend.bind(prepared);
     prepared.registerAdapter(new ProductAdapter(backend));
@@ -663,7 +668,8 @@ ready.join();
 Call launch once on a new or prepared engine; do not call `start()` first.
 It installs the built-ins and configured modules, publishes the catalogue,
 provisions configured secrets, seeds MCP, awaits the hook, recovers Jobs and
-queued agent work, re-arms HITL expiries, then activates workers and schedules.
+queued agent work, then activates workers and takes part in the application's
+updates (EMBEDDING.md, Time).
 Do not copy this sequence into the application. `prepare()` and `start()`
 remain low-level APIs for manually assembled runtimes and tests: they do not
 provide a complete venue bootstrap.
@@ -675,8 +681,7 @@ returned stage when setup depends on their results. The hook must return a non-n
 stage covering all prerequisite setup. It must not start autonomous workers,
 perform recovery or wait for operations requiring running workers or schedules.
 Recovery skips already-live Jobs started by the hook. Recovered work can execute
-after the hook completes, before launch returns. The persistence sweep can run
-during setup. The hook may override configured secrets; startup does not provision
+after the hook completes, before launch returns. The hook may override configured secrets; startup does not provision
 them again afterwards. Configured MCP discovery retains its best-effort policy:
 the hook is not a guarantee that every remote server was reachable.
 Adapters must start autonomous workers in `AAdapter.start()`, not
@@ -834,8 +839,8 @@ bound retained native state.
 
 Callers never provide source, script paths, or unrestricted global names. The
 operator configures each template and must explicitly list its callable
-functions. All four management operations also pass through ordinary,
-path-scoped `invoke` capability checks. Omit `instances` entirely to expose none
+functions. Generic invocation of these management operations additionally
+checks `invoke` on the operation reference; bound calls retain their action checks. Omit `instances` entirely to expose none
 of this management surface.
 
 Python is a separate loadable module and is not present in `covia.jar` or the
@@ -925,7 +930,11 @@ check or, for a `did:web` subject, an outbound fetch (#539).
   authentications from one address wait up to `blockMs` for the one in
   flight, then shed with 429, so an address cannot fan out outbound DID
   resolution in parallel. Failed `did:web` resolutions are also remembered
-  for a minute, so a stream of bad tokens for one DID costs one fetch.
+  for a minute, so a stream of bad tokens for one DID costs one fetch. The
+  document's host is the token's choice, so it passes the outbound guard (see
+  `http.allowedHosts`): a `did:web` whose name resolves to a private address is
+  never fetched unless its host is allowed, and with the `http` adapter
+  disabled no remote `did:web` identity resolves.
 
 ```json
 {
@@ -965,9 +974,9 @@ This setting does not change public/anonymous access, admission or capabilities.
 Invalid shapes, unknown adapters/selectors and ambiguous references fail startup.
 Host-installed adapters may be supplied in the pre-start hook. Disabling or
 removing an adapter immediately withdraws its verifiers; enabling it restores
-valid references. Verifications overlapping an adapter registry/configuration
-change are rejected and may be retried. Successful reconfiguration invalidates
-in-flight verification; rejected configuration leaves the old settings intact.
+valid references. A verification under way when an adapter changes completes as
+it began; later ones use the new configuration. Rejected configuration leaves
+the old settings intact.
 Bindings themselves are startup configuration, with no separate runtime registry.
 
 `VenueAuthenticator.verify(methodId, input)` accepts transient Convex values
@@ -975,13 +984,22 @@ for custom methods. Automatic HTTP bearer classification still selects `key`,
 `ucan` or `oidc`; custom transports choose a method explicitly. The extension
 does not yet add new ceremonies, assurance policy or revocable sessions.
 
-## Bearer expiry (`auth.requireExp`, `auth.maxTokenLifetime`)
+## Bearer audience and expiry (`auth.requireAud`, `auth.requireExp`, `auth.maxTokenLifetime`)
 
 ```json
 {
-  "auth": { "requireExp": true, "maxTokenLifetime": 2592000 }
+  "auth": { "requireAud": true, "requireExp": true, "maxTokenLifetime": 2592000 }
 }
 ```
+
+`requireAud` (default `true`): a bearer credential must name this venue in
+`aud` — its DID, its `did:web` alias, or a value in `auth.acceptedAudiences`. A
+credential without `aud` is refused with a reason naming this setting. RFC 7519
+leaves `aud` optional, but RFC 8725 §3.9 requires it whenever one issuer's JWTs
+go to more than one recipient, as a key holder's do: without it, a token made for
+another venue, or for some other purpose, would pass as a login here. Turn it
+off only for clients that cannot name the venue. A present `aud` that does not
+name this venue is refused either way.
 
 `requireExp` (default `true`): a bearer credential must expire. A self-issued
 JWT without `exp`, or a UCAN bearer with `exp: null`, is refused with a reason
@@ -996,6 +1014,58 @@ are delegations, not credentials, and are not affected.
 further ahead than this. Deliberately unset by default, since a cap is a
 nuisance in development. Worth setting on a production venue — for example
 30 days (`2592000`), the frontend's longest identity-token option, or lower.
+
+## Venue identity proof (`auth.venueProof`, `auth.requireVenueProof`)
+
+```json
+{
+  "auth": {
+    "venueProof": [
+      { "adapter": "auth", "implementation": "address" },
+      { "adapter": "auth", "implementation": "challenge" }
+    ]
+  }
+}
+```
+
+An authenticated grid or remote-agent hop (`authenticateAs` `caller` or
+`venue`) sends its credential only to a venue proven to hold the DID the
+credential is audienced to. `venueProof` lists the mechanisms that may prove
+it, in order. The first that proves the DID wins; if none does, the hop is
+refused with each mechanism's reason before the credential leaves. The example
+is the default.
+
+- `address`: a `did:web` venue at its own address, `https://<host>`, or plain
+  http on loopback.
+- `challenge`: the venue answers a fresh nonce sent to `POST /api/v1/challenge`
+  with a proof signed by its DID's key that names the address dialled. It
+  proves a `did:key`. A proof is reused for two minutes for the same target and
+  DID; a failure is not. This build verifies challenge proofs but does not
+  answer challenges, so other venues prove it only by `address`.
+
+Any listed mechanism is enough, so the list is as strong as its weakest member:
+list only mechanisms you trust on their own. An unlisted mechanism is never
+tried, and `[]` proves nothing, so every authenticated hop is refused while
+anonymous hops are unaffected. Each entry names an adapter and one of its
+implementations; an adapter contributes them by implementing
+`VenueProofMethods` (ADAPTERS.md). Every entry must be available when the
+venue starts, and an entry whose adapter is disabled proves nothing. A
+mechanism dials the target through the outbound guard, as the hop does.
+
+A recovered job that authenticated as the venue proves its target again
+before authenticating again. If the target is no longer proven, nothing is
+sent: the job stays unfinished, and its record says the venue no longer
+follows the remote job (`delegation.notFollowed`). The venue never stores a
+caller's credential, so a hop with `authenticateAs: "caller"` lasts only as
+long as the venue runs: after a restart its job ends, its reason naming the
+remote job and its venue, where the caller can follow it. A scheduled hop with
+`authenticateAs: "caller"` has no credential and fails; schedule such work at
+the target venue instead.
+
+`requireVenueProof` (default `true`): `false` skips proof and takes the DID a
+target states at its address, for test venues whose DID cannot be proven where
+they are served. It sits outside the list because it proves nothing. See
+UCAN.md §5.6.
 
 ## Public access (`auth.public`)
 
@@ -1076,7 +1146,9 @@ within limits that keep waiting from tying the venue up:
   waits; `anonymousToolCallTimeout` (default two minutes) the most an
   unauthenticated one does. Past it the call ends as an error result whose
   `structuredContent` is `{status: "running", id, message}`: the job runs on,
-  and `grid_job_result` with that `id` collects its result.
+  and `grid_job_result` with that `id` collects its result. A read-only call,
+  which runs unrecorded, is then given a recorded mirror, and `id` names that
+  (`docs/JOBS.md` § Mirrors).
 - `maxConcurrentToolCalls` (default 16) is how many calls one caller may have
   in progress; every anonymous caller counts as one. A call over it is refused
   with a message saying so.
@@ -1135,6 +1207,21 @@ shows the recorded-job path. An operator-installed adapter may use the same
 mechanism. OAuth callbacks are trusted venue provisioners and create the same
 did:web-managed account explicitly.
 
+### Storage usage
+
+`user:info` and `user:list`, and their REST forms `GET /api/v1/users/{did}`
+and `GET /api/v1/users`, report what each user's data takes up as stored, in
+bytes:
+
+- `storage.workspace`: the user's workspace (`w`) and each of their agents'
+  workspaces (`n`);
+- `storage.drives`: their DLFS drives, including the markers deleted drives
+  leave. It is absent when the venue runs without the `dlfs` adapter.
+
+Sizes are Convex storage sizes, so a value held in two places counts twice.
+Session and job scratch, jobs, agent records, the inbox, secrets and assets
+are not counted. The venue measures storage but sets no limit on it.
+
 ### Account deletion
 
 `v/ops/user/delete {"did":"did:..."}` and `DELETE /api/v1/users/{did}`
@@ -1185,15 +1272,17 @@ audit tombstone and takes effect on the next request.
 Java clients use the same key without hand-building JWTs:
 
 ```java
-VenueAuth auth = VenueAuth.namedKeyPair(
-    keyPair,
-    "did:web:venue.example:u:alice",
-    venueDID);
+VenueAuth auth = VenueAuth.namedKeyPair(keyPair, "did:web:venue.example:u:alice");
 Venue venue = Grid.connect("https://venue.example", auth);
 ```
 
-The strategy signs a fresh short-lived, audience-bound token for each request;
-`mintToken()` is available for transports that need the raw bearer credential.
+The strategy signs a fresh short-lived token for each request, audienced to the
+venue the connection reaches. The connection fixes that DID: the one it was
+opened with (`Grid.connect(did, auth)`, or a URL with the DID named), or else
+the DID the venue proves at its address — a `did:web` at its own https address,
+or any DID on loopback. A venue that presents another DID gets no credential,
+and `alsoKnownAs` never re-binds one. `mintToken(venueDID)` is available for
+transports that need the raw bearer credential.
 
 Registering a full external DID admits that identity to use the venue; it does
 not transfer control of the DID to the venue. A self-sovereign user signs their
@@ -1230,7 +1319,8 @@ drive. DLFS roots may be clamped to a provider-relative subtree:
 
 `subpath` is valid only with `dlfs`. It must be a non-empty relative path and
 cannot contain `..`; invalid roots are skipped rather than broadened to the
-whole drive. The subtree is created lazily on first file access. It is an
+whole drive. The first authorised write under the root creates the subtree,
+and the drive if need be, as the caller's; reads create nothing. It is an
 implementation boundary, not part of the client path: callers use
 `{ "root": "agent-documents", "path": "report.pdf" }`, while the provider
 stores the file at `vault/agent-output/report.pdf`. Because this is DLFS data,
@@ -1289,19 +1379,64 @@ Currently defined:
   none (default `Covia/<version> (+https://covia.ai)`); an explicit caller
   header always wins. Public APIs such as Wikipedia refuse anonymous clients.
 - `http.allowedHosts` / `http.blockedHosts` — host names exempted from, or
-  always refused by, the SSRF guard that every outbound HTTP, MCP and A2A URL
-  passes. Block wins over allow. Loopback, private and link-local targets are
-  refused unless their host is allowed here. Both lists are published at
-  `v/info/adapters/http`.
+  always refused by, the outbound (SSRF) guard. Every caller-chosen target
+  passes it: HTTP, MCP, A2A and model endpoint URLs, relayed Convex peers,
+  `did:web` documents, and other venues — grid and remote-agent targets,
+  orchestration steps' venues and the publishers of `did:web` asset
+  references, whether named by URL or DID. Names match whatever their case and
+  with or without a trailing dot. Block wins over allow. Loopback, private,
+  shared (`100.64.0.0/10`), link-local, unspecified and `0.0.0.0/8` addresses,
+  IPv6 unique local addresses (`fc00::/7`) and IPv6 forms that carry one of
+  these IPv4 addresses are refused unless their host is allowed here, so
+  federating with a venue on the same machine or a private network needs its
+  host listed. The venue itself, and a holder of a venue-issued `outbound/any`
+  grant on `<venueDID>/outbound`, may have HTTP, MCP, A2A, model, Convex peer
+  and venue targets dialled unchecked, every redirect of an `http:*` request
+  included; agents, the venue's own included, are checked unless granted it.
+  `did:web` documents are checked for every caller. A name that passes is
+  held to the same rule for every later lookup, by whichever client, until the
+  venue stops or its host is allowed here: the venue's jar makes
+  `covia.adapter.GuardedResolver` the JVM's name resolver. If the JVM resolves
+  through anything else (`jdk.net.hosts.file` set, or another
+  `InetAddressResolverProvider` found first), only allowed hosts pass. The
+  guard belongs to the `http` adapter: with it disabled, every such target is
+  refused. Both lists are published at `v/info/adapters/http`.
+  HTTP, MCP, A2A and caller-selected model URLs are normalised before checks
+  and sent in that form, including literal and encoded dot segments. Ambiguous
+  encoded path separators or nested path encoding are refused. This also
+  applies with `outbound/any`. URL secret placeholders must occur in the path
+  or query, and their values must survive normalisation unchanged so that
+  reported URLs can still redact them.
 - `http.maxRedirects` — the longest redirect chain `http:*` follows (default
-  `5`, at most `20`; `0` returns 3xx responses unfollowed). Every hop passes
-  the SSRF guard, credentials are dropped on a change of origin, and a loop or
-  a longer chain fails the request naming the chain.
+  `5`, at most `20`; `0` returns 3xx responses unfollowed). Every hop is
+  checked by the SSRF guard as the first request is. Retained secret and OAuth
+  headers must also be authorised for each normalised redirect destination;
+  a denial stops the request before that hop. Credential headers are dropped
+  on a change of origin and are never restored later in the chain. Inline URL
+  secrets constrain the whole chain to their granted destinations, even if a
+  redirect removes them. A loop or a longer chain fails the request naming
+  the chain.
+- `convex.peer` — the Convex peer that `convex:query` and `convex:transact` use
+  (default `peer.convex.live:18888`; `host:port`, `tcp://host:port` or
+  `tls://host:port`). It is the operator's choice, so it does not pass the
+  outbound guard: a local peer such as `localhost:18888` works.
+- `convex.anyPeer` — whether the venue relays to a peer a call names (default
+  `false`). Off, a call that names any other peer, in its input or in its
+  operation's metadata, is refused. On, the venue relays, and the peer's host
+  passes the outbound guard (see `http.allowedHosts`).
 - `hitl.maxGrantLifetimeSecs` — optional positive lifetime ceiling for grants
   minted after HITL approval. It is absent by default, so the venue imposes no
   maximum and permits an explicit `exp: null`. With a finite ceiling, null and
   later expiries are rejected before the request reaches the approver. A grant
   that omits `exp` uses the shorter of the seven-day default and this ceiling.
+- `preferences.maxBytes` — the most one user's preferences (`x/preferences`)
+  may hold, measured as the map's Convex storage size (default `4096`). An
+  edit that would go over it is refused unless it makes the preferences
+  smaller, so lowering the limit never stops a user tidying up.
+  `preferences.users.<did>.maxBytes` sets one user's limit instead. Both must
+  be positive integers. The venue limit is published at
+  `v/adapters/preferences/config`; per-user limits are not. See
+  [PREFERENCES.md](PREFERENCES.md).
 - `orchestrator.maxItems` — maximum number of elements accepted by one
   `foreach` step (default `50`). The complete input is rejected before any
   iteration starts when this limit is exceeded. Set explicitly to `null` for no
@@ -1345,16 +1480,19 @@ the agent instruction/tool bundle is `v/skills/crypto/crypto`.
 | Operation | Input | Result |
 |-----------|-------|--------|
 | `hash` | blob `data`, optional string `encoding`, `algorithm` | `algorithm`, native `digest` blob |
-| `generate-key` | secret `name`, optional `overwrite` | `secret`, public `accountKey`, `did` |
+| `generate-key` | secret `name`, or `keyring: true` with optional `label`; optional `overwrite` | `secret` (not for the keyring), public `accountKey`, `did` |
 | `public-key` | `seed` secret reference | public `accountKey`, `did` |
-| `sign` | `seed` reference, `data`, optional `encoding` | public `accountKey`, `did`, detached `signature` |
+| `sign` | `seed` reference or held `key`, `data`, optional `encoding` | public `accountKey`, `did`, detached `signature` |
 | `verify` | `accountKey`, `signature`, `data`, optional `encoding` | `valid` (false for signature mismatch; malformed input fails) |
 | `encrypt` | recipient `accountKey`, blob `data`, optional string `encoding` | native `ciphertext` blob, `encoding: blob` |
-| `decrypt` | `seed` reference, blob `ciphertext`, optional output `encoding`, destination `name`, `overwrite` | `secret` when a name is supplied, otherwise native plaintext `data` by default; plus `encoding` |
-| `generate-mnemonic` | secret `name`, optional `words`, `overwrite` | `secret`, `words`; phrase remains encrypted |
-| `validate-mnemonic` | `mnemonic` secret reference | `valid`, without revealing words |
-| `derive-key` | `mnemonic` reference, destination `name`, optional `path`, `passphraseSecret`, `overwrite` | `secret`, public `accountKey`, `did`, effective hardened `path` |
-| `jwt-sign` | `seed` reference, `claims` map, optional `kid`, destination `name`, `overwrite` | public `accountKey`, `did`, and compact `token` or stored `secret` reference |
+| `decrypt` | `seed` reference or held `key`, blob `ciphertext`, optional output `encoding`, destination `name`, `overwrite` | `secret` when a name is supplied, otherwise native plaintext `data` by default; plus `encoding` |
+| `generate-mnemonic` | secret `name`, or `keyring: true` with optional `label`; optional `words`, `overwrite` | `secret`, or for the keyring the phrase's `did`; `words`; the phrase is never returned |
+| `validate-mnemonic` | `mnemonic` secret reference or held mnemonic | `valid`, without revealing words |
+| `derive-key` | `mnemonic` reference or held mnemonic, destination `name` or `keyring: true` (only the keyring for a held mnemonic), optional `label`, `path`, `passphraseSecret`, `overwrite` | `secret` (not for the keyring), public `accountKey`, `did`, effective hardened `path` |
+| `jwt-sign` | `seed` reference or held `key`, `claims` map, optional `kid`, destination `name`, `overwrite` | public `accountKey`, `did`, and compact `token` or stored `secret` reference |
+| `add-key` | `seed` or `mnemonic`, a reference to your own secret; optional `label`, `overwrite` (replaces the label of one already held) | a key's `accountKey` and `did`, or a phrase's `did` and `words` |
+| `remove-key` | held `key` or `mnemonic` | `removed` |
+| `list-keys` | optional `did` (default yours), `offset`, `limit` | `keys` (`accountKey`, `did`, `label`, `addedAt`), `mnemonics` (`did`, `label`, `addedAt`), `total`, `offset`, `nextOffset` while more remain |
 | `jwt-verify` | `token` or `tokenSecret` reference, trusted `accountKey`, optional `expectedIssuer`, `expectedAudience`, `requireExpiration` | `valid`; on success `header`, `claims`; on rejection `reason` without claims |
 | `jwt-decode` | `token` or `tokenSecret` reference | `verified: false`, unverified `header`, `claims`, native `signature` blob |
 
@@ -1418,7 +1556,7 @@ the agent instruction/tool bundle is `v/skills/crypto/crypto`.
 The CAD025 web page's test vector currently prints path `m/44/864/1234/0/1`
 with expected seed `2172bb...`, but Convex's `SLIP10Test.testCAD25` uses
 `m/44/888/1234/0/1` for that expected seed. The 864 path yields `23a427...`.
-Adapter tests pin both results and GetMine's account-0/account-1 vectors;
+Adapter tests pin both results and the account-0 and account-1 vectors;
 the default remains coin type 864.
 
 ### Agent workflows and secret boundaries
@@ -1495,7 +1633,7 @@ registration. A custom hierarchy such as `m/7/1234567/2147483647` also works;
 the same hardened Ed25519 derivation applies to every valid path.
 
 Private inputs (`seed`, `mnemonic`, `passphraseSecret`) accept secret references
-only. Import through the existing secret-store boundary, not through crypto
+only, or for `key` and `mnemonic` a held key or phrase (below). Import through the existing secret-store boundary, not through crypto
 tool arguments or prompts. Resolution uses `Engine.resolveSecret` with the
 request context. Own-user access follows the existing secret-use rules;
 cross-user references require `secret/use`, and URL-bound grants cannot be
@@ -1518,14 +1656,39 @@ does not promise deterministic memory erasure. Human recovery-phrase display
 and backup/export require a separate trusted interface; these agent operations
 do not expose plaintext phrases or enable `secret:extract`.
 
+#### Held keys
+
+A keyring holds keys and phrases the venue uses for an identity but never
+returns ([HELD_KEYS.md](./HELD_KEYS.md)). `add-key {"seed":"s/SIGNER"}` copies
+a seed from one of your own secrets into your keyring; delete the secret if the
+keyring copy should be the only one. `generate-key {"keyring":true}` makes a
+key there whose private half nobody ever sees. Name a held key by its
+`did:key`, multibase key or `0x` account key, as in
+`sign {"key":"did:key:z6Mk…","data":"0x…"}`, or another holder's as
+`<did>/x/crypto/keys/<key>`. Each use needs its `key/…` ability on the key by the
+standard capability rules: your own authority covers your keyring, and caps,
+`user/sudo` and grants work as for any resource, so a grant of `*` over a
+namespace includes its keys. An agent has a keyring of its own, under its own
+DID, which goes when the agent is deleted. A phrase kept with
+`generate-mnemonic {"keyring":true}` derives keys only into its holder's
+keyring. A did:key that holds its own key signs `auth:identity-token` for
+itself and the identities nested below it; `ucan:issue` and `convex:transact`
+take a held `key` too.
+
 ## Connected accounts (`adapters.oauth`)
 
 The `oauth` adapter holds OAuth 2.0 grants on behalf of venue users so an
 agent can call a provider's API as the user — Gmail, Microsoft Graph, GitHub,
 anything that speaks OAuth 2.0. This is not login: login OAuth (`auth.oauth`)
 proves who a caller is; a *connection* is a grant to act on the user's data
-at a provider, obtained under the caller's venue identity and kept in that
-user's encrypted secret store under `oauth/<provider>`.
+at a provider, obtained under the caller's venue identity. Connections are the
+`oauth` adapter's own state, their tokens sealed under the venue's secret store
+keys; they are not in the user's secret store, so no secret operation lists,
+replaces, extracts or deletes them, and no operation returns a token. Grants an
+earlier venue kept there as `oauth/<provider>` move on first access; one that
+cannot be read is refused with a reason and left where it was. Deleting
+a user deletes their connections; their grants are not revoked at the provider.
+The public principal has none.
 
 ```json
 {
@@ -1564,23 +1727,49 @@ user's encrypted secret store under `oauth/<provider>`.
 - The venue's callback is `<baseUrl>/auth/connect/<provider>/callback`;
   register it with the provider's client. A local venue uses a loopback URL,
   which Google accepts for a "Desktop app" client on any port.
-- `returnTo` — URL prefixes a connect may name to send the browser back to
-  an app after approval; venue-relative paths are always allowed.
-- `pendingTtlSecs` — how long a started connect may wait for approval
-  (default 600).
+- `returnTo` — URL prefixes of the apps a connect may name to send the
+  browser back to after approval, with the completion code added as
+  `?code=`. List only apps that complete the connect under their own
+  sign-in. A prefix matches up to a path, query or fragment boundary, and
+  venue paths are never allowed.
+- `pendingTtlSecs` — how long a started connect may wait for approval, and
+  an approved one for completion (default 600).
 
 Flow: `v/ops/oauth/connect {provider, scopes?, returnTo?}` returns the URL
-the user opens; the callback exchanges the code (PKCE, one-time state bound
-to the caller) and stores the grant. `http:get` / `http:post` with
-`bearerSecret: "oauth/<provider>"` then attach a fresh access token —
-refreshed when expired — that never reaches a model or a job record.
-Attaching it is a use of the secret `s/oauth/<provider>`: a capability-scoped
-caller such as an agent needs `secret/use` on it, and an `nb.url` caveat
-limits where it is sent.
-`oauth:status` lists connections without tokens; `oauth:disconnect` revokes
-where the provider supports it and forgets the grant. Providers and default
-scopes are published at `v/info/adapters/oauth`; the `v/skills/auth/oauth`
-skill teaches agents the flow.
+the user opens. Approval at the provider connects nothing by itself. The
+venue has no browser session, so the callback cannot tell whose browser it
+is in. Instead it consumes the one-time state (PKCE, bound to the caller)
+and gives the browser a one-time completion code. The browser takes the code
+to the `returnTo` app, or without one the page shows it, naming the venue
+account it connects to, for the user to give to the app that asked.
+`v/ops/oauth/complete {code}`, from the account that started the connect,
+exchanges the provider's code and stores the grant. Any other account is
+refused and the code is used up. A completion code lapses after
+`pendingTtlSecs`, and in practice sooner, when the provider's own code
+expires. A completion for an account deleted since the connect began stores
+nothing and revokes what it was issued.
+`http:get` / `http:post` with `bearerSecret: "oauth/<provider>"` then attach a
+fresh access token — refreshed when expired — that never reaches a model or a
+job record. `oauth:status` lists connections without tokens;
+`oauth:disconnect` forgets the grant and revokes it where the provider
+supports it. A refresh in flight never brings back a disconnected grant or
+replaces a newer one. Deleting an account (`user:delete`) revokes its grants
+the same way, once: a provider that refuses or cannot be reached keeps a grant
+the venue no longer holds. Providers and default scopes are published at
+`v/info/adapters/oauth`; the `v/skills/auth/oauth` skill teaches agents the
+flow.
+
+A connection is the resource `<did>/x/oauth/<provider>`, in the adapter's own
+`x/` space, which its owner holds outright. The `bearerSecret` reference stays
+`oauth/<provider>`. A capability-scoped caller such as an agent needs, on the
+resource:
+
+- `oauth/use` to attach its token, which an `nb.url` caveat limits to a
+  destination;
+- `crud/read` for `oauth:status` (on `x/oauth/` to list them all);
+- `oauth/connect` (for `oauth:connect` and `oauth:complete`) and
+  `oauth/disconnect`, which a `crud` grant does not cover;
+- or `oauth`, which covers all of these.
 
 Provider policy is the operator's problem, not the venue's: Google's Gmail
 scopes are *restricted*, so a production client needs Google's verification,
@@ -1784,19 +1973,28 @@ Operators can force read-only runs and internal calls to be recorded:
 This option is off by default. It does not change `/invoke`, which is always
 recorded.
 
-## Scheduled job tracking
+Agents' tool calls are internal calls, unrecorded unless the operation says
+otherwise. `recordToolCalls: true` records every agent's tool calls from the
+start, for agents that do not set their own `config.recordToolCalls`. It is
+off by default: a call is then recorded only if it outlasts the agent's
+`toolCallTimeoutMs` (see the agent-side bounds under
+[LLM providers](#llm-providers-langchain)).
+
+## Scheduler
 
 A scheduled event (`scheduler:schedule`) fires as a transient Job by default —
 no record beyond the log — which suits chatty machinery such as agent wakes.
 A caller can ask for a durable Job per fire with `track: true` on the event;
 the venue decides what happens when the caller says nothing, and may override
-the caller altogether:
+the caller altogether. The venue also bounds how many due events it starts at
+once:
 
 ```json
 {
   "scheduler": {
     "trackJobs": false,
-    "forceTrackJobs": false
+    "forceTrackJobs": false,
+    "maxConcurrency": 2
   }
 }
 ```
@@ -1806,9 +2004,15 @@ the caller altogether:
 - `forceTrackJobs` — every scheduled fire is a durable Job whatever the event
   asked for. Off by default. Use it where an audit trail of all scheduled
   work is required.
+- `maxConcurrency` — how many due events the venue starts at once, at least 1;
+  2 by default. Due events start in time order, and the rest wait in the
+  schedule, still cancellable, until a place frees. An event holds its place
+  until its operation has been invoked, not until its Job finishes, so a long
+  job does not hold one. Agent wakes and HITL timeouts count like any other
+  event.
 
-Both are resolved at fire time, so changing them covers events already
-queued. A tracked fire is recorded in the owner's job history; on a recurring
+`trackJobs` and `forceTrackJobs` are resolved at fire time, so changing them
+covers events already queued. A tracked fire is recorded in the owner's job history; on a recurring
 event its ID is reported as `lastJob` by `scheduler:list` / `GET
 /api/v1/schedules` — read that Job for the outcome. The scheduler itself keeps
 no execution history. See `GRID_SCHEDULER.md` §7.
@@ -1821,7 +2025,10 @@ no execution history. See `GRID_SCHEDULER.md` §7.
 }
 ```
 
-Mounts WebDAV at `/dlfs/` for file access to DLFS drives. Off by default.
+Mounts WebDAV at `/dlfs/` for file access to DLFS drives. Off by default. The
+venue does not authenticate these requests: each acts as the venue's public
+identity, outside the `dlfs` operations' capability checks. Whoever enables it
+controls access in front of `/dlfs/`.
 
 ## MCP tool bridging
 
@@ -1865,9 +2072,10 @@ schemas/annotations update, name/description untouched, vanished tools
 
 Destination paths under the caller's own `o/` need nothing extra. Venue-side
 targets (`v/ops/...` or `scope: "venue"`) are written as the venue, so they
-are venue administration: call as the venue, or present a venue-issued
-`mcp/manage` delegation over `<venue DID>/v/mcp`. A user's own unrestricted
-authority is not enough.
+are venue administration: they need venue authority
+([VENUE_AUTHORITY.md](./VENUE_AUTHORITY.md#how-it-works-today)) for
+`mcp/manage` on `<venue DID>/v/mcp`. A user's own unrestricted authority is
+not enough.
 Server URLs pass the same SSRF validation (and operator allow/block lists) as
 the http adapter. `auth` should be a secret reference (`s/<name>`, stored via
 `v/ops/secret/set`; bare refs are stored DID-qualified to the registrar) —
@@ -1932,8 +2140,19 @@ typically needs `http://host.docker.internal:11434`, with Ollama started as
 URL and this knob instead of a bare ConnectException.
 
 Agent-side bounds: each level-3 LLM call is bounded by the agent's
-`llmTimeoutMs` (default 120s) and each tool call by `toolCallTimeoutMs`
-(default 300s); cancellation interrupts the in-flight provider call.
+`llmTimeoutMs` (default 120s), and is cancelled at it, interrupting the
+in-flight provider call; that fails the work the agent was doing, and the
+agent carries on with the rest. A provider that keeps failing after the
+provider library's own retries, or a refused key or missing model, suspends
+the agent with its queued work kept (`docs/AGENT_LOOP.md` §3.4). Each tool
+call is bounded by `toolCallTimeoutMs`
+(default 300s, minimum 1s). A tool call still running at its limit is not
+cancelled: the model is told the recorded job it is running as, and in a
+session its outcome arrives when it ends, after a restart too
+(`docs/AGENT_LOOP.md` §3.4.2): as a message, or as a tool result where the
+model's `lateToolResults` option says `"tool"` (`docs/OPERATIONS.md`). `recordToolCalls: true` in an agent's config
+records each of its tool calls from the start; unset, the venue's
+`recordToolCalls` applies.
 Provider responses also carry `finishReason` when reported. A `length` result
 is incomplete: both agent runtimes discard its partial content and tool calls,
 retry once with a concise-response diagnostic, and fail clearly if the retry
@@ -2003,8 +2222,9 @@ earlier embed a build path, so compare their hash column by hand.
 
 First module: **covia-sql** (#227) — `v/ops/sql/query` / `v/ops/sql/execute`
 over venue-local convex-db databases (per-user, lattice-backed, created on
-first use; ONE instance = one store, per-user isolation via the `database=`
-param) and operator-registered JDBC connections
+first use; ONE instance = one store, in which a user's database `<db>` is named
+`<userDID>/sql/<db>`, the resource its `sql/<db>` capability names; the public
+principal has none) and operator-registered JDBC connections
 (`adapters.sql.databases.<name>`, passwords as `s/` secret refs). Callers name a `db`, never a URL. Caps:
 `sql/<db>` × `sql/query`|`sql/execute`. `sql/query` never changes data:
 convex-db statements must parse as a single query, and other drivers run the
@@ -2013,14 +2233,15 @@ MySQL refuse writes in that transaction; for a driver that ignores read-only,
 statements that commit on their own (DDL on some databases, non-transactional
 tables) are not undone, so register such a database with a read-only database
 user. The module ships its own `sql`
-agent skill from its jar (materialises at `v/skills/data/sql` exactly when the
+agent skill from its jar (materialises at `v/skills/data/sql` when the
 module is loaded — the module-shipped-skill pattern, see `docs/SKILLS.md`).
 
 Registered databases are shared: every signed-in user may query them and,
 unless the entry sets `readOnly: true`, change them with `sql/execute`.
 `readOnly` refuses `sql/execute` for every caller, the venue included, before a
 connection opens; `sql/query` is unaffected. Venue-local databases have no such
-flag.
+flag. A registered name always means the registered database: a user's
+venue-local database of that name is unreachable while the entry exists.
 
 ```json
 {
@@ -2292,6 +2513,40 @@ OpenRAIL-M, Supertone: open use with use-based restrictions that pass to anyone
 using it). The models are fetched by the venue from Hugging Face, not
 distributed with Covia.
 
+### Who a chat message comes from
+
+Telegram, Discord, WhatsApp and Slack bindings share one rule: every message
+comes from a principal, and the binding identifies which.
+
+- **A sender the binding's `allow` names** comes from the binding's
+  principal: its `user` for an operator-declared binding; for one made with
+  `<provider>:create`, its creator — an agent as itself, bounded by its
+  current `config.caps`, never its owner.
+- **A sender only `open: true` admits** is anonymous: the venue's public
+  principal, under `auth.public.caps`. They may ask only an agent whose
+  `accepts` is `"anyone"`. The configured handler is a bound call, so it
+  checks its action authority without requiring `invoke` on the handler.
+  With public access off, they are not served.
+- **The authentication record** travels with the request: the binding, the
+  provider-scoped identity it authenticated, how delivery was verified, and
+  the channel in one shape for every provider — `sender {id, handle?, name?}`,
+  `chat {id, kind}`, `thread`, `space`, `message`, with provider extras under
+  the provider's name ([AUTH.md §5.3](AUTH.md#53-channel-methods-messaging-bindings)).
+  The agent records it beside the turn, never in the message, so nothing typed
+  can pose as it, and an LLM agent's context shows it as a `[From: …]` element
+  whenever who is talking changes. The message itself is the sender's text,
+  or `{text, attachments, content?}` when it carries media.
+- **The agent acts as itself**, whoever asked: its tool calls under its own
+  `config.caps`, its harness with its controller's authority (UCAN.md §5.4).
+  The binding's work for it — storing a message's media, `mediaOperation`,
+  `replyOperation` — runs as the agent when the binding's principal is the
+  agent or its owner, and otherwise as the binding's principal.
+
+A `user: "public"` binding's allow-listed senders are the public principal
+too, so they are bound by the public scope. A capped agent's own binding asks
+it as the agent, so the agent's `caps` need `agent/message` on itself.
+The bound chat call needs no additional `invoke` grant.
+
 ### Telegram bots (covia-telegram)
 
 The **covia-telegram** module (`telegram` adapter) runs operator-declared
@@ -2339,7 +2594,8 @@ Per bot:
   secrets, and another principal's only under a `secret/use` grant. A bot
   whose secret is absent parks as `PENDING` and retries (once after 2 s, then every 30 s), so provisioning the secret later brings it
   up without a restart.
-- `user` — the DID the bot acts as; every invocation runs with that user's
+- `user` — the principal the bot's allow-listed senders come from
+  ([Who a chat message comes from](#who-a-chat-message-comes-from)), with its
   full authority, so it should be the owner of the agent it routes to.
   `"public"` names the venue's public principal (the same identity as an
   anonymous MCP client on a public venue), which is what a local dev venue's
@@ -2348,13 +2604,12 @@ Per bot:
   Telegram chat (or forum topic) is one `agent:chat` session, persisted at
   `:adapters/telegram/config/<bot>/sessions/<chatId>` so
   conversations survive restarts; `/new` starts a fresh one. The agent
-  receives each turn as `{text, via: {channel: "telegram", bot, access:
-  "allow" | "open", from, chat, message_id}}` — Telegram's authenticated
-  `from`/`chat` verbatim — so it knows who is on the other end without
-  trusting anything typed; the venue's own "Venue attribution" system note
-  still names the bot's Covia identity (the principal that submitted the
-  turn). The module ships an agent template for exactly this role,
-  `v/agents/templates/telegram` (phone-chat register, `via`, per-chat
+  receives each turn as the sender's text, from the principal the bot
+  authenticated, with the Telegram sender, chat and topic in the
+  authentication record ([Who a chat message comes from](#who-a-chat-message-comes-from)),
+  so it knows who is on the other end without trusting anything typed. The
+  module ships an agent template for exactly this role,
+  `v/agents/templates/telegram` (phone-chat register, the From element, per-chat
   sessions, memory pinned into context, telegram/venue/covia skills;
   provider composed at create time): `agent:create {agentId, config:
   ["v/agents/templates/telegram", {llmOperation, model}]}`. With
@@ -2368,7 +2623,8 @@ Per bot:
   operation you own** (an orchestration, a pinned op…) that takes the Update
   and does the work. Agent bots also download photos, voice/audio, documents,
   video/video notes, animations and stickers into the owner's DLFS `telegram`
-  drive after admission. Each turn retains its caption and `attachments`
+  drive after admission, as the bot's work for its agent (a capped agent needs
+  write on that drive). Each turn retains its caption and `attachments`
   descriptors (`kind`, `file_id`, `ref`, `mediaType`, provider metadata).
   Images reach the LLM as asset-reference image blocks; the agent needs
   `crud/read` on the referenced DLFS files and a vision-capable model.
@@ -2391,16 +2647,17 @@ Per bot:
 - `allow` — Telegram user ids and/or `@usernames` permitted to talk to the
   bot. **Fail-closed**: with no `allow` and no `open: true`, everyone is
   refused (in private chats they are told their user id, so an operator can
-  add it). `open: true` admits anyone — appropriate only for a bot whose
-  target is safe for the public.
+  add it). `open: true` also admits everyone else, as anonymous senders —
+  appropriate only for a bot whose target is safe for the public.
 - `parseMode` — `Markdown`, `MarkdownV2` or `HTML` for replies; omit for
   plain text. Markup Telegram rejects is resent as plain text. None of the
   three renders an agent's Markdown as written; for an agent bot use
   `replyOperation: "v/ops/telegram/format"`, whose `HTML` the reply then uses.
 - `greeting` — the `/start` reply (default names the agent and venue).
 - `mediaOperation` — optional, agent bots only. Runs once per downloaded
-  attachment as the bot owner. Input is the attachment descriptor plus
-  `caption` (empty when absent) and `via` (bot, sender, chat, topic/reply IDs).
+  attachment, as the bot's work for its agent. Input is the attachment descriptor plus
+  `caption` (empty when absent) and `authentication`, the message's
+  authentication record (bot, sender, chat, topic and reply IDs).
   Return an object: `{}` leaves this attachment untouched; optional non-empty
   `text` supplies a transcription/extraction. The full non-empty result is
   retained under `attachment.result`, so application record IDs, language and
@@ -2409,7 +2666,7 @@ Per bot:
   select handling by `kind` or `mediaType`; a speech-only handler can return
   `{}` for photos and documents. Malformed results and processing failures
   fail the turn visibly rather than silently dropping the attachment.
-- `replyOperation` — optional, agent bots only. Takes `{response, via}` after
+- `replyOperation` — optional, agent bots only. Takes `{response, authentication}` after
   the agent completes and returns a non-empty string or `{text: "..."}`,
   optionally with `parse_mode`, which then wins over `parseMode`.
   This is the application's place to render structured responses or remove
@@ -2423,8 +2680,9 @@ Per bot:
   An application with its own hook calls it after its own processing and
   returns its text and `parse_mode`.
 
-Both hooks invoke ordinary Covia operation references as the bot owner, with
-normal Jobs, secret resolution and capability checks, and no turn timeout.
+Both hooks invoke ordinary Covia operation references as the bot's work for
+its agent ([Who a chat message comes from](#who-a-chat-message-comes-from)),
+with normal Jobs, secret resolution and capability checks, and no turn timeout.
 They may be application adapters, orchestrations or other operations; Telegram
 has no built-in speech provider or application-specific reply syntax. Runtime
 `telegram/create` persists both references and restores them on restart.
@@ -2443,7 +2701,7 @@ backlog when it is enabled again.
 
 Bots can also be **created at runtime by their user**: `v/ops/telegram/create
 {name, token: "s/…", agent | operation, reply?, allow?, open?, parseMode?,
-greeting?, mediaOperation?, replyOperation?}` makes a bot that acts as the caller (no `user` — a user cannot
+greeting?, mediaOperation?, replyOperation?}` makes a bot whose allow-listed senders come from the caller — an agent as itself (no `user` — a user cannot
 create a bot acting as someone else; the token must be a secret reference),
 records it at
 `:adapters/telegram/users/<caller-did>/bots/<name>`, starts it,
@@ -2547,8 +2805,9 @@ uncertain sends still need reconciliation. Removing a runtime bot removes its
 receipts, but downloaded files remain in its owner's DLFS drive.
 Store durability follows the venue configuration (temporary venues remain
 ephemeral). Media albums retain `media_group_id` but each message is a separate
-turn; `/new` resets only the current topic. `via` also includes topic and reply
-message IDs when supplied by Telegram.
+turn; `/new` resets only the current topic. The authentication record carries
+the topic as its `thread`, and the reply-to and media-group IDs under
+`telegram`, when Telegram supplies them.
 
 ### Discord bots (covia-discord)
 
@@ -2587,12 +2846,14 @@ bot is expected to process guild text.
 
 Each bot has exactly one `agent` or `operation` handler. Agent conversations
 persist under `:adapters/discord/config/<bot>/sessions/<channelId>`
-and receive
-`{text, via: {channel: "discord", bot, access, from, chat, guild?,
-message_id}, attachments}`. Operation handlers receive a normalized Discord
+and receive the sender's text, or `{text, attachments}` when the message
+carries files; the authentication record holds the Discord sender, channel and
+server. Operation handlers receive a normalized Discord
 message record including attachment ids, filenames, URLs, sizes and types.
-Every inbound turn runs as a Job for the configured `user`. `allow` accepts
-Discord user snowflakes or usernames and fails closed unless `open: true`.
+Each inbound turn is a Job of the principal it comes from
+([Who a chat message comes from](#who-a-chat-message-comes-from)). `allow`
+accepts Discord user snowflakes or usernames and fails closed unless
+`open: true`.
 DMs are handled directly; guild messages require a bot mention by default.
 Set `mentionOnly: false` only when the bot should process every allowed
 message it can see. Built-in text commands are `!start`, `!help`, `!new`, and
@@ -2638,7 +2899,9 @@ bindings use `c-<name>`, runtime bindings an opaque owner-specific name. Runtime
 requires `<provider>/manage`; sends require `<provider>/send` on the binding,
 and WhatsApp downloads `whatsapp/download`.
 
-Both fail closed on empty admission lists, acknowledge only after durable
+Senders are identified as in
+[Who a chat message comes from](#who-a-chat-message-comes-from). Both fail
+closed on empty admission lists, acknowledge only after durable
 acceptance and perform Jobs/replies asynchronously. Pending receipts resume;
 started receipts require inspection after an interruption and are never
 blindly replayed. Local agent input, receipt and session mapping commit together;
@@ -2727,6 +2990,13 @@ so a session outlives its process and is continued with `--resume`. A
 session's next turn — so a caller only ever sees a slightly slower reply,
 never lost context, even across a venue restart.
 
+A session belongs to the project it runs in, and resumes only there: once
+Claude Code has run a session, a call naming another project is refused and
+the session is left as it is. A resume that never runs (Claude Code does not
+find the session, or the call is cancelled first) claims nothing. Before the
+venue has seen a session, after a restart, only Claude Code keeps projects
+apart, and it does so by directory: two projects on one path share sessions.
+
 Operations:
 
 - `v/ops/claudecode/run {project?, prompt, session?, …options}` — one turn
@@ -2744,7 +3014,13 @@ Operations:
   `INPUT_REQUIRED` with the latest reply as its output; each message posted
   to the job (`{content}` / `{prompt}`) is the next turn, `{end: true}`
   finishes it. Restored after a restart, it resumes from the session id on
-  its job record.
+  its job record, as the principal that started it with the authority that
+  principal holds then: the grants it presented are kept on the job until
+  the job ends. It keeps the options its call asked for, as the job's input
+  records them; a `bypassPermissions` mode the project no longer allows ends
+  the job. Every turn checks again that the caller may run in the
+  project; a turn it may not is refused to the sender, and the session
+  waits.
 - `v/ops/claudecode/sessions {project?}` — the sessions this venue knows in
   projects the caller may use (live and recently stopped; all resumable).
 - `v/ops/claudecode/stop {session}` — stop a session's live process (the
@@ -2752,8 +3028,9 @@ Operations:
 - `v/ops/claudecode/projects` — the projects the caller may run in.
 - `v/ops/claudecode/create {name, path, user?, description?, options?}` /
   `v/ops/claudecode/delete {name}` — the runtime project registry. Both need
-  **venue authority** (`<venueDID>/claudecode/projects` × `claudecode/manage`
-  — call as the venue or present a venue-issued delegation), because naming a
+  **venue authority** for `claudecode/manage` on
+  `<venueDID>/claudecode/projects`
+  ([VENUE_AUTHORITY.md](./VENUE_AUTHORITY.md#how-it-works-today)), because naming a
   directory the venue's OS user may execute code in is an operator decision.
   Runtime projects are recorded at `w/claudecode/projects/<name>` in the
   venue workspace and re-armed at every start; config-declared projects are
@@ -2828,11 +3105,10 @@ above is intentionally outside this administrative group:
 | `v/ops/venue/module/load {module, sha256?, config?}` | Load a module jar; its adapters and declarations overwrite existing names and paths |
 | `v/ops/venue/module/unload {name}` | Remove a module's live adapters and introspection, close resources and its classloader; catalog metadata remains |
 
-**Authority.** All of these are venue administration: a null capability
-scope is deliberately not enough. They run only as the venue identity itself
-or with a venue-issued delegation covering `<venue DID>/adapters` ×
-`adapter/manage` — the same model as `user:create`. Ordinary authenticated
-users get `AuthException`.
+**Authority.** All of these are venue administration: they need venue
+authority ([VENUE_AUTHORITY.md](./VENUE_AUTHORITY.md#how-it-works-today)) for
+`adapter/manage` on `<venue DID>/adapters`, the same model as `user:create`.
+Ordinary authenticated users get `AuthException`.
 
 **Module policy.** `module/load` and `module/unload` require
 `dynamicModules.enabled` (default **off**). By default `module` must be a jar
@@ -2888,29 +3164,42 @@ registered **only** when an `a2a` block is present. Without it, `POST /a2a` and
 - `agentInfo` — surfaced in the agent card (`name`/`description`, plus
   `organization`/`providerUrl` for the card's `provider`). All optional.
 
-**Auth note:** `SendMessage` invokes `defaultChatOp` as the *calling*
-identity. Under the default read-only public scope an unauthenticated caller
-cannot invoke, so the Task comes back `TASK_STATE_FAILED`. To exercise
-`SendMessage` from an unauthenticated client, either authenticate the caller
-or widen `auth.public.caps` to permit the op — do the latter only on a
-loopback-bound (`bindAddress: 127.0.0.1`) throwaway venue, never a
-LAN-reachable one. The agent-card GET is public and works regardless.
+**Auth note:** `SendMessage` calls the configured `defaultChatOp` as the
+calling identity. It is a bound endpoint, so no generic `invoke` grant is
+required. The operation still enforces its resource authority: a pure echo
+can run under the read-only public scope; a protected action can be refused.
+The agent-card GET is public and works regardless.
 
 **Per-agent endpoints (COG-14):** beyond the front door, every hosted agent is
 addressable at `POST /a2a/<ownerDID>/g/<agentId>` (JSON-RPC `SendMessage` →
 `agent:request` task Job = A2A Task; `GetTask`, `CancelTask`,
 `SubscribeToTask`, `GetExtendedAgentCard`), with its card at the A2A well-known
-path below that base. Private by default: the owner interacts as themselves; anonymous
-non-owners get an existence-hiding 404, authenticated non-owners 403.
-Publishing is per-agent config: `a2a: {public: true}` makes the card
-discoverable; adding an explicit `a2a.caps` scope accepts stranger
-messages, dispatched as the OWNER narrowed by that scope — it must include
-`agent/request` plus whatever the agent's own work needs. `"unrestricted"`
-grants full owner authority (logged loudly). Wire method names are SDK-style
-(`SendMessage`, not `message/send`). The full addressing, discovery and
-publication model is in [A2A_AGENTS.md](./A2A_AGENTS.md), the implementation
-companion to COG-14; non-owner run authority is detailed in
-[A2A_INTERACTION_AUTHORITY.md](./A2A_INTERACTION_AUTHORITY.md).
+path below that base. Private by default: whoever may ask the agent may use
+the endpoint — the owner, a caller the agent's `config.accepts` admits, or one
+presenting an `agent/request` UCAN in `X-Covia-Ucans`. Anyone else gets an
+existence-hiding 404 (anonymous) or 403 (authenticated). Each request is the
+asker's own Job, and the agent serves it as itself, its tool calls under its
+own `config.caps`, so `caps` is what the owner offers everyone the agent
+admits; set it as tightly as the public should get, or publish a dedicated
+public agent. An external agent's backend acts with its controller's
+authority, so admitting a caller to one admits it to that backend. Task calls
+reach only the asker's own tasks for that agent.
+
+`a2a: {public: true}` publishes the card; it admits nobody. `accepts:
+"anyone"` lets anonymous callers ask. They ask as the venue's public
+principal when public access is enabled. The target's `accepts: "anyone"`
+provides the action authority; the bound endpoint needs no `invoke` grant.
+Following tasks still needs `crud/read` on the public principal's jobs,
+which the read-only public default grants.
+Every anonymous caller is that one principal, so they share its jobs: under a
+read-only scope any of them can read an anonymous task by its id, and none can
+cancel it. An older config with `a2a.caps` on a public agent reads as
+`accepts: "anyone"`; `a2a.caps` bounds nothing, and beside an `accepts` that
+says otherwise it is refused at create and update. Wire method names are
+SDK-style (`SendMessage`, not `message/send`). The full addressing, discovery
+and publication model is in [A2A_AGENTS.md](./A2A_AGENTS.md), the
+implementation companion to COG-14; who may ask an agent and what it does then
+is in [A2A_INTERACTION_AUTHORITY.md](./A2A_INTERACTION_AUTHORITY.md).
 
 Minimal authenticated per-agent request:
 
@@ -2939,8 +3228,8 @@ curl -sS "$AGENT_URL" \
 
 The result is an A2A Task. Poll its `id` at the same `AGENT_URL` with
 `{"jsonrpc":"2.0","id":"get-1","method":"GetTask","params":{"id":"<task-id>"}}`.
-The `Authorization` header may be omitted only when the agent is explicitly
-published with an `a2a.caps` scope that permits the interaction.
+The `Authorization` header may be omitted only when the agent accepts
+`"anyone"` and `auth.public.caps` lets anonymous callers ask.
 
 `SendMessage` never waits for the agent turn to finish. It returns the current
 Task snapshot as soon as the durable Job has been submitted: Task `id` is the
@@ -3029,12 +3318,15 @@ Top-level keys resolve as follows:
 
 Each named secret overwrites any existing value under that name for that user — config is the source of truth at launch. Names not listed are left untouched. Per-secret failures log a warning but do not fail startup. Values are never logged.
 
-A user, and the agents acting in its namespace, use the user's own secrets as
-of right: a reference a caller writes (`s/NAME` in an input, `bearerSecret`,
-`secretHeaders`, a `{s/NAME}` url placeholder, an operation's `secretKey`
-default) names the caller's own secret, which it may send anywhere the SSRF
-guard allows. Using anyone else's is an action on `<owner>/s/NAME` requiring
-the `secret/use` ability, checked wherever a secret is resolved. Another
+Using a secret is an action on `<owner>/s/NAME` requiring the `secret/use`
+ability, checked wherever a secret is resolved, whoever names it: the caller
+(`s/NAME` in an input, `bearerSecret`, `secretHeaders`, a `{s/NAME}` url
+placeholder) or the operation it invokes (an operation's `secretKey` default,
+an MCP bridge's `auth`). A plain `s/NAME` is the caller's own secret. A user
+holds the ability over its own secrets and may send them anywhere the SSRF
+guard allows; an agent holds it as far as its caps reach, and its harness as
+far as its controller's authority does (UCAN.md §5.4); a delegate acting for
+the user (`user/sudo`) needs a grant like anyone else. Another
 principal's secret is named as `<did>/s/NAME` and needs a `secret/use` grant
 from its owner, which may be bound to a destination: a UCAN whose capability
 carries `nb: {url: "https://api.example/"}` lets the holder use the secret
@@ -3045,8 +3337,9 @@ a grant says so.
 The venue's own secrets are the `"venue"` store above plus the venue process
 environment under the same conventional names (`ANTHROPIC_API_KEY`,
 `OPENAI_API_KEY`, etc.), which supports process/container secret injection
-without persisting a credential in Covia config. Venue-owned agents and
-operations use them as their own; anyone else needs a grant from the venue.
+without persisting a credential in Covia config. The venue uses them as its
+own, and its agents as far as their caps reach; anyone else needs a grant from
+the venue.
 To share a key with every caller, provision it under `"public"` and grant its
 use in `auth.public.caps`, bound to the provider:
 

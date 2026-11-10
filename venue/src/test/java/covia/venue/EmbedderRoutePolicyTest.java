@@ -32,12 +32,15 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import covia.api.Fields;
 import covia.exception.AuthException;
+import covia.exception.NotSupportedException;
 import covia.grid.auth.VenueAuth;
 import covia.venue.server.AuthMiddleware;
+import covia.venue.server.RequestLog;
 import covia.venue.server.VenueServer;
 import io.javalin.config.RoutesConfig;
 import io.javalin.http.BadRequestResponse;
 import io.javalin.http.MethodNotAllowedResponse;
+import io.javalin.router.Endpoint;
 import io.javalin.security.RouteRole;
 
 /**
@@ -60,16 +63,20 @@ class EmbedderRoutePolicyTest {
 	private static final String LIMITED = "/api/getmine/limited";
 	private static final String FAILURE = "/api/getmine/failure";
 	private static final String BAD_REQUEST = "/api/getmine/bad-request";
+	private static final String REFUSAL = "/api/getmine/refusal";
 	private static final String METHOD_REJECTED = "/api/getmine/method-rejected";
 	private static final String CUSTOM_FAILURE = "/api/getmine/custom-failure";
 	private static final String CUSTOM_AUTH = "/api/getmine/custom-auth";
 	private static final String API_KEY_AUTH = "/api/getmine/api-key-auth";
+	private static final String ROLE_GUARDED = "/api/getmine/role-guarded";
+	private static final String PATH_GUARDED = "/api/getmine/path-guarded";
 	private static final String AUTHENTICATED_IDENTITY_HEADER =
 		"X-GetMine-Authenticated-Identity";
 	private static final String VENUE_USER_HEADER = "X-GetMine-Venue-User";
 
 	private enum GetMineRole implements RouteRole {
-		ADMIN
+		ADMIN,
+		GUARDED
 	}
 
 	private static final class GetMineException extends RuntimeException {
@@ -111,22 +118,21 @@ class EmbedderRoutePolicyTest {
 		assertResponse(200, "anonymous", get(strictServer, RAW, "not-a-jwt"));
 		assertResponse(200, "product",
 			get(strictServer, PRODUCT_ROLE, "not-a-jwt"));
-		assertNull(strictServer.getEngine().getVenueState().users().get(did));
+		assertNull(strictServer.getEngine().getVenueState().users().user(did));
 
 		assertEquals(401, get(strictServer, IDENTITY, null).statusCode());
 		assertEquals(401,
 			get(strictServer, IDENTITY, "not-a-jwt").statusCode());
 		assertEquals(401, get(strictServer, IDENTITY,
-			VenueAuth.keyPair(key,
-				UCAN.toDIDKey(AKeyPair.generate().getAccountKey()).toString(),
-				300).mintToken()).statusCode());
+			VenueAuth.keyPair(key, 300).mintToken(
+				UCAN.toDIDKey(AKeyPair.generate().getAccountKey()).toString())).statusCode());
 
 		assertResponse(200, did.toString(), get(strictServer, IDENTITY, token));
-		assertNull(strictServer.getEngine().getVenueState().users().get(did),
+		assertNull(strictServer.getEngine().getVenueState().users().user(did),
 			"identity verification alone must not provision venue state");
 
 		assertEquals(403, get(strictServer, USER, token).statusCode());
-		assertNull(strictServer.getEngine().getVenueState().users().get(did));
+		assertNull(strictServer.getEngine().getVenueState().users().user(did));
 
 		strictServer.getEngine().getVenueState().users().create(did);
 		assertResponse(200, did.toString(), get(strictServer, USER, token));
@@ -135,11 +141,8 @@ class EmbedderRoutePolicyTest {
 	@Test
 	void namedCredentialExposesAuthenticatorAndMappedVenueUser()
 			throws Exception {
-		String token = VenueAuth.namedKeyPair(
-			operatorKey,
-			operatorDID.toString(),
-			strictServer.getEngine().getDIDString().toString(),
-			300).mintToken();
+		String token = VenueAuth.namedKeyPair(operatorKey, operatorDID.toString(), 300)
+			.mintToken(strictServer.getEngine().getDIDString().toString());
 
 		assertNotEquals(operatorKeyDID, operatorDID);
 		assertResponse(200, operatorKeyDID + "|" + operatorDID,
@@ -151,10 +154,10 @@ class EmbedderRoutePolicyTest {
 		AKeyPair key = AKeyPair.generate();
 		AString root = UCAN.toDIDKey(key.getAccountKey());
 		AString subject = Strings.create(root + ":u:alice:g:worker");
-		String token = VenueAuth.namedKeyPair(key, subject.toString(),
-			strictServer.getEngine().getDIDString().toString(), 300).mintToken();
+		String token = VenueAuth.namedKeyPair(key, subject.toString(), 300)
+			.mintToken(strictServer.getEngine().getDIDString().toString());
 		assertResponse(200, root + "|" + subject, get(strictServer, IDENTITIES, token));
-		assertNull(strictServer.getEngine().getVenueState().users().get(subject));
+		assertNull(strictServer.getEngine().getVenueState().users().user(subject));
 		// Neither a known installation nor a known owner grants native user admission.
 		strictServer.getEngine().getVenueState().users().create(root);
 		strictServer.getEngine().getVenueState().users().create(Strings.create(root + ":u:alice"));
@@ -174,7 +177,7 @@ class EmbedderRoutePolicyTest {
 		assertResponse(200, authenticatedIdentity + "|" + venueUser,
 			getWithIdentityHeaders(strictServer, CUSTOM_AUTH,
 				authenticatedIdentity, venueUser));
-		assertNull(strictServer.getEngine().getVenueState().users().get(venueUser),
+		assertNull(strictServer.getEngine().getVenueState().users().user(venueUser),
 			"publishing extender-owned auth context must not admit a venue user");
 		assertEquals(401,
 			get(strictServer, CUSTOM_AUTH, null).statusCode());
@@ -182,11 +185,8 @@ class EmbedderRoutePolicyTest {
 
 	@Test
 	void extenderCanAuthenticateAlternateCredentialCarrier() throws Exception {
-		String token = VenueAuth.namedKeyPair(
-			operatorKey,
-			operatorDID.toString(),
-			"did:web:embedder.example",
-			300).mintToken();
+		String token = VenueAuth.namedKeyPair(operatorKey, operatorDID.toString(), 300)
+			.mintToken("did:web:embedder.example");
 
 		assertResponse(200, operatorKeyDID + "|" + operatorDID,
 			getWithApiKey(strictServer, API_KEY_AUTH, token));
@@ -206,7 +206,21 @@ class EmbedderRoutePolicyTest {
 		assertEquals(403,
 			post(strictServer, "/mcp", token, "{}").statusCode(),
 			"native MCP must still reject an unknown authenticated DID");
-		assertNull(strictServer.getEngine().getVenueState().users().get(did));
+		assertNull(strictServer.getEngine().getVenueState().users().user(did));
+	}
+
+	/**
+	 * Routing ignores a trailing slash (EMBEDDING.md, Routes), so a filter that
+	 * keys on the matched route, by its roles or its registered path, sees every
+	 * request that reaches the route.
+	 */
+	@Test
+	void filtersKeyedOnTheMatchedRouteSeeEveryPathThatReachesIt() throws Exception {
+		assertResponse(200, "anonymous", get(strictServer, RAW + "/", null));
+		for (String route : List.of(ROLE_GUARDED, PATH_GUARDED)) {
+			assertResponse(403, "guarded", get(strictServer, route, null));
+			assertResponse(403, "guarded", get(strictServer, route + "/", null));
+		}
 	}
 
 	@Test
@@ -218,27 +232,52 @@ class EmbedderRoutePolicyTest {
 			denied.headers().firstValue("Retry-After").orElse(null));
 	}
 
+	/**
+	 * An unexpected failure names only its type and the request, whose log line
+	 * holds the message: a message may carry a remote's text or a credential.
+	 */
 	@Test
-	void unexpectedErrorsUseJavalinRepresentationsWithDiagnostics()
+	void unexpectedErrorsNameTheirTypeAndRequestOnly()
 			throws Exception {
 		// The venue logs the unhandled exception at ERROR with its stack —
 		// correct in production; here it is provoked on purpose.
-		TestLogs.quiet(VenueServer.class, () -> {
+		TestLogs.quiet(covia.exception.FaultException.class, () -> {
 			HttpResponse<String> json = getAccept(
 				strictServer, FAILURE, "application/json");
 			assertEquals(500, json.statusCode(), json.body());
 			assertContentType("application/json", json);
 			assertTrue(json.body().contains("\"status\": 500"), json.body());
 			assertTrue(json.body().contains("IllegalStateException"), json.body());
+			assertTrue(json.body().contains(requestId(json)), json.body());
+			assertFalse(json.body().contains("diagnostic"), json.body());
 
 			HttpResponse<String> html = getAccept(
 				strictServer, FAILURE, "text/html");
 			assertEquals(500, html.statusCode(), html.body());
 			assertContentType("text/html", html);
-			assertTrue(html.body().contains(
-				"extension &lt;failed&gt; &amp; diagnostic"), html.body());
-			assertFalse(html.body().contains("extension <failed>"), html.body());
+			assertTrue(html.body().contains("IllegalStateException"), html.body());
+			assertTrue(html.body().contains(requestId(html)), html.body());
+			assertFalse(html.body().contains("diagnostic"), html.body());
 		});
+	}
+
+	/** A refusal the route does not answer itself is a 400 with its reason, escaped in HTML. */
+	@Test
+	void typedRefusalsAnswerBadRequestWithTheirReason() throws Exception {
+		HttpResponse<String> json = getAccept(strictServer, REFUSAL, "application/json");
+		assertEquals(400, json.statusCode(), json.body());
+		assertContentType("application/json", json);
+		assertTrue(json.body().contains("refused"), json.body());
+
+		HttpResponse<String> html = getAccept(strictServer, REFUSAL, "text/html");
+		assertEquals(400, html.statusCode(), html.body());
+		assertContentType("text/html", html);
+		assertTrue(html.body().contains("&lt;refused&gt;"), html.body());
+		assertFalse(html.body().contains("<refused>"), html.body());
+	}
+
+	private static String requestId(HttpResponse<String> response) {
+		return response.headers().firstValue(RequestLog.HEADER).orElseThrow();
 	}
 
 	@Test
@@ -277,7 +316,7 @@ class EmbedderRoutePolicyTest {
 
 	private VenueServer launch() {
 		return VenueServer.launch(Maps.of(
-			Config.PORT, 0,
+			Config.PORT, 0, Config.STORE, "memory",
 			Config.HOSTNAME, "embedder.example",
 			Config.USERS, Maps.of(
 				Config.AUTO_CREATE, false,
@@ -290,8 +329,7 @@ class EmbedderRoutePolicyTest {
 				"rps", 1L,
 				"burst", 1L),
 			Config.AUTH, Maps.of(
-				Config.PUBLIC, Maps.of(Config.ENABLED, true),
-				Config.AUDIENCE, "require"),
+				Config.PUBLIC, Maps.of(Config.ENABLED, true)),
 			Fields.MCP, Maps.of(
 				Config.AUTH, Maps.of(Config.REQUIRED, true))),
 			List.of(this::registerRoutes));
@@ -317,6 +355,9 @@ class EmbedderRoutePolicyTest {
 		routes.get(LIMITED, ctx -> ctx.result("ok"), RATE_LIMITED);
 		routes.get(FAILURE, ctx -> {
 			throw new IllegalStateException("extension <failed> & diagnostic");
+		});
+		routes.get(REFUSAL, ctx -> {
+			throw new NotSupportedException("<refused> by the extension");
 		});
 		routes.get(BAD_REQUEST, ctx -> {
 			throw new BadRequestResponse("bad extension <input>",
@@ -359,6 +400,17 @@ class EmbedderRoutePolicyTest {
 				ctx.status(401).result(e.getMessage());
 			}
 		}, GetMineRole.ADMIN);
+
+		routes.get(ROLE_GUARDED, ctx -> ctx.result("reached"), GetMineRole.GUARDED);
+		routes.get(PATH_GUARDED, ctx -> ctx.result("reached"));
+		routes.beforeMatched(ctx -> {
+			Endpoint matched = ctx.endpoints().matchedHttpEndpoint();
+			if (ctx.routeRoles().contains(GetMineRole.GUARDED)
+					|| (matched != null && PATH_GUARDED.equals(matched.path))) {
+				ctx.status(403).result("guarded");
+				ctx.skipRemainingHandlers();
+			}
+		});
 	}
 
 	private HttpResponse<String> get(VenueServer server, String path,
@@ -423,8 +475,7 @@ class EmbedderRoutePolicyTest {
 	}
 
 	private static String tokenFor(AKeyPair key, VenueServer server) {
-		return VenueAuth.keyPair(key,
-			server.getEngine().getDIDString().toString(), 300).mintToken();
+		return VenueAuth.keyPair(key, 300).mintToken(server.getEngine().getDIDString().toString());
 	}
 
 	private static String base(VenueServer server) {

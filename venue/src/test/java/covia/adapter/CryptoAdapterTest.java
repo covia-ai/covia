@@ -10,12 +10,8 @@ import java.security.spec.X509EncodedKeySpec;
 import java.util.Base64;
 import java.util.concurrent.CompletableFuture;
 
-import org.junit.jupiter.api.AfterAll;
-import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.parallel.Execution;
-import org.junit.jupiter.api.parallel.ExecutionMode;
 
 import convex.auth.jwt.JWT;
 import convex.auth.ucan.Capability;
@@ -42,21 +38,16 @@ import covia.grid.Job;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.SecretStore;
+import covia.venue.TestEngine;
 
 /** Known-answer, interoperability and authority tests through real Jobs. */
-@Execution(ExecutionMode.SAME_THREAD) // Lifecycle test temporarily disables this class's shared adapter.
 class CryptoAdapterTest {
 
 	private static final String PHRASE = "abandon ".repeat(11) + "about";
-	private static Engine engine;
+	private Engine engine = TestEngine.ENGINE;
 	private RequestContext ctx;
 	private AKeyPair identity;
 
-	@BeforeAll static void start() {
-		engine = Engine.createTemp(null);
-		Engine.addDemoAssets(engine);
-	}
-	@AfterAll static void stop() { if (engine != null) engine.close(); }
 	@BeforeEach void caller() {
 		identity = AKeyPair.generate();
 		ctx = RequestContext.of(UCAN.toDIDKey(identity.getAccountKey()));
@@ -599,25 +590,104 @@ class CryptoAdapterTest {
 		}
 	}
 
-	@Test void discoveryMirrorsAndLifecycle() {
-		var adapter = engine.getAdapter("crypto");
-		assertEquals(13, adapter.getOperations().count());
-		for (AString op : adapter.getOperations().getKeys()) {
-			ACell metadata = engine.jobs().invokeOperation("v/ops/covia/read", Maps.of("path", "v/ops/crypto/" + op), ctx).awaitResult(5000);
-			ACell mirror = engine.jobs().invokeOperation("v/ops/covia/read", Maps.of("path", "v/adapters/crypto/ops/" + op), ctx).awaitResult(5000);
-			assertEquals(metadata, mirror);
-			assertEquals(adapter.getOperations().get(op), RT.getIn(metadata, "value"));
-			assertEquals(Strings.create("object"), RT.getIn(metadata, "value", "operation", "input", "type"));
+	@Test void storedTokenDecodeNeverReturnsItsBearerSignature() {
+		AString token = JWT.signPublic(Maps.of("sub", "stored"), identity);
+		String segment = token.toString().substring(token.toString().lastIndexOf('.') + 1);
+		String signature = Blob.wrap(JWT.parse(token).getSignatureBytes()).toHexString();
+		put("bearer", token.toString());
+		RequestContext owner = ctx;
+		String ref = owner.getUserDID() + "/s/bearer";
+		AKeyPair bob = AKeyPair.generate();
+		RequestContext other = RequestContext.of(UCAN.toDIDKey(bob.getAccountKey()));
+		engine.getVenueState().users().ensure(other.getUserDID());
+		UCAN grant = UCAN.create(identity, bob.getAccountKey(), System.currentTimeMillis() / 1000 + 3600,
+			Vectors.of(Capability.create(Strings.create(ref), Abilities.SECRET_USE)), Vectors.empty());
+		// The owner, the owner's agent (barred from extraction) and a grantee using it
+		for (RequestContext caller : new RequestContext[] {owner,
+				RequestContext.ofAgent(owner.getUserDID(), Strings.create("helper")),
+				other.withProofs(Vectors.of(grant.toMap()))}) {
+			ctx = caller;
+			ACell decoded = run("jwt-decode", Maps.of("tokenSecret", ref));
+			assertEquals(Strings.create("stored"), RT.getIn(decoded, "claims", "sub"));
+			assertNull(RT.getIn(decoded, "signature"));
+			Job job = job("jwt-decode", Maps.of("tokenSecret", ref));
+			job.awaitResult(5000);
+			assertFalse(job.getData().toString().contains(signature));
+			assertFalse(job.getData().toString().contains(segment));
 		}
-		assertEquals(CVMBool.TRUE, RT.getIn(engine.jobs().invokeOperation("v/ops/covia/read",
-			Maps.of("path", "v/skills/crypto/crypto"), ctx).awaitResult(5000), "exists"));
-		run("generate-key", Maps.of("name", "survives"));
-		String seed = engine.resolveSecret("s/survives", ctx);
+		ctx = owner;
+		assertNotNull(RT.getIn(run("jwt-decode", Maps.of("token", token)), "signature"),
+			"an inline token's signature is the caller's already");
+	}
+
+	@Test void deriveKeyNeverDerivesFromAnotherPrincipalsSecrets() {
+		put("phrase", PHRASE);
+		put("pass", "TREZOR");
+		RequestContext alice = ctx;
+		String phraseRef = alice.getUserDID() + "/s/phrase";
+		String passRef = alice.getUserDID() + "/s/pass";
+		AKeyPair bob = AKeyPair.generate();
+		ctx = RequestContext.of(UCAN.toDIDKey(bob.getAccountKey()));
+		put("own-phrase", PHRASE);
+		UCAN grant = UCAN.create(identity, bob.getAccountKey(), System.currentTimeMillis() / 1000 + 3600,
+			Vectors.of(Capability.create(Strings.create(phraseRef), Abilities.SECRET_USE),
+				Capability.create(Strings.create(passRef), Abilities.SECRET_USE)), Vectors.empty());
+		ctx = ctx.withProofs(Vectors.of(grant.toMap()));
+		// The grant is real: Bob may use Alice's phrase...
+		assertEquals(CVMBool.TRUE, RT.getIn(run("validate-mnemonic", Maps.of("mnemonic", phraseRef)), "valid"));
+		// ...but never hold a key derived from it, nor one that would let him guess her passphrase
+		assertEquals(CryptoAdapter.OWN_SECRETS_ONLY, failure("derive-key",
+			Maps.of("mnemonic", phraseRef, "name", "stolen")).getErrorMessage());
+		assertEquals(CryptoAdapter.OWN_SECRETS_ONLY, failure("derive-key",
+			Maps.of("mnemonic", "s/own-phrase", "passphraseSecret", passRef, "name", "guessable")).getErrorMessage());
+		assertNull(engine.resolveSecret("s/stolen", ctx));
+		assertNull(engine.resolveSecret("s/guessable", ctx));
+		run("derive-key", Maps.of("mnemonic", "s/own-phrase", "name", "mine"));
+		assertNotNull(engine.resolveSecret("s/mine", ctx));
+		// Alice names her own secrets in either form
+		ctx = alice;
+		run("derive-key", Maps.of("mnemonic", phraseRef, "passphraseSecret", passRef, "name", "hers"));
+		assertNotNull(engine.resolveSecret("s/hers", alice));
+	}
+
+	@Test void ownSecretMeansTheCallersStoreAndNeverThePublicOne() {
+		String own = ctx.getUserDID().toString();
+		assertTrue(engine.isOwnSecretRef("s/x", ctx));
+		assertTrue(engine.isOwnSecretRef("x", ctx));
+		assertTrue(engine.isOwnSecretRef(own + "/s/x", ctx));
+		assertTrue(engine.isOwnSecretRef(own + "/s/x", RequestContext.ofAgent(ctx.getUserDID(), Strings.create("helper"))));
+		assertFalse(engine.isOwnSecretRef(UCAN.toDIDKey(AKeyPair.generate().getAccountKey()) + "/s/x", ctx));
+		assertFalse(engine.isOwnSecretRef(own + "/w/y/s/x", ctx), "a path under a DID names no store");
+		assertFalse(engine.isOwnSecretRef("s/x", RequestContext.of(Strings.create(engine.getDIDString() + ":public"))));
+	}
+
+	/** On a venue of its own, since it disables the adapter. */
+	@Test void discoveryMirrorsAndLifecycle() {
+		engine = Engine.createTemp(null);
 		try {
-			assertTrue(engine.disableAdapter("crypto"));
-			assertThrows(Exception.class, () -> run("public-key", Maps.of("seed", "s/survives")));
-		} finally { engine.enableAdapter("crypto"); }
-		assertEquals(seed, engine.resolveSecret("s/survives", ctx));
-		run("public-key", Maps.of("seed", "s/survives"));
+			Engine.addDemoAssets(engine);
+			engine.getVenueState().users().ensure(ctx.getUserDID());
+			var adapter = engine.getAdapter("crypto");
+			for (String op : new String[] {"sign", "generate-key", "add-key", "remove-key", "list-keys"}) {
+				assertNotNull(adapter.getOperations().get(Strings.create(op)), op);
+			}
+			for (AString op : adapter.getOperations().getKeys()) {
+				ACell metadata = engine.jobs().invokeOperation("v/ops/covia/read", Maps.of("path", "v/ops/crypto/" + op), ctx).awaitResult(5000);
+				ACell mirror = engine.jobs().invokeOperation("v/ops/covia/read", Maps.of("path", "v/adapters/crypto/ops/" + op), ctx).awaitResult(5000);
+				assertEquals(metadata, mirror);
+				assertEquals(adapter.getOperations().get(op), RT.getIn(metadata, "value"));
+				assertEquals(Strings.create("object"), RT.getIn(metadata, "value", "operation", "input", "type"));
+			}
+			assertEquals(CVMBool.TRUE, RT.getIn(engine.jobs().invokeOperation("v/ops/covia/read",
+				Maps.of("path", "v/skills/crypto/crypto"), ctx).awaitResult(5000), "exists"));
+			run("generate-key", Maps.of("name", "survives"));
+			String seed = engine.resolveSecret("s/survives", ctx);
+			try {
+				assertTrue(engine.disableAdapter("crypto"));
+				assertThrows(Exception.class, () -> run("public-key", Maps.of("seed", "s/survives")));
+			} finally { engine.enableAdapter("crypto"); }
+			assertEquals(seed, engine.resolveSecret("s/survives", ctx));
+			run("public-key", Maps.of("seed", "s/survives"));
+		} finally { engine.close(); }
 	}
 }

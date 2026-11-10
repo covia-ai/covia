@@ -1,6 +1,6 @@
 {
   "name": "Delete DLFS Drive",
-  "description": "Delete a DLFS drive owned by the caller. All files in the drive are removed.",
+  "description": "Delete a DLFS drive. All files in the drive are removed.",
   "creator": "Covia",
   "operation": {
     "adapter": "dlfs:deleteDrive",
@@ -9,9 +9,9 @@
     "input": {
       "type": "object",
       "properties": {
-        "name": { "type": "string", "description": "Drive name to delete" }
-      },
-      "required": ["name"]
+        "drive": { "type": "string", "description": "Drive name or authorised DID-scoped drive reference" },
+        "name": { "type": "string", "description": "Alias for a bare drive name" }
+      }
     },
     "output": {
       "type": "object",

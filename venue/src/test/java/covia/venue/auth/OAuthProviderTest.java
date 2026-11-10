@@ -32,6 +32,7 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
+import covia.exception.ConfigurationException;
 import covia.venue.Config;
 import covia.venue.SecretStore;
 import covia.venue.User;
@@ -61,7 +62,7 @@ public class OAuthProviderTest {
 	@BeforeAll
 	public void setup() throws Exception {
 		server = VenueServer.launch(Maps.of(
-			Config.PORT, 0,
+			Config.PORT, 0, Config.STORE, "memory",
 			Config.BIND_ADDRESS, Strings.create("127.0.0.1"),
 			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
 			Config.RATE_LIMIT, Maps.of(Config.ENABLED, false),
@@ -344,7 +345,7 @@ public class OAuthProviderTest {
 		try {
 			r.run();
 			org.junit.jupiter.api.Assertions.fail("expected failure: " + because);
-		} catch (IllegalArgumentException expected) {
+		} catch (ConfigurationException expected) {
 			// good
 		}
 	}

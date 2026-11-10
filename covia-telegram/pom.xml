@@ -5,7 +5,7 @@
 	<parent>
 		<groupId>ai.covia</groupId>
 		<artifactId>covia</artifactId>
-		<version>0.10.0</version>
+		<version>0.11.0</version>
 	</parent>
 	<artifactId>covia-telegram</artifactId>
 
@@ -24,6 +24,15 @@
 			<artifactId>venue</artifactId>
 			<version>${project.version}</version>
 			<scope>provided</scope>
+		</dependency>
+
+		<!-- The shared test fixture -->
+		<dependency>
+			<groupId>ai.covia</groupId>
+			<artifactId>venue</artifactId>
+			<version>${project.version}</version>
+			<type>test-jar</type>
+			<scope>test</scope>
 		</dependency>
 
 		<!-- Telegram Bot API client (OkHttp + Gson + Kotlin stdlib), shaded

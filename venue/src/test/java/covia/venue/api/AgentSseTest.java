@@ -41,7 +41,7 @@ import covia.grid.Job;
 import covia.grid.Status;
 import covia.grid.auth.VenueAuth;
 import covia.grid.client.VenueHTTP;
-import covia.venue.AgentState;
+import covia.venue.Agent;
 import covia.venue.TestServer;
 
 /**
@@ -188,7 +188,7 @@ public class AgentSseTest {
 			assertNotNull(initial, "initial status frame");
 			assertEquals("status", initial.event());
 			assertEquals("status", initial.type());
-			assertEquals(AgentState.SLEEPING.toString(), initial.status());
+			assertEquals(Agent.SLEEPING.toString(), initial.status());
 			assertEquals(Strings.create(id), RT.getIn(initial.data(), Fields.AGENT_ID));
 			assertNotNull(RT.getIn(initial.data(), Fields.ADDRESS));
 			assertNotNull(safe.readUntil(f -> true).get(10, TimeUnit.SECONDS));
@@ -237,7 +237,7 @@ public class AgentSseTest {
 			assertEquals(null, ended.get(10, TimeUnit.SECONDS), "the stream ends after the terminal frame");
 			Frame lastFrame = full.frames.get(full.frames.size() - 1);
 			assertEquals("status", lastFrame.event());
-			assertEquals(AgentState.TERMINATED.toString(), lastFrame.status());
+			assertEquals(Agent.TERMINATED.toString(), lastFrame.status());
 			assertTrue(full.closed);
 		} finally {
 			full.response.body().close();
@@ -258,7 +258,7 @@ public class AgentSseTest {
 			CompletableFuture<Frame> ended = s.readUntil(f -> false);
 			assertEquals(null, ended.get(10, TimeUnit.SECONDS), "one frame, then close");
 			assertEquals(1, s.frames.size());
-			assertEquals(AgentState.TERMINATED.toString(), s.frames.get(0).status());
+			assertEquals(Agent.TERMINATED.toString(), s.frames.get(0).status());
 		} finally {
 			s.response.body().close();
 		}

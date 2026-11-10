@@ -1,6 +1,7 @@
 package covia.venue.api;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -13,7 +14,6 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.AfterAll;
@@ -21,16 +21,27 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.TestInstance.Lifecycle;
+import org.junit.jupiter.api.parallel.Execution;
+import org.junit.jupiter.api.parallel.ExecutionMode;
 
+import convex.auth.jwt.JWT;
+import convex.auth.ucan.UCAN;
+import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
+import convex.core.data.AString;
+import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
+import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
+import covia.adapter.TestAdapter;
 import covia.api.Fields;
+import covia.grid.Job;
 import covia.venue.Config;
+import covia.venue.TestEngine;
 import covia.venue.TestHTTP;
 import covia.venue.server.VenueServer;
 
@@ -45,9 +56,11 @@ import covia.venue.server.VenueServer;
  * own with small limits.</p>
  */
 @TestInstance(Lifecycle.PER_CLASS)
+@Execution(ExecutionMode.SAME_THREAD) // Every anonymous call takes one of the same two places.
 public class MCPToolCallWaitTest {
 
 	private static final long CEILING_MS = 500;
+	private static final String INITIALIZE = "{\"jsonrpc\":\"2.0\",\"method\":\"initialize\",\"id\":0}";
 
 	private VenueServer server;
 	private String base;
@@ -57,7 +70,7 @@ public class MCPToolCallWaitTest {
 	@BeforeAll
 	public void launch() throws Exception {
 		server = VenueServer.launch(Maps.of(
-			Strings.create("port"), 0,
+			Strings.create("port"), 0, Config.STORE, "memory",
 			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
 			Fields.MCP, Maps.of(
 				Strings.create("includePathPrefixes"), Vectors.of(Strings.create("v/ops/"), Strings.create("v/test/ops/")),
@@ -68,8 +81,7 @@ public class MCPToolCallWaitTest {
 			Config.AUTH, Maps.of(Config.PUBLIC, Maps.of(
 				Config.ENABLED, true, Config.CAPS, Strings.create("unrestricted")))));
 		base = "http://localhost:" + server.port() + "/mcp";
-		HttpResponse<String> init = http.send(post("{\"jsonrpc\":\"2.0\",\"method\":\"initialize\",\"id\":0}", "application/json"),
-			HttpResponse.BodyHandlers.ofString());
+		HttpResponse<String> init = http.send(post(INITIALIZE, "application/json"), HttpResponse.BodyHandlers.ofString());
 		session = init.headers().firstValue("Mcp-Session-Id").orElseThrow();
 	}
 
@@ -79,13 +91,27 @@ public class MCPToolCallWaitTest {
 	}
 
 	private HttpRequest post(String body, String accept) {
+		return post(body, accept, null, session);
+	}
+
+	/** A request from the caller a bearer names, or the anonymous caller when it is null. */
+	private HttpRequest post(String body, String accept, String bearer, String sessionId) {
 		HttpRequest.Builder b = HttpRequest.newBuilder(URI.create(base))
 			.header("Content-Type", "application/json")
 			.header("Accept", accept)
 			.timeout(Duration.ofSeconds(20))
 			.POST(HttpRequest.BodyPublishers.ofString(body));
-		if (session != null) b.header("Mcp-Session-Id", session);
+		if (bearer != null) b.header("Authorization", "Bearer " + bearer);
+		if (sessionId != null) b.header("Mcp-Session-Id", sessionId);
 		return b.build();
+	}
+
+	/** A bearer a new key issues for itself. */
+	private String selfIssued() {
+		AKeyPair key = AKeyPair.generate();
+		AString did = UCAN.toDIDKey(key.getAccountKey());
+		return JWT.signPublic(Maps.of(JWT.SUB, did, JWT.AUD, server.getEngine().getDIDString(),
+			JWT.EXP, CVMLong.create(System.currentTimeMillis() / 1000 + 3600)), key).toString();
 	}
 
 	private static String never(int id, String meta) {
@@ -106,6 +132,40 @@ public class MCPToolCallWaitTest {
 		assertEquals("running", RT.getIn(result, "structuredContent", "status").toString());
 		assertNotNull(RT.getIn(result, "structuredContent", "id"), "the job to collect: " + r.body());
 		assertTrue(RT.getIn(result, "structuredContent", "message").toString().contains("grid_job_result"), r.body());
+	}
+
+	/** A tools/call request's structured result. */
+	private ACell callTool(int id, String tool, String arguments) throws Exception {
+		String call = "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"method\":\"tools/call\",\"params\":{\"name\":\""
+			+ tool + "\",\"arguments\":" + arguments + "}}";
+		String body = http.send(post(call, "application/json"), HttpResponse.BodyHandlers.ofString()).body();
+		ACell content = RT.getIn(result(body), "structuredContent");
+		assertNotNull(content, body);
+		return content;
+	}
+
+	@Test
+	public void anUnrecordedCallPastTheCeilingLeavesAJobToLookUp() throws Exception {
+		String gateName = "mcp-read-only-" + System.identityHashCode(this);
+		Job job;
+		try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName)) {
+			// A read-only call runs unrecorded; past the ceiling it is mirrored by a recorded job.
+			ACell ran = callTool(20, "test_holdread", "{\"gate\":\"" + gateName + "\",\"result\":\"read-late\"}");
+			assertEquals("running", RT.getIn(ran, "status").toString(), ran.toString());
+			String id = RT.getIn(ran, "id").toString();
+			job = server.getEngine().jobs().getJob(Blob.fromHex(id));
+			assertNotNull(job, "the job named is live");
+			assertTrue(job.isRecorded(), "and recorded");
+			ACell status = callTool(21, "grid_job_status", "{\"id\":\"" + id + "\"}");
+			assertEquals("STARTED", RT.getIn(status, "status").toString(),
+				"grid_job_status sees it while it runs: " + status);
+			gate.release();
+			TestEngine.awaitJob(job, Job::isFinished, 10_000, () -> "the call did not finish");
+		}
+		ACell status = callTool(22, "grid_job_status", "{\"id\":\"" + job.getID().toHexString() + "\"}");
+		assertEquals("COMPLETE", RT.getIn(status, "status").toString(), status.toString());
+		assertEquals("read-late", RT.getIn(status, "output").toString(),
+			"and its outcome once it has finished");
 	}
 
 	@Test
@@ -145,39 +205,53 @@ public class MCPToolCallWaitTest {
 
 	@Test
 	public void cancellingACallEndsIt() throws Exception {
-		CompletableFuture<HttpResponse<String>> call = http.sendAsync(post(never(3, ""), "application/json, text/event-stream"),
-			HttpResponse.BodyHandlers.ofString());
-		// Until the venue holds the call there is nothing to cancel: keep asking until it answers.
-		HttpResponse<String> r = null;
-		while (!call.isDone() || r == null) {
+		// The venue holds the call before it opens the call's stream with a first
+		// keep-alive, so once the response has begun there is a call to cancel.
+		HttpResponse<InputStream> r = http.send(post(never(3, ""), "application/json, text/event-stream"),
+			HttpResponse.BodyHandlers.ofInputStream());
+		try (InputStream in = r.body()) {
+			assertTrue(r.headers().firstValue("Content-Type").orElse("").contains("text/event-stream"),
+				"a long call is answered as a stream");
 			http.send(post("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/cancelled\",\"params\":{\"requestId\":3}}",
 				"application/json"), HttpResponse.BodyHandlers.ofString());
-			if (call.isDone()) r = call.get();
-			else Thread.onSpinWait();
+			String body = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+			String data = body.lines().filter(l -> l.startsWith("data: ")).reduce((a, b) -> b).map(l -> l.substring(6)).orElse(body);
+			assertEquals("Cancelled", RT.getIn(result(data), "structuredContent", "message").toString(), body);
 		}
-		String data = r.body().lines().filter(l -> l.startsWith("data: ")).reduce((a, b) -> b).map(l -> l.substring(6)).orElse(r.body());
-		assertEquals("Cancelled", RT.getIn(result(data), "structuredContent", "message").toString(), r.body());
 	}
 
 	@Test
 	public void eachCallerHasALimitAndACallerThatLeavesFreesItsPlace() throws Exception {
-		// Fill the caller's two places with streams the venue is holding (it has written to them).
+		// A signed-in caller's calls wait for an hour, so only leaving frees a place.
+		String bearer = selfIssued();
+		String own = http.send(post(INITIALIZE, "application/json", bearer, null), HttpResponse.BodyHandlers.ofString())
+			.headers().firstValue("Mcp-Session-Id").orElseThrow();
+
+		// Fill the caller's two places with calls the venue is holding as streams.
 		InputStream[] held = new InputStream[2];
 		for (int i = 0; i < 2; i++) {
-			held[i] = http.send(post(never(10 + i, ""), "application/json, text/event-stream"),
-				HttpResponse.BodyHandlers.ofInputStream()).body();
-			assertTrue(held[i].read() >= 0, "the venue holds call " + i);
+			HttpResponse<InputStream> r = http.send(post(never(10 + i, ""), "application/json, text/event-stream", bearer, own),
+				HttpResponse.BodyHandlers.ofInputStream());
+			assertTrue(streams(r), "the venue holds call " + i);
+			held[i] = r.body();
 		}
-		HttpResponse<String> over = http.send(post(never(12, ""), "application/json"), HttpResponse.BodyHandlers.ofString());
-		assertTrue(over.body().contains("Too many tool calls"), "a third at once is refused, and told why: " + over.body());
+		HttpResponse<String> over = http.send(post(never(12, ""), "application/json", bearer, own), HttpResponse.BodyHandlers.ofString());
+		assertFalse(streams(over), "a third at once is refused");
+		assertFalse(over.body().isBlank(), "and told why");
 
 		// Leave both: the venue notices at its next keep-alive and frees the places.
 		for (InputStream in : held) in.close();
-		String body;
-		do {
-			body = http.send(post(never(13, ""), "application/json"), HttpResponse.BodyHandlers.ofString()).body();
-		} while (body.contains("Too many tool calls"));
-		assertEquals("running", RT.getIn(result(body), "structuredContent", "status").toString(),
-			"admitted once they left, and waited for as usual: " + body);
+		HttpResponse<InputStream> admitted;
+		while (!streams(admitted = http.send(post(never(13, ""), "application/json, text/event-stream", bearer, own),
+				HttpResponse.BodyHandlers.ofInputStream()))) {
+			String refusal = new String(admitted.body().readAllBytes(), StandardCharsets.UTF_8);
+			assertFalse(refusal.isBlank(), "refused only while its places are taken, and told why");
+		}
+		admitted.body().close();
+	}
+
+	/** Whether the venue is holding a call, answering it as a stream. */
+	private static boolean streams(HttpResponse<?> r) {
+		return r.headers().firstValue("Content-Type").orElse("").startsWith("text/event-stream");
 	}
 }

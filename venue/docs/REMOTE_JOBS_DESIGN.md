@@ -5,7 +5,7 @@ The implemented contract is in [JOBS.md](JOBS.md#remote-delegation). This docume
 also describes planned extensions; it does not claim they have all shipped.
 
 The first delivery implements unkeyed submit-once, durable handle recovery,
-protected saved authority and operation metadata, shared bounded observation,
+a connection kept in the job's entry for recovery, shared bounded observation,
 and conservative acceptance uncertainty. Synchronous adapters and simple
 requests remain valid without keys or delegation machinery. Transient/private
 jobs retain their existing recording policy. Optional submission keys,
@@ -74,26 +74,31 @@ removing the deadlines would leave work orphaned on restart.
 
 ## State and invariants
 
-Use one authoritative delegation descriptor inside the local Job's record,
-committed with its status/output. Do not maintain another competing execution
-status in the scheduler or adapter workspace. Proposed fields:
+Use one authoritative delegation descriptor per local Job, in two parts. What
+the caller can follow is on the Job's record, committed with its
+status/output; how the venue follows it is the venue's own, in the Job's
+entry (JOBS.md, The venue's job entries). Do not maintain another competing
+execution status in the scheduler or adapter workspace. Proposed fields:
 
 ```text
-delegation:
+delegation (on the record):
+  remoteId                       absent until acceptance is known
+  remoteStatus, remoteRevision    last authoritative observation, if available
+  notFollowed                    why the venue stopped following, while it has
+
+in the entry:
   version
   protocol                       covia | a2a
   target                         verified DID when available; endpoint/tenant
+  ownsRemote                     whether cancelling here cancels the remote job
   requestKey, requestDigest      stable identity of this submission
   phase                          prepared | submitting | observing | resolved
-  remoteId                       absent until acceptance is known
-  remoteStatus, remoteRevision    last authoritative observation, if available
   observedAt                     local observation time
   observation                    healthy | retrying | auth-required |
                                  acceptance-unknown | unavailable
   lastObservationError           bounded, redacted diagnostic
   nextAction, nextAttemptAt       durable description of the next step
   generation                     rejects superseded callbacks
-  authRef                        reference to protected credentials, never tokens
 ```
 
 These are orthogonal facts, not new terminal Job statuses. `STARTED` means the
@@ -225,7 +230,7 @@ shutdown, detachment, and reattachment invalidate old callbacks. Serial polling
 avoids overlapping snapshots. If SSE is added later, use a remote revision/event
 cursor and snapshot reconciliation; timestamp comparison alone cannot order
 updates across clocks. Publish genuine status/health changes, not every unchanged
-heartbeat: the `prev` history must not grow on every successful poll forever.
+heartbeat.
 Persist retry scheduling with bounded checkpoint frequency; exact retry timing
 need not survive a crash because repeating a status read is safe.
 
@@ -234,7 +239,7 @@ EOF, or subscription expiry triggers snapshot reconciliation, never completion.
 
 ## Recovery, authority, and waiting
 
-Grid and A2A override `recoverJob`/`suspendJob` for delegation records. Shutdown
+Grid and A2A override `recoverJob`/`suspendJob` for delegated jobs. Shutdown
 invalidates pending callbacks, stops observations, and preserves the non-terminal
 record; it does not cancel remote work. Boot re-arms observation of the same ID,
 or reconciles the same submission key. The existing shutdown path can release
@@ -249,8 +254,9 @@ bundles later. Do not persist a raw RequestContext or bearer in Job history.
 Pin the selected remote principal, target identity, and authority references.
 Renew credentials only through the originally authorised strategy; never fall
 back from caller to venue authority, or to another venue after a timeout.
-Ephemeral caller proofs can expire: report observation auth-required and allow
-an authorised owner to restore credentials. Recovery must not widen capabilities.
+A caller's sign-in credential proves presence and is never stored, so a hop
+that signed in as its caller is not resumed: its recovered job ends, naming
+the remote job and its venue (JOBS.md). Recovery must not widen capabilities.
 Anonymous submissions cannot promise durable cross-restart ownership and safe
 deduplication without an explicit server-issued scoped receipt or equivalent
 ownership contract. Do not silently authenticate anonymous work as the venue.

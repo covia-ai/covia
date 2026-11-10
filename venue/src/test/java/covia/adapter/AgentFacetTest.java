@@ -12,12 +12,21 @@ import covia.api.Fields;
 import covia.grid.*;
 import covia.venue.*;
 
+/** One venue for the class, since each test registers a backend of its own, under its own name. */
 class AgentFacetTest {
-    private final Engine engine = Engine.createTemp(null);
-    private final RequestContext ctx = engine.venueContext();
-    private final Probe probe = new Probe();
-    AgentFacetTest() { engine.registerAdapter(probe); Engine.addDemoAssets(engine); }
-    @AfterEach void close() { engine.close(); }
+    private static final AtomicInteger PROBES = new AtomicInteger();
+    private static Engine engine;
+    private RequestContext ctx;
+    private Probe probe;
+    @BeforeAll static void start() { engine = Engine.createTemp(null); Engine.addDemoAssets(engine); }
+    @AfterAll static void stop() { engine.close(); }
+    @BeforeEach void setup(TestInfo info) {
+        ctx = RequestContext.of(TestEngine.uniqueDID(info));
+        engine.getVenueState().users().ensure(ctx.getUserDID());
+        probe = new Probe("facetprobe-" + PROBES.incrementAndGet());
+        engine.registerAdapter(probe);
+    }
+    private AMap<AString, ACell> facet() { return Maps.of(Fields.ADAPTER, probe.getName()); }
     private Job invoke(String operation, AMap<AString, ACell> input) {
         return engine.jobs().invokeOperation("v/ops/agent/" + operation, input, ctx);
     }
@@ -25,10 +34,12 @@ class AgentFacetTest {
         return invoke(operation, input).awaitResult(5000);
     }
     private AMap<AString, ACell> target() { return Maps.of(Fields.AGENT_ID, "external"); }
+    /** An external agent with no caps: asking its backend is its harness's work, which they do not bound. */
     private void create() throws Exception {
-        run("create", target().assoc(AgentState.KEY_AGENT, Maps.of(Fields.ADAPTER, "facetprobe")));
+        run("create", target().assoc(Agent.KEY_AGENT, facet()));
     }
-    private AgentState agent(String id) { return engine.getVenueState().users().get(ctx.getUserDID()).agent(Strings.create(id)); }
+
+    private Agent agent(String id) { return engine.getVenueState().users().user(ctx.getUserDID()).agent(Strings.create(id)); }
 
     static class Probe extends ARemoteAgentAdapter<RemoteInteraction> {
         final AtomicInteger starts = new AtomicInteger(), cancels = new AtomicInteger();
@@ -36,7 +47,10 @@ class AgentFacetTest {
         volatile ACell previous;
         volatile ACell message;
         boolean waiting;
-        public String getName() { return "facetprobe"; }
+        boolean requiresRead;
+        private final String name;
+        Probe(String name) { this.name = name; }
+        public String getName() { return name; }
         public String getDescription() { return "Agent facade test backend"; }
         protected boolean isInteractionOperation(String op) { return true; }
         public AgentInvocation agentInvocation(String operation, AMap<AString, ACell> definition, ACell content, ACell session) {
@@ -45,6 +59,7 @@ class AgentFacetTest {
         }
         public ACell agentSession(Job job) { return Strings.create("provider-session"); }
         protected void startInteraction(Job job, RequestContext context, AMap<AString, ACell> meta, ACell input) {
+            if (requiresRead) engine.requireAuthority(context, Strings.create("w/backend"), convex.auth.ucan.Capability.CRUD_READ);
             starts.incrementAndGet(); child = job;
             bindInteraction(job, new RemoteInteraction() {
                 public void cancel() { cancels.incrementAndGet(); }
@@ -61,7 +76,7 @@ class AgentFacetTest {
     @Test void absentFacetPreservesNativeRecordAndTaskContract() throws Exception {
         run("create", Maps.of(Fields.AGENT_ID, "legacy", Fields.CONFIG,
             Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")));
-        assertFalse(agent("legacy").getRecord().containsKey(AgentState.KEY_AGENT));
+        assertFalse(agent("legacy").getRecord().containsKey(Agent.KEY_AGENT));
         ACell result = run("request", Maps.of(Fields.AGENT_ID, "legacy", Fields.INPUT, Maps.of("task", "hello")));
         assertEquals(Strings.create("hello"), RT.getIn(result, Fields.OUTPUT, "completed", "task"));
         assertEquals(0, probe.starts.get());
@@ -69,7 +84,7 @@ class AgentFacetTest {
 
     @Test void invalidFacetNeverFallsBackOrCreatesRecord() {
         for (ACell value : new ACell[]{null, Strings.create("a2a"), Maps.empty(), Maps.of(Fields.ADAPTER, "missing"), Maps.of(Fields.ADAPTER, "test")}) {
-            Job job = invoke("create", target().assoc(AgentState.KEY_AGENT, value));
+            Job job = invoke("create", target().assoc(Agent.KEY_AGENT, value));
             assertEquals(Status.FAILED, job.getStatus());
             assertNull(agent("external"));
         }
@@ -85,9 +100,9 @@ class AgentFacetTest {
         ACell second = run("chat", target().assoc(Fields.MESSAGE, Strings.create("two")).assoc(Fields.SESSION_ID, sid));
         assertEquals(sid, RT.getIn(second, Fields.SESSION_ID));
         assertEquals(Strings.create("provider-session"), probe.previous);
-        ACell history = run("session-read", target().assoc(Fields.SESSION_ID, sid));
-        assertEquals(4, RT.ensureVector(RT.getIn(history, Fields.MESSAGES)).count());
-        assertEquals(Maps.of(Fields.ADAPTER, "facetprobe"), RT.getIn(run("info", target()), AgentState.KEY_AGENT));
+        ACell history = run("history", target().assoc(Fields.SESSION_ID, sid));
+        assertEquals(4, RT.ensureVector(RT.getIn(history, "entries")).count());
+        assertEquals(facet(), RT.getIn(run("info", target()), Agent.KEY_AGENT));
     }
 
     @Test void busySessionContinuationAndCancellationUseChildWithoutAnotherSubmission() throws Exception {
@@ -111,6 +126,34 @@ class AgentFacetTest {
         assertEquals(2, probe.starts.get());
     }
 
+    @Test void messageToAnExternalAgentRefusesATaskIdThatIsNotHex() throws Exception {
+        create();
+        Job job = invoke("message", target().assoc(Fields.TASK_ID, Strings.create("not-hex")).assoc(Fields.MESSAGE, Strings.create("x")));
+        assertEquals(Status.FAILED, job.getStatus());
+        assertEquals(AgentAdapter.INVALID_TASK_ID + "not-hex", job.getErrorMessage());
+    }
+
+    @Test void messageToAgentWhoseBackendIsUnloadedIsUnavailable() throws Exception {
+        create(); probe.waiting = true;
+        Job first = invoke("request", target().assoc(Fields.INPUT, Maps.of("task", "wait")));
+        assertEquals(Status.INPUT_REQUIRED, first.getStatus(), first.getErrorMessage());
+        engine.removeAdapter(probe.getName());
+        covia.exception.UnavailableException e = assertThrows(covia.exception.UnavailableException.class,
+            () -> engine.jobs().deliverMessage(first.getID(), Maps.of(Fields.MESSAGE, Strings.create("continue")), ctx));
+        assertEquals(ExternalAgents.UNAVAILABLE + probe.getName(), e.getMessage());
+    }
+
+    @Test void messageToAgentWithBrokenStoredDefinitionSaysItIsMisconfigured() throws Exception {
+        create(); probe.waiting = true;
+        Job first = invoke("request", target().assoc(Fields.INPUT, Maps.of("task", "wait")));
+        assertEquals(Status.INPUT_REQUIRED, first.getStatus(), first.getErrorMessage());
+        Agent agent = agent("external");
+        agent.putRecord(agent.getRecord().assoc(Agent.KEY_AGENT, Maps.of(Fields.ADAPTER, "")));
+        covia.exception.InvalidDefinitionException e = assertThrows(covia.exception.InvalidDefinitionException.class,
+            () -> engine.jobs().deliverMessage(first.getID(), Maps.of(Fields.MESSAGE, Strings.create("continue")), ctx));
+        assertEquals(ExternalAgents.MISCONFIGURED + ExternalAgents.INVALID, e.getMessage());
+    }
+
     @Test void badOptionsUnknownSessionAndNativeOnlyOperationsAreExplicitFailures() throws Exception {
         create();
         Job unknown = invoke("chat", target().assoc(Fields.SESSION_ID, Strings.create("00112233445566778899aabbccddeeff"))
@@ -122,12 +165,29 @@ class AgentFacetTest {
         assertEquals(0, probe.starts.get());
     }
 
-    @Test void configuredAgentCapsBoundBackendInvocation() throws Exception {
-        run("create", target().assoc(AgentState.KEY_AGENT, Maps.of(Fields.ADAPTER, "facetprobe"))
+    /**
+     * The backend turn acts with the agent's controller's authority, as its
+     * harness: the agent's caps do not bound it, and its controller's do.
+     */
+    @Test void backendTurnActsWithTheControllersAuthority() throws Exception {
+        probe.requiresRead = true;
+        run("create", target().assoc(Agent.KEY_AGENT, facet())
             .assoc(Fields.CONFIG, Maps.of("caps", Vectors.empty())));
-        Job denied = invoke("chat", target().assoc(Fields.MESSAGE, Strings.create("hello")));
+        run("chat", target().assoc(Fields.MESSAGE, Strings.create("hello")));
+        assertEquals(1, probe.starts.get());
+
+        // An agent that may create agents but read nothing controls the one it creates
+        run("create", Maps.of(Fields.AGENT_ID, "creator", Fields.CONFIG, Maps.of("caps", Vectors.of(
+            convex.auth.ucan.Capability.create(Strings.create("g/"), covia.api.Abilities.AGENT_CREATE),
+            Maps.of(convex.auth.ucan.Capability.CAN, covia.api.Abilities.INVOKE)))));
+        RequestContext creator = engine.context(ctx.getUserDID(),
+            Principals.agentDID(ctx.getUserDID(), Strings.create("creator")));
+        engine.jobs().invokeOperation("v/ops/agent/create",
+            Maps.of(Fields.AGENT_ID, "managed", Agent.KEY_AGENT, facet()), creator).awaitResult(5000);
+        assertEquals(creator.getCallerDID(), agent("managed").getController());
+        Job denied = invoke("chat", Maps.of(Fields.AGENT_ID, "managed", Fields.MESSAGE, Strings.create("hello")));
         assertEquals(Status.FAILED, denied.getStatus());
-        assertEquals(0, probe.starts.get());
+        assertEquals(1, probe.starts.get());
     }
 
     @Test void suspensionAndDeletionCancelBackendAndDoNotWakeNativeLoop() throws Exception {
@@ -140,7 +200,7 @@ class AgentFacetTest {
         Job next = invoke("request", target().assoc(Fields.INPUT, Maps.empty()));
         run("delete", target());
         assertEquals(Status.CANCELLED, next.getStatus());
-        assertEquals(AgentState.TERMINATED, agent("external").getStatus());
+        assertEquals(Agent.TERMINATED, agent("external").getStatus());
         assertEquals(2, probe.starts.get());
     }
 
@@ -156,11 +216,11 @@ class AgentFacetTest {
 
     @Test void definitionAssetCopiesFacetAndLegacyTemplateStillCreatesNativeAgent() throws Exception {
         engine.jobs().invokeOperation("v/ops/covia/write", Maps.of(Fields.PATH, "w/external-definition",
-            Fields.VALUE, Maps.of("name", "Helper", "agent", Maps.of(Fields.ADAPTER, "facetprobe"))), ctx).awaitResult(5000);
+            Fields.VALUE, Maps.of("name", "Helper", "agent", facet())), ctx).awaitResult(5000);
         run("create", target().assoc(Fields.DEFINITION, Strings.create("w/external-definition")));
-        assertEquals(Maps.of(Fields.ADAPTER, "facetprobe"), agent("external").getRecord().get(AgentState.KEY_AGENT));
+        assertEquals(facet(), agent("external").getRecord().get(Agent.KEY_AGENT));
         run("create", Maps.of(Fields.AGENT_ID, "legacy-template", Fields.CONFIG, "v/agents/templates/skilled"));
-        assertFalse(agent("legacy-template").getRecord().containsKey(AgentState.KEY_AGENT));
+        assertFalse(agent("legacy-template").getRecord().containsKey(Agent.KEY_AGENT));
     }
 
     @Test void a2aFacetUsesCommonApiAndRetainsContext() throws Exception {
@@ -179,13 +239,14 @@ class AgentFacetTest {
         });
         server.start();
         try {
-            run("create", target().assoc(AgentState.KEY_AGENT, Maps.of(Fields.ADAPTER, "a2a",
+            run("create", target().assoc(Agent.KEY_AGENT, Maps.of(Fields.ADAPTER, "a2a",
                 "endpoint", "http://127.0.0.1:" + server.getAddress().getPort() + "/rpc", "card", Maps.empty())));
             Job firstJob = invoke("chat", target().assoc(Fields.MESSAGE, Strings.create("first")));
             ACell first;
             try { first = firstJob.awaitResult(5000); }
             catch (Exception e) {
-                Job child = engine.jobs().getJob(Job.parseID(firstJob.getData().get(ExternalAgents.CHILD)), ctx);
+                ACell childId = RT.getIn(engine.jobs().adapterData(firstJob), ExternalAgents.CHILD);
+                Job child = childId == null ? null : engine.jobs().getJob(Job.parseID(childId), ctx);
                 throw new AssertionError("parent=" + firstJob.getData() + " child=" + (child == null ? null : child.getData()) + " received=" + received.get(), e);
             }
             ACell sid = RT.getIn(first, Fields.SESSION_ID);
@@ -197,7 +258,7 @@ class AgentFacetTest {
 
     @Test void realNativeProxyUsesExistingAgentRequestSurface() throws Exception {
         run("create", Maps.of(Fields.AGENT_ID, "native", Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")));
-        run("create", target().assoc(AgentState.KEY_AGENT, Maps.of(Fields.ADAPTER, "remoteagent", Fields.AGENT_ID, "native")));
+        run("create", target().assoc(Agent.KEY_AGENT, Maps.of(Fields.ADAPTER, "remoteagent", Fields.AGENT_ID, "native")));
         ACell output = run("request", target().assoc(Fields.INPUT, Maps.of("task", "via proxy")));
         assertEquals(Strings.create("via proxy"), RT.getIn(output, Fields.OUTPUT, "completed", "task"));
     }

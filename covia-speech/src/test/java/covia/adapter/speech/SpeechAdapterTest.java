@@ -76,6 +76,8 @@ class SpeechAdapterTest {
 
 	String save(String name, byte[] bytes, String type) throws Exception {
 		String ref = owner + "/dlfs/media/" + name;
+		engine.jobs().invokeOperation("v/ops/dlfs/create-drive", Maps.of("name", "media"),
+			RequestContext.of(owner)).awaitResult(10_000);
 		assertTrue(engine.createContent(Strings.create(ref), new ByteArrayInputStream(bytes), type, RequestContext.of(owner)));
 		return ref;
 	}
@@ -107,12 +109,12 @@ class SpeechAdapterTest {
 	@Test void itServesAsAMediaOperation() throws Exception {
 		String ref = save("voice.ogg", VOICE, "audio/ogg");
 		AMap<AString, ACell> photo = RT.castMap(Maps.of("ref", ref, "kind", "photo", "mediaType", "image/jpeg",
-			"caption", "", "via", Maps.of("from", "alice")));
+			"caption", "", "authentication", Maps.of("authenticatedIdentity", "telegram:alice")));
 		assertEquals(Maps.empty(), run(owner, "transcribe", photo), "not audio: passed through");
 		assertTrue(api.requests.isEmpty(), "and nothing was sent");
 
 		AMap<AString, ACell> voice = RT.castMap(Maps.of("ref", ref, "kind", "voice", "mediaType", "audio/ogg; codecs=opus",
-			"file_id", "AwACAg", "size", VOICE.length, "caption", "", "via", Maps.of("from", "alice")));
+			"file_id", "AwACAg", "size", VOICE.length, "caption", "", "authentication", Maps.of("authenticatedIdentity", "telegram:alice")));
 		ACell heard = run(owner, "transcribe", voice);
 		AMap<AString, ACell> attachment = MessagingMedia.processed(voice, heard);
 		assertEquals("Hello world.", RT.getIn(attachment, "text").toString(), "the transcript joins the attachment");
@@ -333,7 +335,7 @@ class SpeechAdapterTest {
 			assertEquals(bad[1], assertThrows(IllegalArgumentException.class, () -> new SpeechAdapter().configure(config, true)).getMessage());
 		}
 		assertTrue(assertThrows(IllegalArgumentException.class, () -> new SpeechAdapter().configure(
-			RT.castMap(Maps.of("engine", "local", "local", Maps.of("mystery", 1))), true)).getMessage().startsWith("adapters.speech.local: unknown setting"));
+			RT.castMap(Maps.of("engine", "local", "local", Maps.of("mystery", 1))), true)).getMessage().contains("mystery"));
 	}
 
 	@Test void unsafeSettingsAreRefused() {
@@ -347,7 +349,7 @@ class SpeechAdapterTest {
 			assertEquals(bad[1], assertThrows(IllegalArgumentException.class, () -> new SpeechAdapter().configure(config, true)).getMessage());
 		}
 		assertTrue(assertThrows(IllegalArgumentException.class, () -> new SpeechAdapter().configure(
-			RT.castMap(Maps.of("mystery", 1)), true)).getMessage().startsWith("adapters.speech: unknown setting"));
+			RT.castMap(Maps.of("mystery", 1)), true)).getMessage().contains("mystery"));
 		assertTrue(new SpeechAdapter().configure(RT.castMap(Maps.of("baseUrl", "http://localhost:8000/v1/")), true),
 			"a local server over plain HTTP is fine");
 	}

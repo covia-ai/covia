@@ -23,6 +23,8 @@ import convex.core.data.Strings;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
+import covia.api.Fields;
+import covia.exception.ConfigurationException;
 
 /**
  * Venue configuration instance wrapping an immutable config map.
@@ -132,7 +134,8 @@ public class Config {
 	public static final AString RATE_LIMIT = Strings.intern("rateLimit");
 
 	/** Key for the grid scheduler config block ({@code trackJobs},
-	 *  {@code forceTrackJobs}). See {@code venue/docs/GRID_SCHEDULER.md} §7. */
+	 *  {@code forceTrackJobs}, {@code maxConcurrency}). See
+	 *  {@code venue/docs/GRID_SCHEDULER.md}. */
 	public static final AString SCHEDULER = Strings.intern("scheduler");
 	public static final AString SHUTDOWN = Strings.intern("shutdown");
 	/** Per-venue logging of normal operational events: {@code {audit, access}}, both off by default (covia#538). */
@@ -152,6 +155,12 @@ public class Config {
 	/** Scheduler block: operator override — every scheduled fire is a durable
 	 *  Job, whatever the event asked for. */
 	public static final AString FORCE_TRACK_JOBS = Strings.intern("forceTrackJobs");
+
+	/** Scheduler block: how many due events a venue starts at once. */
+	public static final AString MAX_CONCURRENCY = Fields.MAX_CONCURRENCY;
+
+	/** Scheduled events a venue starts at once when {@code scheduler.maxConcurrency} is absent. */
+	public static final int DEFAULT_SCHEDULER_MAX_CONCURRENCY = 2;
 
 	/** Key for the HTTP connector's accept-queue (backlog) size */
 	public static final AString ACCEPT_QUEUE_SIZE = Strings.intern("acceptQueueSize");
@@ -285,12 +294,23 @@ public class Config {
 	 *  (legacy permissive behaviour); an explicit cap array → that scope. */
 	public static final AString CAPS = Strings.intern("caps");
 
-	/** Key for the JWT audience policy, under {@code auth}: {@code "verify"}
-	 *  (default — check aud if present) or {@code "require"} (aud must be present
-	 *  and match). A mismatched aud is always rejected under both. */
+	/** The value of {@code caps} that sets no scope at all: {@code auth.public.caps}
+	 *  for anonymous callers, and an agent's {@code config.caps}, which only an
+	 *  explicit {@code "unrestricted"} leaves unbounded. */
+	public static final AString UNRESTRICTED = Strings.intern("unrestricted");
+
+	/** Obsolete option recognised only to report its required migration. */
 	public static final AString AUDIENCE = Strings.intern("audience");
+	/** The migration reported for {@code auth.audience}. */
+	public static final String AUDIENCE_REPLACED =
+		"replace with auth.requireAud (true by default; false accepts a bearer without aud)";
+	/** Whether a bearer credential must name this venue in {@code aud} ({@code auth.requireAud}, default true). */
+	public static final AString REQUIRE_AUD = Strings.intern("requireAud");
 	/** Whether a bearer credential must carry an expiry ({@code auth.requireExp}, default true). */
 	public static final AString REQUIRE_EXP = Strings.intern("requireExp");
+	/** Whether an authenticated connection to another venue must prove its DID first
+	 *  ({@code auth.requireVenueProof}, default true). */
+	public static final AString REQUIRE_VENUE_PROOF = Strings.intern("requireVenueProof");
 	/** Obsolete option recognised only to report its required migration. */
 	public static final AString LOGIN_REDIRECT_ORIGINS = Strings.intern("loginRedirectOrigins");
 	/** Exact frontend destinations for single-use login handoff codes. */
@@ -352,6 +372,8 @@ public class Config {
 	public static final AString ENABLE_PRIVATE_JOBS = Strings.intern("enablePrivateJobs");
 	/** Force durable records for read-only run/internal invocations. */
 	public static final AString RECORD_READ_ONLY_OPERATIONS = Strings.intern("recordReadOnlyOperations");
+	/** Venue default for recording agents' tool calls from the start. */
+	public static final AString RECORD_TOOL_CALLS = Strings.intern("recordToolCalls");
 
 	// ========== MCP config keys ==========
 
@@ -413,7 +435,8 @@ public class Config {
 		"httpSelectors", "httpAcceptors", "mcp", "a2a", "adapters",
 		"modules", "dynamicModules", "users", "store", "seed", "keystore", "storage", "etch",
 		"maxContentSize", "auth", "webdav", "file", "corsOrigins",
-		"allowPrivateNetwork", "securityHeaders", "enablePrivateJobs", "recordReadOnlyOperations", "fixMcpStrings",
+		"allowPrivateNetwork", "securityHeaders", "enablePrivateJobs", "recordReadOnlyOperations",
+		"recordToolCalls", "fixMcpStrings",
 		"outputValidation", "secrets", "strictAssets", "strictConfig", "scheduler",
 		"shutdown", "logging", "tray");
 
@@ -503,6 +526,7 @@ public class Config {
 		validateTrustedProxies();
 		optionalBoolean(config, ENABLE_PRIVATE_JOBS, "enablePrivateJobs", false);
 		optionalBoolean(config, RECORD_READ_ONLY_OPERATIONS, "recordReadOnlyOperations", false);
+		optionalBoolean(config, RECORD_TOOL_CALLS, "recordToolCalls", false);
 		optionalBoolean(config, TRAY, "tray", true);
 
 		validateBaseUrl();
@@ -667,7 +691,7 @@ public class Config {
 		ACell raw = config.get(TRUSTED_PROXIES);
 		if (raw == null) return;
 		if (!(raw instanceof AVector<?>)) {
-			throw new IllegalArgumentException("trustedProxies must be an array of IP literals, CIDR ranges or \"loopback\"");
+			throw new ConfigurationException("trustedProxies must be an array of IP literals, CIDR ranges or \"loopback\"");
 		}
 		getTrustedProxies();   // parses every entry; a bad one fails startup with its name
 	}
@@ -675,9 +699,10 @@ public class Config {
 	private void validateScheduler(boolean strict) {
 		AMap<AString, ACell> sched = optionalMap(config, SCHEDULER, "scheduler");
 		if (sched == null) return;
-		validateUnknownFields(sched, Set.of("trackJobs", "forceTrackJobs"), "scheduler", strict);
+		validateUnknownFields(sched, Set.of("trackJobs", "forceTrackJobs", "maxConcurrency"), "scheduler", strict);
 		optionalBoolean(sched, TRACK_JOBS, "scheduler.trackJobs", false);
 		optionalBoolean(sched, FORCE_TRACK_JOBS, "scheduler.forceTrackJobs", false);
+		optionalLong(sched, MAX_CONCURRENCY, "scheduler.maxConcurrency", 1, Integer.MAX_VALUE);
 	}
 
 	private void validateShutdown(boolean strict) {
@@ -746,16 +771,18 @@ public class Config {
 		if (auth == null) return;
 		validateUnknownFields(auth,
 			Set.of("tokenExpiry", "public", "audience", "acceptedAudiences", "oauth",
-				"requireExp", "maxTokenLifetime", "loginRedirectOrigins", "loginRedirectUris", "methods"),
+				"requireAud", "requireExp", "requireVenueProof", "venueProof", "maxTokenLifetime", "loginRedirectOrigins", "loginRedirectUris", "methods"),
 			"auth", strict);
 		covia.venue.auth.AuthMethods.validateConfig(auth);
+		covia.venue.auth.VenueProofs.validateConfig(auth);
 		optionalLong(auth, TOKEN_EXPIRY, "auth.tokenExpiry", 1, Long.MAX_VALUE);
+		optionalBoolean(auth, REQUIRE_AUD, "auth.requireAud", true);
 		optionalBoolean(auth, REQUIRE_EXP, "auth.requireExp", true);
+		optionalBoolean(auth, REQUIRE_VENUE_PROOF, "auth.requireVenueProof", true);
 		optionalLong(auth, MAX_TOKEN_LIFETIME, "auth.maxTokenLifetime", 1, Long.MAX_VALUE);
 
-		AString audience = optionalString(auth, AUDIENCE, "auth.audience");
-		if (audience != null && !Set.of("verify", "require").contains(audience.toString())) {
-			throw malformed("auth.audience", "must be verify or require");
+		if (auth.containsKey(AUDIENCE)) {
+			throw malformed("auth.audience", AUDIENCE_REPLACED);
 		}
 		optionalStringVector(auth, ACCEPTED_AUDIENCES, "auth.acceptedAudiences");
 		optionalStringVector(auth, LOGIN_REDIRECT_ORIGINS, "auth.loginRedirectOrigins");
@@ -774,7 +801,7 @@ public class Config {
 				throw malformed("auth.public.caps",
 					"must be \"unrestricted\" or an array of capabilities");
 			}
-			if (caps instanceof AString s && !"unrestricted".equals(s.toString())) {
+			if (caps instanceof AString s && !UNRESTRICTED.equals(s)) {
 				throw malformed("auth.public.caps",
 					"the only supported string value is unrestricted");
 			}
@@ -915,7 +942,7 @@ public class Config {
 		if (unknown.isEmpty()) return;
 		String message = "Unknown configuration field" + (unknown.size() == 1 ? "" : "s")
 			+ ": " + String.join(", ", unknown);
-		if (strict) throw new IllegalArgumentException(message);
+		if (strict) throw new ConfigurationException(message);
 		log.warn("{} (ignored; set strictConfig=true to reject)", message);
 	}
 
@@ -969,8 +996,8 @@ public class Config {
 		return vector;
 	}
 
-	private static IllegalArgumentException malformed(String path, String requirement) {
-		return new IllegalArgumentException("Invalid configuration field '" + path + "': "
+	private static ConfigurationException malformed(String path, String requirement) {
+		return new ConfigurationException("Invalid configuration field '" + path + "': "
 			+ requirement);
 	}
 
@@ -1283,13 +1310,17 @@ public class Config {
 			if (raw instanceof AVector<?> v) {
 				for (long i = 0; i < v.count(); i++) {
 					AString s = RT.ensureString(v.get(i));
-					if (s == null) throw new IllegalArgumentException("trustedProxies entries must be strings");
+					if (s == null) throw new ConfigurationException("trustedProxies entries must be strings");
 					entries.add(s.toString());
 				}
 			} else if (raw != null) {
-				throw new IllegalArgumentException("trustedProxies must be an array of IP literals, CIDR ranges or \"loopback\"");
+				throw new ConfigurationException("trustedProxies must be an array of IP literals, CIDR ranges or \"loopback\"");
 			}
-			t = TrustedProxies.parse(entries);
+			try {
+				t = TrustedProxies.parse(entries);
+			} catch (IllegalArgumentException e) {
+				throw new ConfigurationException(e.getMessage(), e);
+			}
 			trustedProxies = t;
 		}
 		return t;
@@ -1489,7 +1520,7 @@ public class Config {
 			}
 			keyFn = hint -> {
 				if (hint != null && !hint.equals(expectedHint)) {
-					throw new IllegalStateException("Etch store is encrypted under key "
+					throw new ConfigurationException("Etch store is encrypted under key "
 						+ hint + " but the configured etch key has identity " + expectedHint
 						+ " — wrong key material for this store");
 				}
@@ -1593,7 +1624,7 @@ public class Config {
 					"must be a 32-byte hex string, {\"env\": name} or {\"file\": path}");
 			}
 		}
-		convex.core.data.Blob key = convex.core.data.Blob.fromHex(hex.trim());
+		convex.core.data.Blob key = convex.core.data.Blob.fromHex(hex);
 		if (key == null || key.count() != 32) {
 			throw malformed("etch.key", "must resolve to exactly 32 bytes of hex");
 		}
@@ -1804,19 +1835,19 @@ public class Config {
 	}
 
 	/**
-	 * JWT audience policy from {@code auth.audience}: {@code "require"} (aud must
-	 * be present and match this venue) or {@code "verify"} (the default — if aud
-	 * is present it must match; if absent, accept). A mismatched aud is always
-	 * rejected; there is no "off".
-	 * @return {@code "require"} or {@code "verify"} (default)
+	 * Whether a bearer credential must name this venue in {@code aud}
+	 * ({@code auth.requireAud}, default {@code true}), as RFC 8725 §3.9 requires
+	 * of JWTs whose issuer serves more than one recipient. Off, a credential
+	 * without {@code aud} is accepted; a present {@code aud} that does not name
+	 * this venue is refused either way.
 	 */
-	public String getAudiencePolicy() {
+	public boolean isRequireAud() {
 		AMap<AString, ACell> authConfig = getAuthConfig();
 		if (authConfig != null) {
-			AString v = RT.ensureString(authConfig.get(AUDIENCE));
-			if (v != null && "require".equals(v.toString())) return "require";
+			ACell v = authConfig.get(REQUIRE_AUD);
+			if (v != null) return RT.bool(v);
 		}
-		return "verify";
+		return true;
 	}
 
 	/**
@@ -1830,6 +1861,22 @@ public class Config {
 		AMap<AString, ACell> authConfig = getAuthConfig();
 		if (authConfig != null) {
 			ACell v = authConfig.get(REQUIRE_EXP);
+			if (v != null) return RT.bool(v);
+		}
+		return true;
+	}
+
+	/**
+	 * Whether an authenticated connection to another venue must prove the
+	 * venue's DID before sending it a credential ({@code auth.requireVenueProof},
+	 * default {@code true}), by the mechanisms {@code auth.venueProof} lists.
+	 * Off, the venue takes the DID a target claims at its address, for test
+	 * venues whose DID cannot be proven where they are served.
+	 */
+	public boolean isRequireVenueProof() {
+		AMap<AString, ACell> authConfig = getAuthConfig();
+		if (authConfig != null) {
+			ACell v = authConfig.get(REQUIRE_VENUE_PROOF);
 			if (v != null) return RT.bool(v);
 		}
 		return true;
@@ -1926,7 +1973,7 @@ public class Config {
 		if (raw == null) return null;
 		AMap<AString, ACell> auth = RT.ensureMap(raw);
 		if (auth == null) {
-			throw new IllegalArgumentException("mcp.auth must be an object");
+			throw new ConfigurationException("mcp.auth must be an object");
 		}
 		return auth;
 	}
@@ -1945,7 +1992,7 @@ public class Config {
 		AMap<AString, ACell> auth = getMCPAuthConfig();
 		ACell raw = (auth == null) ? null : auth.get(REQUIRED);
 		if (raw != null && !(raw instanceof CVMBool)) {
-			throw new IllegalArgumentException("mcp.auth.required must be a boolean");
+			throw new ConfigurationException("mcp.auth.required must be a boolean");
 		}
 		boolean configuredRequired = (raw == null) ? !isPublicAccess() : CVMBool.TRUE.equals(raw);
 		return configuredRequired || !isPublicAccess() || !getMCPAllowedDids().isEmpty();
@@ -1962,23 +2009,23 @@ public class Config {
 		ACell raw = (auth == null) ? null : auth.get(ALLOWED_DIDS);
 		if (raw == null) return Set.of();
 		if (!(raw instanceof AVector<?> vector)) {
-			throw new IllegalArgumentException("mcp.auth.allowedDids must be an array of DID strings");
+			throw new ConfigurationException("mcp.auth.allowedDids must be an array of DID strings");
 		}
 		LinkedHashSet<String> result = new LinkedHashSet<>();
 		for (long i = 0; i < vector.count(); i++) {
 			AString entry = RT.ensureString(vector.get(i));
-			String did = (entry == null) ? null : entry.toString().trim();
+			String did = (entry == null) ? null : entry.toString();
 			if (did == null || !did.startsWith("did:") || did.length() <= 4) {
-				throw new IllegalArgumentException(
+				throw new ConfigurationException(
 					"mcp.auth.allowedDids entries must be non-empty DID strings");
 			}
 			try {
 				if (convex.auth.did.DID.fromString(did) == null) {
-					throw new IllegalArgumentException(
+					throw new ConfigurationException(
 						"mcp.auth.allowedDids entry is not a valid DID: " + did);
 				}
 			} catch (RuntimeException e) {
-				throw new IllegalArgumentException(
+				throw new ConfigurationException(
 					"mcp.auth.allowedDids entry is not a valid DID: " + did, e);
 			}
 			result.add(did);
@@ -2090,16 +2137,19 @@ public class Config {
 		/** Javalin's legacy allowHost accepted a bare host and supplied HTTPS. */
 		static ParsedOrigin parseConfigured(String raw, String label) {
 			String value = (raw != null && !raw.contains("://")) ? "https://" + raw : raw;
-			return parse(value, label);
+			try {
+				return parse(value, label);
+			} catch (IllegalArgumentException e) {
+				throw new ConfigurationException(e.getMessage(), e);
+			}
 		}
 
 		static ParsedOrigin parse(String raw, String label) {
 			if (raw == null || raw.isBlank()) {
 				throw new IllegalArgumentException(label + " must not be empty");
 			}
-			String value = raw.trim();
 			try {
-				URI uri = new URI(value);
+				URI uri = new URI(raw);
 				String scheme = uri.getScheme();
 				String host = uri.getHost();
 				if (scheme == null || host == null || uri.isOpaque()
@@ -2155,12 +2205,12 @@ public class Config {
 			for (long i = 0; i < vector.count(); i++) {
 				AString value = RT.ensureString(vector.get(i));
 				if (value == null) {
-					throw new IllegalArgumentException("corsOrigins array entries must be strings");
+					throw new ConfigurationException("corsOrigins array entries must be strings");
 				}
 				values.add(value.toString());
 			}
 		} else {
-			throw new IllegalArgumentException(
+			throw new ConfigurationException(
 				"corsOrigins must be a string, an array of strings, or false");
 		}
 
@@ -2169,8 +2219,7 @@ public class Config {
 		boolean any = false;
 		boolean loopback = false;
 		boolean none = false;
-		for (String rawValue : values) {
-			String value = rawValue.trim();
+		for (String value : values) {
 			switch (value) {
 				case "*" -> any = true;
 				case "loopback" -> loopback = true;
@@ -2183,7 +2232,7 @@ public class Config {
 		}
 		if (none) {
 			if (values.size() != 1) {
-				throw new IllegalArgumentException(
+				throw new ConfigurationException(
 					"corsOrigins 'none' cannot be combined with allowed origins");
 			}
 			return new CorsPolicy(false, false, false, List.of());
@@ -2252,6 +2301,16 @@ public class Config {
 	}
 
 	/**
+	 * Venue default for recording an agent's tool calls from the start, for
+	 * agents whose {@code config.recordToolCalls} is unset. Defaults to false:
+	 * a call is recorded only if it outlasts its time limit.
+	 */
+	public boolean isRecordToolCalls() {
+		ACell v = config.get(RECORD_TOOL_CALLS);
+		return (v != null) && RT.bool(v);
+	}
+
+	/**
 	 * Whether a scheduled event that did not state a {@code track} preference
 	 * fires as a durable Job ({@code scheduler.trackJobs}). Defaults to false:
 	 * a scheduled fire is a transient Job unless the event, or the operator
@@ -2268,6 +2327,22 @@ public class Config {
 	 */
 	public boolean isForceTrackScheduledJobs() {
 		return schedulerBool(FORCE_TRACK_JOBS);
+	}
+
+	/**
+	 * How many due scheduled events the venue starts at once
+	 * ({@code scheduler.maxConcurrency}), at least 1; defaults to
+	 * {@link #DEFAULT_SCHEDULER_MAX_CONCURRENCY}. An event holds its place
+	 * until its operation's invocation returns, not until its Job finishes.
+	 */
+	public int getSchedulerMaxConcurrency() {
+		ACell block = config.get(SCHEDULER);
+		if (block instanceof AMap) {
+			@SuppressWarnings("unchecked")
+			ACell v = ((AMap<AString, ACell>) block).get(MAX_CONCURRENCY);
+			if (v instanceof CVMLong n) return (int) n.longValue();
+		}
+		return DEFAULT_SCHEDULER_MAX_CONCURRENCY;
 	}
 
 	private boolean schedulerBool(AString key) {

@@ -33,10 +33,20 @@ import covia.adapter.AssetAdapter;
 import covia.adapter.CoviaAdapter;
 import covia.adapter.UserAdapter;
 import covia.adapter.DLFSAdapter;
+import covia.adapter.SecretAdapter;
 import convex.core.util.JSON;
 import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.AuthException;
+import covia.exception.ConflictException;
+import covia.exception.CoviaException;
+import covia.exception.FaultException;
+import covia.exception.InvalidDefinitionException;
+import covia.exception.InvalidInputException;
+import covia.exception.NotFoundException;
+import covia.exception.NotSupportedException;
+import covia.exception.ShuttingDownException;
+import covia.exception.UnavailableException;
 import covia.grid.AContent;
 import covia.grid.Asset;
 import covia.grid.Job;
@@ -47,9 +57,9 @@ import covia.venue.api.model.InvokeRequest;
 import covia.venue.api.model.InvokeResult;
 import covia.venue.AssetStore;
 import covia.venue.Config;
+import covia.venue.JobManager;
 import covia.venue.RequestContext;
 import covia.venue.SecretStore;
-import covia.venue.User;
 import covia.venue.server.AuthMiddleware;
 import covia.venue.server.SseServer;
 import io.javalin.config.RoutesConfig;
@@ -209,11 +219,16 @@ public class CoviaAPI extends ACoviaAPI {
 		result=result.assoc(Fields.URL,RT.cvm(getExternalBaseUrl(ctx, null, engine().config().getTrustedProxies())));
 
 		// Add the stats, plus the caller's own job count (#229) — anonymous
-		// callers see the shared public identity's count.
+		// callers see the shared public identity's count. A caller who may not
+		// read its jobs gets no count; the status itself is for anyone.
 		AMap<AString,ACell> stats = engine().getStats();
 		RequestContext rctx = AuthMiddleware.callerContext(ctx);
-		stats = stats.assoc(Strings.intern("userJobs"),
-			RT.cvm(engine().jobs().countJobs(rctx)));
+		try {
+			stats = stats.assoc(Strings.intern("userJobs"),
+				RT.cvm(engine().jobs().countJobs(rctx)));
+		} catch (AuthException e) {
+			// no count
+		}
 		result=result.assoc(STATS_FIELD,stats);
 
 		// Curated admission-policy fields (#255) — safe to state to any caller,
@@ -282,7 +297,7 @@ public class CoviaAPI extends ACoviaAPI {
 		                description = "Bad request due to invalid offset, negative limit, or too many assets requested (exceeding 1000).",
 		                content = {
 		                    @OpenApiContent(
-		                        type = "application/json",
+		                        type = ApiErrors.PROBLEM_JSON,
 		                        from = ErrorResponse.class
 		                    )
 		                }
@@ -351,8 +366,7 @@ public class CoviaAPI extends ACoviaAPI {
 					boolean isOperation = a.meta().get(Fields.OPERATION) != null;
 					if (isOperation == wantOperations.booleanValue()) matching.add(h);
 				} catch (IOException e) {
-					buildError(ctx, 500, "Error retrieving venue asset "
-						+ engine().assetDIDURL(h) + ": " + e.getMessage());
+					storageFailure(ctx, "Retrieving venue asset " + engine().assetDIDURL(h), e);
 					return;
 				}
 			}
@@ -399,7 +413,7 @@ public class CoviaAPI extends ACoviaAPI {
 				item.put(Fields.METADATA, asset.meta());
 				assetsList.add(item);
 			} catch (IOException e) {
-				buildError(ctx, 500, "Error retrieving venue asset " + id + ": " + e.getMessage());
+				storageFailure(ctx, "Retrieving venue asset " + id, e);
 				return;
 			}
 		}
@@ -524,7 +538,7 @@ public class CoviaAPI extends ACoviaAPI {
 				ctx.result(asset.getMetadata().toString());
 				ctx.status(200);
 			} catch (IOException e) {
-				buildError(ctx,500,"Error retrieving venue asset: "+e.getMessage());
+				storageFailure(ctx, "Retrieving venue asset", e);
 			}
 			return;
 		}
@@ -541,8 +555,8 @@ public class CoviaAPI extends ACoviaAPI {
 	private void serveAssetMeta(Context ctx, String ref) {
 		// Caller identity comes from authentication; UCAN grants arrive separately.
 		RequestContext rctx = AuthMiddleware.callerContext(ctx);
-		rctx = AuthMiddleware.withTransportGrants(rctx,
-			AuthMiddleware.headerUcans(ctx), engine().didVerifier());
+		rctx = engine().withTransportGrants(rctx,
+			AuthMiddleware.headerUcans(ctx));
 
 		try {
 			Asset asset=resolveAssetReference(ref, rctx);
@@ -561,7 +575,7 @@ public class CoviaAPI extends ACoviaAPI {
 		} catch (AuthException e) {
 			buildError(ctx,403,"Not authorised to read asset: "+ref);
 		} catch (IOException e) {
-			buildError(ctx,500,"Error retrieving asset: "+e.getMessage());
+			storageFailure(ctx, "Retrieving asset", e);
 		}
 	}
 
@@ -569,9 +583,13 @@ public class CoviaAPI extends ACoviaAPI {
 	 * Resolves an asset reference to an Asset, accepting any lattice address —
 	 * a bare hash, {@code a/<hash>}, a workspace/operation path ({@code w/…},
 	 * {@code o/…}), or a DID URL — the same addressing scheme {@code invoke}
-	 * uses. Enforces the asset-read capability (consistent with the
-	 * {@code asset:get} operation); cross-DID reads are satisfied by a UCAN
-	 * grant presented through the request's proof channel.
+	 * uses. An asset by hash is read as an asset's metadata, with
+	 * {@code asset/read} or {@code crud/read} over it
+	 * ({@link Engine#requireMetadataRead}, as the {@code asset:get} operation
+	 * reads it), and any other lattice address as data, where it lives
+	 * ({@link Engine#requirePathRead});
+	 * cross-DID reads are satisfied by a UCAN grant presented through the
+	 * request's proof channel.
 	 *
 	 * @param ref Asset reference (lattice address or bare hash)
 	 * @param ctx Request context (caller identity, grant scope, proofs)
@@ -580,14 +598,20 @@ public class CoviaAPI extends ACoviaAPI {
 	 */
 	private Asset resolveAssetReference(String ref, RequestContext ctx) throws IOException {
 		AString refStr = Strings.create(ref);
-		engine().requireResourceAccess(ctx,refStr, Abilities.ASSET_READ);
+		if (covia.adapter.AssetAdapter.parseAssetId(refStr) != null) {
+			engine().requireMetadataRead(ctx, refStr);
+		} else if (ref.startsWith("did:") && !engine().isLocalDIDResource(refStr)) {
+			engine().requireResourceAccess(ctx, refStr, Abilities.ASSET_READ);
+		} else {
+			engine().requirePathRead(ctx, refStr);
+		}
 
 		// Caller-relative content-addressed forms (bare hex and a/<hash>) — fetch
 		// the stored record so the returned bytes are byte-identical to the legacy
 		// assets/<hash> route, keeping content-addressed lookups self-verifying.
 		Hash hash = parseCallerAssetId(ref);
 		if (hash != null) {
-			AString owner = engine().requireLocalAccess(ctx, refStr, Abilities.ASSET_READ);
+			AString owner = engine().requireLocalAssetRead(ctx, refStr);
 			AVector<?> record = engine().getAssetRecord(hash, owner);
 			if (record == null) return null;
 			AString metadata = RT.ensureString(record.get(AssetStore.POS_JSON));
@@ -596,7 +620,7 @@ public class CoviaAPI extends ACoviaAPI {
 
 		// Any other lattice address — resolve via the universal resolver (the same
 		// path invoke and covia:read use) and interpret the value as metadata.
-		// Read checked above (asset/read).
+		// Read checked above.
 		ACell value = engine().resolvePathUnchecked(refStr, ctx);
 		if (value instanceof AMap) {
 			@SuppressWarnings("unchecked")
@@ -618,10 +642,8 @@ public class CoviaAPI extends ACoviaAPI {
 	 */
 	private static Hash parseCallerAssetId(String ref) {
 		if (ref == null) return null;
-		if (ref.startsWith("/a/")) return Hash.parse(ref.substring(3));
-		if (ref.startsWith("a/")) return Hash.parse(ref.substring(2));
-		if (ref.startsWith("did:")) return null;
-		return Hash.parse(ref);
+		AString name = Strings.create(ref);
+		return (covia.venue.Engine.ownerOf(name) != null) ? null : covia.adapter.AssetAdapter.parseAssetId(name);
 	}
 	
 	@OpenApi(path = ROUTE + "assets/{id}/content",
@@ -734,8 +756,8 @@ public class CoviaAPI extends ACoviaAPI {
 			}
 
 			RequestContext rctx = AuthMiddleware.callerContext(ctx);
-			rctx = AuthMiddleware.withTransportGrants(rctx,
-				AuthMiddleware.headerUcans(ctx), engine().didVerifier());
+			rctx = engine().withTransportGrants(rctx,
+				AuthMiddleware.headerUcans(ctx));
 			AString ref = Strings.create(id);
 
 			Hash assetID=parseCallerAssetId(id);
@@ -789,7 +811,7 @@ public class CoviaAPI extends ACoviaAPI {
 			// preview/download go through, and callers need to see why.
 			buildError(ctx,403,e.getMessage());
 		} catch (IOException e) {
-			buildError(ctx,500,"Error retrieving asset content: "+e.getMessage());
+			storageFailure(ctx, "Retrieving asset content", e);
 		}
 	}
 
@@ -846,8 +868,8 @@ public class CoviaAPI extends ACoviaAPI {
 			}
 
 			RequestContext rctx = AuthMiddleware.callerContext(ctx);
-			rctx = AuthMiddleware.withTransportGrants(rctx,
-				AuthMiddleware.headerUcans(ctx), engine().didVerifier());
+			rctx = engine().withTransportGrants(rctx,
+				AuthMiddleware.headerUcans(ctx));
 			AString ref = Strings.create(idString);
 			AString writeAs=engine().requireLocalAccess(rctx, ref, Abilities.ASSET_STORE);
 			AVector<?> record=engine().getAssetRecord(assetID, writeAs);
@@ -874,10 +896,10 @@ public class CoviaAPI extends ACoviaAPI {
 
 		} catch (AuthException e) {
 			buildError(ctx,403,"Not authorised to store asset content: "+idString);
-		} catch (IllegalArgumentException e) {
+		} catch (InvalidInputException e) {
 			this.buildError(ctx, 400, "Cannot PUT asset content: "+e.getMessage());
-		} catch (IOException | OutOfMemoryError e) {
-			this.buildError(ctx, 500,"Storage error trying to PUT asset content: "+e.getMessage());
+		} catch (IOException e) {
+			storageFailure(ctx, "Storing asset content", e);
 		}
 	}
 
@@ -902,8 +924,13 @@ public class CoviaAPI extends ACoviaAPI {
 			responses = {
 				@OpenApiResponse(status = "200", description = "Operation output",
 					content = @OpenApiContent(type = "application/json", from = Object.class)),
-				@OpenApiResponse(status = "400", description = "Malformed request or operation"),
-				@OpenApiResponse(status = "403", description = "Operation not authorised")
+				@OpenApiResponse(status = "400", description = "Malformed request, or the job failed with "
+					+ "the reason the message gives, an authority check inside the operation included. "
+					+ "A failed job may have had side effects before it failed"),
+				@OpenApiResponse(status = "403", description = "The venue refused the run before the operation started"),
+				@OpenApiResponse(status = "500", description = "The job failed unexpectedly: a venue error. "
+					+ "It may have had side effects before it failed"),
+				@OpenApiResponse(status = "503", description = "Venue shutting down; retry once it is back")
 			})
 	protected void runOperation(Context ctx) {
 		// Direct operation results may contain owner-requested plaintext secrets.
@@ -929,30 +956,48 @@ public class CoviaAPI extends ACoviaAPI {
 		}
 		boolean privateJob = CVMBool.TRUE.equals(privateCell);
 		RequestContext rctx = AuthMiddleware.callerContext(ctx);
-		AVector<ACell> ucans = RT.getIn(req, Fields.UCANS);
-		rctx = AuthMiddleware.withTransportGrants(rctx, ucans, engine().didVerifier());
-
+		AVector<ACell> ucans;
 		try {
-			ACell result = engine().jobs().runOperation(op, input, rctx, privateJob).join();
+			ucans = AuthMiddleware.bodyUcans(req);
+		} catch (InvalidInputException e) {
+			buildError(ctx, 400, e.getMessage());
+			return;
+		}
+		rctx = engine().withTransportGrants(rctx, ucans);
+
+		JobManager.Run run = engine().jobs().startRun(op, input, rctx, privateJob);
+		try {
+			ACell result = run.result().join();
 			buildResult(ctx, 200, result);
 		} catch (java.util.concurrent.CompletionException e) {
 			Throwable cause = (e.getCause() != null) ? e.getCause() : e;
-			if (cause instanceof AuthException) {
+			if (run.job() != null) {
+				// The venue accepted the run; the operation then failed. However
+				// it failed, that is the job's outcome, not an HTTP refusal: a
+				// fault, which the job reported, or the operation's stated reason.
+				CoviaException reported = run.job().report(cause);
+				if (FaultException.isFault(reported)) {
+					buildError(ctx, 500, reported.getMessage());
+				} else {
+					buildError(ctx, 400, "Error running operation: " + reported.getMessage());
+				}
+			} else if (cause instanceof AuthException) {
 				buildError(ctx, 403, cause.getMessage());
+			} else if (cause instanceof ShuttingDownException) {
+				buildError(ctx, 503, cause.getMessage());
 			} else if (cause instanceof covia.exception.RemoteFetchException) {
 				buildError(ctx, 502, cause.getMessage());
 			} else if (cause instanceof covia.exception.RateLimitException rate) {
 				ctx.header("Retry-After", Long.toString(rate.getRetryAfterSeconds()));
 				buildError(ctx, 429, rate.getMessage());
-			} else if (cause instanceof IllegalArgumentException
-					|| cause instanceof IllegalStateException) {
+			} else if (AAdapter.isExpectedFailure(cause)) {
+				// The run was refused for its own stated reason.
 				buildError(ctx, 400, "Error running operation: " + cause.getMessage());
 			} else {
-				buildError(ctx, 500, "Operation failed: " + cause.getMessage());
+				// A fault reported where it happened, or the venue's own in
+				// handling this request: the server answers both
+				throw e;
 			}
-		} catch (Exception e) {
-			buildError(ctx, 500, "Unexpected failure running operation: " + e);
-			log.warn("Unexpected exception handling client run", e);
 		}
 	}
 	
@@ -960,7 +1005,11 @@ public class CoviaAPI extends ACoviaAPI {
 			methods = HttpMethod.POST,
 			tags = { "Covia"},
 			summary = "Invoke a Covia operation",
-			description = "Invokes an operation, creating a Job that tracks its execution. "
+			description = "Looks up an operation reference and creates a Job that tracks its execution. "
+					+ "Requires invoke on that reference or a containing operation tree. This grants "
+					+ "no authority over resources used by the operation, which checks the caller's "
+					+ "authority independently. Directly bound tools need their action authority "
+					+ "without this arbitrary-reference permission. "
 					+ "EVERY invocation is asynchronous by default: the response is the job "
 					+ "record (201, with a Location header for the job), which the caller polls "
 					+ "via GET /jobs/{id} (or subscribes via /jobs/{id}/sse) until it reaches a "
@@ -1029,8 +1078,14 @@ public class CoviaAPI extends ACoviaAPI {
 
 		// Authentication has already selected the caller. Body UCANs are grants
 		// only: they cannot authenticate, select a namespace, or instruct execution.
-		AVector<ACell> ucans = RT.getIn(req, "ucans");
-		rctx = AuthMiddleware.withTransportGrants(rctx, ucans, engine().didVerifier());
+		AVector<ACell> ucans;
+		try {
+			ucans = AuthMiddleware.bodyUcans(req);
+		} catch (InvalidInputException e) {
+			buildError(ctx, 400, e.getMessage());
+			return;
+		}
+		rctx = engine().withTransportGrants(rctx, ucans);
 
 		try {
 			// Wait window: `wait` (query param or body field) is boolean or an
@@ -1045,34 +1100,32 @@ public class CoviaAPI extends ACoviaAPI {
 			}
 
 			Job job=engine().jobs().submitOperation(op,input,rctx);
-			if (job==null) {
-				buildError(ctx,404,"Operation does not exist");
-				return;
-			}
-
 			boolean completedWithinWait = awaitCompletion(job, waitMs);
 
 			this.buildResult(ctx, completedWithinWait ? 200 : 201, job.getData());
 			ctx.header("Location",ROUTE+"jobs/"+job.getID().toHexString());
 		} catch (AuthException e) {
 			this.buildError(ctx, 403, e.getMessage());
+		} catch (ShuttingDownException e) {
+			this.buildError(ctx, 503, e.getMessage());
 		} catch (covia.exception.RemoteFetchException e) {
 			// Resolving the operation required fetching a definition from another
 			// venue, and that upstream fetch failed — a gateway error, not "the
 			// operation does not exist" (#174). The message names the venue.
 			this.buildError(ctx, 502, e.getMessage());
-		} catch (IllegalArgumentException | IllegalStateException e) {
-			this.buildError(ctx, 400, "Error invoking operation: "+e.getClass().getSimpleName()+":"+e.getMessage());
-			return;
 		} catch (covia.exception.RateLimitException e) {
 			// Caller is over an admission/rate limit (e.g. concurrent-job cap) and
 			// the bounded wait elapsed — standard backpressure: 429 + Retry-After.
 			ctx.header("Retry-After", Long.toString(e.getRetryAfterSeconds()));
 			this.buildError(ctx, 429, e.getMessage());
 			return;
-		} catch (Exception e) {
-			this.buildError(ctx, 500, "Unexpected failure invoking operation: "+e);
-			log.warn("Unexpected exception handling client invoke",e);
+		} catch (FaultException e) {
+			// A fault, reported where it happened, is the server handler's to answer
+			throw e;
+		} catch (CoviaException e) {
+			// Any other expected refusal of the invocation; anything else is a
+			// fault, which the server's handler reports
+			this.buildError(ctx, 400, "Error invoking operation: " + e.getMessage());
 		}
 	}
 
@@ -1113,16 +1166,16 @@ public class CoviaAPI extends ACoviaAPI {
 	 * @param queryParam Raw {@code wait} query parameter (may be null)
 	 * @param bodyField {@code wait} field from the request body (may be null)
 	 * @return Wait window in ms; 0 for the default asynchronous behaviour
-	 * @throws IllegalArgumentException if {@code wait} is present but malformed
+	 * @throws InvalidInputException if {@code wait} is present but malformed
 	 */
 	static long parseWaitMs(String queryParam, ACell bodyField) {
-		if (queryParam != null) return parseWaitToken(queryParam.trim());
+		if (queryParam != null) return parseWaitToken(queryParam);
 		if (bodyField == null) return 0;
 		if (convex.core.data.prim.CVMBool.TRUE.equals(bodyField)) return MAX_WAIT_MS;
 		if (convex.core.data.prim.CVMBool.FALSE.equals(bodyField)) return 0;
 		if (bodyField instanceof convex.core.data.prim.CVMLong l) return clampWait(l.longValue());
-		if (bodyField instanceof AString s) return parseWaitToken(s.toString().trim());
-		throw new IllegalArgumentException(
+		if (bodyField instanceof AString s) return parseWaitToken(s.toString());
+		throw new InvalidInputException(
 			"Invalid wait value: expected boolean or milliseconds, got " + bodyField.getClass().getSimpleName());
 	}
 
@@ -1134,13 +1187,13 @@ public class CoviaAPI extends ACoviaAPI {
 		try {
 			return clampWait(Long.parseLong(token));
 		} catch (NumberFormatException e) {
-			throw new IllegalArgumentException(
+			throw new InvalidInputException(
 				"Invalid wait value: expected true, false or milliseconds, got '" + token + "'");
 		}
 	}
 
 	private static long clampWait(long ms) {
-		if (ms < 0) throw new IllegalArgumentException("Invalid wait value: negative milliseconds " + ms);
+		if (ms < 0) throw new InvalidInputException("Invalid wait value: negative milliseconds " + ms);
 		return Math.min(ms, MAX_WAIT_MS);
 	}
 
@@ -1165,8 +1218,8 @@ public class CoviaAPI extends ACoviaAPI {
 		RequestContext rctx = AuthMiddleware.callerContext(ctx);
 		// Job reads are delegable and federated observation must carry the
 		// caller's authority: attach grants from X-Covia-Ucans (a GET has no body).
-		rctx = AuthMiddleware.withTransportGrants(rctx,
-			AuthMiddleware.headerUcans(ctx), engine().didVerifier());
+		rctx = engine().withTransportGrants(rctx,
+			AuthMiddleware.headerUcans(ctx));
 
 		try {
 			AMap<AString,ACell> status=engine().jobs().getJobData(id, rctx);
@@ -1177,8 +1230,6 @@ public class CoviaAPI extends ACoviaAPI {
 			buildResult(ctx,200,status);
 		} catch (AuthException e) {
 			buildError(ctx,403,e.getMessage());
-		} catch (Exception e) {
-			buildError(ctx,404,"Job not found: "+id);
 		}
 	}
 	
@@ -1202,11 +1253,17 @@ public class CoviaAPI extends ACoviaAPI {
 					@OpenApiResponse(status = "202", description = "Message accepted and queued"),
 					@OpenApiResponse(status = "403", description = "Caller is not the job owner"),
 					@OpenApiResponse(status = "404", description = "Job not found"),
-					@OpenApiResponse(status = "409", description = "Job is in terminal state, or its adapter refused the message"),
-					@OpenApiResponse(status = "502", description = "The remote end of a mirrored job did not acknowledge the message; delivery is unknown")
+					@OpenApiResponse(status = "400", description = "The id is not a job ID, or the body is not JSON"),
+					@OpenApiResponse(status = "409", description = "Job has finished, is not active, does not take messages, or its adapter refused the message"),
+					@OpenApiResponse(status = "502", description = "The remote end of a mirrored job did not acknowledge the message; delivery is unknown"),
+					@OpenApiResponse(status = "503", description = "The job's backend cannot take the message: not available on this venue, or its agent is misconfigured")
 					})
 	protected void sendMessage(Context ctx) {
 		Blob id = Blob.parse(ctx.pathParam("id"));
+		if (id == null) {
+			buildError(ctx, 400, "Message delivery requires a job ID as a valid hex string");
+			return;
+		}
 		// A malformed body is the caller's error: 400, never the generic 500.
 		ACell message;
 		try {
@@ -1229,12 +1286,15 @@ public class CoviaAPI extends ACoviaAPI {
 			buildResult(ctx, 202, response);
 		} catch (AuthException e) {
 			buildError(ctx, 403, e.getMessage());
-		} catch (IllegalArgumentException e) {
+		} catch (NotFoundException e) {
 			buildError(ctx, 404, e.getMessage());
-		} catch (IllegalStateException e) {
+		} catch (ConflictException | NotSupportedException e) {
 			buildError(ctx, 409, e.getMessage());
 		} catch (covia.exception.ResponseException e) {
 			buildError(ctx, 502, e.getMessage());
+		} catch (UnavailableException | InvalidDefinitionException e) {
+			// The job's backend cannot take the message: unloaded, or its agent misconfigured
+			buildError(ctx, 503, e.getMessage());
 		}
 	}
 
@@ -1281,13 +1341,15 @@ public class CoviaAPI extends ACoviaAPI {
 				buildResult(ctx,status);
 				ctx.status(200);
 			} else {
-				ctx.status(404);
+				buildError(ctx, 404, JobManager.JOB_NOT_FOUND + id.toHexString());
 			}
 		} catch (AuthException e) {
 			buildError(ctx, 403, e.getMessage());
+		} catch (ConflictException | NotSupportedException e) {
+			buildError(ctx, 409, e.getMessage());
 		}
 	}
-	
+
 	@OpenApi(path = ROUTE + "jobs/{id}/pause",
 			methods = HttpMethod.PUT,
 			tags = { "Covia"},
@@ -1314,11 +1376,11 @@ public class CoviaAPI extends ACoviaAPI {
 				buildResult(ctx,status);
 				ctx.status(200);
 			} else {
-				ctx.status(404);
+				buildError(ctx, 404, JobManager.JOB_NOT_FOUND + id.toHexString());
 			}
 		} catch (AuthException e) {
 			buildError(ctx, 403, e.getMessage());
-		} catch (IllegalStateException e) {
+		} catch (ConflictException | NotSupportedException e) {
 			buildError(ctx, 409, e.getMessage());
 		}
 	}
@@ -1349,11 +1411,11 @@ public class CoviaAPI extends ACoviaAPI {
 				buildResult(ctx,status);
 				ctx.status(200);
 			} else {
-				ctx.status(404);
+				buildError(ctx, 404, JobManager.JOB_NOT_FOUND + id.toHexString());
 			}
 		} catch (AuthException e) {
 			buildError(ctx, 403, e.getMessage());
-		} catch (IllegalStateException e) {
+		} catch (ConflictException | NotSupportedException e) {
 			buildError(ctx, 409, e.getMessage());
 		}
 	}
@@ -1383,7 +1445,7 @@ public class CoviaAPI extends ACoviaAPI {
 			if (deleted) {
 				ctx.status(200);
 			} else {
-				ctx.status(404);
+				buildError(ctx, 404, JobManager.JOB_NOT_FOUND + id.toHexString());
 			}
 		} catch (AuthException e) {
 			buildError(ctx, 403, e.getMessage());
@@ -1411,8 +1473,8 @@ public class CoviaAPI extends ACoviaAPI {
 		}
 		// Ownership applies to the stream exactly as to GET /jobs/{id}: the
 		// record resolves under the caller's context or not at all.
-		RequestContext rctx = AuthMiddleware.withTransportGrants(AuthMiddleware.callerContext(ctx),
-			AuthMiddleware.headerUcans(ctx), engine().didVerifier());
+		RequestContext rctx = engine().withTransportGrants(AuthMiddleware.callerContext(ctx),
+			AuthMiddleware.headerUcans(ctx));
 		try {
 			if (engine().jobs().getJobData(id, rctx) == null) {
 				buildError(ctx, 404, "Job not found: " + id);
@@ -1448,7 +1510,7 @@ public class CoviaAPI extends ACoviaAPI {
 		try {
 			ctx.res().flushBuffer();
 		} catch (java.io.IOException e) {
-			throw new RuntimeException(e);
+			throw new java.io.UncheckedIOException(e);
 		}
 		ctx.async(cfg -> cfg.timeout = 0L,
 			() -> sseServer.registerSSE.accept(new io.javalin.http.sse.SseClient(ctx)));
@@ -1579,8 +1641,12 @@ public class CoviaAPI extends ACoviaAPI {
 							example = "v/test/ops/echo") })
 	protected void getOperation(Context ctx) {
 		String name = ctx.pathParam("name");
+		// Resolved as the caller, like assets/<ref>: an encoded name may be any
+		// lattice path, so the read is the caller's to make, never the venue's.
+		RequestContext rctx = engine().withTransportGrants(AuthMiddleware.callerContext(ctx),
+			AuthMiddleware.headerUcans(ctx));
 		try {
-			Asset asset = venue.resolveAsset(name);
+			Asset asset = engine().resolveAsset(Strings.create(name), rctx);
 			if (asset == null) {
 				buildError(ctx, 404, "Operation not found: " + name);
 				return;
@@ -1601,8 +1667,10 @@ public class CoviaAPI extends ACoviaAPI {
 				if (output != null) result.put("output", output);
 			}
 			buildResult(ctx, 200, result);
-		} catch (IOException e) {
-			buildError(ctx, 500, "Error resolving operation: " + e.getMessage());
+		} catch (AuthException e) {
+			buildError(ctx, 403, e.getMessage());
+		} catch (covia.exception.RemoteFetchException e) {
+			buildError(ctx, 502, e.getMessage());
 		}
 	}
 
@@ -1739,14 +1807,14 @@ public class CoviaAPI extends ACoviaAPI {
 		}
 
 		RequestContext rctx = AuthMiddleware.callerContext(ctx);
-		rctx = AuthMiddleware.withTransportGrants(rctx,
-			AuthMiddleware.headerUcans(ctx), engine().didVerifier());
+		rctx = engine().withTransportGrants(rctx,
+			AuthMiddleware.headerUcans(ctx));
 
 		AMap<AString, ACell> input;
 		try {
 			path = expandValueScope(ctx, rctx, path);
 			input = buildValueInput(ctx, path);
-		} catch (IllegalArgumentException e) {
+		} catch (InvalidInputException e) {
 			buildError(ctx, 400, e.getMessage());
 			return;
 		}
@@ -1767,7 +1835,7 @@ public class CoviaAPI extends ACoviaAPI {
 				case "aggregate" -> covia.handleAggregate(rctx, input);
 				// The count fast path is aggregate with no grouping.
 				case "count"     -> covia.handleAggregate(rctx, input.dissoc(Strings.intern("groupBy")));
-				default -> throw new IllegalArgumentException("Unknown values op: " + op);
+				default -> throw new IllegalStateException("Unknown values op: " + op);
 			};
 			// Content-addressed conditional read — only for `read`, where a path
 			// resolves to a single value whose CAD3 hash is a free, exact validator.
@@ -1794,12 +1862,10 @@ public class CoviaAPI extends ACoviaAPI {
 			buildResult(ctx, 200, result);
 		} catch (AuthException e) {
 			buildError(ctx, 403, e.getMessage());
-		} catch (IllegalArgumentException e) {
+		} catch (InvalidInputException e) {
 			// Bad request parameters (e.g. a fields projection on a non-keyed
 			// node, or over the field cap) — the caller's error, not the venue's.
 			buildError(ctx, 400, e.getMessage());
-		} catch (RuntimeException e) {
-			buildError(ctx, 500, "Read failed: " + e.getMessage());
 		}
 	}
 
@@ -1832,11 +1898,11 @@ public class CoviaAPI extends ACoviaAPI {
 
 	private static AMap<AString, ACell> putLongParam(AMap<AString, ACell> m, Context ctx, String name) {
 		String v = ctx.queryParam(name);
-		if (v == null || v.isBlank()) return m;
+		if (v == null || v.isEmpty()) return m;
 		try {
-			return m.assoc(Strings.intern(name), CVMLong.create(Long.parseLong(v.trim())));
+			return m.assoc(Strings.intern(name), CVMLong.create(Long.parseLong(v)));
 		} catch (NumberFormatException e) {
-			throw new IllegalArgumentException("Invalid integer query parameter '" + name + "': " + v);
+			throw new InvalidInputException("Invalid integer query parameter '" + name + "': " + v);
 		}
 	}
 
@@ -1881,7 +1947,7 @@ public class CoviaAPI extends ACoviaAPI {
 		boolean scopedPath = isExecutionScopedNamespace(path);
 		if (!scopedPath) {
 			if (isExecutionScopedRequest(ctx)) {
-				throw new IllegalArgumentException(
+				throw new InvalidInputException(
 					"'agent', 'task', and 'session' are only valid with n/, t/, or c/ paths");
 			}
 			return path;
@@ -1910,13 +1976,13 @@ public class CoviaAPI extends ACoviaAPI {
 				yield agent.ownerDID() + "/g/" + agent.agentId()
 					+ "/sessions/" + sessionId.toHexString() + "/c" + suffix;
 			}
-			default -> throw new IllegalArgumentException("Unsupported scoped namespace: " + namespace);
+			default -> throw new IllegalStateException("Unsupported scoped namespace: " + namespace);
 		};
 	}
 
 	private static AgentScope parseAgentScope(String ref, RequestContext rctx) {
 		if (ref == null || ref.isBlank()) {
-			throw new IllegalArgumentException(
+			throw new InvalidInputException(
 				"Missing 'agent' query parameter for execution-scoped path");
 		}
 
@@ -1925,7 +1991,7 @@ public class CoviaAPI extends ACoviaAPI {
 		if (ref.startsWith("did:")) {
 			AString agentDID = Strings.create(ref);
 			if (!Principals.isAgentDID(agentDID)) {
-				throw new IllegalArgumentException(
+				throw new InvalidInputException(
 					"'agent' must be a bare agent id or a full agent DID ending ':g:<agentId>'");
 			}
 			owner = Principals.userOf(agentDID);
@@ -1933,7 +1999,7 @@ public class CoviaAPI extends ACoviaAPI {
 		} else {
 			owner = rctx.getUserDID();
 			if (owner == null) {
-				throw new IllegalArgumentException(
+				throw new InvalidInputException(
 					"A bare 'agent' id requires an authenticated caller");
 			}
 			agentId = Strings.create(ref);
@@ -1941,32 +2007,31 @@ public class CoviaAPI extends ACoviaAPI {
 
 		if (agentId == null || agentId.count() == 0
 				|| agentId.toString().contains("/") || agentId.toString().contains(":")) {
-			throw new IllegalArgumentException("'agent' must name a single agent id");
+			throw new InvalidInputException("'agent' must name a single agent id");
 		}
 		// Apply the canonical agent-DID syntax validation in one place.
-		Principals.agentDID(owner, agentId);
+		try {
+			Principals.agentDID(owner, agentId);
+		} catch (IllegalArgumentException e) {
+			throw new InvalidInputException(e.getMessage(), e);
+		}
 		return new AgentScope(owner, agentId);
 	}
 
 	private static Blob parseBlobParam(Context ctx, String name, String namespace) {
 		String raw = ctx.queryParam(name);
 		if (raw == null || raw.isBlank()) {
-			throw new IllegalArgumentException(
+			throw new InvalidInputException(
 				"Missing '" + name + "' query parameter for " + namespace + " path");
 		}
-		try {
-			Blob id = Blob.parse(raw.trim());
-			if (id == null) throw new IllegalArgumentException();
-			return id;
-		} catch (RuntimeException e) {
-			throw new IllegalArgumentException(
-				"Invalid '" + name + "' query parameter: expected a hex id");
-		}
+		Blob id = Blob.parse(raw.trim());
+		if (id == null) throw new InvalidInputException("Invalid '" + name + "' query parameter: expected a hex id");
+		return id;
 	}
 
 	private static void rejectParam(Context ctx, String name, String namespace) {
 		if (hasParam(ctx, name)) {
-			throw new IllegalArgumentException(
+			throw new InvalidInputException(
 				"'" + name + "' is not valid with a " + namespace + " path");
 		}
 	}
@@ -1997,14 +2062,18 @@ public class CoviaAPI extends ACoviaAPI {
 		boolean annotated = !"false".equals(ctx.queryParam("status"));
 		boolean includeTerminated = "true".equals(ctx.queryParam("includeTerminated"));
 		AgentAdapter agent = (AgentAdapter) engine().getAdapter("agent");
-		buildResult(ctx, 200, agent.listAgents(rctx, includeTerminated, annotated));
+		try {
+			buildResult(ctx, 200, agent.listAgents(rctx, includeTerminated, annotated));
+		} catch (AuthException e) {
+			buildError(ctx, 403, e.getMessage());
+		}
 	}
 
 	@OpenApi(path = ROUTE + "schedules",
 			methods = HttpMethod.GET,
 			tags = { "Covia" },
 			summary = "List the authenticated caller's pending scheduled events, each "
-				+ "{handle, op, time, track, by?, input?, description?, created?, repeat?, lastFired?, "
+				+ "{handle, op, time, track, caller?, owner?, input?, description?, created?, repeat?, lastFired?, "
 				+ "lastJob?}, ordered by next fire time (job-free, #369). Includes events queued by the "
 				+ "caller's agents; input hides the operation's secret fields as job records do. Read "
 				+ "lastJob via /jobs/{id} for a tracked recurring event's most recent outcome.",
@@ -2033,7 +2102,16 @@ public class CoviaAPI extends ACoviaAPI {
 		}
 		String id = ctx.pathParam("id");
 		AgentAdapter agent = (AgentAdapter) engine().getAdapter("agent");
-		AMap<AString, ACell> info = agent.agentInfo(rctx, Strings.create(id));
+		AMap<AString, ACell> info;
+		try {
+			info = agent.agentInfo(rctx, Strings.create(id));
+		} catch (AuthException e) {
+			buildError(ctx, 403, e.getMessage());
+			return;
+		} catch (InvalidInputException e) {
+			buildError(ctx, 400, e.getMessage());
+			return;
+		}
 		if (info == null) {
 			buildError(ctx, 404, "Agent not found: " + id);
 			return;
@@ -2058,10 +2136,8 @@ public class CoviaAPI extends ACoviaAPI {
 			buildResult(ctx, 200, user.list(rctx));
 		} catch (AuthException e) {
 			buildError(ctx, 403, e.getMessage());
-		} catch (IllegalArgumentException e) {
+		} catch (InvalidInputException e) {
 			buildError(ctx, 400, e.getMessage());
-		} catch (RuntimeException e) {
-			buildError(ctx, 500, "Read failed: " + e.getMessage());
 		}
 	}
 
@@ -2085,10 +2161,10 @@ public class CoviaAPI extends ACoviaAPI {
 			buildResult(ctx, 200, user.info(rctx, input));
 		} catch (AuthException e) {
 			buildError(ctx, 403, e.getMessage());
-		} catch (IllegalArgumentException e) {
+		} catch (NotFoundException e) {
 			buildError(ctx, 404, e.getMessage());
-		} catch (RuntimeException e) {
-			buildError(ctx, 500, "Read failed: " + e.getMessage());
+		} catch (InvalidInputException e) {
+			buildError(ctx, 400, e.getMessage());
 		}
 	}
 
@@ -2103,9 +2179,12 @@ public class CoviaAPI extends ACoviaAPI {
 				Maps.of(Fields.DID, Strings.create(ctx.pathParam("did"))), rctx).join();
 			buildResult(ctx, 200, result);
 		} catch (RuntimeException e) {
-			Throwable cause = e instanceof java.util.concurrent.CompletionException ? e.getCause() : e;
+			Throwable cause = (e instanceof java.util.concurrent.CompletionException && e.getCause() != null)
+				? e.getCause() : e;
+			// A venue error is the server handler's to log and answer
+			if (!AAdapter.isExpectedFailure(cause)) throw e;
 			buildError(ctx, cause instanceof AuthException ? 403
-				: cause instanceof IllegalArgumentException ? 400 : 500, cause.getMessage());
+				: cause instanceof ShuttingDownException ? 503 : 400, cause.getMessage());
 		}
 	}
 
@@ -2131,10 +2210,10 @@ public class CoviaAPI extends ACoviaAPI {
 			buildResult(ctx, 200, user.authenticationList(rctx, input));
 		} catch (AuthException e) {
 			buildError(ctx, 403, e.getMessage());
-		} catch (IllegalArgumentException e) {
+		} catch (NotFoundException e) {
+			buildError(ctx, 404, e.getMessage());
+		} catch (InvalidInputException e) {
 			buildError(ctx, 400, e.getMessage());
-		} catch (RuntimeException e) {
-			buildError(ctx, 500, "Read failed: " + e.getMessage());
 		}
 	}
 
@@ -2155,10 +2234,10 @@ public class CoviaAPI extends ACoviaAPI {
 			buildResult(ctx, 200, dlfs.listDrives(rctx));
 		} catch (AuthException e) {
 			buildError(ctx, 403, e.getMessage());
-		} catch (IllegalArgumentException e) {
+		} catch (InvalidInputException e) {
 			buildError(ctx, 400, e.getMessage());
-		} catch (Exception e) {
-			buildError(ctx, 500, "Read failed: " + e.getMessage());
+		} catch (IOException e) {
+			storageFailure(ctx, "Listing drives", e);
 		}
 	}
 
@@ -2192,10 +2271,12 @@ public class CoviaAPI extends ACoviaAPI {
 			buildResult(ctx, 200, dlfs.listDirectory(rctx, input));
 		} catch (AuthException e) {
 			buildError(ctx, 403, e.getMessage());
-		} catch (IllegalArgumentException e) {
+		} catch (NotFoundException e) {
+			buildError(ctx, 404, e.getMessage());
+		} catch (InvalidInputException | UnavailableException e) {
 			buildError(ctx, 400, e.getMessage());
-		} catch (Exception e) {
-			buildError(ctx, 500, "Read failed: " + e.getMessage());
+		} catch (IOException e) {
+			storageFailure(ctx, "Listing the directory", e);
 		}
 	}
 
@@ -2234,6 +2315,9 @@ public class CoviaAPI extends ACoviaAPI {
 		} catch (AuthException e) {
 			buildError(ctx, 403, e.getMessage());
 			return;
+		} catch (InvalidInputException e) {
+			buildError(ctx, 400, e.getMessage());
+			return;
 		}
 		String sessionParam = ctx.queryParam("sessionId");
 		if (sessionParam != null && !sessionParam.isBlank() && SseServer.sessionFilter(sessionParam) == null) {
@@ -2263,7 +2347,7 @@ public class CoviaAPI extends ACoviaAPI {
 		try {
 			ctx.res().flushBuffer();
 		} catch (java.io.IOException e) {
-			throw new RuntimeException(e);
+			throw new java.io.UncheckedIOException(e);
 		}
 		ctx.async(cfg -> cfg.timeout = 0L,
 			() -> sseServer.registerAgentSSE.accept(new io.javalin.http.sse.SseClient(ctx)));
@@ -2277,19 +2361,23 @@ public class CoviaAPI extends ACoviaAPI {
 			operationId = "listSecrets")
 	protected void listSecrets(Context ctx) {
 		RequestContext rctx = AuthMiddleware.callerContext(ctx);
-		AString callerDID = rctx.getCallerDID();
-		if (callerDID == null) {
+		if (rctx.getCallerDID() == null) {
 			buildError(ctx, 401, "Authentication required");
 			return;
 		}
-
-		User user = engine().getVenueState().users().get(callerDID);
-		if (user == null) {
-			buildResult(ctx, 200, Maps.of(Fields.ITEMS, Strings.create("[]"), Fields.TOTAL, 0));
+		SecretAdapter secrets = (SecretAdapter) engine().getAdapter("secret");
+		if (secrets == null) {
+			buildError(ctx, 404, ADAPTER_NOT_ACTIVE + "secret");
 			return;
 		}
 
-		AVector<AString> names = user.secrets().list();
+		AVector<AString> names;
+		try {
+			names = secrets.listNames(rctx);
+		} catch (AuthException e) {
+			buildError(ctx, 403, e.getMessage());
+			return;
+		}
 		ArrayList<Object> items = new ArrayList<>();
 		for (long i = 0; i < names.count(); i++) {
 			items.add(names.get(i).toString());
@@ -2339,7 +2427,7 @@ public class CoviaAPI extends ACoviaAPI {
 		// PUT already expresses replacement intent at the HTTP resource boundary.
 		ACell input = Maps.of("name", name, "value", value,
 			Fields.OVERWRITE, convex.core.data.prim.CVMBool.TRUE);
-		Job job = engine().jobs().invokeOperation(Strings.create("v/ops/secret/set"), input, rctx);
+		Job job = engine().jobs().callOperation("v/ops/secret/set", input, rctx);
 		ACell result = job.awaitResult();
 		if (result == null) {
 			buildError(ctx, 500, "Failed to store secret");
@@ -2377,7 +2465,10 @@ public class CoviaAPI extends ACoviaAPI {
 			}
 			ctx.status(200);
 		} catch (RuntimeException e) {
-			Throwable cause = e instanceof java.util.concurrent.CompletionException ? e.getCause() : e;
+			Throwable cause = (e instanceof java.util.concurrent.CompletionException && e.getCause() != null)
+				? e.getCause() : e;
+			// A venue error is the server handler's to log and answer
+			if (!AAdapter.isExpectedFailure(cause)) throw e;
 			buildError(ctx, cause instanceof AuthException ? 403 : 400, cause.getMessage());
 		}
 	}

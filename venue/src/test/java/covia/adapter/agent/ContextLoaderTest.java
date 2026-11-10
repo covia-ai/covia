@@ -20,6 +20,7 @@ import convex.core.lang.RT;
 import convex.auth.ucan.Capability;
 import covia.adapter.agent.ContextLoader;
 import covia.api.Fields;
+import covia.exception.NotFoundException;
 import covia.grid.Job;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -69,24 +70,26 @@ public class ContextLoaderTest {
 	// ========== Static helpers ==========
 
 	@Test
-	public void testIsNamespacePath() {
-		assertTrue(ContextLoader.isNamespacePath("w/docs/rules"));
-		assertTrue(ContextLoader.isNamespacePath("g/my-agent/state"));
-		assertTrue(ContextLoader.isNamespacePath("o/my-op"));
-		assertTrue(ContextLoader.isNamespacePath("j/some-job"));
-		assertTrue(ContextLoader.isNamespacePath("s/secret-name"));
-		assertTrue(ContextLoader.isNamespacePath("h/hitl-request"));
+	public void testIsLatticePath() {
+		for (String path : new String[] {"w/docs/rules", "g/my-agent/state", "o/my-op", "j/" + "ab".repeat(16),
+				"s/secret-name", "h/hitl-request", "w/e should be brief", "w/"}) {
+			assertTrue(ContextLoader.isLatticePath(engine, ctx, path), path);
+		}
 
 		// Leading slash is optional sugar (mirrors Engine.resolvePath): "/w/x"
 		// must resolve like "w/x" rather than falling through to literal text.
-		assertTrue(ContextLoader.isNamespacePath("/w/docs/rules"));
-		assertTrue(ContextLoader.isNamespacePath("/g/my-agent/state"));
-		assertTrue(ContextLoader.isNamespacePath("/n/notes"));
+		assertTrue(ContextLoader.isLatticePath(engine, ctx, "/w/docs/rules"));
+		assertTrue(ContextLoader.isLatticePath(engine, ctx, "/g/my-agent/state"));
 
-		assertFalse(ContextLoader.isNamespacePath("Always use British English"));
-		assertFalse(ContextLoader.isNamespacePath("abc123def456"));
-		assertFalse(ContextLoader.isNamespacePath("/a/abc123"));
-		assertFalse(ContextLoader.isNamespacePath("v/test/ops/echo"));
+		// A context-rooted path is a path outside its scope too.
+		assertTrue(ContextLoader.isLatticePath(engine, ctx, "/n/notes"));
+		assertTrue(ContextLoader.isLatticePath(engine, ctx, "c/draft"));
+
+		// Text: no slash, or a place no data could be
+		for (String text : new String[] {"Always use British English", "abc123def456", "w", "foo/bar",
+				"meta/updated", "j/not-hex", "https://example.com/rules", "and/or"}) {
+			assertFalse(ContextLoader.isLatticePath(engine, ctx, text), text);
+		}
 	}
 
 	@Test
@@ -95,9 +98,11 @@ public class ContextLoaderTest {
 		assertTrue(ContextLoader.isAssetReference("a".repeat(64)));
 		assertTrue(ContextLoader.isAssetReference("0123456789abcdef".repeat(4)));
 
-		// /a/ and /o/ paths
+		// /a/ paths
 		assertTrue(ContextLoader.isAssetReference("/a/abc123"));
-		assertTrue(ContextLoader.isAssetReference("/o/my-op"));
+		// o/ is the user's operations, a lattice path
+		assertFalse(ContextLoader.isAssetReference("/o/my-op"));
+		assertTrue(ContextLoader.isReference(engine, ctx, "/o/my-op"));
 
 		// DID URLs
 		assertTrue(ContextLoader.isAssetReference("did:key:z6MkAlice/a/abc123"));
@@ -115,6 +120,18 @@ public class ContextLoaderTest {
 		assertFalse(ContextLoader.isAssetReference("Always use British English"));
 		assertFalse(ContextLoader.isAssetReference("This is a plain instruction."));
 		assertFalse(ContextLoader.isAssetReference("short"));
+	}
+
+	@Test
+	public void testAStringEntryIsContentAPathOrText() {
+		ContextLoader plain = new ContextLoader(engine);
+		assertEquals("Be brief", plain.resolveValue(Strings.create("Be brief"), ctx).content());
+		assertEquals("foo/bar", plain.resolveValue(Strings.create("foo/bar"), ctx).content(),
+			"a place no data could be is text");
+		assertNull(plain.resolveValue(Strings.create("w/ctxNothingHere"), ctx), "a path to nothing is skipped");
+		ContextLoader.Resolved outOfScope = plain.resolveValue(Strings.create("c/draft"), ctx);
+		assertTrue(outOfScope.error(), "a path outside its scope is a visible failure");
+		assertEquals(covia.adapter.CoviaAdapter.NO_SESSION_SCOPE, outOfScope.content());
 	}
 
 	@Test
@@ -406,6 +423,37 @@ public class ContextLoaderTest {
 			Strings.intern("required"), CVMBool.TRUE
 		);
 		assertThrows(RuntimeException.class, () -> loader.resolveEntry(entry, ctx));
+	}
+
+	@Test
+	public void aJobMayBeNamedWithThePrefix() {
+		Job job = engine.jobs().invokeOperation("v/test/ops/echo",
+			Maps.of(Strings.create("message"), Strings.create("hello world")),
+			ctx);
+		job.awaitResult(5000);
+		AString prefixed = Strings.create("0x" + job.getID().toHexString());
+
+		String content = RT.ensureString(RT.getIn(
+			loader.resolveEntry(Maps.of(Strings.intern("job"), prefixed), ctx), Strings.intern("content"))).toString();
+		assertTrue(content.contains("hello world"));
+
+		assertEquals("hello world", loader.resolveText(
+			Maps.of(Strings.intern("job"), prefixed, Strings.intern("path"), Strings.create("message")), ctx));
+	}
+
+	@Test
+	public void textThatIsNoJobIdNamesNoJob() {
+		Job job = engine.jobs().invokeOperation("v/test/ops/echo",
+			Maps.of(Strings.create("message"), Strings.create("hello world")),
+			ctx);
+		job.awaitResult(5000);
+		AString spaced = Strings.create(job.getID().toHexString() + " ");
+
+		assertNull(loader.resolveEntry(Maps.of(Strings.intern("job"), spaced), ctx));
+		assertThrows(NotFoundException.class, () -> loader.resolveEntry(
+			Maps.of(Strings.intern("job"), spaced, Strings.intern("required"), CVMBool.TRUE), ctx));
+		assertThrows(NotFoundException.class, () -> loader.resolveText(
+			Maps.of(Strings.intern("job"), spaced), ctx));
 	}
 
 	// ========== Grid operation entries ==========

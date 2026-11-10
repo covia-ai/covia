@@ -11,8 +11,7 @@
 			"properties": {
 				"peer": {
 					"type": "string",
-					"description": "Convex peer endpoint, e.g.: peer.convex.live:18888",
-					"default": "peer.convex.live:18888"
+					"description": "Convex peer endpoint (host:port, tcp:// or tls://). Omit it to use the venue's peer; another peer works only where the operator allows relaying."
 				},
 				"address": {
 					"type": "string",
@@ -25,10 +24,14 @@
 				"seed": {
 					"type": "string",
 					"secret":true,
-					"description": "An s/<name> secret reference containing the Ed25519 seed. A literal hexadecimal seed is accepted only for compatibility."
+					"description": "An s/<name> secret reference containing the Ed25519 seed. A literal hexadecimal seed is accepted only for compatibility. Give this or key."
+				},
+				"key": {
+					"type": "string",
+					"description": "A held key to sign with instead of seed: its did:key, multibase public key or 0x account key in your keyring, or <did>/x/crypto/keys/<key> in another holder's. Needs key/sign/convex on it."
 				}
 			},
-			"required": ["address", "source", "seed"],
+			"required": ["address", "source"],
 			"additionalProperties": false
 		},
 		"output": {
@@ -47,8 +50,7 @@
 					"description": "Result of the query, as JSON (some type distinctions may be lost)."
 				}
 			}
-		},
-		"peer": "peer.convex.live:18888"
+		}
 	}
 }
 

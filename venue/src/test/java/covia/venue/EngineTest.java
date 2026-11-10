@@ -7,18 +7,17 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assertions.fail;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import convex.core.cvm.Keywords;
+import convex.core.crypto.AKeyPair;
 import convex.core.crypto.Hashing;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -38,14 +37,17 @@ import convex.core.util.Utils;
 import convex.lattice.cursor.Cursors;
 import convex.lattice.cursor.Root;
 import covia.api.Fields;
+import covia.exception.AuthException;
+import covia.exception.InvalidInputException;
 import covia.exception.JobFailedException;
+import covia.exception.ShuttingDownException;
 import covia.grid.Asset;
 import covia.grid.Assets;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.grid.impl.BlobContent;
 import covia.lattice.Covia;
-import covia.venue.storage.AStorage;
+import covia.venue.storage.ContentStorage;
 import covia.venue.storage.MemoryStorage;
 
 public class EngineTest {
@@ -77,15 +79,27 @@ public class EngineTest {
 		final TrackingStorage storage = new TrackingStorage();
 		final boolean failAfterSchedulerStart;
 
-		LifecycleTestEngine(Root<Index<Keyword, ACell>> cursor,
-				boolean failAfterSchedulerStart) throws IOException {
-			super(new Config(null), CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)),
-				convex.core.crypto.AKeyPair.generate());
+		private LifecycleTestEngine(Config config, CoviaApplication application, AKeyPair key,
+				boolean failAfterSchedulerStart) {
+			super(config, application, key);
 			this.failAfterSchedulerStart = failAfterSchedulerStart;
 		}
 
+		/** Mounts a new venue on a host over {@code cursor}, with this engine as its runtime. */
+		static LifecycleTestEngine mount(Root<Index<Keyword, ACell>> cursor, boolean failAfterSchedulerStart) {
+			return mount(TestEngine.application(new convex.lattice.LatticeHost<>(cursor, null)),
+				AKeyPair.generate(), failAfterSchedulerStart);
+		}
+
+		/** Mounts the venue {@code key} in {@code application}, with this engine as its runtime. */
+		static LifecycleTestEngine mount(CoviaApplication application, AKeyPair key,
+				boolean failAfterSchedulerStart) {
+			return (LifecycleTestEngine) application.mount(key, new Config(null),
+				(config, app, keyPair) -> new LifecycleTestEngine(config, app, keyPair, failAfterSchedulerStart));
+		}
+
 		@Override
-		protected AStorage createStorage() {
+		protected ContentStorage createStorage() {
 			return storage;
 		}
 
@@ -163,7 +177,7 @@ public class EngineTest {
 	@Test
 	public void testConstructionIsInertAndCloseMirrorsStart() throws Exception {
 		Root<Index<Keyword, ACell>> cursor = Cursors.root(convex.core.data.Index.<convex.core.data.Keyword, ACell>none());
-		LifecycleTestEngine engine = new LifecycleTestEngine(cursor, false);
+		LifecycleTestEngine engine = LifecycleTestEngine.mount(cursor, false);
 
 		assertFalse(engine.isStarted());
 		assertNull(engine.venueState, "constructor must not initialise lattice state");
@@ -186,24 +200,26 @@ public class EngineTest {
 	public void testConnectedVenueStateUsesAtomicLocalWriteOrderAtSameTimestamp() throws Exception {
 		Root<Index<Keyword, ACell>> cursor = Cursors.root(convex.core.data.Index.<convex.core.data.Keyword, ACell>none());
 
-		LifecycleTestEngine engine = new LifecycleTestEngine(cursor, false);
-		engine.latticeContext = convex.lattice.LatticeContext.EMPTY.withTimestamp(CVMLong.create(1_000L));
+		AKeyPair key = AKeyPair.generate();
+		var application = TestEngine.application(new convex.lattice.LatticeHost<>(cursor, null),
+			DrivenClock.at(java.time.Instant.ofEpochMilli(1_000L)));
+		LifecycleTestEngine engine = LifecycleTestEngine.mount(application, key, false);
 		AString did = Strings.create("did:test:connected-engine-state");
 		Blob jobId = Blob.parse("0x0001");
 
 		try {
 			engine.start();
 			User user = engine.getVenueState().users().ensure(did);
-			user.persistJob(jobId, Maps.of(
+			user.jobs().create(jobId, Maps.of(
 				Fields.STATUS, Status.PENDING, Fields.UPDATED, CVMLong.create(1_000L)));
-			user.persistJob(jobId, Maps.of(
-				Fields.STATUS, Status.STARTED, Fields.UPDATED, CVMLong.create(1_000L)));
+			user.jobs().job(jobId).update(job -> job.assoc(Fields.STATUS, Status.STARTED));
 
+			engine.syncState();
 			assertNotNull(RT.getIn(cursor.get(),
 				Covia.GRID, Covia.VENUES, engine.getAccountKey(), Keywords.VALUE,
 				Covia.USER_DATA, did),
-				"component writes must update the Engine's authoritative root immediately");
-			assertEquals(Status.STARTED, RT.getIn(user.getJob(jobId), Fields.STATUS),
+				"publication signs component writes into the Engine's root");
+			assertEquals(Status.STARTED, RT.getIn(user.jobs().getRecord(jobId), Fields.STATUS),
 				"local write order, not wall-clock resolution, decides the current value");
 		} finally {
 			engine.close();
@@ -213,7 +229,7 @@ public class EngineTest {
 	@Test
 	public void testFailedStartRollsBackAcquiredResources() throws Exception {
 		Root<Index<Keyword, ACell>> cursor = Cursors.root(convex.core.data.Index.<convex.core.data.Keyword, ACell>none());
-		LifecycleTestEngine engine = new LifecycleTestEngine(cursor, true);
+		LifecycleTestEngine engine = LifecycleTestEngine.mount(cursor, true);
 
 		IllegalStateException failure = assertThrows(IllegalStateException.class, engine::start);
 		assertTrue(failure.getMessage().contains("injected scheduler-rebuild failure"));
@@ -223,6 +239,9 @@ public class EngineTest {
 			"failed start must close storage after shutting down the scheduler");
 		assertThrows(IllegalStateException.class, engine.gridScheduler()::start,
 			"failed start must shut down the scheduler it started");
+		assertThrows(ShuttingDownException.class,
+			() -> engine.gridScheduler().cancel(Blob.fromHex("00"), RequestContext.of(Strings.create("did:test:late"))),
+			"a request reaching the shut-down scheduler is refused as shutting down");
 
 		// The caller retains the Engine reference and close remains safe after
 		// automatic rollback, including repeated cleanup by an outer owner.
@@ -266,7 +285,7 @@ public class EngineTest {
 		ACell jobID = RT.getIn(status, "id");
 		assertNotNull(jobID, "Job ID should be present in status");
 
-		waitForJobCompletion((Blob)jobID, 5000);
+		waitForJobCompletion(job);
 
 		ACell finalStatus = venue.jobs().getJobData((Blob)jobID, venue.venueContext());
 		assertEquals(Status.COMPLETE, RT.getIn(finalStatus, "status"));
@@ -284,7 +303,7 @@ public class EngineTest {
 		ACell jobID = RT.getIn(status, "id");
 		assertNotNull(jobID, "Job ID should be present in status");
 
-		waitForJobCompletion((Blob)jobID, 5000);
+		waitForJobCompletion(job);
 
 		ACell finalStatus = venue.jobs().getJobData((Blob)jobID, venue.venueContext());
 		assertEquals("FAILED", RT.getIn(finalStatus, "status").toString());
@@ -299,7 +318,7 @@ public class EngineTest {
 		ACell jobID = RT.getIn(status, "id");
 		assertNotNull(jobID, "Job ID should be present in status");
 
-		ACell finalStatus = waitForJobCompletion((Blob)jobID, 5000);
+		ACell finalStatus = waitForJobCompletion(job);
 
 		assertEquals(Status.COMPLETE, RT.getIn(finalStatus, "status"));
 
@@ -314,8 +333,7 @@ public class EngineTest {
 	// @Test
 	public void testQwen() {
 		ACell input = Maps.of("prompt", "What is the capital of France?");
-		ACell result = venue.jobs().invokeOperation(qwenOpId.toCVMHexString(), input, venue.venueContext()).awaitResult(5000);
-		result=waitForJobCompletion(RT.getIn(result, "id"), 5000);
+		ACell result = waitForJobCompletion(venue.jobs().invokeOperation(qwenOpId.toCVMHexString(), input, venue.venueContext()));
 		if (Status.COMPLETE.equals(RT.getIn(result, "status"))) {
 			// OK
 		} else {
@@ -323,24 +341,10 @@ public class EngineTest {
 		}
 	}
 
-	private ACell waitForJobCompletion(Object jobID, long timeoutMillis) {
-		Blob id=Job.parseID(jobID);
-		long startTime = System.currentTimeMillis();
-		ACell status = venue.jobs().getJobData(id, venue.venueContext());
-		while (System.currentTimeMillis() - startTime < timeoutMillis) {
-			status = venue.jobs().getJobData(id, venue.venueContext());
-			String jobStatus = RT.getIn(status, "status").toString();
-			if (!jobStatus.equals("PENDING")) {
-				return status;
-			}
-			try {
-				TimeUnit.MILLISECONDS.sleep(100);
-			} catch (InterruptedException e) {
-				Thread.currentThread().interrupt();
-				fail("Test interrupted while waiting for job completion");
-			}
-		}
-		return RT.assocIn(status, Status.FAILED,"status");
+	/** Waits for {@code job} to finish and returns its record. */
+	private ACell waitForJobCompletion(Job job) {
+		TestEngine.awaitJob(job, Job::isFinished, 10_000, () -> "job did not finish");
+		return venue.jobs().getJobData(job.getID(), venue.venueContext());
 	}
 
 	@Test
@@ -401,7 +405,7 @@ public class EngineTest {
 		ACell input = Maps.of("message", "Fail fast");
 		Job job = venue.jobs().invokeOperation("v/test/ops/error", input, venue.venueContext());
 
-		TestEngine.awaitCondition(job::isFinished, 5000,
+		TestEngine.awaitJob(job, Job::isFinished, 10_000,
 			() -> "error job did not reach a terminal state");
 		assertTrue(job.isFinished(), "Job should be finished");
 
@@ -425,7 +429,7 @@ public class EngineTest {
 		Engine closedEngine = Engine.createTemp(null);
 		Engine.addDemoAssets(closedEngine);
 		closedEngine.close();
-		assertThrows(IllegalStateException.class, () -> closedEngine.jobs().invokeOperation(
+		assertThrows(covia.exception.ShuttingDownException.class, () -> closedEngine.jobs().invokeOperation(
 			"v/test/ops/echo", Maps.empty(), closedEngine.venueContext()));
 		assertTrue(closedEngine.jobs().invokeInternal(
 			"v/test/ops/echo", Maps.empty(), closedEngine.venueContext())
@@ -444,6 +448,70 @@ public class EngineTest {
 		String didUrl = "did:web:venue.example.com/a/" + echoOpId.toHexString();
 		Hash resolved = venue.resolveHash(didUrl);
 		assertEquals(echoOpId, resolved);
+	}
+
+	@Test
+	public void testResolveLocalAssetNeverFetches() {
+		RequestContext ctx = venue.venueContext();
+		// A definition held here resolves by its DID URL; one another venue
+		// publishes is absent rather than fetched.
+		assertNotNull(venue.resolveLocalAsset(
+			Strings.create(venue.getDIDString() + "/a/" + echoOpId.toHexString()), ctx));
+		Hash elsewhere = Hashing.sha3("held by no venue".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+		assertNull(venue.resolveLocalAsset(
+			Strings.create("did:web:venue.example.com/a/" + elsewhere.toHexString()), ctx));
+		assertNull(venue.resolveLocalAsset(
+			Strings.create("did:web:venue.example.com/v/ops/elsewhere"), ctx));
+	}
+
+	@Test
+	public void testReferencesThisVenueHostsResolveHereAlone() {
+		// The shared engine's public hostname resolves to no venue, so any of
+		// these that went over the network would throw rather than answer.
+		RequestContext ctx = venue.venueContext();
+		AString web = venue.config().getWebDID();
+		Hash elsewhere = Hashing.sha3("held by no venue".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+		AString ownName = Strings.create(web + "/v/test/ops/echo");
+		AString ownHash = Strings.create(web + "/a/" + echoOpId.toHexString());
+		AString ownMiss = Strings.create(web + "/a/" + elsewhere.toHexString());
+		AString user = TestEngine.uniqueManagedDID("hosted-ref-owner");
+		AString userMiss = Strings.create(user + "/a/" + elsewhere.toHexString());
+
+		assertEquals(echoOpId, venue.resolveAsset(ownName, ctx).getID());
+		assertEquals(echoOpId, venue.resolveAsset(ownHash, ctx).getID());
+		assertNull(venue.resolveAsset(ownMiss, ctx));
+		assertNull(venue.resolveAsset(userMiss, RequestContext.of(user)));
+		assertNull(venue.fetchRemoteContent(ctx, ownHash));
+		for (AString hosted : java.util.List.of(ownName, ownHash, ownMiss, userMiss)) {
+			assertFalse(venue.isRemoteDefinition(hosted), hosted.toString());
+		}
+		assertTrue(venue.isRemoteDefinition(Strings.create("did:web:venue.example.com/v/ops/elsewhere")));
+		assertFalse(venue.isRemoteDefinition(Strings.create("did:key:z6MkUnhosted/a/" + elsewhere.toHexString())),
+			"a did:key has no address to fetch from");
+	}
+
+	@Test
+	public void testMalformedUserPathsAreInvalidInput() {
+		RequestContext ctx = venue.venueContext();
+		InvalidInputException empty = assertThrows(InvalidInputException.class,
+			() -> venue.resolveUserPath(ctx, Strings.EMPTY, false));
+		assertFalse(empty.getMessage().isBlank(), "a refusal says why");
+		InvalidInputException bare = assertThrows(InvalidInputException.class,
+			() -> venue.resolveUserPath(ctx, Strings.create(venue.getDIDString()), false));
+		assertFalse(bare.getMessage().isBlank(), "a refusal says why");
+		InvalidInputException malformed = assertThrows(InvalidInputException.class,
+			() -> venue.resolveUserPath(ctx, Strings.create("did:"), false));
+		assertTrue(malformed.getMessage().startsWith(Engine.INVALID_DID_URL), malformed.getMessage());
+	}
+
+	@Test
+	public void testUnauthenticatedCallersAreRefusedAsAuthFailures() {
+		AuthException path = assertThrows(AuthException.class,
+			() -> venue.resolveUserPath(RequestContext.ANONYMOUS, Strings.create("w/notes"), false));
+		assertEquals(Engine.USER_PATH_UNAUTHENTICATED, path.getMessage());
+		AuthException store = assertThrows(AuthException.class,
+			() -> venue.storeUserAsset(Strings.create("{\"name\":\"anon\"}"), null, RequestContext.ANONYMOUS));
+		assertEquals(Engine.STORE_UNAUTHENTICATED, store.getMessage());
 	}
 
 	@Test
@@ -625,13 +693,8 @@ public class EngineTest {
 
 	@Test
 	public void testProvisionConfiguredSecretsAbsent() {
-		Engine e = Engine.createTemp(null);
-		try {
-			assertEquals(0, e.provisionConfiguredSecrets(),
-				"No secrets configured → returns 0, no error");
-		} finally {
-			e.close();
-		}
+		assertEquals(0, venue.provisionConfiguredSecrets(),
+			"No secrets configured → returns 0, no error");
 	}
 
 	// ========== Secret field redaction ==========
@@ -715,7 +778,7 @@ public class EngineTest {
 		assertNotNull(result);
 		assertEquals(Strings.create("MY_KEY"), RT.getIn(result, "name"));
 
-		User alice = venue.getVenueState().users().get(ALICE_DID);
+		User alice = venue.getVenueState().users().user(ALICE_DID);
 		SecretStore.Keys encKey = SecretStore.keys(venue.getKeyPair());
 		assertEquals("my-secret-value", alice.secrets().decrypt("MY_KEY", encKey).toString());
 
@@ -758,7 +821,8 @@ public class EngineTest {
 	@Test
 	public void testDLFSStorageConfig() throws IOException {
 		AMap<AString, ACell> config = Maps.of(
-			Config.STORAGE, Maps.of(Config.CONTENT, Config.STORAGE_TYPE_DLFS)
+			Config.STORAGE, Maps.of(Config.CONTENT, Config.STORAGE_TYPE_DLFS),
+			Config.MAX_CONTENT_SIZE, 64
 		);
 
 		Engine dlfsVenue = Engine.createTemp(config);
@@ -786,6 +850,25 @@ public class EngineTest {
 				String retrievedContent = new String(retrievedStream.readAllBytes());
 				assertEquals(testContent, retrievedContent);
 			}
+
+			// Uploads stream into the store: the size limit and the hash are
+			// checked as the bytes arrive, and refused content is never stored.
+			byte[] tooLarge = new byte[65];
+			Hash tooLargeAsset = dlfsVenue.storeAsset(JSON.printPretty(Maps.of(
+				Fields.NAME, "too-large",
+				Fields.CONTENT, Maps.of(Fields.SHA256, Hashing.sha256(tooLarge).toHexString()))), null);
+			covia.exception.InvalidInputException large = assertThrows(covia.exception.InvalidInputException.class, () ->
+				dlfsVenue.putContent(dlfsVenue.getMetaValue(tooLargeAsset), new ByteArrayInputStream(tooLarge)));
+			assertTrue(large.getMessage().startsWith(Engine.CONTENT_TOO_LARGE), large.getMessage());
+			assertNull(dlfsVenue.getContentStream(dlfsVenue.getMetaValue(tooLargeAsset)));
+
+			Hash mismatchAsset = dlfsVenue.storeAsset(JSON.printPretty(Maps.of(
+				Fields.NAME, "mismatched",
+				Fields.CONTENT, Maps.of(Fields.SHA256, Hashing.sha256("declared".getBytes()).toHexString()))), null);
+			covia.exception.InvalidInputException mismatch = assertThrows(covia.exception.InvalidInputException.class, () ->
+				dlfsVenue.putContent(dlfsVenue.getMetaValue(mismatchAsset), new ByteArrayInputStream("sent".getBytes())));
+			assertTrue(mismatch.getMessage().startsWith(ContentStorage.HASH_MISMATCH), mismatch.getMessage());
+			assertNull(dlfsVenue.getContentStream(dlfsVenue.getMetaValue(mismatchAsset)));
 		} finally {
 			dlfsVenue.close();
 		}
@@ -795,11 +878,16 @@ public class EngineTest {
 
 	@Test
 	public void testDIDDocumentDefaultsToDIDKey() {
-		// No public hostname (shared temp engine defaults to localhost):
+		// No public hostname (the default, localhost):
 		// the document id IS the canonical did:key and there is no alias.
-		AMap<AString, ACell> ddo = venue.getDIDDocument("https://localhost:8080/api/v1");
-		assertEquals(venue.getDIDString(), ddo.get(Strings.create("id")));
-		assertNull(ddo.get(Strings.create("alsoKnownAs")));
+		Engine plain = Engine.createTemp(null);
+		try {
+			AMap<AString, ACell> ddo = plain.getDIDDocument("https://localhost:8080/api/v1");
+			assertEquals(plain.getDIDString(), ddo.get(Strings.create("id")));
+			assertNull(ddo.get(Strings.create("alsoKnownAs")));
+		} finally {
+			plain.close();
+		}
 	}
 
 	@Test
@@ -849,5 +937,41 @@ public class EngineTest {
 
 		// Whatever this build carries, the venue never reports a blank version.
 		assertFalse(Engine.jarVersion().isBlank());
+	}
+
+	@Test
+	public void contextDecidesWhatAPrincipalMayDoNow() {
+		AString owner = TestEngine.uniqueDID("context-owner");
+		venue.getVenueState().users().ensure(owner);
+		AVector<ACell> caps = Vectors.of(Maps.of(convex.auth.ucan.Capability.CAN, Strings.create("invoke")));
+		venue.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "worker",
+			Fields.CONFIG, Maps.of(Config.CAPS, caps)), RequestContext.of(owner)).awaitResult(5000);
+		AString worker = covia.grid.Principals.agentDID(owner, Strings.create("worker"));
+
+		// In its own namespace a user is unrestricted, and an agent-shaped name holds nothing.
+		assertEquals(owner, venue.context(owner).getUserDID());
+		assertNull(venue.context(owner).getCaps());
+		assertEquals(worker, venue.context(worker).getUserDID());
+		assertEquals(Vectors.empty(), venue.context(worker).getCaps());
+
+		// For its owner, the owner's agent acts as itself in the owner's namespace, under its own caps.
+		RequestContext agent = venue.context(owner, worker);
+		assertEquals(worker, agent.getCallerDID());
+		assertEquals(owner, agent.getUserDID());
+		assertEquals(caps, agent.getCaps());
+		assertNull(venue.context(owner, owner).getCaps());
+		assertEquals(Vectors.empty(), venue.context(owner,
+			covia.grid.Principals.agentDID(owner, Strings.create("gone"))).getCaps(), "an agent that is gone holds nothing");
+
+		// The owner comes from the record: anyone else's agent, or any other user, is refused.
+		AString other = TestEngine.uniqueDID("context-other");
+		assertThrows(covia.exception.AuthException.class, () -> venue.context(other, worker));
+		assertThrows(covia.exception.AuthException.class, () -> venue.context(owner, other));
+
+		// The public principal acts only as itself, under the public scope.
+		AString publicDID = venue.publicPrincipal();
+		RequestContext anonymous = venue.context(owner, publicDID);
+		assertEquals(publicDID, anonymous.getUserDID());
+		assertEquals(venue.getAuth().getPublicScope(publicDID), anonymous.getCaps());
 	}
 }

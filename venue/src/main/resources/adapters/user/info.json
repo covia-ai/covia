@@ -18,7 +18,18 @@
       "properties": {
         "did": { "type": "string" },
         "registered": { "type": "boolean" },
-        "meta": { "type": "object" }
+        "storage": {
+          "type": "object",
+          "description": "What the user's data takes up as stored, in bytes",
+          "properties": {
+            "workspace": { "type": "integer", "description": "The user's workspace (w) and their agents' workspaces (n)" },
+            "drives": { "type": "integer", "description": "The user's DLFS drives, deleted drives' markers included; absent without the dlfs adapter" }
+          }
+        },
+        "meta": {
+          "type": "object",
+          "description": "The venue's activity times for the user (created, updated), shown to venue operators only"
+        }
       },
       "required": ["did", "registered"]
     }

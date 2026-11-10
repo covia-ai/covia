@@ -26,11 +26,13 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.auth.jwt.JWT;
 import covia.api.Fields;
+import covia.exception.ConfigurationException;
 import covia.venue.Auth;
 import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.SecretStore;
 import covia.venue.User;
+import covia.venue.TestEngine;
 import covia.venue.TestServer;
 
 @TestInstance(Lifecycle.PER_CLASS)
@@ -139,7 +141,7 @@ public class OAuthTest {
 		// not silently send an empty client_secret to the provider.
 		OAuthConfig viaRef = OAuthConfig.google("cid", "s/NO_SUCH_SECRET", "https://venue.example.com");
 		LoginProviders lp = new LoginProviders(engine, null);
-		IllegalStateException ex = assertThrows(IllegalStateException.class,
+		ConfigurationException ex = assertThrows(ConfigurationException.class,
 			() -> lp.resolveClientSecret(viaRef));
 		assertTrue(ex.getMessage().contains("s/NO_SUCH_SECRET"), ex.getMessage());
 	}
@@ -161,7 +163,7 @@ public class OAuthTest {
 		OAuthConfig ms = OAuthConfig.microsoft("cid", "csecret", "https://venue.example.com", "11111111-1111-1111-1111-111111111111");
 		assertEquals("microsoft", ms.name);
 		assertEquals("https://login.microsoftonline.com/11111111-1111-1111-1111-111111111111/v2.0", ms.issuer);
-		assertThrows(IllegalArgumentException.class, () -> OAuthConfig.microsoft("cid", "secret", "https://venue.example.com", "common"));
+		assertThrows(ConfigurationException.class, () -> OAuthConfig.microsoft("cid", "secret", "https://venue.example.com", "common"));
 		assertNotNull(ms.jwksUri);
 		assertEquals("https://venue.example.com/auth/microsoft/callback", ms.redirectUri);
 	}
@@ -295,15 +297,8 @@ public class OAuthTest {
 
 	@Test
 	void testPublicAccessDefaultEnabled() {
-		// Engine with no auth config should default to public access enabled
-		Engine tempEngine = Engine.createTemp(Maps.of(
-			"name", "no-auth-venue"
-		));
-		try {
-			assertTrue(tempEngine.getAuth().isPublicAccessEnabled());
-		} finally {
-			tempEngine.close();
-		}
+		// The shared engine has no auth config, so it takes the default: public access enabled
+		assertTrue(TestEngine.ENGINE.getAuth().isPublicAccessEnabled());
 	}
 
 	@Test
@@ -345,10 +340,10 @@ public class OAuthTest {
 			"https://APP.example.com/cb", "/", "//evil.example", "https://app.example.com.evil/cb"}) {
 			assertEquals(LoginProviders.REDIRECT_REFUSED, lp.checkRedirect(uri));
 		}
-		assertThrows(IllegalArgumentException.class, () -> new LoginProviders(engine,
+		assertThrows(ConfigurationException.class, () -> new LoginProviders(engine,
 			Maps.of(Config.LOGIN_REDIRECT_ORIGINS, Vectors.of("https://app.example.com"))));
 		for (String uri : new String[] {"http://app.example.com/cb", "https://app.example/cb?x=1", "https://user@app.example/cb", "https://app.example/cb#f"}) {
-			assertThrows(IllegalArgumentException.class, () -> new LoginProviders(engine,
+			assertThrows(ConfigurationException.class, () -> new LoginProviders(engine,
 				Maps.of(Config.LOGIN_REDIRECT_URIS, Vectors.of(uri))));
 		}
 	}

@@ -13,6 +13,7 @@ import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
+import convex.core.data.Blob;
 import convex.core.data.Cells;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
@@ -22,15 +23,24 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.adapter.AAdapter;
+import covia.adapter.AgentAdapter;
 import covia.adapter.agent.ContextInspectable.Inspection;
 import covia.adapter.ToolCallArguments;
 import covia.api.Fields;
+import covia.exception.ConfigurationException;
+import covia.exception.CoviaException;
+import covia.exception.FaultException;
+import covia.exception.InvalidInputException;
 import covia.exception.JobFailedException;
+import covia.exception.NotFoundException;
+import covia.exception.UnavailableException;
 import covia.grid.Asset;
 import covia.grid.Job;
+import covia.grid.Operation;
 import covia.grid.Status;
-import covia.venue.AgentState;
+import covia.venue.Agent;
 import covia.venue.Engine;
+import covia.venue.Models;
 import covia.venue.RequestContext;
 import covia.venue.ToolGuards;
 
@@ -39,13 +49,14 @@ import covia.venue.ToolGuards;
  *
  * <p>Provides shared infrastructure for both the flat conversation model
  * ({@code LLMAgentAdapter}) and the goal tree model ({@code GoalTreeAdapter}).
- * Both adapters use the same Level 3 message format, tool dispatch pipeline,
- * and capability enforcement.</p>
+ * Both adapters use the same Level 3 message format and tool dispatch
+ * pipeline.</p>
  *
  * <h3>Shared responsibilities</h3>
  * <ul>
+ *   <li>Model setup — resolved once per cycle ({@link #modelSetup})</li>
  *   <li>Level 3 invocation — dispatch to LLM via grid operation</li>
- *   <li>Tool dispatch — config tool resolution, capability checking, grid fallthrough</li>
+ *   <li>Tool dispatch — config tool resolution, the host's tool guards, grid fallthrough</li>
  *   <li>Input parsing — canonical structured tool arguments with provider compatibility</li>
  *   <li>Config constants — field keys shared across both adapters</li>
  * </ul>
@@ -57,23 +68,45 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	// ========== Config field keys ==========
 
 	public static final AString K_CONFIG          = Strings.intern("config");
-	public static final AString K_LLM_OPERATION   = Strings.intern("llmOperation");
-	public static final AString K_MODEL           = Strings.intern("model");
+	public static final AString K_MODEL           = Models.K_MODEL;
 	public static final AString K_SYSTEM_PROMPT   = Strings.intern("systemPrompt");
-	/** Prefix of the timeout failure a run loop treats as recoverable (AgentAdapter). */
+	/** How the failure begins when an LLM call outlasts the agent's {@code llmTimeoutMs}. */
 	public static final String LLM_TIMEOUT_PREFIX = "LLM call timed out after ";
-	public static final AString K_URL             = Strings.intern("url");
+	/** A failed LLM call: the operation, then why. */
+	public static final String LLM_CALL_FAILED = "LLM call failed (%s): %s";
+
+	/** What failed, when a model call reports a fault: the model operation follows. */
+	public static final String LLM_CALL = "LLM call (%s)";
+	/** A {@code config.systemPrompt} entry that did not resolve: the entry, then why. */
+	public static final String SYSTEM_PROMPT_UNRESOLVED = "config.systemPrompt did not resolve — %s: %s";
+	/** An LLM operation, or the provider its model names, that did not resolve: the operation, then why. */
+	public static final String LLM_OPERATION_UNRESOLVED = "LLM operation %s did not resolve: %s";
+	/**
+	 * How a level-3 operation's reason begins when the provider refused the
+	 * context as larger than the model accepts. The reason survives a job
+	 * boundary where the exception type does not, so the run loop recognises
+	 * the refusal by it.
+	 */
+	public static final String CONTEXT_TOO_LARGE = "The context is larger than the model accepts";
+	/** What the agent is told when its context was refused as too large: operation, encoded bytes, then the refusal. */
+	public static final String CONTEXT_TOO_LARGE_ADVICE = "LLM provider rejected the context as too large"
+		+ " (%s, approximately %d encoded bytes). Loaded references are not truncated automatically because"
+		+ " provider tokenisation varies; inspect agent:context and context_unload unused paths, then retry. %s";
+	public static final AString K_URL           = Strings.intern("url");
 	public static final AString K_API_KEY         = Strings.intern("apiKey");
 	public static final AString K_CACHE           = Strings.intern("cache");
 	public static final AString K_PROVIDER_OPTIONS = Strings.intern("providerOptions");
 	public static final AString K_MODEL_OPTIONS = Strings.intern("modelOptions");
 	public static final AString K_TOOLS           = Strings.intern("tools");
 	public static final AString K_RESPONSE_FORMAT = Strings.intern("responseFormat");
+	/** The JSON Schema in a {@code responseFormat} or an output declaration. */
+	protected static final AString K_SCHEMA = Strings.intern("schema");
 	public static final AString K_CAPS            = Strings.intern("caps");
 	public static final AString K_CONTEXT         = Strings.intern("context");
 	public static final AString K_TOOL_CALL_TIMEOUT_MS = Strings.intern("toolCallTimeoutMs");
 	public static final AString K_MAX_TOOL_ITERATIONS  = Strings.intern("maxToolIterations");
 	public static final AString K_LLM_TIMEOUT_MS       = Strings.intern("llmTimeoutMs");
+	public static final AString K_RECORD_TOOL_CALLS    = Strings.intern("recordToolCalls");
 
 	/**
 	 * Per-tool-call timeout default. Bounds the wait on any single grid op
@@ -111,7 +144,6 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	public static final AString K_DESCRIPTION = Strings.intern("description");
 	public static final AString K_PARAMETERS  = Strings.intern("parameters");
 	public static final AString K_TYPE        = Strings.intern("type");
-	public static final AString K_PROPERTIES  = Strings.intern("properties");
 	public static final AString K_REQUIRED    = Strings.intern("required");
 
 	// ========== context_load / context_unload helpers ==========
@@ -155,13 +187,14 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	public static final long SKILL_LOAD_DEFAULT_BUDGET = 2_000L;
 
 	/**
-	 * Builds the loaded-context entry metadata: {@code {budget, ts, label?}}.
-	 * The {@code label} key is omitted when the input is null.
+	 * Builds the loaded-context entry metadata: {@code {budget, ts, label?}},
+	 * where {@code ts} is the load time from the venue's clock. The
+	 * {@code label} key is omitted when the input is null.
 	 */
-	public static AMap<AString, ACell> buildLoadEntryMeta(long budget, AString label) {
+	public static AMap<AString, ACell> buildLoadEntryMeta(long budget, AString label, CVMLong ts) {
 		AMap<AString, ACell> meta = Maps.of(
 			K_BUDGET, CVMLong.create(budget),
-			Strings.intern("ts"), CVMLong.create(convex.core.util.Utils.getCurrentTimestamp()),
+			Strings.intern("ts"), ts,
 			Loads.K_AGENT_MANAGED, CVMBool.TRUE,
 			Loads.K_TRUSTED, CVMBool.FALSE);
 		if (label != null) meta = meta.assoc(K_LABEL, label);
@@ -183,68 +216,37 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	static final String TRUNCATION_FAILURE_MESSAGE =
 		"LLM response reached its output token limit twice. Increase maxTokens or request a shorter response.";
 
-	// ========== Defaults ==========
-
-	public static final AString DEFAULT_LLM_OPERATION = Strings.create(
-		"v/models/anthropic/claude-sonnet-5-5");
-
 	// ========== Authority and model profile (AGENT_CONTEXT.md §4, §8) ==========
 
-	/** The agent's capability-narrowed context: {@code config.caps} applied, else {@code ctx} unchanged. */
+	/** {@code ctx} narrowed by {@code config.caps}: for an agent's harness, what the agent itself may do. */
 	public static RequestContext capsContext(AMap<AString, ACell> config, RequestContext ctx) {
-		AVector<ACell> caps = RT.ensureVector(config != null ? config.get(K_CAPS) : null);
-		return (caps != null) ? ctx.withCaps(caps) : ctx;
-	}
-
-	/**
-	 * {@link #capsContext} for a transition's input config, which its caller
-	 * supplies: the caps it names replace the caller's scope, so the caller must
-	 * hold each of them ({@link covia.venue.Engine#requireConferrable}). An agent
-	 * running under the caps its own record holds confers nothing: they were
-	 * checked against their author when written, and are not re-checked against
-	 * the agent, which holds none of that author's grants.
-	 */
-	protected RequestContext conferredCapsContext(AMap<AString, ACell> config, AString agentId,
-			RequestContext ctx) {
-		AVector<ACell> caps = RT.ensureVector(config != null ? config.get(K_CAPS) : null);
-		// No engine only in adapters constructed directly by unit tests (as requireInvoke).
-		if (caps != null && engine != null && !isOwnRecordScope(ctx, agentId, caps)) {
-			engine.requireConferrable(ctx, ctx.getUserDID(), caps);
-		}
-		return capsContext(config, ctx);
-	}
-
-	/** Whether the caller is agent {@code agentId} itself and {@code caps} are its stored caps. */
-	private boolean isOwnRecordScope(RequestContext ctx, AString agentId, AVector<ACell> caps) {
-		AString owner = ctx.getUserDID();
-		if (agentId == null || owner == null
-				|| !covia.grid.Principals.agentDID(owner, agentId).equals(ctx.getCallerDID())) {
-			return false;
-		}
-		AgentState agent = engine.getAgent(owner, agentId);
-		return agent != null && caps.equals(RT.getIn(agent.getConfig(), K_CAPS));
+		return ctx.narrowedTo(RT.ensureVector(config != null ? config.get(K_CAPS) : null));
 	}
 
 	/**
 	 * What the model declares that assembly needs: its context budget in
-	 * bytes, its label dialect, whether it can call tools at all, and whether
-	 * its provider should receive a persistent cache prefix — with
-	 * tool calling off, no tool is presented (OPERATIONS.md, <i>The
-	 * {@code model} facet</i>).
+	 * bytes, its label dialect, whether it can call tools at all, whether
+	 * its provider should receive a persistent cache prefix, and how a late
+	 * tool call outcome is shown to it — with tool calling off, no tool is
+	 * presented (OPERATIONS.md, <i>The {@code model} facet</i>).
 	 */
 	public record ModelProfile(long budget, AString labels, boolean toolCalling,
-			boolean cachePrefix) {
-		public static final ModelProfile DEFAULT =
-			new ModelProfile(ContextAssembler.DEFAULT_BUDGET, LABELS_BRACKET, true, true);
-
+			boolean cachePrefix, AString lateToolResults) {
 		/** The profile a resolved facet map declares; defaults fill what it does not. */
 		public static ModelProfile of(AMap<AString, ACell> profile) {
 			return new ModelProfile(
 				AbstractLLMAdapter.budgetBytes(profile, ContextAssembler.DEFAULT_BUDGET),
 				AbstractLLMAdapter.labelDialect(profile),
-				AbstractLLMAdapter.toolCalling(profile),
-				AbstractLLMAdapter.cachePrefix(profile));
+				Models.toolCalling(profile),
+				AbstractLLMAdapter.cachePrefix(profile),
+				AbstractLLMAdapter.lateToolResults(profile));
 		}
+	}
+
+	/** The JSON Schema {@code config.responseFormat} asks for, or null: a
+	 *  {@code "json"} or {@code "text"} format names none. */
+	protected static AMap<AString, ACell> responseFormatSchema(AMap<AString, ACell> config) {
+		return RT.ensureMap(RT.getIn(config, K_RESPONSE_FORMAT, K_SCHEMA));
 	}
 
 	/** Whether this invocation should retain and mark a rendered prefix. Models
@@ -256,74 +258,64 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	}
 
 	/**
-	 * The model profile for an agent: the {@code model} facet of its LLM
-	 * operation, resolved for its model, with the agent's own
-	 * {@code config.modelProfile} layered last. Defaults when the asset cannot
-	 * be read: a missing provider must fail at the call, not at assembly.
+	 * What an agent's model calls run under: its LLM operation, the config
+	 * each call carries (the identity prompt as text, the operation's model
+	 * default added) and the model profile its context is assembled to. A
+	 * cycle resolves it once, at its start, and inspection resolves it the
+	 * same way, so every call in the cycle and every view of it meet the
+	 * same setup.
 	 */
-	protected ModelProfile modelProfileFor(AMap<AString, ACell> config, RequestContext ctx) {
-		try {
-			Asset asset = engine.resolveAsset(getLLMOperation(config), ctx);
-			return ModelProfile.of(resolveModel(engine, asset,
-				RT.ensureString(config != null ? config.get(K_MODEL) : null), config, ctx).assemblyProfile());
-		} catch (RuntimeException e) {
-			return ModelProfile.DEFAULT;
+	public record ModelSetup(AString operationRef, Operation operation,
+			AMap<AString, ACell> config, ModelProfile profile) {
+		/** This setup, its calls carrying {@code config}: a goal-tree child frame drops the root's output format. */
+		public ModelSetup withConfig(AMap<AString, ACell> config) {
+			return new ModelSetup(operationRef, operation, config, profile);
 		}
 	}
 
 	/**
-	 * A selected provider or model operation reduced to the same effective
-	 * execution data. Caller-supplied {@code model} wins over operation
-	 * defaults; a model preset contributes its own facet only while its selected
-	 * id remains effective.
+	 * The agent's model setup for {@code config}. One that does not resolve
+	 * (its {@code systemPrompt} entry, its LLM operation, or the provider a
+	 * model operation names) means the agent cannot continue: every cycle
+	 * resolves it again, so every cycle would fail the same way until it is
+	 * fixed.
 	 */
-	public record ResolvedModel(Asset operation, Asset provider, AString modelId,
-			AMap<AString, ACell> executionProfile, AMap<AString, ACell> assemblyProfile) {}
-
-	/** Resolves the data shared by provider-edge rendering and agent assembly. */
-	public static ResolvedModel resolveModel(Engine engine, Asset selected, AString requestedModel,
-			AMap<AString, ACell> config, RequestContext ctx) {
-		if (selected == null) throw new IllegalArgumentException("LLM operation does not resolve");
-		AMap<AString, ACell> selectedMeta = selected.meta();
-		AMap<AString, ACell> selectedFacet = modelFacet(selectedMeta);
-		AString selectedId = RT.ensureString(selectedFacet.get(K_MODEL_ID));
-		AString modelId = (requestedModel != null) ? requestedModel : declaredModelDefault(selectedMeta);
-		if (modelId == null) modelId = selectedId;
-
-		Asset provider = selected;
-		AString providerRef = RT.ensureString(selectedFacet.get(K_MODEL_PROVIDER));
-		if (providerRef != null) {
-			provider = engine.resolveAsset(providerRef, ctx);
-			if (provider == null) throw new IllegalArgumentException(
-				"Model provider does not resolve: " + providerRef);
-		}
-
-		AMap<AString, ACell> execution = modelProfile(provider.meta(), modelId);
-		if (selectedId != null && selectedId.equals(modelId)) {
-			execution = layer(execution, modelDefinitionProfile(selectedFacet));
-		}
-		AMap<AString, ACell> assembly = layer(execution,
-			RT.ensureMap(config != null ? config.get(K_MODEL_PROFILE) : null));
-		return new ResolvedModel(selected, provider, modelId, execution, assembly);
-	}
-
-	/**
-	 * The cycle's effective config: the identity prompt resolved to text and
-	 * the operation's model default added, for inspection and L3 input. Both
-	 * runtimes call this once per cycle, so a {@code systemPrompt} entry is
-	 * read once and the head stays identical across the cycle's inferences.
-	 */
-	protected AMap<AString, ACell> effectiveModelConfig(AMap<AString, ACell> config,
-			RequestContext ctx) {
+	protected ModelSetup modelSetup(AMap<AString, ACell> config, RequestContext ctx) {
 		AMap<AString, ACell> effective = resolveSystemPrompt((config != null) ? config : Maps.empty(), ctx);
-		if (effective.get(K_MODEL) != null) return effective;
+		AString ref = Models.llmOperation(effective);
+		Operation operation;
+		Models.Resolved model;
 		try {
-			Asset selected = engine.resolveAsset(getLLMOperation(effective), ctx);
-			AString modelId = resolveModel(engine, selected, null, effective, ctx).modelId();
-			return (modelId != null) ? effective.assoc(K_MODEL, modelId) : effective;
+			operation = engine.jobs().resolveOperation(ref, ctx);
+			model = resolveModel(engine, operation, RT.ensureString(effective.get(K_MODEL)), effective, ctx);
 		} catch (RuntimeException e) {
-			return effective;
+			if (!isExpectedFailure(e)) throw e;
+			throw new CannotContinueException(LLM_OPERATION_UNRESOLVED.formatted(ref, CoviaException.reasonOf(e)), e);
 		}
+		if (effective.get(K_MODEL) == null && model.modelId() != null) {
+			effective = effective.assoc(K_MODEL, model.modelId());
+		}
+		return new ModelSetup(ref, operation, effective, ModelProfile.of(model.assemblyProfile()));
+	}
+
+	/**
+	 * Resolves the data shared by provider-edge rendering and agent assembly
+	 * ({@link Models#resolve}), reading each reference as {@code ctx} may.
+	 *
+	 * @throws NotFoundException when the operation, or the provider it names, does not resolve
+	 */
+	public static Models.Resolved resolveModel(Engine engine, Asset selected, AString requestedModel,
+			AMap<AString, ACell> config, RequestContext ctx) {
+		if (selected == null) throw new NotFoundException("LLM operation does not resolve", null);
+		Models.Resolved model = Models.resolve(selected.meta(), requestedModel, config, ref -> {
+			Asset asset = engine.resolveAsset(ref, ctx);
+			return (asset == null) ? null : asset.meta();
+		});
+		if (model == null) {
+			AString providerRef = Models.providerRef(selected.meta());
+			throw new NotFoundException("Model provider does not resolve: " + providerRef, providerRef.toString());
+		}
+		return model;
 	}
 
 	/**
@@ -332,11 +324,10 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	 * {@code op} + {@code input}, {@code job}) resolved through the same
 	 * loader as pinned context and loads, once per cycle, under the cycle's
 	 * identity: a prompt kept at a workspace path or in a DLFS file, or built
-	 * by a read-only operation. A prompt that does not resolve fails the
-	 * cycle — a missing identity is a configuration error, not something to
-	 * render around.
+	 * by a read-only operation. A missing identity is a configuration error,
+	 * not something to render around, so the agent cannot continue.
 	 */
-	protected AMap<AString, ACell> resolveSystemPrompt(AMap<AString, ACell> config, RequestContext ctx) {
+	private AMap<AString, ACell> resolveSystemPrompt(AMap<AString, ACell> config, RequestContext ctx) {
 		ACell prompt = config.get(K_SYSTEM_PROMPT);
 		if (!(prompt instanceof AMap)) return config;
 		@SuppressWarnings("unchecked")
@@ -345,8 +336,9 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 			String text = new ContextLoader(engine).resolveText(entry, ctx);
 			return config.assoc(K_SYSTEM_PROMPT, Strings.create(text));
 		} catch (RuntimeException e) {
-			throw new IllegalStateException("config.systemPrompt did not resolve — " + entry
-				+ ": " + ContextLoader.rootMessage(e), e);
+			if (!isExpectedFailure(e)) throw e;
+			throw new CannotContinueException(SYSTEM_PROMPT_UNRESOLVED.formatted(entry,
+				ContextLoader.rootMessage(e)), e);
 		}
 	}
 
@@ -376,12 +368,13 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	public static final AString K_DONE     = Strings.intern("done");
 	public static final AString K_NEXT     = Strings.intern("next");
 
-	/** A conversation turn stamped with the wall-clock moment it was recorded. */
-	static ACell stampTs(ACell message) {
+	/** A conversation turn stamped with the moment it was recorded, {@code ts}
+	 *  from the venue's clock. */
+	static ACell stampTs(ACell message, CVMLong ts) {
 		if (!(message instanceof AMap<?, ?>)) return message;
 		@SuppressWarnings("unchecked")
 		AMap<AString, ACell> m = (AMap<AString, ACell>) message;
-		return m.assoc(Fields.TS, CVMLong.create(convex.core.util.Utils.getCurrentTimestamp()));
+		return m.assoc(Fields.TS, ts);
 	}
 
 	/**
@@ -390,13 +383,13 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	 * {@code content} and/or {@code toolCalls}, each call given an id when it
 	 * has none and empty arguments when it has none. Null in, null out.
 	 *
-	 * @throws IllegalArgumentException when a call has no name, or the value is neither form
+	 * @throws InvalidInputException when a call has no name, or the value is neither form
 	 */
 	@SuppressWarnings("unchecked")
 	public static AMap<AString, ACell> stepAssistant(ACell raw) {
 		if (raw == null) return null;
 		if (raw instanceof AString text) return Maps.of(K_ROLE, ROLE_ASSISTANT, K_CONTENT, text);
-		if (!(raw instanceof AMap)) throw new IllegalArgumentException(
+		if (!(raw instanceof AMap)) throw new InvalidInputException(
 			"assistant must be a string or {content?, toolCalls?}");
 		AMap<AString, ACell> reply = ((AMap<AString, ACell>) raw).assoc(K_ROLE, ROLE_ASSISTANT);
 		AVector<ACell> calls = RT.ensureVector(reply.get(K_TOOL_CALLS));
@@ -405,7 +398,7 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 		for (long i = 0; i < calls.count(); i++) {
 			AMap<AString, ACell> call = RT.ensureMap(calls.get(i));
 			AString name = (call != null) ? RT.ensureString(call.get(K_NAME)) : null;
-			if (name == null) throw new IllegalArgumentException(
+			if (name == null) throw new InvalidInputException(
 				"assistant.toolCalls[" + i + "] needs a name");
 			AString id = RT.ensureString(call.get(K_ID));
 			call = call.assoc(K_ID, (id != null)
@@ -417,13 +410,21 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	}
 
 	/** Collects what one batch produces — the tool-result turns in order
-	 *  and each call's wall-clock — for the step report. */
+	 *  and each call's wall-clock — for the step report, and appends each turn
+	 *  to the stepped frame as it arrives, as the live loop's sink does, so a
+	 *  later call in the batch sees the frame a live one would. */
 	protected static final class StepSink implements ToolCycleEngine.BatchSink {
+		private final FrameTools frame;
 		private AVector<ACell> turns = Vectors.empty();
 		private final Map<AString, Long> millis = new java.util.HashMap<>();
 
+		StepSink(FrameTools frame) { this.frame = frame; }
+
 		@Override
-		public void append(AMap<AString, ACell> message) { turns = turns.conj(message); }
+		public void append(AMap<AString, ACell> message) {
+			turns = turns.conj(message);
+			frame.appendTurn(message);
+		}
 
 		@Override
 		public void recordCall(ToolCycleEngine.ToolCall call, ToolCycleEngine.ToolOutcome outcome, long ms) {
@@ -500,58 +501,48 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	// ========== Level 3 invocation ==========
 
 	/**
-	 * Invokes a Level 3 LLM operation with messages and optional tools.
+	 * Invokes the setup's level-3 operation with an assembled prompt. The L3
+	 * input carries the setup's config and the prompt's cache marks, so a
+	 * caching provider can place its breakpoints at the band boundaries
+	 * (AGENT_CONTEXT.md §3.1).
 	 *
-	 * @param llmOperation the grid operation (e.g. "v/ops/langchain/openai")
-	 * @param config agent config (model, url, apiKey, responseFormat extracted)
-	 * @param messages full message history for this inference
-	 * @param tools tool definitions (null or empty = no tools)
-	 * @param ctx request context
 	 * @return the L3 result (assistant message with content and/or toolCalls)
 	 */
-	protected ACell invokeLevel3(AString llmOperation, AMap<AString, ACell> config,
-			AVector<ACell> messages, AVector<ACell> tools, RequestContext ctx) {
-		return invokeLevel3(llmOperation, config, buildL3Input(config, messages, tools), messages, ctx);
-	}
-
-	/**
-	 * As {@link #invokeLevel3(AString, AMap, AVector, AVector, RequestContext)}
-	 * for an assembled prompt: the L3 input also carries the prompt's cache
-	 * marks, so a caching provider can place its breakpoints at the band
-	 * boundaries (AGENT_CONTEXT.md §3.1).
-	 */
-	protected ACell invokeLevel3(AString llmOperation, AMap<AString, ACell> config,
-			ContextAssembler.Prompt prompt, RequestContext ctx) {
+	protected ACell invokeLevel3(ModelSetup model, ContextAssembler.Prompt prompt, RequestContext ctx) {
 		// The cycle record (#392) sees every call made from an assembled
 		// prompt: what it newly sent, then the reply verbatim or the failure.
 		CycleRecord record = CycleRecord.current();
 		if (record != null) {
-			record.beginInference(prompt, llmOperation,
-				RT.ensureString(config != null ? config.get(K_MODEL) : null));
+			record.beginInference(prompt, model.operationRef(), RT.ensureString(model.config().get(K_MODEL)),
+				engine.currentTimestamp());
 		}
 		try {
-			ACell reply = invokeLevel3(llmOperation, config, prompt.toL3Input(config), prompt.messages(), ctx);
+			ACell reply = invokeLevel3(model, prompt.toL3Input(model.config()), prompt.messages(), ctx);
 			if (record != null) record.endInference(reply);
 			return reply;
 		} catch (RuntimeException e) {
-			if (record != null) record.failInference(describeFailure(e));
-			throw e;
+			// Reported once here, so the record and the transition carry the same report
+			CoviaException reported = FaultException.within(LLM_CALL.formatted(model.operationRef()),
+				FaultException.ADAPTER.formatted(getName()), e);
+			if (record != null) record.failInference(reported.getMessage());
+			throw reported;
 		}
 	}
 
-	private ACell invokeLevel3(AString llmOperation, AMap<AString, ACell> config,
-			AMap<AString, ACell> l3Input, AVector<ACell> messages, RequestContext ctx) {
-		// LLM invocation is framework infrastructure: the agent's caps gate
-		// what it can DO via tools, not the inference call itself. Trust is
-		// established by going through invokeInternal — the framework path —
-		// rather than the user-facing invokeOperation. Caps stay on ctx.
+	private ACell invokeLevel3(ModelSetup model, AMap<AString, ACell> l3Input,
+			AVector<ACell> messages, RequestContext ctx) {
+		AString llmOperation = model.operationRef();
+		// The model call is the harness's, not the agent's: the owner chose the
+		// model in the agent's config, and the agent's caps bound what it does
+		// in its tool calls (UCAN.md §5.4). Each runtime passes its harness context.
 		// Park (cheaply, on a virtual thread) until the LLM op completes,
 		// bounded by llmTimeoutMs: a hung provider connection must fail the
 		// transition, not stall the agent run loop indefinitely. On timeout the
 		// invocation is cancelled — LangChainAdapter bridges cancellation to a
 		// worker-thread interrupt, closing the in-flight HTTP call.
-		long llmTimeoutMs = resolveLlmTimeoutMs(config);
-		CompletableFuture<ACell> invocation = engine.jobs().invokeInternal(llmOperation, l3Input, ctx);
+		long llmTimeoutMs = resolveLlmTimeoutMs(model.config());
+		CompletableFuture<ACell> invocation = engine.jobs().invokeInternal(llmOperation, model.operation(),
+			l3Input, ctx, null);
 		ACell result;
 		try {
 			result = invocation.get(llmTimeoutMs, TimeUnit.MILLISECONDS);
@@ -566,37 +557,36 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 			invocation.cancel(true);
 			throw new JobFailedException("Interrupted while waiting for LLM call (" + llmOperation + ")");
 		} catch (ExecutionException e) {
-			Throwable cause = (e.getCause() != null) ? e.getCause() : e;
-			if (isContextSizeFailure(cause)) {
-				throw new JobFailedException("LLM provider rejected the context as too large ("
-					+ llmOperation + ", approximately " + Cells.storageSize(messages)
-					+ " encoded bytes). Loaded references are not truncated automatically because "
-					+ "provider tokenisation varies; inspect agent:context and context_unload unused "
-					+ "paths, then retry. Provider detail: " + describeFailure(cause));
+			Throwable cause = unwrap((e.getCause() != null) ? e.getCause() : e);
+			String reason = CoviaException.reasonOf(cause);
+			if (reason != null && reason.startsWith(CONTEXT_TOO_LARGE)) {
+				JobFailedException failure = new JobFailedException(CONTEXT_TOO_LARGE_ADVICE.formatted(
+					llmOperation, Cells.storageSize(messages), reason));
+				failure.initCause(cause);
+				throw failure;
+			}
+			// The setup the call runs under is wrong, or the provider cannot be
+			// reached after its own retries: the agent's next call would fail the
+			// same way, so the agent cannot continue. Anything else is about this
+			// request and fails only the work (AGENT_LOOP.md §3.4).
+			if (cause instanceof ConfigurationException || cause instanceof UnavailableException) {
+				throw new CannotContinueException(LLM_CALL_FAILED.formatted(llmOperation, reason), cause);
 			}
 			if (cause instanceof RuntimeException re) throw re;
-			throw new JobFailedException("LLM call failed (" + llmOperation + "): " + cause.getMessage());
+			throw FaultException.within(LLM_CALL.formatted(llmOperation), FaultException.ADAPTER.formatted(getName()), cause);
 		}
 
 		// A level-3 op that completes with a failure VALUE — {status: FAILED,
-		// message: ...} from Status.failure (missing/invalid API key, unknown
-		// provider) — is not an assistant message. Without this guard the tool
-		// loop sees no toolCalls and no content and silently emits an empty
-		// response, hiding the real failure. Surface it as a transition failure
-		// so the framework fails the caller's Job with the provider's message.
-		// (An op that throws already propagates exceptionally via join().)
+		// message: ...} from Status.failure (missing or refused API key, unknown
+		// provider, unresolved model) — is not an assistant message. Without this
+		// guard the tool loop sees no toolCalls and no content and silently emits
+		// an empty response, hiding the real failure. A failure value is only
+		// ever a setup problem — a provider's refusal arrives as a typed failure
+		// above — so the agent cannot continue. Its message is the venue's own.
 		if (result instanceof AMap && Status.FAILED.equals(RT.getIn(result, Fields.STATUS))) {
 			AString message = RT.ensureString(RT.getIn(result, Fields.MESSAGE));
-			if (message != null && isContextSizeFailure(
-					new IllegalArgumentException(message.toString()))) {
-				throw new JobFailedException("LLM provider rejected the context as too large ("
-					+ llmOperation + ", approximately " + Cells.storageSize(messages)
-					+ " encoded bytes). Loaded references are not truncated automatically because "
-					+ "provider tokenisation varies; inspect agent:context and context_unload unused "
-					+ "paths, then retry. Provider detail: " + message);
-			}
-			throw new JobFailedException("LLM call failed (" + llmOperation + "): "
-				+ (message != null ? message.toString() : "no message"));
+			throw new CannotContinueException(LLM_CALL_FAILED.formatted(llmOperation,
+				(message != null) ? message.toString() : "no message"), null);
 		}
 		// Keep the persisted agent protocol provider-neutral even when a custom
 		// Level 3 operation returns OpenAI-style JSON text. Malformed text remains
@@ -604,152 +594,21 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 		return ToolCallArguments.canonicaliseAssistantMessage(result);
 	}
 
-	/** Recognises common provider context-window failures without guessing tokens. */
-	private static boolean isContextSizeFailure(Throwable failure) {
-		for (Throwable t = failure; t != null; t = t.getCause()) {
-			String message = t.getMessage();
-			if (message == null) continue;
-			String m = message.toLowerCase(java.util.Locale.ROOT);
-			if (m.contains("context_length_exceeded")
-					|| m.contains("maximum context length")
-					|| m.contains("prompt is too long")
-					|| m.contains("input is too long")
-					|| m.contains("too many input tokens")
-					|| m.contains("request too large")
-					|| m.contains("context window")) return true;
-		}
-		return false;
-	}
-
 	// ========== The `model` facet: rendering hints and context budget ==========
+	// The facet and its layering are Models'; these read what assembly needs from it.
 
-	/** The {@code model} facet key on an LLM operation asset. */
-	public static final AString K_MODEL_FACET = Strings.intern("model");
-	/** Canonical model id on a model-operation asset. */
-	public static final AString K_MODEL_ID = Strings.intern("id");
-	/** Provider operation reference on a model-operation asset. */
-	public static final AString K_MODEL_PROVIDER = Strings.intern("provider");
-	private static final AString K_MODEL_TAGS = Strings.intern("tags");
-	private static final AString K_MODEL_RECOMMENDED = Strings.intern("recommended");
-	/** Model option: {@code false} declares a model that cannot call tools. */
-	public static final AString OPT_TOOL_CALLING = Strings.intern("toolCalling");
 	/** Model option: {@code false} opts out of persistent prompt-prefix caching. */
 	public static final AString OPT_CACHE_PREFIX = Strings.intern("cachePrefix");
 	/** Model option: tool support varies per model, so it must be probed, never assumed. */
 	public static final AString OPT_TOOL_CALLING_BY_MODEL = Strings.intern("toolCallingByModel");
-	/** Provider-specific rendering hints, inside the {@code model} facet. */
-	public static final AString K_OPTIONS = Strings.intern("options");
-	/** Per-model overrides inside the {@code model} facet, keyed by model id. */
-	public static final AString K_BY_MODEL = Strings.intern("byModel");
-	/** Agent config: the facet's shape again, layered over the operation's for this agent. */
-	public static final AString K_MODEL_PROFILE = Strings.intern("modelProfile");
 	/** Context budget in bytes of UTF-8, inside {@code model.budget}. */
 	public static final AString K_BYTES = Strings.intern("bytes");
-
-	/**
-	 * The {@code model} facet on an LLM operation asset (e.g.
-	 * {@code v/ops/langchain/anthropic}), or an empty map when absent or
-	 * malformed — discovery must answer even for a broken asset.
-	 *
-	 * <p>The facet declares, as data on the asset rather than branches in
-	 * code, facts about the model that change how a prompt is shaped and sized
-	 * for it:</p>
-	 * <ul>
-	 * <li>{@code options} — rendering hints, see {@link #modelOptions};</li>
-	 * <li>{@code budget.bytes} — an estimate of the context size appropriate
-	 *     for the model, in bytes of UTF-8, see {@link #modelBudgetBytes};</li>
-	 * <li>{@code byModel.<id>} — the same shape again for one model id, layered
-	 *     over the provider level by {@link #modelProfile}.</li>
-	 * </ul>
-	 *
-	 * <p>An absent facet means the OpenAI-compatible norm, so a provider only
-	 * declares what differs. Every map is open — unknown keys are ignored, so a
-	 * newer asset stays readable by an older venue.</p>
-	 */
-	@SuppressWarnings("unchecked")
-	public static AMap<AString, ACell> modelFacet(AMap<AString, ACell> meta) {
-		ACell facet = (meta != null) ? meta.get(K_MODEL_FACET) : null;
-		return (facet instanceof AMap) ? (AMap<AString, ACell>) facet : Maps.empty();
-	}
-
-	/**
-	 * The facet resolved for one model: the provider level with that model's
-	 * {@code byModel} entry layered over it, one key deep — {@code options}
-	 * and {@code budget} merge key-wise, so an override states only what it
-	 * changes. {@code byModel} itself is dropped from the result. A null or
-	 * unknown model id yields the provider level.
-	 */
-	@SuppressWarnings("unchecked")
-	public static AMap<AString, ACell> modelProfile(AMap<AString, ACell> meta, AString modelId) {
-		AMap<AString, ACell> facet = modelFacet(meta);
-		ACell byModel = facet.get(K_BY_MODEL);
-		AMap<AString, ACell> profile = facet.dissoc(K_BY_MODEL);
-		if (modelId == null || !(byModel instanceof AMap)) return profile;
-		return layer(profile, RT.ensureMap(((AMap<AString, ACell>) byModel).get(modelId)));
-	}
-
-	/**
-	 * The facet resolved for one model and one agent: the provider level, the
-	 * model's {@code byModel} entry, then the agent's {@code config.modelProfile}
-	 * — each layered one key deep, stating only what it changes. An agent
-	 * override speaks to assembly ({@code options.toolCalling},
-	 * {@code options.labels}, {@code budget.bytes}); the provider edge reads the
-	 * operation's own facet.
-	 */
-	public static AMap<AString, ACell> modelProfile(AMap<AString, ACell> meta, AString modelId,
-			AMap<AString, ACell> config) {
-		return layer(modelProfile(meta, modelId),
-			RT.ensureMap(config != null ? config.get(K_MODEL_PROFILE) : null));
-	}
-
-	/** Operation default first, legacy schema default second. */
-	private static AString declaredModelDefault(AMap<AString, ACell> meta) {
-		AString model = RT.ensureString(RT.getIn(meta, Fields.OPERATION, Fields.DEFAULT, K_MODEL));
-		if (model != null) return model;
-		return RT.ensureString(RT.getIn(meta, Fields.OPERATION, Fields.INPUT,
-			K_PROPERTIES, K_MODEL, Fields.DEFAULT));
-	}
-
-	/** Removes discovery/identity fields from a model asset's executable profile. */
-	private static AMap<AString, ACell> modelDefinitionProfile(AMap<AString, ACell> facet) {
-		return facet.dissoc(K_MODEL_ID)
-			.dissoc(K_MODEL_PROVIDER)
-			.dissoc(K_MODEL_TAGS)
-			.dissoc(Fields.DEFAULT)
-			.dissoc(K_MODEL_RECOMMENDED);
-	}
-
-	/** {@code override} over {@code base}, one key deep: maps merge key-wise, anything else replaces. */
-	@SuppressWarnings("unchecked")
-	private static AMap<AString, ACell> layer(AMap<AString, ACell> base, AMap<AString, ACell> override) {
-		if (override == null) return base;
-		AMap<AString, ACell> profile = base;
-		for (Map.Entry<AString, ACell> e : override.entrySet()) {
-			AString key = e.getKey();
-			ACell value = e.getValue();
-			ACell under = profile.get(key);
-			if (under instanceof AMap && value instanceof AMap) {
-				AMap<AString, ACell> merged = (AMap<AString, ACell>) under;
-				for (Map.Entry<AString, ACell> inner : ((AMap<AString, ACell>) value).entrySet()) {
-					merged = merged.assoc(inner.getKey(), inner.getValue());
-				}
-				value = merged;
-			}
-			profile = profile.assoc(key, value);
-		}
-		return profile;
-	}
-
-	/** Whether a resolved profile allows tool calling: {@code options.toolCalling}, true unless declared false. */
-	public static boolean toolCalling(AMap<AString, ACell> profile) {
-		return !CVMBool.FALSE.equals(RT.getIn(profile, K_OPTIONS, OPT_TOOL_CALLING));
-	}
 
 	/** Whether a resolved profile wants a persistent prompt prefix. Absent is
 	 * true: caching is the model norm, and providers may harmlessly ignore the
 	 * canonical cache marks. */
 	public static boolean cachePrefix(AMap<AString, ACell> profile) {
-		return !CVMBool.FALSE.equals(RT.getIn(profile, K_OPTIONS, OPT_CACHE_PREFIX));
+		return !CVMBool.FALSE.equals(RT.getIn(profile, Models.K_OPTIONS, OPT_CACHE_PREFIX));
 	}
 
 	/**
@@ -779,6 +638,10 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	 * <li>{@code labels}: {@code "bracket"} (default), {@code "xml"} or {@code "header"} — the
 	 *     dialect in which context elements are labelled, applied by the one
 	 *     label renderer (AGENT_CONTEXT.md §1.1). See {@link #labelDialect}.</li>
+	 * <li>{@code lateToolResults}: {@code "message"} (default) or {@code "tool"} —
+	 *     whether a tool call's outcome that arrives after its time limit is
+	 *     shown as a user message or as a {@code tool_call_outcome} tool
+	 *     exchange (AGENT_CONTEXT.md §5.7). See {@link #lateToolResults}.</li>
 	 * </ul>
 	 *
 	 * @param meta resolved operation metadata for the LLM operation
@@ -787,7 +650,7 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	 */
 	@SuppressWarnings("unchecked")
 	public static AMap<AString, ACell> modelOptions(AMap<AString, ACell> meta, AString modelId) {
-		ACell options = modelProfile(meta, modelId).get(K_OPTIONS);
+		ACell options = Models.modelProfile(meta, modelId).get(Models.K_OPTIONS);
 		return (options instanceof AMap) ? (AMap<AString, ACell>) options : Maps.empty();
 	}
 
@@ -804,7 +667,7 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 
 	/** One string option from an already resolved execution profile. */
 	public static String modelOptionText(AMap<AString, ACell> profile, AString key) {
-		AString v = RT.ensureString(RT.getIn(profile, K_OPTIONS, key));
+		AString v = RT.ensureString(RT.getIn(profile, Models.K_OPTIONS, key));
 		return (v != null) ? v.toString() : null;
 	}
 
@@ -814,14 +677,13 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	 * provider level. It is an estimate of the context size <em>appropriate</em>
 	 * for the model — what an assembler should target — not the hard window the
 	 * provider enforces. Bytes rather than tokens because bytes are what the
-	 * venue can count without a provider-specific tokenizer; a
-	 * {@code budget.tokens} sibling may follow.
+	 * venue can count without a provider-specific tokenizer.
 	 *
 	 * @param defaultBytes returned when nothing is declared, or the declaration
 	 *        is not a positive integer
 	 */
 	public static long modelBudgetBytes(AMap<AString, ACell> meta, AString modelId, long defaultBytes) {
-		return budgetBytes(modelProfile(meta, modelId), defaultBytes);
+		return budgetBytes(Models.modelProfile(meta, modelId), defaultBytes);
 	}
 
 	/** {@code budget.bytes} of a resolved profile, or the default when absent or not a positive integer. */
@@ -845,22 +707,38 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	 * default — a misspelt option must never change how a prompt is labelled.
 	 */
 	public static AString labelDialect(AMap<AString, ACell> meta, AString modelId) {
-		return labelDialect(modelProfile(meta, modelId));
+		return labelDialect(Models.modelProfile(meta, modelId));
 	}
 
 	/** The label dialect a resolved profile declares, by the same rule. */
 	public static AString labelDialect(AMap<AString, ACell> profile) {
-		AString declared = RT.ensureString(RT.getIn(profile, K_OPTIONS, OPT_LABELS));
+		AString declared = RT.ensureString(RT.getIn(profile, Models.K_OPTIONS, OPT_LABELS));
 		if (LABELS_XML.equals(declared)) return LABELS_XML;
 		if (LABELS_HEADER.equals(declared)) return LABELS_HEADER;
 		return LABELS_BRACKET;
 	}
 
+	/** The {@code lateToolResults} option: how a tool call's late outcome is shown. */
+	public static final AString OPT_LATE_TOOL_RESULTS = Strings.intern("lateToolResults");
+	/** A user message from the principal that made the call — the default. */
+	public static final AString LATE_RESULTS_MESSAGE = Strings.intern("message");
+	/** A {@code tool_call_outcome} tool exchange — opt-in. */
+	public static final AString LATE_RESULTS_TOOL = Strings.intern("tool");
+
+	/**
+	 * How a resolved profile shows a tool call's late outcome:
+	 * {@link #LATE_RESULTS_TOOL} only when declared, else
+	 * {@link #LATE_RESULTS_MESSAGE} — a misspelt option keeps the default.
+	 */
+	public static AString lateToolResults(AMap<AString, ACell> profile) {
+		AString declared = RT.ensureString(RT.getIn(profile, Models.K_OPTIONS, OPT_LATE_TOOL_RESULTS));
+		return LATE_RESULTS_TOOL.equals(declared) ? LATE_RESULTS_TOOL : LATE_RESULTS_MESSAGE;
+	}
+
 	/**
 	 * Builds the L3 input map: {@code {messages, tools, model, ...}} — the
-	 * exact payload that goes to the LLM provider operation. Factored out of
-	 * {@link #invokeLevel3} so the same construction can be used for
-	 * inspection (e.g. {@code agent:context}) without actually calling the LLM.
+	 * exact payload that goes to the LLM provider operation, for a live call
+	 * and for inspection alike (through {@code ContextAssembler.Prompt.toL3Input}).
 	 */
 	public static AMap<AString, ACell> buildL3Input(AMap<AString, ACell> config,
 			AVector<ACell> messages, AVector<ACell> tools) {
@@ -903,57 +781,85 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 		return Maps.of(
 			K_ROLE, ROLE_SYSTEM,
 			K_CONTENT, Strings.create(TRUNCATION_RETRY_MESSAGE),
-			AgentState.K_SOURCE, AgentState.SOURCE_TRANSITION);
+			Agent.K_SOURCE, Agent.SOURCE_TRANSITION);
 	}
 
 	// ========== Tool dispatch ==========
 
 	/**
-	 * Dispatches a tool call through the capability-checked pipeline.
-	 * Checks capabilities and falls through to grid dispatch when no resolved
-	 * operation route is supplied.
-	 *
-	 * <p>Subclasses should call this for non-harness tools (i.e. after checking
-	 * their own built-in tools like subgoal/complete/compact).</p>
+	 * Dispatches a tool call to the operation the palette routes it to, after
+	 * the host's tool guards ({@link FrameTools#dispatch}). The operation
+	 * enforces capabilities itself, under the agent's grant scope on
+	 * {@code ctx}.
 	 *
 	 * @param toolName the tool name as returned by the LLM
 	 * @param input the tool call arguments
-	 * @param operation resolved operation route, or null when the tool name is
-	 *        itself an operation reference
+	 * @param operation the route the palette binds the name to
 	 * @param ctx request context for the tool dispatch — carries the agent's
 	 *        grant scope ({@link RequestContext#getCaps()})
-	 * @param timeoutMs per-tool-call wall-clock budget; {@link TimeoutException}
-	 *        is converted to an "Error: tool call timed out" string result so
-	 *        the agent loop can continue
+	 * @param timeoutMs per-tool-call wall-clock budget; a call that outruns it
+	 *        gives a result saying so, naming the job it runs as (a sessioned
+	 *        call's outcome reaches the session when it ends), so the agent
+	 *        loop can continue
+	 * @param record whether the call's job is recorded from the start
+	 *        ({@link #resolveRecordToolCalls})
 	 * @return tool result (ACell)
 	 */
 	protected ACell dispatchTool(String toolName, ACell input,
-			AString operation, RequestContext ctx, long timeoutMs) {
+			AString operation, RequestContext ctx, long timeoutMs, boolean record) {
 		// Capability enforcement happens at the operation's own enforcement point
 		// under the agent's grant scope carried on ctx — no name-keyed gate here.
 		// The host's guards come first: a call they refuse never runs.
-		if (operation != null) {
-			String refused = guard(toolName, operation, input, ctx, timeoutMs);
-			if (refused != null) return Strings.create("Error: " + refused);
-			return invokeOperation(operation, input, ctx, timeoutMs);
-		}
+		String refused = guard(toolName, operation, input, ctx, timeoutMs);
+		if (refused != null) return Strings.create("Error: " + refused);
+		return invokeOperation(operation, null, input, ctx, timeoutMs, record);
+	}
 
-		// A harness pseudo-tool name reaching grid dispatch belongs to another
-		// runtime — this runtime's own harness tools were intercepted by the
-		// subclass before falling through. It exists in no catalog, so fail the
-		// call with the actual reason instead of a generic resolution miss (#143).
+	/** A harness tool of this runtime, offered here, named through {@code invoke_tool}. */
+	static final String CALL_HARNESS_DIRECTLY = "'%s' is a harness tool; call it directly, not through invoke_tool";
+	/** A harness tool of this runtime that the frame is not offered. */
+	static final String HARNESS_NOT_OFFERED = "'%s' is not among the tools offered here";
+
+	/**
+	 * Dispatches a tool name the active palette binds to no route (#643). The
+	 * name is either an operation reference, dispatched as one, or nothing this
+	 * frame can call: then nothing runs, and the model is told why and, when
+	 * {@code surface} shows it for certain, how to make the tool callable
+	 * ({@link HarnessTools#unboundTool}).
+	 *
+	 * @param surface what the frame can call and acquire
+	 */
+	protected ACell dispatchUnbound(String toolName, ACell input, RequestContext ctx,
+			HarnessTools.ToolSurface surface, long timeoutMs, boolean record) {
+		// This runtime runs its own harness tools by name where they are
+		// offered, so an offered one arriving here came through invoke_tool.
+		if (harnessToolNames().contains(toolName)) {
+			String reason = surface.callable().contains(toolName) ? CALL_HARNESS_DIRECTLY : HARNESS_NOT_OFFERED;
+			return Strings.create("Error: " + String.format(reason, toolName));
+		}
+		// Another runtime's harness tool exists in no catalog: name the actual
+		// reason rather than a resolution miss (#143).
 		String provider = HarnessNames.PROVIDERS.get(toolName);
 		if (provider != null) {
 			return Strings.create("Error: '" + toolName + "' is a " + provider
 				+ " harness tool — not available under this agent's runtime (" + getName() + ")");
 		}
 
-		// Fall through to grid dispatch
 		AString named = Strings.create(toolName);
+		Operation op;
+		try {
+			op = Operation.from(engine.resolveAsset(named, ctx));
+		} catch (Exception e) {
+			return Strings.create("Error: " + toolFailure(e, toolName, FaultException.VENUE));
+		}
+		if (op == null) return Strings.create("Error: " + HarnessTools.unboundTool(toolName, surface));
 		String refused = guard(toolName, named, input, ctx, timeoutMs);
 		if (refused != null) return Strings.create("Error: " + refused);
-		return invokeOperation(named, input, ctx, timeoutMs);
+		return invokeOperation(named, op, input, ctx, timeoutMs, record);
 	}
+
+	/** This runtime's own harness tool names, which its cycle intercepts. */
+	protected abstract java.util.Set<String> harnessToolNames();
 
 	/** The host's tool guards on this call: null to run it, else why not. */
 	private String guard(String toolName, AString operation, ACell input, RequestContext ctx, long timeoutMs) {
@@ -1007,21 +913,25 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	 * Invokes an operation with a per-call timeout, normally via the no-Job
 	 * internal dispatch path. Sessioned {@code hitl:request} is the deliberate
 	 * exception: it returns its durable Job handle immediately and re-enters the
-	 * session on resolution. {@code invokeInternal} enforces the grant scope carried by
-	 * {@code ctx} (today the agent cycle runs unrestricted at the context
-	 * level); {@link #dispatchTool} has additionally checked the call against
-	 * the agent's own config caps. Times out via
+	 * session on resolution. {@code invokeInternal} enforces the agent's grant
+	 * scope carried by {@code ctx}. Times out via
 	 * {@link java.util.concurrent.CompletableFuture#get(long, TimeUnit)} so a
 	 * stuck downstream op cannot hang the agent loop forever. Inside a cycle
 	 * with a live tap, the progress the operation publishes while it runs is
 	 * announced against the tool call that invoked it.
+	 *
+	 * @param resolved the definition resolved for an unbound, caller-selected
+	 *        reference, or null for a bound tool route
+	 * @param record whether the call's job is recorded from the start
 	 */
-	protected ACell invokeOperation(AString operation, ACell input, RequestContext ctx, long timeoutMs) {
+	private ACell invokeOperation(AString operation, Operation resolved, ACell input,
+			RequestContext ctx, long timeoutMs, boolean record) {
 		// Internal dispatch preserves types exactly — no coercion here. Tool
 		// arguments were already normalised once at the LLM wire boundary
 		// (parseToolArguments); a wrong-shaped input is the caller's error and
 		// surfaces from the op's own validation (#89).
 		ToolCycleEngine.ProgressRelay relay = ToolCycleEngine.relayForRunningCall();
+		java.util.concurrent.atomic.AtomicReference<Job> started = new java.util.concurrent.atomic.AtomicReference<>();
 		try {
 			// HITL is naturally longer-lived than a model turn. Its operation
 			// already owns a durable Job, so a sessioned agent receives that handle
@@ -1029,7 +939,9 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 			// session. Direct/API callers retain the ordinary parked-Job contract.
 			if ("v/ops/hitl/request".equals(operation.toString())
 					&& ctx.getAgentId() != null && ctx.getSessionId() != null) {
-				Job job = engine.jobs().invokeOperation(operation, input, ctx);
+				Job job = (resolved == null)
+					? engine.jobs().callOperation(operation.toString(), input, ctx)
+					: engine.jobs().invokeOperation(operation, resolved, input, ctx);
 				String error = job.getErrorMessage();
 				if (error != null) return Strings.create("Error: " + error);
 				AMap<AString, ACell> receipt = Maps.of(
@@ -1039,14 +951,21 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 				if (title != null) receipt = receipt.assoc(Fields.TITLE, title);
 				return receipt;
 			}
-			ACell result = engine.jobs().invokeInternal(operation, input, ctx,
-					(relay != null) ? relay::watch : null)
-				.get(timeoutMs, TimeUnit.MILLISECONDS);
+			java.util.function.Consumer<Job> watch = job -> {
+				started.set(job);
+				if (relay != null) relay.watch(job);
+			};
+			CompletableFuture<ACell> call = (resolved != null)
+				? engine.jobs().invokeReference(operation, resolved, input, ctx, watch, record)
+				: engine.jobs().invokeInternal(operation, input, ctx, watch, record);
+			ACell result = call.get(timeoutMs, TimeUnit.MILLISECONDS);
 			return (result != null) ? result : Maps.empty();
 		} catch (TimeoutException e) {
-			return Strings.create("Error: tool call timed out after " + timeoutMs + "ms");
+			return stillRunning(operation, started.get(), ctx, timeoutMs);
+		} catch (InterruptedException e) {
+			return toolInterrupted();
 		} catch (Exception e) {
-			return Strings.create("Error: " + unwrap(e).getMessage());
+			return Strings.create("Error: " + toolFailure(e, operation.toString(), FaultException.VENUE));
 		} finally {
 			if (relay != null) relay.close();
 		}
@@ -1069,9 +988,21 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	}
 
 	/**
+	 * Whether an agent's tool calls are recorded from the start: its
+	 * {@code config.recordToolCalls} when a boolean, else the venue's
+	 * {@code recordToolCalls} (false unset). An unrecorded call is recorded
+	 * only if it outlasts its time limit ({@link covia.venue.JobManager#mirror}).
+	 */
+	public boolean resolveRecordToolCalls(AMap<AString, ACell> config) {
+		ACell v = (config != null) ? config.get(K_RECORD_TOOL_CALLS) : null;
+		if (v instanceof CVMBool b) return b.booleanValue();
+		return engine.config().isRecordToolCalls();
+	}
+
+	/**
 	 * Resolves the per-tool-call timeout from the agent's merged config.
-	 * Accepts CVMLong (ms) or any numeric ACell; falls back to the default
-	 * if absent, non-numeric, or below the 1s minimum.
+	 * Accepts an integer number of milliseconds; falls back to the default
+	 * if absent, not an integer, or below the 1s minimum.
 	 */
 	public static long resolveToolCallTimeoutMs(AMap<AString, ACell> config) {
 		ACell v = (config != null) ? config.get(K_TOOL_CALL_TIMEOUT_MS) : null;
@@ -1096,16 +1027,85 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 		return DEFAULT_LLM_TIMEOUT_MS;
 	}
 
+	/** What failed, when a tool call reports a fault in the code handling it: the tool's name follows. */
+	public static final String TOOL = "Tool %s";
+
 	/**
-	 * Unwraps a {@link java.util.concurrent.CompletionException} to expose the
-	 * adapter's original exception — otherwise error messages read
-	 * "java.util.concurrent.CompletionException: ...".
+	 * Explains a failed tool call to the model. A failure already reported
+	 * passes as it is: an expected failure's reason, or the fault an operation
+	 * reported where it happened. Anything else is a fault in the code handling
+	 * the call, reported here as the tool's failure in {@code owner}'s code
+	 * ({@link FaultException#within}): logged at ERROR, named only by its type.
+	 * The text is whole, as the history stores it; {@link ConversationRenderer}
+	 * decides how much of it the model is shown.
+	 *
+	 * @param owner whose code handled the call: {@link FaultException#VENUE} for
+	 *        the venue's tool dispatch, or the adapter running the agent
 	 */
-	public static Throwable unwrap(Throwable t) {
-		if (t instanceof java.util.concurrent.CompletionException && t.getCause() != null) {
-			return t.getCause();
+	public static String toolFailure(Throwable failure, String toolName, String owner) {
+		return FaultException.within(TOOL.formatted(toolName), owner, failure).getMessage();
+	}
+
+	/** The result of a tool call whose operation outran its budget. */
+	static AString toolTimeout(long timeoutMs) {
+		return Strings.create("Error: tool call timed out after " + timeoutMs + "ms");
+	}
+
+	/** The result of a sessioned tool call still running at its time limit (#607):
+	 *  the operation, the limit in milliseconds, then the job it runs as. */
+	public static final String TOOL_STILL_RUNNING = "Error: %s did not complete within %dms and is still running as job %s. "
+		+ "Its outcome will arrive later in this session, naming this call and that job; grid_job_status with that id shows how it is going. "
+		+ "Do not call it again unless repeating it is safe.";
+
+	/** As {@link #TOOL_STILL_RUNNING}, for a call with no session to deliver its outcome to. */
+	public static final String TOOL_STILL_RUNNING_UNTRACKED = "Error: %s did not complete within %dms and is still running as job %s. "
+		+ "No message will follow; grid_job_status with that id gives its status and, once it has finished, its outcome. "
+		+ "Do not call it again unless repeating it is safe.";
+
+	/**
+	 * Answers a tool call still running at its time limit (#607). The call is
+	 * not cancelled, and the model is told the job it runs as: the call's own
+	 * when it is recorded, else a mirror ({@link covia.venue.JobManager#mirror}),
+	 * so the job can be looked up and outlasts a restart. A sessioned agent's
+	 * call is tracked in its pending index ({@link AgentAdapter#trackCall}),
+	 * with the id and tool name the model gave it: its outcome reaches the
+	 * task whose cycle made the call as its next input, else the asking
+	 * session, which wakes the agent, and a task its cycle leaves open
+	 * meanwhile waits for it. When no job can be named, the plain timeout stands.
+	 *
+	 * @param call the call's Job, or null if it never had one
+	 */
+	AString stillRunning(AString operation, Job call, RequestContext ctx, long timeoutMs) {
+		Job job;
+		try {
+			job = (call != null) ? engine.jobs().mirror(call) : null;
+		} catch (RuntimeException e) {
+			log.warn("No job recorded for {} still running past its limit: {}", operation, e.toString());
+			job = null;
 		}
-		return t;
+		if (job == null) return toolTimeout(timeoutMs);
+		String id = job.getID().toHexString();
+		AString agentId = ctx.getAgentId();
+		Blob sessionId = ctx.getSessionId();
+		AgentAdapter agents = engine.getAdapter("agent") instanceof AgentAdapter a ? a : null;
+		if (agentId == null || sessionId == null || agents == null) {
+			return Strings.create(String.format(TOOL_STILL_RUNNING_UNTRACKED, operation, timeoutMs, id));
+		}
+		try {
+			agents.trackCall(ctx.getUserDID(), agentId, sessionId, ctx.getTaskId(), job, ToolCycleEngine.runningCall());
+		} catch (RuntimeException e) {
+			// Untracked, nothing will follow: say so rather than promise a message
+			log.error("Tool call job {} not tracked for agent {}", id, agentId, e);
+			return Strings.create(String.format(TOOL_STILL_RUNNING_UNTRACKED, operation, timeoutMs, id));
+		}
+		return Strings.create(String.format(TOOL_STILL_RUNNING, operation, timeoutMs, id));
+	}
+
+	/** The result of a tool call abandoned because its cycle was interrupted;
+	 *  the thread's interrupt status is restored for the cycle to observe. */
+	static AString toolInterrupted() {
+		Thread.currentThread().interrupt();
+		return Strings.create("Error: tool call interrupted — the agent cycle is stopping");
 	}
 
 	// ========== Tool result message construction ==========
@@ -1158,59 +1158,17 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	 *
 	 * @param rawArguments the {@code arguments} cell from an LLM tool call
 	 * @return the parsed arguments value
-	 * @throws IllegalArgumentException if the arguments are not valid JSON
+	 * @throws InvalidInputException if the arguments are not valid JSON
 	 */
 	public static ACell parseToolArguments(ACell rawArguments) {
-		return ToolCallArguments.parse(rawArguments);
+		try {
+			return ToolCallArguments.parse(rawArguments);
+		} catch (IllegalArgumentException e) {
+			throw new InvalidInputException(e.getMessage(), e);
+		}
 	}
 
 	// ========== Config helpers ==========
-
-	/**
-	 * Extracts the LLM operation from config, falling back to the default.
-	 */
-	public static AString getLLMOperation(AMap<AString, ACell> config) {
-		if (config == null) return DEFAULT_LLM_OPERATION;
-		AString op = RT.ensureString(config.get(K_LLM_OPERATION));
-		return (op != null) ? op : DEFAULT_LLM_OPERATION;
-	}
-
-	/**
-	 * Pretty-prints a Level 3 input map as JSON for inspection. Output is
-	 * stable-ordered ({@code model}, {@code responseFormat}, {@code messages},
-	 * {@code tools}) so diffs across turns stay readable. Used by
-	 * {@code inspectContext} implementations.
-	 */
-	@SuppressWarnings("unchecked")
-	public static AString renderL3InputAsJson(AMap<AString, ACell> l3Input) {
-		AVector<ACell> messages = RT.ensureVector(l3Input.get(K_MESSAGES));
-		AVector<ACell> tools = RT.ensureVector(l3Input.get(K_TOOLS));
-		StringBuilder sb = new StringBuilder("{\n");
-		ACell model = l3Input.get(K_MODEL);
-		if (model != null) {
-			sb.append("  \"model\": ").append(convex.core.util.JSON.toString(model)).append(",\n");
-		}
-		ACell rf = l3Input.get(K_RESPONSE_FORMAT);
-		if (rf != null) {
-			sb.append("  \"responseFormat\": ").append(convex.core.util.JSON.toString(rf)).append(",\n");
-		}
-		sb.append("  \"messages\": [\n");
-		if (messages != null) {
-			for (long i = 0; i < messages.count(); i++) {
-				if (i > 0) sb.append(",\n");
-				sb.append("    ").append(convex.core.util.JSON.toString(messages.get(i)));
-			}
-		}
-		sb.append("\n  ],\n  \"tools\": [\n");
-		if (tools != null) {
-			for (long i = 0; i < tools.count(); i++) {
-				if (i > 0) sb.append(",\n");
-				sb.append("    ").append(convex.core.util.JSON.toString(tools.get(i)));
-			}
-		}
-		sb.append("\n  ]\n}");
-		return Strings.create(sb.toString());
-	}
 
 	/**
 	 * Copies config fields into a target map if they are present in the source.

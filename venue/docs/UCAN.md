@@ -18,6 +18,8 @@ Design for User Controlled Authorisation Networks (UCAN) in Covia, using lattice
 
 5. **DID-native.** Resource URIs are DID URLs. The DID identifies the authority (user), the path scopes into their lattice namespace. This aligns naturally with Covia's per-user namespace model.
 
+6. **Policy is Covia's, decided at one seam.** convex-core validates token structure, signatures and chains and treats resources as opaque; Covia gives resources their meaning and enforces granting where tokens are produced (§4.1). Each policy decision is one Engine method (`Engine.crossUserAllows`, `Engine.requireAuthority`) that composes venue configuration and delegates to the static, configuration-free matching in `CapabilityChecker`, so call sites stay a single line.
+
 ---
 
 ## 2. UCAN Structure
@@ -100,6 +102,8 @@ Resources are **DID URLs** — the DID identifies the authority (user/owner), th
 | `did:key:zAlice.../o/` | All operations |
 | `did:key:zAlice.../g/helper` | Specific agent |
 | `did:key:zAlice.../s/api-key` | Specific secret |
+| `did:key:zAlice.../x/oauth/google` | Alice's connected Google account (`x/oauth/` for all of them) |
+| `did:key:zAlice.../x/crypto/keys/z6Mk...` | A key in Alice's keyring (`x/crypto/keys/` for all of them) |
 | `did:key:zAlice.../dlfs/docs/` | All files on Alice's `docs` DLFS drive |
 | `did:key:zAlice.../dlfs/docs/reports/q1.md` | Specific file on that drive |
 
@@ -109,11 +113,11 @@ Resources are **DID URLs** — the DID identifies the authority (user/owner), th
 
 This aligns with `DIDURL` from convex-core — the DID is the authority, the path is the namespace scope.
 
-**Canonical vs. shorthand.** A canonical `with` is absolute (owner-named) as above; a **bare** lattice path is shorthand whose owner is implied by context, always the same principal: **the authority whose grant it is**.
+**Canonical vs. shorthand.** A canonical `with` is absolute (owner-named) as above. A **bare** lattice path is shorthand, resolved in a namespace the context supplies, as [GRID_LATTICE_DESIGN.md](GRID_LATTICE_DESIGN.md) §3.2 sets out for every name. That namespace is only where the name is resolved, and need not be the authority using it: an agent's `n/` is in the agent's own namespace, whatever its controller's authority. A leading slash changes nothing, and a capability is stored without one.
 
-- **Agent caps (config scopes)**: a bare `w/projects/foo` is the *caller's own* resource; enforcement canonicalises it to `<callerDID>/w/projects/foo` before matching, so bare and DID-URL grants compare identically. The same applies to bare `dlfs/<drive>/…` paths.
+- **Agent caps (config scopes)**: a bare `w/projects/foo` is in the namespace the request acts in, an agent's owner's; enforcement canonicalises it to `<ownerDID>/w/projects/foo` before matching, so bare and DID-URL grants compare identically. The same applies to bare `dlfs/<drive>/…` paths. A bare `n/…` names the agent's own notes, `<ownerDID>/g/<id>/n/…`, as `n/` does in any path it uses (`CapabilityChecker.inAgent`). An agent's own DID is named explicitly (`<ownerDID>:g:<id>/x/crypto/keys/`).
 - **Signed UCAN tokens**: a bare `with` means the **token issuer's own** namespace, resolved at evaluation against the token's signed `iss` (`CapabilityChecker.normaliseProofs`, applied inside `proofsCover` recursively per chain hop — a bare path in a re-delegation binds to the re-delegator). A self-sovereign owner can therefore sign bare paths naturally; they can never be reinterpreted against the presenter or the target.
-- **Custodial issuance** (`ucan:issue`): the venue signs for its own resources or a locally managed `did:web:<host>:u:<user>`, so its `iss` is not the caller — bare paths are absolutised to the *caller's* DID before signing (§4.1). Self-sovereign owners sign client-side. Tokens minted by the venue always carry the canonical form.
+- **Venue issuance** (`ucan:issue`): the venue signs, so its `iss` is not the caller — bare paths are absolutised to the namespace the request acts in before signing (§4.1). Tokens minted by the venue always carry the canonical form.
 
 Only `file://…` resources are scheme-qualified (host-filesystem, not DID-scoped) and are left unchanged; scheme forms are not issuable.
 
@@ -128,14 +132,14 @@ Abilities follow UCAN's slash-delimited convention with no leading slash. `*` is
 | `crud/read` | — | Read data |
 | `crud/write` | — | Write data |
 | `crud/delete` | — | Delete data |
-| `invoke` | `invoke/async` | Execute operations |
-| `invoke/async` | — | Fire-and-forget execution |
+| `invoke` | — | Look up and run an operation from an authorised location; no resource authority is implied |
 | `agent` | every `agent/*` | All agent operations |
 | `agent/create` | — | Create a new agent |
 | `agent/request` | — | Submit a request task to an agent |
 | `agent/message` | — | Send message to agent session |
 | `agent/fork` | — | Fork an agent |
 | `agent/write` | — | Update or administer an existing agent |
+| `admin/agent` | — | Run an agent's tool calls directly, with no model between (`agent:step`); no `agent` grant or admission to talk covers it |
 | `skill/load` | — | Admit a skill outside an agent's advertised skill surface as trusted instructions |
 | `tool/load` | — | Add an operation outside an agent's declared/advertised tool surface |
 | `asset` | every `asset/*` | All asset operations |
@@ -143,8 +147,22 @@ Abilities follow UCAN's slash-delimited convention with no leading slash. `*` is
 | `asset/read` | — | Get / list content-addressed assets |
 | `venue/restart` | — | Restart a standalone venue process or hand off to a successor jar |
 | `venue/gc` | — | Garbage-collect the venue's Etch store online (`<venueDID>/store`) |
+| `outbound/any` | — | Have the venue dial any HTTP, MCP, A2A, model, Convex peer or venue target, unchecked by its outbound guard (`<venueDID>/outbound`) |
 | `secret/use` | — | Use a secret's value in an operation without seeing it; bindable to a destination with `nb.url` |
 | `secret/extract` | — | Reveal an owned secret through a direct owner call |
+| `oauth` | every `oauth/*` | All connected-account operations |
+| `oauth/use` | — | Send a connected account's token in a request without seeing it; bindable to a destination with `nb.url` |
+| `oauth/connect` | — | Connect an account: start a connect, and complete one the provider approved, for the account that started it |
+| `oauth/disconnect` | — | Disconnect an account, revoking its grant at the provider |
+| `key` | every `key/*` | All use of held keys and phrases (`<did>/x/crypto/keys/<key>`, `<did>/x/crypto/mnemonics/<id>`; [HELD_KEYS.md](./HELD_KEYS.md)) |
+| `key/add` | — | Put a key or phrase into a keyring, or generate or derive one there |
+| `key/remove` | — | Remove a key or phrase from a keyring |
+| `key/sign` | every `key/sign/*` | Sign anything with a held key |
+| `key/sign/grant` | — | Sign UCAN grants with it (`ucan:issue`) |
+| `key/sign/convex` | — | Sign Convex transactions with it (`convex:transact`) |
+| `key/sign/raw` | — | Sign content the caller chooses (`crypto:sign`, `crypto:jwt-sign`), which can produce any other signature |
+| `key/decrypt` | — | Decrypt with a held key (`crypto:decrypt`) |
+| `key/derive` | — | Derive keys from a held phrase into its holder's keyring (`crypto:derive-key`) |
 | `ucan/delegate` | — | Sub-delegate capabilities |
 | `ucan/revoke` | — | Revoke a UCAN |
 
@@ -189,8 +207,9 @@ argument-conditional example).
 
 When a gate is an orchestration that relies on step output schemas, set
 `operation.strict: true` on the orchestration. Strict orchestration resolves
-each step's operation definition before invoking it and requires `asset/read`
-authority over that metadata in addition to `invoke`; an unreadable or
+each step's operation definition before invoking it and requires read
+authority over that metadata in addition to `invoke`
+([GRID_LATTICE_DESIGN.md](GRID_LATTICE_DESIGN.md) §4.6); an unreadable or
 unresolvable definition, or a schema violation, fails the orchestration and
 therefore the gate. Operations that declare no output schema impose no output
 constraint.
@@ -233,16 +252,33 @@ A grant of `secret/use` may name where the value may go:
   nb: { url: "https://safe.com/api" } }
 ```
 
-The adapter about to send the secret supplies the request url, and the
-capability applies iff that url falls under the prefix: the same scheme, host
+The API boundary normalises the destination before checking authority, and the
+adapter sends that same normalised URL. Normalisation decodes unreserved path
+characters before removing `.` and `..` segments, including `%2e` spellings.
+For example, `/api/../admin` is checked and sent as `/admin`, so a grant for
+`/api` does not cover it. Encoded path separators, backslashes, nested percent
+encoding and ambiguous dot parameters are refused; paths cannot traverse above
+the URL root. Queries and fragments do not participate in path normalisation.
+Inline URL secrets are checked again against the fully substituted URL before
+sending; a template match alone cannot authorise a different resolved path.
+The caveat prefix uses the same normal form. The matcher also normalises
+defensively for callers outside the HTTP API.
+
+The adapter about to send the secret supplies that request URL, and the
+capability applies iff that URL falls under the prefix: the same scheme, host
 and effective port, and a path equal to the caveat's or below it at a `/`
 boundary (a caveat path ending in `/` covers everything under it; query and
 fragment never matter). A use that supplies no destination, such as signing
 with a stored seed, never satisfies a `url` caveat. On a delegation path every
-link's `url` must cover the use, so a re-delegation can never widen it. The
-check is made once, on the request url: the http adapter drops credential
-headers on a cross-origin redirect, but a same-origin redirect may land on a
-path outside the prefix on the covered host.
+link's `url` must cover the use, so a re-delegation can never widen it. Before
+following each redirect, the HTTP adapter rechecks `secret/use` or `oauth/use`
+for every retained credential header against the normalised next destination.
+A denial fails the job before sending that hop. Cross-origin redirects strip
+credential headers and their references; returning to the original origin does
+not restore them. Literal caller-supplied headers have no grant to recheck.
+Requests using inline URL secrets remain bound to those secrets' grants for
+the entire redirect chain, even when a redirect removes the value from the URL;
+this avoids guessing how a server may have re-encoded the credential.
 
 ### 3.4 Risk Hierarchy
 
@@ -262,8 +298,7 @@ path outside the prefix on the covered host.
 
 ### 4.1 Issuing
 
-For a venue-managed custodial identity, the venue creates and signs a UCAN
-token using `ucan:issue`:
+A caller has the venue create and sign a UCAN token with `ucan:issue`:
 
 ```json
 ucan:issue {
@@ -291,32 +326,74 @@ Defaults are applied only after the signature over the original JWT bytes has
 been verified.
 
 The venue signs the token with the **venue key pair** (the venue is the
-issuer — custodial attestation on the authenticated caller's instruction)
-and returns the complete signed token. A self-sovereign owner (`did:key`, or
-an externally controlled DID) instead signs with their own key using the
-client SDK; registering that DID at a venue does not make the venue its
-controller.
+issuer, acting on the authenticated caller's instruction) and returns the
+complete signed token with its `iss`. The venue is the root of such a token,
+so it is valid only at this venue (§5.6, "Roots"). An identity that signs its
+own grants, with its own key or a held one (`key`, [HELD_KEYS.md](./HELD_KEYS.md)),
+makes a root that is valid anywhere.
 
 Resource rules at issuance (`UCANAdapter.handleIssue`):
 
-- A **bare** path (`/w/`, `w/projects/`) is absolutised to the *caller's*
-  DID before signing — in a venue-signed token a stored-bare path would
-  denote the venue's own namespace (§3.1). Empty paths and scheme forms
-  are rejected.
-- A DID URL in the **caller's own namespace** is issuable by this operation
-  only when the caller is a locally managed custodial user. A self-sovereign
-  caller must sign client-side.
-- A DID URL in **another principal's namespace** is issuable only under a
-  held **granting right** (COG-17): the caller's transport-presented
-  proofs must cover `grant/<can>` on the resource (proofs travel in the
-  proof channel, never in operation input), and the minted `exp` must not
-  outlive the enabling right (coverage is re-evaluated at the minted
-  expiry — so a non-expiring mint requires a non-expiring enabling
-  right), and the resource must still be controlled by this venue (the
-  venue's own DID or a local custodial user). A granting right cannot turn
-  the venue into root authority for an external DID. This makes `ucan:issue`
-  a *granting surface* — the `grant/…` rule binds token production; chain
-  resolution stays grant-agnostic.
+- A **bare** path (`/w/`, `w/projects/`) names a resource in the namespace
+  the request acts in, as everywhere else, and is absolutised before signing:
+  in a venue-signed token a stored-bare path would denote the venue's own
+  namespace (§3.1). For an agent that is its owner's namespace, which it may
+  not grant. Empty paths and scheme forms are rejected.
+- You pass on only what you could grant (`Engine.requireGrantable`). A
+  principal may grant what it is root of:
+  - its own resources, an agent's own DID included;
+  - those of an identity it signs in as (a `did:key` and the identities
+    nested below it);
+  - those of its own agents, since an agent is its owner's.
+
+  So may whatever acts with its authority: an agent with its owner's, a
+  request under `user/sudo` with the target's. That is the authority it has of
+  its own, never what others have granted it. Its scope must include the right
+  to grant, `grant/<can>`, as having no scope does, so an unrestricted agent
+  that its owner controls grants what its owner could.
+- Any other resource is issuable only under a held **granting right**
+  (COG-17), or passed on by the venue itself with `prf` (below). The caller's
+  transport-presented proofs must cover `grant/<can>` on the resource (proofs
+  travel in the proof channel, never in operation input), and the minted
+  `exp` must not outlive the enabling right (coverage is re-evaluated at the
+  minted expiry, so a non-expiring mint requires a non-expiring enabling
+  right). The `grant/…` rule binds token production; chain resolution stays
+  grant-agnostic.
+- Whatever the caller's right, the venue signs a root only over identities it
+  hosts. A granting right cannot make it the root of an identity it does not
+  host; that identity signs its own grants.
+- With `key`, a held key signs the token as its own `did:key`. Bare paths are
+  under that `did:key`, every entry must be a resource it is root of, and the
+  caller needs `key/sign/grant` on the key.
+
+**Passing on a held grant.** With `prf`, the issuance operation of COG-17
+signs the next link of a chain instead of a root: the venue passes on part of
+grants made to it, typically by another venue over that venue's resources.
+
+```json
+ucan:issue {
+  aud: "did:key:zAlice...",
+  att: [{ with: "did:web:b.example/w/shared/", can: "crud/read" }],
+  exp: 1735689600,
+  prf: ["<b.example's grant to this venue>"]
+}
+```
+
+- Only the venue itself may supply `prf` (`Engine.isDirectVenue`): the
+  authority passed on is the venue's, not the caller's.
+- Each `prf` entry must be a valid UCAN JWT addressed to this venue, and one
+  of them must cover every `att` entry now and through `exp`, so a
+  non-expiring link needs a non-expiring parent. These are the checks a
+  verifier makes of the chain (§4.4), made before signing.
+- A token with proofs is never a root, so it cannot also grant the venue's
+  own resources; those take a token without `prf`.
+- The parents' caveats bind wherever the chain is used, because verification
+  evaluates `nb` at every hop.
+- A parent rooted in another venue's custodial user is refused until
+  custodial attestation exists (C3b, §5.6).
+
+The proofs are part of the token being signed, so they are operation input.
+Proofs that authorise a request travel in the proof channel instead (§4.3).
 
 ### 4.2 Delivery
 
@@ -354,8 +431,24 @@ of Alice's workspace might require:
 - (For delegation) Bob's own sub-delegation UCAN if acting on behalf
   of Carol
 
-The proofs travel with the request — they are not stored at the venue.
-This is the standard per-request UCAN proof-presentation model.
+The proofs travel with the request. This is the standard per-request UCAN
+proof-presentation model, and two rules cover work that continues after the
+request:
+
+- **A check that happens later needs its evidence kept.** Grant proofs are
+  kept only for work that continues after the request: a scheduled event
+  keeps them with the event, and a job that can resume after a restart keeps
+  them in its entry, which no route reads (a Claude Code session, or an agent
+  request whose `outputPath` write is pending; `JobManager.keepCallerContext`,
+  JOBS.md, Kept caller context). They are kept in the form checked on
+  arrival, with no second signature check, since the store is the trust
+  boundary for the whole record. The work presents them again each time it
+  acts, through `Engine.context(owner, caller, proofs)`, which checks what a
+  live request would on arrival. They go when the work ends, and a job record
+  never holds them, so exports hold none. They never appear in API output,
+  never serve another record's work and are never handed to an agent.
+- **Sign-in credentials prove presence and are never stored.** Deferred work
+  that must act as the caller at another venue is scheduled at that venue.
 
 #### Proof references
 
@@ -419,13 +512,14 @@ grid:invoke {
 }
 ```
 `anonymous` is the default, `caller` requires a target-audienced empty-`att`
-credential, and `venue` requires a `venue/relay` grant. Credentials and grants
-are forwarded in their distinct channels, filtered to the selected principal.
-Grant presence never selects a mode. See §5.6.
+credential presented with the request, and `venue` is only for the venue itself. Credentials and grants
+are forwarded in their distinct channels, filtered to the selected principal,
+and only to a venue whose DID is proven. Grant presence never selects a mode.
+See §5.6.
 
-**Agent tool calls**: The agent framework (level 2) attaches the user's
-proofs automatically when invoking tools on behalf of the user. Agents
-inherit the capabilities of the user who triggered them.
+**Agent tool calls**: an agent's tool calls run as the agent, in its owner's
+namespace, under its own `config.caps` as they stand at each check (§5.4).
+The requester's proofs and credentials are never handed to the agent.
 
 #### Caching (future)
 
@@ -497,19 +591,10 @@ The full proof chain travels with Carol's request.
 
 ### 4.6 Revocation
 
-A revocation is a signed record referencing a UCAN's CAD3 hash:
-
-```
-{
-  revoke: <cad3-hash-of-ucan>
-  iss: "did:key:zAlice..."        ; must be the UCAN's issuer
-  sig: 0x...                       ; Ed25519 signature
-}
-```
-
-Revocations are published to the lattice. Venues check revocation
-lists during verification. Revoking a parent invalidates all
-downstream delegations.
+The venue does not implement revocation: an issued token holds until its
+`exp`, and only sign-in keys can be revoked (`ManagedUsers`). COG-17 lets a
+grantor revoke any grant it made; how the venue does so is an open question in
+[VENUE_AUTHORITY.md](./VENUE_AUTHORITY.md).
 
 ### 4.7 Authenticating — lifting the public read-only scope
 
@@ -605,6 +690,11 @@ history, venue-wide events and schema-validation logs. Transient results
 cannot be fetched through public job-status APIs. HTTP run responses use
 `Cache-Control: private, no-store`.
 
+Crypto operations do not turn a use into possession either. `crypto:derive-key` reads only
+the caller's own secrets, because it stores the derived key where the caller
+can extract it. `crypto:jwt-decode` never returns a stored token's signature,
+which is its bearer credential.
+
 After authorization, a missing secret fails with `SecretAdapter.SECRET_UNAVAILABLE`;
 an unreadable key version, corrupt ciphertext or malformed record fails with
 `SecretAdapter.SECRET_DECRYPT_FAILED`. Decryption failures expose no underlying
@@ -624,52 +714,85 @@ references with `secret/use` instead.
 
 ### 5.3 Enforcement Points
 
+Creating an entry changes the directory or map that holds it. A write that
+creates therefore also needs `crud/write` there, or at the nearest level that
+exists when several are missing. A grant on an existing file or key changes it
+but creates nothing. This applies to:
+
+- workspace keys (`covia:write`, `covia:append`, `covia:copy` destinations),
+  checked within the write's atomic update;
+- files on host, temp and DLFS roots, including `archive:extract` and
+  `archive:zip` destinations;
+- DLFS drives, which are entries of `[<owner>/]dlfs`.
+
+A user's namespaces (`w`, `o`, …) always exist. So does a component's own drive
+(Vault's, a DLFS-backed root's, a messaging or speech media drive): an
+authorised write there creates it as its owner. A cross-user write reaches
+only a user the venue already has (`VenueState.UNKNOWN_USER`), since a user's
+record is an entry no grant of theirs covers.
+
 | Point | Required Capability |
 |-------|-------------------|
 | `covia:read` / `covia:list` / `covia:slice` (cross-user) | `{ with: "<path>", can: "crud/read" }` |
-| `covia:write` / `covia:delete` / `covia:append` (cross-user) | `{ with: "<path>", can: "crud/write" }` |
+| `covia:write` / `covia:append` (cross-user) | `{ with: "<path>", can: "crud/write" }`, and on the map that holds a new key |
+| `covia:delete` (cross-user) | `{ with: "<path>", can: "crud/delete" }` |
 | `file:read` / `file:list` / `file:stat` | `crud/read` on the resolved resource: `file://<root>/<path>` for host/temp roots, canonical `dlfs/<drive>/<path>` for DLFS targets |
 | `file:roots` | `{ with: "file://", can: "crud/read" }` |
-| `file:write` / `file:append` / `file:mkdir` | `crud/write` on the resolved file or DLFS resource |
-| `file:move` | `crud/write` on both resolved source and destination resources |
-| `file:copy` | `crud/read` on the resolved source and `crud/write` on the resolved destination |
+| `file:write` / `file:append` / `file:create` / `file:mkdir` | `crud/write` on the resolved file or DLFS resource, and on the directory that holds a new one |
+| `file:move` | `crud/read` and `crud/delete` on the resolved source, `crud/write` on the resolved destination and the directory that holds it |
+| `file:copy` | `crud/read` on the resolved source, `crud/write` on the resolved destination and the directory that holds it |
 | `file:delete` | `crud/delete` on the resolved file or DLFS resource |
-| `dlfs:read` / `dlfs:list` / `dlfs:stat` / `dlfs:listDrives` | `{ with: "dlfs/<drive>/<path>", can: "crud/read" }` |
-| `dlfs:write` / `dlfs:append` / `dlfs:mkdir` / `dlfs:createDrive` | `{ with: "dlfs/<drive>/<path>", can: "crud/write" }` |
-| `dlfs:delete` / `dlfs:deleteDrive` | `{ with: "dlfs/<drive>/<path>", can: "crud/delete" }` |
+| `dlfs:read` / `dlfs:list` / `dlfs:tree` / `dlfs:stat` | `{ with: "dlfs/<drive>/<path>", can: "crud/read" }` |
+| `dlfs:listDrives` | `{ with: "dlfs", can: "crud/read" }` |
+| `dlfs:write` / `dlfs:append` / `dlfs:create` / `dlfs:mkdir` | `{ with: "dlfs/<drive>/<path>", can: "crud/write" }`, and on the directory that holds a new entry |
+| `dlfs:createDrive` | `{ with: "dlfs", can: "crud/write" }` |
+| `dlfs:delete` | `{ with: "dlfs/<drive>/<path>", can: "crud/delete" }` |
+| `dlfs:deleteDrive` | `{ with: "dlfs/<drive>", can: "crud/delete" }` |
 | `secret:list` | `{ with: "s/", can: "crud/read" }` (names only) |
+| `hitl:list` | `{ with: "h/", can: "crud/read" }` |
+| `GET /api/v1/jobs`, and the caller's job count in `/status` | `{ with: "j/", can: "crud/read" }`; `/status` leaves out the count without it |
 | `secret:delete` | `{ with: "s/<name>", can: "crud/delete" }` |
 | `secret:extract` | `{ with: "s/<name>", can: "secret/extract" }`, plus the direct-owner restriction in *Secret extraction* above |
-| Any adapter sending a secret (`apiKey`, `bearerSecret`, `secretHeaders`, `{s/NAME}`, MCP `auth`, A2A auth) | `{ with: "<ownerDID>/s/<name>", can: "secret/use" }`, its `nb.url` checked against the request's destination |
+| Any adapter sending a secret (`apiKey`, `bearerSecret`, `secretHeaders`, `{s/NAME}`, an operation's `secretKey`, MCP `auth`, A2A auth) | `{ with: "<ownerDID>/s/<name>", can: "secret/use" }`, its `nb.url` checked against the request's destination |
+| `http:*` with `bearerSecret: "oauth/<provider>"` | `{ with: "<ownerDID>/x/oauth/<provider>", can: "oauth/use" }`, its `nb.url` checked against the request's destination |
+| `oauth:status` | `{ with: "x/oauth/", can: "crud/read" }`, or `x/oauth/<provider>` for one provider |
+| `oauth:connect` | `{ with: "x/oauth/<provider>", can: "oauth/connect" }` |
+| `oauth:complete` | `{ with: "x/oauth/<provider>", can: "oauth/connect" }`, and only by the account that started the connect |
+| `oauth:disconnect` | `{ with: "x/oauth/<provider>", can: "oauth/disconnect" }` |
 | `agent:create` | `{ with: "<ownerDID>/g/<id>", can: "agent/create" }` |
 | `agent:info` / `agent:context` (cross-user) | `{ with: "<ownerDID>/g/<id>", can: "crud/read" }` |
+| `agent:list` (and `GET /api/v1/agents`) | `{ with: "g/", can: "crud/read" }` |
 | `agent:request` (cross-user) | `{ with: "<ownerDID>/g/<id>", can: "agent/request" }` |
 | `agent:trigger` (cross-user) | `{ with: "<ownerDID>/g/<id>", can: "agent/request" }` |
 | `agent:message` (cross-user) | `{ with: "<ownerDID>/g/<id>", can: "agent/message" }` |
-| `agent:chat` / `agent:query` / `agent:step` (cross-user) | `{ with: "<ownerDID>/g/<id>", can: "agent/message" }` |
+| `agent:chat` / `agent:query` (cross-user) | `{ with: "<ownerDID>/g/<id>", can: "agent/message" }` |
+| `agent:step` (cross-user) | `{ with: "<ownerDID>/g/<id>", can: "admin/agent" }` |
 | `agent:fork` (cross-user source) | `{ with: "<ownerDID>/g/<id>", can: "agent/fork" }` |
 | `agent:update` / `agent:summarise` / suspend / resume / delete / task-session administration (cross-user) | `{ with: "<ownerDID>/g/<id>", can: "agent/write" }` |
 | `skill_load {ref}` outside the effective advertised index | `{ with: "<skill-ref>", can: "skill/load" }`, explicitly present even for an otherwise unrestricted agent; read authority remains separate |
 | `more_tools` outside config, active loads and effective advertised skills | `{ with: "<operation-ref>", can: "tool/load" }`, explicitly present even for an otherwise unrestricted agent; `invoke` remains separate |
 | `asset:store` | `{ with: "<any>", can: "asset/store" }` |
-| `asset:get` / `asset:list` | `{ with: "<any>", can: "asset/read" }` |
+| `asset:get` | `{ with: "<ref>", can: "asset/read" }` or `crud/read` over the same hash; a path is read as data ([GRID_LATTICE_DESIGN.md](GRID_LATTICE_DESIGN.md) §4.6) |
+| `asset:list` | `{ with: "<any>", can: "asset/read" }` |
 | Grid operation invoke | `{ with: "/o/<op>", can: "invoke" }` |
 | Sub-delegation | `{ with: "<path>", can: "ucan/delegate" }` |
 
 **Target-side admission (#447).** Before proofs are consulted, the two "talk"
 rows — `agent/request` (`agent:request`, `agent:trigger`) and `agent/message`
-(`agent:message`, `agent:chat`, `agent:query`, `agent:step`) on `<ownerDID>/g/<id>` — may be
+(`agent:message`, `agent:chat`, `agent:query`) on `<ownerDID>/g/<id>` — may be
 admitted by the agent record's own `config.accepts`: `"owner"` (default:
 nobody without a delegation), `"venue"` (the venue operator — the venue
-principal and the agents it owns, never every user hosted here), or an array
-of principal DIDs matched exactly (a user DID admits that user only,
+principal and the agents it owns, never every user hosted here), `"anyone"`
+(every caller, the anonymous public principal included), or an array of
+principal DIDs matched exactly (a user DID admits that user only,
 `<userDID>:g:<agentId>` admits that one agent only; `"venue"` may appear as an
 entry). Admission is the owner's standing statement, evaluated inside the same
 single cross-user gate as proofs (`Engine.crossUserAllows`, see `Admission`),
-and it covers talking only: `crud/read`, `agent/write` and `agent/fork` still
-need a delegation. The public principal is never admitted — anonymous exposure
-remains A2A's `a2a.public` + `a2a.caps`. A malformed policy is rejected at
-`agent:create` / `agent:update`.
+for every way of asking, A2A included. It covers talking only: `crud/read`,
+`agent/write` and `agent/fork` still need a delegation. An admitted request is
+the caller's own, and the agent serves it under its own `caps`
+([A2A_INTERACTION_AUTHORITY.md](./A2A_INTERACTION_AUTHORITY.md)). A malformed
+policy is rejected at `agent:create` / `agent:update`.
 
 File resources use URI form so they parse as standard hierarchical
 identifiers (per UCAN convention for `with`): the configured root is the URI
@@ -699,10 +822,19 @@ checks (a *grant* of access to someone else's resource). A caller running under
 a **narrower Authority** — an agent started with `config.caps` (§5.4) — has the
 same capability check applied to its **own** operations as a *scope*: the op's
 resource and each grant's `with` are canonicalised to absolute owner-scoped form
-(a bare `w/records/item` → `<callerDID>/w/records/item`; DID-URL and `file://`/`dlfs://`
-left as-is), then matched with `Capability.covers`. Own and cross-user resources
+(a bare `w/records/item` → `<callerDID>/w/records/item`; DID-URL and `file://`
+left as-is, `dlfs://` normalised as above), then matched with `Capability.covers`. Own and cross-user resources
 thus match by one rule. A caller with no scope (the null-caps fast path) holds
 the full implicit grant and is unaffected.
+
+A scope, unrestricted or not, applies only to the request's own namespaces:
+the one it acts in, its own DID's, and resources the venue does not host
+(scheme and remote references). Another identity's resource that the venue
+hosts is reached only by what the request holds: a presented grant, an
+agent's admission, the public scope. A scope entry naming one gives nothing
+there. `Engine.authorityCovers` applies this itself, so it holds whatever
+resource a call site passes. A local path under a DID the venue does not host
+names nothing here and is refused as another's (`Engine.requireLocalAccess`).
 
 ### 5.4 Agent Identity Models
 
@@ -722,11 +854,11 @@ Two questions must not be conflated, and the context answers them separately:
 
 | Question | Accessor | Used for |
 |---|---|---|
-| **Who acted?** | `ctx.getCallerDID()` | attribution (`actor` on job records), delegation audience, granting authority |
+| **Who acted?** | `ctx.getCallerDID()` | attribution (`caller` on records of calls), delegation audience, granting authority |
 | **Whose namespace?** | `ctx.getUserDID()` | bare path resolution, workspace, secrets, jobs, inbox, quota |
 
 For every ordinary principal the two are equal, so this is a no-op outside
-agent execution. For an agent, `w/foo` still means the **owner's** workspace —
+agent execution and delegation (`user/sudo`). For an agent, `w/foo` still means the **owner's** workspace —
 that is the namespace it lives and works in — while the agent remains a
 distinct principal. `RequestContext.grantsDenial` canonicalises bare paths
 against `getUserDID()`, applying the same DID to the request resource and to
@@ -734,16 +866,45 @@ every grant's `with`, so agent `config.caps` written as `w/decisions/` keep
 their meaning. The proof path is unaffected: a bare `with` in a token binds to
 that token's signed `iss`.
 
-The nesting is recoverable by parsing (`Principals.userOf`), and
-`Authority.of(did)` uses it, so reconstructing a context from a stored DID is
-lossless — a scheduled event or capability gate that replays as
-`<owner>:g:<agent>` still resolves the owner's namespace. That parse is
-therefore load-bearing for authorisation, which is why an admitted user may
-never be agent-shaped: `Engine.admitUser` rejects one at the admission
-boundary. A bearer may authenticate a nested agent identity on an identity-only
-route (AUTH.md section 5.2), but it establishes no local execution relationship.
-`AuthMiddleware.callerContext` keeps that full subject as both actor and
-namespace with an empty capability scope, so the name grants no owner access.
+An agent's own DID is its own as well: what is held under it, its keyring at
+`<agentDID>/x/crypto/keys/`, it reaches under its own scope
+(`Engine.requireLocalAccess`), and it may grant (§4.1). A scope names it
+explicitly, since a bare path is the owner's. Its owner grants on its behalf,
+the agent being its owner's; to use what the agent holds, the owner, like
+anyone else, presents a grant.
+
+The namespace is never parsed from a name: `Authority.of(did)` makes every DID
+its own namespace, agent-shaped or not. Only the venue puts a principal in
+another namespace, from a relationship it holds — running its own agent
+(`Authority.ofAgent`) or acting on a delegation (`onBehalfOf`, as `user/sudo`
+does). Whatever records a call records the namespace beside the caller, as
+COG-8 names them: `caller` is the principal that made the call, and `owner`
+the namespace, written only when it differs (`covia.grid.Attribution`). Jobs,
+scheduled events and HITL requests all do, and the
+policy-gate input is `{operation, input, caller, owner?}` on both the held
+grant and the proof path.
+
+What a principal may do *now* is decided in one place, `Engine.context`.
+`context(principal)` is a principal in its own namespace: the public principal
+holds `auth.public.caps`, an agent-shaped DID holds nothing, and anyone else is
+unrestricted there. `context(owner, principal)` is a principal a record of
+`owner`'s names (a messaging binding, say): the owner, one of its agents with
+its controller's authority under the agent's current `config.caps`, or the
+public principal; the owner comes
+from the record, never from the principal's name. An agent's context carries
+the agent, not a copy of its caps: every point of action reads `config.caps`
+as they stand then, and none once the agent is gone or terminated. `context(owner, principal,
+proofs)` adds proofs it presented, and takes any other principal as a delegate
+of the owner, under the same `user/sudo` check as a live request; a scheduled
+event fires through it. Every inbound request starts from `context(caller)`
+(`AuthMiddleware.callerContext`), and an agent's step runs as that agent
+(`Engine.stepContext`, §5.4).
+
+An admitted user may never be agent-shaped (`Engine.admitUser` rejects one), so
+a name addressing an agent never also names a user. A bearer may authenticate a
+nested agent identity on an identity-only route (AUTH.md section 5.2), but it
+establishes no local execution relationship: the full subject is both actor and
+namespace, with an empty capability scope, so the name grants no owner access.
 Explicit authorization is required to act within another namespace.
 
 Being a sub-principal is **proximity, not permission**.
@@ -756,16 +917,16 @@ by its name.
 #### Model A: User-Scoped Agent (Attenuated Delegation)
 
 The agent has **no key of its own**. It acts as its own sub-principal DID
-within the user's namespace, bounded by attenuated capabilities; the venue
-signs on the owner's behalf. The user creates the agent and declares what it
-can do.
+within the user's namespace, bounded by attenuated capabilities. The user
+creates the agent and declares what it can do; no token is issued. The scope
+in its `config.caps` has the shape of the delegation below.
 
 ```
 User DID: did:key:zAlice...
 Agent ID: Carol
 Agent DID: did:key:zAlice...:g:Carol
 
-Delegation at creation:
+Scope, as the delegation it amounts to:
   iss: did:key:zAlice
   aud: did:key:zAlice...:g:Carol        ; the agent sub-principal
   att: [
@@ -775,47 +936,156 @@ Delegation at creation:
   prf: []                               ; root grant from resource owner
 ```
 
-When Carol's tool calls execute, the framework wraps her RequestContext
-with only this token. Carol can write to `w/decisions/` but not
+When Carol's tool calls execute, they run as Carol under exactly these
+capabilities, read from her `config.caps` at each check. Carol can write to `w/decisions/` but not
 `w/vendor-records/`. She can read enrichments but not secrets.
 
 **Identity:** `did:key:zAlice...:g:Carol` (a sub-principal of Alice)
-**Keys:** None — the venue signs on Alice's behalf
-**Granting:** none, and **the gate is identity, not scope**. Both granting
-surfaces refuse an agent context outright (COG-17): `ucan:issue` directly, and
-`hitl:respond` because answering an ask mints a grant under the *inbox owner's*
-authority — an agent reaching it would approve its own request. An agent that
-must confer authority asks its human, and only the human can answer.
+**Keys:** None — the venue holds the relationship, and nothing is signed
+**Granting:** by the rule for everyone (§4.1). An unrestricted agent its owner
+controls grants what its owner could grant of its own right, its owner's
+resources and its own, and never what others granted its owner; with caps, or
+under a capped controller, only what they include the right to grant
+(`grant/<can>`). `hitl:respond` refuses an agent
+context outright, because answering an ask mints a grant *as the inbox owner*:
+an agent reaching it would approve its own request with authority it may not
+have. An agent that needs more asks its human, and only the human can answer.
 
-This is why the guards are pinned to identity. An agent with no `config.caps`
-holds a `null` scope, which the `authorityCovers` fast path treats as
-unrestricted; a scope-based defence would therefore be absent on exactly the
-agent that most needs bounding.
+That guard is pinned to identity. An unrestricted agent holds no scope, which
+the `authorityCovers` fast path passes; a scope-based defence would therefore
+be absent on exactly the agent that most needs bounding.
 
-**Conferring:** attenuation only. Creating or reconfiguring an agent mints no
-token, but it hands authority on, so the caller may confer only what it holds
-(`Engine.requireConferrable`). `agent:create`, `agent:update` and `agent:fork`
-refuse a config whose `caps` the caller's own authority does not cover, one
-capability at a time; an absent `caps` is unrestricted, so only a caller
-unrestricted in that namespace may leave it out. The same holds for `accepts`,
-which confers `agent/request` and `agent/message` on the agent, and for a public
-`a2a.caps`. An agent may therefore create sub-agents, never more capable ones,
-and a delegated `agent/create` or `agent/write` confers nothing beyond the
-delegation. An update re-checks only the fields it changes. A direct
-`llmagent:chat` or `goaltree:chat` whose input `config.caps` would replace the
-caller's scope follows the same rule.
+**A request's caller, namespace and authority are separate.** Its caller is
+who acted, its namespace is where its names resolve (with the agent, session
+and task its work belongs to), and its authority is what it may do. A request
+usually acts with its caller's own authority in the namespace it acts in. An
+agent acts with its controller's instead. Where that is a principal from
+another namespace, and always for the agent's harness, its owner's authority
+included, it is a separate authority
+(`RequestContext.withAuthorityOf`): access checks decide under it, on names
+resolved in the agent's namespace (`RequestContext.authorityContext`,
+`inNamespace`). State a namespace keeps with no capability of its own, such as
+its Python instances, dictations and bot list, is reachable only by a request
+acting with that namespace's authority. A recorded job and a scheduled event
+keep a separate authority with the work and act with it again.
+
+**Each agent has a controller:** the principal whose authority it acts with,
+as that principal's own request would hold it (`Engine.context`), the owner's
+included: a user's is unrestricted in its namespace, and the public
+principal's is the public caps, none while public access is off. Its harness
+acts with that authority as it stands, and its tool calls with that
+authority narrowed by its `config.caps`. The harness does not hold the
+controller's authority for choosing a controller or configuring agents
+(`Engine.holdsAuthorityOf`), and does not reach what is held under the agent's
+own DID. Read as a delegation, the controller
+is the issuer, the agent the audience and the caps the capabilities, with
+`"unrestricted"` passing on all the controller has, so an agent never exceeds its
+controller, at any depth (`Engine.agentContext`). Each point of action reads
+the caps along the chain of controllers as they stand, so a controller narrowed
+or gone bounds its agents' running work. A chain that loops has no authority at its root and
+grants nothing, and two caveats that ask different things of the same grant
+allow nothing (`CapabilityChecker.intersect`).
+
+A controller has authority over the namespace of each agent it controls,
+directly or through the agents it controls: everything under
+`<owner>/g/<agent>/`, in its own right and whatever its own caps say
+(`Engine.withControl`). Its agents act with that too, within their caps, so an
+agent reaches its own namespace, and an unrestricted one reaches those of the
+other agents its controller controls. A capability naming a path in full gets
+no more than that: an agent reaches another agent's `n/` only if its caps name
+it and its controller has authority there. Control is not a root, so it grants
+nothing over those namespaces (§4.1), and what is held under an agent's own DID,
+such as its keyring, stays the agent's.
+
+It is the agent's owner unless the record stores another (`controller`, shown
+by `agent:info` and `agent:list`). Whoever creates or forks an agent controls
+it, meaning the principal whose authority the request acts with
+(`Engine.actingPrincipal`): a user, an agent itself, or for a `user/sudo`
+delegate the user it acts for. An input's `controller` names another, whose
+authority the request must hold (`Engine.holdsAuthorityOf`): it is that
+principal or an identity it signs in as, is its owner if it is an agent, or
+acts unscoped in a namespace that is root of it. So a user may name itself or
+its agents, and a capped agent only itself. A request made as an agent holds
+that agent's authority however it is derived, and not the whole authority of a
+controller its caps narrow. A `user/sudo` delegate, whose scope is its
+presented grants, holds no other principal's authority. An agent such a
+delegate creates is controlled by its target, so grant `agent/create` beside
+`user/sudo` as you would that user's own authority.
+
+**Configuring an agent acts with its controller's authority.** The config
+chooses the agent's harness, its transition operation and the context it
+assembles, and how far its caps narrow its controller. So changing an agent's
+config or controller (`agent:update`) needs `agent/write` on it and that
+controller's authority, checked against the record in the same atomic update,
+and for an agent its owner controls that is the owner's. So a capped agent or
+a delegate holding `agent/write` cannot change the config of an agent its owner
+controls, its own included. Changing only the state of an agent its owner controls, suspending or resuming
+it, and managing its sessions need `agent/write` alone, and its owner may
+always delete it.
+`user:import` and `user:clone` keep a stored controller only when it is the
+target user or one of its agents; any other agent returns to its owner.
+
+The config's `caps` and `accepts` take no check of their own. `caps` narrow
+what the agent does and cannot exceed its controller: a list of capabilities
+gives it what they cover, and `"unrestricted"` all its controller has. An
+agent is unrestricted only when its config says so: one created without
+`caps`, or whose `caps` are set to `null`, has none, and its harness still
+runs, answers and makes tool calls, which are refused (§5.5). An update that
+leaves `caps` out keeps them, and a fork copies its source's unless it names
+others. `accepts` admits others to talk to it (an older
+public `a2a.caps` reads as `accepts: "anyone"`). Configuring mints no token,
+and caps reach nothing of another identity's, which a request reaches only by
+what it holds (§5.3). The owner's secrets are part of its namespace like any
+other: an agent sends one only under `secret/use` in its caps, whether its
+input names the secret or the operation it invokes does.
+
+**The transition operation is the harness.** Each cycle, the run loop invokes
+the agent's transition operation (`config.operation`) as a harness step, under
+the harness context (`Engine.harnessContext`): in the owner's namespace,
+attributed to the agent, and acting with its controller's authority as it
+stands that cycle. An agent controller's is read from its caps at each check,
+and is none once it is gone; a controller whose account is gone stops the
+run. The controller chose the operation when it configured the agent, so it
+needs no invocation grant in the agent's caps. These configured transition
+and model calls are bound framework calls; their resource checks use the
+controller's current authority. The transition operation defines where the agent acts: it
+switches what it does on the agent's behalf to the agent's own context
+(`Engine.stepContext`), its controller's authority under its current
+`config.caps`. A transition operation that never switches is not bounded by
+the caps; that is the choice of whoever installs it.
+
+The built-in runtimes, `llmagent:chat` and `goaltree:chat`, switch at each
+tool call and for each load the agent makes or a caller adds (a session's
+`loads`). Everything else they do is the harness's: assembling the context the
+config names (the system prompt, `config.context`, `config.loads` and the
+skills index), resolving the model setup, calling the model with the key its
+operation names, reading the
+configured tools' definitions and keeping the session's frames. The switch takes the
+agent from the step's input, never its authority, whoever invokes the runtime
+and whatever `config` its input carries. Only the agent's own run or its
+owner may make an agent act, and only an agent that exists.
+
+An external agent (AGENT_LOOP.md §2.2.1) has no transition operation. Asking
+its backend (an A2A endpoint, a Claude Code project, another Covia agent) is
+its harness's work under the same context, since its definition, fixed when it
+was created, chose the backend, so its `config.caps` do not bound it. The
+backend job keeps that authority across a restart (JOBS.md, Kept caller
+context).
 
 **Best for:** Pipeline agents, task workers, scoped automations — anything that
 operates within one user's namespace with restricted permissions.
 
 **How it works at runtime:**
 
-1. `agent:create` with `caps` field declares the agent's attenuations
-2. Venue issues a UCAN: issuer = user DID, audience = agent DID
-3. Token stored in agent record (alongside config, state, etc.)
-4. On each run, level 2 creates a restricted RequestContext with only the agent's token
-5. Tool calls go through CoviaAdapter which verifies the token against the requested path/ability
-6. Writes outside the allowed scope are denied
+1. `agent:create` with `config.caps` declares the agent's scope; no token is
+   minted, since the venue holds the relationship.
+2. Every context the agent acts under (`Engine.context(owner, agentDID)`,
+   `Engine.stepContext`) carries the agent, not a copy of its caps.
+3. Each point of action (`Engine.requireAuthority`) reads `config.caps` as they
+   stand then. Narrowing the agent with `agent:update` bounds work it already
+   has running (orchestration steps, tool calls past their timeout, live
+   Claude Code sessions, the rest of a cycle), and a deleted agent holds none.
+4. Operations outside the scope are denied.
 
 **Reading an agent's live caps.** An agent's scope lives at `config.caps`,
 so read it via the config: `agent:info` (returns the record, whose `config.caps`
@@ -836,9 +1106,11 @@ data under the config, not a separate slot.
 #### Model B: Independent Agent (Own DID) — not implemented
 
 > **Status: design only.** `agent:create` has no `identity` option and mints no
-> keys. Agents today are Model A sub-principals: a distinct DID, no key of their
-> own. Model B is what a *key* would add — the ability to sign, to be delegated
-> to by other users, and to survive migration to another venue.
+> keys. Agents today are Model A sub-principals: a distinct DID that is not a
+> key. An agent may hold keys in its own keyring and sign with them
+> ([HELD_KEYS.md](./HELD_KEYS.md)), but its identity is not one of them. Model B
+> is what an identity that *is* a key would add — being delegated to by other
+> users as that key, and surviving migration to another venue.
 
 The agent has its own **cryptographic identity** — its own Ed25519 keypair and
 DID. It can sign UCANs, receive delegations from multiple users, and act
@@ -939,63 +1211,74 @@ a RequestContext for the tool invocation. The context determines enforcement:
 
 | Agent Model | RequestContext | Enforcement |
 |-------------|---------------|-------------|
-| No caps (current default) | Caller's identity, no restrictions | Full access to own namespace |
-| Model A (attenuated) | Caller's identity + agent's scoped UCAN | CoviaAdapter checks UCAN before writes |
-| Model B (independent) | Agent's own DID + presented proof chain | Full UCAN verification on every operation |
+| Unrestricted (`caps: "unrestricted"`) | The agent's DID in its owner's namespace, no scope | All its controller has |
+| Model A (attenuated) | The agent's DID in its owner's namespace, scoped by its `config.caps` (empty when it was given none) | Every point of action checks the caps as they stand then |
+| Model B (independent, not implemented) | Agent's own DID + presented proof chain | Full UCAN verification on every operation |
 
 Two complementary checks apply, both built on the same `Capability.covers`
 matcher over canonical owner-scoped resources (§3.1):
 
 - **`CapabilityChecker`** enforces a *scope* — the agent's config `caps`
-  (§5.4) — on every operation (`enforceCaps` at job dispatch, and before each
-  tool call). A scope can only narrow.
-- **`CoviaAdapter.verifyProofs()`** authorises *cross-user* access against
+  (§5.4) — at each operation's point of action (`Engine.requireAuthority`),
+  tool calls included. A scope can only narrow.
+- **`Engine.crossUserAllows`** authorises *cross-user* access against
   presented proofs (§5.2). A proof grants reach into another namespace.
 
 The difference between agent models is which identity and caps the
 RequestContext carries; the matcher is shared.
 
-For Model A, the key change is that the agent's tool calls go through a
-**restricted RequestContext** instead of inheriting the user's full access.
-The venue becomes the enforcement mechanism — it issued the scoped token
-and it verifies it on every tool call.
+For Model A, the agent's tool calls go through a **restricted
+RequestContext** instead of inheriting the user's full access. The venue is
+the enforcement mechanism: it holds the agent's scope and checks it, as it
+stands, on every tool call.
 
 #### The `invoke` ability under a scope (#211)
 
-Invoke-classed operations (compute, LLM, external I/O, federation — anything
-that does not act on a specific named lattice resource) require the `invoke`
-ability. Under a restricted `config.caps` scope:
+`invoke` authorises looking up an operation at a permitted location and
+starting a Job to run it. The grant's `with` names that operation reference or
+a tree containing it; matching uses whole path segments. For example,
+`{with: "v/ops/http", can: "invoke"}` covers `v/ops/http/get`, but not
+`v/ops/http-extra/get`. It does not grant access to resources the operation
+reads, writes, or otherwise uses, and never lends the authority of the
+operation's author, publisher, or executing venue.
 
-- **Full tool access** is a one-liner: `{"can": "invoke"}` (or the equivalent
-  `{"with": "", "can": "invoke"}`) — an empty/absent `with` is a match-any
-  wildcard in the grant-scope path. The standard restricted-but-tool-capable
-  recipe is therefore:
+A directly bound tool calls its particular operation without an `invoke`
+grant. The binding comes from the serving tool registry or agent's available
+tool palette, not a caller-supplied operation reference. Its action still
+needs the appropriate authority: a direct write tool needs `crud/write` on
+its target. Passing that same operation reference to a generic invocation
+surface needs `invoke` on the reference **as well as** the write authority.
+Creating a Job is not by itself a reason to require `invoke`. An agent call
+that names a raw operation reference outside its bound palette is a generic
+invocation and requires the location grant, even when carried in a tool call.
 
-  ```json
-  "caps": [
-    { "with": "w/kill-switch", "can": "crud" },
-    { "can": "invoke" }
-  ]
-  ```
+Generic invocation surfaces include REST `/invoke` and `/run`, and the
+`grid:invoke` and `grid:run` tools, and the target of `user:sudo`. A direct
+call to `grid:run` is a bound tool call, but that tool's action is to invoke the operation in its `operation`
+argument: the `invoke` grant must cover that target, not merely
+`v/ops/grid/run`. Scheduled reference invocations check the target when they
+fire. The target's resource checks apply in every case. An invocation may be
+accepted as a Job and then fail an authority check before its action.
 
-`invoke` authorises execution, not discovery of private operation metadata. If
-an agent declares a user-scoped operation path in `config.tools`, its scope must
-also include `crud/read` over that definition path so the runtime can obtain the
-tool description and input schema. Missing metadata-read authority is visible as
-an `unavailableTools` diagnostic; the operation is not silently advertised with
-an invented or incomplete schema. Venue catalog definitions under `v/ops/...`
-are shared public metadata and do not need an additional read grant.
+Within an agent's `caps`, `{can: "invoke"}` (equivalently
+`{with: "", can: "invoke"}`) permits arbitrary operation locations. It grants
+no additional resource authority. A caller can instead name one location or
+subtree, such as `o/reports` or `did:web:publisher.example/o/reports`.
 
-- **Scoped invoke** pins the grant to an op-path prefix, attenuating *which*
-  operations the agent may invoke: `{"with": "v/ops/getmine", "can": "invoke"}`
-  admits `v/ops/getmine/*` and denies every other invoke-classed op. The
-  checked resource is the operation reference as the caller supplied it
-  (`RequestContext.getOp()`), captured at dispatch — the same path form the
-  agent's `config.tools` entries use, so tool-loop calls match naturally.
+Reading a private definition is a separate check. A binding in `config.tools`
+must be readable so the runtime can obtain its metadata; an invocation grant
+alone does not make that metadata readable. Venue catalog definitions under
+`v/ops` are public. Hash references are checked in the form supplied: a grant
+on `o/reports` does not follow a hash or another alias to the same definition.
+An internal call already bound to a definition does not gain arbitrary lookup
+authority from that definition or from its recorded `op` field.
 
-- **Caveat:** invoking by hex hash (or from resolved metadata directly)
-  carries no path, so only the wildcard grant covers it — a path-scoped
-  invoke grant denies hash-form invocation by design (fail-closed).
+The definition resolved for a call is the definition executed. A location
+grant follows later changes to its binding on subsequent calls; it does not
+pin an adapter or immutable content. An adapter restriction could be added as
+a future caveat, intersecting location permission with the resolved adapter.
+There is no adapter caveat today: unknown caveats fail closed. A directory
+named `http` is not evidence of which adapter a definition uses.
 
 ### 5.6 Trust Anchors and Federation
 
@@ -1006,17 +1289,36 @@ are shared public metadata and do not need an additional read grant.
 
 Every delegation chain terminates in a **root** — a token whose `prf` is
 empty. The single question that makes verification federatable is: *who is
-allowed to sign that root?* The answer is uniform and derives entirely from
-the resource being accessed, never from the identity of the verifying venue.
+allowed to sign that root?*
 
-**The trust anchor is the authority over the resource owner.** A resource URI
-names its owner (§3.1: `did:…/w/notes` is owned by `did:…`). The root of any
-chain granting access to it must be signed by that owner's controlling
-authority — which is read directly off the owner's DID:
+**Roots.** A venue accepts two kinds of root and no others
+(`Engine.rootAuthorityPolicy`):
+
+- **An identity**, for its own resources and those of every identity a venue
+  accepts it as signing in as: a `did:key` and the identities nested below it
+  (`did:key:zKim:g:bot`, `did:key:zKim:u:bob`), by the rule authentication uses
+  (`VenueAuthenticator.signsInAs`). A `did:web` signs in as nothing below it,
+  since its colons are URL path segments. These roots are self-certifying and
+  count at every venue.
+- **The hosting venue**, for everything it hosts (`Engine.isHosted`): its
+  users, self-sovereign or not, their agents, and its own namespaces. A venue
+  has authority over the users it hosts and must sometimes act for them. Its
+  roots count only at itself; whether another venue accepts a venue's
+  attestation for its custodial users is the trust question below (Phase C3b).
+
+Being a root confers nothing by itself: a root reaches another identity's
+resources only through a grant it signs. Owners are compared as written, as
+users are keyed and grants matched, so a differently encoded DID names nothing
+hosted.
+
+**Across venues, the trust anchor is the authority over the resource owner.**
+A resource URI names its owner (§3.1: `did:…/w/notes` is owned by `did:…`).
+The root of any chain granting access to it at another venue must be signed by
+that owner's controlling authority — which is read directly off the owner's DID:
 
 | Owner DID form | Identity class | Controlling authority | Root signer | Trusted because |
 |----------------|----------------|-----------------------|-------------|-----------------|
-| `did:key:z…` | **Self-sovereign** | the owner themselves | the owner (owner-signed) | `did:key` is self-certifying — the key *is* the DID |
+| `did:key:z…` | **Self-sovereign** | the owner, or a `did:key` it is nested below | that identity (identity-signed) | `did:key` is self-certifying — the key *is* the DID |
 | `did:web:host` | **Self-sovereign** | the owner themselves | the owner (owner-signed) | resolved from `https://host/.well-known/did.json` |
 | `<venueDID>:u:<user>` | **Venue-custodial** | the controlling venue (`<venueDID>`) | that venue (venue-**attested**) | the verifier's trust policy accepts that venue |
 
@@ -1040,15 +1342,13 @@ This is not the venue claiming authority over arbitrary data — it is scoped to
 the namespaces of the users it controls. A verifying venue accepts such a root
 only if its **trust policy** accepts the attesting venue (Phase C3).
 
-**The verifier's own identity is irrelevant.** A venue verifying a request
-asks only: does the chain root in the resource owner's controlling authority,
-and (for a custodial root) do I trust that authority? It never requires the
-root to be its *own* signature. The current implementation's Phase C1 check —
-root `iss` must equal the verifying venue — is the **degenerate case** where
-the controlling authority happens to be the verifying venue itself (a local
-custodial user). Generalising it from "iss == this venue" to "iss == the
-owner's controlling authority, and trusted" is backward-compatible for local
-users and is precisely what unblocks federation (#100).
+**The verifier's own identity matters only for what it hosts.** A venue
+verifying a request asks: does the chain root in the resource owner's
+controlling authority, and (for a custodial root) do I trust that authority?
+It never requires the root to be its *own* signature. Its own root over what
+it hosts is the **degenerate case** where the controlling authority is the
+verifying venue itself. Accepting "iss == the owner's controlling authority,
+and trusted" as well is what unblocks federation (#100).
 
 #### Trust policy for attesting venues (Phase C3)
 
@@ -1118,8 +1418,8 @@ the authentication channel. The three concerns never infer one another:
   transport UCANs (`RequestContext.getRawUcans()`; the parsed maps cannot be
   re-signed) are relayed in the hop's `ucans` body array. The relay drops only
   what is *provably inert* at the target — expired/unparseable tokens, and
-  tokens audienced to an identity that is not the hop's principal (e.g. the
-  local caller's own grants when the venue relays as itself). Deeper filtering
+  tokens audienced to an identity that is not the hop's principal (e.g.
+  grants audienced to this venue when the caller is the hop's principal). Deeper filtering
   is not provable (the relay cannot know which resources an operation on the
   target touches, nor generally the target's DID before contact), so
   presentation remains the *caller's* disclosure decision: present per-request,
@@ -1130,13 +1430,34 @@ the authentication channel. The three concerns never infer one another:
   envelope. It grants nothing and is inert at the relay. Only an explicit
   `authenticateAs: "caller"` request causes the relay to install that credential
   in the target request's `Authorization` header. The target verifies the
-  caller's own signature — zero trust in the relay.
-- **`venue/relay` delegation** — `authenticateAs: "venue"` is the separate
-  instruction to have the venue hop as itself. The caller must authorise that
-  request with `can: venue/relay` issued **by the caller**, audienced **to the
-  relaying venue**, and scoped to `with: <callerDID>`. Someone else's grant
-  cannot authorise this caller, preventing confused-deputy use. The same token
-  can carry substantive grants that the target independently verifies.
+  caller's own signature — zero trust in the relay. The credential proves the
+  caller's presence and the relay never stores it, so the hop lasts only as
+  long as the venue runs: after a restart a recovered job that signed in this
+  way ends, its reason naming the remote job and its venue for the caller to
+  follow it there. Deferred work that must act as the caller at another venue
+  is scheduled at that venue: a scheduled hop has no credential, and fails
+  saying so (`VenueConnection.NO_CALLER_CREDENTIAL`).
+- **Venue identity** — `authenticateAs: "venue"` has the venue hop as itself,
+  and only when the venue itself is the caller (`Engine.isDirectVenue`): not
+  its agents, and never by delegation. Whoever authenticates as a principal
+  holds all of its ambient standing — at the target, and at the venue itself
+  when the target is its own URL — so a right to it would amount to every
+  right the venue has. A user reaches the venue's own resources at a target
+  through capabilities instead: a `ucan:issue` grant from the venue, presented
+  with `authenticateAs: "caller"` (custodial users through C3b attestation).
+  A grant a target made to this venue reaches a user the same way: the venue
+  passes on part of it with `ucan:issue` and `prf` (§4.1).
+- **Target identity** — a credential (`caller` or `venue`) is sent only to a
+  venue proven to hold the DID it is audienced to, by a mechanism the operator
+  lists in `auth.venueProof` (CONFIG.md). By default that is its address — a
+  `did:web` venue at `https://<host>` or plain http on loopback, whether the hop
+  names it by that DID or by that address — and then a challenge, which proves
+  a `did:key` venue that answers a fresh nonce with a proof naming the address
+  dialled. A target named by URL states its DID at `/.well-known/did.json`; a
+  DID no listed mechanism proves there is refused before any credential leaves,
+  and a recovered job that authenticated as the venue proves its target again
+  before authenticating again. `auth.requireVenueProof: false` takes the stated
+  DID instead, for test venues.
 - **`authenticateAs: "anonymous"`** is the default and sends neither identity
   nor grants, even when valid credentials or grants were presented locally.
 - **Local targets** carry the caller's verified proofs into the local context
@@ -1150,8 +1471,8 @@ the authentication channel. The three concerns never infer one another:
 ### Phase C1: Signed UCAN Tokens ✓
 
 - `Capability.covers()` in convex-core for attenuation matching
-- `ucan:issue` creates venue-signed roots only for venue-controlled resources;
-  self-sovereign owners sign client-side
+- `ucan:issue` creates venue-signed roots, valid at that venue, over the
+  identities it hosts (§4.1)
 - `ucan:verify` operation verifies a token against the venue's trust policy and explains the verdict (validity, chain depth, root issuer, per-capability root-authority, optional would-it-authorise check)
 - Tokens presented per-request in `RequestContext.proofs`
 - Signature verification on every capability check
@@ -1162,10 +1483,10 @@ the authentication channel. The three concerns never infer one another:
 
 - Bare `with` in signed tokens resolves against the token's `iss` at
   evaluation (`normaliseProofs` in `proofsCover`, per chain hop)
-- `ucan:issue` absolutises bare paths to the caller DID before signing;
-  mints over another locally controlled principal's resource only under a
-  presented `grant/<can>` granting right, with `exp` capped by the right's
-  validity; external DID roots are never venue-minted
+- `ucan:issue` absolutises bare paths in the namespace the request acts in
+  before signing; mints over a resource the caller is not root of only under
+  a presented `grant/<can>` granting right, with `exp` capped by the right's
+  validity; the venue roots no identity it does not host
 - `ucan:verify` canonicalises bare queried resources against the audience
   so diagnostics match enforcement
 - Verification remains grant-agnostic — `grant/…` binds production only
@@ -1203,15 +1524,16 @@ land together, in order of dependency:
 **C3a — Self-sovereign** (current behaviour).
 - *Verify:* root authority follows the §4.4 rule — the chain root must be signed
   by the resource owner's controlling authority (self-sovereign owners verify
-  offline via `RootAuthorityPolicy.SELF_SOVEREIGN`), or by this venue only for
-  its locally managed custodial users. The generic primitive
+  offline via `RootAuthorityPolicy.SELF_SOVEREIGN`, a `did:key` also for the
+  identities nested below it), or by this venue for the identities it hosts
+  (§5.6, "Roots"). The generic primitive
   (chain walk + root-authority policy + pluggable DID verification) is
   convex-core `UCANValidator` (Convex-Dev/convex#635); covia's `proofsCover`
   composes the policy.
 - *Forward:* the grid wrapper relays the caller's authority per §5.6 — proofs
   filtered to the provably admissible; explicit `authenticateAs` selects
-  anonymous, caller-credential, or venue-credential authentication, with
-  `venue/relay` authorising only the last choice.
+  anonymous, caller-credential, or venue-credential authentication, the last
+  only for the venue itself.
 
 **C3b — Venue-attested (custodial).**
 - *Verify:* accept a root signed by a *remote* controlling venue for its

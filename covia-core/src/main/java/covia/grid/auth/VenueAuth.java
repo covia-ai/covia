@@ -1,6 +1,8 @@
 package covia.grid.auth;
 
 import java.net.http.HttpRequest;
+import java.util.function.LongSupplier;
+import java.util.function.Supplier;
 
 import convex.auth.did.DID;
 import convex.core.crypto.AKeyPair;
@@ -9,22 +11,26 @@ import convex.core.crypto.AKeyPair;
  * Abstract base class for venue authentication strategies.
  *
  * <p>Subclass this to implement custom authentication schemes.
- * {@link #apply(HttpRequest.Builder)} is called before every HTTP request
- * to inject credentials into the outgoing request headers.
+ * {@link #apply(HttpRequest.Builder, Supplier)} is called before every HTTP
+ * request to inject credentials into the outgoing request headers.
+ *
+ * <p>A strategy holds the caller's credentials, not the venue's identity: the
+ * connection fixes which venue a request goes to, and a strategy that signs
+ * credentials takes that venue's DID from it.
  *
  * <p>Built-in implementations:
  * <ul>
  *   <li>{@link #none()} — no authentication (default)</li>
  *   <li>{@link #bearer(String)} — static bearer token</li>
  *   <li>{@link #keyPair(AKeyPair)} — self-issued EdDSA JWT per request</li>
- *   <li>{@link #namedKeyPair(AKeyPair, String, String)} — self-issued named
- *       identity JWT using a registered public key</li>
+ *   <li>{@link #namedKeyPair(AKeyPair, String)} — self-issued JWT for a
+ *       named identity the key is authorised for</li>
  * </ul>
  *
  * <p>Custom implementations can be created by extending this class:
  * <pre>{@code
  * VenueAuth apiKey = new VenueAuth() {
- *     public void apply(HttpRequest.Builder b) {
+ *     public void apply(HttpRequest.Builder b, Supplier<String> venueDID) {
  *         b.header("X-API-Key", "my-secret");
  *     }
  * };
@@ -38,8 +44,13 @@ public abstract class VenueAuth {
 	 * Implementations should add headers (e.g. Authorization) to the builder.
 	 *
 	 * @param builder The HTTP request builder to add auth headers to
+	 * @param venueDID Supplies the DID of the venue the request goes to, as the
+	 *        connection established it. A strategy that signs a credential for
+	 *        the venue names it as audience; others need not call it. It throws
+	 *        {@link covia.exception.AuthException} when the connection cannot
+	 *        establish that DID.
 	 */
-	public abstract void apply(HttpRequest.Builder builder);
+	public abstract void apply(HttpRequest.Builder builder, Supplier<String> venueDID);
 
 	/**
 	 * Get the DID associated with this auth provider, if known.
@@ -53,29 +64,30 @@ public abstract class VenueAuth {
 	}
 
 	/**
-	 * Mint the raw credential token this strategy would attach to a request —
-	 * for callers that need to STORE a credential (typically long-lived and
-	 * audience-bound, e.g. handed to a proxy as an API key) rather than
+	 * Mint the raw credential token this strategy would attach to a request to
+	 * the venue {@code venueDID} — for callers that need to STORE a credential
+	 * (typically long-lived, e.g. handed to a proxy as an API key) rather than
 	 * authenticate a request in flight.
 	 *
 	 * <p>For key-pair auth the token carries exactly the claims
-	 * {@link #apply} signs, using the instance's configured audience and
-	 * lifetime — mint a long-lived credential from a purpose-configured
-	 * instance:
+	 * {@link #apply} signs, with {@code venueDID} as audience and the
+	 * instance's lifetime — mint a long-lived credential from a
+	 * purpose-configured instance:
 	 * <pre>{@code
-	 * String token = VenueAuth.keyPair(kp, venueDID, 30 * 24 * 3600).mintToken();
+	 * String token = VenueAuth.keyPair(kp, 30 * 24 * 3600).mintToken(venueDID);
 	 * }</pre>
 	 *
 	 * <p>Rotation of a stored token is the caller's responsibility;
 	 * {@code apply()} never needs rotation because it signs fresh per
-	 * request. Bind {@code aud} for anything long-lived — a captured
-	 * aud-less token replays anywhere self-issued tokens are accepted.
+	 * request. A credential without {@code aud} is no strategy's to make: sign
+	 * it yourself and present it with {@link #bearer(String)}.
 	 *
+	 * @param venueDID DID of the venue the credential is for
 	 * @return The signed token string
 	 * @throws UnsupportedOperationException for strategies that cannot mint
 	 *         (none, bearer, local — they hold no signing key)
 	 */
-	public String mintToken() {
+	public String mintToken(String venueDID) {
 		throw new UnsupportedOperationException(
 			getClass().getSimpleName() + " cannot mint tokens");
 	}
@@ -103,109 +115,94 @@ public abstract class VenueAuth {
 	 * Self-issued EdDSA JWT authentication using an Ed25519 key pair.
 	 * Generates a fresh short-lived JWT for each request, signed with
 	 * the given key pair. The JWT's {@code sub} claim is a {@code did:key}
-	 * derived from the public key.
+	 * derived from the public key, and its {@code aud} the DID of the venue
+	 * the connection reaches, so a captured token cannot be replayed at any
+	 * other venue (RFC 8725 §3.9).
 	 *
 	 * @param keyPair Ed25519 key pair for signing
 	 * @return A key pair auth instance
 	 */
 	public static VenueAuth keyPair(AKeyPair keyPair) {
-		return new KeyPairAuth(keyPair);
+		return new KeyPairAuth(keyPair, null, KeyPairAuth.DEFAULT_TOKEN_LIFETIME);
 	}
 
 	/**
-	 * As {@link #keyPair(AKeyPair)}, with the JWT's {@code aud} claim bound to
-	 * the target venue's DID. RECOMMENDED for any venue whose DID is known: a
-	 * captured token then cannot be replayed at any other venue that accepts
-	 * self-issued tokens (RFC 7519 §4.1.3). Discover the DID with
-	 * {@link VenueDID#discover(String)}.
-	 *
-	 * @param keyPair Ed25519 key pair for signing
-	 * @param audienceDID the target venue's DID (did:key or its did:web alias)
-	 * @return A key pair auth instance audience-bound to the venue
-	 */
-	public static VenueAuth keyPair(AKeyPair keyPair, String audienceDID) {
-		return new KeyPairAuth(keyPair, KeyPairAuth.DEFAULT_TOKEN_LIFETIME, audienceDID);
-	}
-
-	/**
-	 * As {@link #keyPair(AKeyPair, String)}, with an explicit token lifetime.
+	 * As {@link #keyPair(AKeyPair)}, with an explicit token lifetime.
 	 * The default (300s) suits per-request tokens — signing is effectively
 	 * free, so short lifetimes cost nothing. Longer lifetimes are for minted
-	 * long-lived credentials; pass a null {@code audienceDID} only when the
-	 * target venue's DID is genuinely unknowable.
+	 * long-lived credentials ({@link #mintToken(String)}).
 	 *
 	 * @param keyPair Ed25519 key pair for signing
-	 * @param audienceDID the target venue's DID, or null for no audience binding
 	 * @param lifetimeSeconds token validity window in seconds (must be positive)
 	 * @return A key pair auth instance
 	 */
-	public static VenueAuth keyPair(AKeyPair keyPair, String audienceDID, long lifetimeSeconds) {
-		return new KeyPairAuth(keyPair, lifetimeSeconds, audienceDID);
+	public static VenueAuth keyPair(AKeyPair keyPair, long lifetimeSeconds) {
+		return new KeyPairAuth(keyPair, null, lifetimeSeconds);
 	}
 
 	/**
-	 * Self-issued EdDSA authentication as a stable named DID using one of that
-	 * identity's registered public keys, or as an identity nested below the
-	 * signing key's DID ({@code did:key:<key>:u:<name>:g:<agent>}).
+	 * Self-issued EdDSA authentication as a named DID the key is authorised
+	 * for: a venue user holding one of its registered public keys, an
+	 * identity nested below the signing key's DID
+	 * ({@code did:key:<key>:u:<name>:g:<agent>}), or a DID whose key the
+	 * target resolves by its DID method, as a venue presents its declared DID
+	 * to another venue.
 	 *
 	 * <p>The token carries {@code iss == sub == subjectDID}, is signed by
-	 * {@code keyPair}, and is audience-bound to {@code audienceDID}. The target
-	 * venue authenticates a local named user only when that public key is active
-	 * in the user's venue-owned authentication record. A nested identity needs
-	 * no such record: its subject must have nonempty colon-separated segments
-	 * below the signing key's exact DID, using letters, numbers, '.', '_' and '-'.
-	 * User admission remains separate, and the subject inherits no authority
-	 * from the signing identity or its parent names.
+	 * {@code keyPair}, and names the venue the connection reaches as audience.
+	 * The target venue authenticates a local named user only when that public
+	 * key is active in the user's venue-owned authentication record. A nested
+	 * identity needs no such record: its subject must have nonempty
+	 * colon-separated segments below the signing key's exact DID, using
+	 * letters, numbers, '.', '_' and '-'. User admission remains separate, and
+	 * the subject inherits no authority from the signing identity or its
+	 * parent names.
 	 *
-	 * @param keyPair registered Ed25519 authentication key or installation key
-	 * @param subjectDID stable named identity asserted in {@code iss}/{@code sub}
-	 * @param audienceDID target venue DID
-	 * @return a named-user key-pair authentication strategy
+	 * @param keyPair Ed25519 key authorised for the subject
+	 * @param subjectDID named identity asserted in {@code iss}/{@code sub}
+	 * @return a named key-pair authentication strategy
 	 */
-	public static VenueAuth namedKeyPair(AKeyPair keyPair, String subjectDID,
-			String audienceDID) {
-		return namedKeyPair(keyPair, subjectDID, audienceDID,
-			KeyPairAuth.DEFAULT_TOKEN_LIFETIME);
+	public static VenueAuth namedKeyPair(AKeyPair keyPair, String subjectDID) {
+		return namedKeyPair(keyPair, subjectDID, KeyPairAuth.DEFAULT_TOKEN_LIFETIME);
 	}
 
 	/**
-	 * As {@link #namedKeyPair(AKeyPair, String, String)}, with an explicit token
-	 * lifetime. Named credentials always require an audience to bind them to
-	 * the intended receiving venue.
+	 * As {@link #namedKeyPair(AKeyPair, String)}, with an explicit token
+	 * lifetime.
 	 *
-	 * @param keyPair registered Ed25519 authentication key or installation key
-	 * @param subjectDID stable named identity asserted in {@code iss}/{@code sub}
-	 * @param audienceDID target venue DID
+	 * @param keyPair Ed25519 key authorised for the subject
+	 * @param subjectDID named identity asserted in {@code iss}/{@code sub}
 	 * @param lifetimeSeconds token validity window in seconds
-	 * @return a named-user key-pair authentication strategy
+	 * @return a named key-pair authentication strategy
 	 */
 	public static VenueAuth namedKeyPair(AKeyPair keyPair, String subjectDID,
-			String audienceDID, long lifetimeSeconds) {
-		requireDID(subjectDID, "subjectDID");
-		requireDID(audienceDID, "audienceDID");
-		return new KeyPairAuth(keyPair, subjectDID, lifetimeSeconds, audienceDID);
+			long lifetimeSeconds) {
+		return namedKeyPair(keyPair, subjectDID, lifetimeSeconds, System::currentTimeMillis);
 	}
 
 	/**
-	 * Self-issued authentication for a DID whose signing key is resolved by the
-	 * target's DID-method verifier. Unlike {@link #namedKeyPair}, the subject
-	 * need not be a user registered at the target; this is how a venue presents
-	 * its declared DID to another venue. The credential is always audience-bound.
+	 * As {@link #namedKeyPair(AKeyPair, String)}, issuing each token at the time
+	 * {@code clock} gives: a venue presenting its DID passes its own clock.
 	 *
-	 * @param keyPair private key authorised by the subject DID
-	 * @param subjectDID identity asserted in {@code iss}/{@code sub}
-	 * @param audienceDID target venue's declared DID
-	 * @return a DID-resolved, audience-bound authentication strategy
+	 * @param clock the time each token is issued at, in epoch milliseconds
 	 */
-	public static VenueAuth identityKeyPair(AKeyPair keyPair, String subjectDID,
-			String audienceDID) {
-		requireDID(subjectDID, "subjectDID");
-		requireDID(audienceDID, "audienceDID");
-		return new KeyPairAuth(keyPair, subjectDID,
-			KeyPairAuth.DEFAULT_TOKEN_LIFETIME, audienceDID);
+	public static VenueAuth namedKeyPair(AKeyPair keyPair, String subjectDID, LongSupplier clock) {
+		return namedKeyPair(keyPair, subjectDID, KeyPairAuth.DEFAULT_TOKEN_LIFETIME, clock);
 	}
 
-	private static void requireDID(String value, String label) {
+	/**
+	 * As {@link #namedKeyPair(AKeyPair, String, long)}, issuing each token at
+	 * the time {@code clock} gives.
+	 *
+	 * @param clock the time each token is issued at, in epoch milliseconds
+	 */
+	public static VenueAuth namedKeyPair(AKeyPair keyPair, String subjectDID,
+			long lifetimeSeconds, LongSupplier clock) {
+		requireDID(subjectDID, "subjectDID");
+		return new KeyPairAuth(keyPair, subjectDID, lifetimeSeconds, clock);
+	}
+
+	static void requireDID(String value, String label) {
 		try {
 			if (value == null || value.isBlank() || DID.fromString(value) == null) {
 				throw new IllegalArgumentException(label + " must be a valid DID");

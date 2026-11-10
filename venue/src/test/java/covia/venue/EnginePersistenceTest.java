@@ -31,10 +31,10 @@ import covia.venue.server.VenueServer;
 import covia.test.DurabilityTest;
 
 /**
- * Tests for Engine persistence semantics — sweep, flush, close ordering.
+ * Tests for venue persistence semantics — flush, the host's sync worker, close ordering.
  *
  * <p>Each test constructs a venue with a temp Etch store, exercises the
- * Engine.flush() / Engine.close() / persistence-sweep contract, and (where
+ * Engine.flush() / Engine.close() / host-worker contract, and (where
  * relevant) restarts a fresh venue against the same store to verify that
  * writes physically survived to disk.</p>
  *
@@ -47,8 +47,8 @@ import covia.test.DurabilityTest;
  *   <li>{@link Engine#close()} runs a final flush before nodeServer.close()
  *       so the connected root is published and flushed before
  *       the existing graceful drain reads from it.</li>
- *   <li>The persistence sweep daemon thread fires periodically while the
- *       engine is running, automatically publishing the connected root.</li>
+ *   <li>The venue server runs its host's sync worker, which publishes the
+ *       connected root periodically while the venue runs.</li>
  * </ul>
  *
  * <p><b>Determinism.</b> These tests use {@link CountDownLatch} and direct
@@ -61,6 +61,8 @@ import covia.test.DurabilityTest;
 // `mvn test` inner loop, run on every push via CI (-DexcludedGroups=integration).
 @DurabilityTest
 public class EnginePersistenceTest {
+	/** The venue's secret store keys: these venues keep no secret a migration step carries over. */
+	private static final SecretStore.Keys NO_SECRETS = SecretStore.keys(AKeyPair.generate());
 	@Test
 	public void unsupportedVenueVersionLeavesStoreUntouched() throws Exception {
 		File file = newTempEtch();
@@ -69,17 +71,17 @@ public class EnginePersistenceTest {
 		long future = VenueState.CURRENT_VERSION + 1;
 		ACell before;
 		try (var store = convex.etch.EtchStore.create(file)) {
-			CoviaApplication application = CoviaApplication.open(store, key);
+			CoviaApplication application = TestEngine.application(store, key);
 			VenueState venue = application.venue(key.getAccountKey());
-			venue.initialise(Strings.create("did:test:future"));
+			venue.initialise(Strings.create("did:test:future"), NO_SECRETS);
 			venue.cursor().path(Covia.VERSION).set(convex.core.data.prim.CVMLong.create(future));
+			application.sync();
 			application.host().sync();
 			application.host().flush();
 			before = store.getRootData();
 		}
-		var error = assertThrows(RuntimeException.class, () -> VenueServer.launch(config));
-		var cause = org.junit.jupiter.api.Assertions.assertInstanceOf(IllegalStateException.class, error.getCause());
-		assertEquals(VenueState.UNSUPPORTED_VERSION.formatted(future, VenueState.CURRENT_VERSION), cause.getMessage());
+		var error = assertThrows(UnsupportedVersionException.class, () -> VenueServer.launch(config));
+		assertEquals(VenueState.UNSUPPORTED_VERSION.formatted(future, VenueState.CURRENT_VERSION), error.getMessage());
 		try (var store = convex.etch.EtchStore.create(file)) {
 			assertEquals(before, store.getRootData());
 		}
@@ -89,7 +91,7 @@ public class EnginePersistenceTest {
 	public void legacyAdapterStateMovesLazilyAndDoesNotReturnAfterReopen() throws Exception {
 		File file = newTempEtch();
 		var config = testConfig(file.getAbsolutePath().replace('\\', '/'), AKeyPair.createSeeded(612).getSeed().toHexString());
-		var oldPath = covia.lattice.WorkspaceRoot.parseStringPath("w/adapters/unloaded-test");
+		var oldPath = covia.lattice.CoviaPath.parse("w/adapters/unloaded-test");
 		ACell value = convex.core.data.Vectors.of("adapter-defined", Maps.of("nested", 42L));
 		VenueServer server = VenueServer.launch(config);
 		try {
@@ -101,7 +103,7 @@ public class EnginePersistenceTest {
 		server = VenueServer.launch(config);
 		try {
 			Engine engine = server.getEngine();
-			User host = engine.getVenueState().users().get(engine.getDIDString());
+			User host = engine.getVenueState().users().user(engine.getDIDString());
 			assertEquals(value, host.readInternalPath(oldPath), "startup leaves unloaded adapter state alone");
 			assertEquals(VenueState.CURRENT_VERSION, engine.getVenueState().version());
 			assertNull(RT.getIn(engine.getVenueState().get(), Covia.ADAPTERS, Strings.create("unloaded-test")));
@@ -114,7 +116,7 @@ public class EnginePersistenceTest {
 			Engine engine = server.getEngine();
 			assertEquals(value, engine.adapterState("unloaded-test").get(), "exact migrated value survives reopening");
 			assertEquals(VenueState.CURRENT_VERSION, engine.getVenueState().version());
-			assertNull(engine.getVenueState().users().get(engine.getDIDString()).readInternalPath(oldPath));
+			assertNull(engine.getVenueState().users().user(engine.getDIDString()).readInternalPath(oldPath));
 			engine.adapterState("unloaded-test").set(null);
 		} finally { server.close(); }
 
@@ -128,8 +130,8 @@ public class EnginePersistenceTest {
 	public void legacyDeletionQueueRecoversThroughAdapterOwnedCleanup() throws Exception {
 		File file = newTempEtch();
 		var config = testConfig(file.getAbsolutePath().replace('\\', '/'), AKeyPair.createSeeded(613).getSeed().toHexString());
-		var oldState = covia.lattice.WorkspaceRoot.parseStringPath("w/adapters/cleanup-test");
-		var oldQueue = covia.lattice.WorkspaceRoot.parseStringPath("w/user-deletions");
+		var oldState = covia.lattice.CoviaPath.parse("w/adapters/cleanup-test");
+		var oldQueue = covia.lattice.CoviaPath.parse("w/user-deletions");
 		ACell value = Maps.of("custom", Maps.of(ALICE_DID, "old association"));
 		VenueServer server = VenueServer.launch(config);
 		try {
@@ -147,7 +149,7 @@ public class EnginePersistenceTest {
 		try {
 			Engine engine = server.getEngine();
 			VenueState venue = engine.getVenueState();
-			User host = venue.users().get(engine.getDIDString());
+			User host = venue.users().user(engine.getDIDString());
 			assertEquals(value, host.readInternalPath(oldState));
 			assertEquals(VenueState.CURRENT_VERSION, venue.version());
 			assertNull(host.readInternalPath(oldQueue), "recovery moves the pending index, without scanning adapter values");
@@ -210,45 +212,6 @@ public class EnginePersistenceTest {
 		} finally { server.close(); }
 	}
 
-	@Test
-	public void legacyJobChainsMigrateLazilyAcrossReopens() throws Exception {
-		File file = newTempEtch();
-		var config = testConfig(file.getAbsolutePath().replace('\\', '/'), AKeyPair.createSeeded(611).getSeed().toHexString());
-		var id = convex.core.data.Blob.fromHex("61106110611061106110611061106110");
-		AString prev = Strings.intern("prev");
-		AMap<AString, ACell> current = Maps.of(Fields.ID, id, Fields.CALLER, ALICE_DID,
-			Fields.STATUS, covia.grid.Status.COMPLETE, Fields.OUTPUT, "kept", Fields.UPDATED, 123L);
-		var legacy = current.assoc(prev, Maps.of(Fields.STATUS, covia.grid.Status.STARTED));
-		VenueServer server = VenueServer.launch(config);
-		try {
-			User user = server.getEngine().getVenueState().users().ensure(ALICE_DID);
-			user.cursor().path(covia.lattice.Namespace.J).set(convex.core.data.Index.<convex.core.data.Blob, ACell>none().assoc(id, legacy));
-		} finally { server.close(); }
-
-		server = VenueServer.launch(config);
-		try {
-			Engine engine = server.getEngine();
-			User user = engine.getVenueState().users().get(ALICE_DID);
-			var storage = user.cursor().path(covia.lattice.Namespace.J, id);
-			assertEquals(legacy, storage.get(), "startup does not rewrite terminal jobs");
-			assertEquals(current, engine.jobs().getJobData(id, RequestContext.of(ALICE_DID)));
-			assertEquals(current, engine.resolvePath(Strings.create("j/" + id.toHexString()), RequestContext.of(ALICE_DID)));
-			assertEquals(legacy, storage.get(), "reading the reopened record is pure");
-			user.job(id).appendHistory(Maps.of(Fields.MESSAGE_ID, "after-reopen"));
-			assertNull(RT.getIn(storage.get(), prev));
-		} finally { server.close(); }
-
-		server = VenueServer.launch(config);
-		try {
-			var user = server.getEngine().getVenueState().users().get(ALICE_DID);
-			var stored = RT.ensureMap(user.cursor().path(covia.lattice.Namespace.J, id).get());
-			assertNull(stored.get(prev));
-			assertEquals(current.get(Fields.OUTPUT), stored.get(Fields.OUTPUT));
-			assertEquals(current.get(Fields.STATUS), stored.get(Fields.STATUS));
-			assertEquals(convex.core.data.Vectors.of(Maps.of(Fields.MESSAGE_ID, "after-reopen")), stored.get(Fields.HISTORY));
-		} finally { server.close(); }
-	}
-
 	private static final AString ALICE_DID = Strings.create("did:key:z6MkAlicePersistTest");
 	private static final AString BOB_DID   = Strings.create("did:key:z6MkBobPersistTest");
 
@@ -264,10 +227,7 @@ public class EnginePersistenceTest {
 	}
 
 	private static File newTempEtch() throws Exception {
-		File f = File.createTempFile("engine-persist-", ".etch");
-		f.delete();
-		f.deleteOnExit();
-		return f;
+		return TestTemp.etchFile("engine-persist");
 	}
 
 	/**
@@ -365,81 +325,7 @@ public class EnginePersistenceTest {
 	}
 
 	// ========================================================================
-	// Test 3 — Background sweep daemon eventually publishes the connected
-	// root automatically, without any explicit flush() call.
-	// ========================================================================
-	@Test
-	public void testSweepFiresPeriodically() throws Exception {
-		File etchFile = newTempEtch();
-		String storePath = etchFile.getAbsolutePath().replace('\\', '/');
-		AKeyPair venueKey = AKeyPair.createSeeded(1003);
-		var config = testConfig(storePath, venueKey.getSeed().toHexString());
-
-		VenueServer server = VenueServer.launch(config);
-		try {
-			Engine engine = server.getEngine();
-			AccountKey ak = engine.getAccountKey();
-
-			// Sweep observability: write through venueState without calling flush().
-			// If the sweep daemon is running, the value will eventually appear in
-			// the etch store via the sweep's application.sync() → propagator path.
-			engine.getVenueState().users().ensure(ALICE_DID);
-
-			// Poll the store with a bounded timeout. With the default 100ms sweep
-			// interval, the value should appear within a few hundred ms. We
-			// poll with Thread.yield() rather than sleep — bounded by the
-			// 5-second deadline.
-			long deadline = System.currentTimeMillis() + 5_000;
-			ACell aliceRecord = null;
-			while (System.currentTimeMillis() < deadline) {
-				aliceRecord = userRecordInStore(server.getStore(), ak, ALICE_DID);
-				if (aliceRecord != null) break;
-				Thread.yield();
-			}
-
-			assertNotNull(aliceRecord,
-				"Sweep daemon must propagate venueState writes to the etch store within 5s — "
-				+ "either the daemon isn't running or the sweep doesn't include lattice.sync()");
-		} finally {
-			server.close();
-		}
-	}
-
-	// ========================================================================
-	// Test 4 — Engine.close() stops the sweep daemon cleanly within a bounded
-	// time. We verify by measuring close() latency rather than counting
-	// threads (which is flaky in a multi-test JVM with leftover daemons).
-	// ========================================================================
-	@Test
-	public void testCloseStopsSweepDaemon() throws Exception {
-		File etchFile = newTempEtch();
-		String storePath = etchFile.getAbsolutePath().replace('\\', '/');
-		AKeyPair venueKey = AKeyPair.createSeeded(1004);
-		var config = testConfig(storePath, venueKey.getSeed().toHexString());
-
-		VenueServer server = VenueServer.launch(config);
-
-		// Verify that AT LEAST one persistence sweep daemon is alive while
-		// the engine is running. We can't pin a specific thread to this engine
-		// without test hooks, so we just check the named prefix exists.
-		assertTrue(countThreadsByNamePrefix("covia-persistence-sweep") >= 1,
-			"Sweep daemon thread should be running while engine is alive");
-
-		// Time the close call. If shutdownNow + awaitTermination is working,
-		// close should return well under the 2s awaitTermination ceiling.
-		long t0 = System.nanoTime();
-		server.close();
-		long elapsedMs = (System.nanoTime() - t0) / 1_000_000;
-
-		assertTrue(elapsedMs < 3_000,
-			"Engine.close() should return within 3s — actual: " + elapsedMs + "ms");
-	}
-
-	// ========================================================================
-	// Test 5 — Multiple writes within a single sweep window are batched into
-	// one persist (the LatticePropagator's LatestUpdateQueue coalesces).
-	// We can't directly observe the queue, but we can verify that all writes
-	// in a burst end up on disk after a single flush.
+	// Test 3 — A burst of writes all reach the disk through a single flush.
 	// ========================================================================
 	@Test
 	public void testFlushPersistsBurstOfWrites() throws Exception {
@@ -472,7 +358,7 @@ public class EnginePersistenceTest {
 	}
 
 	// ========================================================================
-	// Test 6 — Calling flush() on an idle venue (no pending writes) is a
+	// Test 4 — Calling flush() on an idle venue (no pending writes) is a
 	// safe no-op. Should not throw, should not corrupt state.
 	// ========================================================================
 	@Test
@@ -502,20 +388,4 @@ public class EnginePersistenceTest {
 		}
 	}
 
-	// ========================================================================
-	// Helpers
-	// ========================================================================
-
-	private static int countThreadsByNamePrefix(String prefix) {
-		Thread[] threads = new Thread[Thread.activeCount() * 2];
-		int n = Thread.enumerate(threads);
-		int count = 0;
-		for (int i = 0; i < n; i++) {
-			Thread t = threads[i];
-			if (t != null && t.getName() != null && t.getName().startsWith(prefix)) {
-				count++;
-			}
-		}
-		return count;
-	}
 }

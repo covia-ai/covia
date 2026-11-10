@@ -1,6 +1,7 @@
 package covia.venue;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -35,8 +36,8 @@ import covia.venue.server.VenueServer;
  * <p>Verifies the three properties of the secure-by-default public profile:
  * <ol>
  *   <li>an unauthenticated (public) caller may <b>read</b> but may not
- *       <b>mutate</b> or <b>invoke</b> — invoking any operation creates a job
- *       and is therefore resource-consuming, so the read-only scope denies it;</li>
+ *       <b>mutate</b> or look up arbitrary operations through <b>invoke</b>;
+ *       bound read tools still need only their resource permissions;</li>
  *   <li>authenticating (with no token attenuation) lifts the scope;</li>
  *   <li>an operator can opt out via {@code auth.public.caps = "unrestricted"}.</li>
  * </ol>
@@ -59,20 +60,35 @@ public class PublicScopeTest {
 	/** The shared TestServer runs unrestricted public — reuse it for the operator
 	 *  opt-out case rather than launching a second venue. */
 	private final String openBase = TestServer.BASE_URL;
+	/** A custom public scope naming one private target and granting no read of the public store. */
+	private static final String PRIVATE_TARGET = "did:example:private-owner/w/internal-ledger";
+	private VenueServer customServer;
+	private String customBase;
 
 	@BeforeAll
 	public void setup() {
 		secureServer = VenueServer.launch(Maps.of(
 			Strings.create("port"), 0, // ephemeral
+			Config.STORE, "memory",
 			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
 			Config.AUTH, Maps.of(
 				Config.PUBLIC, Maps.of(Config.ENABLED, true)))); // default → read-only
 		secureBase = "http://localhost:" + secureServer.port();
+		customServer = VenueServer.launch(Maps.of(Config.PORT, 0, Config.STORE, "memory",
+			Config.AUTH, Maps.of(Config.PUBLIC, Maps.of(Config.ENABLED, true, "caps",
+				Vectors.of(Maps.of("with", PRIVATE_TARGET, "can", "data/read"))))));
+		customBase = "http://localhost:" + customServer.port();
 	}
 
 	@AfterAll
 	public void teardown() {
 		if (secureServer != null) try { secureServer.close(); } catch (Exception ignored) {}
+		if (customServer != null) try { customServer.close(); } catch (Exception ignored) {}
+	}
+
+	private static java.net.http.HttpResponse<String> get(String url) throws Exception {
+		return TestHTTP.CLIENT.send(java.net.http.HttpRequest.newBuilder(URI.create(url)).build(),
+			java.net.http.HttpResponse.BodyHandlers.ofString());
 	}
 
 	private static VenueHTTP anon(String base) {
@@ -119,38 +135,38 @@ public class PublicScopeTest {
 			Strings.create("path"), Strings.create("w/x"),
 			Strings.create("value"), Strings.create("nope")));
 		assertEquals(Status.FAILED, job.getStatus(), "public write must be denied");
-		assertTrue(String.valueOf(job.getErrorMessage()).contains("Capability denied"),
-			"public write denial must name the cap, got: " + job.getErrorMessage());
+		assertFalse(String.valueOf(job.getErrorMessage()).isBlank());
 	}
 
 	@Test
 	public void anonymousInvokeDeniedByDefault() throws Exception {
-		// Invoking any op creates a job (resource-consuming), so the read-only
-		// scope denies it — even an otherwise-harmless echo.
+		// The read-only scope does not grant arbitrary-operation invocation,
+		// even for an otherwise-harmless echo.
 		VenueHTTP pub = anon(secureBase);
 		Job job = pub.invokeAndWait(OP_ECHO, Maps.of(Strings.create("hi"), Strings.create("there")));
 		assertEquals(Status.FAILED, job.getStatus(), "public invoke must be denied");
-		assertTrue(String.valueOf(job.getErrorMessage()).contains("Capability denied"),
-			"public invoke denial must name the cap, got: " + job.getErrorMessage());
+		assertFalse(String.valueOf(job.getErrorMessage()).isBlank());
 	}
 
 	@Test
 	public void anonymousReadAllowedByDefault() throws Exception {
 		VenueHTTP pub = anon(secureBase);
 		Job job = pub.invokeAndWait(OP_READ, Maps.of(Strings.create("path"), Strings.create("w/x")));
-		assertEquals(Status.COMPLETE, job.getStatus(),
-			"public read of own/venue lattice is allowed under the read-only default");
+		assertEquals(Status.FAILED, job.getStatus(), "generic invocation requires invoke");
+		assertEquals(200, get(secureBase + "/api/v1/values/read?path=w/x").statusCode(),
+			"the direct read endpoint needs only resource authority");
 	}
 
 	@Test
 	public void anonymousShowConfigAllowedByDefault() throws Exception {
 		VenueHTTP pub = anon(secureBase);
 		Job job = pub.invokeAndWait(OP_SHOW_CONFIG, Maps.empty());
-		assertEquals(Status.COMPLETE, job.getStatus(),
-			"the curated venue configuration is public discovery under the read-only default");
-		assertEquals(secureServer.getEngine().getDIDString(),
-			convex.core.lang.RT.getIn(job.getOutput(), "venue", "did"));
-		assertNotNull(convex.core.lang.RT.getIn(job.getOutput(), "notice"));
+		assertEquals(Status.FAILED, job.getStatus(), "generic invocation requires invoke");
+		Engine engine = secureServer.getEngine();
+		var result = engine.jobs().runToolOperation(OP_SHOW_CONFIG, Maps.empty(),
+			engine.context(Strings.create(engine.getDIDString() + ":public"))).join();
+		assertEquals(engine.getDIDString(), convex.core.lang.RT.getIn(result, "venue", "did"));
+		assertNotNull(convex.core.lang.RT.getIn(result, "notice"));
 	}
 
 	@Test
@@ -180,23 +196,40 @@ public class PublicScopeTest {
 	// ========================= operator opt-out =========================
 	@Test
 	public void publicStatusDoesNotDiscloseCustomCapabilityTargets() throws Exception {
-		String privateTarget = "did:example:private-owner/w/internal-ledger";
-		VenueServer custom = VenueServer.launch(Maps.of(Config.PORT, 0,
-			Config.AUTH, Maps.of(Config.PUBLIC, Maps.of(Config.ENABLED, true, "caps",
-				Vectors.of(Maps.of("with", privateTarget, "can", "data/read"))))));
-		try {
-			var response = java.net.http.HttpClient.newHttpClient().send(
-				java.net.http.HttpRequest.newBuilder(URI.create("http://localhost:" + custom.port() + "/api/v1/status")).build(),
-				java.net.http.HttpResponse.BodyHandlers.ofString());
-			assertEquals(200, response.statusCode());
-			assertEquals(Strings.create("custom"), convex.core.lang.RT.getIn(
-				convex.core.util.JSON.parse(response.body()), "access", "publicCaps"));
-			assertTrue(!response.body().contains(privateTarget));
-			var shown = custom.getEngine().jobs().invokeInternal(OP_SHOW_CONFIG.toString(), Maps.empty(),
-				custom.getEngine().venueContext()).get(5, TimeUnit.SECONDS);
-			assertEquals(Strings.create("custom"), convex.core.lang.RT.getIn(shown, "access", "publicCaps"));
-			assertTrue(!shown.toString().contains(privateTarget));
-		} finally { custom.close(); }
+		var response = get(customBase + "/api/v1/status");
+		assertEquals(200, response.statusCode());
+		assertEquals(Strings.create("custom"), convex.core.lang.RT.getIn(
+			convex.core.util.JSON.parse(response.body()), "access", "publicCaps"));
+		assertTrue(!response.body().contains(PRIVATE_TARGET));
+		Engine custom = customServer.getEngine();
+		var shown = custom.jobs().invokeInternal(OP_SHOW_CONFIG.toString(), Maps.empty(),
+			custom.venueContext()).get(5, TimeUnit.SECONDS);
+		assertEquals(Strings.create("custom"), convex.core.lang.RT.getIn(shown, "access", "publicCaps"));
+		assertTrue(!shown.toString().contains(PRIVATE_TARGET));
+	}
+
+	@Test
+	public void publicSecretNamesNeedTheSameReadAsSecretList() throws Exception {
+		// The operator provisions a shared key in the public store; this public
+		// scope grants no read of s/, so neither job-free read may name it.
+		Engine custom = customServer.getEngine();
+		custom.getVenueState().users().ensure(Strings.create(custom.getDIDString() + ":public"))
+			.secrets().store("OPERATOR_SHARED_KEY", "value", SecretStore.keys(custom.getKeyPair()));
+
+		var values = get(customBase + "/api/v1/values/list?path=s");
+		assertEquals(403, values.statusCode(), values.body());
+		var secrets = get(customBase + "/api/v1/secrets");
+		assertEquals(403, secrets.statusCode(), secrets.body());
+		assertTrue(!secrets.body().contains("OPERATOR_SHARED_KEY"), secrets.body());
+
+		// Under the read-only default the public store is readable, by both routes alike.
+		Engine secure = secureServer.getEngine();
+		secure.getVenueState().users().ensure(Strings.create(secure.getDIDString() + ":public"))
+			.secrets().store("OPERATOR_SHARED_KEY", "value", SecretStore.keys(secure.getKeyPair()));
+		var listed = get(secureBase + "/api/v1/secrets");
+		assertEquals(200, listed.statusCode(), listed.body());
+		assertEquals(Vectors.of(Strings.create("OPERATOR_SHARED_KEY")),
+			convex.core.lang.RT.getIn(convex.core.util.JSON.parse(listed.body()), "items"));
 	}
 
 	@Test

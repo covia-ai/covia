@@ -21,6 +21,7 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.auth.ucan.Capability;
 import covia.api.Fields;
+import covia.exception.CapabilityDeniedException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.lattice.CapabilityChecker;
@@ -57,8 +58,8 @@ public class AdapterCapEnforcementTest {
 		unrestricted = RequestContext.of(DID); // no caps
 	}
 
-	/** Invoke an op directly on its adapter; return the cause-chain message
-	 *  (empty if it completed without throwing). */
+	/** Invoke an op directly on its adapter; return the cause-chain exception
+	 *  types and messages (empty if it completed without throwing). */
 	private static String direct(String adapter, String op, AMap<AString, ACell> input, RequestContext ctx) {
 		AMap<AString, ACell> meta = Maps.of(Fields.OPERATION,
 			Maps.of(Fields.ADAPTER, Strings.create(adapter + ":" + op)));
@@ -68,7 +69,9 @@ public class AdapterCapEnforcementTest {
 		} catch (Exception e) {
 			StringBuilder sb = new StringBuilder();
 			for (Throwable c = e; c != null; c = c.getCause()) {
-				if (c.getMessage() != null) sb.append(c.getMessage()).append(" | ");
+				sb.append(c.getClass().getName()).append(": ");
+				if (c.getMessage() != null) sb.append(c.getMessage());
+				sb.append(" | ");
 			}
 			return sb.toString();
 		}
@@ -88,7 +91,7 @@ public class AdapterCapEnforcementTest {
 	}
 
 	private static boolean capDenied(String msg) {
-		return msg.contains("Capability denied");
+		return msg.contains(CapabilityDeniedException.class.getName());
 	}
 
 	private static AMap<AString, ACell> m(Object... kv) {
@@ -188,19 +191,45 @@ public class AdapterCapEnforcementTest {
 		assertFalse(capDenied(direct("dlfs", "write", m("drive", "d", "path", "x"), unrestricted)));
 	}
 
-	// ===================== job-aware invoke gates =====================
+	// ===================== listings read their collection =====================
 
-	@Test public void a2aFuturePathRequiresInvokeBeforeOutboundWork() {
-		assertTrue(capDenied(direct("a2a", "getAgentCard",
-			m(Fields.URL, "http://10.0.0.1/a2a"), readOnly)),
-			"A2A must deny at requireInvoke before URL validation or network work");
+	/** The restricted tool-capable scope (UCAN.md §5.5): any operation, plus {@code extra}. */
+	private static RequestContext invokeWith(ACell... extra) {
+		var caps = Vectors.<ACell>of(Capability.create(Strings.create(""), Strings.create("invoke")));
+		for (ACell cap : extra) caps = caps.conj(cap);
+		return RequestContext.of(DID).withCaps(caps);
 	}
 
-	@Test public void agentJobPathRequiresInvokeAsWellAsTheActionAbility() {
+	@Test public void agentListNeedsReadOnTheAgents() {
+		assertTrue(capDenied(direct("agent", "list", Maps.empty(), invokeWith())),
+			"invoking the operation does not let a caller read the agents it lists");
+		assertFalse(capDenied(direct("agent", "list", Maps.empty(),
+			invokeWith(Capability.create(Strings.create("g/"), Capability.CRUD_READ)))));
+		assertFalse(capDenied(direct("agent", "list", Maps.empty(), unrestricted)));
+	}
+
+	@Test public void hitlListNeedsReadOnTheInbox() {
+		engine.getVenueState().users().ensure(DID);
+		assertTrue(capDenied(direct("hitl", "list", Maps.empty(), invokeWith())),
+			"invoking the operation does not let a caller read the inbox it lists");
+		assertEquals("", direct("hitl", "list", Maps.empty(),
+			invokeWith(Capability.create(Strings.create("h/"), Capability.CRUD_READ))));
+		assertEquals("", direct("hitl", "list", Maps.empty(), unrestricted));
+	}
+
+	// ===================== job-aware invoke gates =====================
+
+	@Test public void directA2AStillValidatesItsDestination() {
+		String failure = direct("a2a", "getAgentCard",
+			m(Fields.URL, "http://10.0.0.1/a2a"), readOnly);
+		assertFalse(failure.isEmpty(), "private outbound destinations remain blocked");
+		assertFalse(failure.contains("requires invoke"), failure);
+	}
+
+	@Test public void genericAgentInvocationRequiresInvokeAsWellAsTheActionAbility() {
 		String agentId = "cap-invoke-" + System.nanoTime();
 		// Deliberately grant the action-specific right but not invocation of the
-		// operation definition. The Job-aware override must enforce both, exactly
-		// like AgentAdapter.invokeFuture does.
+		// operation definition. Generic invocation must enforce both.
 		RequestContext actionOnly = RequestContext.of(DID).withCaps(Vectors.of(
 			Capability.create(Strings.create("g/" + agentId), Strings.create("agent/create"))));
 		Job job = engine.jobs().invokeOperation("v/ops/agent/create",

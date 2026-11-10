@@ -5,19 +5,14 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 
-import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
-import org.junit.jupiter.api.io.TempDir;
 
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -29,7 +24,6 @@ import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import covia.adapter.agent.Skills;
 import covia.api.Fields;
-import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.TestEngine;
@@ -38,13 +32,11 @@ import covia.venue.TestEngine;
  * {@code agent:from-skills} (covia#484) — the one-call migration wedge that
  * composes {@code skills:import} and {@code agent:create}: import an existing
  * agent's SKILL.md skills and stand up a native agent from them plus a system
- * prompt, in a single operation. Uses a bespoke engine for a host file root,
- * mirroring {@link SkillsImportTest}.
+ * prompt, in a single operation.
  */
 public class AgentFromSkillsTest {
 
-	@TempDir static Path work;
-	private static Engine engine;
+	private static final Engine engine = TestEngine.ENGINE;
 	private AString did;
 	private RequestContext ctx;
 
@@ -69,18 +61,8 @@ public class AgentFromSkillsTest {
 		"You are Acme's support agent. Follow the refund policy skill exactly.";
 
 	@BeforeAll
-	static void setup() throws IOException {
-		engine = Engine.createTemp(Maps.of(
-			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
-			"file", Maps.of("roots", Maps.of("work", work.toAbsolutePath().toString()))));
-		Engine.addDemoAssets(engine);
-		Files.createDirectories(work.resolve("refund-policy"));
-		Files.writeString(work.resolve("refund-policy/SKILL.md"), REFUND_SKILL);
-	}
-
-	@AfterAll
-	static void teardown() {
-		engine.close();
+	static void setup() {
+		TestEngine.writeTempFile("AgentFromSkillsTest/refund-policy/SKILL.md", REFUND_SKILL);
 	}
 
 	@BeforeEach
@@ -110,7 +92,7 @@ public class AgentFromSkillsTest {
 		ACell out = call("v/ops/agent/from-skills", Maps.of(
 			K_AGENT_ID, Strings.create("refund-bot"),
 			K_SYSTEM_PROMPT, Strings.create(SYSTEM_PROMPT),
-			K_SKILLS, Vectors.of(Strings.create("file://work/refund-policy/SKILL.md"))));
+			K_SKILLS, Vectors.of(Strings.create("file://tmp/AgentFromSkillsTest/refund-policy/SKILL.md"))));
 
 		// The result carries the created agent plus what was migrated in.
 		assertEquals("refund-bot", str(out, "agentId"));
@@ -183,6 +165,6 @@ public class AgentFromSkillsTest {
 			Fields.CONFIG, Maps.empty()));
 		assertThrows(RuntimeException.class, () -> call("v/ops/agent/from-skills", Maps.of(
 			K_AGENT_ID, Strings.create("taken"),
-			K_SKILLS, Vectors.of(Strings.create("file://work/refund-policy/SKILL.md")))));
+			K_SKILLS, Vectors.of(Strings.create("file://tmp/AgentFromSkillsTest/refund-policy/SKILL.md")))));
 	}
 }

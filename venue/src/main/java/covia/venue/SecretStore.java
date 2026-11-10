@@ -1,13 +1,13 @@
 package covia.venue;
 
 import java.nio.charset.StandardCharsets;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 import convex.core.crypto.AESGCM;
 import convex.core.crypto.AKeyPair;
 import convex.core.crypto.HKDF;
 import convex.core.crypto.Hashing;
 import convex.core.data.ACell;
+import convex.core.data.AHashMap;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
@@ -17,10 +17,13 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
+import covia.lattice.Covia;
+import covia.lattice.CoviaValue;
 import convex.lattice.ALatticeComponent;
+import convex.lattice.MapComponent;
 import convex.lattice.TransactionalComponent;
-import convex.lattice.LatticeContext;
 import convex.lattice.cursor.AForkableCursor;
+import convex.lattice.cursor.PathCursor;
 import covia.api.Fields;
 
 /**
@@ -39,18 +42,58 @@ import covia.api.Fields;
 	 * from one seed. Every write encrypts under
  * {@link #CURRENT_KEY_VERSION}, so an older secret migrates on its next
  * write.</p>
- *
- * <p>Follows the same lattice app wrapper pattern as {@link AssetStore}.</p>
  */
-public class SecretStore extends ALatticeComponent<AMap<AString, ACell>> implements TransactionalComponent<AMap<AString, ACell>, SecretStore> {
+public class SecretStore extends MapComponent<AString, ACell> implements TransactionalComponent<AHashMap<AString, ACell>, SecretStore> {
 	@Override
-	public SecretStore withCursor(AForkableCursor<AMap<AString, ACell>> draft) {
-		return new SecretStore(context, draft);
+	public SecretStore rebind(AForkableCursor<AHashMap<AString, ACell>> cursor) {
+		return new SecretStore(context, cursor);
 	}
 
-	private final LatticeContext context;
+	@Override
+	public SecretStore withCursor(AForkableCursor<AHashMap<AString, ACell>> cursor) {
+		return rebind(cursor);
+	}
 
-	public LatticeContext getContext() { return context; }
+	private final VenueContext context;
+
+	public VenueContext getContext() { return context; }
+
+	/**
+	 * A path names one secret by its name, as its {@link Record}, and data in
+	 * that record below it; all read-only, since only this store's operations
+	 * change a secret.
+	 */
+	@Override
+	public ALatticeComponent<?> resolve(AString[] segments, int start, int end) {
+		if (end - start != 1) return CoviaValue.within(this, segments, start, end);
+		return new Record(this, segments[start]);
+	}
+
+	/** One secret's stored record, as a path names it: read-only, and removed by its store. */
+	public static final class Record extends CoviaValue<ACell> {
+		private final SecretStore store;
+		private final AString name;
+
+		private Record(SecretStore store, AString name) {
+			super(new PathCursor<ACell>(store.cursor().readOnly(), name));
+			this.store = store;
+			this.name = name;
+		}
+
+		/** The secret's name. */
+		public AString name() {
+			return name;
+		}
+
+		/**
+		 * Removes the secret from its store.
+		 *
+		 * @return Whether it was there
+		 */
+		public boolean delete() {
+			return store.deleteIfPresent(name);
+		}
+	}
 
 	/** Key version 1: SHA-256 of the venue seed. Read only; nothing encrypts under it. */
 	public static final int KEY_VERSION_1 = 1;
@@ -77,8 +120,8 @@ public class SecretStore extends ALatticeComponent<AMap<AString, ACell>> impleme
 	private static final AString KEY_VERSION_KEY = Strings.intern("keyVersion");
 	private static final CVMLong CURRENT_KEY_VERSION_CELL = CVMLong.create(CURRENT_KEY_VERSION);
 
-	SecretStore(LatticeContext context,
-			AForkableCursor<AMap<AString, ACell>> cursor) {
+	SecretStore(VenueContext context,
+			AForkableCursor<AHashMap<AString, ACell>> cursor) {
 		super(cursor);
 		this.context = context;
 	}
@@ -93,8 +136,12 @@ public class SecretStore extends ALatticeComponent<AMap<AString, ACell>> impleme
 		private final byte[] v2;
 
 		private Keys(byte[] seed) {
-			this.v1 = sha256Key(seed);
-			this.v2 = HKDF.derive256(seed, null, KEY_INFO_V2.getBytes(StandardCharsets.UTF_8));
+			this(sha256Key(seed), HKDF.derive256(seed, null, KEY_INFO_V2.getBytes(StandardCharsets.UTF_8)));
+		}
+
+		private Keys(byte[] v1, byte[] v2) {
+			this.v1 = v1;
+			this.v2 = v2;
 		}
 
 		/** The key of one version, or null when there is no such version. */
@@ -124,6 +171,28 @@ public class SecretStore extends ALatticeComponent<AMap<AString, ACell>> impleme
 	 */
 	public static Keys keys(AKeyPair venueKeyPair) {
 		return new Keys(venueKeyPair.getSeed().getBytes());
+	}
+
+	/** Why {@link #sealingKeys} refused a label: it would derive this store's own key. */
+	public static final String SEALING_LABEL_RESERVED = "A sealing label must differ from the secret store's own";
+
+	/**
+	 * Keys for a component that seals its own records ({@link #seal}) apart
+	 * from this store: HKDF-SHA256 of the venue's seed under {@code label},
+	 * at {@link #CURRENT_KEY_VERSION}. They have no key version 1, so nothing
+	 * this store or any other label sealed opens under them.
+	 *
+	 * @param venueKeyPair Venue's key pair
+	 * @param label The component's own HKDF info label
+	 * @return Keys that open only what was sealed under the same label
+	 * @throws IllegalArgumentException for the secret store's own label
+	 */
+	public static Keys sealingKeys(AKeyPair venueKeyPair, String label) {
+		if (label == null || label.isEmpty() || KEY_INFO_V2.equals(label)) {
+			throw new IllegalArgumentException(SEALING_LABEL_RESERVED);
+		}
+		return new Keys(null, HKDF.derive256(venueKeyPair.getSeed().getBytes(), null,
+			label.getBytes(StandardCharsets.UTF_8)));
 	}
 
 	/**
@@ -161,16 +230,8 @@ public class SecretStore extends ALatticeComponent<AMap<AString, ACell>> impleme
 	public void store(AString name, AString plaintext, Keys keys) {
 		Blob encryptedBlob = encrypt(plaintext, keys);
 		CVMLong timestamp = getContext().currentTimestamp();
-		cursor().updateAndGet(current -> {
-			AMap<AString, ACell> m = RT.castMap(current);
-			if (m == null) m = Maps.empty();
-			CVMLong effective = timestamp;
-			ACell existing = m.get(name);
-			if (existing instanceof AMap<?, ?> oldRecord
-					&& oldRecord.get(UPDATED_KEY) instanceof CVMLong old
-					&& old.longValue() > effective.longValue()) effective = old;
-			return m.assoc(name, record(encryptedBlob, effective));
-		});
+		path(name).updateAndGet(current ->
+			record(encryptedBlob, Covia.ratchet(RT.getIn(current, UPDATED_KEY), timestamp)));
 	}
 
 	/**
@@ -184,22 +245,40 @@ public class SecretStore extends ALatticeComponent<AMap<AString, ACell>> impleme
 	 * @param keys The venue's secret store keys (from {@link #keys})
 	 * @return true if this call wrote the entry; false if an entry already existed
 	 */
-	@SuppressWarnings({ "unchecked", "rawtypes" })
 	public boolean storeIfAbsent(AString name, AString plaintext, Keys keys) {
 		AMap<AString, ACell> record = record(encrypt(plaintext, keys),
 			getContext().currentTimestamp());
-		AtomicBoolean wrote = new AtomicBoolean(false);
-		cursor().updateAndGet(current -> {
-			AMap m = RT.castMap(current);
-			if (m == null) m = Maps.empty();
-			if (m.containsKey(name)) {
-				wrote.set(false);
-				return m;
-			}
-			wrote.set(true);
-			return m.assoc(name, record);
-		});
-		return wrote.get();
+		return path(name).getAndUpdate(current -> (current == null) ? record : current) == null;
+	}
+
+	/**
+	 * A value sealed as a stored secret is, under the same keys and key
+	 * versions, for a component other than this store to keep: credentials an
+	 * adapter obtains and rotates for a user, such as OAuth grants
+	 * (ADAPTERS.md). Opened with {@link #unseal}.
+	 *
+	 * @param plaintext Value to seal
+	 * @param keys The venue's secret store keys (from {@link #keys})
+	 * @return The sealed value: its ciphertext and key version
+	 */
+	public static AMap<AString, ACell> seal(AString plaintext, Keys keys) {
+		return Maps.of(ENCRYPTED_KEY, encrypt(plaintext, keys), KEY_VERSION_KEY, CURRENT_KEY_VERSION_CELL);
+	}
+
+	/**
+	 * Opens a value from {@link #seal} under the key of its version.
+	 *
+	 * @param sealed A sealed value, or null
+	 * @param keys The venue's secret store keys (from {@link #keys})
+	 * @return The plaintext, or null for null
+	 * @throws IllegalStateException with {@link #INVALID_RECORD} for a value that is
+	 * not sealed, or {@link #UNKNOWN_KEY_VERSION} for a key version this venue cannot derive
+	 */
+	@SuppressWarnings("unchecked")
+	public static AString unseal(ACell sealed, Keys keys) {
+		if (sealed == null) return null;
+		if (!(sealed instanceof AMap<?, ?> record)) throw new IllegalStateException(INVALID_RECORD);
+		return open((AMap<AString, ACell>) record, keys);
 	}
 
 	private static Blob encrypt(AString plaintext, Keys keys) {
@@ -345,10 +424,9 @@ public class SecretStore extends ALatticeComponent<AMap<AString, ACell>> impleme
 	 * @return Vector of secret names, or empty vector if none
 	 */
 	public AVector<AString> list() {
-		AMap<AString, ACell> all = cursor().get();
+		AHashMap<AString, ACell> all = get();
 		if (all == null || all.isEmpty()) return Vectors.empty();
 		return all.getKeys();
-
 	}
 
 	/**
@@ -366,12 +444,7 @@ public class SecretStore extends ALatticeComponent<AMap<AString, ACell>> impleme
 
 	/** Atomically removes an entry and reports whether it existed. */
 	public boolean deleteIfPresent(AString name) {
-		AMap<AString, ACell> previous = cursor().getAndUpdate(current -> {
-			AMap<AString,ACell> m = RT.ensureMap(current);
-			if (m == null) return null;
-			return m.dissoc(name);
-		});
-		return previous != null && previous.containsKey(name);
+		return remove(name) != null;
 	}
 
 	/**
@@ -379,7 +452,7 @@ public class SecretStore extends ALatticeComponent<AMap<AString, ACell>> impleme
 	 */
 	@SuppressWarnings("unchecked")
 	private AMap<AString, ACell> getRecord(AString name) {
-		AMap<AString, ACell> all = cursor().get();
+		AHashMap<AString, ACell> all = get();
 		if (all == null) return null;
 		ACell value = all.get(name);
 		if (!(value instanceof AMap)) {

@@ -67,9 +67,11 @@ public class GoalTreeCrashResumeTest {
 
 	private static final AString ALICE = Strings.create("did:key:z6MkCrashBoundaryAlice");
 
-	private static void await(BooleanSupplier condition, long timeoutMs, String description) {
-		TestEngine.awaitCondition(condition, timeoutMs,
-			() -> "timeout waiting for: " + description);
+	/** Waits until {@code condition} holds, checked now and as each of the agent's run-loop events arrives. */
+	private static void await(Engine engine, String agentId, BooleanSupplier condition, String description) {
+		try (AgentWatch watch = AgentWatch.open(engine, ALICE, agentId)) {
+			watch.awaitState(description, condition);
+		}
 	}
 
 	private static AMap<AString, ACell> config(AKeyPair keyPair) {
@@ -82,10 +84,10 @@ public class GoalTreeCrashResumeTest {
 			throws Exception {
 		activeStore = store;
 		NodeServer<Index<Keyword, ACell>> node =
-			new NodeServer<>(CoviaApplication.open(store, keyPair).host(), NodeConfig.port(-1));
+			new NodeServer<>(TestEngine.application(store).host(), NodeConfig.port(-1));
 		activeNode = node;
 		node.launch();
-		Engine engine = new Engine(config, CoviaApplication.connect(node.getHost()), keyPair).start();
+		Engine engine = TestEngine.application(node.getHost()).mount(keyPair, config).start();
 		activeEngine = engine;
 		Engine.addDemoAssets(engine);
 		return engine;
@@ -98,19 +100,20 @@ public class GoalTreeCrashResumeTest {
 					Fields.OPERATION, Strings.create("v/ops/goaltree/chat"),
 					Strings.create("llmOperation"), Strings.create("v/test/ops/nevertoolllm"),
 					Strings.create("systemPrompt"), Strings.create("Test agent."),
+					Strings.create("caps"), Config.UNRESTRICTED,
 					Strings.create("toolCallTimeoutMs"), CVMLong.create(60_000))),
 			RequestContext.of(ALICE)).awaitResult(5000);
 	}
 
-	private static AgentState agent(Engine engine, String agentId) {
-		User user = engine.getVenueState().users().get(ALICE);
+	private static Agent agent(Engine engine, String agentId) {
+		User user = engine.getVenueState().users().user(ALICE);
 		return (user != null) ? user.agent(agentId) : null;
 	}
 
 	@SuppressWarnings("unchecked")
 	private static AVector<ACell> rootConversation(Engine engine, String agentId, Blob sid) {
 		AMap<AString, ACell> session = agent(engine, agentId).getSession(sid);
-		AVector<ACell> frames = (AVector<ACell>) session.get(AgentState.KEY_FRAMES);
+		AVector<ACell> frames = (AVector<ACell>) session.get(Agent.KEY_FRAMES);
 		return covia.adapter.agent.GoalTreeContext.activeConversation(RT.ensureMap(frames.get(0)));
 	}
 
@@ -121,7 +124,7 @@ public class GoalTreeCrashResumeTest {
 
 	@Test
 	public void testLegacyHistoryMigrationCompactionAndAppendSurviveStoreReopen() throws Exception {
-		EtchStore store = EtchStore.createTemp();
+		EtchStore store = TestTemp.etch("goal-tree-legacy-history");
 		java.io.File file = store.getFile();
 		AKeyPair keyPair = AKeyPair.generate();
 		AMap<AString, ACell> config = config(keyPair);
@@ -136,19 +139,19 @@ public class GoalTreeCrashResumeTest {
 		AMap<AString, ACell> legacy = Maps.of("description", "persisted legacy session", "conversation", selected);
 
 		Engine first = start(store, keyPair, config);
-		AgentState initial = first.getVenueState().users().ensure(ALICE).ensureAgent(agentId,
+		Agent initial = first.getVenueState().users().ensure(ALICE).ensureAgent(agentId,
 			Maps.of(Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/test/ops/llm"), null);
 		AMap<AString, ACell> session = initial.ensureSession(sid, ALICE).assoc(Fields.FRAMES, Vectors.of(legacy));
 		AMap<AString, ACell> meta = RT.ensureMap(session.get(Strings.intern("meta")));
 		session = session.assoc(Strings.intern("meta"), meta.assoc(Strings.intern("turns"), CVMLong.create(4)));
-		initial.putRecord(initial.getRecord().assoc(AgentState.KEY_SESSIONS, initial.getSessions().assoc(sid, session)));
+		initial.putRecord(initial.getRecord().assoc(Agent.KEY_SESSIONS, initial.getSessions().assoc(sid, session)));
 		first.flush();
 		closeActivePhase();
 		store.close();
 		activeStore = null;
 
 		Engine second = start(EtchStore.create(file), keyPair, config);
-		AgentState restored = agent(second, agentId);
+		Agent restored = agent(second, agentId);
 		AVector<ACell> oldFrames = RT.ensureVector(restored.getSession(sid).get(Fields.FRAMES));
 		assertEquals(legacy, oldFrames.get(0), "read/restart alone does not rewrite legacy state");
 		assertTrue(restored.session(sid).migrateHistory(oldFrames));
@@ -156,7 +159,7 @@ public class GoalTreeCrashResumeTest {
 			RT.getIn(restored.getSession(sid), Fields.FRAMES, CVMLong.ZERO))));
 		second.jobs().invokeOperation("v/ops/agent/chat", Maps.of(Fields.AGENT_ID, agentId,
 			Fields.SESSION_ID, sid.toHexString(), Fields.MESSAGE, "after migration"), alice).awaitResult(5000);
-		await(() -> restored.getSessionCycleEpoch(sid) == null, 5000, "migrated chat committed");
+		await(second, agentId, () -> restored.getSessionCycleEpoch(sid) == null, "migrated chat committed");
 		second.jobs().invokeOperation("v/ops/agent/compact-session", Maps.of(Fields.AGENT_ID, agentId,
 			Fields.SESSION_ID, sid.toHexString(), "summary", "keep all completed exchanges"), alice).awaitResult(5000);
 		AMap<AString, ACell> compacted = RT.ensureMap(RT.getIn(restored.getSession(sid), Fields.FRAMES, CVMLong.ZERO));
@@ -168,19 +171,19 @@ public class GoalTreeCrashResumeTest {
 		activeStore = null;
 
 		Engine third = start(EtchStore.create(file), keyPair, config);
-		AgentState reopened = agent(third, agentId);
+		Agent reopened = agent(third, agentId);
 		assertEquals(compacted, RT.getIn(reopened.getSession(sid), Fields.FRAMES, CVMLong.ZERO));
 		third.jobs().invokeOperation("v/ops/agent/chat", Maps.of(Fields.AGENT_ID, agentId,
 			Fields.SESSION_ID, sid.toHexString(), Fields.MESSAGE, "after restart"), alice).awaitResult(5000);
-		await(() -> reopened.getSessionCycleEpoch(sid) == null, 5000, "reopened chat committed");
+		await(third, agentId, () -> reopened.getSessionCycleEpoch(sid) == null, "reopened chat committed");
 		AMap<AString, ACell> appended = RT.ensureMap(RT.getIn(reopened.getSession(sid), Fields.FRAMES, CVMLong.ZERO));
 		AVector<ACell> retained = GoalTreeContext.history(compacted);
 		assertEquals(retained, GoalTreeContext.history(appended).slice(0, retained.count()));
 		assertEquals(8, GoalTreeContext.countTurns(appended));
 		assertEquals(CVMLong.create(8), RT.getIn(reopened.getSession(sid), "meta", "turns"));
-		ACell read = third.jobs().invokeOperation("v/ops/agent/session-read", Maps.of(Fields.AGENT_ID, agentId,
-			Fields.SESSION_ID, sid.toHexString(), "archiveDepth", 2L), alice).awaitResult(5000);
-		assertEquals(8, RT.ensureVector(RT.getIn(read, Fields.MESSAGES)).count());
+		ACell read = third.jobs().invokeOperation("v/ops/agent/history", Maps.of(Fields.AGENT_ID, agentId,
+			Fields.SESSION_ID, sid.toHexString(), Fields.LIMIT, 100L), alice).awaitResult(5000);
+		assertEquals(GoalTreeContext.history(appended), RT.getIn(read, "entries"));
 	}
 
 	@Test
@@ -195,7 +198,7 @@ public class GoalTreeCrashResumeTest {
 		// that fresh attempt then re-parks or completes is timing, not
 		// contract (AgentRestartTest covers the deterministic completing
 		// case); what matters here is that the restart never fails it.
-		EtchStore store = EtchStore.createTemp();
+		EtchStore store = TestTemp.etch("goal-tree-restart");
 		AKeyPair keyPair = AKeyPair.generate();
 		AMap<AString, ACell> config = config(keyPair);
 		Blob sid = Blob.fromHex("cc112233445566778899aabbccddee31");
@@ -210,9 +213,9 @@ public class GoalTreeCrashResumeTest {
 				Fields.INPUT, Strings.create("use the slow tool")),
 			RequestContext.of(ALICE));
 		requestId = request.getID();
-		await(() -> parkedInTool(first, "request-agent", sid), 10_000, "request parked in tool");
+		await(first, "request-agent", () -> parkedInTool(first, "request-agent", sid), "request parked in tool");
 		assertEquals(Status.STARTED, request.getStatus());
-		assertEquals(AgentState.RUNNING, agent(first, "request-agent").getStatus());
+		assertEquals(Agent.RUNNING, agent(first, "request-agent").getStatus());
 		assertNotNull(agent(first, "request-agent").getSessionCycleEpoch(sid));
 		first.flush();
 		closeActivePhase();
@@ -225,7 +228,7 @@ public class GoalTreeCrashResumeTest {
 		AMap<AString, ACell> restored = second.jobs().getJobData(requestId, RequestContext.of(ALICE));
 		assertEquals(Status.STARTED, restored.get(Fields.STATUS),
 			"an interrupted request is restored live, not failed");
-		AgentState recovered = agent(second, "request-agent");
+		Agent recovered = agent(second, "request-agent");
 		assertNotNull(recovered.getTasks().get(requestId),
 			"the surviving request is still the agent's task after recovery");
 		assertFalse(String.valueOf(rootConversation(second, "request-agent", sid)).contains("gave up"),
@@ -246,7 +249,7 @@ public class GoalTreeCrashResumeTest {
 
 	@Test
 	public void testCompletedMessageDoesNotMakeStaleCycleBootWork() throws Exception {
-		EtchStore store = EtchStore.createTemp();
+		EtchStore store = TestTemp.etch("goal-tree-stale-cycle");
 		AKeyPair keyPair = AKeyPair.generate();
 		AMap<AString, ACell> config = config(keyPair);
 		Blob sid = Blob.fromHex("cc112233445566778899aabbccddee32");
@@ -260,7 +263,7 @@ public class GoalTreeCrashResumeTest {
 				Fields.MESSAGE, Strings.create("use the slow tool")),
 			RequestContext.of(ALICE));
 		delivery.awaitResult(5000);
-		await(() -> parkedInTool(first, "message-agent", sid), 10_000, "message parked in tool");
+		await(first, "message-agent", () -> parkedInTool(first, "message-agent", sid), "message parked in tool");
 		first.flush();
 		closeActivePhase();
 
@@ -269,8 +272,8 @@ public class GoalTreeCrashResumeTest {
 		AgentAdapter adapter = (AgentAdapter) second.getAdapter("agent");
 		assertEquals(0, adapter.wakeAgentsWithWork(),
 			"inCycle alone must not wake an agent after restart");
-		AgentState recovered = agent(second, "message-agent");
-		assertEquals(AgentState.SLEEPING, recovered.getStatus());
+		Agent recovered = agent(second, "message-agent");
+		assertEquals(Agent.SLEEPING, recovered.getStatus());
 		assertNull(recovered.getSessionCycleEpoch(sid));
 		assertFalse(String.valueOf(rootConversation(second, "message-agent", sid)).contains("gave up"));
 		closeActivePhase();
@@ -278,7 +281,7 @@ public class GoalTreeCrashResumeTest {
 
 	@Test
 	public void testFreshAttemptRepairsAnAbortedToolCall() throws Exception {
-		EtchStore store = EtchStore.createTemp();
+		EtchStore store = TestTemp.etch("goal-tree-aborted-tool");
 		AKeyPair keyPair = AKeyPair.generate();
 		AMap<AString, ACell> config = config(keyPair);
 		Blob sid = Blob.fromHex("cc112233445566778899aabbccddee33");
@@ -292,14 +295,13 @@ public class GoalTreeCrashResumeTest {
 					Fields.SESSION_ID, Strings.create(sid.toHexString()),
 					Fields.MESSAGE, Strings.create("use the slow tool")),
 				RequestContext.of(ALICE)).awaitResult(5000);
-			await(() -> parkedInTool(engine, "repair-agent", sid),
-				10_000, "message parked in tool");
+			await(engine, "repair-agent", () -> parkedInTool(engine, "repair-agent", sid), "message parked in tool");
 
 			engine.jobs().invokeOperation("v/ops/agent/suspend",
 				Maps.of(Fields.AGENT_ID, "repair-agent"),
 				RequestContext.of(ALICE)).awaitResult(5000);
-			await(() -> agent(engine, "repair-agent").getSessionCycleEpoch(sid) == null,
-				10_000, "cycle fence cleared after suspension");
+			await(engine, "repair-agent", () -> agent(engine, "repair-agent").getSessionCycleEpoch(sid) == null,
+				"cycle fence cleared after suspension");
 			engine.jobs().invokeOperation("v/ops/agent/resume",
 				Maps.of(Fields.AGENT_ID, "repair-agent"),
 				RequestContext.of(ALICE)).awaitResult(5000);
@@ -309,9 +311,8 @@ public class GoalTreeCrashResumeTest {
 					Fields.SESSION_ID, Strings.create(sid.toHexString()),
 					Fields.MESSAGE, Strings.create("start a fresh attempt")),
 				RequestContext.of(ALICE)).awaitResult(5000);
-			await(() -> String.valueOf(rootConversation(engine, "repair-agent", sid))
-				.contains("did not return"), 10_000,
-				"fresh attempt settled the dangling call explicitly");
+			await(engine, "repair-agent", () -> String.valueOf(rootConversation(engine, "repair-agent", sid))
+				.contains("did not return"), "fresh attempt settled the dangling call explicitly");
 		} finally {
 			closeActivePhase();
 		}

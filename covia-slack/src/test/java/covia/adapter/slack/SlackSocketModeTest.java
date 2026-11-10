@@ -26,6 +26,7 @@ import covia.adapter.messaging.MessagingSettings;
 import covia.adapter.messaging.WebhookBot;
 import covia.adapter.webhook.WebhookInbox;
 import covia.api.Fields;
+import covia.exception.ResponseException;
 import covia.venue.RequestContext;
 import io.javalin.websocket.WsContext;
 
@@ -248,7 +249,7 @@ class SlackSocketModeTest {
 		try (FakeSocket socket = new FakeSocket(); Fixture f = new Fixture(agentSpec, socket.url())) {
 			RequestContext owner = RequestContext.of(OWNER);
 			ACell cfg = RT.getIn(f.engine.resolvePath(Strings.create("v/agents/templates/slack"), owner), "agent", "config");
-			assertTrue(RT.getIn(cfg, "systemPrompt").toString().contains("via.from"), "the prompt teaches via");
+			assertTrue(RT.getIn(cfg, "systemPrompt").toString().contains("[From:"), "the prompt teaches the From element");
 			assertTrue(RT.getIn(cfg, "systemPrompt").toString().contains("plain text"), "the prompt asks for plain text");
 			assertEquals(Vectors.of(Strings.create("w/skills"), Strings.create("v/skills/root")), RT.getIn(cfg, "skillsets"));
 			// Every tool and revealed skill in the template and the skill hierarchy resolves.
@@ -287,7 +288,7 @@ class SlackSocketModeTest {
 			assertNull(((AMap<?, ?>) status).get(Strings.intern("webhookPath")));
 			assertNotNull(((AMap<?, ?>) status).get(Strings.intern("connection")));
 		}
-		assertEquals(MessagingHttp.INVALID_SOCKET_URL, assertThrows(IllegalArgumentException.class,
+		assertEquals(MessagingHttp.INVALID_SOCKET_URL, assertThrows(ResponseException.class,
 			() -> MessagingHttp.socket("ws://example.com/link")).getMessage());
 	}
 }

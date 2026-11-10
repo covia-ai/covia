@@ -3,19 +3,25 @@ package covia.adapter;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.AccessDeniedException;
+import java.nio.file.DirectoryNotEmptyException;
 import java.nio.file.DirectoryStream;
+import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.FileSystem;
 import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
 import java.nio.file.LinkOption;
 import java.nio.file.NoSuchFileException;
+import java.nio.file.NotDirectoryException;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
+import java.util.zip.ZipException;
 
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -29,6 +35,11 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.api.Fields;
+import covia.exception.ConfigurationException;
+import covia.exception.ConflictException;
+import covia.exception.InvalidInputException;
+import covia.exception.NotFoundException;
+import covia.exception.NotSupportedException;
 import covia.utils.MimeUtils;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -61,6 +72,27 @@ final class FileOperations {
 
 	private FileOperations() {}
 
+	/**
+	 * An IO failure as the Covia type for what it says about the request. A
+	 * missing file is not found, and an existing file where a new one would go
+	 * conflicts with it. Deleting a non-empty directory without
+	 * {@code recursive}, a path through a file and a file that is not a
+	 * readable archive are bad input. A file the system will not open is the
+	 * operator's setup. Anything else is a venue fault.
+	 */
+	static RuntimeException failure(IOException e) {
+		if (e instanceof NoSuchFileException missing) {
+			return new NotFoundException(e.getMessage(), missing.getFile());
+		}
+		if (e instanceof FileAlreadyExistsException) return new ConflictException(e.getMessage());
+		if (e instanceof DirectoryNotEmptyException || e instanceof NotDirectoryException
+				|| e instanceof ZipException) {
+			return new InvalidInputException(e.getMessage(), e);
+		}
+		if (e instanceof AccessDeniedException) return new ConfigurationException(e.getMessage(), e);
+		return new UncheckedIOException(e.getMessage(), e);
+	}
+
 	@FunctionalInterface
 	interface AttributeReader {
 		BasicFileAttributes read(Path path) throws IOException;
@@ -86,17 +118,17 @@ final class FileOperations {
 		try {
 			relative = base.getFileSystem().getPath(stripped);
 		} catch (InvalidPathException e) {
-			throw new IllegalArgumentException(
-				"Invalid path '" + userPath + "': " + e.getReason());
+			throw new InvalidInputException(
+				"Invalid path '" + userPath + "': " + e.getReason(), e);
 		}
 		if (relative.isAbsolute() || relative.getRoot() != null) {
-			throw new IllegalArgumentException(
+			throw new InvalidInputException(
 				"Path must be relative to '" + rootLabel + "': " + userPath);
 		}
 
 		Path target = base.resolve(relative).normalize();
 		if (!target.startsWith(base)) {
-			throw new IllegalArgumentException(
+			throw new InvalidInputException(
 				"Path escapes '" + rootLabel + "': " + userPath);
 		}
 
@@ -111,7 +143,7 @@ final class FileOperations {
 			Path realBase = base.toRealPath();
 			Path realProbe = probe.toRealPath();
 			if (!realProbe.startsWith(realBase)) {
-				throw new IllegalArgumentException(
+				throw new InvalidInputException(
 					"Path escapes '" + rootLabel + "' through a symbolic link: " + userPath);
 			}
 		}
@@ -125,7 +157,7 @@ final class FileOperations {
 	}
 
 	static ACell list(Path dir, AttributeReader attributeReader) throws IOException {
-		if (!Files.isDirectory(dir)) throw new IllegalArgumentException("Not a directory: " + dir);
+		if (!Files.isDirectory(dir)) throw new InvalidInputException("Not a directory: " + dir);
 		AVector<ACell> entries = Vectors.empty();
 		boolean changed = false;
 		try (DirectoryStream<Path> stream = Files.newDirectoryStream(dir)) {
@@ -161,7 +193,7 @@ final class FileOperations {
 
 	static ACell tree(Path dir, AMap<AString, ACell> input,
 			AttributeReader attributeReader) throws IOException {
-		if (!Files.isDirectory(dir)) throw new IllegalArgumentException("Not a directory: " + dir);
+		if (!Files.isDirectory(dir)) throw new InvalidInputException("Not a directory: " + dir);
 		int maxDepth = boundedInt(input, "maxDepth", 3, 1, MAX_DEPTH_CAP);
 		int maxEntries = boundedInt(input, "maxEntries", 500, 1, MAX_ENTRIES_CAP);
 		AString infoCell = RT.ensureString(input.get(Strings.create("info")));
@@ -238,7 +270,7 @@ final class FileOperations {
 	 *  {@link TextExtractor} and the read's {@code pages} / {@code maxChars} options. */
 	static ACell read(Path file, String mode, String binaryUrl, Engine engine,
 			AMap<AString, ACell> input) throws IOException {
-		if (!Files.isRegularFile(file)) throw new IllegalArgumentException("Not a regular file: " + file);
+		if (!Files.isRegularFile(file)) throw new InvalidInputException("Not a regular file: " + file);
 		byte[] bytes = Files.readAllBytes(file);
 		String mime = MimeUtils.guess(displayName(file), bytes);
 		CVMLong size = CVMLong.create(bytes.length);
@@ -246,7 +278,7 @@ final class FileOperations {
 
 		return switch (effectiveMode) {
 			case "text" -> {
-				if (!looksLikeText(bytes)) throw new IllegalArgumentException("File is not valid UTF-8 text");
+				if (!looksLikeText(bytes)) throw new InvalidInputException("File is not valid UTF-8 text");
 				yield Maps.of("content", new String(bytes, StandardCharsets.UTF_8),
 					"encoding", "utf-8", "size", size, "mime", mime);
 			}
@@ -257,7 +289,7 @@ final class FileOperations {
 					yield Maps.of("value", JSON.parse(new String(bytes, StandardCharsets.UTF_8)),
 						"size", size, "mime", mime);
 				} catch (Exception e) {
-					throw new IllegalArgumentException("File is not valid JSON: " + e.getMessage());
+					throw new InvalidInputException("File is not valid JSON: " + e.getMessage(), e);
 				}
 			}
 			case "auto" -> {
@@ -273,7 +305,7 @@ final class FileOperations {
 					"encoding", "base64", "size", size, "mime", mime);
 			}
 			case "extract" -> extract(bytes, displayName(file), mime, size, engine, input);
-			default -> throw new IllegalArgumentException(
+			default -> throw new InvalidInputException(
 				"Unknown mode '" + effectiveMode + "'. Expected: auto, text, bytes, json, extract");
 		};
 	}
@@ -289,12 +321,12 @@ final class FileOperations {
 			Engine engine, AMap<AString, ACell> input) throws IOException {
 		TextExtractor extractor = (engine != null) ? engine.findAdapter(TextExtractor.class) : null;
 		if (extractor == null) {
-			throw new IllegalArgumentException("mode 'extract' needs the documents module (covia-documents), "
+			throw new NotSupportedException("mode 'extract' needs the documents module (covia-documents), "
 				+ "which is not loaded on this venue — read the file with mode 'bytes', or ask the operator "
 				+ "to load the module");
 		}
 		if (!extractor.supports(mime, name)) {
-			throw new IllegalArgumentException("No text extractor for " + name + " (" + mime
+			throw new NotSupportedException("No text extractor for " + name + " (" + mime
 				+ "); supported: " + extractor.supported());
 		}
 		CVMLong max = (input != null) ? RT.ensureLong(input.get(TextExtractor.K_MAX_CHARS)) : null;
@@ -305,14 +337,18 @@ final class FileOperations {
 		return extraction.toCell(mime, size.longValue());
 	}
 
+	/**
+	 * @param mayCreate whether the write was authorised to create the file; one
+	 *        that was not only changes a file that still exists
+	 */
 	static ACell write(Path file, AMap<AString, ACell> input, Engine engine,
-			RequestContext assetCtx, boolean append) throws IOException {
+			RequestContext assetCtx, boolean append, boolean mayCreate) throws IOException {
 		Path parent = file.getParent();
 		if (parent != null && !Files.isDirectory(parent)) {
 			throw new NoSuchFileException("Parent directory does not exist: " + parent);
 		}
 		boolean existed = exists(file);
-		long count = writeInput(file, input, engine, assetCtx, append);
+		long count = writeInput(file, input, engine, assetCtx, append, mayCreate);
 		return Maps.of(append ? "appended" : "written", CVMLong.create(count),
 			"created", CVMBool.create(!existed));
 	}
@@ -325,7 +361,9 @@ final class FileOperations {
 	 * do on asset metadata.
 	 */
 	static ACell create(Path file, AMap<AString, ACell> input, Engine engine,
-			RequestContext ctx) throws IOException {
+			RequestContext ctx, boolean mayCreate) throws IOException {
+		// Authorised only to change it, so the file existed: create never replaces
+		if (!mayCreate) throw new FileAlreadyExistsException(file.toString());
 		Path parent = file.getParent();
 		if (parent != null && !Files.isDirectory(parent)) {
 			throw new NoSuchFileException("Parent directory does not exist: " + parent);
@@ -334,7 +372,8 @@ final class FileOperations {
 		covia.venue.storage.ContentProvider.Resolved resolved =
 			engine.resolveContentBlock(block, ctx);
 		if (resolved == null && contentBlockHasLocator(block)) {
-			throw new IllegalArgumentException("Content descriptor did not resolve any data");
+			throw new NotFoundException("Content descriptor did not resolve any data",
+				stringAt(block, Fields.REF));
 		}
 
 		java.nio.file.OpenOption[] options = createOptions(file);
@@ -374,43 +413,44 @@ final class FileOperations {
 		ACell pathCell = input.get(Fields.PATH);
 		if (pathCell != null) {
 			AString path = RT.ensureString(pathCell);
-			if (path == null) throw new IllegalArgumentException("path must be a string");
+			if (path == null) throw new InvalidInputException("path must be a string");
 			return path.toString();
 		}
 		AString fileName = RT.ensureString(RT.getIn(input, Fields.CONTENT, Fields.FILE_NAME));
 		if (fileName == null || fileName.isEmpty()) {
-			throw new IllegalArgumentException(
+			throw new InvalidInputException(
 				"path is required unless content.fileName supplies it");
 		}
 		return fileName.toString();
 	}
 
 	private static long writeInput(Path target, AMap<AString, ACell> input,
-			Engine engine, RequestContext assetCtx, boolean append) throws IOException {
+			Engine engine, RequestContext assetCtx, boolean append, boolean create) throws IOException {
 		AString content = RT.ensureString(input.get(FIELD_CONTENT));
 		boolean hasValue = input.containsKey(FIELD_VALUE);
 		AString bytesB64 = RT.ensureString(input.get(FIELD_BYTES));
 		AString contentRef = RT.ensureString(input.get(FIELD_CONTENT_REF));
 		AString legacyAssetRef = RT.ensureString(input.get(FIELD_ASSET));
 		if (contentRef != null && legacyAssetRef != null && !contentRef.equals(legacyAssetRef)) {
-			throw new IllegalArgumentException("contentRef conflicts with legacy 'asset'");
+			throw new InvalidInputException("contentRef conflicts with legacy 'asset'");
 		}
 		if (contentRef == null) contentRef = legacyAssetRef;
 		int supplied = (content != null ? 1 : 0) + (hasValue ? 1 : 0)
 			+ (bytesB64 != null ? 1 : 0) + (contentRef != null ? 1 : 0);
 		if (supplied != 1) {
-			throw new IllegalArgumentException(supplied == 0
+			throw new InvalidInputException(supplied == 0
 				? "Exactly one of 'content' (UTF-8 text), 'value' (JSON), 'bytes' (base64), or 'contentRef' is required"
 				: "Only one of 'content', 'value', 'bytes', or 'contentRef' may be supplied");
 		}
 
 		StandardOpenOption mode = append
 			? StandardOpenOption.APPEND : StandardOpenOption.TRUNCATE_EXISTING;
-		java.nio.file.OpenOption[] options = writeOptions(target, mode);
+		java.nio.file.OpenOption[] options = writeOptions(target, mode, create);
 		if (contentRef != null) {
 			covia.venue.storage.ContentProvider.Resolved resolved =
 				engine.resolveContent(contentRef, assetCtx);
-			if (resolved == null) throw new IllegalArgumentException("No content at ref: " + contentRef);
+			if (resolved == null) throw new NotFoundException("No content at ref: " + contentRef,
+				contentRef.toString());
 			try (InputStream is = resolved.content().getInputStream();
 				 OutputStream os = Files.newOutputStream(target, options)) {
 				return is.transferTo(os);
@@ -425,17 +465,16 @@ final class FileOperations {
 		return data.length;
 	}
 
-	private static java.nio.file.OpenOption[] writeOptions(Path target,
-			StandardOpenOption mode) {
+	/** Options to write a file in {@code mode}, creating it only when {@code create}. */
+	static java.nio.file.OpenOption[] writeOptions(Path target,
+			StandardOpenOption mode, boolean create) {
+		java.util.List<java.nio.file.OpenOption> options = new java.util.ArrayList<>(
+			java.util.List.of(mode, StandardOpenOption.WRITE));
+		if (create) options.add(StandardOpenOption.CREATE);
 		if (target.getFileSystem() == java.nio.file.FileSystems.getDefault()) {
-			return new java.nio.file.OpenOption[] {
-				StandardOpenOption.CREATE, mode, StandardOpenOption.WRITE,
-				LinkOption.NOFOLLOW_LINKS
-			};
+			options.add(LinkOption.NOFOLLOW_LINKS);
 		}
-		return new java.nio.file.OpenOption[] {
-			StandardOpenOption.CREATE, mode, StandardOpenOption.WRITE
-		};
+		return options.toArray(java.nio.file.OpenOption[]::new);
 	}
 
 	static java.nio.file.OpenOption[] createOptions(Path target) {
@@ -450,12 +489,30 @@ final class FileOperations {
 		};
 	}
 
-	static ACell mkdir(Path target, AMap<AString, ACell> input) throws IOException {
+	/**
+	 * Where a write at {@code target} is authorised: the target when it exists,
+	 * otherwise the nearest existing directory above it, because creating an
+	 * entry changes the directory that holds it. {@code base}, the root the
+	 * target was resolved in, is always present.
+	 */
+	static Path writeAuthority(Path base, Path target) {
+		Path at = target;
+		while (!at.equals(base) && !exists(at)) at = at.getParent();
+		return at;
+	}
+
+	/**
+	 * @param mayCreate whether the write was authorised to create; one that
+	 *        was not refuses a target that has gone since it was authorised
+	 */
+	static ACell mkdir(Path target, AMap<AString, ACell> input, boolean mayCreate) throws IOException {
 		boolean existed = Files.exists(target);
 		if (existed) {
 			if (!Files.isDirectory(target)) {
-				throw new IllegalArgumentException("Path exists and is not a directory: " + target);
+				throw new ConflictException("Path exists and is not a directory: " + target);
 			}
+		} else if (!mayCreate) {
+			throw new NoSuchFileException(target.toString());
 		} else if (RT.bool(input.get(FIELD_PARENTS))) {
 			Files.createDirectories(target);
 		} else {
@@ -468,7 +525,7 @@ final class FileOperations {
 			throws IOException {
 		if (!Files.exists(target)) return Maps.of("deleted", CVMBool.FALSE, "existed", CVMBool.FALSE);
 		if (protectedRoot != null && target.equals(protectedRoot)) {
-			throw new IllegalArgumentException("Refusing to delete the root itself");
+			throw new InvalidInputException("Refusing to delete the root itself");
 		}
 		if (Files.isDirectory(target) && RT.bool(input.get(FIELD_RECURSIVE))) {
 			deleteRecursive(target);

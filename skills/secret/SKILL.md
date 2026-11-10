@@ -63,4 +63,5 @@ result-only `/api/v1/run` endpoint. See `venue/docs/UCAN.md` for the restriction
 - In the local dev venue (public access), all MCP clients share the same secret store
 - The `langchain:openai` adapter resolves `OPENAI_API_KEY` automatically from the caller's secret store
 - Another user's secret is named `<did>/s/NAME` and needs a `secret/use` grant from its owner (see the ucan skill); the grant may be bound to a url prefix with `nb.url`
+- An agent with caps uses your secrets only under `secret/use` in those caps, the same grant and caveat; one you control thinks with your model key, and an imported A2A agent you control sends its credential, without one
 - For non-OpenAI providers, set the `url` parameter in the agent's `config` to point to the compatible endpoint

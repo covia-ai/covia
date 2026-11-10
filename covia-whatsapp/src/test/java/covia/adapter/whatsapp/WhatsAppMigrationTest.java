@@ -11,11 +11,14 @@ import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Maps;
+import convex.core.data.Path;
 import convex.core.data.Strings;
 import covia.adapter.messaging.ConversationSessions;
-import covia.lattice.WorkspaceRoot;
-import covia.venue.CoviaApplication;
+import covia.api.Fields;
+import covia.lattice.CoviaPath;
+import covia.lattice.Workspace;
 import covia.venue.Engine;
+import covia.venue.TestEngine;
 import covia.venue.User;
 
 /**
@@ -28,10 +31,21 @@ class WhatsAppMigrationTest {
 	static final AString OWNER = Strings.create("did:key:z6MkWhatsAppMigrationOwner");
 	static final AMap<AString, ACell> SETTINGS = Maps.of("token", "s/WHATSAPP_TOKEN", "operation", "v/test/ops/echo");
 
-	/** WhatsApp's state at every version, oldest first: the one layout 0.9.11 wrote. */
+	/** A bot one of the owner's agents created, and that agent. */
+	static final AMap<AString, ACell> HELPER = SETTINGS.assoc(Strings.create("operation"), Strings.create("v/test/ops/random"));
+	static final AString AGENT = Strings.create(OWNER + ":g:helper");
+
+	/** WhatsApp's state at every version, oldest first. Version 0 is the layout 0.9.11
+	 *  wrote, with a bot an agent created naming it {@code principal} as later releases
+	 *  wrote it; version 1 names it {@code caller}. */
 	static final List<ACell> STATES = List.of(Maps.of(
 		"users", Maps.of(OWNER, Maps.of(
-			"bots", Maps.of("support", SETTINGS),
+			"bots", Maps.of("support", SETTINGS, "helper", HELPER.assoc(Strings.create("principal"), AGENT)),
+			"sessions", Maps.of("support", Maps.of("identity", Maps.of("version", Maps.of("447700900001", "session-a")))))),
+		"config", Maps.of("operator", Maps.of("sessions", Maps.of("identity", Maps.of("version", Maps.of("447700900002", "session-b")))))),
+		Maps.of(
+		"users", Maps.of(OWNER, Maps.of(
+			"bots", Maps.of("support", SETTINGS, "helper", HELPER.assoc(Fields.CALLER, AGENT)),
 			"sessions", Maps.of("support", Maps.of("identity", Maps.of("version", Maps.of("447700900001", "session-a")))))),
 		"config", Maps.of("operator", Maps.of("sessions", Maps.of("identity", Maps.of("version", Maps.of("447700900002", "session-b")))))));
 
@@ -41,18 +55,20 @@ class WhatsAppMigrationTest {
 
 	@Test void releaseStateReachesTheAdapter() throws Exception {
 		AKeyPair key = AKeyPair.generate();
-		Engine engine = new Engine(Maps.empty(), CoviaApplication.create(key), key).prepare();
+		Engine engine = TestEngine.application().mount(key, Maps.empty()).prepare();
 		try {
 			// 0.9.11 kept adapter state in the venue user's workspace.
-			User host = engine.getVenueState().users().get(engine.getDIDString());
-			ACell[] legacy = WorkspaceRoot.parseStringPath("w/adapters/whatsapp");
-			host.workspaceRoot().write(legacy, STATES.get(0));
+			User host = engine.getVenueState().users().user(engine.getDIDString());
+			Workspace workspace = host.workspace();
+			Path legacy =CoviaPath.parse("adapters/whatsapp");
+			workspace.createPath(CoviaPath.parent(legacy));
+			workspace.write(legacy, STATES.get(0));
 			engine.getVenueState().users().ensure(OWNER);
 
 			WhatsAppAdapter adapter = new WhatsAppAdapter();
 			engine.registerAdapter(adapter);
 			assertEquals(STATES.get(STATES.size() - 1), adapter.state().get(), "moved exactly, and current");
-			assertNull(host.workspaceRoot().read(legacy));
+			assertNull(workspace.read(legacy));
 
 			// Read back through the adapter's own paths.
 			assertEquals(SETTINGS, adapter.state().read(adapter.userStatePath(OWNER, "bots/support")));

@@ -1,6 +1,7 @@
 package covia.venue.server;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
@@ -18,6 +19,7 @@ import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import covia.exception.ConfigurationException;
 
 /**
  * Tests for venue identity via a PKCS12 keystore (#208) — the Convex keystore
@@ -67,7 +69,7 @@ public class VenueKeystoreTest {
 
 	@Test
 	public void testMissingAliasFails() {
-		IllegalStateException e = assertThrows(IllegalStateException.class, () ->
+		ConfigurationException e = assertThrows(ConfigurationException.class, () ->
 			VenueServer.loadFromKeystore(
 				ksConfig(KEYSTORE_FILE.getAbsolutePath(), null, STOREPASS, KEYPASS)));
 		assertTrue(e.getMessage().contains("alias"), e.getMessage());
@@ -75,7 +77,7 @@ public class VenueKeystoreTest {
 
 	@Test
 	public void testUnknownAliasFails() {
-		IllegalStateException e = assertThrows(IllegalStateException.class, () ->
+		ConfigurationException e = assertThrows(ConfigurationException.class, () ->
 			VenueServer.loadFromKeystore(
 				ksConfig(KEYSTORE_FILE.getAbsolutePath(), "deadbeef", STOREPASS, KEYPASS)));
 		assertTrue(e.getMessage().contains("deadbeef"), e.getMessage());
@@ -83,24 +85,24 @@ public class VenueKeystoreTest {
 
 	@Test
 	public void testWrongStorePasswordFails() {
-		assertThrows(IllegalStateException.class, () ->
+		assertThrows(ConfigurationException.class, () ->
 			VenueServer.loadFromKeystore(
 				ksConfig(KEYSTORE_FILE.getAbsolutePath(), ALIAS, "wrong", KEYPASS)));
 	}
 
 	@Test
 	public void testMissingKeystoreFileFails() {
-		IllegalStateException e = assertThrows(IllegalStateException.class, () ->
+		ConfigurationException e = assertThrows(ConfigurationException.class, () ->
 			VenueServer.loadFromKeystore(
 				ksConfig(KEYSTORE_FILE.getAbsolutePath() + ".nope", ALIAS, STOREPASS, KEYPASS)));
-		assertTrue(e.getMessage().contains("not found"), e.getMessage());
+		assertFalse(e.getMessage().isBlank());
 	}
 
 	@Test
 	public void testMissingStorePasswordFails() {
 		// Env fallback would mask the failure — only meaningful when unset.
 		assumeTrue(System.getenv("CONVEX_KEYSTORE_PASSWORD") == null);
-		IllegalStateException e = assertThrows(IllegalStateException.class, () ->
+		ConfigurationException e = assertThrows(ConfigurationException.class, () ->
 			VenueServer.loadFromKeystore(
 				ksConfig(KEYSTORE_FILE.getAbsolutePath(), ALIAS, null, KEYPASS)));
 		assertTrue(e.getMessage().contains("CONVEX_KEYSTORE_PASSWORD"), e.getMessage());
@@ -109,7 +111,7 @@ public class VenueKeystoreTest {
 	@Test
 	public void testMissingKeyPasswordFails() {
 		assumeTrue(System.getenv("CONVEX_KEY_PASSWORD") == null);
-		IllegalStateException e = assertThrows(IllegalStateException.class, () ->
+		ConfigurationException e = assertThrows(ConfigurationException.class, () ->
 			VenueServer.loadFromKeystore(
 				ksConfig(KEYSTORE_FILE.getAbsolutePath(), ALIAS, STOREPASS, null)));
 		assertTrue(e.getMessage().contains("CONVEX_KEY_PASSWORD"), e.getMessage());

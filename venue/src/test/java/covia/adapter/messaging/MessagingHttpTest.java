@@ -20,6 +20,8 @@ import com.sun.net.httpserver.HttpServer;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.util.JSON;
+import covia.exception.ResponseException;
+import covia.exception.UnavailableException;
 
 class MessagingHttpTest {
 	private static final String TOKEN = "fixture-token";
@@ -41,7 +43,7 @@ class MessagingHttpTest {
 	@Test void rejectsMalformedAndNonObjectReceiptsWithoutLeakingTheirBody() throws Exception {
 		for (String response : new String[] {"{private-provider-detail", "[]", "null"}) {
 			try (Server server = new Server(exchange -> reply(exchange, 200, response))) {
-				var error = assertThrows(IllegalStateException.class, () -> MessagingHttp.post(server.url(), TOKEN, Maps.empty()));
+				var error = assertThrows(ResponseException.class, () -> MessagingHttp.post(server.url(), TOKEN, Maps.empty()));
 				assertEquals(MessagingHttp.RESPONSE_ERROR, error.getMessage());
 				assertNull(error.getCause());
 				assertEquals(1, server.requests.get());
@@ -57,7 +59,7 @@ class MessagingHttpTest {
 					exchange.getResponseHeaders().set("Retry-After", "0");
 					reply(exchange, status, "{\"private\":\"provider-detail\"}");
 				})) {
-					assertEquals(MessagingHttp.HTTP_ERROR.formatted(status), assertThrows(IllegalStateException.class,
+					assertEquals(MessagingHttp.HTTP_ERROR.formatted(status), assertThrows(ResponseException.class,
 						() -> MessagingHttp.post(server.url(), TOKEN, Maps.empty())).getMessage());
 					assertEquals(1, server.requests.get());
 				}
@@ -81,7 +83,7 @@ class MessagingHttpTest {
 			exchange.sendResponseHeaders(200, 0);
 			exchange.getResponseBody().write((atLimit + " ").getBytes(StandardCharsets.UTF_8));
 		})) {
-			assertEquals(MessagingHttp.IO_ERROR, assertThrows(IllegalStateException.class,
+			assertEquals(MessagingHttp.IO_ERROR, assertThrows(ResponseException.class,
 				() -> MessagingHttp.post(server.url(), TOKEN, Maps.empty())).getMessage());
 			assertEquals(1, server.requests.get());
 		}
@@ -93,7 +95,7 @@ class MessagingHttpTest {
 		assertEquals("ws://127.0.0.1:9/link", MessagingHttp.socket("ws://127.0.0.1:9/link").toString());
 		for (String url : new String[] {"ws://example.com/link", "https://example.com/link", "wss://user@example.com/link",
 				"wss://example.com/link#fragment", "wss:///link", "not a url"}) {
-			assertEquals(MessagingHttp.INVALID_SOCKET_URL, assertThrows(IllegalArgumentException.class, () -> MessagingHttp.socket(url)).getMessage(), url);
+			assertEquals(MessagingHttp.INVALID_SOCKET_URL, assertThrows(ResponseException.class, () -> MessagingHttp.socket(url)).getMessage(), url);
 		}
 	}
 
@@ -113,7 +115,7 @@ class MessagingHttpTest {
 		})) {
 			try {
 				assertTimeoutPreemptively(Duration.ofSeconds(5), () -> {
-					assertEquals(MessagingHttp.IO_ERROR, assertThrows(IllegalStateException.class,
+					assertEquals(MessagingHttp.IO_ERROR, assertThrows(UnavailableException.class,
 						() -> MessagingHttp.post(server.url(), TOKEN, Maps.empty(), TIMEOUT)).getMessage());
 				});
 				assertEquals(1, server.requests.get());
@@ -135,7 +137,7 @@ class MessagingHttpTest {
 			MessagingMedia.Fetched fetched = MessagingHttp.fetch(MessagingHttp.download(server.url() + "?hash=signed"), TOKEN, 1024);
 			assertArrayEquals(audio, fetched.bytes());
 			assertEquals("audio/ogg", fetched.contentType());
-			assertEquals(MessagingMedia.TOO_LARGE, assertThrows(IllegalStateException.class,
+			assertEquals(MessagingMedia.TOO_LARGE, assertThrows(ResponseException.class,
 				() -> MessagingHttp.fetch(MessagingHttp.download(server.url() + "?hash=signed"), TOKEN, 4)).getMessage(),
 				"a download past its bound is refused as too large");
 		}
@@ -145,7 +147,7 @@ class MessagingHttpTest {
 		assertEquals("ext=1&hash=x", MessagingHttp.download("https://lookaside.example/media?ext=1&hash=x").getQuery());
 		for (String bad : new String[] {"http://lookaside.example/media", "https://user@lookaside.example/media",
 				"https://lookaside.example/media#part", "ftp://lookaside.example/media", "not a url"}) {
-			assertEquals(MessagingHttp.INVALID_DOWNLOAD_URL, assertThrows(IllegalArgumentException.class,
+			assertEquals(MessagingHttp.INVALID_DOWNLOAD_URL, assertThrows(ResponseException.class,
 				() -> MessagingHttp.download(bad)).getMessage(), bad);
 		}
 	}

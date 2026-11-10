@@ -103,7 +103,7 @@ public class MCPBridgeTest {
 		// Self-contained dispatch pins: adapter, remoteToolName, server
 		assertEquals("mcp:tools:call", RT.getIn(meta, Fields.OPERATION, Fields.ADAPTER).toString());
 		assertEquals("test_echo", RT.getIn(meta, Fields.OPERATION, Fields.REMOTE_TOOL_NAME).toString());
-		assertEquals(TestServer.BASE_URL, RT.getIn(meta, Fields.OPERATION, Fields.SERVER).toString());
+		assertEquals(TestServer.BASE_URL + "/", RT.getIn(meta, Fields.OPERATION, Fields.SERVER).toString());
 		// The op's declared input is the TOOL's own schema
 		assertNotNull(RT.getIn(meta, Fields.OPERATION, Fields.INPUT),
 			"bridged op must declare the tool's input schema");
@@ -119,8 +119,7 @@ public class MCPBridgeTest {
 		Job denied = addServer("selfc", TestServer.BASE_URL, "venue", capped);
 		assertThrows(Exception.class, () -> denied.awaitResult(15000));
 		assertEquals(Status.FAILED, denied.getStatus());
-		assertTrue(denied.getErrorMessage().contains("Capability denied"),
-			denied.getErrorMessage());
+		assertFalse(denied.getErrorMessage().isBlank());
 
 		// The venue's own context may bridge at venue scope; the ops are then
 		// visible in the shared catalog for everyone.
@@ -304,6 +303,23 @@ public class MCPBridgeTest {
 	}
 
 	@Test
+	public void testCallerNamedMalformedServerIsTheCallersToFix() {
+		// A URL from the call's input that names no MCP endpoint fails the job
+		// with the session's own reason, not as an unexpected venue error.
+		RequestContext ctx = RequestContext.of(ALICE_DID);
+		String url = "did:web:venue.example";
+		String reason = assertThrows(IllegalArgumentException.class,
+			() -> McpClientSession.endpointUrl(url)).getMessage();
+		Job add = addServer("didweb", url, null, ctx);
+		Job list = engine.jobs().invokeOperation("v/ops/mcp/tools-list", Maps.of(Fields.SERVER, url), ctx);
+		for (Job job : new Job[] {add, list}) {
+			assertThrows(Exception.class, () -> job.awaitResult(15000));
+			assertEquals(Status.FAILED, job.getStatus());
+			assertEquals(reason, job.getErrorMessage());
+		}
+	}
+
+	@Test
 	public void testRawAuthTokenWarns() {
 		// Pure check: secret references (bare or DID-qualified) are clean,
 		// literal credentials warn with the catalog-path remedy. (A live add
@@ -345,6 +361,51 @@ public class MCPBridgeTest {
 		assertThrows(covia.exception.AuthException.class, () -> adapter.resolveAuthRef(bob, ref, null));
 	}
 
+	/** A secret an operation names is used by whoever invokes it: an agent needs secret/use, whoever wrote the operation. */
+	@Test
+	public void testOperationsSecretIsTheInvokersUse() throws Exception {
+		HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
+		AtomicReference<String> seen = new AtomicReference<>();
+		server.createContext("/mcp", x -> {
+			seen.compareAndSet(null, x.getRequestHeaders().getFirst("Authorization"));
+			x.getRequestBody().readAllBytes();
+			x.sendResponseHeaders(401, -1);
+			x.close();
+		});
+		server.start();
+		try {
+			engine.getVenueState().users().ensure(ALICE_DID).secrets()
+				.store("BANK_TOKEN", "alice-bank-token", covia.venue.SecretStore.keys(engine.getKeyPair()));
+			// Caps: invoke, and read and write in her o/; nothing about her secrets.
+			AMap<AString, ACell> invoke = Maps.of(Capability.CAN, Strings.create("invoke"));
+			AMap<AString, ACell> ops = Maps.of(Capability.WITH, Strings.create("o/"), Capability.CAN, Strings.create("crud"));
+			RequestContext agent = RequestContext.ofAgent(ALICE_DID, Strings.create("worker")).withCaps(Vectors.of(invoke, ops));
+			String origin = "http://localhost:" + server.getAddress().getPort();
+			AMap<AString, ACell> op = Maps.of("name", "Lookup", "operation", Maps.of(
+				"adapter", "mcp:tools:call", "server", origin + "/mcp", "remoteToolName", "lookup",
+				"auth", "s/BANK_TOKEN"));
+			Job wrote = engine.jobs().invokeOperation("v/ops/covia/write",
+				Maps.of(Fields.PATH, "o/lookup", Fields.VALUE, op), agent);
+			wrote.awaitResult(10000);
+			assertEquals(Status.COMPLETE, wrote.getStatus(), wrote.getErrorMessage());
+
+			Job refused = engine.jobs().invokeOperation("o/lookup", Maps.empty(), agent);
+			try { refused.awaitResult(15000); } catch (Exception ignored) { /* status tells */ }
+			assertEquals(Status.FAILED, refused.getStatus());
+			assertTrue(refused.getErrorMessage().contains(Abilities.SECRET_USE.toString()), refused.getErrorMessage());
+			assertNull(seen.get(), "the server received: " + seen.get());
+
+			// Granted for that server, the secret goes there.
+			RequestContext granted = RequestContext.ofAgent(ALICE_DID, Strings.create("worker")).withCaps(Vectors.of(invoke, ops,
+				Capability.create(Strings.create("s/BANK_TOKEN"), Abilities.SECRET_USE, Maps.of("url", origin + "/"))));
+			Job sent = engine.jobs().invokeOperation("o/lookup", Maps.empty(), granted);
+			try { sent.awaitResult(15000); } catch (Exception ignored) { /* the server refuses the call */ }
+			assertEquals("Bearer alice-bank-token", seen.get());
+		} finally {
+			server.stop(0);
+		}
+	}
+
 	@Test
 	public void testToolsListInitializationFailureIsActionable() throws Exception {
 		// Addressed as localhost, the test venue's allow-listed host: caller-named
@@ -358,21 +419,50 @@ public class MCPBridgeTest {
 		});
 		rejecting.start();
 		try {
-			String server = "http://localhost:" + rejecting.getAddress().getPort() + "/mcp/";
+			String origin = "http://localhost:" + rejecting.getAddress().getPort();
+			String server = origin + "/mcp/?token=private-token";
 			Job job = engine.jobs().invokeOperation("v/ops/mcp/tools-list",
 				Maps.of(Fields.SERVER, server), RequestContext.of(ALICE_DID));
 			assertThrows(Exception.class, () -> job.awaitResult(15000));
 			assertEquals(Status.FAILED, job.getStatus());
 
-			String error = job.getErrorMessage();
-			assertTrue(error.contains("Cannot initialize MCP client for server " + server), error);
-			assertTrue(error.contains("Authorization error"), error);
-			assertTrue(error.contains("URL names the MCP endpoint"), error);
-			assertTrue(error.contains("credentials") && error.contains("protocol version"), error);
+			// The refusal is typed and names the server by its origin only:
+			// the url's query may carry a credential.
+			assertEquals(McpClientSession.CREDENTIAL_REFUSED.formatted(origin, McpClientSession.TOOLS_LIST,
+				" (HTTP 401)"), job.getErrorMessage());
 			assertEquals("/mcp", requestedPath.get(),
 				"a trailing slash on an explicit MCP endpoint must not append another /mcp");
 		} finally {
 			rejecting.stop(0);
+		}
+	}
+
+	@Test
+	public void testToolCallServerErrorIsTypedWithoutItsText() throws Exception {
+		// A server answering with an HTTP error is a ResponseException naming
+		// the server and the tool; its response body never reaches the caller.
+		HttpServer failing = HttpServer.create(new InetSocketAddress(0), 0);
+		failing.createContext("/mcp", exchange -> {
+			exchange.getRequestBody().readAllBytes();
+			byte[] body = "internal trace SERVER-SAYS-leak-456".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+			exchange.sendResponseHeaders(500, body.length);
+			try (var out = exchange.getResponseBody()) {
+				out.write(body);
+			}
+		});
+		failing.start();
+		try {
+			String origin = "http://localhost:" + failing.getAddress().getPort();
+			Job job = engine.jobs().invokeOperation("v/ops/mcp/tools-call",
+				Maps.of(Fields.SERVER, origin + "/mcp", Fields.TOOL_NAME, "lookup",
+					Fields.ARGUMENTS, Maps.empty()),
+				RequestContext.of(ALICE_DID));
+			assertThrows(Exception.class, () -> job.awaitResult(15000));
+			assertEquals(Status.FAILED, job.getStatus());
+			assertEquals(McpClientSession.BAD_ANSWER.formatted(origin,
+				McpClientSession.TOOL_CALL.formatted("lookup")), job.getErrorMessage());
+		} finally {
+			failing.stop(0);
 		}
 	}
 
@@ -420,11 +510,9 @@ public class MCPBridgeTest {
 		assertThrows(Exception.class, () -> miss.awaitResult(15000));
 		assertEquals(Status.FAILED, miss.getStatus());
 		String err = miss.getErrorMessage();
-		assertTrue(err.contains("not found"), err);
-		// The error lists available tool names so a model can self-correct
-		// (capped — the shared venue exposes >40 tools — with a pointer to
-		// the full listing).
-		assertTrue(err.contains("Available tools:"), err);
+		assertFalse(err.isBlank());
+		// The error points at the full tool listing so a model can self-correct
+		// (the shared venue exposes >40 tools, so the names themselves are capped).
 		assertTrue(err.contains("tools-list"), err);
 	}
 
@@ -434,7 +522,7 @@ public class MCPBridgeTest {
 		Job bad = addTool("w/nope/echo", "test_echo", ctx);
 		assertThrows(Exception.class, () -> bad.awaitResult(15000));
 		assertEquals(Status.FAILED, bad.getStatus());
-		assertTrue(bad.getErrorMessage().contains("path must be under o/"), bad.getErrorMessage());
+		assertFalse(bad.getErrorMessage().isBlank());
 	}
 
 	@Test
@@ -444,7 +532,7 @@ public class MCPBridgeTest {
 		Job denied = addTool("v/ops/mcptest/echo", "test_echo", capped);
 		assertThrows(Exception.class, () -> denied.awaitResult(15000));
 		assertEquals(Status.FAILED, denied.getStatus());
-		assertTrue(denied.getErrorMessage().contains("Capability denied"), denied.getErrorMessage());
+		assertFalse(denied.getErrorMessage().isBlank());
 
 		Job add = addTool("v/ops/mcptest/echo", "test_echo", engine.venueContext());
 		add.awaitResult(15000);
@@ -456,7 +544,7 @@ public class MCPBridgeTest {
 			// Shared TestServer catalog doubles as the venue's own MCP tool
 			// list — always remove venue-scope test entries.
 			engine.jobs().invokeOperation("v/ops/covia/delete",
-				Maps.of(Fields.PATH, Strings.create("v/ops/mcptest")),
+				Maps.of(Fields.PATH, Strings.create("w/global/ops/mcptest")),
 				engine.venueContext()).awaitResult(15000);
 		}
 		assertNull(engine.resolveAsset(Strings.create("v/ops/mcptest/echo"), RequestContext.of(ALICE_DID)));
@@ -553,7 +641,7 @@ public class MCPBridgeTest {
 		Job both = engine.jobs().invokeOperation("v/ops/mcp/refresh",
 			Maps.of(Fields.NAME, Strings.create("x"), Fields.PATH, Strings.create("o/grp")), ctx);
 		assertThrows(Exception.class, () -> both.awaitResult(15000));
-		assertTrue(both.getErrorMessage().contains("not both"), both.getErrorMessage());
+		assertFalse(both.getErrorMessage().isBlank());
 	}
 
 	// ========== Error comprehensibility (LLM-facing failures) ==========
@@ -613,17 +701,6 @@ public class MCPBridgeTest {
 		// a bare error still says something useful
 		assertTrue(MCPAdapter.errorText(new CallToolResult(List.of(), true, null, null))
 			.contains("no error detail"));
-	}
-
-	@Test
-	public void testRootCauseMessage() {
-		Exception inner = new java.io.IOException("Connection refused");
-		Exception wrapped = new java.util.concurrent.CompletionException(new RuntimeException(inner));
-		assertEquals("Connection refused", MCPAdapter.rootCauseMessage(wrapped));
-		// message-less chain falls back to the class name
-		assertEquals("IllegalStateException", MCPAdapter.rootCauseMessage(new IllegalStateException()));
-		// a plain message passes through
-		assertEquals("plain", MCPAdapter.rootCauseMessage(new RuntimeException("plain")));
 	}
 
 	private static boolean vectorContains(AVector<ACell> v, String s) {

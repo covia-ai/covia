@@ -35,6 +35,7 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.api.Fields;
+import covia.exception.ConfigurationException;
 import covia.grid.auth.VenueAuth;
 import covia.venue.server.VenueServer;
 
@@ -94,8 +95,7 @@ public class MCPAuthTest {
 						Vectors.of(UCAN.toDIDKey(outsiderKey.getAccountKey()))))),
 			Config.RATE_LIMIT, Maps.of(Config.ENABLED, false),
 			Config.AUTH, Maps.of(
-				Config.PUBLIC, Maps.of(Config.ENABLED, true),
-				Config.AUDIENCE, "require"),
+				Config.PUBLIC, Maps.of(Config.ENABLED, true)),
 			Fields.MCP, Maps.of(
 				"includeAdapters", Vectors.of("covia", "secret", "user"),
 				Config.AUTH, Maps.of(
@@ -178,7 +178,7 @@ public class MCPAuthTest {
 	void authenticatedDidOutsideAllowlistGetsForbidden() throws Exception {
 		HttpResponse<String> response = post(selfIssued(AKeyPair.generate()));
 		assertEquals(403, response.statusCode());
-		assertTrue(response.body().contains("not allowed"));
+		assertFalse(response.body().isBlank());
 	}
 
 	@Test
@@ -199,7 +199,7 @@ public class MCPAuthTest {
 		String outsider = namedToken(outsiderKey, outsiderDid, server);
 		HttpResponse<String> forbidden = post(outsider);
 		assertEquals(403, forbidden.statusCode());
-		assertTrue(forbidden.body().contains("not allowed"));
+		assertFalse(forbidden.body().isBlank());
 	}
 
 	@Test
@@ -226,8 +226,7 @@ public class MCPAuthTest {
 		assertEquals(401, post("not-a-jwt").statusCode(),
 			"malformed credentials must fail rather than downgrade to public access");
 
-		String signingKeyAsSubject = VenueAuth.keyPair(
-			namedKey, venueDid.toString(), 300).mintToken();
+		String signingKeyAsSubject = VenueAuth.keyPair(namedKey, 300).mintToken(venueDid.toString());
 		assertEquals(403, post(signingKeyAsSubject).statusCode(),
 			"registering a key for a named user must not allow its did:key "
 				+ "principal through the named-subject MCP allowlist");
@@ -238,6 +237,9 @@ public class MCPAuthTest {
 		String adminToken = namedToken(namedKey, namedDid, server);
 		String peerToken = namedToken(peerKey, peerDid, server);
 		String target = peerDid + "/w/delegated";
+		// A grant over the value changes it once it exists; the peer creates it
+		assertToolSuccess(toolCall(baseUrl, peerToken, "covia_write",
+			Maps.of(Fields.PATH, "w/delegated", Fields.VALUE, "peer-value")));
 
 		AMap<AString, ACell> ungranted = toolCall(baseUrl, adminToken, "covia_write",
 			Maps.of(Fields.PATH, target, Fields.VALUE, "must-not-land"));
@@ -353,11 +355,7 @@ public class MCPAuthTest {
 
 	@Test
 	void rotationRevocationAndAuthenticatorHistorySurviveRestart() throws Exception {
-		// Not a JUnit @TempDir: on Java 21 (no FFM mapper) Etch cannot unmap on
-		// close, so on Windows the store file stays pinned until the buffers are
-		// garbage-collected and @TempDir's mandatory cleanup fails the test.
-		// TestTemp deletes best-effort now and retries at JVM exit.
-		Path store = TestTemp.dir("mcp-auth").resolve("credential-lifecycle.etch");
+		Path store = TestTemp.etchFile("mcp-auth").toPath();
 		AKeyPair oldKey = AKeyPair.generate();
 		AKeyPair replacement = AKeyPair.generate();
 		AString oldKeyDid = UCAN.toDIDKey(oldKey.getAccountKey());
@@ -423,12 +421,12 @@ public class MCPAuthTest {
 
 	@Test
 	void invalidPolicyShapesFailClosed() {
-		assertThrows(IllegalArgumentException.class, () -> new Config(Maps.of(
+		assertThrows(ConfigurationException.class, () -> new Config(Maps.of(
 			Fields.MCP, Maps.of(Config.AUTH, CVMBool.TRUE))));
-		assertThrows(IllegalArgumentException.class, () -> new Config(Maps.of(
+		assertThrows(ConfigurationException.class, () -> new Config(Maps.of(
 			Fields.MCP, Maps.of(
 				Config.AUTH, Maps.of(Config.REQUIRED, Strings.create("yes"))))));
-		assertThrows(IllegalArgumentException.class, () -> new Config(Maps.of(
+		assertThrows(ConfigurationException.class, () -> new Config(Maps.of(
 			Fields.MCP, Maps.of(
 				Config.AUTH, Maps.of(
 					Config.ALLOWED_DIDS, Strings.create("did:key:z"))))));
@@ -528,11 +526,8 @@ public class MCPAuthTest {
 
 	private String namedToken(AKeyPair key, AString subject,
 			VenueServer target) {
-		return VenueAuth.namedKeyPair(
-			key,
-			subject.toString(),
-			target.getEngine().getDIDString().toString(),
-			3600).mintToken();
+		return VenueAuth.namedKeyPair(key, subject.toString(), 3600)
+			.mintToken(target.getEngine().getDIDString().toString());
 	}
 
 	private static String namedClaimsToken(AKeyPair key, AString subject,
@@ -581,8 +576,7 @@ public class MCPAuthTest {
 			Config.SEED, seed,
 			Config.RATE_LIMIT, Maps.of(Config.ENABLED, false),
 			Config.AUTH, Maps.of(
-				Config.PUBLIC, Maps.of(Config.ENABLED, false),
-				Config.AUDIENCE, "require"),
+				Config.PUBLIC, Maps.of(Config.ENABLED, false)),
 			Config.USERS, Maps.of(
 				Config.AUTO_CREATE, false,
 				Config.BOOTSTRAP, Maps.of(

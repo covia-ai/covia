@@ -28,7 +28,7 @@ class WhatsAppModuleIT {
 		assertFalse(has(module,"convex/core/"));assertFalse(has(module,"covia/venue/"));assertFalse(has(module,"covia/grid/"));assertFalse(has(module,"org/slf4j/"));
 		assertEquals("covia.whatsapp",name(module));Set<String> shared=packages(module);shared.retainAll(packages(venue));assertTrue(shared.isEmpty(),"covia.jar already ships these packages: "+shared);
 		Path log=temp.resolve("whatsapp-module.log");String executable=System.getProperty("os.name","").startsWith("Windows")?"java.exe":"java";
-		List<String> command=List.of(Path.of(System.getProperty("java.home"),"bin",executable).toString(),"-cp",venue+java.io.File.pathSeparator+System.getProperty("covia.test.classes"),"covia.adapter.whatsapp.WhatsAppModuleSmokeMain",module.toString());
+		List<String> command=List.of(Path.of(System.getProperty("java.home"),"bin",executable).toString(),"-Dstdout.encoding=UTF-8","-Dstderr.encoding=UTF-8","-cp",venue+java.io.File.pathSeparator+System.getProperty("covia.test.classes"),"covia.adapter.whatsapp.WhatsAppModuleSmokeMain",module.toString());
 		Process process = new ProcessBuilder(command)
 			.redirectErrorStream(true).redirectOutput(log.toFile()).start();
 		try {

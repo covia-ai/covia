@@ -24,6 +24,7 @@ import covia.adapter.VenueAdapter;
 import covia.api.Fields;
 import covia.exception.JobFailedException;
 import covia.grid.Job;
+import covia.grid.Status;
 import covia.venue.server.VenueServer;
 
 /**
@@ -71,6 +72,8 @@ public class VenueGcOperationTest {
 	}
 
 	private static void writeFile(VenueServer venue, String text) {
+		venue.getEngine().jobs().invokeOperation("v/ops/dlfs/create-drive", Maps.of("name", "checkpoint"),
+			RequestContext.of(USER)).awaitResult(5000);
 		venue.getEngine().jobs().invokeOperation("v/ops/dlfs/write",
 			Maps.of("drive", "checkpoint", "path", "proof.txt", "content", text),
 			RequestContext.of(USER)).awaitResult(5000);
@@ -183,6 +186,9 @@ public class VenueGcOperationTest {
 			else Files.writeString(backup.toPath(), "do not replace");
 			store.resume.countDown();
 			assertThrows(JobFailedException.class, () -> cycle.awaitResult(60_000));
+			assertEquals(cancel ? Status.CANCELLED : Status.FAILED, cycle.getStatus());
+			if (!cancel) assertTrue(RT.getIn(cycle.getData(), Fields.ERROR).toString()
+				.startsWith(StoreControl.BACKUP_EXISTS.formatted("")), "the competing file is a conflict");
 			if (cancel) assertFalse(backup.exists(), "an aborted cycle must not publish a checkpoint");
 			else assertEquals("do not replace", Files.readString(backup.toPath()));
 			assertFalse(store.isGCInProgress());
@@ -218,7 +224,7 @@ public class VenueGcOperationTest {
 	@Test
 	void onlineRetentionInheritsConfigAndCanBeOverridden() throws Exception {
 		for (Boolean override : new Boolean[] {null, Boolean.FALSE, Boolean.TRUE}) {
-			File file = new File(TestTemp.dir("gc-retention-policy").toFile(), "venue.etch");
+			File file = TestTemp.etchFile("gc-retention-policy");
 			AMap<AString, ACell> cfg = config(file.getAbsolutePath()).assoc(Config.ETCH,
 				Maps.of("gc", Maps.of("retainSuperseded", override != Boolean.TRUE)));
 			VenueServer venue = VenueServer.launch(cfg);
@@ -282,7 +288,7 @@ public class VenueGcOperationTest {
 
 	@Test
 	public void collectsWhileServingThenAdoptsOnRelaunch() throws Exception {
-		File file = new File(TestTemp.dir("venue-gc-online").toFile(), "venue.etch");
+		File file = TestTemp.etchFile("venue-gc-online");
 		String storePath = file.getAbsolutePath().replace('\\', '/');
 		long garbage = EtchGcOnStartTest.addGarbage(file);
 
@@ -303,13 +309,20 @@ public class VenueGcOperationTest {
 			assertEquals(CVMBool.FALSE, RT.getIn(gc(engine, operator, Maps.of("cancel", CVMBool.TRUE)), "inProgress"));
 			String noRestart = gcFails(engine, operator, Maps.of("restart", CVMBool.TRUE));
 			assertTrue(noRestart.contains("restart"), noRestart);
+			// A backup path already taken is refused before any cycle, and never replaced.
+			File taken = new File(file.getParentFile(), "taken-checkpoint.etch");
+			Files.writeString(taken.toPath(), "taken");
+			assertEquals(StoreControl.BACKUP_EXISTS.formatted(new File(taken.getAbsolutePath())),
+				gcFails(engine, operator, Maps.of("backupFile", taken.getAbsolutePath())));
+			assertEquals("taken", Files.readString(taken.toPath()));
+			assertEquals(CVMBool.FALSE, RT.getIn(gc(engine, operator, STATUS), "inProgress"));
 			assertEquals(CVMBool.FALSE, RT.getIn(gc(engine, operator, STATUS), "completed"));
 
 			// The collection itself. Persist the live root first: the venue writes
-			// lazily on its 100 ms sweep, so without this the sizes below would
+			// lazily on its host's sync worker, so without this the sizes below would
 			// compare a file that does not yet hold the ~1.7 MB operation catalog
 			// against one that does (a fast sequential run collected before the
-			// first sweep and the relaunched store came out bigger, not smaller).
+			// worker's first run and the relaunched store came out bigger, not smaller).
 			engine.flush();
 			ACell result = gc(engine, operator, Maps.empty());
 			before = asLong(result, "bytesBefore");
@@ -365,13 +378,15 @@ public class VenueGcOperationTest {
 		// No venue needed: authority is decided before the store seam is touched.
 		Engine engine = TestEngine.ENGINE;
 		AString venue = engine.getDIDString();
-		// An ordinary user, a user's agent, the venue's own agent and the public
-		// principal are all refused: only the venue principal itself (or a
-		// venue-issued venue/gc delegation) may collect.
+		// An ordinary user, a user's agent, a venue agent whose caps grant no
+		// venue authority and the public principal are all refused: only the
+		// venue, an agent of its with venue/gc, or a venue-issued venue/gc
+		// delegation may collect.
 		for (RequestContext caller : new RequestContext[] {
 				RequestContext.of(USER),
 				RequestContext.ofAgent(USER, Strings.create("helper")),
-				RequestContext.ofAgent(venue, Strings.create("odin")),
+				RequestContext.ofAgent(venue, Strings.create("odin")).withCaps(convex.core.data.Vectors.of(
+					Maps.of(convex.auth.ucan.Capability.CAN, Strings.create("invoke")))),
 				RequestContext.of(Strings.create(venue + ":public"))}) {
 			String denied = gcFails(engine, caller, STATUS);
 			assertTrue(denied.contains("venue/gc") || denied.contains("denied"), denied);

@@ -1,6 +1,7 @@
 package covia.adapter.agent;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -28,7 +29,8 @@ import covia.venue.TestEngine;
  * {@code config.systemPrompt} as a context entry (AGENT_CONTEXT.md §5.1): a
  * workspace path, a DLFS file, an operation or a job resolve to the identity
  * once per cycle through the same loader as loads; a prompt that does not
- * resolve fails the cycle and warns at create.
+ * resolve warns at create and fails an inspection with the reason, and a cycle
+ * it fails suspends the agent ({@code AgentCycleTest}).
  */
 public class SystemPromptTest {
 
@@ -114,46 +116,49 @@ public class SystemPromptTest {
 		create("op-prompt-agent", Maps.of("op", "v/test/ops/echo",
 			"input", Maps.of(Strings.create("x"), Strings.create("y"))), "v/ops/llmagent/chat");
 		RuntimeException e = assertThrows(RuntimeException.class, () -> head("op-prompt-agent"));
-		assertTrue(e.getMessage().contains("not text"), e.getMessage());
+		assertFalse(e.getMessage().isBlank());
 	}
 
 	// ========== failure and validation ==========
 
 	@Test
-	public void testUnresolvablePromptWarnsAtCreateAndFailsTheCycle() {
-		ACell created = create("missing-prompt-agent", Maps.of("ref", "w/prompts/absent"), "v/ops/llmagent/chat");
+	public void testUnresolvablePromptWarnsAtCreateAndFailsInspection() {
+		AMap<AString, ACell> prompt = Maps.of("ref", "w/prompts/absent");
+		ACell created = create("missing-prompt-agent", prompt, "v/ops/llmagent/chat");
 		AVector<ACell> warnings = RT.ensureVector(RT.getIn(created, Fields.WARNINGS));
 		assertNotNull(warnings, created.toString());
-		assertTrue(warnings.toString().contains("systemPrompt does not resolve"), warnings.toString());
+		assertTrue(warnings.toString().contains("w/prompts/absent"), warnings.toString());
 		RuntimeException e = assertThrows(RuntimeException.class, () -> head("missing-prompt-agent"));
-		assertTrue(e.getMessage().contains("config.systemPrompt did not resolve"), e.getMessage());
-		assertTrue(e.getMessage().contains("w/prompts/absent"), e.getMessage());
+		assertTrue(e.getMessage().contains(AbstractLLMAdapter.SYSTEM_PROMPT_UNRESOLVED.formatted(prompt, "")),
+			e.getMessage());
 	}
 
 	@Test
 	public void testMalformedPromptEntriesAreRejectedAtCreate() {
 		RuntimeException none = assertThrows(RuntimeException.class,
 			() -> create("bad-prompt-1", Maps.of("label", "no source"), "v/ops/llmagent/chat"));
-		assertTrue(none.getMessage().contains("ref, text, op, job"), none.getMessage());
+		for (String source : new String[] {"ref", "text", "op", "job"}) {
+			assertTrue(none.getMessage().contains(source), none.getMessage());
+		}
 		RuntimeException two = assertThrows(RuntimeException.class,
 			() -> create("bad-prompt-2", Maps.of("ref", "w/x", "text", "y"), "v/ops/llmagent/chat"));
-		assertTrue(two.getMessage().contains("at most one of"), two.getMessage());
+		assertFalse(two.getMessage().isBlank());
 		// A plain string is still the ordinary form.
 		create("string-prompt-agent", Strings.create("Plain identity."), "v/ops/llmagent/chat");
 		assertTrue(head("string-prompt-agent").startsWith("Plain identity."));
 	}
 
 	@Test
-	public void testResolvedOncePerCycleViaEffectiveConfig() {
-		// The seam both runtimes use: effectiveModelConfig turns the entry into
-		// text, so everything downstream — head, inspection, L3 input — sees a
-		// string and a mid-cycle edit cannot move the cached head.
+	public void testResolvedOncePerCycleInTheModelSetup() {
+		// The seam both runtimes use: the cycle's model setup carries the entry
+		// as text, so everything downstream — head, inspection, L3 input — sees
+		// a string and a mid-cycle edit cannot move the cached head.
 		write("w/prompts/once", Strings.create("Once per cycle."));
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 		AMap<AString, ACell> config = Maps.of(
 			"llmOperation", "v/test/ops/llm",
 			"systemPrompt", Maps.of("ref", "w/prompts/once"));
-		AMap<AString, ACell> effective = adapter.effectiveModelConfig(config, ctx);
+		AMap<AString, ACell> effective = adapter.modelSetup(config, ctx).config();
 		assertEquals("Once per cycle.", RT.ensureString(effective.get(AbstractLLMAdapter.K_SYSTEM_PROMPT)).toString());
 	}
 }

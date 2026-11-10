@@ -33,13 +33,13 @@ the component review below on the experimental lattice branch.
 
 ### Experimental component consolidation
 
-Session record operations now belong to `SessionState`: frames, pending input,
-summaries, external turns and cycle completion. `AgentState` owns admission and
+Session record operations now belong to `Session`: frames, pending input,
+summaries, external turns and cycle completion. `Agent` owns admission and
 composes child edits with tasks, status and timeline through upstream transactions.
 Record formats remain unchanged. Tests cover failed-completion rollback, retained
 draft isolation, concurrent deletion and summary admission after a concurrent stop.
 
-Recorded jobs now use `user.job(id)` (`JobState`) as their primary record.
+Recorded jobs now use `user.jobs().job(id)` (`JobRecord`) as their primary record.
 `VenueJob` has no independently updated live record and no persistence callback;
 its hooks run after the lattice update. Admission creates the row explicitly,
 and updates cannot recreate it. History appends share one path for active and
@@ -60,7 +60,7 @@ secret redaction and account-generation guards. Job record formats are unchanged
 - [ ] `GoalTreeAdapter.buildTypedRootHarnessTools` is the *canonical* typed-tool
   builder that 3 inline copies should adopt — keep as the seed for Phase 1
   consolidation (do NOT delete).
-- [ ] Agent-level `pending` Index in `AgentState`
+- [ ] Agent-level `pending` Index in `Agent`
   (`addPending`/`getPending`/`extractPending` + `resolveJobIds` plumbing)
   appears write-only — removing it is a data-path change, not a quick win.
   Its own task.
@@ -113,7 +113,7 @@ Many files, but each edit small and mechanical. Behind the green suite.
 - [ ] Add the one missing key (`Fields.ROLE`) + a small `covia.api` holder for
   `ROLE_*` / `TOOL_CALLS`.
 - [ ] Point `LangChainAdapter`, `AbstractLLMAdapter`, `ContextAssembler`,
-  `GoalTreeContext`, `AgentState`, `TestAdapter` at the shared constants (delete
+  `GoalTreeContext`, `Agent`, `TestAdapter` at the shared constants (delete
   the duplicate declarations).
 - [ ] Extract shared message-scan helpers (`lastUserContent`, `hasToolResults`,
   `assistantText`, `assistantToolCall`); collapse `TestAdapter`'s hand-rolled
@@ -137,7 +137,7 @@ Add new classes — **propose each design before cutting**. One at a time, suite
   (`runningLoops`/`activeTransitions`/`deferredCompletions`/`activeChats` +
   `wakeAgent`/`executeRunLoop`/`mergeAndPostProcess`). Collapse the picked-work
   tuple into a `PickedWork` record (kills the 14-param signature). Collapse
-  `AgentState.mergeRunResult`'s overload chain into one + param object.
+  `Agent.mergeRunResult`'s overload chain into one + param object.
 - [ ] **`Engine` decomposition** → extract `AssetResolver`/`PathResolver`,
   `AdapterRegistry`, `ContentRouter`, `SecretService`, and a `VenueProvisioner`
   (breaks the `Engine → JobManager → Engine` startup cycle). Persistence stays
@@ -161,9 +161,6 @@ Trickiest; aligns with the existing P2 TODO. Propose design first.
 - [ ] Single-pass `resolveExternalPath(cursor, jsonKeys)` (walk lattice + value
   together); replace `readPath`'s O(n²) descending-prefix loop. Used by
   `read`/`slice`/`list`/`inspect`.
-- [ ] Collapse `deepGet`/`deepSet`/`deepDelete`/`deepAppend` into one
-  `deepUpdate(root, keys, from, leafOp)` reusing `navigateInto`'s type-dispatch;
-  hoist the `==2` split into one `applyWrite(...)`.
 - [ ] One `requireWritable(ctx, jsonKeys)` (collapse
   `isWritableNamespace`/`validateWritablePath` + the asymmetric `canWrite`
   check).

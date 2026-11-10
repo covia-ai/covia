@@ -9,20 +9,19 @@ import java.util.function.Predicate;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import convex.auth.ucan.Capability;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
-import convex.core.data.Hash;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
-import covia.api.Abilities;
 import covia.api.Fields;
+import covia.exception.InvalidDefinitionException;
 import covia.grid.Asset;
+import covia.lattice.CapabilityChecker;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 
@@ -44,7 +43,6 @@ public final class ToolPalette {
 
 	private static final AString K_TOOLS         = Strings.intern("tools");
 	private static final AString K_DEFAULT_TOOLS = Strings.intern("defaultTools");
-	private static final AString K_CAPS          = Strings.intern("caps");
 	private static final AString K_NAME          = Strings.intern("name");
 	private static final AString K_DESCRIPTION   = Strings.intern("description");
 	private static final AString K_PARAMETERS    = Strings.intern("parameters");
@@ -158,21 +156,20 @@ public final class ToolPalette {
 	/**
 	 * Resolves the configured palette: the default pack when opted in, then
 	 * {@code config.tools}, deduplicated by name. Resolution runs under the
-	 * agent's capability-narrowed context ({@code config.caps}); a configured
-	 * tool that cannot be resolved is reported in {@code unavailable} rather
-	 * than failing the cycle.
+	 * given context narrowed by {@code config.caps}; a configured tool that
+	 * cannot be resolved is reported in {@code unavailable} rather than failing
+	 * the cycle.
 	 *
 	 * @param skipNames bare names the runtime resolves itself (its harness
 	 *        tools) — silently skipped when they appear in {@code config.tools}
 	 */
 	public static Palette resolve(Engine engine, RequestContext ctx,
 			AMap<AString, ACell> config, Set<String> skipNames) {
-		AVector<ACell> caps = RT.ensureVector(config != null ? config.get(K_CAPS) : null);
-		RequestContext resolutionCtx = (caps != null) ? ctx.withCaps(caps) : ctx;
+		RequestContext resolutionCtx = AbstractLLMAdapter.capsContext(config, ctx);
 		Set<String> skipped = (skipNames != null) ? skipNames : Set.of();
 		Palette palette = Palette.EMPTY;
 		if (config != null && CVMBool.TRUE.equals(config.get(K_DEFAULT_TOOLS))) {
-			palette = build(engine, ctx, DEFAULT_TOOL_OPS,
+			palette = build(engine, resolutionCtx, DEFAULT_TOOL_OPS,
 				skipped::contains, null, SOURCE_DEFAULT, null);
 		}
 
@@ -230,7 +227,7 @@ public final class ToolPalette {
 	/**
 	 * Configured tools that do not resolve under the agent's authority, as
 	 * {@code {operation, reason}} — the author-time diagnostic used by
-	 * {@code agent:create} warnings and {@code agent:info}.
+	 * {@code agent:create} warnings.
 	 */
 	public static AVector<ACell> unavailableConfigTools(Engine engine, RequestContext ctx,
 			AMap<AString, ACell> config, Set<String> skipNames) {
@@ -240,7 +237,7 @@ public final class ToolPalette {
 
 	/** Resolves load-owned tools without parallel route/label projections. */
 	@SuppressWarnings("unchecked")
-	static LoadPalette loadPalette(Engine engine, RequestContext ctx,
+	static LoadPalette loadPalette(Engine engine, Loads.Readers readers,
 			AMap<AString, ACell> effectiveLoads, BiPredicate<String, AString> excluded,
 			boolean resolvePinned) {
 		AVector<ACell> added = Vectors.empty();
@@ -259,7 +256,7 @@ public final class ToolPalette {
 				if (!resolvePinned && !Loads.isAgentManaged(meta)) continue;
 				AVector<ACell> ops = RT.ensureVector(meta.get(K_TOOLS));
 				if (ops == null || ops.count() == 0) continue;
-				bindings = bindingsForOperations(engine, ctx, ops);
+				bindings = bindingsForOperations(engine, readers.reading(meta), ops);
 			}
 			for (long i = 0; i < bindings.count(); i++) {
 				ACell binding = bindings.get(i);
@@ -320,6 +317,19 @@ public final class ToolPalette {
 			AString operation = parsed[0];
 			if (skipName.test(operation.toString())) continue;
 
+			if (engine.isRemoteDefinition(operation)) {
+				// Another venue's definition is fetched only when the agent calls
+				// the tool, as the call resolves its operation, never to describe
+				// it: the model sees what the entry says, and takes any input.
+				AString name = Strings.create(remoteToolName(parsed));
+				if (skipName.test(name.toString()) || index.containsKey(name)) continue;
+				AString description = (parsed[2] != null)
+					? parsed[2] : Strings.create(REMOTE_TOOL_DESCRIPTION.formatted(operation));
+				tools = tools.conj(buildToolDefinition(name.toString(), description, null));
+				index = index.assoc(name, toolInfo(operation, null, name, source, ref));
+				continue;
+			}
+
 			Asset asset;
 			try {
 				requireToolMetadataRead(engine, ctx, operation);
@@ -340,12 +350,7 @@ public final class ToolPalette {
 				continue;
 			}
 
-			// toolName lives inside the operation block. If absent, sanitise the
-			// dispatch string (e.g. "agent:create") rather than the catalog path.
-			AString assetToolName = RT.ensureString(RT.getIn(asset.meta(), Fields.OPERATION, Fields.TOOL_NAME));
-			AString dispatchAdapter = RT.ensureString(RT.getIn(asset.meta(), Fields.OPERATION, Fields.ADAPTER));
-			String toolName = deriveToolName(parsed[1], assetToolName,
-				(dispatchAdapter != null) ? dispatchAdapter : operation);
+			String toolName = boundName(parsed, asset);
 			// Manifest order owns name precedence. Do not let a later operation
 			// replace the route behind an earlier definition with the same name.
 			AString name = Strings.create(toolName);
@@ -358,6 +363,29 @@ public final class ToolPalette {
 				activityLabel(asset.meta(), toolName), name, source, ref));
 		}
 		return new Palette(tools, index, null);
+	}
+
+	/** The tool name a parsed entry binds to its operation's metadata. */
+	private static String boundName(AString[] parsed, Asset asset) {
+		// toolName lives inside the operation block. If absent, sanitise the
+		// dispatch string (e.g. "agent:create") rather than the catalog path.
+		AString assetToolName = RT.ensureString(RT.getIn(asset.meta(), Fields.OPERATION, Fields.TOOL_NAME));
+		AString dispatchAdapter = RT.ensureString(RT.getIn(asset.meta(), Fields.OPERATION, Fields.ADAPTER));
+		return deriveToolName(parsed[1], assetToolName,
+			(dispatchAdapter != null) ? dispatchAdapter : parsed[0]);
+	}
+
+	/**
+	 * The tool name a tool entry would bind, from definitions this venue holds
+	 * — never fetched from another — or null when none is held here. Read
+	 * authority is checked as when the entry is bound.
+	 */
+	static String localToolName(Engine engine, RequestContext ctx, ACell entry) {
+		AString[] parsed = parseConfigToolEntry(entry);
+		if (parsed == null) return null;
+		requireToolMetadataRead(engine, ctx, parsed[0]);
+		Asset asset = engine.resolveLocalAsset(parsed[0], ctx);
+		return (asset != null) ? boundName(parsed, asset) : null;
 	}
 
 	/** UI-only activity text, deliberately kept outside provider tool definitions. */
@@ -384,6 +412,18 @@ public final class ToolPalette {
 	}
 
 	/** Direct fixed-route lookup. */
+	/** The tool names that {@link #operation} routes in this index. */
+	static Set<String> names(AMap<AString, ACell> toolIndex) {
+		Set<String> names = new HashSet<>();
+		if (toolIndex == null) return names;
+		for (var entry : toolIndex.entrySet()) {
+			if (RT.ensureString(RT.getIn(entry.getValue(), Fields.OPERATION)) != null) {
+				names.add(entry.getKey().toString());
+			}
+		}
+		return names;
+	}
+
 	static AString operation(AMap<AString, ACell> toolIndex, String name) {
 		return (toolIndex == null || name == null) ? null
 			: RT.ensureString(RT.getIn(toolIndex.get(Strings.create(name)), Fields.OPERATION));
@@ -470,23 +510,12 @@ public final class ToolPalette {
 	}
 
 	/** Private user-scoped operation definitions are data: the agent must be
-	 *  able to read their metadata as well as invoke them. Venue catalog entries
-	 *  are shared public metadata; remote DID references apply the publishing
-	 *  venue's policy during fetch. */
+	 *  able to read their metadata as well as invoke them, as
+	 *  {@link Engine#resolvePath} reads them. Venue catalog entries are read by
+	 *  every principal; remote DID references apply the publishing venue's
+	 *  policy during fetch. */
 	private static void requireToolMetadataRead(Engine engine, RequestContext ctx, AString operation) {
-		String ref = operation.toString();
-		String normalised = ref.startsWith("/") ? ref.substring(1) : ref;
-		if (normalised.startsWith("v/")) return;
-		if (Hash.parse(operation) != null || normalised.startsWith("a/")) {
-			engine.requireResourceAccess(ctx, operation, Abilities.ASSET_READ);
-			return;
-		}
-		if (normalised.startsWith("w/") || normalised.startsWith("o/")
-				|| normalised.startsWith("g/") || normalised.startsWith("j/")
-				|| normalised.startsWith("s/") || normalised.startsWith("h/")
-				|| normalised.startsWith("n/") || normalised.startsWith("c/")) {
-			engine.requireResourceAccess(ctx, operation, Capability.CRUD_READ);
-		}
+		engine.requireReadable(ctx, operation);
 	}
 
 	private static String safeMessage(Throwable error) {
@@ -537,6 +566,26 @@ public final class ToolPalette {
 		return false;
 	}
 
+	/** The description of a tool on another venue whose entry gives none; the operation follows. */
+	static final String REMOTE_TOOL_DESCRIPTION = "Operation %s on another venue. Its inputs are not"
+		+ " described here: it is fetched from that venue when called.";
+
+	/** Longest tool name every provider accepts. */
+	private static final int MAX_TOOL_NAME = 64;
+
+	/**
+	 * The name of a tool on another venue, bound without its definition: the
+	 * entry's name, else the reference's path after its DID, in the characters
+	 * and length every provider accepts.
+	 */
+	private static String remoteToolName(AString[] parsed) {
+		if (parsed[1] != null) return parsed[1].toString();
+		String canonical = CapabilityChecker.canonicalResource(parsed[0].toString(), null);
+		String path = canonical.substring(Math.min(canonical.length(), Engine.ownerOf(parsed[0]).toString().length() + 1));
+		String name = path.replaceAll("[^A-Za-z0-9_-]", "_");
+		return (name.length() > MAX_TOOL_NAME) ? name.substring(0, MAX_TOOL_NAME) : name;
+	}
+
 	/** Tool name priority: override → asset toolName → operation with colons/slashes as underscores. */
 	public static String deriveToolName(AString nameOverride, AString assetToolName, AString operation) {
 		if (nameOverride != null) return nameOverride.toString();
@@ -564,12 +613,12 @@ public final class ToolPalette {
 	static AMap<AString, ACell> operationToolDefinition(AMap<AString, ACell> metadata,
 			AString nameOverride, AString descriptionOverride) {
 		if (!(RT.getIn(metadata, Fields.OPERATION) instanceof AMap)) {
-			throw new IllegalArgumentException("Tool metadata must contain an operation object");
+			throw new InvalidDefinitionException("Tool metadata must contain an operation object");
 		}
 		AString name = (nameOverride != null) ? nameOverride
 			: RT.ensureString(RT.getIn(metadata, Fields.OPERATION, Fields.TOOL_NAME));
 		if (name == null || name.toString().isBlank()) {
-			throw new IllegalArgumentException("Tool metadata must declare operation.toolName");
+			throw new InvalidDefinitionException("Tool metadata must declare operation.toolName");
 		}
 		AString description = (descriptionOverride != null) ? descriptionOverride
 			: RT.ensureString(metadata.get(Fields.DESCRIPTION));

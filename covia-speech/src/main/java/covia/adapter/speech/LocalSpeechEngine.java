@@ -25,7 +25,9 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
+import covia.exception.InvalidInputException;
 import covia.exception.JobFailedException;
+import covia.exception.NotSupportedException;
 
 /**
  * Speech recognised and spoken inside the venue's JVM by sherpa-onnx: no audio or text
@@ -177,7 +179,7 @@ final class LocalSpeechEngine implements SpeechEngine {
 	@Override
 	public Transcript transcribe(Audio audio, String modelId, String language, String prompt, String key) {
 		if (model == null) throw new JobFailedException(TRANSCRIBE_UNAVAILABLE);
-		if (!model.id().equals(modelId)) throw new IllegalArgumentException(OTHER_MODEL.formatted(model.id()));
+		if (!model.id().equals(modelId)) throw new NotSupportedException(OTHER_MODEL.formatted(model.id()));
 		float[] samples = AudioDecoder.decode(audio.bytes());
 		prepare();
 		Future<String> heard = worker.submit(() -> {
@@ -202,13 +204,13 @@ final class LocalSpeechEngine implements SpeechEngine {
 	@Override
 	public Speech speak(SpeakRequest request, String key) {
 		if (voice == null) throw new JobFailedException(SPEAK_UNAVAILABLE);
-		if (request.model() != null && !voice.id().equals(request.model())) throw new IllegalArgumentException(OTHER_MODEL.formatted(voice.id()));
-		if (!"wav".equals(request.format())) throw new IllegalArgumentException(WAV_ONLY);
+		if (request.model() != null && !voice.id().equals(request.model())) throw new NotSupportedException(OTHER_MODEL.formatted(voice.id()));
+		if (!"wav".equals(request.format())) throw new NotSupportedException(WAV_ONLY);
 		int sid = voiceNumber(request.voice());
 		float speed = request.speed() == null ? 1f : request.speed().floatValue();
 		String language = request.language() == null ? DEFAULT_LANGUAGE : request.language();
 		if (voice.kind() == SpeechModels.Kind.VITS && !DEFAULT_LANGUAGE.equals(language)) {
-			throw new IllegalArgumentException(ENGLISH_ONLY.formatted(voice.id()));
+			throw new NotSupportedException(ENGLISH_ONLY.formatted(voice.id()));
 		}
 		prepareVoice();
 		// A lexicon voice drops any word it lacks without a sound: make every word sayable first.
@@ -217,7 +219,7 @@ final class LocalSpeechEngine implements SpeechEngine {
 		if (!sayable.spelled().isEmpty()) log.info("speech: spelled out {}", sayable.spelled());
 		Said said = onWorker(worker.submit(() -> {
 			Speaker s = speaker();
-			if (sid >= s.voices()) throw new IllegalArgumentException(NO_SUCH_VOICE.formatted(voice.id(), s.voices() - 1));
+			if (sid >= s.voices()) throw new InvalidInputException(NO_SUCH_VOICE.formatted(voice.id(), s.voices() - 1));
 			Said out = s.say(sayable.text(), sid, speed, language);
 			lastSpoke = System.nanoTime();
 			return out;
@@ -243,11 +245,11 @@ final class LocalSpeechEngine implements SpeechEngine {
 	private static int voiceNumber(String voice) {
 		if (voice == null) return 0;
 		try {
-			int sid = Integer.parseInt(voice.strip());
-			if (sid < 0) throw new IllegalArgumentException(VOICE_NUMBER);
+			int sid = Integer.parseInt(voice);
+			if (sid < 0) throw new InvalidInputException(VOICE_NUMBER);
 			return sid;
 		} catch (NumberFormatException e) {
-			throw new IllegalArgumentException(VOICE_NUMBER);
+			throw new InvalidInputException(VOICE_NUMBER, e);
 		}
 	}
 
@@ -323,7 +325,7 @@ final class LocalSpeechEngine implements SpeechEngine {
 		}
 
 		private Heard step(float[] samples, boolean end) {
-			if (ended) throw new IllegalStateException(DICTATION_CLOSED);
+			if (ended) throw new NotSupportedException(DICTATION_CLOSED);
 			Backend b = backend();
 			if (pauses == null) pauses = b.pauses(DICTATION_STRETCH_SECONDS);
 			int n = Math.max(0, Math.min(AudioDecoder.MAX_SECONDS * AudioDecoder.RATE - received, samples.length));

@@ -20,6 +20,7 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
 import covia.api.Fields;
+import covia.exception.InvalidInputException;
 
 /**
  * Markdown to Telegram HTML ({@link TelegramMarkdown}, {@code telegram:format}).
@@ -225,10 +226,10 @@ public class TelegramMarkdownTest {
 		assertEquals("<b>hi</b>", RT.getIn(TelegramAdapter.handleFormat(Maps.of("text", "**hi**")), Fields.TEXT).toString());
 		// The reply hook's own input: the response read as the adapter reads any reply.
 		ACell hooked = TelegramAdapter.handleFormat(Maps.of(
-			"response", Maps.of("text", "**hi**"), "via", Maps.of("channel", "telegram")));
+			"response", Maps.of("text", "**hi**"), "authentication", Maps.of("identity", "telegram:5551")));
 		assertEquals("<b>hi</b>", RT.getIn(hooked, Fields.TEXT).toString());
-		assertThrows(IllegalArgumentException.class,
-			() -> TelegramAdapter.handleFormat(Maps.of("response", Strings.create("  "), "via", Maps.empty())),
+		assertThrows(InvalidInputException.class,
+			() -> TelegramAdapter.handleFormat(Maps.of("response", Strings.create("  "), "authentication", Maps.empty())),
 			"a turn that ended without a reply has nothing to format, and the bot sends nothing");
 		// A hook's parse_mode wins over the bot's; one Telegram does not know does not.
 		assertEquals(TelegramMarkdown.PARSE_MODE, BotRunner.formattedParseMode(direct, null));
@@ -236,12 +237,13 @@ public class TelegramMarkdownTest {
 		assertEquals("MarkdownV2", BotRunner.formattedParseMode(Maps.of("text", "x"), "MarkdownV2"));
 		assertEquals("MarkdownV2", BotRunner.formattedParseMode(Strings.create("x"), "MarkdownV2"));
 		assertEquals(null, BotRunner.formattedParseMode(Maps.of("text", "x", "parse_mode", "Shouty"), null));
+		assertEquals(null, BotRunner.formattedParseMode(Maps.of("text", "x", "parse_mode", " " + TelegramMarkdown.PARSE_MODE), null));
 		assertEquals("HTML", BotRunner.formattedParseMode(Maps.of("text", "x", "parse_mode", "html"), null),
 			"matched as Telegram matches it, sent as Telegram spells it");
 		// A blank markdown gives way to text.
 		assertEquals("<i>i</i>", RT.getIn(TelegramAdapter.handleFormat(Maps.of("markdown", "  ", "text", "*i*")), Fields.TEXT).toString());
-		IllegalArgumentException nothing = assertThrows(IllegalArgumentException.class,
-			() -> TelegramAdapter.handleFormat(Maps.of("via", Maps.empty())));
+		InvalidInputException nothing = assertThrows(InvalidInputException.class,
+			() -> TelegramAdapter.handleFormat(Maps.of("authentication", Maps.empty())));
 		assertEquals(TelegramAdapter.NOTHING_TO_FORMAT, nothing.getMessage());
 	}
 

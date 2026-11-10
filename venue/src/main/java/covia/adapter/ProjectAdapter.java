@@ -5,6 +5,7 @@ import java.util.concurrent.CompletableFuture;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import covia.exception.NotSupportedException;
 import covia.venue.RequestContext;
 
 /**
@@ -74,9 +75,8 @@ public class ProjectAdapter extends AAdapter {
 
 	@Override
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
-		requireInvoke(ctx);
 		String subOp = getSubOperation(meta);
-		return CompletableFuture.failedFuture(new IllegalArgumentException(
+		return CompletableFuture.failedFuture(new NotSupportedException(
 			"Unknown project operation: " + subOp + " (the project adapter provides no operations yet; "
 			+ "work with the project tree through the lattice operations — see the projects skill)"));
 	}

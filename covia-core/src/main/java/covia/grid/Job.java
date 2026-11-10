@@ -20,8 +20,11 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
 import covia.api.Fields;
+import covia.exception.CoviaException;
+import covia.exception.FaultException;
 import covia.exception.JobFailedException;
 import covia.exception.JobPollingFailedException;
+import covia.exception.NotSupportedException;
 
 /**
  * Class representing a Covia Job.
@@ -55,30 +58,6 @@ public class Job {
 	/** Result-oriented callers may request the original typed failure instead of
 	 * the transport-safe {@link JobFailedException}. */
 	private volatile boolean preserveFailureCause;
-
-	/**
-	 * Optional cancellation hook. Invoked by {@link #cancel()} so the work can
-	 * actually stop (interrupt a sleeping thread, close a connection, etc.)
-	 * rather than just marking the lattice status. Adapters that submit
-	 * interruptible work register a hook such as
-	 * {@code () -> future.cancel(true)}.
-	 */
-	private final AtomicReference<Runnable> onCancel = new AtomicReference<>();
-
-	/**
-	 * Optional pause hook, invoked by {@link #pause()} so the executing adapter
-	 * can actually suspend its work rather than merely flipping the status.
-	 * Registered via {@link #setPauseHook} when a suspendable execution starts;
-	 * absence means the job cannot be paused (a bare status flip is not a pause).
-	 */
-	private volatile Runnable onPause = null;
-
-	/**
-	 * Optional resume hook, invoked by {@link #resume()} to restart the adapter's
-	 * suspended work. Registered via {@link #setResumeHook}; absence means the
-	 * generic resume path is unsupported (advance via message delivery instead).
-	 */
-	private volatile Runnable onResume = null;
 
 	/** Obsolete field, recognised only to discard legacy state chains. */
 	private static final AString LEGACY_PREV = Strings.intern("prev");
@@ -198,18 +177,20 @@ public class Job {
 	}
 
 	/**
-	 * True when this Job is STARTED and its adapter registered a pause hook —
-	 * the adapter's declaration that the work can be suspended and resumed
-	 * later. Venue shutdown pauses pausable Jobs rather than cancelling them.
+	 * True when this Job is STARTED and its work can be suspended and resumed
+	 * later ({@link #supportsPause}). Venue shutdown pauses pausable Jobs rather
+	 * than cancelling them.
 	 *
 	 * @return true if {@link #pause()} would be accepted
 	 */
 	public boolean isPausable() {
-		return onPause != null && Status.STARTED.equals(getStatus());
+		return supportsPause() && Status.STARTED.equals(getStatus());
 	}
 
 	/**
-	 * Updates the job data atomically. No effect if job is already finished.
+	 * Replaces the job data atomically. No effect if job is already finished.
+	 * It replaces the whole record, so a change made since {@code newData} was
+	 * read is lost: to change part of the record, use {@link #update}.
 	 *
 	 * <p>The pure {@link #processUpdate} runs inside the atomic backing-record
 	 * update. Hooks and future completion run only if the update took effect.</p>
@@ -279,7 +260,7 @@ public class Job {
 				try {
 					if (Status.CANCELLED.equals(next.get(Fields.STATUS))) {
 						cancelled = true;
-						runCancelHook();
+						onCancelled();
 					}
 					if (continuation != null) continuation.run();
 				} finally {
@@ -552,21 +533,29 @@ public class Job {
 	}
 
 	/**
-	 * Gets the caller DID associated with this job, if identified.
-	 * @return Caller DID string, or null if anonymous
+	 * The principal that made this job's call: a user, one of a user's agents
+	 * or a {@code user/sudo} delegate.
+	 * @return the caller's DID, or null when the job records none
 	 */
 	public AString getCaller() {
-		return RT.ensureString(getData().get(Fields.CALLER));
+		return Attribution.caller(getData());
+	}
+
+	/**
+	 * The namespace this job belongs to, which its ownership, access and quota
+	 * key on: its recorded owner, else its caller's own.
+	 * @return the owner's DID, or null when the job records no caller
+	 */
+	public AString getOwner() {
+		return Attribution.owner(getData());
 	}
 
 	/**
 	 * Cancel this Job. No effect if already finished.
 	 *
-	 * <p>If a {@linkplain #setCancelHook cancel hook} has been registered, it
-	 * runs after the status transition so the underlying worker can actually
-	 * stop (e.g. interrupt a sleeping thread via {@code future.cancel(true)}).
-	 * Without a hook, cancellation only flips the lattice status and the
-	 * worker must poll {@link #isFinished()} to notice.</p>
+	 * <p>Once the cancellation commits, {@link #onCancelled()} runs, once, so
+	 * a venue's handle can stop the Job's work. A plain handle has none to
+	 * stop: cancellation only flips its status.</p>
 	 */
 	public void cancel() {
 		cancel(null);
@@ -585,9 +574,7 @@ public class Job {
 	 */
 	public void cancel(String reason) {
 		if (isFinished()) return;
-		String message = (reason != null && !reason.isBlank())
-			? reason.strip()
-			: "Job cancelled" + (getID() == null ? "" : ": " + getID().toHexString());
+		String message = cancellationMessage(reason);
 		update(job -> {
 			job = job.assoc(Fields.STATUS, Status.CANCELLED);
 			job = job.assoc(Fields.ERROR, Strings.create(message));
@@ -595,26 +582,20 @@ public class Job {
 		});
 	}
 
-	/**
-	 * Register a cancellation hook invoked by {@link #cancel()}. Adapters that
-	 * submit interruptible work should register
-	 * {@code () -> future.cancel(true)} so a cancel actually stops the worker
-	 * thread. Pass a {@link java.util.concurrent.Future} from
-	 * {@code ExecutorService.submit(...)}, not a {@link CompletableFuture}
-	 * from {@code runAsync} (the latter ignores {@code mayInterruptIfRunning}).
-	 * Registration after cancellation immediately runs the hook. Each registered
-	 * hook is claimed once even when registration races with cancellation.
-	 *
-	 * @param hook the cancel callback, or null to clear
-	 */
-	public void setCancelHook(Runnable hook) {
-		onCancel.set(hook);
-		if (Status.CANCELLED.equals(getStatus())) runCancelHook();
+	/** The error a cancellation records: its reason, or that the Job was cancelled. */
+	protected final String cancellationMessage(String reason) {
+		return (reason != null && !reason.isBlank())
+			? reason.strip()
+			: "Job cancelled" + (getID() == null ? "" : ": " + getID().toHexString());
 	}
 
-	private void runCancelHook() {
-		Runnable hook = onCancel.getAndSet(null);
-		if (hook != null) hook.run();
+	/**
+	 * Runs once, after this Job's cancellation commits and before it finishes
+	 * ({@link #onFinish}), so a subclass can stop the Job's work. Listeners have
+	 * been told of the cancellation by then. The base does nothing.
+	 */
+	protected void onCancelled() {
+		// A plain handle has no work of its own to stop
 	}
 
 	/**
@@ -636,68 +617,71 @@ public class Job {
 	}
 
 	/**
-	 * Register a pause hook invoked by {@link #pause()}. Adapters that can
-	 * genuinely suspend work register one when they start executing; the hook
-	 * performs the suspension. Registering a hook is what makes a job pausable.
-	 *
-	 * @param hook the pause callback, or null to clear
+	 * Whether this Job's work can actually be suspended. Without it the Job
+	 * refuses to pause: a status flip while work continues is not a pause.
 	 */
-	public void setPauseHook(Runnable hook) {
-		this.onPause = hook;
-	}
+	protected boolean supportsPause() { return false; }
 
 	/**
-	 * Register a resume hook invoked by {@link #resume()} to restart the
-	 * adapter's suspended work. Registering a hook is what makes a job resumable
-	 * via the generic resume path (vs message-based advancement).
-	 *
-	 * @param hook the resume callback, or null to clear
+	 * Suspends this Job's work, once its pause has committed. Runs once for each
+	 * pause; a throw fails the Job.
 	 */
-	public void setResumeHook(Runnable hook) {
-		this.onResume = hook;
-	}
+	protected void onPaused() {}
 
 	/**
-	 * Pause this Job. Commits STARTED &rarr; PAUSED, then triggers the registered
-	 * {@linkplain #setPauseHook pause hook}. A throwing hook fails the Job.
-	 * @throws IllegalStateException if the job is finished, not STARTED, or has no
-	 *         pause hook registered (a status flip while work continues is not a
-	 *         pause; unsupported pause surfaces as HTTP 409).
+	 * Whether this Job's suspended work can be restarted through {@link #resume()}.
+	 * Without it the Job advances only by message delivery.
+	 */
+	protected boolean supportsResume() { return false; }
+
+	/**
+	 * Restarts this Job's suspended work, once its resume has committed. It sees
+	 * STARTED and may complete or suspend the Job again at once. Runs once for
+	 * each resume; a throw fails the Job.
+	 */
+	protected void onResumed() {}
+
+	/**
+	 * Pause this Job. Commits STARTED &rarr; PAUSED, then suspends its work
+	 * ({@link #onPaused}). Failing to suspend it fails the Job.
+	 * @throws NotSupportedException if the job is finished, not STARTED, or its
+	 *         work cannot be suspended (unsupported pause surfaces as HTTP 409).
 	 */
 	public void pause() {
-		Runnable hook = onPause;
 		boolean changed = commitUpdate(job -> {
 			if (!Status.STARTED.equals(job.get(Fields.STATUS))) {
-				throw new IllegalStateException("Cannot pause job: expected STARTED");
+				throw new NotSupportedException("Cannot pause job: expected STARTED");
 			}
-			if (hook == null) throw new IllegalStateException(
+			if (!supportsPause()) throw new NotSupportedException(
 				"Cannot pause job: its operation does not support pausing; cancel it if appropriate");
 			return job.assoc(Fields.STATUS, Status.PAUSED);
-		}, null, () -> runContinuation(hook));
-		if (!changed) throw new IllegalStateException("Cannot pause job: status is terminal (" + getStatus() + ")");
+		}, null, () -> runContinuation(this::onPaused));
+		if (!changed) throw new NotSupportedException("Cannot pause job: status is terminal (" + getStatus() + ")");
 	}
 
 	/**
-	 * Atomically resumes a paused Job, then triggers its continuation. The hook
-	 * observes STARTED and may complete or suspend the Job again immediately.
+	 * Atomically resumes a paused Job, then restarts its work ({@link #onResumed}).
+	 * @throws NotSupportedException if the job is not paused or waiting, or its
+	 *         work cannot be restarted this way
 	 */
 	public void resume() {
-		Runnable hook = onResume;
 		boolean changed = commitUpdate(job -> {
 			ACell status = job.get(Fields.STATUS);
 			if (!Status.PAUSED.equals(status) && !Status.INPUT_REQUIRED.equals(status)
 					&& !Status.AUTH_REQUIRED.equals(status)) {
-				throw new IllegalStateException("Cannot resume job: expected PAUSED, INPUT_REQUIRED, or AUTH_REQUIRED");
+				throw new NotSupportedException("Cannot resume job: expected PAUSED, INPUT_REQUIRED, or AUTH_REQUIRED");
 			}
-			if (hook == null) throw new IllegalStateException(
+			if (!supportsResume()) throw new NotSupportedException(
 				"Cannot resume job: its operation does not provide a resume action");
 			return job.assoc(Fields.STATUS, Status.STARTED);
-		}, null, () -> runContinuation(hook));
-		if (!changed) throw new IllegalStateException("Cannot resume job: status is terminal (" + getStatus() + ")");
+		}, null, () -> runContinuation(this::onResumed));
+		if (!changed) throw new NotSupportedException("Cannot resume job: status is terminal (" + getStatus() + ")");
 	}
 
 	/**
 	 * Claims a pending Job and triggers execution only for the winning transition.
+	 * A continuation that throws fails the Job with what it {@linkplain #report reports},
+	 * and that report is thrown to the caller.
 	 * @param continuation action that schedules or starts the operation
 	 * @return true if STARTED committed, false if the Job was no longer pending
 	 */
@@ -714,11 +698,13 @@ public class Job {
 		try {
 			continuation.run();
 		} catch (RuntimeException | Error error) {
-			try { fail(error); }
-			catch (RuntimeException | Error reporting) {
-				if (reporting != error) error.addSuppressed(reporting);
+			// Reported once here; the caller that started the work receives the report
+			CoviaException reported = report(error);
+			try { fail(reported); }
+			catch (RuntimeException | Error recording) {
+				if (recording != reported) reported.addSuppressed(recording);
 			}
-			throw error;
+			throw reported;
 		}
 	}
 
@@ -845,18 +831,42 @@ public class Job {
 		});
 	}
 
-	/** Fail this Job while retaining a non-persisted typed cause for
-	 * result-oriented in-process callers. */
+	/** Fail this Job with what it {@linkplain #report reports} of {@code cause},
+	 * retained, not persisted, for result-oriented in-process callers. */
 	public void fail(Throwable cause) {
 		fail(cause, UnaryOperator.identity());
 	}
 
 	/** Fail with supporting state in the same transition; the decorator must be pure. */
 	protected void fail(Throwable cause, UnaryOperator<AMap<AString, ACell>> decorate) {
-		String message = cause == null ? "Operation failed" : cause.getMessage();
-		String detail = (message != null && !message.isBlank()) ? message : cause.toString();
+		CoviaException reported = (cause == null) ? null : report(cause);
+		String detail = (reported == null) ? "Operation failed" : reported.getMessage();
 		commitUpdate(job -> decorate.apply(job).assoc(Fields.STATUS, Status.FAILED)
-			.assoc(Fields.ERROR, Strings.create(detail)).dissoc(Fields.ERROR_CODE), cause, null);
+			.assoc(Fields.ERROR, Strings.create(detail)).dissoc(Fields.ERROR_CODE), reported, null);
+	}
+
+	/** What failed, when a Job reports a fault in its work: its operation as the caller referred to it follows. */
+	public static final String OPERATION = "Operation %s";
+
+	/** What failed, when a Job reports a fault and does not name its operation. */
+	public static final String UNNAMED_OPERATION = "Operation";
+
+	/** Whose code it was, when a Job does not name its adapter. */
+	public static final String UNNAMED_ADAPTER = "its adapter";
+
+	/**
+	 * What this Job reports of a failure in its work: a Covia exception with
+	 * its reason as it is, and anything else as a fault of its operation in
+	 * the adapter that runs it ({@link FaultException#within}), logged once.
+	 */
+	public CoviaException report(Throwable failure) {
+		AMap<AString, ACell> data = getData();
+		AString op = RT.ensureString(data.get(Fields.OP));
+		AString adapter = RT.ensureString(data.get(Fields.ADAPTER));
+		return FaultException.within(
+			(op == null) ? UNNAMED_OPERATION : OPERATION.formatted(op),
+			(adapter == null) ? UNNAMED_ADAPTER : FaultException.ADAPTER.formatted(adapter),
+			failure);
 	}
 
 	/**

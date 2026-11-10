@@ -96,7 +96,8 @@ public class ToolGuardsTest {
 	private String chat(String agentId, String message, Long toolCallTimeoutMs) {
 		var config = Maps.of(
 			Fields.OPERATION, "v/ops/llmagent/chat",
-			"llmOperation", "v/test/ops/toolllm");
+			"llmOperation", "v/test/ops/toolllm",
+			"caps", "unrestricted");
 		if (toolCallTimeoutMs != null) {
 			config = config.assoc(Strings.create("toolCallTimeoutMs"), CVMLong.create(toolCallTimeoutMs));
 		}

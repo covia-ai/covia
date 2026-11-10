@@ -15,7 +15,7 @@
 		"output": {
 			"type": "object",
 			"properties": {
-				"items": { "type": "array", "description": "Request summaries: {id, from, title, status, created, expires?}" },
+				"items": { "type": "array", "description": "Request summaries: {id, caller, title, status, created, expires?}" },
 				"count": { "type": "integer" }
 			}
 		}

@@ -184,12 +184,12 @@ public class RemoteOperationTest {
 		// matches the hash case: local execution, local job, transient.
 
 		// Publish a B-only definition: into B's CAS, plus a catalog
-		// binding (venue-caller write to the v/ namespace).
+		// binding (the venue's write to its w/global, which v/ shows).
 		AString meta = concatOpMeta("named-fetch");
 		Hash opId = TwoVenueTestServer.ENGINE_B.storeAsset(meta, null);
 		Job bind = TwoVenueTestServer.ENGINE_B.jobs().invokeOperation(
 			"v/ops/covia/write",
-			Maps.of("path", "v/ops/remotetest/concat-named", "value", JSON.parse(meta)),
+			Maps.of("path", "w/global/ops/remotetest/concat-named", "value", JSON.parse(meta)),
 			TwoVenueTestServer.ENGINE_B.venueContext());
 		bind.awaitResult(10_000);
 		assertEquals(Status.COMPLETE, bind.getStatus(), "catalog binding write must succeed");
@@ -234,7 +234,7 @@ public class RemoteOperationTest {
 			"ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100");
 		RequestContext caller = RequestContext.of(Strings.create("did:key:zCallerRejected"));
 
-		assertThrows(IllegalArgumentException.class, () ->
+		assertThrows(covia.exception.NotFoundException.class, () ->
 			TwoVenueTestServer.ENGINE_A.jobs().invokeOperation(
 				didWebRefB(absent), Maps.of("first", "x", "second", "y"), caller));
 
@@ -258,8 +258,8 @@ public class RemoteOperationTest {
 				deadRef, Maps.of("first", "x", "second", "y"), caller));
 		assertFalse(ex.getMessage().contains("Cannot resolve operation"),
 			"a down venue must not masquerade as a missing operation");
-		assertTrue(ex.getMessage().toLowerCase().contains("could not fetch"),
-			"the error must say the fetch failed, got: " + ex.getMessage());
+		assertTrue(ex.getMessage().contains(opId.toHexString()),
+			"the error must name the operation that failed to fetch, got: " + ex.getMessage());
 
 		assertEquals(0, TwoVenueTestServer.ENGINE_A.jobs().getJobs(caller).count(),
 			"a rejected invoke must leave no job record behind");
@@ -286,7 +286,7 @@ public class RemoteOperationTest {
 		assertEquals(Status.FAILED, job.getStatus(),
 			"the job must reach FAILED — not hang as STARTED behind the throw");
 		assertTrue(ex.getMessage() != null
-				&& ex.getMessage().toLowerCase().contains("could not fetch"),
+				&& ex.getMessage().contains(deadDef.substring(deadDef.lastIndexOf('/') + 1)),
 			"the job failure must carry the meaningful fetch error, got: " + ex.getMessage());
 	}
 
@@ -299,7 +299,7 @@ public class RemoteOperationTest {
 		RequestContext caller = RequestContext.of(Strings.create("did:key:zCallerKeyScope"));
 		String didKeyRef = "did:key:z6MkNotAFetchableVenue/a/" + opId.toHexString();
 
-		assertThrows(IllegalArgumentException.class, () ->
+		assertThrows(covia.exception.NotFoundException.class, () ->
 			TwoVenueTestServer.ENGINE_A.jobs().invokeOperation(
 				didKeyRef, Maps.of("first", "x", "second", "y"), caller));
 	}

@@ -18,7 +18,7 @@ venue/
 │   ├── venue/           # Core runtime
 │   │   ├── Engine.java          # Core state: adapters, assets, content, identity
 │   │   ├── JobManager.java      # Job lifecycle: submit, query, persist, recover
-│   │   ├── VenueState.java      # Lattice state wrapper (assets, jobs, users, auth)
+│   │   ├── VenueState.java      # Lattice state wrapper (assets, jobs, users, managed users)
 │   │   ├── Users.java / User.java  # Per-user lattice state (jobs, agents, workspace, h/ inbox)
 │   │   ├── AccessControl.java   # Job ownership enforcement
 │   │   ├── Auth.java            # Auth config, public capability scope, login providers
@@ -49,15 +49,16 @@ venue/
   `CompletableFuture` (or overrides the job-aware `invoke` for direct job
   control — multi-turn, orchestration, HITL).
 - **RequestContext** — caller DID, verified UCAN proofs, capability scope,
-  execution scopes. `Engine.requireAuthority(ctx, resource, ability)` is the
+  execution scopes. `RequestContext.of` builds one; `Engine.context` decides
+  what a principal may do now. `Engine.requireAuthority(ctx, resource, ability)` is the
   point-of-action enforcement primitive; `Engine.crossUserAllows` is the
   single cross-user gate (public-user parity + target-side admission
   `config.accepts` for talking to an agent, #447 + delegation proofs).
   **Two identities, never conflated**: `getCallerDID()` is *who acted*
   (attribution, delegation audience, granting authority); `getUserDID()` is
   *whose namespace* (bare paths, workspace, secrets, jobs, inbox, quota). They
-  differ only for an agent sub-principal, `<ownerDID>:g:<agentId>` — see
-  `docs/UCAN.md` §5.4.
+  differ only for an agent sub-principal, `<ownerDID>:g:<agentId>`, and a
+  delegate acting for another user (`user/sudo`) — see `docs/UCAN.md` §5.4.
 - **Lattice** — CRDT-based persistent state. Structure defined in
   `covia.lattice.Covia`; design in `docs/GRID_LATTICE_DESIGN.md`.
 
@@ -78,7 +79,7 @@ AUTH_REQUIRED).
 | `remoteagent` | Covia agent proxy on a local or remote venue; selected by `g/<id>/agent.adapter`, used through `agent:chat` / `agent:request` | internal transport |
 | `p2p` | The venue's Convex P2P node (`convex-p2p`), off unless `adapters.p2p.join`; peer list plus in-process change events, venue-owned (`docs/CONFIG.md#p2p-network-adaptersp2p`) | `peers`, `connect` |
 | `convex` | Convex blockchain, CAD3 conversion, and secret-backed Ed25519 keys | `query`, `transact`, `generate-key`, `sign`, `decode-cad3`, `encode-cad3` |
-| `crypto` | Local cryptography in Convex formats; secret-backed keys, JWTs and BIP39 phrases (see `docs/CONFIG.md#cryptography-crypto`) | `hash`, `generate-key`, `public-key`, `sign`, `verify`, `encrypt`, `decrypt`, `generate-mnemonic`, `validate-mnemonic`, `derive-key`, `jwt-sign`, `jwt-verify`, `jwt-decode` |
+| `crypto` | Local cryptography in Convex formats; secret-backed and held keys, JWTs and BIP39 phrases (see `docs/CONFIG.md#cryptography-crypto`) | `hash`, `generate-key`, `public-key`, `sign`, `verify`, `encrypt`, `decrypt`, `generate-mnemonic`, `validate-mnemonic`, `derive-key`, `jwt-sign`, `jwt-verify`, `jwt-decode`, `add-key`, `remove-key`, `list-keys` |
 | `mcp` | Model Context Protocol | `toolList`, `toolCall`, bridging ops |
 | `a2a` | Agent-to-Agent protocol client — remote agent cards, tasks and message relay | `send`, `get-task`, `cancel`, `agent-card`, `import-agent` |
 | `langchain` | AI/LLM models | `openai`, `ollama`, `anthropic`, `gemini`, `xai`, `deepseek`, `mistral`, `openrouter`, `models` |
@@ -92,23 +93,24 @@ AUTH_REQUIRED).
 | `orchestrator` | Multi-step workflows | Custom orchestration |
 | `covia` | Lattice CRUD | `read`, `write`, `copy`, `delete`, `append`, `slice`, `list`, `inspect`, `aggregate` |
 | `asset` | Content-addressed assets | `store`, `get`, `getContent`, `list`, `pin` |
-| `agent` | Agent lifecycle | `create`, `fromSkills`, `fork`, `request`, `message`, `trigger`, `query`, `list`, `delete`, `suspend`, `resume`, `update`, `cancelTask`, `deleteSession` |
+| `agent` | Agent lifecycle | `create`, `fromSkills`, `fork`, `request`, `message`, `trigger`, `query`, `list`, `delete`, `suspend`, `resume`, `update`, `cancelTask`, `parkTask`, `deleteSession` |
 | `llmagent` | LLM agent transitions | `chat` |
 | `goaltree` | Goal-tree agent planning | `chat` |
-| `hitl` | Human-in-the-Loop (COG-16) | `request`, `respond`, `list` over the per-user `h/` inbox |
+| `hitl` | Human-in-the-Loop (COG-16) | `request`, `respond`, `list` over the per-user `h/` inbox; `expire` (venue-only, fired by a request's scheduled timeout) |
 | `project` | Projects as a work breakdown tree at `w/projects/<pid>` (`docs/PROJECT.md`); publishes the `projects` skill family | none yet — skills only |
 | `dlfs` | Decentralised file system | `listDrives`, `createDrive`, `deleteDrive`, `list`, `read`, `write`, `mkdir`, `delete` |
 | `vault` | Personal vault (configurable-drive DLFS wrapper) | `read`, `write`, `list`, `mkdir`, `delete` |
 | `secret` | Secret store | `set`, `list`, `delete`, `extract` (direct owner `/run` only, never the public principal) |
-| `memory` | Per-user agent memory (one LWW vector, default `w/memory`) | `recall`, `remember`, `update`, `forget` |
+| `memory` | Per-user agent memory (one vector at a path, default `w/memory`; each edit one atomic update) | `memory` (commands `recall`, `remember`, `update`, `forget`), `memory-recall` |
+| `preferences` | Per-user preferences: one map per user in adapter state, read-only at `x/preferences` (`docs/PREFERENCES.md`) | `preferences` (commands `set`, `remove`, `append`, `insert`, `merge`) |
 | `skills` | Agent skills discovery and SKILL.md import (see `docs/SKILLS.md`) | `list`, `read`, `parse`, `import` |
 | `ucan` | Capability tokens — granting surface (COG-17) | `issue`, `verify` |
 | `scheduler` | Deferred grid-op invocation, one-shot or `repeat.every`; tracked fires are durable Jobs (`docs/GRID_SCHEDULER.md`) | `schedule`, `cancel`, `trigger`, `list` |
 | `auth` | Authentication and identity | `whoami`, `identity-token` (caller-only bearer saved as a secret) |
-| `oauth` | Connected accounts — OAuth 2.0 grants held for users; `http:*` attaches tokens via `bearerSecret: "oauth/<provider>"` | `connect`, `status`, `disconnect` |
+| `oauth` | Connected accounts — OAuth 2.0 grants held for users; `http:*` attaches tokens via `bearerSecret: "oauth/<provider>"` | `connect`, `complete`, `status`, `disconnect` |
 | `user` | Explicit user registration, operator account deletion and discovery (arbitrary DIDs; venue-managed did:web usernames) | `create`, `delete`, `info`, `list` |
 | `venue` | Venue administration — runtime adapter/module lifecycle and process restart (venue-owned; `docs/CONFIG.md`) | `adapters`, `adapter/enable`, `adapter/disable`, `adapter/configure`, `module/load`, `module/unload`, `restart`, `gc` |
-| `test` | Testing | `echo`, `delay`, `fail`, `never`, `random`, `chat`, `pause`, `taskComplete` |
+| `test` | Testing | `echo`, `delay`, `fail`, `never`, `hold` (finishes when the test releases its gate), `holdstart` (as `hold`, inside its own invocation, so its start waits too), `random`, `chat`, `pause`, `taskComplete`, `failllm` (a model call that fails as the agent's `model` names: `setup`, `unavailable`, `value`, `content`, `bug`, `long-setup`), `step` (an agent transition scripted by its input: hold at a gate, complete, fail or park the task, fail the cycle, yield) |
 
 Module adapters (shaded module jars, not in covia.jar — `docs/CONFIG.md` "Venue modules"):
 
@@ -152,7 +154,7 @@ Base path: `/api/v1/`
 | `/.well-known/did.json` | GET | Venue DID document (#167) |
 | `/.well-known/oauth-authorization-server` | GET | OAuth 2.1 AS metadata (RFC 8414) when `auth.oauth.provider` is enabled |
 | `/oauth/{authorize,token,revoke}` | — | OAuth 2.1 authorization server: code+PKCE flow issuing venue bearers (`auth.oauth.provider`) |
-| `/auth/connect/{provider}/callback` | GET | OAuth connection callback — the provider redirects the user here after approval (`adapters.oauth`; not `/api/v1`) |
+| `/auth/connect/{provider}/callback` | GET | OAuth connection callback — the provider redirects the user here after approval; it hands the browser a one-time completion code for `oauth:complete` (`adapters.oauth`; not `/api/v1`) |
 
 MCP endpoint at `/mcp`; A2A is opt-in with an `a2a` config block.
 
@@ -167,16 +169,24 @@ Covia exposes both the venue front door and individual hosted agents:
 
 The front door invokes `a2a.defaultChatOp` for a fresh `SendMessage`. A
 per-agent `SendMessage` invokes `agent:request`; the resulting Covia task Job
-is the A2A Task, and its session is the A2A `contextId`. `GetTask` and
-`CancelTask` use the same per-agent endpoint.
+is the A2A Task, and its session is the A2A `contextId`. `GetTask`,
+`CancelTask`, `SubscribeToTask` and a `taskId` continuation on the same
+per-agent endpoint reach only the asker's own tasks for that agent; anything
+else is refused alike (`A2A.AGENT_TASK_NOT_FOUND`).
 
-Per-agent exposure is private by default. The owner may always address their
-agent. Agent config `a2a: {public: true}` publishes the card; an explicit
-`a2a.caps` additionally permits anonymous interaction, running under the
-owner's identity narrowed by that scope. Card-only publication does not grant
-interaction. Anonymous denials are existence-hiding 404s; authenticated
-callers without standing receive 403. Native authentication and UCAN checks
-still apply—A2A introduces no new authority.
+Per-agent exposure is private by default. Whoever may ask the agent may use
+its endpoint: the owner, a caller the agent's `config.accepts` admits
+(`"anyone"` includes anonymous callers), or one presenting an `agent/request`
+UCAN — the same check as every other way of asking an agent. Each request is
+the asker's own, and the agent serves it as itself, its tool calls under its
+own `config.caps` and an external agent's backend with its controller's
+authority, so an owner who wants a narrower public face publishes a
+dedicated agent. Agent config `a2a: {public: true}` publishes the card and
+admits nobody. Anonymous callers ask as the venue's public principal, so
+the target's admission policy can authorise the action. The bound A2A
+endpoint does not require generic `invoke` authority.
+Anonymous denials are existence-hiding 404s; authenticated callers without
+standing receive 403. A2A introduces no new authority.
 
 Detailed addressing, publication, identifier mapping and access semantics are
 in [`docs/A2A_AGENTS.md`](docs/A2A_AGENTS.md), the implementation companion to
@@ -213,10 +223,9 @@ AMap<AString, ACell> data = engine.jobs().getJobData(jobID, requestCtx);
 
 // Lifecycle control
 engine.jobs().cancelJob(jobID, requestCtx);
-// Pause/resume are opt-in via Job hooks (the adapter calls job.setPauseHook /
-// setResumeHook when it starts a suspendable execution). A job with no hook
-// rejects them (HTTP 409). Pause is STARTED-only; resume never re-invokes the
-// operation from stored input.
+// Pause/resume are opt-in by the job's adapter (AAdapter.canPause / canResume).
+// A job whose adapter cannot rejects them (HTTP 409). Pause is STARTED-only;
+// resume never re-invokes the operation from stored input.
 engine.jobs().pauseJob(jobID, requestCtx);
 engine.jobs().resumeJob(jobID, requestCtx);
 ```
@@ -228,7 +237,7 @@ Hash id = engine.storeAsset(metadataString, contentBlob);
 
 // Per-user access (jobs, agents, secrets, workspace, h/ inbox)
 User user = engine.getVenueState().users().ensure(callerDID);
-Index<Blob, ACell> userJobs = user.getJobs();
+Index<Blob, ACell> userJobs = user.jobs().getAll();
 
 ```
 
@@ -237,10 +246,54 @@ Adapter-owned state uses `AdapterState`; see
 
 ### Testing
 
-- Use the shared `TestEngine.ENGINE` with per-test DIDs (`TestEngine.uniqueDID`)
-  — never a fresh Engine per test unless persistence/restart is under test
+- Use the shared `TestEngine.ENGINE` with per-test DIDs (`TestEngine.uniqueDID`,
+  `TestEngine.uniqueManagedDID` for a user the venue hosts)
+  — never a fresh Engine per test unless persistence/restart is under test. It
+  has a fictitious public hostname (`TestEngine.HOSTNAME`) and the default `tmp`
+  file root, which a class fills with `TestEngine.writeTempFile`
+- Every test class can run again in the same JVM, which is how an intermittent
+  failure is reproduced: a scratch JUnit `LauncherFactory` harness loops the
+  class under CPU load with the suite's parallel settings, calling
+  `TestEngine.nextRun()` between runs so `uniqueDID` gives each test an
+  identity no earlier run used. A class with an engine of its own starts it in
+  `@BeforeAll` and closes it in `@AfterAll`, and venue-global state a class
+  writes (the public identity's drives and secrets) must not stop a second
+  run: it removes that state in `@AfterAll` or overwrites it
 - Cross-venue tests use the shared `TwoVenueTestServer` (static venues,
   per-test identities) — never spin venues per test
+- Launching a venue is the expensive part: tell a feature's story as one
+  scenario on one store (a relaunch only when persistence is under test), and
+  run authority matrices and edge cases on `TestEngine.ENGINE` or a store from
+  `TestTemp.etch`. A test class in the default suite takes a second or two at
+  most. `TestEngine.ENGINE` is Etch-backed so store machinery such as online
+  GC runs on it under the suite's own load (`SharedEngineOnlineGcTest`)
+- A test waits on a signal from the code under test, never a sleep or timed
+  poll: an agent's run-loop events (`AgentWatch`), a Job's updates
+  (`TestEngine.awaitJob`), a `TestAdapter.TestGate` that holds
+  `v/test/ops/hold` work in flight, or a `TestSignal` a stub calls
+- Unit tests run on a held clock, which wakes nothing: `TestEngine.ENGINE` and
+  `Engine.createTemp(config)` hold theirs at the current time, so nothing fires
+  in the middle of another test. A test that moves time takes a venue of its
+  own, `Engine.createTemp(clock, config)` with a `DrivenClock`, and calls
+  `engine.application().update()` after each step (`SteppedSchedulerTest`).
+  A test never opens a `CoviaApplication` itself unless that is what it tests:
+  `TestEngine.restartable(config)` is a venue it can restart in memory, and
+  `TestEngine.application(...)` an application over its own store or host, both
+  on a held clock unless given a `VenueClock`. `Engine.createRealTime` is the
+  system clock, for integration and smoke tests; `BothClocksTest` runs the engine
+  on both. A venue behind HTTP (`VenueServer`, `TestServer`, `TwoVenueTestServer`)
+  stays on the system clock
+- Size and durability assertions call `engine.flush()` first: otherwise state
+  reaches the store only when the host's sync worker next runs, if whoever
+  opened the host runs one
+- A test that needs an Etch store of its own (restart, recovery, GC, the root,
+  identity) gets it from `TestTemp.etch` or `TestTemp.etchFile`, never
+  `@TempDir` or `EtchStore.createTemp` (`TestTemp` says why); a test server
+  names its store, `"memory"` unless persistence is under test
+- A test that opens a release-written store fixture (`src/test/resources/migrations`)
+  is a failsafe `*IT`, run by `mvn verify`; migration unit tests build their
+  older states in code (`docs/MIGRATE.md`, Testing), and a new venue version or
+  older shape is seeded in `VenueMigrationEndToEndTest`
 - `mvn test -pl venue` runs the module; asset examples in
   `src/main/resources/asset-examples/`
 
@@ -269,18 +322,21 @@ java -jar target/covia.jar [config.json]
 - `docs/CONFIG.md` — operator configuration reference
 - `docs/EMBEDDING.md` — running a venue inside another application: lifecycle and close order, adapters, user data, upgrading from 0.9.x
 - `docs/JOBS.md` — job implementation semantics (COG-8 companion)
+- `docs/ERRORS.md` — how the venue raises, types and reports failures, and what each surface tells a caller
 - `docs/UCAN.md` — capabilities, granting surface, proof channels
+- `docs/VENUE_AUTHORITY.md` — raising authority above a principal's base: allowances, activation, and the venue's power over the users it hosts (design)
+- `docs/HELD_KEYS.md` — keyrings of private keys the crypto adapter holds for the identities a venue hosts: store format, use and custody rules
 - `docs/HITL_TOKEN_TRANSPORT.md` — COG-19 design (proposal): HITL transport of
   a user-signed, self-sovereign token for cross-venue access (covia#292)
 - `docs/SKILLS.md` — agent skill system
 - `docs/OPERATIONS.md` — operation model, defaults, discovery
+- `docs/PREFERENCES.md` — per-user preferences: storage, the `x/preferences` view, the edit tool's commands and size limit
 - `docs/MODELS.md` — model definition assets (design): a model is an operation asset at `v/models/<provider>/<id>`
 - `docs/PROJECT.md` — projects (design): a work-breakdown tree at `w/projects/<pid>` where every node has a principal, an assignee, targets, tolerances and PRINCE2-style product descriptions, and the assignee of a node is the principal of its children; the `project` adapter builds, executes and rolls up the tree
 - `docs/GRID_LATTICE_DESIGN.md` — lattice design
-- `docs/MIGRATE.md` — venue migration requirements (#621): pure migration
-  functions per lattice component that embedders compose into their own
-  migration; adapter-defined migration rules; optional lazy migration
-- `docs/AGENT_LOOP.md`, `docs/AGENT_SESSIONS.md`, `docs/AGENT_TEMPLATES.md`,
-  `docs/GOAL_TREE.md` — agent architecture
+- `docs/MIGRATE.md` — venue migration: requirements, ownership and design,
+  each migration in this build with its code, and how migration is tested
+- `docs/AGENT_LOOP.md`, `docs/AGENT_SESSIONS.md`, `docs/AGENT_TASKS.md`,
+  `docs/AGENT_TEMPLATES.md`, `docs/GOAL_TREE.md` — agent architecture
 - `docs/READ_API.md` — job-free read surface
 - `../AGENTS.md` — project-level guide; `../BUILD.md` — release flow

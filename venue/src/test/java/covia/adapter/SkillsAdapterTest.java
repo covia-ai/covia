@@ -27,6 +27,7 @@ import convex.core.lang.RT;
 import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.AuthException;
+import covia.exception.ConfigurationException;
 import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -155,7 +156,7 @@ public class SkillsAdapterTest {
 		String message = assertThrows(RuntimeException.class,
 			() -> call("v/ops/skills/list",
 				Maps.of(K_SKILLSET, Vectors.of(Strings.create("w/skills"))), ctx)).getMessage();
-		assertTrue(message.contains("skillset") || message.contains("string"), message);
+		assertTrue(message.contains("skillset"), message);
 	}
 
 	// ========== read ==========
@@ -299,14 +300,14 @@ public class SkillsAdapterTest {
 	@Test
 	public void testMalformedDefaultsAreRejectedAtConfigureTime() {
 		SkillsAdapter adapter = (SkillsAdapter) engine.getAdapter("skills");
-		assertTrue(assertThrows(IllegalArgumentException.class,
+		assertTrue(assertThrows(ConfigurationException.class,
 			() -> adapter.configure(Maps.of(
 				SkillsAdapter.K_DEFAULT_SKILLSETS, Strings.create("v/skills/root")), true))
-			.getMessage().contains("must be an array"));
-		assertTrue(assertThrows(IllegalArgumentException.class,
+			.getMessage().contains(SkillsAdapter.K_DEFAULT_SKILLSETS.toString()));
+		assertTrue(assertThrows(ConfigurationException.class,
 			() -> adapter.configure(Maps.of(
 				SkillsAdapter.K_DEFAULT_SKILLS, Vectors.of(CVMLong.create(42))), true))
-			.getMessage().contains("ref strings"));
+			.getMessage().contains(SkillsAdapter.K_DEFAULT_SKILLS.toString()));
 		assertTrue(adapter.configure(Maps.of(
 			SkillsAdapter.K_DEFAULT_SKILLSETS, Vectors.of(Strings.create("v/skills/root"))), true));
 		assertTrue(adapter.configure(Maps.empty(), true));
@@ -329,7 +330,7 @@ public class SkillsAdapterTest {
 		try {
 			RequestContext venueCtx = own.venueContext();
 			own.jobs().invokeInternal("v/ops/covia/write",
-				Maps.of(Fields.PATH, Strings.create("v/skills/house/house-rules"),
+				Maps.of(Fields.PATH, Strings.create("w/global/skills/house/house-rules"),
 					Fields.VALUE, Maps.of(Fields.DESCRIPTION,
 						Strings.create("The house way of doing things"))), venueCtx)
 				.get(5, TimeUnit.SECONDS);

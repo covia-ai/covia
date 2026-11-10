@@ -66,7 +66,9 @@ class SecretAdapterTest {
 		return engine.getAdapter("secret").getOperations().get(Strings.create(op));
 	}
 	private CompletableFuture<ACell> run(String op, ACell input, RequestContext ctx) {
-		return engine.jobs().runOperation("v/ops/secret/" + op, input, ctx);
+		return "extract".equals(op)
+			? engine.jobs().runOperation("v/ops/secret/" + op, input, ctx)
+			: engine.jobs().runToolOperation(Strings.create("v/ops/secret/" + op), input, ctx);
 	}
 	private ACell run(String op, ACell input) {
 		ACell result = run(op, input, owner).join();
@@ -145,10 +147,12 @@ class SecretAdapterTest {
 		engine.jobs().addJobUpdateListener(listener);
 		try {
 			assertEquals(Strings.create(VALUE), RT.getIn(run("extract", Maps.of("name", "KEY")), "value"));
-			assertEquals(Strings.create(VALUE), RT.getIn(run("extract", Maps.of("name", "KEY"), scope("s/KEY", Abilities.SECRET_EXTRACT)).join(), "value"));
+			assertEquals(Strings.create(VALUE), RT.getIn(run("extract", Maps.of("name", "KEY"), scope("s/KEY", Abilities.SECRET_EXTRACT).withCaps(Vectors.of(
+				Capability.create(Strings.create("s/KEY"), Abilities.SECRET_EXTRACT),
+				Capability.create(Strings.create("v/ops/secret/extract"), Abilities.INVOKE)))).join(), "value"));
 			assertEquals(before, engine.jobs().getJobs(owner));
 			assertTrue(events.isEmpty());
-			assertFalse(engine.getVenueState().users().get(owner.getUserDID()).get().toString().contains(VALUE));
+			assertFalse(engine.getVenueState().users().user(owner.getUserDID()).get().toString().contains(VALUE));
 		} finally { engine.jobs().removeJobUpdateListener(listener); }
 	}
 
@@ -199,7 +203,8 @@ class SecretAdapterTest {
 
 	@Test void extractionRefusesAgentsSessionsTasksAndMcpTools() {
 		RequestContext agent = RequestContext.ofAgent(owner.getUserDID(), Strings.create("mina"));
-		for (RequestContext ctx : new RequestContext[] { agent, RequestContext.of(agent.getCallerDID()),
+		for (RequestContext ctx : new RequestContext[] { agent,
+			RequestContext.of(agent.getCallerDID(), owner.getUserDID(), null),
 			agent.withCaps(Vectors.of(Capability.create(null, Strings.create("*")))),
 			owner.withSessionId(Blob.fromHex("01")), owner.withTaskId(Blob.fromHex("02")) }) {
 			assertEquals(SecretAdapter.EXTRACT_DIRECT_ONLY, failure(run("extract", Maps.of("name", "KEY"), ctx)).getMessage());
@@ -267,7 +272,7 @@ class SecretAdapterTest {
 	}
 
 	@Test void missingAndUnreadableSecretsHaveDistinctSanitizedFailures() {
-		var user = engine.getVenueState().users().get(owner.getUserDID());
+		var user = engine.getVenueState().users().user(owner.getUserDID());
 		user.secrets().store("CORRUPT", VALUE, SecretStore.keys(AKeyPair.generate()));
 		put("UNKNOWN_VERSION", VALUE);
 		user.cursor().path(Namespace.S, Strings.create("UNKNOWN_VERSION"), Strings.create("keyVersion")).set(CVMLong.create(7));

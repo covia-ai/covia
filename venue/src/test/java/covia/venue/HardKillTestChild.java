@@ -31,13 +31,14 @@ import covia.venue.server.VenueServer;
  *   SLEEP &lt;ms&gt;                        PROTO OK
  *   HALT                              (no response — Runtime.halt)
  *   EXIT                              (no response — orderly close + exit 0)
+ *   SYSTEM_EXIT                       (no response — exit 0; the shutdown hook closes)
  * </pre>
  *
  * <p>WRITE invokes {@code v/ops/dlfs/write} then calls {@code engine.flush()}
  * before responding. After OK, the value is durable on disk.</p>
  *
  * <p>WRITE_NOFLUSH invokes the write but does NOT flush — durability then
- * relies on the background sweep daemon.</p>
+ * relies on the venue's host sync worker.</p>
  *
  * <p>HALT calls {@link Runtime#halt(int)} which bypasses shutdown hooks and
  * simulates a process crash.</p>
@@ -80,6 +81,7 @@ public class HardKillTestChild {
 			return;
 		}
 		Engine engine = server.getEngine();
+		MainVenue.closeOnJvmShutdown(java.util.List.of(server));
 
 		out.println(PROTO + " READY " + server.port());
 
@@ -105,6 +107,8 @@ public class HardKillTestChild {
 				} else if ("EXIT".equals(line)) {
 					server.close();
 					System.exit(0);
+				} else if ("SYSTEM_EXIT".equals(line)) {
+					System.exit(0);
 				} else {
 					out.println(PROTO + " ERR unknown_command " + line);
 				}
@@ -127,6 +131,8 @@ public class HardKillTestChild {
 		String path = parts[1];
 		String content = parts[2];
 
+		engine.jobs().invokeOperation("v/ops/dlfs/create-drive", Maps.of("name", drive),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
 		engine.jobs().invokeOperation(
 			"v/ops/dlfs/write",
 			Maps.of("drive", drive, "path", path, "content", content),

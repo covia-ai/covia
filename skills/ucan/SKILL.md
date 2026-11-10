@@ -19,6 +19,7 @@ Manage capability-based authorisation on a Covia venue using UCAN tokens.
 - **aud** (audience) — who receives the capability
 - **att** (attenuations) — array of `{with, can}` pairs defining what's allowed
 - **exp** (expiry) — Unix timestamp when the token expires
+- **prf** (proofs) — the grants the issuer passes on; empty for a root
 
 ## Resources (the `with` field)
 
@@ -38,9 +39,9 @@ Resources are DID URL paths into a user's namespace:
 |---------|-------|
 | `*` | Full delegation |
 | `crud/read` | Read data |
-| `crud/write` | Write data |
+| `crud/write` | Write data; creating a key or file also needs it on the map or directory that holds it |
 | `crud/delete` | Delete data |
-| `invoke` | Execute operations |
+| `invoke` | Look up and run an arbitrary operation at the granted location; resource authority remains separate |
 | `agent/message` | Send messages to an agent |
 | `secret/use` | Use a secret in an operation without seeing it |
 | `secret/extract` | Reveal a secret value (direct owner call only) |
@@ -64,7 +65,7 @@ ucan_issue
   exp: <unix-timestamp>
 ```
 
-Returns a signed UCAN token that the audience can present with future requests.
+Returns a signed UCAN token that the audience can present with future requests. The venue signs it, and it is valid at this venue only; it covers what the caller may grant (its own resources, those of an identity it signs in as, its agents', or another's under a presented `grant/<can>` right), and no more than the caller holds. With `key`, a key from a keyring signs it instead, valid anywhere.
 
 ### `verify` — Verify and explain a token
 
@@ -78,7 +79,7 @@ ucan_verify
   aud: "<audience-DID>"     # optional — defaults to the caller
 ```
 
-Reports validity (with a diagnosable reason when invalid — expired, bad signature, unparseable), issuer/audience, delegation chain depth and root issuer, and a per-capability root-authority verdict: `owner` (self-sovereign — signed by the resource owner), `venue` (this venue's grant), or `refused`. Use it whenever a token is rejected and the enforcement error isn't enough.
+Reports validity (with a diagnosable reason when invalid — expired, bad signature, unparseable), issuer/audience, delegation chain depth and root issuer, and a per-capability root-authority verdict: `owner` (an identity root — signed by the resource owner or an identity that signs in as it), `venue` (this venue's grant, valid here only), or `refused`. Use it whenever a token is rejected and the enforcement error isn't enough.
 
 ### `explain` — Explain the UCAN model
 
@@ -117,6 +118,22 @@ ucan_issue
 # secretHeaders; the venue sends it only to urls under the nb.url prefix
 ```
 
+## Example: Pass On a Grant This Venue Holds
+
+```
+# Venue B granted this venue read on B's shared folder (b-grant is that JWT).
+# Called as the venue itself, pass part of it on to Alice:
+ucan_issue
+  aud: "did:key:zAlice..."
+  att: [{ "with": "did:web:b.example/w/shared/reports/", "can": "crud/read" }]
+  exp: <no later than b-grant's exp>
+  prf: ["<b-grant>"]
+
+# Alice presents the token at B, directly or through this venue with
+# authenticateAs: "caller"; B checks the chain back to its own grant.
+# Only the venue itself may supply prf; any other caller is refused.
+```
+
 ## Solo Demo (No Second User)
 
 If demoing alone without a second DID, you can still show the flow:
@@ -133,9 +150,3 @@ If demoing alone without a second DID, you can still show the flow:
 2. **Explain the model** — use the `explain` command to walk through the concepts. The token itself demonstrates the structure even without a real second party.
 
 3. **Show the token contents** — UCANs are self-describing. Display the issued token and walk through the fields (issuer, audience, attenuations, expiry, signature).
-
-## Current Status
-
-- **Phase C1 (complete):** Venue-signed tokens, per-request verification, DID URL resources, adversarial tests
-- **Phase C2 (planned):** Delegation chains, proof chain walking, revocation
-- **Phase C3 (planned):** Cross-venue federation with UCAN proofs

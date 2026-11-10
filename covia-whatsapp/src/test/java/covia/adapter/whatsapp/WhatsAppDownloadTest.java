@@ -75,6 +75,7 @@ class WhatsAppDownloadTest {
 	@Test void anExplicitDestinationIsWrittenWithTheCallersAuthority() throws Exception {
 		try (Fixture f = new Fixture(WhatsAppAdapterTest.spec())) {
 			f.api.media.put("91002", new Media(VOICE, "audio/ogg"));
+			run(f.engine, OWNER, "v/ops/dlfs/create-drive", Maps.of("name", "imports"));
 			ACell saved = f.run("download", Maps.of("media_id", "91002", "destination", "dlfs/imports", "fileName", "note.ogg"));
 			assertEquals("dlfs/imports/note.ogg", text(saved, "ref"));
 			assertEquals("note.ogg", text(saved, "fileName"));

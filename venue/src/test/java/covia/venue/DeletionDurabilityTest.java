@@ -163,7 +163,7 @@ public class DeletionDurabilityTest {
 		delete("s/revoked-token");
 		mergeBack(preDelete);
 
-		assertFalse(engine.getVenueState().users().get(DID).secrets().exists("revoked-token"),
+		assertFalse(engine.getVenueState().users().user(DID).secrets().exists("revoked-token"),
 			"a deleted secret must not resurrect after a stale merge-back");
 	}
 
@@ -181,7 +181,7 @@ public class DeletionDurabilityTest {
 
 		mergeBack(preDelete);
 
-		assertNull(engine.getVenueState().users().get(DID).agent("dur-agent"),
+		assertNull(engine.getVenueState().users().user(DID).agent("dur-agent"),
 			"a hard-deleted agent must not resurrect after a stale merge-back");
 	}
 }

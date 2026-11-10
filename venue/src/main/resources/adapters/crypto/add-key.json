@@ -1,0 +1,56 @@
+{
+  "name": "Add a key to your keyring",
+  "description": "Move an Ed25519 seed or a BIP39 phrase from one of your secrets into your keyring, where it can be used under your authority but never read. The secret stays where it is; delete it if the keyring copy is the only one you want.",
+  "operation": {
+    "adapter": "crypto:add-key",
+    "readOnly": false,
+    "activityLabel": "Add a key to your keyring",
+    "input": {
+      "type": "object",
+      "properties": {
+        "seed": {
+          "type": "string",
+          "description": "Reference to your own secret holding a 32-byte hexadecimal Ed25519 seed: s/NAME. Give this or mnemonic. Never pass the seed inline."
+        },
+        "mnemonic": {
+          "type": "string",
+          "description": "Reference to your own secret holding an English BIP39 phrase: s/NAME. Give this or seed. Never pass the phrase inline."
+        },
+        "label": {
+          "type": "string",
+          "maxLength": 256,
+          "description": "Your own name for the key or phrase in the keyring."
+        },
+        "overwrite": {
+          "type": "boolean",
+          "default": false,
+          "description": "For a key or phrase already held, replace its label. Otherwise adding it again fails."
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "accountKey": {
+          "type": "string",
+          "description": "For a key: its native 32-byte Ed25519 AccountKey; JSON renders it as a 0x-prefixed hexadecimal string.",
+          "pattern": "^0x(?:[0-9a-f]{2})*$"
+        },
+        "did": {
+          "type": "string",
+          "description": "The key's did:key, or a phrase's ID: the did:key of its SLIP-10 master node with no passphrase."
+        },
+        "words": {
+          "type": "integer",
+          "description": "For a phrase: its number of words."
+        }
+      },
+      "required": [
+        "did"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

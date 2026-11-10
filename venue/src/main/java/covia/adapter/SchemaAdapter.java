@@ -11,6 +11,8 @@ import convex.core.data.Strings;
 import convex.core.data.prim.CVMBool;
 import convex.core.json.schema.JsonSchema;
 import convex.core.lang.RT;
+import covia.exception.InvalidInputException;
+import covia.exception.NotSupportedException;
 import covia.venue.RequestContext;
 
 /**
@@ -50,7 +52,6 @@ public class SchemaAdapter extends AAdapter {
 
 	@Override
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
-		requireInvoke(ctx);
 		String op = getSubOperation(meta);
 		try {
 			return switch (op) {
@@ -60,7 +61,7 @@ public class SchemaAdapter extends AAdapter {
 				case "coerce" -> CompletableFuture.completedFuture(handleCoerce(input));
 				case "check" -> CompletableFuture.completedFuture(handleCheck(input));
 				default -> CompletableFuture.failedFuture(
-					new IllegalArgumentException("Unknown schema operation: " + op));
+					new NotSupportedException("Unknown schema operation: " + op));
 			};
 		} catch (Exception e) {
 			return CompletableFuture.failedFuture(e);
@@ -73,7 +74,7 @@ public class SchemaAdapter extends AAdapter {
 		// reparse (#89): a JSON-looking string IS a string, and a validation
 		// verdict must apply to what the caller actually sent.
 		ACell value = RT.getIn(input, K_VALUE);
-		if (schema == null) throw new IllegalArgumentException("'schema' is required");
+		if (schema == null) throw new InvalidInputException("'schema' is required");
 
 		String err = JsonSchema.validate(schema, value);
 		if (err == null) {
@@ -85,7 +86,7 @@ public class SchemaAdapter extends AAdapter {
 	private ACell handleValidateAll(ACell input) {
 		AMap<AString, ACell> schema = getMap(RT.getIn(input, K_SCHEMA));
 		ACell value = RT.getIn(input, K_VALUE);
-		if (schema == null) throw new IllegalArgumentException("'schema' is required");
+		if (schema == null) throw new InvalidInputException("'schema' is required");
 
 		AVector<AString> errors = JsonSchema.validateAll(schema, value);
 		return Maps.of(
@@ -103,7 +104,7 @@ public class SchemaAdapter extends AAdapter {
 	private ACell handleCoerce(ACell input) {
 		AMap<AString, ACell> schema = getMap(RT.getIn(input, K_SCHEMA));
 		ACell value = RT.getIn(input, K_VALUE);
-		if (schema == null) throw new IllegalArgumentException("'schema' is required");
+		if (schema == null) throw new InvalidInputException("'schema' is required");
 
 		ACell coerced = JsonSchema.coerce(schema, value);
 		return Maps.of(K_VALUE, coerced);
@@ -111,7 +112,7 @@ public class SchemaAdapter extends AAdapter {
 
 	private ACell handleCheck(ACell input) {
 		AMap<AString, ACell> schema = getMap(RT.getIn(input, K_SCHEMA));
-		if (schema == null) throw new IllegalArgumentException("'schema' is required");
+		if (schema == null) throw new InvalidInputException("'schema' is required");
 
 		String err = JsonSchema.checkSchema(schema);
 		if (err == null) {
@@ -134,10 +135,10 @@ public class SchemaAdapter extends AAdapter {
 			try {
 				parsed = convex.core.util.JSON.parse(s.toString());
 			} catch (Exception e) {
-				throw new IllegalArgumentException("'schema' string is not valid JSON: " + e.getMessage());
+				throw new InvalidInputException("'schema' string is not valid JSON: " + e.getMessage());
 			}
 			if (parsed instanceof AMap) return (AMap<AString, ACell>) parsed;
-			throw new IllegalArgumentException(
+			throw new InvalidInputException(
 				"'schema' must be a JSON object, got: " + (parsed == null ? "null" : parsed.getClass().getSimpleName()));
 		}
 		return null;

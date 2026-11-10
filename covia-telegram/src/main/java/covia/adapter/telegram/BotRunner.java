@@ -52,13 +52,25 @@ import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.adapter.AAdapter;
 import covia.adapter.webhook.WebhookInbox;
+import covia.adapter.messaging.ChannelAuthentication;
+import covia.adapter.messaging.ChannelAuthentication.Channel;
 import covia.adapter.messaging.MessagingBot;
 import covia.adapter.messaging.MessagingMedia;
 import covia.adapter.messaging.MessagingText;
 import covia.adapter.messaging.ConversationRouter;
 import covia.adapter.messaging.ConversationSessions;
 import covia.api.Fields;
+import covia.exception.AuthException;
+import covia.exception.ConfigurationException;
+import covia.exception.CoviaException;
+import covia.exception.FaultException;
+import covia.exception.InvalidDefinitionException;
+import covia.exception.InvalidInputException;
 import covia.exception.JobFailedException;
+import covia.exception.NotSupportedException;
+import covia.exception.ResponseException;
+import covia.exception.StillStartingException;
+import covia.exception.UnavailableException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.RequestContext;
@@ -105,14 +117,28 @@ final class BotRunner implements MessagingBot<BotSpec> {
 	static final AString K_FAILED = Strings.intern("failed");
 	static final AString K_MANAGED = Strings.intern("managed");
 	private static final AString K_BOT = Strings.intern("bot");
-	private static final AString K_VIA = Strings.intern("via");
-	private static final AString K_CHANNEL = Strings.intern("channel");
-	private static final AString K_ACCESS = Strings.intern("access");
-	private static final AString K_FROM = Strings.intern("from");
-	private static final AString K_CHAT = Strings.intern("chat");
-	private static final AString K_MESSAGE_ID = Strings.intern("message_id");
+	/** Telegram's own extras in a channel record: what a message replies to, and its album. */
+	private static final AString K_REPLY_TO = Strings.intern("reply_to_message_id");
+	private static final AString K_MEDIA_GROUP = Strings.intern("media_group_id");
 
 	enum State { STARTING, PENDING, RUNNING, STOPPED }
+
+	/** A Bot API call while the bot's first start is in flight; the bot's name follows. */
+	static final String BOT_STARTING = "Telegram bot '%s' is starting; try again shortly";
+	/** A Bot API call while the bot retries a failed start; its name, then why. */
+	static final String BOT_PENDING = "Telegram bot '%s' is not running (%s); it keeps retrying";
+	/** A Bot API call to a stopped bot; its name follows. */
+	static final String BOT_STOPPED = "Telegram bot '%s' is stopped";
+
+	/** Why the bot cannot call the Bot API now. */
+	private UnavailableException notRunning() {
+		if (stopped) return new UnavailableException(String.format(BOT_STOPPED, spec.name()));
+		return switch (state) {
+			case STARTING -> new StillStartingException(String.format(BOT_STARTING, spec.name()));
+			case PENDING -> new UnavailableException(String.format(BOT_PENDING, spec.name(), error));
+			default -> new UnavailableException(String.format(BOT_STOPPED, spec.name()));
+		};
+	}
 
 	private final TelegramAdapter adapter;
 	final BotSpec spec;
@@ -158,7 +184,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 			this::legacySession, chat -> {
 				if (managed == Managed.RUNTIME) adapter.deleteLegacyPath(context(), legacySessionsPath(spec.name()) + "/" + chat);
 			}, this, () -> !stopped && adapter.isActive());
-		conversations = new ConversationRouter(adapter.engine, spec, sessionStore);
+		conversations = new ConversationRouter(adapter.engine, spec, adapter.principalOf(spec, managed), sessionStore, this::lists);
 		inbox = new WebhookInbox(adapter.engine, storage, statePath("inbox") + "/unbound");
 	}
 
@@ -353,7 +379,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 			try {
 				if (recover) { recoverPending(); recover = false; }
 				if (System.currentTimeMillis() >= nextPrune) {
-					inbox.pruneCompleted(System.currentTimeMillis() - TimeUnit.DAYS.toMillis(7));
+					inbox.pruneCompleted(adapter.engine.currentTimestamp().longValue() - TimeUnit.DAYS.toMillis(7));
 					nextPrune = System.currentTimeMillis() + TimeUnit.HOURS.toMillis(1);
 				}
 				GetUpdates req = new GetUpdates().offset(offset).timeout(POLL_TIMEOUT_SECS);
@@ -476,7 +502,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 				claimed = inbox.claim(id);
 				if (!claimed) return;
 				// Only session delivery can share a local transaction with its recipient.
-				if (isAgentTurn(update) && conversations.supportsSessionDelivery()) {
+				if (isAgentTurn(update) && conversations.supportsSessionDelivery(channel(update.message()))) {
 					deliverTurn(id, update);
 					return;
 				}
@@ -513,12 +539,12 @@ final class BotRunner implements MessagingBot<BotSpec> {
 	private void deliverTurn(String id, Update update) {
 		Message m = update.message();
 		try {
-			String refusal = admitted(update) ? conversations.deliveryRefusal() : NOT_ADMITTED;
-			if (refusal != null) throw new IllegalStateException(refusal);
+			String refusal = admitted(update) ? conversations.deliveryRefusal(channel(update.message())) : NOT_ADMITTED;
+			if (refusal != null) throw new NotSupportedException(refusal);
 			respondAgent(id, m, messageText(m), true);
 		} catch (RuntimeException failure) {
 			String detail = concise(failure);
-			AMap<AString, ACell> rejected = guarded(() -> inbox.fail(id, DELIVERY_FAILED, detail, System.currentTimeMillis()));
+			AMap<AString, ACell> rejected = guarded(() -> inbox.fail(id, DELIVERY_FAILED, detail, adapter.engine.currentTimestamp().longValue()));
 			if (rejected == null) throw failure; // Already admitted: report an uncertain outcome, not "not delivered".
 			failed.incrementAndGet();
 			error = "Update " + id + " was not delivered: " + detail;
@@ -557,7 +583,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 		User from = senderOf(update);
 		Long fromId = from == null ? null : from.id();
 		String fromName = from == null ? null : from.username();
-		if (!admitted(update)) throw new IllegalStateException(NOT_ADMITTED);
+		if (!admitted(update)) throw new NotSupportedException(NOT_ADMITTED);
 		String text = messageText(m);
 		if (!text.isEmpty()) {
 			if (addressedToAnotherBot(text)) return;   // /cmd@otherbot in a group
@@ -669,10 +695,10 @@ final class BotRunner implements MessagingBot<BotSpec> {
 			// Remote agent facades cannot join a local lattice transaction. Preserve
 			// their existing claimed-receipt protocol until the remote result arrives.
 			typing(chatId, m);
-			sendAgentReply(m, text, conversations.chat(conversationKey(m, chatId), input));
+			sendAgentReply(m, text, conversations.chat(conversationKey(m, chatId), input, channel(m)));
 			return;
 		}
-		covia.grid.Job job = conversations.deliver(conversationKey(m, chatId), input,
+		covia.grid.Job job = conversations.deliver(conversationKey(m, chatId), input, channel(m),
 			(draft, sid, jid) -> inbox.deliver(draft, updateId, sid, jid));
 		if (job == null) return; // Already delivered; never send a duplicate reply.
 		// Delivery is now durable. Waiting, formatting and sending are independent
@@ -695,8 +721,8 @@ final class BotRunner implements MessagingBot<BotSpec> {
 		if (reply == null) return;
 		String parseMode = spec.parseMode();
 		if (spec.replyOperation() != null) {
-			ACell formatted = conversations.runOperation(spec.replyOperation(), Maps.of(
-				Fields.RESPONSE, response, K_VIA, agentMessage(m, text).get(K_VIA)));
+			ACell formatted = conversations.runForAgent(spec.replyOperation(), Maps.of(
+				Fields.RESPONSE, response, Fields.AUTHENTICATION, conversations.context(channel(m)).getAuthentication()));
 			reply = formattedReply(formatted);
 			parseMode = formattedParseMode(formatted, parseMode);
 		}
@@ -713,7 +739,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 	static String formattedParseMode(ACell result, String botParseMode) {
 		if (result instanceof AMap<?, ?> && RT.getIn(result, TelegramAdapter.K_PARSE_MODE_PARAM) instanceof AString mode) {
 			for (String known : BotSpec.PARSE_MODES) {
-				if (known.equalsIgnoreCase(mode.toString().strip())) return known;
+				if (known.equalsIgnoreCase(mode.toString())) return known;
 			}
 		}
 		return botParseMode;
@@ -721,7 +747,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 
 	static String formattedReply(ACell result) {
 		ACell text = result instanceof AString ? result : result instanceof AMap<?, ?> ? RT.getIn(result, Fields.TEXT) : null;
-		if (!(text instanceof AString string) || string.toString().isBlank()) throw new IllegalArgumentException(INVALID_REPLY);
+		if (!(text instanceof AString string) || string.toString().isBlank()) throw new InvalidDefinitionException(INVALID_REPLY);
 		return string.toString();
 	}
 
@@ -735,7 +761,8 @@ final class BotRunner implements MessagingBot<BotSpec> {
 		Long chatId = chatOf(update);
 		try {
 			if (chatId != null && !spec.silent() && spec.fixedReply() == null) typing(chatId, m);
-			ACell result = conversations.runOperation(spec.operation(), updateRecord(update));
+			ACell result = conversations.runOperation(spec.operation(), updateRecord(update),
+				channel(senderOf(update), chatOfUpdate(update), m));
 			if (chatId != null) replyAfter(chatId, m, result);
 		} catch (Throwable t) {
 			logFailure("handler failed for update " + update.updateId(), chatId, t);
@@ -752,30 +779,46 @@ final class BotRunner implements MessagingBot<BotSpec> {
 	}
 
 	/**
-	 * The chat message an agent receives: the text plus, as structure it cannot
-	 * mistake for typed text, who is on the other end — Telegram's own {@code from}
-	 * and {@code chat} objects (authenticated by Telegram, admitted by this bot's
-	 * allow-list or its {@code open} setting), the bot, and the message id. The
-	 * framework's own "[Authenticated sender: …]" line names the bot's Covia
-	 * identity; this names the human.
+	 * The verified channel a message came through (COG-3 §7): Telegram's own sender
+	 * and chat, over the bot's polling session, with the topic as the thread and
+	 * the ids that place the message in its chat. Null for a message with no
+	 * sender and no chat.
 	 */
-	AMap<AString, ACell> agentMessage(Message m, String text) {
-		AMap<AString, ACell> via = Maps.of(
-			K_CHANNEL, Strings.create("telegram"),
-			K_BOT, Strings.create(spec.name()),
-			K_ACCESS, Strings.create(spec.open() ? "open" : "allow"));
-		if (m.from() != null) via = via.assoc(K_FROM, telegramCell(m.from()));
-		if (m.chat() != null) via = via.assoc(K_CHAT, telegramCell(m.chat()));
-		if (threadOf(m) != null) via = via.assoc(Strings.intern("message_thread_id"), CVMLong.create(threadOf(m)));
-		if (m.replyToMessage() != null) via = via.assoc(Strings.intern("reply_to_message_id"), CVMLong.create(m.replyToMessage().messageId()));
-		if (m.mediaGroupId() != null) via = via.assoc(Strings.intern("media_group_id"), Strings.create(m.mediaGroupId()));
-		if (m.messageId() != null) via = via.assoc(K_MESSAGE_ID, CVMLong.create(m.messageId()));
-		return Maps.of(Fields.TEXT, Strings.create(text), K_VIA, via);
+	Channel channel(Message m) {
+		return m == null ? null : channel(m.from(), m.chat(), m);
 	}
 
-	/** A pengrad model object as Telegram's JSON (snake_case), as a cell. */
-	private static ACell telegramCell(Object model) {
-		return JSON.parse(BotUtils.toJson(model));
+	/** An update's verified channel; a post with no author is the chat's own. */
+	private Channel channel(User from, Chat chat, Message m) {
+		AMap<AString, ACell> sender = (from != null)
+			? ChannelAuthentication.sender(Long.toString(from.id()), from.username(), name(from.firstName(), from.lastName()))
+			: (chat != null) ? ChannelAuthentication.sender(Long.toString(chat.id()), chat.username(), chat.title()) : null;
+		if (sender == null) return null;
+		AMap<AString, ACell> where = (chat == null) ? null : ChannelAuthentication.chat(Long.toString(chat.id()),
+			chat.type() == Chat.Type.Private ? ChannelAuthentication.DIRECT
+				: chat.type() == Chat.Type.channel ? ChannelAuthentication.CHANNEL : ChannelAuthentication.GROUP,
+			chat.title());
+		Channel channel = Channel.of(TelegramAdapter.NAME, ChannelAuthentication.PROVIDER_SESSION, sender, where);
+		if (m == null) return channel;
+		AMap<AString, ACell> extras = Maps.empty();
+		if (m.replyToMessage() != null) extras = extras.assoc(K_REPLY_TO, Strings.create(Integer.toString(m.replyToMessage().messageId())));
+		if (m.mediaGroupId() != null) extras = extras.assoc(K_MEDIA_GROUP, Strings.create(m.mediaGroupId()));
+		Long topic = threadOf(m);
+		return channel.thread(topic == null ? null : topic.toString())
+			.message(m.messageId() == null ? null : m.messageId().toString()).extras(extras);
+	}
+
+	private static String name(String first, String last) {
+		if (first == null) return last;
+		return (last == null) ? first : first + " " + last;
+	}
+
+	/** Whether the allow-list names a verified sender ({@link #listed(Long, String)}). */
+	private boolean lists(AMap<AString, ACell> sender) {
+		AString id = RT.ensureString(sender.get(ChannelAuthentication.K_ID));
+		AString handle = RT.ensureString(sender.get(ChannelAuthentication.K_HANDLE));
+		if (id == null || !id.toString().matches("-?[0-9]{1,20}")) return false;
+		return listed(Long.valueOf(id.toString()), handle == null ? null : handle.toString());
 	}
 
 	/** The configured reply after the operation handler ran. */
@@ -800,21 +843,33 @@ final class BotRunner implements MessagingBot<BotSpec> {
 		return topic == null ? chatId : ConversationRouter.key(chatId, topic.toString());
 	}
 
-	/** Download privately, then give the agent references rather than token-bearing URLs or bytes. */
+	/**
+	 * The turn an agent receives: the sender's text, or {@code {text, attachments,
+	 * content?}} for a message with media. Downloads privately, then gives the agent
+	 * references rather than token-bearing URLs or bytes.
+	 */
 	private ACell prepareMessage(Message m, String text) {
 		rememberMedia(m);
-		AMap<AString, ACell> message = agentMessage(m, text);
+		if (TelegramMedia.attachments(m).isEmpty()) return Strings.create(text);
+		AMap<AString, ACell> message = Maps.of(Fields.TEXT, Strings.create(text));
+		AMap<AString, ACell> authentication = conversations.context(channel(m)).getAuthentication();
 		AVector<ACell> attachments = Vectors.empty();
 		AVector<ACell> images = Vectors.empty();
 		for (JsonObject media : TelegramMedia.attachments(m)) {
 			if (media.has("file_size") && media.get("file_size").getAsLong() > TelegramMedia.MAX_BYTES) {
-				throw new IllegalArgumentException(TelegramMedia.TOO_LARGE);
+				throw new ResponseException(TelegramMedia.TOO_LARGE);
 			}
-			AMap<AString, ACell> attachment = download(media.get("file_id").getAsString())
-				.merge(RT.castMap(JSON.parse(media.toString())));
+			AMap<AString, ACell> attachment;
+			try {
+				attachment = download(media.get("file_id").getAsString());
+			} catch (IllegalArgumentException e) {
+				// No content provider takes the owner's media drive: the venue's setup.
+				throw new ConfigurationException(e.getMessage(), e);
+			}
+			attachment = attachment.merge(RT.castMap(JSON.parse(media.toString())));
 			if (spec.mediaOperation() != null) {
-				ACell processed = conversations.runOperation(spec.mediaOperation(), attachment
-					.assoc(Strings.intern("caption"), Strings.create(text)).assoc(K_VIA, message.get(K_VIA)));
+				ACell processed = conversations.runForAgent(spec.mediaOperation(), attachment
+					.assoc(Strings.intern("caption"), Strings.create(text)).assoc(Fields.AUTHENTICATION, authentication));
 				attachment = TelegramMedia.processed(attachment, processed);
 			}
 			attachments = attachments.conj(attachment);
@@ -839,30 +894,31 @@ final class BotRunner implements MessagingBot<BotSpec> {
 		return fileMetadataRoot + "/" + Strings.create(fileId).getHash().toHexString();
 	}
 
+	/** Automatic intake stores media as the bot's work for its agent. */
 	AMap<AString, ACell> download(String fileId) {
-		return download(fileId, null, null, context());
+		return download(fileId, null, null, conversations.agentContext());
 	}
 
-	/** Explicit destinations use caller authority; automatic intake uses the bot owner's context. */
+	/** Explicit destinations use caller authority; automatic intake uses the bot's work for its agent. */
 	AMap<AString, ACell> download(String fileId, AString destination, String fileName, RequestContext writeContext) {
 		ACell info = call("getFile", Map.of("file_id", fileId));
 		AString path = RT.ensureString(RT.getIn(info, "file_path"));
 		if (path == null || !path.toString().matches("[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*")
-				|| path.toString().contains("..")) throw new IllegalArgumentException(TelegramMedia.INVALID_PATH);
+				|| path.toString().contains("..")) throw new ResponseException(TelegramMedia.INVALID_PATH);
 		ACell size = RT.getIn(info, "file_size");
-		if (size instanceof CVMLong n && n.longValue() > TelegramMedia.MAX_BYTES) throw new IllegalArgumentException(TelegramMedia.TOO_LARGE);
+		if (size instanceof CVMLong n && n.longValue() > TelegramMedia.MAX_BYTES) throw new ResponseException(TelegramMedia.TOO_LARGE);
 		// Both official and local Bot API servers use /file/bot<token>/<path>.
-		if (!apiUrl.endsWith("/bot")) throw new IllegalArgumentException("Telegram downloads require an apiUrl ending in /bot");
+		if (!apiUrl.endsWith("/bot")) throw new ConfigurationException("Telegram downloads require an apiUrl ending in /bot");
 		String base = apiUrl.substring(0, apiUrl.length() - 4) + "/file/bot";
 		OkHttpClient client = http;
 		String liveToken = token;
-		if (client == null || liveToken == null) throw new IllegalStateException("Telegram bot is not running");
+		if (client == null || liveToken == null) throw notRunning();
 		Request request = new Request.Builder().url(base + liveToken + "/" + path).build();
 		try (Response response = client.newCall(request).execute()) {
 			if (!response.isSuccessful() || response.body() == null) throw new JobFailedException(TelegramMedia.DOWNLOAD_FAILED);
-			if (response.body().contentLength() > TelegramMedia.MAX_BYTES) throw new IllegalArgumentException(TelegramMedia.TOO_LARGE);
+			if (response.body().contentLength() > TelegramMedia.MAX_BYTES) throw new ResponseException(TelegramMedia.TOO_LARGE);
 			byte[] bytes = response.body().byteStream().readNBytes(TelegramMedia.MAX_BYTES + 1);
-			if (bytes.length > TelegramMedia.MAX_BYTES) throw new IllegalArgumentException(TelegramMedia.TOO_LARGE);
+			if (bytes.length > TelegramMedia.MAX_BYTES) throw new ResponseException(TelegramMedia.TOO_LARGE);
 			ACell metadata = fileMetadataRoot == null ? null : storage.read(fileMetadataPath(fileId));
 			AString originalName = RT.ensureString(RT.getIn(metadata, "file_name"));
 			AString originalType = RT.ensureString(RT.getIn(metadata, "mime_type"));
@@ -878,7 +934,8 @@ final class BotRunner implements MessagingBot<BotSpec> {
 				name = spec.name().substring(0, Math.min(64, spec.name().length())) + "-" + Strings.create(fileId).getHash().toHexString() + extension;
 			}
 			String directory = destination == null
-				? MessagingMedia.ownerDirectory(spec.userDID(adapter.engine), TelegramAdapter.NAME) : destination.toString();
+				? MessagingMedia.ensureOwnerDirectory(adapter.engine, spec.userDID(adapter.engine), TelegramAdapter.NAME, writeContext)
+				: destination.toString();
 			AMap<AString, ACell> result = MessagingMedia.store(adapter.engine, bytes, contentType, directory, name, writeContext)
 				.assoc(Strings.intern("file_id"), Strings.create(fileId));
 			if (originalName != null) result = result.assoc(Strings.intern("file_name"), originalName);
@@ -931,7 +988,15 @@ final class BotRunner implements MessagingBot<BotSpec> {
 	 * clears a binding by deleting its record, or by listing the id instead.</p>
 	 */
 	private boolean admits(Long fromId, String fromName) {
-		if (spec.open()) return true;
+		return spec.open() || listed(fromId, fromName);
+	}
+
+	/** Whether the allow-list names this sender, whom the bot then identifies as its principal. */
+	private boolean listed(User from) {
+		return from != null && listed(from.id(), from.username());
+	}
+
+	private boolean listed(Long fromId, String fromName) {
 		if (fromId != null && spec.allowIds().contains(fromId)) return true;
 		if (fromId == null || fromName == null) return false;
 		String handle = fromName.toLowerCase(Locale.ROOT);
@@ -1005,7 +1070,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 	 * to the chat of an update this bot admitted, which for an allow-listed bot
 	 * is an allowed user's private chat (see {@link #handle}).</p>
 	 *
-	 * @throws IllegalArgumentException naming the rule and the offending target
+	 * @throws AuthException naming the rule and the offending target
 	 */
 	void requireAllowedTarget(String method, Map<String, Object> params) {
 		if (spec.open() || params == null) return;
@@ -1020,7 +1085,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 				msg.append("; resolved handles: ").append(resolved())
 					.append(" — a person listed by @username becomes addressable once they have written to the bot");
 			}
-			throw new IllegalArgumentException(msg.append(')').toString());
+			throw new AuthException(msg.append(')').toString());
 		}
 	}
 
@@ -1030,7 +1095,8 @@ final class BotRunner implements MessagingBot<BotSpec> {
 	 * {@code true} for most others). Subject to {@link #requireAllowedTarget}.
 	 *
 	 * @throws JobFailedException when Telegram answers {@code ok: false}
-	 * @throws IllegalStateException when the bot is not running
+	 * @throws UnavailableException when the bot is not running; a
+	 *         {@link StillStartingException} while it is starting
 	 */
 	record Upload(String filename, String contentType, byte[] bytes) {}
 
@@ -1069,11 +1135,11 @@ final class BotRunner implements MessagingBot<BotSpec> {
 	/** {@link #sendMessage} without the target check: the runner's own replies, addressed to an admitted update's chat. */
 	private ACell deliver(Map<String, Object> params) {
 		if (params.get("chat_id") == null) {
-			throw new IllegalArgumentException("chat_id is required: a Telegram chat id or @channelusername");
+			throw new InvalidInputException("chat_id is required: a Telegram chat id or @channelusername");
 		}
 		Object textObj = params.get("text");
 		String text = (textObj == null) ? "" : String.valueOf(textObj);
-		if (text.isBlank()) throw new IllegalArgumentException("text is required");
+		if (text.isBlank()) throw new InvalidInputException("text is required");
 		ACell last = null;
 		boolean first = true;
 		for (String chunk : MessagingText.split(text, MAX_MESSAGE_LENGTH)) {
@@ -1129,10 +1195,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 	private ApiResponse execute(String method, Map<String, Object> params, Map<String, Upload> uploads) {
 		OkHttpClient c = http;
 		String tok = token;
-		if (c == null || tok == null) {
-			throw new IllegalStateException("Telegram bot '" + spec.name() + "' is not running"
-				+ (error != null ? ": " + error : ""));
-		}
+		if (c == null || tok == null) throw notRunning();
 		FormBody.Builder form = new FormBody.Builder();
 		if (params != null) {
 			for (Map.Entry<String, Object> e : params.entrySet()) {
@@ -1252,24 +1315,27 @@ final class BotRunner implements MessagingBot<BotSpec> {
 		return r.errorCode() + " " + r.description();
 	}
 
-	/** What a person should read about a failure: the venue's shared rendering (type named unless self-describing). */
+	/** Whose code it was, when a bot reports an unexpected failure in its own handling. */
+	static final String OWNER = FaultException.ADAPTER.formatted(TelegramAdapter.NAME);
+
+	/**
+	 * What a person should read about a failure: its reason, or an unexpected
+	 * exception in this adapter by its type ({@link FaultException#describe}).
+	 * Not logged here: {@link #logFailure} logs a failure the bot handles.
+	 */
 	static String concise(Throwable t) {
-		Throwable c = t;
-		while ((c instanceof CompletionException || c instanceof ExecutionException) && c.getCause() != null) {
-			c = c.getCause();
-		}
-		String msg = AAdapter.describeFailure(c);
+		String msg = FaultException.describe(OWNER, t);
 		return (msg.length() > 400) ? msg.substring(0, 400) + "…" : msg;
 	}
 
-	/** Log a handler failure: one line for expected, self-describing errors; the stack trace for anything else. */
+	/** Log a handler failure: one line for an expected failure or a fault reported elsewhere; ERROR with the stack for anything else. */
 	private void logFailure(String what, Long chatId, Throwable t) {
 		Throwable c = t;
 		while ((c instanceof CompletionException || c instanceof ExecutionException) && c.getCause() != null) c = c.getCause();
-		if (AAdapter.isSelfDescribing(c)) {
+		if (CoviaException.reasonOf(c) != null) {
 			log.warn("Telegram bot '{}': {} in chat {}: {}", spec.name(), what, chatId, concise(c));
 		} else {
-			log.warn("Telegram bot '{}': {} in chat {}: {}", spec.name(), what, chatId, concise(c), c);
+			log.error("Telegram bot '{}': {} in chat {}: {}", spec.name(), what, chatId, concise(c), c);
 		}
 	}
 }

@@ -10,7 +10,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.TimeUnit;
+import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -55,7 +58,10 @@ public class AgentEventsTest {
 	private static final class Capture implements Consumer<Event> {
 		final List<Event> events = new CopyOnWriteArrayList<>();
 
-		@Override public void accept(Event e) { events.add(e); }
+		@Override public void accept(Event e) {
+			events.add(e);
+			synchronized (this) { notifyAll(); }
+		}
 
 		List<String> types() {
 			List<String> out = new ArrayList<>();
@@ -76,13 +82,28 @@ public class AgentEventsTest {
 
 		/** Waits for an event of the type carrying the given status (or any, when null). */
 		void await(AString type, AString status, long timeoutMs) {
-			TestEngine.awaitCondition(() -> {
+			awaitUntil(() -> {
 				for (Event e : all(type)) {
 					if (status == null || status.equals(RT.getIn(e.data(), Fields.STATUS))) return true;
 				}
 				return false;
 			}, timeoutMs, () -> "no " + type + (status != null ? " " + status : "")
 				+ " event within " + timeoutMs + "ms; saw " + types());
+		}
+
+		/** Waits until {@code condition} holds, checked now and as each event arrives. */
+		synchronized void awaitUntil(BooleanSupplier condition, long timeoutMs, Supplier<String> timeoutMessage) {
+			long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs);
+			while (!condition.getAsBoolean()) {
+				long remaining = TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime());
+				if (remaining <= 0) throw new AssertionError(timeoutMessage.get());
+				try {
+					wait(remaining);
+				} catch (InterruptedException e) {
+					Thread.currentThread().interrupt();
+					throw new AssertionError("Interrupted while waiting: " + timeoutMessage.get(), e);
+				}
+			}
 		}
 	}
 
@@ -98,7 +119,7 @@ public class AgentEventsTest {
 
 	private void createAgent(String id, AMap<AString, ACell> config) {
 		Job job = engine.jobs().invokeOperation("v/ops/agent/create",
-			Maps.of(Fields.AGENT_ID, id, Fields.CONFIG, config), ctx);
+			Maps.of(Fields.AGENT_ID, id, Fields.CONFIG, TestEngine.unrestricted(config)), ctx);
 		job.awaitResult(5000);
 	}
 
@@ -128,8 +149,8 @@ public class AgentEventsTest {
 		assertSeqStrictlyIncreasing(c.events);
 		assertEquals(1, c.events.get(0).seq(), "the first event of an agent is seq 1");
 
-		assertEquals(AgentState.RUNNING, str(c.events.get(0), Fields.STATUS));
-		assertEquals(AgentState.SLEEPING, str(c.events.get(4), Fields.STATUS));
+		assertEquals(Agent.RUNNING, str(c.events.get(0), Fields.STATUS));
+		assertEquals(Agent.SLEEPING, str(c.events.get(4), Fields.STATUS));
 
 		Event runStart = c.first(AgentEvents.RUN_START);
 		assertEquals(1, num(runStart, Fields.RUN));
@@ -145,10 +166,10 @@ public class AgentEventsTest {
 		Event cycleEnd = c.first(AgentEvents.CYCLE_END);
 		assertEquals(1, num(cycleEnd, Fields.CYCLE));
 		assertTrue(num(cycleEnd, Fields.MS) >= 0);
-		assertEquals(0, num(cycleEnd, AgentState.KEY_TIMELINE), "the first timeline entry was written");
+		assertEquals(0, num(cycleEnd, Agent.KEY_TIMELINE), "the first timeline entry was written");
 
 		Event runEnd = c.first(AgentEvents.RUN_END);
-		assertEquals(AgentState.SLEEPING, str(runEnd, Fields.STATUS));
+		assertEquals(Agent.SLEEPING, str(runEnd, Fields.STATUS));
 		assertEquals(1, num(runEnd, Fields.CYCLES));
 
 		// Wire form: the envelope names the agent by id and grid address.
@@ -258,10 +279,10 @@ public class AgentEventsTest {
 		Event cycleEnd = c.first(AgentEvents.CYCLE_END);
 		assertEquals(response, str(cycleEnd, Fields.RESPONSE));
 		assertNotNull(RT.getIn(cycleEnd.data(), Fields.TOKENS));
-		assertEquals(0, num(cycleEnd, AgentState.KEY_TIMELINE));
+		assertEquals(0, num(cycleEnd, Agent.KEY_TIMELINE));
 		assertNull(cycleEnd.data().get(Fields.DETAIL),
 			"frame-owning runtimes do not duplicate already-persisted turns in cycle:end");
-		AgentState agent = engine.getVenueState().users().get(did).agent(id);
+		Agent agent = engine.getVenueState().users().user(did).agent(id);
 		AVector<ACell> turns = covia.adapter.agent.GoalTreeContext.activeConversation(RT.ensureMap(RT.getIn(
 			agent.getSession(Blob.fromHex(sid.toString())), Fields.FRAMES,
 			CVMLong.ZERO)));
@@ -311,11 +332,12 @@ public class AgentEventsTest {
 	public void testTransitionOutsideRunLoopEmitsNothing() {
 		// A direct harness invocation carries no cycle handle, so nothing is
 		// attributed to the agent — the tap is a run-loop surface.
+		createAgent("direct-agent", Maps.of("llmOperation", "v/test/ops/toolllm"));
 		Capture c = new Capture();
 		try (AgentEvents.Subscription s = engine.agentEvents().subscribe(c)) {
 			ACell out = engine.jobs().invokeOperation("v/ops/llmagent/chat", Maps.of(
 				Fields.AGENT_ID, "direct-agent",
-				AgentState.KEY_CONFIG, Maps.of("llmOperation", "v/test/ops/toolllm"),
+				Agent.KEY_CONFIG, Maps.of("llmOperation", "v/test/ops/toolllm"),
 				Fields.MESSAGES, Vectors.of(Maps.of("content", "no tap"))),
 				ctx.withAgentId(Strings.create("direct-agent"))).awaitResult(10_000);
 			assertNotNull(RT.getIn(out, Fields.RESPONSE));
@@ -342,34 +364,36 @@ public class AgentEventsTest {
 				Maps.of(Fields.AGENT_ID, id), ctx).awaitResult(5_000);
 		}
 		assertEquals(List.of("status", "status", "status"), c.types());
-		assertEquals(AgentState.SUSPENDED, str(c.events.get(0), Fields.STATUS));
-		assertEquals(AgentState.SLEEPING, str(c.events.get(1), Fields.STATUS));
-		assertEquals(AgentState.TERMINATED, str(c.events.get(2), Fields.STATUS));
+		assertEquals(Agent.SUSPENDED, str(c.events.get(0), Fields.STATUS));
+		assertEquals(Agent.SLEEPING, str(c.events.get(1), Fields.STATUS));
+		assertEquals(Agent.TERMINATED, str(c.events.get(2), Fields.STATUS));
 		assertFalse(c.events.get(0).isTerminal());
 		assertTrue(c.events.get(2).isTerminal(), "TERMINATED ends the stream");
 	}
 
 	@Test
-	public void testTransitionFailureSuspendsWithTheError() {
+	public void testCannotContinueSuspendsWithTheError() {
+		// A broken model setup means the agent cannot continue (AGENT_LOOP.md §3.4).
 		String id = "failing";
-		createAgent(id, Maps.of(Fields.OPERATION, "v/test/ops/error"));
+		createAgent(id, Maps.of(Fields.OPERATION, "v/ops/llmagent/chat",
+			"llmOperation", "v/test/ops/failllm", "model", "setup"));
 		Capture c = new Capture();
 		try (AgentEvents.Subscription s = engine.agentEvents().subscribe(did, Strings.create(id), c)) {
-			engine.jobs().invokeOperation("v/ops/agent/trigger",
-				Maps.of(Fields.AGENT_ID, id, Fields.WAIT, true), ctx).awaitResult(10_000);
+			engine.jobs().invokeOperation("v/ops/agent/request",
+				Maps.of(Fields.AGENT_ID, id, Fields.INPUT, Maps.of("q", "go")), ctx);
 			c.await(AgentEvents.RUN_END, null, 5_000);
 		}
 		Event cycleEnd = c.first(AgentEvents.CYCLE_END);
 		assertNotNull(cycleEnd);
 		assertNotNull(RT.getIn(cycleEnd.data(), Fields.ERROR), "a failed cycle ends with its error");
 		assertNull(RT.getIn(cycleEnd.data(), Fields.RESPONSE));
-		c.await(AgentEvents.STATUS, AgentState.SUSPENDED, 1_000);
+		c.await(AgentEvents.STATUS, Agent.SUSPENDED, 1_000);
 		Event suspended = null;
 		for (Event e : c.all(AgentEvents.STATUS)) {
-			if (AgentState.SUSPENDED.equals(str(e, Fields.STATUS))) suspended = e;
+			if (Agent.SUSPENDED.equals(str(e, Fields.STATUS))) suspended = e;
 		}
 		assertNotNull(RT.getIn(suspended.data(), Fields.ERROR), "the suspension carries the error");
-		assertEquals(AgentState.SUSPENDED, str(c.first(AgentEvents.RUN_END), Fields.STATUS));
+		assertEquals(Agent.SUSPENDED, str(c.first(AgentEvents.RUN_END), Fields.STATUS));
 	}
 
 	// ========== subscriptions ==========
@@ -425,7 +449,7 @@ public class AgentEventsTest {
 		assertNull(e.withoutDetail().toCell().get(Fields.DETAIL));
 		assertFalse(e.isTerminal());
 		Event terminated = new Event(owner, Strings.create("a"), 8, 124L, AgentEvents.STATUS,
-			Maps.of(Fields.STATUS, AgentState.TERMINATED));
+			Maps.of(Fields.STATUS, Agent.TERMINATED));
 		assertTrue(terminated.isTerminal());
 		assertEquals(CVMBool.TRUE, CVMBool.create(terminated.isTerminal()));
 	}
@@ -458,7 +482,7 @@ public class AgentEventsTest {
 				Maps.of(Fields.AGENT_ID, id, Fields.MESSAGE, "mint B"), ctx);
 			other.awaitResult(10_000);
 			// Both cycles committed and the last run has exited.
-			TestEngine.awaitCondition(() -> whole.all(AgentEvents.CYCLE_END).size() >= 2
+			whole.awaitUntil(() -> whole.all(AgentEvents.CYCLE_END).size() >= 2
 				&& AgentEvents.RUN_END.equals(whole.events.get(whole.events.size() - 1).type()),
 				5_000, () -> "two cycles then a run end: " + whole.types());
 		}

@@ -4,12 +4,16 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import org.junit.jupiter.api.Test;
 
+import convex.core.data.ACell;
+import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
+import covia.api.Fields;
 
-/** The pure admission algebra (covia#447): exact allowlists, the operator class, fail-closed. */
+/** The pure admission algebra (covia#447): exact allowlists, the operator class, anyone, fail-closed. */
 public class AdmissionTest {
 
 	private static final AString ALICE = Strings.create("did:key:z6MkAlice");
@@ -50,6 +54,29 @@ public class AdmissionTest {
 		assertTrue(Admission.admits(Vectors.of(Admission.VENUE, BOB), ALICE, true));
 		assertTrue(Admission.admits(Vectors.of(Admission.VENUE, BOB), BOB, false));
 		assertFalse(Admission.admits(Vectors.of(Admission.VENUE, BOB), ALICE, false));
+	}
+
+	@Test
+	public void testAnyoneAdmitsEveryCallerIncludingThePublicPrincipal() {
+		assertTrue(Admission.admits(Admission.ANYONE, BOB, false));
+		assertTrue(Admission.admits(Admission.ANYONE, BOB, false, true));
+		assertFalse(Admission.admits(Admission.ANYONE, null, false));
+		assertNull(Admission.problem(Admission.ANYONE));
+		assertFalse(Admission.admits(Vectors.of(BOB), BOB, false, true),
+			"only anyone admits the public principal");
+		assertFalse(Admission.admits(Admission.VENUE, BOB, true, true),
+			"only anyone admits the public principal");
+	}
+
+	@Test
+	public void testOlderA2AShapeReadsAsAnyone() {
+		AMap<AString, ACell> legacy = Maps.of(Fields.A2A, Maps.of("public", true, "caps", "unrestricted"));
+		assertEquals(Admission.ANYONE, Admission.policy(legacy));
+		assertEquals(Admission.ANYONE, Admission.policy(legacy.assoc(Fields.ACCEPTS, Vectors.of(BOB))));
+		AMap<AString, ACell> cardOnly = Maps.of(Fields.A2A, Maps.of("public", true));
+		assertNull(Admission.policy(cardOnly), "a public card alone admits nobody");
+		assertEquals(Vectors.of(BOB), Admission.policy(Maps.of(Fields.ACCEPTS, Vectors.of(BOB))));
+		assertNull(Admission.policy(null));
 	}
 
 	@Test

@@ -18,6 +18,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 import com.nimbusds.jose.JWSAlgorithm;
@@ -44,6 +46,8 @@ import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.api.Fields;
+import covia.exception.ConflictException;
+import covia.exception.NotSupportedException;
 import covia.venue.Config;
 import covia.venue.Engine;
 import io.javalin.Javalin;
@@ -54,8 +58,21 @@ class LoginFlowTest {
 	private static final String REDIRECT = "https://app.example/callback";
 	private record Started(Map<String, String> query, String cookie, String code) {}
 
+	/** The venue of every test that only adds identities of its own. */
+	private static Engine venue;
+
+	/** A public hostname for managed did:web users and an https base URL for secure login cookies. */
+	private static Engine loginVenue() {
+		return Engine.createTemp(Maps.of(Config.HOSTNAME, "login.example", Config.BASE_URL, "https://login.example"));
+	}
+
+	@BeforeAll static void startVenue() { venue = loginVenue(); }
+
+	@AfterAll static void closeVenue() { venue.close(); }
+
 	private static final class Fixture implements AutoCloseable {
-		final Engine engine = Engine.createTemp(Maps.of(Config.HOSTNAME, "login.example", Config.BASE_URL, "https://login.example"));
+		final Engine engine;
+		private final boolean ownVenue;
 		final AtomicLong clock = new AtomicLong(System.currentTimeMillis());
 		final AtomicInteger tokenCalls = new AtomicInteger(), userInfoCalls = new AtomicInteger();
 		final Map<String, Map<String, String>> codes = new ConcurrentHashMap<>();
@@ -67,8 +84,12 @@ class LoginFlowTest {
 		Consumer<Map<String, Object>> alterClaims = claims -> {};
 		boolean omitIdToken;
 
-		Fixture() throws Exception { this(true); }
-		Fixture(boolean oidc) throws Exception {
+		Fixture() throws Exception { this(venue, false, true); }
+		/** On a venue of its own, for a test that reads the whole user directory or leaves a record every other login would meet. */
+		static Fixture onOwnVenue(boolean oidc) throws Exception { return new Fixture(loginVenue(), true, oidc); }
+		private Fixture(Engine engine, boolean ownVenue, boolean oidc) throws Exception {
+			this.engine = engine;
+			this.ownVenue = ownVenue;
 			key = new RSAKeyGenerator(2048).keyID("test").generate();
 			provider = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
 			String base = "http://127.0.0.1:" + provider.getAddress().getPort();
@@ -158,7 +179,7 @@ class LoginFlowTest {
 					.header("Content-Type", "application/x-www-form-urlencoded")
 					.POST(HttpRequest.BodyPublishers.ofString(body)).build(), HttpResponse.BodyHandlers.ofString());
 		}
-		@Override public void close() { app.stop(); provider.stop(0); engine.close(); }
+		@Override public void close() { app.stop(); provider.stop(0); if (ownVenue) engine.close(); }
 	}
 
 	@Test void browserLoginUsesPkceNonceAndNeverPutsBearerInLocation() throws Exception {
@@ -184,8 +205,9 @@ class LoginFlowTest {
 	}
 
 	@Test void exchangeRechecksTheIdentityBindingAndAccountAfterTheCallback() throws Exception {
-		try (Fixture f = new Fixture()) {
-			for (String change : new String[] {"unbound", "rebound", "deleted"}) {
+		try (Fixture f = Fixture.onOwnVenue(true)) { // while unbound, its record refuses every other login with its email
+			AString conflict = Strings.create("conflict");
+			for (String change : new String[] {"conflicted", "unbound", "rebound", "deleted"}) {
 				CodeVerifier verifier = new CodeVerifier();
 				var start = f.start("?redirect_uri=" + enc(REDIRECT) + "&state=state&code_challenge_method=S256&code_challenge=" + challenge(verifier));
 				var callback = f.callback(start);
@@ -195,6 +217,10 @@ class LoginFlowTest {
 				AMap<AString, ACell> record = f.engine.getAuth().getUser(id);
 				if (change.equals("deleted")) {
 					f.engine.deleteUser(f.engine.venueContext(), RT.ensureString(record.get(Fields.DID)));
+				} else if (change.equals("conflicted")) {
+					// A second account claims the binding: the lookup refuses both.
+					f.engine.getAuth().putUser(conflict, Maps.of(Fields.DID, "did:web:other.example:u:other",
+						LoginProviders.EXTERNAL_IDENTITY, identity.binding()));
 				} else {
 					f.engine.getAuth().putUser(id, change.equals("unbound")
 							? record.dissoc(LoginProviders.EXTERNAL_IDENTITY)
@@ -204,6 +230,7 @@ class LoginFlowTest {
 				assertEquals(400, response.statusCode(), change);
 				assertEquals(LoginProviders.INVALID_EXCHANGE, response.body());
 				assertEquals(400, f.exchange(code, verifier.getValue(), REDIRECT).statusCode());
+				if (change.equals("conflicted")) f.engine.getAuth().putUser(conflict, Maps.of(Fields.DID, "did:web:other.example:u:other"));
 				if (!change.equals("deleted")) f.engine.getAuth().putUser(id, record);
 			}
 		}
@@ -229,7 +256,7 @@ class LoginFlowTest {
 	}
 
 	@Test void invalidOrAbsentOidcTokenNeverFallsBackToUserInfo() throws Exception {
-		try (Fixture f = new Fixture()) {
+		try (Fixture f = Fixture.onOwnVenue(true)) {
 			f.alterClaims = claims -> claims.put("nonce", "wrong");
 			assertEquals(LoginProviders.INVALID_LOGIN, f.callback(f.start("")).body());
 			f.alterClaims = claims -> claims.remove("nonce");
@@ -317,25 +344,26 @@ class LoginFlowTest {
 
 	@Test void identitiesSurviveEmailChangesAndDoNotMergeMatchingEmails() throws Exception {
 		try (Fixture f = new Fixture()) {
-			var first = new LoginProviders.UserIdentity("https://issuer", "subject", "alice@example", "Alice");
+			String issuer = uniqueIssuer();
+			var first = new LoginProviders.UserIdentity(issuer, "subject", "alice@example", "Alice");
 			AString did = f.login.provisionIdentity("test", first);
-			assertEquals(did, f.login.provisionIdentity("test", new LoginProviders.UserIdentity("https://issuer", "subject", "new@example", "New")));
-			assertNotEquals(did, f.login.provisionIdentity("other", new LoginProviders.UserIdentity("https://other", "subject", "new@example", "New")));
-			assertNotEquals(did, f.login.provisionIdentity("test", new LoginProviders.UserIdentity("https://issuer", "different", "new@example", "New")));
-			assertEquals(did, LoginProviders.findIdentity(f.engine.getAuth(), "https://issuer", "subject"));
+			assertEquals(did, f.login.provisionIdentity("test", new LoginProviders.UserIdentity(issuer, "subject", "new@example", "New")));
+			assertNotEquals(did, f.login.provisionIdentity("other", new LoginProviders.UserIdentity(uniqueIssuer(), "subject", "new@example", "New")));
+			assertNotEquals(did, f.login.provisionIdentity("test", new LoginProviders.UserIdentity(issuer, "different", "new@example", "New")));
+			assertEquals(did, LoginProviders.findIdentity(f.engine.getAuth(), issuer, "subject"));
 			assertEquals(Strings.create("new@example"), f.engine.getAuth().getUser(first.toUserId()).get(Fields.EMAIL));
 		}
 	}
 
 	@Test void legacyEmailAndProviderSubjectNeedExplicitMigration() throws Exception {
-		try (Fixture f = new Fixture()) {
+		try (Fixture f = Fixture.onOwnVenue(true)) { // every other first login would meet the legacy record
 			AString legacyId = Strings.create("alice_example");
 			AString legacyDID = f.engine.managedUserDID(legacyId);
 			f.engine.getAuth().putUser(legacyId, Maps.of(Fields.DID, legacyDID, Fields.EMAIL, "alice@example",
 					Fields.PROVIDER, "test", Fields.PROVIDER_SUB, "subject"));
 			assertNull(LoginProviders.findIdentity(f.engine.getAuth(), "https://issuer", "subject"));
 			var identity = new LoginProviders.UserIdentity("https://issuer", "subject", "alice@example", "Alice");
-			assertEquals(LoginProviders.LEGACY_IDENTITY, assertThrows(IllegalStateException.class,
+			assertEquals(LoginProviders.LEGACY_IDENTITY, assertThrows(NotSupportedException.class,
 					() -> f.login.provisionIdentity("test", identity)).getMessage());
 			assertNull(f.engine.getAuth().getUser(identity.toUserId()));
 		}
@@ -343,17 +371,17 @@ class LoginFlowTest {
 
 	@Test void conflictingBindingsFailClosed() throws Exception {
 		try (Fixture f = new Fixture()) {
-			var identity = new LoginProviders.UserIdentity("https://issuer", "subject", null, null);
+			var identity = new LoginProviders.UserIdentity(uniqueIssuer(), "subject", null, null);
 			f.login.provisionIdentity("test", identity);
 			f.engine.getAuth().putUser(Strings.create("conflict"), Maps.of(Fields.DID, "did:web:other.example:u:other",
 				LoginProviders.EXTERNAL_IDENTITY, identity.binding()));
-			assertEquals(LoginProviders.IDENTITY_CONFLICT, assertThrows(IllegalStateException.class,
+			assertEquals(LoginProviders.IDENTITY_CONFLICT, assertThrows(ConflictException.class,
 				() -> f.login.provisionIdentity("test", identity)).getMessage());
 		}
 	}
 
 	@Test void unverifiedEmailIsNotStoredAsTrustedProfileMetadata() throws Exception {
-		try (Fixture f = new Fixture()) {
+		try (Fixture f = Fixture.onOwnVenue(true)) {
 			f.alterClaims = claims -> claims.put("email_verified", false);
 			assertEquals(200, f.callback(f.start("")).statusCode());
 			AMap<AString, ACell> record = f.engine.getAuth().getUsers().values().iterator().next();
@@ -363,7 +391,7 @@ class LoginFlowTest {
 	}
 
 	@Test void oauthOnlyProviderUsesStableNumericIdWithoutInferringVerifiedEmail() throws Exception {
-		try (Fixture f = new Fixture(false)) {
+		try (Fixture f = Fixture.onOwnVenue(false)) {
 			Started start = f.start("");
 			assertNull(start.query().get("nonce"));
 			var response = f.callback(start);
@@ -376,6 +404,8 @@ class LoginFlowTest {
 		}
 	}
 
+	/** An issuer no other test's identities on the class's venue are bound to. */
+	private static String uniqueIssuer() { return "https://issuer.example/" + java.util.UUID.randomUUID(); }
 	private static String challenge(CodeVerifier verifier) { return CodeChallenge.compute(CodeChallengeMethod.S256, verifier).getValue(); }
 	private static String enc(String value) { return URLEncoder.encode(value, StandardCharsets.UTF_8); }
 	private static Map<String, String> params(String query) {

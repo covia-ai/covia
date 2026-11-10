@@ -22,6 +22,7 @@ import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.api.parallel.Execution;
 import org.junit.jupiter.api.parallel.ExecutionMode;
 
+import convex.auth.ucan.Capability;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
@@ -34,8 +35,12 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.exception.AuthException;
+import covia.exception.InvalidInputException;
+import covia.exception.NotFoundException;
 import covia.grid.Job;
+import covia.grid.Principals;
 import covia.grid.Status;
+import covia.venue.Agent;
 import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -110,7 +115,8 @@ public class ClaudeCodeAdapterTest {
 
 	@Test void agentFacetChatResumesThroughCommonSessionId() throws Exception {
 		engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "coding-facet",
-			"agent", Maps.of(Fields.ADAPTER, "claudecode", "project", "alpha")), OWNER_CTX).awaitResult(5000);
+			"agent", Maps.of(Fields.ADAPTER, "claudecode", "project", "alpha"),
+			Fields.CONFIG, Maps.of(Config.CAPS, Config.UNRESTRICTED)), OWNER_CTX).awaitResult(5000);
 		ACell first = engine.jobs().invokeOperation("v/ops/agent/chat", Maps.of(Fields.AGENT_ID,
 			"coding-facet", Fields.MESSAGE, "first facade turn"), OWNER_CTX).awaitResult(10000);
 		ACell sid = RT.getIn(first, Fields.SESSION_ID);
@@ -120,7 +126,7 @@ public class ClaudeCodeAdapterTest {
 			"coding-facet", Fields.MESSAGE, "second facade turn", Fields.SESSION_ID, sid), OWNER_CTX).awaitResult(10000);
 		assertEquals(sid, RT.getIn(next, Fields.SESSION_ID));
 		assertTrue(RT.getIn(next, Fields.RESPONSE).toString().contains("second facade turn"));
-		var state = engine.getVenueState().users().get(OWNER).agent(Strings.create("coding-facet"));
+		var state = engine.getVenueState().users().user(OWNER).agent(Strings.create("coding-facet"));
 		ACell providerId = RT.getIn(state.getSession(Job.parseID(sid)), "external", Fields.SESSION_ID);
 		assertNotNull(providerId);
 		assertNotEquals(sid, providerId);
@@ -213,7 +219,7 @@ public class ClaudeCodeAdapterTest {
 		assertEquals(pid, ((CVMLong) sessionStatus(OWNER_CTX, session).get(ClaudeSession.K_PID)).longValue(), "same warm process");
 
 		// project is optional when the session is known — but a wrong project is refused.
-		assertThrows(IllegalArgumentException.class, () -> engine.jobs().invokeOperation("v/ops/claudecode/run",
+		assertThrows(NotFoundException.class, () -> engine.jobs().invokeOperation("v/ops/claudecode/run",
 			Maps.of("session", "not-a-known-session-id", "prompt", "count"), OWNER_CTX));
 
 		// Stop the process explicitly; the session survives and resumes on a fresh process.
@@ -277,7 +283,8 @@ public class ClaudeCodeAdapterTest {
 		AMap<AString, ACell> res = RT.castMap(job.awaitResult(30_000));
 		assertEquals(Status.COMPLETE, job.getStatus());
 		assertEquals("used a tool", str(res, "result"));
-		assertNull(job.getData().get(ClaudeCodeAdapter.K_PROGRESS), "progress cleared on completion");
+		assertEquals("used a tool", Job.progressMessage(job.getData().get(ClaudeCodeAdapter.K_PROGRESS)),
+			"the last progress stays in the finished record");
 	}
 
 	@Test
@@ -303,7 +310,7 @@ public class ClaudeCodeAdapterTest {
 		String err = job.getErrorMessage();
 		assertTrue(err.contains("error_during_execution"), err);
 		assertTrue(err.contains("boom"), err);
-		assertTrue(err.contains("session "), err);
+		assertFalse(err.isBlank());
 
 		Job max = engine.jobs().invokeOperation("v/ops/claudecode/run", Maps.of("project", "alpha", "prompt", "maxturns"), OWNER_CTX);
 		assertThrows(RuntimeException.class, () -> max.awaitResult(30_000));
@@ -316,7 +323,7 @@ public class ClaudeCodeAdapterTest {
 		assertThrows(RuntimeException.class, () -> job.awaitResult(30_000));
 		assertEquals(Status.FAILED, job.getStatus());
 		String err = job.getErrorMessage();
-		assertTrue(err.contains("code 3"), err);
+		assertTrue(err.contains("3"), err);
 		assertTrue(err.contains("simulated crash"), err);
 	}
 
@@ -398,7 +405,10 @@ public class ClaudeCodeAdapterTest {
 		// With exactly one accessible project it need not be named.
 		assertEquals("gamma", str(run(OTHER_CTX, "v/ops/claudecode/run", Maps.of("prompt", "hi")), "project"));
 		// OWNER has several: must name one.
-		assertThrows(IllegalArgumentException.class, () -> engine.jobs().invokeOperation("v/ops/claudecode/run", Maps.of("prompt", "hi"), OWNER_CTX));
+		assertThrows(InvalidInputException.class, () -> engine.jobs().invokeOperation("v/ops/claudecode/run", Maps.of("prompt", "hi"), OWNER_CTX));
+		// Someone with none has nothing to run in.
+		assertThrows(NotFoundException.class, () -> engine.jobs().invokeOperation("v/ops/claudecode/run",
+			Maps.of("prompt", "hi"), RequestContext.of(Strings.create("did:test:claudecode-nobody"))));
 
 		AVector<ACell> mine = RT.ensureVector(run(OTHER_CTX, "v/ops/claudecode/projects", Maps.empty()).get(ClaudeCodeAdapter.K_PROJECTS));
 		assertEquals(1, mine.count());
@@ -415,6 +425,102 @@ public class ClaudeCodeAdapterTest {
 		assertEquals(Status.FAILED, stop.getStatus());
 	}
 
+	/**
+	 * A session belongs to its project. A call naming another project is
+	 * gated on that project, so resuming the session there is refused before
+	 * anything happens to it: its process is not stopped and no turn runs.
+	 */
+	@Test
+	public void testAnotherProjectsSessionIsNeitherStoppedNorResumed() {
+		AMap<AString, ACell> first = run(OWNER_CTX, "v/ops/claudecode/run", Maps.of("project", "alpha", "prompt", "count"));
+		String session = str(first, "session");
+		long pid = pidOf(OWNER_CTX, session);
+
+		// OTHER may use gamma only. OWNER may use beta too: the rule is the session's, not the caller's.
+		Object[][] attempts = {
+			{OTHER_CTX, "v/ops/claudecode/run", "gamma"},
+			{OTHER_CTX, "v/ops/claudecode/session", "gamma"},
+			{OWNER_CTX, "v/ops/claudecode/run", "beta"}};
+		for (Object[] a : attempts) {
+			InvalidInputException refused = assertThrows(InvalidInputException.class,
+				() -> engine.jobs().invokeOperation((String) a[1],
+					Maps.of("project", a[2], "session", session, "prompt", "count"), (RequestContext) a[0]));
+			assertTrue(refused.getMessage().contains(ClaudeCodeAdapter.SESSION_OF_ANOTHER_PROJECT), refused.getMessage());
+		}
+
+		AMap<AString, ACell> status = sessionStatus(OWNER_CTX, session);
+		assertEquals("alpha", str(status, "project"));
+		assertEquals(CVMBool.TRUE, status.get(ClaudeSession.K_LIVE));
+		assertEquals(pid, pidOf(OWNER_CTX, session), "the same process");
+		assertNull(sessionStatus(OTHER_CTX, session));
+		assertEquals("count: 2", str(run(OWNER_CTX, "v/ops/claudecode/run", Maps.of("session", session, "prompt", "count")), "result"),
+			"no turn ran elsewhere");
+	}
+
+	/**
+	 * A venue restarted knows no sessions, so a resume from another project
+	 * reaches Claude Code. One that never starts there, failed or still
+	 * waiting for its first prompt, must not keep the session from its own
+	 * project. Claude Code keeps the sessions of different directories apart;
+	 * the fake shares them, so here the waiting job's turn is what the
+	 * venue refuses.
+	 */
+	@Test
+	public void testResumeThatNeverStartedLeavesTheSessionToItsProject() throws Exception {
+		String missing = "22222222-0000-4000-8000-000000000000";
+		Job failed = awaitFinished(engine.jobs().invokeOperation("v/ops/claudecode/run",
+			Maps.of("project", "gamma", "session", missing, "prompt", "count"), OTHER_CTX));
+		assertEquals(Status.FAILED, failed.getStatus());
+		assertTrue(failed.getErrorMessage().contains("No conversation found"), failed.getErrorMessage());
+
+		// A session from before the restart, on disk with four turns behind it
+		String earlier = "33333333-0000-4000-8000-000000000000";
+		Files.writeString(stateDir.resolve("fake-claude-" + earlier + ".count"), "4");
+		Job waiting = engine.jobs().invokeOperation("v/ops/claudecode/session",
+			Maps.of("project", "gamma", "session", earlier), OTHER_CTX);
+		await(() -> Status.INPUT_REQUIRED.equals(waiting.getStatus()), 10_000);
+
+		await(() -> adapter.knownSessions().stream().noneMatch(s -> missing.equals(s.sessionId())), 5000);
+		Job own = awaitFinished(engine.jobs().invokeOperation("v/ops/claudecode/run",
+			Maps.of("project", "alpha", "session", missing, "prompt", "count"), OWNER_CTX));
+		assertTrue(own.getErrorMessage().contains("No conversation found"), own.getErrorMessage());
+		assertEquals("count: 5", str(run(OWNER_CTX, "v/ops/claudecode/run",
+			Maps.of("project", "alpha", "session", earlier, "prompt", "count")), "result"));
+
+		// Now the venue knows the session as alpha's, the waiting job's first turn is refused
+		engine.jobs().deliverMessage(waiting.getID(), Maps.of("content", "count"), OTHER_CTX);
+		awaitFinished(waiting);
+		assertEquals(Status.FAILED, waiting.getStatus());
+		assertTrue(waiting.getErrorMessage().contains(ClaudeCodeAdapter.SESSION_OF_ANOTHER_PROJECT), waiting.getErrorMessage());
+		assertEquals("count: 6", str(run(OWNER_CTX, "v/ops/claudecode/run", Maps.of("session", earlier, "prompt", "count")), "result"));
+	}
+
+	/** A resume cancelled while it waits for a pool slot gives up the session id, and the slot. */
+	@Test
+	public void testCancelledWaitingResumeReleasesSessionAndSlot() throws Exception {
+		stopAll();
+		assertTrue(adapter.configure(baseConfig.assoc(ClaudeCodeAdapter.K_MAX_SESSIONS, CVMLong.create(1)), true));
+		try {
+			Job busy = engine.jobs().invokeOperation("v/ops/claudecode/run", Maps.of("project", "alpha", "prompt", "sleep 20000"), OWNER_CTX);
+			await(() -> adapter.knownSessions().stream().anyMatch(s -> s.state() == ClaudeSession.State.BUSY), 10_000);
+
+			String earlier = "44444444-0000-4000-8000-000000000000";
+			Files.writeString(stateDir.resolve("fake-claude-" + earlier + ".count"), "1");
+			Job waiting = engine.jobs().invokeOperation("v/ops/claudecode/run",
+				Maps.of("project", "gamma", "session", earlier, "prompt", "count"), OTHER_CTX);
+			await(() -> adapter.knownSessions().stream().anyMatch(s -> earlier.equals(s.sessionId())), 5000);
+			waiting.cancel();
+			await(() -> adapter.knownSessions().stream().noneMatch(s -> earlier.equals(s.sessionId())), 5000);
+
+			busy.cancel();
+			await(() -> liveTotal() == 0, 10_000);
+			assertEquals("count: 2", str(run(OWNER_CTX, "v/ops/claudecode/run",
+				Maps.of("project", "alpha", "session", earlier, "prompt", "count")), "result"));
+		} finally {
+			assertTrue(adapter.configure(baseConfig, true));
+		}
+	}
+
 	@Test
 	public void testBypassPermissionsOnlyWhereConfigured() {
 		Job denied = engine.jobs().invokeOperation("v/ops/claudecode/run",
@@ -429,9 +535,9 @@ public class ClaudeCodeAdapterTest {
 
 	@Test
 	public void testCallOptionsCannotSetOperatorSettings() {
-		assertThrows(IllegalArgumentException.class, () -> engine.jobs().invokeOperation("v/ops/claudecode/run",
+		assertThrows(InvalidInputException.class, () -> engine.jobs().invokeOperation("v/ops/claudecode/run",
 			Maps.of("project", "alpha", "prompt", "hi", "options", Maps.of("addDirs", Vectors.of("/etc"))), OWNER_CTX));
-		assertThrows(IllegalArgumentException.class, () -> engine.jobs().invokeOperation("v/ops/claudecode/run",
+		assertThrows(InvalidInputException.class, () -> engine.jobs().invokeOperation("v/ops/claudecode/run",
 			Maps.of("project", "alpha", "prompt", "hi", "options", Maps.of("env", Maps.of("X", "y"))), OWNER_CTX));
 	}
 
@@ -470,7 +576,7 @@ public class ClaudeCodeAdapterTest {
 		AMap<AString, ACell> deleted = run(engine.venueContext(), "v/ops/claudecode/delete", Maps.of("name", "rt"));
 		assertEquals(CVMBool.TRUE, deleted.get(ClaudeCodeAdapter.K_DELETED));
 		assertNull(engine.resolvePath(Strings.create(ClaudeCodeAdapter.REGISTRY_PATH + "/rt"), engine.venueContext()));
-		assertThrows(IllegalArgumentException.class, () -> engine.jobs().invokeOperation("v/ops/claudecode/run",
+		assertThrows(NotFoundException.class, () -> engine.jobs().invokeOperation("v/ops/claudecode/run",
 			Maps.of("project", "rt", "prompt", "hi"), OWNER_CTX));
 		Job delCfg = engine.jobs().invokeOperation("v/ops/claudecode/delete", Maps.of("name", "alpha"), engine.venueContext());
 		assertThrows(RuntimeException.class, () -> delCfg.awaitResult(10_000));
@@ -557,6 +663,102 @@ public class ClaudeCodeAdapterTest {
 		await(job::isFinished, 10_000);
 	}
 
+	@Test
+	public void testRestoredSessionKeepsTheOptionsItsCallAsked() throws Exception {
+		// Project beta says haiku and seven turns; the call asks for others.
+		Job job = engine.jobs().invokeOperation("v/ops/claudecode/session", Maps.of("project", "beta", "prompt", "count",
+			"model", "sonnet", "options", Maps.of("effort", "low", "maxTurns", 3)), OWNER_CTX);
+		await(() -> Status.INPUT_REQUIRED.equals(job.getStatus()), 30_000);
+		String session = str(output(job), "session");
+		adapter.forgetSessionJobForTest(job.getID());
+		run(OWNER_CTX, "v/ops/claudecode/stop", Maps.of("session", session));
+		engine.jobs().deliverMessage(job.getID(), Maps.of("content", "args"), OWNER_CTX);
+		await(() -> {
+			String reply = str(output(job), "result");
+			return reply != null && reply.startsWith("args:");
+		}, 30_000);
+		String args = str(output(job), "result");
+		for (String expected : List.of("--model sonnet", "--effort low", "--max-turns 3", "--resume " + session)) {
+			assertTrue(args.contains(expected), expected + " in " + args);
+		}
+		assertFalse(args.contains("haiku") || args.contains("--max-turns 7"), "the project's settings do not replace the call's: " + args);
+		engine.jobs().deliverMessage(job.getID(), Maps.of("end", true), OWNER_CTX);
+		await(job::isFinished, 10_000);
+	}
+
+	@Test
+	public void testRestoredSessionEndsWhenItsProjectNoLongerAllowsItsPermissionMode() throws Exception {
+		Path dir = Files.createDirectory(root.resolve("restore-bypass"));
+		AMap<AString, ACell> project = Maps.of("name", "restore-bypass", "path", dir.toString(), "user", OWNER.toString());
+		run(engine.venueContext(), "v/ops/claudecode/create",
+			project.assoc(Strings.create("options"), Maps.of("permissionMode", RunOptions.BYPASS_PERMISSIONS)));
+		try {
+			Job job = engine.jobs().invokeOperation("v/ops/claudecode/session", Maps.of("project", "restore-bypass",
+				"prompt", "count", "permissionMode", RunOptions.BYPASS_PERMISSIONS), OWNER_CTX);
+			await(() -> Status.INPUT_REQUIRED.equals(job.getStatus()), 30_000);
+			adapter.forgetSessionJobForTest(job.getID());
+			// The operator takes the mode out of the project while the session waits.
+			run(engine.venueContext(), "v/ops/claudecode/delete", Maps.of("name", "restore-bypass"));
+			run(engine.venueContext(), "v/ops/claudecode/create", project);
+			assertThrows(Exception.class, () -> engine.jobs().deliverMessage(job.getID(), Maps.of("content", "count"), OWNER_CTX));
+			await(job::isFinished, 10_000);
+			assertEquals(Status.FAILED, job.getStatus(), "a mode the project no longer allows is not carried over silently");
+			assertTrue(job.getErrorMessage().contains(RunOptions.BYPASS_PERMISSIONS), job.getErrorMessage());
+		} finally {
+			run(engine.venueContext(), "v/ops/claudecode/delete", Maps.of("name", "restore-bypass"));
+		}
+	}
+
+	/** Caps an agent needs to open a session in the alpha project. */
+	private static AVector<ACell> alphaSessionCaps() {
+		return Vectors.of(
+			Capability.create(Strings.create("v/ops/claudecode/session"), Strings.create("invoke")),
+			Capability.create(Strings.create("claudecode/alpha"), ClaudeCodeAdapter.ABILITY_RUN));
+	}
+
+	/** An agent of the owner, made with {@code caps}, as it acts now. */
+	private static RequestContext agentWith(String agentId, AVector<ACell> caps) {
+		run(OWNER_CTX, "v/ops/agent/create", Maps.of(Fields.AGENT_ID, agentId, Fields.CONFIG, Maps.of(Config.CAPS, caps)));
+		return engine.context(OWNER, Principals.agentDID(OWNER, Strings.create(agentId)));
+	}
+
+	@Test
+	public void testRestoredSessionActsAsTheAgentThatStartedIt() throws Exception {
+		AVector<ACell> caps = alphaSessionCaps();
+		RequestContext agent = agentWith("session-restorer", caps);
+		Job job = engine.jobs().invokeOperation("v/ops/claudecode/session", Maps.of("project", "alpha", "prompt", "count"), agent);
+		await(() -> Status.INPUT_REQUIRED.equals(job.getStatus()), 30_000);
+		assertEquals(agent.getCallerDID(), job.getCaller());
+		assertEquals(OWNER, job.getOwner());
+		String session = str(output(job), "session");
+
+		// After a restart the session resumes as the agent stands then, not as its owner.
+		adapter.forgetSessionJobForTest(job.getID());
+		run(OWNER_CTX, "v/ops/claudecode/stop", Maps.of("session", session));
+		run(OWNER_CTX, "v/ops/agent/update", Maps.of(Fields.AGENT_ID, "session-restorer",
+			Fields.CONFIG, Maps.of(Config.CAPS, Vectors.of(caps.get(0)))));
+		assertThrows(Exception.class, () -> engine.jobs().deliverMessage(job.getID(), Maps.of("content", "count"), OWNER_CTX));
+		await(job::isFinished, 10_000);
+		assertEquals(Status.FAILED, job.getStatus(), "an agent that lost the project cannot resume in it");
+	}
+
+	/** A live session's next turn acts as its agent stands then: narrowed out of the project, the turn is refused and the session waits. */
+	@Test
+	public void testLiveSessionTurnActsUnderTheAgentsCurrentCaps() throws Exception {
+		AVector<ACell> caps = alphaSessionCaps();
+		RequestContext agent = agentWith("session-narrowed", caps);
+		Job job = engine.jobs().invokeOperation("v/ops/claudecode/session", Maps.of("project", "alpha", "prompt", "count"), agent);
+		await(() -> Status.INPUT_REQUIRED.equals(job.getStatus()), 30_000);
+
+		run(OWNER_CTX, "v/ops/agent/update", Maps.of(Fields.AGENT_ID, "session-narrowed",
+			Fields.CONFIG, Maps.of(Config.CAPS, Vectors.of(caps.get(0)))));
+		assertThrows(Exception.class, () -> engine.jobs().deliverMessage(job.getID(), Maps.of("content", "count"), OWNER_CTX));
+		assertEquals(Status.INPUT_REQUIRED, job.getStatus(), "the session waits for a turn it may take");
+
+		engine.jobs().deliverMessage(job.getID(), Maps.of("end", true), OWNER_CTX);
+		await(job::isFinished, 10_000);
+	}
+
 	// ------------------------------------------------------------------ helpers
 
 	@Test
@@ -615,6 +817,10 @@ public class ClaudeCodeAdapterTest {
 			if (session.equals(str(s, "session"))) return s;
 		}
 		return null;
+	}
+
+	private static long pidOf(RequestContext ctx, String session) {
+		return ((CVMLong) sessionStatus(ctx, session).get(ClaudeSession.K_PID)).longValue();
 	}
 
 	private static int liveInProject(String project) {

@@ -29,7 +29,7 @@ class DiscordModuleIT {
 		assertTrue(has(module,"net/dv8tion/jda/"),"JDA must be bundled");assertTrue(has(module,"okhttp3/"),"JDA HTTP stack must be bundled");
 		assertEquals("covia.discord",name(module));Set<String> shared=packages(module);shared.retainAll(packages(venue));assertTrue(shared.isEmpty(),"covia.jar already ships these packages: "+shared);
 		Path log=temp.resolve("discord-module.log");String executable=System.getProperty("os.name","").startsWith("Windows")?"java.exe":"java";
-		List<String> command=List.of(Path.of(System.getProperty("java.home"),"bin",executable).toString(),"-cp",venue+java.io.File.pathSeparator+System.getProperty("covia.test.classes"),"covia.adapter.discord.DiscordModuleSmokeMain",module.toString());
+		List<String> command=List.of(Path.of(System.getProperty("java.home"),"bin",executable).toString(),"-Dstdout.encoding=UTF-8","-Dstderr.encoding=UTF-8","-cp",venue+java.io.File.pathSeparator+System.getProperty("covia.test.classes"),"covia.adapter.discord.DiscordModuleSmokeMain",module.toString());
 		Process process = new ProcessBuilder(command)
 			.redirectErrorStream(true).redirectOutput(log.toFile()).start();
 		try {

@@ -15,11 +15,14 @@ import org.junit.jupiter.api.Test;
 import convex.auth.ucan.Capability;
 import convex.auth.ucan.UCAN;
 import convex.core.crypto.AKeyPair;
+import convex.core.data.ACell;
+import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.lang.RT;
+import covia.adapter.VenueConnection;
 import covia.api.Fields;
 import covia.exception.ResponseException;
 import covia.grid.Job;
@@ -27,6 +30,10 @@ import covia.grid.Status;
 import covia.grid.auth.VenueAuth;
 import covia.grid.auth.UcanTokens;
 import covia.grid.client.VenueHTTP;
+import covia.venue.Engine;
+import covia.venue.RemoteJobs;
+import covia.venue.RequestContext;
+import covia.venue.TestEngine;
 import covia.venue.TwoVenueTestServer;
 
 /**
@@ -163,12 +170,12 @@ public class CrossVenueTest {
 			Fields.OPERATION, "v/ops/jvm/string-concat",
 			Fields.INPUT, Maps.of("first", "x", "second", "y")));
 		try {
-			long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5);
 			Job local = TwoVenueTestServer.ENGINE_A.jobs().getJob(seed.getID(), TwoVenueTestServer.ENGINE_A.venueContext());
-			while (System.nanoTime() < deadline && !Strings.create("acceptance-unknown").equals(
-				RT.getIn(local.getData(), "delegation", "observation"))) Thread.sleep(5);
+			TestEngine.awaitJob(local, j -> RT.getIn(j.getData(), RemoteJobs.DELEGATION, RemoteJobs.NOT_FOLLOWED) != null,
+				10_000, () -> "no uncertain acceptance recorded");
 			assertEquals(Status.STARTED, local.getStatus());
-			assertEquals(Strings.create("acceptance-unknown"), RT.getIn(local.getData(), "delegation", "observation"));
+			assertEquals(Strings.create(RemoteJobs.ACCEPTANCE_UNKNOWN.formatted("http://localhost:1")),
+				RT.getIn(local.getData(), RemoteJobs.DELEGATION, RemoteJobs.NOT_FOLLOWED));
 			assertTrue(!local.future().isDone());
 		} finally { TwoVenueTestServer.COVIA_A.cancelJob(seed.getID()); }
 	}
@@ -348,75 +355,171 @@ public class CrossVenueTest {
 	}
 
 	/**
-	 * Venue-as-delegate hop: Alice grants VENUE A a token carrying both her
-	 * {@code crud/read} authority and a {@code venue/relay} grant
-	 * (iss = Alice, aud = venue A). authenticateAs=venue is the separate
-	 * instruction. A authenticates as itself; at B the chain roots at Alice.
+	 * A scheduled hop has no caller credential to sign in with: only a request
+	 * presents one, and the venue keeps none. It fails saying to schedule the
+	 * work at the target venue, though the caller presented a credential when
+	 * scheduling it.
 	 */
 	@Test
-	public void gridHopVenueRelayExercisesDelegation() throws Exception {
+	public void scheduledHopCannotSignInAsItsCaller() throws Exception {
 		AKeyPair aliceKP = AKeyPair.generate();
-		AString aliceDID = UCAN.toDIDKey(aliceKP.getAccountKey());
-		VenueHTTP aliceOnB = VenueHTTP.create(
-			URI.create(TwoVenueTestServer.BASE_URL_B), VenueAuth.keyPair(aliceKP));
-		aliceOnB.invokeAndWait(Strings.create("v/ops/covia/write"),
-			Maps.of(Fields.PATH, "w/deleg/doc", Fields.VALUE, Strings.create("delegated content")));
-
-		// One token: Alice → venue A, granting read over her namespace and
-		// authorising venue relay over her own DID.
-		String toVenueA = UcanTokens.relayDelegation(aliceKP,
-			TwoVenueTestServer.DID_A, 3600,
-			aliceDID + "/w/", Capability.CRUD_READ.toString());
-
-		VenueHTTP aliceOnA = VenueHTTP.create(
-			URI.create(TwoVenueTestServer.BASE_URL_A), VenueAuth.keyPair(aliceKP));
-		aliceOnA.setUcans(java.util.List.of(toVenueA));
-
-		Job inert = aliceOnA.invokeAndWait(OP_GRID_RUN, Maps.of(
-			Fields.OPERATION, "v/ops/covia/read",
-			Fields.VENUE, TwoVenueTestServer.BASE_URL_B,
-			Fields.INPUT, Maps.of(Fields.PATH, aliceDID + "/w/deleg/doc")));
-		assertNotEquals(Status.COMPLETE, inert.getStatus(),
-			"a venue/relay grant must be inert until authenticateAs=venue is requested");
-
-		Job hop = aliceOnA.invokeAndWait(OP_GRID_RUN, Maps.of(
-			Fields.OPERATION, "v/ops/covia/read",
-			Fields.VENUE, TwoVenueTestServer.BASE_URL_B,
-			"authenticateAs", "venue",
-			Fields.INPUT, Maps.of(Fields.PATH, aliceDID + "/w/deleg/doc")));
-		assertEquals(Status.COMPLETE, hop.getStatus(),
-			"venue/relay hop under the caller's delegation should complete: "
-				+ RT.getIn(hop.getData(), Fields.ERROR));
-		assertEquals(Strings.create("delegated content"),
-			RT.getIn(hop.getData(), Fields.OUTPUT, "value"));
+		RequestContext alice = RequestContext.of(UCAN.toDIDKey(aliceKP.getAccountKey()));
+		RequestContext scheduling = alice.withRawUcans(
+			Vectors.of(Strings.create(identityToken(aliceKP, TwoVenueTestServer.DID_B))));
+		Engine engine = TwoVenueTestServer.ENGINE_A;
+		ACell scheduled = engine.jobs().invokeOperation("v/ops/scheduler/schedule", Maps.of(
+			"operation", OP_GRID_RUN,
+			"input", Maps.of(
+				Fields.OPERATION, "v/ops/auth/whoami",
+				Fields.VENUE, TwoVenueTestServer.BASE_URL_B,
+				"authenticateAs", "caller",
+				Fields.INPUT, Maps.empty()),
+			"after", 3_600_000L), scheduling).awaitResult(10_000);
+		Job fired = engine.jobs().invokeOperation("v/ops/scheduler/trigger",
+			Maps.of("handle", RT.getIn(scheduled, "handle")), alice);
+		assertThrows(Exception.class, () -> fired.awaitResult(10_000));
+		assertEquals(VenueConnection.NO_CALLER_CREDENTIAL + TwoVenueTestServer.DID_B, fired.getErrorMessage());
 	}
 
 	/**
-	 * Confused-deputy guard: an explicit venue-mode request is authorised only by
-	 * a relay grant issued by the authenticated caller. Carol cannot use Bob's.
+	 * The venue itself hops as itself: B authenticates the request as venue A.
 	 */
 	@Test
-	public void gridHopRelayGrantMustComeFromCaller() throws Exception {
-		AKeyPair aliceKP = AKeyPair.generate();
-		AString aliceDID = UCAN.toDIDKey(aliceKP.getAccountKey());
-		AKeyPair bobKP = AKeyPair.generate();
-		AKeyPair carolKP = AKeyPair.generate();
-
-		// Bob (not Carol) mints a venue/relay grant for venue A.
-		String bobRelay = UcanTokens.relayDelegation(bobKP,
-			TwoVenueTestServer.DID_A, 3600);
-
-		// Carol explicitly requests venue mode but presents Bob's grant.
-		VenueHTTP carolOnA = VenueHTTP.create(
-			URI.create(TwoVenueTestServer.BASE_URL_A), VenueAuth.keyPair(carolKP));
-		carolOnA.setUcans(java.util.List.of(bobRelay));
-
-		Job hop = carolOnA.invokeAndWait(OP_GRID_RUN, Maps.of(
-			Fields.OPERATION, "v/ops/covia/read",
+	public void gridHopAsVenueWhenTheVenueCalls() throws Exception {
+		Job hop = TwoVenueTestServer.ENGINE_A.jobs().invokeOperation(OP_GRID_RUN, Maps.of(
+			Fields.OPERATION, "v/ops/auth/whoami",
 			Fields.VENUE, TwoVenueTestServer.BASE_URL_B,
 			"authenticateAs", "venue",
-			Fields.INPUT, Maps.of(Fields.PATH, aliceDID + "/w/deleg/doc")));
-		assertNotEquals(Status.COMPLETE, hop.getStatus(),
-			"a relay grant issued by someone other than the caller cannot authorise venue mode");
+			Fields.INPUT, Maps.empty()), TwoVenueTestServer.ENGINE_A.venueContext());
+		assertEquals(Strings.create(TwoVenueTestServer.DID_A),
+			RT.getIn(hop.awaitResult(10_000), Fields.CALLER));
+	}
+
+	/**
+	 * A user reaches the venue's own resources at another venue through a grant
+	 * from the venue, as themselves: A keeps a document in its namespace at B,
+	 * issues Alice read on it, and Alice reads it at B.
+	 */
+	@Test
+	public void venueGrantReachesItsResourcesElsewhere() throws Exception {
+		TwoVenueTestServer.ENGINE_A.jobs().invokeOperation(OP_GRID_RUN, Maps.of(
+			Fields.OPERATION, "v/ops/covia/write",
+			Fields.VENUE, TwoVenueTestServer.BASE_URL_B,
+			"authenticateAs", "venue",
+			Fields.INPUT, Maps.of(Fields.PATH, "w/venue-share/doc", Fields.VALUE, "shared by A")),
+			TwoVenueTestServer.ENGINE_A.venueContext()).awaitResult(10_000);
+
+		AKeyPair aliceKP = AKeyPair.generate();
+		AString aliceDID = UCAN.toDIDKey(aliceKP.getAccountKey());
+		ACell issued = TwoVenueTestServer.ENGINE_A.jobs().invokeOperation("v/ops/ucan/issue", Maps.of(
+			"aud", aliceDID,
+			"att", Vectors.of(Maps.of("with", "w/venue-share/", "can", Capability.CRUD_READ)),
+			"exp", (System.currentTimeMillis() / 1000) + 3600),
+			TwoVenueTestServer.ENGINE_A.venueContext()).awaitResult(10_000);
+
+		VenueHTTP aliceOnB = VenueHTTP.create(
+			URI.create(TwoVenueTestServer.BASE_URL_B), VenueAuth.keyPair(aliceKP));
+		aliceOnB.setUcans(java.util.List.of(RT.getIn(issued, "token").toString()));
+		Job read = aliceOnB.invokeAndWait(Strings.create("v/ops/covia/read"),
+			Maps.of(Fields.PATH, TwoVenueTestServer.DID_A + "/w/venue-share/doc"));
+		assertEquals(Status.COMPLETE, read.getStatus(),
+			"a venue-issued grant should reach the venue's resources at B: "
+				+ RT.getIn(read.getData(), Fields.ERROR));
+		assertEquals(Strings.create("shared by A"), RT.getIn(read.getData(), Fields.OUTPUT, "value"));
+	}
+
+	/**
+	 * The venue passes on part of a grant another venue made to it: B grants A
+	 * read on a document in B's namespace, A passes it on to Alice with B's
+	 * grant in prf, and Alice reads it at B through A, as herself.
+	 */
+	@Test
+	public void venuePassesOnAGrantItHoldsElsewhere() throws Exception {
+		TwoVenueTestServer.ENGINE_B.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/held-share/doc", Fields.VALUE, "held by A"),
+			TwoVenueTestServer.ENGINE_B.venueContext()).awaitResult(10_000);
+		long now = System.currentTimeMillis() / 1000;
+		ACell toA = TwoVenueTestServer.ENGINE_B.jobs().invokeOperation("v/ops/ucan/issue", Maps.of(
+			"aud", TwoVenueTestServer.DID_A,
+			"att", Vectors.of(Maps.of("with", "w/held-share/", "can", Capability.CRUD_READ)),
+			"exp", now + 3600),
+			TwoVenueTestServer.ENGINE_B.venueContext()).awaitResult(10_000);
+
+		AKeyPair aliceKP = AKeyPair.generate();
+		AString aliceDID = UCAN.toDIDKey(aliceKP.getAccountKey());
+		ACell toAlice = TwoVenueTestServer.ENGINE_A.jobs().invokeOperation("v/ops/ucan/issue", Maps.of(
+			"aud", aliceDID,
+			"att", Vectors.of(Maps.of("with", TwoVenueTestServer.DID_B + "/w/held-share/",
+				"can", Capability.CRUD_READ)),
+			"exp", now + 1800,
+			"prf", Vectors.of(RT.getIn(toA, "token"))),
+			TwoVenueTestServer.ENGINE_A.venueContext()).awaitResult(10_000);
+
+		AMap<AString, ACell> read = Maps.of(
+			Fields.OPERATION, "v/ops/covia/read",
+			Fields.VENUE, TwoVenueTestServer.BASE_URL_B,
+			"authenticateAs", "caller",
+			Fields.INPUT, Maps.of(Fields.PATH, TwoVenueTestServer.DID_B + "/w/held-share/doc"));
+		VenueHTTP aliceOnA = VenueHTTP.create(
+			URI.create(TwoVenueTestServer.BASE_URL_A), VenueAuth.keyPair(aliceKP));
+
+		// Control: as herself but without the passed-on grant, Alice is refused at B.
+		aliceOnA.setUcans(java.util.List.of(identityToken(aliceKP, TwoVenueTestServer.DID_B)));
+		assertNotEquals(Status.COMPLETE, aliceOnA.invokeAndWait(OP_GRID_RUN, read).getStatus(),
+			"without a grant Alice has no standing in B's namespace");
+
+		aliceOnA.setUcans(java.util.List.of(RT.getIn(toAlice, "token").toString(),
+			identityToken(aliceKP, TwoVenueTestServer.DID_B)));
+		Job hop = aliceOnA.invokeAndWait(OP_GRID_RUN, read);
+		assertEquals(Status.COMPLETE, hop.getStatus(),
+			"the chain B -> A -> Alice should reach B's document: "
+				+ RT.getIn(hop.getData(), Fields.ERROR));
+		assertEquals(Strings.create("held by A"), RT.getIn(hop.getData(), Fields.OUTPUT, "value"));
+	}
+
+	/**
+	 * A user cannot have the venue authenticate as itself, whatever they sign:
+	 * the venue's identity carries all of its standing, so no grant lends it.
+	 */
+	@Test
+	public void gridHopAsVenueRefusedForUsers() throws Exception {
+		AKeyPair aliceKP = AKeyPair.generate();
+		AString aliceDID = UCAN.toDIDKey(aliceKP.getAccountKey());
+		VenueHTTP aliceOnA = VenueHTTP.create(
+			URI.create(TwoVenueTestServer.BASE_URL_A), VenueAuth.keyPair(aliceKP));
+		aliceOnA.setUcans(java.util.List.of(UcanTokens.grant(aliceKP,
+			TwoVenueTestServer.DID_A, aliceDID.toString(), "venue/relay", 3600)));
+
+		Job hop = aliceOnA.invokeAndWait(OP_GRID_RUN, Maps.of(
+			Fields.OPERATION, "v/ops/auth/whoami",
+			Fields.VENUE, TwoVenueTestServer.BASE_URL_B,
+			"authenticateAs", "venue",
+			Fields.INPUT, Maps.empty()));
+		assertNotEquals(Status.COMPLETE, hop.getStatus());
+		assertTrue(String.valueOf(RT.getIn(hop.getData(), Fields.ERROR))
+			.contains(VenueConnection.VENUE_MODE_DENIED));
+	}
+
+	/**
+	 * Regression: a hop back to the venue's own URL as the venue would make any
+	 * user the operator. It is refused like any other venue-mode request.
+	 */
+	@Test
+	public void gridSelfHopAsVenueRefusedForUsers() throws Exception {
+		AKeyPair malloryKP = AKeyPair.generate();
+		AString malloryDID = UCAN.toDIDKey(malloryKP.getAccountKey());
+		VenueHTTP malloryOnA = VenueHTTP.create(
+			URI.create(TwoVenueTestServer.BASE_URL_A), VenueAuth.keyPair(malloryKP));
+		malloryOnA.setUcans(java.util.List.of(UcanTokens.grant(malloryKP,
+			TwoVenueTestServer.DID_A, malloryDID.toString(), "venue/relay", 3600)));
+
+		Job list = malloryOnA.invokeAndWait(OP_GRID_RUN, Maps.of(
+			Fields.OPERATION, "v/ops/user/list",
+			Fields.VENUE, TwoVenueTestServer.BASE_URL_A,
+			"authenticateAs", "venue",
+			Fields.INPUT, Maps.empty()));
+		assertNotEquals(Status.COMPLETE, list.getStatus());
+		assertTrue(String.valueOf(RT.getIn(list.getData(), Fields.ERROR))
+			.contains(VenueConnection.VENUE_MODE_DENIED));
 	}
 }

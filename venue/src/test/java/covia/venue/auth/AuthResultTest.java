@@ -47,12 +47,15 @@ import covia.grid.auth.VenueAuth;
 import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
+import covia.venue.TestEngine;
 import covia.venue.server.AuthMiddleware;
 import io.javalin.http.Context;
 
 /** Credential/evidence boundaries, without contacting an external identity provider. */
 class AuthResultTest {
-	private static Engine engine;
+	private static final Engine engine = TestEngine.ENGINE;
+	/** A venue that accepts tokens with no expiry. */
+	private static Engine relaxed;
 	private static VenueAuthenticator auth;
 	private static AKeyPair key;
 	private static AString did;
@@ -61,8 +64,7 @@ class AuthResultTest {
 
 	@BeforeAll
 	static void setup() {
-		engine = Engine.createTemp(Maps.of(Config.HOSTNAME, "auth-result.example"));
-		Engine.addDemoAssets(engine);
+		relaxed = Engine.createTemp(Maps.of(Config.AUTH, Maps.of("requireExp", false)));
 		auth = new VenueAuthenticator(engine);
 		key = AKeyPair.generate();
 		did = UCAN.toDIDKey(key.getAccountKey());
@@ -72,7 +74,7 @@ class AuthResultTest {
 
 	@AfterAll
 	static void close() {
-		if (engine != null) engine.close();
+		if (relaxed != null) relaxed.close();
 	}
 
 	private static AMap<AString, ACell> claims() {
@@ -132,9 +134,9 @@ class AuthResultTest {
 		for (String name : new String[] {"alice", "Bob_2.test-3", ".", ".."}) {
 			// Deliberately the existing username grammar, including dot-only names.
 			AString user = Strings.create(did + ":u:" + name);
-			AString token = Strings.create(VenueAuth.namedKeyPair(key, user.toString(),
-				engine.getDIDString().toString(), 300).mintToken());
-			assertNull(engine.getVenueState().users().get(user));
+			AString token = Strings.create(VenueAuth.namedKeyPair(key, user.toString(), 300)
+				.mintToken(engine.getDIDString().toString()));
+			assertNull(engine.getVenueState().users().user(user));
 			AuthResult result = auth.verify(token);
 			assertEquals(user, result.userDID());
 			assertEquals(did, result.authenticatedIdentity());
@@ -147,7 +149,7 @@ class AuthResultTest {
 			assertEquals(user, auth.authenticatedUser(ctx));
 			assertEquals(user, AuthMiddleware.callerContext(ctx).getCallerDID());
 			assertEquals(user, AuthMiddleware.callerContext(ctx).getUserDID());
-			assertNull(engine.getVenueState().users().get(user), "authentication does not admit users");
+			assertNull(engine.getVenueState().users().user(user), "authentication does not admit users");
 		}
 	}
 
@@ -176,14 +178,14 @@ class AuthResultTest {
 			":u:alice:g:worker", ":org:acme:service:build:job:42", ":g:parent:g:child",
 			":segment".repeat(2000)}) {
 			AString subject = Strings.create(did + suffix);
-			AString token = Strings.create(VenueAuth.namedKeyPair(key, subject.toString(),
-				engine.getDIDString().toString(), 300).mintToken());
+			AString token = Strings.create(VenueAuth.namedKeyPair(key, subject.toString(), 300)
+				.mintToken(engine.getDIDString().toString()));
 			Context ctx = context();
 			assertEquals(subject, auth.authenticate(ctx, token));
 			assertEquals(subject, auth.authenticatedUser(ctx));
 			assertEquals(did, auth.authenticatedIdentity(ctx));
 			assertEquals(subject, AuthMiddleware.callerContext(ctx).getCallerDID());
-			assertNull(engine.getVenueState().users().get(subject));
+			assertNull(engine.getVenueState().users().user(subject));
 			assertUnknownEvidence(auth.authenticationResult(ctx));
 			assertKeyRejected(JWT.signPublic(claims().assoc(Fields.SUB, subject), AKeyPair.generate()),
 				VenueAuthenticator.Reason.WRONG_KEY_FOR_SUBJECT);
@@ -212,13 +214,13 @@ class AuthResultTest {
 			assertThrows(AuthException.class, () -> engine.admitUser(agent));
 			AString proof = JWT.signPublic(UCAN.buildPayload(key.getAccountKey(), agent, expiry, null,
 				Vectors.of(Capability.create(resource, Capability.CRUD_READ)), Vectors.empty(), null), key);
-			RequestContext granted = AuthMiddleware.withTransportGrants(caller, Vectors.of(proof));
+			RequestContext granted = engine.withTransportGrants(caller, Vectors.of(proof));
 			assertEquals(did, engine.requireLocalAccess(granted, resource, Capability.CRUD_READ));
 			assertThrows(AuthException.class, () -> engine.requireLocalAccess(granted, resource, Capability.CRUD_WRITE));
 			AString sibling = Strings.create(agent + "-sibling");
 			Context siblingCtx = context();
 			auth.authenticate(siblingCtx, JWT.signPublic(claims().assoc(Fields.SUB, sibling), key));
-			RequestContext other = AuthMiddleware.withTransportGrants(AuthMiddleware.callerContext(siblingCtx), Vectors.of(proof));
+			RequestContext other = engine.withTransportGrants(AuthMiddleware.callerContext(siblingCtx), Vectors.of(proof));
 			assertThrows(AuthException.class, () -> engine.requireLocalAccess(other, resource, Capability.CRUD_READ));
 		}
 	}
@@ -252,17 +254,37 @@ class AuthResultTest {
 			Vectors.of(Capability.create(resource, Capability.CRUD_READ)), Vectors.empty()).toJWT(owner);
 		Context root = context();
 		auth.authenticate(root, JWT.signPublic(claims(), key));
-		assertTrue(engine.proofsCover(AuthMiddleware.withTransportGrants(AuthMiddleware.callerContext(root), Vectors.of(proof)),
+		assertTrue(engine.proofsCover(engine.withTransportGrants(AuthMiddleware.callerContext(root), Vectors.of(proof)),
 			resource, Capability.CRUD_READ, now));
 		Context child = context();
 		AString user = Strings.create(did + ":u:isolated");
 		auth.authenticate(child, JWT.signPublic(claims().assoc(Fields.SUB, user), key));
 		RequestContext caller = AuthMiddleware.callerContext(child);
-		assertFalse(engine.proofsCover(AuthMiddleware.withTransportGrants(caller, Vectors.of(proof)),
+		assertFalse(engine.proofsCover(engine.withTransportGrants(caller, Vectors.of(proof)),
 			resource, Capability.CRUD_READ, now), "a grant to the signer is not a grant to its user");
 		assertFalse(engine.crossUserAllows(caller, Strings.create(did + "/w/private"), Capability.CRUD_READ));
 		AString sibling = Strings.create(did + ":u:sibling");
 		assertFalse(engine.crossUserAllows(caller, Strings.create(sibling + "/w/private"), Capability.CRUD_READ));
+	}
+
+	@Test
+	void thePublicPrincipalNeverAuthenticates() {
+		// The venue key can sign its own public principal as a nested subject, and
+		// could issue a session for it; neither credential may authenticate.
+		AString publicDID = Strings.create(engine.getDIDString() + ":public");
+		assertTrue(engine.isPublicPrincipal(publicDID));
+		AString selfIssued = Strings.create(VenueAuth.namedKeyPair(engine.getKeyPair(), publicDID.toString(), 300)
+			.mintToken(engine.getDIDString().toString()));
+		assertKeyRejected(selfIssued, VenueAuthenticator.Reason.PUBLIC_SUBJECT);
+		AString venueSigned = JWT.signPublic(Maps.of(JWT.ISS, engine.getDIDString(), JWT.SUB, publicDID,
+			JWT.AUD, engine.getDIDString(), JWT.IAT, now, JWT.EXP, expiry), engine.getKeyPair());
+		String message = assertThrows(AuthException.class, () -> auth.verify(venueSigned)).getMessage();
+		assertTrue(message.startsWith(VenueAuthenticator.VENUE_TOKEN_REJECTED_PREFIX), message);
+		assertTrue(message.contains(VenueAuthenticator.Reason.PUBLIC_SUBJECT), message);
+		// Any other venue-key-signed nested subject still authenticates.
+		AString user = Strings.create(UCAN.toDIDKey(engine.getKeyPair().getAccountKey()) + ":u:alice");
+		assertEquals(user, auth.authenticate(Strings.create(VenueAuth.namedKeyPair(engine.getKeyPair(),
+			user.toString(), 300).mintToken(engine.getDIDString().toString()))));
 	}
 
 	private static void assertKeyRejected(AString token, String reason) {
@@ -310,42 +332,34 @@ class AuthResultTest {
 
 	@Test
 	void uncheckedOrMissingMetadataDoesNotChangeAcceptance() {
-		Engine relaxed = Engine.createTemp(Maps.of(Config.AUTH, Maps.of("requireExp", false)));
-		try {
-			VenueAuthenticator verifier = new VenueAuthenticator(relaxed);
-			AString token = JWT.signPublic(Maps.of("sub", did, "iat", "not-a-time",
-				"auth_time", now, "amr", Vectors.of("mfa")), key);
-			AuthResult result = verifier.verify(token);
-			assertNull(result.credential().expiresAt());
-			assertUnknownEvidence(result);
-			assertEquals(did, verifier.authenticate(token));
-		} finally {
-			relaxed.close();
-		}
+		VenueAuthenticator verifier = new VenueAuthenticator(relaxed);
+		AString token = JWT.signPublic(Maps.of("sub", did, "aud", relaxed.getDIDString(),
+			"iat", "not-a-time", "auth_time", now, "amr", Vectors.of("mfa")), key);
+		AuthResult result = verifier.verify(token);
+		assertNull(result.credential().expiresAt());
+		assertUnknownEvidence(result);
+		assertEquals(did, verifier.authenticate(token));
 	}
 
 	@Test
 	void optionalExpiryDoesNotMakeMalformedTemporalClaimsOptional() {
-		Engine relaxed = Engine.createTemp(Maps.of(Config.AUTH, Maps.of("requireExp", false)));
-		try {
-			VenueAuthenticator verifier = new VenueAuthenticator(relaxed);
-			for (boolean venueSigned : new boolean[] {false, true}) {
-				AKeyPair signer = venueSigned ? relaxed.getKeyPair() : key;
-				AMap<AString, ACell> base = Maps.of("sub", did,
-					"iss", venueSigned ? relaxed.getDIDString() : did, "exp", expiry);
-				for (String field : new String[] {"exp", "nbf"}) {
-					for (ACell invalid : new ACell[] {Strings.create("tomorrow"), Maps.empty(), Vectors.empty()}) {
-						AString token = JWT.signPublic(base.assoc(Strings.create(field), invalid), signer);
-						String prefix = venueSigned ? VenueAuthenticator.VENUE_TOKEN_REJECTED_PREFIX
-							: VenueAuthenticator.SELF_ISSUED_REJECTED_PREFIX;
-						String reason = field.equals("exp") ? VenueAuthenticator.Reason.MALFORMED_EXP
-							: VenueAuthenticator.Reason.MALFORMED_NBF;
-						assertEquals(prefix + reason,
-							assertThrows(AuthException.class, () -> verifier.verify(token), field).getMessage());
-					}
+		VenueAuthenticator verifier = new VenueAuthenticator(relaxed);
+		for (boolean venueSigned : new boolean[] {false, true}) {
+			AKeyPair signer = venueSigned ? relaxed.getKeyPair() : key;
+			AMap<AString, ACell> base = Maps.of("sub", did,
+				"iss", venueSigned ? relaxed.getDIDString() : did, "exp", expiry);
+			for (String field : new String[] {"exp", "nbf"}) {
+				for (ACell invalid : new ACell[] {Strings.create("tomorrow"), Maps.empty(), Vectors.empty()}) {
+					AString token = JWT.signPublic(base.assoc(Strings.create(field), invalid), signer);
+					String prefix = venueSigned ? VenueAuthenticator.VENUE_TOKEN_REJECTED_PREFIX
+						: VenueAuthenticator.SELF_ISSUED_REJECTED_PREFIX;
+					String reason = field.equals("exp") ? VenueAuthenticator.Reason.MALFORMED_EXP
+						: VenueAuthenticator.Reason.MALFORMED_NBF;
+					assertEquals(prefix + reason,
+						assertThrows(AuthException.class, () -> verifier.verify(token), field).getMessage());
 				}
 			}
-		} finally { relaxed.close(); }
+		}
 	}
 
 	@Test
@@ -437,7 +451,7 @@ class AuthResultTest {
 			encoded, caller).awaitResult(5000);
 		assertEquals(data, restored);
 		assertEquals(data.getHash(), restored.getHash());
-		var state = engine.adapterState("auth-result-test");
+		var state = relaxed.adapterState("auth-result-test");
 		state.write("event", restored);
 		assertEquals(data, state.read("event"));
 		assertEquals(details, state.read("event/authentication/details"));
@@ -456,9 +470,8 @@ class AuthResultTest {
 
 	@Test
 	void providerEvidenceUsesVerifiedIssuerAndSubject() throws Exception {
-		// Swapping the auth adapter bumps the adapter registry version, which
-		// refuses verifications in flight on that engine (AuthMethods.CHANGED).
-		// This class's tests run concurrently, so this one swaps on its own engine.
+		// Swapping the auth adapter changes how every concurrent test on that
+		// engine authenticates, so this one swaps on its own engine.
 		Engine isolated = Engine.createTemp(Maps.of(Config.HOSTNAME, "auth-result.example"));
 		KeyPairGenerator generator = KeyPairGenerator.getInstance("RSA");
 		generator.initialize(2048);

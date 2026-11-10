@@ -43,7 +43,7 @@ public final class ClaudeCodeModuleSmokeMain {
 							Strings.create("user"), owner)))));
 		Engine engine = null;
 		try {
-			engine = Engine.createTemp(config);
+			engine = Engine.createRealTime(config);
 			Engine.addDemoAssets(engine);
 			AAdapter adapter = engine.getAdapter("claudecode");
 			if (adapter == null) throw new AssertionError("Claude Code adapter did not load");

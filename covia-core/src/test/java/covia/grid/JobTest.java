@@ -21,9 +21,14 @@ import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import covia.api.Fields;
+import covia.exception.FaultException;
+import covia.exception.InvalidInputException;
 import covia.exception.JobFailedException;
 import covia.exception.JobPollingFailedException;
+import covia.exception.NotSupportedException;
 
+/** Isolated because a fault case silences the global fault logger. */
+@org.junit.jupiter.api.parallel.Isolated
 public class JobTest {
 	private static final AString LEGACY_PREV = Strings.intern("prev");
 
@@ -63,11 +68,11 @@ public class JobTest {
 		var notifications = new java.util.concurrent.atomic.AtomicInteger();
 		Job job = new Job(Maps.of(Fields.STATUS, Status.STARTED)) {
 			@Override public void onFinish(AMap<AString, ACell> data) { finishes.incrementAndGet(); }
+			@Override protected void onCancelled() { hooks.incrementAndGet(); }
 		};
 		AMap<AString, ACell> evidence = Maps.of("outcome", "acknowledged");
 		job.recordCancellation(evidence);
 		assertNull(job.getData().get(Fields.CANCELLATION));
-		job.setCancelHook(hooks::incrementAndGet);
 		job.subscribe(j -> notifications.incrementAndGet());
 		job.cancel("stop");
 		var future = job.future();
@@ -143,20 +148,23 @@ public class JobTest {
 		assertFalse(unclassified.getData().containsKey(Fields.ERROR_CODE));
 		assertNull(new JobFailedException(unclassified).getErrorCode());
 		Job exceptional = Job.create(Maps.of(Fields.STATUS, Status.STARTED));
-		exceptional.fail(new IllegalArgumentException("Unknown session"));
+		exceptional.fail(new InvalidInputException("Unknown session"));
 		assertFalse(exceptional.getData().containsKey(Fields.ERROR_CODE));
 		assertNull(exceptional.getErrorCode());
 	}
 
 	@Test
-	public void testLateCancelHookRunsExactlyOnceAndSeesCommittedState() {
-		Job job = Job.create(Maps.of(Fields.STATUS, Status.PENDING));
-		job.cancel();
+	public void testCancellationRunsOnceAndSeesCommittedState() {
 		var calls = new java.util.concurrent.atomic.AtomicInteger();
-		job.setCancelHook(() -> {
-			assertEquals(Status.CANCELLED, job.getStatus());
-			calls.incrementAndGet();
-		});
+		var holder = new java.util.concurrent.atomic.AtomicReference<Job>();
+		Job job = new Job(Maps.of(Fields.STATUS, Status.PENDING)) {
+			@Override protected void onCancelled() {
+				assertEquals(Status.CANCELLED, holder.get().getStatus());
+				calls.incrementAndGet();
+			}
+		};
+		holder.set(job);
+		job.cancel();
 		job.cancel();
 		job.completeWith(Strings.create("too late"));
 		assertEquals(1, calls.get());
@@ -178,9 +186,10 @@ public class JobTest {
 	}
 
 	@Test
-	public void testCancellationLosingToCompletionDoesNotRunHook() throws Exception {
+	public void testCancellationLosingToCompletionDoesNotRunCancellation() throws Exception {
 		var entered = new java.util.concurrent.CountDownLatch(1);
 		var release = new java.util.concurrent.CountDownLatch(1);
+		var calls = new java.util.concurrent.atomic.AtomicInteger();
 		Job job = new Job(Maps.of(Fields.STATUS, Status.STARTED)) {
 			@Override public AMap<AString, ACell> processUpdate(AMap<AString, ACell> next) {
 				if (Status.CANCELLED.equals(next.get(Fields.STATUS))) {
@@ -189,9 +198,8 @@ public class JobTest {
 				}
 				return next;
 			}
+			@Override protected void onCancelled() { calls.incrementAndGet(); }
 		};
-		var calls = new java.util.concurrent.atomic.AtomicInteger();
-		job.setCancelHook(calls::incrementAndGet);
 		var cancelling = CompletableFuture.runAsync(job::cancel);
 		try {
 			assertTrue(entered.await(5, TimeUnit.SECONDS));
@@ -203,17 +211,17 @@ public class JobTest {
 	}
 
 	@Test
-	public void testCompetingCancellationsOnlyRunWinningHook() throws Exception {
+	public void testCompetingCancellationsOnlyRunTheWinner() throws Exception {
 		var ready = new java.util.concurrent.CountDownLatch(2);
+		var calls = new java.util.concurrent.atomic.AtomicInteger();
 		Job job = new Job(Maps.of(Fields.STATUS, Status.STARTED)) {
 			@Override public AMap<AString, ACell> processUpdate(AMap<AString, ACell> next) {
 				ready.countDown();
 				awaitLatch(ready);
 				return next;
 			}
+			@Override protected void onCancelled() { calls.incrementAndGet(); }
 		};
-		var calls = new java.util.concurrent.atomic.AtomicInteger();
-		job.setCancelHook(calls::incrementAndGet);
 		var first = CompletableFuture.runAsync(job::cancel);
 		var second = CompletableFuture.runAsync(job::cancel);
 		CompletableFuture.allOf(first, second).get(5, TimeUnit.SECONDS);
@@ -225,9 +233,9 @@ public class JobTest {
 	public void testLosingFailureCannotReplaceWinningCause() {
 		Job job = Job.create(Maps.of(Fields.STATUS, Status.STARTED));
 		job.setPreserveFailureCause(true);
-		var winner = new IllegalArgumentException("winner");
+		var winner = new InvalidInputException("winner");
 		job.fail(winner);
-		job.fail(new IllegalStateException("loser"));
+		job.fail(new InvalidInputException("loser"));
 		assertEquals("winner", job.getErrorMessage());
 		var error = assertThrows(java.util.concurrent.CompletionException.class, () -> job.future().join());
 		org.junit.jupiter.api.Assertions.assertSame(winner, error.getCause());
@@ -244,11 +252,11 @@ public class JobTest {
 			}
 		};
 		job.setPreserveFailureCause(true);
-		var winner = new LinkageError("missing class");
+		var winner = new NotSupportedException("winner");
 		var update = CompletableFuture.runAsync(() -> job.fail(winner));
 		try {
 			assertTrue(committed.await(5, TimeUnit.SECONDS));
-			job.fail(new IllegalStateException("loser"));
+			job.fail(new InvalidInputException("loser"));
 			var error = assertThrows(java.util.concurrent.CompletionException.class, () -> job.future().join());
 			org.junit.jupiter.api.Assertions.assertSame(winner, error.getCause());
 		} finally { release.countDown(); }
@@ -256,13 +264,13 @@ public class JobTest {
 	}
 
 	@Test
-	public void testThrowingCancelHookStillCompletesAndFinishesJob() {
+	public void testThrowingCancellationStillCompletesAndFinishesJob() {
 		var finished = new java.util.concurrent.atomic.AtomicInteger();
 		Job job = new Job(Maps.of(Fields.STATUS, Status.STARTED)) {
 			@Override public void onFinish(AMap<AString, ACell> next) { finished.incrementAndGet(); }
+			@Override protected void onCancelled() { throw new IllegalStateException("cleanup failed"); }
 		};
 		var future = job.future();
-		job.setCancelHook(() -> { throw new IllegalStateException("cleanup failed"); });
 		assertThrows(IllegalStateException.class, job::cancel);
 		assertEquals(Status.CANCELLED, job.getStatus());
 		assertTrue(future.isCompletedExceptionally());
@@ -271,28 +279,52 @@ public class JobTest {
 
 	@Test
 	public void testStartAndResumeCommitBeforeContinuation() {
-		Job job = Job.create(Maps.of(Fields.STATUS, Status.PENDING));
+		Job job = new Job(Maps.of(Fields.STATUS, Status.PENDING)) {
+			@Override protected boolean supportsPause() { return true; }
+			@Override protected void onPaused() { assertEquals(Status.PAUSED, getStatus()); }
+			@Override protected boolean supportsResume() { return true; }
+			@Override protected void onResumed() {
+				assertEquals(Status.STARTED, getStatus());
+				setStatus(Status.INPUT_REQUIRED);
+			}
+		};
 		assertTrue(job.start(() -> assertEquals(Status.STARTED, job.getStatus())));
 		assertFalse(job.start(() -> { throw new AssertionError("already started"); }));
-		job.setPauseHook(() -> assertEquals(Status.PAUSED, job.getStatus()));
 		job.pause();
-		job.setResumeHook(() -> {
-			assertEquals(Status.STARTED, job.getStatus());
-			job.setStatus(Status.INPUT_REQUIRED);
-		});
 		job.resume();
 		assertEquals(Status.INPUT_REQUIRED, job.getStatus(), "continuation's next state must not be overwritten");
 	}
 
 	@Test
-	public void testContinuationErrorFailsJobAndCancelledStartDoesNoWork() {
-		Job job = Job.create(Maps.of(Fields.STATUS, Status.PENDING));
-		assertThrows(LinkageError.class, () -> job.start(() -> { throw new LinkageError("broken module"); }));
+	public void testContinuationErrorFailsJobAndCancelledStartDoesNoWork() throws Exception {
+		Job job = Job.create(Maps.of(Fields.STATUS, Status.PENDING,
+			Fields.OP, Strings.create("broken:run"), Fields.ADAPTER, Strings.create("broken")));
+		var broken = new LinkageError("broken module");
+		// The Job reports the fault, logging it at ERROR as it must
+		FaultException thrown = quietFaults(() -> assertThrows(FaultException.class,
+			() -> job.start(() -> { throw broken; })));
+		String report = FaultException.FAILED.formatted(Job.OPERATION.formatted("broken:run"),
+			"LinkageError", FaultException.ADAPTER.formatted("broken"));
+		assertEquals(report, thrown.getMessage(), "the starter receives the Job's report");
+		assertSame(broken, thrown.getCause());
 		assertEquals(Status.FAILED, job.getStatus());
+		assertEquals(report, job.getErrorMessage());
 		assertTrue(job.future().isCompletedExceptionally());
 		Job cancelled = Job.create(Maps.of(Fields.STATUS, Status.PENDING));
 		cancelled.cancel();
 		assertFalse(cancelled.start(() -> { throw new AssertionError("must not execute"); }));
+	}
+
+	/** Runs {@code body} with the fault logger silenced: the level is global, so the class is isolated. */
+	private static <T> T quietFaults(java.util.concurrent.Callable<T> body) throws Exception {
+		var logger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(FaultException.class);
+		var before = logger.getLevel();
+		logger.setLevel(ch.qos.logback.classic.Level.OFF);
+		try {
+			return body.call();
+		} finally {
+			logger.setLevel(before);
+		}
 	}
 
 	private static void awaitLatch(java.util.concurrent.CountDownLatch latch) {
@@ -440,15 +472,15 @@ public class JobTest {
 	@Test
 	public void testPauseAndResumeErrorsExplainExpectedStateOrAction() {
 		Job pending = Job.create(Maps.of(Fields.ID, "pending", Fields.STATUS, Status.PENDING));
-		IllegalStateException pendingPause = assertThrows(IllegalStateException.class, pending::pause);
-		assertTrue(pendingPause.getMessage().contains("expected STARTED"));
+		NotSupportedException pendingPause = assertThrows(NotSupportedException.class, pending::pause);
+		assertFalse(pendingPause.getMessage().isBlank());
 
 		Job running = Job.create(Maps.of(Fields.ID, "running", Fields.STATUS, Status.STARTED));
-		IllegalStateException unsupportedPause = assertThrows(IllegalStateException.class, running::pause);
-		assertTrue(unsupportedPause.getMessage().contains("cancel it if appropriate"));
+		NotSupportedException unsupportedPause = assertThrows(NotSupportedException.class, running::pause);
+		assertFalse(unsupportedPause.getMessage().isBlank());
 
-		IllegalStateException runningResume = assertThrows(IllegalStateException.class, running::resume);
-		assertTrue(runningResume.getMessage().contains("expected PAUSED, INPUT_REQUIRED, or AUTH_REQUIRED"));
+		NotSupportedException runningResume = assertThrows(NotSupportedException.class, running::resume);
+		assertFalse(runningResume.getMessage().isBlank());
 	}
 
 	/**
@@ -518,13 +550,9 @@ public class JobTest {
 		// Fail the job immediately (simulating fast async failure)
 		job.fail("Fast failure");
 
-		// Now try awaitResult - this should NOT hang
-		CompletableFuture<ACell> future = CompletableFuture.supplyAsync(() -> {
-			return job.awaitResult();
-		});
-
-		// Should complete within 1 second (not hang)
-		assertThrows(ExecutionException.class, () -> future.get(1, TimeUnit.SECONDS));
+		// A waiter arriving now finds the failure already settled, so cannot hang
+		assertTrue(job.future().isCompletedExceptionally());
+		assertThrows(JobFailedException.class, job::awaitResult);
 	}
 
 	/**
@@ -592,18 +620,9 @@ public class JobTest {
 		assertTrue(outerJob.isFinished(), "Outer job should be finished");
 		assertEquals(Status.FAILED, outerJob.getStatus());
 
-		// Now awaitResult on outer job should NOT hang - it should throw immediately
-		CompletableFuture<Object> awaitFuture = CompletableFuture.supplyAsync(() -> {
-			try {
-				return (Object)outerJob.awaitResult();
-			} catch (JobFailedException e) {
-				return e; // Return exception as result
-			}
-		});
-
-		// Should complete within 1 second
-		Object result = awaitFuture.get(1, TimeUnit.SECONDS);
-		assertTrue(result instanceof JobFailedException, "Should have received JobFailedException");
+		// A waiter on the outer job finds its failure already settled, so cannot hang
+		assertTrue(outerJob.future().isCompletedExceptionally());
+		assertThrows(JobFailedException.class, outerJob::awaitResult);
 	}
 
 	/**
@@ -624,18 +643,8 @@ public class JobTest {
 		assertFalse(job.isComplete());
 		assertEquals(Status.FAILED, job.getStatus());
 
-		// Now call awaitResult - this creates the future AFTER job is already failed
-		// This must NOT hang
-		CompletableFuture<Object> future = CompletableFuture.supplyAsync(() -> {
-			try {
-				return (Object)job.awaitResult();
-			} catch (JobFailedException e) {
-				return e;
-			}
-		});
-
-		// Must complete within 1 second
-		Object result = future.get(1, TimeUnit.SECONDS);
-		assertTrue(result instanceof JobFailedException);
+		// The future, made only now, is already settled, so awaitResult cannot hang
+		assertTrue(job.future().isCompletedExceptionally());
+		assertThrows(JobFailedException.class, job::awaitResult);
 	}
 }

@@ -88,10 +88,10 @@ time (§ resolution and authorisation), not by hiding the address space.
 ## Resolution and authorisation
 
 An inbound interaction (1) resolves the target agent from the endpoint, then (2)
-dispatches to `agent:chat` / `agent:request` under the caller's
+dispatches to `agent:request` / `agent:message` under the caller's
 `RequestContext`. The capability check is the existing one (COG-10 / COG-13):
-owner, a presented capability over `<ownerDID>/g/<agentId>`, or an agent the
-owner/operator made public. There is no A2A-specific branch in the trust
+owner, the agent's admission policy, or a presented capability over
+`<ownerDID>/g/<agentId>`. There is no A2A-specific branch in the trust
 decision.
 
 Agents are **private by default**. Denials are shaped so as not to leak an
@@ -99,32 +99,24 @@ agent's existence to callers with no standing: an **anonymous** caller gets a
 *not-found*, an **authenticated** caller without access gets a *forbidden*. (This
 mirrors how the current `GetTask` already hides foreign tasks.)
 
-Two independent levers open a private agent, and both already exist as
-primitives: a **UCAN capability** delegated on the agent's address (fine-grained,
-revocable), and an **explicit public flag** in the agent's config. The public
-flag is `a2a: { public: true, caps: … }` and has two levels:
+A private agent is opened the same way whichever door is used: the agent's
+admission policy `config.accepts` (named principals, the venue operator, or
+`"anyone"`), or a **UCAN capability** delegated on the agent's address. The
+**public flag** `a2a: { public: true }` only makes the agent's **card
+discoverable** by anyone; it admits nobody. An older config with `a2a.caps` on
+a public agent reads as `accepts: "anyone"`.
 
-- `public: true` alone makes the agent's **card discoverable** by anyone (no
-  interaction).
-- adding `caps` makes it **interactable** by non-owners. A non-owner's
-  `SendMessage` then runs the agent under the *owner's* identity narrowed by
-  that scope — `RequestContext.of(ownerDID).withCaps(scope)`. A scope can
-  only narrow, so it is escalation-safe. `caps: "unrestricted"` is honoured
-  (full owner authority for anonymous callers) with a warning, mirroring
-  `auth.public.caps`; a public agent with **no** `caps` is discoverable but its
-  interaction is **denied** (`publicInteractionAllowed` is false) — the owner
-  must deliberately bound a run.
+Every per-agent method runs as the asker: a `SendMessage` is the asker's own
+`agent:request` Job, and the agent serves it as itself, its tool calls under
+its own `config.caps` and an external agent's backend with its controller's
+authority (UCAN.md §5.4). Task calls reach only the asker's own tasks for that
+agent.
 
 The operator's `defaultChatOp` front-door is the venue-level version of the
 public flag.
 
-The **run authority** for a non-owner interaction — whose identity executes, the
-scope applied, and how the public and delegated levers differ — is worked out
-in [A2A_INTERACTION_AUTHORITY.md](./A2A_INTERACTION_AUTHORITY.md). In short: the
-agent always runs under its *owner's* identity; the levers are pure admission; a
-public run is narrowed by `a2a.caps`; the named-delegate scope (gated by a
-dedicated `agent/request` ability) and initiator-provenance are pending
-ratification there.
+Who may ask an agent, and what it does then, is in
+[A2A_INTERACTION_AUTHORITY.md](./A2A_INTERACTION_AUTHORITY.md).
 
 ## Discovery
 
@@ -160,8 +152,12 @@ the ownership enforcement (facade over the capability layer), so no A2A-specific
 trust branch exists. The task Job records its session under `SESSION_ID` (which
 `Job.completeWith` preserves across completion), so `A2ACodec` surfaces
 `contextId = session` for the task's whole lifecycle — the same on `SendMessage`
-and on a later `GetTask`. `GetTask` / `CancelTask` reuse the front-door by-id
-handlers (a Task id is a global, caller-scoped Job id). `SubscribeToTask`
+and on a later `GetTask`. The per-agent by-id methods — `GetTask`,
+`CancelTask`, `SubscribeToTask` and a `SendMessage` carrying a `taskId` —
+reach only the asker's own Jobs whose recorded agent address is this agent's;
+anything else is "not found", in one wording (`A2A.AGENT_TASK_NOT_FOUND`), so
+the endpoint discloses nothing about other jobs. The owner's other jobs are
+addressed on the front door. `SubscribeToTask`
 attaches SSE updates directly to that same Job. A fresh `SendMessage` returns
 immediately with its Task and session identifiers; it never imposes a
 synchronous turn deadline. Polling and SSE therefore observe one state machine
@@ -169,12 +165,51 @@ and converge on the same final Task.
 
 A `SendMessage` carrying a `contextId` but no `taskId` is likewise an
 `agent:request` on that session — a new task, one cycle, its own reply — and
-a `taskId` continues that task. The per-agent surface never uses `agent:chat`:
-a message without `taskId` is a new unit of work in A2A, whereas `agent:chat`
-batches the messages queued on one session into one shared reply
-(AGENT_SESSIONS.md §5.5.2), which A2A has no way to express (#416). The front
-door is whatever `a2a.defaultChatOp` names; an operator who points it at an
-agent chat inherits chat semantics there.
+a `taskId` continues that task. A plain reply completes the task
+(AGENT_TASKS.md §5.2), as A2A expects of a task-generating agent, and a task
+the agent parks stays `TASK_STATE_WORKING`, with the agent's reply after the
+park as its status message (AGENT_TASKS.md §6). The per-agent surface never uses
+`agent:chat`: a message without `taskId` is a new unit of work in A2A, which
+a task represents, with its own lifecycle, cancellation and resubscription,
+where a chat has only its reply. The front door is whatever
+`a2a.defaultChatOp` names; an operator who points it at an agent chat
+inherits chat semantics there.
+
+## Errors
+
+A JSON-RPC request is answered with HTTP 200. A failure is a JSON-RPC `error`
+whose `code` names the situation and whose `message` is the reason
+([ERRORS.md](ERRORS.md)). The front door and the per-agent endpoints answer
+alike:
+
+| Situation | Code |
+| --- | --- |
+| The body is not JSON | `-32700` parse error |
+| The body is empty, or names no method | `-32600` invalid request |
+| The method is not an A2A method | `-32601` method not found |
+| An A2A method the venue does not implement: the push notification config methods and `ListTasks` | `-32004` unsupported operation |
+| The params do not fit the method, a task id is missing or not hex, or a continuation's `contextId` is not its task's session | `-32602` invalid params |
+| A task id names none of the caller's tasks (on a per-agent endpoint, none of the caller's tasks for that agent); a task the caller may read but not write is not found either | `-32001` task not found |
+| A message the task does not take: it has finished, takes no messages, is not running on this venue, or refuses it; `SubscribeToTask` on a finished task; a fresh `SendMessage` to a front door with no `defaultChatOp` | `-32004` unsupported operation |
+| `CancelTask` on a finished task, or one the venue will not cancel | `-32002` task not cancelable |
+| The front door's chat operation, or the agent, does not take a fresh message | `-32006` invalid agent response |
+| Anything else | `-32603` internal error |
+
+A fault answers `-32603` with the report of the scope it happened in: the
+adapter that failed taking the message, or the venue handling the method,
+naming the exception's type, never its text ([ERRORS.md](ERRORS.md#scopes)).
+An expected failure that no situation above describes, such as an admission
+refusal or a venue that is shutting down, also answers `-32603`, with its
+reason.
+
+On a stream (`SendStreamingMessage`, `SubscribeToTask`), a refusal before the
+stream opens is an ordinary JSON-RPC response. A failure after it opens arrives
+as one `-32603` error event, and the stream closes.
+
+Two answers are HTTP rather than JSON-RPC. Access to a per-agent endpoint is
+refused before the body is read: 404 for an anonymous caller, 403 for an
+authenticated one (see Resolution and authorisation). An Agent Card request
+that fails answers 500 with its reason, or with the venue's report of a fault.
 
 ## Relationship to the venue-as-single-agent model
 
@@ -210,8 +245,12 @@ Authentication is also part of the imported profile. Assets retain only a
 caller-owned SecretStore reference (`s/NAME`), never the secret value. The
 binding can select a card-declared API-key or HTTP-Bearer security scheme, or
 direct Bearer authentication for private-card discovery. The secret is resolved
-once for an invocation and reused for send, polling, and cancellation. UCAN
-proofs are deliberately not projected onto A2A.
+once for an invocation and reused for send, polling, and cancellation. A send
+that outlives a restart keeps only the reference and reads the secret again
+under the caller's current authority, so a rotated secret is used as it now
+stands. A send whose caller can no longer use the secret ends instead, naming
+the remote task and where to follow it (JOBS.md). UCAN proofs are deliberately
+not projected onto A2A.
 
 ## Implementation status and follow-ups
 
@@ -222,8 +261,8 @@ Shipped:
 - Authenticated catalogue discovery over the job-free agent-list read surface.
 - Per-agent `SendMessage` dispatch through `agent:request`, with Task = task Job
   and `contextId` = session — for fresh sends and `contextId` follow-ups alike (#416).
-- Private-by-default cards, explicit public publication, and attenuated
-  anonymous interaction scopes alongside UCAN delegation.
+- Private-by-default cards, explicit public publication, and the shared
+  admission check (`config.accepts`, UCAN delegation) for asking.
 - `GetTask` and `CancelTask` on the per-agent endpoint.
 - `SubscribeToTask` reattachment on the per-agent endpoint, backed by the same
   durable Job used by polling.
@@ -233,4 +272,5 @@ Shipped:
 
 The route, publication and task-mapping contract is covered by
 `A2AAgentCardTest`; common JSON-RPC and codec behavior is covered by `A2ATest`,
-`A2ACodecTest` and `A2AExtendedCardTest`.
+`A2ACodecTest` and `A2AExtendedCardTest`, and the answer to an unexpected
+failure by `A2AFaultTest`.

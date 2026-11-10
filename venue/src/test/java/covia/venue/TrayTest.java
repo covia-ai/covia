@@ -13,6 +13,7 @@ import org.junit.jupiter.api.Test;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMBool;
+import covia.exception.ConfigurationException;
 
 /**
  * Tray is best-effort chrome around the venue: these pin the guarantees that
@@ -38,7 +39,7 @@ class TrayTest {
 		assertEquals(Tray.DISABLED_BY_ENV, Tray.refusal("1", List.of(on)));
 		// A native AWT crash takes every venue in the process down, so one opt-out decides for all.
 		assertEquals(Tray.DISABLED_BY_CONFIG, Tray.refusal(null, List.of(on, off)));
-		assertThrows(IllegalArgumentException.class, () -> new Config(Maps.of(Config.TRAY, Strings.create("no"))));
+		assertThrows(ConfigurationException.class, () -> new Config(Maps.of(Config.TRAY, Strings.create("no"))));
 	}
 
 	@Test

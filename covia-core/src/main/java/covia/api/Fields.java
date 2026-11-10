@@ -49,6 +49,8 @@ public class Fields {
 	public static final StringShort STATUS = Strings.intern("status");	
 	public static final StringShort CANCELLATION = Strings.intern("cancellation");
 	public static final StringShort OP = Strings.intern("op");
+	/** A job's scratch area, reached as {@code t/} by work under the job. */
+	public static final StringShort TEMP = Strings.intern("temp");
 
 	/** Token usage map {@code {input, output, total}} — reported by LLM ops on
 	 *  assistant messages, aggregated per cycle onto agent timeline entries,
@@ -140,6 +142,8 @@ public class Fields {
 	public static final StringShort ARGUMENTS = Strings.intern("arguments");
 	public static final StringShort REMOTE_TOOL_NAME = Strings.intern("remoteToolName");
 	public static final StringShort TOOL_NAME = Strings.intern("toolName");
+	/** The id a model gave one of its tool calls. */
+	public static final StringShort TOOL_CALL_ID = Strings.intern("toolCallId");
 	public static final StringShort TOOL = Strings.intern("tool");
 	public static final StringShort TOOLS = Strings.intern("tools");
 	public static final StringShort IS_ERROR = Strings.intern("isError");
@@ -160,10 +164,6 @@ public class Fields {
 	public static final StringShort A2A = Strings.intern("a2a");
 	public static final StringShort URL = Strings.intern("url");
 	public static final StringShort OUTPUT_SCHEMA = Strings.intern("outputSchema");
-	/** When the A2A adapter mirrors a remote Task into a local Job, this field
-	 *  stores the remote Task ID on the local Job's data so clients can
-	 *  correlate the two. */
-	public static final StringShort REMOTE_TASK_ID = Strings.intern("remoteTaskId");
 
 	// Asset related
 	public static final StringShort DEFINITION = Strings.intern("definition");
@@ -237,8 +237,8 @@ public class Fields {
 	public static final StringShort BUDGET = Strings.intern("budget");
 	/** Job ids a cycle presented (chat envelopes drained this cycle). */
 	public static final StringShort JOBS = Strings.intern("jobs");
-	/** Chat job ids one response answered together, in presentation order (#416). */
-	public static final StringShort ANSWERED = Strings.intern("answered");
+	/** Where a queued message stands in its agent's queue: a venue sequence value, stamped at intake. */
+	public static final StringShort QUEUED = Strings.intern("queued");
 	public static final StringShort CYCLES = Strings.intern("cycles");
 	/** Wall-clock milliseconds. */
 	public static final StringShort MS = Strings.intern("ms");
@@ -255,6 +255,11 @@ public class Fields {
 	public static final StringShort TASK_ID = Strings.intern("taskId");
 	public static final StringShort CANCELLED = Strings.intern("cancelled");
 	public static final StringShort DELETED = Strings.intern("deleted");
+	/** Path-write results: whether a value was already at the path, and whether missing parents were built. */
+	public static final StringShort EXISTED = Strings.intern("existed");
+	public static final StringShort PATH_CREATED = Strings.intern("pathCreated");
+	/** Element count of a vector after an append. */
+	public static final StringShort NEW_SIZE = Strings.intern("newSize");
 	public static final StringShort RESPONSE_SCHEMA = Strings.intern("responseSchema");
 	/** Requester opt-in: enforce {@link #RESPONSE_SCHEMA} at task completion (#376). */
 	public static final StringShort STRICT = Strings.intern("strict");
@@ -291,13 +296,33 @@ public class Fields {
 	public static final StringShort FRAMES = Strings.intern("frames");
 
 	// Identity / authorization
+	/** On a record of a call (a job, a scheduled event, a HITL request): the
+	 *  principal that made the call — a user, one of a user's agents
+	 *  ({@code <owner>:g:<id>}) or a {@code user/sudo} delegate. Written with
+	 *  {@link covia.grid.Attribution}. */
 	public static final StringShort CALLER = Strings.intern("caller");
-	/** The principal that actually performed an invocation, when that is not the
-	 *  owning {@link #CALLER} — an agent sub-principal ({@code <owner>:g:<id>}).
-	 *  Absent means the owner acted directly, so ordinary job records are
-	 *  unchanged and no migration is implied. Attribution only: ownership,
-	 *  access control and quota all key on {@code caller}. */
-	public static final StringShort ACTOR = Strings.intern("actor");
+	/** On a record of a call: the namespace it belongs to, present only when that
+	 *  differs from {@link #CALLER}. Ownership, access control and quota key on
+	 *  it. Read and written with {@link covia.grid.Attribution}. */
+	public static final StringShort OWNER = Strings.intern("owner");
+	/** On an agent: the principal whose authority its harness runs under, and
+	 *  whose authority an update needs. Absent means the agent's owner. */
+	public static final StringShort CONTROLLER = Strings.intern("controller");
+	/** On a record whose work continues after the request that made it: the
+	 *  verified UCAN proofs the caller presented, presented again when the work
+	 *  continues. Dropped when the work ends and never shown to a caller. */
+	public static final StringShort PROOFS = Strings.intern("proofs");
+	/** On a record whose work continues after the request that made it, when
+	 *  that request acted with another principal's authority (an agent's
+	 *  harness under its controller): that authority, as its principal
+	 *  ({@link #CALLER}), namespace ({@link #OWNER}) and {@link #PROOFS}. Never
+	 *  shown to a caller. */
+	public static final StringShort AUTHORITY = Strings.intern("authority");
+	/** Beside a request or message an agent receives, and on its history turn:
+	 *  how the venue authenticated the caller through a channel binding (COG-3
+	 *  §7), written by the agent's ingress from the request context. Attribution
+	 *  only, never evidence. */
+	public static final StringShort AUTHENTICATION = Strings.intern("authentication");
 	/** On a job record: the id of the nearest <em>recorded</em> job inside whose
 	 *  execution this job was dispatched. Absent on top-level jobs. Only the
 	 *  up-link is stored; a client reconstructs a job tree by tracing parents. */
@@ -316,6 +341,11 @@ public class Fields {
 	public static final StringShort KEY = Strings.intern("key");
 	public static final StringShort LABEL = Strings.intern("label");
 	public static final StringShort ADDED_AT = Strings.intern("addedAt");
+	/** Held keys (HELD_KEYS.md): {@code keyring: true} stores a new key or
+	 *  phrase in a keyring instead of a secret. */
+	public static final StringShort KEYRING = Strings.intern("keyring");
+	public static final StringShort KEYS = Strings.intern("keys");
+	public static final StringShort MNEMONICS = Strings.intern("mnemonics");
 	public static final StringShort ADDED_BY = Strings.intern("addedBy");
 	public static final StringShort REVOKED_AT = Strings.intern("revokedAt");
 	public static final StringShort REVOKED_BY = Strings.intern("revokedBy");

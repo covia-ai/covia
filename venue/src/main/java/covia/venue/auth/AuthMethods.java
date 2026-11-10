@@ -10,6 +10,7 @@ import convex.core.data.Strings;
 import covia.adapter.AAdapter;
 import covia.adapter.AuthAdapter;
 import covia.exception.AuthException;
+import covia.exception.ConfigurationException;
 import covia.venue.Engine;
 
 /** Resolves configured bindings against the live adapter set; owns no lifecycle. */
@@ -22,7 +23,6 @@ public final class AuthMethods {
 	public static final String AMBIGUOUS = "Authentication implementation selector is required: ";
 	public static final String INVALID_DECLARATION = "Invalid authentication implementation declaration: ";
 	public static final String NOT_SELECTED = "Authentication method is not selected: ";
-	public static final String CHANGED = "Authentication configuration changed during verification";
 	public static final String INVALID_RESULT = "Authentication verifier returned no result or a different method";
 	public static final String LEGACY_RESTRICTED = "Legacy venue credential has unknown originating method and cannot satisfy explicit auth.methods";
 
@@ -65,8 +65,8 @@ public final class AuthMethods {
 		return Map.copyOf(bindings);
 	}
 
-	private static IllegalArgumentException invalid(Object field) {
-		return new IllegalArgumentException(INVALID_CONFIG + field);
+	private static ConfigurationException invalid(Object field) {
+		return new ConfigurationException(INVALID_CONFIG + field);
 	}
 
 	/** Validate all explicit references after assembly and before serving requests. */
@@ -88,27 +88,27 @@ public final class AuthMethods {
 
 	private static Map<AString, AuthenticationMethods.Verifier> declarations(AAdapter adapter) {
 		if (!(adapter instanceof AuthenticationMethods provider)) {
-			throw new IllegalArgumentException(UNAVAILABLE + (adapter == null ? "adapter" : adapter.getName()));
+			throw new ConfigurationException(UNAVAILABLE + (adapter == null ? "adapter" : adapter.getName()));
 		}
 		Map<AString, AuthenticationMethods.Verifier> methods = provider.authenticationMethods();
-		if (methods == null) throw new IllegalArgumentException(INVALID_DECLARATION + adapter.getName());
+		if (methods == null) throw new ConfigurationException(INVALID_DECLARATION + adapter.getName());
 		for (var entry : methods.entrySet()) {
 			if (entry.getKey() == null || entry.getKey().toString().isBlank() || entry.getValue() == null) {
-				throw new IllegalArgumentException(INVALID_DECLARATION + adapter.getName());
+				throw new ConfigurationException(INVALID_DECLARATION + adapter.getName());
 			}
 		}
 		return methods;
 	}
 
 	private static AuthenticationMethods.Verifier resolve(Binding binding, AAdapter adapter) {
-		if (adapter == null) throw new IllegalArgumentException(UNAVAILABLE + binding.adapter);
+		if (adapter == null) throw new ConfigurationException(UNAVAILABLE + binding.adapter);
 		var methods = declarations(adapter);
 		if (binding.implementation == null) {
-			if (methods.size() != 1) throw new IllegalArgumentException(AMBIGUOUS + binding.adapter);
+			if (methods.size() != 1) throw new ConfigurationException(AMBIGUOUS + binding.adapter);
 			return methods.values().iterator().next();
 		}
 		var verifier = methods.get(binding.implementation);
-		if (verifier == null) throw new IllegalArgumentException(UNAVAILABLE + binding.adapter + "/" + binding.implementation);
+		if (verifier == null) throw new ConfigurationException(UNAVAILABLE + binding.adapter + "/" + binding.implementation);
 		return verifier;
 	}
 
@@ -116,41 +116,36 @@ public final class AuthMethods {
 	public AuthResult verify(AString method, ACell input) {
 		if (method == null) throw new AuthException(NOT_SELECTED + method);
 		AuthenticationMethods.Verifier verifier;
-		long revision;
 		synchronized (engine) {
 			Binding binding = bindings.get(method);
 			if (binding == null) throw new AuthException(NOT_SELECTED + method);
 			try { verifier = resolve(binding, engine.getAdapter(binding.adapter)); }
-			catch (IllegalArgumentException e) { throw new AuthException(e.getMessage()); }
-			revision = engine.adapterRegistryVersion();
+			catch (ConfigurationException e) { throw new AuthException(e.getMessage()); }
 		}
-		return finish(method, input, verifier, revision);
+		return finish(method, input, verifier);
 	}
 
 	/** Compatibility credentials with unknown origin are never a selectable method. */
 	AuthResult verifyLegacy(ACell input) {
 		AuthenticationMethods.Verifier verifier;
-		long revision;
 		synchronized (engine) {
 			if (explicit) throw new AuthException(LEGACY_RESTRICTED);
 			if (!(engine.getAdapter("auth") instanceof AuthAdapter adapter)) throw new AuthException(UNAVAILABLE + "auth");
 			verifier = (method, value) -> adapter.verifyLegacyCredential(value);
-			revision = engine.adapterRegistryVersion();
 		}
-		return finish(null, input, verifier, revision);
+		return finish(null, input, verifier);
 	}
 
-	private AuthResult finish(AString method, ACell input,
-			AuthenticationMethods.Verifier verifier, long revision) {
+	/**
+	 * Runs the verifier resolved when the verification started, outside the
+	 * lifecycle monitor because it may do I/O. An adapter change meanwhile
+	 * affects only verifications that start after it.
+	 */
+	private static AuthResult finish(AString method, ACell input, AuthenticationMethods.Verifier verifier) {
 		AuthResult result = verifier.verify(method, input);
-		synchronized (engine) {
-			// Never hold the lifecycle monitor over verifier I/O. The revision
-			// also detects disable/re-enable of the same instance (an ABA change).
-			if (revision != engine.adapterRegistryVersion()) throw new AuthException(CHANGED);
-			if (result == null || !java.util.Objects.equals(method, result.authentication().method())) {
-				throw new AuthException(INVALID_RESULT);
-			}
-			return result;
+		if (result == null || !java.util.Objects.equals(method, result.authentication().method())) {
+			throw new AuthException(INVALID_RESULT);
 		}
+		return result;
 	}
 }

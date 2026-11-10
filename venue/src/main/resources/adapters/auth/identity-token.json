@@ -1,6 +1,6 @@
 {
   "name": "Create identity token",
-  "description": "Save a short-lived, audience-bound bearer for the caller's exact identity in its secret store. Supports identities beneath this venue's signing key DID, including agents. Grants no permissions; requires invoke on v/ops/auth/identity-token and secret/write on s/<name>. Agents use their owner's secret store. No private key or bearer is returned.",
+  "description": "Save an audience-bound bearer for the caller's exact identity in its secret store. Supports identities beneath this venue's signing key DID, including agents. Grants no permissions; requires secret/write on s/<name>. Generic invocation also requires invoke on the operation reference; a bound identity tool does not. Agents use their owner's secret store. No private key or bearer is returned.",
   "operation": {
     "adapter": "auth:identity-token",
     "readOnly": false,
@@ -11,7 +11,7 @@
       "properties": {
         "aud": {"type": "string", "description": "Target venue DID; required, without path, query or fragment."},
         "name": {"type": "string", "minLength": 1, "description": "Secret name for the generated bearer."},
-        "lifetime": {"type": "integer", "minimum": 1, "maximum": 3600, "default": 300, "description": "Validity in seconds. Refresh explicitly before expiry."},
+        "lifetime": {"type": "integer", "minimum": 1, "default": 300, "description": "Validity in seconds, as long as the caller chooses; the target venue may refuse a token that lasts longer than it allows. Refresh explicitly before expiry."},
         "overwrite": {"type": "boolean", "default": false, "description": "Replace an existing secret when refreshing."}
       }
     },

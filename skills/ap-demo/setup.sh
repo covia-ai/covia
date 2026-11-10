@@ -14,6 +14,16 @@ DIR="$(cd "$(dirname "$0")/assets" && pwd -W 2>/dev/null || pwd)"
 # Write a {path, value} JSON file to the lattice
 write() { curl -sf -X POST "$API" -H "Content-Type: application/json" -d "{\"operation\":\"v/ops/covia/write\",\"input\":$(cat "$DIR/$1")}" > /dev/null; }
 
+# Create an empty folder at a workspace path unless one is there. The agents'
+# grants cover what is inside their folders, not w/ itself, so they cannot
+# create the folders.
+folder() {
+  curl -sf -X POST "$API" -H "Content-Type: application/json" \
+    -d "{\"operation\":\"v/ops/covia/read\",\"input\":{\"path\":\"$1\"}}" | grep -q '"exists": *true' \
+    || curl -sf -X POST "$API" -H "Content-Type: application/json" \
+      -d "{\"operation\":\"v/ops/covia/write\",\"input\":{\"path\":\"$1\",\"value\":{}}}" > /dev/null
+}
+
 # Recreate an agent explicitly: ignore "not found" from delete, then create.
 agent() {
   local name="$1"
@@ -42,6 +52,11 @@ write doc-data-guide.json
 
 echo "Storing pipeline..."
 write pipeline.json
+
+echo "Creating the agents' folders..."
+folder w/invoices
+folder w/enrichments
+folder w/decisions
 
 echo "Creating agents..."
 agent Alice alice.json

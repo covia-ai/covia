@@ -13,7 +13,9 @@ import convex.core.data.Strings;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
+import covia.exception.ConfigurationException;
 import covia.venue.Engine;
+import covia.adapter.messaging.ChannelAuthentication;
 import covia.adapter.messaging.MessagingBotSpec;
 
 /** Immutable and validated configuration for one Discord bot. */
@@ -35,17 +37,24 @@ public record BotSpec(String name, String tokenRef, String userRef, String agent
 	}
 	public AString userDID(Engine engine) {
 		if (!PUBLIC_USER.equals(userRef)) return Strings.create(userRef);
-		if (engine==null || !engine.config().isPublicAccess()) throw new IllegalStateException(
+		if (engine==null || !engine.config().isPublicAccess()) throw new ConfigurationException(
 			"bot '"+name+"' acts as public but public access is disabled");
 		return Strings.create(engine.getDIDString()+":public");
 	}
 	/** Allow-list check: numeric ids and unique Discord usernames only. The global
 	 *  display name is user-settable and non-unique, so it never admits anyone. */
 	public boolean allows(String id,String username){
-		if(open) return true;
+		return open || lists(id,username);
+	}
+	/** Whether the allow-list names this sender, whom the bot then identifies as its principal. */
+	public boolean lists(String id,String username){
 		if(id!=null && allowIds.contains(id)) return true;
 		return matches(username);
 	}
+	@Override public boolean lists(AMap<AString,ACell> sender){
+		return lists(str(sender.get(ChannelAuthentication.K_ID)),str(sender.get(ChannelAuthentication.K_HANDLE)));
+	}
+	private static String str(ACell value){return value instanceof AString s?s.toString():null;}
 	private boolean matches(String name){return name!=null&&allowNames.contains(name.toLowerCase(Locale.ROOT));}
 
 	static BotSpec parse(String name, ACell cell, boolean strict) {
@@ -72,7 +81,7 @@ public record BotSpec(String name, String tokenRef, String userRef, String agent
 		if(ac!=null) {
 			AVector<ACell> v=RT.ensureVector(ac); if(v==null) throw new IllegalArgumentException(where+".allow must be an array");
 			for(long i=0;i<v.count();i++) { ACell e=v.get(i); String x;
-				if(e instanceof CVMLong n) x=Long.toUnsignedString(n.longValue()); else if(e instanceof AString s) x=s.toString().trim();
+				if(e instanceof CVMLong n) x=Long.toUnsignedString(n.longValue()); else if(e instanceof AString s) x=s.toString();
 				else throw new IllegalArgumentException(where+".allow entries must be Discord user ids or usernames");
 				if(x.startsWith("@")) x=x.substring(1); if(x.matches("[0-9]+")) ids.add(x); else if(!x.isBlank()) names.add(x.toLowerCase(Locale.ROOT));
 			}

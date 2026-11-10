@@ -8,6 +8,7 @@ import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
 import convex.core.data.type.Types;
 import convex.core.lang.RT;
+import covia.exception.InvalidInputException;
 
 /**
  * The context scope chain (#142): agent ({@code config.loads}) → frame
@@ -91,7 +92,7 @@ public class ContextChain {
 	 */
 	@SuppressWarnings("unchecked")
 	public static AMap<AString, ACell> declaredLoads(ACell raw, String which) {
-		return declaredLoads(raw, which, false);
+		return declaredLoads(raw, which, null);
 	}
 
 	/**
@@ -101,7 +102,7 @@ public class ContextChain {
 	 * never acquire operator authority merely by also being pinned.
 	 */
 	public static AMap<AString, ACell> operatorLoads(ACell raw, String which) {
-		return declaredLoads(raw, which, false, true);
+		return declaredLoads(raw, which, null, true);
 	}
 
 	/**
@@ -113,19 +114,22 @@ public class ContextChain {
 	 * persistence boundary (for example session mint), never during ordinary
 	 * rendering — otherwise a stable declaration would appear newest on every
 	 * inference.
+	 *
+	 * @param missingTs the time, from the venue's clock, stamped on an entry
+	 *        that has none; null leaves such entries unstamped
 	 */
 	@SuppressWarnings("unchecked")
 	public static AMap<AString, ACell> declaredLoads(ACell raw, String which,
-			boolean stampMissingTimestamp) {
-		return declaredLoads(raw, which, stampMissingTimestamp, false);
+			CVMLong missingTs) {
+		return declaredLoads(raw, which, missingTs, false);
 	}
 
 	@SuppressWarnings("unchecked")
 	private static AMap<AString, ACell> declaredLoads(ACell raw, String which,
-			boolean stampMissingTimestamp, boolean operatorOwned) {
+			CVMLong missingTs, boolean operatorOwned) {
 		if (raw == null) return Maps.empty();
 		if (!(raw instanceof AMap)) {
-			throw new IllegalArgumentException(which + " must be a map of key → {budget?, …}, got "
+			throw new InvalidInputException(which + " must be a map of key → {budget?, …}, got "
 				+ Types.get(raw));
 		}
 		AMap<AString, ACell> loads = (AMap<AString, ACell>) raw;
@@ -140,25 +144,25 @@ public class ContextChain {
 				continue;
 			}
 			if (!(spec instanceof AMap)) {
-				throw new IllegalArgumentException(which + " entry '" + entry.getKey()
+				throw new InvalidInputException(which + " entry '" + entry.getKey()
 					+ "' must be a map (e.g. {budget: 500}), got " + Types.get(spec));
 			}
 			AMap<AString, ACell> meta = (AMap<AString, ACell>) spec;
 			ACell label = meta.get(labelKey);
 			if (label != null && !(label instanceof AString)) {
-				throw new IllegalArgumentException(which + " entry '" + entry.getKey()
+				throw new InvalidInputException(which + " entry '" + entry.getKey()
 					+ "' label must be a string, got " + Types.get(label));
 			}
 			ACell ts = meta.get(tsKey);
 			if (ts != null && !(ts instanceof CVMLong)) {
-				throw new IllegalArgumentException(which + " entry '" + entry.getKey()
+				throw new InvalidInputException(which + " entry '" + entry.getKey()
 					+ "' ts must be an integer, got " + Types.get(ts));
 			}
 			Loads.validateSpec(meta, which, entry.getKey());
 			long budget = AbstractLLMAdapter.clampLoadBudget(meta.get(budgetKey));
 			meta = meta.assoc(budgetKey, CVMLong.create(budget));
-			if (ts == null && stampMissingTimestamp) {
-				meta = meta.assoc(tsKey, CVMLong.create(convex.core.util.Utils.getCurrentTimestamp()));
+			if (ts == null && missingTs != null) {
+				meta = meta.assoc(tsKey, missingTs);
 			}
 			// Every declared tier is external to the agent's mutable working set.
 			// Trust is a separate authority marker: operator config may opt out,
@@ -169,6 +173,10 @@ public class ContextChain {
 				&& !convex.core.data.prim.CVMBool.FALSE.equals(declaredTrust);
 			meta = meta.assoc(Loads.K_TRUSTED,
 				convex.core.data.prim.CVMBool.create(trusted));
+			// Only the agent's config declares context the harness reads; a
+			// caller's tier can never claim it (UCAN.md §5.4).
+			meta = meta.assoc(Loads.K_CONFIGURED,
+				convex.core.data.prim.CVMBool.create(operatorOwned));
 			normalised = normalised.assoc(entry.getKey(), meta);
 		}
 		return normalised;

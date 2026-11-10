@@ -5,7 +5,7 @@
 	<parent>
 		<groupId>ai.covia</groupId>
 		<artifactId>covia</artifactId>
-		<version>0.10.0</version>
+		<version>0.11.0</version>
 	</parent>
 	<artifactId>covia-slack</artifactId>
 	<name>Covia Slack Module</name>
@@ -15,6 +15,10 @@
 		<dependency>
 			<groupId>ai.covia</groupId><artifactId>venue</artifactId>
 			<version>${project.version}</version><scope>provided</scope>
+		</dependency>
+		<dependency>
+			<groupId>ai.covia</groupId><artifactId>venue</artifactId>
+			<version>${project.version}</version><type>test-jar</type><scope>test</scope>
 		</dependency>
 		<dependency>
 			<groupId>org.junit.jupiter</groupId><artifactId>junit-jupiter-api</artifactId>
