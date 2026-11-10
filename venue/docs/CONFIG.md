@@ -1556,7 +1556,7 @@ the agent instruction/tool bundle is `v/skills/crypto/crypto`.
 The CAD025 web page's test vector currently prints path `m/44/864/1234/0/1`
 with expected seed `2172bb...`, but Convex's `SLIP10Test.testCAD25` uses
 `m/44/888/1234/0/1` for that expected seed. The 864 path yields `23a427...`.
-Adapter tests pin both results and GetMine's account-0/account-1 vectors;
+Adapter tests pin both results and the account-0 and account-1 vectors;
 the default remains coin type 864.
 
 ### Agent workflows and secret boundaries
