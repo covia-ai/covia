@@ -1265,10 +1265,9 @@ public class AgentAdapter extends AAdapter {
 
 	/** Warning for configured tools naming operations this venue does not host; the references follow. */
 	public static final String REMOTE_TOOLS = "agent declares tool operation(s) on another venue: %s."
-		+ " The agent fetches such a definition from that venue whenever this venue holds no copy of it,"
-		+ " and always for one named by path, so while that venue cannot be reached the tool is left out"
-		+ " of the agent's turns and each turn waits on the fetch. Prefer an operation on this venue;"
-		+ " this is only a warning.";
+		+ " The agent fetches such a tool's definition from that venue only when it calls the tool, so"
+		+ " the call fails while that venue cannot be reached, and the model knows only the name and"
+		+ " description the entry gives it. Prefer an operation on this venue; this is only a warning.";
 
 	/**
 	 * The operations {@code config}'s tools name on another venue

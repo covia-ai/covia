@@ -151,11 +151,11 @@ All fields are optional. Missing fields get platform defaults.
 
 > **Tools on another venue depend on that venue.** A tool may name another
 > venue's operation by DID URL (`did:web:other.host/v/ops/...`, or
-> `/a/<hash>`). The runtime fetches its definition from that venue whenever
-> this venue holds no copy, and always for one named by path, so while that
-> venue cannot be reached the tool is left out of the agent's turns and each
-> turn waits on the fetch. `agent:create` and `agent:update` warn of such
-> tools and never fetch them to check them. Prefer an operation on this venue.
+> `/a/<hash>`). The runtime never fetches it to describe it: the model sees
+> the entry's `name` and `description`, or a name made from the reference,
+> and the tool takes any input. Its definition is fetched when the agent calls
+> it, so the call fails while that venue cannot be reached. `agent:create`
+> and `agent:update` warn of such tools. Prefer an operation on this venue.
 
 ### Example templates
 

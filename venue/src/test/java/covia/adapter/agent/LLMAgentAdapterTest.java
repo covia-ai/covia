@@ -2572,6 +2572,29 @@ public class LLMAgentAdapterTest {
 		assertNull(RT.getIn(bindings.get(0), Fields.DEFINITION, Fields.ACTIVITY_LABEL));
 	}
 
+	@Test
+	public void testAToolOnAnotherVenueIsFetchedOnlyWhenCalled() {
+		// The other venue cannot be reached: had the palette fetched the tool,
+		// it would be left out as unavailable.
+		RequestContext ctx = RequestContext.of(ALICE_DID);
+		AString elsewhere = Strings.create("did:web:tools.invalid/v/ops/json/merge");
+		ToolPalette.Palette palette = ToolPalette.resolve(engine, ctx, Maps.of(Fields.TOOLS, Vectors.of(
+			elsewhere, Maps.of(Fields.OPERATION, elsewhere, "name", "merge", "description", "Merges maps"))),
+			java.util.Set.of());
+
+		assertTrue(palette.unavailable().isEmpty(), palette.unavailable().toString());
+		assertEquals(elsewhere, palette.operation("v_ops_json_merge"));
+		assertEquals(elsewhere, palette.operation("merge"));
+		assertEquals(Strings.create(ToolPalette.REMOTE_TOOL_DESCRIPTION.formatted(elsewhere)),
+			RT.getIn(palette.tools().get(0), Fields.DESCRIPTION));
+		assertEquals(Strings.create("Merges maps"), RT.getIn(palette.tools().get(1), Fields.DESCRIPTION));
+
+		// The call fetches it, and its failure is the call's result.
+		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
+		ACell result = adapter.dispatchTool("merge", Maps.empty(), elsewhere, ctx, 5000, false);
+		assertNotNull(AbstractLLMAdapter.toolFailureMessage(result), String.valueOf(result));
+	}
+
 	// ========== Pure function: buildToolDefinition ==========
 
 	@Test

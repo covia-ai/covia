@@ -21,6 +21,7 @@ import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.exception.InvalidDefinitionException;
 import covia.grid.Asset;
+import covia.lattice.CapabilityChecker;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 
@@ -316,6 +317,19 @@ public final class ToolPalette {
 			AString operation = parsed[0];
 			if (skipName.test(operation.toString())) continue;
 
+			if (engine.isRemoteDefinition(operation)) {
+				// Another venue's definition is fetched only when the agent calls
+				// the tool, as the call resolves its operation, never to describe
+				// it: the model sees what the entry says, and takes any input.
+				AString name = Strings.create(remoteToolName(parsed));
+				if (skipName.test(name.toString()) || index.containsKey(name)) continue;
+				AString description = (parsed[2] != null)
+					? parsed[2] : Strings.create(REMOTE_TOOL_DESCRIPTION.formatted(operation));
+				tools = tools.conj(buildToolDefinition(name.toString(), description, null));
+				index = index.assoc(name, toolInfo(operation, null, name, source, ref));
+				continue;
+			}
+
 			Asset asset;
 			try {
 				requireToolMetadataRead(engine, ctx, operation);
@@ -550,6 +564,26 @@ public final class ToolPalette {
 			if (parsed != null && operation.equals(parsed[0])) return true;
 		}
 		return false;
+	}
+
+	/** The description of a tool on another venue whose entry gives none; the operation follows. */
+	static final String REMOTE_TOOL_DESCRIPTION = "Operation %s on another venue. Its inputs are not"
+		+ " described here: it is fetched from that venue when called.";
+
+	/** Longest tool name every provider accepts. */
+	private static final int MAX_TOOL_NAME = 64;
+
+	/**
+	 * The name of a tool on another venue, bound without its definition: the
+	 * entry's name, else the reference's path after its DID, in the characters
+	 * and length every provider accepts.
+	 */
+	private static String remoteToolName(AString[] parsed) {
+		if (parsed[1] != null) return parsed[1].toString();
+		String canonical = CapabilityChecker.canonicalResource(parsed[0].toString(), null);
+		String path = canonical.substring(Math.min(canonical.length(), Engine.ownerOf(parsed[0]).toString().length() + 1));
+		String name = path.replaceAll("[^A-Za-z0-9_-]", "_");
+		return (name.length() > MAX_TOOL_NAME) ? name.substring(0, MAX_TOOL_NAME) : name;
 	}
 
 	/** Tool name priority: override → asset toolName → operation with colons/slashes as underscores. */

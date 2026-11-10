@@ -227,7 +227,8 @@ Resolution distinguishes a **genuine absence** from an **operational failure**, 
 | Direct invoke of a `did:web` op | HTTP **502** (an upstream fetch failed, not a 404), no job created |
 | Job-aware adapter (e.g. `agent:create` resolving a remote `definition`) | the **job fails** cleanly with the message (via the adapter's exception→`job.fail`), never orphaned |
 | `asset:pin` / `asset:get` of a remote ref | the op fails with the meaningful message |
-| Aggregate assembly (agent tool list, `config.context` entries) | **caught and degraded visibly** — the one unreachable ref is skipped / marked unavailable; the rest of the turn proceeds |
+| Aggregate assembly (`config.context` entries) | **caught and degraded visibly** — the one unreachable ref is skipped / marked unavailable; the rest of the turn proceeds |
+| An agent's tool on another venue | not fetched to build the tool list; fetched when the agent calls it, and a failure is that call's error result |
 
 This is why remote fetch can throw without breaking speculative resolution: the multi-form `resolvePath` chain is local-only, and the network is touched exclusively for an *explicit* `did:web` reference to another venue on the invocation/adoption path — where an operational failure is genuinely the answer, not an absence to fall through.
 
