@@ -263,7 +263,7 @@ made against the request's authority as for any resource, with nothing added
 for keys:
 
 - A user's own authority covers its own keyring, and an agent's its own.
-- An agent with no caps uses its own keys, and within what its controller may
+- An unrestricted agent uses its own keys, and within what its controller may
   do, its owner's as it reaches its owner's other resources. An agent with caps uses what they cover: a bare
   `x/crypto/keys/` in its caps names its owner's keyring, and its own is
   named in full, `<owner>:g:<id>/x/crypto/keys/`.
@@ -292,8 +292,8 @@ it.
   be read back by its owner and lent with `secret/use`; one in a keyring
   cannot. The holder chooses which it wants.
 - **Authority over an identity includes its keys.** Whoever acts with a
-  holder's full authority can sign as it: the holder, an agent created
-  without caps over its owner's keys, a grantee of `*` over its namespace. An
+  holder's full authority can sign as it: the holder, an unrestricted agent
+  over its owner's keys, a grantee of `*` over its namespace. An
   agent that should not sign is given caps that leave the keyrings out.
 - **Granting key use is granting a signature.** A grantee of `key/sign/raw`
   can make the key sign anything, so its holder should grant the narrowest

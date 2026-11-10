@@ -38,6 +38,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Requires Convex 0.8.19.
 - `agent:message`, `agent:cancelTask` and a job named in an agent's context take an id with or without `0x`, as other id inputs do (#669).
 - Whitespace around a hash or hex id in a path or asset reference no longer names the same thing.
+- An agent of the venue's holds venue authority as far as its caps reach, all of it when unrestricted; `agent:info` and `agent:list` show `caps: "unrestricted"`.
 - Padded values are refused where they were trimmed: `http` `method`, `wait` and integer query parameters, `pages`, `skills:import` `skillset`, MCP server URLs, venue references, `oauth:connect` `scopes` and `returnTo`, `telegram:call` `method`, Telegram targets and speech voice numbers.
 - Configuration values are read exactly as written: whitespace around one is no longer removed.
 - A leading slash changes nothing in any resource name, including a capability's `with` and before a DID.
@@ -207,6 +208,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - `agent:step` and `agent:context` refuse a deleted agent, as other agent operations do.
 - A delegate acting for a user (`user/sudo`) uses the user's secrets only under a `secret/use` grant.
 - An agent's pinned context and skills index show only what its caps cover.
+- An agent is unrestricted only when its config says `caps: "unrestricted"`; one created without `caps`, or given `caps: null`, has no authority.
 - Every route to data at a path checks it as the data's owner decides, by its DID address: a grant on `<owner>/g/<agent>/n/` covers that agent's `n/`, and one on `<owner>/j/<job>` that job's record and `t/` (#617).
 
 ### Migration
@@ -221,6 +223,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Changing the config or controller of an agent its owner controls needs the owner's authority: `agent/write` alone no longer allows it for a capped agent or a delegate, including one acting through `user:sudo`.
 - A `user:sudo` delegate holding `agent/create` creates agents its target controls: grant the pair only where you would grant that user's own authority.
 - An agent created by another agent, or by a delegate in another user's namespace without `user:sudo`, is controlled by its creator: it acts with the creator's authority narrowed by its `caps`, not the owner's, so a creating agent's caps must cover `invoke` on the new agent's transition and model operations, and bound what the new agent's tool calls can do.
+- Pass `caps: "unrestricted"` to `agent:create` (and `agent:fromSkills`, or with a template other than `reader`) for an agent that acts with its controller's full authority; existing agents keep the authority they had, and an existing agent of the venue's without caps now holds venue authority.
 - Anonymous callers need `auth.public.caps` to grant `invoke` on `v/ops/agent/request`
   and `v/ops/agent/message`, and `crud/read` on `j` to follow their jobs.
 - An open chat bot's agent needs `accepts: "anyone"`, and the public scope `invoke` on

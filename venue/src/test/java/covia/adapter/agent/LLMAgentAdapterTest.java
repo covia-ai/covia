@@ -687,7 +687,8 @@ public class LLMAgentAdapterTest {
 				Fields.OPERATION, "v/ops/llmagent/chat",
 				"llmOperation", "v/test/ops/toolllm",
 				"defaultTools", false,
-				"tools", Vectors.of("v/ops/covia/read"))), ctx).awaitResult(5000);
+				"tools", Vectors.of("v/ops/covia/read"),
+				"caps", "unrestricted")), ctx).awaitResult(5000);
 		ACell chatResult = engine.jobs().invokeOperation("v/ops/agent/chat", Maps.of(
 			Fields.AGENT_ID, "issue-334-persist-agent",
 			Fields.MESSAGE, "issue-334-read"), ctx).awaitResult(10000);
@@ -1146,6 +1147,7 @@ public class LLMAgentAdapterTest {
 				Fields.CONFIG, Maps.of(
 					Fields.OPERATION, "v/ops/llmagent/chat",
 					"llmOperation", "v/test/ops/skillllm",
+					"caps", "unrestricted",
 					"skillsets", Vectors.of(Strings.create("w/skills")))),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 

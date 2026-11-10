@@ -73,8 +73,8 @@ public class LateToolResultTest {
 			"llmOperation", llm,
 			AbstractLLMAdapter.K_TOOL_CALL_TIMEOUT_MS, LIMIT_MS);
 		for (int i = 0; i < extra.length; i += 2) config = config.assoc((AString) extra[i], extra[i + 1]);
-		e.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, agentId, Fields.CONFIG, config),
-			owner).awaitResult(5000);
+		e.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, agentId,
+			Fields.CONFIG, TestEngine.unrestricted(config)), owner).awaitResult(5000);
 	}
 
 	private static String conversation(Agent agent, Blob sid) {

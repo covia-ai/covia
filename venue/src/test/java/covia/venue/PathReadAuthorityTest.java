@@ -153,8 +153,8 @@ public class PathReadAuthorityTest {
 	}
 
 	private static AMap<AString, ACell> toolAgent(String tool) {
-		return Maps.of(Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/test/ops/toolllm",
-			Fields.TOOLS, Vectors.of(Strings.create(tool)));
+		return TestEngine.unrestricted(Maps.of(Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/test/ops/toolllm",
+			Fields.TOOLS, Vectors.of(Strings.create(tool))));
 	}
 
 	@Test

@@ -40,7 +40,7 @@ public class TaskYieldTest {
 
 	private Agent create(RequestContext owner, String agentId, AMap<AString, ACell> config,
 			AMap<AString, ACell> state) {
-		AMap<AString, ACell> input = Maps.of(Fields.AGENT_ID, agentId, Fields.CONFIG, config);
+		AMap<AString, ACell> input = Maps.of(Fields.AGENT_ID, agentId, Fields.CONFIG, TestEngine.unrestricted(config));
 		if (state != null) input = input.assoc(Agent.KEY_STATE, state);
 		engine.jobs().invokeOperation("v/ops/agent/create", input, owner).awaitResult(5000);
 		return engine.getVenueState().users().user(owner.getUserDID()).agent(agentId);

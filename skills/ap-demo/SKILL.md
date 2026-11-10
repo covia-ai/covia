@@ -46,7 +46,7 @@ Run all setup steps — secret, reference data, artifacts, orchestration, agents
 Key config rules:
 - `config.operation` must be a **plain string** `"v/ops/goaltree/chat"`, not a map
 - `config.context` is an array of asset hashes or workspace paths — loaded as system messages before each run
-- `config.caps` is an array of `{with, can}` attenuations — enforced on every tool call. No caps = full access.
+- `config.caps` is an array of `{with, can}` attenuations — enforced on every tool call. `"unrestricted"` gives full access; leaving caps out gives none.
 - `config.responseFormat` must have `additionalProperties: false` at every object level for OpenAI strict mode
 - Use `agent_request` with `input` parameter (not `task`) for submitting work
 

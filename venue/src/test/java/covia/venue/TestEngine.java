@@ -205,6 +205,15 @@ public class TestEngine {
 		return ENGINE.managedUserDID(Strings.create(discriminator + (run > 1 ? "-run" + run : "")));
 	}
 
+	/**
+	 * {@code config} for an agent its owner makes unrestricted, as a test agent
+	 * that acts for its owner is: {@code caps: "unrestricted"}, unless the
+	 * config names caps of its own.
+	 */
+	public static AMap<AString, ACell> unrestricted(AMap<AString, ACell> config) {
+		return config.containsKey(Config.CAPS) ? config : config.assoc(Config.CAPS, Config.UNRESTRICTED);
+	}
+
 	// ========== Venues of a test's own ==========
 
 	/** The clock of a venue a test makes for itself: held at the current time, so nothing fires by itself. */

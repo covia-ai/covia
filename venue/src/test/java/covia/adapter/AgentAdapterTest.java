@@ -1337,6 +1337,7 @@ public class AgentAdapterTest {
 					Fields.OPERATION, "v/ops/llmagent/chat",
 					"llmOperation", "v/test/ops/llm",
 					"systemPrompt", "You step.",
+					"caps", "unrestricted",
 					Fields.TOOLS, Vectors.of(Strings.create("v/test/ops/echo")))),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
@@ -1417,6 +1418,7 @@ public class AgentAdapterTest {
 					Fields.OPERATION, "v/ops/llmagent/chat",
 					"llmOperation", "v/test/ops/llm",
 					"systemPrompt", "You step.",
+					"caps", "unrestricted",
 					Fields.ACCEPTS, Vectors.of(BOB_DID),
 					Fields.TOOLS, Vectors.of(Strings.create("v/ops/covia/write")))),
 			alice).awaitResult(5000), Fields.ADDRESS));
@@ -1451,7 +1453,8 @@ public class AgentAdapterTest {
 				Fields.CONFIG, Maps.of(
 					Fields.OPERATION, "v/ops/llmagent/chat",
 					"llmOperation", "v/test/ops/toolllm",
-					"systemPrompt", "You record.")),
+					"systemPrompt", "You record.",
+					"caps", "unrestricted")),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 		ACell chat = engine.jobs().invokeOperation("v/ops/agent/chat",
 			Maps.of(Fields.AGENT_ID, "record-agent", Fields.MESSAGE, "use your tool"),

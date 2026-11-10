@@ -378,13 +378,15 @@ public class VenueGcOperationTest {
 		// No venue needed: authority is decided before the store seam is touched.
 		Engine engine = TestEngine.ENGINE;
 		AString venue = engine.getDIDString();
-		// An ordinary user, a user's agent, the venue's own agent and the public
-		// principal are all refused: only the venue principal itself (or a
-		// venue-issued venue/gc delegation) may collect.
+		// An ordinary user, a user's agent, a venue agent whose caps grant no
+		// venue authority and the public principal are all refused: only the
+		// venue, an agent of its with venue/gc, or a venue-issued venue/gc
+		// delegation may collect.
 		for (RequestContext caller : new RequestContext[] {
 				RequestContext.of(USER),
 				RequestContext.ofAgent(USER, Strings.create("helper")),
-				RequestContext.ofAgent(venue, Strings.create("odin")),
+				RequestContext.ofAgent(venue, Strings.create("odin")).withCaps(convex.core.data.Vectors.of(
+					Maps.of(convex.auth.ucan.Capability.CAN, Strings.create("invoke")))),
 				RequestContext.of(Strings.create(venue + ":public"))}) {
 			String denied = gcFails(engine, caller, STATUS);
 			assertTrue(denied.contains("venue/gc") || denied.contains("denied"), denied);

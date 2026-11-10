@@ -374,6 +374,7 @@ public class AgentToolboxTest {
 			engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, id,
 				Fields.CONFIG, Maps.of(
 					Fields.OPERATION, runtime.operation(),
+					"caps", "unrestricted",
 					"llmOperation", "v/test/ops/compactllm",
 					Fields.TOOLS, Vectors.of(
 						Strings.create(HarnessTools.COMPACT), Strings.create("v/test/ops/echo")))),
@@ -546,7 +547,7 @@ public class AgentToolboxTest {
 
 	private RunningAgent start(AgentRuntime runtime, String id, AMap<AString, ACell> config) {
 		engine.jobs().invokeOperation("v/ops/agent/create",
-			Maps.of(Fields.AGENT_ID, id, Fields.CONFIG, config), user).awaitResult(5000);
+			Maps.of(Fields.AGENT_ID, id, Fields.CONFIG, TestEngine.unrestricted(config)), user).awaitResult(5000);
 		ACell chat = engine.jobs().invokeOperation("v/ops/agent/chat",
 			Maps.of(Fields.AGENT_ID, id, Fields.MESSAGE, "establish deterministic session"),
 			user).awaitResult(10000);

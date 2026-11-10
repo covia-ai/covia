@@ -221,7 +221,8 @@ class RemoteAgentAdapterTest {
 			Job original;
 			try {
 				first.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "proxy",
-					"agent", peer.input().dissoc(Fields.INPUT).assoc(Fields.ADAPTER, Strings.create("remoteagent"))),
+					"agent", peer.input().dissoc(Fields.INPUT).assoc(Fields.ADAPTER, Strings.create("remoteagent")),
+					Fields.CONFIG, Maps.of(Config.CAPS, Config.UNRESTRICTED)),
 					first.venueContext()).awaitResult(5000);
 				original = first.jobs().invokeOperation("v/ops/agent/request", Maps.of(Fields.AGENT_ID, "proxy", Fields.INPUT, Maps.empty()), first.venueContext());
 				await(original, j -> Status.INPUT_REQUIRED.equals(j.getStatus()));
@@ -261,7 +262,8 @@ class RemoteAgentAdapterTest {
 			agent(first, ctx, "waiter", "v/test/ops/never");
 			agent(first, ctx, "helper", "v/test/ops/askhuman");
 			first.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "front",
-				"agent", Maps.of(Fields.ADAPTER, "remoteagent", Fields.AGENT_ID, "helper")), ctx).awaitResult(5000);
+				"agent", Maps.of(Fields.ADAPTER, "remoteagent", Fields.AGENT_ID, "helper"),
+				Fields.CONFIG, Maps.of(Config.CAPS, Config.UNRESTRICTED)), ctx).awaitResult(5000);
 			RequestContext anon = first.context(first.publicPrincipal());
 			agent(first, anon, "lobby", "v/test/ops/never");
 			try (AgentWatch asker = AgentWatch.open(first, user, "asker");
@@ -340,7 +342,7 @@ class RemoteAgentAdapterTest {
 
 	private static void agent(Engine engine, RequestContext ctx, String id, String operation) {
 		engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, id,
-			Fields.CONFIG, Maps.of(Fields.OPERATION, operation)), ctx).awaitResult(5000);
+			Fields.CONFIG, Maps.of(Fields.OPERATION, operation, Config.CAPS, Config.UNRESTRICTED)), ctx).awaitResult(5000);
 	}
 
 	/** Answers the one open ask of {@code ctx}'s agent {@code id}. */

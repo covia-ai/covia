@@ -66,10 +66,11 @@ public class AgentControllerTest {
 		assertTrue(job.getErrorMessage().contains(reason), job.getErrorMessage());
 	}
 
+	/** An agent's config with {@code caps}, or unrestricted when they are null. */
 	private static AMap<AString, ACell> config(AVector<ACell> caps) {
 		AMap<AString, ACell> config = Maps.of(Fields.OPERATION, "v/ops/llmagent/chat",
 			"llmOperation", "v/test/ops/toolllm");
-		return (caps == null) ? config : config.assoc(Strings.create("caps"), caps);
+		return config.assoc(covia.venue.Config.CAPS, (caps == null) ? covia.venue.Config.UNRESTRICTED : caps);
 	}
 
 	private static ACell cap(String with, AString can) {

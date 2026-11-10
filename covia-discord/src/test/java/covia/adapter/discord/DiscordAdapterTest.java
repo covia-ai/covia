@@ -167,7 +167,7 @@ class DiscordAdapterTest {
 			}
 		});
 		run(OWNER,"v/ops/agent/create",Maps.of(Fields.AGENT_ID,"discord-agent",Fields.CONFIG,
-			Maps.of(Fields.OPERATION,"v/ops/llmagent/chat","llmOperation","v/ops/discord-held/llm")));
+			Maps.of(Fields.OPERATION,"v/ops/llmagent/chat","llmOperation","v/ops/discord-held/llm","caps","unrestricted")));
 		run(OWNER,"v/ops/secret/set",Maps.of("name","DISCORD_AGENT","value","agent-token"));
 		try {
 			run(OWNER,"v/ops/discord/create",Maps.of("name","agent-bot","token","s/DISCORD_AGENT","agent","discord-agent","allow",Vectors.of("alice")));

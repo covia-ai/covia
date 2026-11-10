@@ -931,8 +931,7 @@ public class AgentAdapter extends AAdapter {
 		}
 		if (explicitFacet) {
 			AMap<AString, ACell> definition = externalAgents().validate(facet);
-			AMap<AString, ACell> config = parseConfigArg(RT.getIn(input, Fields.CONFIG), ctx);
-			if (config == null) config = Maps.empty();
+			AMap<AString, ACell> config = storedCaps(parseConfigArg(RT.getIn(input, Fields.CONFIG), ctx), true);
 			validateComposedConfig(config);
 			Agent created = user.createAgent(agentId, config,
 				RT.getIn(input, Agent.KEY_STATE), definition, controller);
@@ -1046,6 +1045,7 @@ public class AgentAdapter extends AAdapter {
 		if (config.containsKey(K_SYSTEM_PROMPT) && !config.containsKey(K_LLM_OPERATION)) {
 			config = config.assoc(K_LLM_OPERATION, engine.config().getDefaultLlmOperation());
 		}
+		config = storedCaps(config, true);
 		try {
 			validateComposedConfig(config);
 		} catch (InvalidInputException e) {
@@ -1533,8 +1533,10 @@ public class AgentAdapter extends AAdapter {
 		}
 		AMap<AString, ACell> sourceConfig = RT.ensureMap(
 			sourceRecord.get(Agent.KEY_CONFIG));
-		AMap<AString, ACell> forkConfig = (overrideConfig == null) ? sourceConfig
-			: (sourceConfig != null ? mergeConfigMaps(sourceConfig, overrideConfig) : overrideConfig);
+		// A fork copies its source's caps, unrestricted included, unless the
+		// override names others.
+		AMap<AString, ACell> forkConfig = storedCaps((overrideConfig == null) ? sourceConfig
+			: (sourceConfig != null ? mergeConfigMaps(sourceConfig, overrideConfig) : overrideConfig), false);
 		try {
 			validateComposedConfig(forkConfig);
 		} catch (InvalidInputException e) {
@@ -2219,7 +2221,7 @@ public class AgentAdapter extends AAdapter {
 			Fields.STATUS, observableStatus(target.ownerDID(), agentId, agent),
 			Fields.AWAITING, awaitingSummary(record),
 			Fields.CONTROLLER, agent.getController(),
-			Fields.CONFIG, record.get(Agent.KEY_CONFIG)));
+			Fields.CONFIG, shownConfig(record.get(Agent.KEY_CONFIG))));
 
 		if (record.containsKey(Agent.KEY_AGENT)) summary = summary.assoc(Agent.KEY_AGENT, record.get(Agent.KEY_AGENT));
 		if (timeline != null) summary = summary.assoc(Strings.intern("timelineLength"), CVMLong.create(timeline.count()));
@@ -3048,7 +3050,7 @@ public class AgentAdapter extends AAdapter {
 			boolean configuring = (changes != null) || (controller != null);
 			AMap<AString, ACell> committed = agent.update(current -> requireController(ctx, target, current, configuring),
 				controller, (changes == null) ? null : current -> {
-					AMap<AString, ACell> composed = mergeConfigMaps(current, changes);
+					AMap<AString, ACell> composed = storedCaps(mergeConfigMaps(current, changes), false);
 					validateComposedConfig(composed);
 					return composed;
 				}, newState);
@@ -5738,6 +5740,31 @@ public class AgentAdapter extends AAdapter {
 		return canonicalCaps(resolveConfigValue(configArg, ctx, new ArrayList<>(), 0, "config"));
 	}
 
+	/**
+	 * {@code config} with its caps as they are stored. An agent is unrestricted
+	 * only when its owner says {@code caps: "unrestricted"}, stored as no caps
+	 * entry. Caps that are null, or left out of a new agent's config, give it
+	 * no authority of its own: an empty list. An existing agent's caps, left
+	 * out of a change, stay as they are.
+	 *
+	 * @param creating whether {@code config} is a new agent's whole config
+	 */
+	private static AMap<AString, ACell> storedCaps(AMap<AString, ACell> config, boolean creating) {
+		if (config == null) config = Maps.empty();
+		ACell caps = config.get(K_CAPS);
+		if (covia.venue.Config.UNRESTRICTED.equals(caps)) return config.dissoc(K_CAPS);
+		if (caps == null && (creating || config.containsKey(K_CAPS))) return config.assoc(K_CAPS, Vectors.empty());
+		return config;
+	}
+
+	/** {@code config} as an agent's record is shown: stored with no caps entry, it says {@code caps: "unrestricted"}. */
+	private static ACell shownConfig(ACell config) {
+		if (!(config instanceof AMap<?, ?> map) || map.containsKey(K_CAPS)) return config;
+		@SuppressWarnings("unchecked")
+		AMap<AString, ACell> shown = (AMap<AString, ACell>) map;
+		return shown.assoc(K_CAPS, covia.venue.Config.UNRESTRICTED);
+	}
+
 	/** {@code config} with each capability's {@code with} in the form it is stored in ({@link CapabilityChecker#canonicalResource}). */
 	private static AMap<AString, ACell> canonicalCaps(AMap<AString, ACell> config) {
 		AVector<ACell> caps = (config == null) ? null : RT.ensureVector(config.get(K_CAPS));
@@ -5944,7 +5971,7 @@ public class AgentAdapter extends AAdapter {
 		requireConfigType(config, K_API_KEY, AString.class, "a string secret reference");
 		requireConfigType(config, K_DEFAULT_TOOLS, CVMBool.class, "a boolean");
 		requireConfigType(config, AbstractLLMAdapter.K_RECORD_TOOL_CALLS, CVMBool.class, "a boolean");
-		requireConfigType(config, K_CAPS, AVector.class, "an array of capability objects");
+		requireConfigType(config, K_CAPS, AVector.class, "an array of capability objects, or \"unrestricted\"");
 		// Admission is security configuration: a policy that would fail closed at
 		// runtime must fail loudly here instead (#447).
 		String admissionProblem = Admission.configProblem(config);

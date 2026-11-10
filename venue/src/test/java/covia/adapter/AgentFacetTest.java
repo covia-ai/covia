@@ -35,8 +35,11 @@ class AgentFacetTest {
     }
     private AMap<AString, ACell> target() { return Maps.of(Fields.AGENT_ID, "external"); }
     private void create() throws Exception {
-        run("create", target().assoc(Agent.KEY_AGENT, facet()));
+        run("create", target().assoc(Agent.KEY_AGENT, facet()).assoc(Fields.CONFIG, UNRESTRICTED));
     }
+
+    /** An external agent's backend turn runs under the agent's own authority, which these agents have whole. */
+    private static final ACell UNRESTRICTED = Maps.of("caps", "unrestricted");
     private Agent agent(String id) { return engine.getVenueState().users().user(ctx.getUserDID()).agent(Strings.create(id)); }
 
     static class Probe extends ARemoteAgentAdapter<RemoteInteraction> {
@@ -219,7 +222,8 @@ class AgentFacetTest {
         server.start();
         try {
             run("create", target().assoc(Agent.KEY_AGENT, Maps.of(Fields.ADAPTER, "a2a",
-                "endpoint", "http://127.0.0.1:" + server.getAddress().getPort() + "/rpc", "card", Maps.empty())));
+                "endpoint", "http://127.0.0.1:" + server.getAddress().getPort() + "/rpc", "card", Maps.empty()))
+                .assoc(Fields.CONFIG, UNRESTRICTED));
             Job firstJob = invoke("chat", target().assoc(Fields.MESSAGE, Strings.create("first")));
             ACell first;
             try { first = firstJob.awaitResult(5000); }
@@ -237,7 +241,8 @@ class AgentFacetTest {
 
     @Test void realNativeProxyUsesExistingAgentRequestSurface() throws Exception {
         run("create", Maps.of(Fields.AGENT_ID, "native", Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")));
-        run("create", target().assoc(Agent.KEY_AGENT, Maps.of(Fields.ADAPTER, "remoteagent", Fields.AGENT_ID, "native")));
+        run("create", target().assoc(Agent.KEY_AGENT, Maps.of(Fields.ADAPTER, "remoteagent", Fields.AGENT_ID, "native"))
+            .assoc(Fields.CONFIG, UNRESTRICTED));
         ACell output = run("request", target().assoc(Fields.INPUT, Maps.of("task", "via proxy")));
         assertEquals(Strings.create("via proxy"), RT.getIn(output, Fields.OUTPUT, "completed", "task"));
     }

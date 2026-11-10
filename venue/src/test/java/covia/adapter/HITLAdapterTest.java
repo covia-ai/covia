@@ -169,6 +169,7 @@ public class HITLAdapterTest {
 			Fields.CONFIG, Maps.of(
 				Fields.OPERATION, "v/ops/llmagent/chat",
 				"llmOperation", "v/test/ops/llm",
+				"caps", "unrestricted",
 				Fields.TOOLS, Vectors.of(Strings.create("v/ops/hitl/request")))),
 			ALICE).awaitResult(5000);
 		User owner = engine.getVenueState().users().user(ALICE_DID);

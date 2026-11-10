@@ -483,7 +483,7 @@ groups accordingly.
    its node and everything above it), and `crud/write` on each of its
    products' `location`s — conventionally `w/projects/<pid>/out/<node path>/`.
    Where that comes from:
-   - **Root principal's own uncapped agent** — has it already.
+   - **Root principal's own unrestricted agent** — has it already.
    - **Root principal's capped agent** — the root principal's `assign`
      appends the scopes to the agent's `config.caps` (`agent/write` on their
      own agent).

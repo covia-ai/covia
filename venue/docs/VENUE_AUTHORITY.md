@@ -10,7 +10,7 @@ Tracked by covia#660.
 
 | Term | Meaning |
 |------|---------|
-| Base | The authority a context starts with: a user's own authority; for an agent with no caps, its owner's; for an agent with caps, exactly those caps; for the venue, its own resources |
+| Base | The authority a context starts with: a user's own authority; for an unrestricted agent, its controller's; for any other agent, exactly its caps; for the venue, its own resources |
 | Addition | Authority added to the base for a request: a grant it presents, or an allowance it activates |
 | Allowance | A standing right, kept by the venue as a record separate from grants, that confers nothing until its holder activates it |
 | Activation | An explicit request to add an allowance's privileges to a context for one request or job and everything it starts |
@@ -27,9 +27,10 @@ Tracked by covia#660.
   further. An agent is a
   sub-principal of its owner and works in the owner's namespace
   ([UCAN.md](./UCAN.md) §5.4).
-- **Venue authority.** `Engine.hasVenueAuthority` admits the venue acting as
-  itself (`isDirectVenue`, which excludes the venue's agents), or a presented
-  grant covering `<venueDID>/<resource>`. The scope is not read.
+- **Venue authority.** `Engine.hasVenueAuthority` decides by the rule for
+  every resource, on `<venueDID>/<resource>`: it admits the venue acting as
+  itself, an agent of the venue's whose caps cover the resource (an
+  unrestricted one covers all of them), and a presented grant covering it.
 - **The venue context.** `Engine.venueContext()` is the venue as caller. About
   two dozen call sites in this repository use it for the venue's own secrets,
   its own records and start-up work. It reaches a user's namespace only as any
@@ -95,7 +96,7 @@ without cost.
   never be passed on and there are no chains of allowances.
 - Issuing is an action the issuer's base must cover: an agent with caps can
   issue only if a cap allows it.
-- An agent with no caps that its owner controls has its owner's authority as its base, so it can issue
+- An unrestricted agent that its owner controls has its owner's authority as its base, so it can issue
   allowances over its owner's namespace. An agent with caps can issue only
   within them.
 - The same base rule applies to issuing grants: `ucan:issue` must check the
@@ -112,7 +113,7 @@ The venue activates only when all of these hold, and refuses otherwise:
 1. The allowance has not expired or been revoked.
 2. The requester is its holder.
 3. The requester's base covers activating it. An agent whose caps do not allow
-   activation can never raise its own authority; an agent with no caps can
+   activation can never raise its own authority; an unrestricted agent can
    activate any allowance issued to it.
 4. The privileges asked for lie within the ceiling.
 5. Its gate, if any, passes. The gate runs once, at activation, never on later

@@ -135,9 +135,7 @@ public class Auth {
 	/** Public admission summary only: never disclose custom capability targets. */
 	public AString getPublicCapsMode() {
 		if (!publicAccessEnabled) return Strings.intern("disabled");
-		if (publicCapsConfig instanceof AString s && "unrestricted".equals(s.toString())) {
-			return Strings.intern("unrestricted");
-		}
+		if (Config.UNRESTRICTED.equals(publicCapsConfig)) return Config.UNRESTRICTED;
 		return Strings.intern(publicCapsConfig instanceof AVector ? "custom" : "read-only");
 	}
 
@@ -172,7 +170,7 @@ public class Auth {
 	 */
 	public AVector<ACell> getPublicScope(AString publicDID) {
 		if (publicCapsConfig == null) return CapabilityChecker.readOnlyScope(publicDID);
-		if (publicCapsConfig instanceof AString s && "unrestricted".equals(s.toString())) return null;
+		if (Config.UNRESTRICTED.equals(publicCapsConfig)) return null;
 		AVector<ACell> caps = RT.ensureVector(publicCapsConfig);
 		if (caps != null) return caps;
 		log.warn("auth.public.caps is malformed ({}); defaulting to read-only", publicCapsConfig);

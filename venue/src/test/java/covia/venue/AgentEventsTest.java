@@ -119,7 +119,7 @@ public class AgentEventsTest {
 
 	private void createAgent(String id, AMap<AString, ACell> config) {
 		Job job = engine.jobs().invokeOperation("v/ops/agent/create",
-			Maps.of(Fields.AGENT_ID, id, Fields.CONFIG, config), ctx);
+			Maps.of(Fields.AGENT_ID, id, Fields.CONFIG, TestEngine.unrestricted(config)), ctx);
 		job.awaitResult(5000);
 	}
 

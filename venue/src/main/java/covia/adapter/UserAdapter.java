@@ -411,14 +411,10 @@ public class UserAdapter extends AAdapter {
 		throw new InvalidInputException("Invalid user DID: " + value);
 	}
 
-	/**
-	 * Administrative user operations are venue-owned. A null capability scope
-	 * is intentionally not enough: only direct venue execution or a presented
-	 * venue-rooted delegation over {@code <venue DID>/users} can authorise them.
-	 */
 	/** The venue resource whose authority makes a caller an operator over users. */
 	private static final String USERS_RESOURCE = "users";
 
+	/** Administrative user operations are the venue's ({@link Engine#requireVenueAuthority}). */
 	private void requireVenueUserAuthority(RequestContext ctx, AString ability) {
 		engine.requireVenueAuthority(ctx, USERS_RESOURCE, ability);
 	}

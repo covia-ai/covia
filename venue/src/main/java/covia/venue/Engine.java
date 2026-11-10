@@ -4602,10 +4602,8 @@ public class Engine {
 
 	/**
 	 * Venue-administration gate. Administrative operations (user provisioning,
-	 * adapter and module lifecycle) are venue-owned: a null capability scope is
-	 * deliberately NOT enough. Only direct execution as the venue identity, or
-	 * a presented venue-rooted delegation covering
-	 * {@code <venue DID>/<resource>} for {@code ability}, authorises them.
+	 * adapter and module lifecycle) are the venue's, authorised by the rule for
+	 * every resource ({@link #hasVenueAuthority}).
 	 *
 	 * @param ctx Request context
 	 * @param resource Venue-relative resource segment (e.g. {@code "users"}, {@code "adapters"})
@@ -4615,18 +4613,19 @@ public class Engine {
 	public void requireVenueAuthority(RequestContext ctx, String resource, AString ability) {
 		if (hasVenueAuthority(ctx, resource, ability)) return;
 		throw new covia.exception.AuthException(VENUE_AUTHORITY_DENIED + ": requires " + ability
-			+ " on " + getDIDString() + "/" + resource + " from the venue (call as the venue or present "
-			+ "a venue-issued delegation)");
+			+ " on " + getDIDString() + "/" + resource + " from the venue (call as the venue, as one of "
+			+ "its agents whose caps include it, or present a venue-issued delegation)");
 	}
 
 	/**
-	 * Whether the caller holds venue authority: it is the venue itself, or
-	 * presents a venue-rooted delegation covering {@code <venue DID>/<resource>}
-	 * for {@code ability}. The check behind {@link #requireVenueAuthority}.
+	 * Whether the request's authority covers {@code <venue DID>/<resource>} for
+	 * {@code ability} ({@link #authorityCovers}): the venue itself; one of its
+	 * agents within its caps, so an agent its owner made unrestricted holds all
+	 * of it; or a request presenting a venue-rooted delegation. The check behind
+	 * {@link #requireVenueAuthority}.
 	 */
 	public boolean hasVenueAuthority(RequestContext ctx, String resource, AString ability) {
-		if (isDirectVenue(ctx)) return true;
-		return crossUserAllows(ctx, Strings.create(getDIDString() + "/" + resource), ability);
+		return authorityCovers(ctx, Strings.create(getDIDString() + "/" + resource), ability);
 	}
 
 	/**
@@ -4692,9 +4691,9 @@ public class Engine {
 
 	/**
 	 * Whether the caller may have the venue dial any target, unchecked by the
-	 * outbound guard: the venue itself, or a holder of a venue-issued
-	 * {@link Abilities#OUTBOUND_ANY} grant on {@code <venue DID>/outbound}.
-	 * Agents, including the venue's own, are checked unless granted it.
+	 * outbound guard: whoever has venue authority for
+	 * {@link Abilities#OUTBOUND_ANY} on {@code <venue DID>/outbound}, which an
+	 * unrestricted agent of the venue's has. Every other caller is checked.
 	 */
 	public boolean outboundUnrestricted(RequestContext ctx) {
 		return hasVenueAuthority(ctx, OUTBOUND, Abilities.OUTBOUND_ANY);

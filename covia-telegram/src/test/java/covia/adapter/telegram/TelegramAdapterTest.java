@@ -87,7 +87,8 @@ public class TelegramAdapterTest {
 			Fields.CONFIG, Maps.of(
 				Fields.OPERATION, "v/ops/llmagent/chat",
 				"llmOperation", "v/test/ops/llm",
-				"systemPrompt", "Echo the user.")));
+				"systemPrompt", "Echo the user.",
+				"caps", "unrestricted")));
 
 		awaitState("echo", BotRunner.State.RUNNING, 10_000);
 	}
@@ -465,7 +466,7 @@ public class TelegramAdapterTest {
 			}
 		});
 		run(RequestContext.of(OWNER), "v/ops/agent/create", Maps.of(Fields.AGENT_ID, "tg-vision", Fields.CONFIG,
-			Maps.of(Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/ops/telegram-vision/llm")));
+			Maps.of(Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/ops/telegram-vision/llm", "caps", "unrestricted")));
 		try {
 			configureBots(Maps.of("echo", echoBotConfig().assoc(BotSpec.K_AGENT, Strings.create("tg-vision"))));
 			awaitState("echo", BotRunner.State.RUNNING, 10_000);
@@ -672,7 +673,7 @@ public class TelegramAdapterTest {
 			}
 		});
 		run(RequestContext.of(OWNER), "v/ops/agent/create", Maps.of(Fields.AGENT_ID, "tg-held", Fields.CONFIG,
-			Maps.of(Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/ops/telegram-held/llm")));
+			Maps.of(Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/ops/telegram-held/llm", "caps", "unrestricted")));
 		var inbox = new covia.adapter.webhook.WebhookInbox(engine, engine.adapterState("telegram"),
 			"config/echo/inbox/" + OWNER.getHash().toHexString() + "/42");
 		var config = echoBotConfig().assoc(BotSpec.K_AGENT, Strings.create("tg-held"));
@@ -770,7 +771,7 @@ public class TelegramAdapterTest {
 	@Test
 	public void suspendedAgentFailsTheUpdateOnceWithoutJobs() throws Exception {
 		run(RequestContext.of(OWNER), "v/ops/agent/create", Maps.of(Fields.AGENT_ID, "tg-resting", Fields.CONFIG,
-			Maps.of(Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/test/ops/llm")));
+			Maps.of(Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/test/ops/llm", "caps", "unrestricted")));
 		run(RequestContext.of(OWNER), "v/ops/agent/suspend", Maps.of(Fields.AGENT_ID, "tg-resting"));
 		var config = echoBotConfig().assoc(BotSpec.K_AGENT, Strings.create("tg-resting"));
 		try {

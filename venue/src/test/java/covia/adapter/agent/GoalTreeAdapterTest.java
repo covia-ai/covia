@@ -889,7 +889,7 @@ public class GoalTreeAdapterTest {
 			"model", "strict-goal-schema-test");
 		engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(
 			Fields.AGENT_ID, "strict-goal-schema-agent",
-			Fields.CONFIG, config), ALICE).awaitResult(5000);
+			Fields.CONFIG, TestEngine.unrestricted(config)), ALICE).awaitResult(5000);
 
 		try (AgentWatch watch = AgentWatch.open(engine, ALICE_DID, "strict-goal-schema-agent")) {
 			engine.jobs().invokeOperation("v/ops/agent/request", Maps.of(

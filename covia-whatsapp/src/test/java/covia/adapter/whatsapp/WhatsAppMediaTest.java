@@ -50,7 +50,7 @@ class WhatsAppMediaTest {
 	/** The owner's agent the binding serves: a real record, whose turns the fixture adapter then takes. */
 	static Agent agent(Fixture f) throws Exception {
 		run(f.engine, OWNER, "v/ops/agent/create", Maps.of(Fields.AGENT_ID, "media-agent",
-			Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/echo")));
+			Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/echo", "caps", "unrestricted")));
 		Agent agent = new Agent();
 		f.engine.registerAdapter(agent);
 		return agent;

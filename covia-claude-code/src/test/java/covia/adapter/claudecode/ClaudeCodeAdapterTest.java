@@ -115,7 +115,8 @@ public class ClaudeCodeAdapterTest {
 
 	@Test void agentFacetChatResumesThroughCommonSessionId() throws Exception {
 		engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "coding-facet",
-			"agent", Maps.of(Fields.ADAPTER, "claudecode", "project", "alpha")), OWNER_CTX).awaitResult(5000);
+			"agent", Maps.of(Fields.ADAPTER, "claudecode", "project", "alpha"),
+			Fields.CONFIG, Maps.of(Config.CAPS, Config.UNRESTRICTED)), OWNER_CTX).awaitResult(5000);
 		ACell first = engine.jobs().invokeOperation("v/ops/agent/chat", Maps.of(Fields.AGENT_ID,
 			"coding-facet", Fields.MESSAGE, "first facade turn"), OWNER_CTX).awaitResult(10000);
 		ACell sid = RT.getIn(first, Fields.SESSION_ID);

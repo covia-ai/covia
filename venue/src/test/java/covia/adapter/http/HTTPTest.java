@@ -1210,7 +1210,9 @@ public class HTTPTest {
 		AtomicInteger requests = new AtomicInteger();
 		HttpServer s = loopback(requests);
 		try {
-			String refusal = failureOf(engine, engine.venueContext().withAgentId(Strings.create("helper")), hop(s));
+			// An agent of the venue's whose caps grant no venue authority.
+			String refusal = failureOf(engine, engine.venueContext().withAgentId(Strings.create("helper"))
+				.withCaps(Vectors.of(Maps.of(convex.auth.ucan.Capability.CAN, Strings.create("invoke")))), hop(s));
 			assertTrue(refusal.contains(HTTPAdapter.PRIVATE_ADDRESS), refusal);
 			assertEquals(0, requests.get());
 		} finally {

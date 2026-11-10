@@ -73,7 +73,7 @@ public class GoalTreeLatticeFramesTest {
 		}
 		engine.jobs().invokeOperation(
 			"v/ops/agent/create",
-			Maps.of(Fields.AGENT_ID, agentId, Fields.CONFIG, config),
+			Maps.of(Fields.AGENT_ID, agentId, Fields.CONFIG, TestEngine.unrestricted(config)),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 	}
 

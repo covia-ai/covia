@@ -57,6 +57,7 @@ public class AgentWorkspaceTest {
 			Maps.of(Fields.AGENT_ID, "workspace-agent",
 				Fields.CONFIG, Maps.of(
 					Fields.OPERATION, "v/ops/llmagent/chat",
+					"caps", "unrestricted",
 					"llmOperation", "v/test/ops/workspacellm",
 					"tools", Vectors.of(
 						Strings.create("v/ops/covia/write"),

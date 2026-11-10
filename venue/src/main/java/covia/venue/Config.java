@@ -294,6 +294,11 @@ public class Config {
 	 *  (legacy permissive behaviour); an explicit cap array → that scope. */
 	public static final AString CAPS = Strings.intern("caps");
 
+	/** The value of {@code caps} that sets no scope at all: {@code auth.public.caps}
+	 *  for anonymous callers, and an agent's {@code config.caps}, which only an
+	 *  explicit {@code "unrestricted"} leaves unbounded. */
+	public static final AString UNRESTRICTED = Strings.intern("unrestricted");
+
 	/** Obsolete option recognised only to report its required migration. */
 	public static final AString AUDIENCE = Strings.intern("audience");
 	/** The migration reported for {@code auth.audience}. */
@@ -796,7 +801,7 @@ public class Config {
 				throw malformed("auth.public.caps",
 					"must be \"unrestricted\" or an array of capabilities");
 			}
-			if (caps instanceof AString s && !"unrestricted".equals(s.toString())) {
+			if (caps instanceof AString s && !UNRESTRICTED.equals(s)) {
 				throw malformed("auth.public.caps",
 					"the only supported string value is unrestricted");
 			}

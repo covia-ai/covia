@@ -171,7 +171,7 @@ class WhatsAppAdapterTest {
 				}
 			});
 			TestSupport.run(f.engine, OWNER, "v/ops/agent/create", Maps.of(Fields.AGENT_ID, "local-agent", Fields.CONFIG,
-				Maps.of(Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/ops/held/llm")));
+				Maps.of(Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/ops/held/llm", "caps", "unrestricted")));
 			assertEquals(200, f.webhook(payload(message("local-first"))).status());
 			assertTrue(entered.await(8, TimeUnit.SECONDS));
 			awaitStatus(f.bot(), "local-first", WebhookInbox.COMPLETE);
@@ -204,7 +204,7 @@ class WhatsAppAdapterTest {
 	}
 	static void createAgent(Engine engine, String agent) throws Exception {
 		TestSupport.run(engine, OWNER, "v/ops/agent/create", Maps.of(Fields.AGENT_ID, agent, Fields.CONFIG,
-			Maps.of(Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/test/ops/llm")));
+			Maps.of(Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/test/ops/llm", "caps", "unrestricted")));
 	}
 
 	@Test void failingSessionDeliveryRunsOnce() throws Exception {

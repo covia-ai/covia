@@ -47,7 +47,8 @@ import covia.venue.TwoVenueTestServer;
  * A loopback target is refused before any request reaches it unless the
  * operator allows its host, and the block list wins over the allow list. The
  * venue itself, and a holder of a venue-issued {@code outbound/any} grant,
- * dial anywhere; the venue's own agents are checked.
+ * dial anywhere; an agent of the venue's whose caps grant no venue authority
+ * is checked.
  */
 public class FederationTargetPolicyTest {
 
@@ -191,7 +192,9 @@ public class FederationTargetPolicyTest {
 
 	@Test
 	void venueAgentIsChecked() throws IOException {
-		ctx = ENGINE.venueContext().withAgentId(Strings.create("helper"));
+		// An agent of the venue's whose caps grant no venue authority.
+		ctx = ENGINE.venueContext().withAgentId(Strings.create("helper"))
+			.withCaps(Vectors.of(Maps.of(Capability.CAN, Strings.create("invoke"))));
 		try (Peer peer = new Peer()) {
 			assertRefused(peer, HTTPAdapter.PRIVATE_ADDRESS, ENGINE, GRID_RUN, gridInput(peer.url("127.0.0.1")));
 		}

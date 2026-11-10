@@ -108,7 +108,7 @@ public class AgentQueryTest {
 			"llmOperation", modelOperation(), "systemPrompt", "query persona");
 		for (var e : extra.entrySet()) config = config.assoc(e.getKey(), e.getValue());
 		engine.jobs().invokeOperation("v/ops/agent/create",
-			Maps.of(Fields.AGENT_ID, AGENT, Fields.CONFIG, config), owner).awaitResult(5000);
+			Maps.of(Fields.AGENT_ID, AGENT, Fields.CONFIG, TestEngine.unrestricted(config)), owner).awaitResult(5000);
 		return engine.getVenueState().users().user(owner.getUserDID()).agent(AGENT);
 	}
 

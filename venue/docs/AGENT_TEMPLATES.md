@@ -402,7 +402,7 @@ cancelled tasks write nothing.
 
 ### Capabilities for handoff
 
-A worker can read a handoff path **only if its capability scope covers it** — sharing the owner's namespace is not sufficient. An agent's `config.caps` narrows it to exactly the listed `{with, can}` grants (each step runs as the agent under them, `Engine.stepContext`); an agent with **no** `caps` runs with the owner's full authority and can read any of the owner's paths.
+A worker can read a handoff path **only if its capability scope covers it** — sharing the owner's namespace is not sufficient. An agent's `config.caps` narrows it to exactly the listed `{with, can}` grants (each step runs as the agent under them, `Engine.stepContext`); an unrestricted agent (`caps: "unrestricted"`) runs with its owner's full authority and can read any of the owner's paths, and one created without `caps` reads none.
 
 So for a pipeline of *capped* workers, provision the handoff area explicitly:
 
@@ -421,7 +421,7 @@ Every stage can read the shared `w/pipeline/` area. With structural handoff the
 **manager** needs `crud/write` on each `outputPath`, because the framework writes
 as the requester; each consumer needs `crud/read` on its
 input path. The producing worker does not need write authority merely to return
-its result. Uncapped agents need none of these explicit grants — but capping is
+its result. Unrestricted agents need none of these explicit grants — but capping is
 the least-privilege posture for untrusted or externally-facing work, and there
 the handoff caps are mandatory, not optional.
 

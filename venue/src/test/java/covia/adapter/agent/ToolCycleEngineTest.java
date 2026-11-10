@@ -328,6 +328,7 @@ public class ToolCycleEngineTest {
 					Fields.OPERATION, "v/ops/llmagent/chat",
 					"llmOperation", "v/test/ops/llm",
 					"systemPrompt", "You step.",
+					"caps", "unrestricted",
 					Fields.TOOLS, Vectors.of(Strings.create("v/test/ops/hold")))),
 			RequestContext.of(did)).awaitResult(5000);
 

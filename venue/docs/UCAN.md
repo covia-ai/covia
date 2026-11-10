@@ -331,7 +331,7 @@ Resource rules at issuance (`UCANAdapter.handleIssue`):
   So may whatever acts with its authority: an agent with its owner's, a
   request under `user/sudo` with the target's. That is the authority it has of
   its own, never what others have granted it. Its scope must include the right
-  to grant, `grant/<can>`, as having no scope does, so an agent with no caps
+  to grant, `grant/<can>`, as having no scope does, so an unrestricted agent
   that its owner controls grants what its owner could.
 - Any other resource is issuable only under a held **granting right**
   (COG-17), or passed on by the venue itself with `prf` (below). The caller's
@@ -922,7 +922,7 @@ capabilities, read from her `config.caps` at each check. Carol can write to `w/d
 
 **Identity:** `did:key:zAlice...:g:Carol` (a sub-principal of Alice)
 **Keys:** None — the venue holds the relationship, and nothing is signed
-**Granting:** by the rule for everyone (§4.1). With no caps an agent its owner
+**Granting:** by the rule for everyone (§4.1). An unrestricted agent its owner
 controls grants what its owner could grant of its own right, its owner's
 resources and its own, and never what others granted its owner; with caps, or
 under a capped controller, only what they include the right to grant
@@ -931,10 +931,9 @@ context outright, because answering an ask mints a grant *as the inbox owner*:
 an agent reaching it would approve its own request with authority it may not
 have. An agent that needs more asks its human, and only the human can answer.
 
-That guard is pinned to identity. An agent with no `config.caps` holds a
-`null` scope, which the `authorityCovers` fast path treats as unrestricted; a
-scope-based defence would therefore be absent on exactly the agent that most
-needs bounding.
+That guard is pinned to identity. An unrestricted agent holds no scope, which
+the `authorityCovers` fast path passes; a scope-based defence would therefore
+be absent on exactly the agent that most needs bounding.
 
 **A request's caller, namespace and authority are separate.** Its caller is
 who acted, its namespace is where its names resolve (with the agent, session
@@ -952,8 +951,8 @@ keep a separate authority with the work and act with it again.
 **Each agent has a controller:** the principal whose authority it acts with.
 Its harness acts with that authority as it stands, and its tool calls with that
 authority narrowed by its `config.caps`. Read as a delegation, the controller
-is the issuer, the agent the audience and the caps the capabilities, with no
-caps passing on all the controller has, so an agent never exceeds its
+is the issuer, the agent the audience and the caps the capabilities, with
+`"unrestricted"` passing on all the controller has, so an agent never exceeds its
 controller, at any depth (`Engine.agentContext`). Each point of action reads
 the caps along the chain of controllers as they stand, so a controller narrowed
 or gone bounds its agents' running work. A chain that loops has no authority at its root and
@@ -964,7 +963,7 @@ A controller has authority over the namespace of each agent it controls,
 directly or through the agents it controls: everything under
 `<owner>/g/<agent>/`, in its own right and whatever its own caps say
 (`Engine.withControl`). Its agents act with that too, within their caps, so an
-agent reaches its own namespace, and one with no caps reaches those of the
+agent reaches its own namespace, and an unrestricted one reaches those of the
 other agents its controller controls. A capability naming a path in full gets
 no more than that: an agent reaches another agent's `n/` only if its caps name
 it and its controller has authority there. Control is not a root, so it grants
@@ -1000,8 +999,13 @@ always delete it.
 target user or one of its agents; any other agent returns to its owner.
 
 The config's `caps` and `accepts` take no check of their own. `caps` narrow
-what the agent does and cannot exceed its controller, an absent `caps` leaving
-it all its controller has; `accepts` admits others to talk to it (an older
+what the agent does and cannot exceed its controller: a list of capabilities
+gives it what they cover, and `"unrestricted"` all its controller has. An
+agent is unrestricted only when its config says so: one created without
+`caps`, or whose `caps` are set to `null`, has none, and its harness still
+runs, answers and makes tool calls, which are refused (§5.5). An update that
+leaves `caps` out keeps them, and a fork copies its source's unless it names
+others. `accepts` admits others to talk to it (an older
 public `a2a.caps` reads as `accepts: "anyone"`). Configuring mints no token,
 and caps reach nothing of another identity's, which a request reaches only by
 what it holds (§5.3).
@@ -1170,8 +1174,8 @@ a RequestContext for the tool invocation. The context determines enforcement:
 
 | Agent Model | RequestContext | Enforcement |
 |-------------|---------------|-------------|
-| No caps (current default) | The agent's DID in its owner's namespace, no scope | Full access to the owner's namespace |
-| Model A (attenuated) | The agent's DID in its owner's namespace, scoped by its `config.caps` | Every point of action checks the caps as they stand then |
+| Unrestricted (`caps: "unrestricted"`) | The agent's DID in its owner's namespace, no scope | All its controller has |
+| Model A (attenuated) | The agent's DID in its owner's namespace, scoped by its `config.caps` (empty when it was given none) | Every point of action checks the caps as they stand then |
 | Model B (independent, not implemented) | Agent's own DID + presented proof chain | Full UCAN verification on every operation |
 
 Two complementary checks apply, both built on the same `Capability.covers`

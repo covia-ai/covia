@@ -505,10 +505,10 @@ Embedded `VenueServer` instances have no process owner and reject this
 operation. Inside a container this restarts a jar already available in that
 container; it does not replace the container image.
 
-This is process-wide authority, distinct from adapter management. Direct venue
-execution is allowed; delegation requires `venue/restart` on
-`<venue DID>/process` (as well as `invoke` on the operation). There is no
-configuration bypass or enable flag.
+This is process-wide authority, distinct from adapter management: venue
+authority ([VENUE_AUTHORITY.md](./VENUE_AUTHORITY.md#how-it-works-today)) for
+`venue/restart` on `<venue DID>/process`, as well as `invoke` on the
+operation. There is no configuration bypass or enable flag.
 
 ## Shutdown (`shutdown.graceMs`)
 
@@ -555,9 +555,8 @@ Job cancels the cycle. Constraints:
 - Needs free disk of about the current file size; about 2× disk is used until
   the superseded file is deleted, and reads cost a little more during the
   cycle. `temp`/`memory` stores are refused.
-- **Venue-owned**: `venue/gc` on `<venueDID>/store`, checked like
-  `venue/restart` — direct venue execution, or a venue-issued delegation;
-  the venue's own agents are not admitted without one. `restart: true`
+- **Venue-owned**: venue authority for `venue/gc` on `<venueDID>/store`,
+  checked like `venue/restart`. `restart: true`
   additionally requires `venue/restart` on `<venueDID>/process` and a
   `MainVenue`-managed process, both checked before any collection starts.
 
@@ -2062,9 +2061,10 @@ schemas/annotations update, name/description untouched, vanished tools
 
 Destination paths under the caller's own `o/` need nothing extra. Venue-side
 targets (`v/ops/...` or `scope: "venue"`) are written as the venue, so they
-are venue administration: call as the venue, or present a venue-issued
-`mcp/manage` delegation over `<venue DID>/v/mcp`. A user's own unrestricted
-authority is not enough.
+are venue administration: they need venue authority
+([VENUE_AUTHORITY.md](./VENUE_AUTHORITY.md#how-it-works-today)) for
+`mcp/manage` on `<venue DID>/v/mcp`. A user's own unrestricted authority is
+not enough.
 Server URLs pass the same SSRF validation (and operator allow/block lists) as
 the http adapter. `auth` should be a secret reference (`s/<name>`, stored via
 `v/ops/secret/set`; bare refs are stored DID-qualified to the registrar) —
@@ -3016,8 +3016,9 @@ Operations:
 - `v/ops/claudecode/projects` — the projects the caller may run in.
 - `v/ops/claudecode/create {name, path, user?, description?, options?}` /
   `v/ops/claudecode/delete {name}` — the runtime project registry. Both need
-  **venue authority** (`<venueDID>/claudecode/projects` × `claudecode/manage`
-  — call as the venue or present a venue-issued delegation), because naming a
+  **venue authority** for `claudecode/manage` on
+  `<venueDID>/claudecode/projects`
+  ([VENUE_AUTHORITY.md](./VENUE_AUTHORITY.md#how-it-works-today)), because naming a
   directory the venue's OS user may execute code in is an operator decision.
   Runtime projects are recorded at `w/claudecode/projects/<name>` in the
   venue workspace and re-armed at every start; config-declared projects are
@@ -3092,11 +3093,10 @@ above is intentionally outside this administrative group:
 | `v/ops/venue/module/load {module, sha256?, config?}` | Load a module jar; its adapters and declarations overwrite existing names and paths |
 | `v/ops/venue/module/unload {name}` | Remove a module's live adapters and introspection, close resources and its classloader; catalog metadata remains |
 
-**Authority.** All of these are venue administration: a null capability
-scope is deliberately not enough. They run only as the venue identity itself
-or with a venue-issued delegation covering `<venue DID>/adapters` ×
-`adapter/manage` — the same model as `user:create`. Ordinary authenticated
-users get `AuthException`.
+**Authority.** All of these are venue administration: they need venue
+authority ([VENUE_AUTHORITY.md](./VENUE_AUTHORITY.md#how-it-works-today)) for
+`adapter/manage` on `<venue DID>/adapters`, the same model as `user:create`.
+Ordinary authenticated users get `AuthException`.
 
 **Module policy.** `module/load` and `module/unload` require
 `dynamicModules.enabled` (default **off**). By default `module` must be a jar
