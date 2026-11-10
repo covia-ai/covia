@@ -134,10 +134,12 @@ it is.
 The agent decides when a request arrives, in the transaction that would queue
 the task, from its config and the definitions it can look up: its own `n/`,
 its owner's namespaces, and the venue's `v/` and assets
-([GRID_LATTICE_DESIGN.md](./GRID_LATTICE_DESIGN.md) §3.3). A model it cannot
-look up there, such as one on another venue, is decided before a cycle takes
-the task, as the cycle would resolve it; so is a model changed after the task
-was accepted. Either way the task fails as in §2, without a cycle.
+([GRID_LATTICE_DESIGN.md](./GRID_LATTICE_DESIGN.md) §3.3). It reads them with
+the authority it runs under, its controller's, as its cycle does, whoever
+asks. A model it cannot look up there, such as one on another venue, is
+decided before a cycle takes the task, as the cycle would resolve it; so is a
+model changed after the task was accepted. Either way the task fails as in
+§2, without a cycle.
 
 A custom transition that never calls the §5 operations can still accept a
 task it does not resolve. Such a task fails when its first cycle ends (§6).

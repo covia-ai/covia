@@ -632,7 +632,7 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	 *     assumed; a provider may harmlessly ignore the canonical marks.</li>
 	 * <li>{@code toolCalling}: {@code false} declares that the model cannot call
 	 *     tools, so an agent with it is presented none and takes no tasks
-	 *     ({@link covia.venue.Agent#taskRefusal()}). Absent means tool calling
+	 *     ({@link covia.venue.Agent#taskRefusal(java.util.function.Predicate)}). Absent means tool calling
 	 *     is available.</li>
 	 * <li>{@code toolCallingByModel}: tool support varies per model rather than
 	 *     per provider, so it cannot be assumed from the provider alone.</li>

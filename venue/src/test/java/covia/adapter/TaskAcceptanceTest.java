@@ -18,11 +18,13 @@ import covia.api.Fields;
 import covia.exception.JobFailedException;
 import covia.grid.Job;
 import covia.grid.Status;
+import covia.lattice.CoviaPath;
 import covia.venue.Agent;
 import covia.venue.Engine;
 import covia.venue.Models;
 import covia.venue.RequestContext;
 import covia.venue.TestEngine;
+import covia.venue.User;
 
 /**
  * A request to an agent that cannot take tasks, because its model cannot call
@@ -79,6 +81,30 @@ public class TaskAcceptanceTest {
 				Maps.of(Fields.AGENT_ID, agentId, Fields.MESSAGE, "hello"), owner).awaitResult(5000);
 			assertNotNull(RT.getIn(reply, Fields.RESPONSE), runtime + ": chat still works");
 		}
+	}
+
+	/**
+	 * The agent judges its model as it runs, with its controller's authority:
+	 * a model in its owner's namespace that its controller may not read is not
+	 * read for it, at intake or before its cycle.
+	 */
+	@Test
+	public void testTheModelIsReadWithTheControllersAuthority(TestInfo info) {
+		AString alice = TestEngine.uniqueDID(info);
+		AString bob = TestEngine.uniqueDID(info.getDisplayName() + "-controller");
+		User owner = ENGINE.getVenueState().users().ensure(alice);
+		ENGINE.getVenueState().users().ensure(bob);
+		owner.operations().write(CoviaPath.parse("tiny"), Maps.of(
+			"operation", Maps.of("adapter", "test:llm"),
+			"model", Maps.of("id", "tiny", "provider", "v/test/ops/llm",
+				"options", Maps.of("toolCalling", CVMBool.FALSE))));
+		AMap<AString, ACell> config = Maps.of(Fields.OPERATION, "v/test/ops/step", Models.K_LLM_OPERATION, "o/tiny");
+		owner.createAgent(Strings.create("alices"), config, null);
+		owner.createAgent(Strings.create("bobs"), config, null, null, bob);
+
+		RequestContext asker = RequestContext.of(alice);
+		assertRefused(request(asker, "alices", "complete"), "alices");
+		assertNotNull(request(asker, "bobs", "complete").awaitResult(5000), "Bob may not read Alice's definition");
 	}
 
 	@Test
