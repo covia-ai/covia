@@ -390,8 +390,9 @@ meaning of validating the orchestration's own input against its input schema.
 Strict step validation resolves the target operation metadata before submitting
 the child job. Resolution and invocation use the same target: the local venue
 when the step omits `venue`, or the connected remote venue when it supplies one.
-The caller therefore needs `asset/read` as well as `invoke` authority for each
-strict step. Missing, unreadable, or operationally unresolvable metadata fails
+The caller therefore needs read authority over the definition
+([GRID_LATTICE_DESIGN.md](GRID_LATTICE_DESIGN.md) §4.6) as well as `invoke`
+authority for each strict step. Missing, unreadable, or operationally unresolvable metadata fails
 the step before it can apply side effects. If the resolved operation declares no
 output schema, there is no output constraint to enforce.
 

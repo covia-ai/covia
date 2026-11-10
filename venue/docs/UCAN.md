@@ -207,8 +207,9 @@ argument-conditional example).
 
 When a gate is an orchestration that relies on step output schemas, set
 `operation.strict: true` on the orchestration. Strict orchestration resolves
-each step's operation definition before invoking it and requires `asset/read`
-authority over that metadata in addition to `invoke`; an unreadable or
+each step's operation definition before invoking it and requires read
+authority over that metadata in addition to `invoke`
+([GRID_LATTICE_DESIGN.md](GRID_LATTICE_DESIGN.md) §4.6); an unreadable or
 unresolvable definition, or a schema violation, fails the orchestration and
 therefore the gate. Operations that declare no output schema impose no output
 constraint.

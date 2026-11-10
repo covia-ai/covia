@@ -2273,9 +2273,10 @@ public class Engine {
 		Asset local = lookupLocalAsset(r);
 		if (local != null) {
 			// Definition resolution precedes adapter dispatch, so it must enforce
-			// the private /a/ read itself. A later invoke capability is a separate
-			// right and cannot retroactively authorise this lookup.
-			if (checked) requireResourceAccess(ctx, ref, Abilities.ASSET_READ);
+			// the private /a/ read itself, as any read of an asset's metadata, so
+			// a/<hash> and its DID URL need the same. A later invoke capability is
+			// a separate right and cannot retroactively authorise this lookup.
+			if (checked) requireMetadataRead(ctx, ref);
 			return local;
 		}
 		return (fetch && "web".equals(r.method())) ? fetchRemoteAsset(ctx, r.didString(), r.hash()) : null;

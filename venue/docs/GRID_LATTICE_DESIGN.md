@@ -573,7 +573,9 @@ a reference resolved by `Engine.resolvePath` read a path as data
 included. Reading an asset as an asset (`asset/read`, or `crud/read` over its
 hash) is for content-addressed references; a path given where an asset is
 wanted, as by `/assets` or `/content`, is still read as data.
-`Engine.requireMetadataRead` decides which.
+`Engine.requireMetadataRead` decides which, and a definition resolved to be
+used (`Engine.resolveAsset`) is read the same way, however its reference is
+written.
 
 Components themselves implement their data independently of whatever mediates
 requests to them. Java code holding the component API is privileged venue

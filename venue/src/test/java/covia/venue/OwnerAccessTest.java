@@ -15,6 +15,8 @@ import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
+import convex.core.data.Hash;
+import convex.core.util.JSON;
 import covia.adapter.CoviaAdapter;
 import covia.api.Abilities;
 import covia.exception.AuthException;
@@ -281,5 +283,28 @@ public class OwnerAccessTest {
 		assertThrows(AuthException.class, () -> engine.requireMetadataRead(
 			agent(caps("w/shared/", Abilities.ASSET_READ)), Strings.create("w/shared/note")));
 		engine.requireMetadataRead(agent(caps("w/shared/", Capability.CRUD_READ)), Strings.create("w/shared/note"));
+	}
+
+	/**
+	 * A definition resolved by its hash, to be used, is an asset's metadata
+	 * read: either read ability over it is enough, however the reference is
+	 * written.
+	 */
+	@Test
+	public void testADefinitionIsReadByHashAlikeHoweverItIsWritten() {
+		Hash id = engine.storeUserAsset(JSON.print(Maps.of("name", "Def", "operation", Maps.of("adapter", "test:echo"))),
+			null, ALICE);
+		AString bare = Strings.create("a/" + id.toHexString());
+		AString did = Strings.create(alice + "/" + bare);
+		for (AString can : new AString[] {Abilities.ASSET_READ, Capability.CRUD_READ}) {
+			RequestContext capped = agent(caps(bare.toString(), can));
+			assertNotNull(engine.resolveAsset(bare, capped), bare + " under a cap of " + can);
+			assertNotNull(engine.resolveAsset(did, capped), did + " under a cap of " + can);
+			assertNotNull(engine.resolveAsset(did, bobGranted(did.toString(), can)), "granted " + can);
+		}
+		RequestContext elsewhere = agent(caps("w/shared/", Capability.CRUD_READ));
+		assertThrows(AuthException.class, () -> engine.resolveAsset(bare, elsewhere));
+		assertThrows(AuthException.class, () -> engine.resolveAsset(did, elsewhere));
+		assertThrows(AuthException.class, () -> engine.resolveAsset(did, BOB));
 	}
 }
