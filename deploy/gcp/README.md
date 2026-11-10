@@ -38,7 +38,8 @@ venues retired, Caddy moved under systemd):
   Etch stores and identities persist across redeploys.
 - **Caddy:** systemd `caddy.service`, config at `/etc/caddy/Caddyfile`
   (venue-test → :8080, venue-1 → :8081, venue-2 → :8082); cert storage
-  migrated from the legacy root-run instance to `/var/lib/caddy`
+  migrated from the legacy root-run instance to `/var/lib/caddy`; every site sends HSTS
+  (`max-age=31536000`, security#13)
 
 The Caddyfile on the host:
 
@@ -48,43 +49,55 @@ The Caddyfile on the host:
 }
 
 venue-1.covia.ai {
+        header Strict-Transport-Security "max-age=31536000"
         reverse_proxy :8081
 }
 
 venue-2.covia.ai {
+        header Strict-Transport-Security "max-age=31536000"
         reverse_proxy :8082
 }
 
 venue-test.covia.ai {
+        header Strict-Transport-Security "max-age=31536000"
         reverse_proxy :8080
 }
 ```
 
-## GitHub Secrets Required
+## Deploy and Admin Access (security#22)
 
-| Secret | Value |
-|--------|-------|
-| `GCP_VM_SSH_KEY` | Private key for SSH access to the VM |
-| `GCP_VM_HOST` | `35.213.147.8` |
-| `GCP_VM_USER` | `deploy` |
-
-The `deploy` user is created by adding its public key to the instance
-ssh-keys metadata — the GCP guest agent creates the account with
-passwordless sudo:
+There is no stored SSH key. `deploy-gcp.yml` signs in to GCP over GitHub OIDC
+(Workload Identity Federation) and runs [`deploy.sh`](deploy.sh) on the VM as
+root through an IAP tunnel with OS Login:
 
 ```bash
-echo "deploy:ssh-ed25519 AAAA... covia-gcp-deploy" > /tmp/deploy-key.txt
-gcloud compute instances add-metadata <instance> --zone=asia-southeast1-b \
-  --metadata-from-file ssh-keys=/tmp/deploy-key.txt
+gcloud compute ssh <instance> --zone asia-southeast1-b \
+  --tunnel-through-iap --command "echo $(base64 -w0 deploy/gcp/deploy.sh) | base64 -d | sudo bash"
 ```
 
-The deploy user is intentionally **not** in the docker group (docker-group
-membership is root-equivalent); the workflow runs docker via its
-passwordless sudo instead.
+| Piece | Value |
+|-------|-------|
+| Workload Identity provider | `projects/323115557788/locations/global/workloadIdentityPools/github/providers/covia-covia` |
+| Provider condition | `assertion.repository_id == '813519888' && assertion.workflow_ref == 'covia-ai/covia/.github/workflows/deploy-gcp.yml@refs/heads/develop'` |
+| Deploy service account | `covia-deploy-gcp@idyllic-pottery-468305-u2.iam.gserviceaccount.com` |
+| Its grants (this instance only) | `roles/compute.osAdminLogin`, `roles/iap.tunnelResourceAccessor`, custom `coviaInstanceGetter` (`compute.instances.get`); plus `roles/iam.serviceAccountUser` on the VM's compute service account, which OS Login requires |
+
+The condition names `develop` because `workflow_run` always runs the workflow
+from the default branch; the image deployed is still `:stable` from `master`.
+None of these values is secret, so they are written in the workflow.
+
+OS Login is on for this instance (`enable-oslogin=TRUE`), so `ssh-keys`
+metadata is ignored here. Admins log in with their Google account, which needs
+`roles/compute.osAdminLogin` and `roles/iap.tunnelResourceAccessor` on the
+instance (project Owners already have both):
+
+```bash
+gcloud compute ssh <instance> --zone asia-southeast1-b --tunnel-through-iap
+```
 
 ## Manual Deploy
 
-To deploy manually on the instance (the workflow does the same):
+Run [`deploy.sh`](deploy.sh) as above, or on the instance:
 
 ```bash
 sudo docker pull ghcr.io/covia-ai/covia:stable
