@@ -1070,8 +1070,8 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	 * call is tracked in its pending index ({@link AgentAdapter#trackCall}),
 	 * with the id and tool name the model gave it: its outcome reaches the
 	 * task whose cycle made the call as its next input, else the asking
-	 * session, which wakes the agent, and a task that yields meanwhile waits
-	 * for it. When no job can be named, the plain timeout stands.
+	 * session, which wakes the agent, and a task its cycle leaves open
+	 * meanwhile waits for it. When no job can be named, the plain timeout stands.
 	 *
 	 * @param call the call's Job, or null if it never had one
 	 */

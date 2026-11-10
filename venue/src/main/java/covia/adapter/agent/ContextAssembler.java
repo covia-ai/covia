@@ -100,7 +100,7 @@ public final class ContextAssembler {
 
 	/** Current task state, outside the cached prefix and absent while a task is assigned. */
 	public static final String NO_TASK_NOTICE =
-		"No assigned task is in scope. Do not call complete_task or fail_task. A chat message is not "
+		"No assigned task is in scope. Do not call complete_task, fail_task or park_task. A chat message is not "
 		+ "an assigned task: answer it with a normal assistant reply. These tools do not finish a "
 		+ "chat reply or a goal-tree frame.";
 

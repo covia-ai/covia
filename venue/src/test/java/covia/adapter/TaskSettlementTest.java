@@ -228,6 +228,33 @@ public class TaskSettlementTest {
 	}
 
 	@Test
+	public void anLlmAgentParksItsTaskAndItsReplyGoesToTheConversation(TestInfo info) throws Exception {
+		RequestContext owner = owner(info);
+		for (String runtime : new String[] {"llmagent", "goaltree"}) {
+			// Default caps: like complete_task, park_task needs none
+			String agentId = runtime + "-parks";
+			engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, agentId,
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/ops/" + runtime + "/chat",
+					"llmOperation", "v/test/ops/taskllm", "model", "park-task-test")), owner).awaitResult(5000);
+			Agent agent = engine.getVenueState().users().user(owner.getUserDID()).agent(agentId);
+			try (AgentWatch watch = AgentWatch.open(engine, owner.getUserDID(), agentId)) {
+				long parkedAt = now();
+				Job job = request(owner, agentId, "write the report");
+				watch.awaitRest(1);
+				ACell row = agent.getTasks().get(job.getID());
+				assertTrue(Task.isParked(row), runtime + " parks its task: " + job.getData());
+				assertEquals(CVMLong.create(parkedAt + 3_600_000L), RT.getIn(row, Fields.WAKE_TIME), runtime);
+				assertEquals(Status.STARTED, job.getStatus(), runtime + ": the reply after the park is not the result");
+				assertEquals(TestAdapter.PARK_TEST_REASON, Job.progressMessage(job.getData().get(Fields.PROGRESS)),
+					runtime + ": the requester sees why it waits");
+				assertEquals(1, agent.getTimeline().count(), runtime);
+				assertTrue(String.valueOf(RT.getIn(agent.getTimeline().get(0), Fields.RESULT)).contains(TestAdapter.PARK_TEST_REPLY),
+					runtime + ": the reply goes to the conversation");
+			}
+		}
+	}
+
+	@Test
 	public void aParkNeedsATaskInScope(TestInfo info) {
 		RequestContext owner = owner(info);
 		stepAgent(owner, "no-task");

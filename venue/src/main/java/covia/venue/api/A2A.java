@@ -413,9 +413,9 @@ public class A2A extends ACoviaAPI {
 		AMap<AString, ACell> record = A2ACodec.toMessageRecord(incoming, false);
 		// Every per-agent send is an agent:request task: a contextId selects
 		// the session, the task Job is the A2A Task, and each message gets
-		// its own cycle and its own reply (#416). agent:chat would batch
-		// the messages queued on one session into one shared reply, which
-		// A2A cannot express — a message without taskId is a new task.
+		// its own cycle and its own reply (#416). A message without taskId is
+		// a new unit of work in A2A, which a task represents with its own
+		// lifecycle; agent:chat has only a reply.
 		AMap<AString, ACell> input = Maps.of(
 			Fields.AGENT_ID, Strings.create(ref.gridAddress()),
 			Fields.INPUT, record);

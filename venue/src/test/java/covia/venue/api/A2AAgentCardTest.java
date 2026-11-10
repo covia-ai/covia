@@ -285,6 +285,49 @@ public class A2AAgentCardTest {
 		assertNull(parse(legacyAsk).get("error"), legacyAsk.body());
 	}
 
+	/**
+	 * A per-agent send is a task, as A2A's task-generating agents work: an
+	 * agent's plain reply completes it, and a task the agent parks stays
+	 * working, its reason the status message (A2A_AGENTS.md).
+	 */
+	@Test
+	public void aPlainReplyCompletesTheTaskAndAParkedTaskStaysWorking() throws Exception {
+		AKeyPair kp = AKeyPair.generate();
+		AString ownerDid = didOf(kp);
+		String jwt = bearerFor(kp);
+		VenueHTTP client = VenueHTTP.create(URI.create(BASE_URL), VenueAuth.bearer(jwt));
+		client.setTimeout(5000);
+		assertEquals(Status.COMPLETE, client.invokeAndWait(Strings.create("v/ops/agent/create"), Maps.of(
+				Fields.AGENT_ID, Strings.create("Replier"),
+				Fields.CONFIG, Maps.of(Fields.OPERATION, Strings.create("v/ops/llmagent/chat"),
+					"llmOperation", Strings.create("v/test/ops/stubbornllm")))).getStatus());
+		assertEquals(Status.COMPLETE, client.invokeAndWait(Strings.create("v/ops/agent/create"), Maps.of(
+				Fields.AGENT_ID, Strings.create("Parker"),
+				Fields.CONFIG, Maps.of(Fields.OPERATION, Strings.create("v/ops/llmagent/chat"),
+					"llmOperation", Strings.create("v/test/ops/taskllm"),
+					"model", Strings.create("park-task-test")))).getStatus());
+
+		String replier = "/a2a/" + ownerDid + "/g/Replier";
+		Task replied = extractTask(parse(post(replier, rpcEnvelope("reply", "SendMessage",
+				new MessageSendParams(userMessage("hello"), null, null)), jwt)));
+		assertNotNull(replied);
+		awaitTask(replier, replied.id(), jwt, TaskState.TASK_STATE_COMPLETED);
+
+		String parker = "/a2a/" + ownerDid + "/g/Parker";
+		Task sent;
+		try (covia.venue.AgentWatch watch = covia.venue.AgentWatch.open(TestServer.ENGINE, ownerDid, "Parker")) {
+			sent = extractTask(parse(post(parker, rpcEnvelope("park", "SendMessage",
+					new MessageSendParams(userMessage("write the report"), null, null)), jwt)));
+			assertNotNull(sent);
+			watch.awaitRest(1);
+		}
+		Task polled = extractTask(parse(post(parker,
+				rpcEnvelope("park-get", "GetTask", new TaskQueryParams(sent.id(), null)), jwt)));
+		assertEquals(TaskState.TASK_STATE_WORKING, polled.status().state());
+		assertTrue(JsonUtil.OBJECT_MAPPER.toJson(polled.status().message()).contains(TestAdapter.PARK_TEST_REASON),
+				"the park's reason is the status message: " + JsonUtil.OBJECT_MAPPER.toJson(polled.status()));
+	}
+
 	@Test
 	public void anonymousAskIsTheAskersOwn_andTheAgentActsAsItself() throws Exception {
 		AKeyPair kp = AKeyPair.generate();

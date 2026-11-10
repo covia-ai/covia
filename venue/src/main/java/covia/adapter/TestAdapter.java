@@ -1455,6 +1455,11 @@ public class TestAdapter extends AAdapter {
             "content", Strings.create("(no task)"));
     }
 
+    /** The reason the {@code taskllm} model {@code park-task-test} parks its task with. */
+    public static final String PARK_TEST_REASON = "waiting for the report";
+    /** What the {@code taskllm} model {@code park-task-test} replies after parking its task. */
+    public static final String PARK_TEST_REPLY = "I have parked this and will come back to it.";
+
     /**
      * Test LLM for task completion: looks for "[Tasks assigned to you]" in user
      * messages, extracts the first job ID, and calls complete_task. After seeing
@@ -1510,6 +1515,21 @@ public class TestAdapter extends AAdapter {
 				"toolCalls", Vectors.of(
 					Maps.of("id", "call_freestyle_complete", "name", "complete_task",
 						"arguments", "{\"result\":\"a freestyle prose answer\"}")));
+		}
+		if (model != null && "park-task-test".equals(model.toString())) {
+			// Parks the task for an hour with a reason, then replies to the
+			// conversation once the park's result is in
+			for (long i = 0; i < messages.count(); i++) {
+				if ("tool".equals(String.valueOf(RT.getIn(messages.get(i), "role")))) {
+					return Maps.of("role", Strings.create("assistant"),
+						"content", Strings.create(PARK_TEST_REPLY));
+				}
+			}
+			return Maps.of(
+				"role", Strings.create("assistant"),
+				"toolCalls", Vectors.of(
+					Maps.of("id", "call_park_task", "name", "park_task",
+						"arguments", "{\"delay\":3600000,\"reason\":\"" + PARK_TEST_REASON + "\"}")));
 		}
         // Check if tool results already present — return text summary
         for (long i = 0; i < messages.count(); i++) {

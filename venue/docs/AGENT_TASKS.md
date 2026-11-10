@@ -124,9 +124,8 @@ Both runtimes wrap the operations as the harness tools `complete_task`,
   in play, because the tool list is the start of the cached prompt. Never in a
   child frame. With no task in scope, a call is refused.
 - **With tool calling off** for the model, no tools are presented.
-- **Written as text**, a `complete_task` or `fail_task` call is honoured while
-  a task is outstanding, when the text is the tool's name, alone or followed by
-  a JSON object.
+- **Written as text**, a call is honoured while a task is outstanding, when the
+  text is the tool's name, alone or followed by a JSON object.
 - **An empty `result` or `error`** falls back to the text of the same turn. With
   no text either, the call is refused and the model can try again.
 - **A rejected result** returns the reason and the schema to the model, which

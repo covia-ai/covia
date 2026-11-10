@@ -112,7 +112,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 			+ "invokes a level 3 grid operation for LLM calls. Supports tool call "
 			+ "loops: when the LLM requests tool calls, executes them as grid "
 			+ "operations and feeds results back until a text response is produced. "
-			+ "Built-in tools: complete_task and fail_task, which resolve the "
+			+ "Built-in tools: complete_task, fail_task and park_task, which settle the "
 			+ "agent's task. All other tools dispatch via the grid.";
 	}
 
