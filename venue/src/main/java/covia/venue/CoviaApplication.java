@@ -1,5 +1,7 @@
 package covia.venue;
 
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -168,20 +170,25 @@ public final class CoviaApplication
 	}
 
 	/**
-	 * Publishes the application through its host, then has each venue's copy read
-	 * back what the host persisted, so the copy does not go on holding those cells
-	 * in memory. Whoever runs the host's sync runs this in place of {@link #sync()}.
+	 * Publishes the application through its host, then persists each venue's copy
+	 * through the host, so the copy reaches what the host saved through soft
+	 * references and holds strongly none of what it has persisted, a write made
+	 * during the save included. Whoever runs the host's sync runs this in place of
+	 * {@link #sync()}.
 	 *
-	 * <p>Interim (covia#678): a copy takes up the host's persisted value only when
-	 * it has no changes since its last sync, so this syncs each copy again straight
-	 * after the host persists. A write landing in between misses that cycle. The
-	 * issue says which Convex changes let callers go back to {@code sync()} and
-	 * {@code host().sync()} and this be deleted.</p>
+	 * @throws UncheckedIOException if persisting a copy fails; the host has
+	 *         saved the root by then
 	 */
 	public void publish() {
 		sync();
 		host.sync();
-		for (Mounted venue : mounted.values()) venue.state().sync();
+		for (Mounted venue : mounted.values()) {
+			try {
+				venue.state().persist();
+			} catch (IOException e) {
+				throw new UncheckedIOException("Persisting a venue's copy failed", e);
+			}
+		}
 	}
 
 	/**
@@ -209,7 +216,7 @@ public final class CoviaApplication
 		Objects.requireNonNull(config, "config");
 		AccountKey key = keyPair.getAccountKey();
 		if (mounted.containsKey(key)) throw new ConflictException(String.format(ALREADY_MOUNTED, key));
-		VenueState state = VenueState.draft(venues, key, venueContext.withSigner(keyPair));
+		VenueState state = VenueState.draft(venues, key, venueContext.withSigner(keyPair), host::persist);
 		Engine engine = factory.create(config, this, keyPair);
 		mounted.put(key, new Mounted(state, engine, mounts++));
 		return engine;

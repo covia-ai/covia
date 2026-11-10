@@ -102,9 +102,10 @@ clock and signing policy and share storage; there is no component-parent policy
 inheritance. `application.sync()` only reconciles application working state.
 `application.host().sync()` publishes the current root, and
 `application.host().flush()` supplies the durability barrier.
-`application.publish()` runs the first two and then syncs each venue's copy
-again, so the copy reads back the references the host persisted rather than
-holding those cells in memory (interim, #678). Engine calls `publish()` and then
+`application.publish()` runs the first two and then persists each venue's copy
+through the host (`ALatticeComponent.persist`). The copy then reaches all it
+holds, a write made during the host's save included, through soft references,
+and holds strongly only writes made since. Engine calls `publish()` and then
 the barrier for an explicit `flush()` and on close. A concurrent write remains pending
 when the host finishes publishing an older snapshot; the host does not merge
 that stale snapshot back into current state.
@@ -453,7 +454,7 @@ Signing, publication and durability are separate operations:
 | component mutation | atomically updates the venue's working copy |
 | `application.sync()` | signs each venue's copy into its record, then publishes Covia's regions |
 | `application.host().sync()` | publishes the hosted root through the host policy |
-| `application.publish()` | runs both of the above, then syncs each copy again to read back what the host persisted (interim, #678) |
+| `application.publish()` | runs both of the above, then persists each copy through the host, so it holds what is saved softly |
 | `application.host().flush()` | invokes the store's physical durability barrier |
 
 Local mutations do not compete through the LWW merge. The atomic update order

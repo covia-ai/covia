@@ -36,6 +36,7 @@ import convex.lattice.OwnedMap;
 import convex.lattice.Timestamped;
 import convex.lattice.cursor.AForkableCursor;
 import convex.lattice.cursor.Cursors;
+import convex.lattice.cursor.Persister;
 import covia.lattice.Covia;
 import covia.lattice.CoviaPath;
 import covia.api.Fields;
@@ -118,7 +119,16 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 
 	/** Binds working storage and the policy its components share. */
 	private VenueState(AForkableCursor<ACell> cursor, AccountKey ownerKey, VenueContext context) {
-		super(cursor);
+		this(cursor, ownerKey, context, null);
+	}
+
+	/**
+	 * Binds working storage of its own, persisted through {@code persister}
+	 * ({@link #persist()}), or with its parent when {@code persister} is null.
+	 */
+	private VenueState(AForkableCursor<ACell> cursor, AccountKey ownerKey, VenueContext context,
+			Persister<ACell> persister) {
+		super(cursor, persister);
 		this.ownerKey = ownerKey;
 		this.context = context;
 		this.record = new Timestamped<>(cursor, Covia.VENUE, context::currentTimestamp, Covia::stampVenue);
@@ -138,9 +148,15 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 		return application.venue(kp.getAccountKey());
 	}
 
-	/** The application's copy of a venue, signing with the context's signer. */
-	static VenueState draft(OwnedMap<ACell, ACell> venues, AccountKey ownerKey, VenueContext context) {
-		return draft(venues, ownerKey, context::sign, context);
+	/**
+	 * The application's copy of a venue, signing with the context's signer and
+	 * persisted through {@code persister}, the host's, so that once saved it holds
+	 * its cells softly.
+	 */
+	static VenueState draft(OwnedMap<ACell, ACell> venues, AccountKey ownerKey, VenueContext context,
+			Persister<ACell> persister) {
+		return new VenueState(venues.draft(ownerKey, context::sign).storage(), ownerKey, context,
+			Objects.requireNonNull(persister, "persister"));
 	}
 
 	/**

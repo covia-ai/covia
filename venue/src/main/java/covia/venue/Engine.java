@@ -815,7 +815,7 @@ public class Engine {
 	/**
 	 * Publishes the application through its caller-owned host: the application
 	 * signs the venue's working copy into its record, the host publishes, and
-	 * the copy reads back what the host persisted.
+	 * the copy is persisted through the host ({@link CoviaApplication#publish}).
 	 */
 	private void publishApplicationRoot() {
 		application.publish();
