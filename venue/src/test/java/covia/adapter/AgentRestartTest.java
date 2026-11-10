@@ -15,6 +15,7 @@ import convex.auth.ucan.Capability;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.AVector;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
@@ -306,7 +307,7 @@ public class AgentRestartTest {
 	 * Each agent is recovered at boot on its own. One that cannot run then,
 	 * here because its record names a controller that cannot act, is left
 	 * asleep with its work queued, and the venue still starts and wakes the
-	 * others.
+	 * others. Its info still reads, saying why its tools could not be checked.
 	 */
 	@Test
 	public void anAgentThatCannotRunDoesNotStopTheVenueStarting() throws Exception {
@@ -322,7 +323,8 @@ public class AgentRestartTest {
 					Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete",
 						"testGate", gateName, Fields.DELAY, 0L)), alice).awaitResult(5000);
 				first.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "stray",
-					Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/never")), alice).awaitResult(5000);
+					Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/never",
+						"tools", Vectors.of("v/ops/json/merge"))), alice).awaitResult(5000);
 				// A record no request could write: the public principal controls Alice's agent
 				Agent stray = first.getVenueState().users().user(ALICE).agent("stray");
 				stray.putRecord(stray.getRecord().assoc(Agent.KEY_CONTROLLER, first.publicPrincipal()));
@@ -345,8 +347,18 @@ public class AgentRestartTest {
 				Job live = second.jobs().getJob(request.getID(), alice);
 				live.awaitResult(10_000);
 				assertEquals(Status.COMPLETE, live.getStatus(), "the venue started and woke the agent that can run");
-				assertEquals(Agent.SLEEPING, second.getVenueState().users().user(ALICE).agent("stray").getStatus());
 				assertFalse(second.jobs().getJob(stranded.getID(), alice).isFinished(), "its work stays queued");
+
+				// Its info still reads, saying its tools could not be checked
+				AMap<AString, ACell> info = ((AgentAdapter) second.getAdapter("agent"))
+					.agentInfo(alice, Strings.create("stray"));
+				assertEquals(Agent.SLEEPING, info.get(Fields.STATUS));
+				assertEquals(second.publicPrincipal(), info.get(Fields.CONTROLLER));
+				AVector<ACell> unavailable = RT.ensureVector(info.get(Fields.UNAVAILABLE_TOOLS));
+				assertEquals(1, unavailable.count(), info.toString());
+				assertEquals(Strings.create("v/ops/json/merge"), RT.getIn(unavailable.get(0), Fields.OPERATION));
+				assertEquals(Strings.create(AgentAdapter.TOOLS_UNCHECKED.formatted(Engine.PUBLIC_ACCESS_OFF)),
+					RT.getIn(unavailable.get(0), Fields.REASON));
 			} finally {
 				second.close();
 			}

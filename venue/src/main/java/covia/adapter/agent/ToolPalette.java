@@ -234,6 +234,25 @@ public final class ToolPalette {
 		return resolve(engine, ctx, config, skipNames).unavailable();
 	}
 
+	/**
+	 * Every operation tool {@code config} names, each unavailable for
+	 * {@code reason}, in the form of {@link #unavailableConfigTools}: what is
+	 * reported when the tools could not be checked at all.
+	 */
+	public static AVector<ACell> configToolsUnavailable(AMap<AString, ACell> config, Set<String> skipNames,
+			String reason) {
+		AVector<ACell> entries = (config == null) ? null : RT.ensureVector(config.get(K_TOOLS));
+		List<AMap<AString, ACell>> unavailable = new java.util.ArrayList<>();
+		if (entries != null) {
+			for (long i = 0; i < entries.count(); i++) {
+				AString[] parsed = parseConfigToolEntry(entries.get(i));
+				if (parsed == null || skipNames.contains(parsed[0].toString())) continue;
+				record(unavailable, parsed[0], reason);
+			}
+		}
+		return vector(unavailable);
+	}
+
 	/** Resolves load-owned tools without parallel route/label projections. */
 	@SuppressWarnings("unchecked")
 	static LoadPalette loadPalette(Engine engine, Loads.Readers readers,
