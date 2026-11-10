@@ -415,8 +415,9 @@ assembly and is **not** published to Central.
 
 Publishing uses the [Sonatype Central Publishing plugin](https://central.sonatype.org/publish/publish-portal-maven/)
 and mirrors the Convex setup: pom config lives in the root `pom.xml`
-(`distributionManagement`, `central-publishing-maven-plugin`, source/javadoc
-plugins, and a `release` profile that GPG-signs artifacts). The deploy itself is
+(`distributionManagement`, `central-publishing-maven-plugin`, and a `release`
+profile that attaches sources and javadoc jars and GPG-signs every artifact;
+other builds make neither jar). The deploy itself is
 a **local command**, run only after the GitHub Release is confirmed live —
 Maven Central publishes are irreversible.
 
