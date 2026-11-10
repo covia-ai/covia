@@ -16,7 +16,10 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.Hash;
+import convex.core.data.prim.CVMBool;
+import convex.core.lang.RT;
 import convex.core.util.JSON;
+import covia.exception.JobFailedException;
 import covia.adapter.CoviaAdapter;
 import covia.api.Abilities;
 import covia.exception.AuthException;
@@ -306,5 +309,35 @@ public class OwnerAccessTest {
 		assertThrows(AuthException.class, () -> engine.resolveAsset(bare, elsewhere));
 		assertThrows(AuthException.class, () -> engine.resolveAsset(did, elsewhere));
 		assertThrows(AuthException.class, () -> engine.resolveAsset(did, BOB));
+	}
+
+	/**
+	 * {@code asset:get} reads an asset's metadata by hash with either read
+	 * ability over it, as every metadata read does; its content still takes
+	 * {@code asset/read}.
+	 */
+	@Test
+	public void testAssetGetReadsMetadataByHashWithEitherAbility() {
+		Hash id = engine.storeUserAsset(JSON.print(Maps.of("name", "Doc",
+			"content", Maps.of("inline", "text", "contentType", "text/plain"))), null, ALICE);
+		String bare = "a/" + id.toHexString();
+		String did = alice + "/" + bare;
+		for (AString can : new AString[] {Abilities.ASSET_READ, Capability.CRUD_READ}) {
+			RequestContext own = ALICE.withCaps(Vectors.of(Capability.create(Strings.create(bare), can),
+				Capability.create(Strings.create("v/ops/asset/get"), Abilities.INVOKE)));
+			assertEquals(CVMBool.TRUE, RT.getIn(get(bare, own), "exists"), bare + " under a cap of " + can);
+			assertEquals(CVMBool.TRUE, RT.getIn(get(did, bobGranted(did, can)), "exists"), "granted " + can);
+		}
+		assertThrows(JobFailedException.class, () -> get(did, BOB), "nothing granted");
+
+		RequestContext crudOnly = bobGranted(did, Capability.CRUD_READ);
+		assertThrows(JobFailedException.class, () -> engine.jobs().invokeOperation("v/ops/asset/content",
+			Maps.of("ref", did), crudOnly).awaitResult(5000), "content takes asset/read");
+		engine.jobs().invokeOperation("v/ops/asset/content", Maps.of("ref", did),
+			bobGranted(did, Abilities.ASSET_READ)).awaitResult(5000);
+	}
+
+	private ACell get(String ref, RequestContext ctx) {
+		return engine.jobs().invokeOperation("v/ops/asset/get", Maps.of("ref", ref), ctx).awaitResult(5000);
 	}
 }

@@ -17,6 +17,7 @@ import org.junit.jupiter.api.TestInstance.Lifecycle;
 
 import convex.core.data.ACell;
 import convex.core.crypto.AKeyPair;
+import convex.auth.ucan.Capability;
 import convex.auth.ucan.UCAN;
 import convex.core.data.Hash;
 import convex.core.data.Maps;
@@ -180,6 +181,29 @@ public class CoviaAssetRefTest {
 		HttpResponse<String> bobContent = get(path + "/content", identityToken(bobKey));
 		assertEquals(404, bobContent.statusCode(),
 			"content lookup must not fall through to another asset namespace");
+	}
+
+	/** Another's asset by hash is read with either read ability over it that its owner granted. */
+	@Test
+	public void anothersAssetByHashIsReadWithEitherGrantedAbility() throws Exception {
+		AKeyPair aliceKey = AKeyPair.generate();
+		AKeyPair bobKey = AKeyPair.generate();
+		var aliceDID = UCAN.toDIDKey(aliceKey.getAccountKey());
+		Hash id = TestServer.ENGINE.storeUserAsset(Strings.create(META), null, RequestContext.of(aliceDID));
+		String ref = aliceDID + "/a/" + id.toHexString();
+		String path = "/api/v1/assets/" + encodeRefPath(ref);
+
+		assertEquals(403, get(path, identityToken(bobKey)).statusCode(), "nothing granted");
+		long exp = (System.currentTimeMillis() / 1000) + 3600;
+		for (var can : new convex.core.data.AString[] {covia.api.Abilities.ASSET_READ, Capability.CRUD_READ}) {
+			String proof = UCAN.createJWT(aliceKey, bobKey.getAccountKey(), exp,
+				Vectors.of(Capability.create(Strings.create(ref), can)), Vectors.empty()).toString();
+			HttpResponse<String> r = http.send(HttpRequest.newBuilder().uri(new URI(base + path))
+				.header("Authorization", "Bearer " + identityToken(bobKey))
+				.header(VenueHTTP.UCANS_HEADER, proof).GET().build(), HttpResponse.BodyHandlers.ofString());
+			assertEquals(200, r.statusCode(), can + " -> " + r.body());
+			assertTrue(etagHash(r).contains(id.toHexString()), can.toString());
+		}
 	}
 
 	@Test

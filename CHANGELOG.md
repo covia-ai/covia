@@ -168,7 +168,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Fixed
 
-- An operation definition named as `did:…/a/<hash>` can be read with `asset/read` or `crud/read` over it, as one named `a/<hash>` already could.
+- An asset's metadata by hash is read with `asset/read` or `crud/read` over it on every route, however the reference is written: `asset:get`, `GET /assets/{ref}` and operation definitions, as `covia:read` already did.
 - A venue told to stop (SIGTERM, `docker stop`) stops taking requests before its final save, then closes completely, as the tray's Close and Exit do.
 - An agent's session history keeps a failed tool call's whole message; the model is shown the first 1024 characters and how many more there are.
 - A model provider's HTTP 403 no longer reports a refused API key, and model call failures carry the provider's error code and message exactly as sent.

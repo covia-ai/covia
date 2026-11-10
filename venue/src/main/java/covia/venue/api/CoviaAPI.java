@@ -583,9 +583,11 @@ public class CoviaAPI extends ACoviaAPI {
 	 * Resolves an asset reference to an Asset, accepting any lattice address —
 	 * a bare hash, {@code a/<hash>}, a workspace/operation path ({@code w/…},
 	 * {@code o/…}), or a DID URL — the same addressing scheme {@code invoke}
-	 * uses. An asset is read as an asset, with the asset-read capability
-	 * (consistent with the {@code asset:get} operation), and any other lattice
-	 * address as data, where it lives ({@link Engine#requirePathRead});
+	 * uses. An asset by hash is read as an asset's metadata, with
+	 * {@code asset/read} or {@code crud/read} over it
+	 * ({@link Engine#requireMetadataRead}, as the {@code asset:get} operation
+	 * reads it), and any other lattice address as data, where it lives
+	 * ({@link Engine#requirePathRead});
 	 * cross-DID reads are satisfied by a UCAN grant presented through the
 	 * request's proof channel.
 	 *
@@ -596,8 +598,9 @@ public class CoviaAPI extends ACoviaAPI {
 	 */
 	private Asset resolveAssetReference(String ref, RequestContext ctx) throws IOException {
 		AString refStr = Strings.create(ref);
-		if (covia.adapter.AssetAdapter.parseAssetId(refStr) != null
-				|| (ref.startsWith("did:") && !engine().isLocalDIDResource(refStr))) {
+		if (covia.adapter.AssetAdapter.parseAssetId(refStr) != null) {
+			engine().requireMetadataRead(ctx, refStr);
+		} else if (ref.startsWith("did:") && !engine().isLocalDIDResource(refStr)) {
 			engine().requireResourceAccess(ctx, refStr, Abilities.ASSET_READ);
 		} else {
 			engine().requirePathRead(ctx, refStr);
@@ -608,7 +611,7 @@ public class CoviaAPI extends ACoviaAPI {
 		// assets/<hash> route, keeping content-addressed lookups self-verifying.
 		Hash hash = parseCallerAssetId(ref);
 		if (hash != null) {
-			AString owner = engine().requireLocalAccess(ctx, refStr, Abilities.ASSET_READ);
+			AString owner = engine().requireLocalAssetRead(ctx, refStr);
 			AVector<?> record = engine().getAssetRecord(hash, owner);
 			if (record == null) return null;
 			AString metadata = RT.ensureString(record.get(AssetStore.POS_JSON));
@@ -617,7 +620,7 @@ public class CoviaAPI extends ACoviaAPI {
 
 		// Any other lattice address — resolve via the universal resolver (the same
 		// path invoke and covia:read use) and interpret the value as metadata.
-		// Read checked above (asset/read).
+		// Read checked above.
 		ACell value = engine().resolvePathUnchecked(refStr, ctx);
 		if (value instanceof AMap) {
 			@SuppressWarnings("unchecked")

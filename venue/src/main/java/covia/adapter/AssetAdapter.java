@@ -263,7 +263,9 @@ public class AssetAdapter extends AAdapter {
 	private ACell handleGet(ACell input, RequestContext ctx) {
 		AString idStr = referenceArg(input, Fields.ID);
 		Hash hash = parseAssetId(idStr);
-		AString readAs = requireReadable(ctx, idStr, hash);
+		// Metadata by hash is read with either read ability over it, as every
+		// metadata read is; content takes asset/read alone
+		AString readAs = (hash != null) ? engine.requireLocalAssetRead(ctx, idStr) : requireReadable(ctx, idStr, null);
 
 		// Hash-form refs go through the CAS record (preserves the canonical
 		// metadata bytes). Other forms walk the universal resolver.

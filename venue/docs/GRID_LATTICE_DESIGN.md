@@ -570,12 +570,13 @@ builds the address from its own identity, so a grant written as `w/foo` or as
 A read is of data at a path or of an asset. A covia operation, `/values` and
 a reference resolved by `Engine.resolvePath` read a path as data
 (`Engine.requirePathRead`, `crud/read` through the owner's access), `a/`
-included. Reading an asset as an asset (`asset/read`, or `crud/read` over its
-hash) is for content-addressed references; a path given where an asset is
-wanted, as by `/assets` or `/content`, is still read as data.
-`Engine.requireMetadataRead` decides which, and a definition resolved to be
-used (`Engine.resolveAsset`) is read the same way, however its reference is
-written.
+included. Reading an asset's metadata as an asset (`asset/read`, or
+`crud/read` over its hash) is for content-addressed references; a path given
+where an asset is wanted, as by `/assets` or `/content`, is still read as
+data. `Engine.requireMetadataRead` decides which. Every metadata read follows
+it however its reference is written: `asset:get`, `GET /assets/{ref}`, and a
+definition resolved to be used (`Engine.resolveAsset`). Content bytes by
+hash take `asset/read` alone.
 
 Components themselves implement their data independently of whatever mediates
 requests to them. Java code holding the component API is privileged venue

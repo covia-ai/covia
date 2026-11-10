@@ -4012,14 +4012,38 @@ public class Engine {
 			requirePathRead(ctx, resource);
 			return;
 		}
-		// Content-addressed: either ability over this hash is enough.
+		assetRead(can -> {
+			requireResourceAccess(ctx, resource, can);
+			return null;
+		});
+	}
+
+	/**
+	 * As {@link #requireMetadataRead}, for an asset's metadata by a
+	 * content-addressed reference to a store this venue holds:
+	 * {@code asset/read}, or {@code crud/read} over that hash, through
+	 * {@link #requireLocalAccess}.
+	 *
+	 * @return the owner whose store it is read from ({@link #requireLocalAccess})
+	 * @throws covia.exception.AuthException naming {@code asset/read} when neither is held
+	 */
+	public AString requireLocalAssetRead(RequestContext ctx, AString ref) {
+		return assetRead(can -> requireLocalAccess(ctx, ref, can));
+	}
+
+	/**
+	 * {@code check} with {@code asset/read}, else with {@code crud/read}: either
+	 * ability over a hash is enough to read the asset's metadata. Reports the
+	 * refusal of the expected ability.
+	 */
+	private static <T> T assetRead(java.util.function.Function<AString, T> check) {
 		try {
-			requireResourceAccess(ctx, resource, Abilities.ASSET_READ);
+			return check.apply(Abilities.ASSET_READ);
 		} catch (covia.exception.AuthException denied) {
 			try {
-				requireResourceAccess(ctx, resource, Capability.CRUD_READ);
+				return check.apply(Capability.CRUD_READ);
 			} catch (covia.exception.AuthException alsoDenied) {
-				throw denied;                     // report the expected ability
+				throw denied;
 			}
 		}
 	}

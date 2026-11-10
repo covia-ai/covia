@@ -772,7 +772,8 @@ record is an entry no grant of theirs covers.
 | `skill_load {ref}` outside the effective advertised index | `{ with: "<skill-ref>", can: "skill/load" }`, explicitly present even for an otherwise unrestricted agent; read authority remains separate |
 | `more_tools` outside config, active loads and effective advertised skills | `{ with: "<operation-ref>", can: "tool/load" }`, explicitly present even for an otherwise unrestricted agent; `invoke` remains separate |
 | `asset:store` | `{ with: "<any>", can: "asset/store" }` |
-| `asset:get` / `asset:list` | `{ with: "<any>", can: "asset/read" }` |
+| `asset:get` | `{ with: "<ref>", can: "asset/read" }` or `crud/read` over the same hash; a path is read as data ([GRID_LATTICE_DESIGN.md](GRID_LATTICE_DESIGN.md) §4.6) |
+| `asset:list` | `{ with: "<any>", can: "asset/read" }` |
 | Grid operation invoke | `{ with: "/o/<op>", can: "invoke" }` |
 | Sub-delegation | `{ with: "<path>", can: "ucan/delegate" }` |
 
