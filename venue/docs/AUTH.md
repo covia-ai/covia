@@ -1090,6 +1090,16 @@ the user's secret store, and is consumed only by `http:*`
 (`bearerSecret: "oauth/<provider>"`). The two share OAuth plumbing and
 nothing else.
 
+A connection binds to the venue user who both starts and completes it.
+`oauth:connect` binds its one-time state to the caller. A connect starts
+from an API call, so no browser exists to bind to, and the venue never
+learns whose browser approves at the provider: approval stores nothing and
+yields a one-time completion code for that browser. `oauth:complete` with
+the code stores the grant only when the caller is the user who started the
+connect; any other caller is refused and the code is spent. Whoever holds
+the code can therefore finish the connect only as its starter. The flow's
+steps are in CONFIG.md "Connected accounts".
+
 ## 9. Assurance policy enforcement
 
 Proposed enforcement seam (under review, §2.1): `engine.requireAssurance(ctx, policyName)` —
