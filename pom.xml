@@ -51,9 +51,9 @@
 		<logback.version>1.6.6</logback.version>
 		<slf4j.version>2.0.20</slf4j.version>
 		<javalin.version>7.2.4</javalin.version>
-		<langchain.version>1.22.0</langchain.version>
+		<langchain.version>1.23.0</langchain.version>
 		<mcp.version>2.1.0</mcp.version>
-		<a2a.version>1.4.0.Final</a2a.version>
+		<a2a.version>1.5.1.Final</a2a.version>
 		<!-- CommonMark: the workbench's Markdown renderer and the Telegram
 		     module's Markdown to Telegram HTML conversion. -->
 		<commonmark.version>0.30.1</commonmark.version>
@@ -96,7 +96,7 @@
 				<plugin>
 					<groupId>org.apache.maven.plugins</groupId>
 					<artifactId>maven-failsafe-plugin</artifactId>
-					<version>3.6.0</version>
+					<version>3.6.1</version>
 					<configuration>
 						<argLine>${covia.test.jvmflags}</argLine>
 					</configuration>
@@ -112,7 +112,7 @@
 			<plugin>
 				<groupId>org.apache.maven.plugins</groupId>
 				<artifactId>maven-surefire-plugin</artifactId>
-				<version>3.6.0</version>
+				<version>3.6.1</version>
 				<configuration>
 					<argLine>${covia.test.jvmflags}</argLine>
 					<forkCount>1</forkCount>
@@ -124,6 +124,7 @@
 							junit.jupiter.execution.parallel.mode.default = concurrent
 							junit.jupiter.execution.parallel.config.strategy = dynamic
 							junit.jupiter.execution.parallel.config.dynamic.factor = 0.5
+							junit.jupiter.execution.parallel.config.executor-service = FORK_JOIN_POOL
 						</configurationParameters>
 					</properties>
 				</configuration>
@@ -140,7 +141,7 @@
 			<plugin>
 				<groupId>org.apache.maven.plugins</groupId>
 				<artifactId>maven-enforcer-plugin</artifactId>
-				<version>3.6.3</version>
+				<version>3.7.0</version>
 				<executions>
 					<execution>
 						<id>enforce-maven</id>
@@ -183,7 +184,7 @@
 			<plugin>
 				<groupId>org.apache.maven.plugins</groupId>
 				<artifactId>maven-jar-plugin</artifactId>
-				<version>3.4.1</version>
+				<version>3.5.1</version>
 				<configuration>
 					<archive>
 						<manifestEntries>
@@ -234,7 +235,7 @@
 			<plugin>
 				<groupId>org.sonatype.central</groupId>
 				<artifactId>central-publishing-maven-plugin</artifactId>
-				<version>0.11.0</version>
+				<version>0.12.0</version>
 				<extensions>true</extensions>
 				<configuration>
 					<publishingServerId>central</publishingServerId>

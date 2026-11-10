@@ -148,7 +148,7 @@ unimplemented.
 ### 2.3 External login consolidation (#298, 2026-10-22)
 
 The concrete login flow is hardened independently of managed-session or
-assurance design. Nimbus OAuth/OIDC SDK **11.38.2** supplies ID-token validation,
+assurance design. The Nimbus OAuth/OIDC SDK supplies ID-token validation,
 JWKS key selection/cache/refresh/rate limiting, secure state/nonce generation and
 PKCE. Its sources were checked: the OIDC verifier covers required issuer,
 subject, audience, expiry, issuance time and requested nonce; the standard JWT

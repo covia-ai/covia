@@ -10,7 +10,7 @@
   <description>Reusable Swing components and utilities, with a venue REPL demo.</description>
 
   <properties>
-    <flatlaf.version>3.7.2</flatlaf.version>
+    <flatlaf.version>3.8</flatlaf.version>
     <covia.module.name>covia.workbench</covia.module.name>
   </properties>
   

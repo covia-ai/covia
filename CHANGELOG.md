@@ -8,6 +8,10 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ## [Unreleased]
 
+### Changed
+
+- LangChain4j 1.23.0, A2A 1.5.1.Final, Nimbus OAuth/OIDC SDK 11.39.
+
 ## [0.11.0] - 2026-11-10
 
 ### Added

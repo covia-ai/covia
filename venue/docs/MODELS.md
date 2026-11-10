@@ -337,7 +337,7 @@ These are distinct from `config.modelProfile`, which controls context assembly.
 Catalog options are also published under the serving provider's `byModel`, so
 provider-plus-id calls and model overrides select the same defaults as presets.
 
-The Anthropic adapter maps these options onto LangChain4j 1.22.0. LangChain4j
+The Anthropic adapter maps these options onto LangChain4j. LangChain4j
 owns HTTP, retries, request serialization and response message conversion.
 
 | Option | Meaning | Current standard Claude defaults |
