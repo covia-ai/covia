@@ -33,6 +33,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Audit events `keyring.add`, `keyring.remove` and `keyring.use`.
 - `scheduler.maxConcurrency` bounds how many due scheduled events a venue starts at once, 2 by default (#671).
 - `hitl:expire`, which the venue alone invokes when a HITL request's timeout falls due (#671).
+- `agent:park-task` and the LLM agent tool `park_task` keep a task open and bring it back after a delay, or sooner when new input arrives for it.
 
 ### Changed
 
@@ -83,7 +84,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - A path given where an asset is wanted, as by `/assets` and `/content`, is read as data and needs `crud/read`; a bare hash is the caller's asset when their store holds it, otherwise the venue catalog's (#617).
 - A user's `meta`, `generation`, `deleting` and `deleted` are venue bookkeeping that no path reads (#617).
 - `user:info` and `/users/{did}` show a user's `meta` to operators only, and `user:export` leaves it out.
-- A task that yields waits for its HITL ask, late tool call or wake time; with none, it fails at once.
+- A task an agent leaves open waits for a wake time, its HITL ask or a late tool call; with none, the agent's reply is the task's result, judged against a strict `responseSchema`, and a cycle with no reply fails it.
 - A forced `agent:trigger` no longer presents a parked task.
 - An LLM agent's job results show an open HITL ask as still waiting, not as ended with no reason.
 - A HITL answer or a late tool call's outcome goes to the task that waited for it, not to whichever task in its session runs next.

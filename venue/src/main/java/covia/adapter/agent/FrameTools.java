@@ -99,6 +99,7 @@ class FrameTools {
 			// reaches its job at tool time.
 			.register(TaskTools.COMPLETE, (call, ignored) -> tasks.complete(call, turnText))
 			.register(TaskTools.FAIL, (call, ignored) -> tasks.fail(call, turnText))
+			.register(TaskTools.PARK, (call, ignored) -> tasks.park(call))
 			.register(HarnessTools.CONTEXT_LOAD, (call, ignored) -> contextLoad(call))
 			.register(HarnessTools.CONTEXT_UNLOAD, (call, ignored) -> contextUnload(call))
 			.register(HarnessTools.SKILL_LOAD, (call, ignored) -> skillLoad(call))

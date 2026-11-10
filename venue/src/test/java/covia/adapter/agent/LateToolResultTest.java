@@ -290,8 +290,8 @@ public class LateToolResultTest {
 			}
 			assertEquals(0, agent.getPending().count(), "the outcome left the pending index");
 			AMap<AString, ACell> task = second.jobs().getJobData(crashed.taskId(), RequestContext.of(RESTART_OWNER));
-			assertEquals(AgentAdapter.TASK_YIELDED_IDLE, String.valueOf(task.get(Fields.ERROR)),
-				"the task ran again on the outcome rather than failing as lost");
+			assertEquals(Status.COMPLETE, task.get(Fields.STATUS),
+				"the task ran again on the outcome, and its reply is its result, rather than failing as lost");
 			String shown = conversation(agent, sessionOf(task));
 			assertTrue(shown.contains(crashed.mirrorId().toHexString()) && shown.contains(AAdapter.RESTARTED_DURING_EXECUTION),
 				"the task's cycle was shown the call's failure: " + shown);
@@ -369,11 +369,11 @@ public class LateToolResultTest {
 			gate.release();
 
 			// The outcome arrives as the task's next input and runs it again.
-			// toolllm replies with text once more, leaving nothing outstanding.
+			// toolllm replies with text once more, leaving nothing outstanding,
+			// so that reply is the task's result.
 			watch.awaitRest(2);
 		}
-		assertEquals(Status.FAILED, job.getStatus());
-		assertEquals(AgentAdapter.TASK_YIELDED_IDLE, job.getErrorMessage());
+		assertEquals(Status.COMPLETE, job.getStatus());
 		assertEquals(2, agent.getTimeline().count());
 		assertNull(RT.getIn(agent.getTimeline().get(1), Fields.MESSAGES), "the outcome is not a session message");
 		String shown = conversation(agent, sessionOf(job.getData()));
@@ -433,8 +433,8 @@ public class LateToolResultTest {
 			// the older one waits in the same session and would be picked first.
 			newerGate.release();
 			watch.awaitRest(3);
-			assertEquals(AgentAdapter.TASK_YIELDED_IDLE, newerTask.getErrorMessage(),
-				"the newer task ran on its outcome, and with nothing left to wait on it ends");
+			assertEquals(Status.COMPLETE, newerTask.getStatus(),
+				"the newer task ran on its outcome, and with nothing left to wait on its reply is its result");
 			assertFalse(olderTask.isFinished());
 			assertTrue(Task.isParked(agent.getTasks().get(olderTask.getID())),
 				"the older task still waits on its own call");
@@ -464,7 +464,7 @@ public class LateToolResultTest {
 
 			olderGate.release();
 			watch.awaitRest(4);
-			assertEquals(AgentAdapter.TASK_YIELDED_IDLE, olderTask.getErrorMessage());
+			assertEquals(Status.COMPLETE, olderTask.getStatus());
 			assertTrue(String.valueOf(RT.getIn(agent.getTimeline().get(3), Fields.RESULT)).contains("older-outcome"),
 				"the older task's cycle was shown its own outcome");
 			assertEquals(0, agent.getPending().count());

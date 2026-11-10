@@ -653,7 +653,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		// completes takes the frame's outcome — in this runtime a reply is
 		// the answer, where llmagent would yield (AGENT_SESSIONS.md §6.3).
 		boolean failed = "failed".equals(result.status());
-		if (tasks != null && tasks.count() > 0 && ctx.getTaskId() != null && !cycle.tasks().resolved()) {
+		if (tasks != null && tasks.count() > 0 && ctx.getTaskId() != null && !cycle.tasks().settled()) {
 			completeTaskViaVenueOp(ctx, failed, result.value());
 		}
 		AMap<AString, ACell> output = Maps.of(Agent.KEY_STATE, newState);

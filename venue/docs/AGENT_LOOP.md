@@ -561,7 +561,7 @@ The contract between level 1 and level 2:
 | Field | Type | Description |
 |-------|------|-------------|
 | `state` | any | Updated user-defined state. Written back to the agent record; absent leaves it unchanged. |
-| `response` | any? | The reply on the session. It answers the session's chats the agent has taken (§4.4); absent, the cycle yields and they keep waiting. |
+| `response` | any? | The reply on the session. It answers the session's chats the agent has taken (§4.4); absent, the cycle yields and they keep waiting. A picked task the cycle left neither resolved nor parked takes it as its result (§4.6). |
 | `error` | any? | The cycle failed (see below). |
 | `turns` | vector? | Assistant and tool turns to append to the session's conversation, for a transition that does not write its frames itself. |
 | `wakeTime` | long? | When to wake the picked task or session again (§4.6). |
@@ -633,6 +633,10 @@ by `agent:cancelTask`, and the outcome survives a restart. The cycle's merge han
 it back (§4.4 step 6): its request Job settles in the merge's transaction,
 so its caller sees the cycle's writes first. The timeline entry records each
 outcome in `taskResults`.
+
+A transition can instead keep its task open with `agent:park-task`, which sets
+the task's `wakeTime` (§4.6), and a task it leaves neither resolved nor parked
+is settled by the cycle's reply (§4.6, [AGENT_TASKS.md](./AGENT_TASKS.md) §5).
 
 A resolved task keeps its outcome when the cycle then fails: if the agent told
 a caller "done", the task was done. This matches how other side effects (tool
@@ -728,7 +732,7 @@ describes goaltree's frame controls in use.
 
 | Tool | Runtime | Purpose |
 |------|---------|---------|
-| `complete_task`, `fail_task` | both | Resolve or fail the agent's task (§3.4.1) |
+| `complete_task`, `fail_task`, `park_task` | both | Resolve or fail the agent's task, or park it to come back later (§3.4.1) |
 | `context_load` | both | Pin workspace data, an asset or an operation's result in context across turns |
 | `context_unload` | both | Remove loads by the keys `context_load`, `skill_load` or `more_tools` returned |
 | `skill_load` | both | Load a skill: its instructions and its tools |
@@ -743,7 +747,7 @@ A frame is offered the harness tools listed in `config.tools`, and:
 
 | Tool | Also offered | Never offered |
 |------|--------------|---------------|
-| `complete_task`, `fail_task` | At the root frame, always; an explicit current-turn notice says when no task is assigned, and calls then are refused | In a child frame: the task is the root's |
+| `complete_task`, `fail_task`, `park_task` | At the root frame, always; an explicit current-turn notice says when no task is assigned, and calls then are refused | In a child frame: the task is the root's |
 | `skill_load` | When the agent declares skills or skillsets | |
 | `context_unload` | When the agent declares skills or skillsets, or with `more_tools`, whose results are loads | |
 | `invoke_tool` | With `skill_load` or `more_tools`, which add tools later | |
@@ -1087,6 +1091,8 @@ run's `finally` block.
      task/chat job record; the final assistant turn carries its own
      inference's usage. Absent means "not measured", never zero.
    - Do not write executor status; the launcher slot remains the liveness truth.
+   - Settle the picked task with the reply when the transition left it
+     neither resolved nor parked (§4.6).
    - Hand back every task the transition resolved (§3.4.1), in the same
      venue transaction: the task leaves `resolved`, its request's
      `outputPath`, when it names one in this venue's lattice, is written as
@@ -1116,7 +1122,7 @@ run's `finally` block.
 
 **Iteration budget.** A single loop runs at most `MAX_LOOP_ITERATIONS`
 (20) cycles before forcing sleep — a runaway backstop, not a normal exit.
-A task that yields with nothing outstanding fails at once (§4.6), so the cap
+A task left open with nothing to bring it back is settled at once (§4.6), so the cap
 is reached only by a task that is ready again every cycle, such as one whose
 wake time is always already past.
 A cap hit on genuinely varied work (a long task queue, chat traffic) is
@@ -1223,7 +1229,7 @@ An agent is eligible to run when any of:
   time limit when no queued task waits for it)
 - A task is ready (below)
 
-**Task readiness and yields.** A task is ready unless it is parked. A parked
+**Task readiness and parking.** A task is ready unless it is parked. A parked
 task is ready again once something new is there for it: an input it has not
 been shown (a continuation through `agent:message` with its `taskId`, or the
 answer or outcome its cycle waited for), a message in its session, or its
@@ -1232,17 +1238,21 @@ choice of task both use this test (`Agent.isTaskReady`), and the cycle
 takes the oldest ready task.
 
 A cycle that leaves its picked task queued, neither completed nor failed and
-without a transition error, has yielded it. The task is parked
+without a transition error, has left it open. The task is parked
 (`parked: true` on its row) when something will bring it back:
 
+- a `wakeTime` on the task, set during the cycle by `agent:park-task` or
+  returned by the transition;
 - a HITL ask from its cycle that is still open (the ask's entry in the agent's
   `pending` index names the task);
 - a tool call from its cycle still running past its time limit (§3.4.2),
   tracked in the agent's `pending` index;
-- a `wakeTime` on the task;
 - input or session messages that arrived during the cycle.
 
-A yield with none of these could never resume, so the task's Job fails at once
+With none of these the merge settles it with the cycle's reply, in the same
+transaction (`AgentAdapter.replyCompletion`): the task completes with the reply
+as its result, judged as `agent:complete-task` judges one, so a `strict` task
+whose reply does not conform fails with the reason; with no reply it fails
 with `AgentAdapter.TASK_YIELDED_IDLE`. Claiming a task for a cycle clears
 `parked`, so a task that is not parked but has been shown its input was
 interrupted mid-cycle, and runs again (§6.1).
@@ -1264,7 +1274,8 @@ record may carry `wakeTime` (absolute millis): "this thread wants to wake at
 T". Only the framework writes it, never the `n/`, `c/` or `t/` scratch
 namespaces. On merge, `mergeAndPostProcess` installs the `wakeTime` a
 transition returns on the thread it picked, or clears the one that thread
-carried when the transition returns none. The last writer wins, with no
+carried when picked and the transition returns none; a wake set during the
+cycle, by `agent:park-task`, stays. The last writer wins, with no
 min-merge, so a short retry cannot clobber an explicit long sleep. Intake
 operations write `pending` or `tasks`, never `wakeTime`: new work runs at once
 through `hasWork`.
@@ -1274,8 +1285,8 @@ scheduler, at the earliest `wakeTime` across its threads
 ([GRID_SCHEDULER.md §8](./GRID_SCHEDULER.md)). When it fires, a parked task
 whose `wakeTime` has come is ready and runs. Readiness applies to tasks only:
 a session's own `wakeTime` firing with nothing pending runs nothing. No
-production transition returns a `wakeTime` yet, and there is no fixed
-periodic sleep interval. A `sleep` harness tool is future work (§8.3.4).
+production transition returns a `wakeTime`; an LLM agent sets its task's with
+`park_task`, and there is no fixed periodic sleep interval.
 
 The scheduler is an internal venue concern — its implementation may change
 without affecting the agent contract or MCP interface.
@@ -1506,9 +1517,8 @@ The step adapter ends up branching on "do I have a task? a session? neither?" �
 
 #### 8.3.4 Wake features not built
 
-- **`sleep` harness tool** — let an LLM defer its current thread by writing
-  `wakeTime = now + ms`. A future `wakeTime` is set only by a transition
-  result (§4.6).
+- **Session sleep** — let an LLM defer its session, as `park_task` defers its
+  task (§4.6).
 - **Async invoke** — a harness tool that starts an operation without waiting
   and delivers its outcome to the asking task or session when it ends. Today
   only sessioned HITL asks (§6.3) and tool calls past their time limit

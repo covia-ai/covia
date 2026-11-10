@@ -294,6 +294,17 @@ public class AgentToolboxTest {
 					Maps.of("error", "cannot complete")), Strings.create("produce an answer"));
 			exercisedTaskTools.add(TaskTools.FAIL);
 			assertTerminal(failed, "failed", Strings.create("cannot complete"), where);
+
+			// park_task keeps the task open: its answer is not terminal, so the
+			// turn carries on to a reply that goes to the conversation.
+			AMap<AString, ACell> parked = step(agent, null,
+				assistantCall("call_park_task", TaskTools.PARK,
+					Maps.of("delay", 60_000L, "reason", "waiting for the report")), Strings.create("produce an answer"));
+			exercisedTaskTools.add(TaskTools.PARK);
+			assertNull(RT.getIn(parked, AbstractLLMAdapter.K_TERMINAL), where + " park is not terminal: " + parked);
+			String parkedReply = String.valueOf(result(parked, "call_park_task"));
+			assertTrue(parkedReply.startsWith(TaskTools.PARKED.split("%s")[0]),
+				where + " answers park as every runtime does: " + parkedReply);
 		}
 
 		assertEquals(HarnessTools.SHARED.keySet(), exercisedHarness,
@@ -421,7 +432,7 @@ public class AgentToolboxTest {
 			AMap<AString, ACell> step = step(agent, "call a tool that does not exist",
 				assistantCall("call_unknown", "records_read", Maps.empty()), null);
 			assertEquals(Strings.create("Error: " + HarnessTools.noSuchTool("records_read",
-				Set.of(TaskTools.COMPLETE, TaskTools.FAIL, "test_echo"))),
+				Set.of(TaskTools.COMPLETE, TaskTools.FAIL, TaskTools.PARK, "test_echo"))),
 				result(step, "call_unknown"), runtime.name());
 		}
 	}

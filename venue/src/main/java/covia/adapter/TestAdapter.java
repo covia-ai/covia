@@ -1845,7 +1845,8 @@ public class TestAdapter extends AAdapter {
      * already shown) the conversation's last user turn. It is read as words in
      * order: {@code hold:<gate>} waits at that
      * {@link TestGate}, then stops if the cycle was cancelled meanwhile;
-     * {@code complete} and {@code failtask} resolve the task; {@code fail},
+     * {@code complete} and {@code failtask} resolve the task;
+     * {@code park:<ms>} parks it for that many milliseconds; {@code fail},
      * {@code cannot} and {@code bug} fail the cycle as a failure of the work,
      * as one the agent cannot continue from, and as a venue fault; and
      * {@code yield} ends the cycle without a reply. Otherwise it replies with
@@ -1876,6 +1877,11 @@ public class TestAdapter extends AAdapter {
                 gate.pass();
                 java.util.concurrent.atomic.AtomicBoolean cancelled = ctx.getCancellation();
                 if (cancelled != null && cancelled.get()) throw new CancellationException("step cancelled");
+                continue;
+            }
+            if (word.startsWith("park:")) {
+                engine.jobs().invokeInternal("v/ops/agent/park-task",
+                    Maps.of(Fields.DELAY, CVMLong.create(Long.parseLong(word.substring(5)))), ctx).join();
                 continue;
             }
             switch (word) {

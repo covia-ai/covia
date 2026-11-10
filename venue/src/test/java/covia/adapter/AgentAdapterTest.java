@@ -1220,7 +1220,7 @@ public class AgentAdapterTest {
 			for (long i = 0; tools != null && i < tools.count(); i++) names.add(RT.getIn(tools.get(i), "name").toString());
 			return names;
 		};
-		assertEquals(java.util.Set.of("complete_task", "fail_task"),
+		assertEquals(java.util.Set.of("complete_task", "fail_task", "park_task"),
 			toolsOf.apply(Maps.of("systemPrompt", "bare")),
 			"the invariant task controls are the only tools when nothing is declared");
 		java.util.Set<String> skilled = toolsOf.apply(Maps.of("skillsets", Vectors.of(Strings.create("w/skills"))));

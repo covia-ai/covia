@@ -820,7 +820,8 @@ public class LLMAgentAdapterTest {
 
 		AMap<AString, ACell> palette = RT.ensureMap(l3.get(Strings.intern("palette")));
 		AVector<ACell> paletteEntries = RT.ensureVector(palette.get(Fields.TOOLS));
-		assertEquals(4, paletteEntries.count(), "stable task controls plus the two declared context tools");
+		assertEquals(TaskTools.NAMES.size() + 2, paletteEntries.count(),
+			"stable task controls plus the two declared context tools");
 		for (long i = 0; i < paletteEntries.count(); i++) {
 			assertEquals("harness", RT.getIn(paletteEntries.get(i), Fields.SOURCE).toString());
 		}
@@ -1997,12 +1998,12 @@ public class LLMAgentAdapterTest {
 	}
 
 	@Test
-	public void testTaskThatYieldsWithNothingOutstandingFailsAtOnce() throws Exception {
-		// test:stubbornllm never resolves the task: its one cycle is a
+	public void testTaskReplyWithNothingOutstandingIsItsResult() throws Exception {
+		// test:stubbornllm never calls a task tool: its one cycle is a
 		// plain-text reply that leaves nothing to resume the task (no ask, no
-		// running call, no wake time). The caller's job fails after that one
-		// cycle with a reason, rather than the task being picked straight back
-		// up with nothing new until the loop cap (#215).
+		// running call, no wake time). That reply is the task's result after
+		// one cycle, rather than the task being picked straight back up with
+		// nothing new until the loop cap (#215).
 		engine.jobs().invokeOperation(
 			"v/ops/agent/create",
 			Maps.of(
@@ -2014,23 +2015,21 @@ public class LLMAgentAdapterTest {
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		// Real task job via agent:request — the pinned-STARTED symptom needs an
-		// actual caller job to observe. The awaiting caller must see FAILED
-		// with the structured error, never an eternal STARTED.
+		// actual caller job to observe. The awaiting caller sees the reply,
+		// never an eternal STARTED.
 		Job reqJob = engine.jobs().invokeOperation(
 			"v/ops/agent/request",
 			Maps.of(
 				Fields.AGENT_ID, "stubborn-agent",
 				Fields.INPUT, Maps.of("task", "impossible request")),
 			RequestContext.of(ALICE_DID));
-		assertThrows(Exception.class, () -> reqJob.awaitResult(30000),
-			"the caller's await must terminate in failure, not hang");
-		assertEquals(Status.FAILED, reqJob.getStatus());
-		assertEquals(covia.adapter.AgentAdapter.TASK_YIELDED_IDLE, reqJob.getErrorMessage());
+		assertEquals(Strings.create("Working on it."), RT.getIn(reqJob.awaitResult(30000), Fields.OUTPUT));
+		assertEquals(Status.COMPLETE, reqJob.getStatus());
 
 		// One cycle ran; the task is gone; the agent is not poisoned
 		User user = engine.getVenueState().users().user(ALICE_DID);
 		Agent agent = user.agent("stubborn-agent");
-		assertEquals(0, agent.getTasks().count(), "the yielded task must be removed");
+		assertEquals(0, agent.getTasks().count(), "the settled task must be removed");
 		AgentWatch.awaitIdle(engine, ALICE_DID, agent);
 		assertEquals(1, agent.getTimeline().count(), "the task ran exactly once");
 	}
@@ -2639,7 +2638,32 @@ public class LLMAgentAdapterTest {
 			Maps.of(Fields.ERROR, "no task"), 0), null);
 		assertEquals(TaskTools.NO_TASK.formatted(TaskTools.FAIL), failed.result().toString());
 		assertNull(failed.terminalStatus());
-		assertFalse(chat.resolved(), "misusing a task control cannot resolve unrelated work");
+		var parked = chat.park(new ToolCycleEngine.ToolCall(Strings.create("p1"), TaskTools.PARK,
+			Maps.of(Fields.DELAY, 1000L), 0));
+		assertEquals(TaskTools.NO_TASK.formatted(TaskTools.PARK), parked.result().toString());
+		assertFalse(chat.settled(), "misusing a task control cannot settle unrelated work");
+	}
+
+	@Test
+	public void testParkTaskNeedsAPositiveDelayAndIsNotTerminal() {
+		// A park reads the venue's clock for when the task comes back
+		TaskTools.Tasks preview = new TaskTools.Tasks(TestEngine.ENGINE, null,
+			Vectors.of(Maps.of(Fields.JOB_ID, "aaa", Fields.INPUT, "later")),
+			AbstractLLMAdapter.DEFAULT_TOOL_CALL_TIMEOUT_MS, true);
+		for (ACell delay : new ACell[] {null, CVMLong.ZERO, Strings.create("soon")}) {
+			var refused = preview.park(new ToolCycleEngine.ToolCall(Strings.create("p0"), TaskTools.PARK,
+				(delay == null) ? Maps.empty() : Maps.of(Fields.DELAY, delay), 0));
+			assertEquals("Error: " + covia.adapter.AgentAdapter.PARK_DELAY_REQUIRED, refused.result().toString());
+		}
+		assertTrue(preview.outstanding(), "a refused park leaves the task outstanding");
+
+		var parked = preview.park(new ToolCycleEngine.ToolCall(Strings.create("p1"), TaskTools.PARK,
+			Maps.of(Fields.DELAY, 60_000L), 0));
+		assertNull(parked.terminalStatus(), "a park is not terminal: the turn carries on to a reply");
+		assertTrue(parked.result().toString().startsWith(TaskTools.PARKED.split("%s")[0]));
+		assertTrue(preview.settled(), "the parked task is settled for this cycle, so the reply is not its result");
+		assertFalse(preview.outstanding());
+		assertNull(preview.message(), "the parked task leaves the outstanding-task message");
 	}
 
 	@Test
@@ -2649,7 +2673,7 @@ public class LLMAgentAdapterTest {
 			Maps.of(Fields.JOB_ID, "bbb", Fields.INPUT, "pending-task"));
 		TaskTools.Tasks preview = previewTasks(null, tasks);
 		assertTrue(preview.outstanding());
-		assertEquals(2, preview.tools().count(), "task tools offered while a task is outstanding");
+		assertEquals(TaskTools.NAMES.size(), preview.tools().count(), "task tools offered while a task is outstanding");
 		String all = RT.ensureString(preview.message().get(Strings.intern("content"))).toString();
 		assertTrue(all.contains("aaa") && all.contains("bbb") && all.contains("[Tasks assigned to you]"), all);
 

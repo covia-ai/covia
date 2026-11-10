@@ -27,9 +27,10 @@ import covia.venue.TestEngine;
 import covia.venue.User;
 
 /**
- * A task that yields runs again only when something it waits on brings it
- * back: a person's answer, a call past its time limit, or a wake time. One
- * that yields with none of these fails at once (AGENT_LOOP.md §4.6). Every
+ * A task a cycle leaves open runs again only when something it waits on brings
+ * it back: a person's answer, a call past its time limit, or a wake time. One
+ * left open with none of these is settled at once by the cycle's reply, and
+ * fails when there is none (AGENT_LOOP.md §4.6). Every
  * case is driven by test transitions and lattice state, with no clock waits:
  * the tests wait on the run loop's own events. A wake time's own scenario runs
  * on both kinds of clock in {@code BothClocksTest}.
@@ -57,7 +58,7 @@ public class TaskYieldTest {
 	}
 
 	@Test
-	public void aYieldWithNothingOutstandingFailsTheTaskAtOnce(TestInfo info) throws Exception {
+	public void aCycleWithNoReplyAndNothingOutstandingFailsTheTaskAtOnce(TestInfo info) throws Exception {
 		RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));
 		Agent agent = create(owner, "idle-yield", Maps.of(Fields.OPERATION, "v/test/ops/echo"), null);
 
@@ -115,10 +116,11 @@ public class TaskYieldTest {
 		assertFalse(job.isFinished());
 
 		// The answer runs the task again. toolllm replies with text once more,
-		// which leaves nothing outstanding, so this time the task fails as idle.
+		// and with nothing outstanding that reply is the task's result.
 		respond(owner, agent, "carry on");
-		assertThrows(Exception.class, () -> job.awaitResult(10_000));
-		assertEquals(AgentAdapter.TASK_YIELDED_IDLE, job.getErrorMessage());
+		ACell result = job.awaitResult(10_000);
+		assertEquals(Status.COMPLETE, job.getStatus());
+		assertNotNull(result, "the reply is the task's result");
 		assertEquals(2, timelineCount(agent));
 	}
 

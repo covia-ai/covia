@@ -706,8 +706,8 @@ description lives at the asset root and their provider schema in
 asset parser and projected by the same `ToolPalette` path as catalog
 operations. They are not installed under `v/ops` merely to make them tools:
 the runtime owns their handlers and selects them from its fixed registry.
-Where a harness control is also a public operation (`complete_task` /
-`fail_task`), the harness reuses that operation resource and changes only the
+Where a harness control is also a public operation (`complete_task`,
+`fail_task`, `park_task`), the harness reuses that operation resource and changes only the
 cycle-local tool name. This keeps schema and prompt prose single-sourced.
 
 A tool becoming available later must not cause the venue to rebuild that array
@@ -751,8 +751,8 @@ representations, in order:
 
 An adapter or plugin loading or unloading mutates the venue capability registry, not the fixed tool vector of an existing context. Revocation is always enforced at dispatch even if an earlier event remains visible to the model. A soft removal appends a removal event; only an explicit rebuild makes the historical definition absent.
 
-The same rule applies to conditional capabilities. The static `complete_task` /
-`fail_task` schemas stay in the fixed harness manifest and reject calls when no
+The same rule applies to conditional capabilities. The static `complete_task`,
+`fail_task` and `park_task` schemas stay in the fixed harness manifest and reject calls when no
 task is in scope. When those controls are offered without an outstanding task,
 the current-turn notices explicitly say that no task is assigned, that these
 controls must not be called, and that ordinary chat is answered with a normal
@@ -1038,7 +1038,7 @@ One line, changing daily, taken from the Spec's clock — never from the system 
 Tool resolution failures observed during initialisation or a current append — reported so the agent adapts rather than calling into a void. The adapter registry is not polled by assembly; a restored operation becomes available through an explicit tool-state event or prefix rebuild.
 
 ### 5.13 Outstanding task
-Present only when the agent has a task it must complete or fail. A `user` message rendered last on every inference — after the tool-loop messages and after the notices — so it is the thing nearest the reply, and never baked into history: the model sees only tasks still outstanding. The same on every runtime, and `agent:context`, `agent:step` and live inferences render the same task status. `complete_task` / `fail_task` stay in the root frame's tools whether or not this message is present (§3.2.3). Their presence alone does not mean a task is assigned: a call with no task in scope is refused — the framework's task boundary (`TaskTools`) — and a frame that offers them with no task in scope gets a no-task notice among the notices instead, telling it to answer chat normally (`ContextAssembler.NO_TASK_NOTICE`). A frame without them gets no such notice. A goal-tree frame's *goal* is its opening turn, not this slot; see [GOAL_TREE.md](./GOAL_TREE.md), “Sessions and Frames”.
+Present only when the agent has a task to settle. A `user` message rendered last on every inference — after the tool-loop messages and after the notices — so it is the thing nearest the reply, and never baked into history: the model sees only tasks still outstanding, and its closing line names the three task tools and says that a plain reply is the task's result ([AGENT_TASKS.md](./AGENT_TASKS.md) §5). The same on every runtime, and `agent:context`, `agent:step` and live inferences render the same task status. `complete_task`, `fail_task` and `park_task` stay in the root frame's tools whether or not this message is present (§3.2.3). Their presence alone does not mean a task is assigned: a call with no task in scope is refused — the framework's task boundary (`TaskTools`) — and a frame that offers them with no task in scope gets a no-task notice among the notices instead, telling it to answer chat normally (`ContextAssembler.NO_TASK_NOTICE`). A frame without them gets no such notice. A goal-tree frame's *goal* is its opening turn, not this slot; see [GOAL_TREE.md](./GOAL_TREE.md), “Sessions and Frames”.
 
 ---
 

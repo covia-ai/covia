@@ -142,9 +142,9 @@ public class AgentAdapter extends AAdapter {
 	public static final String SUSPEND_AGENT_GONE = "Agent was removed or terminated before suspension";
 	public static final String TRANSITION_CANCELLED = "Transition cancelled";
 	/** Why a task failed after a cycle that neither resolved it nor left anything to resume it. */
-	public static final String TASK_YIELDED_IDLE = "The agent ended its turn without completing or failing the task, "
-		+ "and nothing it waits on (a person's answer, a running call or a wake time) would resume it; "
-		+ "inspect the agent timeline for what it did, and re-submit if appropriate";
+	public static final String TASK_YIELDED_IDLE = "The agent ended its turn with no reply, without completing, "
+		+ "failing or parking the task, and nothing it waits on (a person's answer, a running call or a wake time) "
+		+ "would resume it; inspect the agent timeline for what it did, and re-submit if appropriate";
 	/** Why a parked task failed at startup: what it waited on ran only in memory. */
 	public static final String TASK_WAIT_LOST = "The venue restarted while the task waited on a call that "
 		+ "had passed its time limit, so its result was lost; re-submit if appropriate";
@@ -638,6 +638,7 @@ public class AgentAdapter extends AAdapter {
 		installAsset("agent/cancel-task",   BASE + "cancelTask.json");
 		installAsset("agent/complete-task", BASE + "completeTask.json");
 		installAsset("agent/fail-task",     BASE + "failTask.json");
+		installAsset("agent/park-task",     BASE + "parkTask.json");
 		installAsset("agent/delete-session", BASE + "deleteSession.json");
 		installAsset("agent/rename-session", BASE + "renameSession.json");
 		installAsset("agent/compact-session", BASE + "compactSession.json");
@@ -681,6 +682,9 @@ public class AgentAdapter extends AAdapter {
 				}
 				case "failTask" -> {
 					return CompletableFuture.completedFuture(doFailTask(input, ctx));
+				}
+				case "parkTask" -> {
+					return CompletableFuture.completedFuture(doParkTask(input, ctx));
 				}
 				case "request" -> {
 					return invokeRequestInternal(ctx, meta, input);
@@ -888,6 +892,7 @@ public class AgentAdapter extends AAdapter {
 				case "sessionRead"   -> handleSessionRead(job, input, ctx);
 				case "completeTask" -> handleCompleteTask(job, input, ctx);
 				case "failTask"     -> handleFailTask(job, input, ctx);
+				case "parkTask"     -> handleParkTask(job, input, ctx);
 				default             -> job.fail("Unknown agent operation: " + getSubOperation(meta));
 			}
 		} catch (Exception e) {
@@ -1329,7 +1334,7 @@ public class AgentAdapter extends AAdapter {
 		if (Models.toolCalling(profile)) return null;
 		return Strings.create("agent declares tools but tool calling is off for its model"
 			+ ((model != null) ? " '" + model + "'" : "") + " (" + llmOp
-			+ ") — no tool is presented to it; its reply still completes a task (AGENT_TASKS.md §5)."
+			+ ") — no tool is presented to it; its reply still completes a task (AGENT_TASKS.md §5.2)."
 			+ " This is only a warning.");
 	}
 
@@ -3399,35 +3404,7 @@ public class AgentAdapter extends AAdapter {
 					"Task received continuation input; process the updated task before completing"));
 		}
 
-		// Runtime-independent completion seam (#380): strict requester schemas
-		// are authoritative here, so every harness and any future non-LLM runtime
-		// gets identical enforcement. A JSON string is promoted to its structured
-		// value when that is what the schema describes.
-		ACell result = RT.getIn(input, Fields.RESULT);
-		if (CVMBool.TRUE.equals(RT.getIn(currentTask, Fields.STRICT))) {
-			AMap<AString, ACell> schema = RT.ensureMap(
-				RT.getIn(currentTask, Fields.RESPONSE_SCHEMA));
-			if (schema == null) {
-				throw new InvalidInputException(
-					"Strict task has no response schema: " + taskId.toHexString());
-			}
-			ACell candidate = result;
-			AString stringResult = RT.ensureString(result);
-			if (stringResult != null) {
-				try {
-					ACell parsed = JSON.parse(stringResult.toString());
-					if (JsonSchema.validate(schema, parsed) == null) candidate = parsed;
-				} catch (Exception ignored) {
-					// The raw string may itself be the schema-conforming value.
-				}
-			}
-			String schemaError = JsonSchema.validate(schema, candidate);
-			if (schemaError != null) {
-				throw new InvalidInputException(
-					"Result does not conform to this task's response schema — " + schemaError);
-			}
-			result = candidate;
-		}
+		ACell result = conformingResult(taskId, currentTask, RT.getIn(input, Fields.RESULT));
 
 		ACell task = agent.resolveTask(taskId, expectedRevision, ctx.getClaim(),
 			completion(taskId, agent.getTasks().get(taskId), Status.COMPLETE, Fields.OUTPUT, result));
@@ -3501,6 +3478,91 @@ public class AgentAdapter extends AAdapter {
 			Fields.TASK_ID,  taskIdHex(taskId),
 			Fields.STATUS,   Status.FAILED);
 	}
+
+	/** Opening of the refusal of a result a strict task's response schema rejects; the schema's reason follows. */
+	public static final String RESULT_NONCONFORMING = "Result does not conform to this task's response schema — ";
+
+	/**
+	 * The result a task takes for {@code result}. Runtime-independent
+	 * completion seam (#380): a strict requester schema is authoritative here,
+	 * so every harness, a reply that completes a task, and any non-LLM runtime
+	 * get identical enforcement. A JSON string is promoted to its structured
+	 * value when that is what the schema describes.
+	 *
+	 * @throws InvalidInputException when a strict schema rejects it, saying why
+	 */
+	private static ACell conformingResult(Blob taskId, ACell task, ACell result) {
+		if (!CVMBool.TRUE.equals(RT.getIn(task, Fields.STRICT))) return result;
+		AMap<AString, ACell> schema = RT.ensureMap(RT.getIn(task, Fields.RESPONSE_SCHEMA));
+		if (schema == null) {
+			throw new InvalidInputException("Strict task has no response schema: " + taskId.toHexString());
+		}
+		ACell candidate = result;
+		AString stringResult = RT.ensureString(result);
+		if (stringResult != null) {
+			try {
+				ACell parsed = JSON.parse(stringResult.toString());
+				if (JsonSchema.validate(schema, parsed) == null) candidate = parsed;
+			} catch (Exception ignored) {
+				// The raw string may itself be the schema-conforming value.
+			}
+		}
+		String schemaError = JsonSchema.validate(schema, candidate);
+		if (schemaError != null) throw new InvalidInputException(RESULT_NONCONFORMING + schemaError);
+		return candidate;
+	}
+
+	/** Why a park was refused: no delay, or one that is not a positive number of milliseconds. */
+	public static final String PARK_DELAY_REQUIRED = "agent:parkTask requires delay, a positive number of milliseconds";
+
+	/**
+	 * Parks the in-scope task: it stays open, and is brought back to the agent
+	 * after {@code delay} milliseconds (AGENT_TASKS.md §6). The wake is the
+	 * task's own, committed as any thread wake is, so new input brings the
+	 * task back sooner, and a task resolved or cancelled first is not brought
+	 * back. The {@code reason}, if any, becomes the task Job's progress, which
+	 * its requester sees. Returns {@code {agentId, taskId, status: STARTED, wakeTime}}.
+	 */
+	private void handleParkTask(Job job, ACell input, RequestContext ctx) {
+		try {
+			job.setStatus(Status.STARTED);
+			job.completeWith(doParkTask(input, ctx));
+		} catch (Exception e) {
+			job.fail(e);
+		}
+	}
+
+	private ACell doParkTask(ACell input, RequestContext ctx) {
+		AString agentId = ctx.getAgentId();
+		Blob taskId = ctx.getTaskId();
+		if (agentId == null || taskId == null) {
+			throw new InvalidInputException(
+				"agent:parkTask requires task scope (agentId + taskId in RequestContext)");
+		}
+		if (!(RT.getIn(input, Fields.DELAY) instanceof CVMLong delay) || delay.longValue() <= 0) {
+			throw new InvalidInputException(PARK_DELAY_REQUIRED);
+		}
+		Agent agent = requireAgent(ctx.getUserDID(), agentId);
+		if (agent.getTasks().get(taskId) == null) {
+			throw new NotFoundException("Task not found: " + taskId.toHexString(), taskId.toHexString());
+		}
+		refuseIfStopped(agent, taskId, ctx);
+		Scheduler scheduler = engine.gridScheduler();
+		if (scheduler == null) throw new NotSupportedException(PARK_UNAVAILABLE);
+		long wakeTime = engine.currentTimestamp().longValue() + delay.longValue();
+		scheduler.setThreadWakeTime(ctx.getUserDID(), agent, Agent.ThreadKind.TASK, taskId, wakeTime);
+		AString reason = RT.ensureString(RT.getIn(input, Fields.REASON));
+		Job request = engine.jobs().getJob(taskId);
+		if (request != null && reason != null) request.progress(reason.toString(), null);
+		return Maps.of(
+			Fields.AGENT_ID,  agentId,
+			Fields.TASK_ID,   taskIdHex(taskId),
+			Fields.STATUS,    Status.STARTED,
+			Fields.WAKE_TIME, CVMLong.create(wakeTime));
+	}
+
+	/** Why a park was refused: this venue runs no scheduler to bring the task back. */
+	public static final String PARK_UNAVAILABLE = "Tasks cannot be parked on this venue: it runs no scheduler";
 
 	/** Refuses a task resolution the cycle could not make because it was stopped (AGENT_LOOP.md §2.5.1). */
 	private static void refuseIfStopped(Agent agent, Blob taskId, RequestContext ctx) {
@@ -4702,6 +4764,10 @@ public class AgentAdapter extends AAdapter {
 		// outcome. An agent that cannot continue leaves the task queued for after
 		// resume.
 		boolean failsPickedTask = leanError != null && !cannotContinue && pickedTask != null;
+		// A wake time the transition asks for brings its thread back (installed
+		// after the merge), so a task it leaves open waits for it, reply or not
+		boolean wakeRequested = RT.getIn(transitionResult, Fields.WAKE_TIME) instanceof CVMLong requested
+			&& requested.longValue() > 0;
 		ACell result = (leanError != null) ? leanError : leanResponse;
 
 		AMap<AString, ACell> timelineEntry = Maps.of(
@@ -4805,8 +4871,13 @@ public class AgentAdapter extends AAdapter {
 					cycleEntry.assoc(Fields.RESULT, Strings.create(TRANSITION_CANCELLED)).assoc(Fields.CANCELLED, CVMBool.TRUE));
 				return new Merge(record, run, true);
 			}
-			if (failsPickedTask) current.resolveTask(pickedTask.getKey(), -1, completion(pickedTask.getKey(),
-				pickedTask.getValue(), Status.FAILED, Fields.ERROR, leanError));
+			if (failsPickedTask) {
+				current.resolveTask(pickedTask.getKey(), -1, completion(pickedTask.getKey(),
+					pickedTask.getValue(), Status.FAILED, Fields.ERROR, leanError));
+			} else if (pickedTask != null && leanError == null && !wakeRequested) {
+				AMap<AString, ACell> answer = replyCompletion(current, callerDID, agentId, pickedTask.getKey(), leanResponse);
+				if (answer != null) current.resolveTask(pickedTask.getKey(), -1, answer);
+			}
 			AMap<AString, ACell> results = run.taskResults(current);
 			AMap<AString, ACell> record = current.mergeRunResult(snapshotState, newState, results,
 				(results == null) ? cycleEntry : cycleEntry.assoc(Fields.TASK_RESULTS, results),
@@ -4845,31 +4916,37 @@ public class AgentAdapter extends AAdapter {
 		// `wakeTime` (absolute millis on the venue's clock) requesting a future fire on
 		// the picked thread. If present, install it via setThreadWakeTime
 		// (lattice-first, then scheduler). If absent but the picked record
-		// still carries a stale `wakeTime` from a just-consumed scheduler
-		// fire, clear it so the scheduler rebuild on restart doesn't re-fire
-		// a wake that's already been serviced. Lattice is authoritative; the
-		// scheduler index is rebuilt from it on boot.
+		// still carries the `wakeTime` it had when picked, such as one from a
+		// just-consumed scheduler fire, clear it so the scheduler rebuild on
+		// restart doesn't re-fire a wake that's already been serviced. A wake
+		// set during the cycle, by agent:park-task, is the cycle's own and
+		// stays. Lattice is authoritative; the scheduler index is rebuilt from
+		// it on boot.
 		Scheduler scheduler = engine.gridScheduler();
 		if (scheduler != null && leanError == null) {
 			Blob pickedThreadId = null;
 			Agent.ThreadKind pickedKind = null;
 			AMap<AString, ACell> pickedRecord = null;
+			ACell wakeAtPick = null;
 			if (pickedTask != null) {
 				pickedThreadId = pickedTask.getKey();
 				pickedKind = Agent.ThreadKind.TASK;
 				Index<Blob, ACell> currentTasks = agent.getTasks();
 				ACell tRec = (currentTasks != null) ? currentTasks.get(pickedThreadId) : null;
 				if (tRec instanceof AMap) pickedRecord = (AMap<AString, ACell>) tRec;
+				wakeAtPick = RT.getIn(pickedTask.getValue(), Fields.WAKE_TIME);
 			} else if (pickedSessionBlob != null) {
 				pickedThreadId = pickedSessionBlob;
 				pickedKind = Agent.ThreadKind.SESSION;
 				pickedRecord = agent.getSession(pickedSessionBlob);
+				// Only a transition sets a session's wake, so whatever it holds is the one picked
+				wakeAtPick = (pickedRecord != null) ? pickedRecord.get(Fields.WAKE_TIME) : null;
 			}
 			if (pickedThreadId != null) {
 				ACell wtCell = RT.getIn(transitionResult, Fields.WAKE_TIME);
 				long requestedWake = (wtCell instanceof CVMLong cl) ? cl.longValue() : 0L;
-				boolean hasExisting = pickedRecord != null
-					&& pickedRecord.get(Fields.WAKE_TIME) instanceof CVMLong;
+				ACell wakeNow = (pickedRecord != null) ? pickedRecord.get(Fields.WAKE_TIME) : null;
+				boolean hasExisting = wakeNow instanceof CVMLong && wakeNow.equals(wakeAtPick);
 				if (requestedWake > 0 || hasExisting) {
 					scheduler.setThreadWakeTime(callerDID, agent,
 						pickedKind, pickedThreadId, requestedWake);
@@ -4877,22 +4954,17 @@ public class AgentAdapter extends AAdapter {
 			}
 		}
 
-		// A cycle that leaves its task queued has yielded it. The task waits
-		// only on something that will bring it back: a person's answer, a call
-		// still running past its time limit, or a wake time. A yield with none
-		// of these could never resume, so the task fails now rather than being
-		// picked straight back up with nothing new (AGENT_LOOP.md §4.6).
+		// A task the cycle left queued waits on something that will bring it
+		// back — a wake time (park_task), a person's answer, a call still
+		// running past its time limit, or input that arrived during the cycle —
+		// and is parked until then (AGENT_LOOP.md §4.6). With none of these
+		// the merge settled it with the cycle's reply (replyCompletion).
 		if (pickedTask != null && leanError == null) {
 			Blob taskId = pickedTask.getKey();
 			ACell row = agent.getTasks().get(taskId);
-			if (row != null) {
-				if (yieldIsBacked(agent, callerDID, agentId, taskId, row)) {
-					agent.tasks().task(taskId).park(Task.revision(pickedTask.getValue()));
-				} else {
-					log.info("Agent {} yielded task {} with nothing to resume it — failing the task job",
-						agentId, taskId);
-					failTask(callerDID, agentId, taskId, TASK_YIELDED_IDLE);
-				}
+			if (row != null && agent.getResolved().get(taskId) == null
+					&& yieldIsBacked(agent, callerDID, agentId, taskId, row)) {
+				agent.tasks().task(taskId).park(Task.revision(pickedTask.getValue()));
 			}
 		}
 
@@ -5361,6 +5433,29 @@ public class AgentAdapter extends AAdapter {
 		if (RT.getIn(row, Fields.WAKE_TIME) instanceof CVMLong) return true;
 		if (agent.hasPendingFor(taskId)) return true;
 		return agent.hasNewWorkFor(row, engine.currentTimestamp().longValue());
+	}
+
+	/**
+	 * What a task the cycle took settles with when the agent neither resolved
+	 * nor parked it (AGENT_TASKS.md §5.2): the cycle's reply is its result,
+	 * judged as {@code complete_task} judges one, and it fails when there is no
+	 * reply or a strict schema rejects it. Null when it needs nothing: it is
+	 * gone or resolved already, or something will bring it back
+	 * ({@link #yieldIsBacked}). Read from the merge's draft.
+	 */
+	private AMap<AString, ACell> replyCompletion(Agent agent, AString ownerDID, AString agentId,
+			Blob taskId, ACell reply) {
+		ACell row = agent.getTasks().get(taskId);
+		if (row == null || agent.getResolved().get(taskId) != null) return null;
+		if (yieldIsBacked(agent, ownerDID, agentId, taskId, row)) return null;
+		if (reply == null || (reply instanceof AString text && text.toString().isBlank())) {
+			return completion(taskId, row, Status.FAILED, Fields.ERROR, Strings.create(TASK_YIELDED_IDLE));
+		}
+		try {
+			return completion(taskId, row, Status.COMPLETE, Fields.OUTPUT, conformingResult(taskId, row, reply));
+		} catch (InvalidInputException rejected) {
+			return completion(taskId, row, Status.FAILED, Fields.ERROR, Strings.create(rejected.getMessage()));
+		}
 	}
 
 	/**

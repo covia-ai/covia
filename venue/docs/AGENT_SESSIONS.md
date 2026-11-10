@@ -200,7 +200,7 @@ agent_trigger   agentId=X  sessionId=Y?                 — wake the agent. No p
 
 | Op | Queue | Caller waits? | Completion semantics |
 |----|-------|---------------|----------------------|
-| `agent_request` | `tasks` Index | yes (Job) | Agent completes or fails the task (`complete_task` / `fail_task`; a goaltree root reply completes it), or yields: the task waits while a HITL ask, a late tool call or a wake time will bring it back, and fails otherwise (§6.3) |
+| `agent_request` | `tasks` Index | yes (Job) | Agent completes, fails or parks the task (`complete_task` / `fail_task` / `park_task`); a task left open waits while a wake time, a HITL ask or a late tool call will bring it back, and otherwise the cycle's reply is its result (§6.3) |
 | `agent_chat` | session `pending` (as an awaiting waiter) | yes (Job) | Agent's next `response` on this session completes every chat whose message a cycle has taken (§5.5.2). Not serialised — several may await one session. Typically continues an existing session (`sessionId` supplied); mints a new one on first contact |
 | `agent_message` | session `pending` | no | Agent processes whenever; any `response` lands in session history |
 | `agent_trigger` | none | block on cycle quiesce/yield | **Fallback kick** — nudges the run loop, no payload, no result-await. Callers wanting output should wait on a task/chat Job from `agent_request` / `agent_chat`. |
@@ -549,7 +549,7 @@ input: {
 output: ACell           — the response value (or null), appended to frames[0].conversation
 ```
 
-If the return value is non-null, the framework appends it as the terminal turn in `frames[0].conversation`. A transition may also return `turns`: non-terminal assistant tool-call and tool-result messages that the framework inserts immediately before that terminal turn. This keeps one chronologically ordered audit transcript without making the framework understand provider-specific tool execution. For chat work, the return value also completes the chat Job. For task work, completion is **explicit**: the agent (or LLM tool loop) invokes `agent:complete_task` to finish; if no completion op was invoked during the transition, the task yields and stays in the queue.
+If the return value is non-null, the framework appends it as the terminal turn in `frames[0].conversation`. A transition may also return `turns`: non-terminal assistant tool-call and tool-result messages that the framework inserts immediately before that terminal turn. This keeps one chronologically ordered audit transcript without making the framework understand provider-specific tool execution. For chat work, the return value also completes the chat Job. For task work, the agent (or LLM tool loop) invokes `agent:complete-task`, `agent:fail-task` or `agent:park-task`; a task left open with nothing to bring it back takes the return value as its result (§6.3).
 
 **Stored history and model context.** The session retains and replays the complete transcript: user input, assistant tool calls, tool results, durable failure diagnostics, and the final assistant response. Existing history turns remain byte-identical and in order; compaction appends a summary and changes the active context selection. Tool calls therefore stay paired with their results, and a later inference extends the previous provider-shaped prefix instead of rebuilding a shorter projection of it.
 
@@ -565,12 +565,13 @@ If the return value is non-null, the framework appends it as the terminal turn i
 
 | Op | Effect |
 |---|---|
-| `agent:complete_task` (input: `result`) | Job → COMPLETE with `result`, task entry removed |
-| `agent:fail_task` (input: `error`) | Job → FAILED with `error`, task entry removed |
+| `agent:complete-task` (input: `result`) | Job → COMPLETE with `result`, task entry removed |
+| `agent:fail-task` (input: `error`) | Job → FAILED with `error`, task entry removed |
+| `agent:park-task` (input: `delay`, `reason?`) | Task stays open and comes back after `delay` ms, or sooner on new input ([AGENT_TASKS.md](./AGENT_TASKS.md) §6) |
 
-Both are refused once the cycle's claim is revoked ([AGENT_LOOP.md §2.5.1](./AGENT_LOOP.md)): a stopped cycle's task stays queued.
+All three are refused once the cycle's claim is revoked ([AGENT_LOOP.md §2.5.1](./AGENT_LOOP.md)): a stopped cycle's task stays queued.
 
-There is no `agent:yield` op — yield is the natural state when no completion op was invoked. There is no `agent:complete_chat` op — chat completes via the return value.
+There is no `agent:complete_chat` op — chat completes via the return value.
 
 **Framework-populated scope.** The transition runs under a request context scoped to `(agent, session?, task?)`. Any venue op invoked from inside the transition — directly or via the LLM tool loop — sees the correct scope without having to pass IDs explicitly.
 
@@ -584,7 +585,7 @@ There is no `agent:yield` op — yield is the natural state when no completion o
 | `meta.turns` | the common frame store / framework append | bumped in the same CAS as a root-conversation append |
 | `meta.updated` | the common frame store / framework append | ratcheted to the newest persisted root-turn timestamp in the same CAS |
 
-**Completion ordering.** `agent:complete_task` / `agent:fail_task` do not finish the caller's pending Job inline. The completion envelope is parked and drained after the transition's timeline + state writes commit. Only then is the pending Job completed. This ordering is load-bearing: any caller awaiting its task observes the timeline and lattice writes for its task before its await returns. Without the deferral, the venue op would race the framework's timeline write and callers could see an empty `taskResults` immediately after unblocking.
+**Completion ordering.** `agent:complete-task` / `agent:fail-task` do not finish the caller's pending Job inline. The completion envelope is parked and drained after the transition's timeline + state writes commit. Only then is the pending Job completed. This ordering is load-bearing: any caller awaiting its task observes the timeline and lattice writes for its task before its await returns. Without the deferral, the venue op would race the framework's timeline write and callers could see an empty `taskResults` immediately after unblocking.
 
 The framework around the transition:
 
@@ -598,40 +599,31 @@ The framework around the transition:
    - Append adapter-emitted non-terminal `turns`, if any, to `frames[0].conversation`
    - If return value non-null → append one terminal turn to `frames[0].conversation`
    - Complete every chat on the session that is STARTED with the return value (yield only if return is null — rare)
-   - If task picked: completed iff `agent:complete_task` / `agent:fail_task` was invoked during transition; otherwise it yields, and is parked or failed (§6.3). (goaltree additionally completes a still-open task when its root frame completes — there, a reply is the answer; llmagent yields.)
+   - If task picked and neither resolved nor parked: parked if something will bring it back, otherwise settled with the return value (§6.3)
    - If message picked: no completion concept (return value already emitted to history)
 8. On adapter throw → the picked task's Job and the session's STARTED chats → FAILED with *technical* error (distinct from `fail_task` semantic failure), unless the agent cannot continue (§6.3)
 9. Returns the sessionId in the response envelope (always)
 
-Stateless adapters (pure extraction, one-shot classifiers) just invoke `agent:complete_task(result)` and return. Their session becomes a one-turn audit record.
+Stateless adapters (pure extraction, one-shot classifiers) just invoke `agent:complete-task(result)` and return. Their session becomes a one-turn audit record.
 
-### 6.3 Yield and timeouts
+### 6.3 Settling a task, and timeouts
 
-For task work, the framework distinguishes **completed** from **yield** by observing whether `agent:complete_task` / `agent:fail_task` was invoked during the transition. Queue state is authoritative — the Job is the system of record (set by the completion op), the task entry is the in-flight instruction (removed by the completion op). For chat work, completion is determined by the return value (non-null = complete; null = yield, rare).
+Queue state is authoritative — the Job is the system of record (set by the completion op), the task entry is the in-flight instruction (removed by the completion op). For chat work, completion is determined by the return value (non-null = complete; null = yield, rare).
 
-**Yield semantics.** A task cycle that exits without invoking a completion op yields. The task stays in the `tasks` Index, parked, only while something will bring it back, and runs again when that arrives ([AGENT_LOOP.md §4.6](./AGENT_LOOP.md)):
-
-- **Human input in progress** — a sessioned HITL request returned its durable
-  handle; the answer will append to this session and wake the task again (§3.4.2)
-- **A slow call** — a tool call passed its time limit while still running; its
-  outcome will append to this session when it ends
-- **A wake time** — the transition returned a `wakeTime` for the task
-
-A yield with none of these could never resume, so the task fails at once with a reason rather than being presented again with nothing new.
+A task cycle that exits with its task neither completed nor failed leaves it open. The task stays in the `tasks` Index, parked, while something will bring it back — a wake time (`agent:park-task`, or one the transition returns), an open HITL ask from its cycle, or a tool call from its cycle still running past its time limit — and runs again when that arrives. With none of these, the return value is the task's result, and a cycle without one fails it ([AGENT_TASKS.md](./AGENT_TASKS.md) §5–§6, [AGENT_LOOP.md §4.6](./AGENT_LOOP.md)).
 
 **Iteration budget.** A task presented for a run's whole iteration budget without resolving is failed ([AGENT_LOOP.md §4.4](./AGENT_LOOP.md)).
 
-**Technical errors.** If the transition adapter throws or returns an `error` (e.g., a request the provider refused, an LLM call past `llmTimeoutMs`), the framework catches it. If a task or chat was picked, the Job is failed with a *technical* error (distinct from `agent:fail_task`'s semantic failure), and the agent carries on with its other work. The difference is recorded in the Job's failure reason. When the agent cannot continue (its model setup is wrong, its provider cannot be reached, or the venue fails), the agent is suspended instead and the picked task stays queued for after resume ([AGENT_LOOP.md §3.4](./AGENT_LOOP.md)).
+**Technical errors.** If the transition adapter throws or returns an `error` (e.g., a request the provider refused, an LLM call past `llmTimeoutMs`), the framework catches it. If a task or chat was picked, the Job is failed with a *technical* error (distinct from `agent:fail-task`'s semantic failure), and the agent carries on with its other work. The difference is recorded in the Job's failure reason. When the agent cannot continue (its model setup is wrong, its provider cannot be reached, or the venue fails), the agent is suspended instead and the picked task stays queued for after resume ([AGENT_LOOP.md §3.4](./AGENT_LOOP.md)).
 
-**Layering: framework vs tool loop.** The framework only sees venue ops being invoked (`agent:complete_task`, `agent:fail_task`) and the adapter's return value. There is no LLM-specific concept at the framework layer. Inside an LLM adapter, the tool loop wraps these as named tools the LLM can call:
+**Layering: framework vs tool loop.** The framework only sees venue ops being invoked (`agent:complete-task`, `agent:fail-task`, `agent:park-task`) and the adapter's return value. There is no LLM-specific concept at the framework layer. Inside an LLM adapter, the tool loop wraps these as named tools the LLM can call:
 
-- `complete_task` tool → invokes `agent:complete_task`, exits loop with the result as the return value
-- `fail_task` tool → invokes `agent:fail_task`, exits loop
+- `complete_task` tool → invokes `agent:complete-task`, exits loop with the result as the return value
+- `fail_task` tool → invokes `agent:fail-task`, exits loop
+- `park_task` tool → invokes `agent:park-task`; the loop carries on
 - Plain text response from the LLM (no tool calls) → exits loop with the text as the return value
 
-For chat, plain text response naturally completes the chat Job (return value flows through). For tasks, plain text response does *not* complete the task — the LLM must call `complete_task` explicitly. This matches the explicit-completion model for tool-using LLMs.
-
-There is no separate `yield` tool. Yield is what happens when the loop exits for a task without `complete_task` having been called — purely emergent from tool-loop behaviour, not a framework primitive.
+A plain text response completes a chat Job, and completes a task the LLM neither resolved nor parked.
 
 Non-LLM adapters call the venue ops directly with no tool-loop layer.
 
