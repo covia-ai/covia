@@ -73,6 +73,11 @@ public class AgentConcurrencyTest {
 		}
 	}
 
+	/** What Alice's {@code agent}'s harness may read, as a request's intake asks. */
+	private java.util.function.Predicate<AString> reads(Agent agent) {
+		return AgentAdapter.harnessReads(engine, ALICE_DID, agent.getAgentId());
+	}
+
 	// ========== Unit: Agent CAS operations ==========
 
 	@Test
@@ -122,7 +127,7 @@ public class AgentConcurrencyTest {
 		Blob secondTask = Blob.fromHex("1002");
 		java.util.function.BiFunction<Blob, String, Agent.SessionIntake> intake = (task, marker) ->
 			agent.addTaskInSession(sid, ALICE_DID,
-				Maps.of("load", marker), task, Maps.of("marker", marker));
+				Maps.of("load", marker), task, Maps.of("marker", marker), reads(agent));
 		List<Agent.SessionIntake> raced = Rendezvous.all(
 			() -> intake.apply(firstTask, "first"),
 			() -> intake.apply(secondTask, "second"));
@@ -175,14 +180,14 @@ public class AgentConcurrencyTest {
 		Blob task = Blob.fromHex("1003");
 		List<Object> raced = Rendezvous.all(
 			() -> agent.terminate(),
-			() -> agent.addTaskInSession(sid, ALICE_DID, null, task, Maps.of("input", "work")));
+			() -> agent.addTaskInSession(sid, ALICE_DID, null, task, Maps.of("input", "work"), reads(agent)));
 		@SuppressWarnings("unchecked")
 		AMap<AString, ACell> before = (AMap<AString, ACell>) raced.get(0);
 		boolean givenBack = RT.getIn(before, Agent.KEY_TASKS, task) != null;
 		boolean refused = raced.get(1) == Agent.SessionIntake.MISSING;
 		assertTrue(givenBack != refused, "the task is in the record termination gives back, or intake refused it");
 		assertEquals(Agent.SessionIntake.MISSING,
-			agent.addTaskInSession(sid, ALICE_DID, null, Blob.fromHex("1004"), Maps.of("input", "late")),
+			agent.addTaskInSession(sid, ALICE_DID, null, Blob.fromHex("1004"), Maps.of("input", "late"), reads(agent)),
 			"a terminated agent takes no task");
 		assertEquals(Agent.SessionIntake.MISSING,
 			agent.appendSessionPending(sid, ALICE_DID, null, Maps.of("content", "late"), true),

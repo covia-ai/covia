@@ -12,6 +12,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.function.Function;
+import java.util.function.Predicate;
 import java.util.function.Supplier;
 
 import org.slf4j.Logger;
@@ -141,7 +142,7 @@ public class AgentAdapter extends AAdapter {
 	/** Optional agent-adapter code: a supplied session does not exist. */
 	public static final String UNKNOWN_SESSION_CODE = "agent:unknown-session";
 	public static final String SUSPENDED_CODE = "agent:suspended";
-	/** Agent-adapter code: the agent cannot take tasks ({@link Agent#taskRefusal()}). */
+	/** Agent-adapter code: the agent cannot take tasks ({@link Agent#taskRefusal(Predicate)}). */
 	public static final String TASKS_UNSUPPORTED_CODE = "agent:tasks-unsupported";
 	public static final String SUSPEND_REASON_INVALID = "Suspension reason must be a string";
 	public static final String SUSPEND_AGENT_GONE = "Agent was removed or terminated before suspension";
@@ -1290,7 +1291,7 @@ public class AgentAdapter extends AAdapter {
 
 	/**
 	 * The create/update advisory for an agent that cannot take tasks
-	 * ({@link Agent#taskRefusal()}): tool calling is off for its model.
+	 * ({@link Agent#taskRefusal(Predicate)}): tool calling is off for its model.
 	 */
 	public static final AString CANNOT_TAKE_TASKS_WARNING = Strings.intern("Tool calling is off for the agent's "
 		+ "model, so no tool is presented to it and it cannot take tasks: agent:request to it fails with "
@@ -1662,7 +1663,8 @@ public class AgentAdapter extends AAdapter {
 			.assoc(Fields.AGENT_ID, agentId));
 		Agent.SessionIntake intake;
 		try {
-			intake = agent.addTaskInSession(sid, ctx.getCallerDID(), session.loads(), taskId, taskData);
+			intake = agent.addTaskInSession(sid, ctx.getCallerDID(), session.loads(), taskId, taskData,
+				harnessReads(engine, target.ownerDID(), agentId));
 		} catch (NotSupportedException cannotTakeTasks) {
 			job.fail(TASKS_UNSUPPORTED_CODE, cannotTakeTasks.getMessage());
 			return;
@@ -5418,6 +5420,23 @@ public class AgentAdapter extends AAdapter {
 				return (asset == null) ? null : asset.meta();
 			} catch (CoviaException e) {
 				return null;
+			}
+		};
+	}
+
+	/**
+	 * Whether agent {@code agentId}'s harness may read a reference, as its
+	 * cycle reads one ({@link Engine#requireReadable}): the authority the agent
+	 * runs under, as it stands at each check. Nothing while its controller could
+	 * not act. It only reads, so it can run inside the agent's transaction.
+	 */
+	public static Predicate<AString> harnessReads(Engine engine, AString owner, AString agentId) {
+		return ref -> {
+			try {
+				engine.requireReadable(engine.harnessContext(owner, agentId), ref);
+				return true;
+			} catch (CoviaException e) {
+				return false;
 			}
 		};
 	}

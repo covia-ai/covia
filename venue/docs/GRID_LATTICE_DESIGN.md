@@ -131,9 +131,12 @@ resolving what it holds and passing the rest to its parent:
 A reference in an operation's form resolves as `Engine.resolveAsset`
 resolves it locally: `<venue DID>/v/…` is the venue's own definition, and a
 bare hash or `a/<hash>` the owner's asset, else the catalog's. Another user's
-data and another venue's names look up nothing. A lookup checks no authority
-and changes nothing; it serves a decision whose outcome is all a caller sees.
-`AgentLookupTest` covers this section.
+data and another venue's names look up nothing. A lookup only resolves: it
+checks no authority and changes nothing. Whoever uses one first asks whether
+the authority it acts under may read the reference, and a reference it may
+not read is not looked up. An agent deciding whether it can take tasks reads
+with the authority it runs under, as its cycle does. `AgentLookupTest` covers
+this section.
 
 ---
 
