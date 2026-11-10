@@ -67,6 +67,8 @@ public final class Abilities {
 	public static final AString AGENT_MESSAGE = Strings.intern("agent/message");
 	public static final AString AGENT_FORK    = Strings.intern("agent/fork");
 	public static final AString AGENT_WRITE   = Strings.intern("agent/write");
+	/** Run an agent's tool calls directly, with no model between ({@code agent:step}). */
+	public static final AString ADMIN_AGENT   = Strings.intern("admin/agent");
 	/** Trust a skill outside an agent's effective advertised skill surface. */
 	public static final AString SKILL_LOAD    = Strings.intern("skill/load");
 	/** Add an operation outside an agent's already declared tool surface. */

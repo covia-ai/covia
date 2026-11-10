@@ -176,6 +176,36 @@ public class AgentConfigAuthorityTest {
 			Engine.NOT_AGENTS_STEP.formatted(sibling.getCallerDID(), "wide")), borrowed.getErrorMessage());
 	}
 
+	/**
+	 * agent:step runs an agent's tool calls as its caller chooses, with no
+	 * model between, so it needs admin/agent on the agent: being admitted to
+	 * talk to it, or holding agent/message or every agent/ ability, is not
+	 * enough.
+	 */
+	@Test
+	public void testOnlyAnAdministratorStepsAnAgent() {
+		assertComplete(run("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/private", Fields.VALUE, "OWNER-ONLY"), ALICE));
+		assertComplete(run("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "open",
+			Fields.CONFIG, config(null)
+				.assoc(Fields.ACCEPTS, Vectors.of(bob))
+				.assoc(Fields.TOOLS, Vectors.of(Strings.create("v/ops/covia/read")))), ALICE));
+		String address = alice + "/g/open";
+		ACell readPrivate = Maps.of(Fields.AGENT_ID, address, Fields.MESSAGE, "Read it",
+			"assistant", Maps.of("toolCalls", Vectors.of(Maps.of("name", "covia_read",
+				"arguments", Maps.of(Fields.PATH, "w/private")))));
+
+		for (RequestContext talker : new RequestContext[] {
+				BOB, bobWith(cap(address, Abilities.AGENT_MESSAGE)), bobWith(cap(address, Strings.create("agent")))}) {
+			assertEquals(Status.FAILED, run("v/ops/agent/step", readPrivate, talker).getStatus());
+		}
+
+		Job administered = run("v/ops/agent/step", readPrivate, bobWith(cap(address, Abilities.ADMIN_AGENT)));
+		assertComplete(administered);
+		assertTrue(String.valueOf(administered.getOutput()).contains("OWNER-ONLY"), "an administrator steps it");
+		assertComplete(run("v/ops/agent/step", readPrivate, ALICE));
+	}
+
 	@Test
 	public void testAStepRunsUnderItsAgentsOwnCaps() {
 		assertComplete(run("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "narrow",

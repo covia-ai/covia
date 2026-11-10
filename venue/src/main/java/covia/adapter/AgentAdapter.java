@@ -2288,7 +2288,9 @@ public class AgentAdapter extends AAdapter {
 	 * checks and timeouts exactly as live; the agent's own state is untouched.
 	 */
 	private void handleStep(Job job, ACell input, RequestContext ctx) {
-		Inspectable target = inspectable(job, input, ctx, Abilities.AGENT_MESSAGE);
+		// Stepping runs the agent's tools as the caller chooses, with no model
+		// between: administering the agent, which no admission to talk covers.
+		Inspectable target = inspectable(job, input, ctx, Abilities.ADMIN_AGENT);
 		if (target == null) return;
 		AMap<AString, ACell> assistant;
 		try {

@@ -139,6 +139,7 @@ Abilities follow UCAN's slash-delimited convention with no leading slash. `*` is
 | `agent/message` | — | Send message to agent session |
 | `agent/fork` | — | Fork an agent |
 | `agent/write` | — | Update or administer an existing agent |
+| `admin/agent` | — | Run an agent's tool calls directly, with no model between (`agent:step`); no `agent` grant or admission to talk covers it |
 | `skill/load` | — | Admit a skill outside an agent's advertised skill surface as trusted instructions |
 | `tool/load` | — | Add an operation outside an agent's declared/advertised tool surface |
 | `asset` | every `asset/*` | All asset operations |
@@ -763,7 +764,8 @@ record is an entry no grant of theirs covers.
 | `agent:request` (cross-user) | `{ with: "<ownerDID>/g/<id>", can: "agent/request" }` |
 | `agent:trigger` (cross-user) | `{ with: "<ownerDID>/g/<id>", can: "agent/request" }` |
 | `agent:message` (cross-user) | `{ with: "<ownerDID>/g/<id>", can: "agent/message" }` |
-| `agent:chat` / `agent:query` / `agent:step` (cross-user) | `{ with: "<ownerDID>/g/<id>", can: "agent/message" }` |
+| `agent:chat` / `agent:query` (cross-user) | `{ with: "<ownerDID>/g/<id>", can: "agent/message" }` |
+| `agent:step` (cross-user) | `{ with: "<ownerDID>/g/<id>", can: "admin/agent" }` |
 | `agent:fork` (cross-user source) | `{ with: "<ownerDID>/g/<id>", can: "agent/fork" }` |
 | `agent:update` / `agent:summarise` / suspend / resume / delete / task-session administration (cross-user) | `{ with: "<ownerDID>/g/<id>", can: "agent/write" }` |
 | `skill_load {ref}` outside the effective advertised index | `{ with: "<skill-ref>", can: "skill/load" }`, explicitly present even for an otherwise unrestricted agent; read authority remains separate |
@@ -775,7 +777,7 @@ record is an entry no grant of theirs covers.
 
 **Target-side admission (#447).** Before proofs are consulted, the two "talk"
 rows — `agent/request` (`agent:request`, `agent:trigger`) and `agent/message`
-(`agent:message`, `agent:chat`, `agent:query`, `agent:step`) on `<ownerDID>/g/<id>` — may be
+(`agent:message`, `agent:chat`, `agent:query`) on `<ownerDID>/g/<id>` — may be
 admitted by the agent record's own `config.accepts`: `"owner"` (default:
 nobody without a delegation), `"venue"` (the venue operator — the venue
 principal and the agents it owns, never every user hosted here), `"anyone"`

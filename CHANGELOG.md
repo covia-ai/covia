@@ -218,6 +218,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - A delegate acting for a user (`user/sudo`) uses the user's secrets only under a `secret/use` grant.
 - An agent's pinned context and skills index show only what its caps cover.
 - An agent is unrestricted only when its config says `caps: "unrestricted"`; one created without `caps`, or given `caps: null`, has no authority.
+- `agent:step` needs the new `admin/agent` ability on the agent; admission to talk to an agent and `agent/…` grants do not cover it.
 - Every route to data at a path checks it as the data's owner decides, by its DID address: a grant on `<owner>/g/<agent>/n/` covers that agent's `n/`, and one on `<owner>/j/<job>` that job's record and `t/` (#617).
 
 ### Migration
@@ -233,6 +234,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - A `user:sudo` delegate holding `agent/create` creates agents its target controls: grant the pair only where you would grant that user's own authority.
 - An agent created by another agent, or by a delegate in another user's namespace without `user:sudo`, is controlled by its creator: it acts with the creator's authority narrowed by its `caps`, not the owner's, so a creating agent's caps must cover `invoke` on the new agent's transition and model operations, and bound what the new agent's tool calls can do.
 - Pass `caps: "unrestricted"` to `agent:create` (and `agent:fromSkills`, or with a template other than `reader` or `admin`) for an agent that acts with its controller's full authority; existing agents keep the authority they had.
+- To let someone other than its owner step an agent, grant them `admin/agent` on it.
 - Anonymous callers need `auth.public.caps` to grant `invoke` on `v/ops/agent/request`
   and `v/ops/agent/message`, and `crud/read` on `j` to follow their jobs.
 - An open chat bot's agent needs `accepts: "anyone"`, and the public scope `invoke` on
