@@ -371,16 +371,23 @@ request into `master` so the required `build-and-test` check runs before
    - Create a versioned release (e.g., `1.0.0`)
    - Update the `latest` release to point to this version
 
-7. **Prepare for next development cycle** (on develop):
+7. **Prepare for next development cycle** (on develop). Develop takes the
+   next minor version's snapshot; a fix to a released line is a patch release
+   from `master`:
    ```bash
    git checkout develop
    git merge origin/master
-   mvn versions:set -DnewVersion=1.0.1-SNAPSHOT
+   mvn versions:set -DnewVersion=1.1.0-SNAPSHOT
    mvn versions:commit
    git add -A
    git commit -m "Prepare for next development iteration"
    git push origin develop
    ```
+
+8. **Add the release line's migration fixture**, a store written by the
+   published `covia.jar`, as the
+   [fixture guide](venue/src/test/resources/migrations/README.md#provenance-and-regeneration)
+   describes.
 
 ### Publishing to Maven Central
 
@@ -459,6 +466,11 @@ mvn clean deploy    # -SNAPSHOT version → routes to the Central snapshot repo
 ```bash
 mvn clean deploy -Prelease
 ```
+Run it with Maven 3.9 and without `-B`. Under Maven 3.10 the Central plugin
+bundles Maven's `.locks/` and `maven-metadata-local.xml` files, which Central
+rejects. In batch mode the gpg plugin passes `--pinentry-mode error`, so gpg
+cannot ask for the key's passphrase.
+
 `-Prelease` GPG-signs every artifact; the Central plugin bundles all reactor
 modules (main + sources + javadoc + pom + signatures) and, with
 `autoPublish=true`, publishes them to Maven Central. Then verify at
