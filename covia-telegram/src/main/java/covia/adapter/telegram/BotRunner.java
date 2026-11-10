@@ -130,6 +130,8 @@ final class BotRunner implements MessagingBot<BotSpec> {
 	static final String BOT_PENDING = "Telegram bot '%s' is not running (%s); it keeps retrying";
 	/** A Bot API call to a stopped bot; its name follows. */
 	static final String BOT_STOPPED = "Telegram bot '%s' is stopped";
+	/** A call made on a stopped bot's client. */
+	static final String CLIENT_RELEASED = "Telegram bot client released";
 
 	/** Why the bot cannot call the Bot API now. */
 	private UnavailableException notRunning() {
@@ -214,11 +216,18 @@ final class BotRunner implements MessagingBot<BotSpec> {
 		}
 		// Our own client so stop() can cancel the in-flight long poll; the read
 		// timeout must outlast the poll wait or every idle poll is an error.
+		// Cancelling reaches only calls already made, so once stopped the client
+		// refuses new ones: a poll the loop makes just after stop() fails at once
+		// instead of waiting out the long poll.
 		OkHttpClient client = new OkHttpClient.Builder()
 			.followRedirects(false).followSslRedirects(false).retryOnConnectionFailure(false)
 			.connectTimeout(20, TimeUnit.SECONDS)
 			.readTimeout(POLL_TIMEOUT_SECS + 15, TimeUnit.SECONDS)
 			.writeTimeout(30, TimeUnit.SECONDS)
+			.addInterceptor(chain -> {
+				if (stopped) throw new java.io.IOException(CLIENT_RELEASED);
+				return chain.proceed(chain.request());
+			})
 			.build();
 		TelegramBot candidate = new TelegramBot.Builder(token).apiUrl(apiUrl).okHttpClient(client).build();
 		GetMeResponse me;
