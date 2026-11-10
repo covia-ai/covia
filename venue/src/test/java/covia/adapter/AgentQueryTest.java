@@ -712,44 +712,4 @@ public class AgentQueryTest {
 		assertEquals(1, model.invocations.get());
 	}
 
-	@Test public void defaultSummaryAndItsCacheSurviveStoreReopen() throws Exception { summarySurvivesStoreReopen(false); }
-	@Test public void detailedSummaryAndItsCacheSurviveStoreReopen() throws Exception { summarySurvivesStoreReopen(true); }
-
-	private void summarySurvivesStoreReopen(boolean includeSteps) throws Exception {
-		var key = convex.core.crypto.AKeyPair.generate();
-		String modelName = model.getName();
-		java.io.File file;
-		ACell expected;
-		Blob jobId;
-		try (convex.etch.EtchStore store = covia.venue.TestTemp.etch("summarise-persist")) {
-			file = store.getFile();
-			engine = TestEngine.application(store).mount(key, Maps.empty()).start();
-			try {
-				Engine.addDemoAssets(engine);
-				owner = engine.venueContext();
-				model = new QueryModel(modelName);
-				engine.registerAdapter(model);
-				createSummarisable("llmagent");
-				Job job = summarise(includeSteps);
-				expected = job.awaitResult(5000);
-				jobId = job.getID();
-			} finally { engine.close(); }
-		}
-		try (convex.etch.EtchStore store = convex.etch.EtchStore.create(file)) {
-			engine = TestEngine.application(store).mount(key, Maps.empty()).start();
-			try {
-				Engine.addDemoAssets(engine);
-				owner = engine.venueContext();
-				model = new QueryModel(modelName);
-				engine.registerAdapter(model);
-				Agent agent = engine.getVenueState().users().user(owner.getUserDID()).agent(AGENT);
-				assertEquals(expected, savedSummary(agent));
-				assertEquals(expected, engine.jobs().getJob(jobId, owner).getOutput());
-				assertEquals(includeSteps, savedSummary(agent).containsKey(Fields.STEPS));
-				assertEquals(expected, summarise(true).awaitResult(5000));
-				assertEquals(expected, summarise(false).awaitResult(5000));
-				assertEquals(0, model.invocations.get(), "the cache is durable, not an in-memory optimisation");
-			} finally { engine.close(); }
-		}
-	}
 }

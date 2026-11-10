@@ -2,7 +2,6 @@ package covia.adapter.webhook;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-import java.io.IOException;
 import java.util.ArrayList;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -13,9 +12,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
 
 import convex.core.crypto.AKeyPair;
-import convex.core.data.ACell;
-import convex.core.data.AMap;
-import convex.core.data.AString;
 import convex.core.data.Index;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
@@ -23,11 +19,8 @@ import convex.core.store.MemoryStore;
 import convex.lattice.LatticeHost;
 import covia.adapter.AAdapter;
 import covia.api.Fields;
-import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.TestEngine;
-import covia.venue.TestTemp;
-import covia.venue.server.VenueServer;
 
 class WebhookInboxTest {
 
@@ -107,34 +100,6 @@ class WebhookInboxTest {
 		assertEquals(WebhookInbox.INVALID_RECEIPT,
 			assertThrows(IllegalStateException.class, () -> inbox.accept("event", Maps.empty())).getMessage());
 		assertEquals(Maps.empty(), state.read(path));
-	}
-
-	@Test void receiptsSurviveVenueRestartAndKeepUncertainWorkSeparate() throws IOException {
-		AMap<AString, ACell> config = Maps.of(Config.PORT, 0, Config.BIND_ADDRESS, "127.0.0.1",
-			Config.STORE, TestTemp.etchFile("webhook-inbox").toString(),
-			Config.SEED, AKeyPair.createSeeded(1928).getSeed().toHexString());
-		VenueServer first = VenueServer.launch(config);
-		try {
-			Engine engine = first.getEngine();
-			var inbox = new WebhookInbox(engine, engine.adapterState("webhook-test"), "config/bot/inbox");
-			inbox.accept("pending", Maps.of("text", "one"));
-			assertEquals(WebhookInbox.PENDING, inbox.get("pending").get(Fields.STATUS), () -> inbox.get("pending").toString());
-			inbox.accept("uncertain", Maps.of("text", "two"));
-			inbox.claim("uncertain");
-			inbox.accept("done", Maps.empty());
-			inbox.claim("done");
-			inbox.complete("done");
-		} finally { first.close(); }
-		VenueServer second = VenueServer.launch(config);
-		try {
-			Engine engine = second.getEngine();
-			var inbox = new WebhookInbox(engine, engine.adapterState("webhook-test"), "config/bot/inbox");
-			assertEquals(Strings.create("pending"), inbox.records(WebhookInbox.PENDING).getFirst().get(Fields.ID));
-			assertEquals(Strings.create("uncertain"), inbox.records(WebhookInbox.STARTED).getFirst().get(Fields.ID));
-			assertFalse(inbox.claim("uncertain"));
-			assertFalse(inbox.claim("done"));
-			assertTrue(inbox.claim("pending"));
-		} finally { second.close(); }
 	}
 
 	/** A store whose durability barrier counts its calls and fails on request. */

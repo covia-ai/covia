@@ -1,6 +1,7 @@
 package covia.venue;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.concurrent.CompletableFuture;
@@ -110,6 +111,8 @@ public class JobShutdownTest {
 		Engine first = venue.start();
 		Engine.addDemoAssets(first);
 		Job parked = first.jobs().invokeOperation(NEVER, Maps.empty(), alice); // its adapter can suspend it
+		Job selfPaused = first.jobs().invokeOperation("v/test/ops/pause", Maps.of(Fields.MESSAGE, "pause me"), alice);
+		awaitStatus(selfPaused, Status.PAUSED);
 		Job slow;
 		String gateName = "shutdown-parked-" + System.identityHashCode(first);
 		try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName)) {
@@ -128,6 +131,13 @@ public class JobShutdownTest {
 			AMap<AString, ACell> restored = second.jobs().getJobData(parked.getID(), alice);
 			assertEquals(Status.PAUSED, restored.get(Fields.STATUS),
 				"a suspended job is restored live at boot, not stabilised");
+			// A job that paused itself before the restart is live after it, and
+			// a message resumes it to completion
+			Job resumed = second.jobs().getJob(selfPaused.getID());
+			assertNotNull(resumed, "a paused job is live after the restart");
+			second.jobs().deliverMessage(selfPaused.getID(), Maps.of("content", "resume"), alice);
+			TestEngine.awaitJob(resumed, Job::isFinished, 10_000, () -> "the resumed job did not complete");
+			assertEquals(Status.COMPLETE, resumed.getStatus());
 			AMap<AString, ACell> cancelled = second.jobs().getJobData(slow.getID(), alice);
 			assertEquals(Status.CANCELLED, cancelled.get(Fields.STATUS));
 		} finally {

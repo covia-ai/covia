@@ -37,8 +37,8 @@ import convex.lattice.cursor.Root;
  * A restart in memory takes {@link #restartable}; a venue over a store or host
  * of the test's own takes an {@link #application}, which is the one place a
  * test's venue gets its clock. {@code VenueServer.launch} is for tests over HTTP.
- * Examples: {@link EnginePersistenceTest}, {@link VenueServerPersistenceTest},
- * {@link VenueRestartTest}, {@link DLFSPersistenceTest},
+ * Examples: {@link VenuePersistenceTest}, {@link EnginePersistenceTest},
+ * {@link VenueServerPersistenceTest},
 	 * {@link EngineSchedulerRebuildTest}. Tests that need bespoke engine
 	 * config (e.g. {@code FileAdapterTest} with custom {@code @TempDir}
 	 * jail roots, or {@code OAuthTest}'s inline {@code createTemp} for

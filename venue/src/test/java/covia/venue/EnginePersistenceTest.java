@@ -9,8 +9,6 @@ import static org.junit.jupiter.api.Assertions.fail;
 
 import java.io.File;
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.Test;
 
@@ -20,7 +18,6 @@ import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AccountKey;
-import convex.core.data.Keyword;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
@@ -285,47 +282,7 @@ public class EnginePersistenceTest {
 	}
 
 	// ========================================================================
-	// Test 2 — Engine.close() runs a final flush BEFORE nodeServer.close(),
-	// so writes survive even if the caller never calls flush() explicitly.
-	// This is the bug we discovered in the AP demo session.
-	// ========================================================================
-	@Test
-	public void testCloseDoesFinalFlush() throws Exception {
-		File etchFile = newTempEtch();
-		String storePath = etchFile.getAbsolutePath().replace('\\', '/');
-		AKeyPair venueKey = AKeyPair.createSeeded(1002);
-		var config = testConfig(storePath, venueKey.getSeed().toHexString());
-
-		AccountKey expectedKey = venueKey.getAccountKey();
-
-		// Phase 1: launch venue, write through venueState, close (no manual flush)
-		{
-			VenueServer server = VenueServer.launch(config);
-			Engine engine = server.getEngine();
-
-			engine.getVenueState().users().ensure(BOB_DID);
-
-			// Close WITHOUT calling flush() — the close should do its own
-			// final flush so the write survives anyway.
-			server.close();
-		}
-
-		// Phase 2: launch a fresh venue against the same store
-		{
-			VenueServer server = VenueServer.launch(config);
-			try {
-				// Bob's user record must be present after restart
-				ACell bobRecord = userRecordInStore(server.getStore(), expectedKey, BOB_DID);
-				assertNotNull(bobRecord,
-					"Bob's user record must survive close+restart — Engine.close() should do a final flush");
-			} finally {
-				server.close();
-			}
-		}
-	}
-
-	// ========================================================================
-	// Test 3 — A burst of writes all reach the disk through a single flush.
+	// A burst of writes all reach the disk through a single flush.
 	// ========================================================================
 	@Test
 	public void testFlushPersistsBurstOfWrites() throws Exception {
