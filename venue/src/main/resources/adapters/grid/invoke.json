@@ -1,6 +1,6 @@
 {
 	"name": "Grid Invoke",
-	"description": "Submit any operation on the local or a remote venue and return immediately with a job snapshot — does not block. Use grid_run if you want the result inline.\n\nThe escape hatch for invoking operations not exposed as MCP tools: discover with covia_inspect path=v/ops, drill into a group, then invoke any path. The operation argument accepts every resolvable form: v/ops/json/merge (venue catalog), o/my-pipeline (your pin), a/<hash> (asset by content hash), or did:web:<host>/v/ops/... (remote venue).\n\nReturns a job snapshot — poll with grid_job_status or wait for the result with grid_job_result(id=<returned id>).",
+	"description": "Submit an operation by reference on this venue, or on the explicit venue target, and return its Job snapshot without waiting for completion. Use grid_run to wait for the result. Discover operation references through the catalog; they may be venue paths, user pins, asset hashes, or DID URLs. A DID URL identifies where to fetch the definition, not where to execute it. Pass venue explicitly for remote execution. Poll with grid_job_status or wait with grid_job_result.\n\nRequires invoke on the requested operation reference or a containing operation tree. This is permission to look up and start that operation, not permission to access its underlying resources. The operation enforces those permissions under the caller authority at the execution venue. A direct tool binding to an operation does not itself require invoke; this tool does because it accepts an arbitrary operation reference.",
 	"operation": {
 		"adapter": "grid:invoke",
 		"readOnly": false,
@@ -9,7 +9,7 @@
 			"properties": {
 				"operation": {
 					"type": "string",
-					"description": "Any resolvable op reference: v/ops/<group>/<op>, o/<pin>, a/<hash>, or did:web:<host>/v/ops/<group>/<op> for federated calls."
+					"description": "Operation definition reference: v/ops/<group>/<op>, o/<pin>, a/<hash>, or a DID URL. A remote definition is fetched and executed locally unless venue explicitly selects another execution venue."
 				},
 				"input": {
 					"description": "Arguments matching the operation's input schema (any JSON value — object, array, string, number, boolean, or null). Read the schema first via covia_read v/ops/<group>/<op>."

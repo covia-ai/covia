@@ -249,7 +249,6 @@ public class TelegramAdapter extends AMessagingAdapter<BotSpec, BotRunner> {
 
 	@Override
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
-		requireInvoke(ctx);
 		String subOp = getSubOperation(meta);
 		if (subOp == null) throw new InvalidDefinitionException("Insufficient specification for telegram operation");
 		return switch (subOp) {

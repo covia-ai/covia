@@ -40,11 +40,14 @@ import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.api.Fields;
 import covia.exception.ConfigurationException;
+import covia.exception.AuthException;
+import covia.exception.CapabilityDeniedException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
 import covia.exception.NotSupportedException;
 import covia.exception.ResponseException;
 import covia.exception.UnavailableException;
+import covia.utils.HTTPURLs;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 
@@ -75,7 +78,9 @@ import covia.venue.RequestContext;
  * and refused on a loop; 303 re-requests with GET, 301/302 do so for POST, and
  * 307/308 keep the method and body. Credentials — {@code Authorization},
  * {@code Cookie}, every {@code secretHeaders} value and the bearer — are
- * dropped on a change of origin (scheme, host or port) and kept within one.
+ * dropped on a change of origin (scheme, host or port). Retained secret and
+ * OAuth headers are authorised again for each destination. URL-secret grants
+ * constrain every hop, even if a redirect removes the value from the URL.
  * The result names the final {@code url} and lists the {@code redirects}
  * taken; {@code followRedirects: false} returns the redirect response itself.</p>
  */
@@ -237,16 +242,7 @@ public class HTTPAdapter extends AAdapter {
 	 * @throws InvalidInputException if malformed, blocked or private
 	 */
 	public void requireSafeUrl(String url) {
-		URI uri;
-		try {
-			uri = URI.create(url);
-		} catch (Exception e) {
-			throw new InvalidInputException("Malformed URL: " + url);
-		}
-		String scheme = uri.getScheme();
-		if (!"http".equalsIgnoreCase(scheme) && !"https".equalsIgnoreCase(scheme)) {
-			throw new InvalidInputException("URL must be http(s): " + url);
-		}
+		URI uri = HTTPURLs.normalize(url);
 		validateURL(uri, false);
 	}
 
@@ -388,7 +384,7 @@ public class HTTPAdapter extends AAdapter {
 	 * credentials. {@link #follow} derives the next hop's request.
 	 */
 	private record Outbound(String method, String body, LinkedHashMap<String, String> headers,
-			Set<String> credentials) {
+			Set<String> credentials, Map<String, CredentialSource> sources) {
 
 		HttpRequest build(URI uri) {
 			HttpRequest.Builder b = HttpRequest.newBuilder().uri(uri).timeout(Duration.ofSeconds(30));
@@ -425,8 +421,51 @@ public class HTTPAdapter extends AAdapter {
 				if (bodyDropped && (name.equals("content-type") || name.equals("content-length"))) continue;
 				next.put(h.getKey(), h.getValue());
 			}
-			return new Outbound(nextMethod, nextBody, next, credentials);
+			Map<String, CredentialSource> retained = new LinkedHashMap<>();
+			for (var entry : sources.entrySet()) {
+				if (hasHeader(next, entry.getKey())) retained.put(entry.getKey(), entry.getValue());
+			}
+			return new Outbound(nextMethod, nextBody, next, credentials, Map.copyOf(retained));
 		}
+	}
+
+	/** Authority to obtain a header value, retained only while that header travels. */
+	private record CredentialSource(String reference, boolean bearer) { }
+
+	private String credentialValue(CredentialSource source, RequestContext ctx, String destination) {
+		String ref = source.reference();
+		String value = source.bearer() && ref.startsWith(TokenSource.PREFIX)
+			? connectionToken(ctx, ref.substring(TokenSource.PREFIX.length()), destination)
+			: resolveSecret(Strings.create(ref), ctx, source.bearer() ? "bearerSecret" : "secretHeaders", destination);
+		return source.bearer() ? "Bearer " + value : value;
+	}
+
+	/** Re-authorise retained headers; URL-secret grants constrain the whole chain. */
+	private Outbound authorizeRedirect(Outbound request, URI target, RequestContext ctx,
+			Map<String, String> redactions) {
+		String destination = target.toString();
+		try {
+			LinkedHashMap<String, String> headers = new LinkedHashMap<>(request.headers());
+			for (var entry : request.sources().entrySet()) {
+				putHeader(headers, entry.getKey(), credentialValue(entry.getValue(), ctx, destination));
+			}
+			for (String placeholder : new HashSet<>(redactions.values())) {
+				String ref = placeholder.substring(1, placeholder.length() - 1);
+				resolveSecret(Strings.create(ref), ctx, "url secret", destination);
+			}
+			return new Outbound(request.method(), request.body(), headers, request.credentials(), request.sources());
+		} catch (AuthException e) {
+			throw redactDenial(e, redactions);
+		}
+	}
+
+	private static AuthException redactDenial(AuthException e, Map<String, String> redactions) {
+		if (redactions.isEmpty()) return e;
+		String message = redact(e.getMessage(), redactions);
+		if (e instanceof CapabilityDeniedException denied) {
+			return new CapabilityDeniedException(message, denied.getResource(), denied.getAbility(), denied.getAuthority());
+		}
+		return new AuthException(message);
 	}
 
 	/** Sets a header, replacing any existing one of the same name in any case. */
@@ -458,7 +497,6 @@ public class HTTPAdapter extends AAdapter {
 
 	@Override
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
-		requireInvoke(ctx);
 		String subOp = getSubOperation(meta);
 
 		AString url=RT.ensureString(RT.getIn(input, Fields.URL));
@@ -474,6 +512,7 @@ public class HTTPAdapter extends AAdapter {
 		AString bearerSecret=RT.ensureString(RT.getIn(input, Fields.BEARER_SECRET));
 		AMap<AString, ACell> secretHeaders = optionalMap(input, Fields.SECRET_HEADERS);
 		boolean follow = !CVMBool.FALSE.equals(RT.getIn(input, Fields.FOLLOW_REDIRECTS)) && maxRedirects > 0;
+		Map<String, String> urlRedactions = new LinkedHashMap<>();
 
 		try {
 			String method = "GET"; // default
@@ -492,7 +531,6 @@ public class HTTPAdapter extends AAdapter {
 			// this op reports (final url, redirect trail, error chain) is masked
 			// back to its placeholder via urlRedactions so the resolved token is
 			// never persisted or surfaced.
-			Map<String, String> urlRedactions = new LinkedHashMap<>();
 			String finalUrl = resolveUrlSecrets(url.toString(), ctx, urlRedactions);
 			if (queryParams != null && !queryParams.isEmpty()) {
 				StringBuilder queryString = new StringBuilder();
@@ -509,14 +547,26 @@ public class HTTPAdapter extends AAdapter {
 				}
 
 				if (queryString.length() > 0) {
-					finalUrl += (finalUrl.contains("?") ? "&" : "?") + queryString.toString();
+					int fragmentAt = finalUrl.indexOf('#');
+					String fragment = fragmentAt < 0 ? "" : finalUrl.substring(fragmentAt);
+					String requestUrl = fragmentAt < 0 ? finalUrl : finalUrl.substring(0, fragmentAt);
+					finalUrl = requestUrl + (requestUrl.contains("?") ? "&" : "?") + queryString + fragment;
 				}
 			}
 
 			// Validate URL for SSRF safety
-			URI targetUri = new URI(finalUrl);
+			URI targetUri = HTTPURLs.normalize(new URI(finalUrl));
+			finalUrl = targetUri.toString();
 			boolean unrestricted = outboundUnrestricted(ctx);
 			validateURL(targetUri, unrestricted);
+			// Substitution can change which path is sent (for example a secret
+			// containing '#'). The preliminary template check is not authority
+			// for that different destination. Check every URL credential again
+			// against the final URI before any request is made.
+			for (String placeholder : new HashSet<>(urlRedactions.values())) {
+				String ref = placeholder.substring(1, placeholder.length() - 1);
+				resolveSecret(Strings.create(ref), ctx, "url secret", finalUrl);
+			}
 
 			String bodyText = (bodyField == null) ? "" : JSON.printPretty(bodyField).toString();
 
@@ -525,6 +575,7 @@ public class HTTPAdapter extends AAdapter {
 			// User-Agent when the caller set none (#422).
 			LinkedHashMap<String, String> outHeaders = new LinkedHashMap<>();
 			Set<String> credentials = new HashSet<>(CREDENTIAL_HEADERS);
+			Map<String, CredentialSource> sources = new LinkedHashMap<>();
 			if (headers != null) {
 				for (MapEntry<AString, ACell> me : headers.entryVector()) {
 					putHeader(outHeaders, me.getKey().toString(), scalar(me.getValue(), Fields.HEADERS, me.getKey()));
@@ -548,7 +599,9 @@ public class HTTPAdapter extends AAdapter {
 						throw new InvalidInputException(
 							"secretHeaders contains the same header more than once: " + header);
 					}
-					putHeader(outHeaders, header.toString(), resolveSecret(secret, ctx, "secretHeaders", finalUrl));
+					CredentialSource source = new CredentialSource(secret.toString(), false);
+					putHeader(outHeaders, header.toString(), credentialValue(source, ctx, finalUrl));
+					sources.put(canonical, source);
 					credentials.add(canonical);
 				}
 			}
@@ -560,11 +613,9 @@ public class HTTPAdapter extends AAdapter {
 					throw new InvalidInputException(
 						"Specify Authorization in either secretHeaders or bearerSecret, not both");
 				}
-				String ref = bearerSecret.toString();
-				String bearer = ref.startsWith(TokenSource.PREFIX)
-					? connectionToken(ctx, ref.substring(TokenSource.PREFIX.length()), finalUrl)
-					: resolveSecret(bearerSecret, ctx, "bearerSecret", finalUrl);
-				putHeader(outHeaders, "Authorization", "Bearer " + bearer);
+				CredentialSource source = new CredentialSource(bearerSecret.toString(), true);
+				putHeader(outHeaders, "Authorization", credentialValue(source, ctx, finalUrl));
+				sources.put("authorization", source);
 			}
 
 			// The declared body is a JSON value and bodyText is its JSON encoding.
@@ -579,13 +630,15 @@ public class HTTPAdapter extends AAdapter {
 				outHeaders.put(USER_AGENT_HEADER, userAgent);
 			}
 
-			Outbound request = new Outbound(method, bodyText, outHeaders, Set.copyOf(credentials));
+			Outbound request = new Outbound(method, bodyText, outHeaders, Set.copyOf(credentials), Map.copyOf(sources));
 			Set<URI> visited = new HashSet<>();
 			visited.add(targetUri);
-			return send(targetUri, request, follow, maxRedirects, Vectors.empty(), visited, urlRedactions, unrestricted);
+			return send(targetUri, request, follow, maxRedirects, Vectors.empty(), visited, urlRedactions, unrestricted, ctx);
 
 		} catch (URISyntaxException e) {
-			throw new InvalidInputException("Bad URI syntax: "+url,e);
+			throw new InvalidInputException(HTTPURLs.INVALID_URL);
+		} catch (AuthException e) {
+			throw redactDenial(e, urlRedactions);
 		}
 	}
 
@@ -595,7 +648,7 @@ public class HTTPAdapter extends AAdapter {
 	 * longer than the limit and refused targets fail the job naming the chain.
 	 */
 	private CompletableFuture<ACell> send(URI uri, Outbound request, boolean follow, int hopsLeft,
-			AVector<ACell> trail, Set<URI> visited, Map<String, String> redactions, boolean unrestricted) {
+			AVector<ACell> trail, Set<URI> visited, Map<String, String> redactions, boolean unrestricted, RequestContext ctx) {
 		return httpClient.sendAsync(request.build(uri), HttpResponse.BodyHandlers.ofString())
 			.thenCompose(response -> {
 				int code = response.statusCode();
@@ -605,10 +658,10 @@ public class HTTPAdapter extends AAdapter {
 				}
 				URI next;
 				try {
-					next = uri.resolve(location.trim());
-				} catch (IllegalArgumentException e) {
+					next = HTTPURLs.normalize(uri.resolve(location.trim()));
+				} catch (IllegalArgumentException | InvalidInputException e) {
 					throw new ResponseException("Redirect from " + redact(uri.toString(), redactions)
-						+ " has a malformed Location: " + location, response);
+						+ " has a malformed or ambiguous Location", response);
 				}
 				AMap<AString, ACell> hop = Maps.of(
 					Fields.STATUS, CVMLong.create(code),
@@ -626,8 +679,8 @@ public class HTTPAdapter extends AAdapter {
 				} catch (InvalidInputException e) {
 					throw new ResponseException("Redirect refused: " + e.getMessage() + " — " + chain(hops), response);
 				}
-				return send(next, request.follow(code, sameOrigin(uri, next)), true, hopsLeft - 1, hops, visited, redactions,
-					unrestricted);
+				Outbound redirected = authorizeRedirect(request.follow(code, sameOrigin(uri, next)), next, ctx, redactions);
+				return send(next, redirected, true, hopsLeft - 1, hops, visited, redactions, unrestricted, ctx);
 			});
 	}
 
@@ -709,10 +762,12 @@ public class HTTPAdapter extends AAdapter {
 	/** Inline URL credential placeholder: {s/NAME}, resolved to the stored secret. */
 	private static final Pattern URL_SECRET = Pattern.compile("\\{(s/[^}{]+)\\}");
 
+	public static final String URL_SECRET_STRUCTURE = "URL secrets must be in the path or query and preserve the normalized URL";
+
 	/**
 	 * Substitutes every {@code {s/NAME}} placeholder in the URL with its
-	 * resolved secret, in a single pass. A URL with no placeholder is returned
-	 * unchanged (the common case). The resolved value is spliced in verbatim —
+	 * resolved secret after normalising the template. The resolved value must
+	 * survive normalisation verbatim, so it can always be redacted —
 	 * like {@code bearerSecret}/{@code secretHeaders} do for header values — so
 	 * a token keeps whatever literal form the API expects (e.g. Telegram's
 	 * {@code <id>:<hash>}). Place a URL secret in the path or query, never the
@@ -721,20 +776,47 @@ public class HTTPAdapter extends AAdapter {
 	 */
 	private String resolveUrlSecrets(String rawUrl, RequestContext ctx, Map<String, String> redactions) {
 		Matcher m = URL_SECRET.matcher(rawUrl);
-		if (!m.find()) return rawUrl;
-		// The destination a grant is checked against is the url itself with its
-		// placeholders blanked, which still names the host and path.
-		String destination = m.replaceAll("secret");
-		StringBuilder out = new StringBuilder();
+		if (!m.find()) return HTTPURLs.normalize(rawUrl).toString();
+		// Normalise the template before resolving credentials. Unique path-safe
+		// markers keep placeholder braces out of the URI parser and let dot
+		// processing remove an unused placeholder without resolving its secret.
+		Map<String, String> placeholders = new LinkedHashMap<>();
+		StringBuilder template = new StringBuilder();
 		m.reset();
 		while (m.find()) {
-			String placeholder = m.group();
-			String resolved = resolveSecret(Strings.create(m.group(1)), ctx, "url secret", destination);
-			redactions.put(resolved, placeholder);
-			m.appendReplacement(out, Matcher.quoteReplacement(resolved));
+			String marker = "covia-secret-" + java.util.UUID.randomUUID();
+			placeholders.put(marker, m.group());
+			m.appendReplacement(template, marker);
 		}
-		m.appendTail(out);
-		return out.toString();
+		m.appendTail(template);
+		URI templateUri = HTTPURLs.normalize(template.toString());
+		String destination = templateUri.toString();
+		for (String marker : placeholders.keySet()) {
+			if (templateUri.getRawAuthority().contains(marker)
+					|| (templateUri.getRawFragment() != null && templateUri.getRawFragment().contains(marker))) {
+				throw new InvalidInputException(URL_SECRET_STRUCTURE);
+			}
+			destination = destination.replace(marker, "secret");
+		}
+		String resolvedUrl = templateUri.toString();
+		String reportedUrl = resolvedUrl;
+		for (var entry : placeholders.entrySet()) {
+			if (!resolvedUrl.contains(entry.getKey())) continue;
+			String placeholder = entry.getValue();
+			String ref = placeholder.substring(1, placeholder.length() - 1);
+			String resolved = resolveSecret(Strings.create(ref), ctx, "url secret", destination);
+			if (resolved.isEmpty()) throw new InvalidInputException(URL_SECRET_STRUCTURE);
+			redactions.put(resolved, placeholder);
+			resolvedUrl = resolvedUrl.replace(entry.getKey(), resolved);
+			reportedUrl = reportedUrl.replace(entry.getKey(), placeholder);
+		}
+		String normalized = HTTPURLs.normalize(resolvedUrl).toString();
+		// A credential containing dot segments or encoded unreserved characters
+		// must not be transformed into an unredactable fragment in job output.
+		if (!redact(normalized, redactions).equals(reportedUrl)) {
+			throw new InvalidInputException(URL_SECRET_STRUCTURE);
+		}
+		return normalized;
 	}
 
 	/**

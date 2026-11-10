@@ -100,7 +100,6 @@ public class UserAdapter extends AAdapter {
 	@Override
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx,
 			AMap<AString, ACell> meta, ACell input) {
-		requireInvoke(ctx);
 		String subOperation = getSubOperation(meta);
 		String event = switch (subOperation) {
 			case "create" -> Audit.USER_CREATE;
@@ -153,7 +152,7 @@ public class UserAdapter extends AAdapter {
 			AString operation = RT.ensureString(RT.getIn(input, Fields.OPERATION));
 			if (operation == null) throw new InvalidInputException("operation is required");
 			RequestContext sudo = engine.sudoContext(ctx, userDID);
-			return engine.jobs().invokeInternal(operation, RT.getIn(input, Fields.INPUT), sudo);
+			return engine.jobs().runOperation(operation, RT.getIn(input, Fields.INPUT), sudo, false);
 		} catch (Exception e) {
 			return CompletableFuture.failedFuture(e);
 		}

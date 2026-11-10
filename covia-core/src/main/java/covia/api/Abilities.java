@@ -16,8 +16,10 @@ public final class Abilities {
 
 	private Abilities() {}
 
-	/** Run an operation. Its {@code with} names the operation chosen, whoever
-	 *  publishes it: the operation runs with the invoker's own authority. */
+	/** Look up an operation by reference and start its Job. {@code with}
+	 *  names the permitted location or operation tree, whoever publishes it.
+	 *  This grants no authority over resources the operation uses. A directly
+	 *  bound tool needs its action authority, not arbitrary lookup permission. */
 	public static final AString INVOKE        = Strings.intern("invoke");
 
 	public static final AString ASSET_READ    = Strings.intern("asset/read");

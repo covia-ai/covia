@@ -460,7 +460,7 @@ public class AgentAdapter extends AAdapter {
 	 */
 	public Job deliverSession(ACell input, RequestContext ctx) {
 		Delivery delivery = new Delivery(java.util.Objects.requireNonNull(ctx.getSessionDelivery()));
-		Job job = engine.jobs().invokeOperation("v/ops/agent/chat", input, ctx.withSessionDelivery(delivery));
+		Job job = engine.jobs().callOperation("v/ops/agent/chat", input, ctx.withSessionDelivery(delivery));
 		if (!delivery.taken && !delivery.duplicate) throw new JobFailedException(job);
 		engine.flush();
 		AgentTarget target = resolveAgentTarget(ctx, input, Fields.AGENT_ID, Abilities.AGENT_MESSAGE, false);
@@ -670,8 +670,8 @@ public class AgentAdapter extends AAdapter {
 		// restricted transition scope: these context-bound lifecycle actions do
 		// not resolve a user-supplied target or require an additional agent cap. A
 		// scoped agent that cannot complete/fail its own task is trapped in the tool
-		// loop until the iteration limit. The invoke gate covers everything else.
-		if (!"completeTask".equals(subOp) && !"failTask".equals(subOp)) requireInvoke(ctx);
+		// loop until the iteration limit. Other actions check their target resources.
+
 		try {
 			switch (subOp) {
 				case "completeTask" -> {
@@ -857,7 +857,6 @@ public class AgentAdapter extends AAdapter {
 			// is context-bound framework plumbing; every other user-facing
 			// operation requires invocation of its exact definition.
 			if (!"completeTask".equals(subOp) && !"failTask".equals(subOp)) {
-				requireInvoke(ctx);
 			}
 			switch (subOp) {
 				case "create"  -> handleCreate(job, input, ctx);

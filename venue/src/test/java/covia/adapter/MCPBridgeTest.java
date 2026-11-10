@@ -103,7 +103,7 @@ public class MCPBridgeTest {
 		// Self-contained dispatch pins: adapter, remoteToolName, server
 		assertEquals("mcp:tools:call", RT.getIn(meta, Fields.OPERATION, Fields.ADAPTER).toString());
 		assertEquals("test_echo", RT.getIn(meta, Fields.OPERATION, Fields.REMOTE_TOOL_NAME).toString());
-		assertEquals(TestServer.BASE_URL, RT.getIn(meta, Fields.OPERATION, Fields.SERVER).toString());
+		assertEquals(TestServer.BASE_URL + "/", RT.getIn(meta, Fields.OPERATION, Fields.SERVER).toString());
 		// The op's declared input is the TOOL's own schema
 		assertNotNull(RT.getIn(meta, Fields.OPERATION, Fields.INPUT),
 			"bridged op must declare the tool's input schema");

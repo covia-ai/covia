@@ -444,6 +444,17 @@ public class OAuthAdapterTest {
 					Maps.of("url", fake.base() + "/token", "bearerSecret", "oauth/fake"), bound));
 				assertTrue(elsewhere.contains(Abilities.OAUTH_USE.toString()), elsewhere);
 
+				fake.server.createContext("/api/redirect", x -> {
+					x.getResponseHeaders().set("Location", "/api/%2e%2e/token");
+					x.sendResponseHeaders(302, -1);
+					x.close();
+				});
+				int tokenRequests = fake.tokenRequests.size();
+				String redirected = failed(run(engine, "v/ops/http/get",
+					Maps.of("url", fake.base() + "/api/redirect", "bearerSecret", "oauth/fake"), bound));
+				assertTrue(redirected.contains(Abilities.OAUTH_USE.toString()), redirected);
+				assertEquals(tokenRequests, fake.tokenRequests.size(), "the denied hop must never reach /token");
+
 				// The owner uses their own connection as of right.
 				assertEquals("Bearer access-1", RT.getIn(ok(run(engine, "v/ops/http/get", me, alice)), "body").toString());
 			} finally {

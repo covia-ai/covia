@@ -2065,17 +2065,16 @@ public class LLMAgentAdapterTest {
 	}
 
 	@Test
-	public void testScopedInvokeDeniesOutOfScopeTool() {
-		// #211: the same agent under an invoke grant that does NOT cover the
-		// tool op — the tool call is denied, the denial (naming the op) is fed
-		// to the model, and the agent handles it in one cycle: no looping to
-		// the iteration limit, agent back to SLEEPING.
+	public void testBoundPureToolNeedsNoMatchingInvokeGrant() {
+		// Bound tools do not exercise an arbitrary-lookup grant.
 		engine.jobs().invokeOperation(
 			"v/ops/agent/create",
 			Maps.of(
 				Fields.AGENT_ID, "scoped-deny-agent",
 				Fields.CONFIG, Maps.of(
 					Fields.OPERATION, "v/ops/llmagent/chat",
+					Fields.TOOLS, Vectors.of(Maps.of("name", "v/test/ops/echo",
+						"operation", "v/test/ops/echo")),
 					"llmOperation", "v/test/ops/toolllm",
 					"caps", Vectors.of(Maps.of(
 						"with", Strings.create("v/ops/schema"),
@@ -2090,14 +2089,47 @@ public class LLMAgentAdapterTest {
 			RequestContext.of(ALICE_DID));
 		ACell result = chatJob.awaitResult(10000);
 		String response = RT.getIn(result, Fields.RESPONSE).toString();
-		assertTrue(response.contains("v/test/ops/echo"),
-			"the denial must reach the model naming the blocked op: " + response);
+		assertTrue(response.contains("Tool returned"),
+			"the bound pure tool must run: " + response);
 
 		User user = engine.getVenueState().users().user(ALICE_DID);
 		Agent agent = user.agent("scoped-deny-agent");
 		AgentWatch.awaitStatus(engine, ALICE_DID, agent, Agent.SLEEPING);
 		assertEquals(Agent.SLEEPING, agent.getStatus(),
-			"a handled denial is not an agent failure — no suspension, no loop");
+			"the successful tool call leaves the agent sleeping");
+	}
+
+	@Test
+	public void testUnboundReferenceRequiresMatchingInvokeGrant() {
+		// A raw operation reference outside the palette exercises invoke.
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(
+				Fields.AGENT_ID, "unbound-deny-agent",
+				Fields.CONFIG, Maps.of(
+					Fields.OPERATION, "v/ops/llmagent/chat",
+					"llmOperation", "v/test/ops/toolllm",
+					"caps", Vectors.of(Maps.of(
+						"with", Strings.create("v/ops/schema"),
+						"can", Strings.create("invoke"))))
+			),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		Job chatJob = engine.jobs().invokeOperation(
+			"v/ops/agent/chat",
+			Maps.of(Fields.AGENT_ID, "unbound-deny-agent",
+				Fields.MESSAGE, Strings.create("use your tool")),
+			RequestContext.of(ALICE_DID));
+		ACell result = chatJob.awaitResult(10000);
+		String response = RT.getIn(result, Fields.RESPONSE).toString();
+		assertTrue(response.contains("invoke") && response.contains("v/test/ops/echo"),
+			"the raw reference must be refused: " + response);
+
+		User user = engine.getVenueState().users().user(ALICE_DID);
+		Agent agent = user.agent("unbound-deny-agent");
+		AgentWatch.awaitStatus(engine, ALICE_DID, agent, Agent.SLEEPING);
+		assertEquals(Agent.SLEEPING, agent.getStatus(),
+			"the successful tool call leaves the agent sleeping");
 	}
 
 	@Test
@@ -2597,6 +2629,15 @@ public class LLMAgentAdapterTest {
 	public void testTaskMessageNoTasks() {
 		assertNull(previewTasks(RequestContext.of(ALICE_DID), null).message());
 		assertNull(previewTasks(null, Vectors.empty()).message());
+		TaskTools.Tasks chat = previewTasks(RequestContext.of(ALICE_DID), Vectors.empty());
+		var completed = chat.complete(completeCall("Yes, I'm here."), null);
+		assertEquals(TaskTools.NO_TASK.formatted(TaskTools.COMPLETE), completed.result().toString());
+		assertNull(completed.terminalStatus());
+		var failed = chat.fail(new ToolCycleEngine.ToolCall(Strings.create("f1"), TaskTools.FAIL,
+			Maps.of(Fields.ERROR, "no task"), 0), null);
+		assertEquals(TaskTools.NO_TASK.formatted(TaskTools.FAIL), failed.result().toString());
+		assertNull(failed.terminalStatus());
+		assertFalse(chat.resolved(), "misusing a task control cannot resolve unrelated work");
 	}
 
 	@Test

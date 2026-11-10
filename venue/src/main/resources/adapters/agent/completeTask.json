@@ -1,6 +1,6 @@
 {
     "name": "Complete Agent Task",
-    "description": "Deliver the final result for the in-scope task and end it. This is terminal: the caller receives the result and nothing else. During an LLM transition, a long prose answer may be supplied as the message text with no result argument in the same turn; otherwise pass the answer in result. Only invoke this once the actual answer is ready. The agent and task are determined from the current request context — no id is passed. Without a task in scope the call fails. Side effects: completes the pending task Job and removes the task from the agent's task queue.",
+    "description": "Use only for an assigned task shown in the current task context. For ordinary chat, send a normal assistant reply instead of calling this tool. Deliver the final result for the in-scope task and end it. This is terminal: the caller receives the result and nothing else. During an LLM transition, a long prose answer may be supplied as the message text with no result argument in the same turn; otherwise pass the answer in result. Only invoke this once the actual answer is ready. The agent and task are determined from the current request context — no id is passed. Without a task in scope the call fails. Side effects: completes the pending task Job and removes the task from the agent's task queue.",
     "dateCreated": "2026-04-16T00:00:00Z",
     "operation": {
         "adapter": "agent:completeTask",

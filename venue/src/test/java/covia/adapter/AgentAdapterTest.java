@@ -1088,6 +1088,10 @@ public class AgentAdapterTest {
 		assertEquals(CVMLong.create(1), RT.getIn(withMessage, "marks", "head"));
 		assertEquals(Strings.create("bracket"), withMessage.get(Strings.intern("labels")));
 		assertNotNull(withMessage.get(Strings.intern("cacheMarks")), "the input is a cache breakpoint");
+		assertTrue(RT.getIn(messages.get(messages.count() - 1), "content").toString()
+			.contains(covia.adapter.agent.ContextAssembler.NO_TASK_NOTICE));
+		assertTrue(RT.getIn(messages.get(messages.count() - 1), "content").toString()
+			.contains(covia.adapter.agent.ContextAssembler.REPLY_NOTICE), "inspection includes the live reply notice");
 
 		// A task renders exactly as the tool loop renders it, task tools offered.
 		AMap<AString, ACell> withTask = RT.ensureMap(engine.jobs().invokeOperation("v/ops/agent/context",
@@ -3883,14 +3887,15 @@ public class AgentAdapterTest {
 	@Test
 	@SuppressWarnings("unchecked")
 	public void testToolFailureRecordedAndVisibleInContext() {
-		// toolllm calls v/test/ops/echo once, then reports the tool result as
-		// text. The scope's invoke grant does not cover echo → denial.
+		// toolllm calls covia_read once, then reports the tool result as
+		// text. The scope grants no read on the target resource.
 		engine.jobs().invokeOperation(
 			"v/ops/agent/create",
 			Maps.of(
 				Fields.AGENT_ID, "tool-fail-agent",
 				Fields.CONFIG, Maps.of(
 					Fields.OPERATION, "v/ops/llmagent/chat",
+					Fields.TOOLS, Vectors.of("v/ops/covia/read"),
 					Strings.create("llmOperation"), Strings.create("v/test/ops/toolllm"),
 					Strings.create("caps"), Vectors.of(Maps.of(
 						"with", Strings.create("v/ops/schema"),
@@ -3901,7 +3906,7 @@ public class AgentAdapterTest {
 		Job chatJob = engine.jobs().invokeOperation(
 			"v/ops/agent/chat",
 			Maps.of(Fields.AGENT_ID, "tool-fail-agent",
-				Fields.MESSAGE, Strings.create("use your tool")),
+				Fields.MESSAGE, Strings.create("issue-334-read")),
 			RequestContext.of(ALICE_DID));
 		ACell chatResult = chatJob.awaitResult(10000);
 		AString sidHex = RT.ensureString(RT.getIn(chatResult, Fields.SESSION_ID));
@@ -3915,7 +3920,7 @@ public class AgentAdapterTest {
 		assertNotNull(inferences, "timeline entry must record the cycle's inferences");
 		ACell denied = RT.ensureVector(RT.getIn(inferences.get(0), Fields.CALLS)).get(0);
 		assertEquals(CVMBool.TRUE, RT.getIn(denied, "isError"), "the call is recorded as failed: " + denied);
-		assertTrue(RT.getIn(denied, Fields.RESULT).toString().contains("v/test/ops/echo"),
+		assertTrue(RT.getIn(denied, Fields.RESULT).toString().contains("crud/read"),
 			"the recorded failure must carry the denial: " + denied);
 		// 2. Session conversation contains exactly one tool failure turn: the
 		// provider-shaped result needed to keep the conversation valid.
@@ -3928,7 +3933,7 @@ public class AgentAdapterTest {
 			ACell turn = conversation.get(i);
 			if (Agent.SOURCE_TOOL.equals(RT.getIn(turn, "source"))) {
 				String content = String.valueOf(RT.getIn(turn, "content"));
-				assertTrue(content.contains("v/test/ops/echo"),
+				assertTrue(content.contains("crud/read"),
 					"the failure turn must carry the denial: " + content);
 				assertEquals(Strings.intern("tool"), RT.getIn(turn, "role"),
 					"tool failures must not be duplicated as synthetic system turns");
@@ -3945,7 +3950,7 @@ public class AgentAdapterTest {
 				Fields.SESSION_ID, sidHex),
 			RequestContext.of(ALICE_DID));
 		String rendered = String.valueOf(contextJob.awaitResult(5000));
-		assertTrue(rendered.contains("v/test/ops/echo"),
+		assertTrue(rendered.contains("crud/read"),
 			"agent:context with sessionId must surface the failure turn: " + rendered);
 
 		// Without a sessionId the synthetic fresh-transition render is

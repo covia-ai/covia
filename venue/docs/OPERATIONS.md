@@ -470,8 +470,10 @@ disabled or excluded tools are not listed. Older venues may omit this metadata:
 treat absence as unknown, not as evidence that an operation is unavailable.
 
 This is runtime discovery metadata, not part of the immutable operation asset.
-Exposure does not grant permission to invoke an operation: the normal capability
-checks still apply. REST/native invocation remains subject to its own checks
+Exposure binds a direct tool; it grants no authority over the resources the
+operation uses. Those resource checks still apply, without a blanket `invoke`
+requirement for a bound tool. Generic REST/native invocation additionally
+checks `invoke` on the requested reference and remains subject to its own checks
 and operation restrictions, independently of MCP exposure.
 
 A `tools/call` that the venue accepts and that then fails answers a tool result
@@ -508,6 +510,14 @@ A small fixed set of primitives covers all interaction with operations and the c
 | `asset:list` | `limit?`, `offset?` | Caller's `/a/` | — | Asset summaries | List assets in the caller's CAS |
 
 #### `grid:` — operation invocation
+
+`grid:run` and `grid:invoke` look up their `operation` argument under the
+caller's authority. They need `invoke` on that target reference or a containing
+tree, not merely permission naming the grid wrapper. The chosen operation
+independently checks its resource authority. A directly exposed tool for that
+same operation needs only its action authority; the difference is arbitrary
+reference lookup, not whether execution creates a Job.
+
 
 | Op | Args | Returns | Purpose |
 |----|------|---------|---------|

@@ -75,7 +75,6 @@ public class ProjectAdapter extends AAdapter {
 
 	@Override
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
-		requireInvoke(ctx);
 		String subOp = getSubOperation(meta);
 		return CompletableFuture.failedFuture(new NotSupportedException(
 			"Unknown project operation: " + subOp + " (the project adapter provides no operations yet; "

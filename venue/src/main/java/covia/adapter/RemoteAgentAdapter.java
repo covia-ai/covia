@@ -53,7 +53,6 @@ public class RemoteAgentAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 	}
 	@Override protected boolean isInteractionOperation(String operation) { return "request".equals(operation) || "chat".equals(operation); }
 	@Override public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
-		requireInvoke(ctx);
 		if (!isInteractionOperation(getSubOperation(meta))) throw new NotSupportedException(UNKNOWN_OPERATION);
 		return engine.jobs().invokeInternal(meta, input, ctx);
 	}

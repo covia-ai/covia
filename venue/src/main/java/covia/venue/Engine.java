@@ -4670,7 +4670,15 @@ public class Engine {
 	 * @throws ConfigurationException when the guard cannot be enforced
 	 */
 	public void requireSafeUrl(RequestContext ctx, String url) {
-		if (!outboundUnrestricted(ctx)) requireSafeUrl(url);
+		outboundUrl(ctx, url);
+	}
+
+	/** Normalises a caller-chosen HTTP URL before the outbound guard. Adapters
+	 * must use the returned URL for both credential checks and transport. */
+	public String outboundUrl(RequestContext ctx, String url) {
+		String normalized = covia.utils.HTTPURLs.normalize(url).toString();
+		if (!outboundUnrestricted(ctx)) requireSafeUrl(normalized);
+		return normalized;
 	}
 
 	/**

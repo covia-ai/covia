@@ -731,7 +731,8 @@ advertised skill authorises adding that definition. Anything else requires an
 explicit resource-scoped `skill/load` or `tool/load` grant. For these two
 opt-ins a null capability scope is not consent. The ordinary read checks still
 apply while resolving metadata, and every eventual operation call independently
-requires `invoke` at its point of action.
+checks its resource authority. A bound tool needs no `invoke` grant; a generic
+invocation tool checks `invoke` on its target reference.
 
 In cached mode, if such a load is present while a context is first materialised
 (or explicitly rebuilt), its definitions enter `renderedContext.tools`. An
@@ -752,7 +753,11 @@ An adapter or plugin loading or unloading mutates the venue capability registry,
 
 The same rule applies to conditional capabilities. The static `complete_task` /
 `fail_task` schemas stay in the fixed harness manifest and reject calls when no
-task is in scope. Skill and `more_tools` loads append exact addition/removal
+task is in scope. When those controls are offered without an outstanding task,
+the current-turn notices explicitly say that no task is assigned, that these
+controls must not be called, and that ordinary chat is answered with a normal
+reply. This status is re-rendered outside the cached prefix; it does not mutate
+the tool vector or enter conversation history. Skill and `more_tools` loads append exact addition/removal
 state and use the fixed `invoke_tool` dispatcher where the provider has no
 native representation. `context_unload`
 removes any agent-managed load, including a tool-only load, so it also retracts
@@ -1033,7 +1038,7 @@ One line, changing daily, taken from the Spec's clock — never from the system 
 Tool resolution failures observed during initialisation or a current append — reported so the agent adapts rather than calling into a void. The adapter registry is not polled by assembly; a restored operation becomes available through an explicit tool-state event or prefix rebuild.
 
 ### 5.13 Outstanding task
-Present only when the agent has a task it must complete or fail. A `user` message rendered last on every inference — after the tool-loop messages and after the notices — so it is the thing nearest the reply, and never baked into history: the model sees only tasks still outstanding. The same on every runtime. `complete_task` / `fail_task` stay in the root frame's tools whether or not this message is present (§3.2.3), and a call with no task in scope is refused — the framework's task boundary (`TaskTools`). A goal-tree frame's *goal* is its opening turn, not this slot; see [GOAL_TREE.md](./GOAL_TREE.md), “Sessions and Frames”.
+Present only when the agent has a task it must complete or fail. A `user` message rendered last on every inference — after the tool-loop messages and after the notices — so it is the thing nearest the reply, and never baked into history: the model sees only tasks still outstanding. The same on every runtime, and `agent:context`, `agent:step` and live inferences render the same task status. `complete_task` / `fail_task` stay in the root frame's tools whether or not this message is present (§3.2.3). Their presence alone does not mean a task is assigned: a call with no task in scope is refused — the framework's task boundary (`TaskTools`) — and a frame that offers them with no task in scope gets a no-task notice among the notices instead, telling it to answer chat normally (`ContextAssembler.NO_TASK_NOTICE`). A frame without them gets no such notice. A goal-tree frame's *goal* is its opening turn, not this slot; see [GOAL_TREE.md](./GOAL_TREE.md), “Sessions and Frames”.
 
 ---
 

@@ -71,7 +71,7 @@ public class DiscordAdapter extends AMessagingAdapter<BotSpec, BotRunner> {
 	void rearmForTest(){rearmRuntimeBots();}
 
 	@Override public CompletableFuture<ACell> invokeFuture(RequestContext ctx,AMap<AString,ACell> meta,ACell input){
-		requireInvoke(ctx);String op=getSubOperation(meta);if(op==null)throw new InvalidDefinitionException("Insufficient specification for discord operation");
+		String op=getSubOperation(meta);if(op==null)throw new InvalidDefinitionException("Insufficient specification for discord operation");
 		return CompletableFuture.supplyAsync(()->switch(op){case "send"->send(ctx,input);case "call"->call(ctx,input);case "create"->handleCreate(ctx,input);case "delete"->handleDelete(ctx,input);case "bots"->handleBots(ctx);default->throw new NotSupportedException("Unsupported discord operation: "+op);},VIRTUAL_EXECUTOR);
 	}
 	private ACell send(RequestContext ctx,ACell input){

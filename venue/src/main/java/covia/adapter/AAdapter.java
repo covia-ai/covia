@@ -829,39 +829,8 @@ public abstract class AAdapter {
         return scheme + "://" + authority + "/" + p;
     }
 
-    /** The baseline op-invocation ability — "the right to run an operation".
-     *  Required by adapters that do not act on a specific named lattice resource
-     *  (compute, LLM, external I/O, federation, scheduling, …). */
+    /** Permission to look up and run an arbitrary operation reference. */
     protected static final AString INVOKE = Abilities.INVOKE;
-
-    /**
-     * Asserts the baseline {@link #INVOKE} capability at the adapter's enforcement
-     * point. An invoke-class adapter calls this at the top of its dispatch — before
-     * any side effect — so the capability check happens where the op actually
-     * runs, with no central name-keyed mapping. A {@code null} grant scope
-     * (authenticated/internal) is unrestricted (no-op); a restricted scope
-     * (e.g. the public read-only profile, which withholds {@code invoke}) denies.
-     *
-     * <p>The checked resource is the caller-supplied operation reference from
-     * {@link RequestContext#getOp()} (e.g. {@code "v/ops/langchain/openai"}),
-     * so an {@code invoke} grant can be scoped to specific operations:
-     * {@code {"with": "v/ops/getmine", "can": "invoke"}} (#211). A wildcard
-     * grant — {@code {"can": "invoke"}} or {@code {"with": "", "can": "invoke"}}
-     * — covers every invoke, including metadata-direct and hash-form
-     * invocations where no reference path is available ({@code getOp() == null}
-     * → resource-less check, coverable only by the wildcard).</p>
-     */
-    protected void requireInvoke(RequestContext ctx) {
-        // The framework always supplies a context (at minimum ANONYMOUS); a null
-        // ctx only occurs in direct unit-test calls that bypass dispatch — treat
-        // as no enforcement context. Route through the single authority seam so an
-        // invoke grant may be satisfied by a config grant OR a presented proof
-        // (additive); fall back to the scope-only check when no engine is wired
-        // (adapters constructed directly in unit tests).
-        if (ctx == null) return;
-        if (engine != null) engine.requireInvoke(ctx, ctx.getOp());
-        else ctx.requireCapability(ctx.getOp(), INVOKE);
-    }
 
     /**
      * Extracts the full {@code adapter:operation} string from operation metadata.

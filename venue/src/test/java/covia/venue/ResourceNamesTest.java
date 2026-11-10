@@ -194,7 +194,7 @@ public class ResourceNamesTest {
 	// ========== Every route ==========
 
 	private Job run(String op, ACell input, RequestContext ctx) {
-		Job job = engine.jobs().invokeOperation(op, input, ctx);
+		Job job = engine.jobs().callOperation(op, input, ctx);
 		try {
 			job.awaitResult(10_000);
 		} catch (Exception refused) {

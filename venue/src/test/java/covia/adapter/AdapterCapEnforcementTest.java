@@ -219,17 +219,17 @@ public class AdapterCapEnforcementTest {
 
 	// ===================== job-aware invoke gates =====================
 
-	@Test public void a2aFuturePathRequiresInvokeBeforeOutboundWork() {
-		assertTrue(capDenied(direct("a2a", "getAgentCard",
-			m(Fields.URL, "http://10.0.0.1/a2a"), readOnly)),
-			"A2A must deny at requireInvoke before URL validation or network work");
+	@Test public void directA2AStillValidatesItsDestination() {
+		String failure = direct("a2a", "getAgentCard",
+			m(Fields.URL, "http://10.0.0.1/a2a"), readOnly);
+		assertFalse(failure.isEmpty(), "private outbound destinations remain blocked");
+		assertFalse(failure.contains("requires invoke"), failure);
 	}
 
-	@Test public void agentJobPathRequiresInvokeAsWellAsTheActionAbility() {
+	@Test public void genericAgentInvocationRequiresInvokeAsWellAsTheActionAbility() {
 		String agentId = "cap-invoke-" + System.nanoTime();
 		// Deliberately grant the action-specific right but not invocation of the
-		// operation definition. The Job-aware override must enforce both, exactly
-		// like AgentAdapter.invokeFuture does.
+		// operation definition. Generic invocation must enforce both.
 		RequestContext actionOnly = RequestContext.of(DID).withCaps(Vectors.of(
 			Capability.create(Strings.create("g/" + agentId), Strings.create("agent/create"))));
 		Job job = engine.jobs().invokeOperation("v/ops/agent/create",

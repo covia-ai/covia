@@ -69,7 +69,6 @@ public class VenueStartupTest {
 		}
 		@Override public CompletableFuture<ACell> invokeFuture(RequestContext ctx,
 				AMap<AString, ACell> metadata, ACell input) {
-			requireInvoke(ctx);
 			assertTrue(recovered, "embedder recovery must precede the overdue fire");
 			assertEquals(1, starts.get());
 			calls.incrementAndGet();

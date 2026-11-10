@@ -126,7 +126,6 @@ public abstract class AWebhookMessagingAdapter<S extends WebhookBotSpec>
 		draft.delete(userStatePath(owner, "relay/" + name));
 	}
 	@Override public final CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
-		requireInvoke(ctx);
 		String op = getSubOperation(meta);
 		return CompletableFuture.supplyAsync(() -> switch (op == null ? "" : op) {
 			case "create" -> handleCreate(ctx, input);

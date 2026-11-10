@@ -70,7 +70,7 @@ public class ArchiveAdapterTest {
 	}
 
 	private ACell run(String op, ACell input) {
-		Job job = engine.jobs().invokeOperation(op, input, ctx());
+		Job job = engine.jobs().callOperation(op, input, ctx());
 		ACell result = job.awaitResult(5000);
 		if (job.getStatus() == Status.FAILED) {
 			throw new AssertionError("Job failed: " + job.getErrorMessage());
@@ -79,7 +79,7 @@ public class ArchiveAdapterTest {
 	}
 
 	private Job runRaw(String op, ACell input) {
-		Job job = engine.jobs().invokeOperation(op, input, ctx());
+		Job job = engine.jobs().callOperation(op, input, ctx());
 		try { job.awaitResult(5000); } catch (RuntimeException ignored) { }
 		return job;
 	}
@@ -158,14 +158,14 @@ public class ArchiveAdapterTest {
 			Strings.create("file://work/cap-extract/"), convex.auth.ucan.Capability.CRUD_WRITE)));
 
 		// cap-extract is missing: creating it is a write on the root, outside the grant
-		Job denied = engine.jobs().invokeOperation("v/ops/archive/extract", Maps.of(
+		Job denied = engine.jobs().callOperation("v/ops/archive/extract", Maps.of(
 			"bytes", b64, "destRoot", "work", "destPath", "cap-extract/out"), capped);
 		try { denied.awaitResult(5000); } catch (RuntimeException ignored) { }
 		assertEquals(Status.FAILED, denied.getStatus());
 		assertFalse(Files.exists(workspace.resolve("cap-extract")));
 
 		Files.createDirectories(workspace.resolve("cap-extract"));
-		Job extracted = engine.jobs().invokeOperation("v/ops/archive/extract", Maps.of(
+		Job extracted = engine.jobs().callOperation("v/ops/archive/extract", Maps.of(
 			"bytes", b64, "destRoot", "work", "destPath", "cap-extract/out"), capped);
 		extracted.awaitResult(5000);
 		assertEquals(Status.COMPLETE, extracted.getStatus());

@@ -35,6 +35,14 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Changed
 
+- Agents explicitly distinguish ordinary chat from assigned tasks before using task-completion tools; context previews include the live reply guidance.
+
+- HTTP redirects recheck credential grants at each destination, preventing same-origin redirects from escaping a granted URL path.
+
+- Outbound HTTP URLs are normalised before destination checks and sending, preventing dot-segment escapes from URL-scoped credential grants.
+
+- `invoke` scopes generic operation lookup by location; direct tools use their action permissions without an invocation grant. Rebuild adapter modules with the venue.
+
 - Requires Convex 0.8.19.
 - `agent:message`, `agent:cancelTask` and a job named in an agent's context take an id with or without `0x`, as other id inputs do (#669).
 - Whitespace around a hash or hex id in a path or asset reference no longer names the same thing.

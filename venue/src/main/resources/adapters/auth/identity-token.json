@@ -1,6 +1,6 @@
 {
   "name": "Create identity token",
-  "description": "Save an audience-bound bearer for the caller's exact identity in its secret store. Supports identities beneath this venue's signing key DID, including agents. Grants no permissions; requires invoke on v/ops/auth/identity-token and secret/write on s/<name>. Agents use their owner's secret store. No private key or bearer is returned.",
+  "description": "Save an audience-bound bearer for the caller's exact identity in its secret store. Supports identities beneath this venue's signing key DID, including agents. Grants no permissions; requires secret/write on s/<name>. Generic invocation also requires invoke on the operation reference; a bound identity tool does not. Agents use their owner's secret store. No private key or bearer is returned.",
   "operation": {
     "adapter": "auth:identity-token",
     "readOnly": false,
