@@ -261,8 +261,11 @@ Adapter-owned state uses `AdapterState`; see
   run: it removes that state in `@AfterAll` or overwrites it
 - Cross-venue tests use the shared `TwoVenueTestServer` (static venues,
   per-test identities) — never spin venues per test
+- That the venue's state survives a restart is tested once, for the whole
+  state (`VenuePersistenceTest`, `docs/PERSISTENCE.md` §7): a feature's tests
+  never re-check it for their own state, and relaunch only to test what start-up does
 - Launching a venue is the expensive part: tell a feature's story as one
-  scenario on one store (a relaunch only when persistence is under test), and
+  scenario on one store, and
   run authority matrices and edge cases on `TestEngine.ENGINE` or a store from
   `TestTemp.etch`. A test class in the default suite takes a second or two at
   most. `TestEngine.ENGINE` is Etch-backed so store machinery such as online

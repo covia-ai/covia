@@ -638,32 +638,22 @@ Phases 1–2 are the **functional fix**. Phase 3 is the **structural cleanup**.
 
 ---
 
-## 7. Test strategy
+## 7. Testing
 
-For each persistence path, one regression test that:
-1. Starts a venue with a temp etch store and a fixed seed.
-2. Writes via the path under test.
-3. **Hard-kills** the venue (`Runtime.halt(1)`, NOT `server.close()`).
-4. Restarts a new venue against the same etch.
-5. Reads back via a different path. Asserts the write survived.
+Persistence keeps the venue's whole state, so it is tested once, for the
+whole state, not once per feature or write path:
 
-Paths covered:
-
-| Path | Status today |
-|---|---|
-| REST `/api/v1/invoke` covia:write | ✅ works (because of after-hook) — must continue working after Phase 2 |
-| MCP `/mcp` tools/call covia:write | ❌ broken — must pass after Phase 2 |
-| DLFS WebDAV `/dlfs/<drive>/<path>` PUT | ❌ likely broken — must pass after Phase 2 |
-| Agent run loop `mergeRunResult` (background virtual thread) | ❌ broken — must pass after Phase 2 |
-| `JobManager.persistJobRecord` from Job completion callback | ❌ broken — must pass after Phase 2 |
-| OAuth `Auth.putUser` from `/auth/callback` | ❌ likely broken — must pass after Phase 2 |
-| `engine.flush()` synchronous barrier | new in Phase 1 |
-
-Plus:
-- **Race test**: 100 concurrent writes from different sources (REST + MCP + run loop), abrupt kill, restart, verify all 100 survive.
-- **Latency test**: measure end-to-end write→disk latency under default config. Target ≤ 250 ms (100 ms sync worker + 100 ms propagator persistInterval + Etch overhead).
-- **Idle cost test**: venue with no writes for 10 seconds — confirm the sync worker is performing no-op syncs (CPU stays effectively zero).
-- **Adapter compliance test**: a static check that asserts no adapter file contains `cursor.set` / `cursor.updateAndGet` / `engine.syncState`.
+- `VenuePersistenceTest` fills one venue with every kind of state, closes it
+  without an explicit flush, reopens the store and reads every cell back, then
+  launches the venue again on the same key, configuration and held clock. The
+  venue state must be exactly what it closed with: start-up on a held clock
+  changes nothing. A second cycle appends to the reopened store. A new kind of
+  state is added to this test.
+- `EngineFlushTest` covers the barrier and close's final flush,
+  `SoftKillPersistenceTest` a venue server's close, and
+  `HardKillPersistenceTest` (durability suite) a halted process and a JVM exit.
+- What a venue does at start with work pending (recovered jobs, waking
+  agents, re-armed expiries) is recovery, tested with the behaviour it belongs to.
 
 ---
 
