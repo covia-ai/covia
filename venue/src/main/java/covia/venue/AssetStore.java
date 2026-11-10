@@ -14,6 +14,7 @@ import convex.lattice.ALatticeComponent;
 import convex.lattice.IndexComponent;
 import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
+import covia.grid.Assets;
 import covia.lattice.CoviaValue;
 
 /**
@@ -63,10 +64,22 @@ public class AssetStore extends IndexComponent<ABlob, AVector<ACell>> implements
 	 * @throws IllegalArgumentException if meta is not valid JSON
 	 */
 	public Hash store(AString meta, ACell content) {
-		AMap<AString, ACell> metaMap = RT.ensureMap(JSON.parse(meta));
-		if (metaMap == null) {
-			throw new IllegalArgumentException("Metadata is not a valid JSON object");
-		}
+		return store(meta, RT.ensureMap(JSON.parse(meta)), content);
+	}
+
+	/**
+	 * Stores an asset from its metadata text and that text's parse, for a
+	 * caller that has already parsed it. The two must match: the record keeps
+	 * the text as given, and the map's hash is the asset's id.
+	 *
+	 * @param meta JSON metadata string
+	 * @param metaMap The parse of {@code meta}, or null if it is not a JSON object
+	 * @param content Binary content (may be null)
+	 * @return Content-addressed Hash ID for the asset
+	 * @throws IllegalArgumentException if metaMap is null
+	 */
+	Hash store(AString meta, AMap<AString, ACell> metaMap, ACell content) {
+		if (metaMap == null) throw new IllegalArgumentException(Assets.NOT_AN_OBJECT);
 		Hash id = metaMap.getHash();
 		put(id, Vectors.create(meta, content, metaMap));
 		return id;

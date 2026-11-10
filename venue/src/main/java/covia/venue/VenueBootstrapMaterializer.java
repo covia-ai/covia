@@ -15,7 +15,6 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
-import convex.core.util.JSON;
 import java.util.function.Consumer;
 import covia.lattice.CoviaPath;
 import covia.lattice.Entry;
@@ -224,15 +223,10 @@ final class VenueBootstrapMaterializer {
 	}
 
 	private static ACell catalogMetadata(AAdapter adapter, String path, Hash assetHash) {
-		AString metadataJson = adapter.getInstalledAssets().get(assetHash);
-		if (metadataJson == null) {
+		AMap<AString, ACell> metadata = adapter.installedMetadata(assetHash);
+		if (metadata == null) {
 			throw new IllegalStateException("Adapter '" + adapter.getName()
 				+ "' catalog path /" + path + " references an uninstalled asset " + assetHash);
-		}
-		ACell metadata = JSON.parse(metadataJson);
-		if (!(metadata instanceof AMap)) {
-			throw new IllegalStateException("Adapter '" + adapter.getName()
-				+ "' catalog metadata at /" + path + " is not a JSON object");
 		}
 		return metadata;
 	}

@@ -276,11 +276,9 @@ public class MCP extends McpServer {
 				String group = (slash >= 0) ? tail.substring(0, slash) : tail;
 				if (!includeAll && !includedAdapters.contains(group)) continue;
 
-				Hash hash = entry.getValue();
-				AString metaString = adapter.getInstalledAssets().get(hash);
-				if (metaString == null) continue;
+				AMap<AString, ACell> meta = adapter.installedMetadata(entry.getValue());
+				if (meta == null) continue;
 				try {
-					AMap<AString, ACell> meta = RT.ensureMap(JSON.parse(metaString));
 					AString toolName = mcpToolNameFor(meta);
 					if (toolName == null) continue;
 					if (reg.putIfAbsent(toolName, Strings.create(path)) != null) {
@@ -458,9 +456,7 @@ public class MCP extends McpServer {
 			int n = installedAssets.size();
 			for (int i = 0; i < n; i++) {
 				try {
-					MapEntry<Hash, AString> me = installedAssets.entryAt(i);
-					AString metaString = me.getValue();
-					AMap<AString, ACell> meta = RT.ensureMap(JSON.parse(metaString));
+					AMap<AString, ACell> meta = adapter.installedMetadata(installedAssets.entryAt(i).getKey());
 					AMap<AString, ACell> mcpTool = checkTool(meta);
 					if (mcpTool != null) {
 						toolsVector = toolsVector.conj(mcpTool);

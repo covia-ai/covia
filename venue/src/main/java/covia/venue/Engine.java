@@ -1676,8 +1676,24 @@ public class Engine {
 	 * Stores an asset in the venue-level CAS (used by adapter registration).
 	 */
 	public Hash storeAsset(AString meta, ACell content) {
-		Hash id = venueState.assets().store(meta, content);
-		log.debug("Stored asset {} : {}", id, RT.getIn(JSON.parse(meta), Fields.NAME));
+		return storeAsset(meta, RT.ensureMap(JSON.parse(meta)), content);
+	}
+
+	/**
+	 * Stores an asset in the venue-level CAS from its metadata text and that
+	 * text's parse, for a caller that has already parsed it (adapter
+	 * installation parses each built-in text once per JVM). The two must match:
+	 * the text is stored as given, and the map's hash is the asset's id.
+	 *
+	 * @param meta JSON metadata text
+	 * @param metaMap The parse of {@code meta}, or null if it is not a JSON object
+	 * @param content Content, or null
+	 * @return The asset's id
+	 * @throws IllegalArgumentException if metaMap is null
+	 */
+	public Hash storeAsset(AString meta, AMap<AString, ACell> metaMap, ACell content) {
+		Hash id = venueState.assets().store(meta, metaMap, content);
+		log.debug("Stored asset {} : {}", id, metaMap.get(Fields.NAME));
 		return id;
 	}
 
@@ -1690,8 +1706,9 @@ public class Engine {
 		AString callerDID = ctx.getUserDID();
 		if (callerDID == null) throw new AuthException(STORE_UNAUTHENTICATED);
 		User user = getVenueState().users().ensure(callerDID);
-		Hash id = user.assets().store(meta, content);
-		log.info("Stored user asset {} : {} (user: {})", id, RT.getIn(JSON.parse(meta), Fields.NAME), callerDID);
+		AMap<AString, ACell> metaMap = RT.ensureMap(JSON.parse(meta));
+		Hash id = user.assets().store(meta, metaMap, content);
+		log.info("Stored user asset {} : {} (user: {})", id, metaMap.get(Fields.NAME), callerDID);
 		return id;
 	}
 

@@ -23,6 +23,7 @@ import convex.core.data.Index;
 import convex.core.data.Path;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
+import convex.core.util.SoftCache;
 import convex.lattice.cursor.AForkableCursor;
 import covia.api.Abilities;
 import covia.api.Fields;
@@ -595,7 +596,7 @@ public abstract class AAdapter {
 			warnIfInputIsNotAnObject(prefix + catalogPath, hash);
 			String name = catalogPath.startsWith(getName() + "/")
 				? catalogPath.substring(getName().length() + 1) : catalogPath;
-			AMap<AString, ACell> metadata = RT.ensureMap(JSON.parse(installedAssets.get(hash)));
+			AMap<AString, ACell> metadata = installedMetadata(hash);
 			// Legacy catalogue declarations are permissive and their adapter-owned
 			// mirror uses last-declaration precedence. Discovery must not turn a
 			// previously valid installation into a failure when local names collide.
@@ -618,14 +619,7 @@ public abstract class AAdapter {
 	 * advertises an unconstrained object, which such an operation accepts.
 	 */
 	private void warnIfInputIsNotAnObject(String path, Hash hash) {
-		AString metaString = installedAssets.get(hash);
-		if (metaString == null) return;
-		ACell type;
-		try {
-			type = RT.getIn(JSON.parse(metaString), Fields.OPERATION, Fields.INPUT, Fields.TYPE);
-		} catch (Exception e) {
-			return;   // unparseable metadata is reported by the store step, not here
-		}
+		ACell type = RT.getIn(installedMetadata(hash), Fields.OPERATION, Fields.INPUT, Fields.TYPE);
 		if (type == null) return;
 		boolean admitsObject = Fields.OBJECT.equals(type);
 		if (!admitsObject && type instanceof AVector<?> types) {
@@ -765,10 +759,39 @@ public abstract class AAdapter {
 	}
 
     protected Hash installAsset(AString metaString) {
-		Hash assetHash = engine.storeAsset(metaString, null);
+		Hash assetHash = engine.storeAsset(metaString, parseMetadata(metaString), null);
 		installedAssets = installedAssets.assoc(assetHash, metaString);
 		return assetHash;
     }
+
+	/**
+	 * Parsed installed metadata, keyed by the hash of its JSON text. Every
+	 * venue in a JVM installs the same built-in texts, so each is parsed once
+	 * per JVM rather than at every venue start. Values are soft: the GC
+	 * reclaims a parse no venue still holds, and the next use parses again.
+	 */
+	private static final SoftCache<Hash, AMap<AString, ACell>> PARSED_METADATA = new SoftCache<>();
+
+	/** The parse of installed metadata text, or null if it is not a JSON object. */
+	private static AMap<AString, ACell> parseMetadata(AString metaString) {
+		Hash key = metaString.getHash();
+		AMap<AString, ACell> meta = PARSED_METADATA.get(key);
+		if (meta == null) {
+			meta = RT.ensureMap(JSON.parse(metaString));
+			if (meta != null) PARSED_METADATA.put(key, meta);
+		}
+		return meta;
+	}
+
+	/**
+	 * The parsed metadata of an asset this adapter installed.
+	 * @param hash The asset's id
+	 * @return The metadata, or null if this adapter installed no such asset
+	 */
+	public AMap<AString, ACell> installedMetadata(Hash hash) {
+		AString metaString = installedAssets.get(hash);
+		return (metaString == null) ? null : parseMetadata(metaString);
+	}
 
 	    /**
      * Returns the name of this adapter.
