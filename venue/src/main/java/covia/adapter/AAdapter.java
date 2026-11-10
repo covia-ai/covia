@@ -240,7 +240,7 @@ public abstract class AAdapter {
 
 	/**
 	 * This adapter's state migration rules as plain data, for
-	 * {@link covia.venue.VenueState#migrate(java.util.List)}: an embedder that
+	 * {@link covia.venue.VenueState#migrate(covia.venue.SecretStore.Keys, java.util.List)}: an embedder that
 	 * migrates a venue itself passes its adapters' rules with it.
 	 */
 	public final covia.venue.VenueState.AdapterMigration stateMigration() {

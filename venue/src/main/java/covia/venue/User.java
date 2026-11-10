@@ -37,9 +37,9 @@ import convex.lattice.cursor.StampedCursor;
  *   <li>{@code "j"} — user's jobs ({@link Jobs})</li>
  *   <li>{@code "g"} — user's agents ({@link Agent})</li>
  *   <li>{@code "s"} — user's encrypted credentials</li>
- *   <li>{@code "w"} — user's workspace data ({@link Workspace}, in a {@link covia.lattice.Covia#WORKSPACE_RECORD})</li>
- *   <li>{@code "o"} — user's operations ({@link Workspace}, in a {@link covia.lattice.Covia#WORKSPACE_RECORD})</li>
- *   <li>{@code "h"} — HITL requests ({@link Inbox}, in a {@link covia.lattice.Covia#WORKSPACE_RECORD})</li>
+ *   <li>{@code "w"} — user's workspace data ({@link Workspace}, in a stamped {@code {updated, data}} record)</li>
+ *   <li>{@code "o"} — user's operations ({@link Workspace}, in a stamped {@code {updated, data}} record)</li>
+ *   <li>{@code "h"} — HITL requests ({@link Inbox}, in a stamped {@code {updated, data}} record)</li>
  *   <li>{@code "a"} — content-addressed assets</li>
  * </ul>
  * Merge is whole-value at the venue {@code :value}; these namespaces are
