@@ -119,7 +119,9 @@ public class AgentControllerTest {
 		assertComplete(create("own", null, ALICE));
 		assertNull(agent("own").getRecord().get(Agent.KEY_CONTROLLER));
 		assertEquals(alice, agent("own").getController());
-		assertFalse(engine.harnessContext(alice, Strings.create("own")).hasSeparateAuthority());
+		RequestContext harness = engine.harnessContext(alice, Strings.create("own"));
+		assertEquals(agentDID("own"), harness.getCallerDID(), "its harness acts as the agent");
+		assertEquals(alice, harness.authorityContext().getCallerDID(), "with its owner's authority");
 
 		Job info = run("v/ops/agent/info", Maps.of(Fields.AGENT_ID, "own"), ALICE);
 		assertComplete(info);
@@ -171,6 +173,41 @@ public class AgentControllerTest {
 		RequestContext member = engine.harnessContext(alice, Strings.create("member"));
 		assertEquals("alice-key", engine.resolveSecret("s/API_KEY", member, provider));
 		assertThrows(AuthException.class, () -> engine.resolveSecret("s/API_KEY", member, "https://elsewhere.example/"));
+	}
+
+	/**
+	 * A job an agent's harness starts keeps the authority the harness acts
+	 * with, and acts with it again when its context is rebuilt after a
+	 * restart, whoever controls the agent: its owner, another of her agents,
+	 * or another user. The agent's caps play no part.
+	 */
+	@Test
+	public void testAJobAHarnessStartsKeepsItsControllersAuthority() {
+		assertComplete(create("own", Vectors.empty(), ALICE));
+		assertComplete(create("child", null, parent()));
+		assertComplete(run("v/ops/agent/create", Maps.of(Fields.AGENT_ID, alice + "/g/bobs", Fields.CONFIG, config(null)),
+			bobWith(cap(alice + "/g/", Abilities.AGENT_CREATE))));
+		AString[] resources = {Strings.create("w/private"), Strings.create("w/shared/doc"), Strings.create(bob + "/w/notes")};
+		for (String id : new String[] {"own", "child", "bobs"}) {
+			RequestContext harness = engine.harnessContext(alice, Strings.create(id));
+			Job job = engine.jobs().invokeOperation("v/test/ops/never", Maps.empty(), harness);
+			try {
+				engine.jobs().keepCallerContext(job, harness);
+				RequestContext rebuilt = engine.jobs().callerContext(job);
+				assertEquals(agentDID(id), rebuilt.getCallerDID(), id);
+				assertEquals(harness.authorityContext().getCallerDID(), rebuilt.authorityContext().getCallerDID(), id);
+				for (AString resource : resources) {
+					assertEquals(engine.authorityCovers(harness, resource, READ), engine.authorityCovers(rebuilt, resource, READ),
+						id + " on " + resource);
+				}
+				if (id.equals("own")) {
+					assertTrue(engine.authorityCovers(rebuilt, Strings.create("w/private"), READ),
+						"its owner's authority, though the agent's caps grant nothing");
+				}
+			} finally {
+				job.cancel();
+			}
+		}
 	}
 
 	@Test

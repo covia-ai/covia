@@ -154,9 +154,13 @@ Supported definitions:
 | `remoteagent` | Destination `agentId`, optional `venue` and `authenticateAs`; omitted venue uses the local venue |
 
 `agent:chat` and `agent:request` preserve their existing result envelopes.
-The common dispatcher checks normal agent admission and executes as the resident
-agent under its `config.caps` as they stand at each check. Requester credentials
-do not become the agent's authority. Provider-specific project, secret and destination checks still apply.
+The common dispatcher checks normal agent admission. Asking the backend is the
+agent's harness at work, as calling the model is a native agent's: it acts as
+the agent with its controller's authority as it stands, which the agent's
+`config.caps` do not narrow (UCAN.md §5.4). The backend job keeps that
+authority, so work it carries on after a restart acts with it again. Requester
+credentials do not become the agent's authority. Provider-specific project,
+secret and destination checks apply under the controller's authority.
 See [AGENT_SESSIONS.md §2.2](./AGENT_SESSIONS.md#22-external-agent-sessions)
 for conversation mapping, turn execution, messages and recovery.
 
@@ -1335,7 +1339,9 @@ the winner is always a state that genuinely existed on the hosting venue.
 
 A venue restart has no live launcher slots, so startup clears every persisted
 RUNNING marker and revokes every cycle claim (§2.5.1) before scheduling
-remaining work.
+remaining work. Each agent is recovered on its own: one that cannot be, such
+as one whose controller cannot act, is logged and left asleep with its work
+queued, and the venue starts and recovers the rest.
 Durable Jobs, queued inputs, stable lifecycle state, and external interaction
 records survive independently. Recovery may start a fresh attempt from a
 durable boundary; it never treats a persisted executor bit as resumable state.

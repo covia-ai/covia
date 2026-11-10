@@ -61,6 +61,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - A bare `n/` in an agent's `caps` names that agent's own notes; it used to name nothing.
 - A `did:key` roots grants over the identities nested below it, at any venue; `ucan:verify` reports such a root as `owner`.
 - The context an agent's config names (`config.context`, `config.loads` and the skills index) is assembled by the harness with its controller's authority, as the system prompt already was; the agent's tool calls, and the loads it or a caller adds, stay under its `caps`.
+- Asking an external agent's backend (an A2A endpoint, a Claude Code project, another Covia agent) acts with the agent's controller's authority, as a native agent's thinking does, not under its `caps`; the backend job keeps that authority across a restart.
 - `auth:identity-token` takes any `lifetime` the caller chooses, no longer capped at an hour.
 - `ucan:issue` reads a bare `with` in the namespace the request acts in.
 - Job records name the principal that made the call as `caller` and its namespace as `owner`, present only when it differs; `actor` is gone.
@@ -171,6 +172,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Fixed
 
+- A venue starts when one of its agents cannot be recovered, such as one whose controller cannot act: that agent is logged and left asleep with its work queued.
 - An asset's metadata by hash is read with `asset/read` or `crud/read` over it on every route, however the reference is written: `asset:get`, `GET /assets/{ref}` and operation definitions, as `covia:read` already did.
 - A venue told to stop (SIGTERM, `docker stop`) stops taking requests before its final save, then closes completely, as the tray's Close and Exit do.
 - An agent's session history keeps a failed tool call's whole message; the model is shown the first 1024 characters and how many more there are.
@@ -204,6 +206,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - `authenticateAs: "venue"` is only for the venue itself.
 - `secret/use` never yields possession through `crypto:derive-key` or `crypto:jwt-decode`.
 - Venue-local SQL databases are per user; the public principal has none.
+- An agent of the venue's public principal acts with that principal's authority, as any owner's agent acts with its owner's: within the public caps, its harness and its tool calls alike, and not at all while public access is off.
 - A Claude Code session resumes only in its own project.
 - Convex calls go to the operator's peer unless `adapters.convex.anyPeer` is set.
 - Every outbound venue target passes the outbound guard, with a stricter address rule.
@@ -239,7 +242,9 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Changing the config or controller of an agent its owner controls needs the owner's authority: `agent/write` alone no longer allows it for a capped agent or a delegate, including one acting through `user:sudo`.
 - A `user:sudo` delegate holding `agent/create` creates agents its target controls: grant the pair only where you would grant that user's own authority.
 - An agent created by another agent, or by a delegate in another user's namespace without `user:sudo`, is controlled by its creator: it acts with the creator's authority narrowed by its `caps`, not the owner's, so a creating agent's caps must cover `invoke` on the new agent's transition and model operations and `secret/use` on the model's key, and bound what the new agent's tool calls can do.
-- Every narrowed context, an agent with caps or a request under a restricted token, needs `secret/use` on each of its owner's secrets it uses: a `bearerSecret`, an `apiKey`, a model's key when it calls a model as a tool, a speech key, an MCP bridge's or an A2A agent's credential, a secret-backed signing key or seed. Grant it in the agent's caps, bound with `nb.url` where the secret is sent, and unbound for a local use such as signing. An agent its owner controls still thinks with its owner's keys.
+- Every narrowed context, an agent with caps or a request under a restricted token, needs `secret/use` on each of its owner's secrets it uses: a `bearerSecret`, an `apiKey`, a model's key when it calls a model as a tool, a speech key, an MCP bridge's credential, or an A2A agent's when it calls one as a tool, a secret-backed signing key or seed. Grant it in the agent's caps, bound with `nb.url` where the secret is sent, and unbound for a local use such as signing. An agent still thinks, and an external agent still reaches its backend, with the keys its controller may use.
+- Review `accepts` on external agents: whoever one admits reaches its backend with its controller's authority, which its `caps` no longer bound.
+- Review `auth.public.caps` for agents the venue's public principal owns: they act only as far as those caps reach.
 - Pass `caps: "unrestricted"` to `agent:create` (and `agent:fromSkills`, or with a template other than `reader` or `admin`) for an agent that acts with its controller's full authority; existing agents keep the authority they had.
 - To let someone other than its owner step an agent, grant them `admin/agent` on it.
 - Anonymous callers need `auth.public.caps` to grant `invoke` on `v/ops/agent/request`

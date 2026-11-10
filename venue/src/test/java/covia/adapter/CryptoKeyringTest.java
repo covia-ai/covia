@@ -30,8 +30,11 @@ class CryptoKeyringTest {
 
 	private static final CVMLong NOW = CVMLong.create(1);
 
+	private static final java.util.concurrent.atomic.AtomicInteger STATES = new java.util.concurrent.atomic.AtomicInteger();
+
+	/** An empty adapter state of the test's own: a class's tests run at once, so none shares one. */
 	private static AdapterState state() {
-		AdapterState state = engine.adapterState("crypto");
+		AdapterState state = engine.adapterState("crypto-test-" + STATES.incrementAndGet());
 		state.set(Maps.empty());
 		return state;
 	}

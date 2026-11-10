@@ -15,7 +15,6 @@ import covia.exception.NotFoundException;
 import covia.exception.NotSupportedException;
 import covia.exception.UnavailableException;
 import covia.grid.Job;
-import covia.grid.Principals;
 import covia.grid.Status;
 import covia.venue.*;
 
@@ -112,8 +111,10 @@ public final class ExternalAgents {
 			var invocation = adapter.agentInvocation(operation, definition, content, remoteSession);
 			AString backendOp = Strings.create(adapter.getName() + ":" + invocation.operation());
 			AMap<AString, ACell> meta = Maps.of(Fields.OPERATION, Maps.of(Fields.ADAPTER, backendOp));
-			// The resident agent's configured authority applies, never the waking caller's grants.
-			RequestContext execution = engine.context(owner, Principals.agentDID(owner, id)).withJob(job)
+			// Asking the backend is the agent's harness at work, as calling the model is a native
+			// agent's: it acts with the agent's controller's authority, never the asking caller's
+			// grants, and the backend job keeps it for work it carries on after a restart.
+			RequestContext execution = engine.harnessContext(owner, id).withJob(job)
 				.withOp(Strings.create("v/ops/" + adapter.getName() + "/" + invocation.operation()));
 			var prepared = engine.jobs().prepareAgentInteraction(meta, invocation.input(), execution);
 			Job child = prepared.job();

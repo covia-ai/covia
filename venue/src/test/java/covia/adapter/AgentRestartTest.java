@@ -4,20 +4,26 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.Test;
 
+import convex.auth.ucan.Capability;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.data.Vectors;
 import convex.core.lang.RT;
+import covia.api.Abilities;
 import covia.api.Fields;
+import covia.exception.AuthException;
 import covia.grid.Job;
+import covia.grid.Principals;
 import covia.grid.Status;
 import covia.venue.Agent;
 import covia.venue.Task;
@@ -241,6 +247,109 @@ public class AgentRestartTest {
 				.getTasks().get(waking.getID()), "a cancelled request is not left for the agent to run");
 		} finally {
 			second.close();
+		}
+	}
+
+	/** {@link #config()} with the public principal's access on or off, unrestricted while on. */
+	private static AMap<AString, ACell> withPublicAccess(boolean on) {
+		return withPublicAccess(on, Config.UNRESTRICTED);
+	}
+
+	/** {@link #config()} with the public principal's access on or off, and its {@code caps}. */
+	private static AMap<AString, ACell> withPublicAccess(boolean on, ACell caps) {
+		return config().assoc(Config.AUTH, Maps.of(Config.PUBLIC, Maps.of(Config.ENABLED, on, Config.CAPS, caps)));
+	}
+
+	/**
+	 * An agent the venue's public principal owns acts with that principal's
+	 * authority, as any owner's agent acts with its owner's: its harness and
+	 * its tool calls alike, even unrestricted, reach what the public caps
+	 * cover, and nothing while public access is off.
+	 */
+	@Test
+	public void aPublicAgentActsWithThePublicPrincipalsAuthority() throws Exception {
+		ACell caps = Vectors.of(
+			Capability.create(Strings.create("g/"), Abilities.AGENT_CREATE),
+			Maps.of(Capability.CAN, Abilities.INVOKE),
+			Capability.create(Strings.create("w/open/"), Capability.CRUD_READ));
+		TestEngine.Restartable venue = TestEngine.restartable(withPublicAccess(true, caps));
+		AString lobby = Strings.create("lobby");
+		Engine first = venue.mount(withPublicAccess(true, caps)).launch();
+		AString owner = first.publicPrincipal();
+		AString agent = Principals.agentDID(owner, lobby);
+		try {
+			Engine.addDemoAssets(first);
+			first.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, lobby,
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/never", Config.CAPS, Config.UNRESTRICTED)),
+				first.context(owner)).awaitResult(5000);
+			for (RequestContext acting : new RequestContext[] {first.harnessContext(owner, lobby), first.context(owner, agent)}) {
+				assertTrue(first.authorityCovers(acting, Strings.create("w/open/doc"), Capability.CRUD_READ));
+				assertFalse(first.authorityCovers(acting, Strings.create("w/closed/doc"), Capability.CRUD_READ),
+					"no more than the public caps give");
+			}
+		} finally {
+			first.close();
+		}
+
+		Engine second = venue.mount(withPublicAccess(false, caps)).launch();
+		try {
+			AuthException harness = assertThrows(AuthException.class, () -> second.harnessContext(owner, lobby));
+			assertEquals(Engine.PUBLIC_ACCESS_OFF, harness.getMessage());
+			AuthException tools = assertThrows(AuthException.class, () -> second.context(owner, agent));
+			assertEquals(Engine.PUBLIC_ACCESS_OFF, tools.getMessage());
+		} finally {
+			second.close();
+		}
+	}
+
+	/**
+	 * Each agent is recovered at boot on its own. One that cannot run then,
+	 * here because its record names a controller that cannot act, is left
+	 * asleep with its work queued, and the venue still starts and wakes the
+	 * others.
+	 */
+	@Test
+	public void anAgentThatCannotRunDoesNotStopTheVenueStarting() throws Exception {
+		TestEngine.Restartable venue = TestEngine.restartable(withPublicAccess(true));
+		RequestContext alice = RequestContext.of(ALICE);
+		String gateName = "agent-boot-" + System.nanoTime();
+		Job request, stranded;
+		try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName)) {
+			Engine first = venue.mount(withPublicAccess(true)).launch();
+			try {
+				Engine.addDemoAssets(first);
+				first.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "worker",
+					Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete",
+						"testGate", gateName, Fields.DELAY, 0L)), alice).awaitResult(5000);
+				first.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "stray",
+					Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/never")), alice).awaitResult(5000);
+				// A record no request could write: the public principal controls Alice's agent
+				Agent stray = first.getVenueState().users().user(ALICE).agent("stray");
+				stray.putRecord(stray.getRecord().assoc(Agent.KEY_CONTROLLER, first.publicPrincipal()));
+				stranded = first.jobs().invokeOperation("v/ops/agent/request",
+					Maps.of(Fields.AGENT_ID, "stray", Fields.INPUT, Maps.of("ask", "wait")), alice);
+				request = first.jobs().invokeOperation("v/ops/agent/request",
+					Maps.of(Fields.AGENT_ID, "worker", Fields.INPUT, Maps.of("ask", "outlive the venue")), alice);
+				assertTrue(gate.awaitEntered(10, TimeUnit.SECONDS), "the task transition never reached its test gate");
+				first.syncState();
+			} finally {
+				first.close();
+			}
+		}
+
+		try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName)) {
+			gate.release();
+			// With public access off, the stray agent's controller cannot act
+			Engine second = venue.mount(withPublicAccess(false)).launch();
+			try {
+				Job live = second.jobs().getJob(request.getID(), alice);
+				live.awaitResult(10_000);
+				assertEquals(Status.COMPLETE, live.getStatus(), "the venue started and woke the agent that can run");
+				assertEquals(Agent.SLEEPING, second.getVenueState().users().user(ALICE).agent("stray").getStatus());
+				assertFalse(second.jobs().getJob(stranded.getID(), alice).isFinished(), "its work stays queued");
+			} finally {
+				second.close();
+			}
 		}
 	}
 }

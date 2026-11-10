@@ -2536,7 +2536,8 @@ comes from a principal, and the binding identifies which.
   can pose as it, and an LLM agent's context shows it as a `[From: …]` element
   whenever who is talking changes. The message itself is the sender's text,
   or `{text, attachments, content?}` when it carries media.
-- **The agent acts as itself**, under its own `config.caps`, whoever asked.
+- **The agent acts as itself**, whoever asked: its tool calls under its own
+  `config.caps`, its harness with its controller's authority (UCAN.md §5.4).
   The binding's work for it — storing a message's media, `mediaOperation`,
   `replyOperation` — runs as the agent when the binding's principal is the
   agent or its owner, and otherwise as the binding's principal.
@@ -3177,10 +3178,12 @@ path below that base. Private by default: whoever may ask the agent may use
 the endpoint — the owner, a caller the agent's `config.accepts` admits, or one
 presenting an `agent/request` UCAN in `X-Covia-Ucans`. Anyone else gets an
 existence-hiding 404 (anonymous) or 403 (authenticated). Each request is the
-asker's own Job, and the agent serves it as itself, under its own
-`config.caps`, so `caps` is what the owner offers everyone the agent admits;
-set it as tightly as the public should get, or publish a dedicated public
-agent. Task calls reach only the asker's own tasks for that agent.
+asker's own Job, and the agent serves it as itself, its tool calls under its
+own `config.caps`, so `caps` is what the owner offers everyone the agent
+admits; set it as tightly as the public should get, or publish a dedicated
+public agent. An external agent's backend acts with its controller's
+authority, so admitting a caller to one admits it to that backend. Task calls
+reach only the asker's own tasks for that agent.
 
 `a2a: {public: true}` publishes the card; it admits nobody. `accepts:
 "anyone"` lets anonymous callers ask. They ask as the venue's public

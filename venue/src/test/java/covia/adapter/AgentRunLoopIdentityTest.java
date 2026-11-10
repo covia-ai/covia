@@ -110,7 +110,8 @@ public class AgentRunLoopIdentityTest {
 			"run loop must execute within the agent owner's namespace");
 		assertTrue(seen.isSubPrincipal(), "an agent run is a sub-principal context");
 		assertNull(seen.getProofs(), "run context must carry no proofs");
-		assertNull(seen.getCaps(),   "run context must carry no caps");
+		assertEquals(ALICE_DID, seen.authorityContext().getCallerDID(), "run context acts with its owner's authority");
+		assertNull(seen.authorityContext().getCaps(), "its owner's whole authority");
 		assertEquals("alice-secret", engine.resolveSecret("RUNLOOP_KEY", seen),
 			"owner-scoped secret must resolve under the run-loop context");
 	}

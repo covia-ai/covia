@@ -165,16 +165,20 @@ and no more. The adapter asks for it (`JobManager.keepCallerContext`): a
 Claude Code session does, so does an agent request naming an `outputPath`,
 whose job completes by writing there as its caller (AGENT_TEMPLATES.md), and
 so does a `remoteagent` call to an agent on this venue, which follows the
-agent's task as its caller (ADAPTERS.md, External agent interactions). The job's
-entry keeps the grant proofs the caller presented, in the form checked on
-arrival, and the request's execution scopes (agent, session, job and task),
-even when there are none, so that `JobManager.keepsCallerContext` tells such
-a job from one whose adapter never asked. `JobManager.callerContext` rebuilds
-the caller from them with `Engine.context(owner, caller, proofs)`, checking
-what a live request would: the principal still exists, a delegate still holds
-its `user/sudo` grant, an agent acts under its current `config.caps`. The
-record never holds them, and they go with the entry when the job ends
-(UCAN.md §4.3).
+agent's task as its caller (ADAPTERS.md, External agent interactions), and so
+does every external agent's backend job, which the agent's harness starts
+(UCAN.md §5.4). The job's entry keeps the grant proofs the caller presented, in
+the form checked on arrival, the separate authority the request acts with, if
+any (`Engine.keptAuthority`: an agent's harness acts with its controller's),
+and the request's execution scopes (agent, session, job and task), even when
+there are none, so that `JobManager.keepsCallerContext` tells such a job from
+one whose adapter never asked. `JobManager.callerContext` rebuilds the caller
+from them with `Engine.context(owner, caller, proofs, authority)`, checking
+what a live request would: the principal and the kept authority still exist,
+a delegate still holds its `user/sudo` grant, an agent acts under its current
+`config.caps`, an agent controller under its own. The kept authority is the
+controller the work started with, as it acts now. The record never holds them,
+and they go with the entry when the job ends (UCAN.md §4.3).
 
 ## The update path — CAS-committed, terminal-sticky
 
@@ -483,8 +487,10 @@ presented (`authenticateAs: "caller"`, or an A2A `bearerToken`) is therefore
 not resumed: its recovered job fails, naming the remote job and its venue
 (`RemoteJobs.CREDENTIAL_NOT_KEPT`). A recovered A2A job reads its bearer again from
 its caller's secrets, under the context `JobManager.callerContext` rebuilds
-for the job, so a rotated secret is sent as it now stands. An A2A
-job keeps no grants ([Kept caller context](#kept-caller-context)). When its caller can no longer use the
+for the job, so a rotated secret is sent as it now stands. A direct A2A
+send keeps no context, so not the grants its request presented, while an
+external agent's backend job keeps its harness's authority
+([Kept caller context](#kept-caller-context)). When its caller can no longer use the
 secret (it was deleted, the caller cannot act now, or it is another user's,
 used under a grant the request presented), the job fails, naming the remote
 task and the agent's address (`A2AAdapter.SECRET_UNREADABLE`). Recovery does not resolve a changed catalog binding or

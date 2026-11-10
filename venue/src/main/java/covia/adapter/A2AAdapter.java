@@ -968,7 +968,7 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 			try {
 				auth = restoreAuth(job, saved, target);
 			} catch (AuthException | NotFoundException unusable) {
-				// The job keeps no grants: a secret its caller cannot use now ends it
+				// A secret the job's caller cannot use now ends it
 				engine.remoteJobs().end(job, SECRET_UNREADABLE.formatted(id, target));
 				return;
 			}
@@ -979,8 +979,10 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 
 	/**
 	 * Reads a saved authentication's secret again, under the authority the
-	 * job's caller holds now: a rotated secret is sent as it now stands, and
-	 * one the caller can no longer use is refused.
+	 * job's caller holds now, in the context its job kept if any
+	 * ({@link covia.venue.JobManager#callerContext}): a rotated secret is sent
+	 * as it now stands, and one the caller can no longer use is refused. A
+	 * direct send keeps no context, so not the grants its request presented.
 	 *
 	 * @throws AuthException when the caller cannot act now, or cannot use the secret without a grant
 	 * @throws NotFoundException when the secret no longer exists
@@ -989,7 +991,6 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 		AString location = RT.ensureString(saved.get(K_LOCATION));
 		if (location == null) return null;
 		String ref = secretRef(saved);
-		// The job's caller as it acts now; the job keeps no grants for it
 		String value = resolveSecretRef(ref, engine.jobs().callerContext(job), destination);
 		if (convex.core.data.prim.CVMBool.TRUE.equals(saved.get(K_BEARER))) return RequestAuth.bearer(value, ref);
 		return new RequestAuth(location.toString(), RT.ensureString(saved.get(Fields.NAME)).toString(), value, ref, false);

@@ -107,8 +107,10 @@ discoverable** by anyone; it admits nobody. An older config with `a2a.caps` on
 a public agent reads as `accepts: "anyone"`.
 
 Every per-agent method runs as the asker: a `SendMessage` is the asker's own
-`agent:request` Job, and the agent serves it as itself, under its own
-`config.caps`. Task calls reach only the asker's own tasks for that agent.
+`agent:request` Job, and the agent serves it as itself, its tool calls under
+its own `config.caps` and an external agent's backend with its controller's
+authority (UCAN.md §5.4). Task calls reach only the asker's own tasks for that
+agent.
 
 The operator's `defaultChatOp` front-door is the venue-level version of the
 public flag.

@@ -4159,7 +4159,10 @@ public class Engine {
 
 	/**
 	 * Agent {@code agentId} as it acts now: in its owner's namespace, with its
-	 * controller's authority narrowed by its caps. Its owner's agents narrow one
+	 * controller's authority narrowed by its caps. A controller's authority is
+	 * what its own request would hold ({@link #context(AString, AString)}),
+	 * the owner's included: unrestricted in its namespace for a user, the
+	 * public caps for the public principal. Its owner's agents narrow one
 	 * scope along the chain of controllers, read at each point of action. A
 	 * controller from another namespace is a separate authority
 	 * ({@link RequestContext#withAuthorityOf}), since it holds nothing of the
@@ -4171,14 +4174,14 @@ public class Engine {
 	 * its own caps.</p>
 	 *
 	 * @param seen the agents already on this chain of controllers
+	 * @throws AuthException when a controller on the chain could not act now
 	 */
 	private RequestContext agentContext(AString owner, AString agentId, Set<AString> seen) {
 		RequestContext agent = RequestContext.ofAgent(owner, agentId);
 		AString self = covia.grid.Principals.agentDID(owner, agentId);
 		RequestContext.ScopeSource caps = resource -> withControl(agentScope(owner, agentId), self, resource, owner);
 		Agent state = getAgent(owner, agentId);
-		AString controller = (state == null) ? null : state.getController();
-		if (controller == null || controller.equals(owner)) return agent.readingScope(caps);
+		AString controller = (state == null) ? owner : state.getController();
 
 		Set<AString> chain = new HashSet<>(seen);
 		chain.add(self);
@@ -4327,9 +4330,11 @@ public class Engine {
 	 * other principal's.
 	 *
 	 * <p>A request made as an agent holds that agent's authority, however it is
-	 * derived, and its owner's only when nothing narrows it. The authority of a
-	 * controller it derives from is narrowed by the agent's caps, so is not
-	 * that controller's whole authority.</p>
+	 * derived, and its owner's only when it acts with its own authority and
+	 * nothing narrows it. The authority of a controller it derives from is
+	 * narrowed by the agent's caps, so is not that controller's whole
+	 * authority, and its harness ({@link #harnessContext}) acts with its
+	 * controller's authority without holding it.</p>
 	 */
 	public boolean holdsAuthorityOf(RequestContext ctx, AString principal) {
 		if (ctx == null || principal == null) return false;
@@ -4363,22 +4368,23 @@ public class Engine {
 	/**
 	 * The context agent {@code agentId}'s harness runs under: the agent in its
 	 * owner's namespace, attributed to the agent, acting with its controller's
-	 * authority as it stands now. For an agent its owner controls that is the
-	 * agent with its owner's whole authority; for any other controller the
-	 * agent acts with that controller's authority
-	 * ({@link RequestContext#withAuthorityOf}), an agent controller's read from
-	 * its caps at each check and none once it is gone.
+	 * authority as it stands now ({@link RequestContext#withAuthorityOf}), its
+	 * owner's included, as that principal's own request would hold it
+	 * ({@link #context(AString, AString)}). An agent controller's is read from
+	 * its caps at each check and is none once it is gone. Being a separate
+	 * authority, it is what a job the harness starts keeps
+	 * ({@link #keptAuthority}), so that job acts with it again after a restart.
+	 * What is held under the agent's own DID, such as its keyring, is the
+	 * agent's, not its controller's, so the harness does not reach it.
 	 *
 	 * @throws AuthException when the controller could not act now
 	 */
 	public RequestContext harnessContext(AString owner, AString agentId) {
-		RequestContext harness = RequestContext.ofAgent(owner, agentId);
 		Agent agent = getAgent(owner, agentId);
-		AString controller = (agent == null) ? null : agent.getController();
-		if (controller == null || controller.equals(owner)) return harness;
+		AString controller = (agent == null) ? owner : agent.getController();
 		AString controllerOwner = covia.grid.Principals.isAgentDID(controller)
 			? covia.grid.Principals.userOf(controller) : controller;
-		return harness.withAuthorityOf(context(controllerOwner, controller));
+		return RequestContext.ofAgent(owner, agentId).withAuthorityOf(context(controllerOwner, controller));
 	}
 
 	/**

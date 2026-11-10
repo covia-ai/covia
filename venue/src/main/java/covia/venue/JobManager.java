@@ -315,9 +315,16 @@ public class JobManager {
 			false, Invocation.SCHEDULED);
 	}
 
-	/** Prepare a durable backend job so its parent can checkpoint the handle before submission. */
+	/**
+	 * Prepare a durable backend job so its parent can checkpoint the handle
+	 * before submission. The job keeps the context it runs under
+	 * ({@link #keepCallerContext}), so work it carries on after a restart acts
+	 * with the same authority ({@link #callerContext}).
+	 */
 	public Prepared prepareAgentInteraction(AMap<AString, ACell> meta, ACell input, RequestContext ctx) {
-		return prepareOperation(meta, input, ctx, false, Invocation.TRACKED);
+		Prepared prepared = prepareOperation(meta, input, ctx, false, Invocation.TRACKED);
+		keepCallerContext(prepared.job, prepared.jobCtx);
+		return prepared;
 	}
 
 	/** Bind even an untracked scheduled fire to the account lifecycle at claim time. */
