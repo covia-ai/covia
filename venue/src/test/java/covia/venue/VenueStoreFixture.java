@@ -45,7 +45,8 @@ public final class VenueStoreFixture {
 	/** The published covia.jar SHA-256 of each release that wrote a fixture, one per release line. */
 	public static final Map<String, String> RELEASES = Map.of(
 		"0.9.11", "c5975145ff860c2d6d893ecfa832cdb9a7e532d71929f06a4d9b335d47269530",
-		"0.10.0", "f0f4a4f369ac22482e414d1c0e5d64bd345e58eaeaa064c0f0b86118321eefc1");
+		"0.10.0", "f0f4a4f369ac22482e414d1c0e5d64bd345e58eaeaa064c0f0b86118321eefc1",
+		"0.11.0", "d3ed087ab99391f1698fe6f6fba2dbe363548de4d3b2ad5a01edba8de027937d");
 
 	public static AKeyPair key(String hexByte) {
 		return AKeyPair.create(Blob.fromHex(hexByte.repeat(32)));

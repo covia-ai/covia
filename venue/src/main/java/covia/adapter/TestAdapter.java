@@ -79,9 +79,9 @@ public class TestAdapter extends AAdapter {
 
 	/**
 	 * Version 1 is version 0's shape, {@code users/<did>/scratch}, unchanged.
-	 * Versions 2 and 3 are synthetic, so every venue and the release-written
-	 * fixtures run real steps in order at start-up. State first written at
-	 * version 3 has no log.
+	 * Versions 2 and 3 are synthetic, so venues and the release-written
+	 * fixtures from before version 3 run real steps in order at start-up.
+	 * State first written at version 3 has no log.
 	 */
 	private static final List<MigrationStep> STATE_STEPS = List.of(
 		state -> state,		// 0 → 1

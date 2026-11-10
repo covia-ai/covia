@@ -38,7 +38,8 @@ import covia.lattice.CoviaPath;
  * {@code src/test/resources/migrations} opens with this build through the
  * launch path, and comes out at the current schema with its data readable.
  * One engine per fixture, no HTTP and no restart; {@link VenueStoreMigrationIT}
- * adds those. A new fixture is picked up by adding its archive. Fixtures are
+ * adds those. A new fixture is picked up by adding its archive, with its
+ * release's adapter versions in {@link #RELEASE_ADAPTER_VERSIONS}. Fixtures are
  * big, so both are failsafe integration tests.
  */
 class VenueUpgradeIT {
@@ -67,7 +68,8 @@ class VenueUpgradeIT {
 	/** The adapter state versions each release recorded, so the migrations each fixture starts from are known. */
 	private static final Map<String, Map<String, Long>> RELEASE_ADAPTER_VERSIONS = Map.of(
 		"0.9.11", Map.of(),
-		"0.10.0", Map.of("test", 1L));
+		"0.10.0", Map.of("test", 1L),
+		"0.11.0", Map.of("test", 3L, "crypto", 1L));
 
 	private static final Comparator<String> BY_RELEASE = Comparator.comparing(
 		fixture -> Arrays.stream(release(fixture).split("\\.")).mapToInt(Integer::parseInt).toArray(), Arrays::compare);
@@ -122,8 +124,14 @@ class VenueUpgradeIT {
 				String alice = text(users.get(0), "did");
 				assertEquals(Maps.of("origin", text(manifest, "coviaVersion")),
 					engine.adapterState("test").read("users/" + alice + "/scratch"));
-				// Each release's test adapter state predates its synthetic steps, which ran in order.
-				assertEquals(convex.core.data.Vectors.of(2L, 3L),
+				// The test adapter's synthetic steps past the release's version ran in
+				// order; state a release wrote at the current version has no log.
+				long releasedTest = RELEASE_ADAPTER_VERSIONS.get(text(manifest, "coviaVersion")).getOrDefault("test", 0L);
+				AVector<ACell> ran = convex.core.data.Vectors.empty();
+				for (long v = Math.max(2, releasedTest + 1); v <= new covia.adapter.TestAdapter().stateVersion(); v++) {
+					ran = ran.conj(CVMLong.create(v));
+				}
+				assertEquals(ran.isEmpty() ? null : ran,
 					engine.adapterState("test").read(covia.adapter.TestAdapter.K_MIGRATIONS.toString()));
 
 				for (ACell user : users) verifyUser(engine, user);
