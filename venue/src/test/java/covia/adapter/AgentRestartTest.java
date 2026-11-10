@@ -4,19 +4,24 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.Test;
 
+import convex.auth.ucan.Capability;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.data.Vectors;
 import convex.core.lang.RT;
+import covia.api.Abilities;
 import covia.api.Fields;
+import covia.exception.AuthException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.Agent;
@@ -246,7 +251,48 @@ public class AgentRestartTest {
 
 	/** {@link #config()} with the public principal's access on or off, unrestricted while on. */
 	private static AMap<AString, ACell> withPublicAccess(boolean on) {
-		return config().assoc(Config.AUTH, Maps.of(Config.PUBLIC, Maps.of(Config.ENABLED, on, Config.CAPS, Config.UNRESTRICTED)));
+		return withPublicAccess(on, Config.UNRESTRICTED);
+	}
+
+	/** {@link #config()} with the public principal's access on or off, and its {@code caps}. */
+	private static AMap<AString, ACell> withPublicAccess(boolean on, ACell caps) {
+		return config().assoc(Config.AUTH, Maps.of(Config.PUBLIC, Maps.of(Config.ENABLED, on, Config.CAPS, caps)));
+	}
+
+	/**
+	 * The harness of an agent the venue's public principal owns acts with that
+	 * principal's authority: what the public caps cover, and nothing while
+	 * public access is off.
+	 */
+	@Test
+	public void aPublicAgentsHarnessActsWithThePublicPrincipalsAuthority() throws Exception {
+		ACell caps = Vectors.of(
+			Capability.create(Strings.create("g/"), Abilities.AGENT_CREATE),
+			Maps.of(Capability.CAN, Abilities.INVOKE),
+			Capability.create(Strings.create("w/open/"), Capability.CRUD_READ));
+		TestEngine.Restartable venue = TestEngine.restartable(withPublicAccess(true, caps));
+		AString lobby = Strings.create("lobby");
+		Engine first = venue.mount(withPublicAccess(true, caps)).launch();
+		AString owner = first.publicPrincipal();
+		try {
+			Engine.addDemoAssets(first);
+			first.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, lobby,
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/never")), first.context(owner)).awaitResult(5000);
+			RequestContext harness = first.harnessContext(owner, lobby);
+			assertTrue(first.authorityCovers(harness, Strings.create("w/open/doc"), Capability.CRUD_READ));
+			assertFalse(first.authorityCovers(harness, Strings.create("w/closed/doc"), Capability.CRUD_READ),
+				"no more than the public caps give");
+		} finally {
+			first.close();
+		}
+
+		Engine second = venue.mount(withPublicAccess(false, caps)).launch();
+		try {
+			AuthException off = assertThrows(AuthException.class, () -> second.harnessContext(owner, lobby));
+			assertEquals(Engine.PUBLIC_ACCESS_OFF, off.getMessage());
+		} finally {
+			second.close();
+		}
 	}
 
 	/**

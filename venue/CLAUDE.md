@@ -178,8 +178,9 @@ Per-agent exposure is private by default. Whoever may ask the agent may use
 its endpoint: the owner, a caller the agent's `config.accepts` admits
 (`"anyone"` includes anonymous callers), or one presenting an `agent/request`
 UCAN — the same check as every other way of asking an agent. Each request is
-the asker's own, and the agent serves it as itself, under its own
-`config.caps`, so an owner who wants a narrower public face publishes a
+the asker's own, and the agent serves it as itself, its tool calls under its
+own `config.caps` and an external agent's backend with its controller's
+authority, so an owner who wants a narrower public face publishes a
 dedicated agent. Agent config `a2a: {public: true}` publishes the card and
 admits nobody. Anonymous callers ask as the venue's public principal, so
 the target's admission policy can authorise the action. The bound A2A

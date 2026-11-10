@@ -249,7 +249,7 @@ class RemoteAgentAdapterTest {
 	 * in the context their jobs kept: each follows the same task to its end,
 	 * an external agent served by one answers, and cancelling one reaches its
 	 * task. A call whose caller cannot act after the restart ends, naming its
-	 * task, which runs on.
+	 * task, which it leaves as it is.
 	 */
 	@Test void localCallsResumeAfterARestartAsTheirCallers() throws Exception {
 		TestEngine.Restartable venue = TestEngine.restartable(config(true));
@@ -306,7 +306,7 @@ class RemoteAgentAdapterTest {
 			assertEquals(Status.FAILED, ended.get(Fields.STATUS));
 			assertEquals(Strings.create(RemoteAgentAdapter.CALLER_CANNOT_ACT.formatted(Engine.PUBLIC_ACCESS_OFF,
 				taskOf(anonymous).toHexString())), ended.get(Fields.ERROR));
-			assertFalse(second.jobs().getJob(taskOf(anonymous)).isFinished(), "the task of a call that ended runs on");
+			assertFalse(second.jobs().getJob(taskOf(anonymous)).isFinished(), "a call that ended leaves its task as it is");
 		} finally { second.close(); }
 	}
 

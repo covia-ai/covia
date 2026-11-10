@@ -69,8 +69,11 @@ refuse that config (`Admission.configProblem`).
   the asker's own tasks submitted to that agent, and refuse every other id
   alike, so the endpoint is no oracle for other jobs; the owner reaches its
   other jobs on the front door.
-- **The agent serves it as itself.** The run is the agent sub-principal
-  bounded by `config.caps`, exactly as for a request from the owner.
+- **The agent serves it as itself.** The run is the agent sub-principal,
+  exactly as for a request from the owner: its tool calls are bounded by
+  `config.caps`, and its harness acts with its controller's authority
+  (UCAN.md §5.4). An external agent's backend is its harness's work, so
+  whoever the agent admits reaches that backend.
 - **The agent knows who asked, and how.** The task records the asker as its
   caller. When a channel binding authenticated the asker, the request context
   carries the authentication record (AUTH.md §5.3), and the agent's ingress
