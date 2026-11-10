@@ -972,6 +972,21 @@ public class AgentAdapterTest {
 	}
 
 	@Test
+	public void testCreateResolvesAToolNamedByThisVenuesOwnDIDHere() {
+		// The shared engine's public hostname resolves to no venue: a fetch
+		// would fail and be reported as an unavailable tool.
+		ACell result = engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(
+			Fields.AGENT_ID, "own-did-tool",
+			Fields.CONFIG, Maps.of(
+				"operation", "v/ops/llmagent/chat",
+				"llmOperation", "v/ops/langchain/openai",
+				"tools", Vectors.of(engine.config().getWebDID() + "/v/ops/covia/list"))),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		assertNull(RT.getIn(result, Fields.WARNINGS), "the tool resolves here, unfetched");
+	}
+
+	@Test
 	public void testCreateReportsAToolOfAnUnhostedDIDKeyAsUnavailable() {
 		// A did:key has no address, so its definition is never fetched: the tool
 		// works only if this venue holds it, and is reported as any missing tool.

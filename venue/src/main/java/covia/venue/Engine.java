@@ -2266,8 +2266,9 @@ public class Engine {
 		if (r == null) return null;
 		if (r.name() != null) {
 			// Named refs are publisher-scoped bindings — OUR v/ops/x is not
-			// THEIR v/ops/x, so there is no local-copy shortcut.
-			return (fetch && fetchable(r))
+			// THEIR v/ops/x, so there is no local-copy shortcut. A name this
+			// venue hosts is looked up here, by resolvePath (resolveLocalDIDURL).
+			return (fetch && fetchedRemotely(r))
 				? fetchRemoteNamedAsset(ctx, r.didString(), r.name()) : null;
 		}
 		Asset local = lookupLocalAsset(r);
@@ -2279,12 +2280,18 @@ public class Engine {
 			if (checked) requireMetadataRead(ctx, ref);
 			return local;
 		}
-		return (fetch && fetchable(r)) ? fetchRemoteAsset(ctx, r.didString(), r.hash()) : null;
+		return (fetch && fetchedRemotely(r)) ? fetchRemoteAsset(ctx, r.didString(), r.hash()) : null;
 	}
 
-	/** Whether a definition {@code r} names can be fetched from its owner: only a did:web has an address. */
-	private static boolean fetchable(AssetRef r) {
-		return "web".equals(r.method());
+	/**
+	 * Whether what {@code r} names is fetched from its owner's venue rather
+	 * than looked up here. An owner this venue hosts ({@link #isHosted}) is
+	 * looked up in this venue's state alone, found or not, and never over the
+	 * network; another owner is fetched from only if it has an address, which
+	 * only a did:web does.
+	 */
+	private boolean fetchedRemotely(AssetRef r) {
+		return "web".equals(r.method()) && isRemote(Strings.create(r.didString()));
 	}
 
 	/**
@@ -2296,7 +2303,7 @@ public class Engine {
 	 */
 	public boolean isRemoteDefinition(AString ref) {
 		AssetRef r = parseAssetRef(ref);
-		return r != null && fetchable(r) && isRemote(ref);
+		return r != null && fetchedRemotely(r);
 	}
 
 	/**
@@ -2417,7 +2424,7 @@ public class Engine {
 	/**
 	 * Fetches the binary content of a remote asset reference, for adoption
 	 * by {@code asset:pin}. Returns null when there is genuinely nothing to
-	 * fetch: the reference is not a fetchable remote ref, the asset/name is
+	 * fetch: the reference is not a fetchable remote ref ({@link #isRemoteDefinition}), the asset/name is
 	 * absent, or the metadata declares no content. When the metadata declares
 	 * a sha256, the fetched bytes are verified against it — substituted content
 	 * throws rather than being adopted. Operational failures (venue unreachable,
@@ -2431,7 +2438,7 @@ public class Engine {
 	 */
 	public ACell fetchRemoteContent(RequestContext ctx, AString ref) {
 		AssetRef r = parseAssetRef(ref);
-		if (r == null || !"web".equals(r.method())) return null;   // not a fetchable remote ref
+		if (r == null || !fetchedRemotely(r)) return null;   // not a fetchable remote ref
 		Venue remote = publisherVenue(ctx, r.didString());
 		try {
 			Hash id = (r.hash() != null) ? r.hash() : remote.getOperationId(r.name());
