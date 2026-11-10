@@ -145,6 +145,9 @@ public class AgentAdapter extends AAdapter {
 	public static final String TASK_YIELDED_IDLE = "The agent ended its turn with no reply, without completing, "
 		+ "failing or parking the task, and nothing it waits on (a person's answer, a running call or a wake time) "
 		+ "would resume it; inspect the agent timeline for what it did, and re-submit if appropriate";
+	/** Why a chat failed after the cycle that took it ended without a reply. */
+	public static final String CHAT_UNANSWERED = "The agent ended its turn without a reply to this message; "
+		+ "inspect the agent timeline for what it did, and send it again if appropriate";
 	/** Why a parked task failed at startup: what it waited on ran only in memory. */
 	public static final String TASK_WAIT_LOST = "The venue restarted while the task waited on a call that "
 		+ "had passed its time limit, so its result was lost; re-submit if appropriate";
@@ -317,9 +320,9 @@ public class AgentAdapter extends AAdapter {
 	/**
 	 * Per-agent in-flight chat Jobs keyed by session ID. An entry reserves
 	 * a chat awaiting a reply on a session, keyed by the chat's own Job id, so a
-	 * session may hold several at once — chats are not serialised. A response on
-	 * the session completes every waiter whose message a cycle has taken (its Job
-	 * STARTED); one still queued stays PENDING until a later response (§5.5). The
+	 * session may hold several at once — chats are not serialised. A cycle takes
+	 * at most one (its Job STARTED) and its reply completes that one; one still
+	 * queued stays PENDING until a cycle of its own takes it (§5.5.2). The
 	 * map is released per waiter when the run loop completes or fails its Job,
 	 * when the caller cancels it (a cancel hook in {@link #handleChat}), on
 	 * {@code deleteSession}, or when {@link #failAllPendingForAgent} sweeps a
@@ -1796,7 +1799,7 @@ public class AgentAdapter extends AAdapter {
 			}
 		} else {
 			Agent.SessionIntake intake = agent.appendSessionPending(sid,
-				ctx.getCallerDID(), session.loads(), envelope, true);
+				ctx.getCallerDID(), session.loads(), queued(envelope), true);
 			if (intake == Agent.SessionIntake.LOADS_ON_EXISTING) {
 				job.fail("loads can only be passed when a session is created — this session already exists");
 				return;
@@ -1837,8 +1840,8 @@ public class AgentAdapter extends AAdapter {
 	 *   <li>{@code sessionId} present + unknown → fail</li>
 	 * </ul>
 	 *
-	 * <p>Several chats may await the same session. A response completes the
-	 * waiters whose messages a cycle has taken. A trusted SessionDelivery participant
+	 * <p>Several chats may await the same session. Each is taken by a cycle of
+	 * its own, whose reply completes it. A trusted SessionDelivery participant
 	 * can commit delivery bookkeeping with intake, before the agent wakes.</p>
 	 */
 	private void handleChat(Job job, ACell input, RequestContext ctx) {
@@ -4199,13 +4202,22 @@ public class AgentAdapter extends AAdapter {
 		return appendSessionEnvelope(agent, sessionId, caller, sessionEnvelope(sessionId, caller, jobId, message));
 	}
 
-	/** The envelope a venue-delivered session message travels in. */
-	private static AMap<AString, ACell> sessionEnvelope(Blob sessionId, AString caller, AString jobId, ACell message) {
+	/** The envelope a venue-delivered session message travels in: a chat when it names a {@code jobId}, else a message, stamped where it stands in the queue. */
+	private AMap<AString, ACell> sessionEnvelope(Blob sessionId, AString caller, AString jobId, ACell message) {
 		AMap<AString, ACell> envelope = Maps.of(
 			Fields.CALLER, caller,
 			Fields.SESSION_ID, Strings.create(sessionId.toHexString()),
 			Fields.MESSAGE, message);
-		return (jobId != null) ? envelope.assoc(Fields.JOB_ID, jobId) : envelope;
+		return (jobId != null) ? envelope.assoc(Fields.JOB_ID, jobId) : queued(envelope);
+	}
+
+	/**
+	 * A message's envelope stamped with where it stands in the agent's queue
+	 * (AGENT_SESSIONS.md §5.5.2): the venue's next sequence value, which
+	 * orders it against tasks and chats, whose Job ids carry their own.
+	 */
+	private AMap<AString, ACell> queued(AMap<AString, ACell> envelope) {
+		return envelope.assoc(Fields.QUEUED, CVMLong.create(engine.jobs().nextSequence()));
 	}
 
 	private static boolean appendSessionEnvelope(Agent agent, Blob sessionId, AString caller,
@@ -4469,10 +4481,11 @@ public class AgentAdapter extends AAdapter {
 
 				long startTs = engine.currentTimestamp().longValue();
 
-				// Pick at most one task per cycle: the oldest by created timestamp
-				// that has something to run on. Multi-task agents fan out across
-				// cycles; parked tasks wait for what they are waiting on.
-				Map.Entry<Blob, ACell> pickedTask = pickOldestReadyTask(agent, tasks, startTs);
+				// One unit of work per cycle, the oldest in the agent's queue: a
+				// ready task, or a session's queued messages up to and including
+				// its first chat. Parked tasks wait for what they are waiting on.
+				Pick pick = pickNext(agent, tasks, startTs);
+				Map.Entry<Blob, ACell> pickedTask = pick.task();
 				if (pickedTask != null) {
 					if (stuckTaskId != null && stuckTaskId.equals(pickedTask.getKey())) {
 						stuckCount++;
@@ -4496,23 +4509,23 @@ public class AgentAdapter extends AAdapter {
 				AVector<ACell> formattedTasks = formatPickedTask(pickedTask);
 				AVector<ACell> resolvedPending = resolveJobIds(pending, Fields.OUTPUT);
 
-				// Pick at most one session per cycle. Priority:
-				//   1. picked task's sessionId (so the task's session controls)
-				//   2. else the first session with non-empty pending
-				//   3. else null (no session traffic)
-				AString pickedSession = pickSessionForCycle(pickedTask, agent);
+				// The cycle's session: its task's, or the session picked for its
+				// queued messages. Read the session record ONCE and derive what
+				// the cycle takes from it — a second lattice read would let a
+				// message land in between, making the drain count, the adapter's
+				// view and the timeline snapshot disagree about what was
+				// presented. A session's cycle takes its first chat and the
+				// messages ahead of it; a task's cycle takes only those messages,
+				// since its reply is the task's (Session.taken).
+				AString pickedSession = pick.session();
 				Blob pickedSessionBlob = storedId(pickedSession);
-				// Read the session record ONCE and derive the presented inbox
-				// from it — a second lattice read would let a message land in
-				// between, making the drain count, the adapter's view and the
-				// timeline snapshot disagree about what was presented.
 				AMap<AString, ACell> pickedSessionRecord = null;
 				AVector<ACell> filteredInbox = Vectors.empty();
 				if (pickedSessionBlob != null) {
 					pickedSessionRecord = agent.getSession(pickedSessionBlob);
-					if (pickedSessionRecord != null
-							&& pickedSessionRecord.get(Agent.KEY_PENDING) instanceof AVector<?> pv) {
-						filteredInbox = (AVector<ACell>) pv;
+					if (pickedSessionRecord != null) {
+						filteredInbox = Session.taken(pickedSessionRecord, pickedTask == null);
+						pickedSessionRecord = pickedSessionRecord.assoc(Agent.KEY_PENDING, filteredInbox);
 					}
 				}
 
@@ -4961,41 +4974,27 @@ public class AgentAdapter extends AAdapter {
 		// caller sees the completed cycle's writes.
 		handback.afterCommit();
 
-		// Complete every chat the agent has taken. A response on the session
-		// answers the whole conversation so far, so each waiting chat whose
-		// message a cycle took (this one, or an earlier one that yielded)
-		// resolves with the same reply; a chat still queued keeps waiting.
-		// Same post-merge ordering as task completion. A failed cycle fails
-		// those chats instead, below.
-		if (leanResponse != null && pickedSessionBlob != null) {
+		// Answer the chat this cycle took with its reply: a session's cycle
+		// takes at most one, and a task's none (Session.taken), so a chat's
+		// reply is its own. Same post-merge ordering as task completion. A
+		// cycle that ends without a reply leaves the chat unanswered, and it
+		// fails; a failed cycle fails it instead, below.
+		if (leanError == null && pickedSessionBlob != null) {
 			ConcurrentHashMap<Blob, Job> waiters = sessionChats(key, pickedSessionBlob);
 			if (waiters != null) {
-				java.util.Map<Blob, Job> answered = removeTakenChats(waiters);
-				// Every result names the chats this response answered, in
-				// presentation order — this cycle's inbox first, then any
-				// waiter presented by an earlier cycle that yielded — so a
-				// client can tell one reply to several messages from several
-				// replies and collapse the duplicates (#416).
-				java.util.LinkedHashSet<Blob> order = new java.util.LinkedHashSet<>();
-				for (long i = 0; filteredInbox != null && i < filteredInbox.count(); i++) {
-					AString jid = RT.ensureString(RT.getIn(filteredInbox.get(i), Fields.JOB_ID));
-					Blob id = storedId(jid);
-					if (id != null && answered.containsKey(id)) order.add(id);
-				}
-				order.addAll(answered.keySet());
-				AVector<ACell> answeredIds = Vectors.empty();
-				for (Blob id : order) answeredIds = answeredIds.conj(Strings.create(id.toHexString()));
-				for (Job chatJob : answered.values()) {
+				for (Job chatJob : removeTakenChats(waiters).values()) {
 					if (cycleTokens != null) attachTokens(chatJob, cycleTokens);
-					chatJob.completeWith(Maps.of(
-						Fields.AGENT_ID,   agentId,
-						Fields.SESSION_ID, pickedSession,
-						Fields.RESPONSE,   leanResponse,
-						Fields.ANSWERED,   answeredIds));
+					if (leanResponse == null) {
+						chatJob.fail(CHAT_UNANSWERED);
+					} else {
+						chatJob.completeWith(Maps.of(
+							Fields.AGENT_ID,   agentId,
+							Fields.SESSION_ID, pickedSession,
+							Fields.RESPONSE,   leanResponse));
+					}
 				}
 			}
 		}
-		// else: yield — every waiter stays for the next response
 
 		// A failed cycle fails only the work it took (AGENT_LOOP.md §3.4): its
 		// task above, and here the chats it was answering. Work it never took
@@ -5284,56 +5283,35 @@ public class AgentAdapter extends AAdapter {
 		return ((AMap<AString, ACell>) task).get(Fields.SESSION_ID);
 	}
 
-	/**
-	 * Picks the oldest ready task ({@link Agent#isTaskReady}) by
-	 * {@code created} timestamp. Tasks created at the same time go in task ID
-	 * order, which is submission order: the scan meets them in key order and
-	 * keeps the first. Returns null if no task is ready.
-	 */
-	@SuppressWarnings("unchecked")
-	private Map.Entry<Blob, ACell> pickOldestReadyTask(Agent agent, Index<Blob, ACell> tasks, long now) {
-		if (tasks == null || tasks.count() == 0) return null;
-		Map.Entry<Blob, ACell> oldest = null;
-		long oldestTs = Long.MAX_VALUE;
-		for (var entry : tasks.entrySet()) {
-			ACell value = entry.getValue();
-			if (!agent.isTaskReady(value, now)) continue;
-			long ts = Long.MAX_VALUE;
-			if (value instanceof AMap) {
-				ACell created = ((AMap<AString, ACell>) value).get(Fields.CREATED);
-				if (created instanceof CVMLong) ts = ((CVMLong) created).longValue();
-			}
-			if (oldest == null || ts < oldestTs) {
-				oldest = entry;
-				oldestTs = ts;
-			}
-		}
-		return oldest;
-	}
+	/** What a cycle works on: a task, in its session if it has one, or else a session's queued messages. */
+	private record Pick(Map.Entry<Blob, ACell> task, AString session) {}
 
 	/**
-	 * Picks the session this cycle will handle. Priority:
-	 *   1. Picked task's sessionId (so the active task's session controls)
-	 *   2. First session with non-empty pending
-	 *   3. null (no session traffic)
-	 *
-	 * <p>Returned value is the AString hex sessionId, or null if no
-	 * session has pending work. The transition will only see traffic for
-	 * this single session per cycle.</p>
+	 * Picks the oldest work in the agent's queue (AGENT_SESSIONS.md §5.5.2):
+	 * the oldest ready task ({@link Agent#isTaskReady}) or the session whose
+	 * oldest queued envelope is older, a task winning a tie. A task stands in
+	 * the queue by its request Job id and an envelope by its stamp
+	 * ({@link Session#queueKey}), both from the venue's one sequence, so the
+	 * queue is in order of arrival. Tasks are keyed by their ids, so the first
+	 * ready one in key order is the oldest.
 	 */
-	@SuppressWarnings("unchecked")
-	private static AString pickSessionForCycle(
-			Map.Entry<Blob, ACell> pickedTask, Agent agent) {
-		if (pickedTask != null) {
-			ACell tv = pickedTask.getValue();
-			if (tv instanceof AMap) {
-				ACell sid = ((AMap<AString, ACell>) tv).get(Fields.SESSION_ID);
-				if (sid instanceof AString) return (AString) sid;
+	private static Pick pickNext(Agent agent, Index<Blob, ACell> tasks, long now) {
+		Map.Entry<Blob, ACell> task = null;
+		for (var entry : (tasks == null) ? Index.<Blob, ACell>none().entrySet() : tasks.entrySet()) {
+			if (agent.isTaskReady(entry.getValue(), now)) {
+				task = entry;
+				break;
 			}
-			return null;
 		}
-		Blob sid = agent.pickSessionWithPending();
-		return (sid != null) ? Strings.create(sid.toHexString()) : null;
+		Blob sid = agent.oldestSessionWithPending();
+		if (sid != null && task != null) {
+			AVector<ACell> pending = Session.taken(agent.getSession(sid), true);
+			if (pending.count() == 0 || Session.queueKey(pending.get(0)) >= Session.queueKey(task.getKey())) sid = null;
+		}
+		if (task == null || sid != null) {
+			return new Pick(null, (sid == null) ? null : Strings.create(sid.toHexString()));
+		}
+		return new Pick(task, RT.ensureString(RT.getIn(task.getValue(), Fields.SESSION_ID)));
 	}
 
 	/**

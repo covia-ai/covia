@@ -141,8 +141,7 @@ public final class ExternalAgents {
 						AMap<AString, ACell> result = Maps.of(Fields.AGENT_ID, data.get(Fields.AGENT_ID),
 							Fields.ADDRESS, data.get(Fields.ADDRESS), Fields.SESSION_ID, data.get(Fields.SESSION_ID));
 						if (Strings.create("chat").equals(kept(parent, KIND))) {
-							result = result.assoc(Fields.RESPONSE, response).assoc(Strings.intern("answered"),
-								Vectors.of(Strings.create(parent.getID().toHexString())));
+							result = result.assoc(Fields.RESPONSE, response);
 						} else {
 							result = result.assoc(Fields.ID, Strings.create(parent.getID().toHexString()))
 								.assoc(Fields.STATUS, Status.COMPLETE).assoc(Fields.OUTPUT, response);

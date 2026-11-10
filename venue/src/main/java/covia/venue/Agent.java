@@ -587,17 +587,24 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 	}
 
 	/**
-	 * Returns the sid (Blob) of the first session with outstanding work
-	 * (pending messages), or null if none.
+	 * The session whose oldest queued envelope is the oldest of any session's
+	 * ({@link Session#queueKey(ACell)}), or null when none has one: the
+	 * session that is next in the agent's queue.
 	 */
-	public Blob pickSessionWithPending() {
+	public Blob oldestSessionWithPending() {
 		Index<Blob, ACell> sessions = getSessions();
 		if (sessions == null || sessions.count() == 0) return null;
+		Blob oldest = null;
+		long oldestKey = Long.MAX_VALUE;
 		for (var entry : sessions.entrySet()) {
-			ACell sv = entry.getValue();
-			if (sv instanceof AMap m && sessionHasWork(m)) return entry.getKey();
+			if (!(entry.getValue() instanceof AMap m) || !sessionHasWork(m)) continue;
+			long key = Session.queueKey(((AVector<ACell>) m.get(K_PENDING)).get(0));
+			if (oldest == null || key < oldestKey) {
+				oldest = entry.getKey();
+				oldestKey = key;
+			}
 		}
-		return null;
+		return oldest;
 	}
 
 	public AString getError() {
@@ -833,7 +840,8 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 	 * Whether a task has something to run on: it has not been parked, or it
 	 * has an input it has not been shown (a continuation, or the outcome of
 	 * something its cycle waited on), or its wake time has come, or its
-	 * session has messages waiting. A task
+	 * session has messages waiting that its cycle would take
+	 * ({@link #hasSessionWorkFor}). A task
 	 * that is not parked but has been shown its input was interrupted
 	 * mid-cycle, and runs again.
 	 */
@@ -844,19 +852,23 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 	/**
 	 * Whether something new is there for a task, parked or not: an input it
 	 * has not been shown, a wake time that has come, or messages waiting in
-	 * its session.
+	 * its session that its cycle would take.
 	 */
 	public boolean hasNewWorkFor(ACell taskData, long now) {
 		return Task.hasOwnWork(taskData, now) || hasSessionWorkFor(taskData);
 	}
 
-	/** Whether messages are waiting in a task's session. */
+	/**
+	 * Whether messages are waiting in a task's session that its cycle would
+	 * take: those ahead of the session's first queued chat, which waits for a
+	 * session cycle of its own ({@link Session#taken}).
+	 */
 	public boolean hasSessionWorkFor(ACell taskData) {
 		if (!(taskData instanceof AMap<?, ?> task)) return false;
 		AString sid = RT.ensureString(task.get(Fields.SESSION_ID));
 		Blob sessionId = (sid == null) ? null : Blob.fromHex(sid.toString());
 		AMap<AString, ACell> session = (sessionId == null) ? null : getSession(sessionId);
-		return session != null && Session.sessionHasWork(session);
+		return session != null && Session.hasTaskWork(session);
 	}
 
 	/** Whether any queued task is ready to run ({@link #isTaskReady}). */

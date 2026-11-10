@@ -163,12 +163,14 @@ and converge on the same final Task.
 
 A `SendMessage` carrying a `contextId` but no `taskId` is likewise an
 `agent:request` on that session — a new task, one cycle, its own reply — and
-a `taskId` continues that task. The per-agent surface never uses `agent:chat`:
-a message without `taskId` is a new unit of work in A2A, whereas `agent:chat`
-batches the messages queued on one session into one shared reply
-(AGENT_SESSIONS.md §5.5.2), which A2A has no way to express (#416). The front
-door is whatever `a2a.defaultChatOp` names; an operator who points it at an
-agent chat inherits chat semantics there.
+a `taskId` continues that task. A plain reply completes the task
+(AGENT_TASKS.md §5.2), as A2A expects of a task-generating agent, and a task
+the agent parks stays `TASK_STATE_WORKING`. The per-agent surface never uses
+`agent:chat`: a message without `taskId` is a new unit of work in A2A, which
+a task represents, with its own lifecycle, cancellation and resubscription,
+where a chat has only its reply. The front door is whatever
+`a2a.defaultChatOp` names; an operator who points it at an agent chat
+inherits chat semantics there.
 
 ## Errors
 

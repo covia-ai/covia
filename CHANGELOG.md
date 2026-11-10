@@ -85,6 +85,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - A user's `meta`, `generation`, `deleting` and `deleted` are venue bookkeeping that no path reads (#617).
 - `user:info` and `/users/{did}` show a user's `meta` to operators only, and `user:export` leaves it out.
 - A task an agent leaves open waits for a wake time, its HITL ask or a late tool call; with none, the agent's reply is the task's result, judged against a strict `responseSchema`, and a cycle with no reply fails it.
+- An agent takes one chat per cycle, with the messages queued ahead of it in its session, and its reply answers that chat alone; a task's cycle takes no chat, and a chat whose cycle ends without a reply fails.
+- An agent takes its work oldest first across tasks and chats; tasks used to go first.
 - A forced `agent:trigger` no longer presents a parked task.
 - An LLM agent's job results show an open HITL ask as still waiting, not as ended with no reason.
 - A HITL answer or a late tool call's outcome goes to the task that waited for it, not to whichever task in its session runs next.
@@ -165,6 +167,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - The `venue/relay` ability: users hop with `authenticateAs: "caller"` and grants.
 - `auth.audience`: replaced by `auth.requireAud`.
 - `FileAdapter.resolve`, which resolved a root path without authorising it.
+- `answered` in `agent:chat` results: each reply answers one chat.
 
 ### Fixed
 

@@ -25,7 +25,7 @@ An agent can be asked in three ways:
 | Asked with | Asker waits | Finished by |
 |------------|-------------|-------------|
 | `agent:request` | Yes, on the Job | An explicit outcome (§4) |
-| `agent:chat` | Yes, on the Job | The agent's next response on the session |
+| `agent:chat` | Yes, on the Job | The reply of the cycle that takes it |
 | `agent:message` | No | Nothing: no outcome is expected |
 
 ## 2. Asking
@@ -51,8 +51,12 @@ its own adapter, and the rest of this document does not apply to it.
 
 ## 3. Running
 
-The run loop takes at most one task per cycle: the oldest that is ready. A
-task is ready unless it is parked (§6). The cycle runs in the task's session.
+Each cycle takes one piece of work, the oldest the agent has: a ready task, or
+a chat with the messages queued ahead of it in its session, in order of
+arrival ([AGENT_SESSIONS.md](./AGENT_SESSIONS.md) §5.5.2). A task is ready
+unless it is parked (§6). The cycle runs in the task's session and takes the
+messages queued there ahead of any chat, but never a chat, since its reply is
+the task's.
 
 Further input for an open task queues behind its original input, and each
 cycle is shown the next one not yet shown. It comes from `agent:message` with

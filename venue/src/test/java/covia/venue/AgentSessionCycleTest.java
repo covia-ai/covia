@@ -424,11 +424,11 @@ public class AgentSessionCycleTest {
 		assertEquals(0, agent.getSessionPending(sid).count());
 
 		assertFalse(agent.hasSessionPending(), "inCycle must not count as queued work");
-		assertNull(agent.pickSessionWithPending(), "inCycle session must not be pickable");
+		assertNull(agent.oldestSessionWithPending(), "inCycle session must not be pickable");
 
 		mergeMinimalCycle();
 		assertFalse(agent.hasSessionPending(), "merged cycle with empty pending is quiescent");
-		assertNull(agent.pickSessionWithPending());
+		assertNull(agent.oldestSessionWithPending());
 	}
 
 	// ========== CAS contention: intake vs frame writes ==========

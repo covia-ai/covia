@@ -32,6 +32,7 @@ import covia.venue.Engine;
 import covia.venue.JobManager;
 import covia.venue.Models;
 import covia.venue.RequestContext;
+import covia.venue.Task;
 import covia.venue.TestEngine;
 
 /**
@@ -184,8 +185,24 @@ public class AgentCycleTest {
 		assertTrue(gate.awaitEntered(10, TimeUnit.SECONDS), "the cycle reaches its gate");
 	}
 
-	private static AVector<ACell> answered(Job chat) {
-		return RT.ensureVector(RT.getIn(chat.awaitResult(10_000), Fields.ANSWERED));
+	/** Waits for a chat's reply, checks it completed, and returns its response. */
+	private static ACell reply(Job chat) {
+		ACell result = chat.awaitResult(10_000);
+		assertEquals(Status.COMPLETE, chat.getStatus());
+		return RT.getIn(result, Fields.RESPONSE);
+	}
+
+	/** Waits for a chat's reply and returns the index of the timeline entry whose cycle took its message, or -1. */
+	private static long cycleOf(Agent agent, Job chat) {
+		reply(chat);
+		AVector<ACell> timeline = agent.getTimeline();
+		for (long i = 0; i < timeline.count(); i++) {
+			AVector<ACell> taken = RT.ensureVector(RT.getIn(timeline.get(i), Fields.MESSAGES));
+			for (long j = 0; taken != null && j < taken.count(); j++) {
+				if (hex(chat).equals(RT.getIn(taken.get(j), Fields.JOB_ID))) return i;
+			}
+		}
+		return -1;
 	}
 
 	// ========== The cycle takes its input before its runtime runs ==========
@@ -235,8 +252,8 @@ public class AgentCycleTest {
 				assertEquals(Status.PENDING, second.getStatus(), runtime + ": a queued chat is not");
 
 				gate.release();
-				assertEquals(Vectors.of(hex(first)), answered(first), runtime + ": a reply answers only what its cycle took");
-				assertEquals(Vectors.of(hex(second)), answered(second), runtime + ": the second message gets its own cycle");
+				assertEquals(0, cycleOf(agent, first), runtime + ": a reply answers only what its cycle took");
+				assertEquals(1, cycleOf(agent, second), runtime + ": the second message gets its own cycle");
 				assertEquals(Agent.SLEEPING, awaitRest(agent, owner));
 				assertEquals(2, timelineCount(agent), runtime.name());
 				assertEquals(1, userTurns(agent, sid, "second").count(), runtime + ": presented once");
@@ -283,7 +300,7 @@ public class AgentCycleTest {
 		String agentId = agent.getAgentId().toString();
 		op(owner, "resume", agentId, Maps.empty());
 		Job next = chat(owner, agentId, sid, "again");
-		assertEquals(Vectors.of(hex(next)), answered(next), runtime);
+		assertNotNull(reply(next), runtime);
 		assertEquals(Agent.SLEEPING, awaitRest(agent, owner), runtime);
 		assertNull(agent.getError(), runtime);
 	}
@@ -373,7 +390,7 @@ public class AgentCycleTest {
 				// The second message waited for a cycle of its own: a step replies
 				// to it, and an LLM agent whose model always fails fails it alone.
 				if (runtime == Runtime.STEP) {
-					assertEquals(Vectors.of(hex(second)), answered(second));
+					assertEquals(Vectors.of(Strings.create("reply")), RT.getIn(reply(second), "saw"));
 				} else {
 					assertThrows(JobFailedException.class, () -> second.awaitResult(10_000));
 				}
@@ -428,7 +445,7 @@ public class AgentCycleTest {
 
 				if (runtime == Runtime.LLM) op(owner, "update", "cannot-continue", Maps.of(Fields.CONFIG, Maps.of("model", "ok")));
 				op(owner, "resume", "cannot-continue", Maps.empty());
-				assertEquals(Vectors.of(hex(second)), answered(second), runtime + ": it runs after resume");
+				assertNotNull(reply(second), runtime + ": it runs after resume");
 				assertEquals(Agent.SLEEPING, awaitRest(agent, owner));
 			}
 		}
@@ -594,20 +611,125 @@ public class AgentCycleTest {
 	// ========== Chats ==========
 
 	@Test
-	public void aChatTakenByAYieldingCycleIsAnsweredByTheNextReply(TestInfo info) throws Exception {
+	public void aChatWhoseCycleEndsWithoutAReplyFails(TestInfo info) throws Exception {
 		RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));
 		Agent agent = stepAgent(owner, "yielding-chat");
 		Job first = chat(owner, "yielding-chat", null, "yield");
+		assertThrows(JobFailedException.class, () -> first.awaitResult(10_000));
+		assertEquals(AgentAdapter.CHAT_UNANSWERED, first.getErrorMessage(), "a chat expects the reply of its own cycle");
 		Blob sid = sessionOf(first);
 		assertEquals(Agent.SLEEPING, awaitRest(agent, owner));
-		assertFalse(first.isFinished(), "a cycle without a reply leaves its chat waiting");
-		assertEquals(0, pendingCount(agent, sid), "but its message was taken");
+		assertEquals(0, pendingCount(agent, sid), "its message was taken");
 
 		Job second = chat(owner, "yielding-chat", sid, "reply");
-		AVector<ACell> both = Vectors.of(hex(second), hex(first));
-		assertEquals(both, answered(second), "this cycle's message first, then the one taken earlier");
-		assertEquals(both, answered(first));
-		assertEquals(RT.getIn(second.getOutput(), Fields.RESPONSE), RT.getIn(first.getOutput(), Fields.RESPONSE));
+		assertEquals(Vectors.of(Strings.create("reply")), RT.getIn(reply(second), "saw"),
+			"the next chat gets the reply to its own message");
+	}
+
+	@Test
+	public void aCycleTakesTheMessagesAheadOfAChatAndNotThoseAfterIt(TestInfo info) throws Exception {
+		RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));
+		String gateName = gateName("ahead");
+		try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName)) {
+			Agent agent = stepAgent(owner, "ahead");
+			Job first = chat(owner, "ahead", null, "hold:" + gateName + " reply");
+			awaitGate(gate);
+			Blob sid = sessionOf(first);
+			AString sidHex = Strings.create(sid.toHexString());
+			// Queued behind the held cycle: a message, two chats, and a message
+			message(owner, "ahead", Maps.of(Fields.SESSION_ID, sidHex, Fields.MESSAGE, "note-1"));
+			Job second = chat(owner, "ahead", sid, "chat-2");
+			Job third = chat(owner, "ahead", sid, "chat-3");
+			message(owner, "ahead", Maps.of(Fields.SESSION_ID, sidHex, Fields.MESSAGE, "note-2"));
+
+			gate.release();
+			assertEquals(Vectors.of(Strings.create("note-1"), Strings.create("chat-2")), RT.getIn(reply(second), "saw"),
+				"a chat's cycle takes the messages ahead of it, and its reply is its own");
+			assertEquals(Vectors.of(Strings.create("chat-3")), RT.getIn(reply(third), "saw"),
+				"the next chat gets a cycle of its own");
+			assertEquals(Agent.SLEEPING, awaitRest(agent, owner));
+			assertEquals(0, pendingCount(agent, sid));
+			assertEquals(4, timelineCount(agent), "the message after the last chat has a cycle of its own");
+			assertEquals(1, userTurns(agent, sid, "note-2").count());
+		}
+	}
+
+	@Test
+	public void aTaskCycleTakesNoChatAndItsReplyGoesToTheTask(TestInfo info) throws Exception {
+		RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));
+		String gateName = gateName("task-chat");
+		try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName)) {
+			Agent agent = stepAgent(owner, "task-chat");
+			Job first = chat(owner, "task-chat", null, "hold:" + gateName + " reply");
+			awaitGate(gate);
+			Blob sid = sessionOf(first);
+			AString sidHex = Strings.create(sid.toHexString());
+			// Queued in order: a task in the session, then a chat in it
+			Job task = engine.jobs().invokeOperation("v/ops/agent/request", Maps.of(Fields.AGENT_ID, "task-chat",
+				Fields.SESSION_ID, sidHex, Fields.INPUT, "the task"), owner);
+			Job chat = chat(owner, "task-chat", sid, "the chat");
+
+			gate.release();
+			ACell result = task.awaitResult(10_000);
+			assertEquals(Strings.create("the task"), RT.getIn(result, Fields.OUTPUT, Fields.INPUT),
+				"the task's cycle replies to the task");
+			assertEquals(Vectors.empty(), RT.getIn(result, Fields.OUTPUT, "saw"), "and took no chat");
+			assertEquals(Vectors.of(Strings.create("the chat")), RT.getIn(reply(chat), "saw"),
+				"the chat, queued after the task, gets the next cycle and its own reply");
+			assertEquals(2, cycleOf(agent, chat));
+		}
+	}
+
+	@Test
+	public void aChatInAParkedTasksSessionGetsItsOwnCycleAndAMessageBringsTheTaskBack(TestInfo info) throws Exception {
+		RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));
+		Agent agent = stepAgent(owner, "parked-chat");
+		Job task = request(owner, "parked-chat", "park:3600000");
+		assertEquals(Agent.SLEEPING, awaitRest(agent, owner));
+		assertTrue(Task.isParked(agent.getTasks().get(task.getID())));
+		Blob sid = sessionOf(task);
+
+		// A chat in the task's session waits for a reply, which the task's
+		// cycle would give the task, so it gets the session's own cycle and
+		// the task stays parked, not ready while the chat is queued.
+		Job chat = chat(owner, "parked-chat", sid, "hello");
+		assertEquals(Vectors.of(Strings.create("hello")), RT.getIn(reply(chat), "saw"));
+		assertEquals(Agent.SLEEPING, awaitRest(agent, owner));
+		assertEquals(2, timelineCount(agent), "one cycle for the chat, none for the task");
+		assertNull(RT.getIn(agent.getTimeline().get(1), Fields.TASKS));
+		assertTrue(Task.isParked(agent.getTasks().get(task.getID())));
+
+		// A message waits for no reply, so the task's cycle takes it.
+		message(owner, "parked-chat", Maps.of(Fields.SESSION_ID, Strings.create(sid.toHexString()), Fields.MESSAGE, "fyi"));
+		assertEquals(Agent.SLEEPING, awaitRest(agent, owner));
+		assertEquals(3, timelineCount(agent));
+		assertNotNull(RT.getIn(agent.getTimeline().get(2), Fields.TASKS), "the message brings the task back");
+		assertEquals(Strings.create("fyi"), RT.getIn(agent.getTimeline().get(2), Fields.MESSAGES, 0L, Fields.MESSAGE));
+		assertTrue(Task.isParked(agent.getTasks().get(task.getID())), "its revisit still to come, it parks again");
+		assertFalse(task.isFinished());
+	}
+
+	@Test
+	public void workIsTakenOldestFirstAcrossTasksAndSessions(TestInfo info) throws Exception {
+		RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));
+		String gateName = gateName("fifo");
+		try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName)) {
+			Agent agent = stepAgent(owner, "fifo");
+			Job first = chat(owner, "fifo", null, "hold:" + gateName + " reply");
+			awaitGate(gate);
+			// Queued behind the held cycle, each in a session of its own
+			Job chatA = chat(owner, "fifo", null, "chat-a");
+			Job task = request(owner, "fifo", "task-b");
+			Job chatC = chat(owner, "fifo", null, "chat-c");
+
+			gate.release();
+			assertEquals(1, cycleOf(agent, chatA), "the chat that came first is first");
+			task.awaitResult(10_000);
+			assertEquals(Status.COMPLETE, task.getStatus());
+			assertEquals(Strings.create("task-b"), RT.getIn(agent.getTimeline().get(2), Fields.TASKS, 0L, Fields.INPUT),
+				"then the task, which came before the last chat");
+			assertEquals(3, cycleOf(agent, chatC));
+		}
 	}
 
 	/**
@@ -643,13 +765,13 @@ public class AgentCycleTest {
 			try {
 				assertTrue(waiting.await(10, TimeUnit.SECONDS), "the second chat waits, its message not yet queued");
 				gate.release();
-				assertEquals(Vectors.of(hex(first)), answered(first), "the reply answers the chat its cycle took");
+				assertEquals(0, cycleOf(agent, first), "the reply answers the chat its cycle took");
 				assertEquals(Agent.SLEEPING, awaitRest(agent, owner));
 			} finally {
 				queue.countDown();
 			}
 			Job second = delivered.get(10, TimeUnit.SECONDS);
-			assertEquals(Vectors.of(hex(second)), answered(second), "it is answered by the reply to its own message");
+			assertEquals(1, cycleOf(agent, second), "it is answered by the reply to its own message");
 			assertEquals(Vectors.of(Strings.create("reply")), RT.getIn(second.getOutput(), Fields.RESPONSE, "saw"));
 		}
 	}

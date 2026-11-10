@@ -275,6 +275,62 @@ public final class Session extends ALatticeComponent<ACell>
 		return pv instanceof AVector<?> v && v.count() > 0;
 	}
 
+	/**
+	 * Whether a queued envelope is a chat, which waits for a reply, rather
+	 * than a message, which waits for none: a chat names its chat Job.
+	 */
+	public static boolean isChat(ACell envelope) {
+		return RT.getIn(envelope, Fields.JOB_ID) != null;
+	}
+
+	/**
+	 * What a cycle takes from a session's pending queue (AGENT_SESSIONS.md
+	 * §5.5.2): the messages ahead of the first chat, and that chat too when
+	 * {@code takesChat}. A session's cycle takes one; a task's cycle in the
+	 * session takes none, since its reply belongs to the task. The rest waits
+	 * for later cycles, so each chat gets the reply of its own cycle.
+	 */
+	public static AVector<ACell> taken(AMap<AString, ACell> session, boolean takesChat) {
+		AVector<ACell> pending = (session != null && session.get(K_PENDING) instanceof AVector<?> pv)
+			? (AVector<ACell>) pv : Vectors.empty();
+		long n = 0;
+		while (n < pending.count()) {
+			boolean chat = isChat(pending.get(n));
+			if (chat && takesChat) n++;
+			if (chat) break;
+			n++;
+		}
+		return (n == pending.count()) ? pending : pending.subVector(0, n);
+	}
+
+	/** Whether a task's cycle in this session would take anything from it ({@link #taken}). */
+	static boolean hasTaskWork(AMap<AString, ACell> session) {
+		return taken(session, false).count() > 0;
+	}
+
+	/**
+	 * Where a queued envelope stands in the agent's queue: the sequence it was
+	 * stamped with at intake ({@link Fields#QUEUED}), else its chat Job's
+	 * ({@link #queueKey(Blob)}). One with neither predates both, so it is the oldest.
+	 */
+	public static long queueKey(ACell envelope) {
+		if (RT.getIn(envelope, Fields.QUEUED) instanceof CVMLong queued) return queued.longValue();
+		AString jobId = RT.ensureString(RT.getIn(envelope, Fields.JOB_ID));
+		Blob id = (jobId == null) ? null : Blob.fromHex(jobId.toString());
+		return (id == null) ? 0L : queueKey(id);
+	}
+
+	/**
+	 * Where a Job id stands in the agent's queue: its leading eight bytes, the
+	 * sequence the venue issues in increasing order (JobManager#nextSequence).
+	 */
+	public static long queueKey(Blob id) {
+		if (id.count() < 8) return 0L;
+		long key = 0;
+		for (int i = 0; i < 8; i++) key = (key << 8) | (id.byteAt(i) & 0xFF);
+		return key;
+	}
+
 
 	/** Publishes against the same session identity; newer coverage wins.
 	 * Agent admission checks belong to the enclosing agent transaction. */

@@ -1811,17 +1811,29 @@ public class JobManager {
 	 * Time-ordered, monotonic, unpredictable, collision-resistant, thread-safe.
 	 */
 	private Blob generateJobID(long ts) {
-		// Strictly-increasing prefix: a new millisecond resets the counter to 0
-		// (ts<<16 wins); a same-millisecond or backwards-clock submission advances
-		// the counter (prev+1 wins), carrying into the timestamp bits if a single
-		// millisecond ever exceeds 65535 IDs. Lock-free via AtomicLong.
-		long prefix = idPrefix.updateAndGet(prev -> Math.max(prev + 1, ts << 16));
 		byte[] bs = new byte[16];
 
-		Utils.writeLong(bs, 0, prefix);
+		Utils.writeLong(bs, 0, nextSequence(ts));
 		Utils.writeLong(bs, 8, rand.nextLong());
 
 		return Blob.wrap(bs);
+	}
+
+	/**
+	 * The next value of the venue's strictly increasing sequence, which also
+	 * leads every Job id, so anything stamped with it orders against Jobs by
+	 * when it arrived (an agent's queue, AGENT_SESSIONS.md §5.5.2).
+	 */
+	public long nextSequence() {
+		return nextSequence(engine.currentTimestamp().longValue());
+	}
+
+	private long nextSequence(long ts) {
+		// Strictly-increasing: a new millisecond resets the counter to 0
+		// (ts<<16 wins); a same-millisecond or backwards-clock call advances
+		// the counter (prev+1 wins), carrying into the timestamp bits if a single
+		// millisecond ever exceeds 65535 values. Lock-free via AtomicLong.
+		return idPrefix.updateAndGet(prev -> Math.max(prev + 1, ts << 16));
 	}
 
 	// ========== Listeners ==========

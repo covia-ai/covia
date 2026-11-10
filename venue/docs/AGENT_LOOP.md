@@ -36,7 +36,7 @@ See GRID_LATTICE_DESIGN.md for: per-user namespace layout (§4.3), agent address
    The framework never inspects user state; lower levels never manage framework fields.
 
 5. **A failure lands on what failed.** A failed transition fails the work it took
-   — the picked task, the chats it was answering — and the agent carries on with
+   — the picked task, or the chat it was answering — and the agent carries on with
    the rest. Only an agent that cannot continue is suspended, and it keeps its
    queue (§3.4).
 
@@ -182,10 +182,12 @@ until the agent completes or rejects them — they survive restarts and can span
 days or weeks. Tasks can come from humans (via MCP), other agents, or the system.
 
 **Messages** are delivered to `session.pending` — a per-session queue. Each
-message is an envelope with content and caller metadata. The next cycle on
-that session takes them as it starts: in one transaction they leave the queue
+message is an envelope with content and caller metadata; a chat's names the
+chat Job waiting for the reply. A cycle on that session takes the head of the
+queue as it starts, up to and including the first chat for the session's own
+cycle and short of it for a task's: in one transaction those leave the queue
 and become user turns in `session.frames[0].conversation` (§4.4). See
-AGENT_SESSIONS.md for the session model.
+AGENT_SESSIONS.md §5.5.2 for the session model.
 
 The **pending** outbound-Job index holds job references for outstanding waits.
 HITL registers its request there until settlement, including after recovery;
@@ -561,7 +563,7 @@ The contract between level 1 and level 2:
 | Field | Type | Description |
 |-------|------|-------------|
 | `state` | any | Updated user-defined state. Written back to the agent record; absent leaves it unchanged. |
-| `response` | any? | The reply on the session. It answers the session's chats the agent has taken (§4.4); absent, the cycle yields and they keep waiting. A picked task the cycle left neither resolved nor parked takes it as its result (§4.6). |
+| `response` | any? | The reply on the session. It answers the chat the cycle took (§4.4), which fails when it is absent. A picked task the cycle left neither resolved nor parked takes it as its result (§4.6). |
 | `error` | any? | The cycle failed (see below). |
 | `turns` | vector? | Assistant and tool turns to append to the session's conversation, for a transition that does not write its frames itself. |
 | `wakeTime` | long? | When to wake the picked task or session again (§4.6). |
@@ -592,7 +594,7 @@ What happens next depends on what failed:
   the cycle took. The model gave up on the task (`fail_task`), reached the
   tool-call iteration limit, sent a conversation too big for the model or a
   request the provider refused, or an LLM call outlasted `llmTimeoutMs`. The
-  cycle's picked task fails, and so do the chats it was answering. Work it never
+  cycle's picked task fails, or the chat it was answering. Work it never
   took stays queued, and the agent carries on with it. A task the agent already
   resolved keeps its own outcome.
 - **The agent cannot continue.** A transition raises `CannotContinueException`
@@ -1047,10 +1049,11 @@ run's `finally` block.
    session with pending messages and no scheduled wake due): break out
    of the loop. Pending jobs are passed through but do not alone
    trigger a run.
-3. Pick the oldest ready task and one session (the task's, else one with
-   pending messages), and resolve job data from JobManager. A picked task
-   whose request Job has already finished is removed, and the loop goes back
-   to step 1.
+3. Pick the oldest work in the agent's queue: the oldest ready task, in its
+   session, or the session whose oldest queued envelope arrived before it
+   ([AGENT_SESSIONS.md §5.5.2](./AGENT_SESSIONS.md)). Resolve job data from
+   JobManager. A picked task whose request Job has already finished is
+   removed, and the loop goes back to step 1.
 4. **Take the cycle's input**, in one transaction on the agent record:
    - Issue the cycle's claim (§2.5.1). An agent that is SUSPENDED or
      TERMINATED is issued none: take nothing and go back to step 1.
@@ -1059,10 +1062,11 @@ run's `finally` block.
      nothing and go back to step 1.
    - Close any tool call an interrupted cycle left without a result, with a
      result saying it did not return.
-   - Append the pending messages and the task's input to
+   - Append what the cycle takes from `pending` and the task's input to
      `frames[0].conversation` as user turns, and remove exactly those
-     messages from `pending`. A message that arrives later waits for the
-     next cycle.
+     envelopes from `pending`: the messages ahead of the first chat, and for
+     a session's own cycle that chat too. Anything after them, or arriving
+     later, waits for a later cycle.
 
    A task whose session has gone takes only its input and runs without one.
    Each chat whose message was taken becomes STARTED; a chat still queued
@@ -1101,19 +1105,17 @@ run's `finally` block.
      write to another venue or a view cannot join the transaction: its task
      stays resolved until the write ends, and its request then settles and
      the task goes in one transaction.
-7. Release the callers of the requests the merge settled, and complete every
-   waiting chat on the session that is STARTED with the reply — this
-   cycle's and any an earlier cycle took and yielded on. A cycle without a
-   reply yields, and those chats keep waiting. Both happen strictly AFTER
+7. Release the callers of the requests the merge settled, and complete the
+   chat the cycle took, if any, with the reply; a cycle without a reply
+   fails it (`AgentAdapter.CHAT_UNANSWERED`). Both happen strictly AFTER
    the merge, so external awaiters see timeline and state writes first.
 8. Loop back to step 1. The top-of-loop check at step 2 is the sole
    exit gate.
 9. On failure, thrown or returned as the output's `error` (§3.4):
    - Append the cycle record with the error and the inferences that ran
      before it (§2.4).
-   - If the agent can continue, fail the picked task's Job and the
-     session's STARTED chats, then loop back to step 1 for the remaining
-     work.
+   - If the agent can continue, fail the picked task's Job or the chat the
+     cycle took, then loop back to step 1 for the remaining work.
    - If it cannot (a `CannotContinueException` or an unexpected failure),
      set status → `"SUSPENDED"` and `error`, keep the queue, fail the
      chats a cycle took, and give every waiting Job the suspension note.
@@ -1232,10 +1234,12 @@ An agent is eligible to run when any of:
 **Task readiness and parking.** A task is ready unless it is parked. A parked
 task is ready again once something new is there for it: an input it has not
 been shown (a continuation through `agent:message` with its `taskId`, or the
-answer or outcome its cycle waited for), a message in its session, or its
+answer or outcome its cycle waited for), a message in its session that its
+cycle would take (one ahead of any chat, `Session.taken`), or its
 `wakeTime` having come. The work check and the
 choice of task both use this test (`Agent.isTaskReady`), and the cycle
-takes the oldest ready task.
+takes the oldest work: the oldest ready task, unless a session's oldest
+queued envelope arrived before it ([AGENT_SESSIONS.md §5.5.2](./AGENT_SESSIONS.md)).
 
 A cycle that leaves its picked task queued, neither completed nor failed and
 without a transition error, has left it open. The task is parked

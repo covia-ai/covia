@@ -2370,10 +2370,10 @@ public class AgentAdapterTest {
 	}
 
 	@Test
-	public void testConcurrentChatsOnOneSessionAllGetTheReply() throws Exception {
-		// Chats are not serialised: several may await one session at once, and a
-		// response answers the conversation the agent had already seen, so every
-		// presented waiter completes with that reply — none is rejected.
+	public void testConcurrentChatsOnOneSessionEachGetTheirOwnReply() throws Exception {
+		// Chats are not serialised: several may await one session at once, none
+		// is rejected, and the agent takes them one per cycle, oldest first, so
+		// each completes with the reply to its own message.
 		engine.jobs().invokeOperation(
 			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "chat-multi-agent",
@@ -2415,26 +2415,12 @@ public class AgentAdapterTest {
 		assertEquals(sidHex, RT.getIn(ra, Fields.SESSION_ID));
 		assertEquals(sidHex, RT.getIn(rb, Fields.SESSION_ID));
 
-		// Every result names the chats its reply answered (#416): always itself;
-		// and when two were read together they share one reply and one list.
-		AString aId = Strings.create(a.getID().toHexString());
-		AString bId = Strings.create(b.getID().toHexString());
-		AVector<ACell> answeredFirst = RT.ensureVector(RT.getIn(firstResult, Fields.ANSWERED));
-		assertEquals(Vectors.of(Strings.create(first.getID().toHexString())), answeredFirst,
-			"a lone chat answers only itself");
-		AVector<ACell> answeredA = RT.ensureVector(RT.getIn(ra, Fields.ANSWERED));
-		AVector<ACell> answeredB = RT.ensureVector(RT.getIn(rb, Fields.ANSWERED));
-		assertNotNull(answeredA);
-		assertNotNull(answeredB);
-		assertTrue(answeredA.contains(aId), "a names itself: " + answeredA);
-		assertTrue(answeredB.contains(bId), "b names itself: " + answeredB);
-		if (answeredA.contains(bId)) {
-			assertEquals(answeredA, answeredB, "chats read together share one list");
-			assertEquals(RT.getIn(ra, Fields.RESPONSE), RT.getIn(rb, Fields.RESPONSE), "and one reply");
-		} else {
-			assertEquals(Vectors.of(aId), answeredA);
-			assertEquals(Vectors.of(bId), answeredB);
-		}
+		// The test model echoes the last message it was shown, so each reply
+		// shows whose cycle produced it.
+		String replyA = String.valueOf(RT.getIn(ra, Fields.RESPONSE));
+		String replyB = String.valueOf(RT.getIn(rb, Fields.RESPONSE));
+		assertTrue(replyA.contains("two") && !replyA.contains("three"), "a has its own reply: " + replyA);
+		assertTrue(replyB.contains("three"), "b has its own reply: " + replyB);
 	}
 
 	@Test
