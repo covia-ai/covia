@@ -4,7 +4,6 @@ import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Cells;
-import convex.core.data.Hash;
 import convex.core.data.Maps;
 import convex.core.data.Path;
 import convex.core.data.Strings;
@@ -22,7 +21,6 @@ import covia.lattice.ValuePath;
 import convex.lattice.NoSuchPathException;
 import covia.lattice.Workspace;
 import convex.lattice.cursor.StampedCursor;
-import covia.adapter.AssetAdapter;
 
 /**
  * Per-user domain state, with atomic mutations and compound transactions.
@@ -50,7 +48,7 @@ import covia.adapter.AssetAdapter;
 public class User extends ALatticeComponent<ACell> implements TransactionalComponent<ACell, User>, Owner {
 	@Override
 	public User rebind(AForkableCursor<ACell> cursor) {
-		return new User(context, cursor, did, venue);
+		return new User(context, cursor, did);
 	}
 
 	@Override
@@ -77,42 +75,6 @@ public class User extends ALatticeComponent<ACell> implements TransactionalCompo
 	}
 
 	/**
-	 * The value a reference names, as this user looks it up: a path in one of
-	 * the namespaces that hold this user's definitions and data ({@code o/},
-	 * {@code w/} and {@code a/}), an asset by its hash in this user's asset
-	 * store, or either named by a DID URL of this user's DID. The rest, a
-	 * {@code v/} path or an asset only the venue holds, is looked up by the
-	 * venue that hosts this user ({@link VenueState#lookup}). Another user's
-	 * data, and this user's secrets, inbox, jobs and agents, are never looked
-	 * up. Reads check no authority and change nothing.
-	 *
-	 * @param ref A reference, as a config holds it
-	 * @return The value there, an asset's metadata for an asset, or null when
-	 *         nothing is there or the reference names nothing this user or its venue holds
-	 */
-	public ACell lookup(AString ref) {
-		if (ref == null) return null;
-		Reference reference = Reference.of(ref);
-		boolean own = (did != null) && did.equals(reference.owner());
-		if (reference.owner() == null || own) {
-			Hash asset = AssetAdapter.parseAssetId(ref);
-			if (asset != null) {
-				AMap<AString, ACell> meta = assets().meta(asset);
-				if (meta != null || own) return meta;
-			} else if (reference.in(Namespace.O) || reference.in(Namespace.W) || reference.in(Namespace.A)) {
-				try {
-					return readInternalPath(reference.path());
-				} catch (NoSuchPathException e) {
-					return null;
-				}
-			} else if (own || !reference.in(Namespace.V)) {
-				return null;
-			}
-		}
-		return (venue == null) ? null : venue.lookup(ref);
-	}
-
-	/**
 	 * Framework-internal atomic write to a workspace path, creating the levels
 	 * above it; authority is possession of this user cursor.
 	 */
@@ -128,14 +90,10 @@ public class User extends ALatticeComponent<ACell> implements TransactionalCompo
 		return Entry.of(resolve(path)).delete();
 	}
 
-	/** The venue that hosts this user, which it asks for what it does not hold ({@link #lookup}); null outside one. */
-	private final VenueState venue;
-
-	User(VenueContext context, AForkableCursor<ACell> cursor, AString did, VenueState venue) {
+	User(VenueContext context, AForkableCursor<ACell> cursor, AString did) {
 		super(cursor);
 		this.context = context;
 		this.did = did;
-		this.venue = venue;
 		this.policy = (did == null) ? null : AccessPolicy.principal(did);
 		this.edits = StampedCursor.create(cursor, context::currentTimestamp, Covia::stampUserMeta);
 	}
@@ -188,7 +146,7 @@ public class User extends ALatticeComponent<ACell> implements TransactionalCompo
 	 * agent.
 	 */
 	public Agent agentAt(AString agentId) {
-		return new Agent(context, agentStorage(agentId), did, agentId, this);
+		return new Agent(context, agentStorage(agentId), did, agentId);
 	}
 
 	/** An agent's record in {@code g}, a map the first agent creates. */
@@ -233,7 +191,7 @@ public class User extends ALatticeComponent<ACell> implements TransactionalCompo
 	public Agent agent(AString agentId) {
 		AForkableCursor<ACell> c = agentStorage(agentId);
 		if (c.getOrDefault(null) == null) return null;
-		return new Agent(context, c, did, agentId, this);
+		return new Agent(context, c, did, agentId);
 	}
 
 	/**
@@ -250,7 +208,7 @@ public class User extends ALatticeComponent<ACell> implements TransactionalCompo
 
 	public Agent ensureAgent(AString agentId, AMap<AString, ACell> config, ACell initialState) {
 		AForkableCursor<ACell> c = agentStorage(agentId);
-		Agent state = new Agent(context, c, did, agentId, this);
+		Agent state = new Agent(context, c, did, agentId);
 		state.initialiseIfAbsent(config, initialState);
 		return state;
 	}
@@ -279,7 +237,7 @@ public class User extends ALatticeComponent<ACell> implements TransactionalCompo
 	public Agent createAgent(AString agentId, AMap<AString, ACell> config,
 			ACell initialState, AMap<AString, ACell> definition, AString controller) {
 		AForkableCursor<ACell> c = agentStorage(agentId);
-		Agent state = new Agent(context, c, did, agentId, this);
+		Agent state = new Agent(context, c, did, agentId);
 		return state.initialiseIfAbsent(config, initialState, definition, controller) ? state : null;
 	}
 
@@ -306,7 +264,7 @@ public class User extends ALatticeComponent<ACell> implements TransactionalCompo
 	public Agent forkAgent(AString agentId, AMap<AString, ACell> config,
 			ACell state, convex.core.data.AVector<ACell> timeline, AString controller) {
 		AForkableCursor<ACell> c = agentStorage(agentId);
-		Agent fork = new Agent(context, c, did, agentId, this);
+		Agent fork = new Agent(context, c, did, agentId);
 		return fork.initialiseFromForkIfAbsent(config, state, timeline, controller) ? fork : null;
 	}
 

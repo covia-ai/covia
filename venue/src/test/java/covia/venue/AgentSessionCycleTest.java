@@ -26,7 +26,6 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.api.Fields;
-import covia.adapter.AgentAdapter;
 import covia.adapter.agent.GoalTreeContext;
 import covia.exception.ConflictException;
 import covia.exception.InvalidInputException;
@@ -89,7 +88,7 @@ public class AgentSessionCycleTest {
 	@Test
 	public void invalidCompletionRollsBackAgentAndSessionTogether() {
 		Blob task = Blob.fromHex("01");
-		agent.addTaskInSession(sid, userDid, null, task, Maps.of("input", "work"), reads());
+		agent.addTaskInSession(sid, userDid, null, task, Maps.of("input", "work"));
 		agent.session(sid).appendPending(envelope("pending"));
 		agent.session(sid).beginCycle(EPOCH_A, null, 0);
 		AMap<AString, ACell> damaged = agent.getSession(sid).assoc(Fields.FRAMES, Strings.create("damaged"));
@@ -313,13 +312,8 @@ public class AgentSessionCycleTest {
 
 	private ACell queueTask(String input) {
 		agent.addTaskInSession(sid, userDid, null, TASK, Maps.of(Fields.INPUT, Strings.create(input),
-			Fields.SESSION_ID, Strings.create(sid.toHexString())), reads());
+			Fields.SESSION_ID, Strings.create(sid.toHexString())));
 		return agent.getTasks().get(TASK);
-	}
-
-	/** What the agent's harness may read, as a request's intake asks. */
-	private java.util.function.Predicate<AString> reads() {
-		return AgentAdapter.harnessReads(engine, userDid, agent.getAgentId());
 	}
 
 	@Test

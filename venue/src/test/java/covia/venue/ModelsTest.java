@@ -14,7 +14,7 @@ import convex.core.data.Strings;
 import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
 
-/** The profile an agent's config resolves to, through whatever looks up its references. */
+/** The profile a model operation resolves to, through whatever looks up its references. */
 public class ModelsTest {
 
 	private static final AString PROVIDER = Strings.create("v/ops/provider");
@@ -31,7 +31,16 @@ public class ModelsTest {
 		TINY, meta("id", "tiny", "provider", PROVIDER, "options", Maps.of("toolCalling", CVMBool.FALSE)));
 
 	private static AMap<AString, ACell> profile(AMap<AString, ACell> config) {
-		return Models.agentProfile(config, CATALOG::get);
+		return profile(config, CATALOG::get);
+	}
+
+	/** The profile an agent with {@code config} is assembled to, its references looked up by {@code lookup}. */
+	private static AMap<AString, ACell> profile(AMap<AString, ACell> config,
+			java.util.function.Function<AString, AMap<AString, ACell>> lookup) {
+		AMap<AString, ACell> selected = lookup.apply(Models.llmOperation(config));
+		if (selected == null) return null;
+		Models.Resolved model = Models.resolve(selected, RT.ensureString(config.get(Models.K_MODEL)), config, lookup);
+		return (model == null) ? null : model.assemblyProfile();
 	}
 
 	@Test
@@ -68,15 +77,7 @@ public class ModelsTest {
 	public void testNoProfileWhenAReferenceDoesNotResolve() {
 		assertNull(profile(Maps.of(Models.K_LLM_OPERATION, "v/ops/missing")));
 		assertNull(profile(Maps.empty()), "the default model is not in this catalogue");
-		assertNull(Models.agentProfile(Maps.of(Models.K_LLM_OPERATION, TINY), ref -> TINY.equals(ref) ? CATALOG.get(TINY) : null),
+		assertNull(profile(Maps.of(Models.K_LLM_OPERATION, TINY), ref -> TINY.equals(ref) ? CATALOG.get(TINY) : null),
 			"a definition whose provider does not resolve");
-	}
-
-	@Test
-	public void testOperationIsMetadataWithAnOperation() {
-		assertNotNull(Models.operation(CATALOG.get(PROVIDER)));
-		assertNull(Models.operation(Maps.of("model", Maps.empty())));
-		assertNull(Models.operation(Strings.create("text")));
-		assertNull(Models.operation(null));
 	}
 }

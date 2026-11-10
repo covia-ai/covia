@@ -627,6 +627,12 @@ public class AgentAdapterTest {
 		assertTrue(noTools.toString().contains("gemma3"));
 
 		// caps including "tools" → no warning
+		// Declared data: a resolved profile that says toolCalling: false warns without a probe.
+		assertNull(AgentAdapter.declaredNoToolCalling(Maps.empty(), null, Strings.create("v/ops/x")));
+		AString declared = AgentAdapter.declaredNoToolCalling(
+			Maps.of("options", Maps.of("toolCalling", CVMBool.FALSE)),
+			Strings.create("tiny"), Strings.create("v/ops/langchain/ollama"));
+		assertTrue(declared.toString().contains("'tiny'") && declared.toString().contains("tool calling is off"), declared.toString());
 		assertNull(AgentAdapter.toolWarningFor(
 			"qwen2.5", "http://localhost:11434", java.util.List.of("completion", "tools")));
 	}
@@ -1229,8 +1235,7 @@ public class AgentAdapterTest {
 
 	/** toolCalling: false — declared by the provider, the model, or the agent's own
 	 *  config.modelProfile — is honoured by the assembler: no tool is presented,
-	 *  no capability notice, no skills index; agent:create says the agent cannot
-	 *  take tasks. */
+	 *  no capability notice, no skills index; agent:create says so. */
 	@Test
 	public void testToolCallingOffPresentsNoTools() {
 		AMap<AString, ACell> config = Maps.of(
@@ -1243,9 +1248,8 @@ public class AgentAdapterTest {
 		ACell created = engine.jobs().invokeOperation("v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "no-tool-calling", Fields.CONFIG, config),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
-		AVector<ACell> warnings = RT.ensureVector(RT.getIn(created, Fields.WARNINGS));
-		assertTrue(warnings.contains(AgentAdapter.CANNOT_TAKE_TASKS_WARNING),
-			"create advises: " + warnings);
+		assertTrue(RT.getIn(created, Fields.WARNINGS).toString().contains("tool calling is off"),
+			"create advises: " + RT.getIn(created, Fields.WARNINGS));
 
 		AMap<AString, ACell> context = RT.ensureMap(engine.jobs().invokeOperation("v/ops/agent/context",
 			Maps.of(Fields.AGENT_ID, "no-tool-calling", Fields.MESSAGE, "hi"),

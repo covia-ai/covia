@@ -28,7 +28,7 @@ import convex.core.lang.RT;
 public class Users extends MapComponent<AString, ACell> implements TransactionalComponent<AHashMap<AString, ACell>, Users> {
 	@Override
 	public Users rebind(AForkableCursor<AHashMap<AString, ACell>> cursor) {
-		return new Users(venue, context, cursor);
+		return new Users(context, cursor);
 	}
 
 	@Override
@@ -36,8 +36,6 @@ public class Users extends MapComponent<AString, ACell> implements Transactional
 		return rebind(cursor);
 	}
 
-	/** The venue whose accounts these are, which each account looks up through ({@link User#lookup}). */
-	private final VenueState venue;
 	private final VenueContext context;
 
 	public VenueContext getContext() { return context; }
@@ -77,9 +75,8 @@ public class Users extends MapComponent<AString, ACell> implements Transactional
 		return current != null ? current : Maps.empty();
 	}
 
-	Users(VenueState venue, VenueContext context, AForkableCursor<AHashMap<AString, ACell>> cursor) {
+	Users(VenueContext context, AForkableCursor<AHashMap<AString, ACell>> cursor) {
 		super(cursor);
-		this.venue = venue;
 		this.context = context;
 	}
 
@@ -98,7 +95,7 @@ public class Users extends MapComponent<AString, ACell> implements Transactional
 		AForkableCursor<ACell> userCursor = path(did);
 		ACell current = userCursor.getOrDefault(null);
 		if (current == null || RT.getIn(current, Covia.K_DELETED) != null) return null;
-		return new User(context, new AccountCursor(userCursor), did, venue);
+		return new User(context, new AccountCursor(userCursor), did);
 	}
 
 	/**
@@ -119,7 +116,7 @@ public class Users extends MapComponent<AString, ACell> implements Transactional
 		// a late reader could observe null and set(zero), clobbering an earlier
 		// writer's committed user data (jobs, secrets, agents).
 		userCursor.updateAndGet(Users::initialise);
-		return new User(context, new AccountCursor(userCursor), did, venue);
+		return new User(context, new AccountCursor(userCursor), did);
 	}
 
 	/**
@@ -206,7 +203,7 @@ public class Users extends MapComponent<AString, ACell> implements Transactional
 	 * @return The account's user, never null
 	 */
 	public User at(AString did) {
-		return new User(context, new PathAccountCursor(path(did), did), did, venue);
+		return new User(context, new PathAccountCursor(path(did), did), did);
 	}
 
 	/**

@@ -631,9 +631,8 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	 *     a rendered prefix has no value for this model. Absent means caching is
 	 *     assumed; a provider may harmlessly ignore the canonical marks.</li>
 	 * <li>{@code toolCalling}: {@code false} declares that the model cannot call
-	 *     tools, so an agent with it is presented none and takes no tasks
-	 *     ({@link covia.venue.Agent#taskRefusal(java.util.function.Predicate)}). Absent means tool calling
-	 *     is available.</li>
+	 *     tools — {@code agent:create} warns when an agent declares tools or
+	 *     skills against it. Absent means tool calling is available.</li>
 	 * <li>{@code toolCallingByModel}: tool support varies per model rather than
 	 *     per provider, so it cannot be assumed from the provider alone.</li>
 	 * <li>{@code labels}: {@code "bracket"} (default), {@code "xml"} or {@code "header"} — the

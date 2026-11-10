@@ -3,8 +3,6 @@ package covia.venue;
 import static covia.venue.Session.*;
 
 import java.util.Objects;
-import java.util.function.Function;
-import java.util.function.Predicate;
 import java.util.function.UnaryOperator;
 
 import convex.core.data.ACell;
@@ -31,7 +29,6 @@ import covia.lattice.Owner;
 import covia.lattice.ValuePath;
 import covia.lattice.Workspace;
 import covia.api.Fields;
-import covia.exception.NotSupportedException;
 
 /**
  * Agent state with named atomic mutations and compound transactions.
@@ -43,7 +40,7 @@ import covia.exception.NotSupportedException;
 public class Agent extends ALatticeComponent<ACell> implements TransactionalComponent<ACell, Agent>, Owner {
 	@Override
 	public Agent rebind(AForkableCursor<ACell> cursor) {
-		return new Agent(context, cursor, owner, agentId, user);
+		return new Agent(context, cursor, owner, agentId);
 	}
 
 	@Override
@@ -82,7 +79,7 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 	private static final AString K_TIMELINE = Strings.intern("timeline");
 	private static final AString K_ERROR    = Strings.intern("error");
 	/** The agent's own workspace, which it reaches as {@code n/}. */
-	private static final AString K_N        = Namespace.N;
+	private static final AString K_N        = Strings.intern("n");
 	/** Handle of this agent's single pending {@code agent:trigger} wake event in the
 	 *  venue grid scheduler, or absent when no wake is armed. */
 	private static final AString K_WAKE_HANDLE = Strings.intern("wakeHandle");
@@ -167,8 +164,6 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 
 	private final AString owner;
 	private final AString agentId;
-	/** The user whose agent this is, which it asks for what it does not hold ({@link #lookup}). */
-	private final User user;
 
 	/** Who may use this agent's data: whoever holds authority over {@code <owner>/g/<id>/<path>}. */
 	private final AccessPolicy policy;
@@ -176,15 +171,13 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 	/**
 	 * @param owner DID of the user whose agent this is, or null for a record outside any user
 	 * @param agentId The agent's id in its owner's {@code g/}
-	 * @param user The user whose agent this is, or null outside one
 	 */
 	Agent(VenueContext context, AForkableCursor<ACell> cursor,
-			AString owner, AString agentId, User user) {
+			AString owner, AString agentId) {
 		super(cursor);
 		this.context = context;
 		this.owner = owner;
 		this.agentId = agentId;
-		this.user = user;
 		this.policy = (owner == null) ? null : agentPolicy(owner, agentId);
 		this.edits = StampedCursor.create(cursor, context::currentTimestamp, Covia::stampAgent);
 	}
@@ -397,64 +390,6 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 	}
 
 	/**
-	 * The value a reference in this agent's config names, as the agent looks
-	 * it up: {@code n/} in its own workspace, anything else through the user
-	 * whose agent it is ({@link User#lookup}), which passes on to its venue
-	 * what it does not hold. A lookup only resolves: it checks no authority and
-	 * changes nothing, so whoever uses it first asks whether the authority it
-	 * acts under may read the reference, as {@link #taskRefusal(Predicate)} does.
-	 *
-	 * @param ref A reference, as a config holds it
-	 * @return The value there, or null when nothing is there or the reference
-	 *         names nothing the agent, its user or its venue holds
-	 */
-	public ACell lookup(AString ref) {
-		if (ref == null) return null;
-		Reference reference = Reference.of(ref);
-		if (reference.owner() == null && reference.in(K_N)) {
-			try {
-				return resolve(reference.path()).cursor().getOrDefault(null);
-			} catch (NoSuchPathException e) {
-				return null;
-			}
-		}
-		return (user == null) ? null : user.lookup(ref);
-	}
-
-	/** Why an agent cannot take tasks: it resolves a task by calling a tool, and its model cannot. */
-	public static final AString MODEL_CANNOT_CALL_TOOLS = Strings.intern("its model cannot call tools");
-
-	/** The refusal of a task by an agent that cannot take tasks: the agent, then why. */
-	public static final String CANNOT_TAKE_TASKS = "Agent '%s' cannot take tasks: %s; use agent:chat instead";
-
-	/**
-	 * Why this agent cannot take tasks, or null when it can (AGENT_TASKS.md
-	 * §2). An agent resolves a task by calling a tool, so one whose model
-	 * cannot call tools takes none. The model is the one its config names, as
-	 * the agent looks it up ({@link #lookup}), reading only the references
-	 * {@code readable} admits. A model it cannot look up, or may not read, is
-	 * not decided here, and the run loop decides it before a cycle takes the task.
-	 *
-	 * @param readable Whether the authority the agent runs under may read a reference
-	 */
-	public AString taskRefusal(Predicate<AString> readable) {
-		return taskRefusal(getConfig(), ref -> readable.test(ref) ? Models.operation(lookup(ref)) : null);
-	}
-
-	/**
-	 * As {@link #taskRefusal(Predicate)}, for an agent with {@code config}, each
-	 * reference in it looked up by {@code lookup}.
-	 *
-	 * @param lookup The operation metadata a reference names, or null when it names none
-	 * @return Why the agent cannot take tasks, or null when it can or a reference does not resolve
-	 */
-	public static AString taskRefusal(AMap<AString, ACell> config,
-			Function<AString, AMap<AString, ACell>> lookup) {
-		AMap<AString, ACell> profile = Models.agentProfile(config, lookup);
-		return (profile != null && !Models.toolCalling(profile)) ? MODEL_CANNOT_CALL_TOOLS : null;
-	}
-
-	/**
 	 * {@code n} is the agent's workspace and {@code sessions/<id>} a session,
 	 * named by its id in hex, whether or not it exists; an id that is not hex
 	 * names no session. The rest of the record is read as stored. The agent's
@@ -548,43 +483,29 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 	 * Atomically creates/reuses a session and adds a task to it. This prevents
 	 * agent removal or competing session creation from landing between the two
 	 * record changes.
-	 *
-	 * @param readable Whether the authority the agent runs under may read a
-	 *        reference ({@link #taskRefusal(Predicate)}); it may run more than
-	 *        once, so it only reads
-	 * @throws NotSupportedException when the agent cannot take tasks
-	 *         ({@link #taskRefusal(Predicate)}), as its config stands in the same
-	 *         transaction; nothing is changed
 	 */
 	public SessionIntake addTaskInSession(Blob sid, AString caller,
-			AMap<AString, ACell> initialLoads, Blob taskId, ACell taskData, Predicate<AString> readable) {
-		return intakeSession(sid, caller, initialLoads, true, draft -> draft.taskRefusal(readable),
-			draft -> draft.tasks().add(taskId, taskData));
+			AMap<AString, ACell> initialLoads, Blob taskId, ACell taskData) {
+		return intakeSession(sid, caller, initialLoads, true, draft -> draft.tasks().add(taskId, taskData));
 	}
 
 	/** Atomically creates/reuses a session and appends one pending envelope. */
 	public SessionIntake appendSessionPending(Blob sid, AString caller,
 			AMap<AString, ACell> initialLoads, ACell envelope, boolean createIfMissing) {
-		return intakeSession(sid, caller, initialLoads, createIfMissing, draft -> null,
+		return intakeSession(sid, caller, initialLoads, createIfMissing,
 			draft -> draft.session(sid).appendPending(envelope));
 	}
 
 	/**
 	 * Session admission and the associated agent change observe one atomic
 	 * snapshot. A terminated agent takes nothing: its work was given back when
-	 * it terminated ({@link #terminate}). A task is refused, before any session
-	 * is made, by an agent that cannot take one.
-	 *
-	 * @param taskRefusal Why the draft cannot take the task the change adds, or
-	 *        null when it can or the change adds none
+	 * it terminated ({@link #terminate}).
 	 */
 	private SessionIntake intakeSession(Blob sid, AString caller,
-			AMap<AString, ACell> initialLoads, boolean create, Function<Agent, AString> taskRefusal,
+			AMap<AString, ACell> initialLoads, boolean create,
 			java.util.function.Consumer<Agent> change) {
 		return transact(draft -> {
 			if (!draft.exists() || TERMINATED.equals(draft.getStatus())) return SessionIntake.MISSING;
-			AString refused = taskRefusal.apply(draft);
-			if (refused != null) throw new NotSupportedException(CANNOT_TAKE_TASKS.formatted(agentId, refused));
 			ACell raw = draft.getSessions().get(sid);
 			if (raw != null && initialLoads != null) return SessionIntake.LOADS_ON_EXISTING;
 			if (raw == null) {

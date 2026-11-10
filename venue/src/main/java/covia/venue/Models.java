@@ -15,9 +15,7 @@ import covia.api.Fields;
 /**
  * The model an agent's config names, and the profile its definition declares
  * (OPERATIONS.md, <i>The {@code model} facet</i>; MODELS.md). These are
- * functions of lattice values: the caller resolves each reference, so the run
- * loop resolves through the engine and an agent through its owner and venue
- * ({@link Agent#lookup}), and both reach the same profile.
+ * functions of lattice values: the caller resolves each reference.
  */
 public final class Models {
 
@@ -157,28 +155,6 @@ public final class Models {
 	/** The provider operation a model definition names, or null for a provider operation itself. */
 	public static AString providerRef(AMap<AString, ACell> selected) {
 		return RT.ensureString(modelFacet(selected).get(K_MODEL_PROVIDER));
-	}
-
-	/**
-	 * The profile an agent's context is assembled to: its LLM operation
-	 * ({@link #llmOperation}), {@code config.model} and {@code config.modelProfile}.
-	 *
-	 * @param lookup The operation metadata a reference names, or null when it names none
-	 * @return The profile, or null when the LLM operation or its provider does not resolve
-	 */
-	public static AMap<AString, ACell> agentProfile(AMap<AString, ACell> config,
-			Function<AString, AMap<AString, ACell>> lookup) {
-		AMap<AString, ACell> selected = lookup.apply(llmOperation(config));
-		if (selected == null) return null;
-		AString requested = (config == null) ? null : RT.ensureString(config.get(K_MODEL));
-		Resolved model = resolve(selected, requested, config, lookup);
-		return (model == null) ? null : model.assemblyProfile();
-	}
-
-	/** The metadata of an operation {@code value} holds, or null when it holds none. */
-	public static AMap<AString, ACell> operation(ACell value) {
-		AMap<AString, ACell> meta = RT.ensureMap(value);
-		return (meta != null && meta.get(Fields.OPERATION) != null) ? meta : null;
 	}
 
 	/** Operation default first, legacy schema default second. */

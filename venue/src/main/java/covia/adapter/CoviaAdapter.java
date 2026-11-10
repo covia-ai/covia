@@ -1291,7 +1291,7 @@ public class CoviaAdapter extends AAdapter {
 			return new Located(view, AdapterView.inView(segments), AdapterView.ownership(owner, segments));
 		}
 		if (V.equals(namespace)) {
-			Workspace global = state.users().at(state.getDID()).workspace();
+			Workspace global = state.users().at(engine.getDIDString()).workspace();
 			return new Located(global, venueGlobals(segments).slice(1), new Owner.Ownership(VIEW_POLICY, segments));
 		}
 		AString agentId = (ctx == null) ? null : ctx.getAgentId();

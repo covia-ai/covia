@@ -11,9 +11,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
-import java.util.function.Function;
-import java.util.function.Predicate;
-import java.util.function.Supplier;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -53,7 +50,6 @@ import covia.adapter.agent.Loads;
 import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.exception.ConflictException;
-import covia.exception.CoviaException;
 import covia.exception.InvalidInputException;
 import covia.exception.JobFailedException;
 import covia.exception.NotFoundException;
@@ -142,8 +138,6 @@ public class AgentAdapter extends AAdapter {
 	/** Optional agent-adapter code: a supplied session does not exist. */
 	public static final String UNKNOWN_SESSION_CODE = "agent:unknown-session";
 	public static final String SUSPENDED_CODE = "agent:suspended";
-	/** Agent-adapter code: the agent cannot take tasks ({@link Agent#taskRefusal(Predicate)}). */
-	public static final String TASKS_UNSUPPORTED_CODE = "agent:tasks-unsupported";
 	public static final String SUSPEND_REASON_INVALID = "Suspension reason must be a string";
 	public static final String SUSPEND_AGENT_GONE = "Agent was removed or terminated before suspension";
 	public static final String TRANSITION_CANCELLED = "Transition cancelled";
@@ -1290,29 +1284,17 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	/**
-	 * The create/update advisory for an agent that cannot take tasks
-	 * ({@link Agent#taskRefusal(Predicate)}): tool calling is off for its model.
-	 */
-	public static final AString CANNOT_TAKE_TASKS_WARNING = Strings.intern("Tool calling is off for the agent's "
-		+ "model, so no tool is presented to it and it cannot take tasks: agent:request to it fails with "
-		+ TASKS_UNSUPPORTED_CODE + ", while agent:chat works. This is only a warning.");
-
-	/**
-	 * Tool-capability advisory for a freshly-configured agent (#205). Declared
-	 * data first: an agent that cannot take tasks, because tool calling is off
-	 * for its model, is told so whatever it declares ({@link Agent#taskRefusal}).
-	 * Then, for an agent that uses tools (it declares {@code tools} or skill
-	 * sources, which imply {@code skill_load}) where the facet says tool support
-	 * varies by model ({@code toolCallingByModel}) and a probe exists — Ollama
-	 * advertises model capabilities — the probe decides. Otherwise silence
-	 * beats a guess. Warning only: create never fails on this, since the model
-	 * can be switched or installed later.
+	 * Tool-capability advisory for a freshly-configured agent (#205). An agent
+	 * uses tools when it declares {@code tools} or skill sources (which imply
+	 * {@code skill_load}). Declared data first: a model profile that says
+	 * {@code toolCalling: false} warns outright. Then, where the facet says
+	 * tool support varies by model ({@code toolCallingByModel}) and a probe
+	 * exists — Ollama advertises model capabilities — the probe decides.
+	 * Otherwise silence beats a guess. Warning only: create never fails on
+	 * this, since the model can be switched or installed later.
 	 */
 	private AString toolCapabilityWarning(AMap<AString, ACell> config, RequestContext ctx) {
 		if (config == null) return null;
-		if (Agent.taskRefusal(config, operationLookup(() -> ctx)) != null) {
-			return CANNOT_TAKE_TASKS_WARNING;
-		}
 		AVector<ACell> tools = RT.ensureVector(config.get(Fields.TOOLS));
 		boolean usesTools = tools != null && !tools.isEmpty();
 		if (!usesTools) {
@@ -1327,6 +1309,8 @@ public class AgentAdapter extends AAdapter {
 		catch (RuntimeException e) { return null; }
 		if (opAsset == null) return null;
 		AString model = RT.ensureString(config.get(K_MODEL));
+		AString declared = declaredNoToolCalling(Models.modelProfile(opAsset.meta(), model, config), model, llmOp);
+		if (declared != null) return declared;
 		if (!AbstractLLMAdapter.modelOption(opAsset.meta(), model, AbstractLLMAdapter.OPT_TOOL_CALLING_BY_MODEL)) return null;
 		// The one probe there is: Ollama advertises each model's capabilities.
 		String adapterOp = getAdapterOperation(opAsset.meta());
@@ -1336,6 +1320,17 @@ public class AgentAdapter extends AAdapter {
 		String baseUrl = (urlCell != null) ? urlCell.toString() : "http://localhost:11434";
 		return toolWarningFor(modelName, baseUrl,
 			LangChainAdapter.ollamaModelCapabilities(baseUrl, modelName));
+	}
+
+	/** The declared-data half of {@link #toolCapabilityWarning}: a resolved
+	 *  profile — provider, model or the agent's own override — that says
+	 *  {@code toolCalling: false}. Null when tool calling is on. */
+	static AString declaredNoToolCalling(AMap<AString, ACell> profile, AString model, AString llmOp) {
+		if (Models.toolCalling(profile)) return null;
+		return Strings.create("agent declares tools but tool calling is off for its model"
+			+ ((model != null) ? " '" + model + "'" : "") + " (" + llmOp
+			+ ") — no tool is presented to it; its reply still completes a task (AGENT_TASKS.md §5)."
+			+ " This is only a warning.");
 	}
 
 	/**
@@ -1661,14 +1656,8 @@ public class AgentAdapter extends AAdapter {
 		engine.jobs().updateAdapterData(job, kept -> kept
 			.assoc(Fields.OWNER, target.ownerDID())
 			.assoc(Fields.AGENT_ID, agentId));
-		Agent.SessionIntake intake;
-		try {
-			intake = agent.addTaskInSession(sid, ctx.getCallerDID(), session.loads(), taskId, taskData,
-				harnessReads(engine, target.ownerDID(), agentId));
-		} catch (NotSupportedException cannotTakeTasks) {
-			job.fail(TASKS_UNSUPPORTED_CODE, cannotTakeTasks.getMessage());
-			return;
-		}
+		Agent.SessionIntake intake = agent.addTaskInSession(sid,
+			ctx.getCallerDID(), session.loads(), taskId, taskData);
 		if (intake == Agent.SessionIntake.LOADS_ON_EXISTING) {
 			job.fail("loads can only be passed when a session is created — this session already exists");
 			return;
@@ -4441,16 +4430,6 @@ public class AgentAdapter extends AAdapter {
 						agent.removeTask(pickedTask.getKey());
 						continue;
 					}
-					// An agent that cannot take tasks fails one before a cycle takes
-					// it: its model may have changed since it was accepted, or be one
-					// it could not look up then (AGENT_TASKS.md §2).
-					AString refusal = Agent.taskRefusal(agent.getConfig(),
-						operationLookup(() -> engine.harnessContext(ownerDID, agentId)));
-					if (refusal != null) {
-						failTask(ownerDID, agentId, pickedTask.getKey(), TASKS_UNSUPPORTED_CODE,
-							Agent.CANNOT_TAKE_TASKS.formatted(agentId, refusal));
-						continue;
-					}
 				}
 				AVector<ACell> formattedTasks = formatPickedTask(pickedTask);
 				AVector<ACell> resolvedPending = resolveJobIds(pending, Fields.OUTPUT);
@@ -5390,55 +5369,16 @@ public class AgentAdapter extends AAdapter {
 	 * released after the commit, so it never observes the task still queued.
 	 */
 	private void failTask(AString ownerDID, AString agentId, Blob taskId, String reason) {
-		failTask(ownerDID, agentId, taskId, null, reason);
-	}
-
-	/** As {@link #failTask(AString, AString, Blob, String)}, with an error code ({@link Job#fail(String, String)}). */
-	private void failTask(AString ownerDID, AString agentId, Blob taskId, String code, String reason) {
 		Job pending = engine.jobs().getJob(taskId);
 		List<Runnable> after = engine.getVenueState().transact(draft -> {
 			List<Runnable> work = new ArrayList<>();
 			Agent agent = agentIn(draft, ownerDID, agentId);
 			if (agent != null) agent.removeTask(taskId);
-			settle(draft, pending, work, recorded -> recorded.failIn(draft, code, reason), live -> live.fail(code, reason));
+			settle(draft, pending, work, recorded -> recorded.failIn(draft, reason), live -> live.fail(reason));
 			return work;
 		});
 		outputContexts.remove(taskId);
 		after.forEach(Runnable::run);
-	}
-
-	/**
-	 * The operation metadata a reference in an agent's config names, resolved
-	 * as {@code ctx} may: for the run loop the agent's harness context, so as
-	 * its cycle resolves it. Null when it names none or cannot be resolved now,
-	 * which whoever uses the reference then reports itself.
-	 */
-	private Function<AString, AMap<AString, ACell>> operationLookup(Supplier<RequestContext> ctx) {
-		return ref -> {
-			try {
-				Asset asset = engine.resolveAsset(ref, ctx.get());
-				return (asset == null) ? null : asset.meta();
-			} catch (CoviaException e) {
-				return null;
-			}
-		};
-	}
-
-	/**
-	 * Whether agent {@code agentId}'s harness may read a reference, as its
-	 * cycle reads one ({@link Engine#requireReadable}): the authority the agent
-	 * runs under, as it stands at each check. Nothing while its controller could
-	 * not act. It only reads, so it can run inside the agent's transaction.
-	 */
-	public static Predicate<AString> harnessReads(Engine engine, AString owner, AString agentId) {
-		return ref -> {
-			try {
-				engine.requireReadable(engine.harnessContext(owner, agentId), ref);
-				return true;
-			} catch (CoviaException e) {
-				return false;
-			}
-		};
 	}
 
 	/** Stamps token usage onto a job's record (#217) — best-effort: an

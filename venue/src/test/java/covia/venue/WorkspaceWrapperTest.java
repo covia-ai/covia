@@ -133,7 +133,7 @@ public class WorkspaceWrapperTest {
 		var userRoot = Cursors.<ACell>root(convex.core.data.Maps.empty());
 		var policy = new java.util.concurrent.atomic.AtomicLong(200);
 		var context = VenueContext.create(() -> CVMLong.create(policy.get()));
-		AForkableCursor<ACell> data = new User(context, userRoot, DID, null).workspace().cursor();
+		AForkableCursor<ACell> data = new User(context, userRoot, DID).workspace().cursor();
 		AForkableCursor<ACell> container = userRoot.path(Namespace.W);
 		data.set(Maps.of("a", CVMLong.ONE));
 
@@ -172,7 +172,7 @@ public class WorkspaceWrapperTest {
 	@Test
 	public void testWrapperBoundaryAppliesOnlyAtNamespaceRoot() {
 		var userRoot = Cursors.<ACell>root(convex.core.data.Maps.empty());
-		var data = new User(VenueContext.create(() -> CVMLong.create(300)), userRoot, DID, null).workspace().cursor();
+		var data = new User(VenueContext.create(() -> CVMLong.create(300)), userRoot, DID).workspace().cursor();
 		AForkableCursor<ACell> container = userRoot.path(Namespace.W);
 
 		AForkableCursor<ACell> nested = data.withDefault(convex.core.data.Maps.empty()).path(Strings.intern("nested"))

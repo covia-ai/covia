@@ -302,11 +302,8 @@ operation; authored assets should follow the same convention:
 | this agent's assembly overrides (`options`, `budget`) | `config.modelProfile` |
 
 `Models.resolve` follows `model.provider` through a lookup its caller
-supplies: a cycle resolves each reference through the engine under its
-context, and an agent deciding whether it can take tasks through its owner
-and venue ([GRID_LATTICE_DESIGN.md](./GRID_LATTICE_DESIGN.md) §3.3), so both
-reach the same profile. A profile with `toolCalling: false` serves chat but
-no tasks ([AGENT_TASKS.md](./AGENT_TASKS.md) §5.3).
+supplies: a cycle resolves each reference through the engine under its own
+context. The static `modelProfile(meta, modelId, config)` does not follow it.
 
 ### 5.2 Defaults at dispatch
 

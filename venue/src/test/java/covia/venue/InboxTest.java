@@ -32,7 +32,7 @@ public class InboxTest {
 
 	private static User user() {
 		return new User(VenueContext.create(() -> NOW), Cursors.<ACell>root(Maps.empty()),
-			Strings.create("did:key:inbox"), null);
+			Strings.create("did:key:inbox"));
 	}
 
 	private static AMap<AString, ACell> request(Long expires) {

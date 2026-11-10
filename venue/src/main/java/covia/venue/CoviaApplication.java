@@ -209,7 +209,7 @@ public final class CoviaApplication
 		Objects.requireNonNull(config, "config");
 		AccountKey key = keyPair.getAccountKey();
 		if (mounted.containsKey(key)) throw new ConflictException(String.format(ALREADY_MOUNTED, key));
-		VenueState state = VenueState.draft(venues, key, config.venueDID(key), venueContext.withSigner(keyPair));
+		VenueState state = VenueState.draft(venues, key, venueContext.withSigner(keyPair));
 		Engine engine = factory.create(config, this, keyPair);
 		mounted.put(key, new Mounted(state, engine, mounts++));
 		return engine;
