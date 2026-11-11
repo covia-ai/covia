@@ -10,7 +10,13 @@ public interface MessagingBot<S extends MessagingBotSpec> {
 
 	S spec();
 	Managed managed();
+	/** Starts the binding's transport; it may return before the transport is connected. */
 	void start();
+	/**
+	 * Stops the binding for good. The adapter's lock, and on a disable the
+	 * engine's, is held meanwhile, so this returns promptly: it aborts a
+	 * connection attempt in progress rather than waiting for it.
+	 */
 	void stop();
 	AMap<AString, ACell> status();
 }
