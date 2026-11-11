@@ -88,8 +88,31 @@ class ConvexAdapterLocalTest {
 
 	@Test
 	void transactRequiresAnAddress() {
-		assertEquals(ConvexAdapter.NO_ADDRESS, refusal(TRANSACT, Maps.of(
+		assertEquals(ConvexAdapter.NOT_AN_ADDRESS, refusal(TRANSACT, Maps.of(
 			Fields.SOURCE, "(def foo 1)", Fields.SEED, SEED)));
+	}
+
+	@Test
+	void anAddressThatNamesNoAccountIsRefused() {
+		for (String address : new String[] {"garbage", "#-5", "#", "", "#13.5"}) {
+			String query = refusal(QUERY, Maps.of(Fields.ADDRESS, address, Fields.SOURCE, "(+ 1 2)"));
+			assertTrue(query.startsWith(ConvexAdapter.NOT_AN_ADDRESS), address + ": " + query);
+
+			String transact = refusal(TRANSACT, Maps.of(
+				Fields.ADDRESS, address, Fields.SOURCE, "(def foo 1)", Fields.SEED, SEED));
+			assertTrue(transact.startsWith(ConvexAdapter.NOT_AN_ADDRESS), address + ": " + transact);
+		}
+	}
+
+	@Test
+	void transactRequiresASigner() {
+		assertEquals(ConvexAdapter.NO_SIGNER, refusal(TRANSACT, Maps.of(
+			Fields.ADDRESS, "#13", Fields.SOURCE, "(def foo 1)")));
+	}
+
+	@Test
+	void signRequiresASeed() {
+		assertEquals(ConvexAdapter.NO_SEED, refusal("v/ops/convex/sign", Maps.of(Fields.MESSAGE, "message")));
 	}
 
 	@Test
@@ -161,10 +184,8 @@ class ConvexAdapterLocalTest {
 		assertThrows(Exception.class, () -> literal.awaitResult(5000));
 		assertFalse(literal.getErrorMessage().isBlank());
 
-		Job missing = engine.jobs().invokeOperation("v/ops/convex/sign", Maps.of(
-			Fields.SEED, "s/missing", Fields.MESSAGE, "message"), ctx);
-		assertThrows(Exception.class, () -> missing.awaitResult(5000));
-		assertTrue(missing.getErrorMessage().contains("s/missing"));
+		assertEquals(ConvexAdapter.SEED_UNAVAILABLE + "s/missing", refusal("v/ops/convex/sign", Maps.of(
+			Fields.SEED, "s/missing", Fields.MESSAGE, "message")));
 	}
 
 	@Test
@@ -176,14 +197,12 @@ class ConvexAdapterLocalTest {
 		assertNotNull(secretFields);
 		assertTrue(secretFields.contains(Fields.SEED));
 
-		Job missing = engine.jobs().invokeOperation("v/ops/convex/transact", Maps.of(
+		// Secret resolution fails before the peer is even checked
+		assertEquals(ConvexAdapter.SEED_UNAVAILABLE + "s/missing", refusal(TRANSACT, Maps.of(
 			Fields.PEER, "localhost:1",
 			Fields.ADDRESS, "#13",
 			Fields.SOURCE, "(def foo 1)",
-			Fields.SEED, "s/missing"), ctx);
-		assertThrows(Exception.class, () -> missing.awaitResult(5000));
-		assertTrue(missing.getErrorMessage().contains("s/missing"),
-			"secret resolution must fail before attempting a peer connection");
+			Fields.SEED, "s/missing")));
 	}
 
 	@Test

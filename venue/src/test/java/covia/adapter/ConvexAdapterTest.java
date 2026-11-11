@@ -201,24 +201,6 @@ class ConvexAdapterTest {
 		assertEquals("2", RT.getIn(job.getOutput(), "result").toString());
 	}
 
-	// ===== Transact: missing required parameters =====
-
-	@Test
-	void transactMissingSeed() throws Exception {
-		VenueHTTP covia = TestServer.COVIA;
-
-		Job job = covia.invokeSync("v/ops/convex/transact", Maps.of(
-				Fields.PEER, PEER,
-				Fields.SOURCE, "(def foo 1)",
-				Fields.ADDRESS, "#13"));
-
-		assertNotNull(job);
-		assertEquals(Status.FAILED, job.getStatus());
-		assertTrue(job.getErrorMessage().toLowerCase().contains("key") ||
-				   job.getErrorMessage().toLowerCase().contains("seed"),
-				"Error should mention missing key/seed: " + job.getErrorMessage());
-	}
-
 	// ===== Connection errors =====
 
 	@Test

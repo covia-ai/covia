@@ -42,6 +42,7 @@ import covia.api.Fields;
 import covia.exception.ConfigurationException;
 import covia.exception.InvalidInputException;
 import covia.exception.JobFailedException;
+import covia.exception.NotFoundException;
 import covia.exception.NotSupportedException;
 import covia.venue.Config;
 import covia.venue.Engine;
@@ -202,19 +203,28 @@ public class ConvexAdapter extends AAdapter {
 	/** Why a source that does not read as one Convex Lisp form is refused; the reader's reason follows. */
 	public static final String UNREADABLE_SOURCE = "source must be one Convex Lisp form: ";
 
-	/** Why a transaction without an origin account is refused. */
-	public static final String NO_ADDRESS = "address must be a Convex account address, such as #13";
+	/** Why an address that names no account, or a transaction without one, is refused. */
+	public static final String NOT_AN_ADDRESS = "address must be a Convex account address, such as #13";
 
+	/** A query without an address is sent without one: Convex runs it as the genesis account, and a query changes nothing either way. */
 	private Query query(ACell input) {
-		Address address = Address.parse(RT.getIn(input, Fields.ADDRESS));
-		return new Query(address, readSource(input));
+		return new Query(address(input), readSource(input));
 	}
 
 	private Transaction transaction(RequestContext ctx, ACell input) {
-		Address address = Address.parse(RT.getIn(input, Fields.ADDRESS));
-		if (address == null) throw new InvalidInputException(NO_ADDRESS);
+		Address address = address(input);
+		if (address == null) throw new InvalidInputException(NOT_AN_ADDRESS);
 		ACell code = readSource(input);
 		return new Transaction(address, transactionKeyPair(ctx, input), code);
+	}
+
+	/** The account a call's {@code address} names, or null when it gives none. */
+	private static Address address(ACell input) {
+		ACell named = RT.getIn(input, Fields.ADDRESS);
+		if (named == null) return null;
+		Address address = Address.parse(named);
+		if (address == null) throw new InvalidInputException(NOT_AN_ADDRESS + ", got: " + named);
+		return address;
 	}
 
 	/**
@@ -334,11 +344,22 @@ public class ConvexAdapter extends AAdapter {
 
 	public static final String KEY_OR_SEED = "Give either seed or key, not both";
 
+	/** Why a transaction with neither a seed nor a key is refused. */
+	public static final String NO_SIGNER = "Give seed or key to sign the transaction";
+
+	/** Why a signing call without a seed is refused. */
+	public static final String NO_SEED = "seed is required: an s/<name> secret reference holding an Ed25519 seed";
+
+	/** Why a seed reference that resolves to no secret is refused; the reference follows. */
+	public static final String SEED_UNAVAILABLE = "No secret is available for the seed reference ";
+
 	/** A transaction's signer: a held {@code key}, used under {@code key/sign/convex}, or its {@code seed}. */
 	private AKeyPair transactionKeyPair(RequestContext ctx, ACell input) {
 		ACell key = RT.getIn(input, Fields.KEY);
+		ACell seed = RT.getIn(input, Fields.SEED);
+		if (key == null && seed == null) throw new InvalidInputException(NO_SIGNER);
 		if (key == null) return resolveKeyPair(ctx, input, false);
-		if (RT.getIn(input, Fields.SEED) != null) throw new InvalidInputException(KEY_OR_SEED);
+		if (seed != null) throw new InvalidInputException(KEY_OR_SEED);
 		return CryptoAdapter.of(engine).heldKeyPair(ctx, key, covia.api.Abilities.KEY_SIGN_CONVEX);
 	}
 
@@ -347,7 +368,7 @@ public class ConvexAdapter extends AAdapter {
 	 * raw private material never needs to enter its job input. */
 	private AKeyPair resolveKeyPair(RequestContext ctx, ACell input, boolean requireSecretRef) {
 		AString supplied = RT.ensureString(RT.getIn(input, Fields.SEED));
-		if (supplied == null) throw new JobFailedException("No Ed25519 signing seed provided");
+		if (supplied == null) throw new InvalidInputException(NO_SEED);
 		String value = supplied.toString();
 		boolean secretRef = Engine.isSecretRef(value);
 		if (requireSecretRef && !secretRef) {
@@ -355,8 +376,7 @@ public class ConvexAdapter extends AAdapter {
 		}
 		if (secretRef) {
 			String resolved = engine.resolveSecret(value, ctx);
-			if (resolved == null) throw new JobFailedException(
-				"Convex signing seed not found in the caller's secret store: " + value);
+			if (resolved == null) throw new NotFoundException(SEED_UNAVAILABLE + value, value);
 			value = resolved;
 		}
 		Blob seed = parseBlob(Strings.create(value), "seed");
