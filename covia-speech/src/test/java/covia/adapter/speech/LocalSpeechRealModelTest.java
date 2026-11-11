@@ -7,9 +7,12 @@ import java.nio.file.Path;
 import java.util.Locale;
 import java.util.concurrent.atomic.AtomicLong;
 
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
+
+import covia.test.Reachable;
 
 /**
  * The local engine for real: sherpa-onnx's pinned libraries fetched for this platform,
@@ -19,13 +22,19 @@ import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
  * heard back. Nothing is played.
  *
  * <p><b>Opt-in</b>, like the venue's {@code @IntegrationTest}: it reaches the network and
- * loads native code, so it runs only with {@code -Dcovia.tests.integration=true}. The
- * files are kept under {@code target/} between runs.
+ * loads native code, so it runs only with {@code -Dcovia.tests.integration=true}, and
+ * skips when no connection opens to a host it fetches from. The files are kept under
+ * {@code target/} between runs.
  */
 @Tag("integration")
 @EnabledIfSystemProperty(named = "covia.tests.integration", matches = "true",
 	disabledReason = "downloads a model and loads native code; enable with -Dcovia.tests.integration=true")
 class LocalSpeechRealModelTest {
+
+	/** The natives (jitpack.io), the models and recordings (Hugging Face) and the voice activity model (GitHub). */
+	@BeforeAll static void downloadsReachable() {
+		for (String host : new String[] { "jitpack.io", "huggingface.co", "github.com" }) Reachable.assume(host, 443);
+	}
 
 	static final String RECORDINGS = "https://huggingface.co/csukuangfj/sherpa-onnx-moonshine-tiny-en-int8/resolve/"
 		+ "bf2b762c076d8ea61e2af0b3851c9564fb77552e/test_wavs/";

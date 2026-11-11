@@ -20,6 +20,7 @@ import covia.lattice.Workspace;
 import covia.venue.Engine;
 import covia.venue.TestEngine;
 import covia.venue.User;
+import covia.test.IntegrationTest;
 
 /**
  * Telegram's own state migration: state in the layout 0.9.11 wrote, at 0.9.11's
@@ -54,6 +55,7 @@ class TelegramMigrationTest {
 		assertNull(new TelegramAdapter().checkStateMigration(STATES));
 	}
 
+	@IntegrationTest
 	@Test void releaseStateReachesTheAdapter() throws Exception {
 		AKeyPair key = AKeyPair.generate();
 		Engine engine = TestEngine.application().mount(key, Maps.empty()).prepare();

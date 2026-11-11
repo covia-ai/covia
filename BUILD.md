@@ -169,8 +169,17 @@ default `mvn test` runs the fast suite and skips these with a reason:
 
 ```bash
 mvn test -Dcovia.tests.durability=true    # crash/restart survival (forks JVMs); CI runs this on every push
-mvn test -Dcovia.tests.integration=true   # external services (real network, a local Ollama)
+mvn test -Dcovia.tests.integration=true   # components working together, external services included; CI runs this on qa and master pushes, pull requests into master and release builds
 ```
+
+An integration test exercises components working together: an adapter
+against its provider's service or an in-process fake of it, background
+threads and waits on what they do, anything long-running or timing-dependent,
+and anything that reaches an external service (the real network, a local
+Ollama, a live peer). A small synchronous test of a helper API stays in the
+default suite. A test that needs an external service skips when no connection
+to it opens (`covia.test.Reachable`); once connected, its failures count like
+any other.
 
 A single heavy test still needs its flag, e.g.
 `mvn test -pl venue -Dtest=HardKillPersistenceTest -Dcovia.tests.durability=true`.
@@ -320,8 +329,9 @@ This ensures all tests pass and the build is ready for deployment.
 
 ### Snapshot Releases
 
-Snapshot builds are automatically created after the full test workflow passes
-for a push to the `develop` branch. These are available at:
+Snapshot builds are automatically created after the full test workflow,
+integration tests included, passes for a push to the `qa` branch, which
+follows `develop` (`AGENTS.md`, Branches and deploys). These are available at:
 
 - [latest-snapshot](https://github.com/covia-ai/covia/releases/tag/latest-snapshot)
 

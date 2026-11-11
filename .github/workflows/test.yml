@@ -1,14 +1,15 @@
 name: Test
 
 # Build-and-test quality gate. Runs the full reactor with tests on every pull
-# request and on pushes to the long-lived branches, gating merges.
+# request and on pushes to the long-lived branches (develop, qa, master),
+# gating merges and the deploys that follow a push to qa or master.
 # See DX_PLAN.md → Milestone 2 ("Add a CI quality gate").
 
 on:
   pull_request:
     branches: [ develop, master ]
   push:
-    branches: [ develop, master ]
+    branches: [ develop, qa, master ]
   workflow_dispatch:
 
 # Supersede in-flight runs when the same branch/PR is pushed again
@@ -54,11 +55,16 @@ jobs:
         echo "COVIA_PYTHON_LIBRARY=$library" >> "$GITHUB_ENV"
 
     - name: Build and test (full reactor)
-      # Opt into the durability group (@DurabilityTest — crash/restart survival
-      # tests that fork real JVMs): off in the local `mvn test` inner loop for
-      # speed, but must gate every push. @IntegrationTest (external services:
-      # network/Ollama) stays off — enable with -Dcovia.tests.integration=true.
-      run: mvn clean install -T 1C -Dcovia.tests.durability=true -Dcovia.jdk.check=ERROR
+      # The durability group (@DurabilityTest: crash/restart survival tests
+      # that fork real JVMs) gates every run. The integration group
+      # (@IntegrationTest: components working together, external services
+      # included) gates qa and master, whose pushes deploy, and pull requests
+      # into master, so a release fails before it merges; develop and its pull
+      # requests leave it off to stay fast. Both are off in the local
+      # `mvn test` inner loop.
+      env:
+        INTEGRATION: ${{ github.ref_name == 'qa' || github.ref_name == 'master' || github.base_ref == 'master' }}
+      run: mvn clean install -T 1C -Dcovia.tests.durability=true -Dcovia.tests.integration=$INTEGRATION -Dcovia.jdk.check=ERROR
 
     - name: Verify optional module boundaries
       run: |

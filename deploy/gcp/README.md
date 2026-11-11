@@ -16,8 +16,8 @@ the default closed admission policy and require explicit provisioning.
 
 The container runs the `:stable` image, published by `publish-docker.yml`
 on every push to `master`, and is redeployed automatically by
-`deploy-gcp.yml`. The dev venues (`venue-3`, `venue-4`) track `develop` via
-the `:latest` image; this host only changes at releases.
+`deploy-gcp.yml`. The dev venues (`venue-3`, `venue-4`) track `qa` via the
+`:latest` image; this host only changes at releases.
 
 ## Host Layout
 

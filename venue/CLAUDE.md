@@ -246,6 +246,10 @@ Adapter-owned state uses `AdapterState`; see
 
 ### Testing
 
+- A test of components working together, or a long-running or
+  timing-dependent one, is an `@IntegrationTest`, off unless
+  `-Dcovia.tests.integration=true` (`BUILD.md`, Opt-in test groups); a small
+  synchronous test of a helper API stays in the default suite
 - Use the shared `TestEngine.ENGINE` with per-test DIDs (`TestEngine.uniqueDID`,
   `TestEngine.uniqueManagedDID` for a user the venue hosts)
   — never a fresh Engine per test unless persistence/restart is under test. It

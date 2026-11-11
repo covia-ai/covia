@@ -11,7 +11,7 @@ calls an embedder makes in [EMBEDDING.md](EMBEDDING.md).
 - A build reads a store written by any older release and brings it to its own
   schema.
 - Migration supports stores written by a release, never a snapshot's. The
-  dev venues, which CI deploys from `develop`
+  dev venues, which CI deploys from `qa`
   ([AGENTS.md](../../AGENTS.md#branches-and-deploys)), are wiped and
   refreshed instead (#670, not built), and no other store runs a snapshot.
 - A build refuses stored state newer than it supports, Covia's or an

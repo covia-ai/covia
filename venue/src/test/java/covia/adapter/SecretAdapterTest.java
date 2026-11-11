@@ -279,9 +279,11 @@ class SecretAdapterTest {
 		user.cursor().path(Namespace.S, Strings.create("MALFORMED")).set(Maps.empty());
 		for (String name : new String[] { "MISSING", "CORRUPT", "UNKNOWN_VERSION", "MALFORMED" }) {
 			Throwable error = failure(run("extract", Maps.of("name", name), owner));
-			assertEquals("MISSING".equals(name) ? SecretAdapter.SECRET_UNAVAILABLE : SecretAdapter.SECRET_DECRYPT_FAILED,
+			boolean missing = "MISSING".equals(name);
+			assertEquals(missing ? SecretAdapter.SECRET_UNAVAILABLE : SecretAdapter.SECRET_DECRYPT_FAILED,
 				error.getMessage());
-			assertNull(error.getCause());
+			// An unreadable secret's refusal carries why, outside its message.
+			if (!missing) assertNotNull(error.getCause(), name);
 			denied(run("extract", Maps.of("name", name), scope("s/", Capability.CRUD_READ)));
 		}
 	}

@@ -1224,7 +1224,10 @@ Run the owning module tests during development and `mvn clean install` before
 release so the full reactor, javadocs, shaded jars, and module integration
 tests are verified.
 
-The messaging suites run locally without provider credentials. WhatsApp and
+The messaging adapters' tests run their bots against a venue and a loopback
+fake of the provider, so they are integration tests
+(`-Dcovia.tests.integration=true`, `BUILD.md`); the default suite keeps the
+helpers they call directly. They need no provider credentials. WhatsApp and
 Slack module integration tests boot a private venue with the packaged module,
 post signed HTTP callbacks, and capture outgoing requests at a loopback fake API.
 They cover verification challenges, rejected signatures, duplicate delivery,
@@ -1236,7 +1239,7 @@ redirects, provider errors, and deadlines before headers and during body reads.
 Run the focused messaging tests and packaged-module checks from the root:
 
 ```bash
-mvn -pl covia-whatsapp,covia-slack,covia-telegram -am verify -Dtest=MessagingHttpTest,WhatsAppAdapterTest,SlackAdapterTest,TelegramAdapterTest,ConversationRouterTest,WebhookInboxTest,WebhookRoutesTest -Dsurefire.failIfNoSpecifiedTests=false
+mvn -pl covia-whatsapp,covia-slack,covia-telegram -am verify -Dcovia.tests.integration=true -Dtest=MessagingHttpTest,WhatsAppAdapterTest,SlackAdapterTest,TelegramAdapterTest,ConversationRouterTest,WebhookInboxTest,WebhookRoutesTest -Dsurefire.failIfNoSpecifiedTests=false
 ```
 
 These are local contract tests; they do not validate live provider credentials,

@@ -133,7 +133,8 @@ A venue is a single self-contained server. With Docker:
 docker run --rm -p 127.0.0.1:8080:8080 ghcr.io/covia-ai/covia:0.11.0
 ```
 
-`:latest` is the newest unreleased build.
+`:latest` is the newest unreleased build to pass the full test suite, the one
+the dev venues run.
 
 The default venue has a read-only anonymous capability scope. For a throwaway,
 invoke-capable local venue, select the image's explicit ephemeral test config:

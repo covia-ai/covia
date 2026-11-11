@@ -5092,6 +5092,8 @@ public class Engine {
 	 * @param ctx Request context (identity and authority)
 	 * @return Decrypted plaintext, or null when the store holds no such secret
 	 * @throws covia.exception.AuthException when the caller's authority does not cover the use
+	 * @throws NotSupportedException with {@link #SECRET_UNREADABLE} when the store holds the secret
+	 * but cannot decrypt it, with the failure as its cause
 	 */
 	public String resolveSecret(String secretRef, RequestContext ctx) {
 		return resolveSecret(secretRef, ctx, null);
@@ -5179,9 +5181,10 @@ public class Engine {
 			// A decrypt/key failure is NOT the same as "secret not set". Collapsing
 			// both to null masked #91-class identity/key misconfigurations as
 			// absence. The operator is told too, as a lost venue key is theirs to
-			// restore. Values are never logged.
+			// restore. Values are never logged. Why it failed is the cause, for the
+			// caller to use as it sees fit.
 			log.warn("Secret '{}' of {} cannot be decrypted: {}", name, userDID, e.toString());
-			throw new NotSupportedException(SECRET_UNREADABLE + name);
+			throw new NotSupportedException(SECRET_UNREADABLE + name, e);
 		}
 		if (value != null) return value.toString();
 		return isVenuePrincipal(userDID) ? environmentSecret(name) : null;   // null == genuinely absent

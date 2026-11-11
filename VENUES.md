@@ -5,7 +5,7 @@ Live venue server instances available for development, testing, and agent use.
 Two tiers:
 
 - **Stable** — `venue-1`, `venue-2` (plus `venue-test` for scratch use): run the `:stable` image, deployed automatically on push to `master` (i.e. at releases). Use these for demos, integrations, and anything long-lived.
-- **Dev** — `venue-3`, `venue-4`: run the `:latest` image, deployed automatically on every push to `develop`. Use these to exercise unreleased features.
+- **Dev** — `venue-3`, `venue-4`: run the `:latest` image, deployed automatically on every push to `qa`, which follows `develop`. Use these to exercise unreleased features.
 
 | Venue | Tier | Fresh authenticated DID |
 |---|---|---|

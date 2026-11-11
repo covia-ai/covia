@@ -28,7 +28,9 @@ import covia.exception.NotSupportedException;
 import covia.exception.ResponseException;
 import covia.venue.*;
 import covia.venue.server.VenueServer;
+import covia.test.IntegrationTest;
 
+@IntegrationTest
 class WhatsAppAdapterTest {
 	static AMap<AString, ACell> spec() {
 		return Maps.of("token", "s/TOKEN", "appSecret", "s/SIGNING", "verifyToken", "s/VERIFY", "user", OWNER,

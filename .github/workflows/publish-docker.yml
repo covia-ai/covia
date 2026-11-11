@@ -7,7 +7,7 @@ run-name: Publish Docker image [${{ github.event.workflow_run.head_branch }}]
 # public Docker image from deployment").
 #
 # Tags:
-#   :latest  — tracks develop (dev venues: venue-3, venue-4)
+#   :latest  — tracks qa (dev venues: venue-3, venue-4)
 #   :stable  — tracks master (stable venues: venue-1, venue-2)
 #   :<x.y.z> — release builds (master pushes whose POM version is not a
 #              SNAPSHOT, i.e. the "Release x.y.z" commit) — pin deployments here
@@ -17,7 +17,7 @@ on:
   workflow_run:
     workflows: ["Test"]
     types: [completed]
-    branches: [ develop, master ]
+    branches: [ qa, master ]
 
 # Newest commit wins the :latest tag — cancel superseded publishes
 concurrency:
@@ -54,7 +54,7 @@ jobs:
       run: echo "sha=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
 
     # master publishes the :stable channel (plus :x.y.z for release builds),
-    # develop publishes :latest
+    # qa publishes :latest
     - name: Compute image tags
       id: tags
       run: |
@@ -67,7 +67,7 @@ jobs:
             *-SNAPSHOT) ;;
             *) tags="$tags,ghcr.io/covia-ai/covia:${version}" ;;
           esac
-        else
+        elif [ "$source_branch" = "qa" ]; then
           tags="$tags,ghcr.io/covia-ai/covia:latest"
         fi
         echo "tags=$tags" >> $GITHUB_OUTPUT

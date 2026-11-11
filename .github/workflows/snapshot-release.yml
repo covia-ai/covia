@@ -4,7 +4,7 @@ on:
   workflow_run:
     workflows: ["Test"]
     types: [completed]
-    branches: [ develop ]
+    branches: [ qa ]
 
 # Serialise snapshot publishing — concurrent runs race the delete/recreate
 # of the latest-snapshot tag (HTTP 422: tag_name already exists)
@@ -24,7 +24,7 @@ jobs:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         # Release the exact commit that passed the Test workflow, not the latest
-        # develop commit at the time this runner starts.
+        # qa commit at the time this runner starts.
         ref: ${{ github.event.workflow_run.head_sha }}
 
     - name: Download the jars the Test run built
@@ -69,12 +69,13 @@ jobs:
       run: |
         gh release create latest-snapshot \
           --title "Latest Snapshot" \
-          --notes "Automated snapshot build from develop branch.
+          --notes "Automated snapshot build from the qa branch, which follows develop.
 
         **Commit:** ${{ steps.sha.outputs.sha }}
         **Built:** ${{ steps.date.outputs.date }}
 
-        This release is automatically updated on every push to develop.
+        This release is automatically updated on every push to qa, after the
+        full test suite, integration tests included, passes.
         For stable releases, see tagged versions." \
           --prerelease \
           venue/target/covia.jar \

@@ -23,6 +23,13 @@
 			<version>${project.version}</version>
 			<scope>provided</scope>
 		</dependency>
+		<dependency>
+			<groupId>ai.covia</groupId>
+			<artifactId>venue</artifactId>
+			<version>${project.version}</version>
+			<type>test-jar</type>
+			<scope>test</scope>
+		</dependency>
 		<!-- Pure-Java Opus codec (BSD): decodes Ogg/Opus voice notes for the local engine. -->
 		<dependency>
 			<groupId>io.github.jaredmdobson</groupId>

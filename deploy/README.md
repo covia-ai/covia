@@ -97,7 +97,7 @@ curl -fLo covia.jar https://github.com/covia-ai/covia/releases/download/${COVIA_
 # Latest stable release
 curl -fLo covia.jar https://github.com/covia-ai/covia/releases/download/latest/covia.jar
 
-# Or the latest develop snapshot
+# Or the latest snapshot (the build the dev venues run)
 curl -fLo covia.jar https://github.com/covia-ai/covia/releases/download/latest-snapshot/covia.jar
 ```
 
