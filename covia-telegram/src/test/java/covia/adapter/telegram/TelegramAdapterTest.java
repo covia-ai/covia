@@ -1108,9 +1108,11 @@ public class TelegramAdapterTest {
 		String token = "779:SELF-BOT";
 		telegram.registerBot(token, "self_bot");
 		run(RequestContext.of(owner), "v/ops/secret/set", Maps.of("name", "TG_SELF", "value", token));
-		// Its own bot's senders come from the agent, so it needs the right to ask itself.
+		// Its own bot's senders come from the agent, so it needs the right to ask itself,
+		// and the bot uses its credential with the agent's authority, so the right to use it.
 		AVector<ACell> caps = Vectors.of(
 			convex.auth.ucan.Capability.create(Strings.create(owner + "/telegram"), Strings.create("telegram/manage")),
+			convex.auth.ucan.Capability.create(Strings.create(owner + "/s/TG_SELF"), Strings.create("secret/use")),
 			convex.auth.ucan.Capability.create(Strings.create("v/ops/telegram/create"), Strings.create("invoke")),
 			convex.auth.ucan.Capability.create(Strings.create(owner + "/g/self-asker"), Strings.create("agent/message")),
 			convex.auth.ucan.Capability.create(Strings.create("v/ops/agent/chat"), Strings.create("invoke")));

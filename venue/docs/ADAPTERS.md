@@ -1071,7 +1071,9 @@ provider cannot relay (a location, say) is told so. The hub's own replies are `n
 `unlinked`, `notLinked`, `codeUnknown`, `notOpen`, `held`, `textOnly`,
 `notAvailable`), each overridable. A relay binding admits every sender unless
 `open: false` narrows it to `allow`, and its owner must be a DID, since both hooks run
-as that user without a Job record: `admit` receives `{principal}` before linking,
+for that user without a Job record, with the binding's own authority: its creator's,
+as for its credentials (`AMessagingAdapter.bindingContext`), and the user's for an
+operator-declared binding. `admit` receives `{principal}` before linking,
 polling and each delivery and answers `{allowed: true}` or `{allowed: false, code?,
 notice?}`; `charge` receives `{principal, parts, message_id}` after a reply is sent.
 

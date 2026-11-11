@@ -276,15 +276,16 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 	 * sent to {@code destination}: a {@code secret/use} grant bound to a url prefix
 	 * covers another principal's secret only there. Null when the use has no destination.
 	 *
-	 * <p>A reference resolves under the bot owner's authority, so another principal's
-	 * secret, the venue's included, needs a {@code secret/use} grant. Only an
+	 * <p>A reference resolves under the bot's own authority ({@link #bindingContext}),
+	 * so another principal's secret, the venue's included, needs a {@code secret/use}
+	 * grant, and a bot an agent created uses only what that agent may. Only an
 	 * operator-declared bot also looks in the venue's own store: the operator wrote
 	 * that reference, so the venue's authority stands behind it. A user-created bot's
 	 * reference is its creator's, and never resolves as the venue.</p>
 	 */
 	public final String resolveCredential(String reference, MessagingBot<?> bot, String destination) {
 		if (!isSecretReference(reference)) return reference;
-		String value = engine.resolveSecret(reference, engine.context(bot.spec().userDID(engine)), destination);
+		String value = engine.resolveSecret(reference, bindingContext(bot), destination);
 		if (value != null || bot.managed() != Managed.CONFIG) return value;
 		return engine.resolveSecret(reference, engine.venueContext(), destination);
 	}
@@ -387,8 +388,24 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 	 * created directly).
 	 */
 	public final AString principalOf(S spec, Managed managed) {
+		return creatorOf(spec, managed);
+	}
+
+	private AString creatorOf(MessagingBotSpec spec, Managed managed) {
 		if (managed != Managed.RUNTIME) return null;
 		return principals.get(runtimeKey(spec.userDID(engine), spec.name()));
+	}
+
+	/**
+	 * The context a bot acts in on its own account, such as using its
+	 * credentials or running a relay's hooks: its principal ({@link #principalOf})
+	 * as that principal acts now for the bot's user, as its conversations do. A
+	 * bot an agent created is bounded by that agent's authority, never its user's.
+	 */
+	public final RequestContext bindingContext(MessagingBot<?> bot) {
+		AString owner = bot.spec().userDID(engine);
+		AString principal = creatorOf(bot.spec(), bot.managed());
+		return engine.context(owner, (principal == null) ? owner : principal);
 	}
 
 	protected final synchronized ACell handleDelete(RequestContext ctx, ACell input) {

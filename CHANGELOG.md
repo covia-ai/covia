@@ -12,6 +12,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 - LangChain4j 1.23.0, A2A 1.5.1.Final, Nimbus OAuth/OIDC SDK 11.39, CommonMark 0.32.0; the Documents module uses Apache POI 6.0.0.
 - Disabling a messaging adapter (Telegram, Discord, Slack, WhatsApp) stops its bots at once, closing their polls and connections, and enabling it starts them again; a replaced one's bots stop before its replacement's start.
+- A messaging bot an agent created uses its credentials and runs its relay's `admit` and `charge` hooks with that agent's authority, not its user's: the agent needs `secret/use` on the bot's secret in its caps.
 
 ### Fixed
 
