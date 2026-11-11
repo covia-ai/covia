@@ -24,6 +24,7 @@ import covia.adapter.HTTPAdapter;
 import covia.api.Abilities;
 import covia.exception.AuthException;
 import covia.grid.Job;
+import covia.lattice.Cap;
 import covia.lattice.CapabilityChecker;
 import covia.lattice.CapabilityGate;
 
@@ -63,30 +64,30 @@ public class SecretUseTest {
 
 	@Test
 	public void testUrlCaveatCoverage() {
-		assertTrue(CapabilityChecker.urlCovers("https://safe.com/api", "https://safe.com/api"));
-		assertTrue(CapabilityChecker.urlCovers("https://safe.com/api", "https://safe.com/api/v1/chat?x=1"));
-		assertTrue(CapabilityChecker.urlCovers("https://safe.com/api", "https://SAFE.com:443/api"));
-		assertTrue(CapabilityChecker.urlCovers("https://safe.com/", "https://safe.com/anything/at/all"));
-		assertTrue(CapabilityChecker.urlCovers("https://safe.com", "https://safe.com/anything"));
-		assertFalse(CapabilityChecker.urlCovers("https://safe.com/api", "https://safe.com/apix"));
-		assertFalse(CapabilityChecker.urlCovers("https://safe.com/api", "http://safe.com/api"));
-		assertFalse(CapabilityChecker.urlCovers("https://safe.com/api", "https://safe.com:8443/api"));
-		assertFalse(CapabilityChecker.urlCovers("https://safe.com/api", "https://evil.com/api"));
-		assertFalse(CapabilityChecker.urlCovers("https://safe.com/api", "https://safe.com.evil.com/api"));
-		assertFalse(CapabilityChecker.urlCovers("https://safe.com/api", "https://user@safe.com@evil.com/api"));
-		assertFalse(CapabilityChecker.urlCovers("https://safe.com/api", "not a url"));
-		assertFalse(CapabilityChecker.urlCovers("not a url", "https://safe.com/api"));
+		assertTrue(Cap.urlCovers("https://safe.com/api", "https://safe.com/api"));
+		assertTrue(Cap.urlCovers("https://safe.com/api", "https://safe.com/api/v1/chat?x=1"));
+		assertTrue(Cap.urlCovers("https://safe.com/api", "https://SAFE.com:443/api"));
+		assertTrue(Cap.urlCovers("https://safe.com/", "https://safe.com/anything/at/all"));
+		assertTrue(Cap.urlCovers("https://safe.com", "https://safe.com/anything"));
+		assertFalse(Cap.urlCovers("https://safe.com/api", "https://safe.com/apix"));
+		assertFalse(Cap.urlCovers("https://safe.com/api", "http://safe.com/api"));
+		assertFalse(Cap.urlCovers("https://safe.com/api", "https://safe.com:8443/api"));
+		assertFalse(Cap.urlCovers("https://safe.com/api", "https://evil.com/api"));
+		assertFalse(Cap.urlCovers("https://safe.com/api", "https://safe.com.evil.com/api"));
+		assertFalse(Cap.urlCovers("https://safe.com/api", "https://user@safe.com@evil.com/api"));
+		assertFalse(Cap.urlCovers("https://safe.com/api", "not a url"));
+		assertFalse(Cap.urlCovers("not a url", "https://safe.com/api"));
 		for (String path : new String[] {"/api/../admin", "/api/%2e%2E/admin", "/api/.%2e/admin",
 				"/api%2f..%2fadmin", "/api/%252e%252e/admin", "/api/%5c../admin", "/api/..;x/admin"}) {
-			assertFalse(CapabilityChecker.urlCovers("https://safe.com/api", "https://safe.com" + path), path);
+			assertFalse(Cap.urlCovers("https://safe.com/api", "https://safe.com" + path), path);
 		}
-		assertTrue(CapabilityChecker.urlCovers("https://safe.com/api", "https://safe.com/other/../%61pi/items"));
-		assertTrue(CapabilityChecker.urlCovers("https://safe.com/other/../api", "https://safe.com/api/items"));
+		assertTrue(Cap.urlCovers("https://safe.com/api", "https://safe.com/other/../%61pi/items"));
+		assertTrue(Cap.urlCovers("https://safe.com/other/../api", "https://safe.com/api/items"));
 
 		// A trailing slash means "everything under", the bare path included.
-		assertTrue(CapabilityChecker.urlCovers("https://safe.com/api/", "https://safe.com/api"));
-		assertTrue(CapabilityChecker.urlCovers("https://safe.com/api/", "https://safe.com/api/x"));
-		assertFalse(CapabilityChecker.urlCovers("https://safe.com/api/", "https://safe.com/apix"));
+		assertTrue(Cap.urlCovers("https://safe.com/api/", "https://safe.com/api"));
+		assertTrue(Cap.urlCovers("https://safe.com/api/", "https://safe.com/api/x"));
+		assertFalse(Cap.urlCovers("https://safe.com/api/", "https://safe.com/apix"));
 	}
 
 	@Test
