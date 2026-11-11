@@ -34,11 +34,10 @@ class MessagingUserDeletionTest {
 	@BeforeEach void perTest(TestInfo info) {
 		owner = TestEngine.uniqueDID(info);
 		other = Strings.create(owner + "-other");
-		// Bots that keep running while the adapter is disabled, as deletion must still reach them
-		adapter = new TestMessagingAdapter(info.getTestMethod().orElseThrow().getName().toLowerCase(), owner, false);
+		adapter = new TestMessagingAdapter(info.getTestMethod().orElseThrow().getName().toLowerCase(), owner);
 	}
 
-	@Test void deletionStopsDisabledBotsErasesPrivateStateAndPreventsRestart() {
+	@Test void deletionWhileDisabledErasesPrivateStateAndPreventsRestart() {
 		engine.getVenueState().users().create(owner);
 		engine.getVenueState().users().create(other);
 		adapter.configureOwner("configured");
@@ -51,15 +50,15 @@ class MessagingUserDeletionTest {
 			configured.state.write("config/configured/" + region + "/entry", VALUE);
 		}
 		engine.disableAdapter(adapter.getName());
-		engine.deleteUser(engine.venueContext(), owner);
 		assertFalse(runtime.running);
 		assertFalse(configured.running);
-		assertTrue(adapter.runner(other, "runtime").running);
+		engine.deleteUser(engine.venueContext(), owner);
 		assertNull(adapter.state().read(adapter.userStatePath(owner, "")));
 		assertNull(adapter.state().read("config/configured"));
 		engine.enableAdapter(adapter.getName());
-		assertNull(adapter.runner(owner, "runtime"));
+		assertNull(adapter.runner(owner, "runtime"), "a deleted user's bots do not start again");
 		assertNull(adapter.runner("configured"));
+		assertTrue(adapter.runner(other, "runtime").running, "another user's do");
 		engine.getVenueState().users().create(owner);
 		assertThrows(AuthException.class, () -> runtime.state.write(adapter.userStatePath(owner, "sessions/late"), VALUE));
 		assertThrows(AuthException.class, () -> configured.state.write("config/configured/sessions/late", VALUE));

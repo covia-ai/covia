@@ -11,12 +11,12 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 ### Changed
 
 - LangChain4j 1.23.0, A2A 1.5.1.Final, Nimbus OAuth/OIDC SDK 11.39, CommonMark 0.32.0; the Documents module uses Apache POI 6.0.0.
+- Disabling a messaging adapter (Telegram, Discord, Slack, WhatsApp) stops its bots at once, closing their polls and connections, and enabling it starts them again; a replaced one's bots stop before its replacement's start.
 
 ### Fixed
 
 - `user:delete` no longer leaves cleanup pending for an adapter registered while it runs.
 - Stopping or reconfiguring a Telegram bot just as it polls no longer leaves that poll running for up to 30 seconds or holds up the change for 5.
-- Disabling the Telegram adapter stops its bots at once instead of leaving each poll open for up to 30 seconds, and enabling it starts them again straight away.
 
 ## [0.11.0] - 2026-11-10
 

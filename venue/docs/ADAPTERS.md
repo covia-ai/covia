@@ -222,8 +222,8 @@ The significant lifecycle is:
    `stop()`, but retains the instance and durable catalog metadata. Enable
    restores it and calls `start()` again. `stop()` ends the workers `start()`
    started and keeps the instance's resources; nothing, `configure` included,
-   starts them again before `start()`. The default does nothing. Messaging
-   adapters opt in by calling `stopBots()`, which Telegram does.
+   starts them again before `start()`. The default does nothing; a messaging
+   adapter stops every bot, closing its poll or connection.
    Replacing an active instance stops it before the new one starts. If the new
    one fails to start, it is closed and the old one is restored and started
    again; otherwise the old one is closed.

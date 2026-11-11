@@ -40,10 +40,9 @@ import covia.venue.migration.MigrationStep;
  * Shared registration, ownership and lifecycle for messaging adapters.
  * Provider subclasses retain configuration parsing, credentials, admission,
  * transports and operation schemas. Installation is inert; {@link #start()}
- * activates workers only after the engine is ready. A provider whose bots
- * stop while the adapter is disabled overrides {@link #stop()} to call
- * {@link #stopBots()}; {@link #start()} then starts them again from
- * configuration and the bot registry.
+ * activates workers only after the engine is ready, and {@link #stop()}, when
+ * the adapter is disabled or replaced, stops every bot until {@link #start()}
+ * starts them again from configuration and the bot registry.
  */
 public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends MessagingBot<S>>
 		extends AAdapter implements AutoCloseable {
@@ -85,7 +84,7 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 		return t;
 	});
 	private volatile boolean closed;
-	/** Whether bots run: set by {@link #start()}, cleared by {@link #stopBots()}; guarded by this. */
+	/** Whether bots run: set by {@link #start()}, cleared by {@link #stop()}; guarded by this. */
 	private boolean running;
 	/** Retry cadence for missing credentials or temporarily unavailable providers. */
 	public volatile long retryMillis = 30_000;
@@ -122,11 +121,12 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 	}
 
 	/**
-	 * Stops every bot, keeping their settings and records, until {@link #start()}
-	 * starts them again; no bot starts in between, by configuration, re-arming
-	 * or {@code create}. For a provider's {@link #stop()}.
+	 * Stops every bot, closing its poll or connection and keeping its settings
+	 * and records, until {@link #start()} starts them again; no bot starts in
+	 * between, by configuration, re-arming or {@code create}.
 	 */
-	protected final synchronized void stopBots() {
+	@Override
+	public synchronized void stop() {
 		running = false;
 		stopRunners();
 	}

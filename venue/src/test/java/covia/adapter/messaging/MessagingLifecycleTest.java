@@ -14,9 +14,9 @@ import covia.venue.Engine;
 import covia.venue.TestEngine;
 
 /**
- * A messaging adapter whose bots stop while it is disabled: they stop with
- * it, nothing starts one until it is enabled again, and then they all start
- * with their current settings.
+ * A messaging adapter's bots stop while it is disabled: they stop with it,
+ * nothing starts one until it is enabled again, and then they all start with
+ * their current settings.
  */
 class MessagingLifecycleTest {
 	private static Engine engine;
@@ -27,7 +27,7 @@ class MessagingLifecycleTest {
 	@Test void stoppedBotsStartOnlyWhenTheAdapterIsEnabledAgain(TestInfo info) {
 		AString owner = TestEngine.uniqueDID(info);
 		engine.getVenueState().users().create(owner);
-		TestMessagingAdapter adapter = new TestMessagingAdapter("stopping", owner, true);
+		TestMessagingAdapter adapter = new TestMessagingAdapter("stopping", owner);
 		adapter.configureOwner("configured");
 		engine.registerAdapter(adapter);
 		adapter.create(owner);

@@ -44,13 +44,11 @@ class TestMessagingAdapter extends AMessagingAdapter<TestMessagingAdapter.Spec, 
 
 	private final String name;
 	private final AString owner;
-	/** Whether disabling stops the bots, as a provider opts in to. */
-	private final boolean stopsBots;
 	Runnable creating = () -> { };
 	Runnable deleting = () -> { };
 
-	TestMessagingAdapter(String name, AString owner, boolean stopsBots) {
-		this.name = name; this.owner = owner; this.stopsBots = stopsBots;
+	TestMessagingAdapter(String name, AString owner) {
+		this.name = name; this.owner = owner;
 	}
 
 	@Override public String getName() { return name; }
@@ -67,7 +65,6 @@ class TestMessagingAdapter extends AMessagingAdapter<TestMessagingAdapter.Spec, 
 	@Override public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
 		return CompletableFuture.completedFuture(handleCreate(ctx, input));
 	}
-	@Override public void stop() { if (stopsBots) stopBots(); }
 	/** Every adapter on the venue hears of every deletion: another test's account is none of this one's business. */
 	@Override public void onUserDeleted(AString did, AMap<AString, ACell> previousUser) {
 		if (!did.equals(owner)) return;

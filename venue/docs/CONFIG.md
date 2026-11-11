@@ -1236,7 +1236,7 @@ atomically removes the user's namespace and login profile/aliases. A small
 tombstone records the DID, deletion time and actor; public-key revocations
 remain without profile fields or key labels. Repeating deletion while the
 account is absent is idempotent. Adapter hooks remove their user-associated state
-in the same transaction and then stop their workers (including disabled messaging bots). An unloaded adapter
+in the same transaction and then stop their workers; a disabled adapter's do not start again for that account. An unloaded adapter
 retains a pending cleanup entry until its implementation is available; the venue
 does not guess its schema. An interrupted cleanup can be retried with the same
 delete operation; unavailable adapters reconcile before their next activation.
@@ -3100,8 +3100,8 @@ above is intentionally outside this administrative group:
 | Operation | Effect |
 |-----------|--------|
 | `v/ops/venue/adapters` | Registry view: every registered adapter (active **and** disabled) with `enabled`, `kernel`, owning `module`, effective `config` and `operations`, plus loaded `modules` |
-| `v/ops/venue/adapter/disable {name}` | Remove an adapter from live dispatch and `v/info/adapters/<name>`; an adapter that stops its workers while disabled, such as Telegram, stops them. Durable catalog metadata remains; the instance is retained and in-flight jobs finish |
-| `v/ops/venue/adapter/enable {name}` | Restore it and start any workers it stopped (installing on first enable if it was boot-disabled) |
+| `v/ops/venue/adapter/disable {name}` | Remove an adapter from live dispatch and `v/info/adapters/<name>`, and stop its workers: a messaging adapter's bots close their polls and connections. Durable catalog metadata remains; the instance is retained and in-flight jobs finish |
+| `v/ops/venue/adapter/enable {name}` | Restore it and start its workers again (installing on first enable if it was boot-disabled) |
 | `v/ops/venue/adapter/configure {name, config, merge?}` | Apply a new effective configuration (`adapters.<name>` shape) — the adapter's `configure` hook may reject it, in which case nothing changes |
 | `v/ops/venue/module/load {module, sha256?, config?}` | Load a module jar; its adapters and declarations overwrite existing names and paths |
 | `v/ops/venue/module/unload {name}` | Remove a module's live adapters and introspection, close resources and its classloader; catalog metadata remains |
