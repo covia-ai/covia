@@ -152,7 +152,8 @@ or a connected account, is refused with `NotSupportedException`. The message
 names the record, never its content, and says who can fix it and how: the
 owner by setting it again, or the operator by restoring the key or removing the
 record. The failure that stopped the venue reading it is chained as the cause,
-for the caller to inspect or log as it sees fit; no surface reports it. When
+for the caller to inspect or log as it sees fit; like the message, it never
+quotes the record, and no surface reports it. When
 such a record is used, rather than read out by its owner, the
 venue also logs a warning naming the user and the record, so the operator learns
 of a lost key.

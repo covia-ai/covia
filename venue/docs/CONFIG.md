@@ -1719,9 +1719,8 @@ at a provider, obtained under the caller's venue identity. Connections are the
 keys; they are not in the user's secret store, so no secret operation lists,
 replaces, extracts or deletes them, and no operation returns a token. Grants an
 earlier venue kept there as `oauth/<provider>` move on first access; one that
-cannot be read is refused with a reason and left where it was. Deleting
-a user deletes their connections; their grants are not revoked at the provider.
-The public principal has none.
+cannot be read is refused with a reason and left where it was. The public
+principal has none.
 
 ```json
 {
@@ -1786,7 +1785,10 @@ fresh access token — refreshed when expired — that never reaches a model or 
 job record. `oauth:status` lists connections without tokens;
 `oauth:disconnect` forgets the grant and revokes it where the provider
 supports it. A refresh in flight never brings back a disconnected grant or
-replaces a newer one. Deleting an account (`user:delete`) revokes its grants
+replaces a newer one. A connection whose tokens the venue cannot read, as
+after a lost venue key, is refused with a reason when used; connecting again
+replaces it, and disconnecting forgets it unrevoked. Deleting an account
+(`user:delete`) deletes its connections and revokes their grants
 the same way, once: a provider that refuses or cannot be reached keeps a grant
 the venue no longer holds. Providers and default scopes are published at
 `v/info/adapters/oauth`; the `v/skills/auth/oauth` skill teaches agents the

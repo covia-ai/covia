@@ -723,6 +723,47 @@ public class OAuthAdapterTest {
 	}
 
 	@Test
+	public void testAnUnreadableConnectionIsRefusedAndCanBeReplaced() throws Exception {
+		try (FakeProvider fake = new FakeProvider()) {
+			Engine engine = engine(fake);
+			try {
+				AString aliceDID = Strings.create("did:test:oauth:alice");
+				RequestContext alice = RequestContext.of(aliceDID);
+				AMap<AString, ACell> me = Maps.of("url", fake.base() + "/api/me", "bearerSecret", "oauth/fake");
+				var state = engine.adapterState("oauth");
+				String path = "users/" + aliceDID + "/fake";
+				// Its tokens sealed under a key this venue does not hold, as after a lost venue key
+				connectFake(engine, fake, alice);
+				AMap<AString, ACell> connected = RT.ensureMap(state.read(path));
+				AMap<AString, ACell> lost = connected.assoc(OAuthAdapter.C_TOKENS,
+					SecretStore.seal(Strings.create("{\"accessToken\":\"other\"}"),
+						SecretStore.keys(convex.core.crypto.AKeyPair.generate())));
+				state.write(path, lost);
+
+				// Using it is refused with a reason, which carries why as its cause
+				NotSupportedException refused = assertThrows(NotSupportedException.class,
+					() -> engine.findAdapter(OAuthAdapter.class).accessToken(alice, "fake", null));
+				assertEquals(OAuthAdapter.UNREADABLE_CONNECTION + "fake", refused.getMessage());
+				assertNotNull(refused.getCause());
+				assertEquals(OAuthAdapter.UNREADABLE_CONNECTION + "fake", failed(run(engine, "v/ops/http/get", me, alice)));
+
+				// Connecting again replaces it
+				connectFake(engine, fake, alice);
+				assertEquals("Bearer access-" + fake.issued.get(), RT.getIn(ok(run(engine, "v/ops/http/get", me, alice)), "body").toString());
+
+				// Disconnecting one forgets it, with nothing it could revoke
+				state.write(path, lost);
+				ACell gone = ok(run(engine, "v/ops/oauth/disconnect", Maps.of("provider", "fake"), alice));
+				assertEquals(CVMBool.FALSE, RT.getIn(gone, "revoked"));
+				assertTrue(fake.revokedTokens.isEmpty(), fake.revokedTokens.toString());
+				assertEquals(0, connections(engine, alice).count());
+			} finally {
+				engine.close();
+			}
+		}
+	}
+
+	@Test
 	public void testCompletionForADeletedAccountStoresNothing() throws Exception {
 		try (FakeProvider fake = new FakeProvider()) {
 			Engine engine = engine(fake);
@@ -757,9 +798,11 @@ public class OAuthAdapterTest {
 				assertNull(engine.adapterState("oauth").read("users/" + aliceDID));
 				assertNull(engine.adapterState("oauth").read(OAuthAdapter.REVOCATIONS), "its tokens are not kept once revoked");
 
-				// A grant an earlier venue kept, never moved to the connections, is revoked too
+				// A grant an earlier venue kept, never moved to the connections, is revoked too, and one
+				// that cannot be read holds nothing to revoke and does not stop the deletion
 				AString carolDID = Strings.create("did:test:oauth:carol");
 				storeLegacyGrant(engine, carolDID, "fake", legacyGrant("legacy-access", "legacy-refresh"));
+				storeLegacyGrant(engine, carolDID, "broken", "not a grant");
 				engine.deleteUser(engine.venueContext(), carolDID);
 				assertEquals(List.of("refresh-1", "legacy-refresh"), fake.revokedTokens);
 			} finally {

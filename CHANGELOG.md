@@ -26,6 +26,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Deleting, reconfiguring or disabling a Telegram or Discord bot that is still connecting no longer waits for the connection (for Discord, without limit), and one bot's slow connection attempt no longer holds up the others' retries.
 - Deleting, reconfiguring or disabling a Telegram bot no longer waits up to 5 seconds while it handles an update it has received or waits to retry a failed poll.
 - A secret longer than about 4 KB stays readable once the venue has saved it to its store, instead of being reported as damaged moments after it was set.
+- Using a connected account the venue cannot read is refused with a reason (connect it again with `oauth:connect`) instead of failing as an internal error, and `oauth:disconnect` removes one instead of failing.
 
 ## [0.11.0] - 2026-11-10
 
