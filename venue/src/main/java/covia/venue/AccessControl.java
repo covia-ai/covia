@@ -111,11 +111,12 @@ public class AccessControl {
 	 * Whether {@code ctx}'s caller made {@code record} for the owner whose
 	 * namespace it acts in: a sub-principal (an agent or a delegate) named as the
 	 * record's caller. The owner itself under a scope is not such a caller, so its
-	 * scope alone decides.
+	 * scope alone decides, and nor is a request an MCP token narrows, whose
+	 * caller is the token's issuer: the token's caps decide.
 	 */
 	private static boolean madeItFor(RequestContext ctx, AMap<AString, ACell> record) {
 		AString caller = ctx.getCallerDID();
-		return !caller.equals(ctx.getUserDID()) && caller.equals(Attribution.caller(record));
+		return ctx.getTokens().isEmpty() && !caller.equals(ctx.getUserDID()) && caller.equals(Attribution.caller(record));
 	}
 
 }

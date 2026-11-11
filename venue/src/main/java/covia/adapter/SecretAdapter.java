@@ -189,7 +189,7 @@ public class SecretAdapter extends AAdapter {
 			AString value;
 			try {
 				value = user == null ? null : user.secrets().decrypt(name, SecretStore.keys(engine.getKeyPair()));
-			} catch (RuntimeException e) { throw new NotSupportedException(SECRET_DECRYPT_FAILED); }
+			} catch (RuntimeException e) { throw new NotSupportedException(SECRET_DECRYPT_FAILED, e); }
 			if (value == null) throw new NotFoundException(SECRET_UNAVAILABLE, name.toString());
 			engine.audit().event(Audit.SECRET_EXTRACT, Audit.K_DID, ctx.getCallerDID(), Audit.K_NAME, name, Audit.K_OUTCOME, Audit.OK);
 			return Maps.of(Fields.NAME, name, Fields.VALUE, value);

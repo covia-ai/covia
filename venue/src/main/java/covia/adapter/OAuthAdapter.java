@@ -144,6 +144,10 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 	/** Opening of the refusal for a provider the user has no connection to. */
 	public static final String NOT_CONNECTED = "Not connected to ";
 
+	/** Refusal for a connection whose tokens the venue cannot read; its provider follows. */
+	public static final String UNREADABLE_CONNECTION = "A connected account cannot be read: it is damaged or was "
+		+ "sealed under a key this venue no longer holds. Its owner can connect it again with oauth:connect: ";
+
 	static final long DEFAULT_PENDING_TTL_MILLIS = 10 * 60_000;
 	static final int MAX_PENDING = 10_000;
 	/** Refresh this long before the reported expiry, so a token is never handed out about to die. */
@@ -653,7 +657,7 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 			return grant;
 		});
 		if (taken == null) throw new NotFoundException(NOT_CONNECTED + provider, provider);
-		boolean revoked = revokeSealed(providers.get(provider), taken.get(C_TOKENS));
+		boolean revoked = revokeSealed(userDID, provider, taken.get(C_TOKENS));
 		return Maps.of(
 			K_PROVIDER, Strings.create(provider),
 			K_DISCONNECTED, CVMBool.TRUE,
@@ -676,14 +680,14 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 		String path = state.userPath(userDID, provider);
 		AMap<AString, ACell> connection = RT.ensureMap(state.read(path));
 		if (connection == null) throw notConnected(provider);
-		if (!expiring(connection)) return str(tokens(connection), G_ACCESS_TOKEN);
+		if (!expiring(connection)) return str(tokens(userDID, provider, connection), G_ACCESS_TOKEN);
 
 		// One refresh per (user, provider) at a time; a second caller waits and reads the result.
 		Object lock = refreshLocks.computeIfAbsent(userDID + "|" + provider, k -> new Object());
 		synchronized (lock) {
 			AMap<AString, ACell> current = RT.ensureMap(state.read(path));
 			if (current == null) throw notConnected(provider);
-			AMap<AString, ACell> tokens = tokens(current);
+			AMap<AString, ACell> tokens = tokens(userDID, provider, current);
 			if (!expiring(current)) return str(tokens, G_ACCESS_TOKEN);
 			String refreshToken = str(tokens, G_REFRESH_TOKEN);
 			Provider p = providers.get(provider);
@@ -714,7 +718,7 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 			if (current.equals(seen)) return str(fresh, G_ACCESS_TOKEN);
 			AMap<AString, ACell> replaced = RT.ensureMap(seen);
 			if (replaced == null) throw notConnected(provider);
-			return str(tokens(replaced), G_ACCESS_TOKEN);
+			return str(tokens(userDID, provider, replaced), G_ACCESS_TOKEN);
 		}
 	}
 
@@ -827,10 +831,21 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 		return revoke(p, (refreshToken != null) ? refreshToken : accessToken);
 	}
 
-	/** Revokes the grant whose tokens a stored connection holds sealed. */
-	private boolean revokeSealed(Provider p, ACell sealed) {
+	/**
+	 * Revokes the grant whose tokens a stored connection holds sealed; false when its provider is no longer
+	 * configured or has no revocation endpoint, or the tokens cannot be read, which leaves the grant live at
+	 * the provider and is logged.
+	 */
+	private boolean revokeSealed(AString userDID, String provider, ACell sealed) {
+		Provider p = providers.get(provider);
 		if (p == null || p.revocationEndpoint() == null) return false;
-		AMap<AString, ACell> tokens = opened(sealed);
+		AMap<AString, ACell> tokens;
+		try {
+			tokens = opened(sealed, provider);
+		} catch (NotSupportedException e) {
+			log.warn("Could not revoke the {} connection of {}: {}", provider, userDID, e.getCause().toString());
+			return false;
+		}
 		return revokeGrant(p, str(tokens, G_REFRESH_TOKEN), str(tokens, G_ACCESS_TOKEN));
 	}
 
@@ -883,19 +898,49 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 			.assoc(C_TOKENS, SecretStore.seal(Strings.create(JSON.toString(tokens)), keys));
 	}
 
-	/** A stored connection's tokens, opened. */
-	private AMap<AString, ACell> tokens(AMap<AString, ACell> connection) {
-		return opened(connection.get(C_TOKENS));
+	/** A stored connection's tokens, opened for use; the operator is told of tokens that cannot be read, as
+	 *  the venue's key may be lost. */
+	private AMap<AString, ACell> tokens(AString userDID, String provider, AMap<AString, ACell> connection) {
+		try {
+			return opened(connection.get(C_TOKENS), provider);
+		} catch (NotSupportedException e) {
+			log.warn("Connected account '{}' of {} cannot be read: {}", provider, userDID, e.getCause().toString());
+			throw e;
+		}
 	}
 
-	/** Tokens {@link #withTokens} sealed, opened. */
-	private AMap<AString, ACell> opened(ACell sealed) {
-		AString raw = SecretStore.unseal(sealed, keys());
-		AMap<AString, ACell> tokens = (raw != null) ? RT.ensureMap(JSON.parse(raw.toString())) : null;
-		if (tokens == null || str(tokens, G_ACCESS_TOKEN) == null) {
+	/**
+	 * Tokens {@link #withTokens} sealed, opened.
+	 *
+	 * @throws NotSupportedException with {@link #UNREADABLE_CONNECTION} when they cannot be, why being its cause
+	 */
+	private AMap<AString, ACell> opened(ACell sealed, String provider) {
+		try {
+			AMap<AString, ACell> tokens = sealedJson(sealed, keys());
+			if (tokens == null || str(tokens, G_ACCESS_TOKEN) == null) throw new IllegalStateException(SecretStore.INVALID_RECORD);
+			return tokens;
+		} catch (RuntimeException e) {
+			throw new NotSupportedException(UNREADABLE_CONNECTION + provider, e);
+		}
+	}
+
+	/**
+	 * The JSON a value holds sealed, as a map; null when nothing is sealed there or it is JSON of another kind.
+	 *
+	 * @throws IllegalStateException with {@link SecretStore#INVALID_RECORD} for plaintext that is not JSON: a
+	 * parser's exception can quote its input, so it is never passed on
+	 * @throws RuntimeException when the value cannot be unsealed
+	 */
+	private static AMap<AString, ACell> sealedJson(ACell sealed, SecretStore.Keys keys) {
+		AString raw = SecretStore.unseal(sealed, keys);
+		if (raw == null) return null;
+		ACell parsed;
+		try {
+			parsed = JSON.parse(raw.toString());
+		} catch (RuntimeException e) {
 			throw new IllegalStateException(SecretStore.INVALID_RECORD);
 		}
-		return tokens;
+		return RT.ensureMap(parsed);
 	}
 
 	private SecretStore.Keys keys() {
@@ -979,7 +1024,12 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 			String name = entry.getKey().toString();
 			if (!name.startsWith(LEGACY_GRANT_PREFIX)) continue;
 			String provider = name.substring(LEGACY_GRANT_PREFIX.length());
-			AMap<AString, ACell> grant = legacyGrant(entry.getValue(), keys);
+			AMap<AString, ACell> grant;
+			try {
+				grant = legacyGrant(entry.getValue(), keys);
+			} catch (RuntimeException e) {
+				throw new NotSupportedException(UNREADABLE_LEGACY_GRANT + name, e);
+			}
 			if (grant == null || !PROVIDER_NAME.matcher(provider).matches()) {
 				throw new NotSupportedException(UNREADABLE_LEGACY_GRANT + name);
 			}
@@ -998,15 +1048,15 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 		return false;
 	}
 
-	/** A grant as an earlier venue stored it (JSON of the grant fields), or null when it is unreadable or holds no token. */
+	/**
+	 * A grant as an earlier venue stored it (JSON of the grant fields), or null when it is not a grant
+	 * or holds no token.
+	 *
+	 * @throws RuntimeException when the record cannot be opened or holds no JSON ({@link #sealedJson})
+	 */
 	private static AMap<AString, ACell> legacyGrant(ACell record, SecretStore.Keys keys) {
-		try {
-			AString raw = SecretStore.unseal(record, keys);
-			AMap<AString, ACell> grant = (raw != null) ? RT.ensureMap(JSON.parse(raw.toString())) : null;
-			return (grant != null && str(grant, G_ACCESS_TOKEN) != null) ? grant : null;
-		} catch (RuntimeException e) {
-			return null;
-		}
+		AMap<AString, ACell> grant = sealedJson(record, keys);
+		return (grant != null && str(grant, G_ACCESS_TOKEN) != null) ? grant : null;
 	}
 
 	/**
@@ -1050,12 +1100,7 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 			return grants;
 		});
 		if (taken != null) for (var entry : taken.entrySet()) {
-			try {
-				revokeSealed(providers.get(entry.getKey().toString()), entry.getValue());
-			} catch (RuntimeException e) {
-				log.warn("Could not revoke the deleted user {}'s {} connection: {}", did, entry.getKey(),
-					FaultException.describe(faultOwner(), e));
-			}
+			revokeSealed(did, entry.getKey().toString(), entry.getValue());
 		}
 		AMap<AString, ACell> secrets = (previousUser != null) ? RT.ensureMap(previousUser.get(Namespace.S)) : null;
 		if (!hasLegacyGrant(secrets)) return;
@@ -1063,7 +1108,12 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 		for (var entry : secrets.entrySet()) {
 			String name = entry.getKey().toString();
 			if (!name.startsWith(LEGACY_GRANT_PREFIX)) continue;
-			AMap<AString, ACell> grant = legacyGrant(entry.getValue(), keys);
+			AMap<AString, ACell> grant;
+			try {
+				grant = legacyGrant(entry.getValue(), keys);
+			} catch (RuntimeException e) {
+				continue;   // nothing that can be revoked
+			}
 			if (grant != null) revokeGrant(providers.get(name.substring(LEGACY_GRANT_PREFIX.length())),
 				str(grant, G_REFRESH_TOKEN), str(grant, G_ACCESS_TOKEN));
 		}

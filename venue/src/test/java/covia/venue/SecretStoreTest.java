@@ -52,6 +52,25 @@ public class SecretStoreTest {
 			"Decrypted value should match original plaintext");
 	}
 
+	@Test
+	public void testLongSecretOpensAsAStoreDecodesIt() {
+		SecretStore.Keys keys = SecretStore.keys(AKeyPair.generate());
+		String longValue = "k".repeat(5000);
+		AMap<AString, ACell> sealed = SecretStore.seal(Strings.create(longValue), keys);
+
+		// Decoded from a store, a ciphertext over one chunk is a tree of blobs,
+		// not the flat blob first written. The tree equals the blob, so assoc
+		// would keep the blob: the record is built afresh, as decoding does.
+		ACell tree = ((Blob) sealed.get(ENCRYPTED)).toCanonical();
+		assertFalse(tree instanceof Blob, "the ciphertext spans more than one chunk");
+		AMap<AString, ACell> decoded = Maps.of(ENCRYPTED, tree);
+		for (var entry : sealed.entrySet()) {
+			if (!ENCRYPTED.equals(entry.getKey())) decoded = decoded.assoc(entry.getKey(), entry.getValue());
+		}
+
+		assertEquals(longValue, SecretStore.unseal(decoded, keys).toString());
+	}
+
 	// ========== Sealed values ==========
 
 	@Test

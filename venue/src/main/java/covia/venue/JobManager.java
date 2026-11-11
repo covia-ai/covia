@@ -617,6 +617,15 @@ public class JobManager {
 		return startOperation(ref, input, ctx, false, Invocation.TOOL);
 	}
 
+	/**
+	 * As above, for the definition the framework already resolved for
+	 * {@code ref}: a tool bound by an MCP token, whose definition its issuer
+	 * reads, while the call acts with the token's authority.
+	 */
+	public Run startToolOperation(AString ref, Operation operation, ACell input, RequestContext ctx) {
+		return startOperation(operation.meta(), input, ctx.withOp(ref), false, Invocation.TOOL);
+	}
+
 	private CompletableFuture<ACell> runOperation(AString ref, ACell input,
 			RequestContext ctx, boolean privateJob, Invocation invocation) {
 		return startOperation(ref, input, ctx, privateJob, invocation).result();

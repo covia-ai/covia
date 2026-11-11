@@ -1125,6 +1125,38 @@ It deliberately does not advertise a fictional `authorization_servers`
 entry. A future OAuth bridge can add that standard field without changing the
 discovery URLs.
 
+## MCP tokens (`adapters.mcp`)
+
+An MCP token is the recommended way to connect an external agent: a bearer a
+user or agent creates with `mcp:create-token`, offering chosen operations as
+tools within caps set on it ([MCP_TOKENS.md](MCP_TOKENS.md)). An MCP client
+sends it as it would any bearer:
+
+```json
+{
+  "mcpServers": {
+    "covia": {
+      "type": "http",
+      "url": "https://venue.example.com/mcp",
+      "headers": { "Authorization": "Bearer cvmcp_..." }
+    }
+  }
+}
+```
+
+A token satisfies `mcp.auth.required`, and `mcp.auth.allowedDids` applies to
+the token's owner. An unknown, deleted or expired token receives HTTP 401.
+
+```json
+{ "adapters": { "mcp": { "keepRawTokens": true } } }
+```
+
+- `keepRawTokens` (default `false`): keep each token's bearer beside its
+  hash, so `mcp:get-token` can return it again to a caller holding
+  `admin/token`. Off, the venue keeps only the hash and a lost bearer is
+  replaced by rotating it. Turning it off, at start-up or with
+  `venue:adapter/configure`, drops the kept bearers at once.
+
 ## MCP tool calls: how long they wait
 
 MCP leaves timeouts to the sender: a client waits as long as it chooses and
@@ -1687,9 +1719,8 @@ at a provider, obtained under the caller's venue identity. Connections are the
 keys; they are not in the user's secret store, so no secret operation lists,
 replaces, extracts or deletes them, and no operation returns a token. Grants an
 earlier venue kept there as `oauth/<provider>` move on first access; one that
-cannot be read is refused with a reason and left where it was. Deleting
-a user deletes their connections; their grants are not revoked at the provider.
-The public principal has none.
+cannot be read is refused with a reason and left where it was. The public
+principal has none.
 
 ```json
 {
@@ -1754,7 +1785,10 @@ fresh access token — refreshed when expired — that never reaches a model or 
 job record. `oauth:status` lists connections without tokens;
 `oauth:disconnect` forgets the grant and revokes it where the provider
 supports it. A refresh in flight never brings back a disconnected grant or
-replaces a newer one. Deleting an account (`user:delete`) revokes its grants
+replaces a newer one. A connection whose tokens the venue cannot read, as
+after a lost venue key, is refused with a reason when used; connecting again
+replaces it, and disconnecting forgets it unrevoked. Deleting an account
+(`user:delete`) deletes its connections and revokes their grants
 the same way, once: a provider that refuses or cannot be reached keeps a grant
 the venue no longer holds. Providers and default scopes are published at
 `v/info/adapters/oauth`; the `v/skills/auth/oauth` skill teaches agents the
@@ -2591,8 +2625,10 @@ Per bot:
 - `token` — the token from @BotFather, as an `s/NAME` secret reference
   (resolved in the bot user's store, then the venue's; a literal is accepted
   but never logged or listed). Only operator-declared bots fall back to the
-  venue's store: a bot created with `telegram:create` resolves its creator's
-  secrets, and another principal's only under a `secret/use` grant. A bot
+  venue's store: a bot created with `telegram:create` resolves secrets with
+  its creator's authority, so a bot an agent created uses its user's secret
+  only under `secret/use` in that agent's caps, and another principal's only
+  under a `secret/use` grant. A bot
   whose secret is absent parks as `PENDING` and retries (once after 2 s, then every 30 s), so provisioning the secret later brings it
   up without a restart.
 - `user` — the principal the bot's allow-listed senders come from

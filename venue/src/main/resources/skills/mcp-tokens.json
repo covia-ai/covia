@@ -1,0 +1,16 @@
+{
+	"name": "mcp-tokens",
+	"description": "Hand another agent or an MCP client a chosen set of tools: a scoped token for the venue's /mcp endpoint, acting within your authority and the caps you set. Load to give, change or revoke such access.",
+	"content": {
+		"contentType": "text/markdown",
+		"inline": "## MCP tokens\nA token is an API key for this venue's `/mcp` endpoint. Whoever holds it sees and calls exactly the tools it offers, as you, within the caps set on it and never beyond your own authority. It is not an identity: work done through it is yours.\n\n- Create with `{name, tools, caps, expires?}`. `tools` are operation references (or `{operation, name?, description?}`), as in an agent's config. `caps` are the capabilities the token acts within, or `\"unrestricted\"` for all of yours; left out, the token can do nothing. `expires` is milliseconds since the epoch.\n- The result's `token` is the bearer, shown once. Pass it to the holder: an MCP client sends `Authorization: Bearer <token>` to `<venue>/mcp`, and a Covia agent calls `mcp:tools-call` or `mcp:tools-list` with `{server: \"<venue>/mcp\", token}`.\n- Change tools, caps or expiry, or `rotate` for a new bearer, with the update operation. List your tokens to see them without their bearers.\n- Revoke by setting caps to `[]`, emptying tools, or deleting the token; it takes effect at once, on work already started too.\n\nRules:\n- Give the narrowest tools and caps the holder needs, and an expiry where the need is temporary.\n- Never put a bearer in durable prose, a workspace value or a message to anyone but its holder.\n- A token cannot widen itself; a token made through a token is bounded by both."
+	},
+	"skill": {
+		"tools": [
+			"v/ops/mcp/create-token",
+			"v/ops/mcp/update-token",
+			"v/ops/mcp/delete-token",
+			"v/ops/mcp/list-tokens"
+		]
+	}
+}

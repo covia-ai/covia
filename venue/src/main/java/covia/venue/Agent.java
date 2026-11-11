@@ -59,6 +59,8 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 	public static final AString KEY_AGENT = Strings.intern("agent");
 	/** The principal whose authority the agent's harness runs under, absent for its owner. */
 	public static final AString KEY_CONTROLLER = Fields.CONTROLLER;
+	/** The MCP token narrowing its controller's authority, when a request a token narrowed created it. */
+	public static final AString KEY_CONTROLLER_TOKEN = Fields.CONTROLLER_TOKEN;
 	public static final AString KEY_EXTERNAL = Strings.intern("external");
 	/** Present only for a deliberate stop; faults use {@link #KEY_ERROR}. */
 	public static final AString KEY_SUSPENSION = Strings.intern("suspension");
@@ -246,11 +248,12 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 	}
 
 	/**
-	 * Atomically initialises this record under {@code controller} (null or the
-	 * owner for its owner), returning false if it already exists.
+	 * Atomically initialises this record under {@code controller} (null, or
+	 * the owner with no token, for its owner), returning false if it already
+	 * exists.
 	 */
 	boolean initialiseIfAbsent(AMap<AString, ACell> config, ACell initialState, AMap<AString, ACell> definition,
-			AString controller) {
+			Engine.Source controller) {
 		AMap<AString, ACell> record = Maps.of(
 			K_STATUS, SLEEPING,
 			K_TASKS, Index.none(),
@@ -265,10 +268,16 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 		return cursor().getAndUpdate(current -> (current == null) ? initial : current) == null;
 	}
 
-	/** {@code record} with {@code controller}, which is stored only when it is not the owner. */
-	private AMap<AString, ACell> withController(AMap<AString, ACell> record, AString controller) {
-		return (controller == null || controller.equals(owner)) ? record.dissoc(KEY_CONTROLLER)
-			: record.assoc(KEY_CONTROLLER, controller);
+	/**
+	 * {@code record} with {@code controller}: its principal, stored only when
+	 * it is not the owner, and the MCP token narrowing it, if any.
+	 */
+	private AMap<AString, ACell> withController(AMap<AString, ACell> record, Engine.Source controller) {
+		AString principal = (controller == null) ? null : controller.principal();
+		AMap<AString, ACell> token = (controller == null) ? null : controller.token();
+		record = (principal == null || principal.equals(owner)) ? record.dissoc(KEY_CONTROLLER)
+			: record.assoc(KEY_CONTROLLER, principal);
+		return (token == null) ? record.dissoc(KEY_CONTROLLER_TOKEN) : record.assoc(KEY_CONTROLLER_TOKEN, token);
 	}
 
 	/**
@@ -287,9 +296,9 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 		return initialiseFromForkIfAbsent(config, state, timeline, null);
 	}
 
-	/** As above, under {@code controller} (null or the owner for its owner). */
+	/** As above, under {@code controller} (null, or the owner with no token, for its owner). */
 	boolean initialiseFromForkIfAbsent(AMap<AString, ACell> config, ACell state,
-			AVector<ACell> timeline, AString controller) {
+			AVector<ACell> timeline, Engine.Source controller) {
 		AMap<AString, ACell> record = Maps.of(
 			K_STATUS, SLEEPING,
 			K_TASKS, Index.none(),
@@ -310,6 +319,17 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 		AMap<AString, ACell> r = getRecord();
 		AString stored = (r != null) ? RT.ensureString(r.get(KEY_CONTROLLER)) : null;
 		return (stored != null) ? stored : owner;
+	}
+
+	/** The MCP token narrowing its controller's authority, or null when none does. */
+	public AMap<AString, ACell> getControllerToken() {
+		AMap<AString, ACell> r = getRecord();
+		return (r != null) ? RT.ensureMap(r.get(KEY_CONTROLLER_TOKEN)) : null;
+	}
+
+	/** Its controller and the MCP token narrowing it, as one source of authority. */
+	public Engine.Source getControllerSource() {
+		return new Engine.Source(getController(), getControllerToken());
 	}
 
 	public AString getStatus() {
@@ -1065,19 +1085,20 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 	 * As {@link #updateConfigAndState}, checked against the controller the
 	 * record holds and, with {@code controller}, handing the agent to it, all
 	 * in one atomic update. {@code check} receives the current controller
-	 * ({@link #getController()}) and refuses by throwing, leaving the record
-	 * unchanged; like {@code config}, it may run again on a retry.
+	 * ({@link #getControllerSource()}) and refuses by throwing, leaving the
+	 * record unchanged; like {@code config}, it may run again on a retry.
 	 *
 	 * @param check refuses an update its caller may not make, or null for none
 	 * @param controller the new controller, or null to keep the current one
 	 */
 	@SuppressWarnings("unchecked")
-	public AMap<AString, ACell> update(java.util.function.Consumer<AString> check, AString controller,
+	public AMap<AString, ACell> update(java.util.function.Consumer<Engine.Source> check, Engine.Source controller,
 			UnaryOperator<AMap<AString, ACell>> config, ACell state) {
 		AMap<AString, ACell> record = update(r -> {
 			if (check != null) {
 				AString current = RT.ensureString(r.get(KEY_CONTROLLER));
-				check.accept((current != null) ? current : owner);
+				check.accept(new Engine.Source((current != null) ? current : owner,
+					RT.ensureMap(r.get(KEY_CONTROLLER_TOKEN))));
 			}
 			AMap<AString, ACell> u = (controller == null) ? r : withController(r, controller);
 			if (config != null) {

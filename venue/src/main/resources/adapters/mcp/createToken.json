@@ -1,0 +1,39 @@
+{
+	"name": "MCP Create Token",
+	"description": "Creates a scoped API key for this venue's /mcp endpoint, so an MCP client — another agent, Claude Code, any assistant — can connect with Authorization: Bearer <token> and no other login. The token offers exactly the tools you list, and each call acts with your own authority narrowed by the token's caps, read at the time of each action: it can never do more than you can. Returns the token once, in this result (wait for the result: the job record keeps it hidden). Revoke by emptying its tools or caps with v/ops/mcp/update-token, or with v/ops/mcp/delete-token. Needs the mcp/token ability on x/mcp/tokens/<name>.",
+	"dateCreated": "2026-11-11T00:00:00Z",
+	"operation": {
+		"adapter": "mcp:token:create",
+		"readOnly": false,
+		"secretFields": ["token"],
+		"input": {
+			"type": "object",
+			"properties": {
+				"name": { "type": "string", "description": "The token's name, unique in your namespace: [a-z0-9-]{1,64}" },
+				"tools": {
+					"type": "array",
+					"description": "The operations the token offers as MCP tools, as in an agent's config.tools: an operation reference such as v/ops/covia/read or o/research/search, or {operation, name?, description?} to name or describe it differently. Tool names must not clash.",
+					"items": {}
+				},
+				"caps": {
+					"description": "The capabilities bounding what the token's calls may do, within your authority: an array of {with, can} capabilities (UCAN.md §3), or \"unrestricted\" for all of your authority. Left out, the token has none: its tools can do only what needs no authority.",
+					"oneOf": [ { "type": "array", "items": { "type": "object" } }, { "type": "string", "enum": ["unrestricted"] } ]
+				},
+				"expires": { "type": "integer", "description": "When the token stops working, in milliseconds since the epoch. Left out, it lasts until revoked." }
+			},
+			"required": ["name", "tools"]
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"name": { "type": "string" },
+				"token": { "type": "string", "description": "The bearer to configure the MCP client with. Shown only here." },
+				"issuer": { "type": "string" },
+				"tools": { "type": "array" },
+				"caps": {},
+				"expires": { "type": "integer" },
+				"created": { "type": "integer" }
+			}
+		}
+	}
+}

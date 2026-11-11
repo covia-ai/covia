@@ -297,7 +297,7 @@ public class Config {
 	/** The value of {@code caps} that sets no scope at all: {@code auth.public.caps}
 	 *  for anonymous callers, and an agent's {@code config.caps}, which only an
 	 *  explicit {@code "unrestricted"} leaves unbounded. */
-	public static final AString UNRESTRICTED = Strings.intern("unrestricted");
+	public static final AString UNRESTRICTED = covia.lattice.Caps.UNRESTRICTED;
 
 	/** Obsolete option recognised only to report its required migration. */
 	public static final AString AUDIENCE = Strings.intern("audience");

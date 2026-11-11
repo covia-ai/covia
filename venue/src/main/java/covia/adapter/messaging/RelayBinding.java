@@ -362,8 +362,9 @@ public final class RelayBinding<S extends WebhookBotSpec> {
 		String notice() { return text != null ? text : N_NOT_AVAILABLE; }
 	}
 
+	/** The relay's hooks run with the binding's own authority, its creator's, never its user's whole. */
 	private RequestContext hookContext() {
-		return adapter.engine.context(bot.spec().userDID(adapter.engine));
+		return adapter.bindingContext(bot);
 	}
 
 	private Admission admit(AString principal) {
@@ -383,10 +384,17 @@ public final class RelayBinding<S extends WebhookBotSpec> {
 
 	private void charge(AString principal, String messageId, int parts) {
 		if (settings.charge() == null) return;
-		adapter.engine.jobs().invokeInternal(settings.charge(), Maps.of("principal", principal, "parts", CVMLong.create(parts),
-			"message_id", messageId), hookContext()).whenComplete((r, e) -> {
-				if (e != null) log.warn("{} relay '{}': charge hook failed ({})", adapter.getName(), bot.spec().name(), e.getClass().getSimpleName());
-			});
+		CompletableFuture<ACell> charged;
+		try {
+			// The binding's creator may no longer act: the reply is sent, so the charge fails as the hook would
+			charged = adapter.engine.jobs().invokeInternal(settings.charge(), Maps.of("principal", principal,
+				"parts", CVMLong.create(parts), "message_id", messageId), hookContext());
+		} catch (RuntimeException e) {
+			charged = CompletableFuture.failedFuture(e);
+		}
+		charged.whenComplete((r, e) -> {
+			if (e != null) log.warn("{} relay '{}': charge hook failed ({})", adapter.getName(), bot.spec().name(), e.getClass().getSimpleName());
+		});
 	}
 
 	// ---- plumbing ----

@@ -1,0 +1,20 @@
+{
+	"name": "MCP List Tokens",
+	"description": "Lists the MCP tokens in your namespace: each one's name, issuer, tools, caps, expiry and creation time, never its bearer. Needs crud/read on x/mcp/tokens.",
+	"dateCreated": "2026-11-11T00:00:00Z",
+	"operation": {
+		"adapter": "mcp:token:list",
+		"readOnly": true,
+		"input": {
+			"type": "object",
+			"properties": {}
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"tokens": { "type": "array", "items": { "type": "object" } },
+				"total": { "type": "integer" }
+			}
+		}
+	}
+}

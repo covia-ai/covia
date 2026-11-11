@@ -71,6 +71,8 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 	public static final String FOREIGN_PRINCIPAL = "a bot's principal must be its user or one of that user's agents, not %s";
 	public static final String SEPARATE_AUTHORITY_CREATOR = "a bot acts as its creator, so a request acting with "
 		+ "another principal's authority cannot create one";
+	public static final String TOKEN_CREATOR = "a bot acts as its creator with all of its authority, so a request "
+		+ "through an MCP token, which holds less, cannot create one";
 	/** Creating or deleting a bot while its adapter's bots are stopped; the provider follows. */
 	public static final String NOT_RUNNING = "The %s adapter is not running";
 
@@ -274,15 +276,16 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 	 * sent to {@code destination}: a {@code secret/use} grant bound to a url prefix
 	 * covers another principal's secret only there. Null when the use has no destination.
 	 *
-	 * <p>A reference resolves under the bot owner's authority, so another principal's
-	 * secret, the venue's included, needs a {@code secret/use} grant. Only an
+	 * <p>A reference resolves under the bot's own authority ({@link #bindingContext}),
+	 * so another principal's secret, the venue's included, needs a {@code secret/use}
+	 * grant, and a bot an agent created uses only what that agent may. Only an
 	 * operator-declared bot also looks in the venue's own store: the operator wrote
 	 * that reference, so the venue's authority stands behind it. A user-created bot's
 	 * reference is its creator's, and never resolves as the venue.</p>
 	 */
 	public final String resolveCredential(String reference, MessagingBot<?> bot, String destination) {
 		if (!isSecretReference(reference)) return reference;
-		String value = engine.resolveSecret(reference, engine.context(bot.spec().userDID(engine)), destination);
+		String value = engine.resolveSecret(reference, bindingContext(bot), destination);
 		if (value != null || bot.managed() != Managed.CONFIG) return value;
 		return engine.resolveSecret(reference, engine.venueContext(), destination);
 	}
@@ -367,6 +370,7 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 		// The bot identifies its senders as exactly its creator: an agent as itself, never its owner.
 		// It then acts as that creator, so it cannot record one whose authority was another's.
 		if (ctx.hasSeparateAuthority()) throw new AuthException(SEPARATE_AUTHORITY_CREATOR);
+		if (!ctx.getTokens().isEmpty()) throw new AuthException(TOKEN_CREATOR);
 		AString principal = ctx.getCallerDID();
 		if (!owner.equals(Principals.userOf(principal))) throw new AuthException(FOREIGN_PRINCIPAL.formatted(principal));
 		boolean own = owner.equals(principal);
@@ -384,8 +388,24 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 	 * created directly).
 	 */
 	public final AString principalOf(S spec, Managed managed) {
+		return creatorOf(spec, managed);
+	}
+
+	private AString creatorOf(MessagingBotSpec spec, Managed managed) {
 		if (managed != Managed.RUNTIME) return null;
 		return principals.get(runtimeKey(spec.userDID(engine), spec.name()));
+	}
+
+	/**
+	 * The context a bot acts in on its own account, such as using its
+	 * credentials or running a relay's hooks: its principal ({@link #principalOf})
+	 * as that principal acts now for the bot's user, as its conversations do. A
+	 * bot an agent created is bounded by that agent's authority, never its user's.
+	 */
+	public final RequestContext bindingContext(MessagingBot<?> bot) {
+		AString owner = bot.spec().userDID(engine);
+		AString principal = creatorOf(bot.spec(), bot.managed());
+		return engine.context(owner, (principal == null) ? owner : principal);
 	}
 
 	protected final synchronized ACell handleDelete(RequestContext ctx, ACell input) {
