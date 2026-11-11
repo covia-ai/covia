@@ -54,6 +54,8 @@ final class FakeTelegramServer implements AutoCloseable {
 		final List<Map<String, Object>> updates = new ArrayList<>();
 		final BlockingQueue<Sent> sent = new LinkedBlockingQueue<>();
 		final AtomicInteger getMeCalls = new AtomicInteger();
+		/** While set, getMe answers only once this is released, counting {@code getMeArrived} down first. */
+		volatile java.util.concurrent.CountDownLatch getMeHeld, getMeArrived;
 		final AtomicInteger downloads = new AtomicInteger();
 		/** Chats whose sendMessage fails with a 503, and how many have failed. */
 		final java.util.Set<Long> failSendChats = ConcurrentHashMap.newKeySet();
@@ -103,6 +105,16 @@ final class FakeTelegramServer implements AutoCloseable {
 
 	int getMeCalls(String token) {
 		return bot(token).getMeCalls.get();
+	}
+
+	/**
+	 * Holds the bot's getMe calls, as an unresponsive API would, until the
+	 * returned latch is released; {@code arrived} counts down as each arrives.
+	 */
+	java.util.concurrent.CountDownLatch holdGetMe(String token, java.util.concurrent.CountDownLatch arrived) {
+		Bot b = bot(token);
+		b.getMeArrived = arrived;
+		return b.getMeHeld = new java.util.concurrent.CountDownLatch(1);
 	}
 
 	/** Files the bot has downloaded. */
@@ -291,6 +303,12 @@ final class FakeTelegramServer implements AutoCloseable {
 			switch (method) {
 				case "getMe" -> {
 					bot.getMeCalls.incrementAndGet();
+					var held = bot.getMeHeld;
+					if (held != null) {
+						bot.getMeArrived.countDown();
+						try { held.await(30, TimeUnit.SECONDS); }
+						catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+					}
 					Map<String, Object> me = new HashMap<>();
 					me.put("id", 42L);
 					me.put("is_bot", true);

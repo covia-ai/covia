@@ -173,6 +173,21 @@ class DiscordAdapterTest {
 		run(OWNER,"v/ops/discord/delete",Maps.of("name","paused"));
 	}
 
+	@Test void stoppingABotWhileItConnectsDoesNotWaitForTheConnection() throws Exception {
+		gateway.held.add("held-token");
+		BotRunner connecting=new BotRunner(adapter,BotSpec.parse("held",Maps.of("token","held-token","user",OWNER,"operation","v/test/ops/echo","allow",Vectors.of("alice")),false),
+			api.url(),covia.adapter.messaging.MessagingBot.Managed.CONFIG);
+		try {
+			connecting.start();
+			assertEquals("held-token",gateway.holding.poll(10,TimeUnit.SECONDS),"the bot is connecting");
+			java.util.concurrent.CompletableFuture.runAsync(connecting::stop).get(5,TimeUnit.SECONDS);
+			assertTrue(connecting.status().toString().contains("STOPPED"));
+			assertFalse(gateway.sinks.containsKey("held-token"));
+		} finally {
+			gateway.released.countDown();
+		}
+	}
+
 	@Test void localAgentAcceptsAnotherMessageWhileThinking() throws Exception {
 		var response = new java.util.concurrent.CompletableFuture<ACell>();
 		var entered = new java.util.concurrent.CountDownLatch(1);
@@ -219,7 +234,12 @@ class DiscordAdapterTest {
 
 	private static final class FakeGatewayHub implements DiscordGateway.Factory {
 		final ConcurrentHashMap<String,Consumer<InboundMessage>> sinks=new ConcurrentHashMap<>();
-		@Override public synchronized DiscordGateway connect(String token,Consumer<InboundMessage> messages){sinks.put(token,messages);notifyAll();return new DiscordGateway(){public String botId(){return "999";}public String username(){return "covia-test";}public void close(){sinks.remove(token,messages);}};}
+		/** Tokens whose connection never becomes ready, as when Discord is unreachable, until {@link #released}. */
+		final java.util.Set<String> held=ConcurrentHashMap.newKeySet();final BlockingQueue<String> holding=new LinkedBlockingQueue<>();final java.util.concurrent.CountDownLatch released=new java.util.concurrent.CountDownLatch(1);
+		@Override public DiscordGateway connect(String token,Consumer<InboundMessage> messages) throws InterruptedException {
+			if(held.contains(token)){holding.add(token);released.await();throw new IllegalStateException("released");}
+			synchronized(this){sinks.put(token,messages);notifyAll();}
+			return new DiscordGateway(){public String botId(){return "999";}public String username(){return "covia-test";}public void close(){sinks.remove(token,messages);}};}
 		synchronized void awaitConnected(String token) throws InterruptedException {
 			long end=System.nanoTime()+TimeUnit.SECONDS.toNanos(10);
 			while(!sinks.containsKey(token)){long left=end-System.nanoTime();if(left<=0)throw new AssertionError(token+" did not connect");TimeUnit.NANOSECONDS.timedWait(this,left);}

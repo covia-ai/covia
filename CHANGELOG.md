@@ -17,6 +17,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 - `user:delete` no longer leaves cleanup pending for an adapter registered while it runs.
 - Stopping or reconfiguring a Telegram bot just as it polls no longer leaves that poll running for up to 30 seconds or holds up the change for 5.
+- Deleting, reconfiguring or disabling a Telegram or Discord bot that is still connecting no longer waits for the connection (for Discord, without limit), and one bot's slow connection attempt no longer holds up the others' retries.
 
 ## [0.11.0] - 2026-11-10
 

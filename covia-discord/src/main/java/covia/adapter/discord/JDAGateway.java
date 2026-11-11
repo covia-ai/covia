@@ -37,6 +37,7 @@ final class JDAGateway implements DiscordGateway {
 		};
 		JDA jda=JDABuilder.createLight(token, GatewayIntent.GUILD_MESSAGES, GatewayIntent.DIRECT_MESSAGES,
 			GatewayIntent.MESSAGE_CONTENT).addEventListeners(listener).build();
+		// No time limit, since JDA keeps reconnecting: a stopping bot interrupts the wait instead.
 		try { jda.awaitReady(); return new JDAGateway(jda); }
 		catch(Exception e){jda.shutdownNow(); throw e;}
 	}

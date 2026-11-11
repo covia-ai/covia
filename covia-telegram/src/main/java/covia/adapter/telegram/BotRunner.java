@@ -85,7 +85,7 @@ import covia.venue.RequestContext;
  * a dedicated virtual thread. A missing secret or unreachable API parks the
  * runner as {@link State#PENDING} and retries on the adapter's retry
  * schedule, so a bot whose token is provisioned after boot comes up by
- * itself. {@link #stop()} cancels the in-flight poll and is final: disabling
+ * itself. {@link #stop()} cancels the in-flight {@code getMe} or poll and is final: disabling
  * the adapter stops every bot, and enabling it starts new ones, to which
  * Telegram redelivers whatever was left unconfirmed.</p>
  *
@@ -158,6 +158,8 @@ final class BotRunner implements MessagingBot<BotSpec> {
 	private volatile boolean stopped;
 	private volatile ScheduledFuture<?> retry;
 	private volatile Thread pollThread;
+	/** The client of a start attempt while its {@code getMe} is in flight, for {@link #stop()} to cancel. */
+	private volatile OkHttpClient starting;
 	/** What the poll loop waits on once its adapter is no longer live, until {@link #stop()} signals it. */
 	private final Object parked = new Object();
 
@@ -231,12 +233,16 @@ final class BotRunner implements MessagingBot<BotSpec> {
 			.build();
 		TelegramBot candidate = new TelegramBot.Builder(token).apiUrl(apiUrl).okHttpClient(client).build();
 		GetMeResponse me;
+		// stop() cancels this getMe rather than waiting out its timeouts.
+		starting = client;
 		try {
 			me = candidate.execute(new GetMe());
 		} catch (RuntimeException e) {
 			release(candidate, client);
-			pending("Telegram API unreachable: " + concise(e));
+			if (!stopped) pending("Telegram API unreachable: " + concise(e));
 			return;
+		} finally {
+			starting = null;
 		}
 		if (me == null || !me.isOk() || me.user() == null) {
 			release(candidate, client);
@@ -279,7 +285,9 @@ final class BotRunner implements MessagingBot<BotSpec> {
 		} else {
 			log.debug("Telegram bot '{}' still pending: {} (will retry)", spec.name(), why);
 		}
-		retry = adapter.scheduleRetry(this::tryStart, delay);
+		// Each attempt blocks on the network, so it runs on a thread of its own;
+		// the adapter's one retry thread only schedules it.
+		retry = adapter.scheduleRetry(this::start, delay);
 	}
 
 	/** Warn once when an initial problem persists, and again only on a new outage or reason. */
@@ -288,30 +296,36 @@ final class BotRunner implements MessagingBot<BotSpec> {
 			|| !java.util.Objects.equals(previousError, why);
 	}
 
-	@Override public synchronized void stop() {
+	@Override public void stop() {
 		stopped = true;
+		// A start attempt holds the runner's lock through its getMe: cancel that
+		// call so the attempt ends now. One not yet made is refused, being stopped.
+		OkHttpClient attempt = starting;
+		if (attempt != null) attempt.dispatcher().cancelAll();
 		synchronized (parked) {
 			parked.notifyAll();
 		}
-		ScheduledFuture<?> r = retry;
-		if (r != null) r.cancel(false);
-		TelegramBot b = bot;
-		OkHttpClient c = http;
-		bot = null;
-		http = null;
-		token = null;
-		if (b != null) release(b, c);
-		// Let the poll thread unwind its cancelled call before the caller (an
-		// unload) closes the module classloader under it.
-		Thread t = pollThread;
-		if (t != null && t != Thread.currentThread()) {
-			try {
-				t.join(5_000);
-			} catch (InterruptedException e) {
-				Thread.currentThread().interrupt();
+		synchronized (this) {
+			ScheduledFuture<?> r = retry;
+			if (r != null) r.cancel(false);
+			TelegramBot b = bot;
+			OkHttpClient c = http;
+			bot = null;
+			http = null;
+			token = null;
+			if (b != null) release(b, c);
+			// Let the poll thread unwind its cancelled call before the caller (an
+			// unload) closes the module classloader under it.
+			Thread t = pollThread;
+			if (t != null && t != Thread.currentThread()) {
+				try {
+					t.join(5_000);
+				} catch (InterruptedException e) {
+					Thread.currentThread().interrupt();
+				}
 			}
+			state = State.STOPPED;
 		}
-		state = State.STOPPED;
 		log.info("Telegram bot '{}' stopped", spec.name());
 	}
 

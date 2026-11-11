@@ -149,6 +149,24 @@ public class TelegramAdapterTest {
 	}
 
 	@Test
+	public void stoppingABotWhileItConnectsCancelsTheConnection() throws Exception {
+		var arrived = new java.util.concurrent.CountDownLatch(1);
+		var release = telegram.holdGetMe(echoToken, arrived);
+		BotRunner connecting = new BotRunner(adapter, BotSpec.parse("connecting", botConfig(echoToken,
+			owner.toString(), "operation", "v/test/ops/echo", Vectors.of(CVMLong.create(ALLOWED_ID))), false),
+			telegram.apiUrl(), covia.adapter.messaging.MessagingBot.Managed.CONFIG);
+		try {
+			connecting.start();
+			assertTrue(arrived.await(10, java.util.concurrent.TimeUnit.SECONDS), "the bot checks its token with getMe");
+			// Stopping cancels the check instead of waiting for Telegram to answer it.
+			java.util.concurrent.CompletableFuture.runAsync(connecting::stop).get(5, java.util.concurrent.TimeUnit.SECONDS);
+			assertEquals(BotRunner.State.STOPPED, connecting.state());
+		} finally {
+			release.countDown();
+		}
+	}
+
+	@Test
 	public void preparedEngineDefersBotWorkersUntilActivation() throws Exception {
 		try (FakeTelegramServer fake = new FakeTelegramServer()) {
 			var key = convex.core.crypto.AKeyPair.generate();

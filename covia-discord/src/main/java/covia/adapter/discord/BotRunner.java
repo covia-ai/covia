@@ -67,7 +67,10 @@ final class BotRunner implements MessagingBot<BotSpec> {
 	private static final HttpClient HTTP=HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(20)).executor(AAdapter.VIRTUAL_EXECUTOR).build();
 	private final DiscordAdapter adapter;
 	final BotSpec spec;final String apiUrl;final Managed managed;
-	private volatile DiscordGateway gateway;private volatile HttpClient http;private volatile String token,username,botId,error;private volatile State state=State.STARTING;private volatile boolean stopped;private volatile ScheduledFuture<?> retry;private final AtomicLong received=new AtomicLong(),sent=new AtomicLong(),failed=new AtomicLong();
+	private volatile DiscordGateway gateway;private volatile HttpClient http;private volatile String token,username,botId,error;private volatile State state=State.STARTING;private volatile boolean stopped;private volatile ScheduledFuture<?> retry;
+	/** The thread of a start attempt while it connects, for {@link #stop()} to interrupt: the connection waits for Discord without a time limit. */
+	private volatile Thread starting;
+	private final AtomicLong received=new AtomicLong(),sent=new AtomicLong(),failed=new AtomicLong();
 
 	private final ConversationRouter conversations;
 
@@ -80,13 +83,24 @@ final class BotRunner implements MessagingBot<BotSpec> {
 		try{tok=adapter.resolveToken(this);}catch(RuntimeException e){pending("token resolution failed: "+e.getMessage());return;}
 		if(tok==null){pending("token secret "+spec.tokenRef()+" not found");return;}
 		DiscordGateway candidate;
-		try{candidate=adapter.gatewayFactory.connect(tok,this::receive);}catch(Exception|LinkageError e){pending("Discord Gateway connection failed: "+concise(e));return;}
+		// Published before checking stopped, so stop() either sees this attempt or the attempt sees it stopped.
+		starting=Thread.currentThread();
+		try{if(stopped)return;candidate=adapter.gatewayFactory.connect(tok,this::receive);}
+		catch(Exception|LinkageError e){if(!stopped)pending("Discord Gateway connection failed: "+concise(e));return;}
+		finally{starting=null;}
 		if(stopped){candidate.close();return;}
 		gateway=candidate;token=tok;username=candidate.username();botId=candidate.botId();http=HTTP;error=null;state=State.RUNNING;
 		log.info("Discord bot '{}' (@{}) running as {} -> {}",spec.name(),username,spec.userRef(),spec.target());
 	}
-	private void pending(String why){state=State.PENDING;error=why;log.warn("Discord bot '{}' not started: {} (will retry)",spec.name(),why);retry=adapter.scheduleRetry(this::tryStart,adapter.retryMillis);}
-	@Override public synchronized void stop(){stopped=true;if(retry!=null)retry.cancel(false);DiscordGateway g=gateway;gateway=null;token=null;http=null;if(g!=null)try{g.close();}catch(RuntimeException e){log.debug("Discord Gateway close failed",e);}state=State.STOPPED;}
+	private void pending(String why){state=State.PENDING;error=why;log.warn("Discord bot '{}' not started: {} (will retry)",spec.name(),why);
+		// Each attempt blocks on the network, so it runs on a thread of its own; the adapter's one retry thread only schedules it.
+		retry=adapter.scheduleRetry(this::start,adapter.retryMillis);}
+	@Override public void stop(){
+		stopped=true;
+		// A start attempt holds the runner's lock while it connects: interrupt it so it gives up now.
+		Thread attempt=starting;if(attempt!=null)attempt.interrupt();
+		synchronized(this){if(retry!=null)retry.cancel(false);DiscordGateway g=gateway;gateway=null;token=null;http=null;if(g!=null)try{g.close();}catch(RuntimeException e){log.debug("Discord Gateway close failed",e);}state=State.STOPPED;}
+	}
 	@Override public AMap<AString,ACell> status(){AMap<AString,ACell> m=Maps.of(Fields.NAME,Strings.create(spec.name()),BotSpec.K_USER,Strings.create(spec.userRef()),K_TARGET,Strings.create(spec.target()),K_STATE,Strings.create(state.name()),K_MANAGED,Strings.create(managed.name().toLowerCase(Locale.ROOT)),K_RECEIVED,CVMLong.create(received.get()),K_SENT,CVMLong.create(sent.get()),K_FAILED,CVMLong.create(failed.get()));if(username!=null)m=m.assoc(K_USERNAME,Strings.create(username));if(botId!=null)m=m.assoc(K_BOT_ID,Strings.create(botId));if(error!=null)m=m.assoc(Fields.ERROR,Strings.create(error));
 		// Who may message the bot: ids, then usernames, as the spec matches them.
 		AVector<ACell> allow=Vectors.empty();for(String id:spec.allowIds())allow=allow.conj(Strings.create(id));for(String n:spec.allowNames())allow=allow.conj(Strings.create(n));
