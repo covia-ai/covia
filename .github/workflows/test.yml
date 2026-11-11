@@ -58,11 +58,12 @@ jobs:
       # The durability group (@DurabilityTest: crash/restart survival tests
       # that fork real JVMs) gates every run. The integration group
       # (@IntegrationTest: components working together, external services
-      # included) gates qa and master, whose pushes deploy; develop and pull
+      # included) gates qa and master, whose pushes deploy, and pull requests
+      # into master, so a release fails before it merges; develop and its pull
       # requests leave it off to stay fast. Both are off in the local
       # `mvn test` inner loop.
       env:
-        INTEGRATION: ${{ github.ref_name == 'qa' || github.ref_name == 'master' }}
+        INTEGRATION: ${{ github.ref_name == 'qa' || github.ref_name == 'master' || github.base_ref == 'master' }}
       run: mvn clean install -T 1C -Dcovia.tests.durability=true -Dcovia.tests.integration=$INTEGRATION -Dcovia.jdk.check=ERROR
 
     - name: Verify optional module boundaries

@@ -169,7 +169,7 @@ default `mvn test` runs the fast suite and skips these with a reason:
 
 ```bash
 mvn test -Dcovia.tests.durability=true    # crash/restart survival (forks JVMs); CI runs this on every push
-mvn test -Dcovia.tests.integration=true   # components working together, external services included; CI runs this on qa and master pushes and release builds
+mvn test -Dcovia.tests.integration=true   # components working together, external services included; CI runs this on qa and master pushes, pull requests into master and release builds
 ```
 
 An integration test exercises components working together: an adapter
