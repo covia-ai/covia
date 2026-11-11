@@ -177,7 +177,9 @@ from them with `Engine.context(owner, caller, proofs, authority)`, checking
 what a live request would: the principal and the kept authority still exist,
 a delegate still holds its `user/sudo` grant, an agent acts under its current
 `config.caps`, an agent controller under its own. The kept authority is the
-controller the work started with, as it acts now. The record never holds them,
+controller the work started with, as it acts now, and the MCP token narrowing
+the request, if any, which then narrows it as it stands and to nothing once
+it is gone (MCP_TOKENS.md). The record never holds them,
 and they go with the entry when the job ends (UCAN.md §4.3).
 
 ## The update path — CAS-committed, terminal-sticky

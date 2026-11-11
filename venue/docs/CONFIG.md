@@ -1125,6 +1125,38 @@ It deliberately does not advertise a fictional `authorization_servers`
 entry. A future OAuth bridge can add that standard field without changing the
 discovery URLs.
 
+## MCP tokens (`adapters.mcp`)
+
+An MCP token is the recommended way to connect an external agent: a bearer a
+user or agent creates with `mcp:create-token`, offering chosen operations as
+tools within caps set on it ([MCP_TOKENS.md](MCP_TOKENS.md)). An MCP client
+sends it as it would any bearer:
+
+```json
+{
+  "mcpServers": {
+    "covia": {
+      "type": "http",
+      "url": "https://venue.example.com/mcp",
+      "headers": { "Authorization": "Bearer cvmcp_..." }
+    }
+  }
+}
+```
+
+A token satisfies `mcp.auth.required`, and `mcp.auth.allowedDids` applies to
+the token's owner. An unknown, deleted or expired token receives HTTP 401.
+
+```json
+{ "adapters": { "mcp": { "keepRawTokens": true } } }
+```
+
+- `keepRawTokens` (default `false`): keep each token's bearer beside its
+  hash, so `mcp:get-token` can return it again to a caller holding
+  `admin/token`. Off, the venue keeps only the hash and a lost bearer is
+  replaced by rotating it. Turning it off, at start-up or with
+  `venue:adapter/configure`, drops the kept bearers at once.
+
 ## MCP tool calls: how long they wait
 
 MCP leaves timeouts to the sender: a client waits as long as it chooses and

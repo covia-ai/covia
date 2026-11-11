@@ -8,6 +8,10 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- MCP tokens: any user or agent can create a scoped bearer for the venue's `/mcp` (`mcp:create-token`, `update-token`, `delete-token`, `list-tokens`, `get-token`) that offers chosen operations as tools and acts with its issuer's authority within the token's caps; emptying its caps, deleting it or its expiry revokes it, and `adapters.mcp.keepRawTokens` keeps bearers for `admin/token` to read again.
+
 ### Changed
 
 - LangChain4j 1.23.0, A2A 1.5.1.Final, Nimbus OAuth/OIDC SDK 11.39, CommonMark 0.32.0; the Documents module uses Apache POI 6.0.0.

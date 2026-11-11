@@ -949,6 +949,8 @@ under a capped controller, only what they include the right to grant
 context outright, because answering an ask mints a grant *as the inbox owner*:
 an agent reaching it would approve its own request with authority it may not
 have. An agent that needs more asks its human, and only the human can answer.
+A request through an MCP token answers only with all of the inbox owner's
+authority ([MCP_TOKENS.md](MCP_TOKENS.md)).
 
 That guard is pinned to identity. An unrestricted agent holds no scope, which
 the `authorityCovers` fast path passes; a scope-based defence would therefore
@@ -1011,6 +1013,18 @@ presented grants, holds no other principal's authority. An agent such a
 delegate creates is controlled by its target, so grant `agent/create` beside
 `user/sudo` as you would that user's own authority.
 
+**An MCP token narrows the authority a request acts with.** A request through
+an MCP token is its issuer's, acting with the issuer's authority narrowed by
+the caps of the token and of each token whose request created it, read at
+each point of action as an agent's caps narrow its controller's
+(`Engine.tokenContext`). It holds the issuer's whole authority only when every
+token on that chain is unrestricted. What it creates keeps the token: an agent
+records it beside its controller (`controllerToken`), whose authority it then
+narrows, and a job or scheduled event keeps it with its authority. A token
+that no longer stands narrows all of these to nothing. Changing a token needs
+the authority it was created with, so a token never widens itself.
+[MCP_TOKENS.md](MCP_TOKENS.md) is the contract.
+
 **Configuring an agent acts with its controller's authority.** The config
 chooses the agent's harness, its transition operation and the context it
 assembles, and how far its caps narrow its controller. So changing an agent's
@@ -1022,7 +1036,8 @@ controls, its own included. Changing only the state of an agent its owner contro
 it, and managing its sessions need `agent/write` alone, and its owner may
 always delete it.
 `user:import` and `user:clone` keep a stored controller only when it is the
-target user or one of its agents; any other agent returns to its owner.
+target user or one of its agents; any other agent returns to its owner, and
+drops its `controllerToken` with it.
 
 The config's `caps` and `accepts` take no check of their own. `caps` narrow
 what the agent does and cannot exceed its controller: a list of capabilities
@@ -1062,7 +1077,8 @@ operation names, reading the
 configured tools' definitions and keeping the session's frames. The switch takes the
 agent from the step's input, never its authority, whoever invokes the runtime
 and whatever `config` its input carries. Only the agent's own run or its
-owner may make an agent act, and only an agent that exists.
+owner, with all of the owner's authority, may make an agent act, and only an
+agent that exists.
 
 An external agent (AGENT_LOOP.md §2.2.1) has no transition operation. Asking
 its backend (an A2A endpoint, a Claude Code project, another Covia agent) is
@@ -1242,8 +1258,9 @@ reads, writes, or otherwise uses, and never lends the authority of the
 operation's author, publisher, or executing venue.
 
 A directly bound tool calls its particular operation without an `invoke`
-grant. The binding comes from the serving tool registry or agent's available
-tool palette, not a caller-supplied operation reference. Its action still
+grant. The binding comes from the serving tool registry, an agent's available
+tool palette or an MCP token's tools, not a caller-supplied operation
+reference. Its action still
 needs the appropriate authority: a direct write tool needs `crud/write` on
 its target. Passing that same operation reference to a generic invocation
 surface needs `invoke` on the reference **as well as** the write authority.

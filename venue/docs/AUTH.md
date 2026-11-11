@@ -622,6 +622,15 @@ restriction is pending in #595, separately from #297's method-neutral refactor.
 Likewise, outbound connected-account grants (§8.1)
 remain separate from both login and the venue's authorization-server grants.
 
+### 4.4 MCP tokens are outside the method contract
+
+An MCP token (`cvmcp_…`) is an API key a user or agent creates for the
+venue's MCP endpoint, which accepts it on its own routes only
+([MCP_TOKENS.md](MCP_TOKENS.md)). It is not an authentication method: it
+proves no subject, carries no evidence, starts no session and never reaches
+`VenueAuthenticator`. A request presenting one is its issuer's, acting with
+the issuer's authority narrowed by the token.
+
 ## 5. Methods
 
 | `method` id | Credential | User mapping | Verified evidence | Session? | Issue |

@@ -80,7 +80,7 @@ AUTH_REQUIRED).
 | `p2p` | The venue's Convex P2P node (`convex-p2p`), off unless `adapters.p2p.join`; peer list plus in-process change events, venue-owned (`docs/CONFIG.md#p2p-network-adaptersp2p`) | `peers`, `connect` |
 | `convex` | Convex blockchain, CAD3 conversion, and secret-backed Ed25519 keys | `query`, `transact`, `generate-key`, `sign`, `decode-cad3`, `encode-cad3` |
 | `crypto` | Local cryptography in Convex formats; secret-backed and held keys, JWTs and BIP39 phrases (see `docs/CONFIG.md#cryptography-crypto`) | `hash`, `generate-key`, `public-key`, `sign`, `verify`, `encrypt`, `decrypt`, `generate-mnemonic`, `validate-mnemonic`, `derive-key`, `jwt-sign`, `jwt-verify`, `jwt-decode`, `add-key`, `remove-key`, `list-keys` |
-| `mcp` | Model Context Protocol | `toolList`, `toolCall`, bridging ops |
+| `mcp` | Model Context Protocol client, bridging, and scoped tokens for the venue's `/mcp` (`docs/MCP_TOKENS.md`) | `tools-list`, `tools-call`, `add-server`, `add-tool`, `remove-server`, `refresh`, `create-token`, `update-token`, `delete-token`, `list-tokens`, `get-token` |
 | `a2a` | Agent-to-Agent protocol client — remote agent cards, tasks and message relay | `send`, `get-task`, `cancel`, `agent-card`, `import-agent` |
 | `langchain` | AI/LLM models | `openai`, `ollama`, `anthropic`, `gemini`, `xai`, `deepseek`, `mistral`, `openrouter`, `models` |
 | `http` | HTTP requests (SSRF-protected, bounded validated redirects, default User-Agent; `adapters.http`) | `get`, `post` |
@@ -156,7 +156,7 @@ Base path: `/api/v1/`
 | `/oauth/{authorize,token,revoke}` | — | OAuth 2.1 authorization server: code+PKCE flow issuing venue bearers (`auth.oauth.provider`) |
 | `/auth/connect/{provider}/callback` | GET | OAuth connection callback — the provider redirects the user here after approval; it hands the browser a one-time completion code for `oauth:complete` (`adapters.oauth`; not `/api/v1`) |
 
-MCP endpoint at `/mcp`; A2A is opt-in with an `a2a` config block.
+MCP endpoint at `/mcp`, reached with a venue bearer or a scoped MCP token (`docs/MCP_TOKENS.md`); A2A is opt-in with an `a2a` config block.
 
 ### A2A surfaces
 
@@ -337,6 +337,7 @@ java -jar target/covia.jar [config.json]
 - `docs/SKILLS.md` — agent skill system
 - `docs/OPERATIONS.md` — operation model, defaults, discovery
 - `docs/PREFERENCES.md` — per-user preferences: storage, the `x/preferences` view, the edit tool's commands and size limit
+- `docs/MCP_TOKENS.md` — scoped MCP tokens: a token request's identity and authority, the token operations and store, and `/mcp` with a token
 - `docs/MODELS.md` — model definition assets (design): a model is an operation asset at `v/models/<provider>/<id>`
 - `docs/PROJECT.md` — projects (design): a work-breakdown tree at `w/projects/<pid>` where every node has a principal, an assignee, targets, tolerances and PRINCE2-style product descriptions, and the assignee of a node is the principal of its children; the `project` adapter builds, executes and rolls up the tree
 - `docs/GRID_LATTICE_DESIGN.md` — lattice design
