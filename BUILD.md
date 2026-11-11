@@ -329,8 +329,9 @@ This ensures all tests pass and the build is ready for deployment.
 
 ### Snapshot Releases
 
-Snapshot builds are automatically created after the full test workflow passes
-for a push to the `develop` branch. These are available at:
+Snapshot builds are automatically created after the full test workflow,
+integration tests included, passes for a push to the `qa` branch, which
+follows `develop` (`AGENTS.md`, Branches and deploys). These are available at:
 
 - [latest-snapshot](https://github.com/covia-ai/covia/releases/tag/latest-snapshot)
 
