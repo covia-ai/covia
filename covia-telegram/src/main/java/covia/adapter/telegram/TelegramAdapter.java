@@ -204,6 +204,18 @@ public class TelegramAdapter extends AMessagingAdapter<BotSpec, BotRunner> {
 		return true;
 	}
 
+	/**
+	 * Stopping a bot does not wait for its poll thread, so closing, as an unload
+	 * does before it closes the module's classloader, waits briefly for them all.
+	 */
+	@Override
+	public synchronized void close() {
+		java.util.List<BotRunner> bots = runnerList();
+		super.close();
+		long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+		for (BotRunner bot : bots) bot.awaitPollThread(TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime()));
+	}
+
 	@Override
 	protected BotSpec parseBot(String name, ACell settings, boolean strict) {
 		return BotSpec.parse(name, settings, strict);

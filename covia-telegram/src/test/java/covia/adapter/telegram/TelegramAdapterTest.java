@@ -149,6 +149,32 @@ public class TelegramAdapterTest {
 	}
 
 	@Test
+	public void stoppingABotMidUpdateDoesNotWaitForItsPollThread() throws Exception {
+		long strangerChat = 15001L, allowedChat = 15002L;
+		var arrived = new java.util.concurrent.CountDownLatch(1);
+		var release = telegram.holdSends(echoToken, strangerChat, arrived);
+		// One batch: the stranger's message, whose refusal notice the fake holds, then an allowed user's.
+		telegram.push(echoToken, strangerChat, "private", STRANGER_ID, "mallory", "let me in");
+		telegram.push(echoToken, allowedChat, "private", ALLOWED_ID, "alice", "next in the batch");
+		BotRunner midUpdate = new BotRunner(adapter, BotSpec.parse("mid-update", botConfig(echoToken,
+			owner.toString(), "operation", "v/test/ops/echo", Vectors.of(CVMLong.create(ALLOWED_ID))), false),
+			telegram.apiUrl(), covia.adapter.messaging.MessagingBot.Managed.CONFIG);
+		try {
+			midUpdate.start();
+			assertTrue(arrived.await(10, java.util.concurrent.TimeUnit.SECONDS), "the poll thread is answering the stranger");
+			// Stopping cancels that notice, and the poll thread moves on to record the
+			// next update, which needs the engine's lock: held here, as a disable holds it.
+			java.util.concurrent.CompletableFuture.runAsync(() -> {
+				synchronized (engine) { midUpdate.stop(); }
+			}).get(2, java.util.concurrent.TimeUnit.SECONDS);
+			assertEquals(BotRunner.State.STOPPED, midUpdate.state());
+		} finally {
+			release.countDown();
+			midUpdate.awaitPollThread(5_000);
+		}
+	}
+
+	@Test
 	public void stoppingABotWhileItConnectsCancelsTheConnection() throws Exception {
 		var arrived = new java.util.concurrent.CountDownLatch(1);
 		var release = telegram.holdGetMe(echoToken, arrived);

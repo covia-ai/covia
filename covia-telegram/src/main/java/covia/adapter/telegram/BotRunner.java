@@ -160,7 +160,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 	private volatile Thread pollThread;
 	/** The client of a start attempt while its {@code getMe} is in flight, for {@link #stop()} to cancel. */
 	private volatile OkHttpClient starting;
-	/** What the poll loop waits on once its adapter is no longer live, until {@link #stop()} signals it. */
+	/** What the poll loop waits on, for a retry or once its adapter is no longer live; {@link #stop()} signals it. */
 	private final Object parked = new Object();
 
 	private final AtomicLong received = new AtomicLong();
@@ -314,19 +314,25 @@ final class BotRunner implements MessagingBot<BotSpec> {
 			http = null;
 			token = null;
 			if (b != null) release(b, c);
-			// Let the poll thread unwind its cancelled call before the caller (an
-			// unload) closes the module classloader under it.
-			Thread t = pollThread;
-			if (t != null && t != Thread.currentThread()) {
-				try {
-					t.join(5_000);
-				} catch (InterruptedException e) {
-					Thread.currentThread().interrupt();
-				}
-			}
+			// The poll thread is not waited for, as it may be held up behind the
+			// caller's own locks; its client refuses every call once stopped.
 			state = State.STOPPED;
 		}
 		log.info("Telegram bot '{}' stopped", spec.name());
+	}
+
+	/**
+	 * Waits up to {@code millis} for a stopped bot's poll thread to finish, so
+	 * an unload does not close the module's classloader under it.
+	 */
+	void awaitPollThread(long millis) {
+		Thread t = pollThread;
+		if (t == null || t == Thread.currentThread() || millis <= 0) return;
+		try {
+			t.join(millis);
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+		}
 	}
 
 	/** Cancel in-flight calls (unblocking the poll loop) and drop the client. */
@@ -415,7 +421,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 				if (stopped) return;
 				if (r == null || !r.isOk()) {
 					pollError(describe(r));
-					sleep(backoff);
+					pause(backoff);
 					backoff = Math.min(backoff * 2, 60_000);
 					continue;
 				}
@@ -434,7 +440,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 			} catch (Throwable e) {
 				if (stopped) return;
 				pollError(concise(e));
-				sleep(backoff);
+				pause(backoff);
 				backoff = Math.min(backoff * 2, 60_000);
 			}
 		}
@@ -470,11 +476,14 @@ final class BotRunner implements MessagingBot<BotSpec> {
 		}
 	}
 
-	private static void sleep(long millis) {
-		try {
-			Thread.sleep(millis);
-		} catch (InterruptedException e) {
-			Thread.currentThread().interrupt();
+	/** Waits {@code millis} before polling again, or until the bot is stopped. */
+	private void pause(long millis) {
+		synchronized (parked) {
+			try {
+				if (!stopped) parked.wait(millis);
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+			}
 		}
 	}
 

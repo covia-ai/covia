@@ -56,6 +56,9 @@ final class FakeTelegramServer implements AutoCloseable {
 		final AtomicInteger getMeCalls = new AtomicInteger();
 		/** While set, getMe answers only once this is released, counting {@code getMeArrived} down first. */
 		volatile java.util.concurrent.CountDownLatch getMeHeld, getMeArrived;
+		/** While set, a sendMessage to {@code sendHeldChat} answers only once released, counting {@code sendArrived} down first. */
+		volatile java.util.concurrent.CountDownLatch sendHeld, sendArrived;
+		volatile long sendHeldChat;
 		final AtomicInteger downloads = new AtomicInteger();
 		/** Chats whose sendMessage fails with a 503, and how many have failed. */
 		final java.util.Set<Long> failSendChats = ConcurrentHashMap.newKeySet();
@@ -115,6 +118,14 @@ final class FakeTelegramServer implements AutoCloseable {
 		Bot b = bot(token);
 		b.getMeArrived = arrived;
 		return b.getMeHeld = new java.util.concurrent.CountDownLatch(1);
+	}
+
+	/** Holds the bot's sendMessage calls to {@code chatId} until the returned latch is released; {@code arrived} counts down as each arrives. */
+	java.util.concurrent.CountDownLatch holdSends(String token, long chatId, java.util.concurrent.CountDownLatch arrived) {
+		Bot b = bot(token);
+		b.sendHeldChat = chatId;
+		b.sendArrived = arrived;
+		return b.sendHeld = new java.util.concurrent.CountDownLatch(1);
 	}
 
 	/** Files the bot has downloaded. */
@@ -348,6 +359,12 @@ final class FakeTelegramServer implements AutoCloseable {
 					reply(ex, 200, ok(result));
 				}
 				case "sendMessage" -> {
+					var held = bot.sendHeld;
+					if (held != null && Long.parseLong(form.get("chat_id")) == bot.sendHeldChat) {
+						bot.sendArrived.countDown();
+						try { held.await(30, TimeUnit.SECONDS); }
+						catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+					}
 					if (bot.failSendChats.contains(Long.parseLong(form.get("chat_id")))) {
 						bot.failedSends.incrementAndGet();
 						reply(ex, 503, error(503, "Injected send failure"));
