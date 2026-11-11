@@ -343,11 +343,13 @@ public class RequestContext {
 	/**
 	 * Whether this request acts with the authority of the namespace it acts in:
 	 * always, unless it acts with a separate authority from another namespace
-	 * ({@link #withAuthorityOf}). State a namespace keeps with no capability
+	 * ({@link #withAuthorityOf}), or an MCP token narrows it, since no cap can
+	 * name such state to bound it. State a namespace keeps with no capability
 	 * resource of its own, such as a Python instance or a dictation, is
 	 * reachable only so.
 	 */
 	public boolean actsWithNamespaceAuthority() {
+		if (!getTokens().isEmpty()) return false;
 		return rights == null || java.util.Objects.equals(getUserDID(), rights.getUserDID());
 	}
 
@@ -401,7 +403,46 @@ public class RequestContext {
 			return new RequestContext(authority, executionScope, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, cycle, sessionDelivery, authentication, scopeSource, rights.narrowedBy(bound, boundOwner));
 		}
 		AString owner = getUserDID();
-		return readingScope(resource -> CapabilityChecker.intersect(scopeFor(resource), owner, bound.read(resource), boundOwner));
+		ScopeSource narrowed = resource -> CapabilityChecker.intersect(scopeFor(resource), owner, bound.read(resource), boundOwner);
+		AVector<ACell> tokens = getTokens();
+		return readingScope(tokens.isEmpty() ? narrowed : new TokenScope(narrowed, tokens));
+	}
+
+	/**
+	 * A scope narrowed by MCP tokens: what it reads, and the tokens narrowing
+	 * it, outermost first, each as its reference ({@code {owner, name, id}}).
+	 * The tokens go wherever the scope does, so work the request keeps or
+	 * creates can record what narrowed it ({@link #getTokens}).
+	 */
+	private record TokenScope(ScopeSource scope, AVector<ACell> tokens) implements ScopeSource {
+		@Override
+		public AVector<ACell> read(AString resource) {
+			return scope.read(resource);
+		}
+	}
+
+	/**
+	 * This context with the authority it acts with narrowed further by an MCP
+	 * token: its caps, read at each point of action, whose bare paths are
+	 * {@code capsOwner}'s. The token's reference joins {@link #getTokens}. Only
+	 * the venue narrows a request by a token ({@link Engine#tokenContext}).
+	 */
+	RequestContext withToken(AMap<AString, ACell> reference, ScopeSource caps, AString capsOwner) {
+		if (rights != null) {
+			return new RequestContext(authority, executionScope, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, cycle, sessionDelivery, authentication, scopeSource, rights.withToken(reference, caps, capsOwner));
+		}
+		AString owner = getUserDID();
+		ScopeSource narrowed = resource -> CapabilityChecker.intersect(scopeFor(resource), owner, caps.read(resource), capsOwner);
+		return readingScope(new TokenScope(narrowed, getTokens().conj(reference)));
+	}
+
+	/**
+	 * The MCP tokens narrowing the authority this request acts with, outermost
+	 * first, each as its reference; empty when no token narrows it.
+	 */
+	public AVector<ACell> getTokens() {
+		ScopeSource source = (rights != null) ? rights.scopeSource : scopeSource;
+		return (source instanceof TokenScope narrowed) ? narrowed.tokens() : Vectors.empty();
 	}
 
 	/**

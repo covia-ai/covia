@@ -1,0 +1,23 @@
+{
+	"name": "MCP Delete Token",
+	"description": "Deletes one of your MCP tokens: its bearer stops working, and work it started, schedules it made and agents it created hold nothing more through it. Needs the mcp/token ability on x/mcp/tokens/<name>.",
+	"dateCreated": "2026-11-11T00:00:00Z",
+	"operation": {
+		"adapter": "mcp:token:delete",
+		"readOnly": false,
+		"input": {
+			"type": "object",
+			"properties": {
+				"name": { "type": "string", "description": "The token's name" }
+			},
+			"required": ["name"]
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"name": { "type": "string" },
+				"deleted": { "type": "boolean" }
+			}
+		}
+	}
+}

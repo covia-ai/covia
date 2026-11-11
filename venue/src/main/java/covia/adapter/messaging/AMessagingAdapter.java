@@ -71,6 +71,8 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 	public static final String FOREIGN_PRINCIPAL = "a bot's principal must be its user or one of that user's agents, not %s";
 	public static final String SEPARATE_AUTHORITY_CREATOR = "a bot acts as its creator, so a request acting with "
 		+ "another principal's authority cannot create one";
+	public static final String TOKEN_CREATOR = "a bot acts as its creator with all of its authority, so a request "
+		+ "through an MCP token, which holds less, cannot create one";
 	/** Creating or deleting a bot while its adapter's bots are stopped; the provider follows. */
 	public static final String NOT_RUNNING = "The %s adapter is not running";
 
@@ -367,6 +369,7 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 		// The bot identifies its senders as exactly its creator: an agent as itself, never its owner.
 		// It then acts as that creator, so it cannot record one whose authority was another's.
 		if (ctx.hasSeparateAuthority()) throw new AuthException(SEPARATE_AUTHORITY_CREATOR);
+		if (!ctx.getTokens().isEmpty()) throw new AuthException(TOKEN_CREATOR);
 		AString principal = ctx.getCallerDID();
 		if (!owner.equals(Principals.userOf(principal))) throw new AuthException(FOREIGN_PRINCIPAL.formatted(principal));
 		boolean own = owner.equals(principal);

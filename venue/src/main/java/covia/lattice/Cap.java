@@ -54,7 +54,8 @@ public final class Cap extends ALatticeComponent<AMap<AString, ACell>>
 	/** Why a capability is malformed: it carries a caveat Covia does not enforce; the caveat follows. */
 	public static final String UNKNOWN_CAVEAT = "Unknown caveat (only gate and url are enforced): ";
 
-	Cap(AForkableCursor<AMap<AString, ACell>> cursor) {
+	/** A capability over {@code cursor}, for a domain component that holds one. */
+	public Cap(AForkableCursor<AMap<AString, ACell>> cursor) {
 		super(cursor);
 	}
 

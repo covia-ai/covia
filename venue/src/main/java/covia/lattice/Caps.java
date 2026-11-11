@@ -44,7 +44,8 @@ public final class Caps extends ALatticeComponent<AVector<ACell>>
 	/** Why caps from outside are refused: an entry is malformed; its index and why follow. */
 	public static final String MALFORMED_ENTRY = "caps[%d] is malformed: %s";
 
-	Caps(AForkableCursor<AVector<ACell>> cursor) {
+	/** Caps over {@code cursor}, for a domain component that holds them. */
+	public Caps(AForkableCursor<AVector<ACell>> cursor) {
 		super(cursor);
 	}
 

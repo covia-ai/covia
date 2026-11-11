@@ -375,11 +375,13 @@ public class AgentAdapter extends AAdapter {
 	/**
 	 * The controller of an agent {@code ctx} creates or forks: the one the input
 	 * names, else the principal whose authority the request acts with
-	 * ({@link Engine#actingPrincipal}).
+	 * ({@link Engine#actingPrincipal}); either narrowed by the MCP token
+	 * narrowing the request, if any, so the agent never exceeds it.
 	 */
-	private AString newController(RequestContext ctx, ACell input) {
+	private Engine.Source newController(RequestContext ctx, ACell input) {
 		AString named = namedController(ctx, input);
-		return (named != null) ? named : Engine.actingPrincipal(ctx);
+		Engine.Source acting = Engine.actingSource(ctx);
+		return (named != null) ? new Engine.Source(named, acting.token()) : acting;
 	}
 
 	/**
@@ -392,11 +394,12 @@ public class AgentAdapter extends AAdapter {
 	 *
 	 * @param configuring whether the change sets the agent's config or controller
 	 */
-	private void requireController(RequestContext ctx, AgentTarget target, AString controller, boolean configuring) {
-		if (!configuring && (controller == null || controller.equals(target.ownerDID()))) return;
-		AString held = (controller != null) ? controller : target.ownerDID();
+	private void requireController(RequestContext ctx, AgentTarget target, Engine.Source controller, boolean configuring) {
+		AString principal = (controller == null) ? null : controller.principal();
+		if (!configuring && (principal == null || principal.equals(target.ownerDID()))) return;
+		Engine.Source held = (principal != null) ? controller : new Engine.Source(target.ownerDID(), null);
 		if (!engine.holdsAuthorityOf(ctx, held)) {
-			throw new AuthException(Engine.NOT_CONTROLLERS.formatted(target.address(), held));
+			throw new AuthException(Engine.NOT_CONTROLLERS.formatted(target.address(), held.principal()));
 		}
 	}
 
@@ -919,7 +922,7 @@ public class AgentAdapter extends AAdapter {
 				+ "; update it, or delete it with remove=true before creating it again");
 			return;
 		}
-		AString controller = newController(ctx, input);
+		Engine.Source controller = newController(ctx, input);
 
 		AMap<AString, ACell> supplied = RT.ensureMap(input);
 		ACell facet = supplied == null ? null : supplied.get(Agent.KEY_AGENT);
@@ -2260,6 +2263,7 @@ public class AgentAdapter extends AAdapter {
 			Fields.CONFIG, shownConfig(record.get(Agent.KEY_CONFIG))));
 
 		if (record.containsKey(Agent.KEY_AGENT)) summary = summary.assoc(Agent.KEY_AGENT, record.get(Agent.KEY_AGENT));
+		if (agent.getControllerToken() != null) summary = summary.assoc(Fields.CONTROLLER_TOKEN, agent.getControllerToken());
 		if (timeline != null) summary = summary.assoc(Strings.intern("timelineLength"), CVMLong.create(timeline.count()));
 		if (tasks != null) summary = summary.assoc(Strings.intern("tasks"), CVMLong.create(tasks.count()));
 		ACell error = record.get(Agent.KEY_ERROR);
@@ -2467,6 +2471,7 @@ public class AgentAdapter extends AAdapter {
 						Fields.CONTROLLER, listed.getController(),
 						Fields.AWAITING, awaitingSummary(record),
 						Fields.TASKS, CVMLong.create(taskCount));
+					if (listed.getControllerToken() != null) summary = summary.assoc(Fields.CONTROLLER_TOKEN, listed.getControllerToken());
 					ACell error = record.get(Agent.KEY_ERROR);
 					if (error != null) summary = summary.assoc(Fields.ERROR, error);
 					ACell suspension = record.get(Agent.KEY_SUSPENSION);
@@ -3074,7 +3079,8 @@ public class AgentAdapter extends AAdapter {
 		// record holds then, so a concurrent change is never overwritten and a
 		// change of controller is never bypassed.
 		AMap<AString, ACell> changes = resolved;
-		AString controller = namedController(ctx, input);
+		AString named = namedController(ctx, input);
+		Engine.Source controller = (named == null) ? null : new Engine.Source(named, Engine.actingSource(ctx).token());
 		AMap<AString, ACell> newConfig;
 		try {
 			boolean configuring = (changes != null) || (controller != null);

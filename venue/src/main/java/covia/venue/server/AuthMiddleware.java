@@ -7,11 +7,14 @@ import java.util.Set;
 import java.util.concurrent.Semaphore;
 
 import convex.core.data.ACell;
+import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.lang.RT;
+import covia.adapter.McpToken;
+import covia.adapter.McpTokens;
 import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.exception.ConfigurationException;
@@ -50,6 +53,11 @@ public class AuthMiddleware {
 
 	static final String AUTHENTICATED_IDENTITY_ATTR = "authenticatedIdentity";
 	static final String CALLER_DID_ATTR = "callerDID";
+	/** The reference of the MCP token a request presented, when it presented one. */
+	static final String MCP_TOKEN_ATTR = "mcpToken";
+
+	/** Why a presented MCP token is refused: unknown, deleted, expired or replaced alike. */
+	public static final String MCP_TOKEN_NOT_RECOGNISED = "MCP token not recognised";
 	// Per-instance state. Was static, which made running multiple VenueServers
 	// in the same JVM (production multi-tenant, parallel test classes) racy:
 	// every register() call would trample the previous instance's fields,
@@ -163,7 +171,7 @@ public class AuthMiddleware {
 		String resourceMetadata = ACoviaAPI.getExternalBaseUrl(ctx, null, engine.config().getTrustedProxies())
 			+ "/.well-known/oauth-protected-resource/mcp";
 		extractIdentity(ctx, !required && publicAccessEnabled, resourceMetadata,
-			true);
+			true, true);
 		AString venueUserDID = getVenueUserDID(ctx);
 		if (venueUserDID == null) return; // authentication already rejected the request
 		if (!allowedDids.isEmpty() && !allowedDids.contains(venueUserDID.toString())) {
@@ -193,6 +201,16 @@ public class AuthMiddleware {
 
 	private void extractIdentity(Context ctx, boolean allowPublic,
 			String resourceMetadata, boolean admitUser) {
+		extractIdentity(ctx, allowPublic, resourceMetadata, admitUser, false);
+	}
+
+	/**
+	 * As above; with {@code mcpTokens}, an MCP token's bearer
+	 * ({@link McpTokens#isBearer}) is recognised by the venue's token store
+	 * instead of venue authentication ({@link #authenticateMcpToken}).
+	 */
+	private void extractIdentity(Context ctx, boolean allowPublic,
+			String resourceMetadata, boolean admitUser, boolean mcpTokens) {
 		String auth = ctx.header("Authorization");
 		if (auth == null || !auth.startsWith("Bearer ")) {
 			if (!allowPublic) {
@@ -234,7 +252,9 @@ public class AuthMiddleware {
 			}
 		}
 		try {
-			AString venueUserDID = authenticator.authenticate(ctx, Strings.create(token));
+			AString venueUserDID = (mcpTokens && McpTokens.isBearer(token))
+				? authenticateMcpToken(ctx, token)
+				: authenticator.authenticate(ctx, Strings.create(token));
 			audit.event(Audit.AUTH_SUCCESS, Audit.K_DID, venueUserDID,
 				Audit.K_IDENTITY, getAuthenticatedIdentity(ctx), Audit.K_IP, ip);
 			if (admitUser && !admitAuthenticated(ctx, venueUserDID)) return;
@@ -247,6 +267,30 @@ public class AuthMiddleware {
 		} finally {
 			if (slot != null) slot.release();
 		}
+	}
+
+	/**
+	 * Recognises an MCP token's bearer (MCP_TOKENS.md): the token must stand,
+	 * so be neither deleted, expired nor replaced. The request's caller is the
+	 * token's issuer and its venue user the token's namespace; what it may do
+	 * is the token's context ({@link #callerContext}).
+	 *
+	 * @return the venue user, the token's namespace
+	 * @throws AuthException when no standing token has this bearer
+	 */
+	private AString authenticateMcpToken(Context ctx, String bearer) {
+		McpTokens tokens = engine.mcpTokens();
+		AMap<AString, ACell> reference = (tokens == null) ? null : tokens.lookup(bearer);
+		McpToken token = engine.resolveToken(reference);
+		if (token == null) throw new AuthException(MCP_TOKEN_NOT_RECOGNISED);
+		ctx.attribute(MCP_TOKEN_ATTR, reference);
+		setRequestIdentity(ctx, token.issuer(), token.owner());
+		return token.owner();
+	}
+
+	/** The reference of the MCP token the request presented, or null when it presented none. */
+	public static AMap<AString, ACell> getMcpToken(Context ctx) {
+		return (ctx == null) ? null : ctx.attribute(MCP_TOKEN_ATTR);
 	}
 
 	private void rejectTooMany(Context ctx, long retryAfterSeconds, String message) {
@@ -334,7 +378,8 @@ public class AuthMiddleware {
 		if (caller == null) return RequestContext.ANONYMOUS;
 		Engine engine = VenueAuthenticator.engineOf(ctx);
 		if (engine == null) throw new ConfigurationException(NO_VENUE);
-		return engine.context(caller);
+		AMap<AString, ACell> token = getMcpToken(ctx);
+		return (token != null) ? engine.tokenContext(token) : engine.context(caller);
 	}
 
 	/** Why a request's caller has no context: no venue's middleware or authenticator bound it. */

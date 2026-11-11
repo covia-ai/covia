@@ -1,0 +1,36 @@
+{
+	"name": "MCP Update Token",
+	"description": "Changes one of your MCP tokens: its tools, its caps or its expiry, or gives it a new bearer with rotate (the old one stops working at once). What you leave out stays as it is. Emptying its tools or caps revokes it. Changes take effect at the next check, including on work the token already started. Needs the mcp/token ability on x/mcp/tokens/<name>, and the authority the token was created with, so a request through a token can never widen it.",
+	"dateCreated": "2026-11-11T00:00:00Z",
+	"operation": {
+		"adapter": "mcp:token:update",
+		"readOnly": false,
+		"secretFields": ["token"],
+		"input": {
+			"type": "object",
+			"properties": {
+				"name": { "type": "string", "description": "The token's name" },
+				"tools": { "type": "array", "description": "The tools it now offers, as for v/ops/mcp/create-token", "items": {} },
+				"caps": {
+					"description": "Its caps now: an array of {with, can} capabilities, or \"unrestricted\"",
+					"oneOf": [ { "type": "array", "items": { "type": "object" } }, { "type": "string", "enum": ["unrestricted"] } ]
+				},
+				"expires": { "type": "integer", "description": "When it stops working, in milliseconds since the epoch" },
+				"rotate": { "type": "boolean", "description": "Issue a new bearer, returned in this result; the old one stops working" }
+			},
+			"required": ["name"]
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"name": { "type": "string" },
+				"token": { "type": "string", "description": "The new bearer, only when rotated" },
+				"issuer": { "type": "string" },
+				"tools": { "type": "array" },
+				"caps": {},
+				"expires": { "type": "integer" },
+				"created": { "type": "integer" }
+			}
+		}
+	}
+}

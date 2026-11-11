@@ -380,7 +380,7 @@ public final class ToolPalette {
 	 * — never fetched from another — or null when none is held here. Read
 	 * authority is checked as when the entry is bound.
 	 */
-	static String localToolName(Engine engine, RequestContext ctx, ACell entry) {
+	public static String localToolName(Engine engine, RequestContext ctx, ACell entry) {
 		AString[] parsed = parseConfigToolEntry(entry);
 		if (parsed == null) return null;
 		requireToolMetadataRead(engine, ctx, parsed[0]);

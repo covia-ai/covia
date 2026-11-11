@@ -230,12 +230,12 @@ public class User extends ALatticeComponent<ACell> implements TransactionalCompo
 
 	/**
 	 * Creates an agent under {@code controller}, the principal whose authority
-	 * its harness runs under (null for this user).
+	 * its harness runs under and the MCP token narrowing it (null for this user).
 	 *
 	 * @return the new agent, or null if the id already existed
 	 */
 	public Agent createAgent(AString agentId, AMap<AString, ACell> config,
-			ACell initialState, AMap<AString, ACell> definition, AString controller) {
+			ACell initialState, AMap<AString, ACell> definition, Engine.Source controller) {
 		AForkableCursor<ACell> c = agentStorage(agentId);
 		Agent state = new Agent(context, c, did, agentId);
 		return state.initialiseIfAbsent(config, initialState, definition, controller) ? state : null;
@@ -259,10 +259,11 @@ public class User extends ALatticeComponent<ACell> implements TransactionalCompo
 
 	/**
 	 * As above, under {@code controller}: the principal whose authority the
-	 * fork's harness runs under, or null for this user.
+	 * fork's harness runs under and the MCP token narrowing it, or null for
+	 * this user.
 	 */
 	public Agent forkAgent(AString agentId, AMap<AString, ACell> config,
-			ACell state, convex.core.data.AVector<ACell> timeline, AString controller) {
+			ACell state, convex.core.data.AVector<ACell> timeline, Engine.Source controller) {
 		AForkableCursor<ACell> c = agentStorage(agentId);
 		Agent fork = new Agent(context, c, did, agentId);
 		return fork.initialiseFromForkIfAbsent(config, state, timeline, controller) ? fork : null;

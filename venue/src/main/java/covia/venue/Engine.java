@@ -70,6 +70,8 @@ import covia.adapter.JVMAdapter;
 import covia.adapter.SchemaAdapter;
 import covia.adapter.LangChainAdapter;
 import covia.adapter.MCPAdapter;
+import covia.adapter.McpToken;
+import covia.adapter.McpTokens;
 import covia.adapter.Orchestrator;
 import covia.adapter.SecretAdapter;
 import covia.adapter.DLFSAdapter;
@@ -3889,6 +3891,9 @@ public class Engine {
 	 * selects only the namespace: the invoked operation and every point of action
 	 * must still be covered independently.</p>
 	 */
+	/** Why a request an MCP token narrows may not act for another user. */
+	public static final String SUDO_WITH_TOKEN = "A request through an MCP token cannot act for another user (user/sudo)";
+
 	public RequestContext sudoContext(RequestContext ctx, AString userDID) {
 		if (ctx == null || ctx.getCallerDID() == null
 				|| isPublicPrincipal(ctx.getCallerDID())) {
@@ -3897,6 +3902,9 @@ public class Engine {
 		if (userDID == null) throw new InvalidInputException("Target user DID is required");
 		requireNotSubPrincipal(userDID);
 		if (userDID.equals(ctx.getUserDID())) return ctx;
+		// Acting for another user is bounded by that user's grants, not by a token's
+		// caps, so a request a token narrows never takes that step.
+		if (!ctx.getTokens().isEmpty()) throw new AuthException(SUDO_WITH_TOKEN);
 		if (!crossUserAllows(ctx, userDID, Abilities.USER_SUDO)) {
 			throw new AuthException("Sudo denied: requires user/sudo on " + userDID
 				+ " from that user");
@@ -4271,9 +4279,9 @@ public class Engine {
 		AString controllerOwner = covia.grid.Principals.isAgentDID(controller)
 			? covia.grid.Principals.userOf(controller) : controller;
 		AString controllerAgent = agentIdIn(controllerOwner, controller);
-		RequestContext bound = (controllerAgent != null)
+		RequestContext bound = narrowedByToken((controllerAgent != null)
 			? agentContext(controllerOwner, controllerAgent, chain)
-			: context(controllerOwner, controller);
+			: context(controllerOwner, controller), (state == null) ? null : state.getControllerToken());
 		if (controllerOwner.equals(owner) && !bound.hasSeparateAuthority()) {
 			return agent.readingScope(resource -> withControl(
 				CapabilityChecker.intersect(agentScope(owner, agentId), owner, bound.scopeFor(resource), owner),
@@ -4379,18 +4387,24 @@ public class Engine {
 	}
 
 	/**
-	 * What a stored context keeps of {@code ctx}'s separate authority
-	 * ({@link RequestContext#withAuthorityOf}), beside its caller, owner and
-	 * proofs, so that work continuing later acts with the same authority: its
-	 * principal as {@link Fields#CALLER}, namespace as {@link Fields#OWNER} and
-	 * presented {@link Fields#PROOFS}. Null when it acts with its caller's own.
+	 * What a stored context keeps of the authority {@code ctx} acts with,
+	 * beside its caller, owner and proofs, so that work continuing later acts
+	 * with the same authority: a separate authority
+	 * ({@link RequestContext#withAuthorityOf}) as its principal
+	 * ({@link Fields#CALLER}), namespace ({@link Fields#OWNER}) and presented
+	 * {@link Fields#PROOFS}, and the MCP token narrowing it as
+	 * {@link Fields#MCP_TOKEN}. Null when it acts with its caller's own,
+	 * unnarrowed.
 	 */
 	public static AMap<AString, ACell> keptAuthority(RequestContext ctx) {
-		if (ctx == null || !ctx.hasSeparateAuthority()) return null;
+		if (ctx == null) return null;
+		AMap<AString, ACell> token = actingSource(ctx).token();
+		if (!ctx.hasSeparateAuthority()) return (token == null) ? null : Maps.of(Fields.MCP_TOKEN, token);
 		RequestContext authority = ctx.authorityContext();
 		AMap<AString, ACell> kept = Attribution.attribute(Maps.empty(), authority.getCallerDID(), authority.getUserDID());
 		AVector<ACell> proofs = authority.getProofs();
-		return (proofs == null || proofs.isEmpty()) ? kept : kept.assoc(Fields.PROOFS, proofs);
+		if (proofs != null && !proofs.isEmpty()) kept = kept.assoc(Fields.PROOFS, proofs);
+		return (token == null) ? kept : kept.assoc(Fields.MCP_TOKEN, token);
 	}
 
 	/** Why a request may not change an agent another principal controls; the agent and its controller follow. */
@@ -4418,6 +4432,45 @@ public class Engine {
 	 * controller's authority without holding it.</p>
 	 */
 	public boolean holdsAuthorityOf(RequestContext ctx, AString principal) {
+		return holdsAuthorityOf(ctx, new Source(principal, null));
+	}
+
+	/**
+	 * A source of authority: a principal, and the MCP token narrowing it, if
+	 * any (MCP_TOKENS.md). An agent's controller is one, and so is what an MCP
+	 * token's request acts with. A token stands for the chain of tokens whose
+	 * requests created it ({@link #tokenChain}).
+	 *
+	 * @param principal the principal whose authority it is
+	 * @param token the innermost token narrowing it, as its reference, or null
+	 */
+	public record Source(AString principal, AMap<AString, ACell> token) {}
+
+	/**
+	 * Whether {@code ctx} acts with all of {@code source}'s authority, as
+	 * changing what that source created needs: it holds the principal's whole
+	 * authority ({@link #holdsAuthorityOf(RequestContext, AString)}, ignoring
+	 * tokens), and the MCP tokens narrowing it, once those it shares with the
+	 * source's chain are set aside, are all unrestricted. So a request through
+	 * a token holds what that token's requests created, but not the token
+	 * itself, nor what its issuer created directly.
+	 */
+	public boolean holdsAuthorityOf(RequestContext ctx, Source source) {
+		if (ctx == null || source == null || !holdsWholeAuthorityOf(ctx, source.principal())) return false;
+		AVector<ACell> held = ctx.getTokens();
+		if (held.isEmpty()) return true;
+		AVector<ACell> needed = (source.token() == null) ? Vectors.empty() : tokenChain(source.token());
+		long shared = 0;
+		while (shared < held.count() && shared < needed.count() && held.get(shared).equals(needed.get(shared))) shared++;
+		for (long i = shared; i < held.count(); i++) {
+			McpToken token = resolveToken(RT.ensureMap(held.get(i)));
+			if (token == null || !token.caps().isUnrestricted()) return false;
+		}
+		return true;
+	}
+
+	/** {@link #holdsAuthorityOf(RequestContext, AString)} before any MCP token narrowing is considered. */
+	private boolean holdsWholeAuthorityOf(RequestContext ctx, AString principal) {
 		if (ctx == null || principal == null) return false;
 		AString caller = ctx.getCallerDID();
 		if (agentIdIn(ctx.getUserDID(), caller) != null) {
@@ -4427,6 +4480,17 @@ public class Engine {
 		RequestContext authority = ctx.authorityContext();
 		if (isRootOf(authority.getCallerDID(), principal)) return true;
 		return authority.getCaps() == null && isRootOf(authority.getUserDID(), principal);
+	}
+
+	/**
+	 * The source of authority {@code ctx} acts with, which what it creates
+	 * (an agent's controller, an MCP token) takes as its own: its acting
+	 * principal ({@link #actingPrincipal}) and the innermost MCP token
+	 * narrowing it, if any.
+	 */
+	public static Source actingSource(RequestContext ctx) {
+		AVector<ACell> tokens = ctx.getTokens();
+		return new Source(actingPrincipal(ctx), tokens.isEmpty() ? null : RT.ensureMap(tokens.get(tokens.count() - 1)));
 	}
 
 	/**
@@ -4465,7 +4529,8 @@ public class Engine {
 		AString controller = (agent == null) ? owner : agent.getController();
 		AString controllerOwner = covia.grid.Principals.isAgentDID(controller)
 			? covia.grid.Principals.userOf(controller) : controller;
-		return RequestContext.ofAgent(owner, agentId).withAuthorityOf(context(controllerOwner, controller));
+		return RequestContext.ofAgent(owner, agentId).withAuthorityOf(
+			narrowedByToken(context(controllerOwner, controller), (agent == null) ? null : agent.getControllerToken()));
 	}
 
 	/**
@@ -4480,9 +4545,76 @@ public class Engine {
 			AMap<AString, ACell> authority) {
 		RequestContext ctx = context(owner, principal, proofs);
 		if (authority == null) return ctx;
+		AMap<AString, ACell> token = RT.ensureMap(authority.get(Fields.MCP_TOKEN));
+		if (Attribution.caller(authority) == null) return narrowedByToken(ctx, token);
 		RequestContext held = context(Attribution.owner(authority), Attribution.caller(authority),
 			RT.ensureVector(authority.get(Fields.PROOFS)));
-		return ctx.withAuthorityOf(held);
+		return ctx.withAuthorityOf(narrowedByToken(held, token));
+	}
+
+	// ========== MCP tokens (MCP_TOKENS.md) ==========
+
+	/** Why a request an MCP token narrowed may not go on; the token's name follows. */
+	public static final String TOKEN_NOT_STANDING = "The MCP token no longer stands (deleted, expired or replaced): ";
+
+	/** Furthest a chain of tokens created by tokens' requests is followed. */
+	private static final int MAX_TOKEN_CHAIN = 16;
+
+	/** The venue's MCP tokens, or null while the mcp adapter is not running. */
+	public McpTokens mcpTokens() {
+		return (getAdapter("mcp") instanceof MCPAdapter mcp) ? mcp.tokens() : null;
+	}
+
+	/** The token {@code reference} names, while it stands; otherwise null. */
+	public McpToken resolveToken(AMap<AString, ACell> reference) {
+		McpTokens tokens = mcpTokens();
+		return (tokens == null || reference == null) ? null : tokens.resolve(reference, currentTimestamp().longValue());
+	}
+
+	/**
+	 * The context a request presenting MCP token {@code reference} acts under
+	 * now: its issuer as that principal acts in the token's namespace
+	 * ({@link #context(AString, AString)}), narrowed by the caps of every token
+	 * on its chain ({@link #tokenChain}), each read at each point of action. A
+	 * token that later stops standing narrows to nothing.
+	 *
+	 * @throws AuthException when the token does not stand now, or its issuer could not act
+	 */
+	public RequestContext tokenContext(AMap<AString, ACell> reference) {
+		McpToken token = resolveToken(reference);
+		if (token == null) throw new AuthException(TOKEN_NOT_STANDING + RT.getIn(reference, Fields.NAME));
+		return narrowedByToken(context(token.owner(), token.issuer()), reference);
+	}
+
+	/**
+	 * The tokens {@code reference} stands for, outermost first: the token,
+	 * after the token whose request created it, and so on back. A link that no
+	 * longer resolves ends the chain there; it stays on the chain, where it
+	 * narrows to nothing.
+	 */
+	public AVector<ACell> tokenChain(AMap<AString, ACell> reference) {
+		java.util.ArrayDeque<ACell> chain = new java.util.ArrayDeque<>();
+		AMap<AString, ACell> at = reference;
+		while (at != null && chain.size() < MAX_TOKEN_CHAIN && !chain.contains(at)) {
+			chain.addFirst(at);
+			McpToken token = resolveToken(at);
+			at = (token == null) ? null : token.source();
+		}
+		return Vectors.create(chain);
+	}
+
+	/** {@code ctx} narrowed by the chain {@code token} stands for; unchanged when there is no token. */
+	private RequestContext narrowedByToken(RequestContext ctx, AMap<AString, ACell> token) {
+		if (token == null) return ctx;
+		AString owner = RT.ensureString(token.get(Fields.OWNER));
+		for (ACell link : tokenChain(token)) {
+			AMap<AString, ACell> reference = RT.ensureMap(link);
+			ctx = ctx.withToken(reference, resource -> {
+				McpToken current = resolveToken(reference);
+				return (current == null) ? Vectors.empty() : current.caps().scope();
+			}, owner);
+		}
+		return ctx;
 	}
 
 	/**
@@ -4499,7 +4631,9 @@ public class Engine {
 		AString caller = ctx.getCallerDID();
 		AString agentDID = (owner == null || agentId == null) ? null
 			: covia.grid.Principals.agentDID(owner, agentId);
-		if (agentDID == null || !(agentDID.equals(caller) || owner.equals(caller))) {
+		// Its own run, or its owner with all of the owner's authority: a request a
+		// token narrows may not make an agent act with the agent's own authority
+		if (agentDID == null || !(agentDID.equals(caller) || (owner.equals(caller) && holdsAuthorityOf(ctx, owner)))) {
 			throw new AuthException(NOT_AGENTS_STEP.formatted(caller, agentId));
 		}
 		if (getAgent(owner, agentId) == null) throw new AuthException(NO_SUCH_AGENT.formatted(agentDID));
@@ -4597,8 +4731,24 @@ public class Engine {
 		if (ctx.hasSeparateAuthority()) {
 			return authorityCovers(ctx.authorityContext(), ctx.inNamespace(resource), ability, destination);
 		}
-		if (isAnothers(ctx, resource)) return crossUserAllows(ctx, resource, ability, destination);
+		if (isAnothers(ctx, resource)) return crossUserAllows(ctx, resource, ability, destination) && tokensCover(ctx, resource, ability, destination);
 		return scopeOrHeldCovers(ctx, resource, ability, destination);
+	}
+
+	/**
+	 * Whether every MCP token narrowing the request covers
+	 * {@code (resource, ability)}: what it holds beyond its scope (a proof, an
+	 * admission, the public scope) reaches only as far as its tokens' caps do.
+	 * True when no token narrows it.
+	 */
+	private boolean tokensCover(RequestContext ctx, AString resource, AString ability, AString destination) {
+		for (ACell link : ctx.getTokens()) {
+			McpToken token = resolveToken(RT.ensureMap(link));
+			if (token == null) return false;
+			AVector<ACell> caps = token.caps().scope();
+			if (caps != null && ctx.denialUnder(caps, resource, ability, token.owner(), destination) != null) return false;
+		}
+		return true;
 	}
 
 	/** Whether {@code resource} is another identity's that this venue hosts, and not in the namespace of an agent the request controls. */
@@ -4615,7 +4765,7 @@ public class Engine {
 	private boolean scopeOrHeldCovers(RequestContext ctx, AString resource, AString ability, AString destination) {
 		AVector<ACell> scope = ctx.scopeFor(resource);
 		if (scope == null) return true;
-		if (crossUserAllows(ctx, resource, ability, destination)) return true;
+		if (crossUserAllows(ctx, resource, ability, destination) && tokensCover(ctx, resource, ability, destination)) return true;
 		return ctx.denialUnder(scope, resource, ability, ctx.getUserDID(), destination) == null;
 	}
 
@@ -4702,11 +4852,12 @@ public class Engine {
 
 	/**
 	 * Whether the request is the venue acting directly as itself: the venue's
-	 * own DID, not one of its agents. No delegation makes another caller this.
+	 * own DID, not one of its agents, and not narrowed by an MCP token. No
+	 * delegation makes another caller this.
 	 */
 	public boolean isDirectVenue(RequestContext ctx) {
 		return ctx != null && getDIDString().equals(ctx.getCallerDID())
-			&& ctx.getExecutionScope().agentId() == null;
+			&& ctx.getExecutionScope().agentId() == null && ctx.getTokens().isEmpty();
 	}
 
 	/** Opening of every {@link #requireVenueAuthority} denial. */

@@ -202,8 +202,10 @@ public final class UserExports {
 
 	/**
 	 * {@code state} with each agent's controller kept only where it is
-	 * {@code did} itself or one of its agents. A controller anywhere else
-	 * authorised none of this copy, so the agent returns to its owner's control.
+	 * {@code did} itself or one of its agents, and the MCP token narrowing it
+	 * only where that token is {@code did}'s. A controller or token anywhere
+	 * else authorised none of this copy, so the agent returns to its owner's
+	 * control.
 	 */
 	@SuppressWarnings("unchecked")
 	private static AMap<AString, ACell> ownControllers(AString did, AMap<AString, ACell> state) {
@@ -212,10 +214,17 @@ public final class UserExports {
 		AMap<AString, ACell> kept = agents;
 		for (long i = 0; i < agents.count(); i++) {
 			var entry = agents.entryAt(i);
-			if (!(entry.getValue() instanceof AMap<?, ?> rec)) continue;
+			if (!(entry.getValue() instanceof AMap<?, ?> found2)) continue;
+			AMap<AString, ACell> rec = (AMap<AString, ACell>) found2;
+			AMap<AString, ACell> own = rec;
 			AString controller = RT.ensureString(rec.get(Agent.KEY_CONTROLLER));
-			if (controller == null || controller.equals(did) || Engine.agentIdIn(did, controller) != null) continue;
-			kept = kept.assoc(entry.getKey(), ((AMap<AString, ACell>) rec).dissoc(Agent.KEY_CONTROLLER));
+			boolean foreignController = controller != null && !controller.equals(did) && Engine.agentIdIn(did, controller) == null;
+			if (foreignController) own = own.dissoc(Agent.KEY_CONTROLLER);
+			AMap<AString, ACell> token = RT.ensureMap(rec.get(Agent.KEY_CONTROLLER_TOKEN));
+			if (token != null && (foreignController || !did.equals(token.get(Fields.OWNER)))) {
+				own = own.dissoc(Agent.KEY_CONTROLLER_TOKEN);
+			}
+			if (own != rec) kept = kept.assoc(entry.getKey(), own);
 		}
 		return (kept == agents) ? state : state.assoc(Namespace.G, kept);
 	}

@@ -409,7 +409,7 @@ public class MCP extends McpServer {
 			"required", authRequired,
 			"scheme", "Bearer",
 			"bearer_token_profiles",
-				Vectors.of("ucan-jwt", "self-issued-did-jwt", "venue-session-jwt"),
+				Vectors.of("ucan-jwt", "self-issued-did-jwt", "venue-session-jwt", "mcp-token"),
 			"caller_identity", "DID",
 			"did_allowlist", !allowedDids.isEmpty(),
 			"protected_resource_metadata", protectedResourceMetadata(ctx)
@@ -430,6 +430,17 @@ public class MCP extends McpServer {
 	@Override
 	protected AMap<AString, ACell> listTools() {
 		AVector<AMap<AString, ACell>> toolsVector = Vectors.empty();
+		AMap<AString, ACell> token = AuthMiddleware.getMcpToken(McpServer.getCurrentContext());
+		if (token != null) {
+			for (var entry : tokenTools(token).entrySet()) {
+				TokenTool tool = entry.getValue();
+				AMap<AString, ACell> built = buildToolEntry(entry.getKey(), tool.operation().meta());
+				if (built == null) continue;
+				if (tool.description() != null) built = built.assoc(Fields.DESCRIPTION, tool.description());
+				toolsVector = toolsVector.conj(built.assoc(K_META, Maps.of(TOOL_OPERATION, tool.opRef())));
+			}
+			return Maps.of("tools", toolsVector);
+		}
 		for (var entry : registry().entrySet()) {
 			AString toolName = entry.getKey();
 			AString opRef = entry.getValue();
@@ -444,6 +455,41 @@ public class MCP extends McpServer {
 			}
 		}
 		return Maps.of("tools", toolsVector);
+	}
+
+	/** Why a request through an MCP token may not present UCANs. */
+	public static final String UCANS_WITH_TOKEN = "A request through an MCP token presents no UCANs: the token's caps are all it acts with";
+
+	/**
+	 * A tool an MCP token offers: its operation reference, the definition the
+	 * token's issuer reads for it, and the description it is given, if any.
+	 */
+	private record TokenTool(AString opRef, covia.grid.Operation operation, AString description) {}
+
+	/**
+	 * The tools MCP token {@code reference} offers, by MCP name, as an agent's
+	 * tool palette names them. Each definition is read with the issuer's
+	 * authority as it stands, as an agent's runtime reads its tools; a tool the
+	 * issuer can no longer read, or that no longer resolves, is left out. The
+	 * calls themselves act with the token's authority.
+	 */
+	private java.util.LinkedHashMap<AString, TokenTool> tokenTools(AMap<AString, ACell> reference) {
+		java.util.LinkedHashMap<AString, TokenTool> tools = new java.util.LinkedHashMap<>();
+		covia.adapter.McpToken token = engine().resolveToken(reference);
+		if (token == null) return tools;
+		RequestContext issuer = engine().context(token.owner(), token.issuer());
+		for (ACell entry : token.tools()) {
+			try {
+				AString[] parsed = covia.adapter.agent.ToolPalette.parseConfigToolEntry(entry);
+				String name = (parsed == null) ? null : covia.adapter.agent.ToolPalette.localToolName(engine(), issuer, entry);
+				if (name == null) continue;
+				covia.grid.Operation operation = engine().jobs().resolveOperation(parsed[0], issuer);
+				tools.putIfAbsent(Strings.create(name), new TokenTool(parsed[0], operation, parsed[2]));
+			} catch (RuntimeException e) {
+				log.debug("MCP token {} leaves out a tool it cannot offer now: {}", token.name(), e.getMessage());
+			}
+		}
+		return tools;
 	}
 
 	/**
@@ -620,8 +666,14 @@ public class MCP extends McpServer {
 		return ctx != null && AuthMiddleware.getAuthenticatedIdentity(ctx) != null;
 	}
 
-	/** The caller a request counts against: its DID if authenticated, else the one anonymous caller. */
+	/**
+	 * The caller a request counts against: the MCP token it presented, so two
+	 * tokens of one owner never share a limit or a session; else its DID if
+	 * authenticated; else the one anonymous caller.
+	 */
 	private static AString callerKey(Context ctx) {
+		AMap<AString, ACell> token = AuthMiddleware.getMcpToken(ctx);
+		if (token != null) return Strings.create("mcp-token " + token.get(Fields.ID));
 		AString did = authenticated(ctx) ? AuthMiddleware.getCallerDID(ctx) : null;
 		return (did != null) ? did : ANONYMOUS;
 	}
@@ -642,7 +694,11 @@ public class MCP extends McpServer {
 
 		try {
 			AString toolName = RT.getIn(params, Fields.NAME);
-			AString opRef = (toolName != null) ? registry().get(sanitiseToolName(toolName)) : null;
+			// A request through an MCP token reaches only the tools that token offers
+			AMap<AString, ACell> token = AuthMiddleware.getMcpToken(ctx);
+			TokenTool bound = (token == null || toolName == null) ? null : tokenTools(token).get(toolName);
+			AString opRef = (token != null) ? ((bound == null) ? null : bound.opRef())
+				: (toolName != null) ? registry().get(sanitiseToolName(toolName)) : null;
 			ACell arguments = RT.getIn(params, Fields.ARGUMENTS);
 			if (opRef != null) {
 				RequestContext rctx = AuthMiddleware.callerContext(ctx);
@@ -650,6 +706,7 @@ public class MCP extends McpServer {
 				// Authentication selected the caller before dispatch. The `ucans`
 				// argument carries additive grants only.
 				AVector<ACell> ucans = AuthMiddleware.bodyUcans(arguments);
+				if (token != null && ucans != null) return toolError(UCANS_WITH_TOKEN);
 				rctx = engine().withTransportGrants(rctx, ucans);
 				// `ucans` is transport authority, not operation input. Never let
 				// raw proof JWTs enter durable Job records, adapter logs, or agent
@@ -674,7 +731,9 @@ public class MCP extends McpServer {
 				String cancelKey = (requestId == null || ctx == null) ? null : cancelKey(caller, ctx, requestId);
 				JobManager.Run run = null;
 				try {
-					run = engine().jobs().startToolOperation(opRef, arguments, rctx);
+					run = (bound != null)
+						? engine().jobs().startToolOperation(opRef, bound.operation(), arguments, rctx)
+						: engine().jobs().startToolOperation(opRef, arguments, rctx);
 					if (cancelKey != null) cancellable.put(cancelKey, run.result());
 					return await(run, authenticated(ctx) ? toolCallTimeoutMs : anonymousToolCallTimeoutMs, stream);
 				} finally {
@@ -833,7 +892,7 @@ public class MCP extends McpServer {
 			sessions.put(session.id, session);
 			Context ctx = McpServer.getCurrentContext();
 			if (ctx != null) {
-				AString caller = AuthMiddleware.getCallerDID(ctx);
+				AString caller = sessionOwner(ctx);
 				if (caller != null) sessionOwners.put(session.id, caller);
 				ctx.header(HEADER_SESSION_ID, session.id);
 			}
@@ -978,12 +1037,18 @@ public class MCP extends McpServer {
 		ctx.status(200);
 	}
 
-	/** True only when the current authenticated/public principal owns a session. */
+	/** True only when the current authenticated/public principal, or MCP token, owns a session. */
 	private boolean sessionOwnedByCaller(Context ctx, String sessionId) {
 		if (sessionId == null) return false;
 		AString owner = sessionOwners.get(sessionId);
-		AString caller = AuthMiddleware.getCallerDID(ctx);
+		AString caller = sessionOwner(ctx);
 		return owner != null && owner.equals(caller);
+	}
+
+	/** Who owns the sessions a request opens: the MCP token it presented, else its caller. */
+	private static AString sessionOwner(Context ctx) {
+		AMap<AString, ACell> token = AuthMiddleware.getMcpToken(ctx);
+		return (token != null) ? callerKey(ctx) : AuthMiddleware.getCallerDID(ctx);
 	}
 
 	// ==================== Tool metadata helpers ====================
