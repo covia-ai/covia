@@ -278,7 +278,8 @@ public class UserAdapter extends AAdapter {
 		if (did == null) throw new AuthException("Authentication required");
 		did = requireDID(did);
 		boolean operator = engine.hasVenueAuthority(ctx, USERS_RESOURCE, Abilities.USER_READ);
-		if (!operator && !did.equals(ctx.getCallerDID())) {
+		// The user itself with all of its authority, as for managing the user
+		if (!operator && !(did.equals(ctx.getCallerDID()) && engine.holdsAuthorityOf(ctx, did))) {
 			requireVenueUserAuthority(ctx, Abilities.USER_READ);
 		}
 		User user = engine.getVenueState().users().user(did);
