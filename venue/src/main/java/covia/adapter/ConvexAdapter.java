@@ -9,7 +9,6 @@ import java.util.Set;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeoutException;
-import java.util.function.Function;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -30,6 +29,7 @@ import convex.core.data.Hash;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMBool;
+import convex.core.data.prim.CVMLong;
 import convex.core.exceptions.BadFormatException;
 import convex.core.exceptions.ParseException;
 import convex.core.exceptions.PartialMessageException;
@@ -63,6 +63,11 @@ import covia.venue.RequestContext;
  * to relay: refused unless the operator sets {@code adapters.convex.anyPeer},
  * and then the peer's host passes the venue's outbound address guard
  * ({@link Engine#requireSafeHost}).</p>
+ *
+ * <p><b>Timeout.</b> A query or transaction waits for its peer's result
+ * through the Convex client's own timeout ({@code adapters.convex.timeoutMillis},
+ * default the client's {@value #DEFAULT_TIMEOUT_MILLIS} ms); no result in time
+ * is Convex's {@code TIMEOUT} result. The client bounds connecting itself.</p>
  */
 public class ConvexAdapter extends AAdapter {
 
@@ -71,10 +76,17 @@ public class ConvexAdapter extends AAdapter {
 	// Operator configuration keys (adapters.convex.*)
 	static final AString K_PEER = Fields.PEER;
 	static final AString K_ANY_PEER = Strings.intern("anyPeer");
-	private static final Set<AString> SETTINGS = Set.of(Config.ENABLED, K_PEER, K_ANY_PEER);
+	static final AString K_TIMEOUT_MILLIS = Strings.intern("timeoutMillis");
+	private static final Set<AString> SETTINGS = Set.of(Config.ENABLED, K_PEER, K_ANY_PEER, K_TIMEOUT_MILLIS);
 
 	/** The peer a venue talks to when its operator names none. */
 	public static final String DEFAULT_PEER = "peer.convex.live:18888";
+
+	/** How long a call waits for its peer's result when the operator sets no timeoutMillis: the Convex client's default. */
+	public static final long DEFAULT_TIMEOUT_MILLIS = convex.peer.Config.DEFAULT_CLIENT_TIMEOUT;
+
+	/** Why a timeoutMillis setting that is not a positive whole number is refused; the value follows. */
+	public static final String TIMEOUT_NOT_POSITIVE = "adapters.convex.timeoutMillis must be a positive whole number of milliseconds, got: ";
 
 	/** Why a call naming another peer is refused while relaying is off. */
 	public static final String OTHER_PEER =
@@ -86,8 +98,8 @@ public class ConvexAdapter extends AAdapter {
 	/** Why a call fails when no connection to its peer opens; the peer follows. */
 	public static final String PEER_UNREACHABLE = "Could not connect to the Convex peer ";
 
-	/** Why a call ends when its thread is interrupted while connecting; the peer follows. */
-	public static final String CONNECT_INTERRUPTED = "Interrupted connecting to the Convex peer ";
+	/** Why a call ends when its thread is interrupted while it waits on its peer; the peer follows. */
+	public static final String INTERRUPTED = "Interrupted waiting for the Convex peer ";
 
 	/** Why a setting adapters.convex does not have is refused; the setting follows. */
 	public static final String UNKNOWN_SETTING = "adapters.convex: unknown setting ";
@@ -98,21 +110,11 @@ public class ConvexAdapter extends AAdapter {
 	/** Why an operation this adapter does not have is refused; its name follows. */
 	public static final String UNSUPPORTED_OPERATION = "Unsupported Convex operation: ";
 
-	/** The operator's peer settings, replaced whole on every {@link #configure}. */
-	private record PeerPolicy(URI peer, boolean anyPeer) {}
+	/** The operator's settings, replaced whole on every {@link #configure}. */
+	private record Settings(URI peer, boolean anyPeer, long timeoutMillis) {}
 
-	private volatile PeerPolicy policy =
-		new PeerPolicy(peerEndpoint(Strings.create(DEFAULT_PEER), "adapters.convex.peer"), false);
-
-	/**
-	 * Backstop deadline for a Convex peer call (connect + query/transact). The
-	 * Convex client configures no request timeout, so without this a connected-
-	 * but-non-responsive peer leaves the future — and the Job — pending forever.
-	 */
-	private static final long CONVEX_CALL_TIMEOUT_MS = 60_000L;
-
-	/** Why a call fails when its peer has not answered within the backstop deadline. */
-	public static final String PEER_SILENT = "The Convex peer did not answer within " + CONVEX_CALL_TIMEOUT_MS + "ms";
+	private volatile Settings settings = new Settings(
+		peerEndpoint(Strings.create(DEFAULT_PEER), "adapters.convex.peer"), false, DEFAULT_TIMEOUT_MILLIS);
 
 	private static final AString K_ACCOUNT_KEY = Strings.intern("accountKey");
 	private static final AString K_ENCODING = Strings.intern("encoding");
@@ -158,7 +160,16 @@ public class ConvexAdapter extends AAdapter {
 		if (rawAny != null && !(rawAny instanceof CVMBool)) {
 			throw new ConfigurationException(ANY_PEER_NOT_BOOLEAN + rawAny);
 		}
-		policy = new PeerPolicy(peer, CVMBool.TRUE.equals(rawAny));
+		ACell rawTimeout = config.get(K_TIMEOUT_MILLIS);
+		long timeout = DEFAULT_TIMEOUT_MILLIS;
+		if (rawTimeout != null) {
+			CVMLong millis = RT.ensureLong(rawTimeout);
+			if (millis == null || millis.longValue() < 1) {
+				throw new ConfigurationException(TIMEOUT_NOT_POSITIVE + rawTimeout);
+			}
+			timeout = millis.longValue();
+		}
+		settings = new Settings(peer, CVMBool.TRUE.equals(rawAny), timeout);
 		return true;
 	}
 
@@ -262,15 +273,14 @@ public class ConvexAdapter extends AAdapter {
 		}
 	}
 
-	private CompletableFuture<ACell> executeQuery(Convex convex, Query request) {
-		return convex.query(request.code(), request.address())
-			.thenApply(ConvexAdapter::resultCell);
+	private static Result executeQuery(Convex convex, Query request) throws InterruptedException {
+		return convex.querySync(request.code(), request.address());
 	}
 
-	private CompletableFuture<ACell> executeTransact(Convex convex, Transaction request) {
+	private static Result executeTransact(Convex convex, Transaction request) throws InterruptedException {
 		convex.setAddress(request.address());
 		convex.setKeyPair(request.keyPair());
-		return convex.transact(request.code()).thenApply(ConvexAdapter::resultCell);
+		return convex.transactSync(request.code());
 	}
 
 	private static ACell resultCell(Result result) {
@@ -430,36 +440,45 @@ public class ConvexAdapter extends AAdapter {
 		return parsed.toFlatBlob();
 	}
 
-	private CompletableFuture<ACell> withConvexClient(RequestContext ctx, AMap<AString, ACell> meta, ACell input,
-			Function<Convex, CompletableFuture<ACell>> action) {
+	/** One call on a connected client, answered by the peer's Result. */
+	@FunctionalInterface
+	private interface ConvexCall {
+		Result call(Convex convex) throws InterruptedException;
+	}
 
+	/**
+	 * Runs {@code action} on a client connected to the call's peer. The client's
+	 * own timeout bounds the wait for the result: no result in time is Convex's
+	 * {@code TIMEOUT} result, which leaves a transaction's outcome unknown.
+	 */
+	private CompletableFuture<ACell> withConvexClient(RequestContext ctx, AMap<AString, ACell> meta, ACell input,
+			ConvexCall action) {
 		return CompletableFuture.supplyAsync(() -> {
+			Settings s = settings;
 			// Outside the connect wrapper: a refusal is the venue's answer, not a connection failure
-			URI endpoint = permittedPeer(ctx, meta, input);
+			URI endpoint = permittedPeer(s, ctx, meta, input);
+			Convex convex = null;
 			try {
-				return Convex.connect(endpoint);
-			} catch (IOException | TimeoutException e) {
-				// The client's own text names local sockets and hosts, not the peer's answer
-				throw new UnavailableException(PEER_UNREACHABLE + endpoint, e);
+				convex = connect(endpoint);
+				convex.setTimeout(s.timeoutMillis());
+				return resultCell(action.call(convex));
 			} catch (InterruptedException e) {
 				Thread.currentThread().interrupt();
-				throw new CancellationException(CONNECT_INTERRUPTED + endpoint);
+				throw new CancellationException(INTERRUPTED + endpoint);
+			} finally {
+				closeQuietly(convex);
 			}
-		}, VIRTUAL_EXECUTOR).thenCompose(convex -> {
-			CompletableFuture<ACell> resultFuture;
-			try {
-				resultFuture = action.apply(convex);
-			} catch (Exception e) {
-				resultFuture = CompletableFuture.failedFuture(e);
-			}
+		}, VIRTUAL_EXECUTOR);
+	}
 
-			return resultFuture.whenComplete((result, error) -> closeQuietly(convex));
-		})
-		// Backstop so a non-responsive Convex peer cannot leave the Job pending
-		// forever (the Convex client sets no request timeout of its own).
-		.orTimeout(CONVEX_CALL_TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
-		.exceptionallyCompose(e -> CompletableFuture.failedFuture(
-			(unwrap(e) instanceof TimeoutException) ? new UnavailableException(PEER_SILENT, e) : e));
+	/** A client connected to {@code endpoint}; the Convex client bounds the attempt itself. */
+	private static Convex connect(URI endpoint) throws InterruptedException {
+		try {
+			return Convex.connect(endpoint);
+		} catch (IOException | TimeoutException e) {
+			// The client's own text names local sockets and hosts, not the peer's answer
+			throw new UnavailableException(PEER_UNREACHABLE + endpoint, e);
+		}
 	}
 
 	/**
@@ -469,8 +488,7 @@ public class ConvexAdapter extends AAdapter {
 	 * relay, refused unless the operator sets {@code anyPeer}; then its host
 	 * passes the venue's outbound address guard like any caller-chosen target.
 	 */
-	private URI permittedPeer(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
-		PeerPolicy p = policy;
+	private URI permittedPeer(Settings p, RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
 		ACell named = RT.getIn(input, Fields.PEER);
 		if (named == null && meta != null) named = RT.getIn(meta, Fields.OPERATION, Fields.PEER);
 		if (named == null) return p.peer();

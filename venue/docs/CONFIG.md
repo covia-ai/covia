@@ -1457,6 +1457,11 @@ Currently defined:
   `false`). Off, a call that names any other peer, in its input or in its
   operation's metadata, is refused. On, the venue relays, and the peer's host
   passes the outbound guard (see `http.allowedHosts`).
+- `convex.timeoutMillis` — how long `convex:query` and `convex:transact` wait
+  for the peer's result, in milliseconds (default `20000`, the Convex client's
+  own default). A call with no result by then completes with Convex's
+  `TIMEOUT` error code; a transaction that timed out may still be applied.
+  The Convex client limits the time spent connecting on its own.
 - `hitl.maxGrantLifetimeSecs` — optional positive lifetime ceiling for grants
   minted after HITL approval. It is absent by default, so the venue imposes no
   maximum and permits an explicit `exp: null`. With a finite ceiling, null and

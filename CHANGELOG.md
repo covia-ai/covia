@@ -11,6 +11,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 ### Added
 
 - MCP tokens: any user or agent can create a scoped bearer for the venue's `/mcp` (`mcp:create-token`, `update-token`, `delete-token`, `list-tokens`, `get-token`) that offers chosen operations as tools and acts with its issuer's authority within the token's caps; emptying its caps, deleting it or its expiry revokes it, and `adapters.mcp.keepRawTokens` keeps bearers for `admin/token` to read again.
+- `adapters.convex.timeoutMillis` sets how long `convex:query` and `convex:transact` wait for the peer's result; the default is the Convex client's own, 20 seconds.
 
 ### Changed
 
@@ -29,7 +30,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - `convex:query` and `convex:transact` accept a source of `nil` instead of refusing it as empty.
 - A `convex:query` or `convex:transact` source that is empty or not one Convex Lisp form fails as invalid input with the reader's reason, instead of as a fault in the `convex` adapter.
 - `convex:query` refuses an `address` that is not a Convex account address, instead of running the query without one.
-- A `convex:query` or `convex:transact` whose peer does not answer within 60 seconds fails with the peer unavailable, instead of as a fault in the `convex` adapter.
+- A `convex:query` or `convex:transact` that gets no result from its peer in time completes with Convex's `TIMEOUT` error code, after 20 seconds by default rather than 60, instead of failing as a fault in the `convex` adapter.
 
 ## [0.11.0] - 2026-11-10
 
