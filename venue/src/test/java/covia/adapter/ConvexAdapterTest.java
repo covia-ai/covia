@@ -134,7 +134,8 @@ class ConvexAdapterTest {
 
 		assertNotNull(job);
 		assertEquals(Status.COMPLETE, job.getStatus());
-		// nil query should complete successfully; result may be null/absent
+		// The peer evaluated nil; a CVM error would print its message here instead
+		assertEquals("nil", RT.getIn(job.getOutput(), "result").toString());
 	}
 
 	@Test
