@@ -18,6 +18,7 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.lang.RT;
+import covia.adapter.HITLAdapter;
 import covia.adapter.McpToken;
 import covia.api.Abilities;
 import covia.api.Fields;
@@ -193,7 +194,7 @@ public class McpTokenAuthorityTest {
 		AString alice = TestEngine.uniqueDID(info);
 		AString bob = TestEngine.uniqueDID("bob-" + info.getDisplayName());
 		engine.getVenueState().users().ensure(bob);
-		AVector<ACell> tools = Vectors.of("v/ops/user/info", "v/ops/user/authentication-list");
+		AVector<ACell> tools = Vectors.of("v/ops/user/info", "v/ops/user/authentication-list", "v/ops/hitl/respond");
 		Issued restricted = issue(RequestContext.of(alice), "restricted", tools, Vectors.of(cap("w/", Capability.CRUD)));
 		Issued unrestricted = issue(RequestContext.of(alice), "unrestricted", tools, Caps.UNRESTRICTED);
 		RequestContext narrowed = engine.tokenContext(restricted.ref());
@@ -210,9 +211,56 @@ public class McpTokenAuthorityTest {
 			done(tool(unrestricted, op, Maps.of(Fields.DID, alice)));
 		}
 
+		// Answering an ask mints a grant as the inbox owner: checked before the ask is looked up
+		assertEquals(HITLAdapter.ANSWER_NEEDS_WHOLE_AUTHORITY, refusal(tool(restricted, "v/ops/hitl/respond", Maps.empty())));
+		assertNotEquals(HITLAdapter.ANSWER_NEEDS_WHOLE_AUTHORITY, refusal(tool(unrestricted, "v/ops/hitl/respond", Maps.empty())),
+			"an unrestricted token gets as far as the missing id");
+
 		// Acting for another user, or as an agent, starts from the user's own authority
-		assertThrows(AuthException.class, () -> engine.sudoContext(whole, bob));
+		assertEquals(Engine.SUDO_WITH_TOKEN, assertThrows(AuthException.class, () -> engine.sudoContext(whole, bob)).getMessage());
 		agent(alice, "helper", Caps.UNRESTRICTED);
 		assertThrows(AuthException.class, () -> engine.stepContext(narrowed, Strings.create("helper")));
+		assertNotNull(engine.stepContext(whole, Strings.create("helper")), "all of the owner's authority makes it act");
+	}
+
+	@Test
+	public void aTokenReachesWhatItsIssuerMadeOnlyByItsCaps(TestInfo info) {
+		AString alice = TestEngine.uniqueDID(info);
+		complete(run("v/ops/covia/write", Maps.of(Fields.PATH, "w/seed", Fields.VALUE, 0), RequestContext.of(alice)));
+		RequestContext helper = agent(alice, "helper", Vectors.of(cap("v/ops/", Abilities.INVOKE),
+			cap("x/mcp/tokens/", Abilities.MCP_TOKEN), cap("w/", Capability.CRUD), cap("j/", Capability.CRUD_READ)));
+		Job made = run("v/ops/covia/write", Maps.of(Fields.PATH, "w/made", Fields.VALUE, 1), helper);
+		complete(made);
+		AVector<ACell> tools = Vectors.of("v/ops/covia/read");
+		RequestContext workspaceOnly = engine.tokenContext(issue(helper, "workspace", tools, Vectors.of(cap("w/", Capability.CRUD))).ref());
+		RequestContext jobReader = engine.tokenContext(issue(helper, "jobs", tools, Vectors.of(cap("j/", Capability.CRUD_READ))).ref());
+
+		assertNotNull(engine.jobs().getJobData(made.getID(), helper), "the agent reads the job it made");
+		assertThrows(AuthException.class, () -> engine.jobs().getJobData(made.getID(), workspaceOnly),
+			"its token reaches it only as its caps allow");
+		assertNotNull(engine.jobs().getJobData(made.getID(), jobReader));
+	}
+
+	@Test
+	public void aTokensReachIntoAnotherUserIsWithinItsCaps(TestInfo info) {
+		AString alice = TestEngine.uniqueDID(info);
+		AString bob = TestEngine.uniqueDID("bob-" + info.getDisplayName());
+		complete(run("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "desk",
+			Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/echo", Fields.ACCEPTS, Vectors.of(alice))), RequestContext.of(bob)));
+		AString desk = Strings.create(bob + "/g/desk");
+		AVector<ACell> tools = Vectors.of("v/ops/agent/request");
+
+		assertTrue(engine.authorityCovers(RequestContext.of(alice), desk, Abilities.AGENT_REQUEST), "Bob's agent admits Alice");
+		assertTrue(engine.authorityCovers(engine.tokenContext(issue(RequestContext.of(alice), "whole", tools, Caps.UNRESTRICTED).ref()),
+			desk, Abilities.AGENT_REQUEST));
+		assertFalse(engine.authorityCovers(engine.tokenContext(issue(RequestContext.of(alice), "workspace", tools,
+			Vectors.of(cap("w/", Capability.CRUD))).ref()), desk, Abilities.AGENT_REQUEST),
+			"an admission reaches a token's request only as far as its caps");
+	}
+
+	/** Why the call was refused, as its caller is told. */
+	private static String refusal(CompletableFuture<ACell> result) {
+		ExecutionException e = assertThrows(ExecutionException.class, () -> result.get(10, TimeUnit.SECONDS));
+		return e.getCause().getMessage();
 	}
 }
