@@ -142,8 +142,7 @@ class DiscordAdapterTest {
 		assertFailed(OWNER,"v/ops/discord/create",Maps.of("name","bad","token","literal","operation","v/test/ops/echo"));
 		run(OWNER,"v/ops/secret/set",Maps.of("name","DISCORD_CREATED","value","created-token"));
 		run(OWNER,"v/ops/discord/create",Maps.of("name","created","token","s/DISCORD_CREATED","operation","v/test/ops/echo","open",true));
-		for(int i=0;i<100&&!gateway.sinks.containsKey("created-token");i++)Thread.sleep(20);
-		assertTrue(gateway.sinks.containsKey("created-token"));
+		gateway.awaitConnected("created-token");
 		String recordPath=adapter.userStatePath(OWNER,"bots/created");
 		ACell record=adapter.state().read(recordPath);
 		assertNotNull(record);assertEquals(Strings.create("s/DISCORD_CREATED"),RT.getIn(record,"token"));assertEquals(null,RT.getIn(record,"user"));
@@ -153,6 +152,25 @@ class DiscordAdapterTest {
 		ACell deleted=run(OWNER,"v/ops/discord/delete",Maps.of("name","created"));assertEquals(CVMBool.TRUE,RT.getIn(deleted,"deleted"));
 		assertFalse(gateway.sinks.containsKey("created-token"));
 		assertEquals(null,adapter.state().read(recordPath));
+	}
+
+	@Test void disablingClosesEveryGatewayUntilEnabled() throws Exception {
+		run(OWNER,"v/ops/secret/set",Maps.of("name","DISCORD_PAUSED","value","paused-token"));
+		run(OWNER,"v/ops/discord/create",Maps.of("name","paused","token","s/DISCORD_PAUSED","operation","v/test/ops/echo","open",true));
+		gateway.awaitConnected("paused-token");
+		try {
+			engine.disableAdapter(DiscordAdapter.NAME);
+			assertFalse(gateway.sinks.containsKey("literal-test-token"),"the configured bot's gateway closes");
+			assertFalse(gateway.sinks.containsKey("paused-token"),"and so does a runtime bot's");
+			assertNull(adapter.runnerForTest("echo"));
+		} finally {
+			engine.enableAdapter(DiscordAdapter.NAME);
+			awaitRunning();
+		}
+		gateway.awaitConnected("paused-token");
+		gateway.emit(message("5","chan-dm","alice","back again",true,false));
+		assertTrue(take().body().contains("back again"));
+		run(OWNER,"v/ops/discord/delete",Maps.of("name","paused"));
 	}
 
 	@Test void localAgentAcceptsAnotherMessageWhileThinking() throws Exception {
@@ -171,7 +189,7 @@ class DiscordAdapterTest {
 		run(OWNER,"v/ops/secret/set",Maps.of("name","DISCORD_AGENT","value","agent-token"));
 		try {
 			run(OWNER,"v/ops/discord/create",Maps.of("name","agent-bot","token","s/DISCORD_AGENT","agent","discord-agent","allow",Vectors.of("alice")));
-			for(int n=0;n<100&&!gateway.sinks.containsKey("agent-token");n++) Thread.sleep(20);
+			gateway.awaitConnected("agent-token");
 			var sink=gateway.sinks.get("agent-token"); assertNotNull(sink);
 			sink.accept(message("first","agent-channel","alice","first input",true,false));
 			assertTrue(entered.await(10,TimeUnit.SECONDS));
@@ -201,7 +219,11 @@ class DiscordAdapterTest {
 
 	private static final class FakeGatewayHub implements DiscordGateway.Factory {
 		final ConcurrentHashMap<String,Consumer<InboundMessage>> sinks=new ConcurrentHashMap<>();
-		@Override public DiscordGateway connect(String token,Consumer<InboundMessage> messages){sinks.put(token,messages);return new DiscordGateway(){public String botId(){return "999";}public String username(){return "covia-test";}public void close(){sinks.remove(token,messages);}};}
+		@Override public synchronized DiscordGateway connect(String token,Consumer<InboundMessage> messages){sinks.put(token,messages);notifyAll();return new DiscordGateway(){public String botId(){return "999";}public String username(){return "covia-test";}public void close(){sinks.remove(token,messages);}};}
+		synchronized void awaitConnected(String token) throws InterruptedException {
+			long end=System.nanoTime()+TimeUnit.SECONDS.toNanos(10);
+			while(!sinks.containsKey(token)){long left=end-System.nanoTime();if(left<=0)throw new AssertionError(token+" did not connect");TimeUnit.NANOSECONDS.timedWait(this,left);}
+		}
 		void emit(InboundMessage m){Consumer<InboundMessage> s=sinks.get("literal-test-token");if(s==null)throw new AssertionError("not connected");s.accept(m);}
 	}
 	private record Request(String method,String path,String authorization,String body){}

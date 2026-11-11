@@ -117,6 +117,22 @@ class SlackSocketModeTest {
 		}
 	}
 
+	@Test void disablingClosesTheConnectionUntilEnabled() throws Exception {
+		try (FakeSocket socket = new FakeSocket(); Fixture f = new Fixture(socketSpec(), socket.url())) {
+			f.api.opened(); socket.connected();
+			awaitConnection(f.bot(), WebhookBot.CONNECTED);
+			f.engine.disableAdapter(NAME);
+			assertNull(f.bot(), "disabling stops the binding");
+			assertNotNull(socket.closes.poll(8, TimeUnit.SECONDS), "and closes its connection");
+			f.engine.enableAdapter(NAME);
+			f.api.opened(); WsContext ctx = socket.connected();
+			awaitConnection(f.bot(), WebhookBot.CONNECTED);
+			ctx.send(envelope("env-back", payload("back", event("1700000000.000002"))));
+			assertEquals(ack("env-back"), socket.ack());
+			assertEquals("/chat.postMessage", f.api.take().path());
+		}
+	}
+
 	@Test void aSilentConnectionIsReplaced() throws Exception {
 		try (SilentSocket silent = new SilentSocket(); Fixture f = new Fixture(socketSpec())) {
 			f.adapter.keepaliveMillis = 50;
