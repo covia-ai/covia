@@ -39,7 +39,7 @@ An honest snapshot, so newcomers know what to expect and contributors know where
 | Onboarding / quickstart (docs) | ✅ Done | README quickstart and the docs "Getting Started" page both go zero-to-first-operation |
 | Published artifact alignment | ✅ Done | Platform `0.11.0` on GitHub/GHCR; `covia-core` `0.9.0` on Maven Central; TS SDK `1.8.0` on npm; Python SDK `0.9.0` on PyPI. Python mirrors the published `covia-core` release line. |
 | Build reproducibility | ✅ Done | Depends on released Convex 0.8.19 from Maven Central; a clean clone builds in one command |
-| CI quality gate | ✅ Done | `test.yml` runs the full reactor (with tests) on every PR and push to `develop`/`master`; its first run caught three latent flaky tests |
+| CI quality gate | ✅ Done | `test.yml` runs the full reactor (with tests) on every PR and push to `develop`/`qa`/`master`; its first run caught three latent flaky tests |
 | Client/auth test coverage | ✅ Done | `VenueHTTP`, `KeyPairAuth`, bearer integration, and the focused `NoAuth`, `BearerAuth`, and `LocalAuth` strategy tests are covered |
 | Community scaffolding | 🔨 In progress | `CONTRIBUTING`, `SECURITY`, `CHANGELOG`, and issue/PR templates in place; a governance note remains |
 | Operability (metrics, health, rate limits) | 🔨 In progress | Per-caller request and concurrent-job limits are shipped; structured logs, audit/access logs and request ids are shipped; health/readiness, per-operation limits, and metrics remain |

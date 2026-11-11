@@ -48,10 +48,12 @@ Dependency versions are in the root `pom.xml`.
 
 ## Branches and deploys
 
-`develop` is the working branch and `master` takes releases (`BUILD.md`). CI
-deploys from both: a push to `develop` redeploys the dev venues (venue-3 on
-EC2, venue-4 on Azure), and a push to `master` the stable GCP venues
-(venue-test, venue-1, venue-2).
+`develop` is the working branch and `master` takes releases (`BUILD.md`).
+`qa` follows develop and takes no commits of its own: it moves forward with
+`git push origin develop:qa`. CI deploys from `qa` and `master`, each push
+running the integration tests first: a push to `qa` redeploys the dev venues
+(venue-3 on EC2, venue-4 on Azure), and a push to `master` the stable GCP
+venues (venue-test, venue-1, venue-2). A push to `develop` deploys nothing.
 
 ## Conventions
 

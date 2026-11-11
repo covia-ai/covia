@@ -2,12 +2,15 @@ name: Deploy to Azure
 
 # Deploys the published image to the Azure venue VM. The image itself is
 # built and pushed by publish-docker.yml — this workflow only pulls and
-# (re)starts the container, after a successful publish or on manual dispatch.
+# (re)starts the container, after a successful publish from qa or on manual
+# dispatch.
 #
 # No SSH (security#12): the job signs in as the covia-deploy-venue-4 managed
 # identity over GitHub OIDC (federated for covia-ai/covia on develop only,
 # allowed only to read covia-venue-vm and run commands on it) and runs
-# deploy/azure/deploy.sh on the VM through az vm run-command.
+# deploy/azure/deploy.sh on the VM through az vm run-command. The job itself
+# runs on develop, the default branch, as every workflow_run job does, so a
+# manual dispatch must be run from develop too.
 
 on:
   workflow_run:
@@ -28,7 +31,7 @@ jobs:
         github.event_name == 'workflow_dispatch' ||
         (
           github.event.workflow_run.conclusion == 'success' &&
-          endsWith(github.event.workflow_run.display_title, '[develop]')
+          endsWith(github.event.workflow_run.display_title, '[qa]')
         )
       }}
     permissions:
