@@ -285,6 +285,7 @@ public class AuditLogTest {
 		user.secrets().store("FOREIGN", v2Value, SecretStore.keys(AKeyPair.generate()));
 		NotSupportedException unreadable = assertThrows(NotSupportedException.class, () -> engine.resolveSecret("FOREIGN", ctx));
 		assertEquals(Engine.SECRET_UNREADABLE + "FOREIGN", unreadable.getMessage());
+		assertNotNull(unreadable.getCause(), "the refusal carries why the secret could not be read");
 		assertTrue(List.copyOf(captured.list).stream().anyMatch(e -> e.getLevel() == Level.WARN
 			&& Engine.class.getName().equals(e.getLoggerName())), "the failed resolution is logged");
 

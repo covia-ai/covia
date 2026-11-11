@@ -979,7 +979,12 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 			String name = entry.getKey().toString();
 			if (!name.startsWith(LEGACY_GRANT_PREFIX)) continue;
 			String provider = name.substring(LEGACY_GRANT_PREFIX.length());
-			AMap<AString, ACell> grant = legacyGrant(entry.getValue(), keys);
+			AMap<AString, ACell> grant;
+			try {
+				grant = legacyGrant(entry.getValue(), keys);
+			} catch (RuntimeException e) {
+				throw new NotSupportedException(UNREADABLE_LEGACY_GRANT + name, e);
+			}
 			if (grant == null || !PROVIDER_NAME.matcher(provider).matches()) {
 				throw new NotSupportedException(UNREADABLE_LEGACY_GRANT + name);
 			}
@@ -998,15 +1003,16 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 		return false;
 	}
 
-	/** A grant as an earlier venue stored it (JSON of the grant fields), or null when it is unreadable or holds no token. */
+	/**
+	 * A grant as an earlier venue stored it (JSON of the grant fields), or null when it is not a grant
+	 * or holds no token.
+	 *
+	 * @throws RuntimeException when the record cannot be opened or its JSON parsed
+	 */
 	private static AMap<AString, ACell> legacyGrant(ACell record, SecretStore.Keys keys) {
-		try {
-			AString raw = SecretStore.unseal(record, keys);
-			AMap<AString, ACell> grant = (raw != null) ? RT.ensureMap(JSON.parse(raw.toString())) : null;
-			return (grant != null && str(grant, G_ACCESS_TOKEN) != null) ? grant : null;
-		} catch (RuntimeException e) {
-			return null;
-		}
+		AString raw = SecretStore.unseal(record, keys);
+		AMap<AString, ACell> grant = (raw != null) ? RT.ensureMap(JSON.parse(raw.toString())) : null;
+		return (grant != null && str(grant, G_ACCESS_TOKEN) != null) ? grant : null;
 	}
 
 	/**

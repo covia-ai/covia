@@ -672,6 +672,7 @@ public class OAuthAdapterTest {
 		NotSupportedException refused = assertThrows(NotSupportedException.class, () -> OAuthAdapter.moveLegacyGrants(
 			other.assoc(fake, SecretStore.seal(Strings.create("not a grant"), keys)), none, keys));
 		assertTrue(refused.getMessage().startsWith(OAuthAdapter.UNREADABLE_LEGACY_GRANT), refused.getMessage());
+		assertNotNull(refused.getCause(), "the refusal carries why the grant could not be read");
 	}
 
 	@Test
