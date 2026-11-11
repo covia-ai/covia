@@ -85,9 +85,9 @@ import covia.venue.RequestContext;
  * a dedicated virtual thread. A missing secret or unreachable API parks the
  * runner as {@link State#PENDING} and retries on the adapter's retry
  * schedule, so a bot whose token is provisioned after boot comes up by
- * itself. While the adapter is disabled the loop stops fetching without
- * confirming, so Telegram redelivers on re-enable — the bot is simply
- * offline. {@link #stop()} cancels the in-flight poll and is final.</p>
+ * itself. {@link #stop()} cancels the in-flight poll and is final: disabling
+ * the adapter stops every bot, and enabling it starts new ones, to which
+ * Telegram redelivers whatever was left unconfirmed.</p>
  *
  * <p>Inbound messages are serialised per Telegram chat (an agent session
  * accepts one chat at a time) and processed on virtual threads, so a slow
@@ -158,8 +158,8 @@ final class BotRunner implements MessagingBot<BotSpec> {
 	private volatile boolean stopped;
 	private volatile ScheduledFuture<?> retry;
 	private volatile Thread pollThread;
-	/** True once the poll loop has observed that its adapter is disabled. */
-	private volatile boolean offline;
+	/** What the poll loop waits on once its adapter is no longer live, until {@link #stop()} signals it. */
+	private final Object parked = new Object();
 
 	private final AtomicLong received = new AtomicLong();
 	private final AtomicLong sent = new AtomicLong();
@@ -290,6 +290,9 @@ final class BotRunner implements MessagingBot<BotSpec> {
 
 	@Override public synchronized void stop() {
 		stopped = true;
+		synchronized (parked) {
+			parked.notifyAll();
+		}
 		ScheduledFuture<?> r = retry;
 		if (r != null) r.cancel(false);
 		TelegramBot b = bot;
@@ -368,9 +371,10 @@ final class BotRunner implements MessagingBot<BotSpec> {
 	/**
 	 * The long-poll loop: fetch, dispatch, confirm by advancing the offset.
 	 * Runs until {@link #stop()}. Errors back off (2s doubling to 60s) and are
-	 * logged once per outage. While the adapter is disabled nothing is fetched
-	 * and nothing is confirmed, so Telegram holds the backlog (24h) and
-	 * redelivers when the adapter is enabled again.
+	 * logged once per outage. Once the adapter is no longer live (disabled or
+	 * being replaced) nothing more is handled or confirmed, so Telegram keeps
+	 * the backlog (24h) for the bot that starts next; the engine stops this one
+	 * straight after, and the loop waits for that.
 	 */
 	private void pollLoop() {
 		boolean recover = true;
@@ -380,12 +384,9 @@ final class BotRunner implements MessagingBot<BotSpec> {
 			TelegramBot b = bot;
 			if (b == null) return;
 			if (!adapter.isActive()) {
-				offline = true;
-				recover = true;
-				sleep(1_000);
-				continue;
+				awaitStop();
+				return;
 			}
-			offline = false;
 			try {
 				if (recover) { recoverPending(); recover = false; }
 				if (System.currentTimeMillis() >= nextPrune) {
@@ -411,7 +412,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 				List<Update> updates = r.updates();
 				if (updates == null) continue;
 				for (Update u : updates) {
-					// Went offline mid-batch: leave the rest unconfirmed for redelivery.
+					// No longer live mid-batch: leave the rest unconfirmed for redelivery.
 					if (!adapter.isActive()) break;
 					handle(u); // A failed durable acceptance must leave this update unconfirmed.
 					if (u.updateId() != null) offset = u.updateId() + 1;
@@ -423,12 +424,17 @@ final class BotRunner implements MessagingBot<BotSpec> {
 				backoff = Math.min(backoff * 2, 60_000);
 			}
 		}
-		offline = false;
 	}
 
-	/** Whether the long-poll loop has parked after observing adapter disablement. */
-	boolean isOffline() {
-		return offline;
+	/** Waits until the bot is stopped; an interrupt ends the wait early. */
+	private void awaitStop() {
+		synchronized (parked) {
+			try {
+				while (!stopped) parked.wait();
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+			}
+		}
 	}
 
 	/** Whether queued intake for one chat has finished (replies may still be pending). */

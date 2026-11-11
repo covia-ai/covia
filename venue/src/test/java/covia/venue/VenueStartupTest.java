@@ -44,11 +44,15 @@ public class VenueStartupTest {
 
 	private static class StartupAdapter extends AAdapter implements AutoCloseable {
 		final AtomicInteger starts = new AtomicInteger();
+		final AtomicInteger stops = new AtomicInteger();
 		final AtomicInteger calls = new AtomicInteger();
 		final CountDownLatch closed = new CountDownLatch(1);
 		final CompletableFuture<ACell> fired = new CompletableFuture<>();
 		boolean recovered;
 		boolean failStart;
+		/** Lifecycle calls in order, shared between instances to see how they interleave. */
+		List<String> events = new java.util.concurrent.CopyOnWriteArrayList<>();
+		String label = "adapter";
 
 		@Override public String getName() { return "startup-test"; }
 		@Override public String getDescription() { return "Startup ordering fixture"; }
@@ -59,8 +63,13 @@ public class VenueStartupTest {
 		}
 		@Override public void start() {
 			starts.incrementAndGet();
+			events.add(label + " start");
 			assertNotNull(engine.resolveAsset(OP, engine.venueContext()));
 			if (failStart) throw new IllegalStateException(START_FAILURE);
+		}
+		@Override public void stop() {
+			stops.incrementAndGet();
+			events.add(label + " stop");
 		}
 		@Override public void recoverJob(Job job) {
 			recovered = true;
@@ -75,7 +84,10 @@ public class VenueStartupTest {
 			fired.complete(input);
 			return CompletableFuture.completedFuture(input);
 		}
-		@Override public void close() { closed.countDown(); }
+		@Override public void close() {
+			events.add(label + " close");
+			closed.countDown();
+		}
 	}
 
 	/** A job a previous run left STARTED: its record and the venue's entry for it, as admission writes them. */
@@ -550,8 +562,11 @@ public class VenueStartupTest {
 		try {
 			Engine.addDemoAssets(engine);
 			StartupAdapter original = new StartupAdapter();
+			original.label = "original";
 			engine.registerAdapter(original);
 			StartupAdapter replacement = new StartupAdapter();
+			replacement.label = "replacement";
+			replacement.events = original.events;
 			replacement.failStart = true;
 			assertEquals(START_FAILURE, assertThrows(IllegalStateException.class,
 				() -> engine.registerAdapter(replacement)).getMessage());
@@ -559,8 +574,47 @@ public class VenueStartupTest {
 			assertEquals(0, replacement.closed.getCount());
 			assertEquals(1, original.closed.getCount());
 			assertNotNull(engine.resolveAsset(OP, engine.venueContext()));
+			// The original stops before its replacement starts, and runs again only once that is closed.
+			assertEquals(List.of("original start", "original stop", "replacement start", "replacement close", "original start"),
+				original.events);
 		} finally {
 			engine.close();
+		}
+	}
+
+	@Test
+	public void replacedAdapterStopsBeforeItsReplacementStarts() {
+		Engine engine = Engine.createTemp(null);
+		try {
+			Engine.addDemoAssets(engine);
+			StartupAdapter original = new StartupAdapter();
+			original.label = "original";
+			engine.registerAdapter(original);
+			StartupAdapter replacement = new StartupAdapter();
+			replacement.label = "replacement";
+			replacement.events = original.events;
+			engine.registerAdapter(replacement);
+			assertSame(replacement, engine.getAdapter(original.getName()));
+			assertEquals(List.of("original start", "original stop", "replacement start", "original close"), original.events);
+		} finally {
+			engine.close();
+		}
+	}
+
+	@Test
+	public void adapterWorkersStopAndStartOnlyOnAStartedEngine() throws Exception {
+		Engine prepared = TestEngine.application().mount(AKeyPair.generate(), Maps.empty()).prepare();
+		try {
+			Engine.addDemoAssets(prepared);
+			StartupAdapter adapter = new StartupAdapter();
+			prepared.registerAdapter(adapter);
+			prepared.disableAdapter(adapter.getName());
+			prepared.enableAdapter(adapter.getName());
+			assertEquals(List.of(), adapter.events, "a prepared engine runs no workers to stop or start");
+			prepared.start();
+			assertEquals(List.of("adapter start"), adapter.events);
+		} finally {
+			prepared.close();
 		}
 	}
 
@@ -573,8 +627,11 @@ public class VenueStartupTest {
 			engine.registerAdapter(adapter);
 			assertEquals(1, adapter.starts.get());
 			engine.disableAdapter(adapter.getName());
+			assertEquals(1, adapter.stops.get(), "disabling stops the workers");
 			engine.enableAdapter(adapter.getName());
 			assertEquals(2, adapter.starts.get());
+			assertEquals(List.of("adapter start", "adapter stop", "adapter start"), adapter.events);
+			assertEquals(1, adapter.closed.getCount(), "disabling keeps the instance");
 		} finally {
 			engine.close();
 		}

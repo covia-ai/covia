@@ -1274,26 +1274,33 @@ public class TelegramAdapterTest {
 
 	@Test
 	@ResourceLock(value = ADAPTER, mode = ResourceAccessMode.READ_WRITE)
-	public void testDisabledAdapterIsOfflineUntilReenabled() throws Exception {
+	public void testDisabledAdapterStopsItsBotsUntilReenabled() throws Exception {
 		BotRunner runner = startEcho();
 		long chat = 1004L;
 		engine.disableAdapter("telegram");
 		try {
-			await(runner::isOffline, 2_000,
-				() -> "Telegram poll loop did not park after adapter disablement");
-			push(chat, ALLOWED_ID, "alice", "while disabled");
-			assertNull(awaitSent(0), "a disabled adapter must not act on Telegram traffic");
+			// Disabling stops the bot, its poll cancelled, before it returns.
+			assertEquals(BotRunner.State.STOPPED, runner.state());
+			assertNull(adapter.runner(echo), "a disabled adapter runs no bots");
+			String id = Integer.toString(push(chat, ALLOWED_ID, "alice", "while disabled"));
+			// Reconfiguring meanwhile starts nothing: the bot takes the settings when enabled.
+			declare(echo, echoBotConfig().assoc(BotSpec.K_GREETING, Strings.create("Back again")));
+			assertNull(adapter.runner(echo), "reconfiguring a disabled adapter starts no bot");
+			assertNull(echoInbox().get(id), "a disabled adapter must not act on Telegram traffic");
 		} finally {
 			engine.enableAdapter("telegram");
 		}
-		// Nothing was confirmed while offline, so Telegram redelivers the backlog first.
+		BotRunner restarted = adapter.runner(echo);
+		assertNotNull(restarted, "enabling starts the bot again");
+		assertNotSame(runner, restarted);
+		// Nothing was confirmed while disabled, so Telegram redelivers the backlog first.
 		FakeTelegramServer.Sent backlog = awaitSent(15_000);
 		assertNotNull(backlog, "the message received while disabled is answered once re-enabled");
 		assertTrue(backlog.text().contains("while disabled"), backlog.text());
-		push(chat, ALLOWED_ID, "alice", "after enable");
-		FakeTelegramServer.Sent reply = awaitSent(15_000);
-		assertNotNull(reply);
-		assertTrue(reply.text().contains("after enable"), reply.text());
+		push(chat, ALLOWED_ID, "alice", "/start");
+		FakeTelegramServer.Sent greeting = awaitSent(15_000);
+		assertNotNull(greeting);
+		assertEquals("Back again", greeting.text(), "the bot runs with the settings given while disabled");
 	}
 
 	// ---------------------------------------------------------------- outbound

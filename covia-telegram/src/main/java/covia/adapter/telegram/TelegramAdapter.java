@@ -209,6 +209,12 @@ public class TelegramAdapter extends AMessagingAdapter<BotSpec, BotRunner> {
 		return BotSpec.parse(name, settings, strict);
 	}
 
+	/** Disabled or being replaced: every bot stops, cancelling its poll, until {@link #start()} starts them again. */
+	@Override
+	public void stop() {
+		stopBots();
+	}
+
 	@Override
 	protected BotRunner newBot(BotSpec spec, Managed managed) {
 		return new BotRunner(this, spec, apiUrl, managed);

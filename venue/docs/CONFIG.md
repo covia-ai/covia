@@ -2696,9 +2696,9 @@ to Telegram's. Built-in commands: `/start`, `/help`, `/new`, `/id`. Messages
 are answered in order per chat, with a typing indicator while the agent
 works; long replies are split at Telegram's 4096-character limit. Polling is
 long-poll (`getUpdates`); no inbound port or webhook is required. Disabling
-the adapter (`adapters.telegram.enabled: false` or `adapter/disable`) takes
-its bots offline without confirming updates, so Telegram redelivers the
-backlog when it is enabled again.
+the adapter (`adapters.telegram.enabled: false` or `adapter/disable`) stops
+its bots without confirming updates; enabling it starts them again, with any
+configuration given meanwhile, and Telegram redelivers the backlog.
 
 Bots can also be **created at runtime by their user**: `v/ops/telegram/create
 {name, token: "s/…", agent | operation, reply?, allow?, open?, parseMode?,
@@ -3100,8 +3100,8 @@ above is intentionally outside this administrative group:
 | Operation | Effect |
 |-----------|--------|
 | `v/ops/venue/adapters` | Registry view: every registered adapter (active **and** disabled) with `enabled`, `kernel`, owning `module`, effective `config` and `operations`, plus loaded `modules` |
-| `v/ops/venue/adapter/disable {name}` | Remove an adapter from live dispatch and `v/info/adapters/<name>`. Durable catalog metadata remains; the instance is retained and in-flight jobs finish |
-| `v/ops/venue/adapter/enable {name}` | Restore it (installing on first enable if it was boot-disabled) |
+| `v/ops/venue/adapter/disable {name}` | Remove an adapter from live dispatch and `v/info/adapters/<name>`; an adapter that stops its workers while disabled, such as Telegram, stops them. Durable catalog metadata remains; the instance is retained and in-flight jobs finish |
+| `v/ops/venue/adapter/enable {name}` | Restore it and start any workers it stopped (installing on first enable if it was boot-disabled) |
 | `v/ops/venue/adapter/configure {name, config, merge?}` | Apply a new effective configuration (`adapters.<name>` shape) — the adapter's `configure` hook may reject it, in which case nothing changes |
 | `v/ops/venue/module/load {module, sha256?, config?}` | Load a module jar; its adapters and declarations overwrite existing names and paths |
 | `v/ops/venue/module/unload {name}` | Remove a module's live adapters and introspection, close resources and its classloader; catalog metadata remains |

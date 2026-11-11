@@ -166,10 +166,12 @@ public abstract class AAdapter {
 
 	/**
 	 * Starts adapter-owned inbound/background workers after venue assembly and
-	 * recovery. Installation must only bind state and declare assets; workers
-	 * that can invoke operations belong here. Runtime registration and enable
-	 * call this after publication on an already-started engine. Implementations
-	 * must be idempotent because enable may retain an installed instance.
+	 * recovery: the instance has become the venue's live one. Installation must
+	 * only bind state and declare assets; workers that can invoke operations
+	 * belong here. Runtime registration and enable call this after publication
+	 * on an already-started engine, and so does a failed replacement that
+	 * restores this instance. Implementations must be idempotent because enable
+	 * may retain an installed instance.
 	 *
 	 * <p>Constructors, configuration and {@link #install(Engine)} must not start
 	 * autonomous work. During {@link Engine#launch(java.util.function.Function)},
@@ -177,11 +179,29 @@ public abstract class AAdapter {
 	 * provisioning and recovery. Recovering a Job may itself execute work before
 	 * this hook, so recovery prerequisites must be established during installation
 	 * or the application's pre-start hook. Implement {@link AutoCloseable} to
-	 * release workers/resources on disable, replacement, shutdown or failed
-	 * startup; close must be idempotent and tolerate partial installation/activation. Do not block
-	 * here waiting for another adapter's workers or the HTTP listener.</p>
+	 * release workers/resources on replacement, unload, shutdown or failed
+	 * startup; close must be idempotent and tolerate partial installation/activation.
+	 * Do not block here waiting for another adapter's workers or the HTTP listener.</p>
+	 *
+	 * <p>The engine calls this and {@link #stop()} under its monitor, after the
+	 * registry change they announce, never from a lattice transaction or on a
+	 * fork of the venue's state.</p>
 	 */
 	public void start() {
+		// Most adapters have no autonomous workers.
+	}
+
+	/**
+	 * Stops the workers {@link #start()} started, keeping the instance and its
+	 * resources: it is no longer the venue's live one, because it was disabled or
+	 * is being replaced. {@link #start()} follows when it is enabled again or a
+	 * failed replacement restores it. Called only on a started engine. When it
+	 * returns the adapter starts no further autonomous work, and work in progress
+	 * neither commits nor acts outside the venue, so a replacement starts with no
+	 * predecessor running beside it. Implementations must be idempotent; closing
+	 * the adapter also ends its workers, with or without this.
+	 */
+	public void stop() {
 		// Most adapters have no autonomous workers.
 	}
 

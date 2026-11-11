@@ -29,6 +29,7 @@ import covia.exception.ConflictException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
 import covia.exception.NotSupportedException;
+import covia.exception.UnavailableException;
 import covia.grid.Principals;
 import covia.venue.AdapterState;
 import covia.venue.Engine;
@@ -39,7 +40,10 @@ import covia.venue.migration.MigrationStep;
  * Shared registration, ownership and lifecycle for messaging adapters.
  * Provider subclasses retain configuration parsing, credentials, admission,
  * transports and operation schemas. Installation is inert; {@link #start()}
- * activates workers only after the engine is ready.
+ * activates workers only after the engine is ready. A provider whose bots
+ * stop while the adapter is disabled overrides {@link #stop()} to call
+ * {@link #stopBots()}; {@link #start()} then starts them again from
+ * configuration and the bot registry.
  */
 public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends MessagingBot<S>>
 		extends AAdapter implements AutoCloseable {
@@ -68,6 +72,8 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 	public static final String FOREIGN_PRINCIPAL = "a bot's principal must be its user or one of that user's agents, not %s";
 	public static final String SEPARATE_AUTHORITY_CREATOR = "a bot acts as its creator, so a request acting with "
 		+ "another principal's authority cannot create one";
+	/** Creating or deleting a bot while its adapter's bots are stopped; the provider follows. */
+	public static final String NOT_RUNNING = "The %s adapter is not running";
 
 	private volatile Map<String, S> specs = Map.of();
 	private final Map<String, R> runners = new LinkedHashMap<>();
@@ -79,6 +85,8 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 		return t;
 	});
 	private volatile boolean closed;
+	/** Whether bots run: set by {@link #start()}, cleared by {@link #stopBots()}; guarded by this. */
+	private boolean running;
 	/** Retry cadence for missing credentials or temporarily unavailable providers. */
 	public volatile long retryMillis = 30_000;
 
@@ -101,14 +109,37 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 	protected final synchronized void configureBots(Map<String, S> wanted) {
 		if (closed) throw new IllegalStateException(CLOSED);
 		specs = Map.copyOf(wanted);
-		if (engine != null && engine.isStarted()) reconcile();
+		// Stopped bots take the new settings when start() brings them back.
+		if (running) reconcile();
 	}
 
 	@Override
 	public synchronized void start() {
 		if (closed) return;
+		running = true;
 		reconcile();
 		rearmRuntimeBots();
+	}
+
+	/**
+	 * Stops every bot, keeping their settings and records, until {@link #start()}
+	 * starts them again; no bot starts in between, by configuration, re-arming
+	 * or {@code create}. For a provider's {@link #stop()}.
+	 */
+	protected final synchronized void stopBots() {
+		running = false;
+		stopRunners();
+	}
+
+	private void stopRunners() {
+		try {
+			for (R runner : runners.values()) {
+				try { runner.stop(); }
+				catch (RuntimeException e) { log.warn("{}: failed to stop bot '{}'", getName(), runner.spec().name(), e); }
+			}
+		} finally {
+			runners.clear();
+		}
 	}
 
 	@Override
@@ -186,7 +217,7 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 	protected void rearmLegacyBots() { }
 
 	protected final synchronized void startRegistry(AString owner, AMap<AString, ACell> registry, boolean migrate) {
-		if (registry == null || closed || engine.getVenueState().users().isDeleted(owner)) return;
+		if (registry == null || closed || !running || engine.getVenueState().users().isDeleted(owner)) return;
 		for (var entry : registry.entrySet()) {
 			String name = String.valueOf(entry.getKey());
 			String key = runtimeKey(owner, name);
@@ -215,13 +246,10 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 	public synchronized void close() {
 		if (closed) return;
 		closed = true;
+		running = false;
 		try {
-			for (R runner : runners.values()) {
-				try { runner.stop(); }
-				catch (RuntimeException e) { log.warn("{}: failed to stop bot '{}'", getName(), runner.spec().name(), e); }
-			}
+			stopRunners();
 		} finally {
-			runners.clear();
 			retries.shutdownNow();
 		}
 	}
@@ -316,6 +344,7 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 
 	protected final synchronized ACell handleCreate(RequestContext ctx, ACell input) {
 		if (closed) throw new IllegalStateException(CLOSED);
+		if (!running) throw new UnavailableException(NOT_RUNNING.formatted(providerName()));
 		AString owner = ctx.getUserDID();
 		if (owner == null) throw new AuthException(getName() + ":create" + AUTH_REQUIRED);
 		AMap<AString, ACell> in = RT.castMap(input);
@@ -360,6 +389,8 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 	}
 
 	protected final synchronized ACell handleDelete(RequestContext ctx, ACell input) {
+		// A stopped bot has no runner to stop, and its records go only with it.
+		if (!running) throw new UnavailableException(NOT_RUNNING.formatted(providerName()));
 		AString owner = ctx.getUserDID();
 		if (owner == null) throw new AuthException(getName() + ":delete" + AUTH_REQUIRED);
 		AString nameCell = RT.ensureString(RT.getIn(input, Fields.NAME));

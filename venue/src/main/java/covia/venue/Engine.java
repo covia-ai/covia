@@ -1376,7 +1376,11 @@ public class Engine {
 		adapterRegistrationOrder.remove(name);
 		adapterRegistrationOrder.add(name);
 		adapterRegistryVersion.incrementAndGet();
+		// The instance this one replaces stops before this one starts, so their
+		// workers never run together; a failed start restarts it below.
+		boolean replacing = previousActive && previous != adapter && isStarted();
 		try {
+			if (replacing) previous.stop();
 			resumeAdapterUserDeletions(adapter);
 			if (isStarted()) adapter.start();
 		} catch (RuntimeException | Error failure) {
@@ -1404,6 +1408,11 @@ public class Engine {
 			if (adapter instanceof AutoCloseable closeable) {
 				try { closeable.close(); }
 				catch (Exception closeFailure) { failure.addSuppressed(closeFailure); }
+			}
+			// Live again, and only now the failed replacement is closed.
+			if (replacing) {
+				try { previous.start(); }
+				catch (RuntimeException | Error restartFailure) { failure.addSuppressed(restartFailure); }
 			}
 			adapterRegistryVersion.incrementAndGet();
 			throw failure;
@@ -1445,7 +1454,8 @@ public class Engine {
 
 	/**
 	 * Disable an active adapter: retract its {@code v/info/adapters/<name>}
-	 * record and stop dispatching to it. Durable catalog metadata remains. The instance
+	 * record, stop dispatching to it, then {@linkplain AAdapter#stop() stop} its
+	 * workers. Durable catalog metadata remains. The instance
 	 * is retained (not closed) so {@link #enableAdapter} restores it exactly.
 	 * In-flight jobs keep their adapter reference and finish; anything that
 	 * re-resolves the adapter by name (multi-turn messages, recovery) fails at
@@ -1466,6 +1476,7 @@ public class Engine {
 		disabledAdapters.put(name, adapter);
 		adapterRegistryVersion.incrementAndGet();
 		log.info("Disabled adapter: {}", name);
+		if (isStarted()) adapter.stop();
 		return true;
 	}
 

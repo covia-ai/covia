@@ -216,9 +216,17 @@ The significant lifecycle is:
    runtime registration and enable also call it after publishing the adapter
    on an already-live engine. A prepared engine defers it until activation.
 7. Runtime `adapter/configure` calls `configure` again and republishes public
-   configuration and information if accepted.
-8. Disable removes live dispatch and public introspection but retains the
-   instance and durable catalog metadata. Enable restores it.
+   configuration and information if accepted, whether or not the adapter is
+   enabled.
+8. Disable removes live dispatch and public introspection, then calls
+   `stop()`, but retains the instance and durable catalog metadata. Enable
+   restores it and calls `start()` again. `stop()` ends the workers `start()`
+   started and keeps the instance's resources; nothing, `configure` included,
+   starts them again before `start()`. The default does nothing. Messaging
+   adapters opt in by calling `stopBots()`, which Telegram does.
+   Replacing an active instance stops it before the new one starts. If the new
+   one fails to start, it is closed and the old one is restored and started
+   again; otherwise the old one is closed.
 9. Module unload deregisters its live adapters and closes `AutoCloseable`
    resources and the module classloader. In-flight jobs retain their adapter
    instance and may finish.
@@ -227,6 +235,15 @@ The significant lifecycle is:
    pauses a pausable Job and cancels the rest; override to record a
    durable wait and let the thread go
    (see [JOBS.md § Shutdown](JOBS.md#shutdown)).
+
+`start()` and `stop()` are effects on the running venue, so the engine calls
+them under its monitor after the registry change they announce, never from a
+lattice transaction (which may run its callback again) or on a fork of the
+venue's state. An adapter that implements `stop()` never runs workers beside
+its predecessor or replacement. When
+`stop()` returns, the adapter starts no new autonomous work, and work already
+under way neither commits nor acts outside the venue: a messaging bot's writes
+and sends check that it is still running.
 
 The venue config is authoritative again after restart; runtime enable,
 disable, configure, load, and unload changes are not persisted. Full operator
@@ -550,7 +567,8 @@ static final class BotsUnderKey implements MigrationStep {
   disabled adapter, so the start or registration fails. To run an older build without
   restoring the state from before the upgrade, remove the adapter from the
   configuration; disabling it is not enough.
-- A replaced instance keeps running until its replacement has registered. When
+- Registration migrates the replacement's state first, while the instance it
+  replaces is still live; that one stops only when the replacement starts. When
   loading a module at runtime that raises its state version, disable the old
   instance first.
 - The built-in test adapter is at version 3, so every venue, both release
