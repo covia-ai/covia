@@ -6,6 +6,7 @@ import convex.core.crypto.AESGCM;
 import convex.core.crypto.AKeyPair;
 import convex.core.crypto.HKDF;
 import convex.core.crypto.Hashing;
+import convex.core.data.ABlob;
 import convex.core.data.ACell;
 import convex.core.data.AHashMap;
 import convex.core.data.AMap;
@@ -386,10 +387,14 @@ public class SecretStore extends MapComponent<AString, ACell> implements Transac
 		return plaintext(AESGCM.decrypt(encryptionKey, blob.getBytes()));
 	}
 
-	/** The ciphertext of a secret record, or null when there is none. */
+	/**
+	 * The ciphertext of a secret record, or null when there is none. A store
+	 * decodes a ciphertext longer than one chunk as a tree of blobs, so any blob
+	 * form is the same ciphertext.
+	 */
 	private static Blob encrypted(AMap<AString, ACell> record) {
 		if (record == null) return null;
-		if (record.get(ENCRYPTED_KEY) instanceof Blob blob) return blob;
+		if (record.get(ENCRYPTED_KEY) instanceof ABlob blob) return blob.toFlatBlob();
 		throw new IllegalStateException(INVALID_RECORD);
 	}
 
