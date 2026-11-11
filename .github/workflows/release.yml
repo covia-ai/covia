@@ -71,9 +71,11 @@ jobs:
         fi
 
     - name: Build and test with Maven
-      # Opt into the @DurabilityTest crash/restart group. @IntegrationTest
-      # (external services) stays off. A JDK with JDK-8370887 fails the build.
-      run: mvn clean install -T 1C -Dcovia.tests.durability=true -Dcovia.jdk.check=ERROR
+      # Opt into the @DurabilityTest crash/restart group and the
+      # @IntegrationTest group (components working together, external
+      # services included), as master's own runs do. A JDK with JDK-8370887
+      # fails the build.
+      run: mvn clean install -T 1C -Dcovia.tests.durability=true -Dcovia.tests.integration=true -Dcovia.jdk.check=ERROR
 
     - name: Verify optional module boundaries
       run: |
