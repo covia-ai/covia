@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 import convex.core.data.Maps;
@@ -17,18 +18,25 @@ import covia.grid.Status;
 import covia.grid.client.VenueHTTP;
 import covia.venue.TestServer;
 import covia.test.IntegrationTest;
+import covia.test.Reachable;
 
 /**
- * Integration tests for the convex adapter — every test makes a real network
- * call to {@code peer.convex.live:18888}. Tagged "integration" so they're
- * excluded from the default {@code mvn test} run (which uses
- * {@code excludedGroups=integration} per the surefire config in venue/pom.xml).
- * Run explicitly with {@code mvn test -Dgroups=integration}.
+ * Integration tests for the convex adapter against the live Convex peer
+ * {@code peer.convex.live:18888}. They run with
+ * {@code -Dcovia.tests.integration=true}, and skip when no connection to the
+ * peer opens.
  */
 @IntegrationTest
 class ConvexAdapterTest {
 
-	static final String PEER = "peer.convex.live:18888";
+	static final String HOST = "peer.convex.live";
+	static final int PORT = 18888;
+	static final String PEER = HOST + ":" + PORT;
+
+	@BeforeAll
+	static void peerReachable() {
+		Reachable.assume(HOST, PORT);
+	}
 
 	@Test
 	void queryPublicPeerEndpoint() throws Exception {

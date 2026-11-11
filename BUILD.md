@@ -177,7 +177,9 @@ against its provider's service or an in-process fake of it, background
 threads and waits on what they do, anything long-running or timing-dependent,
 and anything that reaches an external service (the real network, a local
 Ollama, a live peer). A small synchronous test of a helper API stays in the
-default suite.
+default suite. A test that needs an external service skips when no connection
+to it opens (`covia.test.Reachable`); once connected, its failures count like
+any other.
 
 A single heavy test still needs its flag, e.g.
 `mvn test -pl venue -Dtest=HardKillPersistenceTest -Dcovia.tests.durability=true`.

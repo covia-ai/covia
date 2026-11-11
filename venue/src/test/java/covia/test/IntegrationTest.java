@@ -15,13 +15,13 @@ import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
  * threads and waits on what they do, anything long-running or
  * timing-dependent, and anything that reaches an external service (the real
  * network, an Ollama server, a live peer). A small synchronous test of a
- * helper API stays in the default suite.
+ * helper API stays in the default suite. One that reaches an external service
+ * skips when no connection to it opens ({@link Reachable}).
  *
  * <p><b>Opt-in.</b> Such tests run only when {@code -Dcovia.tests.integration=true}
- * is set; otherwise JUnit reports them skipped with the reason below. This
- * replaces the old {@code excludedGroups} denylist: a test declares its own
- * gate, so opening the file shows both why it is off and how to turn it on,
- * and there is no build-file list to keep in sync. Selecting the test by name
+ * is set; otherwise JUnit reports them skipped with the reason below. A test
+ * declares its own gate, so opening the file shows both why it is off and how
+ * to turn it on, and there is no build-file list to keep in sync. Selecting the test by name
  * ({@code -Dtest=…}) still requires the flag — the gate is on the test, not on
  * how it was selected.</p>
  *

@@ -55,6 +55,7 @@ import covia.venue.User;
 import covia.adapter.GuardedResolver;
 import covia.adapter.HTTPAdapter;
 import covia.test.IntegrationTest;
+import covia.test.Reachable;
 
 public class HTTPTest {
 
@@ -710,11 +711,15 @@ public class HTTPTest {
 	}
 
 	// ====================================================================
-	// External-dependent tests (retained from original, may be flaky)
+	// External-dependent tests: they reach Google, and skip when no
+	// connection to it opens
 	// ====================================================================
+
+	static final String GOOGLE = "www.google.com";
 
 	@IntegrationTest
 	@Test public void testGoogleSearch() throws InterruptedException, ExecutionException, TimeoutException {
+		Reachable.assume(GOOGLE, 443);
 		VenueHTTP covia=TestServer.COVIA;
 
 		// Test the Google search orchestration using the orchestrator adapter
@@ -759,6 +764,7 @@ public class HTTPTest {
 
 	@IntegrationTest
 	@Test public void testGoogleSearchWithFallback() throws InterruptedException, ExecutionException, TimeoutException {
+		Reachable.assume(GOOGLE, 443);
 		VenueHTTP covia=TestServer.COVIA;
 
 		// Test Google search orchestration with a different query
