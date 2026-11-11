@@ -26,6 +26,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Deleting, reconfiguring or disabling a Telegram or Discord bot that is still connecting no longer waits for the connection (for Discord, without limit), and one bot's slow connection attempt no longer holds up the others' retries.
 - Deleting, reconfiguring or disabling a Telegram bot no longer waits up to 5 seconds while it handles an update it has received or waits to retry a failed poll.
 - A secret longer than about 4 KB stays readable after the venue restarts or its store is compacted, instead of being reported as damaged.
+- `convex:query` of `nil` completes instead of being refused as an empty source.
+- A `convex:query` or `convex:transact` source that is empty or not one Convex Lisp form fails as invalid input with the reader's reason, instead of as a fault in the `convex` adapter.
 
 ## [0.11.0] - 2026-11-10
 

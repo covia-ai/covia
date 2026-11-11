@@ -29,6 +29,7 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMBool;
 import convex.core.exceptions.BadFormatException;
+import convex.core.exceptions.ParseException;
 import convex.core.exceptions.PartialMessageException;
 import convex.core.lang.RT;
 import convex.core.lang.Reader;
@@ -195,25 +196,40 @@ public class ConvexAdapter extends AAdapter {
 	private record Query(Address address, ACell code) {}
 	private record Transaction(Address address, AKeyPair keyPair, ACell code) {}
 
+	/** Why a query or transaction without its source is refused. */
+	public static final String NO_SOURCE = "source must be a string of Convex Lisp";
+
+	/** Why a source that does not read as one Convex Lisp form is refused; the reader's reason follows. */
+	public static final String UNREADABLE_SOURCE = "source must be one Convex Lisp form: ";
+
+	/** Why a transaction without an origin account is refused. */
+	public static final String NO_ADDRESS = "address must be a Convex account address, such as #13";
+
 	private Query query(ACell input) {
 		Address address = Address.parse(RT.getIn(input, Fields.ADDRESS));
-		AString source = RT.ensureString(RT.getIn(input, Fields.SOURCE));
-		if (source == null) {
-			throw new JobFailedException("No query source provided");
-		}
-		ACell code = Reader.read(source.toString());
-		if (code == null) throw new JobFailedException("Query source is empty");
-		return new Query(address, code);
+		return new Query(address, readSource(input));
 	}
 
 	private Transaction transaction(RequestContext ctx, ACell input) {
 		Address address = Address.parse(RT.getIn(input, Fields.ADDRESS));
-		if (address == null) throw new JobFailedException("No address provided");
-		AString source = RT.ensureString(RT.getIn(input, Fields.SOURCE));
-		if (source == null) throw new JobFailedException("No transaction source provided");
-		ACell code = Reader.read(source.toString());
-		if (code == null) throw new JobFailedException("Transaction source is empty");
+		if (address == null) throw new InvalidInputException(NO_ADDRESS);
+		ACell code = readSource(input);
 		return new Transaction(address, transactionKeyPair(ctx, input), code);
+	}
+
+	/**
+	 * The form a call's {@code source} reads as. A source of {@code nil} reads
+	 * as null, the nil form, and is sent like any other; Convex's reader itself
+	 * refuses empty, blank and malformed text.
+	 */
+	private static ACell readSource(ACell input) {
+		AString source = RT.ensureString(RT.getIn(input, Fields.SOURCE));
+		if (source == null) throw new InvalidInputException(NO_SOURCE);
+		try {
+			return Reader.read(source);
+		} catch (ParseException e) {
+			throw new InvalidInputException(UNREADABLE_SOURCE + e.getMessage(), e);
+		}
 	}
 
 	private CompletableFuture<ACell> executeQuery(Convex convex, Query request) {

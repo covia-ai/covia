@@ -49,6 +49,47 @@ class ConvexAdapterLocalTest {
 		return engine.jobs().invokeOperation(operation, input, ctx).awaitResult(5000);
 	}
 
+	/** Why a call failed, asserting that it did. */
+	private String refusal(String operation, ACell input) {
+		Job job = engine.jobs().invokeOperation(operation, input, ctx);
+		assertThrows(Exception.class, () -> job.awaitResult(5000));
+		return job.getErrorMessage();
+	}
+
+	private static final String QUERY = "v/ops/convex/query";
+	private static final String TRANSACT = "v/ops/convex/transact";
+	/** A literal seed; these calls are refused before it is used. */
+	private static final String SEED = "0xB5232CF710Aaa222F2C898105d06d58283f91173D668C313b72dD90f0175E622";
+
+	// A refused source or address fails the call before any peer is dialled
+
+	@Test
+	void queryAndTransactRequireASource() {
+		assertEquals(ConvexAdapter.NO_SOURCE, refusal(QUERY, Maps.of(Fields.ADDRESS, "#13")));
+		assertEquals(ConvexAdapter.NO_SOURCE, refusal(QUERY, Maps.of(Fields.SOURCE, 42L)));
+		assertEquals(ConvexAdapter.NO_SOURCE, refusal(TRANSACT, Maps.of(
+			Fields.ADDRESS, "#13", Fields.SEED, SEED)));
+	}
+
+	@Test
+	void sourceThatIsNotOneFormIsInvalidInput() {
+		for (String source : new String[] {"", "  \n", ";; only a comment", "(+ 1 2", "1 2", ")"}) {
+			String query = refusal(QUERY, Maps.of(Fields.SOURCE, source));
+			assertTrue(query.startsWith(ConvexAdapter.UNREADABLE_SOURCE), source + ": " + query);
+			assertTrue(query.length() > ConvexAdapter.UNREADABLE_SOURCE.length(), "the reader's reason follows: " + query);
+
+			String transact = refusal(TRANSACT, Maps.of(
+				Fields.ADDRESS, "#13", Fields.SOURCE, source, Fields.SEED, SEED));
+			assertTrue(transact.startsWith(ConvexAdapter.UNREADABLE_SOURCE), source + ": " + transact);
+		}
+	}
+
+	@Test
+	void transactRequiresAnAddress() {
+		assertEquals(ConvexAdapter.NO_ADDRESS, refusal(TRANSACT, Maps.of(
+			Fields.SOURCE, "(def foo 1)", Fields.SEED, SEED)));
+	}
+
 	@Test
 	void generateKeyStoresSeedButReturnsOnlyPublicMaterial() {
 		ACell result = run("v/ops/convex/generate-key", Maps.of(Fields.NAME, "signer"));
