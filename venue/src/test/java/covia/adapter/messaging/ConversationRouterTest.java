@@ -277,13 +277,16 @@ class ConversationRouterTest {
 		} finally { release.countDown(); engine.close(); }
 	}
 
-	@Test void inputDeliveredBeforeTheAgentWakesIsAnsweredAfterARestart() throws Exception {
-		var venue = TestEngine.restartable(Maps.empty());
+	@Test void deliveredInputSurvivesPersistentRestartBeforeAgentWake() throws Exception {
+		convex.core.data.AMap<convex.core.data.AString, ACell> config = Maps.of(covia.venue.Config.PORT, 0, covia.venue.Config.BIND_ADDRESS, "127.0.0.1",
+			covia.venue.Config.STORE, covia.venue.TestTemp.etchFile("router-intake").toString(),
+			covia.venue.Config.SEED, convex.core.crypto.AKeyPair.createSeeded(74123).getSeed().toHexString());
 		var owner = Strings.create("did:test:restart-intake");
 		String sid;
 		convex.core.data.Blob jobId;
-		var engine = venue.start();
+		var first = covia.venue.server.VenueServer.launch(config);
 		try {
+			var engine = first.getEngine();
 			Engine.addDemoAssets(engine);
 			engine.getVenueState().users().ensure(owner);
 			engine.registerAdapter(new AgentAdapter() {
@@ -303,13 +306,10 @@ class ConversationRouterTest {
 			jobId = job.getID();
 			sid = sessions.get("chat");
 			assertEquals(covia.adapter.webhook.WebhookInbox.COMPLETE, inbox.get("1").get(Fields.STATUS));
-		} finally { engine.close(); }
-		engine = venue.start();
+		} finally { first.close(); }
+		var second = covia.venue.server.VenueServer.launch(config);
 		try {
-			// What boot does once the adapters are in: recover the venue's jobs, then wake the agents with work.
-			Engine.addDemoAssets(engine);
-			engine.jobs().recoverJobs();
-			((AgentAdapter) engine.getAdapter("agent")).wakeAgentsWithWork();
+			var engine = second.getEngine();
 			var state = engine.adapterState("messaging-test");
 			var sessions = new ConversationSessions(state, "restart/sessions");
 			var inbox = new covia.adapter.webhook.WebhookInbox(engine, state, "restart/inbox");
@@ -322,7 +322,7 @@ class ConversationRouterTest {
 			var router = new ConversationRouter(engine, new Spec("bot", owner.toString(), "restart", null, null), sessions);
 			assertNull(router.deliver("chat", Strings.create("accepted before wake"), LISTED,
 				(draft, session, id) -> inbox.deliver(draft, "1", session, id)));
-		} finally { engine.close(); }
+		} finally { second.close(); }
 	}
 
 	@Test void failedFlushReportsErrorWithoutRetryOrLostAdmission() throws Exception {
