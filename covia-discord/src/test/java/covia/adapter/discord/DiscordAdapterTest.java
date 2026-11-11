@@ -43,7 +43,13 @@ import covia.venue.Agent;
 import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
+import covia.test.IntegrationTest;
 
+/**
+ * Discord bots against a venue engine, a fake Discord REST API and a fake
+ * gateway. The module's helpers, called directly, are in {@link DiscordHelpersTest}.
+ */
+@IntegrationTest
 @Execution(ExecutionMode.SAME_THREAD)
 class DiscordAdapterTest {
 	private static final AString OWNER=Strings.create("did:test:discord:owner"),OTHER=Strings.create("did:test:discord:other");
@@ -90,16 +96,6 @@ class DiscordAdapterTest {
 		} finally {
 			prepared.close();
 		}
-	}
-
-	@Test void validatesSpecsAndDoesNotLeakToken(){
-		assertThrows(IllegalArgumentException.class,()->BotSpec.parse("x",Maps.of("user",OWNER,"agent","a"),false));
-		assertThrows(IllegalArgumentException.class,()->BotSpec.parse("x",Maps.of("token","t","user",OWNER,"agent","a","operation","o"),false));
-		BotSpec s=BotSpec.parse("x",Maps.of("token","s/DISCORD","user",OWNER,"agent","a","allow",Vectors.of("123","@Alice")),true);
-		assertTrue(s.mentionOnly());assertTrue(s.allows("123",null));assertTrue(s.allows("9","ALICE"));assertFalse(s.allows("9","bob"));assertFalse(s.toString().contains("DISCORD"));
-		DiscordAdapter fresh=new DiscordAdapter();
-		assertThrows(IllegalArgumentException.class,()->fresh.configure(Maps.of("statePath","w/elsewhere"),false));
-		fresh.close();
 	}
 
 	@Test void inboundAccessAndGuildMentionsAreFailClosed() throws Exception {

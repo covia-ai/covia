@@ -24,11 +24,11 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.adapter.messaging.AWebhookMessagingAdapter;
-import covia.adapter.messaging.MessagingSettings;
 import covia.adapter.messaging.RelayBinding;
 import covia.adapter.messaging.RelaySettings;
 import covia.adapter.webhook.WebhookRequest;
 import covia.adapter.webhook.WebhookResponse;
+import covia.test.IntegrationTest;
 
 /**
  * A WhatsApp binding whose handler is {@code relay}, end to end against a stand-in for
@@ -36,8 +36,10 @@ import covia.adapter.webhook.WebhookResponse;
  * number reaches that principal's poll and no other's; the answer goes back as WhatsApp
  * replies, once; a closed principal's sender is told so; an unlinked number is told how
  * to link; STOP unlinks; a forged webhook reaches nobody; the admission hook can refuse;
- * only the link is stored; the send operation stays as closed as written.
+ * only the link is stored; the send operation stays as closed as written. Settings
+ * refused before any binding starts are in {@link WhatsAppHelpersTest}.
  */
+@IntegrationTest
 class WhatsAppRelayTest {
 
 	static final AString ALICE = Strings.create("did:test:relay:alice");
@@ -286,19 +288,6 @@ class WhatsAppRelayTest {
 			assertNotNull(path, String.valueOf(created));
 			assertTrue(path.startsWith("/relay/whatsapp/u-"), path);
 		}
-	}
-
-	@Test void malformedRelaySettingsAreRefused() {
-		AMap<AString, ACell> base = RT.castMap(Maps.of("user", OWNER, "token", "s/TOKEN", "appSecret", "s/SIGNING",
-			"verifyToken", "s/VERIFY", "businessAccountId", "123", "phoneNumberId", "456", "apiVersion", "v25.0"));
-		assertEquals(RelaySettings.HOLD, assertThrows(IllegalArgumentException.class, () -> BotSpec.parse("main",
-			base.assoc(MessagingSettings.key("relay"), Maps.of("holdSeconds", -1)), true)).getMessage());
-		assertEquals(MessagingSettings.HANDLER, assertThrows(IllegalArgumentException.class, () -> BotSpec.parse("main",
-			base.assoc(MessagingSettings.key("relay"), CVMBool.TRUE).assoc(MessagingSettings.key("agent"), Strings.create("g/a")), true)).getMessage());
-		assertEquals(RelaySettings.PUBLIC_USER, assertThrows(IllegalArgumentException.class, () -> BotSpec.parse("main",
-			base.assoc(MessagingSettings.key("relay"), CVMBool.TRUE).assoc(MessagingSettings.key("user"), Strings.create("public")), true)).getMessage());
-		assertEquals(MessagingSettings.INVALID_ID.formatted("number"), assertThrows(IllegalArgumentException.class, () -> BotSpec.parse("main",
-			base.assoc(MessagingSettings.key("relay"), CVMBool.TRUE).assoc(MessagingSettings.key("number"), Strings.create("+44 7700")), true)).getMessage());
 	}
 
 	private static int status(AMap<AString, ACell> m) {

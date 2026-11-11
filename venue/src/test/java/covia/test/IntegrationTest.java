@@ -10,9 +10,12 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 
 /**
- * Marks a test (class or method) that reaches an external service — the real
- * network, an Ollama server, a live peer — so it is flaky or
- * environment-dependent.
+ * Marks a test (class or method) of components working together: an adapter
+ * against its provider's service or an in-process fake of it, background
+ * threads and waits on what they do, anything long-running or
+ * timing-dependent, and anything that reaches an external service (the real
+ * network, an Ollama server, a live peer). A small synchronous test of a
+ * helper API stays in the default suite.
  *
  * <p><b>Opt-in.</b> Such tests run only when {@code -Dcovia.tests.integration=true}
  * is set; otherwise JUnit reports them skipped with the reason below. This
@@ -29,6 +32,6 @@ import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 @Documented
 @Tag("integration")
 @EnabledIfSystemProperty(named = "covia.tests.integration", matches = "true",
-	disabledReason = "external-service test; enable with -Dcovia.tests.integration=true")
+	disabledReason = "integration test; enable with -Dcovia.tests.integration=true")
 public @interface IntegrationTest {
 }

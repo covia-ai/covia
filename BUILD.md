@@ -169,8 +169,15 @@ default `mvn test` runs the fast suite and skips these with a reason:
 
 ```bash
 mvn test -Dcovia.tests.durability=true    # crash/restart survival (forks JVMs); CI runs this on every push
-mvn test -Dcovia.tests.integration=true   # external services (real network, a local Ollama)
+mvn test -Dcovia.tests.integration=true   # components working together, external services included
 ```
+
+An integration test exercises components working together: an adapter
+against its provider's service or an in-process fake of it, background
+threads and waits on what they do, anything long-running or timing-dependent,
+and anything that reaches an external service (the real network, a local
+Ollama, a live peer). A small synchronous test of a helper API stays in the
+default suite.
 
 A single heavy test still needs its flag, e.g.
 `mvn test -pl venue -Dtest=HardKillPersistenceTest -Dcovia.tests.durability=true`.

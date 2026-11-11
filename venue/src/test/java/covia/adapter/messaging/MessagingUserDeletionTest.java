@@ -19,7 +19,9 @@ import convex.core.data.Strings;
 import covia.exception.AuthException;
 import covia.venue.Engine;
 import covia.venue.TestEngine;
+import covia.test.IntegrationTest;
 
+@IntegrationTest
 class MessagingUserDeletionTest {
 	private static final AString VALUE = Strings.create("session");
 	/** One venue for the class: each test registers an adapter of its own and disables it or deletes through it. */

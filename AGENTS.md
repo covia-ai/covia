@@ -26,11 +26,12 @@ Dependency versions are in the root `pom.xml`.
   25.0.3: JDK-8370887 fires virtual-thread timeouts tens of seconds late, so
   jobs stall and tests fail. The build warns on one; `-Dcovia.jdk.check=ERROR`
   (CI and release) fails it.
-- `mvn clean install` builds and tests everything (`-DskipTests` skips tests);
-  `mvn test -pl venue` tests one module. `covia.jar` is assembled in
-  `install`, not `package`.
+- `mvn clean install` builds everything and runs the default tests
+  (`-DskipTests` skips them); `mvn test -pl venue` tests one module.
+  `covia.jar` is assembled in `install`, not `package`.
 - Heavy tests are opt-in: `-Dcovia.tests.durability=true` (forks JVMs) and
-  `-Dcovia.tests.integration=true` (external services); see `BUILD.md`.
+  `-Dcovia.tests.integration=true` (components working together, external
+  services included); see `BUILD.md`.
 - Never kill a running `mvn test`: it orphans venue JVMs. Let it finish, and
   stop a stray venue JVM only by its `jps` PID.
 - In a worktree, build with `-pl <module> -am`: sibling SNAPSHOTs may be
