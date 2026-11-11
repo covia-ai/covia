@@ -134,10 +134,8 @@ class ConvexAdapterLocalTest {
 		ACell first = run("v/ops/convex/generate-key", Maps.of(Fields.NAME, "protected"));
 		String firstSeed = engine.resolveSecret("s/protected", ctx);
 
-		Job refused = engine.jobs().invokeOperation("v/ops/convex/generate-key",
-			Maps.of(Fields.NAME, "protected"), ctx);
-		assertThrows(Exception.class, () -> refused.awaitResult(5000));
-		assertTrue(refused.getErrorMessage().contains("overwrite:true"));
+		assertEquals(SecretAdapter.SECRET_EXISTS, refusal("v/ops/convex/generate-key",
+			Maps.of(Fields.NAME, "protected")));
 		assertEquals(firstSeed, engine.resolveSecret("s/protected", ctx));
 
 		ACell replacement = run("v/ops/convex/generate-key", Maps.of(
@@ -179,10 +177,8 @@ class ConvexAdapterLocalTest {
 	@Test
 	void signRejectsLiteralSeedsAndMissingSecrets() {
 		AKeyPair keyPair = AKeyPair.generate();
-		Job literal = engine.jobs().invokeOperation("v/ops/convex/sign", Maps.of(
-			Fields.SEED, keyPair.getSeed().toHexString(), Fields.MESSAGE, "message"), ctx);
-		assertThrows(Exception.class, () -> literal.awaitResult(5000));
-		assertFalse(literal.getErrorMessage().isBlank());
+		assertEquals(ConvexAdapter.SEED_REF_REQUIRED, refusal("v/ops/convex/sign", Maps.of(
+			Fields.SEED, keyPair.getSeed().toHexString(), Fields.MESSAGE, "message")));
 
 		assertEquals(ConvexAdapter.SEED_UNAVAILABLE + "s/missing", refusal("v/ops/convex/sign", Maps.of(
 			Fields.SEED, "s/missing", Fields.MESSAGE, "message")));
@@ -235,25 +231,17 @@ class ConvexAdapterLocalTest {
 
 	@Test
 	void decodeCad3RejectsMalformedAndIncompleteMessages() {
-		Job malformed = engine.jobs().invokeOperation("v/ops/convex/decode-cad3",
-			Maps.of("encoding", "0xzz"), ctx);
-		assertThrows(Exception.class, () -> malformed.awaitResult(5000));
-		assertFalse(malformed.getErrorMessage().isBlank());
+		assertEquals(ConvexAdapter.NOT_CAD3, refusal("v/ops/convex/decode-cad3", Maps.of("encoding", "0xzz")));
 
 		ACell value = Maps.of("payload", Strings.create("abcdef".repeat(2_000)));
 		String topCellOnly = Cells.getEncoding(value).toString();
-		Job incomplete = engine.jobs().invokeOperation("v/ops/convex/decode-cad3",
-			Maps.of("encoding", topCellOnly), ctx);
-		assertThrows(Exception.class, () -> incomplete.awaitResult(5000));
-		assertFalse(incomplete.getErrorMessage().isBlank());
+		String incomplete = refusal("v/ops/convex/decode-cad3", Maps.of("encoding", topCellOnly));
+		assertTrue(incomplete.startsWith(ConvexAdapter.CAD3_INCOMPLETE), incomplete);
 	}
 
 	@Test
 	void encodeCad3DistinguishesMissingValueFromExplicitNull() {
-		Job missing = engine.jobs().invokeOperation("v/ops/convex/encode-cad3",
-			Maps.empty(), ctx);
-		assertThrows(Exception.class, () -> missing.awaitResult(5000));
-		assertFalse(missing.getErrorMessage().isBlank());
+		assertEquals(ConvexAdapter.NO_VALUE, refusal("v/ops/convex/encode-cad3", Maps.empty()));
 
 		ACell encodedNull = run("v/ops/convex/encode-cad3",
 			Maps.of(Fields.VALUE, null));

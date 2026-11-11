@@ -29,6 +29,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - `convex:query` and `convex:transact` accept a source of `nil` instead of refusing it as empty.
 - A `convex:query` or `convex:transact` source that is empty or not one Convex Lisp form fails as invalid input with the reader's reason, instead of as a fault in the `convex` adapter.
 - `convex:query` refuses an `address` that is not a Convex account address, instead of running the query without one.
+- A `convex:query` or `convex:transact` whose peer does not answer within 60 seconds fails with the peer unavailable, instead of as a fault in the `convex` adapter.
 
 ## [0.11.0] - 2026-11-10
 

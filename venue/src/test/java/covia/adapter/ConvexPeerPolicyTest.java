@@ -38,11 +38,11 @@ import covia.venue.TestEngine;
  * A Convex call goes to the operator's peer. Naming another peer asks the
  * venue to relay: off by default, and when the operator turns it on the peer
  * passes the venue's outbound address guard. Nothing here leaves the machine:
- * the peers that are dialled are local sockets that accept and never answer.
+ * the peers that are dialled are local sockets that accept and never answer,
+ * or a local port where nothing listens.
  */
 class ConvexPeerPolicyTest {
 
-	private static final String CONNECT_FAILURE = "Failed to connect to Convex peer";
 	private static final String QUERY = "v/ops/convex/query";
 
 	/** This venue's own Convex peer on {@link #relayOff}. */
@@ -109,7 +109,7 @@ class ConvexPeerPolicyTest {
 	private static String refusal(Job job) {
 		assertThrows(Exception.class, () -> job.awaitResult(5000));
 		String message = job.getErrorMessage();
-		assertFalse(message.contains(CONNECT_FAILURE), "refused before any dial: " + message);
+		assertFalse(message.startsWith(ConvexAdapter.PEER_UNREACHABLE), "refused before any dial: " + message);
 		return message;
 	}
 
@@ -166,6 +166,14 @@ class ConvexPeerPolicyTest {
 	void allowListedPeerIsRelayed() throws IOException {
 		assertDialled(allowedPeer,
 			relayOn.jobs().invokeOperation(QUERY, query("localhost:" + allowedPeer.getLocalPort()), ctx));
+	}
+
+	@Test
+	void unreachablePeerIsUnavailable() {
+		// Nothing listens on port 1, so the connection is refused
+		Job job = relayOn.jobs().invokeOperation(QUERY, query("localhost:1"), ctx);
+		assertThrows(Exception.class, () -> job.awaitResult(10_000));
+		assertEquals(ConvexAdapter.PEER_UNREACHABLE + "tcp://localhost:1", job.getErrorMessage());
 	}
 
 	@Test

@@ -1,12 +1,14 @@
 package covia.adapter;
 
+import java.io.IOException;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 import java.util.Set;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
+import java.util.concurrent.TimeoutException;
 import java.util.function.Function;
 
 import org.slf4j.Logger;
@@ -41,9 +43,9 @@ import convex.net.Transports;
 import covia.api.Fields;
 import covia.exception.ConfigurationException;
 import covia.exception.InvalidInputException;
-import covia.exception.JobFailedException;
 import covia.exception.NotFoundException;
 import covia.exception.NotSupportedException;
+import covia.exception.UnavailableException;
 import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -81,6 +83,21 @@ public class ConvexAdapter extends AAdapter {
 	/** Why a peer value is refused before any policy applies. */
 	public static final String NOT_A_PEER = "must be a Convex peer endpoint: host:port, tcp://host:port or tls://host:port";
 
+	/** Why a call fails when no connection to its peer opens; the peer follows. */
+	public static final String PEER_UNREACHABLE = "Could not connect to the Convex peer ";
+
+	/** Why a call ends when its thread is interrupted while connecting; the peer follows. */
+	public static final String CONNECT_INTERRUPTED = "Interrupted connecting to the Convex peer ";
+
+	/** Why a setting adapters.convex does not have is refused; the setting follows. */
+	public static final String UNKNOWN_SETTING = "adapters.convex: unknown setting ";
+
+	/** Why an anyPeer setting that is not a boolean is refused; the value follows. */
+	public static final String ANY_PEER_NOT_BOOLEAN = "adapters.convex.anyPeer must be a boolean, got: ";
+
+	/** Why an operation this adapter does not have is refused; its name follows. */
+	public static final String UNSUPPORTED_OPERATION = "Unsupported Convex operation: ";
+
 	/** The operator's peer settings, replaced whole on every {@link #configure}. */
 	private record PeerPolicy(URI peer, boolean anyPeer) {}
 
@@ -93,6 +110,9 @@ public class ConvexAdapter extends AAdapter {
 	 * but-non-responsive peer leaves the future — and the Job — pending forever.
 	 */
 	private static final long CONVEX_CALL_TIMEOUT_MS = 60_000L;
+
+	/** Why a call fails when its peer has not answered within the backstop deadline. */
+	public static final String PEER_SILENT = "The Convex peer did not answer within " + CONVEX_CALL_TIMEOUT_MS + "ms";
 
 	private static final AString K_ACCOUNT_KEY = Strings.intern("accountKey");
 	private static final AString K_ENCODING = Strings.intern("encoding");
@@ -123,7 +143,7 @@ public class ConvexAdapter extends AAdapter {
 			for (long i = 0; i < config.count(); i++) {
 				AString key = config.entryAt(i).getKey();
 				if (!SETTINGS.contains(key)) {
-					throw new ConfigurationException("adapters.convex: unknown setting '" + key + "'");
+					throw new ConfigurationException(UNKNOWN_SETTING + "'" + key + "'");
 				}
 			}
 		}
@@ -136,7 +156,7 @@ public class ConvexAdapter extends AAdapter {
 		}
 		ACell rawAny = config.get(K_ANY_PEER);
 		if (rawAny != null && !(rawAny instanceof CVMBool)) {
-			throw new ConfigurationException("adapters.convex.anyPeer must be a boolean, got: " + rawAny);
+			throw new ConfigurationException(ANY_PEER_NOT_BOOLEAN + rawAny);
 		}
 		policy = new PeerPolicy(peer, CVMBool.TRUE.equals(rawAny));
 		return true;
@@ -169,7 +189,7 @@ public class ConvexAdapter extends AAdapter {
 			case "encode-cad3" -> CompletableFuture.supplyAsync(
 				() -> encodeCAD3(input), VIRTUAL_EXECUTOR);
 			default -> CompletableFuture.failedFuture(
-				new NotSupportedException("Unsupported Convex operation: " + op));
+				new NotSupportedException(UNSUPPORTED_OPERATION + op));
 		};
 	}
 
@@ -257,14 +277,19 @@ public class ConvexAdapter extends AAdapter {
 		return RT.cvm(result.toJSON());
 	}
 
+	public static final String NAME_REQUIRED = "name is required";
+	public static final String OVERWRITE_NOT_BOOLEAN = "overwrite must be a boolean";
+	public static final String MESSAGE_REQUIRED = "message is required";
+	public static final String SIGN_ENCODING = "encoding must be 'utf8' or 'hex'";
+
 	private ACell generateKey(RequestContext ctx, ACell input) {
 		AString name = RT.ensureString(RT.getIn(input, Fields.NAME));
 		if (name == null || name.toString().isBlank()) {
-			throw new InvalidInputException("name is required");
+			throw new InvalidInputException(NAME_REQUIRED);
 		}
 		ACell overwriteValue = RT.getIn(input, Fields.OVERWRITE);
 		if (overwriteValue != null && !(overwriteValue instanceof CVMBool)) {
-			throw new InvalidInputException("overwrite must be a boolean");
+			throw new InvalidInputException(OVERWRITE_NOT_BOOLEAN);
 		}
 
 		AKeyPair keyPair = AKeyPair.generate();
@@ -278,13 +303,13 @@ public class ConvexAdapter extends AAdapter {
 
 	private ACell sign(RequestContext ctx, ACell input) {
 		AString message = RT.ensureString(RT.getIn(input, Fields.MESSAGE));
-		if (message == null) throw new InvalidInputException("message is required");
+		if (message == null) throw new InvalidInputException(MESSAGE_REQUIRED);
 		AString encodingValue = RT.ensureString(RT.getIn(input, K_ENCODING));
 		String encoding = (encodingValue != null) ? encodingValue.toString() : "utf8";
 		Blob bytes = switch (encoding) {
 			case "utf8" -> Blob.wrap(message.toString().getBytes(StandardCharsets.UTF_8));
 			case "hex" -> parseBlob(message, "message");
-			default -> throw new InvalidInputException("encoding must be 'utf8' or 'hex'");
+			default -> throw new InvalidInputException(SIGN_ENCODING);
 		};
 		AKeyPair keyPair = resolveKeyPair(ctx, input, true);
 		ASignature signature = keyPair.sign(bytes);
@@ -293,36 +318,44 @@ public class ConvexAdapter extends AAdapter {
 			K_SIGNATURE, Strings.create(signature.toHexString()));
 	}
 
+	public static final String CAD3_TOO_LARGE = "CAD3 encoding exceeds the maximum message size of "
+		+ CPoSConstants.MAX_MESSAGE_LENGTH + " bytes";
+	public static final String NOT_CAD3 = "encoding must be a hexadecimal CAD3 blob";
+	/** Why an encoding that refers to a cell it does not carry is refused; the cell's hash follows. */
+	public static final String CAD3_INCOMPLETE = "Incomplete CAD3 encoding; missing referenced cell ";
+	/** Why an encoding Convex cannot decode is refused; Convex's reason follows. */
+	public static final String CAD3_INVALID = "Invalid CAD3 encoding: ";
+	public static final String NO_VALUE = "encode-cad3 requires a 'value' field";
+	public static final String NO_ROUND_TRIP = "CAD3 value did not round-trip exactly";
+	public static final String VALUE_TOO_LARGE = "Value exceeds the maximum complete CAD3 message size";
+
 	private ACell decodeCAD3(ACell input) {
 		ACell supplied = RT.getIn(input, K_ENCODING);
 		if (supplied instanceof AString text
 				&& text.count() > (CPoSConstants.MAX_MESSAGE_LENGTH * 2L + 2L)) {
-			throw new InvalidInputException("CAD3 encoding exceeds the maximum message size of "
-				+ CPoSConstants.MAX_MESSAGE_LENGTH + " bytes");
+			throw new InvalidInputException(CAD3_TOO_LARGE);
 		}
 		ABlob parsed = Blobs.parse(supplied);
 		if (parsed == null) {
-			throw new InvalidInputException("encoding must be a hexadecimal CAD3 blob");
+			throw new InvalidInputException(NOT_CAD3);
 		}
 		if (parsed.count() > CPoSConstants.MAX_MESSAGE_LENGTH) {
-			throw new InvalidInputException("CAD3 encoding exceeds the maximum message size of "
-				+ CPoSConstants.MAX_MESSAGE_LENGTH + " bytes");
+			throw new InvalidInputException(CAD3_TOO_LARGE);
 		}
 		try {
 			// Storeless multi-cell decoding is deliberate: every referenced child must
 			// be carried by this encoding rather than resolved from ambient venue state.
 			return CVMEncoder.INSTANCE.decodeMultiCell(parsed.toFlatBlob());
 		} catch (PartialMessageException e) {
-			throw new InvalidInputException(
-				"Incomplete CAD3 encoding; missing referenced cell " + e.getMissingHash(), e);
+			throw new InvalidInputException(CAD3_INCOMPLETE + e.getMissingHash(), e);
 		} catch (BadFormatException e) {
-			throw new InvalidInputException("Invalid CAD3 encoding: " + e.getMessage(), e);
+			throw new InvalidInputException(CAD3_INVALID + e.getMessage(), e);
 		}
 	}
 
 	private ACell encodeCAD3(ACell input) {
 		if (!(input instanceof AMap<?, ?> map) || !map.containsKey(Fields.VALUE)) {
-			throw new InvalidInputException("encode-cad3 requires a 'value' field");
+			throw new InvalidInputException(NO_VALUE);
 		}
 		ACell value = map.get(Fields.VALUE);
 		Blob encoding = Format.encodeMultiCell(value, true);
@@ -331,11 +364,10 @@ public class ConvexAdapter extends AAdapter {
 			// Never return a purported complete encoding that cannot stand alone.
 			ACell roundTrip = CVMEncoder.INSTANCE.decodeMultiCell(encoding);
 			if (!Cells.equals(value, roundTrip)) {
-				throw new InvalidInputException("CAD3 value did not round-trip exactly");
+				throw new InvalidInputException(NO_ROUND_TRIP);
 			}
 		} catch (PartialMessageException e) {
-			throw new InvalidInputException(
-				"Value exceeds the maximum complete CAD3 message size", e);
+			throw new InvalidInputException(VALUE_TOO_LARGE, e);
 		} catch (BadFormatException e) {
 			throw new IllegalStateException("Generated invalid CAD3 encoding", e);
 		}
@@ -352,6 +384,12 @@ public class ConvexAdapter extends AAdapter {
 
 	/** Why a seed reference that resolves to no secret is refused; the reference follows. */
 	public static final String SEED_UNAVAILABLE = "No secret is available for the seed reference ";
+
+	public static final String SEED_REF_REQUIRED = "seed must be an s/<name> secret reference";
+	public static final String WRONG_SEED_LENGTH = "Ed25519 seed must be exactly " + AKeyPair.SEED_LENGTH + " bytes";
+
+	/** Why a value that is not hexadecimal is refused; follows the field's name. */
+	public static final String NOT_HEX = "must be a hexadecimal blob";
 
 	/** A transaction's signer: a held {@code key}, used under {@code key/sign/convex}, or its {@code seed}. */
 	private AKeyPair transactionKeyPair(RequestContext ctx, ACell input) {
@@ -372,7 +410,7 @@ public class ConvexAdapter extends AAdapter {
 		String value = supplied.toString();
 		boolean secretRef = Engine.isSecretRef(value);
 		if (requireSecretRef && !secretRef) {
-			throw new InvalidInputException("seed must be an s/<name> secret reference");
+			throw new InvalidInputException(SEED_REF_REQUIRED);
 		}
 		if (secretRef) {
 			String resolved = engine.resolveSecret(value, ctx);
@@ -381,16 +419,14 @@ public class ConvexAdapter extends AAdapter {
 		}
 		Blob seed = parseBlob(Strings.create(value), "seed");
 		if (seed.count() != AKeyPair.SEED_LENGTH) {
-			throw new InvalidInputException("Ed25519 seed must be exactly "
-				+ AKeyPair.SEED_LENGTH + " bytes");
+			throw new InvalidInputException(WRONG_SEED_LENGTH);
 		}
 		return AKeyPair.create(seed);
 	}
 
 	private static Blob parseBlob(AString value, String field) {
 		ABlob parsed = Blobs.parse(value);
-		if (parsed == null) throw new InvalidInputException(
-			field + " must be a hexadecimal blob");
+		if (parsed == null) throw new InvalidInputException(field + " " + NOT_HEX);
 		return parsed.toFlatBlob();
 	}
 
@@ -402,9 +438,12 @@ public class ConvexAdapter extends AAdapter {
 			URI endpoint = permittedPeer(ctx, meta, input);
 			try {
 				return Convex.connect(endpoint);
-			} catch (Exception e) {
-				throw new CompletionException(
-						new JobFailedException("Failed to connect to Convex peer: " + e.getMessage()));
+			} catch (IOException | TimeoutException e) {
+				// The client's own text names local sockets and hosts, not the peer's answer
+				throw new UnavailableException(PEER_UNREACHABLE + endpoint, e);
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+				throw new CancellationException(CONNECT_INTERRUPTED + endpoint);
 			}
 		}, VIRTUAL_EXECUTOR).thenCompose(convex -> {
 			CompletableFuture<ACell> resultFuture;
@@ -418,7 +457,9 @@ public class ConvexAdapter extends AAdapter {
 		})
 		// Backstop so a non-responsive Convex peer cannot leave the Job pending
 		// forever (the Convex client sets no request timeout of its own).
-		.orTimeout(CONVEX_CALL_TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS);
+		.orTimeout(CONVEX_CALL_TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
+		.exceptionallyCompose(e -> CompletableFuture.failedFuture(
+			(unwrap(e) instanceof TimeoutException) ? new UnavailableException(PEER_SILENT, e) : e));
 	}
 
 	/**
