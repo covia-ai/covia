@@ -145,7 +145,7 @@ public class AdapterFailureTest {
 	}
 
 	@Test
-	public void enableWhoseStartFailsKeepsTheAdapterEnabledButFailed() {
+	public void enableWhoseStartFailsKeepsTheAdapterEnabledButFailed() throws Exception {
 		Engine engine = boot();
 		try {
 			FlakyAdapter flaky = new FlakyAdapter();
@@ -166,6 +166,9 @@ public class AdapterFailureTest {
 
 			assertTrue(engine.disableAdapter(NAME));
 			assertNull(engine.adapterFailure(NAME), "disabling forgets the failure");
+			AMap<AString, ACell> disabled = listed(engine, NAME);
+			assertEquals(VenueAdapter.ADAPTER_DISABLED, disabled.get(Fields.STATUS));
+			assertNull(disabled.get(Fields.REASON));
 
 			assertThrows(UnavailableException.class, () -> engine.enableAdapter(NAME));
 			engine.removeAdapter(NAME);
