@@ -114,9 +114,11 @@ public abstract class AAdapter {
 	 * front or to rebuild cached derived state (clients, connection pools,
 	 * allow-lists). Return {@code false} to decline: at registration the
 	 * adapter is parked as disabled; at reconfiguration the new settings are
-	 * rejected and the previous configuration stays in force. Malformed known
-	 * settings should throw {@link IllegalArgumentException} with an
-	 * actionable message.</p>
+	 * rejected and the previous configuration stays in force. A setting the
+	 * adapter refuses throws {@link covia.exception.ConfigurationException}
+	 * with an actionable message, whoever supplied the settings; any other
+	 * exception that escapes and is not a Covia exception is this adapter's
+	 * fault (docs/ERRORS.md).</p>
 	 *
 	 * <p>Distinct from {@link #configureModule}: that receives the module-level
 	 * bootstrap settings ({@code modules[].config}) exactly once, before

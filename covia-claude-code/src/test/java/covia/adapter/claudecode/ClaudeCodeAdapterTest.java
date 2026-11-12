@@ -2,6 +2,7 @@ package covia.adapter.claudecode;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -35,6 +36,7 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.exception.AuthException;
+import covia.exception.ConfigurationException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
 import covia.grid.Job;
@@ -175,9 +177,17 @@ public class ClaudeCodeAdapterTest {
 	@Test
 	public void testAdapterConfigValidation() {
 		ClaudeCodeAdapter a = new ClaudeCodeAdapter();
-		assertThrows(IllegalArgumentException.class, () -> a.configure(Maps.of("maxSessions", 0), true));
-		assertThrows(IllegalArgumentException.class, () -> a.configure(Maps.of("command", Vectors.empty()), true));
-		assertThrows(IllegalArgumentException.class, () -> a.configure(Maps.of("bogus", 1), true));
+		assertEquals(ClaudeCodeAdapter.BAD_COUNT.formatted("adapters.claudecode.maxSessions", 1),
+			assertThrows(ConfigurationException.class, () -> a.configure(Maps.of("maxSessions", 0), true)).getMessage());
+		assertEquals(ClaudeCodeAdapter.COMMAND_NOT_ARGV,
+			assertThrows(ConfigurationException.class, () -> a.configure(Maps.of("command", Vectors.empty()), true)).getMessage());
+		assertEquals(ClaudeCodeAdapter.UNKNOWN_SETTING.formatted("bogus"),
+			assertThrows(ConfigurationException.class, () -> a.configure(Maps.of("bogus", 1), true)).getMessage());
+		// The project parser also reads create input, so its refusal is rethrown here as configuration:
+		// a well-formed path that is no directory on this venue is refused the same way
+		ConfigurationException noDir = assertThrows(ConfigurationException.class, () -> a.configure(
+			Maps.of("projects", Maps.of("p", Maps.of("path", root.resolve("no-such-dir").toString()))), true));
+		assertInstanceOf(IllegalArgumentException.class, noDir.getCause());
 		assertTrue(a.configure(Maps.of("bogus", 1), false), "lenient mode ignores unknown keys");
 		assertTrue(a.configure(Maps.of("command", "claude", "defaults", Maps.of("model", "sonnet")), true));
 		assertEquals(List.of("claude"), a.command());

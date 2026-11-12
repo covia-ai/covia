@@ -15,6 +15,7 @@ import convex.core.lang.RT;
 import covia.adapter.messaging.AMessagingAdapter;
 import covia.adapter.messaging.MessagingBot.Managed;
 import covia.adapter.messaging.ConversationRouter;
+import covia.exception.ConfigurationException;
 import covia.exception.InvalidDefinitionException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotSupportedException;
@@ -34,6 +35,13 @@ public class DiscordAdapter extends AMessagingAdapter<BotSpec, BotRunner> {
 		ABILITY_CALL=Strings.intern("discord/call"), ABILITY_MANAGE=Strings.intern("discord/manage");
 	private static final Set<AString> KNOWN=Set.of(K_BOTS,K_API_URL,K_ENABLED);
 	private volatile String apiUrl=DEFAULT_API_URL;
+
+	/** Refusals of the {@code adapters.discord} settings. */
+	public static final String STATE_PATH_FIXED="adapters.discord.statePath is fixed at :adapters/discord";
+	public static final String UNKNOWN_SETTING="adapters.discord: unknown setting %s";
+	public static final String API_URL_NOT_STRING="adapters.discord.apiUrl must be a non-empty string";
+	public static final String API_URL_NOT_HTTP="adapters.discord.apiUrl must be an http(s) URL";
+	public static final String BOTS_NOT_OBJECT="adapters.discord.bots must be an object";
 	volatile DiscordGateway.Factory gatewayFactory=JDAGateway::connect;
 
 	@Override public String getName(){return NAME;}
@@ -53,12 +61,14 @@ public class DiscordAdapter extends AMessagingAdapter<BotSpec, BotRunner> {
 
 	@Override public boolean configure(AMap<AString,ACell> config,boolean strict){
 		if(config==null)config=Maps.empty();
-		if(config.containsKey(K_STATE_PATH))throw new IllegalArgumentException("adapters.discord.statePath is fixed at :adapters/discord");
-		if(strict)for(long i=0;i<config.count();i++){ACell k=config.entryAt(i).getKey();if(!(k instanceof AString s)||!KNOWN.contains(s))throw new IllegalArgumentException("adapters.discord: unknown setting "+k);}
+		if(config.containsKey(K_STATE_PATH))throw new ConfigurationException(STATE_PATH_FIXED);
+		if(strict)for(long i=0;i<config.count();i++){ACell k=config.entryAt(i).getKey();if(!(k instanceof AString s)||!KNOWN.contains(s))throw new ConfigurationException(UNKNOWN_SETTING.formatted(k));}
 		String url=DEFAULT_API_URL; ACell u=config.get(K_API_URL);
-		if(u!=null){if(!(u instanceof AString s)||s.isEmpty())throw new IllegalArgumentException("adapters.discord.apiUrl must be a non-empty string");url=s.toString();if(!url.startsWith("http://")&&!url.startsWith("https://"))throw new IllegalArgumentException("adapters.discord.apiUrl must be an http(s) URL");url=url.replaceAll("/+$","");}
+		if(u!=null){if(!(u instanceof AString s)||s.isEmpty())throw new ConfigurationException(API_URL_NOT_STRING);url=s.toString();if(!url.startsWith("http://")&&!url.startsWith("https://"))throw new ConfigurationException(API_URL_NOT_HTTP);url=url.replaceAll("/+$","");}
 		Map<String,BotSpec> parsed=new LinkedHashMap<>(); ACell bc=config.get(K_BOTS);
-		if(bc!=null){AMap<AString,ACell> bots=RT.castMap(bc);if(bots==null)throw new IllegalArgumentException("adapters.discord.bots must be an object");for(long i=0;i<bots.count();i++){var e=bots.entryAt(i);String name=String.valueOf(e.getKey());parsed.put(name,BotSpec.parse(name,e.getValue(),strict));}}
+		if(bc!=null){AMap<AString,ACell> bots=RT.castMap(bc);if(bots==null)throw new ConfigurationException(BOTS_NOT_OBJECT);for(long i=0;i<bots.count();i++){var e=bots.entryAt(i);String name=String.valueOf(e.getKey());
+			// The bot parser also reads a create call's input; here it read the settings
+			try{parsed.put(name,BotSpec.parse(name,e.getValue(),strict));}catch(IllegalArgumentException refused){throw new ConfigurationException(refused.getMessage(),refused);}}}
 		apiUrl=url;configureBots(parsed);return true;
 	}
 	@Override protected BotSpec parseBot(String name,ACell settings,boolean strict){return BotSpec.parse(name,settings,strict);}

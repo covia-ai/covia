@@ -294,13 +294,19 @@ There are two distinct configuration hooks:
   `engine.adapterConfig(getName())` lazily need not override it.
 
 An override of `configure` should validate the whole proposed configuration
-before changing live fields, throw `IllegalArgumentException` with an
-actionable message for malformed known settings, and reject unknown settings
-when `strict` is true. The Engine reports it as the failure of whoever supplied
-the settings ([ERRORS.md](ERRORS.md)). Security boundaries and reserved settings must remain
-enforced even in lenient mode. Return `false` only to decline a valid but
-unavailable configuration. The reserved `enabled` key is owned by the
-framework.
+before changing live fields, and reject unknown settings when `strict` is
+true. A setting it refuses, whether malformed or unusable on this venue, and
+settings it cannot apply throw `ConfigurationException` with an actionable
+message built from a constant on the adapter. That reaches whoever supplied the
+settings unchanged: the operator at start-up, enable or module load, or the
+caller of `venue:adapter/configure`. A parser that also reads an operation's
+input throws `IllegalArgumentException`, and `configure` rethrows it as
+`ConfigurationException` with the cause chained; any other exception
+escaping `configure` that is not a Covia exception is the adapter's fault
+([ERRORS.md](ERRORS.md)). Security
+boundaries and reserved settings must remain enforced even in lenient mode.
+Return `false` only to decline a valid but unavailable configuration. The
+reserved `enabled` key is owned by the framework.
 
 Never publish an effective config object wholesale. `publicConfig()` is an
 explicit allow-list and defaults to publishing nothing; the helper

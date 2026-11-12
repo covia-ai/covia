@@ -105,6 +105,16 @@ public class ClaudeCodeAdapter extends ARemoteAgentAdapter<RemoteInteraction> im
 	private static final Set<AString> KNOWN_KEYS = Set.of(
 		K_COMMAND, K_ENV, K_DEFAULTS, K_PROJECTS, K_MAX_SESSIONS, K_IDLE_SECONDS, K_ENABLED);
 
+	/** Refusals of the {@code adapters.claudecode} settings. */
+	public static final String UNKNOWN_SETTING =
+		"adapters.claudecode: unknown setting %s (known: command, env, defaults, projects, maxSessions, idleSeconds, enabled)";
+	public static final String PROJECTS_NOT_OBJECT = "adapters.claudecode.projects must be an object of project name -> settings";
+	public static final String COMMAND_EMPTY = "adapters.claudecode.command must not be empty";
+	public static final String COMMAND_NOT_ARGV = "adapters.claudecode.command must be the claude executable (a string) or an argv array";
+	public static final String COMMAND_ENTRY_NOT_STRING = "adapters.claudecode.command entries must be strings";
+	/** A count below its minimum; the setting and the minimum follow. */
+	public static final String BAD_COUNT = "%s must be an integer >= %d";
+
 	static final AString K_PROJECT = ClaudeSession.K_PROJECT;
 	static final AString K_SESSION = ClaudeSession.K_SESSION;
 	static final AString K_PROMPT = Strings.intern("prompt");
@@ -196,28 +206,35 @@ public class ClaudeCodeAdapter extends ARemoteAgentAdapter<RemoteInteraction> im
 			for (long i = 0; i < config.count(); i++) {
 				ACell k = config.entryAt(i).getKey();
 				if (!(k instanceof AString ks) || !KNOWN_KEYS.contains(ks)) {
-					throw new IllegalArgumentException("adapters.claudecode: unknown setting " + k
-						+ " (known: command, env, defaults, projects, maxSessions, idleSeconds, enabled)");
+					throw new ConfigurationException(UNKNOWN_SETTING.formatted(k));
 				}
 			}
 		}
 		List<String> cmd = parseCommand(config.get(K_COMMAND));
-		Map<String, String> env = RunOptions.parse(
-			config.get(K_ENV) == null ? null : Maps.of(K_ENV, config.get(K_ENV)),
-			Set.of(K_ENV), "adapters.claudecode", true).env();
-		RunOptions dflt = RunOptions.parse(config.get(K_DEFAULTS), RunOptions.ALL_KEYS, "adapters.claudecode.defaults", strict);
 		int max = positiveInt(config.get(K_MAX_SESSIONS), DEFAULT_MAX_SESSIONS, "adapters.claudecode.maxSessions", 1);
 		long idle = positiveInt(config.get(K_IDLE_SECONDS), (int) DEFAULT_IDLE_SECONDS, "adapters.claudecode.idleSeconds", 0);
-		Map<String, ProjectSpec> parsed = new LinkedHashMap<>();
+		AMap<AString, ACell> projects = null;
 		ACell projectsCell = config.get(K_PROJECTS);
 		if (projectsCell != null) {
-			AMap<AString, ACell> projects = RT.castMap(projectsCell);
-			if (projects == null) throw new IllegalArgumentException("adapters.claudecode.projects must be an object of project name -> settings");
-			for (long i = 0; i < projects.count(); i++) {
+			projects = RT.castMap(projectsCell);
+			if (projects == null) throw new ConfigurationException(PROJECTS_NOT_OBJECT);
+		}
+		Map<String, String> env;
+		RunOptions dflt;
+		Map<String, ProjectSpec> parsed = new LinkedHashMap<>();
+		try {
+			env = RunOptions.parse(
+				config.get(K_ENV) == null ? null : Maps.of(K_ENV, config.get(K_ENV)),
+				Set.of(K_ENV), "adapters.claudecode", true).env();
+			dflt = RunOptions.parse(config.get(K_DEFAULTS), RunOptions.ALL_KEYS, "adapters.claudecode.defaults", strict);
+			if (projects != null) for (long i = 0; i < projects.count(); i++) {
 				var e = projects.entryAt(i);
 				String name = String.valueOf(e.getKey());
 				parsed.put(name, ProjectSpec.parse(name, e.getValue(), strict, ProjectSpec.Managed.CONFIG, ProjectSpec.VENUE_USER));
 			}
+		} catch (IllegalArgumentException e) {
+			// The options and project parsers also read a call's input; here they read the settings
+			throw new ConfigurationException(e.getMessage(), e);
 		}
 		this.command = cmd;
 		this.envRefs = env;
@@ -232,16 +249,14 @@ public class ClaudeCodeAdapter extends ARemoteAgentAdapter<RemoteInteraction> im
 	private static List<String> parseCommand(ACell cell) {
 		if (cell == null) return List.of("claude");
 		if (cell instanceof AString s) {
-			if (s.isEmpty()) throw new IllegalArgumentException("adapters.claudecode.command must not be empty");
+			if (s.isEmpty()) throw new ConfigurationException(COMMAND_EMPTY);
 			return List.of(s.toString());
 		}
 		AVector<ACell> v = RT.ensureVector(cell);
-		if (v == null || v.isEmpty()) {
-			throw new IllegalArgumentException("adapters.claudecode.command must be the claude executable (a string) or an argv array");
-		}
+		if (v == null || v.isEmpty()) throw new ConfigurationException(COMMAND_NOT_ARGV);
 		List<String> out = new ArrayList<>();
 		for (long i = 0; i < v.count(); i++) {
-			if (!(v.get(i) instanceof AString s)) throw new IllegalArgumentException("adapters.claudecode.command entries must be strings");
+			if (!(v.get(i) instanceof AString s)) throw new ConfigurationException(COMMAND_ENTRY_NOT_STRING);
 			out.add(s.toString());
 		}
 		return List.copyOf(out);
@@ -251,7 +266,7 @@ public class ClaudeCodeAdapter extends ARemoteAgentAdapter<RemoteInteraction> im
 		if (cell == null) return dflt;
 		CVMLong n = RT.ensureLong(cell);
 		if (n == null || n.longValue() < min || n.longValue() > Integer.MAX_VALUE) {
-			throw new IllegalArgumentException(where + " must be an integer >= " + min);
+			throw new ConfigurationException(BAD_COUNT.formatted(where, min));
 		}
 		return (int) n.longValue();
 	}

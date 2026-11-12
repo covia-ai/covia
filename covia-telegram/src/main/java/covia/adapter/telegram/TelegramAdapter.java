@@ -20,6 +20,7 @@ import covia.adapter.messaging.AMessagingAdapter;
 import covia.adapter.messaging.MessagingBot.Managed;
 import covia.adapter.messaging.ConversationRouter;
 import covia.api.Fields;
+import covia.exception.ConfigurationException;
 import covia.exception.InvalidDefinitionException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
@@ -124,6 +125,13 @@ public class TelegramAdapter extends AMessagingAdapter<BotSpec, BotRunner> {
 	private static final Set<AString> KNOWN_KEYS = Set.of(K_BOTS, K_API_URL, K_ENABLED);
 	private volatile String apiUrl = DEFAULT_API_URL;
 
+	/** Refusals of the {@code adapters.telegram} settings. */
+	public static final String STATE_PATH_FIXED = "adapters.telegram.statePath is fixed at :adapters/telegram";
+	public static final String UNKNOWN_SETTING = "adapters.telegram: unknown setting %s (known: bots, apiUrl, enabled)";
+	public static final String API_URL_NOT_STRING = "adapters.telegram.apiUrl must be a non-empty string";
+	public static final String API_URL_NOT_HTTP = "adapters.telegram.apiUrl must be an http(s) URL: %s";
+	public static final String BOTS_NOT_OBJECT = "adapters.telegram.bots must be an object of bot name -> settings";
+
 	@Override
 	public String getName() {
 		return NAME;
@@ -165,38 +173,38 @@ public class TelegramAdapter extends AMessagingAdapter<BotSpec, BotRunner> {
 	@Override
 	public boolean configure(AMap<AString, ACell> config, boolean strict) {
 		if (config == null) config = Maps.empty();
-		if (config.containsKey(K_STATE_PATH)) {
-			throw new IllegalArgumentException("adapters.telegram.statePath is fixed at :adapters/telegram");
-		}
+		if (config.containsKey(K_STATE_PATH)) throw new ConfigurationException(STATE_PATH_FIXED);
 		if (strict) {
 			for (long i = 0; i < config.count(); i++) {
 				ACell k = config.entryAt(i).getKey();
 				if (!(k instanceof AString ks) || !KNOWN_KEYS.contains(ks)) {
-					throw new IllegalArgumentException("adapters.telegram: unknown setting " + k
-						+ " (known: bots, apiUrl, enabled)");
+					throw new ConfigurationException(UNKNOWN_SETTING.formatted(k));
 				}
 			}
 		}
 		String url = DEFAULT_API_URL;
 		ACell urlCell = config.get(K_API_URL);
 		if (urlCell != null) {
-			if (!(urlCell instanceof AString s) || s.isEmpty()) {
-				throw new IllegalArgumentException("adapters.telegram.apiUrl must be a non-empty string");
-			}
+			if (!(urlCell instanceof AString s) || s.isEmpty()) throw new ConfigurationException(API_URL_NOT_STRING);
 			url = s.toString();
 			if (!url.startsWith("http://") && !url.startsWith("https://")) {
-				throw new IllegalArgumentException("adapters.telegram.apiUrl must be an http(s) URL: " + url);
+				throw new ConfigurationException(API_URL_NOT_HTTP.formatted(url));
 			}
 		}
 		Map<String, BotSpec> parsed = new LinkedHashMap<>();
 		ACell botsCell = config.get(K_BOTS);
 		if (botsCell != null) {
 			AMap<AString, ACell> bots = RT.castMap(botsCell);
-			if (bots == null) throw new IllegalArgumentException("adapters.telegram.bots must be an object of bot name -> settings");
+			if (bots == null) throw new ConfigurationException(BOTS_NOT_OBJECT);
 			for (long i = 0; i < bots.count(); i++) {
 				var e = bots.entryAt(i);
 				String name = String.valueOf(e.getKey());
-				parsed.put(name, BotSpec.parse(name, e.getValue(), strict));
+				try {
+					parsed.put(name, BotSpec.parse(name, e.getValue(), strict));
+				} catch (IllegalArgumentException refused) {
+					// The bot parser also reads a create call's input; here it read the settings
+					throw new ConfigurationException(refused.getMessage(), refused);
+				}
 			}
 		}
 		this.apiUrl = url;

@@ -20,6 +20,7 @@ import convex.core.data.prim.AInteger;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.api.Fields;
+import covia.exception.ConfigurationException;
 import covia.exception.CoviaException;
 import covia.exception.InvalidDefinitionException;
 import covia.exception.InvalidInputException;
@@ -1099,7 +1100,7 @@ public class MCPAdapter extends AAdapter {
 	@Override
 	public boolean configure(AMap<AString, ACell> config, boolean strict) {
 		ACell keep = (config == null) ? null : config.get(KEEP_RAW_TOKENS);
-		if (keep != null && !(keep instanceof convex.core.data.prim.CVMBool)) throw new IllegalArgumentException(KEEP_RAW_NOT_BOOLEAN);
+		if (keep != null && !(keep instanceof convex.core.data.prim.CVMBool)) throw new ConfigurationException(KEEP_RAW_NOT_BOOLEAN);
 		// Reconfigured to stop keeping tokens: the kept ones go now (at boot, start does it)
 		if (engine != null && !convex.core.data.prim.CVMBool.TRUE.equals(keep)) tokens().dropKept();
 		return true;

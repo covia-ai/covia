@@ -25,6 +25,7 @@ import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.adapter.messaging.MessagingMedia;
 import covia.api.Fields;
+import covia.exception.ConfigurationException;
 import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -332,10 +333,13 @@ class SpeechAdapterTest {
 				{Maps.of("engine", "local", "local", Maps.of("threads", 0)), SpeechAdapter.INVALID_THREADS},
 				{Maps.of("engine", "local", "local", Maps.of("prefetch", "yes")), SpeechAdapter.INVALID_FLAG.formatted("prefetch")}}) {
 			AMap<AString, ACell> config = RT.castMap((ACell) bad[0]);
-			assertEquals(bad[1], assertThrows(IllegalArgumentException.class, () -> new SpeechAdapter().configure(config, true)).getMessage());
+			assertEquals(bad[1], assertThrows(ConfigurationException.class, () -> new SpeechAdapter().configure(config, true)).getMessage());
 		}
-		assertTrue(assertThrows(IllegalArgumentException.class, () -> new SpeechAdapter().configure(
+		assertTrue(assertThrows(ConfigurationException.class, () -> new SpeechAdapter().configure(
 			RT.castMap(Maps.of("engine", "local", "local", Maps.of("mystery", 1))), true)).getMessage().contains("mystery"));
+		assertEquals(SpeechAdapter.INVALID_NATIVE_PATH.formatted("bad\0path"), assertThrows(ConfigurationException.class,
+			() -> new SpeechAdapter().configure(RT.castMap(Maps.of("engine", "local", "local",
+				Maps.of("nativePath", "bad\0path"))), true)).getMessage());
 	}
 
 	@Test void unsafeSettingsAreRefused() {
@@ -346,9 +350,9 @@ class SpeechAdapterTest {
 				{Maps.of("keyName", "../X"), SpeechAdapter.INVALID_KEY_NAME},
 				{Maps.of("timeoutMillis", 5), SpeechAdapter.INVALID_TIMEOUT}}) {
 			AMap<AString, ACell> config = RT.castMap((ACell) bad[0]);
-			assertEquals(bad[1], assertThrows(IllegalArgumentException.class, () -> new SpeechAdapter().configure(config, true)).getMessage());
+			assertEquals(bad[1], assertThrows(ConfigurationException.class, () -> new SpeechAdapter().configure(config, true)).getMessage());
 		}
-		assertTrue(assertThrows(IllegalArgumentException.class, () -> new SpeechAdapter().configure(
+		assertTrue(assertThrows(ConfigurationException.class, () -> new SpeechAdapter().configure(
 			RT.castMap(Maps.of("mystery", 1)), true)).getMessage().contains("mystery"));
 		assertTrue(new SpeechAdapter().configure(RT.castMap(Maps.of("baseUrl", "http://localhost:8000/v1/")), true),
 			"a local server over plain HTTP is fine");

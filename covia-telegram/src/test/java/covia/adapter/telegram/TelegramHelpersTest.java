@@ -2,6 +2,7 @@ package covia.adapter.telegram;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -19,6 +20,7 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.api.Fields;
+import covia.exception.ConfigurationException;
 import covia.exception.InvalidDefinitionException;
 
 /**
@@ -101,13 +103,21 @@ class TelegramHelpersTest {
 	@Test
 	void testAdapterConfigValidation() {
 		TelegramAdapter fresh = new TelegramAdapter();
-		assertThrows(IllegalArgumentException.class, () -> fresh.configure(Maps.of("apiUrl", "ftp://x"), false));
-		assertThrows(IllegalArgumentException.class, () -> fresh.configure(Maps.of("bots", "nope"), false));
-		assertThrows(IllegalArgumentException.class, () -> fresh.configure(Maps.of("unknown", true), true));
+		assertEquals(TelegramAdapter.API_URL_NOT_HTTP.formatted("ftp://x"), assertThrows(ConfigurationException.class,
+			() -> fresh.configure(Maps.of("apiUrl", "ftp://x"), false)).getMessage());
+		assertEquals(TelegramAdapter.BOTS_NOT_OBJECT, assertThrows(ConfigurationException.class,
+			() -> fresh.configure(Maps.of("bots", "nope"), false)).getMessage());
+		assertEquals(TelegramAdapter.UNKNOWN_SETTING.formatted("unknown"), assertThrows(ConfigurationException.class,
+			() -> fresh.configure(Maps.of("unknown", true), true)).getMessage());
 		assertTrue(fresh.configure(Maps.of("unknown", true), false), "lenient mode tolerates unknown keys");
-		assertThrows(IllegalArgumentException.class,
-			() -> fresh.configure(Maps.of("statePath", "w/elsewhere"), false),
+		assertEquals(TelegramAdapter.STATE_PATH_FIXED, assertThrows(ConfigurationException.class,
+			() -> fresh.configure(Maps.of("statePath", "w/elsewhere"), false)).getMessage(),
 			"adapter-global state has one well-known venue-private root even in lenient mode");
+		// The bot parser also reads create input, so its refusal is rethrown here as configuration
+		ConfigurationException badBot = assertThrows(ConfigurationException.class,
+			() -> fresh.configure(Maps.of("bots", Maps.of("main", Maps.empty())), false));
+		assertInstanceOf(IllegalArgumentException.class, badBot.getCause());
+		assertEquals(badBot.getCause().getMessage(), badBot.getMessage());
 		assertTrue(fresh.configure(Maps.empty(), true));
 		fresh.close();
 	}

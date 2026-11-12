@@ -20,6 +20,7 @@ import convex.core.lang.RT;
 import convex.auth.ucan.UCAN;
 import covia.adapter.AAdapter;
 import covia.exception.AuthException;
+import covia.exception.ConfigurationException;
 import covia.grid.Authority;
 import covia.grid.Job;
 import covia.grid.Status;
@@ -320,7 +321,7 @@ public class AdapterLifecycleTest {
 
 	/**
 	 * Records every configure() call, declines configs with {@code reject: true}
-	 * and refuses any {@code malformed} setting as malformed.
+	 * and refuses any {@code malformed} setting.
 	 */
 	private static final class ConfigurableAdapter extends AAdapter {
 		static final String MALFORMED = "malformed is not a valid setting";
@@ -330,7 +331,7 @@ public class AdapterLifecycleTest {
 		@Override public String getDescription() { return "test"; }
 		@Override public boolean configure(AMap<AString, ACell> config, boolean strict) {
 			calls++;
-			if (config.containsKey(Strings.create("malformed"))) throw new IllegalArgumentException(MALFORMED);
+			if (config.containsKey(Strings.create("malformed"))) throw new ConfigurationException(MALFORMED);
 			if (RT.bool(config.get(Strings.create("reject")))) return false;
 			seen = config;
 			return true;
@@ -401,14 +402,13 @@ public class AdapterLifecycleTest {
 	}
 
 	@Test
-	public void testMalformedSettingIsTypedByItsSource() {
-		// In the venue config a malformed setting is the operator's setup; in a
-		// runtime reconfiguration it is the caller's input.
+	public void testRefusedSettingIsAConfigurationErrorFromEitherSource() {
+		// Whether the venue config or a runtime reconfiguration supplied it, a
+		// setting the adapter refuses reaches whoever supplied it unchanged.
 		AMap<AString, ACell> malformed = Maps.of(Strings.create("malformed"), CVMBool.TRUE);
 		Engine engine = boot(Maps.of(Config.ADAPTERS, Maps.of(Strings.create("configurable"), malformed)));
 		try {
-			covia.exception.ConfigurationException refused = assertThrows(
-				covia.exception.ConfigurationException.class,
+			ConfigurationException refused = assertThrows(ConfigurationException.class,
 				() -> engine.registerAdapter(new ConfigurableAdapter()));
 			assertEquals(ConfigurableAdapter.MALFORMED, refused.getMessage());
 			assertNull(engine.getAdapter("configurable"));
@@ -419,12 +419,18 @@ public class AdapterLifecycleTest {
 			malformed.assoc(Config.ENABLED, CVMBool.FALSE))));
 		try {
 			parked.registerAdapter(new ConfigurableAdapter());
-			assertThrows(covia.exception.ConfigurationException.class, () -> parked.enableAdapter("configurable"));
-			covia.exception.InvalidInputException rejected = assertThrows(
-				covia.exception.InvalidInputException.class,
-				() -> parked.configureAdapter("configurable", malformed));
-			assertEquals(ConfigurableAdapter.MALFORMED, rejected.getMessage());
+			assertEquals(ConfigurableAdapter.MALFORMED, assertThrows(ConfigurationException.class,
+				() -> parked.enableAdapter("configurable")).getMessage());
+			assertEquals(ConfigurableAdapter.MALFORMED, assertThrows(ConfigurationException.class,
+				() -> parked.configureAdapter("configurable", malformed)).getMessage());
+			ExecutionException viaOperation = assertThrows(ExecutionException.class,
+				() -> asVenue(parked, "v/ops/venue/adapter/configure",
+					Maps.of(Strings.create("name"), Strings.create("configurable"), Strings.create("config"), malformed)));
+			assertEquals(ConfigurableAdapter.MALFORMED,
+				assertInstanceOf(ConfigurationException.class, viaOperation.getCause()).getMessage());
 			assertNull(parked.getAdapter("configurable"));
+			assertEquals(malformed.assoc(Config.ENABLED, CVMBool.FALSE), parked.adapterConfig("configurable"),
+				"a refused configuration changes nothing");
 		} finally {
 			parked.close();
 		}
