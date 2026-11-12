@@ -157,15 +157,15 @@ class VenueStoreMigrationIT {
 		String importedDID = VenueAuth.keyPair(key("33")).getDID();
 		String clonedDID = VenueAuth.keyPair(key("44")).getDID();
 		// The portable user export deliberately excludes private adapter state.
-		ACell exported = run(owner, "admin/user/export", Maps.of("accountKey", key("55").getAccountKey()));
+		ACell exported = run(owner, "user/export", Maps.of("accountKey", key("55").getAccountKey()));
 		ACell value = RT.getIn(exported, "export");
 		assertNotNull(value);
 		run(operator, "secret/set", Maps.of("name", "FIXTURE_EXPORT_KEY", "value", key("55").getSeed().toHexString()));
 		AMap<AString, ACell> input = Maps.of("did", importedDID, "export", value, "seed", "s/FIXTURE_EXPORT_KEY");
-		run(operator, "admin/user/import", input);
+		run(operator, "user/import", input);
 		assertEquals(read(owner, "w/profile"), read(client(server, "33"), "w/profile"));
 		assertEquals("test-only-alice-updated", text(RT.getIn(run(client(server, "33"), "secret/extract", Maps.of("name", SECRET)), "value")));
-		assertThrows(ExecutionException.class, () -> run(operator, "admin/user/import", input));
+		assertThrows(ExecutionException.class, () -> run(operator, "user/import", input));
 		run(operator, "user/clone", Maps.of("from", RT.getIn(alice, "did"), "to", clonedDID));
 		VenueHTTP cloned = client(server, "44");
 		assertEquals(read(owner, "w/profile"), read(cloned, "w/profile"));
@@ -174,7 +174,7 @@ class VenueStoreMigrationIT {
 		assertNotEquals(read(cloned, "w/profile"), read(owner, "w/profile"));
 		assertNull(read(cloned, "x/test/scratch"));
 		write(cloned, "x/test/scratch", Maps.of("deleteMe", true));
-		run(operator, "admin/user/delete", Maps.of("did", clonedDID));
+		run(operator, "user/delete", Maps.of("did", clonedDID));
 		assertNull(server.getEngine().adapterState("test").read("users/" + clonedDID));
 	}
 }
