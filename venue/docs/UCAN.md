@@ -121,17 +121,36 @@ This aligns with `DIDURL` from convex-core — the DID is the authority, the pat
 
 Only `file://…` resources are scheme-qualified (host-filesystem, not DID-scoped) and are left unchanged; scheme forms are not issuable.
 
-### 3.2 Abilities (`can`)
+### 3.2 Standard capability catalog (`can`)
+
+Venue administration is grouped under `admin/user`, `admin/adapter`,
+`admin/venue` and `admin/sudo`. [ADMIN.md](ADMIN.md) owns the privileged-operation
+inventory, resource scopes, exceptions and migration; MCP management retains
+its separate abilities. The former user, adapter and venue administration
+abilities are not compatibility aliases. Ordinary family grants do not cover
+the new admin abilities; the normal resource and prefix matching rules apply.
+
+The normative standard capability catalog is COG-13 (`docs/protocol/cogs/COG-013.md`
+in covia-docs). This is its implementation companion. `covia.api.Abilities`
+provides their shared code constants; subsystem documents define each operation's
+resource and required abilities. New standard abilities must be added to both catalogs.
+Modules may define additional abilities and document them in their own contract.
+Use domain abilities for domain actions; CRUD is access to raw values and files,
+not a substitute for lifecycle or interaction authority.
 
 Abilities follow UCAN's slash-delimited convention with no leading slash. `*` is the top ability that proves everything. Shorter abilities prove longer ones (prefix hierarchy):
 
 | Ability | Proves | Meaning |
 |---------|--------|---------|
 | `*` | everything | Full delegation |
-| `crud` | `crud/read`, `crud/write`, `crud/delete` | All data operations |
+| `crud` | `crud/read`, `crud/write`, `crud/delete` | Raw data operations; no Job API authority |
 | `crud/read` | — | Read data |
 | `crud/write` | — | Write data |
 | `crud/delete` | — | Delete data |
+| `job` | every `job/*` | All Job API rights on the named Job or collection |
+| `job/read` | - | Read a Job's externally visible record/result and subscribe to updates; list/count when granted on `j/` |
+| `job/manage` | - | Cancel, pause, resume or delete a Job; acknowledgements disclose no record |
+| `job/message` | - | Deliver input to an existing Job, without granting the Job new execution authority |
 | `invoke` | — | Look up and run an operation from an authorised location; no resource authority is implied |
 | `agent` | every `agent/*` | All agent operations |
 | `agent/create` | — | Create a new agent |
@@ -145,8 +164,8 @@ Abilities follow UCAN's slash-delimited convention with no leading slash. `*` is
 | `asset` | every `asset/*` | All asset operations |
 | `asset/store` | — | Store a new content-addressed asset |
 | `asset/read` | — | Get / list content-addressed assets |
-| `venue/restart` | — | Restart a standalone venue process or hand off to a successor jar |
-| `venue/gc` | — | Garbage-collect the venue's Etch store online (`<venueDID>/store`) |
+| `admin/venue/restart` | — | Restart a standalone venue process or hand off to a successor jar |
+| `admin/venue/gc` | — | Garbage-collect the venue's Etch store online (`<venueDID>/store`) |
 | `outbound/any` | — | Have the venue dial any HTTP, MCP, A2A, model, Convex peer or venue target, unchecked by its outbound guard (`<venueDID>/outbound`) |
 | `secret/use` | — | Use a secret's value in an operation without seeing it; bindable to a destination with `nb.url` |
 | `secret/extract` | — | Reveal an owned secret through a direct owner call |
@@ -163,6 +182,23 @@ Abilities follow UCAN's slash-delimited convention with no leading slash. `*` is
 | `key/sign/raw` | — | Sign content the caller chooses (`crypto:sign`, `crypto:jwt-sign`), which can produce any other signature |
 | `key/decrypt` | — | Decrypt with a held key (`crypto:decrypt`) |
 | `key/derive` | — | Derive keys from a held phrase into its holder's keyring (`crypto:derive-key`) |
+| `secret/write` | - | Store or update a secret (`<owner>/s/<name>`) |
+| `mcp/manage` | - | Manage MCP server and tool connections (`<venue>/v/mcp`) |
+| `mcp/token` | - | Create, update or delete an MCP token (`<owner>/x/mcp/tokens/<name>`) |
+| `admin/token` | Every `admin/token/…` | Administration across token kinds on matching resources |
+| `admin/token/mcp` | - | Retrieve a retained MCP bearer token; source authority is also required |
+| `hitl/request` | - | Ask the owner a human-in-the-loop question |
+| `admin/user/create` | - | Create an account |
+| `admin/user/delete` | - | Delete an account |
+| `admin/user/read` | - | Read account information |
+| `admin/sudo` | - | Explicitly act in a user namespace; grants no action authority |
+| `admin/user/export` | - | Export a user's stored state |
+| `admin/user/import` | - | Import stored state into an empty account |
+| `admin/user/authentication-manage` | - | Manage account authentication |
+| `admin/adapter/manage` | - | Manage venue adapters and modules (`<venue>/adapters`) |
+| `p2p/read` | - | Inspect the venue's P2P node (`<venue>/p2p`) |
+| `p2p/manage` | - | Connect the venue's P2P node (`<venue>/p2p`) |
+| `grant/<ability>` | Narrower grants within that ability | Issue a grant at a granting surface; distinct from exercising the ability (COG-17) |
 
 To pass on part of a grant you hold, sign a narrower grant with your own key and attach yours as proof. Through the venue (`ucan:issue`), you need a `grant/<ability>` right to grant on someone else's data. Agents cannot pass on grants. A grant cannot be withdrawn before it expires.
 
@@ -347,7 +383,7 @@ Resource rules at issuance (`UCANAdapter.handleIssue`):
   - those of its own agents, since an agent is its owner's.
 
   So may whatever acts with its authority: an agent with its owner's, a
-  request under `user/sudo` with the target's. That is the authority it has of
+  request under `admin/sudo` with the target's. That is the authority it has of
   its own, never what others have granted it. Its scope must include the right
   to grant, `grant/<can>`, as having no scope does, so an unrestricted agent
   that its owner controls grants what its owner could.
@@ -489,10 +525,10 @@ value hashes as the native content-addressing scheme.
 
 **Explicit sudo.** `user:sudo {did, operation, input}` is the instruction to
 execute one nested operation in another user's namespace. It requires a
-presented `{with: <did>, can: "user/sudo"}` grant, plus the nested operation's
+presented `{with: <did>, can: "admin/sudo"}` grant, plus the nested operation's
 `invoke` and point-of-action grants. The authenticated caller remains the actor;
 only the effective user namespace changes, and the nested context has no ambient
-caller capabilities. A `user/sudo` grant on an ordinary invocation is inert.
+caller capabilities. A `admin/sudo` grant on an ordinary invocation is inert.
 
 **MCP**: Same separation. Tool call parameters may include grant `ucans`, and
 the enclosing HTTP request carries its authentication credential in
@@ -750,7 +786,11 @@ record is an entry no grant of theirs covers.
 | `dlfs:deleteDrive` | `{ with: "dlfs/<drive>", can: "crud/delete" }` |
 | `secret:list` | `{ with: "s/", can: "crud/read" }` (names only) |
 | `hitl:list` | `{ with: "h/", can: "crud/read" }` |
-| `GET /api/v1/jobs`, and the caller's job count in `/status` | `{ with: "j/", can: "crud/read" }`; `/status` leaves out the count without it |
+| Job status/result, REST GET/SSE, Grid Job reads and A2A GetTask | `job/read` on `<owner>/j/<id>` |
+| Job cancel/pause/resume/delete, including REST controls | `job/manage` on `<owner>/j/<id>`; response is an acknowledgement |
+| Job message delivery and task-specific agent continuation | `job/message` on `<owner>/j/<id>`; agent routes also enforce agent access |
+| A2A CancelTask / continuation | `job/read` plus `job/manage` / `job/message`, because A2A returns a Task record |
+| `GET /api/v1/jobs`, and the caller's job count in `/status` | `{ with: "j/", can: "job/read" }`; `/status` leaves out the count without it |
 | `secret:delete` | `{ with: "s/<name>", can: "crud/delete" }` |
 | `secret:extract` | `{ with: "s/<name>", can: "secret/extract" }`, plus the direct-owner restriction in *Secret extraction* above |
 | Any adapter sending a secret (`apiKey`, `bearerSecret`, `secretHeaders`, `{s/NAME}`, an operation's `secretKey`, MCP `auth`, A2A auth) | `{ with: "<ownerDID>/s/<name>", can: "secret/use" }`, its `nb.url` checked against the request's destination |
@@ -857,7 +897,7 @@ Two questions must not be conflated, and the context answers them separately:
 | **Whose namespace?** | `ctx.getUserDID()` | bare path resolution, workspace, secrets, jobs, inbox, quota |
 
 For every ordinary principal the two are equal, so this is a no-op outside
-agent execution and delegation (`user/sudo`). For an agent, `w/foo` still means the **owner's** workspace —
+agent execution and delegation (`admin/sudo`). For an agent, `w/foo` still means the **owner's** workspace —
 that is the namespace it lives and works in — while the agent remains a
 distinct principal. `RequestContext.grantsDenial` canonicalises bare paths
 against `getUserDID()`, applying the same DID to the request resource and to
@@ -875,7 +915,7 @@ anyone else, presents a grant.
 The namespace is never parsed from a name: `Authority.of(did)` makes every DID
 its own namespace, agent-shaped or not. Only the venue puts a principal in
 another namespace, from a relationship it holds — running its own agent
-(`Authority.ofAgent`) or acting on a delegation (`onBehalfOf`, as `user/sudo`
+(`Authority.ofAgent`) or acting on a delegation (`onBehalfOf`, as `admin/sudo`
 does). Whatever records a call records the namespace beside the caller, as
 COG-8 names them: `caller` is the principal that made the call, and `owner`
 the namespace, written only when it differs (`covia.grid.Attribution`). Jobs,
@@ -894,7 +934,7 @@ from the record, never from the principal's name. An agent's context carries
 the agent, not a copy of its caps: every point of action reads `config.caps`
 as they stand then, and none once the agent is gone or terminated. `context(owner, principal,
 proofs)` adds proofs it presented, and takes any other principal as a delegate
-of the owner, under the same `user/sudo` check as a live request; a scheduled
+of the owner, under the same `admin/sudo` check as a live request; a scheduled
 event fires through it. Every inbound request starts from `context(caller)`
 (`AuthMiddleware.callerContext`), and an agent's step runs as that agent
 (`Engine.stepContext`, §5.4).
@@ -1001,17 +1041,17 @@ such as its keyring, stays the agent's.
 It is the agent's owner unless the record stores another (`controller`, shown
 by `agent:info` and `agent:list`). Whoever creates or forks an agent controls
 it, meaning the principal whose authority the request acts with
-(`Engine.actingPrincipal`): a user, an agent itself, or for a `user/sudo`
+(`Engine.actingPrincipal`): a user, an agent itself, or for a `admin/sudo`
 delegate the user it acts for. An input's `controller` names another, whose
 authority the request must hold (`Engine.holdsAuthorityOf`): it is that
 principal or an identity it signs in as, is its owner if it is an agent, or
 acts unscoped in a namespace that is root of it. So a user may name itself or
 its agents, and a capped agent only itself. A request made as an agent holds
 that agent's authority however it is derived, and not the whole authority of a
-controller its caps narrow. A `user/sudo` delegate, whose scope is its
+controller its caps narrow. A `admin/sudo` delegate, whose scope is its
 presented grants, holds no other principal's authority. An agent such a
 delegate creates is controlled by its target, so grant `agent/create` beside
-`user/sudo` as you would that user's own authority.
+`admin/sudo` as you would that user's own authority.
 
 **An MCP token narrows the authority a request acts with.** A request through
 an MCP token is its issuer's, acting with the issuer's authority narrowed by
@@ -1424,6 +1464,18 @@ from a spoofed one, which is *worse* than anonymous. So it follows the
 verification phases exactly: **proofs + self-sovereign signatures with C3a**
 (shipped — see below); **custodial attestations with C3b** (the trust policy
 exists).
+
+**Source and destination authority.** The source checks permission to invoke a
+dynamically selected operation and enforces outbound and credential-use policy.
+The destination authorizes execution and direct Job actions using the selected
+remote identity and grants. A local scope neither prohibits remote calls nor
+attenuates a deliberately supplied remote credential. Direct remote Job actions
+therefore do not need additional source-side grants on the remote Job. Local Job
+controls remain local: permission on an owning proxy authorizes the framework's
+bound remote cancellation attempt; cancelling a result waiter only stops waiting.
+See [JOBS.md](JOBS.md#remote-authority-and-host-binding). Explicit credential
+selection is essential: neither a local grant nor tool availability authorizes
+implicit use of another principal's login.
 
 **C3a implementation (shipped).** Authority travels **only in the `ucans` proof
 channel** — never as operation data (which is persisted in job records).

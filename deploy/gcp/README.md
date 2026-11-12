@@ -14,10 +14,10 @@ registration (`users.autoCreate: true`). Any caller that proves control of a
 valid DID is admitted on its first operation. `venue-1` and `venue-2` retain
 the default closed admission policy and require explicit provisioning.
 
-The container runs the `:stable` image, published by `publish-docker.yml`
-on every push to `master`, and is redeployed automatically by
-`deploy-gcp.yml`. The dev venues (`venue-3`, `venue-4`) track `develop` via
-the `:latest` image; this host only changes at releases.
+The container runs the image digest recorded by `publish-docker.yml`
+after successful master validation (also tagged `:stable`), and is redeployed automatically by
+`deploy-gcp.yml`. The dev venues (`venue-3`, `venue-4`) track `qa` via the
+`:latest` image; this host only changes at releases.
 
 ## Host Layout
 
@@ -84,7 +84,10 @@ passwordless sudo instead.
 
 ## Manual Deploy
 
-To deploy manually on the instance (the workflow does the same):
+Run *Deploy to GCP* with a master publishing run ID, following
+[the redeploy procedure](../../BUILD.md#deployment-identity-and-redeploys).
+
+For ad hoc deployment directly on the instance using the moving stable channel:
 
 ```bash
 sudo docker pull ghcr.io/covia-ai/covia:stable

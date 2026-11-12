@@ -9,7 +9,7 @@
 		"tools": [
 			"v/ops/hitl/request",
 			"v/ops/hitl/list",
-			"v/ops/grid/job-status",
+			"v/ops/job/status",
 			"v/ops/covia/read"
 		]
 	}

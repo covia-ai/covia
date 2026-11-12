@@ -1,6 +1,6 @@
 {
   "name": "Venue adapters",
-  "description": "Lists every registered adapter on this venue — active and disabled — with its kernel flag, owning module, effective configuration and operations, plus the loaded modules. Venue-owned: requires adapter/manage on <venue DID>/adapters.",
+  "description": "Lists every registered adapter on this venue — active and disabled — with its kernel flag, owning module, effective configuration and operations, plus the loaded modules. Venue-owned: requires admin/adapter/manage on <venue DID>/adapters.",
   "operation": {
     "adapter": "venue:adapters",
     "readOnly": true,

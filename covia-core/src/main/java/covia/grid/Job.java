@@ -534,7 +534,7 @@ public class Job {
 
 	/**
 	 * The principal that made this job's call: a user, one of a user's agents
-	 * or a {@code user/sudo} delegate.
+	 * or a {@code admin/sudo} delegate.
 	 * @return the caller's DID, or null when the job records none
 	 */
 	public AString getCaller() {

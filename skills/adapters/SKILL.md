@@ -85,9 +85,9 @@ All are invoked with `grid_run operation=v/ops/venue/... input=...`. `show-confi
 ### Authority — read this before trying
 
 The administrative commands below are **venue-owned**; `show-config` is the
-public read-only exception. Adapter/module lifecycle requires `adapter/manage`
-on `<venueDID>/adapters`; process restart instead requires `venue/restart` on
-`<venueDID>/process`, and store collection `venue/gc` on `<venueDID>/store`. A null (unrestricted) capability scope is deliberately
+public read-only exception. Adapter/module lifecycle requires `admin/adapter/manage`
+on `<venueDID>/adapters`; process restart instead requires `admin/venue/restart` on
+`<venueDID>/process`, and store collection `admin/venue/gc` on `<venueDID>/store`. A null (unrestricted) capability scope is deliberately
 *not* enough, so **the default local MCP connection — which acts as the venue's
 public user — is denied**. That is by design, not a misconfiguration. Do not
 loop retrying; explain and pick a route:
@@ -101,14 +101,14 @@ loop retrying; explain and pick a route:
    ```
    The same strategy's `mintToken(venueDID)` gives a bearer JWT for `curl … -H "Authorization: Bearer <jwt>" POST /api/v1/run` or an MCP client `headers` block. Never paste the seed into chat or commit it.
 2. **In-process operator code** — anything holding the `Engine` uses `engine.jobs().invokeOperation("v/ops/venue/...", input, engine.venueContext())`. This is how tests and embedded venues do it.
-3. **Venue-issued delegation** — for a standing admin identity, mint a UCAN *as the venue* (route 1 or 2, `v/ops/ucan/issue` with `att: [{"with": "<venueDID>/adapters", "can": "adapter/manage"}]`, `aud` = the admin's DID); the admin then presents it through the `ucans` grant channel. Authentication remains a separate bearer credential. Same model as `user:create`. See `/ucan`.
+3. **Venue-issued delegation** — for a standing admin identity, mint a UCAN *as the venue* (route 1 or 2, `v/ops/ucan/issue` with `att: [{"with": "<venueDID>/adapters", "can": "admin/adapter/manage"}]`, `aud` = the admin's DID); the admin then presents it through the `ucans` grant channel. Authentication remains a separate bearer credential. Same model as `user:create`. See `/ucan`.
 
-`venue/restart` is deliberately separate process authority: it requires
-`venue/restart` on `<venueDID>/process`, plus invoke authority for the operation.
-`venue/gc` is likewise separate store authority (`venue/gc` on `<venueDID>/store`);
-with `restart: true` it needs both. Neither is held by the venue's own agents:
-an agent acting as the venue must present a venue-issued delegation.
-It is available only when running the executable `MainVenue` jar. The operation
+`admin/venue/restart` is deliberately separate process authority: it requires
+`admin/venue/restart` on `<venueDID>/process`, plus invoke authority for the operation.
+`admin/venue/gc` is likewise separate store authority (`admin/venue/gc` on `<venueDID>/store`);
+with `restart: true` it needs both. Venue agents hold these privileges within
+their effective caps; an unrestricted venue agent holds both. Process restart
+requires the executable `MainVenue` jar; collection requires host store control. The operation
 finishes its Job before closing all venues; a helper starts the successor and
 falls back to the current jar if startup does not reach readiness. Use immutable,
 versioned jar paths and leave the current jar available for rollback.
@@ -176,7 +176,7 @@ Follow the canonical developer contract in `venue/docs/ADAPTERS.md`: it covers `
 
 | Symptom | Cause / fix |
 |---------|-------------|
-| `Venue administration denied: requires adapter/manage …` | Caller is not the venue and holds no venue-issued delegation — see Authority above. Expected for the public MCP user. |
+| `Venue administration denied: requires admin/adapter/manage …` | Caller is not the venue and holds no venue-issued delegation — see Authority above. Expected for the public MCP user. |
 | Operation metadata resolves but invocation fails | Its adapter is disabled/unloaded. Reload a module to overwrite it, or delete the catalog path explicitly. |
 | `module/load` policy error | `dynamicModules.enabled` is off, the jar is outside `dynamicModules.dir`, the name has `..`/an absolute path without `anyPath`, or the `sha256` pin mismatched. |
 | Change vanished after restart | Runtime changes are not persisted — put it in `adapters.*` / `modules` in the config. |

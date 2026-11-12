@@ -26,11 +26,12 @@ Dependency versions are in the root `pom.xml`.
   25.0.3: JDK-8370887 fires virtual-thread timeouts tens of seconds late, so
   jobs stall and tests fail. The build warns on one; `-Dcovia.jdk.check=ERROR`
   (CI and release) fails it.
-- `mvn clean install` builds and tests everything (`-DskipTests` skips tests);
-  `mvn test -pl venue` tests one module. `covia.jar` is assembled in
-  `install`, not `package`.
+- `mvn clean install` builds everything and runs the default tests
+  (`-DskipTests` skips them); `mvn test -pl venue` tests one module.
+  `covia.jar` is assembled in `install`, not `package`.
 - Heavy tests are opt-in: `-Dcovia.tests.durability=true` (forks JVMs) and
-  `-Dcovia.tests.integration=true` (external services); see `BUILD.md`.
+  `-Dcovia.tests.integration=true` (components working together, external
+  services included); see `BUILD.md`.
 - Never kill a running `mvn test`: it orphans venue JVMs. Let it finish, and
   stop a stray venue JVM only by its `jps` PID.
 - In a worktree, build with `-pl <module> -am`: sibling SNAPSHOTs may be
@@ -47,10 +48,12 @@ Dependency versions are in the root `pom.xml`.
 
 ## Branches and deploys
 
-`develop` is the working branch and `master` takes releases (`BUILD.md`). CI
-deploys from both: a push to `develop` redeploys the dev venues (venue-3 on
-EC2, venue-4 on Azure), and a push to `master` the stable GCP venues
-(venue-test, venue-1, venue-2).
+`develop` is for fast iteration (default tests, direct pushes, no deployment).
+`qa` takes published develop commits for heavy tests and prereleases, then
+deploys dev venues 3/4; `master` takes releases and deploys stable venues test/1/2.
+QA has no independent commits: push develop first, then `git push origin develop:qa`,
+without force. Workflow definitions must reach default branch develop first.
+See [BUILD.md](BUILD.md#development-and-qa) for promotion, acceptance and deployment.
 
 ## Conventions
 
@@ -124,8 +127,8 @@ and required tests. Operation metadata is covered there and in
   `AGENT_LOOP.md`, `EMBEDDING.md`, `GRID_LATTICE_DESIGN.md` (lattice layout,
   defined in code by `covia.lattice.Covia`) and `CONFIG.md` (operator
   reference).
-- `BUILD.md`: build details and the release flow. `DX_PLAN.md`: the public
-  developer-experience roadmap. `deploy/README.md`: the operator guide.
+- `BUILD.md`: builds, QA and releases. `DX_PLAN.md`: experience roadmap for
+  developers using Covia. `deploy/README.md`: the operator guide.
 
 ## Skills
 

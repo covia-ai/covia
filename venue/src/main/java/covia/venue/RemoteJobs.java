@@ -16,6 +16,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import convex.core.data.ACell;
+import convex.core.data.prim.CVMBool;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Maps;
@@ -371,6 +372,8 @@ public final class RemoteJobs implements AutoCloseable {
 		if (snapshot == null || !id.equals(Job.parseID(snapshot.get(Fields.ID)))) {
 			throw new ResponseException(CANCELLATION_ID_MISMATCH);
 		}
+		// An accepted control does not prove that remote work has stopped.
+		if (CVMBool.TRUE.equals(snapshot.get(Fields.ACCEPTED))) return Maps.of(OUTCOME, OUTCOME_UNKNOWN);
 		return cancellationResult(RT.ensureString(snapshot.get(Fields.STATUS)));
 	}
 

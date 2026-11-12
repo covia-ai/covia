@@ -29,7 +29,9 @@ import covia.api.Fields;
 import covia.exception.ResponseException;
 import covia.venue.RequestContext;
 import io.javalin.websocket.WsContext;
+import covia.test.IntegrationTest;
 
+@IntegrationTest
 class SlackSocketModeTest {
 	static final AString APP = Strings.intern("appToken"), SIGNING = Strings.intern("signingSecret");
 	static AMap<AString, ACell> socketSpec() { return spec().dissoc(SIGNING).assoc(APP, Strings.create("s/APP")); }

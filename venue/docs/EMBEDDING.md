@@ -163,6 +163,36 @@ List<Job> started = application.update().get(); // start what is due by then
 for (Job job : started) job.awaitResult();      // when the test needs them finished
 ```
 
+`application.nextDue()` returns the earliest queued scheduled timestamp as a
+`CVMLong`, in epoch milliseconds on the application's clock, or `null` when
+none is queued. It considers every started, non-closing mounted venue and
+includes scheduled operations, agent wakes and HITL timeouts. Dispatch capacity
+does not hide queued events. An overdue event retains its original timestamp;
+a claimed event is excluded, while a recurring event's next queued occurrence
+is included. The query only reads: it neither moves the clock nor starts work.
+
+The answer is an observation, not a reservation or an atomic snapshot across
+venues: concurrent scheduling, cancellation, dispatch and venue lifecycle
+changes can alter it. Re-query after each step. `null` does not establish that
+running jobs or agents are idle, and this query does not cover system-timer
+timeouts, retries or other elapsed-time activity.
+
+For a host driving time forward, the next step can jump straight to an event:
+
+```java
+CVMLong due = application.nextDue();
+if (due != null) {
+    clock.set(Math.max(clock.millis(), due.longValue())); // overdue: keep the current time
+    List<Job> started = application.update().get();
+    // Observe or await these Jobs as the simulation requires.
+}
+```
+
+Await an outstanding update before choosing the next step: it already waits
+for dispatch capacity to start the events due by its time. Its completion does
+not mean the returned Jobs have finished. Waiting for a Job's result is a
+separate choice; a Job may itself need a later scheduled event to finish.
+
 `Engine.createTemp(clock, config)` does this setup in one call: an in-memory
 venue on `clock`, updated with `engine.application().update()`.
 `Engine.createTemp(config)` is the same on a clock held at the current time, so

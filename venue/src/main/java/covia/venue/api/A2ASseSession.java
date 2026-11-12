@@ -55,6 +55,7 @@ public class A2ASseSession {
 	private final Blob taskId;
 	private final Object rpcRequestId;
 	private final RequestContext rctx;
+	private final AString owner;
 
 	private final Consumer<Job> listener = this::onJobUpdate;
 	private final AtomicBoolean closed = new AtomicBoolean(false);
@@ -62,6 +63,12 @@ public class A2ASseSession {
 
 	public A2ASseSession(SseClient sseClient, Engine engine, Blob taskId,
 			Object rpcRequestId, RequestContext rctx) {
+		this(sseClient, engine, taskId, rpcRequestId, rctx, null);
+	}
+
+	public A2ASseSession(SseClient sseClient, Engine engine, Blob taskId,
+			Object rpcRequestId, RequestContext rctx, AString owner) {
+		this.owner = owner;
 		this.sseClient = sseClient;
 		this.engine = engine;
 		this.taskId = taskId;
@@ -97,7 +104,7 @@ public class A2ASseSession {
 	private void attach() {
 		// Access-control check against the caller via the RequestContext path;
 		// gives us an authoritative snapshot for the initial frame.
-		AMap<AString, ACell> data = engine.jobs().getJobData(taskId, rctx);
+		AMap<AString, ACell> data = engine.jobs().getJobData(taskId, rctx, owner);
 		if (data == null) {
 			close();
 			return;
@@ -108,7 +115,7 @@ public class A2ASseSession {
 			// The Job may have completed and been evicted between the authorised
 			// lookup above and this active-cache lookup. Re-read the durable record
 			// so the stream cannot finish on a stale non-terminal snapshot.
-			data = engine.jobs().getJobData(taskId, rctx);
+			data = engine.jobs().getJobData(taskId, rctx, owner);
 			if (data == null) {
 				close();
 				return;
@@ -128,7 +135,8 @@ public class A2ASseSession {
 		// the next status frame. Fast completion can therefore never be lost.
 		this.subscribedJob = job;
 		job.subscribe(listener);
-		data = job.getData();
+		data = engine.jobs().getJobData(taskId, rctx, owner);
+		if (data == null) { close(); return; }
 
 		// Frame 1: Task snapshot
 		sendFrame(A2ACodec.toTask(data));
@@ -142,7 +150,9 @@ public class A2ASseSession {
 	private synchronized void onJobUpdate(Job job) {
 		if (closed.get()) return;
 		try {
-			TaskStatusUpdateEvent update = A2ACodec.toStatusUpdate(job.getData());
+			AMap<AString, ACell> data = engine.jobs().getJobData(taskId, rctx, owner);
+			if (data == null) { close(); return; }
+			TaskStatusUpdateEvent update = A2ACodec.toStatusUpdate(data);
 			sendFrame(update);
 			if (update.isFinal()) {
 				close();
@@ -161,6 +171,13 @@ public class A2ASseSession {
 	 */
 	private void fail(Exception e) {
 		Map<String, Object> error = new LinkedHashMap<>();
+		if (e instanceof covia.exception.AuthException) {
+			error.put("code", A2AErrorCodes.TASK_NOT_FOUND.code());
+			error.put("message", covia.venue.JobManager.JOB_ACCESS_DENIED + taskId.toHexString());
+			sendEnvelope("error", error);
+			close();
+			return;
+		}
 		error.put("code", A2AErrorCodes.INTERNAL.code());
 		error.put("message", FaultException.within(
 			STREAM.formatted(taskId.toHexString()), FaultException.VENUE, e).getMessage());

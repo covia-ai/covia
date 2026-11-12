@@ -1,6 +1,6 @@
 {
   "name": "Revoke user authentication key",
-  "description": "Revokes a venue-managed named user's public authenticator while retaining its audit tombstone.",
+  "description": "Revokes a venue-managed named user's public authenticator while retaining its audit tombstone. Requires the user's own whole authority or admin/user/authentication-manage on <venueDID>/users. Only the direct venue may revoke the final active key.",
   "mcp": {
     "annotations": {
       "readOnlyHint": false,

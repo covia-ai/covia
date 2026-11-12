@@ -10,23 +10,40 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Added
 
-- MCP tokens: any user or agent can create a scoped bearer for the venue's `/mcp` (`mcp:create-token`, `update-token`, `delete-token`, `list-tokens`, `get-token`) that offers chosen operations as tools and acts with its issuer's authority within the token's caps; emptying its caps, deleting it or its expiry revokes it, and `adapters.mcp.keepRawTokens` keeps bearers for `admin/token` to read again.
+- Job-specific `job/read`, `job/manage` and `job/message` grants replace CRUD permissions on Job APIs; lifecycle controls return acknowledgements.
+- Embedded simulations can discover the next queued scheduled timestamp across venues and advance directly to it (#683).
+
+- Universal Job tools (`job:status`, `result`, `cancel`, `pause`, `resume`, `message`) manage local and remote work independently of its execution adapter; agent skills use them and existing Grid Job tools remain compatible.
+
+- MCP tokens: any user or agent can create a scoped bearer for the venue's `/mcp` (`mcp:create-token`, `update-token`, `delete-token`, `list-tokens`, `get-token`) that offers chosen operations as tools and acts with its issuer's authority within the token's caps; emptying its caps, deleting it or its expiry revokes it, and `adapters.mcp.keepRawTokens` keeps bearers for `admin/token/mcp` to read again.
 - `adapters.convex.timeoutMillis` sets how long `convex:query` and `convex:transact` wait for the peer's result; the default is the Convex client's own, 20 seconds.
 
 ### Changed
 
+- MCP bearer retrieval uses `admin/token/mcp`; `admin/token` remains its parent for administration across token kinds.
+- Venue administration requires `admin/user/*`, `admin/adapter/manage`, `admin/venue/*` and `admin/sudo` capabilities; the former user, adapter and venue abilities are no longer accepted for these actions.
+- Remote submissions and direct Job controls use explicitly selected remote credentials; local proxy cancellation controls only its bound execution.
+
+- Grid and Job tool descriptions distinguish submission, observation and compatibility entry points, with clearer handle, status and cancellation guidance and leaner workflow skills.
+- Automated venue deployments use the tested build's image digest; manual redeploys select a successful image-publishing run.
 - LangChain4j 1.23.0, A2A 1.5.1.Final, Nimbus OAuth/OIDC SDK 11.39, CommonMark 0.32.0; the Documents module uses Apache POI 6.0.0.
 - Disabling a messaging adapter (Telegram, Discord, Slack, WhatsApp) stops its bots at once, closing their polls and connections, and enabling it starts them again; a replaced one's bots stop before its replacement's start.
+- The `:latest` Docker image and the `latest-snapshot` release follow the `qa` branch, published only after the integration tests pass, rather than every push to `develop`.
 - A messaging bot an agent created uses its credentials and runs its relay's `admit` and `charge` hooks with that agent's authority, not its user's: an agent with caps needs `secret/use` on each secret the bot names, and its caps must cover what the hooks do.
 - `mcp:tools-call` and `mcp:tools-list` hide `token` in their job records, both the bearer in the input and a top-level `token` in a tool's result; a caller waiting for the result still receives it.
 
 ### Fixed
 
+- Account REST reads and deletion honour delegated administration grants in `X-Covia-Ucans`.
+- Job SSE subscriptions no longer miss completion while connecting or deliver initial state after a newer update.
+
+- Grid operations honour explicit remote result wait timeouts, submit asynchronously without background polling, and reject non-string venue targets instead of executing locally.
 - `user:delete` no longer leaves cleanup pending for an adapter registered while it runs.
 - Stopping or reconfiguring a Telegram bot just as it polls no longer leaves that poll running for up to 30 seconds or holds up the change for 5.
 - Deleting, reconfiguring or disabling a Telegram or Discord bot that is still connecting no longer waits for the connection (for Discord, without limit), and one bot's slow connection attempt no longer holds up the others' retries.
 - Deleting, reconfiguring or disabling a Telegram bot no longer waits up to 5 seconds while it handles an update it has received or waits to retry a failed poll.
-- A secret longer than about 4 KB stays readable after the venue restarts or its store is compacted, instead of being reported as damaged.
+- A secret longer than about 4 KB stays readable once the venue has saved it to its store, instead of being reported as damaged moments after it was set.
+- Using a connected account the venue cannot read is refused with a reason (connect it again with `oauth:connect`) instead of failing as an internal error, and `oauth:disconnect` removes one instead of failing.
 - `convex:query` and `convex:transact` accept a source of `nil` instead of refusing it as empty.
 - A `convex:query` or `convex:transact` source that is empty or not one Convex Lisp form fails as invalid input with the reader's reason, instead of as a fault in the `convex` adapter.
 - `convex:query` refuses an `address` that is not a Convex account address, instead of running the query without one.

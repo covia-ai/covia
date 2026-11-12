@@ -1041,7 +1041,8 @@ public class JobManagerTest {
 
 		AMap<AString, ACell> cancelled = engine.jobs().cancelJob(job.getID(), ctx);
 		assertNotNull(cancelled, "cancelling a finished job answers its record (COG-8)");
-		assertEquals(Status.COMPLETE, RT.ensureString(cancelled.get(Fields.STATUS)));
+		assertEquals(JobManager.acknowledgement(job.getID()), cancelled);
+		assertEquals(Status.COMPLETE, job.getStatus());
 
 		NotSupportedException pause = assertThrows(NotSupportedException.class,
 			() -> engine.jobs().pauseJob(job.getID(), ctx));

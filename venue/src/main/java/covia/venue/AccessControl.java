@@ -1,25 +1,15 @@
 package covia.venue;
 
-import convex.auth.ucan.Capability;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Blob;
 import convex.core.data.Strings;
 import covia.api.Fields;
+import covia.api.Abilities;
 import covia.grid.Attribution;
 
-/**
- * Central authorisation for a venue.
- *
- * <p>Job ownership enforcement. A request reaches a job whose owner (its
- * {@code owner}, else its {@code caller}) is the request's user. Jobs with no
- * {@code caller} are venue-internal and visible only to internal requests.</p>
- *
- * <p>Fine-grained operation capabilities are enforced at adapter action
- * points through {@link RequestContext#requireCapability}; they do not belong
- * in this ownership-only helper.</p>
- */
+/** Shared resource checks for Job APIs and scheduled events. */
 public class AccessControl {
 
 	private final Engine engine;
@@ -28,57 +18,35 @@ public class AccessControl {
 		this.engine = engine;
 	}
 
-	/**
-	 * Checks if the request can see a specific job: {@link #canAccessJob(RequestContext,
-	 * AMap, AString)} for {@code crud/read}.
-	 */
+	/** Whether the caller may read this Job through the Job API. */
 	public boolean canAccessJob(RequestContext ctx, AMap<AString, ACell> jobData) {
-		return canAccessJob(ctx, jobData, Capability.CRUD_READ);
+		return canAccessJob(ctx, jobData, Abilities.JOB_READ);
 	}
 
 	/**
-	 * Checks if the request can see ({@code crud/read}) or manage ({@code crud/write})
-	 * a specific job.
-	 *
-	 * <p>Ownership first: the job's owner must be the request's user.
-	 * Anonymous callers and jobs with no recorded caller are denied. Framework
-	 * code that needs to bypass ownership (recovery, scheduler) goes through the
-	 * no-ctx variants of {@link JobManager#getJobData(Blob)} and
-	 * {@code deliverMessage} — trust is established by call path, not by a flag.</p>
-	 *
-	 * <p>Sharing the owner's namespace is proximity, not permission. A context
-	 * with a capability scope (an agent with {@code caps}, a sudo delegate, the
-	 * venue's public principal under {@code auth.public.caps}) reaches a job it
-	 * made as a principal other than the owner, recorded as the job's
-	 * {@code caller}, or one its authority covers for {@code ability} on
-	 * {@code <owner>/j/<id>}. Only an unscoped context is the owner outright, so
-	 * a scope on the owner itself (the shared public principal, say) reaches
-	 * only what its authority covers.</p>
-	 *
-	 * @param ctx Request context with caller identity
-	 * @param jobData Job record map
-	 * @param ability {@code crud/read} to see the job, {@code crud/write} to manage it
-	 * @return true if access is allowed
+	 * Job abilities are independent of raw lattice CRUD. Ownership supplies
+	 * ordinary standing, but never bypasses a scope or MCP token. Attribution
+	 * as the creator is not a grant. Other principals need a valid delegation.
 	 */
 	public boolean canAccessJob(RequestContext ctx, AMap<AString, ACell> jobData, AString ability) {
-		if (jobData == null) return false;
+		if (ctx == null || jobData == null) return false;
 		AString owner = Attribution.owner(jobData);
-		if (owner == null) return false;              // venue-internal job
-		// Jobs are owned by the user, so ownership compares on the user DID.
-		AString userDID = ctx.getUserDID();
-		if (userDID == null) return false;            // anonymous
-		if (!owner.equals(userDID)) return false;
-		if (isOwnerOutright(ctx)) return true;
-		if (madeItFor(ctx, jobData)) return true;
-		if (!(jobData.get(Fields.ID) instanceof Blob id)) return false;
-		return engine.authorityCovers(ctx, Strings.create(userDID + "/j/" + id.toHexString()), ability);
+		if (owner == null || ctx.getUserDID() == null) return false;
+		// An incomplete record has no delegable resource; only its unscoped owner.
+		if (!(jobData.get(Fields.ID) instanceof Blob id))
+			return owner.equals(ctx.getUserDID()) && isOwnerOutright(ctx) && ctx.getTokens().isEmpty();
+		AString resource = JobManager.resource(owner, id);
+		AString destination = Strings.create(engine.config().getBaseUrl());
+		RequestContext authority = ctx.authorityContext();
+		if (!owner.equals(authority.getUserDID()) && !owner.equals(authority.getCallerDID())
+				&& !engine.crossUserAllows(ctx, resource, ability, destination)) return false;
+		return engine.authorityCovers(ctx, resource, ability, destination);
 	}
 
 	/**
 	 * Checks if the request can see or manage a scheduled event record.
 	 *
-	 * <p>Ownership first: the event's owner must be the request's user. As for
-	 * jobs, sharing the owner's namespace is proximity, not permission: a
+	 * <p>Ownership first: the event's owner must be the request's user. Sharing the owner's namespace is proximity, not permission: a
 	 * context with a capability scope reaches only an event it scheduled itself as
 	 * a principal other than the owner, recorded as the event's {@code caller}.
 	 * Scheduled events are not a capability resource, so no caps extend that

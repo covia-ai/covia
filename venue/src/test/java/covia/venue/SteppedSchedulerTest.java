@@ -102,6 +102,44 @@ class SteppedSchedulerTest {
 	}
 
 	@Test
+	void nextDueReportsQueuedTimestampsAcrossStartedVenues(TestInfo info) throws Exception {
+		DrivenClock clock = DrivenClock.at(Instant.parse("2026-01-01T00:00:00Z"));
+		long now = clock.millis();
+		try (CoviaApplication app = TestEngine.application(clock)) {
+			assertNull(app.nextDue(), "no mounted venues");
+			Engine first = app.mount(AKeyPair.generate(), config(null)).launch();
+			assertNull(app.nextDue(), "a started venue with no queued events");
+			Engine second = app.mount(AKeyPair.generate(), config(null)).launch(venue -> {
+				venue.gridScheduler().schedule(ECHO, Strings.create("second"), user(venue, info), now + 20);
+				assertNull(app.nextDue(), "a venue's events take part only after it starts");
+				return CompletableFuture.completedFuture(null);
+			});
+			assertEquals(CVMLong.create(now + 20), app.nextDue());
+			RequestContext ctx = user(first, info);
+			Blob early = first.gridScheduler().schedule(ECHO, Strings.create("cancelled"), ctx, now + 10);
+			Blob last = first.gridScheduler().schedule(ECHO, Strings.create("last"), ctx, Long.MAX_VALUE);
+			assertEquals(CVMLong.create(now + 10), app.nextDue(), "the earliest event across both venues");
+			assertTrue(first.gridScheduler().cancel(early, ctx));
+			assertEquals(CVMLong.create(now + 20), app.nextDue(), "cancellation is visible immediately");
+
+			clock.advance(100);
+			assertEquals(CVMLong.create(now + 20), app.nextDue(), "overdue work retains its original timestamp");
+			assertEquals(now + 100, clock.millis(), "the query does not move the clock");
+			assertEquals(1, second.gridScheduler().list(user(second, info)).count(), "the query does not claim work");
+			List<Job> jobs = app.update().get(10, TimeUnit.SECONDS);
+			assertEquals(1, jobs.size());
+			assertEquals(Strings.create("second"), jobs.get(0).awaitResult(10_000));
+			assertEquals(CVMLong.MAX_VALUE, app.nextDue(), "the maximum timestamp is a value, not absence");
+			assertTrue(first.gridScheduler().cancel(last, ctx));
+			assertNull(app.nextDue());
+
+			first.gridScheduler().schedule(ECHO, Strings.create("unmounted"), ctx, now + 200);
+			app.unmount(first.getAccountKey());
+			assertNull(app.nextDue(), "an unmounted venue's queued work is excluded");
+		}
+	}
+
+	@Test
 	void nothingStartsUntilTheApplicationIsUpdated(TestInfo info) throws Exception {
 		RequestContext ctx = user(engine, info);
 		Scheduler scheduler = engine.gridScheduler();
@@ -114,6 +152,7 @@ class SteppedSchedulerTest {
 			CompletableFuture<List<Job>> update = application.update();
 			entered(gate, "the update starts the due event");
 			assertTrue(scheduler.list(ctx).isEmpty(), "a started one-shot event has left the schedule");
+			assertNull(application.nextDue(), "no queued event does not mean the invocation has finished");
 			assertFalse(update.isDone(), "the update completes once its events' invocations have returned");
 			gate.release();
 			update.get(10, TimeUnit.SECONDS);
@@ -168,6 +207,8 @@ class SteppedSchedulerTest {
 			entered(b, "the second due event starts alongside it");
 			assertEquals(2, scheduler.list(ctx).count(),
 				"the third waits in the schedule, with the event not yet due, while two are starting");
+			assertEquals(CVMLong.create(t + 3), application.nextDue(), "full dispatch capacity does not hide queued work");
+			assertEquals(Long.MAX_VALUE, application.nextUpdateTime(), "the timer waits for capacity rather than waking repeatedly");
 			a.release();
 			entered(c, "a place frees when an invocation returns, and the third starts");
 			assertFalse(update.isDone());
@@ -229,6 +270,7 @@ class SteppedSchedulerTest {
 					CompletableFuture<List<Job>> waiting = single.update();
 					entered(held, "the first event takes the only place");
 					scheduler.shutdown();
+					assertNull(single.nextDue(), "a shut-down scheduler's queued work is excluded");
 					ExecutionException failed = assertThrows(ExecutionException.class,
 						() -> waiting.get(10, TimeUnit.SECONDS));
 					assertInstanceOf(ShuttingDownException.class, failed.getCause());
@@ -289,6 +331,7 @@ class SteppedSchedulerTest {
 		ACell rec = listed.get(0);
 		assertEquals(CVMLong.create(t + 4_000), RT.getIn(rec, Schedule.K_TIME),
 			"the next slot after the update's time, on the event's phase");
+		assertEquals(CVMLong.create(t + 4_000), application.nextDue(), "a recurrence reports its next queued occurrence");
 		assertEquals(CVMLong.create(t + 3_500), RT.getIn(rec, Schedule.K_LAST_FIRED),
 			"fired at the update's time");
 		assertEquals(1, engine.getVenueState().users().user(ctx.getUserDID()).jobs().getAll().count(),
@@ -310,7 +353,7 @@ class SteppedSchedulerTest {
 			closing.set(true);
 			closable.update().get(10, TimeUnit.SECONDS);
 			assertEquals(1, scheduler.list(ctx).count(), "a closing venue neither starts nor consumes it");
-			assertEquals(Long.MAX_VALUE, closable.nextDue(), "and reports nothing due");
+			assertNull(closable.nextDue(), "and reports nothing due");
 			closing.set(false);
 			closable.update().get(10, TimeUnit.SECONDS);
 			assertTrue(scheduler.list(ctx).isEmpty());

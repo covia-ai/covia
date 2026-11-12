@@ -43,7 +43,8 @@ venue/
   with JSON Schema input/output. See `docs/OPERATIONS.md`.
 - **Job** — execution state for an invocation. No framework-level timeout;
   terminal states sticky; caller-side wait timeouts never mutate the job.
-  Full implementation semantics: `docs/JOBS.md`; protocol: COG-8.
+  Full implementation semantics: `docs/JOBS.md`; protocol: COG-8. Standard
+  capability catalog: `docs/UCAN.md` section 3.2 (`job/read`, `job/manage`, `job/message`).
 - **Adapter** — bridges operations to execution. Extends `AAdapter`; receives
   resolved metadata (never null) and a `RequestContext`; returns
   `CompletableFuture` (or overrides the job-aware `invoke` for direct job
@@ -58,7 +59,7 @@ venue/
   (attribution, delegation audience, granting authority); `getUserDID()` is
   *whose namespace* (bare paths, workspace, secrets, jobs, inbox, quota). They
   differ only for an agent sub-principal, `<ownerDID>:g:<agentId>`, and a
-  delegate acting for another user (`user/sudo`) — see `docs/UCAN.md` §5.4.
+  delegate acting for another user (`admin/sudo`) — see `docs/UCAN.md` §5.4.
 - **Lattice** — CRDT-based persistent state. Structure defined in
   `covia.lattice.Covia`; design in `docs/GRID_LATTICE_DESIGN.md`.
 
@@ -75,7 +76,8 @@ AUTH_REQUIRED).
 
 | Adapter | Purpose | Operations |
 |---------|---------|------------|
-| `grid` | Federated grid operations | `run`, `invoke`, `jobStatus`, `jobResult` |
+| `grid` | Invoke operations locally or across venues | `run`, `invoke`; compatibility queries `jobStatus`, `jobResult` (prefer `job`) |
+| `job` | Universal Job inspection and control, local or remote; Grid Job reads remain compatibility entry points | `status`, `result`, `cancel`, `pause`, `resume`, `message` |
 | `remoteagent` | Covia agent proxy on a local or remote venue; selected by `g/<id>/agent.adapter`, used through `agent:chat` / `agent:request` | internal transport |
 | `p2p` | The venue's Convex P2P node (`convex-p2p`), off unless `adapters.p2p.join`; peer list plus in-process change events, venue-owned (`docs/CONFIG.md#p2p-network-adaptersp2p`) | `peers`, `connect` |
 | `convex` | Convex blockchain, CAD3 conversion, and secret-backed Ed25519 keys | `query`, `transact`, `generate-key`, `sign`, `decode-cad3`, `encode-cad3` |
@@ -246,6 +248,13 @@ Adapter-owned state uses `AdapterState`; see
 
 ### Testing
 
+- A test of components working together, or a long-running or
+  timing-dependent one, is an `@IntegrationTest`, off unless
+  `-Dcovia.tests.integration=true` (`BUILD.md`, Tests); a small
+  synchronous test of a helper API stays in the default suite
+- Tests downloading large models require a separate explicit opt-in, never
+  the general integration flag. Speech model tests use
+  `-Dcovia.tests.speech.models=true`; default and QA suites use local fixtures.
 - Use the shared `TestEngine.ENGINE` with per-test DIDs (`TestEngine.uniqueDID`,
   `TestEngine.uniqueManagedDID` for a user the venue hosts)
   — never a fresh Engine per test unless persistence/restart is under test. It
@@ -323,6 +332,7 @@ java -jar target/covia.jar [config.json]
 
 ## Related Documentation
 
+- `docs/ADMIN.md` — venue-level privileged operations, admin abilities and resources, exceptions and migration; document responsibility map
 - `docs/AUTH.md` — authentication design (#297): method contract, central sessions, assurance policy
 - `docs/ADAPTERS.md` — canonical adapter system, state, lifecycle, authoring, and module contract
 - `docs/CONFIG.md` — operator configuration reference

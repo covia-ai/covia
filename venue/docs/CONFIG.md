@@ -508,7 +508,7 @@ container; it does not replace the container image.
 
 This is process-wide authority, distinct from adapter management: venue
 authority ([VENUE_AUTHORITY.md](./VENUE_AUTHORITY.md#how-it-works-today)) for
-`venue/restart` on `<venue DID>/process`, plus `invoke` on its reference when
+`admin/venue/restart` on `<venue DID>/process`, plus `invoke` on its reference when
 called through a generic invocation surface. There is no configuration bypass
 or enable flag.
 
@@ -557,9 +557,9 @@ Job cancels the cycle. Constraints:
 - Needs free disk of about the current file size; about 2× disk is used until
   the superseded file is deleted, and reads cost a little more during the
   cycle. `temp`/`memory` stores are refused.
-- **Venue-owned**: venue authority for `venue/gc` on `<venueDID>/store`,
-  checked like `venue/restart`. `restart: true`
-  additionally requires `venue/restart` on `<venueDID>/process` and a
+- **Venue-owned**: venue authority for `admin/venue/gc` on `<venueDID>/store`,
+  checked like `admin/venue/restart`. `restart: true`
+  additionally requires `admin/venue/restart` on `<venueDID>/process` and a
   `MainVenue`-managed process, both checked before any collection starts.
 
 ### Retaining a store checkpoint
@@ -1153,7 +1153,7 @@ the token's owner. An unknown, deleted or expired token receives HTTP 401.
 
 - `keepRawTokens` (default `false`): keep each token's bearer beside its
   hash, so `mcp:get-token` can return it again to a caller holding
-  `admin/token`. Off, the venue keeps only the hash and a lost bearer is
+  `admin/token/mcp`. Off, the venue keeps only the hash and a lost bearer is
   replaced by rotating it. Turning it off, at start-up or with
   `venue:adapter/configure`, drops the kept bearers at once.
 
@@ -1233,8 +1233,8 @@ venue-managed `username`. A username requires a public `hostname` and derives
 `did:web:<hostname>:u:<username>` — for example
 `did:web:venue.example.com:u:alice`. `user:create` and `user:list` are
 venue-administrative operations: invoke directly as the venue, or present a
-venue-issued UCAN covering `<venueDID>/users` with `user/create` or
-`user/read`. Operator code can use `engine.venueContext()` to invoke the
+venue-issued UCAN covering `<venueDID>/users` with `admin/user/create` or
+`admin/user/read`. Operator code can use `engine.venueContext()` to invoke the
 built-in adapter; the [deployment guide](../../deploy/README.md#admit-users-at-runtime)
 shows the recorded-job path. An operator-installed adapter may use the same
 mechanism. OAuth callbacks are trusted venue provisioners and create the same
@@ -1258,7 +1258,7 @@ are not counted. The venue measures storage but sets no limit on it.
 ### Account deletion
 
 `v/ops/user/delete {"did":"did:..."}` and `DELETE /api/v1/users/{did}`
-require venue-issued `user/delete` authority on `<venueDID>/users`. This applies
+require venue-issued `admin/user/delete` authority on `<venueDID>/users`. This applies
 to the caller's own account too: ordinary users cannot delete themselves.
 The venue and shared public principal cannot be deleted. MCP exposes
 `user_delete` when the operator includes the `user` adapter in its tool set.
@@ -1299,7 +1299,7 @@ registered multikey in `kid`. Active methods are published in
 `/u/<username>/did.json`. `user:authentication-add`,
 `user:authentication-revoke`, and `user:authentication-list` manage the
 bindings; self-management is allowed, while cross-user changes require
-`user/authentication-manage` on `<venueDID>/users`. Revocation retains an
+`admin/user/authentication-manage` on `<venueDID>/users`. Revocation retains an
 audit tombstone and takes effect on the next request.
 
 Java clients use the same key without hand-building JWTs:
@@ -1705,7 +1705,7 @@ key there whose private half nobody ever sees. Name a held key by its
 `sign {"key":"did:key:z6Mk…","data":"0x…"}`, or another holder's as
 `<did>/x/crypto/keys/<key>`. Each use needs its `key/…` ability on the key by the
 standard capability rules: your own authority covers your keyring, and caps,
-`user/sudo` and grants work as for any resource, so a grant of `*` over a
+`admin/sudo` and grants work as for any resource, so a grant of `*` over a
 namespace includes its keys. An agent has a keyring of its own, under its own
 DID, which goes when the agent is deleted. A phrase kept with
 `generate-mnemonic {"keyring":true}` derives keys only into its holder's
@@ -1724,9 +1724,8 @@ at a provider, obtained under the caller's venue identity. Connections are the
 keys; they are not in the user's secret store, so no secret operation lists,
 replaces, extracts or deletes them, and no operation returns a token. Grants an
 earlier venue kept there as `oauth/<provider>` move on first access; one that
-cannot be read is refused with a reason and left where it was. Deleting
-a user deletes their connections; their grants are not revoked at the provider.
-The public principal has none.
+cannot be read is refused with a reason and left where it was. The public
+principal has none.
 
 ```json
 {
@@ -1791,7 +1790,10 @@ fresh access token — refreshed when expired — that never reaches a model or 
 job record. `oauth:status` lists connections without tokens;
 `oauth:disconnect` forgets the grant and revokes it where the provider
 supports it. A refresh in flight never brings back a disconnected grant or
-replaces a newer one. Deleting an account (`user:delete`) revokes its grants
+replaces a newer one. A connection whose tokens the venue cannot read, as
+after a lost venue key, is refused with a reason when used; connecting again
+replaces it, and disconnecting forgets it unrevoked. Deleting an account
+(`user:delete`) deletes its connections and revokes their grants
 the same way, once: a provider that refuses or cannot be reached keeps a grant
 the venue no longer holds. Providers and default scopes are published at
 `v/info/adapters/oauth`; the `v/skills/auth/oauth` skill teaches agents the
@@ -3147,7 +3149,7 @@ above is intentionally outside this administrative group:
 
 **Authority.** All of these are venue administration: they need venue
 authority ([VENUE_AUTHORITY.md](./VENUE_AUTHORITY.md#how-it-works-today)) for
-`adapter/manage` on `<venue DID>/adapters`, the same model as `user:create`.
+`admin/adapter/manage` on `<venue DID>/adapters`, the same model as `user:create`.
 Ordinary authenticated users get `AuthException`.
 
 **Module policy.** `module/load` and `module/unload` require
@@ -3229,7 +3231,7 @@ reach only the asker's own tasks for that agent.
 "anyone"` lets anonymous callers ask. They ask as the venue's public
 principal when public access is enabled. The target's `accepts: "anyone"`
 provides the action authority; the bound endpoint needs no `invoke` grant.
-Following tasks still needs `crud/read` on the public principal's jobs,
+Following tasks needs explicit `job/read` on the public principal's jobs,
 which the read-only public default grants.
 Every anonymous caller is that one principal, so they share its jobs: under a
 read-only scope any of them can read an anonymous task by its id, and none can
@@ -3366,7 +3368,7 @@ an MCP bridge's `auth`). A plain `s/NAME` is the caller's own secret. A user
 holds the ability over its own secrets and may send them anywhere the SSRF
 guard allows; an agent holds it as far as its caps reach, and its harness as
 far as its controller's authority does (UCAN.md §5.4); a delegate acting for
-the user (`user/sudo`) needs a grant like anyone else. Another
+the user (`admin/sudo`) needs a grant like anyone else. Another
 principal's secret is named as `<did>/s/NAME` and needs a `secret/use` grant
 from its owner, which may be bound to a destination: a UCAN whose capability
 carries `nb: {url: "https://api.example/"}` lets the holder use the secret

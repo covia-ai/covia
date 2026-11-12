@@ -187,6 +187,13 @@ class UserExportsTest {
 		run("import", Maps.of(Fields.DID, target, EXPORT, blob), venue);
 		assertTrue(engine.getVenueState().users().user(target).secrets().list().isEmpty());
 		assertNotNull(engine.getVenueState().users().content(target).get(Namespace.W));
+
+		// One the venue cannot decrypt refuses the export, carrying why.
+		users().user(source).secrets().store("FOREIGN", SECRET, SecretStore.keys(AKeyPair.generate()));
+		Throwable refused = assertThrows(CompletionException.class, () -> run("export",
+			Maps.of(Fields.DID, source, ACCOUNT_KEY, AKeyPair.generate().getAccountKey()), venue)).getCause();
+		assertEquals(UserExports.SECRET_UNREADABLE, refused.getMessage());
+		assertNotNull(refused.getCause());
 	}
 
 	@Test

@@ -230,7 +230,7 @@ public class AgentApiTest {
 		assertEquals(before + 1, jobCount(), "agent:list via invoke persists exactly one job");
 	}
 
-	/** #406: grants are inert until the intermediary explicitly invokes user/sudo. */
+	/** #406: grants are inert until the intermediary explicitly invokes user:sudo. */
 	@Test
 	public void testDelegatedCreateUsesIssuerNamespaceAndProofBounds() throws Exception {
 		AKeyPair ownerKey = AKeyPair.generate();
@@ -240,7 +240,7 @@ public class AgentApiTest {
 		// The delegate gives the agent caps, which last, so its right to grant them does too.
 		AString createGrant = UCAN.create(ownerKey, delegateKey.getAccountKey(), (Long) null,
 			Vectors.of(
-				Capability.create(owner, Abilities.USER_SUDO),
+				Capability.create(owner, Abilities.ADMIN_SUDO),
 				Capability.create(Strings.create(owner + "/v/ops/agent/create"), Strings.create("invoke")),
 				Capability.create(Strings.create(owner + "/g/"), Abilities.AGENT_CREATE),
 				Capability.create(Strings.create(owner + "/g/"), Strings.create("grant/" + Abilities.AGENT_CREATE))),
@@ -283,7 +283,7 @@ public class AgentApiTest {
 		// permits invocation but omits the action's agent/create capability.
 		long exp = (System.currentTimeMillis() / 1000) + 3600;
 		AString invokeOnly = UCAN.create(ownerKey, delegateKey.getAccountKey(), exp,
-			Vectors.of(Capability.create(owner, Abilities.USER_SUDO),
+			Vectors.of(Capability.create(owner, Abilities.ADMIN_SUDO),
 				Capability.create(Strings.create(owner + "/v/ops/agent/create"), Strings.create("invoke"))),
 			Vectors.empty()).toJWT(ownerKey);
 		delegated.setUcans(java.util.List.of(invokeOnly.toString()));

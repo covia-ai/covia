@@ -129,8 +129,9 @@ public final class UserExports {
 			try {
 				plain = SecretStore.plaintexts(secrets, SecretStore.keys(engine.getKeyPair()));
 			} catch (RuntimeException e) {
-				// Neither the provider's exception nor any decrypted material is reported.
-				throw new NotSupportedException(SECRET_UNREADABLE);
+				// The message carries neither the provider's exception nor any decrypted
+				// material; why it failed is the cause, for the caller to use as it sees fit.
+				throw new NotSupportedException(SECRET_UNREADABLE, e);
 			}
 			export = export.assoc(K_SECRETS, ECIES.encrypt(recipient, Format.encodeMultiCell(plain, true)));
 		}

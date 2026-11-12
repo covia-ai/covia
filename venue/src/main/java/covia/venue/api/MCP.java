@@ -72,7 +72,7 @@ import jakarta.servlet.http.HttpServletResponse;
  *       authenticated caller and {@code mcp.anonymousToolCallTimeout} (default
  *       two minutes) for an anonymous one. Past it the call ends with the id of
  *       a recorded job (the call's own, or a mirror of an unrecorded read-only
- *       call), so the result can still be collected with {@code grid_job_result};
+ *       call), so the result can still be collected through the Job tools;
  *       the job itself runs on.</li>
  *   <li>at most {@code mcp.maxConcurrentToolCalls} (default 16) calls in
  *       progress per caller.</li>
@@ -86,6 +86,11 @@ import jakarta.servlet.http.HttpServletResponse;
 public class MCP extends McpServer {
 
 	public static final Logger log = LoggerFactory.getLogger(MCP.class);
+	/** Guidance accompanying the local handle of a tool call still running. */
+	public static final String COLLECT_RUNNING_JOB =
+		"Use an advertised Job-result or Job-status tool with {\"id\": \"%s\"} on this venue (omit venue). "
+		+ "This is the local call's Job ID. Do not resubmit the original operation just because this wait ended.";
+	public static final String NO_COLLECTABLE_JOB = "It left no job to collect the result from.";
 
 	/** Tool metadata key for the operation reference used by this venue's dispatcher. */
 	public static final AString TOOL_OPERATION = Strings.intern("ai.covia/operation");
@@ -143,7 +148,7 @@ public class MCP extends McpServer {
 	 * an explicit list to override the default.</p>
 	 */
 	private static final java.util.Set<String> DEFAULT_INCLUDE_ADAPTERS =
-		java.util.Set.of("covia", "grid", "asset", "secret", "agent", "skills");
+		java.util.Set.of("covia", "grid", "job", "asset", "secret", "agent", "skills");
 
 	/** Wildcard token in {@code includeAdapters} meaning "expose all groups". */
 	private static final String INCLUDE_ALL = "*";
@@ -814,8 +819,7 @@ public class MCP extends McpServer {
 	private static AMap<AString, ACell> stillRunning(Job job, String why) {
 		String id = (job == null) ? null : job.getID().toHexString();
 		String message = "Still running: " + why + ". " + ((id == null)
-			? "It left no job to collect the result from."
-			: "Collect the result with grid_job_result {\"id\": \"" + id + "\"}, or see how it is going with grid_job_status.");
+			? NO_COLLECTABLE_JOB : COLLECT_RUNNING_JOB.formatted(id));
 		return protocolResult(buildMcpResult(Maps.of("message", message, "status", "running", "id", id), true));
 	}
 

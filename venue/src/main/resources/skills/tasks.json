@@ -3,15 +3,15 @@
 	"description": "Delegate, track, receive and complete tasks—the flow of work between agents. Load when assigning work, coordinating a pipeline, or handling your own queue.",
 	"content": {
 		"contentType": "text/markdown",
-		"inline": "## Tasks\nA delegated task is a tracked Job; its task id is its Job id and the durable record lives at `j/<id>`.\n\nDelegating:\n- Use the advertised agent-request operation with `{agentId, input, sessionId?, timeout?, outputPath?, responseSchema?}`. Input must be self-contained: task, paths/data, constraints, and expected output. Never send `{}`.\n- Default timeout is about 5s. If work finishes, the result is returned directly. Otherwise you receive a STARTED snapshot. Pass its exact id to the directly advertised Job-status operation to poll or Job-result operation with `{id, timeout?}` to wait; do not wrap either operation in a generic runner. timeout=0 is pure async.\n- outputPath is the lossless handoff: the framework writes the exact successful result under the requester's captured authority and returns a small receipt. Tell dependants to read that path. Failed/cancelled tasks write nothing.\n- Confirm dependencies before starting their consumers. Independent tasks may fan out; retain each Job id and collect every result.\n- Reuse sessionId only when the task should join that conversation and its loaded context.\n\nReceiving:\n- Outstanding tasks appear as `[Tasks assigned to you]` together with terminal completion and failure controls. The completion result is the only channel back to the requester; ordinary chat text is not the task result. Complete once with the real answer, or fail with a useful error when work cannot be completed. Never leave a caller waiting on work you have abandoned.\n\nManaging:\n- Use the advertised agent-info operation for status and queue depth and cancellation for queued work. Select every callable by the exact name, description, and schema in the current palette rather than any name in these instructions.\n- Debug by reading the Job/timeline instead of re-running potentially mutating work."
+		"inline": "## Tasks\nA delegated task is a tracked Job; its task id is its Job id and the durable record lives at `j/<id>`.\n\nDelegating:\n- Give each worker self-contained instructions: task, paths/data, constraints, and expected output.\n- For large or exact results, arrange a path-based handoff and tell dependants where to read it.\n- Confirm dependencies before starting their consumers. Independent tasks may fan out; retain each Job id and collect every result.\n- Reuse sessionId only when the task should join that conversation and its loaded context.\n\nReceiving:\n- Outstanding tasks appear as `[Tasks assigned to you]` together with terminal completion and failure controls. The completion result is the only channel back to the requester; ordinary chat text is not the task result. Complete once with the real answer, or fail with a useful error when work cannot be completed. Never leave a caller waiting on work you have abandoned.\n\nManaging:\n- Debug by reading the Job/timeline instead of re-running potentially mutating work."
 	},
 	"skill": {
 		"tools": [
 			"v/ops/agent/request",
-			"v/ops/agent/cancel-task",
+			"v/ops/job/cancel",
 			"v/ops/agent/info",
-			"v/ops/grid/job-status",
-			"v/ops/grid/job-result",
+			"v/ops/job/status",
+			"v/ops/job/result",
 			"v/ops/covia/read"
 		]
 	}

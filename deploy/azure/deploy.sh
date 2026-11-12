@@ -5,12 +5,18 @@
 # stored key. Pulls the published image and (re)starts the container; exits
 # non-zero if the venue does not come up healthy.
 
-# Pull latest image (public on GHCR: no login needed). Pull with an empty
+set -euo pipefail
+if [[ ! "${DEPLOY_IMAGE:-}" =~ ^ghcr.io/covia-ai/covia@sha256:[0-9a-f]{64}$ ]]; then
+  echo "::error::DEPLOY_IMAGE must name the published image by digest"
+  exit 1
+fi
+
+# Pull the selected image (public on GHCR: no login needed). Pull with an empty
 # client config: the old SSH deploys left expired GHCR logins in root's and
 # azureuser's ~/.docker/config.json, and the registry denies those rather
 # than falling back to an anonymous pull. Stop here if the pull fails, or the
 # old image would be restarted behind a green deploy.
-if ! DOCKER_CONFIG=$(mktemp -d) docker pull ghcr.io/covia-ai/covia:latest; then
+if ! DOCKER_CONFIG=$(mktemp -d) docker pull "$DEPLOY_IMAGE"; then
   echo "::error::docker pull failed — deploy stopped, running container left as is"
   exit 1
 fi
@@ -104,7 +110,7 @@ docker run -d \
   --health-timeout=5s \
   --health-start-period=15s \
   --health-retries=3 \
-  ghcr.io/covia-ai/covia:latest \
+  "$DEPLOY_IMAGE" \
   /data/config.json
 
 # Wait for the health check to settle; fail the deploy rather than
@@ -117,7 +123,7 @@ for i in $(seq 1 25); do
   echo "Health status: $status"
   [ "$status" = "healthy" ] && break
   [ "$status" = "unhealthy" ] && break
-  [ "$i" -lt 25 ] && sleep 5
+  if [ "$i" -lt 25 ]; then sleep 5; fi
 done
 if [ "$status" != "healthy" ]; then
   echo "::error::covia-venue did not become healthy — deploy failed"

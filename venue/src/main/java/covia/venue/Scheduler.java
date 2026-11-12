@@ -22,6 +22,7 @@ import convex.core.data.Index;
 import convex.core.data.Maps;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
+import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.exception.AuthException;
@@ -47,7 +48,7 @@ import static covia.venue.Schedule.*;
  * the venue value merges whole-value by its own timestamp. Nothing here keeps
  * time: the application's update fires what is due ({@link #update}), and the
  * scheduler tells the application when its next event is due
- * ({@link #nextDue}). See {@code venue/docs/GRID_SCHEDULER.md §8}.</p>
+ * ({@link #nextUpdateTime}). See {@code venue/docs/GRID_SCHEDULER.md §8}.</p>
  *
  * <p><b>Concurrency.</b> One lock covers every index mutation (schedule,
  * cancel, trigger, claims by an update, agent wakes, user and caller
@@ -380,7 +381,17 @@ public class Scheduler {
 	 * scheduled, every place is taken (the event that frees one reports the
 	 * next time), the scheduler is not started or the venue is closing.
 	 */
-	long nextDue() {
+	long nextUpdateTime() {
+		lock.lock();
+		try {
+			return nextUpdateTimeLocked();
+		} finally {
+			lock.unlock();
+		}
+	}
+
+	/** The next queued timestamp, independent of dispatch capacity; see {@link CoviaApplication#nextDue}. */
+	CVMLong nextDue() {
 		lock.lock();
 		try {
 			return nextDueLocked();
@@ -395,7 +406,7 @@ public class Scheduler {
 	 * once it has committed.
 	 */
 	public void scheduleChanged() {
-		reportDue(nextDue());
+		reportDue(nextUpdateTime());
 	}
 
 	/** Whether this scheduler starts events: from its start until the venue begins closing. */
@@ -403,14 +414,21 @@ public class Scheduler {
 		return started && !shutdown && !engine.isClosing();
 	}
 
-	private long nextDueLocked() {
-		if (!takingPart()) return Long.MAX_VALUE;
+	private long nextUpdateTimeLocked() {
 		if (starting >= engine.config().getSchedulerMaxConcurrency()) return Long.MAX_VALUE;
+		CVMLong due = nextDueLocked();
+		return due == null ? Long.MAX_VALUE : due.longValue();
+	}
+
+	private CVMLong nextDueLocked() {
+		if (!takingPart()) return null;
 		Index<Blob, ACell> idx = index();
-		if (idx.isEmpty()) return Long.MAX_VALUE;
+		if (idx.isEmpty()) return null;
 		ACell head = idx.entryAt(0).getValue();
 		// A malformed head is due now, so the drain drops it.
-		return (head instanceof AMap) ? timeOf(asMap(head)) : Long.MIN_VALUE;
+		if (!(head instanceof AMap)) return CVMLong.MIN_VALUE;
+		ACell time = asMap(head).get(K_TIME);
+		return time instanceof CVMLong due ? due : CVMLong.ZERO;
 	}
 
 	/**
@@ -450,7 +468,7 @@ public class Scheduler {
 				starting++;
 			}
 			settleWaiters(completed);
-			due = nextDueLocked();
+			due = nextUpdateTimeLocked();
 		} finally {
 			lock.unlock();
 		}
@@ -688,7 +706,7 @@ public class Scheduler {
 		lock.lock();
 		try {
 			result = body.get();
-			due = nextDueLocked();
+			due = nextUpdateTimeLocked();
 		} finally {
 			lock.unlock();
 		}

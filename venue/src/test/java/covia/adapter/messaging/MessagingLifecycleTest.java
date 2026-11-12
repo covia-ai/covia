@@ -12,12 +12,14 @@ import convex.core.data.Maps;
 import covia.exception.UnavailableException;
 import covia.venue.Engine;
 import covia.venue.TestEngine;
+import covia.test.IntegrationTest;
 
 /**
  * A messaging adapter's bots stop while it is disabled: they stop with it,
  * nothing starts one until it is enabled again, and then they all start with
  * their current settings.
  */
+@IntegrationTest
 class MessagingLifecycleTest {
 	private static Engine engine;
 

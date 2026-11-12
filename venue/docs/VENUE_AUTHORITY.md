@@ -6,6 +6,23 @@ over the users it hosts. This is a design; none of it is implemented yet.
 
 Tracked by covia#660.
 
+## Scope
+
+This document owns the general authority-elevation model: base and additions,
+allowances, issuance, activation, expiry/revocation, deferred work, the venue's
+host power and the trusted-code boundary. Allowances can cover any capability;
+they are not limited to administrative operations.
+
+[ADMIN.md](ADMIN.md) owns the privileged-operation inventory, admin ability
+names, target resources, additional restrictions, exceptions and migration.
+Refer there for what counts as venue administration and what remains ordinary
+domain management. This document does not maintain a separate operation list
+or admin taxonomy. The initial organisation of admin privileges does not
+implement the elevation design below.
+
+For the division with capability enforcement and authentication, see
+[document responsibilities](ADMIN.md#document-responsibilities).
+
 ## Terminology
 
 | Term | Meaning |
@@ -27,19 +44,17 @@ Tracked by covia#660.
   further. An agent is a
   sub-principal of its owner and works in the owner's namespace
   ([UCAN.md](./UCAN.md) §5.4).
-- **Venue authority.** `Engine.hasVenueAuthority` decides by the rule for
-  every resource, on `<venueDID>/<resource>`: it admits the venue acting as
-  itself, an agent of the venue's whose caps cover the resource (an
-  unrestricted one covers all of them), and a presented grant covering it.
+- **Privileged operations.** Their authority checks and capability
+  names are defined in [ADMIN.md](ADMIN.md#current-venue-level-admin-functions).
 - **The venue context.** `Engine.venueContext()` is the venue as caller. About
   two dozen call sites in this repository use it for the venue's own secrets,
   its own records and start-up work. It reaches a user's namespace only as any
   other caller does, through grants or an agent's admission policy
-  (`Engine.crossUserAllows`). Acting as a user (`Engine.sudoContext`) needs
-  `user/sudo` on that user, rooted by the user or by the venue, which roots
-  grants over every identity it hosts, self-sovereign users included, valid
-  only here (`Engine.rootAuthorityPolicy`, [UCAN.md](./UCAN.md) §5.6). Managing
-  accounts, such as users' sign-in keys, is done on venue resources.
+  (`Engine.crossUserAllows`). Explicit namespace switching and account
+  administration follow [ADMIN.md](ADMIN.md#current-venue-level-admin-functions).
+  The venue can root grants over every identity it hosts, self-sovereign
+  users included, valid only here (`Engine.rootAuthorityPolicy`,
+  [UCAN.md](./UCAN.md) §5.6).
 - **Issuing.** `ucan:issue` signs grants over the identities the venue hosts,
   for a caller that is root of the resource (its own, an identity's it signs
   in as, its agent's) and whose scope includes the right to grant it, or that
@@ -61,7 +76,7 @@ Authority is raised above a base today by signing grants:
 |--------|-------|-----|
 | Embedder code, operator modules | In the process | `engine.venueContext()`, over the venue's own resources |
 | Brightside's gods (bridges, treasury) | In the process, as venue agents | A 300-second grant per call, signed and verified in the process (`VenueGrants`): for an operation a god runs, for a user asking a god, and for acting as a user |
-| GetMine administrators | Outside | A one-hour grant over users, sign-in keys, adapters, restart and store collection, issued on demand (`VenueGrantApi`) and presented over MCP or `X-Covia-Ucans` |
+| GetMine administrators | Outside | A one-hour administrative grant, issued on demand (`VenueGrantApi`) and presented over MCP or `X-Covia-Ucans`; privileged operations are catalogued in [ADMIN.md](ADMIN.md) |
 | Provisioning services, standing admin identities | Outside | A grant from `ucan:issue`, as deploy/README.md and CONFIG.md describe |
 
 ## Design

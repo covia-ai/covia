@@ -3,11 +3,11 @@ run-name: Publish Docker image [${{ github.event.workflow_run.head_branch }}]
 
 # Builds and publishes the public venue image to GHCR. This is the single
 # source of ghcr.io/covia-ai/covia tags — the deploy workflows consume the
-# image rather than building their own (see DX_PLAN.md → "Decouple the
-# public Docker image from deployment").
+# image rather than building their own (see BUILD.md → Deployment identity
+# and redeploys).
 #
 # Tags:
-#   :latest  — tracks develop (dev venues: venue-3, venue-4)
+#   :latest  — tracks qa (dev venues: venue-3, venue-4)
 #   :stable  — tracks master (stable venues: venue-1, venue-2)
 #   :<x.y.z> — release builds (master pushes whose POM version is not a
 #              SNAPSHOT, i.e. the "Release x.y.z" commit) — pin deployments here
@@ -17,17 +17,20 @@ on:
   workflow_run:
     workflows: ["Test"]
     types: [completed]
-    branches: [ develop, master ]
+    branches: [ qa, master ]
 
-# Newest commit wins the :latest tag — cancel superseded publishes
+# Finish each publication; reject superseded candidates before changing tags.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.workflow_run.head_branch }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   publish:
     runs-on: ubuntu-latest
-    if: github.event.workflow_run.conclusion == 'success'
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
     permissions:
       contents: read
       packages: write
@@ -54,7 +57,7 @@ jobs:
       run: echo "sha=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
 
     # master publishes the :stable channel (plus :x.y.z for release builds),
-    # develop publishes :latest
+    # qa publishes :latest
     - name: Compute image tags
       id: tags
       run: |
@@ -67,7 +70,7 @@ jobs:
             *-SNAPSHOT) ;;
             *) tags="$tags,ghcr.io/covia-ai/covia:${version}" ;;
           esac
-        else
+        elif [ "$source_branch" = "qa" ]; then
           tags="$tags,ghcr.io/covia-ai/covia:latest"
         fi
         echo "tags=$tags" >> $GITHUB_OUTPUT
@@ -79,9 +82,44 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
 
+    - name: Refuse a superseded candidate
+      env:
+        GH_TOKEN: ${{ github.token }}
+        SOURCE_BRANCH: ${{ github.event.workflow_run.head_branch }}
+        SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+      run: |
+        current=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/$SOURCE_BRANCH" --jq .object.sha)
+        if [ "$current" != "$SOURCE_SHA" ]; then
+          echo "::error::Candidate was superseded; publish the current branch's successful Test run"
+          exit 1
+        fi
+
     - name: Build and push Docker image
+      id: image
       uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
       with:
         context: .
         push: true
         tags: ${{ steps.tags.outputs.tags }}
+        labels: org.opencontainers.image.revision=${{ github.event.workflow_run.head_sha }}
+
+    - name: Record the tested source and published image
+      env:
+        SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+        SOURCE_BRANCH: ${{ github.event.workflow_run.head_branch }}
+        TEST_RUN_ID: ${{ github.event.workflow_run.id }}
+        IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+      run: |
+        [[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+        jq -n --arg sha "$SOURCE_SHA" --arg branch "$SOURCE_BRANCH" \
+          --arg image "ghcr.io/covia-ai/covia@$IMAGE_DIGEST" \
+          --arg test_run_id "$TEST_RUN_ID" \
+          '{sha: $sha, branch: $branch, image: $image, test_run_id: $test_run_id}' > deployment.json
+
+    - name: Share deployment identity with the deploy workflows
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: deployment-${{ github.run_attempt }}
+        path: deployment.json
+        retention-days: 90
+        if-no-files-found: error

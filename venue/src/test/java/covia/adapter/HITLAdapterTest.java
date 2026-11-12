@@ -105,7 +105,7 @@ public class HITLAdapterTest {
 		AString owner = UCAN.toDIDKey(ownerKey.getAccountKey());
 		engine.getVenueState().users().ensure(owner);
 		AString grant = UCAN.create(ownerKey, BOB_KP.getAccountKey(), System.currentTimeMillis() / 1000 + HOUR,
-			Vectors.of(Capability.create(owner, Abilities.USER_SUDO),
+			Vectors.of(Capability.create(owner, Abilities.ADMIN_SUDO),
 				Capability.create(Strings.create(owner + "/v/ops/hitl/request"), Strings.create("invoke"))),
 			Vectors.empty()).toJWT(ownerKey);
 		RequestContext delegate = engine.sudoContext(engine.withTransportGrants(

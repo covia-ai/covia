@@ -25,6 +25,7 @@ import covia.adapter.messaging.RelayBinding;
 import covia.adapter.messaging.RelaySettings;
 import covia.adapter.webhook.WebhookRequest;
 import covia.adapter.webhook.WebhookResponse;
+import covia.test.IntegrationTest;
 
 /**
  * The relay is provider-neutral: a Slack binding whose handler is {@code relay} links a
@@ -32,6 +33,7 @@ import covia.adapter.webhook.WebhookResponse;
  * goes back into that channel's thread rather than to the user, with no Slack-specific
  * relay code. Nothing but the link is stored.
  */
+@IntegrationTest
 class SlackRelayTest {
 
 	static final AString ALICE = Strings.create("did:test:relay:alice");

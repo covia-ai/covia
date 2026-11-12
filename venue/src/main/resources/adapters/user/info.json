@@ -1,6 +1,6 @@
 {
   "name": "User info",
-  "description": "Returns registration information for the caller, or for another DID when authorised by the venue.",
+  "description": "Returns registration information for the caller with its own whole authority, or an operator view with admin/user/read on <venueDID>/users.",
   "operation": {
     "adapter": "user:info",
     "readOnly": true,

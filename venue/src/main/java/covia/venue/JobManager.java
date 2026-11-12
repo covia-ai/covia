@@ -21,7 +21,6 @@ import convex.core.data.Blob;
 import convex.core.data.Index;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
-import convex.auth.ucan.Capability;
 import covia.lattice.CapabilityChecker;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
@@ -30,6 +29,7 @@ import convex.core.data.prim.CVMBool;
 import convex.core.json.schema.JsonSchema;
 import covia.adapter.AAdapter;
 import covia.api.Fields;
+import covia.api.Abilities;
 import covia.exception.AuthException;
 import covia.exception.CoviaException;
 import covia.exception.FaultException;
@@ -260,7 +260,8 @@ public class JobManager {
 	/**
 	 * Authorises an explicit remote invocation against the target reference and
 	 * the input being sent. The executing venue applies its defaults and checks
-	 * its own invocation and resource authority independently.
+	 * its own invocation and resource authority independently, using the
+	 * explicitly selected remote credentials, not the source's local scope.
 	 */
 	public void requireRemoteInvoke(AString ref, ACell input, RequestContext ctx) {
 		if (ref == null) throw operationRequired();
@@ -1278,69 +1279,64 @@ public class JobManager {
 
 	// ========== Job Queries ==========
 
-	/**
-	 * Gets a snapshot of the current job status data with request context.
-	 * Reads the primary lattice record, using a live handle's owner when available.
-	 * @throws AuthException if the caller does not own the job
-	 */
-	public AMap<AString, ACell> getJobData(Blob jobID, RequestContext ctx) {
-		// Transient results belong only to their awaiting caller, not job-query APIs.
-		// 1. Hot cache (active jobs)
-		Job job;
-		job = activeJobs.get(jobID);
-		if (job != null && !job.isRecorded()) return null;
-		if (job != null) {
-			AMap<AString, ACell> data = ((VenueJob) job).primaryRecord();
-			if (data == null) return null;
-			requireReadable(ctx, jobID, data);
-			return data;
-		}
-
-		// 2. User's lattice (authoritative). Scoped to the caller's own jobs;
-		// a delegated read of another user's *terminal* (evicted) job goes via
-		// the explicit DID-URL path (covia:read did:<owner>/j/<id>).
-		AString did = ctx.getUserDID();
-		if (did == null) return null;
-		User user = engine.getVenueState().users().user(did);
-		if (user == null) return null;
-		AMap<AString, ACell> record = user.jobs().getRecord(jobID);
-		if (record != null) requireReadable(ctx, jobID, record);
-		return record;
+	/** Canonical capability resource for a Job, independent of its execution adapter. */
+	public static AString resource(AString owner, Blob id) {
+		return owner.append("/j/" + id.toHexString());
 	}
 
 	/** Opening of every refusal of access to a job. */
 	public static final String JOB_ACCESS_DENIED = "Access denied to job: ";
 
-	private void requireReadable(RequestContext ctx, Blob jobID, AMap<AString, ACell> data) {
-		if (!canReadJob(ctx, jobID, data)) throw new AuthException(JOB_ACCESS_DENIED + jobID.toHexString());
+	/** Read a Job, defaulting the retained-record lookup to the caller's namespace. */
+	public AMap<AString, ACell> getJobData(Blob id, RequestContext ctx) {
+		return getJobData(id, ctx, null);
 	}
 
-	/**
-	 * Read authorisation for a job: the owner, or a caller presenting a UCAN
-	 * proof granting {@code crud/read} on the job resource {@code <owner>/j/<id>}
-	 * — the same right as {@code covia:read did:<owner>/j/<id>} (covia#102), via
-	 * the shared {@link CapabilityChecker#proofsCover} check. Reads are
-	 * delegable like any other read; job *mutations* remain owner-only
-	 * ({@link #requireJobOwner}).
-	 */
-	private boolean canReadJob(RequestContext ctx, Blob jobID, AMap<AString, ACell> data) {
-		if (engine.getAccessControl().canAccessJob(ctx, data, Capability.CRUD_READ)) return true; // owner
-		AString owner = Attribution.owner(data);
-		if (owner == null) return false; // venue-internal job — owner/internal only
-		AString resource = owner.append("/j/" + jobID.toHexString());
-		return engine.crossUserAllows(ctx, resource, Capability.CRUD_READ);
+	/** An explicit owner locates retained Jobs; it never changes the caller's authority. */
+	public AMap<AString, ACell> getJobData(Blob id, RequestContext ctx, AString owner) {
+		return authorizedRecord(id, ctx, owner, Abilities.JOB_READ);
 	}
 
-	/**
-	 * Owner-only gate for job <em>mutations</em> (cancel/pause/resume/delete).
-	 * A {@code crud/read} delegation lets a caller read a job but not mutate it,
-	 * so mutations check ownership explicitly rather than relying on the
-	 * read-delegable {@link #getJobData(Blob, RequestContext)}.
-	 */
-	private void requireJobOwner(RequestContext ctx, Blob jobID, AMap<AString, ACell> data) {
-		if (!engine.getAccessControl().canAccessJob(ctx, data, Capability.CRUD_WRITE)) {
-			throw new AuthException(JOB_ACCESS_DENIED + jobID.toHexString());
+	private AMap<AString, ACell> authorizedRecord(Blob id, RequestContext ctx, AString owner, AString ability) {
+		Job live = liveJob(id);
+		AMap<AString, ACell> data;
+		if (live != null) {
+			if (!live.isRecorded()) return null;
+			data = ((VenueJob) live).primaryRecord();
+			if (data == null || (owner != null && !owner.equals(Attribution.owner(data)))) return null;
+		} else {
+			AString did = owner == null ? ctx.getUserDID() : owner;
+			User user = did == null ? null : engine.getVenueState().users().user(did);
+			data = user == null ? null : user.jobs().getRecord(id);
 		}
+		if (data != null) requireJobAbility(ctx, id, data, ability);
+		return data;
+	}
+
+	/** Authorize a task-specific control without exposing its record. */
+	public void requireAccess(Blob id, RequestContext ctx, AString owner, AString ability) {
+		if (authorizedRecord(id, ctx, owner, ability) == null) throw jobNotFound(id);
+	}
+
+	/** A result wait rechecks access at delivery, so an expired grant discloses no result. */
+	public CompletableFuture<ACell> awaitResult(Blob id, RequestContext ctx, AString owner) {
+		Job job = getJob(id, ctx, owner);
+		if (job == null) throw jobNotFound(id);
+		return job.future().handle((result, error) -> {
+			requireAccess(id, ctx, owner, Abilities.JOB_READ);
+			if (error != null) throw new java.util.concurrent.CompletionException(error);
+			return result;
+		});
+	}
+
+	private void requireJobAbility(RequestContext ctx, Blob id, AMap<AString, ACell> data, AString ability) {
+		if (!engine.getAccessControl().canAccessJob(ctx, data, ability))
+			throw new AuthException(JOB_ACCESS_DENIED + id.toHexString() + " (" + ability + ")");
+	}
+
+	/** Controls acknowledge acceptance without disclosing the Job's input, output or history. */
+	public static AMap<AString, ACell> acknowledgement(Blob id) {
+		return Maps.of(Fields.ID, id, Fields.ACCEPTED, CVMBool.TRUE);
 	}
 
 	/**
@@ -1384,37 +1380,28 @@ public class JobManager {
 	 * Gets the live Job object with lattice fallback using request context.
 	 */
 	public Job getJob(Blob jobID, RequestContext ctx) {
-		Job job = liveJob(jobID);
-		if (job != null) {
-			requireReadable(ctx, jobID, job.getData());
-			return job;
-		}
-
-		// Fall back to user's lattice
-		AString did = ctx.getUserDID();
-		if (did == null) return null;
-		User user = engine.getVenueState().users().user(did);
-		if (user == null) return null;
-		AMap<AString, ACell> record = user.jobs().getRecord(jobID);
-		if (record == null) return null;
-		requireReadable(ctx, jobID, record);
-		return new Job(record);
+		return getJob(jobID, ctx, null);
 	}
 
-	/** The collection the job listing reads: the caller's jobs. */
-	private static final AString JOB_RECORDS = Strings.intern("j/");
+	public Job getJob(Blob jobID, RequestContext ctx, AString owner) {
+		AMap<AString, ACell> data = getJobData(jobID, ctx, owner);
+		if (data == null) return null;
+		Job live = liveJob(jobID);
+		return live == null ? new Job(data) : live;
+	}
 
 	/**
 	 * Gets the jobs Index for the given request context.
 	 * Reads directly from the user's per-user lattice. Listing the jobs reads
-	 * their collection, so the caller needs {@code crud/read} on {@code j/}.
+	 * their collection, so the caller needs {@code job/read} on {@code j/}.
 	 *
 	 * @throws AuthException when the caller may not read {@code j/}
 	 */
 	public Index<Blob, ACell> getJobs(RequestContext ctx) {
 		AString did = ctx.getUserDID();
 		if (did == null) return Index.none();
-		engine.requireResourceAccess(ctx, JOB_RECORDS, Capability.CRUD_READ);
+		engine.requireAuthority(ctx, ctx.getUserDID().append("/j/"), Abilities.JOB_READ,
+			Strings.create(engine.config().getBaseUrl()));
 		User user = engine.getVenueState().users().user(did);
 		if (user == null) return Index.none();
 		return user.jobs().getAll();
@@ -1429,7 +1416,8 @@ public class JobManager {
 	public long countJobs(RequestContext ctx) {
 		AString did = ctx.getUserDID();
 		if (did == null) return 0;
-		engine.requireResourceAccess(ctx, JOB_RECORDS, Capability.CRUD_READ);
+		engine.requireAuthority(ctx, ctx.getUserDID().append("/j/"), Abilities.JOB_READ,
+			Strings.create(engine.config().getBaseUrl()));
 		User user = engine.getVenueState().users().user(did);
 		return user == null ? 0 : user.jobs().size();
 	}
@@ -1438,7 +1426,7 @@ public class JobManager {
 
 	/**
 	 * Cancels a Job with request context.
-	 * @throws AuthException if the caller does not own the job
+	 * @throws AuthException if the caller lacks the required Job ability
 	 */
 	public AMap<AString, ACell> cancelJob(Blob id, RequestContext ctx) {
 		return cancelJob(id, ctx, null);
@@ -1447,17 +1435,20 @@ public class JobManager {
 	/**
 	 * Cancels a Job with request context and an optional reason, which becomes
 	 * the job's {@code error} ({@link Job#cancel(String)}).
-	 * @throws AuthException if the caller does not own the job
+	 * @throws AuthException if the caller lacks the required Job ability
 	 */
 	public AMap<AString, ACell> cancelJob(Blob id, RequestContext ctx, String reason) {
-		AMap<AString, ACell> data = getJobData(id, ctx);
+		return cancelJob(id, ctx, reason, null);
+	}
+
+	public AMap<AString, ACell> cancelJob(Blob id, RequestContext ctx, String reason, AString owner) {
+		AMap<AString, ACell> data = authorizedRecord(id, ctx, owner, Abilities.JOB_MANAGE);
 		if (data == null) return null;
-		requireJobOwner(ctx, id, data); // mutation: owner-only, not read-delegable
 		AMap<AString, ACell> cancelled = cancelJob(id, reason);
-		if (cancelled != null) return cancelled;
-		// Cancelling a finished job changes nothing and answers its record (COG-8),
+		if (cancelled != null) return acknowledgement(id);
+		// Cancelling a finished job changes nothing and acknowledges acceptance,
 		// whether or not its live handle has been evicted
-		if (Job.isFinished(data)) return data;
+		if (Job.isFinished(data)) return acknowledgement(id);
 		throw notLive(id, data);
 	}
 
@@ -1474,30 +1465,36 @@ public class JobManager {
 
 	/**
 	 * Pauses a running Job with request context.
-	 * @throws AuthException if the caller does not own the job
+	 * @throws AuthException if the caller lacks the required Job ability
 	 */
 	public AMap<AString, ACell> pauseJob(Blob id, RequestContext ctx) {
-		AMap<AString, ACell> data = getJobData(id, ctx);
+		return pauseJob(id, ctx, null);
+	}
+
+	public AMap<AString, ACell> pauseJob(Blob id, RequestContext ctx, AString owner) {
+		AMap<AString, ACell> data = authorizedRecord(id, ctx, owner, Abilities.JOB_MANAGE);
 		if (data == null) return null;
-		requireJobOwner(ctx, id, data); // mutation: owner-only
 		Job job = liveJob(id);
 		if (job == null) throw notLive(id, data);
 		job.pause();
-		return job.getData();
+		return acknowledgement(id);
 	}
 
 	/**
 	 * Resumes a paused Job with request context.
-	 * @throws AuthException if the caller does not own the job
+	 * @throws AuthException if the caller lacks the required Job ability
 	 */
 	public AMap<AString, ACell> resumeJob(Blob id, RequestContext ctx) {
-		AMap<AString, ACell> data = getJobData(id, ctx);
+		return resumeJob(id, ctx, null);
+	}
+
+	public AMap<AString, ACell> resumeJob(Blob id, RequestContext ctx, AString owner) {
+		AMap<AString, ACell> data = authorizedRecord(id, ctx, owner, Abilities.JOB_MANAGE);
 		if (data == null) return null;
-		requireJobOwner(ctx, id, data); // mutation: owner-only
 		Job job = liveJob(id);
 		if (job == null) throw notLive(id, data);
 		job.resume();
-		return job.getData();
+		return acknowledgement(id);
 	}
 
 	/**
@@ -1512,12 +1509,15 @@ public class JobManager {
 	/**
 	 * Deletes a job permanently with request context: removes the durable
 	 * record from the owning user's job index and evicts the active cache.
-	 * @throws AuthException if the caller does not own the job
+	 * @throws AuthException if the caller lacks the required Job ability
 	 */
 	public boolean deleteJob(Blob id, RequestContext ctx) {
-		AMap<AString, ACell> data = getJobData(id, ctx);
+		return deleteJob(id, ctx, null);
+	}
+
+	public boolean deleteJob(Blob id, RequestContext ctx, AString owner) {
+		AMap<AString, ACell> data = authorizedRecord(id, ctx, owner, Abilities.JOB_MANAGE);
 		if (data == null) return false;
-		requireJobOwner(ctx, id, data); // mutation: owner-only
 		AString ownerDID = Attribution.owner(data);
 		boolean removed = ownerDID != null && venue().transact(draft -> {
 			User user = draft.users().user(ownerDID);
@@ -1540,26 +1540,17 @@ public class JobManager {
 
 	/**
 	 * Delivers a message to a job's message queue with request context.
-	 * @throws AuthException if the caller does not own the job
+	 * @throws AuthException if the caller lacks the required Job ability
 	 */
 	public void deliverMessage(Blob jobID, AMap<AString, ACell> message, RequestContext ctx) {
+		deliverMessage(jobID, message, ctx, null);
+	}
+
+	public void deliverMessage(Blob jobID, AMap<AString, ACell> message, RequestContext ctx, AString owner) {
+		AMap<AString, ACell> data = authorizedRecord(jobID, ctx, owner, Abilities.JOB_MESSAGE);
+		if (data == null) throw jobNotFound(jobID);
 		Job job = liveJob(jobID);
-		if (job == null) {
-			// Not active: consult the caller's lattice so a job that has completed
-			// and been evicted reports its terminal state rather than "not found"
-			// — the same fallback appendToHistory already uses (#506). A recorded
-			// but inactive job has no live handle to dispatch to, so that is an
-			// error too, just an honest one.
-			Job recorded = getJob(jobID, ctx);
-			if (recorded == null) throw jobNotFound(jobID);
-			if (!engine.getAccessControl().canAccessJob(ctx, recorded.getData(), Capability.CRUD_WRITE)) {
-				throw new AuthException(JOB_ACCESS_DENIED + jobID.toHexString());
-			}
-			throw notLive(jobID, recorded.getData());
-		}
-		if (!engine.getAccessControl().canAccessJob(ctx, job.getData(), Capability.CRUD_WRITE)) {
-			throw new AuthException(JOB_ACCESS_DENIED + jobID.toHexString());
-		}
+		if (job == null) throw notLive(jobID, data);
 		deliverMessage(job, message, ctx.getCallerDID());
 	}
 
@@ -1611,13 +1602,12 @@ public class JobManager {
 	 * per-message maps. Caller-provided {@code messageId} / role / parts
 	 * fields are preserved.</p>
 	 *
-	 * @throws AuthException if the caller does not own the job
+	 * @throws AuthException if the caller lacks the required Job ability
 	 */
 	public void appendToHistory(Blob jobID, AMap<AString, ACell> record, RequestContext ctx) {
-		AMap<AString, ACell> current = getJobData(jobID, ctx);
+		AMap<AString, ACell> current = authorizedRecord(jobID, ctx, null, Abilities.JOB_MESSAGE);
 		if (current == null) throw jobNotFound(jobID);
-		requireJobOwner(ctx, jobID, current);
-		appendToHistory(jobID, ctx.getUserDID(), record);
+		appendToHistory(jobID, Attribution.owner(current), record);
 	}
 
 	/**

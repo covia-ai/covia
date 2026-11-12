@@ -97,7 +97,7 @@ curl -fLo covia.jar https://github.com/covia-ai/covia/releases/download/${COVIA_
 # Latest stable release
 curl -fLo covia.jar https://github.com/covia-ai/covia/releases/download/latest/covia.jar
 
-# Or the latest develop snapshot
+# Or the latest snapshot (the build the dev venues run)
 curl -fLo covia.jar https://github.com/covia-ai/covia/releases/download/latest-snapshot/covia.jar
 ```
 
@@ -166,7 +166,7 @@ An operator-installed adapter can use the same call. Code given
 modules should receive it.
 
 A remote provisioning service does not need a separate administration API.
-Give it a venue-issued UCAN for `<venueDID>/users` with the `user/create`
+Give it a venue-issued UCAN for `<venueDID>/users` with the `admin/user/create`
 ability, then invoke `v/ops/user/create` through the normal REST, MCP, or client
 SDK surface. `UserAdapter` checks that delegation at the operation boundary.
 

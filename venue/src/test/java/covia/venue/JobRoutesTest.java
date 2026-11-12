@@ -397,7 +397,7 @@ public class JobRoutesTest {
 	}
 
 	@Test
-	public void cancelOfFinishedJobAnswersItsRecord() throws Exception {
+	public void cancelOfFinishedJobAcknowledgesWithoutDisclosingItsRecord() throws Exception {
 		String id = invoke("v/test/ops/echo");
 		awaitHttpStatus(id, "COMPLETE");
 		TestServer.ENGINE.jobs().evictActive(Blob.parse(id));
@@ -405,7 +405,8 @@ public class JobRoutesTest {
 			.uri(new URI(base + "/api/v1/jobs/" + id + "/cancel"))
 			.PUT(HttpRequest.BodyPublishers.noBody()));
 		assertEquals(200, cancel.statusCode(), cancel.body());
-		assertEquals("COMPLETE", RT.ensureString(RT.getIn(JSON.parse(cancel.body()), "status")).toString());
+		assertEquals(convex.core.data.prim.CVMBool.TRUE, RT.getIn(JSON.parse(cancel.body()), Fields.ACCEPTED));
+		org.junit.jupiter.api.Assertions.assertNull(RT.getIn(JSON.parse(cancel.body()), Fields.OUTPUT));
 
 		HttpResponse<String> pause = send(HttpRequest.newBuilder()
 			.uri(new URI(base + "/api/v1/jobs/" + id + "/pause"))

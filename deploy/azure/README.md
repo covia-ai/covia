@@ -48,12 +48,14 @@ sudo chown -R 1001:1001 ~/covia-data
 ## Automated Deploys (no SSH)
 
 `.github/workflows/deploy-azure.yml` deploys after every successful image
-publish from `develop`, or on manual dispatch. It runs
+publish from `qa`, or on manual dispatch. It runs
 [`deploy.sh`](deploy.sh) on the VM through `az vm run-command` (security#12):
 
 - The job signs in with `azure/login` over GitHub OIDC as the user-assigned
   managed identity `covia-deploy-venue-4` (in `covia-venue-rg`). Its
-  federated credential trusts only `repo:covia-ai/covia:ref:refs/heads/develop`.
+  federated credential trusts only `repo:covia-ai/covia:ref:refs/heads/develop`:
+  the job runs on develop, the default branch, whichever branch published
+  the image.
 - The identity holds one custom role, "Covia VM Run Command"
   (`virtualMachines/read` and `virtualMachines/runCommand/action`),
   assigned on `covia-venue-vm` only.
@@ -64,11 +66,16 @@ publish from `develop`, or on manual dispatch. It runs
 
 ## Manual Deploy
 
-Admin access is through run-command (port 22 is closed):
+Run *Deploy to Azure* with a QA publishing run ID, following
+[the redeploy procedure](../../BUILD.md#deployment-identity-and-redeploys).
+
+Admin access is through run-command (port 22 is closed). For direct use, take
+the script from the recorded commit and pass its image digest explicitly:
 
 ```bash
 az vm run-command invoke -g covia-venue-rg -n covia-venue-vm \
-  --command-id RunShellScript --scripts @deploy/azure/deploy.sh \
+  --command-id RunShellScript \
+  --scripts 'export DEPLOY_IMAGE=ghcr.io/covia-ai/covia@sha256:<digest>' "$(cat deploy/azure/deploy.sh)" \
   --query 'value[0].message' -o tsv
 ```
 

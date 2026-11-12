@@ -22,12 +22,17 @@ import convex.core.data.Strings;
 import convex.core.util.JSON;
 import covia.exception.ResponseException;
 import covia.exception.UnavailableException;
+import covia.test.IntegrationTest;
 
+/**
+ * The shared provider HTTP client. Requests to a local server are integration
+ * tests; URL checks are called directly.
+ */
 class MessagingHttpTest {
 	private static final String TOKEN = "fixture-token";
 	private static final Duration TIMEOUT = Duration.ofSeconds(1);
 
-	@Test void sendsUtf8JsonAndReadsTheReceipt() throws Exception {
+	@IntegrationTest @Test void sendsUtf8JsonAndReadsTheReceipt() throws Exception {
 		try (Server server = new Server(exchange -> {
 			assertEquals("POST", exchange.getRequestMethod());
 			assertEquals("Bearer " + TOKEN, exchange.getRequestHeaders().getFirst("Authorization"));
@@ -40,7 +45,7 @@ class MessagingHttpTest {
 		}
 	}
 
-	@Test void rejectsMalformedAndNonObjectReceiptsWithoutLeakingTheirBody() throws Exception {
+	@IntegrationTest @Test void rejectsMalformedAndNonObjectReceiptsWithoutLeakingTheirBody() throws Exception {
 		for (String response : new String[] {"{private-provider-detail", "[]", "null"}) {
 			try (Server server = new Server(exchange -> reply(exchange, 200, response))) {
 				var error = assertThrows(ResponseException.class, () -> MessagingHttp.post(server.url(), TOKEN, Maps.empty()));
@@ -51,7 +56,7 @@ class MessagingHttpTest {
 		}
 	}
 
-	@Test void refusesRedirectsAndDoesNotRetryProviderErrors() throws Exception {
+	@IntegrationTest @Test void refusesRedirectsAndDoesNotRetryProviderErrors() throws Exception {
 		try (Server destination = new Server(exchange -> reply(exchange, 200, "{}"))) {
 			for (int status : new int[] {302, 429, 503}) {
 				try (Server server = new Server(exchange -> {
@@ -68,7 +73,7 @@ class MessagingHttpTest {
 		}
 	}
 
-	@Test void boundsChunkedResponsesAtOneMiB() throws Exception {
+	@IntegrationTest @Test void boundsChunkedResponsesAtOneMiB() throws Exception {
 		int limit = 1024 * 1024;
 		String atLimit = "{\"padding\":\"" + "x".repeat(limit - 14) + "\"}";
 		assertEquals(limit, atLimit.length());
@@ -99,8 +104,8 @@ class MessagingHttpTest {
 		}
 	}
 
-	@Test void timesOutWaitingForHeaders() throws Exception { assertTimeoutAt(false); }
-	@Test void timesOutWhileReadingTheBody() throws Exception { assertTimeoutAt(true); }
+	@IntegrationTest @Test void timesOutWaitingForHeaders() throws Exception { assertTimeoutAt(false); }
+	@IntegrationTest @Test void timesOutWhileReadingTheBody() throws Exception { assertTimeoutAt(true); }
 
 	private static void assertTimeoutAt(boolean sendHeaders) throws Exception {
 		CountDownLatch release = new CountDownLatch(1);
@@ -123,7 +128,7 @@ class MessagingHttpTest {
 		}
 	}
 
-	@Test void getsJsonAndFetchesBoundedBytesWithTheToken() throws Exception {
+	@IntegrationTest @Test void getsJsonAndFetchesBoundedBytesWithTheToken() throws Exception {
 		byte[] audio = "OggS-bytes".getBytes(StandardCharsets.UTF_8);
 		try (Server server = new Server(exchange -> {
 			assertEquals("GET", exchange.getRequestMethod());

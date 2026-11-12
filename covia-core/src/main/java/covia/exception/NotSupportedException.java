@@ -10,4 +10,8 @@ public class NotSupportedException extends CoviaException {
 	public NotSupportedException(String message) {
 		super(message);
 	}
+
+	public NotSupportedException(String message, Throwable cause) {
+		super(message, cause);
+	}
 }

@@ -7,6 +7,7 @@ import convex.auth.ucan.UCANValidator;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import covia.grid.client.VenueHTTP;
 import convex.core.data.AVector;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
@@ -15,6 +16,7 @@ import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.exception.InvalidInputException;
+import covia.exception.ResponseException;
 import covia.exception.UnavailableException;
 import covia.grid.Venue;
 import covia.grid.auth.VenueAuth;
@@ -31,6 +33,7 @@ import covia.venue.UcanJwtValidator;
  */
 public record VenueConnection(Venue venue, AMap<AString, ACell> credentials) {
 	private static final AString AUTHENTICATE_AS = Strings.intern("authenticateAs");
+	private static final AString RESUMABLE = Strings.intern("resumable");
 	private static final AString CALLER = Strings.intern("caller");
 	/** Saved when the caller could have the venue dial anywhere, so recovery reconnects alike. */
 	private static final AString OUTBOUND_ANY = Strings.intern("outboundAny");
@@ -193,13 +196,44 @@ public record VenueConnection(Venue venue, AMap<AString, ACell> credentials) {
 		return new VenueConnection(venue, saved);
 	}
 
+	public static final String JOB_OWNER_UNAVAILABLE = "The remote Job owner could not be established; supply owner explicitly";
+	public static final String INVALID_JOB_OWNER = "'owner' must be a DID string when provided";
+
+	/** Validate a lookup namespace without replacing the caller's identity. */
+	public static AString jobOwner(ACell input) {
+		ACell value = RT.getIn(input, Fields.OWNER);
+		if (value == null) return null;
+		if (value instanceof AString owner && owner.toString().startsWith("did:")) return owner;
+		throw new InvalidInputException(INVALID_JOB_OWNER);
+	}
+
+	/** Connect using explicit remote credentials; the hosting venue authorizes the Job action. */
+	public static VenueConnection job(Engine engine, RequestContext ctx, AString target,
+			ACell input) {
+		VenueConnection connection = connect(engine, ctx, target, input);
+		Venue venue = connection.venue();
+		AString owner = jobOwner(input);
+		if (owner == null) {
+			AString mode = RT.ensureString(RT.getIn(input, AUTHENTICATE_AS));
+			if (CALLER.equals(mode)) owner = ctx.getCallerDID();
+			else if (Fields.VENUE.equals(mode)) owner = engine.getDIDString();
+			else {
+				try {
+					owner = Strings.create((venue instanceof VenueHTTP http ? http.venueDID() : venue.getDID().toString()) + ":public");
+				} catch (IllegalArgumentException e) { throw new ResponseException(JOB_OWNER_UNAVAILABLE, e); }
+			}
+		}
+		venue.setJobOwner(owner);
+		return new VenueConnection(venue, connection.credentials().assoc(Fields.OWNER, owner));
+	}
+
 	/**
 	 * Whether a job can reach its remote job again after a restart over the
 	 * connection {@code saved} describes. Not when it signed in as its caller:
 	 * only the request presented that credential, and the venue keeps none.
 	 */
 	public static boolean resumable(AMap<AString, ACell> saved) {
-		return !CALLER.equals(saved.get(AUTHENTICATE_AS));
+		return !CVMBool.FALSE.equals(saved.get(RESUMABLE)) && !CALLER.equals(saved.get(AUTHENTICATE_AS));
 	}
 
 	/**
@@ -231,6 +265,7 @@ public record VenueConnection(Venue venue, AMap<AString, ACell> credentials) {
 			default -> throw new IllegalArgumentException("Invalid saved remote authentication mode");
 		};
 		Venue venue = engine.connectVenue(target.toString(), targetDID, auth, unrestricted);
+		venue.setJobOwner(RT.ensureString(saved.get(Fields.OWNER)));
 		AVector<ACell> grants = RT.ensureVector(saved.get(Fields.UCANS));
 		if (grants != null) {
 			List<String> raw = new ArrayList<>();

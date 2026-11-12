@@ -25,11 +25,13 @@ mkdir -p /home/ec2-user/covia-data
 
 ## How deploys reach the host
 
-No SSH and no stored keys (security#12). `deploy-ec2.yml`:
+No SSH and no stored keys (security#12). `deploy-ec2.yml` runs after every
+successful image publish from `qa`, or on manual dispatch, and:
 
 1. assumes the IAM role `covia-deploy-venue-3` through GitHub OIDC. The role
-   trusts only `repo:covia-ai/covia:ref:refs/heads/develop` and may only run
-   `AWS-RunShellScript` on this instance and read the results;
+   trusts only `repo:covia-ai/covia:ref:refs/heads/develop` (the job runs on
+   develop, the default branch, whichever branch published the image) and
+   may only run `AWS-RunShellScript` on this instance and read the results;
 2. sends [`deploy.sh`](deploy.sh) through SSM Run Command, where it runs as
    root, and fails the job unless the command finishes with `Success`.
 
@@ -47,8 +49,13 @@ aws ssm start-session --region us-east-1 --target i-0ba252844d8787529
 
 ## Manual Deploy
 
-Run the deploy workflow from the Actions tab (*Deploy to EC2*, `workflow_dispatch`), or in an SSM
-session on the instance:
+Run *Deploy to EC2* with a QA publishing run ID, following
+[the redeploy procedure](../../BUILD.md#deployment-identity-and-redeploys).
+
+For a direct SSM session, obtain the digest from that record and run the
+matching commit's script with `DEPLOY_IMAGE=ghcr.io/covia-ai/covia@sha256:<digest>`.
+The following channel-based commands are for ad hoc operator use, not the
+automated QA promotion:
 
 ```bash
 docker pull ghcr.io/covia-ai/covia:latest

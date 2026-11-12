@@ -36,6 +36,185 @@ reachable by cancel, pause, resume and message delivery. The row's transaction
 refuses a deleted account, and the account is checked again once the handle is
 registered, so a job accepted across a deletion is cancelled and refused.
 
+## Canonical operation and tool surface
+
+Jobs are a universal Covia abstraction, independent of the adapter performing
+the work. The `job` adapter exposes this contract; it does not own execution,
+invent a second lifecycle, or acquire authority over the jobs it addresses.
+The hosting venue checks access and routes each control to the implementation
+responsible for that job. Grid handles operation invocation and federation.
+
+| Operation | MCP tool | Result |
+|---|---|---|
+| `job:status` (`v/ops/job/status`) | `job_status` | Current Job record, including progress, result/error and any delegation observations |
+| `job:result` (`v/ops/job/result`) | `job_result` | Exact output value when the target completes; failure if it fails, is rejected or is cancelled |
+| `job:cancel` (`v/ops/job/cancel`) | `job_cancel` | Acceptance acknowledgement; existing terminal outcomes are unchanged |
+| `job:pause` (`v/ops/job/pause`) | `job_pause` | Acceptance acknowledgement after an implementation-supported pause |
+| `job:resume` (`v/ops/job/resume`) | `job_resume` | Acceptance acknowledgement after an implementation-supported resumption |
+| `job:message` (`v/ops/job/message`) | `job_message` | `{id, delivered: true}` after the receiving adapter accepts the message |
+
+All operations require `id`, the exact Job ID returned by its invocation.
+IDs are venue-scoped: omit `venue` for a local Job, or supply its hosting
+venue's URL or routable DID. An explicit non-string `venue`, including null,
+is rejected rather than falling back locally. Custom operation metadata may
+set `operation.venue`; an input `venue` takes precedence. Remote
+`authenticateAs` uses the same explicit `anonymous` (default), `caller` or
+venue-only `venue` connection policy as Grid. Local calls retain the full
+caller context. Reads and controls require the Job abilities below;
+permission to read a Job does not grant permission to cancel it.
+
+`result` optionally accepts a non-negative integer `timeout` in milliseconds;
+omission or zero waits without a deadline. Expiry fails the **wait**, leaving
+the target untouched. Cancelling a result-wait Job also leaves the target and
+its result future untouched. Remote waits observe an existing job and never
+submit it again. The wait remains STARTED while the target needs input; its
+`delegation.remoteStatus` reports that state. Send input to the target Job,
+not to the result waiter. Unbounded remote waits reattach after restart when
+their saved connection permits it; bounded waits end on restart rather than
+starting a fresh timeout budget. Local waits are process-bound.
+
+`message` requires a map `message`, forwarded unchanged in the receiving
+operation's format, for example `{content: "continue"}`. An acknowledgement
+means accepted delivery, not task completion. Pause/resume and message delivery
+are optional implementation features: unsupported controls fail explicitly.
+No control replays the target's original operation.
+
+For a local proxy Job, use its local ID with no `venue`. To address its remote
+destination directly, use the destination ID and hosting venue. Cancellation
+is best-effort and does not undo side effects or prove remote cessation.
+The returned record retains any available delegation/cancellation observations;
+absence of confirmation must not be treated as confirmation.
+
+The default MCP palette includes all six Job tools. The `jobs` skill supplies
+them to agents; agent/task skills and templates use the canonical Job paths.
+Existing `grid:jobStatus` and `grid:jobResult` paths, tool names and behavior
+remain compatible. Existing configured agents and tokens are not rewritten.
+
+The legacy tools remain discoverable for compatibility and describe themselves
+as such; new workflows use the `job` operations. They are not interchangeable
+aliases: legacy Grid result waits accept negative timeouts as unbounded and
+ignore non-integer timeouts, while `job:result` rejects either. An unbounded
+remote Grid waiter mirrors the destination's paused/input/auth-required state;
+the canonical result waiter stays STARTED and reports it in
+`delegation.remoteStatus`. Bounded legacy remote waits use SDK polling, whereas
+canonical remote waits use the venue's shared observation and retry policy.
+These differences are retained rather than silently changing existing callers.
+
+Tool descriptions carry each tool's name, purpose, arguments and result
+guidance. Skills supply workflow advice rather than restating included tools'
+descriptions or relying on fixed callable names. Runtime handoff messages
+identify the local Job handle and direct callers to their advertised Job tools;
+they do not assume a particular tool name is present in a scoped palette.
+
+## Job capabilities
+
+The standard capability catalog is [UCAN.md section 3.2](UCAN.md#32-standard-capability-catalog-can).
+All Job APIs use these domain abilities, independently of raw lattice CRUD:
+
+| Action | Ability on `<owner-DID>/j/<id>` |
+|---|---|
+| Status, result and SSE updates | `job/read` |
+| Cancel, pause, resume and delete | `job/manage` |
+| Deliver input or append a caller's message | `job/message` |
+
+The siblings imply none of one another; `job` covers all three. Listing and
+counting require `job/read` on the owner's `j/` collection, not merely one Job.
+`job/read` discloses the whole externally visible record, including input,
+output/error and history; it is not a status-only grant. Private execution
+checkpoints and credentials are never part of that record.
+
+An unscoped authenticated owner has these rights by default. An agent, scoped
+session or MCP token must have the required effective authority: creator
+attribution supplies no bypass. Creating or invoking work grants no continuing
+Job permissions; its direct invocation response is still returned to the caller.
+A separate principal can present the owner's valid UCAN grant without sudo or
+impersonation. Expiry and token restrictions apply at use, and result delivery
+and SSE updates recheck read permission.
+
+Job tools accept optional `owner` (a DID); REST Job routes accept `?owner=<DID>`.
+This locates retained records after live-cache eviction and never changes the
+request's identity or scope. Local omission uses the caller's namespace for
+retained records; active Jobs can resolve by ID. Remote tools bind the owner
+before the request: explicit `owner`, otherwise the hop's authenticated principal
+or destination public principal for anonymous access. A mismatched owner cannot
+address a different Job that happens to be live. Supply the owner's DID when
+sharing a Job reference.
+
+Lifecycle controls return `{id, accepted: true}`. They do not return input,
+output, history or a status snapshot. Acceptance is not proof of remote cessation;
+use a separate read if authorized. A2A methods that return a full Task require
+`job/read` in addition to their action right. Task-specific agent cancellation
+and continuation also check `job/manage` and `job/message` respectively; agent
+administration and an adapter's internal execution remain separate operations.
+
+### Remote authority and host binding
+
+A direct remote Job action is authorized by its hosting venue using the explicitly
+selected authentication mode, credentials and grants. The source authorizes use
+of the local operation and enforces its outbound connection and credential-use
+policy; it does not additionally require local `job/read`, `job/manage` or
+`job/message` grants on the remote Job. Local capability scopes are not exported
+as remote execution scopes. A deliberately supplied broad remote credential can
+therefore authorize remote actions that the caller could not perform locally.
+
+The same rule applies to Grid run/invoke and remote orchestration steps. The
+source still checks `invoke` permission on a dynamically selected operation
+reference, including its input-dependent constraints. Being scoped does not
+prohibit remote submission. The destination independently checks invocation and
+resource permissions under the authenticated remote principal and its grants.
+Anonymous mode uses the destination's public policy; it does not borrow an
+identity credential. Caller mode needs an explicitly presented, in-date identity
+credential for that caller and destination. Venue mode is reserved to the venue
+itself. No local scope, grant or tool selection implicitly lends the venue's or
+another principal's identity. Credentials stay outside inputs and public Job records.
+
+An owning local proxy binds the destination Job and connection established at
+submission. `job/manage` on that local proxy authorizes its supported lifecycle
+controls, including the framework's cancellation attempt on that exact remote
+execution using the bound connection. The caller needs neither a separate remote
+Job grant nor access to the bound credentials. A result waiter only observes an
+existing Job: cancelling it ends observation, never the target execution.
+Successful submission does not guarantee that a later cancellation is supported
+or authorized at the destination. Local cancellation completes independently;
+its cancellation evidence reports acceptance, refusal or an unconfirmed outcome.
+An asynchronous submission acknowledgement is not a continuing owning proxy:
+follow and control the returned destination handle at its hosting venue.
+
+Job IDs are venue-scoped. To grant access to one hosted Job, include the existing
+`nb.url` constraint with the hosting venue's canonical base URL:
+
+```json
+{"with":"did:example:alice/j/0123456789abcdef", "can":"job/read",
+ "nb":{"url":"https://venue.example/"}}
+```
+
+The hosting venue enforces this constraint against its configured `baseUrl`
+(or its hostname/port-derived base URL). Operators behind a proxy must configure
+the canonical base URL; use that address when presenting a host-bound grant.
+A grant without this constraint deliberately covers the named resource wherever
+hosted. Token audience is the grantee and is not a hosting restriction. A relay
+forwards eligible grants to the selected principal; it does not mint a new
+credential or grant, or substitute its own base URL for the hosting venue's.
+
+Recovery preserves the bound connection's authentication mode and owner lookup.
+Caller identity credentials remain unpersisted, so caller-authenticated proxies
+and observations require reattachment after restart. Anonymous observations may
+resume under the destination's public policy; the original caller's local scope
+is not reconstructed as remote authority. Every remote status request is
+independently authorized at the host. Local Job reads and result delivery still
+require the caller's current local Job permissions.
+
+### Migration
+
+There is no CRUD fallback. Replace Job API grants of `crud/read` with `job/read`,
+and assign `job/manage` and/or `job/message` deliberately in place of old write
+rights. Raw lattice reads continue to require CRUD, and framework-managed Job
+state remains unwritable by raw CRUD. Public read-only defaults grant no Job API
+access; explicitly grant the public principal `job/read` to expose shared Jobs.
+Existing agents and tokens are not silently widened. The reader template includes
+explicit Job read permission; full/manager templates start with empty caps and
+need task-specific grants. The explicitly unrestricted admin template is unchanged.
+
 ## Lifecycle and status semantics
 
 `PENDING → STARTED → COMPLETE | FAILED | CANCELLED | REJECTED` (terminal,
@@ -97,14 +276,13 @@ remains the application's choice.
 ## Record fields: `caller`, `owner`, `op`, `adapter` and `parent`
 
 - **`caller`** is the principal that made the call: a user, one of a user's
-  agents (`<owner>:g:<agent>`) or a `user/sudo` delegate (COG-8).
+  agents (`<owner>:g:<agent>`) or a `admin/sudo` delegate (COG-8).
 - **`owner`** is the namespace the job belongs to, written only when it
   differs from `caller`: an agent's owner, or the user a delegate acts for.
   The job is stored in that user's `j/`, and ownership, access control and the
   admission quota key on it (`Job.getOwner`, `owner` else `caller`). The owner
   is never derived from a DID; `covia.grid.Attribution` writes and reads both
-  fields. A scoped context reaches a job it made as a principal other than the
-  owner; otherwise its scope decides (`AccessControl.canAccessJob`).
+  fields. A scoped context needs explicit Job authority even for work it created.
 - **`op`** is the reference that was invoked, verbatim: `v/ops/json/merge`,
   `o/my-tool`, a DID URL, or a bare hash when the caller pinned a definition
   explicitly (#499). Only an inline definition has no reference, in which
@@ -175,7 +353,7 @@ there are none, so that `JobManager.keepsCallerContext` tells such a job from
 one whose adapter never asked. `JobManager.callerContext` rebuilds the caller
 from them with `Engine.context(owner, caller, proofs, authority)`, checking
 what a live request would: the principal and the kept authority still exist,
-a delegate still holds its `user/sudo` grant, an agent acts under its current
+a delegate still holds its `admin/sudo` grant, an agent acts under its current
 `config.caps`, an agent controller under its own. The kept authority is the
 controller the work started with, as it acts now, and the MCP token narrowing
 the request, if any, which then narrows it as it stands and to nothing once

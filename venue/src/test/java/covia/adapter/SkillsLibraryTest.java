@@ -283,7 +283,13 @@ public class SkillsLibraryTest {
 		assertFalse(agents.contains("created: false"), agents);
 		assertFalse(agents.contains("wait?"), agents);
 		assertFalse(tasks.contains("wait?"), tasks);
-		assertTrue(tasks.contains("timeout?"), tasks);
+		// The included tools supply calling contracts; workflow prose need not
+		// repeat their argument lists or provider-facing names.
+		ACell taskMeta = convex.core.util.JSON.parse(readResource("/skills/tasks.json"));
+		AVector<ACell> taskTools = RT.ensureVector(RT.getIn(taskMeta, "skill", "tools"));
+		assertTrue(taskTools.contains(Strings.create("v/ops/agent/request")));
+		assertTrue(taskTools.contains(Strings.create("v/ops/job/status")));
+		assertTrue(taskTools.contains(Strings.create("v/ops/job/result")));
 		assertTrue(models.contains("Templates are provider-neutral"), models);
 		assertFalse(models.contains("templates default to openai"), models);
 		assertTrue(skills.contains("Do not invent an undeclared tool name"), skills);
@@ -428,9 +434,10 @@ public class SkillsLibraryTest {
 		ACell config = RT.getIn(asset, "agent", "config");
 		AVector<ACell> caps = RT.ensureVector(RT.getIn(config, "caps"));
 		assertNotNull(caps, "reader must pin a capability");
-		assertEquals(2, caps.count());
+		assertEquals(3, caps.count());
 		assertEquals("crud/read", RT.getIn(caps.get(0), "can").toString());
 		assertEquals("asset/read", RT.getIn(caps.get(1), "can").toString());
+		assertEquals("job/read", RT.getIn(caps.get(2), "can").toString());
 	}
 
 	@Test

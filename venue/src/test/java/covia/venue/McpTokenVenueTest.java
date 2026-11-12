@@ -153,7 +153,7 @@ public class McpTokenVenueTest {
 		RequestContext owner = RequestContext.of(alice);
 		AMap<AString, ACell> tools = Maps.of(Fields.TOOLS, Vectors.of("v/ops/mcp/get-token", "v/ops/mcp/create-token"));
 		ACell manage = cap("x/mcp/tokens/", Abilities.MCP_TOKEN);
-		ACell admin = cap("x/mcp/tokens/", Abilities.ADMIN_TOKEN);
+		ACell admin = cap("x/mcp/tokens/", Abilities.ADMIN_TOKEN_MCP);
 		String plain = bearer(complete(run("v/ops/mcp/create-token",
 			tools.assoc(Fields.NAME, Strings.create("plain")).assoc(Fields.CAPS, Vectors.of(manage)), owner)));
 		String administrator = bearer(complete(run("v/ops/mcp/create-token",
@@ -171,5 +171,24 @@ public class McpTokenVenueTest {
 			failure(tool(administrator, "v/ops/mcp/get-token", Maps.of(Fields.NAME, "administrator"))));
 		assertEquals(MCPAdapter.TOKEN_SOURCE_NOT_HELD.formatted("plain"),
 			failure(tool(administrator, "v/ops/mcp/get-token", Maps.of(Fields.NAME, "plain"))));
+	}
+
+	@Test
+	public void bearerRetrievalAcceptsMcpLeafAndParentsButNotOtherTokenKinds(TestInfo info) {
+		RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));
+		String[] abilities = {"admin/token/mcp", "admin/token", "admin", "admin/token/other"};
+		for (int i = 0; i < abilities.length; i++) {
+			String source = bearer(complete(run("v/ops/mcp/create-token", Maps.of(
+				Fields.NAME, "source-" + i,
+				Fields.TOOLS, Vectors.of("v/ops/mcp/create-token", "v/ops/mcp/get-token"),
+				Fields.CAPS, Vectors.of(cap("x/mcp/tokens/", Abilities.MCP_TOKEN),
+					cap("x/mcp/tokens/", Strings.create(abilities[i])))), owner)));
+			String name = "child-" + i;
+			String child = bearer(complete(tool(source, "v/ops/mcp/create-token",
+				Maps.of(Fields.NAME, name, Fields.TOOLS, Vectors.of("v/ops/covia/read")))));
+			Job read = tool(source, "v/ops/mcp/get-token", Maps.of(Fields.NAME, name));
+			if (i < 3) assertEquals(child, bearer(complete(read)), abilities[i]);
+			else failure(read);
+		}
 	}
 }

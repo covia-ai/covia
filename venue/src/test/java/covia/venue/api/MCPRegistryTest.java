@@ -22,7 +22,10 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
+import convex.core.json.schema.JsonSchema;
 import covia.api.Fields;
+import covia.grid.Status;
+import covia.venue.RemoteJobs;
 import covia.venue.Engine;
 import covia.venue.LocalVenue;
 import covia.venue.TestEngine;
@@ -82,6 +85,11 @@ public class MCPRegistryTest {
 		var defaults = toolReferences(mcp(freshEngine(), Maps.empty()));
 		assertEquals("v/ops/agent/history", defaults.get("agent_history"));
 		assertEquals("v/ops/agent/session-read", defaults.get("agent_session_read"));
+		for (String control : Set.of("status", "result", "cancel", "pause", "resume", "message")) {
+			assertEquals("v/ops/job/" + control, defaults.get("job_" + control));
+		}
+		assertEquals("v/ops/grid/job-status", defaults.get("grid_job_status"));
+		assertEquals("v/ops/grid/job-result", defaults.get("grid_job_result"));
 		assertFalse(defaults.containsValue("v/ops/json/merge"), "excluded operations stay hidden");
 		assertFalse(defaults.containsValue("v/test/ops/echo"), "excluded paths stay hidden");
 
@@ -94,11 +102,51 @@ public class MCPRegistryTest {
 
 	// ==================== Default include set ====================
 
+	@Test public void jobRecordSchemasAdmitLifecycleAndObservationEvidence() {
+		Set<String> recordTools = Set.of("grid_invoke", "grid_job_status", "job_status");
+		AVector<ACell> tools = RT.getIn(mcp(freshEngine(), Maps.empty()).listTools(), "tools");
+		for (ACell tool : tools) {
+			String name = RT.getIn(tool, Fields.NAME).toString();
+			if (!recordTools.contains(name)) continue;
+			AMap<AString, ACell> schema = RT.ensureMap(RT.getIn(tool, Fields.OUTPUT_SCHEMA));
+			assertNotNull(schema, name);
+			for (AString status : new AString[]{Status.PENDING, Status.STARTED, Status.PAUSED,
+				Status.INPUT_REQUIRED, Status.AUTH_REQUIRED, Status.COMPLETE, Status.FAILED, Status.CANCELLED, Status.REJECTED}) {
+				AMap<AString, ACell> record = Maps.of(Fields.ID, "00112233445566778899aabbccddeeff", Fields.STATUS, status,
+					Fields.OUTPUT, null, Fields.ERROR, null, Fields.ERROR_CODE, null, Fields.PROGRESS, "waiting for input",
+					RemoteJobs.DELEGATION, Maps.of(RemoteJobs.REMOTE_ID, "ffeeddccbbaa99887766554433221100",
+						RemoteJobs.REMOTE_STATUS, Status.INPUT_REQUIRED));
+				assertNull(JsonSchema.validate(schema, record), name + ": " + status);
+				// Progress also accepts structured detail, and cancellation evidence
+				// may arrive after the local Job reached a terminal state.
+				record = record.assoc(Fields.PROGRESS, Maps.of(Fields.MESSAGE, "working", Fields.DATA, Maps.of("step", 2)))
+					.assoc(Fields.CANCELLATION, RemoteJobs.cancellationResult(Status.CANCELLED));
+				assertNull(JsonSchema.validate(schema, record), name + ": " + status);
+			}
+		}
+	}
+
 	@Test public void testDefaultExposesOnlyAllowlistedGroups() {
 		MCP mcp = mcp(freshEngine(), Maps.empty());
 		Set<String> groups = groupsOf(toolNames(mcp));
-		assertEquals(Set.of("agent", "asset", "covia", "grid", "secret", "skills"), groups,
+		assertEquals(Set.of("agent", "asset", "covia", "grid", "job", "secret", "skills"), groups,
 			"Default include set should expose exactly the allowlisted groups");
+	}
+
+	@Test public void jobControlsExposeAcknowledgementsOnly() {
+		Set<String> controls = Set.of("job_cancel", "job_pause", "job_resume");
+		Set<String> checked = new java.util.HashSet<>();
+		AVector<ACell> tools = RT.getIn(mcp(freshEngine(), Maps.empty()).listTools(), "tools");
+		for (ACell tool : tools) {
+			String name = RT.getIn(tool, Fields.NAME).toString();
+			if (!controls.contains(name)) continue;
+			checked.add(name);
+			AMap<AString, ACell> schema = RT.ensureMap(RT.getIn(tool, Fields.OUTPUT_SCHEMA));
+			AMap<AString, ACell> ack = Maps.of(Fields.ID, "00112233445566778899aabbccddeeff", Fields.ACCEPTED, true);
+			assertNull(JsonSchema.validate(schema, ack), name);
+			assertNotNull(JsonSchema.validate(schema, ack.assoc(Fields.OUTPUT, Strings.create("private"))), name);
+		}
+		assertEquals(controls, checked);
 	}
 
 	@Test public void testDefaultHidesUtilityAdapters() {
@@ -152,7 +200,7 @@ public class MCPRegistryTest {
 		MCP mcp = mcp(freshEngine(),
 			Maps.of(K_INCLUDE_ADAPTERS, Vectors.empty()));
 		Set<String> groups = groupsOf(toolNames(mcp));
-		assertEquals(Set.of("agent", "asset", "covia", "grid", "secret", "skills"), groups);
+		assertEquals(Set.of("agent", "asset", "covia", "grid", "job", "secret", "skills"), groups);
 	}
 
 	// ==================== Path-prefix filter ====================

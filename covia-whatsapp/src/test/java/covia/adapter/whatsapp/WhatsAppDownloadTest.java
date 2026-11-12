@@ -20,6 +20,7 @@ import covia.adapter.messaging.MessagingSettings;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.RequestContext;
+import covia.test.IntegrationTest;
 
 /**
  * {@code whatsapp:download}: a message's media by its media id, fetched with the
@@ -28,6 +29,7 @@ import covia.venue.RequestContext;
  * directory the caller names; gated on {@code whatsapp/download}, which
  * {@code whatsapp/send} does not grant.
  */
+@IntegrationTest
 class WhatsAppDownloadTest {
 
 	static final String OP = "v/ops/whatsapp/download";

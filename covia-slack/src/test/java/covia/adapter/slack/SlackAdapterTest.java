@@ -25,7 +25,9 @@ import covia.exception.InvalidInputException;
 import covia.exception.ResponseException;
 import covia.venue.*;
 import covia.venue.server.VenueServer;
+import covia.test.IntegrationTest;
 
+@IntegrationTest
 class SlackAdapterTest {
 	static AMap<AString, ACell> spec() {
 		return Maps.of("token", "s/TOKEN", "signingSecret", "s/SIGNING", "user", OWNER, "appId", "A123", "teamId", "T123",

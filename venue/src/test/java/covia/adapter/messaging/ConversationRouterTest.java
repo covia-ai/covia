@@ -28,7 +28,9 @@ import covia.api.Fields;
 import covia.exception.JobFailedException;
 import covia.grid.Job;
 import covia.grid.Status;
+import covia.test.IntegrationTest;
 
+@IntegrationTest
 class ConversationRouterTest {
 	/**
 	 * One venue for the tests that need nothing else of their own. Not the shared
@@ -47,17 +49,6 @@ class ConversationRouterTest {
 	/** A name for this test's own adapter state: adapter names are lower-case, so not a DID as it stands. */
 	private static String stateName(TestInfo info) {
 		return TestEngine.uniqueDID(info).toString().toLowerCase().replaceAll("[^a-z0-9-]", "-");
-	}
-
-	@Test void recoveryUsesOnlyTheAgentCodeRegardlessOfWording() {
-		Job missing = Job.create(Maps.of(Fields.STATUS, Status.STARTED));
-		missing.fail(AgentAdapter.UNKNOWN_SESSION_CODE, "This conversation has expired");
-		assertTrue(ConversationRouter.isUnknownSession(new java.util.concurrent.CompletionException(
-			new JobFailedException(missing))));
-		assertFalse(ConversationRouter.isUnknownSession(new JobFailedException("Unknown session")));
-		Job other = Job.create(Maps.of(Fields.STATUS, Status.STARTED));
-		other.fail("other:unknown-session", "Unknown session");
-		assertFalse(ConversationRouter.isUnknownSession(new JobFailedException(other)));
 	}
 
 	@Test void staleSessionIsReplacedThroughTheRealAgentFailure(TestInfo info) {

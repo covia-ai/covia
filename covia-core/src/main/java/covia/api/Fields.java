@@ -298,13 +298,15 @@ public class Fields {
 	// Identity / authorization
 	/** On a record of a call (a job, a scheduled event, a HITL request): the
 	 *  principal that made the call — a user, one of a user's agents
-	 *  ({@code <owner>:g:<id>}) or a {@code user/sudo} delegate. Written with
+	 *  ({@code <owner>:g:<id>}) or a {@code admin/sudo} delegate. Written with
 	 *  {@link covia.grid.Attribution}. */
 	public static final StringShort CALLER = Strings.intern("caller");
 	/** On a record of a call: the namespace it belongs to, present only when that
 	 *  differs from {@link #CALLER}. Ownership, access control and quota key on
 	 *  it. Read and written with {@link covia.grid.Attribution}. */
 	public static final StringShort OWNER = Strings.intern("owner");
+	/** A lifecycle control was accepted; does not assert remote cessation. */
+	public static final StringShort ACCEPTED = Strings.intern("accepted");
 	/** On an agent: the principal whose authority its harness runs under, and
 	 *  whose authority an update needs. Absent means the agent's owner. */
 	public static final StringShort CONTROLLER = Strings.intern("controller");

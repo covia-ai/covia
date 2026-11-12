@@ -42,7 +42,7 @@ nodes in the root `:dlfs` region, outside the venue value: the Etch header does
 not show a change in them, so `:version` is the only thing a later build can
 check.
 
-A user export (`user/export`) carries its own format version,
+A user export (`user:export`) carries its own format version,
 `UserExports.VERSION`. It advances whenever the shape of a user's stored state
 changes in a way an older build cannot read, as `:version` does, so an older
 venue refuses the export rather than importing shapes it cannot read.

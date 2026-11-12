@@ -561,13 +561,13 @@ public class AdapterLifecycleTest {
 			assertInstanceOf(AuthException.class, denied.getCause(), op);
 			assertFalse(denied.getCause().getMessage().isBlank(), op);
 			if (op.endsWith("/restart")) {
-				assertTrue(denied.getCause().getMessage().contains("venue/restart"), op);
+				assertTrue(denied.getCause().getMessage().contains("admin/venue/restart"), op);
 				assertTrue(denied.getCause().getMessage().contains("/process"), op);
 			} else if (op.endsWith("/gc")) {
-				assertTrue(denied.getCause().getMessage().contains("venue/gc"), op);
+				assertTrue(denied.getCause().getMessage().contains("admin/venue/gc"), op);
 				assertTrue(denied.getCause().getMessage().contains("/store"), op);
 			} else {
-				assertTrue(denied.getCause().getMessage().contains("adapter/manage"), op);
+				assertTrue(denied.getCause().getMessage().contains("admin/adapter/manage"), op);
 				assertTrue(denied.getCause().getMessage().contains("/adapters"), op);
 			}
 		}

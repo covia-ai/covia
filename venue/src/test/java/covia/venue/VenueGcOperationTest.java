@@ -380,7 +380,7 @@ public class VenueGcOperationTest {
 		AString venue = engine.getDIDString();
 		// An ordinary user, a user's agent, a venue agent whose caps grant no
 		// venue authority and the public principal are all refused: only the
-		// venue, an agent of its with venue/gc, or a venue-issued venue/gc
+		// venue, an agent of its with admin/venue/gc, or a venue-issued admin/venue/gc
 		// delegation may collect.
 		for (RequestContext caller : new RequestContext[] {
 				RequestContext.of(USER),
@@ -389,9 +389,9 @@ public class VenueGcOperationTest {
 					Maps.of(convex.auth.ucan.Capability.CAN, Strings.create("invoke")))),
 				RequestContext.of(Strings.create(venue + ":public"))}) {
 			String denied = gcFails(engine, caller, STATUS);
-			assertTrue(denied.contains("venue/gc") || denied.contains("denied"), denied);
+			assertTrue(denied.contains("admin/venue/gc") || denied.contains("denied"), denied);
 			String backupDenied = gcFails(engine, caller, Maps.of("backupFile", "unauthorised.etch"));
-			assertTrue(backupDenied.contains("venue/gc") || backupDenied.contains("denied"), backupDenied);
+			assertTrue(backupDenied.contains("admin/venue/gc") || backupDenied.contains("denied"), backupDenied);
 		}
 		// The venue itself passes authority; this engine's host installed no
 		// store seam, which is the next thing the operation reports.

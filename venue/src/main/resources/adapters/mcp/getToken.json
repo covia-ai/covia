@@ -1,6 +1,6 @@
 {
 	"name": "MCP Get Token",
-	"description": "Returns one of your MCP tokens' bearer again, on a venue whose operator keeps tokens (adapters.mcp.keepRawTokens); otherwise rotate it with v/ops/mcp/update-token. Needs the admin/token ability on x/mcp/tokens/<name>, and the authority the token was created with.",
+	"description": "Returns one of your MCP tokens' bearer again, on a venue whose operator keeps tokens (adapters.mcp.keepRawTokens); otherwise rotate it with v/ops/mcp/update-token. Needs the admin/token/mcp ability on x/mcp/tokens/<name>, and the authority the token was created with.",
 	"dateCreated": "2026-11-11T00:00:00Z",
 	"operation": {
 		"adapter": "mcp:token:get",

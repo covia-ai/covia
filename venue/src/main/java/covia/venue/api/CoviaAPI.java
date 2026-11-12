@@ -1197,6 +1197,12 @@ public class CoviaAPI extends ACoviaAPI {
 		return Math.min(ms, MAX_WAIT_MS);
 	}
 
+	/** Optional lookup namespace, never a change of authenticated principal. */
+	public static AString jobOwner(Context ctx) {
+		String owner = ctx.queryParam("owner");
+		return owner == null ? null : Strings.create(owner);
+	}
+
 	@OpenApi(path = ROUTE + "jobs/{id}",
 			methods = HttpMethod.GET,
 			tags = { "Covia"},
@@ -1215,14 +1221,11 @@ public class CoviaAPI extends ACoviaAPI {
 			buildError(ctx,400,"Job request requires a job ID as a valid hex string");
 			return;
 		}
-		RequestContext rctx = AuthMiddleware.callerContext(ctx);
-		// Job reads are delegable and federated observation must carry the
-		// caller's authority: attach grants from X-Covia-Ucans (a GET has no body).
-		rctx = engine().withTransportGrants(rctx,
+		RequestContext rctx = engine().withTransportGrants(AuthMiddleware.callerContext(ctx),
 			AuthMiddleware.headerUcans(ctx));
 
 		try {
-			AMap<AString,ACell> status=engine().jobs().getJobData(id, rctx);
+			AMap<AString,ACell> status=engine().jobs().getJobData(id, rctx, jobOwner(ctx));
 			if (status==null) {
 				buildError(ctx,404,"Job not found: "+id);
 				return;
@@ -1251,7 +1254,7 @@ public class CoviaAPI extends ACoviaAPI {
 					content= @OpenApiContent(type = "application/json", from = Object.class)),
 			responses = {
 					@OpenApiResponse(status = "202", description = "Message accepted and queued"),
-					@OpenApiResponse(status = "403", description = "Caller is not the job owner"),
+					@OpenApiResponse(status = "403", description = "Caller lacks job/message authority"),
 					@OpenApiResponse(status = "404", description = "Job not found"),
 					@OpenApiResponse(status = "400", description = "The id is not a job ID, or the body is not JSON"),
 					@OpenApiResponse(status = "409", description = "Job has finished, is not active, does not take messages, or its adapter refused the message"),
@@ -1272,7 +1275,8 @@ public class CoviaAPI extends ACoviaAPI {
 			buildError(ctx, 400, "Request body is not valid JSON: " + e.getMessage());
 			return;
 		}
-		RequestContext rctx = AuthMiddleware.callerContext(ctx);
+		RequestContext rctx = engine().withTransportGrants(AuthMiddleware.callerContext(ctx),
+			AuthMiddleware.headerUcans(ctx));
 
 		@SuppressWarnings("unchecked")
 		AMap<AString, ACell> msgMap = (message instanceof AMap)
@@ -1280,7 +1284,7 @@ public class CoviaAPI extends ACoviaAPI {
 				: Maps.of(Fields.CONTENT, message);
 
 		try {
-			engine().jobs().deliverMessage(id, msgMap, rctx);
+			engine().jobs().deliverMessage(id, msgMap, rctx, jobOwner(ctx));
 			Map<String, Object> response = new HashMap<>();
 			response.put("status", "queued");
 			buildResult(ctx, 202, response);
@@ -1333,10 +1337,11 @@ public class CoviaAPI extends ACoviaAPI {
 			AString reasonCell = RT.ensureString(RT.getIn(parsed, Fields.REASON));
 			if (reasonCell != null) reason = reasonCell.toString();
 		}
-		RequestContext rctx = AuthMiddleware.callerContext(ctx);
+		RequestContext rctx = engine().withTransportGrants(AuthMiddleware.callerContext(ctx),
+			AuthMiddleware.headerUcans(ctx));
 
 		try {
-			AMap<AString, ACell> status = engine().jobs().cancelJob(id, rctx, reason);
+			AMap<AString, ACell> status = engine().jobs().cancelJob(id, rctx, reason, jobOwner(ctx));
 			if (status!=null) {
 				buildResult(ctx,status);
 				ctx.status(200);
@@ -1368,10 +1373,11 @@ public class CoviaAPI extends ACoviaAPI {
 			buildError(ctx,400,"Pause request requires a job ID");
 			return;
 		}
-		RequestContext rctx = AuthMiddleware.callerContext(ctx);
+		RequestContext rctx = engine().withTransportGrants(AuthMiddleware.callerContext(ctx),
+			AuthMiddleware.headerUcans(ctx));
 
 		try {
-			AMap<AString, ACell> status = engine().jobs().pauseJob(id, rctx);
+			AMap<AString, ACell> status = engine().jobs().pauseJob(id, rctx, jobOwner(ctx));
 			if (status!=null) {
 				buildResult(ctx,status);
 				ctx.status(200);
@@ -1403,10 +1409,11 @@ public class CoviaAPI extends ACoviaAPI {
 			buildError(ctx,400,"Resume request requires a job ID");
 			return;
 		}
-		RequestContext rctx = AuthMiddleware.callerContext(ctx);
+		RequestContext rctx = engine().withTransportGrants(AuthMiddleware.callerContext(ctx),
+			AuthMiddleware.headerUcans(ctx));
 
 		try {
-			AMap<AString, ACell> status = engine().jobs().resumeJob(id, rctx);
+			AMap<AString, ACell> status = engine().jobs().resumeJob(id, rctx, jobOwner(ctx));
 			if (status!=null) {
 				buildResult(ctx,status);
 				ctx.status(200);
@@ -1438,10 +1445,11 @@ public class CoviaAPI extends ACoviaAPI {
 			buildError(ctx,400,"Job deletion request requires a job ID as a valid hex string");
 			return;
 		}
-		RequestContext rctx = AuthMiddleware.callerContext(ctx);
+		RequestContext rctx = engine().withTransportGrants(AuthMiddleware.callerContext(ctx),
+			AuthMiddleware.headerUcans(ctx));
 
 		try {
-			boolean deleted=engine().jobs().deleteJob(id, rctx);
+			boolean deleted=engine().jobs().deleteJob(id, rctx, jobOwner(ctx));
 			if (deleted) {
 				ctx.status(200);
 			} else {
@@ -1476,7 +1484,7 @@ public class CoviaAPI extends ACoviaAPI {
 		RequestContext rctx = engine().withTransportGrants(AuthMiddleware.callerContext(ctx),
 			AuthMiddleware.headerUcans(ctx));
 		try {
-			if (engine().jobs().getJobData(id, rctx) == null) {
+			if (engine().jobs().getJobData(id, rctx, jobOwner(ctx)) == null) {
 				buildError(ctx, 404, "Job not found: " + id);
 				return;
 			}
@@ -2126,7 +2134,8 @@ public class CoviaAPI extends ACoviaAPI {
 				+ "Operator-only: a non-operator, signed-in caller gets 403, not a partial list.",
 			operationId = "getUsers")
 	protected void getUsers(Context ctx) {
-		RequestContext rctx = AuthMiddleware.callerContext(ctx);
+		RequestContext rctx = engine().withTransportGrants(AuthMiddleware.callerContext(ctx),
+			AuthMiddleware.headerUcans(ctx));
 		if (rctx.getCallerDID() == null) {
 			buildError(ctx, 401, "Authentication required");
 			return;
@@ -2149,7 +2158,8 @@ public class CoviaAPI extends ACoviaAPI {
 			operationId = "getUserInfo",
 			pathParams = { @OpenApiParam(name = "did", description = "User DID") })
 	protected void getUserInfo(Context ctx) {
-		RequestContext rctx = AuthMiddleware.callerContext(ctx);
+		RequestContext rctx = engine().withTransportGrants(AuthMiddleware.callerContext(ctx),
+			AuthMiddleware.headerUcans(ctx));
 		if (rctx.getCallerDID() == null) {
 			buildError(ctx, 401, "Authentication required");
 			return;
@@ -2170,10 +2180,11 @@ public class CoviaAPI extends ACoviaAPI {
 
 	@OpenApi(path = ROUTE + "users/{did}", methods = HttpMethod.DELETE,
 			tags = { "Covia" }, operationId = "deleteUser",
-			summary = "Delete an account with venue user/delete authority. Self-deletion has no authority exemption.",
+			summary = "Delete an account with venue admin/user/delete authority. Self-deletion has no authority exemption.",
 			pathParams = { @OpenApiParam(name = "did", description = "Exact account DID") })
 	protected void deleteUser(Context ctx) {
-		RequestContext rctx = AuthMiddleware.callerContext(ctx);
+		RequestContext rctx = engine().withTransportGrants(AuthMiddleware.callerContext(ctx),
+			AuthMiddleware.headerUcans(ctx));
 		try {
 			ACell result = engine().jobs().invokeInternal("v/ops/user/delete",
 				Maps.of(Fields.DID, Strings.create(ctx.pathParam("did"))), rctx).join();
@@ -2198,7 +2209,8 @@ public class CoviaAPI extends ACoviaAPI {
 			operationId = "getUserAuthentications",
 			pathParams = { @OpenApiParam(name = "did", description = "User DID") })
 	protected void getUserAuthentications(Context ctx) {
-		RequestContext rctx = AuthMiddleware.callerContext(ctx);
+		RequestContext rctx = engine().withTransportGrants(AuthMiddleware.callerContext(ctx),
+			AuthMiddleware.headerUcans(ctx));
 		if (rctx.getCallerDID() == null) {
 			buildError(ctx, 401, "Authentication required");
 			return;

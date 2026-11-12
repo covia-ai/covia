@@ -260,6 +260,9 @@ public class VenueHTTP extends Venue {
 	 * @return Pre-authenticated request builder
 	 */
 	private HttpRequest.Builder requestBuilder(String path) {
+		if (path.startsWith("jobs/") && getJobOwner() != null)
+			path += (path.contains("?") ? "&" : "?") + "owner="
+				+ java.net.URLEncoder.encode(getJobOwner().toString(), java.nio.charset.StandardCharsets.UTF_8);
 		return requestBuilder(getBaseURI().resolve(path));
 	}
 
@@ -516,7 +519,7 @@ public class VenueHTTP extends Venue {
 	public CompletableFuture<Job> getJob(Blob jobId) {
 		return getJobData(jobId).thenApply(status -> {
 			if (status == null) {
-				throw new IllegalArgumentException("Job not found: " + jobId.toHexString());
+				throw new NotFoundException("Job not found: " + jobId.toHexString(), jobId.toHexString());
 			}
 			return Job.create(status);
 		});
@@ -526,7 +529,7 @@ public class VenueHTTP extends Venue {
 	public CompletableFuture<AMap<AString, ACell>> getJobStatus(Blob jobId) {
 		return getJobData(jobId).thenApply(status -> {
 			if (status == null) {
-				throw new IllegalArgumentException("Job not found: " + jobId.toHexString());
+				throw new NotFoundException("Job not found: " + jobId.toHexString(), jobId.toHexString());
 			}
 			return status;
 		});
@@ -1121,7 +1124,7 @@ public class VenueHTTP extends Venue {
 	/**
 	 * Pauses a running job on the connected venue
 	 * @param jobId The job ID to pause
-	 * @return Future containing the updated job status
+	 * @return Future containing the control acknowledgement
 	 */
 	public CompletableFuture<AMap<AString,ACell>> pauseJob(String jobId) {
 		HttpRequest req = requestBuilder("jobs/" + jobId + "/pause")
@@ -1143,7 +1146,7 @@ public class VenueHTTP extends Venue {
 	/**
 	 * Resumes a paused job on the connected venue
 	 * @param jobId The job ID to resume
-	 * @return Future containing the updated job status
+	 * @return Future containing the control acknowledgement
 	 */
 	public CompletableFuture<AMap<AString,ACell>> resumeJob(String jobId) {
 		HttpRequest req = requestBuilder("jobs/" + jobId + "/resume")

@@ -228,12 +228,12 @@ public class McpTokenAuthorityTest {
 		AString alice = TestEngine.uniqueDID(info);
 		complete(run("v/ops/covia/write", Maps.of(Fields.PATH, "w/seed", Fields.VALUE, 0), RequestContext.of(alice)));
 		RequestContext helper = agent(alice, "helper", Vectors.of(cap("v/ops/", Abilities.INVOKE),
-			cap("x/mcp/tokens/", Abilities.MCP_TOKEN), cap("w/", Capability.CRUD), cap("j/", Capability.CRUD_READ)));
+			cap("x/mcp/tokens/", Abilities.MCP_TOKEN), cap("w/", Capability.CRUD), cap("j/", Abilities.JOB_READ)));
 		Job made = run("v/ops/covia/write", Maps.of(Fields.PATH, "w/made", Fields.VALUE, 1), helper);
 		complete(made);
 		AVector<ACell> tools = Vectors.of("v/ops/covia/read");
 		RequestContext workspaceOnly = engine.tokenContext(issue(helper, "workspace", tools, Vectors.of(cap("w/", Capability.CRUD))).ref());
-		RequestContext jobReader = engine.tokenContext(issue(helper, "jobs", tools, Vectors.of(cap("j/", Capability.CRUD_READ))).ref());
+		RequestContext jobReader = engine.tokenContext(issue(helper, "jobs", tools, Vectors.of(cap("j/", Abilities.JOB_READ))).ref());
 
 		assertNotNull(engine.jobs().getJobData(made.getID(), helper), "the agent reads the job it made");
 		assertThrows(AuthException.class, () -> engine.jobs().getJobData(made.getID(), workspaceOnly),

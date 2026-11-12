@@ -137,7 +137,7 @@ class KeptCallerContextTest {
 		engine.getVenueState().users().create(owner);
 		engine.getVenueState().users().create(delegate);
 		AString grant = UCAN.create(ownerKey, delegateKey.getAccountKey(), exp(),
-			Vectors.of(Capability.create(owner, Abilities.USER_SUDO),
+			Vectors.of(Capability.create(owner, Abilities.ADMIN_SUDO),
 				Capability.create(Strings.create(owner + "/v/test/ops/never"), Strings.create("invoke")),
 				Capability.create(Strings.create(owner + "/w/output"), Capability.CRUD_WRITE)),
 			Vectors.empty()).toJWT(ownerKey);

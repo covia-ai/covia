@@ -843,7 +843,7 @@ public class OrchestratorTest {
 				Config.ENABLED, CVMBool.TRUE,
 				Config.CAPS, Vectors.of(
 					Capability.create(Strings.create("v/test/ops/echo"), Strings.create("invoke")),
-					Capability.create(Strings.create("j"), Capability.CRUD_READ))))));
+					Capability.create(Strings.create("j"), covia.api.Abilities.JOB_READ))))));
 		Engine local = loopback;
 		try {
 			String remoteUrl = "http://127.0.0.1:" + remote.port();
