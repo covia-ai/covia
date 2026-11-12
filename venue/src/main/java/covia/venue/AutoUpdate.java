@@ -65,7 +65,7 @@ final class AutoUpdate implements AutoCloseable {
 	private void refresh() {
 		long due;
 		try {
-			due = application.nextDue();
+			due = application.nextUpdateTime();
 		} catch (RuntimeException | Error e) {
 			failure.complete(e);
 			return;

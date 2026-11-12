@@ -3720,11 +3720,11 @@ public class Engine {
 	}
 
 	/**
-	 * When this venue next needs an update ({@link Scheduler#nextDue}), or
+	 * When this venue next needs an update ({@link Scheduler#nextUpdateTime}), or
 	 * {@link Long#MAX_VALUE} for none.
 	 */
-	long nextDue() {
-		return gridScheduler.nextDue();
+	long nextUpdateTime() {
+		return gridScheduler.nextUpdateTime();
 	}
 
 	/** The application this venue is mounted in. */

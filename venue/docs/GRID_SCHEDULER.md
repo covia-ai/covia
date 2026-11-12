@@ -155,7 +155,13 @@ each run on its caller's thread. There is no cross-thread race on the index and
 no claim flag: a claim reads the head and removes it under the lock. All
 ordering lives in the lattice index; nothing scans sleeping events.
 
-**Next due.** Once a change commits, the venue tells the application when its
+**Next due query.** `CoviaApplication.nextDue()` reports the earliest queued
+timestamp across started, non-closing mounted venues as a `CVMLong`, or `null`
+when none is queued, regardless of dispatch capacity. It is a read-only
+observation, not an idle signal. The caller-visible contract and driven-clock
+example are in [EMBEDDING.md, Time](./EMBEDDING.md#time).
+
+**Timer wake-up.** Once a change commits, the venue tells the application when its
 next event is due, after releasing its lock so that no venue's lock is ever
 held while another's is taken. That is the head event's `time`, which may
 already have passed (an event scheduled in the past is due at once). A venue

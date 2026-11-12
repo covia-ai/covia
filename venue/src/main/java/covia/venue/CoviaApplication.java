@@ -24,6 +24,7 @@ import convex.core.data.Hash;
 import convex.core.data.Index;
 import convex.core.data.Keyword;
 import convex.core.data.SignedData;
+import convex.core.data.prim.CVMLong;
 import convex.core.store.AStore;
 import convex.dlfs.DLFSRegion;
 import convex.lattice.ALatticeApplication;
@@ -263,13 +264,34 @@ public final class CoviaApplication
 	}
 
 	/**
-	 * The earliest time any mounted venue next needs an update, or
-	 * {@link Long#MAX_VALUE} for none. Takes each venue's schedule lock in
-	 * turn, never two at once.
+	 * The earliest queued scheduled timestamp across started, non-closing
+	 * mounted venues, in epoch milliseconds on this application's clock, or
+	 * {@code null} when none is queued. Includes scheduled operations, agent
+	 * wakes and HITL timeouts, even while dispatch capacity is full. Overdue
+	 * events retain their scheduled timestamp; claimed events are excluded,
+	 * while a recurring event's next queued occurrence is included.
+	 *
+	 * <p>This only reads the schedules: it neither moves the clock nor starts
+	 * work. It does not wait for running Jobs or establish that agents are idle.
+	 * Each venue is read separately, so concurrent changes can alter the answer
+	 * and there is no atomic snapshot across venues. Re-query after each step.
+	 * See {@code EMBEDDING.md}, Time.</p>
+	 *
+	 * @return The next queued timestamp, or {@code null} for none
 	 */
-	long nextDue() {
+	public CVMLong nextDue() {
+		CVMLong due = null;
+		for (Mounted venue : mounted.values()) {
+			CVMLong candidate = venue.engine().gridScheduler().nextDue();
+			if (candidate != null && (due == null || candidate.compareTo(due) < 0)) due = candidate;
+		}
+		return due;
+	}
+
+	/** The timer's next wake-up, excluding venues with no dispatch capacity. */
+	long nextUpdateTime() {
 		long due = Long.MAX_VALUE;
-		for (Mounted venue : mounted.values()) due = Math.min(due, venue.engine().nextDue());
+		for (Mounted venue : mounted.values()) due = Math.min(due, venue.engine().nextUpdateTime());
 		return due;
 	}
 
