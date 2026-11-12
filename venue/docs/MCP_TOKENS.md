@@ -4,17 +4,17 @@ An MCP token is an API key for the venue's MCP endpoint (`/mcp`). It offers a
 fixed set of operations as MCP tools and acts within caps set on it. Any user,
 or an agent acting for one, can create tokens and hand them to an MCP client,
 another agent included, which connects with `Authorization: Bearer <token>`
-and needs no venue login, DID or UCAN. A Covia agent holding a token calls
-`mcp:tools-call` or `mcp:tools-list` with the bearer as `token`, or with
-`bearerSecret` naming a secret that holds it. Venue authentication on `/mcp` works as
+and needs no venue login, DID or UCAN. Venue authentication on `/mcp` works as
 before, but a scoped token is the recommended way for an external agent to
 connect.
 
 A venue agent can consume a peer's token through `v/ops/mcp/tools-list` and
-`v/ops/mcp/tools-call`. Discovery takes `server` and `token`; a call requires
-`server`, `toolName` (the exact discovered name, including any custom alias) and
-an `arguments` object matching that tool's schema, plus the same token. An empty
-arguments object is required even when the remote tool takes no arguments.
+`v/ops/mcp/tools-call`. Each takes the bearer as `token`, or as `bearerSecret`
+naming a secret that holds it, never both. Discovery takes `server` and the
+bearer; a call requires `server`, `toolName` (the exact discovered name,
+including any custom alias) and an `arguments` object matching that tool's
+schema, plus the same bearer. An empty arguments object is required even when
+the remote tool takes no arguments.
 
 The tokens are kept by the `mcp` adapter (`covia.adapter.McpTokens`).
 
