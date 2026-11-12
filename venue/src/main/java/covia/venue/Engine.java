@@ -287,7 +287,7 @@ public class Engine {
 			// venue runs without it (docs/ADAPTERS.md, Lifecycle).
 			for (String name : getAdapterNamesInRegistrationOrder()) {
 				AAdapter adapter = adapters.get(name);
-				if (adapter != null) startAdapter(adapter);
+				if (adapter != null && !adapterFailures.containsKey(name)) startAdapter(adapter);
 			}
 			gridScheduler.start();
 			lifecycle = Lifecycle.STARTED;
@@ -1274,6 +1274,7 @@ public class Engine {
 		if (disabled || !offerConfiguration(adapter, cfg)) {
 			retractAdapter(name);
 			adapterFailures.remove(name);
+			unconfiguredAdapters.remove(name);
 			disabledAdapters.put(name, adapter);
 			if (previous != null) adapterRegistryVersion.incrementAndGet();
 			closeReplacedAdapter(previous);
@@ -1281,6 +1282,7 @@ public class Engine {
 			return;
 		}
 		activate(adapter, previous, true);
+		unconfiguredAdapters.remove(name);
 	}
 
 	public static final String ADAPTER_BEFORE_PREPARE = "Adapters are registered once the engine is prepared";
@@ -1532,15 +1534,62 @@ public class Engine {
 			return null;
 		} catch (RuntimeException | Error failure) {
 			RuntimeException reported = adapterFailed(STARTING_ADAPTER, adapter, failure);
-			try {
-				adapter.stop();
-			} catch (RuntimeException | Error stopFailure) {
-				reported.addSuppressed(stopFailure);
-			}
-			adapterFailures.put(name, reported);
+			failAdapter(adapter, reported);
 			return reported;
 		}
 	}
+
+	/**
+	 * Takes an enabled adapter out of service: stops whatever it runs, keeping
+	 * a failure to stop on the reason, and records the reason. Caller holds
+	 * the engine monitor.
+	 */
+	private void failAdapter(AAdapter adapter, RuntimeException reason) {
+		try {
+			adapter.stop();
+		} catch (RuntimeException | Error stopFailure) {
+			reason.addSuppressed(stopFailure);
+		}
+		adapterFailures.put(adapter.getName(), reason);
+	}
+
+	/**
+	 * Adapters, by name, whose settings may differ from their effective
+	 * configuration: they refused it, and could not take back the settings
+	 * they had. Enabling or restarting one offers it its effective
+	 * configuration first. Cleared when it accepts a configuration, or is
+	 * replaced or removed.
+	 */
+	private final java.util.Set<String> unconfiguredAdapters = ConcurrentHashMap.newKeySet();
+
+	/**
+	 * After an adapter refused a change by throwing, offers it the settings it
+	 * had, so it carries on as before. If it cannot take them back either, it
+	 * is unconfigured: an enabled adapter is taken out of service, failed with
+	 * that failure as its reason, and enabling or restarting it offers it its
+	 * effective configuration again. That failure is kept on the refusal.
+	 * Caller holds the engine monitor.
+	 */
+	private void restoreConfiguration(AAdapter adapter, AMap<AString, ACell> previous, RuntimeException refused) {
+		String name = adapter.getName();
+		RuntimeException unrestored;
+		try {
+			if (offerConfiguration(adapter, previous)) return;
+			unrestored = new ConfigurationException(ADAPTER_DECLINED_CONFIG.formatted(name));
+		} catch (RuntimeException failure) {
+			unrestored = failure;
+		}
+		refused.addSuppressed(unrestored);
+		unconfiguredAdapters.add(name);
+		log.warn(SETTINGS_NOT_RESTORED.formatted(name, unrestored.getMessage()));
+		if (adapters.get(name) != adapter) return;
+		// Workers run only on a started engine; launch does not start a failed adapter.
+		if (isStarted()) failAdapter(adapter, unrestored);
+		else adapterFailures.put(name, unrestored);
+	}
+
+	/** Logged when an adapter cannot take back its settings after refusing a change; its name and why follow. */
+	public static final String SETTINGS_NOT_RESTORED = "Adapter %s refused a change and could not take back its settings: %s";
 
 	/**
 	 * A failure in an adapter's own lifecycle step, as the venue reports it: a
@@ -1593,9 +1642,11 @@ public class Engine {
 			refused = failure;
 		}
 		if (refused != null) {
+			unconfiguredAdapters.add(name);
 			adapterFailures.put(name, refused);
 			throw refused;
 		}
+		unconfiguredAdapters.remove(name);
 		RuntimeException failed = startAdapter(adapter);
 		if (failed != null) throw failed;
 		log.info("Restarted adapter: {}", name);
@@ -1633,7 +1684,9 @@ public class Engine {
 	/**
 	 * Enable a disabled adapter: install it if it never was, overwrite its
 	 * catalog paths, publish {@code v/info/adapters/<name>}, resume dispatch
-	 * and, once the venue has started, start it. If its start fails, it stays
+	 * and, once the venue has started, start it. One that was never installed,
+	 * or could not take back its settings after refusing a change, is offered
+	 * its effective configuration first. If its start fails, it stays
 	 * enabled but failed (see {@link #adapterFailure}) and the failure is
 	 * thrown; {@link #restartAdapter} tries it again.
 	 *
@@ -1654,9 +1707,11 @@ public class Engine {
 			if (adapters.containsKey(name)) return false;
 			throw unknownAdapter(name);
 		}
-		if (adapter.engine == null && !offerConfiguration(adapter, adapterConfig(name))) {
+		boolean offer = adapter.engine == null || unconfiguredAdapters.contains(name);
+		if (offer && !offerConfiguration(adapter, adapterConfig(name))) {
 			throw new ConfigurationException(String.format(ADAPTER_DECLINED_CONFIG, name));
 		}
+		unconfiguredAdapters.remove(name);
 		activate(adapter, null, false);
 		if (isStarted()) {
 			RuntimeException failed = startAdapter(adapter);
@@ -1669,7 +1724,11 @@ public class Engine {
 	 * Apply a new effective configuration to a registered adapter (active or
 	 * disabled) and record it as the runtime override returned by
 	 * {@link #adapterConfig}. The adapter sees the change through
-	 * {@link AAdapter#configure}; if it declines, nothing changes.
+	 * {@link AAdapter#configure} and decides what it means for its work. If it
+	 * declines, nothing changes. If it throws, the change is refused and the
+	 * adapter is offered its previous configuration again; should it refuse
+	 * that too, it is stopped and left failed (see {@link #adapterFailure}),
+	 * and enabling or restarting it offers it its configuration again.
 	 *
 	 * @param name Adapter name
 	 * @param cfg The complete new effective configuration
@@ -1677,18 +1736,28 @@ public class Engine {
 	 * @throws ConfigurationException if the adapter refuses a setting in the
 	 *         configuration
 	 * @throws InvalidInputException if the adapter declines the configuration
-	 * @throws FaultException if the adapter fails unexpectedly while being
-	 *         configured
+	 * @throws covia.exception.CoviaException whatever else the adapter raised
+	 *         as it refused the change: a Covia exception with a reason as it
+	 *         is, such as an {@link UnavailableException} for work it could not
+	 *         restart, or a {@link FaultException} for anything unexpected
 	 */
 	public synchronized void configureAdapter(String name, AMap<AString, ACell> cfg) {
 		AAdapter adapter = adapters.get(name);
 		if (adapter == null) adapter = disabledAdapters.get(name);
 		if (adapter == null) throw unknownAdapter(name);
 		if (cfg == null) cfg = Maps.empty();
-		boolean accepted = offerConfiguration(adapter, cfg);
+		AMap<AString, ACell> previous = adapterConfig(name);
+		boolean accepted;
+		try {
+			accepted = offerConfiguration(adapter, cfg);
+		} catch (RuntimeException refused) {
+			restoreConfiguration(adapter, previous, refused);
+			throw refused;
+		}
 		if (!accepted) {
 			throw new InvalidInputException(String.format(ADAPTER_REJECTED_CONFIG, name));
 		}
+		unconfiguredAdapters.remove(name);
 		runtimeAdapterConfig.put(name, cfg);
 		// Authentication finishing under the previous configuration must retry.
 		adapterRegistryVersion.incrementAndGet();
@@ -1759,6 +1828,7 @@ public class Engine {
 		if (removed == null) return null;
 		runtimeAdapterConfig.remove(name);
 		adapterFailures.remove(name);
+		unconfiguredAdapters.remove(name);
 		if (removed instanceof AutoCloseable closeable) {
 			try {
 				closeable.close();

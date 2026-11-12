@@ -49,6 +49,8 @@ public class AdapterFailureTest {
 	private static final class FlakyAdapter extends AAdapter implements AutoCloseable {
 		volatile boolean failStart;
 		volatile boolean refuseConfig;
+		/** A colour it refuses while it accepts others. */
+		volatile String refuseColour;
 		volatile boolean closed;
 		volatile AMap<AString, ACell> configured;
 		final List<String> events = new CopyOnWriteArrayList<>();
@@ -64,7 +66,9 @@ public class AdapterFailureTest {
 		@Override public boolean supportsMultiTurn() { return true; }
 		@Override public boolean configure(AMap<AString, ACell> config, boolean strict) {
 			events.add("configure");
-			if (refuseConfig) throw new ConfigurationException(REFUSED);
+			boolean refused = refuseConfig
+				|| (refuseColour != null && Strings.create(refuseColour).equals(config.get(K_COLOUR)));
+			if (refused) throw new ConfigurationException(REFUSED);
 			configured = config;
 			return true;
 		}
@@ -167,6 +171,62 @@ public class AdapterFailureTest {
 			engine.removeAdapter(NAME);
 			assertNull(engine.adapterFailure(NAME), "removal forgets the failure");
 			assertTrue(flaky.closed);
+		} finally {
+			engine.close();
+		}
+	}
+
+	@Test
+	public void refusedChangeIsRevertedWithThePreviousSettings() {
+		Engine engine = boot();
+		try {
+			FlakyAdapter flaky = new FlakyAdapter();
+			engine.registerAdapter(flaky);
+			AMap<AString, ACell> blue = Maps.of(K_COLOUR, "blue");
+			engine.configureAdapter(NAME, blue);
+			flaky.refuseColour = "red";
+			flaky.events.clear();
+			assertEquals(REFUSED, assertThrows(ConfigurationException.class,
+				() -> engine.configureAdapter(NAME, Maps.of(K_COLOUR, "red"))).getMessage());
+			assertEquals(List.of("configure", "configure"), flaky.events, "offered the change, then its previous settings");
+			assertEquals(blue, flaky.configured);
+			assertEquals(blue, engine.adapterConfig(NAME));
+			assertNull(engine.adapterFailure(NAME), "it carries on running");
+
+			// Refusing its previous settings too takes it out of service.
+			flaky.refuseConfig = true;
+			flaky.events.clear();
+			assertEquals(REFUSED, assertThrows(ConfigurationException.class,
+				() -> engine.configureAdapter(NAME, Maps.of(K_COLOUR, "green"))).getMessage());
+			assertEquals(List.of("configure", "configure", "stop"), flaky.events);
+			assertEquals(REFUSED, engine.adapterFailure(NAME));
+			assertEquals(blue, engine.adapterConfig(NAME), "the refused change is not recorded");
+
+			// Disabled meanwhile, it is offered its settings again when enabled, and only then.
+			engine.disableAdapter(NAME);
+			flaky.refuseConfig = false;
+			flaky.configured = null;
+			flaky.events.clear();
+			engine.enableAdapter(NAME);
+			assertEquals(List.of("configure", "start"), flaky.events);
+			assertEquals(blue, flaky.configured);
+			assertNull(engine.adapterFailure(NAME));
+			engine.disableAdapter(NAME);
+			flaky.events.clear();
+			engine.enableAdapter(NAME);
+			assertEquals(List.of("start"), flaky.events);
+
+			// Unsettled while disabled: nothing is stopped, and enabling waits for settings it takes.
+			engine.disableAdapter(NAME);
+			flaky.refuseConfig = true;
+			flaky.events.clear();
+			assertThrows(ConfigurationException.class, () -> engine.configureAdapter(NAME, Maps.of(K_COLOUR, "green")));
+			assertEquals(List.of("configure", "configure"), flaky.events);
+			assertEquals(REFUSED, assertThrows(ConfigurationException.class, () -> engine.enableAdapter(NAME)).getMessage());
+			assertFalse(engine.hasAdapter(NAME), "it stays disabled");
+			flaky.refuseConfig = false;
+			assertTrue(engine.enableAdapter(NAME));
+			assertNull(engine.adapterFailure(NAME));
 		} finally {
 			engine.close();
 		}
