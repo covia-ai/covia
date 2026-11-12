@@ -275,7 +275,9 @@ should set at least:
 - `auth.public.enabled: false` unless anonymous read access is wanted, and
   `auth.maxTokenLifetime` to bound hand-minted bearers (*Bearer expiry*).
 - `users.autoCreate: false` unless any authenticated DID may register itself.
-- `strictConfig: true`, so a typo fails startup instead of being ignored.
+- `strictConfig: true`, so a typo fails startup, or in an adapter's block
+  leaves that adapter failed (*Runtime adapter lifecycle*), instead of being
+  ignored.
 - `Strict-Transport-Security` at the proxy — Caddy needs an explicit
   `header Strict-Transport-Security "max-age=31536000"` — the venue sends the
   other browser hardening headers itself (*Browser security headers*).
@@ -3352,7 +3354,8 @@ across restarts. Connection state is the venue's own and is never published:
 what a node shares is only its signed records. The adapter is network
 infrastructure; social follows belong to the social layer, not here. Both are venue-owned: they need `p2p/read` or `p2p/manage`
 on `<venue DID>/p2p`. An embedding host subscribes to peer changes with
-`engine.findAdapter(P2PAdapter.class).subscribe(listener)`. Disabling the
+`engine.findAdapter(P2PAdapter.class).subscribe(listener)`; `findAdapter`
+returns null while the adapter is disabled or failed. Disabling the
 adapter takes the node offline; reconfiguring it restarts the node. A node
 that cannot launch, such as on a port in use, leaves the adapter failed with
 the venue running; `venue:adapter/restart` launches it again. A runtime change

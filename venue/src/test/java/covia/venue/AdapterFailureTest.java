@@ -80,6 +80,10 @@ public class AdapterFailureTest {
 			if (failStart) throw new UnavailableException(START_FAILURE);
 		}
 		@Override public void stop() { events.add("stop"); }
+		@Override public void recoverJob(Job job) {
+			events.add("recover");
+			super.recoverJob(job);
+		}
 		@Override public void onUserDeleted(AString did, AMap<AString, ACell> previousUser) {
 			if (failDeletion) throw new UnavailableException(DELETION_FAILURE);
 		}
@@ -105,7 +109,7 @@ public class AdapterFailureTest {
 			});
 			assertTrue(engine.isStarted(), "the venue runs without the adapter");
 			assertEquals(START_FAILURE, engine.adapterFailure(NAME));
-			assertEquals(List.of("configure", "start", "stop"), flaky.events, "what a failed start began is stopped");
+			assertEquals(List.of("configure", "recover", "start", "stop"), flaky.events, "what a failed start began is stopped");
 			// Treated as a stopped adapter: nothing in the venue reaches it, and its live record is withdrawn.
 			assertNull(engine.getAdapter(NAME));
 			assertFalse(engine.getAdapterNames().contains(NAME));
@@ -186,6 +190,31 @@ public class AdapterFailureTest {
 		}
 	}
 
+	/**
+	 * Refused at launch, the adapter is parked before recovery, so its
+	 * unfinished jobs are recovered as a missing adapter's are: its own
+	 * {@code recoverJob} is not called.
+	 */
+	@Test
+	public void settingRefusedAtLaunchRecoversItsJobsAsForAMissingAdapter() throws Exception {
+		Engine engine = TestEngine.application().mount(AKeyPair.generate(), Maps.empty());
+		FlakyAdapter flaky = new FlakyAdapter();
+		flaky.refuseConfig = true;
+		try {
+			engine.launch(prepared -> {
+				prepared.registerAdapter(flaky);
+				leaveStarted(prepared);
+				return CompletableFuture.completedFuture(null);
+			});
+			assertEquals(REFUSED, engine.adapterFailure(NAME));
+			assertEquals(List.of("configure"), flaky.events, "never installed, recovered or started");
+			assertEquals(Status.FAILED, engine.getVenueState().users().user(engine.getDIDString())
+				.jobs().getRecord(RECOVERED_JOB).get(Fields.STATUS));
+		} finally {
+			engine.close();
+		}
+	}
+
 	@Test
 	public void enableWhoseStartFailsKeepsTheAdapterEnabledButFailed() throws Exception {
 		Engine engine = boot();
@@ -207,8 +236,10 @@ public class AdapterFailureTest {
 			assertFalse(flaky.closed, "and keeps its instance");
 			assertEquals(List.of("start", "stop"), flaky.events);
 
+			flaky.events.clear();
 			assertTrue(engine.disableAdapter(NAME));
 			assertNull(engine.adapterFailure(NAME), "disabling forgets the failure");
+			assertEquals(List.of("stop"), flaky.events, "and stops it again");
 			AMap<AString, ACell> disabled = listed(engine, NAME);
 			assertEquals(VenueAdapter.ADAPTER_DISABLED, disabled.get(Fields.STATUS));
 			assertNull(disabled.get(Fields.REASON));

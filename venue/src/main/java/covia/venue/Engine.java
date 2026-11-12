@@ -1709,7 +1709,8 @@ public class Engine {
 	 * re-resolves the adapter by name (multi-turn messages, recovery) fails at
 	 * that point of use.
 	 *
-	 * A failed adapter, already stopped, is disabled by forgetting its failure.
+	 * A failed adapter is disabled by forgetting its failure and stopping it
+	 * again, which tries again a stop that failed.
 	 *
 	 * @param name Adapter name
 	 * @return true if the adapter was enabled, running or failed, and is now
@@ -1719,9 +1720,12 @@ public class Engine {
 	public synchronized boolean disableAdapter(String name) {
 		AAdapter adapter = adapters.get(name);
 		if (adapter == null) {
-			if (!disabledAdapters.containsKey(name)) throw unknownAdapter(name);
+			AAdapter parked = disabledAdapters.get(name);
+			if (parked == null) throw unknownAdapter(name);
 			if (adapterFailures.remove(name) == null) return false;
 			log.info("Disabled adapter: {}", name);
+			// Stopping is idempotent: a stop that failed before is tried again.
+			if (isStarted() && parked.engine != null) parked.stop();
 			return true;
 		}
 		retractAdapter(name);

@@ -268,11 +268,12 @@ a reason as it is, logged at WARN, anything else as the adapter's fault.
 A failed adapter is treated as a stopped one, as if disabled, except that it
 stays enabled. Its `v/info/adapters/<name>` record is withdrawn (the catalog
 metadata remains), and `Engine.getAdapter`, `getAdapterNames` and
-`hasAdapter` leave it out, so every part of the venue that uses adapters
-directly sees it as absent and refuses as it does for a disabled one: the
-outbound guard refuses rather than check without the `http` adapter's
-settings, a login method it provides is unavailable, recovery ends its jobs as
-for a missing adapter. An adapter that `auth.methods` or `auth.venueProof`
+`hasAdapter` (and so `findAdapter`) leave it out. Every part of the venue
+that uses adapters directly therefore sees it as absent and treats it as it
+treats a disabled one: the outbound guard refuses rather than check without
+the `http` adapter's settings, a login method it provides is unavailable, and
+an adapter refused at launch is parked before recovery, so its unfinished
+jobs are recovered as a missing adapter's are, not by its own `recoverJob`. An adapter that `auth.methods` or `auth.venueProof`
 names therefore still stops the launch if it fails, as a disabled one does. Its operations, internal
 calls to them and messages to their live jobs are refused with
 `UnavailableException` (`Engine.ADAPTER_NOT_RUNNING`). The venue runs without
