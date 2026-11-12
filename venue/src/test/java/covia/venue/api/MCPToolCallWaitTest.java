@@ -133,7 +133,12 @@ public class MCPToolCallWaitTest {
 		assertEquals(CVMBool.TRUE, RT.getIn(result, "isError"), r.body());
 		assertEquals("running", RT.getIn(result, "structuredContent", "status").toString());
 		assertNotNull(RT.getIn(result, "structuredContent", "id"), "the job to collect: " + r.body());
-		assertTrue(RT.getIn(result, "structuredContent", "message").toString().contains("grid_job_result"), r.body());
+		String id = RT.getIn(result, "structuredContent", "id").toString();
+		assertTrue(RT.getIn(result, "structuredContent", "message").toString()
+			.contains(MCP.COLLECT_RUNNING_JOB.formatted(id)), r.body());
+		ACell record = callTool(101, "job_status", "{\"id\":\"" + id + "\"}");
+		assertEquals(Job.parseID(Strings.create(id)), Job.parseID(RT.getIn(record, Fields.ID)));
+		assertEquals(covia.grid.Status.STARTED, RT.getIn(record, Fields.STATUS));
 	}
 
 	/** A tools/call request's structured result. */

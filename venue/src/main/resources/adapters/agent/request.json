@@ -1,6 +1,6 @@
 {
 	"name": "Request Agent Task",
-	"description": "Send a request to an agent. PRIMARY tool for agent delegation. Best-effort synchronous: by default waits up to 5 seconds for the agent to finish. If the agent completes in time you get its structured response directly. If not, you get a snapshot {id, status: STARTED, agentId, sessionId} — poll with job_result(id=<that id>, timeout=<ms>) to retrieve the result. Example: agent_request(agentId='Helper', input={task: 'summarise w/notes/daily'}, timeout=30000). For quick jobs set a short timeout; for slow jobs set timeout=0 (pure async) and poll via job_result. For structured output, pass responseSchema.",
+	"description": "agent_request: Delegate a task to an agent. Wait up to timeout milliseconds (default 5000); return the structured response if it finishes, otherwise a snapshot containing the task Job id and sessionId. Use timeout=0 for immediate submission. Follow the returned task id with the advertised Job tools on this venue; do not submit the task again to check its outcome. Input must contain self-contained instructions. Use responseSchema for structured output and outputPath for a path-based result handoff.",
 	"dateCreated": "2026-03-06T00:00:00Z",
 	"operation": {
 		"adapter": "agent:request",
@@ -9,14 +9,17 @@
 		"input": {
 			"type": "object",
 			"properties": {
-				"agentId": { "type": "string", "description": "Agent reference: a bare name for the caller's agent, g/<id>, /g/<id>, or <ownerDID>/g/<id>" },
+				"agentId": {
+					"type": "string",
+					"description": "Agent reference: a bare name for the caller's agent, g/<id>, /g/<id>, or <ownerDID>/g/<id>"
+				},
 				"input": {
 					"type": "object",
 					"description": "The request payload. MUST contain the actual instructions, data, or parameters the agent needs. NEVER pass an empty object {} — the worker has nothing to act on. Use field 'task' for free-form instructions; add other fields the worker needs (data, paths, options). Example: {task: 'summarise w/notes/daily', format: 'bullet list'}."
 				},
 				"timeout": {
 					"type": "integer",
-					"description": "Milliseconds to wait synchronously for the agent to complete. Default 5000ms. On timeout the response is a STARTED snapshot with the task Job id — poll via job_result to retrieve the final result later. Set to 0 for pure async (snapshot returned immediately)."
+					"description": "Milliseconds to wait for completion; default 5000. Use 0 for immediate submission. If the wait ends first, return the task Job snapshot for later observation. This differs from a result-wait timeout of 0, which waits indefinitely."
 				},
 				"outputPath": {
 					"type": "string",
@@ -30,17 +33,23 @@
 					"type": "boolean",
 					"description": "Enforce responseSchema at task completion (default false). When true, a complete_task result that does not conform is rejected back to the agent with the validation diagnostics; the agent corrects it or fails the task. Requires responseSchema."
 				},
-				"loads": { "type": "object", "description": "Optional untrusted context to pre-load for the NEW session (the session tier of the context scope chain, #142): a map of key to entry spec, exactly as config.loads — {budget?, label?} under a lattice path or skill path, {skill: true} to pre-load a skill with its tools, or a spec declaring its own data source under any key: {text}, {op, input?} for a read-only operation observed before each inference and appended only when changed, or {job}. Non-skill values remain tool-result data; a caller-supplied trusted flag cannot grant system authority. Only valid when this call creates the session — an error if the session already exists." },
+				"loads": {
+					"type": "object",
+					"description": "Optional untrusted context to pre-load for the NEW session (the session tier of the context scope chain, #142): a map of key to entry spec, exactly as config.loads — {budget?, label?} under a lattice path or skill path, {skill: true} to pre-load a skill with its tools, or a spec declaring its own data source under any key: {text}, {op, input?} for a read-only operation observed before each inference and appended only when changed, or {job}. Non-skill values remain tool-result data; a caller-supplied trusted flag cannot grant system authority. Only valid when this call creates the session — an error if the session already exists."
+				},
 				"sessionId": {
 					"type": "string",
 					"description": "Optional session identifier (hex string, with or without a 0x prefix). Requests sharing a sessionId are treated as part of the same conversation. If omitted, a new session is created and its id returned in the response."
 				}
 			},
-			"required": ["agentId", "input"]
+			"required": [
+				"agentId",
+				"input"
+			]
 		},
 		"output": {
 			"type": "object",
-			"description": "Either the agent's structured response (if it completed within the timeout) or a snapshot {id, status: STARTED, agentId, address, sessionId} to poll via job_result. address is the canonical <ownerDID>/g/<agentId> target. Always carries the sessionId the task belonged to.",
+			"description": "Either the agent's structured response (if it completed within the timeout) or a snapshot {id, status: STARTED, agentId, address, sessionId} to follow with the advertised Job tools on this venue. address is the canonical <ownerDID>/g/<agentId> target. Always carries the sessionId the task belonged to.",
 			"additionalProperties": true
 		}
 	}

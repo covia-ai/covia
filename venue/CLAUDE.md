@@ -75,7 +75,7 @@ AUTH_REQUIRED).
 
 | Adapter | Purpose | Operations |
 |---------|---------|------------|
-| `grid` | Federated grid operations | `run`, `invoke`, `jobStatus`, `jobResult` |
+| `grid` | Invoke operations locally or across venues | `run`, `invoke`; compatibility queries `jobStatus`, `jobResult` (prefer `job`) |
 | `job` | Universal Job inspection and control, local or remote; Grid Job reads remain compatibility entry points | `status`, `result`, `cancel`, `pause`, `resume`, `message` |
 | `remoteagent` | Covia agent proxy on a local or remote venue; selected by `g/<id>/agent.adapter`, used through `agent:chat` / `agent:request` | internal transport |
 | `p2p` | The venue's Convex P2P node (`convex-p2p`), off unless `adapters.p2p.join`; peer list plus in-process change events, venue-owned (`docs/CONFIG.md#p2p-network-adaptersp2p`) | `peers`, `connect` |

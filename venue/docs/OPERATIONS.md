@@ -525,8 +525,8 @@ reference lookup, not whether execution creates a Job.
 |----|------|---------|---------|
 | `grid:run` | `operation`, `input`, `venue?`, `authenticateAs?` | Job result | Run an operation; wait for completion |
 | `grid:invoke` | `operation`, `input`, `venue?`, `authenticateAs?` | Job status | Submit and return immediately |
-| `grid:jobStatus` | `id`, `venue?`, `authenticateAs?` | Status | Poll a job by ID |
-| `grid:jobResult` | `id`, `venue?`, `timeout?`, `authenticateAs?` | Output | Wait for a job by ID and return its output |
+| `grid:jobStatus` | `id`, `venue?`, `authenticateAs?` | Job record | Compatibility entry point; prefer `job:status` |
+| `grid:jobResult` | `id`, `venue?`, `timeout?`, `authenticateAs?` | Output | Compatibility entry point; prefer `job:result` |
 
 All four operations select the execution or observation venue in the same way:
 an input `venue` overrides `operation.venue` in the operation definition; when
@@ -536,13 +536,19 @@ instead of falling back to another target. Remote strings name an absolute
 HTTP(S) URL or a routable DID. Remote authentication is explicit, as described
 in [UCAN.md](UCAN.md#43-presentation).
 
-Remote `grid:invoke` returns the accepted Job snapshot without starting
-background observation. Call `grid:jobStatus` to poll or `grid:jobResult` to
-wait. A positive `jobResult.timeout` is the caller's wait budget in milliseconds,
-including when it exceeds the client's default polling timeout. Expiry fails
-only this wait, leaving the remote Job running. Omitted or non-positive timeouts
-wait without a deadline; remote unbounded waits use the durable observation
-described in [JOBS.md](JOBS.md).
+`grid:invoke` returns the invoked Job's snapshot on the execution venue,
+possibly already terminal. Its `id` is the destination Job's ID, not the ID of
+a grid wrapper on the submitting venue. Retain that ID, execution venue and
+authentication mode for subsequent Job operations. Remote submission starts no
+background observation. Submission success does not imply execution success;
+inspect the returned status. A Job's output can itself be another handle if
+that is what the invoked operation returns.
+
+Use `job:status` to inspect existing work and `job:result` to await its output;
+the complete surface, including controls and compatibility differences, is in
+[JOBS.md](JOBS.md#canonical-operation-and-tool-surface). Repeating either grid
+submission operation starts new work. A timeout waiting for an existing Job
+does not justify resubmitting it.
 
 Each op has a single purpose. None has a mode flag. Two-path operations (`covia:copy`) use `from` and `to` to make direction explicit; single-path operations use `path`. Every read-side argument accepts the universal resolution chain from §4.
 

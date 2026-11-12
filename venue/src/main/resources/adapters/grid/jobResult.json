@@ -1,6 +1,6 @@
 {
 	"name": "Grid Job Result",
-	"description": "Wait for an EXISTING Covia Job to finish and return its output. Call this operation directly with the exact id returned by a delegated request or asynchronous invocation; do not wrap it in the generic operation runner. With no timeout, blocks until the Job completes. With timeout, errors if it has not completed in time—callers wanting a result treat missing-result as failure. Retry with a longer timeout or fall back to alternative work if a timeout occurs.",
+	"description": "grid_job_result: Compatibility entry point for waiting for an existing Job's output. Prefer job_result when available. A failed, rejected or cancelled target fails the wait. Legacy behavior: omitted or non-positive timeout waits indefinitely; an unbounded remote waiter mirrors the target's input/auth-required state. Send input to the target, not this waiter. A timeout does not cancel remote work; do not resubmit it.",
 	"operation": {
 		"adapter": "grid:jobResult",
 		"readOnly": true,
@@ -10,28 +10,33 @@
 			"properties": {
 				"id": {
 					"type": "string",
-					"description": "Job identifier returned from a previous grid invocation"
+					"description": "Exact Job ID on the selected hosting venue. A local wrapper and its destination are separate Jobs: use the ID of the one you intend to inspect or control. Agent, session and tool-call IDs are not Job IDs."
 				},
 				"timeout": {
 					"type": "integer",
-					"description": "Optional max milliseconds to wait. Omitted or <=0 means no timeout (block until done). On timeout the operation ERRORS — a missing result is a failure."
+					"description": "Maximum milliseconds to wait. Legacy behavior: omitted or <=0 means no deadline. Expiry fails this wait, not the target execution."
 				},
 				"venue": {
 					"type": "string",
-					"description": "Optional remote venue URL or DID to query"
+					"description": "Hosting venue HTTP(S) URL or routable DID. Omit for a local Job, including a local proxy. For a destination Job use its own ID and hosting venue. A definition may set a default venue; this input overrides it. Null is invalid."
 				},
 				"authenticateAs": {
 					"type": "string",
-					"enum": ["anonymous", "caller", "venue"],
+					"enum": [
+						"anonymous",
+						"caller",
+						"venue"
+					],
 					"default": "anonymous",
-					"description": "Explicit remote authentication mode; use the same mode and credentials as the invocation that created the job"
+					"description": "Remote identity: anonymous (default) sends no identity or grants; caller requires your identity credential addressed to the target venue, with no capabilities, plus any separate grants; venue is only for the venue itself. Use the same mode and credentials when following the Job. Local calls retain your caller context."
 				}
 			},
-			"required": ["id"]
+			"required": [
+				"id"
+			]
 		},
 		"output": {
 			"description": "Output value of the referenced job"
 		}
 	}
 }
-

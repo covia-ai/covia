@@ -1,6 +1,6 @@
 {
 	"name": "Grid Invoke",
-	"description": "Submit an operation by reference on this venue, or on the explicit venue target, and return its Job snapshot without waiting for completion. Use grid_run to wait for the result. Discover operation references through the catalog; they may be venue paths, user pins, asset hashes, or DID URLs. A DID URL identifies where to fetch the definition, not where to execute it. Pass venue explicitly for remote execution. Poll with grid_job_status or wait with grid_job_result.\n\nRequires invoke on the requested operation reference or a containing operation tree. This is permission to look up and start that operation, not permission to access its underlying resources. The operation enforces those permissions under the caller authority at the execution venue. A direct tool binding to an operation does not itself require invoke; this tool does because it accepts an arbitrary operation reference.",
+	"description": "grid_invoke: Start a new operation on this venue or the selected execution venue and return its Job snapshot without waiting for completion. The returned id belongs to that execution venue, not to a local wrapper. Retain the id, execution venue and authentication mode for the advertised Job tools. A successful submission does not imply successful execution: inspect status. Calling again starts new work. Requires invoke permission on the operation reference and the operation's own resource permissions.",
 	"operation": {
 		"adapter": "grid:invoke",
 		"readOnly": false,
@@ -9,55 +9,126 @@
 			"properties": {
 				"operation": {
 					"type": "string",
-					"description": "Operation definition reference: v/ops/<group>/<op>, o/<pin>, a/<hash>, or a DID URL. A remote definition is fetched and executed locally unless venue explicitly selects another execution venue."
+					"description": "Exact operation reference from catalog metadata, configuration or the task: v/ops/<group>/<op>, o/<pin>, a/<hash>, a hex asset hash, or a DID URL. Resolve it on the execution venue. A DID URL selects where to fetch a definition, not where to execute it. Never derive a catalog path from a tool name."
 				},
 				"input": {
-					"description": "Arguments matching the operation's input schema (any JSON value — object, array, string, number, boolean, or null). Read the schema first via covia_read v/ops/<group>/<op>."
+					"description": "Arguments matching the target operation's input schema; any JSON value. Inspect unfamiliar operations' metadata before invoking them. Passed unchanged, including strings that look like JSON."
 				},
 				"venue": {
 					"type": "string",
-					"description": "Optional remote venue URL or DID — for one-off federation without changing the operation reference."
+					"description": "Execution venue HTTP(S) URL or routable DID. Omit to use this operation's default venue, normally the current venue. This input overrides any definition-level venue. Null is invalid. Retain the selected venue when following the returned Job."
 				},
 				"authenticateAs": {
 					"type": "string",
-					"enum": ["anonymous", "caller", "venue"],
+					"enum": [
+						"anonymous",
+						"caller",
+						"venue"
+					],
 					"default": "anonymous",
-					"description": "Explicit remote authentication mode. caller requires a target-audienced empty-att identity credential; venue is only for the venue itself. UCAN grant presence never selects a mode."
+					"description": "Remote identity: anonymous (default) sends no identity or grants; caller requires your identity credential addressed to the target venue, with no capabilities, plus any separate grants; venue is only for the venue itself. Use the same mode and credentials when following the Job. Local calls retain your caller context."
 				}
 			},
-			"required": ["operation"]
+			"required": [
+				"operation"
+			]
 		},
 		"output": {
 			"type": "object",
-			"description": "Job status information returned by the venue",
+			"description": "Snapshot of the invoked Job on the execution venue, possibly already terminal. Follow its id on that same venue using the same authentication mode. This is not the record of a local grid wrapper.",
 			"properties": {
 				"id": {
 					"type": "string",
-					"description": "Remote job identifier"
+					"description": "Job ID on this record's hosting venue."
 				},
 				"status": {
 					"type": "string",
-					"description": "Current job status (e.g. PENDING, STARTED, COMPLETE, FAILED, CANCELLED)"
+					"enum": [
+						"PENDING",
+						"STARTED",
+						"PAUSED",
+						"INPUT_REQUIRED",
+						"AUTH_REQUIRED",
+						"COMPLETE",
+						"FAILED",
+						"CANCELLED",
+						"REJECTED"
+					],
+					"description": "PENDING is queued; STARTED is running. PAUSED may be resumed. INPUT_REQUIRED or AUTH_REQUIRED needs the requested input or credentials sent to this Job. COMPLETE has output; FAILED, CANCELLED and REJECTED are terminal. Inspect error and errorCode when present; do not automatically resubmit."
+				},
+				"output": {
+					"description": "The operation's output when COMPLETE; any JSON value, including null. The output can itself be a handle returned by that operation."
+				},
+				"error": {
+					"description": "Reported reason for failure, rejection or cancellation: a string when available, otherwise absent or null."
+				},
+				"errorCode": {
+					"description": "Optional operation-defined error code, a string or null; status alone does not identify the cause."
 				},
 				"created": {
 					"type": "integer",
-					"description": "Timestamp when the job was created (milliseconds since epoch)",
-					"format": "int64"
+					"description": "Creation time in milliseconds since the Unix epoch."
 				},
 				"updated": {
 					"type": "integer",
-					"description": "Timestamp when the job status was last updated (milliseconds since epoch)",
-					"format": "int64"
+					"description": "Last record update in milliseconds since the Unix epoch."
 				},
-				"output": {
-					"description": "Operation output, when available"
+				"progress": {
+					"description": "Latest progress, usually {message, data?}; may also be a string or operation-specific detail. Progress is not the final output."
 				},
-				"error": {
-					"type": "string",
-					"description": "Error message if the job failed"
+				"delegation": {
+					"type": "object",
+					"description": "Observations of remote work, when this Job delegates or waits on another Job.",
+					"properties": {
+						"remoteId": {
+							"type": "string",
+							"description": "Destination Job ID, not a local Job ID. Use only with its known hosting venue."
+						},
+						"remoteStatus": {
+							"type": "string",
+							"description": "Last observed destination state; may differ from this Job's status."
+						},
+						"notFollowed": {
+							"type": "string",
+							"description": "Why observation stopped and what the caller can do. Does not establish failure of the destination work."
+						}
+					}
+				},
+				"cancellation": {
+					"type": "object",
+					"description": "Evidence from an attempted backend cancellation; may arrive after local cancellation. Missing evidence does not prove remote work stopped.",
+					"properties": {
+						"remoteId": {
+							"type": "string"
+						},
+						"outcome": {
+							"type": "string",
+							"enum": [
+								"requested",
+								"acknowledged",
+								"finished",
+								"rejected",
+								"unknown"
+							],
+							"description": "requested: sent, no confirmation; acknowledged: peer reported cancellation; finished: peer reported another terminal outcome; rejected: peer refused; unknown: no conclusive answer. None undoes prior side effects."
+						},
+						"remoteStatus": {
+							"type": "string"
+						},
+						"httpStatus": {
+							"type": "integer"
+						},
+						"errorCode": {
+							"description": "Protocol error code, when supplied."
+						}
+					}
 				}
-			}
-		}
+			},
+			"required": [
+				"id",
+				"status"
+			]
+		},
+		"toolName": "grid_invoke"
 	}
 }
-

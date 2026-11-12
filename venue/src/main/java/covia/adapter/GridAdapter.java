@@ -53,9 +53,8 @@ public class GridAdapter extends AAdapter {
 	
 	@Override
 	public String getDescription() {
-		return "Enables distributed processing and resource sharing across the Covia network via grid operations. " +
-		   "Provides access to remote venues, distributed job execution, and collaborative computing capabilities. " +
-		   "Perfect for scaling computational tasks, leveraging distributed resources, and building resilient, distributed AI applications.";
+		return "Invoke operations by reference locally or on another venue. " +
+			"Use the job adapter to inspect, await and control existing work; legacy grid job queries remain available for compatibility.";
 	}
 
     @Override

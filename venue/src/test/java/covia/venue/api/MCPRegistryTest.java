@@ -22,7 +22,10 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
+import convex.core.json.schema.JsonSchema;
 import covia.api.Fields;
+import covia.grid.Status;
+import covia.venue.RemoteJobs;
 import covia.venue.Engine;
 import covia.venue.LocalVenue;
 import covia.venue.TestEngine;
@@ -98,6 +101,30 @@ public class MCPRegistryTest {
 	}
 
 	// ==================== Default include set ====================
+
+	@Test public void jobRecordSchemasAdmitLifecycleAndObservationEvidence() {
+		Set<String> recordTools = Set.of("grid_invoke", "grid_job_status", "job_status", "job_cancel", "job_pause", "job_resume");
+		AVector<ACell> tools = RT.getIn(mcp(freshEngine(), Maps.empty()).listTools(), "tools");
+		for (ACell tool : tools) {
+			String name = RT.getIn(tool, Fields.NAME).toString();
+			if (!recordTools.contains(name)) continue;
+			AMap<AString, ACell> schema = RT.ensureMap(RT.getIn(tool, Fields.OUTPUT_SCHEMA));
+			assertNotNull(schema, name);
+			for (AString status : new AString[]{Status.PENDING, Status.STARTED, Status.PAUSED,
+				Status.INPUT_REQUIRED, Status.AUTH_REQUIRED, Status.COMPLETE, Status.FAILED, Status.CANCELLED, Status.REJECTED}) {
+				AMap<AString, ACell> record = Maps.of(Fields.ID, "00112233445566778899aabbccddeeff", Fields.STATUS, status,
+					Fields.OUTPUT, null, Fields.ERROR, null, Fields.ERROR_CODE, null, Fields.PROGRESS, "waiting for input",
+					RemoteJobs.DELEGATION, Maps.of(RemoteJobs.REMOTE_ID, "ffeeddccbbaa99887766554433221100",
+						RemoteJobs.REMOTE_STATUS, Status.INPUT_REQUIRED));
+				assertNull(JsonSchema.validate(schema, record), name + ": " + status);
+				// Progress also accepts structured detail, and cancellation evidence
+				// may arrive after the local Job reached a terminal state.
+				record = record.assoc(Fields.PROGRESS, Maps.of(Fields.MESSAGE, "working", Fields.DATA, Maps.of("step", 2)))
+					.assoc(Fields.CANCELLATION, RemoteJobs.cancellationResult(Status.CANCELLED));
+				assertNull(JsonSchema.validate(schema, record), name + ": " + status);
+			}
+		}
+	}
 
 	@Test public void testDefaultExposesOnlyAllowlistedGroups() {
 		MCP mcp = mcp(freshEngine(), Maps.empty());

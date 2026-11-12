@@ -1,6 +1,6 @@
 {
 	"name": "Job Status",
-	"description": "Read the current record of an existing Job, including status, progress, output/error and any remote-delegation observations. Works for Jobs produced by any adapter. Does not start or retry work.",
+	"description": "job_status: Read an existing Job's current record without waiting or starting work. PENDING is queued and STARTED is running; COMPLETE has output; FAILED, REJECTED and CANCELLED are terminal. PAUSED may be resumed; INPUT_REQUIRED or AUTH_REQUIRED needs the requested input. Inspect progress, output/error, and any delegation or cancellation evidence. For a result waiter, delegation.remoteStatus describes the target; send requested input to that target, not to the waiter.",
 	"operation": {
 		"adapter": "job:status",
 		"toolName": "job_status",
@@ -10,11 +10,11 @@
 			"properties": {
 				"id": {
 					"type": "string",
-					"description": "Exact Job ID returned by an invocation, agent request or Job listing. IDs are scoped to their hosting venue."
+					"description": "Exact Job ID on the selected hosting venue. A local wrapper and its destination are separate Jobs: use the ID of the one you intend to inspect or control. Agent, session and tool-call IDs are not Job IDs."
 				},
 				"venue": {
 					"type": "string",
-					"description": "Optional hosting venue HTTP(S) URL or routable DID. Omit for this venue. For a local proxy Job use its local ID and omit venue; for the destination Job use its ID and hosting venue."
+					"description": "Hosting venue HTTP(S) URL or routable DID. Omit for a local Job, including a local proxy. For a destination Job use its own ID and hosting venue. A definition may set a default venue; this input overrides it. Null is invalid."
 				},
 				"authenticateAs": {
 					"type": "string",
@@ -24,7 +24,7 @@
 						"venue"
 					],
 					"default": "anonymous",
-					"description": "Explicit remote authentication, using the same identity and grants as the target Job. caller requires a target-audienced identity credential. venue is available only to the venue itself. Omitted venue preserves the full local caller context."
+					"description": "Remote identity: anonymous (default) sends no identity or grants; caller requires your identity credential addressed to the target venue, with no capabilities, plus any separate grants; venue is only for the venue itself. Use the same mode and credentials when following the Job. Local calls retain your caller context."
 				}
 			},
 			"required": [
@@ -33,23 +33,93 @@
 		},
 		"output": {
 			"type": "object",
-			"description": "Current Job record. Optional fields retain their ordinary Job meanings, including progress, errorCode and delegation.",
+			"description": "Current Job record on the selected hosting venue. Optional fields are present only when reported; absence of remote evidence does not prove completion or cancellation.",
 			"properties": {
 				"id": {
-					"type": "string"
+					"type": "string",
+					"description": "Job ID on this record's hosting venue."
 				},
 				"status": {
-					"type": "string"
+					"type": "string",
+					"enum": [
+						"PENDING",
+						"STARTED",
+						"PAUSED",
+						"INPUT_REQUIRED",
+						"AUTH_REQUIRED",
+						"COMPLETE",
+						"FAILED",
+						"CANCELLED",
+						"REJECTED"
+					],
+					"description": "PENDING is queued; STARTED is running. PAUSED may be resumed. INPUT_REQUIRED or AUTH_REQUIRED needs the requested input or credentials sent to this Job. COMPLETE has output; FAILED, CANCELLED and REJECTED are terminal. Inspect error and errorCode when present; do not automatically resubmit."
 				},
-				"output": {},
+				"output": {
+					"description": "The operation's output when COMPLETE; any JSON value, including null. The output can itself be a handle returned by that operation."
+				},
 				"error": {
-					"type": "string"
+					"description": "Reported reason for failure, rejection or cancellation: a string when available, otherwise absent or null."
+				},
+				"errorCode": {
+					"description": "Optional operation-defined error code, a string or null; status alone does not identify the cause."
+				},
+				"created": {
+					"type": "integer",
+					"description": "Creation time in milliseconds since the Unix epoch."
+				},
+				"updated": {
+					"type": "integer",
+					"description": "Last record update in milliseconds since the Unix epoch."
 				},
 				"progress": {
-					"type": "object"
+					"description": "Latest progress, usually {message, data?}; may also be a string or operation-specific detail. Progress is not the final output."
 				},
 				"delegation": {
-					"type": "object"
+					"type": "object",
+					"description": "Observations of remote work, when this Job delegates or waits on another Job.",
+					"properties": {
+						"remoteId": {
+							"type": "string",
+							"description": "Destination Job ID, not a local Job ID. Use only with its known hosting venue."
+						},
+						"remoteStatus": {
+							"type": "string",
+							"description": "Last observed destination state; may differ from this Job's status."
+						},
+						"notFollowed": {
+							"type": "string",
+							"description": "Why observation stopped and what the caller can do. Does not establish failure of the destination work."
+						}
+					}
+				},
+				"cancellation": {
+					"type": "object",
+					"description": "Evidence from an attempted backend cancellation; may arrive after local cancellation. Missing evidence does not prove remote work stopped.",
+					"properties": {
+						"remoteId": {
+							"type": "string"
+						},
+						"outcome": {
+							"type": "string",
+							"enum": [
+								"requested",
+								"acknowledged",
+								"finished",
+								"rejected",
+								"unknown"
+							],
+							"description": "requested: sent, no confirmation; acknowledged: peer reported cancellation; finished: peer reported another terminal outcome; rejected: peer refused; unknown: no conclusive answer. None undoes prior side effects."
+						},
+						"remoteStatus": {
+							"type": "string"
+						},
+						"httpStatus": {
+							"type": "integer"
+						},
+						"errorCode": {
+							"description": "Protocol error code, when supplied."
+						}
+					}
 				}
 			},
 			"required": [

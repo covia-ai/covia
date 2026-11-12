@@ -681,7 +681,8 @@ instead (§6.1), so it is delivered exactly once. If the session has gone by
 then, the entry goes with nothing delivered, and a task left parked on it
 with nothing else to wait on fails (`AgentAdapter.TASK_OUTCOME_UNDELIVERED`).
 A call with no session is told only its job (`TOOL_STILL_RUNNING_UNTRACKED`);
-nothing follows, and `job_status` gives the outcome.
+nothing follows, and the advertised Job tools collect the outcome using that
+local ID with no `venue` argument.
 
 Delivery follows the job's own status, not its result future, which a waiter
 can cancel before the job has finished. The job ends in one commit and the

@@ -1,6 +1,6 @@
 {
 	"name": "Job Message",
-	"description": "Deliver a structured message to an existing active Job that accepts messages, for example to answer INPUT_REQUIRED or AUTH_REQUIRED. Unsupported delivery and terminal Jobs fail explicitly. Acknowledgement means the receiving adapter accepted the message, not that the Job completed. Use job_status or job_result to observe the outcome.",
+	"description": "job_message: Deliver a structured message to an existing active Job that accepts messages, for example to answer INPUT_REQUIRED or AUTH_REQUIRED. Unsupported delivery and terminal Jobs fail explicitly. Acknowledgement means accepted delivery, not completion. Address the Job needing input, not a separate Job waiting for its result.",
 	"operation": {
 		"adapter": "job:message",
 		"toolName": "job_message",
@@ -10,11 +10,11 @@
 			"properties": {
 				"id": {
 					"type": "string",
-					"description": "Exact Job ID returned by an invocation, agent request or Job listing. IDs are scoped to their hosting venue."
+					"description": "Exact Job ID on the selected hosting venue. A local wrapper and its destination are separate Jobs: use the ID of the one you intend to inspect or control. Agent, session and tool-call IDs are not Job IDs."
 				},
 				"venue": {
 					"type": "string",
-					"description": "Optional hosting venue HTTP(S) URL or routable DID. Omit for this venue. For a local proxy Job use its local ID and omit venue; for the destination Job use its ID and hosting venue."
+					"description": "Hosting venue HTTP(S) URL or routable DID. Omit for a local Job, including a local proxy. For a destination Job use its own ID and hosting venue. A definition may set a default venue; this input overrides it. Null is invalid."
 				},
 				"authenticateAs": {
 					"type": "string",
@@ -24,7 +24,7 @@
 						"venue"
 					],
 					"default": "anonymous",
-					"description": "Explicit remote authentication, using the same identity and grants as the target Job. caller requires a target-audienced identity credential. venue is available only to the venue itself. Omitted venue preserves the full local caller context."
+					"description": "Remote identity: anonymous (default) sends no identity or grants; caller requires your identity credential addressed to the target venue, with no capabilities, plus any separate grants; venue is only for the venue itself. Use the same mode and credentials when following the Job. Local calls retain your caller context."
 				},
 				"message": {
 					"type": "object",

@@ -1,6 +1,6 @@
 {
 	"name": "Job Result",
-	"description": "Wait for an existing Job and return its exact output value. A failed, rejected or cancelled target fails this wait. Omit timeout or use 0 to wait without a deadline; a positive timeout limits only this wait. Timing out or cancelling the wait leaves the target running. Use job_status to inspect work without waiting.",
+	"description": "job_result: Wait for an existing Job and return its exact output. A failed, rejected or cancelled target fails this wait. Omit timeout or use 0 for no deadline; a positive timeout limits only the wait. Timing out or cancelling this wait leaves the target running. A target needing input will not finish until that input is supplied to it. Do not resubmit the original operation because a wait timed out.",
 	"operation": {
 		"adapter": "job:result",
 		"toolName": "job_result",
@@ -10,11 +10,11 @@
 			"properties": {
 				"id": {
 					"type": "string",
-					"description": "Exact Job ID returned by an invocation, agent request or Job listing. IDs are scoped to their hosting venue."
+					"description": "Exact Job ID on the selected hosting venue. A local wrapper and its destination are separate Jobs: use the ID of the one you intend to inspect or control. Agent, session and tool-call IDs are not Job IDs."
 				},
 				"venue": {
 					"type": "string",
-					"description": "Optional hosting venue HTTP(S) URL or routable DID. Omit for this venue. For a local proxy Job use its local ID and omit venue; for the destination Job use its ID and hosting venue."
+					"description": "Hosting venue HTTP(S) URL or routable DID. Omit for a local Job, including a local proxy. For a destination Job use its own ID and hosting venue. A definition may set a default venue; this input overrides it. Null is invalid."
 				},
 				"authenticateAs": {
 					"type": "string",
@@ -24,7 +24,7 @@
 						"venue"
 					],
 					"default": "anonymous",
-					"description": "Explicit remote authentication, using the same identity and grants as the target Job. caller requires a target-audienced identity credential. venue is available only to the venue itself. Omitted venue preserves the full local caller context."
+					"description": "Remote identity: anonymous (default) sends no identity or grants; caller requires your identity credential addressed to the target venue, with no capabilities, plus any separate grants; venue is only for the venue itself. Use the same mode and credentials when following the Job. Local calls retain your caller context."
 				},
 				"timeout": {
 					"type": "integer",

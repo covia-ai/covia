@@ -90,6 +90,22 @@ them to agents; agent/task skills and templates use the canonical Job paths.
 Existing `grid:jobStatus` and `grid:jobResult` paths, tool names and behavior
 remain compatible. Existing configured agents and tokens are not rewritten.
 
+The legacy tools remain discoverable for compatibility and describe themselves
+as such; new workflows use the `job` operations. They are not interchangeable
+aliases: legacy Grid result waits accept negative timeouts as unbounded and
+ignore non-integer timeouts, while `job:result` rejects either. An unbounded
+remote Grid waiter mirrors the destination's paused/input/auth-required state;
+the canonical result waiter stays STARTED and reports it in
+`delegation.remoteStatus`. Bounded legacy remote waits use SDK polling, whereas
+canonical remote waits use the venue's shared observation and retry policy.
+These differences are retained rather than silently changing existing callers.
+
+Tool descriptions carry each tool's name, purpose, arguments and result
+guidance. Skills supply workflow advice rather than restating included tools'
+descriptions or relying on fixed callable names. Runtime handoff messages
+identify the local Job handle and direct callers to their advertised Job tools;
+they do not assume a particular tool name is present in a scoped palette.
+
 ## Lifecycle and status semantics
 
 `PENDING → STARTED → COMPLETE | FAILED | CANCELLED | REJECTED` (terminal,
