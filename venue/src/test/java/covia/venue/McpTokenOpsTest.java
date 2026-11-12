@@ -21,7 +21,7 @@ import covia.grid.Status;
 import covia.lattice.Caps;
 
 /**
- * The MCP token operations (MCP_TOKENS.md): what a token may be named and
+ * The MCP token operations (ACCESS_TOKENS.md): what a token may be named and
  * offer, what the operations show of it, and that a user's tokens go with
  * the user. Who may use them is {@link McpTokenAuthorityTest}'s.
  */

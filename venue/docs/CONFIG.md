@@ -1125,12 +1125,14 @@ It deliberately does not advertise a fictional `authorization_servers`
 entry. A future OAuth bridge can add that standard field without changing the
 discovery URLs.
 
-## MCP tokens (`adapters.mcp`)
+## Access tokens (`adapters.token`)
 
-An MCP token is the recommended way to connect an external agent: a bearer a
-user or agent creates with `mcp:create-token`, offering chosen operations as
-tools within caps set on it ([MCP_TOKENS.md](MCP_TOKENS.md)). An MCP client
-sends it as it would any bearer:
+An access token is a bearer a user or agent creates, acting with its
+authority within caps set on it and accepted at the access points it names
+([ACCESS_TOKENS.md](ACCESS_TOKENS.md)). An MCP token, made with
+`mcp:create-token` and accepted at the venue's MCP endpoint alone, is the
+recommended way to connect an external agent. An MCP client sends it as it
+would any bearer:
 
 ```json
 {
@@ -1138,24 +1140,26 @@ sends it as it would any bearer:
     "covia": {
       "type": "http",
       "url": "https://venue.example.com/mcp",
-      "headers": { "Authorization": "Bearer cvmcp_..." }
+      "headers": { "Authorization": "Bearer cvtok_..." }
     }
   }
 }
 ```
 
 A token satisfies `mcp.auth.required`, and `mcp.auth.allowedDids` applies to
-the token's owner. An unknown, deleted or expired token receives HTTP 401.
+the token's owner. An unknown, deleted or expired token, or one with no MCP
+entry, receives HTTP 401.
 
 ```json
-{ "adapters": { "mcp": { "keepRawTokens": true } } }
+{ "adapters": { "token": { "keepRawTokens": true } } }
 ```
 
 - `keepRawTokens` (default `false`): keep each token's bearer, sealed, beside
-  its hash, so `mcp:get-token` can return it again to a caller holding
-  `admin/token/mcp`. Off, the venue keeps only the hash and a lost bearer is
-  replaced by rotating it. Turning it off, at start-up or with
-  `venue:adapter/configure`, drops the kept bearers at once.
+  its hash, so `token:get` and `mcp:get-token` can return it again to a caller
+  holding `admin/token/<access point>` for each access point it carries. Off,
+  the venue keeps only the hash and a lost bearer is replaced by rotating it.
+  Turning it off, at start-up or with `venue:adapter/configure`, drops the
+  kept bearers at once.
 
 ## MCP tool calls: how long they wait
 

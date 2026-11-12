@@ -36,7 +36,7 @@ import covia.venue.TestHTTP;
 import covia.venue.TestServer;
 
 /**
- * The venue's MCP endpoint with an MCP token as its bearer (MCP_TOKENS.md):
+ * The venue's MCP endpoint with an MCP token as its bearer (ACCESS_TOKENS.md):
  * the token's tools are all the request sees or calls, it presents no UCANs,
  * a bearer that does not stand is refused before anything runs, and each
  * token has sessions of its own.

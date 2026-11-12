@@ -33,7 +33,7 @@ import covia.grid.Status;
 /**
  * MCP tokens on a venue of its own: on a clock the test drives, so a token
  * expires when the test says, and configured to keep each token's bearer,
- * which the test then turns off and on again (MCP_TOKENS.md).
+ * which the test then turns off and on again (ACCESS_TOKENS.md).
  */
 @Execution(ExecutionMode.SAME_THREAD) // The tests change the clock and the adapter's configuration
 public class McpTokenVenueTest {

@@ -28,7 +28,7 @@ import covia.lattice.Caps;
 
 /**
  * One agent builds a set of tools for another and hands it a token, and the
- * other agent uses them over the venue's MCP endpoint (MCP_TOKENS.md): the
+ * other agent uses them over the venue's MCP endpoint (ACCESS_TOKENS.md): the
  * token offers exactly its tools, acts within its creator's authority and its
  * own caps, and stops working when revoked. Each refusal has a control that
  * differs from it in one thing and succeeds.

@@ -8,7 +8,7 @@ those names are not accepted as aliases.
 administration, directly exercising an agent's authority, and retrieving
 retained bearer credentials. Venue administration uses `admin/user`,
 `admin/adapter`, `admin/venue` and `admin/sudo`; user-resource privileges use
-`admin/agent` and `admin/token/mcp`. Their resource scopes and additional
+`admin/agent` and `admin/token`. Their resource scopes and additional
 authority rules are preserved. Explicit activation is outside this change.
 
 Managing something does not by itself make an operation high-level admin.
@@ -56,7 +56,7 @@ checks; its classification does not broaden what it permits.
 | `admin/venue` | Maintain the venue process and store |
 | `admin/sudo` | Explicitly enter another user's working namespace, with separately granted invocation and action authority |
 | `admin/agent` | Direct tool execution under an agent's effective authority |
-| `admin/token` | Administration across token kinds; `admin/token/mcp` retrieves a retained MCP bearer |
+| `admin/token` | Working on access tokens directly; its leaf `admin/token/<access point>` covers tokens that carry that access point |
 
 Ordinary workflow grants should name their domain abilities and resources.
 They should not need an `admin` grant. An operator deliberately running an
@@ -154,24 +154,26 @@ manage MCP without becoming a venue administrator. Also avoid making a broad
 
 Two user-resource actions are explicitly privileged: `admin/agent` permits
 real tool execution under the agent's authority without a model deciding the
-calls, and `admin/token/mcp` permits retrieval of a reusable MCP credential.
-Both belong in `admin`; ordinary agent and MCP management remain separate.
+calls, and `admin/token` permits direct work on access tokens, retrieving
+a reusable credential included. Both belong in `admin`; ordinary agent and MCP
+token management remain separate.
 
-`admin/token` is the parent for token administration across token kinds.
-`admin/token/mcp` is the MCP-specific leaf, on `U/x/mcp/tokens/<name>`.
-The ordinary prefix rule means existing `admin/token` grants still cover MCP
-retrieval on matching resources and will cover future descendants. Prefer a
-specific leaf when delegating access to only one kind. No other token-kind
-leaf is currently defined, and every retrieval retains its source-authority
-and storage restrictions.
+`admin/token` is the parent for working on access tokens directly
+([ACCESS_TOKENS.md](ACCESS_TOKENS.md)), on `U/x/tokens/<name>`. Each access
+point has a leaf, `admin/token/<access point>` (`admin/token/mcp` for the MCP
+endpoint), and direct work on a token needs the leaf of every access point it
+carries, which the parent covers by the ordinary prefix rule. Prefer a
+specific leaf when delegating access to only one access point. Fetching a
+kept bearer retains its source-authority and storage restrictions.
 
 | Surface | Current check | Treatment |
 |---------|---------------|--------------------|
 | `agent:step` | `admin/agent` on `U/g/<id>`; executes caller-supplied tool calls under the target agent's authority | Privileged execution under the agent's effective capabilities, unrestricted included |
-| `mcp:get-token` | `admin/token/mcp` on `U/x/mcp/tokens/<name>`, token source authority, and retained bearer availability | Privileged credential retrieval specific to MCP tokens |
+| `token:create`, `token:update`, `token:delete`, `token:get` | `admin/token/<p>` on `U/x/tokens/<name>` for every access point the token carries; update and get also check source authority, get retained bearer availability | Privileged direct token administration |
+| `mcp:get-token` | `admin/token/mcp` on `U/x/tokens/<name>` for a token accepted at MCP alone, token source authority, and retained bearer availability | Privileged credential retrieval specific to MCP tokens |
 | `secret:extract` | `secret/extract` on own `s/<name>` and direct-owner, non-recorded-call restrictions | Retain its separate sensitive-operation permission |
 | Self-service account key changes and whole-state export | Whole-owner identity exception described above | Preserve self-service; it grants no venue-level account administration |
-| `mcp:create-token`, `mcp:update-token`, `mcp:delete-token` | `mcp/token` on `U/x/mcp/tokens/<name>`; creation checks issuer authority, update checks source authority; deletion only narrows | Retain independently managed token permissions |
+| `mcp:create-token`, `mcp:update-token`, `mcp:delete-token` | `mcp/token` on `U/x/tokens/<name>`, for tokens accepted at MCP alone; creation checks issuer authority, update checks source authority; deletion only narrows | Retain independently managed MCP token permissions |
 | Agent configuration/controller changes | `agent/write` plus controller-authority checks where required | Retain separate agent management and authority checks |
 | `auth:identity-token` | Caller identity, scope/sub-principal and signing-key custody checks | Identity issuance remains identity-bound; a generic admin grant must not permit impersonation |
 | `hitl:respond` | Responder must hold its own whole authority; grant answers also follow granting rules | Approval remains attributable to the responder; admin authority must not manufacture someone else's consent |
@@ -251,7 +253,7 @@ policy changes to agree before implementation:
 The implemented scope organises venue-administration abilities under
 `admin/user`, `admin/adapter`, `admin/venue` and `admin/sudo`. MCP and other
 domain management remain separate from privileged agent execution
-(`admin/agent`) and credential retrieval (`admin/token/mcp`). Activation and
+(`admin/agent`) and direct token administration (`admin/token`). Activation and
 finer resource scopes remain separate changes.
 
 This is a direct cutover, with no compatibility aliases or automatic grant

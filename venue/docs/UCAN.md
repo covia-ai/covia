@@ -184,9 +184,9 @@ Abilities follow UCAN's slash-delimited convention with no leading slash. `*` is
 | `key/derive` | — | Derive keys from a held phrase into its holder's keyring (`crypto:derive-key`) |
 | `secret/write` | - | Store or update a secret (`<owner>/s/<name>`) |
 | `mcp/manage` | - | Manage MCP server and tool connections (`<venue>/v/mcp`) |
-| `mcp/token` | - | Create, update or delete an MCP token (`<owner>/x/mcp/tokens/<name>`) |
-| `admin/token` | Every `admin/token/…` | Administration across token kinds on matching resources |
-| `admin/token/mcp` | - | Retrieve a retained MCP bearer token; source authority is also required |
+| `mcp/token` | - | Create, update or delete an access token accepted at MCP alone, through the MCP token operations (`<owner>/x/tokens/<name>`) |
+| `admin/token` | Every `admin/token/…` | Work on access tokens directly, whatever access points they carry (`<owner>/x/tokens/<name>`) |
+| `admin/token/<access point>` | - | Work directly on access tokens that carry that access point, such as `admin/token/mcp`; a token carrying several needs each leaf, and fetching a kept bearer also needs the token's source authority |
 | `hitl/request` | - | Ask the owner a human-in-the-loop question |
 | `admin/user/create` | - | Create an account |
 | `admin/user/delete` | - | Delete an account |
@@ -989,8 +989,8 @@ under a capped controller, only what they include the right to grant
 context outright, because answering an ask mints a grant *as the inbox owner*:
 an agent reaching it would approve its own request with authority it may not
 have. An agent that needs more asks its human, and only the human can answer.
-A request through an MCP token answers only with all of the inbox owner's
-authority ([MCP_TOKENS.md](MCP_TOKENS.md)).
+A request through an access token answers only with all of the inbox owner's
+authority ([ACCESS_TOKENS.md](ACCESS_TOKENS.md)).
 
 That guard is pinned to identity. An unrestricted agent holds no scope, which
 the `authorityCovers` fast path passes; a scope-based defence would therefore
@@ -1053,8 +1053,8 @@ presented grants, holds no other principal's authority. An agent such a
 delegate creates is controlled by its target, so grant `agent/create` beside
 `admin/sudo` as you would that user's own authority.
 
-**An MCP token narrows the authority a request acts with.** A request through
-an MCP token is its issuer's, acting with the issuer's authority narrowed by
+**An access token narrows the authority a request acts with.** A request through
+an access token is its issuer's, acting with the issuer's authority narrowed by
 the caps of the token and of each token whose request created it, read at
 each point of action as an agent's caps narrow its controller's
 (`Engine.tokenContext`). It holds the issuer's whole authority only when every
@@ -1063,7 +1063,7 @@ records it beside its controller (`controllerToken`), whose authority it then
 narrows, and a job or scheduled event keeps it with its authority. A token
 that no longer stands narrows all of these to nothing. Changing a token needs
 the authority it was created with, so a token never widens itself.
-[MCP_TOKENS.md](MCP_TOKENS.md) is the contract.
+[ACCESS_TOKENS.md](ACCESS_TOKENS.md) is the contract.
 
 **Configuring an agent acts with its controller's authority.** The config
 chooses the agent's harness, its transition operation and the context it

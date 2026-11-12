@@ -30,7 +30,7 @@ import covia.grid.Status;
 import covia.lattice.Caps;
 
 /**
- * What a request through an MCP token may do (MCP_TOKENS.md): its issuer's
+ * What a request through an MCP token may do (ACCESS_TOKENS.md): its issuer's
  * authority as it stands at each point of action, narrowed by the caps of the
  * token and of every token whose request created it; never the issuer's whole
  * authority while any of those is restricted; and nothing once one is gone.
