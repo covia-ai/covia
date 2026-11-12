@@ -171,9 +171,17 @@ public abstract class AAdapter {
 	 * recovery: the instance has become the venue's live one. Installation must
 	 * only bind state and declare assets; workers that can invoke operations
 	 * belong here. Runtime registration and enable call this after publication
-	 * on an already-started engine, and so does a failed replacement that
-	 * restores this instance. Implementations must be idempotent because enable
-	 * may retain an installed instance.
+	 * on an already-started engine, and so do a restart and a failed
+	 * replacement that restores this instance. Implementations must be
+	 * idempotent because enable may retain an installed instance.
+	 *
+	 * <p>A failure here is this adapter's alone: the engine calls {@link #stop()}
+	 * to end whatever it started, and the adapter stays enabled but not running,
+	 * its operations refused, until a restart starts it
+	 * ({@link Engine#restartAdapter}). Throw a {@link covia.exception.CoviaException}
+	 * with a reason an operator can act on, such as an
+	 * {@link covia.exception.UnavailableException} for a port in use or a
+	 * service out of reach; anything else is reported as a fault.</p>
 	 *
 	 * <p>Constructors, configuration and {@link #install(Engine)} must not start
 	 * autonomous work. During {@link Engine#launch(java.util.function.Function)},
@@ -195,8 +203,8 @@ public abstract class AAdapter {
 
 	/**
 	 * Stops the workers {@link #start()} started, keeping the instance and its
-	 * resources: it is no longer the venue's live one, because it was disabled or
-	 * is being replaced. {@link #start()} follows when it is enabled again or a
+	 * resources: it was disabled, is being replaced or restarted, or its start
+	 * failed. {@link #start()} follows when it is enabled again, restarted, or a
 	 * failed replacement restores it. Called only on a started engine. When it
 	 * returns the adapter starts no further autonomous work, and work in progress
 	 * neither commits nor acts outside the venue, so a replacement starts with no

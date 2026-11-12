@@ -101,7 +101,7 @@ Resource scopes are preserved; possible refinements are listed separately.
 | `user:export` for another account | `admin/user/export` on `V/users` |
 | `user:import` | `admin/user/import` on `V/users` |
 | `user:clone` | Source export permission plus `admin/user/import` on `V/users` |
-| `venue:adapters`, `venue:adapter-enable`, `venue:adapter-disable`, `venue:adapter-configure`, `venue:module-load`, `venue:module-unload` | `admin/adapter/manage` on `V/adapters` |
+| `venue:adapters`, `venue:adapter-enable`, `venue:adapter-disable`, `venue:adapter-configure`, `venue:adapter-restart`, `venue:module-load`, `venue:module-unload` | `admin/adapter/manage` on `V/adapters` |
 | `venue:restart`, including executable jar handoff | `admin/venue/restart` on `V/process` |
 | `venue:gc`, including status, cancel and backup options | `admin/venue/gc` on `V/store`; also `admin/venue/restart` on `V/process` when restarting |
 | `user:sudo` into another namespace | `admin/sudo` on the target `U`, plus independent invocation and action authority |

@@ -71,6 +71,13 @@ itself.
 runs before Convex closes its servers and Etch files. `MainVenue` registers
 there.
 
+A `VenueServer` on an Etch store that outlives the process (a file path, or a
+store it adopted) registers its own `close()` there too, and withdraws it once
+it has closed. `close()` runs once and a later caller waits for it, so a JVM
+shutdown that begins while your own thread is closing the venue waits for the
+venue's final save before Etch closes the file. A venue on a `temp` or
+`memory` store registers nothing: it has nothing to keep.
+
 **Before starting.** `VenueState.peekVenueKeys(store)` reads the venue keys
 recorded in an open store, and `VenueState.peekVersions(store, venueKey)` its
 schema versions, Covia's and each adapter's, without starting a venue.
@@ -218,6 +225,14 @@ prepared engine, in the launch hook or later. An adapter keeps its private
 state in `engine.adapterState(name)`, and owns that state's schema
 ([ADAPTERS.md](ADAPTERS.md)): registering migrates it through the adapter's
 `stateSteps()`.
+
+**An adapter that cannot start does not stop the venue.** One registered
+before launch whose `start()` fails is left failed and the launch goes on:
+`engine.adapterFailure(name)` says why, its operations are refused meanwhile,
+and `engine.restartAdapter(name)` tries again
+([ADAPTERS.md](ADAPTERS.md#an-adapter-that-is-not-running)). One registered on
+a started engine that fails to start is rolled back, and `registerAdapter`
+throws.
 
 **To switch an adapter off, disable it; don't remove it.**
 - `engine.disableAdapter(name)` stops dispatch, but the adapter still runs its

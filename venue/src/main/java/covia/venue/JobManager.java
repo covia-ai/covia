@@ -962,7 +962,20 @@ public class JobManager {
 
 		AAdapter adapter = engine.getAdapter(adapterName);
 		if (adapter == null) throw new NotSupportedException(ADAPTER_NOT_AVAILABLE + adapterName);
+		requireRunning(adapterName);
 		return adapter;
+	}
+
+	/**
+	 * Refuses work for an enabled adapter that is not running: its start
+	 * failed, or it could not take back its settings after a refused change.
+	 * Why is for operators ({@link Engine#adapterFailure}), not callers.
+	 * @throws UnavailableException if the adapter is not running
+	 */
+	private void requireRunning(String adapterName) {
+		if (engine.adapterFailure(adapterName) != null) {
+			throw new UnavailableException(Engine.ADAPTER_NOT_RUNNING.formatted(adapterName));
+		}
 	}
 
 	private static final AString K_STRICT = Strings.intern("strict");
@@ -1801,13 +1814,15 @@ public class JobManager {
 	 * Resolves the adapter responsible for a job: the one its record says it
 	 * was dispatched to, else the one its operation names, else null. A
 	 * mirror names its call's adapter, but no adapter runs it.
-	 * @throws UnavailableException if that adapter is not enabled here now
+	 * @throws UnavailableException if that adapter is not enabled and
+	 *         running here now
 	 */
 	private AAdapter resolveJobAdapter(Job job) {
 		String adapterName = adapterName(job);
 		if (adapterName == null) return null;
 		AAdapter adapter = engine.getAdapter(adapterName);
 		if (adapter == null) throw new UnavailableException(ADAPTER_NOT_AVAILABLE + adapterName);
+		requireRunning(adapterName);
 		return adapter;
 	}
 

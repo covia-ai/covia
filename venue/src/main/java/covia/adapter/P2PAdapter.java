@@ -47,6 +47,7 @@ import covia.api.Fields;
 import covia.exception.ConfigurationException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotSupportedException;
+import covia.exception.UnavailableException;
 import covia.venue.Config;
 import covia.venue.RequestContext;
 
@@ -77,8 +78,14 @@ import covia.venue.RequestContext;
  * {@link #subscribe subscribers} as soon as the lattice changes. Whether a
  * peer is connected is this node's own transient state: it is never
  * published, and since Convex announces connection changes no other way,
- * the adapter also rechecks it every {@code pollMs}. The same pass takes the
- * node offline once the adapter is disabled.</p>
+ * the adapter also rechecks it every {@code pollMs}.</p>
+ *
+ * <p>The node runs while the adapter is started and its settings join:
+ * {@code stop()}, on disable or replacement, takes it offline. A node that
+ * cannot launch, such as on a port in use, is unavailable rather than
+ * misconfigured: at start the adapter is left failed, the venue running
+ * without it, until {@code venue/adapter/restart}; on a runtime change the
+ * change is refused and the previous settings are offered again.</p>
  *
  * <p>This is network infrastructure only. Social follows are a social graph
  * between DIDs, application data for the social layer; they do not belong
@@ -174,6 +181,8 @@ public class P2PAdapter extends AAdapter implements AutoCloseable {
 
 	private volatile Settings settings = parse(null, false);
 	private volatile Running running;
+	/** Between {@link #start()} and {@link #stop()}: the node runs while the settings join. Guarded by this. */
+	private boolean started;
 	private final List<Consumer<PeerEvent>> listeners = new CopyOnWriteArrayList<>();
 
 	@Override
@@ -194,23 +203,45 @@ public class P2PAdapter extends AAdapter implements AutoCloseable {
 		installAsset("p2p/connect", "/adapters/p2p/connect.json");
 	}
 
+	/**
+	 * Takes the settings and, while started, relaunches the node with them.
+	 * A node that cannot launch refuses the change, and the venue offers the
+	 * settings it had again.
+	 *
+	 * @throws ConfigurationException if a setting is invalid
+	 * @throws UnavailableException if the node cannot launch with them
+	 */
 	@Override
 	public synchronized boolean configure(AMap<AString, ACell> config, boolean strict) {
 		Settings next = parse(config, strict);
-		if (running != null) halt();
-		if (next.join() && isActive() && engine.isStarted()) launch(next);
 		settings = next;
+		if (running != null) halt();
+		if (started && next.join()) launch(next);
 		return true;
 	}
 
+	/**
+	 * Launches the node if the settings join the network.
+	 *
+	 * @throws UnavailableException if the node cannot launch, such as on a
+	 *         port in use; the venue keeps running without it until a restart
+	 */
 	@Override
 	public synchronized void start() {
+		started = true;
 		Settings s = settings;
 		if (running == null && s.join()) launch(s);
 	}
 
 	@Override
+	public synchronized void stop() {
+		started = false;
+		halt();
+	}
+
+	@Override
 	public synchronized void close() {
+		started = false;
 		halt();
 	}
 
@@ -279,10 +310,6 @@ public class P2PAdapter extends AAdapter implements AutoCloseable {
 
 	// ========== Node lifecycle ==========
 
-	private boolean isActive() {
-		return engine != null && engine.getAdapter(getName()) == this;
-	}
-
 	/** Test hook: the running node, or null when the venue has not joined. */
 	P2PNode node() {
 		Running r = running;
@@ -292,8 +319,8 @@ public class P2PAdapter extends AAdapter implements AutoCloseable {
 	/**
 	 * Launches a node for {@code s}; caller holds this adapter's lock.
 	 *
-	 * @throws ConfigurationException if the node cannot launch with these
-	 *         settings, such as a port already in use
+	 * @throws UnavailableException if the node cannot launch, such as on a
+	 *         port already in use
 	 */
 	private void launch(Settings s) {
 		P2PNode node = P2PNode.create(new MemoryStore(), s.node(), engine.getKeyPair(), P2PLattice.ROOT);
@@ -303,7 +330,7 @@ public class P2PAdapter extends AAdapter implements AutoCloseable {
 			publishIdentity(node);
 		} catch (IOException e) {
 			closeQuietly(node);
-			throw new ConfigurationException(LAUNCH_FAILED.formatted(e.getMessage()), e);
+			throw new UnavailableException(LAUNCH_FAILED.formatted(e.getMessage()), e);
 		} catch (InterruptedException e) {
 			Thread.currentThread().interrupt();
 			closeQuietly(node);
@@ -359,14 +386,6 @@ public class P2PAdapter extends AAdapter implements AutoCloseable {
 		while (!r.closed) {
 			// Taken before the read, so a change during it ends the next wait
 			CompletableFuture<ACell> changed = propagator.nextAnnounce();
-			if (!isActive()) {
-				synchronized (this) {
-					if (running != r) return;
-					running = null;
-				}
-				shut(r);
-				return;
-			}
 			try {
 				report(r, list(r.node), false);
 			} catch (RuntimeException e) {

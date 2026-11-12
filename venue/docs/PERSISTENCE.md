@@ -539,9 +539,12 @@ publishes nor flushes. Whoever opened the host closes it: a standalone
 the final checkpoint before the store closes. An Engine running on an
 embedder's host never closes it; its final flush is its last save.
 
-On JVM shutdown, `MainVenue` runs each venue's full `VenueServer.close()` from
-a hook at `Shutdown.SERVICE`, before Convex closes its servers and Etch files.
-The close runs once: a caller that finds it under way waits for it.
+On JVM shutdown, a venue on an Etch store that outlives the process runs its
+full `VenueServer.close()` from a hook at `Shutdown.SERVICE`, before Convex
+closes its servers and Etch files; `MainVenue` registers the same for each
+venue. The close runs once: a caller that finds it under way waits for it,
+the hook included, so the store stays open until the final save
+([EMBEDDING.md](EMBEDDING.md), "JVM shutdown").
 
 ### 5.4 Request-boundary publication
 

@@ -18,8 +18,13 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Access tokens: any user or agent can create a scoped bearer that acts with its issuer's authority within the token's caps and is accepted only at the access points it names; the `token` adapter keeps them (`token:create`, `update`, `delete`, `list`, `get`, needing `admin/token/<access point>` on `x/token/<name>`), and `adapters.token.keepRawTokens` keeps bearers to read again; a user sees its tokens, never their bearers, at `x/token`.
 - MCP tokens: access tokens accepted at the venue's `/mcp` alone, offering chosen operations as tools, made and managed with `mcp/token` (`mcp:create-token`, `update-token`, `delete-token`, `list-tokens`, `get-token`); emptying its caps, deleting it or its expiry revokes one.
 - `adapters.convex.timeoutMillis` sets how long `convex:query` and `convex:transact` wait for the peer's result; the default is the Convex client's own, 20 seconds.
+- `venue:adapter/restart` stops an enabled adapter, offers it its configuration again and starts it; `venue:adapters` lists each adapter's `status` and a failed adapter's `reason`.
 
 ### Changed
+
+- An adapter that fails to start, at launch, enable or restart, no longer stops the venue: it stays enabled but failed, its operations refused as not running, until restarted.
+- A `venue:adapter/configure` change the adapter refuses with an error is reverted to its previous configuration.
+- A P2P node that cannot launch, such as on a port in use, is unavailable rather than a configuration error.
 
 - Adapters refuse settings with a configuration error, from the venue config and from `venue:adapter/configure` alike; anything else an adapter's `configure` throws, a module adapter's `IllegalArgumentException` included, is reported as that adapter's fault rather than as invalid input or the `venue` adapter's.
 - MCP bearer retrieval uses `admin/token/mcp`; `admin/token` remains its parent for administration across token kinds.
@@ -43,6 +48,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 - Account REST reads and deletion honour delegated administration grants in `X-Covia-Ucans`.
 - Job SSE subscriptions no longer miss completion while connecting or deliver initial state after a newer update.
+- An embedded venue on a persistent store closes itself on JVM shutdown, and the shutdown waits for a close already under way, so Etch no longer closes the store beneath the venue's final save (#699).
 
 - Grid operations honour explicit remote result wait timeouts, submit asynchronously without background polling, and reject non-string venue targets instead of executing locally.
 - `user:delete` no longer leaves cleanup pending for an adapter registered while it runs.
