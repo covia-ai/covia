@@ -17,8 +17,13 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 - MCP tokens: any user or agent can create a scoped bearer for the venue's `/mcp` (`mcp:create-token`, `update-token`, `delete-token`, `list-tokens`, `get-token`) that offers chosen operations as tools and acts with its issuer's authority within the token's caps; emptying its caps, deleting it or its expiry revokes it, and `adapters.mcp.keepRawTokens` keeps bearers for `admin/token/mcp` to read again.
 - `adapters.convex.timeoutMillis` sets how long `convex:query` and `convex:transact` wait for the peer's result; the default is the Convex client's own, 20 seconds.
+- `venue:adapter/restart` stops an enabled adapter, offers it its configuration again and starts it; `venue:adapters` lists each adapter's `status` and a failed adapter's `reason`.
 
 ### Changed
+
+- An adapter that fails to start, at launch, enable or restart, no longer stops the venue: it stays enabled but failed, its operations refused as not running, until restarted.
+- A `venue:adapter/configure` change the adapter refuses with an error is reverted to its previous configuration.
+- A P2P node that cannot launch, such as on a port in use, is unavailable rather than a configuration error.
 
 - Adapters refuse settings with a configuration error, from the venue config and from `venue:adapter/configure` alike; anything else an adapter's `configure` throws, a module adapter's `IllegalArgumentException` included, is reported as that adapter's fault rather than as invalid input or the `venue` adapter's.
 - MCP bearer retrieval uses `admin/token/mcp`; `admin/token` remains its parent for administration across token kinds.

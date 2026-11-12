@@ -213,20 +213,30 @@ The significant lifecycle is:
    (see [JOBS.md § Recovery](JOBS.md#recovery-on-restart-214)).
 6. `start()` activates adapter-owned workers after assembly, catalogue
    publication, secret provisioning and recovery. It must be idempotent:
-   runtime registration and enable also call it after publishing the adapter
-   on an already-live engine. A prepared engine defers it until activation.
+   runtime registration, enable and restart also call it after publishing the
+   adapter on an already-live engine. A prepared engine defers it until
+   activation. If it fails, the adapter is left failed (below).
 7. Runtime `adapter/configure` calls `configure` again and republishes public
    configuration and information if accepted, whether or not the adapter is
-   enabled.
+   enabled. `configure` is a notification: the adapter decides what the
+   change means for its work, whether to keep it for the next `start()`,
+   apply it in place or restart its own work. A change it refuses by throwing
+   is reverted: the venue offers it the settings it had. If it refuses those
+   too, it is unconfigured: an enabled adapter is stopped and left failed,
+   and enabling or restarting it offers it its effective configuration before
+   it starts.
 8. Disable removes live dispatch and public introspection, then calls
    `stop()`, but retains the instance and durable catalog metadata. Enable
    restores it and calls `start()` again. `stop()` ends the workers `start()`
    started and keeps the instance's resources; nothing, `configure` included,
-   starts them again before `start()`. The default does nothing; a messaging
-   adapter stops every bot, closing its poll or connection.
+   starts them again before `start()`. It must be idempotent: the venue stops
+   a failed adapter again on restart and disable. The default does nothing; a
+   messaging adapter stops every bot, closing its poll or connection.
    Replacing an active instance stops it before the new one starts. If the new
    one fails to start, it is closed and the old one is restored and started
-   again; otherwise the old one is closed.
+   again, unless it had failed; otherwise the old one is closed.
+   Restart (`venue:adapter/restart`) calls `stop()`, offers the adapter its
+   effective configuration again and calls `start()`.
 9. Module unload deregisters its live adapters and closes `AutoCloseable`
    resources and the module classloader. In-flight jobs retain their adapter
    instance and may finish.
@@ -244,6 +254,34 @@ its predecessor or replacement. When
 `stop()` returns, the adapter starts no new autonomous work, and work already
 under way neither commits nor acts outside the venue: a messaging bot's writes
 and sends check that it is still running.
+
+### An adapter that is not running
+
+An enabled adapter whose `start()` fails at launch, enable or restart, or that
+could not take back its settings after refusing a change, is failed. The
+engine calls `stop()` to end whatever it started and reports the failure as
+the adapter's ([ERRORS.md](ERRORS.md)): a Covia exception with a reason as it
+is, logged at WARN, anything else as the adapter's fault. The instance stays
+enabled, published and in the catalog, and the venue runs without it: one
+adapter that cannot start costs only its own operations. Those operations,
+internal calls to them and messages to their live jobs are refused with
+`UnavailableException` (`Engine.ADAPTER_NOT_RUNNING`). The reason is for
+operators: `venue:adapters` lists the adapter with `status: failed` and the
+`reason`, and embedders read it from `Engine.adapterFailure(name)`.
+`venue:adapter/restart` starts it again once the cause is fixed; disabling it
+forgets the failure.
+
+`start()` therefore throws a Covia exception whose reason an operator can act
+on: `UnavailableException` for a port in use or a service out of reach, the
+P2P node's launch failure being one. Recovery runs before `start()`, so the
+default recovery has already ended an unfinished job of an adapter that then
+fails to start; an adapter that re-attaches jobs in `recoverJob` and has
+workers to drive them must resume them in its next successful `start()`.
+
+Runtime registration differs, because module loading undoes what it
+registered when a registration throws: a new instance registered on a started
+engine (`registerAdapter`, `venue:module/load`) that fails to start is rolled
+back and the failure thrown.
 
 The venue config is authoritative again after restart; runtime enable,
 disable, configure, load, and unload changes are not persisted. Full operator
@@ -295,11 +333,14 @@ There are two distinct configuration hooks:
 
 An override of `configure` should validate the whole proposed configuration
 before changing live fields, and reject unknown settings when `strict` is
-true. A setting it refuses, whether malformed or unusable on this venue, and
-settings it cannot apply throw `ConfigurationException` with an actionable
-message built from a constant on the adapter. That reaches whoever supplied the
+true. A setting it refuses, whether malformed or unusable on this venue,
+throws `ConfigurationException` with an actionable message built from a
+constant on the adapter. Work that fails as valid settings are applied, such
+as a listener on a port in use, throws `UnavailableException`: the settings may
+be right, and a retry may succeed. Either reaches whoever supplied the
 settings unchanged: the operator at start-up, enable or module load, or the
-caller of `venue:adapter/configure`. A parser that also reads an operation's
+caller of `venue:adapter/configure`, whose change is then reverted (Lifecycle,
+item 7). A parser that also reads an operation's
 input throws `IllegalArgumentException`, and `configure` rethrows it as
 `ConfigurationException` with the cause chained; any other exception
 escaping `configure` that is not a Covia exception is the adapter's fault

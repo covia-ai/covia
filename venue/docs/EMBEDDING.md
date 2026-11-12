@@ -219,6 +219,14 @@ state in `engine.adapterState(name)`, and owns that state's schema
 ([ADAPTERS.md](ADAPTERS.md)): registering migrates it through the adapter's
 `stateSteps()`.
 
+**An adapter that cannot start does not stop the venue.** One registered
+before launch whose `start()` fails is left failed and the launch goes on:
+`engine.adapterFailure(name)` says why, its operations are refused meanwhile,
+and `engine.restartAdapter(name)` tries again
+([ADAPTERS.md](ADAPTERS.md#an-adapter-that-is-not-running)). One registered on
+a started engine that fails to start is rolled back, and `registerAdapter`
+throws.
+
 **To switch an adapter off, disable it; don't remove it.**
 - `engine.disableAdapter(name)` stops dispatch, but the adapter still runs its
   user-deletion hooks. Messaging bindings stop handling messages, and

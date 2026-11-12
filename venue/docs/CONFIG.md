@@ -670,7 +670,8 @@ Call launch once on a new or prepared engine; do not call `start()` first.
 It installs the built-ins and configured modules, publishes the catalogue,
 provisions configured secrets, seeds MCP, awaits the hook, recovers Jobs and
 queued agent work, then activates workers and takes part in the application's
-updates (EMBEDDING.md, Time).
+updates (EMBEDDING.md, Time). An adapter that fails to start does not fail the
+launch: the venue runs without it ([Runtime adapter lifecycle](#runtime-adapter-lifecycle)).
 Do not copy this sequence into the application. `prepare()` and `start()`
 remain low-level APIs for manually assembled runtimes and tests: they do not
 provide a complete venue bootstrap.
@@ -3140,10 +3141,11 @@ above is intentionally outside this administrative group:
 
 | Operation | Effect |
 |-----------|--------|
-| `v/ops/venue/adapters` | Registry view: every registered adapter (active **and** disabled) with `enabled`, `kernel`, owning `module`, effective `config` and `operations`, plus loaded `modules` |
+| `v/ops/venue/adapters` | Registry view: every registered adapter (active **and** disabled) with `enabled`, `status` (`running`, `failed` or `disabled`), a failed adapter's `reason`, `kernel`, owning `module`, effective `config` and `operations`, plus loaded `modules` |
 | `v/ops/venue/adapter/disable {name}` | Remove an adapter from live dispatch and `v/info/adapters/<name>`, and stop its workers: a messaging adapter's bots close their polls and connections. Durable catalog metadata remains; the instance is retained and in-flight jobs finish |
-| `v/ops/venue/adapter/enable {name}` | Restore it and start its workers again (installing on first enable if it was boot-disabled) |
-| `v/ops/venue/adapter/configure {name, config, merge?}` | Apply a new effective configuration (`adapters.<name>` shape) — the adapter's `configure` hook may reject it, in which case nothing changes |
+| `v/ops/venue/adapter/enable {name}` | Restore it and start its workers again (installing on first enable if it was boot-disabled). If it fails to start, it stays enabled but failed and the call fails with the reason |
+| `v/ops/venue/adapter/configure {name, config, merge?}` | Apply a new effective configuration (`adapters.<name>` shape). The adapter may decline it, and nothing changes, or refuse it with an error, and it is offered its previous configuration again; if it refuses that too, it is stopped and left failed |
+| `v/ops/venue/adapter/restart {name}` | Stop an enabled adapter, running or failed, offer it its effective configuration again and start it. If it fails again, it stays failed and the call fails with the reason |
 | `v/ops/venue/module/load {module, sha256?, config?}` | Load a module jar; its adapters and declarations overwrite existing names and paths |
 | `v/ops/venue/module/unload {name}` | Remove a module's live adapters and introspection, close resources and its classloader; catalog metadata remains |
 
@@ -3151,6 +3153,14 @@ above is intentionally outside this administrative group:
 authority ([VENUE_AUTHORITY.md](./VENUE_AUTHORITY.md#how-it-works-today)) for
 `admin/adapter/manage` on `<venue DID>/adapters`, the same model as `user:create`.
 Ordinary authenticated users get `AuthException`.
+
+**Failed adapters.** An adapter that cannot start, at launch, enable or
+restart, does not stop the venue: it stays enabled with `status: failed` and
+the `reason` in `v/ops/venue/adapters`, and the log says the same. Calls to its
+operations fail with "Adapter `<name>` is not running" and no reason. Fix the
+cause (free the port, bring the service back, or change its settings with
+`adapter/configure`), then `adapter/restart` it. Disabling it clears the
+failure. Contract: [ADAPTERS.md](ADAPTERS.md#an-adapter-that-is-not-running).
 
 **Module policy.** `module/load` and `module/unload` require
 `dynamicModules.enabled` (default **off**). By default `module` must be a jar
@@ -3337,7 +3347,11 @@ what a node shares is only its signed records. The adapter is network
 infrastructure; social follows belong to the social layer, not here. Both are venue-owned: they need `p2p/read` or `p2p/manage`
 on `<venue DID>/p2p`. An embedding host subscribes to peer changes with
 `engine.findAdapter(P2PAdapter.class).subscribe(listener)`. Disabling the
-adapter takes the node offline; reconfiguring it restarts the node.
+adapter takes the node offline; reconfiguring it restarts the node. A node
+that cannot launch, such as on a port in use, leaves the adapter failed with
+the venue running; `venue:adapter/restart` launches it again. A runtime change
+it cannot launch with is refused, and the node carries on with the settings it
+had.
 
 ## Secrets bootstrap
 

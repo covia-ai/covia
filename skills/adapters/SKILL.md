@@ -71,16 +71,17 @@ The `venue` adapter changes the adapter set of a *running* venue, no restart:
 | Command | Operation | Input |
 |---------|-----------|-------|
 | `show-config` | `v/ops/venue/show-config` | `{}` — curated public effective settings for agents/clients; never raw operator config |
-| `status` | `v/ops/venue/adapters` | `{}` — every registered adapter, **active and disabled**, with `enabled`, `kernel`, `module`, effective `config`, `operations`; plus loaded `modules` |
+| `status` | `v/ops/venue/adapters` | `{}` — every registered adapter, **active and disabled**, with `enabled`, `status` (`running`, `failed`, `disabled`), a failed adapter's `reason`, `kernel`, `module`, effective `config`, `operations`; plus loaded `modules` |
 | `disable <name>` | `v/ops/venue/adapter/disable` | `{"name": "<adapter>"}` |
 | `enable <name>` | `v/ops/venue/adapter/enable` | `{"name": "<adapter>"}` |
 | `configure <name>` | `v/ops/venue/adapter/configure` | `{"name": "<adapter>", "config": {…}, "merge": false}` — `config` is the `adapters.<name>` shape; `merge: true` overlays the current effective config instead of replacing it |
+| `restart-adapter <name>` | `v/ops/venue/adapter/restart` | `{"name": "<adapter>"}` — stops an enabled adapter, offers it its effective config again and starts it; the way back for a `failed` one once its cause is fixed |
 | `load <jar>` | `v/ops/venue/module/load` | `{"module": "<jar name>", "sha256": "<hex>", "config": {…}}` — `sha256` and `config` optional |
 | `unload <name>` | `v/ops/venue/module/unload` | `{"name": "<jar name without .jar>"}` |
 | `restart [jar]` | `v/ops/venue/restart` | `{"jar": "<successor covia jar>", "sha256": "<hex>", "startupTimeout": 60000}` — all optional; omitting `jar` restarts the current version |
 | `gc` | `v/ops/venue/gc` | `{}` collects the Etch store while the venue keeps serving; `{"status": true}` reports state; `{"cancel": true}` rolls a running cycle back; `{"restart": true}` restarts after cutover so disk comes back now. One collection per process |
 
-All are invoked with `grid_run operation=v/ops/venue/... input=...`. `show-config` is read-only under the public `v/` scope and reports identity, agent/Job/storage/protocol/limit policy, active adapters, and only adapter settings explicitly allow-listed by `publicConfig()`. Enable/disable/configure return `{name, enabled, changed}` / `{name, config}` — `changed: false` means it was already in that state (idempotent). Load returns `{name, path, sha256, adapters}`; unload returns `{name, path, adapters, unloaded}`.
+All are invoked with `grid_run operation=v/ops/venue/... input=...`. `show-config` is read-only under the public `v/` scope and reports identity, agent/Job/storage/protocol/limit policy, active adapters, and only adapter settings explicitly allow-listed by `publicConfig()`. Enable/disable/configure return `{name, enabled, changed}` / `{name, config}` — `changed: false` means it was already in that state (idempotent); restart-adapter returns `{name, status: "running"}`. An adapter that cannot start (a port in use, a service out of reach) does not stop the venue: it shows `status: failed` with a `reason`, calls to its operations fail with "Adapter <name> is not running", and an enable or restart that fails again fails with the reason. A `configure` the adapter refuses with an error is reverted to its previous config. Load returns `{name, path, sha256, adapters}`; unload returns `{name, path, adapters, unloaded}`.
 
 ### Authority — read this before trying
 

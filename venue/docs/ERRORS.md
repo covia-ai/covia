@@ -36,7 +36,8 @@ unchanged and do not log it again.
 |---|---|---|
 | An adapter running an operation | Where the operation's outcome becomes its Job's: `Job.fail(Throwable)` through `Job.report`, from `AAdapter.invoke`, `settleJob`, `JobManager.start` and the adapters that run their own Jobs | `Operation <op> failed: unexpected <ClassName> in adapter <name>`, where `<op>` is the operation as the caller referred to it |
 | An adapter taking a message for a running Job | `JobManager` message delivery | `Message delivery to job <id> failed: unexpected <ClassName> in adapter <name>` |
-| An adapter being configured | Where the Engine offers it a configuration: start-up, enable, module load and `venue:adapter/configure` | `Configuring adapter <name> failed: unexpected <ClassName> in adapter <name>` |
+| An adapter being configured | Where the Engine offers it a configuration: start-up, enable, restart, module load, `venue:adapter/configure` and the revert of a change it refused | `Configuring adapter <name> failed: unexpected <ClassName> in adapter <name>` |
+| An adapter being started or stopped | Where the Engine starts it at launch, enable, restart or after a failed replacement, and stops it for a restart | `Starting adapter <name> failed` or `Stopping adapter <name> failed: unexpected <ClassName> in adapter <name>`; the adapter is left failed ([ADAPTERS.md](ADAPTERS.md#an-adapter-that-is-not-running)) |
 | An agent's transition | `CycleRecord.Failure.of`, in the adapter running it | `Transition failed: unexpected <ClassName> in adapter <name>` |
 | An agent's tool call (finding the tool, parsing arguments, built-in tools) | `AbstractLLMAdapter.toolFailure` | `Tool <name> failed: unexpected <ClassName> in the venue`; a goal-tree subgoal names its adapter |
 | A venue request (REST, MCP, A2A, other HTTP routes) | The route's catch and the server's catch-all | `Request <method> <path> (id <request id>) failed: unexpected <ClassName> in the venue`; MCP and A2A name the tool call, method or stream |
@@ -138,11 +139,17 @@ that escapes instead is a fault of the scope it escapes.
 **An adapter's settings are refused as its configuration.** An adapter's
 `configure` refuses a setting with `ConfigurationException`, whoever supplied
 it: the operator's venue config at start-up, enable or module load, or the
-caller of `venue:adapter/configure`, who gets it unchanged. Whether settings
-work is known only by applying them, so a malformed setting, one that cannot
-work on this venue and settings that fail as they are applied are the same
-failure ([ADAPTERS.md](ADAPTERS.md)). Only a request whose `config` is not an
-object is invalid input.
+caller of `venue:adapter/configure`, who gets it unchanged. A malformed
+setting and one that cannot work on this venue are the same failure. Work
+that fails as valid settings are applied, such as a listener on a port in use,
+is `UnavailableException`, since retrying later may succeed
+([ADAPTERS.md](ADAPTERS.md)). Only a request whose `config` is not an object is
+invalid input.
+
+**An adapter that cannot start is unavailable.** Its own operations are
+refused with `UnavailableException` naming the adapter, while the venue runs
+on; why it failed goes to operators only, in the log and `venue:adapters`
+([ADAPTERS.md](ADAPTERS.md#an-adapter-that-is-not-running)).
 
 **A shared parser leaves the choice to each caller.** A parser that reads both
 an adapter's settings and an operation's input, such as a messaging bot spec, a
