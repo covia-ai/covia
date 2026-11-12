@@ -10,6 +10,7 @@ import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.util.Shutdown;
 import covia.api.Fields;
 import covia.venue.server.VenueServer;
 
@@ -31,8 +32,16 @@ import covia.venue.server.VenueServer;
  *   SLEEP &lt;ms&gt;                        PROTO OK
  *   HALT                              (no response — Runtime.halt)
  *   EXIT                              (no response — orderly close + exit 0)
- *   SYSTEM_EXIT                       (no response — exit 0; the shutdown hook closes)
+ *   CLOSE_DURING_EXIT                 PROTO CLOSED | PROTO OPEN, from the last shutdown level
  * </pre>
+ *
+ * <p>An optional third argument, {@code embedded}, leaves out
+ * {@link MainVenue}'s shutdown hook, as an embedder that registers none.</p>
+ *
+ * <p>CLOSE_DURING_EXIT keeps a job in flight, starts {@link VenueServer#close()}
+ * on a daemon thread, as an embedder's exit does, and calls {@code System.exit}
+ * while that close waits out the job's shutdown grace. The last shutdown level
+ * reports whether the close had finished by then.</p>
  *
  * <p>WRITE invokes {@code v/ops/dlfs/write} then calls {@code engine.flush()}
  * before responding. After OK, the value is durable on disk.</p>
@@ -64,11 +73,12 @@ public class HardKillTestChild {
 
 	public static void main(String[] args) throws Exception {
 		if (args.length < 2) {
-			System.err.println("Usage: HardKillTestChild <storePath> <seedHex>");
+			System.err.println("Usage: HardKillTestChild <storePath> <seedHex> [embedded]");
 			System.exit(2);
 		}
 		String storePath = args[0];
 		String seedHex = args[1];
+		boolean embedded = args.length > 2 && "embedded".equals(args[2]);
 
 		PrintStream out = new PrintStream(System.out, true, StandardCharsets.UTF_8);
 
@@ -81,7 +91,7 @@ public class HardKillTestChild {
 			return;
 		}
 		Engine engine = server.getEngine();
-		MainVenue.closeOnJvmShutdown(java.util.List.of(server));
+		if (!embedded) MainVenue.closeOnJvmShutdown(java.util.List.of(server));
 
 		out.println(PROTO + " READY " + server.port());
 
@@ -107,7 +117,14 @@ public class HardKillTestChild {
 				} else if ("EXIT".equals(line)) {
 					server.close();
 					System.exit(0);
-				} else if ("SYSTEM_EXIT".equals(line)) {
+				} else if ("CLOSE_DURING_EXIT".equals(line)) {
+					engine.jobs().invokeOperation("v/test/ops/never", Maps.empty(), RequestContext.of(ALICE_DID));
+					// Closing sets the host to null once the engine has made its final flush.
+					Shutdown.addHook(Shutdown.CLI, () -> out.println(PROTO + (server.getHost() == null ? " CLOSED" : " OPEN")));
+					Thread closer = new Thread(server::close, "embedder-close");
+					closer.setDaemon(true);
+					closer.start();
+					while (!engine.isClosing()) Thread.onSpinWait();
 					System.exit(0);
 				} else {
 					out.println(PROTO + " ERR unknown_command " + line);

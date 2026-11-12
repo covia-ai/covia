@@ -71,6 +71,13 @@ itself.
 runs before Convex closes its servers and Etch files. `MainVenue` registers
 there.
 
+A `VenueServer` on an Etch store that outlives the process (a file path, or a
+store it adopted) registers its own `close()` there too, and withdraws it once
+it has closed. `close()` runs once and a later caller waits for it, so a JVM
+shutdown that begins while your own thread is closing the venue waits for the
+venue's final save before Etch closes the file. A venue on a `temp` or
+`memory` store registers nothing: it has nothing to keep.
+
 **Before starting.** `VenueState.peekVenueKeys(store)` reads the venue keys
 recorded in an open store, and `VenueState.peekVersions(store, venueKey)` its
 schema versions, Covia's and each adapter's, without starting a venue.

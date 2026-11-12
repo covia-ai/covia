@@ -42,6 +42,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 - Account REST reads and deletion honour delegated administration grants in `X-Covia-Ucans`.
 - Job SSE subscriptions no longer miss completion while connecting or deliver initial state after a newer update.
+- An embedded venue on a persistent store closes itself on JVM shutdown, and the shutdown waits for a close already under way, so Etch no longer closes the store beneath the venue's final save (#699).
 
 - Grid operations honour explicit remote result wait timeouts, submit asynchronously without background polling, and reject non-string venue targets instead of executing locally.
 - `user:delete` no longer leaves cleanup pending for an adapter registered while it runs.
