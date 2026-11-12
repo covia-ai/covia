@@ -726,7 +726,7 @@ public class VenueServerTest {
 		
 		// Step 5: Confirm that the status is CANCELLED using Covia.getJobStatus
 		assertNotNull(cancelledMap, "Cancelled job status map should not be null");
-		AString cancelledStatus = RT.ensureString(cancelledMap.get(Fields.STATUS));
+		AString cancelledStatus = RT.ensureString(covia.getJobData(jobIdStr).get(5, TimeUnit.SECONDS).get(Fields.STATUS));
 		assertEquals("CANCELLED", cancelledStatus.toString(), "Job status should be CANCELLED");
 		
 		// Step 6: Delete the job using the Covia client
@@ -750,7 +750,7 @@ public class VenueServerTest {
 		// Pause the running job via API
 		AMap<AString, ACell> pausedStatus = covia.pauseJob(jobId).get(5, TimeUnit.SECONDS);
 		assertNotNull(pausedStatus);
-		assertEquals("PAUSED", RT.ensureString(pausedStatus.get(Fields.STATUS)).toString());
+		assertEquals("PAUSED", RT.ensureString(covia.getJobData(jobId).get(5, TimeUnit.SECONDS).get(Fields.STATUS)).toString());
 
 		// Verify job is paused via status check
 		AMap<AString, ACell> check = covia.getJobData(jobId).get(5, TimeUnit.SECONDS);
@@ -759,7 +759,7 @@ public class VenueServerTest {
 		// Resume the job via API
 		AMap<AString, ACell> resumedStatus = covia.resumeJob(jobId).get(5, TimeUnit.SECONDS);
 		assertNotNull(resumedStatus);
-		assertEquals("STARTED", RT.ensureString(resumedStatus.get(Fields.STATUS)).toString());
+		assertEquals("STARTED", RT.ensureString(covia.getJobData(jobId).get(5, TimeUnit.SECONDS).get(Fields.STATUS)).toString());
 
 		// Cancel to clean up
 		covia.cancelJob(jobId).get(5, TimeUnit.SECONDS);

@@ -1,6 +1,6 @@
 {
 	"name": "Manager Agent Template",
-	"description": "Goal-decomposing team coordinator for creating, inspecting, and delegating to agents, tracking asynchronous results, and handing exact outputs between workers by path.",
+	"description": "Goal-decomposing team coordinator for creating, inspecting, and delegating to agents, tracking asynchronous results, and handing exact outputs between workers by path. Capabilities start empty; grant the specific Job and other resource permissions needed for the task.",
 	"agent": {
 		"config": {
 			"operation": "v/ops/goaltree/chat",
@@ -51,7 +51,8 @@
 				"v/skills/agents/hitl",
 				"v/skills/root/auth",
 				"v/skills/ops-tools/provenance"
-			]
+			],
+			"caps": []
 		}
 	}
 }

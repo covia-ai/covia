@@ -141,16 +141,15 @@ public class VenueHTTPTest {
 	public void cancelWithReasonBecomesTheJobsError() throws Exception {
 		Job job = client.startJob(OP_NEVER, Maps.empty());
 		AMap<AString, ACell> cancelled = client.cancelJob(job.getID().toHexString(), "no longer needed").join();
-		assertEquals("CANCELLED", RT.getIn(cancelled, Fields.STATUS).toString());
-		assertEquals("no longer needed", RT.getIn(cancelled, Fields.ERROR).toString(),
-			"the reason is the error every reader shows");
+		assertEquals(convex.core.data.prim.CVMBool.TRUE, cancelled.get(Fields.ACCEPTED));
+		assertNull(cancelled.get(Fields.ERROR));
 		AMap<AString, ACell> remote = client.getJobData(job.getID()).join();
 		assertEquals("no longer needed", RT.getIn(remote, Fields.ERROR).toString());
 
 		// Without a reason, the error names the job as before.
 		Job plain = client.startJob(OP_NEVER, Maps.empty());
 		AMap<AString, ACell> plainCancelled = client.cancelJob(plain.getID().toHexString()).join();
-		assertTrue(RT.getIn(plainCancelled, Fields.ERROR).toString().startsWith("Job cancelled: "));
+		assertTrue(RT.getIn(client.getJobData(plain.getID()).join(), Fields.ERROR).toString().startsWith("Job cancelled: "));
 	}
 
 	@Test

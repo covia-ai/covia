@@ -36,7 +36,7 @@ public class SseServer {
 	public static final String AGENT_NOT_FOUND = "Agent not found: ";
 
 	/** One job-stream client and the context its reads are made under. */
-	private record JobClient(SseClient client, RequestContext rctx) {}
+	private record JobClient(SseClient client, RequestContext rctx, AString owner) {}
 
 	/** Per-job client subscriptions, keyed by the job's CANONICAL bare hex id
 	 *  ({@code Blob.toHexString()}) — the same form {@link #broadcastJobUpdate}
@@ -79,7 +79,8 @@ public class SseServer {
 		// exactly what GET /jobs/{id} would show this caller.
 		RequestContext rctx = engine.withTransportGrants(AuthMiddleware.callerContext(client.ctx()),
 			AuthMiddleware.headerUcans(client.ctx()));
-		AMap<AString, ACell> record = engine.jobs().getJobData(jobId, rctx);
+		AString owner = covia.venue.api.CoviaAPI.jobOwner(client.ctx());
+		AMap<AString, ACell> record = readableRecord(jobId, rctx, owner);
 		if (record == null) {
 			// Vanished between the route check and here (e.g. deleted)
 			sendNotFound(client, key);
@@ -92,7 +93,7 @@ public class SseServer {
 			return;
 		}
 
-		registerClient(key, new JobClient(client, rctx));
+		registerClient(key, new JobClient(client, rctx, owner));
 		client.sendEvent("job-update", JSON.toString(record));
 	};
 
@@ -145,7 +146,7 @@ public class SseServer {
 
 		for (JobClient jc : clients) {
 			try {
-				AMap<AString, ACell> record = readableRecord(job.getID(), jc.rctx());
+				AMap<AString, ACell> record = readableRecord(job.getID(), jc.rctx(), jc.owner());
 				if (record == null) {
 					sendNotFound(jc.client(), jobId);
 					continue;
@@ -159,9 +160,9 @@ public class SseServer {
 	}
 
 	/** The job record as {@code rctx} may read it now, or null when it may not. */
-	private AMap<AString, ACell> readableRecord(Blob jobId, RequestContext rctx) {
+	private AMap<AString, ACell> readableRecord(Blob jobId, RequestContext rctx, AString owner) {
 		try {
-			return engine.jobs().getJobData(jobId, rctx);
+			return engine.jobs().getJobData(jobId, rctx, owner);
 		} catch (AuthException e) {
 			return null;
 		}

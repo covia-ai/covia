@@ -22,6 +22,13 @@ public final class Abilities {
 	 *  bound tool needs its action authority, not arbitrary lookup permission. */
 	public static final AString INVOKE        = Strings.intern("invoke");
 
+	/** Read a Job's public record, result and updates. */
+	public static final AString JOB_READ      = Strings.intern("job/read");
+	/** Control a Job's lifecycle, including deleting its retained record. */
+	public static final AString JOB_MANAGE    = Strings.intern("job/manage");
+	/** Deliver input to an existing Job; grants no execution authority. */
+	public static final AString JOB_MESSAGE   = Strings.intern("job/message");
+
 	public static final AString ASSET_READ    = Strings.intern("asset/read");
 	public static final AString ASSET_STORE   = Strings.intern("asset/store");
 	public static final AString SECRET_WRITE  = Strings.intern("secret/write");

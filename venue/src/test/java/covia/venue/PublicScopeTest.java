@@ -131,11 +131,9 @@ public class PublicScopeTest {
 	public void anonymousMutationDeniedByDefault() throws Exception {
 		VenueHTTP pub = anon(secureBase);
 		// Denial fails the Job at the adapter's enforcement point.
-		Job job = pub.invokeAndWait(OP_WRITE, Maps.of(
+		assertThrows(covia.exception.ResponseException.class, () -> pub.invokeAndWait(OP_WRITE, Maps.of(
 			Strings.create("path"), Strings.create("w/x"),
-			Strings.create("value"), Strings.create("nope")));
-		assertEquals(Status.FAILED, job.getStatus(), "public write must be denied");
-		assertFalse(String.valueOf(job.getErrorMessage()).isBlank());
+			Strings.create("value"), Strings.create("nope"))));
 	}
 
 	@Test
@@ -143,16 +141,13 @@ public class PublicScopeTest {
 		// The read-only scope does not grant arbitrary-operation invocation,
 		// even for an otherwise-harmless echo.
 		VenueHTTP pub = anon(secureBase);
-		Job job = pub.invokeAndWait(OP_ECHO, Maps.of(Strings.create("hi"), Strings.create("there")));
-		assertEquals(Status.FAILED, job.getStatus(), "public invoke must be denied");
-		assertFalse(String.valueOf(job.getErrorMessage()).isBlank());
+		assertThrows(covia.exception.ResponseException.class, () -> pub.invokeAndWait(OP_ECHO, Maps.of(Strings.create("hi"), Strings.create("there"))));
 	}
 
 	@Test
 	public void anonymousReadAllowedByDefault() throws Exception {
 		VenueHTTP pub = anon(secureBase);
-		Job job = pub.invokeAndWait(OP_READ, Maps.of(Strings.create("path"), Strings.create("w/x")));
-		assertEquals(Status.FAILED, job.getStatus(), "generic invocation requires invoke");
+		assertThrows(covia.exception.ResponseException.class, () -> pub.invokeAndWait(OP_READ, Maps.of(Strings.create("path"), Strings.create("w/x"))));
 		assertEquals(200, get(secureBase + "/api/v1/values/read?path=w/x").statusCode(),
 			"the direct read endpoint needs only resource authority");
 	}
@@ -160,8 +155,7 @@ public class PublicScopeTest {
 	@Test
 	public void anonymousShowConfigAllowedByDefault() throws Exception {
 		VenueHTTP pub = anon(secureBase);
-		Job job = pub.invokeAndWait(OP_SHOW_CONFIG, Maps.empty());
-		assertEquals(Status.FAILED, job.getStatus(), "generic invocation requires invoke");
+		assertThrows(covia.exception.ResponseException.class, () -> pub.invokeAndWait(OP_SHOW_CONFIG, Maps.empty()));
 		Engine engine = secureServer.getEngine();
 		var result = engine.jobs().runToolOperation(OP_SHOW_CONFIG, Maps.empty(),
 			engine.context(Strings.create(engine.getDIDString() + ":public"))).join();

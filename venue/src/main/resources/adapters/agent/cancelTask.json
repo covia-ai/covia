@@ -1,6 +1,6 @@
 {
 	"name": "Cancel Agent Task",
-	"description": "Removes a pending task from an agent's task queue. The task will no longer be presented to the agent's transition function. Use this to clean up stuck or unwanted tasks. An optional reason becomes the cancelled task job's error, so whoever is waiting on it sees why.",
+	"description": "Requires job/manage on the task Job as well as agent administration authority. Removes a pending task from an agent's task queue. The task will no longer be presented to the agent's transition function. Use this to clean up stuck or unwanted tasks. An optional reason becomes the cancelled task job's error, so whoever is waiting on it sees why.",
 	"dateCreated": "2026-03-11T00:00:00Z",
 	"operation": {
 		"adapter": "agent:cancelTask",

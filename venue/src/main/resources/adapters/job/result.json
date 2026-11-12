@@ -1,6 +1,6 @@
 {
 	"name": "Job Result",
-	"description": "job_result: Wait for an existing Job and return its exact output. A failed, rejected or cancelled target fails this wait. Omit timeout or use 0 for no deadline; a positive timeout limits only the wait. Timing out or cancelling this wait leaves the target running. A target needing input will not finish until that input is supplied to it. Do not resubmit the original operation because a wait timed out.",
+	"description": "job_result: Wait for an existing Job and return its exact output. A failed, rejected or cancelled target fails this wait. Omit timeout or use 0 for no deadline; a positive timeout limits only the wait. Timing out or cancelling this wait leaves the target running. A target needing input will not finish until that input is supplied to it. Do not resubmit the original operation because a wait timed out. Requires job/read on the target Job; raw CRUD permissions and creator attribution do not grant it.",
 	"operation": {
 		"adapter": "job:result",
 		"toolName": "job_result",
@@ -30,6 +30,10 @@
 					"type": "integer",
 					"minimum": 0,
 					"description": "Maximum milliseconds to wait; omitted or 0 means no deadline. Expiry fails this wait without changing or cancelling the target."
+				},
+				"owner": {
+					"type": "string",
+					"description": "Job owner DID. Supply it for another owner, including retained Jobs. This selects a lookup namespace and grants no authority. With a remote venue, omission selects the authenticated principal, or the remote public principal in anonymous mode."
 				}
 			},
 			"required": [

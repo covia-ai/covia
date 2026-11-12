@@ -305,6 +305,8 @@ public class Fields {
 	 *  differs from {@link #CALLER}. Ownership, access control and quota key on
 	 *  it. Read and written with {@link covia.grid.Attribution}. */
 	public static final StringShort OWNER = Strings.intern("owner");
+	/** A lifecycle control was accepted; does not assert remote cessation. */
+	public static final StringShort ACCEPTED = Strings.intern("accepted");
 	/** On an agent: the principal whose authority its harness runs under, and
 	 *  whose authority an update needs. Absent means the agent's owner. */
 	public static final StringShort CONTROLLER = Strings.intern("controller");

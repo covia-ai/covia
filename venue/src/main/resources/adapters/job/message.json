@@ -1,6 +1,6 @@
 {
 	"name": "Job Message",
-	"description": "job_message: Deliver a structured message to an existing active Job that accepts messages, for example to answer INPUT_REQUIRED or AUTH_REQUIRED. Unsupported delivery and terminal Jobs fail explicitly. Acknowledgement means accepted delivery, not completion. Address the Job needing input, not a separate Job waiting for its result.",
+	"description": "job_message: Deliver a structured message to an existing active Job that accepts messages, for example to answer INPUT_REQUIRED or AUTH_REQUIRED. Unsupported delivery and terminal Jobs fail explicitly. Acknowledgement means accepted delivery, not completion. Address the Job needing input, not a separate Job waiting for its result. Requires job/message on the target Job; raw CRUD permissions and creator attribution do not grant it.",
 	"operation": {
 		"adapter": "job:message",
 		"toolName": "job_message",
@@ -29,6 +29,10 @@
 				"message": {
 					"type": "object",
 					"description": "Message in the receiving operation's format, such as {content: \"continue\"}. Forwarded unchanged."
+				},
+				"owner": {
+					"type": "string",
+					"description": "Job owner DID. Supply it for another owner, including retained Jobs. This selects a lookup namespace and grants no authority. With a remote venue, omission selects the authenticated principal, or the remote public principal in anonymous mode."
 				}
 			},
 			"required": [

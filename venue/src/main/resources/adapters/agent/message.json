@@ -1,6 +1,6 @@
 {
 	"name": "Message Agent",
-	"description": "Send a fire-and-forget notification to an agent's inbox. NO response is returned — use agent_request instead if you need a reply. Messages are ephemeral notifications, not tracked tasks. Only use this for one-way alerts or events where you do not need the agent to respond.",
+	"description": "When addressing a taskId, requires job/message on that Job in addition to agent/message authority. Send a fire-and-forget notification to an agent's inbox. NO response is returned — use agent_request instead if you need a reply. Messages are ephemeral notifications, not tracked tasks. Only use this for one-way alerts or events where you do not need the agent to respond.",
 	"dateCreated": "2026-02-27T00:00:00Z",
 	"operation": {
 		"adapter": "agent:message",

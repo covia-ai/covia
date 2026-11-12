@@ -683,7 +683,10 @@ public class Orchestrator extends AAdapter {
 
 			private Job invokeChild(AString opId, ACell childInput) {
 				Venue venue=targetVenue();
-				if (venue != null) return venue.invoke(opId.toString(),childInput).join();
+				if (venue != null) {
+					engine.jobs().requireRemoteInvoke(opId, childInput, ctx);
+					return venue.invoke(opId.toString(),childInput).join();
+				}
 				// Deliberately use JobManager for every item. This preserves job
 				// tracking and runs the common point-of-action authorization gate
 				// against the actual per-item input.

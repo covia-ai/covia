@@ -14,6 +14,7 @@ import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.api.Fields;
+import covia.api.Abilities;
 import covia.exception.InvalidDefinitionException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
@@ -24,6 +25,7 @@ import covia.grid.Job;
 import covia.grid.Status;
 import covia.grid.Venue;
 import covia.venue.RemoteJobs;
+import covia.venue.JobManager;
 import covia.venue.RequestContext;
 
 /** Tool surface for the universal Job contract; execution belongs to JobManager and the job's adapter. */
@@ -59,25 +61,22 @@ public class JobAdapter extends AAdapter {
 		validateOperation(op);
 		Blob id = id(input);
 		AString target = target(meta, input);
+		AString owner = VenueConnection.jobOwner(input);
 		if ("result".equals(op)) {
 			long timeout = timeout(input);
 			if (target != null) return engine.jobs().invokeInternal(meta, input, ctx);
-			Job job = engine.jobs().getJob(id, ctx);
-			if (job == null) throw missing(id);
-			// A wait owns neither the target job nor its future. Cancelling or timing
-			// out this derived future cannot cancel the work being observed.
-			CompletableFuture<ACell> wait = job.future().thenApply(value -> value);
+			CompletableFuture<ACell> wait = engine.jobs().awaitResult(id, ctx, owner);
 			return bounded(wait, timeout, id);
 		}
 		AMap<AString, ACell> message = "message".equals(op) ? message(input) : null;
 		if (target == null) {
 			return switch (op) {
-				case "status" -> CompletableFuture.completedFuture(found(engine.jobs().getJobData(id, ctx), id));
-				case "cancel" -> CompletableFuture.completedFuture(found(engine.jobs().cancelJob(id, ctx), id));
-				case "pause" -> CompletableFuture.completedFuture(found(engine.jobs().pauseJob(id, ctx), id));
-				case "resume" -> CompletableFuture.completedFuture(found(engine.jobs().resumeJob(id, ctx), id));
+				case "status" -> CompletableFuture.completedFuture(found(engine.jobs().getJobData(id, ctx, owner), id));
+				case "cancel" -> CompletableFuture.completedFuture(found(engine.jobs().cancelJob(id, ctx, null, owner), id));
+				case "pause" -> CompletableFuture.completedFuture(found(engine.jobs().pauseJob(id, ctx, owner), id));
+				case "resume" -> CompletableFuture.completedFuture(found(engine.jobs().resumeJob(id, ctx, owner), id));
 				case "message" -> {
-					engine.jobs().deliverMessage(id, message, ctx);
+					engine.jobs().deliverMessage(id, message, ctx, owner);
 					yield CompletableFuture.completedFuture(delivered(id));
 				}
 				default -> throw new NotSupportedException(UNKNOWN_OPERATION + op);
@@ -86,12 +85,16 @@ public class JobAdapter extends AAdapter {
 		// Connection setup and synchronous SDK controls may perform network I/O.
 		return CompletableFuture.supplyAsync(() -> {
 			if (!"status".equals(op)) engine.remoteJobs().requireNotClosing();
-			Venue venue = VenueConnection.connect(engine, ctx, target, input).venue();
+			Venue venue = VenueConnection.job(engine, ctx, target, input, id, "status".equals(op) ? Abilities.JOB_READ
+				: "message".equals(op) ? Abilities.JOB_MESSAGE : Abilities.JOB_MANAGE).venue();
 			return switch (op) {
-				case "status" -> venue.getJobStatus(id).thenApply(data -> (ACell) found(data, id));
-				case "cancel" -> CompletableFuture.<ACell>completedFuture(found(venue.cancelJob(id), id));
-				case "pause" -> CompletableFuture.<ACell>completedFuture(found(venue.pauseJob(id), id));
-				case "resume" -> CompletableFuture.<ACell>completedFuture(found(venue.resumeJob(id), id));
+				case "status" -> venue.getJobStatus(id).thenApply(data -> {
+					VenueConnection.requireJobAuthority(engine, ctx, venue, id, Abilities.JOB_READ);
+					return (ACell) found(data, id);
+				});
+				case "cancel" -> CompletableFuture.<ACell>completedFuture(controlled(venue.cancelJob(id), id));
+				case "pause" -> CompletableFuture.<ACell>completedFuture(controlled(venue.pauseJob(id), id));
+				case "resume" -> CompletableFuture.<ACell>completedFuture(controlled(venue.resumeJob(id), id));
 				case "message" -> {
 					venue.sendMessage(id.toHexString(), message);
 					yield CompletableFuture.<ACell>completedFuture(delivered(id));
@@ -115,18 +118,22 @@ public class JobAdapter extends AAdapter {
 			CompletableFuture.runAsync(() -> {
 				if (job.isFinished()) return;
 				AString target = target(meta, input);
-				VenueConnection connection = VenueConnection.connect(engine, ctx, target, input);
+				VenueConnection connection = VenueConnection.job(engine, ctx, target, input, id, Abilities.JOB_READ);
 				if (job.isFinished()) return;
 				RemoteJobs observer = engine.remoteJobs();
 				observer.prepare(job, PROTOCOL.toString(), target.toString(), connection.credentials(), false);
 				observer.accepted(job, id.toHexString());
-				watch(job, connection.venue(), id);
+				watch(job, connection.venue(), id, ctx);
 			}, VIRTUAL_EXECUTOR).whenComplete((value, error) -> { if (error != null) job.fail(unwrap(error)); });
 		});
 	}
 
-	private void watch(Job wait, Venue venue, Blob id) {
-		engine.remoteJobs().observe(wait, () -> venue.getJobStatus(id), snapshot -> {
+	private void watch(Job wait, Venue venue, Blob id, RequestContext ctx) {
+		engine.remoteJobs().observe(wait, () -> {
+			VenueConnection.requireJobAuthority(engine, ctx, venue, id, Abilities.JOB_READ);
+			return venue.getJobStatus(id);
+		}, snapshot -> {
+			VenueConnection.requireJobAuthority(engine, ctx, venue, id, Abilities.JOB_READ);
 			AString status = snapshot == null ? null : RT.ensureString(snapshot.get(Fields.STATUS));
 			if (snapshot == null || !id.equals(Job.parseID(snapshot.get(Fields.ID)))
 					|| !(Status.PENDING.equals(status) || Status.STARTED.equals(status) || Status.PAUSED.equals(status)
@@ -159,7 +166,7 @@ public class JobAdapter extends AAdapter {
 			AMap<AString, ACell> saved = engine.remoteJobs().connection(job);
 			if (!VenueConnection.resumable(saved)) { engine.remoteJobs().credentialNotKept(job); return; }
 			Venue venue = VenueConnection.restore(engine, RT.ensureString(kept.get(RemoteJobs.TARGET)), saved);
-			watch(job, venue, Job.parseID(remoteId));
+			watch(job, venue, Job.parseID(remoteId), engine.context(job.getOwner(), job.getCaller()));
 		} catch (RuntimeException e) { engine.remoteJobs().unavailable(job, e); }
 	}
 
@@ -217,6 +224,13 @@ public class JobAdapter extends AAdapter {
 		AMap<AString, ACell> message = RT.ensureMap(RT.getIn(input, Fields.MESSAGE));
 		if (message == null) throw new InvalidInputException(INVALID_MESSAGE);
 		return message;
+	}
+
+	private static AMap<AString, ACell> controlled(AMap<AString, ACell> response, Blob id) {
+		found(response, id);
+		if (!id.equals(Job.parseID(response.get(Fields.ID)))) throw new ResponseException(INVALID_REMOTE);
+		// Older peers may return the whole record. Manage permission never discloses it.
+		return JobManager.acknowledgement(id);
 	}
 
 	private static NotFoundException missing(Blob id) { return new NotFoundException(NOT_FOUND + id.toHexString(), id.toHexString()); }

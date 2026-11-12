@@ -43,7 +43,8 @@ venue/
   with JSON Schema input/output. See `docs/OPERATIONS.md`.
 - **Job** — execution state for an invocation. No framework-level timeout;
   terminal states sticky; caller-side wait timeouts never mutate the job.
-  Full implementation semantics: `docs/JOBS.md`; protocol: COG-8.
+  Full implementation semantics: `docs/JOBS.md`; protocol: COG-8. Standard
+  capability catalog: `docs/UCAN.md` section 3.2 (`job/read`, `job/manage`, `job/message`).
 - **Adapter** — bridges operations to execution. Extends `AAdapter`; receives
   resolved metadata (never null) and a `RequestContext`; returns
   `CompletableFuture` (or overrides the job-aware `invoke` for direct job

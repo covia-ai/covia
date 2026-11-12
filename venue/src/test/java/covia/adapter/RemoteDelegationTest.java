@@ -254,7 +254,7 @@ class RemoteDelegationTest {
 	@Test void cancellingExistingJobObserverDoesNotCancelRemoteWork() throws Exception {
 		try (CancellationPeer peer = new CancellationPeer("grid", null)) {
 			Job job = peer.engine.jobs().invokeOperation(Maps.of(Fields.OPERATION, Maps.of(Fields.ADAPTER, "grid:jobResult")),
-				Maps.of(Fields.VENUE, peer.url(), Fields.ID, ID), peer.engine.venueContext());
+				Maps.of(Fields.VENUE, peer.url(), Fields.ID, ID, Fields.OWNER, peer.engine.getDIDString()), peer.engine.venueContext());
 			awaitRemoteId(job);
 			// Recovery must preserve the same ownership boundary.
 			peer.engine.getAdapter("grid").recoverJob(job);

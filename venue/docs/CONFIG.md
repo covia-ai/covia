@@ -3226,7 +3226,7 @@ reach only the asker's own tasks for that agent.
 "anyone"` lets anonymous callers ask. They ask as the venue's public
 principal when public access is enabled. The target's `accepts: "anyone"`
 provides the action authority; the bound endpoint needs no `invoke` grant.
-Following tasks still needs `crud/read` on the public principal's jobs,
+Following tasks needs explicit `job/read` on the public principal's jobs,
 which the read-only public default grants.
 Every anonymous caller is that one principal, so they share its jobs: under a
 read-only scope any of them can read an anonymous task by its id, and none can

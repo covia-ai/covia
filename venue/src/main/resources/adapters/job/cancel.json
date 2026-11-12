@@ -1,6 +1,6 @@
 {
 	"name": "Job Cancel",
-	"description": "job_cancel: Request cancellation of an existing Job and return its current record. Existing terminal outcomes stay unchanged; prior side effects are not undone. Cancelling a result waiter only stops that wait. For delegated execution, local CANCELLED alone does not prove the destination stopped: inspect cancellation.outcome and delegation.remoteStatus when present.",
+	"description": "job_cancel: Request cancellation of an existing Job and return an acceptance acknowledgement. Existing terminal outcomes stay unchanged; prior side effects are not undone. Cancelling a result waiter only stops that wait. For delegated execution, local CANCELLED alone does not prove the destination stopped: inspect cancellation.outcome and delegation.remoteStatus when present. Requires job/manage on the target Job; raw CRUD permissions and creator attribution do not grant it.",
 	"operation": {
 		"adapter": "job:cancel",
 		"toolName": "job_cancel",
@@ -25,6 +25,10 @@
 					],
 					"default": "anonymous",
 					"description": "Remote identity: anonymous (default) sends no identity or grants; caller requires your identity credential addressed to the target venue, with no capabilities, plus any separate grants; venue is only for the venue itself. Use the same mode and credentials when following the Job. Local calls retain your caller context."
+				},
+				"owner": {
+					"type": "string",
+					"description": "Job owner DID. Supply it for another owner, including retained Jobs. This selects a lookup namespace and grants no authority. With a remote venue, omission selects the authenticated principal, or the remote public principal in anonymous mode."
 				}
 			},
 			"required": [
@@ -33,99 +37,20 @@
 		},
 		"output": {
 			"type": "object",
-			"description": "Current Job record on the selected hosting venue. Optional fields are present only when reported; absence of remote evidence does not prove completion or cancellation.",
 			"properties": {
 				"id": {
-					"type": "string",
-					"description": "Job ID on this record's hosting venue."
+					"type": "string"
 				},
-				"status": {
-					"type": "string",
-					"enum": [
-						"PENDING",
-						"STARTED",
-						"PAUSED",
-						"INPUT_REQUIRED",
-						"AUTH_REQUIRED",
-						"COMPLETE",
-						"FAILED",
-						"CANCELLED",
-						"REJECTED"
-					],
-					"description": "PENDING is queued; STARTED is running. PAUSED may be resumed. INPUT_REQUIRED or AUTH_REQUIRED needs the requested input or credentials sent to this Job. COMPLETE has output; FAILED, CANCELLED and REJECTED are terminal. Inspect error and errorCode when present; do not automatically resubmit."
-				},
-				"output": {
-					"description": "The operation's output when COMPLETE; any JSON value, including null. The output can itself be a handle returned by that operation."
-				},
-				"error": {
-					"description": "Reported reason for failure, rejection or cancellation: a string when available, otherwise absent or null."
-				},
-				"errorCode": {
-					"description": "Optional operation-defined error code, a string or null; status alone does not identify the cause."
-				},
-				"created": {
-					"type": "integer",
-					"description": "Creation time in milliseconds since the Unix epoch."
-				},
-				"updated": {
-					"type": "integer",
-					"description": "Last record update in milliseconds since the Unix epoch."
-				},
-				"progress": {
-					"description": "Latest progress, usually {message, data?}; may also be a string or operation-specific detail. Progress is not the final output."
-				},
-				"delegation": {
-					"type": "object",
-					"description": "Observations of remote work, when this Job delegates or waits on another Job.",
-					"properties": {
-						"remoteId": {
-							"type": "string",
-							"description": "Destination Job ID, not a local Job ID. Use only with its known hosting venue."
-						},
-						"remoteStatus": {
-							"type": "string",
-							"description": "Last observed destination state; may differ from this Job's status."
-						},
-						"notFollowed": {
-							"type": "string",
-							"description": "Why observation stopped and what the caller can do. Does not establish failure of the destination work."
-						}
-					}
-				},
-				"cancellation": {
-					"type": "object",
-					"description": "Evidence from an attempted backend cancellation; may arrive after local cancellation. Missing evidence does not prove remote work stopped.",
-					"properties": {
-						"remoteId": {
-							"type": "string"
-						},
-						"outcome": {
-							"type": "string",
-							"enum": [
-								"requested",
-								"acknowledged",
-								"finished",
-								"rejected",
-								"unknown"
-							],
-							"description": "requested: sent, no confirmation; acknowledged: peer reported cancellation; finished: peer reported another terminal outcome; rejected: peer refused; unknown: no conclusive answer. None undoes prior side effects."
-						},
-						"remoteStatus": {
-							"type": "string"
-						},
-						"httpStatus": {
-							"type": "integer"
-						},
-						"errorCode": {
-							"description": "Protocol error code, when supplied."
-						}
-					}
+				"accepted": {
+					"type": "boolean",
+					"description": "The control was accepted. This does not prove remote cessation; read Job status separately with job/read."
 				}
 			},
 			"required": [
 				"id",
-				"status"
-			]
+				"accepted"
+			],
+			"additionalProperties": false
 		}
 	}
 }

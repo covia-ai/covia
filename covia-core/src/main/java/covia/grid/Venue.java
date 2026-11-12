@@ -17,6 +17,11 @@ import convex.core.data.Strings;
 public abstract class Venue {
 
 	private AString user;
+	private AString jobOwner;
+
+	/** Lookup namespace for Job requests, not an identity or authority override. */
+	public void setJobOwner(AString owner) { this.jobOwner = owner; }
+	public AString getJobOwner() { return jobOwner; }
 
 	/**
 	 * Set the user identity (DID) for this venue client.
@@ -272,21 +277,21 @@ public abstract class Venue {
 	/**
 	 * Cancel a running job.
 	 * @param jobId Job identifier
-	 * @return Updated job status, or null if job not found
+	 * @return Acceptance acknowledgement, or null if job not found
 	 */
 	public abstract AMap<AString, ACell> cancelJob(Blob jobId);
 
 	/**
 	 * Pause a running job.
 	 * @param jobId Job identifier
-	 * @return Updated job status, or null if job not found
+	 * @return Acceptance acknowledgement, or null if job not found
 	 */
 	public abstract AMap<AString, ACell> pauseJob(Blob jobId);
 
 	/**
 	 * Resume a paused job.
 	 * @param jobId Job identifier
-	 * @return Updated job status, or null if job not found
+	 * @return Acceptance acknowledgement, or null if job not found
 	 */
 	public abstract AMap<AString, ACell> resumeJob(Blob jobId);
 

@@ -5707,7 +5707,7 @@ public class AgentAdapterTest {
 		User user = engine.getVenueState().users().user(ALICE_DID);
 		Agent agent = user.agent("task-agent");
 
-		Blob taskId = Blob.createRandom(new java.util.Random(42), 16);
+		Blob taskId = engine.jobs().invokeOperation("v/test/ops/echo", Maps.empty(), RequestContext.of(ALICE_DID)).getID();
 		agent.tasks().add(taskId, Maps.of("question", "What is 2+2?"));
 		assertEquals(1, agent.getTasks().count());
 
@@ -5821,9 +5821,9 @@ public class AgentAdapterTest {
 		Agent agent = user.agent("multi-task");
 
 		java.util.Random rng = new java.util.Random(123);
-		Blob task1 = Blob.createRandom(rng, 16);
-		Blob task2 = Blob.createRandom(rng, 16);
-		Blob task3 = Blob.createRandom(rng, 16);
+		Blob task1 = engine.jobs().invokeOperation("v/test/ops/echo", Maps.empty(), RequestContext.of(ALICE_DID)).getID();
+		Blob task2 = engine.jobs().invokeOperation("v/test/ops/echo", Maps.empty(), RequestContext.of(ALICE_DID)).getID();
+		Blob task3 = engine.jobs().invokeOperation("v/test/ops/echo", Maps.empty(), RequestContext.of(ALICE_DID)).getID();
 		agent.tasks().add(task1, Maps.of("q", "one"));
 		agent.tasks().add(task2, Maps.of("q", "two"));
 		agent.tasks().add(task3, Maps.of("q", "three"));
@@ -5874,7 +5874,7 @@ public class AgentAdapterTest {
 				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/echo")),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 		Agent agent = engine.getVenueState().users().user(ALICE_DID).agent("cancel-prefixed");
-		Blob taskId = Blob.createRandom(new java.util.Random(7), 16);
+		Blob taskId = engine.jobs().invokeOperation("v/test/ops/echo", Maps.empty(), RequestContext.of(ALICE_DID)).getID();
 		agent.tasks().add(taskId, Maps.of("question", "What is 2+2?"));
 
 		ACell result = engine.jobs().invokeOperation(

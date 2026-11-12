@@ -129,7 +129,7 @@ public class AccessControlTest {
 	}
 
 	@Test
-	public void testScopedSubPrincipalReachesOnlyJobsItLaunched() {
+	public void testCreatorAttributionDoesNotGrantJobAuthority() {
 		AccessControl ac = engine.getAccessControl();
 		// An agent of Alice's under its own caps: a sub-principal in her namespace.
 		RequestContext dispatch = RequestContext.ofAgent(ALICE_LITERAL, Strings.create("helper"))
@@ -143,8 +143,8 @@ public class AccessControlTest {
 			Fields.CALLER, dispatch.getCallerDID(),
 			Fields.OWNER, ALICE_LITERAL,
 			Fields.UPDATED, CVMLong.create(1000L));
-		assertTrue(ac.canAccessJob(dispatch, launched), "reaches the job it launched (caller match)");
-		assertTrue(ac.canAccessJob(dispatch, launched, Capability.CRUD_WRITE));
+		assertFalse(ac.canAccessJob(dispatch, launched), "creating a Job grants no continuing access");
+		assertFalse(ac.canAccessJob(dispatch, launched, Abilities.JOB_MANAGE));
 		AMap<AString, ACell> alicesOwn = launched.dissoc(Fields.OWNER).assoc(Fields.CALLER, ALICE_LITERAL);
 		assertFalse(ac.canAccessJob(dispatch, alicesOwn),
 			"sharing Alice's namespace is proximity, not permission");
@@ -234,7 +234,7 @@ public class AccessControlTest {
 		assertThrows(AuthException.class, () -> engine.jobs().countJobs(invokeOnly));
 
 		RequestContext readsJobs = aliceCtx.withCaps(Vectors.of(
-			Capability.create(Strings.create("j/"), Capability.CRUD_READ)));
+			Capability.create(Strings.create("j/"), Abilities.JOB_READ)));
 		assertNotNull(engine.jobs().getJobs(readsJobs).get(job.getID()));
 		assertEquals(1, engine.jobs().countJobs(readsJobs));
 	}
@@ -315,7 +315,7 @@ public class AccessControlTest {
 			RequestContext.of(pub));
 		RequestContext readOnly = RequestContext.of(pub).withCaps(CapabilityChecker.readOnlyScope(pub));
 		try {
-			assertNotNull(engine.jobs().getJobData(job.getID(), readOnly), "a read is within the scope");
+			assertThrows(AuthException.class, () -> engine.jobs().getJobData(job.getID(), readOnly), "raw CRUD read grants no Job API access");
 			assertThrows(AuthException.class, () -> engine.jobs().cancelJob(job.getID(), readOnly),
 				"a read-only public caller must not cancel another anonymous caller's job");
 		} finally {

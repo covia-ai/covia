@@ -196,7 +196,7 @@ public class FederationTargetPolicyTest {
 		ctx = ENGINE.venueContext().withAgentId(Strings.create("helper"))
 			.withCaps(Vectors.of(Maps.of(Capability.CAN, Strings.create("invoke"))));
 		try (Peer peer = new Peer()) {
-			assertRefused(peer, HTTPAdapter.PRIVATE_ADDRESS, ENGINE, GRID_RUN, gridInput(peer.url("127.0.0.1")));
+			assertRefused(peer, covia.venue.JobManager.REMOTE_SCOPE_UNSUPPORTED, ENGINE, GRID_RUN, gridInput(peer.url("127.0.0.1")));
 		}
 	}
 

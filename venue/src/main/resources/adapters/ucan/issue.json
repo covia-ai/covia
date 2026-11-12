@@ -20,7 +20,7 @@
 						"type": "object",
 						"properties": {
 							"with": { "type": "string", "description": "Resource: a bare path in the namespace you act in (e.g. w/projects/) or a DID URL (e.g. did:key:z6Mk…/w/)" },
-							"can": { "type": "string", "description": "Ability (e.g. crud/read, crud/write, *)" }
+							"can": { "type": "string", "description": "Ability (e.g. job/read, job/manage, job/message for Jobs; crud/read or crud/write for raw data; * for all)" }
 						},
 						"required": ["with", "can"]
 					}

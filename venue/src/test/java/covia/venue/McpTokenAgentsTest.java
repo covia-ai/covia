@@ -103,7 +103,7 @@ public class McpTokenAgentsTest {
 		RequestContext builder = agent(alice, "builder", Vectors.of(
 			cap("v/ops/", Abilities.INVOKE),
 			cap("x/mcp/tokens/", Abilities.MCP_TOKEN),
-			cap("w/shared/", Capability.CRUD)));
+			cap("w/shared/", Capability.CRUD), cap("j/", Abilities.JOB_READ)));
 		// Bob's worker holds no authority of Alice's at all
 		RequestContext worker = agent(bob, "worker", Caps.UNRESTRICTED);
 		// Alice sets up the shared area: creating it is a change to w/, which the caps do not reach

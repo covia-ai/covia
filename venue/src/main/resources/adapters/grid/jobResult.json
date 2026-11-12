@@ -1,6 +1,6 @@
 {
 	"name": "Grid Job Result",
-	"description": "grid_job_result: Compatibility entry point for waiting for an existing Job's output. Prefer job_result when available. A failed, rejected or cancelled target fails the wait. Legacy behavior: omitted or non-positive timeout waits indefinitely; an unbounded remote waiter mirrors the target's input/auth-required state. Send input to the target, not this waiter. A timeout does not cancel remote work; do not resubmit it.",
+	"description": "grid_job_result: Compatibility entry point for waiting for an existing Job's output. Prefer job_result when available. A failed, rejected or cancelled target fails the wait. Legacy behavior: omitted or non-positive timeout waits indefinitely; an unbounded remote waiter mirrors the target's input/auth-required state. Send input to the target, not this waiter. A timeout does not cancel remote work; do not resubmit it. Requires job/read on the target Job, at both venues for a remote call.",
 	"operation": {
 		"adapter": "grid:jobResult",
 		"readOnly": true,
@@ -29,6 +29,10 @@
 					],
 					"default": "anonymous",
 					"description": "Remote identity: anonymous (default) sends no identity or grants; caller requires your identity credential addressed to the target venue, with no capabilities, plus any separate grants; venue is only for the venue itself. Use the same mode and credentials when following the Job. Local calls retain your caller context."
+				},
+				"owner": {
+					"type": "string",
+					"description": "Job owner DID for delegated lookup, including retained Jobs. This grants no authority."
 				}
 			},
 			"required": [

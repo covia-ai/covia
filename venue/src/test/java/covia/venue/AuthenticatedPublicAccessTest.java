@@ -85,14 +85,13 @@ public class AuthenticatedPublicAccessTest {
 	// ========== Job reads ==========
 
 	@Test
-	public void testAuthenticatedReadsPublicJob() {
+	public void testDefaultPublicScopeDoesNotExposeJobApi() {
 		// ACTIVE public job — readable via the job surface (hot-cache path,
 		// canReadJob's public-scope fallback).
 		Job activeJob = engine.jobs().invokeOperation("v/test/ops/never", Maps.empty(), PUBLIC);
 		try {
-			AMap<AString, ACell> viaAlice = engine.jobs().getJobData(activeJob.getID(), ALICE);
-			assertNotNull(viaAlice, "active public-owned jobs are readable per the public scope");
-			assertEquals(PUBLIC_DID, viaAlice.get(Fields.CALLER));
+			assertThrows(AuthException.class, () -> engine.jobs().getJobData(activeJob.getID(), ALICE),
+				"public raw read permission does not expose Job APIs");
 
 			// Parity, not blanket access: Bob's active job stays owner-only.
 			Job bobJob = engine.jobs().invokeOperation("v/test/ops/never", Maps.empty(), BOB);

@@ -1,6 +1,6 @@
 {
 	"name": "Job Status",
-	"description": "job_status: Read an existing Job's current record without waiting or starting work. PENDING is queued and STARTED is running; COMPLETE has output; FAILED, REJECTED and CANCELLED are terminal. PAUSED may be resumed; INPUT_REQUIRED or AUTH_REQUIRED needs the requested input. Inspect progress, output/error, and any delegation or cancellation evidence. For a result waiter, delegation.remoteStatus describes the target; send requested input to that target, not to the waiter.",
+	"description": "job_status: Read an existing Job's current record without waiting or starting work. PENDING is queued and STARTED is running; COMPLETE has output; FAILED, REJECTED and CANCELLED are terminal. PAUSED may be resumed; INPUT_REQUIRED or AUTH_REQUIRED needs the requested input. Inspect progress, output/error, and any delegation or cancellation evidence. For a result waiter, delegation.remoteStatus describes the target; send requested input to that target, not to the waiter. Requires job/read on the target Job; raw CRUD permissions and creator attribution do not grant it.",
 	"operation": {
 		"adapter": "job:status",
 		"toolName": "job_status",
@@ -25,6 +25,10 @@
 					],
 					"default": "anonymous",
 					"description": "Remote identity: anonymous (default) sends no identity or grants; caller requires your identity credential addressed to the target venue, with no capabilities, plus any separate grants; venue is only for the venue itself. Use the same mode and credentials when following the Job. Local calls retain your caller context."
+				},
+				"owner": {
+					"type": "string",
+					"description": "Job owner DID. Supply it for another owner, including retained Jobs. This selects a lookup namespace and grants no authority. With a remote venue, omission selects the authenticated principal, or the remote public principal in anonymous mode."
 				}
 			},
 			"required": [

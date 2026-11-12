@@ -7,6 +7,9 @@ import convex.auth.ucan.UCANValidator;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.Blob;
+import covia.grid.client.VenueHTTP;
+import covia.venue.JobManager;
 import convex.core.data.AVector;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
@@ -15,6 +18,7 @@ import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.exception.InvalidInputException;
+import covia.exception.ResponseException;
 import covia.exception.UnavailableException;
 import covia.grid.Venue;
 import covia.grid.auth.VenueAuth;
@@ -31,6 +35,7 @@ import covia.venue.UcanJwtValidator;
  */
 public record VenueConnection(Venue venue, AMap<AString, ACell> credentials) {
 	private static final AString AUTHENTICATE_AS = Strings.intern("authenticateAs");
+	private static final AString RESUMABLE = Strings.intern("resumable");
 	private static final AString CALLER = Strings.intern("caller");
 	/** Saved when the caller could have the venue dial anywhere, so recovery reconnects alike. */
 	private static final AString OUTBOUND_ANY = Strings.intern("outboundAny");
@@ -193,13 +198,58 @@ public record VenueConnection(Venue venue, AMap<AString, ACell> credentials) {
 		return new VenueConnection(venue, saved);
 	}
 
+	public static final String JOB_OWNER_UNAVAILABLE = "The remote Job owner could not be established; supply owner explicitly";
+	public static final String INVALID_JOB_OWNER = "'owner' must be a DID string when provided";
+
+	/** Validate a lookup namespace without replacing the caller's identity. */
+	public static AString jobOwner(ACell input) {
+		ACell value = RT.getIn(input, Fields.OWNER);
+		if (value == null) return null;
+		if (value instanceof AString owner && owner.toString().startsWith("did:")) return owner;
+		throw new InvalidInputException(INVALID_JOB_OWNER);
+	}
+
+	/** Connect to an existing Job with a source-side action check before any Job request. */
+	public static VenueConnection job(Engine engine, RequestContext ctx, AString target,
+			ACell input, Blob id, AString ability) {
+		VenueConnection connection = connect(engine, ctx, target, input);
+		Venue venue = connection.venue();
+		AString owner = jobOwner(input);
+		if (owner == null) {
+			AString mode = RT.ensureString(RT.getIn(input, AUTHENTICATE_AS));
+			if (CALLER.equals(mode)) owner = ctx.getCallerDID();
+			else if (Fields.VENUE.equals(mode)) owner = engine.getDIDString();
+			else {
+				try {
+					owner = Strings.create((venue instanceof VenueHTTP http ? http.venueDID() : venue.getDID().toString()) + ":public");
+				} catch (IllegalArgumentException e) { throw new ResponseException(JOB_OWNER_UNAVAILABLE, e); }
+			}
+		}
+		venue.setJobOwner(owner);
+		requireJobAuthority(engine, ctx, venue, id, ability);
+		AMap<AString, ACell> saved = connection.credentials().assoc(Fields.OWNER, owner);
+		// A scoped request cannot be reconstructed as an unscoped owner after restart.
+		// Keep no invented authority: require the caller to reattach with its credentials.
+		if (ctx.hasSeparateAuthority() || ctx.getCaps() != null || !ctx.getTokens().isEmpty()
+				|| (ctx.getProofs() != null && !ctx.getProofs().isEmpty())) saved = saved.assoc(RESUMABLE, CVMBool.FALSE);
+		return new VenueConnection(venue, saved);
+	}
+
+	/** Rechecked on every remote observation, including before delivering the result. */
+	public static void requireJobAuthority(Engine engine, RequestContext ctx, Venue venue, Blob id, AString ability) {
+		if (venue.getJobOwner() == null) throw new AuthException(JOB_OWNER_UNAVAILABLE);
+		AString destination = venue instanceof VenueHTTP http ? Strings.create(http.getBaseURI().toString())
+			: Strings.create(engine.config().getBaseUrl());
+		engine.requireAuthority(ctx, JobManager.resource(venue.getJobOwner(), id), ability, destination);
+	}
+
 	/**
 	 * Whether a job can reach its remote job again after a restart over the
 	 * connection {@code saved} describes. Not when it signed in as its caller:
 	 * only the request presented that credential, and the venue keeps none.
 	 */
 	public static boolean resumable(AMap<AString, ACell> saved) {
-		return !CALLER.equals(saved.get(AUTHENTICATE_AS));
+		return !CVMBool.FALSE.equals(saved.get(RESUMABLE)) && !CALLER.equals(saved.get(AUTHENTICATE_AS));
 	}
 
 	/**
@@ -231,6 +281,7 @@ public record VenueConnection(Venue venue, AMap<AString, ACell> credentials) {
 			default -> throw new IllegalArgumentException("Invalid saved remote authentication mode");
 		};
 		Venue venue = engine.connectVenue(target.toString(), targetDID, auth, unrestricted);
+		venue.setJobOwner(RT.ensureString(saved.get(Fields.OWNER)));
 		AVector<ACell> grants = RT.ensureVector(saved.get(Fields.UCANS));
 		if (grants != null) {
 			List<String> raw = new ArrayList<>();

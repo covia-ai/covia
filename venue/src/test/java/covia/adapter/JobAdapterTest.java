@@ -17,6 +17,7 @@ import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.api.Fields;
+import covia.api.Abilities;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.test.IntegrationTest;
@@ -54,14 +55,15 @@ class JobAdapterTest {
 	@Test void controlsUseTheExistingLifecycleAndPreserveTerminalOutcomes() {
 		Job job = task("never", Maps.empty());
 		try {
-			assertEquals(Status.PAUSED, RT.getIn(run("pause", job), Fields.STATUS));
-			assertEquals(Status.STARTED, RT.getIn(run("resume", job), Fields.STATUS));
-			assertEquals(Status.CANCELLED, RT.getIn(run("cancel", job), Fields.STATUS));
-			assertEquals(run("status", job), run("cancel", job));
+			assertEquals(CVMBool.TRUE, RT.getIn(run("pause", job), Fields.ACCEPTED));
+			assertEquals(CVMBool.TRUE, RT.getIn(run("resume", job), Fields.ACCEPTED));
+			assertEquals(CVMBool.TRUE, RT.getIn(run("cancel", job), Fields.ACCEPTED));
+			assertEquals(CVMBool.TRUE, RT.getIn(run("cancel", job), Fields.ACCEPTED));
+			assertEquals(Status.CANCELLED, job.getStatus());
 		} finally { job.cancel(); }
 		Job completed = task("echo", Strings.create("kept"));
 		completed.awaitResult(5000);
-		assertEquals(Status.COMPLETE, RT.getIn(run("cancel", completed), Fields.STATUS));
+		assertEquals(CVMBool.TRUE, RT.getIn(run("cancel", completed), Fields.ACCEPTED));
 		assertEquals(Strings.create("kept"), completed.getOutput());
 	}
 
@@ -107,7 +109,7 @@ class JobAdapterTest {
 		try {
 			RequestContext reader = ctx.withCaps(Vectors.of(
 				Capability.create(Strings.create("v/ops/job"), covia.api.Abilities.INVOKE),
-				Capability.create(Strings.create("j/" + job.getID().toHexString()), Capability.CRUD_READ)));
+				Capability.create(Strings.create("j/" + job.getID().toHexString()), Abilities.JOB_READ)));
 			ACell status = engine.jobs().invokeOperation("v/ops/job/status", target(job), reader).awaitResult(5000);
 			assertEquals(Status.STARTED, RT.getIn(status, Fields.STATUS));
 			for (String op : new String[]{"cancel", "pause", "resume", "message"}) {
@@ -150,7 +152,7 @@ class JobAdapterTest {
 		try {
 			Job backend = new covia.adapter.agent.ExternalAgents(engine, new java.util.concurrent.ConcurrentHashMap<>()).child(request);
 			assertNotNull(backend);
-			assertEquals(Status.CANCELLED, RT.getIn(run("cancel", request), Fields.STATUS));
+			assertEquals(CVMBool.TRUE, RT.getIn(run("cancel", request), Fields.ACCEPTED));
 			assertEquals(Status.CANCELLED, backend.getStatus());
 		} finally {
 			request.cancel();

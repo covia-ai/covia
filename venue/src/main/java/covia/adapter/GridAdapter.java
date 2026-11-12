@@ -15,6 +15,7 @@ import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.api.Fields;
+import covia.api.Abilities;
 import covia.exception.InvalidDefinitionException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotSupportedException;
@@ -108,13 +109,15 @@ public class GridAdapter extends AAdapter {
 		if (!existing) engine.remoteJobs().requireNotClosing();
 		AString target = resolveVenue(meta, input);
 		if (!existing) engine.jobs().requireRemoteInvoke(operation, RT.getIn(input, Fields.INPUT), ctx);
-		VenueConnection remote = remoteConnection(ctx, target, input);
+		VenueConnection remote = existing
+			? VenueConnection.job(engine, ctx, target, input, existingID, Abilities.JOB_READ)
+			: remoteConnection(ctx, target, input);
 		RemoteJobs observer = engine.remoteJobs();
 		observer.prepare(job, "covia", target.toString(), remote.credentials(), !existing);
 		if (job.isFinished()) return;
 		if (existing) {
 			try { observer.accepted(job, existingID.toHexString()); }
-			finally { watch(job, remote.venue(), existingID); }
+			finally { watchExisting(job, remote.venue(), existingID, ctx); }
 			return;
 		}
 		// Submit once and retain the handle. SDK background polling is a bounded
@@ -137,6 +140,16 @@ public class GridAdapter extends AAdapter {
 				if (id != null) watch(job, remote.venue(), Job.parseID(id));
 			}
 			});
+		});
+	}
+
+	private void watchExisting(Job job, Venue venue, Blob id, RequestContext ctx) {
+		engine.remoteJobs().observe(job, () -> {
+			VenueConnection.requireJobAuthority(engine, ctx, venue, id, Abilities.JOB_READ);
+			return venue.getJobStatus(id);
+		}, snapshot -> {
+			VenueConnection.requireJobAuthority(engine, ctx, venue, id, Abilities.JOB_READ);
+			applyRemote(job, snapshot);
 		});
 	}
 
@@ -213,7 +226,8 @@ public class GridAdapter extends AAdapter {
 			if (convex.core.data.prim.CVMBool.TRUE.equals(kept.get(RemoteJobs.OWNS_REMOTE))) {
 				bindCancellation(job, venue, Job.parseID(id));
 			}
-			watch(job, venue, Job.parseID(id));
+			if (convex.core.data.prim.CVMBool.TRUE.equals(kept.get(RemoteJobs.OWNS_REMOTE))) watch(job, venue, Job.parseID(id));
+			else watchExisting(job, venue, Job.parseID(id), engine.context(job.getOwner(), job.getCaller()));
 		} catch (RuntimeException e) { engine.remoteJobs().unavailable(job, e); }
 	}
 
@@ -277,8 +291,13 @@ public class GridAdapter extends AAdapter {
 				"'id' is required; use the job ID returned by grid:invoke"));
 		}
 
-		Venue venue = selectVenue(ctx, resolveVenue(meta, input), input);
-		return venue.getJobStatus(jobId).thenApply(status -> status);
+		AString target = resolveVenue(meta, input);
+		Venue venue = target == null ? selectVenue(ctx, null, input)
+			: VenueConnection.job(engine, ctx, target, input, jobId, Abilities.JOB_READ).venue();
+		return venue.getJobStatus(jobId).thenApply(status -> {
+			if (target != null) VenueConnection.requireJobAuthority(engine, ctx, venue, jobId, Abilities.JOB_READ);
+			return status;
+		});
 	}
 
 	private CompletableFuture<ACell> invokeJobResult(RequestContext ctx, ACell meta, ACell input) {
@@ -288,12 +307,18 @@ public class GridAdapter extends AAdapter {
 				"'id' is required; use the job ID returned by grid:invoke"));
 		}
 
-		Venue venue = selectVenue(ctx, resolveVenue(meta, input), input);
+		AString target = resolveVenue(meta, input);
+		Venue venue = target == null ? selectVenue(ctx, null, input)
+			: VenueConnection.job(engine, ctx, target, input, jobId, Abilities.JOB_READ).venue();
 		long timeoutMs = parseTimeoutMs(input);
 		// A remote bounded wait must use the caller's budget, not the SDK's
 		// shorter default. Unbounded remote waits use the durable observer above.
 		if (timeoutMs > 0 && venue instanceof VenueHTTP http) http.setTimeout(timeoutMs);
-		CompletableFuture<ACell> jobFuture = venue.awaitJobResult(jobId);
+		CompletableFuture<ACell> jobFuture = venue.awaitJobResult(jobId).handle((value, error) -> {
+			if (target != null) VenueConnection.requireJobAuthority(engine, ctx, venue, jobId, Abilities.JOB_READ);
+			if (error != null) throw new java.util.concurrent.CompletionException(error);
+			return value;
+		});
 
 		if (timeoutMs <= 0) return jobFuture;
 
@@ -341,6 +366,7 @@ public class GridAdapter extends AAdapter {
 		// authority. Carry the complete immutable context so agent caps,
 		// sub-principal scope, proofs, cancellation and parent job scope survive.
 		lv.setRequestContext(ctx);
+		lv.setJobOwner(VenueConnection.jobOwner(input));
 		return lv;
 	}
 

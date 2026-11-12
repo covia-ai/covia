@@ -1769,6 +1769,13 @@ public class AgentAdapter extends AAdapter {
 
 		ACell messageContent = RT.getIn(input, Fields.MESSAGE);
 		if (messageContent == null) { job.fail("message is required"); return; }
+		ACell taskValue = RT.getIn(input, Fields.TASK_ID);
+		if (taskValue != null) {
+			Blob addressed = HexId.parse(RT.ensureString(taskValue));
+			if (addressed == null && taskValue instanceof Blob blob) addressed = blob;
+			if (addressed == null) throw new InvalidInputException(INVALID_TASK_ID + taskValue);
+			engine.jobs().requireAccess(addressed, ctx, null, Abilities.JOB_MESSAGE);
+		}
 
 		if (externalAgents().isExternal(agent)) {
 			if (failIfSuspended(job, agent, agentId)) return;
@@ -3137,6 +3144,7 @@ public class AgentAdapter extends AAdapter {
 		// race completion or another cancel, and a restart finds both or neither.
 		AString reasonCell = RT.ensureString(RT.getIn(input, Fields.REASON));
 		String reason = (reasonCell != null) ? reasonCell.toString() : null;
+		engine.jobs().requireAccess(taskId, ctx, null, Abilities.JOB_MANAGE);
 		Job pending = engine.jobs().getJob(taskId);
 		// The work to run after commit, or null when the task was not there to take
 		List<Runnable> after = engine.getVenueState().transact(draft -> {

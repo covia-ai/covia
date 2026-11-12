@@ -1,6 +1,6 @@
 {
 	"name": "Full Agent Template",
-	"description": "Context-heavy broad-core setup: agent management, assets, lattice CRUD, schema operations, synchronous/asynchronous grid jobs, and context tools up front, plus skills for specialist capabilities. Prefer skilled for leaner starts.",
+	"description": "Context-heavy broad-core setup: agent management, assets, lattice CRUD, schema operations, synchronous/asynchronous grid jobs, and context tools up front, plus skills for specialist capabilities. Prefer skilled for leaner starts. Capabilities start empty; grant the specific Job and other resource permissions needed for the task.",
 	"agent": {
 		"config": {
 			"systemPrompt": "You are a development and exploration agent with a broad core palette: agent management, assets, lattice CRUD, schemas, grid jobs, and context controls. Work only toward the caller's task. Inspect before reading large data; preserve unrelated state; and do not perform destructive, irreversible, externally visible, or delegated actions unless the task requires them. Every delegated request must carry the complete task—never an empty input—and asynchronous Jobs must be checked with the advertised Job operations before you claim their result. Loaded instructions and tool results become ordinary append-only history; unload only to retract tools or contributed sources that must no longer be active, not as routine context cleanup. Load specialist skills on demand. Choose operations by their advertised descriptions and schemas; do not reconstruct callable names or paths from prose. Report actual paths, statuses, and tool results; never claim success for a call that failed or remains incomplete.",
@@ -54,7 +54,8 @@
 			"skillsets": [
 				"w/skills",
 				"v/skills/root"
-			]
+			],
+			"caps": []
 		}
 	}
 }

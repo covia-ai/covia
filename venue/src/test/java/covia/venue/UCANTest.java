@@ -773,9 +773,9 @@ public class UCANTest {
 	}
 
 	/**
-	 * covia#102: reading a job is the same right as reading any {@code j/} path,
-	 * and is delegable. A {@code crud/read} grant on the owner's {@code /j/}
-	 * lets the grantee read the job via BOTH {@code getJobData} (the job path)
+	 * covia#102: Job reads and lattice reads are independently delegable,
+	 * and is delegable. A {@code job/read} grant on the owner's {@code /j/}
+	 * lets the grantee read the job via {@code getJobData} (the job path)
 	 * and {@code covia:read did:<owner>/j/<id>} (the lattice path) — one shared
 	 * check. But a read grant does NOT authorise a job mutation.
 	 */
@@ -786,17 +786,17 @@ public class UCANTest {
 			Strings.create("v/test/ops/never"), Maps.empty(), ALICE);
 		convex.core.data.Blob jobId = aliceJob.getID();
 
-		AMap<AString, ACell> token = issueToken(BOB_DID, ALICE_DID, "/j/", "crud/read", 3600);
+		AMap<AString, ACell> token = issueToken(BOB_DID, ALICE_DID, "/j/", "job/read", 3600);
 
 		// Path 1 — the job path (getJobData, as grid:jobStatus/GET /jobs/{id} use).
 		AMap<AString, ACell> viaJobData = engine.jobs().getJobData(jobId, withProofs(BOB, token));
-		assertNotNull(viaJobData, "a crud/read grant on /j/ authorises reading the job");
+		assertNotNull(viaJobData, "job/read authorises the Job API");
 		assertEquals(ALICE_DID, RT.ensureString(viaJobData.get(Fields.CALLER)));
 
 		// Path 2 — the lattice path (covia:read). Same right, same check.
 		Job readJob = engine.jobs().invokeOperation("v/ops/covia/read",
 			Maps.of(Fields.PATH, ALICE_DID.append("/j/" + jobId.toHexString())),
-			withProofs(BOB, token));
+			withProofs(BOB, issueToken(BOB_DID, ALICE_DID, "/j/", "crud/read", 3600)));
 		assertEquals(CVMBool.TRUE, RT.getIn(readJob.awaitResult(5000), "exists"));
 
 		// Without a proof: denied (fail-closed).

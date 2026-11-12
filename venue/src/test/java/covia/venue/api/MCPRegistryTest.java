@@ -103,7 +103,7 @@ public class MCPRegistryTest {
 	// ==================== Default include set ====================
 
 	@Test public void jobRecordSchemasAdmitLifecycleAndObservationEvidence() {
-		Set<String> recordTools = Set.of("grid_invoke", "grid_job_status", "job_status", "job_cancel", "job_pause", "job_resume");
+		Set<String> recordTools = Set.of("grid_invoke", "grid_job_status", "job_status");
 		AVector<ACell> tools = RT.getIn(mcp(freshEngine(), Maps.empty()).listTools(), "tools");
 		for (ACell tool : tools) {
 			String name = RT.getIn(tool, Fields.NAME).toString();
@@ -131,6 +131,22 @@ public class MCPRegistryTest {
 		Set<String> groups = groupsOf(toolNames(mcp));
 		assertEquals(Set.of("agent", "asset", "covia", "grid", "job", "secret", "skills"), groups,
 			"Default include set should expose exactly the allowlisted groups");
+	}
+
+	@Test public void jobControlsExposeAcknowledgementsOnly() {
+		Set<String> controls = Set.of("job_cancel", "job_pause", "job_resume");
+		Set<String> checked = new java.util.HashSet<>();
+		AVector<ACell> tools = RT.getIn(mcp(freshEngine(), Maps.empty()).listTools(), "tools");
+		for (ACell tool : tools) {
+			String name = RT.getIn(tool, Fields.NAME).toString();
+			if (!controls.contains(name)) continue;
+			checked.add(name);
+			AMap<AString, ACell> schema = RT.ensureMap(RT.getIn(tool, Fields.OUTPUT_SCHEMA));
+			AMap<AString, ACell> ack = Maps.of(Fields.ID, "00112233445566778899aabbccddeeff", Fields.ACCEPTED, true);
+			assertNull(JsonSchema.validate(schema, ack), name);
+			assertNotNull(JsonSchema.validate(schema, ack.assoc(Fields.OUTPUT, Strings.create("private"))), name);
+		}
+		assertEquals(controls, checked);
 	}
 
 	@Test public void testDefaultHidesUtilityAdapters() {

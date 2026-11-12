@@ -434,9 +434,10 @@ public class SkillsLibraryTest {
 		ACell config = RT.getIn(asset, "agent", "config");
 		AVector<ACell> caps = RT.ensureVector(RT.getIn(config, "caps"));
 		assertNotNull(caps, "reader must pin a capability");
-		assertEquals(2, caps.count());
+		assertEquals(3, caps.count());
 		assertEquals("crud/read", RT.getIn(caps.get(0), "can").toString());
 		assertEquals("asset/read", RT.getIn(caps.get(1), "can").toString());
+		assertEquals("job/read", RT.getIn(caps.get(2), "can").toString());
 	}
 
 	@Test

@@ -35,6 +35,10 @@
 				{
 					"with": "",
 					"can": "asset/read"
+				},
+				{
+					"with": "j/",
+					"can": "job/read"
 				}
 			]
 		}

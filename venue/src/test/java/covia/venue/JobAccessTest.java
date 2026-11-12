@@ -17,6 +17,7 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.api.Fields;
+import covia.api.Abilities;
 import covia.exception.AuthException;
 import covia.grid.Job;
 import covia.grid.Status;
@@ -78,20 +79,22 @@ public class JobAccessTest {
 	}
 
 	@Test
-	public void testScopedAgentReadsJobsItLaunched() {
+	public void testScopedCreatorNeedsAnExplicitJobReadGrant() {
 		RequestContext worker = agent(invokeOnly());
 		Job own = run("v/test/ops/echo", Maps.of("echo", "mine"), worker);
 		assertEquals(Status.COMPLETE, own.getStatus(), own.getErrorMessage());
 		Job result = jobResult(own, worker);
-		assertEquals(Status.COMPLETE, result.getStatus(), result.getErrorMessage());
-		assertEquals(Strings.create("mine"), RT.getIn(result.getOutput(), "echo"));
+		assertDenied(result);
+		RequestContext reader = worker.withCaps(invokeOnly().conj(Capability.create(
+			JobManager.resource(alice, own.getID()), Abilities.JOB_READ)));
+		assertEquals(Strings.create("mine"), RT.getIn(jobResult(own, reader).getOutput(), "echo"));
 	}
 
 	@Test
 	public void testCapsOverJobsGrantAccessByAbility() {
 		Job ownerJob = run("v/test/ops/echo", Maps.of("echo", "shared"), ALICE);
 		RequestContext reader = agent(Vectors.of(Maps.of(Capability.CAN, INVOKE),
-			Capability.create(Strings.create("j/"), Capability.CRUD_READ)));
+			Capability.create(Strings.create("j/"), Abilities.JOB_READ)));
 		assertEquals(Status.COMPLETE, jobResult(ownerJob, reader).getStatus());
 		// Reading is not managing
 		assertThrows(AuthException.class, () -> engine.jobs().deleteJob(ownerJob.getID(), reader));

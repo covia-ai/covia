@@ -121,17 +121,29 @@ This aligns with `DIDURL` from convex-core — the DID is the authority, the pat
 
 Only `file://…` resources are scheme-qualified (host-filesystem, not DID-scoped) and are left unchanged; scheme forms are not issuable.
 
-### 3.2 Abilities (`can`)
+### 3.2 Standard capability catalog (`can`)
+
+The normative standard capability catalog is COG-13 (`docs/protocol/cogs/COG-013.md`
+in covia-docs). This is its implementation companion. `covia.api.Abilities`
+provides their shared code constants; subsystem documents define each operation's
+resource and required abilities. New standard abilities must be added to both catalogs.
+Modules may define additional abilities and document them in their own contract.
+Use domain abilities for domain actions; CRUD is access to raw values and files,
+not a substitute for lifecycle or interaction authority.
 
 Abilities follow UCAN's slash-delimited convention with no leading slash. `*` is the top ability that proves everything. Shorter abilities prove longer ones (prefix hierarchy):
 
 | Ability | Proves | Meaning |
 |---------|--------|---------|
 | `*` | everything | Full delegation |
-| `crud` | `crud/read`, `crud/write`, `crud/delete` | All data operations |
+| `crud` | `crud/read`, `crud/write`, `crud/delete` | Raw data operations; no Job API authority |
 | `crud/read` | — | Read data |
 | `crud/write` | — | Write data |
 | `crud/delete` | — | Delete data |
+| `job` | every `job/*` | All Job API rights on the named Job or collection |
+| `job/read` | - | Read a Job's externally visible record/result and subscribe to updates; list/count when granted on `j/` |
+| `job/manage` | - | Cancel, pause, resume or delete a Job; acknowledgements disclose no record |
+| `job/message` | - | Deliver input to an existing Job, without granting the Job new execution authority |
 | `invoke` | — | Look up and run an operation from an authorised location; no resource authority is implied |
 | `agent` | every `agent/*` | All agent operations |
 | `agent/create` | — | Create a new agent |
@@ -163,6 +175,22 @@ Abilities follow UCAN's slash-delimited convention with no leading slash. `*` is
 | `key/sign/raw` | — | Sign content the caller chooses (`crypto:sign`, `crypto:jwt-sign`), which can produce any other signature |
 | `key/decrypt` | — | Decrypt with a held key (`crypto:decrypt`) |
 | `key/derive` | — | Derive keys from a held phrase into its holder's keyring (`crypto:derive-key`) |
+| `secret/write` | - | Store or update a secret (`<owner>/s/<name>`) |
+| `mcp/manage` | - | Manage MCP server and tool connections (`<venue>/v/mcp`) |
+| `mcp/token` | - | Create, update or delete an MCP token (`<owner>/x/mcp/tokens/<name>`) |
+| `admin/token` | - | Retrieve a stored MCP bearer token |
+| `hitl/request` | - | Ask the owner a human-in-the-loop question |
+| `user/create` | - | Create an account |
+| `user/delete` | - | Delete an account |
+| `user/read` | - | Read account information |
+| `user/sudo` | - | Explicitly act in a user namespace; grants no action authority |
+| `user/export` | - | Export a user's stored state |
+| `user/import` | - | Import stored state into an empty account |
+| `user/authentication-manage` | - | Manage account authentication |
+| `adapter/manage` | - | Manage venue adapters and modules (`<venue>/adapters`) |
+| `p2p/read` | - | Inspect the venue's P2P node (`<venue>/p2p`) |
+| `p2p/manage` | - | Connect the venue's P2P node (`<venue>/p2p`) |
+| `grant/<ability>` | Narrower grants within that ability | Issue a grant at a granting surface; distinct from exercising the ability (COG-17) |
 
 To pass on part of a grant you hold, sign a narrower grant with your own key and attach yours as proof. Through the venue (`ucan:issue`), you need a `grant/<ability>` right to grant on someone else's data. Agents cannot pass on grants. A grant cannot be withdrawn before it expires.
 
@@ -750,7 +778,11 @@ record is an entry no grant of theirs covers.
 | `dlfs:deleteDrive` | `{ with: "dlfs/<drive>", can: "crud/delete" }` |
 | `secret:list` | `{ with: "s/", can: "crud/read" }` (names only) |
 | `hitl:list` | `{ with: "h/", can: "crud/read" }` |
-| `GET /api/v1/jobs`, and the caller's job count in `/status` | `{ with: "j/", can: "crud/read" }`; `/status` leaves out the count without it |
+| Job status/result, REST GET/SSE, Grid Job reads and A2A GetTask | `job/read` on `<owner>/j/<id>` |
+| Job cancel/pause/resume/delete, including REST controls | `job/manage` on `<owner>/j/<id>`; response is an acknowledgement |
+| Job message delivery and task-specific agent continuation | `job/message` on `<owner>/j/<id>`; agent routes also enforce agent access |
+| A2A CancelTask / continuation | `job/read` plus `job/manage` / `job/message`, because A2A returns a Task record |
+| `GET /api/v1/jobs`, and the caller's job count in `/status` | `{ with: "j/", can: "job/read" }`; `/status` leaves out the count without it |
 | `secret:delete` | `{ with: "s/<name>", can: "crud/delete" }` |
 | `secret:extract` | `{ with: "s/<name>", can: "secret/extract" }`, plus the direct-owner restriction in *Secret extraction* above |
 | Any adapter sending a secret (`apiKey`, `bearerSecret`, `secretHeaders`, `{s/NAME}`, an operation's `secretKey`, MCP `auth`, A2A auth) | `{ with: "<ownerDID>/s/<name>", can: "secret/use" }`, its `nb.url` checked against the request's destination |
@@ -1424,6 +1456,11 @@ from a spoofed one, which is *worse* than anonymous. So it follows the
 verification phases exactly: **proofs + self-sovereign signatures with C3a**
 (shipped — see below); **custodial attestations with C3b** (the trust policy
 exists).
+
+**Source scope.** Dedicated Job operations check the exact Job ability locally
+and again at the host. Generic Grid invocation and remote orchestration steps
+refuse scoped callers until the transport can enforce their resource restrictions
+at the destination; an identity credential is not an attenuated execution scope.
 
 **C3a implementation (shipped).** Authority travels **only in the `ucans` proof
 channel** — never as operation data (which is persisted in job records).
