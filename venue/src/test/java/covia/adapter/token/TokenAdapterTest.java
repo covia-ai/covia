@@ -9,6 +9,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
 
 import convex.auth.ucan.Capability;
+import convex.auth.ucan.UCAN;
+import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
@@ -165,6 +167,23 @@ public class TokenAdapterTest {
 		ACell invoke = cap("v/ops/", Abilities.INVOKE);
 		failure(read(agent(alice, "blind", Vectors.of(invoke)), "x/token"));
 		assertEquals(view, RT.getIn(complete(read(agent(alice, "sighted", Vectors.of(invoke, cap("x/token", Capability.CRUD_READ))), "x/token")), Fields.VALUE));
+	}
+
+	@Test
+	public void anotherUserSeesATokenOnlyThroughTheOwnersGrant() {
+		AKeyPair aliceKeys = AKeyPair.generate();
+		AString alice = UCAN.toDIDKey(aliceKeys.getAccountKey());
+		AString bob = UCAN.toDIDKey(AKeyPair.generate().getAccountKey());
+		complete(create(RequestContext.of(alice), "shared", MCP));
+		String one = alice + "/x/token/shared";
+
+		failure(read(RequestContext.of(bob), one));
+		long expiry = engine.currentTimestamp().longValue() / 1000 + 3600;
+		UCAN grant = UCAN.create(aliceKeys, UCAN.fromDIDKey(bob), expiry,
+			Vectors.of(Capability.create(Strings.create(one), Capability.CRUD_READ)), Vectors.empty());
+		RequestContext granted = RequestContext.of(bob).withProofs(Vectors.of(grant.toMap()));
+		assertEquals(MCP, RT.getIn(complete(read(granted, one)), Fields.VALUE, Fields.ACCESS), "the owner's token, not the reader's");
+		failure(read(granted, alice + "/x/token"));
 	}
 
 	@Test

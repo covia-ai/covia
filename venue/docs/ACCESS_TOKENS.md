@@ -128,7 +128,9 @@ operation reaches it.
 (`covia:read`, the read API): each of its tokens by name, with its issuer,
 access entries, caps, creation time and expiry. It never shows a bearer, a
 bearer's hash or a token's id, and it is read-only. Reading it needs
-`crud/read` on `x/token`, or on `x/token/<name>` for one token.
+`crud/read` on `x/token`, or on `x/token/<name>` for one token; another
+user's is read at `<did>/x/token` under the usual cross-user delegation
+rules.
 
 ## Storage
 
