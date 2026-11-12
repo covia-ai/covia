@@ -250,7 +250,7 @@ remains the application's choice.
 ## Record fields: `caller`, `owner`, `op`, `adapter` and `parent`
 
 - **`caller`** is the principal that made the call: a user, one of a user's
-  agents (`<owner>:g:<agent>`) or a `user/sudo` delegate (COG-8).
+  agents (`<owner>:g:<agent>`) or a `admin/sudo` delegate (COG-8).
 - **`owner`** is the namespace the job belongs to, written only when it
   differs from `caller`: an agent's owner, or the user a delegate acts for.
   The job is stored in that user's `j/`, and ownership, access control and the
@@ -327,7 +327,7 @@ there are none, so that `JobManager.keepsCallerContext` tells such a job from
 one whose adapter never asked. `JobManager.callerContext` rebuilds the caller
 from them with `Engine.context(owner, caller, proofs, authority)`, checking
 what a live request would: the principal and the kept authority still exist,
-a delegate still holds its `user/sudo` grant, an agent acts under its current
+a delegate still holds its `admin/sudo` grant, an agent acts under its current
 `config.caps`, an agent controller under its own. The kept authority is the
 controller the work started with, as it acts now, and the MCP token narrowing
 the request, if any, which then narrows it as it stands and to nothing once

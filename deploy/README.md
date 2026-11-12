@@ -166,7 +166,7 @@ An operator-installed adapter can use the same call. Code given
 modules should receive it.
 
 A remote provisioning service does not need a separate administration API.
-Give it a venue-issued UCAN for `<venueDID>/users` with the `user/create`
+Give it a venue-issued UCAN for `<venueDID>/users` with the `admin/user/create`
 ability, then invoke `v/ops/user/create` through the normal REST, MCP, or client
 SDK surface. `UserAdapter` checks that delegation at the operation boundary.
 

@@ -35,7 +35,7 @@ import covia.venue.StoreControl;
  * operational settings without reflecting the raw operator document. Every
  * lifecycle operation is venue-owned. Adapter/module lifecycle requires a
  * venue-rooted delegation over {@code <venue DID>/adapters} with
- * {@code adapter/manage}; process restart requires {@code venue/restart} over
+ * {@code admin/adapter/manage}; process restart requires {@code admin/venue/restart} over
  * {@code <venue DID>/process} ({@link covia.venue.Engine#requireVenueAuthority}).
  * Direct venue execution is allowed. A null capability scope is deliberately
  * not enough for an ordinary authenticated user.</p>
@@ -52,11 +52,11 @@ import covia.venue.StoreControl;
  *   <li>{@code venue/module/load|unload} — runtime module lifecycle, subject
  *       to the operator's {@code dynamicModules} policy ({@link Modules}).</li>
  *   <li>{@code venue/restart} — process-wide graceful successor handoff,
- *       separately guarded by {@code venue/restart} on
+ *       separately guarded by {@code admin/venue/restart} on
  *       {@code <venue DID>/process}.</li>
  *   <li>{@code venue/gc} — online garbage collection of the Etch store
  *       while the venue keeps serving (covia#452), separately guarded by
- *       {@code venue/gc} on {@code <venue DID>/store}.</li>
+ *       {@code admin/venue/gc} on {@code <venue DID>/store}.</li>
  * </ul>
  *
  * <p>Changes are not persisted: after a restart the venue config is
@@ -156,13 +156,13 @@ public class VenueAdapter extends AAdapter {
 				return CompletableFuture.completedFuture(showConfig());
 			}
 			if ("gc".equals(subOperation)) {
-				engine.requireVenueAuthority(ctx, STORE_RESOURCE, Abilities.VENUE_GC);
+				engine.requireVenueAuthority(ctx, STORE_RESOURCE, Abilities.ADMIN_VENUE_GC);
 				return audited(Audit.VENUE_GC, ctx, subOperation, input, gc(ctx, input));
 			}
 			if ("restart".equals(subOperation)) {
-				engine.requireVenueAuthority(ctx, PROCESS_RESOURCE, Abilities.VENUE_RESTART);
+				engine.requireVenueAuthority(ctx, PROCESS_RESOURCE, Abilities.ADMIN_VENUE_RESTART);
 			} else {
-				engine.requireVenueAuthority(ctx, RESOURCE, Abilities.ADAPTER_MANAGE);
+				engine.requireVenueAuthority(ctx, RESOURCE, Abilities.ADMIN_ADAPTER_MANAGE);
 			}
 			if ("adapters".equals(subOperation)) return CompletableFuture.completedFuture(adapters());
 			CompletableFuture<ACell> done;
@@ -394,7 +394,7 @@ public class VenueAdapter extends AAdapter {
 	// ========== store garbage collection ==========
 
 	/**
-	 * {@code venue/gc} (covia#452): {@code status}/{@code cancel} answer at
+	 * {@code venue:gc} (covia#452): {@code status}/{@code cancel} answer at
 	 * once; otherwise one online cycle runs on its own thread with the Job
 	 * {@code STARTED} throughout — cancelling the Job cancels the cycle, which
 	 * rolls the store back to its original file. With {@code restart}, both
@@ -426,7 +426,7 @@ public class VenueAdapter extends AAdapter {
 		boolean restart = CVMBool.TRUE.equals(RT.getIn(input, K_RESTART));
 		long startupTimeout = 60_000;
 		if (restart) {
-			engine.requireVenueAuthority(ctx, PROCESS_RESOURCE, Abilities.VENUE_RESTART);
+			engine.requireVenueAuthority(ctx, PROCESS_RESOURCE, Abilities.ADMIN_VENUE_RESTART);
 			if (!engine.hasProcessControl()) {
 				throw new NotSupportedException(
 					"Process restart is unavailable: this venue is not managed by MainVenue");
@@ -469,7 +469,7 @@ public class VenueAdapter extends AAdapter {
 				}
 				if (restart) {
 					// Registered before this Job completes: the handoff follows its
-					// successful, persisted result, exactly as venue/restart does
+					// successful, persisted result, exactly as venue:restart does
 					var plan = engine.requestProcessRestart(null, null, timeout, job);
 					if (r.backupFile() == null) out = out.assoc(K_RECLAIMED_AT, Strings.create("restart"));
 					out = out.assoc(K_RESTART, Maps.of(

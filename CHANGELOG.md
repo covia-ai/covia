@@ -19,6 +19,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Changed
 
+- Venue administration requires `admin/user/*`, `admin/adapter/manage`, `admin/venue/*` and `admin/sudo` capabilities; the former user, adapter and venue abilities are no longer accepted for these actions.
 - Grid and Job tool descriptions distinguish submission, observation and compatibility entry points, with clearer handle, status and cancellation guidance and leaner workflow skills.
 - Automated venue deployments use the tested build's image digest; manual redeploys select a successful image-publishing run.
 - LangChain4j 1.23.0, A2A 1.5.1.Final, Nimbus OAuth/OIDC SDK 11.39, CommonMark 0.32.0; the Documents module uses Apache POI 6.0.0.
@@ -29,6 +30,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Fixed
 
+- Account REST reads and deletion honour delegated administration grants in `X-Covia-Ucans`.
 - Grid operations honour explicit remote result wait timeouts, submit asynchronously without background polling, and reject non-string venue targets instead of executing locally.
 - `user:delete` no longer leaves cleanup pending for an adapter registered while it runs.
 - Stopping or reconfiguring a Telegram bot just as it polls no longer leaves that poll running for up to 30 seconds or holds up the change for 5.

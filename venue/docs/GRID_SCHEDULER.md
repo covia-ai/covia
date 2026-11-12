@@ -264,7 +264,7 @@ scheduling, which the event keeps in `proofs`. Consequences, all intended:
 - An owner's fire has the owner's authority; an agent's has the agent's
   `config.caps` as they are then, so narrowing an agent narrows its queued
   work, and a deleted agent's work does not fire.
-- A delegate's fire passes the same `user/sudo` check a live request would, so
+- A delegate's fire passes the same `admin/sudo` check a live request would, so
   a revoked or expired delegation stops it.
 - The public principal's fire has `auth.public.caps` as they are then, and
   none while public access is off.

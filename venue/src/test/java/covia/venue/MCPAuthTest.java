@@ -313,8 +313,13 @@ public class MCPAuthTest {
 		AString target = UCAN.toDIDKey(AKeyPair.generate().getAccountKey());
 		server.getEngine().getVenueState().users().create(target);
 		assertToolError(toolCall(baseUrl, token, "user_delete", Maps.of(Fields.DID, target)));
+		String oldGrant = delegation(server, namedDid, server.getEngine().getDIDString() + "/users",
+			Strings.create("user/delete"));
+		assertToolError(toolCall(baseUrl, token, "user_delete", Maps.of(Fields.DID, target,
+			Fields.UCANS, Vectors.of(oldGrant))));
+		assertFalse(server.getEngine().getVenueState().users().isDeleted(target));
 		String grant = delegation(server, namedDid, server.getEngine().getDIDString() + "/users",
-			covia.api.Abilities.USER_DELETE);
+			covia.api.Abilities.ADMIN_USER_DELETE);
 		assertToolSuccess(toolCall(baseUrl, token, "user_delete", Maps.of(Fields.DID, target,
 			Fields.UCANS, Vectors.of(grant))));
 		assertTrue(server.getEngine().getVenueState().users().isDeleted(target));

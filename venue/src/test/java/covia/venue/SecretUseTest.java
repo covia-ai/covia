@@ -172,7 +172,7 @@ public class SecretUseTest {
 		assertThrows(AuthException.class, () -> engine.resolveSecret(ref, carol, "https://evil.example/api"));
 	}
 
-	/** A delegate acting for a user ({@code user/sudo}) works in the user's
+	/** A delegate acting for a user ({@code admin/sudo}) works in the user's
 	 *  namespace, but the user's secrets are not its own: it uses one only
 	 *  under a grant, and never as the possession an own secret gives. */
 	@Test
@@ -185,7 +185,7 @@ public class SecretUseTest {
 		engine.getVenueState().users().ensure(bobDID);
 		long exp = now() + 3600;
 		UCAN sudo = UCAN.create(aliceKP, UCAN.fromDIDKey(bobDID), exp,
-			Vectors.of(Capability.create(aliceDID, Abilities.USER_SUDO)), Vectors.empty());
+			Vectors.of(Capability.create(aliceDID, Abilities.ADMIN_SUDO)), Vectors.empty());
 		RequestContext delegate = engine.sudoContext(
 			RequestContext.of(bobDID).withProofs(Vectors.of(sudo.toMap())), aliceDID);
 		assertEquals(aliceDID, delegate.getUserDID());

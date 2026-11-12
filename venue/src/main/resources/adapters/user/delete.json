@@ -1,6 +1,6 @@
 {
   "name": "Delete user account",
-  "description": "Erase a venue account, profile, login aliases and namespace; cancel its jobs, agents and schedules. Requires venue authority for user/delete on <venueDID>/users, even for the caller's own account. Retains a minimal account tombstone and public key revocations. Recreation follows the existing venue admission policy and starts with an empty account. Physical erasure requires collecting unreferenced data and expiring retained checkpoints/backups.",
+  "description": "Erase a venue account, profile, login aliases and namespace; cancel its jobs, agents and schedules. Requires venue authority for admin/user/delete on <venueDID>/users, even for the caller's own account. Retains a minimal account tombstone and public key revocations. Recreation follows the existing venue admission policy and starts with an empty account. Physical erasure requires collecting unreferenced data and expiring retained checkpoints/backups.",
   "operation": {
     "adapter": "user:delete",
     "readOnly": false,

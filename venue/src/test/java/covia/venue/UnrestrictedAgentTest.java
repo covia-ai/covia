@@ -229,22 +229,22 @@ public class UnrestrictedAgentTest {
 	@Test
 	public void anUnrestrictedVenueAgentAdministersTheVenue(TestInfo info) {
 		withVenueAgent(info, Config.UNRESTRICTED, agent -> {
-			assertTrue(engine.hasVenueAuthority(agent, "users", Abilities.USER_CREATE));
-			assertTrue(engine.hasVenueAuthority(agent, "adapters", Abilities.ADAPTER_MANAGE));
+			assertTrue(engine.hasVenueAuthority(agent, "users", Abilities.ADMIN_USER_CREATE));
+			assertTrue(engine.hasVenueAuthority(agent, "adapters", Abilities.ADMIN_ADAPTER_MANAGE));
 		});
 	}
 
 	@Test
 	public void aCappedVenueAgentAdministersOnlyWhatItsCapsName(TestInfo info) {
-		withVenueAgent(info, Vectors.of(Maps.of(Capability.WITH, "users", Capability.CAN, Abilities.USER_CREATE)), agent -> {
-			assertTrue(engine.hasVenueAuthority(agent, "users", Abilities.USER_CREATE));
-			assertFalse(administers(agent, "adapters", Abilities.ADAPTER_MANAGE));
+		withVenueAgent(info, Vectors.of(Maps.of(Capability.WITH, "users", Capability.CAN, Abilities.ADMIN_USER_CREATE)), agent -> {
+			assertTrue(engine.hasVenueAuthority(agent, "users", Abilities.ADMIN_USER_CREATE));
+			assertFalse(administers(agent, "adapters", Abilities.ADMIN_ADAPTER_MANAGE));
 		});
 	}
 
 	@Test
 	public void aVenueAgentCreatedWithoutCapsCannotAdministerTheVenue(TestInfo info) {
-		withVenueAgent(info, null, agent -> assertFalse(administers(agent, "users", Abilities.USER_CREATE)));
+		withVenueAgent(info, null, agent -> assertFalse(administers(agent, "users", Abilities.ADMIN_USER_CREATE)));
 	}
 
 	/**
@@ -259,7 +259,7 @@ public class UnrestrictedAgentTest {
 				RequestContext.of(TestEngine.uniqueManagedDID("admin-check")),
 				RequestContext.of(engine.publicPrincipal()),   // no scope: unrestricted public access
 				RequestContext.ofAgent(TestEngine.uniqueDID(info), Strings.create("helper"))}) {
-			assertFalse(engine.hasVenueAuthority(caller, "users", Abilities.USER_CREATE), caller.getCallerDID().toString());
+			assertFalse(engine.hasVenueAuthority(caller, "users", Abilities.ADMIN_USER_CREATE), caller.getCallerDID().toString());
 			assertFalse(engine.hasVenueAuthority(caller, Engine.OUTBOUND, Abilities.OUTBOUND_ANY), caller.getCallerDID().toString());
 		}
 	}
@@ -272,7 +272,7 @@ public class UnrestrictedAgentTest {
 		engine.getVenueState().users().ensure(venueDID).ensureAgent(id, Maps.empty(), null);
 		try {
 			RequestContext agent = engine.context(venueDID, Principals.agentDID(venueDID, id));
-			assertTrue(engine.hasVenueAuthority(agent, "users", Abilities.USER_CREATE));
+			assertTrue(engine.hasVenueAuthority(agent, "users", Abilities.ADMIN_USER_CREATE));
 			assertEquals(Config.UNRESTRICTED, shownCaps(engine.venueContext(), id.toString()));
 		} finally {
 			run("v/ops/agent/delete", Maps.of(Fields.AGENT_ID, id, "remove", true), engine.venueContext());

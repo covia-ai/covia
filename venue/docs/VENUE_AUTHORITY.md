@@ -44,7 +44,7 @@ For the division with capability enforcement and authentication, see
   further. An agent is a
   sub-principal of its owner and works in the owner's namespace
   ([UCAN.md](./UCAN.md) §5.4).
-- **Privileged operations.** Their current authority checks and proposed
+- **Privileged operations.** Their authority checks and capability
   names are defined in [ADMIN.md](ADMIN.md#current-venue-level-admin-functions).
 - **The venue context.** `Engine.venueContext()` is the venue as caller. About
   two dozen call sites in this repository use it for the venue's own secrets,

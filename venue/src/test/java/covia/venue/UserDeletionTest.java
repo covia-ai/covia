@@ -65,7 +65,7 @@ class UserDeletionTest {
 		engine.getVenueState().users().create(did);
 		AString proof = UCAN.create(engine.getKeyPair(), delegate.getAccountKey(),
 			System.currentTimeMillis() / 1000 + 3600,
-			Vectors.of(Capability.create(Strings.create(engine.getDIDString() + "/users"), Abilities.USER_DELETE)),
+			Vectors.of(Capability.create(Strings.create(engine.getDIDString() + "/users"), Abilities.ADMIN_USER_DELETE)),
 			Vectors.empty()).toJWT(engine.getKeyPair());
 		RequestContext ctx = engine.withTransportGrants(RequestContext.of(did), Vectors.of(proof));
 		ACell result = engine.jobs().invokeInternal("v/ops/user/delete", Maps.of(Fields.DID, did), ctx).get(5, TimeUnit.SECONDS);

@@ -101,7 +101,7 @@ public class UCANTest {
 	public void testSudoGrantDoesNotSelectNamespaceOrScope() {
 		long exp = (System.currentTimeMillis() / 1000) + HOUR;
 		AString delegation = UCAN.createJWT(ALICE_KP, BOB_KP.getAccountKey(), exp,
-			Vectors.of(Capability.create(ALICE_DID, Abilities.USER_SUDO),
+			Vectors.of(Capability.create(ALICE_DID, Abilities.ADMIN_SUDO),
 				Capability.create(Strings.create(ALICE_DID + "/w/shared"), Capability.CRUD_READ)),
 			Vectors.empty());
 
@@ -153,10 +153,10 @@ public class UCANTest {
 	public void testMultipleSudoGrantsRemainInert() {
 		long exp = (System.currentTimeMillis() / 1000) + HOUR;
 		AString alice = UCAN.createJWT(ALICE_KP, BOB_KP.getAccountKey(), exp,
-			Vectors.of(Capability.create(ALICE_DID, Abilities.USER_SUDO),
+			Vectors.of(Capability.create(ALICE_DID, Abilities.ADMIN_SUDO),
 				Capability.create(Strings.create(ALICE_DID + "/w/"), Capability.CRUD_READ)), Vectors.empty());
 		AString carol = UCAN.createJWT(CAROL_KP, BOB_KP.getAccountKey(), exp,
-			Vectors.of(Capability.create(CAROL_DID, Abilities.USER_SUDO),
+			Vectors.of(Capability.create(CAROL_DID, Abilities.ADMIN_SUDO),
 				Capability.create(Strings.create(CAROL_DID + "/w/"), Capability.CRUD_READ)), Vectors.empty());
 
 		RequestContext ctx = engine.withTransportGrants(

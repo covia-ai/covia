@@ -323,7 +323,7 @@ class UserAdapterTest {
 		long exp = (System.currentTimeMillis() / 1000) + 3600;
 		AString grant = UCAN.create(ownerKey, delegateKey.getAccountKey(), exp,
 			Vectors.of(
-				Capability.create(owner, Abilities.USER_SUDO),
+				Capability.create(owner, Abilities.ADMIN_SUDO),
 				Capability.create(Strings.create(owner + "/v/test/ops/capturectx"),
 					Strings.create("invoke"))),
 			Vectors.empty()).toJWT(ownerKey);
@@ -336,7 +336,7 @@ class UserAdapterTest {
 			delegateCtx).get(5, TimeUnit.SECONDS);
 		assertEquals(delegate, TestAdapter.CAPTURED_CTX.get(delegate).getUserDID());
 
-		// user/sudo is the explicit instruction; the grant only authorises it.
+		// user:sudo is the explicit instruction; the grant only authorises it.
 		TestAdapter.CAPTURED_CTX.remove(owner);
 		ACell result = engine.jobs().invokeInternal("v/ops/user/sudo", Maps.of(
 			Fields.DID, owner,
@@ -369,10 +369,10 @@ class UserAdapterTest {
 		ExecutionException deniedSudo = assertThrows(ExecutionException.class,
 			() -> invokeSudo(owner, noSudo));
 		assertInstanceOf(AuthException.class, deniedSudo.getCause());
-		assertTrue(deniedSudo.getCause().getMessage().contains("user/sudo"));
+		assertTrue(deniedSudo.getCause().getMessage().contains("admin/sudo"));
 
 		RequestContext noInvoke = proofContext(ownerKey, delegateKey, delegate, exp,
-			Vectors.of(Capability.create(owner, Abilities.USER_SUDO)));
+			Vectors.of(Capability.create(owner, Abilities.ADMIN_SUDO)));
 		ExecutionException deniedInvoke = assertThrows(ExecutionException.class,
 			() -> invokeSudo(owner, noInvoke));
 		assertInstanceOf(AuthException.class, deniedInvoke.getCause());

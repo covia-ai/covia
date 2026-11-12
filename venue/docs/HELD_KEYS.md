@@ -173,7 +173,7 @@ own; Convex 0.8.18 provides Ed25519 only.
 A held key is named by its public key, in any of the forms results already
 use: its `did:key`, its multibase string (`z6Mk…`), or for Ed25519 its 32-byte
 account key. A bare key names a key in the keyring of the principal that
-acts: a user's own, an agent's own, a delegate's own under `user/sudo`.
+acts: a user's own, an agent's own, a delegate's own under `admin/sudo`.
 `<did>/x/crypto/keys/<key>` names one in another holder's keyring. A held
 mnemonic is named the same way by its ID, the master node's public key, or as
 `<did>/x/crypto/mnemonics/<id>`.
@@ -269,7 +269,7 @@ for keys:
   named in full, `<owner>:g:<id>/x/crypto/keys/`.
 - An owner uses its agent's keys under a grant, which it can have the venue
   sign on the agent's behalf. It may also put them in the agent's caps.
-- A request under `user/sudo` is bounded by the grants it presents, a
+- A request under `admin/sudo` is bounded by the grants it presents, a
   target's keys as anything else of the target's.
 - A grant covers a key as it covers any resource (principle 5), bounded to
   the key, the kind of signing, an expiry and any `nb.gate`, which can make

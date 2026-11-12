@@ -159,7 +159,7 @@ public class UserAdapter extends AAdapter {
 	}
 
 	private ACell create(RequestContext ctx, ACell input) {
-		requireVenueUserAuthority(ctx, Abilities.USER_CREATE);
+		requireVenueUserAuthority(ctx, Abilities.ADMIN_USER_CREATE);
 		AString suppliedDID = RT.ensureString(RT.getIn(input, Fields.DID));
 		AString username = RT.ensureString(RT.getIn(input, USERNAME));
 		AVector<ACell> authenticationKeys =
@@ -219,7 +219,7 @@ public class UserAdapter extends AAdapter {
 			throw new AuthException(EXPORT_DEFINITION_REQUIRED);
 		}
 		AString did = requireDID(targetDID(ctx, input));
-		requireSelfOrVenueUserAuthority(ctx, did, Abilities.USER_EXPORT);
+		requireSelfOrVenueUserAuthority(ctx, did, Abilities.ADMIN_USER_EXPORT);
 		ACell secrets = RT.getIn(input, SECRETS);
 		if (secrets != null && !(secrets instanceof CVMBool)) throw new InvalidInputException(INVALID_SECRETS);
 		AccountKey recipient = null;
@@ -241,7 +241,7 @@ public class UserAdapter extends AAdapter {
 	 */
 	private ACell importUser(RequestContext ctx, ACell input) {
 		AString did = requireDID(RT.ensureString(RT.getIn(input, Fields.DID)));
-		requireVenueUserAuthority(ctx, Abilities.USER_IMPORT);
+		requireVenueUserAuthority(ctx, Abilities.ADMIN_USER_IMPORT);
 		ABlob export = Blobs.parse(RT.getIn(input, EXPORT));
 		if (export == null) throw new InvalidInputException(UserExports.NOT_AN_EXPORT);
 		boolean created = new UserExports(engine).importUser(export, did, seed(ctx, input));
@@ -251,8 +251,8 @@ public class UserAdapter extends AAdapter {
 	private ACell cloneUser(RequestContext ctx, ACell input) {
 		AString from = requireDID(RT.ensureString(RT.getIn(input, Fields.FROM)));
 		AString to = requireDID(RT.ensureString(RT.getIn(input, Fields.TO)));
-		requireSelfOrVenueUserAuthority(ctx, from, Abilities.USER_EXPORT);
-		requireVenueUserAuthority(ctx, Abilities.USER_IMPORT);
+		requireSelfOrVenueUserAuthority(ctx, from, Abilities.ADMIN_USER_EXPORT);
+		requireVenueUserAuthority(ctx, Abilities.ADMIN_USER_IMPORT);
 		boolean created = new UserExports(engine).cloneUser(from, to);
 		return Maps.of(Fields.FROM, from, Fields.TO, to, CREATED, CVMBool.create(created));
 	}
@@ -277,10 +277,10 @@ public class UserAdapter extends AAdapter {
 		if (did == null) did = ctx.getCallerDID();
 		if (did == null) throw new AuthException("Authentication required");
 		did = requireDID(did);
-		boolean operator = engine.hasVenueAuthority(ctx, USERS_RESOURCE, Abilities.USER_READ);
+		boolean operator = engine.hasVenueAuthority(ctx, USERS_RESOURCE, Abilities.ADMIN_USER_READ);
 		// The user itself with all of its authority, as for managing the user
 		if (!operator && !(did.equals(ctx.getCallerDID()) && engine.holdsAuthorityOf(ctx, did))) {
-			requireVenueUserAuthority(ctx, Abilities.USER_READ);
+			requireVenueUserAuthority(ctx, Abilities.ADMIN_USER_READ);
 		}
 		User user = engine.getVenueState().users().user(did);
 		if (user == null) {
@@ -292,7 +292,7 @@ public class UserAdapter extends AAdapter {
 	/** Job-free REST reads (#255) call this directly, reusing the same
 	 *  capability checks as the {@code user:list} operation. */
 	public ACell list(RequestContext ctx) {
-		requireVenueUserAuthority(ctx, Abilities.USER_READ);
+		requireVenueUserAuthority(ctx, Abilities.ADMIN_USER_READ);
 		Users store = engine.getVenueState().users();
 		AMap<AString, ACell> all = store.getAll();
 		AVector<ACell> result = Vectors.empty();
@@ -306,7 +306,7 @@ public class UserAdapter extends AAdapter {
 	}
 
 	private ACell authenticationAdd(RequestContext ctx, ACell input) {
-		AString did = targetManagedUser(ctx, input, Abilities.USER_AUTH_MANAGE);
+		AString did = targetManagedUser(ctx, input, Abilities.ADMIN_USER_AUTH_MANAGE);
 		AString id = engine.managedUserName(did);
 		AString key = RT.ensureString(RT.getIn(input, Fields.KEY));
 		AString label = RT.ensureString(RT.getIn(input, Fields.LABEL));
@@ -321,7 +321,7 @@ public class UserAdapter extends AAdapter {
 	}
 
 	private ACell authenticationRevoke(RequestContext ctx, ACell input) {
-		AString did = targetManagedUser(ctx, input, Abilities.USER_AUTH_MANAGE);
+		AString did = targetManagedUser(ctx, input, Abilities.ADMIN_USER_AUTH_MANAGE);
 		AString id = engine.managedUserName(did);
 		AString key = RT.ensureString(RT.getIn(input, Fields.KEY));
 		if (key == null) throw new InvalidInputException("key is required");
@@ -338,7 +338,7 @@ public class UserAdapter extends AAdapter {
 	 *  capability checks as the {@code user:authentication-list} operation. */
 	public ACell authenticationList(RequestContext ctx, ACell input) {
 		AString did = requireDID(targetDID(ctx, input));
-		requireSelfOrVenueUserAuthority(ctx, did, Abilities.USER_READ);
+		requireSelfOrVenueUserAuthority(ctx, did, Abilities.ADMIN_USER_READ);
 		AString id = engine.managedUserName(did);
 		if (id != null) {
 			return Maps.of(

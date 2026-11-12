@@ -157,7 +157,7 @@ public class SchedulerTest {
 			Fields.CONFIG, Maps.of(Config.CAPS, narrower)), ctx).awaitResult(5000);
 		assertEquals(narrower, sched.fireContext(state.find(agents).rec()).getCaps());
 
-		// A delegate fires only while a user/sudo delegation still authorises it.
+		// A delegate fires only while a admin/sudo delegation still authorises it.
 		RequestContext delegate = RequestContext.of(s(did + "-delegate")).onBehalfOf(did);
 		Blob delegated = sched.schedule(s("v/test/ops/echo"), s("x"), delegate, future());
 		assertThrows(AuthException.class, () -> sched.fireContext(state.find(delegated).rec()));
@@ -180,7 +180,7 @@ public class SchedulerTest {
 		assertEquals(caps, fired.getCaps());
 	}
 
-	/** A delegate's event fires in the owner's namespace while its user/sudo grant authorises it. */
+	/** A delegate's event fires in the owner's namespace while its admin/sudo grant authorises it. */
 	@Test
 	public void testADelegatedEventFiresUnderItsGrant() throws Exception {
 		AKeyPair ownerKey = AKeyPair.generate();
@@ -191,7 +191,7 @@ public class SchedulerTest {
 		engine.getVenueState().users().create(delegate);
 		AString grant = UCAN.create(ownerKey, delegateKey.getAccountKey(),
 			(System.currentTimeMillis() / 1000) + 3600,
-			Vectors.of(Capability.create(owner, Abilities.USER_SUDO),
+			Vectors.of(Capability.create(owner, Abilities.ADMIN_SUDO),
 				Capability.create(s(owner + "/v/test/ops/capturectx"), s("invoke"))),
 			Vectors.empty()).toJWT(ownerKey);
 		RequestContext sudo = engine.sudoContext(engine.withTransportGrants(

@@ -1,6 +1,6 @@
 {
   "name": "Add user authentication key",
-  "description": "Adds a public did:key authenticator to a venue-managed named user. Defaults to the caller. Revoked keys cannot be reactivated.",
+  "description": "Adds a public did:key authenticator to a venue-managed named user. Defaults to the caller. Requires the user's own whole authority or admin/user/authentication-manage on <venueDID>/users. Revoked keys cannot be reactivated.",
   "mcp": {
     "annotations": {
       "readOnlyHint": false,

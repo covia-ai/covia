@@ -51,7 +51,7 @@ is unrestricted. A restricted token's request therefore cannot:
 - make an agent act (`llmagent:chat` or `goaltree:chat` invoked directly).
 
 Whatever its caps, a request through a token never acts for another user
-(`user/sudo`), never counts as the venue, never reaches state a namespace keeps
+(`admin/sudo`), never counts as the venue, never reaches state a namespace keeps
 with no capability of its own (such as Python instances and bot lists), and
 cannot create a messaging bot, which acts with its creator's whole authority.
 Its reach into another identity's resources, through admissions or presented

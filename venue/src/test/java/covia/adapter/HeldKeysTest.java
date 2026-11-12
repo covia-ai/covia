@@ -235,7 +235,7 @@ class HeldKeysTest {
 		assertTrue(failure("sign", Maps.of("key", key, "data", "0x00")).contains(CryptoAdapter.KEY_NOT_HELD));
 	}
 
-	/** A request under user/sudo is bounded by the grants it presents: it
+	/** A request under admin/sudo is bounded by the grants it presents: it
 	 *  reaches the target's key by naming it, and a bare key is the delegate's
 	 *  own, as for any principal that acts. */
 	@Test void underSudoATargetsKeyIsNamedAndGranted() {

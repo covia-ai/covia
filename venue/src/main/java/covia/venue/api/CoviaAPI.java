@@ -2134,7 +2134,8 @@ public class CoviaAPI extends ACoviaAPI {
 				+ "Operator-only: a non-operator, signed-in caller gets 403, not a partial list.",
 			operationId = "getUsers")
 	protected void getUsers(Context ctx) {
-		RequestContext rctx = AuthMiddleware.callerContext(ctx);
+		RequestContext rctx = engine().withTransportGrants(AuthMiddleware.callerContext(ctx),
+			AuthMiddleware.headerUcans(ctx));
 		if (rctx.getCallerDID() == null) {
 			buildError(ctx, 401, "Authentication required");
 			return;
@@ -2157,7 +2158,8 @@ public class CoviaAPI extends ACoviaAPI {
 			operationId = "getUserInfo",
 			pathParams = { @OpenApiParam(name = "did", description = "User DID") })
 	protected void getUserInfo(Context ctx) {
-		RequestContext rctx = AuthMiddleware.callerContext(ctx);
+		RequestContext rctx = engine().withTransportGrants(AuthMiddleware.callerContext(ctx),
+			AuthMiddleware.headerUcans(ctx));
 		if (rctx.getCallerDID() == null) {
 			buildError(ctx, 401, "Authentication required");
 			return;
@@ -2178,10 +2180,11 @@ public class CoviaAPI extends ACoviaAPI {
 
 	@OpenApi(path = ROUTE + "users/{did}", methods = HttpMethod.DELETE,
 			tags = { "Covia" }, operationId = "deleteUser",
-			summary = "Delete an account with venue user/delete authority. Self-deletion has no authority exemption.",
+			summary = "Delete an account with venue admin/user/delete authority. Self-deletion has no authority exemption.",
 			pathParams = { @OpenApiParam(name = "did", description = "Exact account DID") })
 	protected void deleteUser(Context ctx) {
-		RequestContext rctx = AuthMiddleware.callerContext(ctx);
+		RequestContext rctx = engine().withTransportGrants(AuthMiddleware.callerContext(ctx),
+			AuthMiddleware.headerUcans(ctx));
 		try {
 			ACell result = engine().jobs().invokeInternal("v/ops/user/delete",
 				Maps.of(Fields.DID, Strings.create(ctx.pathParam("did"))), rctx).join();
@@ -2206,7 +2209,8 @@ public class CoviaAPI extends ACoviaAPI {
 			operationId = "getUserAuthentications",
 			pathParams = { @OpenApiParam(name = "did", description = "User DID") })
 	protected void getUserAuthentications(Context ctx) {
-		RequestContext rctx = AuthMiddleware.callerContext(ctx);
+		RequestContext rctx = engine().withTransportGrants(AuthMiddleware.callerContext(ctx),
+			AuthMiddleware.headerUcans(ctx));
 		if (rctx.getCallerDID() == null) {
 			buildError(ctx, 401, "Authentication required");
 			return;

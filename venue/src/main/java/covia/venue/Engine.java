@@ -3383,7 +3383,7 @@ public class Engine {
 	 * activation.
 	 */
 	public ACell deleteUser(RequestContext ctx, AString did) {
-		requireVenueAuthority(ctx, "users", Abilities.USER_DELETE);
+		requireVenueAuthority(ctx, "users", Abilities.ADMIN_USER_DELETE);
 		requireNotSubPrincipal(did);
 		if (isVenuePrincipal(did) || Strings.create(getDIDString() + ":public").equals(did)) {
 			throw new InvalidInputException(PROTECTED_USER);
@@ -3882,9 +3882,15 @@ public class Engine {
 		return web != null && principal.equals(web);
 	}
 
+	/** Refusals of an explicit namespace switch. */
+	public static final String SUDO_AUTH_REQUIRED = "Authentication required for " + Abilities.ADMIN_SUDO;
+	public static final String SUDO_DENIED = "Sudo denied: requires " + Abilities.ADMIN_SUDO + " on %s from that user";
+	/** Why a request an MCP token narrows may not act for another user. */
+	public static final String SUDO_WITH_TOKEN = "A request through an MCP token cannot act for another user (admin/sudo)";
+
 	/**
 	 * Authorises an explicit request to execute within another user's namespace.
-	 * The request itself is the instruction; the {@code user/sudo} capability is
+	 * The request itself is the instruction; the {@code admin/sudo} capability is
 	 * only the permission check. Authentication and actor attribution are retained.
 	 *
 	 * <p>The returned context is proof-bounded so the actor's ambient authority
@@ -3892,13 +3898,10 @@ public class Engine {
 	 * selects only the namespace: the invoked operation and every point of action
 	 * must still be covered independently.</p>
 	 */
-	/** Why a request an MCP token narrows may not act for another user. */
-	public static final String SUDO_WITH_TOKEN = "A request through an MCP token cannot act for another user (user/sudo)";
-
 	public RequestContext sudoContext(RequestContext ctx, AString userDID) {
 		if (ctx == null || ctx.getCallerDID() == null
 				|| isPublicPrincipal(ctx.getCallerDID())) {
-			throw new AuthException("Authentication required for user/sudo");
+			throw new AuthException(SUDO_AUTH_REQUIRED);
 		}
 		if (userDID == null) throw new InvalidInputException("Target user DID is required");
 		requireNotSubPrincipal(userDID);
@@ -3906,9 +3909,8 @@ public class Engine {
 		// Acting for another user is bounded by that user's grants, not by a token's
 		// caps, so a request a token narrows never takes that step.
 		if (!ctx.getTokens().isEmpty()) throw new AuthException(SUDO_WITH_TOKEN);
-		if (!crossUserAllows(ctx, userDID, Abilities.USER_SUDO)) {
-			throw new AuthException("Sudo denied: requires user/sudo on " + userDID
-				+ " from that user");
+		if (!crossUserAllows(ctx, userDID, Abilities.ADMIN_SUDO)) {
+			throw new AuthException(SUDO_DENIED.formatted(userDID));
 		}
 		return ctx.onBehalfOf(userDID);
 	}
@@ -4013,7 +4015,7 @@ public class Engine {
 	 * <ul>
 	 * <li>A principal is root of its own resources, of an identity's it signs in
 	 * as, and of its agents' (UCAN.md, "Roots"), and so is anything acting with
-	 * its authority: an agent with its owner's, a request under {@code user/sudo}
+	 * its authority: an agent with its owner's, a request under {@code admin/sudo}
 	 * with the target's. That is the authority it has of its own, never what
 	 * others have granted it. Its scope must include {@code grant/<can>} there,
 	 * as having no scope does.</li>
@@ -4373,7 +4375,7 @@ public class Engine {
 	 * The context {@code principal} acts under now for {@code owner}, presenting
 	 * {@code proofs}, as a live request of its own would: the owner, one of its
 	 * agents or the public principal as {@link #context(AString, AString)}, and
-	 * any other principal only as a {@code user/sudo} delegate whose proofs still
+	 * any other principal only as a {@code admin/sudo} delegate whose proofs still
 	 * authorise it ({@link #sudoContext}). A recorded request, such as a
 	 * scheduled event, is rebuilt this way when it runs.
 	 *
@@ -4422,7 +4424,7 @@ public class Engine {
 	 * an agent; acting in a namespace that is root of it counts only with an
 	 * unrestricted scope. So a user holds its own and its agents' authority, an
 	 * agent its own, and a capped agent not its owner's or a sibling's. A
-	 * {@code user/sudo} delegate, whose scope is its presented grants, holds no
+	 * {@code admin/sudo} delegate, whose scope is its presented grants, holds no
 	 * other principal's.
 	 *
 	 * <p>A request made as an agent holds that agent's authority, however it is
@@ -4499,7 +4501,7 @@ public class Engine {
 	 * creates or forks takes for its controller: an agent acting in its owner's
 	 * namespace, whatever its authority derives from, so that what it creates
 	 * stays within it; the authority's own principal when it acts in its own
-	 * namespace; and otherwise the namespace it acts for, as a {@code user/sudo}
+	 * namespace; and otherwise the namespace it acts for, as a {@code admin/sudo}
 	 * delegate acts for its target.
 	 */
 	public static AString actingPrincipal(RequestContext ctx) {
@@ -5156,7 +5158,7 @@ public class Engine {
 	}
 
 	/** Whether {@code owner}'s store is the caller's own: the caller is the user
-	 *  or one of its agents. A delegate acting for the user ({@code user/sudo})
+	 *  or one of its agents. A delegate acting for the user ({@code admin/sudo})
 	 *  works in the user's namespace but is neither. The public principal's
 	 *  store is provisioned by the operator and nobody's own. */
 	private boolean isOwnSecret(AString owner, RequestContext ctx) {
