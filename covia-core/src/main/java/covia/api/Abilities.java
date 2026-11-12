@@ -69,10 +69,10 @@ public final class Abilities {
 	public static final AString KEY_DERIVE    = Strings.intern("key/derive");
 	public static final AString MCP_MANAGE    = Strings.intern("mcp/manage");
 	/** Create, change or delete an access token accepted at MCP alone, through the
-	 *  MCP token operations ({@code <did>/x/tokens/<name>}). */
+	 *  MCP token operations ({@code <did>/x/token/<name>}). */
 	public static final AString MCP_TOKEN     = Strings.intern("mcp/token");
 	/** Administer access tokens directly: its leaf {@code admin/token/<access point>}
-	 *  covers the tokens accepted there ({@code <did>/x/tokens/<name>}). */
+	 *  covers the tokens accepted there ({@code <did>/x/token/<name>}). */
 	public static final AString ADMIN_TOKEN   = Strings.intern("admin/token");
 	/** Administer access tokens accepted at MCP, such as fetching a bearer again. */
 	public static final AString ADMIN_TOKEN_MCP = Strings.intern("admin/token/mcp");

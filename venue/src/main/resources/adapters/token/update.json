@@ -1,6 +1,6 @@
 {
 	"name": "Token Update",
-	"description": "Changes an access token in your namespace: its access (replacing every entry), its caps or its expiry, or gives it a new bearer with rotate (the old one stops working at once). What you leave out stays as it is. Changes take effect at the next check, including on work the token already started. Token administration: needs admin/token/<access point> on x/tokens/<name> for every access point the token carries before and after, and the authority the token was created with.",
+	"description": "Changes an access token in your namespace: its access (replacing every entry), its caps or its expiry, or gives it a new bearer with rotate (the old one stops working at once). What you leave out stays as it is. Changes take effect at the next check, including on work the token already started. Token administration: needs admin/token/<access point> on x/token/<name> for every access point the token carries before and after, and the authority the token was created with.",
 	"dateCreated": "2026-11-12T00:00:00Z",
 	"operation": {
 		"adapter": "token:update",

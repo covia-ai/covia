@@ -88,8 +88,8 @@ public class TokenAdapterTest {
 		AString alice = TestEngine.uniqueDID(info);
 		RequestContext owner = RequestContext.of(alice);
 		ACell invoke = cap("v/ops/", Abilities.INVOKE);
-		ACell mcpLeaf = cap("x/tokens/", Abilities.ADMIN_TOKEN_MCP);
-		ACell testLeaf = cap("x/tokens/", TokenAdapter.administers(TEST));
+		ACell mcpLeaf = cap("x/token/", Abilities.ADMIN_TOKEN_MCP);
+		ACell testLeaf = cap("x/token/", TokenAdapter.administers(TEST));
 
 		// An owner holds every leaf in its own namespace
 		complete(create(owner, "owned", BOTH));
@@ -99,7 +99,7 @@ public class TokenAdapterTest {
 		failure(create(mcpAdmin, "wider", BOTH));
 		complete(create(mcpAdmin, "narrow", MCP));
 		complete(create(agent(alice, "both-admin", Vectors.of(invoke, mcpLeaf, testLeaf)), "both", BOTH));
-		complete(create(agent(alice, "parent", Vectors.of(invoke, cap("x/tokens/", Abilities.ADMIN_TOKEN))), "parented", BOTH));
+		complete(create(agent(alice, "parent", Vectors.of(invoke, cap("x/token/", Abilities.ADMIN_TOKEN))), "parented", BOTH));
 
 		// Changing one needs the leaves of what it carries before and after
 		failure(run("v/ops/token/update", Maps.of(Fields.NAME, "narrow", Fields.ACCESS, BOTH), mcpAdmin));

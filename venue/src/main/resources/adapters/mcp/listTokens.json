@@ -1,6 +1,6 @@
 {
 	"name": "MCP List Tokens",
-	"description": "Lists the MCP tokens in your namespace, those accepted at MCP alone: each one's name, issuer, tools, caps, expiry and creation time, never its bearer. Needs crud/read on x/tokens.",
+	"description": "Lists the MCP tokens in your namespace, those accepted at MCP alone: each one's name, issuer, tools, caps, expiry and creation time, never its bearer. Needs crud/read on x/token.",
 	"dateCreated": "2026-11-11T00:00:00Z",
 	"operation": {
 		"adapter": "mcp:token:list",

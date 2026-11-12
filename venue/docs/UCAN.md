@@ -184,8 +184,8 @@ Abilities follow UCAN's slash-delimited convention with no leading slash. `*` is
 | `key/derive` | — | Derive keys from a held phrase into its holder's keyring (`crypto:derive-key`) |
 | `secret/write` | - | Store or update a secret (`<owner>/s/<name>`) |
 | `mcp/manage` | - | Manage MCP server and tool connections (`<venue>/v/mcp`) |
-| `mcp/token` | - | Create, update or delete an access token accepted at MCP alone, through the MCP token operations (`<owner>/x/tokens/<name>`) |
-| `admin/token` | Every `admin/token/…` | Work on access tokens directly, whatever access points they carry (`<owner>/x/tokens/<name>`) |
+| `mcp/token` | - | Create, update or delete an access token accepted at MCP alone, through the MCP token operations (`<owner>/x/token/<name>`) |
+| `admin/token` | Every `admin/token/…` | Work on access tokens directly, whatever access points they carry (`<owner>/x/token/<name>`) |
 | `admin/token/<access point>` | - | Work directly on access tokens that carry that access point, such as `admin/token/mcp`; a token carrying several needs each leaf, and fetching a kept bearer also needs the token's source authority |
 | `hitl/request` | - | Ask the owner a human-in-the-loop question |
 | `admin/user/create` | - | Create an account |

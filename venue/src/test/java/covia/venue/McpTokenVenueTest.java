@@ -158,8 +158,8 @@ public class McpTokenVenueTest {
 		AString alice = TestEngine.uniqueDID(info);
 		RequestContext owner = RequestContext.of(alice);
 		AMap<AString, ACell> tools = Maps.of(Fields.TOOLS, Vectors.of("v/ops/mcp/get-token", "v/ops/mcp/create-token"));
-		ACell manage = cap("x/tokens/", Abilities.MCP_TOKEN);
-		ACell admin = cap("x/tokens/", Abilities.ADMIN_TOKEN_MCP);
+		ACell manage = cap("x/token/", Abilities.MCP_TOKEN);
+		ACell admin = cap("x/token/", Abilities.ADMIN_TOKEN_MCP);
 		String plain = bearer(complete(run("v/ops/mcp/create-token",
 			tools.assoc(Fields.NAME, Strings.create("plain")).assoc(Fields.CAPS, Vectors.of(manage)), owner)));
 		String administrator = bearer(complete(run("v/ops/mcp/create-token",
@@ -187,8 +187,8 @@ public class McpTokenVenueTest {
 			String source = bearer(complete(run("v/ops/mcp/create-token", Maps.of(
 				Fields.NAME, "source-" + i,
 				Fields.TOOLS, Vectors.of("v/ops/mcp/create-token", "v/ops/mcp/get-token"),
-				Fields.CAPS, Vectors.of(cap("x/tokens/", Abilities.MCP_TOKEN),
-					cap("x/tokens/", Strings.create(abilities[i])))), owner)));
+				Fields.CAPS, Vectors.of(cap("x/token/", Abilities.MCP_TOKEN),
+					cap("x/token/", Strings.create(abilities[i])))), owner)));
 			String name = "child-" + i;
 			String child = bearer(complete(tool(source, "v/ops/mcp/create-token",
 				Maps.of(Fields.NAME, name, Fields.TOOLS, Vectors.of("v/ops/covia/read")))));

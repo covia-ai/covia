@@ -117,7 +117,7 @@ public class McpTokenAgentsTest {
 		// Alice's builder may run operations, make tokens and use w/shared/, and nothing else
 		RequestContext builder = agent(alice, "builder", Vectors.of(
 			cap("v/ops/", Abilities.INVOKE),
-			cap("x/tokens/", Abilities.MCP_TOKEN),
+			cap("x/token/", Abilities.MCP_TOKEN),
 			cap("w/shared/", Capability.CRUD), cap("j/", Abilities.JOB_READ)));
 		// Bob's worker holds no authority of Alice's at all
 		RequestContext worker = agent(bob, "worker", Caps.UNRESTRICTED);
@@ -200,6 +200,6 @@ public class McpTokenAgentsTest {
 
 		failed(run("v/ops/mcp/create-token", input, agent(alice, "plain", Vectors.of(invoke, shared))));
 		complete(run("v/ops/mcp/create-token", input,
-			agent(alice, "maker", Vectors.of(invoke, shared, cap("x/tokens/", Abilities.MCP_TOKEN)))));
+			agent(alice, "maker", Vectors.of(invoke, shared, cap("x/token/", Abilities.MCP_TOKEN)))));
 	}
 }

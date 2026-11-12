@@ -70,8 +70,8 @@ public class TokenAdapter extends AAdapter {
 	/** Adapter config: whether the venue keeps each token's bearer, sealed, beside its hash. */
 	static final AString KEEP_RAW_TOKENS = Strings.intern("keepRawTokens");
 
-	/** The resource a namespace's tokens are under, {@code x/tokens}; one token is {@link #resource}. */
-	static final AString TOKENS_RESOURCE = Strings.intern("x/tokens");
+	/** The resource a namespace's tokens are under, {@code x/token}; one token is {@link #resource}. */
+	static final AString TOKENS_RESOURCE = Strings.intern("x/token");
 
 	private static final AString K_TOKENS = Strings.intern("tokens");
 
@@ -164,7 +164,7 @@ public class TokenAdapter extends AAdapter {
 
 	// ========== Gates ==========
 
-	/** The capability resource a token is: {@code x/tokens/<name>} in its namespace. */
+	/** The capability resource a token is: {@code x/token/<name>} in its namespace. */
 	public static AString resource(AString name) {
 		return Strings.create(TOKENS_RESOURCE + "/" + name);
 	}
@@ -297,7 +297,7 @@ public class TokenAdapter extends AAdapter {
 		return name;
 	}
 
-	/** The tokens in the caller's namespace that {@code which} takes, needing {@code crud/read} on {@code x/tokens}. */
+	/** The tokens in the caller's namespace that {@code which} takes, needing {@code crud/read} on {@code x/token}. */
 	public List<AccessToken> list(RequestContext ctx, Predicate<AccessToken> which) {
 		AString owner = owner(ctx);
 		engine.requireAuthority(ctx, TOKENS_RESOURCE, Capability.CRUD_READ);

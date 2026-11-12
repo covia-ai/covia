@@ -1,6 +1,6 @@
 {
 	"name": "Token Get",
-	"description": "Returns an access token's bearer again, on a venue whose operator keeps tokens (adapters.token.keepRawTokens); otherwise rotate it with v/ops/token/update. Token administration: needs admin/token/<access point> on x/tokens/<name> for every access point the token carries, and the authority the token was created with.",
+	"description": "Returns an access token's bearer again, on a venue whose operator keeps tokens (adapters.token.keepRawTokens); otherwise rotate it with v/ops/token/update. Token administration: needs admin/token/<access point> on x/token/<name> for every access point the token carries, and the authority the token was created with.",
 	"dateCreated": "2026-11-12T00:00:00Z",
 	"operation": {
 		"adapter": "token:get",

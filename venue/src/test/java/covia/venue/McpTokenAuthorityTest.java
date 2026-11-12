@@ -135,7 +135,7 @@ public class McpTokenAuthorityTest {
 	public void aTokenFollowsItsIssuersAuthority(TestInfo info) {
 		AString alice = TestEngine.uniqueDID(info);
 		ACell invoke = cap("v/ops/", Abilities.INVOKE);
-		ACell tokens = cap("x/tokens/", Abilities.MCP_TOKEN);
+		ACell tokens = cap("x/token/", Abilities.MCP_TOKEN);
 		RequestContext builder = agent(alice, "builder", Vectors.of(invoke, tokens,
 			cap("w/shared/", Capability.CRUD), cap("w/other/", Capability.CRUD)));
 		Issued wide = issue(builder, "wide", Vectors.of("v/ops/covia/write"), Caps.UNRESTRICTED);
@@ -166,7 +166,7 @@ public class McpTokenAuthorityTest {
 		AString alice = TestEngine.uniqueDID(info);
 		AVector<ACell> manage = Vectors.of("v/ops/mcp/create-token", "v/ops/mcp/update-token");
 		Issued narrow = issue(RequestContext.of(alice), "narrow", manage,
-			Vectors.of(cap("x/tokens/", Abilities.MCP_TOKEN), cap("w/shared/", Capability.CRUD)));
+			Vectors.of(cap("x/token/", Abilities.MCP_TOKEN), cap("w/shared/", Capability.CRUD)));
 
 		refused(tool(narrow, "v/ops/mcp/update-token", Maps.of(Fields.NAME, "narrow", Fields.CAPS, Caps.UNRESTRICTED)));
 		refused(tool(narrow, "v/ops/mcp/update-token", Maps.of(Fields.NAME, "narrow", Fields.ROTATE, true)));
@@ -228,7 +228,7 @@ public class McpTokenAuthorityTest {
 		AString alice = TestEngine.uniqueDID(info);
 		complete(run("v/ops/covia/write", Maps.of(Fields.PATH, "w/seed", Fields.VALUE, 0), RequestContext.of(alice)));
 		RequestContext helper = agent(alice, "helper", Vectors.of(cap("v/ops/", Abilities.INVOKE),
-			cap("x/tokens/", Abilities.MCP_TOKEN), cap("w/", Capability.CRUD), cap("j/", Abilities.JOB_READ)));
+			cap("x/token/", Abilities.MCP_TOKEN), cap("w/", Capability.CRUD), cap("j/", Abilities.JOB_READ)));
 		Job made = run("v/ops/covia/write", Maps.of(Fields.PATH, "w/made", Fields.VALUE, 1), helper);
 		complete(made);
 		AVector<ACell> tools = Vectors.of("v/ops/covia/read");

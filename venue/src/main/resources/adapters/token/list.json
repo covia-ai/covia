@@ -1,6 +1,6 @@
 {
 	"name": "Token List",
-	"description": "Lists the access tokens in your namespace: each one's name, issuer, access, caps, expiry and creation time, never its bearer. Needs crud/read on x/tokens.",
+	"description": "Lists the access tokens in your namespace: each one's name, issuer, access, caps, expiry and creation time, never its bearer. Needs crud/read on x/token.",
 	"dateCreated": "2026-11-12T00:00:00Z",
 	"operation": {
 		"adapter": "token:list",

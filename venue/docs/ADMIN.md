@@ -159,7 +159,7 @@ a reusable credential included. Both belong in `admin`; ordinary agent and MCP
 token management remain separate.
 
 `admin/token` is the parent for working on access tokens directly
-([ACCESS_TOKENS.md](ACCESS_TOKENS.md)), on `U/x/tokens/<name>`. Each access
+([ACCESS_TOKENS.md](ACCESS_TOKENS.md)), on `U/x/token/<name>`. Each access
 point has a leaf, `admin/token/<access point>` (`admin/token/mcp` for the MCP
 endpoint), and direct work on a token needs the leaf of every access point it
 carries, which the parent covers by the ordinary prefix rule. Prefer a
@@ -169,11 +169,11 @@ kept bearer retains its source-authority and storage restrictions.
 | Surface | Current check | Treatment |
 |---------|---------------|--------------------|
 | `agent:step` | `admin/agent` on `U/g/<id>`; executes caller-supplied tool calls under the target agent's authority | Privileged execution under the agent's effective capabilities, unrestricted included |
-| `token:create`, `token:update`, `token:delete`, `token:get` | `admin/token/<p>` on `U/x/tokens/<name>` for every access point the token carries; update and get also check source authority, get retained bearer availability | Privileged direct token administration |
-| `mcp:get-token` | `admin/token/mcp` on `U/x/tokens/<name>` for a token accepted at MCP alone, token source authority, and retained bearer availability | Privileged credential retrieval specific to MCP tokens |
+| `token:create`, `token:update`, `token:delete`, `token:get` | `admin/token/<p>` on `U/x/token/<name>` for every access point the token carries; update and get also check source authority, get retained bearer availability | Privileged direct token administration |
+| `mcp:get-token` | `admin/token/mcp` on `U/x/token/<name>` for a token accepted at MCP alone, token source authority, and retained bearer availability | Privileged credential retrieval specific to MCP tokens |
 | `secret:extract` | `secret/extract` on own `s/<name>` and direct-owner, non-recorded-call restrictions | Retain its separate sensitive-operation permission |
 | Self-service account key changes and whole-state export | Whole-owner identity exception described above | Preserve self-service; it grants no venue-level account administration |
-| `mcp:create-token`, `mcp:update-token`, `mcp:delete-token` | `mcp/token` on `U/x/tokens/<name>`, for tokens accepted at MCP alone; creation checks issuer authority, update checks source authority; deletion only narrows | Retain independently managed MCP token permissions |
+| `mcp:create-token`, `mcp:update-token`, `mcp:delete-token` | `mcp/token` on `U/x/token/<name>`, for tokens accepted at MCP alone; creation checks issuer authority, update checks source authority; deletion only narrows | Retain independently managed MCP token permissions |
 | Agent configuration/controller changes | `agent/write` plus controller-authority checks where required | Retain separate agent management and authority checks |
 | `auth:identity-token` | Caller identity, scope/sub-principal and signing-key custody checks | Identity issuance remains identity-bound; a generic admin grant must not permit impersonation |
 | `hitl:respond` | Responder must hold its own whole authority; grant answers also follow granting rules | Approval remains attributable to the responder; admin authority must not manufacture someone else's consent |

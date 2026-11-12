@@ -13,7 +13,9 @@ is the first access point: an MCP token is an access token accepted at MCP
 alone, whose entry lists the tools it offers.
 
 The tokens are kept by the `token` adapter (`covia.adapter.token`), which
-other adapters use as their infrastructure.
+other adapters use as their infrastructure. The `test` adapter is an access
+point too: it accepts any object as its entry and no route accepts tokens
+there, so it serves only to exercise the rules with a second access point.
 
 ## Identity and authority
 
@@ -75,21 +77,20 @@ minted by answering a HITL ask.
 
 ## Capabilities
 
-Every token is one resource, `x/tokens/<name>` in its namespace, whichever
+Every token is one resource, `x/token/<name>` in its namespace, whichever
 operation reaches it.
 
-| Ability on `x/tokens/<name>` | Permits |
+| Ability on `x/token/<name>` | Permits |
 |------------------------------|---------|
 | `admin/token/<access point>` | Working on tokens that carry that access point directly, through the `token:` operations, including fetching a kept bearer |
 | `admin/token` | The parent of every `admin/token/<access point>` leaf, so every access point |
 | `mcp/token` | Creating, changing and deleting MCP tokens through the MCP token operations |
-| `crud/read` on `x/tokens` | Listing token records, never bearers |
+| `crud/read` on `x/token` | Listing token records, never bearers |
 
 - **Direct work** on a token needs `admin/token/<p>` for every access point
   `p` it carries before and after the change: a bearer works at each of them.
-  A user holds these in its own namespace; anyone else needs a grant. With
-  `admin/token` on a hosted user's `x/tokens/`, an operator can work on that
-  user's tokens.
+  A user holds these in its own namespace; its agents need them in their caps.
+  The operations work only in the caller's own namespace.
 - **An access point's own operations** reach only tokens accepted at that
   access point alone, so they never touch a token they could not have made.
   A token with any other entry is refused there.
@@ -102,7 +103,7 @@ operation reaches it.
 | `v/ops/token/create` | `name`, `access`, `caps?`, `expires?` | the token, with `token` the bearer | `admin/token/<p>` for each access point named |
 | `v/ops/token/update` | `name`, `access?`, `caps?`, `expires?`, `rotate?` | the token; `token` only on rotate | `admin/token/<p>` for each access point before and after, and the token's source authority |
 | `v/ops/token/delete` | `name` | `{name, deleted}` | `admin/token/<p>` for each access point it carries |
-| `v/ops/token/list` | none | `{tokens, total}`, never a bearer | `crud/read` on `x/tokens` |
+| `v/ops/token/list` | none | `{tokens, total}`, never a bearer | `crud/read` on `x/token` |
 | `v/ops/token/get` | `name` | `{name, token}` | `admin/token/<p>` for each access point and the token's source authority; only while bearers are kept |
 
 - **Name:** `[a-z0-9-]{1,64}`, unique within a namespace, which a user shares
@@ -179,11 +180,11 @@ These keep MCP's own arguments and reach only tokens accepted at MCP alone.
 
 | Operation | Input | Result | Needs |
 |-----------|-------|--------|-------|
-| `v/ops/mcp/create-token` | `name`, `tools`, `caps?`, `expires?` | the token, with `token` the bearer | `mcp/token` on `x/tokens/<name>` |
+| `v/ops/mcp/create-token` | `name`, `tools`, `caps?`, `expires?` | the token, with `token` the bearer | `mcp/token` on `x/token/<name>` |
 | `v/ops/mcp/update-token` | `name`, `tools?`, `caps?`, `expires?`, `rotate?` | the token; `token` only on rotate | `mcp/token` and the token's source authority |
-| `v/ops/mcp/delete-token` | `name` | `{name, deleted}` | `mcp/token` on `x/tokens/<name>` |
-| `v/ops/mcp/list-tokens` | none | `{tokens, total}` of MCP tokens, never a bearer | `crud/read` on `x/tokens` |
-| `v/ops/mcp/get-token` | `name` | `{name, token}` | `admin/token/mcp` on `x/tokens/<name>` and the token's source authority; only while bearers are kept |
+| `v/ops/mcp/delete-token` | `name` | `{name, deleted}` | `mcp/token` on `x/token/<name>` |
+| `v/ops/mcp/list-tokens` | none | `{tokens, total}` of MCP tokens, never a bearer | `crud/read` on `x/token` |
+| `v/ops/mcp/get-token` | `name` | `{name, token}` | `admin/token/mcp` on `x/token/<name>` and the token's source authority; only while bearers are kept |
 
 ### `/mcp` with a token
 
