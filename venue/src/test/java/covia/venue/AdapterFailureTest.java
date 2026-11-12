@@ -15,6 +15,7 @@ import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
+import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
@@ -26,6 +27,8 @@ import covia.exception.NotFoundException;
 import covia.exception.NotSupportedException;
 import covia.exception.StillStartingException;
 import covia.exception.UnavailableException;
+import covia.grid.Job;
+import covia.grid.Status;
 
 /**
  * An enabled adapter that is not running: its start failed at launch, enable
@@ -36,6 +39,8 @@ public class AdapterFailureTest {
 
 	private static final String NAME = "flaky";
 	private static final String OP = "v/ops/flaky/echo";
+	private static final String HOLD = "v/ops/flaky/hold";
+	private static final Blob RECOVERED_JOB = Blob.fromHex("0a11");
 	private static final String START_FAILURE = "flaky backend unreachable";
 	private static final String REFUSED = "flaky refuses this setting";
 	private static final AString K_COLOUR = Strings.intern("colour");
@@ -53,7 +58,10 @@ public class AdapterFailureTest {
 		@Override protected void installAssets() {
 			installAsset("flaky/echo", Maps.of(Fields.NAME, "Flaky echo",
 				Fields.OPERATION, Maps.of(Fields.ADAPTER, "flaky:echo")));
+			installAsset("flaky/hold", Maps.of(Fields.NAME, "Flaky hold",
+				Fields.OPERATION, Maps.of(Fields.ADAPTER, "flaky:hold")));
 		}
+		@Override public boolean supportsMultiTurn() { return true; }
 		@Override public boolean configure(AMap<AString, ACell> config, boolean strict) {
 			events.add("configure");
 			if (refuseConfig) throw new ConfigurationException(REFUSED);
@@ -68,24 +76,29 @@ public class AdapterFailureTest {
 		@Override public void close() { closed = true; }
 		@Override public CompletableFuture<ACell> invokeFuture(RequestContext ctx,
 				AMap<AString, ACell> meta, ACell input) {
+			if ("hold".equals(getSubOperation(meta))) return new CompletableFuture<>();
 			return CompletableFuture.completedFuture(input);
 		}
 	}
 
 	@Test
 	public void adapterThatFailsToStartLeavesTheVenueRunningUntilRestarted() throws Exception {
-		Engine engine = TestEngine.application().mount(AKeyPair.generate(), Maps.empty()).prepare();
+		Engine engine = TestEngine.application().mount(AKeyPair.generate(), Maps.empty());
+		FlakyAdapter flaky = new FlakyAdapter();
+		flaky.failStart = true;
 		try {
-			Engine.addDemoAssets(engine);
-			FlakyAdapter flaky = new FlakyAdapter();
-			flaky.failStart = true;
-			engine.registerAdapter(flaky);
-			assertThrows(StillStartingException.class, () -> engine.restartAdapter(NAME));
-
-			engine.start();
+			engine.launch(prepared -> {
+				prepared.registerAdapter(flaky);
+				leaveStarted(prepared);
+				assertThrows(StillStartingException.class, () -> prepared.restartAdapter(NAME));
+				return CompletableFuture.completedFuture(null);
+			});
 			assertTrue(engine.isStarted(), "the venue runs without the adapter");
 			assertEquals(START_FAILURE, engine.adapterFailure(NAME));
 			assertEquals(List.of("configure", "start", "stop"), flaky.events, "what a failed start began is stopped");
+			// Recovery came first: the adapter's unfinished job ended as recovery ends any.
+			assertEquals(Status.FAILED, engine.getVenueState().users().user(engine.getDIDString())
+				.jobs().getRecord(RECOVERED_JOB).get(Fields.STATUS));
 			UnavailableException refused = assertThrows(UnavailableException.class,
 				() -> engine.jobs().invokeOperation(OP, Maps.empty(), engine.venueContext()));
 			assertEquals(Engine.ADAPTER_NOT_RUNNING.formatted(NAME), refused.getMessage());
@@ -108,7 +121,7 @@ public class AdapterFailureTest {
 			flaky.events.clear();
 			ACell restarted = asVenue(engine, "v/ops/venue/adapter/restart", Maps.of("name", NAME));
 			assertEquals(VenueAdapter.ADAPTER_RUNNING, RT.getIn(restarted, Fields.STATUS));
-			assertEquals(List.of("configure", "start"), flaky.events, "a failed adapter is not stopped again");
+			assertEquals(List.of("stop", "configure", "start"), flaky.events);
 			assertEquals(Maps.of(K_COLOUR, "blue"), flaky.configured);
 			assertNull(engine.adapterFailure(NAME));
 			assertNull(listed(engine, NAME).get(Fields.REASON));
@@ -147,11 +160,8 @@ public class AdapterFailureTest {
 			assertEquals(START_FAILURE, engine.adapterFailure(NAME));
 			assertEquals(List.of("start", "stop"), flaky.events);
 
-			// Disabling a failed adapter forgets the failure without stopping it again.
-			flaky.events.clear();
 			assertTrue(engine.disableAdapter(NAME));
-			assertNull(engine.adapterFailure(NAME));
-			assertEquals(List.of(), flaky.events);
+			assertNull(engine.adapterFailure(NAME), "disabling forgets the failure");
 
 			assertThrows(UnavailableException.class, () -> engine.enableAdapter(NAME));
 			engine.removeAdapter(NAME);
@@ -163,34 +173,54 @@ public class AdapterFailureTest {
 	}
 
 	@Test
-	public void replacingAFailedAdapterNeitherStopsNorRestartsIt() {
+	public void failedAdapterRefusesWorkUntilReplaced() throws Exception {
 		Engine engine = boot();
+		Job held = null;
 		try {
 			FlakyAdapter failed = new FlakyAdapter();
 			engine.registerAdapter(failed);
+			held = engine.jobs().invokeOperation(HOLD, Maps.empty(), engine.venueContext());
 			failed.failStart = true;
 			assertThrows(UnavailableException.class, () -> engine.restartAdapter(NAME));
-			failed.events.clear();
 
-			// A replacement that fails to start is rolled back; the failed instance stays as it was.
+			// Messages to its live jobs and internal calls (tools, orchestrations) are refused alike.
+			String notRunning = Engine.ADAPTER_NOT_RUNNING.formatted(NAME);
+			Blob heldID = held.getID();
+			assertEquals(notRunning, assertThrows(UnavailableException.class, () -> engine.jobs().deliverMessage(
+				heldID, Maps.of("content", "more"), engine.venueContext())).getMessage());
+			ExecutionException internal = assertThrows(ExecutionException.class, () -> asVenue(engine, OP, Maps.empty()));
+			assertEquals(notRunning, assertInstanceOf(UnavailableException.class, internal.getCause()).getMessage());
+
+			// A replacement that fails to start is rolled back; the failed instance is not started again.
+			failed.events.clear();
 			FlakyAdapter broken = new FlakyAdapter();
 			broken.failStart = true;
 			assertEquals(START_FAILURE, assertThrows(UnavailableException.class,
 				() -> engine.registerAdapter(broken)).getMessage());
 			assertSame(failed, engine.getAdapter(NAME));
 			assertEquals(START_FAILURE, engine.adapterFailure(NAME));
-			assertEquals(List.of(), failed.events);
+			assertEquals(List.of("stop"), failed.events);
 			assertTrue(broken.closed);
 
 			FlakyAdapter replacement = new FlakyAdapter();
 			engine.registerAdapter(replacement);
 			assertSame(replacement, engine.getAdapter(NAME));
 			assertNull(engine.adapterFailure(NAME), "the running replacement clears the failure");
-			assertEquals(List.of(), failed.events);
 			assertTrue(failed.closed);
 		} finally {
+			if (held != null) held.cancel();
 			engine.close();
 		}
+	}
+
+	/** A job a previous run left STARTED: its record and the venue's entry for it, as admission writes them. */
+	private static void leaveStarted(Engine engine) {
+		AString owner = engine.getDIDString();
+		engine.getVenueState().execute(draft -> {
+			draft.users().ensure(owner).jobs().create(RECOVERED_JOB, Maps.of(Fields.ID, RECOVERED_JOB,
+				Fields.OP, Strings.create(OP), Fields.STATUS, Status.STARTED, Fields.CALLER, owner, Fields.INPUT, Maps.empty()));
+			draft.jobIndex().put(RECOVERED_JOB, Maps.of(JobIndex.OWNER, owner));
+		});
 	}
 
 	private static Engine boot() {

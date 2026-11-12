@@ -1385,8 +1385,7 @@ public class Engine {
 	private void activate(AAdapter adapter, AAdapter previous, boolean start) {
 		String name = adapter.getName();
 		boolean previousActive = previous != null && adapters.get(name) == previous;
-		// A failed instance was stopped when it failed: it is neither stopped
-		// again nor restarted if this one fails.
+		// A failed instance is not started again if this one fails.
 		boolean previousRunning = previousActive && !adapterFailures.containsKey(name);
 		java.util.List<String> previousOrder = java.util.List.copyOf(adapterRegistrationOrder);
 		if (adapter.engine == null) adapter.install(this);
@@ -1406,7 +1405,7 @@ public class Engine {
 		adapterRegistryVersion.incrementAndGet();
 		// The instance this one replaces stops before this one starts, so their
 		// workers never run together; a failed start restarts it below.
-		boolean replacing = previousRunning && previous != adapter && isStarted();
+		boolean replacing = previousActive && previous != adapter && isStarted();
 		try {
 			if (replacing) previous.stop();
 			resumeAdapterUserDeletions(adapter);
@@ -1440,11 +1439,14 @@ public class Engine {
 				try { closeable.close(); }
 				catch (Exception closeFailure) { failure.addSuppressed(closeFailure); }
 			}
-			// Live again, and only now the failed replacement is closed.
-			if (replacing) {
-				try { previous.start(); }
-				catch (RuntimeException | Error restartFailure) { failure.addSuppressed(restartFailure); }
+			// Live again, and only now the failed replacement is closed. If it
+			// cannot start again, it stays enabled but failed.
+			if (replacing && previousRunning) {
+				RuntimeException restartFailure = startAdapter(previous);
+				if (restartFailure != null) failure.addSuppressed(restartFailure);
 			}
+			// An adapter no longer registered has no failure to report.
+			if (!adapters.containsKey(name)) adapterFailures.remove(name);
 			adapterRegistryVersion.incrementAndGet();
 			throw failure;
 		}
@@ -1574,15 +1576,14 @@ public class Engine {
 			throw unknownAdapter(name);
 		}
 		if (!isStarted()) throw new StillStartingException(RESTART_BEFORE_START);
-		// A failed adapter was stopped when it failed.
-		if (!adapterFailures.containsKey(name)) {
-			try {
-				adapter.stop();
-			} catch (RuntimeException | Error failure) {
-				RuntimeException reported = adapterFailed(STOPPING_ADAPTER, adapter, failure);
-				adapterFailures.put(name, reported);
-				throw reported;
-			}
+		// Stopping is idempotent, so a failed adapter is stopped again: a
+		// stop that failed before is tried again.
+		try {
+			adapter.stop();
+		} catch (RuntimeException | Error failure) {
+			RuntimeException reported = adapterFailed(STOPPING_ADAPTER, adapter, failure);
+			adapterFailures.put(name, reported);
+			throw reported;
 		}
 		RuntimeException refused;
 		try {
@@ -1621,12 +1622,11 @@ public class Engine {
 			throw unknownAdapter(name);
 		}
 		retractAdapter(name);
-		// A failed adapter was stopped when it failed.
-		boolean failed = adapterFailures.remove(name) != null;
+		adapterFailures.remove(name);
 		disabledAdapters.put(name, adapter);
 		adapterRegistryVersion.incrementAndGet();
 		log.info("Disabled adapter: {}", name);
-		if (isStarted() && !failed) adapter.stop();
+		if (isStarted()) adapter.stop();
 		return true;
 	}
 
