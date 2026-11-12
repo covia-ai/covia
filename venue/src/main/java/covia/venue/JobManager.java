@@ -1298,6 +1298,21 @@ public class JobManager {
 	}
 
 	private AMap<AString, ACell> authorizedRecord(Blob id, RequestContext ctx, AString owner, AString ability) {
+		Authorized read = authorized(id, ctx, owner, ability);
+		return (read == null) ? null : read.data();
+	}
+
+	/** A job's record as a caller may see it, and the live handle it was read from, or null for a stored record. */
+	private record Authorized(Job live, AMap<AString, ACell> data) {}
+
+	/**
+	 * Reads job {@code id} for a caller with {@code ability}, or null when there
+	 * is none it may know of. A caller that wants the job's handle takes it from
+	 * here, never from a second lookup: a job that finishes in between leaves
+	 * the active set, and the second lookup would find only the record read
+	 * before it finished, a handle that never finishes.
+	 */
+	private Authorized authorized(Blob id, RequestContext ctx, AString owner, AString ability) {
 		Job live = liveJob(id);
 		AMap<AString, ACell> data;
 		if (live != null) {
@@ -1309,8 +1324,9 @@ public class JobManager {
 			User user = did == null ? null : engine.getVenueState().users().user(did);
 			data = user == null ? null : user.jobs().getRecord(id);
 		}
-		if (data != null) requireJobAbility(ctx, id, data, ability);
-		return data;
+		if (data == null) return null;
+		requireJobAbility(ctx, id, data, ability);
+		return new Authorized(live, data);
 	}
 
 	/** Authorize a task-specific control without exposing its record. */
@@ -1383,11 +1399,14 @@ public class JobManager {
 		return getJob(jobID, ctx, null);
 	}
 
+	/**
+	 * The live handle of a job the caller may read, the one its record was read
+	 * from, or a Job of its stored record once it is no longer live.
+	 */
 	public Job getJob(Blob jobID, RequestContext ctx, AString owner) {
-		AMap<AString, ACell> data = getJobData(jobID, ctx, owner);
-		if (data == null) return null;
-		Job live = liveJob(jobID);
-		return live == null ? new Job(data) : live;
+		Authorized read = authorized(jobID, ctx, owner, Abilities.JOB_READ);
+		if (read == null) return null;
+		return (read.live() != null) ? read.live() : new Job(read.data());
 	}
 
 	/**
