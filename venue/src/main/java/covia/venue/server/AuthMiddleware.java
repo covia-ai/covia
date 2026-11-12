@@ -16,7 +16,7 @@ import convex.core.lang.RT;
 import covia.adapter.MCPAdapter;
 import covia.adapter.token.AccessToken;
 import covia.adapter.token.AccessTokens;
-import covia.adapter.token.TokenAccessPoint;
+import covia.adapter.token.TokenAdapter;
 import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.exception.ConfigurationException;
@@ -291,7 +291,7 @@ public class AuthMiddleware {
 		AMap<AString, ACell> reference = (tokens == null) ? null : tokens.lookup(bearer);
 		AccessToken token = engine.resolveToken(reference);
 		if (token == null) throw new AuthException(TOKEN_NOT_RECOGNISED);
-		if (!token.accepts(point) || !(engine.getAdapter(point.toString()) instanceof TokenAccessPoint)) {
+		if (!token.accepts(point) || TokenAdapter.accessPoint(engine, point) == null) {
 			throw new AuthException(TOKEN_NOT_ACCEPTED.formatted(point));
 		}
 		ctx.attribute(TOKEN_ATTR, reference);

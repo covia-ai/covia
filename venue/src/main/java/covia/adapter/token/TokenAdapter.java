@@ -400,7 +400,7 @@ public class TokenAdapter extends AAdapter {
 		AMap<AString, ACell> asked = RT.ensureMap(access);
 		if (asked == null || asked.isEmpty()) throw new InvalidInputException(ACCESS_INVALID);
 		for (var entry : asked.entrySet()) {
-			if (accessPoint(entry.getKey()) == null) throw new InvalidInputException(ACCESS_POINT_UNKNOWN.formatted(entry.getKey()));
+			if (accessPoint(engine, entry.getKey()) == null) throw new InvalidInputException(ACCESS_POINT_UNKNOWN.formatted(entry.getKey()));
 		}
 		return asked;
 	}
@@ -409,16 +409,25 @@ public class TokenAdapter extends AAdapter {
 	private AMap<AString, ACell> entries(RequestContext ctx, AMap<AString, ACell> asked) {
 		AMap<AString, ACell> entries = Maps.empty();
 		for (var entry : asked.entrySet()) {
-			AMap<AString, ACell> kept = accessPoint(entry.getKey()).tokenEntry(ctx, entry.getValue());
+			TokenAccessPoint point = accessPoint(engine, entry.getKey());
+			if (point == null) throw new InvalidInputException(ACCESS_POINT_UNKNOWN.formatted(entry.getKey()));
+			AMap<AString, ACell> kept = point.tokenEntry(ctx, entry.getValue());
 			if (kept == null) throw new InvalidInputException(ACCESS_INVALID);
 			entries = entries.assoc(entry.getKey(), kept);
 		}
 		return entries;
 	}
 
-	/** The running access point named {@code point}, or null when the venue runs none. */
-	public TokenAccessPoint accessPoint(AString point) {
-		return (point != null && engine.getAdapter(point.toString()) instanceof TokenAccessPoint ap) ? ap : null;
+	/**
+	 * The access point named {@code point} while it runs: an enabled adapter
+	 * that accepts tokens and has not failed ({@link Engine#adapterFailure}).
+	 *
+	 * @return the access point, or null when {@code engine} runs none of that name
+	 */
+	public static TokenAccessPoint accessPoint(Engine engine, AString point) {
+		if (point == null) return null;
+		String name = point.toString();
+		return (engine.getAdapter(name) instanceof TokenAccessPoint ap && engine.adapterFailure(name) == null) ? ap : null;
 	}
 
 	/** Whether {@code record} is still the token of id {@code id} that carried exactly {@code points}. */

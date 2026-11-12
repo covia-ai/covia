@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.util.HashSet;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
@@ -18,13 +19,16 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.lang.RT;
+import covia.adapter.AAdapter;
 import covia.adapter.MCPAdapter;
 import covia.adapter.TestAdapter;
 import covia.api.Abilities;
 import covia.api.Fields;
+import covia.exception.ConfigurationException;
 import covia.grid.Job;
 import covia.grid.Principals;
 import covia.grid.Status;
+import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.TestEngine;
@@ -45,7 +49,11 @@ public class TokenAdapterTest {
 	private static final AMap<AString, ACell> BOTH = MCP.assoc(TEST, Maps.empty());
 
 	private Job run(String op, ACell input, RequestContext ctx) {
-		Job job = engine.jobs().invokeOperation(op, input, ctx);
+		return run(engine, op, input, ctx);
+	}
+
+	private static Job run(Engine on, String op, ACell input, RequestContext ctx) {
+		Job job = on.jobs().invokeOperation(op, input, ctx);
 		TestEngine.awaitJob(job, Job::isFinished, 10000, () -> op + " never finished");
 		return job;
 	}
@@ -184,6 +192,50 @@ public class TokenAdapterTest {
 		RequestContext granted = RequestContext.of(bob).withProofs(Vectors.of(grant.toMap()));
 		assertEquals(MCP, RT.getIn(complete(read(granted, one)), Fields.VALUE, Fields.ACCESS), "the owner's token, not the reader's");
 		failure(read(granted, alice + "/x/token"));
+	}
+
+	/** An access point whose settings can be refused, so that a restart leaves it enabled but failed. */
+	private static final class FailingAccessPoint extends AAdapter implements TokenAccessPoint {
+		static final String NAME = "failing";
+		static final String REFUSED = "failing refuses its settings";
+		volatile boolean refuse;
+
+		@Override public String getName() { return NAME; }
+		@Override public String getDescription() { return "An access point that fails on demand"; }
+		@Override public boolean configure(AMap<AString, ACell> config, boolean strict) {
+			if (refuse) throw new ConfigurationException(REFUSED);
+			return true;
+		}
+		@Override public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
+			return CompletableFuture.completedFuture(input);
+		}
+		@Override public AMap<AString, ACell> tokenEntry(RequestContext ctx, ACell requested) {
+			return Maps.empty();
+		}
+	}
+
+	@Test
+	public void aFailedAdapterIsNoAccessPoint(TestInfo info) {
+		Engine own = Engine.createTemp(Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true)));
+		try {
+			Engine.addDemoAssets(own);
+			FailingAccessPoint failing = new FailingAccessPoint();
+			own.registerAdapter(failing);
+			AString point = Strings.create(FailingAccessPoint.NAME);
+			RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));
+			AMap<AString, ACell> access = Maps.of(point, Maps.empty());
+			complete(run(own, "v/ops/token/create", Maps.of(Fields.NAME, "running", Fields.ACCESS, access), owner));
+			assertSame(failing, TokenAdapter.accessPoint(own, point));
+
+			failing.refuse = true;
+			assertEquals(FailingAccessPoint.REFUSED,
+				assertThrows(ConfigurationException.class, () -> own.restartAdapter(FailingAccessPoint.NAME)).getMessage());
+			assertNull(TokenAdapter.accessPoint(own, point), "a failed adapter accepts no tokens");
+			assertEquals(TokenAdapter.ACCESS_POINT_UNKNOWN.formatted(point),
+				failure(run(own, "v/ops/token/create", Maps.of(Fields.NAME, "failed", Fields.ACCESS, access), owner)));
+		} finally {
+			own.close();
+		}
 	}
 
 	@Test
