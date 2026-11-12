@@ -786,3 +786,26 @@ already recorded is its own job and needs none.
   fails it as interrupted (the default in the table above), since the call
   ran only in memory.
 - Direct and private runs are never mirrored: their caller asked for no record.
+
+
+## Security regression checks
+
+Security checks assert both the refusal and the target state, with a successful
+call under the intended authority as a positive control. Remote denials use real
+HTTP responses: an unavailable peer, missing operation or SDK timeout must not
+pass as an authorization refusal.
+
+| Boundary | Adversarial regression coverage |
+|---|---|
+| Caller credential selection | `GridForwardingFilterTest`: wrong issuer or destination, expired or forged signature, malformed token, capability-bearing token used as identity, conflicting identity credentials, and separation of identity from grants. |
+| Destination identity and outbound policy | `VenueIdentityProofTest`, `FederationTargetPolicyTest`: false identity claims, replayed challenges, redirects, credential disclosure to an unproven venue, forbidden network targets, and revalidation after restart. |
+| Independent local Job rights | `JobCapabilityTest`, `JobAccessTest`, `McpTokenAuthorityTest`: read/manage/message separation, sibling resources, CRUD and creator attribution supplying no Job authority, expired grants, retained-owner lookup, and permission rechecks at result delivery. |
+| Direct remote Job rights | `RemoteJobSecurityTest`, `JobAdapterRemoteTest`: every control requires its destination right; grants cannot be retargeted to siblings; owner selection does not impersonate; anonymous mode never borrows a supplied login; venue identity cannot be borrowed; host constraints hold; manage-only acknowledgements expose no records. |
+| Generic invocation | `RemoteJobSecurityTest`, `InvocationAuthorityTest`, `CrossVenueTest`: direct and nested Grid calls cannot turn a read grant into cancellation; dynamic operation references and input constraints still require source invoke authority. |
+| Proxy lifecycle and recovery | `JobAdapterRemoteTest`, `RemoteDelegationTest`, `VenueIdentityProofTest`: one proxy's grant cannot cancel a sibling; result waiters never cancel their targets; late acceptance, refused/unconfirmed cancellation and restart preserve ownership; caller credentials are neither persisted nor invented on recovery. |
+| Streaming disclosure | `JobSseSubscriptionTest`, `JobRoutesTest`: completion during subscription cannot be lost; revoked access or deletion closes the stream without disclosing subsequent results. |
+
+The default suite runs with `mvn -pl venue -am test`. Cross-component tests marked
+`@IntegrationTest`, including `RemoteJobSecurityTest` and `JobAdapterRemoteTest`,
+also require `-Dcovia.tests.integration=true`; include them explicitly in security
+validation. They use local fixture venues and need no LLM provider credentials.

@@ -1426,7 +1426,7 @@ public class VenueHTTP extends Venue {
 			} else if (code == 409) {
 				throw new NotSupportedException("Job is in terminal state: " + jobId);
 			}
-			throw new ResponseException("Failed to send message: HTTP " + code);
+			throw new ResponseException("Failed to send message: HTTP " + code, response);
 		} catch (IOException | InterruptedException e) {
 			throw new ResponseException("Failed to send message to job " + jobId, e);
 		}

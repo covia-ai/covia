@@ -86,4 +86,40 @@ public class GridForwardingFilterTest {
 			"expired and unparseable tokens are provably inert — nothing to relay");
 	}
 
+	@Test
+	public void callerIdentityMustBeSignedByCallerForThisDestinationAndCarryNoGrants() {
+		String valid = token(bobKP, VENUE, null, null, 300);
+		String[] parts = valid.split("\\.");
+		String forged = parts[0] + "." + parts[1] + "." + (parts[2].charAt(0) == 'A' ? "B" : "A") + parts[2].substring(1);
+		var invalid = java.util.Map.of(
+			"wrong issuer", token(aliceKP, VENUE, null, null, 300),
+			"wrong destination", token(bobKP, ALICE, null, null, 300),
+			"expired", token(bobKP, VENUE, null, null, -3600),
+			"forged signature", forged,
+			"capability grant is not identity", token(bobKP, VENUE, BOB + "/j/", "job", 300),
+			"malformed", "not-a-jwt");
+		for (var example : invalid.entrySet()) {
+			RequestContext ctx = ctxWith(BOB, example.getValue());
+			assertNull(VenueConnection.identityCredential(engine, ctx,
+				VenueConnection.parsedRawUcans(engine, ctx), BOB, VENUE), example.getKey());
+		}
+		RequestContext legitimate = ctxWith(BOB, valid);
+		assertEquals(valid, VenueConnection.identityCredential(engine, legitimate,
+			VenueConnection.parsedRawUcans(engine, legitimate), BOB, VENUE));
+	}
+
+	@Test
+	public void conflictingIdentityCredentialsAreRefusedRatherThanChosenByOrder() {
+		String first = token(bobKP, VENUE, null, null, 300);
+		String second = token(bobKP, VENUE, null, null, 600);
+		for (String[] order : new String[][]{{first, second}, {second, first}}) {
+			RequestContext ctx = ctxWith(BOB, order);
+			assertThrows(covia.exception.InvalidInputException.class, () ->
+				VenueConnection.identityCredential(engine, ctx, VenueConnection.parsedRawUcans(engine, ctx), BOB, VENUE));
+		}
+		RequestContext duplicates = ctxWith(BOB, first, first);
+		assertEquals(first, VenueConnection.identityCredential(engine, duplicates,
+			VenueConnection.parsedRawUcans(engine, duplicates), BOB, VENUE));
+	}
+
 }

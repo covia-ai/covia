@@ -224,19 +224,32 @@ class JobAdapterRemoteTest {
 			.withRawUcans(Vectors.of(Strings.create(UcanTokens.identityToken(key, TwoVenueTestServer.DID_B, 300))));
 		Job proxy = source.jobs().startToolOperation(Strings.create("v/ops/grid/run"),
 			Maps.of(Fields.VENUE, TwoVenueTestServer.BASE_URL_B, Fields.OPERATION, "v/test/ops/never", "authenticateAs", "caller"), submitter).job();
+		Job sibling = source.jobs().startToolOperation(Strings.create("v/ops/grid/run"),
+			Maps.of(Fields.VENUE, TwoVenueTestServer.BASE_URL_B, Fields.OPERATION, "v/test/ops/never", "authenticateAs", "caller"), submitter).job();
 		Job remote = null;
+		Job siblingRemote = null;
 		try {
 			await(proxy, j -> Status.STARTED.equals(RT.getIn(RemoteJobs.descriptor(j), RemoteJobs.REMOTE_STATUS)));
+			await(sibling, j -> Status.STARTED.equals(RT.getIn(RemoteJobs.descriptor(j), RemoteJobs.REMOTE_STATUS)));
+			siblingRemote = destination.jobs().getJob(Job.parseID(RemoteJobs.remoteId(sibling)));
+			assertNotNull(siblingRemote);
 			remote = destination.jobs().getJob(Job.parseID(RemoteJobs.remoteId(proxy)));
 			assertNotNull(remote);
 			RequestContext manager = RequestContext.of(did).withCaps(Vectors.of(
 				Capability.create(JobManager.resource(did, proxy.getID()), Abilities.JOB_MANAGE)));
 			assertThrows(AuthException.class, () -> source.jobs().getJobData(proxy.getID(), manager));
 			assertThrows(AuthException.class, () -> source.jobs().cancelJob(proxy.getID(), submitter));
+			assertThrows(AuthException.class, () -> source.jobs().cancelJob(sibling.getID(), manager));
 			assertEquals(JobManager.acknowledgement(proxy.getID()), source.jobs().cancelJob(proxy.getID(), manager));
 			await(remote, Job::isFinished);
 			assertEquals(Status.CANCELLED, remote.getStatus());
-		} finally { proxy.cancel(); if (remote != null) remote.cancel(); }
+			assertEquals(Status.STARTED, sibling.getStatus());
+			assertEquals(Status.STARTED, siblingRemote.getStatus());
+		} finally {
+			proxy.cancel(); sibling.cancel();
+			if (remote != null) remote.cancel();
+			if (siblingRemote != null) siblingRemote.cancel();
+		}
 	}
 
 	@Test void delegatedControlsAndColdReadsCarryOwnerAndProofsOverHttp() {
