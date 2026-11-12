@@ -126,6 +126,8 @@ public class McpTokenVenueTest {
 		RequestContext owner = RequestContext.of(alice);
 		String first = bearer(complete(create(owner, Maps.of(Fields.NAME, "kept"))));
 		assertEquals(first, bearer(complete(get(owner, "kept"))));
+		assertFalse(engine.mcpTokens().token(alice, Strings.create("kept")).record().toString().contains(first),
+			"the venue keeps a bearer only sealed");
 
 		String rotated = bearer(complete(run("v/ops/mcp/update-token", Maps.of(Fields.NAME, "kept", Fields.ROTATE, true), owner)));
 		assertNotEquals(first, rotated);
@@ -134,7 +136,7 @@ public class McpTokenVenueTest {
 
 		try {
 			engine.configureAdapter("mcp", Maps.empty());
-			assertNull(engine.mcpTokens().token(alice, Strings.create("kept")).raw(), "turning it off drops kept bearers");
+			assertNull(engine.mcpTokens().token(alice, Strings.create("kept")).sealedBearer(), "turning it off drops kept bearers");
 			assertEquals(MCPAdapter.RAW_NOT_KEPT, failure(get(owner, "kept")));
 			assertNotNull(engine.mcpTokens().lookup(rotated), "the token itself still stands");
 

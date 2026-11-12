@@ -28,8 +28,8 @@ import covia.api.Fields;
  * </pre>
  *
  * <p>A record and its bearer entry change together, each change in one
- * transaction. The venue never stores a bearer, only its hash, unless it
- * keeps raw tokens.</p>
+ * transaction. The venue stores a bearer's hash, and the bearer itself only
+ * sealed, while it keeps raw tokens.</p>
  */
 public final class McpTokens extends ALatticeComponent<ACell>
 		implements TransactionalComponent<ACell, McpTokens> {
@@ -37,7 +37,8 @@ public final class McpTokens extends ALatticeComponent<ACell>
 	static final AString TOKENS = Strings.intern("tokens");
 	static final AString BEARERS = Strings.intern("bearers");
 	static final AString HASH = Strings.intern("hash");
-	static final AString RAW = Strings.intern("raw");
+	/** A record's bearer, sealed ({@link covia.venue.SecretStore#seal}), while the venue keeps raw tokens. */
+	static final AString SEALED = Strings.intern("sealed");
 
 	/** What every bearer starts with, so it is told from a JWT and secret scanners know it. */
 	public static final String BEARER_PREFIX = "cvmcp_";
@@ -193,7 +194,7 @@ public final class McpTokens extends ALatticeComponent<ACell>
 	}
 
 	/** Removes every kept bearer, when the venue stops keeping raw tokens. */
-	public void dropRaw() {
+	public void dropKept() {
 		cursor().updateAndGet(value -> {
 			AMap<AString, ACell> root = map(value);
 			AMap<AString, ACell> tokens = map(root.get(TOKENS));
@@ -203,7 +204,7 @@ public final class McpTokens extends ALatticeComponent<ACell>
 				AMap<AString, ACell> cleared = mine;
 				for (var entry : mine.entrySet()) {
 					AMap<AString, ACell> record = RT.ensureMap(entry.getValue());
-					if (record != null && record.containsKey(RAW)) cleared = cleared.assoc(entry.getKey(), record.dissoc(RAW));
+					if (record != null && record.containsKey(SEALED)) cleared = cleared.assoc(entry.getKey(), record.dissoc(SEALED));
 				}
 				if (cleared != mine) kept = kept.assoc(owners.getKey(), cleared);
 			}

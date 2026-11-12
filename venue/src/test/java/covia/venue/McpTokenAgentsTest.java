@@ -17,6 +17,7 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.lang.RT;
+import covia.adapter.MCPAdapter;
 import covia.adapter.McpTokens;
 import covia.api.Abilities;
 import covia.api.Fields;
@@ -78,12 +79,26 @@ public class McpTokenAgentsTest {
 		return run("v/ops/mcp/tools-list", Maps.of(Fields.SERVER, MCP_URL, Fields.TOKEN, token), worker);
 	}
 
+	/** {@code caller} lists the venue's MCP tools with the bearer {@code bearer} names, as {@code token} or {@code bearerSecret}. */
+	private Job listWith(RequestContext caller, AMap<AString, ACell> bearer) {
+		return run("v/ops/mcp/tools-list", bearer.assoc(Fields.SERVER, Strings.create(MCP_URL)), caller);
+	}
+
 	private Set<String> toolNames(RequestContext worker, String token) {
+		return names(complete(list(worker, token)));
+	}
+
+	private static Set<String> names(ACell listed) {
 		Set<String> names = new HashSet<>();
-		for (ACell tool : RT.ensureVector(RT.getIn(complete(list(worker, token)), "tools"))) {
+		for (ACell tool : RT.ensureVector(RT.getIn(listed, "tools"))) {
 			names.add(RT.getIn(tool, Fields.NAME).toString());
 		}
 		return names;
+	}
+
+	private static String failure(Job job) {
+		failed(job);
+		return job.getErrorMessage();
 	}
 
 	private static AMap<AString, ACell> write(String path, Object value) {
@@ -147,6 +162,33 @@ public class McpTokenAgentsTest {
 		complete(run("v/ops/mcp/delete-token", Maps.of(Fields.NAME, "for-worker"), builder));
 		failed(list(worker, token));
 		complete(list(worker, wide));
+	}
+
+	@Test
+	public void aHolderMayKeepItsBearerAsASecret(TestInfo info) {
+		AString alice = TestEngine.uniqueDID(info);
+		AString bob = TestEngine.uniqueDID("bob-" + info.getDisplayName());
+		String token = createToken(RequestContext.of(alice), "kept", Vectors.of("v/ops/covia/read"), Caps.UNRESTRICTED);
+		RequestContext holder = RequestContext.of(bob);
+		complete(run("v/ops/secret/set", Maps.of(Fields.NAME, "ALICE_TOOLS", Fields.VALUE, token), holder));
+		AMap<AString, ACell> kept = Maps.of(Fields.BEARER_SECRET, "s/ALICE_TOOLS");
+
+		Job listed = listWith(holder, kept);
+		assertEquals(Set.of("covia_read"), names(complete(listed)));
+		assertEquals(Strings.create("s/ALICE_TOOLS"), RT.getIn(engine.jobs().getJobData(listed.getID(), holder), Fields.INPUT, Fields.BEARER_SECRET),
+			"the job record names the secret it used");
+
+		// An agent uses the secret only within its caps
+		ACell invoke = cap("v/ops/", Abilities.INVOKE);
+		failed(listWith(agent(bob, "without", Vectors.of(invoke)), kept));
+		complete(listWith(agent(bob, "with", Vectors.of(invoke, cap("s/ALICE_TOOLS", Abilities.SECRET_USE))), kept));
+
+		// The bearer is given one way only, and a secret it names must exist
+		assertEquals(MCPAdapter.BEARER_BOTH, failure(listWith(holder, kept.assoc(Fields.TOKEN, Strings.create(token)))));
+		complete(listWith(holder, Maps.of(Fields.TOKEN, token)));
+		assertEquals(MCPAdapter.BEARER_SECRET_NOT_FOUND.formatted("s/NO_SUCH"),
+			failure(listWith(holder, Maps.of(Fields.BEARER_SECRET, "s/NO_SUCH"))));
+		assertEquals(MCPAdapter.BEARER_SECRET_INVALID, failure(listWith(holder, Maps.of(Fields.BEARER_SECRET, "ALICE_TOOLS"))));
 	}
 
 	@Test

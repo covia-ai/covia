@@ -19,8 +19,14 @@
 				},
 				"token": {
 					"type": "string",
-					"description": "API access token to use for the delegated MCP request",
+					"description": "The bearer to send to the server, such as an MCP token from v/ops/mcp/create-token. Give this or bearerSecret, not both",
 					"examples":["xyzabcdefghj"]
+				},
+				"bearerSecret": {
+					"type": "string",
+					"pattern": "^(/?s/|did:.+/s/)[A-Za-z0-9_.-]+$",
+					"description": "A secret holding the bearer: s/NAME in your own store, or did:.../s/NAME under a secret/use grant. Used for this call and sent only to the server. Give this or token, not both",
+					"examples":["s/PARTNER_MCP_TOKEN"]
 				}
 			},
 			"required": ["server"]

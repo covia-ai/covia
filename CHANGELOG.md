@@ -31,6 +31,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - The `:latest` Docker image and the `latest-snapshot` release follow the `qa` branch, published only after the integration tests pass, rather than every push to `develop`.
 - A messaging bot an agent created uses its credentials and runs its relay's `admit` and `charge` hooks with that agent's authority, not its user's: an agent with caps needs `secret/use` on each secret the bot names, and its caps must cover what the hooks do.
 - `mcp:tools-call` and `mcp:tools-list` hide `token` in their job records, both the bearer in the input and a top-level `token` in a tool's result; a caller waiting for the result still receives it.
+- `mcp:tools-call` and `mcp:tools-list` take `bearerSecret`, a secret holding the bearer, as an alternative to `token`.
 
 ### Fixed
 

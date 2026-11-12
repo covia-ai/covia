@@ -137,12 +137,12 @@ public class MCPAdapter extends AAdapter {
 						throw new InvalidInputException("Tool call requires arguments as a JSON object");
 					}
 
-					// Access token: explicit input wins; else the operation
+					// Access token: the input's bearer wins; else the operation
 					// metadata's auth reference (secret ref, possibly
 					// DID-qualified) resolved at call time — never persisted
 					// as a raw value in the bridged asset.
-					AString token=RT.getIn(input, Fields.TOKEN);
-					String accessToken=(token!=null)?token.toString()
+					String bearer = inputBearer(ctx, input, serverUrl);
+					String accessToken = (bearer != null) ? bearer
 						: resolveAuthRef(ctx, RT.ensureString(
 							RT.getIn(meta, Fields.OPERATION, K_AUTH)), serverUrl);
 
@@ -160,12 +160,8 @@ public class MCPAdapter extends AAdapter {
 					}
 					serverUrl = Strings.create(engine.outboundUrl(ctx, serverUrl.toString()));
 
-					// Get API access token, if provided
-					AString token = RT.getIn(input, Fields.TOKEN);
-					String accessToken = (token == null) ? null : token.toString();
-
-					// List the MCP tools
-					return listMCPTools(serverUrl, accessToken);
+					// List the MCP tools, with the input's bearer if it names one
+					return listMCPTools(serverUrl, inputBearer(ctx, input, serverUrl));
 				}, VIRTUAL_EXECUTOR);
 			} else {
 				throw new NotSupportedException("Unsupported tools function: " + function);
@@ -251,6 +247,31 @@ public class MCPAdapter extends AAdapter {
 		} catch (IllegalArgumentException e) {
 			throw refusal.apply(e.getMessage(), e);
 		}
+	}
+
+	/** Refusal: a tools call or list given both forms of the bearer. */
+	public static final String BEARER_BOTH = "Give the bearer as token or as bearerSecret, not both";
+	/** Refusal: a {@code bearerSecret} that is not a secret reference. */
+	public static final String BEARER_SECRET_INVALID = "bearerSecret must be a secret reference: s/NAME, or did:.../s/NAME under a secret/use grant";
+	/** Refusal: a {@code bearerSecret} naming no stored secret. */
+	public static final String BEARER_SECRET_NOT_FOUND = "No secret %s to send as the bearer";
+
+	/**
+	 * The bearer a tools call or list names in its input: {@code token}, the
+	 * bearer itself, or {@code bearerSecret}, a secret holding it, used with
+	 * the caller's authority for this call and sent only to {@code serverUrl}.
+	 * Null when the input names neither.
+	 */
+	private String inputBearer(RequestContext ctx, ACell input, AString serverUrl) {
+		AString token = RT.ensureString(RT.getIn(input, Fields.TOKEN));
+		AString secret = RT.ensureString(RT.getIn(input, Fields.BEARER_SECRET));
+		if (token != null && secret != null) throw new InvalidInputException(BEARER_BOTH);
+		if (secret == null) return (token == null) ? null : token.toString();
+		String ref = secret.toString();
+		if (!Engine.isSecretRef(ref)) throw new InvalidInputException(BEARER_SECRET_INVALID);
+		String value = engine.resolveSecret(ref, ctx, serverUrl.toString());
+		if (value == null) throw new NotFoundException(BEARER_SECRET_NOT_FOUND.formatted(ref), ref);
+		return value;
 	}
 
 	/**
@@ -1080,13 +1101,13 @@ public class MCPAdapter extends AAdapter {
 		ACell keep = (config == null) ? null : config.get(KEEP_RAW_TOKENS);
 		if (keep != null && !(keep instanceof convex.core.data.prim.CVMBool)) throw new IllegalArgumentException(KEEP_RAW_NOT_BOOLEAN);
 		// Reconfigured to stop keeping tokens: the kept ones go now (at boot, start does it)
-		if (engine != null && !convex.core.data.prim.CVMBool.TRUE.equals(keep)) tokens().dropRaw();
+		if (engine != null && !convex.core.data.prim.CVMBool.TRUE.equals(keep)) tokens().dropKept();
 		return true;
 	}
 
 	@Override
 	public void start() {
-		if (!keepRawTokens()) tokens().dropRaw();
+		if (!keepRawTokens()) tokens().dropKept();
 	}
 
 	/** Whether the venue keeps each token's bearer beside its hash. */
@@ -1177,10 +1198,16 @@ public class MCPAdapter extends AAdapter {
 		}
 	}
 
-	/** The fields a new bearer sets on a record: its hash, and itself while the venue keeps tokens. */
+	/** The fields a new bearer sets on a record: its hash, and itself sealed while the venue keeps tokens. */
 	private AMap<AString, ACell> withBearer(AMap<AString, ACell> record, String bearer) {
 		record = record.assoc(McpTokens.HASH, McpTokens.hashOf(bearer));
-		return keepRawTokens() ? record.assoc(McpTokens.RAW, Strings.create(bearer)) : record.dissoc(McpTokens.RAW);
+		if (!keepRawTokens()) return record.dissoc(McpTokens.SEALED);
+		return record.assoc(McpTokens.SEALED, covia.venue.SecretStore.seal(Strings.create(bearer), sealingKeys()));
+	}
+
+	/** The keys kept bearers are sealed under: the venue's secret store keys, as for other credentials an adapter holds. */
+	private covia.venue.SecretStore.Keys sealingKeys() {
+		return covia.venue.SecretStore.keys(engine.getKeyPair());
 	}
 
 	/**
@@ -1282,9 +1309,9 @@ public class MCPAdapter extends AAdapter {
 		McpToken token = tokens().token(owner, name);
 		if (token.record() == null) throw new NotFoundException(TOKEN_NOT_FOUND.formatted(name), name.toString());
 		requireTokenSource(ctx, token);
-		AString raw = token.raw();
-		if (raw == null) throw new NotSupportedException(RAW_NOT_HELD.formatted(name));
-		return Maps.of(Fields.NAME, name, Fields.TOKEN, raw);
+		ACell sealed = token.sealedBearer();
+		if (sealed == null) throw new NotSupportedException(RAW_NOT_HELD.formatted(name));
+		return Maps.of(Fields.NAME, name, Fields.TOKEN, covia.venue.SecretStore.unseal(sealed, sealingKeys()));
 	}
 
 	/**

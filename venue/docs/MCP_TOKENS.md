@@ -4,7 +4,9 @@ An MCP token is an API key for the venue's MCP endpoint (`/mcp`). It offers a
 fixed set of operations as MCP tools and acts within caps set on it. Any user,
 or an agent acting for one, can create tokens and hand them to an MCP client,
 another agent included, which connects with `Authorization: Bearer <token>`
-and needs no venue login, DID or UCAN. Venue authentication on `/mcp` works as
+and needs no venue login, DID or UCAN. A Covia agent holding a token calls
+`mcp:tools-call` or `mcp:tools-list` with the bearer as `token`, or with
+`bearerSecret` naming a secret that holds it. Venue authentication on `/mcp` works as
 before, but a scoped token is the recommended way for an external agent to
 connect.
 
@@ -120,7 +122,7 @@ The adapter's state at `:adapters/mcp`:
 tokens:  { <ownerDID>: { <name>: record } }
 bearers: { <SHA3-256 of the bearer, hex>: [<ownerDID>, <name>] }
 
-record: id, issuer, source?, tools, caps?, expires?, created, hash, raw?
+record: id, issuer, source?, tools, caps?, expires?, created, hash, sealed?
 ```
 
 - `id` is random and fixed at creation. A reference to a token is
@@ -128,7 +130,8 @@ record: id, issuer, source?, tools, caps?, expires?, created, hash, raw?
   reused after deletion never revives old references.
 - `caps` missing means unrestricted and `[]` none (`covia.lattice.Caps`).
 - A record and its `bearers` entry change in one transaction.
-- `raw` is the bearer itself, kept only while `adapters.mcp.keepRawTokens` is
+- `sealed` is the bearer, sealed under the venue's secret store keys
+  (`SecretStore.seal`), kept only while `adapters.mcp.keepRawTokens` is
   on ([CONFIG.md](CONFIG.md#mcp-tokens-adaptersmcp)). The kept bearers are
   dropped when the adapter starts or is reconfigured with it off; a token
   created or rotated meanwhile has none until it is rotated.

@@ -17,7 +17,7 @@ import covia.lattice.Caps;
 /**
  * One MCP token's record (MCP_TOKENS.md): the tools it offers, the caps
  * narrowing its issuer's authority, and how its bearer is recognised. The
- * record never holds the bearer itself unless the venue keeps raw tokens.
+ * record holds the bearer itself only sealed, while the venue keeps raw tokens.
  */
 public final class McpToken extends ALatticeComponent<AMap<AString, ACell>>
 		implements TransactionalComponent<AMap<AString, ACell>, McpToken> {
@@ -106,9 +106,9 @@ public final class McpToken extends ALatticeComponent<AMap<AString, ACell>>
 		return RT.ensureString(field(McpTokens.HASH));
 	}
 
-	/** Its bearer, only while the venue keeps raw tokens; otherwise null. */
-	public AString raw() {
-		return RT.ensureString(field(McpTokens.RAW));
+	/** Its bearer sealed ({@link covia.venue.SecretStore#seal}), only while the venue keeps raw tokens; otherwise null. */
+	public ACell sealedBearer() {
+		return field(McpTokens.SEALED);
 	}
 
 	/** How work it narrowed names it: {@code {owner, name, id}}. */
