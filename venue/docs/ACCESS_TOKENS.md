@@ -159,7 +159,7 @@ record: id, issuer, source?, caps?, expires?, created, hash, sealed?,
 - Deleting a user deletes their tokens, and deleting an agent the tokens it
   issued.
 - Work a request through a token creates keeps the token's reference in its
-  stored authority under the key `mcpToken`.
+  stored authority under the key `token`.
 
 ## Presenting a token
 

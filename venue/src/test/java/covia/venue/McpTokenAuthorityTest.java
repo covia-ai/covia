@@ -113,7 +113,7 @@ public class McpTokenAuthorityTest {
 
 		// A job or schedule keeps the token, and acts with it again
 		AMap<AString, ACell> kept = Engine.keptAuthority(engine.tokenContext(maker.ref()));
-		assertEquals(maker.ref(), kept.get(Fields.MCP_TOKEN));
+		assertEquals(maker.ref(), kept.get(Fields.TOKEN));
 		RequestContext resumed = engine.context(alice, alice, null, kept);
 		assertTrue(mayWrite(resumed, alice, "w/private/x"));
 

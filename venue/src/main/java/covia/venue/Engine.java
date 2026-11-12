@@ -4408,18 +4408,22 @@ public class Engine {
 	 * ({@link RequestContext#withAuthorityOf}) as its principal
 	 * ({@link Fields#CALLER}), namespace ({@link Fields#OWNER}) and presented
 	 * {@link Fields#PROOFS}, and the access token narrowing it as
-	 * {@link Fields#MCP_TOKEN}. Null when it acts with its caller's own,
+	 * {@link Fields#TOKEN}. Null when it acts with its caller's own,
 	 * unnarrowed.
+	 *
+	 * <p>Job entries and scheduled events store these keys, so renaming one
+	 * needs a migration: work stored under the old key would resume without
+	 * the narrowing it records.</p>
 	 */
 	public static AMap<AString, ACell> keptAuthority(RequestContext ctx) {
 		if (ctx == null) return null;
 		AMap<AString, ACell> token = actingSource(ctx).token();
-		if (!ctx.hasSeparateAuthority()) return (token == null) ? null : Maps.of(Fields.MCP_TOKEN, token);
+		if (!ctx.hasSeparateAuthority()) return (token == null) ? null : Maps.of(Fields.TOKEN, token);
 		RequestContext authority = ctx.authorityContext();
 		AMap<AString, ACell> kept = Attribution.attribute(Maps.empty(), authority.getCallerDID(), authority.getUserDID());
 		AVector<ACell> proofs = authority.getProofs();
 		if (proofs != null && !proofs.isEmpty()) kept = kept.assoc(Fields.PROOFS, proofs);
-		return (token == null) ? kept : kept.assoc(Fields.MCP_TOKEN, token);
+		return (token == null) ? kept : kept.assoc(Fields.TOKEN, token);
 	}
 
 	/** Why a request may not change an agent another principal controls; the agent and its controller follow. */
@@ -4560,7 +4564,7 @@ public class Engine {
 			AMap<AString, ACell> authority) {
 		RequestContext ctx = context(owner, principal, proofs);
 		if (authority == null) return ctx;
-		AMap<AString, ACell> token = RT.ensureMap(authority.get(Fields.MCP_TOKEN));
+		AMap<AString, ACell> token = RT.ensureMap(authority.get(Fields.TOKEN));
 		if (Attribution.caller(authority) == null) return narrowedByToken(ctx, token);
 		RequestContext held = context(Attribution.owner(authority), Attribution.caller(authority),
 			RT.ensureVector(authority.get(Fields.PROOFS)));

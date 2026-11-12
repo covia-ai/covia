@@ -378,9 +378,5 @@ public class Fields {
 	/** On an agent created by a request an access token narrowed: that token, which
 	 *  narrows its controller's authority. */
 	public static final StringShort CONTROLLER_TOKEN = Strings.intern("controllerToken");
-	/** On kept authority: the access token that narrowed the request whose work it
-	 *  is. Work stored on deployed venues uses this key, so renaming it needs a
-	 *  migration: without one, such work would resume unnarrowed. */
-	public static final StringShort MCP_TOKEN = Strings.intern("mcpToken");
 
 }
