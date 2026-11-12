@@ -146,9 +146,11 @@ is `UnavailableException`, since retrying later may succeed
 ([ADAPTERS.md](ADAPTERS.md)). Only a request whose `config` is not an object is
 invalid input.
 
-**An adapter that cannot start is unavailable.** Its own operations are
-refused with `UnavailableException` naming the adapter, while the venue runs
-on; why it failed goes to operators only, in the log and `venue:adapters`
+**An adapter that cannot start is unavailable.** Whether it refused its
+settings or its start failed, it is treated as stopped while the venue runs
+on: its own operations are refused with `UnavailableException` naming the
+adapter, and what else depends on it refuses as for a disabled adapter. Why
+it failed goes to operators only, in the log and `venue:adapters`
 ([ADAPTERS.md](ADAPTERS.md#an-adapter-that-is-not-running)).
 
 **A shared parser leaves the choice to each caller.** A parser that reads both

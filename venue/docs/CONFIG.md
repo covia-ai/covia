@@ -3143,7 +3143,7 @@ above is intentionally outside this administrative group:
 |-----------|--------|
 | `v/ops/venue/adapters` | Registry view: every registered adapter (active **and** disabled) with `enabled`, `status` (`running`, `failed` or `disabled`), a failed adapter's `reason`, `kernel`, owning `module`, effective `config` and `operations`, plus loaded `modules` |
 | `v/ops/venue/adapter/disable {name}` | Remove an adapter from live dispatch and `v/info/adapters/<name>`, and stop its workers: a messaging adapter's bots close their polls and connections. Durable catalog metadata remains; the instance is retained and in-flight jobs finish |
-| `v/ops/venue/adapter/enable {name}` | Restore it and start its workers again (installing on first enable if it was boot-disabled). If it fails to start, it stays enabled but failed and the call fails with the reason |
+| `v/ops/venue/adapter/enable {name}` | Restore it and start its workers again (installing on first enable if it was boot-disabled). If it refuses its settings or fails to start, it stays enabled but failed and the call fails with the reason |
 | `v/ops/venue/adapter/configure {name, config, merge?}` | Apply a new effective configuration (`adapters.<name>` shape). The adapter may decline it, and nothing changes, or refuse it with an error, and it is offered its previous configuration again; if it refuses that too, it is stopped and left failed |
 | `v/ops/venue/adapter/restart {name}` | Stop an enabled adapter, running or failed, offer it its effective configuration again and start it. If it fails again, it stays failed and the call fails with the reason |
 | `v/ops/venue/module/load {module, sha256?, config?}` | Load a module jar; its adapters and declarations overwrite existing names and paths |
@@ -3155,12 +3155,18 @@ authority ([VENUE_AUTHORITY.md](./VENUE_AUTHORITY.md#how-it-works-today)) for
 Ordinary authenticated users get `AuthException`.
 
 **Failed adapters.** An adapter that cannot start, at launch, enable or
-restart, does not stop the venue: it stays enabled with `status: failed` and
-the `reason` in `v/ops/venue/adapters`, and the log says the same. Calls to its
-operations fail with "Adapter `<name>` is not running" and no reason. Fix the
-cause (free the port, bring the service back, or change its settings with
-`adapter/configure`), then `adapter/restart` it. Disabling it clears the
-failure. Contract: [ADAPTERS.md](ADAPTERS.md#an-adapter-that-is-not-running).
+restart, does not stop the venue, whether it refused a setting in its
+`adapters.<name>` block or its start failed (a port in use, a service out of
+reach). It stays enabled with `status: failed` and the `reason` in
+`v/ops/venue/adapters`, and the log says the same. Until then it is treated as
+a stopped adapter: its operations fail with "Adapter `<name>` is not running"
+and no reason, and nothing else in the venue uses it, so with `http` failed
+outbound requests are refused. Fix the cause (free the port, bring the service
+back, or correct its settings with `adapter/configure`), then
+`adapter/restart` it. Disabling it clears the failure. A stored adapter state
+newer than this build, or a failed adapter that `auth.methods` names, still
+stops the launch. Contract:
+[ADAPTERS.md](ADAPTERS.md#an-adapter-that-is-not-running).
 
 **Module policy.** `module/load` and `module/unload` require
 `dynamicModules.enabled` (default **off**). By default `module` must be a jar

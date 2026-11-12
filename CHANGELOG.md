@@ -21,7 +21,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Changed
 
-- An adapter that fails to start, at launch, enable or restart, no longer stops the venue: it stays enabled but failed, its operations refused as not running, until restarted.
+- An adapter that fails to start, at launch, enable or restart, including one that refuses a setting in its `adapters.<name>` block, no longer stops the venue: it stays enabled but failed and is treated as stopped, its operations refused as not running, until restarted.
 - A `venue:adapter/configure` change the adapter refuses with an error is reverted to its previous configuration.
 - A P2P node that cannot launch, such as on a port in use, is unavailable rather than a configuration error.
 

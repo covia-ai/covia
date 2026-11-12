@@ -203,7 +203,8 @@ The significant lifecycle is:
    migrate module adapters' state with its own; neither it nor the constructor
    may use the engine.
 3. Registration applies the effective `adapters.<name>` configuration through
-   `configure(config, strict)`.
+   `configure(config, strict)`. At launch, a configuration it refuses leaves
+   it failed (below); the launch goes on.
 4. Unless boot-disabled or declined, `install(engine)` binds the engine and
    private `AdapterState`, then `installAssets()` declares its catalog.
    Installation must not start inbound workers or other autonomous work.
@@ -257,19 +258,32 @@ and sends check that it is still running.
 
 ### An adapter that is not running
 
-An enabled adapter whose `start()` fails at launch, enable or restart, or that
-could not take back its settings after refusing a change, is failed. The
-engine calls `stop()` to end whatever it started and reports the failure as
-the adapter's ([ERRORS.md](ERRORS.md)): a Covia exception with a reason as it
-is, logged at WARN, anything else as the adapter's fault. The instance stays
-enabled, published and in the catalog, and the venue runs without it: one
-adapter that cannot start costs only its own operations. Those operations,
-internal calls to them and messages to their live jobs are refused with
-`UnavailableException` (`Engine.ADAPTER_NOT_RUNNING`). The reason is for
-operators: `venue:adapters` lists the adapter with `status: failed` and the
-`reason`, and embedders read it from `Engine.adapterFailure(name)`.
-`venue:adapter/restart` starts it again once the cause is fixed; disabling it
-forgets the failure.
+An enabled adapter that fails to start is failed: its `start()` failed at
+launch, enable or restart, it refused its configuration at launch, enable or
+restart, or it could not take back its settings after refusing a change. The
+engine calls `stop()` to end whatever a failed `start()` began and reports
+the failure as the adapter's ([ERRORS.md](ERRORS.md)): a Covia exception with
+a reason as it is, logged at WARN, anything else as the adapter's fault.
+
+A failed adapter is treated as a stopped one, as if disabled, except that it
+stays enabled. Its `v/info/adapters/<name>` record is withdrawn (the catalog
+metadata remains), and `Engine.getAdapter`, `getAdapterNames` and
+`hasAdapter` leave it out, so every part of the venue that uses adapters
+directly sees it as absent and refuses as it does for a disabled one: the
+outbound guard refuses rather than check without the `http` adapter's
+settings, a login method it provides is unavailable, recovery ends its jobs as
+for a missing adapter. An adapter that `auth.methods` names therefore still
+stops the launch if it fails, as a disabled one does. Its operations, internal
+calls to them and messages to their live jobs are refused with
+`UnavailableException` (`Engine.ADAPTER_NOT_RUNNING`). The venue runs without
+it: one adapter that cannot start costs only what it provides.
+
+The reason is for operators: `venue:adapters` lists the adapter as enabled
+with `status: failed` and the `reason`, and embedders read it from
+`Engine.adapterFailure(name)`. `venue:adapter/restart` (or enable) brings it
+back once the cause is fixed: it offers the adapter its configuration,
+installs it if it never was, publishes it and starts it. Disabling it forgets
+the failure.
 
 `start()` therefore throws a Covia exception whose reason an operator can act
 on: `UnavailableException` for a port in use or a service out of reach, the
@@ -277,10 +291,13 @@ P2P node's launch failure being one. Recovery runs before `start()`, so the
 default recovery has already ended an unfinished job of an adapter that then
 fails to start, and a restart does not call `recoverJob` again.
 
-Runtime registration differs, because module loading undoes what it
-registered when a registration throws: a new instance registered on a started
-engine (`registerAdapter`, `venue:module/load`) that fails to start is rolled
-back and the failure thrown.
+Two failures still stop the launch: an adapter's stored state recorded at a
+newer version than it supports (`UnsupportedVersionException`), and an
+adapter `auth.methods` names being unavailable. Runtime registration differs
+too, because module loading undoes what it registered when a registration
+throws: a new instance registered on a started engine (`registerAdapter`,
+`venue:module/load`) that refuses its configuration or fails to start is
+rolled back and the failure thrown.
 
 The venue config is authoritative again after restart; runtime enable,
 disable, configure, load, and unload changes are not persisted. Full operator
