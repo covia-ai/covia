@@ -1054,12 +1054,12 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	/** The result of a sessioned tool call still running at its time limit (#607):
 	 *  the operation, the limit in milliseconds, then the job it runs as. */
 	public static final String TOOL_STILL_RUNNING = "Error: %s did not complete within %dms and is still running as job %s. "
-		+ "Its outcome will arrive later in this session, naming this call and that job; grid_job_status with that id shows how it is going. "
+		+ "Its outcome will arrive later in this session, naming this call and that job; job_status with that id shows how it is going. "
 		+ "Do not call it again unless repeating it is safe.";
 
 	/** As {@link #TOOL_STILL_RUNNING}, for a call with no session to deliver its outcome to. */
 	public static final String TOOL_STILL_RUNNING_UNTRACKED = "Error: %s did not complete within %dms and is still running as job %s. "
-		+ "No message will follow; grid_job_status with that id gives its status and, once it has finished, its outcome. "
+		+ "No message will follow; job_status with that id gives its status and, once it has finished, its outcome. "
 		+ "Do not call it again unless repeating it is safe.";
 
 	/**

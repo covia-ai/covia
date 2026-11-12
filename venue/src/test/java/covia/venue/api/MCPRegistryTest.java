@@ -82,6 +82,11 @@ public class MCPRegistryTest {
 		var defaults = toolReferences(mcp(freshEngine(), Maps.empty()));
 		assertEquals("v/ops/agent/history", defaults.get("agent_history"));
 		assertEquals("v/ops/agent/session-read", defaults.get("agent_session_read"));
+		for (String control : Set.of("status", "result", "cancel", "pause", "resume", "message")) {
+			assertEquals("v/ops/job/" + control, defaults.get("job_" + control));
+		}
+		assertEquals("v/ops/grid/job-status", defaults.get("grid_job_status"));
+		assertEquals("v/ops/grid/job-result", defaults.get("grid_job_result"));
 		assertFalse(defaults.containsValue("v/ops/json/merge"), "excluded operations stay hidden");
 		assertFalse(defaults.containsValue("v/test/ops/echo"), "excluded paths stay hidden");
 
@@ -97,7 +102,7 @@ public class MCPRegistryTest {
 	@Test public void testDefaultExposesOnlyAllowlistedGroups() {
 		MCP mcp = mcp(freshEngine(), Maps.empty());
 		Set<String> groups = groupsOf(toolNames(mcp));
-		assertEquals(Set.of("agent", "asset", "covia", "grid", "secret", "skills"), groups,
+		assertEquals(Set.of("agent", "asset", "covia", "grid", "job", "secret", "skills"), groups,
 			"Default include set should expose exactly the allowlisted groups");
 	}
 
@@ -152,7 +157,7 @@ public class MCPRegistryTest {
 		MCP mcp = mcp(freshEngine(),
 			Maps.of(K_INCLUDE_ADAPTERS, Vectors.empty()));
 		Set<String> groups = groupsOf(toolNames(mcp));
-		assertEquals(Set.of("agent", "asset", "covia", "grid", "secret", "skills"), groups);
+		assertEquals(Set.of("agent", "asset", "covia", "grid", "job", "secret", "skills"), groups);
 	}
 
 	// ==================== Path-prefix filter ====================

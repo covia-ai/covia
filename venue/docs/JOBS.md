@@ -36,6 +36,60 @@ reachable by cancel, pause, resume and message delivery. The row's transaction
 refuses a deleted account, and the account is checked again once the handle is
 registered, so a job accepted across a deletion is cancelled and refused.
 
+## Canonical operation and tool surface
+
+Jobs are a universal Covia abstraction, independent of the adapter performing
+the work. The `job` adapter exposes this contract; it does not own execution,
+invent a second lifecycle, or acquire authority over the jobs it addresses.
+The hosting venue checks access and routes each control to the implementation
+responsible for that job. Grid handles operation invocation and federation.
+
+| Operation | MCP tool | Result |
+|---|---|---|
+| `job:status` (`v/ops/job/status`) | `job_status` | Current Job record, including progress, result/error and any delegation observations |
+| `job:result` (`v/ops/job/result`) | `job_result` | Exact output value when the target completes; failure if it fails, is rejected or is cancelled |
+| `job:cancel` (`v/ops/job/cancel`) | `job_cancel` | Current record after requesting cancellation; existing terminal outcomes are unchanged |
+| `job:pause` (`v/ops/job/pause`) | `job_pause` | Current record after an implementation-supported pause |
+| `job:resume` (`v/ops/job/resume`) | `job_resume` | Current record after an implementation-supported resumption |
+| `job:message` (`v/ops/job/message`) | `job_message` | `{id, delivered: true}` after the receiving adapter accepts the message |
+
+All operations require `id`, the exact Job ID returned by its invocation.
+IDs are venue-scoped: omit `venue` for a local Job, or supply its hosting
+venue's URL or routable DID. An explicit non-string `venue`, including null,
+is rejected rather than falling back locally. Custom operation metadata may
+set `operation.venue`; an input `venue` takes precedence. Remote
+`authenticateAs` uses the same explicit `anonymous` (default), `caller` or
+venue-only `venue` connection policy as Grid. Local calls retain the full
+caller context. Reads and controls retain the existing Job access rules;
+permission to read a Job does not grant permission to cancel it.
+
+`result` optionally accepts a non-negative integer `timeout` in milliseconds;
+omission or zero waits without a deadline. Expiry fails the **wait**, leaving
+the target untouched. Cancelling a result-wait Job also leaves the target and
+its result future untouched. Remote waits observe an existing job and never
+submit it again. The wait remains STARTED while the target needs input; its
+`delegation.remoteStatus` reports that state. Send input to the target Job,
+not to the result waiter. Unbounded remote waits reattach after restart when
+their saved connection permits it; bounded waits end on restart rather than
+starting a fresh timeout budget. Local waits are process-bound.
+
+`message` requires a map `message`, forwarded unchanged in the receiving
+operation's format, for example `{content: "continue"}`. An acknowledgement
+means accepted delivery, not task completion. Pause/resume and message delivery
+are optional implementation features: unsupported controls fail explicitly.
+No control replays the target's original operation.
+
+For a local proxy Job, use its local ID with no `venue`. To address its remote
+destination directly, use the destination ID and hosting venue. Cancellation
+is best-effort and does not undo side effects or prove remote cessation.
+The returned record retains any available delegation/cancellation observations;
+absence of confirmation must not be treated as confirmation.
+
+The default MCP palette includes all six Job tools. The `jobs` skill supplies
+them to agents; agent/task skills and templates use the canonical Job paths.
+Existing `grid:jobStatus` and `grid:jobResult` paths, tool names and behavior
+remain compatible. Existing configured agents and tokens are not rewritten.
+
 ## Lifecycle and status semantics
 
 `PENDING → STARTED → COMPLETE | FAILED | CANCELLED | REJECTED` (terminal,

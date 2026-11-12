@@ -6161,7 +6161,9 @@ public class AgentAdapterTest {
 		assertTrue(names.contains("agent_create"), "manager should have agent_create");
 		assertTrue(names.contains("agent_request"), "manager should have agent_request");
 		assertTrue(names.contains("grid_run"), "manager should have grid_run");
-		assertTrue(names.contains("grid_job_result"), "manager should retrieve async results");
+		assertTrue(names.contains("job_status"), "manager should inspect existing work");
+		assertTrue(names.contains("job_result"), "manager should retrieve async results");
+		assertTrue(names.contains("job_cancel"), "manager should cancel work regardless of its agent implementation");
 		assertTrue(names.contains("covia_read"), "manager should have covia_read");
 		// Harness tools resolved by name
 		assertTrue(names.contains("subgoal"), "manager should have subgoal");

@@ -1,0 +1,55 @@
+{
+	"name": "Job Message",
+	"description": "Deliver a structured message to an existing active Job that accepts messages, for example to answer INPUT_REQUIRED or AUTH_REQUIRED. Unsupported delivery and terminal Jobs fail explicitly. Acknowledgement means the receiving adapter accepted the message, not that the Job completed. Use job_status or job_result to observe the outcome.",
+	"operation": {
+		"adapter": "job:message",
+		"toolName": "job_message",
+		"readOnly": false,
+		"input": {
+			"type": "object",
+			"properties": {
+				"id": {
+					"type": "string",
+					"description": "Exact Job ID returned by an invocation, agent request or Job listing. IDs are scoped to their hosting venue."
+				},
+				"venue": {
+					"type": "string",
+					"description": "Optional hosting venue HTTP(S) URL or routable DID. Omit for this venue. For a local proxy Job use its local ID and omit venue; for the destination Job use its ID and hosting venue."
+				},
+				"authenticateAs": {
+					"type": "string",
+					"enum": [
+						"anonymous",
+						"caller",
+						"venue"
+					],
+					"default": "anonymous",
+					"description": "Explicit remote authentication, using the same identity and grants as the target Job. caller requires a target-audienced identity credential. venue is available only to the venue itself. Omitted venue preserves the full local caller context."
+				},
+				"message": {
+					"type": "object",
+					"description": "Message in the receiving operation's format, such as {content: \"continue\"}. Forwarded unchanged."
+				}
+			},
+			"required": [
+				"id",
+				"message"
+			]
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"id": {
+					"type": "string"
+				},
+				"delivered": {
+					"type": "boolean"
+				}
+			},
+			"required": [
+				"id",
+				"delivered"
+			]
+		}
+	}
+}

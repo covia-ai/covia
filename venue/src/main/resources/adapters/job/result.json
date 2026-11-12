@@ -1,0 +1,43 @@
+{
+	"name": "Job Result",
+	"description": "Wait for an existing Job and return its exact output value. A failed, rejected or cancelled target fails this wait. Omit timeout or use 0 to wait without a deadline; a positive timeout limits only this wait. Timing out or cancelling the wait leaves the target running. Use job_status to inspect work without waiting.",
+	"operation": {
+		"adapter": "job:result",
+		"toolName": "job_result",
+		"readOnly": true,
+		"input": {
+			"type": "object",
+			"properties": {
+				"id": {
+					"type": "string",
+					"description": "Exact Job ID returned by an invocation, agent request or Job listing. IDs are scoped to their hosting venue."
+				},
+				"venue": {
+					"type": "string",
+					"description": "Optional hosting venue HTTP(S) URL or routable DID. Omit for this venue. For a local proxy Job use its local ID and omit venue; for the destination Job use its ID and hosting venue."
+				},
+				"authenticateAs": {
+					"type": "string",
+					"enum": [
+						"anonymous",
+						"caller",
+						"venue"
+					],
+					"default": "anonymous",
+					"description": "Explicit remote authentication, using the same identity and grants as the target Job. caller requires a target-audienced identity credential. venue is available only to the venue itself. Omitted venue preserves the full local caller context."
+				},
+				"timeout": {
+					"type": "integer",
+					"minimum": 0,
+					"description": "Maximum milliseconds to wait; omitted or 0 means no deadline. Expiry fails this wait without changing or cancelling the target."
+				}
+			},
+			"required": [
+				"id"
+			]
+		},
+		"output": {
+			"description": "Exact output of the target Job; any JSON value, including null."
+		}
+	}
+}

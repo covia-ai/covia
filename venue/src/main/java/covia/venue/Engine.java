@@ -1094,6 +1094,7 @@ public class Engine {
 			new covia.adapter.SkillsAdapter(),
 			new AssetAdapter(),
 			new GridAdapter(),
+			new covia.adapter.JobAdapter(),
 			new covia.adapter.A2AAdapter(),
 			new covia.adapter.RemoteAgentAdapter(),
 			new covia.adapter.P2PAdapter(),

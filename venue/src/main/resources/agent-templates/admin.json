@@ -7,7 +7,7 @@
 			"tools": [
 				"v/ops/hitl/request",
 				"v/ops/hitl/list",
-				"v/ops/grid/job-status",
+				"v/ops/job/status",
 				"v/ops/venue/show-config",
 				"v/ops/venue/adapters",
 				"v/ops/user/list",

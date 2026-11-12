@@ -15,8 +15,8 @@
 			"v/ops/covia/read",
 			"v/ops/covia/write",
 			"v/ops/covia/append",
-			"v/ops/grid/job-status",
-			"v/ops/grid/job-result"
+			"v/ops/job/status",
+			"v/ops/job/result"
 		]
 	}
 }

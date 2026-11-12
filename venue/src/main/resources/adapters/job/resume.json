@@ -1,0 +1,61 @@
+{
+	"name": "Job Resume",
+	"description": "Resume a paused Job only if its execution adapter supports resumption. Continues existing work; never resubmits its original input. INPUT_REQUIRED or AUTH_REQUIRED normally needs job_message instead.",
+	"operation": {
+		"adapter": "job:resume",
+		"toolName": "job_resume",
+		"readOnly": false,
+		"input": {
+			"type": "object",
+			"properties": {
+				"id": {
+					"type": "string",
+					"description": "Exact Job ID returned by an invocation, agent request or Job listing. IDs are scoped to their hosting venue."
+				},
+				"venue": {
+					"type": "string",
+					"description": "Optional hosting venue HTTP(S) URL or routable DID. Omit for this venue. For a local proxy Job use its local ID and omit venue; for the destination Job use its ID and hosting venue."
+				},
+				"authenticateAs": {
+					"type": "string",
+					"enum": [
+						"anonymous",
+						"caller",
+						"venue"
+					],
+					"default": "anonymous",
+					"description": "Explicit remote authentication, using the same identity and grants as the target Job. caller requires a target-audienced identity credential. venue is available only to the venue itself. Omitted venue preserves the full local caller context."
+				}
+			},
+			"required": [
+				"id"
+			]
+		},
+		"output": {
+			"type": "object",
+			"description": "Current Job record. Optional fields retain their ordinary Job meanings, including progress, errorCode and delegation.",
+			"properties": {
+				"id": {
+					"type": "string"
+				},
+				"status": {
+					"type": "string"
+				},
+				"output": {},
+				"error": {
+					"type": "string"
+				},
+				"progress": {
+					"type": "object"
+				},
+				"delegation": {
+					"type": "object"
+				}
+			},
+			"required": [
+				"id",
+				"status"
+			]
+		}
+	}
+}
