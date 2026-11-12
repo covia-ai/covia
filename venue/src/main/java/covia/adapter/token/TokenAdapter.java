@@ -22,6 +22,8 @@ import convex.core.data.prim.AInteger;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
+import convex.lattice.cursor.AForkableCursor;
+import convex.lattice.cursor.Cursors;
 import covia.adapter.AAdapter;
 import covia.api.Abilities;
 import covia.api.Fields;
@@ -150,6 +152,23 @@ public class TokenAdapter extends AAdapter {
 	/** Whether the venue keeps each token's bearer, sealed, beside its hash. */
 	boolean keepRawTokens() {
 		return CVMBool.TRUE.equals(engine.adapterConfig(getName()).get(KEEP_RAW_TOKENS));
+	}
+
+	/**
+	 * What a user sees of its tokens at {@code x/token}: each by name, with what
+	 * {@link #summary} shows (issuer, access, caps, creation and expiry), never
+	 * a bearer, its hash or the token's id. A snapshot, so read-only.
+	 */
+	@Override
+	public AForkableCursor<ACell> latticeView(RequestContext ctx) {
+		AString owner = ctx.getUserDID();
+		if (owner == null) return null;
+		AMap<AString, ACell> shown = Maps.empty();
+		for (var entry : tokens().list(owner).entrySet()) {
+			AccessToken token = tokens().token(owner, entry.getKey());
+			if (token.record() != null) shown = shown.assoc(entry.getKey(), summary(token).dissoc(Fields.NAME));
+		}
+		return Cursors.create((ACell) shown);
 	}
 
 	@Override

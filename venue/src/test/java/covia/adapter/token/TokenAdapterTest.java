@@ -139,6 +139,34 @@ public class TokenAdapterTest {
 		complete(named("v/ops/token/delete", owner, "plain"));
 	}
 
+	private Job read(RequestContext ctx, String path) {
+		return run("v/ops/covia/read", Maps.of(Fields.PATH, path), ctx);
+	}
+
+	@Test
+	public void aUserSeesItsTokensAtXTokenWithoutWhatProvesThem(TestInfo info) {
+		AString alice = TestEngine.uniqueDID(info);
+		RequestContext owner = RequestContext.of(alice);
+		String bearer = RT.getIn(complete(create(owner, "seen", MCP)), Fields.TOKEN).toString();
+		AccessToken token = engine.tokens().token(alice, Strings.create("seen"));
+
+		AMap<AString, ACell> view = RT.ensureMap(RT.getIn(complete(read(owner, "x/token")), Fields.VALUE));
+		AMap<AString, ACell> seen = RT.ensureMap(view.get(Strings.create("seen")));
+		assertEquals(MCP, seen.get(Fields.ACCESS));
+		assertEquals(alice, seen.get(Fields.ISSUER));
+		String shown = view.toString();
+		assertFalse(shown.contains(bearer), "never the bearer");
+		assertFalse(shown.contains(token.hash().toString()), "nor its hash");
+		assertFalse(shown.contains(token.id().toString()), "nor the token's id");
+		assertEquals(MCP, RT.getIn(complete(read(owner, "x/token/seen")), Fields.VALUE, Fields.ACCESS), "one token by name");
+		failure(run("v/ops/covia/write", Maps.of(Fields.PATH, "x/token/seen", Fields.VALUE, 1), owner));
+
+		// An agent sees it with crud/read on x/token
+		ACell invoke = cap("v/ops/", Abilities.INVOKE);
+		failure(read(agent(alice, "blind", Vectors.of(invoke)), "x/token"));
+		assertEquals(view, RT.getIn(complete(read(agent(alice, "sighted", Vectors.of(invoke, cap("x/token", Capability.CRUD_READ))), "x/token")), Fields.VALUE));
+	}
+
 	@Test
 	public void aTokensAccessNamesRunningAccessPointsWithEntriesTheyAccept(TestInfo info) {
 		RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));

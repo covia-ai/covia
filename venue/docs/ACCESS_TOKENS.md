@@ -85,7 +85,7 @@ operation reaches it.
 | `admin/token/<access point>` | Working on tokens that carry that access point directly, through the `token:` operations, including fetching a kept bearer |
 | `admin/token` | The parent of every `admin/token/<access point>` leaf, so every access point |
 | `mcp/token` | Creating, changing and deleting MCP tokens through the MCP token operations |
-| `crud/read` on `x/token` | Listing token records, never bearers |
+| `crud/read` on `x/token` | Reading the user's view of its tokens, and listing them |
 
 - **Direct work** on a token needs `admin/token/<p>` for every access point
   `p` it carries before and after the change: a bearer works at each of them.
@@ -122,9 +122,17 @@ operation reaches it.
 - **Who may create tokens:** any user or agent holding the abilities above,
   never the public principal or the venue itself.
 
+## The user's view
+
+`x/token` is the token adapter's view for a user, read like any path
+(`covia:read`, the read API): each of its tokens by name, with its issuer,
+access entries, caps, creation time and expiry. It never shows a bearer, a
+bearer's hash or a token's id, and it is read-only. Reading it needs
+`crud/read` on `x/token`, or on `x/token/<name>` for one token.
+
 ## Storage
 
-The token adapter's state at `:adapters/token`:
+The token adapter's state at `:adapters/token`, which no path reaches:
 
 ```
 tokens:  { <ownerDID>: { <name>: record } }

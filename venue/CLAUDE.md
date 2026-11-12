@@ -83,7 +83,7 @@ AUTH_REQUIRED).
 | `convex` | Convex blockchain, CAD3 conversion, and secret-backed Ed25519 keys | `query`, `transact`, `generate-key`, `sign`, `decode-cad3`, `encode-cad3` |
 | `crypto` | Local cryptography in Convex formats; secret-backed and held keys, JWTs and BIP39 phrases (see `docs/CONFIG.md#cryptography-crypto`) | `hash`, `generate-key`, `public-key`, `sign`, `verify`, `encrypt`, `decrypt`, `generate-mnemonic`, `validate-mnemonic`, `derive-key`, `jwt-sign`, `jwt-verify`, `jwt-decode`, `add-key`, `remove-key`, `list-keys` |
 | `mcp` | Model Context Protocol client, bridging, and the MCP access point for access tokens, with MCP token operations (`docs/ACCESS_TOKENS.md`) | `tools-list`, `tools-call`, `add-server`, `add-tool`, `remove-server`, `refresh`, `create-token`, `update-token`, `delete-token`, `list-tokens`, `get-token` |
-| `token` | Access tokens: scoped bearers acting with their issuer's authority within caps, accepted at the access points they name; the store other adapters build on (`docs/ACCESS_TOKENS.md`) | `create`, `update`, `delete`, `list`, `get` |
+| `token` | Access tokens: scoped bearers acting with their issuer's authority within caps, accepted at the access points they name; the store other adapters build on, with a read-only user view at `x/token` (`docs/ACCESS_TOKENS.md`) | `create`, `update`, `delete`, `list`, `get` |
 | `a2a` | Agent-to-Agent protocol client — remote agent cards, tasks and message relay | `send`, `get-task`, `cancel`, `agent-card`, `import-agent` |
 | `langchain` | AI/LLM models | `openai`, `ollama`, `anthropic`, `gemini`, `xai`, `deepseek`, `mistral`, `openrouter`, `models` |
 | `http` | HTTP requests (SSRF-protected, bounded validated redirects, default User-Agent; `adapters.http`) | `get`, `post` |
