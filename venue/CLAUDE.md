@@ -328,6 +328,7 @@ java -jar target/covia.jar [config.json]
 
 ## Related Documentation
 
+- `docs/ADMIN.md` — privileged-operation inventory and proposed admin ability hierarchy at user and venue level
 - `docs/AUTH.md` — authentication design (#297): method contract, central sessions, assurance policy
 - `docs/ADAPTERS.md` — canonical adapter system, state, lifecycle, authoring, and module contract
 - `docs/CONFIG.md` — operator configuration reference

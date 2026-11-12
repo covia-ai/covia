@@ -6,6 +6,10 @@ over the users it hosts. This is a design; none of it is implemented yet.
 
 Tracked by covia#660.
 
+[ADMIN.md](ADMIN.md) inventories current privileged operations and proposes
+their ability hierarchy. It separates naming and resource scope from the
+activation policy proposed here.
+
 ## Terminology
 
 | Term | Meaning |

@@ -1,0 +1,266 @@
+# Privileged operations (review and proposal)
+
+Status: design direction agreed on 2026-11-12; ability migration not
+implemented. The inventory below describes current checks. This document
+does not change existing grants.
+
+`admin/…` identifies venue-level administration that should not happen in
+normal workflows. The initial families are `admin/user`, `admin/adapter`,
+`admin/venue` and `admin/sudo`. Organise these existing privileges first,
+preserving their authority rules. Explicit activation is outside this change.
+
+Managing something does not by itself make an operation high-level admin.
+MCP management, for example, must remain independently delegable without
+granting venue administration. Sensitive user operations also need their own
+precise permissions. Every contract must name its resource, ability and any
+additional restrictions, regardless of how the action is reached.
+
+[UCAN.md](UCAN.md) defines capability enforcement and granting.
+[VENUE_AUTHORITY.md](VENUE_AUTHORITY.md) proposes dormant allowances and
+explicit activation. This document inventories *what is privileged* and
+proposes its vocabulary; that design determines *how authority is elevated*.
+[AUTH.md](AUTH.md) separately covers identity and authentication assurance.
+The normative capability and granting contracts remain COG-13 and COG-17 in
+covia-docs.
+
+## Scope and naming
+
+Use the ability `can: "admin/<area>/<action>"` for venue administration,
+or `can: "admin/sudo"` for the existing explicit namespace switch. Keep
+`with` as the resource being administered; there is no global admin role.
+Managing hosted accounts is a venue resource even though the operation is
+named `user:…`. Sudo retains its target-user resource and separate action
+checks; its classification does not broaden what it permits.
+
+| Family | Meaning |
+|--------|---------|
+| `admin/user` | Administer the venue's hosted accounts: registration, deletion, directory reads, authentication management and state transfer |
+| `admin/adapter` | Administer the venue's installed adapters and modules |
+| `admin/venue` | Maintain the venue process and store |
+| `admin/sudo` | Explicitly enter another user's working namespace, with separately granted invocation and action authority |
+
+Ordinary workflow grants should name their domain abilities and resources.
+They should not need an `admin` grant. An operator deliberately running an
+administrative workflow can delegate the specific admin abilities it needs.
+
+This is an ability hierarchy, not a new REST route, adapter, operation path
+or lattice namespace. Existing operation names can remain. Moving a tool
+into an `admin` skill is useful for discovery but does not authorize it.
+Generic invocation still needs `invoke` for its target as well as each
+action's authority; a directly bound tool still needs its action authority.
+
+Convex 0.8.19's `Capability.abilityCovers` already supplies exact matching,
+slash-boundary prefix matching and the top ability `*`. No new matcher is
+needed. In examples, `admin/…` denotes the family; the parent grant is
+`can: "admin"`, not the literal string `"admin/*"`.
+
+- `admin` covers all administrative abilities on the resource it names,
+  including future descendants. Prefer specific leaves for delegation.
+- `admin/user` covers account administration, but only on its named resource.
+- `agent`, `mcp`, `user` and other ordinary families do not cover abilities
+  moved below `admin`.
+- `*` still covers `admin/…`. Owners and unrestricted contexts still have
+  their existing implicit authority. A rename alone does not require
+  activation, a fresh login, human approval or a separate grant.
+- `admin` does not imply `grant/admin`. Minting and chain delegation retain
+  COG-17's distinct rules; ordinary UCAN use grants can still be passed on
+  through a valid, narrower proof chain.
+
+## Current venue-level admin functions
+
+Here `V` means the hosting venue DID and `U` a hosted user's DID. These are
+authorization resources, not necessarily paths callers can read as data.
+The proposed column is a naming proposal, with existing resource scopes
+preserved unless a later section explicitly proposes otherwise.
+
+| Current surface | Current ability and resource | Proposed ability |
+|-----------------|------------------------------|------------------|
+| `user:create` | `user/create` on `V/users` | `admin/user/create` |
+| `user:delete` | `user/delete` on `V/users` | `admin/user/delete` |
+| `user:list`; operator view of `user:info`; another user's `user:authentication-list` | `user/read` on `V/users` | `admin/user/read` |
+| `user:authentication-add`, `user:authentication-revoke` for another account | `user/authentication-manage` on `V/users` | `admin/user/authentication-manage` |
+| `user:export` for another account | `user/export` on `V/users` | `admin/user/export` |
+| `user:import` | `user/import` on `V/users` | `admin/user/import` |
+| `user:clone` | Source export permission plus `user/import` on `V/users` | Both corresponding export and import permissions |
+| `venue:adapters`, `venue:adapter-enable`, `venue:adapter-disable`, `venue:adapter-configure`, `venue:module-load`, `venue:module-unload` | `adapter/manage` on `V/adapters` | `admin/adapter/manage` |
+| `venue:restart`, including executable jar handoff | `venue/restart` on `V/process` | `admin/venue/restart` |
+| `venue:gc`, including status, cancel and backup options | `venue/gc` on `V/store`; also `venue/restart` on `V/process` when restarting | `admin/venue/gc`, plus `admin/venue/restart` when needed |
+| `user:sudo` into another namespace | `user/sudo` on the target `U`, plus independent invocation and action authority | `admin/sudo` |
+
+Venue administration currently admits the venue itself, its agents within
+their effective authority, or callers presenting a suitable venue-rooted
+grant. An unrestricted venue agent therefore holds these privileges.
+The venue does not acquire ambient access to every user's data from this
+gate. It can root grants over hosted users, valid locally, as UCAN.md defines.
+
+Account operations have important exceptions:
+
+- A direct user with its whole authority can inspect its own account and
+  authenticators, manage its named account's keys, and export its own state.
+  This is not venue-wide `user/*` authority. An agent or a restricted MCP
+  token does not automatically qualify for those self-service exceptions.
+- The operator account view includes venue bookkeeping that the self view
+  omits. Listing all accounts is an administrative read.
+- Export additionally needs a direct, unrecorded run using the published
+  definition, with no agent/session/task context and caller equal to the
+  acting user. Its result may contain secrets. A capability does not remove
+  these restrictions. Clone uses its own source/target checks and does not
+  return the export blob.
+- Import requires venue authority even for the caller's own account and
+  fills an empty account. Clone requires both sides' permission.
+- Only the direct venue can override the final-active-authentication-key
+  protection. An authentication-management delegation does not suffice.
+- `venue:show-config` reads the published effective view with `crud/read` on
+  `v/config`; it is not a privileged read of private configuration.
+
+## Separately managed privileges
+
+These controls are part of the inventory, not additions to the initial
+admin families. A venue-owned resource does not automatically require an
+`admin` ability. In particular, keep MCP management separate so a caller can
+manage MCP without becoming a venue administrator. Also avoid making a broad
+`admin` grant acquire MCP management merely by moving its ability.
+
+| Surface | Existing ability and resource | Initial treatment |
+|---------|-------------------------------|-------------------|
+| Venue-scoped MCP server/catalog management | `mcp/manage` on `V/v/mcp` | Keep separate |
+| `p2p:peers` / `p2p:connect` | `p2p/read` / `p2p/manage` on `V/p2p` | Retain; classify separately if a later change needs it |
+| Bypass of outbound target checks across adapters | `outbound/any` on `V/outbound` | Retain explicit bypass permission; outside the initial rename |
+| Optional Claude Code module's project `create` / `delete` | `claudecode/manage` on `V/claudecode/projects` | Retain separate operator permission; outside the initial rename |
+
+User-level controls also remain separate. Two existing abilities already use
+`admin` for user-resource actions: `admin/agent` and `admin/token`. These are
+exceptions to the intended venue-level vocabulary, not precedents for putting
+all management under `admin`. Review their naming separately; preserve their
+existing checks and names during the initial change.
+
+| Surface | Current check | Proposed treatment |
+|---------|---------------|--------------------|
+| `agent:step` | `admin/agent` on `U/g/<id>`; executes caller-supplied tool calls under the target agent's authority | Existing naming exception; retain initially |
+| `mcp:get-token` | `admin/token` on `U/x/mcp/tokens/<name>`, token source authority, and retained bearer availability | Existing naming exception; retain initially |
+| `secret:extract` | `secret/extract` on own `s/<name>` and direct-owner, non-recorded-call restrictions | Retain its separate sensitive-operation permission |
+| Self-service account key changes and whole-state export | Whole-owner identity exception described above | Preserve self-service; it grants no venue-level account administration |
+| `mcp:create-token`, `mcp:update-token`, `mcp:delete-token` | `mcp/token` on `U/x/mcp/tokens/<name>`; creation checks issuer authority, update checks source authority; deletion only narrows | Retain independently managed token permissions |
+| Agent configuration/controller changes | `agent/write` plus controller-authority checks where required | Retain separate agent management and authority checks |
+| `auth:identity-token` | Caller identity, scope/sub-principal and signing-key custody checks | Identity issuance remains identity-bound; a generic admin grant must not permit impersonation |
+| `hitl:respond` | Responder must hold its own whole authority; grant answers also follow granting rules | Approval remains attributable to the responder; admin authority must not manufacture someone else's consent |
+
+`user:sudo` changes the working namespace, not the authenticated actor. It
+does not grant all the target user's powers. Renaming it must preserve that
+property; `admin/sudo` alone must never become an impersonation grant.
+Requests through MCP tokens remain unable to switch to another user.
+
+Sensitive domain actions need an explicit place in the review without all
+becoming administration. Ordinary secret use, connected-account use,
+financial transactions and scoped file writes remain domain abilities.
+Held-key signing, especially `key/sign/raw` which can produce arbitrary
+signatures, must remain visible as credential risk even if its name stays
+outside `admin`. `key/sign/grant` and `grant/<ability>` retain their granting
+semantics. Their authorization and custody contracts are in
+[HELD_KEYS.md](HELD_KEYS.md) and UCAN.md.
+
+Likewise, `skill/load` and `tool/load` explicitly admit instructions/tools
+outside an agent's advertised surface. Keep them visible as trust controls;
+changing their names or allowing an admin parent to cover them needs an
+explicit decision. A controlled tool list does not replace resource checks.
+
+## Direct-identity restrictions
+
+Some privileged paths deliberately have no delegable administrative ability:
+
+- `hitl:expire` is a direct-venue lifecycle operation.
+- Grid `authenticateAs: "venue"` requires the direct venue; a grant cannot
+  make an agent or administrator authenticate as it.
+- `ucan:issue` with a non-empty `prf` passes on grants held by the venue and
+  is restricted to the direct venue.
+- Revoking the final active named-user key has the direct-venue exception
+  described above.
+
+List these as privileged restrictions rather than silently converting them
+to capability checks. The naming proposal does not make them delegable.
+In-process Java and operator-selected modules remain trusted code; an admin
+capability is not a sandbox around code with direct access to the engine or
+host process. Loading modules or handing off to a jar is therefore a code
+execution privilege, not merely a settings change.
+
+## Where finer control is needed
+
+The existing checks are explicit but often broad. The following are separate
+policy changes to agree before implementation:
+
+1. **Per-account administration.** Today most checks target `V/users`, not
+   the specific account. Define a canonical child resource for one hosted
+   account if delegation must be limited to it. Collection listing remains
+   a collection privilege; clone checks its source and destination. Keep the
+   venue's directory record distinct from the user's own data and the
+   user-rooted `user/sudo` resource. The exact child encoding is still open.
+2. **Separate observation from mutation.** `venue:adapters` requires the same
+   ability as module loading; GC status requires the same ability as
+   collection. Add read leaves if operators need observation-only access.
+3. **Separate maintenance from executable code changes.** Consider distinct
+   rights for module load/unload and jar replacement instead of treating
+   them as ordinary adapter management and restart.
+4. **Explicit activation (deferred).** The initial organisation preserves
+   implicit owner authority and unrestricted-agent behavior. Requiring
+   activation changes the base-authority contract and belongs with
+   VENUE_AUTHORITY.md, not in a special-case string matcher. That design is
+   not yet implemented.
+5. **Audit coverage.** Audit logging is opt-in (`logging.audit`). User
+   mutations, selected credential actions and venue administration have
+   events, but this is not a uniform trail for every privileged check.
+   For example, the venue adapter's authority rejection precedes its audit
+   wrapper. Define success and denial coverage, actor, target resource,
+   ability, request/job reference and authority source. Never record bearer
+   credentials, secret values or arbitrary operation input. Decide retention
+   and whether a privileged call must fail when mandatory recording fails.
+6. **Authentication assurance.** A valid capability answers permission;
+   fresh or stronger authentication is a separate requirement. Use AUTH.md's
+   policy design rather than inferring assurance from an `admin` name.
+
+## Migration and acceptance
+
+The agreed first scope is to organise the existing venue-administration
+abilities under `admin/user`, `admin/adapter`, `admin/venue` and `admin/sudo`,
+preserving resources and additional checks. Keep MCP and other domain
+management separate. Preserve existing `admin/agent` and `admin/token` while
+their naming is reviewed. Activation and finer resource scopes are separate
+changes; neither is part of this initial organisation.
+
+Renaming is an authorization compatibility change, even if operation names
+stay fixed. Existing signed grants cannot be rewritten, and broad `user`,
+`venue` or `adapter` grants stop covering actions moved to `admin`.
+Conversely, existing `admin` grants cover newly added descendants on their
+resources. Audit both directions before rollout. Do not silently accept old
+and new names forever: agree either a coordinated cutover with replacement
+grants or a documented, time-bounded compatibility period. Unrestricted and
+`*` authority remain unrestricted unless separately changed.
+
+Implementation must update shared ability constants, checks, operation
+metadata, skills, provisioning examples, tests, UCAN.md, relevant subsystem
+docs and the COG contracts together. Any compatibility mapping must respect
+proof attenuation and never widen what an old grant permitted.
+
+Acceptance must cover:
+
+- Exact admin leaf, parent and unrelated-family grants; resource boundaries
+  between users and between a user and the venue; `*` and owner behavior.
+- Direct user, capped/unrestricted agent, ordinary delegated caller and
+  restricted/unrestricted MCP token, including tokens created by tokens.
+- REST job-free reads, `/run`, `/invoke`, bound MCP tools, agent tools and
+  direct adapter calls: the same action has the same privilege requirement.
+- Sudo's separate namespace, invocation and action checks; clone's two
+  targets; GC with restart; every direct-identity and source-authority rule.
+- Grant issuance and chain delegation, including `grant/admin/…`, expiry,
+  unknown caveats and the agreed legacy-grant behavior.
+- Scheduled and resumed work, narrowing/revocation where supported, and
+  secret-safe success/denial audit records.
+
+## Implementation references
+
+- [Abilities](../../covia-core/src/main/java/covia/api/Abilities.java): shared ability vocabulary.
+- [Engine](../src/main/java/covia/venue/Engine.java): resource authority, venue administration, sudo, direct-venue checks and outbound bypass.
+- [UserAdapter](../src/main/java/covia/adapter/UserAdapter.java) and [UserAPI](../src/main/java/covia/venue/api/UserAPI.java): account administration and shared REST read checks.
+- [VenueAdapter](../src/main/java/covia/adapter/VenueAdapter.java), [P2PAdapter](../src/main/java/covia/adapter/P2PAdapter.java) and [MCPAdapter](../src/main/java/covia/adapter/MCPAdapter.java): shared facilities and tokens.
+- [ClaudeCodeAdapter](../../covia-claude-code/src/main/java/covia/adapter/claudecode/ClaudeCodeAdapter.java): optional module's venue project registry.
+- [AgentAdapter](../src/main/java/covia/adapter/AgentAdapter.java), [SecretAdapter](../src/main/java/covia/adapter/SecretAdapter.java), [AuthAdapter](../src/main/java/covia/adapter/AuthAdapter.java), [HITLAdapter](../src/main/java/covia/adapter/HITLAdapter.java) and [UCANAdapter](../src/main/java/covia/adapter/UCANAdapter.java): user privileges and identity restrictions.
+- [Audit](../src/main/java/covia/venue/Audit.java): current audit event vocabulary and logging contract.
