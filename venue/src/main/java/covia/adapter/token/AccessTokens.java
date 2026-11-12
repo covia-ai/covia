@@ -1,6 +1,7 @@
-package covia.adapter;
+package covia.adapter.token;
 
 import java.security.SecureRandom;
+import java.util.function.Predicate;
 import java.util.function.UnaryOperator;
 
 import convex.core.crypto.Hashing;
@@ -20,7 +21,8 @@ import convex.lattice.cursor.AForkableCursor;
 import covia.api.Fields;
 
 /**
- * The MCP tokens a venue holds, as the mcp adapter's state (MCP_TOKENS.md):
+ * The access tokens a venue holds, as the token adapter's state
+ * (ACCESS_TOKENS.md):
  *
  * <pre>
  *   tokens:  { &lt;owner DID&gt;: { &lt;name&gt;: record } }
@@ -28,34 +30,34 @@ import covia.api.Fields;
  * </pre>
  *
  * <p>A record and its bearer entry change together, each change in one
- * transaction. The venue stores a bearer's hash, and the bearer itself only
- * sealed, while it keeps raw tokens.</p>
+ * transaction. It knows the records and their bearers, nothing of who may
+ * change them or of what an access point keeps in its entry.</p>
  */
-public final class McpTokens extends ALatticeComponent<ACell>
-		implements TransactionalComponent<ACell, McpTokens> {
+public final class AccessTokens extends ALatticeComponent<ACell>
+		implements TransactionalComponent<ACell, AccessTokens> {
 
 	static final AString TOKENS = Strings.intern("tokens");
 	static final AString BEARERS = Strings.intern("bearers");
 	static final AString HASH = Strings.intern("hash");
-	/** A record's bearer, sealed ({@link covia.venue.SecretStore#seal}), while the venue keeps raw tokens. */
+	/** A record's bearer, sealed ({@link covia.venue.SecretStore#seal}), while the venue keeps bearers. */
 	static final AString SEALED = Strings.intern("sealed");
 
-	/** What every bearer starts with, so it is told from a JWT and secret scanners know it. */
-	public static final String BEARER_PREFIX = "cvmcp_";
+	/** What every bearer starts with, so it is told from other credentials and secret scanners know it. */
+	public static final String BEARER_PREFIX = "cvtok_";
 
 	private static final SecureRandom RANDOM = new SecureRandom();
 
-	McpTokens(AForkableCursor<ACell> cursor) {
+	AccessTokens(AForkableCursor<ACell> cursor) {
 		super(cursor);
 	}
 
 	@Override
-	public McpTokens rebind(AForkableCursor<ACell> cursor) {
-		return new McpTokens(cursor);
+	public AccessTokens rebind(AForkableCursor<ACell> cursor) {
+		return new AccessTokens(cursor);
 	}
 
 	@Override
-	public McpTokens withCursor(AForkableCursor<ACell> cursor) {
+	public AccessTokens withCursor(AForkableCursor<ACell> cursor) {
 		return rebind(cursor);
 	}
 
@@ -76,14 +78,13 @@ public final class McpTokens extends ALatticeComponent<ACell>
 		return Strings.create(Hashing.sha3(bearer).toHexString());
 	}
 
-	/** Whether a presented bearer has an MCP token's form, so is looked up here and nowhere else. */
+	/** Whether a presented bearer has an access token's form, so is looked up here and nowhere else. */
 	public static boolean isBearer(String bearer) {
 		return bearer != null && bearer.startsWith(BEARER_PREFIX);
 	}
 
 	private AMap<AString, ACell> root() {
-		AMap<AString, ACell> root = RT.ensureMap(cursor().getOrDefault(null));
-		return (root == null) ? Maps.empty() : root;
+		return map(cursor().getOrDefault(null));
 	}
 
 	private static AMap<AString, ACell> map(ACell cell) {
@@ -92,13 +93,13 @@ public final class McpTokens extends ALatticeComponent<ACell>
 	}
 
 	/** The token {@code name} in {@code owner}'s namespace, which need not exist. */
-	public McpToken token(AString owner, AString name) {
-		return new McpToken(cursor().path(TOKENS, owner, name), owner, name);
+	public AccessToken token(AString owner, AString name) {
+		return new AccessToken(cursor().path(TOKENS, owner, name), owner, name);
 	}
 
 	/** Every token in {@code owner}'s namespace, by name; empty when there are none. */
 	public AMap<AString, ACell> list(AString owner) {
-		return map(map(root().get(TOKENS)).get(owner));
+		return list(root(), owner);
 	}
 
 	/**
@@ -145,15 +146,16 @@ public final class McpTokens extends ALatticeComponent<ACell>
 	}
 
 	/**
-	 * Removes a token and its bearer entry.
+	 * Removes a token and its bearer entry, if its record as it stands is
+	 * still the one {@code only} accepts.
 	 *
-	 * @return the record removed, or null when there was none
+	 * @return the record removed, or null when there was none it accepts
 	 */
-	public AMap<AString, ACell> delete(AString owner, AString name) {
+	public AMap<AString, ACell> delete(AString owner, AString name, Predicate<AMap<AString, ACell>> only) {
 		return transact(draft -> {
 			AMap<AString, ACell> root = draft.root();
-			AMap<AString, ACell> record = RT.ensureMap(map(map(root.get(TOKENS)).get(owner)).get(name));
-			if (record == null) return null;
+			AMap<AString, ACell> record = RT.ensureMap(list(root, owner).get(name));
+			if (record == null || !only.test(record)) return null;
 			draft.cursor().set(without(root, owner, name, record));
 			return record;
 		});
@@ -193,7 +195,7 @@ public final class McpTokens extends ALatticeComponent<ACell>
 		});
 	}
 
-	/** Removes every kept bearer, when the venue stops keeping raw tokens. */
+	/** Removes every kept bearer, when the venue stops keeping them. */
 	public void dropKept() {
 		cursor().updateAndGet(value -> {
 			AMap<AString, ACell> root = map(value);
@@ -225,20 +227,20 @@ public final class McpTokens extends ALatticeComponent<ACell>
 		AString name = RT.ensureString(at.get(1));
 		AMap<AString, ACell> record = RT.ensureMap(list(root, owner).get(name));
 		if (record == null) return null;
-		return McpToken.reference(owner, name, RT.ensureString(record.get(Fields.ID)));
+		return AccessToken.reference(owner, name, RT.ensureString(record.get(Fields.ID)));
 	}
 
 	/**
 	 * The token a reference names, while it stands: a record of that name and
 	 * id that has not expired at {@code now}; otherwise null.
 	 */
-	public McpToken resolve(AMap<AString, ACell> reference, long now) {
+	public AccessToken resolve(AMap<AString, ACell> reference, long now) {
 		if (reference == null) return null;
 		AString owner = RT.ensureString(reference.get(Fields.OWNER));
 		AString name = RT.ensureString(reference.get(Fields.NAME));
 		AString id = RT.ensureString(reference.get(Fields.ID));
 		if (owner == null || name == null || id == null) return null;
-		McpToken token = token(owner, name);
+		AccessToken token = token(owner, name);
 		if (!id.equals(token.id()) || token.expired(now)) return null;
 		return token;
 	}

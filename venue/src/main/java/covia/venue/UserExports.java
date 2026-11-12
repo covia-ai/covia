@@ -203,7 +203,7 @@ public final class UserExports {
 
 	/**
 	 * {@code state} with each agent's controller kept only where it is
-	 * {@code did} itself or one of its agents, and the MCP token narrowing it
+	 * {@code did} itself or one of its agents, and the access token narrowing it
 	 * only where that token is {@code did}'s. A controller or token anywhere
 	 * else authorised none of this copy, so the agent returns to its owner's
 	 * control.

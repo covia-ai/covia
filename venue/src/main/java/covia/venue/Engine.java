@@ -70,8 +70,9 @@ import covia.adapter.JVMAdapter;
 import covia.adapter.SchemaAdapter;
 import covia.adapter.LangChainAdapter;
 import covia.adapter.MCPAdapter;
-import covia.adapter.McpToken;
-import covia.adapter.McpTokens;
+import covia.adapter.token.AccessToken;
+import covia.adapter.token.AccessTokens;
+import covia.adapter.token.TokenAdapter;
 import covia.adapter.Orchestrator;
 import covia.adapter.SecretAdapter;
 import covia.adapter.DLFSAdapter;
@@ -1087,6 +1088,7 @@ public class Engine {
 			new SchemaAdapter(),
 			new JSONAdapter(),
 			new Orchestrator(),
+			new TokenAdapter(),
 			new MCPAdapter(),
 			new LangChainAdapter(),
 			new CoviaAdapter(),
@@ -3895,8 +3897,8 @@ public class Engine {
 	/** Refusals of an explicit namespace switch. */
 	public static final String SUDO_AUTH_REQUIRED = "Authentication required for " + Abilities.ADMIN_SUDO;
 	public static final String SUDO_DENIED = "Sudo denied: requires " + Abilities.ADMIN_SUDO + " on %s from that user";
-	/** Why a request an MCP token narrows may not act for another user. */
-	public static final String SUDO_WITH_TOKEN = "A request through an MCP token cannot act for another user (admin/sudo)";
+	/** Why a request an access token narrows may not act for another user. */
+	public static final String SUDO_WITH_TOKEN = "A request through an access token cannot act for another user (admin/sudo)";
 
 	/**
 	 * Authorises an explicit request to execute within another user's namespace.
@@ -4405,7 +4407,7 @@ public class Engine {
 	 * with the same authority: a separate authority
 	 * ({@link RequestContext#withAuthorityOf}) as its principal
 	 * ({@link Fields#CALLER}), namespace ({@link Fields#OWNER}) and presented
-	 * {@link Fields#PROOFS}, and the MCP token narrowing it as
+	 * {@link Fields#PROOFS}, and the access token narrowing it as
 	 * {@link Fields#MCP_TOKEN}. Null when it acts with its caller's own,
 	 * unnarrowed.
 	 */
@@ -4449,9 +4451,9 @@ public class Engine {
 	}
 
 	/**
-	 * A source of authority: a principal, and the MCP token narrowing it, if
-	 * any (MCP_TOKENS.md). An agent's controller is one, and so is what an MCP
-	 * token's request acts with. A token stands for the chain of tokens whose
+	 * A source of authority: a principal, and the access token narrowing it, if
+	 * any (ACCESS_TOKENS.md). An agent's controller is one, and so is what an
+	 * access token's request acts with. A token stands for the chain of tokens whose
 	 * requests created it ({@link #tokenChain}).
 	 *
 	 * @param principal the principal whose authority it is
@@ -4463,7 +4465,7 @@ public class Engine {
 	 * Whether {@code ctx} acts with all of {@code source}'s authority, as
 	 * changing what that source created needs: it holds the principal's whole
 	 * authority ({@link #holdsAuthorityOf(RequestContext, AString)}, ignoring
-	 * tokens), and the MCP tokens narrowing it, once those it shares with the
+	 * tokens), and the access tokens narrowing it, once those it shares with the
 	 * source's chain are set aside, are all unrestricted. So a request through
 	 * a token holds what that token's requests created, but not the token
 	 * itself, nor what its issuer created directly.
@@ -4476,13 +4478,13 @@ public class Engine {
 		long shared = 0;
 		while (shared < held.count() && shared < needed.count() && held.get(shared).equals(needed.get(shared))) shared++;
 		for (long i = shared; i < held.count(); i++) {
-			McpToken token = resolveToken(RT.ensureMap(held.get(i)));
+			AccessToken token = resolveToken(RT.ensureMap(held.get(i)));
 			if (token == null || !token.caps().isUnrestricted()) return false;
 		}
 		return true;
 	}
 
-	/** {@link #holdsAuthorityOf(RequestContext, AString)} before any MCP token narrowing is considered. */
+	/** {@link #holdsAuthorityOf(RequestContext, AString)} before any access token narrowing is considered. */
 	private boolean holdsWholeAuthorityOf(RequestContext ctx, AString principal) {
 		if (ctx == null || principal == null) return false;
 		AString caller = ctx.getCallerDID();
@@ -4497,8 +4499,8 @@ public class Engine {
 
 	/**
 	 * The source of authority {@code ctx} acts with, which what it creates
-	 * (an agent's controller, an MCP token) takes as its own: its acting
-	 * principal ({@link #actingPrincipal}) and the innermost MCP token
+	 * (an agent's controller, an access token) takes as its own: its acting
+	 * principal ({@link #actingPrincipal}) and the innermost access token
 	 * narrowing it, if any.
 	 */
 	public static Source actingSource(RequestContext ctx) {
@@ -4565,27 +4567,27 @@ public class Engine {
 		return ctx.withAuthorityOf(narrowedByToken(held, token));
 	}
 
-	// ========== MCP tokens (MCP_TOKENS.md) ==========
+	// ========== Access tokens (ACCESS_TOKENS.md) ==========
 
-	/** Why a request an MCP token narrowed may not go on; the token's name follows. */
-	public static final String TOKEN_NOT_STANDING = "The MCP token no longer stands (deleted, expired or replaced): ";
+	/** Why a request an access token narrowed may not go on; the token's name follows. */
+	public static final String TOKEN_NOT_STANDING = "The access token no longer stands (deleted, expired or replaced): ";
 
 	/** Furthest a chain of tokens created by tokens' requests is followed. */
 	private static final int MAX_TOKEN_CHAIN = 16;
 
-	/** The venue's MCP tokens, or null while the mcp adapter is not running. */
-	public McpTokens mcpTokens() {
-		return (getAdapter("mcp") instanceof MCPAdapter mcp) ? mcp.tokens() : null;
+	/** The venue's access tokens, or null while the token adapter is not running. */
+	public AccessTokens tokens() {
+		return (getAdapter(TokenAdapter.NAME) instanceof TokenAdapter adapter) ? adapter.tokens() : null;
 	}
 
 	/** The token {@code reference} names, while it stands; otherwise null. */
-	public McpToken resolveToken(AMap<AString, ACell> reference) {
-		McpTokens tokens = mcpTokens();
+	public AccessToken resolveToken(AMap<AString, ACell> reference) {
+		AccessTokens tokens = tokens();
 		return (tokens == null || reference == null) ? null : tokens.resolve(reference, currentTimestamp().longValue());
 	}
 
 	/**
-	 * The context a request presenting MCP token {@code reference} acts under
+	 * The context a request presenting access token {@code reference} acts under
 	 * now: its issuer as that principal acts in the token's namespace
 	 * ({@link #context(AString, AString)}), narrowed by the caps of every token
 	 * on its chain ({@link #tokenChain}), each read at each point of action. A
@@ -4594,7 +4596,7 @@ public class Engine {
 	 * @throws AuthException when the token does not stand now, or its issuer could not act
 	 */
 	public RequestContext tokenContext(AMap<AString, ACell> reference) {
-		McpToken token = resolveToken(reference);
+		AccessToken token = resolveToken(reference);
 		if (token == null) throw new AuthException(TOKEN_NOT_STANDING + RT.getIn(reference, Fields.NAME));
 		return narrowedByToken(context(token.owner(), token.issuer()), reference);
 	}
@@ -4610,7 +4612,7 @@ public class Engine {
 		AMap<AString, ACell> at = reference;
 		while (at != null && chain.size() < MAX_TOKEN_CHAIN && !chain.contains(at)) {
 			chain.addFirst(at);
-			McpToken token = resolveToken(at);
+			AccessToken token = resolveToken(at);
 			at = (token == null) ? null : token.source();
 		}
 		return Vectors.create(chain);
@@ -4623,7 +4625,7 @@ public class Engine {
 		for (ACell link : tokenChain(token)) {
 			AMap<AString, ACell> reference = RT.ensureMap(link);
 			ctx = ctx.withToken(reference, resource -> {
-				McpToken current = resolveToken(reference);
+				AccessToken current = resolveToken(reference);
 				return (current == null) ? Vectors.empty() : current.caps().scope();
 			}, owner);
 		}
@@ -4749,14 +4751,14 @@ public class Engine {
 	}
 
 	/**
-	 * Whether every MCP token narrowing the request covers
+	 * Whether every access token narrowing the request covers
 	 * {@code (resource, ability)}: what it holds beyond its scope (a proof, an
 	 * admission, the public scope) reaches only as far as its tokens' caps do.
 	 * True when no token narrows it.
 	 */
 	private boolean tokensCover(RequestContext ctx, AString resource, AString ability, AString destination) {
 		for (ACell link : ctx.getTokens()) {
-			McpToken token = resolveToken(RT.ensureMap(link));
+			AccessToken token = resolveToken(RT.ensureMap(link));
 			if (token == null) return false;
 			AVector<ACell> caps = token.caps().scope();
 			if (caps != null && ctx.denialUnder(caps, resource, ability, token.owner(), destination) != null) return false;
@@ -4865,7 +4867,7 @@ public class Engine {
 
 	/**
 	 * Whether the request is the venue acting directly as itself: the venue's
-	 * own DID, not one of its agents, and not narrowed by an MCP token. No
+	 * own DID, not one of its agents, and not narrowed by an access token. No
 	 * delegation makes another caller this.
 	 */
 	public boolean isDirectVenue(RequestContext ctx) {

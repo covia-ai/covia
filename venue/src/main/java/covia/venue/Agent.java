@@ -59,7 +59,7 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 	public static final AString KEY_AGENT = Strings.intern("agent");
 	/** The principal whose authority the agent's harness runs under, absent for its owner. */
 	public static final AString KEY_CONTROLLER = Fields.CONTROLLER;
-	/** The MCP token narrowing its controller's authority, when a request a token narrowed created it. */
+	/** The access token narrowing its controller's authority, when a request a token narrowed created it. */
 	public static final AString KEY_CONTROLLER_TOKEN = Fields.CONTROLLER_TOKEN;
 	public static final AString KEY_EXTERNAL = Strings.intern("external");
 	/** Present only for a deliberate stop; faults use {@link #KEY_ERROR}. */
@@ -270,7 +270,7 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 
 	/**
 	 * {@code record} with {@code controller}: its principal, stored only when
-	 * it is not the owner, and the MCP token narrowing it, if any.
+	 * it is not the owner, and the access token narrowing it, if any.
 	 */
 	private AMap<AString, ACell> withController(AMap<AString, ACell> record, Engine.Source controller) {
 		AString principal = (controller == null) ? null : controller.principal();
@@ -321,13 +321,13 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 		return (stored != null) ? stored : owner;
 	}
 
-	/** The MCP token narrowing its controller's authority, or null when none does. */
+	/** The access token narrowing its controller's authority, or null when none does. */
 	public AMap<AString, ACell> getControllerToken() {
 		AMap<AString, ACell> r = getRecord();
 		return (r != null) ? RT.ensureMap(r.get(KEY_CONTROLLER_TOKEN)) : null;
 	}
 
-	/** Its controller and the MCP token narrowing it, as one source of authority. */
+	/** Its controller and the access token narrowing it, as one source of authority. */
 	public Engine.Source getControllerSource() {
 		return new Engine.Source(getController(), getControllerToken());
 	}

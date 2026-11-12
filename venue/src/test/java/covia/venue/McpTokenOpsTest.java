@@ -14,6 +14,7 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import covia.adapter.MCPAdapter;
+import covia.adapter.token.TokenAdapter;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
@@ -53,7 +54,7 @@ public class McpTokenOpsTest {
 		RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));
 		AVector<ACell> read = Vectors.of("v/ops/covia/read");
 
-		assertEquals(MCPAdapter.TOKEN_NAME_INVALID, failure(create(owner, "Not A Name", read)));
+		assertEquals(TokenAdapter.TOKEN_NAME_INVALID, failure(create(owner, "Not A Name", read)));
 		assertEquals(MCPAdapter.TOOLS_INVALID, failure(run("v/ops/mcp/create-token", Maps.of(Fields.NAME, "none"), owner)));
 		assertEquals(MCPAdapter.TOOL_NOT_HELD.formatted(1, "v/ops/no/such-op"),
 			failure(create(owner, "missing", Vectors.of("v/ops/covia/read", "v/ops/no/such-op"))));
@@ -66,8 +67,8 @@ public class McpTokenOpsTest {
 		complete(create(owner, "renamed",
 			Vectors.of("v/ops/covia/read", Maps.of(Fields.OPERATION, "v/ops/covia/write", Fields.NAME, "covia_put"))));
 		complete(create(owner, "taken", read));
-		assertEquals(MCPAdapter.TOKEN_EXISTS.formatted("taken"), failure(create(owner, "taken", read)));
-		assertEquals(MCPAdapter.TOKEN_NOT_FOUND.formatted("absent"),
+		assertEquals(TokenAdapter.TOKEN_EXISTS.formatted("taken"), failure(create(owner, "taken", read)));
+		assertEquals(TokenAdapter.TOKEN_NOT_FOUND.formatted("absent"),
 			failure(run("v/ops/mcp/update-token", Maps.of(Fields.NAME, "absent", Fields.TOOLS, read), owner)));
 	}
 
@@ -100,10 +101,10 @@ public class McpTokenOpsTest {
 		AString alice = TestEngine.uniqueDID(info);
 		String bearer = RT.getIn(complete(create(RequestContext.of(alice), "doomed", Vectors.of("v/ops/covia/read"))),
 			Fields.TOKEN).toString();
-		assertNotNull(engine.mcpTokens().lookup(bearer));
+		assertNotNull(engine.tokens().lookup(bearer));
 
 		engine.deleteUser(engine.venueContext(), alice);
-		assertNull(engine.mcpTokens().lookup(bearer));
-		assertNull(engine.mcpTokens().token(alice, Strings.create("doomed")).record());
+		assertNull(engine.tokens().lookup(bearer));
+		assertNull(engine.tokens().token(alice, Strings.create("doomed")).record());
 	}
 }

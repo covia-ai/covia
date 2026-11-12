@@ -1,0 +1,59 @@
+{
+	"name": "Token Update",
+	"description": "Changes an access token in your namespace: its access (replacing every entry), its caps or its expiry, or gives it a new bearer with rotate (the old one stops working at once). What you leave out stays as it is. Changes take effect at the next check, including on work the token already started. Token administration: needs admin/token/<access point> on x/tokens/<name> for every access point the token carries before and after, and the authority the token was created with.",
+	"dateCreated": "2026-11-12T00:00:00Z",
+	"operation": {
+		"adapter": "token:update",
+		"readOnly": false,
+		"secretFields": ["token"],
+		"input": {
+			"type": "object",
+			"properties": {
+				"name": { "type": "string", "description": "The token's name" },
+				"access": {
+					"type": "object",
+					"description": "Its access points now, each with its entry, as for v/ops/token/create",
+					"properties": {
+						"mcp": {
+							"type": "object",
+							"properties": { "tools": { "type": "array", "items": {} } },
+							"required": ["tools"]
+						}
+					},
+					"additionalProperties": { "type": "object" },
+					"minProperties": 1
+				},
+				"caps": {
+					"description": "Its caps now: an array of {with, can} capabilities, or \"unrestricted\"",
+					"oneOf": [
+						{ "type": "array", "items": {
+							"type": "object",
+							"properties": {
+								"with": { "type": "string", "description": "Resource path or prefix, such as w/shared/" },
+								"can": { "type": "string", "description": "One ability, such as crud/read. To grant multiple abilities, use a separate capability entry for each." },
+								"nb": { "type": "object", "description": "Optional capability caveats" }
+							},
+							"required": ["with", "can"]
+						} },
+						{ "type": "string", "enum": ["unrestricted"] }
+					]
+				},
+				"expires": { "type": "integer", "description": "When it stops working, in milliseconds since the epoch" },
+				"rotate": { "type": "boolean", "description": "Issue a new bearer, returned in this result; the old one stops working" }
+			},
+			"required": ["name"]
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"name": { "type": "string" },
+				"token": { "type": "string", "description": "The new bearer, only when rotated" },
+				"issuer": { "type": "string" },
+				"access": { "type": "object" },
+				"caps": {},
+				"expires": { "type": "integer" },
+				"created": { "type": "integer" }
+			}
+		}
+	}
+}

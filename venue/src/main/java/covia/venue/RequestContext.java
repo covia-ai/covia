@@ -343,7 +343,7 @@ public class RequestContext {
 	/**
 	 * Whether this request acts with the authority of the namespace it acts in:
 	 * always, unless it acts with a separate authority from another namespace
-	 * ({@link #withAuthorityOf}), or an MCP token narrows it, since no cap can
+	 * ({@link #withAuthorityOf}), or an access token narrows it, since no cap can
 	 * name such state to bound it. State a namespace keeps with no capability
 	 * resource of its own, such as a Python instance or a dictation, is
 	 * reachable only so.
@@ -409,7 +409,7 @@ public class RequestContext {
 	}
 
 	/**
-	 * A scope narrowed by MCP tokens: what it reads, and the tokens narrowing
+	 * A scope narrowed by access tokens: what it reads, and the tokens narrowing
 	 * it, outermost first, each as its reference ({@code {owner, name, id}}).
 	 * The tokens go wherever the scope does, so work the request keeps or
 	 * creates can record what narrowed it ({@link #getTokens}).
@@ -437,7 +437,7 @@ public class RequestContext {
 	}
 
 	/**
-	 * The MCP tokens narrowing the authority this request acts with, outermost
+	 * The access tokens narrowing the authority this request acts with, outermost
 	 * first, each as its reference; empty when no token narrows it.
 	 */
 	public AVector<ACell> getTokens() {

@@ -72,7 +72,7 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 	public static final String SEPARATE_AUTHORITY_CREATOR = "a bot acts as its creator, so a request acting with "
 		+ "another principal's authority cannot create one";
 	public static final String TOKEN_CREATOR = "a bot acts as its creator with all of its authority, so a request "
-		+ "through an MCP token, which holds less, cannot create one";
+		+ "through an access token, which holds less, cannot create one";
 	/** Creating or deleting a bot while its adapter's bots are stopped; the provider follows. */
 	public static final String NOT_RUNNING = "The %s adapter is not running";
 

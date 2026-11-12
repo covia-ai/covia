@@ -20,8 +20,8 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
-import covia.adapter.MCPAdapter;
-import covia.adapter.McpToken;
+import covia.adapter.token.AccessToken;
+import covia.adapter.token.TokenAdapter;
 import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.AuthException;
@@ -45,7 +45,7 @@ public class McpTokenVenueTest {
 	@BeforeAll
 	static void launch() {
 		engine = Engine.createTemp(CLOCK, Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true),
-			Config.ADAPTERS, Maps.of("mcp", KEEP)));
+			Config.ADAPTERS, Maps.of("token", KEEP)));
 		Engine.addDemoAssets(engine);
 	}
 
@@ -88,8 +88,8 @@ public class McpTokenVenueTest {
 
 	/** The request of the token {@code bearer} names calls tool {@code ref}, as the MCP endpoint would. */
 	private Job tool(String bearer, String ref, ACell input) {
-		AMap<AString, ACell> reference = engine.mcpTokens().lookup(bearer);
-		McpToken token = engine.resolveToken(reference);
+		AMap<AString, ACell> reference = engine.tokens().lookup(bearer);
+		AccessToken token = engine.resolveToken(reference);
 		Operation operation = engine.jobs().resolveOperation(Strings.create(ref), engine.context(token.owner(), token.issuer()));
 		Job job = engine.jobs().startToolOperation(Strings.create(ref), operation, input, engine.tokenContext(reference)).job();
 		TestEngine.awaitJob(job, Job::isFinished, 10000, () -> ref + " never finished");
@@ -101,12 +101,12 @@ public class McpTokenVenueTest {
 		AString alice = TestEngine.uniqueDID(info);
 		RequestContext owner = RequestContext.of(alice);
 		long now = engine.currentTimestamp().longValue();
-		assertEquals(MCPAdapter.EXPIRES_INVALID,
+		assertEquals(TokenAdapter.EXPIRES_INVALID,
 			failure(create(owner, Maps.of(Fields.NAME, "past", Fields.EXPIRES, CVMLong.create(now)))));
 
 		String bearer = bearer(complete(create(owner, Maps.of(Fields.NAME, "brief", Fields.EXPIRES, CVMLong.create(now + 60_000),
 			Fields.CAPS, covia.lattice.Caps.UNRESTRICTED))));
-		AMap<AString, ACell> reference = engine.mcpTokens().lookup(bearer);
+		AMap<AString, ACell> reference = engine.tokens().lookup(bearer);
 		RequestContext through = engine.tokenContext(reference);
 		AString doc = Strings.create(alice + "/w/doc");
 		assertTrue(engine.authorityCovers(through, doc, Capability.CRUD_READ));
@@ -127,29 +127,29 @@ public class McpTokenVenueTest {
 		RequestContext owner = RequestContext.of(alice);
 		String first = bearer(complete(create(owner, Maps.of(Fields.NAME, "kept"))));
 		assertEquals(first, bearer(complete(get(owner, "kept"))));
-		assertFalse(engine.mcpTokens().token(alice, Strings.create("kept")).record().toString().contains(first),
+		assertFalse(engine.tokens().token(alice, Strings.create("kept")).record().toString().contains(first),
 			"the venue keeps a bearer only sealed");
 
 		String rotated = bearer(complete(run("v/ops/mcp/update-token", Maps.of(Fields.NAME, "kept", Fields.ROTATE, true), owner)));
 		assertNotEquals(first, rotated);
-		assertNull(engine.mcpTokens().lookup(first), "rotation retires the old bearer");
+		assertNull(engine.tokens().lookup(first), "rotation retires the old bearer");
 		assertEquals(rotated, bearer(complete(get(owner, "kept"))));
-		assertEquals(MCPAdapter.KEEP_RAW_NOT_BOOLEAN, assertThrows(ConfigurationException.class,
-			() -> engine.configureAdapter("mcp", Maps.of("keepRawTokens", "yes"))).getMessage());
+		assertEquals(TokenAdapter.KEEP_RAW_NOT_BOOLEAN, assertThrows(ConfigurationException.class,
+			() -> engine.configureAdapter("token", Maps.of("keepRawTokens", "yes"))).getMessage());
 		assertEquals(rotated, bearer(complete(get(owner, "kept"))), "a refused setting changes nothing");
 
 		try {
-			engine.configureAdapter("mcp", Maps.empty());
-			assertNull(engine.mcpTokens().token(alice, Strings.create("kept")).sealedBearer(), "turning it off drops kept bearers");
-			assertEquals(MCPAdapter.RAW_NOT_KEPT, failure(get(owner, "kept")));
-			assertNotNull(engine.mcpTokens().lookup(rotated), "the token itself still stands");
+			engine.configureAdapter("token", Maps.empty());
+			assertNull(engine.tokens().token(alice, Strings.create("kept")).sealedBearer(), "turning it off drops kept bearers");
+			assertEquals(TokenAdapter.RAW_NOT_KEPT, failure(get(owner, "kept")));
+			assertNotNull(engine.tokens().lookup(rotated), "the token itself still stands");
 
-			engine.configureAdapter("mcp", KEEP);
-			assertEquals(MCPAdapter.RAW_NOT_HELD.formatted("kept"), failure(get(owner, "kept")));
+			engine.configureAdapter("token", KEEP);
+			assertEquals(TokenAdapter.RAW_NOT_HELD.formatted("kept"), failure(get(owner, "kept")));
 			String again = bearer(complete(run("v/ops/mcp/update-token", Maps.of(Fields.NAME, "kept", Fields.ROTATE, true), owner)));
 			assertEquals(again, bearer(complete(get(owner, "kept"))));
 		} finally {
-			engine.configureAdapter("mcp", KEEP);
+			engine.configureAdapter("token", KEEP);
 		}
 	}
 
@@ -158,8 +158,8 @@ public class McpTokenVenueTest {
 		AString alice = TestEngine.uniqueDID(info);
 		RequestContext owner = RequestContext.of(alice);
 		AMap<AString, ACell> tools = Maps.of(Fields.TOOLS, Vectors.of("v/ops/mcp/get-token", "v/ops/mcp/create-token"));
-		ACell manage = cap("x/mcp/tokens/", Abilities.MCP_TOKEN);
-		ACell admin = cap("x/mcp/tokens/", Abilities.ADMIN_TOKEN_MCP);
+		ACell manage = cap("x/tokens/", Abilities.MCP_TOKEN);
+		ACell admin = cap("x/tokens/", Abilities.ADMIN_TOKEN_MCP);
 		String plain = bearer(complete(run("v/ops/mcp/create-token",
 			tools.assoc(Fields.NAME, Strings.create("plain")).assoc(Fields.CAPS, Vectors.of(manage)), owner)));
 		String administrator = bearer(complete(run("v/ops/mcp/create-token",
@@ -173,9 +173,9 @@ public class McpTokenVenueTest {
 		String child = bearer(complete(tool(administrator, "v/ops/mcp/create-token",
 			Maps.of(Fields.NAME, "admin-child", Fields.TOOLS, Vectors.of("v/ops/covia/read")))));
 		assertEquals(child, bearer(complete(tool(administrator, "v/ops/mcp/get-token", Maps.of(Fields.NAME, "admin-child")))));
-		assertEquals(MCPAdapter.TOKEN_SOURCE_NOT_HELD.formatted("administrator"),
+		assertEquals(TokenAdapter.TOKEN_SOURCE_NOT_HELD.formatted("administrator"),
 			failure(tool(administrator, "v/ops/mcp/get-token", Maps.of(Fields.NAME, "administrator"))));
-		assertEquals(MCPAdapter.TOKEN_SOURCE_NOT_HELD.formatted("plain"),
+		assertEquals(TokenAdapter.TOKEN_SOURCE_NOT_HELD.formatted("plain"),
 			failure(tool(administrator, "v/ops/mcp/get-token", Maps.of(Fields.NAME, "plain"))));
 	}
 
@@ -187,8 +187,8 @@ public class McpTokenVenueTest {
 			String source = bearer(complete(run("v/ops/mcp/create-token", Maps.of(
 				Fields.NAME, "source-" + i,
 				Fields.TOOLS, Vectors.of("v/ops/mcp/create-token", "v/ops/mcp/get-token"),
-				Fields.CAPS, Vectors.of(cap("x/mcp/tokens/", Abilities.MCP_TOKEN),
-					cap("x/mcp/tokens/", Strings.create(abilities[i])))), owner)));
+				Fields.CAPS, Vectors.of(cap("x/tokens/", Abilities.MCP_TOKEN),
+					cap("x/tokens/", Strings.create(abilities[i])))), owner)));
 			String name = "child-" + i;
 			String child = bearer(complete(tool(source, "v/ops/mcp/create-token",
 				Maps.of(Fields.NAME, name, Fields.TOOLS, Vectors.of("v/ops/covia/read")))));

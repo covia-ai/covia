@@ -1,6 +1,6 @@
 {
 	"name": "MCP Update Token",
-	"description": "Changes one of your MCP tokens: its tools, its caps or its expiry, or gives it a new bearer with rotate (the old one stops working at once). What you leave out stays as it is. Emptying its tools or caps revokes it. Changes take effect at the next check, including on work the token already started. Needs the mcp/token ability on x/mcp/tokens/<name>, and the authority the token was created with, so a request through a token can never widen it.",
+	"description": "Changes one of your MCP tokens: its tools, its caps or its expiry, or gives it a new bearer with rotate (the old one stops working at once). What you leave out stays as it is. Emptying its tools or caps revokes it. Changes take effect at the next check, including on work the token already started. Reaches only tokens accepted at MCP alone. Needs the mcp/token ability on x/tokens/<name>, and the authority the token was created with, so a request through a token can never widen it.",
 	"dateCreated": "2026-11-11T00:00:00Z",
 	"operation": {
 		"adapter": "mcp:token:update",

@@ -375,7 +375,7 @@ public class AgentAdapter extends AAdapter {
 	/**
 	 * The controller of an agent {@code ctx} creates or forks: the one the input
 	 * names, else the principal whose authority the request acts with
-	 * ({@link Engine#actingPrincipal}); either narrowed by the MCP token
+	 * ({@link Engine#actingPrincipal}); either narrowed by the access token
 	 * narrowing the request, if any, so the agent never exceeds it.
 	 */
 	private Engine.Source newController(RequestContext ctx, ACell input) {

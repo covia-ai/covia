@@ -19,7 +19,7 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import covia.adapter.HITLAdapter;
-import covia.adapter.McpToken;
+import covia.adapter.token.AccessToken;
 import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.AuthException;
@@ -62,12 +62,12 @@ public class McpTokenAuthorityTest {
 	private Issued issue(RequestContext issuer, String name, AVector<ACell> tools, ACell caps) {
 		String bearer = RT.getIn(complete(run("v/ops/mcp/create-token",
 			Maps.of(Fields.NAME, name, Fields.TOOLS, tools, Fields.CAPS, caps), issuer)), Fields.TOKEN).toString();
-		return new Issued(bearer, engine.mcpTokens().lookup(bearer));
+		return new Issued(bearer, engine.tokens().lookup(bearer));
 	}
 
 	/** The token's request calls tool {@code ref}, as the MCP endpoint would. */
 	private CompletableFuture<ACell> tool(Issued token, String ref, ACell input) {
-		McpToken standing = engine.resolveToken(token.ref());
+		AccessToken standing = engine.resolveToken(token.ref());
 		Operation operation = engine.jobs().resolveOperation(Strings.create(ref),
 			engine.context(standing.owner(), standing.issuer()));
 		return engine.jobs().startToolOperation(Strings.create(ref), operation, input, engine.tokenContext(token.ref())).result();
@@ -135,7 +135,7 @@ public class McpTokenAuthorityTest {
 	public void aTokenFollowsItsIssuersAuthority(TestInfo info) {
 		AString alice = TestEngine.uniqueDID(info);
 		ACell invoke = cap("v/ops/", Abilities.INVOKE);
-		ACell tokens = cap("x/mcp/tokens/", Abilities.MCP_TOKEN);
+		ACell tokens = cap("x/tokens/", Abilities.MCP_TOKEN);
 		RequestContext builder = agent(alice, "builder", Vectors.of(invoke, tokens,
 			cap("w/shared/", Capability.CRUD), cap("w/other/", Capability.CRUD)));
 		Issued wide = issue(builder, "wide", Vectors.of("v/ops/covia/write"), Caps.UNRESTRICTED);
@@ -154,10 +154,10 @@ public class McpTokenAuthorityTest {
 
 		// An issuer deleted takes its tokens with it, and one recreated in its place has none of them
 		complete(run("v/ops/agent/delete", Maps.of(Fields.AGENT_ID, "builder", Fields.REMOVE, true), RequestContext.of(alice)));
-		assertNull(engine.mcpTokens().lookup(wide.bearer()));
+		assertNull(engine.tokens().lookup(wide.bearer()));
 		assertFalse(mayWrite(through, alice, "w/other/x"));
 		agent(alice, "builder", Caps.UNRESTRICTED);
-		assertNull(engine.mcpTokens().lookup(wide.bearer()));
+		assertNull(engine.tokens().lookup(wide.bearer()));
 		assertFalse(mayWrite(through, alice, "w/other/x"));
 	}
 
@@ -166,7 +166,7 @@ public class McpTokenAuthorityTest {
 		AString alice = TestEngine.uniqueDID(info);
 		AVector<ACell> manage = Vectors.of("v/ops/mcp/create-token", "v/ops/mcp/update-token");
 		Issued narrow = issue(RequestContext.of(alice), "narrow", manage,
-			Vectors.of(cap("x/mcp/tokens/", Abilities.MCP_TOKEN), cap("w/shared/", Capability.CRUD)));
+			Vectors.of(cap("x/tokens/", Abilities.MCP_TOKEN), cap("w/shared/", Capability.CRUD)));
 
 		refused(tool(narrow, "v/ops/mcp/update-token", Maps.of(Fields.NAME, "narrow", Fields.CAPS, Caps.UNRESTRICTED)));
 		refused(tool(narrow, "v/ops/mcp/update-token", Maps.of(Fields.NAME, "narrow", Fields.ROTATE, true)));
@@ -174,7 +174,7 @@ public class McpTokenAuthorityTest {
 		// A token it makes is narrowed by it too, whatever its own caps say
 		String bearer = RT.getIn(done(tool(narrow, "v/ops/mcp/create-token", Maps.of(Fields.NAME, "child",
 			Fields.TOOLS, Vectors.of("v/ops/covia/write"), Fields.CAPS, Caps.UNRESTRICTED))), Fields.TOKEN).toString();
-		Issued child = new Issued(bearer, engine.mcpTokens().lookup(bearer));
+		Issued child = new Issued(bearer, engine.tokens().lookup(bearer));
 		RequestContext throughChild = engine.tokenContext(child.ref());
 		assertTrue(mayWrite(throughChild, alice, "w/shared/x"));
 		assertFalse(mayWrite(throughChild, alice, "w/private/x"));
@@ -228,7 +228,7 @@ public class McpTokenAuthorityTest {
 		AString alice = TestEngine.uniqueDID(info);
 		complete(run("v/ops/covia/write", Maps.of(Fields.PATH, "w/seed", Fields.VALUE, 0), RequestContext.of(alice)));
 		RequestContext helper = agent(alice, "helper", Vectors.of(cap("v/ops/", Abilities.INVOKE),
-			cap("x/mcp/tokens/", Abilities.MCP_TOKEN), cap("w/", Capability.CRUD), cap("j/", Abilities.JOB_READ)));
+			cap("x/tokens/", Abilities.MCP_TOKEN), cap("w/", Capability.CRUD), cap("j/", Abilities.JOB_READ)));
 		Job made = run("v/ops/covia/write", Maps.of(Fields.PATH, "w/made", Fields.VALUE, 1), helper);
 		complete(made);
 		AVector<ACell> tools = Vectors.of("v/ops/covia/read");

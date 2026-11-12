@@ -23,6 +23,9 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
+import covia.adapter.MCPAdapter;
+import covia.adapter.token.AccessTokens;
+import covia.venue.server.AuthMiddleware;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
@@ -119,9 +122,25 @@ public class MCPTokenTest {
 		String bearer = createToken(alice, "short-lived", Vectors.of("v/ops/covia/read"));
 		assertEquals(200, post(INITIALIZE, bearer, null).statusCode());
 
-		assertEquals(401, post(INITIALIZE, "cvmcp_" + "1".repeat(40), null).statusCode(), "a token never issued");
+		assertEquals(401, post(INITIALIZE, AccessTokens.BEARER_PREFIX + "1".repeat(40), null).statusCode(), "a token never issued");
 		run("v/ops/mcp/delete-token", Maps.of(Fields.NAME, "short-lived"), RequestContext.of(alice));
 		assertEquals(401, post(INITIALIZE, bearer, null).statusCode(), "a deleted token");
+	}
+
+	@Test
+	public void aTokenIsAcceptedOnlyWhereItHasAnEntry(TestInfo info) throws Exception {
+		AString alice = TestEngine.uniqueDID(info);
+		RequestContext owner = RequestContext.of(alice);
+		String bearer = RT.getIn(run("v/ops/token/create", Maps.of(Fields.NAME, "elsewhere",
+			Fields.ACCESS, Maps.of("test", Maps.empty())), owner).getOutput(), Fields.TOKEN).toString();
+
+		HttpResponse<String> refused = post(INITIALIZE, bearer, null);
+		assertEquals(401, refused.statusCode());
+		assertTrue(refused.body().contains(AuthMiddleware.TOKEN_NOT_ACCEPTED.formatted(MCPAdapter.ACCESS_POINT)), refused.body());
+
+		run("v/ops/token/update", Maps.of(Fields.NAME, "elsewhere", Fields.ACCESS, Maps.of("test", Maps.empty(),
+			MCPAdapter.ACCESS_POINT, Maps.of(Fields.TOOLS, Vectors.of("v/ops/covia/read")))), owner);
+		assertEquals(200, post(INITIALIZE, bearer, null).statusCode(), "accepted once it has an MCP entry");
 	}
 
 	@Test
