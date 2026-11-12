@@ -1277,7 +1277,7 @@ public class MCPAdapter extends AAdapter {
 	ACell handleGetToken(RequestContext ctx, ACell input) {
 		AString name = requireTokenName(input);
 		AString owner = tokenOwner(ctx);
-		engine.requireAuthority(ctx, tokenResource(name), Abilities.ADMIN_TOKEN);
+		engine.requireAuthority(ctx, tokenResource(name), Abilities.ADMIN_TOKEN_MCP);
 		if (!keepRawTokens()) throw new NotSupportedException(RAW_NOT_KEPT);
 		McpToken token = tokens().token(owner, name);
 		if (token.record() == null) throw new NotFoundException(TOKEN_NOT_FOUND.formatted(name), name.toString());

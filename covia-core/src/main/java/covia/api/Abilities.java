@@ -70,8 +70,9 @@ public final class Abilities {
 	public static final AString MCP_MANAGE    = Strings.intern("mcp/manage");
 	/** Create, change or delete an MCP token ({@code <did>/x/mcp/tokens/<name>}). */
 	public static final AString MCP_TOKEN     = Strings.intern("mcp/token");
-	/** Fetch an MCP token's bearer again, where the venue keeps it. */
-	public static final AString ADMIN_TOKEN   = Strings.intern("admin/token");
+	/** Fetch an MCP token's bearer again, where the venue keeps it.
+	 *  The {@code admin/token} parent covers administration of every token kind. */
+	public static final AString ADMIN_TOKEN_MCP = Strings.intern("admin/token/mcp");
 	public static final AString HITL_REQUEST  = Strings.intern("hitl/request");
 	public static final AString AGENT_CREATE  = Strings.intern("agent/create");
 	public static final AString AGENT_REQUEST = Strings.intern("agent/request");

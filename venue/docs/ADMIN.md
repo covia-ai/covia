@@ -1,11 +1,14 @@
 # Privileged operations
 
-Status: the admin ability organisation is implemented. Existing grants must
-be migrated separately; the former ability names are not accepted as aliases.
+Status: the admin ability organisation is implemented. Grants using the former
+user, adapter and venue administration names must be migrated separately;
+those names are not accepted as aliases.
 
-`admin/…` identifies venue-level administration that should not happen in
-normal workflows. The initial families are `admin/user`, `admin/adapter`,
-`admin/venue` and `admin/sudo`. Their existing resource scopes and additional
+`admin/…` identifies privileged controls outside normal workflows: venue
+administration, directly exercising an agent's authority, and retrieving
+retained bearer credentials. Venue administration uses `admin/user`,
+`admin/adapter`, `admin/venue` and `admin/sudo`; user-resource privileges use
+`admin/agent` and `admin/token/mcp`. Their resource scopes and additional
 authority rules are preserved. Explicit activation is outside this change.
 
 Managing something does not by itself make an operation high-level admin.
@@ -18,7 +21,7 @@ additional restrictions, regardless of how the action is reached.
 
 | Document | Owns |
 |----------|------|
-| **ADMIN.md (this document)** | Which operations count as venue administration; their ability names, target resources, additional restrictions and exceptions; separation from ordinary domain management; migration of those privileges |
+| **ADMIN.md (this document)** | Which operations are privileged; their ability names, target resources, additional restrictions and exceptions; separation from ordinary domain management; migration of those privileges |
 | [VENUE_AUTHORITY.md](VENUE_AUTHORITY.md) | The general authority-elevation model: base and additions, allowances, issuance, activation, expiry/revocation, deferred work, the venue's host power and the trusted-code boundary |
 | [UCAN.md](UCAN.md) | Capability matching and enforcement, ownership, proof validation, granting and delegation, and federation |
 | [AUTH.md](AUTH.md) | Authentication, identity evidence, sessions and assurance policy |
@@ -52,6 +55,8 @@ checks; its classification does not broaden what it permits.
 | `admin/adapter` | Administer the venue's installed adapters and modules |
 | `admin/venue` | Maintain the venue process and store |
 | `admin/sudo` | Explicitly enter another user's working namespace, with separately granted invocation and action authority |
+| `admin/agent` | Direct tool execution under an agent's effective authority |
+| `admin/token` | Administration across token kinds; `admin/token/mcp` retrieves a retained MCP bearer |
 
 Ordinary workflow grants should name their domain abilities and resources.
 They should not need an `admin` grant. An operator deliberately running an
@@ -147,16 +152,23 @@ manage MCP without becoming a venue administrator. Also avoid making a broad
 | Bypass of outbound target checks across adapters | `outbound/any` on `V/outbound` | Retain explicit bypass permission; outside the initial rename |
 | Optional Claude Code module's project `create` / `delete` | `claudecode/manage` on `V/claudecode/projects` | Retain separate operator permission; outside the initial rename |
 
-User-level controls also remain separate. Two existing abilities already use
-`admin` for user-resource actions: `admin/agent` and `admin/token`. These are
-exceptions to the intended venue-level vocabulary, not precedents for putting
-all management under `admin`. Review their naming separately; preserve their
-existing checks and names during the initial change.
+Two user-resource actions are explicitly privileged: `admin/agent` permits
+real tool execution under the agent's authority without a model deciding the
+calls, and `admin/token/mcp` permits retrieval of a reusable MCP credential.
+Both belong in `admin`; ordinary agent and MCP management remain separate.
 
-| Surface | Current check | Proposed treatment |
+`admin/token` is the parent for token administration across token kinds.
+`admin/token/mcp` is the MCP-specific leaf, on `U/x/mcp/tokens/<name>`.
+The ordinary prefix rule means existing `admin/token` grants still cover MCP
+retrieval on matching resources and will cover future descendants. Prefer a
+specific leaf when delegating access to only one kind. No other token-kind
+leaf is currently defined, and every retrieval retains its source-authority
+and storage restrictions.
+
+| Surface | Current check | Treatment |
 |---------|---------------|--------------------|
-| `agent:step` | `admin/agent` on `U/g/<id>`; executes caller-supplied tool calls under the target agent's authority | Existing naming exception; retain initially |
-| `mcp:get-token` | `admin/token` on `U/x/mcp/tokens/<name>`, token source authority, and retained bearer availability | Existing naming exception; retain initially |
+| `agent:step` | `admin/agent` on `U/g/<id>`; executes caller-supplied tool calls under the target agent's authority | Privileged execution under the agent's effective capabilities, unrestricted included |
+| `mcp:get-token` | `admin/token/mcp` on `U/x/mcp/tokens/<name>`, token source authority, and retained bearer availability | Privileged credential retrieval specific to MCP tokens |
 | `secret:extract` | `secret/extract` on own `s/<name>` and direct-owner, non-recorded-call restrictions | Retain its separate sensitive-operation permission |
 | Self-service account key changes and whole-state export | Whole-owner identity exception described above | Preserve self-service; it grants no venue-level account administration |
 | `mcp:create-token`, `mcp:update-token`, `mcp:delete-token` | `mcp/token` on `U/x/mcp/tokens/<name>`; creation checks issuer authority, update checks source authority; deletion only narrows | Retain independently managed token permissions |
@@ -238,9 +250,9 @@ policy changes to agree before implementation:
 
 The implemented scope organises venue-administration abilities under
 `admin/user`, `admin/adapter`, `admin/venue` and `admin/sudo`. MCP and other
-domain management remain separate, as do the existing `admin/agent` and
-`admin/token` naming exceptions. Activation and finer resource scopes remain
-separate changes.
+domain management remain separate from privileged agent execution
+(`admin/agent`) and credential retrieval (`admin/token/mcp`). Activation and
+finer resource scopes remain separate changes.
 
 This is a direct cutover, with no compatibility aliases or automatic grant
 migration. Replace grants, configured caps and grant-issuing clients separately:

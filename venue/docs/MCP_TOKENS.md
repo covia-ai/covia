@@ -78,7 +78,13 @@ minted by answering a HITL ask.
 | `v/ops/mcp/update-token` | `name`, `tools?`, `caps?`, `expires?`, `rotate?` | the token; `token` only on rotate | `mcp/token` and the token's source authority |
 | `v/ops/mcp/delete-token` | `name` | `{name, deleted}` | `mcp/token` on `x/mcp/tokens/<name>` |
 | `v/ops/mcp/list-tokens` | none | `{tokens, total}`, never a bearer | `crud/read` on `x/mcp/tokens` |
-| `v/ops/mcp/get-token` | `name` | `{name, token}` | `admin/token` on `x/mcp/tokens/<name>` and the token's source authority; only while bearers are kept |
+| `v/ops/mcp/get-token` | `name` | `{name, token}` | `admin/token/mcp` on `x/mcp/tokens/<name>` and the token's source authority; only while bearers are kept |
+
+`admin/token/mcp` is specific to MCP credentials. The `admin/token` parent
+covers this and future token-kind descendants on matching resources; an
+existing parent grant therefore still covers MCP retrieval. Prefer the MCP
+leaf for callers that only need it. Neither a parent nor a leaf grant removes
+the source-authority or retained-bearer requirements.
 
 - **Name:** `[a-z0-9-]{1,64}`, unique within a namespace, which a user shares
   with its agents.

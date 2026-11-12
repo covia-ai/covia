@@ -185,7 +185,8 @@ Abilities follow UCAN's slash-delimited convention with no leading slash. `*` is
 | `secret/write` | - | Store or update a secret (`<owner>/s/<name>`) |
 | `mcp/manage` | - | Manage MCP server and tool connections (`<venue>/v/mcp`) |
 | `mcp/token` | - | Create, update or delete an MCP token (`<owner>/x/mcp/tokens/<name>`) |
-| `admin/token` | - | Retrieve a stored MCP bearer token |
+| `admin/token` | Every `admin/token/…` | Administration across token kinds on matching resources |
+| `admin/token/mcp` | - | Retrieve a retained MCP bearer token; source authority is also required |
 | `hitl/request` | - | Ask the owner a human-in-the-loop question |
 | `admin/user/create` | - | Create an account |
 | `admin/user/delete` | - | Delete an account |

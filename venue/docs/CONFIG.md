@@ -1153,7 +1153,7 @@ the token's owner. An unknown, deleted or expired token receives HTTP 401.
 
 - `keepRawTokens` (default `false`): keep each token's bearer beside its
   hash, so `mcp:get-token` can return it again to a caller holding
-  `admin/token`. Off, the venue keeps only the hash and a lost bearer is
+  `admin/token/mcp`. Off, the venue keeps only the hash and a lost bearer is
   replaced by rotating it. Turning it off, at start-up or with
   `venue:adapter/configure`, drops the kept bearers at once.
 
