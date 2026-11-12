@@ -8,6 +8,12 @@ and needs no venue login, DID or UCAN. Venue authentication on `/mcp` works as
 before, but a scoped token is the recommended way for an external agent to
 connect.
 
+A venue agent can consume a peer's token through `v/ops/mcp/tools-list` and
+`v/ops/mcp/tools-call`. Discovery takes `server` and `token`; a call requires
+`server`, `toolName` (the exact discovered name, including any custom alias) and
+an `arguments` object matching that tool's schema, plus the same token. An empty
+arguments object is required even when the remote tool takes no arguments.
+
 The tokens are kept by the `mcp` adapter (`covia.adapter.McpTokens`).
 
 ## Identity and authority

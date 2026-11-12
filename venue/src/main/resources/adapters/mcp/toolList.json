@@ -1,6 +1,6 @@
 {
 	"name": "MCP Tools List",
-	"description": "Lists available MCP tools from a remote server",
+	"description": "mcp_tools_list: Discover the tools offered by an MCP endpoint, including each exact name and inputSchema. With an MCP token, shows that token's custom tool list. Use the same server and token when calling a discovered tool, passing its exact name and matching arguments.",
 	"dateCreated": "2025-01-27T00:00:00Z",
 	"operation": {
 		"adapter": "mcp:tools:list",

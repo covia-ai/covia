@@ -1,6 +1,6 @@
 {
 	"name": "MCP Tool Call",
-	"description": "Runs a remote MCP tool via HTTP(s)",
+	"description": "mcp_tools_call: Call one tool on a remote MCP endpoint. Supply server, the exact toolName returned by discovery, and arguments matching that tool's inputSchema (use {} for a tool with no arguments). When using an MCP token, pass the same token used for discovery; only its offered tools and granted capabilities are available. Wait for the result before reporting success; an error or pending job is not evidence that the action succeeded.",
 	"dateCreated": "2025-09-03T23:00:00Z",
 	"operation": {
 		"adapter": "mcp:tools:call",
@@ -19,7 +19,7 @@
 				},
 				"toolName": {
 					"type": "string",
-					"description": "MCP tool name to call",
+					"description": "Exact name of the remote MCP tool, as returned by discovery; custom token aliases may differ from the underlying operation name",
 					"examples":["toolCall"]
 				},
 				"token": {
@@ -32,7 +32,7 @@
 					"description": "Arguments to the MCP tool call"
 				}
 			},
-			"required": ["server"]
+			"required": ["server", "toolName", "arguments"]
 		},
 		"output": {
 			"type": "object",

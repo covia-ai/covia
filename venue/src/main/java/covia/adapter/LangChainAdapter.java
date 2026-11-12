@@ -66,6 +66,7 @@ import dev.langchain4j.model.chat.request.json.JsonEnumSchema;
 import dev.langchain4j.model.chat.request.json.JsonIntegerSchema;
 import dev.langchain4j.model.chat.request.json.JsonNumberSchema;
 import dev.langchain4j.model.chat.request.json.JsonObjectSchema;
+import dev.langchain4j.model.chat.request.json.JsonRawSchema;
 import dev.langchain4j.model.chat.request.json.JsonSchemaElement;
 import dev.langchain4j.model.chat.request.json.JsonStringSchema;
 import dev.langchain4j.model.anthropic.AnthropicChatModel;
@@ -129,6 +130,8 @@ public class LangChainAdapter extends AAdapter {
 	static final AString K_RESPONSE_FORMAT = Strings.intern("responseFormat");
 	static final AString K_SCHEMA      = Strings.intern("schema");
 	static final AString K_TYPE        = Strings.intern("type");
+	static final AString K_ONE_OF      = Strings.intern("oneOf");
+	static final AString K_ANY_OF      = Strings.intern("anyOf");
 	private static final AString K_CODE = Strings.intern("code");
 	static final AString K_DESCRIPTION = Strings.intern("description");
 	static final AString K_ENUM        = Strings.intern("enum");
@@ -2103,13 +2106,22 @@ public class LangChainAdapter extends AAdapter {
 	 * Converts a single JSON Schema property map to a JsonSchemaElement.
 	 *
 	 * <p>Supports: string, number, integer, boolean, array (with items), object (nested),
-	 * and enum (string type with {@code enum} array).</p>
+	 * enum (string type with {@code enum} array), and unchanged union or
+	 * unconstrained schemas through the upstream raw schema representation.</p>
 	 */
 	@SuppressWarnings("unchecked")
 	static JsonSchemaElement toSchemaElement(AMap<AString, ACell> prop) {
 		AString type = RT.ensureString(prop.get(K_TYPE));
 		AString desc = RT.ensureString(prop.get(K_DESCRIPTION));
 		String descStr = (desc != null) ? desc.toString() : null;
+
+		// Keep unions and unconstrained values in their declared form. In
+		// particular, MCP token caps accept an array or "unrestricted", never
+		// an object. The upstream raw schema also preserves scalar/array input
+		// for tools whose parameter accepts any JSON value.
+		if (type == null || prop.containsKey(K_ONE_OF) || prop.containsKey(K_ANY_OF)) {
+			return JsonRawSchema.from(JSON.toString(prop));
+		}
 
 		// Check for enum values — applies to string type
 		ACell enumCell = prop.get(K_ENUM);
@@ -2126,21 +2138,6 @@ public class LangChainAdapter extends AAdapter {
 					.enumValues(enumValues)
 					.build();
 			}
-		}
-
-		// A property with no declared "type" is an "any JSON value" parameter
-		// (e.g. covia:write's `value`, agent_request's `input`, grid_run's
-		// `input`). LangChain4j's typed schema model has no "any" element, so the
-		// old fallback silently coerced such params to a string — which made the
-		// LLM unable to pass a structured value through (it arrived null). Emit an
-		// open object (additionalProperties allowed) so providers accept it and
-		// the model can supply a structured object. Scalar/array values for a
-		// typeless param remain a known limitation; objects are the common case.
-		if (type == null) {
-			return JsonObjectSchema.builder()
-				.description(descStr)
-				.additionalProperties(true)
-				.build();
 		}
 
 		String typeStr = type.toString();

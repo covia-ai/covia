@@ -940,9 +940,7 @@ public class LangChainAdapterTest {
 	@Test
 	public void testToJsonObjectSchemaTypelessValueStaysStructured() {
 		// Mirrors covia/write's input schema: a typed `path` and a typeless `value`.
-		// Regression: the typeless `value` used to be advertised to the LLM as a
-		// string, so a structured object could not be passed and arrived null. It
-		// must now be an open object (additionalProperties allowed), while `path`
+		// Preserve all JSON values, including scalars and arrays, while `path`
 		// stays a string.
 		AMap<AString, ACell> schema = (AMap<AString, ACell>)(AMap) Maps.of(
 			"type", "object",
@@ -959,9 +957,8 @@ public class LangChainAdapterTest {
 		assertInstanceOf(JsonStringSchema.class, result.properties().get("path"));
 
 		JsonSchemaElement value = result.properties().get("value");
-		assertInstanceOf(JsonObjectSchema.class, value,
-			"Typeless `value` must be an open object, not a string");
-		assertEquals(Boolean.TRUE, ((JsonObjectSchema) value).additionalProperties());
+		var raw = assertInstanceOf(dev.langchain4j.model.chat.request.json.JsonRawSchema.class, value);
+		assertEquals(RT.getIn(schema, "properties", "value"), JSON.parse(raw.schema()));
 	}
 
 	// ========== toSchemaElement ==========
@@ -997,17 +994,56 @@ public class LangChainAdapterTest {
 	}
 
 	@Test
-	public void testSchemaElementNoTypeIsOpenObject() {
-		// No declared type = "any JSON value". It must be an open object so the LLM
-		// can pass a structured value through. Regression: it used to coerce to a
-		// string, which dropped structured tool-call args (e.g. covia/write's value
-		// arrived null).
-		JsonSchemaElement el = LangChainAdapter.toSchemaElement(schemaMap("description", "no type"));
-		assertInstanceOf(JsonObjectSchema.class, el);
-		JsonObjectSchema obj = (JsonObjectSchema) el;
-		assertEquals(Boolean.TRUE, obj.additionalProperties(),
-			"Typeless param must allow additional properties so structured values pass through");
-		assertEquals("no type", obj.description());
+	public void testSchemaElementNoTypePreservesAnyJsonValue() {
+		var schema = schemaMap("description", "no type");
+		var raw = assertInstanceOf(dev.langchain4j.model.chat.request.json.JsonRawSchema.class,
+			LangChainAdapter.toSchemaElement(schema));
+		assertEquals(schema, JSON.parse(raw.schema()));
+	}
+
+	@Test
+	public void testMcpSchemasReachProvidersUnchanged() throws Exception {
+		ACell tokenDefinition;
+		try (var input = getClass().getResourceAsStream("/adapters/mcp/createToken.json")) {
+			tokenDefinition = JSON.parse(new String(input.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8));
+		}
+		ACell callDefinition;
+		try (var input = getClass().getResourceAsStream("/adapters/mcp/toolCall.json")) {
+			callDefinition = JSON.parse(new String(input.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8));
+		}
+		ACell parameters = RT.getIn(tokenDefinition, "operation", "input");
+		var tools = Vectors.of((ACell) Maps.of("name", "mcp_token_create", "parameters", parameters),
+			(ACell) Maps.of("name", "mcp_tools_call", "parameters", RT.getIn(callDefinition, "operation", "input")));
+		AtomicReference<String> body = new AtomicReference<>();
+		HttpServer provider = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+		provider.createContext("/", exchange -> {
+			body.set(new String(exchange.getRequestBody().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8));
+			boolean anthropic = exchange.getRequestURI().getPath().endsWith("messages");
+			String reply = anthropic
+				? "{\"id\":\"msg\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"test\",\"content\":[{\"type\":\"text\",\"text\":\"ok\"}],\"stop_reason\":\"end_turn\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}"
+				: "{\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}";
+			byte[] bytes = reply.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+			exchange.getResponseHeaders().set("content-type", "application/json");
+			exchange.sendResponseHeaders(200, bytes.length);
+			try (var out = exchange.getResponseBody()) { out.write(bytes); }
+		});
+		provider.start();
+		try {
+			String url = "http://127.0.0.1:" + provider.getAddress().getPort() + "/v1/";
+			var messages = Vectors.of((ACell) Maps.of("role", "user", "content", "Create a scoped MCP token"));
+			for (String profile : new String[] {"xai", "anthropic"}) {
+				dev.langchain4j.model.chat.ChatModel model = profile.equals("anthropic")
+					? LangChainAdapter.buildAnthropicModel("key", url, "test", Duration.ofSeconds(5), LangChainAdapter.extractTuning(Maps.of("maxTokens", 256)))
+					: LangChainAdapter.buildOpenAiModel("key", url, "test", Duration.ofSeconds(5), LangChainAdapter.ModelTuning.NONE);
+				LangChainAdapter.callModel(profile, "test", model, messages, tools, null, java.util.Set.of());
+				ACell sentTool = RT.getIn(JSON.parse(body.get()), "tools", 0L);
+				ACell sentSchema = profile.equals("anthropic") ? RT.getIn(sentTool, "input_schema") : RT.getIn(sentTool, "function", "parameters");
+				assertEquals(RT.getIn(parameters, "properties", "caps"), RT.getIn(sentSchema, "properties", "caps"), profile);
+				ACell sentCall = RT.getIn(JSON.parse(body.get()), "tools", 1L);
+				ACell callSchema = profile.equals("anthropic") ? RT.getIn(sentCall, "input_schema") : RT.getIn(sentCall, "function", "parameters");
+				assertEquals(Vectors.of("server", "toolName", "arguments"), RT.getIn(callSchema, "required"), profile);
+			}
+		} finally { provider.stop(0); }
 	}
 
 	@Test

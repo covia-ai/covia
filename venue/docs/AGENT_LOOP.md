@@ -796,6 +796,11 @@ Provider descriptions are the operation asset descriptions unchanged. Catalog
 paths and source provenance remain available through agent-context inspection;
 they are not repeated in every provider-facing tool schema.
 
+Tool parameters with union schemas (`oneOf` or `anyOf`) retain those alternatives
+when sent to the model. Unconstrained parameters continue to accept any JSON
+value, including scalars and arrays. For example, MCP token `caps` is an
+array of capabilities or `"unrestricted"`; it is never advertised as an object.
+
 #### Capability enforcement
 
 The operation a tool call runs checks the agent's `config.caps` itself, as they
