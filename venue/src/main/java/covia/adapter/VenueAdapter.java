@@ -44,11 +44,15 @@ import covia.venue.StoreControl;
  *   <li>{@code venue/show-config} — curated public effective settings useful
  *       to agents and clients; never raw configuration.</li>
  *   <li>{@code venue/adapters} — full registry view: active and disabled
- *       adapters (kernel flag, owning module, operations) plus loaded modules.</li>
+ *       adapters (status, kernel flag, owning module, operations) plus loaded
+ *       modules; a failed adapter's entry says why it is not running.</li>
  *   <li>{@code venue/adapter/enable|disable} — retract or restore a non-kernel
  *       adapter's catalog, introspection and dispatch.</li>
  *   <li>{@code venue/adapter/configure} — apply a new effective configuration
  *       ({@link covia.venue.Engine#configureAdapter}).</li>
+ *   <li>{@code venue/adapter/restart} — stop an enabled adapter, offer it its
+ *       effective configuration again and start it, running or failed
+ *       ({@link covia.venue.Engine#restartAdapter}).</li>
  *   <li>{@code venue/module/load|unload} — runtime module lifecycle, subject
  *       to the operator's {@code dynamicModules} policy ({@link Modules}).</li>
  *   <li>{@code venue/restart} — process-wide graceful successor handoff,
@@ -120,6 +124,13 @@ public class VenueAdapter extends AAdapter {
 	private static final AString K_SWEEP_COMPLETE = Strings.intern("sweepComplete");
 	private static final AString K_COMPLETED = Strings.intern("completed");
 
+	/** An adapter's {@code status} in the listing: enabled and running. */
+	public static final AString ADAPTER_RUNNING = Strings.intern("running");
+	/** An adapter's {@code status} in the listing: enabled but not running, with a {@code reason}. */
+	public static final AString ADAPTER_FAILED = Strings.intern("failed");
+	/** An adapter's {@code status} in the listing: disabled. */
+	public static final AString ADAPTER_DISABLED = Strings.intern("disabled");
+
 	@Override
 	public String getName() {
 		return "venue";
@@ -127,8 +138,8 @@ public class VenueAdapter extends AAdapter {
 
 	@Override
 	public String getDescription() {
-		return "Public effective venue settings, plus venue-owned administration to enable, disable "
-			+ "and reconfigure adapters, load or unload modules, garbage-collect the store, "
+		return "Public effective venue settings, plus venue-owned administration to enable, disable, "
+			+ "reconfigure and restart adapters, load or unload modules, garbage-collect the store, "
 			+ "or restart the standalone process.";
 	}
 
@@ -139,6 +150,7 @@ public class VenueAdapter extends AAdapter {
 		installAsset("venue/adapter/enable", "/adapters/venue/adapterEnable.json");
 		installAsset("venue/adapter/disable", "/adapters/venue/adapterDisable.json");
 		installAsset("venue/adapter/configure", "/adapters/venue/adapterConfigure.json");
+		installAsset("venue/adapter/restart", "/adapters/venue/adapterRestart.json");
 		installAsset("venue/module/load", "/adapters/venue/moduleLoad.json");
 		installAsset("venue/module/unload", "/adapters/venue/moduleUnload.json");
 		installAsset("venue/restart", "/adapters/venue/restart.json");
@@ -195,6 +207,7 @@ public class VenueAdapter extends AAdapter {
 			case "adapter-enable" -> adapterEnable(input);
 			case "adapter-disable" -> adapterDisable(input);
 			case "adapter-configure" -> adapterConfigure(input);
+			case "adapter-restart" -> adapterRestart(input);
 			case "module-load" -> moduleLoad(input);
 			case "module-unload" -> moduleUnload(input);
 			case "restart" -> restart(ctx, input);
@@ -301,11 +314,15 @@ public class VenueAdapter extends AAdapter {
 	}
 
 	private AMap<AString, ACell> adapterEntry(String name, AAdapter adapter, boolean enabled) {
+		String failure = enabled ? engine.adapterFailure(name) : null;
+		AString status = !enabled ? ADAPTER_DISABLED : (failure != null) ? ADAPTER_FAILED : ADAPTER_RUNNING;
 		AMap<AString, ACell> entry = Maps.of(
 			Fields.NAME, Strings.create(name),
 			K_ENABLED, CVMBool.of(enabled),
+			Fields.STATUS, status,
 			K_KERNEL, CVMBool.of(engine.isKernelAdapter(name)),
 			K_CONFIG, engine.adapterConfig(name));
+		if (failure != null) entry = entry.assoc(Fields.REASON, Strings.create(failure));
 		if (adapter != null) {
 			entry = entry.assoc(Fields.DESCRIPTION, Strings.create(adapter.getDescription()));
 			AVector<ACell> ops = Vectors.empty();
@@ -344,6 +361,12 @@ public class VenueAdapter extends AAdapter {
 		boolean changed = engine.disableAdapter(name);
 		return Maps.of(Fields.NAME, Strings.create(name),
 			K_ENABLED, CVMBool.FALSE, K_CHANGED, CVMBool.of(changed));
+	}
+
+	ACell adapterRestart(ACell input) {
+		String name = requireName(input, "name");
+		engine.restartAdapter(name);
+		return Maps.of(Fields.NAME, Strings.create(name), Fields.STATUS, ADAPTER_RUNNING);
 	}
 
 	@SuppressWarnings("unchecked")

@@ -347,25 +347,6 @@ public class VenueStartupTest {
 	}
 
 	@Test
-	public void failedWorkerActivationClosesAdapterAndStore() throws Exception {
-		AKeyPair key = AKeyPair.generate();
-		EtchStore store = TestTemp.etch("startup-worker-failure");
-		java.io.File file = store.getFile();
-		StartupAdapter adapter = new StartupAdapter();
-		adapter.failStart = true;
-		IllegalStateException failure = assertThrows(IllegalStateException.class,
-			() -> VenueServer.launch(config(key, 0), store, List.of(), engine -> {
-				engine.registerAdapter(adapter);
-				return CompletableFuture.completedFuture(null);
-			}));
-		assertEquals(START_FAILURE, failure.getMessage());
-		assertTrue(adapter.closed.await(5, TimeUnit.SECONDS));
-		try (EtchStore reopened = EtchStore.create(file)) {
-			assertNotNull(reopened);
-		}
-	}
-
-	@Test
 	public void cancellationDuringHookClosesResourcesWithoutStartingWorkers() throws Exception {
 		AKeyPair key = AKeyPair.generate();
 		EtchStore store = TestTemp.etch("startup-cancel");
@@ -473,31 +454,37 @@ public class VenueStartupTest {
 	}
 
 	@Test
-	public void failedEmbeddedActivationSuspendsRecoveredJobsBeforeClosingAdapters() throws Exception {
+	public void launchEndedAfterRecoverySuspendsRecoveredJobsBeforeClosingAdapters() throws Exception {
 		AKeyPair key = AKeyPair.generate();
 		try (EtchStore store = TestTemp.etch("embedded-recovered-failure")) {
 			CoviaApplication application = TestEngine.application(store);
 			Engine engine = application.mount(key, config(key, 0));
 			AtomicInteger suspended = new AtomicInteger();
+			CompletableFuture<CompletableFuture<Engine>> launch = new CompletableFuture<>();
 			StartupAdapter adapter = new StartupAdapter() {
-				@Override public void recoverJob(Job job) { recovered = true; }
+				// Ends the launch between recovery and activation.
+				@Override public void recoverJob(Job job) {
+					recovered = true;
+					launch.join().cancel(true);
+				}
 				@Override public void suspendJob(Job job) {
 					assertEquals(1, closed.getCount(), "suspend before adapter resources close");
 					suspended.incrementAndGet();
 					super.suspendJob(job);
 				}
 			};
-			adapter.failStart = true;
 			try {
-				assertEquals(START_FAILURE, assertThrows(IllegalStateException.class,
-					() -> engine.launch(prepared -> {
-						prepared.registerAdapter(adapter);
-						leaveStarted(prepared);
-						return CompletableFuture.completedFuture(null);
-					})).getMessage());
+				CompletableFuture<Engine> ready = engine.launchAsync(prepared -> {
+					prepared.registerAdapter(adapter);
+					leaveStarted(prepared);
+					return launch.thenRun(() -> {});
+				});
+				launch.complete(ready);
+				assertThrows(java.util.concurrent.CancellationException.class, () -> ready.get(10, TimeUnit.SECONDS));
+				assertTrue(adapter.closed.await(5, TimeUnit.SECONDS));
 				assertTrue(adapter.recovered);
 				assertEquals(1, suspended.get());
-				assertEquals(0, adapter.closed.getCount());
+				assertEquals(0, adapter.starts.get());
 				assertTrue(engine.isClosing());
 				assertNotEquals(Status.STARTED, engine.getVenueState().users().user(engine.getDIDString())
 					.jobs().getRecord(RECOVERED_JOB).get(Fields.STATUS));

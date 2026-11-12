@@ -1,0 +1,23 @@
+{
+  "name": "Restart adapter",
+  "description": "Restarts an enabled adapter on the running venue: stops its workers, offers it its effective configuration again and starts it. Use it on a failed adapter (status 'failed' in venue/adapters) once whatever stopped it starting is fixed, or to have a running adapter start afresh. If it fails again, the adapter stays failed and the job fails with the reason. A disabled adapter is enabled instead. Venue-owned: requires admin/adapter/manage on <venue DID>/adapters.",
+  "operation": {
+    "adapter": "venue:adapter-restart",
+    "readOnly": false,
+    "input": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "Adapter name, e.g. 'p2p' or 'telegram'" }
+      },
+      "required": ["name"]
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "status": { "type": "string", "enum": ["running"] }
+      },
+      "required": ["name", "status"]
+    }
+  }
+}
