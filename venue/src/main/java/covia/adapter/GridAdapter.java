@@ -8,7 +8,6 @@ import convex.auth.ucan.Capability;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
-import convex.core.data.AVector;
 import convex.core.data.Blob;
 import convex.core.data.Hash;
 import convex.core.data.Maps;
@@ -34,6 +33,9 @@ import covia.grid.client.VenueHTTP;
  */
 public class GridAdapter extends AAdapter {
 	private static final AString AUTHENTICATE_AS = Strings.intern("authenticateAs");
+	public static final String INVALID_VENUE = "'venue' must be a string when provided; omit it for local execution";
+	public static final String INVALID_DEFAULT_VENUE = "Operation 'venue' must be a string when provided";
+	public static final String RESULT_TIMEOUT = "grid:jobResult timed out after %dms waiting for job %s";
 
     /** Asset hash for synchronous grid run operation. */
     public static Hash RUN_OPERATION;
@@ -262,7 +264,10 @@ public class GridAdapter extends AAdapter {
         if (venueSpec != null) engine.jobs().requireRemoteInvoke(targetOperation, operationInput, ctx);
         Venue venue = selectVenue(ctx, venueSpec, input);
 
-        CompletableFuture<Job> jobFuture = venue.invoke(targetOperation.toString(), operationInput);
+        // Only submission is requested here; nobody consumes the SDK Job's future.
+        CompletableFuture<Job> jobFuture = venue instanceof VenueHTTP http
+            ? http.startJobAsync(targetOperation, operationInput)
+            : venue.invoke(targetOperation.toString(), operationInput);
         return jobFuture.thenApply(Job::getData);
 	}
 
@@ -285,9 +290,12 @@ public class GridAdapter extends AAdapter {
 		}
 
 		Venue venue = selectVenue(ctx, resolveVenue(meta, input), input);
+		long timeoutMs = parseTimeoutMs(input);
+		// A remote bounded wait must use the caller's budget, not the SDK's
+		// shorter default. Unbounded remote waits use the durable observer above.
+		if (timeoutMs > 0 && venue instanceof VenueHTTP http) http.setTimeout(timeoutMs);
 		CompletableFuture<ACell> jobFuture = venue.awaitJobResult(jobId);
 
-		long timeoutMs = parseTimeoutMs(input);
 		if (timeoutMs <= 0) return jobFuture;
 
 		// Derive a new future so the timeout doesn't corrupt the underlying Job's future.
@@ -299,7 +307,7 @@ public class GridAdapter extends AAdapter {
 					if (ex instanceof TimeoutException || ex.getCause() instanceof TimeoutException) {
 						// The caller's wait ran out; the job itself may still finish
 						return CompletableFuture.failedFuture(
-							new UnavailableException("grid:jobResult timed out after " + timeoutMs + "ms waiting for job " + jobId.toHexString()));
+							new UnavailableException(RESULT_TIMEOUT.formatted(timeoutMs, jobId.toHexString())));
 					}
 					return CompletableFuture.failedFuture(ex);
 				});
@@ -390,10 +398,19 @@ public class GridAdapter extends AAdapter {
 	 * Finds the venue specification from input (or metadata) if provided.
 	 */
 	private AString resolveVenue(ACell meta, ACell input) {
-		AString venue = RT.ensureString(RT.getIn(input, Fields.VENUE));
-		if (venue != null) return venue;
-		venue = RT.ensureString(RT.getIn(meta, Fields.OPERATION, Fields.VENUE));
-		return venue;
+		AMap<?, ?> args = RT.ensureMap(input);
+		if (args != null && args.containsKey(Fields.VENUE)) {
+			ACell venue = args.get(Fields.VENUE);
+			if (venue instanceof AString target) return target;
+			throw new InvalidInputException(INVALID_VENUE);
+		}
+		AMap<?, ?> operation = RT.ensureMap(RT.getIn(meta, Fields.OPERATION));
+		if (operation != null && operation.containsKey(Fields.VENUE)) {
+			ACell venue = operation.get(Fields.VENUE);
+			if (venue instanceof AString target) return target;
+			throw new InvalidDefinitionException(INVALID_DEFAULT_VENUE);
+		}
+		return null;
 	}
 
 }
