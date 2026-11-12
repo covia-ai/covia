@@ -249,8 +249,11 @@ Adapter-owned state uses `AdapterState`; see
 
 - A test of components working together, or a long-running or
   timing-dependent one, is an `@IntegrationTest`, off unless
-  `-Dcovia.tests.integration=true` (`BUILD.md`, Opt-in test groups); a small
+  `-Dcovia.tests.integration=true` (`BUILD.md`, Tests); a small
   synchronous test of a helper API stays in the default suite
+- Tests downloading large models require a separate explicit opt-in, never
+  the general integration flag. Speech model tests use
+  `-Dcovia.tests.speech.models=true`; default and QA suites use local fixtures.
 - Use the shared `TestEngine.ENGINE` with per-test DIDs (`TestEngine.uniqueDID`,
   `TestEngine.uniqueManagedDID` for a user the venue hosts)
   — never a fresh Engine per test unless persistence/restart is under test. It

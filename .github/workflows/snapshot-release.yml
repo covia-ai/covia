@@ -6,16 +6,18 @@ on:
     types: [completed]
     branches: [ qa ]
 
-# Serialise snapshot publishing — concurrent runs race the delete/recreate
-# of the latest-snapshot tag (HTTP 422: tag_name already exists)
+# Finish each snapshot replacement before another run changes its release/tag.
 concurrency:
   group: ${{ github.workflow }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   build-and-release:
     runs-on: ubuntu-latest
-    if: github.event.workflow_run.conclusion == 'success'
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
     permissions:
       contents: write
       actions: read
@@ -56,18 +58,31 @@ jobs:
       id: sha
       run: echo "sha=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
 
-    - name: Delete existing latest-snapshot release
+    - name: Replace the snapshot tag with the tested commit
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
       run: |
-        gh release delete latest-snapshot --yes || true
-        git push origin :refs/tags/latest-snapshot || true
+        current=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/qa" --jq .object.sha)
+        if [ "$current" != "$SOURCE_SHA" ]; then
+          echo "::error::Candidate was superseded; publish the current QA branch's successful Test run"
+          exit 1
+        fi
+        release_id=$(gh api "repos/$GITHUB_REPOSITORY/releases" --paginate \
+          --jq '.[] | select(.tag_name == "latest-snapshot") | .id')
+        if [ -n "$release_id" ]; then
+          gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/$release_id"
+        fi
+        git tag --force latest-snapshot "$SOURCE_SHA"
+        git push --force origin refs/tags/latest-snapshot
 
     - name: Create latest-snapshot release
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         gh release create latest-snapshot \
+          --verify-tag \
+          --target "${{ github.event.workflow_run.head_sha }}" \
           --title "Latest Snapshot" \
           --notes "Automated snapshot build from the qa branch, which follows develop.
 

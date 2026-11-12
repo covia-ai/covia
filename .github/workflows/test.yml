@@ -3,7 +3,7 @@ name: Test
 # Build-and-test quality gate. Runs the full reactor with tests on every pull
 # request and on pushes to the long-lived branches (develop, qa, master),
 # gating merges and the deploys that follow a push to qa or master.
-# See DX_PLAN.md → Milestone 2 ("Add a CI quality gate").
+# See BUILD.md → Development and QA.
 
 on:
   pull_request:
@@ -31,6 +31,15 @@ jobs:
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+    - name: Verify QA was promoted from published develop
+      if: github.ref == 'refs/heads/qa'
+      run: |
+        git fetch --no-tags --unshallow origin develop:refs/remotes/origin/develop
+        if ! git merge-base --is-ancestor HEAD origin/develop; then
+          echo "::error::Publish this candidate on develop before promoting it to qa"
+          exit 1
+        fi
+
     # JDK 25 before 25.0.3 has JDK-8370887 (timeouts fire tens of seconds late,
     # so tests fail intermittently). check-latest fetches the newest 25 rather
     # than whatever the runner image cached, and -Dcovia.jdk.check=ERROR below
@@ -55,16 +64,12 @@ jobs:
         echo "COVIA_PYTHON_LIBRARY=$library" >> "$GITHUB_ENV"
 
     - name: Build and test (full reactor)
-      # The durability group (@DurabilityTest: crash/restart survival tests
-      # that fork real JVMs) gates every run. The integration group
-      # (@IntegrationTest: components working together, external services
-      # included) gates qa and master, whose pushes deploy, and pull requests
-      # into master, so a release fails before it merges; develop and its pull
-      # requests leave it off to stay fast. Both are off in the local
-      # `mvn test` inner loop.
+      # develop is the fast feedback loop. QA and release validation also run
+      # crash/restart durability and integration tests (including real services).
+      # PRs into master must pass these before the release can merge.
       env:
-        INTEGRATION: ${{ github.ref_name == 'qa' || github.ref_name == 'master' || github.base_ref == 'master' }}
-      run: mvn clean install -T 1C -Dcovia.tests.durability=true -Dcovia.tests.integration=$INTEGRATION -Dcovia.jdk.check=ERROR
+        HEAVY_TESTS: ${{ github.ref_name == 'qa' || github.ref_name == 'master' || github.base_ref == 'master' }}
+      run: mvn clean install -T 1C -Dcovia.tests.durability=$HEAVY_TESTS -Dcovia.tests.integration=$HEAVY_TESTS -Dcovia.jdk.check=ERROR
 
     - name: Verify optional module boundaries
       run: |

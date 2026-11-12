@@ -49,8 +49,13 @@ aws ssm start-session --region us-east-1 --target i-0ba252844d8787529
 
 ## Manual Deploy
 
-Run the deploy workflow from the Actions tab (*Deploy to EC2*, `workflow_dispatch`), or in an SSM
-session on the instance:
+Run *Deploy to EC2* with a QA publishing run ID, following
+[the redeploy procedure](../../BUILD.md#deployment-identity-and-redeploys).
+
+For a direct SSM session, obtain the digest from that record and run the
+matching commit's script with `DEPLOY_IMAGE=ghcr.io/covia-ai/covia@sha256:<digest>`.
+The following channel-based commands are for ad hoc operator use, not the
+automated QA promotion:
 
 ```bash
 docker pull ghcr.io/covia-ai/covia:latest

@@ -66,11 +66,16 @@ publish from `qa`, or on manual dispatch. It runs
 
 ## Manual Deploy
 
-Admin access is through run-command (port 22 is closed):
+Run *Deploy to Azure* with a QA publishing run ID, following
+[the redeploy procedure](../../BUILD.md#deployment-identity-and-redeploys).
+
+Admin access is through run-command (port 22 is closed). For direct use, take
+the script from the recorded commit and pass its image digest explicitly:
 
 ```bash
 az vm run-command invoke -g covia-venue-rg -n covia-venue-vm \
-  --command-id RunShellScript --scripts @deploy/azure/deploy.sh \
+  --command-id RunShellScript \
+  --scripts 'export DEPLOY_IMAGE=ghcr.io/covia-ai/covia@sha256:<digest>' "$(cat deploy/azure/deploy.sh)" \
   --query 'value[0].message' -o tsv
 ```
 

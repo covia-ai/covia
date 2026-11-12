@@ -13,6 +13,11 @@ on:
     workflows: ["Publish Docker image"]
     types: [completed]
   workflow_dispatch:
+    inputs:
+      publish_run_id:
+        description: Successful master Publish Docker image run ID to deploy
+        required: true
+        type: string
 
 # Never cancel a mid-flight deploy; queue the newest instead
 concurrency:
@@ -31,26 +36,39 @@ jobs:
         )
       }}
     permissions:
+      contents: read
+      actions: read
       packages: read
 
     steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+    - name: Resolve the published stable image
+      id: deployment
+      uses: ./.github/actions/deployment
+      with:
+        run-id: ${{ inputs.publish_run_id || github.event.workflow_run.id }}
+        branch: master
+
     - name: Deploy to GCP VM
       uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
       env:
         GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        DEPLOY_IMAGE: ${{ steps.deployment.outputs.image }}
       with:
         host: ${{ secrets.GCP_VM_HOST }}
         username: ${{ secrets.GCP_VM_USER }}
         key: ${{ secrets.GCP_VM_SSH_KEY }}
-        envs: GHCR_TOKEN
+        envs: GHCR_TOKEN,DEPLOY_IMAGE
         script: |
+          set -eu
           # The deploy user is not in the docker group by design — all
           # docker and /srv/covia operations go through (passwordless) sudo
           # Authenticate to GHCR
           echo $GHCR_TOKEN | sudo docker login ghcr.io -u github --password-stdin
 
           # Pull the stable image (published from master)
-          sudo docker pull ghcr.io/covia-ai/covia:stable
+          sudo docker pull "$DEPLOY_IMAGE"
 
           # One JVM hosts all three venues (ports 8080-8082); each venue has
           # its own store directory so identities (venue.key) stay separate.
@@ -148,7 +166,7 @@ jobs:
             --health-start-period=15s \
             --health-retries=3 \
             -e JAVA_OPTS="-Xmx2g -XX:+UseContainerSupport -XX:+UseG1GC -XX:+UseStringDeduplication -XX:+ExitOnOutOfMemoryError -Djava.security.egd=file:/dev/./urandom -Dfile.encoding=UTF-8" \
-            ghcr.io/covia-ai/covia:stable \
+            "$DEPLOY_IMAGE" \
             /data/config.json
 
           # Wait for health check

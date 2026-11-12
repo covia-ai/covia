@@ -11,6 +11,8 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
+import org.junit.jupiter.api.parallel.Execution;
+import org.junit.jupiter.api.parallel.ExecutionMode;
 
 import covia.test.Reachable;
 
@@ -21,14 +23,17 @@ import covia.test.Reachable;
  * voice note; and the pinned voice (Supertonic 3, about 145 MB) fetched, its speech
  * heard back. Nothing is played.
  *
- * <p><b>Opt-in</b>, like the venue's {@code @IntegrationTest}: it reaches the network and
- * loads native code, so it runs only with {@code -Dcovia.tests.integration=true}, and
- * skips when no connection opens to a host it fetches from. The files are kept under
- * {@code target/} between runs.
+ * <p><b>Explicit opt-in</b>: downloads large models and loads native code. Neither
+ * the default suite nor {@code -Dcovia.tests.integration=true} enables these tests;
+ * use {@code -Dcovia.tests.speech.models=true}. They skip when no connection opens
+ * to a required host. Downloads are kept under {@code target/} between runs.
  */
-@Tag("integration")
-@EnabledIfSystemProperty(named = "covia.tests.integration", matches = "true",
-	disabledReason = "downloads a model and loads native code; enable with -Dcovia.tests.integration=true")
+@Tag("speech-models")
+// These methods share downloaded recordings, native libraries and model files.
+// A cold cache must have only one writer while each engine prepares its files.
+@Execution(ExecutionMode.SAME_THREAD)
+@EnabledIfSystemProperty(named = "covia.tests.speech.models", matches = "true",
+	disabledReason = "downloads large speech models; enable explicitly with -Dcovia.tests.speech.models=true")
 class LocalSpeechRealModelTest {
 
 	/** The natives (jitpack.io), the models and recordings (Hugging Face) and the voice activity model (GitHub). */

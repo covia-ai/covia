@@ -17,6 +17,11 @@ on:
     workflows: ["Publish Docker image"]
     types: [completed]
   workflow_dispatch:
+    inputs:
+      publish_run_id:
+        description: Successful QA Publish Docker image run ID to deploy
+        required: true
+        type: string
 
 # Never cancel a mid-flight deploy; queue the newest instead
 concurrency:
@@ -36,16 +41,24 @@ jobs:
       }}
     permissions:
       contents: read
+      actions: read
       id-token: write   # OIDC token for the AWS role; no stored AWS keys
     env:
       INSTANCE_ID: i-0ba252844d8787529
-      # The commit whose image was published (manual runs: the dispatched commit)
-      DEPLOY_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
 
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+    - name: Resolve the published QA image
+      id: deployment
+      uses: ./.github/actions/deployment
       with:
-        ref: ${{ env.DEPLOY_SHA }}
+        run-id: ${{ inputs.publish_run_id || github.event.workflow_run.id }}
+        branch: qa
+
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        ref: ${{ steps.deployment.outputs.sha }}
 
     - name: Assume the venue-3 deploy role (OIDC)
       uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
@@ -54,10 +67,13 @@ jobs:
         aws-region: us-east-1
 
     - name: Deploy to EC2 via SSM Run Command
+      env:
+        DEPLOY_SHA: ${{ steps.deployment.outputs.sha }}
+        DEPLOY_IMAGE: ${{ steps.deployment.outputs.image }}
       run: |
         # Ship the script base64-encoded so SSM passes it through unaltered.
         script=$(base64 -w0 deploy/ec2/deploy.sh)
-        params=$(jq -nc --arg c "echo $script | base64 -d | bash" \
+        params=$(jq -nc --arg c "echo $script | base64 -d | DEPLOY_IMAGE='$DEPLOY_IMAGE' bash" \
           '{commands: [$c], executionTimeout: ["900"]}')
         command_id=$(aws ssm send-command \
           --instance-ids "$INSTANCE_ID" \
