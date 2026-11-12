@@ -272,8 +272,8 @@ metadata remains), and `Engine.getAdapter`, `getAdapterNames` and
 directly sees it as absent and refuses as it does for a disabled one: the
 outbound guard refuses rather than check without the `http` adapter's
 settings, a login method it provides is unavailable, recovery ends its jobs as
-for a missing adapter. An adapter that `auth.methods` names therefore still
-stops the launch if it fails, as a disabled one does. Its operations, internal
+for a missing adapter. An adapter that `auth.methods` or `auth.venueProof`
+names therefore still stops the launch if it fails, as a disabled one does. Its operations, internal
 calls to them and messages to their live jobs are refused with
 `UnavailableException` (`Engine.ADAPTER_NOT_RUNNING`). The venue runs without
 it: one adapter that cannot start costs only what it provides.
@@ -293,7 +293,7 @@ fails to start, and a restart does not call `recoverJob` again.
 
 Two failures still stop the launch: an adapter's stored state recorded at a
 newer version than it supports (`UnsupportedVersionException`), and an
-adapter `auth.methods` names being unavailable. Runtime registration differs
+adapter that `auth.methods` or `auth.venueProof` names being unavailable. Runtime registration differs
 too, because module loading undoes what it registered when a registration
 throws: a new instance registered on a started engine (`registerAdapter`,
 `venue:module/load`) that refuses its configuration or fails to start is

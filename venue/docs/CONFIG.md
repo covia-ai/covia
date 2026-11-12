@@ -3164,8 +3164,8 @@ and no reason, and nothing else in the venue uses it, so with `http` failed
 outbound requests are refused. Fix the cause (free the port, bring the service
 back, or correct its settings with `adapter/configure`), then
 `adapter/restart` it. Disabling it clears the failure. A stored adapter state
-newer than this build, or a failed adapter that `auth.methods` names, still
-stops the launch. Contract:
+newer than this build, or a failed adapter that `auth.methods` or
+`auth.venueProof` names, still stops the launch. Contract:
 [ADAPTERS.md](ADAPTERS.md#an-adapter-that-is-not-running).
 
 **Module policy.** `module/load` and `module/unload` require
