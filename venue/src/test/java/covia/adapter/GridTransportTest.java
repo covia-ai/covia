@@ -52,6 +52,9 @@ class GridTransportTest {
 			PEERS.put(did, this);
 		}
 
+		/** The DID this venue presents; a real venue proves it with its DID document. */
+		@Override public String venueDID() { return did; }
+
 		@Override public CompletableFuture<Job> startJobAsync(AString operation, ACell input) {
 			submissions.incrementAndGet();
 			return CompletableFuture.completedFuture(remote);
