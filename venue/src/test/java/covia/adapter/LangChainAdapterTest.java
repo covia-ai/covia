@@ -1012,6 +1012,7 @@ public class LangChainAdapterTest {
 			callDefinition = JSON.parse(new String(input.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8));
 		}
 		ACell parameters = RT.getIn(tokenDefinition, "operation", "input");
+		assertEquals(Strings.create("string"), RT.getIn(parameters, "properties", "caps", "oneOf", 0L, "items", "properties", "can", "type"));
 		var tools = Vectors.of((ACell) Maps.of("name", "mcp_token_create", "parameters", parameters),
 			(ACell) Maps.of("name", "mcp_tools_call", "parameters", RT.getIn(callDefinition, "operation", "input")));
 		AtomicReference<String> body = new AtomicReference<>();

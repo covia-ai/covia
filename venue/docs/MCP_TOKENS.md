@@ -101,7 +101,9 @@ the source-authority or retained-bearer requirements.
   The issuer must be able to read each operation's definition, and a tool the
   issuer can no longer read is left out of the list.
 - **Caps:** `"unrestricted"` or a list of capabilities. Left out, the token has
-  none.
+  none. Each entry has string `with` and `can` fields and optional `nb` caveats.
+  `can` names one ability; granting read and write uses two entries, not an
+  array of abilities in one entry.
 - **Expiry:** milliseconds since the epoch, still to come. Left out, never.
 - **The bearer** is `cvmcp_` followed by 32 random bytes in base58. It is
   returned once, to a caller waiting for the result, and the job record holds

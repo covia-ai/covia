@@ -13,7 +13,18 @@
 				"tools": { "type": "array", "description": "The tools it now offers, as for v/ops/mcp/create-token", "items": {} },
 				"caps": {
 					"description": "Its caps now: an array of {with, can} capabilities, or \"unrestricted\"",
-					"oneOf": [ { "type": "array", "items": { "type": "object" } }, { "type": "string", "enum": ["unrestricted"] } ]
+					"oneOf": [
+						{ "type": "array", "items": {
+							"type": "object",
+							"properties": {
+								"with": { "type": "string", "description": "Resource path or prefix, such as w/shared/" },
+								"can": { "type": "string", "description": "One ability, such as crud/read. To grant multiple abilities, use a separate capability entry for each." },
+								"nb": { "type": "object", "description": "Optional capability caveats" }
+							},
+							"required": ["with", "can"]
+						} },
+						{ "type": "string", "enum": ["unrestricted"] }
+					]
 				},
 				"expires": { "type": "integer", "description": "When it stops working, in milliseconds since the epoch" },
 				"rotate": { "type": "boolean", "description": "Issue a new bearer, returned in this result; the old one stops working" }

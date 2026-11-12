@@ -36,6 +36,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 - LLM tools preserve capability-array unions and arbitrary JSON values instead of advertising them as objects, enabling agents to create scoped MCP tokens.
 - Generic MCP tool calls declare their required tool name and arguments for agent discovery.
+- MCP token schemas describe each capability's resource and single ability, including optional caveats.
 
 - Account REST reads and deletion honour delegated administration grants in `X-Covia-Ucans`.
 - Job SSE subscriptions no longer miss completion while connecting or deliver initial state after a newer update.

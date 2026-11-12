@@ -17,7 +17,18 @@
 				},
 				"caps": {
 					"description": "The capabilities bounding what the token's calls may do, within your authority: an array of {with, can} capabilities (UCAN.md §3), or \"unrestricted\" for all of your authority. Left out, the token has none: its tools can do only what needs no authority.",
-					"oneOf": [ { "type": "array", "items": { "type": "object" } }, { "type": "string", "enum": ["unrestricted"] } ]
+					"oneOf": [
+						{ "type": "array", "items": {
+							"type": "object",
+							"properties": {
+								"with": { "type": "string", "description": "Resource path or prefix, such as w/shared/" },
+								"can": { "type": "string", "description": "One ability, such as crud/read. To grant multiple abilities, use a separate capability entry for each." },
+								"nb": { "type": "object", "description": "Optional capability caveats" }
+							},
+							"required": ["with", "can"]
+						} },
+						{ "type": "string", "enum": ["unrestricted"] }
+					]
 				},
 				"expires": { "type": "integer", "description": "When the token stops working, in milliseconds since the epoch. Left out, it lasts until revoked." }
 			},
