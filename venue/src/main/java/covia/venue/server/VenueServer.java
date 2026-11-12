@@ -141,8 +141,24 @@ public class VenueServer {
 	private final java.util.concurrent.atomic.AtomicBoolean closed =
 			new java.util.concurrent.atomic.AtomicBoolean(false);
 
-	/** Runs {@link #close()} once; a later caller waits until it has finished. */
-	private final Shutdown.Once closeOnce = Shutdown.once(() -> closeResources(null));
+	/** The failure a failed launch closes after, to carry close failures as suppressed; null for a normal close. */
+	private volatile Throwable launchFailure;
+
+	/**
+	 * Runs {@link #close()}, or a failed launch's cleanup, once; a later caller,
+	 * the JVM shutdown hook included, waits until it has finished.
+	 */
+	private final Shutdown.Once closeOnce = Shutdown.once(() -> closeResources(launchFailure));
+
+	/**
+	 * Whether {@link #closeOnce} is registered as a JVM shutdown hook at
+	 * {@link Shutdown#SERVICE}: for an Etch store whose contents outlive the
+	 * process. Etch closes its file in its own hook at {@link Shutdown#ETCH}, a
+	 * later level, so this hook holds it open until the venue's close, wherever
+	 * it started, has made its final save. A temporary or in-memory store has
+	 * nothing to save, so a venue on one adds no work to the JVM's exit.
+	 */
+	private final boolean closesOnJvmShutdown;
 
 	protected CoviaAPI api;
 	protected MCP mcp;
@@ -256,6 +272,12 @@ public class VenueServer {
 		if (a2aConfig!=null) {
 			a2a=new A2A(localVenue,a2aConfig);
 		}
+
+		// Last, once nothing here can fail: from now on close() releases the store.
+		// An adopted store may be any file the caller opened, so it counts as kept.
+		this.closesOnJvmShutdown = store instanceof EtchStore
+			&& (adoptedStore != null || this.config.isPersistentFileStore());
+		if (closesOnJvmShutdown) Shutdown.addHook(Shutdown.SERVICE, closeOnce);
 	}
 
 	/**
@@ -785,7 +807,7 @@ public class VenueServer {
 		} catch (RuntimeException | Error failure) {
 			boolean interrupted = Thread.interrupted();
 			try {
-				if (server != null) server.closeResources(failure);
+				if (server != null) server.closeAfterFailedLaunch(failure);
 			} finally {
 				if (interrupted) Thread.currentThread().interrupt();
 			}
@@ -1496,12 +1518,32 @@ public class VenueServer {
 	}
 
 	/**
-	 * Releases server resources in reverse ownership order. During failed
-	 * launch, cleanup failures are suppressed onto the initiating failure;
-	 * during normal close they are logged and cleanup continues.
+	 * A failed launch's cleanup, through the same once-only close, so a JVM
+	 * shutdown during it waits for it too. If a close is already under way, waits
+	 * for that one, whose failures are then logged rather than suppressed.
+	 */
+	private void closeAfterFailedLaunch(Throwable failure) {
+		launchFailure = failure;
+		closeOnce.run();
+	}
+
+	/**
+	 * Releases server resources in reverse ownership order, then withdraws the
+	 * JVM shutdown hook: only once the store is closed, so a shutdown beginning
+	 * mid-close still waits for it. During failed launch, cleanup failures are
+	 * suppressed onto the initiating failure; during normal close they are logged
+	 * and cleanup continues.
 	 */
 	private void closeResources(Throwable launchFailure) {
 		if (!closed.compareAndSet(false, true)) return; // idempotent — already closed
+		try {
+			releaseResources(launchFailure);
+		} finally {
+			if (closesOnJvmShutdown) Shutdown.removeHook(Shutdown.SERVICE, closeOnce);
+		}
+	}
+
+	private void releaseResources(Throwable launchFailure) {
 		MCP ownedMcp = mcp;
 		if (ownedMcp != null) {
 			try {
