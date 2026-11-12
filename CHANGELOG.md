@@ -19,6 +19,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Changed
 
+- Adapters refuse settings with a configuration error, from the venue config and from `venue:adapter/configure` alike; anything else an adapter's `configure` throws, a module adapter's `IllegalArgumentException` included, is reported as that adapter's fault rather than as invalid input or the `venue` adapter's.
 - MCP bearer retrieval uses `admin/token/mcp`; `admin/token` remains its parent for administration across token kinds.
 - Venue administration requires `admin/user/*`, `admin/adapter/manage`, `admin/venue/*` and `admin/sudo` capabilities; the former user, adapter and venue abilities are no longer accepted for these actions.
 - Remote submissions and direct Job controls use explicitly selected remote credentials; local proxy cancellation controls only its bound execution.
@@ -33,7 +34,6 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Fixed
 
-- An adapter that fails unexpectedly while being configured, at start-up or through `venue:adapter/configure`, is reported as that adapter's fault rather than as invalid input or the `venue` adapter's fault; a setting it refuses is a configuration error from either source.
 - Account REST reads and deletion honour delegated administration grants in `X-Covia-Ucans`.
 - Job SSE subscriptions no longer miss completion while connecting or deliver initial state after a newer update.
 

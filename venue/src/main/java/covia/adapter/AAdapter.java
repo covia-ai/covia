@@ -116,8 +116,9 @@ public abstract class AAdapter {
 	 * adapter is parked as disabled; at reconfiguration the new settings are
 	 * rejected and the previous configuration stays in force. A setting the
 	 * adapter refuses throws {@link covia.exception.ConfigurationException}
-	 * with an actionable message, whoever supplied the settings; anything
-	 * else that escapes is this adapter's fault (docs/ERRORS.md).</p>
+	 * with an actionable message, whoever supplied the settings; any other
+	 * exception that escapes and is not a Covia exception is this adapter's
+	 * fault (docs/ERRORS.md).</p>
 	 *
 	 * <p>Distinct from {@link #configureModule}: that receives the module-level
 	 * bootstrap settings ({@code modules[].config}) exactly once, before

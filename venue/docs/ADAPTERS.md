@@ -301,8 +301,9 @@ message built from a constant on the adapter. That reaches whoever supplied the
 settings unchanged: the operator at start-up, enable or module load, or the
 caller of `venue:adapter/configure`. A parser that also reads an operation's
 input throws `IllegalArgumentException`, and `configure` rethrows it as
-`ConfigurationException` with the cause chained; anything else escaping
-`configure` is the adapter's fault ([ERRORS.md](ERRORS.md)). Security
+`ConfigurationException` with the cause chained; any other exception
+escaping `configure` that is not a Covia exception is the adapter's fault
+([ERRORS.md](ERRORS.md)). Security
 boundaries and reserved settings must remain enforced even in lenient mode.
 Return `false` only to decline a valid but unavailable configuration. The
 reserved `enabled` key is owned by the framework.

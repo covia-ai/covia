@@ -1283,8 +1283,9 @@ public class Engine {
 	 * Offers an adapter a configuration, from the venue config or a runtime
 	 * reconfiguration. A setting the adapter refuses is its
 	 * {@link ConfigurationException}, which reaches whoever supplied the
-	 * settings as it is; anything else escaping {@link AAdapter#configure} is
-	 * the adapter's fault (docs/ERRORS.md).
+	 * settings as it is, like any Covia exception with a reason; any other
+	 * exception escaping {@link AAdapter#configure} is the adapter's fault
+	 * (docs/ERRORS.md).
 	 *
 	 * @return whether the adapter accepted the configuration
 	 */
