@@ -2,6 +2,7 @@ package covia.adapter;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.net.ServerSocket;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -26,6 +27,7 @@ import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.exception.ConfigurationException;
+import covia.exception.UnavailableException;
 import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -200,6 +202,54 @@ public class P2PAdapterTest {
 			assertEquals(CVMBool.FALSE, RT.getIn(peers(engine), P2PAdapter.K_JOINED));
 			await(events, e -> P2PAdapter.REMOVED.equals(e.type()) && otherDid.equals(e.did()), "leaving lists it removed");
 		} finally {
+			engine.close();
+		}
+	}
+
+	/** Settings that listen on {@code port}, polling rarely: nothing here waits on the timer. */
+	private static AMap<AString, ACell> listeningOn(int port) {
+		return Maps.of("join", true, "pollMs", 60_000, "port", port,
+			"url", "tcp://localhost:" + port, "allowPrivateURL", true);
+	}
+
+	/**
+	 * A node that cannot launch, here on a port in use, leaves the venue
+	 * running: at start-up the adapter fails until restarted, and a runtime
+	 * change it cannot launch with is refused, the node carrying on as it was.
+	 */
+	@Test
+	public void testNodeThatCannotLaunchIsUnavailableUntilRestarted() throws Exception {
+		String launchFailed = P2PAdapter.LAUNCH_FAILED.formatted("");
+		ServerSocket blocker = new ServerSocket(0);
+		int port = blocker.getLocalPort();
+		Engine engine = TestEngine.application().mount(AKeyPair.generate(),
+			Maps.of(Config.ADAPTERS, Maps.of("p2p", listeningOn(port))));
+		try {
+			engine.launch();
+			String reason = engine.adapterFailure("p2p");
+			assertNotNull(reason, "the venue launched without its node");
+			assertTrue(reason.startsWith(launchFailed), reason);
+			ExecutionException refused = assertThrows(ExecutionException.class, () -> engine.jobs()
+				.invokeInternal(PEERS, Maps.empty(), engine.venueContext()).get(WAIT_MS, TimeUnit.MILLISECONDS));
+			assertInstanceOf(UnavailableException.class, refused.getCause());
+
+			blocker.close();
+			engine.restartAdapter("p2p");
+			assertNull(engine.adapterFailure("p2p"));
+			assertEquals(CVMBool.TRUE, RT.getIn(peers(engine), P2PAdapter.K_JOINED));
+
+			try (ServerSocket taken = new ServerSocket(0)) {
+				UnavailableException change = assertThrows(UnavailableException.class,
+					() -> engine.configureAdapter("p2p", listeningOn(taken.getLocalPort())));
+				assertTrue(change.getMessage().startsWith(launchFailed), change.getMessage());
+			}
+			assertNull(engine.adapterFailure("p2p"), "the node relaunched with the settings it had");
+			assertEquals(listeningOn(port), engine.adapterConfig("p2p"));
+			AString transport = RT.ensureString(RT.ensureVector(
+				RT.getIn(peers(engine), P2PAdapter.K_SELF, P2PAdapter.K_TRANSPORTS)).get(0));
+			assertTrue(transport.toString().endsWith(":" + port), transport.toString());
+		} finally {
+			blocker.close();
 			engine.close();
 		}
 	}
