@@ -43,6 +43,7 @@ public class AdapterFailureTest {
 	private static final Blob RECOVERED_JOB = Blob.fromHex("0a11");
 	private static final String START_FAILURE = "flaky backend unreachable";
 	private static final String REFUSED = "flaky refuses this setting";
+	private static final String DELETION_FAILURE = "flaky cannot reach its store of user data";
 	private static final AString K_COLOUR = Strings.intern("colour");
 
 	/** Fails to start while {@code failStart}; records its lifecycle calls. */
@@ -52,6 +53,7 @@ public class AdapterFailureTest {
 		/** A colour it refuses while it accepts others. */
 		volatile String refuseColour;
 		volatile boolean closed;
+		volatile boolean failDeletion;
 		volatile AMap<AString, ACell> configured;
 		final List<String> events = new CopyOnWriteArrayList<>();
 
@@ -77,6 +79,9 @@ public class AdapterFailureTest {
 			if (failStart) throw new UnavailableException(START_FAILURE);
 		}
 		@Override public void stop() { events.add("stop"); }
+		@Override public void onUserDeleted(AString did, AMap<AString, ACell> previousUser) {
+			if (failDeletion) throw new UnavailableException(DELETION_FAILURE);
+		}
 		@Override public void close() { closed = true; }
 		@Override public CompletableFuture<ACell> invokeFuture(RequestContext ctx,
 				AMap<AString, ACell> meta, ACell input) {
@@ -174,6 +179,32 @@ public class AdapterFailureTest {
 			engine.removeAdapter(NAME);
 			assertNull(engine.adapterFailure(NAME), "removal forgets the failure");
 			assertTrue(flaky.closed);
+		} finally {
+			engine.close();
+		}
+	}
+
+	@Test
+	public void enableThatCannotFinishAUserDeletionLeavesTheAdapterDisabled() {
+		Engine engine = boot();
+		try {
+			FlakyAdapter flaky = new FlakyAdapter();
+			engine.registerAdapter(flaky);
+			AString user = TestEngine.uniqueDID("flaky-user");
+			engine.getVenueState().users().create(user);
+			flaky.failDeletion = true;
+			assertEquals(DELETION_FAILURE, assertThrows(UnavailableException.class,
+				() -> engine.deleteUser(engine.venueContext(), user)).getMessage());
+			engine.disableAdapter(NAME);
+
+			// Enabling resumes the deletion first; when that fails, the adapter is disabled as before.
+			assertEquals(DELETION_FAILURE, assertThrows(UnavailableException.class,
+				() -> engine.enableAdapter(NAME)).getMessage());
+			assertFalse(engine.hasAdapter(NAME));
+			assertFalse(flaky.closed, "the instance is kept for the next enable");
+			flaky.failDeletion = false;
+			assertTrue(engine.enableAdapter(NAME));
+			assertNull(engine.adapterFailure(NAME));
 		} finally {
 			engine.close();
 		}

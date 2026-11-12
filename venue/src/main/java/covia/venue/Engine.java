@@ -1389,6 +1389,8 @@ public class Engine {
 		boolean previousActive = previous != null && adapters.get(name) == previous;
 		// A failed instance is not started again if this one fails.
 		boolean previousRunning = previousActive && !adapterFailures.containsKey(name);
+		// An instance being enabled goes back to disabled, not closed, if this fails.
+		boolean parked = disabledAdapters.get(name) == adapter;
 		java.util.List<String> previousOrder = java.util.List.copyOf(adapterRegistrationOrder);
 		if (adapter.engine == null) adapter.install(this);
 		new covia.venue.auth.AuthMethods(this).validateAdapter(adapter);
@@ -1426,6 +1428,7 @@ public class Engine {
 			if (!previousActive && previous != null && previous != adapter) {
 				disabledAdapters.put(name, previous);
 			}
+			if (parked) disabledAdapters.put(name, adapter);
 			try {
 				if (catalogPublished) {
 					if (previousActive && previous != adapter) {
@@ -1437,7 +1440,7 @@ public class Engine {
 			} catch (RuntimeException | Error rollbackFailure) {
 				failure.addSuppressed(rollbackFailure);
 			}
-			if (adapter instanceof AutoCloseable closeable) {
+			if (!parked && adapter instanceof AutoCloseable closeable) {
 				try { closeable.close(); }
 				catch (Exception closeFailure) { failure.addSuppressed(closeFailure); }
 			}

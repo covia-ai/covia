@@ -556,6 +556,7 @@ public class AdapterLifecycleTest {
 		engine.getVenueState().users().create(caller);
 		for (String op : new String[] {"v/ops/venue/adapters", "v/ops/venue/adapter/disable",
 				"v/ops/venue/adapter/enable", "v/ops/venue/adapter/configure",
+				"v/ops/venue/adapter/restart",
 				"v/ops/venue/module/load", "v/ops/venue/module/unload",
 				"v/ops/venue/restart", "v/ops/venue/gc"}) {
 			ExecutionException denied = assertThrows(ExecutionException.class,
@@ -566,7 +567,7 @@ public class AdapterLifecycleTest {
 					RequestContext.of(caller)).get(10, TimeUnit.SECONDS), op);
 			assertInstanceOf(AuthException.class, denied.getCause(), op);
 			assertFalse(denied.getCause().getMessage().isBlank(), op);
-			if (op.endsWith("/restart")) {
+			if (op.equals("v/ops/venue/restart")) {
 				assertTrue(denied.getCause().getMessage().contains("admin/venue/restart"), op);
 				assertTrue(denied.getCause().getMessage().contains("/process"), op);
 			} else if (op.endsWith("/gc")) {

@@ -275,8 +275,7 @@ forgets the failure.
 on: `UnavailableException` for a port in use or a service out of reach, the
 P2P node's launch failure being one. Recovery runs before `start()`, so the
 default recovery has already ended an unfinished job of an adapter that then
-fails to start; an adapter that re-attaches jobs in `recoverJob` and has
-workers to drive them must resume them in its next successful `start()`.
+fails to start, and a restart does not call `recoverJob` again.
 
 Runtime registration differs, because module loading undoes what it
 registered when a registration throws: a new instance registered on a started
