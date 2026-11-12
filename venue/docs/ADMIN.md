@@ -15,13 +15,28 @@ granting venue administration. Sensitive user operations also need their own
 precise permissions. Every contract must name its resource, ability and any
 additional restrictions, regardless of how the action is reached.
 
-[UCAN.md](UCAN.md) defines capability enforcement and granting.
-[VENUE_AUTHORITY.md](VENUE_AUTHORITY.md) proposes dormant allowances and
-explicit activation. This document inventories *what is privileged* and
-proposes its vocabulary; that design determines *how authority is elevated*.
-[AUTH.md](AUTH.md) separately covers identity and authentication assurance.
-The normative capability and granting contracts remain COG-13 and COG-17 in
-covia-docs.
+## Document responsibilities
+
+| Document | Owns |
+|----------|------|
+| **ADMIN.md (this document)** | Which operations count as venue administration; their ability names, target resources, additional restrictions and exceptions; separation from ordinary domain management; migration of those privileges |
+| [VENUE_AUTHORITY.md](VENUE_AUTHORITY.md) | The general authority-elevation model: base and additions, allowances, issuance, activation, expiry/revocation, deferred work, the venue's host power and the trusted-code boundary |
+| [UCAN.md](UCAN.md) | Capability matching and enforcement, ownership, proof validation, granting and delegation, and federation |
+| [AUTH.md](AUTH.md) | Authentication, identity evidence, sessions and assurance policy |
+
+ADMIN.md is the design's single inventory of privileged operations.
+VENUE_AUTHORITY.md refers here for that inventory rather than defining its
+own operation list or admin ability taxonomy. Conversely, this document
+refers there for elevation mechanics; classifying an operation as admin does
+not implement or require the proposed activation model. An allowance can
+cover ordinary domain capabilities too: elevation and admin classification
+are separate concerns.
+
+Subsystem documents retain their operation behavior and detailed contracts;
+this inventory links to them and records the privilege classification.
+Cross-cutting documents should reference the owning contract rather than
+maintain competing definitions. The normative capability and granting
+contracts remain COG-13 and COG-17 in covia-docs.
 
 ## Scope and naming
 
@@ -178,10 +193,10 @@ Some privileged paths deliberately have no delegable administrative ability:
 
 List these as privileged restrictions rather than silently converting them
 to capability checks. The naming proposal does not make them delegable.
-In-process Java and operator-selected modules remain trusted code; an admin
-capability is not a sandbox around code with direct access to the engine or
-host process. Loading modules or handing off to a jar is therefore a code
-execution privilege, not merely a settings change.
+The trusted-code boundary is defined in
+[VENUE_AUTHORITY.md](VENUE_AUTHORITY.md#trusted-code). Consequently, loading
+modules or handing off to a jar is a code execution privilege, not merely a
+settings change.
 
 ## Where finer control is needed
 
@@ -200,11 +215,9 @@ policy changes to agree before implementation:
 3. **Separate maintenance from executable code changes.** Consider distinct
    rights for module load/unload and jar replacement instead of treating
    them as ordinary adapter management and restart.
-4. **Explicit activation (deferred).** The initial organisation preserves
-   implicit owner authority and unrestricted-agent behavior. Requiring
-   activation changes the base-authority contract and belongs with
-   VENUE_AUTHORITY.md, not in a special-case string matcher. That design is
-   not yet implemented.
+4. **Explicit activation (deferred).** See the separate
+   [elevation design](VENUE_AUTHORITY.md#design); this organisation of
+   privileges preserves current owner and unrestricted-agent behavior.
 5. **Audit coverage.** Audit logging is opt-in (`logging.audit`). User
    mutations, selected credential actions and venue administration have
    events, but this is not a uniform trail for every privileged check.
