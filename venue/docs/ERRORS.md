@@ -36,6 +36,7 @@ unchanged and do not log it again.
 |---|---|---|
 | An adapter running an operation | Where the operation's outcome becomes its Job's: `Job.fail(Throwable)` through `Job.report`, from `AAdapter.invoke`, `settleJob`, `JobManager.start` and the adapters that run their own Jobs | `Operation <op> failed: unexpected <ClassName> in adapter <name>`, where `<op>` is the operation as the caller referred to it |
 | An adapter taking a message for a running Job | `JobManager` message delivery | `Message delivery to job <id> failed: unexpected <ClassName> in adapter <name>` |
+| An adapter being configured | Where the Engine offers it a configuration: start-up, enable, module load and `venue:adapter/configure` | `Configuring adapter <name> failed: unexpected <ClassName> in adapter <name>` |
 | An agent's transition | `CycleRecord.Failure.of`, in the adapter running it | `Transition failed: unexpected <ClassName> in adapter <name>` |
 | An agent's tool call (finding the tool, parsing arguments, built-in tools) | `AbstractLLMAdapter.toolFailure` | `Tool <name> failed: unexpected <ClassName> in the venue`; a goal-tree subgoal names its adapter |
 | A venue request (REST, MCP, A2A, other HTTP routes) | The route's catch and the server's catch-all | `Request <method> <path> (id <request id>) failed: unexpected <ClassName> in the venue`; MCP and A2A name the tool call, method or stream |
@@ -134,13 +135,20 @@ the Covia type for what it was attempting, with the cause chained.
 knows the arguments came from a model, rethrows as `InvalidInputException`. One
 that escapes instead is a fault of the scope it escapes.
 
-**A shared parser leaves the choice to each caller.** An adapter's `configure`
-throws `IllegalArgumentException` for a malformed setting
-([ADAPTERS.md](ADAPTERS.md)). The Engine rethrows it as
-`ConfigurationException` when the settings come from the venue's configuration,
-and as `InvalidInputException` when an operator supplies them through
-`venue:adapter/configure`. A messaging bot spec read from operator config and
-from a user's create operation works the same way.
+**An adapter's settings are refused as its configuration.** An adapter's
+`configure` refuses a setting with `ConfigurationException`, whoever supplied
+it: the operator's venue config at start-up, enable or module load, or the
+caller of `venue:adapter/configure`, who gets it unchanged. Whether settings
+work is known only by applying them, so a malformed setting, one that cannot
+work on this venue and settings that fail as they are applied are the same
+failure ([ADAPTERS.md](ADAPTERS.md)). Only a request whose `config` is not an
+object is invalid input.
+
+**A shared parser leaves the choice to each caller.** A parser that reads both
+an adapter's settings and an operation's input, such as a messaging bot spec, a
+Claude Code project or a P2P peer address, throws `IllegalArgumentException`.
+`configure` rethrows it as `ConfigurationException` and the operation as
+`InvalidInputException`.
 
 **Library exceptions are wrapped where the call is made.** Convex parsing, JSON,
 IO and HTTP client failures are caught by the caller and rethrown as the type

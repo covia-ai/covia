@@ -1,6 +1,8 @@
 package covia.adapter.discord;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -10,6 +12,7 @@ import convex.core.data.AString;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
+import covia.exception.ConfigurationException;
 
 /**
  * The Discord module's helpers, called directly. Bots running against a venue
@@ -28,7 +31,16 @@ class DiscordHelpersTest {
 		assertFalse(s.allows("9", "bob"));
 		assertFalse(s.toString().contains("DISCORD"));
 		DiscordAdapter fresh = new DiscordAdapter();
-		assertThrows(IllegalArgumentException.class, () -> fresh.configure(Maps.of("statePath", "w/elsewhere"), false));
+		assertEquals(DiscordAdapter.STATE_PATH_FIXED, assertThrows(ConfigurationException.class,
+			() -> fresh.configure(Maps.of("statePath", "w/elsewhere"), false)).getMessage());
+		assertEquals(DiscordAdapter.API_URL_NOT_HTTP, assertThrows(ConfigurationException.class,
+			() -> fresh.configure(Maps.of("apiUrl", "ftp://x"), false)).getMessage());
+		assertEquals(DiscordAdapter.UNKNOWN_SETTING.formatted("unknown"), assertThrows(ConfigurationException.class,
+			() -> fresh.configure(Maps.of("unknown", true), true)).getMessage());
+		// The bot parser also reads create input, so its refusal is rethrown here as configuration
+		ConfigurationException badBot = assertThrows(ConfigurationException.class,
+			() -> fresh.configure(Maps.of("bots", Maps.of("main", Maps.empty())), false));
+		assertInstanceOf(IllegalArgumentException.class, badBot.getCause());
 		fresh.close();
 	}
 }

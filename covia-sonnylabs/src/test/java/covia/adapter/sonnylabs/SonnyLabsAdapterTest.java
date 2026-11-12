@@ -27,6 +27,7 @@ import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.api.Fields;
 import covia.adapter.agent.Skills;
+import covia.exception.ConfigurationException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.Config;
@@ -48,16 +49,19 @@ class SonnyLabsAdapterTest {
 			"apiVersion", "2026-06-01",
 			"timeoutMillis", 15_000L), true));
 
-		assertThrows(IllegalArgumentException.class,
-			() -> adapter.configure(Maps.of("apiKey", "sk_live_raw"), true));
-		assertThrows(IllegalArgumentException.class,
-			() -> adapter.configure(Maps.of("baseUrl", "file:///tmp/sonny"), true));
-		assertThrows(IllegalArgumentException.class,
-			() -> adapter.configure(Maps.of("apiVersion", "latest"), true));
-		assertThrows(IllegalArgumentException.class,
-			() -> adapter.configure(Maps.of("timeoutMillis", 0L), true));
-		assertThrows(IllegalArgumentException.class,
-			() -> adapter.configure(Maps.of("typo", true), true));
+		assertEquals(SonnyLabsAdapter.KEY_NOT_SECRET_REF.formatted("adapters.sonnylabs.apiKey"),
+			assertThrows(ConfigurationException.class,
+				() -> adapter.configure(Maps.of("apiKey", "sk_live_raw"), true)).getMessage());
+		assertEquals(SonnyLabsAdapter.BAD_BASE_URL, assertThrows(ConfigurationException.class,
+			() -> adapter.configure(Maps.of("baseUrl", "file:///tmp/sonny"), true)).getMessage());
+		assertEquals(SonnyLabsAdapter.BAD_API_VERSION, assertThrows(ConfigurationException.class,
+			() -> adapter.configure(Maps.of("apiVersion", "latest"), true)).getMessage());
+		assertEquals(SonnyLabsAdapter.BAD_TIMEOUT, assertThrows(ConfigurationException.class,
+			() -> adapter.configure(Maps.of("timeoutMillis", 0L), true)).getMessage());
+		assertEquals(SonnyLabsAdapter.NOT_INTEGER.formatted("timeoutMillis"), assertThrows(ConfigurationException.class,
+			() -> adapter.configure(Maps.of("timeoutMillis", "soon"), true)).getMessage());
+		assertEquals(SonnyLabsAdapter.UNKNOWN_SETTING.formatted("typo"), assertThrows(ConfigurationException.class,
+			() -> adapter.configure(Maps.of("typo", true), true)).getMessage());
 		assertTrue(adapter.configure(Maps.of("typo", true), false),
 			"lenient mode ignores unknown adapter settings");
 	}

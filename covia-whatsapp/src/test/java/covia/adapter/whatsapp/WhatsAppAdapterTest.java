@@ -23,7 +23,7 @@ import covia.adapter.AAdapter;
 import covia.adapter.AgentAdapter;
 import covia.adapter.webhook.*;
 import covia.api.Fields;
-import covia.exception.InvalidInputException;
+import covia.exception.ConfigurationException;
 import covia.exception.NotSupportedException;
 import covia.exception.ResponseException;
 import covia.venue.*;
@@ -61,8 +61,10 @@ class WhatsAppAdapterTest {
 			String status = f.run("bots", Maps.empty()).toString();
 			assertFalse(status.contains(TOKEN)); assertFalse(status.contains("s/SIGNING"));
 			assertTrue(status.contains("/webhooks/whatsapp/c-main"));
-			assertThrows(InvalidInputException.class, () -> f.engine.configureAdapter(NAME, Maps.of("statePath", "w/other")));
-			assertThrows(InvalidInputException.class, () -> f.engine.configureAdapter(NAME, Maps.of("apiUrl", "https://token@example.com")));
+			assertEquals(MessagingSettings.UNKNOWN.formatted("statePath"), assertThrows(ConfigurationException.class,
+				() -> f.engine.configureAdapter(NAME, Maps.of("statePath", "w/other"))).getMessage());
+			assertEquals(MessagingHttp.INVALID_URL, assertThrows(ConfigurationException.class,
+				() -> f.engine.configureAdapter(NAME, Maps.of("apiUrl", "https://token@example.com"))).getMessage());
 			assertEquals(200, f.webhook(payload(message("still-live"))).status());
 			assertEquals("Bearer " + TOKEN, f.api.take().authorization());
 		}

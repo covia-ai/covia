@@ -48,6 +48,7 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.adapter.AAdapter;
 import covia.adapter.TextExtractor;
+import covia.exception.ConfigurationException;
 import covia.exception.CoviaException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotSupportedException;
@@ -83,6 +84,9 @@ public class DocumentsAdapter extends AAdapter implements TextExtractor {
 	public static final int DEFAULT_MAX_CHARS = 16_000;
 	/** The most a caller may ask for, however the operator configures the default. */
 	public static final int MAX_CHARS_CEILING = 1_000_000;
+	/** Refusal of {@code adapters.documents.maxChars}; the value given follows. */
+	public static final String BAD_MAX_CHARS =
+		"adapters.documents.maxChars must be an integer from 1 to " + MAX_CHARS_CEILING + ", got: %s";
 	/** A paged document averaging fewer characters per page than this has no usable text layer. */
 	static final int SCANNED_CHARS_PER_PAGE = 20;
 
@@ -148,8 +152,7 @@ public class DocumentsAdapter extends AAdapter implements TextExtractor {
 		if (config != null && config.get(K_MAX_CHARS_CONFIG) != null) {
 			CVMLong n = RT.ensureLong(config.get(K_MAX_CHARS_CONFIG));
 			if (n == null || n.longValue() < 1 || n.longValue() > MAX_CHARS_CEILING) {
-				throw new IllegalArgumentException("adapters.documents.maxChars must be an integer from 1 to "
-					+ MAX_CHARS_CEILING + ", got: " + config.get(K_MAX_CHARS_CONFIG));
+				throw new ConfigurationException(BAD_MAX_CHARS.formatted(config.get(K_MAX_CHARS_CONFIG)));
 			}
 			cap = (int) n.longValue();
 		}

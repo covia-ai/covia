@@ -25,6 +25,7 @@ import convex.p2p.P2PLattice;
 import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.AuthException;
+import covia.exception.ConfigurationException;
 import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -138,19 +139,25 @@ public class P2PAdapterTest {
 		assertEquals("peer.example", on.peers().get(0).host());
 		assertEquals(18888, on.peers().get(0).port());
 
-		assertThrows(IllegalArgumentException.class, () -> P2PAdapter.parse(Maps.of("listen", true), true),
-			"strict mode rejects unknown settings");
+		assertEquals(P2PAdapter.UNKNOWN_SETTING.formatted("listen"), assertThrows(ConfigurationException.class,
+			() -> P2PAdapter.parse(Maps.of("listen", true), true)).getMessage(), "strict mode rejects unknown settings");
 		P2PAdapter.parse(Maps.of("listen", true), false);
-		assertThrows(IllegalArgumentException.class, () -> P2PAdapter.parse(Maps.of("join", "yes"), false));
-		assertThrows(IllegalArgumentException.class, () -> P2PAdapter.parse(Maps.of("port", 70000), false));
-		assertThrows(IllegalArgumentException.class, () -> P2PAdapter.parse(Maps.of("url", "tcp://peer.example:1"), false),
+		assertEquals(P2PAdapter.NOT_BOOLEAN.formatted("join"), assertThrows(ConfigurationException.class,
+			() -> P2PAdapter.parse(Maps.of("join", "yes"), false)).getMessage());
+		assertEquals(P2PAdapter.BAD_PORT.formatted(70000), assertThrows(ConfigurationException.class,
+			() -> P2PAdapter.parse(Maps.of("port", 70000), false)).getMessage());
+		assertEquals(P2PAdapter.URL_WITHOUT_PORT, assertThrows(ConfigurationException.class,
+			() -> P2PAdapter.parse(Maps.of("url", "tcp://peer.example:1"), false)).getMessage(),
 			"a URL advertises a listener, so it needs a port");
-		assertThrows(IllegalArgumentException.class, () -> P2PAdapter.parse(Maps.of("port", 0, "url", "tcp://localhost:0"), false),
+		assertThrows(ConfigurationException.class, () -> P2PAdapter.parse(Maps.of("port", 0, "url", "tcp://localhost:0"), false),
 			"loopback URLs need allowPrivateURL");
-		assertThrows(IllegalArgumentException.class, () -> P2PAdapter.parse(Maps.of("pollMs", 1), false));
-		assertThrows(IllegalArgumentException.class, () -> P2PAdapter.parse(Maps.of("peers", Vectors.of(
+		assertEquals(P2PAdapter.BAD_POLL.formatted(1), assertThrows(ConfigurationException.class,
+			() -> P2PAdapter.parse(Maps.of("pollMs", 1), false)).getMessage());
+		// The peer parser also reads a connect call's input, so its refusal is rethrown here as configuration
+		ConfigurationException notDidKey = assertThrows(ConfigurationException.class, () -> P2PAdapter.parse(Maps.of("peers", Vectors.of(
 			Maps.of("did", "did:web:example.com", "address", "peer.example:1"))), false));
-		assertThrows(IllegalArgumentException.class, () -> P2PAdapter.parse(Maps.of("peers", Vectors.of(
+		assertInstanceOf(IllegalArgumentException.class, notDidKey.getCause());
+		assertThrows(ConfigurationException.class, () -> P2PAdapter.parse(Maps.of("peers", Vectors.of(
 			Maps.of("did", UCAN.toDIDKey(AKeyPair.generate().getAccountKey()), "address", "peer.example"))), false));
 	}
 

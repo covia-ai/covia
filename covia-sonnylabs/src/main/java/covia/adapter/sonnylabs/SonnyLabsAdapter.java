@@ -45,6 +45,19 @@ public class SonnyLabsAdapter extends AAdapter {
 	private static final Set<AString> CONFIG_KEYS = Set.of(
 		K_ENABLED, K_BASE_URL, K_API_KEY, K_API_VERSION, K_TIMEOUT_MILLIS);
 
+	/** Refusals of the {@code adapters.sonnylabs} settings. */
+	public static final String UNKNOWN_SETTING =
+		"adapters.sonnylabs: unknown setting %s (known: baseUrl, apiKey, apiVersion, timeoutMillis, enabled)";
+	public static final String NOT_STRING = "adapters.sonnylabs.%s must be a non-empty string";
+	public static final String NOT_INTEGER = "adapters.sonnylabs.%s must be an integer";
+	public static final String BAD_BASE_URL =
+		"adapters.sonnylabs.baseUrl must be an absolute HTTP(S) URL without credentials, query, or fragment";
+	public static final String INVALID_BASE_URL = "adapters.sonnylabs.baseUrl must be a valid HTTP(S) URL";
+	public static final String BAD_API_VERSION = "adapters.sonnylabs.apiVersion must be a date in YYYY-MM-DD form";
+	public static final String BAD_TIMEOUT = "adapters.sonnylabs.timeoutMillis must be between 1 and " + MAX_TIMEOUT_MILLIS;
+	/** An API key reference that names no secret; the field follows. */
+	public static final String KEY_NOT_SECRET_REF = "%s must be an s/NAME secret reference, never a raw API key";
+
 	private static final AString K_TEXT = Strings.intern("text");
 	private static final AString K_SURFACE = Strings.intern("surface");
 	private static final AString K_TIER = Strings.intern("tier");
@@ -94,8 +107,7 @@ public class SonnyLabsAdapter extends AAdapter {
 			for (long i = 0; i < config.count(); i++) {
 				ACell key = config.entryAt(i).getKey();
 				if (!(key instanceof AString text) || !CONFIG_KEYS.contains(text)) {
-					throw new IllegalArgumentException("adapters.sonnylabs: unknown setting " + key
-						+ " (known: baseUrl, apiKey, apiVersion, timeoutMillis, enabled)");
+					throw new ConfigurationException(UNKNOWN_SETTING.formatted(key));
 				}
 			}
 		}
@@ -107,15 +119,11 @@ public class SonnyLabsAdapter extends AAdapter {
 
 		validateBaseUrl(nextBaseUrl);
 		String badKeyRef = secretRefProblem(nextApiKeyRef, "adapters.sonnylabs.apiKey");
-		if (badKeyRef != null) throw new IllegalArgumentException(badKeyRef);
+		if (badKeyRef != null) throw new ConfigurationException(badKeyRef);
 		if (nextApiVersion != null && !nextApiVersion.matches("\\d{4}-\\d{2}-\\d{2}")) {
-			throw new IllegalArgumentException(
-				"adapters.sonnylabs.apiVersion must be a date in YYYY-MM-DD form");
+			throw new ConfigurationException(BAD_API_VERSION);
 		}
-		if (nextTimeout < 1 || nextTimeout > MAX_TIMEOUT_MILLIS) {
-			throw new IllegalArgumentException("adapters.sonnylabs.timeoutMillis must be between 1 and "
-				+ MAX_TIMEOUT_MILLIS);
-		}
+		if (nextTimeout < 1 || nextTimeout > MAX_TIMEOUT_MILLIS) throw new ConfigurationException(BAD_TIMEOUT);
 
 		this.baseUrl = stripTrailingSlashes(nextBaseUrl);
 		this.apiKeyRef = nextApiKeyRef;
@@ -292,10 +300,7 @@ public class SonnyLabsAdapter extends AAdapter {
 		ACell value = config.get(key);
 		if (value == null) return null;
 		AString text = RT.ensureString(value);
-		if (text == null || text.isEmpty()) {
-			throw new IllegalArgumentException("adapters.sonnylabs." + key
-				+ " must be a non-empty string");
-		}
+		if (text == null || text.isEmpty()) throw new ConfigurationException(NOT_STRING.formatted(key));
 		return text.toString();
 	}
 
@@ -304,17 +309,13 @@ public class SonnyLabsAdapter extends AAdapter {
 		ACell value = config.get(key);
 		if (value == null) return fallback;
 		CVMLong number = RT.ensureLong(value);
-		if (number == null) {
-			throw new IllegalArgumentException("adapters.sonnylabs." + key + " must be an integer");
-		}
+		if (number == null) throw new ConfigurationException(NOT_INTEGER.formatted(key));
 		return number.longValue();
 	}
 
 	/** Why {@code ref} cannot name the API key's secret, or null when it can. */
 	private static String secretRefProblem(String ref, String field) {
-		if (!Engine.isSecretRef(ref) || ref.endsWith("/")) {
-			return field + " must be an s/NAME secret reference, never a raw API key";
-		}
+		if (!Engine.isSecretRef(ref) || ref.endsWith("/")) return KEY_NOT_SECRET_REF.formatted(field);
 		return null;
 	}
 
@@ -325,11 +326,10 @@ public class SonnyLabsAdapter extends AAdapter {
 					|| !("http".equalsIgnoreCase(uri.getScheme())
 						|| "https".equalsIgnoreCase(uri.getScheme()))
 					|| uri.getUserInfo() != null || uri.getQuery() != null || uri.getFragment() != null) {
-				throw new IllegalArgumentException("adapters.sonnylabs.baseUrl must be an absolute "
-					+ "HTTP(S) URL without credentials, query, or fragment");
+				throw new ConfigurationException(BAD_BASE_URL);
 			}
 		} catch (URISyntaxException e) {
-			throw new IllegalArgumentException("adapters.sonnylabs.baseUrl must be a valid HTTP(S) URL", e);
+			throw new ConfigurationException(INVALID_BASE_URL, e);
 		}
 	}
 

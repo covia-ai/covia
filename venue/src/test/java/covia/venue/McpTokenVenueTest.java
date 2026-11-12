@@ -25,6 +25,7 @@ import covia.adapter.McpToken;
 import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.AuthException;
+import covia.exception.ConfigurationException;
 import covia.grid.Job;
 import covia.grid.Operation;
 import covia.grid.Status;
@@ -131,6 +132,9 @@ public class McpTokenVenueTest {
 		assertNotEquals(first, rotated);
 		assertNull(engine.mcpTokens().lookup(first), "rotation retires the old bearer");
 		assertEquals(rotated, bearer(complete(get(owner, "kept"))));
+		assertEquals(MCPAdapter.KEEP_RAW_NOT_BOOLEAN, assertThrows(ConfigurationException.class,
+			() -> engine.configureAdapter("mcp", Maps.of("keepRawTokens", "yes"))).getMessage());
+		assertEquals(rotated, bearer(complete(get(owner, "kept"))), "a refused setting changes nothing");
 
 		try {
 			engine.configureAdapter("mcp", Maps.empty());

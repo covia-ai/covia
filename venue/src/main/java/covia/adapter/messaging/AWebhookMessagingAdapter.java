@@ -19,6 +19,7 @@ import covia.adapter.relay.RelayHandler;
 import covia.adapter.webhook.WebhookHandler;
 import covia.adapter.webhook.WebhookRequest;
 import covia.adapter.webhook.WebhookResponse;
+import covia.exception.ConfigurationException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotSupportedException;
 import covia.exception.UnavailableException;
@@ -82,15 +83,21 @@ public abstract class AWebhookMessagingAdapter<S extends WebhookBotSpec>
 
 	@Override public final synchronized boolean configure(AMap<AString, ACell> settings, boolean strict) {
 		if (settings == null) settings = Maps.empty();
-		if (settings.containsKey(MessagingSettings.key("statePath"))) throw new IllegalArgumentException(MessagingSettings.UNKNOWN.formatted("statePath"));
-		if (strict) MessagingSettings.known(settings, Set.of("bots", "apiUrl", "enabled"));
-		String endpoint = MessagingSettings.optional(settings, "apiUrl");
-		endpoint = MessagingHttp.endpoint(endpoint == null ? defaultApiUrl() : endpoint);
+		if (settings.containsKey(MessagingSettings.key("statePath"))) throw new ConfigurationException(MessagingSettings.UNKNOWN.formatted("statePath"));
+		String endpoint;
 		var parsed = new LinkedHashMap<String, S>();
-		ACell bots = settings.get(K_BOTS);
-		if (bots != null) for (var entry : MessagingSettings.object(bots).entrySet()) {
-			if (!(entry.getKey() instanceof AString name)) throw new IllegalArgumentException(MessagingSettings.INVALID_NAME);
-			parsed.put(name.toString(), parseBot(name.toString(), entry.getValue(), strict));
+		try {
+			if (strict) MessagingSettings.known(settings, Set.of("bots", "apiUrl", "enabled"));
+			endpoint = MessagingSettings.optional(settings, "apiUrl");
+			endpoint = MessagingHttp.endpoint(endpoint == null ? defaultApiUrl() : endpoint);
+			ACell bots = settings.get(K_BOTS);
+			if (bots != null) for (var entry : MessagingSettings.object(bots).entrySet()) {
+				if (!(entry.getKey() instanceof AString name)) throw new ConfigurationException(MessagingSettings.INVALID_NAME);
+				parsed.put(name.toString(), parseBot(name.toString(), entry.getValue(), strict));
+			}
+		} catch (IllegalArgumentException e) {
+			// The settings parsers also read a create call's input; here they read the settings
+			throw new ConfigurationException(e.getMessage(), e);
 		}
 		apiUrl = endpoint;
 		configureBots(parsed);

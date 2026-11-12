@@ -33,6 +33,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Fixed
 
+- An adapter that fails unexpectedly while being configured, at start-up or through `venue:adapter/configure`, is reported as that adapter's fault rather than as invalid input or the `venue` adapter's fault; a setting it refuses is a configuration error from either source.
 - Account REST reads and deletion honour delegated administration grants in `X-Covia-Ucans`.
 - Job SSE subscriptions no longer miss completion while connecting or deliver initial state after a newer update.
 

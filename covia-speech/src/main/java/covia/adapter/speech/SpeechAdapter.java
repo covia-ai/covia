@@ -27,6 +27,7 @@ import convex.core.lang.RT;
 import covia.adapter.AAdapter;
 import covia.adapter.messaging.MessagingMedia;
 import covia.api.Fields;
+import covia.exception.ConfigurationException;
 import covia.exception.InvalidInputException;
 import covia.exception.JobFailedException;
 import covia.exception.NotFoundException;
@@ -159,6 +160,7 @@ public class SpeechAdapter extends AAdapter implements AutoCloseable {
 	static final String DEFAULT_LOCAL_VOICE = "0";
 	public static final String INVALID_THREADS = "adapters.speech.local.threads must be an integer from 1 to 16";
 	public static final String INVALID_FLAG = "adapters.speech.local.%s must be true or false";
+	public static final String INVALID_NATIVE_PATH = "adapters.speech.local.nativePath is not a valid path: %s";
 
 	/** Messaging attachment kinds that are speech. */
 	private static final Set<String> AUDIO_KINDS = Set.of("audio", "voice");
@@ -211,7 +213,7 @@ public class SpeechAdapter extends AAdapter implements AutoCloseable {
 		if (strict) {
 			for (var entry : config.entrySet()) {
 				if (!CONFIG_KEYS.contains(entry.getKey())) {
-					throw new IllegalArgumentException(UNKNOWN_SETTING.formatted(entry.getKey(), CONFIG_KEYS));
+					throw new ConfigurationException(UNKNOWN_SETTING.formatted(entry.getKey(), CONFIG_KEYS));
 				}
 			}
 		}
@@ -261,22 +263,22 @@ public class SpeechAdapter extends AAdapter implements AutoCloseable {
 	 */
 	private Settings settings(AMap<AString, ACell> config) {
 		String transcribeName = setting(config, K_ENGINE, "openai");
-		if (!transcribeName.equals("openai") && !transcribeName.equals(LocalSpeechEngine.NAME)) throw new IllegalArgumentException(INVALID_ENGINE);
+		if (!transcribeName.equals("openai") && !transcribeName.equals(LocalSpeechEngine.NAME)) throw new ConfigurationException(INVALID_ENGINE);
 		String speakName = setting(config, K_SPEAK_ENGINE, transcribeName);
-		if (!speakName.equals("openai") && !speakName.equals(LocalSpeechEngine.NAME)) throw new IllegalArgumentException(INVALID_SPEAK_ENGINE);
+		if (!speakName.equals("openai") && !speakName.equals(LocalSpeechEngine.NAME)) throw new ConfigurationException(INVALID_SPEAK_ENGINE);
 		boolean localTranscribes = transcribeName.equals(LocalSpeechEngine.NAME);
 		boolean localSpeaks = speakName.equals(LocalSpeechEngine.NAME);
 		Settings remote = (localTranscribes && localSpeaks) ? null : remote(config);
 		if (!localTranscribes && !localSpeaks) return remote;
 		ACell localCell = config.get(K_LOCAL);
 		AMap<AString, ACell> local = localCell instanceof AMap<?, ?> m ? RT.castMap(m) : Maps.empty();
-		if (localCell != null && !(localCell instanceof AMap<?, ?>)) throw new IllegalArgumentException(INVALID_STRING.formatted("adapters.speech.local"));
+		if (localCell != null && !(localCell instanceof AMap<?, ?>)) throw new ConfigurationException(INVALID_STRING.formatted("adapters.speech.local"));
 		for (var entry : local.entrySet()) {
-			if (!LOCAL_KEYS.contains(entry.getKey())) throw new IllegalArgumentException(UNKNOWN_LOCAL_SETTING.formatted(entry.getKey(), LOCAL_KEYS));
+			if (!LOCAL_KEYS.contains(entry.getKey())) throw new ConfigurationException(UNKNOWN_LOCAL_SETTING.formatted(entry.getKey(), LOCAL_KEYS));
 		}
 		LocalSpeechEngine engine = local(local, localTranscribes, localSpeaks);
 		String voice = setting(local, K_VOICE, DEFAULT_LOCAL_VOICE);
-		if (!voice.matches("[0-9]{1,4}")) throw new IllegalArgumentException(INVALID_LOCAL_VOICE);
+		if (!voice.matches("[0-9]{1,4}")) throw new ConfigurationException(INVALID_LOCAL_VOICE);
 		return new Settings(
 			localTranscribes ? engine : remote.transcriber(),
 			localSpeaks ? engine : remote.speaker(),
@@ -295,21 +297,21 @@ public class SpeechAdapter extends AAdapter implements AutoCloseable {
 			String host = uri.getHost();
 			if (host == null || uri.getUserInfo() != null || uri.getQuery() != null || uri.getFragment() != null
 				|| !("https".equals(uri.getScheme()) || (OpenAiSpeechEngine.loopback(host) && "http".equals(uri.getScheme())))) {
-				throw new IllegalArgumentException(INVALID_BASE_URL);
+				throw new ConfigurationException(INVALID_BASE_URL);
 			}
 		} catch (IllegalArgumentException e) {
-			throw new IllegalArgumentException(INVALID_BASE_URL);
+			throw new ConfigurationException(INVALID_BASE_URL, e);
 		}
 		baseUrl = baseUrl.replaceAll("/+$", "");
 		String apiKeyRef = setting(config, K_API_KEY, null);
 		if (apiKeyRef != null && (!Engine.isSecretRef(apiKeyRef) || apiKeyRef.endsWith("/"))) {
-			throw new IllegalArgumentException(INVALID_SECRET_REF.formatted("adapters.speech.apiKey"));
+			throw new ConfigurationException(INVALID_SECRET_REF.formatted("adapters.speech.apiKey"));
 		}
 		String keyName = setting(config, K_KEY_NAME, DEFAULT_KEY_NAME);
-		if (!keyName.matches("[A-Za-z0-9_.-]+")) throw new IllegalArgumentException(INVALID_KEY_NAME);
+		if (!keyName.matches("[A-Za-z0-9_.-]+")) throw new ConfigurationException(INVALID_KEY_NAME);
 		CVMLong timeout = RT.ensureLong(config.get(K_TIMEOUT));
 		long millis = config.get(K_TIMEOUT) == null ? DEFAULT_TIMEOUT_MILLIS : timeout == null ? -1 : timeout.longValue();
-		if (millis < 1000 || millis > 600_000) throw new IllegalArgumentException(INVALID_TIMEOUT);
+		if (millis < 1000 || millis > 600_000) throw new ConfigurationException(INVALID_TIMEOUT);
 		SpeechEngine engine = new OpenAiSpeechEngine(baseUrl, Duration.ofMillis(millis), MAX_BYTES, keyName);
 		return new Settings(engine, engine, apiKeyRef, keyName, setting(config, K_TRANSCRIBE_MODEL, DEFAULT_TRANSCRIBE_MODEL),
 			setting(config, K_SPEAK_MODEL, DEFAULT_SPEAK_MODEL), setting(config, K_VOICE, DEFAULT_VOICE), false);
@@ -323,20 +325,26 @@ public class SpeechAdapter extends AAdapter implements AutoCloseable {
 		SpeechModels.Model model = null;
 		if (transcribes) {
 			model = SpeechModels.byId(setting(local, K_TRANSCRIBE_MODEL, SpeechModels.DEFAULT));
-			if (model == null) throw new IllegalArgumentException(UNKNOWN_MODEL.formatted(SpeechModels.ALL.stream().map(SpeechModels.Model::id).toList()));
+			if (model == null) throw new ConfigurationException(UNKNOWN_MODEL.formatted(SpeechModels.ALL.stream().map(SpeechModels.Model::id).toList()));
 		}
 		SpeechModels.Model voice = null;
 		if (speaks) {
 			voice = SpeechModels.voiceById(setting(local, K_SPEAK_MODEL, SpeechModels.DEFAULT_VOICE));
-			if (voice == null) throw new IllegalArgumentException(UNKNOWN_VOICE_MODEL.formatted(SpeechModels.VOICES.stream().map(SpeechModels.Model::id).toList()));
+			if (voice == null) throw new ConfigurationException(UNKNOWN_VOICE_MODEL.formatted(SpeechModels.VOICES.stream().map(SpeechModels.Model::id).toList()));
 		}
 		String nativePath = setting(local, K_NATIVE_PATH, null);
 		String cacheDir = setting(local, K_CACHE_DIR, null);
 		CVMLong threadsCell = RT.ensureLong(local.get(K_THREADS));
 		long threads = local.get(K_THREADS) == null ? Math.max(2, Math.min(4, Runtime.getRuntime().availableProcessors() / 2))
 			: threadsCell == null ? -1 : threadsCell.longValue();
-		if (threads < 1 || threads > 16) throw new IllegalArgumentException(INVALID_THREADS);
-		return new LocalSpeechEngine(model, voice, nativePath == null ? null : java.nio.file.Path.of(nativePath),
+		if (threads < 1 || threads > 16) throw new ConfigurationException(INVALID_THREADS);
+		java.nio.file.Path nativeDir;
+		try {
+			nativeDir = nativePath == null ? null : java.nio.file.Path.of(nativePath);
+		} catch (java.nio.file.InvalidPathException e) {
+			throw new ConfigurationException(INVALID_NATIVE_PATH.formatted(nativePath), e);
+		}
+		return new LocalSpeechEngine(model, voice, nativeDir,
 			flag(local, K_FETCH_NATIVES), () -> cacheDirectory(cacheDir), (int) threads, natives, LocalSpeechEngine.Sherpa::new,
 			LocalSpeechEngine.SherpaVoice::new);
 	}
@@ -344,7 +352,7 @@ public class SpeechAdapter extends AAdapter implements AutoCloseable {
 	private static boolean flag(AMap<AString, ACell> local, AString key) {
 		ACell value = local.get(key);
 		if (value == null) return false;
-		if (!(value instanceof CVMBool b)) throw new IllegalArgumentException(INVALID_FLAG.formatted(key));
+		if (!(value instanceof CVMBool b)) throw new ConfigurationException(INVALID_FLAG.formatted(key));
 		return b.booleanValue();
 	}
 
@@ -694,7 +702,7 @@ public class SpeechAdapter extends AAdapter implements AutoCloseable {
 	private static String setting(AMap<AString, ACell> config, AString key, String fallback) {
 		ACell value = config.get(key);
 		if (value == null) return fallback;
-		if (!(value instanceof AString s) || s.isBlank()) throw new IllegalArgumentException(INVALID_STRING.formatted("adapters.speech." + key));
+		if (!(value instanceof AString s) || s.isBlank()) throw new ConfigurationException(INVALID_STRING.formatted("adapters.speech." + key));
 		return s.toString();
 	}
 }
