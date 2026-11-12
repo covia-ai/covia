@@ -149,15 +149,36 @@ administration and an adapter's internal execution remain separate operations.
 
 ### Remote authority and host binding
 
-A remote Job action must satisfy the source context's effective authority and
-the destination's independent authorization. Identity credentials do not replace
-Job permissions, and choosing anonymous access does not bypass the source check.
-Generic remote invocation by scoped callers is refused: the current transport
-cannot enforce their resource restrictions at the destination. This includes
-Grid run/invoke and remote orchestration steps; an invoke grant alone must not
-provide a route around the dedicated Job checks.
-A local proxy's permissions cover its bound interaction, not arbitrary remote
-Jobs or access to its stored credentials. Unsupported controls still fail.
+A direct remote Job action is authorized by its hosting venue using the explicitly
+selected authentication mode, credentials and grants. The source authorizes use
+of the local operation and enforces its outbound connection and credential-use
+policy; it does not additionally require local `job/read`, `job/manage` or
+`job/message` grants on the remote Job. Local capability scopes are not exported
+as remote execution scopes. A deliberately supplied broad remote credential can
+therefore authorize remote actions that the caller could not perform locally.
+
+The same rule applies to Grid run/invoke and remote orchestration steps. The
+source still checks `invoke` permission on a dynamically selected operation
+reference, including its input-dependent constraints. Being scoped does not
+prohibit remote submission. The destination independently checks invocation and
+resource permissions under the authenticated remote principal and its grants.
+Anonymous mode uses the destination's public policy; it does not borrow an
+identity credential. Caller mode needs an explicitly presented, in-date identity
+credential for that caller and destination. Venue mode is reserved to the venue
+itself. No local scope, grant or tool selection implicitly lends the venue's or
+another principal's identity. Credentials stay outside inputs and public Job records.
+
+An owning local proxy binds the destination Job and connection established at
+submission. `job/manage` on that local proxy authorizes its supported lifecycle
+controls, including the framework's cancellation attempt on that exact remote
+execution using the bound connection. The caller needs neither a separate remote
+Job grant nor access to the bound credentials. A result waiter only observes an
+existing Job: cancelling it ends observation, never the target execution.
+Successful submission does not guarantee that a later cancellation is supported
+or authorized at the destination. Local cancellation completes independently;
+its cancellation evidence reports acceptance, refusal or an unconfirmed outcome.
+An asynchronous submission acknowledgement is not a continuing owning proxy:
+follow and control the returned destination handle at its hosting venue.
 
 Job IDs are venue-scoped. To grant access to one hosted Job, include the existing
 `nb.url` constraint with the hosting venue's canonical base URL:
@@ -167,16 +188,21 @@ Job IDs are venue-scoped. To grant access to one hosted Job, include the existin
  "nb":{"url":"https://venue.example/"}}
 ```
 
-The source checks the actual outbound URL and the host checks its configured
-`baseUrl` (or its hostname/port-derived base URL). Operators behind a proxy must
-configure the canonical base URL; use that address when presenting a host-bound
-grant. A grant without this constraint deliberately covers the named resource
-wherever hosted. Token audience is the grantee and is not a hosting restriction.
-No new credential or grant is minted by a Job operation.
+The hosting venue enforces this constraint against its configured `baseUrl`
+(or its hostname/port-derived base URL). Operators behind a proxy must configure
+the canonical base URL; use that address when presenting a host-bound grant.
+A grant without this constraint deliberately covers the named resource wherever
+hosted. Token audience is the grantee and is not a hosting restriction. A relay
+forwards eligible grants to the selected principal; it does not mint a new
+credential or grant, or substitute its own base URL for the hosting venue's.
 
-Scoped remote observations cannot recover as an unscoped owner. When the original
-scope/proofs cannot be reconstructed, restart ends the observation and requires
-reattachment with fresh authority. Caller identity credentials remain unpersisted.
+Recovery preserves the bound connection's authentication mode and owner lookup.
+Caller identity credentials remain unpersisted, so caller-authenticated proxies
+and observations require reattachment after restart. Anonymous observations may
+resume under the destination's public policy; the original caller's local scope
+is not reconstructed as remote authority. Every remote status request is
+independently authorized at the host. Local Job reads and result delivery still
+require the caller's current local Job permissions.
 
 ### Migration
 

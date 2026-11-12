@@ -1,6 +1,6 @@
 {
 	"name": "Job Pause",
-	"description": "job_pause: Pause an existing STARTED Job if its execution adapter supports pausing. Return an acceptance acknowledgement; use job_status with job/read to inspect the record. Unsupported controls fail explicitly; pause does not undo side effects. Requires job/manage on the target Job; raw CRUD permissions and creator attribution do not grant it.",
+	"description": "job_pause: Pause an existing STARTED Job if its execution adapter supports pausing. Return an acceptance acknowledgement; use job_status with job/read to inspect the record. Unsupported controls fail explicitly; pause does not undo side effects. For local Jobs, requires job/manage; raw CRUD permissions and creator attribution do not grant it. Remote actions use the selected remote identity and grants, authorized at the hosting venue.",
 	"operation": {
 		"adapter": "job:pause",
 		"toolName": "job_pause",

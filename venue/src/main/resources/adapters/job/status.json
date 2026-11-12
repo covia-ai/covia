@@ -1,6 +1,6 @@
 {
 	"name": "Job Status",
-	"description": "job_status: Read an existing Job's current record without waiting or starting work. PENDING is queued and STARTED is running; COMPLETE has output; FAILED, REJECTED and CANCELLED are terminal. PAUSED may be resumed; INPUT_REQUIRED or AUTH_REQUIRED needs the requested input. Inspect progress, output/error, and any delegation or cancellation evidence. For a result waiter, delegation.remoteStatus describes the target; send requested input to that target, not to the waiter. Requires job/read on the target Job; raw CRUD permissions and creator attribution do not grant it.",
+	"description": "job_status: Read an existing Job's current record without waiting or starting work. PENDING is queued and STARTED is running; COMPLETE has output; FAILED, REJECTED and CANCELLED are terminal. PAUSED may be resumed; INPUT_REQUIRED or AUTH_REQUIRED needs the requested input. Inspect progress, output/error, and any delegation or cancellation evidence. For a result waiter, delegation.remoteStatus describes the target; send requested input to that target, not to the waiter. For local Jobs, requires job/read; raw CRUD permissions and creator attribution do not grant it. Remote actions use the selected remote identity and grants, authorized at the hosting venue.",
 	"operation": {
 		"adapter": "job:status",
 		"toolName": "job_status",

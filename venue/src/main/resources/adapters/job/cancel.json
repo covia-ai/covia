@@ -1,6 +1,6 @@
 {
 	"name": "Job Cancel",
-	"description": "job_cancel: Request cancellation of an existing Job and return an acceptance acknowledgement. Existing terminal outcomes stay unchanged; prior side effects are not undone. Cancelling a result waiter only stops that wait. For delegated execution, local CANCELLED alone does not prove the destination stopped: inspect cancellation.outcome and delegation.remoteStatus when present. Requires job/manage on the target Job; raw CRUD permissions and creator attribution do not grant it.",
+	"description": "job_cancel: Request cancellation of an existing Job and return an acceptance acknowledgement. Existing terminal outcomes stay unchanged; prior side effects are not undone. For delegated execution, local CANCELLED alone does not prove the destination stopped: inspect cancellation.outcome and delegation.remoteStatus when present. For local Jobs, requires job/manage; raw CRUD permissions and creator attribution do not grant it. Remote actions use the selected remote identity and grants, authorized at the hosting venue. Cancelling an owning local proxy asks its remote execution to stop using the bound credentials; cancelling a result waiter only stops waiting.",
 	"operation": {
 		"adapter": "job:cancel",
 		"toolName": "job_cancel",

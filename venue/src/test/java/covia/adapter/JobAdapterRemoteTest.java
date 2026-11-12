@@ -91,7 +91,8 @@ class JobAdapterRemoteTest {
 			assertEquals(JobAdapter.RESULT_TIMEOUT.formatted(20, target.getID().toHexString()), timed.getErrorMessage());
 			assertFalse(target.future().isDone());
 
-			Job wait = invoke("result", target(target), ctx);
+			Job wait = invoke("result", target(target), ctx.withCaps(Vectors.of(
+				Capability.create(Strings.create("v/ops/job/result"), Abilities.INVOKE))));
 			await(wait, j -> Status.STARTED.equals(RT.getIn(RemoteJobs.descriptor(j), RemoteJobs.REMOTE_STATUS)));
 			JobAdapter adapter = (JobAdapter) source.getAdapter("job");
 			adapter.suspendJob(wait);
@@ -141,39 +142,101 @@ class JobAdapterRemoteTest {
 		finally { job.unsubscribe(listener); }
 	}
 
-	@Test void identityCredentialCannotBypassSourceJobScope() throws Exception {
+	@Test void explicitRemoteCredentialsSupplyAuthorityIndependentlyOfLocalJobScope() throws Exception {
 		AKeyPair key = AKeyPair.generate();
 		AString did = UCAN.toDIDKey(key.getAccountKey());
 		RequestContext owner = RequestContext.of(did);
-		Job target = destination.jobs().invokeOperation("v/test/ops/never", Maps.empty(), owner);
+		String identity = UcanTokens.identityToken(key, TwoVenueTestServer.DID_B, 300);
+		RequestContext remoteOnly = owner.withCaps(Vectors.empty())
+			.withRawUcans(Vectors.of(Strings.create(identity)));
+		Job target = destination.jobs().invokeOperation("v/test/ops/chat", Maps.empty(), owner);
 		try {
-			AString resource = JobManager.resource(did, target.getID());
-			String identity = UcanTokens.identityToken(key, TwoVenueTestServer.DID_B, 300);
-			RequestContext reader = owner.withCaps(Vectors.of(Capability.create(resource, Abilities.JOB_READ)))
-				.withRawUcans(Vectors.of(Strings.create(identity)));
 			AMap<AString, ACell> input = target(target).assoc(Strings.create("authenticateAs"), Strings.create("caller"));
-			assertNotNull(source.jobs().runToolOperation(Strings.create("v/ops/job/status"), input, reader).get());
-			for (String operation : new String[]{"cancel", "pause", "resume", "message"}) {
-				AMap<AString, ACell> args = input.assoc(Fields.MESSAGE, Maps.of(Fields.CONTENT, "no"));
-				assertThrows(Exception.class, () -> source.jobs().runToolOperation(Strings.create("v/ops/job/" + operation), args, reader).get());
-				assertEquals(Status.STARTED, target.getStatus());
+			for (String operation : new String[]{"v/ops/job/status", "v/ops/grid/job-status"}) {
+				assertNotNull(source.jobs().runToolOperation(Strings.create(operation), input, remoteOnly).get());
+				assertThrows(Exception.class, () -> source.jobs().runToolOperation(Strings.create(operation),
+					input, remoteOnly.withRawUcans(Vectors.empty())).get());
 			}
-			RequestContext none = reader.withCaps(Vectors.empty());
-			for (String operation : new String[]{"v/ops/job/status", "v/ops/job/result", "v/ops/grid/job-status", "v/ops/grid/job-result"})
-				assertThrows(Exception.class, () -> source.jobs().runToolOperation(Strings.create(operation), input, none).get());
-			RequestContext invokeOnly = reader.withCaps(Vectors.of(Capability.create(Strings.create("v/ops/"), Abilities.INVOKE)));
-			for (String operation : new String[]{"run", "invoke"}) {
-				AMap<AString, ACell> relay = Maps.of(Fields.VENUE, TwoVenueTestServer.BASE_URL_B,
-					Fields.OPERATION, "v/ops/job/cancel", Fields.INPUT, Maps.of(Fields.ID, target.getID().toHexString()),
-					"authenticateAs", "caller");
-				assertThrows(Exception.class, () -> source.jobs().runToolOperation(Strings.create("v/ops/grid/" + operation), relay, invokeOnly).get());
-				assertEquals(Status.STARTED, target.getStatus());
-			}
-			RequestContext manager = reader.withCaps(Vectors.of(Capability.create(resource, Abilities.JOB_MANAGE)));
-			assertEquals(JobManager.acknowledgement(target.getID()),
-				source.jobs().runToolOperation(Strings.create("v/ops/job/cancel"), input, manager).get());
-			assertEquals(Status.CANCELLED, target.getStatus());
+			assertEquals(CVMBool.TRUE, RT.getIn(source.jobs().runToolOperation(Strings.create("v/ops/job/message"),
+				input.assoc(Fields.MESSAGE, Maps.of(Fields.CONTENT, "done")), remoteOnly).get(), Fields.DELIVERED));
+			for (String operation : new String[]{"v/ops/job/result", "v/ops/grid/job-result"})
+				assertEquals(target.getOutput(), source.jobs().runToolOperation(Strings.create(operation), input, remoteOnly).get());
 		} finally { target.cancel(); }
+
+		// Generic and dedicated controls use the same remote credential. Local
+		// invoke permission is still required for a dynamically selected operation.
+		RequestContext invokeOnly = remoteOnly.withCaps(Vectors.of(Capability.create(Strings.create("v/ops/"), Abilities.INVOKE)));
+		for (String operation : new String[]{"run", "invoke", "cancel"}) {
+			Job running = destination.jobs().invokeOperation("v/test/ops/never", Maps.empty(), owner);
+			try {
+				AMap<AString, ACell> relay = Maps.of(Fields.VENUE, TwoVenueTestServer.BASE_URL_B,
+					Fields.OPERATION, "v/ops/job/cancel", Fields.INPUT, Maps.of(Fields.ID, running.getID().toHexString()),
+					"authenticateAs", "caller");
+				if ("cancel".equals(operation)) {
+					AMap<AString, ACell> direct = target(running).assoc(Strings.create("authenticateAs"), Strings.create("caller"));
+					for (String control : new String[]{"pause", "resume", "cancel"})
+						assertEquals(JobManager.acknowledgement(running.getID()), source.jobs().runToolOperation(
+							Strings.create("v/ops/job/" + control), direct, remoteOnly).get());
+				} else {
+					assertThrows(Exception.class, () -> source.jobs().runToolOperation(Strings.create("v/ops/grid/" + operation), relay, remoteOnly).get());
+					assertEquals(Status.STARTED, running.getStatus());
+					source.jobs().runToolOperation(Strings.create("v/ops/grid/" + operation), relay, invokeOnly).get();
+					await(running, Job::isFinished);
+				}
+				assertEquals(Status.CANCELLED, running.getStatus());
+			} finally { running.cancel(); }
+		}
+	}
+
+	@Test void destinationEnforcesDelegatedJobRightsForDirectAndGenericCalls() throws Exception {
+		AKeyPair alice = AKeyPair.generate(), bob = AKeyPair.generate();
+		AString owner = UCAN.toDIDKey(alice.getAccountKey());
+		Job target = destination.jobs().invokeOperation("v/test/ops/never", Maps.empty(), RequestContext.of(owner));
+		try {
+			long exp = System.currentTimeMillis() / 1000 + 300;
+			AString read = UCAN.createJWT(alice, bob.getAccountKey(), exp,
+				Vectors.of(Capability.create(JobManager.resource(owner, target.getID()), Abilities.JOB_READ)
+					.assoc(Capability.NB, Maps.of(Fields.URL, destination.config().getBaseUrl()))), Vectors.empty());
+			RequestContext delegated = RequestContext.of(UCAN.toDIDKey(bob.getAccountKey()))
+				.withCaps(Vectors.of(Capability.create(Strings.create("v/ops/"), Abilities.INVOKE)))
+				.withRawUcans(Vectors.of(Strings.create(UcanTokens.identityToken(bob, TwoVenueTestServer.DID_B, 300)), read));
+			AMap<AString, ACell> direct = target(target).assoc(Strings.create("authenticateAs"), Strings.create("caller")).assoc(Fields.OWNER, owner);
+			assertNotNull(source.jobs().runToolOperation(Strings.create("v/ops/job/status"), direct, delegated).get());
+			AString wrongHost = UCAN.createJWT(alice, bob.getAccountKey(), exp,
+				Vectors.of(Capability.create(JobManager.resource(owner, target.getID()), Abilities.JOB_READ)
+					.assoc(Capability.NB, Maps.of(Fields.URL, "https://elsewhere.example/"))), Vectors.empty());
+			RequestContext elsewhere = delegated.withRawUcans(Vectors.of(delegated.getRawUcans().get(0), wrongHost));
+			assertThrows(Exception.class, () -> source.jobs().runToolOperation(Strings.create("v/ops/job/status"), direct, elsewhere).get());
+			assertThrows(Exception.class, () -> source.jobs().runToolOperation(Strings.create("v/ops/job/cancel"), direct, delegated).get());
+			AMap<AString, ACell> relay = Maps.of(Fields.VENUE, TwoVenueTestServer.BASE_URL_B,
+				Fields.OPERATION, "v/ops/job/cancel", Fields.INPUT, Maps.of(Fields.ID, target.getID().toHexString(), Fields.OWNER, owner),
+				"authenticateAs", "caller");
+			assertThrows(Exception.class, () -> source.jobs().runToolOperation(Strings.create("v/ops/grid/run"), relay, delegated).get());
+			assertEquals(Status.STARTED, target.getStatus());
+		} finally { target.cancel(); }
+	}
+
+	@Test void localProxyPermissionCancelsOnlyItsOwnedRemoteExecution() throws Exception {
+		AKeyPair key = AKeyPair.generate();
+		AString did = UCAN.toDIDKey(key.getAccountKey());
+		RequestContext submitter = RequestContext.of(did)
+			.withCaps(Vectors.of(Capability.create(Strings.create("v/test/ops/never"), Abilities.INVOKE)))
+			.withRawUcans(Vectors.of(Strings.create(UcanTokens.identityToken(key, TwoVenueTestServer.DID_B, 300))));
+		Job proxy = source.jobs().startToolOperation(Strings.create("v/ops/grid/run"),
+			Maps.of(Fields.VENUE, TwoVenueTestServer.BASE_URL_B, Fields.OPERATION, "v/test/ops/never", "authenticateAs", "caller"), submitter).job();
+		Job remote = null;
+		try {
+			await(proxy, j -> Status.STARTED.equals(RT.getIn(RemoteJobs.descriptor(j), RemoteJobs.REMOTE_STATUS)));
+			remote = destination.jobs().getJob(Job.parseID(RemoteJobs.remoteId(proxy)));
+			assertNotNull(remote);
+			RequestContext manager = RequestContext.of(did).withCaps(Vectors.of(
+				Capability.create(JobManager.resource(did, proxy.getID()), Abilities.JOB_MANAGE)));
+			assertThrows(AuthException.class, () -> source.jobs().getJobData(proxy.getID(), manager));
+			assertThrows(AuthException.class, () -> source.jobs().cancelJob(proxy.getID(), submitter));
+			assertEquals(JobManager.acknowledgement(proxy.getID()), source.jobs().cancelJob(proxy.getID(), manager));
+			await(remote, Job::isFinished);
+			assertEquals(Status.CANCELLED, remote.getStatus());
+		} finally { proxy.cancel(); if (remote != null) remote.cancel(); }
 	}
 
 	@Test void delegatedControlsAndColdReadsCarryOwnerAndProofsOverHttp() {

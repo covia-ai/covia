@@ -1,6 +1,6 @@
 {
 	"name": "Grid Run",
-	"description": "grid_run: Start a new operation on this venue or the selected execution venue and wait for its output. Use asynchronous submission when you need a Job handle immediately. To inspect or await work already submitted, use the advertised Job tools. Each invocation starts new work. Requires invoke permission on the operation reference and the operation's own resource permissions.",
+	"description": "grid_run: Start a new operation on this venue or the selected execution venue and wait for its output. Use asynchronous submission when you need a Job handle immediately. To inspect or await work already submitted, use the advertised Job tools. Each invocation starts new work. Requires local invoke permission on the selected operation reference. Local execution also checks your resource permissions; remote execution is authorized by the destination using the explicitly selected identity and grants. Local scope does not narrow a supplied remote credential.",
 	"operation": {
 		"adapter": "grid:run",
 		"readOnly": false,

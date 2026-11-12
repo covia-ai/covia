@@ -91,12 +91,9 @@ public class InvocationAuthorityTest {
 			Maps.of("gate", "v/test/ops/amountgate"));
 		RequestContext ctx = owner.withCaps(Vectors.of(grant))
 			.withOp(Strings.create("v/ops/grid/run"));
-		assertEquals(JobManager.REMOTE_SCOPE_UNSUPPORTED,
-			assertThrows(covia.exception.AuthException.class,
-				() -> engine.jobs().requireRemoteInvoke(ECHO, Maps.of("amount", 840), ctx)).getMessage());
-		assertNotEquals(JobManager.REMOTE_SCOPE_UNSUPPORTED,
-			assertThrows(covia.exception.AuthException.class,
-				() -> engine.jobs().requireRemoteInvoke(ECHO, Maps.of("amount", 4820), ctx)).getMessage());
+		assertDoesNotThrow(() -> engine.jobs().requireRemoteInvoke(ECHO, Maps.of("amount", 840), ctx));
+		assertThrows(covia.exception.AuthException.class,
+			() -> engine.jobs().requireRemoteInvoke(ECHO, Maps.of("amount", 4820), ctx));
 	}
 
 	@Test void scheduledReferenceDoesNotBecomeABoundTool() {

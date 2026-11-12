@@ -1,6 +1,6 @@
 {
 	"name": "Grid Invoke",
-	"description": "grid_invoke: Start a new operation on this venue or the selected execution venue and return its Job snapshot without waiting for completion. The returned id belongs to that execution venue, not to a local wrapper. Retain the id, execution venue and authentication mode for the advertised Job tools. A successful submission does not imply successful execution: inspect status. Calling again starts new work. Requires invoke permission on the operation reference and the operation's own resource permissions.",
+	"description": "grid_invoke: Start a new operation on this venue or the selected execution venue and return its Job snapshot without waiting for completion. The returned id belongs to that execution venue, not to a local wrapper. Retain the id, execution venue and authentication mode for the advertised Job tools. A successful submission does not imply successful execution: inspect status. Calling again starts new work. Requires local invoke permission on the selected operation reference. Local execution also checks your resource permissions; remote execution is authorized by the destination using the explicitly selected identity and grants. Local scope does not narrow a supplied remote credential.",
 	"operation": {
 		"adapter": "grid:invoke",
 		"readOnly": false,

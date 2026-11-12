@@ -1,6 +1,6 @@
 {
 	"name": "Job Result",
-	"description": "job_result: Wait for an existing Job and return its exact output. A failed, rejected or cancelled target fails this wait. Omit timeout or use 0 for no deadline; a positive timeout limits only the wait. Timing out or cancelling this wait leaves the target running. A target needing input will not finish until that input is supplied to it. Do not resubmit the original operation because a wait timed out. Requires job/read on the target Job; raw CRUD permissions and creator attribution do not grant it.",
+	"description": "job_result: Wait for an existing Job and return its exact output. A failed, rejected or cancelled target fails this wait. Omit timeout or use 0 for no deadline; a positive timeout limits only the wait. Timing out or cancelling this wait leaves the target running. A target needing input will not finish until that input is supplied to it. Do not resubmit the original operation because a wait timed out. For local Jobs, requires job/read; raw CRUD permissions and creator attribution do not grant it. Remote actions use the selected remote identity and grants, authorized at the hosting venue.",
 	"operation": {
 		"adapter": "job:result",
 		"toolName": "job_result",

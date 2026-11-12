@@ -1,6 +1,6 @@
 {
 	"name": "Grid Job Status",
-	"description": "grid_job_status: Compatibility entry point for reading an existing Job's record. Prefer job_status when available. Uses the same Job ID and hosting venue; does not start or retry work. Requires job/read on the target Job, at both venues for a remote call.",
+	"description": "grid_job_status: Compatibility entry point for reading an existing Job's record. Prefer job_status when available. Uses the same Job ID and hosting venue; does not start or retry work. For local Jobs, requires job/read on the target Job. Remote access is authorized by the hosting venue using the selected remote identity and grants.",
 	"operation": {
 		"adapter": "grid:jobStatus",
 		"readOnly": true,

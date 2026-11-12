@@ -260,19 +260,13 @@ public class JobManager {
 	/**
 	 * Authorises an explicit remote invocation against the target reference and
 	 * the input being sent. The executing venue applies its defaults and checks
-	 * its own invocation and resource authority independently.
+	 * its own invocation and resource authority independently, using the
+	 * explicitly selected remote credentials, not the source's local scope.
 	 */
 	public void requireRemoteInvoke(AString ref, ACell input, RequestContext ctx) {
 		if (ref == null) throw operationRequired();
 		engine.requireInvoke(invocationContext(ctx.withOp(ref), input), ref);
-		if (ctx.getCaps() != null || ctx.authorityContext().getCaps() != null
-				|| !ctx.getTokens().isEmpty() || !ctx.authorityContext().getTokens().isEmpty())
-			throw new AuthException(REMOTE_SCOPE_UNSUPPORTED);
 	}
-
-	/** A generic remote operation cannot enforce a local capability scope on its resource use. */
-	public static final String REMOTE_SCOPE_UNSUPPORTED =
-		"Scoped generic remote invocation is unavailable: the destination cannot enforce the local scope; use dedicated Job operations for existing Jobs";
 
 	private RequestContext invocationContext(RequestContext ctx, ACell input) {
 		return ctx.isGateEvaluation()

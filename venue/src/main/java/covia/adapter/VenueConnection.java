@@ -7,9 +7,7 @@ import convex.auth.ucan.UCANValidator;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
-import convex.core.data.Blob;
 import covia.grid.client.VenueHTTP;
-import covia.venue.JobManager;
 import convex.core.data.AVector;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
@@ -209,9 +207,9 @@ public record VenueConnection(Venue venue, AMap<AString, ACell> credentials) {
 		throw new InvalidInputException(INVALID_JOB_OWNER);
 	}
 
-	/** Connect to an existing Job with a source-side action check before any Job request. */
+	/** Connect using explicit remote credentials; the hosting venue authorizes the Job action. */
 	public static VenueConnection job(Engine engine, RequestContext ctx, AString target,
-			ACell input, Blob id, AString ability) {
+			ACell input) {
 		VenueConnection connection = connect(engine, ctx, target, input);
 		Venue venue = connection.venue();
 		AString owner = jobOwner(input);
@@ -226,21 +224,7 @@ public record VenueConnection(Venue venue, AMap<AString, ACell> credentials) {
 			}
 		}
 		venue.setJobOwner(owner);
-		requireJobAuthority(engine, ctx, venue, id, ability);
-		AMap<AString, ACell> saved = connection.credentials().assoc(Fields.OWNER, owner);
-		// A scoped request cannot be reconstructed as an unscoped owner after restart.
-		// Keep no invented authority: require the caller to reattach with its credentials.
-		if (ctx.hasSeparateAuthority() || ctx.getCaps() != null || !ctx.getTokens().isEmpty()
-				|| (ctx.getProofs() != null && !ctx.getProofs().isEmpty())) saved = saved.assoc(RESUMABLE, CVMBool.FALSE);
-		return new VenueConnection(venue, saved);
-	}
-
-	/** Rechecked on every remote observation, including before delivering the result. */
-	public static void requireJobAuthority(Engine engine, RequestContext ctx, Venue venue, Blob id, AString ability) {
-		if (venue.getJobOwner() == null) throw new AuthException(JOB_OWNER_UNAVAILABLE);
-		AString destination = venue instanceof VenueHTTP http ? Strings.create(http.getBaseURI().toString())
-			: Strings.create(engine.config().getBaseUrl());
-		engine.requireAuthority(ctx, JobManager.resource(venue.getJobOwner(), id), ability, destination);
+		return new VenueConnection(venue, connection.credentials().assoc(Fields.OWNER, owner));
 	}
 
 	/**

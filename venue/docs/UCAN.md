@@ -1464,10 +1464,17 @@ verification phases exactly: **proofs + self-sovereign signatures with C3a**
 (shipped — see below); **custodial attestations with C3b** (the trust policy
 exists).
 
-**Source scope.** Dedicated Job operations check the exact Job ability locally
-and again at the host. Generic Grid invocation and remote orchestration steps
-refuse scoped callers until the transport can enforce their resource restrictions
-at the destination; an identity credential is not an attenuated execution scope.
+**Source and destination authority.** The source checks permission to invoke a
+dynamically selected operation and enforces outbound and credential-use policy.
+The destination authorizes execution and direct Job actions using the selected
+remote identity and grants. A local scope neither prohibits remote calls nor
+attenuates a deliberately supplied remote credential. Direct remote Job actions
+therefore do not need additional source-side grants on the remote Job. Local Job
+controls remain local: permission on an owning proxy authorizes the framework's
+bound remote cancellation attempt; cancelling a result waiter only stops waiting.
+See [JOBS.md](JOBS.md#remote-authority-and-host-binding). Explicit credential
+selection is essential: neither a local grant nor tool availability authorizes
+implicit use of another principal's login.
 
 **C3a implementation (shipped).** Authority travels **only in the `ucans` proof
 channel** — never as operation data (which is persisted in job records).

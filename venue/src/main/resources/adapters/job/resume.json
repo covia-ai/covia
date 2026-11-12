@@ -1,6 +1,6 @@
 {
 	"name": "Job Resume",
-	"description": "job_resume: Resume a PAUSED Job if its execution adapter supports resumption. Return an acceptance acknowledgement; use job_status with job/read to inspect the record. Continue existing work without resubmitting its original input. INPUT_REQUIRED or AUTH_REQUIRED needs the requested input or credentials delivered as a message instead. Requires job/manage on the target Job; raw CRUD permissions and creator attribution do not grant it.",
+	"description": "job_resume: Resume a PAUSED Job if its execution adapter supports resumption. Return an acceptance acknowledgement; use job_status with job/read to inspect the record. Continue existing work without resubmitting its original input. INPUT_REQUIRED or AUTH_REQUIRED needs the requested input or credentials delivered as a message instead. For local Jobs, requires job/manage; raw CRUD permissions and creator attribution do not grant it. Remote actions use the selected remote identity and grants, authorized at the hosting venue.",
 	"operation": {
 		"adapter": "job:resume",
 		"toolName": "job_resume",
