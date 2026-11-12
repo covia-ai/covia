@@ -960,9 +960,9 @@ public class JobManager {
 			}
 		}
 
+		requireRunning(adapterName);
 		AAdapter adapter = engine.getAdapter(adapterName);
 		if (adapter == null) throw new NotSupportedException(ADAPTER_NOT_AVAILABLE + adapterName);
-		requireRunning(adapterName);
 		return adapter;
 	}
 
@@ -1820,9 +1820,9 @@ public class JobManager {
 	private AAdapter resolveJobAdapter(Job job) {
 		String adapterName = adapterName(job);
 		if (adapterName == null) return null;
+		requireRunning(adapterName);
 		AAdapter adapter = engine.getAdapter(adapterName);
 		if (adapter == null) throw new UnavailableException(ADAPTER_NOT_AVAILABLE + adapterName);
-		requireRunning(adapterName);
 		return adapter;
 	}
 

@@ -18,6 +18,7 @@ import convex.core.data.AVector;
 import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
 import covia.adapter.AAdapter;
 import covia.adapter.VenueAdapter;
@@ -105,6 +106,10 @@ public class AdapterFailureTest {
 			assertTrue(engine.isStarted(), "the venue runs without the adapter");
 			assertEquals(START_FAILURE, engine.adapterFailure(NAME));
 			assertEquals(List.of("configure", "start", "stop"), flaky.events, "what a failed start began is stopped");
+			// Treated as a stopped adapter: nothing in the venue reaches it, and its live record is withdrawn.
+			assertNull(engine.getAdapter(NAME));
+			assertFalse(engine.getAdapterNames().contains(NAME));
+			assertNull(venueRead(engine, "v/info/adapters/" + NAME));
 			// Recovery came first: the adapter's unfinished job ended as recovery ends any.
 			assertEquals(Status.FAILED, engine.getVenueState().users().user(engine.getDIDString())
 				.jobs().getRecord(RECOVERED_JOB).get(Fields.STATUS));
@@ -133,6 +138,8 @@ public class AdapterFailureTest {
 			assertEquals(List.of("stop", "configure", "start"), flaky.events);
 			assertEquals(Maps.of(K_COLOUR, "blue"), flaky.configured);
 			assertNull(engine.adapterFailure(NAME));
+			assertSame(flaky, engine.getAdapter(NAME));
+			assertNotNull(venueRead(engine, "v/info/adapters/" + NAME), "published again");
 			assertNull(listed(engine, NAME).get(Fields.REASON));
 			assertEquals(Maps.of("v", 1), engine.jobs().invokeOperation(OP, Maps.of("v", 1),
 				engine.venueContext()).awaitResult(5000));
@@ -144,6 +151,36 @@ public class AdapterFailureTest {
 				() -> engine.restartAdapter(NAME)).getMessage());
 			assertEquals(List.of("stop", "configure"), flaky.events);
 			assertEquals(REFUSED, engine.adapterFailure(NAME));
+			assertNull(engine.getAdapter(NAME));
+		} finally {
+			engine.close();
+		}
+	}
+
+	/**
+	 * A setting refused at launch is a failure to start like any other: the
+	 * venue launches without the adapter. Here it is the outbound guard's own
+	 * adapter, so with it failed the guard refuses rather than check without
+	 * the operator's lists.
+	 */
+	@Test
+	public void settingRefusedAtLaunchLeavesTheAdapterFailedAndUnused() throws Exception {
+		Engine engine = TestEngine.application().mount(AKeyPair.generate(),
+			Maps.of(Config.ADAPTERS, Maps.of("http", Maps.of("maxRedirects", -1))));
+		try {
+			engine.launch();
+			assertNotNull(engine.adapterFailure("http"), "the venue launched without it");
+			assertNull(engine.getAdapter("http"));
+			assertEquals(VenueAdapter.ADAPTER_FAILED, listed(engine, "http").get(Fields.STATUS));
+			RequestContext user = RequestContext.of(TestEngine.uniqueDID("outbound"));
+			assertThrows(ConfigurationException.class, () -> engine.requireSafeUrl(user, "https://example.com/"));
+
+			// With its settings fixed, a restart installs and starts it.
+			engine.configureAdapter("http", Maps.empty());
+			engine.restartAdapter("http");
+			assertNull(engine.adapterFailure("http"));
+			assertNotNull(engine.getAdapter("http"));
+			assertNotNull(venueRead(engine, "v/info/adapters/http"));
 		} finally {
 			engine.close();
 		}
@@ -164,9 +201,10 @@ public class AdapterFailureTest {
 			flaky.events.clear();
 			assertEquals(START_FAILURE, assertThrows(UnavailableException.class,
 				() -> engine.enableAdapter(NAME)).getMessage());
-			assertTrue(engine.hasAdapter(NAME), "the adapter stays enabled");
+			assertEquals(START_FAILURE, engine.adapterFailure(NAME), "the adapter stays enabled, failed");
+			assertEquals(CVMBool.TRUE, listed(engine, NAME).get(Strings.create("enabled")));
+			assertFalse(engine.hasAdapter(NAME), "but not active");
 			assertFalse(flaky.closed, "and keeps its instance");
-			assertEquals(START_FAILURE, engine.adapterFailure(NAME));
 			assertEquals(List.of("start", "stop"), flaky.events);
 
 			assertTrue(engine.disableAdapter(NAME));
@@ -256,8 +294,11 @@ public class AdapterFailureTest {
 			flaky.events.clear();
 			assertThrows(ConfigurationException.class, () -> engine.configureAdapter(NAME, Maps.of(K_COLOUR, "green")));
 			assertEquals(List.of("configure", "configure"), flaky.events);
+			assertNull(engine.adapterFailure(NAME), "a disabled adapter has not failed");
+			// Settings it refuses on enable are a failure to start: enabled, failed, not started.
 			assertEquals(REFUSED, assertThrows(ConfigurationException.class, () -> engine.enableAdapter(NAME)).getMessage());
-			assertFalse(engine.hasAdapter(NAME), "it stays disabled");
+			assertEquals(REFUSED, engine.adapterFailure(NAME));
+			assertFalse(engine.hasAdapter(NAME));
 			flaky.refuseConfig = false;
 			assertTrue(engine.enableAdapter(NAME));
 			assertNull(engine.adapterFailure(NAME));
@@ -285,15 +326,16 @@ public class AdapterFailureTest {
 			ExecutionException internal = assertThrows(ExecutionException.class, () -> asVenue(engine, OP, Maps.empty()));
 			assertEquals(notRunning, assertInstanceOf(UnavailableException.class, internal.getCause()).getMessage());
 
-			// A replacement that fails to start is rolled back; the failed instance is not started again.
+			// A replacement that fails to start is rolled back; the failed instance stays as it was.
 			failed.events.clear();
 			FlakyAdapter broken = new FlakyAdapter();
 			broken.failStart = true;
 			assertEquals(START_FAILURE, assertThrows(UnavailableException.class,
 				() -> engine.registerAdapter(broken)).getMessage());
-			assertSame(failed, engine.getAdapter(NAME));
+			assertNull(engine.getAdapter(NAME));
 			assertEquals(START_FAILURE, engine.adapterFailure(NAME));
-			assertEquals(List.of("stop"), failed.events);
+			assertEquals(List.of(), failed.events);
+			assertFalse(failed.closed);
 			assertTrue(broken.closed);
 
 			FlakyAdapter replacement = new FlakyAdapter();
@@ -321,6 +363,10 @@ public class AdapterFailureTest {
 		Engine engine = Engine.createTemp(null);
 		Engine.addDemoAssets(engine);
 		return engine;
+	}
+
+	private static ACell venueRead(Engine engine, String path) {
+		return engine.resolvePath(Strings.create(path), engine.venueContext());
 	}
 
 	private static ACell asVenue(Engine engine, String op, AMap<AString, ACell> input) throws Exception {

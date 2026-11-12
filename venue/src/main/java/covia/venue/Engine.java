@@ -287,7 +287,7 @@ public class Engine {
 			// venue runs without it (docs/ADAPTERS.md, Lifecycle).
 			for (String name : getAdapterNamesInRegistrationOrder()) {
 				AAdapter adapter = adapters.get(name);
-				if (adapter != null && !adapterFailures.containsKey(name)) startAdapter(adapter);
+				if (adapter != null) startAdapter(adapter);
 			}
 			gridScheduler.start();
 			lifecycle = Lifecycle.STARTED;
@@ -1254,13 +1254,18 @@ public class Engine {
 	 * {@link AAdapter#stateVersion()}, unless the venue's start-up transaction
 	 * already migrated it. Requires a prepared engine.</p>
 	 *
+	 * <p>Before the venue has started, an adapter that refuses its
+	 * configuration has failed to start: it is registered enabled but failed
+	 * ({@link #adapterFailure}) and the launch goes on without it. On a
+	 * started venue the refusal is thrown and nothing is registered.</p>
+	 *
 	 * @param adapter The adapter instance to register
 	 * @throws UnsupportedVersionException if the adapter's state is recorded at
 	 *         a newer version than it supports; nothing is registered or written
-	 * @throws ConfigurationException if the adapter refuses a setting in its
-	 *         venue configuration
-	 * @throws FaultException if the adapter fails unexpectedly while being
-	 *         configured
+	 * @throws ConfigurationException on a started venue, if the adapter
+	 *         refuses a setting in its venue configuration
+	 * @throws FaultException on a started venue, if the adapter fails
+	 *         unexpectedly while being configured
 	 */
 	public synchronized void registerAdapter(AAdapter adapter) {
 		if (venueState == null) throw new IllegalStateException(ADAPTER_BEFORE_PREPARE);
@@ -1271,18 +1276,40 @@ public class Engine {
 		if (previous == null) previous = disabledAdapters.get(name);
 		AMap<AString, ACell> cfg = adapterConfig(name);
 		boolean disabled = CVMBool.FALSE.equals(cfg.get(Config.ENABLED));
-		if (disabled || !offerConfiguration(adapter, cfg)) {
-			retractAdapter(name);
-			adapterFailures.remove(name);
-			unconfiguredAdapters.remove(name);
-			disabledAdapters.put(name, adapter);
-			if (previous != null) adapterRegistryVersion.incrementAndGet();
-			closeReplacedAdapter(previous);
+		boolean declined = false;
+		if (!disabled) {
+			try {
+				declined = !offerConfiguration(adapter, cfg);
+			} catch (RuntimeException refused) {
+				// On a started venue whoever registered undoes it, as module
+				// loading does. Before then a refused setting is a failure to
+				// start: the venue launches without the adapter.
+				if (isStarted()) throw refused;
+				park(adapter, previous);
+				unconfiguredAdapters.add(name);
+				adapterFailures.put(name, refused);
+				logFailed(CONFIGURING_ADAPTER.formatted(name), refused);
+				return;
+			}
+		}
+		if (disabled || declined) {
+			park(adapter, previous);
 			log.info("Adapter '{}' disabled: {}", name, disabled ? "configuration" : "configuration declined");
 			return;
 		}
 		activate(adapter, previous, true);
 		unconfiguredAdapters.remove(name);
+	}
+
+	/** Parks a registering adapter with the disabled ones in place of {@code previous}. Caller holds the engine monitor. */
+	private void park(AAdapter adapter, AAdapter previous) {
+		String name = adapter.getName();
+		retractAdapter(name);
+		adapterFailures.remove(name);
+		unconfiguredAdapters.remove(name);
+		disabledAdapters.put(name, adapter);
+		if (previous != null) adapterRegistryVersion.incrementAndGet();
+		closeReplacedAdapter(previous);
 	}
 
 	public static final String ADAPTER_BEFORE_PREPARE = "Adapters are registered once the engine is prepared";
@@ -1382,15 +1409,15 @@ public class Engine {
 	 * Install (once) and publish an adapter, replacing {@code previous}.
 	 * With {@code start}, a started engine also starts it, and a failed start
 	 * rolls the registration back and throws; without, the caller starts it.
-	 * Caller holds the engine monitor.
+	 * A live adapter has no failure. Caller holds the engine monitor.
 	 */
 	private void activate(AAdapter adapter, AAdapter previous, boolean start) {
 		String name = adapter.getName();
 		boolean previousActive = previous != null && adapters.get(name) == previous;
-		// A failed instance is not started again if this one fails.
-		boolean previousRunning = previousActive && !adapterFailures.containsKey(name);
-		// An instance being enabled goes back to disabled, not closed, if this fails.
+		// An instance being enabled or restarted goes back among the parked ones,
+		// not closed, if this fails; a parked one restored keeps its failure.
 		boolean parked = disabledAdapters.get(name) == adapter;
+		RuntimeException parkedFailure = adapterFailures.get(name);
 		java.util.List<String> previousOrder = java.util.List.copyOf(adapterRegistrationOrder);
 		if (adapter.engine == null) adapter.install(this);
 		new covia.venue.auth.AuthMethods(this).validateAdapter(adapter);
@@ -1404,6 +1431,7 @@ public class Engine {
 		}
 		adapters.put(name, adapter);
 		disabledAdapters.remove(name);
+		adapterFailures.remove(name);
 		adapterRegistrationOrder.remove(name);
 		adapterRegistrationOrder.add(name);
 		adapterRegistryVersion.incrementAndGet();
@@ -1413,10 +1441,7 @@ public class Engine {
 		try {
 			if (replacing) previous.stop();
 			resumeAdapterUserDeletions(adapter);
-			if (start && isStarted()) {
-				adapter.start();
-				adapterFailures.remove(name);
-			}
+			if (start && isStarted()) adapter.start();
 		} catch (RuntimeException | Error failure) {
 			// A failed worker start must not leave a dispatchable partial adapter,
 			// including when module loading has not yet recorded its registration.
@@ -1429,6 +1454,7 @@ public class Engine {
 				disabledAdapters.put(name, previous);
 			}
 			if (parked) disabledAdapters.put(name, adapter);
+			if (parkedFailure != null && disabledAdapters.containsKey(name)) adapterFailures.put(name, parkedFailure);
 			try {
 				if (catalogPublished) {
 					if (previousActive && previous != adapter) {
@@ -1445,13 +1471,11 @@ public class Engine {
 				catch (Exception closeFailure) { failure.addSuppressed(closeFailure); }
 			}
 			// Live again, and only now the failed replacement is closed. If it
-			// cannot start again, it stays enabled but failed.
-			if (replacing && previousRunning) {
+			// cannot start again, it is left failed.
+			if (replacing) {
 				RuntimeException restartFailure = startAdapter(previous);
 				if (restartFailure != null) failure.addSuppressed(restartFailure);
 			}
-			// An adapter no longer registered has no failure to report.
-			if (!adapters.containsKey(name)) adapterFailures.remove(name);
 			adapterRegistryVersion.incrementAndGet();
 			throw failure;
 		}
@@ -1502,16 +1526,20 @@ public class Engine {
 
 	/**
 	 * Enabled adapters that are not running, by name, each with the failure
-	 * that left it so: its start failed, or it could not be configured again
-	 * after a refused change (docs/ADAPTERS.md, Lifecycle). Cleared when it
-	 * next starts, is disabled or is removed.
+	 * that left it so: it could not start, or could not take back its settings
+	 * after refusing a change (docs/ADAPTERS.md, Lifecycle). Each is parked
+	 * with the disabled adapters, so it is treated as a stopped one: nothing
+	 * reaches it through {@link #getAdapter} and its live introspection is
+	 * retracted. Cleared when it starts, is disabled, replaced or removed.
 	 */
 	private final ConcurrentHashMap<String, RuntimeException> adapterFailures = new ConcurrentHashMap<>();
 
 	/**
 	 * Why an enabled adapter is not running, or null when it is running, is
-	 * disabled or is unknown. The venue refuses its operations meanwhile
-	 * ({@link #ADAPTER_NOT_RUNNING}); {@link #restartAdapter} tries it again.
+	 * disabled or is unknown. A failed adapter is treated as a stopped one:
+	 * its operations are refused ({@link #ADAPTER_NOT_RUNNING}), and
+	 * {@link #getAdapter} does not return it, so nothing else in the venue
+	 * uses it either. {@link #restartAdapter} tries it again.
 	 *
 	 * @param name Adapter name
 	 * @return the reason, or null
@@ -1522,38 +1550,46 @@ public class Engine {
 	}
 
 	/**
-	 * Starts an adapter's workers. Its failure is the adapter's alone: the
-	 * failure is reported as the adapter's (docs/ERRORS.md), whatever the
-	 * adapter started is stopped, and the adapter stays enabled but failed,
-	 * with the failure as its reason. Caller holds the engine monitor.
+	 * Starts a live adapter's workers. Its failure is the adapter's alone: the
+	 * failure is reported as the adapter's (docs/ERRORS.md) and the adapter
+	 * is taken out of service ({@link #failAdapter}). Caller holds the engine
+	 * monitor.
 	 *
 	 * @return null when the adapter started, else its failure as reported
 	 */
 	private RuntimeException startAdapter(AAdapter adapter) {
-		String name = adapter.getName();
 		try {
 			adapter.start();
-			adapterFailures.remove(name);
 			return null;
 		} catch (RuntimeException | Error failure) {
 			RuntimeException reported = adapterFailed(STARTING_ADAPTER, adapter, failure);
-			failAdapter(adapter, reported);
+			failAdapter(adapter, reported, true);
 			return reported;
 		}
 	}
 
 	/**
-	 * Takes an enabled adapter out of service: stops whatever it runs, keeping
-	 * a failure to stop on the reason, and records the reason. Caller holds
-	 * the engine monitor.
+	 * Takes an enabled adapter out of service, as a disable would but leaving
+	 * it enabled: a live one is withdrawn from dispatch and live
+	 * introspection and parked; with {@code stop}, whatever it runs is
+	 * stopped, a failure to stop kept on the reason; and the reason is
+	 * recorded. Caller holds the engine monitor.
 	 */
-	private void failAdapter(AAdapter adapter, RuntimeException reason) {
-		try {
-			adapter.stop();
-		} catch (RuntimeException | Error stopFailure) {
-			reason.addSuppressed(stopFailure);
+	private void failAdapter(AAdapter adapter, RuntimeException reason, boolean stop) {
+		String name = adapter.getName();
+		if (adapters.get(name) == adapter) {
+			retractAdapter(name);
+			disabledAdapters.put(name, adapter);
+			adapterRegistryVersion.incrementAndGet();
 		}
-		adapterFailures.put(adapter.getName(), reason);
+		if (stop) {
+			try {
+				adapter.stop();
+			} catch (RuntimeException | Error stopFailure) {
+				reason.addSuppressed(stopFailure);
+			}
+		}
+		adapterFailures.put(name, reason);
 	}
 
 	/**
@@ -1585,10 +1621,8 @@ public class Engine {
 		refused.addSuppressed(unrestored);
 		unconfiguredAdapters.add(name);
 		log.warn(SETTINGS_NOT_RESTORED.formatted(name, unrestored.getMessage()));
-		if (adapters.get(name) != adapter) return;
-		// Workers run only on a started engine; launch does not start a failed adapter.
-		if (isStarted()) failAdapter(adapter, unrestored);
-		else adapterFailures.put(name, unrestored);
+		// Workers run only on a started engine.
+		if (adapters.get(name) == adapter) failAdapter(adapter, unrestored, isStarted());
 	}
 
 	/** Logged when an adapter cannot take back its settings after refusing a change; its name and why follow. */
@@ -1602,16 +1636,21 @@ public class Engine {
 	private static RuntimeException adapterFailed(String what, AAdapter adapter, Throwable failure) {
 		String step = what.formatted(adapter.getName());
 		RuntimeException reported = FaultException.within(step, adapter.faultOwner(), failure);
-		if (!(reported instanceof FaultException)) log.warn("{} failed: {}", step, reported.getMessage());
+		logFailed(step, reported);
 		return reported;
+	}
+
+	/** Logs a failure already reported: a fault was logged at ERROR where it was reported, anything else at WARN. */
+	private static void logFailed(String step, RuntimeException reported) {
+		if (!(reported instanceof FaultException)) log.warn("{} failed: {}", step, reported.getMessage());
 	}
 
 	/**
 	 * Restarts an enabled adapter, running or failed: stops its workers, offers
-	 * it its effective configuration ({@link #adapterConfig}) again and starts
-	 * it, so it never starts on settings it has not accepted. If any step
-	 * fails, the adapter stays enabled but failed, with that failure as its
-	 * reason, and the failure is thrown.
+	 * it its effective configuration ({@link #adapterConfig}) again, publishes
+	 * a failed one again and starts it, so it never starts on settings it has
+	 * not accepted. If any step fails, the adapter is left failed, with that
+	 * failure as its reason, and the failure is thrown.
 	 *
 	 * @param name Adapter name
 	 * @throws NotFoundException if the adapter is unknown
@@ -1623,19 +1662,23 @@ public class Engine {
 	 */
 	public synchronized void restartAdapter(String name) {
 		AAdapter adapter = adapters.get(name);
-		if (adapter == null) {
-			if (disabledAdapters.containsKey(name)) throw new NotSupportedException(ADAPTER_IS_DISABLED.formatted(name));
-			throw unknownAdapter(name);
+		boolean live = adapter != null;
+		if (!live) {
+			adapter = disabledAdapters.get(name);
+			if (adapter == null) throw unknownAdapter(name);
+			if (!adapterFailures.containsKey(name)) throw new NotSupportedException(ADAPTER_IS_DISABLED.formatted(name));
 		}
 		if (!isStarted()) throw new StillStartingException(RESTART_BEFORE_START);
-		// Stopping is idempotent, so a failed adapter is stopped again: a
-		// stop that failed before is tried again.
-		try {
-			adapter.stop();
-		} catch (RuntimeException | Error failure) {
-			RuntimeException reported = adapterFailed(STOPPING_ADAPTER, adapter, failure);
-			adapterFailures.put(name, reported);
-			throw reported;
+		// Stopping is idempotent, so a failed adapter is stopped again: a stop
+		// that failed before is tried again. One never installed never ran.
+		if (adapter.engine != null) {
+			try {
+				adapter.stop();
+			} catch (RuntimeException | Error failure) {
+				RuntimeException reported = adapterFailed(STOPPING_ADAPTER, adapter, failure);
+				failAdapter(adapter, reported, false);
+				throw reported;
+			}
 		}
 		RuntimeException refused;
 		try {
@@ -1646,10 +1689,12 @@ public class Engine {
 		}
 		if (refused != null) {
 			unconfiguredAdapters.add(name);
-			adapterFailures.put(name, refused);
+			failAdapter(adapter, refused, false);
 			throw refused;
 		}
 		unconfiguredAdapters.remove(name);
+		// A failed adapter keeps its failure if publishing it fails.
+		if (!live) activate(adapter, null, false);
 		RuntimeException failed = startAdapter(adapter);
 		if (failed != null) throw failed;
 		log.info("Restarted adapter: {}", name);
@@ -1664,19 +1709,22 @@ public class Engine {
 	 * re-resolves the adapter by name (multi-turn messages, recovery) fails at
 	 * that point of use.
 	 *
+	 * A failed adapter, already stopped, is disabled by forgetting its failure.
+	 *
 	 * @param name Adapter name
-	 * @return true if the adapter was active and is now disabled; false if it
-	 *         was already disabled
+	 * @return true if the adapter was enabled, running or failed, and is now
+	 *         disabled; false if it was already disabled
 	 * @throws NotFoundException if the adapter is unknown
 	 */
 	public synchronized boolean disableAdapter(String name) {
 		AAdapter adapter = adapters.get(name);
 		if (adapter == null) {
-			if (disabledAdapters.containsKey(name)) return false;
-			throw unknownAdapter(name);
+			if (!disabledAdapters.containsKey(name)) throw unknownAdapter(name);
+			if (adapterFailures.remove(name) == null) return false;
+			log.info("Disabled adapter: {}", name);
+			return true;
 		}
 		retractAdapter(name);
-		adapterFailures.remove(name);
 		disabledAdapters.put(name, adapter);
 		adapterRegistryVersion.incrementAndGet();
 		log.info("Disabled adapter: {}", name);
@@ -1685,17 +1733,18 @@ public class Engine {
 	}
 
 	/**
-	 * Enable a disabled adapter: install it if it never was, overwrite its
-	 * catalog paths, publish {@code v/info/adapters/<name>}, resume dispatch
-	 * and, once the venue has started, start it. One that was never installed,
-	 * or could not take back its settings after refusing a change, is offered
-	 * its effective configuration first. If its start fails, it stays
-	 * enabled but failed (see {@link #adapterFailure}) and the failure is
-	 * thrown; {@link #restartAdapter} tries it again.
+	 * Enable a disabled or failed adapter: install it if it never was,
+	 * overwrite its catalog paths, publish {@code v/info/adapters/<name>},
+	 * resume dispatch and, once the venue has started, start it. One that was
+	 * never installed, or could not take back its settings after refusing a
+	 * change, is offered its effective configuration first. If it refuses a
+	 * setting or fails to start, it is left enabled but failed (see
+	 * {@link #adapterFailure}) and the failure is thrown;
+	 * {@link #restartAdapter} tries it again.
 	 *
 	 * @param name Adapter name
-	 * @return true if the adapter was disabled and is now active; false if it
-	 *         was already active
+	 * @return true if the adapter was disabled or failed and is now active;
+	 *         false if it was already active
 	 * @throws NotFoundException if the adapter is unknown
 	 * @throws ConfigurationException if the adapter declines the venue's configuration
 	 *         for it or refuses a setting in it
@@ -1710,9 +1759,18 @@ public class Engine {
 			if (adapters.containsKey(name)) return false;
 			throw unknownAdapter(name);
 		}
-		boolean offer = adapter.engine == null || unconfiguredAdapters.contains(name);
-		if (offer && !offerConfiguration(adapter, adapterConfig(name))) {
-			throw new ConfigurationException(String.format(ADAPTER_DECLINED_CONFIG, name));
+		if (adapter.engine == null || unconfiguredAdapters.contains(name)) {
+			boolean accepted;
+			try {
+				accepted = offerConfiguration(adapter, adapterConfig(name));
+			} catch (RuntimeException refused) {
+				// A refused setting is a failure to start: enabled, but failed.
+				unconfiguredAdapters.add(name);
+				adapterFailures.put(name, refused);
+				logFailed(CONFIGURING_ADAPTER.formatted(name), refused);
+				throw refused;
+			}
+			if (!accepted) throw new ConfigurationException(String.format(ADAPTER_DECLINED_CONFIG, name));
 		}
 		unconfiguredAdapters.remove(name);
 		activate(adapter, null, false);
@@ -1789,9 +1847,9 @@ public class Engine {
 	}
 
 	/**
-	 * Get an active adapter by name
+	 * Get an active adapter by name: one that is enabled and has not failed.
 	 * @param name The name of the adapter to retrieve
-	 * @return The adapter instance, or null if not found or disabled
+	 * @return The adapter instance, or null if not found, disabled or failed
 	 */
 	public AAdapter getAdapter(String name) {
 		return adapters.get(name);
@@ -1806,7 +1864,7 @@ public class Engine {
 	/**
 	 * Check if an active adapter with the given name exists
 	 * @param name The name of the adapter to check
-	 * @return true if the adapter exists and is enabled, false otherwise
+	 * @return true if the adapter exists, is enabled and has not failed
 	 */
 	public boolean hasAdapter(String name) {
 		return adapters.containsKey(name);
@@ -1860,7 +1918,7 @@ public class Engine {
 
 	/**
 	 * Get all active adapter names
-	 * @return Set of all registered, enabled adapter names
+	 * @return Set of all registered adapter names that are enabled and have not failed
 	 */
 	public java.util.Set<String> getAdapterNames() {
 		return adapters.keySet();
@@ -1872,8 +1930,9 @@ public class Engine {
 	}
 
 	/**
-	 * Get the names of registered adapters that are currently disabled.
-	 * @return Set of disabled adapter names
+	 * Get the names of registered adapters that are not active: disabled, or
+	 * enabled but failed ({@link #adapterFailure}).
+	 * @return Set of disabled and failed adapter names
 	 */
 	public java.util.Set<String> getDisabledAdapterNames() {
 		return disabledAdapters.keySet();
