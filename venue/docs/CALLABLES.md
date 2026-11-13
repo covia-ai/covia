@@ -44,6 +44,12 @@ This is a design; none of it is implemented yet.
 8. **Work left running keeps the callable by reference.** Narrowing its caps
    narrows that work, and deleting it narrows the work to nothing, as for
    access tokens.
+9. **References are the provider's choice.** The record keeps `operation` and
+   `gate` as given, and each call resolves them. A content-addressed asset
+   (`a/<hash>`) never changes, so it is the recommended way to name exactly
+   one definition. A reference to `o/` or `v/` follows its binding, so whoever
+   can write that entry changes what the callable runs or whom it admits,
+   within its caps.
 
 ## Data shapes
 
@@ -151,11 +157,12 @@ gate's time limit refuses the call, and its reason is returned.
 | `v/ops/callable/gates/anyone` | Every caller, the public principal included |
 | `v/ops/callable/gates/callers` | A caller listed in its `callers`, or acting in a listed namespace |
 
-A gate takes parameters from an operation default. A provider publishes an
-operation that adds them and names it as the gate:
+A gate takes parameters from an operation default. A provider stores an
+operation that adds them (`asset:store`) and names it as the gate by its
+content hash, so the list stays as stored until the callable names another:
 
 ```
-o/team-gate: {
+a/<hash>: {
   name: "Team gate",
   operation: {
     adapter: "callable:gates/callers",
@@ -164,8 +171,9 @@ o/team-gate: {
 }
 ```
 
-The evaluator builds the gate's input from the call and never sets
-`callers`, so a caller cannot change the list. The test adapter's
+A provider who wants to edit the list in place publishes the same operation
+at an `o/` path and names that. The evaluator builds the gate's input from the
+call and never sets `callers`, so a caller cannot change the list. The test adapter's
 `allowgate`, `denygate` and `amountgate` work as callable gates too.
 
 ### Kept authority
@@ -254,7 +262,7 @@ callable:create {
   name: "guestbook",
   operation: "v/ops/covia/append",
   caps: [{with: "w/guestbook", can: "crud/write"}],
-  gate: "o/friends"
+  gate: "a/<hash>"   // a callers gate listing her friends
 }
 
 callable:call { callable: "<aliceDID>/x/callable/guestbook",
@@ -275,16 +283,6 @@ The path resolves in Alice's namespace, and the caps refuse any other.
 
 ## Open questions
 
-- **Live or pinned references.** `operation` and `gate` are references
-  resolved at each call, so whoever can write what they name, such as an
-  `o/` entry the owner's agents may write, changes what the callable runs or
-  whom it admits, within its caps. Either a callable pins them when it is
-  created or updated, keeping each definition's content hash (as
-  [OPERATIONS.md](OPERATIONS.md) freezes a version), or they follow their
-  binding and writing what they name is as sensitive as changing the
-  callable. Pinning also fixes a `callers` list given as an operation default,
-  so a list that changes often would live in the provider's data, which its
-  gate reads.
 - **Whose quota.** Jobs the target records count against the owner's quota,
   as work in the owner's namespace, not the invoker's.
 - **Calls within calls.** A callable whose target calls another callable:
