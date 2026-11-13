@@ -349,6 +349,7 @@ java -jar target/covia.jar [config.json]
 - `docs/OPERATIONS.md` — operation model, defaults, discovery
 - `docs/PREFERENCES.md` — per-user preferences: storage, the `x/preferences` view, the edit tool's commands and size limit
 - `docs/ACCESS_TOKENS.md` — access tokens: a token request's identity and authority, the capabilities, operations and store, access points, and `/mcp` with a token
+- `docs/CALLABLES.md` — callables (design): functions a principal publishes that run an operation with its issuer's authority narrowed by caps, admitted by a gate operation; the record, abilities, operations, view, gate input and kept authority
 - `docs/MODELS.md` — model definition assets (design): a model is an operation asset at `v/models/<provider>/<id>`
 - `docs/PROJECT.md` — projects (design): a work-breakdown tree at `w/projects/<pid>` where every node has a principal, an assignee, targets, tolerances and PRINCE2-style product descriptions, and the assignee of a node is the principal of its children; the `project` adapter builds, executes and rolls up the tree
 - `docs/GRID_LATTICE_DESIGN.md` — lattice design
