@@ -381,6 +381,10 @@ public class AgentAdapter extends AAdapter {
 	private Engine.Source newController(RequestContext ctx, ACell input) {
 		AString named = namedController(ctx, input);
 		Engine.Source acting = Engine.actingSource(ctx);
+		// A controller keeps no callable's caps, so a call hands on its issuer's authority only when it holds all of it
+		if (named == null && ctx.getCallable() != null && !engine.holdsAuthorityOf(ctx, acting)) {
+			throw new AuthException(Engine.CONTROLLER_NOT_HELD.formatted(acting.principal()));
+		}
 		return (named != null) ? new Engine.Source(named, acting.token()) : acting;
 	}
 

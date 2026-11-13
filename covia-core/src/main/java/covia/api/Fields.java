@@ -379,4 +379,12 @@ public class Fields {
 	 *  narrows its controller's authority. */
 	public static final StringShort CONTROLLER_TOKEN = Strings.intern("controllerToken");
 
+	// Callables (venue/docs/CALLABLES.md)
+	/** A callable, by reference; in kept authority, the callable whose call left the work running. */
+	public static final StringShort CALLABLE = Strings.intern("callable");
+	/** On a callable: the operation that decides who may call it, beyond those holding {@code callable/call}. */
+	public static final StringShort GATE = Strings.intern("gate");
+	/** On the callers gate: the principals and namespaces it admits. */
+	public static final StringShort CALLERS = Strings.intern("callers");
+
 }

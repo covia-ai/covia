@@ -70,6 +70,8 @@ import covia.adapter.JVMAdapter;
 import covia.adapter.SchemaAdapter;
 import covia.adapter.LangChainAdapter;
 import covia.adapter.MCPAdapter;
+import covia.adapter.callable.Callable;
+import covia.adapter.callable.CallableAdapter;
 import covia.adapter.token.AccessToken;
 import covia.adapter.token.AccessTokens;
 import covia.adapter.token.TokenAdapter;
@@ -1094,6 +1096,7 @@ public class Engine {
 			new JSONAdapter(),
 			new Orchestrator(),
 			new TokenAdapter(),
+			new CallableAdapter(),
 			new MCPAdapter(),
 			new LangChainAdapter(),
 			new CoviaAdapter(),
@@ -4116,8 +4119,8 @@ public class Engine {
 	/** Refusals of an explicit namespace switch. */
 	public static final String SUDO_AUTH_REQUIRED = "Authentication required for " + Abilities.ADMIN_SUDO;
 	public static final String SUDO_DENIED = "Sudo denied: requires " + Abilities.ADMIN_SUDO + " on %s from that user";
-	/** Why a request an access token narrows may not act for another user. */
-	public static final String SUDO_WITH_TOKEN = "A request through an access token cannot act for another user (admin/sudo)";
+	/** Why a request an access token or a callable narrows may not act for another user. */
+	public static final String SUDO_NARROWED = "A request through an access token or a callable cannot act for another user (admin/sudo)";
 
 	/**
 	 * Authorises an explicit request to execute within another user's namespace.
@@ -4138,8 +4141,8 @@ public class Engine {
 		requireNotSubPrincipal(userDID);
 		if (userDID.equals(ctx.getUserDID())) return ctx;
 		// Acting for another user is bounded by that user's grants, not by a token's
-		// caps, so a request a token narrows never takes that step.
-		if (!ctx.getTokens().isEmpty()) throw new AuthException(SUDO_WITH_TOKEN);
+		// or a callable's caps, so a request either narrows never takes that step.
+		if (ctx.isNarrowed()) throw new AuthException(SUDO_NARROWED);
 		if (!crossUserAllows(ctx, userDID, Abilities.ADMIN_SUDO)) {
 			throw new AuthException(SUDO_DENIED.formatted(userDID));
 		}
@@ -4627,7 +4630,8 @@ public class Engine {
 	 * ({@link RequestContext#withAuthorityOf}) as its principal
 	 * ({@link Fields#CALLER}), namespace ({@link Fields#OWNER}) and presented
 	 * {@link Fields#PROOFS}, and the access token narrowing it as
-	 * {@link Fields#TOKEN}. Null when it acts with its caller's own,
+	 * {@link Fields#TOKEN}; or, for a callable's call, that callable alone as
+	 * {@link Fields#CALLABLE}. Null when it acts with its caller's own,
 	 * unnarrowed.
 	 *
 	 * <p>Job entries and scheduled events store these keys, so renaming one
@@ -4636,6 +4640,9 @@ public class Engine {
 	 */
 	public static AMap<AString, ACell> keptAuthority(RequestContext ctx) {
 		if (ctx == null) return null;
+		// A callable's call: its record says whose authority it is and what narrows it
+		AMap<AString, ACell> callable = ctx.getCallable();
+		if (callable != null) return Maps.of(Fields.CALLABLE, callable);
 		AMap<AString, ACell> token = actingSource(ctx).token();
 		if (!ctx.hasSeparateAuthority()) return (token == null) ? null : Maps.of(Fields.TOKEN, token);
 		RequestContext authority = ctx.authorityContext();
@@ -4695,6 +4702,12 @@ public class Engine {
 	 */
 	public boolean holdsAuthorityOf(RequestContext ctx, Source source) {
 		if (ctx == null || source == null || !holdsWholeAuthorityOf(ctx, source.principal())) return false;
+		// A call holds its issuer's whole authority only through unrestricted caps
+		AMap<AString, ACell> called = ctx.getCallable();
+		if (called != null) {
+			Callable callable = resolveCallable(called);
+			if (callable == null || !callable.caps().isUnrestricted()) return false;
+		}
 		AVector<ACell> held = ctx.getTokens();
 		if (held.isEmpty()) return true;
 		AVector<ACell> needed = (source.token() == null) ? Vectors.empty() : tokenChain(source.token());
@@ -4711,7 +4724,7 @@ public class Engine {
 	private boolean holdsWholeAuthorityOf(RequestContext ctx, AString principal) {
 		if (ctx == null || principal == null) return false;
 		AString caller = ctx.getCallerDID();
-		if (agentIdIn(ctx.getUserDID(), caller) != null) {
+		if (actsAsOwnAgent(ctx)) {
 			if (isRootOf(caller, principal)) return true;
 			return !ctx.hasSeparateAuthority() && ctx.getCaps() == null && isRootOf(ctx.getUserDID(), principal);
 		}
@@ -4740,12 +4753,22 @@ public class Engine {
 	 * delegate acts for its target.
 	 */
 	public static AString actingPrincipal(RequestContext ctx) {
-		if (agentIdIn(ctx.getUserDID(), ctx.getCallerDID()) != null) return ctx.getCallerDID();
+		if (actsAsOwnAgent(ctx)) return ctx.getCallerDID();
 		RequestContext authority = ctx.authorityContext();
 		AString caller = authority.getCallerDID();
 		AString user = authority.getUserDID();
 		if (caller == null || caller.equals(user) || agentIdIn(user, caller) != null) return caller;
 		return user;
+	}
+
+	/**
+	 * Whether {@code ctx}'s caller is one of the agents of the namespace it acts
+	 * in, acting with authority it has as that agent: its own, or its
+	 * controller's through its harness. Never in a callable's call, whose
+	 * caller is only the invoker and whose authority is the callable's.
+	 */
+	private static boolean actsAsOwnAgent(RequestContext ctx) {
+		return ctx.getCallable() == null && agentIdIn(ctx.getUserDID(), ctx.getCallerDID()) != null;
 	}
 
 	/**
@@ -4781,6 +4804,9 @@ public class Engine {
 	 */
 	public RequestContext context(AString owner, AString principal, AVector<ACell> proofs,
 			AMap<AString, ACell> authority) {
+		// Work a callable's call left running: its invoker, in the callable's namespace, with the callable's authority
+		AMap<AString, ACell> callable = (authority == null) ? null : RT.ensureMap(authority.get(Fields.CALLABLE));
+		if (callable != null) return callContext(RequestContext.of(principal), callable);
 		RequestContext ctx = context(owner, principal, proofs);
 		if (authority == null) return ctx;
 		AMap<AString, ACell> token = RT.ensureMap(authority.get(Fields.TOKEN));
@@ -4853,6 +4879,60 @@ public class Engine {
 			}, owner);
 		}
 		return ctx;
+	}
+
+	// ========== Callables (CALLABLES.md) ==========
+
+	/** The callable {@code reference} names, while it stands; otherwise null, as while the callable adapter is not running. */
+	public Callable resolveCallable(AMap<AString, ACell> reference) {
+		return (reference != null && getAdapter(CallableAdapter.NAME) instanceof CallableAdapter adapter)
+			? adapter.callables().resolve(reference) : null;
+	}
+
+	/**
+	 * The context a call of callable {@code reference} acts in: {@code invoker}'s
+	 * execution carried on by its caller, in the callable's owner's namespace,
+	 * acting with the callable's authority. That is its issuer as that principal
+	 * acts in the callable's namespace ({@link #context(AString, AString)}),
+	 * narrowed by the chain of tokens that created it and by its caps, each
+	 * read at each point of action, so a callable that no longer stands narrows
+	 * it to nothing. The invoker's own authority plays no part.
+	 *
+	 * @throws AuthException when the issuer could not act now
+	 */
+	public RequestContext callContext(RequestContext invoker, AMap<AString, ACell> reference) {
+		AString owner = RT.ensureString(reference.get(Fields.OWNER));
+		Callable callable = resolveCallable(reference);
+		RequestContext issuer = (callable == null) ? RequestContext.of(owner, owner, Vectors.empty())
+			: narrowedByToken(context(owner, callable.issuer()), callable.source());
+		return invoker.callingIn(owner, issuer.withCallable(reference, resource -> {
+			Callable current = resolveCallable(reference);
+			return (current == null) ? Vectors.empty() : current.caps().scope();
+		}, owner));
+	}
+
+	/**
+	 * Whether what narrows the authority {@code ctx} acts with covers
+	 * {@code (resource, ability)}: every access token on it, and the callable
+	 * whose call it is, by their caps as they stand. What a request holds
+	 * beyond its scope (a proof, an admission, the public scope, a callable's
+	 * gate) reaches only that far. True when nothing narrows it.
+	 */
+	public boolean narrowingsCover(RequestContext ctx, AString resource, AString ability) {
+		if (ctx == null) return false;
+		if (ctx.hasSeparateAuthority()) return narrowingsCover(ctx.authorityContext(), ctx.inNamespace(resource), ability);
+		return narrowingsCover(ctx, resource, ability, null);
+	}
+
+	/** As above for a use that sends a value to {@code destination}, on a context acting with its own authority. */
+	private boolean narrowingsCover(RequestContext ctx, AString resource, AString ability, AString destination) {
+		if (!tokensCover(ctx, resource, ability, destination)) return false;
+		AMap<AString, ACell> called = ctx.getCallable();
+		if (called == null) return true;
+		Callable callable = resolveCallable(called);
+		if (callable == null) return false;
+		AVector<ACell> caps = callable.caps().scope();
+		return caps == null || ctx.denialUnder(caps, resource, ability, callable.owner(), destination) == null;
 	}
 
 	/**
@@ -4969,7 +5049,7 @@ public class Engine {
 		if (ctx.hasSeparateAuthority()) {
 			return authorityCovers(ctx.authorityContext(), ctx.inNamespace(resource), ability, destination);
 		}
-		if (isAnothers(ctx, resource)) return crossUserAllows(ctx, resource, ability, destination) && tokensCover(ctx, resource, ability, destination);
+		if (isAnothers(ctx, resource)) return crossUserAllows(ctx, resource, ability, destination) && narrowingsCover(ctx, resource, ability, destination);
 		return scopeOrHeldCovers(ctx, resource, ability, destination);
 	}
 
@@ -5003,7 +5083,7 @@ public class Engine {
 	private boolean scopeOrHeldCovers(RequestContext ctx, AString resource, AString ability, AString destination) {
 		AVector<ACell> scope = ctx.scopeFor(resource);
 		if (scope == null) return true;
-		if (crossUserAllows(ctx, resource, ability, destination) && tokensCover(ctx, resource, ability, destination)) return true;
+		if (crossUserAllows(ctx, resource, ability, destination) && narrowingsCover(ctx, resource, ability, destination)) return true;
 		return ctx.denialUnder(scope, resource, ability, ctx.getUserDID(), destination) == null;
 	}
 
@@ -5095,7 +5175,7 @@ public class Engine {
 	 */
 	public boolean isDirectVenue(RequestContext ctx) {
 		return ctx != null && getDIDString().equals(ctx.getCallerDID())
-			&& ctx.getExecutionScope().agentId() == null && ctx.getTokens().isEmpty();
+			&& ctx.getExecutionScope().agentId() == null && !ctx.isNarrowed();
 	}
 
 	/** Opening of every {@link #requireVenueAuthority} denial. */

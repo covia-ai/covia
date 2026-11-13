@@ -76,6 +76,10 @@ public final class Abilities {
 	public static final AString ADMIN_TOKEN   = Strings.intern("admin/token");
 	/** Administer access tokens accepted at MCP, such as fetching a bearer again. */
 	public static final AString ADMIN_TOKEN_MCP = Strings.intern("admin/token/mcp");
+	/** Call a callable without passing its gate ({@code <owner>/x/callable/<name>}). */
+	public static final AString CALLABLE_CALL   = Strings.intern("callable/call");
+	/** Create, change or delete a callable ({@code <did>/x/callable/<name>}). */
+	public static final AString CALLABLE_MANAGE = Strings.intern("callable/manage");
 	public static final AString HITL_REQUEST  = Strings.intern("hitl/request");
 	public static final AString AGENT_CREATE  = Strings.intern("agent/create");
 	public static final AString AGENT_REQUEST = Strings.intern("agent/request");

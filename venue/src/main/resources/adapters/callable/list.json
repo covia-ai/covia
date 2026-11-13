@@ -1,0 +1,20 @@
+{
+	"name": "Callable List",
+	"description": "Lists the callables in your namespace: each one's name, issuer, operation, caps, gate, description and creation time. Needs crud/read on x/callable.",
+	"dateCreated": "2026-11-13T00:00:00Z",
+	"operation": {
+		"adapter": "callable:list",
+		"readOnly": true,
+		"input": {
+			"type": "object",
+			"properties": {}
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"callables": { "type": "array", "items": { "type": "object" } },
+				"total": { "type": "integer" }
+			}
+		}
+	}
+}

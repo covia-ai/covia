@@ -217,7 +217,7 @@ public class McpTokenAuthorityTest {
 			"an unrestricted token gets as far as the missing id");
 
 		// Acting for another user, or as an agent, starts from the user's own authority
-		assertEquals(Engine.SUDO_WITH_TOKEN, assertThrows(AuthException.class, () -> engine.sudoContext(whole, bob)).getMessage());
+		assertEquals(Engine.SUDO_NARROWED, assertThrows(AuthException.class, () -> engine.sudoContext(whole, bob)).getMessage());
 		agent(alice, "helper", Caps.UNRESTRICTED);
 		assertThrows(AuthException.class, () -> engine.stepContext(narrowed, Strings.create("helper")));
 		assertNotNull(engine.stepContext(whole, Strings.create("helper")), "all of the owner's authority makes it act");
