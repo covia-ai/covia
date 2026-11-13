@@ -72,8 +72,13 @@ public class CallableMcpTest {
 
 	/** The result of MCP tool call {@code tool} with {@code arguments}, made with {@code bearer}. */
 	private AMap<AString, ACell> callTool(String bearer, String tool, ACell arguments) throws Exception {
-		String body = JSON.toString(Maps.of("jsonrpc", "2.0", "id", 1, "method", "tools/call",
-			"params", Maps.of(Fields.NAME, tool, Fields.ARGUMENTS, arguments)));
+		return callTool(bearer, tool, JSON.toString(arguments));
+	}
+
+	/** As above, with the arguments as the client writes them in JSON. */
+	private AMap<AString, ACell> callTool(String bearer, String tool, String arguments) throws Exception {
+		String body = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"" + tool
+			+ "\",\"arguments\":" + arguments + "}}";
 		HttpResponse<String> response = http.send(HttpRequest.newBuilder(URI.create(MCP_URL))
 			.header("Content-Type", "application/json").header("Accept", "application/json")
 			.header("Authorization", "Bearer " + bearer).timeout(Duration.ofSeconds(20))
@@ -158,5 +163,25 @@ public class CallableMcpTest {
 		run("v/ops/callable/delete", Maps.of(Fields.NAME, "guestbook"), owner);
 		refused(callTool(bobs, "guestbook", signing(guestbook, "w/guestbook", "deleted")));
 		assertEquals(Vectors.of("Hello from Bob", "Hello again"), held(alice, "w/guestbook"));
+	}
+
+	@Test
+	public void aGateRemovedWithJsonNullLeavesTheCallablePrivate(TestInfo info) throws Exception {
+		AString alice = TestEngine.uniqueDID(info);
+		AString bob = TestEngine.uniqueDID("bob-" + info.getDisplayName());
+		RequestContext owner = RequestContext.of(alice);
+		run("v/ops/covia/write", Maps.of(Fields.PATH, "w/guestbook", Fields.VALUE, Vectors.empty()), owner);
+		run("v/ops/callable/create", Maps.of(Fields.NAME, "open", Fields.OPERATION, "v/ops/covia/append",
+			Fields.CAPS, Vectors.of(cap("w/guestbook", Capability.CRUD_WRITE)), Fields.GATE, "v/ops/callable/gates/anyone"), owner);
+		String open = alice + "/x/callable/open";
+		String bobs = token(bob, "any", Vectors.of(callTool("guestbook")), Caps.UNRESTRICTED);
+		succeeded(callTool(bobs, "guestbook", signing(open, "w/guestbook", "while open")));
+
+		// Alice's client removes the gate, sending null as JSON
+		String alices = token(alice, "admin", Vectors.of("v/ops/callable/update"), Caps.UNRESTRICTED);
+		succeeded(callTool(alices, "callable_update", "{\"name\":\"open\",\"gate\":null}"));
+		assertTrue(refused(callTool(bobs, "guestbook", signing(open, "w/guestbook", "once closed")))
+			.contains(CallableAdapter.NOT_CALLABLE.formatted(open)));
+		assertEquals(Vectors.of("while open"), held(alice, "w/guestbook"));
 	}
 }

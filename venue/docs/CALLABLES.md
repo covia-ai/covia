@@ -206,7 +206,9 @@ names resolve in the owner's namespace, so what the target reaches by name is
 the owner's, within the callable's caps:
 
 - jobs it records and events it schedules are the owner's, attributed to the
-  invoker as caller, and count against the owner's quota;
+  invoker as caller, and count against the owner's quota; an event fires
+  with the callable's authority as it stands then, so the caps must cover
+  `invoke` on the operation the event runs;
 - a human it asks (`hitl:request`) is the owner's, through the owner's `h/`;
 - a secret it uses is the owner's, as `secret/use` in its caps allows.
 

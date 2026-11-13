@@ -4950,8 +4950,10 @@ public class Engine {
 		AString agentDID = (owner == null || agentId == null) ? null
 			: covia.grid.Principals.agentDID(owner, agentId);
 		// Its own run, or its owner with all of the owner's authority: a request a
-		// token narrows may not make an agent act with the agent's own authority
-		if (agentDID == null || !(agentDID.equals(caller) || (owner.equals(caller) && holdsAuthorityOf(ctx, owner)))) {
+		// token narrows may not make an agent act with the agent's own authority,
+		// and a call's caller is only its invoker, never the agent's own run
+		boolean ownRun = ctx.getCallable() == null && agentDID != null && agentDID.equals(caller);
+		if (agentDID == null || !(ownRun || (owner.equals(caller) && holdsAuthorityOf(ctx, owner)))) {
 			throw new AuthException(NOT_AGENTS_STEP.formatted(caller, agentId));
 		}
 		if (getAgent(owner, agentId) == null) throw new AuthException(NO_SUCH_AGENT.formatted(agentDID));

@@ -2,6 +2,10 @@ package covia.adapter.callable;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
 
@@ -16,9 +20,11 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.lang.RT;
+import covia.adapter.token.AccessToken;
 import covia.api.Abilities;
 import covia.api.Fields;
 import covia.grid.Job;
+import covia.grid.Operation;
 import covia.grid.Principals;
 import covia.grid.Status;
 import covia.lattice.Caps;
@@ -164,9 +170,10 @@ public class CallableAdapterTest {
 		complete(run("v/ops/callable/update", Maps.of(Fields.NAME, "private", Fields.GATE, "o/team-gate"), owner));
 		complete(call(RequestContext.of(bob), callable, append("w/guestbook", "from Bob")));
 		complete(call(agent(bob, "helper", Vectors.of(cap("v/ops/", Abilities.INVOKE))), callable, append("w/guestbook", "from Bob's agent")));
+		complete(call(engine.harnessContext(bob, Strings.create("helper")), callable, append("w/guestbook", "from its harness")));
 		String refused = failure(call(RequestContext.of(carol), callable, append("w/guestbook", "from Carol")));
 		assertTrue(refused.contains(CallableAdapter.NOT_A_CALLER.formatted(carol)), refused);
-		assertEquals(Vectors.of("from Alice", "granted", "from Bob", "from Bob's agent"), held(alice.did(), "w/guestbook"));
+		assertEquals(Vectors.of("from Alice", "granted", "from Bob", "from Bob's agent", "from its harness"), held(alice.did(), "w/guestbook"));
 
 		// A gate that refuses everyone admits no one, and removing the gate makes it private again
 		complete(run("v/ops/callable/update", Maps.of(Fields.NAME, "private", Fields.GATE, "v/test/ops/denygate"), owner));
@@ -203,6 +210,9 @@ public class CallableAdapterTest {
 		assertTrue(engine.holdsAuthorityOf(byHelper, maker.getCallerDID()), "unrestricted, it is all of its issuer's");
 		assertFalse(engine.holdsAuthorityOf(byHelper, helper.getCallerDID()));
 		assertTrue(engine.holdsAuthorityOf(helper, helper.getCallerDID()), "the agent holds its own outside a call");
+		assertThrows(covia.exception.AuthException.class, () -> engine.stepContext(byHelper, Strings.create("helper")),
+			"nor does it make its invoker act as itself");
+		assertNotNull(engine.stepContext(helper, Strings.create("helper")), "its own run makes it act");
 
 		// What a call's caller made in the owner's namespace is not the call's by attribution
 		AMap<AString, ACell> event = Maps.of(Fields.CALLER, bob, Fields.OWNER, alice);
@@ -259,6 +269,80 @@ public class CallableAdapterTest {
 		complete(create(owner, "guestbook", "v/ops/covia/append", Caps.UNRESTRICTED, null));
 		assertFalse(mayWrite(resumed, alice, "w/guestbook"));
 		assertFalse(mayWrite(engine.context(alice, bob, null, kept), alice, "w/guestbook"));
+	}
+
+	@Test
+	public void anEventACallSchedulesFiresWithTheCallablesAuthority(TestInfo info) {
+		AString alice = TestEngine.uniqueDID(info);
+		AString bob = TestEngine.uniqueDID("bob-" + info.getDisplayName());
+		RequestContext owner = RequestContext.of(alice);
+		openGuestbook(alice);
+		// Firing an event invokes its operation, so the caps name that too
+		AVector<ACell> caps = GUESTBOOK_CAPS.conj(cap("v/ops/covia/append", Abilities.INVOKE));
+		complete(create(owner, "later", "v/ops/scheduler/schedule", caps, "v/ops/callable/gates/anyone"));
+		String later = alice + "/x/callable/later";
+		ACell first = schedule(bob, later, append("w/guestbook", "Later from Bob"));
+		ACell beyond = schedule(bob, later, append("w/private", "x"));
+		ACell second = schedule(bob, later, append("w/guestbook", "After deletion"));
+
+		// The events are Alice's, made by Bob
+		AVector<ACell> events = RT.ensureVector(RT.getIn(complete(run("v/ops/scheduler/list", Maps.empty(), owner)), "events"));
+		assertEquals(3, events.count());
+		for (ACell event : events) assertEquals(bob, RT.getIn(event, Fields.CALLER));
+
+		// Each fires with the callable's authority as it stands then
+		complete(run("v/ops/scheduler/trigger", Maps.of("handle", first), owner));
+		failure(run("v/ops/scheduler/trigger", Maps.of("handle", beyond), owner));
+		complete(run("v/ops/callable/delete", Maps.of(Fields.NAME, "later"), owner));
+		failure(run("v/ops/scheduler/trigger", Maps.of("handle", second), owner));
+		assertEquals(Vectors.of("Later from Bob"), held(alice, "w/guestbook"));
+		assertNull(held(alice, "w/private"));
+	}
+
+	@Test
+	public void aCallableATokenMadeIsNarrowedByThatToken(TestInfo info) throws Exception {
+		AString alice = TestEngine.uniqueDID(info);
+		AString bob = TestEngine.uniqueDID("bob-" + info.getDisplayName());
+		RequestContext owner = RequestContext.of(alice);
+		openGuestbook(alice);
+		AVector<ACell> tools = Vectors.of("v/ops/callable/create", "v/ops/callable/update");
+		ACell tokenCaps = Vectors.of(cap("x/callable/", Abilities.CALLABLE_MANAGE), cap("w/guestbook", Capability.CRUD_WRITE));
+		String bearer = RT.getIn(complete(run("v/ops/mcp/create-token",
+			Maps.of(Fields.NAME, "maker", Fields.TOOLS, tools, Fields.CAPS, tokenCaps), owner)), Fields.TOKEN).toString();
+		AMap<AString, ACell> token = engine.tokens().lookup(bearer);
+
+		// An unrestricted callable the token's request makes is still narrowed by the token
+		throughToken(token, "v/ops/callable/create", Maps.of(Fields.NAME, "made", Fields.OPERATION, "v/ops/covia/append",
+			Fields.CAPS, Caps.UNRESTRICTED, Fields.GATE, "v/ops/callable/gates/anyone")).get(10, TimeUnit.SECONDS);
+		String made = alice + "/x/callable/made";
+		complete(call(RequestContext.of(bob), made, append("w/guestbook", "through the token")));
+		failure(call(RequestContext.of(bob), made, append("w/private", "x")));
+
+		// The token changes what it made, never what Alice made directly
+		complete(create(owner, "direct", "v/ops/covia/append", Caps.UNRESTRICTED, null));
+		ExecutionException refused = assertThrows(ExecutionException.class, () -> throughToken(token, "v/ops/callable/update",
+			Maps.of(Fields.NAME, "direct", Fields.CAPS, Vectors.empty())).get(10, TimeUnit.SECONDS));
+		assertEquals(CallableAdapter.SOURCE_NOT_HELD.formatted("direct"), refused.getCause().getMessage());
+		throughToken(token, "v/ops/callable/update", Maps.of(Fields.NAME, "made", Fields.DESCRIPTION, "Sign here"))
+			.get(10, TimeUnit.SECONDS);
+
+		// Deleted, the token narrows what it made to nothing
+		complete(run("v/ops/mcp/delete-token", Maps.of(Fields.NAME, "maker"), owner));
+		failure(call(RequestContext.of(bob), made, append("w/guestbook", "after the token")));
+		assertEquals(Vectors.of("through the token"), held(alice, "w/guestbook"));
+	}
+
+	/** {@code caller} has callable {@code callable} schedule an append of {@code append} an hour from now, and gets its handle. */
+	private ACell schedule(AString caller, String callable, ACell append) {
+		ACell event = Maps.of(Fields.OPERATION, "v/ops/covia/append", Fields.INPUT, append, "after", 3_600_000L);
+		return RT.getIn(complete(call(RequestContext.of(caller), callable, event)), "handle");
+	}
+
+	/** Tool {@code ref} called through access token {@code token}, as the venue's MCP endpoint calls it. */
+	private CompletableFuture<ACell> throughToken(AMap<AString, ACell> token, String ref, ACell input) {
+		AccessToken standing = engine.resolveToken(token);
+		Operation operation = engine.jobs().resolveOperation(Strings.create(ref), engine.context(standing.owner(), standing.issuer()));
+		return engine.jobs().startToolOperation(Strings.create(ref), operation, input, engine.tokenContext(token)).result();
 	}
 
 	@Test
