@@ -29,13 +29,15 @@ This is a design; none of it is implemented yet.
    ([OPERATIONS.md](OPERATIONS.md)), and the gate may inspect the input.
 5. **Who may call:** a request whose authority covers `callable/call` on the
    callable, or any caller its gate admits. Without a gate, only the first.
-6. **The gate is a capability gate.** It has the contract of `nb.gate`
-   ([UCAN.md](UCAN.md#capability-gates-nbgate--covia216)) and is evaluated by
-   the same code
-   (`JobManager.evaluateGate`), so one gate serves grants and callables alike.
-   It runs with the callable's authority, as a Convex trust monitor runs as its
-   actor, so it can consult the provider's private allow lists, block lists
-   and usage records.
+6. **The gate is a capability gate.** It has the input, outcome and limits of
+   `nb.gate` ([UCAN.md](UCAN.md#capability-gates-nbgate--covia216)), so one
+   gate serves grants and callables alike. It runs with the callable's
+   authority, as a Convex trust monitor runs as its actor, so it can consult
+   the provider's private allow lists, block lists and usage records. A
+   capability gate instead runs with a constrained form of the caller's
+   authority (`RequestContext.forGateEvaluation`), and its evaluator
+   (`JobManager.evaluateGate`) takes `owner` from that context; a callable's
+   gate needs the invoker's namespace there and the callable's own authority.
 7. **The target runs inside the call.** A call is one job; the target is bound
    to it as an agent's configured tool is, so running it needs no `invoke`
    grant.
@@ -181,7 +183,37 @@ authority: {
 ```
 
 Rebuilt, it is the issuer's authority narrowed by the token and by the
-callable's caps as they stand, and nothing once the callable is gone.
+callable's caps as they stand, and nothing once the callable is gone. Such
+work belongs to the owner's namespace (see below), so it resumes there with
+the invoker as its caller.
+
+## What a call acts in
+
+The call itself is the invoker's: a job in the invoker's `j/`, counted against
+the invoker's job quota, which the invoker can watch and cancel. Inside it,
+names resolve in the owner's namespace, so what the target reaches by name is
+the owner's, within the callable's caps:
+
+- jobs it records and events it schedules are the owner's, attributed to the
+  invoker as caller, and count against the owner's quota;
+- a human it asks (`hitl:request`) is the owner's, through the owner's `h/`;
+- a secret it uses is the owner's, as `secret/use` in its caps allows.
+
+## What a call never holds
+
+As for a request through an access token
+([ACCESS_TOKENS.md](ACCESS_TOKENS.md#acting-with-a-principals-whole-authority)),
+the authority a call acts with is narrowed, so:
+
+- **It never acts with its namespace's own authority.** State a namespace
+  keeps with no capability of its own, such as Python instances, dictations
+  and bot lists, is out of its reach
+  (`RequestContext.actsWithNamespaceAuthority`), whatever its caps.
+- **It holds its issuer's whole authority** (`Engine.holdsAuthorityOf`) only
+  when its caps are unrestricted and every token on its source chain is.
+- **It never counts as the venue**, even when the venue issued it. It reaches
+  the venue's resources only as far as its caps cover them, as the first
+  example below does.
 
 ## How a call runs
 
@@ -243,6 +275,18 @@ The path resolves in Alice's namespace, and the caps refuse any other.
 
 ## Open questions
 
+- **Live or pinned references.** `operation` and `gate` are references
+  resolved at each call, so whoever can write what they name, such as an
+  `o/` entry the owner's agents may write, changes what the callable runs or
+  whom it admits, within its caps. Either a callable pins them when it is
+  created or updated, keeping each definition's content hash (as
+  [OPERATIONS.md](OPERATIONS.md) freezes a version), or they follow their
+  binding and writing what they name is as sensitive as changing the
+  callable. Pinning also fixes a `callers` list given as an operation default,
+  so a list that changes often would live in the provider's data, which its
+  gate reads.
+- **Whose quota.** Jobs the target records count against the owner's quota,
+  as work in the owner's namespace, not the invoker's.
 - **Calls within calls.** A callable whose target calls another callable:
   which caller the inner gate sees, the invoker or the outer callable, and how
   deep a chain may go (access tokens stop at a fixed depth).
