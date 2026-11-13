@@ -1,25 +1,31 @@
 # Authority (design)
 
-Every request, and every record of work (a job, a scheduled event), names four
-principals by DID: whose authority applies, who called into it, who started
-it, and where names resolve. The model is Convex's `*address*`, `*caller*` and
-`*origin*` (CAD005). This is a design; none of it is implemented yet.
+Every request, and every record of work (a job, a scheduled event), names
+three principals by DID: whose authority applies, who called into it, and who
+started it. The model is Convex's `*address*`, `*caller*` and `*origin*`
+(CAD005). This is a design; none of it is implemented yet.
 
-## The four fields
+## The three fields
 
 | Field | Meaning | Changes |
 |-------|---------|---------|
 | `authority` | The principal whose authority applies. Only this decides access. | When a call enters something that acts with its own authority, such as a callable |
 | `caller` | The `authority` of the frame that called into this one; absent at the top level | On that call: the previous `authority` becomes `caller` |
 | `origin` | The principal that started the top-level request | Never, down the chain |
-| `owner` | The namespace names resolve in, recorded, never parsed from a DID | With `authority`, or by an explicit switch (`admin/sudo`) |
 
-- Ordinary composition keeps all four: orchestration steps, sub-operations
+- Ordinary composition keeps all three: orchestration steps, sub-operations
   and tool calls run in the frame that started them.
 - Every authority check (`Engine.authorityCovers`, `holdsAuthorityOf`) reads
   `authority` alone. `caller` and `origin` grant and refuse nothing.
 - Grants a request presents are additions to its authority
   ([VENUE_AUTHORITY.md](VENUE_AUTHORITY.md)), carried beside these fields.
+
+## Where names resolve
+
+Names resolve in the namespace of the `authority`: a user's own, or the one an
+agent, token or callable belongs to, read from its record and never from the
+form of its DID. A record of work lives in that namespace, so where it is kept
+says whose it is.
 
 ## Derived principals
 
@@ -38,25 +44,48 @@ A callable is invoked as an operation, by its path
 ([CALLABLES.md](CALLABLES.md)). Calls nest: each call's `caller` is the
 authority that made it.
 
+## Acting for another user
+
+`admin/sudo` is a call into the user acted for: `caller` is the delegate, and
+`authority` is that user, bounded by the grants the delegate presents. That is
+a delegation's meaning: the user's authority within the caps they signed,
+exercised by another.
+
+## An agent's harness
+
+The harness is the venue's trusted code, running an agent
+([VENUE_AUTHORITY.md](VENUE_AUTHORITY.md#trusted-code)). It reaches the agent's
+own records as venue code. Two things steer it, each with the authority of
+whoever chose it:
+
+- **Its configuration**, which only its controller may change: the model it
+  calls, the secrets and context it loads and the tools it offers act with the
+  controller's authority, and names in it resolve in the controller's
+  namespace. For an agent its owner controls, that is the owner's.
+- **The model's choices**: each tool call runs as the agent, bounded by its
+  caps.
+
 ## Cases
 
-| Case | `authority` | `caller` | `origin` | `owner` |
-|------|-------------|----------|----------|---------|
-| Alice's own request | Alice | none | Alice | Alice |
-| Through Alice's token | the token | none | the token | Alice |
-| Alice's agent acting | the agent | none | the agent | Alice |
-| That agent's harness | Alice, its controller | none | the agent | Alice |
-| Bob acting for Alice (`admin/sudo`) | Bob, with Alice's grants | none | Bob | Alice |
-| Bob calls Alice's guestbook | the guestbook | Bob | Bob | Alice |
-| The guestbook calls Carol's callable | Carol's callable | the guestbook | Bob | Carol |
+| Case | `authority` | `caller` | `origin` |
+|------|-------------|----------|----------|
+| Alice's own request | Alice | none | Alice |
+| Through Alice's token | the token | none | the token |
+| Alice's agent calling a tool | the agent | none | the agent |
+| That agent's harness, as configured | Alice, its controller | none | the agent |
+| Bob acting for Alice (`admin/sudo`) | Alice, within Bob's grants | Bob | Bob |
+| Bob calls Alice's guestbook | the guestbook | Bob | Bob |
+| The guestbook calls Carol's callable | Carol's callable | the guestbook | Bob |
 
 ## What it replaces
 
 - The request context's caller DID, which today names the authority in most
   cases, but the origin for an agent's harness or a sudo delegate.
-- A separate authority on a context, the token chain on a context, and the
-  two shapes of kept authority. Work kept for later records the four fields,
-  and is rebuilt from them as the principals stand.
+- The request context's namespace as a value apart from its authority, and a
+  separate authority on a context.
+- The token chain on a context, and the two shapes of kept authority: work
+  kept for later records the three fields, and is rebuilt from them as the
+  principals stand.
 - The `source` of tokens and callables, and an agent's `controllerToken`.
 
 ## Open decisions
@@ -66,9 +95,10 @@ authority that made it.
    admitted to; today it keeps that within its caps. A derived principal is
    either admitted where the principal it acts for is, within its caps, which
    agents would then gain too, or it is not.
-2. **The recorded `caller`.** COG-8 defines `caller` as today's origin. Either
-   it is renamed `origin` (a COG-8 change, a venue migration and an API change),
-   or the new field takes another name.
+2. **COG-8's `caller` and `owner`.** `caller` there means today's origin and
+   `owner` the namespace. Either `caller` is renamed `origin` and `owner`
+   stays as where a job lives (a COG-8 change, a venue migration and an API
+   change), or the new fields take other names.
 3. **DIDs for tokens and callables**, such as `<ownerDID>:x:token:<name>` and
    `<ownerDID>:x:callable:<name>`, formed from their record paths as an agent's
    `<ownerDID>:g:<id>` is from `g/<id>`.
