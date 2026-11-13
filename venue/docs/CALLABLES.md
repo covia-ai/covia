@@ -1,4 +1,4 @@
-# Callables (design)
+# Callables
 
 A callable is a function a principal publishes for others to call. It names
 an operation of any kind (an orchestration, a configured Python function, an
@@ -7,7 +7,8 @@ by caps fixed on it, whoever calls it. A gate operation the provider chooses
 decides who may call it. It is Covia's form of a Convex callable function
 guarded by a trust monitor.
 
-This is a design; none of it is implemented yet.
+The `callable` adapter (`covia.adapter.callable`) keeps callables and runs
+their calls; `Engine.callContext` builds the authority a call acts with.
 
 ## Decisions
 
@@ -29,15 +30,19 @@ This is a design; none of it is implemented yet.
    ([OPERATIONS.md](OPERATIONS.md)), and the gate may inspect the input.
 5. **Who may call:** a request whose authority covers `callable/call` on the
    callable, or any caller its gate admits. Without a gate, only the first.
+   A gate is an admission, so it admits a request an access token narrows
+   only as far as its tokens' caps cover `callable/call` on the callable, as
+   for any admission into another identity's resources
+   ([ACCESS_TOKENS.md](ACCESS_TOKENS.md#acting-with-a-principals-whole-authority)).
 6. **The gate is a capability gate.** It has the input, outcome and limits of
    `nb.gate` ([UCAN.md](UCAN.md#capability-gates-nbgate--covia216)), so one
    gate serves grants and callables alike. It runs with the callable's
    authority, as a Convex trust monitor runs as its actor, so it can consult
    the provider's private allow lists, block lists and usage records. A
    capability gate instead runs with a constrained form of the caller's
-   authority (`RequestContext.forGateEvaluation`), and its evaluator
-   (`JobManager.evaluateGate`) takes `owner` from that context; a callable's
-   gate needs the invoker's namespace there and the callable's own authority.
+   authority (`RequestContext.forGateEvaluation`). Both are evaluated by
+   `JobManager`, a callable's by `evaluateCallableGate`, and within either,
+   gated grants stay fail-closed.
 7. **The target runs inside the call.** A call is one job; the target is bound
    to it as an agent's configured tool is, so running it needs no `invoke`
    grant.
@@ -180,20 +185,18 @@ call and never sets `callers`, so a caller cannot change the list. The test adap
 
 Work a call leaves running, such as a job the target starts or an event it
 schedules, keeps the callable's authority with it
-([JOBS.md](JOBS.md)). `Engine.keptAuthority` gains one key:
+([JOBS.md](JOBS.md)). Its kept authority (`Engine.keptAuthority`) is the
+callable alone, since the record names the issuer and the source:
 
 ```
-authority: {
-  caller?, owner?, proofs?,   // the issuer, as for any separate authority
-  token?:    {owner, name, id},   // the callable's source
-  callable?: {owner, name, id}    // the callable whose caps narrow it
-}
+authority: { callable: {owner, name, id} }
 ```
 
-Rebuilt, it is the issuer's authority narrowed by the token and by the
-callable's caps as they stand, and nothing once the callable is gone. Such
-work belongs to the owner's namespace (see below), so it resumes there with
-the invoker as its caller.
+Rebuilt, it is the authority a call of that callable acts with now: the
+issuer's, narrowed by the source chain and the callable's caps as they
+stand, and nothing once the callable is gone. Such work belongs to the
+owner's namespace (see below), so it resumes there with the invoker as its
+caller.
 
 ## What a call acts in
 
@@ -219,9 +222,22 @@ the authority a call acts with is narrowed, so:
   (`RequestContext.actsWithNamespaceAuthority`), whatever its caps.
 - **It holds its issuer's whole authority** (`Engine.holdsAuthorityOf`) only
   when its caps are unrestricted and every token on its source chain is.
-- **It never counts as the venue**, even when the venue issued it. It reaches
-  the venue's resources only as far as its caps cover them, as the first
-  example below does.
+- **It never counts as the venue**, even when the venue issued it or calls
+  it. It reaches the venue's resources only as far as its caps cover them, as
+  the first example below does.
+- **It never acts for another user** (`admin/sudo`), and what it holds beyond
+  its scope (an admission, a presented grant, another callable's gate)
+  reaches only as far as its caps cover it.
+- **It never holds its invoker's authority.** An agent of the owner calling
+  acts with the callable's authority, not its own, and what the call creates
+  is its issuer's (`Engine.actingPrincipal`).
+- **It hands on only what it holds.** An agent it creates takes the issuer as
+  controller, and a controller keeps no callable's caps, so creating one needs
+  the issuer's whole authority. Tokens and callables it creates need that
+  authority too, as their issuer.
+- **It never calls a callable.** A target that is itself a call, and work a
+  call left running, are refused when they call one, since a callable could
+  otherwise call itself without end.
 
 ## How a call runs
 
@@ -271,6 +287,23 @@ callable:call { callable: "<aliceDID>/x/callable/guestbook",
 
 The path resolves in Alice's namespace, and the caps refuse any other.
 
+**A callable as a tool.** A callable is not an operation reference, so an MCP
+token or an agent offers `v/ops/callable/call` as the tool, and the client
+names the callable. Bob offers Alice's guestbook to a client of his:
+
+```
+mcp:create-token {
+  name: "guestbook",
+  tools: [{operation: "v/ops/callable/call", name: "guestbook"}],
+  caps: [{with: "<aliceDID>/x/callable/guestbook", can: "callable/call"}]
+}
+
+tools/call guestbook { callable: "<aliceDID>/x/callable/guestbook",
+                       input: {path: "w/guestbook", value: "Hello from Bob"} }
+```
+
+The token's caps let it reach the guestbook's gate and no other callable's.
+
 ## Precedents
 
 | Part | Follows |
@@ -285,9 +318,13 @@ The path resolves in Alice's namespace, and the caps refuse any other.
 
 - **Whose quota.** Jobs the target records count against the owner's quota,
   as work in the owner's namespace, not the invoker's.
-- **Calls within calls.** A callable whose target calls another callable:
-  which caller the inner gate sees, the invoker or the outer callable, and how
-  deep a chain may go (access tokens stop at a fixed depth).
+- **Calls within calls.** A call cannot call a callable. Allowing it needs a
+  bound on how deep a chain may go (access tokens stop at a fixed depth) and a
+  choice of which caller the inner gate sees, the invoker or the outer
+  callable.
+- **A callable as an operation reference.** Accepting
+  `<ownerDID>/x/callable/<name>` wherever an operation reference goes, so a
+  tool takes the target's input and schema directly.
 - **The `callers` gate and agents.** Listing a user admits that user's agents,
   whatever their caps. A provider who wants exact principals writes its own
   gate.

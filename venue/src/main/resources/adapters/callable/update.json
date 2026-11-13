@@ -17,7 +17,7 @@
 						{ "type": "string", "enum": ["unrestricted"] }
 					]
 				},
-				"gate": { "type": ["string", "null"], "description": "The operation deciding who else may call it, or null to remove it" },
+				"gate": { "description": "The operation deciding who else may call it, as a string reference, or null to remove it" },
 				"description": { "type": "string", "description": "What it does, for its callers" }
 			},
 			"required": ["name"]

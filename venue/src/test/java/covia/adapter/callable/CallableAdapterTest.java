@@ -191,7 +191,32 @@ public class CallableAdapterTest {
 		assertTrue(engine.holdsAuthorityOf(whole, alice), "unrestricted caps are the issuer's whole authority");
 		assertFalse(engine.holdsAuthorityOf(whole, bob), "never the invoker's");
 		assertFalse(whole.actsWithNamespaceAuthority(), "state held for a namespace is never a call's");
-		assertThrows(covia.exception.AuthException.class, () -> engine.sudoContext(whole, bob));
+		assertEquals(Engine.SUDO_NARROWED, assertThrows(covia.exception.AuthException.class, () -> engine.sudoContext(whole, bob)).getMessage());
+
+		// An agent of the owner calling one another agent issued acts with the issuer's authority, never its own
+		ACell invoke = cap("v/ops/", Abilities.INVOKE);
+		RequestContext maker = agent(alice, "maker", Vectors.of(invoke, cap("x/callable/", Abilities.CALLABLE_MANAGE)));
+		complete(create(maker, "made", "v/ops/covia/read", Caps.UNRESTRICTED, null));
+		RequestContext helper = agent(alice, "helper", Vectors.of(invoke));
+		RequestContext byHelper = engine.callContext(helper, reference(alice, "made"));
+		assertEquals(maker.getCallerDID(), Engine.actingPrincipal(byHelper));
+		assertTrue(engine.holdsAuthorityOf(byHelper, maker.getCallerDID()), "unrestricted, it is all of its issuer's");
+		assertFalse(engine.holdsAuthorityOf(byHelper, helper.getCallerDID()));
+		assertTrue(engine.holdsAuthorityOf(helper, helper.getCallerDID()), "the agent holds its own outside a call");
+
+		// What a call's caller made in the owner's namespace is not the call's by attribution
+		AMap<AString, ACell> event = Maps.of(Fields.CALLER, bob, Fields.OWNER, alice);
+		assertFalse(engine.getAccessControl().canAccessEvent(narrow, event));
+		assertTrue(engine.getAccessControl().canAccessEvent(RequestContext.of(bob, alice, Vectors.empty()), event),
+			"a principal acting in the namespace reaches what it made there");
+
+		// Its reach into another user's resources is within its caps too, whatever they admit
+		AString carol = TestEngine.uniqueDID("carol-" + info.getDisplayName());
+		complete(run("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "desk", Fields.CONFIG, Maps.of(
+			Fields.OPERATION, "v/test/ops/echo", Fields.ACCEPTS, Vectors.of(alice))), RequestContext.of(carol)));
+		AString desk = Strings.create(carol + "/g/desk");
+		assertTrue(engine.authorityCovers(whole, desk, Abilities.AGENT_REQUEST), "Carol's agent admits Alice");
+		assertFalse(engine.authorityCovers(narrow, desk, Abilities.AGENT_REQUEST));
 
 		// An agent a call creates takes the issuer as controller, so only a call holding all of it may
 		String made = failure(call(RequestContext.of(bob), alice + "/x/callable/narrow", Maps.of(Fields.AGENT_ID, "made")));

@@ -1,7 +1,6 @@
 package covia.adapter.callable;
 
 import java.security.SecureRandom;
-import java.util.function.Predicate;
 import java.util.function.UnaryOperator;
 
 import convex.core.data.ACell;
@@ -108,16 +107,15 @@ public final class Callables extends ALatticeComponent<ACell>
 	}
 
 	/**
-	 * Removes a callable, if its record as it stands is still the one
-	 * {@code only} accepts.
+	 * Removes a callable.
 	 *
-	 * @return the record removed, or null when there was none it accepts
+	 * @return the record removed, or null when there was none
 	 */
-	public AMap<AString, ACell> delete(AString owner, AString name, Predicate<AMap<AString, ACell>> only) {
+	public AMap<AString, ACell> delete(AString owner, AString name) {
 		return transact(draft -> {
 			AMap<AString, ACell> root = draft.root();
 			AMap<AString, ACell> record = RT.ensureMap(list(root, owner).get(name));
-			if (record == null || !only.test(record)) return null;
+			if (record == null) return null;
 			draft.cursor().set(without(root, owner, name));
 			return record;
 		});

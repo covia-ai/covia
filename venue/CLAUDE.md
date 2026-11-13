@@ -84,6 +84,7 @@ AUTH_REQUIRED).
 | `crypto` | Local cryptography in Convex formats; secret-backed and held keys, JWTs and BIP39 phrases (see `docs/CONFIG.md#cryptography-crypto`) | `hash`, `generate-key`, `public-key`, `sign`, `verify`, `encrypt`, `decrypt`, `generate-mnemonic`, `validate-mnemonic`, `derive-key`, `jwt-sign`, `jwt-verify`, `jwt-decode`, `add-key`, `remove-key`, `list-keys` |
 | `mcp` | Model Context Protocol client, bridging, and the MCP access point for access tokens, with MCP token operations (`docs/ACCESS_TOKENS.md`) | `tools-list`, `tools-call`, `add-server`, `add-tool`, `remove-server`, `refresh`, `create-token`, `update-token`, `delete-token`, `list-tokens`, `get-token` |
 | `token` | Access tokens: scoped bearers acting with their issuer's authority within caps, accepted at the access points they name; the store other adapters build on, with a read-only user view at `x/token` (`docs/ACCESS_TOKENS.md`) | `create`, `update`, `delete`, `list`, `get` |
+| `callable` | Callables: functions a principal publishes for others to call, running an operation with the issuer's authority within caps, admitted by `callable/call` or a gate operation; read-only user view at `x/callable` (`docs/CALLABLES.md`) | `create`, `update`, `delete`, `list`, `call`, `gates/anyone`, `gates/callers` |
 | `a2a` | Agent-to-Agent protocol client — remote agent cards, tasks and message relay | `send`, `get-task`, `cancel`, `agent-card`, `import-agent` |
 | `langchain` | AI/LLM models | `openai`, `ollama`, `anthropic`, `gemini`, `xai`, `deepseek`, `mistral`, `openrouter`, `models` |
 | `http` | HTTP requests (SSRF-protected, bounded validated redirects, default User-Agent; `adapters.http`) | `get`, `post` |
@@ -349,7 +350,7 @@ java -jar target/covia.jar [config.json]
 - `docs/OPERATIONS.md` — operation model, defaults, discovery
 - `docs/PREFERENCES.md` — per-user preferences: storage, the `x/preferences` view, the edit tool's commands and size limit
 - `docs/ACCESS_TOKENS.md` — access tokens: a token request's identity and authority, the capabilities, operations and store, access points, and `/mcp` with a token
-- `docs/CALLABLES.md` — callables (design): functions a principal publishes that run an operation with its issuer's authority narrowed by caps, admitted by a gate operation; the record, abilities, operations, view, gate input and kept authority
+- `docs/CALLABLES.md` — callables: functions a principal publishes that run an operation with its issuer's authority narrowed by caps, admitted by a gate operation; the record, abilities, operations, view, gate input, kept authority, and what a call never holds
 - `docs/MODELS.md` — model definition assets (design): a model is an operation asset at `v/models/<provider>/<id>`
 - `docs/PROJECT.md` — projects (design): a work-breakdown tree at `w/projects/<pid>` where every node has a principal, an assignee, targets, tolerances and PRINCE2-style product descriptions, and the assignee of a node is the principal of its children; the `project` adapter builds, executes and rolls up the tree
 - `docs/GRID_LATTICE_DESIGN.md` — lattice design

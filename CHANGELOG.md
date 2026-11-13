@@ -17,6 +17,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 - Access tokens: any user or agent can create a scoped bearer that acts with its issuer's authority within the token's caps and is accepted only at the access points it names; the `token` adapter keeps them (`token:create`, `update`, `delete`, `list`, `get`, needing `admin/token/<access point>` on `x/token/<name>`), and `adapters.token.keepRawTokens` keeps bearers to read again; a user sees its tokens, never their bearers, at `x/token`.
 - MCP tokens: access tokens accepted at the venue's `/mcp` alone, offering chosen operations as tools, made and managed with `mcp/token` (`mcp:create-token`, `update-token`, `delete-token`, `list-tokens`, `get-token`); emptying its caps, deleting it or its expiry revokes one.
+- Callables: a user, agent or the venue publishes an operation for others to call, run with the publisher's authority within fixed caps in the publisher's namespace (`callable:create`, `update`, `delete`, `list`, `call`, needing `callable/manage`); callers hold `callable/call` or pass a gate operation the publisher chooses, such as `v/ops/callable/gates/anyone` or `gates/callers`; a user sees its callables at `x/callable`.
 - `adapters.convex.timeoutMillis` sets how long `convex:query` and `convex:transact` wait for the peer's result; the default is the Convex client's own, 20 seconds.
 - `venue:adapter/restart` stops an enabled adapter, offers it its configuration again and starts it; `venue:adapters` lists each adapter's `status` and a failed adapter's `reason`.
 

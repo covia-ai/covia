@@ -236,7 +236,7 @@ public class CallableAdapter extends AAdapter {
 	AString delete(RequestContext ctx, AString name) {
 		AString owner = owner(ctx);
 		engine.requireAuthority(ctx, resource(name), Abilities.CALLABLE_MANAGE);
-		if (callables().delete(owner, name, record -> true) == null) {
+		if (callables().delete(owner, name) == null) {
 			throw new NotFoundException(CALLABLE_NOT_FOUND.formatted(name), name.toString());
 		}
 		return name;

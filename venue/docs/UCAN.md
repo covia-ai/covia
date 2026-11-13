@@ -187,6 +187,8 @@ Abilities follow UCAN's slash-delimited convention with no leading slash. `*` is
 | `mcp/token` | - | Create, update or delete an access token accepted at MCP alone, through the MCP token operations (`<owner>/x/token/<name>`) |
 | `admin/token` | Every `admin/token/…` | Work on access tokens directly, whatever access points they carry (`<owner>/x/token/<name>`) |
 | `admin/token/<access point>` | - | Work directly on access tokens that carry that access point, such as `admin/token/mcp`; a token carrying several needs each leaf, and fetching a kept bearer also needs the token's source authority |
+| `callable/call` | - | Call a callable without passing its gate (`<owner>/x/callable/<name>`; [CALLABLES.md](./CALLABLES.md)) |
+| `callable/manage` | - | Create, change or delete a callable (`<owner>/x/callable/<name>`); changing one also needs its source authority |
 | `hitl/request` | - | Ask the owner a human-in-the-loop question |
 | `admin/user/create` | - | Create an account |
 | `admin/user/delete` | - | Delete an account |
