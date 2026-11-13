@@ -111,6 +111,10 @@ public final class Abilities {
 	/** Online garbage collection of the venue's Etch store (covia#452) — guarded
 	 *  on {@code <venue DID>/store}. */
 	public static final AString ADMIN_VENUE_GC = Strings.intern("admin/venue/gc");
+	/** Run code in the venue process: the parent of each runtime's leaf, such as
+	 *  {@code admin/execute/python}, guarded on the venue resource that names the
+	 *  code. */
+	public static final AString ADMIN_EXECUTE = Strings.intern("admin/execute");
 	/** See the venue's P2P node and the peers it knows (covia#587) — guarded
 	 *  on {@code <venue DID>/p2p}. */
 	public static final AString P2P_READ = Strings.intern("p2p/read");

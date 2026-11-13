@@ -819,6 +819,17 @@ on shutdown. Script paths may be absolute or relative to the venue process;
 they are resolved at startup, loaded once, and a missing or invalid configured
 script fails startup.
 
+Running Python is the operator's, since the code runs in the venue process
+with the venue's power. Each configured function, and creating or calling an
+instance, needs `admin/execute/python` on the venue resource that names the
+code: `<venueDID>/python/operations/<id>` for a configured function and
+`<venueDID>/python/templates/<template>` for a template's instances. The venue
+and its unrestricted agents hold it. The operator lets a user run one
+function, one template or all of the venue's Python (`<venueDID>/python`) with
+a UCAN the venue issues to that user, which the user presents with its
+requests ([ADMIN.md](ADMIN.md#current-venue-level-admin-functions)). Listing
+and closing one's own instances need no grant.
+
 The optional `instances` object separately opts the operator into stateful,
 caller-managed Python namespaces. It installs `create`, `list`, `call`, and
 `close` operations under `v/ops/python/instances/`. `create` accepts a configured

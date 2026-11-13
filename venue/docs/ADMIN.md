@@ -5,10 +5,11 @@ user, adapter and venue administration names must be migrated separately;
 those names are not accepted as aliases.
 
 `admin/…` identifies privileged controls outside normal workflows: venue
-administration, directly exercising an agent's authority, and retrieving
-retained bearer credentials. Venue administration uses `admin/user`,
-`admin/adapter`, `admin/venue` and `admin/sudo`; user-resource privileges use
-`admin/agent` and `admin/token`. Their resource scopes and additional
+administration, running code in the venue process, directly exercising an
+agent's authority, and retrieving retained bearer credentials. Venue
+administration uses `admin/user`, `admin/adapter`, `admin/venue`,
+`admin/execute` and `admin/sudo`; user-resource privileges use `admin/agent`
+and `admin/token`. Their resource scopes and additional
 authority rules are preserved. Explicit activation is outside this change.
 
 Managing something does not by itself make an operation high-level admin.
@@ -57,6 +58,7 @@ checks; its classification does not broaden what it permits.
 | `admin/sudo` | Explicitly enter another user's working namespace, with separately granted invocation and action authority |
 | `admin/agent` | Direct tool execution under an agent's effective authority |
 | `admin/token` | Working on access tokens directly; its leaf `admin/token/<access point>` covers tokens that carry that access point |
+| `admin/execute` | Running code in the venue process; its leaf names the runtime, such as `admin/execute/python` |
 
 Ordinary workflow grants should name their domain abilities and resources.
 They should not need an `admin` grant. An operator deliberately running an
@@ -105,6 +107,8 @@ Resource scopes are preserved; possible refinements are listed separately.
 | `venue:restart`, including executable jar handoff | `admin/venue/restart` on `V/process` |
 | `venue:gc`, including status, cancel and backup options | `admin/venue/gc` on `V/store`; also `admin/venue/restart` on `V/process` when restarting |
 | `user:sudo` into another namespace | `admin/sudo` on the target `U`, plus independent invocation and action authority |
+| A configured Python function (`python` module) | `admin/execute/python` on `V/python/operations/<id>` |
+| `python:instances/create`, `python:instances/call` | `admin/execute/python` on `V/python/templates/<template>` |
 
 Venue administration currently admits the venue itself, its agents within
 their effective authority, or callers presenting a suitable venue-rooted
