@@ -65,7 +65,9 @@ operation, by its path `<ownerDID>/x/callable/<name>`, and its call enters its
 issuer's authority: `authority` is the issuer and `caller` is whoever called.
 Either way the token or callable is carried beside the fields and narrows each
 check as it stands, allowing nothing once it is gone. Calls nest: each call's
-`caller` is the authority that made it.
+`caller` is the authority that made it. Nesting has no depth limit: work nested
+deeper than the venue can run fails its job, and the work done counts against
+quotas as any work does.
 
 ## What a request creates
 
@@ -207,6 +209,7 @@ a callable's call runs within what made it, never its owner's whole authority.
   acted.
 - An `accepts` list that matches DIDs exactly, and a callers gate that admits
   a namespace it lists.
+- A callable's call refused when it calls a callable.
 - Reaching state by acting in its namespace, which any of the owner's agents
   does whatever its caps, and a request through a token never does:
   - Python instances that users create from the operator's templates. The
@@ -221,7 +224,9 @@ a callable's call runs within what made it, never its owner's whole authority.
 
 ## Open decisions
 
-1. **One depth limit on nested dispatch**, as Convex has (256).
+1. **Nested jobs and the account's concurrency cap:** the cap counts only
+   top-level jobs, so nothing but the venue's memory bounds a loop of nested
+   jobs whose work no other quota meters.
 2. **Which acts need the user in person** under `admin/sudo`: answering
    approval requests, issuing an identity token, extracting a secret.
 3. **Asking another principal's agent:** a message, whose run is the agent's
