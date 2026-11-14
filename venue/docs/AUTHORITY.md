@@ -20,7 +20,8 @@ it is implemented yet.
   `authority` alone. `caller` and `origin` grant and refuse nothing.
 - Grants a request presents add to that request's authority alone
   ([VENUE_AUTHORITY.md](VENUE_AUTHORITY.md)). They are carried beside these
-  fields and never handed on to what the request creates.
+  fields. Work that continues the request keeps them, but a principal the
+  request creates never holds them.
 
 ## Where names resolve
 
@@ -73,7 +74,9 @@ What the work runs as follows from what was called, not from its record: an
 ordinary operation runs as its caller, and a callable's operation as the
 callable. Work that continues after its request, and a scheduled event when it
 fires, acts as its caller as that caller stands then, and holds nothing once
-the caller is gone.
+the caller is gone. It presents again the grants its request presented, each
+checked as it stands then, so it holds no more than its request did and loses
+what a grant gave once that grant expires.
 
 ## Acting for another user
 
@@ -167,9 +170,8 @@ that principal's authority and never its owner's whole authority.
 9. **Asking another principal's agent:** a message, whose run is the agent's
    own top-level request with no `caller`, or a call with the asker as
    `caller`.
-10. **What continuing work keeps besides its caller:** the grants its request
-    presented, which jobs and scheduled events keep and present again today
-    though a request's grants are never handed on to what it creates; and,
-    inside a callable, who called the callable.
+10. **Who called a callable, in work it leaves running:** a job made inside a
+    callable names the callable as its caller, so work resuming there knows
+    who called the callable only if the venue keeps that beside the grants.
 11. **Reaching a scheduled event:** today the principal that scheduled it
     reaches it as its creator, where a job needs a capability on its record.
