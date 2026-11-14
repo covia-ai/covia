@@ -224,13 +224,10 @@ a callable's call runs within what made it, never its owner's whole authority.
 
 ## Open decisions
 
-1. **Nested jobs and the account's concurrency cap:** the cap counts only
-   top-level jobs, so nothing but the venue's memory bounds a loop of nested
-   jobs whose work no other quota meters.
-2. **Which acts need the user in person** under `admin/sudo`: answering
+1. **Which acts need the user in person** under `admin/sudo`: answering
    approval requests, issuing an identity token, extracting a secret.
-3. **Asking another principal's agent:** a message, whose run is the agent's
+2. **Asking another principal's agent:** a message, whose run is the agent's
    own top-level request with no `caller`, or a call with the asker as
    `caller`.
-4. **Reaching a scheduled event:** today the principal that scheduled it
+3. **Reaching a scheduled event:** today the principal that scheduled it
    reaches it as its creator, where a job needs a capability on its record.
