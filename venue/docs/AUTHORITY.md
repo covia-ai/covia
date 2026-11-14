@@ -1,23 +1,23 @@
 # Authority (design)
 
-Every request names three principals by DID: whose authority applies, who
-called into it, and who started it. The model is Convex's `*address*`,
-`*caller*` and `*origin*` (CAD005). A record of work, such as a job or a
-scheduled event, names the principal that called it. This is a design; none of
-it is implemented yet.
+Every request names two principals by DID: whose authority applies, and who
+called into it. The model is Convex's `*address*` and `*caller*` (CAD005). A
+record of work, such as a job or a scheduled event, names the principal that
+called it. This is a design; none of it is implemented yet.
 
-## The three fields
+## The two fields
 
 | Field | Meaning | Changes |
 |-------|---------|---------|
 | `authority` | The principal whose authority applies. Only this decides access. | When a call enters another principal's authority: a callable's call, or `admin/sudo` |
 | `caller` | The `authority` of the frame that called into this one; absent at the top level | On that call: the previous `authority` becomes `caller` |
-| `origin` | The principal that started the top-level request | Never, down the chain |
 
-- Ordinary composition keeps all three: orchestration steps, sub-operations
-  and tool calls run in the frame that started them.
+- Ordinary composition keeps both: orchestration steps, sub-operations and
+  tool calls run in the frame that started them.
 - Every authority check (`Engine.authorityCovers`, `holdsAuthorityOf`) reads
-  `authority` alone. `caller` and `origin` grant and refuse nothing.
+  `authority` alone. `caller` grants and refuses nothing.
+- Who started a request is not a field: how the request authenticated is kept
+  with it ([AUTH.md](AUTH.md)).
 - A token or a callable narrows the `authority` a request runs under
   ([Tokens and callables](#tokens-and-callables)), and grants a request
   presents add to it ([VENUE_AUTHORITY.md](VENUE_AUTHORITY.md)). Both are
@@ -109,8 +109,8 @@ called it, which is the `authority` of the frame that made the call. A
 scheduled event records the request that scheduled it the same way. So in each
 of the cases below, a job the request makes names the `authority` as its
 caller: one made through a token, or within a callable's call, names the
-issuer. A record names no `origin`; a job made within another job names that
-job as its `parent` ([JOBS.md](JOBS.md)).
+issuer. A job made within another job names that job as its `parent`
+([JOBS.md](JOBS.md)).
 
 A record of work is kept in its caller's account, a job in that account's
 `j/`: a user's own, and for an agent the account it acts in. It names no owner
@@ -158,9 +158,8 @@ right that let it in.
 ## Acting for another user
 
 `admin/sudo` on a user is the power to act as that user, as `sudo` is on
-Unix. It is a call into that user: `authority` is the user, whole, and `caller`
-and `origin` are the delegate. The grants the delegate presents do not bound
-it. A narrower delegation is a plain grant, under which the delegate acts as
+Unix. It is a call into that user: `authority` is the user, whole, and
+`caller` is the delegate. The grants the delegate presents do not bound it. A narrower delegation is a plain grant, under which the delegate acts as
 itself and what it creates is its own.
 
 So the user controls what a request creates under `admin/sudo`, and work it
@@ -194,22 +193,22 @@ a callable's call runs within what made it, never its owner's whole authority.
 
 ## Cases
 
-| Case | `authority` | `caller` | `origin` |
-|------|-------------|----------|----------|
-| Alice's own request | Alice | none | Alice |
-| Through Alice's token | Alice, narrowed by the token | none | Alice |
-| Alice's agent calling a tool | the agent | none | the agent |
-| That agent's harness, as configured | Alice, its controller | none | the agent |
-| Bob acting for Alice (`admin/sudo`) | Alice | Bob | Bob |
-| Bob with a grant from Alice | Bob, with the grant added | none | Bob |
-| Bob calls Alice's guestbook | Alice, narrowed by the guestbook | Bob | Bob |
-| The guestbook calls Carol's callable | Carol, narrowed by that callable | Alice | Bob |
+| Case | `authority` | `caller` |
+|------|-------------|----------|
+| Alice's own request | Alice | none |
+| Through Alice's token | Alice, narrowed by the token | none |
+| Alice's agent calling a tool | the agent | none |
+| That agent's harness, as configured | Alice, its controller | none |
+| Bob acting for Alice (`admin/sudo`) | Alice | Bob |
+| Bob with a grant from Alice | Bob, with the grant added | none |
+| Bob calls Alice's guestbook | Alice, narrowed by the guestbook | Bob |
+| The guestbook calls Carol's callable | Carol, narrowed by that callable | Alice |
 
 ## What it replaces
 
 - The request context's caller DID, which today names the authority in most
-  cases, but the origin for an agent's harness or a sudo delegate, and the
-  invoker within a callable's call.
+  cases, but the agent for its harness, the delegate under `admin/sudo`, and
+  the invoker within a callable's call.
 - The request context's namespace as a value apart from its authority, and a
   separate authority on a context.
 - The caller context a job keeps only when its adapter asks, in two shapes of
