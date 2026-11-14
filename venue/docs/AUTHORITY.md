@@ -185,15 +185,18 @@ a callable's call runs within what made it, never its owner's whole authority.
   acted.
 - An `accepts` list that matches DIDs exactly, and a callers gate that admits
   a namespace it lists.
+- Python instances that users create from the operator's templates and reach
+  by acting in their namespace. The operator's Python is offered to others
+  through callables, and a function is told who called it (#706).
 - `admin/sudo` as a switch of namespace bounded by the grants the delegate
   presents ([ADMIN.md](ADMIN.md), [UCAN.md](UCAN.md)), and the check of the
   delegate's grant again when work it left runs.
 
 ## Open decisions
 
-1. **State a namespace keeps with no capability of its own**, such as Python
-   instances: reachable only with the owner's whole authority, which capped
-   agents reach today and would lose.
+1. **State a namespace keeps with no capability of its own**, such as a
+   dictation or a namespace's list of bots: reached today by any request
+   acting in the namespace, capped agents included, and settled case by case.
 2. **A short form** for principals the venue names under its own DID, such as
    `u:bob` for `did:web:<host>:u:bob`, and which form records store.
 3. **One depth limit on nested dispatch**, as Convex has (256).
