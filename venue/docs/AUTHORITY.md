@@ -119,6 +119,12 @@ as an agent's `<ownerDID>:g:<id>` does, so a reader can find the record. It
 counts against that account's quota. This is COG-8's `caller`, and COG-8's
 `owner` goes.
 
+A job is reached by capability on its record ([JOBS.md](JOBS.md#job-capabilities)).
+A scheduled event is reached by its account's whole authority, which reaches
+all of the account's events, and by the principal that scheduled it, which
+reaches that event; no grant extends that reach
+([GRID_SCHEDULER.md](GRID_SCHEDULER.md)).
+
 A record the venue keeps for itself, such as a job, a scheduled event, an
 approval request or a timeline entry, leaves out a principal that is the
 account it is kept in, since where it is kept says so. Whatever returns the
@@ -227,8 +233,3 @@ a callable's call runs within what made it, never its owner's whole authority.
 - `admin/sudo` as a switch of namespace bounded by the grants the delegate
   presents ([ADMIN.md](ADMIN.md), [UCAN.md](UCAN.md)), and the check of the
   delegate's grant again when work it left runs.
-
-## Open decisions
-
-1. **Reaching a scheduled event:** today the principal that scheduled it
-   reaches it as its creator, where a job needs a capability on its record.
