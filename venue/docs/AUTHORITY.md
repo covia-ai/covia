@@ -192,26 +192,27 @@ a callable's call runs within what made it, never its owner's whole authority.
   acted.
 - An `accepts` list that matches DIDs exactly, and a callers gate that admits
   a namespace it lists.
-- Python instances that users create from the operator's templates and reach
-  by acting in their namespace. The operator's Python is offered to others
-  through callables, and a function is told who called it (#706).
-- A dictation fed by any request acting in its namespace, and refused to a
-  request through a token.
+- Reaching state by acting in its namespace, which any of the owner's agents
+  does whatever its caps, and a request through a token never does:
+  - Python instances that users create from the operator's templates. The
+    operator's Python is offered to others through callables, and a function
+    is told who called it (#706).
+  - A live dictation, which belongs to the principal that opened it.
+  - A namespace's list of messaging bots, which shows each bot whose resource
+    (`<user>/<adapter>/<name>`) the request may manage (`<adapter>/manage`).
 - `admin/sudo` as a switch of namespace bounded by the grants the delegate
   presents ([ADMIN.md](ADMIN.md), [UCAN.md](UCAN.md)), and the check of the
   delegate's grant again when work it left runs.
 
 ## Open decisions
 
-1. **A namespace's list of bots**, which no capability names: today any
-   request acting in the namespace reaches it, capped agents included.
-2. **A short form** for principals the venue names under its own DID, such as
+1. **A short form** for principals the venue names under its own DID, such as
    `u:bob` for `did:web:<host>:u:bob`, and which form records store.
-3. **One depth limit on nested dispatch**, as Convex has (256).
-4. **Which acts need the user in person** under `admin/sudo`: answering
+2. **One depth limit on nested dispatch**, as Convex has (256).
+3. **Which acts need the user in person** under `admin/sudo`: answering
    approval requests, issuing an identity token, extracting a secret.
-5. **Asking another principal's agent:** a message, whose run is the agent's
+4. **Asking another principal's agent:** a message, whose run is the agent's
    own top-level request with no `caller`, or a call with the asker as
    `caller`.
-6. **Reaching a scheduled event:** today the principal that scheduled it
+5. **Reaching a scheduled event:** today the principal that scheduled it
    reaches it as its creator, where a job needs a capability on its record.
