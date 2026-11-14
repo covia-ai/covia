@@ -3,8 +3,8 @@
 Every request names three principals by DID: whose authority applies, who
 called into it, and who started it. The model is Convex's `*address*`,
 `*caller*` and `*origin*` (CAD005). A record of work, such as a job or a
-scheduled event, names the principal that called it and the one that started
-the request. This is a design; none of it is implemented yet.
+scheduled event, names the principal that called it. This is a design; none of
+it is implemented yet.
 
 ## The three fields
 
@@ -56,17 +56,18 @@ authority that made it.
 ## Records of work
 
 A job records the call that made it: its `caller` is the principal that
-called it, which is the `authority` of the frame that made the call, and its
-`origin` is that frame's `origin`. A scheduled event records the request that
-scheduled it the same way. So in each of the cases below, a job the request
-makes names the `authority` as its caller.
+called it, which is the `authority` of the frame that made the call. A
+scheduled event records the request that scheduled it the same way. So in each
+of the cases below, a job the request makes names the `authority` as its
+caller. A record names no `origin`; a job made within another job names that
+job as its `parent` ([JOBS.md](JOBS.md)).
 
 A record of work is kept in its caller's account, a job in that account's
 `j/`: a user's own, and for an agent, token or callable the account it acts
 in. It names no owner beside its caller: the account is the caller's, and the
 caller's DID names it, as an agent's `<ownerDID>:g:<id>` does, so a reader can
-find the record. This is COG-8's `caller`; COG-8's `owner` goes and `origin`
-is added.
+find the record. It counts against that account's quota. This is COG-8's
+`caller`, and COG-8's `owner` goes.
 
 What the work runs as follows from what was called, not from its record: an
 ordinary operation runs as its caller, and a callable's operation as the
@@ -160,18 +161,15 @@ that principal's authority and never its owner's whole authority.
    agents reach today and would lose.
 6. **A short form** for principals the venue names under its own DID, such as
    `u:bob` for `did:web:<host>:u:bob`, and which form records store.
-7. **Accounting** by the account a record of work is kept in, as quotas are
-   kept per account today, or by `origin`, so a call spends the quota of
-   whoever started it.
-8. **One depth limit on nested dispatch**, as Convex has (256).
-9. **Which acts need the user in person** under `admin/sudo`: answering
+7. **One depth limit on nested dispatch**, as Convex has (256).
+8. **Which acts need the user in person** under `admin/sudo`: answering
    approval requests, issuing an identity token, extracting a secret.
-10. **Asking another principal's agent:** a message, whose run is the agent's
-    own top-level request with no `caller`, or a call with the asker as
-    `caller`.
-11. **What continuing work keeps besides its caller:** the grants its request
+9. **Asking another principal's agent:** a message, whose run is the agent's
+   own top-level request with no `caller`, or a call with the asker as
+   `caller`.
+10. **What continuing work keeps besides its caller:** the grants its request
     presented, which jobs and scheduled events keep and present again today
     though a request's grants are never handed on to what it creates; and,
     inside a callable, who called the callable.
-12. **Reaching a scheduled event:** today the principal that scheduled it
+11. **Reaching a scheduled event:** today the principal that scheduled it
     reaches it as its creator, where a job needs a capability on its record.
