@@ -32,6 +32,12 @@ agent belongs to, read from its record and never from the form of its DID.
 Every namespace is an account's, and every principal is an account or an agent
 acting for one, directly or through the agents it acts for.
 
+A principal the venue names under its own DID may be given in short form
+wherever a principal or a path arrives as input: `u:bob` for
+`<venueDID>:u:bob`, `u:bob:g:helper` for his agent, and `u:bob/w/notes` for
+his `w/notes`. It is expanded where it arrives, and records hold and compare
+only the full DID.
+
 ## Agents
 
 An agent is a principal that acts with its controller's authority, narrowed by
