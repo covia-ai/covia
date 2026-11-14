@@ -40,6 +40,11 @@ record is gone. Its controller may itself be an agent, so a chain needs no
 field of its own. An agent's DID is refused at user admission and holds
 nothing by its form alone ([UCAN.md](UCAN.md) §5.4).
 
+An agent's identity is its id in its owner's namespace. An agent deleted and
+created again with the same id is the same principal, as one reconfigured is:
+whatever names it, such as a grant, an `accepts` entry or work it left, applies
+to the agent that stands under that id when it is used.
+
 ## Tokens and callables
 
 An access token and a callable are not principals. Each is a standing
@@ -186,19 +191,16 @@ a callable's call runs within what made it, never its owner's whole authority.
 
 ## Open decisions
 
-1. **An agent id reused after deletion.** A later agent with the same id has
-   the same DID. Either the DID carries the record's id, or deleting an agent
-   ends the work it left running.
-2. **State a namespace keeps with no capability of its own**, such as Python
+1. **State a namespace keeps with no capability of its own**, such as Python
    instances: reachable only with the owner's whole authority, which capped
    agents reach today and would lose.
-3. **A short form** for principals the venue names under its own DID, such as
+2. **A short form** for principals the venue names under its own DID, such as
    `u:bob` for `did:web:<host>:u:bob`, and which form records store.
-4. **One depth limit on nested dispatch**, as Convex has (256).
-5. **Which acts need the user in person** under `admin/sudo`: answering
+3. **One depth limit on nested dispatch**, as Convex has (256).
+4. **Which acts need the user in person** under `admin/sudo`: answering
    approval requests, issuing an identity token, extracting a secret.
-6. **Asking another principal's agent:** a message, whose run is the agent's
+5. **Asking another principal's agent:** a message, whose run is the agent's
    own top-level request with no `caller`, or a call with the asker as
    `caller`.
-7. **Reaching a scheduled event:** today the principal that scheduled it
+6. **Reaching a scheduled event:** today the principal that scheduled it
    reaches it as its creator, where a job needs a capability on its record.
