@@ -51,6 +51,11 @@ created again with the same id is the same principal, as one reconfigured is:
 whatever names it, such as a grant, an `accepts` entry or work it left, applies
 to the agent that stands under that id when it is used.
 
+Asking an agent sends it a message. The request that asks is the asker's own,
+and each of the agent's cycles is the agent's own top-level request, with no
+`caller`, whoever asked. Who asked is recorded on each message, so one cycle
+can serve several askers ([A2A_INTERACTION_AUTHORITY.md](A2A_INTERACTION_AUTHORITY.md)).
+
 ## Tokens and callables
 
 An access token and a callable are not principals. Each is a standing
@@ -225,8 +230,5 @@ a callable's call runs within what made it, never its owner's whole authority.
 
 ## Open decisions
 
-1. **Asking another principal's agent:** a message, whose run is the agent's
-   own top-level request with no `caller`, or a call with the asker as
-   `caller`.
-2. **Reaching a scheduled event:** today the principal that scheduled it
+1. **Reaching a scheduled event:** today the principal that scheduled it
    reaches it as its creator, where a job needs a capability on its record.
