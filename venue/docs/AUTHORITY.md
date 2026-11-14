@@ -70,13 +70,24 @@ caller's DID names it, as an agent's `<ownerDID>:g:<id>` does, so a reader can
 find the record. It counts against that account's quota. This is COG-8's
 `caller`, and COG-8's `owner` goes.
 
-What the work runs as follows from what was called, not from its record: an
-ordinary operation runs as its caller, and a callable's operation as the
-callable. Work that continues after its request, and a scheduled event when it
-fires, acts as its caller as that caller stands then, and holds nothing once
-the caller is gone. It presents again the grants its request presented, each
-checked as it stands then, so it holds no more than its request did and loses
-what a grant gave once that grant expires.
+## A job's state
+
+A job runs in a context: its frame, whose `authority` is the job's caller, the
+grants its request presented, and its execution scopes (agent, session, job
+and task). That context is the job's state, which the venue keeps beside the
+job while it is unfinished, with what its operation keeps to carry it to its
+end ([JOBS.md](JOBS.md#the-venues-job-entries)). No route reads it. It is one
+state, whether the job runs on from its request or resumes after a pause or a
+restart: the context the job runs in is the one kept. A scheduled event keeps
+the context of the request that scheduled it in the same form, and each fire
+runs in it.
+
+The state holds principals and grants, never the authority worked out from
+them. Each time the job acts, its authority is worked out from them as they
+stand then: it holds nothing once its caller is gone, loses what a grant gave
+once that grant expires, and never holds more than its request did. Entering a
+frame is checked once, at the call, so work inside it carries on as the
+frame's `authority` stands, whatever becomes of the right that let it in.
 
 ## Acting for another user
 
@@ -133,8 +144,9 @@ that principal's authority and never its owner's whole authority.
   cases, but the origin for an agent's harness or a sudo delegate.
 - The request context's namespace as a value apart from its authority, and a
   separate authority on a context.
-- The token chain on a context, and the two shapes of kept authority: work
-  kept for later acts as its caller as it stands.
+- The token chain on a context; the caller context a job keeps only when its
+  adapter asks, in two shapes of kept authority; and a scheduled event's own
+  shape of the same. A job's state is the context it runs in.
 - A record of work whose `caller` names whoever authenticated (a sudo
   delegate, an agent for its harness, a token's issuer) beside an `owner`
   naming the account, from which the venue works out what kind of principal
@@ -170,8 +182,5 @@ that principal's authority and never its owner's whole authority.
 9. **Asking another principal's agent:** a message, whose run is the agent's
    own top-level request with no `caller`, or a call with the asker as
    `caller`.
-10. **Who called a callable, in work it leaves running:** a job made inside a
-    callable names the callable as its caller, so work resuming there knows
-    who called the callable only if the venue keeps that beside the grants.
-11. **Reaching a scheduled event:** today the principal that scheduled it
+10. **Reaching a scheduled event:** today the principal that scheduled it
     reaches it as its creator, where a job needs a capability on its record.
