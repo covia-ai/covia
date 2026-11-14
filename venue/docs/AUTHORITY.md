@@ -1,9 +1,10 @@
 # Authority (design)
 
-Every request, and every record of work (a job, a scheduled event), names
-three principals by DID: whose authority applies, who called into it, and who
-started it. The model is Convex's `*address*`, `*caller*` and `*origin*`
-(CAD005). This is a design; none of it is implemented yet.
+Every request names three principals by DID: whose authority applies, who
+called into it, and who started it. The model is Convex's `*address*`,
+`*caller*` and `*origin*` (CAD005). A record of work, such as a job or a
+scheduled event, names the principal that called it and the one that started
+the request. This is a design; none of it is implemented yet.
 
 ## The three fields
 
@@ -25,8 +26,8 @@ started it. The model is Convex's `*address*`, `*caller*` and `*origin*`
 
 Names resolve in the namespace of the `authority`: a user's own, or the one an
 agent, token or callable belongs to, read from its record and never from the
-form of its DID. A record of work lives in that namespace, so where it is kept
-says whose it is.
+form of its DID. Every namespace is an account's, and every principal is an
+account or acts for one, directly or through the principals it acts for.
 
 ## Derived principals
 
@@ -51,6 +52,27 @@ A callable is invoked as an operation, by its path
 `<ownerDID>/x/callable/<name>`, and its call enters its authority
 ([CALLABLES.md](CALLABLES.md)). Calls nest: each call's `caller` is the
 authority that made it.
+
+## Records of work
+
+A job records the call that made it: its `caller` is the principal that
+called it, which is the `authority` of the frame that made the call, and its
+`origin` is that frame's `origin`. A scheduled event records the request that
+scheduled it the same way. So in each of the cases below, a job the request
+makes names the `authority` as its caller.
+
+A record of work is kept in its caller's account, a job in that account's
+`j/`: a user's own, and for an agent, token or callable the account it acts
+in. It names no owner beside its caller: the account is the caller's, and the
+caller's DID names it, as an agent's `<ownerDID>:g:<id>` does, so a reader can
+find the record. This is COG-8's `caller`; COG-8's `owner` goes and `origin`
+is added.
+
+What the work runs as follows from what was called, not from its record: an
+ordinary operation runs as its caller, and a callable's operation as the
+callable. Work that continues after its request, and a scheduled event when it
+fires, acts as its caller as that caller stands then, and holds nothing once
+the caller is gone.
 
 ## Acting for another user
 
@@ -108,8 +130,11 @@ that principal's authority and never its owner's whole authority.
 - The request context's namespace as a value apart from its authority, and a
   separate authority on a context.
 - The token chain on a context, and the two shapes of kept authority: work
-  kept for later records the three fields, and is rebuilt from them as the
-  principals stand.
+  kept for later acts as its caller as it stands.
+- A record of work whose `caller` names whoever authenticated (a sudo
+  delegate, an agent for its harness, a token's issuer) beside an `owner`
+  naming the account, from which the venue works out what kind of principal
+  acted.
 - The `source` of tokens and callables, and an agent's `controllerToken`.
 - `admin/sudo` as a switch of namespace bounded by the grants the delegate
   presents ([ADMIN.md](ADMIN.md), [UCAN.md](UCAN.md)), and the check of the
@@ -122,27 +147,31 @@ that principal's authority and never its owner's whole authority.
    admitted to; today it keeps that within its caps. A derived principal is
    either admitted where the principal it acts for is, within its caps, which
    agents would then gain too, or it is not.
-2. **COG-8's `caller` and `owner`.** `caller` there means today's origin and
-   `owner` the namespace. Either `caller` is renamed `origin` and `owner`
-   stays as where a job lives (a COG-8 change, a venue migration and an API
-   change), or the new fields take other names.
-3. **DIDs for tokens and callables**, such as `<ownerDID>:x:token:<name>` and
+2. **DIDs for tokens and callables**, such as `<ownerDID>:x:token:<name>` and
    `<ownerDID>:x:callable:<name>`, formed from their record paths as an agent's
-   `<ownerDID>:g:<id>` is from `g/<id>`.
-4. **A name reused after deletion.** Either the DID carries the record's id, or
+   `<ownerDID>:g:<id>` is from `g/<id>`. Whatever the form, it names the
+   account, since a record of work names only its caller.
+3. **A name reused after deletion.** Either the DID carries the record's id, or
    deleting a principal ends the work it left running.
-5. **One name for the principal a derived principal acts for:** `controller`
+4. **One name for the principal a derived principal acts for:** `controller`
    (agents, released) or `issuer` (tokens and callables, unreleased).
-6. **State a namespace keeps with no capability of its own**, such as Python
+5. **State a namespace keeps with no capability of its own**, such as Python
    instances: reachable only with the owner's whole authority, which capped
    agents reach today and would lose.
-7. **A short form** for principals the venue names under its own DID, such as
+6. **A short form** for principals the venue names under its own DID, such as
    `u:bob` for `did:web:<host>:u:bob`, and which form records store.
-8. **Accounting by `origin`**, so a call spends the quota of whoever started
-   it, or by `authority`, as Unix charges whoever a process runs as.
-9. **One depth limit on nested dispatch**, as Convex has (256).
-10. **Which acts need the user in person** under `admin/sudo`: answering
-    approval requests, issuing an identity token, extracting a secret.
-11. **Asking another principal's agent:** a message, whose run is the agent's
+7. **Accounting** by the account a record of work is kept in, as quotas are
+   kept per account today, or by `origin`, so a call spends the quota of
+   whoever started it.
+8. **One depth limit on nested dispatch**, as Convex has (256).
+9. **Which acts need the user in person** under `admin/sudo`: answering
+   approval requests, issuing an identity token, extracting a secret.
+10. **Asking another principal's agent:** a message, whose run is the agent's
     own top-level request with no `caller`, or a call with the asker as
     `caller`.
+11. **What continuing work keeps besides its caller:** the grants its request
+    presented, which jobs and scheduled events keep and present again today
+    though a request's grants are never handed on to what it creates; and,
+    inside a callable, who called the callable.
+12. **Reaching a scheduled event:** today the principal that scheduled it
+    reaches it as its creator, where a job needs a capability on its record.
