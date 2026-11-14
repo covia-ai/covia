@@ -154,11 +154,12 @@ itself and what it creates is its own.
 
 So the user controls what a request creates under `admin/sudo`, and work it
 leaves runs as the user while the user stands, whatever becomes of the
-delegate's grant, as a cron entry made under `sudo -u` runs as its owner. Acts
-that need the user in person, such as answering the user's approval requests,
-are kept for a request signed in as that user. That is a rule of how the
-request authenticated, as `passwd` under `sudo -u` still asks for the user's
-own password, not one of authority.
+delegate's grant, as a cron entry made under `sudo -u` runs as its owner.
+Authority does not tell a request under `admin/sudo` from the user's own. An
+action that needs the user in person, such as answering the user's approval
+requests, decides that itself from how the request authenticated
+([AUTH.md](AUTH.md)), as `passwd` under `sudo -u` still asks for the user's own
+password.
 
 ## An agent's harness
 
@@ -224,10 +225,8 @@ a callable's call runs within what made it, never its owner's whole authority.
 
 ## Open decisions
 
-1. **Which acts need the user in person** under `admin/sudo`: answering
-   approval requests, issuing an identity token, extracting a secret.
-2. **Asking another principal's agent:** a message, whose run is the agent's
+1. **Asking another principal's agent:** a message, whose run is the agent's
    own top-level request with no `caller`, or a call with the asker as
    `caller`.
-3. **Reaching a scheduled event:** today the principal that scheduled it
+2. **Reaching a scheduled event:** today the principal that scheduled it
    reaches it as its creator, where a job needs a capability on its record.
