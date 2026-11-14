@@ -112,6 +112,15 @@ as an agent's `<ownerDID>:g:<id>` does, so a reader can find the record. It
 counts against that account's quota. This is COG-8's `caller`, and COG-8's
 `owner` goes.
 
+A record the venue keeps for itself, such as a job, a scheduled event, an
+approval request or a timeline entry, leaves out a principal that is the
+account it is kept in, since where it is kept says so. Whatever returns the
+record or carries it out of that account, such as an API response or an
+export, names the principal in full, so the record as a client sees it always
+names its caller. Data a user writes is stored as given: the venue neither
+leaves anything out of it nor fills anything in, since such data is more
+likely to be copied between places.
+
 ## A job's state
 
 A job runs in a context: its frame, whose `authority` is the job's caller, the
