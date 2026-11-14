@@ -206,13 +206,11 @@ a callable's call runs within what made it, never its owner's whole authority.
 
 ## Open decisions
 
-1. **A short form** for principals the venue names under its own DID, such as
-   `u:bob` for `did:web:<host>:u:bob`, and which form records store.
-2. **One depth limit on nested dispatch**, as Convex has (256).
-3. **Which acts need the user in person** under `admin/sudo`: answering
+1. **One depth limit on nested dispatch**, as Convex has (256).
+2. **Which acts need the user in person** under `admin/sudo`: answering
    approval requests, issuing an identity token, extracting a secret.
-4. **Asking another principal's agent:** a message, whose run is the agent's
+3. **Asking another principal's agent:** a message, whose run is the agent's
    own top-level request with no `caller`, or a call with the asker as
    `caller`.
-5. **Reaching a scheduled event:** today the principal that scheduled it
+4. **Reaching a scheduled event:** today the principal that scheduled it
    reaches it as its creator, where a job needs a capability on its record.
