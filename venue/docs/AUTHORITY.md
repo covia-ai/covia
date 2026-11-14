@@ -17,8 +17,9 @@ started it. The model is Convex's `*address*`, `*caller*` and `*origin*`
   and tool calls run in the frame that started them.
 - Every authority check (`Engine.authorityCovers`, `holdsAuthorityOf`) reads
   `authority` alone. `caller` and `origin` grant and refuse nothing.
-- Grants a request presents are additions to its authority
-  ([VENUE_AUTHORITY.md](VENUE_AUTHORITY.md)), carried beside these fields.
+- Grants a request presents add to that request's authority alone
+  ([VENUE_AUTHORITY.md](VENUE_AUTHORITY.md)). They are carried beside these
+  fields and never handed on to what the request creates.
 
 ## Where names resolve
 
@@ -33,8 +34,15 @@ An agent, an access token and a callable are each a principal that acts with
 another principal's authority, narrowed by its own caps. The caps are read at
 each check, and it holds nothing once its record is gone. Its record names the
 principal it acts for, which may itself be derived: a token made through a
-token acts for that token, so a chain needs no field of its own. Whatever a
-request creates acts for the request's `authority`.
+token acts for that token, so a chain needs no field of its own.
+
+Whatever a request creates acts for the request's `authority`, so it never
+holds more than its creator: an agent another agent makes, and that agent's
+harness, stay within its creator's caps. The caps it is given must lie within
+the authority of the request's `authority`, presented grants aside. That is
+checked when they are set and whenever they change, as `ucan:issue` checks each
+capability against a grant it holds, and caps the creator could not grant are
+refused rather than stored.
 
 A derived principal's DID is refused at user admission and holds nothing by
 its form alone, as an agent's does ([UCAN.md](UCAN.md) §5.4).
@@ -46,17 +54,28 @@ authority that made it.
 
 ## Acting for another user
 
-`admin/sudo` is a call into the user acted for: `caller` is the delegate, and
-`authority` is that user, bounded by the grants the delegate presents. That is
-a delegation's meaning: the user's authority within the caps they signed,
-exercised by another.
+`admin/sudo` on a user is the power to act as that user, as `sudo` is on
+Unix. It is a call into that user: `authority` is the user, whole, and `caller`
+and `origin` are the delegate. The grants the delegate presents do not bound
+it. A narrower delegation is a plain grant, under which the delegate acts as
+itself and what it creates is its own.
+
+So the user controls what a request creates under `admin/sudo`, and work it
+leaves runs as the user while the user stands, whatever becomes of the
+delegate's grant, as a cron entry made under `sudo -u` runs as its owner. Acts
+that need the user in person, such as answering the user's approval requests,
+are kept for a request signed in as that user. That is a rule of how the
+request authenticated, as `passwd` under `sudo -u` still asks for the user's
+own password, not one of authority.
 
 ## An agent's harness
 
 The harness is the venue's trusted code, running an agent
 ([VENUE_AUTHORITY.md](VENUE_AUTHORITY.md#trusted-code)). It reaches the agent's
-own records as venue code. Two things steer it, each with the authority of
-whoever chose it:
+run records, its state, timeline and sessions, as venue code. What is held
+under the agent's own DID, such as its keyring, is the agent's, reached only
+by its tool calls. Two things steer it, each with the authority of whoever
+chose it:
 
 - **Its configuration**, which only its controller may change: the model it
   calls, the secrets and context it loads and the tools it offers act with the
@@ -64,6 +83,10 @@ whoever chose it:
   namespace. For an agent its owner controls, that is the owner's.
 - **The model's choices**: each tool call runs as the agent, bounded by its
   caps.
+
+Its controller is the `authority` of the request that created it, so an agent
+made by a narrower principal, such as another agent or a token, runs within
+that principal's authority and never its owner's whole authority.
 
 ## Cases
 
@@ -73,7 +96,8 @@ whoever chose it:
 | Through Alice's token | the token | none | the token |
 | Alice's agent calling a tool | the agent | none | the agent |
 | That agent's harness, as configured | Alice, its controller | none | the agent |
-| Bob acting for Alice (`admin/sudo`) | Alice, within Bob's grants | Bob | Bob |
+| Bob acting for Alice (`admin/sudo`) | Alice | Bob | Bob |
+| Bob with a grant from Alice | Bob, with the grant added | none | Bob |
 | Bob calls Alice's guestbook | the guestbook | Bob | Bob |
 | The guestbook calls Carol's callable | Carol's callable | the guestbook | Bob |
 
@@ -87,6 +111,9 @@ whoever chose it:
   kept for later records the three fields, and is rebuilt from them as the
   principals stand.
 - The `source` of tokens and callables, and an agent's `controllerToken`.
+- `admin/sudo` as a switch of namespace bounded by the grants the delegate
+  presents ([ADMIN.md](ADMIN.md), [UCAN.md](UCAN.md)), and the check of the
+  delegate's grant again when work it left runs.
 
 ## Open decisions
 
@@ -111,5 +138,11 @@ whoever chose it:
    agents reach today and would lose.
 7. **A short form** for principals the venue names under its own DID, such as
    `u:bob` for `did:web:<host>:u:bob`, and which form records store.
-8. **Accounting by `origin`**, so a call spends the quota of whoever started it.
+8. **Accounting by `origin`**, so a call spends the quota of whoever started
+   it, or by `authority`, as Unix charges whoever a process runs as.
 9. **One depth limit on nested dispatch**, as Convex has (256).
+10. **Which acts need the user in person** under `admin/sudo`: answering
+    approval requests, issuing an identity token, extracting a secret.
+11. **Asking another principal's agent:** a message, whose run is the agent's
+    own top-level request with no `caller`, or a call with the asker as
+    `caller`.
