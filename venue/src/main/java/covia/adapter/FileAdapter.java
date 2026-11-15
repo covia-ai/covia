@@ -380,14 +380,16 @@ public class FileAdapter extends AAdapter implements covia.venue.storage.Content
 	}
 
 	/**
-	 * @param creates whether a write may create the DLFS drive and subpath a
-	 *        DLFS-backed root names, when they are not there
+	 * @param creates whether the write may create what it names, and so is also
+	 *        authorised where that changes a directory, and may create the drive
+	 *        and subpath a DLFS-backed root names; false for a write that only
+	 *        changes an entry, such as {@code setMetadata}
 	 */
 	private FileTarget resolveTarget(RequestContext ctx, String rootName, String userPath,
 			AString ability, boolean mustExist, boolean creates) throws IOException {
 		if (rootName == null || rootName.isEmpty()) {
 			DLFSAdapter.AuthorisedPath target = requireDLFSAdapter()
-				.resolveAuthorisedPath(ctx, userPath, ability);
+				.resolveAuthorisedPath(ctx, userPath, ability, null, creates);
 			if (target == null) {
 				throw new InvalidInputException(
 					"'root' is required unless 'path' is a dlfs/<drive>/... or DID-scoped DLFS reference");
@@ -412,12 +414,11 @@ public class FileAdapter extends AAdapter implements covia.venue.storage.Content
 			String ref = "dlfs/" + dr.driveName + (relative.isEmpty() ? "" : "/" + relative);
 			// The root names its drive and subpath, which count as present: a
 			// write under them creates them as their owner. A read-only root is
-			// never written, so it creates nothing, nor does a write that only
-			// changes an entry.
-			String rootRef = (dr.readOnly || !creates) ? null
+			// never written, so it creates nothing.
+			String rootRef = dr.readOnly ? null
 				: "dlfs/" + dr.driveName + (dr.subpath == null ? "" : "/" + dr.subpath);
 			DLFSAdapter.AuthorisedPath target = requireDLFSAdapter()
-				.resolveAuthorisedPath(ctx, ref, ability, rootRef);
+				.resolveAuthorisedPath(ctx, ref, ability, rootRef, creates);
 			Path logicalBase = FileOperations.resolve(target.root(), dr.subpath,
 				"DLFS root '" + rootName + "'", false);
 			if (!target.path().startsWith(logicalBase)) {
@@ -438,7 +439,7 @@ public class FileAdapter extends AAdapter implements covia.venue.storage.Content
 		// Creating an entry changes the directory that holds it, so a write that
 		// creates is authorised there as well.
 		boolean mayCreate = false;
-		if (Capability.CRUD_WRITE.equals(ability)) {
+		if (creates) {
 			Path at = FileOperations.writeAuthority(base, path);
 			mayCreate = !at.equals(path);
 			if (mayCreate) {
@@ -1020,7 +1021,7 @@ public class FileAdapter extends AAdapter implements covia.venue.storage.Content
 		String pathArg = stringArg(input, FIELD_PATH);
 		rejectArchiveEntry(pathArg, "set metadata on");
 		ACell metadata = DLFSAdapter.metadataArg(input);
-		// It changes an entry that exists, so it creates nothing, root included
+		// It changes an entry that exists, so it creates nothing, a root's drive included
 		FileTarget target = resolveTarget(ctx, rootName, pathArg, Capability.CRUD_WRITE, true, false);
 		requireWritable(target);
 		requireDLFSAdapter().setMetadataAt(ctx, target.resource(), metadata);

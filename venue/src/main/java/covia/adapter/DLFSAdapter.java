@@ -600,12 +600,23 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 	 */
 	AuthorisedPath resolveAuthorisedPath(RequestContext ctx, String ref, AString ability,
 			String componentRoot) throws IOException {
+		return resolveAuthorisedPath(ctx, ref, ability, componentRoot,
+			Capability.CRUD_WRITE.equals(ability));
+	}
+
+	/**
+	 * @param creates whether the write may create the entry, and so is also
+	 *        authorised where that changes its directory; false for a write that
+	 *        only changes an entry, such as {@code setMetadata}
+	 */
+	AuthorisedPath resolveAuthorisedPath(RequestContext ctx, String ref, AString ability,
+			String componentRoot, boolean creates) throws IOException {
 		DlfsFileRef fr = parseDlfsFileRef(ref);
 		if (fr == null) return null;
 
 		RequestContext driveCtx = authorise(ctx, fr, ability);
 		boolean mayCreate = false;
-		if (Capability.CRUD_WRITE.equals(ability)) {
+		if (creates) {
 			DlfsFileRef root = componentRoot(fr, componentRoot);
 			mayCreate = authoriseCreate(ctx, driveCtx, fr, root == null ? null : root.path());
 			if (root != null) materialise(driveCtx, root);
