@@ -28,6 +28,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Running Python is the operator's: each configured function, and creating or calling an instance, needs `admin/execute/python` on `<venue DID>/python/operations/<id>` or `<venue DID>/python/templates/<template>`, which the venue holds and can grant to a user.
 - An adapter that fails to start, at launch, enable or restart, including one that refuses a setting in its `adapters.<name>` block or fails to install, no longer stops the venue: it stays enabled but failed and is treated as stopped, its operations refused as not running, until restarted.
 - A disabled adapter is offered its settings and installed at launch, so it recovers its own unfinished jobs: an agent's queued requests survive a launch with the agent adapter disabled, and enabling the agent adapter wakes agents with queued work. At shutdown a stopped adapter's jobs go to that adapter; pause and resume are refused for its jobs, as messages are.
+- A disabled adapter runs nothing: Python scripts load, speech models are fetched on a settings change, and Claude Code's idle-session reaper runs only once the adapter has started.
 - A `venue:adapter/configure` change the adapter refuses with an error is reverted to its previous configuration.
 - A P2P node that cannot launch, such as on a port in use, is unavailable rather than a configuration error.
 

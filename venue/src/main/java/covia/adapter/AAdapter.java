@@ -183,8 +183,10 @@ public abstract class AAdapter {
 	 * {@link covia.exception.UnavailableException} for a port in use or a
 	 * service out of reach; anything else is reported as a fault.</p>
 	 *
-	 * <p>Constructors, configuration and {@link #install(Engine)} must not start
-	 * autonomous work. During {@link Engine#launch(java.util.function.Function)},
+	 * <p>Constructors, configuration and {@link #install(Engine)} are inert: they
+	 * start no thread, process, network activity or operator code, and a
+	 * {@code configure} call starts work only while this adapter is started, as
+	 * its own state records, not because it has an engine. During {@link Engine#launch(java.util.function.Function)},
 	 * this hook runs only after application setup, catalogue publication, secret
 	 * provisioning and recovery. Recovering a Job may itself execute work before
 	 * this hook, so recovery prerequisites must be established during installation

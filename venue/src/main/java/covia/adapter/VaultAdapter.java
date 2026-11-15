@@ -70,12 +70,6 @@ public class VaultAdapter extends AAdapter {
 			}
 			driveName = configured;
 		}
-		if (!engine.config().hasEncryptedEtchPolicy()) {
-			log.warn("Vault adapter is enabled for DLFS drive '{}' but this venue does "
-				+ "not declare an encrypted Etch policy. Vault contents may be stored "
-				+ "unencrypted; configure etch.cipher and key management for sensitive data.",
-				driveName);
-		}
 		installAsset("vault/read",   ASSETS_PATH + "read.json");
 		installAsset("vault/create", ASSETS_PATH + "create.json");
 		installAsset("vault/write",  ASSETS_PATH + "write.json");
@@ -84,6 +78,16 @@ public class VaultAdapter extends AAdapter {
 		installAsset("vault/delete", ASSETS_PATH + "delete.json");
 		installAsset("vault/set-metadata", ASSETS_PATH + "setMetadata.json");
 		log.debug("Vault adapter installed with {} operations", pendingCatalogEntries.size());
+	}
+
+	@Override
+	public void start() {
+		if (!engine.config().hasEncryptedEtchPolicy()) {
+			log.warn("Vault adapter is enabled for DLFS drive '{}' but this venue does "
+				+ "not declare an encrypted Etch policy. Vault contents may be stored "
+				+ "unencrypted; configure etch.cipher and key management for sensitive data.",
+				driveName);
+		}
 	}
 
 	private static boolean isValidDriveName(String name) {

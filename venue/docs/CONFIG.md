@@ -817,9 +817,10 @@ code execution.
 This installs `v/ops/python/health/score`. Each function receives one Python
 value converted from the Covia input and its return value is converted back to
 a Convex value. Script globals persist for the venue lifetime and are released
-on shutdown. Script paths may be absolute or relative to the venue process;
-they are resolved at startup, loaded once, and a missing or invalid configured
-script fails startup.
+on shutdown. Script paths may be absolute or relative to the venue process.
+Scripts are loaded, running their top-level code, once, when the adapter first
+starts; a disabled adapter runs none. A missing or invalid configured script
+leaves the adapter failed, its operations refused, until a restart loads them.
 
 Running Python is the operator's, since the code runs in the venue process
 with the venue's power. Each configured function, and creating or calling an
