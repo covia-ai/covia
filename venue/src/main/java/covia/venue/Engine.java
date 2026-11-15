@@ -4652,9 +4652,10 @@ public class Engine {
 	 * ({@link RequestContext#withAuthorityOf}) as its principal
 	 * ({@link Fields#CALLER}), namespace ({@link Fields#OWNER}) and presented
 	 * {@link Fields#PROOFS}, and the access token narrowing it as
-	 * {@link Fields#TOKEN}; or, for a callable's call, that callable alone as
-	 * {@link Fields#CALLABLE}. Null when it acts with its caller's own,
-	 * unnarrowed.
+	 * {@link Fields#TOKEN}; or, for a callable's call, that callable as
+	 * {@link Fields#CALLABLE} and the frame's caller
+	 * ({@link RequestContext#getCaller()}) as {@link Fields#CALLER}. Null when
+	 * it acts with its caller's own, unnarrowed.
 	 *
 	 * <p>Job entries and scheduled events store these keys, so renaming one
 	 * needs a migration: work stored under the old key would resume without
@@ -4662,9 +4663,13 @@ public class Engine {
 	 */
 	public static AMap<AString, ACell> keptAuthority(RequestContext ctx) {
 		if (ctx == null) return null;
-		// A callable's call: its record says whose authority it is and what narrows it
+		// A callable's call: its record says whose authority it is and what
+		// narrows it, beside the frame's caller
 		AMap<AString, ACell> callable = ctx.getCallable();
-		if (callable != null) return Maps.of(Fields.CALLABLE, callable);
+		if (callable != null) {
+			AMap<AString, ACell> kept = Maps.of(Fields.CALLABLE, callable);
+			return (ctx.getCaller() == null) ? kept : kept.assoc(Fields.CALLER, ctx.getCaller());
+		}
 		AMap<AString, ACell> token = actingSource(ctx).token();
 		if (!ctx.hasSeparateAuthority()) return (token == null) ? null : Maps.of(Fields.TOKEN, token);
 		RequestContext authority = ctx.authorityContext();
@@ -4855,9 +4860,9 @@ public class Engine {
 
 	private RequestContext keptContext(AString owner, AString principal, AVector<ACell> proofs,
 			AMap<AString, ACell> authority) {
-		// Work a callable's call left running: its invoker, in the callable's namespace, with the callable's authority
+		// Work a callable's call left running: the call's frame as it stands now, called by whoever called it
 		AMap<AString, ACell> callable = (authority == null) ? null : RT.ensureMap(authority.get(Fields.CALLABLE));
-		if (callable != null) return callContext(RequestContext.of(principal), callable);
+		if (callable != null) return callFrame(callable).calledBy(RT.ensureString(authority.get(Fields.CALLER)));
 		RequestContext ctx = context(owner, principal, proofs);
 		if (authority == null) return ctx;
 		AMap<AString, ACell> token = RT.ensureMap(authority.get(Fields.TOKEN));
@@ -4941,25 +4946,32 @@ public class Engine {
 	}
 
 	/**
-	 * The context a call of callable {@code reference} acts in: {@code invoker}'s
-	 * execution carried on by its caller, in the callable's owner's namespace,
-	 * acting with the callable's authority. That is its issuer as that principal
-	 * acts in the callable's namespace ({@link #context(AString, AString)}),
-	 * narrowed by the chain of tokens that created it and by its caps, each
-	 * read at each point of action, so a callable that no longer stands narrows
-	 * it to nothing. The invoker's own authority plays no part.
+	 * The context a call of callable {@code reference} acts in: the frame of
+	 * its issuer as that principal acts in the callable's namespace
+	 * ({@link #context(AString, AString)}), narrowed by the chain of tokens that
+	 * created it and by its caps, each read at each point of action, so a
+	 * callable that no longer stands narrows it to nothing. {@code invoker}'s
+	 * authority is the frame's caller and plays no other part; the call goes on
+	 * with the invoker's job, cancellation and authentication
+	 * ({@link RequestContext#calledFrom}). What the call does is the issuer's:
+	 * the jobs it starts record the issuer as their caller.
 	 *
 	 * @throws AuthException when the issuer could not act now
 	 */
 	public RequestContext callContext(RequestContext invoker, AMap<AString, ACell> reference) {
+		return callFrame(reference).calledFrom(invoker);
+	}
+
+	/** The frame a call of callable {@code reference} runs in, as {@link #callContext} describes, before anyone enters it. */
+	private RequestContext callFrame(AMap<AString, ACell> reference) {
 		AString owner = RT.ensureString(reference.get(Fields.OWNER));
 		Callable callable = resolveCallable(reference);
 		RequestContext issuer = (callable == null) ? RequestContext.of(owner, owner, Vectors.empty())
 			: narrowedByToken(context(owner, callable.issuer()), callable.source());
-		return invoker.callingIn(owner, issuer.withCallable(reference, resource -> {
+		return issuer.withCallable(reference, resource -> {
 			Callable current = resolveCallable(reference);
 			return (current == null) ? Vectors.empty() : current.caps().scope();
-		}, owner));
+		}, owner);
 	}
 
 	/**

@@ -192,7 +192,9 @@ public class CallableAdapterTest {
 		RequestContext narrow = engine.callContext(RequestContext.of(bob), reference(alice, "narrow"));
 		RequestContext whole = engine.callContext(RequestContext.of(bob), reference(alice, "whole"));
 
-		assertEquals(bob, narrow.getCallerDID());
+		assertEquals(alice, narrow.getAuthorityDID(), "a call is its issuer's frame");
+		assertEquals(alice, narrow.getCallerDID());
+		assertEquals(bob, narrow.getCaller(), "called by its invoker");
 		assertEquals(alice, narrow.getUserDID());
 		assertFalse(engine.holdsAuthorityOf(narrow, alice));
 		assertTrue(engine.holdsAuthorityOf(whole, alice), "unrestricted caps are the issuer's whole authority");
@@ -251,9 +253,11 @@ public class CallableAdapterTest {
 		AMap<AString, ACell> ref = reference(alice, "guestbook");
 
 		AMap<AString, ACell> kept = Engine.keptAuthority(engine.callContext(RequestContext.of(bob), ref));
-		assertEquals(Maps.of(Fields.CALLABLE, ref), kept);
-		RequestContext resumed = engine.context(alice, bob, null, kept);
-		assertEquals(bob, resumed.getCallerDID(), "it resumes with the invoker as its caller");
+		assertEquals(Maps.of(Fields.CALLABLE, ref, Fields.CALLER, bob), kept);
+		RequestContext resumed = engine.context(alice, alice, null, kept);
+		assertEquals(alice, resumed.getAuthorityDID(), "it resumes in the issuer's frame");
+		assertEquals(bob, resumed.getCaller(), "called by the invoker");
+		assertNull(resumed.getAuthenticatedDID(), "with nobody present");
 		assertTrue(mayWrite(resumed, alice, "w/guestbook"));
 		assertFalse(mayWrite(resumed, alice, "w/private"));
 
@@ -268,7 +272,7 @@ public class CallableAdapterTest {
 		assertFalse(mayWrite(resumed, alice, "w/guestbook"));
 		complete(create(owner, "guestbook", "v/ops/covia/append", Caps.UNRESTRICTED, null));
 		assertFalse(mayWrite(resumed, alice, "w/guestbook"));
-		assertFalse(mayWrite(engine.context(alice, bob, null, kept), alice, "w/guestbook"));
+		assertFalse(mayWrite(engine.context(alice, alice, null, kept), alice, "w/guestbook"));
 	}
 
 	@Test
@@ -285,10 +289,11 @@ public class CallableAdapterTest {
 		ACell beyond = schedule(bob, later, append("w/private", "x"));
 		ACell second = schedule(bob, later, append("w/guestbook", "After deletion"));
 
-		// The events are Alice's, made by Bob
+		// The events are Alice's work, made in her callable's call: Bob reaches none of them
 		AVector<ACell> events = RT.ensureVector(RT.getIn(complete(run("v/ops/scheduler/list", Maps.empty(), owner)), "events"));
 		assertEquals(3, events.count());
-		for (ACell event : events) assertEquals(bob, RT.getIn(event, Fields.CALLER));
+		for (ACell event : events) assertEquals(alice, RT.getIn(event, Fields.CALLER));
+		failure(run("v/ops/scheduler/cancel", Maps.of("handle", first), RequestContext.of(bob)));
 
 		// Each fires with the callable's authority as it stands then
 		complete(run("v/ops/scheduler/trigger", Maps.of("handle", first), owner));
@@ -346,16 +351,70 @@ public class CallableAdapterTest {
 	}
 
 	@Test
-	public void aCallCannotCallACallable(TestInfo info) {
+	public void whatACallStartsIsItsIssuersWork(TestInfo info) {
 		AString alice = TestEngine.uniqueDID(info);
+		AString bob = TestEngine.uniqueDID("bob-" + info.getDisplayName());
+		RequestContext owner = RequestContext.of(alice);
+		complete(create(owner, "hold", "v/test/ops/never", Caps.UNRESTRICTED, null));
+		RequestContext call = engine.callContext(RequestContext.of(bob), reference(alice, "hold"));
+		Job started = engine.jobs().invokeOperation("v/test/ops/never", Maps.empty(), call);
+		try {
+			assertEquals(alice, started.getData().get(Fields.CALLER), "the issuer's, not the invoker's");
+			assertNull(started.getData().get(Fields.OWNER), "kept in the issuer's own account");
+			assertNotNull(engine.jobs().getJobData(started.getID(), owner), "the issuer reaches it");
+			assertThrows(covia.exception.AuthException.class,
+				() -> engine.jobs().getJobData(started.getID(), RequestContext.of(bob)), "the invoker does not");
+		} finally {
+			started.cancel();
+		}
+	}
+
+	@Test
+	public void callsNestEachInItsIssuersFrame(TestInfo info) {
+		AString alice = TestEngine.uniqueDID(info);
+		AString bob = TestEngine.uniqueDID("bob-" + info.getDisplayName());
+		AString carol = TestEngine.uniqueDID("carol-" + info.getDisplayName());
 		RequestContext owner = RequestContext.of(alice);
 		openGuestbook(alice);
-		complete(create(owner, "inner", "v/ops/covia/append", GUESTBOOK_CAPS, null));
-		complete(create(owner, "outer", "v/ops/callable/call", Caps.UNRESTRICTED, null));
+		complete(create(owner, "inner", "v/ops/covia/append", GUESTBOOK_CAPS, "v/ops/callable/gates/anyone"));
+		complete(create(owner, "outer", "v/ops/callable/call", Caps.UNRESTRICTED, "v/ops/callable/gates/anyone"));
+		String innerPath = alice + "/x/callable/inner";
+		AMap<AString, ACell> inner = Maps.of(Fields.CALLABLE, innerPath, Fields.INPUT, append("w/guestbook", "nested"));
 
-		AMap<AString, ACell> inner = Maps.of(Fields.CALLABLE, "inner", Fields.INPUT, append("w/guestbook", "x"));
-		assertEquals(CallableAdapter.CALL_WITHIN_CALL, failure(call(owner, "outer", inner)));
-		complete(run("v/ops/callable/call", inner, owner));
+		// A call calls a callable
+		complete(call(RequestContext.of(carol), alice + "/x/callable/outer", inner));
+		assertEquals(Vectors.of("nested"), held(alice, "w/guestbook"));
+
+		// Each call's caller is the authority that made it, and only its own callable narrows it
+		RequestContext outerFrame = engine.callContext(RequestContext.of(carol), reference(alice, "outer"));
+		RequestContext innerFrame = engine.callContext(outerFrame, reference(alice, "inner"));
+		assertEquals(carol, outerFrame.getCaller());
+		assertEquals(alice, innerFrame.getCaller());
+		assertEquals(reference(alice, "inner"), innerFrame.getCallable());
+		assertEquals(carol, innerFrame.getAuthenticatedDID(), "who is present goes on through both");
+
+		// The inner callable's caps bound the inner call, however wide the outer's
+		failure(call(RequestContext.of(carol), alice + "/x/callable/outer",
+			Maps.of(Fields.CALLABLE, innerPath, Fields.INPUT, append("w/private", "x"))));
+		assertNull(held(alice, "w/private"));
+
+		// Bob's callable calls Alice's only as far as its caps cover calling it, and is not shown it otherwise
+		RequestContext bobs = RequestContext.of(bob);
+		complete(create(bobs, "relay", "v/ops/callable/call", Vectors.of(cap("w/", Capability.CRUD)), "v/ops/callable/gates/anyone"));
+		String relay = bob + "/x/callable/relay";
+		assertEquals(CallableAdapter.NOT_CALLABLE.formatted(innerPath), failure(call(RequestContext.of(carol), relay, inner)));
+		complete(run("v/ops/callable/update", Maps.of(Fields.NAME, "relay",
+			Fields.CAPS, Vectors.of(cap(innerPath, Abilities.CALLABLE_CALL))), bobs));
+		complete(call(RequestContext.of(carol), relay, inner));
+		assertEquals(Vectors.of("nested", "nested"), held(alice, "w/guestbook"));
+
+		// The inner call holds none of Bob's authority, nor Carol's
+		failure(call(RequestContext.of(carol), relay,
+			Maps.of(Fields.CALLABLE, innerPath, Fields.INPUT, append(bob + "/w/guestbook", "x"))));
+		failure(call(RequestContext.of(carol), relay,
+			Maps.of(Fields.CALLABLE, innerPath, Fields.INPUT, append(carol + "/w/guestbook", "x"))));
+		assertNull(held(bob, "w/guestbook"));
+		assertNull(held(carol, "w/guestbook"));
 	}
 
 	@Test

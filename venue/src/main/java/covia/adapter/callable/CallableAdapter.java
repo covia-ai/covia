@@ -57,7 +57,6 @@ public class CallableAdapter extends AAdapter {
 	public static final String CALLABLE_INVALID = "callable is required: a callable's name, x/callable/<name> or <ownerDID>/x/callable/<name>";
 	public static final String NOT_CALLABLE = "No callable %s that this request may call";
 	public static final String GATE_REFUSED = "The gate of %s refused this call: %s";
-	public static final String CALL_WITHIN_CALL = "A callable's call cannot call a callable";
 	public static final String NOT_A_CALLER = "%s is not among this gate's callers";
 	public static final String NO_CALLERS = "This gate lists no callers: give it callers as an operation default";
 
@@ -265,8 +264,6 @@ public class CallableAdapter extends AAdapter {
 	 * @return the target's output, when it completes
 	 */
 	private CompletableFuture<ACell> call(RequestContext ctx, ACell input) {
-		// Unbounded otherwise: a callable's target could be a call of itself
-		if (ctx.getCallable() != null) throw new AuthException(CALL_WITHIN_CALL);
 		AString named = RT.ensureString(RT.getIn(input, Fields.CALLABLE));
 		Callable callable = named(ctx, named);
 		AString resource = resource(callable.owner(), callable.name());

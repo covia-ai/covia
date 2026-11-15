@@ -17,8 +17,10 @@ their calls; `Engine.callContext` builds the authority a call acts with.
    tokens are the `token` adapter's ([ACCESS_TOKENS.md](ACCESS_TOKENS.md)). It
    is not an operation in the owner's `o/`, which the owner's agents may be
    able to write.
-2. **The caller is the invoker.** The call is the invoker's job and its work
-   is attributed to the invoker, as Convex's `*caller*`.
+2. **A call enters its issuer's frame.** The call itself is the invoker's
+   job, but what it does is the issuer's: its authority is the issuer and its
+   caller is the invoker, as Convex's `*address*` and `*caller*`
+   ([AUTHORITY.md](AUTHORITY.md)).
 3. **The authority is the callable's**: its issuer's authority, narrowed by
    the access token that created it if any, and by its caps, all read at each
    point of action. This is how an agent acts with its controller's authority
@@ -144,13 +146,15 @@ read at `<did>/x/callable` under the usual cross-user delegation rules.
 {
   operation: "<ownerDID>/x/callable/<name>",  // the callable being called
   input:     <the call's input>,
-  caller:    <the invoker's DID>,
+  caller:    <the invoker's authority>,
   owner?:    <the namespace the invoker acts in, when it differs from caller>
 }
 ```
 
 This is a capability gate's input. `operation` names the callable, so one gate
-can serve several. `owner` keeps its meaning there, the invoker's namespace;
+can serve several. `caller` is the principal whose authority the invoking
+request has: for a call made within another call, the outer callable's
+issuer. `owner` keeps its meaning there, the invoker's namespace;
 the callable's owner is in `operation`. The call is admitted only if the gate
 succeeds. A gate that fails, cannot be resolved or runs past a capability
 gate's time limit refuses the call, and its reason is returned.
@@ -186,30 +190,31 @@ call and never sets `callers`, so a caller cannot change the list. The test adap
 Work a call leaves running, such as a job the target starts or an event it
 schedules, keeps the callable's authority with it
 ([JOBS.md](JOBS.md)). Its kept authority (`Engine.keptAuthority`) is the
-callable alone, since the record names the issuer and the source:
+callable, since the record names the issuer and the source, and the call's
+caller:
 
 ```
-authority: { callable: {owner, name, id} }
+authority: { callable: {owner, name, id}, caller: <the call's caller> }
 ```
 
-Rebuilt, it is the authority a call of that callable acts with now: the
-issuer's, narrowed by the source chain and the callable's caps as they
-stand, and nothing once the callable is gone. Such work belongs to the
-owner's namespace (see below), so it resumes there with the invoker as its
-caller.
+Rebuilt, it is the call's frame as it stands now: the issuer's authority,
+narrowed by the source chain and the callable's caps, and nothing once the
+callable is gone, with the kept caller as its caller and nobody present.
 
 ## What a call acts in
 
 The call itself is the invoker's: a job in the invoker's `j/`, counted against
 the invoker's job quota, which the invoker can watch and cancel. Inside it,
-names resolve in the owner's namespace, so what the target reaches by name is
-the owner's, within the callable's caps:
+the call is its issuer's work, and names resolve in the owner's namespace, so
+what the target reaches by name is the owner's, within the callable's caps:
 
-- jobs it records and events it schedules are the owner's, attributed to the
-  invoker as caller, and count against the owner's quota; an event fires
-  with the callable's authority as it stands then, so the caps must cover
-  `invoke` on the operation the event runs;
-- a human it asks (`hitl:request`) is the owner's, through the owner's `h/`;
+- jobs it records and events it schedules are the issuer's, recording the
+  issuer as their caller, kept in the owner's account and counted against the
+  owner's quota, so the invoker does not reach them; an event fires in the
+  call's frame as it stands then, so the caps must cover `invoke` on the
+  operation the event runs;
+- a human it asks (`hitl:request`) is asked by the issuer, through the
+  owner's `h/`;
 - a secret it uses is the owner's, as `secret/use` in its caps allows.
 
 ## What a call never holds
@@ -233,9 +238,16 @@ the authority a call acts with is narrowed, so:
   controller, and a controller keeps no callable's caps, so creating one needs
   the issuer's whole authority. Tokens and callables it creates need that
   authority too, as their issuer.
-- **It never calls a callable.** A target that is itself a call, and work a
-  call left running, are refused when they call one, since a callable could
-  otherwise call itself without end.
+
+## Calls within calls
+
+A call's target, and work a call left running, may call a callable. Each call
+enters its own issuer's frame, with the authority that made it as its caller,
+and only its own callable narrows it. The outer call's caps decide only
+whether it may make the inner call: calling another identity's callable
+through its gate is an admission, so those caps must cover `callable/call` on
+it (decision 5). Nothing yet bounds how deep calls nest
+([#708](https://github.com/covia-ai/covia/issues/708)).
 
 ## How a call runs
 
@@ -245,9 +257,9 @@ the authority a call acts with is narrowed, so:
 2. **Admit** the caller: its authority covers `callable/call` on the
    callable's resource, or the gate, run with the callable's authority,
    succeeds. A gate's refusal is returned with its reason.
-3. **Act** with the callable's authority: the invoker is the caller, the
-   owner's namespace is where names resolve, and the issuer's authority
-   narrowed by `source` and `caps` decides every check.
+3. **Enter** the issuer's frame: the issuer's authority narrowed by `source`
+   and `caps` decides every check, the owner's namespace is where names
+   resolve, and the invoker's authority is the frame's caller.
 4. **Run** the target, resolved as the issuer would resolve it, with `input`.
    Its output is the call's output.
 
@@ -316,10 +328,6 @@ The token's caps let it reach the guestbook's gate and no other callable's.
 
 - **Whose quota.** Jobs the target records count against the owner's quota,
   as work in the owner's namespace, not the invoker's.
-- **Calls within calls.** A call cannot call a callable. Allowing it needs a
-  bound on how deep a chain may go (access tokens stop at a fixed depth) and a
-  choice of which caller the inner gate sees, the invoker or the outer
-  callable.
 - **A callable as an operation reference.** Accepting
   `<ownerDID>/x/callable/<name>` wherever an operation reference goes, so a
   tool takes the target's input and schema directly.

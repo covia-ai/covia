@@ -358,9 +358,9 @@ a delegate still holds its `admin/sudo` grant, an agent acts under its current
 controller the work started with, as it acts now, and the access token
 narrowing the request, if any, which then narrows it as it stands and to
 nothing once it is gone (ACCESS_TOKENS.md). Work a callable's call left
-running keeps the callable instead, and resumes in its owner's namespace with
-the invoker as caller and the callable's authority as it stands
-(CALLABLES.md). The record never holds them,
+running keeps the callable and the call's caller instead, and resumes in the
+call's frame: the issuer's authority as the callable stands, in its owner's
+namespace (CALLABLES.md). The record never holds them,
 and they go with the entry when the job ends (UCAN.md §4.3).
 
 ## The update path — CAS-committed, terminal-sticky
