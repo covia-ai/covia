@@ -765,18 +765,31 @@ public class LLMAgentAdapterTest {
 	}
 
 	@Test
-	public void testSessionIdVisibleInInspectedContext() {
+	public void testACycleIsToldItsSession() {
 		// The report-back handle: a sessioned cycle's system prompt names its
 		// session id, so the agent can schedule agent:request {sessionId}
-		// back into this conversation.
-		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
-		AMap<AString, ACell> l3 = adapter.inspectContext(new ContextInspectable.Inspection(
-			Maps.of("llmOperation", "v/test/ops/llm"), null,
-			Maps.of(Fields.ID, Blob.fromHex("11bb11bb11bb11bb11bb11bb11bb11bb")), null, null, null),
-			RequestContext.of(ALICE_DID));
-		AVector<ACell> messages = RT.ensureVector(RT.getIn(l3, Fields.MESSAGES));
-		String prompt = RT.ensureString(RT.getIn(messages.get(0), "content")).toString();
-		assertTrue(prompt.contains("Session: 11bb11bb11bb11bb11bb11bb11bb11bb"), prompt);
+		// back into this conversation. A live cycle and an inspection of the
+		// session's context both take it from the context they run under.
+		RequestContext alice = RequestContext.of(ALICE_DID);
+		for (String runtime : new String[] {"llmagent", "goaltree"}) {
+			AString agentId = Strings.create("session-line-" + runtime);
+			engine.jobs().invokeOperation("v/ops/agent/create",
+				Maps.of(Fields.AGENT_ID, agentId, Fields.CONFIG, Maps.of(
+					Fields.OPERATION, "v/ops/" + runtime + "/chat", "llmOperation", "v/test/ops/llm")),
+				alice).awaitResult(5000);
+			TestAdapter.CAPTURED_LLM_INPUT.remove(agentId);
+			ACell chat = engine.jobs().invokeOperation("v/ops/agent/chat",
+				Maps.of(Fields.AGENT_ID, agentId, Fields.MESSAGE, "hello"), alice).awaitResult(15000);
+			String line = "Session: " + RT.getIn(chat, Fields.SESSION_ID);
+
+			assertTrue(String.valueOf(TestAdapter.CAPTURED_LLM_INPUT.get(agentId)).contains(line),
+				runtime + ": a live cycle is told its session");
+			ACell context = engine.jobs().invokeOperation("v/ops/agent/context",
+				Maps.of(Fields.AGENT_ID, agentId, Fields.SESSION_ID, RT.getIn(chat, Fields.SESSION_ID)), alice)
+				.awaitResult(5000);
+			assertTrue(String.valueOf(RT.getIn(context, Fields.MESSAGES)).contains(line),
+				runtime + ": an inspection of the session shows it");
+		}
 	}
 
 	@Test

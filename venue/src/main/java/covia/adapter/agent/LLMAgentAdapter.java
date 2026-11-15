@@ -178,7 +178,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 			|| in.task() != null;
 		ContextAssembler.Spec spec = new ContextAssembler.Spec(
 			engine, ctx, capsCtx, config,
-			ContextAssembler.sessionHex(RT.getIn(in.session(), Fields.ID)), null,
+			ContextAssembler.sessionHex(ctx.getSessionId()), null,
 			profile.budget(), profile.labels(), profile.toolCalling(),
 			fixedTools, null, null,
 			previewFrames, in.pending(), null, hasInput, null, null,
@@ -369,7 +369,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 		// changes per inference — loads, this cycle's turns, the outstanding task.
 		ContextAssembler.Spec spec = new ContextAssembler.Spec(
 			engine, ctx, capsCtx, config,
-			ContextAssembler.sessionHex(RT.getIn(input, Fields.SESSION, Fields.ID)), null,
+			ContextAssembler.sessionHex(ctx.getSessionId()), null,
 			profile.budget(), profile.labels(), profile.toolCalling(),
 			fixedTools, null, null, sessionFrames, pending, null, hasInput, null, null,
 			fixed.unavailable(), null, null)
