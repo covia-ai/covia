@@ -36,6 +36,14 @@ Adapters may expose useful extensions. `file` and `dlfs` currently also expose
 `tree`, `append`, and `stat`; `file` additionally exposes `move`, `copy`, and
 configured-root discovery. DLFS additionally exposes drive lifecycle operations.
 
+In a DLFS drive, a file that `create` or `write` makes or replaces changes in
+one update, once all its content has arrived. Readers see the old file or the
+new one, and content that fails part-way, such as an upload cut off, leaves the
+drive as it was. Content uploaded to a DLFS reference and files that `archive`
+extracts or zips into a drive are written the same way. `append` adds its
+content as it arrives. A file cannot replace a directory: such a write fails as
+a conflict.
+
 `read` returns:
 
 - `text`: UTF-8 `content`, or an error if the bytes are not valid text.

@@ -10,7 +10,6 @@ import java.nio.file.FileSystem;
 import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
-import java.nio.file.StandardOpenOption;
 import java.util.concurrent.CompletableFuture;
 
 import org.slf4j.Logger;
@@ -719,17 +718,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 		Path path = target.path();
 		// Authorised only to change it, so it existed: create never replaces
 		if (createOnly && !target.mayCreate()) throw new FileAlreadyExistsException(ref.toString());
-		// Interim (covia#629): a DLFS stream write is visible as it goes, so a
-		// failed or cancelled upload leaves a cut-off file under the real name.
-		// Convex's atomic conditional install (Convex-Dev/convex#790) would
-		// publish the file only on a clean end of stream, with createOnly
-		// checked at that moment.
-		try (java.io.OutputStream os = Files.newOutputStream(path, createOnly
-				? FileOperations.createOptions(path)
-				: FileOperations.writeOptions(path, StandardOpenOption.TRUNCATE_EXISTING,
-					target.mayCreate()))) {
-			data.transferTo(os);
-		}
+		FileOperations.writeFile(path, target.mayCreate(), !createOnly, data::transferTo);
 		return true;
 	}
 

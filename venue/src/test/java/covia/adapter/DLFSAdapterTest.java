@@ -1067,6 +1067,42 @@ public class DLFSAdapterTest {
 	}
 
 	@Test
+	public void testAWriteThatFailsPartWayChangesNothing() throws Exception {
+		run("v/ops/dlfs/create-drive", Maps.of("name", "whole"));
+		run("v/ops/dlfs/write", Maps.of("drive", "whole", "path", "a.txt", "content", "old"));
+		RequestContext alice = RequestContext.of(ALICE_DID);
+		AString drive = ALICE_DID.append("/dlfs/whole/");
+
+		// The source fails after part of the new content has arrived
+		assertThrows(java.io.IOException.class, () ->
+			engine.putContent(drive.append("a.txt"), failingAfter("new"), null, alice));
+		assertEquals("old", RT.getIn(run("v/ops/dlfs/read",
+			Maps.of("drive", "whole", "path", "a.txt")), "content").toString());
+		assertThrows(java.io.IOException.class, () ->
+			engine.createContent(drive.append("b.txt"), failingAfter("new"), null, alice));
+		assertFalse(RT.bool(RT.getIn(run("v/ops/dlfs/stat",
+			Maps.of("drive", "whole", "path", "b.txt")), "exists")));
+
+		// A write where a directory is leaves the directory as it is
+		run("v/ops/dlfs/mkdir", Maps.of("drive", "whole", "path", "dir"));
+		assertFalse(failure("v/ops/dlfs/write",
+			Maps.of("drive", "whole", "path", "dir", "content", "x"), alice).isBlank());
+		assertEquals("directory", RT.getIn(run("v/ops/dlfs/stat",
+			Maps.of("drive", "whole", "path", "dir")), "type").toString());
+	}
+
+	/** Content that fails after {@code text}, as an upload cut off part-way does. */
+	private static java.io.InputStream failingAfter(String text) {
+		return new java.io.SequenceInputStream(
+			new java.io.ByteArrayInputStream(text.getBytes(java.nio.charset.StandardCharsets.UTF_8)),
+			new java.io.InputStream() {
+				@Override public int read() throws java.io.IOException {
+					throw new java.io.IOException("The source failed");
+				}
+			});
+	}
+
+	@Test
 	public void didContentReferencesDecodeNamesBeforeAccessChecks() throws Exception {
 		var ctx = covia.venue.RequestContext.of(ALICE_DID);
 		run("v/ops/dlfs/create-drive", Maps.of("name", "names"));

@@ -739,12 +739,8 @@ public class FileAdapter extends AAdapter implements covia.venue.storage.Content
 			Capability.CRUD_WRITE, false);
 		requireWritable(target);
 		if (createOnly) requireNew(target, endpoint.path());
-		try (java.io.OutputStream out = Files.newOutputStream(target.path(), createOnly
-				? FileOperations.createOptions(target.path())
-				: FileOperations.writeOptions(target.path(),
-					java.nio.file.StandardOpenOption.TRUNCATE_EXISTING, target.mayCreate()))) {
-			data.transferTo(out);
-		}
+		FileOperations.writeFile(target.path(), createOnly || target.mayCreate(), !createOnly,
+			data::transferTo);
 		return true;
 	}
 

@@ -5,7 +5,6 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardOpenOption;
 import java.util.Base64;
 import java.util.Enumeration;
 import java.util.concurrent.CompletableFuture;
@@ -275,10 +274,10 @@ public class ArchiveAdapter extends AAdapter {
 				}
 				Path parent = target.getParent();
 				if (parent != null) Files.createDirectories(parent);
-				try (InputStream is = zip.getInputStream(ze);
-				     OutputStream os = Files.newOutputStream(target,
-						StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE)) {
-					totalBytes += copyCapped(is, os, MAX_TOTAL_BYTES - totalBytes);
+				long remaining = MAX_TOTAL_BYTES - totalBytes;
+				try (InputStream is = zip.getInputStream(ze)) {
+					totalBytes += FileOperations.writeFile(target, true, true,
+						os -> copyCapped(is, os, remaining));
 				}
 				if (files.count() < MAX_LISTED) {
 					files = files.conj(Strings.create(destReal.relativize(target).toString().replace('\\', '/')));
@@ -369,12 +368,14 @@ public class ArchiveAdapter extends AAdapter {
 		long[] entryCount = {0};
 		try {
 			Path out = toFile ? destFile : zipTmp;
-			try (ZipOutputStream zos = new ZipOutputStream(Files.newOutputStream(out,
-					FileOperations.writeOptions(out, StandardOpenOption.TRUNCATE_EXISTING, destCreate)))) {
-				for (int i = 0; i < srcFiles.size(); i++) {
-					addToZip(zos, srcFiles.get(i), srcEntryBases.get(i), entryCount);
+			FileOperations.writeFile(out, destCreate, true, os -> {
+				try (ZipOutputStream zos = new ZipOutputStream(os)) {
+					for (int i = 0; i < srcFiles.size(); i++) {
+						addToZip(zos, srcFiles.get(i), srcEntryBases.get(i), entryCount);
+					}
 				}
-			}
+				return 0;
+			});
 
 			long size = Files.size(out);
 			if (toFile) {

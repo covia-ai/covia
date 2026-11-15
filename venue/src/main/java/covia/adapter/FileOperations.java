@@ -1,5 +1,6 @@
 package covia.adapter;
 
+import java.io.FilterOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -34,6 +35,12 @@ import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
+import convex.lattice.fs.ConditionFailedException;
+import convex.lattice.fs.DLFSCondition;
+import convex.lattice.fs.DLFSNode;
+import convex.lattice.fs.DLFileSystem;
+import convex.lattice.fs.DLFileWriter;
+import convex.lattice.fs.DLPath;
 import covia.api.Fields;
 import covia.exception.ConfigurationException;
 import covia.exception.ConflictException;
@@ -376,12 +383,10 @@ final class FileOperations {
 				stringAt(block, Fields.REF));
 		}
 
-		java.nio.file.OpenOption[] options = createOptions(file);
 		long count;
 		try (InputStream is = resolved != null
-				? resolved.content().getInputStream() : InputStream.nullInputStream();
-			 OutputStream os = Files.newOutputStream(file, options)) {
-			count = is.transferTo(os);
+				? resolved.content().getInputStream() : InputStream.nullInputStream()) {
+			count = writeFile(file, true, false, is::transferTo);
 		}
 		AMap<AString, ACell> result = Maps.of(
 			"written", CVMLong.create(count), "created", CVMBool.TRUE);
@@ -443,17 +448,13 @@ final class FileOperations {
 				: "Only one of 'content', 'value', 'bytes', or 'contentRef' may be supplied");
 		}
 
-		StandardOpenOption mode = append
-			? StandardOpenOption.APPEND : StandardOpenOption.TRUNCATE_EXISTING;
-		java.nio.file.OpenOption[] options = writeOptions(target, mode, create);
 		if (contentRef != null) {
 			covia.venue.storage.ContentProvider.Resolved resolved =
 				engine.resolveContent(contentRef, assetCtx);
 			if (resolved == null) throw new NotFoundException("No content at ref: " + contentRef,
 				contentRef.toString());
-			try (InputStream is = resolved.content().getInputStream();
-				 OutputStream os = Files.newOutputStream(target, options)) {
-				return is.transferTo(os);
+			try (InputStream is = resolved.content().getInputStream()) {
+				return writeOrAppend(target, append, create, is::transferTo);
 			}
 		}
 
@@ -461,12 +462,77 @@ final class FileOperations {
 		if (content != null) data = content.toString().getBytes(StandardCharsets.UTF_8);
 		else if (bytesB64 != null) data = Base64.getDecoder().decode(bytesB64.toString());
 		else data = JSON.print(input.get(FIELD_VALUE)).toString().getBytes(StandardCharsets.UTF_8);
-		Files.write(target, data, options);
-		return data.length;
+		return writeOrAppend(target, append, create, out -> {
+			out.write(data);
+			return data.length;
+		});
+	}
+
+	/** Appends to a file as the content arrives, or writes it whole as {@link #writeFile} does. */
+	private static long writeOrAppend(Path target, boolean append, boolean create,
+			ContentWriter content) throws IOException {
+		if (!append) return writeFile(target, create, true, content);
+		try (OutputStream out = Files.newOutputStream(target,
+				writeOptions(target, StandardOpenOption.APPEND, create))) {
+			return content.write(out);
+		}
+	}
+
+	/** Writes a file's content to the stream it is given, returning the bytes written. */
+	@FunctionalInterface
+	interface ContentWriter {
+		long write(OutputStream out) throws IOException;
+	}
+
+	/**
+	 * Writes a whole file. On a DLFS drive the file changes in one update, made
+	 * only once {@code content} has finished: readers see the old file or the
+	 * new one, and content that fails part-way leaves the drive as it was.
+	 * Elsewhere the file is written as the content arrives. {@code content} may
+	 * close the stream it is given.
+	 *
+	 * @param create whether a missing file may be created
+	 * @param replace whether an existing file may be replaced; if not, only a
+	 *        new file is created, and {@code create} must be true
+	 * @return the bytes {@code content} wrote
+	 * @throws FileAlreadyExistsException if a directory is at the target, or a
+	 *         file that may not be replaced
+	 * @throws NoSuchFileException if the file is missing and may not be created,
+	 *         or its directory is missing
+	 */
+	static long writeFile(Path target, boolean create, boolean replace,
+			ContentWriter content) throws IOException {
+		if (!(target instanceof DLPath file)) {
+			try (OutputStream out = Files.newOutputStream(target, replace
+					? writeOptions(target, StandardOpenOption.TRUNCATE_EXISTING, create)
+					: createOptions(target))) {
+				return content.write(out);
+			}
+		}
+		DLFileSystem fs = file.getFileSystem();
+		DLFSCondition allowed = entry -> (entry == null)
+			? create
+			: (replace && DLFSNode.isRegularFile(entry));
+		try (DLFileWriter writer = fs.newWriter(file, allowed)) {
+			long written = content.write(new FilterOutputStream(writer) {
+				@Override public void write(byte[] b, int off, int len) throws IOException {
+					out.write(b, off, len);
+				}
+				// Closing would discard the content before it is committed
+				@Override public void close() throws IOException {
+					flush();
+				}
+			});
+			writer.commit();
+			return written;
+		} catch (ConditionFailedException e) {
+			if (fs.getNode(file) == null) throw new NoSuchFileException(target.toString());
+			throw new FileAlreadyExistsException(target.toString());
+		}
 	}
 
 	/** Options to write a file in {@code mode}, creating it only when {@code create}. */
-	static java.nio.file.OpenOption[] writeOptions(Path target,
+	private static java.nio.file.OpenOption[] writeOptions(Path target,
 			StandardOpenOption mode, boolean create) {
 		java.util.List<java.nio.file.OpenOption> options = new java.util.ArrayList<>(
 			java.util.List.of(mode, StandardOpenOption.WRITE));
@@ -477,7 +543,7 @@ final class FileOperations {
 		return options.toArray(java.nio.file.OpenOption[]::new);
 	}
 
-	static java.nio.file.OpenOption[] createOptions(Path target) {
+	private static java.nio.file.OpenOption[] createOptions(Path target) {
 		if (target.getFileSystem() == java.nio.file.FileSystems.getDefault()) {
 			return new java.nio.file.OpenOption[] {
 				StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE,
