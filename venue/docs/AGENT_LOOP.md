@@ -1595,7 +1595,7 @@ No `state`, no `tasks`, no `pending`, no `messages`, no `session`, no `config`. 
 | Queued tasks | `agent.getTasks()` |
 | Outbound pending | `agent.getPending()` |
 | Sessions | `agent.getSessions()`, `agent.session(sid).getRecord()` |
-| Session frames | `agent.session(sid).getRecord().get("frames")` |
+| Session frames | `agent.session(sid).frames()` |
 | Session inbox | `agent.session(sid).pending()` |
 
 `cause` is a hint, not a contract — the step adapter is free to read the full lattice state and decide what to do regardless of cause.
