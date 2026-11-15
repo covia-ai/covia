@@ -4442,6 +4442,11 @@ public class Engine {
 	 *       namespace.</li>
 	 * </ul>
 	 *
+	 * <p>It names no authenticated principal: the venue making a context for a
+	 * principal, for a bot's listed senders or for work it carries on, does not
+	 * make that principal present. A request that authenticated is
+	 * {@link #requestContext}.</p>
+	 *
 	 * @param principal the acting DID, or null for anonymous
 	 * @throws AuthException for the public principal while public access is off
 	 */
@@ -4450,12 +4455,29 @@ public class Engine {
 		if (isPublicPrincipal(principal)) {
 			if (!auth.isPublicAccessEnabled()) throw new AuthException(PUBLIC_ACCESS_OFF);
 			AString publicDID = publicPrincipal();
-			return RequestContext.of(publicDID, null, auth.getPublicScope(publicDID));
+			return RequestContext.of(publicDID, null, auth.getPublicScope(publicDID)).unauthenticated();
 		}
 		if (covia.grid.Principals.isAgentDID(principal)) {
-			return RequestContext.of(principal, null, Vectors.empty());
+			return RequestContext.of(principal, null, Vectors.empty()).unauthenticated();
 		}
-		return RequestContext.of(principal);
+		return RequestContext.of(principal).unauthenticated();
+	}
+
+	/**
+	 * The context of a request a door of the venue authenticated as
+	 * {@code principal}, or presenting access token {@code token}: as it acts
+	 * now ({@link #context(AString)}, {@link #tokenContext}), and authenticated
+	 * as the principal that acts in it, the token's issuer for a token
+	 * ({@link RequestContext#getAuthenticatedDID()}). Only a door that
+	 * authenticated the request makes one, so that only such a request can be
+	 * the user in person ({@link #inPersonDenial}).
+	 *
+	 * @param principal the authenticated caller, or null for anonymous
+	 * @param token the access token's reference the request presented, or null
+	 * @throws AuthException as {@link #context(AString)} or {@link #tokenContext}
+	 */
+	public RequestContext requestContext(AString principal, AMap<AString, ACell> token) {
+		return ((token != null) ? tokenContext(token) : context(principal)).authenticated();
 	}
 
 	/**
@@ -5013,7 +5035,8 @@ public class Engine {
 	 */
 	public RequestContext channelContext(AString owner, covia.venue.auth.AuthResult result) {
 		return context(owner, result.userDID())
-			.withAuthentication(result.toData().dissoc(covia.venue.auth.AuthResult.USER_DID));
+			.withAuthentication(result.toData().dissoc(covia.venue.auth.AuthResult.USER_DID))
+			.authenticated();
 	}
 
 	/** Why the public principal cannot act: the operator has public access off. */

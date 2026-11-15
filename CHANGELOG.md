@@ -23,7 +23,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Changed
 
-- Answering an approval request, `secret:extract`, `user:export`, `user:clone` from one's own account and reading or changing one's own sign-in keys need the user in person: work a job or scheduled event carries on later can no longer do them.
+- Answering an approval request, `secret:extract`, `user:export`, `user:clone` from one's own account and reading or changing one's own sign-in keys need the user in person: work a job or scheduled event carries on later, and an operation a bot runs, can no longer do them.
 - A live dictation belongs to the principal that opened it: its access tokens feed it, its agents and other users do not. The messaging adapters' `bots` lists each bot the request may manage (`<adapter>/manage` on `<owner>/<adapter>/<name>`), so an agent sees its owner's bots only when its caps allow managing them.
 - Running Python is the operator's: each configured function needs `admin/execute/python` on `<venue DID>/python/operations/<id>`, which the venue holds and can grant to a user.
 - An adapter that fails to start, at launch, enable or restart, no longer stops the venue: it stays enabled but failed, its operations refused as not running, until restarted.

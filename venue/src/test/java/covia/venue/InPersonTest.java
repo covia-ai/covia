@@ -74,10 +74,53 @@ class InPersonTest {
 	@Test void aUsersOwnRequestIsInPerson() {
 		AString alice = Keyed.generate().did();
 		assertNull(engine.inPersonDenial(RequestContext.of(alice)));
-		assertNull(engine.inPersonDenial(engine.context(alice)));
-		RequestContext carried = engine.context(alice).withOp(Strings.create("v/ops/covia/read")).withProofs(Vectors.empty());
+		assertNull(engine.inPersonDenial(engine.requestContext(alice, null)));
+		RequestContext carried = engine.requestContext(alice, null).withOp(Strings.create("v/ops/covia/read")).withProofs(Vectors.empty());
 		assertEquals(alice, carried.getAuthenticatedDID(), "every context made for the request keeps who it authenticated as");
 		assertNull(engine.inPersonDenial(carried));
+	}
+
+	@Test void aContextTheVenueMakesForTheUserIsNot() {
+		AString alice = Keyed.generate().did();
+		for (RequestContext made : new RequestContext[] {
+				engine.context(alice), engine.context(alice, alice), engine.context(alice, alice, Vectors.empty()) }) {
+			assertTrue(engine.holdsAuthorityOf(made, alice), "it has all of the user's authority");
+			assertNull(made.getAuthenticatedDID(), "but nobody authenticated as the user");
+			assertEquals(Engine.NOT_IN_PERSON, engine.inPersonDenial(made));
+		}
+		assertEquals(Engine.NOT_IN_PERSON, engine.inPersonDenial(engine.venueContext()),
+			"nor is the venue's own work anyone present");
+	}
+
+	@Test void aRequestThroughAnUnrestrictedTokenIsItsIssuerInPerson() {
+		AString alice = Keyed.generate().did();
+		RequestContext own = engine.requestContext(alice, null);
+		Job asked = ask(alice);
+		try {
+			RequestContext restricted = engine.requestContext(alice, token(own, "in-person-restricted",
+				Vectors.of(Capability.create(Strings.create("v/ops/hitl/respond"), Abilities.INVOKE))));
+			assertEquals(alice, restricted.getAuthenticatedDID());
+			Job refused = await(engine.jobs().invokeOperation("v/ops/hitl/respond", approval(asked), restricted));
+			assertEquals(Status.FAILED, refused.getStatus(), "a restricted token lacks the user's whole authority");
+			assertEquals(covia.adapter.HITLAdapter.ANSWER_NEEDS_WHOLE_AUTHORITY, refused.getErrorMessage());
+			assertEquals(Status.INPUT_REQUIRED, asked.getStatus(), "the request stays open");
+
+			// An unrestricted token is its issuer's whole authority, as ACCESS_TOKENS.md says
+			RequestContext whole = engine.requestContext(alice, token(own, "in-person-whole", Caps.UNRESTRICTED));
+			assertNull(engine.inPersonDenial(whole));
+			await(engine.jobs().invokeOperation("v/ops/hitl/respond", approval(asked), whole));
+			assertEquals(Status.COMPLETE, asked.getStatus(), "the issuer answers through it");
+		} finally {
+			asked.cancel();
+		}
+	}
+
+	/** A test token of {@code ctx}'s, accepted at the test access point, as its reference. */
+	private static AMap<AString, ACell> token(RequestContext ctx, String name, ACell caps) {
+		Job made = await(engine.jobs().invokeOperation("v/ops/token/create", Maps.of(Fields.NAME, name,
+			Fields.ACCESS, Maps.of("test", Maps.empty()), Fields.CAPS, caps), ctx));
+		assertEquals(Status.COMPLETE, made.getStatus(), made::getErrorMessage);
+		return engine.tokens().lookup(convex.core.lang.RT.getIn(made.getOutput(), Fields.TOKEN).toString());
 	}
 
 	@Test void anAgentIsNot() {
@@ -144,6 +187,26 @@ class InPersonTest {
 				sudo(alice, bob, "v/ops/hitl/respond")));
 			assertEquals(Status.FAILED, answer.getStatus(), "a delegate may not answer for the user");
 			assertEquals(Status.INPUT_REQUIRED, asked.getStatus(), "the request stays open");
+		} finally {
+			asked.cancel();
+		}
+	}
+
+	/** The issuer calling its own callable is present, and the callable holds
+	 * all of its authority, as an unrestricted token does. */
+	@Test void anIssuerCallingItsOwnUnrestrictedCallableIsInPerson() {
+		AString alice = Keyed.generate().did();
+		RequestContext own = engine.requestContext(alice, null);
+		Job made = await(engine.jobs().invokeOperation("v/ops/callable/create", Maps.of(Fields.NAME, "answer",
+			Fields.OPERATION, "v/ops/hitl/respond", Fields.CAPS, Caps.UNRESTRICTED,
+			Fields.GATE, "v/ops/callable/gates/anyone"), own));
+		assertEquals(Status.COMPLETE, made.getStatus(), made::getErrorMessage);
+		Job asked = ask(alice);
+		try {
+			Job answer = await(engine.jobs().invokeOperation("v/ops/callable/call", Maps.of(
+				Fields.CALLABLE, alice + "/x/callable/answer", Fields.INPUT, approval(asked)), own));
+			assertEquals(Status.COMPLETE, answer.getStatus(), answer::getErrorMessage);
+			assertEquals(Status.COMPLETE, asked.getStatus(), "the issuer answered through its own callable");
 		} finally {
 			asked.cancel();
 		}

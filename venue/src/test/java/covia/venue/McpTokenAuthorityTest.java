@@ -70,7 +70,8 @@ public class McpTokenAuthorityTest {
 		AccessToken standing = engine.resolveToken(token.ref());
 		Operation operation = engine.jobs().resolveOperation(Strings.create(ref),
 			engine.context(standing.owner(), standing.issuer()));
-		return engine.jobs().startToolOperation(Strings.create(ref), operation, input, engine.tokenContext(token.ref())).result();
+		return engine.jobs().startToolOperation(Strings.create(ref), operation, input,
+			engine.requestContext(standing.issuer(), token.ref())).result();
 	}
 
 	private static ACell done(CompletableFuture<ACell> result) {

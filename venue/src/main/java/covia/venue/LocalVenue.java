@@ -65,7 +65,7 @@ public class LocalVenue extends Venue {
 	private RequestContext context() {
 		if (requestContext != null) return requestContext;
 		if (getUser() == null) return RequestContext.ANONYMOUS;
-		return engine.context(getUser()).withProofs(proofs);
+		return engine.requestContext(getUser(), null).withProofs(proofs);
 	}
 
 	@Override

@@ -68,11 +68,14 @@ For the division with capability enforcement and authentication, see
   not the scope. Agents are unaffected, because their scope is read again from
   their config.
 - **In person.** A request carries the principal it authenticated as where it
-  entered the venue: the caller a transport bound, a binding's principal, or
-  the principal an in-process caller made its context for
-  (`RequestContext.of`). Every context made for the request keeps it, a
-  callable's call and `admin/sudo` included. Work a job or a scheduled event
-  carries on later carries none, and neither does a gate's evaluation. An act
+  entered the venue: the caller the HTTP, MCP or A2A door authenticated, or
+  the issuer of the access token it presented; the user a channel's sign-in
+  authenticated; or the principal an in-process caller made its context for
+  (`RequestContext.of`, `Engine.requestContext`). Every context made for the
+  request keeps it, a callable's call and `admin/sudo` included. A context the
+  venue makes for a principal itself (`Engine.context`) carries none: an
+  operation a bot runs for its senders, the venue's own work, and work a job
+  or a scheduled event carries on later. Neither does a gate's evaluation. An act
   that needs the user present passes only when the principal whose authority
   applies is a user in its own account and the request authenticated as that
   user (`Engine.inPersonDenial`): answering approval requests, `secret:extract`,

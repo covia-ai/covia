@@ -58,25 +58,38 @@ public class RequestContext {
 	}
 
 	/** The principal this request authenticated as where it entered the venue:
-	 * the caller a transport bound, a binding's principal, or the principal an
-	 * in-process caller made it for ({@link #of(AString)}). Every context made
-	 * for the request keeps it, a call into another principal's authority
-	 * included, so it names who is present wherever the request goes. Work the
-	 * venue resumes or fires later carries none ({@link #unauthenticated()}),
-	 * and neither does a gate's evaluation. Acts only the user may do in person
-	 * read it ({@link Engine#inPersonDenial}). */
+	 * the caller a transport authenticated ({@link Engine#requestContext}), the
+	 * user a channel's sign-in authenticated ({@link Engine#channelContext}),
+	 * or the principal an in-process caller made it for ({@link #of(AString)}).
+	 * Every context made for the request keeps it, a call into another
+	 * principal's authority included, so it names who is present wherever the
+	 * request goes. A context the venue makes for a principal itself
+	 * ({@link Engine#context(AString)}) carries none: work it resumes or fires
+	 * later, a bot's work for its listed senders, its own work. Neither does a
+	 * gate's evaluation. Acts only the user may do in person read it
+	 * ({@link Engine#inPersonDenial}). */
 	private final AString authenticated;
 
 	/** The principal this request authenticated as, or null for work the venue
 	 * resumes or fires itself ({@link #authenticated}). */
 	public AString getAuthenticatedDID() { return authenticated; }
 
-	/** This context naming no authenticated principal: work the venue resumes or
-	 * fires later, which is never anyone present in person. */
+	/** This context naming no authenticated principal: work the venue makes or
+	 * carries on itself, which is never anyone present in person. */
 	RequestContext unauthenticated() {
 		if (authenticated == null) return this;
 		return new RequestContext(authority, executionScope, rawUcans, op, cancellation,
 			invocationInput, gate, gateEvaluation, job, cycle, sessionDelivery, authentication, null, scopeSource, rights);
+	}
+
+	/** This context authenticated as the principal that acts in it: a request
+	 * that a door of the venue authenticated as that principal
+	 * ({@link Engine#requestContext}, {@link Engine#channelContext}). */
+	RequestContext authenticated() {
+		AString did = authority.getDID();
+		if (did == null || did.equals(authenticated)) return this;
+		return new RequestContext(authority, executionScope, rawUcans, op, cancellation,
+			invocationInput, gate, gateEvaluation, job, cycle, sessionDelivery, authentication, did, scopeSource, rights);
 	}
 
 	/** How a channel binding authenticated this request's caller: the method's

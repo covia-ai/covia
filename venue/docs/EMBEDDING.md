@@ -283,6 +283,13 @@ so the application decides who reaches them.
 
 ## Identity
 
+`engine.context(did)` is the venue acting for a principal, which never makes
+that principal present. Acts only a user may do in person (answering approval
+requests, `secret:extract`, `user:export`, and the user's own account and
+sign-in keys) refuse it. For a user the application has authenticated itself,
+use `engine.requestContext(did, null)` or `RequestContext.of(did)`
+([VENUE_AUTHORITY.md](VENUE_AUTHORITY.md#how-it-works-today), "In person").
+
 A `did:key` installation can sign for identities nested below it, such as
 `<did:key>:u:<name>`. To keep its private key inside the venue, store the seed
 as one of the installation's secrets, run `crypto:add-key {"seed":"s/<name>"}`

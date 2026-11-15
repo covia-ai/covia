@@ -54,7 +54,8 @@ class UserExportsTest {
 	private static final AString ACCOUNT_KEY = Strings.create("accountKey");
 	private static final AString SECRETS = Strings.create("secrets");
 
-	private final RequestContext venue = engine.venueContext();
+	/** The operator's own request, authenticated as the venue, as exporting needs. */
+	private final RequestContext venue = engine.requestContext(engine.getDIDString(), null);
 	private AString source;
 	private AString target;
 	private String unique;
