@@ -11,6 +11,7 @@ import java.nio.file.DirectoryNotEmptyException;
 import java.nio.file.DirectoryStream;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.FileSystem;
+import java.nio.file.FileSystemException;
 import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
 import java.nio.file.LinkOption;
@@ -76,6 +77,9 @@ final class FileOperations {
 
 	private static final int MAX_DEPTH_CAP = 10;
 	private static final int MAX_ENTRIES_CAP = 5000;
+
+	/** Refusal of a write to a symbolic link; the link's name follows. */
+	static final String WRITE_TO_LINK = "A write does not follow a symbolic link at the file's own path: ";
 
 	private FileOperations() {}
 
@@ -472,9 +476,29 @@ final class FileOperations {
 	private static long writeOrAppend(Path target, boolean append, boolean create,
 			ContentWriter content) throws IOException {
 		if (!append) return writeFile(target, create, true, content);
-		try (OutputStream out = Files.newOutputStream(target,
+		try (OutputStream out = openToWrite(target,
 				writeOptions(target, StandardOpenOption.APPEND, create))) {
 			return content.write(out);
+		}
+	}
+
+	/**
+	 * Opens a file to write without following a link at its own path, which
+	 * the options name for a host file. A path checked inside its root then
+	 * cannot lead outside it through a link there, whether that link points
+	 * outside, at nothing yet, or was put there after the check. Writing to a
+	 * link is refused as bad input.
+	 */
+	private static OutputStream openToWrite(Path target, java.nio.file.OpenOption[] options)
+			throws IOException {
+		try {
+			return Files.newOutputStream(target, options);
+		} catch (FileSystemException e) {
+			// A new file conflicts with a link as with any existing entry
+			if (!(e instanceof FileAlreadyExistsException) && Files.isSymbolicLink(target)) {
+				throw new InvalidInputException(WRITE_TO_LINK + target.getFileName(), e);
+			}
+			throw e;
 		}
 	}
 
@@ -488,8 +512,8 @@ final class FileOperations {
 	 * Writes a whole file. On a DLFS drive the file changes in one update, made
 	 * only once {@code content} has finished: readers see the old file or the
 	 * new one, and content that fails part-way leaves the drive as it was.
-	 * Elsewhere the file is written as the content arrives. {@code content} may
-	 * close the stream it is given.
+	 * Elsewhere the file is written as the content arrives, never through a
+	 * link at its own path. {@code content} may close the stream it is given.
 	 *
 	 * @param create whether a missing file may be created
 	 * @param replace whether an existing file may be replaced; if not, only a
@@ -503,7 +527,7 @@ final class FileOperations {
 	static long writeFile(Path target, boolean create, boolean replace,
 			ContentWriter content) throws IOException {
 		if (!(target instanceof DLPath file)) {
-			try (OutputStream out = Files.newOutputStream(target, replace
+			try (OutputStream out = openToWrite(target, replace
 					? writeOptions(target, StandardOpenOption.TRUNCATE_EXISTING, create)
 					: createOptions(target))) {
 				return content.write(out);

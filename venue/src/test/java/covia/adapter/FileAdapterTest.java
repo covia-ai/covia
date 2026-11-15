@@ -14,6 +14,7 @@ import java.util.Comparator;
 import java.util.stream.Stream;
 
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -691,6 +692,34 @@ public class FileAdapterTest {
 		} finally {
 			Files.deleteIfExists(link);
 			Files.deleteIfExists(outside);
+		}
+	}
+
+	@Test
+	public void testWritesDoNotFollowALink() throws IOException {
+		// A link inside the root, at the path a write names
+		Path real = Files.writeString(workspace.resolve("link-target.txt"), "kept");
+		Path alias = workspace.resolve("link-alias.txt");
+		try {
+			link(alias, real);
+			for (String op : new String[] {"v/ops/file/write", "v/ops/file/append"}) {
+				Job job = runRaw(op, Maps.of("root", "work", "path", "link-alias.txt", "content", "x"));
+				assertEquals(Status.FAILED, job.getStatus(), op);
+				assertTrue(job.getErrorMessage().contains(FileOperations.WRITE_TO_LINK), job.getErrorMessage());
+			}
+			assertEquals("kept", Files.readString(real));
+		} finally {
+			Files.deleteIfExists(alias);
+			Files.deleteIfExists(real);
+		}
+	}
+
+	/** Makes a symbolic link, or skips the test where the platform will not. */
+	static void link(Path link, Path target) throws IOException {
+		try {
+			Files.createSymbolicLink(link, target);
+		} catch (IOException | UnsupportedOperationException e) {
+			Assumptions.abort("Symbolic links are not available here: " + e.getMessage());
 		}
 	}
 

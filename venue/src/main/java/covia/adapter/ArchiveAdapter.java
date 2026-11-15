@@ -255,7 +255,7 @@ public class ArchiveAdapter extends AAdapter {
 		// Entries go inside destDir, which the write is authorised over
 		if (dest.mayCreate()) Files.createDirectories(destDir);
 		else if (!Files.isDirectory(destDir)) throw new java.nio.file.NotDirectoryException(destDir.toString());
-		Path destReal = destDir.toRealPath();
+		String destLabel = (destPath == null) ? destRoot.toString() : destRoot + "/" + destPath;
 
 		long entries = 0;
 		long totalBytes = 0;
@@ -268,12 +268,9 @@ public class ArchiveAdapter extends AAdapter {
 				if (++entries > MAX_ENTRIES) {
 					throw new InvalidInputException("Archive exceeds the entry cap (" + MAX_ENTRIES + ")");
 				}
-				// Zip-slip: resolve the entry inside the destination and verify it
-				// cannot escape (normalize collapses any '..'), before touching disk.
-				Path target = destReal.resolve(ze.getName()).normalize();
-				if (!target.startsWith(destReal)) {
-					throw new InvalidInputException("Archive entry escapes destination: " + ze.getName());
-				}
+				// Each entry is checked as a write to its path is, links followed,
+				// before anything is written: it must stay inside the destination
+				Path target = FileOperations.resolve(destDir, ze.getName(), destLabel, false);
 				if (ze.isDirectory()) {
 					Files.createDirectories(target);
 					continue;
@@ -286,7 +283,7 @@ public class ArchiveAdapter extends AAdapter {
 						os -> copyCapped(is, os, remaining));
 				}
 				if (files.count() < MAX_LISTED) {
-					files = files.conj(Strings.create(destReal.relativize(target).toString().replace('\\', '/')));
+					files = files.conj(Strings.create(destDir.relativize(target).toString().replace('\\', '/')));
 				}
 			}
 		}

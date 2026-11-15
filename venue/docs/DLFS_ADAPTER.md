@@ -123,6 +123,12 @@ Reads never create a drive.
 The File adapter supports operator-configured host, temporary, and DLFS-backed
 roots. Host/temp targets use `file://<root>/<path>` capabilities.
 
+A host or temporary root confines every write to what is really inside it. A
+path is followed through any links and refused if it leads outside the root,
+and a write never follows a link at the file's own path: writing to a link is
+refused as bad input. Every route that writes into a root applies both checks,
+`archive:extract` included, for each file it writes.
+
 DLFS-backed configured roots are aliases and optional subtree jails, not a
 second authority namespace. Their capabilities always name the underlying
 canonical DLFS resource. A `file://alias/...` grant cannot authorize DLFS data.

@@ -204,6 +204,45 @@ public class ArchiveAdapterTest {
 	}
 
 	@Test
+	public void testExtractStaysInsideItsRootThroughALinkedFolder() throws IOException {
+		// A folder in the destination that is a link to somewhere outside the root
+		Path outside = Files.createTempDirectory("archive-outside-");
+		try {
+			Path dest = Files.createDirectories(workspace.resolve("linked-folder"));
+			FileAdapterTest.link(dest.resolve("data"), outside);
+			Map<String, byte[]> m = new LinkedHashMap<>();
+			m.put("data/x.txt", "x".getBytes(StandardCharsets.UTF_8));
+
+			Job job = runRaw("v/ops/archive/extract", Maps.of(
+				"bytes", Base64.getEncoder().encodeToString(makeZip(m)),
+				"destRoot", "work", "destPath", "linked-folder"));
+			assertEquals(Status.FAILED, job.getStatus());
+			assertFalse(job.getErrorMessage().isBlank());
+			assertFalse(Files.exists(outside.resolve("x.txt")), "nothing is written outside the root");
+		} finally {
+			Files.deleteIfExists(outside.resolve("x.txt"));
+			Files.deleteIfExists(outside);
+		}
+	}
+
+	@Test
+	public void testExtractDoesNotWriteThroughALink() throws IOException {
+		// A link inside the root, at the path of a file the archive holds
+		Path dest = Files.createDirectories(workspace.resolve("linked-file"));
+		Path real = Files.writeString(dest.resolve("real.txt"), "kept");
+		FileAdapterTest.link(dest.resolve("alias.txt"), real);
+		Map<String, byte[]> m = new LinkedHashMap<>();
+		m.put("alias.txt", "replaced".getBytes(StandardCharsets.UTF_8));
+
+		Job job = runRaw("v/ops/archive/extract", Maps.of(
+			"bytes", Base64.getEncoder().encodeToString(makeZip(m)),
+			"destRoot", "work", "destPath", "linked-file"));
+		assertEquals(Status.FAILED, job.getStatus());
+		assertTrue(job.getErrorMessage().contains(FileOperations.WRITE_TO_LINK), job.getErrorMessage());
+		assertEquals("kept", Files.readString(real));
+	}
+
+	@Test
 	public void testMissingSourceFailsAndCreatesNothing() {
 		Job job = runRaw("v/ops/archive/list", Maps.of("root", "work", "path", "does-not-exist.zip"));
 		assertEquals(Status.FAILED, job.getStatus(), "missing archive must fail");
