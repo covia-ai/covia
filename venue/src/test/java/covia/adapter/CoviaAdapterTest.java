@@ -200,8 +200,9 @@ public class CoviaAdapterTest {
 		Job chat = engine.jobs().invokeOperation("v/ops/agent/chat",
 			Maps.of(Fields.AGENT_ID, "sess-agent", Fields.MESSAGE, Strings.create("hi")),
 			ALICE);
-		AString sid = RT.ensureString(RT.getIn(chat.awaitResult(5000), Fields.SESSION_ID));
-		assertNotNull(sid, "chat should return a sessionId");
+		Blob session = (Blob) RT.getIn(chat.awaitResult(5000), Fields.SESSION_ID);
+		assertNotNull(session, "chat should return a sessionId");
+		String sid = session.toHexString();
 
 		// Whole session record by its hex key (the failing case).
 		Job whole = engine.jobs().invokeOperation("v/ops/covia/read",
@@ -219,7 +220,7 @@ public class CoviaAdapterTest {
 		ACell list = engine.jobs().invokeOperation("v/ops/covia/list",
 			Maps.of(Fields.PATH, "g/sess-agent/sessions"), ALICE).awaitResult(5000);
 		assertEquals(CVMLong.ONE, RT.getIn(list, "count"));
-		assertTrue(String.valueOf(RT.getIn(list, "keys")).contains(sid.toString()), String.valueOf(list));
+		assertTrue(String.valueOf(RT.getIn(list, "keys")).contains(sid), String.valueOf(list));
 	}
 
 	// ========== covia:read — universal resolution forms ==========

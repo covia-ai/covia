@@ -770,7 +770,7 @@ public class LoadsTest {
 				Fields.LOADS, Maps.of(Strings.create("v/skills/data/lattice"),
 					Maps.of(Strings.create("skill"), CVMBool.TRUE, K_BUDGET, CVMLong.create(2000)))),
 			ctx).awaitResult(15000);
-		AString sessionId = RT.ensureString(RT.getIn(chat, "sessionId"));
+		ACell sessionId = RT.getIn(chat, "sessionId");
 		assertNotNull(sessionId, chat.toString());
 
 		ACell inspected = engine.jobs().invokeOperation("v/ops/agent/context",

@@ -14,10 +14,13 @@ import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Blob;
 import convex.core.data.Index;
+import convex.core.data.Strings;
+import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.lattice.Covia;
 import covia.lattice.Namespace;
 import covia.venue.Agent;
+import covia.venue.JobManager;
 import covia.venue.Task;
 
 /**
@@ -37,6 +40,10 @@ import covia.venue.Task;
  *       turns and compacted segments of its frames.</li>
  * </ul>
  *
+ * <p>In each job record ({@code j/}), a mirror's {@code mirrorOf}, and the
+ * {@code sessionId} of a job the agent adapter ran. A finished job's
+ * {@code output} is what its caller was given and is left as it was.</p>
+ *
  * <p>A message envelope, queued on a session or on a task, also loses the
  * {@code sessionId} and {@code taskId} it repeated: where it is queued says
  * both. What the model was shown (turn content, a timeline entry's
@@ -54,6 +61,12 @@ public final class BlobIds implements MigrationStep {
 
 	private static final AString[] FRAME_ENTRIES = {Fields.HISTORY, Agent.KEY_CONVERSATION, Fields.ITEMS};
 
+	/** The adapter a job record names when the agent adapter ran it. */
+	static final AString AGENT_ADAPTER = Strings.intern("agent");
+
+	/** On a mirror job's record, the call it follows. */
+	static final AString MIRROR_OF = JobManager.MIRROR_OF;
+
 	@Override
 	public ACell apply(ACell venue) {
 		if (!(venue instanceof AMap<?, ?>)) return venue;
@@ -63,8 +76,19 @@ public final class BlobIds implements MigrationStep {
 
 	/** One user's state with the ids it stores as Blobs; the same cell when nothing changes. */
 	public static ACell userState(ACell state) {
-		return convertAt(state, Namespace.G, agents -> (agents instanceof AMap<?, ?> byId)
+		ACell result = convertAt(state, Namespace.G, agents -> (agents instanceof AMap<?, ?> byId)
 			? mapValues(byId, BlobIds::agent) : agents);
+		return convertAt(result, Namespace.J, index(BlobIds::job));
+	}
+
+	/**
+	 * A job record: the call a mirror follows, and the session of an agent
+	 * job. Another adapter's job may hold another system's session id under
+	 * the same name, as it was given, so only the agent adapter's is an id.
+	 */
+	static ACell job(ACell record) {
+		ACell result = ids(record, MIRROR_OF);
+		return AGENT_ADAPTER.equals(RT.getIn(record, Fields.ADAPTER)) ? ids(result, Fields.SESSION_ID) : result;
 	}
 
 	static ACell agent(ACell agent) {

@@ -1257,7 +1257,7 @@ public class JobManager {
 			Fields.STATUS, Status.STARTED,
 			Fields.CREATED, CVMLong.create(ts),
 			Fields.UPDATED, CVMLong.create(ts),
-			MIRROR_OF, Strings.create(call.getID().toHexString()));
+			MIRROR_OF, call.getID());
 		for (AString field : MIRRORED_FIELDS) {
 			ACell value = data.get(field);
 			if (value != null) status = status.assoc(field, value);

@@ -37,6 +37,10 @@ class BlobIdsTest {
 	private static final Blob CALL = Blob.fromHex("03".repeat(16));
 	private static final Blob ASK = Blob.fromHex("04".repeat(16));
 	private static final Blob COMPACTION = Blob.fromHex("05".repeat(16));
+	private static final Blob MIRROR = Blob.fromHex("06".repeat(16));
+	private static final Blob REMOTE = Blob.fromHex("07".repeat(16));
+	/** A remote agent's own session id, as its venue gave it. */
+	private static final AString REMOTE_SESSION = Strings.create("ctx-given-elsewhere");
 	private static final AString CONTINUATION_IDS = Strings.create("continuationIds");
 
 	private static AString hex(Blob id) {
@@ -80,7 +84,16 @@ class BlobIdsTest {
 				.assoc(TASK, Maps.of(Fields.ID, TASK, Fields.STATUS, "COMPLETE", Fields.SESSION_ID, hex(SESSION))))
 			.assoc(Agent.KEY_TIMELINE, Vectors.of(timelineEntry))
 			.assoc(Agent.KEY_SESSIONS, Index.<Blob, ACell>none().assoc(SESSION, session)));
+		alice.jobs().put(TASK, Maps.of(Fields.ID, TASK, Fields.ADAPTER, "agent", Fields.SESSION_ID, hex(SESSION)));
+		alice.jobs().put(CHAT, Maps.of(Fields.ID, CHAT, Fields.ADAPTER, "agent", Fields.SESSION_ID, hex(SESSION),
+			Fields.OUTPUT, Maps.of(Fields.SESSION_ID, hex(SESSION), Fields.RESPONSE, "hello")));
+		alice.jobs().put(MIRROR, Maps.of(Fields.ID, MIRROR, Fields.ADAPTER, "agent", BlobIds.MIRROR_OF, hex(CALL)));
+		alice.jobs().put(REMOTE, Maps.of(Fields.ID, REMOTE, Fields.ADAPTER, "remoteagent", Fields.SESSION_ID, REMOTE_SESSION));
 		return venue.get();
+	}
+
+	private static AMap<AString, ACell> job(ACell value, Blob id) {
+		return VenueState.create(AKeyPair.generate()).rebind(Cursors.root(value)).users().user(ALICE).jobs().getRecord(id);
 	}
 
 	private static Agent worker(ACell value) {
@@ -128,6 +141,17 @@ class BlobIdsTest {
 		assertEquals(CHAT, RT.getIn(entry, Fields.MESSAGES, 0, Fields.JOB_ID));
 		assertEquals(Index.of(TASK, Maps.of(Fields.STATUS, "COMPLETE")), RT.getIn(entry, Fields.TASK_RESULTS),
 			"task results are keyed by task");
+	}
+
+	@Test void aJobRecordNamesItsAgentSessionAndMirroredCallAsBlobs() {
+		ACell migrated = STEP.apply(legacy());
+		assertEquals(SESSION, job(migrated, TASK).get(Fields.SESSION_ID), "a request names its session");
+		assertEquals(SESSION, job(migrated, CHAT).get(Fields.SESSION_ID), "a chat names its session");
+		assertEquals(Maps.of(Fields.SESSION_ID, hex(SESSION), Fields.RESPONSE, "hello"), job(migrated, CHAT).get(Fields.OUTPUT),
+			"a finished job's result is what its caller was given");
+		assertEquals(CALL, job(migrated, MIRROR).get(BlobIds.MIRROR_OF), "a mirror names its call");
+		assertEquals(REMOTE_SESSION, job(migrated, REMOTE).get(Fields.SESSION_ID),
+			"another adapter's session id is another system's, kept as given");
 	}
 
 	@Test void migratingAgainChangesNothing() {

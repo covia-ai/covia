@@ -692,11 +692,11 @@ public class LLMAgentAdapterTest {
 		ACell chatResult = engine.jobs().invokeOperation("v/ops/agent/chat", Maps.of(
 			Fields.AGENT_ID, "issue-334-persist-agent",
 			Fields.MESSAGE, "issue-334-read"), ctx).awaitResult(10000);
-		AString sid = RT.ensureString(RT.getIn(chatResult, Fields.SESSION_ID));
+		Blob sid = (Blob) RT.getIn(chatResult, Fields.SESSION_ID);
 		assertNotNull(sid);
 		Agent persistedAgent = engine.getVenueState().users().user(ALICE_DID)
 			.agent("issue-334-persist-agent");
-		AMap<AString, ACell> session = persistedAgent.session(Blob.fromHex(sid.toString())).getRecord();
+		AMap<AString, ACell> session = persistedAgent.session(sid).getRecord();
 		AVector<ACell> frames = RT.ensureVector(RT.getIn(session, Fields.FRAMES));
 		AVector<ACell> conversation = GoalTreeContext.activeConversation(RT.ensureMap(frames.get(0)));
 		ACell persistedToolTurn = conversation.get(2);
@@ -720,9 +720,9 @@ public class LLMAgentAdapterTest {
 			Fields.MESSAGE, "So I was thinking we could"), ctx).awaitResult(10000);
 
 		assertEquals("", RT.getIn(chatResult, Fields.RESPONSE).toString(), "a turn that said nothing, not a failure");
-		AString sid = RT.ensureString(RT.getIn(chatResult, Fields.SESSION_ID));
+		Blob sid = (Blob) RT.getIn(chatResult, Fields.SESSION_ID);
 		AMap<AString, ACell> session = engine.getVenueState().users().user(ALICE_DID)
-			.agent("no-reply-agent").session(Blob.fromHex(sid.toString())).getRecord();
+			.agent("no-reply-agent").session(sid).getRecord();
 		AVector<ACell> conversation = GoalTreeContext.activeConversation(
 			RT.ensureMap(RT.ensureVector(RT.getIn(session, Fields.FRAMES)).get(0)));
 		ACell last = conversation.get(conversation.count() - 1);
@@ -780,7 +780,7 @@ public class LLMAgentAdapterTest {
 			TestAdapter.CAPTURED_LLM_INPUT.remove(agentId);
 			ACell chat = engine.jobs().invokeOperation("v/ops/agent/chat",
 				Maps.of(Fields.AGENT_ID, agentId, Fields.MESSAGE, "hello"), alice).awaitResult(15000);
-			String line = "Session: " + RT.getIn(chat, Fields.SESSION_ID);
+			String line = "Session: " + ((Blob) RT.getIn(chat, Fields.SESSION_ID)).toHexString();
 
 			assertTrue(String.valueOf(TestAdapter.CAPTURED_LLM_INPUT.get(agentId)).contains(line),
 				runtime + ": a live cycle is told its session");
@@ -1806,7 +1806,7 @@ public class LLMAgentAdapterTest {
 				Fields.MESSAGE, Strings.create("first message")),
 			RequestContext.of(ALICE_DID));
 		ACell r1 = chat1.awaitResult(10000);
-		AString sid = RT.ensureString(RT.getIn(r1, Fields.SESSION_ID));
+		Blob sid = (Blob) RT.getIn(r1, Fields.SESSION_ID);
 		assertNotNull(sid);
 
 		User user = engine.getVenueState().users().user(ALICE_DID);
@@ -1823,7 +1823,7 @@ public class LLMAgentAdapterTest {
 		assertEquals(t1, RT.getIn(chat1.getData(), Fields.TOKENS),
 			"chat job record must carry the cycle's tokens");
 
-		Blob sidBlob = Blob.fromHex(sid.toString());
+		Blob sidBlob = sid;
 		long sessTotal1 = RT.ensureLong(RT.getIn(
 			agent.session(sidBlob).getRecord(), "meta", "tokens", "total")).longValue();
 		assertEquals(total1, sessTotal1, "session meta mirrors the first cycle");

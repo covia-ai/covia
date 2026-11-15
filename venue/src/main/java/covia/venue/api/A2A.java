@@ -45,10 +45,12 @@ import covia.exception.FaultException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
 import covia.grid.Attribution;
+import covia.grid.HexId;
 import covia.grid.Job;
 import covia.grid.Venue;
 import covia.venue.Agent;
 import covia.venue.Engine;
+import covia.venue.Ids;
 import covia.venue.RequestContext;
 import covia.venue.User;
 import covia.venue.server.AuthMiddleware;
@@ -444,13 +446,13 @@ public class A2A extends ACoviaAPI {
 		if (task == null) return;
 		Blob taskId = task.id();
 		AMap<AString, ACell> taskData = task.data();
-		AString taskSession = RT.ensureString(taskData.get(Fields.SESSION_ID));
+		Blob taskSession = Ids.stored(taskData.get(Fields.SESSION_ID));
 		if (taskSession == null) {
 			writeError(ctx, id, A2AErrorCodes.TASK_NOT_FOUND, NO_AGENT_SESSION);
 			return;
 		}
 		if (incoming.contextId() != null
-				&& !incoming.contextId().equals(taskSession.toString())) {
+				&& !java.util.Objects.equals(taskSession, HexId.parse(Strings.create(incoming.contextId())))) {
 			writeError(ctx, id, A2AErrorCodes.INVALID_PARAMS, CONTEXT_MISMATCH);
 			return;
 		}
@@ -463,7 +465,7 @@ public class A2A extends ACoviaAPI {
 		AMap<AString, ACell> record = A2ACodec.toMessageRecord(incoming, false);
 		ACell input = Maps.of(
 			Fields.AGENT_ID, Strings.create(ref.gridAddress()),
-			Fields.TASK_ID, Strings.create(taskId.toHexString()),
+			Fields.TASK_ID, taskId,
 			Fields.SESSION_ID, taskSession,
 			Fields.MESSAGE, record);
 		try {

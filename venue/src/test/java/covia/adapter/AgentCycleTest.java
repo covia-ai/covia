@@ -556,18 +556,18 @@ public class AgentCycleTest {
 	}
 
 	@Test
-	public void aSessionNamedWithThePrefixIsHeldAsBareHex(TestInfo info) throws Exception {
+	public void aSessionNamedWithThePrefixIsTheSameSession(TestInfo info) throws Exception {
 		RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));
 		stepAgent(owner, "bare-session");
 		Job first = chat(owner, "bare-session", null, "reply");
 		first.awaitResult(10_000);
-		String bare = sessionOf(first).toHexString();
+		Blob session = sessionOf(first);
 
 		Job second = engine.jobs().invokeOperation("v/ops/agent/chat", Maps.of(Fields.AGENT_ID, "bare-session",
-			Fields.MESSAGE, Strings.create("reply"), Fields.SESSION_ID, Strings.create("0x" + bare)), owner);
+			Fields.MESSAGE, Strings.create("reply"), Fields.SESSION_ID, Strings.create("0x" + session.toHexString())), owner);
 		second.awaitResult(10_000);
 
-		assertEquals(Strings.create(bare), second.getData().get(Fields.SESSION_ID));
+		assertEquals(session, second.getData().get(Fields.SESSION_ID));
 	}
 
 	@Test

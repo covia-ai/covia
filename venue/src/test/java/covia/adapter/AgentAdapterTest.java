@@ -41,6 +41,7 @@ import covia.venue.Admission;
 import covia.venue.Agent;
 import covia.venue.AgentWatch;
 import covia.venue.Engine;
+import covia.venue.Ids;
 import covia.venue.RequestContext;
 import covia.venue.Task;
 import covia.venue.TestEngine;
@@ -1254,8 +1255,8 @@ public class AgentAdapterTest {
 			ACell first = engine.jobs().invokeOperation("v/ops/agent/chat",
 				Maps.of(Fields.AGENT_ID, agentId, Fields.MESSAGE, "first"), alice)
 				.awaitResult(5000);
-			AString sidHex = RT.ensureString(RT.getIn(first, Fields.SESSION_ID));
-			Blob sid = Blob.fromHex(sidHex.toString());
+			Blob sidHex = Ids.stored(RT.getIn(first, Fields.SESSION_ID));
+			Blob sid = sidHex;
 			Agent agent = engine.getVenueState().users().user(ALICE_DID).agent(agentId);
 			assertNull(RT.getIn(agent.session(sid).getRecord(), Fields.FRAMES, CVMLong.ZERO,
 				"renderedContext"), runtime + " persisted an unused cache projection");
@@ -1291,8 +1292,8 @@ public class AgentAdapterTest {
 			ACell first = engine.jobs().invokeOperation("v/ops/agent/chat",
 				Maps.of(Fields.AGENT_ID, agentId, Fields.MESSAGE, "cached"), alice)
 				.awaitResult(5000);
-			AString sidHex = RT.ensureString(RT.getIn(first, Fields.SESSION_ID));
-			Blob sid = Blob.fromHex(sidHex.toString());
+			Blob sidHex = Ids.stored(RT.getIn(first, Fields.SESSION_ID));
+			Blob sid = sidHex;
 			Agent agent = engine.getVenueState().users().user(ALICE_DID).agent(agentId);
 			assertNotNull(RT.getIn(agent.session(sid).getRecord(), Fields.FRAMES, CVMLong.ZERO,
 				"renderedContext"), runtime + " did not use the default cached policy");
@@ -1603,7 +1604,7 @@ public class AgentAdapterTest {
 
 		// The final assistant turn carries its own inference's usage, not the cycle total.
 		AMap<AString, ACell> session = agent.session(
-			Blob.fromHex(RT.getIn(chat, Fields.SESSION_ID).toString())).getRecord();
+			(Blob) RT.getIn(chat, Fields.SESSION_ID)).getRecord();
 		AVector<ACell> frames = RT.ensureVector(RT.getIn(session, Fields.FRAMES));
 		AVector<ACell> conversation = covia.adapter.agent.GoalTreeContext.activeConversation(RT.ensureMap(frames.get(0)));
 		ACell last = conversation.get(conversation.count() - 1);
@@ -2387,7 +2388,7 @@ public class AgentAdapterTest {
 		ACell result = chatJob.awaitResult(5000);
 		assertNotNull(result, "Chat must complete with a response");
 		assertEquals(Strings.create("chat-agent"), RT.getIn(result, Fields.AGENT_ID));
-		AString sidHex = RT.ensureString(RT.getIn(result, Fields.SESSION_ID));
+		Blob sidHex = Ids.stored(RT.getIn(result, Fields.SESSION_ID));
 		assertNotNull(sidHex, "Chat response must include the minted sessionId");
 		assertNotNull(RT.getIn(result, Fields.RESPONSE), "Chat response must include the agent's response");
 
@@ -2435,7 +2436,7 @@ public class AgentAdapterTest {
 			Maps.of(Fields.AGENT_ID, "chat-cont-agent", Fields.MESSAGE, Strings.create("first")),
 			RequestContext.of(ALICE_DID));
 		ACell firstResult = first.awaitResult(5000);
-		AString sidHex = RT.ensureString(RT.getIn(firstResult, Fields.SESSION_ID));
+		Blob sidHex = Ids.stored(RT.getIn(firstResult, Fields.SESSION_ID));
 		assertNotNull(sidHex);
 
 		// Second chat — echo session id
@@ -2499,7 +2500,7 @@ public class AgentAdapterTest {
 		ACell firstResult = first.awaitResult(10000);
 		assertEquals(Status.COMPLETE, first.getStatus(), String.valueOf(first.getErrorMessage()));
 		assertNotNull(RT.getIn(firstResult, Fields.RESPONSE));
-		AString sidHex = RT.ensureString(RT.getIn(firstResult, Fields.SESSION_ID));
+		Blob sidHex = Ids.stored(RT.getIn(firstResult, Fields.SESSION_ID));
 		assertNotNull(sidHex, "chat returns its session id");
 
 		// Two more on the same session, back to back — neither is rejected.
@@ -2569,12 +2570,12 @@ public class AgentAdapterTest {
 			Maps.of(Fields.AGENT_ID, "hist-resp-agent", Fields.MESSAGE, Strings.create("hello")),
 			RequestContext.of(ALICE_DID));
 		ACell result = chatJob.awaitResult(5000);
-		AString sidHex = RT.ensureString(RT.getIn(result, Fields.SESSION_ID));
+		Blob sidHex = Ids.stored(RT.getIn(result, Fields.SESSION_ID));
 		assertNotNull(sidHex);
 
 		User user = engine.getVenueState().users().user(ALICE_DID);
 		Agent agent = user.agent("hist-resp-agent");
-		AMap<AString, ACell> session = agent.session(Blob.fromHex(sidHex.toString())).getRecord();
+		AMap<AString, ACell> session = agent.session(sidHex).getRecord();
 		assertNotNull(session, "Session record must exist");
 
 		AVector<ACell> frames = (AVector<ACell>) session.get(Agent.KEY_FRAMES);
@@ -2621,11 +2622,11 @@ public class AgentAdapterTest {
 			Maps.of(Fields.AGENT_ID, "tool-history-agent",
 				Fields.MESSAGE, "audit this tool"),
 			RequestContext.of(ALICE_DID));
-		AString sid = RT.ensureString(RT.getIn(chat.awaitResult(5000), Fields.SESSION_ID));
+		Blob sid = Ids.stored(RT.getIn(chat.awaitResult(5000), Fields.SESSION_ID));
 
 		Agent agent = engine.getVenueState().users().user(ALICE_DID)
 			.agent("tool-history-agent");
-		AMap<AString, ACell> session = agent.session(Blob.fromHex(sid.toString())).getRecord();
+		AMap<AString, ACell> session = agent.session(sid).getRecord();
 		AVector<ACell> frames = RT.ensureVector(session.get(Fields.FRAMES));
 		AVector<ACell> conversation = GoalTreeContext.activeConversation(RT.ensureMap(frames.get(0)));
 		assertEquals(4, conversation.count(),
@@ -2654,10 +2655,10 @@ public class AgentAdapterTest {
 		Job chatJob = engine.jobs().invokeOperation("v/ops/agent/chat",
 			Maps.of(Fields.AGENT_ID, "caller-agent", Fields.MESSAGE, Strings.create("hi")),
 			RequestContext.of(ALICE_DID));
-		AString sidHex = RT.ensureString(RT.getIn(chatJob.awaitResult(5000), Fields.SESSION_ID));
+		Blob sidHex = Ids.stored(RT.getIn(chatJob.awaitResult(5000), Fields.SESSION_ID));
 
 		Agent agent = engine.getVenueState().users().user(ALICE_DID).agent("caller-agent");
-		AVector<ACell> frames = (AVector<ACell>) agent.session(Blob.fromHex(sidHex.toString())).getRecord()
+		AVector<ACell> frames = (AVector<ACell>) agent.session(sidHex).getRecord()
 			.get(Agent.KEY_FRAMES);
 		AVector<ACell> history = GoalTreeContext.activeConversation(RT.ensureMap(frames.get(0)));
 
@@ -2784,7 +2785,7 @@ public class AgentAdapterTest {
 			Maps.of(Fields.AGENT_ID, "hist-multi-agent", Fields.MESSAGE, Strings.create("one")),
 			RequestContext.of(ALICE_DID));
 		ACell firstResult = first.awaitResult(5000);
-		AString sidHex = RT.ensureString(RT.getIn(firstResult, Fields.SESSION_ID));
+		Blob sidHex = Ids.stored(RT.getIn(firstResult, Fields.SESSION_ID));
 
 		Job second = engine.jobs().invokeOperation(
 			"v/ops/agent/chat",
@@ -2797,7 +2798,7 @@ public class AgentAdapterTest {
 
 		User user = engine.getVenueState().users().user(ALICE_DID);
 		Agent agent = user.agent("hist-multi-agent");
-		AMap<AString, ACell> session = agent.session(Blob.fromHex(sidHex.toString())).getRecord();
+		AMap<AString, ACell> session = agent.session(sidHex).getRecord();
 		AVector<ACell> frames = (AVector<ACell>) session.get(Agent.KEY_FRAMES);
 		AMap<AString, ACell> rootFrame = (AMap<AString, ACell>) frames.get(0);
 		AVector<ACell> history = GoalTreeContext.activeConversation(rootFrame);
@@ -2870,11 +2871,11 @@ public class AgentAdapterTest {
 			Maps.of(Fields.AGENT_ID, "frames-write-agent", Fields.MESSAGE, Strings.create("hi")),
 			RequestContext.of(ALICE_DID));
 		ACell result = chatJob.awaitResult(5000);
-		AString sidHex = RT.ensureString(RT.getIn(result, Fields.SESSION_ID));
+		Blob sidHex = Ids.stored(RT.getIn(result, Fields.SESSION_ID));
 
 		User user = engine.getVenueState().users().user(ALICE_DID);
 		Agent agent = user.agent("frames-write-agent");
-		AMap<AString, ACell> session = agent.session(Blob.fromHex(sidHex.toString())).getRecord();
+		AMap<AString, ACell> session = agent.session(sidHex).getRecord();
 
 		AVector<ACell> frames = (AVector<ACell>) session.get(Agent.KEY_FRAMES);
 		assertEquals(1, frames.count(), "No subgoal — stack depth is 1");
@@ -2906,7 +2907,7 @@ public class AgentAdapterTest {
 			"v/ops/agent/chat",
 			Maps.of(Fields.AGENT_ID, "frames-multi-agent", Fields.MESSAGE, Strings.create("one")),
 			RequestContext.of(ALICE_DID));
-		AString sidHex = RT.ensureString(RT.getIn(first.awaitResult(5000), Fields.SESSION_ID));
+		Blob sidHex = Ids.stored(RT.getIn(first.awaitResult(5000), Fields.SESSION_ID));
 
 		Job second = engine.jobs().invokeOperation(
 			"v/ops/agent/chat",
@@ -2919,7 +2920,7 @@ public class AgentAdapterTest {
 
 		User user = engine.getVenueState().users().user(ALICE_DID);
 		Agent agent = user.agent("frames-multi-agent");
-		AMap<AString, ACell> session = agent.session(Blob.fromHex(sidHex.toString())).getRecord();
+		AMap<AString, ACell> session = agent.session(sidHex).getRecord();
 
 		AVector<ACell> frames = (AVector<ACell>) session.get(Agent.KEY_FRAMES);
 		AMap<AString, ACell> root = (AMap<AString, ACell>) frames.get(0);
@@ -2999,8 +3000,8 @@ public class AgentAdapterTest {
 				Fields.MESSAGE, Strings.create("hi")),
 			RequestContext.of(ALICE_DID));
 		ACell result = chatJob.awaitResult(5000);
-		AString sidHex = RT.ensureString(RT.getIn(result, Fields.SESSION_ID));
-		Blob sid = Blob.fromHex(sidHex.toString());
+		Blob sidHex = Ids.stored(RT.getIn(result, Fields.SESSION_ID));
+		Blob sid = sidHex;
 
 		assertEquals(Agent.SLEEPING, awaitFinished(agent));
 
@@ -3039,8 +3040,8 @@ public class AgentAdapterTest {
 				Fields.MESSAGE, Strings.create("hello")),
 			RequestContext.of(ALICE_DID));
 		ACell result = chatJob.awaitResult(5000);
-		AString sidHex = RT.ensureString(RT.getIn(result, Fields.SESSION_ID));
-		Blob sid = Blob.fromHex(sidHex.toString());
+		Blob sidHex = Ids.stored(RT.getIn(result, Fields.SESSION_ID));
+		Blob sid = sidHex;
 
 		assertEquals(Agent.SLEEPING, awaitFinished(agent));
 
@@ -4003,7 +4004,7 @@ public class AgentAdapterTest {
 				Fields.MESSAGE, Strings.create("issue-334-read")),
 			RequestContext.of(ALICE_DID));
 		ACell chatResult = chatJob.awaitResult(10000);
-		AString sidHex = RT.ensureString(RT.getIn(chatResult, Fields.SESSION_ID));
+		Blob sidHex = Ids.stored(RT.getIn(chatResult, Fields.SESSION_ID));
 		assertNotNull(sidHex, "chat result must carry the sessionId");
 
 		Agent agent = engine.getVenueState().users().user(ALICE_DID).agent("tool-fail-agent");
@@ -4018,7 +4019,7 @@ public class AgentAdapterTest {
 			"the recorded failure must carry the denial: " + denied);
 		// 2. Session conversation contains exactly one tool failure turn: the
 		// provider-shaped result needed to keep the conversation valid.
-		AMap<AString, ACell> session = agent.session(Blob.fromHex(sidHex.toString())).getRecord();
+		AMap<AString, ACell> session = agent.session(sidHex).getRecord();
 		AVector<ACell> frames = RT.ensureVector(RT.getIn(session, Fields.FRAMES));
 		assertNotNull(frames, "session must carry frames");
 		AVector<ACell> conversation = covia.adapter.agent.GoalTreeContext.activeConversation(RT.ensureMap(frames.get(0)));
@@ -4763,8 +4764,7 @@ public class AgentAdapterTest {
 			RequestContext.of(ALICE_DID)).get(5000, java.util.concurrent.TimeUnit.MILLISECONDS);
 
 		assertNotNull(result, "Should return a snapshot on timeout, not error");
-		AString id = RT.ensureString(RT.getIn(result, Fields.ID));
-		assertNotNull(id, "Snapshot should carry the task Job id for polling");
+		assertInstanceOf(Blob.class, RT.getIn(result, Fields.ID), "Snapshot should carry the task Job id for polling");
 		assertEquals(Strings.create("slow-helper"), RT.getIn(result, Fields.AGENT_ID));
 		assertEquals(Status.STARTED, RT.getIn(result, Fields.STATUS),
 			"Timed-out delegation should expose STARTED status for polling");
@@ -4818,8 +4818,7 @@ public class AgentAdapterTest {
 				Fields.INPUT, Maps.of("q", "x"),
 				Fields.TIMEOUT, CVMLong.create(0)),
 			RequestContext.of(ALICE_DID)).get(5000, java.util.concurrent.TimeUnit.MILLISECONDS);
-		AString taskId = RT.ensureString(RT.getIn(snap, Fields.ID));
-		assertNotNull(taskId);
+		Blob taskId = assertInstanceOf(Blob.class, RT.getIn(snap, Fields.ID));
 
 		// Poll via grid:jobResult with a short timeout — must error, not return snapshot
 		java.util.concurrent.CompletableFuture<ACell> f = engine.jobs().invokeInternal(
@@ -4857,8 +4856,7 @@ public class AgentAdapterTest {
 				Fields.INPUT, Maps.of("task", "delegate"),
 				Fields.TIMEOUT, CVMLong.create(0)),
 			RequestContext.of(ALICE_DID)).get(5000, java.util.concurrent.TimeUnit.MILLISECONDS);
-		AString taskId = RT.ensureString(RT.getIn(snap, Fields.ID));
-		assertNotNull(taskId, "Async submit returns a task id");
+		Blob taskId = assertInstanceOf(Blob.class, RT.getIn(snap, Fields.ID), "Async submit returns a task id");
 
 		// Step 2: poll via grid:jobResult with generous timeout
 		ACell result = engine.jobs().invokeInternal(
@@ -4884,15 +4882,14 @@ public class AgentAdapterTest {
 			RequestContext.of(ALICE_DID));
 		ACell result = job.awaitResult(5000);
 
-		AString sid = RT.ensureString(RT.getIn(result, Fields.SESSION_ID));
-		assertNotNull(sid, "Message response should carry a minted sessionId");
-		assertEquals(32, sid.count(), "sessionId should be 16-byte hex (32 chars)");
+		Blob sid = assertInstanceOf(Blob.class, RT.getIn(result, Fields.SESSION_ID),
+			"Message response should carry the minted session's id");
+		assertEquals(16, sid.count(), "a session id is 16 bytes");
 
 		// Session record created lazily
 		User user = engine.getVenueState().users().user(ALICE_DID);
 		Agent agent = user.agent("session-msg");
-		Blob sidBlob = Blob.fromHex(sid.toString());
-		AMap<AString, ACell> session = agent.session(sidBlob).getRecord();
+		AMap<AString, ACell> session = agent.session(sid).getRecord();
 		assertNotNull(session, "Session record should be created");
 		assertNotNull(session.get(Strings.intern("c")));
 		assertNotNull(session.get(Agent.KEY_FRAMES));
@@ -4912,7 +4909,7 @@ public class AgentAdapterTest {
 			"v/ops/agent/message",
 			Maps.of(Fields.AGENT_ID, "session-reuse", Fields.MESSAGE, "one"),
 			RequestContext.of(ALICE_DID));
-		AString sid = RT.ensureString(RT.getIn(first.awaitResult(5000), Fields.SESSION_ID));
+		Blob sid = Ids.stored(RT.getIn(first.awaitResult(5000), Fields.SESSION_ID));
 		assertNotNull(sid);
 
 		// Second call with same sid — echoed back, no new session created
@@ -4922,7 +4919,7 @@ public class AgentAdapterTest {
 				Fields.SESSION_ID, sid),
 			RequestContext.of(ALICE_DID));
 		ACell result2 = second.awaitResult(5000);
-		assertEquals(sid, RT.ensureString(RT.getIn(result2, Fields.SESSION_ID)));
+		assertEquals(sid, RT.getIn(result2, Fields.SESSION_ID));
 
 		User user = engine.getVenueState().users().user(ALICE_DID);
 		Agent agent = user.agent("session-reuse");
@@ -4999,7 +4996,7 @@ public class AgentAdapterTest {
 			RequestContext.of(ALICE_DID));
 		ACell result = job.awaitResult(5000);
 
-		AString sid = RT.ensureString(RT.getIn(result, Fields.SESSION_ID));
+		Blob sid = Ids.stored(RT.getIn(result, Fields.SESSION_ID));
 		assertNull(sid, "Trigger must not mint or return a session when none was supplied");
 
 		User user = engine.getVenueState().users().user(ALICE_DID);
@@ -6307,9 +6304,8 @@ public class AgentAdapterTest {
 		assertEquals(Agent.SLEEPING, awaitFinished(agent));
 
 		// Session id: the chat response carries it back.
-		AString sessionIdStr = (AString) RT.getIn(chatJob.getOutput(), Fields.SESSION_ID);
-		assertNotNull(sessionIdStr, "chat should return a sessionId");
-		Blob sid = Blob.parse(sessionIdStr.toString());
+		Blob sid = assertInstanceOf(Blob.class, RT.getIn(chatJob.getOutput(), Fields.SESSION_ID),
+			"chat should return a sessionId");
 
 		// Lattice: session record carries the wakeTime.
 		AMap<AString, ACell> session = agent.session(sid).getRecord();
@@ -6485,7 +6481,7 @@ public class AgentAdapterTest {
 			Maps.of(Fields.AGENT_ID, "del-agent",
 				Fields.MESSAGE, Maps.of("content", "private hello")),
 			RequestContext.of(ALICE_DID));
-		AString sidHex = RT.ensureString(RT.getIn(msg1.awaitResult(5000), Fields.SESSION_ID));
+		Blob sidHex = Ids.stored(RT.getIn(msg1.awaitResult(5000), Fields.SESSION_ID));
 		assertNotNull(sidHex, "message result should carry the sessionId");
 
 		Job msg2 = engine.jobs().invokeOperation(
@@ -6498,7 +6494,7 @@ public class AgentAdapterTest {
 
 		User user = engine.getVenueState().users().user(ALICE_DID);
 		Agent agent = user.agent("del-agent");
-		Blob sid = Blob.fromHex(sidHex.toString());
+		Blob sid = sidHex;
 		assertNotNull(agent.session(sid).getRecord(), "session should exist after messages");
 
 		Job del = engine.jobs().invokeOperation(
@@ -6619,7 +6615,7 @@ public class AgentAdapterTest {
 			Maps.of(Fields.AGENT_ID, "del-cap-agent",
 				Fields.MESSAGE, Maps.of("content", "hi")),
 			RequestContext.of(ALICE_DID));
-		AString sidHex = RT.ensureString(RT.getIn(msg.awaitResult(5000), Fields.SESSION_ID));
+		Blob sidHex = Ids.stored(RT.getIn(msg.awaitResult(5000), Fields.SESSION_ID));
 
 		RequestContext readOnly = RequestContext.of(ALICE_DID)
 			.withCaps(covia.lattice.CapabilityChecker.readOnlyScope(ALICE_DID));
@@ -6635,7 +6631,7 @@ public class AgentAdapterTest {
 		}
 		// Session survives the denied attempt
 		User user = engine.getVenueState().users().user(ALICE_DID);
-		assertNotNull(user.agent("del-cap-agent").session(Blob.fromHex(sidHex.toString())).getRecord());
+		assertNotNull(user.agent("del-cap-agent").session(sidHex).getRecord());
 	}
 
 	/**
@@ -6660,7 +6656,7 @@ public class AgentAdapterTest {
 				"v/ops/agent/message",
 				Maps.of(Fields.AGENT_ID, "cfg-agent",
 					Fields.MESSAGE, Maps.of("content", "hi")), ctx);
-			AString sidHex = RT.ensureString(RT.getIn(msg.awaitResult(5000), Fields.SESSION_ID));
+			Blob sidHex = Ids.stored(RT.getIn(msg.awaitResult(5000), Fields.SESSION_ID));
 
 			Job del = disabled.jobs().invokeOperation(
 				"v/ops/agent/delete-session",
@@ -6675,7 +6671,7 @@ public class AgentAdapterTest {
 						+ RT.getIn(del.getData(), Fields.ERROR));
 			}
 			assertNotNull(disabled.getVenueState().users().user(ALICE_DID)
-				.agent("cfg-agent").session(Blob.fromHex(sidHex.toString())).getRecord(),
+				.agent("cfg-agent").session(sidHex).getRecord(),
 				"session must survive a disabled deleteSession call");
 		} finally {
 			disabled.close();
@@ -6700,7 +6696,7 @@ public class AgentAdapterTest {
 			Maps.of(Fields.AGENT_ID, "rename-agent",
 				Fields.MESSAGE, Maps.of("content", "hello")),
 			RequestContext.of(ALICE_DID));
-		AString sidHex = RT.ensureString(RT.getIn(msg.awaitResult(5000), Fields.SESSION_ID));
+		Blob sidHex = Ids.stored(RT.getIn(msg.awaitResult(5000), Fields.SESSION_ID));
 
 		Job rename = engine.jobs().invokeOperation(
 			"v/ops/agent/rename-session",
@@ -6711,7 +6707,7 @@ public class AgentAdapterTest {
 		assertEquals(Strings.create("Planning the launch"), RT.getIn(result, Fields.TITLE));
 
 		User user = engine.getVenueState().users().user(ALICE_DID);
-		AMap<AString, ACell> session = user.agent("rename-agent").session(Blob.fromHex(sidHex.toString())).getRecord();
+		AMap<AString, ACell> session = user.agent("rename-agent").session(sidHex).getRecord();
 		assertEquals(Strings.create("Planning the launch"), RT.getIn(session, "meta", "title"));
 
 		Job clear = engine.jobs().invokeOperation(
@@ -6721,7 +6717,7 @@ public class AgentAdapterTest {
 		ACell clearResult = clear.awaitResult(5000);
 		assertNull(RT.getIn(clearResult, Fields.TITLE), "blank title should not round-trip in the result");
 
-		session = user.agent("rename-agent").session(Blob.fromHex(sidHex.toString())).getRecord();
+		session = user.agent("rename-agent").session(sidHex).getRecord();
 		assertNull(RT.getIn(session, "meta", "title"), "title should be cleared, not left blank");
 	}
 
@@ -6737,7 +6733,7 @@ public class AgentAdapterTest {
 			Maps.of(Fields.AGENT_ID, "rename-type-agent",
 				Fields.MESSAGE, Maps.of("content", "hello")),
 			RequestContext.of(ALICE_DID));
-		AString sidHex = RT.ensureString(RT.getIn(msg.awaitResult(5000), Fields.SESSION_ID));
+		Blob sidHex = Ids.stored(RT.getIn(msg.awaitResult(5000), Fields.SESSION_ID));
 
 		engine.jobs().invokeOperation(
 			"v/ops/agent/rename-session",
@@ -6756,7 +6752,7 @@ public class AgentAdapterTest {
 
 		User user = engine.getVenueState().users().user(ALICE_DID);
 		AMap<AString, ACell> session = user.agent("rename-type-agent")
-			.session(Blob.fromHex(sidHex.toString())).getRecord();
+			.session(sidHex).getRecord();
 		assertEquals(Strings.create("Keep me"), RT.getIn(session, "meta", "title"),
 			"invalid input must not clear an existing title");
 	}
@@ -6814,7 +6810,7 @@ public class AgentAdapterTest {
 			Maps.of(Fields.AGENT_ID, "rename-cap-agent",
 				Fields.MESSAGE, Maps.of("content", "hi")),
 			RequestContext.of(ALICE_DID));
-		AString sidHex = RT.ensureString(RT.getIn(msg.awaitResult(5000), Fields.SESSION_ID));
+		Blob sidHex = Ids.stored(RT.getIn(msg.awaitResult(5000), Fields.SESSION_ID));
 
 		RequestContext readOnly = RequestContext.of(ALICE_DID)
 			.withCaps(covia.lattice.CapabilityChecker.readOnlyScope(ALICE_DID));
@@ -6829,7 +6825,7 @@ public class AgentAdapterTest {
 			assertEquals(Status.FAILED, rename.getStatus());
 		}
 		User user = engine.getVenueState().users().user(ALICE_DID);
-		AMap<AString, ACell> session = user.agent("rename-cap-agent").session(Blob.fromHex(sidHex.toString())).getRecord();
+		AMap<AString, ACell> session = user.agent("rename-cap-agent").session(sidHex).getRecord();
 		assertNull(RT.getIn(session, "meta", "title"), "title must not be set by a denied attempt");
 	}
 
@@ -6846,14 +6842,14 @@ public class AgentAdapterTest {
 		ACell first = engine.jobs().invokeOperation("v/ops/agent/chat",
 			Maps.of(Fields.AGENT_ID, "compact-session-agent", Fields.MESSAGE, "first"),
 			alice).awaitResult(5000);
-		AString sidHex = RT.ensureString(RT.getIn(first, Fields.SESSION_ID));
+		Blob sidHex = Ids.stored(RT.getIn(first, Fields.SESSION_ID));
 		engine.jobs().invokeOperation("v/ops/agent/chat",
 			Maps.of(Fields.AGENT_ID, "compact-session-agent", Fields.SESSION_ID, sidHex,
 				Fields.MESSAGE, "second"), alice).awaitResult(5000);
 
 		Agent agent = engine.getVenueState().users().user(ALICE_DID)
 			.agent("compact-session-agent");
-		Blob sid = Blob.fromHex(sidHex.toString());
+		Blob sid = sidHex;
 		AMap<AString, ACell> beforeRoot = RT.ensureMap(
 			RT.getIn(agent.session(sid).getRecord(), Fields.FRAMES, CVMLong.ZERO));
 		AVector<ACell> before = GoalTreeContext.activeConversation(beforeRoot);
@@ -6907,8 +6903,8 @@ public class AgentAdapterTest {
 		ACell first = engine.jobs().invokeOperation("v/ops/agent/chat",
 			Maps.of(Fields.AGENT_ID, "reload-context-agent", Fields.MESSAGE, "first"),
 			alice).awaitResult(5000);
-		AString sidHex = RT.ensureString(RT.getIn(first, Fields.SESSION_ID));
-		Blob sid = Blob.fromHex(sidHex.toString());
+		Blob sidHex = Ids.stored(RT.getIn(first, Fields.SESSION_ID));
+		Blob sid = sidHex;
 		Agent agent = engine.getVenueState().users().user(ALICE_DID)
 			.agent("reload-context-agent");
 		AMap<AString, ACell> beforeRoot = RT.ensureMap(
@@ -6999,8 +6995,8 @@ public class AgentAdapterTest {
 				Fields.LOADS, loads),
 			RequestContext.of(ALICE_DID));
 		ACell result = chat.awaitResult(5000);
-		AString sidHex = RT.ensureString(RT.getIn(result, Fields.SESSION_ID));
-		Blob sid = Blob.fromHex(sidHex.toString());
+		Blob sidHex = Ids.stored(RT.getIn(result, Fields.SESSION_ID));
+		Blob sid = sidHex;
 
 		User u = engine.getVenueState().users().user(ALICE_DID);
 		ACell sessionLoads = RT.getIn(u.agent("mint-loads-agent").session(sid).getRecord(),
@@ -7037,15 +7033,13 @@ public class AgentAdapterTest {
 			Maps.of(Fields.AGENT_ID, "iso-agent",
 				Fields.MESSAGE, Strings.create("A"), Fields.LOADS, loads),
 			RequestContext.of(ALICE_DID));
-		Blob sidA = Blob.fromHex(RT.ensureString(
-			RT.getIn(chatA.awaitResult(5000), Fields.SESSION_ID)).toString());
+		Blob sidA = (Blob) RT.getIn(chatA.awaitResult(5000), Fields.SESSION_ID);
 
 		// Session B: fresh, no loads.
 		Job chatB = engine.jobs().invokeOperation("v/ops/agent/chat",
 			Maps.of(Fields.AGENT_ID, "iso-agent", Fields.MESSAGE, Strings.create("B")),
 			RequestContext.of(ALICE_DID));
-		Blob sidB = Blob.fromHex(RT.ensureString(
-			RT.getIn(chatB.awaitResult(5000), Fields.SESSION_ID)).toString());
+		Blob sidB = (Blob) RT.getIn(chatB.awaitResult(5000), Fields.SESSION_ID);
 
 		Agent agent = engine.getVenueState().users().user(ALICE_DID).agent("iso-agent");
 		ACell loadsA = RT.getIn(agent.session(sidA).getRecord(),
@@ -7177,7 +7171,7 @@ public class AgentAdapterTest {
 			Maps.of(Fields.AGENT_ID, agentId), owner).awaitResult(5000);
 		AVector<ACell> sessions = RT.ensureVector(RT.getIn(listed, "sessions"));
 		assertEquals(1, sessions.count());
-		assertEquals(sid.toHexString(), RT.getIn(sessions.get(0), Fields.SESSION_ID).toString());
+		assertEquals(sid, RT.getIn(sessions.get(0), Fields.SESSION_ID));
 
 		ACell read = engine.jobs().invokeOperation("v/ops/agent/history",
 			Maps.of(Fields.AGENT_ID, agentId, Fields.SESSION_ID, sid.toHexString()), owner)
@@ -7212,7 +7206,7 @@ public class AgentAdapterTest {
 		ACell renamed = engine.jobs().invokeOperation("v/ops/agent/rename-session",
 			Maps.of(Fields.AGENT_ID, agentId, Fields.SESSION_ID, prefixed,
 				Fields.TITLE, "Prefixed session"), owner).awaitResult(5000);
-		assertEquals(sid.toHexString(), RT.getIn(renamed, Fields.SESSION_ID).toString());
+		assertEquals(sid, RT.getIn(renamed, Fields.SESSION_ID));
 
 		ACell read = engine.jobs().invokeOperation("v/ops/agent/history",
 			Maps.of(Fields.AGENT_ID, agentId, Fields.SESSION_ID, prefixed), owner)
@@ -7223,7 +7217,7 @@ public class AgentAdapterTest {
 		ACell deleted = engine.jobs().invokeOperation("v/ops/agent/delete-session",
 			Maps.of(Fields.AGENT_ID, agentId, Fields.SESSION_ID, prefixed), owner)
 			.awaitResult(5000);
-		assertEquals(sid.toHexString(), RT.getIn(deleted, Fields.SESSION_ID).toString());
+		assertEquals(sid, RT.getIn(deleted, Fields.SESSION_ID));
 		assertNull(agent.session(sid).getRecord());
 	}
 
@@ -7255,19 +7249,19 @@ public class AgentAdapterTest {
 			"v/ops/agent/sessions", Maps.empty(), scoped).awaitResult(5000);
 		AVector<ACell> sessions = RT.ensureVector(RT.getIn(listed, "sessions"));
 		assertEquals(2, sessions.count(), "the listing is of the other sessions");
-		assertEquals(newer.toHexString(), RT.getIn(sessions.get(0), Fields.SESSION_ID).toString());
+		assertEquals(newer, RT.getIn(sessions.get(0), Fields.SESSION_ID));
 		assertEquals("Newest topic", RT.getIn(sessions.get(0), "title").toString());
 		assertEquals("Older topic", RT.getIn(sessions.get(1), "title").toString());
 		assertEquals(2L, ((CVMLong) RT.getIn(sessions.get(0), "turnCount")).longValue());
 
 		RequestContext inOlder = RequestContext.ofAgent(ALICE_DID, agentId).withSessionId(older).withCaps(caps);
 		ACell here = readHistory(inOlder, Maps.empty());
-		assertEquals(older.toHexString(), RT.getIn(here, Fields.SESSION_ID).toString(), "the session it is in, newest or not");
+		assertEquals(older, RT.getIn(here, Fields.SESSION_ID), "the session it is in, newest or not");
 		assertEquals(List.of("  Older\n topic  ", "older answer"), contents(entries(here)), "as stored");
 
 		RequestContext noSession = RequestContext.ofAgent(ALICE_DID, agentId).withCaps(caps);
 		ACell newest = readHistory(noSession, Maps.empty());
-		assertEquals(current.toHexString(), RT.getIn(newest, Fields.SESSION_ID).toString(), "outside a session, the newest");
+		assertEquals(current, RT.getIn(newest, Fields.SESSION_ID), "outside a session, the newest");
 		assertEquals(List.of("current topic", "current answer"), contents(entries(newest)));
 	}
 
@@ -7317,8 +7311,7 @@ public class AgentAdapterTest {
 				"v/ops/agent/sessions", Maps.empty(), scoped).awaitResult(5000);
 			AVector<ACell> sessions = RT.ensureVector(RT.getIn(listed, "sessions"));
 			assertEquals(1, sessions.count(), "current and policy-hidden sessions are not listed");
-			assertEquals(visible.toHexString(),
-				RT.getIn(sessions.get(0), Fields.SESSION_ID).toString());
+			assertEquals(visible, RT.getIn(sessions.get(0), Fields.SESSION_ID));
 		}
 	}
 
@@ -7488,7 +7481,7 @@ public class AgentAdapterTest {
 		ACell read = engine.jobs().invokeOperation(
 			"v/ops/agent/session-read", Maps.empty(), scoped).awaitResult(5000);
 		assertEquals(CVMBool.TRUE, RT.getIn(read, "found"));
-		assertEquals(newer.toHexString(), RT.getIn(read, Fields.SESSION_ID).toString());
+		assertEquals(newer, RT.getIn(read, Fields.SESSION_ID));
 		assertEquals("Newest topic", RT.getIn(read, "title").toString());
 		assertEquals(CVMLong.create(2), RT.getIn(read, "turnCount"));
 		assertEquals(List.of("Newest topic", "newest answer"), contents(RT.ensureVector(RT.getIn(read, Fields.MESSAGES))));

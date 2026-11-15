@@ -34,7 +34,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 - Adapters refuse settings with a configuration error, from the venue config and from `venue:adapter/configure` alike; anything else an adapter's `configure` throws, a module adapter's `IllegalArgumentException` included, is reported as that adapter's fault rather than as invalid input or the `venue` adapter's.
 - MCP bearer retrieval uses `admin/token/mcp`; `admin/token` remains its parent for administration across token kinds.
-- An agent's records keep job, task and session ids as Blobs, shown as `0x…` in lattice reads and `agent:history`; venue version 3 converts stored records, and user exports are version 3, which an older venue refuses.
+- Job, task and session ids are Blobs in agent records, job records, operation results and live events, so JSON shows them as `0x…` where results and events gave bare hex; inputs take either form, and an A2A `contextId` stays bare hex. Venue version 3 converts stored records, and user exports are version 3, which an older venue refuses.
 - Venue administration requires `admin/user/*`, `admin/adapter/manage`, `admin/venue/*` and `admin/sudo` capabilities; the former user, adapter and venue abilities are no longer accepted for these actions.
 - Remote submissions and direct Job controls use explicitly selected remote credentials; local proxy cancellation controls only its bound execution.
 

@@ -100,7 +100,7 @@ public final class ExternalAgents {
 		ACell content = RT.getIn(input, "chat".equals(operation) ? Fields.MESSAGE : Fields.INPUT);
 		engine.jobs().updateAdapterData(job, d -> d.assoc(OWNER, owner).assoc(KIND, Strings.create(operation)));
 		job.update(d -> d.assoc(Fields.AGENT_ID, id).assoc(Fields.ADDRESS, address)
-			.assoc(Fields.SESSION_ID, Strings.create(sid.toHexString())));
+			.assoc(Fields.SESSION_ID, sid));
 		if (job.isFinished()) return;
 		if (!agent.claimExternalTurn(sid, job.getID(), caller.getCallerDID(), content, !supplied))
 			throw new ConflictException(SESSION_BUSY);
@@ -179,13 +179,13 @@ public final class ExternalAgents {
 		Agent agent = user == null ? null : user.agent(RT.ensureString(job.getData().get(Fields.AGENT_ID)));
 		ACell childId = kept(job, CHILD);
 		Job child = childId == null ? null : engine.jobs().getJob(Job.parseID(childId), engine.context(owner));
+		Blob sid = Ids.stored(job.getData().get(Fields.SESSION_ID));
 		if (agent == null || child == null) {
 			job.fail(MISSING_CHILD);
-			if (agent != null) agent.session(Blob.fromHex(job.getData().get(Fields.SESSION_ID).toString())).finishExternalTurn(job.getID(), null, null);
+			if (agent != null) agent.session(sid).finishExternalTurn(job.getID(), null, null);
 			return true;
 		}
-		attach(job, child, agent, Blob.fromHex(job.getData().get(Fields.SESSION_ID).toString()),
-			backend(stored(agent)));
+		attach(job, child, agent, sid, backend(stored(agent)));
 		return true;
 	}
 

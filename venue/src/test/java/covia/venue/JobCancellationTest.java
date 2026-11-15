@@ -284,7 +284,8 @@ public class JobCancellationTest {
 				Fields.MESSAGE, Strings.create("first")),
 			ctx);
 		chat1.awaitResult(5000);
-		AString sidHex = RT.ensureString(RT.getIn(chat1.getOutput(), Fields.SESSION_ID));
+		ACell sidHex = RT.getIn(chat1.getOutput(), Fields.SESSION_ID);
+		assertNotNull(sidHex);
 
 		// Second chat on a never-completing agent won't work because this
 		// agent uses the real test LLM. Instead, verify rapid fire-and-cancel.

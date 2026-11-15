@@ -179,7 +179,7 @@ public class SseServer {
 	// ========== Agent streams (#394) ==========
 
 	/** One agent-stream client and whether its frames carry {@code detail}. */
-	private record AgentClient(SseClient client, boolean detail, AString sessionId) {}
+	private record AgentClient(SseClient client, boolean detail, Blob sessionId) {}
 
 	/** Per-agent client subscriptions keyed by the agent's grid address
 	 *  ({@code <ownerDID>/g/<agentId>}) — the key every
@@ -219,7 +219,7 @@ public class SseServer {
 		AString agentId = RT.ensureString(info.get(Fields.AGENT_ID));
 		AString status = RT.ensureString(info.get(Fields.STATUS));
 		boolean detail = !"false".equalsIgnoreCase(client.ctx().queryParam("detail"));
-		AString sessionFilter = sessionFilter(client.ctx().queryParam("sessionId"));
+		Blob sessionFilter = sessionFilter(client.ctx().queryParam("sessionId"));
 		boolean terminated = Agent.TERMINATED.equals(status);
 
 		if (!terminated) registerAgentClient(address, new AgentClient(client, detail, sessionFilter));
@@ -253,15 +253,13 @@ public class SseServer {
 
 
 	/**
-	 * The session a stream is narrowed to, as the bare hex the events carry
-	 * (any parseable form is accepted, {@code 0x}-prefixed included); null
-	 * for the whole agent, or for an unparseable value — the route handler
-	 * rejects that with 400 before the stream is committed.
+	 * The session a stream is narrowed to, given in hex with or without
+	 * {@code 0x}; null for the whole agent, or for an unparseable value — the
+	 * route handler rejects that with 400 before the stream is committed.
 	 */
-	public static AString sessionFilter(String param) {
+	public static Blob sessionFilter(String param) {
 		if (param == null || param.isBlank()) return null;
-		Blob sid = Blob.parse(param.trim());
-		return (sid != null) ? Strings.create(sid.toHexString()) : null;
+		return Blob.parse(param.trim());
 	}
 	/**
 	 * Fans one live agent event out to that agent's stream clients: the

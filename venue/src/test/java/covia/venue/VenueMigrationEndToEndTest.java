@@ -198,6 +198,11 @@ class VenueMigrationEndToEndTest {
 					Fields.TASK_RESULTS, Maps.of(hex(PARKED_WORK), Maps.of(Fields.STATUS, Status.COMPLETE)))))
 				.assoc(Agent.KEY_SESSIONS, Index.of(PARKED_SESSION, Maps.of(Agent.KEY_PENDING, Vectors.of(Maps.of(
 					Fields.MESSAGE, "queued", Fields.SESSION_ID, hex(PARKED_SESSION), Fields.JOB_ID, hex(PARKED_CHAT)))))));
+			// The queued chat's own record, naming its session in hex
+			AMap<AString, ACell> parkedChat = Maps.of(Fields.ID, PARKED_CHAT, Fields.STATUS, Status.PENDING,
+				Fields.CALLER, USER, Fields.OP, "v/ops/agent/chat", Fields.ADAPTER, "agent",
+				Fields.AGENT_ID, PARKED, Fields.ADDRESS, USER + "/g/" + PARKED, Fields.SESSION_ID, hex(PARKED_SESSION));
+			user.cursor().path(Namespace.J).updateAndGet(jobs -> ((Index<Blob, ACell>) jobs).assoc(PARKED_CHAT, parkedChat));
 			seed.cursor().updateAndGet(value -> RT.assocIn(value, Maps.of(Strings.create("events"), Index.of(EVENT,
 				Maps.of(Fields.OP, "v/test/ops/echo", Fields.OWNER, USER, Strings.create("actor"), agentDID,
 					Strings.create("by"), agentDID, Strings.create("time"), Long.MAX_VALUE))), Covia.SCHEDULE));
@@ -241,6 +246,7 @@ class VenueMigrationEndToEndTest {
 					Fields.TASK_RESULTS, Index.of(PARKED_WORK, Maps.of(Fields.STATUS, Status.COMPLETE))),
 				parkedNow.getTimeline().get(0));
 			assertEquals(TURN_JOB, RT.getIn(rootFrame(migrated), Agent.KEY_CONVERSATION, 1, Fields.JOB_ID), "a turn names its job");
+			assertEquals(PARKED_SESSION, migrated.jobs().getRecord(PARKED_CHAT).get(Fields.SESSION_ID), "a chat's record names its session");
 			assertEquals(Maps.of(Fields.OP, "v/test/ops/echo", Fields.CALLER, agentDID, Fields.OWNER, USER,
 				Strings.create("time"), Long.MAX_VALUE), venue.schedule().events().get(EVENT));
 			assertEquals(Maps.of(JobIndex.OWNER, USER), venue.jobIndex().entry(RUNNING_JOB));
@@ -259,7 +265,7 @@ class VenueMigrationEndToEndTest {
 			assertEquals(Maps.of(RemoteJobs.REMOTE_ID, LOCAL_TASK, RemoteJobs.REMOTE_STATUS, Status.STARTED),
 				RT.getIn(migrated.jobs().getRecord(LOCAL_CALL), RemoteJobs.DELEGATION));
 			assertFalse(venue.users().user(venueDID).secrets().exists(remoteRef));
-			assertEquals(4, venue.jobIndex().all().count(), "only the unfinished jobs have entries");
+			assertEquals(5, venue.jobIndex().all().count(), "only the unfinished jobs have entries");
 			assertEquals(job, venue.users().user(USER).cursor().path(Namespace.J, JOB).get(), "the history chain is gone");
 			ReleasedAgents.assertUntouched(venue, USER, releasedAgents);
 			// Lazy parts are still in their older shapes.
@@ -283,6 +289,8 @@ class VenueMigrationEndToEndTest {
 			// A local call that kept no caller context is not followed again; its task is untouched
 			assertEquals(covia.adapter.RemoteAgentAdapter.LOCAL_INTERRUPTED,
 				engine.jobs().getJob(LOCAL_CALL, ctx).getErrorMessage());
+			// The queued chat is still waiting for the cycle that takes its message
+			assertEquals(Status.PENDING, engine.jobs().getJob(PARKED_CHAT, ctx).getStatus());
 
 			// An unversioned adapter's state moves when it is first used.
 			assertEquals(UNLOADED, venue.adapterState("unloaded").get());

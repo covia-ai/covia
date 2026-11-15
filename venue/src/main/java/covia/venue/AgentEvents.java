@@ -11,6 +11,7 @@ import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
+import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
@@ -127,12 +128,12 @@ public final class AgentEvents {
 		 * the cycle-scoped events of that session, plus every {@code status}
 		 * event — a suspension or termination is the answer to why a
 		 * conversation stopped. Run boundaries and other sessions' cycles are
-		 * not its concern. {@code sessionId} is the bare hex the events carry;
-		 * null means the whole agent.
+		 * not its concern. {@code sessionId} is the session's id; null means
+		 * the whole agent.
 		 */
-		public boolean concerns(AString sessionId) {
+		public boolean concerns(Blob sessionId) {
 			if (sessionId == null || STATUS.equals(type)) return true;
-			return sessionId.equals(RT.getIn(data, Fields.SESSION_ID));
+			return java.util.Objects.equals(sessionId, RT.getIn(data, Fields.SESSION_ID));
 		}
 
 		/** True for the event that ends an agent's stream: status TERMINATED. */
@@ -189,7 +190,7 @@ public final class AgentEvents {
 	 * events and the agent's status events — see {@link Event#concerns}. The
 	 * agent's {@code seq} is unchanged, so a session view sees gaps.
 	 */
-	public Subscription subscribe(AString ownerDID, AString agentId, AString sessionId,
+	public Subscription subscribe(AString ownerDID, AString agentId, Blob sessionId,
 			Consumer<Event> listener) {
 		java.util.Objects.requireNonNull(listener, "listener");
 		if (sessionId == null) return subscribe(ownerDID, agentId, listener);
@@ -272,11 +273,11 @@ public final class AgentEvents {
 		 * A cycle is about to invoke its transition: emits {@code cycle:start}
 		 * and returns the handle the cycle context carries.
 		 *
-		 * @param sessionId the picked session (hex), or null
-		 * @param jobId the picked task's job id (hex), or null
+		 * @param sessionId the picked session, or null
+		 * @param jobId the picked task's job id, or null
 		 * @param data the rest of the payload — op, presented job ids and counts
 		 */
-		public Cycle beginCycle(AString sessionId, AString jobId, AMap<AString, ACell> data) {
+		public Cycle beginCycle(Blob sessionId, Blob jobId, AMap<AString, ACell> data) {
 			Cycle cycle = new Cycle(this, ++cycles, sessionId, jobId);
 			emit(ownerDID, agentId, CYCLE_START, cycle.stamp(data));
 			return cycle;
@@ -301,11 +302,11 @@ public final class AgentEvents {
 	public final class Cycle {
 		private final Run run;
 		private final long number;
-		private final AString sessionId;
-		private final AString jobId;
+		private final Blob sessionId;
+		private final Blob jobId;
 		private final long startedNanos = System.nanoTime();
 
-		private Cycle(Run run, long number, AString sessionId, AString jobId) {
+		private Cycle(Run run, long number, Blob sessionId, Blob jobId) {
 			this.run = run;
 			this.number = number;
 			this.sessionId = sessionId;
@@ -313,8 +314,8 @@ public final class AgentEvents {
 		}
 
 		public long number() { return number; }
-		public AString sessionId() { return sessionId; }
-		public AString jobId() { return jobId; }
+		public Blob sessionId() { return sessionId; }
+		public Blob jobId() { return jobId; }
 
 		private AMap<AString, ACell> stamp(AMap<AString, ACell> data) {
 			AMap<AString, ACell> m = (data != null) ? data : Maps.empty();

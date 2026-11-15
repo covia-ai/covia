@@ -9,6 +9,7 @@ import java.util.function.Predicate;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
@@ -23,6 +24,7 @@ import covia.grid.Job;
 import covia.grid.Principals;
 import covia.grid.Status;
 import covia.venue.Engine;
+import covia.venue.Ids;
 import covia.venue.RequestContext;
 
 /**
@@ -123,8 +125,8 @@ public final class ConversationRouter {
 			sessions.remove(conversation);
 			result = run(AGENT_CHAT, input.dissoc(Fields.SESSION_ID), ctx);
 		}
-		AString newSession = RT.ensureString(RT.getIn(result, Fields.SESSION_ID));
-		if (newSession != null && !newSession.toString().equals(sid)) sessions.put(conversation, newSession.toString());
+		Blob newSession = Ids.stored(RT.getIn(result, Fields.SESSION_ID));
+		if (newSession != null && !newSession.toHexString().equals(sid)) sessions.put(conversation, newSession.toHexString());
 		return RT.getIn(result, Fields.RESPONSE);
 	}
 

@@ -346,7 +346,7 @@ public class GoalTreeAdapterTest {
 
 		// The session keeps only the root: the child's history exists nowhere else.
 		AMap<AString, ACell> session = agent.session(
-			Blob.fromHex(RT.getIn(chat, Fields.SESSION_ID).toString())).getRecord();
+			(Blob) RT.getIn(chat, Fields.SESSION_ID)).getRecord();
 		assertEquals(1, RT.ensureVector(RT.getIn(session, Fields.FRAMES)).count());
 	}
 
@@ -480,7 +480,7 @@ public class GoalTreeAdapterTest {
 		}
 		Agent agent = engine.getVenueState().users().user(ALICE_DID).agent("subgoal-fails");
 		AMap<AString, ACell> session = agent.session(
-			Blob.fromHex(RT.getIn(chat, Fields.SESSION_ID).toString())).getRecord();
+			(Blob) RT.getIn(chat, Fields.SESSION_ID)).getRecord();
 		assertEquals(1, RT.ensureVector(RT.getIn(session, Fields.FRAMES)).count(), "the failed child was popped");
 
 		AVector<ACell> inferences = RT.ensureVector(RT.ensureMap(agent.getTimeline().get(0)).get(Fields.INFERENCES));

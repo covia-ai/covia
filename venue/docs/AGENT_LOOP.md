@@ -102,10 +102,11 @@ All fields are framework-managed except `state`, which is owned by the transitio
 function. CAD3 structural sharing means the timeline (which only appends) shares
 all existing entries with the previous version.
 
-Every job, task and session id in the agent's records, its sessions included,
-is a Blob, which JSON shows as `"0x…"`, and so is every id a transition is given
-(§4). Operation results, live events and what the model reads show them as bare
-hex, except `agent:history`, which returns a session's entries as stored.
+Every job, task and session id the venue keeps is a Blob, which JSON shows as
+`"0x…"`: in the agent's records, its sessions included, in the records of the
+jobs it runs, in operation results and live events, and every id a transition
+is given (§4). Inputs take an id as a Blob or as hex text, with or without
+`0x`. What the model reads shows them in bare hex, as does an A2A `contextId`.
 
 ### 2.2.1 Agent definitions and external implementations
 
