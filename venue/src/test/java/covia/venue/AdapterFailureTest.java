@@ -32,9 +32,10 @@ import covia.grid.Job;
 import covia.grid.Status;
 
 /**
- * An enabled adapter that is not running: its start failed at launch, enable
- * or restart. The venue runs without it, refuses its operations, lists why
- * for operators and starts it again on {@code venue/adapter/restart}.
+ * An adapter that is not running: its start failed at launch, enable or
+ * restart, or it is disabled. The venue runs without it, refuses its
+ * operations, lists why for operators and starts it again on
+ * {@code venue/adapter/restart}. Installed, it still owns its jobs.
  */
 public class AdapterFailureTest {
 
@@ -43,6 +44,7 @@ public class AdapterFailureTest {
 	private static final String HOLD = "v/ops/flaky/hold";
 	private static final Blob RECOVERED_JOB = Blob.fromHex("0a11");
 	private static final String START_FAILURE = "flaky backend unreachable";
+	private static final String INSTALL_FAILURE = "flaky cannot load its catalog";
 	private static final String REFUSED = "flaky refuses this setting";
 	private static final String DELETION_FAILURE = "flaky cannot reach its store of user data";
 	private static final AString K_COLOUR = Strings.intern("colour");
@@ -50,17 +52,21 @@ public class AdapterFailureTest {
 	/** Fails to start while {@code failStart}; records its lifecycle calls. */
 	private static final class FlakyAdapter extends AAdapter implements AutoCloseable {
 		volatile boolean failStart;
+		volatile boolean failInstall;
 		volatile boolean refuseConfig;
 		/** A colour it refuses while it accepts others. */
 		volatile String refuseColour;
 		volatile boolean closed;
 		volatile boolean failDeletion;
+		/** Its recovery keeps unfinished jobs as they are, instead of the default. */
+		volatile boolean keepJobs;
 		volatile AMap<AString, ACell> configured;
 		final List<String> events = new CopyOnWriteArrayList<>();
 
 		@Override public String getName() { return NAME; }
 		@Override public String getDescription() { return "Fails to start on demand"; }
 		@Override protected void installAssets() {
+			if (failInstall) throw new UnavailableException(INSTALL_FAILURE);
 			installAsset("flaky/echo", Maps.of(Fields.NAME, "Flaky echo",
 				Fields.OPERATION, Maps.of(Fields.ADAPTER, "flaky:echo")));
 			installAsset("flaky/hold", Maps.of(Fields.NAME, "Flaky hold",
@@ -82,7 +88,14 @@ public class AdapterFailureTest {
 		@Override public void stop() { events.add("stop"); }
 		@Override public void recoverJob(Job job) {
 			events.add("recover");
-			super.recoverJob(job);
+			if (!keepJobs) super.recoverJob(job);
+		}
+		@Override public void suspendJob(Job job) {
+			events.add("suspend");
+			super.suspendJob(job);
+		}
+		@Override public void cancelIn(VenueState draft, Job job, AMap<AString, ACell> adapterData) {
+			events.add("cancelIn");
 		}
 		@Override public void onUserDeleted(AString did, AMap<AString, ACell> previousUser) {
 			if (failDeletion) throw new UnavailableException(DELETION_FAILURE);
@@ -191,8 +204,8 @@ public class AdapterFailureTest {
 	}
 
 	/**
-	 * Refused at launch, the adapter is parked before recovery, so its
-	 * unfinished jobs are recovered as a missing adapter's are: its own
+	 * Refused at launch, the adapter is never installed, so its unfinished
+	 * jobs are recovered as a missing adapter's are: its own
 	 * {@code recoverJob} is not called.
 	 */
 	@Test
@@ -210,6 +223,99 @@ public class AdapterFailureTest {
 			assertEquals(List.of("configure"), flaky.events, "never installed, recovered or started");
 			assertEquals(Status.FAILED, engine.getVenueState().users().user(engine.getDIDString())
 				.jobs().getRecord(RECOVERED_JOB).get(Fields.STATUS));
+		} finally {
+			engine.close();
+		}
+	}
+
+	/**
+	 * Disabled at launch, the adapter is still configured and installed, so
+	 * its jobs are its own: it recovers them, the venue sends it no new work
+	 * for them, and cancelling one ends what it linked to the job. Enabling
+	 * it starts it, without recovering them again.
+	 */
+	@Test
+	public void disabledAdapterOwnsItsJobsFromLaunch() throws Exception {
+		Engine engine = TestEngine.application().mount(AKeyPair.generate(),
+			Maps.of(Config.ADAPTERS, Maps.of(NAME, Maps.of(Config.ENABLED, false))));
+		FlakyAdapter flaky = new FlakyAdapter();
+		flaky.keepJobs = true;
+		try {
+			engine.launch(prepared -> {
+				prepared.registerAdapter(flaky);
+				leaveStarted(prepared);
+				return CompletableFuture.completedFuture(null);
+			});
+			assertEquals(List.of("configure", "recover"), flaky.events, "installed and recovered, not started");
+			assertNull(engine.getAdapter(NAME));
+			Job kept = engine.jobs().getJob(RECOVERED_JOB);
+			assertEquals(Status.STARTED, kept.getStatus(), "its recovery kept the job");
+
+			RequestContext venue = engine.venueContext();
+			assertThrows(UnavailableException.class,
+				() -> engine.jobs().deliverMessage(RECOVERED_JOB, Maps.of("content", "more"), venue));
+			assertThrows(UnavailableException.class, () -> engine.jobs().pauseJob(RECOVERED_JOB, venue));
+			assertEquals(Status.STARTED, kept.getStatus(), "refused work leaves the job unchanged");
+
+			engine.jobs().cancelJob(RECOVERED_JOB, venue);
+			assertEquals(Status.CANCELLED, kept.getStatus());
+			assertEquals(List.of("configure", "recover", "cancelIn"), flaky.events);
+
+			flaky.events.clear();
+			assertTrue(engine.enableAdapter(NAME));
+			assertEquals(List.of("start"), flaky.events, "already configured and installed, it only starts");
+		} finally {
+			engine.close();
+		}
+	}
+
+	/** At shutdown a stopped adapter's job in flight goes to that adapter to suspend. */
+	@Test
+	public void shutdownHandsAStoppedAdaptersJobsToIt() {
+		Engine engine = Engine.createTemp(Maps.of(Config.SHUTDOWN, Maps.of(Config.GRACE_MS, 0L)));
+		Engine.addDemoAssets(engine);
+		FlakyAdapter flaky = new FlakyAdapter();
+		Job held;
+		try {
+			engine.registerAdapter(flaky);
+			held = engine.jobs().invokeOperation(HOLD, Maps.empty(), engine.venueContext());
+			assertTrue(engine.disableAdapter(NAME));
+			flaky.events.clear();
+		} finally {
+			engine.close();
+		}
+		assertEquals(List.of("suspend", "cancelIn"), flaky.events, "its default cancels work that cannot pause");
+		assertEquals(Status.CANCELLED, held.getStatus());
+	}
+
+	/**
+	 * An adapter that fails to install at launch has failed to start, and owns
+	 * no jobs: they are recovered as a missing adapter's. A restart installs
+	 * and starts it once fixed.
+	 */
+	@Test
+	public void installFailureAtLaunchLeavesTheAdapterFailed() throws Exception {
+		Engine engine = TestEngine.application().mount(AKeyPair.generate(), Maps.empty());
+		FlakyAdapter flaky = new FlakyAdapter();
+		flaky.failInstall = true;
+		try {
+			engine.launch(prepared -> {
+				prepared.registerAdapter(flaky);
+				leaveStarted(prepared);
+				return CompletableFuture.completedFuture(null);
+			});
+			assertTrue(engine.isStarted(), "the venue runs without the adapter");
+			assertEquals(INSTALL_FAILURE, engine.adapterFailure(NAME));
+			assertEquals(List.of("configure"), flaky.events, "never installed, recovered or started");
+			assertEquals(Status.FAILED, engine.getVenueState().users().user(engine.getDIDString())
+				.jobs().getRecord(RECOVERED_JOB).get(Fields.STATUS));
+
+			flaky.failInstall = false;
+			flaky.events.clear();
+			engine.restartAdapter(NAME);
+			assertEquals(List.of("configure", "start"), flaky.events);
+			assertSame(flaky, engine.getAdapter(NAME));
+			assertNull(engine.adapterFailure(NAME));
 		} finally {
 			engine.close();
 		}
@@ -385,7 +491,8 @@ public class AdapterFailureTest {
 		AString owner = engine.getDIDString();
 		engine.getVenueState().execute(draft -> {
 			draft.users().ensure(owner).jobs().create(RECOVERED_JOB, Maps.of(Fields.ID, RECOVERED_JOB,
-				Fields.OP, Strings.create(OP), Fields.STATUS, Status.STARTED, Fields.CALLER, owner, Fields.INPUT, Maps.empty()));
+				Fields.OP, Strings.create(OP), Fields.ADAPTER, Strings.create(NAME), Fields.STATUS, Status.STARTED,
+				Fields.CALLER, owner, Fields.INPUT, Maps.empty()));
 			draft.jobIndex().put(RECOVERED_JOB, Maps.of(JobIndex.OWNER, owner));
 		});
 	}

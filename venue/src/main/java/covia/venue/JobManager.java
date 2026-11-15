@@ -1531,6 +1531,8 @@ public class JobManager {
 		if (data == null) return null;
 		Job job = liveJob(id);
 		if (job == null) throw notLive(id, data);
+		// A stopped adapter takes no new work for its jobs
+		resolveJobAdapter(job);
 		job.pause();
 		return acknowledgement(id);
 	}
@@ -1548,6 +1550,8 @@ public class JobManager {
 		if (data == null) return null;
 		Job job = liveJob(id);
 		if (job == null) throw notLive(id, data);
+		// A stopped adapter takes no new work for its jobs
+		resolveJobAdapter(job);
 		job.resume();
 		return acknowledgement(id);
 	}
@@ -1687,13 +1691,15 @@ public class JobManager {
 	/**
 	 * Recovers durable Jobs after a restart, from the venue's entries of
 	 * unfinished jobs ({@link JobIndex}). The decision is the owning adapter's
-	 * ({@link AAdapter#recoverJob}): the framework rebuilds each Job from its
-	 * record and entry, registers it, and calls the hook — whatever state the
+	 * ({@link AAdapter#recoverJob}), whether or not it will start: the
+	 * framework rebuilds each Job from its record and entry, binds it to its
+	 * installed adapter, registers it, and calls the hook — whatever state the
 	 * Job is in afterwards is the durable truth. Jobs still non-terminal are
 	 * restored live and re-occupy their caller's concurrency permit. A Job
-	 * whose adapter is absent (module not loaded, boot-disabled) gets the
-	 * default: PENDING and STARTED fail as interrupted and are never
-	 * re-executed; the paused family is restored.
+	 * whose adapter is missing (module not loaded, or its adapter declined or
+	 * refused its settings and was never installed) gets the default: PENDING
+	 * and STARTED fail as interrupted and are never re-executed; the paused
+	 * family is restored.
 	 */
 	public void recoverJobs() {
 		Index<Blob, ACell> entries = venue().jobIndex().all();
@@ -1710,7 +1716,7 @@ public class JobManager {
 			AMap<AString, ACell> record = (state == null) ? null : state.getRecord();
 			if (record == null || Job.isFinished(record)) continue;
 			OutputRules rules = OutputRules.fromCell(RT.getIn(entry, JobIndex.RULES));
-			VenueJob job = new VenueJob(state, record, rules, ownerDID, this, runningAdapter(record));
+			VenueJob job = new VenueJob(state, record, rules, ownerDID, this, owningAdapter(record));
 			activeJobs.put(jobID, job);
 			restored.add(job);
 		}
@@ -1719,7 +1725,7 @@ public class JobManager {
 		for (VenueJob job : restored) {
 			if (job.isFinished()) continue;
 			Blob jobID = job.getID();
-			AAdapter adapter = runningAdapter(job);
+			AAdapter adapter = job.adapter();
 			try {
 				if (adapter != null) adapter.recoverJob(job);
 				else if (engine.remoteJobs().kept(job) != null) engine.remoteJobs().adapterUnavailable(job);
@@ -1753,17 +1759,13 @@ public class JobManager {
 	}
 
 	/**
-	 * The live adapter that runs a Job ({@link #adapterName}), or null for a
-	 * mirror, or when that adapter is absent or disabled.
+	 * The adapter that owns the Job whose record is {@code data}
+	 * ({@link #adapterName}), started or not: the installed one registered
+	 * under its name. Null for a mirror, or when that adapter is missing.
 	 */
-	private AAdapter runningAdapter(Job job) {
-		return runningAdapter(job.getData());
-	}
-
-	/** The live adapter that runs the Job whose record is {@code data}. */
-	private AAdapter runningAdapter(AMap<AString, ACell> data) {
+	private AAdapter owningAdapter(AMap<AString, ACell> data) {
 		String name = adapterName(data);
-		return (name == null) ? null : engine.getAdapter(name);
+		return (name == null) ? null : engine.getInstalledAdapter(name);
 	}
 
 	// ========== Persistence ==========
@@ -1947,8 +1949,8 @@ public class JobManager {
 	/**
 	 * Shutdown sequence for Jobs: close top-level admission, let in-flight
 	 * work finish for up to {@code graceMs} — returning as soon as nothing is
-	 * in flight — then ask each remaining Job's adapter to suspend it
-	 * ({@link AAdapter#suspendJob}): in-process work is bounded and is
+	 * in flight — then ask each remaining Job's adapter, started or not, to
+	 * suspend it ({@link AAdapter#suspendJob}): in-process work is bounded and is
 	 * cancelled, a durable wait is recorded and its thread let go. Finally
 	 * admission closes completely and every waiter still parked on a
 	 * surviving Job's in-memory future is released without touching the
@@ -1961,7 +1963,8 @@ public class JobManager {
 		awaitDrain(graceMs);
 		for (Job job : activeJobs.values()) {
 			if (job.isFinished()) continue;
-			AAdapter adapter = runningAdapter(job);
+			// The adapter that owns the job decides, started or not
+			AAdapter adapter = (job instanceof VenueJob owned) ? owned.adapter() : null;
 			try {
 				if (adapter != null) adapter.suspendJob(job);
 				else if (engine.remoteJobs().kept(job) != null) engine.remoteJobs().suspend(job);

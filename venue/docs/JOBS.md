@@ -518,16 +518,23 @@ in a stable, honest state so callers can resume, cancel, or retry as they wish.
 The framework never re-fires an operation: re-execution would double side
 effects for non-idempotent ops (`convex:transact`, `http:post`, …).
 
-The decision is the owning adapter's. At boot, before the venue serves
-requests, `JobManager.recoverJobs()` reads the venue's job entries
-([The venue's job entries](#the-venues-job-entries)), not every user's
-records. It rebuilds each job from its record and entry, registers it, and
-calls `AAdapter.recoverJob(job)` on the adapter its record names. The job
+The decision is the owning adapter's, whether or not that adapter is
+started: a job belongs to its adapter from admission to its end, and whether
+the adapter runs decides only whether the venue sends it new work
+([ADAPTERS.md, An adapter that is not running](ADAPTERS.md#an-adapter-that-is-not-running)).
+At boot, before the venue serves requests, `JobManager.recoverJobs()` reads
+the venue's job entries ([The venue's job entries](#the-venues-job-entries)),
+not every user's records. It rebuilds each job from its record and entry,
+binds it to the installed adapter its record names, started or not,
+registers it, and calls that adapter's `AAdapter.recoverJob(job)`. The job
 carries its record and every verb; whatever state it is in when the hook
 returns is the durable truth, and anything still non-terminal is restored
-live. For ordinary jobs, the default also applies when the adapter is absent
-(module not loaded, boot-disabled). A job that delegates its work to a remote
-venue or agent behaves as described under [Remote delegation](#remote-delegation).
+live. Each job is recovered once per venue run: enabling or restarting its
+adapter later does not recover it again. For ordinary jobs, the default
+also applies when no installed adapter owns the job (its module is not
+loaded, or its adapter declined or refused its settings). A job that
+delegates its work to a remote venue or agent behaves as described under
+[Remote delegation](#remote-delegation).
 
 | State at crash | Default at boot | Caller's move |
 |----------------|-----------------|---------------|
@@ -550,10 +557,12 @@ permit** (`JobSemaphore.reserveRecovered`, which may drive permits negative):
 after a restart the cap still holds, and new work admits only as restored
 jobs finish.
 
-After generic Job recovery, AgentAdapter reconciles its own queues: intake for
-terminal Jobs is removed, stale execution markers/fences are cleared, and only
-remaining durable queued work can start a fresh attempt. `inCycle` never causes
-a wake by itself.
+After generic Job recovery, AgentAdapter reconciles its own queues, whether
+or not it is started: intake for terminal Jobs is removed, stale execution
+markers/fences are cleared, and only remaining durable queued work can start
+a fresh attempt. `inCycle` never causes a wake by itself. A started agent
+adapter then wakes the agents with work; a stopped one wakes them when it
+starts.
 
 ## Shutdown
 
@@ -570,7 +579,7 @@ monitor (`JobManager.shutdown`):
    finished is in flight until its finish effects end, so a cancellation it
    sends to a remote venue starts before remote requests close.
 3. **Suspend**: each job still in flight is handed to its adapter,
-   `AAdapter.suspendJob(job)`. In-process execution is bounded and ends with
+   `AAdapter.suspendJob(job)`, whether or not that adapter is started. In-process execution is bounded and ends with
    the process; a wait on something outside it is state, not a thread. The
    default pauses a job whose adapter can suspend it and cancels any
    other in-flight job with the reason "Venue shut down"; the paused family
@@ -592,7 +601,7 @@ carrying the suspended states.
 
 - **Shutdown gate**: admission closes first in the [shutdown
   sequence](#shutdown), before anything else is stopped.
-- **Per-caller concurrency cap**: see `venue/CLAUDE.md` § Rate limiting.
+- **Per-caller concurrency cap**: see [CONFIG.md § Rate limiting](CONFIG.md#rate-limiting).
   Sub-jobs (carrying a parent job id) are exempt.
 
 ## Remote delegation

@@ -5644,11 +5644,79 @@ public class AgentAdapter extends AAdapter {
 		}
 	}
 
+	/** Whether this instance has recovered its agents ({@link #recoverAgents}) in this process. */
+	private volatile boolean agentsRecovered;
+
 	/**
-	 * Boot scan: wakes every agent with durable queued work — pending session
-	 * envelopes or queued tasks. A stale {@code inCycle} claim is abandoned
-	 * executor state, not work and not a resume checkpoint. Called once after
-	 * {@code recoverJobs()} stabilises job records.
+	 * Takes up, when this adapter starts on a running venue (enable or
+	 * restart), the agents it left while stopped: each with work that is not
+	 * running is woken. Only once its agents are recovered: at launch the venue
+	 * recovers them, and wakes a started adapter's, after recovering jobs.
+	 */
+	@Override
+	public void start() {
+		if (engine.isStarted() && agentsRecovered) wakeIdleAgentsWithWork();
+	}
+
+	/**
+	 * Wakes each agent with work ({@link #hasWork}) that is not running, as
+	 * {@link #wakeAgent} does for one. Unlike {@link #recoverAgents} it
+	 * reconciles nothing: no executor has been lost since that ran.
+	 *
+	 * @return the number of agents woken
+	 */
+	private int wakeIdleAgentsWithWork() {
+		int woken = 0;
+		AMap<AString, ACell> all = engine.getVenueState().users().getAll();
+		if (all == null) return 0;
+		for (var userEntry : all.entrySet()) {
+			AString did = RT.ensureString(userEntry.getKey());
+			if (did == null) continue;
+			covia.venue.User user = engine.getVenueState().users().user(did);
+			AMap<AString, ACell> agents = (user == null) ? null : user.getAgents();
+			if (agents == null) continue;
+			for (AString agentId : agents.keySet()) {
+				try {
+					Agent agent = getAgent(did, agentId);
+					if (agent == null || externalAgents().isExternal(agent)) continue;
+					if (isRunning(new AgentKey(did, agentId)) || !hasWork(agent)) continue;
+					wakeAgent(did, agentId, true);
+					woken++;
+				} catch (RuntimeException failure) {
+					reportAgentFailure(WAKING_AGENT, did, agentId, failure);
+				}
+			}
+		}
+		return woken;
+	}
+
+	/**
+	 * Boot scan: recovers every agent, then wakes each with durable queued
+	 * work — pending session envelopes or queued tasks. The venue runs it at
+	 * launch for a started adapter, once {@code recoverJobs()} has stabilised
+	 * job records; {@link #recoverAgents} is the same scan for one that is not
+	 * started.
+	 *
+	 * @return the number of agents woken
+	 */
+	public int wakeAgentsWithWork() {
+		return scanAgents(true);
+	}
+
+	/**
+	 * Boot scan without the wake, for an adapter that is installed but not
+	 * started: agents are recovered as {@link #wakeAgentsWithWork} recovers
+	 * them, and their queued work waits until this adapter {@linkplain #start
+	 * starts}.
+	 */
+	public void recoverAgents() {
+		scanAgents(false);
+	}
+
+	/**
+	 * Recovers every agent after a restart and, with {@code wake}, wakes each
+	 * with work. A stale {@code inCycle} claim is abandoned executor state,
+	 * not work and not a resume checkpoint.
 	 *
 	 * <p>Every agent's tracked calls are recovered before any agent is woken
 	 * ({@link #recoverTrackedCalls}), so a delivered outcome is work this scan
@@ -5661,7 +5729,8 @@ public class AgentAdapter extends AAdapter {
 	 *
 	 * @return the number of agents woken
 	 */
-	public int wakeAgentsWithWork() {
+	private int scanAgents(boolean wake) {
+		agentsRecovered = true;
 		int woken = 0;
 		int staleRuns = 0;
 		AMap<AString, ACell> all = engine.getVenueState().users().getAll();
@@ -5716,7 +5785,7 @@ public class AgentAdapter extends AAdapter {
 					staleRuns++;
 				}
 				reconcileAgentAfterRestart(did, b.user(), agent);
-				if (hasWork(agent)) {
+				if (wake && hasWork(agent)) {
 					log.info("Waking agent {} — durable work found on boot", agentId);
 					wakeAgent(did, agentId, true);
 					woken++;
@@ -5743,7 +5812,19 @@ public class AgentAdapter extends AAdapter {
 	 * as the venue's.
 	 */
 	private static void notRecovered(AString ownerDID, AString agentId, RuntimeException failure) {
-		String what = NOT_RECOVERED.formatted(ownerDID + "/g/" + agentId);
+		reportAgentFailure(NOT_RECOVERED, ownerDID, agentId, failure);
+	}
+
+	/** What failed when an agent is not woken as this adapter starts; its address follows. */
+	public static final String WAKING_AGENT = "Waking agent %s";
+
+	/**
+	 * Reports that a step for agent {@code agentId} failed, which leaves the
+	 * agent as it is: an expected failure is logged with its reason; a fault,
+	 * once at ERROR with its stack, as the venue's.
+	 */
+	private static void reportAgentFailure(String step, AString ownerDID, AString agentId, RuntimeException failure) {
+		String what = step.formatted(ownerDID + "/g/" + agentId);
 		String reason = covia.exception.FaultException.describe(covia.exception.FaultException.VENUE, failure);
 		if (CoviaException.reasonOf(failure) != null) log.warn("{} failed: {}", what, reason);
 		else log.error(what + " failed: " + reason, failure);

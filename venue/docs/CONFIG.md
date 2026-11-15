@@ -1408,8 +1408,10 @@ Adapter implementers should follow the validation, publication, and private
 state contract in [ADAPTERS.md](ADAPTERS.md#lifecycle-and-configuration).
 
 The reserved key `enabled: false` parks an adapter as disabled at
-boot: it is not installed, publishes nothing to `v/ops/` or `v/info/adapters/`,
-and does not dispatch. `{"adapters": {"test": {"enabled": false}}}` hides the
+boot: it is offered its settings and installed, so it still owns and
+recovers its unfinished jobs, but it is not started: it publishes nothing to
+`v/ops/` or `v/info/adapters/`, and does not dispatch. Settings a disabled
+adapter refuses are logged and leave it uninstalled until it is enabled. `{"adapters": {"test": {"enabled": false}}}` hides the
 test operations; `{"adapters": {"convex": {"enabled": false}}}` removes the
 Convex ops. A disabled adapter can be switched on later without a restart
 with `v/ops/venue/adapter/enable`. The `kernel` marker identifies adapters the
@@ -3160,7 +3162,7 @@ above is intentionally outside this administrative group:
 |-----------|--------|
 | `v/ops/venue/adapters` | Registry view: every registered adapter (active **and** disabled) with `enabled`, `status` (`running`, `failed` or `disabled`), a failed adapter's `reason`, `kernel`, owning `module`, effective `config` and `operations`, plus loaded `modules` |
 | `v/ops/venue/adapter/disable {name}` | Remove an adapter from live dispatch and `v/info/adapters/<name>`, and stop its workers: a messaging adapter's bots close their polls and connections. Durable catalog metadata remains; the instance is retained and in-flight jobs finish |
-| `v/ops/venue/adapter/enable {name}` | Restore it and start its workers again (installing on first enable if it was boot-disabled). If it refuses its settings or fails to start, it stays enabled but failed and the call fails with the reason |
+| `v/ops/venue/adapter/enable {name}` | Restore it and start its workers again (offering its settings and installing it first if it never was, having declined or refused them). Its jobs are already its own: enabling does not recover them again. If it refuses its settings or fails to start, it stays enabled but failed and the call fails with the reason |
 | `v/ops/venue/adapter/configure {name, config, merge?}` | Apply a new effective configuration (`adapters.<name>` shape). The adapter may decline it, and nothing changes, or refuse it with an error, and it is offered its previous configuration again; if it refuses that too, it is stopped and left failed |
 | `v/ops/venue/adapter/restart {name}` | Stop an enabled adapter, running or failed, offer it its effective configuration again and start it. If it fails again, it stays failed and the call fails with the reason |
 | `v/ops/venue/module/load {module, sha256?, config?}` | Load a module jar; its adapters and declarations overwrite existing names and paths |
@@ -3173,8 +3175,8 @@ Ordinary authenticated users get `AuthException`.
 
 **Failed adapters.** An adapter that cannot start, at launch, enable or
 restart, does not stop the venue, whether it refused a setting in its
-`adapters.<name>` block or its start failed (a port in use, a service out of
-reach). It stays enabled with `status: failed` and the `reason` in
+`adapters.<name>` block, failed to install, or its start failed (a port in
+use, a service out of reach). It stays enabled with `status: failed` and the `reason` in
 `v/ops/venue/adapters`, and the log says the same. Until then it is treated as
 a stopped adapter: its operations fail with "Adapter `<name>` is not running"
 and no reason, and nothing else in the venue uses it, so with `http` failed
