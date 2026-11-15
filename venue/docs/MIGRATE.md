@@ -112,6 +112,7 @@ A step's parts apply in the order listed.
 | `test` | 0 → 1 | None: version 1 has version 0's shape | `TestAdapter.STATE_STEPS` |
 | `test` | 1 → 2, 2 → 3 | Synthetic, for tests: each appends the version it reaches to `migrations` | `TestAdapter.LogStep` |
 | `telegram`, `discord`, `whatsapp`, `slack` | 0 → 1 | A bot one of its user's agents created names that agent `caller`, not `principal` | `BotCaller` |
+| `telegram`, `discord`, `whatsapp`, `slack` | 1 → 2 | Session and job ids held as hex text become Blobs: the session each conversation continues, under `sessions` at any depth, and a delivery receipt's `sessionId` and `jobId`, under `inbox`. An empty session mapping named no session and goes. A text id that is not hex is refused | `BlobSessionIds` |
 
 ### Shapes converted on use
 
@@ -123,7 +124,7 @@ A step's parts apply in the order listed.
 | Secret at key version 1 | Covia | Read with the version 1 key; re-encrypted under the current key on its next write | `SecretStore` |
 | Public agent with `a2a.caps` | Covia | Read as `accepts: "anyone"`; the stored config is unchanged | `Admission.policy` |
 | OAuth grant as a user secret `oauth/<provider>` → `:adapters/oauth` connection | OAuth adapter | On the user's next use of their connections | `OAuthAdapter.moveLegacyGrants` |
-| Telegram session mapping at `w/telegram/sessions/<bot>/<chat>` | Telegram adapter | When the chat's mapping is first read | `ConversationSessions`, `BotRunner.legacySession` |
+| Telegram session mapping at `w/telegram/sessions/<bot>/<chat>`, in hex | Telegram adapter | When the chat's mapping is first read, as a Blob | `ConversationSessions`, `BotRunner.legacySession` |
 | Telegram bot registry at `w/telegram/bots` | Telegram adapter | At adapter start, for each bot with no current binding | `TelegramAdapter.rearmLegacyBots` |
 
 ## Testing

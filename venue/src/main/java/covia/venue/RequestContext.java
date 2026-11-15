@@ -48,7 +48,7 @@ public class RequestContext {
 	 * no I/O or live writes. False discards duplicate intake. Never deserialised. */
 	@FunctionalInterface
 	public interface SessionDelivery {
-		boolean accept(VenueState draft, AString sessionId, AString jobId);
+		boolean accept(VenueState draft, Blob sessionId, Blob jobId);
 	}
 	private final SessionDelivery sessionDelivery;
 	public SessionDelivery getSessionDelivery() { return sessionDelivery; }

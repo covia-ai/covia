@@ -17,6 +17,7 @@ import org.junit.jupiter.api.TestInfo;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
@@ -59,7 +60,7 @@ class ConversationRouterTest {
 		var router = new ConversationRouter(engine, new Spec("bot", owner.toString(), "retry-agent", null, null), sessions);
 		router.runOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "retry-agent",
 			Fields.CONFIG, Maps.of(Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/test/ops/llm")));
-		String stale = "00000000000000000000000000000000";
+		Blob stale = Blob.fromHex("00000000000000000000000000000000");
 		sessions.put("chat", stale);
 		assertNotNull(router.chat("chat", Strings.create("hello"), LISTED));
 		assertNotNull(sessions.get("chat"));
@@ -111,7 +112,7 @@ class ConversationRouterTest {
 			inbox.accept("1", Strings.create("input"));
 			var agent = engine.getVenueState().users().user(owner).agent("atomic");
 			assertThrows(JobFailedException.class, () -> router.deliver("chat", Strings.create("input"), LISTED, (draft, sid, jid) -> {
-				assertEquals(1, draft.users().user(owner).agent("atomic").session(convex.core.data.Blob.fromHex(sid.toString())).pending().count());
+				assertEquals(1, draft.users().user(owner).agent("atomic").session(sid).pending().count());
 				assertTrue(agent.getSessions().isEmpty(), "the live input must remain invisible until commit");
 				assertTrue(inbox.deliver(draft, "1", sid, jid));
 				assertEquals(covia.adapter.webhook.WebhookInbox.PENDING, inbox.get("1").get(Fields.STATUS));
@@ -131,10 +132,10 @@ class ConversationRouterTest {
 			for (var call : calls) if (call.get(10, TimeUnit.SECONDS) != null) winners++;
 			assertEquals(1, winners);
 			assertEquals(1, agent.getSessions().count());
-			var sid = convex.core.data.Blob.fromHex(sessions.get("chat"));
+			var sid = sessions.get("chat");
 			assertEquals(1, agent.session(sid).pending().count());
 			assertEquals(covia.adapter.webhook.WebhookInbox.COMPLETE, inbox.get("1").get(Fields.STATUS));
-			assertEquals(Strings.create(sessions.get("chat")), inbox.get("1").get(Fields.SESSION_ID));
+			assertEquals(sid, inbox.get("1").get(Fields.SESSION_ID));
 			assertEquals(RT.getIn(agent.session(sid).pending().get(0), Fields.JOB_ID), inbox.get("1").get(Fields.JOB_ID));
 		} finally { engine.close(); }
 	}
@@ -211,7 +212,7 @@ class ConversationRouterTest {
 			assertEquals(1, wakes.get());
 			var agent = engine.getVenueState().users().user(owner).agent("atomic");
 			assertEquals(1, agent.getSessions().count());
-			assertEquals(1, agent.session(convex.core.data.Blob.fromHex(sessions.get("chat"))).pending().count());
+			assertEquals(1, agent.session(sessions.get("chat")).pending().count());
 			assertEquals(covia.adapter.webhook.WebhookInbox.COMPLETE, inbox.get("1").get(Fields.STATUS));
 			var replies = new java.util.concurrent.LinkedBlockingQueue<ACell>();
 			ConversationRouter.onResponse(job, replies::add, failure -> fail(failure));
@@ -273,7 +274,7 @@ class ConversationRouterTest {
 			covia.venue.Config.STORE, covia.venue.TestTemp.etchFile("router-intake").toString(),
 			covia.venue.Config.SEED, convex.core.crypto.AKeyPair.createSeeded(74123).getSeed().toHexString());
 		var owner = Strings.create("did:test:restart-intake");
-		String sid;
+		Blob sid;
 		convex.core.data.Blob jobId;
 		var first = covia.venue.server.VenueServer.launch(config);
 		try {
@@ -353,10 +354,10 @@ class ConversationRouterTest {
 			assertThrows(IllegalStateException.class, () -> router.deliver("chat", Strings.create("input"), LISTED,
 				(draft, sid, jid) -> inbox.deliver(draft, "1", sid, jid)));
 			assertEquals(0, wakes.get(), "do not execute before the durability barrier succeeds");
-			var jid = convex.core.data.Blob.fromHex(inbox.get("1").get(Fields.JOB_ID).toString());
+			var jid = (Blob) inbox.get("1").get(Fields.JOB_ID);
 			assertFalse(engine.jobs().getJob(jid).isFinished(), "a failed flush must not fail accepted input");
 			assertEquals(1, engine.getVenueState().users().user(owner).agent("flush")
-				.session(convex.core.data.Blob.fromHex(sessions.get("chat"))).pending().count());
+				.session(sessions.get("chat")).pending().count());
 		} finally { store.failFlush = false; engine.close(); }
 	}
 
@@ -511,6 +512,8 @@ class ConversationRouterTest {
 
 	/** A sender the binding lists, and one it does not. */
 	private static final ChannelAuthentication.Channel LISTED = channel("listed"), STRANGER = channel("stranger");
+	private static final Blob SESSION_A = Blob.fromHex("a1".repeat(16)), SESSION_B = Blob.fromHex("b2".repeat(16)),
+		SESSION_C = Blob.fromHex("c3".repeat(16)), SESSION_D = Blob.fromHex("d4".repeat(16));
 
 	@Test void ordersTurnsAndResetsDespiteFailureOrObserverCancellation(TestInfo info) throws Exception {
 		Engine engine = venue;
@@ -523,7 +526,7 @@ class ConversationRouterTest {
 			CompletableFuture<Void> first = router.enqueue("chat", () -> {
 				entered.countDown();
 				await(release);
-				sessions.put("chat", "old-session");
+				sessions.put("chat", SESSION_A);
 				calls.add("first");
 				throw new IllegalStateException("test turn failure");
 			});
@@ -549,31 +552,31 @@ class ConversationRouterTest {
 		var sessions = new ConversationSessions(state, root);
 		String thread = ConversationRouter.key("T1", "C1", "1700000000.123456");
 		String otherThread = ConversationRouter.key("T1", "C1", "1700000000.123457");
-		sessions.put(thread, "session-a");
-		sessions.put(otherThread, "session-b");
+		sessions.put(thread, SESSION_A);
+		sessions.put(otherThread, SESSION_B);
 		var restored = new ConversationSessions(state, root);
-		assertEquals("session-a", restored.get(thread));
-		assertEquals("session-b", restored.get(otherThread));
+		assertEquals(SESSION_A, restored.get(thread));
+		assertEquals(SESSION_B, restored.get(otherThread));
 		assertNull(restored.get(ConversationRouter.key("T2", "C1", "1700000000.123456")));
 		assertNull(new ConversationSessions(state, "config/bot/sessions").get(thread));
 		assertNull(new ConversationSessions(state, state.userPath(Strings.create(owner + "-other"), "sessions/bot")).get(thread));
 		assertNotEquals(ConversationRouter.key("a/b", "c"), ConversationRouter.key("a", "b/c"));
-		sessions.put("../../escape", "safe");
-		assertEquals("safe", restored.get("../../escape"));
+		sessions.put("../../escape", SESSION_C);
+		assertEquals(SESSION_C, restored.get("../../escape"));
 		assertNull(state.read("escape"));
-		sessions.put("-123", "telegram");
-		assertEquals(Strings.create("telegram"), state.read(root + "/-123"));
+		sessions.put("-123", SESSION_D);
+		assertEquals(SESSION_D, state.read(root + "/-123"));
 	}
 
 	@Test void migratesLegacySessionsWithCanonicalPrecedenceAndDeletesBoth(TestInfo info) {
 		var state = venue.adapterState(stateName(info));
-		var legacy = new java.util.HashMap<String, String>();
-		legacy.put("1", "legacy-session");
+		var legacy = new java.util.HashMap<String, Blob>();
+		legacy.put("1", SESSION_A);
 		var sessions = new ConversationSessions(state, "sessions", legacy::get, legacy::remove);
-		assertEquals("legacy-session", sessions.get("1"));
-		assertEquals(Strings.create("legacy-session"), state.read("sessions/1"));
-		sessions.put("1", "current-session");
-		assertEquals("current-session", sessions.get("1"));
+		assertEquals(SESSION_A, sessions.get("1"));
+		assertEquals(SESSION_A, state.read("sessions/1"));
+		sessions.put("1", SESSION_B);
+		assertEquals(SESSION_B, sessions.get("1"));
 		sessions.remove("1");
 		assertNull(sessions.get("1"));
 		assertTrue(legacy.isEmpty());

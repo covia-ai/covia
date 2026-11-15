@@ -318,11 +318,11 @@ class WhatsAppAdapterTest {
 			String identity = Strings.create(ConversationRouter.key(OWNER.toString(), parsed.installationKey())).getHash().toHexString();
 			String path = "config/main/sessions/" + identity + "/" + agentSpec.getHash().toHexString() + "/"
 				+ ConversationSessions.segment(ConversationRouter.key(parsed.installationKey(), "441234567890"));
-			assertEquals(Strings.create("session-1"), f.adapter.state().read(path));
+			assertEquals(FakeAgent.session(1), f.adapter.state().read(path));
 			assertNull(f.engine.resolvePath(Strings.create("w/adapters/whatsapp/" + path), RequestContext.of(OWNER)));
 			WhatsAppAdapter restored = new WhatsAppAdapter(); f.engine.registerAdapter(restored);
-			assertEquals(Strings.create("session-1"), agentTurn(f, restored, agent, "main", "12345", "441234567890", "resumed").get(Fields.SESSION_ID));
-			assertEquals(Strings.create("session-3"), agentTurn(f, restored, agent, "second", "54321", "441234567890", "resumed-other").get(Fields.SESSION_ID));
+			assertEquals(FakeAgent.session(1), agentTurn(f, restored, agent, "main", "12345", "441234567890", "resumed").get(Fields.SESSION_ID));
+			assertEquals(FakeAgent.session(3), agentTurn(f, restored, agent, "second", "54321", "441234567890", "resumed-other").get(Fields.SESSION_ID));
 		}
 	}
 	private static AMap<AString, ACell> agentTurn(Fixture f, WhatsAppAdapter adapter, FakeAgent agent,
@@ -437,8 +437,13 @@ class WhatsAppAdapterTest {
 			var in = MessagingSettings.object(input); owner = ctx.getUserDID(); authentication = ctx.getAuthentication(); inputs.add(in);
 			if (blocked != null) return blocked;
 			ACell sid = in.get(Fields.SESSION_ID);
-			if (sid == null) sid = Strings.create("session-" + sessions.incrementAndGet());
+			if (sid == null) sid = session(sessions.incrementAndGet());
 			return CompletableFuture.completedFuture(Maps.of(Fields.SESSION_ID, sid, Fields.RESPONSE, "agent reply"));
+		}
+
+		/** The {@code n}th session it mints, an id as an agent's are. */
+		static Blob session(int n) {
+			return Blob.fromHex(String.format("%032x", n));
 		}
 	}
 }

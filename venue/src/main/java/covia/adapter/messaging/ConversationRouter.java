@@ -113,9 +113,9 @@ public final class ConversationRouter {
 	/** Call within this conversation's queued turn, for a message that came
 	 * through {@code channel}. */
 	public ACell chat(String conversation, ACell message, Channel channel) {
-		String sid = sessions.get(conversation);
+		Blob sid = sessions.get(conversation);
 		AMap<AString, ACell> input = Maps.of(Fields.AGENT_ID, agentAddress(), Fields.MESSAGE, message);
-		if (sid != null) input = input.assoc(Fields.SESSION_ID, Strings.create(sid));
+		if (sid != null) input = input.assoc(Fields.SESSION_ID, sid);
 		RequestContext ctx = context(channel);
 		ACell result;
 		try {
@@ -126,7 +126,7 @@ public final class ConversationRouter {
 			result = run(AGENT_CHAT, input.dissoc(Fields.SESSION_ID), ctx);
 		}
 		Blob newSession = Ids.stored(RT.getIn(result, Fields.SESSION_ID));
-		if (newSession != null && !newSession.toHexString().equals(sid)) sessions.put(conversation, newSession.toHexString());
+		if (newSession != null && !Objects.equals(newSession, sid)) sessions.put(conversation, newSession);
 		return RT.getIn(result, Fields.RESPONSE);
 	}
 
@@ -166,12 +166,12 @@ public final class ConversationRouter {
 	}
 
 	private Job deliverLocked(String conversation, ACell message, Channel channel, RequestContext.SessionDelivery delivery) {
-		String sid = sessions.get(conversation);
+		Blob sid = sessions.get(conversation);
 		AMap<AString, ACell> input = Maps.of(Fields.AGENT_ID, agentAddress(), Fields.MESSAGE, message);
-		if (sid != null) input = input.assoc(Fields.SESSION_ID, Strings.create(sid));
+		if (sid != null) input = input.assoc(Fields.SESSION_ID, sid);
 		RequestContext ctx = context(channel).withSessionDelivery((draft, session, job) -> {
 			boolean applied = delivery.accept(draft, session, job);
-			if (applied) sessions.put(draft, conversation, session.toString());
+			if (applied) sessions.put(draft, conversation, session);
 			return applied;
 		});
 		AgentAdapter adapter = (AgentAdapter) engine.getAdapter("agent");

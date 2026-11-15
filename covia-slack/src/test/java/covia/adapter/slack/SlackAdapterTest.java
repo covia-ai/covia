@@ -132,11 +132,11 @@ class SlackAdapterTest {
 			var reply = Maps.of("type", "message", "channel_type", "channel", "channel", "C123", "user", "UALICE", "ts", "1.2", "thread_ts", "1.1", "text", "and then?");
 			assertEquals(200, f.webhook(payload("in-flight", reply)).status());
 			assertNotNull(f.bot().inbox().get("in-flight"));
-			agent.blocked.complete(Maps.of(Fields.SESSION_ID, "session-1", Fields.RESPONSE, "first"));
+			agent.blocked.complete(Maps.of(Fields.SESSION_ID, FakeAgent.session(1), Fields.RESPONSE, "first"));
 			f.api.take(); f.api.take();
 			awaitStatus(f.bot(), "in-flight", WebhookInbox.COMPLETE);
 			var continued = agent.inputs.poll(5, TimeUnit.SECONDS);
-			assertEquals(Strings.create("session-1"), continued.get(Fields.SESSION_ID));
+			assertEquals(FakeAgent.session(1), continued.get(Fields.SESSION_ID));
 			assertEquals(Strings.create("and then?"), continued.get(Fields.MESSAGE));
 			// With the session stored, later replies continue too, threaded under the root.
 			agent.blocked = null;
@@ -231,15 +231,15 @@ class SlackAdapterTest {
 			String version = parsed.settings().getHash().toHexString();
 			String root = "config/main/sessions/" + identity + "/" + version;
 			String sessionPath = root + "/" + ConversationSessions.segment(ConversationRouter.key(parsed.installationKey(), "C123", "1.1"));
-			assertEquals(Strings.create("session-1"), f.adapter.state().read(sessionPath));
+			assertEquals(FakeAgent.session(1), f.adapter.state().read(sessionPath));
 			assertEquals(":adapters/slack/" + sessionPath, f.adapter.state().path(sessionPath));
-			assertEquals(Strings.create("session-1"), f.adapter.state().read(sessionPath));
+			assertEquals(FakeAgent.session(1), f.adapter.state().read(sessionPath));
 			assertNull(f.engine.resolvePath(Strings.create("w/adapters/slack/" + sessionPath), RequestContext.of(OWNER)));
 			assertNotNull(f.adapter.state().read("config/main/inbox/" + identity + "/" + Strings.create("first").getHash().toHexString()));
 			SlackAdapter restored = new SlackAdapter(); restored.retryMillis = 25; f.engine.registerAdapter(restored);
 			restored.handleWebhook("c-main", signed(payload("same-thread", event("1.2").assoc(Strings.intern("thread_ts"), Strings.create("1.1")))));
 			f.api.take(); awaitStatus(restored.runner("main"), "same-thread", WebhookInbox.COMPLETE);
-			assertEquals(Strings.create("session-1"), agent.inputs.poll(5, TimeUnit.SECONDS).get(Fields.SESSION_ID));
+			assertEquals(FakeAgent.session(1), agent.inputs.poll(5, TimeUnit.SECONDS).get(Fields.SESSION_ID));
 			restored.handleWebhook("c-main", signed(payload("other-thread", event("2.1")))); f.api.take();
 			assertNull(agent.inputs.poll(5, TimeUnit.SECONDS).get(Fields.SESSION_ID));
 		}
@@ -319,8 +319,13 @@ class SlackAdapterTest {
 			var in = MessagingSettings.object(input); owner = ctx.getUserDID(); authentication = ctx.getAuthentication(); inputs.add(in);
 			if (blocked != null) return blocked;
 			ACell sid = in.get(Fields.SESSION_ID);
-			if (sid == null) sid = Strings.create("session-" + sessions.incrementAndGet());
+			if (sid == null) sid = session(sessions.incrementAndGet());
 			return CompletableFuture.completedFuture(Maps.of(Fields.SESSION_ID, sid, Fields.RESPONSE, "agent reply"));
+		}
+
+		/** The {@code n}th session it mints, an id as an agent's are. */
+		static Blob session(int n) {
+			return Blob.fromHex(String.format("%032x", n));
 		}
 	}
 }

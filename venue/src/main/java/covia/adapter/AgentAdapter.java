@@ -493,7 +493,7 @@ public class AgentAdapter extends AAdapter {
 
 		Delivery(RequestContext.SessionDelivery participant) { this.participant = participant; }
 
-		@Override public boolean accept(covia.venue.VenueState draft, AString sessionId, AString jobId) {
+		@Override public boolean accept(covia.venue.VenueState draft, Blob sessionId, Blob jobId) {
 			return participant.accept(draft, sessionId, jobId);
 		}
 	}
@@ -1889,7 +1889,6 @@ public class AgentAdapter extends AAdapter {
 		SessionSpec session = resolveSessionForChat(job, input);
 		if (session == null) return;
 		Blob sid = session.id();
-		AString sidHex = Strings.create(sid.toHexString());
 
 		// Chats are not serialised: register this one as a waiter on the session
 		// keyed by its own Job id, alongside any already awaiting. Its message
@@ -1907,7 +1906,6 @@ public class AgentAdapter extends AAdapter {
 
 		// The envelope carries the chat Job id for provenance — turns minted
 		// from it keep the id, tying conversation content back to the job.
-		AString jobIdHex = Strings.create(job.getID().toHexString());
 		ACell envelope = withProvenance(Maps.of(
 			Fields.MESSAGE,    messageContent,
 			Fields.JOB_ID,     job.getID()), ctx);
@@ -1916,7 +1914,7 @@ public class AgentAdapter extends AAdapter {
 			.assoc(Fields.ADDRESS, target.address()).assoc(Fields.SESSION_ID, sid));
 		Agent.SessionIntake intake;
 		try {
-			intake = appendChatInput(job, agent, target, session, envelope, ctx, sidHex, jobIdHex);
+			intake = appendChatInput(job, agent, target, session, envelope, ctx);
 		} catch (Throwable failure) {
 			agentChats.remove(job.getID(), job);
 			throw failure;
@@ -1951,7 +1949,7 @@ public class AgentAdapter extends AAdapter {
 	/** The common VenueState root contains the agent and adapter-owned receipts.
 	 * Native transactions publish the input, receipt and session mapping together. */
 	private Agent.SessionIntake appendChatInput(Job job, Agent agent, AgentTarget target,
-			SessionSpec session, ACell envelope, RequestContext ctx, AString sid, AString jobId) {
+			SessionSpec session, ACell envelope, RequestContext ctx) {
 		if (ctx.getSessionDelivery() == null) return agent.appendSessionPending(session.id(),
 			ctx.getCallerDID(), session.loads(), envelope, !session.supplied());
 		ChatIntake taken;
@@ -1965,7 +1963,7 @@ public class AgentAdapter extends AAdapter {
 				var intake = current.appendSessionPending(session.id(), ctx.getCallerDID(),
 					session.loads(), envelope, !session.supplied());
 				if (intake != Agent.SessionIntake.APPLIED) return new ChatIntake(intake, null);
-				if (!ctx.getSessionDelivery().accept(draft, sid, jobId)) throw new DuplicateSessionDelivery();
+				if (!ctx.getSessionDelivery().accept(draft, session.id(), job.getID())) throw new DuplicateSessionDelivery();
 				Runnable changed = ((covia.venue.VenueJob) job).updateIn(draft, data ->
 					data.assoc(Fields.AGENT_ID, target.agentId()).assoc(Fields.ADDRESS, target.address())
 						.assoc(Fields.SESSION_ID, session.id()));

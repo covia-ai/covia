@@ -9,11 +9,11 @@ import convex.core.data.Blob;
 import convex.core.data.Index;
 
 /**
- * Rebuilds the records a migration part converts. Each returns the same cell
- * when nothing in it changes, so a part leaves a current record exactly as it
- * found it.
+ * Rebuilds the records a migration step converts, the venue's or an
+ * adapter's. Each returns the same cell when nothing in it changes, so a step
+ * leaves a current record exactly as it found it.
  */
-final class Records {
+public final class Records {
 	private Records() {}
 
 	@SuppressWarnings("unchecked")
@@ -22,7 +22,7 @@ final class Records {
 	}
 
 	/** {@code record} with the value at {@code key} converted; the same cell when there is none or it does not change. */
-	static ACell convertAt(ACell record, ACell key, UnaryOperator<ACell> convert) {
+	public static ACell convertAt(ACell record, ACell key, UnaryOperator<ACell> convert) {
 		if (!(record instanceof AMap<?, ?> map)) return record;
 		ACell value = map.get(key);
 		if (value == null) return record;
@@ -32,7 +32,7 @@ final class Records {
 
 	/** {@code map} with each value converted; the same cell when none changes. */
 	@SuppressWarnings("unchecked")
-	static ACell mapValues(AMap<?, ?> map, UnaryOperator<ACell> convert) {
+	public static ACell mapValues(AMap<?, ?> map, UnaryOperator<ACell> convert) {
 		AMap<ACell, ACell> result = (AMap<ACell, ACell>) map;
 		for (var entry : ((AMap<ACell, ACell>) map).entrySet()) {
 			ACell converted = convert.apply(entry.getValue());

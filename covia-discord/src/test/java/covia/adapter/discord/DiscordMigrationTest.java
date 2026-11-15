@@ -3,6 +3,7 @@ package covia.adapter.discord;
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.util.List;
+import java.util.function.Function;
 
 import org.junit.jupiter.api.Test;
 
@@ -10,6 +11,7 @@ import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.data.Path;
 import convex.core.data.Strings;
@@ -35,19 +37,30 @@ class DiscordMigrationTest {
 	static final AMap<AString, ACell> HELPER = SETTINGS.assoc(Strings.create("operation"), Strings.create("v/test/ops/random"));
 	static final AString AGENT = Strings.create(OWNER + ":g:helper");
 
+	/** The sessions two conversations continue. */
+	static final Blob SESSION_A = Blob.fromHex("a1".repeat(16)), SESSION_B = Blob.fromHex("b2".repeat(16));
+
 	/** Discord's state at every version, oldest first. Version 0 is the layout 0.9.11
 	 *  wrote, with a bot an agent created naming it {@code principal} as later releases
-	 *  wrote it; version 1 names it {@code caller}. */
-	static final List<ACell> STATES = List.of(Maps.of(
-		"users", Maps.of(OWNER, Maps.of(
-			"bots", Maps.of("support", SETTINGS, "helper", HELPER.assoc(Strings.create("principal"), AGENT)),
-			"sessions", Maps.of("support", Maps.of("1234567890", "session-a")))),
-		"config", Maps.of("operator", Maps.of("sessions", Maps.of("42", "session-b")))),
-		Maps.of(
-		"users", Maps.of(OWNER, Maps.of(
-			"bots", Maps.of("support", SETTINGS, "helper", HELPER.assoc(Fields.CALLER, AGENT)),
-			"sessions", Maps.of("support", Maps.of("1234567890", "session-a")))),
-		"config", Maps.of("operator", Maps.of("sessions", Maps.of("42", "session-b")))));
+	 *  wrote it; version 1 names it {@code caller}; version 2 keeps its conversations'
+	 *  sessions as Blobs. */
+	static final List<ACell> STATES = List.of(
+		state(Strings.create("principal"), DiscordMigrationTest::hex),
+		state(Fields.CALLER, DiscordMigrationTest::hex),
+		state(Fields.CALLER, id -> id));
+
+	private static ACell hex(Blob id) {
+		return Strings.create(id.toHexString());
+	}
+
+	/** The state with a bot's creating agent under {@code creator}, and each session as {@code id} gives it. */
+	private static ACell state(AString creator, Function<Blob, ACell> id) {
+		return Maps.of(
+			"users", Maps.of(OWNER, Maps.of(
+				"bots", Maps.of("support", SETTINGS, "helper", HELPER.assoc(creator, AGENT)),
+				"sessions", Maps.of("support", Maps.of("1234567890", id.apply(SESSION_A))))),
+			"config", Maps.of("operator", Maps.of("sessions", Maps.of("42", id.apply(SESSION_B)))));
+	}
 
 	@Test void migrationRulesCoverEveryVersion() {
 		assertNull(new DiscordAdapter().checkStateMigration(STATES));
@@ -73,9 +86,9 @@ class DiscordMigrationTest {
 
 			// Read back through the adapter's own paths.
 			assertEquals(SETTINGS, adapter.state().read(adapter.userStatePath(OWNER, "bots/support")));
-			assertEquals("session-a", new ConversationSessions(adapter.state(OWNER),
+			assertEquals(SESSION_A, new ConversationSessions(adapter.state(OWNER),
 				adapter.userStatePath(OWNER, "sessions/support")).get("1234567890"));
-			assertEquals("session-b", new ConversationSessions(adapter.state(), "config/operator/sessions").get("42"));
+			assertEquals(SESSION_B, new ConversationSessions(adapter.state(), "config/operator/sessions").get("42"));
 
 			// Its deletion hook understands the migrated layout.
 			engine.deleteUser(engine.venueContext(), OWNER);

@@ -45,6 +45,7 @@ import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
+import convex.core.data.Blob;
 import convex.core.data.Vectors;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
@@ -72,6 +73,7 @@ import covia.exception.NotSupportedException;
 import covia.exception.ResponseException;
 import covia.exception.StillStartingException;
 import covia.exception.UnavailableException;
+import covia.grid.HexId;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.RequestContext;
@@ -1003,12 +1005,13 @@ final class BotRunner implements MessagingBot<BotSpec> {
 			: adapter.userStatePath(spec.userDID(adapter.engine), "sessions/" + spec.name());
 	}
 
-	private String legacySession(String chatId) {
+	/** A session the owner's workspace kept before adapter state, in hex. */
+	private Blob legacySession(String chatId) {
 		if (managed != Managed.RUNTIME) return null;
 		try {
 			AString value = RT.ensureString(adapter.engine.resolvePath(
 				Strings.create(legacySessionsPath(spec.name()) + "/" + chatId), context()));
-			return value == null ? null : value.toString();
+			return HexId.parse(value);
 		} catch (RuntimeException e) {
 			log.debug("Telegram bot '{}': could not migrate persisted session for chat {}: {}", spec.name(), chatId, concise(e));
 			return null;

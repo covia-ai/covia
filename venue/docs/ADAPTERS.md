@@ -947,7 +947,8 @@ them with `provided` scope and do not bundle their own copies.
   and applies the result/silent/fixed reply policy. It imposes no Job timeout.
   Its queue is in memory and is **not durable acceptance**.
 - `ConversationSessions` stores mappings under the existing private
-  `config/<bot>/sessions` or `users/<did>/sessions/<bot>` roots. Numeric Telegram
+  `config/<bot>/sessions` or `users/<did>/sessions/<bot>` roots, each
+  conversation to the id of its agent session, a Blob. Numeric Telegram
   and Discord keys retain their paths. Other keys are encoded as single safe
   path segments; `ConversationRouter.key(installation, channel, thread)` builds
   an unambiguous compound key. Optional legacy callbacks support migration.
@@ -987,7 +988,9 @@ and socket transports. Give each installation/binding a private root such as
 `config/<binding>/inbox` or `users/<did>/inbox/<binding>` and a provider event ID.
 IDs are hashed into path segments; the original ID remains in the record.
 Records contain `id`, `input`, `status`, `receivedAt` and, on completion,
-`completedAt`; FAILED adds `reason`, `lastError` and `failedAt`. Input must contain the event needed for processing, **not**
+`completedAt`, with the agent session and chat job (`sessionId`, `jobId`,
+Blobs) when a local session delivery completed it; FAILED adds `reason`,
+`lastError` and `failedAt`. Input must contain the event needed for processing, **not**
 access tokens, signing secrets or credential-bearing HTTP headers.
 
 1. Authenticate/admit the event, then `accept(id, input)`. This writes PENDING
