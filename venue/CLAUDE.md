@@ -338,6 +338,7 @@ java -jar target/covia.jar [config.json]
 - `docs/CONFIG.md` — operator configuration reference
 - `docs/EMBEDDING.md` — running a venue inside another application: lifecycle and close order, adapters, user data, upgrading from 0.9.x
 - `docs/JOBS.md` — job implementation semantics (COG-8 companion)
+- `docs/JOB_EXECUTION.md` — an adapter's jobs whether or not it runs, installed and started as separate phases, and what bounds execution (design)
 - `docs/ERRORS.md` — how the venue raises, types and reports failures, and what each surface tells a caller
 - `docs/UCAN.md` — capabilities, granting surface, proof channels
 - `docs/VENUE_AUTHORITY.md` — raising authority above a principal's base: allowances, activation, and the venue's power over the users it hosts (design)
