@@ -1,5 +1,7 @@
 package covia.venue;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Random;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -7,6 +9,7 @@ import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.BiFunction;
 import java.util.function.Consumer;
 import java.util.function.UnaryOperator;
 
@@ -65,6 +68,10 @@ public class JobManager {
 
 	private static final Logger log = LoggerFactory.getLogger(JobManager.class);
 	private static final String JOB_ID_EXISTS = "Job ID already exists: ";
+	/** A prepared Job started a second time. */
+	private static final String ALREADY_STARTED = "Job already started: ";
+	/** A prepared Job published before a transaction recorded it. */
+	private static final String NOT_RECORDED = "Job has not been recorded: ";
 
 	/** An invocation that names no operation. */
 	public static final String OPERATION_REQUIRED = "Operation must be specified";
@@ -206,10 +213,13 @@ public class JobManager {
 	 *  call from both terminal eviction and explicit deletion. */
 	private void releaseJobPermit(Blob jobID) {
 		AString caller = permitHolders.remove(jobID);
-		if (caller != null) {
-			JobSemaphore sem = jobPermits.get(caller);
-			if (sem != null) sem.release();
-		}
+		if (caller != null) releasePermit(caller);
+	}
+
+	/** Releases one of {@code caller}'s admission permits. */
+	private void releasePermit(AString caller) {
+		JobSemaphore sem = jobPermits.get(caller);
+		if (sem != null) sem.release();
 	}
 
 	// ========== Job Invocation ==========
@@ -279,37 +289,38 @@ public class JobManager {
 	public Job submitOperation(AString ref, ACell input, RequestContext ctx) {
 		Prepared prepared = prepareOperation(resolveOperation(ref, ctx).meta(), input, ctx.withOp(ref),
 			false, Invocation.INVOKE);
+		prepared.commit();
+		Job job = prepared.accept();
 		try {
 			engine.flush();
 			AAdapter.VIRTUAL_EXECUTOR.execute(() -> {
 				try { prepared.start(); }
 				catch (RuntimeException | Error failure) {
 					// start() has already recorded the execution failure on the Job.
-					log.debug("Submitted job {} failed", prepared.job().getID(), failure);
+					log.debug("Submitted job {} failed", job.getID(), failure);
 				}
 			});
 		} catch (RuntimeException | Error failure) {
 			CoviaException reported = FaultException.within(STARTING_JOB, FaultException.VENUE, failure);
-			prepared.job().fail(reported);
+			job.fail(reported);
 			throw reported;
 		}
-		return prepared.job();
+		return job;
 	}
 
 	/**
-	 * Prepare a durable, tracked Job on behalf of a trusted in-process caller
-	 * without starting it — the scheduler's tracked fire path. Resolves and
-	 * scopes exactly like {@link #invokeOperation(AString, ACell, RequestContext)},
-	 * but is exempt from top-level admission like {@link #invokeInternal}: the
-	 * venue itself is dispatching, not a user request. The Job is recorded in
-	 * the owner's history (PENDING) regardless of operation metadata, so the
-	 * caller can persist the ID in its own state <i>before</i> any work begins,
-	 * then {@link Prepared#start()} the adapter.
+	 * Prepare a durable, tracked Job on behalf of a trusted in-process caller,
+	 * for it to record in its own venue transaction and then start — the
+	 * scheduler's tracked fire. Resolves and scopes exactly like
+	 * {@link #invokeOperation(AString, ACell, RequestContext)}, but is exempt
+	 * from top-level admission like {@link #invokeInternal}: the venue itself
+	 * is dispatching, not a user request. The Job is recorded in the owner's
+	 * history (PENDING) regardless of operation metadata.
 	 *
 	 * @param ref Operation reference (hex hash, DID URL, workspace path, etc.)
 	 * @param input Input parameters
 	 * @param ctx Request context (caller identity, caps, scope)
-	 * @return the prepared Job, not yet started
+	 * @return the prepared Job, not yet recorded
 	 */
 	Prepared prepareTracked(AString ref, ACell input, RequestContext ctx) {
 		return prepareOperation(resolveOperation(ref, ctx).meta(), input, ctx.withOp(ref),
@@ -317,67 +328,124 @@ public class JobManager {
 	}
 
 	/**
-	 * Prepare a durable backend job so its parent can checkpoint the handle
-	 * before submission. The job keeps the context it runs under
-	 * ({@link #keepCallerContext}), so work it carries on after a restart acts
-	 * with the same authority ({@link #callerContext}).
+	 * Prepare a durable backend job for its parent to record with its own
+	 * record of it, in one venue transaction. The job keeps the context it runs
+	 * under ({@link #keepCallerContext}), so work it carries on after a restart
+	 * acts with the same authority ({@link #callerContext}).
 	 */
 	public Prepared prepareAgentInteraction(AMap<AString, ACell> meta, ACell input, RequestContext ctx) {
 		Prepared prepared = prepareOperation(meta, input, ctx, false, Invocation.TRACKED);
-		keepCallerContext(prepared.job, prepared.jobCtx);
+		prepared.admission.keptContext = keptContext(prepared.ctx);
 		return prepared;
 	}
 
-	/** Bind even an untracked scheduled fire to the account lifecycle at claim time. */
+	/** Prepare an untracked scheduled fire, bound to its account when it is recorded with its claim. */
 	Prepared prepareUntracked(AString ref, ACell input, RequestContext ctx) {
 		return prepareOperation(resolveOperation(ref, ctx).meta(), input, ctx.withOp(ref),
 			true, Invocation.SCHEDULED_TRANSIENT);
 	}
 
 	/**
-	 * A Job that exists — PENDING, and persisted when durable — whose adapter
-	 * has not yet been invoked. Separating creation from start lets a caller
-	 * record the Job's ID in its next atomic state update and only then hand the
-	 * work to the adapter. {@link #start()} runs exactly once.
+	 * A Job checked and ready to record: its operation resolved, its adapter
+	 * found and the caller admitted, nothing written yet. Running it takes
+	 * three steps:
+	 * <ol>
+	 * <li>{@link #record} in a venue transaction, which takes the Job's id and
+	 *     writes it, PENDING, with whatever else that transaction commits;</li>
+	 * <li>once that transaction has committed, {@link #start}, which runs the
+	 *     adapter, or {@link #accept} first when the caller needs the live Job
+	 *     before it runs;</li>
+	 * <li>if the transaction failed instead, {@link #abandon}.</li>
+	 * </ol>
+	 * A Job that has been recorded is never left without an outcome by its
+	 * start: a failure there fails the Job, unless the Job went with its
+	 * account, which was deleted after the commit.
 	 */
 	public final class Prepared {
-		private final Job job;
+		private final Admission admission;
 		private final AAdapter adapter;
-		private final RequestContext jobCtx;
+		private final RequestContext ctx;
 		private final AMap<AString, ACell> meta;
 		private final ACell input;
 		private final boolean lookup;
-		private boolean started;
+		private final AtomicBoolean started = new AtomicBoolean();
+		private VenueJob job;
+		private RequestContext jobCtx;
 
-		Prepared(Job job, AAdapter adapter, RequestContext jobCtx,
+		Prepared(Admission admission, AAdapter adapter, RequestContext ctx,
 				AMap<AString, ACell> meta, ACell input, boolean lookup) {
-			this.job = job;
+			this.admission = admission;
 			this.adapter = adapter;
-			this.jobCtx = jobCtx;
+			this.ctx = ctx;
 			this.meta = meta;
 			this.input = input;
 			this.lookup = lookup;
 		}
 
-		/** The Job, already visible in the owner's history if durable. */
-		public Job job() {
+		/**
+		 * Records the Job in {@code venue}, the draft of a venue transaction,
+		 * taking its id there. A transaction body that runs again records it
+		 * again under a new id; the one that commits is the Job's.
+		 *
+		 * @return the Job's id in this run of the transaction
+		 * @throws AuthException if the owner's account has been deleted
+		 */
+		public Blob record(VenueState venue) {
+			return admission.record(venue);
+		}
+
+		/** Releases what recording took, after the transaction that recorded it failed. */
+		public void abandon() {
+			admission.abandon();
+		}
+
+		/** Records the Job in a venue transaction of its own. */
+		void commit() {
+			admission.commit();
+		}
+
+		/**
+		 * The live Job, once the transaction that recorded it has committed,
+		 * without running it yet.
+		 *
+		 * @throws AuthException if the owner's account has been deleted since,
+		 *         taking the Job with it
+		 */
+		public Job accept() {
+			if (job == null) {
+				job = admission.publish();
+				if (job.isRecorded()) log.info("Submitted job: {}", job.getID());
+				else log.debug("Started transient job: {}", job.getID());
+				// Every adapter sees the immediate Job wrapper, including a transient one.
+				// jobId is narrower: it names a durable t/ temp scope. Preserve an inherited
+				// parent scope for internal composition, and establish a new scope only for
+				// a recorded Job. Giving a transient wrapper a jobId would let a t/ write
+				// accidentally materialise a partial persistent Job record.
+				RequestContext withJob = ctx.withJob(job);
+				if (withJob.getJobId() == null && job.isRecorded()) withJob = withJob.withJobId(job.getID());
+				jobCtx = withJob;
+			}
 			return job;
 		}
 
 		/**
-		 * Invoke the adapter. A synchronous capability denial fails the Job (the
-		 * same surface async adapters produce); any other synchronous failure is
+		 * Invoke the adapter, once the transaction that recorded the Job has
+		 * committed. A synchronous capability denial fails the Job (the same
+		 * surface async adapters produce); any other synchronous failure is
 		 * recorded on the Job and the report rethrown, so a Job is never stranded
 		 * PENDING with no worker. A failure in the adapter is its operation's
 		 * fault ({@link Job#report}); one in the venue's own check before it is
 		 * the venue's.
+		 *
+		 * @throws AuthException if the owner's account has been deleted since
+		 *         the commit, taking the Job with it
 		 */
-		public synchronized Job start() {
-			if (started) throw new IllegalStateException("Job already started: " + job.getID());
-			started = true;
+		public Job start() {
+			accept();
+			if (!started.compareAndSet(false, true)) throw new IllegalStateException(ALREADY_STARTED + job.getID());
 			if (job.isFinished()) return job;
 			try {
-				if (job instanceof VenueJob venueJob) venueJob.requireAccount();
+				job.requireAccount();
 				// Only a generic reference invocation needs invoke. A bound tool
 				// calls its operation directly and retains every resource gate.
 				if (lookup) engine.requireInvoke(jobCtx, jobCtx.getOp());
@@ -461,13 +529,15 @@ public class JobManager {
 	/** Executes an operation through the canonical Job machinery. */
 	private Job dispatchOperation(AMap<AString, ACell> meta, ACell input,
 			RequestContext ctx, boolean memoryOnly, Invocation invocation) {
-		return prepareOperation(meta, input, ctx, memoryOnly, invocation).start();
+		Prepared prepared = prepareOperation(meta, input, ctx, memoryOnly, invocation);
+		prepared.commit();
+		return prepared.start();
 	}
 
 	/**
-	 * Everything {@link #dispatchOperation} does short of invoking the adapter:
-	 * defaults, gates, adapter lookup, admission, Job creation and persistence.
-	 * The returned {@link Prepared} carries the Job (already PENDING) and what
+	 * Everything {@link #dispatchOperation} does before the Job is recorded:
+	 * defaults, gates, adapter lookup and admission. The returned
+	 * {@link Prepared} carries the Job's record, without its id, and what
 	 * {@link Prepared#start()} needs to run it.
 	 */
 	private Prepared prepareOperation(AMap<AString, ACell> meta, ACell input,
@@ -511,28 +581,16 @@ public class JobManager {
 		if (opID == null) opID = Strings.create(meta.getHash().toHexString());
 		Blob parentID = parentJobID(ctx);
 		long ts = engine.currentTimestamp().longValue();
-		Blob jobID = generateJobID(ts);
-		// Attached before the job can be seen, so whatever ends it releases the permit.
-		if (permit) permitHolders.put(jobID, ownerDID);
-		Job job;
 		try {
-			job = submitJob(jobID, ts, opID, meta, input, ownerDID, ctx.getCallerDID(),
+			Admission admission = jobAdmission(ts, opID, meta, input, ownerDID, ctx,
 				parentID, memoryOnly, resultOriented,
-				(invocation == Invocation.RUN || invocation == Invocation.CALL_RUN) && ctx.getJob() == null && ctx.getJobId() == null, adapter);
-		} catch (RuntimeException e) {
-			releaseJobPermit(jobID);
+				(invocation == Invocation.RUN || invocation == Invocation.CALL_RUN) && ctx.getJob() == null && ctx.getJobId() == null,
+				adapter, permit);
+			return new Prepared(admission, adapter, ctx, meta, input, invocation.lookup);
+		} catch (RuntimeException | Error e) {
+			if (permit) releasePermit(ownerDID);
 			throw e;
 		}
-		// Every adapter sees the immediate Job wrapper, including a transient one.
-		// jobId is narrower: it names a durable t/ temp scope. Preserve an inherited
-		// parent scope for internal composition, and establish a new scope only for
-		// a recorded Job. Giving a transient wrapper a jobId would let a t/ write
-		// accidentally materialise a partial persistent Job record.
-		RequestContext jobCtx = ctx.withJob(job);
-		if (jobCtx.getJobId() == null && job.isRecorded()) {
-			jobCtx = jobCtx.withJobId(job.getID());
-		}
-		return new Prepared(job, adapter, jobCtx, meta, input, invocation.lookup);
 	}
 
 	/**
@@ -792,7 +850,8 @@ public class JobManager {
 			boolean memoryOnly = !record && allowsInternal(meta)
 				&& !(isReadOnly(meta) && engine.config().isRecordReadOnlyOperations());
 			Prepared prepared = prepareOperation(meta, input, ctx, memoryOnly, invocation);
-			if (watch != null) watch.accept(prepared.job());
+			prepared.commit();
+			if (watch != null) watch.accept(prepared.accept());
 			Job job = prepared.start();
 			return operationResultFuture(job, meta, input);
 		} catch (Exception e) {
@@ -1011,7 +1070,8 @@ public class JobManager {
 	// ========== Job Submission ==========
 
 	/**
-	 * Submit a Job for an operation.
+	 * The admission of a Job for an operation: its record, still without its
+	 * id, and how its live handle is made.
 	 *
 	 * @param ownerDID the namespace the job is persisted into, and what
 	 *        ownership, access control and quota key on
@@ -1024,15 +1084,15 @@ public class JobManager {
 	 *        recorded grandchild dispatched through a transient layer still
 	 *        links to its nearest recorded ancestor.
 	 */
-	private Job submitJob(Blob jobID, long ts, AString opID, AMap<AString, ACell> meta, ACell input, AString ownerDID,
-			AString callerDID, Blob parentID, boolean memoryOnly, boolean resultOriented, boolean directRun,
-			AAdapter adapter) {
+	private Admission jobAdmission(long ts, AString opID, AMap<AString, ACell> meta, ACell input, AString ownerDID,
+			RequestContext ctx, Blob parentID, boolean memoryOnly, boolean resultOriented, boolean directRun,
+			AAdapter adapter, boolean permit) {
+		AString callerDID = ctx.getCallerDID();
 		if (ownerDID == null || callerDID == null) throw new AuthException("Authentication required");
 
 		OutputRules rules = OutputRules.of(meta);
 
 		AMap<AString, ACell> status = Maps.of(
-				Fields.ID, jobID,
 				Fields.OP, opID,
 				Fields.STATUS, Status.PENDING,
 				Fields.UPDATED, CVMLong.create(ts),
@@ -1056,61 +1116,164 @@ public class JobManager {
 			status = status.assoc(Fields.ADAPTER, Strings.create(adapterName));
 		}
 
-		AMap<AString, ACell> admitted = status;
-		VenueJob job = admit(jobID, status, rules, ownerDID, memoryOnly, resultOriented,
-			record -> new VenueJob(record, admitted, rules, ownerDID, this, !memoryOnly, directRun, adapter));
-		if (memoryOnly) log.debug("Started transient job: {}", jobID);
-		else log.info("Submitted job: {}", jobID);
-		return job;
+		return new Admission(ts, status, rules, ownerDID, memoryOnly, permit, resultOriented,
+			(record, data) -> new VenueJob(record, data, rules, ownerDID, this, !memoryOnly, directRun, adapter));
 	}
 
 	/**
-	 * Writes a job's row and its entry ({@link JobIndex}) in one transaction,
-	 * unless it is memory-only, and publishes its live handle.
+	 * A Job being admitted. Its id is taken, and its row and entry
+	 * ({@link JobIndex}) written, in a venue transaction: the Job's own, or a
+	 * caller's that commits its own record of the Job with it. Its live handle
+	 * is published once that transaction has committed. A transaction body
+	 * that runs again takes a new id, and the run that committed holds the
+	 * Job's. Each id is listed as accepting before its row is written, and
+	 * stays listed until the handle is published or the admission abandoned,
+	 * so a caller who reads the committed row first waits for the handle
+	 * ({@link #liveJob}).
 	 *
 	 * <p>The row comes first because a handle reads a missing row as an erased
-	 * account. The transaction refuses a deleted account; deletion can still
-	 * commit after it, and scan the active jobs before the handle is published,
-	 * so the account is checked again once the handle can be seen: either the
-	 * scan finds the handle or this check finds the deletion.</p>
+	 * account. The transaction refuses a deleted account and notes the
+	 * account's generation, and the handle is published only while the account
+	 * is that one. Deletion can commit after the transaction and scan the
+	 * active jobs before the handle is published, so the account is checked
+	 * again once the handle can be seen: either the scan finds the handle or
+	 * this check finds the deletion.</p>
 	 *
-	 * @throws AuthException if the owner's account has been deleted
+	 * <p>Recording runs on the thread making the transaction; publishing and
+	 * abandoning after it, on that thread or one it hands the Job to.</p>
 	 */
-	VenueJob admit(Blob jobID, AMap<AString, ACell> status, OutputRules rules,
-			AString ownerDID, boolean memoryOnly, boolean preserveFailureCause,
-			java.util.function.Function<JobRecord, VenueJob> handle) {
-		CompletableFuture<Void> acceptance = new CompletableFuture<>();
-		accepting.put(jobID, acceptance);
-		try {
-			engine.getVenueState().users().requireNotDeleted(ownerDID);
-			JobRecord record = null;
-			if (!memoryOnly) {
-				User account = account(ownerDID);
-				AMap<AString, ACell> entry = Maps.of(JobIndex.OWNER, ownerDID);
-				AMap<AString, ACell> kept = rules.toCell();
-				if (kept != null) entry = entry.assoc(JobIndex.RULES, kept);
-				AMap<AString, ACell> admitted = entry;
-				venue().execute(draft -> {
-					if (draft.users().ensure(ownerDID).jobs().create(jobID, status) == null) {
-						throw new IllegalStateException(JOB_ID_EXISTS + jobID);
-					}
-					draft.jobIndex().put(jobID, admitted);
-				});
-				record = account.jobs().at(jobID);
+	final class Admission {
+		private final long ts;
+		/** The Job's record without its id. */
+		private final AMap<AString, ACell> status;
+		private final OutputRules rules;
+		private final AString ownerDID;
+		private final boolean memoryOnly;
+		/** Whether the Job holds one of its owner's admission permits. */
+		private final boolean permit;
+		private final boolean preserveFailureCause;
+		private final BiFunction<JobRecord, AMap<AString, ACell>, VenueJob> handle;
+		/** The caller's context the entry keeps ({@link #keepCallerContext}), or null. */
+		private AMap<AString, ACell> keptContext;
+		/** The id each run of the transaction took, in order. */
+		private final List<Blob> ids = new ArrayList<>();
+		/** The generation of the owner's account the Job was recorded in ({@link Users#requireCurrent}). */
+		private ACell generation;
+
+		Admission(long ts, AMap<AString, ACell> status, OutputRules rules, AString ownerDID,
+				boolean memoryOnly, boolean permit, boolean preserveFailureCause,
+				BiFunction<JobRecord, AMap<AString, ACell>, VenueJob> handle) {
+			this.ts = ts;
+			this.status = status;
+			this.rules = rules;
+			this.ownerDID = ownerDID;
+			this.memoryOnly = memoryOnly;
+			this.permit = permit;
+			this.preserveFailureCause = preserveFailureCause;
+			this.handle = handle;
+		}
+
+		/** Records the Job in {@code venue}, a venue transaction's draft, under a new id. */
+		Blob record(VenueState venue) {
+			Blob id = generateJobID(ts);
+			ids.add(id);
+			accepting.put(id, new CompletableFuture<>());
+			if (memoryOnly) {
+				venue.users().requireNotDeleted(ownerDID);
+				generation = RT.getIn(venue.users().get(ownerDID), Users.GENERATION);
+				return id;
 			}
-			VenueJob job = handle.apply(record);
-			job.setPreserveFailureCause(preserveFailureCause);
-			activeJobs.put(jobID, job);
+			User account = venue.users().ensure(ownerDID);
+			if (account.jobs().create(id, status.assoc(Fields.ID, id)) == null) {
+				throw new IllegalStateException(JOB_ID_EXISTS + id);
+			}
+			AMap<AString, ACell> entry = Maps.of(JobIndex.OWNER, ownerDID);
+			AMap<AString, ACell> kept = rules.toCell();
+			if (kept != null) entry = entry.assoc(JobIndex.RULES, kept);
+			if (keptContext != null) {
+				// A context with no job scope of its own is the Job's
+				AMap<AString, ACell> context = keptContext.containsKey(Fields.JOB_ID) ? keptContext
+					: keptContext.assoc(Fields.JOB_ID, id);
+				entry = entry.assoc(JobIndex.CONTEXT, context);
+			}
+			venue.jobIndex().put(id, entry);
+			generation = RT.getIn(account.get(), Users.GENERATION);
+			return id;
+		}
+
+		/** Records the Job in a venue transaction of its own, which a memory-only Job does not need. */
+		void commit() {
 			try {
-				engine.getVenueState().users().requireNotDeleted(ownerDID);
-			} catch (AuthException deleted) {
-				job.cancel();
-				throw deleted;
+				if (memoryOnly) record(venue());
+				else venue().execute(this::record);
+			} catch (RuntimeException | Error e) {
+				abandon();
+				throw e;
 			}
-			return job;
-		} finally {
-			accepting.remove(jobID);
-			acceptance.complete(null);
+		}
+
+		/**
+		 * Publishes the live handle of the Job the committed transaction
+		 * recorded.
+		 *
+		 * @throws AuthException if the owner's account has been deleted since,
+		 *         taking the Job with it
+		 */
+		VenueJob publish() {
+			if (ids.isEmpty()) throw new IllegalStateException(NOT_RECORDED + ownerDID);
+			Blob id = ids.get(ids.size() - 1);
+			boolean attached = false;
+			try {
+				for (Blob other : ids) if (!other.equals(id)) release(other);
+				requireAccount();
+				JobRecord record = null;
+				if (!memoryOnly) {
+					record = account(ownerDID).jobs().at(id);
+					if (record.getRecord() == null) throw new IllegalStateException(NOT_RECORDED + id);
+				}
+				VenueJob job = handle.apply(record, status.assoc(Fields.ID, id));
+				job.setPreserveFailureCause(preserveFailureCause);
+				// Attached before the Job can be seen, so whatever ends it releases the permit
+				if (permit) {
+					permitHolders.put(id, ownerDID);
+					attached = true;
+				}
+				activeJobs.put(id, job);
+				try {
+					requireAccount();
+				} catch (AuthException deleted) {
+					job.cancel();
+					throw deleted;
+				}
+				return job;
+			} catch (RuntimeException | Error e) {
+				if (permit && !attached) releasePermit(ownerDID);
+				throw e;
+			} finally {
+				release(id);
+			}
+		}
+
+		/** Releases what recording took, after the transaction that recorded the Job failed. */
+		void abandon() {
+			for (Blob id : ids) release(id);
+			ids.clear();
+			if (permit) releasePermit(ownerDID);
+		}
+
+		/**
+		 * Refuses once the owner's account is no longer the one the Job was
+		 * recorded in. An account never deleted has no generation, so null is
+		 * its first.
+		 */
+		private void requireAccount() {
+			Users.requireCurrent(venue().users().get(ownerDID), generation);
+		}
+
+		/** Ends the acceptance listed for {@code id}, letting go of anyone waiting on it. */
+		private void release(Blob id) {
+			CompletableFuture<Void> acceptance = accepting.remove(id);
+			if (acceptance != null) acceptance.complete(null);
 		}
 	}
 
@@ -1131,6 +1294,12 @@ public class JobManager {
 	 */
 	public void keepCallerContext(Job job, RequestContext ctx) {
 		if (!job.isRecorded()) return;
+		AMap<AString, ACell> context = keptContext(ctx);
+		venue().jobIndex().update(job.getID(), entry -> entry.assoc(JobIndex.CONTEXT, context));
+	}
+
+	/** What {@link #keepCallerContext} keeps of {@code ctx}. */
+	private static AMap<AString, ACell> keptContext(RequestContext ctx) {
 		AMap<AString, ACell> kept = Maps.empty();
 		AVector<ACell> proofs = ctx.getProofs();
 		if (proofs != null && !proofs.isEmpty()) kept = kept.assoc(Fields.PROOFS, proofs);
@@ -1140,8 +1309,7 @@ public class JobManager {
 		if (ctx.getSessionId() != null) kept = kept.assoc(Fields.SESSION_ID, ctx.getSessionId());
 		if (ctx.getJobId() != null) kept = kept.assoc(Fields.JOB_ID, ctx.getJobId());
 		if (ctx.getTaskId() != null) kept = kept.assoc(Fields.TASK_ID, ctx.getTaskId());
-		AMap<AString, ACell> context = kept;
-		venue().jobIndex().update(job.getID(), entry -> entry.assoc(JobIndex.CONTEXT, context));
+		return kept;
 	}
 
 	/**
@@ -1202,11 +1370,20 @@ public class JobManager {
 	 * @param change Pure edit of the data, empty when there is none; null removes it
 	 */
 	public void updateAdapterData(Job job, UnaryOperator<AMap<AString, ACell>> change) {
+		updateAdapterData(venue(), job, change);
+	}
+
+	/**
+	 * As {@link #updateAdapterData(Job, UnaryOperator)}, in {@code venue}, the
+	 * draft of a venue transaction, so the change commits with whatever else
+	 * that transaction writes. A Job held only in memory changes at once.
+	 */
+	public void updateAdapterData(VenueState venue, Job job, UnaryOperator<AMap<AString, ACell>> change) {
 		if (job instanceof VenueJob held && held.isMemoryOnly()) {
 			held.updateAdapterData(change);
 			return;
 		}
-		venue().jobIndex().updateAdapterData(job.getID(), change);
+		venue.jobIndex().updateAdapterData(job.getID(), change);
 	}
 
 	/** Why a job's work cannot regain authority: its record names no caller. */
@@ -1251,9 +1428,7 @@ public class JobManager {
 		requireAccepting(false);
 		AMap<AString, ACell> data = call.getData();
 		long ts = engine.currentTimestamp().longValue();
-		Blob jobID = generateJobID(ts);
 		AMap<AString, ACell> status = Maps.of(
-			Fields.ID, jobID,
 			Fields.STATUS, Status.STARTED,
 			Fields.CREATED, CVMLong.create(ts),
 			Fields.UPDATED, CVMLong.create(ts),
@@ -1262,10 +1437,12 @@ public class JobManager {
 			ACell value = data.get(field);
 			if (value != null) status = status.assoc(field, value);
 		}
-		AMap<AString, ACell> mirrored = status;
 		AString owner = Attribution.owner(data);
-		VenueJob mirror = admit(jobID, status, unrecorded.rules(), owner, false, false,
-			record -> new MirrorJob(record, mirrored, unrecorded.rules(), owner, this, call));
+		Admission admission = new Admission(ts, status, unrecorded.rules(), owner, false, false, false,
+			(record, mirrored) -> new MirrorJob(record, mirrored, unrecorded.rules(), owner, this, call));
+		admission.commit();
+		VenueJob mirror = admission.publish();
+		Blob jobID = mirror.getID();
 		whenFinished(call, () -> {
 			AMap<AString, ACell> outcome = call.getData();
 			try {

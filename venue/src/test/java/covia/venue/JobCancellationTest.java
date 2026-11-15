@@ -461,18 +461,18 @@ public class JobCancellationTest {
 	public void testDeletionDuringAcceptanceCancelsTheJob() {
 		// The deletion commits and scans the active jobs after the job's row is
 		// written and before its handle is registered, so the scan cannot find it.
-		Blob id = Blob.createRandom(new java.util.Random(), 16);
-		AMap<AString, ACell> status = Maps.of(Fields.ID, id, Fields.STATUS, Status.PENDING,
-			Fields.CALLER, ALICE_DID);
+		AMap<AString, ACell> status = Maps.of(Fields.STATUS, Status.PENDING, Fields.CALLER, ALICE_DID);
 		AtomicReference<VenueJob> handle = new AtomicReference<>();
-		assertThrows(AuthException.class, () -> engine.jobs().admit(id, status, OutputRules.NONE,
-			ALICE_DID, false, false, record -> {
-				handle.set(new VenueJob(record, status, OutputRules.NONE, ALICE_DID, engine.jobs(), null));
+		JobManager.Admission admission = engine.jobs().new Admission(engine.currentTimestamp().longValue(),
+			status, OutputRules.NONE, ALICE_DID, false, false, false, (record, data) -> {
+				handle.set(new VenueJob(record, data, OutputRules.NONE, ALICE_DID, engine.jobs(), null));
 				engine.deleteUser(engine.venueContext(), ALICE_DID);
 				return handle.get();
-			}));
+			});
+		admission.commit();
+		assertThrows(AuthException.class, admission::publish);
 		assertEquals(Status.CANCELLED, handle.get().getStatus());
-		assertNull(engine.jobs().cancelJob(id), "The refused job must not stay live");
+		assertNull(engine.jobs().cancelJob(handle.get().getID()), "The refused job must not stay live");
 	}
 
 	// ========== Cancel agent:trigger with wait ==========

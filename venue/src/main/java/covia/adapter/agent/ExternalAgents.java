@@ -116,8 +116,17 @@ public final class ExternalAgents {
 			RequestContext execution = engine.harnessContext(owner, id).withJob(job)
 				.withOp(Strings.create("v/ops/" + adapter.getName() + "/" + invocation.operation()));
 			var prepared = engine.jobs().prepareAgentInteraction(meta, invocation.input(), execution);
-			Job child = prepared.job();
-			engine.jobs().updateAdapterData(job, d -> d.assoc(CHILD, child.getID()));
+			// The child and the parent's record of it commit together
+			try {
+				engine.getVenueState().execute(draft -> {
+					Blob childId = prepared.record(draft);
+					engine.jobs().updateAdapterData(draft, job, d -> d.assoc(CHILD, childId));
+				});
+			} catch (RuntimeException | Error e) {
+				prepared.abandon();
+				throw e;
+			}
+			Job child = prepared.accept();
 			attach(job, child, agent, sid, adapter);
 			if (job.isFinished()) child.cancel();
 			else job.setStatus(Status.STARTED);

@@ -120,16 +120,22 @@ class UserDeletionTest {
 
 	@Test void claimedScheduledWorkCannotRunInARecreatedAccount() throws Exception {
 		for (boolean tracked : new boolean[] {true, false}) {
-			AString did = user();
-			RequestContext ctx = RequestContext.of(did);
-			AMap<AString, ACell> input = Maps.of(Fields.PATH, "w/stale-schedule", Fields.VALUE, "old-input");
-			JobManager.Prepared prepared = tracked
-				? engine.jobs().prepareTracked(Strings.create("v/ops/covia/write"), input, ctx)
-				: engine.jobs().prepareUntracked(Strings.create("v/ops/covia/write"), input, ctx);
-			delete(did);
-			engine.getVenueState().users().create(did);
-			assertEquals(Status.CANCELLED, prepared.start().getStatus());
-			assertFalse(engine.getVenueState().users().user(did).cursor().path(Strings.create("w")).exists());
+			// Deleted before or after the recorded fire's live Job was published
+			for (boolean accepted : new boolean[] {true, false}) {
+				AString did = user();
+				RequestContext ctx = RequestContext.of(did);
+				AMap<AString, ACell> input = Maps.of(Fields.PATH, "w/stale-schedule", Fields.VALUE, "old-input");
+				JobManager.Prepared prepared = tracked
+					? engine.jobs().prepareTracked(Strings.create("v/ops/covia/write"), input, ctx)
+					: engine.jobs().prepareUntracked(Strings.create("v/ops/covia/write"), input, ctx);
+				engine.getVenueState().execute(prepared::record);
+				if (accepted) prepared.accept();
+				delete(did);
+				engine.getVenueState().users().create(did);
+				if (accepted) assertEquals(Status.CANCELLED, prepared.start().getStatus());
+				else assertThrows(AuthException.class, prepared::start);
+				assertFalse(engine.getVenueState().users().user(did).cursor().path(Strings.create("w")).exists());
+			}
 		}
 	}
 

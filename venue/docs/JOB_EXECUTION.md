@@ -17,8 +17,7 @@ while it is in use.
   and blocks no other job. This holds on JDK 24 and later (the venue
   recommends 25), with one exception: a native call (Python through FFM)
   keeps its carrier. On JDK 21 to 23 a thread blocked inside `synchronized`
-  keeps its carrier too, and `JobManager.Prepared.start` is synchronized and
-  runs the adapter's `invoke`, where `agent:trigger` can wait without bound.
+  keeps its carrier too.
 - **Memory.** A job in flight holds its state whether it is computing or
   waiting on a thread. A job whose wait is recorded as state (the paused
   family, a followed remote job, an agent's queued task) holds none.

@@ -30,6 +30,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - A disabled adapter is offered its settings and installed at launch, so it recovers its own unfinished jobs: an agent's queued requests survive a launch with the agent adapter disabled, and enabling the agent adapter wakes agents with queued work. At shutdown a stopped adapter's jobs go to that adapter; pause and resume are refused for its jobs, as messages are.
 - Configuring and installing an adapter start nothing: Python scripts load, speech models are fetched on a settings change, and Claude Code's idle-session reaper runs only once the adapter has started, so a disabled adapter does none of these.
 - A `venue:adapter/configure` change the adapter refuses with an error is reverted to its previous configuration.
+- A scheduled fire's job is recorded in the same commit as its claim, and a remote agent turn's backend job with the turn's link to it, so a restart never leaves a failed job for a fire that then runs again, nor a turn that cannot find its backend job.
 - A P2P node that cannot launch, such as on a port in use, is unavailable rather than a configuration error.
 
 - Adapters refuse settings with a configuration error, from the venue config and from `venue:adapter/configure` alike; anything else an adapter's `configure` throws, a module adapter's `IllegalArgumentException` included, is reported as that adapter's fault rather than as invalid input or the `venue` adapter's.

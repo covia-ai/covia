@@ -29,12 +29,23 @@ from a record snapshot). `VenueJob` is the execution handle for a recorded venue
 job; its data comes directly from the job's `JobRecord` lattice component, which
 admission (`Jobs.create`) or recovery hands it.
 `JobManager` owns execution, recovery and admission. Transient handles and remote
-client snapshots retain local backing records. Acceptance writes a recorded job's
-row before it registers the live handle; a lookup by id that arrives in between
-waits for that job's acceptance alone, so a job a caller has just listed is always
-reachable by cancel, pause, resume and message delivery. The row's transaction
-refuses a deleted account, and the account is checked again once the handle is
-registered, so a job accepted across a deletion is cancelled and refused.
+client snapshots retain local backing records.
+
+Admission is three steps. The operation is resolved, its adapter found and its
+caller admitted; then one venue transaction takes the job's id and writes its
+row and entry; then, once that transaction has committed, the live handle is
+registered and the adapter runs. The transaction is the job's own, or a
+caller's that commits its own record of the job with it: a scheduled fire
+commits with its claim, and a remote agent turn's backend job with the turn's
+pointer to it (`JobManager.Prepared`). A transaction that runs again takes a
+new id, and only the one that commits becomes the job's. A lookup by id that
+arrives between the commit and the handle waits for that job's acceptance
+alone, so a job a caller has just listed is always reachable by cancel, pause,
+resume and message delivery. The transaction refuses a deleted account and
+notes the account's generation; the handle is registered only while the
+account is that one, and it is checked again once the handle is registered, so
+a job accepted across a deletion is cancelled and refused. Once registered, a
+failure to start the job fails it.
 
 ## Canonical operation and tool surface
 
