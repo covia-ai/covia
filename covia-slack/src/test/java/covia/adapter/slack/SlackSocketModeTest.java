@@ -158,7 +158,7 @@ class SlackSocketModeTest {
 			ctx.send(envelope("env-dm", payload("socket-turn", dm.assoc(Strings.intern("ts"), Strings.create("3.2")))));
 			assertEquals(ack("env-dm"), socket.ack());
 			f.api.take();
-			assertEquals(Strings.create("session-1"), agent.inputs.poll(5, TimeUnit.SECONDS).get(Fields.SESSION_ID));
+			assertEquals(SlackAdapterTest.FakeAgent.session(1), agent.inputs.poll(5, TimeUnit.SECONDS).get(Fields.SESSION_ID));
 			var status = f.bot().status();
 			assertNotNull(status.get(Strings.intern("webhookPath")));
 			assertEquals(Strings.create(WebhookBot.CONNECTED), status.get(Strings.intern("connection")));
