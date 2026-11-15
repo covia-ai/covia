@@ -64,7 +64,8 @@ class VenueMigrationEndToEndTest {
 	/** Records of calls as version 1 named their caller and owner. */
 	private static final Blob AGENT_JOB = Blob.fromHex("e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2");
 	private static final Blob EVENT = Blob.fromHex("7fffffffffffffffe2e3e2e3e2e3e2e3");
-	private static final AString REQUEST = Strings.create("e2e-request");
+	/** A HITL request the parked agent asked in its session, open, keyed by its job's id in hex. */
+	private static final Blob ASK = Blob.fromHex("e2f0e2f0e2f0e2f0e2f0e2f0e2f0e2f0");
 	private static final String PARKED = "migration-e2e-parked";
 	private static final Blob PARKED_TASK = Blob.fromHex("e2e4e2e4e2e4e2e4e2e4e2e4e2e4e2e4");
 	/** A job still running when a version 1 venue stopped, with no entry: that version kept none. */
@@ -186,8 +187,13 @@ class VenueMigrationEndToEndTest {
 			user.cursor().path(Namespace.J).updateAndGet(jobs -> ((Index<Blob, ACell>) jobs).assoc(LOCAL_CALL, localCall));
 			host.secrets().store(localRef, Strings.create("{\"operationMetadata\":{\"operation\":{\"adapter\":\"remoteagent:request\"}}}"),
 				SecretStore.keys(key));
-			user.inbox().put(REQUEST, Maps.of(Hitl.ID, REQUEST, Strings.create("from"), agentDID,
-				Hitl.STATUS, Hitl.OPEN));
+			AString parkedDID = Principals.agentDID(USER, Strings.create(PARKED));
+			user.cursor().path(Namespace.H).set(Maps.of(Covia.WORKSPACE_DATA, Maps.of(hex(ASK), Maps.of(
+				Hitl.ID, hex(ASK), Strings.create("from"), parkedDID, Hitl.STATUS, Hitl.OPEN,
+				Hitl.AGENT, PARKED, Fields.SESSION_ID, hex(PARKED_SESSION), Hitl.TITLE, "Go ahead?", Hitl.ASKS, Vectors.empty()))));
+			AMap<AString, ACell> askJob = Maps.of(Fields.ID, ASK, Fields.STATUS, Status.INPUT_REQUIRED,
+				Fields.CALLER, USER, Strings.create("actor"), parkedDID, Fields.OP, "v/ops/hitl/request", Fields.ADAPTER, "hitl");
+			user.cursor().path(Namespace.J).updateAndGet(jobs -> ((Index<Blob, ACell>) jobs).assoc(ASK, askJob));
 			Agent parked = user.ensureAgent(PARKED, Maps.empty(), null);
 			parked.putRecord(parked.getRecord().assoc(Agent.KEY_STATUS, Agent.SUSPENDED)
 				.assoc(Agent.KEY_TASKS, Index.<Blob, ACell>none().assoc(PARKED_TASK,
@@ -233,8 +239,9 @@ class VenueMigrationEndToEndTest {
 			User migrated = venue.users().user(USER);
 			assertEquals(Maps.of(Fields.ID, AGENT_JOB, Fields.STATUS, Status.COMPLETE, Fields.CALLER, agentDID, Fields.OWNER, USER),
 				migrated.jobs().getRecord(AGENT_JOB).dissoc(Fields.UPDATED));
-			assertEquals(Maps.of(Hitl.ID, REQUEST, Hitl.CALLER, agentDID, Hitl.OWNER, USER, Hitl.STATUS, Hitl.OPEN),
-				migrated.inbox().get(REQUEST));
+			assertEquals(Maps.of(Hitl.ID, ASK, Hitl.CALLER, parkedDID, Hitl.OWNER, USER, Hitl.STATUS, Hitl.OPEN,
+					Hitl.AGENT, PARKED, Fields.SESSION_ID, PARKED_SESSION, Hitl.TITLE, "Go ahead?", Hitl.ASKS, Vectors.empty()),
+				migrated.inbox().get(ASK), "a request is keyed by its job's id, which it names as a Blob, as its session");
 			assertEquals(Maps.empty(), migrated.agent(PARKED).getTasks().get(PARKED_TASK),
 				"a pending write's context is the request's to keep, not the worker's");
 			Agent parkedNow = migrated.agent(PARKED);
@@ -265,7 +272,7 @@ class VenueMigrationEndToEndTest {
 			assertEquals(Maps.of(RemoteJobs.REMOTE_ID, LOCAL_TASK, RemoteJobs.REMOTE_STATUS, Status.STARTED),
 				RT.getIn(migrated.jobs().getRecord(LOCAL_CALL), RemoteJobs.DELEGATION));
 			assertFalse(venue.users().user(venueDID).secrets().exists(remoteRef));
-			assertEquals(5, venue.jobIndex().all().count(), "only the unfinished jobs have entries");
+			assertEquals(6, venue.jobIndex().all().count(), "only the unfinished jobs have entries");
 			assertEquals(job, venue.users().user(USER).cursor().path(Namespace.J, JOB).get(), "the history chain is gone");
 			ReleasedAgents.assertUntouched(venue, USER, releasedAgents);
 			// Lazy parts are still in their older shapes.
@@ -291,6 +298,11 @@ class VenueMigrationEndToEndTest {
 				engine.jobs().getJob(LOCAL_CALL, ctx).getErrorMessage());
 			// The queued chat is still waiting for the cycle that takes its message
 			assertEquals(Status.PENDING, engine.jobs().getJob(PARKED_CHAT, ctx).getStatus());
+			// The open request still waits, and its answer reaches the session that asked
+			assertEquals(Status.INPUT_REQUIRED, engine.jobs().getJob(ASK, ctx).getStatus());
+			engine.jobs().invokeOperation("v/ops/hitl/respond", Hitl.reject(ASK.toHexString(), "Not now"), ctx).awaitResult(10_000);
+			AVector<ACell> queued = user.agent(PARKED).session(PARKED_SESSION).pending();
+			assertEquals(ASK, RT.getIn(queued.get(queued.count() - 1), Fields.MESSAGE, Hitl.ID), "the answer is queued on the asking session");
 
 			// An unversioned adapter's state moves when it is first used.
 			assertEquals(UNLOADED, venue.adapterState("unloaded").get());

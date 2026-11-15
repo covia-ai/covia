@@ -417,8 +417,8 @@ changes itself (`HitlRequest.resolve`, `Task.park`, `Session.setWakeTime`).
 Each manages its own state as a lattice component.
 
 **Keyed collections are Convex's map components.** `Jobs`, `JobIndex`,
-`AssetStore`, `ContentStore`, `Tasks` and `Sessions` extend Convex's `IndexComponent`, and
-`Users`, `ManagedUsers`, `SecretStore` and `Inbox` its `MapComponent`, so `get`,
+`AssetStore`, `ContentStore`, `Tasks`, `Sessions` and `Inbox` extend Convex's `IndexComponent`, and
+`Users`, `ManagedUsers` and `SecretStore` its `MapComponent`, so `get`,
 `put`, `remove` and `size` are Convex's and `get(key)` is the entry as stored. A collection binds a
 child component to one entry through `path(key)`, which reads a missing key as
 absent, under a name of its own (`Users.user`, `Jobs.job`). Its domain
@@ -910,7 +910,7 @@ accepts complete snapshots signed by the venue's key and keeps the newer
 | `CoviaValue` (Covia) | Convex's `ValueComponent` resolving segments by Covia's rules (`ValuePath.keys`); read-only where a path ends below any component but a workspace, which hands it the rest of the path with `CoviaValue.within` (§4.6) |
 | `Workspace` (Covia) | A flexible data area reached by path (`w`, `o`, `n`, `c`, a job's `temp`, `x/` views); its changes create no missing level except `createPath` (§4.6) |
 | `Entry` (Covia) | A value in a workspace, at keys fixed when its path was resolved; a path cursor under the workspace's cursor, changed at its key in the level above; no missing level is created except by `createLevels` (§4.6) |
-| `Inbox` (Covia) | A user's HITL requests at `h`, a `MapComponent` keyed by request id; only the venue writes them |
+| `Inbox` (Covia) | A user's HITL requests at `h`, an `IndexComponent` keyed by request id, its job's; only the venue writes them |
 | `Jobs` (Covia) | A user's jobs at `j`, an `IndexComponent` keyed by job id, each bound as its `JobRecord`; only the venue admits a job |
 | `ACursor<V>` | Mutable reference with atomic get/set/update/fork/sync |
 

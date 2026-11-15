@@ -314,6 +314,7 @@ identity token through an operation", and HELD_KEYS.md.
 | A job, task or session id read as hex text (`RT.ensureString`): in an agent's records (a task's or timeline entry's `sessionId`, a turn's or queued envelope's `jobId`, a timeline entry's `taskResults` keys), in a job's record (`sessionId`, `mirrorOf`), in an operation's result (`sessionId`, a task operation's `taskId`, an `agent:request` snapshot's `id`, a run's `taskResults` keys) or in a live event (`sessionId`, `jobId`, `cycle:start`'s `jobs`) | A Blob: `HexId.parse(cell)` reads one given as a Blob or as text, so it works with an older venue too; in the venue, `Task.sessionId(row)`, `Session.chatJob(envelope)` or `Ids.stored(cell)` |
 | `engine.agentEvents().subscribe(owner, agent, sessionId, listener)` and `Event.concerns(sessionId)` taking the session as text | The session as a Blob |
 | A messaging adapter's `ConversationSessions.get` and `put`, `RequestContext.SessionDelivery.accept` and `WebhookInbox.deliver` with sessions and job ids as text | Blobs; a `ConversationSessions` legacy reader gives a Blob |
+| `user.inbox()` keyed by request id in hex (`request`, `get`, `getAll`), `HitlRequest.getID()` and `record` with the id as text, and a record's `id` and `sessionId` as text | Keyed and named by the request's job id as a Blob; `getAll()` is an `Index` |
 | `AgentAdapter.deliverSessionMessage` and `appendSessionMessage` taking the chat's job id as text | The job id as a Blob |
 
 ## Upgrading from 0.9.x

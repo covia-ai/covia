@@ -1416,8 +1416,9 @@ External callers keep the standard Job contract: the returned Job remains
 `INPUT_REQUIRED` until it completes or fails.
 
 The target's `h/` namespace is their inbox (`Inbox`): each request is a record
-(`HitlRequest`) keyed by its job's id in hex, holding the asks and how they
-were resolved. MCP clients can list and respond to these requests.
+(`HitlRequest`) keyed by its job's id, a Blob that a path names in hex, holding
+the asks and how they were resolved. MCP clients can list and respond to these
+requests.
 
 The MCP-facing operations are `hitl:list`, `hitl:respond`, and the ordinary Job
 read/status surfaces.

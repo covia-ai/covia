@@ -73,7 +73,8 @@ class UserExportsTest {
 		User user = users.ensure(did);
 		user.writeInternalPath(CoviaPath.parse("w/notes/today"), Strings.create("buy milk"));
 		user.writeInternalPath(CoviaPath.parse("o/greet"), Maps.of("adapter", "test:echo"));
-		user.inbox().put(Strings.create("req-1"), Maps.of(Fields.STATUS, "OPEN"));
+		Blob requestID = Blob.fromHex("0b".repeat(16));
+		user.inbox().put(requestID, Maps.of(Hitl.ID, requestID, Fields.STATUS, "OPEN"));
 		user.assets().store(Strings.create("{\"name\":\"note\"}"), Strings.create("asset content"));
 		user.secrets().store("API_KEY", SECRET, KEYS);
 		Blob jobID = Blob.fromHex("0a".repeat(16));
@@ -248,26 +249,30 @@ class UserExportsTest {
 	@Test
 	void importBringsOlderShapesToTheirCurrentForm() {
 		// A version 1 export: its HITL requests name the asker as from, with
-		// requesterUser for an agent's ask, and it holds the user's jobs.
+		// requesterUser for an agent's ask, are keyed by their ids in hex, and
+		// it holds the user's jobs.
 		Blob jobID = Blob.fromHex("0c".repeat(16));
+		Blob agentAsk = Blob.fromHex("0d".repeat(16)), userAsk = Blob.fromHex("0e".repeat(16));
+		Blob session = Blob.fromHex("0f".repeat(16));
 		AString asker = Strings.create(source + ":g:" + HELPER);
 		AString stranger = TestEngine.uniqueDID("import-stranger");
-		AMap<AString, ACell> fromAgent = Maps.of(Hitl.ID, "req-agent", Hitl.STATUS, Hitl.OPEN,
-			Strings.create("from"), asker, Strings.create("requesterUser"), source);
-		AMap<AString, ACell> fromUser = Maps.of(Hitl.ID, "req-user", Hitl.STATUS, Hitl.OPEN,
+		AMap<AString, ACell> fromAgent = Maps.of(Hitl.ID, agentAsk.toHexString(), Hitl.STATUS, Hitl.OPEN,
+			Strings.create("from"), asker, Strings.create("requesterUser"), source, Fields.SESSION_ID, session.toHexString());
+		AMap<AString, ACell> fromUser = Maps.of(Hitl.ID, userAsk.toHexString(), Hitl.STATUS, Hitl.OPEN,
 			Strings.create("from"), stranger);
 		ABlob older = Format.encodeMultiCell(Maps.of(UserExports.K_FORMAT, UserExports.FORMAT,
 			Fields.VERSION, 1, Fields.DID, source,
 			UserExports.K_USER, Maps.of(
 				Namespace.J, Index.of(jobID, Maps.of(Fields.ID, jobID, Fields.STATUS, Status.COMPLETE)),
-				Namespace.H, Maps.of(Covia.WORKSPACE_DATA, Maps.of("req-agent", fromAgent, "req-user", fromUser)))), true);
+				Namespace.H, Maps.of(Covia.WORKSPACE_DATA, Maps.of(agentAsk.toHexString(), fromAgent, userAsk.toHexString(), fromUser)))), true);
 		run("import", Maps.of(Fields.DID, target, EXPORT, older), venue);
 
 		User imported = users().user(target);
-		assertEquals(Maps.of(Hitl.ID, "req-agent", Hitl.STATUS, Hitl.OPEN, Hitl.CALLER, asker, Hitl.OWNER, source),
-			imported.inbox().get(Strings.create("req-agent")));
-		assertEquals(Maps.of(Hitl.ID, "req-user", Hitl.STATUS, Hitl.OPEN, Hitl.CALLER, stranger),
-			imported.inbox().get(Strings.create("req-user")));
+		assertEquals(Maps.of(Hitl.ID, agentAsk, Hitl.STATUS, Hitl.OPEN, Hitl.CALLER, asker, Hitl.OWNER, source,
+				Fields.SESSION_ID, session),
+			imported.inbox().get(agentAsk), "keyed by its id, which it names as a Blob, as its session");
+		assertEquals(Maps.of(Hitl.ID, userAsk, Hitl.STATUS, Hitl.OPEN, Hitl.CALLER, stranger),
+			imported.inbox().get(userAsk));
 		assertNull(imported.jobs().getRecord(jobID), "an import leaves out the calls");
 	}
 

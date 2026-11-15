@@ -17,9 +17,14 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.lattice.cursor.Cursors;
+import covia.adapter.HITLAdapter;
 import covia.api.Fields;
+import covia.grid.hitl.Hitl;
 import covia.lattice.Covia;
+import covia.lattice.Namespace;
 import covia.venue.Agent;
+import covia.venue.HitlRequest;
+import covia.venue.JobIndex;
 import covia.venue.Session;
 import covia.venue.Task;
 import covia.venue.User;
@@ -41,6 +46,9 @@ class BlobIdsTest {
 	private static final Blob REMOTE = Blob.fromHex("07".repeat(16));
 	/** A remote agent's own session id, as its venue gave it. */
 	private static final AString REMOTE_SESSION = Strings.create("ctx-given-elsewhere");
+	/** The expiry event of the request {@code ASK} asks, and an event of another operation. */
+	private static final Blob EXPIRY = Blob.fromHex("7f".repeat(8) + "08".repeat(8));
+	private static final Blob OTHER_EVENT = Blob.fromHex("7f".repeat(8) + "09".repeat(8));
 	private static final AString CONTINUATION_IDS = Strings.create("continuationIds");
 
 	private static AString hex(Blob id) {
@@ -89,7 +97,13 @@ class BlobIdsTest {
 			Fields.OUTPUT, Maps.of(Fields.SESSION_ID, hex(SESSION), Fields.RESPONSE, "hello")));
 		alice.jobs().put(MIRROR, Maps.of(Fields.ID, MIRROR, Fields.ADAPTER, "agent", BlobIds.MIRROR_OF, hex(CALL)));
 		alice.jobs().put(REMOTE, Maps.of(Fields.ID, REMOTE, Fields.ADAPTER, "remoteagent", Fields.SESSION_ID, REMOTE_SESSION));
-		return venue.get();
+		alice.cursor().path(Namespace.H).set(Maps.of(Covia.WORKSPACE_DATA, Maps.of(hex(ASK),
+			Maps.of(Hitl.ID, hex(ASK), Hitl.STATUS, Hitl.OPEN, Fields.SESSION_ID, hex(SESSION)))));
+		ACell value = RT.assocIn(venue.get(), Index.of(ASK, Maps.of(JobIndex.OWNER, ALICE,
+			JobIndex.ADAPTER_DATA, Maps.of(Fields.SESSION_ID, hex(SESSION), Strings.create("expiryEvent"), EXPIRY))), Covia.JOBS);
+		return RT.assocIn(value, Maps.of(BlobIds.EVENTS, Index.<Blob, ACell>none()
+			.assoc(EXPIRY, Maps.of(Fields.OP, HITLAdapter.EXPIRE_OP, Fields.INPUT, Maps.of(Hitl.USER, ALICE, Hitl.ID, hex(ASK))))
+			.assoc(OTHER_EVENT, Maps.of(Fields.OP, "v/test/ops/echo", Fields.INPUT, Maps.of(Hitl.ID, "its own")))), Covia.SCHEDULE);
 	}
 
 	private static AMap<AString, ACell> job(ACell value, Blob id) {
@@ -154,6 +168,28 @@ class BlobIdsTest {
 			"another adapter's session id is another system's, kept as given");
 	}
 
+	@Test void aHitlRequestIsKeyedByItsJobAndNamesItsIdsAsBlobs() {
+		ACell migrated = STEP.apply(legacy());
+		User alice = VenueState.create(AKeyPair.generate()).rebind(Cursors.root(migrated)).users().user(ALICE);
+		assertEquals(Maps.of(Hitl.ID, ASK, Hitl.STATUS, Hitl.OPEN, Fields.SESSION_ID, SESSION), alice.inbox().get(ASK));
+		assertEquals(1, alice.inbox().getAll().count());
+		assertEquals(SESSION, RT.getIn(migrated, Covia.JOBS, ASK, JobIndex.ADAPTER_DATA, Fields.SESSION_ID),
+			"the session a request's job entry keeps");
+		assertEquals(ASK, RT.getIn(migrated, Covia.SCHEDULE, BlobIds.EVENTS, EXPIRY, Fields.INPUT, Hitl.ID),
+			"the request an expiry is given");
+		assertEquals(Strings.create("its own"), RT.getIn(migrated, Covia.SCHEDULE, BlobIds.EVENTS, OTHER_EVENT, Fields.INPUT, Hitl.ID),
+			"another operation's input is its own");
+	}
+
+	@Test void anInboxKeyThatIsNotAnIdIsRefused() {
+		VenueState venue = VenueState.create(AKeyPair.generate());
+		venue.cursor().set(Index.<Keyword, ACell>none().assoc(Covia.DID, VENUE));
+		venue.users().ensure(ALICE).cursor().path(Namespace.H)
+			.set(Maps.of(Covia.WORKSPACE_DATA, Maps.of("req-1", Maps.of(Hitl.STATUS, Hitl.OPEN))));
+		IllegalStateException refused = assertThrows(IllegalStateException.class, () -> STEP.apply(venue.get()));
+		assertTrue(refused.getMessage().startsWith(BlobIds.NOT_AN_ID));
+	}
+
 	@Test void migratingAgainChangesNothing() {
 		ACell migrated = STEP.apply(legacy());
 		assertSame(migrated, STEP.apply(migrated));
@@ -167,6 +203,8 @@ class BlobIdsTest {
 		venue.cursor().set(Index.<Keyword, ACell>none().assoc(Covia.DID, VENUE));
 		Agent agent = venue.users().ensure(ALICE).ensureAgent(Strings.create("worker"), Maps.empty(), null);
 		agent.addTaskInSession(SESSION, ALICE, null, TASK, Maps.of(Fields.INPUT, "work", Fields.SESSION_ID, SESSION));
+		venue.users().user(ALICE).inbox().open(HitlRequest.record(ASK, ALICE, null, Strings.create("worker"), SESSION,
+			Strings.create("Go ahead?"), null, Vectors.empty(), 1, null));
 		assertSame(venue.get(), STEP.apply(venue.get()));
 	}
 

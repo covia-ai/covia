@@ -16,10 +16,13 @@ import convex.core.data.Blob;
 import convex.core.data.Index;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
+import covia.adapter.HITLAdapter;
 import covia.api.Fields;
+import covia.grid.hitl.Hitl;
 import covia.lattice.Covia;
 import covia.lattice.Namespace;
 import covia.venue.Agent;
+import covia.venue.JobIndex;
 import covia.venue.JobManager;
 import covia.venue.Task;
 
@@ -44,6 +47,12 @@ import covia.venue.Task;
  * {@code sessionId} of a job the agent adapter ran. A finished job's
  * {@code output} is what its caller was given and is left as it was.</p>
  *
+ * <p>A HITL inbox ({@code h/}) becomes an index of its requests keyed by job
+ * id, from a map keyed by its hex, and each request's {@code id} and
+ * {@code sessionId} are Blobs. So are the {@code sessionId} in a job's entry
+ * in {@code :jobs}, which a HITL request keeps there, and the request
+ * {@code id} a scheduled expiry ({@link HITLAdapter#EXPIRE_OP}) is given.</p>
+ *
  * <p>A message envelope, queued on a session or on a task, also loses the
  * {@code sessionId} and {@code taskId} it repeated: where it is queued says
  * both. What the model was shown (turn content, a timeline entry's
@@ -67,18 +76,42 @@ public final class BlobIds implements MigrationStep {
 	/** On a mirror job's record, the call it follows. */
 	static final AString MIRROR_OF = JobManager.MIRROR_OF;
 
+	/** The scheduled events in the {@code :schedule} region. */
+	static final AString EVENTS = Strings.intern("events");
+
 	@Override
 	public ACell apply(ACell venue) {
 		if (!(venue instanceof AMap<?, ?>)) return venue;
-		return convertAt(venue, Covia.USER_DATA, users -> (users instanceof AMap<?, ?> byDID)
+		ACell result = convertAt(venue, Covia.USER_DATA, users -> (users instanceof AMap<?, ?> byDID)
 			? mapValues(byDID, BlobIds::userState) : users);
+		result = convertAt(result, Covia.JOBS, index(entry -> convertAt(entry, JobIndex.ADAPTER_DATA,
+			data -> ids(data, Fields.SESSION_ID))));
+		return convertAt(result, Covia.SCHEDULE, schedule -> convertAt(schedule, EVENTS, index(BlobIds::event)));
 	}
 
 	/** One user's state with the ids it stores as Blobs; the same cell when nothing changes. */
 	public static ACell userState(ACell state) {
 		ACell result = convertAt(state, Namespace.G, agents -> (agents instanceof AMap<?, ?> byId)
 			? mapValues(byId, BlobIds::agent) : agents);
-		return convertAt(result, Namespace.J, index(BlobIds::job));
+		result = convertAt(result, Namespace.J, index(BlobIds::job));
+		return convertAt(result, Namespace.H, inbox -> convertAt(inbox, Covia.WORKSPACE_DATA, BlobIds::requests));
+	}
+
+	/** A HITL inbox's requests: an index keyed by job id, from a map keyed by its hex. */
+	static ACell requests(ACell requests) {
+		if (requests instanceof Index<?, ?> index) return indexValues(index, request -> ids(request, Hitl.ID, Fields.SESSION_ID));
+		if (!(requests instanceof AMap<?, ?> byHex)) throw new IllegalStateException(NOT_AN_ID + requests);
+		Index<Blob, ACell> index = Index.none();
+		for (var entry : byHex.entrySet()) {
+			index = index.assoc(blob(entry.getKey()), ids(entry.getValue(), Hitl.ID, Fields.SESSION_ID));
+		}
+		return index;
+	}
+
+	/** A scheduled event: a HITL request's expiry names the request. */
+	static ACell event(ACell event) {
+		if (!HITLAdapter.EXPIRE_OP.equals(RT.getIn(event, Fields.OP))) return event;
+		return convertAt(event, Fields.INPUT, input -> ids(input, Hitl.ID));
 	}
 
 	/**

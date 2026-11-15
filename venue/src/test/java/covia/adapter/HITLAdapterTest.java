@@ -114,7 +114,7 @@ public class HITLAdapterTest {
 		Job job = request(delegate, Hitl.request("For the owner").ask(Hitl.approval("ok", "OK?").required()).build());
 		assertEquals(Status.INPUT_REQUIRED, job.getStatus(), job.getErrorMessage());
 		AMap<AString, ACell> record = engine.getVenueState().users().user(owner).inbox()
-			.get(Strings.create(job.getID().toHexString()));
+			.get(job.getID());
 		assertEquals(BOB_DID, record.get(Hitl.CALLER));
 		assertEquals(owner, record.get(Hitl.OWNER), "the delegate asked in the owner's namespace");
 		assertEquals(BOB_DID, job.getCaller());
@@ -157,7 +157,7 @@ public class HITLAdapterTest {
 		assertEquals(Status.COMPLETE, job.getStatus());
 		ACell output = job.getOutput();
 		assertEquals(CVMBool.TRUE, RT.getIn(output, "answers", "pay"));
-		assertEquals(Strings.create(id), RT.getIn(output, "id"));
+		assertEquals(Blob.fromHex(id), RT.getIn(output, "id"), "the result names its request by its id");
 		assertEquals(Hitl.ANSWERED, readRecord(ALICE, id).get(Hitl.STATUS));
 		assertNull(engine.jobs().adapterData(job), "a finished job keeps no adapter data");
 	}
@@ -203,7 +203,7 @@ public class HITLAdapterTest {
 			"the real agent tool path must expose its parked HITL job");
 		AMap<AString, ACell> record = readRecord(ALICE, id.toString());
 		assertEquals(Strings.create("hitl-agent"), record.get(Hitl.AGENT));
-		assertEquals(Strings.create(sid.toHexString()), record.get(Fields.SESSION_ID));
+		assertEquals(sid, record.get(Fields.SESSION_ID));
 
 		try (AgentWatch watch = AgentWatch.open(engine, ALICE_DID, "hitl-agent")) {
 			respond(ALICE, Hitl.answer(id.toString()).answer("path", "left").build());
@@ -231,7 +231,7 @@ public class HITLAdapterTest {
 		AString owner = Strings.create("did:test:atomic-hitl");
 		Blob sid = Blob.fromHex("a11ce000a11ce000a11ce000a11ce000");
 		var failAppend = new java.util.concurrent.atomic.AtomicBoolean(true);
-		var requestId = new java.util.concurrent.atomic.AtomicReference<AString>();
+		var requestId = new java.util.concurrent.atomic.AtomicReference<Blob>();
 		var wakes = new java.util.concurrent.atomic.AtomicInteger();
 		var first = covia.venue.server.VenueServer.launch(config);
 		try {
@@ -241,15 +241,15 @@ public class HITLAdapterTest {
 			e.registerAdapter(new AgentAdapter() {
 				@Override public boolean appendSessionMessage(covia.venue.Users draft, AString user, AString agent, Blob session,
 						AString caller, Blob job, ACell message) {
-					assertEquals(Status.COMPLETE, draft.user(owner).jobs().getRecord(Blob.fromHex(requestId.get().toString())).get(Fields.STATUS),
+					assertEquals(Status.COMPLETE, draft.user(owner).jobs().getRecord(requestId.get()).get(Fields.STATUS),
 						"the final Job result must be part of the same draft as the inbox and session");
 					if (failAppend.get()) {
-						assertEquals(Status.INPUT_REQUIRED, e.getVenueState().users().user(owner).jobs().getRecord(Blob.fromHex(requestId.get().toString())).get(Fields.STATUS));
+						assertEquals(Status.INPUT_REQUIRED, e.getVenueState().users().user(owner).jobs().getRecord(requestId.get()).get(Fields.STATUS));
 						assertEquals(Hitl.OPEN, e.getVenueState().users().user(owner).inbox().get(requestId.get()).get(Hitl.STATUS));
 						assertTrue(e.getVenueState().users().user(owner).agent("asker").session(sid).pending().isEmpty());
 					}
 					boolean appended = super.appendSessionMessage(draft,user,agent,session,caller,job,message);
-					assertFalse(draft.user(owner).agent("asker").getPending().containsKey(Blob.fromHex(requestId.get().toString())),
+					assertFalse(draft.user(owner).agent("asker").getPending().containsKey(requestId.get()),
 						"the draft must clear the completed wait before post-commit notifications");
 					if (failAppend.get()) throw new IllegalStateException("injected delivery failure");
 					return appended;
@@ -266,7 +266,7 @@ public class HITLAdapterTest {
 			Job ask = e.jobs().invokeOperation("v/ops/hitl/request", Hitl.request("Atomic answer")
 				.ask(Hitl.approval("yes", "Continue?").required()).build(), RequestContext.ofAgent(owner, Strings.create("asker")).withSessionId(sid));
 			assertTrue(agent.getPending().containsKey(ask.getID()), "the agent request must own a durable wait");
-			requestId.set(Strings.create(ask.getID().toHexString()));
+			requestId.set(ask.getID());
 			var answer = Hitl.answer(requestId.get().toString()).answer("yes", true).build();
 			assertThrows(JobFailedException.class, () -> e.jobs().invokeOperation("v/ops/hitl/respond", answer, ctx).awaitResult(5000));
 			assertEquals(Hitl.OPEN, e.getVenueState().users().user(owner).inbox().get(requestId.get()).get(Hitl.STATUS));
@@ -339,10 +339,9 @@ public class HITLAdapterTest {
 				Job answering = first.jobs().invokeOperation("v/ops/hitl/respond", tokenAnswer(answered.toHexString(), token), BOB);
 				first.jobs().invokeOperation("v/ops/hitl/respond", Hitl.reject(rejected.toHexString(), "No"), BOB);
 				User owner = first.getVenueState().users().user(BOB_DID);
-				AString expiryId = Strings.create(expired.toHexString());
 				// As the venue does when the request's expiry event fires.
 				var expiring = first.jobs().invokeInternal(HITLAdapter.EXPIRE_OP,
-					HITLAdapter.expiryInput(BOB_DID, expiryId), first.venueContext());
+					HITLAdapter.expiryInput(BOB_DID, expired), first.venueContext());
 				for (Job pending : java.util.List.of(answer, reject, expire)) {
 					TestEngine.awaitJob(pending, Job::isFinished, 10_000, () -> "resolution includes the final Job record");
 				}
@@ -922,7 +921,7 @@ public class HITLAdapterTest {
 			restored.cancel();
 			assertFalse(agent.getPending().containsKey(restored.getID()));
 			assertEquals(Hitl.CANCELLED, isolated.getVenueState().users().user(ALICE_DID)
-				.inbox().get(Strings.create(restored.getID().toHexString())).get(Hitl.STATUS));
+				.inbox().get(restored.getID()).get(Hitl.STATUS));
 		} finally {
 			isolated.close();
 		}
