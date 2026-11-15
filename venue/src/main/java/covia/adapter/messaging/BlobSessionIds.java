@@ -22,16 +22,19 @@ import covia.venue.migration.MigrationStep;
  * <p>A user's bots keep their state under {@code users/<owner>}, a bot from
  * configuration under {@code config/<bot>}. Below either, {@code sessions}
  * maps each conversation to its session at a depth that differs by provider,
- * so every value in it is a session id; an empty one named no session and
- * goes. {@code inbox} holds delivery receipts by bot, binding and event:
- * {@code inbox/<bot>/<binding>/<event>} for a user's bot,
- * {@code inbox/<binding>/<event>} for one from configuration. Nothing else
- * changes. An id that is neither a Blob nor hex text is refused.</p>
+ * so every value in it is a session id. A value that is not one names no
+ * session and goes, and the conversation starts a new session: a Telegram
+ * bot's mappings were copied from its owner's {@code w/telegram/sessions},
+ * which held whatever the owner wrote there. {@code inbox} holds delivery
+ * receipts by bot, binding and event: {@code inbox/<bot>/<binding>/<event>}
+ * for a user's bot, {@code inbox/<binding>/<event>} for one from
+ * configuration. Nothing else changes. A receipt's id, which only the venue
+ * wrote, is refused when it is neither a Blob nor hex text.</p>
  */
 public final class BlobSessionIds implements MigrationStep {
 
-	/** Refusal: a stored session or job id is not an id. */
-	public static final String NOT_AN_ID = "A messaging bot's stored session or job id is neither a blob nor hex text: ";
+	/** Refusal: a delivery receipt's session or job id is not an id. */
+	public static final String NOT_AN_ID = "A messaging bot's delivery receipt names a session or job id that is neither a blob nor hex text: ";
 
 	private static final AString USERS = Strings.intern("users");
 	private static final AString CONFIG = Strings.intern("config");
@@ -53,9 +56,7 @@ public final class BlobSessionIds implements MigrationStep {
 	/** Conversation mappings: each value a session, or a further level of them; null for one that names none. */
 	@SuppressWarnings("unchecked")
 	static ACell sessions(ACell mappings) {
-		if (!(mappings instanceof AMap<?, ?> map)) {
-			return (mappings == null || (mappings instanceof AString text && text.isEmpty())) ? null : id(mappings);
-		}
+		if (!(mappings instanceof AMap<?, ?> map)) return HexId.parse(mappings);
 		AMap<ACell, ACell> result = (AMap<ACell, ACell>) map;
 		for (var entry : ((AMap<ACell, ACell>) map).entrySet()) {
 			ACell converted = sessions(entry.getValue());

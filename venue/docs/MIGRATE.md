@@ -112,7 +112,7 @@ A step's parts apply in the order listed.
 | `test` | 0 → 1 | None: version 1 has version 0's shape | `TestAdapter.STATE_STEPS` |
 | `test` | 1 → 2, 2 → 3 | Synthetic, for tests: each appends the version it reaches to `migrations` | `TestAdapter.LogStep` |
 | `telegram`, `discord`, `whatsapp`, `slack` | 0 → 1 | A bot one of its user's agents created names that agent `caller`, not `principal` | `BotCaller` |
-| `telegram`, `discord`, `whatsapp`, `slack` | 1 → 2 | Session and job ids held as hex text become Blobs: the session each conversation continues, under `sessions` at any depth, and a delivery receipt's `sessionId` and `jobId`, under `inbox`. An empty session mapping named no session and goes. A text id that is not hex is refused | `BlobSessionIds` |
+| `telegram`, `discord`, `whatsapp`, `slack` | 1 → 2 | Session and job ids held as hex text become Blobs: the session each conversation continues, under `sessions` at any depth, and a delivery receipt's `sessionId` and `jobId`, under `inbox`. A session mapping that is not an id names no session and goes, so the conversation starts a new one: a Telegram bot's were copied from its owner's `w/telegram/sessions`, which held whatever the owner wrote. A receipt's id that is not hex is refused | `BlobSessionIds` |
 
 ### Shapes converted on use
 

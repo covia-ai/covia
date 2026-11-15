@@ -32,13 +32,16 @@ class BlobSessionIdsTest {
 
 	/**
 	 * A user's Telegram bot and a configured webhook bot as version 1 kept them:
-	 * conversations at both providers' depths, and a delivered and a pending receipt.
+	 * conversations at both providers' depths, and a delivered and a pending
+	 * receipt. Two of the Telegram bot's mappings name no session: one is empty,
+	 * and one is text its owner wrote at {@code w/telegram/sessions}, which
+	 * version 1 copied as it found it.
 	 */
 	private static ACell legacy() {
 		return Maps.of(
 			"users", Maps.of(OWNER, Maps.of(
 				"bots", Maps.of("support", Maps.of("operation", "v/test/ops/echo")),
-				"sessions", Maps.of("support", Maps.of("1234", hex(SESSION), "5678", "")),
+				"sessions", Maps.of("support", Maps.of("1234", hex(SESSION), "5678", "", "9012", "the owner's note")),
 				"inbox", Maps.of("support", Maps.of("binding", Maps.of("update", receipt(hex(SESSION), hex(CHAT))))),
 				"relay", Maps.of("support", Maps.of("identity", Maps.of("note", "unchanged"))))),
 			"config", Maps.of("operator", Maps.of(
@@ -54,10 +57,12 @@ class BlobSessionIdsTest {
 			"a webhook bot's conversations lie deeper, under its identity and settings");
 	}
 
-	@Test void anEmptyMappingNamedNoSessionAndGoes() {
+	@Test void aMappingThatNamesNoSessionGoes() {
 		ACell state = STEP.apply(legacy());
 		AMap<?, ?> conversations = RT.ensureMap(RT.getIn(state, "users", OWNER, "sessions", "support"));
-		assertFalse(conversations.containsKey(Strings.create("5678")));
+		assertFalse(conversations.containsKey(Strings.create("5678")), "an empty mapping");
+		assertFalse(conversations.containsKey(Strings.create("9012")), "text an owner wrote cannot stop the venue starting");
+		assertTrue(conversations.containsKey(Strings.create("1234")));
 	}
 
 	@Test void aReceiptNamesItsSessionAndChatJobAsBlobs() {
@@ -80,8 +85,9 @@ class BlobSessionIdsTest {
 		assertNull(STEP.apply(null), "no state yet");
 	}
 
-	@Test void anIdThatIsNotOneIsRefused() {
-		ACell state = Maps.of("config", Maps.of("operator", Maps.of("sessions", Maps.of("42", "session-b"))));
+	@Test void aReceiptIdThatIsNotOneIsRefused() {
+		ACell state = Maps.of("config", Maps.of("operator", Maps.of(
+			"inbox", Maps.of("identity", Maps.of("event", receipt(Strings.create("session-b"), hex(CHAT)))))));
 		IllegalStateException refused = assertThrows(IllegalStateException.class, () -> STEP.apply(state));
 		assertTrue(refused.getMessage().startsWith(BlobSessionIds.NOT_AN_ID));
 	}
