@@ -33,7 +33,7 @@ public class TasksTest {
 		AString owner = TestEngine.uniqueDID(info);
 		agent = TestEngine.ENGINE.getVenueState().users().ensure(owner)
 			.ensureAgent(Strings.create("tasks-agent"), Maps.empty(), null);
-		agent.ensureSession(SESSION, owner);
+		agent.sessions().create(SESSION, owner, null);
 		tasks = agent.tasks();
 		task = tasks.task(TASK);
 	}

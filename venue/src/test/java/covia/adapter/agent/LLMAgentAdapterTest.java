@@ -359,8 +359,8 @@ public class LLMAgentAdapterTest {
 		User e2eUser = engine.getVenueState().users().user(ALICE_DID);
 		Agent e2eAgent = e2eUser.agent("e2e-agent");
 		Blob e2eSid = Blob.fromHex("e2e10001e2e10001e2e10001e2e10001");
-		e2eAgent.ensureSession(e2eSid, ALICE_DID);
-		e2eAgent.appendSessionPending(e2eSid, Maps.of(
+		e2eAgent.sessions().create(e2eSid, ALICE_DID, null);
+		e2eAgent.session(e2eSid).appendPending(Maps.of(
 			Strings.intern("content"), Strings.create("Hello from e2e")));
 
 		Job runJob = engine.jobs().invokeOperation(
@@ -373,7 +373,7 @@ public class LLMAgentAdapterTest {
 		User user = engine.getVenueState().users().user(ALICE_DID);
 		Agent agent = user.agent("e2e-agent");
 		assertEquals(Agent.SLEEPING, agent.getStatus());
-		assertFalse(agent.hasSessionPending());
+		assertFalse(agent.sessions().hasPending());
 		assertEquals(1, agent.getTimeline().count());
 
 		ACell timelineEntry = agent.getTimeline().get(0);
@@ -390,11 +390,11 @@ public class LLMAgentAdapterTest {
 		User multiUser = engine.getVenueState().users().user(ALICE_DID);
 		Agent multiAgent = multiUser.agent("multi-run-agent");
 		Blob multiSid = Blob.fromHex("11110001111100011111000111110001");
-		multiAgent.ensureSession(multiSid, ALICE_DID);
+		multiAgent.sessions().create(multiSid, ALICE_DID, null);
 		AString multiSidHex = Strings.create(multiSid.toHexString());
 
 		// First run — deliver directly to avoid auto-wake race
-		multiAgent.appendSessionPending(multiSid, Maps.of(
+		multiAgent.session(multiSid).appendPending(Maps.of(
 			Strings.intern("content"), Strings.create("Turn 1")));
 
 		engine.jobs().invokeOperation(
@@ -404,7 +404,7 @@ public class LLMAgentAdapterTest {
 		AgentWatch.awaitTimeline(engine, ALICE_DID, multiAgent, 1);
 
 		// Second run
-		multiAgent.appendSessionPending(multiSid, Maps.of(
+		multiAgent.session(multiSid).appendPending(Maps.of(
 			Strings.intern("content"), Strings.create("Turn 2")));
 
 		engine.jobs().invokeOperation(
@@ -431,8 +431,8 @@ public class LLMAgentAdapterTest {
 		User echoUser = engine.getVenueState().users().user(ALICE_DID);
 		Agent echoRegAgent = echoUser.agent("echo-regression");
 		Blob echoRegSid = Blob.fromHex("22220001222200012222000122220001");
-		echoRegAgent.ensureSession(echoRegSid, ALICE_DID);
-		echoRegAgent.appendSessionPending(echoRegSid, Maps.of(
+		echoRegAgent.sessions().create(echoRegSid, ALICE_DID, null);
+		echoRegAgent.session(echoRegSid).appendPending(Maps.of(
 			Strings.intern("content"), Strings.create("hello")));
 
 		Job job = engine.jobs().invokeOperation(
@@ -501,8 +501,8 @@ public class LLMAgentAdapterTest {
 		User toolUser = engine.getVenueState().users().user(ALICE_DID);
 		Agent toolAgent = toolUser.agent("tool-agent");
 		Blob toolSid = Blob.fromHex("33330001333300013333000133330001");
-		toolAgent.ensureSession(toolSid, ALICE_DID);
-		toolAgent.appendSessionPending(toolSid, Maps.of(
+		toolAgent.sessions().create(toolSid, ALICE_DID, null);
+		toolAgent.session(toolSid).appendPending(Maps.of(
 			Strings.intern("content"), Strings.create("use a tool")));
 
 		Job runJob = engine.jobs().invokeOperation(
@@ -538,8 +538,8 @@ public class LLMAgentAdapterTest {
 		User user = engine.getVenueState().users().user(ALICE_DID);
 		Agent agent = user.agent("bad-args-agent");
 		Blob sid = Blob.fromHex("44440001444400014444000144440001");
-		agent.ensureSession(sid, ALICE_DID);
-		agent.appendSessionPending(sid, Maps.of(
+		agent.sessions().create(sid, ALICE_DID, null);
+		agent.session(sid).appendPending(Maps.of(
 			Strings.intern("content"), Strings.create("go")));
 
 		engine.jobs().invokeOperation(
@@ -696,7 +696,7 @@ public class LLMAgentAdapterTest {
 		assertNotNull(sid);
 		Agent persistedAgent = engine.getVenueState().users().user(ALICE_DID)
 			.agent("issue-334-persist-agent");
-		AMap<AString, ACell> session = persistedAgent.getSession(Blob.fromHex(sid.toString()));
+		AMap<AString, ACell> session = persistedAgent.session(Blob.fromHex(sid.toString())).getRecord();
 		AVector<ACell> frames = RT.ensureVector(RT.getIn(session, Fields.FRAMES));
 		AVector<ACell> conversation = GoalTreeContext.activeConversation(RT.ensureMap(frames.get(0)));
 		ACell persistedToolTurn = conversation.get(2);
@@ -722,7 +722,7 @@ public class LLMAgentAdapterTest {
 		assertEquals("", RT.getIn(chatResult, Fields.RESPONSE).toString(), "a turn that said nothing, not a failure");
 		AString sid = RT.ensureString(RT.getIn(chatResult, Fields.SESSION_ID));
 		AMap<AString, ACell> session = engine.getVenueState().users().user(ALICE_DID)
-			.agent("no-reply-agent").getSession(Blob.fromHex(sid.toString()));
+			.agent("no-reply-agent").session(Blob.fromHex(sid.toString())).getRecord();
 		AVector<ACell> conversation = GoalTreeContext.activeConversation(
 			RT.ensureMap(RT.ensureVector(RT.getIn(session, Fields.FRAMES)).get(0)));
 		ACell last = conversation.get(conversation.count() - 1);
@@ -1155,8 +1155,8 @@ public class LLMAgentAdapterTest {
 		User user = engine.getVenueState().users().user(ALICE_DID);
 		Agent agent = user.agent("skill-e2e-agent");
 		Blob sid = Blob.fromHex("44440001444400014444000144440001");
-		agent.ensureSession(sid, ALICE_DID);
-		agent.appendSessionPending(sid, Maps.of(
+		agent.sessions().create(sid, ALICE_DID, null);
+		agent.session(sid).appendPending(Maps.of(
 			Strings.intern("content"), Strings.create("use the alpha skill")));
 
 		engine.jobs().invokeOperation("v/ops/agent/trigger",
@@ -1169,7 +1169,7 @@ public class LLMAgentAdapterTest {
 		assertTrue(turn1.toString().contains("SKILL_TOOL_RESULT"), turn1.toString());
 
 		// The skill entry landed on the session's root frame.
-		AMap<AString, ACell> session = agent.getSession(sid);
+		AMap<AString, ACell> session = agent.session(sid).getRecord();
 		AMap<AString, ACell> loads = (AMap<AString, ACell>) RT.getIn(
 			session, Fields.FRAMES, CVMLong.ZERO, Fields.LOADS);
 		assertNotNull(loads);
@@ -1177,7 +1177,7 @@ public class LLMAgentAdapterTest {
 
 		// Turn 2 reuses the appended skill body and tool-state event — no reload
 		// and no rewrite of the initial tools vector.
-		agent.appendSessionPending(sid, Maps.of(
+		agent.session(sid).appendPending(Maps.of(
 			Strings.intern("content"), Strings.create("carry on")));
 		engine.jobs().invokeOperation("v/ops/agent/trigger",
 			Maps.of(Fields.AGENT_ID, "skill-e2e-agent"),
@@ -1192,7 +1192,7 @@ public class LLMAgentAdapterTest {
 		// A source behind unchanged declarative config is ambient: reseeding the
 		// directory and reapplying the same config neither rewrites nor appends to
 		// this session's already-materialised context.
-		session = agent.getSession(sid);
+		session = agent.session(sid).getRecord();
 		ACell initialMessages = RT.getIn(session, Fields.FRAMES, CVMLong.ZERO,
 			GoalTreeContext.K_RENDERED_CONTEXT, Strings.intern("messages"));
 		ContextAssembler.Rendered initialRendering = ContextAssembler.Rendered.fromCell(
@@ -1214,7 +1214,7 @@ public class LLMAgentAdapterTest {
 			Fields.CONFIG, Maps.of("skillsets", Vectors.of(Strings.create("w/skills")))),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
-		session = agent.getSession(sid);
+		session = agent.session(sid).getRecord();
 		assertEquals(initialMessages, RT.getIn(session, Fields.FRAMES, CVMLong.ZERO,
 			GoalTreeContext.K_RENDERED_CONTEXT, Strings.intern("messages")));
 		assertFalse(GoalTreeContext.activeConversation(RT.ensureMap(RT.getIn(session, Fields.FRAMES, CVMLong.ZERO))).toString().contains("Beta catalog refresh"));
@@ -1240,7 +1240,7 @@ public class LLMAgentAdapterTest {
 			Fields.AGENT_ID, "skill-e2e-agent",
 			Fields.CONFIG, Maps.of("skillsets", Vectors.of(Strings.create("w/skills")))),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
-		assertEquals(turnsAfterAmbientUpdate, GoalTreeContext.activeConversation(RT.ensureMap(RT.getIn(agent.getSession(sid), Fields.FRAMES, CVMLong.ZERO))).count(),
+		assertEquals(turnsAfterAmbientUpdate, GoalTreeContext.activeConversation(RT.ensureMap(RT.getIn(agent.session(sid).getRecord(), Fields.FRAMES, CVMLong.ZERO))).count(),
 			"an equal config must not append ambient catalog state");
 	}
 
@@ -1582,7 +1582,7 @@ public class LLMAgentAdapterTest {
 
 		AString sid = RT.ensureString(RT.getIn(taskResult, Fields.SESSION_ID));
 		assertNotNull(sid);
-		AMap<AString, ACell> session = agent.getSession(Blob.fromHex(sid.toString()));
+		AMap<AString, ACell> session = agent.session(Blob.fromHex(sid.toString())).getRecord();
 		AVector<ACell> frames = RT.ensureVector(session.get(Fields.FRAMES));
 		AVector<ACell> conversation = GoalTreeContext.activeConversation(RT.ensureMap(frames.get(0)));
 
@@ -1812,7 +1812,7 @@ public class LLMAgentAdapterTest {
 
 		Blob sidBlob = Blob.fromHex(sid.toString());
 		long sessTotal1 = RT.ensureLong(RT.getIn(
-			agent.getSession(sidBlob), "meta", "tokens", "total")).longValue();
+			agent.session(sidBlob).getRecord(), "meta", "tokens", "total")).longValue();
 		assertEquals(total1, sessTotal1, "session meta mirrors the first cycle");
 
 		// Second cycle on the SAME session — totals must accumulate
@@ -1828,7 +1828,7 @@ public class LLMAgentAdapterTest {
 		assertNotNull(t2, "second cycle must also be measured");
 		long total2 = RT.ensureLong(RT.getIn(t2, Fields.TOTAL)).longValue();
 		long sessTotal = RT.ensureLong(RT.getIn(
-			agent.getSession(sidBlob), "meta", "tokens", "total")).longValue();
+			agent.session(sidBlob).getRecord(), "meta", "tokens", "total")).longValue();
 		assertEquals(total1 + total2, sessTotal,
 			"session totals accumulate across cycles");
 
@@ -2334,7 +2334,7 @@ public class LLMAgentAdapterTest {
 		// For now, verify the agent exists and can receive messages
 		User user = engine.getVenueState().users().user(ALICE_DID);
 		Agent receiver = user.agent("receiver-agent");
-		assertFalse(receiver.hasSessionPending());
+		assertFalse(receiver.sessions().hasPending());
 
 		// Deliver via agent:message (existing path) to verify receiver works.
 		// Delivery is verified through the op's result envelope — the receiver's

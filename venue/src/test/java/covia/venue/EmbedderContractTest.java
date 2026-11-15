@@ -109,7 +109,7 @@ class EmbedderContractTest {
 				"systemPrompt", "Embedder contract test")));
 			ACell chat = run(engine, ALICE, "agent/chat", Maps.of("agentId", "helper", "message", "hello from the embedder"));
 			Blob sid = Blob.fromHex(RT.ensureString(RT.getIn(chat, "sessionId")).toString());
-			AMap<AString, ACell> session = alice.agent("helper").getSession(sid);
+			AMap<AString, ACell> session = alice.agent("helper").session(sid).getRecord();
 			AMap<AString, ACell> frame = RT.ensureMap(RT.ensureVector(session.get(Agent.KEY_FRAMES)).get(0));
 			AVector<ACell> conversation = GoalTreeContext.archivedConversation(frame);
 			assertTrue(conversation.toString().contains("hello from the embedder"), conversation.toString());

@@ -115,7 +115,13 @@ public final class Session extends ALatticeComponent<ACell>
 		});
 	}
 
+	/** The epoch of the cycle holding a claim on this session, or null when none does. */
 	public ACell cycleEpoch() { return RT.getIn(getRecord(), K_IN_CYCLE); }
+
+	/**
+	 * Releases the session's cycle claim without a merge, as startup does for
+	 * a cycle no executor runs: any late writes of that cycle are fenced out.
+	 */
 	public void clearCycle() { update(record -> record.dissoc(K_IN_CYCLE)); }
 
 	/**
@@ -126,6 +132,11 @@ public final class Session extends ALatticeComponent<ACell>
 		Objects.requireNonNull(epoch);
 		update(record -> epoch.equals(record.get(K_IN_CYCLE)) ? record.dissoc(K_IN_CYCLE) : record);
 	}
+	/**
+	 * The messages waiting for the session's next cycle (AGENT_SESSIONS.md
+	 * §5.5.2); empty when there are none or the session does not exist. Not
+	 * the agent's {@code pending}, its outbound waits.
+	 */
 	public AVector<ACell> pending() {
 		AVector<ACell> pending = RT.ensureVector(RT.getIn(getRecord(), K_PENDING));
 		return pending == null ? Vectors.empty() : pending;

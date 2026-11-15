@@ -2399,7 +2399,7 @@ public class AgentAdapter extends AAdapter {
 		if (sidHex != null) {
 			Blob sid = parseSessionId(sidHex);
 			if (sid == null) { job.fail("Invalid sessionId format: " + sidHex); return null; }
-			session = agent.getSession(sid);
+			session = agent.session(sid).getRecord();
 			if (session == null) { job.fail(UNKNOWN_SESSION_CODE, CONTEXT_UNKNOWN_SESSION.formatted(sidHex)); return null; }
 			agentCtx = agentCtx.withSessionId(sid);
 		}
@@ -2570,10 +2570,10 @@ public class AgentAdapter extends AAdapter {
 		AMap<AString, ACell> session;
 		if (requested != null) {
 			sid = requiredSessionId(requested);
-			session = access.agent().getSession(sid);
+			session = access.agent().session(sid).getRecord();
 		} else if (access.excludedSession() != null) {
 			sid = access.excludedSession();
-			session = access.agent().getSession(sid);
+			session = access.agent().session(sid).getRecord();
 		} else {
 			List<SessionSummary> summaries = visibleSessionSummaries(ctx, access);
 			if (summaries.isEmpty()) return sessionNotFound();
@@ -2640,7 +2640,7 @@ public class AgentAdapter extends AAdapter {
 			summary = summaries.get(0);
 		} else {
 			Blob sid = requiredSessionId(requested);
-			summary = summarizeSession(ctx, access, sid, access.agent().getSession(sid));
+			summary = summarizeSession(ctx, access, sid, access.agent().session(sid).getRecord());
 			if (summary == null) return sessionNotFound();
 		}
 
@@ -2675,7 +2675,7 @@ public class AgentAdapter extends AAdapter {
 		if (sid == null || access.excludedSession() == null || !sid.equals(access.excludedSession())) {
 			throw new InvalidInputException("current is only for an agent reading the session it is in");
 		}
-		AMap<AString, ACell> session = access.agent().getSession(sid);
+		AMap<AString, ACell> session = access.agent().session(sid).getRecord();
 		AMap<AString, ACell> frame = (session != null) ? rootFrame(session) : null;
 		if (frame == null) return sessionNotFound();
 		ACell from = RT.getIn(input, K_FROM_TURN), to = RT.getIn(input, K_TO_TURN);
@@ -3219,14 +3219,14 @@ public class AgentAdapter extends AAdapter {
 		Blob sid = parseSessionId(sidHex);
 		if (sid == null) { job.fail("Invalid sessionId format: " + sidHex); return; }
 
-		if (agent.getSession(sid) == null) {
+		if (agent.session(sid).getRecord() == null) {
 			job.fail("Session not found: " + sidHex);
 			return;
 		}
 
 		// Remove the session first: a chat then either registered before the
 		// waiters are failed below, or finds no session for its message.
-		agent.removeSession(sid);
+		agent.sessions().remove(sid);
 
 		// Fail every chat awaiting on this session so each caller unblocks with
 		// a clean error (scoped analogue of failAllPendingForAgent).
@@ -3308,7 +3308,7 @@ public class AgentAdapter extends AAdapter {
 		requireNative(agent, "compactSession");
 		Blob sid = parseSessionId(sidHex);
 		if (sid == null) { job.fail("Invalid sessionId format: " + sidHex); return; }
-		if (agent.getSession(sid) == null) { job.fail("Session not found: " + sidHex); return; }
+		if (agent.session(sid).getRecord() == null) { job.fail("Session not found: " + sidHex); return; }
 
 		java.util.concurrent.atomic.AtomicLong archived =
 			new java.util.concurrent.atomic.AtomicLong(0);
@@ -3333,7 +3333,7 @@ public class AgentAdapter extends AAdapter {
 			return frames.assoc(0, compacted);
 		});
 		if (!applied) {
-			if (agent.getSessionCycleEpoch(sid) != null) {
+			if (agent.session(sid).cycleEpoch() != null) {
 				job.fail("Session is active; retry compaction after the current cycle completes");
 			} else {
 				job.fail("Session changed or disappeared before compaction");
@@ -3364,10 +3364,10 @@ public class AgentAdapter extends AAdapter {
 		requireNative(agent, "reloadContext");
 		Blob sid = parseSessionId(sidHex);
 		if (sid == null) { job.fail("Invalid sessionId format: " + sidHex); return; }
-		if (agent.getSession(sid) == null) { job.fail("Session not found: " + sidHex); return; }
+		if (agent.session(sid).getRecord() == null) { job.fail("Session not found: " + sidHex); return; }
 
 		AVector<ACell> existingFrames = RT.ensureVector(
-			RT.getIn(agent.getSession(sid), Fields.FRAMES));
+			RT.getIn(agent.session(sid).getRecord(), Fields.FRAMES));
 		int clearable = 0;
 		for (long i = 0; existingFrames != null && i < existingFrames.count(); i++) {
 			AMap<AString, ACell> frame = RT.ensureMap(existingFrames.get(i));
@@ -3384,7 +3384,7 @@ public class AgentAdapter extends AAdapter {
 			return updated;
 		});
 		if (!applied) {
-			if (agent.getSessionCycleEpoch(sid) != null) {
+			if (agent.session(sid).cycleEpoch() != null) {
 				job.fail("Session is active; retry context reload after the current cycle completes");
 			} else {
 				job.fail("Session changed or disappeared before context reload");
@@ -3955,8 +3955,7 @@ public class AgentAdapter extends AAdapter {
 		}
 		Blob sid = storedId(RT.ensureString(data.get(Fields.SESSION_ID)));
 		if (sid == null) return false;
-		AVector<ACell> pending = agent.getSessionPending(sid);
-		if (pending == null) return false;
+		AVector<ACell> pending = agent.session(sid).pending();
 		AString jobIdHex = Strings.create(jobId.toHexString());
 		for (long i = 0; i < pending.count(); i++) {
 			if (!jobIdHex.equals(RT.getIn(pending.get(i), Fields.JOB_ID))) continue;
@@ -4402,7 +4401,7 @@ public class AgentAdapter extends AAdapter {
 	/** Work is a session message waiting, or a task with something to run on
 	 *  ({@link Agent#isTaskReady}); a parked task is not work. */
 	private boolean hasWork(Agent agent) {
-		return agent.hasSessionPending() || agent.hasReadyTask(engine.currentTimestamp().longValue());
+		return agent.sessions().hasPending() || agent.hasReadyTask(engine.currentTimestamp().longValue());
 	}
 
 	// ========== Run loop ==========
@@ -4560,7 +4559,7 @@ public class AgentAdapter extends AAdapter {
 				AMap<AString, ACell> pickedSessionRecord = null;
 				AVector<ACell> filteredInbox = Vectors.empty();
 				if (pickedSessionBlob != null) {
-					pickedSessionRecord = agent.getSession(pickedSessionBlob);
+					pickedSessionRecord = agent.session(pickedSessionBlob).getRecord();
 					if (pickedSessionRecord != null) {
 						filteredInbox = Session.taken(pickedSessionRecord, pickedTask == null);
 						pickedSessionRecord = pickedSessionRecord.assoc(Agent.KEY_PENDING, filteredInbox);
@@ -4992,7 +4991,7 @@ public class AgentAdapter extends AAdapter {
 			} else if (pickedSessionBlob != null) {
 				pickedThreadId = pickedSessionBlob;
 				pickedKind = Agent.ThreadKind.SESSION;
-				pickedRecord = agent.getSession(pickedSessionBlob);
+				pickedRecord = agent.session(pickedSessionBlob).getRecord();
 				// Only a transition sets a session's wake, so whatever it holds is the one picked
 				wakeAtPick = (pickedRecord != null) ? pickedRecord.get(Fields.WAKE_TIME) : null;
 			}
@@ -5353,9 +5352,9 @@ public class AgentAdapter extends AAdapter {
 				taskKey = key;
 			}
 		}
-		Blob sid = agent.oldestSessionWithPending();
+		Blob sid = agent.sessions().oldestWithPending();
 		if (sid != null && task != null) {
-			AVector<ACell> pending = Session.taken(agent.getSession(sid), true);
+			AVector<ACell> pending = Session.taken(agent.session(sid).getRecord(), true);
 			if (pending.count() == 0 || Session.queueKey(pending.get(0)) >= taskKey) sid = null;
 		}
 		if (task == null || sid != null) {
@@ -5844,10 +5843,9 @@ public class AgentAdapter extends AAdapter {
 		Index<Blob, ACell> sessions = agent.getSessions();
 		if (sessions == null) return;
 		for (var entry : sessions.entrySet()) {
-			Blob sid = entry.getKey();
-			agent.clearSessionCycle(sid);
-			AVector<ACell> pending = agent.getSessionPending(sid);
-			if (pending == null) continue;
+			Session session = agent.session(entry.getKey());
+			session.clearCycle();
+			AVector<ACell> pending = session.pending();
 			for (long i = 0; i < pending.count(); i++) {
 				AString jobIdHex = RT.ensureString(RT.getIn(pending.get(i), Fields.JOB_ID));
 				Blob jobId = (jobIdHex != null) ? Blob.fromHex(jobIdHex.toString()) : null;
@@ -5855,7 +5853,7 @@ public class AgentAdapter extends AAdapter {
 				ACell rawJob = user.jobs().getRecord(jobId);
 				if (!(rawJob instanceof AMap<?, ?> map)
 						|| Job.isFinished((AMap<AString, ACell>) map)) {
-					agent.session(sid).removePendingJob(jobId);
+					session.removePendingJob(jobId);
 				}
 			}
 		}

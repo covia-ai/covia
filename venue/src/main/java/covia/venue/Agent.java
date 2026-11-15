@@ -386,12 +386,6 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 		return (v instanceof Index) ? (Index<Blob, ACell>) v : Index.none();
 	}
 
-	/**
-	 * Returns the session record for the given sid, or null if absent.
-	 */
-	@SuppressWarnings("unchecked")
-	public AMap<AString, ACell> getSession(Blob sid) { return session(sid).getRecord(); }
-
 	/** The agent's queue of tasks, bound to this agent (including when this agent is a draft). */
 	public Tasks tasks() {
 		return new Tasks(cursor().path(K_TASKS));
@@ -461,25 +455,6 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 		});
 	}
 
-	/**
-	 * Ensures a session record exists at the given sid ({@link Sessions#create}),
-	 * returning the session record (existing or freshly created).
-	 */
-	public AMap<AString, ACell> ensureSession(Blob sid, AString caller) {
-		return ensureSession(sid, caller, null);
-	}
-
-	/**
-	 * Ensures a session exists, seeding the root frame's loads when it is
-	 * minted here. {@code initialLoads} applies only on creation — an existing
-	 * session's loads are never touched by this method.
-	 */
-	public AMap<AString, ACell> ensureSession(Blob sid, AString caller,
-			AMap<AString, ACell> initialLoads) {
-		sessions().create(sid, caller, initialLoads);
-		return getSession(sid);
-	}
-
 	/** Claim one external turn per session. A retained claim after restart prevents blind replay. */
 	@SuppressWarnings("unchecked")
 	public boolean claimExternalTurn(Blob sid, Blob jobId, AString caller, ACell content, boolean create) {
@@ -537,55 +512,6 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 		if (r == null) return Index.none();
 		ACell v = r.get(K_PENDING);
 		return (v instanceof Index) ? (Index<Blob, ACell>) v : Index.none();
-	}
-
-	/**
-	 * Returns the per-session pending message vector (S3b). Distinct from
-	 * the agent-level {@code pending} Index of in-flight Job snapshots —
-	 * same {@code AString} field name at a different path. This vector
-	 * holds messages awaiting consumption by the next transition for the
-	 * given session.
-	 *
-	 * <p>Returns an empty vector if the session is missing or has no
-	 * pending entries.</p>
-	 */
-	@SuppressWarnings("unchecked")
-	public AVector<ACell> getSessionPending(Blob sid) { return session(sid).pending(); }
-	/**
-	 * Atomically appends an envelope to {@code sessions[sid].pending} (S3b).
-	 * No-op if the session is missing — callers should ensureSession first.
-	 */
-	@SuppressWarnings("unchecked")
-	public void appendSessionPending(Blob sid, ACell envelope) {
-		session(sid).appendPending(envelope);
-	}
-
-	/** Reads {@code sessions[sid].inCycle}, or null when absent. */
-	public ACell getSessionCycleEpoch(Blob sid) { return session(sid).cycleEpoch(); }
-	/**
-	 * Releases a session's cycle claim without a merge, as startup does for a
-	 * cycle no executor runs: any late writes of that cycle are fenced out.
-	 */
-	public void clearSessionCycle(Blob sid) {
-		if (sid != null) session(sid).clearCycle();
-	}
-	/**
-	 * Removes the session record at {@code sid} (no-op if absent), as
-	 * {@link Sessions#remove}. A concurrent {@code mergeRunResult} on the same
-	 * session is safe either way: a session's operations skip a vanished session.
-	 */
-	public void removeSession(Blob sid) {
-		sessions().remove(sid);
-	}
-
-	/** Whether any session has pending messages ({@link Sessions#hasPending}). */
-	public boolean hasSessionPending() {
-		return sessions().hasPending();
-	}
-
-	/** The session next in the agent's queue ({@link Sessions#oldestWithPending}). */
-	public Blob oldestSessionWithPending() {
-		return sessions().oldestWithPending();
 	}
 
 	public AString getError() {

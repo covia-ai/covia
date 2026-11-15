@@ -111,7 +111,7 @@ public class ValuesApiTest {
 		// In particular, task scratch is backed by the existing task Job record.
 		User scopedUser = TestServer.ENGINE.getVenueState().users().user(callerDID);
 		scopedUser.ensureAgent(scopedAgentId, Maps.empty(), null)
-			.ensureSession(scopedSessionId, callerDID);
+			.sessions().create(scopedSessionId, callerDID, null);
 		RequestContext base = RequestContext.of(callerDID).withAgentId(scopedAgentId);
 		TestServer.ENGINE.jobs().invokeInternal(OP_WRITE, Maps.of(
 			Strings.create("path"), Strings.create("n/note"),

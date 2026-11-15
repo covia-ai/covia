@@ -104,8 +104,8 @@ public class UserMetaStampTest {
 
 	@Test
 	public void testDeepSessionFrameWriteBumps() {
-		user.ensureAgent("frame-agent", Maps.empty(), null).ensureSession(
-			Blob.fromHex("dd112233445566778899aabbccddee01"), ALICE_DID);
+		user.ensureAgent("frame-agent", Maps.empty(), null).sessions().create(
+			Blob.fromHex("dd112233445566778899aabbccddee01"), ALICE_DID, null);
 		Blob sid = Blob.fromHex("dd112233445566778899aabbccddee01");
 		long before = metaField("updated");
 		tick();

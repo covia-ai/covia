@@ -1638,7 +1638,7 @@ public class TelegramAdapterTest {
 	@SuppressWarnings("unchecked")
 	private AMap<AString, ACell> firstTurn(String sid) {
 		var agent = engine.getVenueState().users().user(owner).agent(Strings.create(AGENT));
-		var frames = (AVector<ACell>) agent.getSession(Blob.fromHex(sid)).get(Agent.KEY_FRAMES);
+		var frames = (AVector<ACell>) agent.session(Blob.fromHex(sid)).getRecord().get(Agent.KEY_FRAMES);
 		return (AMap<AString, ACell>) covia.adapter.agent.GoalTreeContext.activeConversation(RT.ensureMap(frames.get(0))).get(0);
 	}
 

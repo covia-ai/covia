@@ -79,7 +79,7 @@ class UserExportsTest {
 		Blob jobID = Blob.fromHex("0a".repeat(16));
 		user.jobs().create(jobID, Maps.of(Fields.ID, jobID, Fields.STATUS, Status.COMPLETE, Fields.OUTPUT, "done"));
 		Agent agent = user.ensureAgent(HELPER, Maps.of("model", "test"), Strings.create("state"));
-		agent.ensureSession(Blob.fromHex("aa"), did);
+		agent.sessions().create(Blob.fromHex("aa"), did, null);
 		return user;
 	}
 
@@ -322,7 +322,7 @@ class UserExportsTest {
 		User clone = users.user(target);
 		assertEquals(SECRET, clone.secrets().decrypt("API_KEY", KEYS).toString());
 		Agent agent = clone.agent(HELPER);
-		assertEquals(user.agent(HELPER).getSession(sid), agent.getSession(sid));
+		assertEquals(user.agent(HELPER).session(sid).getRecord(), agent.session(sid).getRecord());
 
 		Blob cloneWake = agent.wakeHandle();
 		assertNotNull(cloneWake);

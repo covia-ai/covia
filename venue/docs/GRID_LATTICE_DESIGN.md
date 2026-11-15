@@ -412,12 +412,12 @@ a component that is not Covia's.
 
 **An entity is a collection and its entries.** A kind of domain entity is two
 components with different operations: the collection adds and finds entries
-(`Inbox.open`, `Tasks.add`, `Jobs.create`), and an entry changes itself
-(`HitlRequest.resolve`, `Task.park`). Each manages its own state as a lattice
-component.
+(`Inbox.open`, `Tasks.add`, `Sessions.create`, `Jobs.create`), and an entry
+changes itself (`HitlRequest.resolve`, `Task.park`, `Session.setWakeTime`).
+Each manages its own state as a lattice component.
 
 **Keyed collections are Convex's map components.** `Jobs`, `JobIndex`,
-`AssetStore`, `ContentStore` and `Tasks` extend Convex's `IndexComponent`, and
+`AssetStore`, `ContentStore`, `Tasks` and `Sessions` extend Convex's `IndexComponent`, and
 `Users`, `ManagedUsers`, `SecretStore` and `Inbox` its `MapComponent`, so `get`,
 `put`, `remove` and `size` are Convex's and `get(key)` is the entry as stored. A collection binds a
 child component to one entry through `path(key)`, which reads a missing key as
@@ -441,8 +441,9 @@ operations that name it, not by its place in a larger value.
 | `Jobs` | a job id, in hex, to its `JobRecord` |
 | `JobRecord` | `temp` to the job's `Workspace`; the rest of the job is read-only |
 | `SecretStore` | a secret's name to its `SecretStore.Record`, which its store deletes |
-| `Agent` | `n` to the agent's `Workspace`; `sessions/<id>`, the id in hex, to its `Session`; `tasks` to `Tasks` |
+| `Agent` | `n` to the agent's `Workspace`; `sessions` to `Sessions`, and `sessions/<id>` to the session's `Session`; `tasks` to `Tasks` |
 | `Tasks` | a task's id, in hex, to its `Task`; the agent's access rule covers both |
+| `Sessions` | a session's id, in hex, to its `Session`; the agent's access rule covers the list |
 | `Session` | `c` to the session's `Workspace` |
 
 Segments below the last component a path reaches are read by the value they

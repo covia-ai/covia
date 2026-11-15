@@ -111,7 +111,7 @@ class ConversationRouterTest {
 			inbox.accept("1", Strings.create("input"));
 			var agent = engine.getVenueState().users().user(owner).agent("atomic");
 			assertThrows(JobFailedException.class, () -> router.deliver("chat", Strings.create("input"), LISTED, (draft, sid, jid) -> {
-				assertEquals(1, draft.users().user(owner).agent("atomic").getSessionPending(convex.core.data.Blob.fromHex(sid.toString())).count());
+				assertEquals(1, draft.users().user(owner).agent("atomic").session(convex.core.data.Blob.fromHex(sid.toString())).pending().count());
 				assertTrue(agent.getSessions().isEmpty(), "the live input must remain invisible until commit");
 				assertTrue(inbox.deliver(draft, "1", sid, jid));
 				assertEquals(covia.adapter.webhook.WebhookInbox.PENDING, inbox.get("1").get(Fields.STATUS));
@@ -132,10 +132,10 @@ class ConversationRouterTest {
 			assertEquals(1, winners);
 			assertEquals(1, agent.getSessions().count());
 			var sid = convex.core.data.Blob.fromHex(sessions.get("chat"));
-			assertEquals(1, agent.getSessionPending(sid).count());
+			assertEquals(1, agent.session(sid).pending().count());
 			assertEquals(covia.adapter.webhook.WebhookInbox.COMPLETE, inbox.get("1").get(Fields.STATUS));
 			assertEquals(Strings.create(sessions.get("chat")), inbox.get("1").get(Fields.SESSION_ID));
-			assertEquals(RT.getIn(agent.getSessionPending(sid).get(0), Fields.JOB_ID), inbox.get("1").get(Fields.JOB_ID));
+			assertEquals(RT.getIn(agent.session(sid).pending().get(0), Fields.JOB_ID), inbox.get("1").get(Fields.JOB_ID));
 		} finally { engine.close(); }
 	}
 
@@ -211,7 +211,7 @@ class ConversationRouterTest {
 			assertEquals(1, wakes.get());
 			var agent = engine.getVenueState().users().user(owner).agent("atomic");
 			assertEquals(1, agent.getSessions().count());
-			assertEquals(1, agent.getSessionPending(convex.core.data.Blob.fromHex(sessions.get("chat"))).count());
+			assertEquals(1, agent.session(convex.core.data.Blob.fromHex(sessions.get("chat"))).pending().count());
 			assertEquals(covia.adapter.webhook.WebhookInbox.COMPLETE, inbox.get("1").get(Fields.STATUS));
 			var replies = new java.util.concurrent.LinkedBlockingQueue<ACell>();
 			ConversationRouter.onResponse(job, replies::add, failure -> fail(failure));
@@ -356,7 +356,7 @@ class ConversationRouterTest {
 			var jid = convex.core.data.Blob.fromHex(inbox.get("1").get(Fields.JOB_ID).toString());
 			assertFalse(engine.jobs().getJob(jid).isFinished(), "a failed flush must not fail accepted input");
 			assertEquals(1, engine.getVenueState().users().user(owner).agent("flush")
-				.getSessionPending(convex.core.data.Blob.fromHex(sessions.get("chat"))).count());
+				.session(convex.core.data.Blob.fromHex(sessions.get("chat"))).pending().count());
 		} finally { store.failFlush = false; engine.close(); }
 	}
 

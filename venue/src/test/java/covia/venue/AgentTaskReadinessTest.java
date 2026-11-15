@@ -34,7 +34,7 @@ public class AgentTaskReadinessTest {
 		did = TestEngine.uniqueDID(info);
 		agent = TestEngine.ENGINE.getVenueState().users().ensure(did)
 			.ensureAgent("readiness", Maps.empty(), null);
-		agent.ensureSession(SID, did);
+		agent.sessions().create(SID, did, null);
 		agent.tasks().add(TASK, Maps.of(
 			Fields.INPUT, Maps.of("ask", "something"),
 			Fields.SESSION_ID, Strings.create(SID.toHexString()),
@@ -84,7 +84,7 @@ public class AgentTaskReadinessTest {
 	@Test
 	public void aParkedTaskIsReadyWhenItsSessionHasAMessage() {
 		presentAndPark();
-		agent.appendSessionPending(SID, Maps.of(Fields.MESSAGE, "an answer"));
+		agent.session(SID).appendPending(Maps.of(Fields.MESSAGE, "an answer"));
 		assertTrue(agent.isTaskReady(row(), NOW), "a human's answer arrives in the task's session");
 	}
 

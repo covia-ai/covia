@@ -45,7 +45,7 @@ public class AgentPathTest {
 		user = engine.getVenueState().users().ensure(TestEngine.uniqueDID(info));
 		agent = user.ensureAgent(AGENT, Maps.empty(), null);
 		sid = Blob.fromHex("00112233445566778899aabbccddeeff");
-		agent.ensureSession(sid, null);
+		agent.sessions().create(sid, null, null);
 		session = "g/" + AGENT + "/sessions/" + sid.toHexString();
 	}
 
@@ -118,7 +118,7 @@ public class AgentPathTest {
 			assertThrows(AuthException.class, () -> Entry.of(list)).getMessage());
 
 		ALatticeComponent<?> meta = resolve(session + "/meta");
-		assertEquals(RT.getIn(agent.getSession(sid), "meta"), read(meta));
+		assertEquals(RT.getIn(agent.session(sid).getRecord(), "meta"), read(meta));
 		assertEquals(Entry.READ_ONLY,
 			assertThrows(AuthException.class, () -> Entry.of(meta)).getMessage());
 	}
@@ -140,7 +140,7 @@ public class AgentPathTest {
 			assertThrows(InvalidInputException.class, () -> Entry.of(entry).write(CVMLong.ONE), path);
 		}
 		assertNull(user.agent("nobody"), "resolving a path creates no agent");
-		assertNull(agent.getSession(Blob.fromHex("ff")), "resolving a path creates no session");
+		assertNull(agent.session(Blob.fromHex("ff")).getRecord(), "resolving a path creates no session");
 	}
 
 	@Test

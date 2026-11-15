@@ -126,7 +126,7 @@ public final class AgentWatch implements AutoCloseable {
 	/** Waits until the agent is idle: SLEEPING, with no session input pending and no tasks. */
 	public static void awaitIdle(Engine engine, AString ownerDID, Agent agent) {
 		awaitAgent(engine, ownerDID, agent, "idle", a -> Agent.SLEEPING.equals(a.getStatus())
-			&& !a.hasSessionPending() && (a.getTasks() == null || a.getTasks().count() == 0));
+			&& !a.sessions().hasPending() &&(a.getTasks() == null || a.getTasks().count() == 0));
 	}
 
 	/** Waits for the first {@code status} event since the watch opened that reports {@code status}. */
@@ -191,7 +191,7 @@ public final class AgentWatch implements AutoCloseable {
 			AVector<?> timeline = agent.getTimeline();
 			sb.append("; status=").append(agent.getStatus())
 				.append(", timeline=").append(timeline == null ? 0 : timeline.count())
-				.append(", sessionPending=").append(agent.hasSessionPending())
+				.append(", sessionPending=").append(agent.sessions().hasPending())
 				.append(", tasks=").append(agent.getTasks() == null ? 0 : agent.getTasks().count());
 		}
 		return sb.toString();

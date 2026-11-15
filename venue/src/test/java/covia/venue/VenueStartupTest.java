@@ -240,8 +240,8 @@ public class VenueStartupTest {
 			Agent agent = seed.getVenueState().users().ensure(owner).ensureAgent(
 				"startup-agent", Maps.of(Fields.OPERATION, OP, "release", "old"), null);
 			Blob sid = Blob.fromHex("05640001");
-			agent.ensureSession(sid, owner);
-			agent.appendSessionPending(sid, Maps.of(Fields.SESSION_ID, sid.toHexString(),
+			agent.sessions().create(sid, owner, null);
+			agent.session(sid).appendPending(Maps.of(Fields.SESSION_ID, sid.toHexString(),
 				Fields.MESSAGE, Maps.of("content", "queued before update")));
 		} finally {
 			seed.close();
@@ -275,7 +275,7 @@ public class VenueStartupTest {
 		VenueServer server = null;
 		try {
 			Agent agent = queued.get(10, TimeUnit.SECONDS);
-			assertTrue(agent.hasSessionPending());
+			assertTrue(agent.sessions().hasPending());
 			assertFalse(adapter.fired.isDone());
 			release.complete(null);
 			server = launch.get(10, TimeUnit.SECONDS);

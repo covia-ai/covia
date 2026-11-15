@@ -97,7 +97,7 @@ public final class ExternalAgents {
 		for (String option : new String[]{"loads", "outputPath", "responseSchema", "strict"}) {
 			if (RT.getIn(input, option) != null) throw new NotSupportedException(UNSUPPORTED + option);
 		}
-		if (supplied && agent.getSession(sid) == null) throw new NotFoundException(UNKNOWN_SESSION, sid.toHexString());
+		if (supplied && agent.session(sid).getRecord() == null) throw new NotFoundException(UNKNOWN_SESSION, sid.toHexString());
 		ACell content = RT.getIn(input, "chat".equals(operation) ? Fields.MESSAGE : Fields.INPUT);
 		engine.jobs().updateAdapterData(job, d -> d.assoc(OWNER, owner).assoc(KIND, Strings.create(operation)));
 		job.update(d -> d.assoc(Fields.AGENT_ID, id).assoc(Fields.ADDRESS, address)
@@ -107,7 +107,7 @@ public final class ExternalAgents {
 			throw new ConflictException(SESSION_BUSY);
 		if (job.isFinished()) { agent.session(sid).finishExternalTurn(job.getID(), null, null); return; }
 		try {
-			ACell remoteSession = RT.getIn(agent.getSession(sid), Agent.KEY_EXTERNAL, Fields.SESSION_ID);
+			ACell remoteSession = RT.getIn(agent.session(sid).getRecord(), Agent.KEY_EXTERNAL, Fields.SESSION_ID);
 			var invocation = adapter.agentInvocation(operation, definition, content, remoteSession);
 			AString backendOp = Strings.create(adapter.getName() + ":" + invocation.operation());
 			AMap<AString, ACell> meta = Maps.of(Fields.OPERATION, Maps.of(Fields.ADAPTER, backendOp));
@@ -224,10 +224,10 @@ public final class ExternalAgents {
 	}
 
 	public void deliver(Agent agent, ACell taskId, Blob sid, ACell content) {
-		ACell id = taskId != null ? taskId : RT.getIn(agent.getSession(sid), Agent.KEY_EXTERNAL, Fields.JOB_ID);
+		ACell id = taskId != null ? taskId : RT.getIn(agent.session(sid).getRecord(), Agent.KEY_EXTERNAL, Fields.JOB_ID);
 		Job parent = id == null ? null : engine.jobs().getJob(Job.parseID(id));
 		if (parent == null || !owns(parent) || parent.isFinished()
-				|| !parent.getID().equals(RT.getIn(agent.getSession(sid), Agent.KEY_EXTERNAL, Fields.JOB_ID)))
+				|| !parent.getID().equals(RT.getIn(agent.session(sid).getRecord(), Agent.KEY_EXTERNAL, Fields.JOB_ID)))
 			throw new NotSupportedException(NO_ACTIVE_TURN);
 		Job child = child(parent);
 		if (child == null) throw new NotSupportedException(MISSING_CHILD);
