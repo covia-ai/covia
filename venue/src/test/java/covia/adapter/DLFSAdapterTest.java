@@ -831,6 +831,15 @@ public class DLFSAdapterTest {
 		assertEquals(facts, RT.getIn(run("v/ops/file/stat",
 			Maps.of("path", "dlfs/meta/renamed.jpg")), "metadata"));
 
+		// A move to another drive takes it along too, and back again
+		run("v/ops/dlfs/create-drive", Maps.of("name", "meta-away"));
+		run("v/ops/file/move", Maps.of("from", "dlfs/meta/renamed.jpg", "to", "dlfs/meta-away/away.jpg"));
+		assertEquals(facts, metadataOf("meta-away", "away.jpg"));
+		assertFalse(RT.bool(RT.getIn(run("v/ops/dlfs/stat",
+			Maps.of("drive", "meta", "path", "renamed.jpg")), "exists")));
+		run("v/ops/file/move", Maps.of("from", "dlfs/meta-away/away.jpg", "to", "dlfs/meta/renamed.jpg"));
+		assertEquals(facts, metadataOf("meta", "renamed.jpg"));
+
 		// Null clears it, as it arrives in a JSON request
 		run("v/ops/dlfs/set-metadata", JSON.parseJSON5(
 			"{\"drive\": \"meta\", \"path\": \"renamed.jpg\", \"metadata\": null}"));
