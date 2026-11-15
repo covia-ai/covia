@@ -2454,9 +2454,11 @@ Operations:
   once and kept, then those still being spoken, decoded again as they grow,
   and the seconds since speech was last heard, for an app that ends on a long
   pause. With `end` the rest settles, a short last word such as a lone "go"
-  heard together with the stretch before it, and the dictation closes. Only its
-  caller may feed it, one left unfed for two minutes is dropped, and nothing is
-  stored.
+  heard together with the stretch before it, and the dictation closes. It
+  belongs to the principal that opened it: only a request with that
+  principal's authority feeds it, its access tokens included, but not its
+  agents or another user. One left unfed for two minutes is dropped, and
+  nothing is stored.
 
 A transcript lives in the operation's Job like any other result. Provider
 failures fail the Job; nothing is retried.
@@ -2925,7 +2927,10 @@ never an operation parameter or public setting. `bots` returns the exact
 callback path, or the connection state for a Socket Mode binding; config
 bindings use `c-<name>`, runtime bindings an opaque owner-specific name. Runtime creation infers the owner from the caller and
 requires `<provider>/manage`; sends require `<provider>/send` on the binding,
-and WhatsApp downloads `whatsapp/download`.
+and WhatsApp downloads `whatsapp/download`. `bots` lists each binding the
+request may manage (`<provider>/manage` on `<owner>/<provider>/<name>`), by
+its own authority, its agent's or token's caps or a grant it presents, and
+every binding to the venue.
 
 Senders are identified as in
 [Who a chat message comes from](#who-a-chat-message-comes-from). Both fail

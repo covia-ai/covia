@@ -197,7 +197,7 @@ public class CallableAdapterTest {
 		assertFalse(engine.holdsAuthorityOf(narrow, alice));
 		assertTrue(engine.holdsAuthorityOf(whole, alice), "unrestricted caps are the issuer's whole authority");
 		assertFalse(engine.holdsAuthorityOf(whole, bob), "never the invoker's");
-		assertFalse(whole.actsWithNamespaceAuthority(), "state held for a namespace is never a call's");
+		assertEquals(alice, whole.getAuthorityDID(), "a call has its issuer's authority, so reaches state that is the issuer's");
 		assertEquals(Engine.SUDO_NARROWED, assertThrows(covia.exception.AuthException.class, () -> engine.sudoContext(whole, bob)).getMessage());
 
 		// An agent of the owner calling one another agent issued acts with the issuer's authority, never its own

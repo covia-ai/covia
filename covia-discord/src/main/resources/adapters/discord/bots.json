@@ -1,4 +1,4 @@
 {
-  "name":"List Discord bots","description":"Lists the caller's Discord bots without exposing tokens.",
+  "name":"List Discord bots","description":"Lists the Discord bots the caller may manage (discord/manage on <owner>/discord/<name>; all bots for the venue identity) without exposing tokens.",
   "operation":{"adapter":"discord:bots","readOnly":true,"input":{"type":"object","additionalProperties":false},"output":{"type":"object","properties":{"bots":{"type":"array"}}}}
 }

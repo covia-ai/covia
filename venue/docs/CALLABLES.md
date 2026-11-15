@@ -218,10 +218,6 @@ As for a request through an access token
 ([ACCESS_TOKENS.md](ACCESS_TOKENS.md#acting-with-a-principals-whole-authority)),
 the authority a call acts with is narrowed, so:
 
-- **It never acts with its namespace's own authority.** State a namespace
-  keeps with no capability of its own, such as dictations and bot lists, is
-  out of its reach
-  (`RequestContext.actsWithNamespaceAuthority`), whatever its caps.
 - **It holds its issuer's whole authority** (`Engine.holdsAuthorityOf`) only
   when its caps are unrestricted and every token on its source chain is.
 - **It never counts as the venue**, even when the venue issued it or calls

@@ -56,9 +56,10 @@ is unrestricted. A restricted token's request therefore cannot:
 - make an agent act (`llmagent:chat` or `goaltree:chat` invoked directly).
 
 Whatever its caps, a request through a token never acts for another user
-(`admin/sudo`), never counts as the venue, never reaches state a namespace keeps
-with no capability of its own (such as dictations and bot lists), and
-cannot create a messaging bot, which acts with its creator's whole authority.
+(`admin/sudo`), never counts as the venue, and cannot create a messaging bot,
+which acts with its creator's whole authority. It reaches what belongs to its
+issuer without a capability, such as the issuer's live dictations, because it
+has the issuer's authority.
 Its reach into another identity's resources, through admissions, presented
 grants or a callable's gate ([CALLABLES.md](CALLABLES.md)), must also be
 covered by its tokens' caps.

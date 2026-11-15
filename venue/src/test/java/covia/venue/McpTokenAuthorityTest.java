@@ -202,8 +202,8 @@ public class McpTokenAuthorityTest {
 
 		assertFalse(engine.holdsAuthorityOf(narrowed, alice));
 		assertTrue(engine.holdsAuthorityOf(whole, alice), "an unrestricted token is its issuer's authority");
-		assertFalse(narrowed.actsWithNamespaceAuthority());
-		assertFalse(whole.actsWithNamespaceAuthority(), "state held for a namespace is never a token's");
+		assertEquals(alice, narrowed.getAuthorityDID(), "a token's request has its issuer's authority");
+		assertEquals(alice, whole.getAuthorityDID());
 
 		// Reading or managing the user itself needs all of the user's authority
 		for (String op : new String[] {"v/ops/user/info", "v/ops/user/authentication-list"}) {
