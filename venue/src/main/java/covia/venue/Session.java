@@ -117,6 +117,15 @@ public final class Session extends ALatticeComponent<ACell>
 
 	public ACell cycleEpoch() { return RT.getIn(getRecord(), K_IN_CYCLE); }
 	public void clearCycle() { update(record -> record.dissoc(K_IN_CYCLE)); }
+
+	/**
+	 * Ends the claim of the cycle holding {@code epoch} on this session, as
+	 * stopping its agent does; a claim another cycle holds is left alone.
+	 */
+	void clearCycle(ACell epoch) {
+		Objects.requireNonNull(epoch);
+		update(record -> epoch.equals(record.get(K_IN_CYCLE)) ? record.dissoc(K_IN_CYCLE) : record);
+	}
 	public AVector<ACell> pending() {
 		AVector<ACell> pending = RT.ensureVector(RT.getIn(getRecord(), K_PENDING));
 		return pending == null ? Vectors.empty() : pending;

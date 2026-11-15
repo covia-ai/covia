@@ -613,38 +613,37 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 
 	// ========== Simple mutations ==========
 
+	/**
+	 * Sets the status. SUSPENDED and TERMINATED stop the agent, so they revoke
+	 * its cycle claim in the same transaction: an agent holds a claim only
+	 * while it is neither (AGENT_LOOP.md §2.5.1).
+	 */
 	public void setStatus(AString status) {
-		update(r -> withStatus(r, status));
+		execute(draft -> draft.changeStatus(status));
 	}
 
-	/**
-	 * The record with {@code status} set. SUSPENDED and TERMINATED stop the
-	 * agent, so they revoke its cycle claim in the same write: an agent holds
-	 * a claim only while it is neither (AGENT_LOOP.md §2.5.1).
-	 */
-	private static AMap<AString, ACell> withStatus(AMap<AString, ACell> r, AString status) {
-		AMap<AString, ACell> next = r.assoc(K_STATUS, status);
-		return stopsCycles(status) ? withoutClaim(next) : next;
+	/** In a transaction: sets the status, revoking the cycle claim when it stops the agent. */
+	private void changeStatus(AString status) {
+		update(r -> r.assoc(K_STATUS, status));
+		if (stopsCycles(status)) releaseClaim();
 	}
 
 	private static boolean stopsCycles(AString status) {
 		return SUSPENDED.equals(status) || TERMINATED.equals(status);
 	}
 
-	/** The record with its cycle claim revoked: the claim, and the same epoch on the session it names. */
-	@SuppressWarnings("unchecked")
-	private static AMap<AString, ACell> withoutClaim(AMap<AString, ACell> r) {
-		ACell claim = r.get(K_IN_CYCLE);
-		if (claim == null) return r;
-		AMap<AString, ACell> next = r.dissoc(K_IN_CYCLE);
+	/**
+	 * In a transaction: revokes the cycle claim, ending it on the agent and on
+	 * the session it names when that session still holds the same epoch.
+	 */
+	private void releaseClaim() {
+		ACell claim = RT.getIn(getRecord(), K_IN_CYCLE);
+		if (claim == null) return;
+		update(r -> r.dissoc(K_IN_CYCLE));
 		AString sidHex = RT.ensureString(RT.getIn(claim, Fields.SESSION_ID));
 		Blob sid = (sidHex == null) ? null : Blob.fromHex(sidHex.toString());
-		if (sid == null || !(next.get(K_SESSIONS) instanceof Index<?, ?> index)) return next;
-		Index<Blob, ACell> sessions = (Index<Blob, ACell>) index;
-		if (!(sessions.get(sid) instanceof AMap<?, ?> found)) return next;
-		AMap<AString, ACell> session = (AMap<AString, ACell>) found;
-		if (!java.util.Objects.equals(RT.getIn(claim, K_EPOCH), session.get(K_IN_CYCLE))) return next;
-		return next.assoc(K_SESSIONS, sessions.assoc(sid, session.dissoc(K_IN_CYCLE)));
+		ACell epoch = RT.getIn(claim, K_EPOCH);
+		if (sid != null && epoch != null) session(sid).clearCycle(epoch);
 	}
 
 	/** Whether {@code epoch} is the agent's current cycle claim (AGENT_LOOP.md §2.5.1). */
@@ -654,19 +653,23 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 
 	/** Revokes the agent's cycle claim, as startup does for a cycle no executor runs. */
 	public void revokeClaim() {
-		if (RT.getIn(getRecord(), K_IN_CYCLE) != null) update(Agent::withoutClaim);
+		if (RT.getIn(getRecord(), K_IN_CYCLE) != null) execute(Agent::releaseClaim);
 	}
 
 	/**
-	 * Terminates the agent in one write, which revokes its cycle claim as
-	 * every stopping status does, returning its record from just before.
+	 * Terminates the agent in one transaction, which revokes its cycle claim
+	 * as every stopping status does, returning its record from just before.
 	 * Intake refuses a terminated agent, so the tasks that record holds are all
 	 * the work the agent will ever have to give back.
 	 *
 	 * @return The record before termination, or null when there is no agent
 	 */
 	public AMap<AString, ACell> terminate() {
-		return getAndUpdate(r -> withStatus(r, TERMINATED));
+		return transact(draft -> {
+			AMap<AString, ACell> before = draft.getRecord();
+			if (before != null) draft.changeStatus(TERMINATED);
+			return before;
+		});
 	}
 
 	public void setError(AString error) {
@@ -966,19 +969,22 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 				text.substring(0, Math.min(text.length(), MAX_SUSPEND_REASON_LENGTH))));
 		}
 		AMap<AString, ACell> suspension = stop;
-		AMap<AString, ACell> stopped = update(r -> TERMINATED.equals(r.get(K_STATUS)) ? r
-			: withStatus(r, SUSPENDED).assoc(KEY_SUSPENSION, suspension).dissoc(K_ERROR));
-		return stopped != null && SUSPENDED.equals(stopped.get(K_STATUS)) ? stopped : null;
+		return transact(draft -> {
+			AMap<AString, ACell> r = draft.getRecord();
+			if (r == null || TERMINATED.equals(r.get(K_STATUS))) return null;
+			draft.changeStatus(SUSPENDED);
+			return draft.update(u -> u.assoc(KEY_SUSPENSION, suspension).dissoc(K_ERROR));
+		});
 	}
 
 	/** Sets a fault suspension without overwriting a deliberate stop racing the failure. */
 	public void suspend(AString error) {
-		update(r -> faultSuspension(r, error));
-	}
-
-	private static AMap<AString, ACell> faultSuspension(AMap<AString, ACell> r, AString error) {
-		if (r.containsKey(KEY_SUSPENSION) || TERMINATED.equals(r.get(K_STATUS))) return r;
-		return withStatus(r, SUSPENDED).assoc(K_ERROR, error);
+		execute(draft -> {
+			AMap<AString, ACell> r = draft.getRecord();
+			if (r == null || r.containsKey(KEY_SUSPENSION) || TERMINATED.equals(r.get(K_STATUS))) return;
+			draft.changeStatus(SUSPENDED);
+			draft.update(u -> u.assoc(K_ERROR, error));
+		});
 	}
 
 	/**
