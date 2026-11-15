@@ -259,7 +259,7 @@ public final class Session extends ALatticeComponent<ACell>
 			AVector<ACell> kept = Vectors.empty();
 			for (long i = 0; i < pending.count(); i++) {
 				ACell envelope = pending.get(i);
-				if (!jobId.equals(chatJob(envelope))) {
+				if (!Objects.equals(jobId, chatJob(envelope))) {
 					kept = kept.conj(envelope);
 				}
 			}

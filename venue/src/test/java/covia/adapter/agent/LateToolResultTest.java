@@ -162,7 +162,7 @@ public class LateToolResultTest {
 			assertEquals(RT.getIn(call, Fields.ARGUMENTS, Fields.JOB_ID), RT.getIn(result, Fields.STRUCTURED_CONTENT, Fields.JOB_ID));
 			jobs.add(RT.getIn(call, Fields.ARGUMENTS, Fields.JOB_ID));
 		}
-		assertEquals(java.util.Set.of(Blob.fromHex(okJob), Blob.fromHex(badJob)), jobs, "one exchange per outcome: " + messages);
+		assertEquals(java.util.Set.of(Strings.create(okJob), Strings.create(badJob)), jobs, "one exchange per outcome: " + messages);
 		for (long i = 0; i < messages.count(); i++) {
 			assertFalse(Agent.ROLE_USER.equals(RT.getIn(messages.get(i), Agent.K_ROLE))
 				&& String.valueOf(RT.getIn(messages.get(i), Agent.K_CONTENT)).contains("finished-late"),

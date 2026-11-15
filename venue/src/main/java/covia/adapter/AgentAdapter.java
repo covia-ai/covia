@@ -3932,7 +3932,7 @@ public class AgentAdapter extends AAdapter {
 		if (sid == null) return false;
 		AVector<ACell> pending = agent.session(sid).pending();
 		for (long i = 0; i < pending.count(); i++) {
-			if (!jobId.equals(Session.chatJob(pending.get(i)))) continue;
+			if (!java.util.Objects.equals(jobId, Session.chatJob(pending.get(i)))) continue;
 			if (reattach) {
 				activeChats
 					.computeIfAbsent(new AgentKey(ownerDID, agentId), k -> new ConcurrentHashMap<>())
@@ -4349,7 +4349,8 @@ public class AgentAdapter extends AAdapter {
 	 */
 	static AMap<AString, ACell> callOutcome(Blob jobId, AMap<AString, ACell> record, ACell entry) {
 		AString status = RT.ensureString(record.get(Fields.STATUS));
-		AMap<AString, ACell> outcome = Maps.of(Fields.JOB_ID, jobId);
+		// What the model reads names ids as its other text does, in bare hex
+		AMap<AString, ACell> outcome = Maps.of(Fields.JOB_ID, taskIdHex(jobId));
 		for (AString key : List.of(Fields.TOOL_CALL_ID, Fields.TOOL_NAME)) {
 			ACell value = RT.getIn(entry, key);
 			if (value != null) outcome = outcome.assoc(key, value);

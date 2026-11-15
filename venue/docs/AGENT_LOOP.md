@@ -104,7 +104,8 @@ all existing entries with the previous version.
 
 Every job, task and session id in the agent's records, its sessions included,
 is a Blob, which JSON shows as `"0x…"`, and so is every id a transition is given
-(§4). Operation results and live events show them as bare hex.
+(§4). Operation results, live events and what the model reads show them as bare
+hex, except `agent:history`, which returns a session's entries as stored.
 
 ### 2.2.1 Agent definitions and external implementations
 

@@ -100,6 +100,19 @@ public class SessionsTest {
 	}
 
 	@Test
+	public void testRemovingAChatLeavesTheMessagesQueuedWithIt() {
+		Blob chat = Blob.fromHex("cc01");
+		sessions.create(SESSION, null, null);
+		session.appendPending(queued(1));
+		session.appendPending(Maps.of(Fields.MESSAGE, "c", Fields.JOB_ID, chat));
+		assertEquals(chat, Session.chatJob(session.pending().get(1)));
+		assertNull(Session.chatJob(session.pending().get(0)), "a message names no chat");
+
+		session.removePendingJob(chat);
+		assertEquals(Vectors.of(queued(1)), session.pending());
+	}
+
+	@Test
 	public void testTheOldestWaitingMessageDecidesWhichSessionIsNext() {
 		sessions.create(SESSION, null, null);
 		sessions.create(OTHER_SESSION, null, null);
