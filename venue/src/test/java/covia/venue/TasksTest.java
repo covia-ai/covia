@@ -21,7 +21,6 @@ public class TasksTest {
 	private static final Blob TASK = Blob.fromHex("aa01");
 	private static final Blob SESSION = Blob.fromHex("bb02");
 	private static final Blob OTHER_SESSION = Blob.fromHex("bb03");
-	private static final AString SESSION_HEX = Strings.create(SESSION.toHexString());
 	private static final AString MESSAGE_ID = Strings.create("message-1");
 
 	private Agent agent;
@@ -39,7 +38,7 @@ public class TasksTest {
 	}
 
 	private void queue() {
-		assertTrue(tasks.add(TASK, Maps.of(Fields.INPUT, "work", Fields.SESSION_ID, SESSION_HEX)));
+		assertTrue(tasks.add(TASK, Maps.of(Fields.INPUT, "work", Fields.SESSION_ID, SESSION)));
 	}
 
 	private static ACell envelope(String message) {
@@ -191,7 +190,7 @@ public class TasksTest {
 
 	@Test
 	public void testAContinuationNeedsTheSessionToExist() {
-		assertTrue(tasks.add(TASK, Maps.of(Fields.INPUT, "work", Fields.SESSION_ID, Strings.create(OTHER_SESSION.toHexString()))));
+		assertTrue(tasks.add(TASK, Maps.of(Fields.INPUT, "work", Fields.SESSION_ID, OTHER_SESSION)));
 		assertFalse(agent.appendTaskContinuation(TASK, OTHER_SESSION, envelope("m"), null));
 		assertEquals(0, task.revision());
 	}

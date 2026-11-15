@@ -42,6 +42,7 @@ import covia.venue.Agent;
 import covia.venue.AgentWatch;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
+import covia.venue.Task;
 import covia.venue.TestEngine;
 import covia.venue.User;
 import covia.venue.VenueState;
@@ -1576,7 +1577,7 @@ public class AgentAdapterTest {
 		assertEquals("system", RT.getIn(context.get(0), "role").toString());
 		assertTrue(RT.getIn(context.get(0), "content").toString().startsWith("You record."));
 		assertNotNull(entry.get(Fields.TOOLS), "tools offered to the first inference");
-		assertEquals(RT.getIn(chat, Fields.SESSION_ID), entry.get(Fields.SESSION_ID));
+		assertEquals(Blob.parse(RT.getIn(chat, Fields.SESSION_ID)), entry.get(Fields.SESSION_ID));
 
 		// toolllm: one inference that calls echo, one that answers.
 		AVector<ACell> inferences = RT.ensureVector(entry.get(Fields.INFERENCES));
@@ -2714,7 +2715,7 @@ public class AgentAdapterTest {
 		assertEquals(Strings.create("do thing"), userTurn.get(Agent.K_CONTENT));
 		// The request turn records the delegating agent:request Job id, so the
 		// target agent's session ties back to the calling job as chat turns do (#378).
-		assertEquals(Strings.create(reqJob.getID().toHexString()), userTurn.get(Fields.JOB_ID),
+		assertEquals(reqJob.getID(), userTurn.get(Fields.JOB_ID),
 			"request turn records the calling agent:request job id");
 		assertEquals(ALICE_DID, userTurn.get(Fields.CALLER), "the request turn keeps its caller");
 
@@ -4536,7 +4537,7 @@ public class AgentAdapterTest {
 		assertTrue(worker.getResolved().isEmpty());
 		AVector<ACell> timeline = worker.getTimeline();
 		assertEquals(Status.COMPLETE, RT.getIn(timeline.get(timeline.count() - 1), Fields.TASK_RESULTS,
-			request.getID().toHexString(), Fields.STATUS), "the agent's own outcome is recorded");
+			request.getID(), Fields.STATUS), "the agent's own outcome is recorded");
 	}
 
 	/** A request cancelled after its task is resolved, before the merge, writes nothing. */
@@ -4952,12 +4953,11 @@ public class AgentAdapterTest {
 		var entry = agent.getTasks().entrySet().iterator().next();
 		@SuppressWarnings("unchecked")
 		AMap<AString, ACell> row = (AMap<AString, ACell>) entry.getValue();
-		AString taskSid = RT.ensureString(row.get(Fields.SESSION_ID));
+		Blob taskSid = Task.sessionId(row);
 		assertNotNull(taskSid, "Task row should record the session it belongs to");
 
 		// And the session itself exists
-		Blob sidBlob = Blob.fromHex(taskSid.toString());
-		assertNotNull(agent.session(sidBlob).getRecord(), "Session record should be created");
+		assertNotNull(agent.session(taskSid).getRecord(), "Session record should be created");
 
 		// Clean up: cancel the task so the test doesn't leave a running loop
 		job.cancel();
@@ -4978,8 +4978,9 @@ public class AgentAdapterTest {
 			RequestContext.of(ALICE_DID));
 
 		ACell result = job.awaitResult(5000);
-		AString sid = RT.ensureString(RT.getIn(result, Fields.SESSION_ID));
-		assertNotNull(sid, "Completed request envelope must include sessionId");
+		assertNotNull(RT.getIn(result, Fields.SESSION_ID));
+		assertEquals(job.getData().get(Fields.SESSION_ID), RT.getIn(result, Fields.SESSION_ID),
+			"Completed request envelope must include its sessionId");
 	}
 
 	/** Trigger never creates a session: with no sessionId supplied, none is
@@ -6874,7 +6875,7 @@ public class AgentAdapterTest {
 		assertTrue(GoalTreeContext.isSegment(archive));
 		assertEquals(before, RT.getIn(GoalTreeContext.archivedConversation(compactedRoot).get(0), "items"),
 			"the archive retains the exact replaced vector");
-		assertEquals(Strings.create(compact.getID().toHexString()), archive.get(Fields.JOB_ID));
+		assertEquals(compact.getID(), archive.get(Fields.JOB_ID));
 		assertEquals(ALICE_DID, archive.get(Fields.CALLER));
 		assertNull(compactedRoot.get(Strings.intern("renderedContext")),
 			"compaction is one explicit rendered-prefix rebuild boundary");

@@ -76,7 +76,8 @@ Each part of the schema has one owner, which defines its migrations.
   build that stops reading such a shape first converts every part still in it.
 - **Import migrates.** `user:import` applies the venue steps' conversions of a
   user's records to an export older than `UserExports.VERSION` (version 2
-  names callers and owners as step 1 → 2 does) and re-encrypts secrets under
+  names callers and owners as step 1 → 2 does, version 3 stores ids as
+  Blobs as step 2 → 3 does) and re-encrypts secrets under
   the current key; other shapes convert on use. It leaves out the export's
   jobs, which the account it fills has not made, and refuses an export newer
   than `UserExports.VERSION`.
@@ -89,7 +90,7 @@ Open questions for #624:
 
 ## Migrations in this build
 
-The venue is at version 2.
+The venue is at version 3.
 
 ### Venue steps
 
@@ -102,6 +103,7 @@ A step's parts apply in the order listed.
 | 1 → 2 | Records of calls name `caller` and `owner` (COG-8): a job's `actor` becomes its `caller` and its old `caller` its `owner`; a scheduled event's `actor` (else `owner`) becomes its `caller` and `by` goes; a HITL request's `from` and `requesterUser` become `caller` and `owner`; an agent output snapshot's `user` becomes `owner` and its `caps` copy goes. A HITL request or snapshot naming only its caller takes its owner's namespace when the caller is an existing agent of this venue, else its own | `CallerAndOwner` |
 | 1 → 2 | Each unfinished job of a live account gets an entry in `:jobs` naming its owner. Proofs its record kept move to the entry's caller context. A remote job's connection, kept encrypted in the venue's `remote-job-<id>` secret that `delegation.authRef` named, moves to the entry's adapter data without any sign-in credential (only the mode of a caller-signed hop), and its pinned definition gives the entry's output rules; `authRef` and every `remote-job-*` secret go. An external agent's job moves `agentOwner`, `agentInteraction` and `agentBackendJob` to the entry's adapter data. A pending agent `outputPath` write's context moves from the worker's task (`outputContext`) to the request job's entry, and the task keeps neither `outputContext` nor `outputPath`. Any other job's entry has no output rules: a step cannot resolve an operation. Built with the venue's secret keys | `JobEntries` |
 | 1 → 2 | A remote job's record keeps only what its caller can follow: every record's `delegation` keeps its `remoteId` and `remoteStatus`, and goes when it holds neither. An unfinished job's `protocol`, `target` and `ownsRemote` are copied into its entry's adapter data; anything else, observation health among it, is left behind | `DelegationEntries` |
+| 2 → 3 | Job, task and session ids an agent's records hold as hex text become Blobs: a task's, a cycle claim's, an outbound wait's and a resolved task's session; an outbound wait's task; in the timeline, each entry's session, the jobs of its tasks, pending jobs and messages, and its `taskResults`, which become an index by task; in each session, the jobs its queued envelopes, turns and compacted segments name. A message envelope drops the session and task it repeated. What the model was shown, and an id another system gave, are left as written. A text id that is not hex is refused | `BlobIds` |
 
 ### Adapter steps
 

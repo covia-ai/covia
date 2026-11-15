@@ -102,6 +102,11 @@ All fields are framework-managed except `state`, which is owned by the transitio
 function. CAD3 structural sharing means the timeline (which only appends) shares
 all existing entries with the previous version.
 
+Every job, task and session id in the agent's records, its sessions included,
+is a Blob, which JSON shows as `"0x…"`, and so is every id a transition is given
+(§4). Operation results, live events and what the model reads show them as bare
+hex, except `agent:history`, which returns a session's entries as stored.
+
 ### 2.2.1 Agent definitions and external implementations
 
 The optional `agent` facet selects an external implementation. It follows the
@@ -218,13 +223,13 @@ inferences that ran before it, and a stopped cycle's entry says it was stopped
 |-------|------|-------------|
 | `start`, `end` | long | When the cycle began and ended. |
 | `op` | string | The transition operation (llmagent / goaltree). |
-| `sessionId` | string? | The session the cycle ran on. |
+| `sessionId` | blob? | The session the cycle ran on. |
 | `tasks`, `messages`, `pending` | vector? | What the cycle was given: resolved tasks, inbox envelopes, job results that arrived. |
 | `context` | vector | The root frame's standing context as rendered for its first inference — the head and live surface (system prompt, skills index, loads): the prompt minus the conversation. |
 | `tools` | vector | Names of the tools offered to the first inference. |
 | `inferences` | vector | One record per model call, in order — see below. |
 | `result` | any | The cycle's response, or its error, or for a stopped cycle why it stopped. |
-| `taskResults` | map? | Task completions, `{<jobId>: {status, output}}`. |
+| `taskResults` | index? | Task completions by the task's job id: `{status, output}` or `{status, error}`. |
 | `cancelled` | boolean? | `true` for a stopped cycle (§2.5.1). |
 | `suspension` | map? | On a stopped cycle, the `agent:suspend` that stopped it. |
 
@@ -560,7 +565,7 @@ The contract between level 1 and level 2:
 | `tasks` | vector | Inbound task data resolved from the `tasks` index (jobId, input, status). |
 | `pending` | vector | Outbound job data resolved from the `pending` index (jobId, status, output, error when the job did not complete). |
 | `newInput` | any? | The picked task's input this cycle shows: its original input, then each continuation once. |
-| `jobId` | string? | With `newInput`: the task's request Job id. |
+| `jobId` | blob? | With `newInput`: the task's request Job id. |
 | `session` | map? | The picked session record: `{id, parties, meta, c, frames, pending, inCycle}`. `pending` lists the messages this cycle took; they and `newInput` are already user turns in `frames` (§4.4). `inCycle` is the cycle's claim (§2.5.1). See AGENT_SESSIONS.md §6.1. |
 
 **Output:**

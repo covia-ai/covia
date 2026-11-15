@@ -7,9 +7,12 @@ import java.util.List;
 
 import org.junit.jupiter.api.Test;
 
+import convex.core.data.ACell;
+import convex.core.data.AString;
 import convex.core.data.Blob;
 import convex.core.data.Hash;
 import convex.core.data.Strings;
+import convex.core.data.prim.CVMLong;
 
 public class HexIdTest {
 
@@ -41,8 +44,17 @@ public class HexIdTest {
 
 	@Test
 	public void noTextIsNoId() {
-		assertNull(HexId.parse(null));
+		assertNull(HexId.parse((AString) null));
+		assertNull(HexId.parse((ACell) null));
 		assertNull(HexId.parseHash(null));
+	}
+
+	@Test
+	public void anIdGivenBackAsABlobIsThatId() {
+		assertEquals(ID, HexId.parse((ACell) ID));
+		assertEquals(ID, HexId.parse((ACell) Strings.create("0x00ab12cd")), "text reads as text does");
+		assertNull(HexId.parse((ACell) Blob.EMPTY), "an empty blob names nothing");
+		assertNull(HexId.parse((ACell) CVMLong.ONE), "nor does a number");
 	}
 
 	@Test

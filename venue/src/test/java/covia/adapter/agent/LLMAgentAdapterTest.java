@@ -1593,9 +1593,9 @@ public class LLMAgentAdapterTest {
 		assertEquals(CVMBool.FALSE, RT.getIn(read, "exists"),
 			"a call after complete_task in the same batch must not execute");
 
-		AString sid = RT.ensureString(RT.getIn(taskResult, Fields.SESSION_ID));
+		Blob sid = Blob.parse(RT.getIn(taskResult, Fields.SESSION_ID));
 		assertNotNull(sid);
-		AMap<AString, ACell> session = agent.session(Blob.fromHex(sid.toString())).getRecord();
+		AMap<AString, ACell> session = agent.session(sid).getRecord();
 		AVector<ACell> frames = RT.ensureVector(session.get(Fields.FRAMES));
 		AVector<ACell> conversation = GoalTreeContext.activeConversation(RT.ensureMap(frames.get(0)));
 

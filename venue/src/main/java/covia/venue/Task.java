@@ -39,6 +39,7 @@ public final class Task extends ALatticeComponent<ACell>
 	private static final AString K_CONTINUATION_IDS = Strings.intern("continuationIds");
 	/** Ordered continuation envelopes queued behind the original input. */
 	private static final AString K_CONTINUATIONS = Strings.intern("continuations");
+	public static final AString KEY_CONTINUATIONS = K_CONTINUATIONS;
 	/** Number of original and continuation inputs already shown to cycles. */
 	private static final AString K_PRESENTED_INPUTS = Strings.intern("presentedInputs");
 	/** Set when its cycle left the task open with something to bring it back:
@@ -99,8 +100,7 @@ public final class Task extends ALatticeComponent<ACell>
 
 	/** The session a row's task runs in, or null when it has none. */
 	public static Blob sessionId(ACell row) {
-		AString hex = RT.ensureString(RT.getIn(row, Fields.SESSION_ID));
-		return (hex == null) ? null : Blob.fromHex(hex.toString());
+		return Ids.stored(RT.getIn(row, Fields.SESSION_ID));
 	}
 
 	/** When a row's task next runs; zero when it has no wake time. */
@@ -184,7 +184,7 @@ public final class Task extends ALatticeComponent<ACell>
 		return transact(draft -> {
 			AMap<AString, ACell> task = draft.getRecord();
 			if (task == null) return false;
-			if (!sid.equals(sessionId(task))) return false;
+			if (!java.util.Objects.equals(sid, sessionId(task))) return false;
 			AVector<ACell> ids = vector(task.get(K_CONTINUATION_IDS));
 			if (messageId != null) {
 				for (long i = 0; i < ids.count(); i++) {

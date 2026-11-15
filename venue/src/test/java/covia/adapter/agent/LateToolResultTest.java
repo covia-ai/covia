@@ -336,7 +336,7 @@ public class LateToolResultTest {
 			watch.awaitRest(1);
 			ACell task = agent.getTasks().get(job.getID());
 			assertTrue(Task.isParked(task));
-			agent.sessions().remove(Blob.fromHex(RT.ensureString(RT.getIn(task, Fields.SESSION_ID)).toString()));
+			agent.sessions().remove(Task.sessionId(task));
 			gate.release();
 			TestEngine.awaitJob(job, Job::isFinished, 10_000, () -> "the stranded task did not fail");
 		}
@@ -382,7 +382,7 @@ public class LateToolResultTest {
 	}
 
 	private static Blob sessionOf(AMap<AString, ACell> taskJob) {
-		return Blob.fromHex(RT.ensureString(taskJob.get(Fields.SESSION_ID)).toString());
+		return Blob.parse(taskJob.get(Fields.SESSION_ID));
 	}
 
 	/**

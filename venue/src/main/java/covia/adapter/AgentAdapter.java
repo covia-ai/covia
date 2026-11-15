@@ -23,7 +23,6 @@ import convex.core.util.JSON;
 import covia.grid.Asset;
 import covia.grid.Attribution;
 import convex.core.data.AVector;
-import convex.core.data.ABlob;
 import convex.core.data.Blob;
 import convex.core.data.Cells;
 import convex.core.data.Index;
@@ -69,6 +68,7 @@ import covia.venue.Task;
 import covia.venue.AgentEvents;
 import covia.api.Abilities;
 import covia.venue.Engine;
+import covia.venue.Ids;
 import covia.venue.JobManager;
 import covia.venue.Models;
 import covia.venue.RequestContext;
@@ -529,8 +529,7 @@ public class AgentAdapter extends AAdapter {
 		ConcurrentHashMap<Blob, Job> waiters = sessionChats(key, sid);
 		if (waiters == null) return;
 		for (long i = 0; i < taken.count(); i++) {
-			AString jobHex = RT.ensureString(RT.getIn(taken.get(i), Fields.JOB_ID));
-			Blob jobId = storedId(jobHex);
+			Blob jobId = Session.chatJob(taken.get(i));
 			Job chat = (jobId != null) ? waiters.get(jobId) : null;
 			if (chat != null && Status.PENDING.equals(chat.getStatus())) chat.setStatus(Status.STARTED);
 		}
@@ -782,10 +781,10 @@ public class AgentAdapter extends AAdapter {
 
 	private CompletableFuture<ACell> requestResultFuture(Job taskJob, ACell input) {
 		long timeoutMs = parseRequestTimeoutMs(input);
-		AString suppliedSession = RT.ensureString(RT.getIn(input, Fields.SESSION_ID));
-		Blob parsedSession = parseSessionId(suppliedSession);
+		ACell suppliedSession = RT.getIn(input, Fields.SESSION_ID);
+		Blob parsedSession = parseId(suppliedSession);
 		AString sessionId = (parsedSession != null)
-			? Strings.create(parsedSession.toHexString()) : suppliedSession;
+			? Strings.create(parsedSession.toHexString()) : RT.ensureString(suppliedSession);
 		AString agentId = RT.ensureString(RT.getIn(input, Fields.AGENT_ID));
 
 		if (timeoutMs <= 0) {
@@ -1687,7 +1686,7 @@ public class AgentAdapter extends AAdapter {
 		AMap<AString, ACell> taskData = withProvenance(Maps.of(
 			Fields.INPUT,      taskInput,
 			Fields.CREATED,    engine.currentTimestamp(),
-			Fields.SESSION_ID, Strings.create(sid.toHexString())), ctx);
+			Fields.SESSION_ID, sid), ctx);
 		if (responseSchema instanceof AMap) {
 			taskData = taskData.assoc(Fields.RESPONSE_SCHEMA, responseSchema);
 			if (strict) taskData = taskData.assoc(Fields.STRICT, CVMBool.TRUE);
@@ -1776,43 +1775,36 @@ public class AgentAdapter extends AAdapter {
 		ACell messageContent = RT.getIn(input, Fields.MESSAGE);
 		if (messageContent == null) { job.fail("message is required"); return; }
 		ACell taskValue = RT.getIn(input, Fields.TASK_ID);
+		Blob taskId = null;
 		if (taskValue != null) {
-			Blob addressed = HexId.parse(RT.ensureString(taskValue));
-			if (addressed == null && taskValue instanceof Blob blob) addressed = blob;
-			if (addressed == null) throw new InvalidInputException(INVALID_TASK_ID + taskValue);
-			engine.jobs().requireAccess(addressed, ctx, null, Abilities.JOB_MESSAGE);
+			taskId = parseId(taskValue);
+			if (taskId == null) throw new InvalidInputException(INVALID_TASK_ID + taskValue);
+			engine.jobs().requireAccess(taskId, ctx, null, Abilities.JOB_MESSAGE);
 		}
 
 		if (externalAgents().isExternal(agent)) {
 			if (failIfSuspended(job, agent, agentId)) return;
-			ACell task = RT.getIn(input, Fields.TASK_ID);
-			Blob taskId = (task instanceof ABlob b) ? b.toFlatBlob() : HexId.parse(RT.ensureString(task));
-			if (task != null && taskId == null) { job.fail(new InvalidInputException(INVALID_TASK_ID + task)); return; }
-			Blob sid = parseSessionId(RT.ensureString(RT.getIn(input, Fields.SESSION_ID)));
-			if (sid == null && task != null) {
+			Blob sid = parseId(RT.getIn(input, Fields.SESSION_ID));
+			if (sid == null && taskId != null) {
 				Job parent = engine.jobs().getJob(taskId);
 				if (parent != null) sid = storedId(RT.ensureString(parent.getData().get(Fields.SESSION_ID)));
 			}
 			if (sid == null) throw new NotSupportedException(ExternalAgents.NO_ACTIVE_TURN);
-			externalAgents().deliver(agent, task, sid, messageContent);
+			externalAgents().deliver(agent, taskId, sid, messageContent);
 			job.setStatus(Status.STARTED);
 			job.completeWith(identify(target, Maps.of(Fields.SESSION_ID, Strings.create(sid.toHexString()),
 				Strings.intern("delivered"), CVMBool.TRUE)));
 			return;
 		}
 
-		AString taskIdHex = RT.ensureString(RT.getIn(input, Fields.TASK_ID));
-		Blob taskId = null;
 		SessionSpec session = null;
 		Blob sid;
-		if (taskIdHex != null) {
-			taskId = HexId.parse(taskIdHex);
-			if (taskId == null) { job.fail(new InvalidInputException(INVALID_TASK_ID + taskIdHex)); return; }
+		if (taskId != null) {
 			sid = Task.sessionId(agent.getTasks().get(taskId));
-			if (sid == null) { job.fail("Task not found: " + taskIdHex); return; }
-			AString suppliedSid = RT.ensureString(RT.getIn(input, Fields.SESSION_ID));
+			if (sid == null) { job.fail("Task not found: " + taskId.toHexString()); return; }
+			ACell suppliedSid = RT.getIn(input, Fields.SESSION_ID);
 			if (suppliedSid != null) {
-				Blob supplied = parseSessionId(suppliedSid);
+				Blob supplied = parseId(suppliedSid);
 				if (supplied == null) { job.fail("Invalid sessionId format: " + suppliedSid); return; }
 				if (!sid.equals(supplied)) {
 					job.fail("contextId does not match task session");
@@ -1826,15 +1818,12 @@ public class AgentAdapter extends AAdapter {
 		}
 
 		AString sidHex = Strings.create(sid.toHexString());
-		// Wrap message with caller provenance and the session it belongs to
-		AMap<AString, ACell> envelope = withProvenance(Maps.of(
-			Fields.SESSION_ID, sidHex,
-			Fields.MESSAGE,    messageContent), ctx);
+		// Wrap message with caller provenance; the task or session it queues on says where it belongs
+		AMap<AString, ACell> envelope = withProvenance(Maps.of(Fields.MESSAGE, messageContent), ctx);
 		if (taskId != null) {
-			envelope = envelope.assoc(Fields.TASK_ID, taskIdHex);
 			AString messageId = RT.ensureString(RT.getIn(messageContent, Fields.MESSAGE_ID));
 			if (!agent.appendTaskContinuation(taskId, sid, envelope, messageId)) {
-				job.fail("Task not found or no longer accepts messages: " + taskIdHex);
+				job.fail("Task not found or no longer accepts messages: " + taskId.toHexString());
 				return;
 			}
 		} else {
@@ -1924,9 +1913,8 @@ public class AgentAdapter extends AAdapter {
 		// from it keep the id, tying conversation content back to the job.
 		AString jobIdHex = Strings.create(job.getID().toHexString());
 		ACell envelope = withProvenance(Maps.of(
-			Fields.SESSION_ID, sidHex,
 			Fields.MESSAGE,    messageContent,
-			Fields.JOB_ID,     jobIdHex), ctx);
+			Fields.JOB_ID,     job.getID()), ctx);
 		// Local delivery includes provenance in the admission transaction below.
 		if (ctx.getSessionDelivery() == null) job.update(data -> data.assoc(Fields.AGENT_ID, agentId)
 			.assoc(Fields.ADDRESS, target.address()).assoc(Fields.SESSION_ID, sidHex));
@@ -2078,7 +2066,7 @@ public class AgentAdapter extends AAdapter {
 		Blob sid = null;
 		if (sessionRequired && sessionId == null) { job.fail(SUMMARISE_SESSION_REQUIRED); return null; }
 		if (sessionId != null) {
-			sid = parseSessionId(RT.ensureString(sessionId));
+			sid = parseId(sessionId);
 			if (sid == null) { job.fail(QUERY_INVALID_SESSION); return null; }
 			session = RT.ensureMap(RT.getIn(record, Agent.KEY_SESSIONS, sid));
 			if (session == null) { job.fail(UNKNOWN_SESSION_CODE, QUERY_UNKNOWN_SESSION); return null; }
@@ -2169,10 +2157,8 @@ public class AgentAdapter extends AAdapter {
 		Blob sid = null;
 		ACell sidCell = RT.getIn(input, Fields.SESSION_ID);
 		if (sidCell != null) {
-			AString s = RT.ensureString(sidCell);
-			if (s == null) { job.fail("sessionId must be a hex string"); return; }
-			sid = parseSessionId(s);
-			if (sid == null) { job.fail("Invalid sessionId format: " + s); return; }
+			sid = parseId(sidCell);
+			if (sid == null) { job.fail("Invalid sessionId format: " + sidCell); return; }
 		}
 		AString sidHex = (sid != null) ? Strings.create(sid.toHexString()) : null;
 
@@ -2392,12 +2378,12 @@ public class AgentAdapter extends AAdapter {
 		// diagnostics — exactly as a live transition would see it. Without one
 		// the render is the synthetic fresh-transition context, as before.
 		AMap<AString, ACell> session = null;
-		AString sidHex = RT.ensureString(RT.getIn(input, Fields.SESSION_ID));
-		if (sidHex != null) {
-			Blob sid = parseSessionId(sidHex);
-			if (sid == null) { job.fail("Invalid sessionId format: " + sidHex); return null; }
+		ACell given = RT.getIn(input, Fields.SESSION_ID);
+		if (given != null) {
+			Blob sid = parseId(given);
+			if (sid == null) { job.fail("Invalid sessionId format: " + given); return null; }
 			session = agent.session(sid).getRecord();
-			if (session == null) { job.fail(UNKNOWN_SESSION_CODE, CONTEXT_UNKNOWN_SESSION.formatted(sidHex)); return null; }
+			if (session == null) { job.fail(UNKNOWN_SESSION_CODE, CONTEXT_UNKNOWN_SESSION.formatted(sid.toHexString())); return null; }
 			agentCtx = agentCtx.withSessionId(sid);
 		}
 
@@ -2562,7 +2548,7 @@ public class AgentAdapter extends AAdapter {
 		if (start != null && end != null && end < start) throw new InvalidInputException(HISTORY_RANGE_INVALID);
 		int limit = boundedInt(input, Fields.LIMIT, DEFAULT_HISTORY_ENTRIES, 1, MAX_HISTORY_ENTRIES);
 
-		AString requested = RT.ensureString(RT.getIn(input, Fields.SESSION_ID));
+		ACell requested = RT.getIn(input, Fields.SESSION_ID);
 		Blob sid;
 		AMap<AString, ACell> session;
 		if (requested != null) {
@@ -2629,7 +2615,7 @@ public class AgentAdapter extends AAdapter {
 		}
 		if (CVMBool.TRUE.equals(current)) return doCurrentSessionRead(ctx, access, input, maxTurns, maxChars, archiveDepth, skip);
 
-		AString requested = RT.ensureString(RT.getIn(input, Fields.SESSION_ID));
+		ACell requested = RT.getIn(input, Fields.SESSION_ID);
 		SessionSummary summary;
 		if (requested == null) {
 			List<SessionSummary> summaries = visibleSessionSummaries(ctx, access);
@@ -2695,8 +2681,8 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	/** A session id the caller named, which must be well formed. */
-	private static Blob requiredSessionId(AString requested) {
-		Blob sid = parseSessionId(requested);
+	private static Blob requiredSessionId(ACell requested) {
+		Blob sid = parseId(requested);
 		if (sid == null || sid.count() != 16) {
 			throw new InvalidInputException("sessionId must be a 16-byte hex string");
 		}
@@ -3118,16 +3104,16 @@ public class AgentAdapter extends AAdapter {
 			Abilities.AGENT_WRITE, false);
 		AString agentId = target.agentId();
 
-		AString taskIdHex = RT.ensureString(RT.getIn(input, Fields.TASK_ID));
-		if (taskIdHex == null) { job.fail("taskId is required"); return; }
+		ACell given = RT.getIn(input, Fields.TASK_ID);
+		if (given == null) { job.fail("taskId is required"); return; }
 
 		Agent agent = lookupAgent(job, target);
 		if (agent == null) return;
 		requireNative(agent, "cancelTask");
 
-		Blob taskId = HexId.parse(taskIdHex);
+		Blob taskId = parseId(given);
 		if (taskId == null) {
-			job.fail(new InvalidInputException(INVALID_TASK_ID + taskIdHex));
+			job.fail(new InvalidInputException(INVALID_TASK_ID + given));
 			return;
 		}
 
@@ -3149,7 +3135,7 @@ public class AgentAdapter extends AAdapter {
 			return work;
 		});
 		if (after == null) {
-			job.fail("Task not found: " + taskIdHex);
+			job.fail("Task not found: " + taskId.toHexString());
 			return;
 		}
 		outputContexts.remove(taskId);
@@ -3157,7 +3143,7 @@ public class AgentAdapter extends AAdapter {
 
 		job.setStatus(Status.STARTED);
 		job.completeWith(identify(target, Maps.of(
-			Fields.TASK_ID, taskIdHex,
+			Fields.TASK_ID, taskIdHex(taskId),
 			Fields.CANCELLED, CVMBool.TRUE)));
 	}
 
@@ -3198,18 +3184,18 @@ public class AgentAdapter extends AAdapter {
 			Abilities.AGENT_WRITE, false);
 		AString agentId = target.agentId();
 
-		AString sidHex = RT.ensureString(RT.getIn(input, Fields.SESSION_ID));
-		if (sidHex == null) { job.fail("sessionId is required"); return; }
+		ACell given = RT.getIn(input, Fields.SESSION_ID);
+		if (given == null) { job.fail("sessionId is required"); return; }
 
 		Agent agent = lookupAgent(job, target);
 		if (agent == null) return;
 		requireNative(agent, "deleteSession");
 
-		Blob sid = parseSessionId(sidHex);
-		if (sid == null) { job.fail("Invalid sessionId format: " + sidHex); return; }
+		Blob sid = parseId(given);
+		if (sid == null) { job.fail("Invalid sessionId format: " + given); return; }
 
 		if (agent.session(sid).getRecord() == null) {
-			job.fail("Session not found: " + sidHex);
+			job.fail("Session not found: " + sid.toHexString());
 			return;
 		}
 
@@ -3248,15 +3234,15 @@ public class AgentAdapter extends AAdapter {
 			Abilities.AGENT_WRITE, false);
 		AString agentId = target.agentId();
 
-		AString sidHex = RT.ensureString(RT.getIn(input, Fields.SESSION_ID));
-		if (sidHex == null) { job.fail("sessionId is required"); return; }
+		ACell given = RT.getIn(input, Fields.SESSION_ID);
+		if (given == null) { job.fail("sessionId is required"); return; }
 
 		Agent agent = lookupAgent(job, target);
 		if (agent == null) return;
 		requireNative(agent, "renameSession");
 
-		Blob sid = parseSessionId(sidHex);
-		if (sid == null) { job.fail("Invalid sessionId format: " + sidHex); return; }
+		Blob sid = parseId(given);
+		if (sid == null) { job.fail("Invalid sessionId format: " + given); return; }
 
 		ACell titleValue = RT.getIn(input, Fields.TITLE);
 		if (titleValue != null && !(titleValue instanceof AString)) {
@@ -3267,7 +3253,7 @@ public class AgentAdapter extends AAdapter {
 		if (title != null && title.toString().isBlank()) title = null;
 
 		if (!agent.session(sid).setTitle(title)) {
-			job.fail("Session not found: " + sidHex);
+			job.fail("Session not found: " + sid.toHexString());
 			return;
 		}
 
@@ -3284,8 +3270,8 @@ public class AgentAdapter extends AAdapter {
 	private void handleCompactSession(Job job, ACell input, RequestContext ctx) {
 		AgentTarget target = resolveAgentTarget(ctx, input, Fields.AGENT_ID,
 			Abilities.AGENT_WRITE, false);
-		AString sidHex = RT.ensureString(RT.getIn(input, Fields.SESSION_ID));
-		if (sidHex == null) { job.fail("sessionId is required"); return; }
+		ACell given = RT.getIn(input, Fields.SESSION_ID);
+		if (given == null) { job.fail("sessionId is required"); return; }
 		AString summary = RT.ensureString(RT.getIn(input, Strings.intern("summary")));
 		if (summary == null || summary.toString().isBlank()) {
 			job.fail("summary is required");
@@ -3295,9 +3281,9 @@ public class AgentAdapter extends AAdapter {
 		Agent agent = lookupAgent(job, target);
 		if (agent == null) return;
 		requireNative(agent, "compactSession");
-		Blob sid = parseSessionId(sidHex);
-		if (sid == null) { job.fail("Invalid sessionId format: " + sidHex); return; }
-		if (agent.session(sid).getRecord() == null) { job.fail("Session not found: " + sidHex); return; }
+		Blob sid = parseId(given);
+		if (sid == null) { job.fail("Invalid sessionId format: " + given); return; }
+		if (agent.session(sid).getRecord() == null) { job.fail("Session not found: " + sid.toHexString()); return; }
 
 		java.util.concurrent.atomic.AtomicLong archived =
 			new java.util.concurrent.atomic.AtomicLong(0);
@@ -3306,7 +3292,7 @@ public class AgentAdapter extends AAdapter {
 		AMap<AString, ACell> provenance = Maps.of(
 			K_CREATED, engine.currentTimestamp(),
 			Fields.CALLER, ctx.getCallerDID(),
-			Fields.JOB_ID, Strings.create(job.getID().toHexString()));
+			Fields.JOB_ID, job.getID());
 		boolean applied = agent.session(sid).updateQuiescentFrames(frames -> {
 			if (frames.isEmpty()) return frames;
 			AMap<AString, ACell> root = RT.ensureMap(frames.get(0));
@@ -3345,15 +3331,15 @@ public class AgentAdapter extends AAdapter {
 	private void handleReloadContext(Job job, ACell input, RequestContext ctx) {
 		AgentTarget target = resolveAgentTarget(ctx, input, Fields.AGENT_ID,
 			Abilities.AGENT_WRITE, false);
-		AString sidHex = RT.ensureString(RT.getIn(input, Fields.SESSION_ID));
-		if (sidHex == null) { job.fail("sessionId is required"); return; }
+		ACell given = RT.getIn(input, Fields.SESSION_ID);
+		if (given == null) { job.fail("sessionId is required"); return; }
 
 		Agent agent = lookupAgent(job, target);
 		if (agent == null) return;
 		requireNative(agent, "reloadContext");
-		Blob sid = parseSessionId(sidHex);
-		if (sid == null) { job.fail("Invalid sessionId format: " + sidHex); return; }
-		if (agent.session(sid).getRecord() == null) { job.fail("Session not found: " + sidHex); return; }
+		Blob sid = parseId(given);
+		if (sid == null) { job.fail("Invalid sessionId format: " + given); return; }
+		if (agent.session(sid).getRecord() == null) { job.fail("Session not found: " + sid.toHexString()); return; }
 
 		AVector<ACell> existingFrames = agent.session(sid).frames();
 		int clearable = 0;
@@ -3718,7 +3704,7 @@ public class AgentAdapter extends AAdapter {
 		private final List<Runnable> after = new ArrayList<>();
 		private final List<Blob> settled = new ArrayList<>();
 		private final List<OutsideWrite> outside = new ArrayList<>();
-		private AMap<AString, ACell> results;
+		private Index<Blob, ACell> results;
 
 		/** @param writeContexts the write contexts, one map for every run of the body */
 		Handback(AString ownerDID, AString agentId, Map<Blob, WriteContext> writeContexts) {
@@ -3731,18 +3717,18 @@ public class AgentAdapter extends AAdapter {
 		 * What the draft's agent resolved, as a timeline entry's
 		 * {@code taskResults}, passing over writes in flight; null when nothing.
 		 */
-		AMap<AString, ACell> taskResults(Agent agent) {
-			AMap<AString, ACell> found = Maps.empty();
+		Index<Blob, ACell> taskResults(Agent agent) {
+			Index<Blob, ACell> found = Index.none();
 			for (var e : agent.getResolved().entrySet()) {
 				if (handbacksInFlight.contains(e.getKey())) continue;
-				found = found.assoc(taskIdHex(e.getKey()), taskResult(RT.ensureMap(e.getValue())));
+				found = found.assoc(e.getKey(), taskResult(RT.ensureMap(e.getValue())));
 			}
 			results = found.isEmpty() ? null : found;
 			return results;
 		}
 
 		/** The task results {@link #taskResults} last found, or null. */
-		AMap<AString, ACell> results() {
+		Index<Blob, ACell> results() {
 			return results;
 		}
 
@@ -3767,8 +3753,9 @@ public class AgentAdapter extends AAdapter {
 				// historical envelope (including the full output) survives.
 				agent.removeTask(taskId);
 				settled.add(taskId);
-				AgentAdapter.settle(draft, request, after, recorded -> recorded.completeIn(draft, completion),
-					live -> live.completeWith(completion));
+				AMap<AString, ACell> result = withSessionHex(completion);
+				AgentAdapter.settle(draft, request, after, recorded -> recorded.completeIn(draft, result),
+					live -> live.completeWith(result));
 				return;
 			}
 			String handoff = "Output handoff failed for '" + outputPath + "': ";
@@ -3872,8 +3859,14 @@ public class AgentAdapter extends AAdapter {
 			Fields.STATUS, Status.COMPLETE,
 			Fields.OUTPUT_PATH, outputPath,
 			Fields.BYTES, CVMLong.create(Cells.storageSize(output)));
-		ACell sid = envelope.get(Fields.SESSION_ID);
+		AString sid = hexOrNull(Ids.stored(envelope.get(Fields.SESSION_ID)));
 		return (sid != null) ? receipt.assoc(Fields.SESSION_ID, sid) : receipt;
+	}
+
+	/** A resolved task's completion as its request's result shows it: the session as hex. */
+	private static AMap<AString, ACell> withSessionHex(AMap<AString, ACell> completion) {
+		AString sid = hexOrNull(Ids.stored(completion.get(Fields.SESSION_ID)));
+		return (sid != null) ? completion.assoc(Fields.SESSION_ID, sid) : completion;
 	}
 
 	// ========== Durability: tasks and chats outlive the process ==========
@@ -3938,9 +3931,8 @@ public class AgentAdapter extends AAdapter {
 		Blob sid = storedId(RT.ensureString(data.get(Fields.SESSION_ID)));
 		if (sid == null) return false;
 		AVector<ACell> pending = agent.session(sid).pending();
-		AString jobIdHex = Strings.create(jobId.toHexString());
 		for (long i = 0; i < pending.count(); i++) {
-			if (!jobIdHex.equals(RT.getIn(pending.get(i), Fields.JOB_ID))) continue;
+			if (!java.util.Objects.equals(jobId, Session.chatJob(pending.get(i)))) continue;
 			if (reattach) {
 				activeChats
 					.computeIfAbsent(new AgentKey(ownerDID, agentId), k -> new ConcurrentHashMap<>())
@@ -4159,7 +4151,7 @@ public class AgentAdapter extends AAdapter {
 
 	/** Venue-mediated delivery to an already authorized local session. */
 	public boolean deliverSessionMessage(AString ownerDID, AString agentId, Blob sessionId,
-			AString caller, AString jobId, ACell message) {
+			AString caller, Blob jobId, ACell message) {
 		if (!appendSessionMessage(engine.getVenueState().users(), ownerDID, agentId, sessionId, caller, jobId, message)) return false;
 		engine.flush();
 		wakeAgent(ownerDID, agentId, true);
@@ -4197,32 +4189,29 @@ public class AgentAdapter extends AAdapter {
 		if (taskId != null) {
 			AMap<AString, ACell> envelope = Maps.of(
 				Fields.CALLER, caller,
-				Fields.SESSION_ID, Strings.create(sessionId.toHexString()),
-				Fields.TASK_ID, Strings.create(taskId.toHexString()),
 				Fields.MESSAGE, message);
 			if (source != null) envelope = envelope.assoc(Agent.K_SOURCE, source);
 			if (agent.appendTaskContinuation(taskId, sessionId, envelope, messageId)) return true;
 		}
 		if (source == null) return appendSessionMessage(users, ownerDID, agentId, sessionId, caller, null, message);
 		return appendSessionEnvelope(agent, sessionId, caller,
-			sessionEnvelope(sessionId, caller, null, message).assoc(Agent.K_SOURCE, source));
+			sessionEnvelope(caller, null, message).assoc(Agent.K_SOURCE, source));
 	}
 
 	/** Append to a known local session using the supplied component, including a
 	 * transaction draft. The caller owns authorization and flush/wake after commit. */
 	public boolean appendSessionMessage(covia.venue.Users users, AString ownerDID, AString agentId, Blob sessionId,
-			AString caller, AString jobId, ACell message) {
+			AString caller, Blob jobId, ACell message) {
 		var owner = users.user(ownerDID);
 		Agent agent = owner == null ? null : owner.agent(agentId);
 		if (agent == null || externalAgents().isExternal(agent)) return false;
-		return appendSessionEnvelope(agent, sessionId, caller, sessionEnvelope(sessionId, caller, jobId, message));
+		return appendSessionEnvelope(agent, sessionId, caller, sessionEnvelope(caller, jobId, message));
 	}
 
 	/** The envelope a venue-delivered session message travels in: a chat when it names a {@code jobId}, else a message, stamped where it stands in the queue. */
-	private AMap<AString, ACell> sessionEnvelope(Blob sessionId, AString caller, AString jobId, ACell message) {
+	private AMap<AString, ACell> sessionEnvelope(AString caller, Blob jobId, ACell message) {
 		AMap<AString, ACell> envelope = Maps.of(
 			Fields.CALLER, caller,
-			Fields.SESSION_ID, Strings.create(sessionId.toHexString()),
 			Fields.MESSAGE, message);
 		return (jobId != null) ? envelope.assoc(Fields.JOB_ID, jobId) : queued(envelope);
 	}
@@ -4261,8 +4250,8 @@ public class AgentAdapter extends AAdapter {
 			AMap<AString, ACell> call) {
 		Agent agent = getAgent(ownerDID, agentId);
 		if (agent == null) return;
-		AMap<AString, ACell> entry = Maps.of(Fields.SESSION_ID, Strings.create(sessionId.toHexString()));
-		if (taskId != null) entry = entry.assoc(Fields.TASK_ID, Strings.create(taskId.toHexString()));
+		AMap<AString, ACell> entry = Maps.of(Fields.SESSION_ID, sessionId);
+		if (taskId != null) entry = entry.assoc(Fields.TASK_ID, taskId);
 		for (AString key : List.of(Fields.TOOL_CALL_ID, Fields.TOOL_NAME)) {
 			ACell value = RT.getIn(call, key);
 			if (value != null) entry = entry.assoc(key, value);
@@ -4315,26 +4304,25 @@ public class AgentAdapter extends AAdapter {
 			Agent agent = (owner == null) ? null : owner.agent(agentId);
 			if (agent == null || agent.getRecord() == null) return null;
 			ACell entry = agent.getPending().get(jobId);
-			AString sid = RT.ensureString(RT.getIn(entry, Fields.SESSION_ID));
+			Blob sid = Ids.stored(RT.getIn(entry, Fields.SESSION_ID));
 			if (sid == null) return null;
-			AString taskHex = RT.ensureString(RT.getIn(entry, Fields.TASK_ID));
+			Blob taskId = Ids.stored(RT.getIn(entry, Fields.TASK_ID));
 			agent.removePending(jobId);
-			boolean delivered = deliverToWaiter(draft, ownerDID, agentId, Blob.fromHex(sid.toString()),
-				(taskHex != null) ? Blob.fromHex(taskHex.toString()) : null, callMadeBy(record),
+			boolean delivered = deliverToWaiter(draft, ownerDID, agentId, sid, taskId, callMadeBy(record),
 				Strings.create(jobId.toHexString()), callOutcome(jobId, record, entry),
 				Agent.SOURCE_TOOL_OUTCOME);
-			return new CallDelivery(delivered, taskHex);
+			return new CallDelivery(delivered, taskId);
 		});
 		if (delivery == null) return false;
 		if (!delivery.delivered()) {
 			log.info("Outcome of job {} not delivered: agent {} has no such session", jobId, agentId);
-			if (delivery.waitingTask() != null) failIfStranded(ownerDID, agentId, Blob.fromHex(delivery.waitingTask().toString()));
+			if (delivery.waitingTask() != null) failIfStranded(ownerDID, agentId, delivery.waitingTask());
 		}
 		return delivery.delivered();
 	}
 
 	/** Whether a tracked call's outcome reached its waiter, and the task that waited on it, or null. */
-	private record CallDelivery(boolean delivered, AString waitingTask) {}
+	private record CallDelivery(boolean delivered, Blob waitingTask) {}
 
 	/** Fails a parked task with nothing left to wait on or run on ({@link #yieldIsBacked}). */
 	private void failIfStranded(AString ownerDID, AString agentId, Blob taskId) {
@@ -4361,7 +4349,8 @@ public class AgentAdapter extends AAdapter {
 	 */
 	static AMap<AString, ACell> callOutcome(Blob jobId, AMap<AString, ACell> record, ACell entry) {
 		AString status = RT.ensureString(record.get(Fields.STATUS));
-		AMap<AString, ACell> outcome = Maps.of(Fields.JOB_ID, Strings.create(jobId.toHexString()));
+		// What the model reads names ids as its other text does, in bare hex
+		AMap<AString, ACell> outcome = Maps.of(Fields.JOB_ID, taskIdHex(jobId));
 		for (AString key : List.of(Fields.TOOL_CALL_ID, Fields.TOOL_NAME)) {
 			ACell value = RT.getIn(entry, key);
 			if (value != null) outcome = outcome.assoc(key, value);
@@ -4391,7 +4380,7 @@ public class AgentAdapter extends AAdapter {
 	 * {@code hasWork()} at the top of the next iteration, same criterion
 	 * used at launch time.
 	 */
-	private record IterResult(ACell lastResult, AMap<AString, ACell> allTaskResults) {}
+	private record IterResult(ACell lastResult, Index<Blob, ACell> allTaskResults) {}
 
 	/**
 	 * Runs an agent's cycle loop on a single virtual thread. Each iteration:
@@ -4425,7 +4414,7 @@ public class AgentAdapter extends AAdapter {
 		final AgentKey key = new AgentKey(ownerDID, agentId);
 		ACell lastResult = null;
 		int iteration = 0;
-		AMap<AString, ACell> allTaskResults = Maps.empty();
+		Index<Blob, ACell> allTaskResults = Index.none();
 		boolean firstIteration = true;
 		// Stuck-task detection (#215): the oldest task is re-presented every
 		// cycle until it resolves, so the same task id recurring for the whole
@@ -4529,12 +4518,11 @@ public class AgentAdapter extends AAdapter {
 				// presented. A session's cycle takes its first chat and the
 				// messages ahead of it; a task's cycle takes only those messages,
 				// since its reply is the task's (Session.taken).
-				AString pickedSession = pick.session();
-				Blob pickedSessionBlob = storedId(pickedSession);
+				Blob pickedSession = pick.session();
 				AMap<AString, ACell> pickedSessionRecord = null;
 				AVector<ACell> filteredInbox = Vectors.empty();
-				if (pickedSessionBlob != null) {
-					pickedSessionRecord = agent.session(pickedSessionBlob).getRecord();
+				if (pickedSession != null) {
+					pickedSessionRecord = agent.session(pickedSession).getRecord();
 					if (pickedSessionRecord != null) {
 						filteredInbox = Session.taken(pickedSessionRecord, pickedTask == null);
 						pickedSessionRecord = pickedSessionRecord.assoc(Agent.KEY_PENDING, filteredInbox);
@@ -4552,12 +4540,12 @@ public class AgentAdapter extends AAdapter {
 				ACell claim = Blob.createRandom(new java.util.Random(), 8);
 				// A continuation keeps its own sender's provenance, not the requester's
 				AVector<ACell> inputTurns = cycleInputTurns(filteredInbox, pickedTaskInput,
-					(pickedTask != null) ? Strings.create(pickedTask.getKey().toHexString()) : null,
+					(pickedTask != null) ? pickedTask.getKey() : null,
 					(pickedTask != null) ? Task.nextInputSource(pickedTask.getValue()) : null, startTs);
 				Agent.CycleStart started = agent.beginCycle(
 					(pickedTask != null) ? pickedTask.getKey() : null,
 					(pickedTask != null) ? pickedTask.getValue() : null,
-					(pickedSessionRecord != null) ? pickedSessionBlob : null,
+					(pickedSessionRecord != null) ? pickedSession : null,
 					claim, inputTurns, filteredInbox.count());
 				// Stopped, the top of the loop exits. Moved, what was picked changed
 				// since and nothing was taken, so pick again.
@@ -4580,7 +4568,7 @@ public class AgentAdapter extends AAdapter {
 					cycleCtx = cycleCtx.withTaskId(pickedTask.getKey(),
 						Task.revision(pickedTask.getValue()));
 				}
-				if (pickedSessionBlob != null) cycleCtx = cycleCtx.withSessionId(pickedSessionBlob);
+				if (pickedSession != null) cycleCtx = cycleCtx.withSessionId(pickedSession);
 
 				// PENDING means accepted and queued. STARTED begins when a cycle
 				// takes the work: a request when its task is picked, a chat when
@@ -4591,7 +4579,7 @@ public class AgentAdapter extends AAdapter {
 						taskJob.setStatus(Status.STARTED);
 					}
 				}
-				if (pickedSessionRecord != null) startTakenChats(key, pickedSessionBlob, filteredInbox);
+				if (pickedSessionRecord != null) startTakenChats(key, pickedSession, filteredInbox);
 
 				AMap<AString, ACell> transitionInput = Maps.of(
 					Fields.AGENT_ID, agentId,
@@ -4605,10 +4593,7 @@ public class AgentAdapter extends AAdapter {
 					// The task is keyed by the delegating agent:request Job id; carry it
 					// so a frame-owning harness can tie the request turn back to the
 					// calling job, exactly as chat turns record their job id (#378).
-					if (pickedTask != null) {
-						transitionInput = transitionInput.assoc(Fields.JOB_ID,
-							Strings.create(pickedTask.getKey().toHexString()));
-					}
+					if (pickedTask != null) transitionInput = transitionInput.assoc(Fields.JOB_ID, pickedTask.getKey());
 				}
 				// The session as picked, its pending listing the messages this cycle
 				// took, and the cycle's claim on it: a runtime that keeps its frames
@@ -4642,8 +4627,8 @@ public class AgentAdapter extends AAdapter {
 					new java.util.concurrent.atomic.AtomicBoolean(false);
 				// The live tap (#394): announce the cycle with what it was given
 				// and hand the transition the handle it emits through.
-				AgentEvents.Cycle cycle = run.beginCycle(pickedSession,
-					(pickedTask != null) ? Strings.create(pickedTask.getKey().toHexString()) : null,
+				AgentEvents.Cycle cycle = run.beginCycle(hexOrNull(pickedSession),
+					(pickedTask != null) ? taskIdHex(pickedTask.getKey()) : null,
 					cycleStartData(transitionOp, filteredInbox, formattedTasks, resolvedPending));
 				CompletableFuture<ACell> transitionFuture =
 					engine.jobs().invokeInternal(transitionOp, transitionInput,
@@ -4684,8 +4669,7 @@ public class AgentAdapter extends AAdapter {
 
 				IterResult merged = mergeAndPostProcess(
 					agent, agentId, ownerDID, transitionOp, framesOwned, transitionResult, currentState, pickedTask,
-					pickedTaskInput, formattedTasks, pickedSession,
-					pickedSessionBlob, filteredInbox, resolvedPending,
+					pickedTaskInput, formattedTasks, pickedSession, filteredInbox, resolvedPending,
 					startTs, allTaskResults, cannotContinue, claim, cycle);
 				// A stopped cycle merged nothing: the top of the loop exits, or
 				// carries on with the work of an agent resumed since
@@ -4716,7 +4700,7 @@ public class AgentAdapter extends AAdapter {
 				Fields.ADDRESS, Strings.create(ownerDID + "/g/" + agentId),
 				Fields.STATUS, finalStatus,
 				Fields.RESULT, lastResult != null ? RT.getIn(lastResult, Fields.RESULT) : null,
-				Fields.TASK_RESULTS, allTaskResults));
+				Fields.TASK_RESULTS, byHex(allTaskResults)));
 		} catch (Exception e) {
 			if (engine.isClosing()) {
 				// Shutdown, typically the store closing under this loop: as at the
@@ -4766,9 +4750,8 @@ public class AgentAdapter extends AAdapter {
 			AString transitionOp, boolean framesOwned,
 			ACell transitionResult, ACell snapshotState, Map.Entry<Blob, ACell> pickedTask,
 			ACell pickedTaskInput, AVector<ACell> formattedTasks,
-			AString pickedSession, Blob pickedSessionBlob,
-			AVector<ACell> filteredInbox, ACell pending,
-			long startTs, AMap<AString, ACell> allTaskResults, boolean cannotContinue,
+			Blob pickedSession, AVector<ACell> filteredInbox, ACell pending,
+			long startTs, Index<Blob, ACell> allTaskResults, boolean cannotContinue,
 			ACell claim, AgentEvents.Cycle tap) {
 		final AgentKey key = new AgentKey(callerDID, agentId);
 		long endTs = engine.currentTimestamp().longValue();
@@ -4844,7 +4827,7 @@ public class AgentAdapter extends AAdapter {
 		// input is already there, written when the cycle began; a runtime that
 		// keeps its frames live has written its turns itself.
 		AVector<ACell> turnsToAppend = Vectors.empty();
-		if (pickedSessionBlob != null && leanError == null && !framesOwned) {
+		if (pickedSession != null && leanError == null && !framesOwned) {
 			if (transitionTurns != null) {
 				for (long i = 0; i < transitionTurns.count(); i++) {
 					AMap<AString, ACell> turn = normaliseTransitionTurn(
@@ -4905,10 +4888,10 @@ public class AgentAdapter extends AAdapter {
 			} else if (pickedTask != null && leanError == null) {
 				parked = settleOpenTask(current, pickedTask, leanResponse, wakeRequested, startTs, parkedAt);
 			}
-			AMap<AString, ACell> results = run.taskResults(current);
+			Index<Blob, ACell> results = run.taskResults(current);
 			AMap<AString, ACell> record = current.mergeRunResult(snapshotState, newState, results,
 				(results == null) ? cycleEntry : cycleEntry.assoc(Fields.TASK_RESULTS, results),
-				pickedSessionBlob, cycleTurns, cycleTokens);
+				pickedSession, cycleTurns, cycleTokens);
 			run.settleAll(draft, current);
 			return new Merge(record, run, false, parked);
 		});
@@ -4925,7 +4908,7 @@ public class AgentAdapter extends AAdapter {
 			return null;
 		}
 		Handback handback = merge.handback();
-		AMap<AString, ACell> taskResults = handback.results();
+		Index<Blob, ACell> taskResults = handback.results();
 		// Accumulate task results across iterations
 		if (taskResults != null) {
 			for (var entry : taskResults.entrySet()) {
@@ -4961,11 +4944,11 @@ public class AgentAdapter extends AAdapter {
 				pickedKind = Agent.ThreadKind.TASK;
 				wakeAtPick = Task.wakeTime(pickedTask.getValue());
 				wakeNow = Task.wakeTime(agent.getTasks().get(pickedThreadId));
-			} else if (pickedSessionBlob != null) {
-				pickedThreadId = pickedSessionBlob;
+			} else if (pickedSession != null) {
+				pickedThreadId = pickedSession;
 				pickedKind = Agent.ThreadKind.SESSION;
 				// Only a transition sets a session's wake, so whatever it holds is the one picked
-				wakeNow = agent.session(pickedSessionBlob).wakeTime();
+				wakeNow = agent.session(pickedSession).wakeTime();
 				wakeAtPick = wakeNow;
 			}
 			if (pickedThreadId != null) {
@@ -5003,12 +4986,13 @@ public class AgentAdapter extends AAdapter {
 		// reply is its own. Same post-merge ordering as task completion. A
 		// cycle that ends without a reply has said nothing, which answers the
 		// chat with no response; a failed cycle fails it instead, below.
-		if (leanError == null && pickedSessionBlob != null) {
-			ConcurrentHashMap<Blob, Job> waiters = sessionChats(key, pickedSessionBlob);
+		if (leanError == null && pickedSession != null) {
+			ConcurrentHashMap<Blob, Job> waiters = sessionChats(key, pickedSession);
 			if (waiters != null) {
 				for (Job chatJob : removeTakenChats(waiters).values()) {
 					if (cycleTokens != null) attachTokens(chatJob, cycleTokens);
-					AMap<AString, ACell> answer = Maps.of(Fields.AGENT_ID, agentId, Fields.SESSION_ID, pickedSession);
+					AMap<AString, ACell> answer = Maps.of(Fields.AGENT_ID, agentId,
+						Fields.SESSION_ID, Strings.create(pickedSession.toHexString()));
 					chatJob.completeWith((leanResponse == null) ? answer : answer.assoc(Fields.RESPONSE, leanResponse));
 				}
 			}
@@ -5018,7 +5002,7 @@ public class AgentAdapter extends AAdapter {
 		// task above, and here the chats it was answering. Work it never took
 		// stays queued, and the agent carries on with it.
 		if (leanError != null && !cannotContinue) {
-			failTakenChats(key, pickedSessionBlob, leanError.toString(), cycleTokens);
+			failTakenChats(key, pickedSession, leanError.toString(), cycleTokens);
 		}
 
 		// An agent that cannot continue — its model setup is wrong, its
@@ -5040,7 +5024,7 @@ public class AgentAdapter extends AAdapter {
 			Fields.ADDRESS, Strings.create(callerDID + "/g/" + agentId),
 			Fields.STATUS, cannotContinue ? Agent.SUSPENDED : Agent.status(merged),
 			Fields.RESULT, result,
-			Fields.TASK_RESULTS, allTaskResults);
+			Fields.TASK_RESULTS, byHex(allTaskResults));
 
 		return new IterResult(lastResult, allTaskResults);
 	}
@@ -5205,8 +5189,8 @@ public class AgentAdapter extends AAdapter {
 			AVector<ACell> tasks, AVector<ACell> pending) {
 		AVector<ACell> jobs = Vectors.empty();
 		for (long i = 0; inbox != null && i < inbox.count(); i++) {
-			ACell jobId = RT.getIn(inbox.get(i), Fields.JOB_ID);
-			if (jobId != null) jobs = jobs.conj(jobId);
+			Blob jobId = Session.chatJob(inbox.get(i));
+			if (jobId != null) jobs = jobs.conj(taskIdHex(jobId));
 		}
 		AMap<AString, ACell> data = Maps.of(
 			Fields.OP, op,
@@ -5305,7 +5289,7 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	/** What a cycle works on: a task, in its session if it has one, or else a session's queued messages. */
-	private record Pick(Map.Entry<Blob, ACell> task, AString session) {}
+	private record Pick(Map.Entry<Blob, ACell> task, Blob session) {}
 
 	/**
 	 * Picks the oldest work in the agent's queue (AGENT_SESSIONS.md §5.5.2):
@@ -5333,10 +5317,9 @@ public class AgentAdapter extends AAdapter {
 			if (pending.count() == 0 || Session.queueKey(pending.get(0)) >= taskKey) sid = null;
 		}
 		if (task == null || sid != null) {
-			return new Pick(null, (sid == null) ? null : Strings.create(sid.toHexString()));
+			return new Pick(null, sid);
 		}
-		Blob taskSession = Task.sessionId(task.getValue());
-		return new Pick(task, (taskSession == null) ? null : Strings.create(taskSession.toHexString()));
+		return new Pick(task, Task.sessionId(task.getValue()));
 	}
 
 	/**
@@ -5361,7 +5344,7 @@ public class AgentAdapter extends AAdapter {
 		ACell responseSchema = (taskMap != null) ? taskMap.get(Fields.RESPONSE_SCHEMA) : null;
 		ACell strict = (taskMap != null) ? taskMap.get(Fields.STRICT) : null;
 		AMap<AString, ACell> task = withRecordedProvenance(Maps.of(
-			Fields.JOB_ID, taskIdHex(jobId),
+			Fields.JOB_ID, jobId,
 			Fields.INPUT, taskInput), taskMap);
 		if (responseSchema != null) task = task.assoc(Fields.RESPONSE_SCHEMA, responseSchema);
 		if (strict != null) task = task.assoc(Fields.STRICT, strict);
@@ -5383,7 +5366,7 @@ public class AgentAdapter extends AAdapter {
 			AMap<AString, ACell> jobData = engine.jobs().getJobData(jobId);
 			ACell payload = (jobData != null) ? jobData.get(payloadField) : snapshot;
 			AMap<AString, ACell> info = Maps.of(
-				Fields.JOB_ID, taskIdHex(jobId),
+				Fields.JOB_ID, jobId,
 				Fields.STATUS, (jobData != null) ? jobData.get(Fields.STATUS) : null,
 				payloadField, payload);
 			// A job that did not complete says why: the reason is what the
@@ -5904,8 +5887,7 @@ public class AgentAdapter extends AAdapter {
 			session.clearCycle();
 			AVector<ACell> pending = session.pending();
 			for (long i = 0; i < pending.count(); i++) {
-				AString jobIdHex = RT.ensureString(RT.getIn(pending.get(i), Fields.JOB_ID));
-				Blob jobId = (jobIdHex != null) ? Blob.fromHex(jobIdHex.toString()) : null;
+				Blob jobId = Session.chatJob(pending.get(i));
 				if (jobId == null) continue; // fire-and-forget message, not a chat Job
 				ACell rawJob = user.jobs().getRecord(jobId);
 				if (!(rawJob instanceof AMap<?, ?> map)
@@ -6302,21 +6284,31 @@ public class AgentAdapter extends AAdapter {
 		return Strings.create(id.toHexString());
 	}
 
+	/** Task results as a run's result shows them: keyed by each task's id in hex. */
+	private static AMap<AString, ACell> byHex(Index<Blob, ACell> results) {
+		AMap<AString, ACell> shown = Maps.empty();
+		for (var entry : results.entrySet()) shown = shown.assoc(taskIdHex(entry.getKey()), entry.getValue());
+		return shown;
+	}
+
+	/** An id as results and live events show it, bare hex; null for none. */
+	private static AString hexOrNull(Blob id) {
+		return (id == null) ? null : taskIdHex(id);
+	}
+
 	/** A session or job id the venue wrote, which is always bare hex; null for none. */
 	private static Blob storedId(AString hex) {
 		return (hex == null) ? null : Blob.fromHex(hex.toString());
 	}
 
-	/** Accepts canonical hex and the {@code 0x}-prefixed form emitted by CVM data. */
-	private static Blob parseSessionId(AString value) {
-		if (value == null) return null;
-		String hex = value.toString();
-		if (hex.startsWith("0x") || hex.startsWith("0X")) hex = hex.substring(2);
-		try {
-			return Blob.fromHex(hex);
-		} catch (RuntimeException e) {
-			return null;
-		}
+	/**
+	 * An id as an operation's input gives it: a Blob, or hex text with or
+	 * without {@code 0x}, as an id the venue returned may be echoed back.
+	 *
+	 * @return The id, or null when the value is none of these
+	 */
+	private static Blob parseId(ACell value) {
+		return HexId.parse(value);
 	}
 
 	/**
@@ -6342,11 +6334,9 @@ public class AgentAdapter extends AAdapter {
 		ACell sidCell = RT.getIn(input, Fields.SESSION_ID);
 		Blob sid;
 		if (sidCell != null) {
-			AString s = RT.ensureString(sidCell);
-			if (s == null) { job.fail("sessionId must be a hex string"); return null; }
-			sid = parseSessionId(s);
+			sid = parseId(sidCell);
 			if (sid == null) {
-				job.fail("Invalid sessionId format: " + s);
+				job.fail("Invalid sessionId format: " + sidCell);
 				return null;
 			}
 		} else {
@@ -6382,10 +6372,8 @@ public class AgentAdapter extends AAdapter {
 		}
 		ACell sidCell = RT.getIn(input, Fields.SESSION_ID);
 		if (sidCell != null) {
-			AString s = RT.ensureString(sidCell);
-			if (s == null) { job.fail("sessionId must be a hex string"); return null; }
-			Blob sid = parseSessionId(s);
-			if (sid == null) { job.fail("Invalid sessionId format: " + s); return null; }
+			Blob sid = parseId(sidCell);
+			if (sid == null) { job.fail("Invalid sessionId format: " + sidCell); return null; }
 			return new SessionSpec(sid, initialLoads, true);
 		}
 		Blob sid = generateSessionId();

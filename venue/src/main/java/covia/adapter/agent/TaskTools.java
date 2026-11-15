@@ -87,9 +87,9 @@ final class TaskTools {
 		private final long timeoutMs;
 		private final boolean preview;
 		/** jobId → {status, output | error}, as each task is resolved. */
-		private AMap<AString, ACell> results;
+		private AMap<ACell, ACell> results;
 		/** The tasks parked this cycle: open, and no longer the agent's to resolve now. */
-		private final java.util.Set<AString> parked = new java.util.HashSet<>();
+		private final java.util.Set<ACell> parked = new java.util.HashSet<>();
 
 		Tasks(Engine engine, RequestContext ctx, AVector<ACell> tasks, long timeoutMs, boolean preview) {
 			this.engine = engine;
@@ -110,7 +110,7 @@ final class TaskTools {
 		}
 
 		/** What was resolved this cycle: jobId → {status, output | error}; null when nothing. */
-		AMap<AString, ACell> results() {
+		AMap<ACell, ACell> results() {
 			return results;
 		}
 
@@ -130,12 +130,12 @@ final class TaskTools {
 			int outstanding = 0;
 			for (long i = 0; i < tasks.count(); i++) {
 				ACell task = tasks.get(i);
-				AString jobId = RT.ensureString(RT.getIn(task, Fields.JOB_ID));
+				ACell jobId = RT.getIn(task, Fields.JOB_ID);
 				if (jobId != null && !open(jobId)) continue;
 				if (outstanding == 0) sb.append("[Tasks assigned to you]\n");
 				outstanding++;
 				String from = TurnProvenance.summary(engine, ctx, task);
-				sb.append("- Task ").append(jobId);
+				sb.append("- Task ").append(ContextAssembler.idText(jobId));
 				if (from != null) sb.append(" (from: ").append(from).append(")");
 				sb.append(": ").append(renderTaskText(RT.getIn(task, Fields.INPUT))).append("\n");
 				// The requester's declared result shape (#376) — advisory unless
@@ -171,7 +171,7 @@ final class TaskTools {
 		 * its reply goes to the conversation rather than the task.
 		 */
 		ToolCycleEngine.ToolOutcome park(ToolCycleEngine.ToolCall call) {
-			AString jobId = scope();
+			ACell jobId = scope();
 			if (jobId == null || !open(jobId)) {
 				return ToolCycleEngine.ToolOutcome.result(Strings.create(NO_TASK.formatted(PARK)));
 			}
@@ -208,7 +208,7 @@ final class TaskTools {
 		 */
 		private ToolCycleEngine.ToolOutcome resolve(ToolCycleEngine.ToolCall call, AString turnText, boolean failed) {
 			String tool = failed ? FAIL : COMPLETE;
-			AString jobId = scope();
+			ACell jobId = scope();
 			if (jobId == null) {
 				return ToolCycleEngine.ToolOutcome.result(Strings.create(
 					NO_TASK.formatted(tool)));
@@ -261,29 +261,30 @@ final class TaskTools {
 		}
 
 		/** The in-scope task's id: the one the cycle was started for, else the
-		 *  first still outstanding (a preview, or a direct invocation). */
-		private AString scope() {
+		 *  first still outstanding (a preview, or a direct invocation). A
+		 *  task's id is its job's, or {@link #PREVIEW_JOB_ID} in a preview. */
+		private ACell scope() {
 			Blob id = (ctx != null) ? ctx.getTaskId() : null;
-			return (id != null) ? Strings.create(id.toHexString()) : firstOutstanding();
+			return (id != null) ? id : firstOutstanding();
 		}
 
-		private AString firstOutstanding() {
+		private ACell firstOutstanding() {
 			for (long i = 0; tasks != null && i < tasks.count(); i++) {
-				AString jobId = RT.ensureString(RT.getIn(tasks.get(i), Fields.JOB_ID));
+				ACell jobId = RT.getIn(tasks.get(i), Fields.JOB_ID);
 				if (jobId != null && open(jobId)) return jobId;
 			}
 			return null;
 		}
 
 		/** Whether a task is still the agent's to settle this cycle: neither resolved nor parked. */
-		private boolean open(AString jobId) {
+		private boolean open(ACell jobId) {
 			return (results == null || results.get(jobId) == null) && !parked.contains(jobId);
 		}
 
 		/** The contract in force for a task: the requester's response schema
 		 *  when it asked for strict enforcement (#376); otherwise none — a
 		 *  non-strict schema is guidance, never judged. */
-		private AMap<AString, ACell> strictSchema(AString jobId) {
+		private AMap<AString, ACell> strictSchema(ACell jobId) {
 			for (long i = 0; tasks != null && i < tasks.count(); i++) {
 				ACell task = tasks.get(i);
 				if (!jobId.equals(RT.getIn(task, Fields.JOB_ID))) continue;
