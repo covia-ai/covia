@@ -28,6 +28,7 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.lang.RT;
+import convex.core.util.JSON;
 import convex.core.data.AHashMap;
 import convex.core.data.SignedData;
 import convex.lattice.cursor.AForkableCursor;
@@ -829,8 +830,9 @@ public class DLFSAdapterTest {
 		assertEquals(facts, RT.getIn(run("v/ops/file/stat",
 			Maps.of("path", "dlfs/meta/renamed.jpg")), "metadata"));
 
-		// Null clears it
-		run("v/ops/dlfs/set-metadata", Maps.of("drive", "meta", "path", "renamed.jpg", "metadata", null));
+		// Null clears it, as it arrives in a JSON request
+		run("v/ops/dlfs/set-metadata", JSON.parseJSON5(
+			"{\"drive\": \"meta\", \"path\": \"renamed.jpg\", \"metadata\": null}"));
 		assertNull(metadataOf("meta", "renamed.jpg"));
 
 		// Deleting the file removes it: a file created again at the path has none
@@ -840,10 +842,43 @@ public class DLFSAdapterTest {
 		run("v/ops/dlfs/write", Maps.of("drive", "meta", "path", "renamed.jpg", "content", "v3"));
 		assertNull(metadataOf("meta", "renamed.jpg"));
 
-		// A directory carries metadata too
+		// A directory carries metadata too, the drive's root included
 		run("v/ops/dlfs/mkdir", Maps.of("drive", "meta", "path", "album"));
 		run("v/ops/dlfs/set-metadata", Maps.of("drive", "meta", "path", "album", "metadata", "holiday"));
 		assertEquals(Strings.create("holiday"), metadataOf("meta", "album"));
+		run("v/ops/dlfs/set-metadata", Maps.of("drive", "meta", "path", "", "metadata", "root"));
+		assertEquals(Strings.create("root"), metadataOf("meta", ""));
+		assertEquals(Strings.create("holiday"), metadataOf("meta", "album"));
+		assertTrue(driveNames().toString().contains("meta"));
+	}
+
+	@Test
+	public void testSettingMetadataLeavesContentAndModifiedTime() throws Exception {
+		// On a clock that moves, so an unchanged time shows something
+		var time = DrivenClock.at(Instant.now());
+		CoviaApplication application = TestEngine.application(time);
+		Engine isolated = application.mount(AKeyPair.generate(),
+			Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true))).start();
+		try {
+			Engine.addDemoAssets(isolated);
+			var adapter = (DLFSAdapter) isolated.getAdapter("dlfs");
+			RequestContext alice = RequestContext.of(ALICE_DID);
+			var drive = writableDrive(adapter, "times");
+			Files.writeString(drive.getPath("/photo.jpg"), "bytes");
+			long written = Files.getLastModifiedTime(drive.getPath("/photo.jpg")).toMillis();
+			time.advance(1000);
+
+			adapter.setMetadata(alice, "times", "photo.jpg", Strings.create("facts"));
+			assertEquals(Strings.create("facts"), adapter.metadata(alice, "times", "photo.jpg"));
+			assertEquals(written, Files.getLastModifiedTime(drive.getPath("/photo.jpg")).toMillis());
+			assertEquals("bytes", Files.readString(drive.getPath("/photo.jpg")));
+
+			// The drive transaction signs the owner's drives as any write does
+			@SuppressWarnings("unchecked")
+			var owners = (AMap<ACell, ACell>) application.cursor().get().get(Covia.DLFS);
+			var signed = (SignedData<?>) owners.entryAt(0).getValue();
+			assertTrue(signed.checkSignature());
+		} finally { isolated.close(); }
 	}
 
 	@Test

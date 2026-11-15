@@ -1143,6 +1143,30 @@ public class FileAdapterTest {
 	}
 
 	@Test
+	public void testDLFSBackedRootSetsMetadata() {
+		Engine eng = dlfsRoots;
+		RequestContext ctx = RequestContext.of(TestEngine.uniqueDID("FileAdapterTest-dlfs-metadata"));
+
+		// Setting metadata changes an entry that exists, so it brings no root into being
+		Job refused = eng.jobs().callOperation("v/ops/file/set-metadata",
+			Maps.of("root", "docs", "path", "a.txt", "metadata", "x"), ctx);
+		assertThrows(Exception.class, () -> refused.awaitResult(2000));
+		assertTrue(refused.getErrorMessage().contains(DLFSAdapter.DRIVE_NOT_FOUND), refused.getErrorMessage());
+		Job drives = eng.jobs().callOperation("v/ops/dlfs/list-drives", Maps.empty(), ctx);
+		assertEquals(0, RT.ensureVector(RT.getIn(drives.awaitResult(2000), "drives")).count());
+
+		eng.jobs().callOperation("v/ops/file/write",
+			Maps.of("root", "docs", "path", "a.txt", "content", "text"), ctx).awaitResult(2000);
+		Job set = eng.jobs().callOperation("v/ops/file/set-metadata",
+			Maps.of("root", "docs", "path", "a.txt", "metadata", Maps.of("kind", "note")), ctx);
+		set.awaitResult(2000);
+		assertEquals(Status.COMPLETE, set.getStatus());
+		Job stat = eng.jobs().callOperation("v/ops/file/stat",
+			Maps.of("root", "docs", "path", "a.txt"), ctx);
+		assertEquals(Maps.of("kind", "note"), RT.getIn(stat.awaitResult(2000), "metadata"));
+	}
+
+	@Test
 	public void testDLFSBackedRootMoveAndCopyAreNative() {
 		// Convex 0.8.11 (#675/#677) implements DLFSProvider.move/copy, so the
 		// file: surface's direct NIO dispatch works natively on a DLFS root — a

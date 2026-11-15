@@ -375,6 +375,16 @@ public class FileAdapter extends AAdapter implements covia.venue.storage.Content
 	 */
 	private FileTarget resolveTarget(RequestContext ctx, String rootName, String userPath,
 			AString ability, boolean mustExist) throws IOException {
+		return resolveTarget(ctx, rootName, userPath, ability, mustExist,
+			Capability.CRUD_WRITE.equals(ability));
+	}
+
+	/**
+	 * @param creates whether a write may create the DLFS drive and subpath a
+	 *        DLFS-backed root names, when they are not there
+	 */
+	private FileTarget resolveTarget(RequestContext ctx, String rootName, String userPath,
+			AString ability, boolean mustExist, boolean creates) throws IOException {
 		if (rootName == null || rootName.isEmpty()) {
 			DLFSAdapter.AuthorisedPath target = requireDLFSAdapter()
 				.resolveAuthorisedPath(ctx, userPath, ability);
@@ -402,8 +412,9 @@ public class FileAdapter extends AAdapter implements covia.venue.storage.Content
 			String ref = "dlfs/" + dr.driveName + (relative.isEmpty() ? "" : "/" + relative);
 			// The root names its drive and subpath, which count as present: a
 			// write under them creates them as their owner. A read-only root is
-			// never written, so it creates nothing.
-			String rootRef = dr.readOnly ? null
+			// never written, so it creates nothing, nor does a write that only
+			// changes an entry.
+			String rootRef = (dr.readOnly || !creates) ? null
 				: "dlfs/" + dr.driveName + (dr.subpath == null ? "" : "/" + dr.subpath);
 			DLFSAdapter.AuthorisedPath target = requireDLFSAdapter()
 				.resolveAuthorisedPath(ctx, ref, ability, rootRef);
@@ -1009,9 +1020,10 @@ public class FileAdapter extends AAdapter implements covia.venue.storage.Content
 		String pathArg = stringArg(input, FIELD_PATH);
 		rejectArchiveEntry(pathArg, "set metadata on");
 		ACell metadata = DLFSAdapter.metadataArg(input);
-		FileTarget target = resolveTarget(ctx, rootName, pathArg, Capability.CRUD_WRITE, true);
+		// It changes an entry that exists, so it creates nothing, root included
+		FileTarget target = resolveTarget(ctx, rootName, pathArg, Capability.CRUD_WRITE, true, false);
 		requireWritable(target);
-		requireDLFSAdapter().setMetadata(target.path(), metadata);
+		requireDLFSAdapter().setMetadataAt(ctx, target.resource(), metadata);
 		return Maps.of(Fields.METADATA, metadata);
 	}
 

@@ -46,6 +46,13 @@ public class VaultAdapterTest {
 
 	@Test
 	public void testVaultSetsMetadata() {
+		// Setting metadata changes an entry that exists, so it brings no vault into being
+		var refused = engine.jobs().callOperation("v/ops/vault/set-metadata",
+			Maps.of("path", "doc.txt", "metadata", "x"), RequestContext.of(aliceDID));
+		assertThrows(Exception.class, () -> refused.awaitResult(5000));
+		assertTrue(refused.getErrorMessage().contains(DLFSAdapter.DRIVE_NOT_FOUND), refused.getErrorMessage());
+		assertEquals(0, RT.ensureVector(RT.getIn(run("v/ops/dlfs/list-drives", Maps.empty()), "drives")).count());
+
 		run("v/ops/vault/write", Maps.of("path", "doc.txt", "content", "x"));
 		AMap<AString, ACell> facts = Maps.of("kind", "letter");
 		run("v/ops/vault/set-metadata", Maps.of("path", "doc.txt", "metadata", facts));

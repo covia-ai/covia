@@ -14,8 +14,12 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.TestInstance.Lifecycle;
 
+import convex.core.data.ACell;
+import convex.core.data.AMap;
+import convex.core.data.AString;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.lang.RT;
 import covia.adapter.DLFSAdapter;
 import covia.venue.server.VenueServer;
 
@@ -134,6 +138,21 @@ public class DLFSWebDAVTest {
 		HttpResponse<String> getRes = request("GET", "test-drive/overwrite.txt", null);
 		assertEquals(200, getRes.statusCode());
 		assertEquals("version 2", getRes.body());
+	}
+
+	@Test
+	public void testOverwriteKeepsMetadata() throws Exception {
+		request("PUT", "test-drive/kept.txt", "version 1");
+		RequestContext publicCtx = RequestContext.of(Strings.create(server.getEngine().getDIDString() + ":public"));
+		AMap<AString, ACell> facts = Maps.of("source", "camera");
+		server.getEngine().jobs().invokeOperation("v/ops/dlfs/set-metadata",
+			Maps.of("drive", "test-drive", "path", "kept.txt", "metadata", facts), publicCtx).awaitResult(5000);
+
+		request("PUT", "test-drive/kept.txt", "version 2");
+		assertEquals("version 2", request("GET", "test-drive/kept.txt", null).body());
+		ACell stat = server.getEngine().jobs().invokeOperation("v/ops/dlfs/stat",
+			Maps.of("drive", "test-drive", "path", "kept.txt"), publicCtx).awaitResult(5000);
+		assertEquals(facts, RT.getIn(stat, "metadata"));
 	}
 
 	@Test
