@@ -19,6 +19,7 @@ import covia.api.Fields;
 import covia.venue.Agent;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
+import covia.venue.Session;
 
 /**
  * Durable frame storage shared by the flat and goal-tree LLM runtimes. Every
@@ -55,7 +56,7 @@ interface FrameStore {
 		ACell claim = RT.getIn(input, Fields.SESSION, Agent.KEY_IN_CYCLE);
 		if (sid != null && claim != null) {
 			Agent agent = resolveAgentState(engine, ctx, agentId);
-			if (agent == null || agent.getSession(sid) == null) {
+			if (agent == null || agent.session(sid).getRecord() == null) {
 				return failed("Session vanished before cycle start: " + sid);
 			}
 			FrameStore store = new LatticeFrameStore(agent, sid, claim, ctx.getCancellation());
@@ -171,10 +172,9 @@ interface FrameStore {
 
 		@Override
 		public AVector<ACell> frames() {
-			var session = agent.getSession(sid);
+			var session = agent.session(sid).getRecord();
 			if (session == null) { aborted = true; return Vectors.empty(); }
-			ACell fv = session.get(Agent.KEY_FRAMES);
-			return (fv instanceof AVector) ? (AVector<ACell>) fv : Vectors.empty();
+			return Session.frames(session);
 		}
 
 		@Override

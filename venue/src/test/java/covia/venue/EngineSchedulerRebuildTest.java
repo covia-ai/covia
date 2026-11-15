@@ -43,7 +43,7 @@ public class EngineSchedulerRebuildTest {
 			// One session + one task, each with a far-future wakeTime so
 			// nothing fires during the test. Session is the earlier of the two.
 			Blob sid = Blob.fromHex("aa");
-			agent.ensureSession(sid, userDid);
+			agent.sessions().create(sid, userDid, null);
 			Blob taskId = Blob.fromHex("bb");
 			agent.tasks().add(taskId, Maps.empty());
 
@@ -82,7 +82,7 @@ public class EngineSchedulerRebuildTest {
 			Agent agent = user.ensureAgent("no-wakes-agent", Maps.empty(), null);
 
 			// Session + task exist but neither carries a wakeTime.
-			agent.ensureSession(Blob.fromHex("cc"), userDid);
+			agent.sessions().create(Blob.fromHex("cc"), userDid, null);
 			agent.tasks().add(Blob.fromHex("dd"), Maps.empty());
 
 			engine.rebuildSchedulerFromLattice();

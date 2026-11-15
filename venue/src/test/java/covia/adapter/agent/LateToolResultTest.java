@@ -80,7 +80,7 @@ public class LateToolResultTest {
 
 	private static String conversation(Agent agent, Blob sid) {
 		return GoalTreeContext.activeConversation(RT.ensureMap(
-			RT.getIn(agent.getSession(sid), Fields.FRAMES, CVMLong.ZERO))).toString();
+			RT.getIn(agent.session(sid).getRecord(), Fields.FRAMES, CVMLong.ZERO))).toString();
 	}
 
 	@Test
@@ -93,7 +93,7 @@ public class LateToolResultTest {
 		User user = engine.getVenueState().users().user(did);
 		Agent agent = user.agent("late-step");
 		Blob sid = Blob.fromHex("1a7e00001a7e00001a7e00001a7e0000");
-		agent.ensureSession(sid, did);
+		agent.sessions().create(sid, did, null);
 
 		String okGate = "late-ok-" + did;
 		String badGate = "late-bad-" + did;
@@ -125,7 +125,7 @@ public class LateToolResultTest {
 
 			// Each outcome is a message in the asking session, which wakes the agent.
 			watch.awaitState("both late outcomes in the session", () -> {
-				if (agent.getSession(sid) == null) return false;
+				if (agent.session(sid).getRecord() == null) return false;
 				String c = conversation(agent, sid);
 				return c.contains("finished-late") && c.contains("broke-late");
 			});
@@ -138,7 +138,7 @@ public class LateToolResultTest {
 		assertTrue(c.contains("c-ok") && c.contains("c-bad"), "each outcome cites the model's call: " + c);
 		assertEquals(0, agent.getPending().count(), "a delivered outcome leaves the pending index");
 		AVector<ACell> stored = GoalTreeContext.activeConversation(RT.ensureMap(
-			RT.getIn(agent.getSession(sid), Fields.FRAMES, CVMLong.ZERO)));
+			RT.getIn(agent.session(sid).getRecord(), Fields.FRAMES, CVMLong.ZERO)));
 		int outcomes = 0;
 		for (long i = 0; i < stored.count(); i++) {
 			if (!Agent.SOURCE_TOOL_OUTCOME.equals(RT.getIn(stored.get(i), Agent.K_SOURCE))) continue;
@@ -219,7 +219,7 @@ public class LateToolResultTest {
 		createAgent(engine, owner, "unrecorded", "v/test/ops/llm");
 		Blob sid = Blob.fromHex("5e55000000000000000000000000beef");
 		for (String agentId : new String[] {"recording", "unrecorded"}) {
-			engine.getVenueState().users().user(did).agent(agentId).ensureSession(sid, did);
+			engine.getVenueState().users().user(did).agent(agentId).sessions().create(sid, did, null);
 			engine.jobs().invokeOperation("v/ops/agent/step", Maps.of(
 				Fields.AGENT_ID, agentId,
 				Fields.SESSION_ID, sid.toHexString(),
@@ -336,7 +336,7 @@ public class LateToolResultTest {
 			watch.awaitRest(1);
 			ACell task = agent.getTasks().get(job.getID());
 			assertTrue(Task.isParked(task));
-			agent.removeSession(Blob.fromHex(RT.ensureString(RT.getIn(task, Fields.SESSION_ID)).toString()));
+			agent.sessions().remove(Blob.fromHex(RT.ensureString(RT.getIn(task, Fields.SESSION_ID)).toString()));
 			gate.release();
 			TestEngine.awaitJob(job, Job::isFinished, 10_000, () -> "the stranded task did not fail");
 		}
@@ -445,7 +445,7 @@ public class LateToolResultTest {
 
 			// Shown in the conversation as from whoever made the call: here the owner, by hand
 			AVector<ACell> turns = GoalTreeContext.activeConversation(RT.ensureMap(
-				RT.getIn(agent.getSession(sid), Fields.FRAMES, CVMLong.ZERO)));
+				RT.getIn(agent.session(sid).getRecord(), Fields.FRAMES, CVMLong.ZERO)));
 			ACell outcomeTurn = null;
 			for (long i = turns.count() - 1; i >= 0 && outcomeTurn == null; i--) {
 				ACell turn = turns.get(i);

@@ -380,7 +380,7 @@ public class UserAdapter extends AAdapter {
 	}
 
 	private void requireSelfOrVenueUserAuthority(RequestContext ctx, AString did, AString ability) {
-		// The user itself, with all of its authority: not a request an MCP token narrows
+		// The user itself, with all of its authority: not a request an access token narrows
 		if (did.equals(ctx.getCallerDID()) && ctx.getExecutionScope().agentId() == null && engine.holdsAuthorityOf(ctx, did)) return;
 		requireVenueUserAuthority(ctx, ability);
 	}

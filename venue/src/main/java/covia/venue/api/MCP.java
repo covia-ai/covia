@@ -435,7 +435,7 @@ public class MCP extends McpServer {
 	@Override
 	protected AMap<AString, ACell> listTools() {
 		AVector<AMap<AString, ACell>> toolsVector = Vectors.empty();
-		AMap<AString, ACell> token = AuthMiddleware.getMcpToken(McpServer.getCurrentContext());
+		AMap<AString, ACell> token = AuthMiddleware.getToken(McpServer.getCurrentContext());
 		if (token != null) {
 			for (var entry : tokenTools(token).entrySet()) {
 				TokenTool tool = entry.getValue();
@@ -472,18 +472,21 @@ public class MCP extends McpServer {
 	private record TokenTool(AString opRef, covia.grid.Operation operation, AString description) {}
 
 	/**
-	 * The tools MCP token {@code reference} offers, by MCP name, as an agent's
-	 * tool palette names them. Each definition is read with the issuer's
-	 * authority as it stands, as an agent's runtime reads its tools; a tool the
-	 * issuer can no longer read, or that no longer resolves, is left out. The
-	 * calls themselves act with the token's authority.
+	 * The tools access token {@code reference} offers here, by MCP name, as an
+	 * agent's tool palette names them: those its MCP entry lists
+	 * ({@link covia.adapter.McpAccess}). Each definition is read with the
+	 * issuer's authority as it stands, as an agent's runtime reads its tools; a
+	 * tool the issuer can no longer read, or that no longer resolves, is left
+	 * out. The calls themselves act with the token's authority.
 	 */
 	private java.util.LinkedHashMap<AString, TokenTool> tokenTools(AMap<AString, ACell> reference) {
 		java.util.LinkedHashMap<AString, TokenTool> tools = new java.util.LinkedHashMap<>();
-		covia.adapter.McpToken token = engine().resolveToken(reference);
-		if (token == null) return tools;
+		covia.adapter.token.AccessToken token = engine().resolveToken(reference);
+		covia.adapter.McpAccess access = (token == null) ? null
+			: token.access(covia.adapter.MCPAdapter.ACCESS_POINT, covia.adapter.McpAccess::new);
+		if (access == null) return tools;
 		RequestContext issuer = engine().context(token.owner(), token.issuer());
-		for (ACell entry : token.tools()) {
+		for (ACell entry : access.tools()) {
 			try {
 				AString[] parsed = covia.adapter.agent.ToolPalette.parseConfigToolEntry(entry);
 				String name = (parsed == null) ? null : covia.adapter.agent.ToolPalette.localToolName(engine(), issuer, entry);
@@ -677,7 +680,7 @@ public class MCP extends McpServer {
 	 * authenticated; else the one anonymous caller.
 	 */
 	private static AString callerKey(Context ctx) {
-		AMap<AString, ACell> token = AuthMiddleware.getMcpToken(ctx);
+		AMap<AString, ACell> token = AuthMiddleware.getToken(ctx);
 		if (token != null) return Strings.create("mcp-token " + token.get(Fields.ID));
 		AString did = authenticated(ctx) ? AuthMiddleware.getCallerDID(ctx) : null;
 		return (did != null) ? did : ANONYMOUS;
@@ -700,7 +703,7 @@ public class MCP extends McpServer {
 		try {
 			AString toolName = RT.getIn(params, Fields.NAME);
 			// A request through an MCP token reaches only the tools that token offers
-			AMap<AString, ACell> token = AuthMiddleware.getMcpToken(ctx);
+			AMap<AString, ACell> token = AuthMiddleware.getToken(ctx);
 			TokenTool bound = (token == null || toolName == null) ? null : tokenTools(token).get(toolName);
 			AString opRef = (token != null) ? ((bound == null) ? null : bound.opRef())
 				: (toolName != null) ? registry().get(sanitiseToolName(toolName)) : null;
@@ -1051,7 +1054,7 @@ public class MCP extends McpServer {
 
 	/** Who owns the sessions a request opens: the MCP token it presented, else its caller. */
 	private static AString sessionOwner(Context ctx) {
-		AMap<AString, ACell> token = AuthMiddleware.getMcpToken(ctx);
+		AMap<AString, ACell> token = AuthMiddleware.getToken(ctx);
 		return (token != null) ? callerKey(ctx) : AuthMiddleware.getCallerDID(ctx);
 	}
 

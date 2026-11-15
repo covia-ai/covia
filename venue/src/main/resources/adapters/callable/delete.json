@@ -1,0 +1,23 @@
+{
+	"name": "Callable Delete",
+	"description": "Deletes a callable in your namespace: it can no longer be called, and work its calls left running acts with nothing. Needs callable/manage on x/callable/<name>.",
+	"dateCreated": "2026-11-13T00:00:00Z",
+	"operation": {
+		"adapter": "callable:delete",
+		"readOnly": false,
+		"input": {
+			"type": "object",
+			"properties": {
+				"name": { "type": "string", "description": "The callable's name" }
+			},
+			"required": ["name"]
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"name": { "type": "string" },
+				"deleted": { "type": "boolean" }
+			}
+		}
+	}
+}

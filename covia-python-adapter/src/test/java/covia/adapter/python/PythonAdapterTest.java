@@ -20,13 +20,18 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import org.junit.jupiter.api.io.TempDir;
 
+import convex.auth.ucan.Capability;
+import convex.auth.ucan.UCAN;
+import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
+import convex.core.data.AString;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
+import covia.api.Abilities;
 import covia.exception.AuthException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
@@ -90,7 +95,6 @@ class PythonAdapterTest {
 			""");
 
 		AStringFixture identities = new AStringFixture();
-		RequestContext agent = RequestContext.ofAgent(identities.alice, Strings.create("worker"));
 		Engine engine = Engine.createTemp(Maps.empty());
 		try {
 			PythonAdapter adapter = new PythonAdapter();
@@ -102,38 +106,48 @@ class PythonAdapterTest {
 			Asset list = resolve(engine, "list");
 			Asset call = resolve(engine, "call");
 			Asset close = resolve(engine, "close");
-			AMap<?, ?> created = (AMap<?, ?>) invoke(adapter, create, agent,
+			RequestContext alice = granted(engine, identities.alice, PythonAdapter.TEMPLATE_RESOURCE + "worker",
+				PythonAdapter.ADMIN_EXECUTE_PYTHON);
+
+			// Running a template's code needs the operator's grant on that template
+			assertFutureCause(AuthException.class, () -> invoke(adapter, create,
+				RequestContext.of(identities.alice), Maps.of("template", "worker")));
+			assertFutureCause(AuthException.class, () -> invoke(adapter, create,
+				granted(engine, identities.alice, PythonAdapter.TEMPLATE_RESOURCE + "other",
+					PythonAdapter.ADMIN_EXECUTE_PYTHON), Maps.of("template", "worker")));
+			AMap<?, ?> created = (AMap<?, ?>) invoke(adapter, create, alice,
 				Maps.of("template", "worker"));
 			String id = created.get(Strings.create("id")).toString();
-			assertEquals(agent.getCallerDID(), created.get(Strings.create("createdBy")));
+			assertEquals(identities.alice, created.get(Strings.create("createdBy")));
 			assertEquals(Vectors.of("add"), created.get(Strings.create("functions")));
 
-			AMap<?, ?> aliceList = (AMap<?, ?>) invoke(adapter, list,
-				RequestContext.of(identities.alice), Maps.empty());
+			// Listing needs no grant, and an agent works in its owner's instances
+			AMap<?, ?> agentList = (AMap<?, ?>) invoke(adapter, list,
+				RequestContext.ofAgent(identities.alice, Strings.create("worker")), Maps.empty());
 			assertEquals(1L,
-				((convex.core.data.AVector<?>) aliceList.get(Strings.create("instances"))).count());
+				((convex.core.data.AVector<?>) agentList.get(Strings.create("instances"))).count());
 			AMap<?, ?> bobList = (AMap<?, ?>) invoke(adapter, list,
 				RequestContext.of(identities.bob), Maps.empty());
 			assertEquals(0L,
 				((convex.core.data.AVector<?>) bobList.get(Strings.create("instances"))).count());
 
-			AMap<?, ?> result = (AMap<?, ?>) invoke(adapter, call,
+			assertFutureCause(AuthException.class, () -> invoke(adapter, call,
 				RequestContext.of(identities.alice), Maps.of(
-					"id", id, "function", "add", "args", Vectors.of(5L, 7L)));
+					"id", id, "function", "add", "args", Vectors.of(5L, 7L))));
+			AMap<?, ?> result = (AMap<?, ?>) invoke(adapter, call, alice, Maps.of(
+				"id", id, "function", "add", "args", Vectors.of(5L, 7L)));
 			assertEquals(CVMLong.create(12), result.get(Strings.create("sum")));
 			assertEquals(CVMLong.create(1), result.get(Strings.create("calls")));
-			assertFutureCause(ResponseException.class, () -> invoke(adapter, call,
-				RequestContext.of(identities.alice), Maps.of(
-					"id", id, "function", "add", "args", Vectors.of("text", 1L))));
+			assertFutureCause(ResponseException.class, () -> invoke(adapter, call, alice, Maps.of(
+				"id", id, "function", "add", "args", Vectors.of("text", 1L))));
 
 			assertFutureCause(NotFoundException.class, () -> invoke(adapter, call,
 				RequestContext.of(identities.bob), Maps.of(
 					"id", id, "function", "add", "args", Vectors.empty())));
-			assertFutureCause(InvalidInputException.class, () -> invoke(adapter, call,
-				RequestContext.of(identities.alice), Maps.of(
-					"id", id, "function", "hidden", "args", Vectors.empty())));
-			assertFutureCause(UnavailableException.class, () -> invoke(adapter, create,
-				RequestContext.of(identities.alice), Maps.of("template", "worker")));
+			assertFutureCause(InvalidInputException.class, () -> invoke(adapter, call, alice, Maps.of(
+				"id", id, "function", "hidden", "args", Vectors.empty())));
+			assertFutureCause(UnavailableException.class, () -> invoke(adapter, create, alice,
+				Maps.of("template", "worker")));
 			assertFutureCause(AuthException.class, () -> invoke(adapter, list,
 				RequestContext.ANONYMOUS, Maps.empty()));
 			assertFutureCause(AuthException.class, () -> invoke(adapter, list,
@@ -152,8 +166,17 @@ class PythonAdapterTest {
 	}
 
 	private static final class AStringFixture {
-		private final convex.core.data.AString alice = Strings.create("did:key:zAlice");
-		private final convex.core.data.AString bob = Strings.create("did:key:zBob");
+		private final AString alice = UCAN.toDIDKey(AKeyPair.generate().getAccountKey());
+		private final AString bob = UCAN.toDIDKey(AKeyPair.generate().getAccountKey());
+	}
+
+	/** {@code user} presenting the venue's grant of {@code ability} on its resource {@code resource}. */
+	private static RequestContext granted(Engine engine, AString user, String resource, AString ability) {
+		long expiry = engine.currentTimestamp().longValue() / 1000 + 3600;
+		UCAN grant = UCAN.create(engine.getKeyPair(), UCAN.fromDIDKey(user), expiry,
+			Vectors.of(Capability.create(Strings.create(engine.getDIDString() + "/" + resource), ability)),
+			Vectors.empty());
+		return RequestContext.of(user).withProofs(Vectors.of(grant.toMap()));
 	}
 
 	private static Asset resolve(Engine engine, String operation) {
@@ -202,9 +225,10 @@ class PythonAdapterTest {
 			Asset asset = engine.resolveAsset(Strings.create("v/ops/python/double"),
 				engine.venueContext());
 			assertNotNull(asset);
-			AMap<?, ?> first = (AMap<?, ?>) adapter.invokeFuture(null, asset.meta(),
+			RequestContext venue = engine.venueContext();
+			AMap<?, ?> first = (AMap<?, ?>) adapter.invokeFuture(venue, asset.meta(),
 				Maps.of("value", 6L)).join();
-			AMap<?, ?> second = (AMap<?, ?>) adapter.invokeFuture(null, asset.meta(),
+			AMap<?, ?> second = (AMap<?, ?>) adapter.invokeFuture(venue, asset.meta(),
 				Maps.of("value", 7L)).join();
 			assertEquals(CVMLong.create(12), first.get(Strings.create("value")));
 			assertEquals(CVMLong.create(1), first.get(Strings.create("calls")));
@@ -212,7 +236,7 @@ class PythonAdapterTest {
 			assertEquals(CVMLong.create(2), second.get(Strings.create("calls")));
 
 			List<CompletableFuture<ACell>> concurrent = IntStream.range(0, 8)
-				.mapToObj(i -> adapter.invokeFuture(null, asset.meta(),
+				.mapToObj(i -> adapter.invokeFuture(venue, asset.meta(),
 					Maps.of("value", i)))
 				.toList();
 			Set<Long> callNumbers = concurrent.stream()
@@ -222,6 +246,21 @@ class PythonAdapterTest {
 				.collect(java.util.stream.Collectors.toSet());
 			assertEquals(Set.of(3L, 4L, 5L, 6L, 7L, 8L, 9L, 10L), callNumbers,
 				"the GIL must serialize mutation of shared script globals");
+
+			// Running it is the operator's: a user needs the venue's grant on this function
+			AString alice = UCAN.toDIDKey(AKeyPair.generate().getAccountKey());
+			String double_ = PythonAdapter.OPERATION_RESOURCE + "double";
+			assertFutureCause(AuthException.class, () -> invoke(adapter, asset,
+				RequestContext.of(alice), Maps.of("value", 1L)));
+			assertFutureCause(AuthException.class, () -> invoke(adapter, asset,
+				granted(engine, alice, PythonAdapter.OPERATION_RESOURCE + "other", PythonAdapter.ADMIN_EXECUTE_PYTHON),
+				Maps.of("value", 1L)));
+			assertEquals(CVMLong.create(2), ((AMap<?, ?>) invoke(adapter, asset,
+				granted(engine, alice, double_, PythonAdapter.ADMIN_EXECUTE_PYTHON), Maps.of("value", 1L)))
+				.get(Strings.create("value")));
+			assertEquals(CVMLong.create(4), ((AMap<?, ?>) invoke(adapter, asset,
+				granted(engine, alice, "python", Abilities.ADMIN_EXECUTE), Maps.of("value", 2L)))
+				.get(Strings.create("value")), "the parent ability on all of the venue's Python");
 		} finally {
 			engine.close();
 		}

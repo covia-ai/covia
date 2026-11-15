@@ -75,16 +75,18 @@ refuse that config (`Admission.configProblem`).
   (UCAN.md §5.4). An external agent's backend is its harness's work, so
   whoever the agent admits reaches that backend.
 - **The agent knows who asked, and how.** The task records the asker as its
-  caller. When a channel binding authenticated the asker, the request context
-  carries the authentication record (AUTH.md §5.3), and the agent's ingress
-  records it beside the request, never in it, so nothing a caller sends can
-  pose as one.
+  caller. When the request acts through one of the asker's access tokens, the
+  agent's ingress records the token's reference beside it
+  ([ACCESS_TOKENS.md](./ACCESS_TOKENS.md)); when a channel binding
+  authenticated the asker, the request context carries the authentication
+  record (AUTH.md §5.3), which the ingress records likewise. Both are taken
+  from the request context, beside the request and never from it, so nothing
+  a caller sends can pose as either.
+- **A session is open to whoever may ask.** A caller who may ask the agent and
+  knows a session's id can add to that session. Each turn records who sent it,
+  and the agent's context shows that whenever the sender changes
+  ([AGENT_SESSIONS.md](./AGENT_SESSIONS.md#2-core-abstraction-session)).
 
 Every anonymous caller is the one public principal, so they share its jobs:
 what any of them may do with an anonymous task is what the operator's public
 scope allows. A job id is not a credential.
-
-## Not yet on this model
-
-- **Sessions** do not check who joins: a caller who may ask and knows a
-  session id can add to that session.

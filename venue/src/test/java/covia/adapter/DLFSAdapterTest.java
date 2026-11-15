@@ -28,9 +28,11 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.lang.RT;
+import convex.core.util.JSON;
 import convex.core.data.AHashMap;
 import convex.core.data.SignedData;
 import convex.lattice.cursor.AForkableCursor;
+import convex.lattice.fs.DLFSNode;
 import convex.lattice.fs.impl.DLFSLocal;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
@@ -425,6 +427,9 @@ public class DLFSAdapterTest {
 					Maps.of("drive", drive, "path", "a.txt", "content", "new"), alice)
 					.contains(DLFSAdapter.DRIVE_NOT_FOUND), op + " on " + drive);
 			}
+			assertTrue(failure("v/ops/dlfs/set-metadata",
+				Maps.of("drive", drive, "path", "a.txt", "metadata", "x"), alice)
+				.contains(DLFSAdapter.DRIVE_NOT_FOUND), "set-metadata on " + drive);
 			String ref = "dlfs/" + drive + "/a.txt";
 			assertTrue(failure("v/ops/file/read", Maps.of("path", ref), alice)
 				.contains(DLFSAdapter.DRIVE_NOT_FOUND), "file:read on " + drive);
@@ -795,6 +800,128 @@ public class DLFSAdapterTest {
 		ACell missing = run("v/ops/dlfs/stat",
 			Maps.of("drive", "test-stat", "path", "nope.txt"));
 		assertFalse(RT.bool(RT.getIn(missing, "exists")));
+	}
+
+	/** The metadata dlfs:stat reports for an entry, null when it has none. */
+	private ACell metadataOf(String drive, String path) {
+		ACell stat = run("v/ops/dlfs/stat", Maps.of("drive", drive, "path", path));
+		assertTrue(RT.bool(RT.getIn(stat, "exists")), path);
+		return RT.getIn(stat, "metadata");
+	}
+
+	@Test
+	public void testMetadataTravelsWithTheEntry() {
+		run("v/ops/dlfs/create-drive", Maps.of("name", "meta"));
+		run("v/ops/dlfs/write", Maps.of("drive", "meta", "path", "photo.jpg", "content", "v1"));
+		assertNull(metadataOf("meta", "photo.jpg"));
+
+		AMap<AString, ACell> facts = Maps.of("type", "image/jpeg", "sha256", "0xabcd");
+		ACell set = run("v/ops/dlfs/set-metadata",
+			Maps.of("drive", "meta", "path", "photo.jpg", "metadata", facts));
+		assertEquals(facts, RT.getIn(set, "metadata"));
+		assertEquals(facts, metadataOf("meta", "photo.jpg"));
+		assertEquals("v1", RT.getIn(run("v/ops/dlfs/read",
+			Maps.of("drive", "meta", "path", "photo.jpg")), "content").toString());
+
+		// Replacing the content in place keeps it, and a move takes it along
+		run("v/ops/dlfs/write", Maps.of("drive", "meta", "path", "photo.jpg", "content", "v2"));
+		assertEquals(facts, metadataOf("meta", "photo.jpg"));
+		run("v/ops/file/move", Maps.of("from", "dlfs/meta/photo.jpg", "to", "dlfs/meta/renamed.jpg"));
+		assertEquals(facts, metadataOf("meta", "renamed.jpg"));
+		assertEquals(facts, RT.getIn(run("v/ops/file/stat",
+			Maps.of("path", "dlfs/meta/renamed.jpg")), "metadata"));
+
+		// A move to another drive takes it along too, and back again
+		run("v/ops/dlfs/create-drive", Maps.of("name", "meta-away"));
+		run("v/ops/file/move", Maps.of("from", "dlfs/meta/renamed.jpg", "to", "dlfs/meta-away/away.jpg"));
+		assertEquals(facts, metadataOf("meta-away", "away.jpg"));
+		assertFalse(RT.bool(RT.getIn(run("v/ops/dlfs/stat",
+			Maps.of("drive", "meta", "path", "renamed.jpg")), "exists")));
+		run("v/ops/file/move", Maps.of("from", "dlfs/meta-away/away.jpg", "to", "dlfs/meta/renamed.jpg"));
+		assertEquals(facts, metadataOf("meta", "renamed.jpg"));
+
+		// Null clears it, as it arrives in a JSON request
+		run("v/ops/dlfs/set-metadata", JSON.parseJSON5(
+			"{\"drive\": \"meta\", \"path\": \"renamed.jpg\", \"metadata\": null}"));
+		assertNull(metadataOf("meta", "renamed.jpg"));
+
+		// Deleting the file removes it: a file created again at the path has none
+		run("v/ops/file/set-metadata", Maps.of("path", "dlfs/meta/renamed.jpg", "metadata", facts));
+		assertEquals(facts, metadataOf("meta", "renamed.jpg"));
+		run("v/ops/dlfs/delete", Maps.of("drive", "meta", "path", "renamed.jpg"));
+		run("v/ops/dlfs/write", Maps.of("drive", "meta", "path", "renamed.jpg", "content", "v3"));
+		assertNull(metadataOf("meta", "renamed.jpg"));
+
+		// A directory carries metadata too, the drive's root included
+		run("v/ops/dlfs/mkdir", Maps.of("drive", "meta", "path", "album"));
+		run("v/ops/dlfs/set-metadata", Maps.of("drive", "meta", "path", "album", "metadata", "holiday"));
+		assertEquals(Strings.create("holiday"), metadataOf("meta", "album"));
+		run("v/ops/dlfs/set-metadata", Maps.of("drive", "meta", "path", "", "metadata", "root"));
+		assertEquals(Strings.create("root"), metadataOf("meta", ""));
+		assertEquals(Strings.create("holiday"), metadataOf("meta", "album"));
+		assertTrue(driveNames().toString().contains("meta"));
+	}
+
+	@Test
+	public void testSettingMetadataLeavesContentAndModifiedTime() throws Exception {
+		// On a clock that moves, so an unchanged time shows something
+		var time = DrivenClock.at(Instant.now());
+		CoviaApplication application = TestEngine.application(time);
+		Engine isolated = application.mount(AKeyPair.generate(),
+			Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true))).start();
+		try {
+			Engine.addDemoAssets(isolated);
+			var adapter = (DLFSAdapter) isolated.getAdapter("dlfs");
+			RequestContext alice = RequestContext.of(ALICE_DID);
+			var drive = writableDrive(adapter, "times");
+			Files.writeString(drive.getPath("/photo.jpg"), "bytes");
+			long written = Files.getLastModifiedTime(drive.getPath("/photo.jpg")).toMillis();
+			time.advance(1000);
+
+			isolated.jobs().callOperation("v/ops/dlfs/set-metadata",
+				Maps.of("drive", "times", "path", "photo.jpg", "metadata", "facts"), alice).awaitResult(5000);
+			assertEquals(Strings.create("facts"),
+				DLFSNode.getMetadata(drive.getNode(drive.getPath("/photo.jpg"))));
+			assertEquals(written, Files.getLastModifiedTime(drive.getPath("/photo.jpg")).toMillis());
+			assertEquals("bytes", Files.readString(drive.getPath("/photo.jpg")));
+
+			// The drive transaction signs the owner's drives as any write does
+			@SuppressWarnings("unchecked")
+			var owners = (AMap<ACell, ACell>) application.cursor().get().get(Covia.DLFS);
+			var signed = (SignedData<?>) owners.entryAt(0).getValue();
+			assertTrue(signed.checkSignature());
+		} finally { isolated.close(); }
+	}
+
+	@Test
+	public void testSettingMetadataIsAWriteToAnExistingEntry() {
+		run("v/ops/dlfs/create-drive", Maps.of("name", "meta-checks"));
+		run("v/ops/dlfs/write", Maps.of("drive", "meta-checks", "path", "a.txt", "content", "a"));
+
+		// A reader sees metadata but cannot set it
+		RequestContext reader = RequestContext.ofAgent(ALICE_DID, Strings.create("reader"))
+			.withCaps(Vectors.of(Capability.create(Strings.create("dlfs/"), Capability.CRUD_READ)));
+		assertFalse(failure("v/ops/dlfs/set-metadata",
+			Maps.of("drive", "meta-checks", "path", "a.txt", "metadata", "x"), reader).isBlank());
+		assertNull(metadataOf("meta-checks", "a.txt"));
+
+		// It sets metadata on an entry that exists, and creates none
+		RequestContext alice = RequestContext.of(ALICE_DID);
+		assertFalse(failure("v/ops/dlfs/set-metadata",
+			Maps.of("drive", "meta-checks", "path", "nope.txt", "metadata", "x"), alice).isBlank());
+		assertFalse(RT.bool(RT.getIn(run("v/ops/dlfs/stat",
+			Maps.of("drive", "meta-checks", "path", "nope.txt")), "exists")));
+
+		// The input names the value, null included
+		assertTrue(failure("v/ops/dlfs/set-metadata",
+			Maps.of("drive", "meta-checks", "path", "a.txt"), alice)
+			.contains(DLFSAdapter.METADATA_REQUIRED));
+
+		// A host file keeps no metadata
+		TestEngine.writeTempFile("meta-checks/host.txt", "host");
+		assertTrue(failure("v/ops/file/set-metadata",
+			Maps.of("root", "tmp", "path", "meta-checks/host.txt", "metadata", "x"), engine.venueContext())
+			.contains(DLFSAdapter.NO_METADATA));
 	}
 
 	@Test

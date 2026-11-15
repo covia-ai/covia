@@ -343,14 +343,32 @@ public class RequestContext {
 	/**
 	 * Whether this request acts with the authority of the namespace it acts in:
 	 * always, unless it acts with a separate authority from another namespace
-	 * ({@link #withAuthorityOf}), or an MCP token narrows it, since no cap can
+	 * ({@link #withAuthorityOf}), or an access token narrows it, since no cap can
 	 * name such state to bound it. State a namespace keeps with no capability
 	 * resource of its own, such as a Python instance or a dictation, is
 	 * reachable only so.
 	 */
 	public boolean actsWithNamespaceAuthority() {
-		if (!getTokens().isEmpty()) return false;
+		if (isNarrowed()) return false;
 		return rights == null || java.util.Objects.equals(getUserDID(), rights.getUserDID());
+	}
+
+	/**
+	 * This execution carried on by its caller in {@code owner}'s namespace,
+	 * acting with {@code source}'s authority: a callable's call
+	 * (CALLABLES.md). The caller still acted, and names resolve in the
+	 * owner's namespace, but the caller's own authority is emptied: what the
+	 * call may do is decided by {@code source} alone ({@link #withAuthorityOf}).
+	 * The caller's execution references stay its own, so its {@code n/},
+	 * {@code c/} and {@code t/} do not name the owner's records, and its
+	 * transport tokens, authentication record, agent cycle and session
+	 * delivery stay with it. Only {@link Engine#callContext} makes one.
+	 */
+	RequestContext callingIn(AString owner, RequestContext source) {
+		RequestContext held = (source.rights != null) ? source.rights : source;
+		Authority caller = Authority.of(getCallerDID(), owner, Vectors.empty());
+		return new RequestContext(caller, executionScope, null, null, cancellation, null, null, gateEvaluation,
+			job, null, null, null, null, held);
 	}
 
 	/**
@@ -404,17 +422,22 @@ public class RequestContext {
 		}
 		AString owner = getUserDID();
 		ScopeSource narrowed = resource -> CapabilityChecker.intersect(scopeFor(resource), owner, bound.read(resource), boundOwner);
-		AVector<ACell> tokens = getTokens();
-		return readingScope(tokens.isEmpty() ? narrowed : new TokenScope(narrowed, tokens));
+		return readingScope(Narrowed.of(narrowed, getTokens(), getCallable()));
 	}
 
 	/**
-	 * A scope narrowed by MCP tokens: what it reads, and the tokens narrowing
-	 * it, outermost first, each as its reference ({@code {owner, name, id}}).
-	 * The tokens go wherever the scope does, so work the request keeps or
-	 * creates can record what narrowed it ({@link #getTokens}).
+	 * A scope narrowed by access tokens or a callable: what it reads, the tokens
+	 * narrowing it, outermost first, and the callable whose caps narrow it, if
+	 * any, each as its reference ({@code {owner, name, id}}). They go wherever
+	 * the scope does, so work the request keeps or creates can record what
+	 * narrowed it ({@link #getTokens}, {@link #getCallable}).
 	 */
-	private record TokenScope(ScopeSource scope, AVector<ACell> tokens) implements ScopeSource {
+	private record Narrowed(ScopeSource scope, AVector<ACell> tokens, AMap<AString, ACell> callable) implements ScopeSource {
+		/** {@code scope} carrying what narrowed it, or {@code scope} itself when nothing did. */
+		static ScopeSource of(ScopeSource scope, AVector<ACell> tokens, AMap<AString, ACell> callable) {
+			return (tokens.isEmpty() && callable == null) ? scope : new Narrowed(scope, tokens, callable);
+		}
+
 		@Override
 		public AVector<ACell> read(AString resource) {
 			return scope.read(resource);
@@ -433,16 +456,51 @@ public class RequestContext {
 		}
 		AString owner = getUserDID();
 		ScopeSource narrowed = resource -> CapabilityChecker.intersect(scopeFor(resource), owner, caps.read(resource), capsOwner);
-		return readingScope(new TokenScope(narrowed, getTokens().conj(reference)));
+		return readingScope(Narrowed.of(narrowed, getTokens().conj(reference), getCallable()));
 	}
 
 	/**
-	 * The MCP tokens narrowing the authority this request acts with, outermost
+	 * This context with the authority it acts with narrowed further by a
+	 * callable: its caps, read at each point of action, whose bare paths are
+	 * {@code capsOwner}'s. The callable's reference becomes
+	 * {@link #getCallable}. Only the venue narrows a request by a callable
+	 * ({@link Engine#callContext}).
+	 */
+	RequestContext withCallable(AMap<AString, ACell> reference, ScopeSource caps, AString capsOwner) {
+		if (rights != null) {
+			return new RequestContext(authority, executionScope, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, cycle, sessionDelivery, authentication, scopeSource, rights.withCallable(reference, caps, capsOwner));
+		}
+		AString owner = getUserDID();
+		ScopeSource narrowed = resource -> CapabilityChecker.intersect(scopeFor(resource), owner, caps.read(resource), capsOwner);
+		return readingScope(Narrowed.of(narrowed, getTokens(), reference));
+	}
+
+	/**
+	 * The access tokens narrowing the authority this request acts with, outermost
 	 * first, each as its reference; empty when no token narrows it.
 	 */
 	public AVector<ACell> getTokens() {
 		ScopeSource source = (rights != null) ? rights.scopeSource : scopeSource;
-		return (source instanceof TokenScope narrowed) ? narrowed.tokens() : Vectors.empty();
+		return (source instanceof Narrowed narrowed) ? narrowed.tokens() : Vectors.empty();
+	}
+
+	/**
+	 * The callable whose call this request is, as its reference
+	 * ({@code {owner, name, id}}): its caps narrow the authority the request
+	 * acts with (CALLABLES.md). Null outside a call.
+	 */
+	public AMap<AString, ACell> getCallable() {
+		ScopeSource source = (rights != null) ? rights.scopeSource : scopeSource;
+		return (source instanceof Narrowed narrowed) ? narrowed.callable() : null;
+	}
+
+	/**
+	 * Whether an access token or a callable narrows the authority this request
+	 * acts with. Such a request never acts with its namespace's own authority,
+	 * for another user, or as the venue, whatever the caps allow.
+	 */
+	public boolean isNarrowed() {
+		return !getTokens().isEmpty() || getCallable() != null;
 	}
 
 	/**
@@ -598,6 +656,17 @@ public class RequestContext {
 		Authority gateAuthority = holder.authority.withGrantScope(grants).withProofs(null);
 		return new RequestContext(gateAuthority, executionScope,
 			null, gateOp, cancellation, null, null, true, job, cycle, null, null, null, null);
+	}
+
+	/**
+	 * This context running gate {@code gateOp} with the authority it acts with,
+	 * unconstrained: a callable's gate, which runs with the callable's authority
+	 * as a trust monitor runs as its actor (CALLABLES.md). As in
+	 * {@link #forGateEvaluation}, gated grants stay fail-closed within it.
+	 */
+	RequestContext asGateEvaluation(AString gateOp) {
+		return new RequestContext(authority, executionScope, null, gateOp, cancellation, null, null, true, job, null,
+			null, null, scopeSource, rights);
 	}
 
 	boolean isGateEvaluation() {

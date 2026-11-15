@@ -66,8 +66,8 @@ public class OwnerAccessTest {
 		user.workspace().write(CoviaPath.parse("private"), Strings.create("w-private"));
 		Agent agent = user.ensureAgent(AGENT, null, null);
 		agent.workspace().write(CoviaPath.parse("note"), Strings.create("n-note"));
-		agent.ensureSession(SESSION, alice);
-		agent.ensureSession(OTHER_SESSION, alice);
+		agent.sessions().create(SESSION, alice, null);
+		agent.sessions().create(OTHER_SESSION, alice, null);
 		agent.session(SESSION).workspace().write(CoviaPath.parse("draft"), Strings.create("c-draft"));
 		agent.session(OTHER_SESSION).workspace().write(CoviaPath.parse("draft"), Strings.create("c-other"));
 		Job echo = engine.jobs().callOperation("v/test/ops/echo", Maps.of("message", "scope"), ALICE);

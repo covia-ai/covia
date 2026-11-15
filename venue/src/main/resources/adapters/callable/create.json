@@ -1,0 +1,46 @@
+{
+	"name": "Callable Create",
+	"description": "Publishes a callable in your namespace: a function others can call, which runs operation with your own authority narrowed by caps, whoever calls it, and names in your namespace. Holders of callable/call on it may call it; with a gate, so may anyone that gate operation admits. Pin an operation or gate to one definition by naming it a/<hash>. Needs callable/manage on x/callable/<name>.",
+	"dateCreated": "2026-11-13T00:00:00Z",
+	"operation": {
+		"adapter": "callable:create",
+		"readOnly": false,
+		"input": {
+			"type": "object",
+			"properties": {
+				"name": { "type": "string", "description": "The callable's name, unique in your namespace: [a-z0-9-]{1,64}" },
+				"operation": { "type": "string", "description": "The operation it runs, such as v/ops/covia/append, o/my-pipeline or a/<hash>. Bare paths are in your namespace." },
+				"caps": {
+					"description": "The capabilities bounding what it may do, within your authority: an array of {with, can} capabilities (UCAN.md §3), or \"unrestricted\" for all of your authority. Left out, it has none.",
+					"oneOf": [
+						{ "type": "array", "items": {
+							"type": "object",
+							"properties": {
+								"with": { "type": "string", "description": "Resource path or prefix, such as w/guestbook" },
+								"can": { "type": "string", "description": "One ability, such as crud/write. To grant multiple abilities, use a separate capability entry for each." },
+								"nb": { "type": "object", "description": "Optional capability caveats" }
+							},
+							"required": ["with", "can"]
+						} },
+						{ "type": "string", "enum": ["unrestricted"] }
+					]
+				},
+				"gate": { "type": "string", "description": "An operation deciding who else may call it, given {operation, input, caller, owner?} and run with the callable's authority; the call proceeds only if it succeeds. Standard gates: v/ops/callable/gates/anyone and v/ops/callable/gates/callers." },
+				"description": { "type": "string", "description": "What it does, for its callers" }
+			},
+			"required": ["name", "operation"]
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"name": { "type": "string" },
+				"issuer": { "type": "string" },
+				"operation": { "type": "string" },
+				"caps": {},
+				"gate": { "type": "string" },
+				"description": { "type": "string" },
+				"created": { "type": "integer" }
+			}
+		}
+	}
+}

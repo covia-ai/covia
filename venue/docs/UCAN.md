@@ -184,9 +184,11 @@ Abilities follow UCAN's slash-delimited convention with no leading slash. `*` is
 | `key/derive` | — | Derive keys from a held phrase into its holder's keyring (`crypto:derive-key`) |
 | `secret/write` | - | Store or update a secret (`<owner>/s/<name>`) |
 | `mcp/manage` | - | Manage MCP server and tool connections (`<venue>/v/mcp`) |
-| `mcp/token` | - | Create, update or delete an MCP token (`<owner>/x/mcp/tokens/<name>`) |
-| `admin/token` | Every `admin/token/…` | Administration across token kinds on matching resources |
-| `admin/token/mcp` | - | Retrieve a retained MCP bearer token; source authority is also required |
+| `mcp/token` | - | Create, update or delete an access token accepted at MCP alone, through the MCP token operations (`<owner>/x/token/<name>`) |
+| `admin/token` | Every `admin/token/…` | Work on access tokens directly, whatever access points they carry (`<owner>/x/token/<name>`) |
+| `admin/token/<access point>` | - | Work directly on access tokens that carry that access point, such as `admin/token/mcp`; a token carrying several needs each leaf, and fetching a kept bearer also needs the token's source authority |
+| `callable/call` | - | Call a callable without passing its gate (`<owner>/x/callable/<name>`; [CALLABLES.md](./CALLABLES.md)) |
+| `callable/manage` | - | Create, change or delete a callable (`<owner>/x/callable/<name>`); changing one also needs its source authority |
 | `hitl/request` | - | Ask the owner a human-in-the-loop question |
 | `admin/user/create` | - | Create an account |
 | `admin/user/delete` | - | Delete an account |
@@ -775,12 +777,14 @@ record is an entry no grant of theirs covers.
 | `file:read` / `file:list` / `file:stat` | `crud/read` on the resolved resource: `file://<root>/<path>` for host/temp roots, canonical `dlfs/<drive>/<path>` for DLFS targets |
 | `file:roots` | `{ with: "file://", can: "crud/read" }` |
 | `file:write` / `file:append` / `file:create` / `file:mkdir` | `crud/write` on the resolved file or DLFS resource, and on the directory that holds a new one |
+| `file:setMetadata` | `crud/write` on the resolved DLFS resource, which must exist |
 | `file:move` | `crud/read` and `crud/delete` on the resolved source, `crud/write` on the resolved destination and the directory that holds it |
 | `file:copy` | `crud/read` on the resolved source, `crud/write` on the resolved destination and the directory that holds it |
 | `file:delete` | `crud/delete` on the resolved file or DLFS resource |
 | `dlfs:read` / `dlfs:list` / `dlfs:tree` / `dlfs:stat` | `{ with: "dlfs/<drive>/<path>", can: "crud/read" }` |
 | `dlfs:listDrives` | `{ with: "dlfs", can: "crud/read" }` |
 | `dlfs:write` / `dlfs:append` / `dlfs:create` / `dlfs:mkdir` | `{ with: "dlfs/<drive>/<path>", can: "crud/write" }`, and on the directory that holds a new entry |
+| `dlfs:setMetadata` | `{ with: "dlfs/<drive>/<path>", can: "crud/write" }` on an entry that exists |
 | `dlfs:createDrive` | `{ with: "dlfs", can: "crud/write" }` |
 | `dlfs:delete` | `{ with: "dlfs/<drive>/<path>", can: "crud/delete" }` |
 | `dlfs:deleteDrive` | `{ with: "dlfs/<drive>", can: "crud/delete" }` |
@@ -989,8 +993,8 @@ under a capped controller, only what they include the right to grant
 context outright, because answering an ask mints a grant *as the inbox owner*:
 an agent reaching it would approve its own request with authority it may not
 have. An agent that needs more asks its human, and only the human can answer.
-A request through an MCP token answers only with all of the inbox owner's
-authority ([MCP_TOKENS.md](MCP_TOKENS.md)).
+A request through an access token answers only with all of the inbox owner's
+authority ([ACCESS_TOKENS.md](ACCESS_TOKENS.md)).
 
 That guard is pinned to identity. An unrestricted agent holds no scope, which
 the `authorityCovers` fast path passes; a scope-based defence would therefore
@@ -1053,8 +1057,8 @@ presented grants, holds no other principal's authority. An agent such a
 delegate creates is controlled by its target, so grant `agent/create` beside
 `admin/sudo` as you would that user's own authority.
 
-**An MCP token narrows the authority a request acts with.** A request through
-an MCP token is its issuer's, acting with the issuer's authority narrowed by
+**An access token narrows the authority a request acts with.** A request through
+an access token is its issuer's, acting with the issuer's authority narrowed by
 the caps of the token and of each token whose request created it, read at
 each point of action as an agent's caps narrow its controller's
 (`Engine.tokenContext`). It holds the issuer's whole authority only when every
@@ -1063,7 +1067,7 @@ records it beside its controller (`controllerToken`), whose authority it then
 narrows, and a job or scheduled event keeps it with its authority. A token
 that no longer stands narrows all of these to nothing. Changing a token needs
 the authority it was created with, so a token never widens itself.
-[MCP_TOKENS.md](MCP_TOKENS.md) is the contract.
+[ACCESS_TOKENS.md](ACCESS_TOKENS.md) is the contract.
 
 **Configuring an agent acts with its controller's authority.** The config
 chooses the agent's harness, its transition operation and the context it

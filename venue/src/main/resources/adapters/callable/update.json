@@ -1,0 +1,38 @@
+{
+	"name": "Callable Update",
+	"description": "Changes a callable in your namespace: its operation, caps, gate or description. What is left out stays as it is; gate: null removes its gate. Calls already running see the new caps at their next action. Needs callable/manage on x/callable/<name> and the authority the callable was created with.",
+	"dateCreated": "2026-11-13T00:00:00Z",
+	"operation": {
+		"adapter": "callable:update",
+		"readOnly": false,
+		"input": {
+			"type": "object",
+			"properties": {
+				"name": { "type": "string", "description": "The callable's name" },
+				"operation": { "type": "string", "description": "The operation it runs" },
+				"caps": {
+					"description": "The capabilities bounding what it may do: an array of {with, can} capabilities, or \"unrestricted\"",
+					"oneOf": [
+						{ "type": "array", "items": { "type": "object" } },
+						{ "type": "string", "enum": ["unrestricted"] }
+					]
+				},
+				"gate": { "description": "The operation deciding who else may call it, as a string reference, or null to remove it" },
+				"description": { "type": "string", "description": "What it does, for its callers" }
+			},
+			"required": ["name"]
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"name": { "type": "string" },
+				"issuer": { "type": "string" },
+				"operation": { "type": "string" },
+				"caps": {},
+				"gate": { "type": "string" },
+				"description": { "type": "string" },
+				"created": { "type": "integer" }
+			}
+		}
+	}
+}

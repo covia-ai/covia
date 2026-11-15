@@ -92,7 +92,7 @@ public class HITLAdapter extends AAdapter {
 	public static final String GRANTS_UNAVAILABLE = "This venue cannot issue capability grants: its ucan adapter is not running";
 
 	/** Why a request may not answer an ask: it holds less than the inbox owner's whole authority. */
-	public static final String ANSWER_NEEDS_WHOLE_AUTHORITY = "Answering a HITL request needs all of the inbox owner's authority, which this request (through an MCP token) does not hold";
+	public static final String ANSWER_NEEDS_WHOLE_AUTHORITY = "Answering a HITL request needs all of the inbox owner's authority, which this request (through an access token) does not hold";
 
 	/** In a request job's adapter data: the DID of the user it was sent to. */
 	static final AString TARGET = Hitl.USER;
@@ -431,7 +431,7 @@ public class HITLAdapter extends AAdapter {
 		AString caller = ctx.getUserDID();
 		if (caller == null) throw new AuthException("Authentication required");
 		// For the same reason, only a request with all of that user's authority
-		// answers: not one an MCP token narrows to less.
+		// answers: not one an access token narrows to less.
 		if (!engine.holdsAuthorityOf(ctx, caller)) throw new AuthException(ANSWER_NEEDS_WHOLE_AUTHORITY);
 		AString id = RT.ensureString(RT.getIn(input, Hitl.ID));
 		if (id == null) throw new InvalidInputException("id is required");

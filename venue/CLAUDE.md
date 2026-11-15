@@ -82,13 +82,15 @@ AUTH_REQUIRED).
 | `p2p` | The venue's Convex P2P node (`convex-p2p`), off unless `adapters.p2p.join`; peer list plus in-process change events, venue-owned (`docs/CONFIG.md#p2p-network-adaptersp2p`) | `peers`, `connect` |
 | `convex` | Convex blockchain, CAD3 conversion, and secret-backed Ed25519 keys | `query`, `transact`, `generate-key`, `sign`, `decode-cad3`, `encode-cad3` |
 | `crypto` | Local cryptography in Convex formats; secret-backed and held keys, JWTs and BIP39 phrases (see `docs/CONFIG.md#cryptography-crypto`) | `hash`, `generate-key`, `public-key`, `sign`, `verify`, `encrypt`, `decrypt`, `generate-mnemonic`, `validate-mnemonic`, `derive-key`, `jwt-sign`, `jwt-verify`, `jwt-decode`, `add-key`, `remove-key`, `list-keys` |
-| `mcp` | Model Context Protocol client, bridging, and scoped tokens for the venue's `/mcp` (`docs/MCP_TOKENS.md`) | `tools-list`, `tools-call`, `add-server`, `add-tool`, `remove-server`, `refresh`, `create-token`, `update-token`, `delete-token`, `list-tokens`, `get-token` |
+| `mcp` | Model Context Protocol client, bridging, and the MCP access point for access tokens, with MCP token operations (`docs/ACCESS_TOKENS.md`) | `tools-list`, `tools-call`, `add-server`, `add-tool`, `remove-server`, `refresh`, `create-token`, `update-token`, `delete-token`, `list-tokens`, `get-token` |
+| `token` | Access tokens: scoped bearers acting with their issuer's authority within caps, accepted at the access points they name; the store other adapters build on, with a read-only user view at `x/token` (`docs/ACCESS_TOKENS.md`) | `create`, `update`, `delete`, `list`, `get` |
+| `callable` | Callables: functions a principal publishes for others to call, running an operation with the issuer's authority within caps, admitted by `callable/call` or a gate operation; read-only user view at `x/callable` (`docs/CALLABLES.md`) | `create`, `update`, `delete`, `list`, `call`, `gates/anyone`, `gates/callers` |
 | `a2a` | Agent-to-Agent protocol client — remote agent cards, tasks and message relay | `send`, `get-task`, `cancel`, `agent-card`, `import-agent` |
 | `langchain` | AI/LLM models | `openai`, `ollama`, `anthropic`, `gemini`, `xai`, `deepseek`, `mistral`, `openrouter`, `models` |
 | `http` | HTTP requests (SSRF-protected, bounded validated redirects, default User-Agent; `adapters.http`) | `get`, `post` |
 | `connections` | Service connection catalog; owns provider skills and reports transport/credential presence without reading secrets | `list`, `status` |
 | `jvm` | JVM utilities | `stringConcat`, `urlEncode`, `urlDecode` |
-| `file` | Filesystem (root-jailed); reads see into archives via `x.zip!/entry` | `roots`, `list`, `tree`, `read`, `write`, `append`, `delete`, `mkdir`, `stat` |
+| `file` | Filesystem (root-jailed); reads see into archives via `x.zip!/entry` | `roots`, `list`, `tree`, `read`, `create`, `write`, `append`, `move`, `copy`, `delete`, `mkdir`, `stat`, `setMetadata` (DLFS targets) |
 | `archive` | Zip/jar archives over file roots (zip-slip + zip-bomb guarded) | `list`, `extract`, `zip` |
 | `schema` | JSON Schema | `validate`, `validateAll`, `infer`, `coerce`, `check` |
 | `json` | JSON value utilities | `merge`, `cond`, `assoc`, `select` |
@@ -100,8 +102,8 @@ AUTH_REQUIRED).
 | `goaltree` | Goal-tree agent planning | `chat` |
 | `hitl` | Human-in-the-Loop (COG-16) | `request`, `respond`, `list` over the per-user `h/` inbox; `expire` (venue-only, fired by a request's scheduled timeout) |
 | `project` | Projects as a work breakdown tree at `w/projects/<pid>` (`docs/PROJECT.md`); publishes the `projects` skill family | none yet — skills only |
-| `dlfs` | Decentralised file system | `listDrives`, `createDrive`, `deleteDrive`, `list`, `read`, `write`, `mkdir`, `delete` |
-| `vault` | Personal vault (configurable-drive DLFS wrapper) | `read`, `write`, `list`, `mkdir`, `delete` |
+| `dlfs` | Decentralised file system; entries carry application metadata (`docs/DLFS_ADAPTER.md`) | `listDrives`, `createDrive`, `deleteDrive`, `list`, `tree`, `read`, `create`, `write`, `append`, `mkdir`, `delete`, `stat`, `setMetadata` |
+| `vault` | Personal vault (configurable-drive DLFS wrapper) | `read`, `create`, `write`, `list`, `mkdir`, `delete`, `setMetadata` |
 | `secret` | Secret store | `set`, `list`, `delete`, `extract` (direct owner `/run` only, never the public principal) |
 | `memory` | Per-user agent memory (one vector at a path, default `w/memory`; each edit one atomic update) | `memory` (commands `recall`, `remember`, `update`, `forget`), `memory-recall` |
 | `preferences` | Per-user preferences: one map per user in adapter state, read-only at `x/preferences` (`docs/PREFERENCES.md`) | `preferences` (commands `set`, `remove`, `append`, `insert`, `merge`) |
@@ -112,7 +114,7 @@ AUTH_REQUIRED).
 | `oauth` | Connected accounts — OAuth 2.0 grants held for users; `http:*` attaches tokens via `bearerSecret: "oauth/<provider>"` | `connect`, `complete`, `status`, `disconnect` |
 | `user` | Explicit user registration, operator account deletion and discovery (arbitrary DIDs; venue-managed did:web usernames) | `create`, `delete`, `info`, `list` |
 | `venue` | Venue administration — runtime adapter/module lifecycle and process restart (venue-owned; `docs/CONFIG.md`) | `adapters`, `adapter/enable`, `adapter/disable`, `adapter/configure`, `adapter/restart`, `module/load`, `module/unload`, `restart`, `gc` |
-| `test` | Testing | `echo`, `delay`, `fail`, `never`, `hold` (finishes when the test releases its gate), `holdstart` (as `hold`, inside its own invocation, so its start waits too), `random`, `chat`, `pause`, `taskComplete`, `failllm` (a model call that fails as the agent's `model` names: `setup`, `unavailable`, `value`, `content`, `bug`, `long-setup`), `step` (an agent transition scripted by its input: hold at a gate, complete, fail or park the task, fail the cycle, yield) |
+| `test` | Testing; also a second access-token access point that no route serves (`docs/ACCESS_TOKENS.md`) | `echo`, `delay`, `fail`, `never`, `hold` (finishes when the test releases its gate), `holdstart` (as `hold`, inside its own invocation, so its start waits too), `random`, `chat`, `pause`, `taskComplete`, `failllm` (a model call that fails as the agent's `model` names: `setup`, `unavailable`, `value`, `content`, `bug`, `long-setup`), `step` (an agent transition scripted by its input: hold at a gate, complete, fail or park the task, fail the cycle, yield) |
 
 Module adapters (shaded module jars, not in covia.jar — `docs/CONFIG.md` "Venue modules"):
 
@@ -158,7 +160,7 @@ Base path: `/api/v1/`
 | `/oauth/{authorize,token,revoke}` | — | OAuth 2.1 authorization server: code+PKCE flow issuing venue bearers (`auth.oauth.provider`) |
 | `/auth/connect/{provider}/callback` | GET | OAuth connection callback — the provider redirects the user here after approval; it hands the browser a one-time completion code for `oauth:complete` (`adapters.oauth`; not `/api/v1`) |
 
-MCP endpoint at `/mcp`, reached with a venue bearer or a scoped MCP token (`docs/MCP_TOKENS.md`); A2A is opt-in with an `a2a` config block.
+MCP endpoint at `/mcp`, reached with a venue bearer or an access token with an MCP entry (`docs/ACCESS_TOKENS.md`); A2A is opt-in with an `a2a` config block.
 
 ### A2A surfaces
 
@@ -341,6 +343,7 @@ java -jar target/covia.jar [config.json]
 - `docs/JOB_EXECUTION.md` — an adapter's jobs whether or not it runs, installed and started as separate phases, and what bounds execution (design)
 - `docs/ERRORS.md` — how the venue raises, types and reports failures, and what each surface tells a caller
 - `docs/UCAN.md` — capabilities, granting surface, proof channels
+- `docs/AUTHORITY.md` — whose authority applies to a request: `authority` and `caller` as DIDs, names resolving in the authority's namespace, agents, tokens and callables as narrowing whose authority they act with, admission, what a job records and keeps, sudo and an agent's harness (design)
 - `docs/VENUE_AUTHORITY.md` — raising authority above a principal's base: allowances, activation, and the venue's power over the users it hosts (design)
 - `docs/HELD_KEYS.md` — keyrings of private keys the crypto adapter holds for the identities a venue hosts: store format, use and custody rules
 - `docs/HITL_TOKEN_TRANSPORT.md` — COG-19 design (proposal): HITL transport of
@@ -348,7 +351,8 @@ java -jar target/covia.jar [config.json]
 - `docs/SKILLS.md` — agent skill system
 - `docs/OPERATIONS.md` — operation model, defaults, discovery
 - `docs/PREFERENCES.md` — per-user preferences: storage, the `x/preferences` view, the edit tool's commands and size limit
-- `docs/MCP_TOKENS.md` — scoped MCP tokens: a token request's identity and authority, the token operations and store, and `/mcp` with a token
+- `docs/ACCESS_TOKENS.md` — access tokens: a token request's identity and authority, the capabilities, operations and store, access points, and `/mcp` with a token
+- `docs/CALLABLES.md` — callables: functions a principal publishes that run an operation with its issuer's authority narrowed by caps, admitted by a gate operation; the record, abilities, operations, view, gate input, kept authority, and what a call never holds
 - `docs/MODELS.md` — model definition assets (design): a model is an operation asset at `v/models/<provider>/<id>`
 - `docs/PROJECT.md` — projects (design): a work-breakdown tree at `w/projects/<pid>` where every node has a principal, an assignee, targets, tolerances and PRINCE2-style product descriptions, and the assignee of a node is the principal of its children; the `project` adapter builds, executes and rolls up the tree
 - `docs/GRID_LATTICE_DESIGN.md` — lattice design

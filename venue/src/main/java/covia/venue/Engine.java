@@ -70,8 +70,11 @@ import covia.adapter.JVMAdapter;
 import covia.adapter.SchemaAdapter;
 import covia.adapter.LangChainAdapter;
 import covia.adapter.MCPAdapter;
-import covia.adapter.McpToken;
-import covia.adapter.McpTokens;
+import covia.adapter.callable.Callable;
+import covia.adapter.callable.CallableAdapter;
+import covia.adapter.token.AccessToken;
+import covia.adapter.token.AccessTokens;
+import covia.adapter.token.TokenAdapter;
 import covia.adapter.Orchestrator;
 import covia.adapter.SecretAdapter;
 import covia.adapter.DLFSAdapter;
@@ -1092,6 +1095,8 @@ public class Engine {
 			new SchemaAdapter(),
 			new JSONAdapter(),
 			new Orchestrator(),
+			new TokenAdapter(),
+			new CallableAdapter(),
 			new MCPAdapter(),
 			new LangChainAdapter(),
 			new CoviaAdapter(),
@@ -4177,8 +4182,8 @@ public class Engine {
 	/** Refusals of an explicit namespace switch. */
 	public static final String SUDO_AUTH_REQUIRED = "Authentication required for " + Abilities.ADMIN_SUDO;
 	public static final String SUDO_DENIED = "Sudo denied: requires " + Abilities.ADMIN_SUDO + " on %s from that user";
-	/** Why a request an MCP token narrows may not act for another user. */
-	public static final String SUDO_WITH_TOKEN = "A request through an MCP token cannot act for another user (admin/sudo)";
+	/** Why a request an access token or a callable narrows may not act for another user. */
+	public static final String SUDO_NARROWED = "A request through an access token or a callable cannot act for another user (admin/sudo)";
 
 	/**
 	 * Authorises an explicit request to execute within another user's namespace.
@@ -4199,8 +4204,8 @@ public class Engine {
 		requireNotSubPrincipal(userDID);
 		if (userDID.equals(ctx.getUserDID())) return ctx;
 		// Acting for another user is bounded by that user's grants, not by a token's
-		// caps, so a request a token narrows never takes that step.
-		if (!ctx.getTokens().isEmpty()) throw new AuthException(SUDO_WITH_TOKEN);
+		// or a callable's caps, so a request either narrows never takes that step.
+		if (ctx.isNarrowed()) throw new AuthException(SUDO_NARROWED);
 		if (!crossUserAllows(ctx, userDID, Abilities.ADMIN_SUDO)) {
 			throw new AuthException(SUDO_DENIED.formatted(userDID));
 		}
@@ -4687,19 +4692,27 @@ public class Engine {
 	 * with the same authority: a separate authority
 	 * ({@link RequestContext#withAuthorityOf}) as its principal
 	 * ({@link Fields#CALLER}), namespace ({@link Fields#OWNER}) and presented
-	 * {@link Fields#PROOFS}, and the MCP token narrowing it as
-	 * {@link Fields#MCP_TOKEN}. Null when it acts with its caller's own,
+	 * {@link Fields#PROOFS}, and the access token narrowing it as
+	 * {@link Fields#TOKEN}; or, for a callable's call, that callable alone as
+	 * {@link Fields#CALLABLE}. Null when it acts with its caller's own,
 	 * unnarrowed.
+	 *
+	 * <p>Job entries and scheduled events store these keys, so renaming one
+	 * needs a migration: work stored under the old key would resume without
+	 * the narrowing it records.</p>
 	 */
 	public static AMap<AString, ACell> keptAuthority(RequestContext ctx) {
 		if (ctx == null) return null;
+		// A callable's call: its record says whose authority it is and what narrows it
+		AMap<AString, ACell> callable = ctx.getCallable();
+		if (callable != null) return Maps.of(Fields.CALLABLE, callable);
 		AMap<AString, ACell> token = actingSource(ctx).token();
-		if (!ctx.hasSeparateAuthority()) return (token == null) ? null : Maps.of(Fields.MCP_TOKEN, token);
+		if (!ctx.hasSeparateAuthority()) return (token == null) ? null : Maps.of(Fields.TOKEN, token);
 		RequestContext authority = ctx.authorityContext();
 		AMap<AString, ACell> kept = Attribution.attribute(Maps.empty(), authority.getCallerDID(), authority.getUserDID());
 		AVector<ACell> proofs = authority.getProofs();
 		if (proofs != null && !proofs.isEmpty()) kept = kept.assoc(Fields.PROOFS, proofs);
-		return (token == null) ? kept : kept.assoc(Fields.MCP_TOKEN, token);
+		return (token == null) ? kept : kept.assoc(Fields.TOKEN, token);
 	}
 
 	/** Why a request may not change an agent another principal controls; the agent and its controller follow. */
@@ -4731,9 +4744,9 @@ public class Engine {
 	}
 
 	/**
-	 * A source of authority: a principal, and the MCP token narrowing it, if
-	 * any (MCP_TOKENS.md). An agent's controller is one, and so is what an MCP
-	 * token's request acts with. A token stands for the chain of tokens whose
+	 * A source of authority: a principal, and the access token narrowing it, if
+	 * any (ACCESS_TOKENS.md). An agent's controller is one, and so is what an
+	 * access token's request acts with. A token stands for the chain of tokens whose
 	 * requests created it ({@link #tokenChain}).
 	 *
 	 * @param principal the principal whose authority it is
@@ -4745,30 +4758,36 @@ public class Engine {
 	 * Whether {@code ctx} acts with all of {@code source}'s authority, as
 	 * changing what that source created needs: it holds the principal's whole
 	 * authority ({@link #holdsAuthorityOf(RequestContext, AString)}, ignoring
-	 * tokens), and the MCP tokens narrowing it, once those it shares with the
+	 * tokens), and the access tokens narrowing it, once those it shares with the
 	 * source's chain are set aside, are all unrestricted. So a request through
 	 * a token holds what that token's requests created, but not the token
 	 * itself, nor what its issuer created directly.
 	 */
 	public boolean holdsAuthorityOf(RequestContext ctx, Source source) {
 		if (ctx == null || source == null || !holdsWholeAuthorityOf(ctx, source.principal())) return false;
+		// A call holds its issuer's whole authority only through unrestricted caps
+		AMap<AString, ACell> called = ctx.getCallable();
+		if (called != null) {
+			Callable callable = resolveCallable(called);
+			if (callable == null || !callable.caps().isUnrestricted()) return false;
+		}
 		AVector<ACell> held = ctx.getTokens();
 		if (held.isEmpty()) return true;
 		AVector<ACell> needed = (source.token() == null) ? Vectors.empty() : tokenChain(source.token());
 		long shared = 0;
 		while (shared < held.count() && shared < needed.count() && held.get(shared).equals(needed.get(shared))) shared++;
 		for (long i = shared; i < held.count(); i++) {
-			McpToken token = resolveToken(RT.ensureMap(held.get(i)));
+			AccessToken token = resolveToken(RT.ensureMap(held.get(i)));
 			if (token == null || !token.caps().isUnrestricted()) return false;
 		}
 		return true;
 	}
 
-	/** {@link #holdsAuthorityOf(RequestContext, AString)} before any MCP token narrowing is considered. */
+	/** {@link #holdsAuthorityOf(RequestContext, AString)} before any access token narrowing is considered. */
 	private boolean holdsWholeAuthorityOf(RequestContext ctx, AString principal) {
 		if (ctx == null || principal == null) return false;
 		AString caller = ctx.getCallerDID();
-		if (agentIdIn(ctx.getUserDID(), caller) != null) {
+		if (actsAsOwnAgent(ctx)) {
 			if (isRootOf(caller, principal)) return true;
 			return !ctx.hasSeparateAuthority() && ctx.getCaps() == null && isRootOf(ctx.getUserDID(), principal);
 		}
@@ -4779,13 +4798,26 @@ public class Engine {
 
 	/**
 	 * The source of authority {@code ctx} acts with, which what it creates
-	 * (an agent's controller, an MCP token) takes as its own: its acting
-	 * principal ({@link #actingPrincipal}) and the innermost MCP token
+	 * (an agent's controller, an access token) takes as its own: its acting
+	 * principal ({@link #actingPrincipal}) and the innermost access token
 	 * narrowing it, if any.
 	 */
 	public static Source actingSource(RequestContext ctx) {
 		AVector<ACell> tokens = ctx.getTokens();
 		return new Source(actingPrincipal(ctx), tokens.isEmpty() ? null : RT.ensureMap(tokens.get(tokens.count() - 1)));
+	}
+
+	/**
+	 * The access token request {@code ctx} came through, as its reference: the
+	 * innermost token narrowing its own authority, for the request a token's
+	 * bearer made and the work it left running alike. Null when none does, and
+	 * when the request is a callable's call or acts with authority not its own
+	 * (an agent's controller's), since the tokens narrowing that authority say
+	 * how it was set up, not how this request came.
+	 */
+	public static AMap<AString, ACell> tokenCameThrough(RequestContext ctx) {
+		if (ctx.hasSeparateAuthority() || ctx.getCallable() != null) return null;
+		return actingSource(ctx).token();
 	}
 
 	/**
@@ -4797,12 +4829,22 @@ public class Engine {
 	 * delegate acts for its target.
 	 */
 	public static AString actingPrincipal(RequestContext ctx) {
-		if (agentIdIn(ctx.getUserDID(), ctx.getCallerDID()) != null) return ctx.getCallerDID();
+		if (actsAsOwnAgent(ctx)) return ctx.getCallerDID();
 		RequestContext authority = ctx.authorityContext();
 		AString caller = authority.getCallerDID();
 		AString user = authority.getUserDID();
 		if (caller == null || caller.equals(user) || agentIdIn(user, caller) != null) return caller;
 		return user;
+	}
+
+	/**
+	 * Whether {@code ctx}'s caller is one of the agents of the namespace it acts
+	 * in, acting with authority it has as that agent: its own, or its
+	 * controller's through its harness. Never in a callable's call, whose
+	 * caller is only the invoker and whose authority is the callable's.
+	 */
+	private static boolean actsAsOwnAgent(RequestContext ctx) {
+		return ctx.getCallable() == null && agentIdIn(ctx.getUserDID(), ctx.getCallerDID()) != null;
 	}
 
 	/**
@@ -4838,36 +4880,39 @@ public class Engine {
 	 */
 	public RequestContext context(AString owner, AString principal, AVector<ACell> proofs,
 			AMap<AString, ACell> authority) {
+		// Work a callable's call left running: its invoker, in the callable's namespace, with the callable's authority
+		AMap<AString, ACell> callable = (authority == null) ? null : RT.ensureMap(authority.get(Fields.CALLABLE));
+		if (callable != null) return callContext(RequestContext.of(principal), callable);
 		RequestContext ctx = context(owner, principal, proofs);
 		if (authority == null) return ctx;
-		AMap<AString, ACell> token = RT.ensureMap(authority.get(Fields.MCP_TOKEN));
+		AMap<AString, ACell> token = RT.ensureMap(authority.get(Fields.TOKEN));
 		if (Attribution.caller(authority) == null) return narrowedByToken(ctx, token);
 		RequestContext held = context(Attribution.owner(authority), Attribution.caller(authority),
 			RT.ensureVector(authority.get(Fields.PROOFS)));
 		return ctx.withAuthorityOf(narrowedByToken(held, token));
 	}
 
-	// ========== MCP tokens (MCP_TOKENS.md) ==========
+	// ========== Access tokens (ACCESS_TOKENS.md) ==========
 
-	/** Why a request an MCP token narrowed may not go on; the token's name follows. */
-	public static final String TOKEN_NOT_STANDING = "The MCP token no longer stands (deleted, expired or replaced): ";
+	/** Why a request an access token narrowed may not go on; the token's name follows. */
+	public static final String TOKEN_NOT_STANDING = "The access token no longer stands (deleted, expired or replaced): ";
 
 	/** Furthest a chain of tokens created by tokens' requests is followed. */
 	private static final int MAX_TOKEN_CHAIN = 16;
 
-	/** The venue's MCP tokens, or null while the mcp adapter is not running. */
-	public McpTokens mcpTokens() {
-		return (getAdapter("mcp") instanceof MCPAdapter mcp) ? mcp.tokens() : null;
+	/** The venue's access tokens, or null while the token adapter is not running. */
+	public AccessTokens tokens() {
+		return (getAdapter(TokenAdapter.NAME) instanceof TokenAdapter adapter) ? adapter.tokens() : null;
 	}
 
 	/** The token {@code reference} names, while it stands; otherwise null. */
-	public McpToken resolveToken(AMap<AString, ACell> reference) {
-		McpTokens tokens = mcpTokens();
+	public AccessToken resolveToken(AMap<AString, ACell> reference) {
+		AccessTokens tokens = tokens();
 		return (tokens == null || reference == null) ? null : tokens.resolve(reference, currentTimestamp().longValue());
 	}
 
 	/**
-	 * The context a request presenting MCP token {@code reference} acts under
+	 * The context a request presenting access token {@code reference} acts under
 	 * now: its issuer as that principal acts in the token's namespace
 	 * ({@link #context(AString, AString)}), narrowed by the caps of every token
 	 * on its chain ({@link #tokenChain}), each read at each point of action. A
@@ -4876,7 +4921,7 @@ public class Engine {
 	 * @throws AuthException when the token does not stand now, or its issuer could not act
 	 */
 	public RequestContext tokenContext(AMap<AString, ACell> reference) {
-		McpToken token = resolveToken(reference);
+		AccessToken token = resolveToken(reference);
 		if (token == null) throw new AuthException(TOKEN_NOT_STANDING + RT.getIn(reference, Fields.NAME));
 		return narrowedByToken(context(token.owner(), token.issuer()), reference);
 	}
@@ -4892,7 +4937,7 @@ public class Engine {
 		AMap<AString, ACell> at = reference;
 		while (at != null && chain.size() < MAX_TOKEN_CHAIN && !chain.contains(at)) {
 			chain.addFirst(at);
-			McpToken token = resolveToken(at);
+			AccessToken token = resolveToken(at);
 			at = (token == null) ? null : token.source();
 		}
 		return Vectors.create(chain);
@@ -4905,11 +4950,65 @@ public class Engine {
 		for (ACell link : tokenChain(token)) {
 			AMap<AString, ACell> reference = RT.ensureMap(link);
 			ctx = ctx.withToken(reference, resource -> {
-				McpToken current = resolveToken(reference);
+				AccessToken current = resolveToken(reference);
 				return (current == null) ? Vectors.empty() : current.caps().scope();
 			}, owner);
 		}
 		return ctx;
+	}
+
+	// ========== Callables (CALLABLES.md) ==========
+
+	/** The callable {@code reference} names, while it stands; otherwise null, as while the callable adapter is not running. */
+	public Callable resolveCallable(AMap<AString, ACell> reference) {
+		return (reference != null && getAdapter(CallableAdapter.NAME) instanceof CallableAdapter adapter)
+			? adapter.callables().resolve(reference) : null;
+	}
+
+	/**
+	 * The context a call of callable {@code reference} acts in: {@code invoker}'s
+	 * execution carried on by its caller, in the callable's owner's namespace,
+	 * acting with the callable's authority. That is its issuer as that principal
+	 * acts in the callable's namespace ({@link #context(AString, AString)}),
+	 * narrowed by the chain of tokens that created it and by its caps, each
+	 * read at each point of action, so a callable that no longer stands narrows
+	 * it to nothing. The invoker's own authority plays no part.
+	 *
+	 * @throws AuthException when the issuer could not act now
+	 */
+	public RequestContext callContext(RequestContext invoker, AMap<AString, ACell> reference) {
+		AString owner = RT.ensureString(reference.get(Fields.OWNER));
+		Callable callable = resolveCallable(reference);
+		RequestContext issuer = (callable == null) ? RequestContext.of(owner, owner, Vectors.empty())
+			: narrowedByToken(context(owner, callable.issuer()), callable.source());
+		return invoker.callingIn(owner, issuer.withCallable(reference, resource -> {
+			Callable current = resolveCallable(reference);
+			return (current == null) ? Vectors.empty() : current.caps().scope();
+		}, owner));
+	}
+
+	/**
+	 * Whether what narrows the authority {@code ctx} acts with covers
+	 * {@code (resource, ability)}: every access token on it, and the callable
+	 * whose call it is, by their caps as they stand. What a request holds
+	 * beyond its scope (a proof, an admission, the public scope, a callable's
+	 * gate) reaches only that far. True when nothing narrows it.
+	 */
+	public boolean narrowingsCover(RequestContext ctx, AString resource, AString ability) {
+		if (ctx == null) return false;
+		if (ctx.hasSeparateAuthority()) return narrowingsCover(ctx.authorityContext(), ctx.inNamespace(resource), ability);
+		return narrowingsCover(ctx, resource, ability, null);
+	}
+
+	/** As above for a use that sends a value to {@code destination}, on a context acting with its own authority. */
+	private boolean narrowingsCover(RequestContext ctx, AString resource, AString ability, AString destination) {
+		if (!tokensCover(ctx, resource, ability, destination)) return false;
+		AMap<AString, ACell> called = ctx.getCallable();
+		if (called == null) return true;
+		Callable callable = resolveCallable(called);
+		if (callable == null) return false;
+		AVector<ACell> caps = callable.caps().scope();
+		return caps == null || ctx.denialUnder(caps, resource, ability, callable.owner(), destination) == null;
 	}
 
 	/**
@@ -4927,8 +5026,10 @@ public class Engine {
 		AString agentDID = (owner == null || agentId == null) ? null
 			: covia.grid.Principals.agentDID(owner, agentId);
 		// Its own run, or its owner with all of the owner's authority: a request a
-		// token narrows may not make an agent act with the agent's own authority
-		if (agentDID == null || !(agentDID.equals(caller) || (owner.equals(caller) && holdsAuthorityOf(ctx, owner)))) {
+		// token narrows may not make an agent act with the agent's own authority,
+		// and a call's caller is only its invoker, never the agent's own run
+		boolean ownRun = ctx.getCallable() == null && agentDID != null && agentDID.equals(caller);
+		if (agentDID == null || !(ownRun || (owner.equals(caller) && holdsAuthorityOf(ctx, owner)))) {
 			throw new AuthException(NOT_AGENTS_STEP.formatted(caller, agentId));
 		}
 		if (getAgent(owner, agentId) == null) throw new AuthException(NO_SUCH_AGENT.formatted(agentDID));
@@ -5026,19 +5127,19 @@ public class Engine {
 		if (ctx.hasSeparateAuthority()) {
 			return authorityCovers(ctx.authorityContext(), ctx.inNamespace(resource), ability, destination);
 		}
-		if (isAnothers(ctx, resource)) return crossUserAllows(ctx, resource, ability, destination) && tokensCover(ctx, resource, ability, destination);
+		if (isAnothers(ctx, resource)) return crossUserAllows(ctx, resource, ability, destination) && narrowingsCover(ctx, resource, ability, destination);
 		return scopeOrHeldCovers(ctx, resource, ability, destination);
 	}
 
 	/**
-	 * Whether every MCP token narrowing the request covers
+	 * Whether every access token narrowing the request covers
 	 * {@code (resource, ability)}: what it holds beyond its scope (a proof, an
 	 * admission, the public scope) reaches only as far as its tokens' caps do.
 	 * True when no token narrows it.
 	 */
 	private boolean tokensCover(RequestContext ctx, AString resource, AString ability, AString destination) {
 		for (ACell link : ctx.getTokens()) {
-			McpToken token = resolveToken(RT.ensureMap(link));
+			AccessToken token = resolveToken(RT.ensureMap(link));
 			if (token == null) return false;
 			AVector<ACell> caps = token.caps().scope();
 			if (caps != null && ctx.denialUnder(caps, resource, ability, token.owner(), destination) != null) return false;
@@ -5060,7 +5161,7 @@ public class Engine {
 	private boolean scopeOrHeldCovers(RequestContext ctx, AString resource, AString ability, AString destination) {
 		AVector<ACell> scope = ctx.scopeFor(resource);
 		if (scope == null) return true;
-		if (crossUserAllows(ctx, resource, ability, destination) && tokensCover(ctx, resource, ability, destination)) return true;
+		if (crossUserAllows(ctx, resource, ability, destination) && narrowingsCover(ctx, resource, ability, destination)) return true;
 		return ctx.denialUnder(scope, resource, ability, ctx.getUserDID(), destination) == null;
 	}
 
@@ -5147,12 +5248,12 @@ public class Engine {
 
 	/**
 	 * Whether the request is the venue acting directly as itself: the venue's
-	 * own DID, not one of its agents, and not narrowed by an MCP token. No
+	 * own DID, not one of its agents, and not narrowed by an access token. No
 	 * delegation makes another caller this.
 	 */
 	public boolean isDirectVenue(RequestContext ctx) {
 		return ctx != null && getDIDString().equals(ctx.getCallerDID())
-			&& ctx.getExecutionScope().agentId() == null && ctx.getTokens().isEmpty();
+			&& ctx.getExecutionScope().agentId() == null && !ctx.isNarrowed();
 	}
 
 	/** Opening of every {@link #requireVenueAuthority} denial. */

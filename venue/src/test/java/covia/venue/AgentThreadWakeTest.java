@@ -64,7 +64,7 @@ public class AgentThreadWakeTest {
 
 	private Blob makeSession(String hex) {
 		Blob sid = Blob.fromHex(hex);
-		agent.ensureSession(sid, userDid);
+		agent.sessions().create(sid, userDid, null);
 		return sid;
 	}
 
@@ -177,7 +177,7 @@ public class AgentThreadWakeTest {
 
 	@Test
 	public void testMissingSessionIsNoop() {
-		Blob sid = Blob.fromHex("ee"); // never ensureSession'd
+		Blob sid = Blob.fromHex("ee"); // never created with sessions().create
 		sched().setThreadWakeTime(userDid, agent, ThreadKind.SESSION, sid,
 			System.currentTimeMillis() + FAR);
 
@@ -205,11 +205,11 @@ public class AgentThreadWakeTest {
 		venue.users().finishDeletion(userDid);
 		venue.users().create(userDid);
 		var replacement = venue.users().user(userDid).ensureAgent(agent.getAgentId(), Maps.empty(), null);
-		replacement.ensureSession(sid, userDid);
+		replacement.sessions().create(sid, userDid, null);
 		var failure = assertThrows(AuthException.class, () -> sched().setThreadWakeTime(
 			userDid, agent, ThreadKind.SESSION, sid, System.currentTimeMillis() + FAR));
 		assertEquals(Users.ACCOUNT_DELETED, failure.getMessage());
-		assertNull(replacement.getSession(sid).get(Fields.WAKE_TIME));
+		assertNull(replacement.session(sid).getRecord().get(Fields.WAKE_TIME));
 		assertEquals(0, wakeEvents().count());
 	}
 

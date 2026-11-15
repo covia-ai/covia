@@ -310,6 +310,7 @@ identity token through an operation", and HELD_KEYS.md.
 | Several engines in turn over one application | Close (or `unmount`) the venue's engine, then mount it again |
 | Closing the engine, then the host | Close the application (or the engine), then the host |
 | `AuthMiddleware.withTransportGrants(ctx, ucans[, verifier])` | `engine.withTransportGrants(ctx, ucans)`, which verifies with the venue's DID verifier and clock |
+| `agent.getSession(sid)` and `Agent`'s other session shortcuts (`getSessionPending`, `getSessionCycleEpoch`, `ensureSession`, `removeSession`, `hasSessionPending`, `oldestSessionWithPending`) | The session itself, `agent.session(sid)` (`getRecord()`, `pending()`, `cycleEpoch()`), and the agent's sessions, `agent.sessions()` (`create`, `remove`, `hasPending`, `oldestWithPending`) |
 
 ## Upgrading from 0.9.x
 

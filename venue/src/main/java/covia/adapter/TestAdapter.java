@@ -42,9 +42,24 @@ import covia.venue.AdapterState;
 import covia.venue.api.A2ACodec;
 import covia.venue.migration.MigrationStep;
 
-public class TestAdapter extends AAdapter {
-	
+public class TestAdapter extends AAdapter implements covia.adapter.token.TokenAccessPoint {
+
 	public static final Logger log=LoggerFactory.getLogger(TestAdapter.class);
+
+	/** Why a token's {@code access.test} entry is refused: it is not an object. */
+	public static final String TOKEN_ENTRY_INVALID = "access.test must be an object";
+
+	/**
+	 * An access point for testing access tokens beside MCP: a token's
+	 * {@code access.test} entry is any object, kept as it is. No route accepts
+	 * tokens here, so it only shows how the token rules treat a second access point.
+	 */
+	@Override
+	public AMap<AString, ACell> tokenEntry(RequestContext ctx, ACell requested) {
+		AMap<AString, ACell> entry = RT.ensureMap(requested);
+		if (entry == null) throw new covia.exception.InvalidInputException(TOKEN_ENTRY_INVALID);
+		return entry;
+	}
 
 	/** Shared body used by the skill-adoption test fixture and its mock LLM. */
 	public static final String SKILL_LLM_BODY = "Use covia_read on w/probe.";

@@ -18,10 +18,11 @@ import covia.venue.auth.AuthResult;
 
 /**
  * Who a turn came from, as the {@code From} label element shows it (COG-20 §4,
- * AUTH.md §5.3): the caller the venue recorded with the turn and, when a
- * channel binding authenticated it, the authentication record. Rendered from
- * those and the agent's own identity alone — no venue state is consulted — so
- * a turn renders the same way every time and the cached prefix holds.
+ * AUTH.md §5.3): the caller the venue recorded with the turn, the access token
+ * its request acted through, if any, and, when a channel binding authenticated
+ * it, the authentication record. Rendered from those and the agent's own
+ * identity alone — no venue state is consulted — so a turn renders the same way
+ * every time and the cached prefix holds.
  */
 final class TurnProvenance {
 	private TurnProvenance() {}
@@ -62,21 +63,22 @@ final class TurnProvenance {
 	 * The identity part of a turn's provenance. A new element appears only when it
 	 * changes; per-message fields are never part of it.
 	 */
-	record Key(AString caller, ACell method, ACell binding, ACell identity, ACell chat, ACell thread, ACell space) {}
+	record Key(AString caller, ACell token, ACell method, ACell binding, ACell identity, ACell chat, ACell thread, ACell space) {}
 
 	/** The agent's own principal, which turns start from. */
 	static Key self(RequestContext ctx) {
-		return new Key(ctx == null ? null : ctx.getCallerDID(), null, null, null, null, null, null);
+		return new Key(ctx == null ? null : ctx.getCallerDID(), null, null, null, null, null, null, null);
 	}
 
 	/** A turn's key, or null for a turn stored without a caller. */
 	static Key key(AMap<AString, ACell> turn) {
 		AString caller = RT.ensureString(turn.get(Fields.CALLER));
 		if (caller == null) return null;
+		ACell token = turn.get(Fields.TOKEN);
 		AMap<AString, ACell> auth = RT.ensureMap(turn.get(Fields.AUTHENTICATION));
-		if (auth == null) return new Key(caller, null, null, null, null, null, null);
+		if (auth == null) return new Key(caller, token, null, null, null, null, null, null);
 		AMap<AString, ACell> details = details(auth);
-		return new Key(caller, RT.getIn(auth, AuthResult.AUTHENTICATION, AuthResult.METHOD),
+		return new Key(caller, token, RT.getIn(auth, AuthResult.AUTHENTICATION, AuthResult.METHOD),
 			RT.getIn(auth, AuthResult.AUTHENTICATION, AuthResult.BINDING), auth.get(AuthResult.AUTHENTICATED_IDENTITY),
 			RT.getIn(details, ChannelAuthentication.K_CHAT, ChannelAuthentication.K_ID),
 			RT.getIn(details, ChannelAuthentication.K_THREAD),
@@ -114,9 +116,11 @@ final class TurnProvenance {
 		List<String> attributes = new ArrayList<>(List.of(
 			"principal", caller.toString(), "relationship", relationship.token));
 		if (agentId != null) attributes.addAll(List.of("agent", agentId.toString()));
+		String token = token(turn);
+		if (token != null) attributes.addAll(List.of("token", token));
 		Channel channel = channel(turn);
 		if (channel != null) channel.attributes(attributes);
-		return Labels.renderAttributed(dialect, Labels.Kind.FROM, summary(relationship, agentId, caller, channel),
+		return Labels.renderAttributed(dialect, Labels.Kind.FROM, summary(relationship, agentId, caller, token, channel),
 			attributes.toArray(new String[0]));
 	}
 
@@ -127,15 +131,21 @@ final class TurnProvenance {
 		if (caller == null) return null;
 		Relationship relationship = relationship(engine, ctx, caller);
 		AString agentId = relationship.namesAgent() ? Principals.agentIdOf(caller) : null;
-		return summary(relationship, agentId, caller, channel(map));
+		return summary(relationship, agentId, caller, token(map), channel(map));
 	}
 
-	private static String summary(Relationship relationship, AString agentId, AString caller, Channel channel) {
+	private static String summary(Relationship relationship, AString agentId, AString caller, String token, Channel channel) {
 		StringBuilder sb = new StringBuilder(relationship.words);
 		if (agentId != null) sb.append(' ').append(agentId);
 		sb.append(' ').append(caller);
+		if (token != null) sb.append(" — access token ").append(token);
 		if (channel != null) channel.describe(sb);
 		return sb.toString();
+	}
+
+	/** The name of the access token a turn's request acted through, or null when it acted through none. */
+	private static String token(AMap<AString, ACell> turn) {
+		return identifier(RT.getIn(turn, Fields.TOKEN, Fields.NAME));
 	}
 
 	private static AMap<AString, ACell> details(AMap<AString, ACell> auth) {

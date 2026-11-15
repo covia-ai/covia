@@ -124,7 +124,7 @@ output/error and history; it is not a status-only grant. Private execution
 checkpoints and credentials are never part of that record.
 
 An unscoped authenticated owner has these rights by default. An agent, scoped
-session or MCP token must have the required effective authority: creator
+session or access token must have the required effective authority: creator
 attribution supplies no bypass. Creating or invoking work grants no continuing
 Job permissions; its direct invocation response is still returned to the caller.
 A separate principal can present the owner's valid UCAN grant without sudo or
@@ -355,9 +355,12 @@ from them with `Engine.context(owner, caller, proofs, authority)`, checking
 what a live request would: the principal and the kept authority still exist,
 a delegate still holds its `admin/sudo` grant, an agent acts under its current
 `config.caps`, an agent controller under its own. The kept authority is the
-controller the work started with, as it acts now, and the MCP token narrowing
-the request, if any, which then narrows it as it stands and to nothing once
-it is gone (MCP_TOKENS.md). The record never holds them,
+controller the work started with, as it acts now, and the access token
+narrowing the request, if any, which then narrows it as it stands and to
+nothing once it is gone (ACCESS_TOKENS.md). Work a callable's call left
+running keeps the callable instead, and resumes in its owner's namespace with
+the invoker as caller and the callable's authority as it stands
+(CALLABLES.md). The record never holds them,
 and they go with the entry when the job ends (UCAN.md §4.3).
 
 ## The update path — CAS-committed, terminal-sticky

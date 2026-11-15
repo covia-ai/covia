@@ -27,9 +27,10 @@ Operations with the same name have the same inputs and response semantics:
 |-----------|---------|
 | `list` | List direct children with `name`, `type`, `size`, and `modified` |
 | `read` | Read using `auto`, `text`, `bytes`, or `json` mode |
-| `write` | Create/overwrite from exactly one of `content`, `value`, `bytes`, or `asset` |
+| `write` | Create/overwrite from exactly one of `content`, `value`, `bytes`, or `contentRef` |
 | `mkdir` | Create a directory; `parents=true` creates missing parents |
 | `delete` | Delete a target; `recursive=true` removes a populated directory |
+| `setMetadata` | Set or clear a DLFS entry's metadata (see Metadata) |
 
 Adapters may expose useful extensions. `file` and `dlfs` currently also expose
 `tree`, `append`, and `stat`; `file` additionally exposes `move`, `copy`, and
@@ -43,6 +44,28 @@ configured-root discovery. DLFS additionally exposes drive lifecycle operations.
 - `auto`: UTF-8 `content` for text. For binary DLFS content it returns an
   WebDAV `url` when that URL addresses the caller's own drive;
   otherwise it returns inline base64.
+
+## Metadata
+
+Every DLFS entry, file or directory, can carry one application-defined value,
+which Covia stores without interpreting. `setMetadata` sets it, replacing any
+it had, or clears it with null. It needs `crud/write` on the entry, which must
+exist, and creates nothing: unlike other writes, it does not create a
+component's own drive or root. It is offered by `dlfs`, by `file` for a DLFS
+target, and by `vault`.
+`stat` returns it as `metadata`, absent when there is none. The value belongs
+to the entry:
+
+- a move or rename takes it along;
+- replacing a file's content in place, through an operation or WebDAV, keeps
+  it;
+- deleting the entry removes it, so an entry that later takes its path,
+  created there or moved there, has only its own.
+
+Setting it is one transaction on the drive that leaves the entry's content and
+modification time as they were, so a write to the entry made meanwhile is
+never lost. Host and temp files under `file` roots have no metadata, and
+`file:setMetadata` refuses them.
 
 ## DLFS addressing and authority
 

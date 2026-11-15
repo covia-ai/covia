@@ -878,11 +878,34 @@ public class JobManager {
 	 */
 	String evaluateGate(AString gateOp, AString opRef, ACell input, AString caller,
 			RequestContext authorityCtx) {
+		return runGate(gateOp, gateInput(opRef, input, caller, authorityCtx.getUserDID()),
+			authorityCtx.forGateEvaluation(gateOp));
+	}
+
+	/**
+	 * Evaluates a callable's gate (CALLABLES.md): as a capability gate, with
+	 * the same input, outcome and limits, describing a call of the callable at
+	 * {@code callable} by {@code invoker}, but run with the call's own
+	 * authority ({@code call}, the callable's), as a Convex trust monitor runs
+	 * as its actor, so it can consult the provider's private records.
+	 *
+	 * @param callable the callable's resource, {@code <owner>/x/callable/<name>}
+	 * @return null when the gate admits the call, else why not
+	 */
+	public String evaluateCallableGate(AString gateOp, AString callable, ACell input, RequestContext invoker,
+			RequestContext call) {
+		return runGate(gateOp, gateInput(callable, input, invoker.getCallerDID(), invoker.getUserDID()),
+			call.asGateEvaluation(gateOp));
+	}
+
+	/** A gate's input: the operation being authorised, its input, who acted and, when it differs, the namespace it acted in. */
+	private static AMap<AString, ACell> gateInput(AString operation, ACell input, AString caller, AString owner) {
+		return Attribution.attribute(Maps.of(Fields.OPERATION, operation, Fields.INPUT, input), caller, owner);
+	}
+
+	/** Runs gate {@code gateOp} on {@code gateInput} under {@code gateCtx}: null when it succeeds, else why not. */
+	private String runGate(AString gateOp, AMap<AString, ACell> gateInput, RequestContext gateCtx) {
 		try {
-			AMap<AString, ACell> gateInput = Attribution.attribute(Maps.of(
-				Fields.OPERATION, opRef,
-				Fields.INPUT, input), caller, authorityCtx.getUserDID());
-			RequestContext gateCtx = authorityCtx.forGateEvaluation(gateOp);
 			Asset gate = engine.resolveAssetUnchecked(gateOp, gateCtx);
 			if (gate == null) return "gate " + gateOp + ": cannot resolve operation";
 			invokeInternal(gate.meta(), gateInput, gateCtx)

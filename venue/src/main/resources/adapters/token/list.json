@@ -1,0 +1,20 @@
+{
+	"name": "Token List",
+	"description": "Lists the access tokens in your namespace: each one's name, issuer, access, caps, expiry and creation time, never its bearer. Needs crud/read on x/token.",
+	"dateCreated": "2026-11-12T00:00:00Z",
+	"operation": {
+		"adapter": "token:list",
+		"readOnly": true,
+		"input": {
+			"type": "object",
+			"properties": {}
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"tokens": { "type": "array", "items": { "type": "object" } },
+				"total": { "type": "integer" }
+			}
+		}
+	}
+}

@@ -34,7 +34,7 @@ public class AgentTaskResolutionTest {
 	public void setup(TestInfo info) {
 		AString did = TestEngine.uniqueDID(info);
 		agent = TestEngine.ENGINE.getVenueState().users().ensure(did).ensureAgent("resolver", Maps.empty(), null);
-		agent.ensureSession(SID, did);
+		agent.sessions().create(SID, did, null);
 		agent.tasks().add(TASK, Maps.of(Fields.INPUT, Maps.of("ask", "something"),
 			Fields.SESSION_ID, Strings.create(SID.toHexString())));
 	}

@@ -365,20 +365,26 @@ public class Fields {
 	public static final StringShort SEED = Strings.intern("seed");
 	public static final StringShort VENUE = Strings.intern("venue");
 
-	// MCP tokens (venue/docs/MCP_TOKENS.md)
+	// Access tokens (venue/docs/ACCESS_TOKENS.md)
 	/** A set of capabilities bounding what its holder may do: missing means
 	 *  unrestricted, empty means none (covia.lattice.Caps). */
 	public static final StringShort CAPS = Strings.intern("caps");
 	/** When something stops being valid, in milliseconds since the epoch. */
 	public static final StringShort EXPIRES = Strings.intern("expires");
-	/** On an MCP token: the identity that created it, whose authority it narrows. */
+	/** On an access token: the identity that created it, whose authority it narrows. */
 	public static final StringShort ISSUER = Strings.intern("issuer");
-	/** On an MCP token update: issue a new bearer, so the old one stops working. */
+	/** On an access token update: issue a new bearer, so the old one stops working. */
 	public static final StringShort ROTATE = Strings.intern("rotate");
-	/** On an agent created by a request an MCP token narrowed: that token, which
+	/** On an agent created by a request an access token narrowed: that token, which
 	 *  narrows its controller's authority. */
 	public static final StringShort CONTROLLER_TOKEN = Strings.intern("controllerToken");
-	/** On kept authority: the MCP token that narrowed the request whose work it is. */
-	public static final StringShort MCP_TOKEN = Strings.intern("mcpToken");
+
+	// Callables (venue/docs/CALLABLES.md)
+	/** A callable, by reference; in kept authority, the callable whose call left the work running. */
+	public static final StringShort CALLABLE = Strings.intern("callable");
+	/** On a callable: the operation that decides who may call it, beyond those holding {@code callable/call}. */
+	public static final StringShort GATE = Strings.intern("gate");
+	/** On the callers gate: the principals and namespaces it admits. */
+	public static final StringShort CALLERS = Strings.intern("callers");
 
 }

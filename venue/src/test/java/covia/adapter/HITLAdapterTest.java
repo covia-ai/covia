@@ -175,7 +175,7 @@ public class HITLAdapterTest {
 		User owner = engine.getVenueState().users().user(ALICE_DID);
 		Agent agent = owner.agent("hitl-agent");
 		Blob sid = Blob.fromHex("a11ce000a11ce000a11ce000a11ce000");
-		agent.ensureSession(sid, ALICE_DID);
+		agent.sessions().create(sid, ALICE_DID, null);
 
 		AMap<AString, ACell> ask = Hitl.request("Choose a path")
 			.ask(Hitl.choice("path", "Which path?")
@@ -214,7 +214,7 @@ public class HITLAdapterTest {
 			watch.awaitCycles(1);
 		}
 		String conversation = covia.adapter.agent.GoalTreeContext.activeConversation(RT.ensureMap(
-			RT.getIn(owner.agent("hitl-agent").getSession(sid), Fields.FRAMES, CVMLong.ZERO))).toString();
+			RT.getIn(owner.agent("hitl-agent").session(sid).getRecord(), Fields.FRAMES, CVMLong.ZERO))).toString();
 		assertTrue(conversation.contains(id.toString()) && conversation.contains("left"),
 			"the human answer must arrive in the asking session: " + conversation);
 	}
@@ -246,7 +246,7 @@ public class HITLAdapterTest {
 					if (failAppend.get()) {
 						assertEquals(Status.INPUT_REQUIRED, e.getVenueState().users().user(owner).jobs().getRecord(Blob.fromHex(requestId.get().toString())).get(Fields.STATUS));
 						assertEquals(Hitl.OPEN, e.getVenueState().users().user(owner).inbox().get(requestId.get()).get(Hitl.STATUS));
-						assertTrue(e.getVenueState().users().user(owner).agent("asker").getSessionPending(sid).isEmpty());
+						assertTrue(e.getVenueState().users().user(owner).agent("asker").session(sid).pending().isEmpty());
 					}
 					boolean appended = super.appendSessionMessage(draft,user,agent,session,caller,job,message);
 					assertFalse(draft.user(owner).agent("asker").getPending().containsKey(Blob.fromHex(requestId.get().toString())),
@@ -262,7 +262,7 @@ public class HITLAdapterTest {
 			e.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "asker", Fields.CONFIG,
 				Maps.of(Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/test/ops/llm")), ctx).awaitResult(5000);
 			var agent = e.getVenueState().users().user(owner).agent("asker");
-			agent.ensureSession(sid, owner);
+			agent.sessions().create(sid, owner, null);
 			Job ask = e.jobs().invokeOperation("v/ops/hitl/request", Hitl.request("Atomic answer")
 				.ask(Hitl.approval("yes", "Continue?").required()).build(), RequestContext.ofAgent(owner, Strings.create("asker")).withSessionId(sid));
 			assertTrue(agent.getPending().containsKey(ask.getID()), "the agent request must own a durable wait");
@@ -270,7 +270,7 @@ public class HITLAdapterTest {
 			var answer = Hitl.answer(requestId.get().toString()).answer("yes", true).build();
 			assertThrows(JobFailedException.class, () -> e.jobs().invokeOperation("v/ops/hitl/respond", answer, ctx).awaitResult(5000));
 			assertEquals(Hitl.OPEN, e.getVenueState().users().user(owner).inbox().get(requestId.get()).get(Hitl.STATUS));
-			assertTrue(agent.getSessionPending(sid).isEmpty());
+			assertTrue(agent.session(sid).pending().isEmpty());
 			assertEquals(Status.INPUT_REQUIRED, ask.getStatus());
 			assertTrue(agent.getPending().containsKey(ask.getID()), "a rolled-back resolution must retain its wait");
 			failAppend.set(false);
@@ -285,8 +285,8 @@ public class HITLAdapterTest {
 			for (var response : responses) if (response.get(10, java.util.concurrent.TimeUnit.SECONDS)) accepted++;
 			assertEquals(1, accepted, failures.toString());
 			assertEquals(1, wakes.get());
-			assertEquals(1, agent.getSessionPending(sid).count());
-			assertNull(RT.getIn(agent.getSessionPending(sid).get(0), Fields.JOB_ID), "a resolved request must not make its independent message disposable");
+			assertEquals(1, agent.session(sid).pending().count());
+			assertNull(RT.getIn(agent.session(sid).pending().get(0), Fields.JOB_ID), "a resolved request must not make its independent message disposable");
 			assertEquals(Status.COMPLETE, ask.getStatus());
 		} finally { first.close(); }
 		var second = covia.venue.server.VenueServer.launch(config);
@@ -296,7 +296,7 @@ public class HITLAdapterTest {
 			try (AgentWatch watch = AgentWatch.open(second.getEngine(), owner, "asker")) {
 				watch.awaitState("a timeline entry", () -> agent.getTimeline() != null && agent.getTimeline().count() >= 1);
 			}
-			assertTrue(agent.getSession(sid).toString().contains(requestId.get().toString()), "the resolved answer must survive restart before wake");
+			assertTrue(agent.session(sid).getRecord().toString().contains(requestId.get().toString()), "the resolved answer must survive restart before wake");
 			assertEquals(Hitl.ANSWERED, second.getEngine().getVenueState().users().user(owner).inbox().get(requestId.get()).get(Hitl.STATUS));
 		} finally { second.close(); }
 	}
@@ -812,7 +812,7 @@ public class HITLAdapterTest {
 			BOB).awaitResult(5000);
 		Agent agent = engine.getVenueState().users().user(owner).agent(agentId);
 		Blob sid = Blob.fromHex("d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0");
-		agent.ensureSession(sid, owner);
+		agent.sessions().create(sid, owner, null);
 		Job job = request(asking(owner, agentId, ALICE_DID).withSessionId(sid), Hitl.request("May I?").to(ALICE_DID.toString())
 			.ask(Hitl.approval("ok", "OK?")).build());
 		assertTrue(agent.getPending().containsKey(job.getID()));
@@ -824,7 +824,7 @@ public class HITLAdapterTest {
 			watch.awaitCycles(1);
 		}
 		String conversation = covia.adapter.agent.GoalTreeContext.activeConversation(RT.ensureMap(
-			RT.getIn(agent.getSession(sid), Fields.FRAMES, CVMLong.ZERO))).toString();
+			RT.getIn(agent.session(sid).getRecord(), Fields.FRAMES, CVMLong.ZERO))).toString();
 		assertTrue(conversation.contains(String.format(HITLAdapter.TARGET_DELETED, ALICE_DID)),
 			"the asking session must be told why: " + conversation);
 	}

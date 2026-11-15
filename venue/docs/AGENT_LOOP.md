@@ -86,7 +86,7 @@ The agent's value is a plain map. Every write replaces the entire map atomically
 | `status` | string | `"SLEEPING"` \| `"RUNNING"` \| `"SUSPENDED"` \| `"TERMINATED"`. `RUNNING` is a persisted execution marker, validated against the live executor by the hosting venue. |
 | `agent` | map? | Optional external implementation selector; absent for the native Covia runtime. See §2.2.1. |
 | `controller` | string? | DID of the principal whose authority the agent acts with, and whose authority configuring the agent needs; absent for its owner ([UCAN.md §5.4](./UCAN.md)). |
-| `controllerToken` | map? | The MCP token `{owner, name, id}` that narrows the controller's authority, when a request through that token created, forked or last set the controller of the agent ([MCP_TOKENS.md](./MCP_TOKENS.md)). |
+| `controllerToken` | map? | The access token `{owner, name, id}` that narrows the controller's authority, when a request through that token created, forked or last set the controller of the agent ([ACCESS_TOKENS.md](./ACCESS_TOKENS.md)). |
 | `config` | map | Framework-level configuration. Includes `operation` (default transition op) and `caps`, the agent's capability scope ([UCAN.md §5.4](./UCAN.md): Model A, user-scoped). The record stores `caps` only when they bound the agent: an unrestricted agent's record has none, which `agent:info` shows as `"unrestricted"`, and one given no authority stores `[]`. |
 | `state` | any | User-defined state. Opaque to the framework. Passed to and returned from the transition function. Transition-function configuration (LLM operation, model, system prompt, tools, caps) lives in `config`, not here (#144). Set at creation via optional initial state. Conversation content lives on the session record (`session.frames[0].conversation`), not here. |
 | `tasks` | index | `Index<Blob, ACell>` of inbound request Job IDs. Persistent until resolved. Ordered by Job ID. |
@@ -328,8 +328,8 @@ new agent status or event type.
   session the cycle took at `inCycle.sessionId` and the same epoch at that
   session's `inCycle`. An agent that is SUSPENDED or TERMINATED is issued
   none, and the cycle does not run.
-- **Revoked** by every write that sets SUSPENDED or TERMINATED or removes the
-  record, in that same write: `agent:suspend`, `agent:delete`, account
+- **Revoked** by every change that sets SUSPENDED or TERMINATED or removes the
+  record, in that same transaction: `agent:suspend`, `agent:delete`, account
   deletion and a fault suspension alike. So an agent holds a claim only while
   it is neither SUSPENDED nor TERMINATED. Startup revokes every claim (§6.1),
   and resume issues none.
@@ -1594,9 +1594,9 @@ No `state`, no `tasks`, no `pending`, no `messages`, no `session`, no `config`. 
 | Agent's config | `agent.getConfig()` |
 | Queued tasks | `agent.getTasks()` |
 | Outbound pending | `agent.getPending()` |
-| Sessions | `agent.getSessions()`, `agent.getSession(sid)` |
-| Session frames | `agent.getSession(sid).get("frames")` |
-| Session inbox | `agent.getSession(sid).get("pending")` |
+| Sessions | `agent.getSessions()`, `agent.session(sid).getRecord()` |
+| Session frames | `agent.session(sid).frames()` |
+| Session inbox | `agent.session(sid).pending()` |
 
 `cause` is a hint, not a contract — the step adapter is free to read the full lattice state and decide what to do regardless of cause.
 

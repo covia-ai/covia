@@ -18,7 +18,7 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import covia.adapter.MCPAdapter;
-import covia.adapter.McpTokens;
+import covia.adapter.token.AccessTokens;
 import covia.api.Abilities;
 import covia.api.Fields;
 import covia.grid.Job;
@@ -28,7 +28,7 @@ import covia.lattice.Caps;
 
 /**
  * One agent builds a set of tools for another and hands it a token, and the
- * other agent uses them over the venue's MCP endpoint (MCP_TOKENS.md): the
+ * other agent uses them over the venue's MCP endpoint (ACCESS_TOKENS.md): the
  * token offers exactly its tools, acts within its creator's authority and its
  * own caps, and stops working when revoked. Each refusal has a control that
  * differs from it in one thing and succeeds.
@@ -117,7 +117,7 @@ public class McpTokenAgentsTest {
 		// Alice's builder may run operations, make tokens and use w/shared/, and nothing else
 		RequestContext builder = agent(alice, "builder", Vectors.of(
 			cap("v/ops/", Abilities.INVOKE),
-			cap("x/mcp/tokens/", Abilities.MCP_TOKEN),
+			cap("x/token/", Abilities.MCP_TOKEN),
 			cap("w/shared/", Capability.CRUD), cap("j/", Abilities.JOB_READ)));
 		// Bob's worker holds no authority of Alice's at all
 		RequestContext worker = agent(bob, "worker", Caps.UNRESTRICTED);
@@ -129,7 +129,7 @@ public class McpTokenAgentsTest {
 			Fields.CAPS, Vectors.of(cap("w/shared/", Capability.CRUD))), builder);
 		AMap<AString, ACell> result = RT.ensureMap(complete(created));
 		String token = RT.getIn(result, Fields.TOKEN).toString();
-		assertTrue(McpTokens.isBearer(token), token);
+		assertTrue(AccessTokens.isBearer(token), token);
 		assertEquals(builder.getCallerDID(), RT.getIn(result, Fields.ISSUER));
 		assertEquals(Fields.HIDDEN, RT.getIn(engine.jobs().getJobData(created.getID(), builder), Fields.OUTPUT, Fields.TOKEN),
 			"the job record never keeps the bearer");
@@ -200,6 +200,6 @@ public class McpTokenAgentsTest {
 
 		failed(run("v/ops/mcp/create-token", input, agent(alice, "plain", Vectors.of(invoke, shared))));
 		complete(run("v/ops/mcp/create-token", input,
-			agent(alice, "maker", Vectors.of(invoke, shared, cap("x/mcp/tokens/", Abilities.MCP_TOKEN)))));
+			agent(alice, "maker", Vectors.of(invoke, shared, cap("x/token/", Abilities.MCP_TOKEN)))));
 	}
 }

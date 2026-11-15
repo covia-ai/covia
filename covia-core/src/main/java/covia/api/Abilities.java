@@ -68,11 +68,18 @@ public final class Abilities {
 	/** Derive keys from a held mnemonic ({@code crypto:derive-key}). */
 	public static final AString KEY_DERIVE    = Strings.intern("key/derive");
 	public static final AString MCP_MANAGE    = Strings.intern("mcp/manage");
-	/** Create, change or delete an MCP token ({@code <did>/x/mcp/tokens/<name>}). */
+	/** Create, change or delete an access token accepted at MCP alone, through the
+	 *  MCP token operations ({@code <did>/x/token/<name>}). */
 	public static final AString MCP_TOKEN     = Strings.intern("mcp/token");
-	/** Fetch an MCP token's bearer again, where the venue keeps it.
-	 *  The {@code admin/token} parent covers administration of every token kind. */
+	/** Administer access tokens directly: its leaf {@code admin/token/<access point>}
+	 *  covers the tokens accepted there ({@code <did>/x/token/<name>}). */
+	public static final AString ADMIN_TOKEN   = Strings.intern("admin/token");
+	/** Administer access tokens accepted at MCP, such as fetching a bearer again. */
 	public static final AString ADMIN_TOKEN_MCP = Strings.intern("admin/token/mcp");
+	/** Call a callable without passing its gate ({@code <owner>/x/callable/<name>}). */
+	public static final AString CALLABLE_CALL   = Strings.intern("callable/call");
+	/** Create, change or delete a callable ({@code <did>/x/callable/<name>}). */
+	public static final AString CALLABLE_MANAGE = Strings.intern("callable/manage");
 	public static final AString HITL_REQUEST  = Strings.intern("hitl/request");
 	public static final AString AGENT_CREATE  = Strings.intern("agent/create");
 	public static final AString AGENT_REQUEST = Strings.intern("agent/request");
@@ -108,6 +115,10 @@ public final class Abilities {
 	/** Online garbage collection of the venue's Etch store (covia#452) — guarded
 	 *  on {@code <venue DID>/store}. */
 	public static final AString ADMIN_VENUE_GC = Strings.intern("admin/venue/gc");
+	/** Run code in the venue process: the parent of each runtime's leaf, such as
+	 *  {@code admin/execute/python}, guarded on the venue resource that names the
+	 *  code. */
+	public static final AString ADMIN_EXECUTE = Strings.intern("admin/execute");
 	/** See the venue's P2P node and the peers it knows (covia#587) — guarded
 	 *  on {@code <venue DID>/p2p}. */
 	public static final AString P2P_READ = Strings.intern("p2p/read");

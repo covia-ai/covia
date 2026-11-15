@@ -28,6 +28,9 @@ import covia.exception.JobFailedException;
 import covia.exception.NotFoundException;
 import covia.exception.NotSupportedException;
 import covia.exception.UnavailableException;
+import covia.adapter.token.AccessToken;
+import covia.adapter.token.TokenAccessPoint;
+import covia.adapter.token.TokenAdapter;
 import covia.api.Abilities;
 import covia.lattice.CoviaPath;
 import covia.venue.Engine;
@@ -37,7 +40,7 @@ import io.modelcontextprotocol.spec.McpSchema.CallToolRequest;
 import io.modelcontextprotocol.spec.McpSchema.CallToolResult;
 import io.modelcontextprotocol.spec.McpSchema.Tool;
 
-public class MCPAdapter extends AAdapter {
+public class MCPAdapter extends AAdapter implements TokenAccessPoint {
 
 	public static final Logger log=LoggerFactory.getLogger(MCPAdapter.class);
 
@@ -195,7 +198,7 @@ public class MCPAdapter extends AAdapter {
 					"Unsupported tool function: " + function);
 			}, VIRTUAL_EXECUTOR);
 		} else if (feature.equals("token")) {
-			// Scoped bearer tokens for the venue's own /mcp endpoint (MCP_TOKENS.md).
+			// Access tokens accepted at the venue's own /mcp endpoint alone (ACCESS_TOKENS.md).
 			if (subParts.length < 2) {
 				throw new InvalidDefinitionException("MCP token operation requires function (create/update/delete/list/get)");
 			}
@@ -1070,78 +1073,23 @@ public class MCPAdapter extends AAdapter {
 		}
 	}
 
-	// ========== MCP tokens (MCP_TOKENS.md) ==========
+	// ========== MCP tokens: the MCP access point (ACCESS_TOKENS.md) ==========
 
-	public static final String TOKEN_NAME_INVALID = "name is required and must match [a-z0-9-]{1,64}";
-	public static final String TOKEN_NOT_FOUND = "No MCP token named %s";
-	public static final String TOKEN_EXISTS = "An MCP token named %s already exists: update or delete it";
 	public static final String TOOLS_INVALID = "tools must be an array of operation references, or of objects {operation, name?, description?}";
 	public static final String TOOL_NOT_HELD = "tools[%d] names no operation this venue holds: %s";
 	public static final String TOOL_NAME_INVALID = "tools[%d] would be named %s, which is not an MCP tool name ([A-Za-z0-9_.-]{1,128}): give it a name";
 	public static final String TOOL_NAMES_CLASH = "Two tools would both be named %s: give one of them a name";
-	public static final String EXPIRES_INVALID = "expires must be a time still to come, in milliseconds since the epoch";
-	public static final String RAW_NOT_KEPT = "This venue keeps only the hashes of MCP tokens, not the tokens (adapters.mcp.keepRawTokens)";
-	public static final String RAW_NOT_HELD = "MCP token %s was created or last rotated while the venue kept no tokens: rotate it";
-	public static final String TOKEN_SOURCE_NOT_HELD = "MCP token %s can only be changed or read with the authority it was created with";
-	public static final String ISSUER_MAY_NOT_CREATE = "%s may not create MCP tokens";
-	public static final String KEEP_RAW_NOT_BOOLEAN = "adapters.mcp.keepRawTokens must be a boolean";
+	public static final String TOKENS_UNAVAILABLE = "MCP tokens are unavailable: the token adapter is not running";
 
-	/** Adapter config: whether the venue keeps each token's bearer beside its hash. */
-	static final AString KEEP_RAW_TOKENS = Strings.intern("keepRawTokens");
+	/** This access point's name, the key of what an access token keeps for the venue's MCP endpoint. */
+	public static final AString ACCESS_POINT = Strings.intern("mcp");
 
-	private static final java.util.regex.Pattern TOKEN_NAME = java.util.regex.Pattern.compile("[a-z0-9-]{1,64}");
 	private static final java.util.regex.Pattern MCP_TOOL_NAME = java.util.regex.Pattern.compile("[A-Za-z0-9_.-]{1,128}");
 
-	/** The venue's MCP tokens. */
-	public McpTokens tokens() {
-		return new McpTokens(adapterState().cursor());
-	}
-
+	/** A token's {@code access.mcp} entry: the tools it offers, checked as {@link #requireTools} checks them. */
 	@Override
-	public boolean configure(AMap<AString, ACell> config, boolean strict) {
-		ACell keep = (config == null) ? null : config.get(KEEP_RAW_TOKENS);
-		if (keep != null && !(keep instanceof convex.core.data.prim.CVMBool)) throw new ConfigurationException(KEEP_RAW_NOT_BOOLEAN);
-		// Reconfigured to stop keeping tokens: the kept ones go now (at boot, start does it)
-		if (engine != null && !convex.core.data.prim.CVMBool.TRUE.equals(keep)) tokens().dropKept();
-		return true;
-	}
-
-	@Override
-	public void start() {
-		if (!keepRawTokens()) tokens().dropKept();
-	}
-
-	/** Whether the venue keeps each token's bearer beside its hash. */
-	boolean keepRawTokens() {
-		return convex.core.data.prim.CVMBool.TRUE.equals(engine.adapterConfig(getName()).get(KEEP_RAW_TOKENS));
-	}
-
-	@Override
-	public void deleteUserState(AString did, covia.venue.AdapterState state) {
-		new McpTokens(state.cursor()).deleteOwner(did);
-	}
-
-	@Override
-	public void deleteAgentState(AString agentDID, covia.venue.AdapterState state) {
-		new McpTokens(state.cursor()).deleteIssuer(covia.grid.Principals.userOf(agentDID), agentDID);
-	}
-
-	/** The capability resource a token is: {@code x/mcp/tokens/<name>} in its namespace. */
-	static AString tokenResource(AString name) {
-		return Strings.create("x/mcp/tokens/" + name);
-	}
-
-	private static AString requireTokenName(ACell input) {
-		AString name = RT.ensureString(RT.getIn(input, Fields.NAME));
-		if (name == null || !TOKEN_NAME.matcher(name.toString()).matches()) throw new InvalidInputException(TOKEN_NAME_INVALID);
-		return name;
-	}
-
-	/** The namespace a token request acts in, which its tokens belong to. */
-	private static AString tokenOwner(RequestContext ctx) {
-		AString owner = ctx.getUserDID();
-		if (owner == null) throw new covia.exception.AuthException("Authentication required");
-		return owner;
+	public AMap<AString, ACell> tokenEntry(RequestContext ctx, ACell requested) {
+		return McpAccess.entry(requireTools(ctx, RT.getIn(requested, Fields.TOOLS)));
 	}
 
 	/**
@@ -1149,8 +1097,8 @@ public class MCPAdapter extends AAdapter {
 	 * a local operation {@code ctx} may read, under an MCP tool name, no two
 	 * alike (ToolPalette's naming).
 	 */
-	private AVector<ACell> requireTools(RequestContext ctx, ACell input) {
-		AVector<ACell> tools = RT.ensureVector(RT.getIn(input, Fields.TOOLS));
+	private AVector<ACell> requireTools(RequestContext ctx, ACell requested) {
+		AVector<ACell> tools = RT.ensureVector(requested);
 		if (tools == null) throw new InvalidInputException(TOOLS_INVALID);
 		java.util.Set<String> names = new java.util.HashSet<>();
 		for (long i = 0; i < tools.count(); i++) {
@@ -1165,154 +1113,72 @@ public class MCPAdapter extends AAdapter {
 		return tools;
 	}
 
-	/** The expiry the input asks for, or null for never; it must be still to come. */
-	private Long expiresFrom(ACell input) {
-		ACell raw = RT.getIn(input, Fields.EXPIRES);
-		if (raw == null) return null;
-		if (!(raw instanceof convex.core.data.prim.CVMLong at) || at.longValue() <= engine.currentTimestamp().longValue()) {
-			throw new InvalidInputException(EXPIRES_INVALID);
-		}
-		return at.longValue();
+	/** The token adapter, which keeps every access token; MCP tokens are those accepted at MCP alone. */
+	private TokenAdapter tokenAdapter() {
+		if (engine.getAdapter(TokenAdapter.NAME) instanceof TokenAdapter tokens) return tokens;
+		throw new UnavailableException(TOKENS_UNAVAILABLE);
 	}
 
-	/** Caps as a token shows them: {@code "unrestricted"} for none stored. */
-	private static ACell shownCaps(AVector<ACell> caps) {
-		return (caps == null) ? covia.lattice.Caps.UNRESTRICTED : caps;
+	/** The access an MCP token asks for: the MCP endpoint alone, offering {@code tools}. */
+	private static AMap<AString, ACell> mcpAccess(ACell tools) {
+		return Maps.of(ACCESS_POINT, Maps.of(Fields.TOOLS, tools));
 	}
 
-	/** What a token's operations return about it; {@code bearer} only when it is handed out. */
-	private static AMap<AString, ACell> tokenResult(McpToken token, String bearer) {
-		AMap<AString, ACell> result = Maps.of(
+	/** Whether {@code token} is an MCP token: accepted at MCP alone. */
+	private static boolean isMcpToken(AccessToken token) {
+		return token.accessPoints().equals(java.util.Set.of(ACCESS_POINT));
+	}
+
+	/** What the MCP token operations show of a token, never its bearer. */
+	private static AMap<AString, ACell> mcpSummary(AccessToken token) {
+		McpAccess access = token.access(ACCESS_POINT, McpAccess::new);
+		AMap<AString, ACell> shown = Maps.of(
 			Fields.NAME, token.name(),
 			Fields.ISSUER, token.issuer(),
-			Fields.TOOLS, token.tools(),
-			Fields.CAPS, shownCaps(token.caps().scope()),
+			Fields.TOOLS, (access == null) ? Vectors.empty() : access.tools(),
+			Fields.CAPS, TokenAdapter.shownCaps(token),
 			Fields.CREATED, token.record().get(Fields.CREATED));
-		if (token.expires() != null) result = result.assoc(Fields.EXPIRES, convex.core.data.prim.CVMLong.create(token.expires()));
-		return (bearer == null) ? result : result.assoc(Fields.TOKEN, Strings.create(bearer));
+		Long expires = token.expires();
+		return (expires == null) ? shown : shown.assoc(Fields.EXPIRES, convex.core.data.prim.CVMLong.create(expires));
 	}
 
-	/** Refuses {@code ctx} unless it holds the authority {@code token} was created with. */
-	private void requireTokenSource(RequestContext ctx, McpToken token) {
-		if (!engine.holdsAuthorityOf(ctx, new covia.venue.Engine.Source(token.issuer(), token.source()))) {
-			throw new covia.exception.AuthException(TOKEN_SOURCE_NOT_HELD.formatted(token.name()));
-		}
+	private static AMap<AString, ACell> mcpResult(TokenAdapter.Issued issued) {
+		AMap<AString, ACell> shown = mcpSummary(issued.token());
+		return (issued.bearer() == null) ? shown : shown.assoc(Fields.TOKEN, Strings.create(issued.bearer()));
 	}
 
-	/** The fields a new bearer sets on a record: its hash, and itself sealed while the venue keeps tokens. */
-	private AMap<AString, ACell> withBearer(AMap<AString, ACell> record, String bearer) {
-		record = record.assoc(McpTokens.HASH, McpTokens.hashOf(bearer));
-		if (!keepRawTokens()) return record.dissoc(McpTokens.SEALED);
-		return record.assoc(McpTokens.SEALED, covia.venue.SecretStore.seal(Strings.create(bearer), sealingKeys()));
-	}
-
-	/** The keys kept bearers are sealed under: the venue's secret store keys, as for other credentials an adapter holds. */
-	private covia.venue.SecretStore.Keys sealingKeys() {
-		return covia.venue.SecretStore.keys(engine.getKeyPair());
-	}
-
-	/**
-	 * Creates a token in the caller's namespace, issued by the source of
-	 * authority the request acts with ({@link covia.venue.Engine#actingSource}),
-	 * and returns its bearer, this once.
-	 */
+	/** Creates an MCP token offering the input's tools, with {@code mcp/token} on it. */
 	ACell handleCreateToken(RequestContext ctx, ACell input) {
-		AString name = requireTokenName(input);
-		AString owner = tokenOwner(ctx);
-		covia.venue.Engine.Source issuer = covia.venue.Engine.actingSource(ctx);
-		AString principal = issuer.principal();
-		if (principal == null || engine.isPublicPrincipal(principal) || engine.getDIDString().equals(principal)) {
-			throw new covia.exception.AuthException(ISSUER_MAY_NOT_CREATE.formatted(principal));
-		}
-		engine.requireAuthority(ctx, tokenResource(name), Abilities.MCP_TOKEN);
-		// A delegate acting for another user holds none of that user's own authority to hand on.
-		if (!engine.holdsAuthorityOf(ctx, issuer)) throw new covia.exception.AuthException(ISSUER_MAY_NOT_CREATE.formatted(principal));
-		AVector<ACell> tools = requireTools(ctx, input);
-		ACell capsInput = RT.getIn(input, Fields.CAPS);
-		AVector<ACell> caps = (capsInput == null) ? Vectors.empty() : covia.lattice.Caps.parse(capsInput);
-		Long expires = expiresFrom(input);
-
-		String bearer = McpTokens.newBearer();
-		AMap<AString, ACell> record = Maps.of(
-			Fields.ID, McpTokens.newId(),
-			Fields.ISSUER, principal,
-			Fields.TOOLS, tools,
-			Fields.CREATED, engine.currentTimestamp());
-		if (issuer.token() != null) record = record.assoc(Fields.SOURCE, issuer.token());
-		if (caps != null) record = record.assoc(Fields.CAPS, caps);
-		if (expires != null) record = record.assoc(Fields.EXPIRES, convex.core.data.prim.CVMLong.create(expires));
-		record = withBearer(record, bearer);
-		if (!tokens().create(owner, name, record)) throw new covia.exception.ConflictException(TOKEN_EXISTS.formatted(name));
-		return tokenResult(tokens().token(owner, name), bearer);
+		TokenAdapter tokens = tokenAdapter();
+		return mcpResult(tokens.create(ctx, TokenAdapter.requireName(input), mcpAccess(RT.getIn(input, Fields.TOOLS)),
+			RT.getIn(input, Fields.CAPS), RT.getIn(input, Fields.EXPIRES), tokens.onlyAt(ACCESS_POINT, Abilities.MCP_TOKEN)));
 	}
 
-	/**
-	 * Changes a token's tools, caps or expiry, or gives it a new bearer
-	 * ({@code rotate}). Each needs the authority the token was created with,
-	 * so no request through a token widens it.
-	 */
+	/** Changes an MCP token's tools, caps or expiry, or rotates it, with {@code mcp/token} on it. */
 	ACell handleUpdateToken(RequestContext ctx, ACell input) {
-		AString name = requireTokenName(input);
-		AString owner = tokenOwner(ctx);
-		engine.requireAuthority(ctx, tokenResource(name), Abilities.MCP_TOKEN);
-		McpToken token = tokens().token(owner, name);
-		if (token.record() == null) throw new NotFoundException(TOKEN_NOT_FOUND.formatted(name), name.toString());
-		requireTokenSource(ctx, token);
-		AVector<ACell> tools = (RT.getIn(input, Fields.TOOLS) == null) ? null : requireTools(ctx, input);
-		ACell capsInput = RT.getIn(input, Fields.CAPS);
-		AVector<ACell> caps = (capsInput == null) ? null : covia.lattice.Caps.parse(capsInput);
-		Long expires = expiresFrom(input);
-		boolean rotate = convex.core.data.prim.CVMBool.TRUE.equals(RT.getIn(input, Fields.ROTATE));
-		String bearer = rotate ? McpTokens.newBearer() : null;
-		AString id = token.id();
-
-		AMap<AString, ACell> changed = tokens().update(owner, name, record -> {
-			// Changed only if it is still the token the checks above were made on
-			if (!java.util.Objects.equals(id, record.get(Fields.ID))) return record;
-			AMap<AString, ACell> next = record;
-			if (tools != null) next = next.assoc(Fields.TOOLS, tools);
-			if (capsInput != null) next = (caps == null) ? next.dissoc(Fields.CAPS) : next.assoc(Fields.CAPS, caps);
-			if (expires != null) next = next.assoc(Fields.EXPIRES, convex.core.data.prim.CVMLong.create(expires));
-			return (bearer == null) ? next : withBearer(next, bearer);
-		});
-		if (changed == null || !java.util.Objects.equals(id, changed.get(Fields.ID))) {
-			throw new NotFoundException(TOKEN_NOT_FOUND.formatted(name), name.toString());
-		}
-		return tokenResult(tokens().token(owner, name), bearer);
+		TokenAdapter tokens = tokenAdapter();
+		ACell tools = RT.getIn(input, Fields.TOOLS);
+		return mcpResult(tokens.update(ctx, TokenAdapter.requireName(input), (tools == null) ? null : mcpAccess(tools),
+			RT.getIn(input, Fields.CAPS), RT.getIn(input, Fields.EXPIRES),
+			convex.core.data.prim.CVMBool.TRUE.equals(RT.getIn(input, Fields.ROTATE)), tokens.onlyAt(ACCESS_POINT, Abilities.MCP_TOKEN)));
 	}
 
-	/** Deletes a token: its bearer stops working, and what it narrowed holds nothing. */
+	/** Deletes an MCP token, with {@code mcp/token} on it. */
 	ACell handleDeleteToken(RequestContext ctx, ACell input) {
-		AString name = requireTokenName(input);
-		AString owner = tokenOwner(ctx);
-		engine.requireAuthority(ctx, tokenResource(name), Abilities.MCP_TOKEN);
-		if (tokens().delete(owner, name) == null) throw new NotFoundException(TOKEN_NOT_FOUND.formatted(name), name.toString());
-		return Maps.of(Fields.NAME, name, Fields.DELETED, convex.core.data.prim.CVMBool.TRUE);
+		TokenAdapter tokens = tokenAdapter();
+		return TokenAdapter.deleted(tokens.delete(ctx, TokenAdapter.requireName(input), tokens.onlyAt(ACCESS_POINT, Abilities.MCP_TOKEN)));
 	}
 
-	/** Lists the tokens in the caller's namespace, never their bearers. */
+	/** Lists the MCP tokens in the caller's namespace, never their bearers. */
 	ACell handleListTokens(RequestContext ctx) {
-		AString owner = tokenOwner(ctx);
-		engine.requireAuthority(ctx, Strings.create("x/mcp/tokens"), convex.auth.ucan.Capability.CRUD_READ);
-		AVector<ACell> listed = Vectors.empty();
-		for (var entry : tokens().list(owner).entrySet()) {
-			listed = listed.conj(tokenResult(tokens().token(owner, entry.getKey()), null));
-		}
-		return Maps.of(Strings.intern("tokens"), listed, Fields.TOTAL, AInteger.create(listed.count()));
+		return TokenAdapter.listed(tokenAdapter().list(ctx, MCPAdapter::isMcpToken), MCPAdapter::mcpSummary);
 	}
 
-	/** A token's bearer again, where the venue keeps it, to whoever may administer it. */
+	/** An MCP token's bearer again, where the venue keeps it, with {@code admin/token/mcp} on it. */
 	ACell handleGetToken(RequestContext ctx, ACell input) {
-		AString name = requireTokenName(input);
-		AString owner = tokenOwner(ctx);
-		engine.requireAuthority(ctx, tokenResource(name), Abilities.ADMIN_TOKEN_MCP);
-		if (!keepRawTokens()) throw new NotSupportedException(RAW_NOT_KEPT);
-		McpToken token = tokens().token(owner, name);
-		if (token.record() == null) throw new NotFoundException(TOKEN_NOT_FOUND.formatted(name), name.toString());
-		requireTokenSource(ctx, token);
-		ACell sealed = token.sealedBearer();
-		if (sealed == null) throw new NotSupportedException(RAW_NOT_HELD.formatted(name));
-		return Maps.of(Fields.NAME, name, Fields.TOKEN, covia.venue.SecretStore.unseal(sealed, sealingKeys()));
+		TokenAdapter tokens = tokenAdapter();
+		AString name = TokenAdapter.requireName(input);
+		return Maps.of(Fields.NAME, name, Fields.TOKEN, tokens.bearer(ctx, name, tokens.onlyAt(ACCESS_POINT, Abilities.ADMIN_TOKEN_MCP)));
 	}
 
 	/**

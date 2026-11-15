@@ -25,7 +25,7 @@ public class AccessControl {
 
 	/**
 	 * Job abilities are independent of raw lattice CRUD. Ownership supplies
-	 * ordinary standing, but never bypasses a scope or MCP token. Attribution
+	 * ordinary standing, but never bypasses a scope or access token. Attribution
 	 * as the creator is not a grant. Other principals need a valid delegation.
 	 */
 	public boolean canAccessJob(RequestContext ctx, AMap<AString, ACell> jobData, AString ability) {
@@ -34,7 +34,7 @@ public class AccessControl {
 		if (owner == null || ctx.getUserDID() == null) return false;
 		// An incomplete record has no delegable resource; only its unscoped owner.
 		if (!(jobData.get(Fields.ID) instanceof Blob id))
-			return owner.equals(ctx.getUserDID()) && isOwnerOutright(ctx) && ctx.getTokens().isEmpty();
+			return owner.equals(ctx.getUserDID()) && isOwnerOutright(ctx) && !ctx.isNarrowed();
 		AString resource = JobManager.resource(owner, id);
 		AString destination = Strings.create(engine.config().getBaseUrl());
 		RequestContext authority = ctx.authorityContext();
@@ -79,12 +79,13 @@ public class AccessControl {
 	 * Whether {@code ctx}'s caller made {@code record} for the owner whose
 	 * namespace it acts in: a sub-principal (an agent or a delegate) named as the
 	 * record's caller. The owner itself under a scope is not such a caller, so its
-	 * scope alone decides, and nor is a request an MCP token narrows, whose
-	 * caller is the token's issuer: the token's caps decide.
+	 * scope alone decides, and nor is a request an access token narrows, whose
+	 * caller is the token's issuer: the token's caps decide. Nor is a callable's
+	 * call, whose caller is only its invoker.
 	 */
 	private static boolean madeItFor(RequestContext ctx, AMap<AString, ACell> record) {
 		AString caller = ctx.getCallerDID();
-		return ctx.getTokens().isEmpty() && !caller.equals(ctx.getUserDID()) && caller.equals(Attribution.caller(record));
+		return !ctx.isNarrowed() && !caller.equals(ctx.getUserDID()) && caller.equals(Attribution.caller(record));
 	}
 
 }

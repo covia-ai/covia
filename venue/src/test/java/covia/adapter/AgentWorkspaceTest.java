@@ -70,9 +70,9 @@ public class AgentWorkspaceTest {
 			Agent wsAgent = engine.getVenueState().users().user(ALICE_DID)
 				.agent("workspace-agent");
 			Blob wsSid = Blob.fromHex("55550001555500015555000155550001");
-			wsAgent.ensureSession(wsSid, ALICE_DID);
+			wsAgent.sessions().create(wsSid, ALICE_DID, null);
 			AString wsSidHex = Strings.create(wsSid.toHexString());
-			wsAgent.appendSessionPending(wsSid, Maps.of(
+			wsAgent.session(wsSid).appendPending(Maps.of(
 				Strings.intern("content"), Strings.create("Learn about lattice technology")));
 
 			Job run1 = engine.jobs().invokeOperation("v/ops/agent/trigger",
@@ -99,7 +99,7 @@ public class AgentWorkspaceTest {
 			assertEquals(1, log1.count());
 
 			// Run 2: same agent, workspace accumulates
-			wsAgent.appendSessionPending(wsSid, Maps.of(
+			wsAgent.session(wsSid).appendPending(Maps.of(
 				Strings.intern("content"), Strings.create("Continue learning")));
 
 			Job run2 = engine.jobs().invokeOperation("v/ops/agent/trigger",

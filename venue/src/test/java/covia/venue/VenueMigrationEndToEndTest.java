@@ -133,7 +133,8 @@ class VenueMigrationEndToEndTest {
 				Fields.LOADS, Maps.of("w/frame-notes", Maps.empty()));
 			Agent agent = user.ensureAgent(AGENT,
 				Maps.of(Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/test/ops/llm"), null);
-			AMap<AString, ACell> session = agent.ensureSession(SESSION, USER)
+			agent.sessions().create(SESSION, USER, null);
+			AMap<AString, ACell> session = agent.session(SESSION).getRecord()
 				.assoc(Fields.FRAMES, Vectors.of(root)).assoc(Fields.LOADS, Maps.of("w/notes", Maps.empty()));
 			agent.putRecord(agent.getRecord().assoc(Agent.KEY_SESSIONS, agent.getSessions().assoc(SESSION, session)));
 
@@ -282,7 +283,7 @@ class VenueMigrationEndToEndTest {
 			// history and folds the session loads into the root frame.
 			AMap<AString, ACell> before = rootFrame(user);
 			assertTrue(before.containsKey(Agent.KEY_CONVERSATION));
-			assertNotNull(user.agent(AGENT).getSession(SESSION).get(Fields.LOADS));
+			assertNotNull(user.agent(AGENT).session(SESSION).getRecord().get(Fields.LOADS));
 			ACell reply = engine.jobs().invokeOperation("v/ops/agent/chat", Maps.of(Fields.AGENT_ID, AGENT,
 				Fields.SESSION_ID, SESSION.toHexString(), Fields.MESSAGE, "after migration"), ctx).awaitResult(20_000);
 			assertTrue(RT.getIn(reply, "response").toString().contains("after migration"));
@@ -291,7 +292,7 @@ class VenueMigrationEndToEndTest {
 			assertFalse(frame.containsKey(Agent.KEY_CONVERSATION));
 			String history = GoalTreeContext.archivedConversation(frame).toString();
 			assertTrue(history.contains("old question") && history.contains("recent answer") && history.contains("after migration"), history);
-			assertNull(user.agent(AGENT).getSession(SESSION).get(Fields.LOADS));
+			assertNull(user.agent(AGENT).session(SESSION).getRecord().get(Fields.LOADS));
 			assertEquals(Maps.of("w/frame-notes", Maps.empty(), "w/notes", Maps.empty()), frame.get(Fields.LOADS));
 
 			// Migrating again changes nothing migration owns.
@@ -308,6 +309,6 @@ class VenueMigrationEndToEndTest {
 	}
 
 	private static AMap<AString, ACell> rootFrame(User user) {
-		return RT.ensureMap(RT.getIn(user.agent(AGENT).getSession(SESSION), Agent.KEY_FRAMES, CVMLong.ZERO));
+		return RT.ensureMap(RT.getIn(user.agent(AGENT).session(SESSION).getRecord(), Agent.KEY_FRAMES, CVMLong.ZERO));
 	}
 }

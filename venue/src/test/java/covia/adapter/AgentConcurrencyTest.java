@@ -133,7 +133,7 @@ public class AgentConcurrencyTest {
 		assertEquals(1, (a == Agent.SessionIntake.LOADS_ON_EXISTING ? 1 : 0)
 			+ (b == Agent.SessionIntake.LOADS_ON_EXISTING ? 1 : 0));
 		assertEquals(1, agent.getTasks().count());
-		assertNotNull(agent.getSession(sid));
+		assertNotNull(agent.session(sid).getRecord());
 	}
 
 	@Test
@@ -145,26 +145,26 @@ public class AgentConcurrencyTest {
 
 		assertEquals(Agent.SessionIntake.MISSING,
 			agent.appendSessionPending(sid, ALICE_DID, null, firstEnvelope, false));
-		assertNull(agent.getSession(sid),
+		assertNull(agent.session(sid).getRecord(),
 			"a supplied/strict session path must not mint a missing session");
 
 		AMap<AString, ACell> loads = Maps.of("seed", Strings.create("initial"));
 		assertEquals(Agent.SessionIntake.APPLIED,
 			agent.appendSessionPending(sid, ALICE_DID, loads, firstEnvelope, true));
-		assertEquals(Strings.create("initial"), RT.getIn(agent.getSession(sid),
+		assertEquals(Strings.create("initial"), RT.getIn(agent.session(sid).getRecord(),
 			Agent.KEY_FRAMES, CVMLong.ZERO, Fields.LOADS, "seed"));
-		assertEquals(1, agent.getSessionPending(sid).count());
+		assertEquals(1, agent.session(sid).pending().count());
 
 		assertEquals(Agent.SessionIntake.LOADS_ON_EXISTING,
 			agent.appendSessionPending(sid, ALICE_DID, Maps.empty(),
 				Maps.of("content", "rejected"), true));
-		assertEquals(1, agent.getSessionPending(sid).count(),
+		assertEquals(1, agent.session(sid).pending().count(),
 			"loads against an existing session reject the whole append");
 
 		assertEquals(Agent.SessionIntake.APPLIED,
 			agent.appendSessionPending(sid, ALICE_DID, null,
 				Maps.of("content", "second"), false));
-		assertEquals(2, agent.getSessionPending(sid).count());
+		assertEquals(2, agent.session(sid).pending().count());
 	}
 
 	@Test
@@ -198,17 +198,17 @@ public class AgentConcurrencyTest {
 
 		assertFalse(adapter.deliverSessionMessage(ALICE_DID, agent.getAgentId(), missing,
 			ALICE_DID, Strings.create("hitl-missing"), Strings.create("answer")));
-		assertNull(agent.getSession(missing),
+		assertNull(agent.session(missing).getRecord(),
 			"venue-mediated delivery must not mint the session it is meant to resume");
 
 		Blob existing = Blob.fromHex("99990004999900049999000499990004");
-		agent.ensureSession(existing, ALICE_DID);
+		agent.sessions().create(existing, ALICE_DID, null);
 		agent.suspend(Strings.create("keep the run loop parked for inspection"));
 		assertTrue(adapter.deliverSessionMessage(ALICE_DID, agent.getAgentId(), existing,
 			ALICE_DID, Strings.create("hitl-present"), Strings.create("answer")));
-		assertEquals(1, agent.getSessionPending(existing).count());
+		assertEquals(1, agent.session(existing).pending().count());
 		assertEquals(Strings.create("hitl-present"),
-			RT.getIn(agent.getSessionPending(existing), CVMLong.ZERO, Fields.JOB_ID));
+			RT.getIn(agent.session(existing).pending(), CVMLong.ZERO, Fields.JOB_ID));
 	}
 
 	@Test
@@ -306,8 +306,8 @@ public class AgentConcurrencyTest {
 		Agent agent = user.ensureAgent("merge-msg", Maps.empty(), null);
 
 		Blob sid = Blob.fromHex("66660001666600016666000166660001");
-		agent.ensureSession(sid, ALICE_DID);
-		agent.appendSessionPending(sid, Maps.of("content", "hello"));
+		agent.sessions().create(sid, ALICE_DID, null);
+		agent.session(sid).appendPending(Maps.of("content", "hello"));
 		Blob taskId = Blob.fromHex("0001");
 		agent.tasks().add(taskId, Strings.create("new work"));
 
@@ -317,7 +317,7 @@ public class AgentConcurrencyTest {
 
 		assertEquals(Agent.SLEEPING,
 			RT.ensureString(merged.get(Agent.KEY_STATUS)));
-		assertEquals(1, agent.getSessionPending(sid).count(),
+		assertEquals(1, agent.session(sid).pending().count(),
 			"pending work remains available to the live loop");
 		assertNotNull(agent.getTasks().get(taskId),
 			"new task remains available to the live loop");
@@ -339,8 +339,8 @@ public class AgentConcurrencyTest {
 		User user = engine.getVenueState().users().user(ALICE_DID);
 		Agent concAgent = user.agent("conc-trig");
 		Blob concSid = Blob.fromHex("77770001777700017777000177770001");
-		concAgent.ensureSession(concSid, ALICE_DID);
-		concAgent.appendSessionPending(concSid, Maps.of(
+		concAgent.sessions().create(concSid, ALICE_DID, null);
+		concAgent.session(concSid).appendPending(Maps.of(
 			Fields.SESSION_ID, Strings.create(concSid.toHexString()),
 			Fields.MESSAGE, Maps.of("content", "hello")));
 
@@ -365,7 +365,7 @@ public class AgentConcurrencyTest {
 		Agent agent = user.agent("conc-trig");
 		assertEquals(Agent.SLEEPING, awaitFinished(agent));
 		assertEquals(Agent.SLEEPING, agent.getStatus());
-		assertFalse(agent.hasSessionPending(), "Session pending should be drained");
+		assertFalse(agent.sessions().hasPending(), "Session pending should be drained");
 		// At least 1 timeline entry (possibly 2 if both triggered separate loops)
 		assertTrue(agent.getTimeline().count() >= 1, "At least one run should have executed");
 	}
@@ -390,11 +390,11 @@ public class AgentConcurrencyTest {
 		User user = engine.getVenueState().users().user(ALICE_DID);
 		Agent agent = user.agent("rapid");
 		Blob rapidSid = Blob.fromHex("88880001888800018888000188880001");
-		agent.ensureSession(rapidSid, ALICE_DID);
+		agent.sessions().create(rapidSid, ALICE_DID, null);
 		AString rapidSidHex = Strings.create(rapidSid.toHexString());
 
 		for (int i = 0; i < 50; i++) {
-			agent.appendSessionPending(rapidSid, Maps.of(
+			agent.session(rapidSid).appendPending(Maps.of(
 				Fields.SESSION_ID, rapidSidHex,
 				Fields.MESSAGE, Maps.of("content", "msg-" + i)));
 
@@ -419,7 +419,7 @@ public class AgentConcurrencyTest {
 
 		// Eventually quiesce — all messages processed, agent SLEEPING
 		assertEquals(Agent.SLEEPING, awaitFinished(agent));
-		assertFalse(agent.hasSessionPending(), "All messages should be processed");
+		assertFalse(agent.sessions().hasPending(), "All messages should be processed");
 	}
 
 	@Test
@@ -438,7 +438,7 @@ public class AgentConcurrencyTest {
 		User user = engine.getVenueState().users().user(ALICE_DID);
 		Agent agent = user.agent("barrage");
 		Blob barrageSid = Blob.fromHex("99990001999900019999000199990001");
-		agent.ensureSession(barrageSid, ALICE_DID);
+		agent.sessions().create(barrageSid, ALICE_DID, null);
 		AString barrageSidHex = Strings.create(barrageSid.toHexString());
 
 		final int N = 20;
@@ -447,7 +447,7 @@ public class AgentConcurrencyTest {
 
 		for (int i = 0; i < N; i++) {
 			final int idx = i;
-			agent.appendSessionPending(barrageSid, Maps.of(
+			agent.session(barrageSid).appendPending(Maps.of(
 				Fields.SESSION_ID, barrageSidHex,
 				Fields.MESSAGE, Maps.of("content", "barrage-" + idx)));
 			final ACell wait = (idx % 2 == 0) ? CVMBool.FALSE : CVMBool.TRUE;
@@ -466,7 +466,7 @@ public class AgentConcurrencyTest {
 		}
 
 		assertEquals(Agent.SLEEPING, awaitFinished(agent));
-		assertFalse(agent.hasSessionPending(), "All messages should be processed");
+		assertFalse(agent.sessions().hasPending(), "All messages should be processed");
 	}
 
 	@Test
@@ -484,8 +484,8 @@ public class AgentConcurrencyTest {
 		User user = engine.getVenueState().users().user(ALICE_DID);
 		Agent overlapAgent = user.agent("overlap");
 		Blob overlapSid = Blob.fromHex("aabb0001aabb0001aabb0001aabb0001");
-		overlapAgent.ensureSession(overlapSid, ALICE_DID);
-		overlapAgent.appendSessionPending(overlapSid, Maps.of(
+		overlapAgent.sessions().create(overlapSid, ALICE_DID, null);
+		overlapAgent.session(overlapSid).appendPending(Maps.of(
 			Fields.SESSION_ID, Strings.create(overlapSid.toHexString()),
 			Fields.MESSAGE, Maps.of("content", "hello")));
 
@@ -543,7 +543,7 @@ public class AgentConcurrencyTest {
 		Agent agent = user.agent("msg-trig");
 		assertEquals(Agent.SLEEPING, awaitFinished(agent));
 		assertEquals(Agent.SLEEPING, agent.getStatus());
-		assertFalse(agent.hasSessionPending(), "Session pending should be drained");
+		assertFalse(agent.sessions().hasPending(), "Session pending should be drained");
 	}
 
 	// ========== Integration: syncState during agent operations ==========
@@ -584,8 +584,8 @@ public class AgentConcurrencyTest {
 		User user = engine.getVenueState().users().user(ALICE_DID);
 		Agent syncRunAgent = user.agent("sync-run");
 		Blob syncSid = Blob.fromHex("bbcc0001bbcc0001bbcc0001bbcc0001");
-		syncRunAgent.ensureSession(syncSid, ALICE_DID);
-		syncRunAgent.appendSessionPending(syncSid, Maps.of(
+		syncRunAgent.sessions().create(syncSid, ALICE_DID, null);
+		syncRunAgent.session(syncSid).appendPending(Maps.of(
 			Fields.SESSION_ID, Strings.create(syncSid.toHexString()),
 			Fields.MESSAGE, Maps.of("content", "hello")));
 
@@ -605,7 +605,7 @@ public class AgentConcurrencyTest {
 
 		assertEquals(Agent.SLEEPING, agent.getStatus(),
 			"Agent should reach SLEEPING after run loop completes — syncState must not clobber");
-		assertFalse(agent.hasSessionPending(), "Session pending should be drained");
+		assertFalse(agent.sessions().hasPending(), "Session pending should be drained");
 		assertTrue(agent.getTimeline().count() >= 1, "Run loop should have executed");
 	}
 
@@ -665,19 +665,19 @@ public class AgentConcurrencyTest {
 		User user = engine.getVenueState().users().user(ALICE_DID);
 		Agent agent = user.agent("resume-wake");
 		Blob resumeSid = Blob.fromHex("ccdd0001ccdd0001ccdd0001ccdd0001");
-		agent.ensureSession(resumeSid, ALICE_DID);
+		agent.sessions().create(resumeSid, ALICE_DID, null);
 		AString resumeSidHex = Strings.create(resumeSid.toHexString());
-		agent.appendSessionPending(resumeSid, Maps.of(
+		agent.session(resumeSid).appendPending(Maps.of(
 			Fields.SESSION_ID, resumeSidHex,
 			Fields.MESSAGE, Maps.of("content", "pending-1")));
-		agent.appendSessionPending(resumeSid, Maps.of(
+		agent.session(resumeSid).appendPending(Maps.of(
 			Fields.SESSION_ID, resumeSidHex,
 			Fields.MESSAGE, Maps.of("content", "pending-2")));
 
 		// Suspend the agent
 		agent.suspend(Strings.create("maintenance"));
 		assertEquals(Agent.SUSPENDED, agent.getStatus());
-		assertTrue(agent.hasSessionPending(), "Messages should be pending");
+		assertTrue(agent.sessions().hasPending(), "Messages should be pending");
 
 		// Resume with autoWake=true
 		engine.jobs().invokeOperation("v/ops/agent/resume",
@@ -688,7 +688,7 @@ public class AgentConcurrencyTest {
 		// SLEEPING throughout the attempt).
 		assertEquals(Agent.SLEEPING, awaitFinished(agent),
 			"Agent should complete run loop after resume auto-wake");
-		assertFalse(agent.hasSessionPending(),
+		assertFalse(agent.sessions().hasPending(),
 			"Messages should be processed by auto-wake");
 	}
 }

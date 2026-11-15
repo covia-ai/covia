@@ -230,7 +230,7 @@ public class User extends ALatticeComponent<ACell> implements TransactionalCompo
 
 	/**
 	 * Creates an agent under {@code controller}, the principal whose authority
-	 * its harness runs under and the MCP token narrowing it (null for this user).
+	 * its harness runs under and the access token narrowing it (null for this user).
 	 *
 	 * @return the new agent, or null if the id already existed
 	 */
@@ -259,7 +259,7 @@ public class User extends ALatticeComponent<ACell> implements TransactionalCompo
 
 	/**
 	 * As above, under {@code controller}: the principal whose authority the
-	 * fork's harness runs under and the MCP token narrowing it, or null for
+	 * fork's harness runs under and the access token narrowing it, or null for
 	 * this user.
 	 */
 	public Agent forkAgent(AString agentId, AMap<AString, ACell> config,

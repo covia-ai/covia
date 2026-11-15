@@ -12,15 +12,20 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 - Job-specific `job/read`, `job/manage` and `job/message` grants replace CRUD permissions on Job APIs; lifecycle controls return acknowledgements.
 - Embedded simulations can discover the next queued scheduled timestamp across venues and advance directly to it (#683).
+- DLFS entries carry application metadata: `dlfs:setMetadata`, `file:setMetadata` and `vault:setMetadata` set or clear it (`crud/write`), and `dlfs:stat` and `file:stat` return it; a move keeps it, replacing a file's content in place keeps it, and deleting the entry removes it (#659).
 
 - Universal Job tools (`job:status`, `result`, `cancel`, `pause`, `resume`, `message`) manage local and remote work independently of its execution adapter; agent skills use them and existing Grid Job tools remain compatible.
 
-- MCP tokens: any user or agent can create a scoped bearer for the venue's `/mcp` (`mcp:create-token`, `update-token`, `delete-token`, `list-tokens`, `get-token`) that offers chosen operations as tools and acts with its issuer's authority within the token's caps; emptying its caps, deleting it or its expiry revokes it, and `adapters.mcp.keepRawTokens` keeps bearers for `admin/token/mcp` to read again.
+- Access tokens: any user or agent can create a scoped bearer that acts with its issuer's authority within the token's caps and is accepted only at the access points it names; the `token` adapter keeps them (`token:create`, `update`, `delete`, `list`, `get`, needing `admin/token/<access point>` on `x/token/<name>`), and `adapters.token.keepRawTokens` keeps bearers to read again; a user sees its tokens, never their bearers, at `x/token`.
+- An agent is told when a message or task came through one of its sender's access tokens, and which: the turn records the token's reference and the agent's `From` line names it.
+- MCP tokens: access tokens accepted at the venue's `/mcp` alone, offering chosen operations as tools, made and managed with `mcp/token` (`mcp:create-token`, `update-token`, `delete-token`, `list-tokens`, `get-token`); emptying its caps, deleting it or its expiry revokes one.
+- Callables: a user, agent or the venue publishes an operation for others to call, run with the publisher's authority within fixed caps in the publisher's namespace (`callable:create`, `update`, `delete`, `list`, `call`, needing `callable/manage`); callers hold `callable/call` or pass a gate operation the publisher chooses, such as `v/ops/callable/gates/anyone` or `gates/callers`; a user sees its callables at `x/callable`.
 - `adapters.convex.timeoutMillis` sets how long `convex:query` and `convex:transact` wait for the peer's result; the default is the Convex client's own, 20 seconds.
 - `venue:adapter/restart` stops an enabled adapter, offers it its configuration again and starts it; `venue:adapters` lists each adapter's `status` and a failed adapter's `reason`.
 
 ### Changed
 
+- Running Python is the operator's: each configured function, and creating or calling an instance, needs `admin/execute/python` on `<venue DID>/python/operations/<id>` or `<venue DID>/python/templates/<template>`, which the venue holds and can grant to a user.
 - An adapter that fails to start, at launch, enable or restart, including one that refuses a setting in its `adapters.<name>` block, no longer stops the venue: it stays enabled but failed and is treated as stopped, its operations refused as not running, until restarted.
 - A `venue:adapter/configure` change the adapter refuses with an error is reverted to its previous configuration.
 - A P2P node that cannot launch, such as on a port in use, is unavailable rather than a configuration error.

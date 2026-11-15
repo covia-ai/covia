@@ -47,9 +47,19 @@ import covia.venue.RequestContext;
  * callers may also create stateful instances from operator-approved templates
  * and invoke only their allowlisted functions. Caller-supplied source and host
  * paths are never accepted.
+ *
+ * <p>The code runs in the venue process with the venue's power, so running it
+ * is the operator's: {@link #ADMIN_EXECUTE_PYTHON} on the venue resource that
+ * names it, which the operator may grant (CONFIG.md, Python operations).</p>
  */
 public final class PythonAdapter extends AAdapter implements AutoCloseable {
 	private static final Logger log = LoggerFactory.getLogger(PythonAdapter.class);
+	/** Running the operator's Python code, below {@link covia.api.Abilities#ADMIN_EXECUTE}. */
+	public static final AString ADMIN_EXECUTE_PYTHON = Strings.intern("admin/execute/python");
+	/** The venue resource of a configured function, under the venue's DID; its id follows. */
+	public static final String OPERATION_RESOURCE = "python/operations/";
+	/** The venue resource of an instance template, under the venue's DID; its name follows. */
+	public static final String TEMPLATE_RESOURCE = "python/templates/";
 	private static final AString ENABLED = Strings.intern("enabled");
 	private static final AString LIBRARY = Strings.intern("library");
 	private static final AString OPERATIONS = Strings.intern("operations");
@@ -499,6 +509,7 @@ public final class PythonAdapter extends AAdapter implements AutoCloseable {
 			try {
 				if (closed) throw new UnavailableException("Python adapter is closed");
 				if (operation == null) return invokeInstance(id, ctx, input);
+				requireExecute(ctx, OPERATION_RESOURCE + id);
 				try {
 					return operation.script().call(operation.definition().function(), input);
 				} catch (PythonException e) {
@@ -514,10 +525,10 @@ public final class PythonAdapter extends AAdapter implements AutoCloseable {
 		AString owner = requireOwner(ctx);
 		AMap<AString, ACell> parameters = requireInputMap(input);
 		return switch (operation) {
-			case INSTANCE_CREATE -> createInstance(owner, ctx.getCallerDID(),
+			case INSTANCE_CREATE -> createInstance(ctx, owner,
 				requiredString(parameters, TEMPLATE, "template"));
 			case INSTANCE_LIST -> listInstances(owner);
-			case INSTANCE_CALL -> callInstance(owner,
+			case INSTANCE_CALL -> callInstance(ctx, owner,
 				requiredString(parameters, ID, "id"),
 				requiredString(parameters, FUNCTION, "function"),
 				arguments(parameters.get(ARGS)));
@@ -528,11 +539,13 @@ public final class PythonAdapter extends AAdapter implements AutoCloseable {
 		};
 	}
 
-	private ACell createInstance(AString owner, AString createdBy, String templateId) {
+	private ACell createInstance(RequestContext ctx, AString owner, String templateId) {
 		PreparedTemplate template = templates.get(templateId);
 		if (template == null) {
 			throw new NotFoundException("Unknown Python instance template: " + templateId, templateId);
 		}
+		requireExecute(ctx, TEMPLATE_RESOURCE + template.definition().id());
+		AString createdBy = ctx.getCallerDID();
 		synchronized (instances) {
 			long owned = instances.keySet().stream()
 				.filter(key -> key.owner().equals(owner)).count();
@@ -572,11 +585,22 @@ public final class PythonAdapter extends AAdapter implements AutoCloseable {
 		return Maps.of(INSTANCES, Vectors.create(result));
 	}
 
-	private ACell callInstance(AString owner, String id, String function,
+	private ACell callInstance(RequestContext ctx, AString owner, String id, String function,
 			List<? extends ACell> arguments) {
 		Instance instance = instances.get(new InstanceKey(owner, id));
 		if (instance == null) throw instanceNotFound(id);
+		requireExecute(ctx, TEMPLATE_RESOURCE + instance.template);
 		return instance.call(function, arguments);
+	}
+
+	/**
+	 * Requires that the request may run the operator's Python code at
+	 * {@code resource}, a resource of the venue: the venue and its unrestricted
+	 * agents may, and anyone the operator granted {@link #ADMIN_EXECUTE_PYTHON}
+	 * there.
+	 */
+	private void requireExecute(RequestContext ctx, String resource) {
+		engine.requireVenueAuthority(ctx, resource, ADMIN_EXECUTE_PYTHON);
 	}
 
 	private ACell closeInstance(AString owner, String id) {

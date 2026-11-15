@@ -82,6 +82,7 @@ public class VaultAdapter extends AAdapter {
 		installAsset("vault/list",   ASSETS_PATH + "list.json");
 		installAsset("vault/mkdir",  ASSETS_PATH + "mkdir.json");
 		installAsset("vault/delete", ASSETS_PATH + "delete.json");
+		installAsset("vault/set-metadata", ASSETS_PATH + "setMetadata.json");
 		log.debug("Vault adapter installed with {} operations", pendingCatalogEntries.size());
 	}
 

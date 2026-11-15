@@ -39,12 +39,13 @@ public final class PythonModuleSmokeMain {
 			if (runtime.getClassLoader() != loader) {
 				throw new AssertionError("Python runtime leaked onto the venue classpath");
 			}
+			// Running Python is the operator's, so the smoke runs as the venue
+			RequestContext user = engine.venueContext();
 			Asset asset = engine.resolveAsset(Strings.create("v/ops/python/smoke"),
 				engine.venueContext());
-			ACell result = adapter.invokeFuture(null, asset.meta(), Maps.of("x", 41L)).join();
+			ACell result = adapter.invokeFuture(user, asset.meta(), Maps.of("x", 41L)).join();
 			if (!CVMLong.create(42).equals(result)) throw new AssertionError("Bad result: " + result);
 
-			RequestContext user = RequestContext.of(Strings.create("did:key:zSmoke"));
 			Asset create = engine.resolveAsset(
 				Strings.create("v/ops/python/instances/create"), engine.venueContext());
 			AMap<?, ?> instance = (AMap<?, ?>) adapter.invokeFuture(user, create.meta(),

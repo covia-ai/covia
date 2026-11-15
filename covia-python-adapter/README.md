@@ -67,8 +67,9 @@ accepted as an instance owner, even if public invocation is configured.
 
 Callers cannot submit Python source, host paths, or arbitrary global names. The
 operator selects every template path and explicitly allowlists its callable
-functions. Each operation still requires its normal path-scoped `invoke`
-capability.
+functions. Running a configured function, or creating or calling an instance,
+needs the operator's grant of `admin/execute/python` (the venue's
+`docs/CONFIG.md`, Python operations).
 
 Python executes in-process with the venue's full authority; it is not a sandbox.
 Templates must therefore be trusted operator code. Start the Java 22+ venue with
