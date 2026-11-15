@@ -49,7 +49,8 @@ public class ArchiveAdapterTest {
 				"work", workspace.toAbsolutePath().toString(),
 				"ro", Maps.of(
 					"path", readonly.toAbsolutePath().toString(),
-					"readOnly", true)
+					"readOnly", true),
+				"drive", Maps.of("dlfs", "archive-drive")
 			))
 		));
 		Engine.addDemoAssets(engine);
@@ -117,6 +118,19 @@ public class ArchiveAdapterTest {
 		}
 		assertTrue(hasA, "listing must contain data/a.txt");
 		assertTrue(hasB, "listing must contain data/sub/b.txt (recursive)");
+	}
+
+	@Test
+	public void testZipAndExtractInADrive() {
+		run("v/ops/archive/zip", Maps.of(
+			"root", "work", "path", "data",
+			"destRoot", "drive", "destPath", "out.zip"));
+		run("v/ops/archive/extract", Maps.of(
+			"root", "drive", "path", "out.zip",
+			"destRoot", "drive", "destPath", "restored"));
+		ACell read = run("v/ops/file/read",
+			Maps.of("root", "drive", "path", "restored/data/sub/b.txt"));
+		assertEquals("bravo", RT.getIn(read, "content").toString());
 	}
 
 	@Test

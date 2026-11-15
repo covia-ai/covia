@@ -3,8 +3,10 @@ package covia.adapter;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.Base64;
 import java.util.Enumeration;
 import java.util.concurrent.CompletableFuture;
@@ -149,8 +151,9 @@ public class ArchiveAdapter extends AAdapter {
 	/**
 	 * Resolves the archive source — exactly one of {@code root}+{@code path} (a
 	 * jailed file, read-checked), {@code contentRef} (any resolvable content), or
-	 * {@code bytes} (inline base64). Reference/bytes sources are spooled to a temp file so every op
-	 * reads via {@link ZipFile} (existing-only — a source is never created here).
+	 * {@code bytes} (inline base64). Every source but a host file, a file in a
+	 * DLFS drive included, is spooled to a temp file so every op reads via
+	 * {@link ZipFile} (existing-only — a source is never created here).
 	 */
 	private Source resolveSource(RequestContext ctx, AMap<AString, ACell> input) throws IOException {
 		AString root = RT.ensureString(input.get(FIELD_ROOT));
@@ -174,18 +177,21 @@ public class ArchiveAdapter extends AAdapter {
 				"Provide only one archive source: 'root'+'path', 'contentRef', or 'bytes'");
 		}
 
+		Path file = null;
 		if (root != null && path != null) {
-			Path file = files().target(ctx, root.toString(), path.toString(),
+			file = files().target(ctx, root.toString(), path.toString(),
 				Capability.CRUD_READ, true).path();
 			if (!Files.isRegularFile(file)) {
 				throw new InvalidInputException("Archive is not a regular file: " + path);
 			}
-			return new Source(file, false);
+			if (file.getFileSystem() == FileSystems.getDefault()) return new Source(file, false);
 		}
 
 		Path tmp = Files.createTempFile("covia-archive-", ".zip");
 		try {
-			if (contentRef != null) {
+			if (file != null) {
+				Files.copy(file, tmp, StandardCopyOption.REPLACE_EXISTING);
+			} else if (contentRef != null) {
 				// resolveContent spans every storage mechanism (CAS record, DLFS,
 				// provider) under the caller's authority — unlike getContentStream,
 				// which only serves metadata-declared content.
