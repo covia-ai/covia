@@ -28,7 +28,7 @@ import static covia.venue.Agent.*;
 /**
  * One agent session: conversation frames, pending input and cycle fences.
  * Updates preserve the owning agent's timestamp/account policies. Missing
- * sessions are never created by this view; creation belongs to Agent.
+ * sessions are never created by this view; {@link Sessions#create} creates them.
  * Transactions compose session changes without runtime services or external I/O.
  */
 public final class Session extends ALatticeComponent<ACell>
@@ -121,7 +121,7 @@ public final class Session extends ALatticeComponent<ACell>
 		AVector<ACell> pending = RT.ensureVector(RT.getIn(getRecord(), K_PENDING));
 		return pending == null ? Vectors.empty() : pending;
 	}
-	private static final AString K_PENDING = Strings.intern("pending");
+	static final AString K_PENDING = Strings.intern("pending");
 
 	static final AString K_C = Strings.intern("c");
 	static final AString K_FRAMES   = Strings.intern("frames");
@@ -181,6 +181,17 @@ public final class Session extends ALatticeComponent<ACell>
 			session = session.assoc(K_META, meta);
 			return session;
 		});
+	}
+
+	/**
+	 * Sets when the session next wakes its agent.
+	 *
+	 * @param time The wake time; zero or less clears it
+	 * @return whether the session exists
+	 */
+	public boolean setWakeTime(long time) {
+		return update(session -> (time > 0)
+			? session.assoc(Fields.WAKE_TIME, CVMLong.create(time)) : session.dissoc(Fields.WAKE_TIME));
 	}
 
 	public void removePendingJob(Blob jobId) {

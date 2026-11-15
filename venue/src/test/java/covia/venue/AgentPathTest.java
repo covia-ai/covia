@@ -112,6 +112,11 @@ public class AgentPathTest {
 		assertEquals(Entry.READ_ONLY,
 			assertThrows(AuthException.class, () -> Entry.of(status)).getMessage());
 
+		ALatticeComponent<?> list = resolve("g/" + AGENT + "/sessions");
+		assertEquals(agent.getSessions(), read(list));
+		assertEquals(Entry.READ_ONLY,
+			assertThrows(AuthException.class, () -> Entry.of(list)).getMessage());
+
 		ALatticeComponent<?> meta = resolve(session + "/meta");
 		assertEquals(RT.getIn(agent.getSession(sid), "meta"), read(meta));
 		assertEquals(Entry.READ_ONLY,
