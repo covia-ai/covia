@@ -53,6 +53,9 @@ public class SessionsTest {
 		AMap<AString, ACell> created = session.getRecord();
 		assertEquals(Vectors.of(CALLER), RT.getIn(created, "meta", "parties"), "the caller is its first party");
 		assertEquals(LOADS, RT.getIn(created, "frames", 0, "loads"), "the loads seed its root frame");
+		assertEquals(1, session.frames().count());
+		assertEquals(session.frames().get(0), session.rootFrame());
+		assertNull(session.externalJob(), "no external agent holds a turn");
 
 		assertFalse(sessions.create(SESSION, Strings.create("did:key:other"), null));
 		assertEquals(created, session.getRecord(), "a second create changes nothing");
@@ -61,6 +64,9 @@ public class SessionsTest {
 	@Test
 	public void testASessionThatDoesNotExistAcceptsNothing() {
 		assertNull(session.getRecord());
+		assertTrue(session.frames().isEmpty());
+		assertNull(session.rootFrame());
+		assertEquals(0, session.wakeTime());
 		assertFalse(session.setWakeTime(5));
 		assertFalse(session.appendPending(queued(1)));
 		assertNull(session.getRecord(), "nothing may bring it into being");
@@ -77,9 +83,9 @@ public class SessionsTest {
 	public void testAWakeTimeIsSetAndZeroClearsIt() {
 		sessions.create(SESSION, null, null);
 		assertTrue(session.setWakeTime(500));
-		assertEquals(CVMLong.create(500), session.getRecord().get(Fields.WAKE_TIME));
+		assertEquals(500, session.wakeTime());
 		assertTrue(session.setWakeTime(0));
-		assertNull(session.getRecord().get(Fields.WAKE_TIME));
+		assertEquals(0, session.wakeTime());
 	}
 
 	@Test

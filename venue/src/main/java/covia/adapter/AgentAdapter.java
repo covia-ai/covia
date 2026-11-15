@@ -227,7 +227,6 @@ public class AgentAdapter extends AAdapter {
 	private static final AString K_NEXT             = Strings.intern("next");
 	private static final AString K_ENTRIES          = Strings.intern("entries");
 	private static final AString K_META            = Strings.intern("meta");
-	private static final AString K_FRAMES           = Strings.intern("frames");
 	private static final AString K_TITLE            = Strings.intern("title");
 	private static final AString K_CREATED          = Strings.intern("created");
 	private static final AString K_RUNNING          = Strings.intern("running");
@@ -2582,7 +2581,7 @@ public class AgentAdapter extends AAdapter {
 		}
 		if (session == null || !isVisibleToPolicies(ctx, access, sid, session)) return sessionNotFound();
 
-		ConversationHistory.Page page = readHistory(ConversationHistory.open(rootFrame(session)), start, end, limit);
+		ConversationHistory.Page page = readHistory(ConversationHistory.open(Session.rootFrame(session)), start, end, limit);
 		AMap<AString, ACell> result = Maps.of(
 			K_FOUND, CVMBool.TRUE,
 			Fields.SESSION_ID, Strings.create(sid.toHexString()),
@@ -2644,7 +2643,7 @@ public class AgentAdapter extends AAdapter {
 			if (summary == null) return sessionNotFound();
 		}
 
-		AMap<AString, ACell> frame = rootFrame(summary.session());
+		AMap<AString, ACell> frame = Session.rootFrame(summary.session());
 		ConversationRenderer.HistoricalView view = ConversationRenderer.historical(
 			frame, maxTurns, maxChars, archiveDepth, skip);
 		AMap<AString, ACell> result = Maps.of(
@@ -2676,7 +2675,7 @@ public class AgentAdapter extends AAdapter {
 			throw new InvalidInputException("current is only for an agent reading the session it is in");
 		}
 		AMap<AString, ACell> session = access.agent().session(sid).getRecord();
-		AMap<AString, ACell> frame = (session != null) ? rootFrame(session) : null;
+		AMap<AString, ACell> frame = Session.rootFrame(session);
 		if (frame == null) return sessionNotFound();
 		ACell from = RT.getIn(input, K_FROM_TURN), to = RT.getIn(input, K_TO_TURN);
 		if ((from == null) != (to == null)) throw new InvalidInputException("from and to go together");
@@ -2761,7 +2760,7 @@ public class AgentAdapter extends AAdapter {
 		Blob excluded = access.excludedSession();
 		if (session == null || (excluded != null && sid.equals(excluded))
 				|| !isVisibleToPolicies(ctx, access, sid, session)) return null;
-		ConversationRenderer.HistoricalView view = ConversationRenderer.historical(rootFrame(session), 0, 0);
+		ConversationRenderer.HistoricalView view = ConversationRenderer.historical(Session.rootFrame(session), 0, 0);
 		if (view.turnCount() == 0) return null;
 		AMap<AString, ACell> meta = RT.ensureMap(session.get(K_META));
 		long created = longValue((meta != null) ? meta.get(K_CREATED) : null, 0);
@@ -2789,14 +2788,6 @@ public class AgentAdapter extends AAdapter {
 		return true;
 	}
 
-	@SuppressWarnings("unchecked")
-	private static AMap<AString, ACell> rootFrame(AMap<AString, ACell> session) {
-		AVector<ACell> frames = RT.ensureVector(session.get(K_FRAMES));
-		if (frames == null || frames.isEmpty() || !(frames.get(0) instanceof AMap<?, ?> frame)) {
-			return null;
-		}
-		return (AMap<AString, ACell>) frame;
-	}
 
 	private static int boundedInt(ACell input, AString field, int defaultValue,
 			int min, int max) {
@@ -3366,10 +3357,9 @@ public class AgentAdapter extends AAdapter {
 		if (sid == null) { job.fail("Invalid sessionId format: " + sidHex); return; }
 		if (agent.session(sid).getRecord() == null) { job.fail("Session not found: " + sidHex); return; }
 
-		AVector<ACell> existingFrames = RT.ensureVector(
-			RT.getIn(agent.session(sid).getRecord(), Fields.FRAMES));
+		AVector<ACell> existingFrames = agent.session(sid).frames();
 		int clearable = 0;
-		for (long i = 0; existingFrames != null && i < existingFrames.count(); i++) {
+		for (long i = 0; i < existingFrames.count(); i++) {
 			AMap<AString, ACell> frame = RT.ensureMap(existingFrames.get(i));
 			if (frame != null && GoalTreeContext.reloadContext(frame) != frame) clearable++;
 		}

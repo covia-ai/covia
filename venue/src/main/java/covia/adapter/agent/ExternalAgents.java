@@ -107,7 +107,7 @@ public final class ExternalAgents {
 			throw new ConflictException(SESSION_BUSY);
 		if (job.isFinished()) { agent.session(sid).finishExternalTurn(job.getID(), null, null); return; }
 		try {
-			ACell remoteSession = RT.getIn(agent.session(sid).getRecord(), Agent.KEY_EXTERNAL, Fields.SESSION_ID);
+			ACell remoteSession = agent.session(sid).remoteSession();
 			var invocation = adapter.agentInvocation(operation, definition, content, remoteSession);
 			AString backendOp = Strings.create(adapter.getName() + ":" + invocation.operation());
 			AMap<AString, ACell> meta = Maps.of(Fields.OPERATION, Maps.of(Fields.ADAPTER, backendOp));
@@ -193,16 +193,16 @@ public final class ExternalAgents {
 	/** No execution is replayed when startup finds an abandoned session claim. */
 	public void reconcile(Agent agent) {
 		for (var entry : agent.getSessions().entrySet()) {
-			ACell id = RT.getIn(entry.getValue(), Agent.KEY_EXTERNAL, Fields.JOB_ID);
-			if (id != null && engine.jobs().getJob(Job.parseID(id)) == null)
-				agent.session(entry.getKey()).finishExternalTurn(Job.parseID(id), null, null);
+			Blob id = Session.externalJob(RT.ensureMap(entry.getValue()));
+			if (id != null && engine.jobs().getJob(id) == null)
+				agent.session(entry.getKey()).finishExternalTurn(id, null, null);
 		}
 	}
 
 	public void cancelAll(Agent agent) {
 		for (var entry : agent.getSessions().entrySet()) {
-			ACell id = RT.getIn(entry.getValue(), Agent.KEY_EXTERNAL, Fields.JOB_ID);
-			Job parent = id == null ? null : engine.jobs().getJob(Job.parseID(id));
+			Blob id = Session.externalJob(RT.ensureMap(entry.getValue()));
+			Job parent = id == null ? null : engine.jobs().getJob(id);
 			if (parent != null) parent.cancel();
 		}
 	}
@@ -224,10 +224,10 @@ public final class ExternalAgents {
 	}
 
 	public void deliver(Agent agent, ACell taskId, Blob sid, ACell content) {
-		ACell id = taskId != null ? taskId : RT.getIn(agent.session(sid).getRecord(), Agent.KEY_EXTERNAL, Fields.JOB_ID);
+		Blob turn = agent.session(sid).externalJob();
+		ACell id = taskId != null ? taskId : turn;
 		Job parent = id == null ? null : engine.jobs().getJob(Job.parseID(id));
-		if (parent == null || !owns(parent) || parent.isFinished()
-				|| !parent.getID().equals(RT.getIn(agent.session(sid).getRecord(), Agent.KEY_EXTERNAL, Fields.JOB_ID)))
+		if (parent == null || !owns(parent) || parent.isFinished() || !parent.getID().equals(turn))
 			throw new NotSupportedException(NO_ACTIVE_TURN);
 		Job child = child(parent);
 		if (child == null) throw new NotSupportedException(MISSING_CHILD);
