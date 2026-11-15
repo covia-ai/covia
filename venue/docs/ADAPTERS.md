@@ -212,14 +212,14 @@ The significant lifecycle is:
    separate phases**: an installed adapter owns its jobs whether or not it
    is started. **Configuration and installation are inert**: they start no
    thread, process, network activity or operator code, so an adapter that
-   never starts leaves nothing running. Live work, such as loading operator
-   scripts, fetching models or scheduling a sweep, belongs in `start()`. A
-   `configure` call may end work its new settings no longer allow, but starts
-   work only while the adapter is started, which it knows from its own state
-   (set by `start()`, cleared by `stop()`), not from having an engine.
-   An adapter that declined or refused its configuration
-   is not installed until enable or restart offers it again and it accepts;
-   an enabled adapter whose installation fails is failed (below).
+   never starts does nothing but recover its jobs (step 5). Live work, such
+   as loading operator scripts, fetching models or scheduling a sweep,
+   belongs in `start()`. A `configure` call may end work its new settings no
+   longer allow, but starts work only while the adapter is started, which it
+   knows from its own state (set by `start()`, cleared by `stop()`), not from
+   having an engine. An adapter that declined or refused its configuration is
+   not installed until enable or restart offers it again and it accepts; an
+   enabled adapter whose installation fails is failed (below).
 5. Before the venue serves requests, `recoverJob(job)` is called once per
    non-terminal durable Job the adapter's operations own, whether or not
    the adapter will start. The default stabilises and never re-executes;
