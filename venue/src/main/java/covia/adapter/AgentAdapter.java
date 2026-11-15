@@ -1805,10 +1805,7 @@ public class AgentAdapter extends AAdapter {
 		if (taskIdHex != null) {
 			taskId = HexId.parse(taskIdHex);
 			if (taskId == null) { job.fail(new InvalidInputException(INVALID_TASK_ID + taskIdHex)); return; }
-			ACell taskData = agent.getTasks().get(taskId);
-			AString taskSid = (taskData instanceof AMap<?, ?> map)
-				? RT.ensureString(map.get(Fields.SESSION_ID)) : null;
-			sid = storedId(taskSid);
+			sid = Task.sessionId(agent.getTasks().get(taskId));
 			if (sid == null) { job.fail("Task not found: " + taskIdHex); return; }
 			AString suppliedSid = RT.ensureString(RT.getIn(input, Fields.SESSION_ID));
 			if (suppliedSid != null) {
@@ -3424,9 +3421,7 @@ public class AgentAdapter extends AAdapter {
 		if (currentTask == null) {
 			throw new NotFoundException("Task not found: " + taskId.toHexString(), taskId.toHexString());
 		}
-		if (expectedRevision >= 0
-				&& (Task.revision(currentTask) != expectedRevision
-					|| Task.hasUnshownInput(currentTask))) {
+		if (Task.isStale(currentTask, expectedRevision)) {
 			return Maps.of(
 				Fields.AGENT_ID, agentId,
 				Fields.TASK_ID, taskIdHex(taskId),
@@ -3442,9 +3437,7 @@ public class AgentAdapter extends AAdapter {
 		if (task == null) {
 			refuseIfStopped(agent, taskId, ctx);
 			ACell current = agent.getTasks().get(taskId);
-			if (current != null && expectedRevision >= 0
-					&& (Task.revision(current) != expectedRevision
-						|| Task.hasUnshownInput(current))) {
+			if (current != null && Task.isStale(current, expectedRevision)) {
 				return Maps.of(
 					Fields.AGENT_ID, agentId,
 					Fields.TASK_ID, taskIdHex(taskId),
@@ -3492,9 +3485,7 @@ public class AgentAdapter extends AAdapter {
 		if (task == null) {
 			refuseIfStopped(agent, taskId, ctx);
 			ACell current = agent.getTasks().get(taskId);
-			if (current != null && expectedRevision >= 0
-					&& (Task.revision(current) != expectedRevision
-						|| Task.hasUnshownInput(current))) {
+			if (current != null && Task.isStale(current, expectedRevision)) {
 					return Maps.of(
 						Fields.AGENT_ID, agentId,
 						Fields.TASK_ID, taskIdHex(taskId),
@@ -4969,29 +4960,26 @@ public class AgentAdapter extends AAdapter {
 		if (scheduler != null && leanError == null) {
 			Blob pickedThreadId = null;
 			Agent.ThreadKind pickedKind = null;
-			AMap<AString, ACell> pickedRecord = null;
-			ACell wakeAtPick = null;
+			long wakeAtPick = 0;
+			long wakeNow = 0;
 			if (pickedTask != null) {
 				pickedThreadId = pickedTask.getKey();
 				pickedKind = Agent.ThreadKind.TASK;
-				Index<Blob, ACell> currentTasks = agent.getTasks();
-				ACell tRec = (currentTasks != null) ? currentTasks.get(pickedThreadId) : null;
-				if (tRec instanceof AMap) pickedRecord = (AMap<AString, ACell>) tRec;
-				wakeAtPick = RT.getIn(pickedTask.getValue(), Fields.WAKE_TIME);
+				wakeAtPick = Task.wakeTime(pickedTask.getValue());
+				wakeNow = Task.wakeTime(agent.getTasks().get(pickedThreadId));
 			} else if (pickedSessionBlob != null) {
 				pickedThreadId = pickedSessionBlob;
 				pickedKind = Agent.ThreadKind.SESSION;
-				pickedRecord = agent.session(pickedSessionBlob).getRecord();
 				// Only a transition sets a session's wake, so whatever it holds is the one picked
-				wakeAtPick = (pickedRecord != null) ? pickedRecord.get(Fields.WAKE_TIME) : null;
+				wakeNow = agent.session(pickedSessionBlob).wakeTime();
+				wakeAtPick = wakeNow;
 			}
 			if (pickedThreadId != null) {
 				ACell wtCell = RT.getIn(transitionResult, Fields.WAKE_TIME);
 				long requestedWake = (wtCell instanceof CVMLong cl) ? cl.longValue() : 0L;
-				ACell wakeNow = (pickedRecord != null) ? pickedRecord.get(Fields.WAKE_TIME) : null;
 				boolean spent = (pickedKind == Agent.ThreadKind.TASK)
 					? spentWake(wakeNow, wakeAtPick, startTs)
-					: (wakeNow instanceof CVMLong && wakeNow.equals(wakeAtPick));
+					: wakeNow > 0;
 				if (requestedWake > 0 || spent) {
 					scheduler.setThreadWakeTime(callerDID, agent,
 						pickedKind, pickedThreadId, requestedWake);
@@ -5350,7 +5338,8 @@ public class AgentAdapter extends AAdapter {
 		if (task == null || sid != null) {
 			return new Pick(null, (sid == null) ? null : Strings.create(sid.toHexString()));
 		}
-		return new Pick(task, RT.ensureString(RT.getIn(task.getValue(), Fields.SESSION_ID)));
+		Blob taskSession = Task.sessionId(task.getValue());
+		return new Pick(task, (taskSession == null) ? null : Strings.create(taskSession.toHexString()));
 	}
 
 	/**
@@ -5434,7 +5423,7 @@ public class AgentAdapter extends AAdapter {
 	 */
 	private boolean yieldIsBacked(Agent agent, AString ownerDID, AString agentId,
 			Blob taskId, ACell row) {
-		if (RT.getIn(row, Fields.WAKE_TIME) instanceof CVMLong) return true;
+		if (Task.wakeTime(row) > 0) return true;
 		if (agent.hasPendingFor(taskId)) return true;
 		return agent.hasNewWorkFor(row, engine.currentTimestamp().longValue());
 	}
@@ -5457,9 +5446,9 @@ public class AgentAdapter extends AAdapter {
 		Blob taskId = picked.getKey();
 		ACell row = agent.getTasks().get(taskId);
 		if (row == null || agent.getResolved().get(taskId) != null) return false;
+		long wake = Task.wakeTime(row);
 		boolean comesBack = wakeRequested
-			|| (RT.getIn(row, Fields.WAKE_TIME) instanceof CVMLong wake
-				&& !spentWake(wake, RT.getIn(picked.getValue(), Fields.WAKE_TIME), startTs))
+			|| (wake > 0 && !spentWake(wake, Task.wakeTime(picked.getValue()), startTs))
 			|| agent.hasPendingFor(taskId)
 			|| Task.hasUnshownInput(row)
 			|| agent.hasSessionWorkFor(row);
@@ -5469,8 +5458,8 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	/** Whether {@code wake} is the one that was due when the cycle starting at {@code startTs} took its thread: that cycle spent it. */
-	private static boolean spentWake(ACell wake, ACell wakeAtPick, long startTs) {
-		return wakeAtPick instanceof CVMLong picked && picked.longValue() <= startTs && picked.equals(wake);
+	private static boolean spentWake(long wake, long wakeAtPick, long startTs) {
+		return wakeAtPick > 0 && wakeAtPick <= startTs && wakeAtPick == wake;
 	}
 
 	/**
@@ -5820,7 +5809,7 @@ public class AgentAdapter extends AAdapter {
 						&& Job.isFinished((AMap<AString, ACell>) map)) {
 					agent.removeTask(taskId);
 				} else if (Task.isParked(entry.getValue())
-						&& !(RT.getIn(entry.getValue(), Fields.WAKE_TIME) instanceof CVMLong)
+						&& Task.wakeTime(entry.getValue()) == 0
 						&& !agent.hasPendingFor(taskId)
 						&& !agent.hasNewWorkFor(entry.getValue(), engine.currentTimestamp().longValue())) {
 					failTask(ownerDID, agent.getAgentId(), taskId, TASK_WAIT_LOST);

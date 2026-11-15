@@ -774,9 +774,7 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 	 * session cycle of its own ({@link Session#taken}).
 	 */
 	public boolean hasSessionWorkFor(ACell taskData) {
-		if (!(taskData instanceof AMap<?, ?> task)) return false;
-		AString sid = RT.ensureString(task.get(Fields.SESSION_ID));
-		Blob sessionId = (sid == null) ? null : Blob.fromHex(sid.toString());
+		Blob sessionId = Task.sessionId(taskData);
 		AMap<AString, ACell> session = (sessionId == null) ? null : session(sessionId).getRecord();
 		return session != null && Session.hasTaskWork(session);
 	}
@@ -835,23 +833,17 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 
 	/** Earliest positive {@code wakeTime} across all sessions and tasks, or 0 if none. */
 	private static long earliestWake(AMap<AString, ACell> record) {
-		long min = minWakeIn(record.get(K_SESSIONS), Long.MAX_VALUE);
-		min = minWakeIn(record.get(K_TASKS), min);
+		long min = minWakeIn(record.get(K_SESSIONS), session -> Session.wakeTime(RT.ensureMap(session)), Long.MAX_VALUE);
+		min = minWakeIn(record.get(K_TASKS), Task::wakeTime, min);
 		return (min == Long.MAX_VALUE) ? 0L : min;
 	}
 
-	@SuppressWarnings("unchecked")
-	private static long minWakeIn(ACell idxCell, long min) {
-		if (!(idxCell instanceof Index)) return min;
-		Index<Blob, ACell> idx = (Index<Blob, ACell>) idxCell;
-		long cnt = idx.count();
-		for (long i = 0; i < cnt; i++) {
-			ACell rec = idx.entryAt(i).getValue();
-			if (!(rec instanceof AMap)) continue;
-			ACell wt = ((AMap<AString, ACell>) rec).get(Fields.WAKE_TIME);
-			if (wt instanceof CVMLong l && l.longValue() > 0) {
-				min = Math.min(min, l.longValue());
-			}
+	/** The earliest positive wake time among an index's entries, or {@code min} if earlier. */
+	private static long minWakeIn(ACell index, java.util.function.ToLongFunction<ACell> wakeTime, long min) {
+		if (!(index instanceof Index<?, ?> entries)) return min;
+		for (long i = 0; i < entries.count(); i++) {
+			long wake = wakeTime.applyAsLong(entries.entryAt(i).getValue());
+			if (wake > 0) min = Math.min(min, wake);
 		}
 		return min;
 	}

@@ -47,6 +47,27 @@ public class TasksTest {
 	}
 
 	@Test
+	public void testATaskKnowsItsSessionAndWakeTime() {
+		queue();
+		assertEquals(SESSION, task.sessionId());
+		assertEquals(0, task.wakeTime());
+		task.setWakeTime(500);
+		assertEquals(500, task.wakeTime());
+		assertNull(tasks.task(Blob.fromHex("aa02")).sessionId(), "a task that is not queued has none");
+	}
+
+	@Test
+	public void testAViewIsStaleOnceItsTaskMoves() {
+		queue();
+		assertTrue(Task.isStale(task.getRecord(), 0), "its input has not been shown");
+		task.present();
+		assertFalse(Task.isStale(task.getRecord(), 0));
+		task.appendContinuation(SESSION, envelope("m"), null);
+		assertTrue(Task.isStale(task.getRecord(), 0), "the revision moved");
+		assertFalse(Task.isStale(task.getRecord(), -1), "a negative revision takes it regardless");
+	}
+
+	@Test
 	public void testAddRefusesAnIdAlreadyQueued() {
 		queue();
 		assertFalse(tasks.add(TASK, Maps.of(Fields.INPUT, "other")));
