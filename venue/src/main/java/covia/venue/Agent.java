@@ -331,9 +331,51 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 		return new Engine.Source(getController(), getControllerToken());
 	}
 
-	public AString getStatus() {
-		AMap<AString, ACell> r = getRecord();
-		return (r != null) ? RT.ensureString(r.get(K_STATUS)) : null;
+	public AString getStatus() { return status(getRecord()); }
+
+	/** Whether the agent is stopped: SUSPENDED or TERMINATED. */
+	public boolean isStopped() { return isStopped(getRecord()); }
+
+	/** Who stopped the agent deliberately and why, or null when nobody did ({@link #suspend(AString, AString)}). */
+	public AMap<AString, ACell> suspension() { return suspension(getRecord()); }
+
+	/**
+	 * The definition an external agent was created with, as stored, or null
+	 * for an agent the venue runs itself. Its user checks it before use.
+	 */
+	public ACell definition() { return definition(getRecord()); }
+
+	/** The operation that runs the agent's cycles, or null when its config names none. */
+	public AString transitionOperation() { return transitionOperation(getRecord()); }
+
+	/** The status of an agent record, or null when there is no record. */
+	public static AString status(AMap<AString, ACell> record) {
+		return RT.ensureString(RT.getIn(record, K_STATUS));
+	}
+
+	/** Whether an agent record is stopped: SUSPENDED or TERMINATED. */
+	public static boolean isStopped(AMap<AString, ACell> record) {
+		return stopsCycles(status(record));
+	}
+
+	/** Who stopped an agent record deliberately and why, or null when nobody did. */
+	public static AMap<AString, ACell> suspension(AMap<AString, ACell> record) {
+		return RT.ensureMap(RT.getIn(record, KEY_SUSPENSION));
+	}
+
+	/** The fault an agent record was suspended for, or null when there is none. */
+	public static AString error(AMap<AString, ACell> record) {
+		return RT.ensureString(RT.getIn(record, K_ERROR));
+	}
+
+	/** The definition an external agent record was created with, as stored, or null for an agent the venue runs. */
+	public static ACell definition(AMap<AString, ACell> record) {
+		return RT.getIn(record, KEY_AGENT);
+	}
+
+	/** The operation that runs an agent record's cycles, or null when its config names none. */
+	public static AString transitionOperation(AMap<AString, ACell> record) {
+		return RT.ensureString(RT.getIn(record, K_CONFIG, Fields.OPERATION));
 	}
 
 	@SuppressWarnings("unchecked")
@@ -514,10 +556,7 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 		return (v instanceof Index) ? (Index<Blob, ACell>) v : Index.none();
 	}
 
-	public AString getError() {
-		AMap<AString, ACell> r = getRecord();
-		return (r != null) ? RT.ensureString(r.get(K_ERROR)) : null;
-	}
+	public AString getError() { return error(getRecord()); }
 
 	/** One description for the stop event, cancelled cycle and waiting callers. */
 	public static AString suspensionDetail(AMap<AString, ACell> record) {
@@ -668,7 +707,7 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 		Objects.requireNonNull(epoch);
 		return transact(draft -> {
 			AMap<AString, ACell> record = draft.getRecord();
-			if (record == null || stopsCycles(RT.ensureString(record.get(K_STATUS)))) return CycleStart.STOPPED;
+			if (record == null || isStopped(record)) return CycleStart.STOPPED;
 			if (taskId != null) {
 				ACell current = draft.getTasks().get(taskId);
 				if (current == null || !current.equals(pickedTask)) return CycleStart.MOVED;

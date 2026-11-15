@@ -71,7 +71,7 @@ public final class ExternalAgents {
 	 */
 	public AMap<AString, ACell> stored(Agent agent) {
 		try {
-			return validate(agent.getRecord().get(Agent.KEY_AGENT));
+			return validate(agent.definition());
 		} catch (InvalidInputException e) {
 			throw new InvalidDefinitionException(MISCONFIGURED + e.getMessage(), e);
 		}
@@ -86,8 +86,7 @@ public final class ExternalAgents {
 	}
 
 	public boolean isExternal(Agent agent) {
-		AMap<AString, ACell> record = agent == null ? null : agent.getRecord();
-		return record != null && record.containsKey(Agent.KEY_AGENT);
+		return agent != null && agent.definition() != null;
 	}
 
 	public void start(Job job, RequestContext caller, AString owner, AString id, AString address,

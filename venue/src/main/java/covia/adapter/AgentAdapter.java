@@ -576,10 +576,8 @@ public class AgentAdapter extends AAdapter {
 	 */
 	private AString observableStatus(AString ownerDID, AString agentId, Agent agent) {
 		if (agent == null) return Agent.TERMINATED;
-		AString stable = agent.getStatus();
-		if (Agent.SUSPENDED.equals(stable) || Agent.TERMINATED.equals(stable)) {
-			return stable;
-		}
+		AMap<AString, ACell> record = agent.getRecord();
+		if (Agent.isStopped(record)) return Agent.status(record);
 		return isRunning(new AgentKey(ownerDID, agentId))
 			? Agent.RUNNING : Agent.SLEEPING;
 	}
@@ -1558,7 +1556,7 @@ public class AgentAdapter extends AAdapter {
 		if (sourceRecord == null) {
 			job.fail("Source agent not found: " + sourceId); return;
 		}
-		if (Agent.TERMINATED.equals(sourceRecord.get(Agent.KEY_STATUS))) {
+		if (Agent.TERMINATED.equals(Agent.status(sourceRecord))) {
 			job.fail("Cannot fork TERMINATED agent: " + sourceId); return;
 		}
 		AgentTarget targetTarget = resolveAgentTarget(ctx, input, Fields.AGENT_ID,
@@ -1972,8 +1970,7 @@ public class AgentAdapter extends AAdapter {
 			taken = engine.getVenueState().transact(draft -> {
 				var owner = draft.users().user(target.ownerDID());
 				var current = owner == null ? null : owner.agent(target.agentId());
-				if (current == null || Agent.SUSPENDED.equals(current.getStatus())
-						|| Agent.TERMINATED.equals(current.getStatus())) {
+				if (current == null || current.isStopped()) {
 					return new ChatIntake(Agent.SessionIntake.MISSING, null);
 				}
 				var intake = current.appendSessionPending(session.id(), ctx.getCallerDID(),
@@ -2069,7 +2066,7 @@ public class AgentAdapter extends AAdapter {
 		// One immutable record supplies config, state and session, even if the
 		// live agent is concurrently accepting work or advancing a conversation.
 		AMap<AString, ACell> record = agent.getRecord();
-		AString operation = RT.ensureString(RT.getIn(record, Agent.KEY_CONFIG, Fields.OPERATION));
+		AString operation = Agent.transitionOperation(record);
 		if (operation == null) { job.fail(QUERY_NO_OPERATION); return null; }
 		AMap<AString, ACell> session = Maps.empty();
 		ACell sessionId = RT.getIn(input, Fields.SESSION_ID);
@@ -2269,13 +2266,14 @@ public class AgentAdapter extends AAdapter {
 			Fields.CONTROLLER, agent.getController(),
 			Fields.CONFIG, shownConfig(record.get(Agent.KEY_CONFIG))));
 
-		if (record.containsKey(Agent.KEY_AGENT)) summary = summary.assoc(Agent.KEY_AGENT, record.get(Agent.KEY_AGENT));
+		ACell definition = Agent.definition(record);
+		if (definition != null) summary = summary.assoc(Agent.KEY_AGENT, definition);
 		if (agent.getControllerToken() != null) summary = summary.assoc(Fields.CONTROLLER_TOKEN, agent.getControllerToken());
 		if (timeline != null) summary = summary.assoc(Strings.intern("timelineLength"), CVMLong.create(timeline.count()));
 		if (tasks != null) summary = summary.assoc(Strings.intern("tasks"), CVMLong.create(tasks.count()));
-		ACell error = record.get(Agent.KEY_ERROR);
+		AString error = Agent.error(record);
 		if (error != null) summary = summary.assoc(Agent.KEY_ERROR, error);
-		ACell suspension = record.get(Agent.KEY_SUSPENSION);
+		AMap<AString, ACell> suspension = Agent.suspension(record);
 		if (suspension != null) summary = summary.assoc(Agent.KEY_SUSPENSION, suspension);
 		return summary;
 	}
@@ -2366,9 +2364,7 @@ public class AgentAdapter extends AAdapter {
 			? (AMap<AString, ACell>) m : null;
 		ACell state = record.get(Agent.KEY_STATE);
 
-		AString operation = (recordConfig != null)
-			? RT.ensureString(recordConfig.get(Fields.OPERATION))
-			: null;
+		AString operation = Agent.transitionOperation(record);
 		if (operation == null) { job.fail("Agent has no transition operation configured"); return null; }
 
 		// Resolve the adapter that handles the agent's transition operation.
@@ -2457,7 +2453,7 @@ public class AgentAdapter extends AAdapter {
 					if (!(value instanceof AMap)) continue;
 					AMap<AString, ACell> record = (AMap<AString, ACell>) value;
 
-					AString stableStatus = RT.ensureString(record.get(Agent.KEY_STATUS));
+					AString stableStatus = Agent.status(record);
 					if (!includeTerminated && Agent.TERMINATED.equals(stableStatus)) continue;
 
 					if (!annotated) {
@@ -2479,9 +2475,9 @@ public class AgentAdapter extends AAdapter {
 						Fields.AWAITING, awaitingSummary(record),
 						Fields.TASKS, CVMLong.create(taskCount));
 					if (listed.getControllerToken() != null) summary = summary.assoc(Fields.CONTROLLER_TOKEN, listed.getControllerToken());
-					ACell error = record.get(Agent.KEY_ERROR);
+					AString error = Agent.error(record);
 					if (error != null) summary = summary.assoc(Fields.ERROR, error);
-					ACell suspension = record.get(Agent.KEY_SUSPENSION);
+					AMap<AString, ACell> suspension = Agent.suspension(record);
 					if (suspension != null) summary = summary.assoc(Agent.KEY_SUSPENSION, suspension);
 					agents = agents.conj(summary);
 				}
@@ -2993,7 +2989,7 @@ public class AgentAdapter extends AAdapter {
 
 		job.setStatus(Status.STARTED);
 		job.completeWith(identify(target, Maps.of(Fields.STATUS, Agent.SUSPENDED,
-			Agent.KEY_SUSPENSION, stopped.get(Agent.KEY_SUSPENSION))));
+			Agent.KEY_SUSPENSION, Agent.suspension(stopped))));
 	}
 
 	private void handleResume(Job job, ACell input, RequestContext ctx) {
@@ -4096,12 +4092,9 @@ public class AgentAdapter extends AAdapter {
 		CompletableFuture<ACell> existing = runningLoops.get(key);
 		if (existing != null && !existing.isDone()) return existing;
 
-		AString status = agent.getStatus();
-
-		// SLEEPING is normal. RUNNING without a live slot is a stale marker
-		// (normally cleared by startup) and must not lock the agent forever.
-		if (!Agent.SLEEPING.equals(status)
-				&& !Agent.RUNNING.equals(status)) return null;
+		// A stopped agent does not run. RUNNING without a live slot is a stale
+		// marker (normally cleared by startup) and must not lock the agent forever.
+		if (agent.isStopped()) return null;
 
 		// Gate: only start if there's work (or forced).
 		if (!force && !hasWork(agent)) return null;
@@ -4471,11 +4464,7 @@ public class AgentAdapter extends AAdapter {
 				// handleSuspend) flipped our status while we were between
 				// iterations, exit promptly. The merge step preserves the
 				// status via the same rule, so we won't clobber it here.
-				AString curStatus = agent.getStatus();
-				if (Agent.SUSPENDED.equals(curStatus)
-						|| Agent.TERMINATED.equals(curStatus)) {
-					break;
-				}
+				if (agent.isStopped()) break;
 
 				// Shutdown: stop here. Tasks and chats stay queued durably; the
 				// next boot restores their Jobs and wakes the agent (recoverJob).
@@ -4924,7 +4913,7 @@ public class AgentAdapter extends AAdapter {
 			// carry the suspension, and its work waits for the resume
 			AString detail = Agent.suspensionDetail(merged);
 			if (detail == null) detail = Strings.create(TRANSITION_CANCELLED);
-			if (merged != null && Agent.SUSPENDED.equals(merged.get(Agent.KEY_STATUS))) {
+			if (Agent.SUSPENDED.equals(Agent.status(merged))) {
 				holdForResume(callerDID, agentId, detail.toString());
 			}
 			tap.end(Maps.of(Fields.ERROR, detail, Fields.CANCELLED, CVMBool.TRUE));
@@ -5044,7 +5033,7 @@ public class AgentAdapter extends AAdapter {
 		ACell lastResult = Maps.of(
 			Fields.AGENT_ID, agentId,
 			Fields.ADDRESS, Strings.create(callerDID + "/g/" + agentId),
-			Fields.STATUS, cannotContinue ? Agent.SUSPENDED : merged.get(Agent.KEY_STATUS),
+			Fields.STATUS, cannotContinue ? Agent.SUSPENDED : Agent.status(merged),
 			Fields.RESULT, result,
 			Fields.TASK_RESULTS, allTaskResults);
 
@@ -5856,7 +5845,7 @@ public class AgentAdapter extends AAdapter {
 	 */
 	private boolean failIfSuspended(Job job, Agent agent, AString agentId) {
 		AMap<AString, ACell> record = agent.getRecord();
-		if (record == null || !Agent.SUSPENDED.equals(record.get(Fields.STATUS))) return false;
+		if (!Agent.SUSPENDED.equals(Agent.status(record))) return false;
 		job.fail(SUSPENDED_CODE, SUSPENDED_REFUSAL.formatted(agentId, suspendedDetail(record),
 			Agent.suspensionDetail(record) != null ? SUSPENDED_ASK_ADVICE : SUSPENDED_RESUME_ADVICE));
 		return true;
@@ -5867,7 +5856,7 @@ public class AgentAdapter extends AAdapter {
 	private static String suspendedDetail(AMap<AString, ACell> record) {
 		if (record == null) return "";
 		AString stop = Agent.suspensionDetail(record);
-		ACell error = record.get(Agent.KEY_ERROR);
+		AString error = Agent.error(record);
 		return stop != null ? ": " + stop
 			: error != null ? ": " + error : "";
 	}
@@ -5880,10 +5869,7 @@ public class AgentAdapter extends AAdapter {
 
 	private AString resolveTransitionOp(AString callerDID, AString agentId) {
 		Agent agent = getAgent(callerDID, agentId);
-		if (agent == null) return null;
-		AMap<AString, ACell> config = agent.getConfig();
-		if (config == null) return null;
-		return RT.ensureString(config.get(Fields.OPERATION));
+		return (agent == null) ? null : agent.transitionOperation();
 	}
 
 	/**
