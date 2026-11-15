@@ -1011,7 +1011,7 @@ included, it is a separate authority
 (`RequestContext.withAuthorityOf`): access checks decide under it, on names
 resolved in the agent's namespace (`RequestContext.authorityContext`,
 `inNamespace`). State a namespace keeps with no capability of its own, such as
-its Python instances, dictations and bot list, is reachable only by a request
+its dictations and bot list, is reachable only by a request
 acting with that namespace's authority. A recorded job and a scheduled event
 keep a separate authority with the work and act with it again.
 

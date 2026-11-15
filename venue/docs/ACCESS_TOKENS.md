@@ -57,7 +57,7 @@ is unrestricted. A restricted token's request therefore cannot:
 
 Whatever its caps, a request through a token never acts for another user
 (`admin/sudo`), never counts as the venue, never reaches state a namespace keeps
-with no capability of its own (such as Python instances and bot lists), and
+with no capability of its own (such as dictations and bot lists), and
 cannot create a messaging bot, which acts with its creator's whole authority.
 Its reach into another identity's resources, through admissions, presented
 grants or a callable's gate ([CALLABLES.md](CALLABLES.md)), must also be

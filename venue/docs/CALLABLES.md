@@ -219,8 +219,8 @@ As for a request through an access token
 the authority a call acts with is narrowed, so:
 
 - **It never acts with its namespace's own authority.** State a namespace
-  keeps with no capability of its own, such as Python instances, dictations
-  and bot lists, is out of its reach
+  keeps with no capability of its own, such as dictations and bot lists, is
+  out of its reach
   (`RequestContext.actsWithNamespaceAuthority`), whatever its caps.
 - **It holds its issuer's whole authority** (`Engine.holdsAuthorityOf`) only
   when its caps are unrestricted and every token on its source chain is.

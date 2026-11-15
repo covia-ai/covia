@@ -108,7 +108,6 @@ Resource scopes are preserved; possible refinements are listed separately.
 | `venue:gc`, including status, cancel and backup options | `admin/venue/gc` on `V/store`; also `admin/venue/restart` on `V/process` when restarting |
 | `user:sudo` into another namespace | `admin/sudo` on the target `U`, plus independent invocation and action authority |
 | A configured Python function (`python` module) | `admin/execute/python` on `V/python/operations/<id>` |
-| `python:instances/create`, `python:instances/call` | `admin/execute/python` on `V/python/templates/<template>` |
 
 Venue administration currently admits the venue itself, its agents within
 their effective authority, or callers presenting a suitable venue-rooted

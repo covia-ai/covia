@@ -24,7 +24,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 ### Changed
 
 - Answering an approval request, `secret:extract`, `user:export`, `user:clone` from one's own account and reading or changing one's own sign-in keys need the user in person: work a job or scheduled event carries on later can no longer do them.
-- Running Python is the operator's: each configured function, and creating or calling an instance, needs `admin/execute/python` on `<venue DID>/python/operations/<id>` or `<venue DID>/python/templates/<template>`, which the venue holds and can grant to a user.
+- Running Python is the operator's: each configured function needs `admin/execute/python` on `<venue DID>/python/operations/<id>`, which the venue holds and can grant to a user.
 - An adapter that fails to start, at launch, enable or restart, no longer stops the venue: it stays enabled but failed, its operations refused as not running, until restarted.
 - A `venue:adapter/configure` change the adapter refuses with an error is reverted to its previous configuration.
 - A P2P node that cannot launch, such as on a port in use, is unavailable rather than a configuration error.
@@ -42,6 +42,10 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - A messaging bot an agent created uses its credentials and runs its relay's `admit` and `charge` hooks with that agent's authority, not its user's: an agent with caps needs `secret/use` on each secret the bot names, and its caps must cover what the hooks do.
 - `mcp:tools-call` and `mcp:tools-list` hide `token` in their job records, both the bearer in the input and a top-level `token` in a tool's result; a caller waiting for the result still receives it.
 - `mcp:tools-call` and `mcp:tools-list` take `bearerSecret`, a secret holding the bearer, as an alternative to `token`.
+
+### Removed
+
+- Python instances (`python:instances/create`, `list`, `call`, `close` and the module's `instances` setting): configure each function under `operations` and offer it to others through a callable; a config naming `instances` is refused (#706).
 
 ### Fixed
 

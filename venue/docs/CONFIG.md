@@ -796,16 +796,6 @@ code execution.
           "input": { "type": "object" },
           "output": { "type": "object" }
         }
-      },
-      "instances": {
-        "maxPerUser": 8,
-        "maxTotal": 128,
-        "templates": {
-          "health-session": {
-            "script": "/opt/getmine/python/health_session.py",
-            "functions": ["add_reading", "summary", "reset"]
-          }
-        }
       }
     }
   }]
@@ -820,41 +810,21 @@ they are resolved at startup, loaded once, and a missing or invalid configured
 script fails startup.
 
 Running Python is the operator's, since the code runs in the venue process
-with the venue's power. Each configured function, and creating or calling an
-instance, needs `admin/execute/python` on the venue resource that names the
-code: `<venueDID>/python/operations/<id>` for a configured function and
-`<venueDID>/python/templates/<template>` for a template's instances. The venue
-and its unrestricted agents hold it. The operator lets a user run one
-function, one template or all of the venue's Python (`<venueDID>/python`) with
-a UCAN the venue issues to that user, which the user presents with its
-requests ([ADMIN.md](ADMIN.md#current-venue-level-admin-functions)). Listing
-and closing one's own instances need no grant.
+with the venue's power. Each configured function needs `admin/execute/python`
+on the venue resource that names it, `<venueDID>/python/operations/<id>`. The
+venue and its unrestricted agents hold it. The operator lets a user run one
+function or all of the venue's Python (`<venueDID>/python`) with a UCAN the
+venue issues to that user, which the user presents with its requests
+([ADMIN.md](ADMIN.md#current-venue-level-admin-functions)). To offer a
+function to others without a grant, the venue publishes it as a callable,
+which decides who may call it and with what caps
+([CALLABLES.md](CALLABLES.md)).
 
-The optional `instances` object separately opts the operator into stateful,
-caller-managed Python namespaces. It installs `create`, `list`, `call`, and
-`close` operations under `v/ops/python/instances/`. `create` accepts a configured
-template name; `call` accepts an instance `id`, an allowlisted `function`, and an
-optional `args` vector of positional Convex values. The create operation's JSON
-Schema advertises the configured template names, so MCP clients can discover
-them without a separate host-filesystem API. Create and list results include the
-instance's allowed `functions`, making the subsequent call surface discoverable.
-
-Instance ownership follows the effective venue user (`RequestContext.getUserDID`),
-while `createdBy` records the authenticated caller DID. This means an agent
-sub-principal and its owner share the owner's instance namespace without losing
-attribution. Other users receive the same not-found result whether an ID is
-absent or belongs to someone else. The venue's synthetic public principal is a
-shared authorization namespace, not an authenticated identity, and is always
-rejected for instance management even if public invocation is configured.
-Instances are process-local, disappear on restart, and are closed automatically
-during venue shutdown. `maxPerUser` (default 8) and `maxTotal` (default 128)
-bound retained native state.
-
-Callers never provide source, script paths, or unrestricted global names. The
-operator configures each template and must explicitly list its callable
-functions. Generic invocation of these management operations additionally
-checks `invoke` on the operation reference; bound calls retain their action checks. Omit `instances` entirely to expose none
-of this management surface.
+Callers never provide source, script paths or global names: the operator
+configures each function. A config that still names `instances`, which earlier
+releases used for per-user copies of a template, is refused with a message
+saying what replaces it: configure each function under `operations`, and offer
+it to others through a callable.
 
 Python is a separate loadable module and is not present in `covia.jar` or the
 standard Docker image. Listing the module enables it by default; `enabled:
