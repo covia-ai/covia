@@ -58,15 +58,15 @@ public class RequestContext {
 	}
 
 	/** The principal this request authenticated as where it entered the venue:
-	 * the caller a transport authenticated ({@link Engine#requestContext}), the
-	 * user a channel's sign-in authenticated ({@link Engine#channelContext}),
-	 * or the principal an in-process caller made it for ({@link #of(AString)}).
+	 * the caller a transport authenticated ({@link Engine#requestContext}), or
+	 * the principal an in-process caller made it for ({@link #of(AString)}).
 	 * Every context made for the request keeps it, a call into another
 	 * principal's authority included, so it names who is present wherever the
 	 * request goes. A context the venue makes for a principal itself
 	 * ({@link Engine#context(AString)}) carries none: work it resumes or fires
-	 * later, a bot's work for its listed senders, its own work. Neither does a
-	 * gate's evaluation. Acts only the user may do in person read it
+	 * later, its own work, and a message a channel binding brings, whose record
+	 * is attribution, not evidence ({@link Engine#channelContext}). Neither does
+	 * a gate's evaluation. Acts only the user may do in person read it
 	 * ({@link Engine#inPersonDenial}). */
 	private final AString authenticated;
 
@@ -93,7 +93,7 @@ public class RequestContext {
 
 	/** This context authenticated as the principal that acts in it: a request
 	 * that a door of the venue authenticated as that principal
-	 * ({@link Engine#requestContext}, {@link Engine#channelContext}). */
+	 * ({@link Engine#requestContext}). */
 	RequestContext authenticated() {
 		AString did = authority.getDID();
 		if (did == null || did.equals(authenticated)) return this;

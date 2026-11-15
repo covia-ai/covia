@@ -5041,14 +5041,16 @@ public class Engine {
 	 * binding runs under (COG-3 §7): its identified principal as it acts now
 	 * ({@link #context(AString, AString)}), carrying the result's record without
 	 * its {@code userDID}. The one place a request context gains an
-	 * authentication record.
+	 * authentication record. That record is attribution, not evidence, so the
+	 * context names no authenticated principal: a message a bot brings, and an
+	 * operation the bot runs for it, are never the user in person
+	 * ({@link #inPersonDenial}).
 	 *
 	 * @throws AuthException as {@link #context(AString, AString)}
 	 */
 	public RequestContext channelContext(AString owner, covia.venue.auth.AuthResult result) {
 		return context(owner, result.userDID())
-			.withAuthentication(result.toData().dissoc(covia.venue.auth.AuthResult.USER_DID))
-			.authenticated();
+			.withAuthentication(result.toData().dissoc(covia.venue.auth.AuthResult.USER_DID));
 	}
 
 	/** Why the public principal cannot act: the operator has public access off. */

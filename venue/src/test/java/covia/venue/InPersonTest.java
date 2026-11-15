@@ -92,6 +92,32 @@ class InPersonTest {
 			"nor is the venue's own work anyone present");
 	}
 
+	/** A listed sender on a bot acts as the bot's principal, but the channel's
+	 * record is attribution, not evidence, so it is not the user in person,
+	 * whether the bot asks an agent or runs an operation for the message. */
+	@Test void aMessageABotBringsIsNot() {
+		AString alice = Keyed.generate().did();
+		covia.venue.auth.AuthResult listed = new covia.venue.auth.AuthResult(alice, Strings.create("telegram:4242"),
+			new covia.venue.auth.AuthResult.Credential(Strings.create("telegram"), null, null),
+			new covia.venue.auth.AuthResult.Authentication(Strings.create("telegram"), Strings.create(alice + "/telegram/desk"),
+				null, convex.core.data.Sets.empty(), Maps.empty()), null, null);
+		RequestContext message = engine.channelContext(alice, listed);
+		assertTrue(engine.holdsAuthorityOf(message, alice), "it acts with all of the user's authority");
+		assertNotNull(message.getAuthentication(), "and carries the channel's record");
+		assertNull(message.getAuthenticatedDID(), "but nobody authenticated as the user");
+		assertEquals(Engine.NOT_IN_PERSON, engine.inPersonDenial(message));
+
+		Job asked = ask(alice);
+		try {
+			Job answer = await(engine.jobs().invokeOperation("v/ops/hitl/respond", approval(asked), message));
+			assertEquals(Status.FAILED, answer.getStatus(), "a bot's message may not answer the user's approval requests");
+			assertEquals(Engine.NOT_IN_PERSON, answer.getErrorMessage());
+			assertEquals(Status.INPUT_REQUIRED, asked.getStatus(), "the request stays open");
+		} finally {
+			asked.cancel();
+		}
+	}
+
 	@Test void aRequestThroughAnUnrestrictedTokenIsItsIssuerInPerson() {
 		AString alice = Keyed.generate().did();
 		RequestContext own = engine.requestContext(alice, null);
