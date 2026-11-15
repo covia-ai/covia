@@ -1050,35 +1050,16 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 	}
 
 	/**
-	 * The application metadata of the entry at {@code path} in the user's
-	 * drive {@code driveName}, or null if it has none. DLFS keeps the value with
-	 * the entry: a move takes it along, replacing the content in place keeps it,
-	 * and deleting the entry removes it. No authority is checked: {@code ctx}
-	 * names whose drive it is.
+	 * Sets the metadata of the entry at {@code path} in the user's live drive
+	 * {@code driveName}, or clears it when {@code metadata} is null: one
+	 * transaction on the drive through DLFS's own entry calls, which leaves the
+	 * content and modification time as they were. It creates nothing. Callers
+	 * have authorised the write; {@code ctx} names whose drive it is.
 	 *
 	 * @throws NotFoundException If the drive is absent or deleted
 	 * @throws NoSuchFileException If there is no entry at {@code path}
 	 */
-	public ACell metadata(RequestContext ctx, String driveName, String path) throws IOException {
-		DLFSLocal fs = getDrive(ctx, driveName);
-		AVector<ACell> node = fs.getNode(dlPath(resolvePath(fs, path)));
-		if (node == null) throw new NoSuchFileException(path);
-		return DLFSNode.getMetadata(node);
-	}
-
-	/**
-	 * Sets the application metadata of the entry at {@code path} in the user's
-	 * drive {@code driveName}, or clears it when {@code metadata} is null,
-	 * leaving the entry's content and modification time as they were. It is
-	 * one transaction on the drive, so a change to the entry made meanwhile is
-	 * never lost. It creates nothing. No authority is checked: {@code ctx}
-	 * names whose drive it is.
-	 *
-	 * @param metadata The value to keep with the entry, or null for none
-	 * @throws NotFoundException If the drive is absent or deleted
-	 * @throws NoSuchFileException If there is no entry at {@code path}
-	 */
-	public void setMetadata(RequestContext ctx, String driveName, String path, ACell metadata)
+	private void setMetadata(RequestContext ctx, String driveName, String path, ACell metadata)
 			throws IOException {
 		DLFSDrive drive = liveDrive(ctx, driveName);
 		if (drive == null) throw new NotFoundException(DRIVE_NOT_FOUND + driveName, driveName);
@@ -1102,9 +1083,9 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 	}
 
 	/**
-	 * {@link #setMetadata(RequestContext, String, String, ACell)} for the entry
-	 * a canonical DLFS resource names, which the caller has authorised a write
-	 * to.
+	 * Sets the metadata of the entry a canonical DLFS resource names, as
+	 * {@code dlfs:setMetadata} does, for {@code file:setMetadata}, which has
+	 * authorised the write.
 	 *
 	 * @throws NotSupportedException If {@code resource} is not in DLFS
 	 */

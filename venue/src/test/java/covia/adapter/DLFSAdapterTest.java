@@ -32,6 +32,7 @@ import convex.core.util.JSON;
 import convex.core.data.AHashMap;
 import convex.core.data.SignedData;
 import convex.lattice.cursor.AForkableCursor;
+import convex.lattice.fs.DLFSNode;
 import convex.lattice.fs.impl.DLFSLocal;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
@@ -868,8 +869,10 @@ public class DLFSAdapterTest {
 			long written = Files.getLastModifiedTime(drive.getPath("/photo.jpg")).toMillis();
 			time.advance(1000);
 
-			adapter.setMetadata(alice, "times", "photo.jpg", Strings.create("facts"));
-			assertEquals(Strings.create("facts"), adapter.metadata(alice, "times", "photo.jpg"));
+			isolated.jobs().callOperation("v/ops/dlfs/set-metadata",
+				Maps.of("drive", "times", "path", "photo.jpg", "metadata", "facts"), alice).awaitResult(5000);
+			assertEquals(Strings.create("facts"),
+				DLFSNode.getMetadata(drive.getNode(drive.getPath("/photo.jpg"))));
 			assertEquals(written, Files.getLastModifiedTime(drive.getPath("/photo.jpg")).toMillis());
 			assertEquals("bytes", Files.readString(drive.getPath("/photo.jpg")));
 
