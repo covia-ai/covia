@@ -9,6 +9,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -172,11 +173,17 @@ final class LocalSpeechEngine implements SpeechEngine {
 
 	/**
 	 * Schedules the idle check the first time a model loads, so an engine
-	 * that has only been configured runs no thread.
+	 * that has only been configured runs no thread. A model can load after
+	 * {@link #close} has begun, for work queued before it; the close step
+	 * queued behind that work releases the model, so none is scheduled then.
 	 */
 	private void scheduleIdleRelease() {
 		if (idleScheduled.compareAndSet(false, true)) {
-			idle.scheduleWithFixedDelay(this::releaseIfIdle, 60, 60, TimeUnit.SECONDS);
+			try {
+				idle.scheduleWithFixedDelay(this::releaseIfIdle, 60, 60, TimeUnit.SECONDS);
+			} catch (RejectedExecutionException closing) {
+				// Closing: the close step releases the model when this work is done
+			}
 		}
 	}
 
