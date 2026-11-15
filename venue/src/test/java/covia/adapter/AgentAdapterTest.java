@@ -419,6 +419,46 @@ public class AgentAdapterTest {
 			"the record travels beside the turn");
 	}
 
+	@Test
+	public void testARequestThroughATokenRecordsTheToken() {
+		// An agent is told when a request came through one of its owner's access
+		// tokens rather than from the owner: ingress records the token's reference
+		// beside the caller, from the request's context alone, on the request and
+		// on work the token left to run later (ACCESS_TOKENS.md).
+		RequestContext alice = RequestContext.of(ALICE_DID);
+		AString address = createAgentAs(alice, "token-provenance", null);
+		String bearer = RT.getIn(engine.jobs().invokeOperation("v/ops/token/create", Maps.of(
+			Fields.NAME, "outside-bot", Fields.ACCESS, Maps.of("test", Maps.empty()),
+			Fields.CAPS, Vectors.of(Capability.create(Strings.create("g/token-provenance"), Abilities.AGENT_REQUEST),
+				Capability.create(Strings.create("v/ops/agent/request"), Abilities.INVOKE))),
+			alice).awaitResult(5000), Fields.TOKEN).toString();
+		AMap<AString, ACell> reference = engine.tokens().lookup(bearer);
+		RequestContext viaToken = engine.tokenContext(reference);
+		RequestContext keptWork = engine.context(ALICE_DID, ALICE_DID, null, Engine.keptAuthority(viaToken));
+
+		Agent agent = engine.getVenueState().users().user(ALICE_DID).agent("token-provenance");
+		Blob directSid = Blob.fromHex("55555555555555555555555555555555");
+		Blob tokenSid = Blob.fromHex("66666666666666666666666666666666");
+		Blob keptSid = Blob.fromHex("77777777777777777777777777777777");
+		for (Blob sid : List.of(directSid, tokenSid, keptSid)) agent.sessions().create(sid, ALICE_DID, null);
+
+		AMap<AString, ACell> forged = Maps.of("ask", "hi", Fields.TOKEN, reference.assoc(Fields.NAME, Strings.create("forged")));
+		assertEquals(forged, RT.getIn(requestIn(alice, address, directSid, forged), Fields.OUTPUT, "completed"),
+			"content reaches the agent as sent");
+		requestIn(viaToken, address, tokenSid, Maps.of("ask", "hi"));
+		requestIn(keptWork, address, keptSid, Maps.of("ask", "later"));
+		awaitFinished(agent);
+
+		assertNull(firstTurn(agent, directSid).get(Fields.TOKEN), "a token named inside the content is content");
+		AMap<AString, ACell> tokenTurn = firstTurn(agent, tokenSid);
+		assertEquals(reference, tokenTurn.get(Fields.TOKEN));
+		assertEquals(ALICE_DID, tokenTurn.get(Fields.CALLER), "the request is still its issuer's");
+		assertEquals(reference, firstTurn(agent, keptSid).get(Fields.TOKEN), "work the token left to run later");
+		for (Blob sid : List.of(directSid, tokenSid, keptSid)) {
+			assertFalse(agent.session(sid).getRecord().toString().contains(bearer), "the bearer is never recorded");
+		}
+	}
+
 	private ACell requestIn(RequestContext caller, AString address, Blob sid, ACell input) {
 		return engine.jobs().invokeOperation("v/ops/agent/request",
 			Maps.of(Fields.AGENT_ID, address, Fields.SESSION_ID, Strings.create(sid.toHexString()),

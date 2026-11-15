@@ -36,6 +36,11 @@ there, so it serves only to exercise the rules with a second access point.
     the token (`controllerToken`, shown by `agent:info` and `agent:list`);
   - tokens it creates, whose `source` is that token, so each token on the
     chain narrows them.
+- **What an agent is told.** A message or task a request through a token
+  sends an agent records the token's reference, `{owner, name, id}`, beside
+  its caller, also when work the token started sends it, and the agent's
+  `From` line names the token ([AGENT_CONTEXT.md](./AGENT_CONTEXT.md) §1.2).
+  The bearer is never recorded.
 - **Revocation.** Setting a token's caps to `[]`, emptying what an access
   point offers through it, deleting it or letting it expire takes effect at
   the next check, on work it already started too. A token that no longer

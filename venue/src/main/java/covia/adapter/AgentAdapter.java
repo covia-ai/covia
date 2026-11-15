@@ -1616,12 +1616,16 @@ public class AgentAdapter extends AAdapter {
 
 	/**
 	 * A pending envelope or task record with the request's provenance beside its
-	 * content (COG-20 §4): the caller, and the authentication record when a
-	 * channel binding authenticated it — both from the request context only. The
-	 * content is never read for provenance or rewritten with it.
+	 * content (COG-20 §4): the caller; the access token the request acts
+	 * through, by its reference, when one does ({@link Engine#actingSource}),
+	 * so work a token started records it too; and the authentication record when
+	 * a channel binding authenticated it — all from the request context only.
+	 * The content is never read for provenance or rewritten with it.
 	 */
 	static AMap<AString, ACell> withProvenance(AMap<AString, ACell> record, RequestContext ctx) {
 		record = record.assoc(Fields.CALLER, ctx.getCallerDID());
+		AMap<AString, ACell> token = Engine.actingSource(ctx).token();
+		if (token != null) record = record.assoc(Fields.TOKEN, token);
 		AMap<AString, ACell> authentication = ctx.getAuthentication();
 		return (authentication == null) ? record : record.assoc(Fields.AUTHENTICATION, authentication);
 	}
@@ -5112,12 +5116,15 @@ public class AgentAdapter extends AAdapter {
 
 	/**
 	 * Stamps a user turn with the provenance its envelope or task record carries
-	 * (COG-20 §4): the caller, the authentication record when there is one, and
-	 * the venue's mark on a tracked call's outcome ({@link Agent#SOURCE_TOOL_OUTCOME}).
+	 * (COG-20 §4): the caller, the access token and the authentication record
+	 * when there are any, and the venue's mark on a tracked call's outcome
+	 * ({@link Agent#SOURCE_TOOL_OUTCOME}).
 	 */
 	public static AMap<AString, ACell> withRecordedProvenance(AMap<AString, ACell> turn, ACell source) {
 		ACell caller = RT.getIn(source, Fields.CALLER);
 		if (caller != null) turn = turn.assoc(Fields.CALLER, caller);
+		ACell token = RT.getIn(source, Fields.TOKEN);
+		if (token != null) turn = turn.assoc(Fields.TOKEN, token);
 		if (Agent.SOURCE_TOOL_OUTCOME.equals(RT.getIn(source, Agent.K_SOURCE))) {
 			turn = turn.assoc(Agent.K_SOURCE, Agent.SOURCE_TOOL_OUTCOME);
 		}
