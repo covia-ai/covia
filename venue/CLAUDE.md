@@ -153,7 +153,7 @@ Base path: `/api/v1/`
 | `/jobs` | GET | Caller's jobs as a paged `{items, total, offset, limit}` envelope (#229) |
 | `/jobs/{id}` | GET | Job status. Proofs ride the `X-Covia-Ucans` header on body-less reads (federated observation) |
 | `/jobs/{id}` | POST | Message delivery to a running job (202/403/404/409) |
-| `/jobs/{id}/{cancel,pause,resume,delete}` | PUT | Lifecycle control (pause/resume are adapter opt-in → 409 otherwise) |
+| `/jobs/{id}/{cancel,pause,resume,delete}` | PUT | Lifecycle control (pause/resume are adapter opt-in → 409 otherwise, and refused as unavailable while the job's adapter is not running) |
 | `/jobs/{id}/sse` | GET | Server-sent job updates (closes on terminal) |
 | `/.well-known/did.json` | GET | Venue DID document (#167) |
 | `/.well-known/oauth-authorization-server` | GET | OAuth 2.1 AS metadata (RFC 8414) when `auth.oauth.provider` is enabled |

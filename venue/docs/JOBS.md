@@ -461,6 +461,10 @@ for days, weeks, or months (workflows, HITL, agents). Consequences:
   → HTTP 409): changing only the status while work continues underneath is not
   a pause.
 - `Job.pause()` is `STARTED`-only; `resume()` accepts the whole paused family.
+- While the job's adapter is not running, pause and resume are refused with
+  `UnavailableException`, as messages to the job are, and the job is
+  unchanged: a stopped adapter takes no new work for its jobs
+  ([ADAPTERS.md](ADAPTERS.md#an-adapter-that-is-not-running)).
 - Resume **never re-invokes the operation from its stored input** — that would
   duplicate non-idempotent side effects and lose request authority. Resumption
   continues from the suspended state the adapter holds.
@@ -562,7 +566,9 @@ or not it is started: intake for terminal Jobs is removed, stale execution
 markers/fences are cleared, and only remaining durable queued work can start
 a fresh attempt. `inCycle` never causes a wake by itself. A started agent
 adapter then wakes the agents with work; a stopped one wakes them when it
-starts.
+starts. Work already under way goes on while it is stopped, as after a
+runtime disable: a call an agent tracks that finishes still delivers its
+outcome and wakes the agent.
 
 ## Shutdown
 
