@@ -328,8 +328,8 @@ new agent status or event type.
   session the cycle took at `inCycle.sessionId` and the same epoch at that
   session's `inCycle`. An agent that is SUSPENDED or TERMINATED is issued
   none, and the cycle does not run.
-- **Revoked** by every write that sets SUSPENDED or TERMINATED or removes the
-  record, in that same write: `agent:suspend`, `agent:delete`, account
+- **Revoked** by every change that sets SUSPENDED or TERMINATED or removes the
+  record, in that same transaction: `agent:suspend`, `agent:delete`, account
   deletion and a fault suspension alike. So an agent holds a claim only while
   it is neither SUSPENDED nor TERMINATED. Startup revokes every claim (§6.1),
   and resume issues none.

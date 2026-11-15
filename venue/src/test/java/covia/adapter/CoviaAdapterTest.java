@@ -214,6 +214,12 @@ public class CoviaAdapterTest {
 			Maps.of(Fields.PATH, "g/sess-agent/sessions/" + sid + "/meta/turns"), ALICE);
 		assertEquals(CVMBool.TRUE, RT.getIn(field.awaitResult(5000), "exists"),
 			"a deep field after the hex Index key must resolve too");
+
+		// The agent's sessions list as one entry per session (AGENT_SESSIONS.md §5.3).
+		ACell list = engine.jobs().invokeOperation("v/ops/covia/list",
+			Maps.of(Fields.PATH, "g/sess-agent/sessions"), ALICE).awaitResult(5000);
+		assertEquals(CVMLong.ONE, RT.getIn(list, "count"));
+		assertTrue(String.valueOf(RT.getIn(list, "keys")).contains(sid.toString()), String.valueOf(list));
 	}
 
 	// ========== covia:read — universal resolution forms ==========
