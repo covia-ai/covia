@@ -1616,15 +1616,16 @@ public class AgentAdapter extends AAdapter {
 
 	/**
 	 * A pending envelope or task record with the request's provenance beside its
-	 * content (COG-20 §4): the caller; the access token the request acts
-	 * through, by its reference, when one does ({@link Engine#actingSource}),
-	 * so work a token started records it too; and the authentication record when
-	 * a channel binding authenticated it — all from the request context only.
-	 * The content is never read for provenance or rewritten with it.
+	 * content (COG-20 §4): the caller; the access token the request came
+	 * through, by its reference, when it came through one
+	 * ({@link Engine#tokenCameThrough}), so work a token started records it too;
+	 * and the authentication record when a channel binding authenticated it —
+	 * all from the request context only. The content is never read for
+	 * provenance or rewritten with it.
 	 */
 	static AMap<AString, ACell> withProvenance(AMap<AString, ACell> record, RequestContext ctx) {
 		record = record.assoc(Fields.CALLER, ctx.getCallerDID());
-		AMap<AString, ACell> token = Engine.actingSource(ctx).token();
+		AMap<AString, ACell> token = Engine.tokenCameThrough(ctx);
 		if (token != null) record = record.assoc(Fields.TOKEN, token);
 		AMap<AString, ACell> authentication = ctx.getAuthentication();
 		return (authentication == null) ? record : record.assoc(Fields.AUTHENTICATION, authentication);

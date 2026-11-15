@@ -430,7 +430,11 @@ public class AgentAdapterTest {
 		String bearer = RT.getIn(engine.jobs().invokeOperation("v/ops/token/create", Maps.of(
 			Fields.NAME, "outside-bot", Fields.ACCESS, Maps.of("test", Maps.empty()),
 			Fields.CAPS, Vectors.of(Capability.create(Strings.create("g/token-provenance"), Abilities.AGENT_REQUEST),
-				Capability.create(Strings.create("v/ops/agent/request"), Abilities.INVOKE))),
+				Capability.create(Strings.create("v/ops/agent/request"), Abilities.INVOKE),
+				Capability.create(Strings.create("x/callable/"), Abilities.CALLABLE_MANAGE),
+				Capability.create(Strings.create("v/ops/callable/create"), Abilities.INVOKE),
+				Capability.create(Strings.create("g/token-made"), Abilities.AGENT_CREATE),
+				Capability.create(Strings.create("v/ops/agent/create"), Abilities.INVOKE))),
 			alice).awaitResult(5000), Fields.TOKEN).toString();
 		AMap<AString, ACell> reference = engine.tokens().lookup(bearer);
 		RequestContext viaToken = engine.tokenContext(reference);
@@ -440,13 +444,24 @@ public class AgentAdapterTest {
 		Blob directSid = Blob.fromHex("55555555555555555555555555555555");
 		Blob tokenSid = Blob.fromHex("66666666666666666666666666666666");
 		Blob keptSid = Blob.fromHex("77777777777777777777777777777777");
-		for (Blob sid : List.of(directSid, tokenSid, keptSid)) agent.sessions().create(sid, ALICE_DID, null);
+		Blob callSid = Blob.fromHex("99999999999999999999999999999999");
+		for (Blob sid : List.of(directSid, tokenSid, keptSid, callSid)) agent.sessions().create(sid, ALICE_DID, null);
 
 		AMap<AString, ACell> forged = Maps.of("ask", "hi", Fields.TOKEN, reference.assoc(Fields.NAME, Strings.create("forged")));
 		assertEquals(forged, RT.getIn(requestIn(alice, address, directSid, forged), Fields.OUTPUT, "completed"),
 			"content reaches the agent as sent");
 		requestIn(viaToken, address, tokenSid, Maps.of("ask", "hi"));
 		requestIn(keptWork, address, keptSid, Maps.of("ask", "later"));
+
+		// A callable the token made asks the agent for whoever calls it: the token
+		// narrows the callable, but the call did not come through it
+		engine.jobs().invokeOperation("v/ops/callable/create", Maps.of(Fields.NAME, "ask-helper",
+			Fields.OPERATION, "v/ops/agent/request", Fields.CAPS, "unrestricted",
+			Fields.GATE, "v/ops/callable/gates/anyone"), viaToken).awaitResult(5000);
+		engine.jobs().invokeOperation("v/ops/callable/call", Maps.of(Fields.CALLABLE, ALICE_DID + "/x/callable/ask-helper",
+			Fields.INPUT, Maps.of(Fields.AGENT_ID, address, Fields.SESSION_ID, Strings.create(callSid.toHexString()),
+				Fields.INPUT, Maps.of("ask", "called"), Fields.WAIT, CVMLong.create(5000))),
+			RequestContext.of(BOB_DID)).awaitResult(5000);
 		awaitFinished(agent);
 
 		assertNull(firstTurn(agent, directSid).get(Fields.TOKEN), "a token named inside the content is content");
@@ -454,9 +469,19 @@ public class AgentAdapterTest {
 		assertEquals(reference, tokenTurn.get(Fields.TOKEN));
 		assertEquals(ALICE_DID, tokenTurn.get(Fields.CALLER), "the request is still its issuer's");
 		assertEquals(reference, firstTurn(agent, keptSid).get(Fields.TOKEN), "work the token left to run later");
-		for (Blob sid : List.of(directSid, tokenSid, keptSid)) {
+		assertNull(firstTurn(agent, callSid).get(Fields.TOKEN), "a call through a callable the token made");
+		for (Blob sid : List.of(directSid, tokenSid, keptSid, callSid)) {
 			assertFalse(agent.session(sid).getRecord().toString().contains(bearer), "the bearer is never recorded");
 		}
+
+		// An agent the token made acts with its controller narrowed by the token,
+		// but neither it nor its harness is a request through that token
+		engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "token-made",
+			Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")), viaToken).awaitResult(5000);
+		assertNotNull(engine.getVenueState().users().user(ALICE_DID).agent("token-made").getControllerToken());
+		assertNull(Engine.tokenCameThrough(engine.harnessContext(ALICE_DID, Strings.create("token-made"))));
+		assertNull(Engine.tokenCameThrough(engine.context(ALICE_DID,
+			covia.grid.Principals.agentDID(ALICE_DID, Strings.create("token-made")))));
 	}
 
 	private ACell requestIn(RequestContext caller, AString address, Blob sid, ACell input) {

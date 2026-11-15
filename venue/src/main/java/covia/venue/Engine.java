@@ -4745,6 +4745,19 @@ public class Engine {
 	}
 
 	/**
+	 * The access token request {@code ctx} came through, as its reference: the
+	 * innermost token narrowing its own authority, for the request a token's
+	 * bearer made and the work it left running alike. Null when none does, and
+	 * when the request is a callable's call or acts with authority not its own
+	 * (an agent's controller's), since the tokens narrowing that authority say
+	 * how it was set up, not how this request came.
+	 */
+	public static AMap<AString, ACell> tokenCameThrough(RequestContext ctx) {
+		if (ctx.hasSeparateAuthority() || ctx.getCallable() != null) return null;
+		return actingSource(ctx).token();
+	}
+
+	/**
 	 * The principal whose authority {@code ctx} acts with, which an agent it
 	 * creates or forks takes for its controller: an agent acting in its owner's
 	 * namespace, whatever its authority derives from, so that what it creates

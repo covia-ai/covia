@@ -1212,7 +1212,7 @@ public class ContextAssemblerTest {
 	public void testFromElementNamesTheTokenARequestCameThrough() {
 		ctx = RequestContext.ofAuthority(covia.grid.Authority.ofAgent(ALICE_DID, Strings.create("helper")));
 		String bracket = TurnProvenance.element(Labels.BRACKET, engine, ctx, tokenTurn("outside-bot", "hello"));
-		assertEquals("[From: owner " + ALICE_DID + " — token outside-bot]", bracket);
+		assertEquals("[From: owner " + ALICE_DID + " — access token outside-bot]", bracket);
 		String xml = TurnProvenance.element(Labels.XML, engine, ctx, tokenTurn("outside-bot", "hello"));
 		assertEquals("<from principal=\"" + ALICE_DID + "\" relationship=\"owner\" token=\"outside-bot\"/>", xml);
 
@@ -1230,8 +1230,8 @@ public class ContextAssemblerTest {
 		var elements = fromElements(ContextAssembler.assemble(spec(null, null, null, inbox, true)).messages());
 		assertEquals(4, elements.size(), elements.toString());
 		assertFalse(elements.get(0).contains("token"), elements.get(0));
-		assertTrue(elements.get(1).endsWith("— token outside-bot]"), elements.get(1));
-		assertTrue(elements.get(2).endsWith("— token another-bot]"), elements.get(2));
+		assertTrue(elements.get(1).endsWith("— access token outside-bot]"), elements.get(1));
+		assertTrue(elements.get(2).endsWith("— access token another-bot]"), elements.get(2));
 		assertFalse(elements.get(3).contains("token"), elements.get(3));
 	}
 

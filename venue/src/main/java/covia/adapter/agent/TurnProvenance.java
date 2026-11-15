@@ -138,7 +138,7 @@ final class TurnProvenance {
 		StringBuilder sb = new StringBuilder(relationship.words);
 		if (agentId != null) sb.append(' ').append(agentId);
 		sb.append(' ').append(caller);
-		if (token != null) sb.append(" — token ").append(token);
+		if (token != null) sb.append(" — access token ").append(token);
 		if (channel != null) channel.describe(sb);
 		return sb.toString();
 	}
