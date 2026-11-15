@@ -3,7 +3,6 @@ package covia.venue;
 import java.util.Objects;
 import java.util.function.UnaryOperator;
 
-import convex.core.data.ABlob;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
@@ -174,8 +173,7 @@ public final class Session extends ALatticeComponent<ACell>
 
 	/** The job holding an external agent's current turn in a session record, or null when none does. */
 	public static Blob externalJob(AMap<AString, ACell> session) {
-		ABlob job = RT.ensureBlob(RT.getIn(session, KEY_EXTERNAL, Fields.JOB_ID));
-		return (job == null) ? null : job.toFlatBlob();
+		return Ids.stored(RT.getIn(session, KEY_EXTERNAL, Fields.JOB_ID));
 	}
 
 	/** The external agent's own id for a session record's conversation, or null before its backend gave one. */
@@ -255,14 +253,13 @@ public final class Session extends ALatticeComponent<ACell>
 	}
 
 	public void removePendingJob(Blob jobId) {
-		AString jobIdHex = Strings.create(jobId.toHexString());
 		update(session -> {
 			AVector<ACell> pending = (session.get(K_PENDING) instanceof AVector<?> v)
 				? (AVector<ACell>) v : Vectors.empty();
 			AVector<ACell> kept = Vectors.empty();
 			for (long i = 0; i < pending.count(); i++) {
 				ACell envelope = pending.get(i);
-				if (!jobIdHex.equals(RT.getIn(envelope, Fields.JOB_ID))) {
+				if (!jobId.equals(chatJob(envelope))) {
 					kept = kept.conj(envelope);
 				}
 			}
@@ -354,6 +351,11 @@ public final class Session extends ALatticeComponent<ACell>
 		return RT.getIn(envelope, Fields.JOB_ID) != null;
 	}
 
+	/** The chat Job a queued envelope names, or null for a message. */
+	public static Blob chatJob(ACell envelope) {
+		return Ids.stored(RT.getIn(envelope, Fields.JOB_ID));
+	}
+
 	/**
 	 * What a cycle takes from a session's pending queue (AGENT_SESSIONS.md
 	 * §5.5.2): the messages ahead of the first chat, and that chat too when
@@ -386,8 +388,7 @@ public final class Session extends ALatticeComponent<ACell>
 	 */
 	public static long queueKey(ACell envelope) {
 		if (RT.getIn(envelope, Fields.QUEUED) instanceof CVMLong queued) return queued.longValue();
-		AString jobId = RT.ensureString(RT.getIn(envelope, Fields.JOB_ID));
-		Blob id = (jobId == null) ? null : Blob.fromHex(jobId.toString());
+		Blob id = chatJob(envelope);
 		return (id == null) ? 0L : queueKey(id);
 	}
 

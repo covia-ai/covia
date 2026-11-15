@@ -1,11 +1,14 @@
 package covia.venue.migration;
 
+import static covia.venue.migration.Records.assoc;
+import static covia.venue.migration.Records.indexValues;
+import static covia.venue.migration.Records.mapValues;
+
 import java.util.function.UnaryOperator;
 
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
-import convex.core.data.Blob;
 import convex.core.data.Index;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
@@ -183,31 +186,4 @@ public final class CallerAndOwner implements MigrationStep {
 		return (cell instanceof AMap<?, ?> m) ? (AMap<AString, ACell>) m : null;
 	}
 
-	@SuppressWarnings("unchecked")
-	private static ACell assoc(ACell map, ACell key, ACell value) {
-		return ((AMap<ACell, ACell>) map).assoc(key, value);
-	}
-
-	/** {@code map} with each value converted; the same cell when none changes. */
-	@SuppressWarnings("unchecked")
-	private static ACell mapValues(AMap<?, ?> map, UnaryOperator<ACell> convert) {
-		AMap<ACell, ACell> result = (AMap<ACell, ACell>) map;
-		for (var entry : ((AMap<ACell, ACell>) map).entrySet()) {
-			ACell converted = convert.apply(entry.getValue());
-			if (converted != entry.getValue()) result = result.assoc(entry.getKey(), converted);
-		}
-		return result;
-	}
-
-	/** {@code index} with each value converted; the same cell when none changes. */
-	@SuppressWarnings("unchecked")
-	private static ACell indexValues(Index<?, ?> index, UnaryOperator<ACell> convert) {
-		Index<Blob, ACell> result = (Index<Blob, ACell>) index;
-		for (long i = 0, n = index.count(); i < n; i++) {
-			var entry = ((Index<Blob, ACell>) index).entryAt(i);
-			ACell converted = convert.apply(entry.getValue());
-			if (converted != entry.getValue()) result = result.assoc(entry.getKey(), converted);
-		}
-		return result;
-	}
 }

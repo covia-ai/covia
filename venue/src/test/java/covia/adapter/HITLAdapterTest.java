@@ -240,7 +240,7 @@ public class HITLAdapterTest {
 			e.getVenueState().users().ensure(owner);
 			e.registerAdapter(new AgentAdapter() {
 				@Override public boolean appendSessionMessage(covia.venue.Users draft, AString user, AString agent, Blob session,
-						AString caller, AString job, ACell message) {
+						AString caller, Blob job, ACell message) {
 					assertEquals(Status.COMPLETE, draft.user(owner).jobs().getRecord(Blob.fromHex(requestId.get().toString())).get(Fields.STATUS),
 						"the final Job result must be part of the same draft as the inbox and session");
 					if (failAppend.get()) {

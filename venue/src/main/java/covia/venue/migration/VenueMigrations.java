@@ -16,7 +16,7 @@ public final class VenueMigrations {
 	private VenueMigrations() {}
 
 	/** The current venue version: the number of {@link #steps}. */
-	public static final long VERSION = 2;
+	public static final long VERSION = 3;
 
 	/**
 	 * The steps, built with the venue's secret store keys, which a part that
@@ -31,6 +31,8 @@ public final class VenueMigrations {
 				new CurrentJobRecords(),
 				new CallerAndOwner(),
 				new JobEntries(keys),
-				new DelegationEntries()));
+				new DelegationEntries()),
+			MigrationStep.of(				// 2 → 3
+				new BlobIds()));
 	}
 }

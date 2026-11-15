@@ -605,8 +605,7 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 		ACell claim = RT.getIn(getRecord(), K_IN_CYCLE);
 		if (claim == null) return;
 		update(r -> r.dissoc(K_IN_CYCLE));
-		AString sidHex = RT.ensureString(RT.getIn(claim, Fields.SESSION_ID));
-		Blob sid = (sidHex == null) ? null : Blob.fromHex(sidHex.toString());
+		Blob sid = Ids.stored(RT.getIn(claim, Fields.SESSION_ID));
 		ACell epoch = RT.getIn(claim, K_EPOCH);
 		if (sid != null && epoch != null) session(sid).clearCycle(epoch);
 	}
@@ -716,7 +715,7 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 			boolean sessionClaimed = sid != null && draft.session(sid).beginCycle(epoch, turns, drainCount);
 			if (taskId == null && sid != null && !sessionClaimed) return CycleStart.MOVED;
 			AMap<AString, ACell> claim = Maps.of(K_EPOCH, epoch);
-			if (sessionClaimed) claim = claim.assoc(Fields.SESSION_ID, Strings.create(sid.toHexString()));
+			if (sessionClaimed) claim = claim.assoc(Fields.SESSION_ID, sid);
 			AMap<AString, ACell> issued = claim;
 			draft.update(r -> r.assoc(K_IN_CYCLE, issued));
 			return sessionClaimed ? CycleStart.SESSION : CycleStart.NO_SESSION;
@@ -828,9 +827,8 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 
 	/** Whether an outbound wait recorded for this task, such as an unanswered HITL ask, is open. */
 	public boolean hasPendingFor(Blob taskId) {
-		AString hex = Strings.create(taskId.toHexString());
 		for (var entry : getPending().entrySet()) {
-			if (hex.equals(RT.getIn(entry.getValue(), Fields.TASK_ID))) return true;
+			if (taskId.equals(RT.getIn(entry.getValue(), Fields.TASK_ID))) return true;
 		}
 		return false;
 	}
@@ -1109,7 +1107,7 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 	public AMap<AString, ACell> mergeRunResult(
 			ACell snapshotState,
 			ACell newState,
-			AMap<AString, ACell> taskResults,
+			Index<Blob, ACell> taskResults,
 			AMap<AString, ACell> timelineEntry,
 			Blob historySid,
 			AVector<ACell> turnsToAppend,
@@ -1153,12 +1151,11 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 	}
 
 	private static Index<Blob, ACell> removeCompletedTasks(
-			Index<Blob, ACell> tasks, AMap<AString, ACell> taskResults) {
+			Index<Blob, ACell> tasks, Index<Blob, ACell> taskResults) {
 		if (taskResults == null || tasks == null) return (tasks != null) ? tasks : Index.none();
 		Index<Blob, ACell> remaining = tasks;
 		for (var entry : tasks.entrySet()) {
-			AString hex = Strings.create(entry.getKey().toHexString());
-			if (taskResults.get(hex) != null) remaining = remaining.dissoc(entry.getKey());
+			if (taskResults.get(entry.getKey()) != null) remaining = remaining.dissoc(entry.getKey());
 		}
 		return remaining;
 	}

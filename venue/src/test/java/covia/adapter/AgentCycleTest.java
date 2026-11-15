@@ -136,7 +136,7 @@ public class AgentCycleTest {
 	}
 
 	private static Blob sessionOf(Job job) {
-		return Blob.fromHex(RT.ensureString(job.getData().get(Fields.SESSION_ID)).toString());
+		return Blob.parse(job.getData().get(Fields.SESSION_ID));
 	}
 
 	private static AString hex(Job job) {
@@ -199,7 +199,7 @@ public class AgentCycleTest {
 		for (long i = 0; i < timeline.count(); i++) {
 			AVector<ACell> taken = RT.ensureVector(RT.getIn(timeline.get(i), Fields.MESSAGES));
 			for (long j = 0; taken != null && j < taken.count(); j++) {
-				if (hex(chat).equals(RT.getIn(taken.get(j), Fields.JOB_ID))) return i;
+				if (chat.getID().equals(RT.getIn(taken.get(j), Fields.JOB_ID))) return i;
 			}
 		}
 		return -1;
@@ -223,7 +223,7 @@ public class AgentCycleTest {
 				assertEquals(0, pendingCount(agent, sid), runtime + ": the message has left the queue");
 				AVector<ACell> taken = userTurns(agent, sid, text);
 				assertEquals(1, taken.count(), runtime + ": the message is a turn");
-				assertEquals(hex(chat), RT.getIn(taken.get(0), Fields.JOB_ID), runtime + ": the turn names its chat");
+				assertEquals(chat.getID(), RT.getIn(taken.get(0), Fields.JOB_ID), runtime + ": the turn names its chat");
 				assertNotNull(agent.session(sid).cycleEpoch(), runtime + ": the session is claimed");
 
 				gate.release();

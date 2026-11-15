@@ -162,7 +162,7 @@ public class LateToolResultTest {
 			assertEquals(RT.getIn(call, Fields.ARGUMENTS, Fields.JOB_ID), RT.getIn(result, Fields.STRUCTURED_CONTENT, Fields.JOB_ID));
 			jobs.add(RT.getIn(call, Fields.ARGUMENTS, Fields.JOB_ID));
 		}
-		assertEquals(java.util.Set.of(Strings.create(okJob), Strings.create(badJob)), jobs, "one exchange per outcome: " + messages);
+		assertEquals(java.util.Set.of(Blob.fromHex(okJob), Blob.fromHex(badJob)), jobs, "one exchange per outcome: " + messages);
 		for (long i = 0; i < messages.count(); i++) {
 			assertFalse(Agent.ROLE_USER.equals(RT.getIn(messages.get(i), Agent.K_ROLE))
 				&& String.valueOf(RT.getIn(messages.get(i), Agent.K_CONTENT)).contains("finished-late"),
@@ -336,7 +336,7 @@ public class LateToolResultTest {
 			watch.awaitRest(1);
 			ACell task = agent.getTasks().get(job.getID());
 			assertTrue(Task.isParked(task));
-			agent.sessions().remove(Blob.fromHex(RT.ensureString(RT.getIn(task, Fields.SESSION_ID)).toString()));
+			agent.sessions().remove(Task.sessionId(task));
 			gate.release();
 			TestEngine.awaitJob(job, Job::isFinished, 10_000, () -> "the stranded task did not fail");
 		}
@@ -382,7 +382,7 @@ public class LateToolResultTest {
 	}
 
 	private static Blob sessionOf(AMap<AString, ACell> taskJob) {
-		return Blob.fromHex(RT.ensureString(taskJob.get(Fields.SESSION_ID)).toString());
+		return Blob.parse(taskJob.get(Fields.SESSION_ID));
 	}
 
 	/**

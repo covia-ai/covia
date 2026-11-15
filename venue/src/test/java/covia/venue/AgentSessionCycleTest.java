@@ -95,7 +95,7 @@ public class AgentSessionCycleTest {
 		agent.putRecord(agent.getRecord().assoc(Agent.KEY_SESSIONS, agent.getSessions().assoc(sid, damaged)));
 		ACell before = agent.getRecord();
 		assertThrows(IllegalArgumentException.class, () -> agent.mergeRunResult(
-			null, Maps.of("changed", true), Maps.of(task.toHexString(), "done"),
+			null, Maps.of("changed", true), Index.of(task, Strings.create("done")),
 			Maps.of("event", "complete"), sid, Vectors.of(turn("response")), Maps.of(Fields.TOTAL, 10)));
 		assertEquals(before, agent.getRecord(), "a turn the session cannot take must roll back tasks, state and timeline too");
 	}
@@ -313,7 +313,7 @@ public class AgentSessionCycleTest {
 
 	private ACell queueTask(String input) {
 		agent.addTaskInSession(sid, userDid, null, TASK, Maps.of(Fields.INPUT, Strings.create(input),
-			Fields.SESSION_ID, Strings.create(sid.toHexString())));
+			Fields.SESSION_ID, sid));
 		return agent.getTasks().get(TASK);
 	}
 

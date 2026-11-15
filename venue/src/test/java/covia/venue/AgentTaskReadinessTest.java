@@ -37,7 +37,7 @@ public class AgentTaskReadinessTest {
 		agent.sessions().create(SID, did, null);
 		agent.tasks().add(TASK, Maps.of(
 			Fields.INPUT, Maps.of("ask", "something"),
-			Fields.SESSION_ID, Strings.create(SID.toHexString()),
+			Fields.SESSION_ID, SID,
 			Fields.CREATED, CVMLong.create(1)));
 	}
 
@@ -115,7 +115,7 @@ public class AgentTaskReadinessTest {
 	public void anOpenWaitIsMatchedToItsTask() {
 		Blob ask = Blob.fromHex("a5c0000000000000000000000000beef");
 		assertFalse(agent.hasPendingFor(TASK));
-		agent.addPending(ask, Maps.of(Fields.TASK_ID, Strings.create(TASK.toHexString())));
+		agent.addPending(ask, Maps.of(Fields.TASK_ID, TASK));
 		assertTrue(agent.hasPendingFor(TASK));
 		assertFalse(agent.hasPendingFor(Blob.fromHex("0000000000000000000000000000beef")));
 		agent.removePending(ask);

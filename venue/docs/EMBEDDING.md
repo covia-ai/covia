@@ -310,6 +310,8 @@ identity token through an operation", and HELD_KEYS.md.
 | Closing the engine, then the host | Close the application (or the engine), then the host |
 | `AuthMiddleware.withTransportGrants(ctx, ucans[, verifier])` | `engine.withTransportGrants(ctx, ucans)`, which verifies with the venue's DID verifier and clock |
 | `agent.getSession(sid)` and `Agent`'s other session shortcuts (`getSessionPending`, `getSessionCycleEpoch`, `ensureSession`, `removeSession`, `hasSessionPending`, `oldestSessionWithPending`) | The session itself, `agent.session(sid)` (`getRecord()`, `pending()`, `cycleEpoch()`), and the agent's sessions, `agent.sessions()` (`create`, `remove`, `hasPending`, `oldestWithPending`) |
+| A job, task or session id in an agent's records (a task's or timeline entry's `sessionId`, a turn's or queued envelope's `jobId`, a timeline entry's `taskResults` keys) read as hex text | A Blob: `Task.sessionId(row)`, `Session.chatJob(envelope)`, or `Ids.stored(cell)`; text from elsewhere compares after `Blob.parse` |
+| `AgentAdapter.deliverSessionMessage` and `appendSessionMessage` taking the chat's job id as text | The job id as a Blob |
 
 ## Upgrading from 0.9.x
 

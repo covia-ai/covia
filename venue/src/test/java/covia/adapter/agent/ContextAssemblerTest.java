@@ -347,7 +347,7 @@ public class ContextAssemblerTest {
 	@Test
 	public void testHeadCarriesVenueModelAndSessionButNeverTheDate() {
 		Spec s = new Spec(engine, ctx, null, Maps.of(Strings.intern("model"), Strings.create("gpt-4.1-mini")),
-			ContextAssembler.sessionHex(convex.core.data.Blob.fromHex("00aa00aa00aa00aa00aa00aa00aa00aa")),
+			ContextAssembler.idText(convex.core.data.Blob.fromHex("00aa00aa00aa00aa00aa00aa00aa00aa")),
 			null, 0, null, null, null, null, null, null, null, true, null, null, null, null, null);
 		Prompt p = ContextAssembler.assemble(s);
 		assertTrue(head(p).contains("Venue:"), head(p));
@@ -357,8 +357,8 @@ public class ContextAssemblerTest {
 		assertFalse(head(p).contains(java.time.LocalDate.now().toString()), head(p));
 		assertTrue(tail(p).contains(java.time.LocalDate.now().toString()), tail(p));
 
-		assertEquals("beef0001", ContextAssembler.sessionHex(Strings.create("beef0001")));
-		assertNull(ContextAssembler.sessionHex(null));
+		assertEquals("beef0001", ContextAssembler.idText(Strings.create("beef0001")));
+		assertNull(ContextAssembler.idText(null));
 		assertFalse(head(ContextAssembler.assemble(spec(null))).contains("Session:"));
 	}
 

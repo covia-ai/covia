@@ -197,18 +197,18 @@ public class AgentConcurrencyTest {
 		Blob missing = Blob.fromHex("99990003999900039999000399990003");
 
 		assertFalse(adapter.deliverSessionMessage(ALICE_DID, agent.getAgentId(), missing,
-			ALICE_DID, Strings.create("hitl-missing"), Strings.create("answer")));
+			ALICE_DID, Blob.fromHex("77770001"), Strings.create("answer")));
 		assertNull(agent.session(missing).getRecord(),
 			"venue-mediated delivery must not mint the session it is meant to resume");
 
 		Blob existing = Blob.fromHex("99990004999900049999000499990004");
 		agent.sessions().create(existing, ALICE_DID, null);
 		agent.suspend(Strings.create("keep the run loop parked for inspection"));
+		Blob chat = Blob.fromHex("77770002");
 		assertTrue(adapter.deliverSessionMessage(ALICE_DID, agent.getAgentId(), existing,
-			ALICE_DID, Strings.create("hitl-present"), Strings.create("answer")));
+			ALICE_DID, chat, Strings.create("answer")));
 		assertEquals(1, agent.session(existing).pending().count());
-		assertEquals(Strings.create("hitl-present"),
-			RT.getIn(agent.session(existing).pending(), CVMLong.ZERO, Fields.JOB_ID));
+		assertEquals(chat, RT.getIn(agent.session(existing).pending(), CVMLong.ZERO, Fields.JOB_ID));
 	}
 
 	@Test
