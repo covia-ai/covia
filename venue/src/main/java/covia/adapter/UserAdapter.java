@@ -213,7 +213,7 @@ public class UserAdapter extends AAdapter {
 	private ACell export(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
 		if (!(ctx.getJob() instanceof VenueJob job) || !job.isDirectRun()
 				|| ctx.getExecutionScope().agentId() != null || ctx.getExecutionScope().sessionId() != null || ctx.getExecutionScope().taskId() != null
-				|| !ctx.getCallerDID().equals(ctx.getUserDID())) throw new AuthException(EXPORT_DIRECT_ONLY);
+				|| engine.inPersonDenial(ctx) != null) throw new AuthException(EXPORT_DIRECT_ONLY);
 		// A caller-controlled output schema could put the state in validation logs.
 		if (!getOperations().get(EXPORT).get(Fields.OPERATION).equals(meta.get(Fields.OPERATION))) {
 			throw new AuthException(EXPORT_DEFINITION_REQUIRED);
@@ -380,8 +380,10 @@ public class UserAdapter extends AAdapter {
 	}
 
 	private void requireSelfOrVenueUserAuthority(RequestContext ctx, AString did, AString ability) {
-		// The user itself, with all of its authority: not a request an access token narrows
-		if (did.equals(ctx.getCallerDID()) && ctx.getExecutionScope().agentId() == null && engine.holdsAuthorityOf(ctx, did)) return;
+		// The user itself in person, with all of its authority: not a request an
+		// access token narrows, nor one made for the user by another principal
+		if (did.equals(ctx.getAuthorityDID()) && engine.inPersonDenial(ctx) == null
+				&& ctx.getExecutionScope().agentId() == null && engine.holdsAuthorityOf(ctx, did)) return;
 		requireVenueUserAuthority(ctx, ability);
 	}
 

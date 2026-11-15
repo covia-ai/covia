@@ -67,6 +67,17 @@ For the division with capability enforcement and authentication, see
   a separate authority the request acted with ([UCAN.md](./UCAN.md) §5.4), but
   not the scope. Agents are unaffected, because their scope is read again from
   their config.
+- **In person.** A request carries the principal it authenticated as where it
+  entered the venue: the caller a transport bound, a binding's principal, or
+  the principal an in-process caller made its context for
+  (`RequestContext.of`). Every context made for the request keeps it, a
+  callable's call and `admin/sudo` included. Work a job or a scheduled event
+  carries on later carries none, and neither does a gate's evaluation. An act
+  that needs the user present passes only when the principal whose authority
+  applies is a user in its own account and the request authenticated as that
+  user (`Engine.inPersonDenial`): answering approval requests, `secret:extract`,
+  `user:export` and `user:clone` from one's own account, and reading or
+  changing one's own sign-in keys.
 - **Revocation.** Nothing revokes a grant; only sign-in keys can be revoked
   (`ManagedUsers`).
 

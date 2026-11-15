@@ -4680,6 +4680,28 @@ public class Engine {
 		return holdsAuthorityOf(ctx, new Source(principal, null));
 	}
 
+	/** Refusal of an act only the user may do in person. */
+	public static final String NOT_IN_PERSON = "Only the user in person may do this: not an agent, not another "
+		+ "principal acting for the user, and not work the venue carries on later";
+
+	/**
+	 * Why {@code ctx} is not the user in person, or null when it is: the
+	 * principal whose authority applies is a user acting in its own account,
+	 * and the request authenticated as that user
+	 * ({@link RequestContext#getAuthenticatedDID()}). So an agent, the public
+	 * principal, a callable's call, a delegate under {@code admin/sudo} and
+	 * work resumed from what a job or event kept are each refused. An act that
+	 * needs the user present, such as answering their approval requests, asks
+	 * this beside its authority check.
+	 */
+	public String inPersonDenial(RequestContext ctx) {
+		AString authority = (ctx == null) ? null : ctx.getAuthorityDID();
+		if (authority == null || isPublicPrincipal(authority)) return NOT_IN_PERSON;
+		if (!authority.equals(ctx.getUserDID())) return NOT_IN_PERSON;
+		if (!authority.equals(ctx.getAuthenticatedDID())) return NOT_IN_PERSON;
+		return null;
+	}
+
 	/**
 	 * A source of authority: a principal, and the access token narrowing it, if
 	 * any (ACCESS_TOKENS.md). An agent's controller is one, and so is what an
@@ -4797,12 +4819,19 @@ public class Engine {
 	/**
 	 * As {@link #context(AString, AString, AVector)}, acting with the authority
 	 * {@link #keptAuthority} kept, if any, rebuilt as it would act now: an
-	 * authority that could not act now fails as its own request would.
+	 * authority that could not act now fails as its own request would. Work
+	 * that goes on this way is never anyone in person, so the context names no
+	 * authenticated principal ({@link #inPersonDenial}).
 	 *
 	 * @throws AuthException as {@link #context(AString, AString, AVector)}, for
 	 *         the caller or the kept authority
 	 */
 	public RequestContext context(AString owner, AString principal, AVector<ACell> proofs,
+			AMap<AString, ACell> authority) {
+		return keptContext(owner, principal, proofs, authority).unauthenticated();
+	}
+
+	private RequestContext keptContext(AString owner, AString principal, AVector<ACell> proofs,
 			AMap<AString, ACell> authority) {
 		// Work a callable's call left running: its invoker, in the callable's namespace, with the callable's authority
 		AMap<AString, ACell> callable = (authority == null) ? null : RT.ensureMap(authority.get(Fields.CALLABLE));

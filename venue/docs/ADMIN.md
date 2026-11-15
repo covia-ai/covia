@@ -180,7 +180,7 @@ kept bearer retains its source-authority and storage restrictions.
 | `mcp:create-token`, `mcp:update-token`, `mcp:delete-token` | `mcp/token` on `U/x/token/<name>`, for tokens accepted at MCP alone; creation checks issuer authority, update checks source authority; deletion only narrows | Retain independently managed MCP token permissions |
 | Agent configuration/controller changes | `agent/write` plus controller-authority checks where required | Retain separate agent management and authority checks |
 | `auth:identity-token` | Caller identity, scope/sub-principal and signing-key custody checks | Identity issuance remains identity-bound; a generic admin grant must not permit impersonation |
-| `hitl:respond` | Responder must hold its own whole authority; grant answers also follow granting rules | Approval remains attributable to the responder; admin authority must not manufacture someone else's consent |
+| `hitl:respond` | Responder must hold its own whole authority, in person ([VENUE_AUTHORITY.md](VENUE_AUTHORITY.md#how-it-works-today)); grant answers also follow granting rules | Approval remains attributable to the responder; admin authority must not manufacture someone else's consent |
 
 `user:sudo` changes the working namespace, not the authenticated actor. It
 does not grant all the target user's powers. Renaming it must preserve that

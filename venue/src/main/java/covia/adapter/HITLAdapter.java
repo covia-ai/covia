@@ -433,6 +433,10 @@ public class HITLAdapter extends AAdapter {
 		// For the same reason, only a request with all of that user's authority
 		// answers: not one an access token narrows to less.
 		if (!engine.holdsAuthorityOf(ctx, caller)) throw new AuthException(ANSWER_NEEDS_WHOLE_AUTHORITY);
+		// And only the human in person: not a callable's call, a delegate acting
+		// for the user, or work the venue carries on later
+		String notInPerson = engine.inPersonDenial(ctx);
+		if (notInPerson != null) throw new AuthException(notInPerson);
 		AString id = RT.ensureString(RT.getIn(input, Hitl.ID));
 		if (id == null) throw new InvalidInputException("id is required");
 		// Records key on bare hex, but REST renders job ids 0x-prefixed —

@@ -173,12 +173,13 @@ public class SecretAdapter extends AAdapter {
 	private ACell handleExtract(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
 		AString name = name(input);
 		try {
-			if (!(ctx.getJob() instanceof VenueJob job) || !job.isDirectRun()
-					|| ctx.getExecutionScope().agentId() != null || ctx.getExecutionScope().sessionId() != null || ctx.getExecutionScope().taskId() != null
-					|| !ctx.getCallerDID().equals(ctx.getUserDID())) throw new AuthException(EXTRACT_DIRECT_ONLY);
 			// Anonymous callers act as the public principal, whose store holds the
 			// operator's shared keys. Even unrestricted public access never reads them out.
 			if (engine.isPublicPrincipal(ctx.getUserDID())) throw new AuthException(EXTRACT_NOT_PUBLIC);
+			// Plaintext leaves only for the owner in person
+			if (!(ctx.getJob() instanceof VenueJob job) || !job.isDirectRun()
+					|| ctx.getExecutionScope().agentId() != null || ctx.getExecutionScope().sessionId() != null || ctx.getExecutionScope().taskId() != null
+					|| engine.inPersonDenial(ctx) != null) throw new AuthException(EXTRACT_DIRECT_ONLY);
 			engine.requireResourceAccess(ctx, resource(name), Abilities.SECRET_EXTRACT);
 			// A caller-controlled output schema could put plaintext in validation logs.
 			// Use the adapter-owned definition, including its safe output schema.

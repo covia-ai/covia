@@ -23,6 +23,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Changed
 
+- Answering an approval request, `secret:extract`, `user:export`, `user:clone` from one's own account and reading or changing one's own sign-in keys need the user in person: work a job or scheduled event carries on later can no longer do them.
 - Running Python is the operator's: each configured function, and creating or calling an instance, needs `admin/execute/python` on `<venue DID>/python/operations/<id>` or `<venue DID>/python/templates/<template>`, which the venue holds and can grant to a user.
 - An adapter that fails to start, at launch, enable or restart, no longer stops the venue: it stays enabled but failed, its operations refused as not running, until restarted.
 - A `venue:adapter/configure` change the adapter refuses with an error is reverted to its previous configuration.
