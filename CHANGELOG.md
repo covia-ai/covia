@@ -12,6 +12,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 - Job-specific `job/read`, `job/manage` and `job/message` grants replace CRUD permissions on Job APIs; lifecycle controls return acknowledgements.
 - Embedded simulations can discover the next queued scheduled timestamp across venues and advance directly to it (#683).
+- DLFS entries carry application metadata: `dlfs:setMetadata`, `file:setMetadata` and `vault:setMetadata` set or clear it (`crud/write`), and `dlfs:stat` and `file:stat` return it; a move keeps it, replacing a file's content in place keeps it, and deleting the entry removes it (#659).
 
 - Universal Job tools (`job:status`, `result`, `cancel`, `pause`, `resume`, `message`) manage local and remote work independently of its execution adapter; agent skills use them and existing Grid Job tools remain compatible.
 

@@ -45,6 +45,15 @@ public class VaultAdapterTest {
 	}
 
 	@Test
+	public void testVaultSetsMetadata() {
+		run("v/ops/vault/write", Maps.of("path", "doc.txt", "content", "x"));
+		AMap<AString, ACell> facts = Maps.of("kind", "letter");
+		run("v/ops/vault/set-metadata", Maps.of("path", "doc.txt", "metadata", facts));
+		assertEquals(facts, RT.getIn(run("v/ops/dlfs/stat",
+			Maps.of("drive", "vault", "path", "doc.txt")), "metadata"));
+	}
+
+	@Test
 	public void testVaultCreatesItsDriveOnFirstWrite() {
 		// Vault names its own drive, so its first write creates it. Until then a
 		// read finds no drive and creates nothing.

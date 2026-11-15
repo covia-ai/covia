@@ -3,10 +3,12 @@ package covia.adapter;
 import static convex.dlfs.DLFSDriveManager.isValidDriveName;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.FileSystem;
 import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.concurrent.CompletableFuture;
@@ -27,8 +29,11 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
+import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.dlfs.DLFSDrive;
+import convex.lattice.fs.DLFSNode;
+import convex.lattice.fs.DLPath;
 import convex.lattice.fs.impl.DLFSLocal;
 import covia.api.Fields;
 import covia.exception.AuthException;
@@ -67,6 +72,8 @@ import covia.venue.User;
  *   <li>{@code dlfs:write} — write file content</li>
  *   <li>{@code dlfs:mkdir} — create directory</li>
  *   <li>{@code dlfs:delete} — delete file or directory</li>
+ *   <li>{@code dlfs:stat} — an entry's type, size, times and metadata</li>
+ *   <li>{@code dlfs:setMetadata} — set or clear an entry's application metadata</li>
  * </ul>
  */
 public class DLFSAdapter extends AAdapter implements covia.venue.storage.ContentProvider {
@@ -81,6 +88,10 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 	/** A drive that does not exist or was deleted, named by an operation that does not create one. */
 	public static final String DRIVE_NOT_FOUND = "No such DLFS drive: ";
 	public static final String DRIVE_NAME_CONFLICT = "'drive' and 'name' name different drives";
+	/** Metadata asked of an entry outside a DLFS drive, such as a host file. */
+	public static final String NO_METADATA = "Only an entry in a DLFS drive has metadata";
+	/** A metadata change whose input names no value. */
+	public static final String METADATA_REQUIRED = "'metadata' is required: the value to set, or null to clear it";
 
 	private static final AString FIELD_DRIVE = Strings.intern("drive");
 	private static final AString FIELD_PATH = Strings.intern("path");
@@ -158,6 +169,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 		installAsset("dlfs/mkdir",        ASSETS_PATH + "mkdir.json");
 		installAsset("dlfs/delete",       ASSETS_PATH + "delete.json");
 		installAsset("dlfs/stat",         ASSETS_PATH + "stat.json");
+		installAsset("dlfs/set-metadata", ASSETS_PATH + "setMetadata.json");
 		log.debug("DLFS adapter installed with {} operations", pendingCatalogEntries.size());
 	}
 
@@ -433,7 +445,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 	private static AString abilityFor(String subOp) {
 		return switch (subOp) {
 			case "list", "tree", "read", "stat", "listDrives" -> Capability.CRUD_READ;
-			case "create", "write", "append", "mkdir", "createDrive" -> Capability.CRUD_WRITE;
+			case "create", "write", "append", "mkdir", "setMetadata", "createDrive" -> Capability.CRUD_WRITE;
 			case "delete", "deleteDrive" -> Capability.CRUD_DELETE;
 			default -> null;
 		};
@@ -862,6 +874,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 			case "mkdir" -> handleMkdir(driveCtx, input, mayCreate);
 			case "delete" -> handleDelete(driveCtx, input);
 			case "stat" -> handleStat(driveCtx, input);
+			case "setMetadata" -> handleSetMetadata(driveCtx, input);
 			default -> throw new NotSupportedException("Unknown DLFS operation: " + subOp);
 		};
 	}
@@ -990,7 +1003,94 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 		if (pathCell == null) throw new InvalidInputException("'path' is required");
 
 		Path path = resolvePath(fs, pathCell.toString());
-		return FileOperations.stat(path, null);
+		return stat(path, null);
+	}
+
+	private ACell handleSetMetadata(RequestContext ctx, AMap<AString, ACell> input) throws IOException {
+		FileSystem fs = requireDrive(ctx, input);
+		AString pathCell = RT.ensureString(input.get(FIELD_PATH));
+		if (pathCell == null) throw new InvalidInputException("'path' is required");
+		ACell metadata = metadataArg(input);
+		setMetadata(resolvePath(fs, pathCell.toString()), metadata);
+		return Maps.of(Fields.METADATA, metadata);
+	}
+
+	// ==================== Metadata ====================
+
+	/**
+	 * {@link FileOperations#stat}, with the entry's application metadata in
+	 * {@code metadata} when it is a DLFS entry that has any.
+	 */
+	static ACell stat(Path path, Boolean readOnly) throws IOException {
+		AMap<AString, ACell> stat = RT.ensureMap(FileOperations.stat(path, readOnly));
+		if (!(path.getFileSystem() instanceof DLFSLocal fs)) return stat;
+		AVector<ACell> node = fs.getNode(dlPath(path));
+		ACell metadata = (node == null) ? null : DLFSNode.getMetadata(node);
+		return (metadata == null) ? stat : stat.assoc(Fields.METADATA, metadata);
+	}
+
+	/**
+	 * The application metadata of the entry at {@code path}, or null if it has
+	 * none. DLFS keeps the value with the entry: a move takes it along,
+	 * replacing the content in place keeps it, and deleting the entry removes
+	 * it. No authority is checked.
+	 *
+	 * @param path An entry in a DLFS drive
+	 * @throws NotSupportedException If {@code path} is not in a DLFS drive
+	 * @throws NoSuchFileException If there is no entry at {@code path}
+	 */
+	public static ACell metadata(Path path) throws IOException {
+		AVector<ACell> node = dlfs(path).getNode(dlPath(path));
+		if (node == null) throw new NoSuchFileException(path.toString());
+		return DLFSNode.getMetadata(node);
+	}
+
+	/**
+	 * Sets the application metadata of the entry at {@code path}, or clears it
+	 * when {@code metadata} is null, leaving its content and modification time
+	 * as they were. This is one atomic update of the entry's drive, the same
+	 * compare-and-set DLFS makes for its own changes to an entry, so a change
+	 * to the entry made meanwhile is never lost. No authority is checked:
+	 * callers have authorised a write to the entry.
+	 *
+	 * @param path An entry in a DLFS drive
+	 * @param metadata The value to keep with the entry, or null for none
+	 * @throws NotSupportedException If {@code path} is not in a DLFS drive
+	 * @throws NoSuchFileException If there is no entry at {@code path}
+	 */
+	public void setMetadata(Path path, ACell metadata) throws IOException {
+		DLFSLocal fs = dlfs(path);
+		DLPath target = dlPath(path);
+		CVMLong time = engine.currentTimestamp();
+		try {
+			fs.getCursor().updateAndGet(root -> {
+				AVector<ACell> node;
+				try {
+					node = DLFSNode.resolveValidPath(root, target);
+				} catch (IOException e) {
+					throw new UncheckedIOException(e);
+				}
+				if (node == null) throw new UncheckedIOException(new NoSuchFileException(path.toString()));
+				return DLFSNode.updateNode(root, target, DLFSNode.withMetadata(node, metadata, time), time);
+			});
+		} catch (UncheckedIOException e) {
+			throw e.getCause();
+		}
+	}
+
+	/** The {@code metadata} a change names: required, with null to clear it. */
+	static ACell metadataArg(AMap<AString, ACell> input) {
+		if (!input.containsKey(Fields.METADATA)) throw new InvalidInputException(METADATA_REQUIRED);
+		return input.get(Fields.METADATA);
+	}
+
+	private static DLFSLocal dlfs(Path path) {
+		if (path.getFileSystem() instanceof DLFSLocal fs) return fs;
+		throw new NotSupportedException(NO_METADATA);
+	}
+
+	private static DLPath dlPath(Path path) {
+		return ((DLPath) path).toAbsolutePath().normalize();
 	}
 
 	/**

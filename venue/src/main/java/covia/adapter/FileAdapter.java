@@ -71,7 +71,8 @@ import covia.venue.RequestContext;
  *   <li>{@code file:copy}   — copy within one root</li>
  *   <li>{@code file:delete} — delete a file or empty directory</li>
  *   <li>{@code file:mkdir}  — create a directory</li>
- *   <li>{@code file:stat}   — file metadata</li>
+ *   <li>{@code file:stat}   — an entry's type, size, times and, in DLFS, metadata</li>
+ *   <li>{@code file:setMetadata} — set or clear a DLFS entry's application metadata</li>
  * </ul>
  *
  * <h3>Path safety</h3>
@@ -183,6 +184,7 @@ public class FileAdapter extends AAdapter implements covia.venue.storage.Content
 		installAsset("file/delete", ASSETS_PATH + "delete.json");
 		installAsset("file/mkdir",  ASSETS_PATH + "mkdir.json");
 		installAsset("file/stat",   ASSETS_PATH + "stat.json");
+		installAsset("file/set-metadata", ASSETS_PATH + "setMetadata.json");
 	}
 
 	// ==================== Configuration ====================
@@ -658,6 +660,7 @@ public class FileAdapter extends AAdapter implements covia.venue.storage.Content
 			case "delete" -> handleDelete(ctx, input);
 			case "mkdir"  -> handleMkdir(ctx, input);
 			case "stat"   -> handleStat(ctx, input);
+			case "setMetadata" -> handleSetMetadata(ctx, input);
 			default       -> throw new NotSupportedException("Unknown file operation: " + subOp);
 		};
 	}
@@ -997,8 +1000,19 @@ public class FileAdapter extends AAdapter implements covia.venue.storage.Content
 		String pathArg = stringArg(input, FIELD_PATH);
 
 		try (Resolved r = resolveEntry(ctx, rootName, pathArg, Capability.CRUD_READ, false)) {
-			return FileOperations.stat(r.path(), r.target().readOnly());
+			return DLFSAdapter.stat(r.path(), r.target().readOnly());
 		}
+	}
+
+	private ACell handleSetMetadata(RequestContext ctx, AMap<AString, ACell> input) throws IOException {
+		String rootName = stringArg(input, FIELD_ROOT);
+		String pathArg = stringArg(input, FIELD_PATH);
+		rejectArchiveEntry(pathArg, "set metadata on");
+		ACell metadata = DLFSAdapter.metadataArg(input);
+		FileTarget target = resolveTarget(ctx, rootName, pathArg, Capability.CRUD_WRITE, true);
+		requireWritable(target);
+		requireDLFSAdapter().setMetadata(target.path(), metadata);
+		return Maps.of(Fields.METADATA, metadata);
 	}
 
 	// ==================== Helpers ====================

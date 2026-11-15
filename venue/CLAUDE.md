@@ -90,7 +90,7 @@ AUTH_REQUIRED).
 | `http` | HTTP requests (SSRF-protected, bounded validated redirects, default User-Agent; `adapters.http`) | `get`, `post` |
 | `connections` | Service connection catalog; owns provider skills and reports transport/credential presence without reading secrets | `list`, `status` |
 | `jvm` | JVM utilities | `stringConcat`, `urlEncode`, `urlDecode` |
-| `file` | Filesystem (root-jailed); reads see into archives via `x.zip!/entry` | `roots`, `list`, `tree`, `read`, `write`, `append`, `delete`, `mkdir`, `stat` |
+| `file` | Filesystem (root-jailed); reads see into archives via `x.zip!/entry` | `roots`, `list`, `tree`, `read`, `create`, `write`, `append`, `move`, `copy`, `delete`, `mkdir`, `stat`, `setMetadata` (DLFS targets) |
 | `archive` | Zip/jar archives over file roots (zip-slip + zip-bomb guarded) | `list`, `extract`, `zip` |
 | `schema` | JSON Schema | `validate`, `validateAll`, `infer`, `coerce`, `check` |
 | `json` | JSON value utilities | `merge`, `cond`, `assoc`, `select` |
@@ -102,8 +102,8 @@ AUTH_REQUIRED).
 | `goaltree` | Goal-tree agent planning | `chat` |
 | `hitl` | Human-in-the-Loop (COG-16) | `request`, `respond`, `list` over the per-user `h/` inbox; `expire` (venue-only, fired by a request's scheduled timeout) |
 | `project` | Projects as a work breakdown tree at `w/projects/<pid>` (`docs/PROJECT.md`); publishes the `projects` skill family | none yet — skills only |
-| `dlfs` | Decentralised file system | `listDrives`, `createDrive`, `deleteDrive`, `list`, `read`, `write`, `mkdir`, `delete` |
-| `vault` | Personal vault (configurable-drive DLFS wrapper) | `read`, `write`, `list`, `mkdir`, `delete` |
+| `dlfs` | Decentralised file system; entries carry application metadata (`docs/DLFS_ADAPTER.md`) | `listDrives`, `createDrive`, `deleteDrive`, `list`, `tree`, `read`, `create`, `write`, `append`, `mkdir`, `delete`, `stat`, `setMetadata` |
+| `vault` | Personal vault (configurable-drive DLFS wrapper) | `read`, `create`, `write`, `list`, `mkdir`, `delete`, `setMetadata` |
 | `secret` | Secret store | `set`, `list`, `delete`, `extract` (direct owner `/run` only, never the public principal) |
 | `memory` | Per-user agent memory (one vector at a path, default `w/memory`; each edit one atomic update) | `memory` (commands `recall`, `remember`, `update`, `forget`), `memory-recall` |
 | `preferences` | Per-user preferences: one map per user in adapter state, read-only at `x/preferences` (`docs/PREFERENCES.md`) | `preferences` (commands `set`, `remove`, `append`, `insert`, `merge`) |
