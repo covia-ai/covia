@@ -3,7 +3,11 @@
 Every request names two principals by DID: whose authority applies, and who
 called into it. The model is Convex's `*address*` and `*caller*` (CAD005). A
 record of work, such as a job or a scheduled event, names the principal that
-called it. This is a design; none of it is implemented yet.
+called it. This is a design, implemented in part: a callable's call enters its
+issuer's frame and calls nest, state within one interaction belongs to the
+principal that opened it, and acts that need the user in person read how the
+request authenticated. What still works the old way is listed under
+[What it replaces](#what-it-replaces).
 
 ## The two fields
 
@@ -207,28 +211,20 @@ a callable's call runs within what made it, never its owner's whole authority.
 ## What it replaces
 
 - The request context's caller DID, which today names the authority in most
-  cases, but the agent for its harness, the delegate under `admin/sudo`, and
-  the invoker within a callable's call.
+  cases, but the agent for its harness and the delegate under `admin/sudo`.
 - The request context's namespace as a value apart from its authority, and a
   separate authority on a context.
 - The caller context a job keeps only when its adapter asks, in two shapes of
   kept authority, and a scheduled event's own shape of the same. A job's state
   is the context it runs in.
 - A record of work whose `caller` names whoever authenticated (a sudo
-  delegate, an agent for its harness, a callable's invoker) beside an `owner`
-  naming the account, from which the venue works out what kind of principal
-  acted.
+  delegate, an agent for its harness) beside an `owner` naming the account,
+  from which the venue works out what kind of principal acted.
 - An `accepts` list that matches DIDs exactly, and a callers gate that admits
   a namespace it lists.
-- A callable's call refused when it calls a callable.
-- Reaching state by acting in its namespace, which any of the owner's agents
-  does whatever its caps, and a request through a token never does:
-  - Python instances that users create from the operator's templates. The
-    operator's Python is offered to others through callables, and a function
-    is told who called it (#706).
-  - A live dictation, which belongs to the principal that opened it.
-  - A namespace's list of messaging bots, which shows each bot whose resource
-    (`<user>/<adapter>/<name>`) the request may manage (`<adapter>/manage`).
+- What a callable's call creates, which holds its issuer's authority without
+  the callable's narrowing, so only a call with unrestricted caps may create.
+- A configured Python function, which is not told who called it (#706).
 - `admin/sudo` as a switch of namespace bounded by the grants the delegate
   presents ([ADMIN.md](ADMIN.md), [UCAN.md](UCAN.md)), and the check of the
   delegate's grant again when work it left runs.

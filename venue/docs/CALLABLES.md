@@ -146,15 +146,14 @@ read at `<did>/x/callable` under the usual cross-user delegation rules.
 {
   operation: "<ownerDID>/x/callable/<name>",  // the callable being called
   input:     <the call's input>,
-  caller:    <the invoker's authority>,
+  caller:    <the invoker's DID>,
   owner?:    <the namespace the invoker acts in, when it differs from caller>
 }
 ```
 
 This is a capability gate's input. `operation` names the callable, so one gate
-can serve several. `caller` is the principal whose authority the invoking
-request has: for a call made within another call, the outer callable's
-issuer. `owner` keeps its meaning there, the invoker's namespace;
+can serve several. For a call made within another call, `caller` is the outer
+callable's issuer. `owner` keeps its meaning there, the invoker's namespace;
 the callable's owner is in `operation`. The call is admitted only if the gate
 succeeds. A gate that fails, cannot be resolved or runs past a capability
 gate's time limit refuses the call, and its reason is returned.

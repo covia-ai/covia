@@ -894,7 +894,7 @@ public class JobManager {
 	 */
 	public String evaluateCallableGate(AString gateOp, AString callable, ACell input, RequestContext invoker,
 			RequestContext call) {
-		return runGate(gateOp, gateInput(callable, input, invoker.getAuthorityDID(), invoker.getUserDID()),
+		return runGate(gateOp, gateInput(callable, input, invoker.getCallerDID(), invoker.getUserDID()),
 			call.asGateEvaluation(gateOp));
 	}
 
