@@ -139,6 +139,30 @@ class UserDeletionTest {
 		}
 	}
 
+	@Test void aJobIsNotRecordedForADeletedAccountButItsTransactionStillCommits() throws Exception {
+		// What a scheduled fire's claim relies on: the claim commits without the Job
+		AString did = user();
+		AString other = user();
+		JobManager.Prepared prepared = engine.jobs().prepareTracked(Strings.create("v/ops/covia/write"),
+			Maps.of(Fields.PATH, "w/never", Fields.VALUE, "never"), RequestContext.of(did));
+		delete(did);
+		AuthException refused = engine.getVenueState().transact(draft -> {
+			AuthException failure = null;
+			try {
+				prepared.record(draft);
+			} catch (AuthException e) {
+				failure = e;
+			}
+			draft.users().user(other).cursor().path(Strings.create("w")).set(Maps.of("claimed", true));
+			return failure;
+		});
+		prepared.abandon();
+		assertNotNull(refused);
+		assertNotNull(engine.getVenueState().users().user(other).cursor().path(Strings.create("w")).getOrDefault(null));
+		assertNull(engine.getVenueState().users().user(did), "Recording must not bring the account back");
+		assertThrows(IllegalStateException.class, prepared::start, "Nothing was recorded to start");
+	}
+
 	@Test void deletionCancelsStubAgentTransitionWithoutRestoringItsState() throws Exception {
 		AString did = user();
 		RequestContext ctx = RequestContext.of(did);
