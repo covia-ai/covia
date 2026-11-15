@@ -611,7 +611,11 @@ public class SpeechAdapter extends AAdapter implements AutoCloseable {
 
 	ACell listen(RequestContext ctx, Settings s, AMap<AString, ACell> in) {
 		if (!(s.transcriber() instanceof LocalSpeechEngine local)) throw new JobFailedException(LIVE_UNAVAILABLE);
-		int rate = sampleRate(in, null);
+		return listen(ctx, local, sampleRate(in, null));
+	}
+
+	/** A new dictation on {@code local} of audio at {@code rate}, belonging to {@code ctx}'s authority. */
+	ACell listen(RequestContext ctx, LocalSpeechEngine local, int rate) {
 		for (var entry : dictations.entrySet()) {
 			if (entry.getValue().dictation().idle() > DICTATION_IDLE_NANOS && dictations.remove(entry.getKey(), entry.getValue())) {
 				entry.getValue().dictation().discard();

@@ -24,10 +24,19 @@ import org.junit.jupiter.api.io.TempDir;
 
 import com.sun.net.httpserver.HttpServer;
 
+import convex.core.data.ACell;
+import convex.core.data.AMap;
+import convex.core.data.AString;
+import convex.core.data.Maps;
+import convex.core.data.Strings;
+import convex.core.data.Vectors;
+import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
 import covia.exception.InvalidInputException;
 import covia.exception.JobFailedException;
+import covia.exception.NotFoundException;
 import covia.exception.NotSupportedException;
+import covia.venue.RequestContext;
 
 /**
  * The local engine without sherpa-onnx's natives: a long note is split on its pauses
@@ -288,6 +297,32 @@ class LocalSpeechEngineTest {
 			assertEquals("heard30 heard30 heard15", long75.text());
 			assertEquals(75.0, long75.seconds(), 0.01);
 			assertNull(long75.language());
+		} finally {
+			engine.close();
+		}
+	}
+
+	/**
+	 * A live dictation belongs to the authority of the request that opened it
+	 * ({@link SpeechAdapter}): a request with that authority hears and ends it,
+	 * however narrowed, and any other principal, the opener's own agent
+	 * included, finds no such dictation.
+	 */
+	@Test void aDictationIsReachedOnlyWithTheAuthorityThatOpenedIt() throws Exception {
+		LocalSpeechEngine engine = engine(model("tokens".getBytes(StandardCharsets.UTF_8)), installedLibraries(), false, NativeLibraries.PACKS, new Counting());
+		SpeechAdapter adapter = new SpeechAdapter();
+		AString alice = Strings.create("did:key:z6MkDictationOpener");
+		try {
+			String id = RT.getIn(adapter.listen(RequestContext.of(alice), engine, AudioDecoder.RATE), "id").toString();
+			AMap<AString, ACell> hear = Maps.of("id", id);
+			for (RequestContext other : List.of(RequestContext.of(Strings.create("did:key:z6MkSomeoneElse")),
+					RequestContext.ofAgent(alice, Strings.create("helper")))) {
+				assertThrows(NotFoundException.class, () -> adapter.hear(other, hear), "another principal finds none");
+			}
+			assertNotNull(adapter.hear(RequestContext.of(alice, alice, Vectors.empty()), hear),
+				"a request with the opener's authority reaches it, narrowed to nothing as a token's may be");
+			adapter.hear(RequestContext.of(alice), Maps.of("id", id, "end", CVMBool.TRUE));
+			assertThrows(NotFoundException.class, () -> adapter.hear(RequestContext.of(alice), hear), "an ended dictation is gone");
 		} finally {
 			engine.close();
 		}
