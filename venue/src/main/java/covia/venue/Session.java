@@ -3,6 +3,7 @@ package covia.venue;
 import java.util.Objects;
 import java.util.function.UnaryOperator;
 
+import convex.core.data.ABlob;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
@@ -173,7 +174,8 @@ public final class Session extends ALatticeComponent<ACell>
 
 	/** The job holding an external agent's current turn in a session record, or null when none does. */
 	public static Blob externalJob(AMap<AString, ACell> session) {
-		return (RT.getIn(session, KEY_EXTERNAL, Fields.JOB_ID) instanceof Blob job) ? job : null;
+		ABlob job = RT.ensureBlob(RT.getIn(session, KEY_EXTERNAL, Fields.JOB_ID));
+		return (job == null) ? null : job.toFlatBlob();
 	}
 
 	/** The external agent's own id for a session record's conversation, or null before its backend gave one. */
