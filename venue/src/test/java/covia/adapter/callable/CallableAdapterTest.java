@@ -392,8 +392,9 @@ public class CallableAdapterTest {
 		assertEquals(alice, innerFrame.getCaller());
 		assertEquals(reference(alice, "inner"), innerFrame.getCallable());
 		assertEquals(carol, innerFrame.getAuthenticatedDID(), "who is present goes on through both");
-		assertEquals(bob, engine.callContext(engine.harnessContext(bob, Strings.create("helper")), reference(alice, "outer"))
-			.getCaller(), "an agent's run calls with the authority it acts with, its controller's");
+		// An agent's tool call acts as the agent (Engine.stepContext), so the agent is the call's caller
+		AString bobsAgent = covia.grid.Principals.agentDID(bob, Strings.create("helper"));
+		assertEquals(bobsAgent, engine.callContext(engine.context(bob, bobsAgent), reference(alice, "outer")).getCaller());
 
 		// The inner callable's caps bound the inner call, however wide the outer's
 		failure(call(RequestContext.of(carol), alice + "/x/callable/outer",
