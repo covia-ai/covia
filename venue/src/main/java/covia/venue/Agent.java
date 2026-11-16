@@ -336,6 +336,9 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 	/** Whether the agent is stopped: SUSPENDED or TERMINATED. */
 	public boolean isStopped() { return isStopped(getRecord()); }
 
+	/** Whether the agent is deleted: TERMINATED, its record kept until it is removed ({@link Agents#remove}). */
+	public boolean isTerminated() { return TERMINATED.equals(getStatus()); }
+
 	/** Who stopped the agent deliberately and why, or null when nobody did ({@link #suspend(AString, AString)}). */
 	public AMap<AString, ACell> suspension() { return suspension(getRecord()); }
 

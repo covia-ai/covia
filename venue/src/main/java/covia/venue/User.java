@@ -146,12 +146,12 @@ public class User extends ALatticeComponent<ACell> implements TransactionalCompo
 	 * agent.
 	 */
 	public Agent agentAt(AString agentId) {
-		return new Agent(context, agentStorage(agentId), did, agentId);
+		return agents().at(agentId);
 	}
 
-	/** An agent's record in {@code g}, a map the first agent creates. */
-	private AForkableCursor<ACell> agentStorage(ACell id) {
-		return cursor().withDefault(Maps.empty()).path(Namespace.G).withDefault(Maps.empty()).path(id);
+	/** This user's agents ({@code g}), a map the first agent creates. */
+	public Agents agents() {
+		return new Agents(context, cursor().withDefault(Maps.empty()).path(Namespace.G), did);
 	}
 
 	/** Gets the user's DID string. */
@@ -189,9 +189,7 @@ public class User extends ALatticeComponent<ACell> implements TransactionalCompo
 	}
 
 	public Agent agent(AString agentId) {
-		AForkableCursor<ACell> c = agentStorage(agentId);
-		if (c.getOrDefault(null) == null) return null;
-		return new Agent(context, c, did, agentId);
+		return agents().agent(agentId);
 	}
 
 	/**
@@ -207,8 +205,7 @@ public class User extends ALatticeComponent<ACell> implements TransactionalCompo
 	}
 
 	public Agent ensureAgent(AString agentId, AMap<AString, ACell> config, ACell initialState) {
-		AForkableCursor<ACell> c = agentStorage(agentId);
-		Agent state = new Agent(context, c, did, agentId);
+		Agent state = agents().at(agentId);
 		state.initialiseIfAbsent(config, initialState);
 		return state;
 	}
@@ -236,9 +233,7 @@ public class User extends ALatticeComponent<ACell> implements TransactionalCompo
 	 */
 	public Agent createAgent(AString agentId, AMap<AString, ACell> config,
 			ACell initialState, AMap<AString, ACell> definition, Engine.Source controller) {
-		AForkableCursor<ACell> c = agentStorage(agentId);
-		Agent state = new Agent(context, c, did, agentId);
-		return state.initialiseIfAbsent(config, initialState, definition, controller) ? state : null;
+		return agents().create(agentId, config, initialState, definition, controller);
 	}
 
 	/**
@@ -264,9 +259,7 @@ public class User extends ALatticeComponent<ACell> implements TransactionalCompo
 	 */
 	public Agent forkAgent(AString agentId, AMap<AString, ACell> config,
 			ACell state, convex.core.data.AVector<ACell> timeline, Engine.Source controller) {
-		AForkableCursor<ACell> c = agentStorage(agentId);
-		Agent fork = new Agent(context, c, did, agentId);
-		return fork.initialiseFromForkIfAbsent(config, state, timeline, controller) ? fork : null;
+		return agents().fork(agentId, config, state, timeline, controller);
 	}
 
 	/**
@@ -274,13 +267,8 @@ public class User extends ALatticeComponent<ACell> implements TransactionalCompo
 	 *
 	 * @param agentId Agent identifier to remove
 	 */
-	@SuppressWarnings("unchecked")
 	public void removeAgent(AString agentId) {
-		// Remove the key itself, as covia:delete does: writing null through the
-		// agent's own path would leave g/<id> listed, holding nothing.
-		cursor().path(Namespace.G).updateAndGet(agents -> (agents instanceof AMap<?, ?> map)
-			? ((AMap<AString, ACell>) map).dissoc(agentId)
-			: agents);
+		agents().remove(agentId);
 	}
 
 	/**
@@ -288,10 +276,8 @@ public class User extends ALatticeComponent<ACell> implements TransactionalCompo
 	 *
 	 * @return Map of agent ID to agent state, or null if none
 	 */
-	@SuppressWarnings("unchecked")
 	public AMap<AString, ACell> getAgents() {
-		ACell value = cursor().path(Namespace.G).getOrDefault(null);
-		return (value instanceof AMap) ? (AMap<AString, ACell>) value : null;
+		return agents().get();
 	}
 
 	/**
