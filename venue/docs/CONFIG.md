@@ -2593,9 +2593,11 @@ comes from a principal, and the binding identifies which.
   the channel in one shape for every provider — `sender {id, handle?, name?}`,
   `chat {id, kind}`, `thread`, `space`, `message`, with provider extras under
   the provider's name ([AUTH.md §5.3](AUTH.md#53-channel-methods-messaging-bindings)).
-  The agent records it beside the turn, never in the message, so nothing typed
-  can pose as it, and an LLM agent's context shows it as a `[From: …]` element
-  whenever who is talking changes. The message itself is the sender's text,
+  A binding's media and reply operations receive it. The agent records the
+  binding as what carried the turn, with the sender's and chat's ids, beside
+  the turn and never in the message, so nothing typed can pose as it, and an
+  LLM agent's context shows it as a `[From: …]` element whenever who is
+  talking changes. The message itself is the sender's text,
   or `{text, attachments, content?}` when it carries media.
 - **The agent acts as itself**, whoever asked: its tool calls under its own
   `config.caps`, its harness with its controller's authority (UCAN.md §5.4).

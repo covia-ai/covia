@@ -210,7 +210,11 @@ the owner's, within the callable's caps:
   with the callable's authority as it stands then, so the caps must cover
   `invoke` on the operation the event runs;
 - a human it asks (`hitl:request`) is the owner's, through the owner's `h/`;
-- a secret it uses is the owner's, as `secret/use` in its caps allows.
+- a secret it uses is the owner's, as `secret/use` in its caps allows;
+- an agent it asks is told the call came through the callable: the call is
+  still the invoker's request, so its route is the invoker's with the
+  callable's step added ([AGENT_CONTEXT.md](./AGENT_CONTEXT.md) §1.2). Work
+  the call leaves running and rebuilds later is not the call, and has none.
 
 ## What a call never holds
 

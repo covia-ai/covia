@@ -240,12 +240,14 @@ public class TelegramAdapterTest {
 		Blob sid = readSession(echo, chat);
 		assertNotNull(sid, "the chat's agent session is persisted in the owner's workspace");
 		// Who is on the other end travels beside the turn: the principal the bot
-		// identified and how, with Telegram's sender and chat.
+		// identified, and the bot as what carried it, with Telegram's sender and chat.
 		AMap<AString, ACell> turn = firstTurn(sid);
 		assertEquals(owner, turn.get(Fields.CALLER), "an allow-listed sender comes from the bot's principal");
-		assertEquals(Strings.create("telegram:" + ALLOWED_ID), RT.getIn(turn, "authentication", "authenticatedIdentity"));
-		assertEquals(Strings.create("alice"), RT.getIn(turn, "authentication", "authentication", "details", "sender", "handle"));
-		assertEquals(Strings.create(Long.toString(chat)), RT.getIn(turn, "authentication", "authentication", "details", "chat", "id"));
+		AMap<AString, ACell> step = RT.ensureMap(RT.getIn(turn, Fields.ROUTE, 0));
+		assertEquals(Strings.create("telegram"), step.get(Fields.ADAPTER));
+		assertEquals(Strings.create(Long.toString(ALLOWED_ID)), RT.getIn(step, "sender", "id"));
+		assertEquals(Strings.create("alice"), RT.getIn(step, "sender", "handle"));
+		assertEquals(Strings.create(Long.toString(chat)), RT.getIn(step, "chat", "id"));
 
 		push(chat, ALLOWED_ID, "alice", "second");
 		FakeTelegramServer.Sent second = awaitSent(15_000);

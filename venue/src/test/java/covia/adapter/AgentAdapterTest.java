@@ -385,12 +385,13 @@ public class AgentAdapterTest {
 
 	@Test
 	public void testProvenanceIsRecordedBesideTheRequestNeverInIt() {
-		// Only the venue says who asked and how they were authenticated: ingress
-		// records the caller and the context's authentication record beside the
-		// content, which reaches the agent as it was sent (COG-20 §4).
+		// Only the venue says who asked and what carried the request: ingress
+		// records the caller and the context's route beside the content, which
+		// reaches the agent as it was sent (COG-20 §4).
 		RequestContext alice = RequestContext.of(ALICE_DID);
 		AString address = createAgentAs(alice, "provenance-ingress", null);
-		AMap<AString, ACell> input = Maps.of("ask", "hi", Fields.AUTHENTICATION, Maps.of("method", "forged"));
+		AMap<AString, ACell> input = Maps.of("ask", "hi", Fields.AUTHENTICATION, Maps.of("method", "forged"),
+			Fields.ROUTE, Vectors.of(Maps.of(Fields.ADAPTER, "forged")));
 		AMap<AString, ACell> details = Maps.of("sender", Maps.of("id", "sender-1"));
 		AuthResult result = new AuthResult(ALICE_DID, Strings.create("test:sender-1"),
 			new AuthResult.Credential(Strings.create("provider-session"), null, null),
@@ -399,7 +400,10 @@ public class AgentAdapterTest {
 		RequestContext viaChannel = engine.channelContext(ALICE_DID, result);
 		assertEquals(ALICE_DID, viaChannel.getCallerDID());
 		assertEquals(result.toData().dissoc(AuthResult.USER_DID), viaChannel.getAuthentication());
+		assertEquals(Vectors.of(Maps.of(Fields.ADAPTER, "test", Fields.NAME, "bot", "binding", ALICE_DID + "/test/bot",
+			"sender", Maps.of("id", "sender-1"))), viaChannel.getRoute(), "the binding carried it");
 		assertNull(alice.getAuthentication(), "only a channel context carries a record");
+		assertNull(alice.getRoute(), "a request nothing carried has no route");
 
 		Agent agent = engine.getVenueState().users().user(ALICE_DID).agent("provenance-ingress");
 		Blob plainSid = Blob.fromHex("33333333333333333333333333333333");
@@ -414,19 +418,34 @@ public class AgentAdapterTest {
 
 		AMap<AString, ACell> plainTurn = firstTurn(agent, plainSid);
 		assertEquals(ALICE_DID, plainTurn.get(Fields.CALLER));
+		assertNull(plainTurn.get(Fields.ROUTE), "a route inside the content is content");
 		assertNull(plainTurn.get(Fields.AUTHENTICATION), "a record inside the content is content");
 		AMap<AString, ACell> channelTurn = firstTurn(agent, channelSid);
 		assertEquals(ALICE_DID, channelTurn.get(Fields.CALLER));
-		assertEquals(viaChannel.getAuthentication(), channelTurn.get(Fields.AUTHENTICATION),
-			"the record travels beside the turn");
+		assertEquals(viaChannel.getRoute(), channelTurn.get(Fields.ROUTE), "the route travels beside the turn");
+		assertNull(channelTurn.get(Fields.AUTHENTICATION), "the route stands in for the record");
+
+		// Views outside the agent's runtime never show the route
+		AVector<ACell> entries = RT.ensureVector(RT.getIn(engine.jobs().invokeOperation("v/ops/agent/history",
+			Maps.of(Fields.AGENT_ID, "provenance-ingress", Fields.SESSION_ID, Strings.create(channelSid.toHexString())),
+			alice).awaitResult(5000), "entries"));
+		assertFalse(entries.isEmpty());
+		for (ACell entry : entries) assertNull(RT.getIn(entry, Fields.ROUTE), "history leaves the route out: " + entry);
+		for (ACell cycle : agent.getTimeline()) {
+			for (AString part : List.of(Fields.TASKS, Fields.MESSAGES)) {
+				AVector<ACell> records = RT.ensureVector(RT.getIn(cycle, part));
+				if (records != null) for (ACell r : records) assertNull(RT.getIn(r, Fields.ROUTE), "the timeline leaves it out: " + r);
+			}
+		}
 	}
 
 	@Test
-	public void testARequestThroughATokenRecordsTheToken() {
+	public void testARequestRecordsTheRouteThatCarriedIt() {
 		// An agent is told when a request came through one of its owner's access
-		// tokens rather than from the owner: ingress records the token's reference
-		// beside the caller, from the request's context alone, on the request and
-		// on work the token left to run later (ACCESS_TOKENS.md).
+		// tokens rather than from the owner, and through which callable: ingress
+		// records the request's route beside the caller, from its context alone.
+		// The route is the request's own: work rebuilt later and agents acting
+		// as themselves start without one (ACCESS_TOKENS.md, CALLABLES.md).
 		RequestContext alice = RequestContext.of(ALICE_DID);
 		AString address = createAgentAs(alice, "token-provenance", null);
 		String bearer = RT.getIn(engine.jobs().invokeOperation("v/ops/token/create", Maps.of(
@@ -434,56 +453,118 @@ public class AgentAdapterTest {
 			Fields.CAPS, Vectors.of(Capability.create(Strings.create("g/token-provenance"), Abilities.AGENT_REQUEST),
 				Capability.create(Strings.create("v/ops/agent/request"), Abilities.INVOKE),
 				Capability.create(Strings.create("x/callable/"), Abilities.CALLABLE_MANAGE),
-				Capability.create(Strings.create("v/ops/callable/create"), Abilities.INVOKE),
+				Capability.create(Strings.create("x/callable/"), Abilities.CALLABLE_CALL),
+				Capability.create(Strings.create("v/ops/callable/"), Abilities.INVOKE),
 				Capability.create(Strings.create("g/token-made"), Abilities.AGENT_CREATE),
 				Capability.create(Strings.create("v/ops/agent/create"), Abilities.INVOKE))),
 			alice).awaitResult(5000), Fields.TOKEN).toString();
 		AMap<AString, ACell> reference = engine.tokens().lookup(bearer);
 		RequestContext viaToken = engine.tokenContext(reference);
+		AMap<AString, ACell> tokenStep = reference.assoc(Fields.ADAPTER, Strings.create("token"));
+		assertEquals(Vectors.of(tokenStep), viaToken.getRoute(), "the token carried it, named by its reference");
 		RequestContext keptWork = engine.context(ALICE_DID, ALICE_DID, null, Engine.keptAuthority(viaToken));
+		assertNull(keptWork.getRoute(), "work rebuilt later is not the request");
+		assertFalse(keptWork.getTokens().isEmpty(), "but the token still narrows it");
 
 		Agent agent = engine.getVenueState().users().user(ALICE_DID).agent("token-provenance");
 		Blob directSid = Blob.fromHex("55555555555555555555555555555555");
 		Blob tokenSid = Blob.fromHex("66666666666666666666666666666666");
 		Blob keptSid = Blob.fromHex("77777777777777777777777777777777");
 		Blob callSid = Blob.fromHex("99999999999999999999999999999999");
-		for (Blob sid : List.of(directSid, tokenSid, keptSid, callSid)) agent.sessions().create(sid, ALICE_DID, null);
+		Blob tokenCallSid = Blob.fromHex("88888888888888888888888888888888");
+		for (Blob sid : List.of(directSid, tokenSid, keptSid, callSid, tokenCallSid)) agent.sessions().create(sid, ALICE_DID, null);
 
-		AMap<AString, ACell> forged = Maps.of("ask", "hi", Fields.TOKEN, reference.assoc(Fields.NAME, Strings.create("forged")));
+		AMap<AString, ACell> forged = Maps.of("ask", "hi", Fields.ROUTE, Vectors.of(tokenStep.assoc(Fields.NAME, Strings.create("forged"))));
 		assertEquals(forged, RT.getIn(requestIn(alice, address, directSid, forged), Fields.OUTPUT, "completed"),
 			"content reaches the agent as sent");
 		requestIn(viaToken, address, tokenSid, Maps.of("ask", "hi"));
 		requestIn(keptWork, address, keptSid, Maps.of("ask", "later"));
 
 		// A callable the token made asks the agent for whoever calls it: the token
-		// narrows the callable, but the call did not come through it
+		// narrows the callable, but a call from Bob did not come through it, while
+		// a call through the token keeps the token's step before the callable's
 		engine.jobs().invokeOperation("v/ops/callable/create", Maps.of(Fields.NAME, "ask-helper",
 			Fields.OPERATION, "v/ops/agent/request", Fields.CAPS, "unrestricted",
 			Fields.GATE, "v/ops/callable/gates/anyone"), viaToken).awaitResult(5000);
-		engine.jobs().invokeOperation("v/ops/callable/call", Maps.of(Fields.CALLABLE, ALICE_DID + "/x/callable/ask-helper",
-			Fields.INPUT, Maps.of(Fields.AGENT_ID, address, Fields.SESSION_ID, Strings.create(callSid.toHexString()),
-				Fields.INPUT, Maps.of("ask", "called"), Fields.WAIT, CVMLong.create(5000))),
-			RequestContext.of(BOB_DID)).awaitResult(5000);
+		callAskHelper(RequestContext.of(BOB_DID), address, callSid);
+		callAskHelper(viaToken, address, tokenCallSid);
 		awaitFinished(agent);
 
-		assertNull(firstTurn(agent, directSid).get(Fields.TOKEN), "a token named inside the content is content");
+		assertNull(firstTurn(agent, directSid).get(Fields.ROUTE), "a route inside the content is content");
 		AMap<AString, ACell> tokenTurn = firstTurn(agent, tokenSid);
-		assertEquals(reference, tokenTurn.get(Fields.TOKEN));
+		assertEquals(Vectors.of(tokenStep), tokenTurn.get(Fields.ROUTE));
 		assertEquals(ALICE_DID, tokenTurn.get(Fields.CALLER), "the request is still its issuer's");
-		assertEquals(reference, firstTurn(agent, keptSid).get(Fields.TOKEN), "work the token left to run later");
-		assertNull(firstTurn(agent, callSid).get(Fields.TOKEN), "a call through a callable the token made");
-		for (Blob sid : List.of(directSid, tokenSid, keptSid, callSid)) {
+		assertNull(firstTurn(agent, keptSid).get(Fields.ROUTE), "work rebuilt later came by no route");
+		AMap<AString, ACell> callableStep = RT.ensureMap(RT.getIn(firstTurn(agent, callSid), Fields.ROUTE, 0));
+		assertEquals(Strings.create("callable"), callableStep.get(Fields.ADAPTER));
+		assertEquals(Strings.create("ask-helper"), callableStep.get(Fields.NAME));
+		assertEquals(Vectors.of(callableStep), firstTurn(agent, callSid).get(Fields.ROUTE), "Bob's call came by the callable alone");
+		assertEquals(BOB_DID, firstTurn(agent, callSid).get(Fields.CALLER));
+		assertEquals(Vectors.of(tokenStep, callableStep), firstTurn(agent, tokenCallSid).get(Fields.ROUTE),
+			"a call keeps the route of the request that made it");
+		for (Blob sid : List.of(directSid, tokenSid, keptSid, callSid, tokenCallSid)) {
 			assertFalse(agent.session(sid).getRecord().toString().contains(bearer), "the bearer is never recorded");
 		}
+
+		// Work a call left, rebuilt from its kept authority, is not the call
+		assertNull(engine.context(ALICE_DID, BOB_DID, null, Maps.of(Fields.CALLABLE, callableStep.dissoc(Fields.ADAPTER))).getRoute());
 
 		// An agent the token made acts with its controller narrowed by the token,
 		// but neither it nor its harness is a request through that token
 		engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "token-made",
 			Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")), viaToken).awaitResult(5000);
 		assertNotNull(engine.getVenueState().users().user(ALICE_DID).agent("token-made").getControllerToken());
-		assertNull(Engine.tokenCameThrough(engine.harnessContext(ALICE_DID, Strings.create("token-made"))));
-		assertNull(Engine.tokenCameThrough(engine.context(ALICE_DID,
-			covia.grid.Principals.agentDID(ALICE_DID, Strings.create("token-made")))));
+		assertNull(engine.harnessContext(ALICE_DID, Strings.create("token-made")).getRoute());
+		assertNull(engine.context(ALICE_DID, covia.grid.Principals.agentDID(ALICE_DID, Strings.create("token-made"))).getRoute());
+	}
+
+	@Test
+	public void testAFireScheduledThroughATokenIsCarriedByTheSchedulerAlone() {
+		// A scheduled fire is a request of its own: the scheduler carried it, and
+		// how it was scheduled is not part of its route. The token it was
+		// scheduled through still narrows it, as it stands at each fire.
+		RequestContext alice = RequestContext.of(ALICE_DID);
+		AString address = createAgentAs(alice, "scheduled-provenance", null);
+		String bearer = RT.getIn(engine.jobs().invokeOperation("v/ops/token/create", Maps.of(
+			Fields.NAME, "planner-bot", Fields.ACCESS, Maps.of("test", Maps.empty()),
+			Fields.CAPS, Vectors.of(Capability.create(Strings.create("g/scheduled-provenance"), Abilities.AGENT_REQUEST),
+				Capability.create(Strings.create("v/ops/agent/request"), Abilities.INVOKE),
+				Capability.create(Strings.create("v/ops/scheduler/schedule"), Abilities.INVOKE))),
+			alice).awaitResult(5000), Fields.TOKEN).toString();
+		RequestContext viaToken = engine.tokenContext(engine.tokens().lookup(bearer));
+		Agent agent = engine.getVenueState().users().user(ALICE_DID).agent("scheduled-provenance");
+		Blob firedSid = Blob.fromHex("abababababababababababababababab");
+		Blob refusedSid = Blob.fromHex("cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd");
+		for (Blob sid : List.of(firedSid, refusedSid)) agent.sessions().create(sid, ALICE_DID, null);
+		ACell fired = scheduleRequest(viaToken, address, firedSid);
+		ACell refused = scheduleRequest(viaToken, address, refusedSid);
+
+		engine.jobs().invokeOperation("v/ops/scheduler/trigger", Maps.of("handle", fired), alice).awaitResult(5000);
+		awaitFinished(agent);
+		AMap<AString, ACell> turn = firstTurn(agent, firedSid);
+		assertEquals(ALICE_DID, turn.get(Fields.CALLER), "the user who scheduled it asked");
+		AVector<ACell> route = RT.ensureVector(turn.get(Fields.ROUTE));
+		assertEquals(1, route.count(), "carried by the scheduler alone: " + route);
+		assertEquals(Strings.create("scheduler"), RT.getIn(route, 0, Fields.ADAPTER));
+		assertNotNull(RT.getIn(route, 0, "handle"), "naming the event it fired");
+
+		engine.jobs().invokeOperation("v/ops/token/delete", Maps.of(Fields.NAME, "planner-bot"), alice).awaitResult(5000);
+		Job refusedFire = engine.jobs().invokeOperation("v/ops/scheduler/trigger", Maps.of("handle", refused), alice);
+		assertThrows(Exception.class, () -> refusedFire.awaitResult(5000), "the deleted token narrows the fire to nothing");
+	}
+
+	private ACell scheduleRequest(RequestContext ctx, AString address, Blob sid) {
+		return RT.getIn(engine.jobs().invokeOperation("v/ops/scheduler/schedule", Maps.of(
+			"operation", "v/ops/agent/request", "after", CVMLong.create(3_600_000L),
+			"input", Maps.of(Fields.AGENT_ID, address, Fields.SESSION_ID, Strings.create(sid.toHexString()),
+				Fields.INPUT, Maps.of("ask", "scheduled"), Fields.WAIT, CVMLong.create(5000))), ctx).awaitResult(5000), "handle");
+	}
+
+	private void callAskHelper(RequestContext caller, AString address, Blob sid) {
+		engine.jobs().invokeOperation("v/ops/callable/call", Maps.of(Fields.CALLABLE, ALICE_DID + "/x/callable/ask-helper",
+			Fields.INPUT, Maps.of(Fields.AGENT_ID, address, Fields.SESSION_ID, Strings.create(sid.toHexString()),
+				Fields.INPUT, Maps.of("ask", "called"), Fields.WAIT, CVMLong.create(5000))),
+			caller).awaitResult(5000);
 	}
 
 	private ACell requestIn(RequestContext caller, AString address, Blob sid, ACell input) {

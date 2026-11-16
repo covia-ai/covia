@@ -229,7 +229,7 @@ inferences that ran before it, and a stopped cycle's entry says it was stopped
 | `start`, `end` | long | When the cycle began and ended. |
 | `op` | string | The transition operation (llmagent / goaltree). |
 | `sessionId` | blob? | The session the cycle ran on. |
-| `tasks`, `messages`, `pending` | vector? | What the cycle was given: resolved tasks, inbox envelopes, job results that arrived. |
+| `tasks`, `messages`, `pending` | vector? | What the cycle was given: resolved tasks, inbox envelopes, job results that arrived. Tasks and envelopes leave out their route, which only the `From` element shows (AGENT_CONTEXT.md §1.2). |
 | `context` | vector | The root frame's standing context as rendered for its first inference — the head and live surface (system prompt, skills index, loads): the prompt minus the conversation. |
 | `tools` | vector | Names of the tools offered to the first inference. |
 | `inferences` | vector | One record per model call, in order — see below. |

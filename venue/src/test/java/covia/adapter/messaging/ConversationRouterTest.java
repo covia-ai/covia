@@ -384,6 +384,16 @@ class ConversationRouterTest {
 			assertEquals(Strings.create("test:listed"), listed.getAuthentication().get(covia.venue.auth.AuthResult.AUTHENTICATED_IDENTITY));
 			assertEquals(Strings.create(owner + "/test/bot"),
 				RT.getIn(listed.getAuthentication(), covia.venue.auth.AuthResult.AUTHENTICATION, covia.venue.auth.AuthResult.BINDING));
+			// The binding carried it: its step names the binding, the sender and the chat, never their names
+			assertEquals(convex.core.data.Vectors.of(Maps.of(Fields.ADAPTER, "test", Fields.NAME, "bot",
+				"binding", owner + "/test/bot", "sender", Maps.of("id", "listed"), "chat", Maps.of("id", "chat-1", "kind", "direct"))),
+				listed.getRoute());
+			// An event with no sender is anonymous, but still carried by the binding, never direct
+			var senderless = router.context(null);
+			assertEquals(engine.publicPrincipal(), senderless.getCallerDID());
+			assertNull(senderless.getAuthentication());
+			assertEquals(convex.core.data.Vectors.of(Maps.of(Fields.ADAPTER, "messaging-test", Fields.NAME, "bot",
+				"binding", owner + "/messaging-test/bot")), senderless.getRoute());
 			Job fromFriend = router.deliver("friend", Strings.create("hello"), LISTED, (draft, sid, jid) -> true);
 			assertEquals(Strings.create("owner only"), RT.getIn(fromFriend.awaitResult(5000), Fields.RESPONSE, "completed"));
 			assertEquals(owner, engine.jobs().getJobData(fromFriend.getID(), ownerView).get(Fields.CALLER));
@@ -405,13 +415,14 @@ class ConversationRouterTest {
 				router.context(STRANGER).getAuthentication().get(covia.venue.auth.AuthResult.AUTHENTICATED_IDENTITY),
 				"anonymous senders stay distinct in provenance");
 
-			// The agent's history keeps who asked and how, beside each turn.
+			// The agent's history keeps who asked and what carried it, beside each turn.
 			var sessions = engine.getVenueState().users().user(owner).agent("lender").getSessions();
 			assertEquals(2, sessions.count());
 			for (long i = 0; i < sessions.count(); i++) {
 				var frames = RT.ensureVector(RT.getIn(sessions.entryAt(i).getValue(), Fields.FRAMES));
 				var turn = covia.adapter.agent.GoalTreeContext.activeConversation(RT.ensureMap(frames.get(0))).get(0);
-				assertNotNull(RT.getIn(turn, Fields.AUTHENTICATION), "every bot turn keeps its record");
+				assertNotNull(RT.getIn(turn, Fields.ROUTE, 0, Fields.ADAPTER), "every bot turn names the bot that carried it");
+				assertNull(RT.getIn(turn, Fields.AUTHENTICATION), "the route stands in for the record");
 			}
 		} finally { engine.close(); }
 	}

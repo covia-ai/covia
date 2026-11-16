@@ -1,5 +1,7 @@
 package covia.adapter.agent;
 
+import java.util.List;
+
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
@@ -86,15 +88,39 @@ public final class Labels {
 	 * {@code name, value} pair given, in order, escaped.
 	 */
 	public static String renderAttributed(AString dialect, Kind kind, String summary, String... namesAndValues) {
+		return renderAttributed(dialect, kind, summary, List.of(), namesAndValues);
+	}
+
+	/**
+	 * As {@link #renderAttributed(AString, Kind, String, String...)}, with child
+	 * elements in xml: each child is its tag followed by {@code name, value}
+	 * pairs, escaped, and the element closes after them. With no children it is
+	 * the label-only element. The bracket and header label is {@code summary}
+	 * alone, which must already say what the children do.
+	 */
+	public static String renderAttributed(AString dialect, Kind kind, String summary, List<String[]> children,
+			String... namesAndValues) {
 		if (XML.equals(dialect)) {
 			StringBuilder sb = new StringBuilder("<").append(kind.tag);
-			for (int i = 0; i + 1 < namesAndValues.length; i += 2) {
-				sb.append(' ').append(namesAndValues[i]).append("=\"").append(attr(namesAndValues[i + 1])).append('"');
+			appendAttributes(sb, namesAndValues, 0);
+			if (children.isEmpty()) return sb.append("/>").toString();
+			sb.append('>');
+			for (String[] child : children) {
+				sb.append('<').append(child[0]);
+				appendAttributes(sb, child, 1);
+				sb.append("/>");
 			}
-			return sb.append("/>").toString();
+			return sb.append("</").append(kind.tag).append('>').toString();
 		}
 		String label = String.format(kind.pattern, summary);
 		return HEADER.equals(dialect) ? "## " + label : "[" + label + "]";
+	}
+
+	/** Each {@code name, value} pair of {@code pairs} from {@code from} on, as an escaped xml attribute. */
+	private static void appendAttributes(StringBuilder sb, String[] pairs, int from) {
+		for (int i = from; i + 1 < pairs.length; i += 2) {
+			sb.append(' ').append(pairs[i]).append("=\"").append(attr(pairs[i + 1])).append('"');
+		}
 	}
 
 	/** An element whose source failed: the label carries the reason, there is no body. */

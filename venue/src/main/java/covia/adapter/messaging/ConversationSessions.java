@@ -49,6 +49,11 @@ public final class ConversationSessions {
 		this.writable = Objects.requireNonNull(writable);
 	}
 
+	/** The name of the adapter whose bindings these sessions belong to. */
+	public String adapterName() {
+		return workspace.adapterName();
+	}
+
 	/** The session {@code conversation} continues, or null when it has none yet. */
 	public Blob get(String conversation) {
 		Blob value = Ids.stored(workspace.read(path(conversation)));

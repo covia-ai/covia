@@ -311,6 +311,10 @@ class WhatsAppAdapterTest {
 						"space", Maps.of("id", "12345"),
 						"message", "first"))),
 				agent.authentication, "a listed sender is authenticated through the binding, in the standard channel shape");
+			// Built from the channel stored with the inbox event, as after a restart
+			assertEquals(Vectors.of(Maps.of("adapter", "whatsapp", "name", "main", "binding", OWNER + "/whatsapp/main",
+				"sender", Maps.of("id", "441234567890"), "chat", Maps.of("id", "441234567890", "kind", "direct"),
+				"space", Maps.of("id", "12345"))), agent.route, "the binding carried it");
 			assertEquals(OWNER, agent.owner);
 			assertNull(agentTurn(f, f.adapter, agent, "main", "12345", "441234567891", "other-sender").get(Fields.SESSION_ID));
 			assertNull(agentTurn(f, f.adapter, agent, "second", "54321", "441234567890", "other-phone").get(Fields.SESSION_ID));
@@ -429,12 +433,14 @@ class WhatsAppAdapterTest {
 		final AtomicInteger sessions = new AtomicInteger();
 		volatile AString owner;
 		volatile AMap<AString, ACell> authentication;
+		volatile convex.core.data.AVector<ACell> route;
 		volatile CompletableFuture<ACell> blocked;
 		@Override public String getName() { return "agent"; }
 		@Override public String getDescription() { return "Deterministic WhatsApp chat fixture"; }
 		@Override protected void installAssets() { installAsset("agent/chat", Maps.of("name", "Fixture chat", "operation", Maps.of("adapter", "agent:chat"))); }
 		@Override public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
-			var in = MessagingSettings.object(input); owner = ctx.getUserDID(); authentication = ctx.getAuthentication(); inputs.add(in);
+			var in = MessagingSettings.object(input); owner = ctx.getUserDID(); authentication = ctx.getAuthentication();
+			route = ctx.getRoute(); inputs.add(in);
 			if (blocked != null) return blocked;
 			ACell sid = in.get(Fields.SESSION_ID);
 			if (sid == null) sid = session(sessions.incrementAndGet());

@@ -173,7 +173,8 @@ public class MCPTokenTest {
 		AVector<ACell> frames = RT.ensureVector(agent.session(sid).getRecord().get(Agent.KEY_FRAMES));
 		AMap<AString, ACell> turn = RT.ensureMap(GoalTreeContext.activeConversation(RT.ensureMap(frames.get(0))).get(0));
 		assertEquals(alice, turn.get(Fields.CALLER), "the request is its issuer's");
-		assertEquals(engine.tokens().lookup(bearer), turn.get(Fields.TOKEN), "and the agent is told it came through the token");
+		assertEquals(Vectors.of(engine.tokens().lookup(bearer).assoc(Fields.ADAPTER, Strings.create("token"))),
+			turn.get(Fields.ROUTE), "and the agent is told it came through the token");
 		assertFalse(agent.session(sid).getRecord().toString().contains(bearer), "the bearer is never recorded");
 	}
 

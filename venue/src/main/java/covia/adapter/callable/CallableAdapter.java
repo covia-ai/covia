@@ -44,6 +44,8 @@ public class CallableAdapter extends AAdapter {
 
 	/** The adapter's name. */
 	public static final String NAME = "callable";
+	/** The adapter's name as a call's route step names it. */
+	private static final AString ADAPTER = Strings.intern(NAME);
 
 	public static final String NAME_INVALID = "name is required and must match [a-z0-9-]{1,64}";
 	public static final String CALLABLE_NOT_FOUND = "No callable named %s";
@@ -271,7 +273,9 @@ public class CallableAdapter extends AAdapter {
 		Callable callable = named(ctx, named);
 		AString resource = resource(callable.owner(), callable.name());
 		ACell targetInput = RT.getIn(input, Fields.INPUT);
-		RequestContext call = engine.callContext(ctx, callable.reference());
+		// The callable carries the caller's request on: its reference is the call's
+		// route step, added here and never when work the call left is rebuilt
+		RequestContext call = engine.callContext(ctx, callable.reference()).via(ADAPTER, callable.reference());
 		if (!engine.authorityCovers(ctx, resource, Abilities.CALLABLE_CALL)) {
 			AString gate = callable.gate();
 			// The gate admits the caller only as far as what narrows its request reaches, as any admission does

@@ -54,20 +54,79 @@ public class RequestContext {
 	public SessionDelivery getSessionDelivery() { return sessionDelivery; }
 	public RequestContext withSessionDelivery(SessionDelivery delivery) {
 		return new RequestContext(authority, executionScope, rawUcans, op, cancellation,
-			invocationInput, gate, gateEvaluation, job, cycle, delivery, authentication, scopeSource, rights);
+			invocationInput, gate, gateEvaluation, job, cycle, delivery, carried, scopeSource, rights);
 	}
+
+	/**
+	 * What a request carries for attribution, never for authority: how a channel
+	 * binding authenticated its caller ({@link #getAuthentication}) and its route
+	 * ({@link #getRoute}). Assurance policy and access checks never read it, and
+	 * contexts the venue starts for an agent's own work carry none.
+	 */
+	private record Carried(AMap<AString, ACell> authentication, AVector<ACell> route) {
+		/** The pair, or null when it holds nothing. */
+		static Carried of(AMap<AString, ACell> authentication, AVector<ACell> route) {
+			return (authentication == null && route == null) ? null : new Carried(authentication, route);
+		}
+	}
+	private final Carried carried;
 
 	/** How a channel binding authenticated this request's caller: the method's
 	 * {@code AuthResult} projected to data, without its {@code userDID} (the
-	 * caller). Set only by {@link Engine#channelContext}; the agent's ingress
-	 * records it beside the request. Attribution, not evidence: assurance policy
-	 * never reads it, and contexts the venue starts for an agent's own work carry
-	 * none. */
-	private final AMap<AString, ACell> authentication;
-	public AMap<AString, ACell> getAuthentication() { return authentication; }
+	 * caller), or null. Set only by {@link Engine#channelContext}; a binding's
+	 * media and reply operations receive it. */
+	public AMap<AString, ACell> getAuthentication() { return (carried == null) ? null : carried.authentication(); }
 	RequestContext withAuthentication(AMap<AString, ACell> authentication) {
 		return new RequestContext(authority, executionScope, rawUcans, op, cancellation,
-			invocationInput, gate, gateEvaluation, job, cycle, sessionDelivery, authentication, scopeSource, rights);
+			invocationInput, gate, gateEvaluation, job, cycle, sessionDelivery, Carried.of(authentication, getRoute()), scopeSource, rights);
+	}
+
+	/** Most entries a route holds; past it, steps after the first {@link #ROUTE_HEAD} fold into one {@link #ROUTE_ELIDED} entry. */
+	public static final int ROUTE_MAX = 8;
+	/** Steps at the start of a route that are never folded: where the request entered. */
+	public static final int ROUTE_HEAD = 2;
+	/** The key of a route entry standing for steps folded out of its middle; its value is their count. */
+	public static final AString ROUTE_ELIDED = Strings.intern("elided");
+
+	/**
+	 * What carried this request to here, one step per carrier in the order they
+	 * carried it, or null when nothing did: the request came direct. A step is
+	 * the carrying adapter's own record, naming that adapter as {@code adapter}.
+	 * Attribution only; its shape is venue-internal (AGENT_CONTEXT.md §1.2).
+	 */
+	public AVector<ACell> getRoute() { return (carried == null) ? null : carried.route(); }
+
+	/**
+	 * This request carried one step further, by adapter {@code adapter}:
+	 * {@code step} is the adapter's own record of how it carried the request,
+	 * just enough to find its information again, never a copy of it, and is
+	 * stamped with the adapter's name. A carrier adds its step where the request
+	 * reaches it, never when work it left is rebuilt later. A route longer than
+	 * {@link #ROUTE_MAX} keeps its first {@link #ROUTE_HEAD} steps and its latest,
+	 * folding those between into one {@link #ROUTE_ELIDED} entry.
+	 */
+	public RequestContext via(AString adapter, AMap<AString, ACell> step) {
+		java.util.Objects.requireNonNull(adapter, "adapter");
+		java.util.Objects.requireNonNull(step, "step");
+		AVector<ACell> route = appended(getRoute(), step.assoc(covia.api.Fields.ADAPTER, adapter));
+		return new RequestContext(authority, executionScope, rawUcans, op, cancellation,
+			invocationInput, gate, gateEvaluation, job, cycle, sessionDelivery, Carried.of(getAuthentication(), route), scopeSource, rights);
+	}
+
+	/** {@code route} with {@code step} added, folded to {@link #ROUTE_MAX} entries. */
+	private static AVector<ACell> appended(AVector<ACell> route, ACell step) {
+		AVector<ACell> longer = (route == null) ? Vectors.of(step) : route.conj(step);
+		if (longer.count() <= ROUTE_MAX) return longer;
+		long folded = foldedCount(longer.get(ROUTE_HEAD)) + foldedCount(longer.get(ROUTE_HEAD + 1));
+		return longer.subVector(0, ROUTE_HEAD)
+			.conj(convex.core.data.Maps.of(ROUTE_ELIDED, convex.core.data.prim.CVMLong.create(folded)))
+			.concat(longer.subVector(ROUTE_HEAD + 2, longer.count() - ROUTE_HEAD - 2));
+	}
+
+	/** How many steps a route entry stands for: an elided entry its count, a step one. */
+	private static long foldedCount(ACell entry) {
+		return (entry instanceof AMap<?, ?> map && map.get(ROUTE_ELIDED) instanceof convex.core.data.prim.CVMLong n)
+			? n.longValue() : 1;
 	}
 
 	/** Execution references are always qualified by their owning user. Delegating
@@ -166,12 +225,12 @@ public class RequestContext {
 			AVector<ACell> rawUcans, AString op,
 			java.util.concurrent.atomic.AtomicBoolean cancellation,
 			ACell invocationInput, CapabilityGate gate, boolean gateEvaluation, Job job,
-			AgentEvents.Cycle cycle, SessionDelivery sessionDelivery, AMap<AString, ACell> authentication,
+			AgentEvents.Cycle cycle, SessionDelivery sessionDelivery, Carried carried,
 			ScopeSource scopeSource, RequestContext rights) {
 		this.rights = rights;
 		this.scopeSource = scopeSource;
 		this.sessionDelivery = sessionDelivery;
-		this.authentication = authentication;
+		this.carried = carried;
 		this.authority = authority;
 		this.executionScope = executionScope;
 		this.job = job;
@@ -202,7 +261,7 @@ public class RequestContext {
 
 	private RequestContext withExecutionScope(ExecutionScope scope) {
 		return new RequestContext(authority, scope, rawUcans, op, cancellation,
-			invocationInput, gate, gateEvaluation, job, cycle, sessionDelivery, authentication, scopeSource, rights);
+			invocationInput, gate, gateEvaluation, job, cycle, sessionDelivery, carried,scopeSource, rights);
 	}
 
 	/**
@@ -285,9 +344,9 @@ public class RequestContext {
 	 */
 	public RequestContext withProofs(AVector<ACell> proofs) {
 		if (rights != null) {
-			return new RequestContext(authority, executionScope, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, cycle, sessionDelivery, authentication, scopeSource, rights.withProofs(proofs));
+			return new RequestContext(authority, executionScope, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, cycle, sessionDelivery, carried,scopeSource, rights.withProofs(proofs));
 		}
-		return new RequestContext(authority.withProofs(proofs), executionScope, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, cycle, sessionDelivery, authentication, scopeSource, null);
+		return new RequestContext(authority.withProofs(proofs), executionScope, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, cycle, sessionDelivery, carried,scopeSource, null);
 	}
 
 	/**
@@ -303,14 +362,15 @@ public class RequestContext {
 	public RequestContext onBehalfOf(AString userDID) {
 		Authority delegated = authority.onBehalfOf(userDID);
 		if (delegated == authority && rights == null) return this;
-		return new RequestContext(delegated, executionScope, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, cycle, sessionDelivery, authentication, null, null);
+		return new RequestContext(delegated, executionScope, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, cycle, sessionDelivery, carried,null, null);
 	}
 
 	/**
 	 * This execution (its job, session, task, cancellation and invocation)
 	 * carried on by {@code principal}'s authority instead of the caller's, its
-	 * scope read as {@code principal}'s is. The caller's transport tokens and
-	 * authentication record stay with the caller. Only
+	 * scope read as {@code principal}'s is. The caller's transport tokens,
+	 * authentication record and route stay with the caller: the principal acts
+	 * as itself. Only
 	 * {@link Engine#stepContext} hands a run to an agent this way.
 	 */
 	RequestContext actingAs(RequestContext principal) {
@@ -329,7 +389,7 @@ public class RequestContext {
 	RequestContext withAuthorityOf(RequestContext source) {
 		RequestContext held = (source.rights != null) ? source.rights : source;
 		return new RequestContext(authority.withGrantScope(Vectors.empty()).withProofs(null), executionScope, rawUcans, op,
-			cancellation, invocationInput, gate, gateEvaluation, job, cycle, sessionDelivery, authentication, null, held);
+			cancellation, invocationInput, gate, gateEvaluation, job, cycle, sessionDelivery, carried, null, held);
 	}
 
 	/** Whether what this request may do is decided by an authority other than its caller's own ({@link #withAuthorityOf}). */
@@ -362,13 +422,14 @@ public class RequestContext {
 	 * The caller's execution references stay its own, so its {@code n/},
 	 * {@code c/} and {@code t/} do not name the owner's records, and its
 	 * transport tokens, authentication record, agent cycle and session
-	 * delivery stay with it. Only {@link Engine#callContext} makes one.
+	 * delivery stay with it. The call is still the caller's request, so it
+	 * keeps the caller's route. Only {@link Engine#callContext} makes one.
 	 */
 	RequestContext callingIn(AString owner, RequestContext source) {
 		RequestContext held = (source.rights != null) ? source.rights : source;
 		Authority caller = Authority.of(getCallerDID(), owner, Vectors.empty());
 		return new RequestContext(caller, executionScope, null, null, cancellation, null, null, gateEvaluation,
-			job, null, null, null, null, held);
+			job, null, null, Carried.of(null, getRoute()), null, held);
 	}
 
 	/**
@@ -407,7 +468,7 @@ public class RequestContext {
 	 * that reads them directly finds an unrestricted scope.
 	 */
 	RequestContext readingScope(ScopeSource source) {
-		return new RequestContext(authority.withGrantScope(Vectors.empty()), executionScope, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, cycle, sessionDelivery, authentication, source, null);
+		return new RequestContext(authority.withGrantScope(Vectors.empty()), executionScope, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, cycle, sessionDelivery, carried,source, null);
 	}
 
 	/**
@@ -418,7 +479,7 @@ public class RequestContext {
 	 */
 	RequestContext narrowedBy(ScopeSource bound, AString boundOwner) {
 		if (rights != null) {
-			return new RequestContext(authority, executionScope, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, cycle, sessionDelivery, authentication, scopeSource, rights.narrowedBy(bound, boundOwner));
+			return new RequestContext(authority, executionScope, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, cycle, sessionDelivery, carried,scopeSource, rights.narrowedBy(bound, boundOwner));
 		}
 		AString owner = getUserDID();
 		ScopeSource narrowed = resource -> CapabilityChecker.intersect(scopeFor(resource), owner, bound.read(resource), boundOwner);
@@ -452,7 +513,7 @@ public class RequestContext {
 	 */
 	RequestContext withToken(AMap<AString, ACell> reference, ScopeSource caps, AString capsOwner) {
 		if (rights != null) {
-			return new RequestContext(authority, executionScope, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, cycle, sessionDelivery, authentication, scopeSource, rights.withToken(reference, caps, capsOwner));
+			return new RequestContext(authority, executionScope, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, cycle, sessionDelivery, carried,scopeSource, rights.withToken(reference, caps, capsOwner));
 		}
 		AString owner = getUserDID();
 		ScopeSource narrowed = resource -> CapabilityChecker.intersect(scopeFor(resource), owner, caps.read(resource), capsOwner);
@@ -468,7 +529,7 @@ public class RequestContext {
 	 */
 	RequestContext withCallable(AMap<AString, ACell> reference, ScopeSource caps, AString capsOwner) {
 		if (rights != null) {
-			return new RequestContext(authority, executionScope, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, cycle, sessionDelivery, authentication, scopeSource, rights.withCallable(reference, caps, capsOwner));
+			return new RequestContext(authority, executionScope, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, cycle, sessionDelivery, carried,scopeSource, rights.withCallable(reference, caps, capsOwner));
 		}
 		AString owner = getUserDID();
 		ScopeSource narrowed = resource -> CapabilityChecker.intersect(scopeFor(resource), owner, caps.read(resource), capsOwner);
@@ -527,7 +588,7 @@ public class RequestContext {
 	 * dropped. To narrow what a context may do, use {@link #narrowedTo}.</p>
 	 */
 	public RequestContext withCaps(AVector<ACell> caps) {
-		return new RequestContext(authority.withGrantScope(CapabilityChecker.inAgent(caps, getAgentId())), executionScope, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, cycle, sessionDelivery, authentication, null, null);
+		return new RequestContext(authority.withGrantScope(CapabilityChecker.inAgent(caps, getAgentId())), executionScope, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, cycle, sessionDelivery, carried,null, null);
 	}
 
 	/**
@@ -557,7 +618,7 @@ public class RequestContext {
 	 * durable Job id may remain the temp scope of an internal sub-invocation.
 	 */
 	public RequestContext withJob(Job job) {
-		return new RequestContext(authority, executionScope, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, cycle, sessionDelivery, authentication, scopeSource, rights);
+		return new RequestContext(authority, executionScope, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, cycle, sessionDelivery, carried,scopeSource, rights);
 	}
 
 	/**
@@ -613,7 +674,7 @@ public class RequestContext {
 	 * (#211): {@code {"with": "v/ops/getmine", "can": "invoke"}}.
 	 */
 	public RequestContext withOp(AString op) {
-		return new RequestContext(authority, executionScope, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, cycle, sessionDelivery, authentication, scopeSource, rights);
+		return new RequestContext(authority, executionScope, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, cycle, sessionDelivery, carried,scopeSource, rights);
 	}
 
 	/**
@@ -634,7 +695,7 @@ public class RequestContext {
 	 * evaluator treat gated grants as unable to authorise (fail-closed).
 	 */
 	public RequestContext withInvocation(ACell invocationInput, CapabilityGate gate) {
-		return new RequestContext(authority, executionScope, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, cycle, sessionDelivery, authentication, scopeSource, rights);
+		return new RequestContext(authority, executionScope, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, cycle, sessionDelivery, carried,scopeSource, rights);
 	}
 
 	/**
@@ -680,7 +741,7 @@ public class RequestContext {
 	 * stop the running transition thread by itself.
 	 */
 	public RequestContext withCancellation(java.util.concurrent.atomic.AtomicBoolean cancellation) {
-		return new RequestContext(authority, executionScope, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, cycle, sessionDelivery, authentication, scopeSource, rights);
+		return new RequestContext(authority, executionScope, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, cycle, sessionDelivery, carried,scopeSource, rights);
 	}
 
 	/**
@@ -698,7 +759,7 @@ public class RequestContext {
 	 * signal; the transition adapter opens its {@code CycleRecord} on it.
 	 */
 	public RequestContext withCycle(AgentEvents.Cycle cycle) {
-		return new RequestContext(authority, executionScope, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, cycle, sessionDelivery, authentication, scopeSource, rights);
+		return new RequestContext(authority, executionScope, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, cycle, sessionDelivery, carried,scopeSource, rights);
 	}
 
 	/**
@@ -826,7 +887,7 @@ public class RequestContext {
 	 * forwarding — the parsed {@link #getProofs() proofs} cannot be re-signed.
 	 */
 	public RequestContext withRawUcans(AVector<ACell> rawUcans) {
-		return new RequestContext(authority, executionScope, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, cycle, sessionDelivery, authentication, scopeSource, rights);
+		return new RequestContext(authority, executionScope, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, cycle, sessionDelivery, carried,scopeSource, rights);
 	}
 
 	/**

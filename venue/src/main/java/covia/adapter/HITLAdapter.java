@@ -360,7 +360,7 @@ public class HITLAdapter extends AAdapter {
 		ACell result = Maps.of(Hitl.ID, id, Hitl.STATUS, Hitl.CANCELLED, Fields.ERROR, error);
 		// Null when the job finished first
 		Resolution resolution = engine.getVenueState().transact(venue ->
-			settle(venue, job, data -> failed(data, error), owner, agentId, session, engine.getDIDString(), result));
+			settle(venue, job, data -> failed(data, error), owner, agentId, session, engine.getDIDString(), null, result));
 		if (resolution != null) afterResolution(resolution, id, ownerAccount);
 	}
 
@@ -462,26 +462,29 @@ public class HITLAdapter extends AAdapter {
 		AString outcome = RT.ensureString(RT.getIn(input, Hitl.OUTCOME));
 		AString comment = RT.ensureString(RT.getIn(input, Hitl.COMMENT));
 		Job job = engine.jobs().getJob(id);
+		// The answer reaches an asking agent as a message from the responder,
+		// carried as this request was
+		AVector<ACell> route = ctx.getRoute();
 		if (Hitl.REJECT.equals(outcome)) {
-			return resolveReject(user, id, comment, job);
+			return resolveReject(user, id, comment, job, route);
 		}
 		if (Hitl.ANSWER.equals(outcome)) {
-			return resolveAnswer(user, id, record, input, comment, job);
+			return resolveAnswer(user, id, record, input, comment, job, route);
 		}
 		throw new InvalidInputException("outcome must be 'answer' or 'reject'");
 	}
 
-	private ACell resolveReject(User user, Blob id, AString comment, Job job) {
+	private ACell resolveReject(User user, Blob id, AString comment, Job job, AVector<ACell> route) {
 		AMap<AString, ACell> response = Maps.of(Hitl.OUTCOME, Hitl.REJECT);
 		if (comment != null) response = response.assoc(Hitl.COMMENT, comment);
-		if (!resolveRequest(user.getDID(), id, Hitl.REJECTED, response, user.getDID(),
+		if (!resolveRequest(user.getDID(), id, Hitl.REJECTED, response, user.getDID(), route,
 				response.assoc(Hitl.ID, id).assoc(Hitl.STATUS, Hitl.REJECTED), job, null)) throw new ConflictException(REQUEST_ALREADY_RESOLVED);
 		return Maps.of(Hitl.ID, id, Hitl.STATUS, Hitl.REJECTED);
 	}
 
 	@SuppressWarnings("unchecked")
 	private ACell resolveAnswer(User user, Blob id, AMap<AString, ACell> record,
-			ACell input, AString comment, Job job) {
+			ACell input, AString comment, Job job, AVector<ACell> route) {
 		AVector<ACell> asks = (AVector<ACell>) RT.getIn(record, Hitl.ASKS);
 		ACell answersCell = RT.getIn(input, Hitl.ANSWERS);
 		AMap<AString, ACell> answers = (answersCell instanceof AMap)
@@ -532,7 +535,7 @@ public class HITLAdapter extends AAdapter {
 		// in its own durable session.
 		if (transported.count() > 0) output = output.assoc(Hitl.TOKENS, transported);
 		AMap<AString, ACell> result = output;
-		if (!resolveRequest(user.getDID(), id, Hitl.ANSWERED, response, user.getDID(), result, job, grant)) throw new ConflictException(REQUEST_ALREADY_RESOLVED);
+		if (!resolveRequest(user.getDID(), id, Hitl.ANSWERED, response, user.getDID(), route, result, job, grant)) throw new ConflictException(REQUEST_ALREADY_RESOLVED);
 		return Maps.of(Hitl.ID, id, Hitl.STATUS, Hitl.ANSWERED);
 	}
 
@@ -810,7 +813,7 @@ public class HITLAdapter extends AAdapter {
 	/** Expires an open request: record → expired, job → FAILED. Terminal-state
 	 *  stickiness makes the race against a response commit exactly one winner. */
 	private void expireRequest(AString targetDID, Blob id) {
-		if (resolveRequest(targetDID, id, Hitl.EXPIRED, null, engine.getDIDString(), Maps.of(
+		if (resolveRequest(targetDID, id, Hitl.EXPIRED, null, engine.getDIDString(), null, Maps.of(
 				Hitl.ID, id, Hitl.STATUS, Hitl.EXPIRED, Fields.ERROR, REQUEST_EXPIRED),
 				engine.jobs().getJob(id), null)) log.info("HITL request {} expired", id);
 	}
@@ -829,7 +832,7 @@ public class HITLAdapter extends AAdapter {
 	 * allowed inside the retryable draft callback. A minted {@code grant} the
 	 * result carries is recorded once the resolution commits, and only then. */
 	private boolean resolveRequest(AString targetDID, Blob id, AString status,
-			AMap<AString, ACell> response, AString responder, ACell result, Job job, UCANAdapter.Grant grant) {
+			AMap<AString, ACell> response, AString responder, AVector<ACell> route, ACell result, Job job, UCANAdapter.Grant grant) {
 		AString requester = job == null ? null : job.getOwner();
 		User requesterAccount = requester == null ? null : engine.getVenueState().users().user(requester);
 		// Null when the request was not open to resolve
@@ -842,7 +845,7 @@ public class HITLAdapter extends AAdapter {
 				if (Hitl.ANSWERED.equals(status)) return data.assoc(Fields.STATUS, Status.COMPLETE).assoc(Fields.OUTPUT, result);
 				return failed(data, Hitl.REJECTED.equals(status) ? rejection(targetDID, RT.getIn(result, Hitl.COMMENT)) : REQUEST_EXPIRED);
 			}, Attribution.owner(record), RT.ensureString(record.get(Hitl.AGENT)),
-				Ids.stored(record.get(Fields.SESSION_ID)), responder, result);
+				Ids.stored(record.get(Fields.SESSION_ID)), responder, route, result);
 			if (settled == null) throw new ConflictException(REQUEST_ALREADY_RESOLVED);
 			return settled;
 		});
@@ -863,7 +866,7 @@ public class HITLAdapter extends AAdapter {
 	 * @return What to do after commit, or null when the job had already finished
 	 */
 	private Resolution settle(VenueState venue, Job job, java.util.function.UnaryOperator<AMap<AString, ACell>> outcome,
-			AString askingOwner, AString agentId, Blob session, AString responder, ACell result) {
+			AString askingOwner, AString agentId, Blob session, AString responder, AVector<ACell> route, ACell result) {
 		var draft = venue.users();
 		Runnable notification = null;
 		Blob waitingTask = null;
@@ -888,7 +891,7 @@ public class HITLAdapter extends AAdapter {
 		// not a chat waiter tied to the now-terminal HITL Job; it goes to the
 		// task whose cycle asked, when there is one, else to the session.
 		if (askingOwner != null && agents != null
-				&& agents.deliverToWaiter(draft, askingOwner, agentId, session, waitingTask, responder,
+				&& agents.deliverToWaiter(draft, askingOwner, agentId, session, waitingTask, responder, route,
 					(job != null) ? Strings.create(job.getID().toHexString()) : null, result)) {
 			return new Resolution(notification, new SessionWake(askingOwner, agentId), false);
 		}

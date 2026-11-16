@@ -93,6 +93,10 @@ public class Scheduler {
 
 	private static final Logger log = LoggerFactory.getLogger(Scheduler.class);
 
+	/** The scheduler adapter's name, which a fire's route step names. */
+	public static final String NAME = "scheduler";
+	private static final AString SCHEDULER = convex.core.data.Strings.intern(NAME);
+
 	public static final long MIN_REPEAT_MS = Schedule.MIN_REPEAT_MS;
 	public static final int MAX_DESCRIPTION_CHARS = Schedule.MAX_DESCRIPTION_CHARS;
 	public static final String DESCRIPTION_NOT_STRING = Schedule.DESCRIPTION_NOT_STRING;
@@ -603,9 +607,11 @@ public class Scheduler {
 		boolean tracked = isTracked(rec);
 		try {
 			engine.getVenueState().users().requireNotDeleted(Attribution.owner(rec));
-			prepared = tracked ? engine.jobs().prepareTracked(
-				RT.ensureString(rec.get(K_OP)), rec.get(K_INPUT), fireContext(rec))
-				: engine.jobs().prepareUntracked(RT.ensureString(rec.get(K_OP)), rec.get(K_INPUT), fireContext(rec));
+			// The fire is a request of its own, carried by the scheduler alone: how
+			// the event was scheduled is not part of its route
+			RequestContext fire = fireContext(rec).via(SCHEDULER, Maps.of(K_HANDLE, key));
+			prepared = tracked ? engine.jobs().prepareTracked(RT.ensureString(rec.get(K_OP)), rec.get(K_INPUT), fire)
+				: engine.jobs().prepareUntracked(RT.ensureString(rec.get(K_OP)), rec.get(K_INPUT), fire);
 		} catch (RuntimeException e) {
 			error = e;
 		}

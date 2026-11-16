@@ -1615,19 +1615,35 @@ public class AgentAdapter extends AAdapter {
 
 	/**
 	 * A pending envelope or task record with the request's provenance beside its
-	 * content (COG-20 §4): the caller; the access token the request came
-	 * through, by its reference, when it came through one
-	 * ({@link Engine#tokenCameThrough}), so work a token started records it too;
-	 * and the authentication record when a channel binding authenticated it —
-	 * all from the request context only. The content is never read for
-	 * provenance or rewritten with it.
+	 * content (COG-20 §4): the caller, and the request's route when something
+	 * carried it ({@link RequestContext#getRoute}) — both from the request
+	 * context only. The content is never read for provenance or rewritten with
+	 * it.
 	 */
 	static AMap<AString, ACell> withProvenance(AMap<AString, ACell> record, RequestContext ctx) {
-		record = record.assoc(Fields.CALLER, ctx.getCallerDID());
-		AMap<AString, ACell> token = Engine.tokenCameThrough(ctx);
-		if (token != null) record = record.assoc(Fields.TOKEN, token);
-		AMap<AString, ACell> authentication = ctx.getAuthentication();
-		return (authentication == null) ? record : record.assoc(Fields.AUTHENTICATION, authentication);
+		return withRoute(record.assoc(Fields.CALLER, ctx.getCallerDID()), ctx);
+	}
+
+	/** {@code record} with {@code ctx}'s route, when it has one. */
+	private static AMap<AString, ACell> withRoute(AMap<AString, ACell> record, RequestContext ctx) {
+		AVector<ACell> route = (ctx == null) ? null : ctx.getRoute();
+		return (route == null) ? record : record.assoc(Fields.ROUTE, route);
+	}
+
+	/**
+	 * {@code records} as a view outside the agent's own runtime shows them: each
+	 * without its route, which only the agent's {@code From} element shows
+	 * (AGENT_CONTEXT.md §1.2).
+	 */
+	static AVector<ACell> withoutRoutes(AVector<ACell> records) {
+		if (records == null) return null;
+		AVector<ACell> out = records;
+		for (long i = 0; i < records.count(); i++) {
+			if (records.get(i) instanceof AMap<?, ?> m && m.containsKey(Fields.ROUTE)) {
+				out = out.assoc(i, RT.ensureMap(m).dissoc(Fields.ROUTE));
+			}
+		}
+		return out;
 	}
 
 	/**
@@ -2083,8 +2099,7 @@ public class AgentAdapter extends AAdapter {
 			frames = GoalTreeContext.repairDanglingToolCalls(frames.slice(0, 1),
 				Strings.create(QUERY_PENDING_TOOL));
 		}
-		AVector<ACell> messages = Vectors.of(Maps.of(
-			Fields.CALLER, ctx.getCallerDID(), Fields.MESSAGE, message));
+		AVector<ACell> messages = Vectors.of(withProvenance(Maps.of(Fields.MESSAGE, message), ctx));
 		// An ephemeral conversation tier lets tools load context locally even
 		// without a supplied session. Do not copy its id, pending inbox or tasks.
 		AMap<AString, ACell> snapshot = Maps.of(
@@ -2562,10 +2577,11 @@ public class AgentAdapter extends AAdapter {
 		if (session == null || !isVisibleToPolicies(ctx, access, sid, session)) return sessionNotFound();
 
 		ConversationHistory.Page page = readHistory(ConversationHistory.open(Session.rootFrame(session)), start, end, limit);
+		// Entries as stored, less the route, which only the From element shows
 		AMap<AString, ACell> result = Maps.of(
 			K_FOUND, CVMBool.TRUE,
 			Fields.SESSION_ID, sid,
-			K_ENTRIES, page.entries());
+			K_ENTRIES, withoutRoutes(page.entries()));
 		// A caller that passed start knows it; one that did not has no other way to learn it.
 		if (start == null) result = result.assoc(K_START, CVMLong.create(page.start()));
 		return page.hasMore() ? result.assoc(K_NEXT, CVMLong.create(page.next())) : result;
@@ -4157,34 +4173,38 @@ public class AgentAdapter extends AAdapter {
 	 * flushes and wakes the agent after commit.
 	 *
 	 * @param taskId the task whose cycle waited, or null
+	 * @param caller who the message is from
+	 * @param route what carried the request that sent it ({@link RequestContext#getRoute}), or null
 	 * @param messageId identifies the message, so delivering it to the task again adds nothing
 	 * @return whether the message reached the task or the session
 	 */
 	public boolean deliverToWaiter(covia.venue.Users users, AString ownerDID, AString agentId, Blob sessionId,
-			Blob taskId, AString caller, AString messageId, ACell message) {
-		return deliverToWaiter(users, ownerDID, agentId, sessionId, taskId, caller, messageId, message, null);
+			Blob taskId, AString caller, AVector<ACell> route, AString messageId, ACell message) {
+		return deliverToWaiter(users, ownerDID, agentId, sessionId, taskId, caller, route, messageId, message, null);
 	}
 
 	/**
-	 * As {@link #deliverToWaiter(covia.venue.Users, AString, AString, Blob, Blob, AString, AString, ACell)},
+	 * As {@link #deliverToWaiter(covia.venue.Users, AString, AString, Blob, Blob, AString, AVector, AString, ACell)},
 	 * the envelope marked with the source its turn records when one is given
 	 * ({@link Agent#SOURCE_TOOL_OUTCOME}).
 	 */
 	private boolean deliverToWaiter(covia.venue.Users users, AString ownerDID, AString agentId, Blob sessionId,
-			Blob taskId, AString caller, AString messageId, ACell message, AString source) {
+			Blob taskId, AString caller, AVector<ACell> route, AString messageId, ACell message, AString source) {
 		var owner = users.user(ownerDID);
 		Agent agent = (owner == null) ? null : owner.agent(agentId);
 		if (agent == null || externalAgents().isExternal(agent)) return false;
 		if (taskId != null) {
-			AMap<AString, ACell> envelope = Maps.of(
-				Fields.CALLER, caller,
-				Fields.MESSAGE, message);
-			if (source != null) envelope = envelope.assoc(Agent.K_SOURCE, source);
+			AMap<AString, ACell> envelope = carried(Maps.of(Fields.CALLER, caller, Fields.MESSAGE, message), route, source);
 			if (agent.appendTaskContinuation(taskId, sessionId, envelope, messageId)) return true;
 		}
-		if (source == null) return appendSessionMessage(users, ownerDID, agentId, sessionId, caller, null, message);
-		return appendSessionEnvelope(agent, sessionId, caller,
-			sessionEnvelope(caller, null, message).assoc(Agent.K_SOURCE, source));
+		if (route == null && source == null) return appendSessionMessage(users, ownerDID, agentId, sessionId, caller, null, message);
+		return appendSessionEnvelope(agent, sessionId, caller, carried(sessionEnvelope(caller, null, message), route, source));
+	}
+
+	/** {@code envelope} with the route its message came by and the source its turn records, each when there is one. */
+	private static AMap<AString, ACell> carried(AMap<AString, ACell> envelope, AVector<ACell> route, AString source) {
+		if (route != null) envelope = envelope.assoc(Fields.ROUTE, route);
+		return (source == null) ? envelope : envelope.assoc(Agent.K_SOURCE, source);
 	}
 
 	/** Append to a known local session using the supplied component, including a
@@ -4297,7 +4317,8 @@ public class AgentAdapter extends AAdapter {
 			if (sid == null) return null;
 			Blob taskId = Ids.stored(RT.getIn(entry, Fields.TASK_ID));
 			agent.removePending(jobId);
-			boolean delivered = deliverToWaiter(draft, ownerDID, agentId, sid, taskId, callMadeBy(record),
+			// The agent's own call: its outcome came by no route
+			boolean delivered = deliverToWaiter(draft, ownerDID, agentId, sid, taskId, callMadeBy(record), null,
 				Strings.create(jobId.toHexString()), callOutcome(jobId, record, entry),
 				Agent.SOURCE_TOOL_OUTCOME);
 			return new CallDelivery(delivered, taskId);
@@ -4771,12 +4792,13 @@ public class AgentAdapter extends AAdapter {
 			K_END, CVMLong.create(endTs),
 			Fields.OP, transitionOp,
 			Fields.RESULT, result);
-		// Only include non-empty collections to avoid bloat
+		// Only include non-empty collections to avoid bloat. The timeline is a
+		// view outside the runtime, so routes stay out of it
 		if (formattedTasks != null && formattedTasks.count() > 0) {
-			timelineEntry = timelineEntry.assoc(Fields.TASKS, formattedTasks);
+			timelineEntry = timelineEntry.assoc(Fields.TASKS, withoutRoutes(formattedTasks));
 		}
 		if (filteredInbox != null && filteredInbox.count() > 0) {
-			timelineEntry = timelineEntry.assoc(Fields.MESSAGES, filteredInbox);
+			timelineEntry = timelineEntry.assoc(Fields.MESSAGES, withoutRoutes(filteredInbox));
 		}
 
 		// The cycle's exchange with the model (#392): the root frame's standing
@@ -5089,21 +5111,24 @@ public class AgentAdapter extends AAdapter {
 
 	/**
 	 * Stamps a user turn with the provenance its envelope or task record carries
-	 * (COG-20 §4): the caller, the access token and the authentication record
-	 * when there are any, and the venue's mark on a tracked call's outcome
-	 * ({@link Agent#SOURCE_TOOL_OUTCOME}).
+	 * (COG-20 §4): the caller and the route when there are any, and the venue's
+	 * mark on a tracked call's outcome ({@link Agent#SOURCE_TOOL_OUTCOME}). A
+	 * record stored before routes carries its channel's authentication record
+	 * instead, which is copied as it is, so its turn renders as it always has.
 	 */
 	public static AMap<AString, ACell> withRecordedProvenance(AMap<AString, ACell> turn, ACell source) {
-		ACell caller = RT.getIn(source, Fields.CALLER);
-		if (caller != null) turn = turn.assoc(Fields.CALLER, caller);
-		ACell token = RT.getIn(source, Fields.TOKEN);
-		if (token != null) turn = turn.assoc(Fields.TOKEN, token);
+		for (AString key : RECORDED_PROVENANCE) {
+			ACell value = RT.getIn(source, key);
+			if (value != null) turn = turn.assoc(key, value);
+		}
 		if (Agent.SOURCE_TOOL_OUTCOME.equals(RT.getIn(source, Agent.K_SOURCE))) {
 			turn = turn.assoc(Agent.K_SOURCE, Agent.SOURCE_TOOL_OUTCOME);
 		}
-		ACell authentication = RT.getIn(source, Fields.AUTHENTICATION);
-		return (authentication == null) ? turn : turn.assoc(Fields.AUTHENTICATION, authentication);
+		return turn;
 	}
+
+	/** What a turn copies from its envelope or task record: who sent it and how it came. */
+	private static final AString[] RECORDED_PROVENANCE = {Fields.CALLER, Fields.ROUTE, Fields.AUTHENTICATION};
 
 	/**
 	 * The user turns for a cycle's input, in order: one per presented message,
@@ -5320,10 +5345,11 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	/**
-	 * Formats one canonical taskdata entry — {input, caller, authentication?,
+	 * Formats one canonical taskdata entry — {input, caller, route?,
 	 * created, responseSchema?, strict?, t, sessionId?, goals?} — into the
-	 * transition wire shape {jobId, input, caller?, authentication?,
-	 * responseSchema?, strict?}.
+	 * transition wire shape {jobId, input, caller?, route?,
+	 * responseSchema?, strict?}, which the agent's own runtime reads. A task
+	 * stored before routes carries {@code authentication} in their place.
 	 */
 	@SuppressWarnings("unchecked")
 	private static AMap<AString, ACell> formatTask(Blob jobId, ACell raw) {

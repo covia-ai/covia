@@ -4873,19 +4873,6 @@ public class Engine {
 	}
 
 	/**
-	 * The access token request {@code ctx} came through, as its reference: the
-	 * innermost token narrowing its own authority, for the request a token's
-	 * bearer made and the work it left running alike. Null when none does, and
-	 * when the request is a callable's call or acts with authority not its own
-	 * (an agent's controller's), since the tokens narrowing that authority say
-	 * how it was set up, not how this request came.
-	 */
-	public static AMap<AString, ACell> tokenCameThrough(RequestContext ctx) {
-		if (ctx.hasSeparateAuthority() || ctx.getCallable() != null) return null;
-		return actingSource(ctx).token();
-	}
-
-	/**
 	 * The principal whose authority {@code ctx} acts with, which an agent it
 	 * creates or forks takes for its controller: an agent acting in its owner's
 	 * namespace, whatever its authority derives from, so that what it creates
@@ -4981,15 +4968,18 @@ public class Engine {
 	 * now: its issuer as that principal acts in the token's namespace
 	 * ({@link #context(AString, AString)}), narrowed by the caps of every token
 	 * on its chain ({@link #tokenChain}), each read at each point of action. A
-	 * token that later stops standing narrows to nothing.
+	 * token that later stops standing narrows to nothing. The token carried the
+	 * request, so its reference is the request's route step.
 	 *
 	 * @throws AuthException when the token does not stand now, or its issuer could not act
 	 */
 	public RequestContext tokenContext(AMap<AString, ACell> reference) {
 		AccessToken token = resolveToken(reference);
 		if (token == null) throw new AuthException(TOKEN_NOT_STANDING + RT.getIn(reference, Fields.NAME));
-		return narrowedByToken(context(token.owner(), token.issuer()), reference);
+		return narrowedByToken(context(token.owner(), token.issuer()), reference).via(TOKEN_ADAPTER, reference);
 	}
+
+	private static final AString TOKEN_ADAPTER = Strings.intern(TokenAdapter.NAME);
 
 	/**
 	 * The tokens {@code reference} stands for, outermost first: the token,
@@ -5118,14 +5108,16 @@ public class Engine {
 	 * The context a request authenticated through {@code owner}'s channel
 	 * binding runs under (COG-3 §7): its identified principal as it acts now
 	 * ({@link #context(AString, AString)}), carrying the result's record without
-	 * its {@code userDID}. The one place a request context gains an
-	 * authentication record.
+	 * its {@code userDID}, and carried by the binding: its route step is the
+	 * binding's ({@link covia.adapter.messaging.ChannelAuthentication#step}). The
+	 * one place a request context gains an authentication record.
 	 *
 	 * @throws AuthException as {@link #context(AString, AString)}
 	 */
 	public RequestContext channelContext(AString owner, covia.venue.auth.AuthResult result) {
-		return context(owner, result.userDID())
-			.withAuthentication(result.toData().dissoc(covia.venue.auth.AuthResult.USER_DID));
+		AMap<AString, ACell> record = result.toData().dissoc(covia.venue.auth.AuthResult.USER_DID);
+		return context(owner, result.userDID()).withAuthentication(record)
+			.via(result.authentication().method(), covia.adapter.messaging.ChannelAuthentication.step(record));
 	}
 
 	/** Why the public principal cannot act: the operator has public access off. */

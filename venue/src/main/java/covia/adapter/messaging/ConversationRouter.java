@@ -217,7 +217,8 @@ public final class ConversationRouter {
 	 * context carries the authentication record.
 	 *
 	 * A provider event with no sender at all (a poll, say) is anonymous on an
-	 * open binding and carries no record.
+	 * open binding and carries no record, but the binding still carried it, so
+	 * its route names the binding.
 	 *
 	 * @throws AuthException for a sender the binding does not admit, or an
 	 *         anonymous sender while public access is off
@@ -226,7 +227,8 @@ public final class ConversationRouter {
 		sessions.requireCurrentUser();
 		if (channel == null) {
 			if (!spec.open()) throw new AuthException(ChannelAuthentication.NOT_ADMITTED);
-			return engine.context(engine.publicPrincipal());
+			AString method = Strings.create(sessions.adapterName());
+			return engine.context(engine.publicPrincipal()).via(method, ChannelAuthentication.step(engine, spec, method));
 		}
 		return engine.channelContext(spec.userDID(engine), ChannelAuthentication.authenticate(engine, spec, principal(),
 			lists.test(channel.sender()), channel));

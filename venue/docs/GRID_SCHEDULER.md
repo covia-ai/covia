@@ -276,6 +276,12 @@ Every context that can schedule is a principal's own as it stands, so this
 loses nothing: an agent's step always runs as that agent, under its record's
 caps, whatever its input names (`Engine.stepContext`).
 
+A fire is a request of its own, which the scheduler carried: its route is the
+scheduler's step alone, naming the event's handle, whatever carried the
+request that scheduled it, so an agent it reaches is told the scheduler
+delivered it ([AGENT_CONTEXT.md](./AGENT_CONTEXT.md) §1.2). An access token
+the event was scheduled through still narrows the fire, as above.
+
 A fire presents no sign-in credential: only a live request carries one, and
 the venue keeps none. A grid hop with `authenticateAs: "caller"` therefore
 fails when it fires; work that must act as its caller at another venue is

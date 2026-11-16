@@ -16,6 +16,7 @@ import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.AVector;
 import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
@@ -204,18 +205,29 @@ public class HITLAdapterTest {
 		assertEquals(Strings.create("hitl-agent"), record.get(Hitl.AGENT));
 		assertEquals(sid, record.get(Fields.SESSION_ID));
 
+		// The answer reaches the agent as a message from the responder, carried as
+		// the answering request was
+		RequestContext carried = ALICE.via(Strings.create("test"), Maps.of(Fields.NAME, Strings.create("phone")));
 		try (AgentWatch watch = AgentWatch.open(engine, ALICE_DID, "hitl-agent")) {
-			respond(ALICE, Hitl.answer(id.toString()).answer("path", "left").build());
+			respond(carried, Hitl.answer(id.toString()).answer("path", "left").build());
 			assertEquals(Status.COMPLETE, request.getStatus());
 			assertFalse(agent.getPending().containsKey(request.getID()));
 			assertEquals(Maps.of(Fields.INPUT, 0, Fields.AUTH, 0),
 				agents.agentInfo(ALICE, Strings.create("hitl-agent")).get(Fields.AWAITING));
 			watch.awaitCycles(1);
 		}
-		String conversation = covia.adapter.agent.GoalTreeContext.activeConversation(RT.ensureMap(
-			RT.getIn(owner.agent("hitl-agent").session(sid).getRecord(), Fields.FRAMES, CVMLong.ZERO))).toString();
+		AVector<ACell> turns = covia.adapter.agent.GoalTreeContext.activeConversation(RT.ensureMap(
+			RT.getIn(owner.agent("hitl-agent").session(sid).getRecord(), Fields.FRAMES, CVMLong.ZERO)));
+		String conversation = turns.toString();
 		assertTrue(conversation.contains(id.toString()) && conversation.contains("left"),
 			"the human answer must arrive in the asking session: " + conversation);
+		ACell answer = null;
+		for (ACell turn : turns) {
+			if ("user".equals(String.valueOf(RT.getIn(turn, "role"))) && turn.toString().contains("left")) answer = turn;
+		}
+		assertNotNull(answer, conversation);
+		assertEquals(ALICE_DID, RT.getIn(answer, Fields.CALLER));
+		assertEquals(carried.getRoute(), RT.getIn(answer, Fields.ROUTE), "the answer keeps its request's route");
 	}
 
 	@Test

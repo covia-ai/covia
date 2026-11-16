@@ -264,7 +264,7 @@ The label renderer therefore handles only blocks that genuinely travel as instru
 | Compacted conversation segment (assistant memory): the first and last turn it stands for, by position in the frame's history, so `agent:history` can read exactly those back | `[Compacted: turns <from>–<to>] <summary>` | `<compacted from="…" to="…">` | `## Compacted: turns <from>–<to>` |
 | Ancestor context (goal tree) | `[Ancestor Context]` | `<ancestors>` | `## Ancestor context` |
 | Tool-failure diagnostic | `[Tool failure: <name>] <reason>` | `<tool-failure name="…">` | `## Tool failure: <name>` |
-| Who a turn comes from (COG-20 §4): before a user turn whose caller, access token, binding, authenticated identity, chat, thread or space differs from the turn before it, rendered from the stored turn alone; names are never rendered | `[From: <relationship> <principal> — access token <name> — <method> <binding>: sender <id> @<handle>, <kind> chat <id>, thread <id>, space <id>]` | `<from principal="…" relationship="…" token="…" method="…" binding="…" sender="…" handle="…" chat="…" chat-kind="…" thread="…" space="…"/>` | `## From: …` |
+| Who a turn comes from (COG-20 §4): before a user turn whose caller or route differs from the turn before it, rendered from the stored turn alone; one segment per step of the route | `[From: <relationship> <principal> — <adapter> <name>: sender <id> @<handle>, <kind> chat <id>, thread <id>, space <id> — …]` | `<from principal="…" relationship="…"><via adapter="…" name="…" sender="…" handle="…" chat="…" chat-kind="…" thread="…" space="…"/>…</from>` | `## From: …` |
 | Outstanding task | `[Tasks assigned to you]` | `<tasks>` | `## Tasks assigned to you` |
 | Empty-state signal | `[No pending tasks, messages, or job results. …]` | `<no-input>` | `## No input` |
 | Budget warning | `[Context budget] <pct>% …` | `<context-budget>` | `## Context budget` |
@@ -272,6 +272,34 @@ The label renderer therefore handles only blocks that genuinely travel as instru
 | Current date | `Current date: <date>.` | `Current date: <date>.` | `Current date: <date>.` |
 
 A block is its label followed by its body; in `xml` the body is followed by the closing tag. A one-line element — the date — is a line in every dialect. Fields interpolated into an instruction label come only from operator configuration or validated runtime metadata and are escaped for the chosen dialect. Labels on untrusted declarations remain data fields in tool results.
+
+**The `From` element's route.** A request's route is what carried it to the
+agent, one step per carrier in the order they carried it: the access token it
+presented (`token`), the binding that received it (`telegram`, `slack`, …),
+the callable it called (`callable`), the scheduler that fired it
+(`scheduler`). Each carrier adds its step where the request reaches it
+(`RequestContext.via`), from its own reference. A request nothing carried has
+no route and reads as direct. The route belongs to the request alone:
+contexts the venue starts for an agent's own work and work rebuilt after a
+restart carry none, and a scheduled fire's route is the scheduler's step,
+whatever carried the request that scheduled it. The agent's ingress records
+the route beside the caller (AGENT_SESSIONS.md), as it does for a human's
+answer to the agent's question and for `agent:query`; a tool call's late
+outcome is the agent's own and has none.
+
+A step shows its adapter, its name (the token's, binding's or callable's own,
+set by whoever owns it) and, for a binding, the sender's id and handle, the
+chat's id and kind, a thread and a space id; the names of people, chats and
+spaces never show (COG-3 §7), nor anything else a step holds. Values show
+only in conservative shapes, and the caller only as a DID in printable ASCII,
+otherwise as `unreadable sender`. A route that cannot be read shows as an
+`unreadable route step`, never as no route, so a request something carried
+never looks direct; a long one shows its first two steps, how many it folds,
+and its latest. A turn stored before routes carries its channel's
+`authentication` record instead, and renders as that binding's step would.
+The route's stored shape is venue-internal, not a contract: operations that
+hand turns out leave it out (`agent:history`, the timeline), and this element
+is its one view.
 
 `bracket` is cheap in tokens, reads naturally in logs, and is plain text. `xml` marks where an instruction block ends as well as where it begins. `header` suits models whose guidance favours markdown sections, at the cost of competing with headings inside an instruction body. A model that benefits from either alternative opts in on its asset. The dialect is fixed for a persisted context; changing it rebuilds the prefix deliberately.
 
@@ -1246,7 +1274,7 @@ The same regions drive the timeline record (`AGENT_LOOP.md` §2.4): initial mess
 | Concern | Home |
 |---------|------|
 | `Spec`, `Rendered`, `Prompt`, concatenation and attribution | `ContextAssembler` |
-| The `From` element (§1.2): relationship, channel and identity key | `TurnProvenance` |
+| The `From` element (§1.2): relationship, route and key | `TurnProvenance` |
 | Atomic session/frame persistence | `Agent`, through `FrameStore` |
 | Durable context cell contract | §1.1 of this document |
 | The label renderer (§1.2) | `Labels` |
