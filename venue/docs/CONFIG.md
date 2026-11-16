@@ -780,7 +780,8 @@ that mapper takes precedence over Covia's generic fallback.
 The optional Python adapter exposes only operator-configured scripts. There is
 no caller-supplied `eval` operation: allowing arbitrary operation metadata to
 select source or a host path would turn ordinary venue invocation into host
-code execution.
+code execution. Its design, and the redesign proposed for it, are in
+[adapters/PYTHON.md](adapters/PYTHON.md).
 
 ```json
 {

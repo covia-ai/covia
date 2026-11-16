@@ -1,7 +1,9 @@
 # Covia Python adapter module
 
 This optional venue module wraps `covia-python` and exposes operator-configured
-scripts as ordinary Covia operations. It is not included in `covia.jar`.
+scripts as ordinary Covia operations. It is not included in `covia.jar`. Its
+design, and the redesign proposed for it, are in
+[venue/docs/adapters/PYTHON.md](../venue/docs/adapters/PYTHON.md).
 
 Build the reactor on Java 22+ to include the native FFM backend, then list the
 shaded module jar and configure the `python` adapter it provides:

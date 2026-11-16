@@ -126,7 +126,8 @@ and required tests. Operation metadata is covered there and in
   `JOBS.md`, `UCAN.md`, `AUTH.md`, `PERSISTENCE.md`, `SKILLS.md`,
   `AGENT_LOOP.md`, `EMBEDDING.md`, `GRID_LATTICE_DESIGN.md` (lattice layout,
   defined in code by `covia.lattice.Covia`) and `CONFIG.md` (operator
-  reference).
+  reference). `venue/docs/adapters/` holds the design of a single adapter,
+  such as `PYTHON.md`.
 - `BUILD.md`: builds, QA and releases. `DX_PLAN.md`: experience roadmap for
   developers using Covia. `deploy/README.md`: the operator guide.
 
