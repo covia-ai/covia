@@ -228,7 +228,18 @@ public class Engine {
 		"covia", "agent", "dlfs", "hitl", "http", "file", "grid", "venue");
 
 	/** Explicit lifecycle: construction is inert; start/close own active resources. */
-	private enum Lifecycle { NEW, STARTING, PREPARED, STARTED, FAILED, CLOSING, CLOSED }
+	private enum Lifecycle {
+		NEW, STARTING, PREPARED, STARTED, FAILED, CLOSING, CLOSED;
+
+		/** Close began or startup failed: the venue takes on no more work. */
+		boolean closing() {
+			return this == CLOSING || this == CLOSED || this == FAILED;
+		}
+	}
+	/**
+	 * Read once per decision: a failed engine passes through CLOSING again when
+	 * it is closed, so separate reads can each see a different state.
+	 */
 	private volatile Lifecycle lifecycle = Lifecycle.NEW;
 	private boolean launchClaimed;
 	private boolean launchInProgress;
@@ -479,7 +490,7 @@ public class Engine {
 			try {
 				boolean cleanup;
 				synchronized (this) {
-					cleanup = lifecycle != Lifecycle.FAILED && lifecycle != Lifecycle.CLOSED && lifecycle != Lifecycle.CLOSING;
+					cleanup = !lifecycle.closing();
 					if (cleanup) lifecycle = Lifecycle.CLOSING;
 				}
 				if (cleanup) {
@@ -818,10 +829,11 @@ public class Engine {
 	 * flush worker run by whoever opened the host.</p>
 	 */
 	public void syncState() {
-		if (lifecycle == Lifecycle.CLOSING || lifecycle == Lifecycle.CLOSED || lifecycle == Lifecycle.FAILED) {
+		Lifecycle state = lifecycle;
+		if (state.closing()) {
 			// A request unwinding across shutdown must not write to a closing store;
 			// close() has taken (or will take) the final flush.
-			log.debug("syncState skipped: engine is {}", lifecycle);
+			log.debug("syncState skipped: engine is {}", state);
 			return;
 		}
 		publishApplicationRoot();
@@ -998,7 +1010,7 @@ public class Engine {
 
 	/** True once close began or startup failed: the venue must not take on work. */
 	public boolean isClosing() {
-		return lifecycle == Lifecycle.CLOSING || lifecycle == Lifecycle.CLOSED || lifecycle == Lifecycle.FAILED;
+		return lifecycle.closing();
 	}
 
 	/** Installs process control before MainVenue publishes restart authority. */
