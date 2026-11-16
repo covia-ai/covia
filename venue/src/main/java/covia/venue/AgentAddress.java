@@ -21,9 +21,10 @@ import covia.lattice.Namespace;
  * </ul>
  *
  * <p>Reading a reference is syntax only: it says which agent is named, not
- * whether that agent exists or whether anyone may use it. Every route that
- * takes an agent reference reads it here (AGENT_LOOP.md, "Agent
- * references").</p>
+ * whether that agent exists or whether anyone may use it. Agent operations'
+ * {@code agentId}, the values API's {@code agent} selector and
+ * {@link Engine#getAgent(RequestContext, AString)} read references here
+ * (AGENT_LOOP.md, "Agent references").</p>
  *
  * @param owner The owning user's DID
  * @param agentId The agent's id, a single path segment without {@code ':'}
@@ -54,12 +55,23 @@ public record AgentAddress(AString owner, AString agentId) {
 				AString did = Strings.create(value);
 				AString agentId = Principals.agentIdOf(did);
 				if (agentId == null) throw new InvalidInputException(NOT_AN_AGENT + ref);
-				return of(Principals.userOf(did), agentId, ref);
+				return of(written(Principals.userOf(did), ref), agentId, ref);
 			}
-			return of(Strings.create(value.substring(0, slash)), CoviaPath.parse(value.substring(slash)), ref);
+			AString owner = written(Strings.create(value.substring(0, slash)), ref);
+			return of(owner, CoviaPath.parse(value.substring(slash)), ref);
 		}
 		if (defaultOwner == null) throw new InvalidInputException(NO_OWNER + ref);
 		return of(defaultOwner, CoviaPath.parse(value.startsWith("g/") ? value : "g/" + value), ref);
+	}
+
+	/** An owner DID the reference wrote, which must be one. */
+	private static AString written(AString owner, AString ref) {
+		try {
+			DIDURL.create(owner.toString());
+		} catch (IllegalArgumentException e) {
+			throw new InvalidInputException(NOT_AN_AGENT + ref, e);
+		}
+		return owner;
 	}
 
 	private static AgentAddress of(AString owner, Path path, AString ref) {
@@ -69,7 +81,6 @@ public record AgentAddress(AString owner, AString agentId) {
 
 	private static AgentAddress of(AString owner, AString agentId, AString ref) {
 		try {
-			DIDURL.create(owner.toString());
 			Principals.agentDID(owner, agentId); // a non-empty id without ':'
 		} catch (IllegalArgumentException e) {
 			throw new InvalidInputException(NOT_AN_AGENT + ref, e);

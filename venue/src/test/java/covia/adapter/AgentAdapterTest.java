@@ -5360,6 +5360,15 @@ public class AgentAdapterTest {
 			RequestContext.of(ALICE_DID));
 		assertThrows(Exception.class, () -> duplicate.awaitResult(5000));
 
+		// An id and the agent's DID name one target, so the list is refused and nothing is deleted
+		TestAgents.ensure(engine.getVenueState().users().ensure(ALICE_DID), "forms-same", Maps.empty(), null);
+		Job sameAgent = engine.jobs().invokeOperation("v/ops/agent/delete",
+			Maps.of("agentIds", Vectors.of(Strings.create("forms-same"),
+				Principals.agentDID(ALICE_DID, Strings.create("forms-same")))),
+			RequestContext.of(ALICE_DID));
+		assertThrows(Exception.class, () -> sameAgent.awaitResult(5000));
+		assertEquals(Agent.SLEEPING, engine.getVenueState().users().user(ALICE_DID).agent("forms-same").getStatus());
+
 		Job empty = engine.jobs().invokeOperation("v/ops/agent/delete",
 			Maps.of("agentIds", Vectors.empty()), RequestContext.of(ALICE_DID));
 		assertThrows(Exception.class, () -> empty.awaitResult(5000));

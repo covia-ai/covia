@@ -2903,7 +2903,8 @@ public class AgentAdapter extends AAdapter {
 	 * clear it, there being no agent to halt.
 	 */
 	private static boolean emptyEntry(User user, AString agentId) {
-		return user != null && user.agents().containsKey(agentId) && user.agents().get(agentId) == null;
+		AMap<AString, ACell> agents = (user != null) ? user.agents().all() : null;
+		return agents != null && agents.containsKey(agentId) && agents.get(agentId) == null;
 	}
 
 	/** Shared single-agent deletion semantics used by both wire shapes. */
