@@ -85,10 +85,11 @@ request's `authority`, narrowed as the request is by a token or a callable, so
 it never holds more than its creator: an agent another agent makes, and that
 agent's harness, stay within its creator's caps, and what a request through a
 token creates stays within the token and loses what the token gave once it is
-gone. The caps it is given must lie within what the request may do, presented
-grants aside. That is checked when they are set and whenever they change, as
-`ucan:issue` checks each capability against a grant it holds, and caps the
-creator could not grant are refused rather than stored.
+gone. The caps it is given narrow that and never widen it. They are stored as
+given, not checked against what the creator may do: each check reads them
+within the creator's authority as it stands then, so caps wider than the
+creator's act only as far as the creator reaches, including whatever the
+creator is given later.
 
 ## Admission
 
