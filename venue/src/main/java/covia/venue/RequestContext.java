@@ -143,8 +143,9 @@ public class RequestContext {
 	/**
 	 * This request carried one step further, by adapter {@code adapter}:
 	 * {@code step} is the adapter's own record of how it carried the request,
-	 * just enough to find its information again, never a copy of it, and is
-	 * stamped with the adapter's name. A carrier adds its step where the request
+	 * just enough to find its information again, never a copy of it, with whom
+	 * it carried the request for where the adapter knows (a binding's sender, a
+	 * callable's caller), and is stamped with the adapter's name. A carrier adds its step where the request
 	 * reaches it, never when work it left is rebuilt later. A route longer than
 	 * {@link #ROUTE_MAX} keeps its first {@link #ROUTE_HEAD} steps and its latest,
 	 * folding those between into one {@link #ROUTE_ELIDED} entry.
