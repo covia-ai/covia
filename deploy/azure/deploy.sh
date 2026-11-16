@@ -28,7 +28,7 @@ if [ ! -f /home/azureuser/covia-data/config.json ]; then
 {
   "venues": [
     {
-      "name": "Covia Test Venue (Azure)",
+      "name": "Covia Venue 4 (Dev)",
       "hostname": "venue-4.covia.ai",
       "store": "/data/venue.etch",
       "trustedProxies": ["loopback", "172.16.0.0/12"],
@@ -53,11 +53,12 @@ path = Path("/home/azureuser/covia-data/config.json")
 config = json.loads(path.read_text(encoding="utf-8"))
 config.setdefault("operations", {}).setdefault("log-format", "json")
 for venue in config.get("venues", []):
-    # venue-3 and venue-4 are test venues (security#53, decision D3), so their
-    # status name says so. Only the old default is replaced: a name set by an
-    # operator is kept.
+    # venue-3 and venue-4 are dev venues, not production (security#53,
+    # decision D3), so their status name gives their number and tier as
+    # venue-1 and venue-2 do. Only the old default is replaced: a name set
+    # by an operator is kept.
     if venue.get("name") == "Covia Venue (Azure)":
-        venue["name"] = "Covia Test Venue (Azure)"
+        venue["name"] = "Covia Venue 4 (Dev)"
     venue.setdefault("trustedProxies", ["loopback", "172.16.0.0/12"])
     logging = venue.setdefault("logging", {})
     logging.setdefault("audit", True)
