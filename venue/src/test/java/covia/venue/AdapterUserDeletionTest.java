@@ -17,6 +17,7 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import covia.adapter.AAdapter;
 import covia.exception.AuthException;
+import covia.exception.ConfigurationException;
 import covia.exception.UnavailableException;
 
 class AdapterUserDeletionTest {
@@ -24,6 +25,7 @@ class AdapterUserDeletionTest {
 	private static final AString OTHER = Strings.create("did:test:other-owner");
 	private static final AString VALUE = Strings.create("private-value");
 	private static final String NAME = "cleanup-test";
+	private static final String REFUSED = "cleanup-test refuses its settings";
 
 	static class Probe extends AAdapter {
 		Consumer<AdapterState> duringState = state -> { };
@@ -33,11 +35,13 @@ class AdapterUserDeletionTest {
 		boolean failStop;
 		boolean started;
 		boolean sawPreviousUser;
-		/** Declines its configuration, so the venue never installs it. */
-		boolean declines;
+		/** Refuses its configuration, so the venue never installs it. */
+		boolean refuses;
 		@Override public String getName() { return name; }
 		@Override public String getDescription() { return "Deletion hook test"; }
-		@Override public boolean configure(AMap<AString, ACell> config, boolean strict) { return !declines; }
+		@Override public void configure(AMap<AString, ACell> config, boolean strict) {
+			if (refuses) throw new ConfigurationException(REFUSED);
+		}
 		@Override public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
 			return CompletableFuture.completedFuture(input);
 		}
@@ -115,13 +119,13 @@ class AdapterUserDeletionTest {
 		} finally { engine.close(); }
 	}
 
-	/** An adapter that declined its configuration is never installed, yet deletes its users' state. */
+	/** An adapter that refused its configuration is never installed, yet deletes its users' state. */
 	@Test void uninstalledAdaptersDoNotNeedInstallationToDeleteState() {
 		Engine engine = Engine.createTemp(Maps.of("adapters", Maps.of(
 			NAME, Maps.of("enabled", false), "agent", Maps.of("enabled", false))));
 		try {
 			Probe adapter = new Probe();
-			adapter.declines = true;
+			adapter.refuses = true;
 			engine.registerAdapter(adapter);
 			assertNull(adapter.engine);
 			AdapterState state = seed(engine);

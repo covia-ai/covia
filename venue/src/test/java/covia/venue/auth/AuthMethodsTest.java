@@ -34,6 +34,7 @@ class AuthMethodsTest {
 	private static final AString ALICE = Strings.create("did:test:alice");
 	private static final String REFUSED = "fixture refused input";
 	private static final String WRONG_METHOD = "fixture-wrong-method";
+	private static final String LABEL_NOT_STRING = "label must be a string";
 
 	/** Deliberately not JWT, OAuth, HTTP, a session or a public operation. */
 	private static class Fixture extends AAdapter implements AuthenticationMethods {
@@ -62,11 +63,10 @@ class AuthMethodsTest {
 		@Override public String getDescription() { return "Test authentication extension"; }
 		@Override protected void installAssets() {}
 		@Override public Map<AString, Verifier> authenticationMethods() { return methods; }
-		@Override public boolean configure(AMap<AString, ACell> config, boolean strict) {
+		@Override public void configure(AMap<AString, ACell> config, boolean strict) {
 			ACell value = config.get(Strings.intern("label"));
-			if (value != null && !(value instanceof AString)) return false;
+			if (value != null && !(value instanceof AString)) throw new ConfigurationException(LABEL_NOT_STRING);
 			label = value == null ? Strings.create("original") : (AString) value;
-			return true;
 		}
 		@Override public CompletableFuture<ACell> invokeFuture(RequestContext ctx,
 				AMap<AString, ACell> meta, ACell input) { throw new AssertionError("not a job"); }
@@ -189,8 +189,8 @@ class AuthMethodsTest {
 			engine.registerAdapter(new Fixture(true));
 			VenueAuthenticator service = new VenueAuthenticator(engine);
 			long version = engine.adapterRegistryVersion();
-			assertThrows(covia.exception.InvalidInputException.class,
-				() -> engine.configureAdapter("auth-fixture", Maps.of("label", 123)));
+			assertEquals(LABEL_NOT_STRING, assertThrows(ConfigurationException.class,
+				() -> engine.configureAdapter("auth-fixture", Maps.of("label", 123))).getMessage());
 			assertEquals(version, engine.adapterRegistryVersion());
 			assertEquals(Strings.create("original"), call(service, FIRST).authentication().details().get(Strings.create("label")));
 			engine.configureAdapter("auth-fixture", Maps.of("label", "changed"));
@@ -259,7 +259,7 @@ class AuthMethodsTest {
 		try {
 			ConfigurationException stopped = assertThrows(ConfigurationException.class, () -> engine.launch(prepared -> {
 				prepared.registerAdapter(new Fixture(true) {
-					@Override public boolean configure(AMap<AString, ACell> config, boolean strict) {
+					@Override public void configure(AMap<AString, ACell> config, boolean strict) {
 						throw new ConfigurationException(REFUSED);
 					}
 				});

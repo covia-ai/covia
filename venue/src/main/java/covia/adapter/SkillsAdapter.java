@@ -98,11 +98,10 @@ public class SkillsAdapter extends AAdapter {
 	 * an actionable message at the moment it is set.
 	 */
 	@Override
-	public boolean configure(AMap<AString, ACell> config, boolean strict) {
-		if (config == null) return true;
+	public void configure(AMap<AString, ACell> config, boolean strict) {
+		if (config == null) return;
 		validateRefs(config.get(K_DEFAULT_SKILLSETS), K_DEFAULT_SKILLSETS);
 		validateRefs(config.get(K_DEFAULT_SKILLS), K_DEFAULT_SKILLS);
-		return true;
 	}
 
 	private static void validateRefs(ACell raw, AString key) {

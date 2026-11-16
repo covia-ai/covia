@@ -115,10 +115,9 @@ public class AdapterLifecycleTest {
 		private volatile String colour = "unset";
 		@Override public String getName() { return "fact"; }
 		@Override public String getDescription() { return "publishes a configured fact"; }
-		@Override public boolean configure(AMap<AString, ACell> config, boolean strict) {
+		@Override public void configure(AMap<AString, ACell> config, boolean strict) {
 			AString c = RT.ensureString(config.get(Strings.create("colour")));
 			colour = (c == null) ? "unset" : c.toString();
-			return true;
 		}
 		@Override public AMap<AString, ACell> info() {
 			// The reserved framework key is ignored; the adapter's own fact is published.
@@ -319,22 +318,17 @@ public class AdapterLifecycleTest {
 		}
 	}
 
-	/**
-	 * Records every configure() call, declines configs with {@code reject: true}
-	 * and refuses any {@code malformed} setting.
-	 */
+	/** Records every configure() call and refuses any {@code malformed} setting. */
 	private static final class ConfigurableAdapter extends AAdapter {
 		static final String MALFORMED = "malformed is not a valid setting";
 		AMap<AString, ACell> seen;
 		int calls;
 		@Override public String getName() { return "configurable"; }
 		@Override public String getDescription() { return "test"; }
-		@Override public boolean configure(AMap<AString, ACell> config, boolean strict) {
+		@Override public void configure(AMap<AString, ACell> config, boolean strict) {
 			calls++;
 			if (config.containsKey(Strings.create("malformed"))) throw new ConfigurationException(MALFORMED);
-			if (RT.bool(config.get(Strings.create("reject")))) return false;
 			seen = config;
-			return true;
 		}
 		@Override public CompletableFuture<ACell> invokeFuture(RequestContext ctx,
 				AMap<AString, ACell> meta, ACell input) {
@@ -363,9 +357,9 @@ public class AdapterLifecycleTest {
 			assertEquals(staticCfg, engine.config().getAdapterConfig("configurable"),
 				"static config object is untouched");
 
-			// A declined configuration changes nothing
-			assertThrows(covia.exception.InvalidInputException.class, () -> engine.configureAdapter(
-				"configurable", Maps.of(Strings.create("reject"), CVMBool.TRUE)));
+			// A refused configuration changes nothing: the adapter takes back the settings it had
+			assertThrows(ConfigurationException.class, () -> engine.configureAdapter(
+				"configurable", Maps.of(Strings.create("malformed"), CVMBool.TRUE)));
 			assertEquals(runtime, engine.adapterConfig("configurable"));
 			assertEquals(runtime, adapter.seen);
 
@@ -377,25 +371,6 @@ public class AdapterLifecycleTest {
 
 			assertThrows(covia.exception.NotFoundException.class,
 				() -> engine.configureAdapter("no-such-adapter", Maps.empty()));
-		} finally {
-			engine.close();
-		}
-	}
-
-	@Test
-	public void testDeclinedConfigurationParksAdapterAtRegistration() {
-		Engine engine = boot(Maps.of(Config.ADAPTERS, Maps.of(Strings.create("configurable"),
-			Maps.of(Strings.create("reject"), CVMBool.TRUE))));
-		try {
-			ConfigurableAdapter adapter = new ConfigurableAdapter();
-			engine.registerAdapter(adapter);
-			assertNull(engine.getAdapter("configurable"));
-			assertTrue(engine.getDisabledAdapterNames().contains("configurable"));
-			// Still declining → enable refuses; accept → enable installs and activates
-			assertThrows(covia.exception.ConfigurationException.class, () -> engine.enableAdapter("configurable"));
-			engine.configureAdapter("configurable", Maps.empty());
-			assertTrue(engine.enableAdapter("configurable"));
-			assertNotNull(engine.getAdapter("configurable"));
 		} finally {
 			engine.close();
 		}

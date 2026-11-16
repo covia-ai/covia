@@ -112,13 +112,14 @@ public abstract class AAdapter {
 	 * {@link Engine#adapterConfig(String)} at each call need not override this
 	 * — they see new settings automatically. Override to validate settings up
 	 * front or to rebuild cached derived state (clients, connection pools,
-	 * allow-lists). Return {@code false} to decline: at registration the
-	 * adapter is parked as disabled; at reconfiguration the new settings are
-	 * rejected and the previous configuration stays in force. A setting the
-	 * adapter refuses throws {@link covia.exception.ConfigurationException}
-	 * with an actionable message, whoever supplied the settings; any other
-	 * exception that escapes and is not a Covia exception is this adapter's
-	 * fault (docs/ERRORS.md).</p>
+	 * allow-lists). Returning accepts the configuration. To object, throw: a
+	 * setting the adapter refuses is a
+	 * {@link covia.exception.ConfigurationException} with an actionable
+	 * message, whoever supplied the settings. A refused reconfiguration is
+	 * reverted to the previous settings; a refused configuration at
+	 * registration or enable leaves the adapter failed. Any other exception
+	 * that escapes and is not a Covia exception is this adapter's fault
+	 * (docs/ERRORS.md).</p>
 	 *
 	 * <p>Distinct from {@link #configureModule}: that receives the module-level
 	 * bootstrap settings ({@code modules[].config}) exactly once, before
@@ -126,10 +127,8 @@ public abstract class AAdapter {
 	 *
 	 * @param config effective adapter configuration, empty when none
 	 * @param strict whether venue {@code strictConfig} is enabled
-	 * @return true to accept the configuration; false to decline it
 	 */
-	public boolean configure(AMap<AString, ACell> config, boolean strict) {
-		return true;
+	public void configure(AMap<AString, ACell> config, boolean strict) {
 	}
 
 	/**

@@ -73,13 +73,12 @@ public class AdapterFailureTest {
 				Fields.OPERATION, Maps.of(Fields.ADAPTER, "flaky:hold")));
 		}
 		@Override public boolean supportsMultiTurn() { return true; }
-		@Override public boolean configure(AMap<AString, ACell> config, boolean strict) {
+		@Override public void configure(AMap<AString, ACell> config, boolean strict) {
 			events.add("configure");
 			boolean refused = refuseConfig
 				|| (refuseColour != null && Strings.create(refuseColour).equals(config.get(K_COLOUR)));
 			if (refused) throw new ConfigurationException(REFUSED);
 			configured = config;
-			return true;
 		}
 		@Override public void start() {
 			events.add("start");

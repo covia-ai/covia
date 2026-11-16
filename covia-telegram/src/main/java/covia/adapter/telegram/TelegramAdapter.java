@@ -171,7 +171,7 @@ public class TelegramAdapter extends AMessagingAdapter<BotSpec, BotRunner> {
 	// ------------------------------------------------------------ configuration
 
 	@Override
-	public boolean configure(AMap<AString, ACell> config, boolean strict) {
+	public void configure(AMap<AString, ACell> config, boolean strict) {
 		if (config == null) config = Maps.empty();
 		if (config.containsKey(K_STATE_PATH)) throw new ConfigurationException(STATE_PATH_FIXED);
 		if (strict) {
@@ -209,7 +209,6 @@ public class TelegramAdapter extends AMessagingAdapter<BotSpec, BotRunner> {
 		}
 		this.apiUrl = url;
 		configureBots(parsed);
-		return true;
 	}
 
 	/**

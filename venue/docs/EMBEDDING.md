@@ -317,6 +317,7 @@ identity token through an operation", and HELD_KEYS.md.
 | A messaging adapter's `ConversationSessions.get` and `put`, `RequestContext.SessionDelivery.accept` and `WebhookInbox.deliver` with sessions and job ids as text | Blobs; a `ConversationSessions` legacy reader gives a Blob |
 | `user.inbox()` keyed by request id in hex (`request`, `get`, `getAll`), `HitlRequest.getID()` and `record` with the id as text, and a record's `id` and `sessionId` as text | Keyed and named by the request's job id as a Blob; `getAll()` is an `Index` |
 | `AgentAdapter.deliverSessionMessage` and `appendSessionMessage` taking the chat's job id as text | The job id as a Blob |
+| `boolean AAdapter.configure(config, strict)`, returning `false` to decline | `void configure(config, strict)`: return to accept, throw `ConfigurationException` to refuse ([ADAPTERS.md](ADAPTERS.md)) |
 
 ## Upgrading from 0.9.x
 

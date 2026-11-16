@@ -139,7 +139,7 @@ public class ConvexAdapter extends AAdapter {
 	}
 
 	@Override
-	public boolean configure(AMap<AString, ACell> config, boolean strict) {
+	public void configure(AMap<AString, ACell> config, boolean strict) {
 		if (config == null) config = Maps.empty();
 		if (strict) {
 			for (long i = 0; i < config.count(); i++) {
@@ -170,7 +170,6 @@ public class ConvexAdapter extends AAdapter {
 			timeout = millis.longValue();
 		}
 		settings = new Settings(peer, CVMBool.TRUE.equals(rawAny), timeout);
-		return true;
 	}
 
 	@Override

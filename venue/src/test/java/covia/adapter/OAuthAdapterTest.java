@@ -916,7 +916,7 @@ public class OAuthAdapterTest {
 	@Test
 	public void testConfiguration() {
 		OAuthAdapter adapter = new OAuthAdapter();
-		assertTrue(adapter.configure(Maps.of("providers", Maps.of("google", Maps.of("clientId", "g-id"))), false));
+		adapter.configure(Maps.of("providers", Maps.of("google", Maps.of("clientId", "g-id"))), false);
 		OAuthAdapter.Provider google = adapter.providers().get("google");
 		assertEquals("https://oauth2.googleapis.com/token", google.tokenEndpoint());
 		assertEquals("offline", google.params().get("access_type"));
@@ -937,9 +937,9 @@ public class OAuthAdapterTest {
 			Maps.of("providers", Maps.of("Bad Name", Maps.of("clientId", "c"))), false));
 		assertThrows(ConfigurationException.class, () -> adapter.configure(Maps.of("pendingTtlSecs", 5), false));
 
-		assertTrue(adapter.configure(Maps.of("providers", Maps.of("custom", Maps.of("clientId", "c",
+		adapter.configure(Maps.of("providers", Maps.of("custom", Maps.of("clientId", "c",
 			"authorizationEndpoint", "https://idp.example/authorize", "tokenEndpoint", "https://idp.example/token",
-			"pkce", false, "params", Maps.of("audience", "api")))), false));
+			"pkce", false, "params", Maps.of("audience", "api")))), false);
 		OAuthAdapter.Provider custom = adapter.providers().get("custom");
 		assertFalse(custom.pkce());
 		String url = adapter.authorizationUrl(custom, "st", null, List.of());

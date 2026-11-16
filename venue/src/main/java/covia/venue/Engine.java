@@ -180,9 +180,9 @@ public class Engine {
 
 	/**
 	 * Adapters that are registered but <em>disabled</em> — parked at boot by
-	 * {@code adapters.<name>.enabled: false} (or by declining
-	 * {@link AAdapter#configure}), or retracted at runtime via
-	 * {@link #disableAdapter}. Not dispatchable and absent from
+	 * {@code adapters.<name>.enabled: false}, parked failed when they refuse
+	 * their settings or cannot install ({@link #adapterFailure}), or retracted
+	 * at runtime via {@link #disableAdapter}. Not dispatchable and absent from
 	 * {@code v/info/adapters}; durable catalog metadata may remain and is
 	 * overwritten on a later registration.
 	 */
@@ -1268,8 +1268,7 @@ public class Engine {
 	 * enabled one active. An adapter is installed once it accepts its
 	 * configuration, so it owns its jobs whether or not it is started
 	 * (docs/ADAPTERS.md, Lifecycle). A non-kernel adapter whose config says
-	 * {@code enabled: false} is parked as disabled, installed but not started;
-	 * one whose {@link AAdapter#configure} declines is parked uninstalled.
+	 * {@code enabled: false} is parked as disabled, installed but not started.
 	 * After the bootstrap catalog has been published, an active registration
 	 * is materialised immediately.
 	 *
@@ -1301,10 +1300,9 @@ public class Engine {
 		if (previous == null) previous = disabledAdapters.get(name);
 		AMap<AString, ACell> cfg = adapterConfig(name);
 		boolean disabled = CVMBool.FALSE.equals(cfg.get(Config.ENABLED));
-		boolean declined = false;
 		RuntimeException refused = null;
 		try {
-			declined = !offerConfiguration(adapter, cfg);
+			offerConfiguration(adapter, cfg);
 		} catch (RuntimeException failure) {
 			// On a started venue whoever registered undoes it, as module
 			// loading does. Before then a refused setting is a failure to
@@ -1313,16 +1311,14 @@ public class Engine {
 			refused = failure;
 			logFailed(CONFIGURING_ADAPTER.formatted(name), failure);
 		}
-		RuntimeException notInstalled = (refused == null && !declined) ? installAdapter(adapter) : null;
+		RuntimeException notInstalled = (refused == null) ? installAdapter(adapter) : null;
 		if (notInstalled != null && isStarted() && !disabled) throw notInstalled;
-		if (disabled || declined || refused != null || notInstalled != null) {
+		if (disabled || refused != null || notInstalled != null) {
 			park(adapter, previous);
 			if (refused != null) unconfiguredAdapters.add(name);
 			RuntimeException failure = (refused != null) ? refused : notInstalled;
 			if (failure != null && !disabled) adapterFailures.put(name, failure);
-			if (failure == null) {
-				log.info("Adapter '{}' disabled: {}", name, disabled ? "configuration" : "configuration declined");
-			}
+			if (failure == null) log.info("Adapter '{}' disabled by configuration", name);
 			return;
 		}
 		activate(adapter, previous, true);
@@ -1387,13 +1383,11 @@ public class Engine {
 	 * {@link ConfigurationException}, which reaches whoever supplied the
 	 * settings as it is, like any Covia exception with a reason; any other
 	 * exception escaping {@link AAdapter#configure} is the adapter's fault
-	 * (docs/ERRORS.md).
-	 *
-	 * @return whether the adapter accepted the configuration
+	 * (docs/ERRORS.md). Returning means the adapter accepted the configuration.
 	 */
-	private boolean offerConfiguration(AAdapter adapter, AMap<AString, ACell> cfg) {
+	private void offerConfiguration(AAdapter adapter, AMap<AString, ACell> cfg) {
 		try {
-			return adapter.configure(cfg, config.isStrictConfig());
+			adapter.configure(cfg, config.isStrictConfig());
 		} catch (RuntimeException | Error failure) {
 			throw FaultException.within(CONFIGURING_ADAPTER.formatted(adapter.getName()), adapter.faultOwner(), failure);
 		}
@@ -1575,10 +1569,6 @@ public class Engine {
 
 	/** An adapter name this venue has not registered; the name follows. */
 	public static final String UNKNOWN_ADAPTER = "Unknown adapter: ";
-	/** The venue's own configuration, refused by the adapter it is for. */
-	public static final String ADAPTER_DECLINED_CONFIG = "Adapter '%s' declined its configuration";
-	/** A configuration supplied for an adapter, refused by it. */
-	public static final String ADAPTER_REJECTED_CONFIG = "Adapter '%s' rejected the configuration";
 	/** Why an operation of a failed adapter is refused; the adapter's name follows. */
 	public static final String ADAPTER_NOT_RUNNING = "Adapter %s is not running";
 	/** Why a disabled adapter is not restarted; the adapter's name follows. */
@@ -1683,8 +1673,8 @@ public class Engine {
 		String name = adapter.getName();
 		RuntimeException unrestored;
 		try {
-			if (offerConfiguration(adapter, previous)) return;
-			unrestored = new ConfigurationException(ADAPTER_DECLINED_CONFIG.formatted(name));
+			offerConfiguration(adapter, previous);
+			return;
 		} catch (RuntimeException failure) {
 			unrestored = failure;
 		}
@@ -1750,10 +1740,9 @@ public class Engine {
 				throw reported;
 			}
 		}
-		RuntimeException refused;
+		RuntimeException refused = null;
 		try {
-			refused = offerConfiguration(adapter, adapterConfig(name))
-				? null : new ConfigurationException(ADAPTER_DECLINED_CONFIG.formatted(name));
+			offerConfiguration(adapter, adapterConfig(name));
 		} catch (RuntimeException failure) {
 			refused = failure;
 		}
@@ -1819,8 +1808,8 @@ public class Engine {
 	 * @return true if the adapter was disabled or failed and is now active;
 	 *         false if it was already active
 	 * @throws NotFoundException if the adapter is unknown
-	 * @throws ConfigurationException if the adapter declines the venue's configuration
-	 *         for it or refuses a setting in it
+	 * @throws ConfigurationException if the adapter refuses a setting in the
+	 *         venue's configuration for it
 	 * @throws covia.exception.CoviaException the failure of its start: a Covia exception with
 	 *         a reason as the adapter raised it, or a {@link FaultException}
 	 *         for anything else, including an unexpected failure while it is
@@ -1833,9 +1822,8 @@ public class Engine {
 			throw unknownAdapter(name);
 		}
 		if (!installedAdapters.contains(adapter) || unconfiguredAdapters.contains(name)) {
-			boolean accepted;
 			try {
-				accepted = offerConfiguration(adapter, adapterConfig(name));
+				offerConfiguration(adapter, adapterConfig(name));
 			} catch (RuntimeException refused) {
 				// A refused setting is a failure to start: enabled, but failed.
 				unconfiguredAdapters.add(name);
@@ -1843,7 +1831,6 @@ public class Engine {
 				logFailed(CONFIGURING_ADAPTER.formatted(name), refused);
 				throw refused;
 			}
-			if (!accepted) throw new ConfigurationException(String.format(ADAPTER_DECLINED_CONFIG, name));
 		}
 		unconfiguredAdapters.remove(name);
 		activate(adapter, null, false);
@@ -1859,7 +1846,7 @@ public class Engine {
 	 * disabled) and record it as the runtime override returned by
 	 * {@link #adapterConfig}. The adapter sees the change through
 	 * {@link AAdapter#configure} and decides what it means for its work. If it
-	 * declines, nothing changes. If it throws, the change is refused and the
+	 * throws, the change is refused and the
 	 * adapter is offered its previous configuration again; should it refuse
 	 * that too, it is stopped and left failed (see {@link #adapterFailure}),
 	 * and enabling or restarting it offers it its configuration again.
@@ -1869,7 +1856,6 @@ public class Engine {
 	 * @throws NotFoundException if the adapter is unknown
 	 * @throws ConfigurationException if the adapter refuses a setting in the
 	 *         configuration
-	 * @throws InvalidInputException if the adapter declines the configuration
 	 * @throws covia.exception.CoviaException whatever else the adapter raised
 	 *         as it refused the change: a Covia exception with a reason as it
 	 *         is, such as an {@link UnavailableException} for work it could not
@@ -1881,15 +1867,11 @@ public class Engine {
 		if (adapter == null) throw unknownAdapter(name);
 		if (cfg == null) cfg = Maps.empty();
 		AMap<AString, ACell> previous = adapterConfig(name);
-		boolean accepted;
 		try {
-			accepted = offerConfiguration(adapter, cfg);
+			offerConfiguration(adapter, cfg);
 		} catch (RuntimeException refused) {
 			restoreConfiguration(adapter, previous, refused);
 			throw refused;
-		}
-		if (!accepted) {
-			throw new InvalidInputException(String.format(ADAPTER_REJECTED_CONFIG, name));
 		}
 		unconfiguredAdapters.remove(name);
 		runtimeAdapterConfig.put(name, cfg);

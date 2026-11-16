@@ -147,7 +147,7 @@ public class DocumentsAdapter extends AAdapter implements TextExtractor {
 	// ========== Configuration ==========
 
 	@Override
-	public boolean configure(AMap<AString, ACell> config, boolean strict) {
+	public void configure(AMap<AString, ACell> config, boolean strict) {
 		int cap = DEFAULT_MAX_CHARS;
 		if (config != null && config.get(K_MAX_CHARS_CONFIG) != null) {
 			CVMLong n = RT.ensureLong(config.get(K_MAX_CHARS_CONFIG));
@@ -157,7 +157,6 @@ public class DocumentsAdapter extends AAdapter implements TextExtractor {
 			cap = (int) n.longValue();
 		}
 		maxChars = cap;
-		return true;
 	}
 
 	@Override

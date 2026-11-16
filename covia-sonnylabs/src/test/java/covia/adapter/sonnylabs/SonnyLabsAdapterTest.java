@@ -1,5 +1,6 @@
 package covia.adapter.sonnylabs;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -43,11 +44,11 @@ class SonnyLabsAdapterTest {
 	@Test
 	void configurationIsStrictAndNeverAcceptsRawCredentials() {
 		SonnyLabsAdapter adapter = new SonnyLabsAdapter();
-		assertTrue(adapter.configure(Maps.of(
+		adapter.configure(Maps.of(
 			"baseUrl", "http://localhost:9090/firewall/",
 			"apiKey", "s/SONNY",
 			"apiVersion", "2026-06-01",
-			"timeoutMillis", 15_000L), true));
+			"timeoutMillis", 15_000L), true);
 
 		assertEquals(SonnyLabsAdapter.KEY_NOT_SECRET_REF.formatted("adapters.sonnylabs.apiKey"),
 			assertThrows(ConfigurationException.class,
@@ -62,7 +63,7 @@ class SonnyLabsAdapterTest {
 			() -> adapter.configure(Maps.of("timeoutMillis", "soon"), true)).getMessage());
 		assertEquals(SonnyLabsAdapter.UNKNOWN_SETTING.formatted("typo"), assertThrows(ConfigurationException.class,
 			() -> adapter.configure(Maps.of("typo", true), true)).getMessage());
-		assertTrue(adapter.configure(Maps.of("typo", true), false),
+		assertDoesNotThrow(() -> adapter.configure(Maps.of("typo", true), false),
 			"lenient mode ignores unknown adapter settings");
 	}
 

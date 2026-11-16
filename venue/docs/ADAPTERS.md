@@ -217,7 +217,7 @@ The significant lifecycle is:
    belongs in `start()`. A `configure` call may end work its new settings no
    longer allow, but starts work only while the adapter is started, which it
    knows from its own state (set by `start()`, cleared by `stop()`), not from
-   having an engine. An adapter that declined or refused its configuration is
+   having an engine. An adapter that refused its configuration is
    not installed until enable or restart offers it again and it accepts; an
    enabled adapter whose installation fails is failed (below).
 5. Before the venue serves requests, `recoverJob(job)` is called once per
@@ -312,7 +312,7 @@ one with jobs in flight. Cancelling a stopped adapter's job runs its
 adapter whose policy depends on whether it runs tracks its own `start()` and
 `stop()`, as the messaging adapters do, and takes up in `start()` what it
 left until then: the agent adapter wakes agents with queued work whenever it
-starts. An adapter that refused its configuration, declined it or failed to
+starts. An adapter that refused its configuration or failed to
 install is not installed, owns no jobs, and its unfinished jobs are
 recovered as a missing adapter's are, not by its own `recoverJob`.
 
@@ -387,8 +387,9 @@ There are two distinct configuration hooks:
 
 An override of `configure` should validate the whole proposed configuration
 before changing live fields, and reject unknown settings when `strict` is
-true. A setting it refuses, whether malformed or unusable on this venue,
-throws `ConfigurationException` with an actionable message built from a
+true. It accepts a configuration by returning and refuses it by throwing. A
+setting it refuses, whether malformed or unusable on this venue, throws
+`ConfigurationException` with an actionable message built from a
 constant on the adapter. Work that fails as valid settings are applied, such
 as a listener on a port in use, throws `UnavailableException`: the settings may
 be right, and a retry may succeed. Either reaches whoever supplied the
@@ -400,8 +401,7 @@ input throws `IllegalArgumentException`, and `configure` rethrows it as
 escaping `configure` that is not a Covia exception is the adapter's fault
 ([ERRORS.md](ERRORS.md)). Security
 boundaries and reserved settings must remain enforced even in lenient mode.
-Return `false` only to decline a valid but unavailable configuration. The
-reserved `enabled` key is owned by the framework.
+The reserved `enabled` key is owned by the framework.
 
 Never publish an effective config object wholesale. `publicConfig()` is an
 explicit allow-list and defaults to publishing nothing; the helper
@@ -782,8 +782,8 @@ disposable test data, not included in user exports.
   workers and release external resources here. It must be idempotent, including
   when runs overlap, and throw on incomplete cleanup so the venue can retry. The previous user record is
   available only on initial deletion, never retained for recovery. Tolerate null
-  on retry and an instance that was never installed, having declined or
-  refused its configuration.
+  on retry and an instance that was never installed, having refused its
+  configuration.
 
 An adapter needing durable external cleanup identifiers must maintain its own
 cleanup records outside the data it erases and consume them idempotently in the runtime

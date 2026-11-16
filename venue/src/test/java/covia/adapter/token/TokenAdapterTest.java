@@ -202,9 +202,8 @@ public class TokenAdapterTest {
 
 		@Override public String getName() { return NAME; }
 		@Override public String getDescription() { return "An access point that fails on demand"; }
-		@Override public boolean configure(AMap<AString, ACell> config, boolean strict) {
+		@Override public void configure(AMap<AString, ACell> config, boolean strict) {
 			if (refuse) throw new ConfigurationException(REFUSED);
-			return true;
 		}
 		@Override public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
 			return CompletableFuture.completedFuture(input);

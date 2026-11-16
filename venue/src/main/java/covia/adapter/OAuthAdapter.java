@@ -281,7 +281,7 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 	}
 
 	@Override
-	public boolean configure(AMap<AString, ACell> config, boolean strict) {
+	public void configure(AMap<AString, ACell> config, boolean strict) {
 		Map<String, Provider> parsed = new LinkedHashMap<>();
 		List<String> allow = List.of();
 		long ttl = DEFAULT_PENDING_TTL_MILLIS;
@@ -322,7 +322,6 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 		providers = Map.copyOf(parsed);
 		returnToAllow = allow;
 		pendingTtlMillis = ttl;
-		return true;
 	}
 
 	private static Provider provider(String name, AMap<AString, ACell> settings) {

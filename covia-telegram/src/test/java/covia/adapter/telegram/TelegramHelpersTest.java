@@ -1,5 +1,6 @@
 package covia.adapter.telegram;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
@@ -109,7 +110,7 @@ class TelegramHelpersTest {
 			() -> fresh.configure(Maps.of("bots", "nope"), false)).getMessage());
 		assertEquals(TelegramAdapter.UNKNOWN_SETTING.formatted("unknown"), assertThrows(ConfigurationException.class,
 			() -> fresh.configure(Maps.of("unknown", true), true)).getMessage());
-		assertTrue(fresh.configure(Maps.of("unknown", true), false), "lenient mode tolerates unknown keys");
+		assertDoesNotThrow(() -> fresh.configure(Maps.of("unknown", true), false), "lenient mode tolerates unknown keys");
 		assertEquals(TelegramAdapter.STATE_PATH_FIXED, assertThrows(ConfigurationException.class,
 			() -> fresh.configure(Maps.of("statePath", "w/elsewhere"), false)).getMessage(),
 			"adapter-global state has one well-known venue-private root even in lenient mode");
@@ -118,7 +119,7 @@ class TelegramHelpersTest {
 			() -> fresh.configure(Maps.of("bots", Maps.of("main", Maps.empty())), false));
 		assertInstanceOf(IllegalArgumentException.class, badBot.getCause());
 		assertEquals(badBot.getCause().getMessage(), badBot.getMessage());
-		assertTrue(fresh.configure(Maps.empty(), true));
+		assertDoesNotThrow(() -> fresh.configure(Maps.empty(), true));
 		fresh.close();
 	}
 

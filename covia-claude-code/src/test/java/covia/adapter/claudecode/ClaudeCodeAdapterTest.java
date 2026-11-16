@@ -1,5 +1,6 @@
 package covia.adapter.claudecode;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
@@ -188,8 +189,8 @@ public class ClaudeCodeAdapterTest {
 		ConfigurationException noDir = assertThrows(ConfigurationException.class, () -> a.configure(
 			Maps.of("projects", Maps.of("p", Maps.of("path", root.resolve("no-such-dir").toString()))), true));
 		assertInstanceOf(IllegalArgumentException.class, noDir.getCause());
-		assertTrue(a.configure(Maps.of("bogus", 1), false), "lenient mode ignores unknown keys");
-		assertTrue(a.configure(Maps.of("command", "claude", "defaults", Maps.of("model", "sonnet")), true));
+		assertDoesNotThrow(() -> a.configure(Maps.of("bogus", 1), false), "lenient mode ignores unknown keys");
+		a.configure(Maps.of("command", "claude", "defaults", Maps.of("model", "sonnet")), true);
 		assertEquals(List.of("claude"), a.command());
 	}
 
@@ -352,7 +353,7 @@ public class ClaudeCodeAdapterTest {
 	public void testLiveCapReapsIdleSessionsAndQueuesBusyOnes() throws Exception {
 		stopAll();
 		AMap<AString, ACell> tight = baseConfig.assoc(ClaudeCodeAdapter.K_MAX_SESSIONS, CVMLong.create(1));
-		assertTrue(adapter.configure(tight, true));
+		adapter.configure(tight, true);
 		try {
 			AMap<AString, ACell> a = run(OWNER_CTX, "v/ops/claudecode/run", Maps.of("project", "alpha", "prompt", "count"));
 			String sa = str(a, "session");
@@ -379,7 +380,7 @@ public class ClaudeCodeAdapterTest {
 			assertTrue(System.currentTimeMillis() - t0 >= 1000, "third waited for the busy slot");
 			assertTrue(liveTotal() <= 1);
 		} finally {
-			assertTrue(adapter.configure(baseConfig, true));
+			adapter.configure(baseConfig, true);
 		}
 	}
 
@@ -391,7 +392,7 @@ public class ClaudeCodeAdapterTest {
 		adapter.reapForTest();
 		assertTrue(RT.bool(sessionStatus(OWNER_CTX, session).get(ClaudeSession.K_LIVE)), "idleSeconds 0 = never reap");
 		AMap<AString, ACell> quick = baseConfig.assoc(ClaudeCodeAdapter.K_IDLE_SECONDS, CVMLong.create(1));
-		assertTrue(adapter.configure(quick, true));
+		adapter.configure(quick, true);
 		try {
 			Thread.sleep(1200);
 			adapter.reapForTest();
@@ -399,7 +400,7 @@ public class ClaudeCodeAdapterTest {
 			// …and it resumes transparently.
 			assertEquals("count: 2", str(run(OWNER_CTX, "v/ops/claudecode/run", Maps.of("session", session, "prompt", "count")), "result"));
 		} finally {
-			assertTrue(adapter.configure(baseConfig, true));
+			adapter.configure(baseConfig, true);
 		}
 	}
 
@@ -509,7 +510,7 @@ public class ClaudeCodeAdapterTest {
 	@Test
 	public void testCancelledWaitingResumeReleasesSessionAndSlot() throws Exception {
 		stopAll();
-		assertTrue(adapter.configure(baseConfig.assoc(ClaudeCodeAdapter.K_MAX_SESSIONS, CVMLong.create(1)), true));
+		adapter.configure(baseConfig.assoc(ClaudeCodeAdapter.K_MAX_SESSIONS, CVMLong.create(1)), true);
 		try {
 			Job busy = engine.jobs().invokeOperation("v/ops/claudecode/run", Maps.of("project", "alpha", "prompt", "sleep 20000"), OWNER_CTX);
 			await(() -> adapter.knownSessions().stream().anyMatch(s -> s.state() == ClaudeSession.State.BUSY), 10_000);
@@ -527,7 +528,7 @@ public class ClaudeCodeAdapterTest {
 			assertEquals("count: 2", str(run(OWNER_CTX, "v/ops/claudecode/run",
 				Maps.of("project", "alpha", "session", earlier, "prompt", "count")), "result"));
 		} finally {
-			assertTrue(adapter.configure(baseConfig, true));
+			adapter.configure(baseConfig, true);
 		}
 	}
 

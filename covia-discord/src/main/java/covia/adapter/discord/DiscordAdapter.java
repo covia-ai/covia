@@ -59,7 +59,7 @@ public class DiscordAdapter extends AMessagingAdapter<BotSpec, BotRunner> {
 		installAgentTemplate("discord","/agent-templates/discord.json");
 	}
 
-	@Override public boolean configure(AMap<AString,ACell> config,boolean strict){
+	@Override public void configure(AMap<AString,ACell> config,boolean strict){
 		if(config==null)config=Maps.empty();
 		if(config.containsKey(K_STATE_PATH))throw new ConfigurationException(STATE_PATH_FIXED);
 		if(strict)for(long i=0;i<config.count();i++){ACell k=config.entryAt(i).getKey();if(!(k instanceof AString s)||!KNOWN.contains(s))throw new ConfigurationException(UNKNOWN_SETTING.formatted(k));}
@@ -69,7 +69,7 @@ public class DiscordAdapter extends AMessagingAdapter<BotSpec, BotRunner> {
 		if(bc!=null){AMap<AString,ACell> bots=RT.castMap(bc);if(bots==null)throw new ConfigurationException(BOTS_NOT_OBJECT);for(long i=0;i<bots.count();i++){var e=bots.entryAt(i);String name=String.valueOf(e.getKey());
 			// The bot parser also reads a create call's input; here it read the settings
 			try{parsed.put(name,BotSpec.parse(name,e.getValue(),strict));}catch(IllegalArgumentException refused){throw new ConfigurationException(refused.getMessage(),refused);}}}
-		apiUrl=url;configureBots(parsed);return true;
+		apiUrl=url;configureBots(parsed);
 	}
 	@Override protected BotSpec parseBot(String name,ACell settings,boolean strict){return BotSpec.parse(name,settings,strict);}
 	@Override protected BotRunner newBot(BotSpec spec,Managed managed){return new BotRunner(this,spec,apiUrl,managed);}

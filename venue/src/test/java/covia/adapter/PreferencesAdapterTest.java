@@ -362,9 +362,9 @@ public class PreferencesAdapterTest {
 	@Test
 	public void testConfigurationIsValidated() {
 		PreferencesAdapter adapter = new PreferencesAdapter();
-		assertTrue(adapter.configure(Maps.of("maxBytes", 8192L, "users", Maps.of("did:key:z6MkA", Maps.of("maxBytes", 100L))), true));
+		adapter.configure(Maps.of("maxBytes", 8192L, "users", Maps.of("did:key:z6MkA", Maps.of("maxBytes", 100L))), true);
 		assertThrows(ConfigurationException.class, () -> adapter.configure(Maps.of("maxBites", 1L), true));
-		assertTrue(adapter.configure(Maps.of("maxBites", 1L), false), "unknown settings pass when not strict");
+		assertDoesNotThrow(() -> adapter.configure(Maps.of("maxBites", 1L), false), "unknown settings pass when not strict");
 		assertThrows(ConfigurationException.class, () -> adapter.configure(Maps.of("maxBytes", 0L), false));
 		assertThrows(ConfigurationException.class, () -> adapter.configure(Maps.of("maxBytes", "big"), false));
 		assertThrows(ConfigurationException.class, () -> adapter.configure(Maps.of("users", Vectors.empty()), false));

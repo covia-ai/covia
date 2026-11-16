@@ -101,7 +101,7 @@ public class SonnyLabsAdapter extends AAdapter {
 	}
 
 	@Override
-	public boolean configure(AMap<AString, ACell> config, boolean strict) {
+	public void configure(AMap<AString, ACell> config, boolean strict) {
 		if (config == null) config = Maps.empty();
 		if (strict) {
 			for (long i = 0; i < config.count(); i++) {
@@ -129,7 +129,6 @@ public class SonnyLabsAdapter extends AAdapter {
 		this.apiKeyRef = nextApiKeyRef;
 		this.apiVersion = nextApiVersion;
 		this.timeoutMillis = nextTimeout;
-		return true;
 	}
 
 	@Override

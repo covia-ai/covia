@@ -354,7 +354,7 @@ class SpeechAdapterTest {
 		}
 		assertTrue(assertThrows(ConfigurationException.class, () -> new SpeechAdapter().configure(
 			RT.castMap(Maps.of("mystery", 1)), true)).getMessage().contains("mystery"));
-		assertTrue(new SpeechAdapter().configure(RT.castMap(Maps.of("baseUrl", "http://localhost:8000/v1/")), true),
+		assertDoesNotThrow(() -> new SpeechAdapter().configure(RT.castMap(Maps.of("baseUrl", "http://localhost:8000/v1/")), true),
 			"a local server over plain HTTP is fine");
 	}
 
