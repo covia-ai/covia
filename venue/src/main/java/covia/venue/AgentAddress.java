@@ -22,9 +22,9 @@ import covia.lattice.Namespace;
  *
  * <p>Reading a reference is syntax only: it says which agent is named, not
  * whether that agent exists or whether anyone may use it. Agent operations'
- * {@code agentId}, the values API's {@code agent} selector and
- * {@link Engine#getAgent(RequestContext, AString)} read references here
- * (AGENT_LOOP.md, "Agent references").</p>
+ * {@code agentId}, the values API's {@code agent} selector, a messaging
+ * binding's {@code agent} and {@link Engine#getAgent(RequestContext, AString)}
+ * read references here (AGENT_LOOP.md, "Agent references").</p>
  *
  * @param owner The owning user's DID
  * @param agentId The agent's id, a single path segment without {@code ':'}
