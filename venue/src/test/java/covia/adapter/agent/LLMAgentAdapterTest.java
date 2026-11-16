@@ -780,7 +780,7 @@ public class LLMAgentAdapterTest {
 			TestAdapter.CAPTURED_LLM_INPUT.remove(agentId);
 			ACell chat = engine.jobs().invokeOperation("v/ops/agent/chat",
 				Maps.of(Fields.AGENT_ID, agentId, Fields.MESSAGE, "hello"), alice).awaitResult(15000);
-			String line = "Session: " + ((Blob) RT.getIn(chat, Fields.SESSION_ID)).toHexString();
+			String line = "Session: " + RT.getIn(chat, Fields.SESSION_ID);
 
 			assertTrue(String.valueOf(TestAdapter.CAPTURED_LLM_INPUT.get(agentId)).contains(line),
 				runtime + ": a live cycle is told its session");

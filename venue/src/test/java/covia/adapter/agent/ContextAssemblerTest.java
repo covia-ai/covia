@@ -352,7 +352,7 @@ public class ContextAssemblerTest {
 		Prompt p = ContextAssembler.assemble(s);
 		assertTrue(head(p).contains("Venue:"), head(p));
 		assertTrue(head(p).contains("Model: gpt-4.1-mini"), head(p));
-		assertTrue(head(p).contains("Session: 00aa00aa00aa00aa00aa00aa00aa00aa"), head(p));
+		assertTrue(head(p).contains("Session: 0x00aa00aa00aa00aa00aa00aa00aa00aa"), head(p));
 		// CACHE GUARD: the date must never creep into the cached prefix.
 		assertFalse(head(p).contains(java.time.LocalDate.now().toString()), head(p));
 		assertTrue(tail(p).contains(java.time.LocalDate.now().toString()), tail(p));

@@ -67,7 +67,8 @@ failure's reason or a fault's report.
 A message is written for the caller. It says what failed in the venue's words,
 and may follow that with a remote's own error message, marked as the remote's.
 The venue's words never carry a credential, a secret value, another principal's
-data, a URL that may carry a credential, or a stack trace. A failure from a
+data, a URL that may carry a credential, or a stack trace. A job, task or
+session id in the venue's words is written as JSON shows it, `0x…`. A failure from a
 remote service says what failed and its status; the response stays on the
 exception (`ResponseException.response`) for code that needs it. A remote is
 named by its URL's origin (`AAdapter.origin`), since a path or query may carry

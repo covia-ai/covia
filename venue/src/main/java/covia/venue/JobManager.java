@@ -103,7 +103,7 @@ public class JobManager {
 	public static final String SHUTTING_DOWN = "Venue is shutting down; new operations are not accepted";
 
 	private static NotFoundException jobNotFound(Blob jobID) {
-		return new NotFoundException(JOB_NOT_FOUND + jobID.toHexString(), jobID.toHexString());
+		return new NotFoundException(JOB_NOT_FOUND + jobID, jobID.toString());
 	}
 
 	private static InvalidInputException operationRequired() {
@@ -1335,7 +1335,7 @@ public class JobManager {
 	 */
 	public RequestContext callerContext(Job job) {
 		AString caller = job.getCaller();
-		if (caller == null) throw new AuthException(NO_CALLER + job.getID().toHexString());
+		if (caller == null) throw new AuthException(NO_CALLER + job.getID());
 		AMap<AString, ACell> kept = RT.ensureMap(RT.getIn(venue().jobIndex().entry(job.getID()), JobIndex.CONTEXT));
 		RequestContext ctx = engine.context(job.getOwner(), caller, RT.ensureVector(RT.getIn(kept, Fields.PROOFS)),
 			RT.ensureMap(RT.getIn(kept, Fields.AUTHORITY)));
@@ -1560,7 +1560,7 @@ public class JobManager {
 
 	private void requireJobAbility(RequestContext ctx, Blob id, AMap<AString, ACell> data, AString ability) {
 		if (!engine.getAccessControl().canAccessJob(ctx, data, ability))
-			throw new AuthException(JOB_ACCESS_DENIED + id.toHexString() + " (" + ability + ")");
+			throw new AuthException(JOB_ACCESS_DENIED + id + " (" + ability + ")");
 	}
 
 	/** Controls acknowledge acceptance without disclosing the Job's input, output or history. */
@@ -1738,8 +1738,7 @@ public class JobManager {
 	 * or it is not running on this venue now.
 	 */
 	private static NotSupportedException notLive(Blob id, AMap<AString, ACell> data) {
-		return new NotSupportedException((Job.isFinished(data) ? JOB_TERMINAL : JOB_NOT_ACTIVE)
-			+ id.toHexString());
+		return new NotSupportedException((Job.isFinished(data) ? JOB_TERMINAL : JOB_NOT_ACTIVE) + id);
 	}
 
 	/**
@@ -1792,11 +1791,11 @@ public class JobManager {
 
 	private void deliverMessage(Job job, AMap<AString, ACell> message, AString source) {
 		Blob jobID = job.getID();
-		if (job.isFinished()) throw new NotSupportedException(JOB_TERMINAL + jobID.toHexString());
+		if (job.isFinished()) throw new NotSupportedException(JOB_TERMINAL + jobID);
 		// Only a multi-turn adapter takes messages; any other job would drop it
 		AAdapter adapter = resolveJobAdapter(job);
 		if (adapter == null || !adapter.supportsMultiTurn()) {
-			throw new NotSupportedException(JOB_NO_MESSAGES + jobID.toHexString());
+			throw new NotSupportedException(JOB_NO_MESSAGES + jobID);
 		}
 
 		long ts = engine.currentTimestamp().longValue();
@@ -1814,7 +1813,7 @@ public class JobManager {
 			adapter.handleMessage(job, record);
 		} catch (RuntimeException | Error e) {
 			// The adapter taking the message: an unexpected exception is its fault
-			throw FaultException.within(DELIVERING_MESSAGE.formatted(jobID.toHexString()), adapter.faultOwner(), e);
+			throw FaultException.within(DELIVERING_MESSAGE.formatted(jobID), adapter.faultOwner(), e);
 		}
 	}
 

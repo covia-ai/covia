@@ -153,7 +153,7 @@ public class SseServer {
 			AMap<AString, ACell> record = readableRecord(jobId, jc.rctx(), jc.owner());
 			if (jc.client().terminated()) return;
 			if (record == null) {
-				sendNotFound(jc.client(), jobId.toHexString());
+				sendNotFound(jc.client(), jobId);
 				return;
 			}
 			jc.client().sendEvent("job-update", JSON.toString(record));
@@ -171,7 +171,7 @@ public class SseServer {
 	}
 
 	/** Ends a stream whose job the caller cannot read, saying no more than a 404 would. */
-	private static void sendNotFound(SseClient client, String jobId) {
+	private static void sendNotFound(SseClient client, Blob jobId) {
 		client.sendEvent("error", ApiErrors.body(404, JOB_NOT_FOUND + jobId));
 		client.close();
 	}

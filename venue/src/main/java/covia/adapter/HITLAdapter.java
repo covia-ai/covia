@@ -747,7 +747,7 @@ public class HITLAdapter extends AAdapter {
 	private Blob scheduleExpiry(VenueState venue, AString targetDID, Blob id, CVMLong expires) {
 		AString did = engine.getDIDString();
 		return venue.schedule().schedule(EXPIRE_OP, expiryInput(targetDID, id), did, did, null, null,
-			expires.longValue(), null, Boolean.FALSE, Strings.create("Expires HITL request " + id.toHexString()),
+			expires.longValue(), null, Boolean.FALSE, Strings.create("Expires HITL request " + id),
 			engine.currentTimestamp().longValue());
 	}
 

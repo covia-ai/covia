@@ -106,11 +106,11 @@ Every job, task and session id the venue keeps is a Blob, which JSON shows as
 `"0x…"`: in the agent's records, its sessions included, in the records of the
 jobs it runs, in operation results and live events, and every id a transition
 is given (§4). Inputs take an id as a Blob or as hex text, with or without
-`0x`. The model reads an id inside a tool result or message as JSON shows it,
-`"0x…"`. Text the venue composes for the model shows ids in bare hex: the
-receipt of a call that is still running or waits for a human (`{id, status}`),
-the outcome of a call that finished later, and the session and task its
-context names. An A2A `contextId` is bare hex too.
+`0x`. The model reads every such id as `0x…`, inside a tool result or message
+and in the text the venue composes for it: the receipt of a call that waits for
+a human (`{id, status}`), the job a call still runs as when it outlasts its
+limit, the outcome of a call that finished later, and the session, tasks and
+pending jobs its context names. An A2A `contextId` stays bare hex.
 
 ### 2.2.1 Agent definitions and external implementations
 

@@ -96,7 +96,7 @@ public final class ExternalAgents {
 		for (String option : new String[]{"loads", "outputPath", "responseSchema", "strict"}) {
 			if (RT.getIn(input, option) != null) throw new NotSupportedException(UNSUPPORTED + option);
 		}
-		if (supplied && agent.session(sid).getRecord() == null) throw new NotFoundException(UNKNOWN_SESSION, sid.toHexString());
+		if (supplied && agent.session(sid).getRecord() == null) throw new NotFoundException(UNKNOWN_SESSION, sid.toString());
 		ACell content = RT.getIn(input, "chat".equals(operation) ? Fields.MESSAGE : Fields.INPUT);
 		engine.jobs().updateAdapterData(job, d -> d.assoc(OWNER, owner).assoc(KIND, Strings.create(operation)));
 		job.update(d -> d.assoc(Fields.AGENT_ID, id).assoc(Fields.ADDRESS, address)
@@ -152,7 +152,7 @@ public final class ExternalAgents {
 						if (Strings.create("chat").equals(kept(parent, KIND))) {
 							result = result.assoc(Fields.RESPONSE, response);
 						} else {
-							result = result.assoc(Fields.ID, Strings.create(parent.getID().toHexString()))
+							result = result.assoc(Fields.ID, parent.getID())
 								.assoc(Fields.STATUS, Status.COMPLETE).assoc(Fields.OUTPUT, response);
 						}
 						parent.completeWith(result);

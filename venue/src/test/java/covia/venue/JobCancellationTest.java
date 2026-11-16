@@ -79,7 +79,7 @@ public class JobCancellationTest {
 		// No reason, or a blank one, keeps the default that names the job.
 		Job plain = engine.jobs().invokeOperation("v/test/ops/never", Maps.empty(), ctx);
 		plain.cancel("   ");
-		assertEquals("Job cancelled: " + plain.getID().toHexString(), RT.getIn(plain.getData(), Fields.ERROR).toString());
+		assertEquals(Job.CANCELLED + ": " + plain.getID(), RT.getIn(plain.getData(), Fields.ERROR).toString());
 	}
 
 	@Test

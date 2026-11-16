@@ -1346,7 +1346,7 @@ public class CoviaAPI extends ACoviaAPI {
 				buildResult(ctx,status);
 				ctx.status(200);
 			} else {
-				buildError(ctx, 404, JobManager.JOB_NOT_FOUND + id.toHexString());
+				buildError(ctx, 404, JobManager.JOB_NOT_FOUND + id);
 			}
 		} catch (AuthException e) {
 			buildError(ctx, 403, e.getMessage());
@@ -1382,7 +1382,7 @@ public class CoviaAPI extends ACoviaAPI {
 				buildResult(ctx,status);
 				ctx.status(200);
 			} else {
-				buildError(ctx, 404, JobManager.JOB_NOT_FOUND + id.toHexString());
+				buildError(ctx, 404, JobManager.JOB_NOT_FOUND + id);
 			}
 		} catch (AuthException e) {
 			buildError(ctx, 403, e.getMessage());
@@ -1418,7 +1418,7 @@ public class CoviaAPI extends ACoviaAPI {
 				buildResult(ctx,status);
 				ctx.status(200);
 			} else {
-				buildError(ctx, 404, JobManager.JOB_NOT_FOUND + id.toHexString());
+				buildError(ctx, 404, JobManager.JOB_NOT_FOUND + id);
 			}
 		} catch (AuthException e) {
 			buildError(ctx, 403, e.getMessage());
@@ -1453,7 +1453,7 @@ public class CoviaAPI extends ACoviaAPI {
 			if (deleted) {
 				ctx.status(200);
 			} else {
-				buildError(ctx, 404, JobManager.JOB_NOT_FOUND + id.toHexString());
+				buildError(ctx, 404, JobManager.JOB_NOT_FOUND + id);
 			}
 		} catch (AuthException e) {
 			buildError(ctx, 403, e.getMessage());

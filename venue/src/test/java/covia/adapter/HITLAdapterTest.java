@@ -191,9 +191,8 @@ public class HITLAdapterTest {
 		ACell call = RT.ensureVector(stepped.get(Fields.CALLS)).get(0);
 		AMap<AString, ACell> receipt = RT.ensureMap(RT.getIn(call, Fields.RESULT));
 		assertEquals(Status.INPUT_REQUIRED, receipt.get(Fields.STATUS));
-		AString id = RT.ensureString(receipt.get(Fields.ID));
-		assertNotNull(id, "the agent must receive the durable request handle immediately");
-		Job request = engine.jobs().getJob(Blob.fromHex(id.toString()));
+		Blob id = assertInstanceOf(Blob.class, receipt.get(Fields.ID), "the agent must receive the durable request handle immediately");
+		Job request = engine.jobs().getJob(id);
 		assertNotNull(request);
 		assertEquals(Status.INPUT_REQUIRED, request.getStatus());
 		assertTrue(agent.getPending().containsKey(request.getID()));

@@ -50,7 +50,7 @@ public class LateToolResultTest {
 
 	private static final String HOLD = "v/test/ops/hold";
 	private static final long LIMIT_MS = 1000;
-	private static final Pattern JOB_NAMED = Pattern.compile("running as job ([0-9a-f]+)\\.");
+	private static final Pattern JOB_NAMED = Pattern.compile("running as job (0x[0-9a-f]+)\\.");
 	/** The call a test tracks by hand, as a model would have made it. */
 	private static final String PARKED_CALL_ID = "call-parked";
 	private static final String PARKED_TOOL = "slow_tool";
@@ -116,7 +116,7 @@ public class LateToolResultTest {
 			badJob = jobNamed(RT.getIn(calls.get(1), Fields.RESULT));
 			assertEquals(Strings.create(String.format(AbstractLLMAdapter.TOOL_STILL_RUNNING, HOLD, LIMIT_MS, okJob)),
 				RT.getIn(calls.get(0), Fields.RESULT), "a call past its limit names the job it is still running as");
-			assertNotNull(engine.jobs().getJobData(Blob.fromHex(okJob), owner), "a job the owner can look up");
+			assertNotNull(engine.jobs().getJobData(Blob.parse(okJob), owner), "a job the owner can look up");
 			assertEquals(0, agent.getTimeline() == null ? 0 : agent.getTimeline().count(),
 				"nothing reaches the session while the calls are still running");
 
@@ -162,7 +162,7 @@ public class LateToolResultTest {
 			assertEquals(RT.getIn(call, Fields.ARGUMENTS, Fields.JOB_ID), RT.getIn(result, Fields.STRUCTURED_CONTENT, Fields.JOB_ID));
 			jobs.add(RT.getIn(call, Fields.ARGUMENTS, Fields.JOB_ID));
 		}
-		assertEquals(java.util.Set.of(Strings.create(okJob), Strings.create(badJob)), jobs, "one exchange per outcome: " + messages);
+		assertEquals(java.util.Set.of(Blob.parse(okJob), Blob.parse(badJob)), jobs, "one exchange per outcome: " + messages);
 		for (long i = 0; i < messages.count(); i++) {
 			assertFalse(Agent.ROLE_USER.equals(RT.getIn(messages.get(i), Agent.K_ROLE))
 				&& String.valueOf(RT.getIn(messages.get(i), Agent.K_CONTENT)).contains("finished-late"),
@@ -201,7 +201,7 @@ public class LateToolResultTest {
 			AString said = adapter.stillRunning(Strings.create(HOLD), call.get(), ctx, LIMIT_MS);
 			String id = jobNamed(said);
 			assertEquals(String.format(AbstractLLMAdapter.TOOL_STILL_RUNNING_UNTRACKED, HOLD, LIMIT_MS, id), said.toString());
-			mirror = engine.jobs().getJob(Blob.fromHex(id));
+			mirror = engine.jobs().getJob(Blob.parse(id));
 			assertNotNull(mirror, "the named job is live");
 			gate.release();
 			TestEngine.awaitJob(mirror, Job::isFinished, 10_000, () -> "the job did not finish");

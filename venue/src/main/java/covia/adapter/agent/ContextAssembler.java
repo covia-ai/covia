@@ -1267,9 +1267,9 @@ public final class ContextAssembler {
 		return s.getBytes(StandardCharsets.UTF_8).length;
 	}
 
-	/** An id as the model's text shows it: a blob as bare hex, text as given; null for none. */
+	/** An id as the model's text shows it: a blob as {@code 0x…}, as JSON shows it, text as given; null for none. */
 	public static String idText(ACell id) {
-		if (id instanceof ABlob b) return b.toHexString();
+		if (id instanceof ABlob b) return b.toString();
 		AString s = RT.ensureString(id);
 		return (s != null) ? s.toString() : null;
 	}

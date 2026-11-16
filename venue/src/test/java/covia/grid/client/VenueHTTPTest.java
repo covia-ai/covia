@@ -149,7 +149,7 @@ public class VenueHTTPTest {
 		// Without a reason, the error names the job as before.
 		Job plain = client.startJob(OP_NEVER, Maps.empty());
 		AMap<AString, ACell> plainCancelled = client.cancelJob(plain.getID().toHexString()).join();
-		assertTrue(RT.getIn(client.getJobData(plain.getID()).join(), Fields.ERROR).toString().startsWith("Job cancelled: "));
+		assertTrue(RT.getIn(client.getJobData(plain.getID()).join(), Fields.ERROR).toString().startsWith(Job.CANCELLED + ": "));
 	}
 
 	@Test
