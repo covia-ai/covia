@@ -204,7 +204,7 @@ public class AgentQueryTest {
 		// Preserve the seeded loads when replacing the empty root for this fixture.
 		root = root.assoc(Fields.LOADS, Maps.of("note", Maps.of("text", "session-only context")));
 		session = session.assoc(Fields.FRAMES, Vectors.of(root, child));
-		agent.putRecord(agent.getRecord().assoc(Agent.KEY_SESSIONS,
+		agent.cursor().set(agent.getRecord().assoc(Agent.KEY_SESSIONS,
 			agent.getSessions().assoc(sid, session)));
 		agent.appendSessionPending(sid, owner.getCallerDID(), null,
 			Maps.of(Fields.MESSAGE, "queued live message"), false);
@@ -260,7 +260,7 @@ public class AgentQueryTest {
 		Job denied = engine.jobs().invokeOperation("v/ops/agent/query", input, other);
 		assertThrows(JobFailedException.class, () -> denied.awaitResult(5000));
 		assertNull(model.seenInput, "denial precedes the model call");
-		agent.putRecord(agent.getRecord().assoc(Agent.KEY_CONFIG,
+		agent.cursor().set(agent.getRecord().assoc(Agent.KEY_CONFIG,
 			agent.getConfig().assoc(Fields.ACCEPTS, Vectors.of(other.getCallerDID()))));
 		ACell before = agent.getRecord();
 		engine.jobs().invokeOperation("v/ops/agent/query", input,
@@ -702,7 +702,7 @@ public class AgentQueryTest {
 	public void agentChangesAndQueuedMessagesLeaveSavedResultsUsable() {
 		Agent agent = createSummarisable("llmagent");
 		ACell first = summarise(false).awaitResult(5000);
-		agent.putRecord(agent.getRecord()
+		agent.cursor().set(agent.getRecord()
 			.assoc(Agent.KEY_STATE, Maps.of("progress", "changed"))
 			.assoc(Agent.KEY_CONFIG, RT.ensureMap(agent.getRecord().get(Agent.KEY_CONFIG))
 				.assoc(Strings.intern("systemPrompt"), Strings.create("updated persona"))));

@@ -379,7 +379,7 @@ public class AgentRestartTest {
 						"tools", Vectors.of("v/ops/json/merge"))), alice).awaitResult(5000);
 				// A record no request could write: the public principal controls Alice's agent
 				Agent stray = first.getVenueState().users().user(ALICE).agent("stray");
-				stray.putRecord(stray.getRecord().assoc(Agent.KEY_CONTROLLER, first.publicPrincipal()));
+				stray.cursor().set(stray.getRecord().assoc(Agent.KEY_CONTROLLER, first.publicPrincipal()));
 				stranded = first.jobs().invokeOperation("v/ops/agent/request",
 					Maps.of(Fields.AGENT_ID, "stray", Fields.INPUT, Maps.of("ask", "wait")), alice);
 				request = first.jobs().invokeOperation("v/ops/agent/request",

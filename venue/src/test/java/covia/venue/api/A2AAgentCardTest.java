@@ -669,7 +669,7 @@ public class A2AAgentCardTest {
 			Agent Agent = TestServer.ENGINE.getVenueState().users().user(ownerDid).agent("Continuer");
 			String queuedGateName = "queued-" + UUID.randomUUID();
 			try (TestAdapter.TestGate queuedGate = TestAdapter.createGate(queuedGateName)) {
-				Agent.updateConfigAndState(
+				Agent.update(null, null,
 					config -> config.assoc(Strings.intern("testGate"), Strings.create(queuedGateName)),
 					Agent.getState());
 				long cyclesBefore = Agent.getTimeline().count();

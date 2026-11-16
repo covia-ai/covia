@@ -90,7 +90,7 @@ public final class Agents extends MapComponent<AString, ACell>
 	public Agent create(AString id, AMap<AString, ACell> config, ACell state,
 			AMap<AString, ACell> definition, Engine.Source controller) {
 		Agent agent = at(id);
-		return agent.initialiseIfAbsent(config, state, definition, controller) ? agent : null;
+		return agent.initialiseIfAbsent(config, state, definition, null, controller) ? agent : null;
 	}
 
 	/**
@@ -104,6 +104,6 @@ public final class Agents extends MapComponent<AString, ACell>
 	public Agent fork(AString id, AMap<AString, ACell> config, ACell state,
 			AVector<ACell> timeline, Engine.Source controller) {
 		Agent fork = at(id);
-		return fork.initialiseFromForkIfAbsent(config, state, timeline, controller) ? fork : null;
+		return fork.initialiseIfAbsent(config, state, null, timeline, controller) ? fork : null;
 	}
 }

@@ -80,7 +80,7 @@ class BlobIdsTest {
 			Fields.PENDING, Vectors.of(Maps.of(Fields.JOB_ID, hex(ASK), Fields.SNAPSHOT, Maps.of(Fields.TASK_ID, hex(TASK)))),
 			Fields.MESSAGES, Vectors.of(legacyEnvelope(CHAT)),
 			Fields.TASK_RESULTS, Maps.of(hex(TASK), Maps.of(Fields.STATUS, "COMPLETE")));
-		worker.putRecord(worker.getRecord()
+		worker.cursor().set(worker.getRecord()
 			.assoc(Agent.KEY_TASKS, Index.<Blob, ACell>none().assoc(TASK, Maps.of(
 				Fields.INPUT, "work", Fields.SESSION_ID, hex(SESSION),
 				Task.KEY_CONTINUATIONS, Vectors.of(legacyEnvelope(null).assoc(Fields.TASK_ID, Strings.create("0x" + hex(TASK)))),
@@ -213,7 +213,7 @@ class BlobIdsTest {
 		VenueState venue = VenueState.create(AKeyPair.generate());
 		venue.cursor().set(Index.<Keyword, ACell>none().assoc(Covia.DID, VENUE));
 		Agent agent = TestAgents.ensure(venue.users().ensure(ALICE), Strings.create("worker"), Maps.empty(), null);
-		agent.putRecord(agent.getRecord().assoc(Agent.KEY_TASKS,
+		agent.cursor().set(agent.getRecord().assoc(Agent.KEY_TASKS,
 			Index.<Blob, ACell>none().assoc(TASK, Maps.of(Fields.SESSION_ID, "not an id"))));
 		IllegalStateException refused = assertThrows(IllegalStateException.class, () -> STEP.apply(venue.get()));
 		assertTrue(refused.getMessage().startsWith(BlobIds.NOT_AN_ID));

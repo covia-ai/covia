@@ -2716,7 +2716,7 @@ public class CoviaAdapterTest {
 		// Simulate a valid older/session record whose optional scratch slot has
 		// not been materialised. The guard applies to the session, not c itself.
 		AMap<AString, ACell> session = agent.session(sessionId).getRecord();
-		agent.putRecord(agent.getRecord().assoc(Agent.KEY_SESSIONS,
+		agent.cursor().set(agent.getRecord().assoc(Agent.KEY_SESSIONS,
 			agent.getSessions().assoc(sessionId, session.dissoc(Strings.intern("c")))));
 
 		RequestContext ctx = ALICE.withAgentId(Strings.create("test-agent"))

@@ -81,7 +81,7 @@ public class AgentSessionCycleTest {
 			Vectors.of(GoalTreeContext.createSegment("summary", Vectors.of(turn("old"))), turn("live")));
 		AVector<ACell> frames = Vectors.of(old);
 		AMap<AString, ACell> session = agent.session(sid).getRecord().assoc(Fields.FRAMES, frames);
-		agent.putRecord(agent.getRecord().assoc(Agent.KEY_SESSIONS, agent.getSessions().assoc(sid, session)));
+		agent.cursor().set(agent.getRecord().assoc(Agent.KEY_SESSIONS, agent.getSessions().assoc(sid, session)));
 		return frames;
 	}
 
@@ -92,7 +92,7 @@ public class AgentSessionCycleTest {
 		agent.session(sid).appendPending(envelope("pending"));
 		agent.session(sid).beginCycle(EPOCH_A, null, 0);
 		AMap<AString, ACell> damaged = agent.session(sid).getRecord().assoc(Fields.FRAMES, Strings.create("damaged"));
-		agent.putRecord(agent.getRecord().assoc(Agent.KEY_SESSIONS, agent.getSessions().assoc(sid, damaged)));
+		agent.cursor().set(agent.getRecord().assoc(Agent.KEY_SESSIONS, agent.getSessions().assoc(sid, damaged)));
 		ACell before = agent.getRecord();
 		assertThrows(IllegalArgumentException.class, () -> agent.mergeRunResult(
 			null, Maps.of("changed", true), Index.of(task, Strings.create("done")),
@@ -151,7 +151,7 @@ public class AgentSessionCycleTest {
 		AVector<ACell> frames = legacy.conj(unsupported);
 		AMap<AString, ACell> before = agent.session(sid).getRecord().assoc(Fields.FRAMES, frames)
 			.assoc(Strings.intern("pending"), Vectors.of(envelope("waiting")));
-		agent.putRecord(agent.getRecord().assoc(Agent.KEY_SESSIONS, agent.getSessions().assoc(sid, before)));
+		agent.cursor().set(agent.getRecord().assoc(Agent.KEY_SESSIONS, agent.getSessions().assoc(sid, before)));
 		assertThrows(InvalidInputException.class, () -> agent.session(sid).migrateHistory(frames));
 		assertEquals(before, agent.session(sid).getRecord());
 		assertThrows(InvalidInputException.class,
@@ -179,7 +179,7 @@ public class AgentSessionCycleTest {
 	@Test
 	public void malformedFramesCannotBeResetByMigrationOrAppend() {
 		AMap<AString, ACell> session = agent.session(sid).getRecord().assoc(Fields.FRAMES, Strings.create("damaged"));
-		agent.putRecord(agent.getRecord().assoc(Agent.KEY_SESSIONS, agent.getSessions().assoc(sid, session)));
+		agent.cursor().set(agent.getRecord().assoc(Agent.KEY_SESSIONS, agent.getSessions().assoc(sid, session)));
 		assertEquals(Agent.INVALID_SESSION_FRAMES, assertThrows(IllegalArgumentException.class,
 			() -> agent.session(sid).migrateHistory(Vectors.empty())).getMessage());
 		assertThrows(IllegalArgumentException.class, () -> agent.session(sid).appendRootTurn(null, turn("new")));
@@ -229,7 +229,7 @@ public class AgentSessionCycleTest {
 		AMap<AString, ACell> legacySession = Maps.of(
 			"c", Maps.empty(), "pending", Vectors.empty(),
 			Fields.FRAMES, Vectors.of(root), Fields.LOADS, legacyLoads);
-		agent.putRecord(agent.getRecord().assoc(Agent.KEY_SESSIONS,
+		agent.cursor().set(agent.getRecord().assoc(Agent.KEY_SESSIONS,
 			agent.getSessions().assoc(legacySid, legacySession)));
 
 		assertTrue(agent.session(legacySid).beginCycle(EPOCH_A, null, 0));
@@ -292,7 +292,7 @@ public class AgentSessionCycleTest {
 			GoalTreeContext.createFrame(""), turn("question")),
 			Maps.of("role", "assistant", "toolCalls", Vectors.of(call)));
 		AMap<AString, ACell> session = agent.session(sid).getRecord().assoc(Fields.FRAMES, Vectors.of(root));
-		agent.putRecord(agent.getRecord().assoc(Agent.KEY_SESSIONS, agent.getSessions().assoc(sid, session)));
+		agent.cursor().set(agent.getRecord().assoc(Agent.KEY_SESSIONS, agent.getSessions().assoc(sid, session)));
 
 		assertTrue(agent.session(sid).beginCycle(EPOCH_A, Vectors.of(turn("next")), 0));
 		AVector<ACell> conversation = rootConversation();

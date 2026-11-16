@@ -3523,7 +3523,7 @@ public class AgentAdapterTest {
 		// Simulate a legacy/corrupt record whose config lacks the transition op.
 		Agent unconfigured = engine.getVenueState().users().user(ALICE_DID)
 			.agent("unconfigured-agent");
-		unconfigured.putRecord(unconfigured.getRecord().assoc(Agent.KEY_CONFIG, Maps.empty()));
+		unconfigured.cursor().set(unconfigured.getRecord().assoc(Agent.KEY_CONFIG, Maps.empty()));
 
 		Job job = engine.jobs().invokeOperation(
 			"v/ops/agent/trigger",
@@ -6178,9 +6178,9 @@ public class AgentAdapterTest {
 		assertEquals(Agent.SLEEPING, agent.getStatus());
 
 		assertNull(agent.getError());
-		agent.setError(Strings.create("something went wrong"));
+		agent.suspend(Strings.create("something went wrong"));
 		assertEquals(Strings.create("something went wrong"), agent.getError());
-		agent.clearError();
+		assertTrue(agent.tryResume());
 		assertNull(agent.getError());
 
 		Blob mutSid = Blob.fromHex("cdcd0001cdcd0001cdcd0001cdcd0001");

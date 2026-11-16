@@ -147,7 +147,7 @@ class VenueMigrationEndToEndTest {
 			agent.sessions().create(SESSION, USER, null);
 			AMap<AString, ACell> session = agent.session(SESSION).getRecord()
 				.assoc(Fields.FRAMES, Vectors.of(root)).assoc(Fields.LOADS, Maps.of("w/notes", Maps.empty()));
-			agent.putRecord(agent.getRecord().assoc(Agent.KEY_SESSIONS, agent.getSessions().assoc(SESSION, session)));
+			agent.cursor().set(agent.getRecord().assoc(Agent.KEY_SESSIONS, agent.getSessions().assoc(SESSION, session)));
 
 			// Records of calls as version 1 named them: a job one of the user's
 			// agents made, its scheduled event, a HITL request it asked from
@@ -195,7 +195,7 @@ class VenueMigrationEndToEndTest {
 				Fields.CALLER, USER, Strings.create("actor"), parkedDID, Fields.OP, "v/ops/hitl/request", Fields.ADAPTER, "hitl");
 			user.cursor().path(Namespace.J).updateAndGet(jobs -> ((Index<Blob, ACell>) jobs).assoc(ASK, askJob));
 			Agent parked = TestAgents.ensure(user, PARKED, Maps.empty(), null);
-			parked.putRecord(parked.getRecord().assoc(Agent.KEY_STATUS, Agent.SUSPENDED)
+			parked.cursor().set(parked.getRecord().assoc(Agent.KEY_STATUS, Agent.SUSPENDED)
 				.assoc(Agent.KEY_TASKS, Index.<Blob, ACell>none().assoc(PARKED_TASK,
 					Maps.of(Strings.create("outputContext"), Maps.of(Fields.CALLER, USER, Strings.create("user"), USER)))
 					.assoc(PARKED_WORK, Maps.of(Fields.INPUT, "work", Fields.SESSION_ID, hex(PARKED_SESSION))))
