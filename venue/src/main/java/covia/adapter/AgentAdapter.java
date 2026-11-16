@@ -3407,7 +3407,7 @@ public class AgentAdapter extends AAdapter {
 		long expectedRevision = ctx.getTaskRevision();
 		ACell currentTask = agent.getTasks().get(taskId);
 		if (currentTask == null) {
-			throw new NotFoundException(TASK_NOT_FOUND + taskId, taskId.toString());
+			throw new NotFoundException(TASK_NOT_FOUND + taskId, taskId.toHexString());
 		}
 		if (Task.isStale(currentTask, expectedRevision)) {
 			return Maps.of(
@@ -3432,7 +3432,7 @@ public class AgentAdapter extends AAdapter {
 					Fields.STATUS, Status.STARTED,
 					Fields.REASON, Strings.create("Task received continuation input; process the updated task before completing"));
 			}
-			throw new NotFoundException(TASK_NOT_FOUND + taskId, taskId.toString());
+			throw new NotFoundException(TASK_NOT_FOUND + taskId, taskId.toHexString());
 		}
 
 		return Maps.of(
@@ -3480,7 +3480,7 @@ public class AgentAdapter extends AAdapter {
 						Fields.STATUS, Status.STARTED,
 						Fields.REASON, Strings.create("Task received continuation input; process the updated task before failing"));
 			}
-			throw new NotFoundException(TASK_NOT_FOUND + taskId, taskId.toString());
+			throw new NotFoundException(TASK_NOT_FOUND + taskId, taskId.toHexString());
 		}
 
 		return Maps.of(
@@ -3554,7 +3554,7 @@ public class AgentAdapter extends AAdapter {
 		}
 		Agent agent = requireAgent(ctx.getUserDID(), agentId);
 		if (agent.getTasks().get(taskId) == null) {
-			throw new NotFoundException(TASK_NOT_FOUND + taskId, taskId.toString());
+			throw new NotFoundException(TASK_NOT_FOUND + taskId, taskId.toHexString());
 		}
 		refuseIfStopped(agent, taskId, ctx);
 		Scheduler scheduler = engine.gridScheduler();

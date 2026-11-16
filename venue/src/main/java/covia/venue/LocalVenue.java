@@ -139,7 +139,7 @@ public class LocalVenue extends Venue {
 	public CompletableFuture<Job> getJob(Blob jobId) {
 		Job job = engine.jobs().getJob(jobId, context(), getJobOwner());
 		if (job == null) {
-			return CompletableFuture.failedFuture(new NotFoundException(JobManager.JOB_NOT_FOUND + jobId, jobId.toString()));
+			return CompletableFuture.failedFuture(new NotFoundException(JobManager.JOB_NOT_FOUND + jobId, jobId.toHexString()));
 		}
 		return CompletableFuture.completedFuture(job);
 	}
@@ -148,7 +148,7 @@ public class LocalVenue extends Venue {
 	public CompletableFuture<AMap<AString, ACell>> getJobStatus(Blob jobId) {
 		AMap<AString, ACell> status = engine.jobs().getJobData(jobId, context(), getJobOwner());
 		if (status == null) {
-			return CompletableFuture.failedFuture(new NotFoundException(JobManager.JOB_NOT_FOUND + jobId, jobId.toString()));
+			return CompletableFuture.failedFuture(new NotFoundException(JobManager.JOB_NOT_FOUND + jobId, jobId.toHexString()));
 		}
 		return CompletableFuture.completedFuture(status);
 	}

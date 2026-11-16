@@ -103,7 +103,7 @@ public class JobManager {
 	public static final String SHUTTING_DOWN = "Venue is shutting down; new operations are not accepted";
 
 	private static NotFoundException jobNotFound(Blob jobID) {
-		return new NotFoundException(JOB_NOT_FOUND + jobID, jobID.toString());
+		return new NotFoundException(JOB_NOT_FOUND + jobID, jobID.toHexString());
 	}
 
 	private static InvalidInputException operationRequired() {

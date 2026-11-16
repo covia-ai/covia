@@ -522,7 +522,7 @@ public class VenueHTTP extends Venue {
 	public CompletableFuture<Job> getJob(Blob jobId) {
 		return getJobData(jobId).thenApply(status -> {
 			if (status == null) {
-				throw new NotFoundException(JOB_NOT_FOUND + jobId, jobId.toString());
+				throw new NotFoundException(JOB_NOT_FOUND + jobId, jobId.toHexString());
 			}
 			return Job.create(status);
 		});
@@ -532,7 +532,7 @@ public class VenueHTTP extends Venue {
 	public CompletableFuture<AMap<AString, ACell>> getJobStatus(Blob jobId) {
 		return getJobData(jobId).thenApply(status -> {
 			if (status == null) {
-				throw new NotFoundException(JOB_NOT_FOUND + jobId, jobId.toString());
+				throw new NotFoundException(JOB_NOT_FOUND + jobId, jobId.toHexString());
 			}
 			return status;
 		});

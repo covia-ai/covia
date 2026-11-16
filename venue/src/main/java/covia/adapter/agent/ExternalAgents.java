@@ -96,7 +96,7 @@ public final class ExternalAgents {
 		for (String option : new String[]{"loads", "outputPath", "responseSchema", "strict"}) {
 			if (RT.getIn(input, option) != null) throw new NotSupportedException(UNSUPPORTED + option);
 		}
-		if (supplied && agent.session(sid).getRecord() == null) throw new NotFoundException(UNKNOWN_SESSION, sid.toString());
+		if (supplied && agent.session(sid).getRecord() == null) throw new NotFoundException(UNKNOWN_SESSION, sid.toHexString());
 		ACell content = RT.getIn(input, "chat".equals(operation) ? Fields.MESSAGE : Fields.INPUT);
 		engine.jobs().updateAdapterData(job, d -> d.assoc(OWNER, owner).assoc(KIND, Strings.create(operation)));
 		job.update(d -> d.assoc(Fields.AGENT_ID, id).assoc(Fields.ADDRESS, address)

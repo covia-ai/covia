@@ -224,7 +224,7 @@ public class JobAdapter extends AAdapter {
 		return JobManager.acknowledgement(id);
 	}
 
-	private static NotFoundException missing(Blob id) { return new NotFoundException(NOT_FOUND + id, id.toString()); }
+	private static NotFoundException missing(Blob id) { return new NotFoundException(NOT_FOUND + id, id.toHexString()); }
 	private static AMap<AString, ACell> found(AMap<AString, ACell> data, Blob id) {
 		if (data == null) throw missing(id);
 		return data;
