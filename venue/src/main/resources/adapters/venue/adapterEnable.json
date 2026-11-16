@@ -1,6 +1,6 @@
 {
   "name": "Enable adapter",
-  "description": "Enables a disabled adapter on the running venue: overwrites its catalog declarations, publishes its v/info/adapters entry, resumes dispatch and starts it. If it fails to start, it stays enabled but failed (venue/adapter/restart tries again) and the job fails with the reason. Idempotent (changed is false when already enabled). Not persisted across restarts. Venue-owned: requires admin/adapter/manage on <venue DID>/adapters.",
+  "description": "Enables a disabled adapter on the running venue: overwrites its catalog declarations, publishes its v/info/adapters entry, resumes dispatch and starts it. If it refuses its settings or fails to start, it stays enabled but failed (venue/adapter/restart tries again) and the job fails with the reason. Idempotent (changed is false when already enabled). Not persisted across restarts. Venue-owned: requires admin/adapter/manage on <venue DID>/adapters.",
   "operation": {
     "adapter": "venue:adapter-enable",
     "readOnly": false,

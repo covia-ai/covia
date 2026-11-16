@@ -88,7 +88,7 @@ class JobAdapterRemoteTest {
 			assertEquals(Status.STARTED, target.getStatus());
 			Job timed = invoke("result", target(target).assoc(Fields.TIMEOUT, CVMLong.create(20)), ctx);
 			assertThrows(Exception.class, () -> timed.awaitResult(5000));
-			assertEquals(JobAdapter.RESULT_TIMEOUT.formatted(20, target.getID().toHexString()), timed.getErrorMessage());
+			assertEquals(JobAdapter.RESULT_TIMEOUT.formatted(20, target.getID()), timed.getErrorMessage());
 			assertFalse(target.future().isDone());
 
 			Job wait = invoke("result", target(target), ctx.withCaps(Vectors.of(

@@ -98,8 +98,14 @@ public class InvocationAuthorityTest {
 
 	@Test void scheduledReferenceDoesNotBecomeABoundTool() {
 		RequestContext empty = owner.withCaps(Vectors.empty());
-		denied(engine.jobs().prepareTracked(ECHO, Maps.empty(), empty).start(), Abilities.INVOKE);
-		denied(engine.jobs().prepareUntracked(ECHO, Maps.empty(), empty).start(), Abilities.INVOKE);
+		denied(recordAndStart(engine.jobs().prepareTracked(ECHO, Maps.empty(), empty)), Abilities.INVOKE);
+		denied(recordAndStart(engine.jobs().prepareUntracked(ECHO, Maps.empty(), empty)), Abilities.INVOKE);
+	}
+
+	/** Records a prepared Job as a scheduled fire's claim does, then starts it. */
+	private Job recordAndStart(JobManager.Prepared prepared) {
+		engine.getVenueState().execute(prepared::record);
+		return prepared.start();
 	}
 
 	@Test void deferredArbitraryTargetStillRequiresInvoke() {

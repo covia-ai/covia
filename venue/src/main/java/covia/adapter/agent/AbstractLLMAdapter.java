@@ -945,7 +945,7 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 				String error = job.getErrorMessage();
 				if (error != null) return Strings.create("Error: " + error);
 				AMap<AString, ACell> receipt = Maps.of(
-					Fields.ID, Strings.create(job.getID().toHexString()),
+					Fields.ID, job.getID(),
 					Fields.STATUS, job.getStatus());
 				AString title = RT.ensureString(RT.getIn(input, Fields.TITLE));
 				if (title != null) receipt = receipt.assoc(Fields.TITLE, title);
@@ -1084,7 +1084,7 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 			job = null;
 		}
 		if (job == null) return toolTimeout(timeoutMs);
-		String id = job.getID().toHexString();
+		Blob id = job.getID();
 		AString agentId = ctx.getAgentId();
 		Blob sessionId = ctx.getSessionId();
 		AgentAdapter agents = engine.getAdapter("agent") instanceof AgentAdapter a ? a : null;

@@ -12,7 +12,9 @@ import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
@@ -282,6 +284,28 @@ class LocalSpeechEngineTest {
 		} finally {
 			engine.close();
 		}
+	}
+
+	@Test void aNoteUnderWayWhenTheEngineClosesIsStillHeard() throws Exception {
+		CountDownLatch opening = new CountDownLatch(1);
+		CountDownLatch open = new CountDownLatch(1);
+		Counting backend = new Counting();
+		LocalSpeechEngine engine = new LocalSpeechEngine(model("tokens".getBytes(StandardCharsets.UTF_8)), installedLibraries(), false,
+			() -> temp.resolve("cache"), 2, new NativeLibraries(NativeLibraries.PACKS, loaded::add), (m, d, t) -> {
+				opening.countDown();
+				try {
+					open.await();
+				} catch (InterruptedException e) {
+					throw new IllegalStateException(e);
+				}
+				return backend;
+			});
+		CompletableFuture<SpeechEngine.Transcript> note = CompletableFuture.supplyAsync(
+			() -> engine.transcribe(wav(1), "test-model", null, null, null));
+		opening.await();
+		engine.close();
+		open.countDown();
+		assertEquals("heard1", note.join().text(), "the model it opened is released after it, not under it");
 	}
 
 	@Test void aLongNoteIsSplitOnItsPausesIntoPiecesOfAtMostThirtySeconds() throws Exception {

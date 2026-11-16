@@ -90,7 +90,7 @@ AUTH_REQUIRED).
 | `http` | HTTP requests (SSRF-protected, bounded validated redirects, default User-Agent; `adapters.http`) | `get`, `post` |
 | `connections` | Service connection catalog; owns provider skills and reports transport/credential presence without reading secrets | `list`, `status` |
 | `jvm` | JVM utilities | `stringConcat`, `urlEncode`, `urlDecode` |
-| `file` | Filesystem (root-jailed); reads see into archives via `x.zip!/entry` | `roots`, `list`, `tree`, `read`, `write`, `append`, `delete`, `mkdir`, `stat` |
+| `file` | Filesystem (root-jailed); reads see into archives via `x.zip!/entry` | `roots`, `list`, `tree`, `read`, `create`, `write`, `append`, `move`, `copy`, `delete`, `mkdir`, `stat`, `setMetadata` (DLFS targets) |
 | `archive` | Zip/jar archives over file roots (zip-slip + zip-bomb guarded) | `list`, `extract`, `zip` |
 | `schema` | JSON Schema | `validate`, `validateAll`, `infer`, `coerce`, `check` |
 | `json` | JSON value utilities | `merge`, `cond`, `assoc`, `select` |
@@ -102,8 +102,8 @@ AUTH_REQUIRED).
 | `goaltree` | Goal-tree agent planning | `chat` |
 | `hitl` | Human-in-the-Loop (COG-16) | `request`, `respond`, `list` over the per-user `h/` inbox; `expire` (venue-only, fired by a request's scheduled timeout) |
 | `project` | Projects as a work breakdown tree at `w/projects/<pid>` (`docs/PROJECT.md`); publishes the `projects` skill family | none yet — skills only |
-| `dlfs` | Decentralised file system | `listDrives`, `createDrive`, `deleteDrive`, `list`, `read`, `write`, `mkdir`, `delete` |
-| `vault` | Personal vault (configurable-drive DLFS wrapper) | `read`, `write`, `list`, `mkdir`, `delete` |
+| `dlfs` | Decentralised file system; entries carry application metadata (`docs/DLFS_ADAPTER.md`) | `listDrives`, `createDrive`, `deleteDrive`, `list`, `tree`, `read`, `create`, `write`, `append`, `mkdir`, `delete`, `stat`, `setMetadata` |
+| `vault` | Personal vault (configurable-drive DLFS wrapper) | `read`, `create`, `write`, `list`, `mkdir`, `delete`, `setMetadata` |
 | `secret` | Secret store | `set`, `list`, `delete`, `extract` (direct owner `/run` only, never the public principal) |
 | `memory` | Per-user agent memory (one vector at a path, default `w/memory`; each edit one atomic update) | `memory` (commands `recall`, `remember`, `update`, `forget`), `memory-recall` |
 | `preferences` | Per-user preferences: one map per user in adapter state, read-only at `x/preferences` (`docs/PREFERENCES.md`) | `preferences` (commands `set`, `remove`, `append`, `insert`, `merge`) |
@@ -153,7 +153,7 @@ Base path: `/api/v1/`
 | `/jobs` | GET | Caller's jobs as a paged `{items, total, offset, limit}` envelope (#229) |
 | `/jobs/{id}` | GET | Job status. Proofs ride the `X-Covia-Ucans` header on body-less reads (federated observation) |
 | `/jobs/{id}` | POST | Message delivery to a running job (202/403/404/409) |
-| `/jobs/{id}/{cancel,pause,resume,delete}` | PUT | Lifecycle control (pause/resume are adapter opt-in → 409 otherwise) |
+| `/jobs/{id}/{cancel,pause,resume,delete}` | PUT | Lifecycle control (pause/resume are adapter opt-in → 409 otherwise, and refused as unavailable while the job's adapter is not running) |
 | `/jobs/{id}/sse` | GET | Server-sent job updates (closes on terminal) |
 | `/.well-known/did.json` | GET | Venue DID document (#167) |
 | `/.well-known/oauth-authorization-server` | GET | OAuth 2.1 AS metadata (RFC 8414) when `auth.oauth.provider` is enabled |
@@ -340,6 +340,7 @@ java -jar target/covia.jar [config.json]
 - `docs/CONFIG.md` — operator configuration reference
 - `docs/EMBEDDING.md` — running a venue inside another application: lifecycle and close order, adapters, user data, upgrading from 0.9.x
 - `docs/JOBS.md` — job implementation semantics (COG-8 companion)
+- `docs/JOB_EXECUTION.md` — what bounds job execution: scarce resources, not jobs or threads, and the per-user job cap's removal (design)
 - `docs/ERRORS.md` — how the venue raises, types and reports failures, and what each surface tells a caller
 - `docs/UCAN.md` — capabilities, granting surface, proof channels
 - `docs/AUTHORITY.md` — whose authority applies to a request: `authority` and `caller` as DIDs, names resolving in the authority's namespace, agents, tokens and callables as narrowing whose authority they act with, admission, what a job records and keeps, sudo and an agent's harness (design)

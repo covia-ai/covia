@@ -24,6 +24,7 @@ import covia.exception.NotSupportedException;
 import covia.exception.UnavailableException;
 import covia.grid.Job;
 import covia.lattice.Namespace;
+import covia.venue.migration.BlobIds;
 import covia.venue.migration.CallerAndOwner;
 
 /**
@@ -69,10 +70,13 @@ public final class UserExports {
 	 * older build cannot read, as the venue {@code :version} does, so an older
 	 * venue refuses the export with {@link #NEWER_VERSION}.
 	 */
-	public static final long VERSION = 2;
+	public static final long VERSION = 3;
 
 	/** The first export version whose records of calls name {@code caller} and {@code owner}. */
 	static final long CALLER_AND_OWNER = 2;
+
+	/** The first export version whose stored ids are Blobs. */
+	static final long BLOB_IDS = 3;
 
 	public static final String PROTECTED = "The venue and public principals cannot be exported, imported or cloned";
 	public static final String BUSY = "The user has unfinished work: a job not yet finished or an agent task outstanding. Retry once it has finished";
@@ -281,10 +285,19 @@ public final class UserExports {
 	 */
 	@SuppressWarnings("unchecked")
 	private AMap<AString, ACell> migrate(AMap<AString, ACell> state, long version) {
-		if (version >= CALLER_AND_OWNER) return state;
-		ACell venue = engine.getVenueState().get();
-		return (AMap<AString, ACell>) CallerAndOwner.userState(state,
-			caller -> CallerAndOwner.legacyNamespace(venue, caller));
+		if (version < CALLER_AND_OWNER) {
+			ACell venue = engine.getVenueState().get();
+			state = (AMap<AString, ACell>) CallerAndOwner.userState(state,
+				caller -> CallerAndOwner.legacyNamespace(venue, caller));
+		}
+		if (version < BLOB_IDS) {
+			try {
+				state = (AMap<AString, ACell>) BlobIds.userState(state);
+			} catch (IllegalStateException refused) {
+				throw new InvalidInputException(NOT_AN_EXPORT, refused);
+			}
+		}
+		return state;
 	}
 
 	/** Null when the state is quiet; otherwise why it cannot be copied. */

@@ -51,8 +51,8 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 	private static final AString K_USER = Strings.intern("user");
 	/** On a created bot's record: the principal that created it, when not its user (an agent of that user). */
 	private static final AString K_CALLER = Fields.CALLER;
-	/** The steps of the state every messaging adapter keeps ({@link BotCaller}). */
-	private static final List<MigrationStep> STATE_STEPS = List.of(new BotCaller());
+	/** The steps of the state every messaging adapter keeps ({@link BotCaller}, {@link BlobSessionIds}). */
+	private static final List<MigrationStep> STATE_STEPS = List.of(new BotCaller(), new BlobSessionIds());
 	private static final AString K_TOKEN = Strings.intern("token");
 	private static final AString K_DELETED = Strings.intern("deleted");
 
@@ -93,7 +93,7 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 
 	protected abstract S parseBot(String name, ACell settings, boolean strict);
 
-	/** Every messaging adapter's state migrates alike: its steps are those of the shared bot registry. */
+	/** Every messaging adapter's state migrates alike: its steps are those of the shared bot registry, conversations and receipts. */
 	@Override
 	public List<MigrationStep> stateSteps() {
 		return STATE_STEPS;

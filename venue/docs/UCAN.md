@@ -777,12 +777,14 @@ record is an entry no grant of theirs covers.
 | `file:read` / `file:list` / `file:stat` | `crud/read` on the resolved resource: `file://<root>/<path>` for host/temp roots, canonical `dlfs/<drive>/<path>` for DLFS targets |
 | `file:roots` | `{ with: "file://", can: "crud/read" }` |
 | `file:write` / `file:append` / `file:create` / `file:mkdir` | `crud/write` on the resolved file or DLFS resource, and on the directory that holds a new one |
+| `file:setMetadata` | `crud/write` on the resolved DLFS resource, which must exist |
 | `file:move` | `crud/read` and `crud/delete` on the resolved source, `crud/write` on the resolved destination and the directory that holds it |
 | `file:copy` | `crud/read` on the resolved source, `crud/write` on the resolved destination and the directory that holds it |
 | `file:delete` | `crud/delete` on the resolved file or DLFS resource |
 | `dlfs:read` / `dlfs:list` / `dlfs:tree` / `dlfs:stat` | `{ with: "dlfs/<drive>/<path>", can: "crud/read" }` |
 | `dlfs:listDrives` | `{ with: "dlfs", can: "crud/read" }` |
 | `dlfs:write` / `dlfs:append` / `dlfs:create` / `dlfs:mkdir` | `{ with: "dlfs/<drive>/<path>", can: "crud/write" }`, and on the directory that holds a new entry |
+| `dlfs:setMetadata` | `{ with: "dlfs/<drive>/<path>", can: "crud/write" }` on an entry that exists |
 | `dlfs:createDrive` | `{ with: "dlfs", can: "crud/write" }` |
 | `dlfs:delete` | `{ with: "dlfs/<drive>/<path>", can: "crud/delete" }` |
 | `dlfs:deleteDrive` | `{ with: "dlfs/<drive>", can: "crud/delete" }` |

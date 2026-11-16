@@ -10,7 +10,7 @@
 		"input": {
 			"type": "object",
 			"properties": {
-				"agentId": { "type": "string", "description": "Agent reference: a bare name, g/<id>, /g/<id>, or <ownerDID>/g/<id>. Requires agent/write authority, including for a cached result." },
+				"agentId": { "type": "string", "description": "Agent reference: a bare name, g/<id>, /g/<id>, <ownerDID>/g/<id>, or the agent's DID <ownerDID>:g:<id>. Requires agent/write authority, including for a cached result." },
 				"sessionId": { "type": "string", "description": "Existing session identifier (hex, with or without 0x). Unknown sessions are rejected; no session is minted." },
 				"includeSteps": { "type": "boolean", "description": "When generating a summary, include recorded model replies and tool results in both the saved summary and Job result, in the same steps shape as agent:query. Defaults to false, omitting steps from memory and output. Cached results are returned exactly as saved; changing this flag does not add or remove their steps or rerun inference." }
 			},

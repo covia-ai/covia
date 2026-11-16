@@ -13,7 +13,7 @@
 		"input": {
 			"type": "object",
 			"properties": {
-				"agentId": { "type": "string", "description": "Optional target agent id or g/<id> path. Omit only from that agent's own execution context. Reading an explicit target requires agent read access." },
+				"agentId": { "type": "string", "description": "Optional target agent: an id, g/<id>, <ownerDID>/g/<id>, or the agent's DID <ownerDID>:g:<id>. Omit only from that agent's own execution context. Reading an explicit target requires agent read access." },
 				"limit": { "type": "integer", "minimum": 1, "maximum": 100, "description": "Maximum sessions to return. Default 20." },
 				"offset": { "type": "integer", "minimum": 0, "description": "Number of newest visible sessions to skip. Default 0." }
 			}

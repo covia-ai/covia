@@ -42,18 +42,24 @@ See GRID_LATTICE_DESIGN.md for: per-user namespace layout (§4.3), agent address
 
 ### 1.1 Agent references
 
-Every native agent operation that accepts `agentId` uses the ordinary grid path
-resolver. A bare value such as `Manager` is shorthand for the caller-owned
-`g/Manager`; `g/Manager` and `/g/Manager` are equivalent. A DID-qualified path
-such as `did:key:zAlice/g/Manager` explicitly selects that owner's agent.
+An agent reference names one agent, in any of these forms:
 
-Qualified references do not introduce a separate agent-address grammar or lookup
-path: they resolve exactly like other physical user resources. The canonical
-resource is `<ownerDID>/g/<agentId>`, capability checks apply to that resource at
-the point of action, and the runtime key remains `(ownerDID, agentId)`. Accessing
-another user's agent therefore requires a matching capability; metadata cannot
-redirect or authorize the access. Results keep the local `agentId` for compatibility
-and include the canonical `address`.
+| Form | Names |
+|------|-------|
+| `Manager`, `g/Manager`, `/g/Manager` | The agent `Manager` of the user the request acts for |
+| `did:key:zAlice/g/Manager` | The agent `Manager` of that owner |
+| `did:key:zAlice:g:Manager` | The same agent, by its DID |
+
+Every native agent operation's `agentId`, the values API's `agent` selector and
+a messaging binding's `agent` read a reference in the same way (`AgentAddress`);
+a binding's relative reference names an agent of the binding's `user`. Reading one is syntax only.
+Whether the agent exists, and whether the caller may use it, is decided where it
+is used, the same way for every form. The canonical resource is
+`<ownerDID>/g/<agentId>`, capability checks apply to that resource at the point
+of action, and the runtime key remains `(ownerDID, agentId)`. Accessing another
+user's agent therefore requires a matching capability, whichever form names it;
+metadata cannot redirect or authorise the access. Results keep the local
+`agentId` for compatibility and include the canonical `address`.
 
 ---
 
@@ -101,6 +107,16 @@ The agent's value is a plain map. Every write replaces the entire map atomically
 All fields are framework-managed except `state`, which is owned by the transition
 function. CAD3 structural sharing means the timeline (which only appends) shares
 all existing entries with the previous version.
+
+Every job, task and session id the venue keeps is a Blob, which JSON shows as
+`"0x…"`: in the agent's records, its sessions included, in the records of the
+jobs it runs, in operation results and live events, and every id a transition
+is given (§4). Inputs take an id as a Blob or as hex text, with or without
+`0x`. The model reads every such id as `0x…`, inside a tool result or message
+and in the text the venue composes for it: the receipt of a call that waits for
+a human (`{id, status}`), the job a call still runs as when it outlasts its
+limit, the outcome of a call that finished later, and the session, tasks and
+pending jobs its context names. An A2A `contextId` stays bare hex.
 
 ### 2.2.1 Agent definitions and external implementations
 
@@ -218,13 +234,13 @@ inferences that ran before it, and a stopped cycle's entry says it was stopped
 |-------|------|-------------|
 | `start`, `end` | long | When the cycle began and ended. |
 | `op` | string | The transition operation (llmagent / goaltree). |
-| `sessionId` | string? | The session the cycle ran on. |
-| `tasks`, `messages`, `pending` | vector? | What the cycle was given: resolved tasks, inbox envelopes, job results that arrived. |
+| `sessionId` | blob? | The session the cycle ran on. |
+| `tasks`, `messages`, `pending` | vector? | What the cycle was given: resolved tasks, inbox envelopes, job results that arrived. Tasks and envelopes leave out their route, which only the `From` element shows (AGENT_CONTEXT.md §1.2). |
 | `context` | vector | The root frame's standing context as rendered for its first inference — the head and live surface (system prompt, skills index, loads): the prompt minus the conversation. |
 | `tools` | vector | Names of the tools offered to the first inference. |
 | `inferences` | vector | One record per model call, in order — see below. |
 | `result` | any | The cycle's response, or its error, or for a stopped cycle why it stopped. |
-| `taskResults` | map? | Task completions, `{<jobId>: {status, output}}`. |
+| `taskResults` | index? | Task completions by the task's job id: `{status, output}` or `{status, error}`. |
 | `cancelled` | boolean? | `true` for a stopped cycle (§2.5.1). |
 | `suspension` | map? | On a stopped cycle, the `agent:suspend` that stopped it. |
 
@@ -328,8 +344,8 @@ new agent status or event type.
   session the cycle took at `inCycle.sessionId` and the same epoch at that
   session's `inCycle`. An agent that is SUSPENDED or TERMINATED is issued
   none, and the cycle does not run.
-- **Revoked** by every write that sets SUSPENDED or TERMINATED or removes the
-  record, in that same write: `agent:suspend`, `agent:delete`, account
+- **Revoked** by every change that sets SUSPENDED or TERMINATED or removes the
+  record, in that same transaction: `agent:suspend`, `agent:delete`, account
   deletion and a fault suspension alike. So an agent holds a claim only while
   it is neither SUSPENDED nor TERMINATED. Startup revokes every claim (§6.1),
   and resume issues none.
@@ -560,7 +576,7 @@ The contract between level 1 and level 2:
 | `tasks` | vector | Inbound task data resolved from the `tasks` index (jobId, input, status). |
 | `pending` | vector | Outbound job data resolved from the `pending` index (jobId, status, output, error when the job did not complete). |
 | `newInput` | any? | The picked task's input this cycle shows: its original input, then each continuation once. |
-| `jobId` | string? | With `newInput`: the task's request Job id. |
+| `jobId` | blob? | With `newInput`: the task's request Job id. |
 | `session` | map? | The picked session record: `{id, parties, meta, c, frames, pending, inCycle}`. `pending` lists the messages this cycle took; they and `newInput` are already user turns in `frames` (§4.4). `inCycle` is the cycle's claim (§2.5.1). See AGENT_SESSIONS.md §6.1. |
 
 **Output:**
@@ -1410,8 +1426,9 @@ External callers keep the standard Job contract: the returned Job remains
 `INPUT_REQUIRED` until it completes or fails.
 
 The target's `h/` namespace is their inbox (`Inbox`): each request is a record
-(`HitlRequest`) keyed by its job's id in hex, holding the asks and how they
-were resolved. MCP clients can list and respond to these requests.
+(`HitlRequest`) keyed by its job's id, a Blob that a path names in hex, holding
+the asks and how they were resolved. MCP clients can list and respond to these
+requests.
 
 The MCP-facing operations are `hitl:list`, `hitl:respond`, and the ordinary Job
 read/status surfaces.
@@ -1594,9 +1611,9 @@ No `state`, no `tasks`, no `pending`, no `messages`, no `session`, no `config`. 
 | Agent's config | `agent.getConfig()` |
 | Queued tasks | `agent.getTasks()` |
 | Outbound pending | `agent.getPending()` |
-| Sessions | `agent.getSessions()`, `agent.getSession(sid)` |
-| Session frames | `agent.getSession(sid).get("frames")` |
-| Session inbox | `agent.getSession(sid).get("pending")` |
+| Sessions | `agent.getSessions()`, `agent.session(sid).getRecord()` |
+| Session frames | `agent.session(sid).frames()` |
+| Session inbox | `agent.session(sid).pending()` |
 
 `cause` is a hint, not a contract — the step adapter is free to read the full lattice state and decide what to do regardless of cause.
 

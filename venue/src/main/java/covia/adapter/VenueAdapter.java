@@ -302,7 +302,8 @@ public class VenueAdapter extends AAdapter {
 		names.sort(String::compareTo);
 		AVector<ACell> adapters = Vectors.empty();
 		for (String name : names) {
-			boolean enabled = engine.hasAdapter(name);
+			// A failed adapter is enabled but, like a disabled one, not active.
+			boolean enabled = engine.hasAdapter(name) || engine.adapterFailure(name) != null;
 			AAdapter adapter = engine.getAdapter(name);
 			adapters = adapters.conj(adapterEntry(name, adapter, enabled));
 		}

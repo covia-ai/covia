@@ -586,7 +586,7 @@ public class Job {
 	protected final String cancellationMessage(String reason) {
 		return (reason != null && !reason.isBlank())
 			? reason.strip()
-			: "Job cancelled" + (getID() == null ? "" : ": " + getID().toHexString());
+			: CANCELLED + (getID() == null ? "" : ": " + getID());
 	}
 
 	/**
@@ -844,6 +844,9 @@ public class Job {
 		commitUpdate(job -> decorate.apply(job).assoc(Fields.STATUS, Status.FAILED)
 			.assoc(Fields.ERROR, Strings.create(detail)).dissoc(Fields.ERROR_CODE), reported, null);
 	}
+
+	/** The error a cancellation with no reason records; the job's id follows when it has one. */
+	public static final String CANCELLED = "Job cancelled";
 
 	/** What failed, when a Job reports a fault in its work: its operation as the caller referred to it follows. */
 	public static final String OPERATION = "Operation %s";

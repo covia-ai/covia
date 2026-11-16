@@ -7,17 +7,19 @@ import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.BooleanSupplier;
 
-import convex.core.data.AString;
-import convex.core.data.Strings;
-import convex.core.lang.RT;
+import convex.core.data.Blob;
 import covia.venue.AdapterState;
+import covia.venue.Ids;
 
-/** Session mappings in a binding's private state, with optional legacy migration. */
+/**
+ * Session mappings in a binding's private state, with optional legacy
+ * migration: each conversation maps to the id of its agent session, a Blob.
+ */
 public final class ConversationSessions {
 	public static final String BINDING_STOPPED = "Conversation binding is stopped";
 	private final AdapterState workspace;
 	private final String root;
-	private final Function<String, String> legacyRead;
+	private final Function<String, Blob> legacyRead;
 	private final Consumer<String> legacyDelete;
 	private final Object mutationLock;
 	private final BooleanSupplier writable;
@@ -27,7 +29,7 @@ public final class ConversationSessions {
 	}
 
 	public ConversationSessions(AdapterState workspace, String root,
-			Function<String, String> legacyRead, Consumer<String> legacyDelete) {
+			Function<String, Blob> legacyRead, Consumer<String> legacyDelete) {
 		this(workspace, root, legacyRead, legacyDelete, new Object(), () -> true);
 	}
 
@@ -37,7 +39,7 @@ public final class ConversationSessions {
 	}
 
 	public ConversationSessions(AdapterState workspace, String root,
-			Function<String, String> legacyRead, Consumer<String> legacyDelete, Object mutationLock, BooleanSupplier writable) {
+			Function<String, Blob> legacyRead, Consumer<String> legacyDelete, Object mutationLock, BooleanSupplier writable) {
 		this.workspace = Objects.requireNonNull(workspace);
 		workspace.path(root + "/check");
 		this.root = root;
@@ -47,11 +49,17 @@ public final class ConversationSessions {
 		this.writable = Objects.requireNonNull(writable);
 	}
 
-	public String get(String conversation) {
-		AString value = RT.ensureString(workspace.read(path(conversation)));
-		if (value != null && !value.isEmpty()) return value.toString();
-		String legacy = legacyRead.apply(conversation);
-		if (legacy != null && !legacy.isEmpty()) {
+	/** The name of the adapter whose bindings these sessions belong to. */
+	public String adapterName() {
+		return workspace.adapterName();
+	}
+
+	/** The session {@code conversation} continues, or null when it has none yet. */
+	public Blob get(String conversation) {
+		Blob value = Ids.stored(workspace.read(path(conversation)));
+		if (value != null) return value;
+		Blob legacy = legacyRead.apply(conversation);
+		if (legacy != null) {
 			put(conversation, legacy);
 			return legacy;
 		}
@@ -60,9 +68,9 @@ public final class ConversationSessions {
 
 	void requireCurrentUser() { workspace.requireCurrentUser(); }
 
-	public void put(String conversation, String session) {
+	public void put(String conversation, Blob session) {
 		synchronized (mutationLock) {
-			if (writable.getAsBoolean()) workspace.write(path(conversation), Strings.create(Objects.requireNonNull(session)));
+			if (writable.getAsBoolean()) workspace.write(path(conversation), Objects.requireNonNull(session));
 		}
 	}
 
@@ -75,9 +83,9 @@ public final class ConversationSessions {
 	}
 
 	/** Writes the mapping in the same transaction as agent intake and its receipt. */
-	public void put(covia.venue.VenueState draft, String conversation, String session) {
+	public void put(covia.venue.VenueState draft, String conversation, Blob session) {
 		if (!writable.getAsBoolean()) throw new IllegalStateException(BINDING_STOPPED);
-		workspace.inVenue(draft).write(path(conversation), Strings.create(session));
+		workspace.inVenue(draft).write(path(conversation), Objects.requireNonNull(session));
 	}
 
 	public void remove(String conversation) {

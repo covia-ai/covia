@@ -85,7 +85,7 @@ public class GoalTreeLatticeFramesTest {
 	/** Pre-mints a session so tests know the sid before the chat starts. */
 	private Blob mintSession(String agentId, String hex) {
 		Blob sid = Blob.fromHex(hex);
-		agent(agentId).ensureSession(sid, ALICE_DID);
+		agent(agentId).sessions().create(sid, ALICE_DID, null);
 		return sid;
 	}
 
@@ -100,7 +100,7 @@ public class GoalTreeLatticeFramesTest {
 
 	@SuppressWarnings("unchecked")
 	private AVector<ACell> frames(String agentId, Blob sid) {
-		AMap<AString, ACell> session = agent(agentId).getSession(sid);
+		AMap<AString, ACell> session = agent(agentId).session(sid).getRecord();
 		if (session == null) return null;
 		ACell fv = session.get(Agent.KEY_FRAMES);
 		return (fv instanceof AVector) ? (AVector<ACell>) fv : Vectors.empty();
@@ -233,7 +233,7 @@ public class GoalTreeLatticeFramesTest {
 			ACell turn = lastTurn("live-agent", sid, 0);
 			assertNotNull(turn, "the assistant turn is on the lattice mid-run");
 			assertNotNull(RT.getIn(turn, "toolCalls"), "dangling toolCall visible on the lattice mid-run: " + turn);
-			assertNotNull(ag.getSessionCycleEpoch(sid), "inCycle claim visible mid-run");
+			assertNotNull(ag.session(sid).cycleEpoch(), "inCycle claim visible mid-run");
 
 			// A message arriving MID-cycle (after the cycle-start drain) must
 			// survive the cycle (I2) — the framework no longer drains for
@@ -257,8 +257,8 @@ public class GoalTreeLatticeFramesTest {
 			assertEquals(Agent.SLEEPING, runEnd.await(), "the run ends asleep");
 		}
 		assertEquals(Agent.SLEEPING, ag.getStatus());
-		assertEquals(0, ag.getSessionPending(sid).count(), "the follow-up cycle took the mid-cycle message");
-		assertNull(ag.getSessionCycleEpoch(sid), "no cycle holds the session");
+		assertEquals(0, ag.session(sid).pending().count(), "the follow-up cycle took the mid-cycle message");
+		assertNull(ag.session(sid).cycleEpoch(), "no cycle holds the session");
 		AVector<ACell> conv = conversation(frames("live-agent", sid).get(0));
 		long seen = 0;
 		for (long i = 0; i < conv.count(); i++) {
@@ -297,7 +297,7 @@ public class GoalTreeLatticeFramesTest {
 			assertEquals(Agent.SUSPENDED, runEnd.await(), "transition failure suspends the agent");
 		}
 		assertEquals(Agent.SUSPENDED, ag.getStatus());
-		AVector<ACell> pendingAfter = ag.getSessionPending(sid);
+		AVector<ACell> pendingAfter = ag.session(sid).pending();
 		assertEquals(1, pendingAfter.count(),
 			"the mid-cycle message must survive a FAILED cycle — the framework "
 			+ "must not re-drain what the adapter drained at cycle start");
@@ -374,7 +374,7 @@ public class GoalTreeLatticeFramesTest {
 
 			// The epoch the parked transition thread holds — exactly what its later,
 			// post-tool "zombie" writes will carry once cancel fails to stop it.
-			ACell zombieEpoch = ag.getSessionCycleEpoch(sid);
+			ACell zombieEpoch = ag.session(sid).cycleEpoch();
 			assertNotNull(zombieEpoch, "cycle epoch must be claimed before suspend");
 
 			// Suspend while the transition is parked in the tool: the suspension
@@ -387,7 +387,7 @@ public class GoalTreeLatticeFramesTest {
 			assertEquals(Agent.SUSPENDED, ag.getStatus(), "agent suspended");
 
 			assertEquals(Agent.SUSPENDED, runEnd.await(), "the run ends suspended");
-			assertNull(ag.getSessionCycleEpoch(sid), "the suspension released the cycle claim");
+			assertNull(ag.session(sid).cycleEpoch(), "the suspension released the cycle claim");
 
 			AVector<ACell> atSuspend = frames("zombie-agent", sid);
 
@@ -400,7 +400,7 @@ public class GoalTreeLatticeFramesTest {
 			assertFalse(applied, "a write with the superseded cycle epoch must be fenced (I1)");
 			assertEquals(atSuspend, frames("zombie-agent", sid),
 				"fenced zombie write must not change frames (I1)");
-			assertNull(ag.getSessionCycleEpoch(sid), "claim stays released");
+			assertNull(ag.session(sid).cycleEpoch(), "claim stays released");
 		}
 	}
 
@@ -417,7 +417,7 @@ public class GoalTreeLatticeFramesTest {
 				RunEnd runEnd = new RunEnd("delsess-agent")) {
 			Job chatJob = chat("delsess-agent", sid, "block please");
 			awaitEntered(gate, "the slow tool");
-			assertNotNull(ag.getSessionCycleEpoch(sid), "cycle claimed");
+			assertNotNull(ag.session(sid).cycleEpoch(), "cycle claimed");
 
 			engine.jobs().invokeOperation(
 				"v/ops/agent/delete-session",
@@ -430,7 +430,7 @@ public class GoalTreeLatticeFramesTest {
 			// surfacing as a failed cycle, not a hang. The work it lost was the
 			// deleted session's, so the agent carries on (AGENT_LOOP.md §3.4).
 			assertThrows(Exception.class, () -> chatJob.awaitResult(15000));
-			assertNull(agent("delsess-agent").getSession(sid), "session stays deleted");
+			assertNull(agent("delsess-agent").session(sid).getRecord(), "session stays deleted");
 			gate.release();
 			assertEquals(Agent.SLEEPING, runEnd.await(), "the run ends asleep");
 		}

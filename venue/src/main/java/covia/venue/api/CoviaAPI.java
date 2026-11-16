@@ -50,11 +50,11 @@ import covia.exception.UnavailableException;
 import covia.grid.AContent;
 import covia.grid.Asset;
 import covia.grid.Job;
-import covia.grid.Principals;
 import covia.grid.Venue;
 import covia.venue.api.model.ErrorResponse;
 import covia.venue.api.model.InvokeRequest;
 import covia.venue.api.model.InvokeResult;
+import covia.venue.AgentAddress;
 import covia.venue.AssetStore;
 import covia.venue.Config;
 import covia.venue.JobManager;
@@ -1346,7 +1346,7 @@ public class CoviaAPI extends ACoviaAPI {
 				buildResult(ctx,status);
 				ctx.status(200);
 			} else {
-				buildError(ctx, 404, JobManager.JOB_NOT_FOUND + id.toHexString());
+				buildError(ctx, 404, JobManager.JOB_NOT_FOUND + id);
 			}
 		} catch (AuthException e) {
 			buildError(ctx, 403, e.getMessage());
@@ -1382,7 +1382,7 @@ public class CoviaAPI extends ACoviaAPI {
 				buildResult(ctx,status);
 				ctx.status(200);
 			} else {
-				buildError(ctx, 404, JobManager.JOB_NOT_FOUND + id.toHexString());
+				buildError(ctx, 404, JobManager.JOB_NOT_FOUND + id);
 			}
 		} catch (AuthException e) {
 			buildError(ctx, 403, e.getMessage());
@@ -1418,7 +1418,7 @@ public class CoviaAPI extends ACoviaAPI {
 				buildResult(ctx,status);
 				ctx.status(200);
 			} else {
-				buildError(ctx, 404, JobManager.JOB_NOT_FOUND + id.toHexString());
+				buildError(ctx, 404, JobManager.JOB_NOT_FOUND + id);
 			}
 		} catch (AuthException e) {
 			buildError(ctx, 403, e.getMessage());
@@ -1453,7 +1453,7 @@ public class CoviaAPI extends ACoviaAPI {
 			if (deleted) {
 				ctx.status(200);
 			} else {
-				buildError(ctx, 404, JobManager.JOB_NOT_FOUND + id.toHexString());
+				buildError(ctx, 404, JobManager.JOB_NOT_FOUND + id);
 			}
 		} catch (AuthException e) {
 			buildError(ctx, 403, e.getMessage());
@@ -1690,7 +1690,7 @@ public class CoviaAPI extends ACoviaAPI {
 					@OpenApiParam(name = "path", required = true, example = "w/notes",
 							description = "Lattice path to read, e.g. 'w/notes', 'g/my-agent/status', 'v/info/adapters'."),
 					@OpenApiParam(name = "agent", example = "researcher",
-							description = "Required for n/, t/, and c/: a bare agent id under the caller, or a full agent DID."),
+							description = "Required for n/, t/, and c/: an agent reference, a bare id or g/<id> under the caller, <ownerDID>/g/<id>, or a full agent DID."),
 					@OpenApiParam(name = "task", example = "0198abcdef0123456789abcdef012345",
 							description = "Required for t/: task id, which is the agent:request Job id."),
 					@OpenApiParam(name = "session", example = "0198abcdef0123456789abcdef012345",
@@ -1706,7 +1706,7 @@ public class CoviaAPI extends ACoviaAPI {
 					@OpenApiParam(name = "path", required = true, example = "g",
 							description = "Lattice path of the node to list."),
 					@OpenApiParam(name = "agent", example = "researcher",
-							description = "Required for n/, t/, and c/: a bare agent id under the caller, or a full agent DID."),
+							description = "Required for n/, t/, and c/: an agent reference, a bare id or g/<id> under the caller, <ownerDID>/g/<id>, or a full agent DID."),
 					@OpenApiParam(name = "task",
 							description = "Required for t/: task id, which is the agent:request Job id."),
 					@OpenApiParam(name = "session",
@@ -1730,7 +1730,7 @@ public class CoviaAPI extends ACoviaAPI {
 					@OpenApiParam(name = "path", required = true, example = "w/events",
 							description = "Lattice path of the vector/sequence to slice."),
 					@OpenApiParam(name = "agent", example = "researcher",
-							description = "Required for n/, t/, and c/: a bare agent id under the caller, or a full agent DID."),
+							description = "Required for n/, t/, and c/: an agent reference, a bare id or g/<id> under the caller, <ownerDID>/g/<id>, or a full agent DID."),
 					@OpenApiParam(name = "task",
 							description = "Required for t/: task id, which is the agent:request Job id."),
 					@OpenApiParam(name = "session",
@@ -1751,7 +1751,7 @@ public class CoviaAPI extends ACoviaAPI {
 					@OpenApiParam(name = "path", required = true, example = "g/my-agent",
 							description = "Lattice path to render."),
 					@OpenApiParam(name = "agent", example = "researcher",
-							description = "Required for n/, t/, and c/: a bare agent id under the caller, or a full agent DID."),
+							description = "Required for n/, t/, and c/: an agent reference, a bare id or g/<id> under the caller, <ownerDID>/g/<id>, or a full agent DID."),
 					@OpenApiParam(name = "task",
 							description = "Required for t/: task id, which is the agent:request Job id."),
 					@OpenApiParam(name = "session",
@@ -1769,7 +1769,7 @@ public class CoviaAPI extends ACoviaAPI {
 					@OpenApiParam(name = "path", required = true, example = "j",
 							description = "Lattice path of the collection to aggregate over."),
 					@OpenApiParam(name = "agent", example = "researcher",
-							description = "Required for n/, t/, and c/: a bare agent id under the caller, or a full agent DID."),
+							description = "Required for n/, t/, and c/: an agent reference, a bare id or g/<id> under the caller, <ownerDID>/g/<id>, or a full agent DID."),
 					@OpenApiParam(name = "task",
 							description = "Required for t/: task id, which is the agent:request Job id."),
 					@OpenApiParam(name = "session",
@@ -1787,7 +1787,7 @@ public class CoviaAPI extends ACoviaAPI {
 					@OpenApiParam(name = "path", required = true, example = "j",
 							description = "Lattice path of the collection to count."),
 					@OpenApiParam(name = "agent", example = "researcher",
-							description = "Required for n/, t/, and c/: a bare agent id under the caller, or a full agent DID."),
+							description = "Required for n/, t/, and c/: an agent reference, a bare id or g/<id> under the caller, <ownerDID>/g/<id>, or a full agent DID."),
 					@OpenApiParam(name = "task",
 							description = "Required for t/: task id, which is the agent:request Job id."),
 					@OpenApiParam(name = "session",
@@ -1939,8 +1939,6 @@ public class CoviaAPI extends ACoviaAPI {
 		return value != null && !value.isBlank();
 	}
 
-	private record AgentScope(AString ownerDID, AString agentId) {}
-
 	/**
 	 * Expands the execution-scoped shorthands to the exact persistent lattice
 	 * resource before the Covia accessor performs its capability check.
@@ -1961,7 +1959,7 @@ public class CoviaAPI extends ACoviaAPI {
 			return path;
 		}
 
-		AgentScope agent = parseAgentScope(ctx.queryParam("agent"), rctx);
+		AgentAddress agent = parseAgentScope(ctx.queryParam("agent"), rctx);
 		String suffix = path.length() == namespace.length()
 			? "" : path.substring(namespace.length()); // includes the leading '/'
 
@@ -1969,61 +1967,31 @@ public class CoviaAPI extends ACoviaAPI {
 			case "n" -> {
 				rejectParam(ctx, "task", "n/");
 				rejectParam(ctx, "session", "n/");
-				yield agent.ownerDID() + "/g/" + agent.agentId() + "/n" + suffix;
+				yield agent.address() + "/n" + suffix;
 			}
 			case "t" -> {
 				rejectParam(ctx, "session", "t/");
 				Blob taskId = parseBlobParam(ctx, "task", "t/");
 				// A task is its agent:request Job. Its durable scratch belongs on
 				// that Job record, while the agent task index remains a queue view.
-				yield agent.ownerDID() + "/j/" + taskId.toHexString() + "/temp" + suffix;
+				yield agent.owner() + "/j/" + taskId.toHexString() + "/temp" + suffix;
 			}
 			case "c" -> {
 				rejectParam(ctx, "task", "c/");
 				Blob sessionId = parseBlobParam(ctx, "session", "c/");
-				yield agent.ownerDID() + "/g/" + agent.agentId()
-					+ "/sessions/" + sessionId.toHexString() + "/c" + suffix;
+				yield agent.address() + "/sessions/" + sessionId.toHexString() + "/c" + suffix;
 			}
 			default -> throw new IllegalStateException("Unsupported scoped namespace: " + namespace);
 		};
 	}
 
-	private static AgentScope parseAgentScope(String ref, RequestContext rctx) {
+	/** The agent an {@code agent} parameter names ({@link AgentAddress#parse}), relative to the caller's user. */
+	private static AgentAddress parseAgentScope(String ref, RequestContext rctx) {
 		if (ref == null || ref.isBlank()) {
 			throw new InvalidInputException(
 				"Missing 'agent' query parameter for execution-scoped path");
 		}
-
-		AString owner;
-		AString agentId;
-		if (ref.startsWith("did:")) {
-			AString agentDID = Strings.create(ref);
-			if (!Principals.isAgentDID(agentDID)) {
-				throw new InvalidInputException(
-					"'agent' must be a bare agent id or a full agent DID ending ':g:<agentId>'");
-			}
-			owner = Principals.userOf(agentDID);
-			agentId = Principals.agentIdOf(agentDID);
-		} else {
-			owner = rctx.getUserDID();
-			if (owner == null) {
-				throw new InvalidInputException(
-					"A bare 'agent' id requires an authenticated caller");
-			}
-			agentId = Strings.create(ref);
-		}
-
-		if (agentId == null || agentId.count() == 0
-				|| agentId.toString().contains("/") || agentId.toString().contains(":")) {
-			throw new InvalidInputException("'agent' must name a single agent id");
-		}
-		// Apply the canonical agent-DID syntax validation in one place.
-		try {
-			Principals.agentDID(owner, agentId);
-		} catch (IllegalArgumentException e) {
-			throw new InvalidInputException(e.getMessage(), e);
-		}
-		return new AgentScope(owner, agentId);
+		return AgentAddress.parse((rctx == null) ? null : rctx.getUserDID(), Strings.create(ref));
 	}
 
 	private static Blob parseBlobParam(Context ctx, String name, String namespace) {

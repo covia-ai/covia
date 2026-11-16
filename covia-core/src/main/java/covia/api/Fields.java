@@ -320,11 +320,16 @@ public class Fields {
 	 *  ({@link #CALLER}), namespace ({@link #OWNER}) and {@link #PROOFS}. Never
 	 *  shown to a caller. */
 	public static final StringShort AUTHORITY = Strings.intern("authority");
-	/** Beside a request or message an agent receives, and on its history turn:
-	 *  how the venue authenticated the caller through a channel binding (COG-3
-	 *  §7), written by the agent's ingress from the request context. Attribution
-	 *  only, never evidence. */
+	/** How the venue authenticated a caller through a channel binding (COG-3 §7),
+	 *  as a binding's media and reply operations receive it. Attribution only,
+	 *  never evidence. Agent turns stored before the route replaced it carry it
+	 *  too. */
 	public static final StringShort AUTHENTICATION = Strings.intern("authentication");
+	/** Beside a request or message an agent receives, and on its history turn:
+	 *  what carried the request to the agent (an access token, a binding, a
+	 *  callable, the scheduler), one step per carrier. Venue-internal: its shape
+	 *  is not a contract, and only the agent's {@code From} element shows it. */
+	public static final StringShort ROUTE = Strings.intern("route");
 	/** On a job record: the id of the nearest <em>recorded</em> job inside whose
 	 *  execution this job was dispatched. Absent on top-level jobs. Only the
 	 *  up-link is stored; a client reconstructs a job tree by tracing parents. */

@@ -337,18 +337,19 @@ public class SecretStoreTest {
 		assertNull(user.agent("my-agent"),
 			"Agent should be null before creation");
 
-		Agent agent = user.ensureAgent("my-agent", null, null);
-		assertNotNull(agent, "ensureAgent should return non-null Agent");
-		assertTrue(agent.exists(), "Agent should exist after ensureAgent");
+		user.agents().create(Strings.create("my-agent"), null, null, null, null);
+		Agent agent = user.agent("my-agent");
+		assertNotNull(agent, "Agent should be found once created");
+		assertTrue(agent.exists());
 	}
 
 	@Test
-	public void testGetAgentsInitiallyNull() {
+	public void testAgentsInitiallyEmpty() {
 		AKeyPair kp = AKeyPair.generate();
 		VenueState vs = VenueState.create(kp);
 
 		User user = vs.users().ensure("did:key:zAlice");
-		assertNull(user.getAgents(), "Agents should be null before any are created");
+		assertTrue(user.agents().all().isEmpty(), "Agents should be empty before any are created");
 	}
 
 	// ========== Backwards Compatibility ==========

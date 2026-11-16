@@ -15,8 +15,10 @@ import org.junit.jupiter.api.TestInfo;
 
 import convex.auth.ucan.Capability;
 import convex.core.data.ACell;
+import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
+import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
@@ -24,11 +26,15 @@ import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.adapter.MCPAdapter;
+import covia.adapter.agent.GoalTreeContext;
 import covia.adapter.token.AccessTokens;
 import covia.venue.server.AuthMiddleware;
+import covia.api.Abilities;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
+import covia.venue.Agent;
+import covia.venue.AgentWatch;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.TestEngine;
@@ -141,6 +147,35 @@ public class MCPTokenTest {
 		run("v/ops/token/update", Maps.of(Fields.NAME, "elsewhere", Fields.ACCESS, Maps.of("test", Maps.empty(),
 			MCPAdapter.ACCESS_POINT, Maps.of(Fields.TOOLS, Vectors.of("v/ops/covia/read")))), owner);
 		assertEquals(200, post(INITIALIZE, bearer, null).statusCode(), "accepted once it has an MCP entry");
+	}
+
+	@Test
+	public void anAgentAskedThroughATokenIsToldWhichToken(TestInfo info) throws Exception {
+		AString alice = TestEngine.uniqueDID(info);
+		RequestContext owner = RequestContext.of(alice);
+		run("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "helper",
+			Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")), owner);
+		String bearer = RT.getIn(run("v/ops/mcp/create-token", Maps.of(Fields.NAME, "outside-bot",
+			Fields.TOOLS, Vectors.of("v/ops/agent/request"),
+			Fields.CAPS, Vectors.of(Capability.create(Strings.create("g/helper"), Abilities.AGENT_REQUEST))),
+			owner).getOutput(), Fields.TOKEN).toString();
+		Agent agent = engine.getVenueState().users().user(alice).agent("helper");
+		Blob sid = Blob.fromHex("88888888888888888888888888888888");
+		agent.sessions().create(sid, alice, null);
+
+		try (AgentWatch watch = AgentWatch.open(engine, alice, "helper")) {
+			ACell asked = rpc(call(2, "agent_request", "{\"agentId\":\"helper\",\"sessionId\":\"" + sid.toHexString()
+				+ "\",\"input\":{\"ask\":\"hello\"},\"wait\":5000}"), bearer);
+			assertNotEquals(CVMBool.TRUE, RT.getIn(asked, "result", "isError"), asked.toString());
+			watch.awaitRest(1);
+		}
+
+		AVector<ACell> frames = RT.ensureVector(agent.session(sid).getRecord().get(Agent.KEY_FRAMES));
+		AMap<AString, ACell> turn = RT.ensureMap(GoalTreeContext.activeConversation(RT.ensureMap(frames.get(0))).get(0));
+		assertEquals(alice, turn.get(Fields.CALLER), "the request is its issuer's");
+		assertEquals(Vectors.of(engine.tokens().lookup(bearer).assoc(Fields.ADAPTER, Strings.create("token"))),
+			turn.get(Fields.ROUTE), "and the agent is told it came through the token");
+		assertFalse(agent.session(sid).getRecord().toString().contains(bearer), "the bearer is never recorded");
 	}
 
 	@Test

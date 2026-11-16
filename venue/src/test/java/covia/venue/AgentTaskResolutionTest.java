@@ -33,10 +33,10 @@ public class AgentTaskResolutionTest {
 	@BeforeEach
 	public void setup(TestInfo info) {
 		AString did = TestEngine.uniqueDID(info);
-		agent = TestEngine.ENGINE.getVenueState().users().ensure(did).ensureAgent("resolver", Maps.empty(), null);
-		agent.ensureSession(SID, did);
+		agent = TestAgents.ensure(TestEngine.ENGINE.getVenueState().users().ensure(did), "resolver", Maps.empty(), null);
+		agent.sessions().create(SID, did, null);
 		agent.tasks().add(TASK, Maps.of(Fields.INPUT, Maps.of("ask", "something"),
-			Fields.SESSION_ID, Strings.create(SID.toHexString())));
+			Fields.SESSION_ID, SID));
 	}
 
 	/** Shows the task its input, as a cycle's start does. */

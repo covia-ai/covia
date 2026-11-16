@@ -228,6 +228,9 @@ public class VenueHTTP extends Venue {
 	 */
 	public static final String UCANS_HEADER = "X-Covia-Ucans";
 
+	/** A job the venue does not report: the job's id follows. */
+	public static final String JOB_NOT_FOUND = "Job not found: ";
+
 	private HttpRequest.Builder requestBuilder(URI uri) {
 		HttpRequest.Builder builder = HttpRequest.newBuilder().uri(uri);
 		// Per-request total deadline. connectTimeout only bounds establishing the
@@ -519,7 +522,7 @@ public class VenueHTTP extends Venue {
 	public CompletableFuture<Job> getJob(Blob jobId) {
 		return getJobData(jobId).thenApply(status -> {
 			if (status == null) {
-				throw new NotFoundException("Job not found: " + jobId.toHexString(), jobId.toHexString());
+				throw new NotFoundException(JOB_NOT_FOUND + jobId, jobId.toHexString());
 			}
 			return Job.create(status);
 		});
@@ -529,7 +532,7 @@ public class VenueHTTP extends Venue {
 	public CompletableFuture<AMap<AString, ACell>> getJobStatus(Blob jobId) {
 		return getJobData(jobId).thenApply(status -> {
 			if (status == null) {
-				throw new NotFoundException("Job not found: " + jobId.toHexString(), jobId.toHexString());
+				throw new NotFoundException(JOB_NOT_FOUND + jobId, jobId.toHexString());
 			}
 			return status;
 		});

@@ -71,7 +71,7 @@ public final class ExternalAgents {
 	 */
 	public AMap<AString, ACell> stored(Agent agent) {
 		try {
-			return validate(agent.getRecord().get(Agent.KEY_AGENT));
+			return validate(agent.definition());
 		} catch (InvalidInputException e) {
 			throw new InvalidDefinitionException(MISCONFIGURED + e.getMessage(), e);
 		}
@@ -86,8 +86,7 @@ public final class ExternalAgents {
 	}
 
 	public boolean isExternal(Agent agent) {
-		AMap<AString, ACell> record = agent == null ? null : agent.getRecord();
-		return record != null && record.containsKey(Agent.KEY_AGENT);
+		return agent != null && agent.definition() != null;
 	}
 
 	public void start(Job job, RequestContext caller, AString owner, AString id, AString address,
@@ -97,17 +96,17 @@ public final class ExternalAgents {
 		for (String option : new String[]{"loads", "outputPath", "responseSchema", "strict"}) {
 			if (RT.getIn(input, option) != null) throw new NotSupportedException(UNSUPPORTED + option);
 		}
-		if (supplied && agent.getSession(sid) == null) throw new NotFoundException(UNKNOWN_SESSION, sid.toHexString());
+		if (supplied && agent.session(sid).getRecord() == null) throw new NotFoundException(UNKNOWN_SESSION, sid.toHexString());
 		ACell content = RT.getIn(input, "chat".equals(operation) ? Fields.MESSAGE : Fields.INPUT);
 		engine.jobs().updateAdapterData(job, d -> d.assoc(OWNER, owner).assoc(KIND, Strings.create(operation)));
 		job.update(d -> d.assoc(Fields.AGENT_ID, id).assoc(Fields.ADDRESS, address)
-			.assoc(Fields.SESSION_ID, Strings.create(sid.toHexString())));
+			.assoc(Fields.SESSION_ID, sid));
 		if (job.isFinished()) return;
 		if (!agent.claimExternalTurn(sid, job.getID(), caller.getCallerDID(), content, !supplied))
 			throw new ConflictException(SESSION_BUSY);
 		if (job.isFinished()) { agent.session(sid).finishExternalTurn(job.getID(), null, null); return; }
 		try {
-			ACell remoteSession = RT.getIn(agent.getSession(sid), Agent.KEY_EXTERNAL, Fields.SESSION_ID);
+			ACell remoteSession = agent.session(sid).remoteSession();
 			var invocation = adapter.agentInvocation(operation, definition, content, remoteSession);
 			AString backendOp = Strings.create(adapter.getName() + ":" + invocation.operation());
 			AMap<AString, ACell> meta = Maps.of(Fields.OPERATION, Maps.of(Fields.ADAPTER, backendOp));
@@ -117,8 +116,17 @@ public final class ExternalAgents {
 			RequestContext execution = engine.harnessContext(owner, id).withJob(job)
 				.withOp(Strings.create("v/ops/" + adapter.getName() + "/" + invocation.operation()));
 			var prepared = engine.jobs().prepareAgentInteraction(meta, invocation.input(), execution);
-			Job child = prepared.job();
-			engine.jobs().updateAdapterData(job, d -> d.assoc(CHILD, child.getID()));
+			// The child and the parent's record of it commit together
+			try {
+				engine.getVenueState().execute(draft -> {
+					Blob childId = prepared.record(draft);
+					engine.jobs().updateAdapterData(draft, job, d -> d.assoc(CHILD, childId));
+				});
+			} catch (RuntimeException | Error e) {
+				prepared.abandon();
+				throw e;
+			}
+			Job child = prepared.accept();
 			attach(job, child, agent, sid, adapter);
 			if (job.isFinished()) child.cancel();
 			else job.setStatus(Status.STARTED);
@@ -144,7 +152,7 @@ public final class ExternalAgents {
 						if (Strings.create("chat").equals(kept(parent, KIND))) {
 							result = result.assoc(Fields.RESPONSE, response);
 						} else {
-							result = result.assoc(Fields.ID, Strings.create(parent.getID().toHexString()))
+							result = result.assoc(Fields.ID, parent.getID())
 								.assoc(Fields.STATUS, Status.COMPLETE).assoc(Fields.OUTPUT, response);
 						}
 						parent.completeWith(result);
@@ -180,29 +188,29 @@ public final class ExternalAgents {
 		Agent agent = user == null ? null : user.agent(RT.ensureString(job.getData().get(Fields.AGENT_ID)));
 		ACell childId = kept(job, CHILD);
 		Job child = childId == null ? null : engine.jobs().getJob(Job.parseID(childId), engine.context(owner));
+		Blob sid = Ids.stored(job.getData().get(Fields.SESSION_ID));
 		if (agent == null || child == null) {
 			job.fail(MISSING_CHILD);
-			if (agent != null) agent.session(Blob.fromHex(job.getData().get(Fields.SESSION_ID).toString())).finishExternalTurn(job.getID(), null, null);
+			if (agent != null) agent.session(sid).finishExternalTurn(job.getID(), null, null);
 			return true;
 		}
-		attach(job, child, agent, Blob.fromHex(job.getData().get(Fields.SESSION_ID).toString()),
-			backend(stored(agent)));
+		attach(job, child, agent, sid, backend(stored(agent)));
 		return true;
 	}
 
 	/** No execution is replayed when startup finds an abandoned session claim. */
 	public void reconcile(Agent agent) {
 		for (var entry : agent.getSessions().entrySet()) {
-			ACell id = RT.getIn(entry.getValue(), Agent.KEY_EXTERNAL, Fields.JOB_ID);
-			if (id != null && engine.jobs().getJob(Job.parseID(id)) == null)
-				agent.session(entry.getKey()).finishExternalTurn(Job.parseID(id), null, null);
+			Blob id = Session.externalJob(RT.ensureMap(entry.getValue()));
+			if (id != null && engine.jobs().getJob(id) == null)
+				agent.session(entry.getKey()).finishExternalTurn(id, null, null);
 		}
 	}
 
 	public void cancelAll(Agent agent) {
 		for (var entry : agent.getSessions().entrySet()) {
-			ACell id = RT.getIn(entry.getValue(), Agent.KEY_EXTERNAL, Fields.JOB_ID);
-			Job parent = id == null ? null : engine.jobs().getJob(Job.parseID(id));
+			Blob id = Session.externalJob(RT.ensureMap(entry.getValue()));
+			Job parent = id == null ? null : engine.jobs().getJob(id);
 			if (parent != null) parent.cancel();
 		}
 	}
@@ -224,10 +232,10 @@ public final class ExternalAgents {
 	}
 
 	public void deliver(Agent agent, ACell taskId, Blob sid, ACell content) {
-		ACell id = taskId != null ? taskId : RT.getIn(agent.getSession(sid), Agent.KEY_EXTERNAL, Fields.JOB_ID);
+		Blob turn = agent.session(sid).externalJob();
+		ACell id = taskId != null ? taskId : turn;
 		Job parent = id == null ? null : engine.jobs().getJob(Job.parseID(id));
-		if (parent == null || !owns(parent) || parent.isFinished()
-				|| !parent.getID().equals(RT.getIn(agent.getSession(sid), Agent.KEY_EXTERNAL, Fields.JOB_ID)))
+		if (parent == null || !owns(parent) || parent.isFinished() || !parent.getID().equals(turn))
 			throw new NotSupportedException(NO_ACTIVE_TURN);
 		Job child = child(parent);
 		if (child == null) throw new NotSupportedException(MISSING_CHILD);

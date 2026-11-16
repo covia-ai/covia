@@ -98,7 +98,7 @@ class JobAdapterTest {
 		try {
 			Job wait = invoke("result", target(job).assoc(Fields.TIMEOUT, CVMLong.create(10)));
 			assertThrows(Exception.class, () -> wait.awaitResult(5000));
-			assertEquals(JobAdapter.RESULT_TIMEOUT.formatted(10, job.getID().toHexString()), wait.getErrorMessage());
+			assertEquals(JobAdapter.RESULT_TIMEOUT.formatted(10, job.getID()), wait.getErrorMessage());
 			assertFalse(job.future().isDone());
 			assertEquals(Status.STARTED, job.getStatus());
 		} finally { job.cancel(); }

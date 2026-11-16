@@ -10,7 +10,7 @@
 		"input": {
 			"type": "object",
 			"properties": {
-				"agentId": { "type": "string", "description": "Agent reference: a bare name for the caller's agent, g/<id>, /g/<id>, or <ownerDID>/g/<id>" },
+				"agentId": { "type": "string", "description": "Agent reference: a bare name for the caller's agent, g/<id>, /g/<id>, <ownerDID>/g/<id>, or the agent's DID <ownerDID>:g:<id>" },
 				"sessionId": { "type": "string", "description": "Hex ID of the idle session to compact, with or without a 0x prefix" },
 				"summary": { "type": "string", "minLength": 1, "description": "Summary future turns should retain. It is agent memory, not a privileged system instruction." }
 			},

@@ -31,6 +31,7 @@ import covia.exception.InvalidInputException;
 import covia.exception.JobFailedException;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
+import covia.venue.TestAgents;
 import covia.venue.TestEngine;
 import covia.venue.User;
 
@@ -253,7 +254,7 @@ public class PreferencesAdapterTest {
 	@Test
 	public void testAgentEditsItsOwnersPreferences() {
 		User user = engine.getVenueState().users().ensure(alice.getUserDID());
-		user.ensureAgent("prefs-agent", Maps.empty(), null);
+		TestAgents.ensure(user, "prefs-agent", Maps.empty(), null);
 		RequestContext agent = RequestContext.ofAgent(alice.getUserDID(), Strings.create("prefs-agent"));
 		edit(agent, "command", "set", "path", "units", "value", "metric");
 		assertEquals(Maps.of("units", "metric"), prefs());
@@ -262,7 +263,7 @@ public class PreferencesAdapterTest {
 	@Test
 	public void testConcurrentEditsByUserAndAgentAllApply() throws Exception {
 		User user = engine.getVenueState().users().ensure(alice.getUserDID());
-		user.ensureAgent("prefs-sharer", Maps.empty(), null);
+		TestAgents.ensure(user, "prefs-sharer", Maps.empty(), null);
 		RequestContext agent = RequestContext.ofAgent(alice.getUserDID(), Strings.create("prefs-sharer"));
 		int n = 16;
 		CountDownLatch go = new CountDownLatch(1);

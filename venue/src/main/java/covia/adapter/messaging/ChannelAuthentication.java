@@ -9,6 +9,7 @@ import convex.core.data.Maps;
 import convex.core.data.Sets;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
+import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.venue.Engine;
 import covia.venue.auth.AuthResult;
@@ -146,6 +147,67 @@ public final class ChannelAuthentication {
 	}
 
 	/**
+	 * The route step a binding adds for a request it authenticated
+	 * (RequestContext.via), from the request's authentication record, the
+	 * {@code AuthResult} data without its {@code userDID}: the binding's owner
+	 * and name, which with the adapter name its resource
+	 * ({@code <owner>/<method>/<name>}), the sender's id and handle, the chat's
+	 * id and kind, the thread and the space's id. Names are the sender's text
+	 * (§7), and the message id and provider fields say nothing of the route, so
+	 * the step leaves them out. A stored record is read the same way, keeping
+	 * only values of the expected type, so a turn recorded before routes reads
+	 * as the step it would carry now.
+	 */
+	public static AMap<AString, ACell> step(ACell record) {
+		AMap<AString, ACell> authentication = RT.ensureMap(RT.getIn(record, AuthResult.AUTHENTICATION));
+		AMap<AString, ACell> details = RT.ensureMap(RT.getIn(authentication, AuthResult.DETAILS));
+		AString binding = RT.ensureString(RT.getIn(authentication, AuthResult.BINDING));
+		AMap<AString, ACell> step = (binding == null) ? Maps.empty() : bindingStep(binding);
+		step = withPart(step, K_SENDER, details, K_ID, K_HANDLE);
+		step = withPart(step, K_CHAT, details, K_ID, K_KIND);
+		AString thread = RT.ensureString(RT.getIn(details, K_THREAD));
+		if (thread != null) step = step.assoc(K_THREAD, thread);
+		return withPart(step, K_SPACE, details, K_ID);
+	}
+
+	/**
+	 * The route step binding {@code spec} of adapter {@code method} adds for an
+	 * event with no sender to authenticate (a poll, say): the binding alone.
+	 */
+	public static AMap<AString, ACell> step(Engine engine, MessagingBotSpec spec, AString method) {
+		return bindingStep(binding(engine, spec, method));
+	}
+
+	/**
+	 * A step naming the binding at resource {@code binding}: its owner, the
+	 * resource's first segment, and its name, the last. A resource without
+	 * both gives only what it holds.
+	 */
+	private static AMap<AString, ACell> bindingStep(AString binding) {
+		String resource = binding.toString();
+		int first = resource.indexOf('/');
+		int last = resource.lastIndexOf('/');
+		AMap<AString, ACell> step = Maps.of(K_NAME, Strings.create(resource.substring(last + 1)));
+		return (first > 0 && first < last) ? step.assoc(Fields.OWNER, Strings.create(resource.substring(0, first))) : step;
+	}
+
+	/** The resource of binding {@code spec} of adapter {@code method}: {@code <owner>/<method>/<name>}. */
+	private static AString binding(Engine engine, MessagingBotSpec spec, AString method) {
+		return Strings.create(spec.userDID(engine) + "/" + method + "/" + spec.name());
+	}
+
+	/** {@code step} with {@code details}' {@code part}, keeping only its string-valued {@code fields}. */
+	private static AMap<AString, ACell> withPart(AMap<AString, ACell> step, AString part, AMap<AString, ACell> details,
+			AString... fields) {
+		AMap<AString, ACell> kept = Maps.empty();
+		for (AString field : fields) {
+			AString value = RT.ensureString(RT.getIn(details, part, field));
+			if (value != null) kept = kept.assoc(field, value);
+		}
+		return kept.isEmpty() ? step : step.assoc(part, kept);
+	}
+
+	/**
 	 * Identifies who a verified message comes from and returns the method's
 	 * result: the binding's principal for a sender it lists, the venue's public
 	 * principal for any other sender on an open binding.
@@ -161,7 +223,7 @@ public final class ChannelAuthentication {
 		if (listed) user = principal;
 		else if (spec.open()) user = engine.publicPrincipal();
 		else throw new AuthException(NOT_ADMITTED);
-		AString binding = Strings.create(spec.userDID(engine) + "/" + channel.method() + "/" + spec.name());
+		AString binding = binding(engine, spec, channel.method());
 		return new AuthResult(user, channel.identity(), new AuthResult.Credential(channel.credential(), null, null),
 			new AuthResult.Authentication(channel.method(), binding, null, Sets.empty(), channel.details()), null, null);
 	}

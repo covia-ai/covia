@@ -83,7 +83,7 @@ public final class Tasks extends IndexComponent<Blob, ACell>
 		return transact(draft -> {
 			ACell row = draft.all().get(id);
 			if (row == null) return null;
-			if (expectedRevision >= 0 && (Task.revision(row) != expectedRevision || Task.hasUnshownInput(row))) return null;
+			if (Task.isStale(row, expectedRevision)) return null;
 			draft.remove(id);
 			return row;
 		});

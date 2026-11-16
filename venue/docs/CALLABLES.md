@@ -214,7 +214,12 @@ what the target reaches by name is the owner's, within the callable's caps:
   operation the event runs;
 - a human it asks (`hitl:request`) is asked by the issuer, through the
   owner's `h/`;
-- a secret it uses is the owner's, as `secret/use` in its caps allows.
+- a secret it uses is the owner's, as `secret/use` in its caps allows;
+- an agent it asks is asked by the issuer, and told the call came through
+  the callable: the call carries the invoker's request on, so its route is
+  the invoker's with the callable's step added
+  ([AGENT_CONTEXT.md](./AGENT_CONTEXT.md) §1.2). Work the call leaves running
+  and rebuilds later is not the call, and has none.
 
 ## What a call never holds
 

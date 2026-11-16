@@ -412,17 +412,17 @@ a component that is not Covia's.
 
 **An entity is a collection and its entries.** A kind of domain entity is two
 components with different operations: the collection adds and finds entries
-(`Inbox.open`, `Tasks.add`, `Jobs.create`), and an entry changes itself
-(`HitlRequest.resolve`, `Task.park`). Each manages its own state as a lattice
-component.
+(`Inbox.open`, `Tasks.add`, `Sessions.create`, `Agents.create`, `Jobs.create`), and an entry
+changes itself (`HitlRequest.resolve`, `Task.park`, `Session.setWakeTime`).
+Each manages its own state as a lattice component.
 
 **Keyed collections are Convex's map components.** `Jobs`, `JobIndex`,
-`AssetStore`, `ContentStore` and `Tasks` extend Convex's `IndexComponent`, and
-`Users`, `ManagedUsers`, `SecretStore` and `Inbox` its `MapComponent`, so `get`,
+`AssetStore`, `ContentStore`, `Tasks`, `Sessions` and `Inbox` extend Convex's `IndexComponent`, and
+`Users`, `ManagedUsers`, `Agents` and `SecretStore` its `MapComponent`, so `get`,
 `put`, `remove` and `size` are Convex's and `get(key)` is the entry as stored. A collection binds a
 child component to one entry through `path(key)`, which reads a missing key as
-absent, under a name of its own (`Users.user`, `Jobs.job`). Its domain
-operations (`Users.create`, `Jobs.create`, `SecretStore.store`) keep the rules
+absent, under a name of its own (`Users.user`, `Agents.agent`, `Jobs.job`). Its domain
+operations (`Users.create`, `Agents.create`, `Jobs.create`, `SecretStore.store`) keep the rules
 that a `put` or `remove` of a raw entry bypasses, so only venue code that keeps
 those rules itself uses them.
 
@@ -441,8 +441,9 @@ operations that name it, not by its place in a larger value.
 | `Jobs` | a job id, in hex, to its `JobRecord` |
 | `JobRecord` | `temp` to the job's `Workspace`; the rest of the job is read-only |
 | `SecretStore` | a secret's name to its `SecretStore.Record`, which its store deletes |
-| `Agent` | `n` to the agent's `Workspace`; `sessions/<id>`, the id in hex, to its `Session`; `tasks` to `Tasks` |
+| `Agent` | `n` to the agent's `Workspace`; `sessions` to `Sessions`, and `sessions/<id>` to the session's `Session`; `tasks` to `Tasks` |
 | `Tasks` | a task's id, in hex, to its `Task`; the agent's access rule covers both |
+| `Sessions` | a session's id, in hex, to its `Session`; the agent's access rule covers the list |
 | `Session` | `c` to the session's `Workspace` |
 
 Segments below the last component a path reaches are read by the value they
@@ -909,7 +910,7 @@ accepts complete snapshots signed by the venue's key and keeps the newer
 | `CoviaValue` (Covia) | Convex's `ValueComponent` resolving segments by Covia's rules (`ValuePath.keys`); read-only where a path ends below any component but a workspace, which hands it the rest of the path with `CoviaValue.within` (§4.6) |
 | `Workspace` (Covia) | A flexible data area reached by path (`w`, `o`, `n`, `c`, a job's `temp`, `x/` views); its changes create no missing level except `createPath` (§4.6) |
 | `Entry` (Covia) | A value in a workspace, at keys fixed when its path was resolved; a path cursor under the workspace's cursor, changed at its key in the level above; no missing level is created except by `createLevels` (§4.6) |
-| `Inbox` (Covia) | A user's HITL requests at `h`, a `MapComponent` keyed by request id; only the venue writes them |
+| `Inbox` (Covia) | A user's HITL requests at `h`, an `IndexComponent` keyed by request id, its job's; only the venue writes them |
 | `Jobs` (Covia) | A user's jobs at `j`, an `IndexComponent` keyed by job id, each bound as its `JobRecord`; only the venue admits a job |
 | `ACursor<V>` | Mutable reference with atomic get/set/update/fork/sync |
 

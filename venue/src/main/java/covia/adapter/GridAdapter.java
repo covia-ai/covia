@@ -312,7 +312,7 @@ public class GridAdapter extends AAdapter {
 					if (ex instanceof TimeoutException || ex.getCause() instanceof TimeoutException) {
 						// The caller's wait ran out; the job itself may still finish
 						return CompletableFuture.failedFuture(
-							new UnavailableException(RESULT_TIMEOUT.formatted(timeoutMs, jobId.toHexString())));
+							new UnavailableException(RESULT_TIMEOUT.formatted(timeoutMs, jobId)));
 					}
 					return CompletableFuture.failedFuture(ex);
 				});

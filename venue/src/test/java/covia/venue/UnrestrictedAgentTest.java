@@ -269,7 +269,7 @@ public class UnrestrictedAgentTest {
 	public void aVenueAgentStoredWithoutCapsAdministersTheVenue(TestInfo info) {
 		AString venueDID = engine.getDIDString();
 		AString id = venueAgentId(info);
-		engine.getVenueState().users().ensure(venueDID).ensureAgent(id, Maps.empty(), null);
+		TestAgents.ensure(engine.getVenueState().users().ensure(venueDID), id, Maps.empty(), null);
 		try {
 			RequestContext agent = engine.context(venueDID, Principals.agentDID(venueDID, id));
 			assertTrue(engine.hasVenueAuthority(agent, "users", Abilities.ADMIN_USER_CREATE));

@@ -836,28 +836,26 @@ and whether it is open. Restricting where a binding serves, such as Slack's
 
 **The request context.** `Engine.channelContext(owner, AuthResult)` is
 `Engine.context(owner, userDID)` with the result's data projection attached by
-`RequestContext.withAuthentication`. Only that seam sets it; an HTTP request's
-result stays on its HTTP context. The projection is attribution, not evidence: assurance policy
-never reads it from a context (§3.1), and contexts the venue starts for an
-agent's own work (`ofAgent`, `Engine.context`, the scheduler's replay) carry
-none, so nothing is inherited through jobs or agent delegation. A bot's own work
-for its agent — storing media, its media and reply operations — runs in such a
-context.
+`RequestContext.withAuthentication`, and the binding's step added to the
+request's route (`ChannelAuthentication.step`: the binding's owner and name,
+the sender's id and handle, the chat's id and kind, a thread and a space id,
+never names or the message id). Only that seam sets the projection;
+an HTTP request's result stays on its HTTP context. An event with no sender on
+an open binding carries no projection, but its route still names the binding.
+The projection is attribution, not evidence: assurance policy never reads it
+from a context (§3.1), and contexts the venue starts for an agent's own work
+(`ofAgent`, `Engine.context`, the scheduler's replay) carry none, so nothing is
+inherited through jobs or agent delegation. A bot's own work for its agent —
+storing media, its media and reply operations — runs in such a context.
 
-**Recorded with the turn.** The agent's ingress (`agent:chat`, `agent:message`,
-`agent:request`) writes the request's `caller` and its `authentication` — the
-projection without `userDID`, which is the caller — onto the session envelope
-and the task record, from the request context only; a message to a task goes
-onto its continuation's envelope. Message content is never read for or
-rewritten with provenance. Both runtimes build input turns with
-`AgentAdapter.cycleInputTurns`, which copies both fields onto each user turn,
-and the task wire shape carries them, so a turn keeps its provenance for as long as
-history keeps the turn (COG-20 §4). A task's turn takes the record of the
-input it shows: the task's for its original input, its continuation's for each
-later one, so a follow-up is attributed to its sender rather than the
-requester; a cycle without a session is handed that record by the run loop
-(`inputSource`). A tracked tool call's late outcome is recorded as from the
-principal that made the call: its job's `caller`, normally the agent itself.
+**Recorded with the turn.** The agent's ingress records the request's
+`caller` and its route beside the content, and each user turn copies them
+(AGENT_CONTEXT.md §1.2, AGENT_SESSIONS.md), so the binding's step is how a
+turn keeps its channel. Message content is never read for or rewritten with
+provenance. A turn stored before routes carries the projection as
+`authentication` instead, and renders as the binding's step would. A tracked
+tool call's late outcome is recorded as from the principal that made the
+call: its job's `caller`, normally the agent itself.
 
 **Rendered from the record.** `ContextAssembler` renders a `From` label element
 (`Labels.Kind.FROM`, AGENT_CONTEXT.md §1.2) in the agent's dialect:
@@ -865,20 +863,21 @@ principal that made the call: its job's `caller`, normally the agent itself.
 | Dialect | Owner over the API | Open-bot sender |
 |---------|-------------------|-----------------|
 | `bracket` | `[From: owner did:key:z6MkAlice]` | `[From: anonymous did:web:venue.example:public — telegram helper: sender 5551 @sam, direct chat 5551]` |
-| `xml` | `<from principal="did:key:z6MkAlice" relationship="owner"/>` | `<from principal="…:public" relationship="anonymous" method="telegram" binding="helper" sender="5551" handle="sam" chat="5551" chat-kind="direct"/>` |
+| `xml` | `<from principal="did:key:z6MkAlice" relationship="owner"/>` | `<from principal="…:public" relationship="anonymous"><via adapter="telegram" name="helper" sender="5551" handle="sam" chat="5551" chat-kind="direct"/></from>` |
 
-- **When.** Before a user turn whose key — caller, method, binding,
-  authenticated identity, chat id, thread, space id — differs from the last key
-  rendered, starting from the agent's own principal. Per-message fields
-  (`message`, adapter extras) are never part of the key. A user turn without a
+- **When.** Before a user turn whose caller or shown route differs from the
+  last rendered, starting from the agent's own principal. Per-message fields
+  (`message`, adapter extras) are never part of it. A user turn without a
   recorded caller renders no element and leaves the key unchanged, as does a
   late tool outcome shown as a tool result (AGENT_CONTEXT.md §5.7).
 - **What.** The relationship is computed from DIDs alone: the agent's own DID,
   its owner's and the venue's. No venue state is consulted, so registering or
-  deleting a user never changes an earlier element. The channel part shows the
-  method, the binding's name, ids, the chat kind, a thread and a space id.
-  `name` fields are never rendered (COG-3 §7). Ids and handles render only when
-  they match a conservative identifier pattern; xml values are escaped.
+  deleting a user never changes an earlier element. A binding's step shows the
+  adapter, the binding's name, its owner when that is not the agent's owner,
+  ids, the chat kind, a thread and a space id.
+  `name` fields of people, chats and spaces are never rendered (COG-3 §7). Ids
+  and handles render only when they match a conservative identifier pattern;
+  xml values are escaped.
 - **Cache.** The element is a pure function of the stored turns and the three
   DIDs, and history is append-only within a frame, so each cycle's rendered
   conversation extends the previous cycle's unchanged. Changing the element's
@@ -894,13 +893,14 @@ its released fields (`channel` = method, `from` = `sender.id`, `chat` =
 accepted before its binding recorded the channel with it is failed once rather
 than run unauthenticated (`WebhookBot.UNVERIFIED`).
 
-**Tests.** A forged record in message content stays content; listed, open,
-closed and public-access-off senders identify as specified for every adapter;
-envelope, task record and history turns keep `caller` and `authentication` in
-both runtimes; rendering a session twice, with a turn added in between, leaves
-the earlier output unchanged, also across a user's registration; `name` fields
-and malformed handles never render; the relay wire is unchanged; an agent's own
-contexts carry no `authentication`.
+**Tests.** A forged record or route in message content stays content; listed,
+open, closed and public-access-off senders identify as specified for every
+adapter; envelope, task record and history turns keep `caller` and the
+binding's step in both runtimes; a turn stored with `authentication` renders
+as its route would; rendering a session twice, with a turn added in between,
+leaves the earlier output unchanged, also across a user's registration;
+`name` fields and malformed handles never render; the relay wire is
+unchanged; an agent's own contexts carry no `authentication` and no route.
 
 ## 6. Configuration
 

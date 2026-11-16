@@ -71,7 +71,8 @@ import covia.venue.RequestContext;
  *   <li>{@code file:copy}   — copy within one root</li>
  *   <li>{@code file:delete} — delete a file or empty directory</li>
  *   <li>{@code file:mkdir}  — create a directory</li>
- *   <li>{@code file:stat}   — file metadata</li>
+ *   <li>{@code file:stat}   — an entry's type, size, times and, in DLFS, metadata</li>
+ *   <li>{@code file:setMetadata} — set or clear a DLFS entry's application metadata</li>
  * </ul>
  *
  * <h3>Path safety</h3>
@@ -183,6 +184,7 @@ public class FileAdapter extends AAdapter implements covia.venue.storage.Content
 		installAsset("file/delete", ASSETS_PATH + "delete.json");
 		installAsset("file/mkdir",  ASSETS_PATH + "mkdir.json");
 		installAsset("file/stat",   ASSETS_PATH + "stat.json");
+		installAsset("file/set-metadata", ASSETS_PATH + "setMetadata.json");
 	}
 
 	// ==================== Configuration ====================
@@ -373,9 +375,21 @@ public class FileAdapter extends AAdapter implements covia.venue.storage.Content
 	 */
 	private FileTarget resolveTarget(RequestContext ctx, String rootName, String userPath,
 			AString ability, boolean mustExist) throws IOException {
+		return resolveTarget(ctx, rootName, userPath, ability, mustExist,
+			Capability.CRUD_WRITE.equals(ability));
+	}
+
+	/**
+	 * @param creates whether the write may create what it names, and so is also
+	 *        authorised where that changes a directory, and may create the drive
+	 *        and subpath a DLFS-backed root names; false for a write that only
+	 *        changes an entry, such as {@code setMetadata}
+	 */
+	private FileTarget resolveTarget(RequestContext ctx, String rootName, String userPath,
+			AString ability, boolean mustExist, boolean creates) throws IOException {
 		if (rootName == null || rootName.isEmpty()) {
 			DLFSAdapter.AuthorisedPath target = requireDLFSAdapter()
-				.resolveAuthorisedPath(ctx, userPath, ability);
+				.resolveAuthorisedPath(ctx, userPath, ability, null, creates);
 			if (target == null) {
 				throw new InvalidInputException(
 					"'root' is required unless 'path' is a dlfs/<drive>/... or DID-scoped DLFS reference");
@@ -404,7 +418,7 @@ public class FileAdapter extends AAdapter implements covia.venue.storage.Content
 			String rootRef = dr.readOnly ? null
 				: "dlfs/" + dr.driveName + (dr.subpath == null ? "" : "/" + dr.subpath);
 			DLFSAdapter.AuthorisedPath target = requireDLFSAdapter()
-				.resolveAuthorisedPath(ctx, ref, ability, rootRef);
+				.resolveAuthorisedPath(ctx, ref, ability, rootRef, creates);
 			Path logicalBase = FileOperations.resolve(target.root(), dr.subpath,
 				"DLFS root '" + rootName + "'", false);
 			if (!target.path().startsWith(logicalBase)) {
@@ -425,7 +439,7 @@ public class FileAdapter extends AAdapter implements covia.venue.storage.Content
 		// Creating an entry changes the directory that holds it, so a write that
 		// creates is authorised there as well.
 		boolean mayCreate = false;
-		if (Capability.CRUD_WRITE.equals(ability)) {
+		if (creates) {
 			Path at = FileOperations.writeAuthority(base, path);
 			mayCreate = !at.equals(path);
 			if (mayCreate) {
@@ -658,6 +672,7 @@ public class FileAdapter extends AAdapter implements covia.venue.storage.Content
 			case "delete" -> handleDelete(ctx, input);
 			case "mkdir"  -> handleMkdir(ctx, input);
 			case "stat"   -> handleStat(ctx, input);
+			case "setMetadata" -> handleSetMetadata(ctx, input);
 			default       -> throw new NotSupportedException("Unknown file operation: " + subOp);
 		};
 	}
@@ -724,12 +739,8 @@ public class FileAdapter extends AAdapter implements covia.venue.storage.Content
 			Capability.CRUD_WRITE, false);
 		requireWritable(target);
 		if (createOnly) requireNew(target, endpoint.path());
-		try (java.io.OutputStream out = Files.newOutputStream(target.path(), createOnly
-				? FileOperations.createOptions(target.path())
-				: FileOperations.writeOptions(target.path(),
-					java.nio.file.StandardOpenOption.TRUNCATE_EXISTING, target.mayCreate()))) {
-			data.transferTo(out);
-		}
+		FileOperations.writeFile(target.path(), createOnly || target.mayCreate(), !createOnly,
+			data::transferTo);
 		return true;
 	}
 
@@ -997,8 +1008,20 @@ public class FileAdapter extends AAdapter implements covia.venue.storage.Content
 		String pathArg = stringArg(input, FIELD_PATH);
 
 		try (Resolved r = resolveEntry(ctx, rootName, pathArg, Capability.CRUD_READ, false)) {
-			return FileOperations.stat(r.path(), r.target().readOnly());
+			return DLFSAdapter.stat(r.path(), r.target().readOnly());
 		}
+	}
+
+	private ACell handleSetMetadata(RequestContext ctx, AMap<AString, ACell> input) throws IOException {
+		String rootName = stringArg(input, FIELD_ROOT);
+		String pathArg = stringArg(input, FIELD_PATH);
+		rejectArchiveEntry(pathArg, "set metadata on");
+		ACell metadata = DLFSAdapter.metadataArg(input);
+		// It changes an entry that exists, so it creates nothing, a root's drive included
+		FileTarget target = resolveTarget(ctx, rootName, pathArg, Capability.CRUD_WRITE, true, false);
+		requireWritable(target);
+		requireDLFSAdapter().setMetadataAt(ctx, target.resource(), metadata);
+		return Maps.of(Fields.METADATA, metadata);
 	}
 
 	// ==================== Helpers ====================

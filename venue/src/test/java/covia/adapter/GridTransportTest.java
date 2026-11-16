@@ -111,7 +111,7 @@ class GridTransportTest {
 				Fields.ID, peer.remote.getID().toHexString(), Fields.TIMEOUT, 10));
 			assertThrows(Exception.class, () -> result.awaitResult(5000));
 			assertEquals(Status.FAILED, result.getStatus());
-			assertEquals(GridAdapter.RESULT_TIMEOUT.formatted(10, peer.remote.getID().toHexString()), result.getErrorMessage());
+			assertEquals(GridAdapter.RESULT_TIMEOUT.formatted(10, peer.remote.getID()), result.getErrorMessage());
 			assertFalse(peer.lookup.isDone());
 			assertFalse(peer.remote.future().isDone());
 			peer.remote.completeWith(Strings.create("late-output"));

@@ -46,7 +46,7 @@ class VenueMigrationEndToEndTest {
 	 * The venue version this test seeds shapes for. A new venue version needs
 	 * the shapes its step converts seeded here, and fails until it has them.
 	 */
-	private static final long SEEDED_THROUGH = 2;
+	private static final long SEEDED_THROUGH = 3;
 
 	private static final AString USER = Strings.create("did:test:migration-e2e");
 	private static final Path OLD_DELETIONS =CoviaPath.parse("w/user-deletions");
@@ -64,7 +64,8 @@ class VenueMigrationEndToEndTest {
 	/** Records of calls as version 1 named their caller and owner. */
 	private static final Blob AGENT_JOB = Blob.fromHex("e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2");
 	private static final Blob EVENT = Blob.fromHex("7fffffffffffffffe2e3e2e3e2e3e2e3");
-	private static final AString REQUEST = Strings.create("e2e-request");
+	/** A HITL request the parked agent asked in its session, open, keyed by its job's id in hex. */
+	private static final Blob ASK = Blob.fromHex("e2f0e2f0e2f0e2f0e2f0e2f0e2f0e2f0");
 	private static final String PARKED = "migration-e2e-parked";
 	private static final Blob PARKED_TASK = Blob.fromHex("e2e4e2e4e2e4e2e4e2e4e2e4e2e4e2e4");
 	/** A job still running when a version 1 venue stopped, with no entry: that version kept none. */
@@ -79,6 +80,16 @@ class VenueMigrationEndToEndTest {
 	/** A running call to an agent on this venue, which kept no caller context then. */
 	private static final Blob LOCAL_CALL = Blob.fromHex("e2e9e2e9e2e9e2e9e2e9e2e9e2e9e2e9");
 	private static final String LOCAL_TASK = "e2eae2eae2eae2eae2eae2eae2eae2ea";
+	/** Ids version 2 stored as hex text: a task's session, an open wait for it, a queued chat and a turn's job. */
+	private static final Blob PARKED_SESSION = Blob.fromHex("e2ebe2ebe2ebe2ebe2ebe2ebe2ebe2eb");
+	private static final Blob PARKED_WORK = Blob.fromHex("e2ece2ece2ece2ece2ece2ece2ece2ec");
+	private static final Blob PARKED_ASK = Blob.fromHex("e2ede2ede2ede2ede2ede2ede2ede2ed");
+	private static final Blob PARKED_CHAT = Blob.fromHex("e2eee2eee2eee2eee2eee2eee2eee2ee");
+	private static final Blob TURN_JOB = Blob.fromHex("e2efe2efe2efe2efe2efe2efe2efe2ef");
+
+	private static AString hex(Blob id) {
+		return Strings.create(id.toHexString());
+	}
 
 	/** A running remote job's {@code delegation} as 0.10.0 recorded it. */
 	private static AMap<AString, ACell> followed(String target, String remoteId, AString authRef) {
@@ -128,12 +139,13 @@ class VenueMigrationEndToEndTest {
 			user.writeInternalPath(CoviaPath.parse("w/frame-notes"), Strings.create("frame notes"));
 			AVector<ACell> conversation = Vectors.of(
 				GoalTreeContext.createSegment("earlier", Vectors.of(turn("user", "old question"), turn("assistant", "old answer"))),
-				turn("user", "recent question"), turn("assistant", "recent answer"));
+				turn("user", "recent question").assoc(Fields.JOB_ID, hex(TURN_JOB)), turn("assistant", "recent answer"));
 			AMap<AString, ACell> root = Maps.of("description", "legacy session", "conversation", conversation,
 				Fields.LOADS, Maps.of("w/frame-notes", Maps.empty()));
-			Agent agent = user.ensureAgent(AGENT,
+			Agent agent = TestAgents.ensure(user, AGENT,
 				Maps.of(Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/test/ops/llm"), null);
-			AMap<AString, ACell> session = agent.ensureSession(SESSION, USER)
+			agent.sessions().create(SESSION, USER, null);
+			AMap<AString, ACell> session = agent.session(SESSION).getRecord()
 				.assoc(Fields.FRAMES, Vectors.of(root)).assoc(Fields.LOADS, Maps.of("w/notes", Maps.empty()));
 			agent.putRecord(agent.getRecord().assoc(Agent.KEY_SESSIONS, agent.getSessions().assoc(SESSION, session)));
 
@@ -175,12 +187,28 @@ class VenueMigrationEndToEndTest {
 			user.cursor().path(Namespace.J).updateAndGet(jobs -> ((Index<Blob, ACell>) jobs).assoc(LOCAL_CALL, localCall));
 			host.secrets().store(localRef, Strings.create("{\"operationMetadata\":{\"operation\":{\"adapter\":\"remoteagent:request\"}}}"),
 				SecretStore.keys(key));
-			user.inbox().put(REQUEST, Maps.of(Hitl.ID, REQUEST, Strings.create("from"), agentDID,
-				Hitl.STATUS, Hitl.OPEN));
-			Agent parked = user.ensureAgent(PARKED, Maps.empty(), null);
+			AString parkedDID = Principals.agentDID(USER, Strings.create(PARKED));
+			user.cursor().path(Namespace.H).set(Maps.of(Covia.WORKSPACE_DATA, Maps.of(hex(ASK), Maps.of(
+				Hitl.ID, hex(ASK), Strings.create("from"), parkedDID, Hitl.STATUS, Hitl.OPEN,
+				Hitl.AGENT, PARKED, Fields.SESSION_ID, hex(PARKED_SESSION), Hitl.TITLE, "Go ahead?", Hitl.ASKS, Vectors.empty()))));
+			AMap<AString, ACell> askJob = Maps.of(Fields.ID, ASK, Fields.STATUS, Status.INPUT_REQUIRED,
+				Fields.CALLER, USER, Strings.create("actor"), parkedDID, Fields.OP, "v/ops/hitl/request", Fields.ADAPTER, "hitl");
+			user.cursor().path(Namespace.J).updateAndGet(jobs -> ((Index<Blob, ACell>) jobs).assoc(ASK, askJob));
+			Agent parked = TestAgents.ensure(user, PARKED, Maps.empty(), null);
 			parked.putRecord(parked.getRecord().assoc(Agent.KEY_STATUS, Agent.SUSPENDED)
 				.assoc(Agent.KEY_TASKS, Index.<Blob, ACell>none().assoc(PARKED_TASK,
-					Maps.of(Strings.create("outputContext"), Maps.of(Fields.CALLER, USER, Strings.create("user"), USER)))));
+					Maps.of(Strings.create("outputContext"), Maps.of(Fields.CALLER, USER, Strings.create("user"), USER)))
+					.assoc(PARKED_WORK, Maps.of(Fields.INPUT, "work", Fields.SESSION_ID, hex(PARKED_SESSION))))
+				.assoc(Agent.KEY_PENDING, Index.of(PARKED_ASK, Maps.of(Fields.TASK_ID, hex(PARKED_WORK))))
+				.assoc(Agent.KEY_TIMELINE, Vectors.of(Maps.of(Fields.SESSION_ID, hex(PARKED_SESSION),
+					Fields.TASK_RESULTS, Maps.of(hex(PARKED_WORK), Maps.of(Fields.STATUS, Status.COMPLETE)))))
+				.assoc(Agent.KEY_SESSIONS, Index.of(PARKED_SESSION, Maps.of(Agent.KEY_PENDING, Vectors.of(Maps.of(
+					Fields.MESSAGE, "queued", Fields.SESSION_ID, hex(PARKED_SESSION), Fields.JOB_ID, hex(PARKED_CHAT)))))));
+			// The queued chat's own record, naming its session in hex
+			AMap<AString, ACell> parkedChat = Maps.of(Fields.ID, PARKED_CHAT, Fields.STATUS, Status.PENDING,
+				Fields.CALLER, USER, Fields.OP, "v/ops/agent/chat", Fields.ADAPTER, "agent",
+				Fields.AGENT_ID, PARKED, Fields.ADDRESS, USER + "/g/" + PARKED, Fields.SESSION_ID, hex(PARKED_SESSION));
+			user.cursor().path(Namespace.J).updateAndGet(jobs -> ((Index<Blob, ACell>) jobs).assoc(PARKED_CHAT, parkedChat));
 			seed.cursor().updateAndGet(value -> RT.assocIn(value, Maps.of(Strings.create("events"), Index.of(EVENT,
 				Maps.of(Fields.OP, "v/test/ops/echo", Fields.OWNER, USER, Strings.create("actor"), agentDID,
 					Strings.create("by"), agentDID, Strings.create("time"), Long.MAX_VALUE))), Covia.SCHEDULE));
@@ -211,10 +239,21 @@ class VenueMigrationEndToEndTest {
 			User migrated = venue.users().user(USER);
 			assertEquals(Maps.of(Fields.ID, AGENT_JOB, Fields.STATUS, Status.COMPLETE, Fields.CALLER, agentDID, Fields.OWNER, USER),
 				migrated.jobs().getRecord(AGENT_JOB).dissoc(Fields.UPDATED));
-			assertEquals(Maps.of(Hitl.ID, REQUEST, Hitl.CALLER, agentDID, Hitl.OWNER, USER, Hitl.STATUS, Hitl.OPEN),
-				migrated.inbox().get(REQUEST));
+			assertEquals(Maps.of(Hitl.ID, ASK, Hitl.CALLER, parkedDID, Hitl.OWNER, USER, Hitl.STATUS, Hitl.OPEN,
+					Hitl.AGENT, PARKED, Fields.SESSION_ID, PARKED_SESSION, Hitl.TITLE, "Go ahead?", Hitl.ASKS, Vectors.empty()),
+				migrated.inbox().get(ASK), "a request is keyed by its job's id, which it names as a Blob, as its session");
 			assertEquals(Maps.empty(), migrated.agent(PARKED).getTasks().get(PARKED_TASK),
 				"a pending write's context is the request's to keep, not the worker's");
+			Agent parkedNow = migrated.agent(PARKED);
+			assertEquals(PARKED_SESSION, Task.sessionId(parkedNow.getTasks().get(PARKED_WORK)), "ids stored as hex are Blobs");
+			assertTrue(parkedNow.hasPendingFor(PARKED_WORK), "an open wait names its task");
+			assertEquals(Maps.of(Fields.MESSAGE, "queued", Fields.JOB_ID, PARKED_CHAT),
+				parkedNow.session(PARKED_SESSION).pending().get(0), "a queued chat names its job, and no longer its session");
+			assertEquals(Maps.of(Fields.SESSION_ID, PARKED_SESSION,
+					Fields.TASK_RESULTS, Index.of(PARKED_WORK, Maps.of(Fields.STATUS, Status.COMPLETE))),
+				parkedNow.getTimeline().get(0));
+			assertEquals(TURN_JOB, RT.getIn(rootFrame(migrated), Agent.KEY_CONVERSATION, 1, Fields.JOB_ID), "a turn names its job");
+			assertEquals(PARKED_SESSION, migrated.jobs().getRecord(PARKED_CHAT).get(Fields.SESSION_ID), "a chat's record names its session");
 			assertEquals(Maps.of(Fields.OP, "v/test/ops/echo", Fields.CALLER, agentDID, Fields.OWNER, USER,
 				Strings.create("time"), Long.MAX_VALUE), venue.schedule().events().get(EVENT));
 			assertEquals(Maps.of(JobIndex.OWNER, USER), venue.jobIndex().entry(RUNNING_JOB));
@@ -233,7 +272,7 @@ class VenueMigrationEndToEndTest {
 			assertEquals(Maps.of(RemoteJobs.REMOTE_ID, LOCAL_TASK, RemoteJobs.REMOTE_STATUS, Status.STARTED),
 				RT.getIn(migrated.jobs().getRecord(LOCAL_CALL), RemoteJobs.DELEGATION));
 			assertFalse(venue.users().user(venueDID).secrets().exists(remoteRef));
-			assertEquals(4, venue.jobIndex().all().count(), "only the unfinished jobs have entries");
+			assertEquals(6, venue.jobIndex().all().count(), "only the unfinished jobs have entries");
 			assertEquals(job, venue.users().user(USER).cursor().path(Namespace.J, JOB).get(), "the history chain is gone");
 			ReleasedAgents.assertUntouched(venue, USER, releasedAgents);
 			// Lazy parts are still in their older shapes.
@@ -257,6 +296,13 @@ class VenueMigrationEndToEndTest {
 			// A local call that kept no caller context is not followed again; its task is untouched
 			assertEquals(covia.adapter.RemoteAgentAdapter.LOCAL_INTERRUPTED,
 				engine.jobs().getJob(LOCAL_CALL, ctx).getErrorMessage());
+			// The queued chat is still waiting for the cycle that takes its message
+			assertEquals(Status.PENDING, engine.jobs().getJob(PARKED_CHAT, ctx).getStatus());
+			// The open request still waits, and its answer reaches the session that asked
+			assertEquals(Status.INPUT_REQUIRED, engine.jobs().getJob(ASK, ctx).getStatus());
+			engine.jobs().invokeOperation("v/ops/hitl/respond", Hitl.reject(ASK.toHexString(), "Not now"), ctx).awaitResult(10_000);
+			AVector<ACell> queued = user.agent(PARKED).session(PARKED_SESSION).pending();
+			assertEquals(ASK, RT.getIn(queued.get(queued.count() - 1), Fields.MESSAGE, Hitl.ID), "the answer is queued on the asking session");
 
 			// An unversioned adapter's state moves when it is first used.
 			assertEquals(UNLOADED, venue.adapterState("unloaded").get());
@@ -282,7 +328,7 @@ class VenueMigrationEndToEndTest {
 			// history and folds the session loads into the root frame.
 			AMap<AString, ACell> before = rootFrame(user);
 			assertTrue(before.containsKey(Agent.KEY_CONVERSATION));
-			assertNotNull(user.agent(AGENT).getSession(SESSION).get(Fields.LOADS));
+			assertNotNull(user.agent(AGENT).session(SESSION).getRecord().get(Fields.LOADS));
 			ACell reply = engine.jobs().invokeOperation("v/ops/agent/chat", Maps.of(Fields.AGENT_ID, AGENT,
 				Fields.SESSION_ID, SESSION.toHexString(), Fields.MESSAGE, "after migration"), ctx).awaitResult(20_000);
 			assertTrue(RT.getIn(reply, "response").toString().contains("after migration"));
@@ -291,7 +337,7 @@ class VenueMigrationEndToEndTest {
 			assertFalse(frame.containsKey(Agent.KEY_CONVERSATION));
 			String history = GoalTreeContext.archivedConversation(frame).toString();
 			assertTrue(history.contains("old question") && history.contains("recent answer") && history.contains("after migration"), history);
-			assertNull(user.agent(AGENT).getSession(SESSION).get(Fields.LOADS));
+			assertNull(user.agent(AGENT).session(SESSION).getRecord().get(Fields.LOADS));
 			assertEquals(Maps.of("w/frame-notes", Maps.empty(), "w/notes", Maps.empty()), frame.get(Fields.LOADS));
 
 			// Migrating again changes nothing migration owns.
@@ -308,6 +354,6 @@ class VenueMigrationEndToEndTest {
 	}
 
 	private static AMap<AString, ACell> rootFrame(User user) {
-		return RT.ensureMap(RT.getIn(user.agent(AGENT).getSession(SESSION), Agent.KEY_FRAMES, CVMLong.ZERO));
+		return RT.ensureMap(RT.getIn(user.agent(AGENT).session(SESSION).getRecord(), Agent.KEY_FRAMES, CVMLong.ZERO));
 	}
 }

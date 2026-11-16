@@ -208,8 +208,8 @@ class DiscordAdapterTest {
 			var sid=agent.getSessions().entryAt(0).getKey();
 			sink.accept(message("second","agent-channel","alice","second input",true,false));
 			long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(8);
-			while(!agent.getSessionPending(sid).toString().contains("second input")&&System.nanoTime()<deadline) Thread.sleep(10);
-			assertTrue(agent.getSessionPending(sid).toString().contains("second input"));
+			while(!agent.session(sid).pending().toString().contains("second input")&&System.nanoTime()<deadline) Thread.sleep(10);
+			assertTrue(agent.session(sid).pending().toString().contains("second input"));
 			assertEquals(1,agent.getSessions().count());
 			assertFalse(response.isDone());
 			assertTrue(api.requests.isEmpty());

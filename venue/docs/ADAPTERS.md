@@ -202,19 +202,38 @@ The significant lifecycle is:
    At launch this happens before the venue is prepared, so the venue can
    migrate module adapters' state with its own; neither it nor the constructor
    may use the engine.
-3. Registration applies the effective `adapters.<name>` configuration through
-   `configure(config, strict)`.
-4. Unless boot-disabled or declined, `install(engine)` binds the engine and
-   private `AdapterState`, then `installAssets()` declares its catalog.
-   Installation must not start inbound workers or other autonomous work.
+3. Registration offers the effective `adapters.<name>` configuration through
+   `configure(config, strict)`, whether or not the adapter is enabled. At
+   launch, a configuration an enabled adapter refuses leaves it failed
+   (below), and a disabled adapter's refusal is logged; the launch goes on.
+4. An adapter that accepted its configuration is installed, enabled or not:
+   `install(engine)` binds the engine and private `AdapterState`, then
+   `installAssets()` declares its catalog. **Installed and started are
+   separate phases**: an installed adapter owns its jobs whether or not it
+   is started. **Configuration and installation are inert**: they start no
+   thread, process, network activity or operator code, so an adapter that
+   never starts does nothing but recover its jobs (step 5). Live work, such
+   as loading operator scripts, fetching models or scheduling a sweep,
+   belongs in `start()`. A `configure` call may end work its new settings no
+   longer allow, but starts work only while the adapter is started, which it
+   knows from its own state (set by `start()`, cleared by `stop()`), not from
+   having an engine. An adapter that declined or refused its configuration is
+   not installed until enable or restart offers it again and it accepts; an
+   enabled adapter whose installation fails is failed (below).
 5. Before the venue serves requests, `recoverJob(job)` is called once per
-   non-terminal durable Job the adapter's operations own. The default
-   stabilises and never re-executes; override to re-attach or retry
-   (see [JOBS.md § Recovery](JOBS.md#recovery-on-restart-214)).
-6. `start()` activates adapter-owned workers after assembly, catalogue
-   publication, secret provisioning and recovery. It must be idempotent:
-   runtime registration, enable and restart also call it after publishing the
-   adapter on an already-live engine. A prepared engine defers it until
+   non-terminal durable Job the adapter's operations own, whether or not
+   the adapter will start. The default stabilises and never re-executes;
+   override to re-attach or retry
+   (see [JOBS.md § Recovery](JOBS.md#recovery-on-restart-214)). An
+   adapter's jobs are recovered once per venue run: enable and restart do
+   not recover them again.
+6. `start()` is the second phase: only an enabled adapter is started, and
+   starting makes it live, the venue sending it work and publishing its
+   `v/info/adapters/<name>` record. It activates adapter-owned workers after
+   assembly, catalogue publication, secret provisioning and recovery, and
+   takes up whatever the adapter left until it runs. It must be idempotent:
+   runtime registration, enable and restart also call it after publishing
+   the adapter on an already-live engine. A prepared engine defers it until
    activation. If it fails, the adapter is left failed (below).
 7. Runtime `adapter/configure` calls `configure` again and republishes public
    configuration and information if accepted, whether or not the adapter is
@@ -237,13 +256,16 @@ The significant lifecycle is:
    again, unless it had failed; otherwise the old one is closed.
    Restart (`venue:adapter/restart`) calls `stop()`, offers the adapter its
    effective configuration again and calls `start()`.
+   Stopping does nothing to the adapter's jobs: work in flight runs on, on
+   the stopped instance, and what it does when it finishes or tries to act
+   while the adapter is stopped is the adapter's own policy.
 9. Module unload deregisters its live adapters and closes `AutoCloseable`
    resources and the module classloader. In-flight jobs retain their adapter
    instance and may finish.
 10. At venue shutdown, in-flight Jobs get `shutdown.graceMs` to finish;
-   `suspendJob(job)` is then called for each still in flight. The default
-   pauses a pausable Job and cancels the rest; override to record a
-   durable wait and let the thread go
+   `suspendJob(job)` is then called for each still in flight, whether or not
+   its adapter is started. The default pauses a pausable Job and cancels the
+   rest; override to record a durable wait and let the thread go
    (see [JOBS.md § Shutdown](JOBS.md#shutdown)).
 
 `start()` and `stop()` are effects on the running venue, so the engine calls
@@ -257,30 +279,63 @@ and sends check that it is still running.
 
 ### An adapter that is not running
 
-An enabled adapter whose `start()` fails at launch, enable or restart, or that
-could not take back its settings after refusing a change, is failed. The
-engine calls `stop()` to end whatever it started and reports the failure as
-the adapter's ([ERRORS.md](ERRORS.md)): a Covia exception with a reason as it
-is, logged at WARN, anything else as the adapter's fault. The instance stays
-enabled, published and in the catalog, and the venue runs without it: one
-adapter that cannot start costs only its own operations. Those operations,
-internal calls to them and messages to their live jobs are refused with
-`UnavailableException` (`Engine.ADAPTER_NOT_RUNNING`). The reason is for
-operators: `venue:adapters` lists the adapter with `status: failed` and the
-`reason`, and embedders read it from `Engine.adapterFailure(name)`.
-`venue:adapter/restart` starts it again once the cause is fixed; disabling it
-forgets the failure.
+An enabled adapter that fails to start is failed: its `start()` failed at
+launch, enable or restart, it refused its configuration or failed to install
+at launch, enable or restart, or it could not take back its settings after
+refusing a change. The engine calls `stop()` to end whatever a failed
+`start()` began and reports the failure as the adapter's
+([ERRORS.md](ERRORS.md)): a Covia exception with a reason as it is, logged at
+WARN, anything else as the adapter's fault.
+
+A failed adapter is treated as a stopped one, as if disabled, except that it
+stays enabled. Its `v/info/adapters/<name>` record is withdrawn (the catalog
+metadata remains), and `Engine.getAdapter`, `getAdapterNames` and
+`hasAdapter` (and so `findAdapter`) leave it out. Every part of the venue
+that uses adapters directly therefore sees it as absent and treats it as it
+treats a disabled one: the outbound guard refuses rather than check without
+the `http` adapter's settings, and a login method it provides is
+unavailable. An adapter that `auth.methods` or `auth.venueProof` names
+therefore still stops the launch if it fails, as a disabled one does. The
+venue sends a stopped adapter, failed or disabled, no new work: its
+operations, internal calls to them, and messages, pause and resume for its
+live jobs are refused with `UnavailableException`
+(`Engine.ADAPTER_NOT_RUNNING` for a failed one). The venue runs without it:
+one adapter that cannot start costs only what it provides.
+
+**A stopped adapter's jobs are its own.** Whether an adapter is started
+decides only whether the venue sends it new work; what happens to its jobs
+is its policy either way. Stopping or starting it at runtime does nothing to
+them, and at launch an installed adapter recovers its jobs whether or not it
+will start, so booting with a stopped adapter is the same case as stopping
+one with jobs in flight. Cancelling a stopped adapter's job runs its
+`cancelIn` and `stop(job)`; at shutdown its jobs go to its `suspendJob`. An
+adapter whose policy depends on whether it runs tracks its own `start()` and
+`stop()`, as the messaging adapters do, and takes up in `start()` what it
+left until then: the agent adapter wakes agents with queued work whenever it
+starts. An adapter that refused its configuration, declined it or failed to
+install is not installed, owns no jobs, and its unfinished jobs are
+recovered as a missing adapter's are, not by its own `recoverJob`.
+
+The reason is for operators: `venue:adapters` lists the adapter as enabled
+with `status: failed` and the `reason`, and embedders read it from
+`Engine.adapterFailure(name)`. `venue:adapter/restart` (or enable) brings it
+back once the cause is fixed: it offers the adapter its configuration,
+installs it if it never was, publishes it and starts it. Disabling it forgets
+the failure.
 
 `start()` therefore throws a Covia exception whose reason an operator can act
 on: `UnavailableException` for a port in use or a service out of reach, the
-P2P node's launch failure being one. Recovery runs before `start()`, so the
-default recovery has already ended an unfinished job of an adapter that then
-fails to start, and a restart does not call `recoverJob` again.
+P2P node's launch failure being one. Recovery runs before `start()`, so an
+adapter that then fails to start has already recovered its jobs, and a
+restart does not call `recoverJob` again.
 
-Runtime registration differs, because module loading undoes what it
-registered when a registration throws: a new instance registered on a started
-engine (`registerAdapter`, `venue:module/load`) that fails to start is rolled
-back and the failure thrown.
+Two failures still stop the launch: an adapter's stored state recorded at a
+newer version than it supports (`UnsupportedVersionException`), and an
+adapter that `auth.methods` or `auth.venueProof` names being unavailable. Runtime registration differs
+too, because module loading undoes what it registered when a registration
+throws: a new instance registered on a started engine (`registerAdapter`,
+`venue:module/load`) that refuses its configuration or fails to start is
+rolled back and the failure thrown.
 
 The venue config is authoritative again after restart; runtime enable,
 disable, configure, load, and unload changes are not persisted. Full operator
@@ -727,7 +782,8 @@ disposable test data, not included in user exports.
   workers and release external resources here. It must be idempotent, including
   when runs overlap, and throw on incomplete cleanup so the venue can retry. The previous user record is
   available only on initial deletion, never retained for recovery. Tolerate null
-  on retry and an instance that was boot-disabled and never installed.
+  on retry and an instance that was never installed, having declined or
+  refused its configuration.
 
 An adapter needing durable external cleanup identifiers must maintain its own
 cleanup records outside the data it erases and consume them idempotently in the runtime
@@ -891,7 +947,8 @@ them with `provided` scope and do not bundle their own copies.
   and applies the result/silent/fixed reply policy. It imposes no Job timeout.
   Its queue is in memory and is **not durable acceptance**.
 - `ConversationSessions` stores mappings under the existing private
-  `config/<bot>/sessions` or `users/<did>/sessions/<bot>` roots. Numeric Telegram
+  `config/<bot>/sessions` or `users/<did>/sessions/<bot>` roots, each
+  conversation to the id of its agent session, a Blob. Numeric Telegram
   and Discord keys retain their paths. Other keys are encoded as single safe
   path segments; `ConversationRouter.key(installation, channel, thread)` builds
   an unambiguous compound key. Optional legacy callbacks support migration.
@@ -931,7 +988,9 @@ and socket transports. Give each installation/binding a private root such as
 `config/<binding>/inbox` or `users/<did>/inbox/<binding>` and a provider event ID.
 IDs are hashed into path segments; the original ID remains in the record.
 Records contain `id`, `input`, `status`, `receivedAt` and, on completion,
-`completedAt`; FAILED adds `reason`, `lastError` and `failedAt`. Input must contain the event needed for processing, **not**
+`completedAt`, with the agent session and chat job (`sessionId`, `jobId`,
+Blobs) when a local session delivery completed it; FAILED adds `reason`,
+`lastError` and `failedAt`. Input must contain the event needed for processing, **not**
 access tokens, signing secrets or credential-bearing HTTP headers.
 
 1. Authenticate/admit the event, then `accept(id, input)`. This writes PENDING

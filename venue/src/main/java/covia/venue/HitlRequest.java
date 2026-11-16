@@ -21,7 +21,7 @@ import covia.lattice.CoviaValue;
 
 /**
  * One HITL request in a user's {@link Inbox} (COG-16): what is asked, of whom,
- * and how it was resolved. Its id is the hex id of the job that carries it.
+ * and how it was resolved. Its id is the id of the job that carries it.
  *
  * <p>A request is open until it is resolved, once: answered, rejected, expired
  * or cancelled ({@link #resolve}). Its record reads as stored, and nothing
@@ -36,9 +36,9 @@ public final class HitlRequest extends ALatticeComponent<AMap<AString, ACell>>
 	private static final Set<AString> RESOLUTIONS =
 		Set.of(Hitl.ANSWERED, Hitl.REJECTED, Hitl.EXPIRED, Hitl.CANCELLED);
 
-	private final AString id;
+	private final Blob id;
 
-	HitlRequest(AForkableCursor<AMap<AString, ACell>> cursor, AString id) {
+	HitlRequest(AForkableCursor<AMap<AString, ACell>> cursor, Blob id) {
 		super(cursor);
 		this.id = id;
 	}
@@ -53,8 +53,8 @@ public final class HitlRequest extends ALatticeComponent<AMap<AString, ACell>>
 		return rebind(cursor);
 	}
 
-	/** The request's id: the hex id of the job that carries it. */
-	public AString getID() {
+	/** The request's id: the id of the job that carries it. */
+	public Blob getID() {
 		return id;
 	}
 
@@ -109,7 +109,7 @@ public final class HitlRequest extends ALatticeComponent<AMap<AString, ACell>>
 	/**
 	 * A new open request's record.
 	 *
-	 * @param id The id of the job that carries it, in hex
+	 * @param id The id of the job that carries it
 	 * @param caller Who asked: the verified acting principal
 	 * @param owner Whose request it is, recorded only when not the caller
 	 * @param agentId The asking agent, or null
@@ -120,7 +120,7 @@ public final class HitlRequest extends ALatticeComponent<AMap<AString, ACell>>
 	 * @param created When it was made, in ms
 	 * @param expires When it expires, in ms, or null for never
 	 */
-	public static AMap<AString, ACell> record(AString id, AString caller, AString owner, AString agentId,
+	public static AMap<AString, ACell> record(Blob id, AString caller, AString owner, AString agentId,
 			Blob sessionId, AString title, AString description, AVector<ACell> asks, long created, Long expires) {
 		AMap<AString, ACell> record = Attribution.attribute(Maps.of(
 			Hitl.ID, id,
@@ -131,9 +131,7 @@ public final class HitlRequest extends ALatticeComponent<AMap<AString, ACell>>
 		if (description != null) record = record.assoc(Hitl.DESCRIPTION, description);
 		if (agentId != null) {
 			record = record.assoc(Hitl.AGENT, agentId);
-			if (sessionId != null) {
-				record = record.assoc(Fields.SESSION_ID, Strings.create(sessionId.toHexString()));
-			}
+			if (sessionId != null) record = record.assoc(Fields.SESSION_ID, sessionId);
 		}
 		if (expires != null) record = record.assoc(Hitl.EXPIRES, CVMLong.create(expires));
 		return record;

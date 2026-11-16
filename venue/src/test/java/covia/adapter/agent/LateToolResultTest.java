@@ -50,7 +50,7 @@ public class LateToolResultTest {
 
 	private static final String HOLD = "v/test/ops/hold";
 	private static final long LIMIT_MS = 1000;
-	private static final Pattern JOB_NAMED = Pattern.compile("running as job ([0-9a-f]+)\\.");
+	private static final Pattern JOB_NAMED = Pattern.compile("running as job (0x[0-9a-f]+)\\.");
 	/** The call a test tracks by hand, as a model would have made it. */
 	private static final String PARKED_CALL_ID = "call-parked";
 	private static final String PARKED_TOOL = "slow_tool";
@@ -80,7 +80,7 @@ public class LateToolResultTest {
 
 	private static String conversation(Agent agent, Blob sid) {
 		return GoalTreeContext.activeConversation(RT.ensureMap(
-			RT.getIn(agent.getSession(sid), Fields.FRAMES, CVMLong.ZERO))).toString();
+			RT.getIn(agent.session(sid).getRecord(), Fields.FRAMES, CVMLong.ZERO))).toString();
 	}
 
 	@Test
@@ -93,7 +93,7 @@ public class LateToolResultTest {
 		User user = engine.getVenueState().users().user(did);
 		Agent agent = user.agent("late-step");
 		Blob sid = Blob.fromHex("1a7e00001a7e00001a7e00001a7e0000");
-		agent.ensureSession(sid, did);
+		agent.sessions().create(sid, did, null);
 
 		String okGate = "late-ok-" + did;
 		String badGate = "late-bad-" + did;
@@ -116,7 +116,7 @@ public class LateToolResultTest {
 			badJob = jobNamed(RT.getIn(calls.get(1), Fields.RESULT));
 			assertEquals(Strings.create(String.format(AbstractLLMAdapter.TOOL_STILL_RUNNING, HOLD, LIMIT_MS, okJob)),
 				RT.getIn(calls.get(0), Fields.RESULT), "a call past its limit names the job it is still running as");
-			assertNotNull(engine.jobs().getJobData(Blob.fromHex(okJob), owner), "a job the owner can look up");
+			assertNotNull(engine.jobs().getJobData(Blob.parse(okJob), owner), "a job the owner can look up");
 			assertEquals(0, agent.getTimeline() == null ? 0 : agent.getTimeline().count(),
 				"nothing reaches the session while the calls are still running");
 
@@ -125,7 +125,7 @@ public class LateToolResultTest {
 
 			// Each outcome is a message in the asking session, which wakes the agent.
 			watch.awaitState("both late outcomes in the session", () -> {
-				if (agent.getSession(sid) == null) return false;
+				if (agent.session(sid).getRecord() == null) return false;
 				String c = conversation(agent, sid);
 				return c.contains("finished-late") && c.contains("broke-late");
 			});
@@ -138,7 +138,7 @@ public class LateToolResultTest {
 		assertTrue(c.contains("c-ok") && c.contains("c-bad"), "each outcome cites the model's call: " + c);
 		assertEquals(0, agent.getPending().count(), "a delivered outcome leaves the pending index");
 		AVector<ACell> stored = GoalTreeContext.activeConversation(RT.ensureMap(
-			RT.getIn(agent.getSession(sid), Fields.FRAMES, CVMLong.ZERO)));
+			RT.getIn(agent.session(sid).getRecord(), Fields.FRAMES, CVMLong.ZERO)));
 		int outcomes = 0;
 		for (long i = 0; i < stored.count(); i++) {
 			if (!Agent.SOURCE_TOOL_OUTCOME.equals(RT.getIn(stored.get(i), Agent.K_SOURCE))) continue;
@@ -162,7 +162,7 @@ public class LateToolResultTest {
 			assertEquals(RT.getIn(call, Fields.ARGUMENTS, Fields.JOB_ID), RT.getIn(result, Fields.STRUCTURED_CONTENT, Fields.JOB_ID));
 			jobs.add(RT.getIn(call, Fields.ARGUMENTS, Fields.JOB_ID));
 		}
-		assertEquals(java.util.Set.of(Strings.create(okJob), Strings.create(badJob)), jobs, "one exchange per outcome: " + messages);
+		assertEquals(java.util.Set.of(Blob.parse(okJob), Blob.parse(badJob)), jobs, "one exchange per outcome: " + messages);
 		for (long i = 0; i < messages.count(); i++) {
 			assertFalse(Agent.ROLE_USER.equals(RT.getIn(messages.get(i), Agent.K_ROLE))
 				&& String.valueOf(RT.getIn(messages.get(i), Agent.K_CONTENT)).contains("finished-late"),
@@ -201,7 +201,7 @@ public class LateToolResultTest {
 			AString said = adapter.stillRunning(Strings.create(HOLD), call.get(), ctx, LIMIT_MS);
 			String id = jobNamed(said);
 			assertEquals(String.format(AbstractLLMAdapter.TOOL_STILL_RUNNING_UNTRACKED, HOLD, LIMIT_MS, id), said.toString());
-			mirror = engine.jobs().getJob(Blob.fromHex(id));
+			mirror = engine.jobs().getJob(Blob.parse(id));
 			assertNotNull(mirror, "the named job is live");
 			gate.release();
 			TestEngine.awaitJob(mirror, Job::isFinished, 10_000, () -> "the job did not finish");
@@ -219,7 +219,7 @@ public class LateToolResultTest {
 		createAgent(engine, owner, "unrecorded", "v/test/ops/llm");
 		Blob sid = Blob.fromHex("5e55000000000000000000000000beef");
 		for (String agentId : new String[] {"recording", "unrecorded"}) {
-			engine.getVenueState().users().user(did).agent(agentId).ensureSession(sid, did);
+			engine.getVenueState().users().user(did).agent(agentId).sessions().create(sid, did, null);
 			engine.jobs().invokeOperation("v/ops/agent/step", Maps.of(
 				Fields.AGENT_ID, agentId,
 				Fields.SESSION_ID, sid.toHexString(),
@@ -336,7 +336,7 @@ public class LateToolResultTest {
 			watch.awaitRest(1);
 			ACell task = agent.getTasks().get(job.getID());
 			assertTrue(Task.isParked(task));
-			agent.removeSession(Blob.fromHex(RT.ensureString(RT.getIn(task, Fields.SESSION_ID)).toString()));
+			agent.sessions().remove(Task.sessionId(task));
 			gate.release();
 			TestEngine.awaitJob(job, Job::isFinished, 10_000, () -> "the stranded task did not fail");
 		}
@@ -382,7 +382,7 @@ public class LateToolResultTest {
 	}
 
 	private static Blob sessionOf(AMap<AString, ACell> taskJob) {
-		return Blob.fromHex(RT.ensureString(taskJob.get(Fields.SESSION_ID)).toString());
+		return Blob.parse(taskJob.get(Fields.SESSION_ID));
 	}
 
 	/**
@@ -445,7 +445,7 @@ public class LateToolResultTest {
 
 			// Shown in the conversation as from whoever made the call: here the owner, by hand
 			AVector<ACell> turns = GoalTreeContext.activeConversation(RT.ensureMap(
-				RT.getIn(agent.getSession(sid), Fields.FRAMES, CVMLong.ZERO)));
+				RT.getIn(agent.session(sid).getRecord(), Fields.FRAMES, CVMLong.ZERO)));
 			ACell outcomeTurn = null;
 			for (long i = turns.count() - 1; i >= 0 && outcomeTurn == null; i--) {
 				ACell turn = turns.get(i);

@@ -7,6 +7,7 @@ import java.util.Objects;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
@@ -98,7 +99,7 @@ public final class WebhookInbox {
 
 	/** Complete a local session handoff inside its venue transaction. The input
 	 * and this receipt commit together; replies do not participate. No flush here. */
-	public boolean deliver(covia.venue.VenueState draft, String eventId, AString sessionId, AString jobId) {
+	public boolean deliver(covia.venue.VenueState draft, String eventId, Blob sessionId, Blob jobId) {
 		AdapterState state = workspace.inVenue(draft);
 		AMap<AString, ACell> record = RT.ensureMap(state.read(path(eventId)));
 		if (record == null) throw new IllegalArgumentException(UNKNOWN_EVENT);

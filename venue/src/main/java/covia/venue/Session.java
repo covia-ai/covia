@@ -28,7 +28,7 @@ import static covia.venue.Agent.*;
 /**
  * One agent session: conversation frames, pending input and cycle fences.
  * Updates preserve the owning agent's timestamp/account policies. Missing
- * sessions are never created by this view; creation belongs to Agent.
+ * sessions are never created by this view; {@link Sessions#create} creates them.
  * Transactions compose session changes without runtime services or external I/O.
  */
 public final class Session extends ALatticeComponent<ACell>
@@ -115,13 +115,71 @@ public final class Session extends ALatticeComponent<ACell>
 		});
 	}
 
+	/** The epoch of the cycle holding a claim on this session, or null when none does. */
 	public ACell cycleEpoch() { return RT.getIn(getRecord(), K_IN_CYCLE); }
+
+	/**
+	 * Releases the session's cycle claim without a merge, as startup does for
+	 * a cycle no executor runs: any late writes of that cycle are fenced out.
+	 */
 	public void clearCycle() { update(record -> record.dissoc(K_IN_CYCLE)); }
+
+	/**
+	 * Ends the claim of the cycle holding {@code epoch} on this session, as
+	 * stopping its agent does; a claim another cycle holds is left alone.
+	 */
+	void clearCycle(ACell epoch) {
+		Objects.requireNonNull(epoch);
+		update(record -> epoch.equals(record.get(K_IN_CYCLE)) ? record.dissoc(K_IN_CYCLE) : record);
+	}
+	/**
+	 * The messages waiting for the session's next cycle (AGENT_SESSIONS.md
+	 * §5.5.2); empty when there are none or the session does not exist. Not
+	 * the agent's {@code pending}, its outbound waits.
+	 */
 	public AVector<ACell> pending() {
 		AVector<ACell> pending = RT.ensureVector(RT.getIn(getRecord(), K_PENDING));
 		return pending == null ? Vectors.empty() : pending;
 	}
-	private static final AString K_PENDING = Strings.intern("pending");
+	static final AString K_PENDING = Strings.intern("pending");
+
+	// ========== Reading ==========
+
+	/** The session's frames, root first ({@link #frames(AMap)}). */
+	public AVector<ACell> frames() { return frames(getRecord()); }
+
+	/** The session's root frame, or null when it has none. */
+	public AMap<AString, ACell> rootFrame() { return rootFrame(getRecord()); }
+
+	/** When the session next wakes its agent; zero when it has no wake time. */
+	public long wakeTime() { return wakeTime(getRecord()); }
+
+	/** The job holding an external agent's current turn in this session, or null when none does. */
+	public Blob externalJob() { return externalJob(getRecord()); }
+
+	/** The external agent's own id for this conversation, as its backend gave it, or null before it gave one. */
+	public ACell remoteSession() { return remoteSession(getRecord()); }
+
+	/** A session record's root frame, or null when it has none. */
+	public static AMap<AString, ACell> rootFrame(AMap<AString, ACell> session) {
+		AVector<ACell> frames = frames(session);
+		return frames.isEmpty() ? null : RT.ensureMap(frames.get(0));
+	}
+
+	/** When a session record next wakes its agent; zero when it has no wake time. */
+	public static long wakeTime(AMap<AString, ACell> session) {
+		return (RT.getIn(session, Fields.WAKE_TIME) instanceof CVMLong time) ? time.longValue() : 0L;
+	}
+
+	/** The job holding an external agent's current turn in a session record, or null when none does. */
+	public static Blob externalJob(AMap<AString, ACell> session) {
+		return Ids.stored(RT.getIn(session, KEY_EXTERNAL, Fields.JOB_ID));
+	}
+
+	/** The external agent's own id for a session record's conversation, or null before its backend gave one. */
+	public static ACell remoteSession(AMap<AString, ACell> session) {
+		return RT.getIn(session, KEY_EXTERNAL, Fields.SESSION_ID);
+	}
 
 	static final AString K_C = Strings.intern("c");
 	static final AString K_FRAMES   = Strings.intern("frames");
@@ -146,7 +204,7 @@ public final class Session extends ALatticeComponent<ACell>
 	public boolean beginCycle(ACell epoch, AVector<ACell> turns, long drainCount) {
 		return update(session -> {
 			if (session.containsKey(K_FRAMES)) {
-				AVector<ACell> frames = GoalTreeContext.migrateFrames(sessionFrames(session));
+				AVector<ACell> frames = GoalTreeContext.migrateFrames(frames(session));
 				if (!frames.isEmpty()) {
 					frames = GoalTreeContext.repairDanglingToolCalls(frames, GoalTreeContext.TOOL_CALL_DID_NOT_RETURN);
 				}
@@ -183,15 +241,25 @@ public final class Session extends ALatticeComponent<ACell>
 		});
 	}
 
+	/**
+	 * Sets when the session next wakes its agent.
+	 *
+	 * @param time The wake time; zero or less clears it
+	 * @return whether the session exists
+	 */
+	public boolean setWakeTime(long time) {
+		return update(session -> (time > 0)
+			? session.assoc(Fields.WAKE_TIME, CVMLong.create(time)) : session.dissoc(Fields.WAKE_TIME));
+	}
+
 	public void removePendingJob(Blob jobId) {
-		AString jobIdHex = Strings.create(jobId.toHexString());
 		update(session -> {
 			AVector<ACell> pending = (session.get(K_PENDING) instanceof AVector<?> v)
 				? (AVector<ACell>) v : Vectors.empty();
 			AVector<ACell> kept = Vectors.empty();
 			for (long i = 0; i < pending.count(); i++) {
 				ACell envelope = pending.get(i);
-				if (!jobIdHex.equals(RT.getIn(envelope, Fields.JOB_ID))) {
+				if (!Objects.equals(jobId, chatJob(envelope))) {
 					kept = kept.conj(envelope);
 				}
 			}
@@ -226,7 +294,7 @@ public final class Session extends ALatticeComponent<ACell>
 			if (expectedEpoch != null && !expectedEpoch.equals(session.get(K_IN_CYCLE))) {
 				return null;   // fence: this cycle no longer owns the session
 			}
-			AVector<ACell> frames = sessionFrames(session);
+			AVector<ACell> frames = frames(session);
 			AVector<ACell> updatedFrames = fn.apply(frames);
 			if (updatedFrames == null || updatedFrames == frames) {
 				return updatedFrames == null ? null : session;   // no change — skip the write (and the K_TS bump)
@@ -283,6 +351,11 @@ public final class Session extends ALatticeComponent<ACell>
 		return RT.getIn(envelope, Fields.JOB_ID) != null;
 	}
 
+	/** The chat Job a queued envelope names, or null for a message. */
+	public static Blob chatJob(ACell envelope) {
+		return Ids.stored(RT.getIn(envelope, Fields.JOB_ID));
+	}
+
 	/**
 	 * What a cycle takes from a session's pending queue (AGENT_SESSIONS.md
 	 * §5.5.2): the messages ahead of the first chat, and that chat too when
@@ -315,8 +388,7 @@ public final class Session extends ALatticeComponent<ACell>
 	 */
 	public static long queueKey(ACell envelope) {
 		if (RT.getIn(envelope, Fields.QUEUED) instanceof CVMLong queued) return queued.longValue();
-		AString jobId = RT.ensureString(RT.getIn(envelope, Fields.JOB_ID));
-		Blob id = (jobId == null) ? null : Blob.fromHex(jobId.toString());
+		Blob id = chatJob(envelope);
 		return (id == null) ? 0L : queueKey(id);
 	}
 
@@ -427,7 +499,7 @@ public final class Session extends ALatticeComponent<ACell>
 		if (!session.containsKey(K_LOADS)) return session;
 		AMap<AString, ACell> legacy = (session.get(K_LOADS) instanceof AMap lm)
 			? (AMap<AString, ACell>) lm : Maps.empty();
-		AVector<ACell> frames = sessionFrames(session);
+		AVector<ACell> frames = frames(session);
 		AMap<AString, ACell> root;
 		if (frames.isEmpty() || !(frames.get(0) instanceof AMap)) {
 			root = GoalTreeContext.createFrame("");
@@ -455,10 +527,10 @@ public final class Session extends ALatticeComponent<ACell>
 		return result;
 	}
 
-	/** Shared with compound agent completion so both paths use the same format. */
+	/** Appends turns to a session record's root frame and counts them in its metadata. */
 	static AMap<AString, ACell> appendTurnsToRoot(AMap<AString, ACell> session,
 			AVector<ACell> turnsToAppend) {
-		AVector<ACell> frames = sessionFrames(session);
+		AVector<ACell> frames = frames(session);
 		AMap<AString, ACell> rootFrame;
 		if (frames.count() == 0) {
 			rootFrame = GoalTreeContext.createFrame("");
@@ -489,8 +561,14 @@ public final class Session extends ALatticeComponent<ACell>
 		return session;
 	}
 
-	static AVector<ACell> sessionFrames(AMap<AString, ACell> session) {
-		if (!session.containsKey(K_FRAMES)) return Vectors.empty();
+	/**
+	 * A session record's frames, root first; empty when it has none or there
+	 * is no record.
+	 *
+	 * @throws IllegalArgumentException when its frames are not a vector
+	 */
+	public static AVector<ACell> frames(AMap<AString, ACell> session) {
+		if (session == null || !session.containsKey(K_FRAMES)) return Vectors.empty();
 		AVector<ACell> frames = RT.ensureVector(session.get(K_FRAMES));
 		if (frames == null) throw new IllegalArgumentException(INVALID_SESSION_FRAMES);
 		return frames;

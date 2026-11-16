@@ -17,6 +17,7 @@ import covia.exception.ConfigurationException;
 import covia.venue.Engine;
 import covia.adapter.messaging.ChannelAuthentication;
 import covia.adapter.messaging.MessagingBotSpec;
+import covia.adapter.messaging.MessagingSettings;
 
 /** Immutable and validated configuration for one Discord bot. */
 public record BotSpec(String name, String tokenRef, String userRef, String agent,
@@ -70,6 +71,7 @@ public record BotSpec(String name, String tokenRef, String userRef, String agent
 			throw new IllegalArgumentException(where+".user must be a DID or public");
 		if((agent==null)==(op==null)) throw new IllegalArgumentException(where+": exactly one of agent or operation is required");
 		if(agent!=null&&agent.isBlank()||op!=null&&op.isBlank()) throw new IllegalArgumentException(where+": handler must not be blank");
+		MessagingSettings.agent(where+".agent",user,agent);
 		ACell reply=m.get(K_REPLY);
 		if(reply!=null) {
 			if(agent!=null) throw new IllegalArgumentException(where+".reply only applies to operation handlers");

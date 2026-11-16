@@ -364,10 +364,11 @@ class SteppedSchedulerTest {
 
 	/** The handles of the venue's scheduled events that expire {@code request}. */
 	private static List<Blob> expiries(Engine venue, Job request) {
-		AString id = Strings.create(request.getID().toHexString());
 		List<Blob> handles = new ArrayList<>();
 		for (ACell item : venue.gridScheduler().list(venue.venueContext())) {
-			if (id.equals(RT.getIn(item, Schedule.K_INPUT, Hitl.ID))) handles.add((Blob) RT.getIn(item, Schedule.K_HANDLE));
+			if (java.util.Objects.equals(request.getID(), RT.getIn(item, Schedule.K_INPUT, Hitl.ID))) {
+				handles.add((Blob) RT.getIn(item, Schedule.K_HANDLE));
+			}
 		}
 		return handles;
 	}
@@ -376,7 +377,7 @@ class SteppedSchedulerTest {
 	void aHitlTimeoutExpiresTheRequestAtTheDrivenTime(TestInfo info) throws Exception {
 		RequestContext ctx = user(engine, info);
 		AString agentId = Strings.create("asker");
-		Agent agent = engine.getVenueState().users().user(ctx.getUserDID()).ensureAgent(agentId, Maps.empty(), null);
+		Agent agent = TestAgents.ensure(engine.getVenueState().users().user(ctx.getUserDID()), agentId, Maps.empty(), null);
 		Job expiring = engine.jobs().invokeOperation("v/ops/hitl/request", Hitl.request("Expires")
 			.ask(Hitl.approval("ok", "OK?")).timeout(60).build(), RequestContext.ofAgent(ctx.getUserDID(), agentId));
 		Job answered = engine.jobs().invokeOperation("v/ops/hitl/request", Hitl.request("Answered")
@@ -402,9 +403,9 @@ class SteppedSchedulerTest {
 		assertEquals(Status.FAILED, expiring.getStatus());
 		assertEquals(Strings.create(HITLAdapter.REQUEST_EXPIRED), expiring.getData().get(Fields.ERROR));
 		User owner = engine.getVenueState().users().user(ctx.getUserDID());
-		assertEquals(Hitl.EXPIRED, owner.inbox().get(Strings.create(expiring.getID().toHexString())).get(Hitl.STATUS));
+		assertEquals(Hitl.EXPIRED, owner.inbox().get(expiring.getID()).get(Hitl.STATUS));
 		assertFalse(agent.getPending().containsKey(expiring.getID()));
-		assertEquals(Hitl.ANSWERED, owner.inbox().get(Strings.create(answeredId)).get(Hitl.STATUS),
+		assertEquals(Hitl.ANSWERED, owner.inbox().get(Blob.fromHex(answeredId)).get(Hitl.STATUS),
 			"the expiry of an answered request leaves it as it is");
 		assertEquals(Status.COMPLETE, answered.getStatus());
 		assertThrows(Exception.class, () -> engine.jobs().invokeOperation("v/ops/hitl/respond",
@@ -413,7 +414,7 @@ class SteppedSchedulerTest {
 
 		// Only the venue expires requests.
 		Job asked = engine.jobs().invokeOperation(HITLAdapter.EXPIRE_OP.toString(),
-			HITLAdapter.expiryInput(ctx.getUserDID(), Strings.create(answeredId)), ctx);
+			HITLAdapter.expiryInput(ctx.getUserDID(), Blob.fromHex(answeredId)), ctx);
 		TestEngine.awaitJob(asked, Job::isFinished, 10_000, () -> "a user's expiry is refused");
 		assertEquals(Status.FAILED, asked.getStatus());
 		assertTrue(asked.getErrorMessage().contains(HITLAdapter.EXPIRE_VENUE_ONLY), asked.getErrorMessage());
@@ -455,7 +456,7 @@ class SteppedSchedulerTest {
 				TestEngine.awaitJob(job, Job::isFinished, 10_000, () -> "an overdue request expires at the first update");
 				assertEquals(Status.FAILED, job.getStatus());
 				assertEquals(Hitl.EXPIRED, venue.getVenueState().users().user(did).inbox()
-					.get(Strings.create(job.getID().toHexString())).get(Hitl.STATUS));
+					.get(job.getID()).get(Hitl.STATUS));
 			}
 		} finally {
 			second.close();

@@ -23,6 +23,7 @@ import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
+import convex.core.data.Blob;
 import convex.core.data.Hash;
 import convex.core.data.Index;
 import convex.core.data.MapEntry;
@@ -820,7 +821,7 @@ public class MCP extends McpServer {
 
 	/** A call that stopped waiting, with where its result will be. */
 	private static AMap<AString, ACell> stillRunning(Job job, String why) {
-		String id = (job == null) ? null : job.getID().toHexString();
+		Blob id = (job == null) ? null : job.getID();
 		String message = "Still running: " + why + ". " + ((id == null)
 			? NO_COLLECTABLE_JOB : COLLECT_RUNNING_JOB.formatted(id));
 		return protocolResult(buildMcpResult(Maps.of("message", message, "status", "running", "id", id), true));

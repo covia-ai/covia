@@ -1,0 +1,25 @@
+{
+  "name": "Set DLFS Metadata",
+  "description": "Set the application metadata of a file or directory in a DLFS drive, or clear it with null. The value is kept with the entry: a move or rename takes it along, replacing the file's content in place keeps it, and deleting the entry removes it. The entry's content and modified time are unchanged. dlfs_stat returns it as 'metadata'.",
+  "creator": "Covia",
+  "operation": {
+    "adapter": "dlfs:setMetadata",
+    "readOnly": false,
+    "toolName": "dlfs_set_metadata",
+    "input": {
+      "type": "object",
+      "properties": {
+        "drive": { "type": "string", "description": "Drive name" },
+        "path": { "type": "string", "description": "Path of an existing file or directory within the drive" },
+        "metadata": { "description": "The value to keep with the entry, replacing any it had. Use structured values (objects/arrays/scalars). Null clears it." }
+      },
+      "required": ["drive", "path", "metadata"]
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "metadata": { "description": "The metadata the entry now has, null for none" }
+      }
+    }
+  }
+}

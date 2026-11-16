@@ -222,12 +222,20 @@ public class SpeechAdapter extends AAdapter implements AutoCloseable {
 		settings = settings(config);
 		endDictations();
 		if (previous.local() != null) previous.local().close();
-		if (engine != null && engine.isStarted()) prefetch();
+		if (started) prefetch();
 		return true;
 	}
 
+	/** Whether this adapter is started: only then does a change of settings fetch anything. */
+	private volatile boolean started;
+
 	/** Fetch the local engine's models and libraries in the background when configured to. */
-	@Override public void start() { prefetch(); }
+	@Override public void start() {
+		started = true;
+		prefetch();
+	}
+
+	@Override public void stop() { started = false; }
 
 	private void prefetch() {
 		Settings s = settings;

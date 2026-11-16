@@ -305,7 +305,7 @@ class RemoteAgentAdapterTest {
 			AMap<AString, ACell> ended = second.getVenueState().users().user(second.publicPrincipal()).jobs().getRecord(anonymous.getID());
 			assertEquals(Status.FAILED, ended.get(Fields.STATUS));
 			assertEquals(Strings.create(RemoteAgentAdapter.CALLER_CANNOT_ACT.formatted(Engine.PUBLIC_ACCESS_OFF,
-				taskOf(anonymous).toHexString())), ended.get(Fields.ERROR));
+				taskOf(anonymous))), ended.get(Fields.ERROR));
 			assertFalse(second.jobs().getJob(taskOf(anonymous)).isFinished(), "a call that ended leaves its task as it is");
 		} finally { second.close(); }
 	}

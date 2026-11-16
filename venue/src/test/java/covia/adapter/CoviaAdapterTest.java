@@ -200,8 +200,9 @@ public class CoviaAdapterTest {
 		Job chat = engine.jobs().invokeOperation("v/ops/agent/chat",
 			Maps.of(Fields.AGENT_ID, "sess-agent", Fields.MESSAGE, Strings.create("hi")),
 			ALICE);
-		AString sid = RT.ensureString(RT.getIn(chat.awaitResult(5000), Fields.SESSION_ID));
-		assertNotNull(sid, "chat should return a sessionId");
+		Blob session = (Blob) RT.getIn(chat.awaitResult(5000), Fields.SESSION_ID);
+		assertNotNull(session, "chat should return a sessionId");
+		String sid = session.toHexString();
 
 		// Whole session record by its hex key (the failing case).
 		Job whole = engine.jobs().invokeOperation("v/ops/covia/read",
@@ -214,6 +215,12 @@ public class CoviaAdapterTest {
 			Maps.of(Fields.PATH, "g/sess-agent/sessions/" + sid + "/meta/turns"), ALICE);
 		assertEquals(CVMBool.TRUE, RT.getIn(field.awaitResult(5000), "exists"),
 			"a deep field after the hex Index key must resolve too");
+
+		// The agent's sessions list as one entry per session (AGENT_SESSIONS.md §5.3).
+		ACell list = engine.jobs().invokeOperation("v/ops/covia/list",
+			Maps.of(Fields.PATH, "g/sess-agent/sessions"), ALICE).awaitResult(5000);
+		assertEquals(CVMLong.ONE, RT.getIn(list, "count"));
+		assertTrue(String.valueOf(RT.getIn(list, "keys")).contains(sid), String.valueOf(list));
 	}
 
 	// ========== covia:read — universal resolution forms ==========
@@ -2704,11 +2711,11 @@ public class CoviaAdapterTest {
 		User user = engine.getVenueState().users().user(ALICE.getUserDID());
 		Agent agent = user.agent("test-agent");
 		Blob sessionId = Blob.fromHex("aa11bb22cc33dd45");
-		agent.ensureSession(sessionId, ALICE_DID, Maps.empty());
+		agent.sessions().create(sessionId, ALICE_DID, Maps.empty());
 
 		// Simulate a valid older/session record whose optional scratch slot has
 		// not been materialised. The guard applies to the session, not c itself.
-		AMap<AString, ACell> session = agent.getSession(sessionId);
+		AMap<AString, ACell> session = agent.session(sessionId).getRecord();
 		agent.putRecord(agent.getRecord().assoc(Agent.KEY_SESSIONS,
 			agent.getSessions().assoc(sessionId, session.dissoc(Strings.intern("c")))));
 
@@ -2719,7 +2726,7 @@ public class CoviaAdapterTest {
 			.awaitResult(5000);
 
 		assertEquals(Strings.create("written"),
-			RT.getIn(agent.getSession(sessionId), "c", "x"));
+			RT.getIn(agent.session(sessionId).getRecord(), "c", "x"));
 	}
 
 	@Test
@@ -2728,7 +2735,7 @@ public class CoviaAdapterTest {
 		AString agentId = Strings.create("test-agent");
 		Agent agent = user.agent(agentId);
 		Blob sessionId = Blob.fromHex("aa11bb22cc33dd46");
-		agent.ensureSession(sessionId, ALICE_DID, Maps.empty());
+		agent.sessions().create(sessionId, ALICE_DID, Maps.empty());
 		user.cursor().path(Strings.intern("g"), agentId).updateAndGet(current ->
 			((AMap<AString, ACell>) current).assoc(Strings.intern("ts"), CVMLong.ZERO));
 		assertEquals(0, agent.getTs());
@@ -2739,7 +2746,7 @@ public class CoviaAdapterTest {
 			.awaitResult(5000);
 
 		assertEquals(Strings.create("written"),
-			RT.getIn(agent.getSession(sessionId), "c", "stamp-probe"),
+			RT.getIn(agent.session(sessionId).getRecord(), "c", "stamp-probe"),
 			"session scratch must remain in the existing session record shape");
 		assertTrue(agent.getTs() > 0,
 			"a deep c/ write should refresh the enclosing agent record's ts");
@@ -2779,7 +2786,7 @@ public class CoviaAdapterTest {
 		var refused = assertThrows(InvalidInputException.class,
 			() -> Entry.of(target).write(CVMLong.ONE));
 		assertEquals(String.format(Workspace.NO_RECORD, "c"), refused.getMessage());
-		assertNull(engine.getVenueState().users().user(ALICE_DID).agent(agentId).getSession(sessionId),
+		assertNull(engine.getVenueState().users().user(ALICE_DID).agent(agentId).session(sessionId).getRecord(),
 			"scoped scratch must never mint a phantom session");
 	}
 

@@ -311,6 +311,10 @@ class WhatsAppAdapterTest {
 						"space", Maps.of("id", "12345"),
 						"message", "first"))),
 				agent.authentication, "a listed sender is authenticated through the binding, in the standard channel shape");
+			// Built from the channel stored with the inbox event, as after a restart
+			assertEquals(Vectors.of(Maps.of("adapter", "whatsapp", "name", "main", "owner", OWNER,
+				"sender", Maps.of("id", "441234567890"), "chat", Maps.of("id", "441234567890", "kind", "direct"),
+				"space", Maps.of("id", "12345"))), agent.route, "the binding carried it");
 			assertEquals(OWNER, agent.owner);
 			assertNull(agentTurn(f, f.adapter, agent, "main", "12345", "441234567891", "other-sender").get(Fields.SESSION_ID));
 			assertNull(agentTurn(f, f.adapter, agent, "second", "54321", "441234567890", "other-phone").get(Fields.SESSION_ID));
@@ -318,11 +322,11 @@ class WhatsAppAdapterTest {
 			String identity = Strings.create(ConversationRouter.key(OWNER.toString(), parsed.installationKey())).getHash().toHexString();
 			String path = "config/main/sessions/" + identity + "/" + agentSpec.getHash().toHexString() + "/"
 				+ ConversationSessions.segment(ConversationRouter.key(parsed.installationKey(), "441234567890"));
-			assertEquals(Strings.create("session-1"), f.adapter.state().read(path));
+			assertEquals(FakeAgent.session(1), f.adapter.state().read(path));
 			assertNull(f.engine.resolvePath(Strings.create("w/adapters/whatsapp/" + path), RequestContext.of(OWNER)));
 			WhatsAppAdapter restored = new WhatsAppAdapter(); f.engine.registerAdapter(restored);
-			assertEquals(Strings.create("session-1"), agentTurn(f, restored, agent, "main", "12345", "441234567890", "resumed").get(Fields.SESSION_ID));
-			assertEquals(Strings.create("session-3"), agentTurn(f, restored, agent, "second", "54321", "441234567890", "resumed-other").get(Fields.SESSION_ID));
+			assertEquals(FakeAgent.session(1), agentTurn(f, restored, agent, "main", "12345", "441234567890", "resumed").get(Fields.SESSION_ID));
+			assertEquals(FakeAgent.session(3), agentTurn(f, restored, agent, "second", "54321", "441234567890", "resumed-other").get(Fields.SESSION_ID));
 		}
 	}
 	private static AMap<AString, ACell> agentTurn(Fixture f, WhatsAppAdapter adapter, FakeAgent agent,
@@ -429,16 +433,23 @@ class WhatsAppAdapterTest {
 		final AtomicInteger sessions = new AtomicInteger();
 		volatile AString owner;
 		volatile AMap<AString, ACell> authentication;
+		volatile convex.core.data.AVector<ACell> route;
 		volatile CompletableFuture<ACell> blocked;
 		@Override public String getName() { return "agent"; }
 		@Override public String getDescription() { return "Deterministic WhatsApp chat fixture"; }
 		@Override protected void installAssets() { installAsset("agent/chat", Maps.of("name", "Fixture chat", "operation", Maps.of("adapter", "agent:chat"))); }
 		@Override public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
-			var in = MessagingSettings.object(input); owner = ctx.getUserDID(); authentication = ctx.getAuthentication(); inputs.add(in);
+			var in = MessagingSettings.object(input); owner = ctx.getUserDID(); authentication = ctx.getAuthentication();
+			route = ctx.getRoute(); inputs.add(in);
 			if (blocked != null) return blocked;
 			ACell sid = in.get(Fields.SESSION_ID);
-			if (sid == null) sid = Strings.create("session-" + sessions.incrementAndGet());
+			if (sid == null) sid = session(sessions.incrementAndGet());
 			return CompletableFuture.completedFuture(Maps.of(Fields.SESSION_ID, sid, Fields.RESPONSE, "agent reply"));
+		}
+
+		/** The {@code n}th session it mints, an id as an agent's are. */
+		static Blob session(int n) {
+			return Blob.fromHex(String.format("%032x", n));
 		}
 	}
 }

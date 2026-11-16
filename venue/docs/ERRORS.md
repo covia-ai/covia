@@ -67,7 +67,8 @@ failure's reason or a fault's report.
 A message is written for the caller. It says what failed in the venue's words,
 and may follow that with a remote's own error message, marked as the remote's.
 The venue's words never carry a credential, a secret value, another principal's
-data, a URL that may carry a credential, or a stack trace. A failure from a
+data, a URL that may carry a credential, or a stack trace. A job, task or
+session id in the venue's words is written as JSON shows it, `0x…`. A failure from a
 remote service says what failed and its status; the response stays on the
 exception (`ResponseException.response`) for code that needs it. A remote is
 named by its URL's origin (`AAdapter.origin`), since a path or query may carry
@@ -146,9 +147,11 @@ is `UnavailableException`, since retrying later may succeed
 ([ADAPTERS.md](ADAPTERS.md)). Only a request whose `config` is not an object is
 invalid input.
 
-**An adapter that cannot start is unavailable.** Its own operations are
-refused with `UnavailableException` naming the adapter, while the venue runs
-on; why it failed goes to operators only, in the log and `venue:adapters`
+**An adapter that cannot start is unavailable.** Whether it refused its
+settings or its start failed, it is treated as stopped while the venue runs
+on: its own operations are refused with `UnavailableException` naming the
+adapter, and what else depends on it treats it as a disabled adapter. Why
+it failed goes to operators only, in the log and `venue:adapters`
 ([ADAPTERS.md](ADAPTERS.md#an-adapter-that-is-not-running)).
 
 **A shared parser leaves the choice to each caller.** A parser that reads both

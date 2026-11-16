@@ -77,11 +77,10 @@ import static covia.venue.Schedule.*;
  * Job in the owner's history, and the only thing the scheduler keeps of it is
  * its ID ({@code lastJob} on a recurring record). No outcome, status or error
  * is ever stored here — that is what the Job is for. The Job is
- * {@link JobManager#prepareTracked prepared} (minted, PENDING, persisted) under
- * the lock before the schedule is atomically claimed. For recurrence, that one
- * schedule update also records the prepared Job ID; only then does the
- * adapter start, off the lock. Job preparation and schedule claim are two
- * ordered record updates because they have different lattice owners.</p>
+ * {@link JobManager#prepareTracked prepared} under the lock, then recorded
+ * (PENDING) in the venue transaction that claims the event, which for
+ * recurrence also records its ID; only then does the adapter start, off the
+ * lock.</p>
  *
  * <p><b>No escalation.</b> An event records its caller, its owner when that
  * differs, and the proofs presented at schedule time. A fire runs as that
@@ -93,6 +92,10 @@ import static covia.venue.Schedule.*;
 public class Scheduler {
 
 	private static final Logger log = LoggerFactory.getLogger(Scheduler.class);
+
+	/** The scheduler adapter's name, which a fire's route step names. */
+	public static final String NAME = "scheduler";
+	private static final AString SCHEDULER = convex.core.data.Strings.intern(NAME);
 
 	public static final long MIN_REPEAT_MS = Schedule.MIN_REPEAT_MS;
 	public static final int MAX_DESCRIPTION_CHARS = Schedule.MAX_DESCRIPTION_CHARS;
@@ -125,9 +128,10 @@ public class Scheduler {
 	private record Waiter(long time, List<Job> jobs, CompletableFuture<List<Job>> done) {}
 
 	/**
-	 * A claimed fire: the event record as fired, and either the prepared Job
-	 * to start or the error that prevented preparing it. The event's own state
-	 * has already been committed.
+	 * A claimed fire: the event record as fired, and either its Job, recorded
+	 * with the claim and accepted, to start, or the error that prevented
+	 * preparing or recording it. The event's own state has already been
+	 * committed.
 	 */
 	private record Claimed(AMap<AString, ACell> rec, JobManager.Prepared job, RuntimeException error) {}
 
@@ -461,7 +465,7 @@ public class Scheduler {
 				// Claim: a one-shot is removed; a recurring event moves to its next
 				// slot (strictly after the target, so this loop always advances).
 				Claimed claimed = claim(key, rec, target, true);
-				if (claimed.job() != null) addToWaiters(claimed.job().job(), time);
+				if (claimed.job() != null) addToWaiters(claimed.job().accept(), time);
 				batch.add(claimed);
 				times.add(time);
 				inFlight.merge(time, 1, Integer::sum);
@@ -570,26 +574,27 @@ public class Scheduler {
 	}
 
 	/**
-	 * Claim {@code rec} (at {@code key}) for a fire at {@code now} — one atomic
-	 * lattice write covering everything the fire changes about the schedule:
+	 * Claim {@code rec} (at {@code key}) for a fire at {@code now}. The fire's
+	 * Job is prepared first (its operation resolved and its caller checked),
+	 * then one venue transaction commits everything the fire changes:
 	 * <ul>
-	 * <li>the fire's Job is prepared first (minted, PENDING and, when tracked,
-	 *     persisted — the adapter is not started), so its ID is known;</li>
+	 * <li>the Job, PENDING, in the owner's history when tracked, under an id
+	 *     taken in that transaction, and bound to the owner's account as it is
+	 *     then;</li>
 	 * <li>a one-shot event is removed;</li>
 	 * <li>a recurring event is re-inserted with {@code lastFired = now} and,
 	 *     when tracked, {@code lastJob} — re-keyed at its next due slot when
 	 *     {@code advance} (an update), or left at its current time when not
 	 *     (an early {@code trigger} does not disturb the schedule).</li>
 	 * </ul>
-	 * The prepared Job is persisted before this schedule update, so there is no
-	 * state in which the event has been consumed but its Job is unknown. A crash
-	 * between the two updates can leave a PENDING Job while retaining the event;
-	 * recovery fails that unstarted Job, and a later fire prepares a new one.
-	 * If the Job cannot be prepared (unresolvable op, capability
-	 * denied), the event is still claimed, and the error travels with the
-	 * claim for the caller to see.
-	 * An event whose scheduling agent no longer exists is removed, recurring or
-	 * not, and fails the same way: nothing fires as a deleted agent.
+	 * So an event is never consumed without its Job, nor a Job recorded for an
+	 * event left due. The Job's live handle is then published; its adapter
+	 * starts later, off the lock ({@link #fire}). If the Job cannot be prepared
+	 * or recorded (unresolvable op, capability denied, account deleted), the
+	 * event is still claimed, and the error travels with the claim for the
+	 * caller to see. An event whose scheduling agent no longer exists is
+	 * removed, recurring or not, and fails the same way: nothing fires as a
+	 * deleted agent.
 	 */
 	private Claimed claim(Blob key, AMap<AString, ACell> rec, long now, boolean advance) {
 		AString gone = goneAgent(rec);
@@ -597,25 +602,58 @@ public class Scheduler {
 			state().remove(key);
 			return new Claimed(rec, null, new NotFoundException(AGENT_GONE.formatted(gone), gone.toString()));
 		}
-		JobManager.Prepared job = null;
+		JobManager.Prepared prepared = null;
 		RuntimeException error = null;
 		boolean tracked = isTracked(rec);
 		try {
 			engine.getVenueState().users().requireNotDeleted(Attribution.owner(rec));
-			job = tracked ? engine.jobs().prepareTracked(
-				RT.ensureString(rec.get(K_OP)), rec.get(K_INPUT), fireContext(rec))
-				: engine.jobs().prepareUntracked(RT.ensureString(rec.get(K_OP)), rec.get(K_INPUT), fireContext(rec));
+			// The fire is a request of its own, carried by the scheduler alone: how
+			// the event was scheduled is not part of its route
+			RequestContext fire = fireContext(rec).via(SCHEDULER, Maps.of(K_HANDLE, key));
+			prepared = tracked ? engine.jobs().prepareTracked(RT.ensureString(rec.get(K_OP)), rec.get(K_INPUT), fire)
+				: engine.jobs().prepareUntracked(RT.ensureString(rec.get(K_OP)), rec.get(K_INPUT), fire);
 		} catch (RuntimeException e) {
 			error = e;
 		}
-		state().recordFire(new Entry(key, rec), now, advance, tracked && job != null ? job.job().getID() : null);
-		return new Claimed(rec, job, error);
+		JobManager.Prepared job = prepared;
+		Entry entry = new Entry(key, rec);
+		RuntimeException refused;
+		try {
+			refused = engine.getVenueState().transact(draft -> {
+				Blob id = null;
+				RuntimeException failure = null;
+				if (job != null) {
+					try {
+						id = job.record(draft);
+					} catch (RuntimeException e) {
+						// A deleted account is refused before the Job is written: the claim commits without it
+						failure = e;
+					}
+				}
+				draft.schedule().recordFire(entry, now, advance, tracked ? id : null);
+				return failure;
+			});
+		} catch (RuntimeException | Error e) {
+			if (job != null) job.abandon();
+			throw e;
+		}
+		if (job == null) return new Claimed(rec, null, error);
+		if (refused != null) {
+			job.abandon();
+			return new Claimed(rec, null, refused);
+		}
+		try {
+			job.accept();
+		} catch (RuntimeException e) {
+			return new Claimed(rec, null, e);
+		}
+		return new Claimed(rec, job, null);
 	}
 
 	// ------------------------------------------------------------------ firing
 
 	/**
-	 * Run a claimed fire: start the Job prepared at claim time, durable when
+	 * Run a claimed fire: start the Job recorded with its claim, durable when
 	 * tracked and transient otherwise (design §7). The dispatch runs as its
 	 * caller would invoke it now ({@link #fireContext}), which JobManager
 	 * enforces — so a fire never has authority its caller has since lost.

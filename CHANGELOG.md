@@ -10,12 +10,16 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Added
 
+- Agent operations' `agentId` accepts an agent's DID (`<ownerDID>:g:<id>`), the values API's `agent` selector accepts `g/<id>` and `<ownerDID>/g/<id>`, and a messaging binding's `agent` accepts all of these forms, each checked for access as the existing forms are; a binding whose `agent` names no agent is refused when it is created.
 - Job-specific `job/read`, `job/manage` and `job/message` grants replace CRUD permissions on Job APIs; lifecycle controls return acknowledgements.
 - Embedded simulations can discover the next queued scheduled timestamp across venues and advance directly to it (#683).
+- DLFS entries carry application metadata: `dlfs:setMetadata`, `file:setMetadata` and `vault:setMetadata` set or clear it (`crud/write`), and `dlfs:stat` and `file:stat` return it; a move keeps it, replacing a file's content in place keeps it, and deleting the entry removes it (#659).
 
 - Universal Job tools (`job:status`, `result`, `cancel`, `pause`, `resume`, `message`) manage local and remote work independently of its execution adapter; agent skills use them and existing Grid Job tools remain compatible.
 
 - Access tokens: any user or agent can create a scoped bearer that acts with its issuer's authority within the token's caps and is accepted only at the access points it names; the `token` adapter keeps them (`token:create`, `update`, `delete`, `list`, `get`, needing `admin/token/<access point>` on `x/token/<name>`), and `adapters.token.keepRawTokens` keeps bearers to read again; a user sees its tokens, never their bearers, at `x/token`.
+- An agent is told what carried each message or task to it: the access token, messaging bot, callable or scheduler, each named in its `From` line with its owner when that is not the agent's owner, and an unreadable record never reads as direct (#709).
+- New agent turns no longer show a bot message's `authentication` record in `agent:history` or the agent timeline; the `From` line still names the bot, sender and chat.
 - MCP tokens: access tokens accepted at the venue's `/mcp` alone, offering chosen operations as tools, made and managed with `mcp/token` (`mcp:create-token`, `update-token`, `delete-token`, `list-tokens`, `get-token`); emptying its caps, deleting it or its expiry revokes one.
 - Callables: a user, agent or the venue publishes an operation for others to call, run as the publisher within fixed caps in the publisher's namespace, so the jobs and events a call starts are the publisher's (`callable:create`, `update`, `delete`, `list`, `call`, needing `callable/manage`); callers hold `callable/call` or pass a gate operation the publisher chooses, such as `v/ops/callable/gates/anyone` or `gates/callers`; a call may call callables; a user sees its callables at `x/callable`.
 - `adapters.convex.timeoutMillis` sets how long `convex:query` and `convex:transact` wait for the peer's result; the default is the Convex client's own, 20 seconds.
@@ -26,12 +30,16 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Answering an approval request, `secret:extract`, `user:export`, `user:clone` from one's own account and reading or changing one's own sign-in keys need the user in person: work a job or scheduled event carries on later, and an operation a bot runs, can no longer do them.
 - A live dictation belongs to the principal that opened it: its access tokens feed it, its agents and other users do not. The messaging adapters' `bots` lists each bot the request may manage (`<adapter>/manage` on `<owner>/<adapter>/<name>`), so an agent sees its owner's bots only when its caps allow managing them.
 - Running Python is the operator's: each configured function needs `admin/execute/python` on `<venue DID>/python/operations/<id>`, which the venue holds and can grant to a user.
-- An adapter that fails to start, at launch, enable or restart, no longer stops the venue: it stays enabled but failed, its operations refused as not running, until restarted.
+- An adapter that fails to start, at launch, enable or restart, including one that refuses a setting in its `adapters.<name>` block or fails to install, no longer stops the venue: it stays enabled but failed and is treated as stopped, its operations refused as not running, until restarted.
+- A disabled adapter is offered its settings and installed at launch, so it recovers its own unfinished jobs: an agent's queued requests survive a launch with the agent adapter disabled, and enabling the agent adapter wakes agents with queued work. At shutdown a stopped adapter's jobs go to that adapter; pause and resume are refused for its jobs, as messages are.
+- Configuring and installing an adapter start nothing: Python scripts load, speech models are fetched on a settings change, and Claude Code's idle-session reaper runs only once the adapter has started, so a disabled adapter does none of these.
 - A `venue:adapter/configure` change the adapter refuses with an error is reverted to its previous configuration.
+- A scheduled fire's job is recorded in the same commit as its claim, and a remote agent turn's backend job with the turn's link to it, so a restart never leaves a failed job for a fire that then runs again, nor a backend job its turn has no record of.
 - A P2P node that cannot launch, such as on a port in use, is unavailable rather than a configuration error.
 
 - Adapters refuse settings with a configuration error, from the venue config and from `venue:adapter/configure` alike; anything else an adapter's `configure` throws, a module adapter's `IllegalArgumentException` included, is reported as that adapter's fault rather than as invalid input or the `venue` adapter's.
 - MCP bearer retrieval uses `admin/token/mcp`; `admin/token` remains its parent for administration across token kinds.
+- Job, task and session ids are Blobs in agent records, job records, HITL requests, operation results, live events and messaging bots' conversations and receipts, so JSON shows them as `0x…` where results, events and HITL records gave bare hex, and error messages and the text an agent's model is shown write them as `0x…` too; inputs take either form, and an A2A `contextId` stays bare hex. Venue version 3 and messaging adapter state version 2 convert stored records, and user exports are version 3, which an older venue refuses.
 - Venue administration requires `admin/user/*`, `admin/adapter/manage`, `admin/venue/*` and `admin/sudo` capabilities; the former user, adapter and venue abilities are no longer accepted for these actions.
 - Remote submissions and direct Job controls use explicitly selected remote credentials; local proxy cancellation controls only its bound execution.
 
@@ -50,6 +58,10 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Fixed
 
+- A DLFS file written by `create`, `write`, a content upload or `archive` changes in one update once all its content has arrived, so a write cut off part-way leaves the drive as it was; a write onto a directory fails as a conflict (#629).
+- `archive:list` and `archive:extract` read a zip stored in a DLFS drive instead of failing as a venue fault.
+- `archive:extract` checks each file it writes against its root as `file:write` does, following links.
+- A write to a symbolic link in a host root fails as bad input rather than as a venue fault.
 - LLM tools preserve capability-array unions and arbitrary JSON values instead of advertising them as objects, enabling agents to create scoped MCP tokens.
 - Generic MCP tool calls declare their required tool name and arguments for agent discovery.
 - MCP token schemas describe each capability's resource and single ability, including optional caveats.

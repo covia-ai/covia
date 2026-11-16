@@ -10,6 +10,7 @@ import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Blob;
+import convex.core.data.Index;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
@@ -34,6 +35,7 @@ import covia.grid.HexId;
 import covia.grid.Job;
 import covia.venue.Agent;
 import covia.venue.Engine;
+import covia.venue.Ids;
 import covia.grid.Status;
 import covia.grid.hitl.Hitl;
 import covia.venue.RequestContext;
@@ -212,7 +214,7 @@ public class HITLAdapter extends AAdapter {
 		// h/ is not writable via covia:write) and park its Job in one transaction,
 		// so the request is open exactly when its Job waits for it.
 		long nowMs = engine.currentTimestamp().longValue();
-		AString id = Strings.create(job.getID().toHexString());
+		Blob id = job.getID();
 		AMap<AString, ACell> record = HitlRequest.record(id, caller, ctx.getUserDID(), ctx.getAgentId(),
 			ctx.getSessionId(), title, RT.ensureString(RT.getIn(input, Hitl.DESCRIPTION)), asks, nowMs,
 			(timeoutSecs == null) ? null : nowMs + timeoutSecs * 1000);
@@ -228,7 +230,7 @@ public class HITLAdapter extends AAdapter {
 			if (!targetUser.inbox().open(record)) throw new IllegalStateException(REQUEST_EXISTS + id);
 			addPending(venue, job, taskId);
 			// The session goes with the request if the target's account does
-			AString askingSession = RT.ensureString(record.get(Fields.SESSION_ID));
+			Blob askingSession = Ids.stored(record.get(Fields.SESSION_ID));
 			Blob expiry = (expires == null) ? null : scheduleExpiry(venue, targetDID, id, expires);
 			venue.jobIndex().updateAdapterData(job.getID(), data -> {
 				AMap<AString, ACell> kept = data.assoc(TARGET, targetDID);
@@ -257,7 +259,7 @@ public class HITLAdapter extends AAdapter {
 		Agent agent = owner == null ? null : owner.agent(agentId);
 		if (agent == null || agent.getRecord() == null) return;
 		if (taskId != null) {
-			agent.addPending(job.getID(), Maps.of(Fields.TASK_ID, Strings.create(taskId.toHexString())));
+			agent.addPending(job.getID(), Maps.of(Fields.TASK_ID, taskId));
 		} else if (!agent.getPending().containsKey(job.getID())) {
 			agent.addPending(job.getID(), Maps.empty());
 		}
@@ -287,7 +289,7 @@ public class HITLAdapter extends AAdapter {
 	@Override
 	public void cancelIn(VenueState draft, Job job, AMap<AString, ACell> adapterData) {
 		User user = draft.users().user(askedBy(job, adapterData));
-		if (user != null) user.inbox().request(Strings.create(job.getID().toHexString())).resolve(Hitl.CANCELLED, null);
+		if (user != null) user.inbox().request(job.getID()).resolve(Hitl.CANCELLED, null);
 		removePending(draft, job);
 		cancelExpiry(draft, adapterData);
 	}
@@ -303,7 +305,7 @@ public class HITLAdapter extends AAdapter {
 		engine.getVenueState().execute(venue -> addPending(venue, job, null));
 		AMap<AString, ACell> kept = engine.jobs().adapterData(job);
 		AString target = askedBy(job, kept);
-		AString id = Strings.create(job.getID().toHexString());
+		Blob id = job.getID();
 		User user = engine.getVenueState().users().user(target);
 		if (user == null) {
 			// The account went before this job's handle was restored. Launch wakes
@@ -351,14 +353,14 @@ public class HITLAdapter extends AAdapter {
 	 */
 	private void failForDeletedTarget(AString target, Job job, AMap<AString, ACell> kept, User ownerAccount) {
 		String error = String.format(TARGET_DELETED, target);
-		AString id = Strings.create(job.getID().toHexString());
+		Blob id = job.getID();
 		AString owner = job.getOwner();
 		AString agentId = Engine.agentIdIn(owner, job.getCaller());
-		AString session = (kept == null) ? null : RT.ensureString(kept.get(Fields.SESSION_ID));
+		Blob session = (kept == null) ? null : Ids.stored(kept.get(Fields.SESSION_ID));
 		ACell result = Maps.of(Hitl.ID, id, Hitl.STATUS, Hitl.CANCELLED, Fields.ERROR, error);
 		// Null when the job finished first
 		Resolution resolution = engine.getVenueState().transact(venue ->
-			settle(venue, job, data -> failed(data, error), owner, agentId, session, engine.getDIDString(), result));
+			settle(venue, job, data -> failed(data, error), owner, agentId, session, engine.getDIDString(), null, result));
 		if (resolution != null) afterResolution(resolution, id, ownerAccount);
 	}
 
@@ -437,55 +439,56 @@ public class HITLAdapter extends AAdapter {
 		// for the user, or work the venue carries on later
 		String notInPerson = engine.inPersonDenial(ctx);
 		if (notInPerson != null) throw new AuthException(notInPerson);
-		AString id = RT.ensureString(RT.getIn(input, Hitl.ID));
-		if (id == null) throw new InvalidInputException("id is required");
-		// Records key on bare hex, but REST renders job ids 0x-prefixed —
-		// accept both, so a pasted job id just works.
-		Blob given = HexId.parse(id);
-		if (given != null) id = Strings.create(given.toHexString());
+		ACell given = RT.getIn(input, Hitl.ID);
+		if (given == null) throw new InvalidInputException("id is required");
+		// A request's id is its job's: as a Blob, or in hex with or without 0x
+		Blob id = HexId.parse(given);
 
 		// Structural authorisation: respond reads the CALLER's own inbox only.
 		User user = engine.getVenueState().users().user(caller);
 		if (user == null) throw new AuthException("User is not registered at this venue: " + caller);
-		HitlRequest request = user.inbox().request(id);
-		AMap<AString, ACell> record = request.getRecord();
+		HitlRequest request = (id == null) ? null : user.inbox().request(id);
+		AMap<AString, ACell> record = (request == null) ? null : request.getRecord();
 		if (record == null) {
-			throw new NotFoundException("No HITL request " + id + " in your inbox", id.toString());
+			throw new NotFoundException("No HITL request " + given + " in your inbox", given.toString());
 		}
 		if (!request.isOpen()) {
-			throw new NotSupportedException("HITL request " + id + " is not open (status: "
+			throw new NotSupportedException("HITL request " + given + " is not open (status: "
 				+ request.status() + ")");
 		}
 		// Lazy expiry: an expiry event not yet fired (the venue has not been
 		// updated past its time) must not let an expired request be answered.
 		if (request.isExpired(engine.currentTimestamp().longValue())) {
-			expireRequest(caller, id, Blob.fromHex(id.toString()));
-			throw new NotSupportedException("HITL request " + id + " has expired");
+			expireRequest(caller, id);
+			throw new NotSupportedException("HITL request " + given + " has expired");
 		}
 
 		AString outcome = RT.ensureString(RT.getIn(input, Hitl.OUTCOME));
 		AString comment = RT.ensureString(RT.getIn(input, Hitl.COMMENT));
-		Job job = engine.jobs().getJob(Blob.fromHex(id.toString()));
+		Job job = engine.jobs().getJob(id);
+		// The answer reaches an asking agent as a message from the responder,
+		// carried as this request was
+		AVector<ACell> route = ctx.getRoute();
 		if (Hitl.REJECT.equals(outcome)) {
-			return resolveReject(user, id, comment, job);
+			return resolveReject(user, id, comment, job, route);
 		}
 		if (Hitl.ANSWER.equals(outcome)) {
-			return resolveAnswer(user, id, record, input, comment, job);
+			return resolveAnswer(user, id, record, input, comment, job, route);
 		}
 		throw new InvalidInputException("outcome must be 'answer' or 'reject'");
 	}
 
-	private ACell resolveReject(User user, AString id, AString comment, Job job) {
+	private ACell resolveReject(User user, Blob id, AString comment, Job job, AVector<ACell> route) {
 		AMap<AString, ACell> response = Maps.of(Hitl.OUTCOME, Hitl.REJECT);
 		if (comment != null) response = response.assoc(Hitl.COMMENT, comment);
-		if (!resolveRequest(user.getDID(), id, Hitl.REJECTED, response, user.getDID(),
+		if (!resolveRequest(user.getDID(), id, Hitl.REJECTED, response, user.getDID(), route,
 				response.assoc(Hitl.ID, id).assoc(Hitl.STATUS, Hitl.REJECTED), job, null)) throw new ConflictException(REQUEST_ALREADY_RESOLVED);
 		return Maps.of(Hitl.ID, id, Hitl.STATUS, Hitl.REJECTED);
 	}
 
 	@SuppressWarnings("unchecked")
-	private ACell resolveAnswer(User user, AString id, AMap<AString, ACell> record,
-			ACell input, AString comment, Job job) {
+	private ACell resolveAnswer(User user, Blob id, AMap<AString, ACell> record,
+			ACell input, AString comment, Job job, AVector<ACell> route) {
 		AVector<ACell> asks = (AVector<ACell>) RT.getIn(record, Hitl.ASKS);
 		ACell answersCell = RT.getIn(input, Hitl.ANSWERS);
 		AMap<AString, ACell> answers = (answersCell instanceof AMap)
@@ -536,7 +539,7 @@ public class HITLAdapter extends AAdapter {
 		// in its own durable session.
 		if (transported.count() > 0) output = output.assoc(Hitl.TOKENS, transported);
 		AMap<AString, ACell> result = output;
-		if (!resolveRequest(user.getDID(), id, Hitl.ANSWERED, response, user.getDID(), result, job, grant)) throw new ConflictException(REQUEST_ALREADY_RESOLVED);
+		if (!resolveRequest(user.getDID(), id, Hitl.ANSWERED, response, user.getDID(), route, result, job, grant)) throw new ConflictException(REQUEST_ALREADY_RESOLVED);
 		return Maps.of(Hitl.ID, id, Hitl.STATUS, Hitl.ANSWERED);
 	}
 
@@ -718,7 +721,7 @@ public class HITLAdapter extends AAdapter {
 		AString filter = RT.ensureString(RT.getIn(input, Hitl.STATUS));
 		User user = engine.getVenueState().users().user(caller);
 		if (user == null) throw new AuthException("User is not registered at this venue: " + caller);
-		AMap<AString, AMap<AString, ACell>> all = user.inbox().getAll();
+		Index<Blob, AMap<AString, ACell>> all = user.inbox().getAll();
 		AVector<ACell> items = Vectors.empty();
 		for (long i = 0; i < all.count(); i++) {
 			ACell v = all.entryAt(i).getValue();
@@ -748,7 +751,7 @@ public class HITLAdapter extends AAdapter {
 	 *
 	 * @return The event's handle
 	 */
-	private Blob scheduleExpiry(VenueState venue, AString targetDID, AString id, CVMLong expires) {
+	private Blob scheduleExpiry(VenueState venue, AString targetDID, Blob id, CVMLong expires) {
 		AString did = engine.getDIDString();
 		return venue.schedule().schedule(EXPIRE_OP, expiryInput(targetDID, id), did, did, null, null,
 			expires.longValue(), null, Boolean.FALSE, Strings.create("Expires HITL request " + id),
@@ -772,7 +775,7 @@ public class HITLAdapter extends AAdapter {
 	 * stopped, or never made because the request came from an older venue
 	 * (COG-16). An overdue request expires at the venue's first update.
 	 */
-	private void ensureExpiry(Job job, AString target, AString id, CVMLong expires) {
+	private void ensureExpiry(Job job, AString target, Blob id, CVMLong expires) {
 		if (expires == null) return;
 		boolean restored = engine.getVenueState().transact(venue -> {
 			Blob held = expiryEvent(venue.jobIndex().adapterData(job.getID()));
@@ -785,7 +788,7 @@ public class HITLAdapter extends AAdapter {
 	}
 
 	/** The input of {@link #EXPIRE_OP} for request {@code id} in {@code targetDID}'s inbox. */
-	public static AMap<AString, ACell> expiryInput(AString targetDID, AString id) {
+	public static AMap<AString, ACell> expiryInput(AString targetDID, Blob id) {
 		return Maps.of(Hitl.USER, targetDID, Hitl.ID, id);
 	}
 
@@ -800,11 +803,11 @@ public class HITLAdapter extends AAdapter {
 	private ACell handleExpire(RequestContext ctx, ACell input) {
 		if (!engine.isDirectVenue(ctx)) throw new AuthException(EXPIRE_VENUE_ONLY);
 		AString target = RT.ensureString(RT.getIn(input, Hitl.USER));
-		AString id = RT.ensureString(RT.getIn(input, Hitl.ID));
-		if (target == null || id == null) throw new InvalidInputException("user and id are required");
-		Blob jobId = Blob.fromHex(id.toString());
-		if (jobId == null) throw new InvalidInputException("id is not a HITL request id: " + id);
-		expireRequest(target, id, jobId);
+		ACell given = RT.getIn(input, Hitl.ID);
+		if (target == null || given == null) throw new InvalidInputException("user and id are required");
+		Blob id = HexId.parse(given);
+		if (id == null) throw new InvalidInputException("id is not a HITL request id: " + given);
+		expireRequest(target, id);
 		User user = engine.getVenueState().users().user(target);
 		AMap<AString, ACell> record = (user == null) ? null : user.inbox().get(id);
 		AMap<AString, ACell> result = Maps.of(Hitl.ID, id);
@@ -813,10 +816,10 @@ public class HITLAdapter extends AAdapter {
 
 	/** Expires an open request: record → expired, job → FAILED. Terminal-state
 	 *  stickiness makes the race against a response commit exactly one winner. */
-	private void expireRequest(AString targetDID, AString id, Blob jobId) {
-		if (resolveRequest(targetDID, id, Hitl.EXPIRED, null, engine.getDIDString(), Maps.of(
+	private void expireRequest(AString targetDID, Blob id) {
+		if (resolveRequest(targetDID, id, Hitl.EXPIRED, null, engine.getDIDString(), null, Maps.of(
 				Hitl.ID, id, Hitl.STATUS, Hitl.EXPIRED, Fields.ERROR, REQUEST_EXPIRED),
-				engine.jobs().getJob(jobId), null)) log.info("HITL request {} expired", id);
+				engine.jobs().getJob(id), null)) log.info("HITL request {} expired", id);
 	}
 
 	private record SessionWake(AString owner, AString agent) { }
@@ -832,8 +835,8 @@ public class HITLAdapter extends AAdapter {
 	 * Tokens have already been prepared; no signing, I/O or live Job mutation is
 	 * allowed inside the retryable draft callback. A minted {@code grant} the
 	 * result carries is recorded once the resolution commits, and only then. */
-	private boolean resolveRequest(AString targetDID, AString id, AString status,
-			AMap<AString, ACell> response, AString responder, ACell result, Job job, UCANAdapter.Grant grant) {
+	private boolean resolveRequest(AString targetDID, Blob id, AString status,
+			AMap<AString, ACell> response, AString responder, AVector<ACell> route, ACell result, Job job, UCANAdapter.Grant grant) {
 		AString requester = job == null ? null : job.getOwner();
 		User requesterAccount = requester == null ? null : engine.getVenueState().users().user(requester);
 		// Null when the request was not open to resolve
@@ -846,7 +849,7 @@ public class HITLAdapter extends AAdapter {
 				if (Hitl.ANSWERED.equals(status)) return data.assoc(Fields.STATUS, Status.COMPLETE).assoc(Fields.OUTPUT, result);
 				return failed(data, Hitl.REJECTED.equals(status) ? rejection(targetDID, RT.getIn(result, Hitl.COMMENT)) : REQUEST_EXPIRED);
 			}, Attribution.owner(record), RT.ensureString(record.get(Hitl.AGENT)),
-				RT.ensureString(record.get(Fields.SESSION_ID)), responder, result);
+				Ids.stored(record.get(Fields.SESSION_ID)), responder, route, result);
 			if (settled == null) throw new ConflictException(REQUEST_ALREADY_RESOLVED);
 			return settled;
 		});
@@ -863,11 +866,11 @@ public class HITLAdapter extends AAdapter {
 	 *
 	 * @param job The request's job, or null when it has gone
 	 * @param agentId The agent that asked, or null when a person did
-	 * @param sidHex The session it asked in, or null
+	 * @param session The session it asked in, or null
 	 * @return What to do after commit, or null when the job had already finished
 	 */
 	private Resolution settle(VenueState venue, Job job, java.util.function.UnaryOperator<AMap<AString, ACell>> outcome,
-			AString askingOwner, AString agentId, AString sidHex, AString responder, ACell result) {
+			AString askingOwner, AString agentId, Blob session, AString responder, AVector<ACell> route, ACell result) {
 		var draft = venue.users();
 		Runnable notification = null;
 		Blob waitingTask = null;
@@ -882,18 +885,17 @@ public class HITLAdapter extends AAdapter {
 			User owner = draft.user(job.getOwner());
 			Agent askingAgent = owner == null || requestingAgent == null ? null : owner.agent(requestingAgent);
 			if (askingAgent != null && askingAgent.getRecord() != null) {
-				AString taskHex = RT.ensureString(RT.getIn(askingAgent.getPending().get(job.getID()), Fields.TASK_ID));
-				if (taskHex != null) waitingTask = Blob.fromHex(taskHex.toString());
+				waitingTask = Ids.stored(RT.getIn(askingAgent.getPending().get(job.getID()), Fields.TASK_ID));
 				askingAgent.removePending(job.getID());
 			}
 		}
-		if (agentId == null || sidHex == null) return new Resolution(notification, null, false); // Human/API requester.
+		if (agentId == null || session == null) return new Resolution(notification, null, false); // Human/API requester.
 		AgentAdapter agents = engine.getAdapter("agent") instanceof AgentAdapter a ? a : null;
 		// The result carries the request ID. This is an independent message,
 		// not a chat waiter tied to the now-terminal HITL Job; it goes to the
 		// task whose cycle asked, when there is one, else to the session.
 		if (askingOwner != null && agents != null
-				&& agents.deliverToWaiter(draft, askingOwner, agentId, Blob.fromHex(sidHex.toString()), waitingTask, responder,
+				&& agents.deliverToWaiter(draft, askingOwner, agentId, session, waitingTask, responder, route,
 					(job != null) ? Strings.create(job.getID().toHexString()) : null, result)) {
 			return new Resolution(notification, new SessionWake(askingOwner, agentId), false);
 		}
@@ -901,7 +903,7 @@ public class HITLAdapter extends AAdapter {
 	}
 
 	/** Makes a committed resolution durable, tells the job's observers and wakes the agent that asked. */
-	private void afterResolution(Resolution resolution, AString id, User requesterAccount) {
+	private void afterResolution(Resolution resolution, Blob id, User requesterAccount) {
 		SessionWake destination = resolution.wake();
 		// Notify live waiters even if the durability barrier fails: the in-memory
 		// transaction is already committed. The responder still receives that error.

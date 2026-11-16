@@ -174,7 +174,8 @@ public final class VenueStoreFixture {
 		run(client, "dlfs/write", Maps.of("drive", "documents", "path", "/notes.txt", "content", FILE_TEXT + name + "\nupdated"));
 		ACell chat = run(client, "agent/chat", Maps.of("agentId", AGENT,
 			"sessionId", RT.getIn(user, "sessionId"), "message", "upgraded message for " + name));
-		equal(RT.getIn(user, "sessionId"), RT.getIn(chat, "sessionId"));
+		// The same session, whichever form of its id the release that wrote the fixture returned.
+		equal(Blob.parse(RT.getIn(user, "sessionId")), Blob.parse(RT.getIn(chat, "sessionId")));
 		require(text(RT.getIn(chat, "response")).contains("upgraded message for " + name), "Continued mock chat must answer");
 	}
 

@@ -9,6 +9,7 @@ import java.util.function.Predicate;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
@@ -20,9 +21,10 @@ import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.exception.JobFailedException;
 import covia.grid.Job;
-import covia.grid.Principals;
 import covia.grid.Status;
+import covia.venue.AgentAddress;
 import covia.venue.Engine;
+import covia.venue.Ids;
 import covia.venue.RequestContext;
 
 /**
@@ -111,9 +113,9 @@ public final class ConversationRouter {
 	/** Call within this conversation's queued turn, for a message that came
 	 * through {@code channel}. */
 	public ACell chat(String conversation, ACell message, Channel channel) {
-		String sid = sessions.get(conversation);
+		Blob sid = sessions.get(conversation);
 		AMap<AString, ACell> input = Maps.of(Fields.AGENT_ID, agentAddress(), Fields.MESSAGE, message);
-		if (sid != null) input = input.assoc(Fields.SESSION_ID, Strings.create(sid));
+		if (sid != null) input = input.assoc(Fields.SESSION_ID, sid);
 		RequestContext ctx = context(channel);
 		ACell result;
 		try {
@@ -123,8 +125,8 @@ public final class ConversationRouter {
 			sessions.remove(conversation);
 			result = run(AGENT_CHAT, input.dissoc(Fields.SESSION_ID), ctx);
 		}
-		AString newSession = RT.ensureString(RT.getIn(result, Fields.SESSION_ID));
-		if (newSession != null && !newSession.toString().equals(sid)) sessions.put(conversation, newSession.toString());
+		Blob newSession = Ids.stored(RT.getIn(result, Fields.SESSION_ID));
+		if (newSession != null && !Objects.equals(newSession, sid)) sessions.put(conversation, newSession);
 		return RT.getIn(result, Fields.RESPONSE);
 	}
 
@@ -164,12 +166,12 @@ public final class ConversationRouter {
 	}
 
 	private Job deliverLocked(String conversation, ACell message, Channel channel, RequestContext.SessionDelivery delivery) {
-		String sid = sessions.get(conversation);
+		Blob sid = sessions.get(conversation);
 		AMap<AString, ACell> input = Maps.of(Fields.AGENT_ID, agentAddress(), Fields.MESSAGE, message);
-		if (sid != null) input = input.assoc(Fields.SESSION_ID, Strings.create(sid));
+		if (sid != null) input = input.assoc(Fields.SESSION_ID, sid);
 		RequestContext ctx = context(channel).withSessionDelivery((draft, session, job) -> {
 			boolean applied = delivery.accept(draft, session, job);
-			if (applied) sessions.put(draft, conversation, session.toString());
+			if (applied) sessions.put(draft, conversation, session);
 			return applied;
 		});
 		AgentAdapter adapter = (AgentAdapter) engine.getAdapter("agent");
@@ -215,7 +217,8 @@ public final class ConversationRouter {
 	 * context carries the authentication record.
 	 *
 	 * A provider event with no sender at all (a poll, say) is anonymous on an
-	 * open binding and carries no record.
+	 * open binding and carries no record, but the binding still carried it, so
+	 * its route names the binding.
 	 *
 	 * @throws AuthException for a sender the binding does not admit, or an
 	 *         anonymous sender while public access is off
@@ -224,19 +227,22 @@ public final class ConversationRouter {
 		sessions.requireCurrentUser();
 		if (channel == null) {
 			if (!spec.open()) throw new AuthException(ChannelAuthentication.NOT_ADMITTED);
-			return engine.context(engine.publicPrincipal());
+			AString method = Strings.create(sessions.adapterName());
+			return engine.context(engine.publicPrincipal()).via(method, ChannelAuthentication.step(engine, spec, method));
 		}
 		return engine.channelContext(spec.userDID(engine), ChannelAuthentication.authenticate(engine, spec, principal(),
 			lists.test(channel.sender()), channel));
 	}
 
-	/** The binding's agent as a full address. A relative reference names an agent
-	 * of the binding's user, wherever the message comes from. */
+	/** The binding's agent ({@link AgentAddress#parse}). A relative reference names
+	 * an agent of the binding's user, wherever the message comes from. */
+	private AgentAddress agent() {
+		return AgentAddress.parse(spec.userDID(engine), Strings.create(spec.agent()));
+	}
+
+	/** The binding's agent as a full address, {@code <owner>/g/<agentId>}. */
 	private AString agentAddress() {
-		String agent = covia.lattice.CapabilityChecker.canonicalResource(spec.agent(), null);
-		if (agent.startsWith("did:")) return Strings.create(agent);
-		if (agent.startsWith("g/")) agent = agent.substring(2);
-		return Strings.create(spec.userDID(engine) + "/g/" + agent);
+		return agent().address();
 	}
 
 	/**
@@ -247,15 +253,11 @@ public final class ConversationRouter {
 	 * an agent act.
 	 */
 	public RequestContext agentContext() {
-		String address = agentAddress().toString();
-		int split = address.indexOf("/g/");
-		if (split < 0) return context(); // not an agent address; asking it is refused anyway
-		AString owner = Strings.create(address.substring(0, split));
-		AString agent = Principals.agentDID(owner, Strings.create(address.substring(split + 3)));
+		AgentAddress agent = agent();
 		AString self = principal();
-		if (!self.equals(owner) && !self.equals(agent)) return context();
+		if (!self.equals(agent.owner()) && !self.equals(agent.did())) return context();
 		sessions.requireCurrentUser();
-		return engine.context(owner, agent);
+		return engine.context(agent.owner(), agent.did());
 	}
 
 	/** Run an operation as the binding's own work. */

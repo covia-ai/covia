@@ -257,8 +257,7 @@ public class HTTPAdapter extends AAdapter {
 		+ GuardedResolver.class.getName() + " (is jdk.net.hosts.file set, or another InetAddressResolverProvider first on the class path?)";
 
 	@Override
-	public void install(Engine engine) {
-		super.install(engine);
+	public void start() {
 		if (!GuardedResolver.isActive()) log.error(RESOLVER_INACTIVE);
 	}
 

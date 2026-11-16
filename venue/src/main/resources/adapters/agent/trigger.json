@@ -8,7 +8,7 @@
 		"input": {
 			"type": "object",
 			"properties": {
-				"agentId": { "type": "string", "description": "Agent reference: a bare name for the caller's agent, g/<id>, /g/<id>, or <ownerDID>/g/<id>" },
+				"agentId": { "type": "string", "description": "Agent reference: a bare name for the caller's agent, g/<id>, /g/<id>, <ownerDID>/g/<id>, or the agent's DID <ownerDID>:g:<id>" },
 				"force": { "type": "boolean", "description": "true (default): run a cycle even if the agent has no outstanding work. false: run only if there is work — a no-op on an idle agent. The venue scheduler fires deferred wakes with force=false." },
 				"wait": { "description": "Wait policy: true (default, block until cycle yields or completes), false (return immediately), or integer milliseconds (timeout). Not a result-await — wait on the task/chat Job for results. Cancelling this trigger Job ends the wait early; the run loop is unaffected and continues for any other waiters." },
 				"sessionId": {

@@ -19,7 +19,6 @@ import convex.core.lang.RT;
 import covia.lattice.AccessPolicy;
 import covia.lattice.CoviaValue;
 import convex.lattice.ALatticeComponent;
-import convex.lattice.NoSuchPathException;
 import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
 import convex.lattice.cursor.StampedCursor;
@@ -332,9 +331,54 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 		return new Engine.Source(getController(), getControllerToken());
 	}
 
-	public AString getStatus() {
-		AMap<AString, ACell> r = getRecord();
-		return (r != null) ? RT.ensureString(r.get(K_STATUS)) : null;
+	public AString getStatus() { return status(getRecord()); }
+
+	/** Whether the agent is stopped: SUSPENDED or TERMINATED. */
+	public boolean isStopped() { return isStopped(getRecord()); }
+
+	/** Whether the agent is deleted: TERMINATED, its record kept until it is removed ({@link Agents#remove}). */
+	public boolean isTerminated() { return TERMINATED.equals(getStatus()); }
+
+	/** Who stopped the agent deliberately and why, or null when nobody did ({@link #suspend(AString, AString)}). */
+	public AMap<AString, ACell> suspension() { return suspension(getRecord()); }
+
+	/**
+	 * The definition an external agent was created with, as stored, or null
+	 * for an agent the venue runs itself. Its user checks it before use.
+	 */
+	public ACell definition() { return definition(getRecord()); }
+
+	/** The operation that runs the agent's cycles, or null when its config names none. */
+	public AString transitionOperation() { return transitionOperation(getRecord()); }
+
+	/** The status of an agent record, or null when there is no record. */
+	public static AString status(AMap<AString, ACell> record) {
+		return RT.ensureString(RT.getIn(record, K_STATUS));
+	}
+
+	/** Whether an agent record is stopped: SUSPENDED or TERMINATED. */
+	public static boolean isStopped(AMap<AString, ACell> record) {
+		return stopsCycles(status(record));
+	}
+
+	/** Who stopped an agent record deliberately and why, or null when nobody did. */
+	public static AMap<AString, ACell> suspension(AMap<AString, ACell> record) {
+		return RT.ensureMap(RT.getIn(record, KEY_SUSPENSION));
+	}
+
+	/** The fault an agent record was suspended for, or null when there is none. */
+	public static AString error(AMap<AString, ACell> record) {
+		return RT.ensureString(RT.getIn(record, K_ERROR));
+	}
+
+	/** The definition an external agent record was created with, as stored, or null for an agent the venue runs. */
+	public static ACell definition(AMap<AString, ACell> record) {
+		return RT.getIn(record, KEY_AGENT);
+	}
+
+	/** The operation that runs an agent record's cycles, or null when its config names none. */
+	public static AString transitionOperation(AMap<AString, ACell> record) {
+		return RT.ensureString(RT.getIn(record, K_CONFIG, Fields.OPERATION));
 	}
 
 	@SuppressWarnings("unchecked")
@@ -387,21 +431,20 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 		return (v instanceof Index) ? (Index<Blob, ACell>) v : Index.none();
 	}
 
-	/**
-	 * Returns the session record for the given sid, or null if absent.
-	 */
-	@SuppressWarnings("unchecked")
-	public AMap<AString, ACell> getSession(Blob sid) { return session(sid).getRecord(); }
-
 	/** The agent's queue of tasks, bound to this agent (including when this agent is a draft). */
 	public Tasks tasks() {
 		return new Tasks(cursor().path(K_TASKS));
 	}
 
-	/** Session view bound to this agent (including when this agent is a draft).
-	 * Missing sessions read as null; mutations never create or resurrect them. */
+	/** The agent's sessions, bound to this agent (including when this agent is a draft). */
+	public Sessions sessions() {
+		return new Sessions(getContext(), cursor().path(K_SESSIONS), owner, agentId);
+	}
+
+	/** One of the agent's sessions, as {@link Sessions#session}: a missing
+	 * session reads as null, and its operations never create or resurrect it. */
 	public Session session(Blob sid) {
-		return new Session(getContext(), cursor().path(K_SESSIONS, sid), owner, agentId, sid);
+		return sessions().session(sid);
 	}
 
 	/** The agent's own workspace ({@code n}); a change to it needs the agent. */
@@ -423,7 +466,7 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 		AString segment = segments[start];
 		if (K_N.equals(segment)) return workspace().resolve(segments, start + 1, end);
 		if (K_TASKS.equals(segment)) return tasks().resolve(segments, start + 1, end);
-		if (K_SESSIONS.equals(segment) && end - start > 1) throw new NoSuchPathException(segments, start + 1, end);
+		if (K_SESSIONS.equals(segment)) return sessions().resolve(segments, start + 1, end);
 		return CoviaValue.within(this, segments, start, end);
 	}
 
@@ -457,44 +500,12 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 		});
 	}
 
-	/**
-	 * Ensures a session record exists at the given sid. If absent, creates
-	 * a fresh session: {c: {}, pending: [], frames: [rootFrame],
-	 * meta: {created, turns, parties}}. The root frame is empty
-	 * ({@code {description: "", conversation: []}}) — adapters fill its
-	 * description on first use. If {@code caller} is non-null and the session
-	 * is new, it is recorded as the first party. Returns the session record
-	 * (existing or freshly created).
-	 */
-	@SuppressWarnings("unchecked")
-	public AMap<AString, ACell> ensureSession(Blob sid, AString caller) {
-		return ensureSession(sid, caller, null);
-	}
-
-	/**
-	 * Ensures a session exists, seeding the root frame's loads when it is
-	 * minted here. {@code initialLoads} applies only on creation — an existing
-	 * session's loads are never touched by this method.
-	 */
-	public AMap<AString, ACell> ensureSession(Blob sid, AString caller,
-			AMap<AString, ACell> initialLoads) {
-		final CVMLong created = now();
-		update(r -> {
-			Index<Blob, ACell> sessions = (r.get(K_SESSIONS) instanceof Index idx)
-				? (Index<Blob, ACell>) idx : Index.none();
-			if (sessions.get(sid) != null) return r;
-			AMap<AString, ACell> session = newSession(caller, initialLoads, created);
-			return r.assoc(K_SESSIONS, sessions.assoc(sid, session));
-		});
-		return getSession(sid);
-	}
-
 	/** Claim one external turn per session. A retained claim after restart prevents blind replay. */
 	@SuppressWarnings("unchecked")
 	public boolean claimExternalTurn(Blob sid, Blob jobId, AString caller, ACell content, boolean create) {
 		return transact(draft -> {
 			if (!draft.exists() || TERMINATED.equals(draft.getStatus()) || SUSPENDED.equals(draft.getStatus())) return false;
-			if (create) draft.ensureSession(sid, caller);
+			if (create) draft.sessions().create(sid, caller, null);
 			return draft.session(sid).claimExternalTurn(jobId, content);
 		});
 	}
@@ -526,11 +537,13 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 			java.util.function.Consumer<Agent> change) {
 		return transact(draft -> {
 			if (!draft.exists() || TERMINATED.equals(draft.getStatus())) return SessionIntake.MISSING;
-			ACell raw = draft.getSessions().get(sid);
+			Sessions sessions = draft.sessions();
+			ACell raw = sessions.get(sid);
 			if (raw != null && initialLoads != null) return SessionIntake.LOADS_ON_EXISTING;
 			if (raw == null) {
 				if (!create) return SessionIntake.MISSING;
-				raw = draft.ensureSession(sid, caller, initialLoads);
+				sessions.create(sid, caller, initialLoads);
+				raw = sessions.get(sid);
 			}
 			if (!(raw instanceof AMap<?, ?>)) return SessionIntake.MISSING;
 			change.accept(draft);
@@ -546,91 +559,7 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 		return (v instanceof Index) ? (Index<Blob, ACell>) v : Index.none();
 	}
 
-	/**
-	 * Returns the per-session pending message vector (S3b). Distinct from
-	 * the agent-level {@code pending} Index of in-flight Job snapshots —
-	 * same {@code AString} field name at a different path. This vector
-	 * holds messages awaiting consumption by the next transition for the
-	 * given session.
-	 *
-	 * <p>Returns an empty vector if the session is missing or has no
-	 * pending entries.</p>
-	 */
-	@SuppressWarnings("unchecked")
-	public AVector<ACell> getSessionPending(Blob sid) { return session(sid).pending(); }
-	/**
-	 * Atomically appends an envelope to {@code sessions[sid].pending} (S3b).
-	 * No-op if the session is missing — callers should ensureSession first.
-	 */
-	@SuppressWarnings("unchecked")
-	public void appendSessionPending(Blob sid, ACell envelope) {
-		session(sid).appendPending(envelope);
-	}
-
-	/** Reads {@code sessions[sid].inCycle}, or null when absent. */
-	public ACell getSessionCycleEpoch(Blob sid) { return session(sid).cycleEpoch(); }
-	/**
-	 * Releases a session's cycle claim without a merge, as startup does for a
-	 * cycle no executor runs: any late writes of that cycle are fenced out.
-	 */
-	public void clearSessionCycle(Blob sid) {
-		if (sid != null) session(sid).clearCycle();
-	}
-	/**
-	 * Removes the session record at {@code sid} (no-op if absent). The
-	 * removal is durable: the venue merge is whole-value LWW, so the
-	 * dissoc'd snapshot wins by timestamp and the session is not
-	 * resurrected on sync. A concurrent {@code mergeRunResult} on the same
-	 * session is safe either way — its session write is guarded by an
-	 * {@code instanceof AMap} check and skips a vanished session.
-	 */
-	@SuppressWarnings("unchecked")
-	public void removeSession(Blob sid) {
-		update(r -> {
-			Index<Blob, ACell> sessions = (r.get(K_SESSIONS) instanceof Index idx)
-				? (Index<Blob, ACell>) idx : Index.none();
-			return r.assoc(K_SESSIONS, sessions.dissoc(sid));
-		});
-	}
-
-	/**
-	 * Returns true if any session has pending messages.
-	 */
-	public boolean hasSessionPending() {
-		Index<Blob, ACell> sessions = getSessions();
-		if (sessions == null || sessions.count() == 0) return false;
-		for (var entry : sessions.entrySet()) {
-			ACell sv = entry.getValue();
-			if (sv instanceof AMap m && sessionHasWork(m)) return true;
-		}
-		return false;
-	}
-
-	/**
-	 * The session whose oldest queued envelope is the oldest of any session's
-	 * ({@link Session#queueKey(ACell)}), or null when none has one: the
-	 * session that is next in the agent's queue.
-	 */
-	public Blob oldestSessionWithPending() {
-		Index<Blob, ACell> sessions = getSessions();
-		if (sessions == null || sessions.count() == 0) return null;
-		Blob oldest = null;
-		long oldestKey = Long.MAX_VALUE;
-		for (var entry : sessions.entrySet()) {
-			if (!(entry.getValue() instanceof AMap m) || !sessionHasWork(m)) continue;
-			long key = Session.queueKey(((AVector<ACell>) m.get(K_PENDING)).get(0));
-			if (oldest == null || key < oldestKey) {
-				oldest = entry.getKey();
-				oldestKey = key;
-			}
-		}
-		return oldest;
-	}
-
-	public AString getError() {
-		AMap<AString, ACell> r = getRecord();
-		return (r != null) ? RT.ensureString(r.get(K_ERROR)) : null;
-	}
+	public AString getError() { return error(getRecord()); }
 
 	/** One description for the stop event, cancelled cycle and waiting callers. */
 	public static AString suspensionDetail(AMap<AString, ACell> record) {
@@ -652,38 +581,36 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 
 	// ========== Simple mutations ==========
 
+	/**
+	 * Sets the status. SUSPENDED and TERMINATED stop the agent, so they revoke
+	 * its cycle claim in the same transaction: an agent holds a claim only
+	 * while it is neither (AGENT_LOOP.md §2.5.1).
+	 */
 	public void setStatus(AString status) {
-		update(r -> withStatus(r, status));
+		execute(draft -> draft.changeStatus(status));
 	}
 
-	/**
-	 * The record with {@code status} set. SUSPENDED and TERMINATED stop the
-	 * agent, so they revoke its cycle claim in the same write: an agent holds
-	 * a claim only while it is neither (AGENT_LOOP.md §2.5.1).
-	 */
-	private static AMap<AString, ACell> withStatus(AMap<AString, ACell> r, AString status) {
-		AMap<AString, ACell> next = r.assoc(K_STATUS, status);
-		return stopsCycles(status) ? withoutClaim(next) : next;
+	/** In a transaction: sets the status, revoking the cycle claim when it stops the agent. */
+	private void changeStatus(AString status) {
+		update(r -> r.assoc(K_STATUS, status));
+		if (stopsCycles(status)) releaseClaim();
 	}
 
 	private static boolean stopsCycles(AString status) {
 		return SUSPENDED.equals(status) || TERMINATED.equals(status);
 	}
 
-	/** The record with its cycle claim revoked: the claim, and the same epoch on the session it names. */
-	@SuppressWarnings("unchecked")
-	private static AMap<AString, ACell> withoutClaim(AMap<AString, ACell> r) {
-		ACell claim = r.get(K_IN_CYCLE);
-		if (claim == null) return r;
-		AMap<AString, ACell> next = r.dissoc(K_IN_CYCLE);
-		AString sidHex = RT.ensureString(RT.getIn(claim, Fields.SESSION_ID));
-		Blob sid = (sidHex == null) ? null : Blob.fromHex(sidHex.toString());
-		if (sid == null || !(next.get(K_SESSIONS) instanceof Index<?, ?> index)) return next;
-		Index<Blob, ACell> sessions = (Index<Blob, ACell>) index;
-		if (!(sessions.get(sid) instanceof AMap<?, ?> found)) return next;
-		AMap<AString, ACell> session = (AMap<AString, ACell>) found;
-		if (!java.util.Objects.equals(RT.getIn(claim, K_EPOCH), session.get(K_IN_CYCLE))) return next;
-		return next.assoc(K_SESSIONS, sessions.assoc(sid, session.dissoc(K_IN_CYCLE)));
+	/**
+	 * In a transaction: revokes the cycle claim, ending it on the agent and on
+	 * the session it names when that session still holds the same epoch.
+	 */
+	private void releaseClaim() {
+		ACell claim = RT.getIn(getRecord(), K_IN_CYCLE);
+		if (claim == null) return;
+		update(r -> r.dissoc(K_IN_CYCLE));
+		Blob sid = Ids.stored(RT.getIn(claim, Fields.SESSION_ID));
+		ACell epoch = RT.getIn(claim, K_EPOCH);
+		if (sid != null && epoch != null) session(sid).clearCycle(epoch);
 	}
 
 	/** Whether {@code epoch} is the agent's current cycle claim (AGENT_LOOP.md §2.5.1). */
@@ -693,19 +620,23 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 
 	/** Revokes the agent's cycle claim, as startup does for a cycle no executor runs. */
 	public void revokeClaim() {
-		if (RT.getIn(getRecord(), K_IN_CYCLE) != null) update(Agent::withoutClaim);
+		if (RT.getIn(getRecord(), K_IN_CYCLE) != null) execute(Agent::releaseClaim);
 	}
 
 	/**
-	 * Terminates the agent in one write, which revokes its cycle claim as
-	 * every stopping status does, returning its record from just before.
+	 * Terminates the agent in one transaction, which revokes its cycle claim
+	 * as every stopping status does, returning its record from just before.
 	 * Intake refuses a terminated agent, so the tasks that record holds are all
 	 * the work the agent will ever have to give back.
 	 *
 	 * @return The record before termination, or null when there is no agent
 	 */
 	public AMap<AString, ACell> terminate() {
-		return getAndUpdate(r -> withStatus(r, TERMINATED));
+		return transact(draft -> {
+			AMap<AString, ACell> before = draft.getRecord();
+			if (before != null) draft.changeStatus(TERMINATED);
+			return before;
+		});
 	}
 
 	public void setError(AString error) {
@@ -737,7 +668,7 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 	 */
 	public boolean appendTaskContinuation(Blob taskId, Blob sid, ACell envelope,
 			AString messageId) {
-		return transact(draft -> draft.getSession(sid) != null
+		return transact(draft -> draft.session(sid).getRecord() != null
 			&& draft.tasks().task(taskId).appendContinuation(sid, envelope, messageId));
 	}
 
@@ -778,7 +709,7 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 		Objects.requireNonNull(epoch);
 		return transact(draft -> {
 			AMap<AString, ACell> record = draft.getRecord();
-			if (record == null || stopsCycles(RT.ensureString(record.get(K_STATUS)))) return CycleStart.STOPPED;
+			if (record == null || isStopped(record)) return CycleStart.STOPPED;
 			if (taskId != null) {
 				ACell current = draft.getTasks().get(taskId);
 				if (current == null || !current.equals(pickedTask)) return CycleStart.MOVED;
@@ -787,7 +718,7 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 			boolean sessionClaimed = sid != null && draft.session(sid).beginCycle(epoch, turns, drainCount);
 			if (taskId == null && sid != null && !sessionClaimed) return CycleStart.MOVED;
 			AMap<AString, ACell> claim = Maps.of(K_EPOCH, epoch);
-			if (sessionClaimed) claim = claim.assoc(Fields.SESSION_ID, Strings.create(sid.toHexString()));
+			if (sessionClaimed) claim = claim.assoc(Fields.SESSION_ID, sid);
 			AMap<AString, ACell> issued = claim;
 			draft.update(r -> r.assoc(K_IN_CYCLE, issued));
 			return sessionClaimed ? CycleStart.SESSION : CycleStart.NO_SESSION;
@@ -884,10 +815,8 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 	 * session cycle of its own ({@link Session#taken}).
 	 */
 	public boolean hasSessionWorkFor(ACell taskData) {
-		if (!(taskData instanceof AMap<?, ?> task)) return false;
-		AString sid = RT.ensureString(task.get(Fields.SESSION_ID));
-		Blob sessionId = (sid == null) ? null : Blob.fromHex(sid.toString());
-		AMap<AString, ACell> session = (sessionId == null) ? null : getSession(sessionId);
+		Blob sessionId = Task.sessionId(taskData);
+		AMap<AString, ACell> session = (sessionId == null) ? null : session(sessionId).getRecord();
 		return session != null && Session.hasTaskWork(session);
 	}
 
@@ -901,9 +830,8 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 
 	/** Whether an outbound wait recorded for this task, such as an unanswered HITL ask, is open. */
 	public boolean hasPendingFor(Blob taskId) {
-		AString hex = Strings.create(taskId.toHexString());
 		for (var entry : getPending().entrySet()) {
-			if (hex.equals(RT.getIn(entry.getValue(), Fields.TASK_ID))) return true;
+			if (taskId.equals(RT.getIn(entry.getValue(), Fields.TASK_ID))) return true;
 		}
 		return false;
 	}
@@ -922,22 +850,11 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 	 * Returns false for a missing thread. Runtime callers use
 	 * {@link Scheduler#setThreadWakeTime} to commit the intent and schedule together.
 	 */
-	@SuppressWarnings("unchecked")
 	public boolean setThreadWakeTime(ThreadKind kind, Blob threadId, long wakeTime) {
 		Objects.requireNonNull(kind, "kind");
 		Objects.requireNonNull(threadId, "threadId");
-		if (kind == ThreadKind.TASK) return tasks().task(threadId).setWakeTime(wakeTime);
-		AMap<AString, ACell> before = getAndUpdate(r -> {
-			if (!(r.get(K_SESSIONS) instanceof Index<?, ?>)) return r;
-			Index<Blob, ACell> idx = (Index<Blob, ACell>) r.get(K_SESSIONS);
-			if (!(idx.get(threadId) instanceof AMap<?, ?>)) return r;
-			AMap<AString, ACell> rec = (AMap<AString, ACell>) idx.get(threadId);
-			AMap<AString, ACell> updated = (wakeTime > 0)
-				? rec.assoc(Fields.WAKE_TIME, CVMLong.create(wakeTime))
-				: rec.dissoc(Fields.WAKE_TIME);
-			return r.assoc(K_SESSIONS, idx.assoc(threadId, updated));
-		});
-		return RT.getIn(before, K_SESSIONS, threadId) instanceof AMap<?, ?>;
+		return (kind == ThreadKind.TASK) ? tasks().task(threadId).setWakeTime(wakeTime)
+			: session(threadId).setWakeTime(wakeTime);
 	}
 
 	Blob wakeHandle() {
@@ -956,23 +873,17 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 
 	/** Earliest positive {@code wakeTime} across all sessions and tasks, or 0 if none. */
 	private static long earliestWake(AMap<AString, ACell> record) {
-		long min = minWakeIn(record.get(K_SESSIONS), Long.MAX_VALUE);
-		min = minWakeIn(record.get(K_TASKS), min);
+		long min = minWakeIn(record.get(K_SESSIONS), session -> Session.wakeTime(RT.ensureMap(session)), Long.MAX_VALUE);
+		min = minWakeIn(record.get(K_TASKS), Task::wakeTime, min);
 		return (min == Long.MAX_VALUE) ? 0L : min;
 	}
 
-	@SuppressWarnings("unchecked")
-	private static long minWakeIn(ACell idxCell, long min) {
-		if (!(idxCell instanceof Index)) return min;
-		Index<Blob, ACell> idx = (Index<Blob, ACell>) idxCell;
-		long cnt = idx.count();
-		for (long i = 0; i < cnt; i++) {
-			ACell rec = idx.entryAt(i).getValue();
-			if (!(rec instanceof AMap)) continue;
-			ACell wt = ((AMap<AString, ACell>) rec).get(Fields.WAKE_TIME);
-			if (wt instanceof CVMLong l && l.longValue() > 0) {
-				min = Math.min(min, l.longValue());
-			}
+	/** The earliest positive wake time among an index's entries, or {@code min} if earlier. */
+	private static long minWakeIn(ACell index, java.util.function.ToLongFunction<ACell> wakeTime, long min) {
+		if (!(index instanceof Index<?, ?> entries)) return min;
+		for (long i = 0; i < entries.count(); i++) {
+			long wake = wakeTime.applyAsLong(entries.entryAt(i).getValue());
+			if (wake > 0) min = Math.min(min, wake);
 		}
 		return min;
 	}
@@ -1016,19 +927,22 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 				text.substring(0, Math.min(text.length(), MAX_SUSPEND_REASON_LENGTH))));
 		}
 		AMap<AString, ACell> suspension = stop;
-		AMap<AString, ACell> stopped = update(r -> TERMINATED.equals(r.get(K_STATUS)) ? r
-			: withStatus(r, SUSPENDED).assoc(KEY_SUSPENSION, suspension).dissoc(K_ERROR));
-		return stopped != null && SUSPENDED.equals(stopped.get(K_STATUS)) ? stopped : null;
+		return transact(draft -> {
+			AMap<AString, ACell> r = draft.getRecord();
+			if (r == null || TERMINATED.equals(r.get(K_STATUS))) return null;
+			draft.changeStatus(SUSPENDED);
+			return draft.update(u -> u.assoc(KEY_SUSPENSION, suspension).dissoc(K_ERROR));
+		});
 	}
 
 	/** Sets a fault suspension without overwriting a deliberate stop racing the failure. */
 	public void suspend(AString error) {
-		update(r -> faultSuspension(r, error));
-	}
-
-	private static AMap<AString, ACell> faultSuspension(AMap<AString, ACell> r, AString error) {
-		if (r.containsKey(KEY_SUSPENSION) || TERMINATED.equals(r.get(K_STATUS))) return r;
-		return withStatus(r, SUSPENDED).assoc(K_ERROR, error);
+		execute(draft -> {
+			AMap<AString, ACell> r = draft.getRecord();
+			if (r == null || r.containsKey(KEY_SUSPENSION) || TERMINATED.equals(r.get(K_STATUS))) return;
+			draft.changeStatus(SUSPENDED);
+			draft.update(u -> u.assoc(K_ERROR, error));
+		});
 	}
 
 	/**
@@ -1196,7 +1110,7 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 	public AMap<AString, ACell> mergeRunResult(
 			ACell snapshotState,
 			ACell newState,
-			AMap<AString, ACell> taskResults,
+			Index<Blob, ACell> taskResults,
 			AMap<AString, ACell> timelineEntry,
 			Blob historySid,
 			AVector<ACell> turnsToAppend,
@@ -1240,12 +1154,11 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 	}
 
 	private static Index<Blob, ACell> removeCompletedTasks(
-			Index<Blob, ACell> tasks, AMap<AString, ACell> taskResults) {
+			Index<Blob, ACell> tasks, Index<Blob, ACell> taskResults) {
 		if (taskResults == null || tasks == null) return (tasks != null) ? tasks : Index.none();
 		Index<Blob, ACell> remaining = tasks;
 		for (var entry : tasks.entrySet()) {
-			AString hex = Strings.create(entry.getKey().toHexString());
-			if (taskResults.get(hex) != null) remaining = remaining.dissoc(entry.getKey());
+			if (taskResults.get(entry.getKey()) != null) remaining = remaining.dissoc(entry.getKey());
 		}
 		return remaining;
 	}

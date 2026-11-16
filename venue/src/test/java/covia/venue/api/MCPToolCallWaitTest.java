@@ -160,7 +160,7 @@ public class MCPToolCallWaitTest {
 			ACell ran = callTool(20, "test_holdread", "{\"gate\":\"" + gateName + "\",\"result\":\"read-late\"}");
 			assertEquals("running", RT.getIn(ran, "status").toString(), ran.toString());
 			String id = RT.getIn(ran, "id").toString();
-			job = server.getEngine().jobs().getJob(Blob.fromHex(id));
+			job = server.getEngine().jobs().getJob(Blob.parse(id));
 			assertNotNull(job, "the job named is live");
 			assertTrue(job.isRecorded(), "and recorded");
 			ACell status = callTool(21, "grid_job_status", "{\"id\":\"" + id + "\"}");

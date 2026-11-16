@@ -126,7 +126,7 @@ application on their own `LatticeHost` and mount their venue; restart tests unmo
 new application over the same store, as production does
 ([EMBEDDING.md](EMBEDDING.md#starting-and-stopping)).
 
-`VenueState`, `Users`, `User`, `Agent`, `Session`, `Jobs`, `JobRecord`, `ManagedUsers`, `Schedule`, `AdapterState`, `AssetStore`, `SecretStore` and
+`VenueState`, `Users`, `User`, `Agent`, `Sessions`, `Session`, `Jobs`, `JobRecord`, `ManagedUsers`, `Schedule`, `AdapterState`, `AssetStore`, `SecretStore` and
 `Workspace` implement upstream `TransactionalComponent`. Ordinary domain
 mutations are atomic; `transact(draft -> ...)` groups several operations into one
 local commit. Choose the component containing all data the operation reads or
@@ -175,7 +175,7 @@ agent.execute(draft -> {
 ```java
 venue.execute(draft -> {
     var user = draft.users().ensure(did);
-    user.ensureAgent("assistant", config, null);
+    user.agents().create(Strings.create("assistant"), config, null, null, null);
     user.workspace().write(CoviaPath.parse("ready"), CVMBool.TRUE);
 });
 ```

@@ -275,8 +275,19 @@ public class ClaudeCodeAdapter extends ARemoteAgentAdapter<RemoteInteraction> im
 	public void install(Engine engine) {
 		super.install(engine);
 		rearmRuntimeProjects();
-		reconcile();
-		reapTask = reaper.scheduleWithFixedDelay(this::reapIdle, reapPeriodMillis, reapPeriodMillis, TimeUnit.MILLISECONDS);
+	}
+
+	/**
+	 * Starts the reaper, once: installed but never started, the adapter runs
+	 * no thread. It reaps the idle sessions this adapter spawned, so it keeps
+	 * running after {@code stop()}, while sessions started before it may still
+	 * be warm, and ends with {@link #close}.
+	 */
+	@Override
+	public void start() {
+		if (reapTask == null) {
+			reapTask = reaper.scheduleWithFixedDelay(this::reapIdle, reapPeriodMillis, reapPeriodMillis, TimeUnit.MILLISECONDS);
+		}
 	}
 
 	/** After a (re)configuration: sessions whose project spec changed or vanished are stopped (they respawn against the current spec). */

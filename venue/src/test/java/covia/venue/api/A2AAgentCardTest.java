@@ -601,7 +601,7 @@ public class A2AAgentCardTest {
 				.agent("Continuer");
 			assertEquals(3, continued.getTimeline().count(),
 				"the stale cycle and both distinct continuations each run exactly once");
-			var session = continued.getSession(Blob.fromHex(initial.contextId()));
+			var session = continued.session(Blob.fromHex(initial.contextId())).getRecord();
 			var frames = (convex.core.data.AVector<?>) session.get(Agent.KEY_FRAMES);
 			var conversation = covia.adapter.agent.GoalTreeContext.activeConversation(convex.core.lang.RT.ensureMap(frames.get(0)));
 			assertEquals(6, conversation.count(),

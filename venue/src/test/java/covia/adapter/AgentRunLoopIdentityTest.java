@@ -87,10 +87,8 @@ public class AgentRunLoopIdentityTest {
 	private void queueMessage(AString owner, String name) {
 		Agent agent = engine.getVenueState().users().ensure(owner).agent(name);
 		Blob sid = Blob.fromHex("12340001123400011234000112340001");
-		agent.ensureSession(sid, owner);
-		agent.appendSessionPending(sid, Maps.of(
-			Fields.SESSION_ID, Strings.create(sid.toHexString()),
-			Fields.MESSAGE, Maps.of("content", "hi")));
+		agent.sessions().create(sid, owner, null);
+		agent.session(sid).appendPending(Maps.of(Fields.MESSAGE, Maps.of("content", "hi")));
 	}
 
 	private AgentAdapter adapter() {

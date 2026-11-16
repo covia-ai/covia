@@ -227,7 +227,7 @@ public class RemoteAgentAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 		try {
 			caller = engine.jobs().callerContext(job);
 		} catch (AuthException cannot) {
-			engine.remoteJobs().end(job, CALLER_CANNOT_ACT.formatted(cannot.getMessage(), id.toHexString()));
+			engine.remoteJobs().end(job, CALLER_CANNOT_ACT.formatted(cannot.getMessage(), id));
 			return;
 		}
 		VenueRemoteAgent proxy = new VenueRemoteAgent(localVenue(caller), RT.ensureString(job.getData().get(AGENT)));

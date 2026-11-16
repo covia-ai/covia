@@ -43,9 +43,9 @@ public class AgentPathTest {
 	@BeforeEach
 	public void setup(TestInfo info) {
 		user = engine.getVenueState().users().ensure(TestEngine.uniqueDID(info));
-		agent = user.ensureAgent(AGENT, Maps.empty(), null);
+		agent = TestAgents.ensure(user, AGENT, Maps.empty(), null);
 		sid = Blob.fromHex("00112233445566778899aabbccddeeff");
-		agent.ensureSession(sid, null);
+		agent.sessions().create(sid, null, null);
 		session = "g/" + AGENT + "/sessions/" + sid.toHexString();
 	}
 
@@ -112,8 +112,13 @@ public class AgentPathTest {
 		assertEquals(Entry.READ_ONLY,
 			assertThrows(AuthException.class, () -> Entry.of(status)).getMessage());
 
+		ALatticeComponent<?> list = resolve("g/" + AGENT + "/sessions");
+		assertEquals(agent.getSessions(), read(list));
+		assertEquals(Entry.READ_ONLY,
+			assertThrows(AuthException.class, () -> Entry.of(list)).getMessage());
+
 		ALatticeComponent<?> meta = resolve(session + "/meta");
-		assertEquals(RT.getIn(agent.getSession(sid), "meta"), read(meta));
+		assertEquals(RT.getIn(agent.session(sid).getRecord(), "meta"), read(meta));
 		assertEquals(Entry.READ_ONLY,
 			assertThrows(AuthException.class, () -> Entry.of(meta)).getMessage());
 	}
@@ -135,7 +140,7 @@ public class AgentPathTest {
 			assertThrows(InvalidInputException.class, () -> Entry.of(entry).write(CVMLong.ONE), path);
 		}
 		assertNull(user.agent("nobody"), "resolving a path creates no agent");
-		assertNull(agent.getSession(Blob.fromHex("ff")), "resolving a path creates no session");
+		assertNull(agent.session(Blob.fromHex("ff")).getRecord(), "resolving a path creates no session");
 	}
 
 	@Test
@@ -153,7 +158,7 @@ public class AgentPathTest {
 		user.execute(draft -> {
 			ALatticeComponent<?> notes = draft.resolve(CoviaPath.parse("g/" + later + "/n/notes"));
 			assertFalse(notes.exists(), "the agent does not exist yet");
-			draft.ensureAgent(later, Maps.empty(), null).workspace().write(CoviaPath.parse("notes"), CVMLong.ONE);
+			TestAgents.ensure(draft, later, Maps.empty(), null).workspace().write(CoviaPath.parse("notes"), CVMLong.ONE);
 			assertTrue(notes.exists(), "the resolved entry sees the agent the draft created");
 			assertEquals(CVMLong.ONE, read(notes));
 		});

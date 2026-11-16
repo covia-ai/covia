@@ -253,6 +253,22 @@ class AuthMethodsTest {
 		finally { server.close(); }
 	}
 
+	/** An adapter that fails to start is treated as stopped; one that a login method names then stops the launch, as a disabled one does. */
+	@Test void namedAdapterThatFailsToStartStopsTheLaunch() {
+		Engine engine = covia.venue.TestEngine.application().mount(AKeyPair.generate(), config(fixtureBindings()));
+		try {
+			ConfigurationException stopped = assertThrows(ConfigurationException.class, () -> engine.launch(prepared -> {
+				prepared.registerAdapter(new Fixture(true) {
+					@Override public boolean configure(AMap<AString, ACell> config, boolean strict) {
+						throw new ConfigurationException(REFUSED);
+					}
+				});
+				return CompletableFuture.completedFuture(null);
+			}));
+			assertTrue(stopped.getMessage().startsWith(AuthMethods.UNAVAILABLE), stopped.getMessage());
+		} finally { engine.close(); }
+	}
+
 	@Test void hostCanReplaceDefaultAdapterBeforeReferenceValidation() {
 		AMap<AString, ACell> cfg = config(Maps.of(FIRST, reference("auth", FIRST)))
 			.assoc(Config.STORE, Strings.create("memory"))

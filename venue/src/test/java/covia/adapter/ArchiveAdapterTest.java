@@ -49,7 +49,8 @@ public class ArchiveAdapterTest {
 				"work", workspace.toAbsolutePath().toString(),
 				"ro", Maps.of(
 					"path", readonly.toAbsolutePath().toString(),
-					"readOnly", true)
+					"readOnly", true),
+				"drive", Maps.of("dlfs", "archive-drive")
 			))
 		));
 		Engine.addDemoAssets(engine);
@@ -120,6 +121,19 @@ public class ArchiveAdapterTest {
 	}
 
 	@Test
+	public void testZipAndExtractInADrive() {
+		run("v/ops/archive/zip", Maps.of(
+			"root", "work", "path", "data",
+			"destRoot", "drive", "destPath", "out.zip"));
+		run("v/ops/archive/extract", Maps.of(
+			"root", "drive", "path", "out.zip",
+			"destRoot", "drive", "destPath", "restored"));
+		ACell read = run("v/ops/file/read",
+			Maps.of("root", "drive", "path", "restored/data/sub/b.txt"));
+		assertEquals("bravo", RT.getIn(read, "content").toString());
+	}
+
+	@Test
 	public void testZipToAssetThenExtractRoundTrips() throws IOException {
 		ACell zipped = run("v/ops/archive/zip", Maps.of(
 			"root", "work", "paths", Vectors.of(Strings.create("data"))));
@@ -187,6 +201,45 @@ public class ArchiveAdapterTest {
 		// The escaping file must NOT have been written outside the sandbox.
 		assertFalse(Files.exists(workspace.resolve("escaped.txt")),
 			"zip-slip entry must never land outside the destination");
+	}
+
+	@Test
+	public void testExtractStaysInsideItsRootThroughALinkedFolder() throws IOException {
+		// A folder in the destination that is a link to somewhere outside the root
+		Path outside = Files.createTempDirectory("archive-outside-");
+		try {
+			Path dest = Files.createDirectories(workspace.resolve("linked-folder"));
+			FileAdapterTest.link(dest.resolve("data"), outside);
+			Map<String, byte[]> m = new LinkedHashMap<>();
+			m.put("data/x.txt", "x".getBytes(StandardCharsets.UTF_8));
+
+			Job job = runRaw("v/ops/archive/extract", Maps.of(
+				"bytes", Base64.getEncoder().encodeToString(makeZip(m)),
+				"destRoot", "work", "destPath", "linked-folder"));
+			assertEquals(Status.FAILED, job.getStatus());
+			assertFalse(job.getErrorMessage().isBlank());
+			assertFalse(Files.exists(outside.resolve("x.txt")), "nothing is written outside the root");
+		} finally {
+			Files.deleteIfExists(outside.resolve("x.txt"));
+			Files.deleteIfExists(outside);
+		}
+	}
+
+	@Test
+	public void testExtractDoesNotWriteThroughALink() throws IOException {
+		// A link inside the root, at the path of a file the archive holds
+		Path dest = Files.createDirectories(workspace.resolve("linked-file"));
+		Path real = Files.writeString(dest.resolve("real.txt"), "kept");
+		FileAdapterTest.link(dest.resolve("alias.txt"), real);
+		Map<String, byte[]> m = new LinkedHashMap<>();
+		m.put("alias.txt", "replaced".getBytes(StandardCharsets.UTF_8));
+
+		Job job = runRaw("v/ops/archive/extract", Maps.of(
+			"bytes", Base64.getEncoder().encodeToString(makeZip(m)),
+			"destRoot", "work", "destPath", "linked-file"));
+		assertEquals(Status.FAILED, job.getStatus());
+		assertTrue(job.getErrorMessage().contains(FileOperations.WRITE_TO_LINK), job.getErrorMessage());
+		assertEquals("kept", Files.readString(real));
 	}
 
 	@Test

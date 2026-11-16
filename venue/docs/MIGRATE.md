@@ -76,7 +76,8 @@ Each part of the schema has one owner, which defines its migrations.
   build that stops reading such a shape first converts every part still in it.
 - **Import migrates.** `user:import` applies the venue steps' conversions of a
   user's records to an export older than `UserExports.VERSION` (version 2
-  names callers and owners as step 1 → 2 does) and re-encrypts secrets under
+  names callers and owners as step 1 → 2 does, version 3 stores ids as
+  Blobs as step 2 → 3 does) and re-encrypts secrets under
   the current key; other shapes convert on use. It leaves out the export's
   jobs, which the account it fills has not made, and refuses an export newer
   than `UserExports.VERSION`.
@@ -89,7 +90,7 @@ Open questions for #624:
 
 ## Migrations in this build
 
-The venue is at version 2.
+The venue is at version 3.
 
 ### Venue steps
 
@@ -102,6 +103,7 @@ A step's parts apply in the order listed.
 | 1 → 2 | Records of calls name `caller` and `owner` (COG-8): a job's `actor` becomes its `caller` and its old `caller` its `owner`; a scheduled event's `actor` (else `owner`) becomes its `caller` and `by` goes; a HITL request's `from` and `requesterUser` become `caller` and `owner`; an agent output snapshot's `user` becomes `owner` and its `caps` copy goes. A HITL request or snapshot naming only its caller takes its owner's namespace when the caller is an existing agent of this venue, else its own | `CallerAndOwner` |
 | 1 → 2 | Each unfinished job of a live account gets an entry in `:jobs` naming its owner. Proofs its record kept move to the entry's caller context. A remote job's connection, kept encrypted in the venue's `remote-job-<id>` secret that `delegation.authRef` named, moves to the entry's adapter data without any sign-in credential (only the mode of a caller-signed hop), and its pinned definition gives the entry's output rules; `authRef` and every `remote-job-*` secret go. An external agent's job moves `agentOwner`, `agentInteraction` and `agentBackendJob` to the entry's adapter data. A pending agent `outputPath` write's context moves from the worker's task (`outputContext`) to the request job's entry, and the task keeps neither `outputContext` nor `outputPath`. Any other job's entry has no output rules: a step cannot resolve an operation. Built with the venue's secret keys | `JobEntries` |
 | 1 → 2 | A remote job's record keeps only what its caller can follow: every record's `delegation` keeps its `remoteId` and `remoteStatus`, and goes when it holds neither. An unfinished job's `protocol`, `target` and `ownsRemote` are copied into its entry's adapter data; anything else, observation health among it, is left behind | `DelegationEntries` |
+| 2 → 3 | Job, task and session ids an agent's records hold as hex text become Blobs: a task's, a cycle claim's, an outbound wait's and a resolved task's session; an outbound wait's task; in the timeline, each entry's session, the jobs of its tasks, pending jobs and messages, and its `taskResults`, which become an index by task; in each session, the jobs its queued envelopes, turns and compacted segments name. A message envelope drops the session and task it repeated. In each job record, a mirror's `mirrorOf` and the `sessionId` of a job the agent adapter ran; a finished job's `output` is what its caller was given and stays as it was. A HITL inbox's requests become an index keyed by job id, from a map keyed by its hex, each request naming its `id` and `sessionId` as Blobs; so do the `sessionId` a request keeps in its job's entry in `:jobs` and the `id` a scheduled expiry (`v/ops/hitl/expire`) is given. What the model was shown, and an id another system gave (another adapter's `sessionId`), are left as written. A text id that is not hex is refused | `BlobIds` |
 
 ### Adapter steps
 
@@ -110,6 +112,7 @@ A step's parts apply in the order listed.
 | `test` | 0 → 1 | None: version 1 has version 0's shape | `TestAdapter.STATE_STEPS` |
 | `test` | 1 → 2, 2 → 3 | Synthetic, for tests: each appends the version it reaches to `migrations` | `TestAdapter.LogStep` |
 | `telegram`, `discord`, `whatsapp`, `slack` | 0 → 1 | A bot one of its user's agents created names that agent `caller`, not `principal` | `BotCaller` |
+| `telegram`, `discord`, `whatsapp`, `slack` | 1 → 2 | Session and job ids held as hex text become Blobs: the session each conversation continues, under `sessions` at any depth, and a delivery receipt's `sessionId` and `jobId`, under `inbox`. A session mapping that is not an id names no session and goes, so the conversation starts a new one: a Telegram bot's were copied from its owner's `w/telegram/sessions`, which held whatever the owner wrote. A receipt's id that is not hex is refused | `BlobSessionIds` |
 
 ### Shapes converted on use
 
@@ -121,7 +124,7 @@ A step's parts apply in the order listed.
 | Secret at key version 1 | Covia | Read with the version 1 key; re-encrypted under the current key on its next write | `SecretStore` |
 | Public agent with `a2a.caps` | Covia | Read as `accepts: "anyone"`; the stored config is unchanged | `Admission.policy` |
 | OAuth grant as a user secret `oauth/<provider>` → `:adapters/oauth` connection | OAuth adapter | On the user's next use of their connections | `OAuthAdapter.moveLegacyGrants` |
-| Telegram session mapping at `w/telegram/sessions/<bot>/<chat>` | Telegram adapter | When the chat's mapping is first read | `ConversationSessions`, `BotRunner.legacySession` |
+| Telegram session mapping at `w/telegram/sessions/<bot>/<chat>`, in hex | Telegram adapter | When the chat's mapping is first read, as a Blob | `ConversationSessions`, `BotRunner.legacySession` |
 | Telegram bot registry at `w/telegram/bots` | Telegram adapter | At adapter start, for each bot with no current binding | `TelegramAdapter.rearmLegacyBots` |
 
 ## Testing

@@ -238,15 +238,17 @@ public class TelegramAdapterTest {
 		assertNull(reply.parseMode(), "plain text by default");
 		assertNotNull(reply.replyTo(), "answers reply to the inbound message");
 
-		String sid = readSession(echo, chat);
+		Blob sid = readSession(echo, chat);
 		assertNotNull(sid, "the chat's agent session is persisted in the owner's workspace");
 		// Who is on the other end travels beside the turn: the principal the bot
-		// identified and how, with Telegram's sender and chat.
+		// identified, and the bot as what carried it, with Telegram's sender and chat.
 		AMap<AString, ACell> turn = firstTurn(sid);
 		assertEquals(owner, turn.get(Fields.CALLER), "an allow-listed sender comes from the bot's principal");
-		assertEquals(Strings.create("telegram:" + ALLOWED_ID), RT.getIn(turn, "authentication", "authenticatedIdentity"));
-		assertEquals(Strings.create("alice"), RT.getIn(turn, "authentication", "authentication", "details", "sender", "handle"));
-		assertEquals(Strings.create(Long.toString(chat)), RT.getIn(turn, "authentication", "authentication", "details", "chat", "id"));
+		AMap<AString, ACell> step = RT.ensureMap(RT.getIn(turn, Fields.ROUTE, 0));
+		assertEquals(Strings.create("telegram"), step.get(Fields.ADAPTER));
+		assertEquals(Strings.create(Long.toString(ALLOWED_ID)), RT.getIn(step, "sender", "id"));
+		assertEquals(Strings.create("alice"), RT.getIn(step, "sender", "handle"));
+		assertEquals(Strings.create(Long.toString(chat)), RT.getIn(step, "chat", "id"));
 
 		push(chat, ALLOWED_ID, "alice", "second");
 		FakeTelegramServer.Sent second = awaitSent(15_000);
@@ -283,7 +285,7 @@ public class TelegramAdapterTest {
 
 		push(chat, 9999L, "Alice", "first turn");
 		assertNotNull(awaitSent(15_000));
-		String sid1 = readSession(echo, chat);
+		Blob sid1 = readSession(echo, chat);
 		assertNotNull(sid1);
 
 		push(chat, 9999L, "Alice", "/new@" + echoUsername);
@@ -293,7 +295,7 @@ public class TelegramAdapterTest {
 
 		push(chat, 9999L, "Alice", "after reset");
 		assertNotNull(awaitSent(15_000));
-		String sid2 = readSession(echo, chat);
+		Blob sid2 = readSession(echo, chat);
 		assertNotNull(sid2);
 		assertNotEquals(sid1, sid2, "a fresh session after /new");
 	}
@@ -356,16 +358,16 @@ public class TelegramAdapterTest {
 		startEcho();
 		long chat = 1005L;
 		// A persisted session id the agent has never heard of (e.g. the agent was recreated).
-		adapter.state().write("config/" + echo + "/sessions/" + chat,
-			Strings.create("deadbeefdeadbeefdeadbeefdeadbeef"));
+		Blob stale = Blob.fromHex("deadbeefdeadbeefdeadbeefdeadbeef");
+		adapter.state().write("config/" + echo + "/sessions/" + chat, stale);
 		long jobsBefore = engine.jobs().getJobs(RequestContext.of(owner)).count();
 		push(chat, ALLOWED_ID, "alice", "are you there");
 		FakeTelegramServer.Sent reply = awaitSent(15_000);
 		assertNotNull(reply, "the bot must recover by starting a fresh session");
 		assertTrue(reply.text().contains("are you there"), reply.text());
-		String sid = readSession(echo, chat);
+		Blob sid = readSession(echo, chat);
 		assertNotNull(sid);
-		assertNotEquals("deadbeefdeadbeefdeadbeefdeadbeef", sid, "the stale session is replaced");
+		assertNotEquals(stale, sid, "the stale session is replaced");
 		await(() -> engine.jobs().getJobs(RequestContext.of(owner)).count() >= jobsBefore + 1, 10_000,
 			() -> "the chat turn is recorded as a Job in the bot user's job index");
 	}
@@ -933,7 +935,7 @@ public class TelegramAdapterTest {
 		}
 		String firstKey = covia.adapter.messaging.ConversationRouter.key("15003", "11");
 		String secondKey = covia.adapter.messaging.ConversationRouter.key("15003", "22");
-		String second = sessions.get(secondKey);
+		var second = sessions.get(secondKey);
 		assertNotNull(second);
 		assertNotEquals(sessions.get(firstKey), second);
 		var reset = telegram.message(15003, "private", ALLOWED_ID, "alice");
@@ -1656,18 +1658,17 @@ public class TelegramAdapterTest {
 	}
 
 	@SuppressWarnings("unchecked")
-	private AMap<AString, ACell> firstTurn(String sid) {
+	private AMap<AString, ACell> firstTurn(Blob sid) {
 		var agent = engine.getVenueState().users().user(owner).agent(Strings.create(AGENT));
-		var frames = (AVector<ACell>) agent.getSession(Blob.fromHex(sid)).get(Agent.KEY_FRAMES);
+		var frames = (AVector<ACell>) agent.session(sid).getRecord().get(Agent.KEY_FRAMES);
 		return (AMap<AString, ACell>) covia.adapter.agent.GoalTreeContext.activeConversation(RT.ensureMap(frames.get(0))).get(0);
 	}
 
-	private String readSession(String bot, long chatId) {
+	private Blob readSession(String bot, long chatId) {
 		BotRunner runner=adapter.runner(owner,bot);
 		if(runner==null)runner=adapter.runner(bot);
 		if(runner==null)return null;
-		ACell v=adapter.state().read(runner.sessionsRelativePath()+"/"+chatId);
-		return (v == null) ? null : v.toString();
+		return (Blob) adapter.state().read(runner.sessionsRelativePath()+"/"+chatId);
 	}
 
 	/** The first job of {@code ctx} not in {@code known} whose input carries {@code marker}. */

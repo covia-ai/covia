@@ -170,7 +170,7 @@ public class JobAdapter extends AAdapter {
 		if (timeout == 0) return wait;
 		return wait.orTimeout(timeout, TimeUnit.MILLISECONDS).exceptionallyCompose(error -> {
 			if (unwrap(error) instanceof TimeoutException) return CompletableFuture.failedFuture(
-				new UnavailableException(RESULT_TIMEOUT.formatted(timeout, id.toHexString())));
+				new UnavailableException(RESULT_TIMEOUT.formatted(timeout, id)));
 			return CompletableFuture.failedFuture(error);
 		});
 	}
@@ -224,12 +224,12 @@ public class JobAdapter extends AAdapter {
 		return JobManager.acknowledgement(id);
 	}
 
-	private static NotFoundException missing(Blob id) { return new NotFoundException(NOT_FOUND + id.toHexString(), id.toHexString()); }
+	private static NotFoundException missing(Blob id) { return new NotFoundException(NOT_FOUND + id, id.toHexString()); }
 	private static AMap<AString, ACell> found(AMap<AString, ACell> data, Blob id) {
 		if (data == null) throw missing(id);
 		return data;
 	}
 	private static AMap<AString, ACell> delivered(Blob id) {
-		return Maps.of(Fields.ID, id.toHexString(), Fields.DELIVERED, CVMBool.TRUE);
+		return Maps.of(Fields.ID, id, Fields.DELIVERED, CVMBool.TRUE);
 	}
 }

@@ -9,6 +9,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -165,7 +166,25 @@ final class LocalSpeechEngine implements SpeechEngine {
 		this.natives = natives;
 		this.backends = backends;
 		this.speakers = speakers;
-		idle.scheduleWithFixedDelay(this::releaseIfIdle, 60, 60, TimeUnit.SECONDS);
+	}
+
+	/** Whether the idle check is scheduled: once a model is loaded, there is something to release. */
+	private final AtomicBoolean idleScheduled = new AtomicBoolean();
+
+	/**
+	 * Schedules the idle check the first time a model loads, so an engine
+	 * that has only been configured runs no thread. A model can load after
+	 * {@link #close} has begun, for work queued before it; the close step
+	 * queued behind that work releases the model, so none is scheduled then.
+	 */
+	private void scheduleIdleRelease() {
+		if (idleScheduled.compareAndSet(false, true)) {
+			try {
+				idle.scheduleWithFixedDelay(this::releaseIfIdle, 60, 60, TimeUnit.SECONDS);
+			} catch (RejectedExecutionException closing) {
+				// Closing: the close step releases the model when this work is done
+			}
+		}
 	}
 
 	@Override public String name() { return NAME; }
@@ -485,6 +504,7 @@ final class LocalSpeechEngine implements SpeechEngine {
 			long started = System.nanoTime();
 			backend = backends.open(model, modelDirectory(cache.get(), model), threads);
 			log.info("speech: {} loaded in {} ms on {} threads", model.id(), (System.nanoTime() - started) / 1_000_000, threads);
+			scheduleIdleRelease();
 		}
 		return backend;
 	}
@@ -495,6 +515,7 @@ final class LocalSpeechEngine implements SpeechEngine {
 			long started = System.nanoTime();
 			speaker = speakers.open(voice, modelDirectory(cache.get(), voice), threads);
 			log.info("speech: {} loaded in {} ms on {} threads", voice.id(), (System.nanoTime() - started) / 1_000_000, threads);
+			scheduleIdleRelease();
 		}
 		return speaker;
 	}

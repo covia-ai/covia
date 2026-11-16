@@ -79,9 +79,9 @@ public class LLMAgentOllamaIT {
 		User ollamaUser = engine.getVenueState().users().user(ALICE_DID);
 		Agent ollamaAgent = ollamaUser.agent("ollama-agent");
 		Blob ollamaSid = Blob.fromHex("44440001444400014444000144440001");
-		ollamaAgent.ensureSession(ollamaSid, ALICE_DID);
+		ollamaAgent.sessions().create(ollamaSid, ALICE_DID, null);
 		AString ollamaSidHex = Strings.create(ollamaSid.toHexString());
-		ollamaAgent.appendSessionPending(ollamaSid, Maps.of(
+		ollamaAgent.session(ollamaSid).appendPending(Maps.of(
 			Strings.intern("content"), Strings.create("What is the capital of France?")));
 
 		Job runJob = engine.jobs().invokeOperation(
@@ -104,7 +104,7 @@ public class LLMAgentOllamaIT {
 		System.out.println(timelineResponse);
 
 		// Second turn
-		ollamaAgent.appendSessionPending(ollamaSid, Maps.of(
+		ollamaAgent.session(ollamaSid).appendPending(Maps.of(
 			Strings.intern("content"), Strings.create("And what is its population?")));
 
 		Job run2 = engine.jobs().invokeOperation(

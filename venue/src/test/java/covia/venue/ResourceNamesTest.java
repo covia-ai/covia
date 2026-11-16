@@ -343,7 +343,7 @@ public class ResourceNamesTest {
 	@Test
 	void anAgentsOwnNamesResolveOnEveryRoute() {
 		AString id = s("notes-agent");
-		engine.getVenueState().users().ensure(alice).ensureAgent(id,
+		TestAgents.ensure(engine.getVenueState().users().ensure(alice), id,
 			Maps.of("caps", Vectors.of(cap("n/", Capability.TOP))), null);
 		RequestContext step = engine.stepContext(ALICE, id);
 		ACell held = Maps.of("k", "v");

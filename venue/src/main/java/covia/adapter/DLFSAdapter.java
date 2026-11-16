@@ -3,12 +3,13 @@ package covia.adapter;
 import static convex.dlfs.DLFSDriveManager.isValidDriveName;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.FileSystem;
 import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
-import java.nio.file.StandardOpenOption;
 import java.util.concurrent.CompletableFuture;
 
 import org.slf4j.Logger;
@@ -27,8 +28,12 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
+import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.dlfs.DLFSDrive;
+import convex.lattice.fs.DLFSNode;
+import convex.lattice.fs.DLFileSystem;
+import convex.lattice.fs.DLPath;
 import convex.lattice.fs.impl.DLFSLocal;
 import covia.api.Fields;
 import covia.exception.AuthException;
@@ -67,6 +72,8 @@ import covia.venue.User;
  *   <li>{@code dlfs:write} — write file content</li>
  *   <li>{@code dlfs:mkdir} — create directory</li>
  *   <li>{@code dlfs:delete} — delete file or directory</li>
+ *   <li>{@code dlfs:stat} — an entry's type, size, times and metadata</li>
+ *   <li>{@code dlfs:setMetadata} — set or clear an entry's application metadata</li>
  * </ul>
  */
 public class DLFSAdapter extends AAdapter implements covia.venue.storage.ContentProvider {
@@ -81,6 +88,10 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 	/** A drive that does not exist or was deleted, named by an operation that does not create one. */
 	public static final String DRIVE_NOT_FOUND = "No such DLFS drive: ";
 	public static final String DRIVE_NAME_CONFLICT = "'drive' and 'name' name different drives";
+	/** Metadata asked of an entry outside a DLFS drive, such as a host file. */
+	public static final String NO_METADATA = "Only an entry in a DLFS drive has metadata";
+	/** A metadata change whose input names no value. */
+	public static final String METADATA_REQUIRED = "'metadata' is required: the value to set, or null to clear it";
 
 	private static final AString FIELD_DRIVE = Strings.intern("drive");
 	private static final AString FIELD_PATH = Strings.intern("path");
@@ -158,6 +169,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 		installAsset("dlfs/mkdir",        ASSETS_PATH + "mkdir.json");
 		installAsset("dlfs/delete",       ASSETS_PATH + "delete.json");
 		installAsset("dlfs/stat",         ASSETS_PATH + "stat.json");
+		installAsset("dlfs/set-metadata", ASSETS_PATH + "setMetadata.json");
 		log.debug("DLFS adapter installed with {} operations", pendingCatalogEntries.size());
 	}
 
@@ -433,10 +445,18 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 	private static AString abilityFor(String subOp) {
 		return switch (subOp) {
 			case "list", "tree", "read", "stat", "listDrives" -> Capability.CRUD_READ;
-			case "create", "write", "append", "mkdir", "createDrive" -> Capability.CRUD_WRITE;
+			case "create", "write", "append", "mkdir", "setMetadata", "createDrive" -> Capability.CRUD_WRITE;
 			case "delete", "deleteDrive" -> Capability.CRUD_DELETE;
 			default -> null;
 		};
+	}
+
+	/**
+	 * Whether a DLFS sub-operation may create what it names. Every write may,
+	 * except {@code setMetadata}, which changes an entry that exists.
+	 */
+	private static boolean creates(String subOp) {
+		return Capability.CRUD_WRITE.equals(abilityFor(subOp)) && !"setMetadata".equals(subOp);
 	}
 
 	/**
@@ -579,12 +599,23 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 	 */
 	AuthorisedPath resolveAuthorisedPath(RequestContext ctx, String ref, AString ability,
 			String componentRoot) throws IOException {
+		return resolveAuthorisedPath(ctx, ref, ability, componentRoot,
+			Capability.CRUD_WRITE.equals(ability));
+	}
+
+	/**
+	 * @param creates whether the write may create the entry, and so is also
+	 *        authorised where that changes its directory; false for a write that
+	 *        only changes an entry, such as {@code setMetadata}
+	 */
+	AuthorisedPath resolveAuthorisedPath(RequestContext ctx, String ref, AString ability,
+			String componentRoot, boolean creates) throws IOException {
 		DlfsFileRef fr = parseDlfsFileRef(ref);
 		if (fr == null) return null;
 
 		RequestContext driveCtx = authorise(ctx, fr, ability);
 		boolean mayCreate = false;
-		if (Capability.CRUD_WRITE.equals(ability)) {
+		if (creates) {
 			DlfsFileRef root = componentRoot(fr, componentRoot);
 			mayCreate = authoriseCreate(ctx, driveCtx, fr, root == null ? null : root.path());
 			if (root != null) materialise(driveCtx, root);
@@ -687,17 +718,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 		Path path = target.path();
 		// Authorised only to change it, so it existed: create never replaces
 		if (createOnly && !target.mayCreate()) throw new FileAlreadyExistsException(ref.toString());
-		// Interim (covia#629): a DLFS stream write is visible as it goes, so a
-		// failed or cancelled upload leaves a cut-off file under the real name.
-		// Convex's atomic conditional install (Convex-Dev/convex#790) would
-		// publish the file only on a clean end of stream, with createOnly
-		// checked at that moment.
-		try (java.io.OutputStream os = Files.newOutputStream(path, createOnly
-				? FileOperations.createOptions(path)
-				: FileOperations.writeOptions(path, StandardOpenOption.TRUNCATE_EXISTING,
-					target.mayCreate()))) {
-			data.transferTo(os);
-		}
+		FileOperations.writeFile(path, target.mayCreate(), !createOnly, data::transferTo);
 		return true;
 	}
 
@@ -829,7 +850,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 			requireDlfsCap(ctx, subOp, input);
 		}
 		boolean mayCreate = false;
-		if (Capability.CRUD_WRITE.equals(abilityFor(subOp)) && target.driveName() != null) {
+		if (creates(subOp) && target.driveName() != null) {
 			if ("createDrive".equals(subOp)) {
 				if (liveDrive(driveCtx, target.driveName()) == null) authoriseNewDrive(ctx, target);
 			} else {
@@ -862,6 +883,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 			case "mkdir" -> handleMkdir(driveCtx, input, mayCreate);
 			case "delete" -> handleDelete(driveCtx, input);
 			case "stat" -> handleStat(driveCtx, input);
+			case "setMetadata" -> handleSetMetadata(driveCtx, input);
 			default -> throw new NotSupportedException("Unknown DLFS operation: " + subOp);
 		};
 	}
@@ -990,7 +1012,87 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 		if (pathCell == null) throw new InvalidInputException("'path' is required");
 
 		Path path = resolvePath(fs, pathCell.toString());
-		return FileOperations.stat(path, null);
+		return stat(path, null);
+	}
+
+	private ACell handleSetMetadata(RequestContext ctx, AMap<AString, ACell> input) throws IOException {
+		String driveName = requireDriveName(input);
+		AString pathCell = RT.ensureString(input.get(FIELD_PATH));
+		if (pathCell == null) throw new InvalidInputException("'path' is required");
+		ACell metadata = metadataArg(input);
+		setMetadata(ctx, driveName, pathCell.toString(), metadata);
+		return Maps.of(Fields.METADATA, metadata);
+	}
+
+	// ==================== Metadata ====================
+
+	/**
+	 * {@link FileOperations#stat}, with the entry's application metadata in
+	 * {@code metadata} when it is a DLFS entry that has any.
+	 */
+	static ACell stat(Path path, Boolean readOnly) throws IOException {
+		AMap<AString, ACell> stat = RT.ensureMap(FileOperations.stat(path, readOnly));
+		if (!(path.getFileSystem() instanceof DLFSLocal fs)) return stat;
+		AVector<ACell> node = fs.getNode(dlPath(path));
+		ACell metadata = (node == null) ? null : DLFSNode.getMetadata(node);
+		return (metadata == null) ? stat : stat.assoc(Fields.METADATA, metadata);
+	}
+
+	/**
+	 * Sets the metadata of the entry at {@code path} in the user's live drive
+	 * {@code driveName}, or clears it when {@code metadata} is null: one
+	 * transaction on the drive through DLFS's own entry calls, which leaves the
+	 * content and modification time as they were. It creates nothing. Callers
+	 * have authorised the write; {@code ctx} names whose drive it is.
+	 *
+	 * @throws NotFoundException If the drive is absent or deleted
+	 * @throws NoSuchFileException If there is no entry at {@code path}
+	 */
+	private void setMetadata(RequestContext ctx, String driveName, String path, ACell metadata)
+			throws IOException {
+		DLFSDrive drive = liveDrive(ctx, driveName);
+		if (drive == null) throw new NotFoundException(DRIVE_NOT_FOUND + driveName, driveName);
+		String target = dlPath(resolvePath(drive.fileSystem(), path)).toString();
+		CVMLong time = engine.currentTimestamp();
+		try {
+			drive.execute(draft -> {
+				DLFileSystem fs = draft.fileSystem();
+				DLPath at = fs.getPath(target);
+				try {
+					AVector<ACell> node = fs.getNode(at);
+					if (node == null) throw new NoSuchFileException(path);
+					fs.updateNode(at, DLFSNode.withMetadata(node, metadata, time));
+				} catch (IOException e) {
+					throw new UncheckedIOException(e);
+				}
+			});
+		} catch (UncheckedIOException e) {
+			throw e.getCause();
+		}
+	}
+
+	/**
+	 * Sets the metadata of the entry a canonical DLFS resource names, as
+	 * {@code dlfs:setMetadata} does, for {@code file:setMetadata}, which has
+	 * authorised the write.
+	 *
+	 * @throws NotSupportedException If {@code resource} is not in DLFS
+	 */
+	void setMetadataAt(RequestContext ctx, String resource, ACell metadata) throws IOException {
+		DlfsFileRef fr = parseDlfsFileRef(resource);
+		if (fr == null) throw new NotSupportedException(NO_METADATA);
+		RequestContext driveCtx = (fr.ownerDID() == null) ? ctx : RequestContext.of(fr.ownerDID());
+		setMetadata(driveCtx, fr.drive(), fr.path(), metadata);
+	}
+
+	/** The {@code metadata} a change names: required, with null to clear it. */
+	static ACell metadataArg(AMap<AString, ACell> input) {
+		if (!input.containsKey(Fields.METADATA)) throw new InvalidInputException(METADATA_REQUIRED);
+		return input.get(Fields.METADATA);
+	}
+
+	private static DLPath dlPath(Path path) {
+		return ((DLPath) path).toAbsolutePath().normalize();
 	}
 
 	/**

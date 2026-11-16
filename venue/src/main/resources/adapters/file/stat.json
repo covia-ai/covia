@@ -1,6 +1,6 @@
 {
   "name": "Stat File",
-  "description": "Return metadata for a path under a configured filesystem root. Reports whether the path exists, its type (file/directory/symlink/other), size in bytes, last-modified time (epoch millis), and the root's read-only flag.",
+  "description": "Return metadata for a path under a configured filesystem root. Reports whether the path exists, its type (file/directory/symlink/other), size in bytes, last-modified time (epoch millis), the root's read-only flag, and, for an entry in DLFS, any application metadata set with file_set_metadata.",
   "creator": "Covia",
   "operation": {
     "adapter": "file:stat",
@@ -22,7 +22,8 @@
         "size": { "type": "integer" },
         "modified": { "type": "integer" },
         "readOnly": { "type": "boolean" },
-        "mime": { "type": "string", "description": "Best-guess MIME type (regular files only)" }
+        "mime": { "type": "string", "description": "Best-guess MIME type (regular files only)" },
+        "metadata": { "description": "The DLFS entry's application metadata; absent when it has none" }
       }
     }
   }

@@ -275,7 +275,9 @@ should set at least:
 - `auth.public.enabled: false` unless anonymous read access is wanted, and
   `auth.maxTokenLifetime` to bound hand-minted bearers (*Bearer expiry*).
 - `users.autoCreate: false` unless any authenticated DID may register itself.
-- `strictConfig: true`, so a typo fails startup instead of being ignored.
+- `strictConfig: true`, so a typo fails startup, or in an adapter's block
+  leaves that adapter failed (*Runtime adapter lifecycle*), instead of being
+  ignored.
 - `Strict-Transport-Security` at the proxy — Caddy needs an explicit
   `header Strict-Transport-Security "max-age=31536000"` — the venue sends the
   other browser hardening headers itself (*Browser security headers*).
@@ -805,9 +807,10 @@ code execution.
 This installs `v/ops/python/health/score`. Each function receives one Python
 value converted from the Covia input and its return value is converted back to
 a Convex value. Script globals persist for the venue lifetime and are released
-on shutdown. Script paths may be absolute or relative to the venue process;
-they are resolved at startup, loaded once, and a missing or invalid configured
-script fails startup.
+on shutdown. Script paths may be absolute or relative to the venue process.
+Scripts are loaded, running their top-level code, once, when the adapter first
+starts; a disabled adapter runs none. A missing or invalid configured script
+leaves the adapter failed, its operations refused, until a restart loads them.
 
 Running Python is the operator's, since the code runs in the venue process
 with the venue's power. Each configured function needs `admin/execute/python`
@@ -1376,8 +1379,10 @@ Adapter implementers should follow the validation, publication, and private
 state contract in [ADAPTERS.md](ADAPTERS.md#lifecycle-and-configuration).
 
 The reserved key `enabled: false` parks an adapter as disabled at
-boot: it is not installed, publishes nothing to `v/ops/` or `v/info/adapters/`,
-and does not dispatch. `{"adapters": {"test": {"enabled": false}}}` hides the
+boot: it is offered its settings and installed, so it still owns and
+recovers its unfinished jobs, but it is not started: it publishes nothing to
+`v/ops/` or `v/info/adapters/`, and does not dispatch. Settings a disabled
+adapter refuses are logged and leave it uninstalled until it is enabled. `{"adapters": {"test": {"enabled": false}}}` hides the
 test operations; `{"adapters": {"convex": {"enabled": false}}}` removes the
 Convex ops. A disabled adapter can be switched on later without a restart
 with `v/ops/venue/adapter/enable`. The `kernel` marker identifies adapters the
@@ -2560,9 +2565,11 @@ comes from a principal, and the binding identifies which.
   the channel in one shape for every provider — `sender {id, handle?, name?}`,
   `chat {id, kind}`, `thread`, `space`, `message`, with provider extras under
   the provider's name ([AUTH.md §5.3](AUTH.md#53-channel-methods-messaging-bindings)).
-  The agent records it beside the turn, never in the message, so nothing typed
-  can pose as it, and an LLM agent's context shows it as a `[From: …]` element
-  whenever who is talking changes. The message itself is the sender's text,
+  A binding's media and reply operations receive it. The agent records the
+  binding as what carried the turn, with the sender's and chat's ids, beside
+  the turn and never in the message, so nothing typed can pose as it, and an
+  LLM agent's context shows it as a `[From: …]` element whenever who is
+  talking changes. The message itself is the sender's text,
   or `{text, attachments, content?}` when it carries media.
 - **The agent acts as itself**, whoever asked: its tool calls under its own
   `config.caps`, its harness with its controller's authority (UCAN.md §5.4).
@@ -2630,7 +2637,11 @@ Per bot:
   `"public"` names the venue's public principal (the same identity as an
   anonymous MCP client on a public venue), which is what a local dev venue's
   agents are owned by.
-- `agent` **or** `operation` — the **inbound handler**. With `agent`, each
+- `agent` **or** `operation` — the **inbound handler**. `agent` is an agent
+  reference ([AGENT_LOOP.md §1.1](AGENT_LOOP.md#11-agent-references)); a bare
+  id or `g/<id>` names an agent of the bot's `user`, and a reference that names
+  no agent is refused when the bot is created. This holds for every messaging
+  provider's bindings. With `agent`, each
   Telegram chat (or forum topic) is one `agent:chat` session, persisted at
   `:adapters/telegram/config/<bot>/sessions/<chatId>` so
   conversations survive restarts; `/new` starts a fresh one. The agent
@@ -3133,7 +3144,7 @@ above is intentionally outside this administrative group:
 |-----------|--------|
 | `v/ops/venue/adapters` | Registry view: every registered adapter (active **and** disabled) with `enabled`, `status` (`running`, `failed` or `disabled`), a failed adapter's `reason`, `kernel`, owning `module`, effective `config` and `operations`, plus loaded `modules` |
 | `v/ops/venue/adapter/disable {name}` | Remove an adapter from live dispatch and `v/info/adapters/<name>`, and stop its workers: a messaging adapter's bots close their polls and connections. Durable catalog metadata remains; the instance is retained and in-flight jobs finish |
-| `v/ops/venue/adapter/enable {name}` | Restore it and start its workers again (installing on first enable if it was boot-disabled). If it fails to start, it stays enabled but failed and the call fails with the reason |
+| `v/ops/venue/adapter/enable {name}` | Restore it and start its workers again (offering its settings and installing it first if it never was, having declined or refused them). Its jobs are already its own: enabling does not recover them again. If it refuses its settings or fails to start, it stays enabled but failed and the call fails with the reason |
 | `v/ops/venue/adapter/configure {name, config, merge?}` | Apply a new effective configuration (`adapters.<name>` shape). The adapter may decline it, and nothing changes, or refuse it with an error, and it is offered its previous configuration again; if it refuses that too, it is stopped and left failed |
 | `v/ops/venue/adapter/restart {name}` | Stop an enabled adapter, running or failed, offer it its effective configuration again and start it. If it fails again, it stays failed and the call fails with the reason |
 | `v/ops/venue/module/load {module, sha256?, config?}` | Load a module jar; its adapters and declarations overwrite existing names and paths |
@@ -3145,12 +3156,18 @@ authority ([VENUE_AUTHORITY.md](./VENUE_AUTHORITY.md#how-it-works-today)) for
 Ordinary authenticated users get `AuthException`.
 
 **Failed adapters.** An adapter that cannot start, at launch, enable or
-restart, does not stop the venue: it stays enabled with `status: failed` and
-the `reason` in `v/ops/venue/adapters`, and the log says the same. Calls to its
-operations fail with "Adapter `<name>` is not running" and no reason. Fix the
-cause (free the port, bring the service back, or change its settings with
-`adapter/configure`), then `adapter/restart` it. Disabling it clears the
-failure. Contract: [ADAPTERS.md](ADAPTERS.md#an-adapter-that-is-not-running).
+restart, does not stop the venue, whether it refused a setting in its
+`adapters.<name>` block, failed to install, or its start failed (a port in
+use, a service out of reach). It stays enabled with `status: failed` and the `reason` in
+`v/ops/venue/adapters`, and the log says the same. Until then it is treated as
+a stopped adapter: its operations fail with "Adapter `<name>` is not running"
+and no reason, and nothing else in the venue uses it, so with `http` failed
+outbound requests are refused. Fix the cause (free the port, bring the service
+back, or correct its settings with `adapter/configure`), then
+`adapter/restart` it. Disabling it clears the failure. A stored adapter state
+newer than this build, or a failed adapter that `auth.methods` or
+`auth.venueProof` names, still stops the launch. Contract:
+[ADAPTERS.md](ADAPTERS.md#an-adapter-that-is-not-running).
 
 **Module policy.** `module/load` and `module/unload` require
 `dynamicModules.enabled` (default **off**). By default `module` must be a jar
@@ -3336,7 +3353,8 @@ across restarts. Connection state is the venue's own and is never published:
 what a node shares is only its signed records. The adapter is network
 infrastructure; social follows belong to the social layer, not here. Both are venue-owned: they need `p2p/read` or `p2p/manage`
 on `<venue DID>/p2p`. An embedding host subscribes to peer changes with
-`engine.findAdapter(P2PAdapter.class).subscribe(listener)`. Disabling the
+`engine.findAdapter(P2PAdapter.class).subscribe(listener)`; `findAdapter`
+returns null while the adapter is disabled or failed. Disabling the
 adapter takes the node offline; reconfiguring it restarts the node. A node
 that cannot launch, such as on a port in use, leaves the adapter failed with
 the venue running; `venue:adapter/restart` launches it again. A runtime change

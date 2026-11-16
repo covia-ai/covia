@@ -33,8 +33,11 @@ class AdapterUserDeletionTest {
 		boolean failStop;
 		boolean started;
 		boolean sawPreviousUser;
+		/** Declines its configuration, so the venue never installs it. */
+		boolean declines;
 		@Override public String getName() { return name; }
 		@Override public String getDescription() { return "Deletion hook test"; }
+		@Override public boolean configure(AMap<AString, ACell> config, boolean strict) { return !declines; }
 		@Override public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
 			return CompletableFuture.completedFuture(input);
 		}
@@ -112,15 +115,17 @@ class AdapterUserDeletionTest {
 		} finally { engine.close(); }
 	}
 
-	@Test void bootDisabledAdaptersDoNotNeedInstallationToDeleteState() {
+	/** An adapter that declined its configuration is never installed, yet deletes its users' state. */
+	@Test void uninstalledAdaptersDoNotNeedInstallationToDeleteState() {
 		Engine engine = Engine.createTemp(Maps.of("adapters", Maps.of(
 			NAME, Maps.of("enabled", false), "agent", Maps.of("enabled", false))));
 		try {
 			Probe adapter = new Probe();
+			adapter.declines = true;
 			engine.registerAdapter(adapter);
 			assertNull(adapter.engine);
 			AdapterState state = seed(engine);
-			engine.getVenueState().users().user(OWNER).ensureAgent("old", Maps.empty(), VALUE);
+			TestAgents.ensure(engine.getVenueState().users().user(OWNER), "old", Maps.empty(), VALUE);
 			engine.deleteUser(engine.venueContext(), OWNER);
 			assertEquals(1, adapter.stopped);
 			assertNull(state.read("custom/" + OWNER));

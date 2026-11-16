@@ -118,7 +118,7 @@ context-state contract.
 
 **There is no separate archive.** Authorised operators can read the nested
 lattice value directly; `agent:history` reads any range of the history by
-position, exactly as stored.
+position (AGENT_SESSIONS.md §5.2).
 
 ## The Frame Stack
 

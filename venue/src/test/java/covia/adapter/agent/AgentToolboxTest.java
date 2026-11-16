@@ -398,9 +398,9 @@ public class AgentToolboxTest {
 
 			ACell chat = engine.jobs().invokeOperation("v/ops/agent/chat",
 				Maps.of(Fields.AGENT_ID, id, Fields.MESSAGE, "compact this"), user).awaitResult(10000);
-			Blob sid = Blob.fromHex(RT.getIn(chat, Fields.SESSION_ID).toString());
+			Blob sid = (Blob) RT.getIn(chat, Fields.SESSION_ID);
 			AMap<AString, ACell> root = RT.ensureMap(RT.getIn(engine.getVenueState().users().user(userDid)
-				.agent(id).getSession(sid), Fields.FRAMES, CVMLong.ZERO));
+				.agent(id).session(sid).getRecord(), Fields.FRAMES, CVMLong.ZERO));
 			ACell live = archivedToolResult(GoalTreeContext.archivedConversation(root), "call_c1");
 			assertNotNull(live, runtime.name() + " live cycle did not record compact: " + root);
 			assertEquals(live, result(stepped, "call_c1"), runtime.name());

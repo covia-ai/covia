@@ -48,7 +48,7 @@ public class SchedulerAdapter extends AAdapter {
 
 	@Override
 	public String getName() {
-		return "scheduler";
+		return covia.venue.Scheduler.NAME;
 	}
 
 	@Override

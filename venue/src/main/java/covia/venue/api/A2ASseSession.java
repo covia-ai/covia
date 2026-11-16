@@ -173,14 +173,14 @@ public class A2ASseSession {
 		Map<String, Object> error = new LinkedHashMap<>();
 		if (e instanceof covia.exception.AuthException) {
 			error.put("code", A2AErrorCodes.TASK_NOT_FOUND.code());
-			error.put("message", covia.venue.JobManager.JOB_ACCESS_DENIED + taskId.toHexString());
+			error.put("message", covia.venue.JobManager.JOB_ACCESS_DENIED + taskId);
 			sendEnvelope("error", error);
 			close();
 			return;
 		}
 		error.put("code", A2AErrorCodes.INTERNAL.code());
 		error.put("message", FaultException.within(
-			STREAM.formatted(taskId.toHexString()), FaultException.VENUE, e).getMessage());
+			STREAM.formatted(taskId), FaultException.VENUE, e).getMessage());
 		sendEnvelope("error", error);
 		close();
 	}

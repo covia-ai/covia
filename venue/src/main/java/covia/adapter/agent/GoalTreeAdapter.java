@@ -335,7 +335,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		AVector<ACell> offered = concatTools(fixedTools, loads.tools());
 		ContextAssembler.Spec spec = new ContextAssembler.Spec(
 			engine, ctx, capsCtx, l3Config,
-			ContextAssembler.sessionHex(RT.getIn(in.session(), Fields.ID)), null,
+			ContextAssembler.idText(ctx.getSessionId()), null,
 			profile.budget(), profile.labels(), profile.toolCalling(),
 			offered, null, indexLoads,
 			rootFrames, null, null, true, null, taskTools.message(), fixed.unavailable(), null, null)
@@ -606,7 +606,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		// frame and inference supplies the rest (AGENT_CONTEXT.md §8).
 		ContextAssembler.Spec cycleSpec = new ContextAssembler.Spec(
 			engine, ctx, capsCtx, l3Config,
-			ContextAssembler.sessionHex(RT.getIn(input, Fields.SESSION, Fields.ID)), null,
+			ContextAssembler.idText(ctx.getSessionId()), null,
 			profile.budget(), profile.labels(), profile.toolCalling(),
 			null, null, null, null, null, null, true, null, null,
 			fixed.unavailable(), null, null)

@@ -3,6 +3,7 @@ package covia.venue;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -200,9 +201,8 @@ public class AgentEventsTest {
 			chat.awaitResult(10_000);
 			c.await(AgentEvents.RUN_END, null, 5_000);
 		}
-		AString sid = RT.ensureString(RT.getIn(chat.getOutput(), Fields.SESSION_ID));
+		Blob sid = assertInstanceOf(Blob.class, RT.getIn(chat.getOutput(), Fields.SESSION_ID));
 		AString response = RT.ensureString(RT.getIn(chat.getOutput(), Fields.RESPONSE));
-		assertNotNull(sid);
 		assertTrue(response.toString().startsWith("Tool returned:"), response.toString());
 
 		// The mock LLM requests one echo call, then answers from its result:
@@ -217,19 +217,18 @@ public class AgentEventsTest {
 		assertSeqStrictlyIncreasing(c.events);
 
 		// Every cycle-scoped event is correlated to the run, the cycle and the session.
-		AString chatJobId = Strings.create(chat.getID().toHexString());
 		for (Event e : c.events) {
 			if (e.type().equals(AgentEvents.STATUS) || e.type().toString().startsWith("run:")) continue;
 			assertEquals(1, num(e, Fields.RUN), e.type().toString());
 			assertEquals(1, num(e, Fields.CYCLE), e.type().toString());
-			assertEquals(sid, str(e, Fields.SESSION_ID), e.type().toString());
+			assertEquals(sid, RT.getIn(e.data(), Fields.SESSION_ID), e.type().toString());
 			assertNull(RT.getIn(e.data(), Fields.JOB_ID), "a chat cycle has no task job");
 			assertNull(RT.getIn(e.data(), Fields.DEPTH), "root-frame activity carries no depth");
 		}
 
 		Event cycleStart = c.first(AgentEvents.CYCLE_START);
 		assertEquals(1, num(cycleStart, Fields.MESSAGES));
-		assertEquals(Vectors.of(chatJobId), RT.getIn(cycleStart.data(), Fields.JOBS),
+		assertEquals(Vectors.of(chat.getID()), RT.getIn(cycleStart.data(), Fields.JOBS),
 			"the chat job presented this cycle is named");
 		assertEquals(Strings.create("v/ops/llmagent/chat"), str(cycleStart, Fields.OP));
 
@@ -284,7 +283,7 @@ public class AgentEventsTest {
 			"frame-owning runtimes do not duplicate already-persisted turns in cycle:end");
 		Agent agent = engine.getVenueState().users().user(did).agent(id);
 		AVector<ACell> turns = covia.adapter.agent.GoalTreeContext.activeConversation(RT.ensureMap(RT.getIn(
-			agent.getSession(Blob.fromHex(sid.toString())), Fields.FRAMES,
+			agent.session(sid).getRecord(), Fields.FRAMES,
 			CVMLong.ZERO)));
 		assertTrue(turns.count() >= 4,
 			"canonical session has user, tool-call reply, tool result and response: " + turns);
@@ -466,8 +465,7 @@ public class AgentEventsTest {
 		Job mint = engine.jobs().invokeOperation("v/ops/agent/chat",
 			Maps.of(Fields.AGENT_ID, id, Fields.MESSAGE, "mint A"), ctx);
 		mint.awaitResult(10_000);
-		AString sessionA = RT.ensureString(RT.getIn(mint.getOutput(), Fields.SESSION_ID));
-		assertNotNull(sessionA);
+		Blob sessionA = assertInstanceOf(Blob.class, RT.getIn(mint.getOutput(), Fields.SESSION_ID));
 
 		Capture whole = new Capture();
 		Capture scoped = new Capture();
@@ -486,7 +484,7 @@ public class AgentEventsTest {
 				&& AgentEvents.RUN_END.equals(whole.events.get(whole.events.size() - 1).type()),
 				5_000, () -> "two cycles then a run end: " + whole.types());
 		}
-		AString sessionB = RT.ensureString(RT.getIn(other.getOutput(), Fields.SESSION_ID));
+		Blob sessionB = assertInstanceOf(Blob.class, RT.getIn(other.getOutput(), Fields.SESSION_ID));
 		assertNotEquals(sessionA, sessionB, "the second chat minted its own session");
 
 		assertEquals(2, whole.all(AgentEvents.CYCLE_START).size(), "the whole-agent view saw both cycles");
@@ -496,7 +494,7 @@ public class AgentEventsTest {
 		assertFalse(scoped.all(AgentEvents.STATUS).isEmpty(), "status events reach a session view");
 		for (Event e : scoped.events) {
 			if (AgentEvents.STATUS.equals(e.type())) continue;
-			assertEquals(sessionA, str(e, Fields.SESSION_ID), e.type().toString());
+			assertEquals(sessionA, RT.getIn(e.data(), Fields.SESSION_ID), e.type().toString());
 		}
 		assertSeqStrictlyIncreasing(scoped.events);
 

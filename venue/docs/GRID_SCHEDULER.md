@@ -176,21 +176,21 @@ nothing due holds no thread.
    whose time is the latest asked for. A step that leaves the time unchanged
    still starts whatever is due, such as an event added since with a past time.
 2. While a place is free (`scheduler.maxConcurrency`, below), **claims** the
-   head event if its `time ≤ t` — **one** whole-value replace (§2) that covers
-   everything the fire changes about the schedule: a one-shot event is
-   **removed**; a recurring event is **re-inserted** under the same `id` at
-   its next due slot with `lastFired = t` and, for a tracked fire, `lastJob`.
-   The fire's Job is *prepared* first, under the lock: minted, PENDING and,
-   when tracked, persisted in the owner's history, which makes `lastJob` part
-   of that schedule write — the adapter is **not** started. Job preparation and the
-   schedule claim are two ordered lattice updates because they touch different
-   records. A crash between them can leave an unstarted PENDING Job while the
-   event remains; recovery fails that Job and a later fire prepares a new one.
-   There is still no state in which an event has been consumed but its Job is
-   unknown. Because the claim and every other mutation hold the lock, a
-   `trigger` of the same event either already ran (the drain finds it gone) or
-   runs after. This gives **at-most-once** firing.
-3. Starts each claimed event's prepared Job (§7) on a fresh virtual thread,
+   head event if its `time ≤ t`. The fire's Job is *prepared* first, under
+   the lock: its operation resolved and its caller checked. Then **one**
+   venue transaction commits everything the fire changes: the Job, PENDING,
+   under an id taken in that transaction, in the owner's history when
+   tracked; and the schedule's change, one whole-value replace (§2), in
+   which a one-shot event is **removed** and a recurring event is
+   **re-inserted** under the same `id` at its next due slot with
+   `lastFired = t` and, for a tracked fire, `lastJob`. The adapter is
+   **not** started yet. So an event is never consumed without its Job, nor a
+   Job recorded for an event left due. A crash after the commit leaves an
+   unstarted PENDING Job, which recovery fails as interrupted; the fire is
+   not repeated. Because the claim and every other mutation hold the lock, a
+   `trigger` of the same event either already ran (the drain finds it gone)
+   or runs after. This gives **at-most-once** firing.
+3. Starts each claimed event's Job (§7) on a fresh virtual thread,
    **as the event's caller would invoke it now, presenting its `proofs`
    again** (§5). Any error is logged. Its place frees **when the
    operation's invocation returns** — the adapter has been called and has
@@ -216,9 +216,9 @@ launch has finished recovery, and from the moment close begins, it starts
 nothing, so events falling due then stay in the schedule for its next start.
 Its close fails any update still waiting on it with `ShuttingDownException`.
 
-If a Job cannot be prepared (unresolvable op, capability denied), the event is
-still claimed — the schedule advances, there is no Job and no `lastJob`, and
-the error is logged (or returned, for `trigger`).
+If a Job cannot be prepared or recorded (unresolvable op, capability denied,
+account deleted), the event is still claimed — the schedule advances, there is
+no Job and no `lastJob`, and the error is logged (or returned, for `trigger`).
 
 **Claim-then-invoke** is chosen over invoke-then-remove so a crash mid-fire can
 at worst *drop* an event, never double-run a user's operation. Schedules that
@@ -275,6 +275,12 @@ scheduling, which the event keeps in `proofs`. Consequences, all intended:
 Every context that can schedule is a principal's own as it stands, so this
 loses nothing: an agent's step always runs as that agent, under its record's
 caps, whatever its input names (`Engine.stepContext`).
+
+A fire is a request of its own, which the scheduler carried: its route is the
+scheduler's step alone, naming the event's handle, whatever carried the
+request that scheduled it, so an agent it reaches is told the scheduler
+delivered it ([AGENT_CONTEXT.md](./AGENT_CONTEXT.md) §1.2). An access token
+the event was scheduled through still narrows the fire, as above.
 
 A fire presents no sign-in credential: only a live request carries one, and
 the venue keeps none. A grid hop with `authenticateAs: "caller"` therefore
@@ -338,12 +344,12 @@ every other job uses.
   `operation.internal:false` still forces recording.
 - **tracked** — a durable Job in the owner's `j/` history, exempt from
   top-level admission like any internal dispatch, recorded regardless of
-  operation metadata. The Job is prepared before the claim so its ID is
-  written into the surviving recurring record as `lastJob` in the same
-  atomic replace that consumes the fire (§4); a tracked one-shot simply
-  appears in the owner's job list like any other job. On restart, a prepared
-  Job whose adapter never ran is failed as interrupted by job recovery — the
-  same rule as any other PENDING job — so the split can never double-run.
+  operation metadata. The Job is recorded in the transaction that consumes
+  the fire (§4), so its ID is written into the surviving recurring record as
+  `lastJob` in that same commit; a tracked one-shot simply appears in the
+  owner's job list like any other job. On restart, a recorded Job whose
+  adapter never ran is failed as interrupted by job recovery — the same rule
+  as any other PENDING job — so a fire never runs twice.
 
 **Which applies is resolved at fire time**, so an operator's policy covers
 events already queued:

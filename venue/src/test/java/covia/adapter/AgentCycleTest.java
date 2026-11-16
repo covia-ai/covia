@@ -136,7 +136,7 @@ public class AgentCycleTest {
 	}
 
 	private static Blob sessionOf(Job job) {
-		return Blob.fromHex(RT.ensureString(job.getData().get(Fields.SESSION_ID)).toString());
+		return Blob.parse(job.getData().get(Fields.SESSION_ID));
 	}
 
 	private static AString hex(Job job) {
@@ -149,12 +149,12 @@ public class AgentCycleTest {
 	}
 
 	private static long pendingCount(Agent agent, Blob sid) {
-		AVector<ACell> pending = agent.getSessionPending(sid);
+		AVector<ACell> pending = agent.session(sid).pending();
 		return (pending == null) ? 0 : pending.count();
 	}
 
 	private static AVector<ACell> conversation(Agent agent, Blob sid) {
-		AVector<ACell> frames = RT.ensureVector(RT.getIn(agent.getSession(sid), Agent.KEY_FRAMES));
+		AVector<ACell> frames = RT.ensureVector(RT.getIn(agent.session(sid).getRecord(), Agent.KEY_FRAMES));
 		if (frames == null || frames.isEmpty()) return Vectors.empty();
 		AVector<ACell> turns = GoalTreeContext.activeConversation(RT.ensureMap(frames.get(0)));
 		return (turns == null) ? Vectors.empty() : turns;
@@ -199,7 +199,7 @@ public class AgentCycleTest {
 		for (long i = 0; i < timeline.count(); i++) {
 			AVector<ACell> taken = RT.ensureVector(RT.getIn(timeline.get(i), Fields.MESSAGES));
 			for (long j = 0; taken != null && j < taken.count(); j++) {
-				if (hex(chat).equals(RT.getIn(taken.get(j), Fields.JOB_ID))) return i;
+				if (chat.getID().equals(RT.getIn(taken.get(j), Fields.JOB_ID))) return i;
 			}
 		}
 		return -1;
@@ -223,15 +223,15 @@ public class AgentCycleTest {
 				assertEquals(0, pendingCount(agent, sid), runtime + ": the message has left the queue");
 				AVector<ACell> taken = userTurns(agent, sid, text);
 				assertEquals(1, taken.count(), runtime + ": the message is a turn");
-				assertEquals(hex(chat), RT.getIn(taken.get(0), Fields.JOB_ID), runtime + ": the turn names its chat");
-				assertNotNull(agent.getSessionCycleEpoch(sid), runtime + ": the session is claimed");
+				assertEquals(chat.getID(), RT.getIn(taken.get(0), Fields.JOB_ID), runtime + ": the turn names its chat");
+				assertNotNull(agent.session(sid).cycleEpoch(), runtime + ": the session is claimed");
 
 				gate.release();
 				chat.awaitResult(10_000);
 				assertEquals(Agent.SLEEPING, awaitRest(agent, owner));
 				assertEquals(1, userTurns(agent, sid, text).count(), runtime + ": the message is presented once");
 				assertEquals(1, assistantTurns(agent, sid), runtime + ": one reply");
-				assertNull(agent.getSessionCycleEpoch(sid), runtime + ": the claim ends with the cycle");
+				assertNull(agent.session(sid).cycleEpoch(), runtime + ": the claim ends with the cycle");
 			}
 		}
 	}
@@ -290,7 +290,7 @@ public class AgentCycleTest {
 		Blob sid = sessionOf(chat);
 		assertEquals(0, pendingCount(agent, sid), runtime + ": the cycle took the message");
 		assertEquals(1, userTurns(agent, sid, "hello").count(), runtime + ": the message is in the conversation");
-		assertNull(agent.getSessionCycleEpoch(sid), runtime + ": the claim ends with the cycle");
+		assertNull(agent.session(sid).cycleEpoch(), runtime + ": the claim ends with the cycle");
 		return sid;
 	}
 
@@ -518,7 +518,7 @@ public class AgentCycleTest {
 			awaitGate(gate);
 			Blob sid = sessionOf(task);
 			assertNotNull(agent.suspend(owner.getCallerDID(), Strings.create("stop")));
-			assertNull(agent.getSessionCycleEpoch(sid), "the stop released the session");
+			assertNull(agent.session(sid).cycleEpoch(), "the stop released the session");
 			assertTrue(agent.tryResume());
 			gate.release();
 
@@ -556,18 +556,18 @@ public class AgentCycleTest {
 	}
 
 	@Test
-	public void aSessionNamedWithThePrefixIsHeldAsBareHex(TestInfo info) throws Exception {
+	public void aSessionNamedWithThePrefixIsTheSameSession(TestInfo info) throws Exception {
 		RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));
 		stepAgent(owner, "bare-session");
 		Job first = chat(owner, "bare-session", null, "reply");
 		first.awaitResult(10_000);
-		String bare = sessionOf(first).toHexString();
+		Blob session = sessionOf(first);
 
 		Job second = engine.jobs().invokeOperation("v/ops/agent/chat", Maps.of(Fields.AGENT_ID, "bare-session",
-			Fields.MESSAGE, Strings.create("reply"), Fields.SESSION_ID, Strings.create("0x" + bare)), owner);
+			Fields.MESSAGE, Strings.create("reply"), Fields.SESSION_ID, Strings.create("0x" + session.toHexString())), owner);
 		second.awaitResult(10_000);
 
-		assertEquals(Strings.create(bare), second.getData().get(Fields.SESSION_ID));
+		assertEquals(session, second.getData().get(Fields.SESSION_ID));
 	}
 
 	@Test

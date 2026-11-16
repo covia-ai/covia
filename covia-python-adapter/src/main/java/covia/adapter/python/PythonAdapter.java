@@ -57,6 +57,8 @@ public final class PythonAdapter extends AAdapter implements AutoCloseable {
 	private static final AString INSTANCES = Strings.intern("instances");
 	private static final AString SCRIPT = Strings.intern("script");
 	private static final AString FUNCTION = Strings.intern("function");
+	/** Refusal for a configured operation called before the adapter has started and loaded its script. */
+	public static final String NOT_LOADED = "Python operations are loaded when the python adapter starts";
 
 	private record Definition(String id, Path script, String function,
 		String name, String description, ACell input, ACell output) {}
@@ -182,29 +184,73 @@ public final class PythonAdapter extends AAdapter implements AutoCloseable {
 			+ "Convex maps, vectors, scalars and blobs are converted natively.";
 	}
 
+	/**
+	 * Declares the configured operations. Nothing is read or run: an installed
+	 * adapter that is not started runs no operator code ({@link #start}).
+	 */
 	@Override
 	protected void installAssets() {
+		if (runtime == null) throw new IllegalStateException("Python module was not configured");
+		for (Definition definition : definitions.values()) {
+			installAsset("python/" + definition.id(), metadata(definition));
+		}
+	}
+
+	/** Whether the configured scripts are loaded ({@link #start}); written under {@link #lifecycle}. */
+	private volatile boolean loaded;
+
+	/**
+	 * Loads the configured scripts into the runtime, which runs each one's
+	 * top-level code. Operator code runs only once the adapter is started,
+	 * never while it is just installed. The scripts load once; a later start
+	 * keeps them. If one cannot load, none is kept and the start fails with
+	 * the reason.
+	 *
+	 * @throws ConfigurationException if a script is missing, or cannot be read
+	 *         or loaded
+	 */
+	@Override
+	public void start() {
+		lifecycle.writeLock().lock();
 		try {
-			if (runtime == null) throw new IllegalStateException("Python module was not configured");
-			for (Definition definition : definitions.values()) {
-				if (!Files.isRegularFile(definition.script())) {
-					throw new ConfigurationException(
-						"Python script not found: " + definition.script());
+			if (closed) throw new UnavailableException("Python adapter is closed");
+			if (loaded) return;
+			Map<String, Operation> loading = new LinkedHashMap<>();
+			try {
+				for (Definition definition : definitions.values()) {
+					if (!Files.isRegularFile(definition.script())) {
+						throw new ConfigurationException(
+							"Python script not found: " + definition.script());
+					}
+					String source = Files.readString(definition.script());
+					PythonScript script = runtime.load(source, definition.script().toString());
+					loading.put(definition.id(), new Operation(definition, script));
 				}
-				String source = Files.readString(definition.script());
-				PythonScript script = runtime.load(source, definition.script().toString());
-				operations.put(definition.id(), new Operation(definition, script));
-				installAsset("python/" + definition.id(), metadata(definition));
+				operations.putAll(loading);
+				loaded = true;
+			} catch (IOException | PythonException | ConfigurationException | IllegalArgumentException e) {
+				release(loading.values());
+				throw new ConfigurationException("Failed to load Python operations", e);
+			} catch (RuntimeException e) {
+				release(loading.values());
+				throw e;
 			}
-		} catch (IOException | PythonException | ConfigurationException | IllegalArgumentException e) {
-			close();
-			throw new ConfigurationException("Failed to install Python operations", e);
-		} catch (RuntimeException e) {
-			close();
-			throw new IllegalStateException("Failed to install Python operations", e);
+		} finally {
+			lifecycle.writeLock().unlock();
 		}
 		log.info("Python runtime enabled: {} ({} configured operations)",
 			runtime.description(), operations.size());
+	}
+
+	/** Releases loaded operations' scripts, logging any that cannot be. */
+	private static void release(Iterable<Operation> loaded) {
+		for (Operation operation : loaded) {
+			try {
+				operation.script().close();
+			} catch (RuntimeException e) {
+				log.warn("Failed to release Python operation {}", operation.definition().id(), e);
+			}
+		}
 	}
 
 	private static AMap<AString, ACell> metadata(Definition definition) {
@@ -227,6 +273,9 @@ public final class PythonAdapter extends AAdapter implements AutoCloseable {
 			AMap<AString, ACell> meta, ACell input) {
 		String id = getSubOperation(meta);
 		Operation operation = operations.get(id);
+		if (!loaded && definitions.containsKey(id)) {
+			return CompletableFuture.failedFuture(new UnavailableException(NOT_LOADED));
+		}
 		if (operation == null) {
 			return CompletableFuture.failedFuture(
 				new NotSupportedException("Unknown configured Python operation: " + id));
@@ -268,14 +317,7 @@ public final class PythonAdapter extends AAdapter implements AutoCloseable {
 		try {
 			if (closed) return;
 			closed = true;
-			for (Operation operation : operations.values()) {
-				try {
-					operation.script().close();
-				} catch (RuntimeException e) {
-					log.warn("Failed to release Python operation {}",
-						operation.definition().id(), e);
-				}
-			}
+			release(operations.values());
 			operations.clear();
 		} finally {
 			lifecycle.writeLock().unlock();

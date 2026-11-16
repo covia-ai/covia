@@ -124,7 +124,7 @@ public class AgentQueryTest {
 
 	private Agent createSummarisable(String runtime) {
 		Agent agent = create(runtime, Maps.empty());
-		agent.ensureSession(SUMMARY_SESSION, owner.getCallerDID());
+		agent.sessions().create(SUMMARY_SESSION, owner.getCallerDID(), null);
 		addSummaryTurn(agent, "initial discussion");
 		return agent;
 	}
@@ -145,7 +145,7 @@ public class AgentQueryTest {
 	}
 
 	private AMap<AString, ACell> savedSummary(Agent agent) {
-		return Session.sessionSummary(agent.getSession(SUMMARY_SESSION),
+		return Session.sessionSummary(agent.session(SUMMARY_SESSION).getRecord(),
 			Strings.create(AgentAdapter.DEFAULT_SUMMARISE_INSTRUCTION));
 	}
 
@@ -191,8 +191,9 @@ public class AgentQueryTest {
 	private void sessionQuerySnapshotsRootHistoryAndLeavesLiveWorkAlone(String runtime) {
 		Agent agent = create(runtime, Maps.empty());
 		Blob sid = Blob.fromHex("0123456789abcdef");
-		AMap<AString, ACell> session = agent.ensureSession(sid, owner.getCallerDID(),
+		agent.sessions().create(sid, owner.getCallerDID(),
 			Maps.of("note", Maps.of("text", "session-only context")));
+		AMap<AString, ACell> session = agent.session(sid).getRecord();
 		AMap<AString, ACell> root = GoalTreeContext.createFrame("root question");
 		root = GoalTreeContext.appendTurn(root, Maps.of("role", "user", "content", "previous question"));
 		root = GoalTreeContext.appendTurn(root, Maps.of("role", "assistant", "content", "previous answer"));
@@ -349,7 +350,7 @@ public class AgentQueryTest {
 	public void concurrentSessionChangesSurviveQueryCompletion() throws Exception {
 		Agent agent = create("llmagent", Maps.empty());
 		Blob sid = Blob.fromHex("12345678");
-		agent.ensureSession(sid, owner.getCallerDID());
+		agent.sessions().create(sid, owner.getCallerDID(), null);
 		CompletableFuture<ACell> held = new CompletableFuture<>();
 		model.reply = input -> held;
 		Job job = engine.jobs().invokeOperation("v/ops/agent/query",
@@ -443,7 +444,7 @@ public class AgentQueryTest {
 
 	private void summaryIsPersistedAndReused(String runtime) {
 		Agent agent = createSummarisable(runtime);
-		ACell sessionBefore = agent.getSession(SUMMARY_SESSION);
+		ACell sessionBefore = agent.session(SUMMARY_SESSION).getRecord();
 		ACell stateBefore = agent.getRecord().get(Agent.KEY_STATE);
 		ACell timelineBefore = agent.getTimeline();
 		Job job = engine.jobs().invokeOperation("v/ops/agent/summarise",
@@ -454,7 +455,7 @@ public class AgentQueryTest {
 		assertNull(first.get(Fields.STEPS));
 		assertTrue(model.seenInput.toString().contains(AgentAdapter.DEFAULT_SUMMARISE_INSTRUCTION));
 		assertTrue(model.seenInput.toString().contains("initial discussion"));
-		assertEquals(sessionBefore, agent.getSession(SUMMARY_SESSION).dissoc(Agent.KEY_SUMMARIES));
+		assertEquals(sessionBefore, agent.session(SUMMARY_SESSION).getRecord().dissoc(Agent.KEY_SUMMARIES));
 		assertEquals(stateBefore, agent.getRecord().get(Agent.KEY_STATE));
 		assertEquals(timelineBefore, agent.getTimeline());
 		AMap<AString, ACell> saved = savedSummary(agent);
@@ -470,7 +471,7 @@ public class AgentQueryTest {
 			"requesting steps cannot reconstruct an unsaved trace or change the cached result");
 		assertEquals(1, model.invocations.get(), "cache hits do not invoke the model");
 		assertEquals(afterFirst, agent.getRecord(), "cache hits do not update any timestamp");
-		agent.ensureSession(Blob.fromHex("9876"), owner.getCallerDID());
+		agent.sessions().create(Blob.fromHex("9876"), owner.getCallerDID(), null);
 		ACell withOtherSession = agent.getRecord();
 		assertEquals(first, summarise(false).awaitResult(5000));
 		assertEquals(1, model.invocations.get(), "unrelated sessions do not invalidate the summary");
@@ -504,9 +505,9 @@ public class AgentQueryTest {
 		Agent agent = createSummarisable("llmagent");
 		summarise(false).awaitResult(5000);
 		ACell first = savedSummary(agent);
-		ACell updated = RT.getIn(agent.getSession(SUMMARY_SESSION), "meta", "updated");
+		ACell updated = RT.getIn(agent.session(SUMMARY_SESSION).getRecord(), "meta", "updated");
 		addSummaryTurn(agent, "new fact at the same timestamp");
-		assertEquals(updated, RT.getIn(agent.getSession(SUMMARY_SESSION), "meta", "updated"));
+		assertEquals(updated, RT.getIn(agent.session(SUMMARY_SESSION).getRecord(), "meta", "updated"));
 		assertEquals(first, savedSummary(agent), "old summaries remain readable after conversation advances");
 		summarise(false).awaitResult(5000);
 		assertEquals(2, model.invocations.get());
@@ -528,7 +529,7 @@ public class AgentQueryTest {
 		assertTrue(model.seenInput.toString().contains("Summarise the agreed actions."));
 		assertEquals(first, engine.jobs().invokeOperation(concise, summaryInput(false), owner).awaitResult(5000));
 		assertEquals(actionResult, engine.jobs().invokeOperation(actions, summaryInput(false), owner).awaitResult(5000));
-		assertEquals(2, RT.ensureMap(agent.getSession(SUMMARY_SESSION).get(Agent.KEY_SUMMARIES)).count());
+		assertEquals(2, RT.ensureMap(agent.session(SUMMARY_SESSION).getRecord().get(Agent.KEY_SUMMARIES)).count());
 		ACell beforeInvalid = agent.getRecord();
 		Job bad = engine.jobs().invokeOperation(summariseMetadata(CVMLong.ONE), summaryInput(false), owner);
 		assertThrows(JobFailedException.class, () -> bad.awaitResult(5000));
@@ -538,10 +539,10 @@ public class AgentQueryTest {
 		addSummaryTurn(agent, "newly agreed action");
 		engine.jobs().invokeOperation(actions, summaryInput(false), owner).awaitResult(5000);
 		assertEquals(3, model.invocations.get());
-		assertEquals(first, Session.sessionSummary(agent.getSession(SUMMARY_SESSION),
+		assertEquals(first, Session.sessionSummary(agent.session(SUMMARY_SESSION).getRecord(),
 			Strings.create("Summarise as three bullets.")),
 			"refreshing one instruction preserves the other result and its timestamp");
-		assertEquals(CVMLong.create(2), Session.sessionSummary(agent.getSession(SUMMARY_SESSION),
+		assertEquals(CVMLong.create(2), Session.sessionSummary(agent.session(SUMMARY_SESSION).getRecord(),
 			Strings.create("Summarise the agreed actions.")).get(Fields.TURNS));
 	}
 
@@ -552,7 +553,7 @@ public class AgentQueryTest {
 		ACell first = summarise(false).awaitResult(5000);
 		assertTrue(agent.session(SUMMARY_SESSION).updateQuiescentFrames(frames ->
 			frames.assoc(0, GoalTreeContext.compactFrame(RT.ensureMap(frames.get(0)), "earlier discussion"))));
-		assertEquals(2, Session.sessionTurnCount(agent.getSession(SUMMARY_SESSION)));
+		assertEquals(2, Session.sessionTurnCount(agent.session(SUMMARY_SESSION).getRecord()));
 		assertEquals(first, summarise(false).awaitResult(5000));
 		assertEquals(1, model.invocations.get());
 		addSummaryTurn(agent, "discussion after compaction");
@@ -574,13 +575,13 @@ public class AgentQueryTest {
 		agent.appendSessionPending(SUMMARY_SESSION, owner.getCallerDID(), null,
 			Maps.of(Fields.MESSAGE, "arrived during summarisation"), false);
 		addSummaryTurn(agent, "new conversation during summarisation");
-		ACell afterConcurrentWrite = agent.getSession(SUMMARY_SESSION).dissoc(Agent.KEY_SUMMARIES);
+		ACell afterConcurrentWrite = agent.session(SUMMARY_SESSION).getRecord().dissoc(Agent.KEY_SUMMARIES);
 		held.complete(Maps.of("role", "assistant", "content", "summary through the second turn"));
 		AMap<AString, ACell> result = RT.ensureMap(job.awaitResult(5000));
 		assertEquals(CVMLong.create(2), result.get(Fields.TURNS));
 		assertEquals(result, savedSummary(agent));
-		assertEquals(afterConcurrentWrite, agent.getSession(SUMMARY_SESSION).dissoc(Agent.KEY_SUMMARIES));
-		assertEquals(3, Session.sessionTurnCount(agent.getSession(SUMMARY_SESSION)));
+		assertEquals(afterConcurrentWrite, agent.session(SUMMARY_SESSION).getRecord().dissoc(Agent.KEY_SUMMARIES));
+		assertEquals(3, Session.sessionTurnCount(agent.session(SUMMARY_SESSION).getRecord()));
 		model.reply = input -> CompletableFuture.completedFuture(Maps.of("role", "assistant", "content", "refreshed"));
 		AMap<AString, ACell> refreshed = RT.ensureMap(summarise(false).awaitResult(5000));
 		assertEquals(CVMLong.create(3), refreshed.get(Fields.TURNS));
@@ -622,11 +623,11 @@ public class AgentQueryTest {
 		model.reply = input -> held;
 		Job job = summarise(false);
 		assertTrue(model.entered.await(5, TimeUnit.SECONDS));
-		agent.removeSession(SUMMARY_SESSION);
+		agent.sessions().remove(SUMMARY_SESSION);
 		held.complete(Maps.of("role", "assistant", "content", "late summary"));
 		assertThrows(JobFailedException.class, () -> job.awaitResult(5000));
 		assertTrue(job.getErrorMessage().contains(AgentAdapter.SUMMARISE_UNAVAILABLE));
-		assertNull(agent.getSession(SUMMARY_SESSION));
+		assertNull(agent.session(SUMMARY_SESSION).getRecord());
 	}
 
 	@Test
@@ -673,11 +674,11 @@ public class AgentQueryTest {
 			summaryInput(false), owner).awaitResult(5000);
 		held.complete(Maps.of("role", "assistant", "content", "slow summary"));
 		ACell slowResult = slow.awaitResult(5000);
-		assertEquals(slowResult, Session.sessionSummary(agent.getSession(SUMMARY_SESSION),
+		assertEquals(slowResult, Session.sessionSummary(agent.session(SUMMARY_SESSION).getRecord(),
 			Strings.create("slow instruction")));
-		assertEquals(fastResult, Session.sessionSummary(agent.getSession(SUMMARY_SESSION),
+		assertEquals(fastResult, Session.sessionSummary(agent.session(SUMMARY_SESSION).getRecord(),
 			Strings.create("different instruction")));
-		assertEquals(2, RT.ensureMap(agent.getSession(SUMMARY_SESSION).get(Agent.KEY_SUMMARIES)).count());
+		assertEquals(2, RT.ensureMap(agent.session(SUMMARY_SESSION).getRecord().get(Agent.KEY_SUMMARIES)).count());
 	}
 
 	@Test
@@ -705,7 +706,7 @@ public class AgentQueryTest {
 			.assoc(Agent.KEY_STATE, Maps.of("progress", "changed"))
 			.assoc(Agent.KEY_CONFIG, RT.ensureMap(agent.getRecord().get(Agent.KEY_CONFIG))
 				.assoc(Strings.intern("systemPrompt"), Strings.create("updated persona"))));
-		agent.appendSessionPending(SUMMARY_SESSION, Maps.of(Fields.MESSAGE, "not yet presented"));
+		agent.session(SUMMARY_SESSION).appendPending(Maps.of(Fields.MESSAGE, "not yet presented"));
 		ACell before = agent.getRecord();
 		assertEquals(first, summarise(false).awaitResult(5000));
 		assertEquals(before, agent.getRecord());

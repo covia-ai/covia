@@ -161,6 +161,41 @@ class PythonAdapterTest {
 		}
 	}
 
+	@Test
+	@Tag("integration")
+	@EnabledIfSystemProperty(named = "covia.tests.integration", matches = "true",
+		disabledReason = "embeds native CPython; enable with -Dcovia.tests.integration=true")
+	void disabledAdapterRunsNoScriptUntilEnabled() throws Exception {
+		Assumptions.assumeTrue(PythonRuntime.availability().available(),
+			PythonRuntime.availability().detail());
+		Path marker = temp.resolve("loaded");
+		Path script = temp.resolve("double.py");
+		Files.writeString(script, "open(r'" + marker + "', 'w').close()\n"
+			+ "def main(value):\n"
+			+ "    return {'value': value['value'] * 2}\n");
+
+		Engine engine = Engine.createTemp(Maps.of("adapters", Maps.of(
+			"python", Maps.of("enabled", false))));
+		try {
+			PythonAdapter adapter = new PythonAdapter();
+			assertTrue(adapter.configureModule(
+				pythonConfig(script.toString(), System.getProperty("covia.python.library")), false));
+			engine.registerAdapter(adapter);
+			Engine.addDemoAssets(engine);
+			assertFalse(Files.exists(marker), "an installed adapter that is not started runs no script");
+
+			assertTrue(engine.enableAdapter("python"));
+			assertTrue(Files.exists(marker), "starting the adapter loads its script");
+			Asset asset = engine.resolveAsset(Strings.create("v/ops/python/double"),
+				engine.venueContext());
+			assertNotNull(asset);
+			assertEquals(CVMLong.create(6), ((AMap<?, ?>) invoke(adapter, asset,
+				engine.venueContext(), Maps.of("value", 3L))).get(Strings.create("value")));
+		} finally {
+			engine.close();
+		}
+	}
+
 	private static AMap<convex.core.data.AString, ACell> pythonConfig(
 			String script, String library) {
 		AMap<convex.core.data.AString, ACell> python = Maps.of(

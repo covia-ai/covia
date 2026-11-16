@@ -280,12 +280,13 @@ public class AgentSseTest {
 		assertEquals(400, bad.statusCode(), "an unparseable session id is rejected before the stream opens");
 
 		Stream whole = open(id, "", true);
-		Stream scoped = open(id, "?sessionId=0x" + sessionA, true);
+		assertTrue(sessionA.startsWith("0x"), "JSON shows a session id as 0x hex: " + sessionA);
+		Stream scoped = open(id, "?sessionId=" + sessionA.substring(2), true);
 		try {
 			Frame initial = scoped.readUntil(f -> true).get(10, TimeUnit.SECONDS);
 			assertNotNull(initial);
 			assertEquals(Strings.create(sessionA), RT.getIn(initial.data(), Fields.SESSION_ID),
-				"the initial frame echoes the filter in the bare form the events carry");
+				"the initial frame echoes the filter as the events carry it");
 			assertNotNull(whole.readUntil(f -> true).get(10, TimeUnit.SECONDS));
 
 			CompletableFuture<Frame> wholeDone = whole.readUntil(f -> "run:end".equals(f.event())
