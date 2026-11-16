@@ -196,23 +196,21 @@ a transformed URL and then pass the original spelling to an HTTP library.
 The significant lifecycle is:
 
 1. A built-in adapter is constructed, or a module discovers one through
-   `ServiceLoader`.
-2. A module adapter receives `configureModule(modules[].config, strict)` once.
-   It may return `false` when optional runtime prerequisites are unavailable.
-   At launch this happens before the venue is prepared, so the venue can
-   migrate module adapters' state with its own; neither it nor the constructor
-   may use the engine.
-3. Registration offers the effective `adapters.<name>` configuration through
-   `configure(config, strict)`, whether or not the adapter is enabled. At
-   launch, a configuration an enabled adapter refuses leaves it failed
-   (below), and a disabled adapter's refusal is logged; the launch goes on.
-4. An adapter that accepted its configuration is installed, enabled or not:
+   `ServiceLoader`. At launch a module's adapters are discovered before the
+   venue is prepared, so the venue can migrate their state with its own; the
+   constructor may not use the engine.
+2. Registration offers the effective `adapters.<name>` configuration through
+   `configure(config, strict)`, for a module's adapter as for a built-in,
+   whether or not the adapter is enabled. At launch, a configuration an
+   enabled adapter refuses leaves it failed (below), and a disabled adapter's
+   refusal is logged; the launch goes on.
+3. An adapter that accepted its configuration is installed, enabled or not:
    `install(engine)` binds the engine and private `AdapterState`, then
    `installAssets()` declares its catalog. **Installed and started are
    separate phases**: an installed adapter owns its jobs whether or not it
    is started. **Configuration and installation are inert**: they start no
    thread, process, network activity or operator code, so an adapter that
-   never starts does nothing but recover its jobs (step 5). Live work, such
+   never starts does nothing but recover its jobs (step 4). Live work, such
    as loading operator scripts, fetching models or scheduling a sweep,
    belongs in `start()`. A `configure` call may end work its new settings no
    longer allow, but starts work only while the adapter is started, which it
@@ -220,14 +218,14 @@ The significant lifecycle is:
    having an engine. An adapter that refused its configuration is
    not installed until enable or restart offers it again and it accepts; an
    enabled adapter whose installation fails is failed (below).
-5. Before the venue serves requests, `recoverJob(job)` is called once per
+4. Before the venue serves requests, `recoverJob(job)` is called once per
    non-terminal durable Job the adapter's operations own, whether or not
    the adapter will start. The default stabilises and never re-executes;
    override to re-attach or retry
    (see [JOBS.md § Recovery](JOBS.md#recovery-on-restart-214)). An
    adapter's jobs are recovered once per venue run: enable and restart do
    not recover them again.
-6. `start()` is the second phase: only an enabled adapter is started, and
+5. `start()` is the second phase: only an enabled adapter is started, and
    starting makes it live, the venue sending it work and publishing its
    `v/info/adapters/<name>` record. It activates adapter-owned workers after
    assembly, catalogue publication, secret provisioning and recovery, and
@@ -235,7 +233,7 @@ The significant lifecycle is:
    runtime registration, enable and restart also call it after publishing
    the adapter on an already-live engine. A prepared engine defers it until
    activation. If it fails, the adapter is left failed (below).
-7. Runtime `adapter/configure` calls `configure` again and republishes public
+6. Runtime `adapter/configure` calls `configure` again and republishes public
    configuration and information if accepted, whether or not the adapter is
    enabled. `configure` is a notification: the adapter decides what the
    change means for its work, whether to keep it for the next `start()`,
@@ -244,7 +242,7 @@ The significant lifecycle is:
    too, it is unconfigured: an enabled adapter is stopped and left failed,
    and enabling or restarting it offers it its effective configuration before
    it starts.
-8. Disable removes live dispatch and public introspection, then calls
+7. Disable removes live dispatch and public introspection, then calls
    `stop()`, but retains the instance and durable catalog metadata. Enable
    restores it and calls `start()` again. `stop()` ends the workers `start()`
    started and keeps the instance's resources; nothing, `configure` included,
@@ -259,10 +257,10 @@ The significant lifecycle is:
    Stopping does nothing to the adapter's jobs: work in flight runs on, on
    the stopped instance, and what it does when it finishes or tries to act
    while the adapter is stopped is the adapter's own policy.
-9. Module unload deregisters its live adapters and closes `AutoCloseable`
+8. Module unload deregisters its live adapters and closes `AutoCloseable`
    resources and the module classloader. In-flight jobs retain their adapter
    instance and may finish.
-10. At venue shutdown, in-flight Jobs get `shutdown.graceMs` to finish;
+9. At venue shutdown, in-flight Jobs get `shutdown.graceMs` to finish;
    `suspendJob(job)` is then called for each still in flight, whether or not
    its adapter is started. The default pauses a pausable Job and cancels the
    rest; override to record a durable wait and let the thread go
@@ -377,13 +375,12 @@ An adapter whose work can be suspended answers `canPause(job)` and implements
 refusing, and the job refuses with them. `pause` and `resume` run after the
 change commits, so each sees the new status.
 
-There are two distinct configuration hooks:
-
-- `configureModule` receives module bootstrap configuration exactly once and
-  answers whether that module adapter can run in this JVM.
-- `configure` receives the effective adapter configuration: static
-  `adapters.<name>` overlaid by runtime reconfiguration. Adapters that read
-  `engine.adapterConfig(getName())` lazily need not override it.
+`configure` receives the effective adapter configuration: static
+`adapters.<name>` overlaid by runtime reconfiguration. It is the one
+configuration hook, for a module's adapters as for built-ins. Adapters that
+read `engine.adapterConfig(getName())` lazily need not override it. An adapter
+that cannot run on this host, such as one whose native runtime is missing,
+fails its `start()` with `UnavailableException`, which leaves it failed.
 
 An override of `configure` should validate the whole proposed configuration
 before changing live fields, and reject unknown settings when `strict` is
@@ -1300,8 +1297,9 @@ whether to install their dependency tree. A module:
   catalog appears and retracts correctly, that the jar names its module, and
   that it carries no package `covia.jar` ships.
 
-Boot modules are configured with `modules`; runtime loading is additionally
-gated by `dynamicModules` and venue authority. See
+Boot modules are listed in `modules`, which names only the jar; each adapter
+a module declares takes its settings from `adapters.<name>`. Runtime loading is
+additionally gated by `dynamicModules` and venue authority. See
 [CONFIG.md, “Venue modules”](CONFIG.md#venue-modules) for operator settings and
 [BUILD.md](../../BUILD.md) for reactor and release packaging. Existing
 `covia-telegram`, `covia-discord`, `covia-sonnylabs`, `covia-speech`, and

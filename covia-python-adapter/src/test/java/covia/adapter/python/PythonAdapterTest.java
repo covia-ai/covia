@@ -1,8 +1,10 @@
 package covia.adapter.python;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -33,47 +35,95 @@ import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import covia.api.Abilities;
 import covia.exception.AuthException;
+import covia.exception.ConfigurationException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
 import covia.exception.ResponseException;
 import covia.exception.UnavailableException;
 import covia.grid.Asset;
 import covia.python.PythonRuntime;
+import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
+import covia.venue.TestEngine;
 
 class PythonAdapterTest {
 	@TempDir Path temp;
 
 	@Test
-	void unavailableRuntimeDisablesAdapterCleanly() {
-		PythonAdapter adapter = new PythonAdapter();
-		assertFalse(adapter.configureModule(pythonConfig("missing.py",
-			"definitely-not-a-python-library"), false));
+	void aLibraryThatCannotLoadLeavesNothingRegistered() throws Exception {
+		Path script = Files.writeString(temp.resolve("double.py"), "def main(value):\n    return value\n");
+		Engine engine = Engine.createTemp(Maps.of(Config.ADAPTERS, Maps.of("python",
+			pythonConfig(script.toString(), "definitely-not-a-python-library"))));
+		try {
+			assertThrows(UnavailableException.class, () -> engine.registerAdapter(new PythonAdapter()),
+				"the host lacks the CPython it names, which no setting of ours can fix");
+			assertNull(engine.getAdapter("python"));
+		} finally {
+			engine.close();
+		}
 	}
 
 	@Test
-	void malformedKnownConfigFailsEvenWithoutPython() {
+	void withoutItsCPythonTheVenueStartsAndLeavesItFailed() throws Exception {
+		Path script = Files.writeString(temp.resolve("double.py"), "def main(value):\n    return value\n");
+		Engine engine = TestEngine.application().mount(AKeyPair.generate(), new Config(Maps.of(Config.ADAPTERS,
+			Maps.of("python", pythonConfig(script.toString(), "definitely-not-a-python-library")))));
+		try {
+			engine.launch(prepared -> {
+				prepared.registerAdapter(new PythonAdapter());
+				return CompletableFuture.completedFuture(null);
+			});
+			assertTrue(engine.isStarted(), "the venue starts without it");
+			assertNull(engine.getAdapter("python"));
+			assertNotNull(engine.adapterFailure("python"), "enabled but failed, with the reason");
+		} finally {
+			engine.close();
+		}
+	}
+
+	@Test
+	void malformedSettingsAreRefusedWithoutPython() {
 		PythonAdapter adapter = new PythonAdapter();
-		org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
-			() -> adapter.configureModule(Maps.of("enabled", "yes"), false));
-		org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
-			() -> adapter.configureModule(Maps.of("operations", Maps.of(
+		assertThrows(ConfigurationException.class,
+			() -> adapter.configure(Maps.of("operations", Maps.of(
 				"bad_name", Maps.of("script", "x.py"))), false));
-		org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
-			() -> adapter.configureModule(Maps.of("operations", Maps.of(
+		assertThrows(ConfigurationException.class,
+			() -> adapter.configure(Maps.of("operations", Maps.of(
 				"valid", Maps.of("function", "main"))), false));
-		org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
-			() -> adapter.configureModule(Maps.of("typo", true), true));
-		org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
-			() -> adapter.configureModule(Maps.of("instances", Maps.of(
+		assertEquals(PythonAdapter.UNKNOWN_SETTING.formatted("python", "typo"),
+			assertThrows(ConfigurationException.class,
+				() -> adapter.configure(Maps.of("typo", true), true)).getMessage());
+		assertThrows(ConfigurationException.class,
+			() -> adapter.configure(Maps.of("instances", Maps.of(
 				"templates", Maps.of("worker", Maps.of("script", "worker.py")))), false));
-		org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
-			() -> adapter.configureModule(Maps.of("instances", Maps.of(
+		assertThrows(ConfigurationException.class,
+			() -> adapter.configure(Maps.of("instances", Maps.of(
 				"maxPerUser", 4L,
 				"maxTotal", 2L,
 				"templates", Maps.of("worker", Maps.of(
 					"script", "worker.py", "functions", Vectors.of("run"))))), false));
+		Path missing = temp.resolve("missing.py").toAbsolutePath().normalize();
+		assertEquals(PythonAdapter.SCRIPT_NOT_FOUND.formatted("operations.double.script", missing),
+			assertThrows(ConfigurationException.class,
+				() -> adapter.configure(pythonConfig(missing.toString(), null), false)).getMessage(),
+			"a script that is not there is refused before anything is published");
+	}
+
+	@Test
+	void settingsCannotChangeOnceInstalled() {
+		Engine engine = Engine.createTemp(Maps.empty());
+		try {
+			PythonAdapter adapter = new PythonAdapter();
+			adapter.configure(Maps.empty(), true);
+			adapter.install(engine);
+			assertDoesNotThrow(() -> adapter.configure(Maps.of("enabled", true), true),
+				"the same settings, with the framework's enabled");
+			assertEquals(PythonAdapter.SETTINGS_FIXED, assertThrows(ConfigurationException.class,
+				() -> adapter.configure(Maps.of("library", "other"), true)).getMessage());
+		} finally {
+			engine.close();
+		}
 	}
 
 	@Test
@@ -95,10 +145,10 @@ class PythonAdapterTest {
 			""");
 
 		AStringFixture identities = new AStringFixture();
-		Engine engine = Engine.createTemp(Maps.empty());
+		Engine engine = Engine.createTemp(Maps.of(Config.ADAPTERS, Maps.of("python",
+			instanceConfig(script.toString()))));
 		try {
 			PythonAdapter adapter = new PythonAdapter();
-			assertTrue(adapter.configureModule(instanceConfig(script.toString()), false));
 			engine.registerAdapter(adapter);
 			Engine.addDemoAssets(engine);
 
@@ -214,11 +264,10 @@ class PythonAdapterTest {
 			    return {"value": value["value"] * 2, "calls": calls}
 			""");
 
-		Engine engine = Engine.createTemp(Maps.empty());
+		Engine engine = Engine.createTemp(Maps.of(Config.ADAPTERS, Maps.of("python",
+			pythonConfig(script.toString(), System.getProperty("covia.python.library")))));
 		try {
 			PythonAdapter adapter = new PythonAdapter();
-			org.junit.jupiter.api.Assertions.assertTrue(adapter.configureModule(
-				pythonConfig(script.toString(), System.getProperty("covia.python.library")), false));
 			engine.registerAdapter(adapter);
 			Engine.addDemoAssets(engine);
 			assertNotNull(adapter);
@@ -279,12 +328,11 @@ class PythonAdapterTest {
 			+ "def main(value):\n"
 			+ "    return {'value': value['value'] * 2}\n");
 
-		Engine engine = Engine.createTemp(Maps.of("adapters", Maps.of(
-			"python", Maps.of("enabled", false))));
+		Engine engine = Engine.createTemp(Maps.of(Config.ADAPTERS, Maps.of("python",
+			pythonConfig(script.toString(), System.getProperty("covia.python.library"))
+				.assoc(Strings.create("enabled"), CVMBool.FALSE))));
 		try {
 			PythonAdapter adapter = new PythonAdapter();
-			assertTrue(adapter.configureModule(
-				pythonConfig(script.toString(), System.getProperty("covia.python.library")), false));
 			engine.registerAdapter(adapter);
 			Engine.addDemoAssets(engine);
 			assertFalse(Files.exists(marker), "an installed adapter that is not started runs no script");

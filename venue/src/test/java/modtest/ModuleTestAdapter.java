@@ -8,6 +8,7 @@ import convex.core.data.AString;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
 import covia.adapter.AAdapter;
+import covia.exception.ConfigurationException;
 import covia.venue.RequestContext;
 
 /**
@@ -15,28 +16,29 @@ import covia.venue.RequestContext;
  * {@link covia.venue.ModuleLoaderTest} to exercise the venue module loader
  * end-to-end. Deliberately OUTSIDE the covia.* package so the
  * split-delegation classloader loads it child-first from the module jar
- * (shared covia.* / convex.* prefixes stay parent-first).
+ * (shared covia.* / convex.* prefixes stay parent-first). Its {@code label}
+ * setting, from {@code adapters.modtest}, shows in its description.
  */
 public class ModuleTestAdapter extends AAdapter {
+	public static final String LABEL_NOT_STRING = "adapters.modtest.label must be a string";
+	public static final String UNKNOWN_SETTING = "Unknown modtest setting: ";
+
 	private String label = "unconfigured";
 
 	@Override
-	public boolean configureModule(AMap<AString, ACell> config, boolean strict) {
+	public void configure(AMap<AString, ACell> config, boolean strict) {
 		if (strict) {
 			for (AString key : config.keySet()) {
 				if (!"label".equals(key.toString()) && !"enabled".equals(key.toString())) {
-					throw new IllegalArgumentException("Unknown modtest setting: " + key);
+					throw new ConfigurationException(UNKNOWN_SETTING + key);
 				}
 			}
 		}
 		ACell rawLabel = config.get(Strings.create("label"));
-		if (rawLabel != null) {
-			AString configured = RT.ensureString(rawLabel);
-			if (configured == null) throw new IllegalArgumentException("label must be a string");
-			label = configured.toString();
-		}
-		ACell enabled = config.get(Strings.create("enabled"));
-		return enabled == null || RT.bool(enabled);
+		if (rawLabel == null) return;
+		AString configured = RT.ensureString(rawLabel);
+		if (configured == null) throw new ConfigurationException(LABEL_NOT_STRING);
+		label = configured.toString();
 	}
 
 	@Override

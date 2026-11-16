@@ -19,13 +19,13 @@ public final class PythonModuleSmokeMain {
 	private PythonModuleSmokeMain() {}
 
 	public static void main(String[] args) throws Exception {
-		AMap<AString, ACell> moduleConfig = Maps.of(
+		AMap<AString, ACell> python = Maps.of(
 			"operations", Maps.of("smoke", Maps.of("script", args[1])),
 			"instances", Maps.of("templates", Maps.of("smoke", Maps.of(
 				"script", args[1], "functions", Vectors.of("main")))));
 		AMap<AString, ACell> config = Maps.of(
-			Config.MODULES, Vectors.of(Maps.of(
-				"path", args[0], "config", moduleConfig)));
+			Config.MODULES, Vectors.of(args[0]),
+			Config.ADAPTERS, Maps.of("python", python));
 		Engine engine = Engine.createRealTime(config);
 		try {
 			Engine.addDemoAssets(engine);

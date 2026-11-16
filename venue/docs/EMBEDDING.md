@@ -318,6 +318,8 @@ identity token through an operation", and HELD_KEYS.md.
 | `user.inbox()` keyed by request id in hex (`request`, `get`, `getAll`), `HitlRequest.getID()` and `record` with the id as text, and a record's `id` and `sessionId` as text | Keyed and named by the request's job id as a Blob; `getAll()` is an `Index` |
 | `AgentAdapter.deliverSessionMessage` and `appendSessionMessage` taking the chat's job id as text | The job id as a Blob |
 | `boolean AAdapter.configure(config, strict)`, returning `false` to decline | `void configure(config, strict)`: return to accept, throw `ConfigurationException` to refuse ([ADAPTERS.md](ADAPTERS.md)) |
+| `AAdapter.configureModule` and a module's `modules[].config` | Removed: a module adapter takes `adapters.<name>` through `configure`, and one that cannot run on the host fails its `start()` with `UnavailableException` |
+| `Modules.load(engine, path, sha256, config)` | `Modules.load(engine, path, sha256)` |
 
 ## Upgrading from 0.9.x
 

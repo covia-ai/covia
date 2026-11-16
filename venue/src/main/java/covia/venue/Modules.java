@@ -15,11 +15,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import convex.core.data.ACell;
-import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Blob;
-import convex.core.data.Maps;
 import convex.core.lang.RT;
 import covia.adapter.AAdapter;
 import covia.exception.ConfigurationException;
@@ -37,13 +35,14 @@ import covia.exception.NotSupportedException;
  * {@code META-INF/services/covia.adapter.AAdapter}. Each module gets its own
  * {@link ModuleClassLoader} (split delegation — see there); its adapters are
  * ordinary adapters: catalog materialisation, {@code /v/info/adapters},
- * capabilities, gates and argument defaults all apply.</p>
+ * capabilities, gates and argument defaults all apply, and each takes its
+ * settings from {@code adapters.<name>} like any other.</p>
  *
  * <p>Boot config:</p>
  * <pre>
  * { "modules": [
  *     "modules/covia-sql-module.jar",
- *     { "path": "modules/other.jar", "sha256": "9f2a...", "config": { } }
+ *     { "path": "modules/other.jar", "sha256": "9f2a..." }
  * ] }
  * </pre>
  *
@@ -78,28 +77,24 @@ public class Modules {
 	 * @param name Module name (jar file name without {@code .jar})
 	 * @param jar Resolved jar path
 	 * @param sha256 Pinned digest, or null when unpinned
-	 * @param config Module-level bootstrap settings passed to
-	 *               {@link AAdapter#configureModule}
 	 * @param loader The module's classloader
 	 * @param adapterNames Names of the adapters registered from this module
 	 */
 	public record LoadedModule(String name, Path jar, String sha256,
-			AMap<AString, ACell> config, ModuleClassLoader loader,
-			List<String> adapterNames) {}
+			ModuleClassLoader loader, List<String> adapterNames) {}
 
 	/**
-	 * A module jar opened and module-configured, not yet registered: its
-	 * classloader and the adapters that will register from it. Its adapters'
-	 * state migration rules are known before any of them registers.
+	 * A module jar opened, not yet registered: its classloader and the
+	 * adapters that will register from it. Its adapters' state migration
+	 * rules are known before any of them registers.
 	 *
 	 * @param name Module name (jar file name without {@code .jar})
 	 * @param jar Resolved jar path
 	 * @param sha256 Pinned digest, or null when unpinned
-	 * @param config Module-level bootstrap settings
 	 * @param loader The module's open classloader
-	 * @param adapters Adapters that accepted the module configuration
+	 * @param adapters The adapters the module declares
 	 */
-	record Discovered(String name, Path jar, String sha256, AMap<AString, ACell> config,
+	record Discovered(String name, Path jar, String sha256,
 			ModuleClassLoader loader, List<AAdapter> adapters) {}
 
 	/**
@@ -114,8 +109,8 @@ public class Modules {
 	}
 
 	/**
-	 * Opens and module-configures every config-declared module, registering
-	 * nothing. Fail-fast: on any error, loaders already opened are closed.
+	 * Opens every config-declared module, registering nothing. Fail-fast: on
+	 * any error, loaders already opened are closed.
 	 */
 	static List<Discovered> discoverModules(Config venueConfig) {
 		ACell modulesCell = venueConfig.getModules();
@@ -128,11 +123,10 @@ public class Modules {
 		List<Discovered> discovered = new ArrayList<>();
 		try {
 			for (long i = 0; i < modules.count(); i++) {
-				discovered.add(discover(venueConfig, modules.get(i)));
+				discovered.add(discover(modules.get(i)));
 			}
-		} catch (IllegalStateException | IllegalArgumentException e) {
-			// A module the config names cannot load, or refuses the settings the
-			// config gives it: the operator's setup
+		} catch (IllegalStateException | InvalidPathException e) {
+			// A module the config names cannot load: the operator's setup
 			close(discovered, e);
 			throw new ConfigurationException(e.getMessage(), e);
 		} catch (RuntimeException | Error e) {
@@ -168,11 +162,10 @@ public class Modules {
 		for (Discovered module : discovered) closeQuietly(module.loader(), primary);
 	}
 
-	/** Discovers one boot config entry ({@code path} string or {@code {path, sha256?, config?}}). */
-	static Discovered discover(Config venueConfig, ACell entry) {
+	/** Discovers one boot config entry ({@code path} string or {@code {path, sha256?}}). */
+	static Discovered discover(ACell entry) {
 		String path;
 		String sha256 = null;
-		AMap<AString, ACell> config = Maps.empty();
 		if (entry instanceof AString s) {
 			path = s.toString();
 		} else {
@@ -182,20 +175,15 @@ public class Modules {
 			path = p.toString();
 			AString h = RT.ensureString(RT.getIn(entry, "sha256"));
 			if (h != null) sha256 = h.toString();
-			AMap<ACell, ACell> configured = RT.ensureMap(RT.getIn(entry, "config"));
-			if (configured != null) {
-				@SuppressWarnings({ "rawtypes", "unchecked" })
-				AMap<AString, ACell> typed = (AMap) configured;
-				config = typed;
-			}
 		}
-		return discover(venueConfig, Path.of(path), sha256, config);
+		return discover(Path.of(path), sha256);
 	}
 
 	/**
 	 * Loads a module jar into the engine: verifies the optional digest,
 	 * creates the module classloader, discovers and registers its adapters,
-	 * and records the module on the engine. When the venue catalog has
+	 * and records the module on the engine. Each adapter takes its settings
+	 * from {@code adapters.<name>} as it registers. When the venue catalog has
 	 * already been published (runtime load), each registered adapter is
 	 * materialised incrementally and the module's {@code v/info/modules}
 	 * entry is written.
@@ -206,31 +194,26 @@ public class Modules {
 	 * @param engine The engine
 	 * @param jarPath Path of the module jar
 	 * @param sha256 Optional pinned digest (hex), or null
-	 * @param config Module-level settings for {@link AAdapter#configureModule}
 	 * @return The loaded module record
-	 * @throws IllegalArgumentException if a module adapter refuses a setting
+	 * @throws ConfigurationException if a module adapter refuses its settings
 	 * @throws IllegalStateException on any other load failure (nothing is left registered)
 	 */
-	public static LoadedModule load(Engine engine, Path jarPath, String sha256,
-			AMap<AString, ACell> config) {
-		return register(engine, discover(engine.config(), jarPath, sha256, config));
+	public static LoadedModule load(Engine engine, Path jarPath, String sha256) {
+		return register(engine, discover(jarPath, sha256));
 	}
 
 	/**
-	 * Opens a module jar and module-configures its adapters without
-	 * registering them: verifies the optional digest, creates the module
-	 * classloader and discovers its adapters.
+	 * Opens a module jar without registering its adapters: verifies the
+	 * optional digest, creates the module classloader and discovers its
+	 * adapters.
 	 *
-	 * @throws IllegalArgumentException if a module adapter refuses a setting
-	 * @throws IllegalStateException on any other failure (the loader is closed)
+	 * @throws IllegalStateException on any failure (the loader is closed)
 	 */
-	static Discovered discover(Config venueConfig, Path jarPath, String sha256,
-			AMap<AString, ACell> config) {
+	static Discovered discover(Path jarPath, String sha256) {
 		File jar = jarPath.toFile();
 		if (!jar.isFile()) throw new IllegalStateException(
 			"Module jar not found: " + jar.getAbsolutePath());
 		if (sha256 != null) verifySha256(jar, sha256);
-		if (config == null) config = Maps.empty();
 
 		String name = moduleName(jarPath);
 		ModuleClassLoader loader;
@@ -242,27 +225,14 @@ public class Modules {
 		}
 
 		try {
-			List<AAdapter> active = new ArrayList<>();
-			int discovered = 0;
-			for (AAdapter adapter : ServiceLoader.load(AAdapter.class, loader)) {
-				discovered++;
-				// A malformed module setting (docs/ADAPTERS.md) refuses with
-				// IllegalArgumentException; the caller knows whose setting it was
-				boolean accepted = adapter.configureModule(config, venueConfig.isStrictConfig());
-				if (!accepted) {
-					log.info("Adapter '{}' from module {} is inactive",
-						adapter.getName(), jar.getName());
-					continue;
-				}
-				active.add(adapter);
-			}
-			if (discovered == 0) throw new IllegalStateException(
+			List<AAdapter> adapters = new ArrayList<>();
+			for (AAdapter adapter : ServiceLoader.load(AAdapter.class, loader)) adapters.add(adapter);
+			if (adapters.isEmpty()) throw new IllegalStateException(
 				"Module declares no adapters (missing META-INF/services/covia.adapter.AAdapter?): " + jarPath);
-			return new Discovered(name, jarPath, sha256, config, loader, List.copyOf(active));
+			return new Discovered(name, jarPath, sha256, loader, List.copyOf(adapters));
 		} catch (RuntimeException | Error e) {
 			closeQuietly(loader, e);
-			if (e instanceof IllegalStateException || e instanceof IllegalArgumentException
-					|| e instanceof CoviaException) throw (RuntimeException) e;
+			if (e instanceof IllegalStateException) throw (RuntimeException) e;
 			throw new IllegalStateException("Failed to load module: " + jarPath, e);
 		}
 	}
@@ -290,7 +260,7 @@ public class Modules {
 			// adapters publish — each adapter summary names its owning module.
 			List<String> names = new ArrayList<>();
 			for (AAdapter adapter : active) names.add(adapter.getName());
-			module = new LoadedModule(name, jarPath, discovered.sha256(), discovered.config(), loader, List.copyOf(names));
+			module = new LoadedModule(name, jarPath, discovered.sha256(), loader, List.copyOf(names));
 			engine.addModule(module);
 			for (AAdapter adapter : active) {
 				engine.registerAdapter(adapter);

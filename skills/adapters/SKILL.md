@@ -76,7 +76,7 @@ The `venue` adapter changes the adapter set of a *running* venue, no restart:
 | `enable <name>` | `v/ops/venue/adapter/enable` | `{"name": "<adapter>"}` |
 | `configure <name>` | `v/ops/venue/adapter/configure` | `{"name": "<adapter>", "config": {…}, "merge": false}` — `config` is the `adapters.<name>` shape; `merge: true` overlays the current effective config instead of replacing it |
 | `restart-adapter <name>` | `v/ops/venue/adapter/restart` | `{"name": "<adapter>"}` — stops an enabled adapter, offers it its effective config again and starts it; the way back for a `failed` one once its cause is fixed |
-| `load <jar>` | `v/ops/venue/module/load` | `{"module": "<jar name>", "sha256": "<hex>", "config": {…}}` — `sha256` and `config` optional |
+| `load <jar>` | `v/ops/venue/module/load` | `{"module": "<jar name>", "sha256": "<hex>"}` — `sha256` optional; its adapters take their settings from `adapters.<name>` |
 | `unload <name>` | `v/ops/venue/module/unload` | `{"name": "<jar name without .jar>"}` |
 | `restart [jar]` | `v/ops/venue/restart` | `{"jar": "<successor covia jar>", "sha256": "<hex>", "startupTimeout": 60000}` — all optional; omitting `jar` restarts the current version |
 | `gc` | `v/ops/venue/gc` | `{}` collects the Etch store while the venue keeps serving; `{"status": true}` reports state; `{"cancel": true}` rolls a running cycle back; `{"restart": true}` restarts after cutover so disk comes back now. One collection per process |
@@ -135,7 +135,7 @@ sha256sum modules/covia-sql-*-module.jar                # PowerShell: Get-FileHa
 ```
 then (with venue authority) `grid_run operation=v/ops/venue/module/load input={"module":"covia-sql-<ver>-module.jar","sha256":"<hex>"}` → `sql` adapter appears, `v/ops/sql/query` and `v/ops/sql/execute` are live, and its module-shipped agent skill materialises at `v/skills/data/sql`. Unload with `input={"name":"covia-sql-<ver>-module"}` (jar name without `.jar`, as listed by `status` / `v/info/modules`).
 
-A module jar is a shaded jar compiled against `venue` (provided scope) that declares its adapters in `META-INF/services/covia.adapter.AAdapter`; `config` on load is passed to every adapter in the module before registration (`modules[].config` shape).
+A module jar is a shaded jar compiled against `venue` (provided scope) that declares its adapters in `META-INF/services/covia.adapter.AAdapter`. Each of its adapters takes its settings from `adapters.<name>` as they stand when it loads, so `configure` an adapter before reloading its module to change them; a setting the adapter refuses fails the load and leaves nothing of the module loaded.
 
 ### Semantics to relay to the user
 
@@ -155,11 +155,12 @@ For changes that must survive restarts, edit the venue config instead (see `venu
     "test":         { "enabled": false },          // park an adapter (enable later at runtime)
     "orchestrator": { "maxItems": 50, "maxConcurrency": 8 },
     "vault":        { "drive": "vault" },
-    "agent":        { "sessionDelete": false }
+    "agent":        { "sessionDelete": false },
+    "python":       { "library": "/usr/lib/libpython3.13.so" }   // a module's adapter is configured here too
   },
   "modules": [
     "modules/covia-sql-<version>-module.jar",
-    { "path": "modules/covia-python-adapter-<version>-module.jar", "sha256": "…", "config": { "library": "/usr/lib/libpython3.13.so" } }
+    { "path": "modules/covia-python-adapter-<version>-module.jar", "sha256": "…" }
   ],
   "dynamicModules": { "enabled": true, "dir": "modules", "anyPath": false }
 }

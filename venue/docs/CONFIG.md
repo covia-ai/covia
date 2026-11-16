@@ -786,8 +786,10 @@ code execution.
 {
   "modules": [{
     "path": "modules/covia-python-adapter-<version>-module.jar",
-    "sha256": "<optional 64-hex module digest>",
-    "config": {
+    "sha256": "<optional 64-hex module digest>"
+  }],
+  "adapters": {
+    "python": {
       "library": "/usr/lib/libpython3.13.so",
       "operations": {
         "health/score": {
@@ -810,7 +812,7 @@ code execution.
         }
       }
     }
-  }]
+  }
 }
 ```
 
@@ -819,8 +821,12 @@ value converted from the Covia input and its return value is converted back to
 a Convex value. Script globals persist for the venue lifetime and are released
 on shutdown. Script paths may be absolute or relative to the venue process.
 Scripts are loaded, running their top-level code, once, when the adapter first
-starts; a disabled adapter runs none. A missing or invalid configured script
-leaves the adapter failed, its operations refused, until a restart loads them.
+starts; a disabled adapter runs none. A script that is not a readable file is
+refused with the rest of the settings, and one CPython cannot load fails the
+adapter's start; either way the adapter is left failed, its operations
+refused, until a restart loads them. The operations are published from these
+settings as the adapter installs, so `adapter/configure` refuses any change to
+them while it is installed: change them here and restart the venue.
 
 Running Python is the operator's, since the code runs in the venue process
 with the venue's power. Each configured function, and creating or calling an
@@ -860,10 +866,11 @@ checks `invoke` on the operation reference; bound calls retain their action chec
 of this management surface.
 
 Python is a separate loadable module and is not present in `covia.jar` or the
-standard Docker image. Listing the module enables it by default; `enabled:
-false` leaves it inactive. It is also inactive with a warning when the stable
-FFM API (Java 22+), native access, or a compatible CPython 3.10–3.14 shared
-library is unavailable. Venue startup continues, and native tests skip when
+standard Docker image. Listing the module enables it;
+`adapters.python.enabled: false` switches it off. When the stable FFM API
+(Java 22+), native access, or a compatible CPython 3.10–3.14 shared library is
+unavailable, it fails to start and is left failed with the reason. Venue
+startup continues, and native tests skip when
 these prerequisites are absent. Use `--enable-native-access=ALL-UNNAMED` in
 production. `library` is optional when normal discovery succeeds; set it
 explicitly for reproducible deployments.
@@ -2225,7 +2232,7 @@ is truncated again.
 {
   "modules": [
     "modules/covia-sql-<version>-module.jar",
-    { "path": "modules/other.jar", "sha256": "9f2a...", "config": { } }
+    { "path": "modules/other.jar", "sha256": "9f2a..." }
   ]
 }
 ```
@@ -2241,10 +2248,10 @@ for everything else (dependency isolation). `sha256` pins content; boot
 fails fast on any load error. Loaded modules are listed at
 `v/info/modules/<name>` (`{name, path, sha256?, adapters}`), and each module
 adapter's `v/info/adapters/<name>` summary names its owning `module`.
-The optional `config` object is passed unchanged to every adapter discovered
-in that module before registration. An adapter may reject malformed settings
-or remain inactive when an optional runtime is unavailable. Module-specific
-unknown-field handling receives the venue's `strictConfig` mode.
+A module adapter takes its settings from `adapters.<name>`, is switched off by
+`adapters.<name>.enabled: false`, and is left failed like any adapter when it
+refuses its settings or cannot start, such as when an optional native runtime
+is missing.
 
 Modules can also be loaded and unloaded on a running venue — see
 [Runtime adapter lifecycle](#runtime-adapter-lifecycle). Off by default;
@@ -2265,7 +2272,7 @@ verify the checksum, package it with the application, place it in the
 application's data or module directory at install time, and supply its
 filesystem path in `modules` before creating the `Engine` — pinning
 `modules[].sha256` to the published checksum. A host that deliberately loads
-after startup can call the existing `Modules.load(engine, path, sha256, config)`
+after startup can call the existing `Modules.load(engine, path, sha256)`
 API with the same jar. Both routes retain the module classloader's dependency
 isolation and require no venue-side Maven resolver.
 
@@ -3172,7 +3179,7 @@ above is intentionally outside this administrative group:
 | `v/ops/venue/adapter/enable {name}` | Restore it and start its workers again (offering its settings and installing it first if it never was, having refused them). Its jobs are already its own: enabling does not recover them again. If it refuses its settings or fails to start, it stays enabled but failed and the call fails with the reason |
 | `v/ops/venue/adapter/configure {name, config, merge?}` | Apply a new effective configuration (`adapters.<name>` shape). The adapter may refuse it with an error, and it is offered its previous configuration again; if it refuses that too, it is stopped and left failed |
 | `v/ops/venue/adapter/restart {name}` | Stop an enabled adapter, running or failed, offer it its effective configuration again and start it. If it fails again, it stays failed and the call fails with the reason |
-| `v/ops/venue/module/load {module, sha256?, config?}` | Load a module jar; its adapters and declarations overwrite existing names and paths |
+| `v/ops/venue/module/load {module, sha256?}` | Load a module jar; its adapters and declarations overwrite existing names and paths, and each adapter takes its settings from `adapters.<name>` as they stand, so `adapter/configure` can set them before a reload. A setting an adapter refuses fails the load with a configuration error and leaves nothing of the module loaded |
 | `v/ops/venue/module/unload {name}` | Remove a module's live adapters and introspection, close resources and its classloader; catalog metadata remains |
 
 **Authority.** All of these are venue administration: they need venue

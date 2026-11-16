@@ -83,25 +83,6 @@ public abstract class AAdapter {
 	public static final String DUPLICATE_OPERATION_NAME = "Conflicting operation declaration: ";
 
 	/**
-	 * Configures an adapter discovered from a venue module before it is
-	 * registered or installed.
-	 *
-	 * <p>The module loader passes the immutable {@code modules[].config} object
-	 * verbatim. Existing modules need not override this method. Optional modules
-	 * may return {@code false} when their runtime prerequisites are unavailable;
-	 * this skips registration without turning venue startup into a failure.
-	 * Malformed known settings should still throw. When {@code strict} is true,
-	 * implementations should also reject unknown settings.</p>
-	 *
-	 * @param config module-local configuration, empty when omitted
-	 * @param strict whether venue {@code strictConfig} is enabled
-	 * @return true to register this adapter; false to leave it inactive
-	 */
-	public boolean configureModule(AMap<AString, ACell> config, boolean strict) {
-		return true;
-	}
-
-	/**
 	 * Applies this adapter's <em>effective adapter configuration</em> — the
 	 * venue's {@code adapters.<name>} block, overlaid by any runtime
 	 * reconfiguration ({@code v/ops/venue/adapter/configure}). Called by
@@ -119,11 +100,8 @@ public abstract class AAdapter {
 	 * reverted to the previous settings; a refused configuration at
 	 * registration or enable leaves the adapter failed. Any other exception
 	 * that escapes and is not a Covia exception is this adapter's fault
-	 * (docs/ERRORS.md).</p>
-	 *
-	 * <p>Distinct from {@link #configureModule}: that receives the module-level
-	 * bootstrap settings ({@code modules[].config}) exactly once, before
-	 * registration, and answers "can this module run here at all?".</p>
+	 * (docs/ERRORS.md). An adapter from a venue module is configured the same
+	 * way.</p>
 	 *
 	 * @param config effective adapter configuration, empty when none
 	 * @param strict whether venue {@code strictConfig} is enabled

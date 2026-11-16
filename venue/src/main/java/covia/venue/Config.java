@@ -897,13 +897,12 @@ public class Config {
 			}
 			@SuppressWarnings("unchecked")
 			AMap<AString, ACell> module = (AMap<AString, ACell>) entry;
-			validateUnknownFields(module, Set.of("path", "sha256", "config"),
+			validateUnknownFields(module, Set.of("path", "sha256"),
 				"modules[" + i + "]", strict);
 			if (optionalString(module, PATH, "modules[" + i + "].path") == null) {
 				throw malformed("modules[" + i + "].path", "is required");
 			}
 			optionalString(module, Strings.intern("sha256"), "modules[" + i + "].sha256");
-			optionalMap(module, Strings.intern("config"), "modules[" + i + "].config");
 		}
 	}
 

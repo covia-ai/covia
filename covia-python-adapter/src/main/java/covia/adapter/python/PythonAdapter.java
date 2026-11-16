@@ -83,6 +83,15 @@ public final class PythonAdapter extends AAdapter implements AutoCloseable {
 		INSTANCE_CREATE, INSTANCE_LIST, INSTANCE_CALL, INSTANCE_CLOSE);
 	/** Refusal for a configured operation called before the adapter has started and loaded its script. */
 	public static final String NOT_LOADED = "Python operations are loaded when the python adapter starts";
+	/** A malformed setting: where in {@code adapters}, then what is wrong with it. */
+	public static final String MALFORMED = "Malformed configuration at adapters.%s: %s";
+	/** A setting this adapter does not know, refused under strictConfig: where, then the key. */
+	public static final String UNKNOWN_SETTING = "Unknown configuration field adapters.%s.%s";
+	/** A script a setting names that is not a readable file: the setting, then the path. */
+	public static final String SCRIPT_NOT_FOUND = "adapters.python.%s names no readable file: %s";
+	/** A changed configuration offered once the adapter is installed. */
+	public static final String SETTINGS_FIXED = "adapters.python cannot change once the adapter is installed, "
+		+ "since its operations are published from it: change it in the venue config and restart the venue";
 
 	private record Definition(String id, Path script, String function,
 		String name, String description, ACell input, ACell output) {}
@@ -157,6 +166,9 @@ public final class PythonAdapter extends AAdapter implements AutoCloseable {
 		}
 	}
 
+	/** The settings accepted, without the framework's {@code enabled}; null until configured. */
+	private AMap<AString, ACell> applied;
+	private String library;
 	private PythonRuntime runtime;
 	private Map<String, Definition> definitions = Map.of();
 	private InstanceConfig instanceConfig = InstanceConfig.disabled();
@@ -168,12 +180,22 @@ public final class PythonAdapter extends AAdapter implements AutoCloseable {
 
 	public PythonAdapter() {}
 
+	/**
+	 * Takes {@code adapters.python}: the CPython {@code library}, the
+	 * {@code operations} it publishes and the {@code instances} it allows.
+	 * Every script a setting names must be a readable file. Its operations are
+	 * published from these settings as it installs, so once installed it
+	 * refuses any change to them until the venue restarts.
+	 */
 	@Override
-	public boolean configureModule(AMap<AString, ACell> settings, boolean strict) {
-		validateUnknownFields(settings, Set.of("enabled", "library", "operations", "instances"),
-			"python module config", strict);
-		boolean enabled = optionalBoolean(settings, ENABLED, "python.enabled", true);
-		String library = optionalString(settings, LIBRARY, "python.library");
+	public void configure(AMap<AString, ACell> config, boolean strict) {
+		AMap<AString, ACell> settings = config.dissoc(ENABLED);
+		if (engine != null) {
+			if (!settings.equals(applied)) throw new ConfigurationException(SETTINGS_FIXED);
+			return;
+		}
+		validateUnknownFields(settings, Set.of("library", "operations", "instances"), "python", strict);
+		String parsedLibrary = optionalString(settings, LIBRARY, "python.library");
 		Map<String, Definition> parsed = parseDefinitions(settings, strict);
 		InstanceConfig parsedInstances = parseInstanceConfig(settings, strict);
 		if (parsedInstances.enabled()) {
@@ -184,15 +206,23 @@ public final class PythonAdapter extends AAdapter implements AutoCloseable {
 				}
 			}
 		}
-		if (!enabled) return false;
-		try {
-			runtime = PythonRuntime.open(library);
-			definitions = parsed;
-			instanceConfig = parsedInstances;
-			return true;
-		} catch (PythonException e) {
-			log.warn("Python adapter disabled: {}", e.getMessage());
-			return false;
+		for (Definition definition : parsed.values()) {
+			requireReadable(definition.script(), "operations." + definition.id() + ".script");
+		}
+		if (parsedInstances.enabled()) {
+			for (TemplateDefinition template : parsedInstances.templates().values()) {
+				requireReadable(template.script(), "instances.templates." + template.id() + ".script");
+			}
+		}
+		library = parsedLibrary;
+		definitions = parsed;
+		instanceConfig = parsedInstances;
+		applied = settings;
+	}
+
+	private static void requireReadable(Path script, String setting) {
+		if (!Files.isRegularFile(script) || !Files.isReadable(script)) {
+			throw new ConfigurationException(SCRIPT_NOT_FOUND.formatted(setting, script));
 		}
 	}
 
@@ -312,8 +342,8 @@ public final class PythonAdapter extends AAdapter implements AutoCloseable {
 			Set<String> known, String path, boolean strict) {
 		for (AString key : map.keySet()) {
 			if (known.contains(key.toString())) continue;
-			String message = "Unknown configuration field " + path + "." + key;
-			if (strict) throw new IllegalArgumentException(message);
+			String message = UNKNOWN_SETTING.formatted(path, key);
+			if (strict) throw new ConfigurationException(message);
 			log.warn(message);
 		}
 	}
@@ -354,8 +384,8 @@ public final class PythonAdapter extends AAdapter implements AutoCloseable {
 		return nested;
 	}
 
-	private static IllegalArgumentException malformed(String path, String detail) {
-		return new IllegalArgumentException("Malformed configuration at " + path + ": " + detail);
+	private static ConfigurationException malformed(String path, String detail) {
+		return new ConfigurationException(MALFORMED.formatted(path, detail));
 	}
 
 	@Override
@@ -376,7 +406,6 @@ public final class PythonAdapter extends AAdapter implements AutoCloseable {
 	 */
 	@Override
 	protected void installAssets() {
-		if (runtime == null) throw new IllegalStateException("Python module was not configured");
 		for (Definition definition : definitions.values()) {
 			installAsset("python/" + definition.id(), metadata(definition));
 		}
@@ -387,12 +416,14 @@ public final class PythonAdapter extends AAdapter implements AutoCloseable {
 	private volatile boolean loaded;
 
 	/**
-	 * Loads the configured scripts into the runtime, which runs each one's
-	 * top-level code, and reads the instance templates. Operator code runs only
-	 * once the adapter is started, never while it is just installed. The
+	 * Opens CPython, then loads the configured scripts into it, which runs each
+	 * one's top-level code, and reads the instance templates. Operator code runs
+	 * only once the adapter is started, never while it is just installed. The
 	 * scripts load once; a later start keeps them. If one cannot load, none is
 	 * kept and the start fails with the reason.
 	 *
+	 * @throws UnavailableException if this host has no usable CPython, such as
+	 *         when the configured {@code library} cannot load
 	 * @throws ConfigurationException if a script or template is missing, or
 	 *         a script cannot be read or loaded
 	 */
@@ -402,6 +433,13 @@ public final class PythonAdapter extends AAdapter implements AutoCloseable {
 		try {
 			if (closed) throw new UnavailableException("Python adapter is closed");
 			if (loaded) return;
+			if (runtime == null) {
+				try {
+					runtime = PythonRuntime.open(library);
+				} catch (PythonException e) {
+					throw new UnavailableException(e.getMessage(), e);
+				}
+			}
 			Map<String, Operation> loading = new LinkedHashMap<>();
 			try {
 				for (Definition definition : definitions.values()) {
