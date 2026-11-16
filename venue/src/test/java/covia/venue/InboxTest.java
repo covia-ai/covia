@@ -37,7 +37,7 @@ public class InboxTest {
 	}
 
 	private static AMap<AString, ACell> request(Long expires) {
-		return HitlRequest.record(ID, CALLER, null, null, null, Strings.create("Approve?"), null,
+		return HitlRequest.record(ID, CALLER, null, null, null, null, Strings.create("Approve?"), null,
 			Vectors.empty(), 50, expires);
 	}
 

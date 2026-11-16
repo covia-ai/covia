@@ -204,7 +204,7 @@ class BlobIdsTest {
 		venue.cursor().set(Index.<Keyword, ACell>none().assoc(Covia.DID, VENUE));
 		Agent agent = TestAgents.ensure(venue.users().ensure(ALICE), Strings.create("worker"), Maps.empty(), null);
 		agent.addTaskInSession(SESSION, ALICE, null, TASK, Maps.of(Fields.INPUT, "work", Fields.SESSION_ID, SESSION));
-		venue.users().user(ALICE).inbox().open(HitlRequest.record(ASK, ALICE, null, Strings.create("worker"), SESSION,
+		venue.users().user(ALICE).inbox().open(HitlRequest.record(ASK, ALICE, null, Strings.create("worker"), SESSION, null,
 			Strings.create("Go ahead?"), null, Vectors.empty(), 1, null));
 		assertSame(venue.get(), STEP.apply(venue.get()));
 	}

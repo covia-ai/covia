@@ -124,6 +124,33 @@ public class HITLAdapterTest {
 		job.cancel();
 	}
 
+	/**
+	 * A request records the route that carried it beside its caller, as an
+	 * agent's turn does, so a request through a token or a callable is not taken
+	 * for its caller's own. The route is venue-internal (AGENT_LOOP.md §6.3).
+	 */
+	@Test
+	public void testARequestRecordsTheRouteThatCarriedIt() {
+		Job direct = request(ALICE, Hitl.request("Direct").ask(Hitl.approval("ok", "OK?").required()).build());
+		assertEquals(Status.INPUT_REQUIRED, direct.getStatus(), direct.getErrorMessage());
+		assertNull(readRecord(ALICE, direct.getID().toHexString()).get(Fields.ROUTE), "nothing carried a direct request");
+
+		String bearer = RT.getIn(engine.jobs().invokeOperation("v/ops/token/create", Maps.of(
+			Fields.NAME, "outside-bot", Fields.ACCESS, Maps.of("test", Maps.empty()),
+			Fields.CAPS, Vectors.of(Capability.create(Strings.create("v/ops/hitl/request"), Abilities.INVOKE))),
+			ALICE).awaitResult(5000), Fields.TOKEN).toString();
+		RequestContext viaToken = engine.tokenContext(engine.tokens().lookup(bearer));
+		assertNotNull(viaToken.getRoute());
+		Job carried = request(viaToken, Hitl.request("Through the token").ask(Hitl.approval("ok", "OK?").required()).build());
+		assertEquals(Status.INPUT_REQUIRED, carried.getStatus(), carried.getErrorMessage());
+		AMap<AString, ACell> record = readRecord(ALICE, carried.getID().toHexString());
+		assertEquals(ALICE_DID, record.get(Hitl.CALLER), "a request through a token is its issuer's");
+		assertEquals(viaToken.getRoute(), record.get(Fields.ROUTE), "and its route says the token carried it");
+		assertFalse(record.toString().contains(bearer), "the bearer is never recorded");
+		direct.cancel();
+		carried.cancel();
+	}
+
 	@Test
 	public void testAnswerLifecycle() {
 		// 1. Request — the Job parks awaiting the human.

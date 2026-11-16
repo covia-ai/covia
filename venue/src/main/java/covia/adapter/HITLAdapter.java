@@ -216,7 +216,7 @@ public class HITLAdapter extends AAdapter {
 		long nowMs = engine.currentTimestamp().longValue();
 		Blob id = job.getID();
 		AMap<AString, ACell> record = HitlRequest.record(id, caller, ctx.getUserDID(), ctx.getAgentId(),
-			ctx.getSessionId(), title, RT.ensureString(RT.getIn(input, Hitl.DESCRIPTION)), asks, nowMs,
+			ctx.getSessionId(), ctx.getRoute(), title, RT.ensureString(RT.getIn(input, Hitl.DESCRIPTION)), asks, nowMs,
 			(timeoutSecs == null) ? null : nowMs + timeoutSecs * 1000);
 
 		final AString targetDID = target;

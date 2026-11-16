@@ -284,8 +284,9 @@ contexts the venue starts for an agent's own work and work rebuilt after a
 restart carry none, and a scheduled fire's route is the scheduler's step,
 whatever carried the request that scheduled it. The agent's ingress records
 the route beside the caller (AGENT_SESSIONS.md), as it does for a human's
-answer to the agent's question and for `agent:query`; a tool call's late
-outcome is the agent's own and has none.
+answer to the agent's question and for `agent:query`, and `hitl:request`
+records it in the approval request it opens (AGENT_LOOP.md §6.3); a tool
+call's late outcome is the agent's own and has none.
 
 A step shows its adapter, its name (the token's, binding's or callable's own,
 set by whoever owns it), for a callable the caller it carried the request for,
@@ -305,9 +306,10 @@ otherwise as `unreadable sender`. A route that cannot be read shows as an
 never looks direct; a long one shows its first two steps, how many it folds,
 and its latest. A turn stored before routes carries its channel's
 `authentication` record instead, and renders as that binding's step would.
-The route's stored shape is venue-internal, not a contract: operations that
-hand turns out leave it out (`agent:history`, the timeline), and this element
-is its one view.
+The route's stored shape is venue-internal, not a contract, and may change:
+operations that hand turns out leave it out (`agent:history`, the timeline),
+this element is an agent's one view of it, and an approval request holds it
+as stored.
 
 `bracket` is cheap in tokens, reads naturally in logs, and is plain text. `xml` marks where an instruction block ends as well as where it begins. `header` suits models whose guidance favours markdown sections, at the cost of competing with headings inside an instruction body. A model that benefits from either alternative opts in on its asset. The dialect is fixed for a persisted context; changing it rebuilds the prefix deliberately.
 
