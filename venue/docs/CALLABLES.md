@@ -218,7 +218,8 @@ what the target reaches by name is the owner's, within the callable's caps:
 - an agent it asks is asked by the issuer, and told who called through which
   callable: the call carries the invoker's request on, so its route is the
   invoker's with the callable's step added, and that step names the callable
-  and the call's caller, the authority that called it
+  and the call's caller, the authority that called it: for an agent's run,
+  the controller whose authority it acts with
   ([AGENT_CONTEXT.md](./AGENT_CONTEXT.md) §1.2). A call within a call adds a
   step of its own, whose caller is the outer callable's issuer. Work the call
   leaves running and rebuilds later is not the call, and has none.
