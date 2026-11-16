@@ -2665,7 +2665,11 @@ Per bot:
   `"public"` names the venue's public principal (the same identity as an
   anonymous MCP client on a public venue), which is what a local dev venue's
   agents are owned by.
-- `agent` **or** `operation` — the **inbound handler**. With `agent`, each
+- `agent` **or** `operation` — the **inbound handler**. `agent` is an agent
+  reference ([AGENT_LOOP.md §1.1](AGENT_LOOP.md#11-agent-references)); a bare
+  id or `g/<id>` names an agent of the bot's `user`, and a reference that names
+  no agent is refused when the bot is created. This holds for every messaging
+  provider's bindings. With `agent`, each
   Telegram chat (or forum topic) is one `agent:chat` session, persisted at
   `:adapters/telegram/config/<bot>/sessions/<chatId>` so
   conversations survive restarts; `/new` starts a fresh one. The agent

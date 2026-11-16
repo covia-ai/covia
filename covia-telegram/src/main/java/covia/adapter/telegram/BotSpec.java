@@ -16,6 +16,7 @@ import convex.core.lang.RT;
 import covia.exception.ConfigurationException;
 import covia.venue.Engine;
 import covia.adapter.messaging.MessagingBotSpec;
+import covia.adapter.messaging.MessagingSettings;
 
 /**
  * One operator-declared bot: the immutable, validated form of an
@@ -194,6 +195,7 @@ public record BotSpec(
 				+ "invoked per message with the message record as input) is required");
 		}
 		if (agent != null && agent.isBlank()) throw new IllegalArgumentException(where + ".agent must not be blank");
+		MessagingSettings.agent(where + ".agent", userStr, agent);
 		if (operation != null && operation.isBlank()) throw new IllegalArgumentException(where + ".operation must not be blank");
 
 		ACell reply = m.get(K_REPLY);

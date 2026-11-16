@@ -480,11 +480,17 @@ class ConversationRouterTest {
 			new ConversationSessions(state, "work/own"));
 		assertEquals(helper, own.agentContext().getCallerDID());
 		assertEquals(caps, own.agentContext().getCaps());
+		var byDid = new ConversationRouter(engine, new Spec("bot", owner.toString(), helper.toString(), null, null),
+			new ConversationSessions(state, "work/did"));
+		assertEquals(helper, byDid.agentContext().getCallerDID(), "naming the agent by its DID is the same");
+		assertEquals(caps, byDid.agentContext().getCaps());
 
 		// Nobody else can make the agent act: another user's bot, or a sibling agent's, works as itself.
-		var foreign = new ConversationRouter(engine, new Spec("bot", stranger.toString(), owner + "/g/helper", null, null),
-			new ConversationSessions(state, "work/foreign"));
-		assertEquals(stranger, foreign.agentContext().getCallerDID());
+		for (String agent : new String[] {owner + "/g/helper", helper.toString()}) {
+			var foreign = new ConversationRouter(engine, new Spec("bot", stranger.toString(), agent, null, null),
+				new ConversationSessions(state, "work/foreign"));
+			assertEquals(stranger, foreign.agentContext().getCallerDID(), agent);
+		}
 		var sibling = new ConversationRouter(engine, new Spec("bot", owner.toString(), "sibling", null, null), helper,
 			new ConversationSessions(state, "work/sibling"));
 		assertEquals(helper, sibling.agentContext().getCallerDID(), "the helper's bot, not the sibling it talks to");

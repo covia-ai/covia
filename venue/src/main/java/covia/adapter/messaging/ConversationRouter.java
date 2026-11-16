@@ -21,8 +21,8 @@ import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.exception.JobFailedException;
 import covia.grid.Job;
-import covia.grid.Principals;
 import covia.grid.Status;
+import covia.venue.AgentAddress;
 import covia.venue.Engine;
 import covia.venue.Ids;
 import covia.venue.RequestContext;
@@ -234,13 +234,15 @@ public final class ConversationRouter {
 			lists.test(channel.sender()), channel));
 	}
 
-	/** The binding's agent as a full address. A relative reference names an agent
-	 * of the binding's user, wherever the message comes from. */
+	/** The binding's agent ({@link AgentAddress#parse}). A relative reference names
+	 * an agent of the binding's user, wherever the message comes from. */
+	private AgentAddress agent() {
+		return AgentAddress.parse(spec.userDID(engine), Strings.create(spec.agent()));
+	}
+
+	/** The binding's agent as a full address, {@code <owner>/g/<agentId>}. */
 	private AString agentAddress() {
-		String agent = covia.lattice.CapabilityChecker.canonicalResource(spec.agent(), null);
-		if (agent.startsWith("did:")) return Strings.create(agent);
-		if (agent.startsWith("g/")) agent = agent.substring(2);
-		return Strings.create(spec.userDID(engine) + "/g/" + agent);
+		return agent().address();
 	}
 
 	/**
@@ -251,15 +253,11 @@ public final class ConversationRouter {
 	 * an agent act.
 	 */
 	public RequestContext agentContext() {
-		String address = agentAddress().toString();
-		int split = address.indexOf("/g/");
-		if (split < 0) return context(); // not an agent address; asking it is refused anyway
-		AString owner = Strings.create(address.substring(0, split));
-		AString agent = Principals.agentDID(owner, Strings.create(address.substring(split + 3)));
+		AgentAddress agent = agent();
 		AString self = principal();
-		if (!self.equals(owner) && !self.equals(agent)) return context();
+		if (!self.equals(agent.owner()) && !self.equals(agent.did())) return context();
 		sessions.requireCurrentUser();
-		return engine.context(owner, agent);
+		return engine.context(agent.owner(), agent.did());
 	}
 
 	/** Run an operation as the binding's own work. */

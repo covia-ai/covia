@@ -50,8 +50,9 @@ An agent reference names one agent, in any of these forms:
 | `did:key:zAlice/g/Manager` | The agent `Manager` of that owner |
 | `did:key:zAlice:g:Manager` | The same agent, by its DID |
 
-Every native agent operation's `agentId` and the values API's `agent` selector
-read a reference in the same way (`AgentAddress`). Reading one is syntax only.
+Every native agent operation's `agentId`, the values API's `agent` selector and
+a messaging binding's `agent` read a reference in the same way (`AgentAddress`);
+a binding's relative reference names an agent of the binding's `user`. Reading one is syntax only.
 Whether the agent exists, and whether the caller may use it, is decided where it
 is used, the same way for every form. The canonical resource is
 `<ownerDID>/g/<agentId>`, capability checks apply to that resource at the point
