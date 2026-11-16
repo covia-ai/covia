@@ -377,7 +377,7 @@ class SteppedSchedulerTest {
 	void aHitlTimeoutExpiresTheRequestAtTheDrivenTime(TestInfo info) throws Exception {
 		RequestContext ctx = user(engine, info);
 		AString agentId = Strings.create("asker");
-		Agent agent = engine.getVenueState().users().user(ctx.getUserDID()).ensureAgent(agentId, Maps.empty(), null);
+		Agent agent = TestAgents.ensure(engine.getVenueState().users().user(ctx.getUserDID()), agentId, Maps.empty(), null);
 		Job expiring = engine.jobs().invokeOperation("v/ops/hitl/request", Hitl.request("Expires")
 			.ask(Hitl.approval("ok", "OK?")).timeout(60).build(), RequestContext.ofAgent(ctx.getUserDID(), agentId));
 		Job answered = engine.jobs().invokeOperation("v/ops/hitl/request", Hitl.request("Answered")

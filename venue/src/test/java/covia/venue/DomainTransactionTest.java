@@ -96,7 +96,7 @@ class DomainTransactionTest {
 	@Test
 	void sessionChangesComposeWithAgentChangesAndRollback() {
 		var venue = VenueState.create(AKeyPair.generate());
-		var agent = venue.users().ensure(DID).ensureAgent("sessions", Maps.empty(), null);
+		var agent = TestAgents.ensure(venue.users().ensure(DID), "sessions", Maps.empty(), null);
 		var sid = Blob.fromHex("01");
 		agent.sessions().create(sid, DID, null);
 		var retained = new AtomicReference<Session>();
@@ -124,8 +124,8 @@ class DomainTransactionTest {
 
 	@Test
 	void summaryPublicationRetriesAgentAdmissionAfterConcurrentStop() throws Exception {
-		var agent = VenueState.create(AKeyPair.generate()).users().ensure(DID)
-			.ensureAgent("sessions", Maps.empty(), null);
+		var agent = TestAgents.ensure(VenueState.create(AKeyPair.generate()).users().ensure(DID),
+			"sessions", Maps.empty(), null);
 		var sid = Blob.fromHex("01");
 		agent.sessions().create(sid, DID, null);
 		var snapshot = agent.session(sid).getRecord();
@@ -154,8 +154,8 @@ class DomainTransactionTest {
 	void configChangeRunsAgainstTheConfigItReplaces() throws Exception {
 		var caps = Strings.create("caps");
 		var model = Strings.create("model");
-		var agent = VenueState.create(AKeyPair.generate()).users().ensure(DID)
-			.ensureAgent("config", Maps.of(caps, "wide", model, "a"), null);
+		var agent = TestAgents.ensure(VenueState.create(AKeyPair.generate()).users().ensure(DID),
+			"config", Maps.of(caps, "wide", model, "a"), null);
 		var entered = new CountDownLatch(1);
 		var resume = new CountDownLatch(1);
 		var seen = new CopyOnWriteArrayList<ACell>();
@@ -182,8 +182,8 @@ class DomainTransactionTest {
 
 	@Test
 	void sessionTransactionDoesNotResurrectConcurrentDeletion() throws Exception {
-		var agent = VenueState.create(AKeyPair.generate()).users().ensure(DID)
-			.ensureAgent("sessions", Maps.empty(), null);
+		var agent = TestAgents.ensure(VenueState.create(AKeyPair.generate()).users().ensure(DID),
+			"sessions", Maps.empty(), null);
 		var sid = Blob.fromHex("01");
 		agent.sessions().create(sid, DID, null);
 		var session = agent.session(sid);
@@ -209,8 +209,8 @@ class DomainTransactionTest {
 
 	@Test
 	void sessionUpdateReportsDeletionOnRetryAndPreservesCycleFence() throws Exception {
-		var agent = VenueState.create(AKeyPair.generate()).users().ensure(DID)
-			.ensureAgent("sessions", Maps.empty(), null);
+		var agent = TestAgents.ensure(VenueState.create(AKeyPair.generate()).users().ensure(DID),
+			"sessions", Maps.empty(), null);
 		var sid = Blob.fromHex("01");
 		agent.sessions().create(sid, DID, null);
 		var session = agent.session(sid);
@@ -349,7 +349,7 @@ class DomainTransactionTest {
 	void wakeIntentEventAndHandleShareTheVenueTransaction() {
 		var venue = VenueState.create(AKeyPair.generate());
 		var agentId = Strings.create("assistant");
-		var agent = venue.users().ensure(DID).ensureAgent(agentId, Maps.empty(), null);
+		var agent = TestAgents.ensure(venue.users().ensure(DID), agentId, Maps.empty(), null);
 		var sid = Blob.fromHex("aa");
 		agent.sessions().create(sid, DID, null);
 		ACell before = venue.get();
@@ -375,7 +375,7 @@ class DomainTransactionTest {
 	void concurrentWakeIntentRetriesWithoutOrphanEvents() throws Exception {
 		var venue = VenueState.create(AKeyPair.generate());
 		var agentId = Strings.create("assistant");
-		var agent = venue.users().ensure(DID).ensureAgent(agentId, Maps.empty(), null);
+		var agent = TestAgents.ensure(venue.users().ensure(DID), agentId, Maps.empty(), null);
 		var sid = Blob.fromHex("aa");
 		var other = Blob.fromHex("bb");
 		agent.sessions().create(sid, DID, null);
@@ -438,7 +438,7 @@ class DomainTransactionTest {
 		var failure = new IllegalStateException("abort test transaction");
 		assertSame(failure, assertThrows(IllegalStateException.class, () -> venue.execute(draft -> {
 			var user = draft.users().ensure(DID);
-			user.ensureAgent("assistant", Maps.empty(), null);
+			TestAgents.ensure(user, "assistant", Maps.empty(), null);
 			user.secrets().store("token", "private", keys);
 			user.workspace().write(path("w/ready"), CVMLong.ONE);
 			draft.assets().store(Strings.create("{\"name\":\"private\"}"), null);
@@ -450,7 +450,7 @@ class DomainTransactionTest {
 
 		venue.execute(draft -> {
 			var user = draft.users().ensure(DID);
-			user.ensureAgent("assistant", Maps.empty(), null);
+			TestAgents.ensure(user, "assistant", Maps.empty(), null);
 			user.secrets().store("token", "committed", keys);
 			user.workspace().write(path("w/ready"), CVMLong.ONE);
 		});
@@ -469,7 +469,7 @@ class DomainTransactionTest {
 		var agentDraft = new AtomicReference<Agent>();
 		user.execute(draft -> {
 			retained.set(draft);
-			draft.ensureAgent("assistant", Maps.empty(), null).execute(agent -> {
+			TestAgents.ensure(draft, "assistant", Maps.empty(), null).execute(agent -> {
 				agentDraft.set(agent);
 				agent.setStatus(Strings.create("PAUSED"));
 				assertNull(user.agent("assistant"));
@@ -579,7 +579,7 @@ class DomainTransactionTest {
 		var venue = VenueState.fromRoot(Cursors.root(Index.none()), key.getAccountKey(), key::signData, context);
 		var staged = new AtomicReference<ACell>();
 		venue.execute(draft -> {
-			draft.users().ensure(DID).ensureAgent("assistant", Maps.empty(), null);
+			TestAgents.ensure(draft.users().ensure(DID), "assistant", Maps.empty(), null);
 			staged.set(draft.get());
 		});
 		assertEquals(staged.get(), venue.get());

@@ -79,7 +79,7 @@ class UserExportsTest {
 		user.secrets().store("API_KEY", SECRET, KEYS);
 		Blob jobID = Blob.fromHex("0a".repeat(16));
 		user.jobs().create(jobID, Maps.of(Fields.ID, jobID, Fields.STATUS, Status.COMPLETE, Fields.OUTPUT, "done"));
-		Agent agent = user.ensureAgent(HELPER, Maps.of("model", "test"), Strings.create("state"));
+		Agent agent = TestAgents.ensure(user, HELPER, Maps.of("model", "test"), Strings.create("state"));
 		agent.sessions().create(Blob.fromHex("aa"), did, null);
 		return user;
 	}

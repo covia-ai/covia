@@ -10,6 +10,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Added
 
+- Agent operations' `agentId` accepts an agent's DID (`<ownerDID>:g:<id>`), and the values API's `agent` selector accepts `g/<id>` and `<ownerDID>/g/<id>`, each checked for access as the existing forms are.
 - Job-specific `job/read`, `job/manage` and `job/message` grants replace CRUD permissions on Job APIs; lifecycle controls return acknowledgements.
 - Embedded simulations can discover the next queued scheduled timestamp across venues and advance directly to it (#683).
 - DLFS entries carry application metadata: `dlfs:setMetadata`, `file:setMetadata` and `vault:setMetadata` set or clear it (`crud/write`), and `dlfs:stat` and `file:stat` return it; a move keeps it, replacing a file's content in place keeps it, and deleting the entry removes it (#659).

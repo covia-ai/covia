@@ -63,6 +63,7 @@ import covia.grid.Status;
 import covia.lattice.CapabilityChecker;
 import covia.venue.Admission;
 import covia.venue.Agent;
+import covia.venue.AgentAddress;
 import covia.venue.Session;
 import covia.venue.Task;
 import covia.venue.AgentEvents;
@@ -415,33 +416,28 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	/**
-	 * Resolves a bare id or a normal grid path ({@code g/id}, {@code /g/id}, or
-	 * {@code <did>/g/id}) through Engine's shared user-path resolver.
+	 * Resolves an agent reference ({@link AgentAddress#parse}), relative to the
+	 * user {@code ctx} acts for, and requires {@code ability} over the agent it
+	 * names before creating its owner's namespace when {@code createOwner}.
 	 */
 	private AgentTarget resolveAgentTarget(RequestContext ctx, AString ref,
 			AString ability, boolean createOwner) {
 		if (ref == null || ref.isEmpty()) {
 			throw new InvalidInputException("agentId is required");
 		}
-		String value = CapabilityChecker.canonicalResource(ref.toString(), null);
-		AString path = (value.startsWith("did:") || value.startsWith("g/"))
-			? ref : Strings.create("g/" + value);
-		Engine.UserPathTarget resolved = engine.requireUserPath(ctx, path, ability, createOwner);
-		convex.core.data.Path agentPath = resolved.path();
-		if (agentPath.count() != 2 || !covia.lattice.Namespace.G.equals(agentPath.get(0))) {
-			throw new InvalidInputException("Agent reference must resolve to g/<agentId>: " + ref);
-		}
-		AString agentId = agentPath.get(1);
-		if (agentId.isEmpty() || agentId.toString().contains(":")) {
-			throw new InvalidInputException("agentId must be a non-empty path segment without ':'");
-		}
-		return new AgentTarget(resolved.ownerDID(), resolved.user(), agentId, resolved.resource());
+		if (ctx.getUserDID() == null) throw new AuthException(Engine.USER_PATH_UNAUTHENTICATED);
+		AgentAddress agent = AgentAddress.parse(ctx.getUserDID(), ref);
+		AString address = agent.address();
+		engine.requireLocalAccess(ctx, address, ability);
+		Users users = engine.getVenueState().users();
+		User user = createOwner ? users.ensure(agent.owner()) : users.user(agent.owner());
+		return new AgentTarget(agent.owner(), user, agent.agentId(), address);
 	}
 
 	/** Whether this recipient can join an atomic local session handoff. */
 	public boolean supportsSessionDelivery(RequestContext ctx, AString ref) {
 		AgentTarget target = resolveAgentTarget(ctx, ref, Abilities.AGENT_MESSAGE, false);
-		Agent agent = getAgent(target.ownerDID(), target.agentId());
+		Agent agent = engine.getAgent(target.ownerDID(), target.agentId());
 		return agent != null && !externalAgents().isExternal(agent);
 	}
 
@@ -458,7 +454,7 @@ public class AgentAdapter extends AAdapter {
 		} catch (covia.exception.AuthException | covia.exception.InvalidInputException refused) {
 			return describeFailure(refused);
 		}
-		Agent agent = getAgent(target.ownerDID(), target.agentId());
+		Agent agent = engine.getAgent(target.ownerDID(), target.agentId());
 		if (agent == null) return DELIVERY_AGENT_MISSING.formatted(target.agentId());
 		if (Agent.SUSPENDED.equals(agent.getStatus())) return DELIVERY_AGENT_SUSPENDED.formatted(target.agentId());
 		return null;
@@ -480,7 +476,7 @@ public class AgentAdapter extends AAdapter {
 		if (!delivery.taken && !delivery.duplicate) throw new JobFailedException(job);
 		engine.flush();
 		AgentTarget target = resolveAgentTarget(ctx, input, Fields.AGENT_ID, Abilities.AGENT_MESSAGE, false);
-		Agent agent = getAgent(target.ownerDID(), target.agentId());
+		Agent agent = engine.getAgent(target.ownerDID(), target.agentId());
 		if (agent != null && hasWork(agent)) wakeAgent(target.ownerDID(), target.agentId(), true);
 		return delivery.taken ? job : null;
 	}
@@ -853,9 +849,9 @@ public class AgentAdapter extends AAdapter {
 	private ACell doKick(RequestContext ctx, ACell input) {
 		AgentTarget target = resolveAgentTarget(ctx, input, Fields.AGENT_ID,
 			Abilities.AGENT_REQUEST, false);
-		requireNative(getAgent(target.ownerDID(), target.agentId()), "trigger");
+		requireNative(engine.getAgent(target.ownerDID(), target.agentId()), "trigger");
 		wakeAgent(target.ownerDID(), target.agentId(), parseForce(input));
-		Agent agent = getAgent(target.ownerDID(), target.agentId());
+		Agent agent = engine.getAgent(target.ownerDID(), target.agentId());
 		return identify(target, Maps.of(
 			Fields.STATUS, observableStatus(target.ownerDID(), target.agentId(), agent)));
 	}
@@ -943,7 +939,7 @@ public class AgentAdapter extends AAdapter {
 			AMap<AString, ACell> definition = externalAgents().validate(facet);
 			AMap<AString, ACell> config = storedCaps(parseConfigArg(RT.getIn(input, Fields.CONFIG), ctx), true);
 			validateComposedConfig(config);
-			Agent created = user.createAgent(agentId, config,
+			Agent created = user.agents().create(agentId, config,
 				RT.getIn(input, Agent.KEY_STATE), definition, controller);
 			if (created == null) throw new ConflictException("Agent already exists: " + agentId);
 			job.setStatus(Status.STARTED);
@@ -1063,7 +1059,7 @@ public class AgentAdapter extends AAdapter {
 			return;
 		}
 
-		Agent agent = user.createAgent(agentId, config, initialState, null, controller);
+		Agent agent = user.agents().create(agentId, config, initialState, null, controller);
 		if (agent == null) {
 			job.fail("Agent already exists: " + agentId
 				+ "; update it, or delete it with remove=true before creating it again");
@@ -1546,7 +1542,7 @@ public class AgentAdapter extends AAdapter {
 		AgentTarget sourceTarget = resolveAgentTarget(ctx, input, K_SOURCE_ID,
 			Abilities.AGENT_FORK, false);
 		AString sourceId = sourceTarget.agentId();
-		requireNative(getAgent(sourceTarget.ownerDID(), sourceId), "fork");
+		requireNative(engine.getAgent(sourceTarget.ownerDID(), sourceId), "fork");
 
 		// Resolve source agent
 		User sourceUser = sourceTarget.user();
@@ -1597,7 +1593,7 @@ public class AgentAdapter extends AAdapter {
 			return;
 		}
 
-		Agent target = targetUser.forkAgent(agentId, forkConfig, sourceState, sourceTimeline,
+		Agent target = targetUser.agents().fork(agentId, forkConfig, sourceState, sourceTimeline,
 			newController(ctx, input));
 		if (target == null) {
 			job.fail("Target agent already exists: " + agentId
@@ -2432,8 +2428,8 @@ public class AgentAdapter extends AAdapter {
 
 		AVector<ACell> agents = Vectors.empty();
 		if (user != null) {
-			AMap<AString, ACell> agentMap = user.getAgents();
-			if (agentMap != null) {
+			AMap<AString, ACell> agentMap = user.agents().all();
+			if (!agentMap.isEmpty()) {
 				for (var entry : agentMap.entrySet()) {
 					AString agentId = entry.getKey();
 					ACell value = entry.getValue();
@@ -2907,8 +2903,7 @@ public class AgentAdapter extends AAdapter {
 	 * clear it, there being no agent to halt.
 	 */
 	private static boolean emptyEntry(User user, AString agentId) {
-		AMap<AString, ACell> agents = (user != null) ? user.getAgents() : null;
-		return agents != null && agents.containsKey(agentId) && agents.get(agentId) == null;
+		return user != null && user.agents().containsKey(agentId) && user.agents().get(agentId) == null;
 	}
 
 	/** Shared single-agent deletion semantics used by both wire shapes. */
@@ -2920,7 +2915,7 @@ public class AgentAdapter extends AAdapter {
 		if (agent == null || !agent.exists()) {
 			if (remove && emptyEntry(user, agentId)) {
 				engine.deleteAgentState(Principals.agentDID(target.ownerDID(), agentId));
-				user.removeAgent(agentId);
+				user.agents().remove(agentId);
 				return identify(target, Maps.of(Fields.REMOVED, CVMBool.TRUE));
 			}
 			job.fail("Agent disappeared during deletion: " + agentId);
@@ -2942,7 +2937,7 @@ public class AgentAdapter extends AAdapter {
 		// Nor anything adapters hold for it, its keyring among them.
 		engine.deleteAgentState(agentDID);
 		if (remove) {
-			user.removeAgent(agentId);
+			user.agents().remove(agentId);
 			return identify(target, Maps.of(Fields.REMOVED, CVMBool.TRUE));
 		}
 		return identify(target, Maps.of(Fields.STATUS, Agent.TERMINATED));
@@ -3632,7 +3627,7 @@ public class AgentAdapter extends AAdapter {
 	 * or a restart that came in between.
 	 */
 	private void handBackResolved(AString ownerDID, AString agentId) {
-		Agent agent = getAgent(ownerDID, agentId);
+		Agent agent = engine.getAgent(ownerDID, agentId);
 		if (agent == null || agent.getResolved().isEmpty()) return;
 		Map<Blob, WriteContext> writeContexts = new java.util.HashMap<>();
 		Handback handback = engine.getVenueState().transact(draft -> {
@@ -3867,7 +3862,7 @@ public class AgentAdapter extends AAdapter {
 		Job child = externalAgents().child(job);
 		if (child == null) throw new NotSupportedException(ExternalAgents.MISSING_CHILD);
 		AString owner = externalAgents().owner(job);
-		Agent agent = getAgent(owner, RT.ensureString(job.getData().get(Fields.AGENT_ID)));
+		Agent agent = engine.getAgent(owner, RT.ensureString(job.getData().get(Fields.AGENT_ID)));
 		externalAgents().backend(externalAgents().stored(agent)).handleMessage(child, messageRecord);
 	}
 
@@ -3910,7 +3905,7 @@ public class AgentAdapter extends AAdapter {
 		int split = address.toString().lastIndexOf("/g/");
 		if (split < 0) return false;
 		AString ownerDID = Strings.create(address.toString().substring(0, split));
-		Agent agent = getAgent(ownerDID, agentId);
+		Agent agent = engine.getAgent(ownerDID, agentId);
 		if (agent == null) return false;
 		Blob jobId = job.getID();
 		Index<Blob, ACell> tasks = agent.getTasks();
@@ -4030,7 +4025,7 @@ public class AgentAdapter extends AAdapter {
 				// completed the future exceptionally. That is still a finish.
 			}
 		}
-		Agent agent = getAgent(ctx.getUserDID(), agentId);
+		Agent agent = engine.getAgent(ctx.getUserDID(), agentId);
 		return agent == null ? Agent.TERMINATED : agent.getStatus();
 	}
 
@@ -4064,7 +4059,7 @@ public class AgentAdapter extends AAdapter {
 	 *              it passes {@code force: false}, as scheduler wake fires do
 	 */
 	public CompletableFuture<ACell> wakeAgent(AString ownerDID, AString agentId, boolean force) {
-		Agent agent = getAgent(ownerDID, agentId);
+		Agent agent = engine.getAgent(ownerDID, agentId);
 		if (agent == null) return null;
 		if (externalAgents().isExternal(agent)) return null;
 		// Shutdown: no new loop. Queued work waits durably for the next boot.
@@ -4237,7 +4232,7 @@ public class AgentAdapter extends AAdapter {
 	 */
 	public void trackCall(AString ownerDID, AString agentId, Blob sessionId, Blob taskId, Job job,
 			AMap<AString, ACell> call) {
-		Agent agent = getAgent(ownerDID, agentId);
+		Agent agent = engine.getAgent(ownerDID, agentId);
 		if (agent == null) return;
 		AMap<AString, ACell> entry = Maps.of(Fields.SESSION_ID, sessionId);
 		if (taskId != null) entry = entry.assoc(Fields.TASK_ID, taskId);
@@ -4315,7 +4310,7 @@ public class AgentAdapter extends AAdapter {
 
 	/** Fails a parked task with nothing left to wait on or run on ({@link #yieldIsBacked}). */
 	private void failIfStranded(AString ownerDID, AString agentId, Blob taskId) {
-		Agent agent = getAgent(ownerDID, agentId);
+		Agent agent = engine.getAgent(ownerDID, agentId);
 		Index<Blob, ACell> tasks = (agent == null) ? null : agent.getTasks();
 		ACell row = (tasks == null) ? null : tasks.get(taskId);
 		if (Task.isParked(row) && !yieldIsBacked(agent, ownerDID, agentId, taskId, row)) {
@@ -4430,7 +4425,7 @@ public class AgentAdapter extends AAdapter {
 					break;
 				}
 
-				Agent agent = getAgent(ownerDID, agentId);
+				Agent agent = engine.getAgent(ownerDID, agentId);
 				if (agent == null) {
 					run.end(Agent.TERMINATED);
 					completion.completeExceptionally(
@@ -4669,7 +4664,7 @@ public class AgentAdapter extends AAdapter {
 
 			// Clean exit clears the persisted executor marker. The atomic sleep
 			// preserves an administrative stop/terminal state set while running.
-			Agent agent = getAgent(ownerDID, agentId);
+			Agent agent = engine.getAgent(ownerDID, agentId);
 			AString finalStatus = Agent.SLEEPING;
 			if (agent != null) {
 				agent.sleep();
@@ -4713,7 +4708,7 @@ public class AgentAdapter extends AAdapter {
 			// No re-check during shutdown: wakeAgent refuses new loops, and the
 			// store may already be closed.
 			if (!engine.isClosing()) {
-				Agent agent = getAgent(ownerDID, agentId);
+				Agent agent = engine.getAgent(ownerDID, agentId);
 				if (agent != null && Agent.SLEEPING.equals(agent.getStatus())
 						&& hasWork(agent)) {
 					wakeAgent(ownerDID, agentId, false);
@@ -4863,7 +4858,7 @@ public class AgentAdapter extends AAdapter {
 		long parkedAt = (pickedTask != null && leanError == null) ? engine.jobs().nextSequence() : 0L;
 		Merge merge = engine.getVenueState().transact(draft -> {
 			Handback run = new Handback(callerDID, agentId, writeContexts);
-			Agent current = draft.users().at(callerDID).agentAt(agentId);
+			Agent current = draft.users().at(callerDID).agents().at(agentId);
 			if (!current.holdsClaim(claim)) {
 				AMap<AString, ACell> record = (current.getRecord() == null) ? null : current.recordStoppedCycle(
 					cycleEntry.assoc(Fields.RESULT, Strings.create(TRANSITION_CANCELLED)).assoc(Fields.CANCELLED, CVMBool.TRUE));
@@ -5053,7 +5048,7 @@ public class AgentAdapter extends AAdapter {
 	 */
 	private void holdForResume(AString ownerDID, AString agentId, String error) {
 		AgentKey key = new AgentKey(ownerDID, agentId);
-		Agent agent = getAgent(ownerDID, agentId);
+		Agent agent = engine.getAgent(ownerDID, agentId);
 		if (agent == null) return;
 		handBackResolved(ownerDID, agentId);
 		ConcurrentHashMap<Blob, ConcurrentHashMap<Blob, Job>> agentChats = activeChats.get(key);
@@ -5512,7 +5507,7 @@ public class AgentAdapter extends AAdapter {
 	 * Each surviving Job is failed with {@code error}.
 	 */
 	private void failAllPendingForAgent(AString callerDID, AString agentId, String error) {
-		Agent agent = getAgent(callerDID, agentId);
+		Agent agent = engine.getAgent(callerDID, agentId);
 		failHeldWork(new AgentKey(callerDID, agentId), (agent == null) ? null : agent.getRecord(), error);
 	}
 
@@ -5562,7 +5557,7 @@ public class AgentAdapter extends AAdapter {
 
 	private void suspendOnError(AString callerDID, AString agentId, String failure) {
 		try {
-			Agent agent = getAgent(callerDID, agentId);
+			Agent agent = engine.getAgent(callerDID, agentId);
 			if (agent != null) {
 				AString error = Strings.create(failure);
 				agent.suspend(error);
@@ -5575,21 +5570,11 @@ public class AgentAdapter extends AAdapter {
 
 	// ========== Agent lookup ==========
 
-	private Agent getAgent(AString callerDID, AString agentId) {
-		Users users = engine.getVenueState().users();
-		User user = users.user(callerDID);
-		if (user == null) return null;
-		Agent agent = user.agent(agentId);
-		if (agent == null) return null;
-		if (Agent.TERMINATED.equals(agent.getStatus())) return null;
-		return agent;
-	}
-
 	/** Why an operation on an agent fails when it is absent or deleted; the agent's address fills it. */
 	public static final String AGENT_NOT_FOUND = "Agent '%s' was not found or is terminated; use agent:list or agent:create";
 
 	private Agent lookupAgent(Job job, AgentTarget target) {
-		Agent agent = getAgent(target.ownerDID(), target.agentId());
+		Agent agent = engine.getAgent(target.ownerDID(), target.agentId());
 		if (agent == null) job.fail(AGENT_NOT_FOUND.formatted(target.address()));
 		return agent;
 	}
@@ -5644,11 +5629,11 @@ public class AgentAdapter extends AAdapter {
 			AString did = RT.ensureString(userEntry.getKey());
 			if (did == null) continue;
 			covia.venue.User user = engine.getVenueState().users().user(did);
-			AMap<AString, ACell> agents = (user == null) ? null : user.getAgents();
-			if (agents == null) continue;
+			if (user == null) continue;
+			AMap<AString, ACell> agents = user.agents().all();
 			for (AString agentId : agents.keySet()) {
 				try {
-					Agent agent = getAgent(did, agentId);
+					Agent agent = engine.getAgent(did, agentId);
 					if (agent == null || externalAgents().isExternal(agent)) continue;
 					if (isRunning(new AgentKey(did, agentId)) || !hasWork(agent)) continue;
 					wakeAgent(did, agentId, true);
@@ -5713,12 +5698,11 @@ public class AgentAdapter extends AAdapter {
 			if (did == null) continue;
 			covia.venue.User user = engine.getVenueState().users().user(did);
 			if (user == null) continue;
-			AMap<AString, ACell> agents = user.getAgents();
-			if (agents == null) continue;
+			AMap<AString, ACell> agents = user.agents().all();
 			for (var agentEntry : agents.entrySet()) {
 				AString agentId = agentEntry.getKey();
 				try {
-					Agent agent = getAgent(did, agentId);
+					Agent agent = engine.getAgent(did, agentId);
 					if (agent == null) continue;   // terminated / missing
 					if (externalAgents().isExternal(agent)) { externalAgents().reconcile(agent); continue; }
 					// This method is a startup hook, but keep it safe if an embedding
@@ -5921,13 +5905,13 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	private Agent requireAgent(AString callerDID, AString agentId) {
-		Agent agent = getAgent(callerDID, agentId);
+		Agent agent = engine.getAgent(callerDID, agentId);
 		if (agent == null) throw new NotFoundException(AGENT_NOT_FOUND.formatted(agentId), agentId.toString());
 		return agent;
 	}
 
 	private AString resolveTransitionOp(AString callerDID, AString agentId) {
-		Agent agent = getAgent(callerDID, agentId);
+		Agent agent = engine.getAgent(callerDID, agentId);
 		return (agent == null) ? null : agent.transitionOperation();
 	}
 

@@ -27,6 +27,7 @@ import covia.venue.HitlRequest;
 import covia.venue.JobIndex;
 import covia.venue.Session;
 import covia.venue.Task;
+import covia.venue.TestAgents;
 import covia.venue.User;
 import covia.venue.VenueState;
 
@@ -66,7 +67,7 @@ class BlobIdsTest {
 		VenueState venue = VenueState.create(AKeyPair.generate());
 		venue.cursor().set(Index.<Keyword, ACell>none().assoc(Covia.DID, VENUE).assoc(Covia.VERSION, CVMLong.create(2)));
 		User alice = venue.users().ensure(ALICE);
-		Agent worker = alice.ensureAgent(Strings.create("worker"), Maps.empty(), null);
+		Agent worker = TestAgents.ensure(alice, Strings.create("worker"), Maps.empty(), null);
 		AMap<AString, ACell> turn = Maps.of(Agent.K_ROLE, Agent.ROLE_USER, Agent.K_CONTENT, "hi", Fields.JOB_ID, hex(CHAT));
 		AMap<AString, ACell> segment = Maps.of(Strings.create("summary"), "earlier", Fields.ITEMS, Vectors.of(turn),
 			Fields.JOB_ID, hex(COMPACTION));
@@ -201,7 +202,7 @@ class BlobIdsTest {
 		assertSame(noUsers, STEP.apply(noUsers));
 		VenueState venue = VenueState.create(AKeyPair.generate());
 		venue.cursor().set(Index.<Keyword, ACell>none().assoc(Covia.DID, VENUE));
-		Agent agent = venue.users().ensure(ALICE).ensureAgent(Strings.create("worker"), Maps.empty(), null);
+		Agent agent = TestAgents.ensure(venue.users().ensure(ALICE), Strings.create("worker"), Maps.empty(), null);
 		agent.addTaskInSession(SESSION, ALICE, null, TASK, Maps.of(Fields.INPUT, "work", Fields.SESSION_ID, SESSION));
 		venue.users().user(ALICE).inbox().open(HitlRequest.record(ASK, ALICE, null, Strings.create("worker"), SESSION,
 			Strings.create("Go ahead?"), null, Vectors.empty(), 1, null));
@@ -211,7 +212,7 @@ class BlobIdsTest {
 	@Test void anIdThatIsNotOneIsRefused() {
 		VenueState venue = VenueState.create(AKeyPair.generate());
 		venue.cursor().set(Index.<Keyword, ACell>none().assoc(Covia.DID, VENUE));
-		Agent agent = venue.users().ensure(ALICE).ensureAgent(Strings.create("worker"), Maps.empty(), null);
+		Agent agent = TestAgents.ensure(venue.users().ensure(ALICE), Strings.create("worker"), Maps.empty(), null);
 		agent.putRecord(agent.getRecord().assoc(Agent.KEY_TASKS,
 			Index.<Blob, ACell>none().assoc(TASK, Maps.of(Fields.SESSION_ID, "not an id"))));
 		IllegalStateException refused = assertThrows(IllegalStateException.class, () -> STEP.apply(venue.get()));

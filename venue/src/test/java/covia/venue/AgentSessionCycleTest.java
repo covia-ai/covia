@@ -53,7 +53,7 @@ public class AgentSessionCycleTest {
 	public void setup(TestInfo info) {
 		userDid = TestEngine.uniqueDID(info);
 		User user = engine.getVenueState().users().ensure(userDid);
-		agent = user.ensureAgent("cycle-agent", Maps.empty(), null);
+		agent = TestAgents.ensure(user, "cycle-agent", Maps.empty(), null);
 		sid = Blob.fromHex("00112233445566778899aabbccddeeff");
 		agent.sessions().create(sid, userDid, null);
 	}

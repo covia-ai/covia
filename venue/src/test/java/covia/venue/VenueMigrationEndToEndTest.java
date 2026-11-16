@@ -142,7 +142,7 @@ class VenueMigrationEndToEndTest {
 				turn("user", "recent question").assoc(Fields.JOB_ID, hex(TURN_JOB)), turn("assistant", "recent answer"));
 			AMap<AString, ACell> root = Maps.of("description", "legacy session", "conversation", conversation,
 				Fields.LOADS, Maps.of("w/frame-notes", Maps.empty()));
-			Agent agent = user.ensureAgent(AGENT,
+			Agent agent = TestAgents.ensure(user, AGENT,
 				Maps.of(Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/test/ops/llm"), null);
 			agent.sessions().create(SESSION, USER, null);
 			AMap<AString, ACell> session = agent.session(SESSION).getRecord()
@@ -194,7 +194,7 @@ class VenueMigrationEndToEndTest {
 			AMap<AString, ACell> askJob = Maps.of(Fields.ID, ASK, Fields.STATUS, Status.INPUT_REQUIRED,
 				Fields.CALLER, USER, Strings.create("actor"), parkedDID, Fields.OP, "v/ops/hitl/request", Fields.ADAPTER, "hitl");
 			user.cursor().path(Namespace.J).updateAndGet(jobs -> ((Index<Blob, ACell>) jobs).assoc(ASK, askJob));
-			Agent parked = user.ensureAgent(PARKED, Maps.empty(), null);
+			Agent parked = TestAgents.ensure(user, PARKED, Maps.empty(), null);
 			parked.putRecord(parked.getRecord().assoc(Agent.KEY_STATUS, Agent.SUSPENDED)
 				.assoc(Agent.KEY_TASKS, Index.<Blob, ACell>none().assoc(PARKED_TASK,
 					Maps.of(Strings.create("outputContext"), Maps.of(Fields.CALLER, USER, Strings.create("user"), USER)))

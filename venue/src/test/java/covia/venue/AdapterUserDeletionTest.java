@@ -125,7 +125,7 @@ class AdapterUserDeletionTest {
 			engine.registerAdapter(adapter);
 			assertNull(adapter.engine);
 			AdapterState state = seed(engine);
-			engine.getVenueState().users().user(OWNER).ensureAgent("old", Maps.empty(), VALUE);
+			TestAgents.ensure(engine.getVenueState().users().user(OWNER), "old", Maps.empty(), VALUE);
 			engine.deleteUser(engine.venueContext(), OWNER);
 			assertEquals(1, adapter.stopped);
 			assertNull(state.read("custom/" + OWNER));

@@ -22,6 +22,7 @@ import covia.grid.hitl.Hitl;
 import covia.lattice.Covia;
 import covia.lattice.Namespace;
 import covia.venue.Agent;
+import covia.venue.TestAgents;
 import covia.venue.User;
 import covia.venue.VenueState;
 
@@ -70,12 +71,12 @@ class CallerAndOwnerTest {
 			"legacy-ghost", Maps.of(Hitl.ID, "legacy-ghost", FROM, GHOST),
 			"stranger", Maps.of(Hitl.ID, "stranger", FROM, BOB))));
 
-		Agent worker = alice.ensureAgent(Strings.create("worker"), Maps.empty(), null);
+		Agent worker = TestAgents.ensure(alice, Strings.create("worker"), Maps.empty(), null);
 		worker.putRecord(worker.getRecord().assoc(Agent.KEY_TASKS, Index.<Blob, ACell>none()
 			.assoc(TASK, Maps.of(OUTPUT_CONTEXT, Maps.of(Fields.CALLER, WORKER, USER, ALICE, CAPS, Maps.empty())))
 			.assoc(OLD_TASK, Maps.of(OUTPUT_CONTEXT, Maps.of(Fields.CALLER, WORKER)))
 			.assoc(OWN_TASK, Maps.of(OUTPUT_CONTEXT, Maps.of(Fields.CALLER, BOB, USER, BOB)))));
-		Agent retired = alice.ensureAgent(Strings.create("retired"), Maps.empty(), null);
+		Agent retired = TestAgents.ensure(alice, Strings.create("retired"), Maps.empty(), null);
 		retired.putRecord(retired.getRecord().assoc(Agent.KEY_STATUS, Agent.TERMINATED));
 
 		AMap<AString, ACell> schedule = Maps.of(

@@ -29,6 +29,7 @@ import covia.venue.Agent;
 import covia.venue.AgentWatch;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
+import covia.venue.TestAgents;
 import covia.venue.TestEngine;
 import covia.venue.User;
 
@@ -55,8 +56,8 @@ public class LLMAgentAdapterTest {
 	static void ensureAgent(Engine engine, RequestContext ctx, ACell input) {
 		AString agentId = RT.ensureString(RT.getIn(input, Fields.AGENT_ID));
 		if (agentId == null || ctx.getUserDID() == null) return;
-		engine.getVenueState().users().ensure(ctx.getUserDID())
-			.ensureAgent(agentId, RT.ensureMap(RT.getIn(input, Agent.KEY_CONFIG)), null);
+		TestAgents.ensure(engine.getVenueState().users().ensure(ctx.getUserDID()),
+			agentId, RT.ensureMap(RT.getIn(input, Agent.KEY_CONFIG)), null);
 	}
 	// ALICE_DID is per-test (not static) so each test sees a fresh user
 	// namespace within the shared engine.

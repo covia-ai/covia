@@ -38,6 +38,7 @@ import covia.grid.Status;
 import covia.grid.auth.VenueAuth;
 import covia.grid.client.VenueHTTP;
 import covia.venue.RequestContext;
+import covia.venue.TestAgents;
 import covia.venue.TestServer;
 import covia.venue.User;
 
@@ -110,7 +111,7 @@ public class ValuesApiTest {
 		// Seed all three execution-scoped stores without creating extra Jobs.
 		// In particular, task scratch is backed by the existing task Job record.
 		User scopedUser = TestServer.ENGINE.getVenueState().users().user(callerDID);
-		scopedUser.ensureAgent(scopedAgentId, Maps.empty(), null)
+		TestAgents.ensure(scopedUser, scopedAgentId, Maps.empty(), null)
 			.sessions().create(scopedSessionId, callerDID, null);
 		RequestContext base = RequestContext.of(callerDID).withAgentId(scopedAgentId);
 		TestServer.ENGINE.jobs().invokeInternal(OP_WRITE, Maps.of(
@@ -467,12 +468,28 @@ public class ValuesApiTest {
 	}
 
 	@Test
-	public void testForeignAgentDIDIsAuthorisedAsExpandedResource() throws Exception {
+	public void testAgentPathsSelectTheSameNamespace() throws Exception {
+		for (String agent : new String[] {
+				"g/" + scopedAgentId,
+				callerDID + "/g/" + scopedAgentId}) {
+			HttpResponse<String> r = getQ("read", "n/note",
+				"&agent=" + URLEncoder.encode(agent, StandardCharsets.UTF_8));
+			assertEquals(200, r.statusCode(), agent + ": " + r.body());
+			assertEquals(Strings.create("agent-note"), RT.getIn(JSON.parse(r.body()), "value"), agent);
+		}
+	}
+
+	@Test
+	public void testForeignAgentIsAuthorisedAsExpandedResource() throws Exception {
 		AString foreignOwner = UCAN.toDIDKey(AKeyPair.generate().getAccountKey());
-		AString foreignAgent = Principals.agentDID(foreignOwner, Strings.create("other"));
-		HttpResponse<String> r = getQ("read", "n/does-not-exist",
-			"&agent=" + URLEncoder.encode(foreignAgent.toString(), StandardCharsets.UTF_8));
-		assertEquals(403, r.statusCode(), r.body());
+		// Refused alike whichever form names the agent
+		for (AString foreignAgent : new AString[] {
+				Principals.agentDID(foreignOwner, Strings.create("other")),
+				Strings.create(foreignOwner + "/g/other")}) {
+			HttpResponse<String> r = getQ("read", "n/does-not-exist",
+				"&agent=" + URLEncoder.encode(foreignAgent.toString(), StandardCharsets.UTF_8));
+			assertEquals(403, r.statusCode(), foreignAgent + ": " + r.body());
+		}
 	}
 
 	@Test

@@ -30,6 +30,7 @@ import covia.venue.Agent;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.test.Rendezvous;
+import covia.venue.TestAgents;
 import covia.venue.TestEngine;
 import covia.venue.User;
 import covia.venue.Users;
@@ -80,7 +81,7 @@ public class AgentConcurrencyTest {
 		User user = engine.getVenueState().users().ensure(ALICE_DID);
 		AString id = Strings.create("exclusive-create");
 		java.util.function.Function<String, Agent> create = marker ->
-			user.createAgent(id, Maps.of("marker", marker), null);
+			user.agents().create(id, Maps.of("marker", marker), null, null, null);
 		List<Agent> raced = Rendezvous.all(
 			() -> create.apply("first"),
 			() -> create.apply("second"));
@@ -96,10 +97,10 @@ public class AgentConcurrencyTest {
 		User user = engine.getVenueState().users().ensure(ALICE_DID);
 		AString id = Strings.create("exclusive-fork");
 		java.util.function.Function<String, Agent> fork = marker ->
-			user.forkAgent(id,
+			user.agents().fork(id,
 				Maps.of("marker", marker),
 				Maps.of("stateMarker", marker),
-				Vectors.of(Maps.of("timelineMarker", marker)));
+				Vectors.of(Maps.of("timelineMarker", marker)), null);
 		List<Agent> raced = Rendezvous.all(
 			() -> fork.apply("first"),
 			() -> fork.apply("second"));
@@ -116,7 +117,7 @@ public class AgentConcurrencyTest {
 	@Test
 	public void testSessionLoadsAndTaskLandInOneExclusiveIntake() throws Exception {
 		User user = engine.getVenueState().users().ensure(ALICE_DID);
-		Agent agent = user.ensureAgent("session-intake", Maps.empty(), null);
+		Agent agent = TestAgents.ensure(user, "session-intake", Maps.empty(), null);
 		Blob sid = Blob.fromHex("99990001999900019999000199990001");
 		Blob firstTask = Blob.fromHex("1001");
 		Blob secondTask = Blob.fromHex("1002");
@@ -139,7 +140,7 @@ public class AgentConcurrencyTest {
 	@Test
 	public void testPendingIntakeExposesMissingCreateAndLoadsOutcomes() {
 		User user = engine.getVenueState().users().ensure(ALICE_DID);
-		Agent agent = user.ensureAgent("pending-intake", Maps.empty(), null);
+		Agent agent = TestAgents.ensure(user, "pending-intake", Maps.empty(), null);
 		Blob sid = Blob.fromHex("99990002999900029999000299990002");
 		ACell firstEnvelope = Maps.of("content", "first");
 
@@ -170,7 +171,7 @@ public class AgentConcurrencyTest {
 	@Test
 	public void testATaskRacingTerminationIsGivenBackOrRefused() throws Exception {
 		User user = engine.getVenueState().users().ensure(ALICE_DID);
-		Agent agent = user.ensureAgent("terminate-intake", Maps.empty(), null);
+		Agent agent = TestAgents.ensure(user, "terminate-intake", Maps.empty(), null);
 		Blob sid = Blob.fromHex("99990003999900039999000399990003");
 		Blob task = Blob.fromHex("1003");
 		List<Object> raced = Rendezvous.all(
@@ -192,7 +193,7 @@ public class AgentConcurrencyTest {
 	@Test
 	public void testMediatedDeliveryUsesStrictAtomicSessionIntake() {
 		User user = engine.getVenueState().users().ensure(ALICE_DID);
-		Agent agent = user.ensureAgent("mediated-intake", Maps.empty(), null);
+		Agent agent = TestAgents.ensure(user, "mediated-intake", Maps.empty(), null);
 		AgentAdapter adapter = (AgentAdapter) engine.getAdapter("agent");
 		Blob missing = Blob.fromHex("99990003999900039999000399990003");
 
@@ -215,7 +216,7 @@ public class AgentConcurrencyTest {
 	public void testTryResumeIdempotence() {
 		Users users = engine.getVenueState().users();
 		User user = users.ensure(ALICE_DID);
-		Agent agent = user.ensureAgent("resume-test", Maps.empty(), null);
+		Agent agent = TestAgents.ensure(user, "resume-test", Maps.empty(), null);
 
 		agent.suspend(Strings.create("test error"));
 		assertEquals(Agent.SUSPENDED, agent.getStatus());
@@ -229,9 +230,9 @@ public class AgentConcurrencyTest {
 	@Test
 	public void testAHandleToADeletedAgentNeitherResumesNorRuns() {
 		User user = engine.getVenueState().users().ensure(ALICE_DID);
-		Agent agent = user.ensureAgent("deleted-under-handle", Maps.empty(), null);
+		Agent agent = TestAgents.ensure(user, "deleted-under-handle", Maps.empty(), null);
 		agent.suspend(Strings.create("test error"));
-		user.removeAgent(agent.getAgentId());
+		user.agents().remove(agent.getAgentId());
 		assertFalse(agent.tryResume());
 		assertFalse(agent.tryRun());
 		assertNull(user.agent(agent.getAgentId()), "neither call recreates the agent");
@@ -239,8 +240,8 @@ public class AgentConcurrencyTest {
 
 	@Test
 	public void testDeliberateStopSurvivesLateFaultAndAStoppedCycleDoesNotUndoResume() {
-		Agent agent = engine.getVenueState().users().ensure(ALICE_DID)
-			.ensureAgent("stop-race", Maps.empty(), null);
+		Agent agent = TestAgents.ensure(engine.getVenueState().users().ensure(ALICE_DID),
+			"stop-race", Maps.empty(), null);
 		agent.suspend(ALICE_DID, Strings.create("review"));
 		ACell stop = agent.getRecord().get(Agent.KEY_SUSPENSION);
 		agent.suspend(Strings.create("late failure"));
@@ -262,7 +263,7 @@ public class AgentConcurrencyTest {
 	public void testTakeTaskHasExactlyOneConcurrentWinner() throws Exception {
 		Users users = engine.getVenueState().users();
 		User user = users.ensure(ALICE_DID);
-		Agent agent = user.ensureAgent("take-task-test", Maps.empty(), null);
+		Agent agent = TestAgents.ensure(user, "take-task-test", Maps.empty(), null);
 		Blob taskId = Blob.fromHex("cafe");
 		ACell task = Maps.of(Fields.MESSAGE, Strings.create("claim once"));
 		agent.tasks().add(taskId, task);
@@ -303,7 +304,7 @@ public class AgentConcurrencyTest {
 		// liveness is not part of the merge result.
 		Users users = engine.getVenueState().users();
 		User user = users.ensure(ALICE_DID);
-		Agent agent = user.ensureAgent("merge-msg", Maps.empty(), null);
+		Agent agent = TestAgents.ensure(user, "merge-msg", Maps.empty(), null);
 
 		Blob sid = Blob.fromHex("66660001666600016666000166660001");
 		agent.sessions().create(sid, ALICE_DID, null);

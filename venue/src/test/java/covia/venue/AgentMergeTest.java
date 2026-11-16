@@ -66,8 +66,8 @@ public class AgentMergeTest {
 	@Test
 	public void mergeRunResultAppliesTheChangeInsideTheRecordCas() {
 		AString did = TestEngine.uniqueDID("state-merge-seam");
-		Agent agent = TestEngine.ENGINE.getVenueState().users().ensure(did)
-			.ensureAgent(Strings.create("merge-seam"), Maps.empty(), Maps.of("a", 1, "b", 1));
+		Agent agent = TestAgents.ensure(TestEngine.ENGINE.getVenueState().users().ensure(did),
+			Strings.create("merge-seam"), Maps.empty(), Maps.of("a", 1, "b", 1));
 		ACell snapshot = agent.getState();               // what the transition fired with
 
 		// agent:update lands while the transition runs

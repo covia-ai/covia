@@ -9,7 +9,7 @@
 		"input": {
 			"type": "object",
 			"properties": {
-				"agentId": { "type": "string", "description": "The agent to read, as an id or g/<id> path. Required unless you are that agent. Naming another agent needs read access to it." },
+				"agentId": { "type": "string", "description": "The agent to read: an id, g/<id>, <ownerDID>/g/<id>, or the agent's DID <ownerDID>:g:<id>. Required unless you are that agent. Naming another agent needs read access to it." },
 				"sessionId": { "type": "string", "description": "The session to read, as 16-byte hex with or without 0x. If omitted: the session you are in, or outside a session the newest visible one." },
 				"start": { "type": "integer", "minimum": 0, "description": "Position of the first entry to read; 0 is the oldest. If omitted: as many entries as limit allows, ending at end. To continue after a result with next, pass next here." },
 				"end": { "type": "integer", "minimum": 0, "description": "Position to stop before; that entry is not read. If omitted or past the last entry: the end of the history. To read further back, pass here the start of your last read, which the result gives if you passed none. For a compaction summary naming turns a to b, use start=a and end=b+1." },

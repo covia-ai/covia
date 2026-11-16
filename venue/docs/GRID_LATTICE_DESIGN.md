@@ -412,17 +412,17 @@ a component that is not Covia's.
 
 **An entity is a collection and its entries.** A kind of domain entity is two
 components with different operations: the collection adds and finds entries
-(`Inbox.open`, `Tasks.add`, `Sessions.create`, `Jobs.create`), and an entry
+(`Inbox.open`, `Tasks.add`, `Sessions.create`, `Agents.create`, `Jobs.create`), and an entry
 changes itself (`HitlRequest.resolve`, `Task.park`, `Session.setWakeTime`).
 Each manages its own state as a lattice component.
 
 **Keyed collections are Convex's map components.** `Jobs`, `JobIndex`,
 `AssetStore`, `ContentStore`, `Tasks`, `Sessions` and `Inbox` extend Convex's `IndexComponent`, and
-`Users`, `ManagedUsers` and `SecretStore` its `MapComponent`, so `get`,
+`Users`, `ManagedUsers`, `Agents` and `SecretStore` its `MapComponent`, so `get`,
 `put`, `remove` and `size` are Convex's and `get(key)` is the entry as stored. A collection binds a
 child component to one entry through `path(key)`, which reads a missing key as
-absent, under a name of its own (`Users.user`, `Jobs.job`). Its domain
-operations (`Users.create`, `Jobs.create`, `SecretStore.store`) keep the rules
+absent, under a name of its own (`Users.user`, `Agents.agent`, `Jobs.job`). Its domain
+operations (`Users.create`, `Agents.create`, `Jobs.create`, `SecretStore.store`) keep the rules
 that a `put` or `remove` of a raw entry bypasses, so only venue code that keeps
 those rules itself uses them.
 

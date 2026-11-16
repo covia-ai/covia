@@ -22,8 +22,8 @@ public class AgentTest {
 	@BeforeEach
 	public void setup(TestInfo info) {
 		owner = TestEngine.uniqueDID(info);
-		agent = TestEngine.ENGINE.getVenueState().users().ensure(owner)
-			.ensureAgent(Strings.create("readers-agent"), Maps.of(Fields.OPERATION, OPERATION), null);
+		agent = TestAgents.ensure(TestEngine.ENGINE.getVenueState().users().ensure(owner),
+			Strings.create("readers-agent"), Maps.of(Fields.OPERATION, OPERATION), null);
 	}
 
 	@Test

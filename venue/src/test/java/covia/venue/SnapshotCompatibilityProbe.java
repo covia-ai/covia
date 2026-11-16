@@ -43,8 +43,8 @@ public final class SnapshotCompatibilityProbe {
             run(engine, ctx, "covia/write", Maps.of("path", "w/rehearsal", "value", args[2]));
             user.secrets().store("rehearsal", args[2], secrets);
             Files.writeString(drive.getPath("/marker.txt"), args[2]);
-            user.removeAgent(Strings.create("rehearsal"));
-            user.ensureAgent("rehearsal", Maps.of("marker", args[2]), null);
+            user.agents().remove(Strings.create("rehearsal"));
+            TestAgents.ensure(user, "rehearsal", Maps.of("marker", args[2]), null);
             engine.flush();
             System.out.println("REHEARSAL OK " + args[1] + " -> " + args[2]);
         } finally {

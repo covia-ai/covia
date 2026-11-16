@@ -527,10 +527,10 @@ public class VenueStateTest {
 		assertNull(user.agent("agent-1"),
 			"User agent() should return null for non-existent agent");
 
-		// ensureAgent() creates and returns a non-null Agent
-		Agent agent = user.ensureAgent("agent-1", null, null);
-		assertNotNull(agent, "User ensureAgent() should return non-null Agent");
-		assertTrue(agent.exists(), "ensureAgent() should initialise the agent");
+		user.agents().create(Strings.create("agent-1"), null, null, null, null);
+		Agent agent = user.agent("agent-1");
+		assertNotNull(agent, "agent() finds an agent once it is created");
+		assertTrue(agent.exists());
 	}
 
 	// ========== Fork / Sync ==========

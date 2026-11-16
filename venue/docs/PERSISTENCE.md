@@ -175,7 +175,7 @@ agent.execute(draft -> {
 ```java
 venue.execute(draft -> {
     var user = draft.users().ensure(did);
-    user.ensureAgent("assistant", config, null);
+    user.agents().create(Strings.create("assistant"), config, null, null, null);
     user.workspace().write(CoviaPath.parse("ready"), CVMBool.TRUE);
 });
 ```

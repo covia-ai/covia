@@ -65,7 +65,7 @@ import covia.venue.migration.VenueMigrations;
  * <pre>{@code
  * venue.execute(draft -> {
  *     var user = draft.users().ensure(did);
- *     user.ensureAgent("assistant", config, null);
+ *     user.agents().create(Strings.create("assistant"), config, null, null, null);
  *     user.workspace().write(CoviaPath.parse("assistant/ready"), value);
  * });
  * }</pre>

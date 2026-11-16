@@ -1297,12 +1297,12 @@ public class CoviaAdapter extends AAdapter {
 		AString agentId = (ctx == null) ? null : ctx.getAgentId();
 		if (N.equals(namespace)) {
 			if (agentId == null) throw new WrongScopeException(NO_AGENT_SCOPE);
-			return Located.below(requestUser(state, ctx).agentAt(agentId), segments);
+			return Located.below(requestUser(state, ctx).agents().at(agentId), segments);
 		}
 		if (C.equals(namespace)) {
 			Blob sessionId = (ctx == null) ? null : ctx.getSessionId();
 			if (agentId == null || sessionId == null) throw new WrongScopeException(NO_SESSION_SCOPE);
-			return Located.below(requestUser(state, ctx).agentAt(agentId).session(sessionId), segments);
+			return Located.below(requestUser(state, ctx).agents().at(agentId).session(sessionId), segments);
 		}
 		if (T.equals(namespace)) {
 			JobRecord job = requestUser(state, ctx).jobs().at(scopedJob(ctx));

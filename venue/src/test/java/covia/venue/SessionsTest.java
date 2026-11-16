@@ -38,7 +38,7 @@ public class SessionsTest {
 	@BeforeEach
 	public void setup(TestInfo info) {
 		user = TestEngine.ENGINE.getVenueState().users().ensure(TestEngine.uniqueDID(info));
-		agent = user.ensureAgent(AGENT, Maps.empty(), null);
+		agent = TestAgents.ensure(user, AGENT, Maps.empty(), null);
 		sessions = agent.sessions();
 		session = sessions.session(SESSION);
 	}
@@ -75,7 +75,7 @@ public class SessionsTest {
 	@Test
 	public void testAMissingAgentTakesNoSession() {
 		AString missing = Strings.create("missing-agent");
-		assertThrows(PathWriteException.class, () -> user.agentAt(missing).sessions().create(SESSION, null, null));
+		assertThrows(PathWriteException.class, () -> user.agents().at(missing).sessions().create(SESSION, null, null));
 		assertNull(user.agent(missing), "creating a session brings no agent into being");
 	}
 

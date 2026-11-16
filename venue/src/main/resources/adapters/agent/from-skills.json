@@ -12,7 +12,7 @@
       "properties": {
         "agentId": {
           "type": "string",
-          "description": "Target agent reference: a bare human-readable name for the caller's namespace, g/<id>, /g/<id>, or <ownerDID>/g/<id>. Must be unused."
+          "description": "Target agent reference: a bare human-readable name for the caller's namespace, g/<id>, /g/<id>, <ownerDID>/g/<id>, or the agent's DID <ownerDID>:g:<id>. Must be unused."
         },
         "systemPrompt": {
           "type": "string",
