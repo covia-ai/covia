@@ -32,7 +32,7 @@ cat > ~/covia-data/config.json << 'EOF'
 {
   "venues": [
     {
-      "name": "Covia Venue (Azure)",
+      "name": "Covia Test Venue (Azure)",
       "hostname": "venue-4.covia.ai",
       "store": "/data/venue.etch",
       "mcp": {}
