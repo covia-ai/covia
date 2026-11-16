@@ -296,20 +296,10 @@ application that keeps the key itself signs with `VenueAuth.namedKeyPair`. See
 AUTH.md, "Nested installation identities below a did:key" and "Minting an
 identity token through an operation", and HELD_KEYS.md.
 
-## Upgrading from 0.10.0
+## Upgrading from 0.11.0
 
-| 0.10.0 | Current |
+| 0.11.0 | Current |
 |--------|---------|
-| `user.workspaceRoot()` with keys from `WorkspaceRoot.parseStringPath("w/...")` | `user.workspace()` with a path inside `w` from `CoviaPath.parse` (see User data) |
-| `workspaceRoot().write` creating missing levels | `createPath` for them first, in the same transaction |
-| `VenueState.migrate(adapters)`, `migrate()` | `migrate(SecretStore.keys(venueKeyPair), adapters)`, `migrate(keys)` |
-| The engine publishing and flushing its host in the background | Whoever opens the host starts `host.autoSync` and `host.autoFlush` (see "A venue on your own host"); `VenueServer` does |
-| `new Engine(config, application, keyPair)` | `application.mount(keyPair, config)`; `Engine`'s constructors are no longer public |
-| `CoviaApplication.open`, `create` or `connect` | Open or create the `LatticeHost` yourself, then `host.addApplication(new CoviaApplication(host))`, or `(host, clock)` (see Time); each venue brings its key to `mount(keyPair, config)` |
-| `CoviaApplication.CANNOT_SIGN` | `CoviaApplication.NOT_MOUNTED`, for a venue that is not mounted |
-| Several engines in turn over one application | Close (or `unmount`) the venue's engine, then mount it again |
-| Closing the engine, then the host | Close the application (or the engine), then the host |
-| `AuthMiddleware.withTransportGrants(ctx, ucans[, verifier])` | `engine.withTransportGrants(ctx, ucans)`, which verifies with the venue's DID verifier and clock |
 | `User`'s `agentAt`, `createAgent`, `forkAgent`, `removeAgent`, `getAgents` and `ensureAgent` | The user's agents, `user.agents()`: `at`, `create`, `fork`, `remove` and `all` (empty, not null, when there are none); for `ensureAgent`, `create` then `agent`. `user.agent(id)` stays, and still finds a deleted agent: `agent.isTerminated()` says whether it is one |
 | `agent.getSession(sid)` and `Agent`'s other session shortcuts (`getSessionPending`, `getSessionCycleEpoch`, `ensureSession`, `removeSession`, `hasSessionPending`, `oldestSessionWithPending`) | The session itself, `agent.session(sid)` (`getRecord()`, `pending()`, `cycleEpoch()`), and the agent's sessions, `agent.sessions()` (`create`, `remove`, `hasPending`, `oldestWithPending`) |
 | A job, task or session id read as hex text (`RT.ensureString`): in an agent's records (a task's or timeline entry's `sessionId`, a turn's or queued envelope's `jobId`, a timeline entry's `taskResults` keys), in a job's record (`sessionId`, `mirrorOf`), in an operation's result (`sessionId`, a task operation's `taskId`, an `agent:request` snapshot's `id`, a `job:message` delivery's `id`, a run's `taskResults` keys) or in a live event (`sessionId`, `jobId`, `cycle:start`'s `jobs`) | A Blob: `HexId.parse(cell)` reads one given as a Blob or as text, so it works with an older venue too; in the venue, `Task.sessionId(row)`, `Session.chatJob(envelope)` or `Ids.stored(cell)` |
@@ -320,6 +310,21 @@ identity token through an operation", and HELD_KEYS.md.
 | `boolean AAdapter.configure(config, strict)`, returning `false` to decline | `void configure(config, strict)`: return to accept, throw `ConfigurationException` to refuse ([ADAPTERS.md](ADAPTERS.md)) |
 | `AAdapter.configureModule` and a module's `modules[].config` | Removed: a module adapter takes `adapters.<name>` through `configure`, and one that cannot run on the host fails its `start()` with `UnavailableException` |
 | `Modules.load(engine, path, sha256, config)` | `Modules.load(engine, path, sha256)` |
+
+## Upgrading from 0.10.0
+
+| 0.10.0 | 0.11.0 |
+|--------|--------|
+| `user.workspaceRoot()` with keys from `WorkspaceRoot.parseStringPath("w/...")` | `user.workspace()` with a path inside `w` from `CoviaPath.parse` (see User data) |
+| `workspaceRoot().write` creating missing levels | `createPath` for them first, in the same transaction |
+| `VenueState.migrate(adapters)`, `migrate()` | `migrate(SecretStore.keys(venueKeyPair), adapters)`, `migrate(keys)` |
+| The engine publishing and flushing its host in the background | Whoever opens the host starts `host.autoSync` and `host.autoFlush` (see "A venue on your own host"); `VenueServer` does |
+| `new Engine(config, application, keyPair)` | `application.mount(keyPair, config)`; `Engine`'s constructors are no longer public |
+| `CoviaApplication.open`, `create` or `connect` | Open or create the `LatticeHost` yourself, then `host.addApplication(new CoviaApplication(host))`, or `(host, clock)` (see Time); each venue brings its key to `mount(keyPair, config)` |
+| `CoviaApplication.CANNOT_SIGN` | `CoviaApplication.NOT_MOUNTED`, for a venue that is not mounted |
+| Several engines in turn over one application | Close (or `unmount`) the venue's engine, then mount it again |
+| Closing the engine, then the host | Close the application (or the engine), then the host |
+| `AuthMiddleware.withTransportGrants(ctx, ucans[, verifier])` | `engine.withTransportGrants(ctx, ucans)`, which verifies with the venue's DID verifier and clock |
 
 ## Upgrading from 0.9.x
 
