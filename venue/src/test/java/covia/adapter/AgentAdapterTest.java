@@ -431,12 +431,18 @@ public class AgentAdapterTest {
 			alice).awaitResult(5000), "entries"));
 		assertFalse(entries.isEmpty());
 		for (ACell entry : entries) assertNull(RT.getIn(entry, Fields.ROUTE), "history leaves the route out: " + entry);
+		int seen = 0;
 		for (ACell cycle : agent.getTimeline()) {
 			for (AString part : List.of(Fields.TASKS, Fields.MESSAGES)) {
 				AVector<ACell> records = RT.ensureVector(RT.getIn(cycle, part));
-				if (records != null) for (ACell r : records) assertNull(RT.getIn(r, Fields.ROUTE), "the timeline leaves it out: " + r);
+				if (records == null) continue;
+				for (ACell r : records) {
+					seen++;
+					assertNull(RT.getIn(r, Fields.ROUTE), "the timeline leaves it out: " + r);
+				}
 			}
 		}
+		assertTrue(seen > 0, "the timeline recorded what the cycles were given");
 	}
 
 	@Test
@@ -550,7 +556,45 @@ public class AgentAdapterTest {
 
 		engine.jobs().invokeOperation("v/ops/token/delete", Maps.of(Fields.NAME, "planner-bot"), alice).awaitResult(5000);
 		Job refusedFire = engine.jobs().invokeOperation("v/ops/scheduler/trigger", Maps.of("handle", refused), alice);
-		assertThrows(Exception.class, () -> refusedFire.awaitResult(5000), "the deleted token narrows the fire to nothing");
+		assertThrows(covia.exception.JobFailedException.class, () -> refusedFire.awaitResult(5000),
+			"the deleted token narrows the fire to nothing");
+		AVector<ACell> refusedFrames = RT.ensureVector(agent.session(refusedSid).getRecord().get(Agent.KEY_FRAMES));
+		AVector<ACell> refusedTurns = (refusedFrames == null || refusedFrames.isEmpty()) ? null
+			: GoalTreeContext.activeConversation(RT.ensureMap(refusedFrames.get(0)));
+		assertTrue(refusedTurns == null || refusedTurns.isEmpty(), "nothing reached the agent: " + refusedTurns);
+	}
+
+	@Test
+	public void testAnAgentActingAsItselfCarriesNoRoute() {
+		// Whatever carried the request that set an agent working, the agent's own
+		// tool calls are its own requests: a second agent it asks is told who
+		// asked, the first agent, and nothing of how the first was reached.
+		RequestContext alice = RequestContext.of(ALICE_DID);
+		AString target = createAgentAs(alice, "route-target", null);
+		engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "route-relay",
+			Fields.CONFIG, Maps.of(Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/test/ops/llm",
+				"caps", "unrestricted", Fields.TOOLS, Vectors.of(Strings.create("v/ops/agent/request")))),
+			alice).awaitResult(5000);
+		Agent relay = engine.getVenueState().users().user(ALICE_DID).agent("route-relay");
+		Agent targetAgent = engine.getVenueState().users().user(ALICE_DID).agent("route-target");
+		Blob relaySid = Blob.fromHex("e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1");
+		Blob targetSid = Blob.fromHex("e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2");
+		relay.sessions().create(relaySid, ALICE_DID, null);
+		targetAgent.sessions().create(targetSid, ALICE_DID, null);
+
+		RequestContext carried = alice.via(Strings.create("test"), Maps.of(Fields.NAME, Strings.create("phone")));
+		engine.jobs().invokeOperation("v/ops/agent/step", Maps.of(Fields.AGENT_ID, "route-relay",
+			Fields.SESSION_ID, relaySid.toHexString(), "assistant", Maps.of("toolCalls", Vectors.of(Maps.of(
+				"id", "ask-target", "name", "agent_request", "arguments", Maps.of(Fields.AGENT_ID, target,
+					Fields.SESSION_ID, targetSid.toHexString(), Fields.INPUT, Maps.of("ask", "relayed"),
+					Fields.WAIT, CVMLong.create(5000)))))),
+			carried).awaitResult(5000);
+		awaitFinished(targetAgent);
+
+		AMap<AString, ACell> turn = firstTurn(targetAgent, targetSid);
+		assertEquals(covia.grid.Principals.agentDID(ALICE_DID, Strings.create("route-relay")), turn.get(Fields.CALLER),
+			"the relay asked as itself");
+		assertNull(turn.get(Fields.ROUTE), "and carried nothing of how it was reached");
 	}
 
 	private ACell scheduleRequest(RequestContext ctx, AString address, Blob sid) {

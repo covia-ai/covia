@@ -46,7 +46,7 @@ final class TurnProvenance {
 		ANONYMOUS("anonymous", "anonymous"),
 		OTHER_USER("other-user", "other user"),
 		OTHER_AGENT("other-user-agent", "other user's agent"),
-		/** A recorded caller that is not a DID the element can show. */
+		/** A recorded caller that is not a DID, or too long to show. */
 		UNKNOWN("unknown", "unreadable sender");
 
 		/** The xml attribute value. */
@@ -67,8 +67,35 @@ final class TurnProvenance {
 	/** Ids, names of what carried a request, and adapter names render only in this shape; anything else is left out. */
 	private static final Pattern IDENTIFIER = Pattern.compile("[A-Za-z0-9_.:@+/=-]{1,128}");
 	private static final Pattern HANDLE = Pattern.compile("[A-Za-z0-9_.-]{1,64}");
-	/** A caller renders only as a DID in printable ASCII, without brackets, quotes or a backslash. */
-	private static final Pattern CALLER = Pattern.compile("did:[a-z0-9]+:[!-~&&[^\\[\\]<>\"'\\\\]]{1,240}");
+	/** Longest caller the element shows, once encoded; a longer one is unreadable. */
+	private static final int MAX_SHOWN_DID = 512;
+	private static final char[] HEX = "0123456789ABCDEF".toCharArray();
+
+	/**
+	 * {@code did} as the element shows it: DID syntax as it is (W3C DID Core:
+	 * letters, digits, {@code . - _ :} and percent-encoding), any other
+	 * character percent-encoded as UTF-8, so nothing in a principal's id, such
+	 * as an agent's, can close the label or pose as a route segment. Null when
+	 * it is not a DID, or too long to show.
+	 */
+	static String shownDid(AString did) {
+		String value = did.toString();
+		return value.startsWith("did:") ? encoded(value) : null;
+	}
+
+	/** {@code value} with every character outside DID syntax percent-encoded, or null when longer than can be shown. */
+	private static String encoded(String value) {
+		StringBuilder sb = new StringBuilder();
+		for (byte b : value.getBytes(java.nio.charset.StandardCharsets.UTF_8)) {
+			int c = b & 0xff;
+			boolean kept = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+				|| c == '.' || c == '-' || c == '_' || c == ':' || c == '%';
+			if (kept) sb.append((char) c);
+			else sb.append('%').append(HEX[c >> 4]).append(HEX[c & 15]);
+			if (sb.length() > MAX_SHOWN_DID) return null;
+		}
+		return sb.toString();
+	}
 
 	/**
 	 * One entry of a turn's route as the element shows it: a step, with only its
@@ -151,7 +178,7 @@ final class TurnProvenance {
 
 	/** How {@code caller} stands to the agent acting under {@code ctx}, from DIDs alone. */
 	static Relationship relationship(Engine engine, RequestContext ctx, AString caller) {
-		if (!CALLER.matcher(caller.toString()).matches()) return Relationship.UNKNOWN;
+		if (shownDid(caller) == null) return Relationship.UNKNOWN;
 		AString owner = (ctx != null) ? ctx.getUserDID() : null;
 		AString self = (ctx != null) ? ctx.getCallerDID() : null;
 		if (engine != null && engine.isVenuePrincipal(caller)) return Relationship.VENUE;
@@ -179,9 +206,9 @@ final class TurnProvenance {
 		Relationship relationship = relationship(engine, ctx, caller);
 		AString agentId = relationship.namesAgent() ? Principals.agentIdOf(caller) : null;
 		List<String> attributes = new ArrayList<>();
-		if (relationship != Relationship.UNKNOWN) attributes.addAll(List.of("principal", caller.toString()));
+		if (relationship != Relationship.UNKNOWN) attributes.addAll(List.of("principal", shownDid(caller)));
 		attributes.addAll(List.of("relationship", relationship.token));
-		if (agentId != null) attributes.addAll(List.of("agent", agentId.toString()));
+		if (agentId != null) attributes.addAll(List.of("agent", encoded(agentId.toString())));
 		List<Segment> route = route(turn);
 		List<String[]> children = new ArrayList<>();
 		for (Segment segment : route) segment.attributes(children);
@@ -202,8 +229,8 @@ final class TurnProvenance {
 	private static String summary(Relationship relationship, AString agentId, AString caller, List<Segment> route) {
 		StringBuilder sb = new StringBuilder(relationship.words);
 		if (relationship != Relationship.UNKNOWN) {
-			if (agentId != null) sb.append(' ').append(agentId);
-			sb.append(' ').append(caller);
+			if (agentId != null) sb.append(' ').append(encoded(agentId.toString()));
+			sb.append(' ').append(shownDid(caller));
 		}
 		for (Segment segment : route) segment.describe(sb);
 		return sb.toString();
