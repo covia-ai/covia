@@ -97,20 +97,34 @@ final class TurnProvenance {
 		return sb.toString();
 	}
 
+	/** A step's owner that is named but cannot be shown. */
+	private static final String UNREADABLE_OWNER = "unknown";
+
 	/**
 	 * One entry of a turn's route as the element shows it: a step, with only its
 	 * values that passed their checks; a run of steps folded out of a long
-	 * route; or an entry that could not be read.
+	 * route; or an entry that could not be read. A step's {@code owner} is whose
+	 * token, binding or callable it is, as shown, {@link #UNREADABLE_OWNER} when
+	 * it names one that cannot be shown, or null when it names none.
 	 */
-	record Segment(String adapter, String name, String sender, String handle, String chat, String kind,
+	record Segment(String adapter, String name, String owner, String sender, String handle, String chat, String kind,
 			String thread, String space, long folded) {
-		static final Segment UNREADABLE = new Segment(null, null, null, null, null, null, null, null, 0);
+		static final Segment UNREADABLE = new Segment(null, null, null, null, null, null, null, null, null, 0);
 
 		static Segment folded(long count) {
-			return new Segment(null, null, null, null, null, null, null, null, count);
+			return new Segment(null, null, null, null, null, null, null, null, null, count);
 		}
 
-		void attributes(List<String[]> children) {
+		/**
+		 * The owner this step shows to an agent whose owner shows as
+		 * {@code agentOwner}: none for the agent owner's own, so a name alone is
+		 * always the owner's, and otherwise whose it is.
+		 */
+		private String shownOwner(String agentOwner) {
+			return (owner == null || owner.equals(agentOwner)) ? null : owner;
+		}
+
+		void attributes(List<String[]> children, String agentOwner) {
 			if (folded > 0) {
 				children.add(new String[] {"via", "elided", Long.toString(folded)});
 				return;
@@ -121,6 +135,7 @@ final class TurnProvenance {
 			}
 			List<String> child = new ArrayList<>(List.of("via", "adapter", adapter));
 			add(child, "name", name);
+			add(child, "owner", shownOwner(agentOwner));
 			add(child, "sender", sender);
 			add(child, "handle", handle);
 			add(child, "chat", chat);
@@ -130,7 +145,7 @@ final class TurnProvenance {
 			children.add(child.toArray(new String[0]));
 		}
 
-		void describe(StringBuilder sb) {
+		void describe(StringBuilder sb, String agentOwner) {
 			sb.append(" — ");
 			if (folded > 0) {
 				sb.append(folded).append(folded == 1 ? " more step" : " more steps");
@@ -142,6 +157,8 @@ final class TurnProvenance {
 			}
 			sb.append(adapter);
 			if (name != null) sb.append(' ').append(name);
+			String shown = shownOwner(agentOwner);
+			if (shown != null) sb.append(" of ").append(UNREADABLE_OWNER.equals(shown) ? "unknown owner" : shown);
 			List<String> details = new ArrayList<>();
 			if (sender != null) details.add("sender " + sender + ((handle != null) ? " @" + handle : ""));
 			else if (handle != null) details.add("@" + handle);
@@ -210,9 +227,10 @@ final class TurnProvenance {
 		attributes.addAll(List.of("relationship", relationship.token));
 		if (agentId != null) attributes.addAll(List.of("agent", encoded(agentId.toString())));
 		List<Segment> route = route(turn);
+		String agentOwner = agentOwner(ctx);
 		List<String[]> children = new ArrayList<>();
-		for (Segment segment : route) segment.attributes(children);
-		return Labels.renderAttributed(dialect, Labels.Kind.FROM, summary(relationship, agentId, caller, route),
+		for (Segment segment : route) segment.attributes(children, agentOwner);
+		return Labels.renderAttributed(dialect, Labels.Kind.FROM, summary(relationship, agentId, caller, route, agentOwner),
 			children, attributes.toArray(new String[0]));
 	}
 
@@ -223,17 +241,24 @@ final class TurnProvenance {
 		if (caller == null) return null;
 		Relationship relationship = relationship(engine, ctx, caller);
 		AString agentId = relationship.namesAgent() ? Principals.agentIdOf(caller) : null;
-		return summary(relationship, agentId, caller, route(map));
+		return summary(relationship, agentId, caller, route(map), agentOwner(ctx));
 	}
 
-	private static String summary(Relationship relationship, AString agentId, AString caller, List<Segment> route) {
+	private static String summary(Relationship relationship, AString agentId, AString caller, List<Segment> route,
+			String agentOwner) {
 		StringBuilder sb = new StringBuilder(relationship.words);
 		if (relationship != Relationship.UNKNOWN) {
 			if (agentId != null) sb.append(' ').append(encoded(agentId.toString()));
 			sb.append(' ').append(shownDid(caller));
 		}
-		for (Segment segment : route) segment.describe(sb);
+		for (Segment segment : route) segment.describe(sb, agentOwner);
 		return sb.toString();
+	}
+
+	/** The agent's owner as a step's owner shows, so its own tokens, bindings and callables go by name alone; null when unknown. */
+	private static String agentOwner(RequestContext ctx) {
+		AString owner = (ctx == null) ? null : ctx.getUserDID();
+		return (owner == null) ? null : shownDid(owner);
 	}
 
 	/**
@@ -279,12 +304,18 @@ final class TurnProvenance {
 		return (method == null) ? Segment.UNREADABLE : shown(method, ChannelAuthentication.step(authentication));
 	}
 
-	/** Step {@code step} of adapter {@code adapter}: its name, and a channel's ids, handle and chat kind. Never other names. */
+	/**
+	 * Step {@code step} of adapter {@code adapter}: its name and owner, and a
+	 * channel's ids, handle and chat kind. Never other names.
+	 */
 	private static Segment shown(String adapter, AMap<AString, ACell> step) {
 		AString kind = RT.ensureString(RT.getIn(step, ChannelAuthentication.K_CHAT, ChannelAuthentication.K_KIND));
 		boolean knownKind = ChannelAuthentication.DIRECT.equals(kind) || ChannelAuthentication.GROUP.equals(kind)
 			|| ChannelAuthentication.CHANNEL.equals(kind);
-		return new Segment(adapter, identifier(step.get(Fields.NAME)),
+		ACell ownerCell = step.get(Fields.OWNER);
+		String owner = (ownerCell == null) ? null
+			: (ownerCell instanceof AString did && shownDid(did) != null) ? shownDid(did) : UNREADABLE_OWNER;
+		return new Segment(adapter, identifier(step.get(Fields.NAME)), owner,
 			identifier(RT.getIn(step, ChannelAuthentication.K_SENDER, ChannelAuthentication.K_ID)),
 			handle(RT.getIn(step, ChannelAuthentication.K_SENDER, ChannelAuthentication.K_HANDLE)),
 			identifier(RT.getIn(step, ChannelAuthentication.K_CHAT, ChannelAuthentication.K_ID)),

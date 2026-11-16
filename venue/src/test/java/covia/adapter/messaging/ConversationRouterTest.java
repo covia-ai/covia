@@ -386,14 +386,14 @@ class ConversationRouterTest {
 				RT.getIn(listed.getAuthentication(), covia.venue.auth.AuthResult.AUTHENTICATION, covia.venue.auth.AuthResult.BINDING));
 			// The binding carried it: its step names the binding, the sender and the chat, never their names
 			assertEquals(convex.core.data.Vectors.of(Maps.of(Fields.ADAPTER, "test", Fields.NAME, "bot",
-				"binding", owner + "/test/bot", "sender", Maps.of("id", "listed"), "chat", Maps.of("id", "chat-1", "kind", "direct"))),
+				Fields.OWNER, owner, "sender", Maps.of("id", "listed"), "chat", Maps.of("id", "chat-1", "kind", "direct"))),
 				listed.getRoute());
 			// An event with no sender is anonymous, but still carried by the binding, never direct
 			var senderless = router.context(null);
 			assertEquals(engine.publicPrincipal(), senderless.getCallerDID());
 			assertNull(senderless.getAuthentication());
 			assertEquals(convex.core.data.Vectors.of(Maps.of(Fields.ADAPTER, "messaging-test", Fields.NAME, "bot",
-				"binding", owner + "/messaging-test/bot")), senderless.getRoute());
+				Fields.OWNER, owner)), senderless.getRoute());
 			Job fromFriend = router.deliver("friend", Strings.create("hello"), LISTED, (draft, sid, jid) -> true);
 			assertEquals(Strings.create("owner only"), RT.getIn(fromFriend.awaitResult(5000), Fields.RESPONSE, "completed"));
 			assertEquals(owner, engine.jobs().getJobData(fromFriend.getID(), ownerView).get(Fields.CALLER));

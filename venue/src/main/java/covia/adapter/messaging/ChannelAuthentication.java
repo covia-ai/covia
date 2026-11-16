@@ -9,6 +9,7 @@ import convex.core.data.Maps;
 import convex.core.data.Sets;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
+import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.venue.Engine;
 import covia.venue.auth.AuthResult;
@@ -145,19 +146,17 @@ public final class ChannelAuthentication {
 		return party;
 	}
 
-	/** On a binding's route step: the binding's resource, {@code <owner>/<method>/<name>}. */
-	public static final AString K_BINDING = AuthResult.BINDING;
-
 	/**
 	 * The route step a binding adds for a request it authenticated
 	 * (RequestContext.via), from the request's authentication record, the
-	 * {@code AuthResult} data without its {@code userDID}: the binding's name
-	 * and resource, the sender's id and handle, the chat's id and kind, the
-	 * thread and the space's id. Names are the sender's text (§7), and the
-	 * message id and provider fields say nothing of the route, so the step
-	 * leaves them out. A stored record is read the same way, keeping only
-	 * values of the expected type, so a turn recorded before routes reads as
-	 * the step it would carry now.
+	 * {@code AuthResult} data without its {@code userDID}: the binding's owner
+	 * and name, which with the adapter name its resource
+	 * ({@code <owner>/<method>/<name>}), the sender's id and handle, the chat's
+	 * id and kind, the thread and the space's id. Names are the sender's text
+	 * (§7), and the message id and provider fields say nothing of the route, so
+	 * the step leaves them out. A stored record is read the same way, keeping
+	 * only values of the expected type, so a turn recorded before routes reads
+	 * as the step it would carry now.
 	 */
 	public static AMap<AString, ACell> step(ACell record) {
 		AMap<AString, ACell> authentication = RT.ensureMap(RT.getIn(record, AuthResult.AUTHENTICATION));
@@ -179,10 +178,17 @@ public final class ChannelAuthentication {
 		return bindingStep(binding(engine, spec, method));
 	}
 
-	/** A step naming binding resource {@code binding} and its name, the resource's last segment. */
+	/**
+	 * A step naming the binding at resource {@code binding}: its owner, the
+	 * resource's first segment, and its name, the last. A resource without
+	 * both gives only what it holds.
+	 */
 	private static AMap<AString, ACell> bindingStep(AString binding) {
 		String resource = binding.toString();
-		return Maps.of(K_NAME, Strings.create(resource.substring(resource.lastIndexOf('/') + 1)), K_BINDING, binding);
+		int first = resource.indexOf('/');
+		int last = resource.lastIndexOf('/');
+		AMap<AString, ACell> step = Maps.of(K_NAME, Strings.create(resource.substring(last + 1)));
+		return (first > 0 && first < last) ? step.assoc(Fields.OWNER, Strings.create(resource.substring(0, first))) : step;
 	}
 
 	/** The resource of binding {@code spec} of adapter {@code method}: {@code <owner>/<method>/<name>}. */

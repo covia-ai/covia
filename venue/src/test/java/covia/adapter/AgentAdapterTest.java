@@ -400,7 +400,7 @@ public class AgentAdapterTest {
 		RequestContext viaChannel = engine.channelContext(ALICE_DID, result);
 		assertEquals(ALICE_DID, viaChannel.getCallerDID());
 		assertEquals(result.toData().dissoc(AuthResult.USER_DID), viaChannel.getAuthentication());
-		assertEquals(Vectors.of(Maps.of(Fields.ADAPTER, "test", Fields.NAME, "bot", "binding", ALICE_DID + "/test/bot",
+		assertEquals(Vectors.of(Maps.of(Fields.ADAPTER, "test", Fields.NAME, "bot", Fields.OWNER, ALICE_DID,
 			"sender", Maps.of("id", "sender-1"))), viaChannel.getRoute(), "the binding carried it");
 		assertNull(alice.getAuthentication(), "only a channel context carries a record");
 		assertNull(alice.getRoute(), "a request nothing carried has no route");

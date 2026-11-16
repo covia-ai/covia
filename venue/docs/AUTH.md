@@ -837,9 +837,9 @@ and whether it is open. Restricting where a binding serves, such as Slack's
 **The request context.** `Engine.channelContext(owner, AuthResult)` is
 `Engine.context(owner, userDID)` with the result's data projection attached by
 `RequestContext.withAuthentication`, and the binding's step added to the
-request's route (`ChannelAuthentication.step`: the binding's name and
-resource, the sender's id and handle, the chat's id and kind, a thread and a
-space id, never names or the message id). Only that seam sets the projection;
+request's route (`ChannelAuthentication.step`: the binding's owner and name,
+the sender's id and handle, the chat's id and kind, a thread and a space id,
+never names or the message id). Only that seam sets the projection;
 an HTTP request's result stays on its HTTP context. An event with no sender on
 an open binding carries no projection, but its route still names the binding.
 The projection is attribution, not evidence: assurance policy never reads it
@@ -873,7 +873,8 @@ call: its job's `caller`, normally the agent itself.
 - **What.** The relationship is computed from DIDs alone: the agent's own DID,
   its owner's and the venue's. No venue state is consulted, so registering or
   deleting a user never changes an earlier element. A binding's step shows the
-  adapter, the binding's name, ids, the chat kind, a thread and a space id.
+  adapter, the binding's name, its owner when that is not the agent's owner,
+  ids, the chat kind, a thread and a space id.
   `name` fields of people, chats and spaces are never rendered (COG-3 §7). Ids
   and handles render only when they match a conservative identifier pattern;
   xml values are escaped.
