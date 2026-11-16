@@ -144,10 +144,9 @@ compatible. The receiver must:
    Revalidate read authority on a replay; refreshed credentials are allowed but
    cannot change the effective principal. Tokens and wait budgets are not part of
    the semantic request digest.
-3. Persist the acceptance and prepared Job through a durability barrier before
-   dispatching the adapter or acknowledging acceptance. Avoid independent key
-   and Job writes with no recoverable relationship. Prefer one acceptance record
-   as truth and a rebuildable key index if a cross-record transaction is absent.
+3. Record the acceptance and the prepared Job in one venue transaction
+   (`JobManager.Prepared.record`), so neither is written without the other, and
+   make it durable before dispatching the adapter or acknowledging acceptance.
 4. Return the Job handle promptly and start the recorded Job
    (`JobManager.Prepared`) off the HTTP handler thread. Do not wait for
    `invokeFuture` to return.
