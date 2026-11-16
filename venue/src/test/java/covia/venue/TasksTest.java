@@ -30,8 +30,8 @@ public class TasksTest {
 	@BeforeEach
 	public void setup(TestInfo info) {
 		AString owner = TestEngine.uniqueDID(info);
-		agent = TestEngine.ENGINE.getVenueState().users().ensure(owner)
-			.ensureAgent(Strings.create("tasks-agent"), Maps.empty(), null);
+		agent = TestAgents.ensure(TestEngine.ENGINE.getVenueState().users().ensure(owner),
+			Strings.create("tasks-agent"), Maps.empty(), null);
 		agent.sessions().create(SESSION, owner, null);
 		tasks = agent.tasks();
 		task = tasks.task(TASK);

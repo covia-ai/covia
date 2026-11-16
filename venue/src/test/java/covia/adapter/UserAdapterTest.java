@@ -35,6 +35,7 @@ import covia.lattice.Covia;
 import covia.lattice.CoviaPath;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
+import covia.venue.TestAgents;
 import covia.venue.TestEngine;
 import covia.venue.User;
 
@@ -218,7 +219,7 @@ class UserAdapterTest {
 		long withNotes = stored(self, "workspace");
 		assertTrue(withNotes >= empty + 10_000, "the workspace counts: " + withNotes);
 
-		user.ensureAgent("storage-agent", null, null);
+		TestAgents.ensure(user, "storage-agent", null, null);
 		user.agent("storage-agent").workspace().write(CoviaPath.parse("notes"), Strings.create("n".repeat(10_000)));
 		assertTrue(stored(self, "workspace") >= withNotes + 10_000, "an agent's workspace counts");
 

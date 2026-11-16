@@ -43,7 +43,7 @@ public class AgentPathTest {
 	@BeforeEach
 	public void setup(TestInfo info) {
 		user = engine.getVenueState().users().ensure(TestEngine.uniqueDID(info));
-		agent = user.ensureAgent(AGENT, Maps.empty(), null);
+		agent = TestAgents.ensure(user, AGENT, Maps.empty(), null);
 		sid = Blob.fromHex("00112233445566778899aabbccddeeff");
 		agent.sessions().create(sid, null, null);
 		session = "g/" + AGENT + "/sessions/" + sid.toHexString();
@@ -158,7 +158,7 @@ public class AgentPathTest {
 		user.execute(draft -> {
 			ALatticeComponent<?> notes = draft.resolve(CoviaPath.parse("g/" + later + "/n/notes"));
 			assertFalse(notes.exists(), "the agent does not exist yet");
-			draft.ensureAgent(later, Maps.empty(), null).workspace().write(CoviaPath.parse("notes"), CVMLong.ONE);
+			TestAgents.ensure(draft, later, Maps.empty(), null).workspace().write(CoviaPath.parse("notes"), CVMLong.ONE);
 			assertTrue(notes.exists(), "the resolved entry sees the agent the draft created");
 			assertEquals(CVMLong.ONE, read(notes));
 		});

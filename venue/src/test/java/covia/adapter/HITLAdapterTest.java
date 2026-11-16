@@ -37,6 +37,7 @@ import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.Config;
 import covia.venue.AgentWatch;
+import covia.venue.TestAgents;
 import covia.venue.TestEngine;
 import covia.venue.TestLogs;
 import covia.venue.User;
@@ -904,8 +905,8 @@ public class HITLAdapterTest {
 		try {
 			Engine.addDemoAssets(isolated);
 			AString agentId = Strings.create("recover-hitl");
-			Agent agent = isolated.getVenueState().users().ensure(ALICE_DID)
-				.ensureAgent(agentId, Maps.empty(), null);
+			Agent agent = TestAgents.ensure(isolated.getVenueState().users().ensure(ALICE_DID),
+				agentId, Maps.empty(), null);
 			Job original = isolated.jobs().invokeOperation("v/ops/hitl/request",
 				Hitl.request("Recover me").ask(Hitl.approval("ok", "OK?")).build(),
 				RequestContext.ofAgent(ALICE_DID, agentId));

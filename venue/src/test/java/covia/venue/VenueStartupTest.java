@@ -237,7 +237,7 @@ public class VenueStartupTest {
 		Engine seed = TestEngine.application(store).mount(key, cfg).prepare();
 		try {
 			AString owner = seed.getDIDString();
-			Agent agent = seed.getVenueState().users().ensure(owner).ensureAgent(
+			Agent agent = TestAgents.ensure(seed.getVenueState().users().ensure(owner),
 				"startup-agent", Maps.of(Fields.OPERATION, OP, "release", "old"), null);
 			Blob sid = Blob.fromHex("05640001");
 			agent.sessions().create(sid, owner, null);

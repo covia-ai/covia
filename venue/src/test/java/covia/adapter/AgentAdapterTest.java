@@ -36,6 +36,7 @@ import covia.adapter.agent.GoalTreeContext;
 import covia.api.Abilities;
 import covia.api.Fields;
 import covia.grid.Job;
+import covia.grid.Principals;
 import covia.grid.Status;
 import covia.venue.Admission;
 import covia.venue.Agent;
@@ -44,6 +45,7 @@ import covia.venue.Engine;
 import covia.venue.Ids;
 import covia.venue.RequestContext;
 import covia.venue.Task;
+import covia.venue.TestAgents;
 import covia.venue.TestEngine;
 import covia.venue.User;
 import covia.venue.VenueState;
@@ -122,7 +124,8 @@ public class AgentAdapterTest {
 			Strings.create("qualified-agent"),
 			Strings.create("g/qualified-agent"),
 			Strings.create("/g/qualified-agent"),
-			address
+			address,
+			Principals.agentDID(ALICE_DID, Strings.create("qualified-agent"))
 		}) {
 			AMap<AString, ACell> info = adapter.agentInfo(RequestContext.of(ALICE_DID), ref);
 			assertNotNull(info, "reference should resolve: " + ref);
@@ -670,7 +673,7 @@ public class AgentAdapterTest {
 	public void testAuthenticatedCallerCanReadPublicQualifiedAgent() {
 		AString publicDID = Strings.create(engine.getDIDString() + ":public");
 		AString id = Strings.create("public-qualified-" + Math.abs(ALICE_DID.hashCode()));
-		engine.getVenueState().users().ensure(publicDID).ensureAgent(id, Maps.empty(), null);
+		TestAgents.ensure(engine.getVenueState().users().ensure(publicDID), id, Maps.empty(), null);
 
 		AMap<AString, ACell> info = ((AgentAdapter) engine.getAdapter("agent"))
 			.agentInfo(RequestContext.of(BOB_DID), Strings.create(publicDID + "/g/" + id));
@@ -5220,11 +5223,11 @@ public class AgentAdapterTest {
 	public void testAwaitingSummaryTracksPendingJobStatusesWithoutChangingAgentState() {
 		AgentAdapter adapter = (AgentAdapter) engine.getAdapter("agent");
 		AString id = Strings.create("awaiting");
-		Agent agent = engine.getVenueState().users().ensure(ALICE_DID)
-			.ensureAgent(id, Maps.empty(), null);
-		engine.getVenueState().users().ensure(ALICE_DID)
-			.ensureAgent(Strings.create("idle"), Maps.empty(), null);
-		engine.getVenueState().users().ensure(BOB_DID).ensureAgent(id, Maps.empty(), null);
+		Agent agent = TestAgents.ensure(engine.getVenueState().users().ensure(ALICE_DID),
+			id, Maps.empty(), null);
+		TestAgents.ensure(engine.getVenueState().users().ensure(ALICE_DID),
+			Strings.create("idle"), Maps.empty(), null);
+		TestAgents.ensure(engine.getVenueState().users().ensure(BOB_DID), id, Maps.empty(), null);
 		RequestContext ctx = RequestContext.ofAgent(ALICE_DID, id);
 		Job input = engine.jobs().invokeOperation("v/test/ops/chat", Maps.empty(), ctx);
 		Job auth = engine.jobs().invokeOperation("v/test/ops/never", Maps.empty(), ctx);
@@ -5385,7 +5388,7 @@ public class AgentAdapterTest {
 		Agent agent = user.agent("rem-agent");
 		assertNull(agent, "Agent record should be removed");
 		// Gone, not a key left holding null: a raw listing of g/ no longer names it.
-		assertFalse(user.getAgents().containsKey(Strings.create("rem-agent")), "no key left behind in g/");
+		assertFalse(user.agents().containsKey(Strings.create("rem-agent")), "no key left behind in g/");
 		ACell listed = engine.jobs().invokeOperation("v/ops/covia/list", Maps.of(Fields.PATH, "g"),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 		assertFalse(String.valueOf(RT.getIn(listed, "keys")).contains("rem-agent"), "covia:list of g/: " + listed);
@@ -5398,18 +5401,18 @@ public class AgentAdapterTest {
 		User user = engine.getVenueState().users().user(ALICE_DID);
 		// What deleting did before it removed the key: null written at g/<id>.
 		user.cursor().path(covia.lattice.Namespace.G, Strings.create("stale-agent")).set(null);
-		assertTrue(user.getAgents().containsKey(Strings.create("stale-agent")));
+		assertTrue(user.agents().containsKey(Strings.create("stale-agent")));
 
 		assertThrows(Exception.class, () -> engine.jobs().invokeOperation("v/ops/agent/delete",
 			Maps.of(Fields.AGENT_ID, "stale-agent"), RequestContext.of(ALICE_DID)).awaitResult(5000),
 			"without remove there is no agent to terminate");
-		assertTrue(user.getAgents().containsKey(Strings.create("stale-agent")), "so nothing changes");
+		assertTrue(user.agents().containsKey(Strings.create("stale-agent")), "so nothing changes");
 
 		ACell removed = engine.jobs().invokeOperation("v/ops/agent/delete",
 			Maps.of(Fields.AGENT_ID, "stale-agent", Fields.REMOVE, CVMBool.TRUE),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 		assertEquals(CVMBool.TRUE, RT.getIn(removed, Fields.REMOVED));
-		assertFalse(user.getAgents().containsKey(Strings.create("stale-agent")), "the empty entry is gone");
+		assertFalse(user.agents().containsKey(Strings.create("stale-agent")), "the empty entry is gone");
 	}
 
 	@Test
@@ -5481,6 +5484,15 @@ public class AgentAdapterTest {
 			Maps.of("agentIds", Vectors.of("same", "same")),
 			RequestContext.of(ALICE_DID));
 		assertThrows(Exception.class, () -> duplicate.awaitResult(5000));
+
+		// An id and the agent's DID name one target, so the list is refused and nothing is deleted
+		TestAgents.ensure(engine.getVenueState().users().ensure(ALICE_DID), "forms-same", Maps.empty(), null);
+		Job sameAgent = engine.jobs().invokeOperation("v/ops/agent/delete",
+			Maps.of("agentIds", Vectors.of(Strings.create("forms-same"),
+				Principals.agentDID(ALICE_DID, Strings.create("forms-same")))),
+			RequestContext.of(ALICE_DID));
+		assertThrows(Exception.class, () -> sameAgent.awaitResult(5000));
+		assertEquals(Agent.SLEEPING, engine.getVenueState().users().user(ALICE_DID).agent("forms-same").getStatus());
 
 		Job empty = engine.jobs().invokeOperation("v/ops/agent/delete",
 			Maps.of("agentIds", Vectors.empty()), RequestContext.of(ALICE_DID));
@@ -6123,7 +6135,7 @@ public class AgentAdapterTest {
 	@Test
 	public void testAgentStateRemoveTask() {
 		User user = engine.getVenueState().users().ensure(ALICE_DID);
-		Agent agent = user.ensureAgent("rm-task-agent", null, null);
+		Agent agent = TestAgents.ensure(user, "rm-task-agent", null, null);
 
 		Blob taskId = Blob.createRandom(new java.util.Random(0), 16);
 		agent.tasks().add(taskId, Maps.of("data", "test"));
@@ -6136,7 +6148,7 @@ public class AgentAdapterTest {
 	@Test
 	public void testAgentStateRemoveNonexistentTask() {
 		User user = engine.getVenueState().users().ensure(ALICE_DID);
-		Agent agent = user.ensureAgent("rm-noop-agent", null, null);
+		Agent agent = TestAgents.ensure(user, "rm-noop-agent", null, null);
 
 		Blob taskId = Blob.createRandom(new java.util.Random(1), 16);
 		// Removing a task that doesn't exist should be a no-op
@@ -6152,7 +6164,7 @@ public class AgentAdapterTest {
 		VenueState vs = VenueState.create(kp);
 		User user = vs.users().ensure("did:key:zTest");
 
-		Agent agent = user.ensureAgent("lifecycle-agent", null, null);
+		Agent agent = TestAgents.ensure(user, "lifecycle-agent", null, null);
 		assertTrue(agent.exists());
 		assertEquals(Agent.SLEEPING, agent.getStatus());
 		assertTrue(agent.getTs() > 0, "Agent should have a ts after creation");
@@ -7284,8 +7296,8 @@ public class AgentAdapterTest {
 	@Test
 	public void testOwnerReadsASessionHistoryAndOthersAreRefused() {
 		AString agentId = Strings.create("owner-session-agent");
-		Agent agent = engine.getVenueState().users().ensure(ALICE_DID)
-			.ensureAgent(agentId, Maps.empty(), null);
+		Agent agent = TestAgents.ensure(engine.getVenueState().users().ensure(ALICE_DID),
+			agentId, Maps.empty(), null);
 		Blob sid = Blob.fromHex("0a000000000000000000000000000001");
 		setConversation(agent, sid,
 			turn("user", "Owner-visible question", 100),
@@ -7304,11 +7316,15 @@ public class AgentAdapterTest {
 		assertEquals(CVMBool.TRUE, RT.getIn(read, "found"));
 		assertEquals(2, entries(read).count());
 
-		Job denied = engine.jobs().invokeOperation("v/ops/agent/history",
-			Maps.of(Fields.AGENT_ID, ALICE_DID + "/g/" + agentId,
-				Fields.SESSION_ID, sid.toHexString()), RequestContext.of(BOB_DID));
-		assertThrows(covia.exception.JobFailedException.class, () -> denied.awaitResult(5000));
-		assertTrue(denied.getErrorMessage().contains("crud/read"), denied.getErrorMessage());
+		// Another user is refused alike whichever form names the agent
+		for (AString ref : new AString[] {
+				Strings.create(ALICE_DID + "/g/" + agentId),
+				Principals.agentDID(ALICE_DID, Strings.create(agentId))}) {
+			Job denied = engine.jobs().invokeOperation("v/ops/agent/history",
+				Maps.of(Fields.AGENT_ID, ref, Fields.SESSION_ID, sid.toHexString()), RequestContext.of(BOB_DID));
+			assertThrows(covia.exception.JobFailedException.class, () -> denied.awaitResult(5000));
+			assertTrue(denied.getErrorMessage().contains("crud/read"), ref + ": " + denied.getErrorMessage());
+		}
 	}
 
 	@Test
@@ -7349,8 +7365,8 @@ public class AgentAdapterTest {
 	@Test
 	public void testAnAgentReadsItsOwnHistoryWithoutRawReadCap() {
 		AString agentId = Strings.create("past-session-agent");
-		Agent agent = engine.getVenueState().users().ensure(ALICE_DID)
-			.ensureAgent(agentId, Maps.empty(), null);
+		Agent agent = TestAgents.ensure(engine.getVenueState().users().ensure(ALICE_DID),
+			agentId, Maps.empty(), null);
 		Blob older = Blob.fromHex("10000000000000000000000000000001");
 		Blob newer = Blob.fromHex("10000000000000000000000000000002");
 		Blob current = Blob.fromHex("10000000000000000000000000000003");
@@ -7393,8 +7409,8 @@ public class AgentAdapterTest {
 	@Test
 	public void testMissingAndPolicyHiddenHistoriesAreIndistinguishable() {
 		AString agentId = Strings.create("private-past-session-agent");
-		Agent agent = engine.getVenueState().users().ensure(ALICE_DID)
-			.ensureAgent(agentId, Maps.empty(), null);
+		Agent agent = TestAgents.ensure(engine.getVenueState().users().ensure(ALICE_DID),
+			agentId, Maps.empty(), null);
 		Blob visible = Blob.fromHex("20000000000000000000000000000001");
 		Blob hidden = Blob.fromHex("20000000000000000000000000000002");
 		Blob current = Blob.fromHex("20000000000000000000000000000003");
@@ -7444,8 +7460,8 @@ public class AgentAdapterTest {
 	@Test
 	public void testHistoryNavigatesPositionsAcrossCompaction() {
 		AString agentId = Strings.create("own-history-agent");
-		Agent agent = engine.getVenueState().users().ensure(ALICE_DID)
-			.ensureAgent(agentId, Maps.empty(), null);
+		Agent agent = TestAgents.ensure(engine.getVenueState().users().ensure(ALICE_DID),
+			agentId, Maps.empty(), null);
 		Blob current = Blob.fromHex("30000000000000000000000000000001");
 		agent.sessions().create(current, Strings.create("test-caller"), null);
 		assertTrue(agent.session(current).updateFrames(null, frames -> {
@@ -7511,8 +7527,8 @@ public class AgentAdapterTest {
 	@Test
 	public void testHistoryReturnsEveryEntryWhole() {
 		AString agentId = Strings.create("whole-history-agent");
-		Agent agent = engine.getVenueState().users().ensure(ALICE_DID)
-			.ensureAgent(agentId, Maps.empty(), null);
+		Agent agent = TestAgents.ensure(engine.getVenueState().users().ensure(ALICE_DID),
+			agentId, Maps.empty(), null);
 		Blob sid = Blob.fromHex("31000000000000000000000000000001");
 		String longFailure = "Error: " + "x".repeat(ConversationRenderer.MAX_TOOL_FAILURE_CHARS * 10);
 		AVector<ACell> turns = Vectors.of(
@@ -7532,8 +7548,8 @@ public class AgentAdapterTest {
 	@Test
 	public void testHistoryRangesClampToTheEndAndRefuseNonsense() {
 		AString agentId = Strings.create("range-history-agent");
-		Agent agent = engine.getVenueState().users().ensure(ALICE_DID)
-			.ensureAgent(agentId, Maps.empty(), null);
+		Agent agent = TestAgents.ensure(engine.getVenueState().users().ensure(ALICE_DID),
+			agentId, Maps.empty(), null);
 		Blob sid = Blob.fromHex("32000000000000000000000000000001");
 		Blob empty = Blob.fromHex("32000000000000000000000000000002");
 		setConversation(agent, sid, turn("user", "one", 100), turn("assistant", "two", 110));
@@ -7584,8 +7600,8 @@ public class AgentAdapterTest {
 	@Test
 	public void testSessionReadIsSelfScopedExcludesCurrentAndNeedsNoRawReadCap() {
 		AString agentId = Strings.create("legacy-read-agent");
-		Agent agent = engine.getVenueState().users().ensure(ALICE_DID)
-			.ensureAgent(agentId, Maps.empty(), null);
+		Agent agent = TestAgents.ensure(engine.getVenueState().users().ensure(ALICE_DID),
+			agentId, Maps.empty(), null);
 		Blob older = Blob.fromHex("40000000000000000000000000000001");
 		Blob newer = Blob.fromHex("40000000000000000000000000000002");
 		Blob current = Blob.fromHex("40000000000000000000000000000003");
@@ -7615,8 +7631,8 @@ public class AgentAdapterTest {
 	@Test
 	public void testSessionReadMissingCurrentAndPolicyVetoAreIndistinguishable() {
 		AString agentId = Strings.create("legacy-private-agent");
-		Agent agent = engine.getVenueState().users().ensure(ALICE_DID)
-			.ensureAgent(agentId, Maps.empty(), null);
+		Agent agent = TestAgents.ensure(engine.getVenueState().users().ensure(ALICE_DID),
+			agentId, Maps.empty(), null);
 		Blob visible = Blob.fromHex("41000000000000000000000000000001");
 		Blob hidden = Blob.fromHex("41000000000000000000000000000002");
 		Blob current = Blob.fromHex("41000000000000000000000000000003");
@@ -7653,8 +7669,8 @@ public class AgentAdapterTest {
 	@Test
 	public void testSessionReadReadsBackTheCompactedPartOfTheSessionItIsIn() {
 		AString agentId = Strings.create("legacy-own-history-agent");
-		Agent agent = engine.getVenueState().users().ensure(ALICE_DID)
-			.ensureAgent(agentId, Maps.empty(), null);
+		Agent agent = TestAgents.ensure(engine.getVenueState().users().ensure(ALICE_DID),
+			agentId, Maps.empty(), null);
 		Blob current = Blob.fromHex("42000000000000000000000000000001");
 		Blob plain = Blob.fromHex("42000000000000000000000000000002");
 		agent.sessions().create(current, Strings.create("test-caller"), null);

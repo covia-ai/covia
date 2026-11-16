@@ -64,7 +64,7 @@ public class OwnerAccessTest {
 		user.workspace().createPath(CoviaPath.parse("shared"));
 		user.workspace().write(CoviaPath.parse("shared/note"), Strings.create("w-note"));
 		user.workspace().write(CoviaPath.parse("private"), Strings.create("w-private"));
-		Agent agent = user.ensureAgent(AGENT, null, null);
+		Agent agent = TestAgents.ensure(user, AGENT, null, null);
 		agent.workspace().write(CoviaPath.parse("note"), Strings.create("n-note"));
 		agent.sessions().create(SESSION, alice, null);
 		agent.sessions().create(OTHER_SESSION, alice, null);

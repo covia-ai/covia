@@ -3979,26 +3979,41 @@ public class Engine {
 	}
 
 	/**
-	 * Looks up an agent's lattice state by owner DID and agent ID.
+	 * The agent {@code agentId} of {@code owner}, or null when that user or
+	 * agent does not exist or the agent is deleted ({@link Agent#isTerminated}):
+	 * an agent that can act. It only resolves: whether a caller may use the
+	 * agent is checked where it is used. {@link Agents#agent} also finds a
+	 * deleted agent.
 	 *
-	 * <p>Returns null if the user doesn't exist, the agent isn't initialised,
-	 * or the agent is {@link Agent#TERMINATED}. Used by the harness to
-	 * read agent record fields (config, tasks, pending, sessions) directly
-	 * from the lattice instead of plumbing them through the step input.</p>
-	 *
-	 * @param callerDID Agent owner's DID (never null)
-	 * @param agentId   Agent identifier (never null)
-	 * @return Agent wrapper, or null if not found / terminated
+	 * @param owner The owning user's DID, may be null
+	 * @param agentId The agent's id, may be null
 	 */
-	public Agent getAgent(AString callerDID, AString agentId) {
-		if (callerDID == null || agentId == null) return null;
-		Users users = venueState.users();
-		User user = users.user(callerDID);
-		if (user == null) return null;
-		Agent agent = user.agent(agentId);
-		if (agent == null) return null;
-		if (Agent.TERMINATED.equals(agent.getStatus())) return null;
-		return agent;
+	public Agent getAgent(AString owner, AString agentId) {
+		if (owner == null || agentId == null) return null;
+		User user = venueState.users().user(owner);
+		Agent agent = (user == null) ? null : user.agents().agent(agentId);
+		return (agent == null || agent.isTerminated()) ? null : agent;
+	}
+
+	/**
+	 * As {@link #getAgent(AString, AString)}, for the agent an agent DID
+	 * ({@code <owner>:g:<agentId>}) names; null for a DID that names no agent.
+	 */
+	public Agent getAgent(AString agentDID) {
+		AString agentId = covia.grid.Principals.agentIdOf(agentDID);
+		return (agentId == null) ? null : getAgent(covia.grid.Principals.userOf(agentDID), agentId);
+	}
+
+	/**
+	 * As {@link #getAgent(AString, AString)}, for the agent {@code ref} names
+	 * as {@code ctx}'s caller writes it ({@link AgentAddress#parse}): a relative
+	 * reference names an agent of the user {@code ctx} acts for.
+	 *
+	 * @throws InvalidInputException if {@code ref} names no agent
+	 */
+	public Agent getAgent(RequestContext ctx, AString ref) {
+		AgentAddress agent = AgentAddress.parse(ctx.getUserDID(), ref);
+		return getAgent(agent.owner(), agent.agentId());
 	}
 
 	/** Gets the live root cursor for top-level lattice regions. */
@@ -4130,9 +4145,7 @@ public class Engine {
 			AString userDid = (AString) userEntry.getKey();
 			User user = venueState.users().user(userDid);
 			if (user == null) continue;
-			AMap<AString, ACell> agents = user.getAgents();
-			if (agents == null || agents.isEmpty()) continue;
-			for (var agentEntry : agents.entrySet()) {
+			for (var agentEntry : user.agents().all().entrySet()) {
 				AString agentId = (AString) agentEntry.getKey();
 				if (!(agentEntry.getValue() instanceof AMap)) continue;
 				Agent agent = user.agent(agentId);

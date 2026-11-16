@@ -354,8 +354,10 @@ not part of this surface.
 The context-rooted namespaces `n/`, `t/` and `c/` use explicit query selectors,
 since a values request carries no agent, task or session of its own:
 
-- `n/<path>&agent=<agent>` — agent scratch. `agent` is either a bare id under
-  the authenticated caller's user namespace or a full agent DID.
+- `n/<path>&agent=<agent>` — agent scratch. `agent` is an agent reference
+  ([AGENT_LOOP.md §1.1](AGENT_LOOP.md#11-agent-references)): a bare id or
+  `g/<id>` under the authenticated caller's user namespace, `<ownerDID>/g/<id>`,
+  or a full agent DID.
 - `t/<path>&agent=<agent>&task=<taskId>` — task scratch. A task is its
   `agent:request` Job, so this reads the single durable
   `j/<taskId>/temp/<path>` backing value.

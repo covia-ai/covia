@@ -32,8 +32,8 @@ public class AgentTaskReadinessTest {
 	@BeforeEach
 	public void setup(TestInfo info) {
 		did = TestEngine.uniqueDID(info);
-		agent = TestEngine.ENGINE.getVenueState().users().ensure(did)
-			.ensureAgent("readiness", Maps.empty(), null);
+		agent = TestAgents.ensure(TestEngine.ENGINE.getVenueState().users().ensure(did),
+			"readiness", Maps.empty(), null);
 		agent.sessions().create(SID, did, null);
 		agent.tasks().add(TASK, Maps.of(
 			Fields.INPUT, Maps.of("ask", "something"),

@@ -29,6 +29,7 @@ import covia.adapter.agent.ContextLoader;
 import covia.exception.JobFailedException;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
+import covia.venue.TestAgents;
 import covia.venue.TestEngine;
 import covia.venue.User;
 
@@ -145,7 +146,7 @@ public class UserMemoryAdapterTest {
 	@Test
 	public void testUserAndAgentEditingSharedListAllSurvive() throws Exception {
 		User user = engine.getVenueState().users().ensure(ALICE.getUserDID());
-		user.ensureAgent("memory-sharer", Maps.empty(), null);
+		TestAgents.ensure(user, "memory-sharer", Maps.empty(), null);
 		RequestContext agent = RequestContext.ofAgent(ALICE.getUserDID(), Strings.create("memory-sharer"));
 		int n = 16;
 		List<Callable<ACell>> tasks = new ArrayList<>();
@@ -256,8 +257,8 @@ public class UserMemoryAdapterTest {
 	@Test
 	public void testAgentLocalMemoryAtNPath() {
 		User user = engine.getVenueState().users().ensure(ALICE.getUserDID());
-		user.ensureAgent("memory-agent-a", Maps.empty(), null);
-		user.ensureAgent("memory-agent-b", Maps.empty(), null);
+		TestAgents.ensure(user, "memory-agent-a", Maps.empty(), null);
+		TestAgents.ensure(user, "memory-agent-b", Maps.empty(), null);
 		RequestContext agentA = RequestContext.ofAgent(ALICE.getUserDID(), Strings.create("memory-agent-a"));
 		RequestContext agentB = RequestContext.ofAgent(ALICE.getUserDID(), Strings.create("memory-agent-b"));
 		AMap<AString, ACell> remember = Maps.of(

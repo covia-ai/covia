@@ -42,18 +42,23 @@ See GRID_LATTICE_DESIGN.md for: per-user namespace layout (§4.3), agent address
 
 ### 1.1 Agent references
 
-Every native agent operation that accepts `agentId` uses the ordinary grid path
-resolver. A bare value such as `Manager` is shorthand for the caller-owned
-`g/Manager`; `g/Manager` and `/g/Manager` are equivalent. A DID-qualified path
-such as `did:key:zAlice/g/Manager` explicitly selects that owner's agent.
+An agent reference names one agent, in any of these forms:
 
-Qualified references do not introduce a separate agent-address grammar or lookup
-path: they resolve exactly like other physical user resources. The canonical
-resource is `<ownerDID>/g/<agentId>`, capability checks apply to that resource at
-the point of action, and the runtime key remains `(ownerDID, agentId)`. Accessing
-another user's agent therefore requires a matching capability; metadata cannot
-redirect or authorize the access. Results keep the local `agentId` for compatibility
-and include the canonical `address`.
+| Form | Names |
+|------|-------|
+| `Manager`, `g/Manager`, `/g/Manager` | The agent `Manager` of the user the request acts for |
+| `did:key:zAlice/g/Manager` | The agent `Manager` of that owner |
+| `did:key:zAlice:g:Manager` | The same agent, by its DID |
+
+Every native agent operation's `agentId` and the values API's `agent` selector
+read a reference in the same way (`AgentAddress`). Reading one is syntax only.
+Whether the agent exists, and whether the caller may use it, is decided where it
+is used, the same way for every form. The canonical resource is
+`<ownerDID>/g/<agentId>`, capability checks apply to that resource at the point
+of action, and the runtime key remains `(ownerDID, agentId)`. Accessing another
+user's agent therefore requires a matching capability, whichever form names it;
+metadata cannot redirect or authorise the access. Results keep the local
+`agentId` for compatibility and include the canonical `address`.
 
 ---
 

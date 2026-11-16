@@ -139,7 +139,7 @@ public class GoalTreeCrashResumeTest {
 		AMap<AString, ACell> legacy = Maps.of("description", "persisted legacy session", "conversation", selected);
 
 		Engine first = start(store, keyPair, config);
-		Agent initial = first.getVenueState().users().ensure(ALICE).ensureAgent(agentId,
+		Agent initial = TestAgents.ensure(first.getVenueState().users().ensure(ALICE), agentId,
 			Maps.of(Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/test/ops/llm"), null);
 		initial.sessions().create(sid, ALICE, null);
 		AMap<AString, ACell> session = initial.session(sid).getRecord().assoc(Fields.FRAMES, Vectors.of(legacy));

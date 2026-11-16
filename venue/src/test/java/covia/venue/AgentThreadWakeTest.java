@@ -44,7 +44,7 @@ public class AgentThreadWakeTest {
 		userDid = TestEngine.uniqueDID(info);
 		ctx = RequestContext.of(userDid);
 		User user = engine.getVenueState().users().ensure(userDid);
-		agent = user.ensureAgent("thread-wake-agent", Maps.empty(), null);
+		agent = TestAgents.ensure(user, "thread-wake-agent", Maps.empty(), null);
 	}
 
 	private Scheduler sched() { return engine.gridScheduler(); }
@@ -204,7 +204,7 @@ public class AgentThreadWakeTest {
 		venue.deleteUser(userDid, userDid);
 		venue.users().finishDeletion(userDid);
 		venue.users().create(userDid);
-		var replacement = venue.users().user(userDid).ensureAgent(agent.getAgentId(), Maps.empty(), null);
+		var replacement = TestAgents.ensure(venue.users().user(userDid), agent.getAgentId(), Maps.empty(), null);
 		replacement.sessions().create(sid, userDid, null);
 		var failure = assertThrows(AuthException.class, () -> sched().setThreadWakeTime(
 			userDid, agent, ThreadKind.SESSION, sid, System.currentTimeMillis() + FAR));
