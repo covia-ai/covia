@@ -868,11 +868,6 @@ public class AgentAdapter extends AAdapter {
 		}
 		try {
 			String subOp = getSubOperation(meta);
-			// Keep the Job-aware path identical to invokeFuture: task completion
-			// is context-bound framework plumbing; every other user-facing
-			// operation requires invocation of its exact definition.
-			if (!"completeTask".equals(subOp) && !"failTask".equals(subOp)) {
-			}
 			switch (subOp) {
 				case "create"  -> handleCreate(job, input, ctx);
 				case "fromSkills" -> handleFromSkills(job, input, ctx);
