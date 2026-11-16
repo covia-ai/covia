@@ -47,7 +47,7 @@ fi
 # Ensure data directory exists with correct config (preserve existing etch store)
 mkdir -p /home/ec2-user/covia-data
 if [ ! -f /home/ec2-user/covia-data/config.json ]; then
-  printf '{"venues":[{"name":"Covia Venue (EC2)","hostname":"venue-3.covia.ai","port":8080,"store":"/data/venue.etch","trustedProxies":["loopback","172.16.0.0/12"],"mcp":{"enabled":true}}]}\n' \
+  printf '{"venues":[{"name":"Covia Test Venue (EC2)","hostname":"venue-3.covia.ai","port":8080,"store":"/data/venue.etch","trustedProxies":["loopback","172.16.0.0/12"],"mcp":{"enabled":true}}]}\n' \
     > /home/ec2-user/covia-data/config.json
 fi
 # The venue sits behind nginx on this host and sees it through the
@@ -65,6 +65,11 @@ path = Path("/home/ec2-user/covia-data/config.json")
 config = json.loads(path.read_text(encoding="utf-8"))
 config.setdefault("operations", {}).setdefault("log-format", "json")
 for venue in config.get("venues", []):
+    # venue-3 and venue-4 are test venues (security#53, decision D3), so their
+    # status name says so. Only the old default is replaced: a name set by an
+    # operator is kept.
+    if venue.get("name") == "Covia Venue (EC2)":
+        venue["name"] = "Covia Test Venue (EC2)"
     venue.setdefault("trustedProxies", ["loopback", "172.16.0.0/12"])
     logging = venue.setdefault("logging", {})
     logging.setdefault("audit", True)
