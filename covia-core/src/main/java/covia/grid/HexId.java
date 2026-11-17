@@ -40,6 +40,9 @@ public final class HexId {
 	/**
 	 * Reads an id given as a value, as an in-process caller may pass back an id
 	 * the venue returned: a blob as it is, text as {@link #parse(AString)} reads it.
+	 * Pass an {@code ACell} variable: with a generic call such as
+	 * {@code RT.getIn(...)} as the argument, Java picks {@link #parse(AString)},
+	 * which throws {@code ClassCastException} on a blob.
 	 *
 	 * @param value The id as given, may be null
 	 * @return The id, or null when the value is not an id

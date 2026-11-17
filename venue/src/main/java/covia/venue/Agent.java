@@ -368,8 +368,9 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 		return new Sessions(getContext(), cursor().path(K_SESSIONS), owner, agentId);
 	}
 
-	/** One of the agent's sessions, as {@link Sessions#session}: a missing
-	 * session reads as null, and its operations never create or resurrect it. */
+	/** One of the agent's sessions, as {@link Sessions#session}. It is never
+	 * null: a missing session's record reads as null ({@link Session#getRecord}),
+	 * and its operations never create or resurrect it. */
 	public Session session(Blob sid) {
 		return sessions().session(sid);
 	}
