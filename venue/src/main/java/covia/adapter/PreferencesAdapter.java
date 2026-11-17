@@ -19,6 +19,7 @@ import convex.core.lang.RT;
 import convex.core.util.Utils;
 import convex.lattice.cursor.AForkableCursor;
 import covia.api.Fields;
+import covia.lattice.Covia;
 import covia.exception.AuthException;
 import covia.exception.ConfigurationException;
 import covia.exception.InvalidInputException;
@@ -146,8 +147,7 @@ public class PreferencesAdapter extends AAdapter {
 
 	/** The user's preferences in {@code state}, live or a transaction's draft. */
 	private static AForkableCursor<ACell> userCursor(AdapterState state, AString did) {
-		return state.cursor().withDefault(Maps.empty())
-			.path(K_USERS).withDefault(Maps.empty()).path(did);
+		return Covia.entry(Covia.entry(state.cursor(), K_USERS), did);
 	}
 
 	/** The size limit for one user: their own setting, else the venue's, else {@link #DEFAULT_MAX_BYTES}. */

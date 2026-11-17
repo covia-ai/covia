@@ -32,6 +32,8 @@ import convex.core.store.MemoryStore;
 import convex.core.store.Persister;
 import convex.lattice.LatticeHost;
 import convex.lattice.ALatticeComponent;
+import convex.lattice.IndexComponent;
+import convex.lattice.MapComponent;
 import convex.lattice.TransactionalComponent;
 import convex.lattice.OwnedMap;
 import convex.lattice.Timestamped;
@@ -257,9 +259,21 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 		return new AssetStore(level(Covia.ASSETS));
 	}
 
-	/** One level of the venue record; a change through an absent record creates it. */
+	/** One level of the venue record; a change creates the level, and the record, when absent. */
 	private <T extends ACell> AForkableCursor<T> level(Keyword key) {
-		return cursor().withDefault(Index.none()).path(key);
+		return level(cursor(), key);
+	}
+
+	/** Level {@code key} of the venue record at {@code venue}, as {@link #level(Keyword)}. */
+	@SuppressWarnings("unchecked")
+	static <T extends ACell> AForkableCursor<T> level(AForkableCursor<ACell> venue, Keyword key) {
+		return (AForkableCursor<T>) new IndexComponent<Keyword, ACell>(
+			(AForkableCursor<Index<Keyword, ACell>>) (AForkableCursor<?>) venue).path(key);
+	}
+
+	/** A string-keyed level of the venue record; a put creates the level when absent. */
+	private MapComponent<AString, ACell> mapLevel(Keyword key) {
+		return new MapComponent<>(level(key));
 	}
 
 	/**
@@ -412,7 +426,7 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 				// There is no generic merge for arbitrary adapter-owned values.
 				throw new IllegalStateException(LEGACY_STATE_CONFLICT + path);
 			}
-			if (!present) draft.cursor().path(Covia.ADAPTERS).withDefault(Maps.empty()).path(key).set(legacy);
+			if (!present) draft.mapLevel(Covia.ADAPTERS).put(key, legacy);
 			draft.venueUser().deleteInternalPath(CoviaPath.parse(path));
 		});
 	}
@@ -448,7 +462,7 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 
 	private void markUserDeletion(String name, AString did, ACell tombstone) {
 		AMap<AString, ACell> pending = pendingUserDeletions(name).assoc(did, tombstone);
-		cursor().path(Covia.USER_DELETIONS).withDefault(Maps.empty()).path(convex.core.data.Strings.create(name)).set(pending);
+		mapLevel(Covia.USER_DELETIONS).put(convex.core.data.Strings.create(name), pending);
 	}
 
 	/** Acknowledge exactly this deletion, opening recreation only when all work is done. */
@@ -460,7 +474,7 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 			AMap<AString, ACell> all = RT.ensureMap(RT.getIn(draft.get(), Covia.USER_DELETIONS));
 			AString adapter = convex.core.data.Strings.create(name);
 			all = pending.isEmpty() ? all.dissoc(adapter) : all.assoc(adapter, pending);
-			draft.cursor().path(Covia.USER_DELETIONS).set(all);
+			draft.level(Covia.USER_DELETIONS).set(all);
 			for (ACell value : all.values()) {
 				if (RT.getIn(value, did) != null) return;
 			}
@@ -559,8 +573,7 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 	/** Records the state version an adapter has reached. */
 	void setAdapterVersion(String name, long version) {
 		AdapterState.validateName(name);
-		cursor().withDefault(Index.none()).path(Covia.ADAPTER_VERSIONS).withDefault(Maps.empty())
-			.path(Strings.create(name)).set(CVMLong.create(version));
+		mapLevel(Covia.ADAPTER_VERSIONS).put(Strings.create(name), CVMLong.create(version));
 	}
 
 	/** One pure step of an adapter's state, from {@code version} to {@code version + 1}. */
@@ -667,7 +680,7 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 			ACell value = get();
 			ACell migrated = steps.get((int) version).apply(value);
 			if (migrated != value) cursor().set(migrated);
-			cursor().withDefault(Index.none()).path(Covia.VERSION).set(CVMLong.create(++version));
+			level(Covia.VERSION).set(CVMLong.create(++version));
 		}
 	}
 

@@ -629,7 +629,8 @@ public class MCP extends McpServer {
 	/** The body if it is one JSON-RPC object; a batch, or anything unreadable, is left to the base. */
 	private AMap<?, ?> singleRequest(Context ctx) {
 		try {
-			ACell body = JSONReader.read(RequestBody.boundedInputStream(ctx, getMaxRequestBytes())); // the body is cached: the base reads it again
+			// Javalin keeps this copy, bounded by its maxRequestSize, and the base reads it again from there
+			ACell body = JSONReader.read(new java.io.ByteArrayInputStream(ctx.bodyAsBytes()));
 			return (body instanceof AMap<?, ?> map) ? map : null;
 		} catch (Exception e) {
 			return null;

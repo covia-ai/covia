@@ -1,6 +1,7 @@
 package covia.lattice;
 
 import convex.core.data.ACell;
+import convex.core.data.AHashMap;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Keyword;
@@ -8,6 +9,8 @@ import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
 import convex.core.data.Index;
 import convex.lattice.ALattice;
+import convex.lattice.MapComponent;
+import convex.lattice.cursor.AForkableCursor;
 import convex.lattice.generic.LWWLattice;
 import covia.api.Fields;
 
@@ -134,6 +137,16 @@ public final class Covia {
 	public static CVMLong ratchet(ACell existing, CVMLong ts) {
 		if (existing instanceof CVMLong prev && prev.longValue() > ts.longValue()) return prev;
 		return ts;
+	}
+
+	/**
+	 * The entry {@code key} of the string-keyed hash map at {@code map}, as
+	 * {@link MapComponent#path} gives it: a changed write creates the entry, and
+	 * the map when it is absent, while a read finds an absent entry absent.
+	 */
+	@SuppressWarnings("unchecked")
+	public static <T extends ACell> AForkableCursor<T> entry(AForkableCursor<? extends ACell> map, AString key) {
+		return new MapComponent<AString, ACell>((AForkableCursor<AHashMap<AString, ACell>>) (AForkableCursor<?>) map).path(key);
 	}
 
 	/** Injects the write-clock timestamp (from the VenueContext) into the venue value's {@code :timestamp}. */

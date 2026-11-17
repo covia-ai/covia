@@ -75,7 +75,7 @@ public final class AdapterState extends ALatticeComponent<ACell>
 			base.getOrDefault(null); // reject a tombstoned owner before handing out the view
 		}
 		return new AdapterState(venue.getContext(),
-			base.path(Covia.ADAPTERS).withDefault(Maps.empty()).path(Strings.create(name)), name, owner, generation);
+			Covia.entry(VenueState.level(base, Covia.ADAPTERS), Strings.create(name)), name, owner, generation);
 	}
 
 	public VenueContext getContext() { return context; }

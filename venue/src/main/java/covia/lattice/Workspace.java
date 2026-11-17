@@ -5,6 +5,7 @@ import java.util.function.UnaryOperator;
 
 import convex.core.data.ACell;
 import convex.core.data.AString;
+import convex.core.data.Maps;
 import convex.core.data.Path;
 import convex.lattice.ALatticeComponent;
 import convex.lattice.TransactionalComponent;
@@ -40,15 +41,16 @@ public final class Workspace extends ALatticeComponent<ACell>
 	}
 
 	/**
-	 * The area at {@code key} in a record. It reads as absent while the record is
-	 * missing, and a change to it is refused rather than creating the record.
+	 * The area at {@code key} in a record. It reads as empty while it is absent,
+	 * so a transaction on it starts from an empty map. A change creates it in the
+	 * record, and is refused rather than creating the record.
 	 *
 	 * @param record Cursor at the record
 	 * @param key The area's key in the record
 	 * @return The area
 	 */
 	public static Workspace inRecord(AForkableCursor<ACell> record, AString key) {
-		return new Workspace(new RecordArea(record, key));
+		return new Workspace(new RecordArea(record, key).withDefault(Maps.empty()));
 	}
 
 	@Override
@@ -133,7 +135,7 @@ public final class Workspace extends ALatticeComponent<ACell>
 		return entry(path).createLevels(Math.toIntExact(path.count()));
 	}
 
-	/** The area at a key in a record; a change needs the record. */
+	/** The area at a key in a record; a change creates the area, and needs the record. */
 	private static final class RecordArea extends PathCursor<ACell> {
 		private final AString key;
 
@@ -142,10 +144,11 @@ public final class Workspace extends ALatticeComponent<ACell>
 			this.key = key;
 		}
 
+		/** Only a missing record refuses; a record that cannot hold the area refuses as on any path. */
 		@Override
-		protected ACell write(ACell record, ACell area) {
+		protected void requireWritable(ACell record) {
 			if (record == null) throw new InvalidInputException(String.format(NO_RECORD, key));
-			return super.write(record, area);
+			write(record, view(record));
 		}
 	}
 }

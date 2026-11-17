@@ -53,7 +53,7 @@ public final class Schedule extends ALatticeComponent<ACell>
 
 	@SuppressWarnings("unchecked")
 	private void updateEvents(UnaryOperator<Index<Blob, ACell>> update) {
-		cursor().withDefault(Maps.empty()).path(K_EVENTS).updateAndGet(value ->
+		Covia.entry(cursor(), K_EVENTS).updateAndGet(value ->
 			update.apply(value instanceof Index<?, ?> ? (Index<Blob, ACell>) value : Index.none()));
 	}
 
@@ -66,7 +66,7 @@ public final class Schedule extends ALatticeComponent<ACell>
 
 	@SuppressWarnings("unchecked")
 	private void updateCaller(AString caller, UnaryOperator<ASet<Blob>> update) {
-		cursor().withDefault(Maps.empty()).path(K_BY_ACTOR).updateAndGet(value -> {
+		Covia.entry(cursor(), K_BY_ACTOR).updateAndGet(value -> {
 			AMap<AString, ACell> byCaller = (value instanceof AMap<?, ?>) ? asMap(value) : Maps.empty();
 			ACell held = byCaller.get(caller);
 			ASet<Blob> keys = update.apply((held instanceof ASet<?> s) ? (ASet<Blob>) s : Sets.empty());

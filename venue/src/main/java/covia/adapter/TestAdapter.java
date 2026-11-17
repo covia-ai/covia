@@ -28,6 +28,7 @@ import convex.lattice.cursor.AForkableCursor;
 import convex.lattice.cursor.ATransformCursor;
 import covia.adapter.agent.ContextAssembler;
 import covia.api.Fields;
+import covia.lattice.Covia;
 import covia.exception.AuthException;
 import covia.exception.InvalidInputException;
 import covia.exception.JobFailedException;
@@ -133,8 +134,8 @@ public class TestAdapter extends AAdapter implements covia.adapter.token.TokenAc
 			K_EXECUTION, Maps.of("owner", scope.ownerDID(), Fields.AGENT_ID, scope.agentId(),
 				Fields.SESSION_ID, scope.sessionId(), Fields.JOB_ID, scope.jobId(), Fields.TASK_ID, scope.taskId()));
 		// The diagnostics are computed, so the view has a value before any scratch is stored.
-		AForkableCursor<ACell> scratch = adapterState(ctx.getUserDID()).cursor().withDefault(Maps.empty())
-			.path(K_USERS).withDefault(Maps.empty()).path(ctx.getUserDID()).withDefault(Maps.empty());
+		AForkableCursor<ACell> scratch = Covia.<ACell>entry(Covia.entry(adapterState(ctx.getUserDID()).cursor(), K_USERS),
+			ctx.getUserDID()).withDefault(Maps.empty());
 		return new ATransformCursor<ACell, ACell>(scratch) {
 			@Override protected ACell view(ACell stored) {
 				AMap<AString, ACell> result = Maps.of(K_CONTEXT, context, K_SAMPLES, SAMPLES);

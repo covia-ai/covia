@@ -3,7 +3,9 @@ package covia.venue;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.Blob;
 import convex.core.data.Cells;
+import convex.core.data.Index;
 import convex.core.data.Maps;
 import convex.core.data.Path;
 import convex.core.data.Strings;
@@ -95,7 +97,7 @@ public class User extends ALatticeComponent<ACell> implements TransactionalCompo
 
 	/** This user's workspace ({@code w}). */
 	public Workspace workspace() {
-		return new Workspace(wrapped(Namespace.W));
+		return new Workspace(this.<ACell>wrapped(Namespace.W).withDefault(Maps.empty()));
 	}
 
 	/**
@@ -122,19 +124,24 @@ public class User extends ALatticeComponent<ACell> implements TransactionalCompo
 
 	/** This user's operation definitions ({@code o}), held as a workspace. */
 	public Workspace operations() {
-		return new Workspace(wrapped(Namespace.O));
+		return new Workspace(this.<ACell>wrapped(Namespace.O).withDefault(Maps.empty()));
+	}
+
+	/** One namespace of this user's record; a change creates it, and the record, when absent. */
+	private <T extends ACell> AForkableCursor<T> namespace(AString namespace) {
+		return Covia.entry(cursor(), namespace);
 	}
 
 	/** The data of a namespace held in an {@code {updated, data}} record, which a change stamps. */
 	private <T extends ACell> AForkableCursor<T> wrapped(AString namespace) {
-		return StampedCursor.create(cursor().withDefault(Maps.empty()).path(namespace),
-				context::currentTimestamp, Covia::stampUpdated)
-			.withDefault(Maps.empty()).path(Covia.WORKSPACE_DATA);
+		AForkableCursor<ACell> record = StampedCursor.create(namespace(namespace),
+				context::currentTimestamp, Covia::stampUpdated);
+		return Covia.entry(record, Covia.WORKSPACE_DATA);
 	}
 
 	/** This user's agents ({@code g}), a map the first agent creates. */
 	public Agents agents() {
-		return new Agents(context, cursor().withDefault(Maps.empty()).path(Namespace.G), did);
+		return new Agents(context, namespace(Namespace.G), did);
 	}
 
 	/** Gets the user's DID string. */
@@ -149,7 +156,7 @@ public class User extends ALatticeComponent<ACell> implements TransactionalCompo
 	 */
 	@SuppressWarnings("unchecked")
 	public AssetStore assets() {
-		return new AssetStore(cursor().path(Namespace.A));
+		return new AssetStore(namespace(Namespace.A));
 	}
 
 	/**
@@ -158,7 +165,7 @@ public class User extends ALatticeComponent<ACell> implements TransactionalCompo
 	 * @return SecretStore wrapping the user's "s" cursor
 	 */
 	public SecretStore secrets() {
-		return new SecretStore(context, cursor().path(Namespace.S));
+		return new SecretStore(context, namespace(Namespace.S));
 	}
 
 	/** The agent {@code agentId}, deleted or not, or null when it has no record ({@link Agents#agent}). */
@@ -182,12 +189,12 @@ public class User extends ALatticeComponent<ACell> implements TransactionalCompo
 
 	/** This user's HITL inbox ({@code h/}). */
 	public Inbox inbox() {
-		return new Inbox(wrapped(Namespace.H));
+		return new Inbox(this.<Index<Blob, AMap<AString, ACell>>>wrapped(Namespace.H).withDefault(Index.none()));
 	}
 
 	/** This user's jobs ({@code j/}), bound to this user or transaction draft. */
 	public Jobs jobs() {
-		return new Jobs(context, cursor().withDefault(Maps.empty()).path(Namespace.J), did);
+		return new Jobs(context, namespace(Namespace.J), did);
 	}
 
 	/** Whoever holds authority over {@code <did>/<path>}; none outside any user. */
