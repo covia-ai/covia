@@ -104,13 +104,13 @@ public final class Session extends ALatticeComponent<ACell>
 	/** Null from the operation means rejection, as does a missing session;
 	 * unchanged records still count as accepted. */
 	private boolean update(UnaryOperator<AMap<AString, ACell>> action) {
-		return transact(draft -> {
+		return Records.ifPresent(this, () -> transact(draft -> {
 			AMap<AString, ACell> record = draft.getRecord();
 			AMap<AString, ACell> next = record == null ? null : action.apply(record);
 			if (next == null) return false;
 			draft.cursor().set(next);
 			return true;
-		});
+		}), false);
 	}
 
 	/** The epoch of the cycle holding a claim on this session, or null when none does. */

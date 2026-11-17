@@ -176,7 +176,7 @@ public final class Task extends ALatticeComponent<ACell>
 	 * @return whether the task holds the message: false when it is not queued or is in another session
 	 */
 	public boolean appendContinuation(Blob sid, ACell envelope, AString messageId) {
-		return transact(draft -> {
+		return Records.ifPresent(this, () -> transact(draft -> {
 			AMap<AString, ACell> task = draft.getRecord();
 			if (task == null) return false;
 			if (!java.util.Objects.equals(sid, sessionId(task))) return false;
@@ -191,7 +191,7 @@ public final class Task extends ALatticeComponent<ACell>
 			if (messageId != null) task = task.assoc(K_CONTINUATION_IDS, ids.conj(messageId));
 			draft.cursor().set(task);
 			return true;
-		});
+		}), false);
 	}
 
 	/**
@@ -206,12 +206,12 @@ public final class Task extends ALatticeComponent<ACell>
 	 *         revision moved, since a continuation arrived and the task is ready anyway
 	 */
 	public boolean park(long expectedRevision, long queued) {
-		return transact(draft -> {
+		return Records.ifPresent(this, () -> transact(draft -> {
 			AMap<AString, ACell> task = draft.getRecord();
 			if (task == null || revision(task) != expectedRevision) return false;
 			draft.cursor().set(task.assoc(K_PARKED, CVMBool.TRUE).assoc(Fields.QUEUED, CVMLong.create(queued)));
 			return true;
-		});
+		}), false);
 	}
 
 	/**
@@ -230,12 +230,12 @@ public final class Task extends ALatticeComponent<ACell>
 	 * @return whether the task is queued
 	 */
 	public boolean setWakeTime(long time) {
-		return transact(draft -> {
+		return Records.ifPresent(this, () -> transact(draft -> {
 			AMap<AString, ACell> task = draft.getRecord();
 			if (task == null) return false;
 			draft.cursor().set((time > 0) ? task.assoc(Fields.WAKE_TIME, CVMLong.create(time)) : task.dissoc(Fields.WAKE_TIME));
 			return true;
-		});
+		}), false);
 	}
 
 	/**
@@ -244,14 +244,14 @@ public final class Task extends ALatticeComponent<ACell>
 	 * @return whether the task is queued
 	 */
 	public boolean present() {
-		return transact(draft -> {
+		return Records.ifPresent(this, () -> transact(draft -> {
 			AMap<AString, ACell> task = draft.getRecord();
 			if (task == null) return false;
 			AMap<AString, ACell> running = task.dissoc(K_PARKED);
 			draft.cursor().set(hasUnshownInput(running)
 				? running.assoc(K_PRESENTED_INPUTS, CVMLong.create(shown(running) + 1)) : running);
 			return true;
-		});
+		}), false);
 	}
 
 	@SuppressWarnings("unchecked")

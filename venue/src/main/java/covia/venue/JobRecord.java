@@ -112,12 +112,12 @@ public final class JobRecord extends ALatticeComponent<ACell>
 	/** Pure record edit; null rejects the edit. Returns the committed record,
 	 * or null for a rejected/missing row. */
 	AMap<AString, ACell> update(UnaryOperator<AMap<AString, ACell>> action) {
-		return transact(draft -> {
+		return Records.ifPresent(this, () -> transact(draft -> {
 			AMap<AString, ACell> current = draft.getRecord();
 			AMap<AString, ACell> next = current == null ? null : action.apply(current);
 			if (next == null) return null;
 			return RT.ensureMap(draft.cursor().updateAndGet(value -> next));
-		});
+		}), null);
 	}
 
 	/** History remains appendable after terminal completion. Repeated message IDs

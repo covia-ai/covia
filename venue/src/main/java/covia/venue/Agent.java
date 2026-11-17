@@ -434,20 +434,20 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 	@SuppressWarnings("unchecked")
 	public AMap<AString, ACell> saveSessionSummary(Blob sid, AMap<AString, ACell> expectedSession,
 			AString instruction, AMap<AString, ACell> summary) {
-		return transact(draft -> {
+		return Records.ifPresent(this, () -> transact(draft -> {
 			if (!draft.exists() || SUSPENDED.equals(draft.getStatus()) || TERMINATED.equals(draft.getStatus())) return null;
 			return draft.session(sid).saveSummary(expectedSession, instruction, summary);
-		});
+		}), false);
 	}
 
 	/** Claim one external turn per session. A retained claim after restart prevents blind replay. */
 	@SuppressWarnings("unchecked")
 	public boolean claimExternalTurn(Blob sid, Blob jobId, AString caller, ACell content, boolean create) {
-		return transact(draft -> {
+		return Records.ifPresent(this, () -> transact(draft -> {
 			if (!draft.exists() || TERMINATED.equals(draft.getStatus()) || SUSPENDED.equals(draft.getStatus())) return false;
 			if (create) draft.sessions().create(sid, caller, null);
 			return draft.session(sid).claimExternalTurn(jobId, content);
-		});
+		}), null);
 	}
 
 	/**
@@ -475,7 +475,7 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 	private SessionIntake intakeSession(Blob sid, AString caller,
 			AMap<AString, ACell> initialLoads, boolean create,
 			java.util.function.Consumer<Agent> change) {
-		return transact(draft -> {
+		return Records.ifPresent(this, () -> transact(draft -> {
 			if (!draft.exists() || TERMINATED.equals(draft.getStatus())) return SessionIntake.MISSING;
 			Sessions sessions = draft.sessions();
 			ACell raw = sessions.get(sid);
@@ -488,7 +488,7 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 			if (!(raw instanceof AMap<?, ?>)) return SessionIntake.MISSING;
 			change.accept(draft);
 			return SessionIntake.APPLIED;
-		});
+		}), SessionIntake.MISSING);
 	}
 
 	@SuppressWarnings("unchecked")
@@ -572,7 +572,7 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 	 * @return The record before termination, or null when there is no agent
 	 */
 	public AMap<AString, ACell> terminate() {
-		return transact(draft -> {
+		return Records.ifPresent(this, () -> transact(draft -> {
 			AMap<AString, ACell> before = draft.getRecord();
 			if (before != null) draft.changeStatus(TERMINATED);
 			return before;
@@ -587,7 +587,7 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 				Index<Blob, ACell> resolved = extractResolved(r);
 				return resolved.containsKey(taskId) ? r.assoc(K_RESOLVED, resolved.dissoc(taskId)) : r;
 			});
-		});
+		}), null);
 	}
 
 	/**
@@ -639,7 +639,7 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 	public CycleStart beginCycle(Blob taskId, ACell pickedTask, Blob sid, ACell epoch,
 			AVector<ACell> turns, long drainCount) {
 		Objects.requireNonNull(epoch);
-		return transact(draft -> {
+		return Records.ifPresent(this, () -> transact(draft -> {
 			AMap<AString, ACell> record = draft.getRecord();
 			if (record == null || isStopped(record)) return CycleStart.STOPPED;
 			if (taskId != null) {
@@ -654,7 +654,7 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 			AMap<AString, ACell> issued = claim;
 			draft.update(r -> r.assoc(K_IN_CYCLE, issued));
 			return sessionClaimed ? CycleStart.SESSION : CycleStart.NO_SESSION;
-		});
+		}), CycleStart.STOPPED);
 	}
 
 	/**
@@ -859,7 +859,7 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 				text.substring(0, Math.min(text.length(), MAX_SUSPEND_REASON_LENGTH))));
 		}
 		AMap<AString, ACell> suspension = stop;
-		return transact(draft -> {
+		return Records.ifPresent(this, () -> transact(draft -> {
 			AMap<AString, ACell> r = draft.getRecord();
 			if (r == null || TERMINATED.equals(r.get(K_STATUS))) return null;
 			draft.changeStatus(SUSPENDED);
@@ -874,7 +874,7 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 			if (r == null || r.containsKey(KEY_SUSPENSION) || TERMINATED.equals(r.get(K_STATUS))) return;
 			draft.changeStatus(SUSPENDED);
 			draft.update(u -> u.assoc(K_ERROR, error));
-		});
+		}), null);
 	}
 
 	/**

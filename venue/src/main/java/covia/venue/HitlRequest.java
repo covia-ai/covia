@@ -85,14 +85,14 @@ public final class HitlRequest extends ALatticeComponent<AMap<AString, ACell>>
 	 */
 	public boolean resolve(AString status, AMap<AString, ACell> response) {
 		if (!RESOLUTIONS.contains(status)) throw new IllegalArgumentException(NOT_A_RESOLUTION + status);
-		return transact(draft -> {
+		return Records.ifPresent(this, () -> transact(draft -> {
 			AMap<AString, ACell> record = draft.getRecord();
 			if (record == null || !Hitl.OPEN.equals(record.get(Hitl.STATUS))) return false;
 			AMap<AString, ACell> resolved = record.assoc(Hitl.STATUS, status);
 			if (response != null) resolved = resolved.assoc(Hitl.RESPONSE, response);
 			draft.cursor().set(resolved);
 			return true;
-		});
+		}), false);
 	}
 
 	/** The fields below the request read as stored. */
