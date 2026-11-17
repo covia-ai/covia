@@ -841,13 +841,17 @@ applied twice.
 
 The signed record is what the store and other nodes receive;
 `application.host().sync()` publishes the root and `engine.flush()` is the
-durability barrier. Incoming venue state delivered through the application
-lands in the record by whole-venue LWW, and an unchanged copy takes it at its
-next sync. A copy that changed too does not: the sync fails with a merge
-conflict, publishes nothing and keeps the copy, as every later sync does, so
-the venue's edits are no longer published. A transaction meeting a concurrent
-change instead runs again under its claim. Nothing in the venue delivers state
-for a mounted venue, which one running instance owns (A.2).
+durability barrier.
+
+The copy and the record follow two rules. A transaction on the copy commits by
+the venue's default reconcile: one that meets a concurrent change runs again
+under its claim, so both changes are kept. Publishing the copy (`VenueState.sync`)
+is whole-venue LWW, as incoming state is (A.2): where only one side changed it
+wins, and where both did the newer `:timestamp` selects one complete version,
+a tie keeping the copy. Incoming venue state delivered through the application
+lands in the record, and the copy takes it at its next sync unless the copy has
+written since. Nothing in the venue delivers state for a mounted venue, which
+one running instance owns.
 
 On receiving foreign state (disk recovery, replication, federation),
 `SignedLattice.merge()` verifies the signature, merges if valid, re-signs a

@@ -37,15 +37,15 @@ public class VenueStateTest {
 	/** The venue's secret store keys: these venues keep no secret a migration step carries over. */
 	private static final SecretStore.Keys NO_SECRETS = SecretStore.keys(AKeyPair.generate());
 
-	// ========== Fork Sync ==========
+	// ========== Publication and Transactions ==========
 
 	/**
-	 * A copy that has not changed takes its destination's change at sync; one
-	 * that changed too fails with a merge conflict, publishes nothing and keeps
-	 * its edits, at every sync until something resolves it.
+	 * Publishing a copy: an unchanged copy takes its destination's change, and
+	 * where both changed whole-venue LWW selects one complete version, here the
+	 * copy's later write, rather than combining them.
 	 */
 	@Test
-	public void aCopyThatChangedWithItsDestinationFailsToSyncAndKeepsItsEdits() {
+	public void publishingACopySelectsOneWholeVersionWhereBothChanged() {
 		VenueState venue = VenueState.create(AKeyPair.generate());
 		venue.users().ensure(Strings.create("did:test:first"));
 		VenueState copy = venue.fork();
@@ -56,11 +56,46 @@ public class VenueStateTest {
 
 		venue.users().ensure(Strings.create("did:test:destination"));
 		copy.users().ensure(Strings.create("did:test:copy"));
-		ACell destination = venue.get();
-		assertThrows(convex.lattice.MergeConflictException.class, copy::sync);
-		assertThrows(convex.lattice.MergeConflictException.class, copy::sync);
-		assertSame(destination, venue.get(), "nothing is published");
-		assertNotNull(copy.users().user(Strings.create("did:test:copy")), "the copy keeps its edits");
+		ACell published = copy.sync();
+		assertEquals(copy.get(), published);
+		assertEquals(published, venue.get(), "the destination holds what was published");
+		assertNotNull(venue.users().user(Strings.create("did:test:copy")), "the later write wins");
+		assertNull(venue.users().user(Strings.create("did:test:destination")), "the two versions are not combined");
+		assertEquals(published, copy.sync(), "publishing again changes nothing");
+	}
+
+	/**
+	 * Transactions on a venue commit by its own rule, not by LWW: one that meets
+	 * a concurrent change runs again under its claim, so both changes are kept.
+	 */
+	@Test
+	public void overlappingVenueTransactionsBothKeepTheirChanges() throws Exception {
+		VenueState venue = VenueState.create(AKeyPair.generate());
+		AString first = Strings.create("did:test:first-writer");
+		AString second = Strings.create("did:test:second-writer");
+		java.util.concurrent.CountDownLatch entered = new java.util.concurrent.CountDownLatch(1);
+		java.util.concurrent.CountDownLatch resume = new java.util.concurrent.CountDownLatch(1);
+		java.util.concurrent.atomic.AtomicInteger runs = new java.util.concurrent.atomic.AtomicInteger();
+		try (var executor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
+			var pending = executor.submit(() -> venue.execute(draft -> {
+				draft.users().ensure(first);
+				if (runs.incrementAndGet() == 1) {
+					entered.countDown();
+					try {
+						assertTrue(resume.await(10, java.util.concurrent.TimeUnit.SECONDS));
+					} catch (InterruptedException e) {
+						throw new IllegalStateException(e);
+					}
+				}
+			}));
+			assertTrue(entered.await(10, java.util.concurrent.TimeUnit.SECONDS));
+			venue.execute(draft -> draft.users().ensure(second));
+			resume.countDown();
+			pending.get(10, java.util.concurrent.TimeUnit.SECONDS);
+		}
+		assertEquals(2, runs.get(), "the transaction that met the change ran again");
+		assertNotNull(venue.users().user(first));
+		assertNotNull(venue.users().user(second));
 	}
 
 	// ========== Factory Methods ==========

@@ -26,10 +26,12 @@ import convex.core.data.Path;
 import convex.core.data.SignedData;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
+import convex.core.exceptions.StoreException;
 import convex.core.lang.RT;
 import convex.core.store.AStore;
 import convex.core.store.MemoryStore;
 import convex.core.store.Persister;
+import convex.core.util.Utils;
 import convex.lattice.LatticeHost;
 import convex.lattice.ALatticeComponent;
 import convex.lattice.IndexComponent;
@@ -72,14 +74,16 @@ import covia.venue.migration.VenueMigrations;
  * });
  * }</pre>
  *
- * <p>Whole-venue LWW ({@link #merge}) selects complete snapshots for backup,
- * replication and failover. Nothing combines arbitrarily forked executions:
- * their state invariants and external effects cannot in general be merged. A
- * transaction that meets a concurrent change runs again under its claim, and
- * {@link #sync()} of a {@link #fork()} whose destination changed too fails with
- * a merge conflict, keeping the fork. One authoritative running instance owns a
- * venue; failover must fence the previous writer. Live work uses transactions.
- * Children have no independent publication or merge boundary.</p>
+ * <p>A mounted venue is a working copy of its signed record. Live work is
+ * transactions on the copy, which sign and persist nothing: one that meets a
+ * concurrent change runs again under its claim. {@link #sync()} publishes the
+ * copy into the record, signed once, by whole-venue LWW, the rule
+ * {@link #merge} applies to an incoming snapshot for backup, replication and
+ * failover. LWW selects one complete version and never combines two: forked
+ * executions' state invariants and external effects cannot in general be
+ * merged, so one authoritative running instance owns a venue, and failover must
+ * fence the previous writer. Children have no independent publication or merge
+ * boundary.</p>
  */
 public class VenueState extends ALatticeComponent<ACell> implements TransactionalComponent<ACell, VenueState> {
 	/** The venue schema version: the number of {@link VenueMigrations#steps}. */
@@ -99,20 +103,53 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 	private final VenueContext context;
 	/** The venue value as one timestamped record: local edits stamp it, merges keep the newest. */
 	private final Timestamped<ACell> record;
+	/** Persists this copy's working state after it publishes, or null when its parent persists it. */
+	private final Persister persister;
 
 	public VenueContext getContext() { return context; }
 
 	@Override
 	public AForkableCursor<ACell> cursor() { return record.cursor(); }
 
+	/** Merges an incoming snapshot by whole-venue LWW: the newer {@code :timestamp} wins, and a tie keeps this copy. */
 	@Override
 	public ACell merge(ACell incoming) {
 		return record.merge(incoming);
 	}
 
-	// Reconciliation is the default, a change on both sides being a conflict: it serves
-	// both transaction commits and the copy's sync, so a whole-venue LWW here would let
-	// one transaction silently drop another's changes. LWW is for incoming snapshots.
+	/** Why publishing failed after the record took the copy: its working state could not be persisted. */
+	public static final String PERSIST_FAILED = "Unable to persist the venue's working state after publishing it";
+
+	/**
+	 * Publishes this copy into its record: the record takes the copy where only
+	 * the copy changed, the copy takes the record where only the record did, and
+	 * whole-venue LWW decides where both did, as for an incoming snapshot
+	 * ({@link #merge}). A copy with working state of its own then persists it.
+	 * Transactions on the copy commit by the default reconcile instead: a change
+	 * on both sides is a conflict, and the transaction runs again under its claim.
+	 *
+	 * @return The published value
+	 */
+	@Override
+	public ACell sync() {
+		syncChildren();
+		ACell published = storage().reconcile(this::publication);
+		if (persister != null) {
+			try {
+				persist();
+			} catch (IOException e) {
+				throw new StoreException(PERSIST_FAILED, e);
+			}
+		}
+		return published;
+	}
+
+	/** The reconciliation {@link #sync()} publishes by. */
+	private ACell publication(ACell base, ACell own, ACell other) {
+		if (Utils.equals(own, base)) return other;
+		if (Utils.equals(other, base)) return own;
+		return record.getLattice().merge(own, other);
+	}
 
 	/** Binds working storage and the policy its components share. */
 	private VenueState(AForkableCursor<ACell> cursor, AccountKey ownerKey, VenueContext context) {
@@ -128,6 +165,7 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 		super(cursor, persister);
 		this.ownerKey = ownerKey;
 		this.context = context;
+		this.persister = persister;
 		this.record = new Timestamped<>(cursor, Covia.VENUE, context::currentTimestamp, Covia::stampVenue);
 	}
 
@@ -728,8 +766,8 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 	}
 
 	/**
-	 * Creates independent working state. Its sync reconciles it with this copy,
-	 * unsigned, and fails with a merge conflict, keeping the fork, when both changed.
+	 * Creates independent working state. Its sync publishes it into this copy,
+	 * unsigned, by whole-venue LWW where both changed ({@link #sync()}).
 	 * For compound local edits with conflict retry, use {@link #execute} or {@link #transact}.
 	 */
 	@Override
