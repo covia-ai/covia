@@ -1120,8 +1120,8 @@ configured tools' definitions and keeping the session's frames. The switch takes
 agent from the step's input, never its authority, whoever invokes the runtime
 and whatever `config` its input carries. Only the agent's own run or its
 owner may make an agent act, with all of the authority it acts with, and only
-an agent that exists: a request through a restricted access token makes no
-agent act ([ACCESS_TOKENS.md](ACCESS_TOKENS.md)). The agent's own run is told
+an agent that exists: a request a restricted access token or callable narrows
+makes no agent act ([ACCESS_TOKENS.md](ACCESS_TOKENS.md)). The agent's own run is told
 by the execution a request drives, which the venue gives only to the agent's
 harness, its acts, a request through its access token and the work they keep,
 never by who acts in it; a callable's call is never the agent's own run.

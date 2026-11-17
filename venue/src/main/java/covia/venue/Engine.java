@@ -5200,13 +5200,13 @@ public class Engine {
 	 * execution, still narrowed by the access tokens that narrow {@code ctx},
 	 * so one that stops standing stops the step. A step runs only for an agent
 	 * that exists, and only the agent's own run or its owner may make it act,
-	 * with all of the authority it acts with: a request a restricted token
-	 * narrows makes no agent act. The agent's own run is told by the execution
-	 * it drives, which only the venue gives a request for that agent (its
-	 * harness, its own acts, a request through its token and work they keep),
-	 * never by who acts in it: the harness acts as the agent's controller. A
-	 * call is never the agent's own run. A step's input never sets its
-	 * authority.
+	 * with all of the authority it acts with: a request a restricted access
+	 * token or callable narrows makes no agent act. The agent's own run is told
+	 * by the execution it drives, which only the venue gives a request for that
+	 * agent (its harness, its own acts, a request through its token and work
+	 * they keep), never by who acts in it: the harness acts as the agent's
+	 * controller. A call is never the agent's own run. A step's input never
+	 * sets its authority.
 	 *
 	 * @throws AuthException when the caller may not make that agent act, or it does not exist
 	 */
@@ -5269,8 +5269,9 @@ public class Engine {
 	/** Why a step did not run: only the agent's own run, or its owner, may make an agent act. */
 	public static final String NOT_AGENTS_STEP = "%s cannot run a step of agent %s: only the agent's own run or its owner can make it act";
 
-	/** Why a step did not run: a restricted access token narrows the request, so it holds less than the authority the step would act with. */
-	public static final String STEP_NARROWED = "%s cannot run a step of agent %s through an access token whose caps are restricted";
+	/** Why a step did not run: an access token or callable that is restricted, or no longer stands, narrows the request. */
+	public static final String STEP_NARROWED = "%s cannot run a step of agent %s: an access token or callable narrows the request, "
+		+ "and only a request with all of the authority it acts with can make an agent act";
 
 	/** Why a step did not run: it names no agent that exists here. */
 	public static final String NO_SUCH_AGENT = "%s is not an agent here";
