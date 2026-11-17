@@ -557,6 +557,8 @@ may wrap the component's cursor in its own typed domain components. For simple
 map/vector records, `read`, `write` and `delete` offer type-aware relative paths;
 `get`, `set`, `update`, `execute` and `transact` operate on the complete value;
 `transact` returns what its callback returned in the run that committed.
+Absent state reads as an empty map, so a transaction on new state starts from
+one; a stored value of any type reads as itself, and setting null removes it.
 `rootPath` and `path` are diagnostic locations, not workspace API addresses.
 
 ```java
@@ -689,10 +691,11 @@ whose private schema stores public account data under `accounts/<did>` can
 expose just that subtree:
 
 ```java
+private static final AString ACCOUNTS = Strings.intern("accounts");
+
 @Override public AForkableCursor<ACell> latticeView(AString owner, RequestContext ctx) {
-    return adapterState(owner).cursor().withDefault(Maps.empty())
-        .path(Strings.intern("accounts")).withDefault(Maps.empty())
-        .path(owner);
+    // Entry views: a write creates the map and the entry, and an absent entry reads as absent
+    return Covia.entry(Covia.entry(adapterState(owner).cursor(), ACCOUNTS), owner);
 }
 ```
 

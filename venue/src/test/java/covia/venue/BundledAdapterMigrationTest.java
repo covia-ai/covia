@@ -167,7 +167,7 @@ class BundledAdapterMigrationTest {
 		try {
 			IllegalStateException error = assertThrows(IllegalStateException.class, unrecognised::prepareLaunch);
 			assertEquals(TestAdapter.UNRECOGNISED_STATE.formatted(1), error.getMessage());
-			// Before close, whose sync replaces the working value with its persisted equal
+			// Before close, whose sync has the working copy adopt the record's equal cells
 			assertSame(mislabelled, venue.get(), "the refused start wrote nothing");
 		} finally {
 			unrecognised.close();

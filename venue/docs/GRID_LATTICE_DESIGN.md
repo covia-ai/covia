@@ -841,8 +841,12 @@ applied twice.
 The signed record is what the store and other nodes receive;
 `application.host().sync()` publishes the root and `engine.flush()` is the
 durability barrier. Incoming venue state delivered through the application
-lands in the record, and the copy takes it at its next sync: whole-venue LWW
-decides when both changed.
+lands in the record by whole-venue LWW, and an unchanged copy takes it at its
+next sync. A copy that changed too does not: the sync fails with a merge
+conflict, publishes nothing and keeps the copy, as every later sync will. A
+transaction meeting a concurrent change instead runs again under its claim.
+Nothing in the venue delivers state for a mounted venue, which one running
+instance owns; an embedder merges a snapshot into a venue that is not mounted.
 
 On receiving foreign state (disk recovery, replication, federation),
 `SignedLattice.merge()` verifies the signature, merges if valid, re-signs a

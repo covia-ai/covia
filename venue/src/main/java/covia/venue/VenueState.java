@@ -72,12 +72,13 @@ import covia.venue.migration.VenueMigrations;
  * });
  * }</pre>
  *
- * <p>Whole-venue LWW selects complete snapshots for backup, replication and
- * failover. It does not combine arbitrarily forked executions: their state
- * invariants and external effects cannot in general be merged. One authoritative
- * running instance owns a venue; failover must fence the previous writer.
- * {@link #fork()} creates an independent snapshot, and {@link #sync()} selects
- * a snapshot rather than replaying operations. Live work uses transactions.
+ * <p>Whole-venue LWW ({@link #merge}) selects complete snapshots for backup,
+ * replication and failover. Nothing combines arbitrarily forked executions:
+ * their state invariants and external effects cannot in general be merged. A
+ * transaction that meets a concurrent change runs again under its claim, and
+ * {@link #sync()} of a {@link #fork()} whose destination changed too fails with
+ * a merge conflict, keeping the fork. One authoritative running instance owns a
+ * venue; failover must fence the previous writer. Live work uses transactions.
  * Children have no independent publication or merge boundary.</p>
  */
 public class VenueState extends ALatticeComponent<ACell> implements TransactionalComponent<ACell, VenueState> {
@@ -109,11 +110,9 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 		return record.merge(incoming);
 	}
 
-	// OPEN (Convex 0.8.20 port): 0.8.19 merged a publication conflict by the record's
-	// whole-venue LWW (mergePublication) while transactions reran on conflict. Convex now
-	// commits transactions through the same reconcile, so an LWW override here would let a
-	// conflicting venue transaction drop the other's changes. Until that is decided this
-	// keeps the default: a change on both sides is a conflict, at commit and at sync.
+	// Reconciliation is the default, a change on both sides being a conflict: it serves
+	// both transaction commits and the copy's sync, so a whole-venue LWW here would let
+	// one transaction silently drop another's changes. LWW is for incoming snapshots.
 
 	/** Binds working storage and the policy its components share. */
 	private VenueState(AForkableCursor<ACell> cursor, AccountKey ownerKey, VenueContext context) {
@@ -731,7 +730,7 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 
 	/**
 	 * Creates independent working state. Its sync reconciles it with this copy,
-	 * unsigned, using whole-venue LWW, which may select one complete concurrent version.
+	 * unsigned, and fails with a merge conflict, keeping the fork, when both changed.
 	 * For compound local edits with conflict retry, use {@link #execute} or {@link #transact}.
 	 */
 	@Override
