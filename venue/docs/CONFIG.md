@@ -2234,11 +2234,10 @@ Modules can also be loaded and unloaded on a running venue — see
 
 Shaded module jars (`covia-<module>-<version>-module.jar`) are GitHub Releases
 artifacts, each paired with a `.sha256` checksum file; they are not published
-to Maven Central. (Releases up to 0.9.6 also attached them there under a
-`module` classifier; 0.9.7 onwards do not.) Maven Central carries only each
-module's slim jar, sources and javadoc, for hosts that compile against a
-module's classes. Do not put either the slim jar or the shaded module jar on
-the host application classpath.
+to Maven Central. For hosts that compile against a module's classes, Maven
+Central carries the slim jar, sources and javadoc of the modules
+[BUILD.md](../../BUILD.md#publishing-to-maven-central) lists. Do not put either
+the slim jar or the shaded module jar on the host application classpath.
 
 Download the module jar from the release matching the venue version in use,
 verify the checksum, package it with the application, place it in the
