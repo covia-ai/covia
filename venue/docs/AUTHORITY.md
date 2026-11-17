@@ -140,8 +140,8 @@ A record of work is kept in its caller's account, a job in that account's
 `j/`: a user's own, and for an agent the account it acts in. It names no owner
 beside its caller: the account is the caller's, and the caller's DID names it,
 as an agent's `<ownerDID>:g:<id>` does, so a reader can find the record. It
-counts against that account's quota. This is COG-8's `caller`, and COG-8's
-`owner` goes.
+counts against that account's quota. This is COG-8's `caller`; a record names
+no `owner`.
 
 A job is reached by capability on its record ([JOBS.md](JOBS.md#job-capabilities)).
 A scheduled event is reached by capability on `<account>/x/schedule/<id>`:
@@ -237,11 +237,4 @@ one through a token or within a callable's call.
 - The caller context a job keeps only when its adapter asks, in two shapes of
   kept authority, and a scheduled event's own shape of the same. A job's state
   is the context it runs in.
-- A record of work whose `caller` names a sudo delegate, as work it left
-  before `admin/sudo` acted as the user does, beside an `owner` naming the account,
-  from which the venue works out what kind of principal acted.
-- A scheduled event reached by identity, by its account's owner or the
-  principal that scheduled it, since no capability names an event.
 - A configured Python function, which is not told who called it (#706).
-- The check of an `admin/sudo` delegate's grant again when work it left
-  before `admin/sudo` was a call into the user runs, bounded by that grant.

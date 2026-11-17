@@ -4349,25 +4349,6 @@ public class Engine {
 		return context(userDID).calledFrom(ctx);
 	}
 
-	/**
-	 * Work an {@code admin/sudo} delegate left before {@code admin/sudo} was a
-	 * call into the user, whose records name the delegate: the delegate in the
-	 * user's namespace, bounded by the grants it presents, as that work ran
-	 * then, its grant checked again each time it acts. It never takes the
-	 * user's whole authority ({@link #sudoContext}); the venue's migration
-	 * settles such work.
-	 */
-	private RequestContext delegateWorkContext(RequestContext ctx, AString userDID) {
-		AString delegate = ctx.getAuthorityDID();
-		if (delegate == null || isPublicPrincipal(delegate)) throw new AuthException(SUDO_AUTH_REQUIRED);
-		requireNotSubPrincipal(userDID);
-		if (ctx.isNarrowed()) throw new AuthException(SUDO_NARROWED);
-		if (!crossUserAllows(ctx, userDID, Abilities.ADMIN_SUDO)) {
-			throw new AuthException(SUDO_DENIED.formatted(userDID));
-		}
-		return ctx.onBehalfOf(userDID);
-	}
-
 	/** A read of the venue's explicitly addressed content catalog
 	 *  ({@code <venueDID>/a/…}). It is public only for reads and only for the
 	 *  venue's own DID; bare hashes and another user's {@code /a/} are private.
@@ -4906,23 +4887,30 @@ public class Engine {
 	}
 
 	/**
-	 * The context {@code principal} acts under now for {@code owner}, presenting
-	 * {@code proofs}, as a live request of its own would: the owner, one of its
-	 * agents or the public principal as {@link #context(AString, AString)}, and
-	 * any other principal only as work an {@code admin/sudo} delegate left
-	 * whose proofs still authorise it ({@link #delegateWorkContext}). A recorded
-	 * request, such as a scheduled event, is rebuilt this way when it runs.
+	 * The context {@code principal} acts under now in {@code owner}'s account,
+	 * presenting {@code proofs}, as a live request of its own would: the
+	 * owner, one of its agents or the public principal as
+	 * {@link #context(AString, AString)}. A recorded request, such as a
+	 * scheduled event, is rebuilt this way when it runs.
 	 *
-	 * @throws AuthException as {@link #context(AString, AString)}, or when a
-	 *         delegate's proofs no longer authorise it
+	 * @throws AuthException as {@link #context(AString, AString)}, or when
+	 *         {@code principal} does not act in that account
+	 *         ({@link #NOT_IN_ACCOUNT})
 	 */
 	public RequestContext context(AString owner, AString principal, AVector<ACell> proofs) {
 		boolean own = principal == null || principal.equals(owner) || isPublicPrincipal(principal)
 			|| agentIdIn(owner, principal) != null;
-		RequestContext ctx = own ? context(owner, principal) : context(principal);
-		if (proofs != null) ctx = ctx.withProofs(proofs);
-		return own ? ctx : delegateWorkContext(ctx, owner);
+		if (!own) throw new AuthException(NOT_IN_ACCOUNT.formatted(principal, owner));
+		RequestContext ctx = context(owner, principal);
+		return (proofs == null) ? ctx : ctx.withProofs(proofs);
 	}
+
+	/**
+	 * Refusal of work recorded in an account its principal does not act in, as
+	 * work an {@code admin/sudo} delegate left before that acted as the user
+	 * is: the principal and the account.
+	 */
+	public static final String NOT_IN_ACCOUNT = "%s does not act in the account of %s, so work kept there cannot act as it";
 
 	/**
 	 * What a stored context keeps of the authority {@code ctx} acts with,
@@ -5087,9 +5075,7 @@ public class Engine {
 	 * creates or forks takes for its controller: an agent acting in its owner's
 	 * namespace, whatever its authority derives from, so that what it creates
 	 * stays within it; the authority's own principal when it acts in its own
-	 * namespace; and otherwise the namespace it acts for, as in work an
-	 * {@code admin/sudo} delegate left before that was a call into the user
-	 * ({@link #delegateWorkContext}).
+	 * namespace; and otherwise the namespace it acts in.
 	 */
 	public static AString actingPrincipal(RequestContext ctx) {
 		if (actsAsOwnAgent(ctx)) return ctx.getAuthorityDID();

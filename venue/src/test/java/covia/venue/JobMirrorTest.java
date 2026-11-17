@@ -66,9 +66,10 @@ public class JobMirrorTest {
 			assertNotNull(record, "the mirror can be looked up by its owner");
 			assertEquals(Status.STARTED, record.get(Fields.STATUS));
 			assertEquals(call.getID(), record.get(JobManager.MIRROR_OF));
-			for (AString field : new AString[] {Fields.OP, Fields.INPUT, Fields.CALLER, Fields.ADAPTER, Fields.CREATED}) {
+			for (AString field : new AString[] {Fields.OP, Fields.INPUT, Fields.ADAPTER, Fields.CREATED}) {
 				assertEquals(call.getData().get(field), record.get(field), "the mirror copies the call's " + field);
 			}
+			assertEquals(call.getCaller(), record.get(Fields.CALLER), "and its caller, named in full in its status");
 
 			gate.release();
 			awaitFinished(mirror);

@@ -851,7 +851,8 @@ public class JobManagerTest {
 		AMap<AString, ACell> persisted = engine.jobs().getJobData(job.getID(), ctx);
 		assertEquals(Vectors.of(message), persisted.get(Fields.HISTORY));
 		assertEquals(Maps.of("backend", "stopped"), persisted.get(Fields.CANCELLATION));
-		assertEquals(persisted, job.getData(), "the live handle reads the same primary record");
+		assertEquals(persisted, covia.grid.Attribution.inFull(job.getData(), JobManager.accountOf(job)),
+			"the live handle reads the same primary record");
 	}
 
 	@Test

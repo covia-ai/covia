@@ -24,7 +24,6 @@ import covia.exception.ConflictException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
 import covia.exception.NotSupportedException;
-import covia.grid.Attribution;
 import covia.grid.Operation;
 import covia.lattice.Caps;
 import covia.venue.AdapterState;
@@ -348,7 +347,7 @@ public class CallableAdapter extends AAdapter {
 	private ACell callers(ACell input) {
 		AVector<ACell> callers = RT.ensureVector(RT.getIn(input, Fields.CALLERS));
 		if (callers == null || callers.isEmpty()) throw new InvalidInputException(NO_CALLERS);
-		AString caller = Attribution.caller(RT.ensureMap(input));
+		AString caller = RT.ensureString(RT.getIn(input, Fields.CALLER));
 		for (ACell listed : callers) {
 			if (engine.actsFor(caller, RT.ensureString(listed))) return CVMBool.TRUE;
 		}

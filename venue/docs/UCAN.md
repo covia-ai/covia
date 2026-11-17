@@ -921,11 +921,11 @@ anyone else, presents a grant.
 
 The namespace is never parsed from a name: `Authority.of(did)` makes every DID
 its own namespace, agent-shaped or not. Only the venue puts a principal in
-another namespace, from a relationship it holds — running its own agent
-(`Authority.ofAgent`) or rebuilding work an `admin/sudo` delegate left before
-`admin/sudo` acted as the user (`onBehalfOf`). Whatever records a call records the namespace beside the caller, as
-COG-8 names them: `caller` is the principal that made the call, and `owner`
-the namespace, written only when it differs (`covia.grid.Attribution`). Jobs,
+another namespace, from a relationship it holds: running its own agent
+(`Authority.ofAgent`). Whatever records a call names its `caller`, the
+principal that made the call (COG-8), and is kept in that caller's account,
+an agent's being its owner's; a record the venue keeps in an account leaves
+out a caller that is that account (`covia.grid.Attribution`). Jobs,
 scheduled events and HITL requests all do. A gate's input is
 `{operation, input, caller}` on both the held grant and the proof path: it
 rules on who acted, not where.
@@ -940,9 +940,9 @@ public principal; the owner comes
 from the record, never from the principal's name. An agent's context carries
 the agent, not a copy of its caps: every point of action reads `config.caps`
 as they stand then, and none once the agent is gone or terminated. `context(owner, principal,
-proofs)` adds proofs it presented, and takes any other principal as a
-delegate whose earlier work it rebuilds, its `admin/sudo` grant checked again
-and bounding it as it did then; a scheduled event fires through it. Every inbound request starts from `context(caller)`
+proofs)` adds proofs it presented, and refuses a principal that does not act
+in `owner`'s account (`Engine.NOT_IN_ACCOUNT`); a scheduled event fires
+through it. Every inbound request starts from `context(caller)`
 (`AuthMiddleware.callerContext`), and an agent's step runs as that agent
 (`Engine.stepContext`, §5.4).
 

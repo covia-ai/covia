@@ -32,8 +32,8 @@ import covia.exception.AuthException;
 import covia.exception.NotFoundException;
 import covia.exception.ShuttingDownException;
 import covia.grid.Asset;
-import covia.grid.Attribution;
 import covia.grid.Job;
+import covia.grid.Principals;
 import covia.venue.Schedule.Entry;
 import static covia.venue.Schedule.*;
 
@@ -85,8 +85,8 @@ import static covia.venue.Schedule.*;
  * recurrence also records its ID; only then does the adapter start, off the
  * lock.</p>
  *
- * <p><b>No escalation.</b> An event records its caller, its owner when that
- * differs, and the proofs presented at schedule time. A fire runs as that
+ * <p><b>No escalation.</b> An event records its caller, whose account it
+ * belongs to, and the proofs presented at schedule time. A fire runs as that
  * caller would invoke the operation now ({@link Engine#context(AString, AString, AVector)}), presenting
  * those proofs again, via {@link JobManager#invokeInternal} /
  * {@link JobManager#prepareTracked} (§5 of the design), which enforce that scope
@@ -195,18 +195,18 @@ public class Scheduler {
 	 */
 	public Blob schedule(AString opRef, ACell input, RequestContext ctx, long wakeTime,
 			AMap<AString, ACell> repeat, Boolean track, AString description) {
-		AString owner = ctx.getUserDID();
-		if (owner == null) throw new AuthException("Scheduling requires an authenticated caller");
+		AString caller = ctx.getAuthorityDID();
+		if (caller == null || ctx.getUserDID() == null) throw new AuthException("Scheduling requires an authenticated caller");
 		AMap<AString, ACell> rep = (repeat == null) ? null : validateRepeat(repeat);
 		AString desc = validateDescription(description);
-		// Owned by the user, fired as whoever scheduled it — so an agent's queued
-		// work stays visible to (and cancellable by) the account it runs in.
-		AString caller = ctx.getAuthorityDID();
+		// Fired as whoever scheduled it, in that principal's account, so an agent's
+		// queued work stays visible to the account it runs in.
+		AString owner = Principals.userOf(caller);
 		AVector<ACell> proofs = ctx.getProofs();
 		AMap<AString, ACell> authority = Engine.keptAuthority(ctx);
 		return locked(() -> {
 			engine.getVenueState().users().requireNotDeleted(owner);
-			return state().schedule(opRef, input, owner, caller, proofs, authority, wakeTime,
+			return state().schedule(opRef, input, caller, proofs, authority, wakeTime,
 				rep, track, desc, now());
 		});
 	}
@@ -272,7 +272,7 @@ public class Scheduler {
 	 * ({@code crud/read} on each event's resource), time-ordered, including those
 	 * its agents queued. Each is
 	 * {@code {handle, id, op, caller, time, track}} plus, when present,
-	 * {@code owner}, {@code input}, {@code description}, {@code created},
+	 * {@code input}, {@code description}, {@code created},
 	 * {@code repeat}, {@code lastFired} and {@code lastJob}. {@code track} is
 	 * the effective tracking that the next fire will use; {@code input} is
 	 * shown as the owner's job history would show it ({@link #listedInput}).
@@ -301,7 +301,7 @@ public class Scheduler {
 			ACell input = listedInput(rec);
 			if (input != null) item = item.assoc(K_INPUT, input);
 			out = out.conj(copyIfPresent(rec, item,
-				K_CALLER, K_OWNER, K_DESCRIPTION, K_CREATED, K_REPEAT, K_LAST_FIRED, K_LAST_JOB));
+				K_CALLER, K_DESCRIPTION, K_CREATED, K_REPEAT, K_LAST_FIRED, K_LAST_JOB));
 		}
 		return out;
 	}
@@ -318,8 +318,7 @@ public class Scheduler {
 	private ACell listedInput(AMap<AString, ACell> rec) {
 		ACell input = rec.get(K_INPUT);
 		if (input == null) return null;
-		Asset op = engine.jobs().resolveRecordedOp(RT.ensureString(rec.get(K_OP)),
-			Attribution.owner(rec));
+		Asset op = engine.jobs().resolveRecordedOp(RT.ensureString(rec.get(K_OP)), accountOf(rec));
 		return (op == null) ? null : OutputRules.of(op.meta()).redact(input);
 	}
 
@@ -577,11 +576,6 @@ public class Scheduler {
 		}
 	}
 
-	/** The account an event belongs to and runs in. */
-	static AString accountOf(AMap<AString, ACell> rec) {
-		return Attribution.owner(rec);
-	}
-
 	/** The capability resource the event at {@code key} is: {@code <account>/x/schedule/<id>}. */
 	public static AString resource(AString account, Blob key) {
 		return Strings.create(account + "/" + RESOURCE_PATH + Schedule.idOf(key).toHexString());
@@ -623,7 +617,7 @@ public class Scheduler {
 		RuntimeException error = null;
 		boolean tracked = isTracked(rec);
 		try {
-			engine.getVenueState().users().requireNotDeleted(Attribution.owner(rec));
+			engine.getVenueState().users().requireNotDeleted(accountOf(rec));
 			// The fire is a request of its own, carried by the scheduler alone: how
 			// the event was scheduled is not part of its route
 			RequestContext fire = fireContext(rec).via(SCHEDULER, Maps.of(K_HANDLE, key));
@@ -692,8 +686,8 @@ public class Scheduler {
 	 * scheduled before the reverse index recorded them.
 	 */
 	private AString goneAgent(AMap<AString, ACell> rec) {
-		AString caller = Attribution.caller(rec);
-		AString owner = Attribution.owner(rec);
+		AString caller = RT.ensureString(rec.get(K_CALLER));
+		AString owner = accountOf(rec);
 		AString agentId = Engine.agentIdIn(owner, caller);
 		return (agentId != null && engine.getAgent(owner, agentId) == null) ? caller : null;
 	}
@@ -707,7 +701,7 @@ public class Scheduler {
 	 * @throws AuthException when the caller could not invoke it now
 	 */
 	RequestContext fireContext(AMap<AString, ACell> rec) {
-		return engine.context(Attribution.owner(rec), Attribution.caller(rec), asVector(rec.get(K_PROOFS)),
+		return engine.context(accountOf(rec), RT.ensureString(rec.get(K_CALLER)), asVector(rec.get(K_PROOFS)),
 			RT.ensureMap(rec.get(Fields.AUTHORITY)));
 	}
 

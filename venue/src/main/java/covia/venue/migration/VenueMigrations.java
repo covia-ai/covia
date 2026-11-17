@@ -33,6 +33,7 @@ public final class VenueMigrations {
 				new JobEntries(keys),
 				new DelegationEntries()),
 			MigrationStep.of(				// 2 → 3
-				new BlobIds()));
+				new BlobIds(),
+				new OneCaller()));
 	}
 }

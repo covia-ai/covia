@@ -13,7 +13,6 @@ import convex.core.data.Index;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
 import covia.api.Fields;
-import covia.grid.Attribution;
 import covia.grid.Principals;
 import covia.lattice.Covia;
 import covia.lattice.Namespace;
@@ -22,7 +21,7 @@ import covia.venue.Agent;
 /**
  * Part of venue version 1 to 2: a record of a call names the principal that made it
  * as {@code caller} and the namespace it belongs to as {@code owner}, written
- * only when that differs ({@link Attribution}). Each older shape is told apart
+ * only when that differs ({@link #attribute}). Each older shape is told apart
  * from the current one by a field only it has:
  *
  * <ul>
@@ -111,7 +110,7 @@ public final class CallerAndOwner implements MigrationStep {
 		if (job == null || !job.containsKey(ACTOR)) return cell;
 		AString actor = RT.ensureString(job.get(ACTOR));
 		AString owner = RT.ensureString(job.get(Fields.CALLER));
-		return Attribution.attribute(job.dissoc(ACTOR).dissoc(Fields.CALLER), actor, owner);
+		return attribute(job.dissoc(ACTOR).dissoc(Fields.CALLER), actor, owner);
 	}
 
 	/** A scheduled event: no {@code caller} means it names its owner, and its actor when not the owner. */
@@ -121,7 +120,7 @@ public final class CallerAndOwner implements MigrationStep {
 		AString owner = RT.ensureString(event.get(Fields.OWNER));
 		AString actor = RT.ensureString(event.get(ACTOR));
 		AMap<AString, ACell> rest = event.dissoc(ACTOR).dissoc(BY).dissoc(Fields.OWNER);
-		return Attribution.attribute(rest, (actor != null) ? actor : owner, owner);
+		return attribute(rest, (actor != null) ? actor : owner, owner);
 	}
 
 	/** A HITL request: {@code from} present means it names its asker that way. */
@@ -131,7 +130,7 @@ public final class CallerAndOwner implements MigrationStep {
 		AString caller = RT.ensureString(item.get(FROM));
 		AString owner = RT.ensureString(item.get(REQUESTER_USER));
 		if (owner == null && caller != null) owner = legacy.apply(caller);
-		return Attribution.attribute(item.dissoc(FROM).dissoc(REQUESTER_USER), caller, owner);
+		return attribute(item.dissoc(FROM).dissoc(REQUESTER_USER), caller, owner);
 	}
 
 	/** An agent record with each task's output snapshot in the current shape. */
@@ -159,7 +158,7 @@ public final class CallerAndOwner implements MigrationStep {
 		AString caller = RT.ensureString(current.get(Fields.CALLER));
 		if (caller != null && !current.containsKey(Fields.OWNER)) {
 			AString owner = current.containsKey(USER) ? RT.ensureString(current.get(USER)) : legacy.apply(caller);
-			current = Attribution.attribute(current.dissoc(USER).dissoc(Fields.CALLER), caller, owner);
+			current = attribute(current.dissoc(USER).dissoc(Fields.CALLER), caller, owner);
 		}
 		return current.equals(snapshot) ? cell : current;
 	}
@@ -179,6 +178,17 @@ public final class CallerAndOwner implements MigrationStep {
 		ACell agent = RT.getIn(venue, Covia.USER_DATA, owner, Namespace.G, agentId);
 		if (!(agent instanceof AMap<?, ?>)) return caller;
 		return Agent.TERMINATED.equals(RT.getIn(agent, Agent.KEY_STATUS)) ? caller : owner;
+	}
+
+	/**
+	 * {@code record} naming {@code caller}, and {@code owner} when it differs:
+	 * the shape of venue version 2, which the next step reads to tell work a
+	 * delegate left from the rest. Version 3 names only a caller.
+	 */
+	static AMap<AString, ACell> attribute(AMap<AString, ACell> record, AString caller, AString owner) {
+		if (caller != null) record = record.assoc(Fields.CALLER, caller);
+		if (owner != null && !owner.equals(caller)) record = record.assoc(Fields.OWNER, owner);
+		return record;
 	}
 
 	@SuppressWarnings("unchecked")

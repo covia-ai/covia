@@ -117,9 +117,9 @@ public class HITLAdapterTest {
 		assertEquals(Status.INPUT_REQUIRED, job.getStatus(), job.getErrorMessage());
 		AMap<AString, ACell> record = engine.getVenueState().users().user(owner).inbox()
 			.get(job.getID());
-		assertEquals(owner, record.get(Hitl.CALLER), "the user asked");
+		assertNull(record.get(Hitl.CALLER), "the user asked itself, so its own inbox's request names no other caller");
 		assertEquals(owner, job.getCaller());
-		assertEquals(owner, job.getOwner(), "and the request's job is the user's");
+		assertEquals(owner, covia.venue.JobManager.accountOf(job), "and the request's job is the user's");
 		job.cancel();
 	}
 
@@ -143,7 +143,7 @@ public class HITLAdapterTest {
 		Job carried = request(viaToken, Hitl.request("Through the token").ask(Hitl.approval("ok", "OK?").required()).build());
 		assertEquals(Status.INPUT_REQUIRED, carried.getStatus(), carried.getErrorMessage());
 		AMap<AString, ACell> record = readRecord(ALICE, carried.getID().toHexString());
-		assertEquals(ALICE_DID, record.get(Hitl.CALLER), "a request through a token is its issuer's");
+		assertEquals(ALICE_DID, covia.grid.Attribution.caller(record, ALICE_DID), "a request through a token is its issuer's");
 		assertEquals(viaToken.getRoute(), record.get(Fields.ROUTE), "and its route says the token carried it");
 		assertFalse(record.toString().contains(bearer), "the bearer is never recorded");
 		direct.cancel();
@@ -164,9 +164,10 @@ public class HITLAdapterTest {
 		AMap<AString, ACell> record = readRecord(ALICE, id);
 		assertNotNull(record, "the record must land in the target's h/ inbox");
 		assertEquals(Hitl.OPEN, record.get(Hitl.STATUS));
-		assertEquals(ALICE_DID, record.get(Hitl.CALLER),
+		assertNull(record.get(Hitl.CALLER), "a user asking itself: its inbox's record leaves the caller out");
+		assertEquals(ALICE_DID, covia.grid.Attribution.caller(record, ALICE_DID),
 			"caller is the VERIFIED caller identity, venue-set");
-		assertNull(record.get(Hitl.OWNER), "a user asking in its own namespace names no other owner");
+		assertNull(record.get(Hitl.OWNER), "and names no owner");
 		assertEquals(ALICE_DID, RT.getIn(engine.jobs().adapterData(job), HITLAdapter.TARGET),
 			"the job keeps whom its request went to, outside its record");
 

@@ -402,19 +402,6 @@ public class RequestContext {
 	}
 
 	/**
-	 * This principal in {@code userDID}'s namespace, bounded by the proofs it
-	 * presents and nothing else: work an {@code admin/sudo} delegate left
-	 * before that was a call into the user, as it ran then
-	 * ({@link Engine#context(AString, AString, AVector)}). Its execution scopes
-	 * keep their owner; local ID getters return null outside it.
-	 */
-	RequestContext onBehalfOf(AString userDID) {
-		if (userDID == null || userDID.equals(getUserDID())) return this;
-		Authority delegated = Authority.of(authority.getDID(), userDID, Vectors.empty()).withProofs(authority.getProofs());
-		return new RequestContext(delegated, executionScope, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, cycle, sessionDelivery, carried, authenticated, caller, null);
-	}
-
-	/**
 	 * This execution (its job, session, task, cancellation and invocation)
 	 * carried on by {@code principal}'s authority instead of the caller's, its
 	 * scope read as {@code principal}'s is. The caller's transport tokens,

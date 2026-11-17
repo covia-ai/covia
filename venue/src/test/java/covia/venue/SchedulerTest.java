@@ -157,14 +157,8 @@ public class SchedulerTest {
 			Fields.CONFIG, Maps.of(Config.CAPS, narrower)), ctx).awaitResult(5000);
 		assertEquals(narrower, sched.fireContext(state.find(agents).rec()).getCaps());
 
-		// A delegate fires only while a admin/sudo delegation still authorises it.
-		RequestContext delegate = RequestContext.of(s(did + "-delegate")).onBehalfOf(did);
-		Blob delegated = sched.schedule(s("v/test/ops/echo"), s("x"), delegate, future());
-		assertThrows(AuthException.class, () -> sched.fireContext(state.find(delegated).rec()));
-
 		assertTrue(sched.cancel(own, ctx));
 		assertTrue(sched.cancel(agents, ctx));
-		assertTrue(sched.cancel(delegated, ctx));
 	}
 
 	@Test
@@ -180,14 +174,9 @@ public class SchedulerTest {
 		assertEquals(caps, fired.getCaps());
 	}
 
-	/**
-	 * An event a delegate left before admin/sudo was a call into the user,
-	 * which names the delegate, fires in the owner's namespace while its
-	 * admin/sudo grant authorises it; one scheduled under admin/sudo now is the
-	 * user's own and fires as the user.
-	 */
+	/** An event scheduled under admin/sudo is the user's own, and fires as the user. */
 	@Test
-	public void testADelegatedEventFiresUnderItsGrant() throws Exception {
+	public void testAnEventScheduledUnderSudoIsTheUsers() throws Exception {
 		AKeyPair ownerKey = AKeyPair.generate();
 		AKeyPair delegateKey = AKeyPair.generate();
 		AString owner = UCAN.toDIDKey(ownerKey.getAccountKey());
@@ -196,18 +185,8 @@ public class SchedulerTest {
 		engine.getVenueState().users().create(delegate);
 		AString grant = UCAN.create(ownerKey, delegateKey.getAccountKey(),
 			(System.currentTimeMillis() / 1000) + 3600,
-			Vectors.of(Capability.create(owner, Abilities.ADMIN_SUDO),
-				Capability.create(s(owner + "/v/test/ops/capturectx"), s("invoke"))),
-			Vectors.empty()).toJWT(ownerKey);
+			Vectors.of(Capability.create(owner, Abilities.ADMIN_SUDO)), Vectors.empty()).toJWT(ownerKey);
 		RequestContext delegateCtx = engine.withTransportGrants(RequestContext.of(delegate), Vectors.of(grant));
-		// The delegate in the owner's namespace, bounded by its grants, as such an event was made then
-		Blob handle = sched.schedule(s("v/test/ops/capturectx"), Maps.empty(), delegateCtx.onBehalfOf(owner), future());
-		TestAdapter.CAPTURED_CTX.remove(owner);
-		sched.trigger(handle, RequestContext.of(owner)).get(5, TimeUnit.SECONDS);
-		RequestContext fired = TestAdapter.CAPTURED_CTX.get(owner);
-		assertNotNull(fired, "the fire ran in the owner's namespace");
-		assertEquals(delegate, fired.getAuthorityDID());
-
 		Blob asUser = sched.schedule(s("v/test/ops/capturectx"), Maps.empty(), engine.sudoContext(delegateCtx, owner), future());
 		TestAdapter.CAPTURED_CTX.remove(owner);
 		sched.trigger(asUser, RequestContext.of(owner)).get(5, TimeUnit.SECONDS);
@@ -375,7 +354,7 @@ public class SchedulerTest {
 		long after = engine.currentTimestamp().longValue();
 		AMap<AString, ACell> rec = only(sched.list(ctx));
 		assertEquals(did, rec.get(Schedule.K_CALLER), "a user's own event names the user");
-		assertFalse(rec.containsKey(Schedule.K_OWNER), "and no other owner");
+		assertFalse(rec.containsKey(Fields.OWNER), "and no owner");
 		long created = ((CVMLong) rec.get(Schedule.K_CREATED)).longValue();
 		assertTrue(created >= before && created <= after, "created is the scheduling time");
 		assertTrue(sched.cancel(mine, ctx));
@@ -385,8 +364,8 @@ public class SchedulerTest {
 		Blob queued = sched.schedule(s("v/test/ops/echo"), s("theirs"), agent, future());
 		rec = only(sched.list(ctx));
 		assertEquals(agent.getAuthorityDID(), rec.get(Schedule.K_CALLER), "an agent's event names the agent");
-		assertEquals(did, rec.get(Schedule.K_OWNER), "and the owner it belongs to");
-		assertEquals(did, stored(queued).get(Schedule.K_OWNER), "the owner still owns it");
+		assertFalse(stored(queued).containsKey(Fields.OWNER), "naming no owner");
+		assertEquals(did, Schedule.accountOf(stored(queued)), "it belongs to the agent's owner, read from its DID");
 		assertTrue(sched.cancel(queued, ctx));
 	}
 

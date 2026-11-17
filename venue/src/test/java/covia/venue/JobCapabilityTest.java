@@ -84,8 +84,8 @@ class JobCapabilityTest {
 		RequestContext creator = RequestContext.ofAgent(alice, Strings.create("worker")).withCaps(Vectors.empty());
 		Job job = engine.jobs().invokeOperation("v/test/ops/never", Maps.empty(), owner);
 		try {
-			AMap<AString, ACell> attributed = job.getData().assoc(Fields.CALLER, creator.getAuthorityDID()).assoc(Fields.OWNER, alice);
-			assertFalse(engine.getAccessControl().canAccessJob(creator, attributed));
+			AMap<AString, ACell> attributed = job.getData().assoc(Fields.CALLER, creator.getAuthorityDID());
+			assertFalse(engine.getAccessControl().canAccessJob(creator, alice, attributed));
 			for (AString ability : new AString[]{Capability.CRUD_READ, Capability.CRUD_WRITE, Capability.CRUD_DELETE}) {
 				RequestContext raw = grant(job, ability);
 				assertThrows(AuthException.class, () -> engine.jobs().getJobData(job.getID(), raw));

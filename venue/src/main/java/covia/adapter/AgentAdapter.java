@@ -4313,7 +4313,7 @@ public class AgentAdapter extends AAdapter {
 			Blob taskId = Ids.stored(RT.getIn(entry, Fields.TASK_ID));
 			agent.removePending(jobId);
 			// The agent's own call: its outcome came by no route
-			boolean delivered = deliverToWaiter(draft, ownerDID, agentId, sid, taskId, callMadeBy(record), null,
+			boolean delivered = deliverToWaiter(draft, ownerDID, agentId, sid, taskId, callMadeBy(record, ownerDID), null,
 				Strings.create(jobId.toHexString()), callOutcome(jobId, record, entry),
 				Agent.SOURCE_TOOL_OUTCOME);
 			return new CallDelivery(delivered, taskId);
@@ -4339,9 +4339,9 @@ public class AgentAdapter extends AAdapter {
 		}
 	}
 
-	/** The principal that made a tracked call: its job's {@code caller}. */
-	static AString callMadeBy(AMap<AString, ACell> record) {
-		return Attribution.caller(record);
+	/** The principal that made a tracked call: its job's {@code caller}, read against {@code account}, which keeps the job. */
+	static AString callMadeBy(AMap<AString, ACell> record, AString account) {
+		return Attribution.caller(record, account);
 	}
 
 	/**

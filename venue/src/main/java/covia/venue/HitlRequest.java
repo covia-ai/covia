@@ -111,7 +111,7 @@ public final class HitlRequest extends ALatticeComponent<AMap<AString, ACell>>
 	 *
 	 * @param id The id of the job that carries it
 	 * @param caller Who asked: the verified acting principal
-	 * @param owner Whose request it is, recorded only when not the caller
+	 * @param target Whose inbox keeps the request: the caller is left out when it is the target
 	 * @param agentId The asking agent, or null
 	 * @param sessionId The asking agent's session, or null
 	 * @param route What carried the request, or null when nothing did: venue-internal, as an agent turn's
@@ -122,7 +122,7 @@ public final class HitlRequest extends ALatticeComponent<AMap<AString, ACell>>
 	 * @param created When it was made, in ms
 	 * @param expires When it expires, in ms, or null for never
 	 */
-	public static AMap<AString, ACell> record(Blob id, AString caller, AString owner, AString agentId,
+	public static AMap<AString, ACell> record(Blob id, AString caller, AString target, AString agentId,
 			Blob sessionId, AVector<ACell> route, AString title, AString description, AVector<ACell> asks, long created,
 			Long expires) {
 		AMap<AString, ACell> record = Attribution.attribute(Maps.of(
@@ -130,7 +130,7 @@ public final class HitlRequest extends ALatticeComponent<AMap<AString, ACell>>
 			Hitl.TITLE, title,
 			Hitl.ASKS, asks,
 			Hitl.STATUS, Hitl.OPEN,
-			Hitl.CREATED, CVMLong.create(created)), caller, owner);
+			Hitl.CREATED, CVMLong.create(created)), caller, target);
 		if (description != null) record = record.assoc(Hitl.DESCRIPTION, description);
 		if (route != null) record = record.assoc(Fields.ROUTE, route);
 		if (agentId != null) {

@@ -533,22 +533,12 @@ public class Job {
 	}
 
 	/**
-	 * The principal that made this job's call: a user or one of a user's
-	 * agents, or a {@code admin/sudo} delegate on a job made before that acted
-	 * as the user.
-	 * @return the caller's DID, or null when the job records none
+	 * The principal that made this job's call, as a client is handed the job's
+	 * record ({@link Attribution#inFull}): a user or one of a user's agents.
+	 * @return the caller's DID, or null when the record names none
 	 */
 	public AString getCaller() {
-		return Attribution.caller(getData());
-	}
-
-	/**
-	 * The namespace this job belongs to, which its ownership, access and quota
-	 * key on: its recorded owner, else its caller's own.
-	 * @return the owner's DID, or null when the job records no caller
-	 */
-	public AString getOwner() {
-		return Attribution.owner(getData());
+		return RT.ensureString(getData().get(Fields.CALLER));
 	}
 
 	/**

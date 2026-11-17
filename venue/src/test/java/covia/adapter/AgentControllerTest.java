@@ -199,7 +199,7 @@ public class AgentControllerTest {
 			try {
 				AString controller = agent(id).getController();
 				assertEquals(controller, job.getCaller(), id + " records its controller");
-				assertEquals(controller.equals(bob) ? bob : alice, job.getOwner(), id + " in its controller's account");
+				assertEquals(controller.equals(bob) ? bob : alice, covia.venue.JobManager.accountOf(job), id + " in its controller's account");
 				engine.jobs().keepCallerContext(job, harness);
 				RequestContext rebuilt = engine.jobs().callerContext(job);
 				assertEquals(controller, rebuilt.getAuthorityDID(), id);

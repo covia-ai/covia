@@ -133,7 +133,7 @@ public class CallableAdapterTest {
 		complete(called);
 		assertEquals(Vectors.of("Hello from Bob"), held(alice, "w/guestbook"), "the path names Alice's guestbook");
 		assertNull(held(bob, "w/guestbook"), "not the caller's");
-		assertEquals(bob, called.getData().get(Fields.CALLER), "the call is the invoker's");
+		assertEquals(bob, called.getCaller(), "the call is the invoker's");
 
 		// The caps bound it, wherever the path points
 		failure(call(RequestContext.of(bob), guestbook, append("w/private", "x")));
@@ -417,7 +417,7 @@ public class CallableAdapterTest {
 		RequestContext call = engine.callContext(RequestContext.of(bob), reference(alice, "hold"));
 		Job started = engine.jobs().invokeOperation("v/test/ops/never", Maps.empty(), call);
 		try {
-			assertEquals(alice, started.getData().get(Fields.CALLER), "the issuer's, not the invoker's");
+			assertEquals(alice, started.getCaller(), "the issuer's, not the invoker's");
 			assertNull(started.getData().get(Fields.OWNER), "kept in the issuer's own account");
 			assertNotNull(engine.jobs().getJobData(started.getID(), owner), "the issuer reaches it");
 			assertThrows(covia.exception.AuthException.class,

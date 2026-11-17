@@ -325,7 +325,8 @@ public class JobRoutesTest {
 			HttpRequest.newBuilder().uri(URI.create(base + "/api/v1/jobs/" + id)).GET().build(),
 			HttpResponse.BodyHandlers.ofString());
 		assertEquals(200, status.statusCode());
-		assertEquals(JSON.toString(current), status.body());
+		assertEquals(JSON.toString(covia.grid.Attribution.inFull(current, user.getDID())), status.body(),
+			"a job's status names its caller in full");
 
 		HttpResponse<InputStream> sse = http.send(
 			HttpRequest.newBuilder()

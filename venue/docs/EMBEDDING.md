@@ -323,6 +323,7 @@ identity token through an operation", and HELD_KEYS.md.
 | `RequestContext.getCallerDID()` | `getAuthorityDID()`, the one principal a request acts as |
 | `RequestContext.hasSeparateAuthority()` and `authorityContext()` | Removed: a request names one principal, and `engine.authorityFrame(ctx)` gives the frame an agent whose controller is in another account acts with |
 | `RequestContext.onBehalfOf` and `Authority.onBehalfOf` | Removed: acting for another user is `admin/sudo`, a call into that user (`engine.sudoContext`) |
+| `Job.getOwner()`, `Attribution.owner(record)` and `Attribution.caller(record)`, and a record's `owner` | A record names one `caller` and is kept in its caller's account, leaving out a caller that is that account: `Attribution.caller(record, account)` reads it, `Attribution.inFull(record, account)` names it in full, and `JobManager.accountOf(job)` gives a job's account. `AccessControl.canAccessJob`, `Schedule.schedule` and `HitlRequest.record` take the account in place of reading or writing an owner |
 | `AAdapter.latticeView(ctx)` and `latticeWriteDenial(ctx, path)` | `latticeView(owner, ctx)` and `latticeWriteDenial(owner, ctx, path)`: the view is `owner`'s, and `ctx` is the request's own ([ADAPTERS.md](ADAPTERS.md)) |
 
 ## Upgrading from 0.10.0

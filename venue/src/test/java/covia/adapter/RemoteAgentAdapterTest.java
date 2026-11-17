@@ -340,7 +340,7 @@ class RemoteAgentAdapterTest {
 			backend = (backendId == null) ? null : first.jobs().getJob(Job.parseID(backendId));
 			assertNotNull(backend, "the backend job serves the call");
 			assertEquals(bob, backend.getCaller(), "asked in Bob's frame");
-			assertEquals(bob, backend.getOwner(), "and kept in his account");
+			assertEquals(bob, covia.venue.JobManager.accountOf(backend), "and kept in his account");
 		} finally { first.close(); }
 
 		Engine second = start(venue, false);

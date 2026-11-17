@@ -117,7 +117,8 @@ public class AuthenticatedPublicAccessTest {
 			ALICE).awaitResult(5000);
 		assertEquals(CVMBool.TRUE, RT.getIn(read, "exists"),
 			"terminal public-owned jobs are readable via the DID-URL path");
-		assertEquals(PUBLIC_DID, RT.getIn(read, "value", Fields.CALLER.toString()));
+		assertNull(RT.getIn(read, "value", Fields.CALLER.toString()),
+			"a lattice read carries the record as stored, leaving out a caller that is its account");
 	}
 
 	// ========== Public-store secrets: use needs a grant, never a fallback ==========

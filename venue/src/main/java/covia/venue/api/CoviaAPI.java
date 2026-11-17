@@ -49,6 +49,7 @@ import covia.exception.ShuttingDownException;
 import covia.exception.UnavailableException;
 import covia.grid.AContent;
 import covia.grid.Asset;
+import covia.grid.Attribution;
 import covia.grid.Job;
 import covia.grid.Venue;
 import covia.venue.api.model.ErrorResponse;
@@ -1102,7 +1103,7 @@ public class CoviaAPI extends ACoviaAPI {
 			Job job=engine().jobs().submitOperation(op,input,rctx);
 			boolean completedWithinWait = awaitCompletion(job, waitMs);
 
-			this.buildResult(ctx, completedWithinWait ? 200 : 201, job.getData());
+			this.buildResult(ctx, completedWithinWait ? 200 : 201, Attribution.inFull(job.getData(), JobManager.accountOf(job)));
 			ctx.header("Location",ROUTE+"jobs/"+job.getID().toHexString());
 		} catch (AuthException e) {
 			this.buildError(ctx, 403, e.getMessage());

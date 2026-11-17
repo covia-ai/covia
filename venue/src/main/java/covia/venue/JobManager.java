@@ -46,6 +46,7 @@ import covia.grid.Asset;
 import covia.grid.Attribution;
 import covia.grid.Job;
 import covia.grid.Operation;
+import covia.grid.Principals;
 import covia.grid.Status;
 
 /**
@@ -1074,12 +1075,11 @@ public class JobManager {
 	 * The admission of a Job for an operation: its record, still without its
 	 * id, and how its live handle is made.
 	 *
-	 * @param ownerDID the namespace the job is persisted into, and what
-	 *        ownership, access control and quota key on
-	 * @param callerDID the principal that made the call: the owner itself, one
-	 *        of its agents or a delegate. The record names both
-	 *        ({@link Attribution}), so it answers "who did this" as well as
-	 *        "whose account".
+	 * @param ownerDID the account the job is kept in, and what access control
+	 *        and quota key on
+	 * @param ctx the request, whose authority made the call: the record names
+	 *        it as its caller, left out when it is the account itself
+	 *        ({@link Attribution})
 	 * @param parentID nearest recorded enclosing job, or null for a top-level
 	 *        job. Stamped on transient wrappers too (in memory only) so a
 	 *        recorded grandchild dispatched through a transient layer still
@@ -1338,7 +1338,7 @@ public class JobManager {
 		AString caller = job.getCaller();
 		if (caller == null) throw new AuthException(NO_CALLER + job.getID());
 		AMap<AString, ACell> kept = RT.ensureMap(RT.getIn(venue().jobIndex().entry(job.getID()), JobIndex.CONTEXT));
-		RequestContext ctx = engine.context(job.getOwner(), caller, RT.ensureVector(RT.getIn(kept, Fields.PROOFS)),
+		RequestContext ctx = engine.context(accountOf(job), caller, RT.ensureVector(RT.getIn(kept, Fields.PROOFS)),
 			RT.ensureMap(RT.getIn(kept, Fields.AUTHORITY)));
 		if (kept == null) return ctx;
 		AString agentId = RT.ensureString(kept.get(Fields.AGENT_ID));
@@ -1438,7 +1438,7 @@ public class JobManager {
 			ACell value = data.get(field);
 			if (value != null) status = status.assoc(field, value);
 		}
-		AString owner = Attribution.owner(data);
+		AString owner = unrecorded.accountDID();
 		Admission admission = new Admission(ts, status, unrecorded.rules(), owner, false, false, false,
 			(record, mirrored) -> new MirrorJob(record, mirrored, unrecorded.rules(), owner, this, call));
 		admission.commit();
@@ -1508,7 +1508,8 @@ public class JobManager {
 
 	/** An explicit owner locates retained Jobs; it never changes the caller's authority. */
 	public AMap<AString, ACell> getJobData(Blob id, RequestContext ctx, AString owner) {
-		return authorizedRecord(id, ctx, owner, Abilities.JOB_READ);
+		Authorized read = authorized(id, ctx, owner, Abilities.JOB_READ);
+		return (read == null) ? null : Attribution.inFull(read.data(), read.account());
 	}
 
 	private AMap<AString, ACell> authorizedRecord(Blob id, RequestContext ctx, AString owner, AString ability) {
@@ -1516,8 +1517,11 @@ public class JobManager {
 		return (read == null) ? null : read.data();
 	}
 
-	/** A job's record as a caller may see it, and the live handle it was read from, or null for a stored record. */
-	private record Authorized(Job live, AMap<AString, ACell> data) {}
+	/**
+	 * A job's record as it is kept, the account it is kept in, and the live
+	 * handle it was read from, or null for a stored record.
+	 */
+	private record Authorized(Job live, AString account, AMap<AString, ACell> data) {}
 
 	/**
 	 * Reads job {@code id} for a caller with {@code ability}, or null when there
@@ -1529,18 +1533,20 @@ public class JobManager {
 	private Authorized authorized(Blob id, RequestContext ctx, AString owner, AString ability) {
 		Job live = liveJob(id);
 		AMap<AString, ACell> data;
+		AString account;
 		if (live != null) {
 			if (!live.isRecorded()) return null;
+			account = ((VenueJob) live).accountDID();
 			data = ((VenueJob) live).primaryRecord();
-			if (data == null || (owner != null && !owner.equals(Attribution.owner(data)))) return null;
+			if (data == null || (owner != null && !owner.equals(account))) return null;
 		} else {
-			AString did = owner == null ? ctx.getUserDID() : owner;
-			User user = did == null ? null : engine.getVenueState().users().user(did);
+			account = owner == null ? ctx.getUserDID() : owner;
+			User user = account == null ? null : engine.getVenueState().users().user(account);
 			data = user == null ? null : user.jobs().getRecord(id);
 		}
 		if (data == null) return null;
-		requireJobAbility(ctx, id, data, ability);
-		return new Authorized(live, data);
+		requireJobAbility(ctx, id, account, data, ability);
+		return new Authorized(live, account, data);
 	}
 
 	/** Authorize a task-specific control without exposing its record. */
@@ -1559,8 +1565,8 @@ public class JobManager {
 		});
 	}
 
-	private void requireJobAbility(RequestContext ctx, Blob id, AMap<AString, ACell> data, AString ability) {
-		if (!engine.getAccessControl().canAccessJob(ctx, data, ability))
+	private void requireJobAbility(RequestContext ctx, Blob id, AString account, AMap<AString, ACell> data, AString ability) {
+		if (!engine.getAccessControl().canAccessJob(ctx, account, data, ability))
 			throw new AuthException(JOB_ACCESS_DENIED + id + " (" + ability + ")");
 	}
 
@@ -1620,7 +1626,7 @@ public class JobManager {
 	public Job getJob(Blob jobID, RequestContext ctx, AString owner) {
 		Authorized read = authorized(jobID, ctx, owner, Abilities.JOB_READ);
 		if (read == null) return null;
-		return (read.live() != null) ? read.live() : new Job(read.data());
+		return (read.live() != null) ? read.live() : new Job(Attribution.inFull(read.data(), read.account()));
 	}
 
 	/**
@@ -1752,9 +1758,9 @@ public class JobManager {
 	}
 
 	public boolean deleteJob(Blob id, RequestContext ctx, AString owner) {
-		AMap<AString, ACell> data = authorizedRecord(id, ctx, owner, Abilities.JOB_MANAGE);
-		if (data == null) return false;
-		AString ownerDID = Attribution.owner(data);
+		Authorized read = authorized(id, ctx, owner, Abilities.JOB_MANAGE);
+		if (read == null) return false;
+		AString ownerDID = read.account();
 		boolean removed = ownerDID != null && venue().transact(draft -> {
 			User user = draft.users().user(ownerDID);
 			if (user == null || user.jobs().remove(id) == null) return false;
@@ -1841,9 +1847,9 @@ public class JobManager {
 	 * @throws AuthException if the caller lacks the required Job ability
 	 */
 	public void appendToHistory(Blob jobID, AMap<AString, ACell> record, RequestContext ctx) {
-		AMap<AString, ACell> current = authorizedRecord(jobID, ctx, null, Abilities.JOB_MESSAGE);
+		Authorized current = authorized(jobID, ctx, null, Abilities.JOB_MESSAGE);
 		if (current == null) throw jobNotFound(jobID);
-		appendToHistory(jobID, Attribution.owner(current), record);
+		appendToHistory(jobID, current.account(), record);
 	}
 
 	/**
@@ -1893,7 +1899,7 @@ public class JobManager {
 			AMap<AString, ACell> record = (state == null) ? null : state.getRecord();
 			if (record == null || Job.isFinished(record)) continue;
 			OutputRules rules = OutputRules.fromCell(RT.getIn(entry, JobIndex.RULES));
-			VenueJob job = new VenueJob(state, record, rules, ownerDID, this, owningAdapter(record));
+			VenueJob job = new VenueJob(state, record, rules, ownerDID, this, owningAdapter(record, ownerDID));
 			activeJobs.put(jobID, job);
 			restored.add(job);
 		}
@@ -1916,7 +1922,7 @@ public class JobManager {
 			if (job.isFinished()) {
 				stabilised++;
 			} else {
-				reserveRecoveredPermit(jobID, job.getOwner());
+				reserveRecoveredPermit(jobID, job.accountDID());
 				kept++;
 			}
 		}
@@ -1940,8 +1946,8 @@ public class JobManager {
 	 * ({@link #adapterName}), started or not: the installed one registered
 	 * under its name. Null for a mirror, or when that adapter is missing.
 	 */
-	private AAdapter owningAdapter(AMap<AString, ACell> data) {
-		String name = adapterName(data);
+	private AAdapter owningAdapter(AMap<AString, ACell> data, AString account) {
+		String name = adapterName(data, account);
 		return (name == null) ? null : engine.getInstalledAdapter(name);
 	}
 
@@ -1953,10 +1959,31 @@ public class JobManager {
 	/** The venue's state: job records with every other area it holds, one transaction for both. */
 	VenueState venue() { return engine.getVenueState(); }
 
+	/**
+	 * The account {@code job} is kept in: a venue handle's own, else the
+	 * account of the caller its record, handed out in full, names.
+	 */
+	public static AString accountOf(Job job) {
+		if (job instanceof VenueJob venueJob) return venueJob.accountDID();
+		return accountOf(job.getData());
+	}
+
+	/**
+	 * The account a job record handed out in full ({@link Attribution#inFull})
+	 * is kept in: its caller's, which for an agent is its owner's. A finished
+	 * record a delegate left before {@code admin/sudo} acted as the user names
+	 * the delegate, and is kept in the user's account, so this reads only
+	 * records of work their caller can still do.
+	 */
+	public static AString accountOf(AMap<AString, ACell> inFull) {
+		AString caller = (inFull == null) ? null : RT.ensureString(inFull.get(Fields.CALLER));
+		return (caller == null) ? null : Principals.userOf(caller);
+	}
+
 	/** Cancel all accepted work owned by a now-deleted account, including transient jobs. */
 	void cancelUserJobs(AString did, Job deletion) {
 		for (Job job : activeJobs.values()) {
-			if (job != deletion && did.equals(job.getOwner())) job.cancel();
+			if (job != deletion && did.equals(accountOf(job))) job.cancel();
 		}
 	}
 
@@ -1979,13 +2006,14 @@ public class JobManager {
 	 * in the job record.
 	 */
 	private AMap<AString, ACell> resolveJobMeta(Job job) {
-		return resolveJobMeta(job.getData());
+		return resolveJobMeta(job.getData(), accountOf(job));
 	}
 
-	private AMap<AString, ACell> resolveJobMeta(AMap<AString, ACell> data) {
+	/** The metadata of the operation {@code data}, a job record kept in {@code account}, names. */
+	private AMap<AString, ACell> resolveJobMeta(AMap<AString, ACell> data, AString account) {
 		AString opStr = RT.ensureString(data.get(Fields.OP));
 		if (opStr == null) return null;
-		Asset asset = resolveRecordedOp(opStr, Attribution.owner(data));
+		Asset asset = resolveRecordedOp(opStr, account);
 		return (asset != null) ? asset.meta() : null;
 	}
 
@@ -2034,14 +2062,14 @@ public class JobManager {
 	 * operation names; null for a mirror, which no adapter runs.
 	 */
 	private String adapterName(Job job) {
-		return adapterName(job.getData());
+		return adapterName(job.getData(), accountOf(job));
 	}
 
-	private String adapterName(AMap<AString, ACell> data) {
+	private String adapterName(AMap<AString, ACell> data, AString account) {
 		if (data.get(MIRROR_OF) != null) return null;
 		AString recorded = RT.ensureString(data.get(Fields.ADAPTER));
 		if (recorded != null) return recorded.toString();
-		AMap<AString, ACell> meta = resolveJobMeta(data);
+		AMap<AString, ACell> meta = resolveJobMeta(data, account);
 		return (meta != null) ? AAdapter.getAdapterName(meta) : null;
 	}
 

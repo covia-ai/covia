@@ -7,7 +7,6 @@ import convex.core.data.Blob;
 import convex.core.data.Strings;
 import covia.api.Fields;
 import covia.api.Abilities;
-import covia.grid.Attribution;
 
 /** Shared resource checks for Job APIs and scheduled events. */
 public class AccessControl {
@@ -18,19 +17,22 @@ public class AccessControl {
 		this.engine = engine;
 	}
 
-	/** Whether the caller may read this Job through the Job API. */
-	public boolean canAccessJob(RequestContext ctx, AMap<AString, ACell> jobData) {
-		return canAccessJob(ctx, jobData, Abilities.JOB_READ);
+	/** Whether the caller may read the Job whose record {@code jobData} is kept in {@code account}. */
+	public boolean canAccessJob(RequestContext ctx, AString account, AMap<AString, ACell> jobData) {
+		return canAccessJob(ctx, account, jobData, Abilities.JOB_READ);
 	}
 
 	/**
-	 * Job abilities are independent of raw lattice CRUD. Ownership supplies
-	 * ordinary standing, but never bypasses a scope or access token. Attribution
-	 * as the creator is not a grant. Other principals need a valid delegation.
+	 * Job abilities are independent of raw lattice CRUD. The account a job is
+	 * kept in supplies ordinary standing, but never bypasses a scope or access
+	 * token. Being the record's caller is not a grant. Other principals need a
+	 * valid delegation.
+	 *
+	 * @param account the account the job's record is kept in
 	 */
-	public boolean canAccessJob(RequestContext ctx, AMap<AString, ACell> jobData, AString ability) {
+	public boolean canAccessJob(RequestContext ctx, AString account, AMap<AString, ACell> jobData, AString ability) {
 		if (ctx == null || jobData == null) return false;
-		AString owner = Attribution.owner(jobData);
+		AString owner = account;
 		if (owner == null || ctx.getUserDID() == null) return false;
 		// An incomplete record has no delegable resource; only its unscoped owner.
 		if (!(jobData.get(Fields.ID) instanceof Blob id))
