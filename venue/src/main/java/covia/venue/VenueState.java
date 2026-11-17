@@ -494,9 +494,12 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 		return new JobIndex(level(Covia.JOBS));
 	}
 
-	/** Stored schedule; timer and execution lifecycle belong to Scheduler. */
+	/**
+	 * Stored schedule, read as empty while absent so a transaction on it starts
+	 * from empty; timer and execution lifecycle belong to Scheduler.
+	 */
 	public Schedule schedule() {
-		return new Schedule(context, level(Covia.SCHEDULE));
+		return new Schedule(context, this.<ACell>level(Covia.SCHEDULE).withDefault(Maps.empty()));
 	}
 
 	/** The venue's content, by SHA-256 ({@code :storage}). */

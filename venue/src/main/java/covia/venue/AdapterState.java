@@ -74,8 +74,10 @@ public final class AdapterState extends ALatticeComponent<ACell>
 			};
 			base.getOrDefault(null); // reject a tombstoned owner before handing out the view
 		}
-		return new AdapterState(venue.getContext(),
-			Covia.entry(VenueState.level(base, Covia.ADAPTERS), Strings.create(name)), name, owner, generation);
+		// Absent state reads as an empty map, so a transaction on new state starts from one
+		AForkableCursor<ACell> state = Covia.<ACell>entry(VenueState.level(base, Covia.ADAPTERS), Strings.create(name))
+			.withDefault(Maps.empty());
+		return new AdapterState(venue.getContext(), state, name, owner, generation);
 	}
 
 	public VenueContext getContext() { return context; }
