@@ -135,10 +135,10 @@ counts against that account's quota. This is COG-8's `caller`, and COG-8's
 `owner` goes.
 
 A job is reached by capability on its record ([JOBS.md](JOBS.md#job-capabilities)).
-A scheduled event is reached by its account's whole authority, which reaches
-all of the account's events, and by the principal that scheduled it, which
-reaches that event; no grant extends that reach
-([GRID_SCHEDULER.md](GRID_SCHEDULER.md)).
+A scheduled event is reached by capability on `<account>/x/schedule/<id>`:
+`crud/read` inspects and lists it, and `schedule/manage` cancels or triggers
+it ([GRID_SCHEDULER.md](GRID_SCHEDULER.md)). Having scheduled an event grants
+nothing, as having started a job does not.
 
 A record the venue keeps for itself, such as a job, a scheduled event, an
 approval request or a timeline entry, leaves out a principal that is the
@@ -236,6 +236,8 @@ one through a token or within a callable's call.
   from which the venue works out what kind of principal acted.
 - An `accepts` list that matches DIDs exactly, and a callers gate that admits
   a namespace it lists.
+- A scheduled event reached by identity, by its account's owner or the
+  principal that scheduled it, since no capability names an event.
 - A configured Python function, which is not told who called it (#706).
 - `admin/sudo` as a switch of namespace bounded by the grants the delegate
   presents ([ADMIN.md](ADMIN.md), [UCAN.md](UCAN.md)), and the check of the
