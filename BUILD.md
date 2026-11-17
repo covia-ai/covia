@@ -9,7 +9,8 @@ host setup and store backups.
 - JDK 21+; CI and releases use JDK 25, and source targets Java 21.
   **Never test on JDK 25 before 25.0.3:** JDK-8370887 delays timeouts.
   CI and release builds reject affected versions with `-Dcovia.jdk.check=ERROR`.
-- Maven 3.7+ and Git. Maven Central publication requires Maven 3.9.
+- Maven 3.7+ and Git. Publishing to Maven Central needs Maven 3.9 or 3.10: the
+  Central plugin does not yet work with Maven 4.
 - Dependencies come from Maven Central; versions are pinned in the root POM.
 
 The optional CPython bridge needs Java 22+ for its FFM implementation. Java 21
@@ -277,23 +278,26 @@ The adapter/module implementation contract is documented in
 [`venue/docs/ADAPTERS.md`](venue/docs/ADAPTERS.md); this section covers release
 packaging and publication.
 
-The reactor modules are published to Maven Central under the `ai.covia`
-groupId. `ai.covia:covia-core`, `ai.covia:covia-python`, `ai.covia:venue`, and
-`ai.covia:workbench` are ordinary library artifacts (along with the
-`ai.covia:covia` parent POM). The venue also publishes its test jar
-(`venue-<version>-tests.jar`), which module tests take as a test-scoped
-dependency for shared test support such as `TestTemp`. The operator-facing
-`covia-python-adapter`, `covia-sql`, `covia-telegram`, `covia-discord`, `covia-whatsapp`, `covia-slack`,
-`covia-sonnylabs`, `covia-documents`, `covia-speech` and
-`covia-claude-code` artifacts are loadable venue modules rather than dependencies of
-the standard venue. Their slim jars are published so an embedding host can
-depend on a module through Maven; the shaded `-module.jar`s are GitHub Releases
-artifacts only and are never deployed to Central (the shade plugin writes them
-without attaching them, and leaves the slim jar's POM intact so the published
-POM carries the module's real dependencies). GitHub Releases remain the
-canonical operator download, pairing each module jar with a `sha256sum -c`
-compatible checksum file. The executable `covia.jar` is an unattached
-assembly and is **not** published to Central.
+Maven Central carries what an embedding host builds against, under the
+`ai.covia` groupId: the `ai.covia:covia` parent POM; `covia-core`, `venue` and
+`workbench` as libraries; and the slim jars of the venue modules `covia-sql`,
+`covia-telegram`, `covia-discord`, `covia-speech` and `covia-claude-code`, so a
+host can depend on one of them through Maven. The venue also publishes its test
+jar (`venue-<version>-tests.jar`), which module tests take as a test-scoped
+dependency for shared test support such as `TestTemp`: the Central plugin
+leaves out only whole artifacts. `covia-python`, `covia-python-adapter`,
+`covia-whatsapp`, `covia-slack`, `covia-sonnylabs` and `covia-documents` are
+not published; the root pom's `excludeArtifacts` lists them, and a module is
+published by taking it off that list.
+
+The venue modules are loadable modules rather than dependencies of the
+standard venue. Their shaded `-module.jar`s are GitHub Releases artifacts only
+and are never deployed to Central (the shade plugin writes them without
+attaching them, and leaves the slim jar's POM intact so the published POM
+carries the module's real dependencies). GitHub Releases remain the canonical
+operator download, pairing each module jar with a `sha256sum -c` compatible
+checksum file. The executable `covia.jar` is an unattached assembly and is
+**not** published to Central.
 
 Publishing uses the [Sonatype Central Publishing plugin](https://central.sonatype.org/publish/publish-portal-maven/)
 and mirrors the Convex setup: pom config lives in the root `pom.xml`
@@ -345,16 +349,23 @@ Maven Central publishes are irreversible.
 mvn clean deploy    # -SNAPSHOT version → routes to the Central snapshot repo
 ```
 
+**Check the release bundle** on the tagged version, which builds and signs it
+without uploading anything:
+```bash
+mvn clean deploy -Prelease -DskipUpload=true
+```
+`target/central-publishing/central-bundle.zip` should hold, for each published
+module, its jar, sources, javadoc and POM with their signatures and checksums,
+and nothing else (`unzip -l`).
+
 **Publish a release** — only after the GitHub Release for the tag is live:
 ```bash
 mvn clean deploy -Prelease
 ```
-Run it with Maven 3.9 and without `-B`. Under Maven 3.10 the Central plugin
-bundles Maven's `.locks/` and `maven-metadata-local.xml` files, which Central
-rejects. In batch mode the gpg plugin passes `--pinentry-mode error`, so gpg
-cannot ask for the key's passphrase.
+Run both without `-B`: in batch mode the gpg plugin passes
+`--pinentry-mode error`, so gpg cannot ask for the key's passphrase.
 
-`-Prelease` GPG-signs every artifact; the Central plugin bundles all reactor
+`-Prelease` GPG-signs every artifact; the Central plugin bundles the published
 modules (main + sources + javadoc + pom + signatures) and, with
 `autoPublish=true`, publishes them to Maven Central. Then verify at
 `https://central.sonatype.com/artifact/ai.covia/covia-core`.

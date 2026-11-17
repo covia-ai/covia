@@ -216,9 +216,11 @@
 				</configuration>
 			</plugin>
 
-			<!-- Sonatype Central Publishing: bundles every module's artifacts and
-			     uploads them to Maven Central on `mvn deploy`. Credentials come from
-			     the `central` server entry in ~/.m2/settings.xml. -->
+			<!-- Sonatype Central Publishing: bundles the published modules'
+			     artifacts and uploads them to Maven Central on `mvn deploy`.
+			     Credentials come from the `central` server entry in
+			     ~/.m2/settings.xml. The modules no embedder builds against are left
+			     out (BUILD.md, Publishing to Maven Central). -->
 			<plugin>
 				<groupId>org.sonatype.central</groupId>
 				<artifactId>central-publishing-maven-plugin</artifactId>
@@ -228,6 +230,14 @@
 					<publishingServerId>central</publishingServerId>
 					<checksums>all</checksums>
 					<autoPublish>true</autoPublish>
+					<excludeArtifacts>
+						<excludeArtifact>covia-python</excludeArtifact>
+						<excludeArtifact>covia-python-adapter</excludeArtifact>
+						<excludeArtifact>covia-whatsapp</excludeArtifact>
+						<excludeArtifact>covia-slack</excludeArtifact>
+						<excludeArtifact>covia-sonnylabs</excludeArtifact>
+						<excludeArtifact>covia-documents</excludeArtifact>
+					</excludeArtifacts>
 				</configuration>
 			</plugin>
 		</plugins>
