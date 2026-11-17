@@ -59,12 +59,12 @@ class CallerAndOwnerTest {
 		VenueState venue = VenueState.create(AKeyPair.generate());
 		venue.cursor().set(Index.<Keyword, ACell>none().assoc(Covia.DID, VENUE).assoc(Covia.VERSION, CVMLong.ONE));
 		User alice = venue.users().ensure(ALICE);
-		alice.cursor().path(Namespace.J).set(Index.<Blob, ACell>none()
+		Covia.entry(alice.cursor(), Namespace.J).set(Index.<Blob, ACell>none()
 			.assoc(AGENT_JOB, Maps.of(Fields.ID, AGENT_JOB, Fields.STATUS, "COMPLETE", Fields.CALLER, ALICE, ACTOR, WORKER))
 			.assoc(OWN_JOB, Maps.of(Fields.ID, OWN_JOB, Fields.STATUS, "COMPLETE", Fields.CALLER, ALICE)));
 
 		// The inbox as version 1 kept it, keyed by request id as text
-		alice.cursor().path(Namespace.H).set(Maps.of(Covia.WORKSPACE_DATA, Maps.of(
+		Covia.entry(alice.cursor(), Namespace.H).set(Maps.of(Covia.WORKSPACE_DATA, Maps.of(
 			"agent", Maps.of(Hitl.ID, "agent", FROM, WORKER, REQUESTER_USER, ALICE),
 			"legacy-agent", Maps.of(Hitl.ID, "legacy-agent", FROM, WORKER),
 			"legacy-retired", Maps.of(Hitl.ID, "legacy-retired", FROM, RETIRED),
@@ -147,7 +147,7 @@ class CallerAndOwnerTest {
 		assertSame(noUsers, STEP.apply(noUsers));
 		VenueState venue = VenueState.create(AKeyPair.generate());
 		venue.cursor().set(Index.<Keyword, ACell>none().assoc(Covia.DID, VENUE));
-		venue.users().ensure(ALICE).cursor().path(Namespace.J)
+		Covia.entry(venue.users().ensure(ALICE).cursor(), Namespace.J)
 			.set(Index.<Blob, ACell>none().assoc(OWN_JOB, Maps.of(Fields.ID, OWN_JOB, Fields.CALLER, ALICE)));
 		assertSame(venue.get(), STEP.apply(venue.get()));
 	}

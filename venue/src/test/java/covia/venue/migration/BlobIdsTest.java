@@ -98,7 +98,7 @@ class BlobIdsTest {
 			Fields.OUTPUT, Maps.of(Fields.SESSION_ID, hex(SESSION), Fields.RESPONSE, "hello")));
 		alice.jobs().put(MIRROR, Maps.of(Fields.ID, MIRROR, Fields.ADAPTER, "agent", BlobIds.MIRROR_OF, hex(CALL)));
 		alice.jobs().put(REMOTE, Maps.of(Fields.ID, REMOTE, Fields.ADAPTER, "remoteagent", Fields.SESSION_ID, REMOTE_SESSION));
-		alice.cursor().path(Namespace.H).set(Maps.of(Covia.WORKSPACE_DATA, Maps.of(hex(ASK),
+		Covia.entry(alice.cursor(), Namespace.H).set(Maps.of(Covia.WORKSPACE_DATA, Maps.of(hex(ASK),
 			Maps.of(Hitl.ID, hex(ASK), Hitl.STATUS, Hitl.OPEN, Fields.SESSION_ID, hex(SESSION)))));
 		ACell value = RT.assocIn(venue.get(), Index.of(ASK, Maps.of(JobIndex.OWNER, ALICE,
 			JobIndex.ADAPTER_DATA, Maps.of(Fields.SESSION_ID, hex(SESSION), Strings.create("expiryEvent"), EXPIRY))), Covia.JOBS);
@@ -185,7 +185,7 @@ class BlobIdsTest {
 	@Test void anInboxKeyThatIsNotAnIdIsRefused() {
 		VenueState venue = VenueState.create(AKeyPair.generate());
 		venue.cursor().set(Index.<Keyword, ACell>none().assoc(Covia.DID, VENUE));
-		venue.users().ensure(ALICE).cursor().path(Namespace.H)
+		Covia.entry(venue.users().ensure(ALICE).cursor(), Namespace.H)
 			.set(Maps.of(Covia.WORKSPACE_DATA, Maps.of("req-1", Maps.of(Hitl.STATUS, Hitl.OPEN))));
 		IllegalStateException refused = assertThrows(IllegalStateException.class, () -> STEP.apply(venue.get()));
 		assertTrue(refused.getMessage().startsWith(BlobIds.NOT_AN_ID));

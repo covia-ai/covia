@@ -160,7 +160,7 @@ public class WorkspaceWrapperTest {
 	public void testWorkspaceCursorReachesTheCallerVisibleWrappedValue() {
 		User user = engine.getVenueState().users().ensure(DID);
 		AForkableCursor<ACell> workspace = user.workspace().cursor();
-		workspace.withDefault(Maps.empty()).path(Strings.intern("through-child")).set(CVMLong.create(9));
+		Covia.entry(workspace, Strings.intern("through-child")).set(CVMLong.create(9));
 
 		assertEquals(CVMLong.create(9), workspace.path(Strings.intern("through-child")).get());
 		assertEquals(CVMLong.create(9), RT.getIn(user.cursor().get(),
@@ -175,8 +175,7 @@ public class WorkspaceWrapperTest {
 		var data = new User(VenueContext.create(() -> CVMLong.create(300)), userRoot, DID).workspace().cursor();
 		AForkableCursor<ACell> container = userRoot.path(Namespace.W);
 
-		AForkableCursor<ACell> nested = data.withDefault(convex.core.data.Maps.empty()).path(Strings.intern("nested"))
-			.withDefault(convex.core.data.Maps.empty()).path(Strings.intern("value"));
+		AForkableCursor<ACell> nested = Covia.entry(Covia.entry(data, Strings.intern("nested")), Strings.intern("value"));
 		nested.set(CVMLong.ONE);
 
 		assertEquals(CVMLong.ONE,

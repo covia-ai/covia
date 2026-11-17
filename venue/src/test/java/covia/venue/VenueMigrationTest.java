@@ -65,7 +65,7 @@ class VenueMigrationTest {
 
 	@Test void explicitZeroUsesTheLegacyMigration() {
 		VenueState venue = legacy();
-		venue.cursor().path(Covia.VERSION).set(CVMLong.ZERO);
+		VenueState.level(venue.cursor(), Covia.VERSION).set(CVMLong.ZERO);
 		venue.migrate(NO_SECRETS);
 		assertEquals(VenueState.CURRENT_VERSION, venue.version());
 		assertEquals(PENDING, RT.getIn(venue.get(), Covia.USER_DELETIONS));
@@ -73,7 +73,7 @@ class VenueMigrationTest {
 
 	@Test void migrationConflictPreservesVersionAndBothCopies() {
 		VenueState venue = legacy();
-		venue.cursor().path(Covia.USER_DELETIONS).set(Maps.of("conflicting", true));
+		VenueState.level(venue.cursor(), Covia.USER_DELETIONS).set(Maps.of("conflicting", true));
 		ACell before = venue.get();
 		var error = assertThrows(IllegalStateException.class, () -> venue.initialise(DID, NO_SECRETS));
 		assertEquals(covia.venue.migration.UserDeletionsRegion.CONFLICT, error.getMessage());

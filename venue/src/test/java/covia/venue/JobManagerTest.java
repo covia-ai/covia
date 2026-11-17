@@ -76,7 +76,7 @@ public class JobManagerTest {
 		AMap<AString, ACell> record = Maps.of(Fields.ID, id, Fields.CALLER, did,
 			Fields.STATUS, Status.COMPLETE, Fields.OUTPUT, output, Fields.UPDATED, 123L,
 			Fields.HISTORY, Vectors.of(Maps.of(Fields.MESSAGE_ID, "existing")));
-		user.cursor().path(covia.lattice.Namespace.J).set(convex.core.data.Index.<Blob, ACell>none().assoc(id, record));
+		covia.lattice.Covia.entry(user.cursor(), covia.lattice.Namespace.J).set(convex.core.data.Index.<Blob, ACell>none().assoc(id, record));
 		var storage = user.cursor().path(covia.lattice.Namespace.J, id);
 		ACell before = user.get();
 		String path = "j/" + id.toHexString();
@@ -124,7 +124,7 @@ public class JobManagerTest {
 			Blob started = Blob.fromHex("61136113611361136113611361136113");
 			Blob paused = Blob.fromHex("61146114611461146114611461146114");
 			AMap<AString, ACell> chain = Maps.of(Fields.STATUS, Status.PENDING);
-			application.venue(key.getAccountKey()).users().ensure(caller).cursor().path(covia.lattice.Namespace.J)
+			covia.lattice.Covia.entry(application.venue(key.getAccountKey()).users().ensure(caller).cursor(), covia.lattice.Namespace.J)
 				.set(convex.core.data.Index.<Blob, ACell>none()
 					.assoc(started, Maps.of(Fields.ID, started, Fields.CALLER, caller, Fields.STATUS, Status.STARTED, prev, chain))
 					.assoc(paused, Maps.of(Fields.ID, paused, Fields.CALLER, caller, Fields.STATUS, Status.PAUSED, prev, chain)));

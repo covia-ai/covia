@@ -21,6 +21,7 @@ import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
 import covia.grid.Job;
 import covia.grid.Status;
+import covia.lattice.Covia;
 
 class UserDeletionTest {
 	private static Engine engine;
@@ -77,7 +78,7 @@ class UserDeletionTest {
 		AString did = user();
 		RequestContext ctx = RequestContext.of(did);
 		User retained = engine.getVenueState().users().user(did);
-		retained.cursor().path(Strings.create("w")).set(Maps.of("private", "personal-data"));
+		Covia.entry(retained.cursor(), Strings.create("w")).set(Maps.of("private", "personal-data"));
 		retained.secrets().store("credential", "secret-value", SecretStore.keys(engine.getKeyPair()));
 		TestAgents.ensure(retained, "old-agent", Maps.empty(), Strings.create("old-state"));
 		Job pending = engine.jobs().invokeOperation(Strings.create("v/test/ops/never"), Maps.empty(), ctx);
@@ -91,7 +92,7 @@ class UserDeletionTest {
 		assertThrows(NotFoundException.class, () -> ((UserAdapter) engine.getAdapter("user"))
 			.info(engine.venueContext(), Maps.of(Fields.DID, did)));
 		assertThrows(AuthException.class, () -> engine.admitUser(did));
-		assertThrows(AuthException.class, () -> retained.cursor().path(Strings.create("w")).set(Maps.of("late", true)));
+		assertThrows(AuthException.class, () -> Covia.entry(retained.cursor(), Strings.create("w")).set(Maps.of("late", true)));
 		assertEquals(first, delete(did));
 
 		// Explicit operator recreation follows normal provisioning, never an old job cursor.
@@ -101,7 +102,7 @@ class UserDeletionTest {
 		assertTrue(fresh.jobs().getAll().isEmpty());
 		assertTrue(fresh.secrets().list().isEmpty());
 		assertTrue(fresh.agents().all().isEmpty());
-		assertThrows(AuthException.class, () -> retained.cursor().path(Strings.create("w")).set(Maps.of("late", true)));
+		assertThrows(AuthException.class, () -> Covia.entry(retained.cursor(), Strings.create("w")).set(Maps.of("late", true)));
 		pending.updateData(pending.getData().assoc(Fields.OUTPUT, Strings.create("late-output")));
 		assertTrue(fresh.jobs().getAll().isEmpty());
 		assertFalse(fresh.cursor().path(Strings.create("w")).exists());
@@ -153,7 +154,7 @@ class UserDeletionTest {
 			} catch (AuthException e) {
 				failure = e;
 			}
-			draft.users().user(other).cursor().path(Strings.create("w")).set(Maps.of("claimed", true));
+			Covia.entry(draft.users().user(other).cursor(), Strings.create("w")).set(Maps.of("claimed", true));
 			return failure;
 		});
 		prepared.abandon();

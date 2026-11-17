@@ -17,6 +17,7 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
 import covia.grid.Job;
+import covia.lattice.Covia;
 
 /**
  * A prepared Job is recorded in its caller's venue transaction, under an id
@@ -47,7 +48,7 @@ public class PreparedJobTest {
 		JobManager.Prepared prepared = prepare();
 		engine.getVenueState().execute(draft -> {
 			Blob id = prepared.record(draft);
-			draft.users().ensure(did).cursor().path(W).set(Maps.of(FIRED, id));
+			Covia.entry(draft.users().ensure(did).cursor(), W).set(Maps.of(FIRED, id));
 		});
 		Job job = prepared.start();
 		assertEquals(job.getID(), RT.getIn(workspace(), FIRED));
@@ -75,7 +76,7 @@ public class PreparedJobTest {
 			taken.add(prepared.record(draft));
 			// A write committed elsewhere while this run is open makes it run again
 			if (taken.size() == 1) {
-				engine.getVenueState().users().ensure(did).cursor().path(W).set(Maps.of(FIRED, "elsewhere"));
+				Covia.entry(engine.getVenueState().users().ensure(did).cursor(), W).set(Maps.of(FIRED, "elsewhere"));
 			}
 		});
 		assertTrue(taken.size() > 1, "The transaction ran again");

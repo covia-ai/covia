@@ -439,7 +439,7 @@ public class SecretStoreTest {
 	static void storeVersion1(User user, String name, String plaintext, AKeyPair kp) {
 		byte[] v1 = Hashing.sha256(kp.getSeed().getBytes()).getBytes();
 		Blob encrypted = Blob.wrap(AESGCM.encrypt(v1, plaintext.getBytes(StandardCharsets.UTF_8)));
-		user.secrets().cursor().withDefault(Maps.empty()).path(Strings.create(name)).set(Maps.of(
+		user.secrets().path(Strings.create(name)).set(Maps.of(
 			ENCRYPTED, encrypted,
 			Fields.UPDATED, CVMLong.create(1000L)));
 	}

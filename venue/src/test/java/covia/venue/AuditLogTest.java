@@ -273,7 +273,7 @@ public class AuditLogTest {
 		String v2Value = "sk-v2-" + System.nanoTime();
 
 		// Written as a venue did before key versions existed: no keyVersion.
-		user.secrets().cursor().withDefault(Maps.empty()).path(Strings.create("MIGRATING")).set(Maps.of(
+		user.secrets().path(Strings.create("MIGRATING")).set(Maps.of(
 			Strings.create("encrypted"), Blob.wrap(AESGCM.encrypt(keys.forVersion(SecretStore.KEY_VERSION_1),
 				v1Value.getBytes(StandardCharsets.UTF_8))),
 			Fields.UPDATED, CVMLong.create(1000L)));

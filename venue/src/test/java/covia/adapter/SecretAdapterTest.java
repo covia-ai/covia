@@ -276,7 +276,7 @@ class SecretAdapterTest {
 		user.secrets().store("CORRUPT", VALUE, SecretStore.keys(AKeyPair.generate()));
 		put("UNKNOWN_VERSION", VALUE);
 		user.cursor().path(Namespace.S, Strings.create("UNKNOWN_VERSION"), Strings.create("keyVersion")).set(CVMLong.create(7));
-		user.cursor().path(Namespace.S, Strings.create("MALFORMED")).set(Maps.empty());
+		user.secrets().path(Strings.create("MALFORMED")).set(Maps.empty());
 		for (String name : new String[] { "MISSING", "CORRUPT", "UNKNOWN_VERSION", "MALFORMED" }) {
 			Throwable error = failure(run("extract", Maps.of("name", name), owner));
 			boolean missing = "MISSING".equals(name);

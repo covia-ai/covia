@@ -129,7 +129,7 @@ class VenueMigrationEndToEndTest {
 				Fields.OUTPUT, Maps.of("answer", 42L), Fields.UPDATED, 123L);
 			AMap<AString, ACell> legacyJob = job.assoc(PREV, Maps.of(Fields.STATUS, Status.STARTED,
 				PREV, Maps.of(Fields.STATUS, Status.PENDING)));
-			user.cursor().path(Namespace.J).set(Index.<Blob, ACell>none().assoc(JOB, legacyJob));
+			Covia.entry(user.cursor(), Namespace.J).set(Index.<Blob, ACell>none().assoc(JOB, legacyJob));
 			// A secret encrypted under key version 1, before key versions were recorded.
 			SecretStoreTest.storeVersion1(user, SECRET, "kept", key);
 			user.secrets().store(LEGACY_GRANT, "{\"provider\":\"e2e\",\"accessToken\":\"e2e-access\",\"expiresAt\":0,"
@@ -188,7 +188,7 @@ class VenueMigrationEndToEndTest {
 			host.secrets().store(localRef, Strings.create("{\"operationMetadata\":{\"operation\":{\"adapter\":\"remoteagent:request\"}}}"),
 				SecretStore.keys(key));
 			AString parkedDID = Principals.agentDID(USER, Strings.create(PARKED));
-			user.cursor().path(Namespace.H).set(Maps.of(Covia.WORKSPACE_DATA, Maps.of(hex(ASK), Maps.of(
+			Covia.entry(user.cursor(), Namespace.H).set(Maps.of(Covia.WORKSPACE_DATA, Maps.of(hex(ASK), Maps.of(
 				Hitl.ID, hex(ASK), Strings.create("from"), parkedDID, Hitl.STATUS, Hitl.OPEN,
 				Hitl.AGENT, PARKED, Fields.SESSION_ID, hex(PARKED_SESSION), Hitl.TITLE, "Go ahead?", Hitl.ASKS, Vectors.empty()))));
 			AMap<AString, ACell> askJob = Maps.of(Fields.ID, ASK, Fields.STATUS, Status.INPUT_REQUIRED,
