@@ -42,7 +42,6 @@ import covia.exception.NotFoundException;
 import covia.exception.NotSupportedException;
 import covia.exception.UnavailableException;
 import covia.lattice.CapabilityChecker;
-import covia.lattice.Covia;
 import covia.utils.MimeUtils;
 import covia.venue.Config;
 import covia.venue.Engine;
@@ -54,7 +53,8 @@ import covia.venue.User;
  * DLFS (Decentralised Lattice File System) adapter for the Covia venue.
  *
  * <p>Provides file-system operations on per-user DLFS drives backed by the
- * lattice {@code :dlfs} region (sibling to {@code :grid} in {@link Covia#ROOT}).
+ * lattice {@code :dlfs} region (sibling to {@code :grid} in the root
+ * {@link covia.venue.CoviaApplication} composes).
  * Each user's drives are signed with their own Ed25519 key (stored as
  * {@code DLFS_KEY} in the venue's secret store).</p>
  *
