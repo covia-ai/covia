@@ -463,9 +463,7 @@ public class AgentAdapterTest {
 				Capability.create(Strings.create("v/ops/agent/request"), Abilities.INVOKE),
 				Capability.create(Strings.create("x/callable/"), Abilities.CALLABLE_MANAGE),
 				Capability.create(Strings.create("x/callable/"), Abilities.CALLABLE_CALL),
-				Capability.create(Strings.create("v/ops/callable/"), Abilities.INVOKE),
-				Capability.create(Strings.create("g/token-made"), Abilities.AGENT_CREATE),
-				Capability.create(Strings.create("v/ops/agent/create"), Abilities.INVOKE))),
+				Capability.create(Strings.create("v/ops/callable/"), Abilities.INVOKE))),
 			alice).awaitResult(5000), Fields.TOKEN).toString();
 		AMap<AString, ACell> reference = engine.tokens().lookup(bearer);
 		RequestContext viaToken = engine.tokenContext(reference);
@@ -489,11 +487,13 @@ public class AgentAdapterTest {
 		requestIn(viaToken, address, tokenSid, Maps.of("ask", "hi"));
 		requestIn(keptWork, address, keptSid, Maps.of("ask", "later"));
 
-		// A callable the token made asks the agent for whoever calls it: the token
-		// narrows the callable, but a call from Bob did not come through it, while
-		// a call through the token keeps the token's step before the callable's
+		// A callable the token made, within its caps, asks the agent for whoever
+		// calls it: a call from Bob did not come through the token, while a call
+		// through the token keeps the token's step before the callable's
 		engine.jobs().invokeOperation("v/ops/callable/create", Maps.of(Fields.NAME, "ask-helper",
-			Fields.OPERATION, "v/ops/agent/request", Fields.CAPS, "unrestricted",
+			Fields.OPERATION, "v/ops/agent/request", Fields.CAPS, Vectors.of(
+				Capability.create(Strings.create("g/token-provenance"), Abilities.AGENT_REQUEST),
+				Capability.create(Strings.create("v/ops/agent/request"), Abilities.INVOKE)),
 			Fields.GATE, "v/ops/callable/gates/anyone"), viaToken).awaitResult(5000);
 		callAskHelper(RequestContext.of(BOB_DID), address, callSid);
 		callAskHelper(viaToken, address, tokenCallSid);
@@ -521,13 +521,9 @@ public class AgentAdapterTest {
 		// Work a call left, rebuilt from its kept authority, is not the call
 		assertNull(engine.context(ALICE_DID, BOB_DID, null, Maps.of(Fields.CALLABLE, callableStep.dissoc(Fields.ADAPTER).dissoc(Fields.CALLER))).getRoute());
 
-		// An agent the token made acts with its controller narrowed by the token,
-		// but neither it nor its harness is a request through that token
-		engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "token-made",
-			Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")), viaToken).awaitResult(5000);
-		assertNotNull(engine.getVenueState().users().user(ALICE_DID).agent("token-made").getControllerToken());
-		assertNull(engine.harnessContext(ALICE_DID, Strings.create("token-made")).getRoute());
-		assertNull(engine.context(ALICE_DID, covia.grid.Principals.agentDID(ALICE_DID, Strings.create("token-made"))).getRoute());
+		// Neither an agent nor its harness is a request through anything
+		assertNull(engine.harnessContext(ALICE_DID, Strings.create("token-provenance")).getRoute());
+		assertNull(engine.context(ALICE_DID, covia.grid.Principals.agentDID(ALICE_DID, Strings.create("token-provenance"))).getRoute());
 	}
 
 	@Test

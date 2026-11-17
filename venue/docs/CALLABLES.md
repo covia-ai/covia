@@ -22,8 +22,7 @@ their calls; `Engine.callContext` builds the authority a call acts with.
    caller is the invoker, as Convex's `*address*` and `*caller*`
    ([AUTHORITY.md](AUTHORITY.md)).
 3. **The authority is the callable's**: its issuer's authority, narrowed by
-   the access token that created it if any, and by its caps, all read at each
-   point of action. This is how an agent acts with its controller's authority
+   its caps, both read at each point of action. This is how an agent acts with its controller's authority
    narrowed by its `config.caps` ([UCAN.md](UCAN.md) §5.4). Names resolve in
    the callable's owner's namespace, as Convex's `*address*`.
 4. **Caps bound what it does.** A callable fixes no part of its input: the
@@ -70,7 +69,6 @@ callables: { <ownerDID>: { <name>: record } }
 record: {
   id:           <random string, fixed at creation>,
   issuer:       <DID of the principal that created it: the owner or one of its agents>,
-  source?:      {owner, name, id},          // the access token narrowing the request that created it
   operation:    <operation reference>,
   caps?:        [ {with, can, nb?}, ... ],  // missing: unrestricted; []: none (covia.lattice.Caps)
   gate?:        <operation reference>,
@@ -84,8 +82,8 @@ record: {
 - **A reference** to a callable is `{owner, name, id}`, as an access token's
   is, and resolves only while that record stands, so a name reused after
   deletion never revives a reference to the old one.
-- **`issuer` and `source`** have the meaning they have on an access token. An
-  issuer is never changed: a callable that should act with another
+- **`issuer`** has the meaning it has on an access token. An issuer is never
+  changed: a callable that should act with another
   principal's authority is another callable.
 - **Bare references bind to the owner's namespace**: `operation`, `gate` and
   each cap's `with`, as an agent's caps and a grant's gate bind to their owner.
@@ -108,20 +106,23 @@ from the owner.
 | Operation | Input | Result | Needs |
 |-----------|-------|--------|-------|
 | `v/ops/callable/create` | `name`, `operation`, `caps?`, `gate?`, `description?` | the callable's view | `callable/manage` |
-| `v/ops/callable/update` | `name`, `operation?`, `caps?`, `gate?`, `description?` | the callable's view | `callable/manage` and the callable's source authority |
+| `v/ops/callable/update` | `name`, `operation?`, `caps?`, `gate?`, `description?` | the callable's view | `callable/manage` and what changing a callable needs |
 | `v/ops/callable/delete` | `name` | `{name, deleted}` | `callable/manage` |
 | `v/ops/callable/list` | none | `{callables, total}` | `crud/read` on `x/callable` |
 | `v/ops/callable/call` | `callable`, `input?` | the target's output | `callable/call`, or the gate |
 
 - **Caps** are `"unrestricted"` or a list of capabilities, as on an access
-  token. Left out at creation, the callable has none.
+  token. Left out at creation, the callable has none. They lie within what the
+  request setting them may do itself (`Engine.capsDenial`), as an access
+  token's do ([ACCESS_TOKENS.md](ACCESS_TOKENS.md)).
 - **Gate:** an update sets `gate` to `null` to remove it.
-- **The issuer** is the principal of the creating request, and `source` the
-  token narrowing that request. The public principal never creates one.
-- **Changing a callable** needs its source authority, its issuer's whole
-  authority and the chain of tokens that created it, as changing an access
-  token does ([ACCESS_TOKENS.md](ACCESS_TOKENS.md)). Deleting one only narrows,
-  so it needs none.
+- **The issuer** is the principal of the creating request. The public
+  principal never creates one.
+- **Changing a callable** needs a request acting with its issuer's authority
+  whose own authority covers the callable's caps as they are and as they
+  become, as changing an access token does
+  ([ACCESS_TOKENS.md](ACCESS_TOKENS.md)). Deleting one only narrows, so it
+  needs neither.
 - **`callable`** in a call is a reference in the forms an agent reference
   takes in `agent:request`: a bare name for one of the caller's own,
   `x/callable/<name>`, or `<ownerDID>/x/callable/<name>`. **`input`** is the
@@ -137,7 +138,7 @@ name.
 x/callable: { <name>: {issuer, operation, caps, gate?, description?, created} }
 ```
 
-It omits `id` and `source`, as `x/token` omits a token's id. Another user's is
+It omits `id`, as `x/token` omits a token's id. Another user's is
 read at `<did>/x/callable` under the usual cross-user delegation rules.
 
 ### The gate's input
@@ -189,7 +190,7 @@ call and never sets `callers`, so a caller cannot change the list. The test adap
 Work a call leaves running, such as a job the target starts or an event it
 schedules, keeps the callable's authority with it
 ([JOBS.md](JOBS.md)). Its kept authority (`Engine.keptAuthority`) is the
-callable, since the record names the issuer and the source, and the call's
+callable, since the record names the issuer and the caps, and the call's
 caller:
 
 ```
@@ -197,8 +198,7 @@ authority: { callable: {owner, name, id}, caller: <the call's caller> }
 ```
 
 Rebuilt, it is the call's frame as it stands now: the issuer's authority,
-narrowed by the source chain and the callable's caps, and nothing once the
-callable is gone, with the kept caller as its caller and nobody present.
+narrowed by the callable's caps, and nothing once the callable is gone, with the kept caller as its caller and nobody present.
 
 ## What a call acts in
 
@@ -232,7 +232,7 @@ As for a request through an access token
 the authority a call acts with is narrowed, so:
 
 - **It holds its issuer's whole authority** (`Engine.holdsAuthorityOf`) only
-  when its caps are unrestricted and every token on its source chain is.
+  when its caps are unrestricted.
 - **It never counts as the venue**, even when the venue issued it or calls
   it. It reaches the venue's resources only as far as its caps cover them, as
   the first example below does.
@@ -242,10 +242,12 @@ the authority a call acts with is narrowed, so:
 - **It never holds its invoker's authority.** An agent of the owner calling
   acts with the callable's authority, not its own, and what the call creates
   is its issuer's (`Engine.actingPrincipal`).
-- **It hands on only what it holds.** An agent it creates takes the issuer as
-  controller, and a controller keeps no callable's caps, so creating one needs
-  the issuer's whole authority. Tokens and callables it creates need that
-  authority too, as their issuer.
+- **It hands on only what it may do itself.** Tokens and callables it
+  creates are its issuer's, with caps within the call's own, and keep those
+  caps once the callable is gone. An agent it creates takes the issuer as
+  controller, and the agent's harness acts with all of its controller's
+  authority, which no caps bound, so only a call with unrestricted caps creates
+  or forks an agent.
 
 ## Calls within calls
 
@@ -265,8 +267,8 @@ it (decision 5). Nothing yet bounds how deep calls nest
 2. **Admit** the caller: its authority covers `callable/call` on the
    callable's resource, or the gate, run with the callable's authority,
    succeeds. A gate's refusal is returned with its reason.
-3. **Enter** the issuer's frame: the issuer's authority narrowed by `source`
-   and `caps` decides every check, the owner's namespace is where names
+3. **Enter** the issuer's frame: the issuer's authority narrowed by `caps`
+   decides every check, the owner's namespace is where names
    resolve, and the invoker's authority is the frame's caller.
 4. **Run** the target, resolved as the issuer would resolve it, with `input`.
    Its output is the call's output.
@@ -326,7 +328,7 @@ The token's caps let it reach the guestbook's gate and no other callable's.
 
 | Part | Follows |
 |------|---------|
-| Store, record, reference, `issuer` and `source`, the `x/` view, deletion with the issuer | Access tokens ([ACCESS_TOKENS.md](ACCESS_TOKENS.md)) |
+| Store, record, reference, `issuer`, caps given within the giver's, the `x/` view, deletion with the issuer | Access tokens ([ACCESS_TOKENS.md](ACCESS_TOKENS.md)) |
 | Authority narrowed by caps, read at each point of action; the bound target | Agents and their controllers ([UCAN.md](UCAN.md) §5.4) |
 | The gate's contract and evaluation | Capability gates, `nb.gate` ([UCAN.md](UCAN.md#capability-gates-nbgate--covia216)) |
 | The reference forms of `callable` | Agent references in `agent:request` |

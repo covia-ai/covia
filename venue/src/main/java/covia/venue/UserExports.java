@@ -207,9 +207,8 @@ public final class UserExports {
 
 	/**
 	 * {@code state} with each agent's controller kept only where it is
-	 * {@code did} itself or one of its agents, and the access token narrowing it
-	 * only where that token is {@code did}'s. A controller or token anywhere
-	 * else authorised none of this copy, so the agent returns to its owner's
+	 * {@code did} itself or one of its agents. A controller anywhere else
+	 * authorised none of this copy, so the agent returns to its owner's
 	 * control.
 	 */
 	@SuppressWarnings("unchecked")
@@ -225,10 +224,6 @@ public final class UserExports {
 			AString controller = RT.ensureString(rec.get(Agent.KEY_CONTROLLER));
 			boolean foreignController = controller != null && !controller.equals(did) && Engine.agentIdIn(did, controller) == null;
 			if (foreignController) own = own.dissoc(Agent.KEY_CONTROLLER);
-			AMap<AString, ACell> token = RT.ensureMap(rec.get(Agent.KEY_CONTROLLER_TOKEN));
-			if (token != null && (foreignController || !did.equals(token.get(Fields.OWNER)))) {
-				own = own.dissoc(Agent.KEY_CONTROLLER_TOKEN);
-			}
 			if (own != rec) kept = kept.assoc(entry.getKey(), own);
 		}
 		return (kept == agents) ? state : state.assoc(Namespace.G, kept);

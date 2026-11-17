@@ -25,9 +25,9 @@ request authenticated. What still works the old way is listed under
 - A token or a callable narrows the `authority` a request runs under
   ([Tokens and callables](#tokens-and-callables)), and grants a request
   presents add to it ([VENUE_AUTHORITY.md](VENUE_AUTHORITY.md)). Both are
-  carried beside these fields. Work that continues the request keeps both, and
-  what the request creates keeps the narrowing but never the grants, so it
-  holds no more than the request did.
+  carried beside these fields. Work that continues the request keeps both;
+  what the request creates is bounded by the narrowing when it is made, never
+  by the grants ([What a request creates](#what-a-request-creates)).
 
 ## Where names resolve
 
@@ -81,15 +81,25 @@ quotas as any work does.
 ## What a request creates
 
 Whatever a request creates, an agent, a token or a callable, acts for the
-request's `authority`, narrowed as the request is by a token or a callable, so
-it never holds more than its creator: an agent another agent makes, and that
-agent's harness, stay within its creator's caps, and what a request through a
-token creates stays within the token and loses what the token gave once it is
-gone. The caps it is given narrow that and never widen it. They are stored as
-given, not checked against what the creator may do: each check reads them
-within the creator's authority as it stands then, so caps wider than the
-creator's act only as far as the creator reaches, including whatever the
-creator is given later.
+request's acting principal, narrowed by its own caps, and records only that
+principal and those caps, never the token or callable the request came
+through. So it never holds more than its creator:
+
+- **A token or a callable** is given caps within what the request may do
+  itself: its principal's authority as its token's, callable's or agent's caps
+  narrow it, never widened by grants it presents. A request nothing narrows
+  may give any caps. Each check reads them within the issuer's authority as it
+  stands then. What a request through a token or a callable creates keeps its
+  caps once that token or callable is gone.
+- **An agent** acts with its controller's authority narrowed by its caps,
+  read at each check, so an agent another agent makes stays within its
+  creator, including whatever the creator is given later. Its harness acts
+  with all of its controller's authority, which no caps bound, so a request a
+  token or a callable narrows creates an agent only when their caps are
+  unrestricted.
+
+Changing a token or a callable needs a request acting with its issuer's
+authority that covers its caps as they are and as they become.
 
 ## Admission
 
@@ -192,9 +202,10 @@ chose it:
 - **The model's choices**: each tool call runs as the agent, bounded by its
   caps.
 
-Its controller is the `authority` of the request that created it, narrowed as
-that request was, so an agent made by another agent, through a token or within
-a callable's call runs within what made it, never its owner's whole authority.
+Its controller is the acting principal of the request that created it, so an
+agent made by another agent runs within that agent, never its owner's whole
+authority, and only a request holding its controller's whole authority makes
+one through a token or within a callable's call.
 
 ## Cases
 
@@ -223,8 +234,6 @@ a callable's call runs within what made it, never its owner's whole authority.
   from which the venue works out what kind of principal acted.
 - An `accepts` list that matches DIDs exactly, and a callers gate that admits
   a namespace it lists.
-- What a callable's call creates, which holds its issuer's authority without
-  the callable's narrowing, so only a call with unrestricted caps may create.
 - A configured Python function, which is not told who called it (#706).
 - `admin/sudo` as a switch of namespace bounded by the grants the delegate
   presents ([ADMIN.md](ADMIN.md), [UCAN.md](UCAN.md)), and the check of the

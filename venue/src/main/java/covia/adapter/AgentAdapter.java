@@ -383,17 +383,20 @@ public class AgentAdapter extends AAdapter {
 	/**
 	 * The controller of an agent {@code ctx} creates or forks: the one the input
 	 * names, else the principal whose authority the request acts with
-	 * ({@link Engine#actingPrincipal}); either narrowed by the access token
-	 * narrowing the request, if any, so the agent never exceeds it.
+	 * ({@link Engine#actingPrincipal}). The agent's harness acts with all of
+	 * its controller's authority, which no caps bound, so a request an access
+	 * token or a callable narrows may make one only when it holds all of that
+	 * authority ({@link Engine#holdsAuthorityOf}).
 	 */
-	private Engine.Source newController(RequestContext ctx, ACell input) {
+	private AString newController(RequestContext ctx, ACell input) {
 		AString named = namedController(ctx, input);
-		Engine.Source acting = Engine.actingSource(ctx);
-		// A controller keeps no callable's caps, so a call hands on its issuer's authority only when it holds all of it
-		if (named == null && ctx.getCallable() != null && !engine.holdsAuthorityOf(ctx, acting)) {
-			throw new AuthException(Engine.CONTROLLER_NOT_HELD.formatted(acting.principal()));
+		if (named != null) return named;
+		AString acting = Engine.actingPrincipal(ctx);
+		boolean narrowed = ctx.getCallable() != null || !ctx.getTokens().isEmpty();
+		if (narrowed && !engine.holdsAuthorityOf(ctx, acting)) {
+			throw new AuthException(Engine.CONTROLLER_NOT_HELD.formatted(acting));
 		}
-		return (named != null) ? new Engine.Source(named, acting.token()) : acting;
+		return acting;
 	}
 
 	/**
@@ -406,12 +409,11 @@ public class AgentAdapter extends AAdapter {
 	 *
 	 * @param configuring whether the change sets the agent's config or controller
 	 */
-	private void requireController(RequestContext ctx, AgentTarget target, Engine.Source controller, boolean configuring) {
-		AString principal = (controller == null) ? null : controller.principal();
-		if (!configuring && (principal == null || principal.equals(target.ownerDID()))) return;
-		Engine.Source held = (principal != null) ? controller : new Engine.Source(target.ownerDID(), null);
+	private void requireController(RequestContext ctx, AgentTarget target, AString controller, boolean configuring) {
+		if (!configuring && (controller == null || controller.equals(target.ownerDID()))) return;
+		AString held = (controller != null) ? controller : target.ownerDID();
 		if (!engine.holdsAuthorityOf(ctx, held)) {
-			throw new AuthException(Engine.NOT_CONTROLLERS.formatted(target.address(), held.principal()));
+			throw new AuthException(Engine.NOT_CONTROLLERS.formatted(target.address(), held));
 		}
 	}
 
@@ -918,7 +920,7 @@ public class AgentAdapter extends AAdapter {
 				+ "; update it, or delete it with remove=true before creating it again");
 			return;
 		}
-		Engine.Source controller = newController(ctx, input);
+		AString controller = newController(ctx, input);
 
 		AMap<AString, ACell> supplied = RT.ensureMap(input);
 		ACell facet = supplied == null ? null : supplied.get(Agent.KEY_AGENT);
@@ -2266,7 +2268,6 @@ public class AgentAdapter extends AAdapter {
 
 		ACell definition = Agent.definition(record);
 		if (definition != null) summary = summary.assoc(Agent.KEY_AGENT, definition);
-		if (agent.getControllerToken() != null) summary = summary.assoc(Fields.CONTROLLER_TOKEN, agent.getControllerToken());
 		if (timeline != null) summary = summary.assoc(Strings.intern("timelineLength"), CVMLong.create(timeline.count()));
 		if (tasks != null) summary = summary.assoc(Strings.intern("tasks"), CVMLong.create(tasks.count()));
 		AString error = Agent.error(record);
@@ -2472,7 +2473,6 @@ public class AgentAdapter extends AAdapter {
 						Fields.CONTROLLER, listed.getController(),
 						Fields.AWAITING, awaitingSummary(record),
 						Fields.TASKS, CVMLong.create(taskCount));
-					if (listed.getControllerToken() != null) summary = summary.assoc(Fields.CONTROLLER_TOKEN, listed.getControllerToken());
 					AString error = Agent.error(record);
 					if (error != null) summary = summary.assoc(Fields.ERROR, error);
 					AMap<AString, ACell> suspension = Agent.suspension(record);
@@ -3073,8 +3073,7 @@ public class AgentAdapter extends AAdapter {
 		// record holds then, so a concurrent change is never overwritten and a
 		// change of controller is never bypassed.
 		AMap<AString, ACell> changes = resolved;
-		AString named = namedController(ctx, input);
-		Engine.Source controller = (named == null) ? null : new Engine.Source(named, Engine.actingSource(ctx).token());
+		AString controller = namedController(ctx, input);
 		AMap<AString, ACell> newConfig;
 		try {
 			boolean configuring = (changes != null) || (controller != null);

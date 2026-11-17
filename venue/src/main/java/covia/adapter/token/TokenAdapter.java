@@ -65,7 +65,7 @@ public class TokenAdapter extends AAdapter {
 	public static final String EXPIRES_INVALID = "expires must be a time still to come, in milliseconds since the epoch";
 	public static final String RAW_NOT_KEPT = "This venue keeps only the hashes of tokens, not the tokens (adapters.token.keepRawTokens)";
 	public static final String RAW_NOT_HELD = "Token %s was created or last rotated while the venue kept no tokens: rotate it";
-	public static final String TOKEN_SOURCE_NOT_HELD = "Token %s can only be changed or read with the authority it was created with";
+	public static final String TOKEN_NOT_COVERED = "Token %s can only be changed or read by a request acting with its issuer's authority, covering its caps";
 	public static final String ISSUER_MAY_NOT_CREATE = "%s may not create tokens";
 	public static final String KEEP_RAW_NOT_BOOLEAN = "adapters.token.keepRawTokens must be a boolean";
 
@@ -227,9 +227,10 @@ public class TokenAdapter extends AAdapter {
 	// ========== Working on tokens ==========
 
 	/**
-	 * Creates a token in the caller's namespace, issued by the source of
-	 * authority the request acts with ({@link Engine#actingSource}), with a new
-	 * bearer, handed out this once.
+	 * Creates a token in the caller's namespace, issued by the principal whose
+	 * authority the request acts with ({@link Engine#actingPrincipal}), with a
+	 * new bearer, handed out this once. Its caps lie within what the request
+	 * may do itself ({@link Engine#capsDenial}).
 	 *
 	 * @param access what the caller asks of each access point, by name
 	 * @param caps {@code "unrestricted"}, a list of capabilities, or null for none
@@ -237,17 +238,17 @@ public class TokenAdapter extends AAdapter {
 	 */
 	public Issued create(RequestContext ctx, AString name, ACell access, ACell caps, ACell expires, Gate gate) {
 		AString owner = owner(ctx);
-		Engine.Source issuer = Engine.actingSource(ctx);
-		AString principal = issuer.principal();
+		AString principal = Engine.actingPrincipal(ctx);
 		if (principal == null || engine.isPublicPrincipal(principal) || engine.getDIDString().equals(principal)) {
 			throw new AuthException(ISSUER_MAY_NOT_CREATE.formatted(principal));
 		}
 		AMap<AString, ACell> asked = askedAccess(access);
 		gate.check(ctx, name, Set.of(), AccessToken.accessPoints(asked));
 		// A delegate acting for another user holds none of that user's own authority to hand on.
-		if (!engine.holdsAuthorityOf(ctx, issuer)) throw new AuthException(ISSUER_MAY_NOT_CREATE.formatted(principal));
+		if (!engine.actsWithAuthorityOf(ctx, principal)) throw new AuthException(ISSUER_MAY_NOT_CREATE.formatted(principal));
 		AMap<AString, ACell> entries = entries(ctx, asked);
 		AVector<ACell> stored = (caps == null) ? Vectors.empty() : Caps.parse(caps);
+		requireGivable(ctx, stored);
 		Long until = expiry(expires);
 
 		String bearer = AccessTokens.newBearer();
@@ -256,7 +257,6 @@ public class TokenAdapter extends AAdapter {
 			Fields.ISSUER, principal,
 			Fields.ACCESS, entries,
 			Fields.CREATED, engine.currentTimestamp());
-		if (issuer.token() != null) record = record.assoc(Fields.SOURCE, issuer.token());
 		if (stored != null) record = record.assoc(Fields.CAPS, stored);
 		if (until != null) record = record.assoc(Fields.EXPIRES, CVMLong.create(until));
 		record = withBearer(record, bearer);
@@ -267,8 +267,9 @@ public class TokenAdapter extends AAdapter {
 	/**
 	 * Changes a token's access, caps or expiry, or gives it a new bearer
 	 * ({@code rotate}); what is null stays as it is, and {@code access} replaces
-	 * all of its entries. Each needs the authority the token was created with,
-	 * so no request through a token widens it.
+	 * all of its entries. Each needs a request acting with its issuer's
+	 * authority that covers its caps as they are and as they become, so no
+	 * request widens it beyond what it may do itself.
 	 */
 	public Issued update(RequestContext ctx, AString name, ACell access, ACell caps, ACell expires, boolean rotate, Gate gate) {
 		AString owner = owner(ctx);
@@ -278,9 +279,10 @@ public class TokenAdapter extends AAdapter {
 		gate.check(ctx, name, before, (asked == null) ? before : AccessToken.accessPoints(asked));
 		AString id = token.id();
 		if (id == null) throw new NotFoundException(TOKEN_NOT_FOUND.formatted(name), name.toString());
-		requireSource(ctx, token);
+		requireCovers(ctx, token);
 		AMap<AString, ACell> entries = (asked == null) ? null : entries(ctx, asked);
 		AVector<ACell> stored = (caps == null) ? null : Caps.parse(caps);
+		if (caps != null) requireGivable(ctx, stored);
 		Long until = expiry(expires);
 		String bearer = rotate ? AccessTokens.newBearer() : null;
 
@@ -297,6 +299,12 @@ public class TokenAdapter extends AAdapter {
 		});
 		if (!same.get()) throw new ConflictException(TOKEN_CHANGED.formatted(name));
 		return new Issued(tokens().token(owner, name), bearer);
+	}
+
+	/** Refuses caps beyond what {@code ctx} may do itself ({@link Engine#capsDenial}); null is unrestricted. */
+	private void requireGivable(RequestContext ctx, AVector<ACell> caps) {
+		String denial = engine.capsDenial(ctx, caps);
+		if (denial != null) throw new AuthException(denial);
 	}
 
 	/**
@@ -328,7 +336,7 @@ public class TokenAdapter extends AAdapter {
 		return listed;
 	}
 
-	/** A token's bearer again, where the venue keeps it, to whoever {@code gate} admits and holds its source. */
+	/** A token's bearer again, where the venue keeps it, to whoever {@code gate} admits and covers the token ({@link #requireCovers}). */
 	public AString bearer(RequestContext ctx, AString name, Gate gate) {
 		AString owner = owner(ctx);
 		AccessToken token = tokens().token(owner, name);
@@ -336,7 +344,7 @@ public class TokenAdapter extends AAdapter {
 		gate.check(ctx, name, points, points);
 		if (!keepRawTokens()) throw new NotSupportedException(RAW_NOT_KEPT);
 		if (token.record() == null) throw new NotFoundException(TOKEN_NOT_FOUND.formatted(name), name.toString());
-		requireSource(ctx, token);
+		requireCovers(ctx, token);
 		ACell sealed = token.sealedBearer();
 		if (sealed == null) throw new NotSupportedException(RAW_NOT_HELD.formatted(name));
 		return SecretStore.unseal(sealed, sealingKeys());
@@ -445,10 +453,14 @@ public class TokenAdapter extends AAdapter {
 		return at.longValue();
 	}
 
-	/** Refuses {@code ctx} unless it holds the authority {@code token} was created with. */
-	private void requireSource(RequestContext ctx, AccessToken token) {
-		if (!engine.holdsAuthorityOf(ctx, new Engine.Source(token.issuer(), token.source()))) {
-			throw new AuthException(TOKEN_SOURCE_NOT_HELD.formatted(token.name()));
+	/**
+	 * Refuses {@code ctx} unless it acts with the authority of {@code token}'s
+	 * issuer ({@link Engine#actsWithAuthorityOf}) and may itself do all that
+	 * the token's caps allow ({@link Engine#capsDenial}).
+	 */
+	private void requireCovers(RequestContext ctx, AccessToken token) {
+		if (!engine.actsWithAuthorityOf(ctx, token.issuer()) || engine.capsDenial(ctx, token.caps().scope()) != null) {
+			throw new AuthException(TOKEN_NOT_COVERED.formatted(token.name()));
 		}
 	}
 

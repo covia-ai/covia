@@ -1060,14 +1060,14 @@ delegate creates is controlled by its target, so grant `agent/create` beside
 
 **An access token narrows the authority a request acts with.** A request through
 an access token is its issuer's, acting with the issuer's authority narrowed by
-the caps of the token and of each token whose request created it, read at
-each point of action as an agent's caps narrow its controller's
-(`Engine.tokenContext`). It holds the issuer's whole authority only when every
-token on that chain is unrestricted. What it creates keeps the token: an agent
-records it beside its controller (`controllerToken`), whose authority it then
-narrows, and a job or scheduled event keeps it with its authority. A token
-that no longer stands narrows all of these to nothing. Changing a token needs
-the authority it was created with, so a token never widens itself.
+the token's caps, read at each point of action as an agent's caps narrow its
+controller's (`Engine.tokenContext`). It holds the issuer's whole authority
+only when the token is unrestricted. A job or scheduled event it starts keeps
+the token with its authority, and a token that no longer stands narrows that
+work to nothing. Tokens and callables it creates have caps within its own and
+stand without it; only an unrestricted token's request creates an agent.
+Changing a token needs authority covering its caps, so a token never widens
+itself.
 [ACCESS_TOKENS.md](ACCESS_TOKENS.md) is the contract.
 
 **Configuring an agent acts with its controller's authority.** The config
@@ -1081,8 +1081,7 @@ controls, its own included. Changing only the state of an agent its owner contro
 it, and managing its sessions need `agent/write` alone, and its owner may
 always delete it.
 `user:import` and `user:clone` keep a stored controller only when it is the
-target user or one of its agents; any other agent returns to its owner, and
-drops its `controllerToken` with it.
+target user or one of its agents; any other agent returns to its owner.
 
 The config's `caps` and `accepts` take no check of their own. `caps` narrow
 what the agent does and cannot exceed its controller: a list of capabilities

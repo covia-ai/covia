@@ -17,7 +17,7 @@ import covia.lattice.Caps;
  * narrowed by its caps, whoever calls it.
  *
  * <pre>
- *   id, issuer, source?, operation, caps?, gate?, description?, created
+ *   id, issuer, operation, caps?, gate?, description?, created
  * </pre>
  */
 public final class Callable extends ALatticeComponent<AMap<AString, ACell>>
@@ -75,10 +75,6 @@ public final class Callable extends ALatticeComponent<AMap<AString, ACell>>
 		return RT.ensureString(field(Fields.ISSUER));
 	}
 
-	/** The access token narrowing the request that created it, which narrows it too; null when none did. */
-	public AMap<AString, ACell> source() {
-		return RT.ensureMap(field(Fields.SOURCE));
-	}
 
 	/** The operation it runs, as its provider named it. */
 	public AString operation() {

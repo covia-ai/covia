@@ -105,7 +105,9 @@ import covia.grid.Operation;
 import covia.grid.Venue;
 import covia.grid.auth.VenueAuth;
 import covia.grid.client.VenueHTTP;
+import covia.lattice.Cap;
 import covia.lattice.CapabilityChecker;
+import covia.lattice.Caps;
 import covia.lattice.Covia;
 import covia.lattice.Namespace;
 import covia.venue.api.CoviaAPI;
@@ -4679,9 +4681,9 @@ public class Engine {
 		AString controllerOwner = covia.grid.Principals.isAgentDID(controller)
 			? covia.grid.Principals.userOf(controller) : controller;
 		AString controllerAgent = agentIdIn(controllerOwner, controller);
-		RequestContext bound = narrowedByToken((controllerAgent != null)
+		RequestContext bound = (controllerAgent != null)
 			? agentContext(controllerOwner, controllerAgent, chain)
-			: context(controllerOwner, controller), (state == null) ? null : state.getControllerToken());
+			: context(controllerOwner, controller);
 		if (controllerOwner.equals(owner) && !bound.hasSeparateAuthority()) {
 			return agent.readingScope(resource -> withControl(
 				CapabilityChecker.intersect(agentScope(owner, agentId), owner, bound.scopeFor(resource), owner),
@@ -4811,7 +4813,7 @@ public class Engine {
 			AMap<AString, ACell> kept = Maps.of(Fields.CALLABLE, callable);
 			return (ctx.getCaller() == null) ? kept : kept.assoc(Fields.CALLER, ctx.getCaller());
 		}
-		AMap<AString, ACell> token = actingSource(ctx).token();
+		AMap<AString, ACell> token = presentedToken(ctx);
 		if (!ctx.hasSeparateAuthority()) return (token == null) ? null : Maps.of(Fields.TOKEN, token);
 		RequestContext authority = ctx.authorityContext();
 		AMap<AString, ACell> kept = Attribution.attribute(Maps.empty(), authority.getCallerDID(), authority.getUserDID());
@@ -4843,9 +4845,55 @@ public class Engine {
 	 * narrowed by the agent's caps, so is not that controller's whole
 	 * authority, and its harness ({@link #harnessContext}) acts with its
 	 * controller's authority without holding it.</p>
+	 *
+	 * <p>A request an access token or a callable narrows holds it only when
+	 * their caps are unrestricted.</p>
 	 */
 	public boolean holdsAuthorityOf(RequestContext ctx, AString principal) {
-		return holdsAuthorityOf(ctx, new Source(principal, null));
+		if (!actsWithAuthorityOf(ctx, principal)) return false;
+		AMap<AString, ACell> called = ctx.getCallable();
+		if (called != null) {
+			Callable callable = resolveCallable(called);
+			if (callable == null || !callable.caps().isUnrestricted()) return false;
+		}
+		for (ACell held : ctx.getTokens()) {
+			AccessToken token = resolveToken(RT.ensureMap(held));
+			if (token == null || !token.caps().isUnrestricted()) return false;
+		}
+		return true;
+	}
+
+	/** Refusal of caps beyond what the request giving them may do itself; the first such cap follows. */
+	public static final String CAPS_BEYOND_GIVER = "Caps may give no more than the request giving them may do itself, "
+		+ "and this request may not do: ";
+
+	/**
+	 * Why {@code ctx} may not give {@code caps} to an access token or callable
+	 * it creates or changes, or null when it may. What it makes has no link to
+	 * the request, so each cap must lie within what the request may do itself:
+	 * the authority it acts with as its token, its callable or its agent's caps
+	 * narrow it, never widened by grants it presents
+	 * ({@link RequestContext#authorityContext}). A request nothing narrows may
+	 * give any caps. A caveated cap the request holds counts for nothing here,
+	 * since no gate can be evaluated, so caps it covers are refused rather than
+	 * stored.
+	 *
+	 * @param caps the caps as {@link covia.lattice.Caps#parse} reads them; null for unrestricted
+	 */
+	public String capsDenial(RequestContext ctx, AVector<ACell> caps) {
+		RequestContext holder = ctx.authorityContext();
+		if (holder.scopeFor(null) == null) return null;
+		if (caps == null) return CAPS_BEYOND_GIVER + Caps.UNRESTRICTED;
+		AString namespace = ctx.getUserDID();
+		for (long i = 0; i < caps.count(); i++) {
+			Cap cap = Cap.of(RT.ensureMap(caps.get(i)));
+			String with = CapabilityChecker.canonicalResource((cap.with() == null) ? "" : cap.with().toString(), namespace);
+			AString resource = Strings.create(with);
+			if (CapabilityChecker.allows(holder.scopeFor(resource), resource, cap.can(), holder.getUserDID()) != null) {
+				return CAPS_BEYOND_GIVER + caps.get(i);
+			}
+		}
+		return null;
 	}
 
 	/** Refusal of an act only the user may do in person. */
@@ -4871,47 +4919,14 @@ public class Engine {
 	}
 
 	/**
-	 * A source of authority: a principal, and the access token narrowing it, if
-	 * any (ACCESS_TOKENS.md). An agent's controller is one, and so is what an
-	 * access token's request acts with. A token stands for the chain of tokens whose
-	 * requests created it ({@link #tokenChain}).
-	 *
-	 * @param principal the principal whose authority it is
-	 * @param token the innermost token narrowing it, as its reference, or null
+	 * Whether {@code ctx} acts with {@code principal}'s authority, however an
+	 * access token, a callable or an agent's caps narrow it: as
+	 * {@link #holdsAuthorityOf(RequestContext, AString)}, setting the caps of
+	 * its token or callable aside. Such a request may hand that authority on
+	 * within what it may do itself ({@link #capsDenial}), as the issuer of a
+	 * token or callable; a {@code admin/sudo} delegate may not.
 	 */
-	public record Source(AString principal, AMap<AString, ACell> token) {}
-
-	/**
-	 * Whether {@code ctx} acts with all of {@code source}'s authority, as
-	 * changing what that source created needs: it holds the principal's whole
-	 * authority ({@link #holdsAuthorityOf(RequestContext, AString)}, ignoring
-	 * tokens), and the access tokens narrowing it, once those it shares with the
-	 * source's chain are set aside, are all unrestricted. So a request through
-	 * a token holds what that token's requests created, but not the token
-	 * itself, nor what its issuer created directly.
-	 */
-	public boolean holdsAuthorityOf(RequestContext ctx, Source source) {
-		if (ctx == null || source == null || !holdsWholeAuthorityOf(ctx, source.principal())) return false;
-		// A call holds its issuer's whole authority only through unrestricted caps
-		AMap<AString, ACell> called = ctx.getCallable();
-		if (called != null) {
-			Callable callable = resolveCallable(called);
-			if (callable == null || !callable.caps().isUnrestricted()) return false;
-		}
-		AVector<ACell> held = ctx.getTokens();
-		if (held.isEmpty()) return true;
-		AVector<ACell> needed = (source.token() == null) ? Vectors.empty() : tokenChain(source.token());
-		long shared = 0;
-		while (shared < held.count() && shared < needed.count() && held.get(shared).equals(needed.get(shared))) shared++;
-		for (long i = shared; i < held.count(); i++) {
-			AccessToken token = resolveToken(RT.ensureMap(held.get(i)));
-			if (token == null || !token.caps().isUnrestricted()) return false;
-		}
-		return true;
-	}
-
-	/** {@link #holdsAuthorityOf(RequestContext, AString)} before any access token narrowing is considered. */
-	private boolean holdsWholeAuthorityOf(RequestContext ctx, AString principal) {
+	public boolean actsWithAuthorityOf(RequestContext ctx, AString principal) {
 		if (ctx == null || principal == null) return false;
 		AString caller = ctx.getCallerDID();
 		if (actsAsOwnAgent(ctx)) {
@@ -4923,15 +4938,10 @@ public class Engine {
 		return authority.getCaps() == null && isRootOf(authority.getUserDID(), principal);
 	}
 
-	/**
-	 * The source of authority {@code ctx} acts with, which what it creates
-	 * (an agent's controller, an access token) takes as its own: its acting
-	 * principal ({@link #actingPrincipal}) and the innermost access token
-	 * narrowing it, if any.
-	 */
-	public static Source actingSource(RequestContext ctx) {
+	/** The access token that carried {@code ctx}, which narrows it, or null when none did. */
+	private static AMap<AString, ACell> presentedToken(RequestContext ctx) {
 		AVector<ACell> tokens = ctx.getTokens();
-		return new Source(actingPrincipal(ctx), tokens.isEmpty() ? null : RT.ensureMap(tokens.get(tokens.count() - 1)));
+		return tokens.isEmpty() ? null : RT.ensureMap(tokens.get(tokens.count() - 1));
 	}
 
 	/**
@@ -4980,8 +4990,7 @@ public class Engine {
 		AString controller = (agent == null) ? owner : agent.getController();
 		AString controllerOwner = covia.grid.Principals.isAgentDID(controller)
 			? covia.grid.Principals.userOf(controller) : controller;
-		return RequestContext.ofAgent(owner, agentId).withAuthorityOf(
-			narrowedByToken(context(controllerOwner, controller), (agent == null) ? null : agent.getControllerToken()));
+		return RequestContext.ofAgent(owner, agentId).withAuthorityOf(context(controllerOwner, controller));
 	}
 
 	/**
@@ -5018,9 +5027,6 @@ public class Engine {
 	/** Why a request an access token narrowed may not go on; the token's name follows. */
 	public static final String TOKEN_NOT_STANDING = "The access token no longer stands (deleted, expired or replaced): ";
 
-	/** Furthest a chain of tokens created by tokens' requests is followed. */
-	private static final int MAX_TOKEN_CHAIN = 16;
-
 	/** The venue's access tokens, or null while the token adapter is not running. */
 	public AccessTokens tokens() {
 		return (getAdapter(TokenAdapter.NAME) instanceof TokenAdapter adapter) ? adapter.tokens() : null;
@@ -5035,9 +5041,9 @@ public class Engine {
 	/**
 	 * The context a request presenting access token {@code reference} acts under
 	 * now: its issuer as that principal acts in the token's namespace
-	 * ({@link #context(AString, AString)}), narrowed by the caps of every token
-	 * on its chain ({@link #tokenChain}), each read at each point of action. A
-	 * token that later stops standing narrows to nothing. The token carried the
+	 * ({@link #context(AString, AString)}), narrowed by the token's caps, read
+	 * at each point of action. A token that later stops standing narrows to
+	 * nothing. The token carried the
 	 * request, so its reference is the request's route step.
 	 *
 	 * @throws AuthException when the token does not stand now, or its issuer could not act
@@ -5050,35 +5056,13 @@ public class Engine {
 
 	private static final AString TOKEN_ADAPTER = Strings.intern(TokenAdapter.NAME);
 
-	/**
-	 * The tokens {@code reference} stands for, outermost first: the token,
-	 * after the token whose request created it, and so on back. A link that no
-	 * longer resolves ends the chain there; it stays on the chain, where it
-	 * narrows to nothing.
-	 */
-	public AVector<ACell> tokenChain(AMap<AString, ACell> reference) {
-		java.util.ArrayDeque<ACell> chain = new java.util.ArrayDeque<>();
-		AMap<AString, ACell> at = reference;
-		while (at != null && chain.size() < MAX_TOKEN_CHAIN && !chain.contains(at)) {
-			chain.addFirst(at);
-			AccessToken token = resolveToken(at);
-			at = (token == null) ? null : token.source();
-		}
-		return Vectors.create(chain);
-	}
-
-	/** {@code ctx} narrowed by the chain {@code token} stands for; unchanged when there is no token. */
+	/** {@code ctx} narrowed by the caps of {@code token}, read at each point of action; unchanged when there is no token. */
 	private RequestContext narrowedByToken(RequestContext ctx, AMap<AString, ACell> token) {
 		if (token == null) return ctx;
-		AString owner = RT.ensureString(token.get(Fields.OWNER));
-		for (ACell link : tokenChain(token)) {
-			AMap<AString, ACell> reference = RT.ensureMap(link);
-			ctx = ctx.withToken(reference, resource -> {
-				AccessToken current = resolveToken(reference);
-				return (current == null) ? Vectors.empty() : current.caps().scope();
-			}, owner);
-		}
-		return ctx;
+		return ctx.withToken(token, resource -> {
+			AccessToken current = resolveToken(token);
+			return (current == null) ? Vectors.empty() : current.caps().scope();
+		}, RT.ensureString(token.get(Fields.OWNER)));
 	}
 
 	// ========== Callables (CALLABLES.md) ==========
@@ -5092,8 +5076,8 @@ public class Engine {
 	/**
 	 * The context a call of callable {@code reference} acts in: the frame of
 	 * its issuer as that principal acts in the callable's namespace
-	 * ({@link #context(AString, AString)}), narrowed by the chain of tokens that
-	 * created it and by its caps, each read at each point of action, so a
+	 * ({@link #context(AString, AString)}), narrowed by its caps, read at each
+	 * point of action, so a
 	 * callable that no longer stands narrows it to nothing. {@code invoker}'s
 	 * authority is the frame's caller and plays no other part; the call goes on
 	 * with the invoker's job, cancellation and authentication
@@ -5111,7 +5095,7 @@ public class Engine {
 		AString owner = RT.ensureString(reference.get(Fields.OWNER));
 		Callable callable = resolveCallable(reference);
 		RequestContext issuer = (callable == null) ? RequestContext.of(owner, owner, Vectors.empty())
-			: narrowedByToken(context(owner, callable.issuer()), callable.source());
+			: context(owner, callable.issuer());
 		return issuer.withCallable(reference, resource -> {
 			Callable current = resolveCallable(reference);
 			return (current == null) ? Vectors.empty() : current.caps().scope();

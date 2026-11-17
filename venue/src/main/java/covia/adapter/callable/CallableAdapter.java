@@ -55,7 +55,7 @@ public class CallableAdapter extends AAdapter {
 	public static final String OPERATION_REQUIRED = "operation is required: the operation the callable runs";
 	public static final String DESCRIPTION_INVALID = "description must be a string";
 	public static final String ISSUER_MAY_NOT_CREATE = "%s may not create callables";
-	public static final String SOURCE_NOT_HELD = "Callable %s can only be changed with the authority it was created with";
+	public static final String CALLABLE_NOT_COVERED = "Callable %s can only be changed by a request acting with its issuer's authority, covering its caps";
 	public static final String CALLABLE_INVALID = "callable is required: a callable's name, x/callable/<name> or <ownerDID>/x/callable/<name>";
 	public static final String NOT_CALLABLE = "No callable %s that this request may call";
 	public static final String GATE_REFUSED = "The gate of %s refused this call: %s";
@@ -116,7 +116,7 @@ public class CallableAdapter extends AAdapter {
 
 	/**
 	 * What a user sees of its callables at {@code x/callable}: each by name,
-	 * as {@link #view} shows it, never its id or source. A snapshot, so read-only.
+	 * as {@link #view} shows it, never its id. A snapshot, so read-only.
 	 */
 	@Override
 	public AForkableCursor<ACell> latticeView(RequestContext ctx) {
@@ -155,17 +155,18 @@ public class CallableAdapter extends AAdapter {
 	// ========== Working on callables ==========
 
 	/**
-	 * Creates a callable in the caller's namespace, issued by the source of
-	 * authority the request acts with ({@link Engine#actingSource}).
+	 * Creates a callable in the caller's namespace, issued by the principal
+	 * whose authority the request acts with ({@link Engine#actingPrincipal}).
+	 * Its caps lie within what the request may do itself
+	 * ({@link Engine#capsDenial}).
 	 */
 	Callable create(RequestContext ctx, ACell input) {
 		AString owner = owner(ctx);
 		AString name = requireName(input);
 		engine.requireAuthority(ctx, resource(name), Abilities.CALLABLE_MANAGE);
-		Engine.Source issuer = Engine.actingSource(ctx);
-		AString principal = issuer.principal();
+		AString principal = Engine.actingPrincipal(ctx);
 		// A delegate acting for another user holds none of that user's own authority to hand on.
-		if (principal == null || engine.isPublicPrincipal(principal) || !engine.holdsAuthorityOf(ctx, issuer)) {
+		if (principal == null || engine.isPublicPrincipal(principal) || !engine.actsWithAuthorityOf(ctx, principal)) {
 			throw new AuthException(ISSUER_MAY_NOT_CREATE.formatted(principal));
 		}
 		AString operation = reference(input, Fields.OPERATION);
@@ -175,6 +176,7 @@ public class CallableAdapter extends AAdapter {
 		if (gate != null) requireResolves(ctx, gate);
 		ACell caps = RT.getIn(input, Fields.CAPS);
 		AVector<ACell> stored = (caps == null) ? Vectors.empty() : Caps.parse(caps);
+		requireGivable(ctx, stored);
 		AString description = description(input);
 
 		AMap<AString, ACell> record = Maps.of(
@@ -182,7 +184,6 @@ public class CallableAdapter extends AAdapter {
 			Fields.ISSUER, principal,
 			Fields.OPERATION, operation,
 			Fields.CREATED, engine.currentTimestamp());
-		if (issuer.token() != null) record = record.assoc(Fields.SOURCE, issuer.token());
 		if (stored != null) record = record.assoc(Fields.CAPS, stored);
 		if (gate != null) record = record.assoc(Fields.GATE, gate);
 		if (description != null) record = record.assoc(Fields.DESCRIPTION, description);
@@ -192,8 +193,10 @@ public class CallableAdapter extends AAdapter {
 
 	/**
 	 * Changes a callable's operation, caps, gate or description; what is left
-	 * out stays as it is, and {@code gate: null} removes its gate. It needs the
-	 * authority the callable was created with, so no call or token widens it.
+	 * out stays as it is, and {@code gate: null} removes its gate. It needs a
+	 * request acting with its issuer's authority that covers its caps as they
+	 * are and as they become, so no request widens it beyond what it may do
+	 * itself.
 	 */
 	Callable update(RequestContext ctx, ACell input) {
 		AString owner = owner(ctx);
@@ -202,8 +205,8 @@ public class CallableAdapter extends AAdapter {
 		Callable callable = callables().callable(owner, name);
 		AString id = callable.id();
 		if (id == null) throw new NotFoundException(CALLABLE_NOT_FOUND.formatted(name), name.toString());
-		if (!engine.holdsAuthorityOf(ctx, new Engine.Source(callable.issuer(), callable.source()))) {
-			throw new AuthException(SOURCE_NOT_HELD.formatted(name));
+		if (!engine.actsWithAuthorityOf(ctx, callable.issuer()) || engine.capsDenial(ctx, callable.caps().scope()) != null) {
+			throw new AuthException(CALLABLE_NOT_COVERED.formatted(name));
 		}
 		AString operation = reference(input, Fields.OPERATION);
 		if (operation != null) requireResolves(ctx, operation);
@@ -212,6 +215,7 @@ public class CallableAdapter extends AAdapter {
 		if (gate != null) requireResolves(ctx, gate);
 		ACell caps = RT.getIn(input, Fields.CAPS);
 		AVector<ACell> stored = (caps == null) ? null : Caps.parse(caps);
+		if (caps != null) requireGivable(ctx, stored);
 		AString description = description(input);
 
 		AMap<AString, ACell> changed = callables().update(owner, name, record -> {
@@ -226,6 +230,12 @@ public class CallableAdapter extends AAdapter {
 		});
 		if (changed == null || !id.equals(changed.get(Fields.ID))) throw new ConflictException(CALLABLE_CHANGED.formatted(name));
 		return callables().callable(owner, name);
+	}
+
+	/** Refuses caps beyond what {@code ctx} may do itself ({@link Engine#capsDenial}); null is unrestricted. */
+	private void requireGivable(RequestContext ctx, AVector<ACell> caps) {
+		String denial = engine.capsDenial(ctx, caps);
+		if (denial != null) throw new AuthException(denial);
 	}
 
 	/**

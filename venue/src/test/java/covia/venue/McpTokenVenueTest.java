@@ -154,7 +154,7 @@ public class McpTokenVenueTest {
 	}
 
 	@Test
-	public void readingABearerAgainNeedsTheAdminAbilityAndTheTokensSource(TestInfo info) {
+	public void readingABearerAgainNeedsTheAdminAbilityAndCoveringTheToken(TestInfo info) {
 		AString alice = TestEngine.uniqueDID(info);
 		RequestContext owner = RequestContext.of(alice);
 		AMap<AString, ACell> tools = Maps.of(Fields.TOOLS, Vectors.of("v/ops/mcp/get-token", "v/ops/mcp/create-token"));
@@ -169,14 +169,14 @@ public class McpTokenVenueTest {
 		bearer(complete(tool(plain, "v/ops/mcp/create-token", Maps.of(Fields.NAME, "plain-child", Fields.TOOLS, Vectors.of("v/ops/covia/read")))));
 		failure(tool(plain, "v/ops/mcp/get-token", Maps.of(Fields.NAME, "plain-child")));
 
-		// With it, a token it made, but never itself or a token its issuer made directly
+		// With it, any token of its issuer's within its caps, but never a wider one
 		String child = bearer(complete(tool(administrator, "v/ops/mcp/create-token",
 			Maps.of(Fields.NAME, "admin-child", Fields.TOOLS, Vectors.of("v/ops/covia/read")))));
 		assertEquals(child, bearer(complete(tool(administrator, "v/ops/mcp/get-token", Maps.of(Fields.NAME, "admin-child")))));
-		assertEquals(TokenAdapter.TOKEN_SOURCE_NOT_HELD.formatted("administrator"),
-			failure(tool(administrator, "v/ops/mcp/get-token", Maps.of(Fields.NAME, "administrator"))));
-		assertEquals(TokenAdapter.TOKEN_SOURCE_NOT_HELD.formatted("plain"),
-			failure(tool(administrator, "v/ops/mcp/get-token", Maps.of(Fields.NAME, "plain"))));
+		assertEquals(plain, bearer(complete(tool(administrator, "v/ops/mcp/get-token", Maps.of(Fields.NAME, "plain")))));
+		complete(run("v/ops/mcp/create-token", tools.assoc(Fields.NAME, Strings.create("whole")).assoc(Fields.CAPS, covia.lattice.Caps.UNRESTRICTED), owner));
+		assertEquals(TokenAdapter.TOKEN_NOT_COVERED.formatted("whole"),
+			failure(tool(administrator, "v/ops/mcp/get-token", Maps.of(Fields.NAME, "whole"))));
 	}
 
 	@Test

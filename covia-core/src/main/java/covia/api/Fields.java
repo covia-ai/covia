@@ -380,9 +380,6 @@ public class Fields {
 	public static final StringShort ISSUER = Strings.intern("issuer");
 	/** On an access token update: issue a new bearer, so the old one stops working. */
 	public static final StringShort ROTATE = Strings.intern("rotate");
-	/** On an agent created by a request an access token narrowed: that token, which
-	 *  narrows its controller's authority. */
-	public static final StringShort CONTROLLER_TOKEN = Strings.intern("controllerToken");
 
 	// Callables (venue/docs/CALLABLES.md)
 	/** A callable, by reference; in kept authority, the callable whose call left the work running. */
