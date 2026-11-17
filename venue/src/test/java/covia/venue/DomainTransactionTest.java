@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -26,6 +27,7 @@ import convex.core.data.Strings;
 import convex.core.data.SignedData;
 import convex.core.data.prim.CVMLong;
 import convex.lattice.cursor.Cursors;
+import convex.lattice.cursor.MissingValueException;
 import covia.exception.AuthException;
 import covia.exception.ConflictException;
 import covia.exception.InvalidInputException;
@@ -68,17 +70,17 @@ class DomainTransactionTest {
 		assertFalse(user.jobs().job(id).appendHistory(message));
 	}
 
+	/** A transaction on a job deleted while it runs fails as missing, and recreates nothing. */
 	@Test
-	void jobTransactionRetriesAgainstDeletionWithoutRecreatingTheRow() throws Exception {
+	void jobTransactionAgainstDeletionFailsWithoutRecreatingTheRow() throws Exception {
 		var user = VenueState.create(AKeyPair.generate()).users().ensure(DID);
 		var id = Blob.fromHex("01");
 		user.jobs().create(id, Maps.of(Fields.ID, id, Fields.STATUS, covia.grid.Status.STARTED));
 		var entered = new CountDownLatch(1);
 		var resume = new CountDownLatch(1);
-		var appended = new AtomicBoolean();
 		try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
 			var pending = executor.submit(() -> user.jobs().job(id).execute(draft -> {
-				appended.set(draft.appendHistory(Maps.of(Fields.MESSAGE_ID, "raced")));
+				draft.appendHistory(Maps.of(Fields.MESSAGE_ID, "raced"));
 				entered.countDown();
 				await(resume);
 			}));
@@ -86,9 +88,9 @@ class DomainTransactionTest {
 				assertTrue(entered.await(10, TimeUnit.SECONDS));
 				assertNotNull(user.jobs().remove(id));
 			} finally { resume.countDown(); }
-			pending.get(10, TimeUnit.SECONDS);
+			ExecutionException failed = assertThrows(ExecutionException.class, () -> pending.get(10, TimeUnit.SECONDS));
+			assertInstanceOf(MissingValueException.class, failed.getCause());
 		}
-		assertFalse(appended.get());
 		assertNull(user.jobs().job(id));
 		assertTrue(user.jobs().getAll().isEmpty());
 	}
@@ -180,6 +182,7 @@ class DomainTransactionTest {
 		assertEquals(committed, agent.getConfig());
 	}
 
+	/** A transaction on a session deleted while it runs fails as missing, and does not resurrect it. */
 	@Test
 	void sessionTransactionDoesNotResurrectConcurrentDeletion() throws Exception {
 		var agent = TestAgents.ensure(VenueState.create(AKeyPair.generate()).users().ensure(DID),
@@ -189,10 +192,9 @@ class DomainTransactionTest {
 		var session = agent.session(sid);
 		var entered = new CountDownLatch(1);
 		var resume = new CountDownLatch(1);
-		var accepted = new AtomicBoolean();
 		try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
 			var pending = executor.submit(() -> session.execute(draft -> {
-				accepted.set(draft.setTitle(Strings.create("pending")));
+				draft.setTitle(Strings.create("pending"));
 				entered.countDown();
 				await(resume);
 			}));
@@ -200,9 +202,9 @@ class DomainTransactionTest {
 				assertTrue(entered.await(10, TimeUnit.SECONDS));
 				agent.sessions().remove(sid);
 			} finally { resume.countDown(); }
-			pending.get(10, TimeUnit.SECONDS);
+			ExecutionException failed = assertThrows(ExecutionException.class, () -> pending.get(10, TimeUnit.SECONDS));
+			assertInstanceOf(MissingValueException.class, failed.getCause());
 		}
-		assertFalse(accepted.get());
 		assertNull(agent.session(sid).getRecord());
 		assertFalse(session.beginCycle(CVMLong.ONE, null, 0));
 	}
