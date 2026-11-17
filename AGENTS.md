@@ -150,3 +150,15 @@ ln -s ../skills .agents/skills
 Invoke one as `/<name>` in Claude Code or `$<name>` in Codex. `.mcp.json`
 and `.claude/settings.json` are tracked; local overrides go in
 `.claude/settings.local.json`.
+
+## Java code intelligence
+
+`.claude/settings.json` enables Anthropic's `jdtls-lsp` plugin, which gives
+Claude Code definitions, references and diagnostics from Eclipse JDT LS. It
+needs a `jdtls` command on PATH: the Homebrew and AUR packages provide one,
+and on Windows a `jdtls.cmd` containing
+`python <jdtls>\bin\jdtls --jvm-arg=-Xmx2G %*` works. Each session starts its
+own server, which grows past 3 GB without a heap cap. The server compiles
+into the modules' `target/` folders as Eclipse does and Maven reuses those
+classes, so a test failing with `Unresolved compilation problem` means a
+source does not compile; `mvn clean` clears it.
