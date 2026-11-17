@@ -180,7 +180,12 @@ public class SchedulerTest {
 		assertEquals(caps, fired.getCaps());
 	}
 
-	/** A delegate's event fires in the owner's namespace while its admin/sudo grant authorises it. */
+	/**
+	 * An event a delegate left before admin/sudo was a call into the user,
+	 * which names the delegate, fires in the owner's namespace while its
+	 * admin/sudo grant authorises it; one scheduled under admin/sudo now is the
+	 * user's own and fires as the user.
+	 */
 	@Test
 	public void testADelegatedEventFiresUnderItsGrant() throws Exception {
 		AKeyPair ownerKey = AKeyPair.generate();
@@ -194,15 +199,19 @@ public class SchedulerTest {
 			Vectors.of(Capability.create(owner, Abilities.ADMIN_SUDO),
 				Capability.create(s(owner + "/v/test/ops/capturectx"), s("invoke"))),
 			Vectors.empty()).toJWT(ownerKey);
-		RequestContext sudo = engine.sudoContext(engine.withTransportGrants(
-			RequestContext.of(delegate), Vectors.of(grant)), owner);
-
-		Blob handle = sched.schedule(s("v/test/ops/capturectx"), Maps.empty(), sudo, future());
+		RequestContext delegateCtx = engine.withTransportGrants(RequestContext.of(delegate), Vectors.of(grant));
+		// The delegate in the owner's namespace, bounded by its grants, as such an event was made then
+		Blob handle = sched.schedule(s("v/test/ops/capturectx"), Maps.empty(), delegateCtx.onBehalfOf(owner), future());
 		TestAdapter.CAPTURED_CTX.remove(owner);
 		sched.trigger(handle, RequestContext.of(owner)).get(5, TimeUnit.SECONDS);
 		RequestContext fired = TestAdapter.CAPTURED_CTX.get(owner);
 		assertNotNull(fired, "the fire ran in the owner's namespace");
 		assertEquals(delegate, fired.getCallerDID());
+
+		Blob asUser = sched.schedule(s("v/test/ops/capturectx"), Maps.empty(), engine.sudoContext(delegateCtx, owner), future());
+		TestAdapter.CAPTURED_CTX.remove(owner);
+		sched.trigger(asUser, RequestContext.of(owner)).get(5, TimeUnit.SECONDS);
+		assertEquals(owner, TestAdapter.CAPTURED_CTX.get(owner).getCallerDID(), "scheduled under sudo, it is the user's");
 	}
 
 	/** An agent's step acts as the agent, so what it schedules fires as the agent. */

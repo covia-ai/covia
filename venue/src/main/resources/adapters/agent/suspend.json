@@ -23,7 +23,7 @@
 				"suspension": {
 					"type": "object",
 					"properties": {
-						"by": { "type": "string", "description": "Actual caller DID, including through sudo" },
+						"by": { "type": "string", "description": "DID of the principal that suspended the agent" },
 						"reason": { "type": "string", "maxLength": 512 },
 						"ts": { "type": "integer", "description": "Stop time in epoch milliseconds" }
 					},

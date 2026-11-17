@@ -130,6 +130,28 @@ class AuthAdapterTest {
 			identityFailure(RequestContext.ofAgent(publicDID, Strings.create("worker")), identityInput()).getErrorMessage());
 	}
 
+	/**
+	 * A user's identity token signs in as the user, so only the user in person
+	 * mints one: not a delegate acting as the user under admin/sudo, nor work
+	 * the venue carries on for the user. The refusal comes before any key is
+	 * looked for.
+	 */
+	@Test void onlyTheUserInPersonMintsTheUsersIdentity() {
+		Engine engine = TestEngine.ENGINE;
+		AKeyPair aliceKey = AKeyPair.generate(), bobKey = AKeyPair.generate();
+		AString alice = UCAN.toDIDKey(aliceKey.getAccountKey()), bob = UCAN.toDIDKey(bobKey.getAccountKey());
+		engine.getVenueState().users().ensure(alice);
+		engine.getVenueState().users().ensure(bob);
+		UCAN sudoGrant = UCAN.create(aliceKey, bobKey.getAccountKey(), engine.currentTimestamp().longValue() / 1000 + 3600,
+			Vectors.of(Capability.create(alice, Abilities.ADMIN_SUDO)), Vectors.empty());
+		RequestContext delegate = engine.sudoContext(RequestContext.of(bob).withProofs(Vectors.of(sudoGrant.toMap())), alice);
+		assertEquals(alice, delegate.getCallerDID(), "the delegate acts as Alice");
+		assertEquals(Engine.NOT_IN_PERSON, identityFailure(delegate, identityInput()).getErrorMessage());
+		assertEquals(Engine.NOT_IN_PERSON, identityFailure(engine.context(alice), identityInput()).getErrorMessage(),
+			"work the venue carries on for her is not her either");
+		assertNull(engine.resolveSecret("s/IDENTITY", RequestContext.of(alice)));
+	}
+
 	@Test void identityTokenValidatesAudienceLifetimeAndStorageInput() {
 		RequestContext ctx = localCaller();
 		assertEquals(AuthAdapter.IDENTITY_INPUT, identityFailure(ctx, Vectors.empty()).getErrorMessage());

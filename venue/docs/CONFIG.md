@@ -1703,9 +1703,9 @@ key there whose private half nobody ever sees. Name a held key by its
 `did:key`, multibase key or `0x` account key, as in
 `sign {"key":"did:key:z6Mk…","data":"0x…"}`, or another holder's as
 `<did>/x/crypto/keys/<key>`. Each use needs its `key/…` ability on the key by the
-standard capability rules: your own authority covers your keyring, and caps,
-`admin/sudo` and grants work as for any resource, so a grant of `*` over a
-namespace includes its keys. An agent has a keyring of its own, under its own
+standard capability rules: your own authority covers your keyring, a
+delegate acting as you under `admin/sudo` included, and caps and grants work
+as for any resource, so a grant of `*` over a namespace includes its keys. An agent has a keyring of its own, under its own
 DID, which goes when the agent is deleted. A phrase kept with
 `generate-mnemonic {"keyring":true}` derives keys only into its holder's
 keyring. A did:key that holds its own key signs `auth:identity-token` for
@@ -3397,8 +3397,8 @@ placeholder) or the operation it invokes (an operation's `secretKey` default,
 an MCP bridge's `auth`). A plain `s/NAME` is the caller's own secret. A user
 holds the ability over its own secrets and may send them anywhere the SSRF
 guard allows; an agent holds it as far as its caps reach, and its harness as
-far as its controller's authority does (UCAN.md §5.4); a delegate acting for
-the user (`admin/sudo`) needs a grant like anyone else. Another
+far as its controller's authority does (UCAN.md §5.4); a delegate acting as
+the user (`admin/sudo`) uses them as the user does. Another
 principal's secret is named as `<did>/s/NAME` and needs a `secret/use` grant
 from its owner, which may be bound to a destination: a UCAN whose capability
 carries `nb: {url: "https://api.example/"}` lets the holder use the secret

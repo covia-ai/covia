@@ -264,8 +264,10 @@ scheduling, which the event keeps in `proofs`. Consequences, all intended:
 - An owner's fire has the owner's authority; an agent's has the agent's
   `config.caps` as they are then, so narrowing an agent narrows its queued
   work, and a deleted agent's work does not fire.
-- A delegate's fire passes the same `admin/sudo` check a live request would, so
-  a revoked or expired delegation stops it.
+- An event scheduled under `admin/sudo` is the user's own. One a delegate
+  scheduled before `admin/sudo` acted as the user names the delegate: its fire
+  passes the delegate's `admin/sudo` check again, bounded by its grants as it
+  was then, so a revoked or expired delegation stops it.
 - The public principal's fire has `auth.public.caps` as they are then, and
   none while public access is off.
 - A proof's own bounds still apply: an expired, revoked or attenuated proof

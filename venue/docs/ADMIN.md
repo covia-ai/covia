@@ -44,18 +44,17 @@ contracts remain COG-13 and COG-17 in covia-docs.
 ## Scope and naming
 
 Use the ability `can: "admin/<area>/<action>"` for venue administration,
-or `can: "admin/sudo"` for the existing explicit namespace switch. Keep
-`with` as the resource being administered; there is no global admin role.
-Managing hosted accounts is a venue resource even though the operation is
-named `user:…`. Sudo retains its target-user resource and separate action
-checks; its classification does not broaden what it permits.
+or `can: "admin/sudo"` for acting as another user. Keep `with` as the
+resource being administered; there is no global admin role. Managing hosted
+accounts is a venue resource even though the operation is named `user:…`.
+Sudo's resource is the target user.
 
 | Family | Meaning |
 |--------|---------|
 | `admin/user` | Administer the venue's hosted accounts: registration, deletion, directory reads, authentication management and state transfer |
 | `admin/adapter` | Administer the venue's installed adapters and modules |
 | `admin/venue` | Maintain the venue process and store |
-| `admin/sudo` | Explicitly enter another user's working namespace, with separately granted invocation and action authority |
+| `admin/sudo` | Act as another user, with that user's whole authority (`user:sudo`) |
 | `admin/agent` | Direct tool execution under an agent's effective authority |
 | `admin/token` | Working on access tokens directly; its leaf `admin/token/<access point>` covers tokens that carry that access point |
 | `admin/execute` | Running code in the venue process; its leaf names the runtime, such as `admin/execute/python` |
@@ -106,7 +105,7 @@ Resource scopes are preserved; possible refinements are listed separately.
 | `venue:adapters`, `venue:adapter-enable`, `venue:adapter-disable`, `venue:adapter-configure`, `venue:adapter-restart`, `venue:module-load`, `venue:module-unload` | `admin/adapter/manage` on `V/adapters` |
 | `venue:restart`, including executable jar handoff | `admin/venue/restart` on `V/process` |
 | `venue:gc`, including status, cancel and backup options | `admin/venue/gc` on `V/store`; also `admin/venue/restart` on `V/process` when restarting |
-| `user:sudo` into another namespace | `admin/sudo` on the target `U`, plus independent invocation and action authority |
+| `user:sudo` as another user | `admin/sudo` on the target `U`, from a request no access token or callable narrows; never the venue's DID or its public principal |
 | A configured Python function (`python` module) | `admin/execute/python` on `V/python/operations/<id>` |
 
 Venue administration currently admits the venue itself, its agents within
@@ -178,13 +177,20 @@ kept bearer retains its source-authority and storage restrictions.
 | Self-service account key changes and whole-state export | Whole-owner identity exception described above | Preserve self-service; it grants no venue-level account administration |
 | `mcp:create-token`, `mcp:update-token`, `mcp:delete-token` | `mcp/token` on `U/x/token/<name>`, for tokens accepted at MCP alone; creation and update give caps only within the request's own, and update needs authority covering the token's caps; deletion only narrows | Retain independently managed MCP token permissions |
 | Agent configuration/controller changes | `agent/write` plus controller-authority checks where required | Retain separate agent management and authority checks |
-| `auth:identity-token` | Caller identity, scope/sub-principal and signing-key custody checks | Identity issuance remains identity-bound; a generic admin grant must not permit impersonation |
+| `auth:identity-token` | Caller identity, scope/sub-principal and signing-key custody checks, and for a user's identity the user in person | Identity issuance remains identity-bound: a delegate acting as the user under `admin/sudo` cannot mint the user's token |
 | `hitl:respond` | Responder must hold its own whole authority, in person ([VENUE_AUTHORITY.md](VENUE_AUTHORITY.md#how-it-works-today)); grant answers also follow granting rules | Approval remains attributable to the responder; admin authority must not manufacture someone else's consent |
 
-`user:sudo` changes the working namespace, not the authenticated actor. It
-does not grant all the target user's powers. Renaming it must preserve that
-property; `admin/sudo` alone must never become an impersonation grant.
-Requests through MCP tokens remain unable to switch to another user.
+`user:sudo` is a call into the target user, as `sudo` is on Unix: the request
+acts with that user's whole authority, the delegate its caller, and what it
+does and makes is the user's ([AUTHORITY.md](AUTHORITY.md#acting-for-another-user)).
+The grants the delegate presents neither bound nor add to it. Entry is checked
+once, when the call is made, whatever request makes it: an agent's tool call
+or a scheduled event included. Acts that need the user in person refuse it:
+answering the user's approval requests, `secret:extract`, `user:export` and
+minting the user's identity token. Requests through access tokens and
+callables cannot enter it, and nobody enters the venue's own DID or its public
+principal. A narrower delegation is a plain grant, under which the delegate
+acts as itself.
 
 Sensitive domain actions need an explicit place in the review without all
 becoming administration. Ordinary secret use, connected-account use,
@@ -283,7 +289,8 @@ Acceptance must cover:
   restricted/unrestricted MCP token, including tokens created by tokens.
 - REST job-free reads, `/run`, `/invoke`, bound MCP tools, agent tools and
   direct adapter calls: the same action has the same privilege requirement.
-- Sudo's separate namespace, invocation and action checks; clone's two
+- Sudo's entry check, the user's whole authority under it and the in-person
+  refusals; clone's two
   targets; GC with restart; every direct-identity and source-authority rule.
 - Grant issuance and chain delegation, including `grant/admin/…`, expiry,
   unknown caveats and rejection of the former ability names.

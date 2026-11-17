@@ -145,7 +145,7 @@ public class UserAdapter extends AAdapter {
 		return result;
 	}
 
-	/** Explicitly execute one operation in another user's namespace. */
+	/** Run one operation as another user, with that user's whole authority ({@link covia.venue.Engine#sudoContext}). */
 	private CompletableFuture<ACell> sudo(RequestContext ctx, ACell input) {
 		try {
 			AString userDID = requireDID(RT.ensureString(RT.getIn(input, Fields.DID)));

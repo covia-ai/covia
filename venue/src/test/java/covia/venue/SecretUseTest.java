@@ -172,11 +172,11 @@ public class SecretUseTest {
 		assertThrows(AuthException.class, () -> engine.resolveSecret(ref, carol, "https://evil.example/api"));
 	}
 
-	/** A delegate acting for a user ({@code admin/sudo}) works in the user's
-	 *  namespace, but the user's secrets are not its own: it uses one only
-	 *  under a grant, and never as the possession an own secret gives. */
+	/** A delegate acting as a user ({@code admin/sudo}) has the user's whole
+	 *  authority, so the user's secrets are the request's own, as they are the
+	 *  user's and the user's agents'. */
 	@Test
-	public void testASudoDelegateUsesTheUsersSecretsOnlyUnderAGrant() {
+	public void testASudoDelegateUsesTheUsersSecretsAsTheUser() {
 		AKeyPair aliceKP = AKeyPair.generate();
 		AKeyPair bobKP = AKeyPair.generate();
 		AString aliceDID = UCAN.toDIDKey(aliceKP.getAccountKey());
@@ -189,18 +189,9 @@ public class SecretUseTest {
 		RequestContext delegate = engine.sudoContext(
 			RequestContext.of(bobDID).withProofs(Vectors.of(sudo.toMap())), aliceDID);
 		assertEquals(aliceDID, delegate.getUserDID());
-		assertThrows(AuthException.class, () -> engine.resolveSecret("s/KEY", delegate));
-		assertThrows(AuthException.class, () -> engine.resolveSecret(aliceDID + "/s/KEY", delegate));
-		assertFalse(engine.isOwnSecretRef("s/KEY", delegate));
-
-		// With a use grant as well, the delegate uses it where the grant points.
-		UCAN use = UCAN.create(aliceKP, UCAN.fromDIDKey(bobDID), exp,
-			useOf(Strings.create(aliceDID + "/s/KEY"), "https://safe.com/api"), Vectors.empty());
-		RequestContext granted = engine.sudoContext(
-			RequestContext.of(bobDID).withProofs(Vectors.of(sudo.toMap(), use.toMap())), aliceDID);
-		assertEquals("alice-key", engine.resolveSecret("s/KEY", granted, "https://safe.com/api/v1"));
-		assertThrows(AuthException.class, () -> engine.resolveSecret("s/KEY", granted, "https://evil.example/"));
-		assertFalse(engine.isOwnSecretRef("s/KEY", granted));
+		assertEquals("alice-key", engine.resolveSecret("s/KEY", delegate, "https://anywhere.example/"));
+		assertEquals("alice-key", engine.resolveSecret(aliceDID + "/s/KEY", delegate));
+		assertTrue(engine.isOwnSecretRef("s/KEY", delegate));
 
 		// Alice and her agents use it as of right.
 		assertEquals("alice-key", engine.resolveSecret("s/KEY", RequestContext.of(aliceDID)));

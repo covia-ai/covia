@@ -58,8 +58,8 @@ venue/
   **Two identities, never conflated**: `getCallerDID()` is *who acted*
   (attribution, delegation audience, granting authority); `getUserDID()` is
   *whose namespace* (bare paths, workspace, secrets, jobs, inbox, quota). They
-  differ only for an agent sub-principal, `<ownerDID>:g:<agentId>`, and a
-  delegate acting for another user (`admin/sudo`) — see `docs/UCAN.md` §5.4.
+  differ only for an agent sub-principal, `<ownerDID>:g:<agentId>`; a
+  delegate under `admin/sudo` acts as the user — see `docs/UCAN.md` §5.4.
 - **Lattice** — CRDT-based persistent state. Structure defined in
   `covia.lattice.Covia`; design in `docs/GRID_LATTICE_DESIGN.md`.
 

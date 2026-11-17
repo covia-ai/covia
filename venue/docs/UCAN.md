@@ -193,7 +193,7 @@ Abilities follow UCAN's slash-delimited convention with no leading slash. `*` is
 | `admin/user/create` | - | Create an account |
 | `admin/user/delete` | - | Delete an account |
 | `admin/user/read` | - | Read account information |
-| `admin/sudo` | - | Explicitly act in a user namespace; grants no action authority |
+| `admin/sudo` | - | Act as the user, with the user's whole authority (`user:sudo`) |
 | `admin/user/export` | - | Export a user's stored state |
 | `admin/user/import` | - | Import stored state into an empty account |
 | `admin/user/authentication-manage` | - | Manage account authentication |
@@ -526,11 +526,11 @@ value hashes as the native content-addressing scheme.
    credentials follow the same separation.
 
 **Explicit sudo.** `user:sudo {did, operation, input}` is the instruction to
-execute one nested operation in another user's namespace. It requires a
-presented `{with: <did>, can: "admin/sudo"}` grant, plus the nested operation's
-`invoke` and point-of-action grants. The authenticated caller remains the actor;
-only the effective user namespace changes, and the nested context has no ambient
-caller capabilities. A `admin/sudo` grant on an ordinary invocation is inert.
+run one nested operation as another user. It requires a presented
+`{with: <did>, can: "admin/sudo"}` grant, checked once as the call is made, and
+the nested operation then runs with the user's whole authority, the delegate
+its caller (`Engine.sudoContext`, [ADMIN.md](ADMIN.md)). A `admin/sudo` grant
+on an ordinary invocation is inert.
 
 **MCP**: Same separation. Tool call parameters may include grant `ucans`, and
 the enclosing HTTP request carries its authentication credential in
@@ -685,10 +685,9 @@ with reduced authority:
   caller's whole authority.
 
 The explicit `user:sudo` operation is the deliberate boundary: a delegate does
-not carry its own ambient authority into another user's namespace. Its
-authority there is exactly the target user's presented proof chain, while its
-authenticated actor identity remains unchanged for attribution and audience
-checks.
+not carry its own authority, nor the grants it presents, into the call. Within
+it the request is the target user's, and only how it authenticated still
+names the delegate, so acts that need the user in person refuse it.
 
 ### 5.2 Cross-User Access
 
@@ -901,7 +900,7 @@ Two questions must not be conflated, and the context answers them separately:
 | **Whose namespace?** | `ctx.getUserDID()` | bare path resolution, workspace, secrets, jobs, inbox, quota |
 
 For every ordinary principal the two are equal, so this is a no-op outside
-agent execution and delegation (`admin/sudo`). For an agent, `w/foo` still means the **owner's** workspace —
+agent execution (a request under `admin/sudo` is the user's own). For an agent, `w/foo` still means the **owner's** workspace —
 that is the namespace it lives and works in — while the agent remains a
 distinct principal. `RequestContext.grantsDenial` canonicalises bare paths
 against `getUserDID()`, applying the same DID to the request resource and to
@@ -919,8 +918,8 @@ anyone else, presents a grant.
 The namespace is never parsed from a name: `Authority.of(did)` makes every DID
 its own namespace, agent-shaped or not. Only the venue puts a principal in
 another namespace, from a relationship it holds — running its own agent
-(`Authority.ofAgent`) or acting on a delegation (`onBehalfOf`, as `admin/sudo`
-does). Whatever records a call records the namespace beside the caller, as
+(`Authority.ofAgent`) or rebuilding work an `admin/sudo` delegate left before
+`admin/sudo` acted as the user (`onBehalfOf`). Whatever records a call records the namespace beside the caller, as
 COG-8 names them: `caller` is the principal that made the call, and `owner`
 the namespace, written only when it differs (`covia.grid.Attribution`). Jobs,
 scheduled events and HITL requests all do, and the
@@ -937,9 +936,9 @@ public principal; the owner comes
 from the record, never from the principal's name. An agent's context carries
 the agent, not a copy of its caps: every point of action reads `config.caps`
 as they stand then, and none once the agent is gone or terminated. `context(owner, principal,
-proofs)` adds proofs it presented, and takes any other principal as a delegate
-of the owner, under the same `admin/sudo` check as a live request; a scheduled
-event fires through it. Every inbound request starts from `context(caller)`
+proofs)` adds proofs it presented, and takes any other principal as a
+delegate whose earlier work it rebuilds, its `admin/sudo` grant checked again
+and bounding it as it did then; a scheduled event fires through it. Every inbound request starts from `context(caller)`
 (`AuthMiddleware.callerContext`), and an agent's step runs as that agent
 (`Engine.stepContext`, §5.4).
 
@@ -1043,17 +1042,15 @@ such as its keyring, stays the agent's.
 It is the agent's owner unless the record stores another (`controller`, shown
 by `agent:info` and `agent:list`). Whoever creates or forks an agent controls
 it, meaning the principal whose authority the request acts with
-(`Engine.actingPrincipal`): a user, an agent itself, or for a `admin/sudo`
-delegate the user it acts for. An input's `controller` names another, whose
+(`Engine.actingPrincipal`): a user, an agent itself, or under `admin/sudo`
+the user the delegate acts as. An input's `controller` names another, whose
 authority the request must hold (`Engine.holdsAuthorityOf`): it is that
 principal or an identity it signs in as, is its owner if it is an agent, or
 acts unscoped in a namespace that is root of it. So a user may name itself or
 its agents, and a capped agent only itself. A request made as an agent holds
 that agent's authority however it is derived, and not the whole authority of a
-controller its caps narrow. A `admin/sudo` delegate, whose scope is its
-presented grants, holds no other principal's authority. An agent such a
-delegate creates is controlled by its target, so grant `agent/create` beside
-`admin/sudo` as you would that user's own authority.
+controller its caps narrow. A delegate under `admin/sudo` acts as its target,
+so holds what the target holds, and an agent it creates is the target's.
 
 **An access token narrows the authority a request acts with.** A request through
 an access token is its issuer's, acting with the issuer's authority narrowed by

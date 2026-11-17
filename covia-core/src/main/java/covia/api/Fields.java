@@ -297,8 +297,9 @@ public class Fields {
 
 	// Identity / authorization
 	/** On a record of a call (a job, a scheduled event, a HITL request): the
-	 *  principal that made the call — a user, one of a user's agents
-	 *  ({@code <owner>:g:<id>}) or a {@code admin/sudo} delegate. Written with
+	 *  principal that made the call — a user or one of a user's agents
+	 *  ({@code <owner>:g:<id>}), or a {@code admin/sudo} delegate on a record
+	 *  made before that acted as the user. Written with
 	 *  {@link covia.grid.Attribution}. */
 	public static final StringShort CALLER = Strings.intern("caller");
 	/** On a record of a call: the namespace it belongs to, present only when that

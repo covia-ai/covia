@@ -1195,8 +1195,9 @@ Clients distinguish a deliberate stop by that field, never by error wording.
 Legacy records without it remain unclassified. New requests/chats to a
 suspended agent fail with `errorCode: "agent:suspended"`; their message names
 the stop and advises asking the stopping caller, or retains fault-recovery
-advice for an ordinary failure. `by` is `ctx.getCallerDID()`, including through
-sudo; an intermediary is not relabelled as the agent on whose behalf it acted.
+advice for an ordinary failure. `by` is `ctx.getCallerDID()`, the user a
+delegate acts as under `admin/sudo`; an intermediary is not relabelled as the
+agent on whose behalf it acted.
 
 **All mutations are atomic.** Each operation is a single compare-and-swap
 on the agent's lattice cell, so concurrent operations against the same

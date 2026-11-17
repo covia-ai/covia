@@ -4241,32 +4241,58 @@ public class Engine {
 		return web != null && principal.equals(web);
 	}
 
-	/** Refusals of an explicit namespace switch. */
+	/** Refusals of acting as another user. */
 	public static final String SUDO_AUTH_REQUIRED = "Authentication required for " + Abilities.ADMIN_SUDO;
 	public static final String SUDO_DENIED = "Sudo denied: requires " + Abilities.ADMIN_SUDO + " on %s from that user";
 	/** Why a request an access token or a callable narrows may not act for another user. */
 	public static final String SUDO_NARROWED = "A request through an access token or a callable cannot act for another user (admin/sudo)";
+	/** Why nobody acts as the venue or its public principal through {@code admin/sudo}; the target follows. */
+	public static final String SUDO_NOT_A_USER = "Nobody acts as the venue or its public principal through admin/sudo: %s";
 
 	/**
-	 * Authorises an explicit request to execute within another user's namespace.
-	 * The request itself is the instruction; the {@code admin/sudo} capability is
-	 * only the permission check. Authentication and actor attribution are retained.
-	 *
-	 * <p>The returned context is proof-bounded so the actor's ambient authority
-	 * over its own account cannot leak into the target account. The sudo grant
-	 * selects only the namespace: the invoked operation and every point of action
-	 * must still be covered independently.</p>
+	 * A call from {@code ctx} into {@code userDID} under {@code admin/sudo}, as
+	 * {@code sudo} on Unix is: the user's whole authority, as the user's own
+	 * request would hold it ({@link #context(AString)}), with the delegate's
+	 * authority as the frame's caller ({@link RequestContext#calledFrom}). The
+	 * grants the delegate presents do not bound it, so what it does and makes is
+	 * the user's. Entry is checked once, here: the request names a principal, no
+	 * access token or callable narrows it, and it holds {@code admin/sudo} on the
+	 * user, whatever request it is (deferred work and an agent's tool call
+	 * included). The venue's own DID and its public principal are no user to
+	 * enter. The call keeps the delegate's job, cancellation and authentication,
+	 * so acts that need the user in person refuse it ({@link #inPersonDenial}).
+	 * A request already in the user's account is returned as it is.
 	 */
 	public RequestContext sudoContext(RequestContext ctx, AString userDID) {
-		if (ctx == null || ctx.getCallerDID() == null
-				|| isPublicPrincipal(ctx.getCallerDID())) {
-			throw new AuthException(SUDO_AUTH_REQUIRED);
-		}
+		AString delegate = (ctx == null) ? null : ctx.getCallerDID();
+		if (delegate == null || isPublicPrincipal(delegate)) throw new AuthException(SUDO_AUTH_REQUIRED);
 		if (userDID == null) throw new InvalidInputException("Target user DID is required");
 		requireNotSubPrincipal(userDID);
 		if (userDID.equals(ctx.getUserDID())) return ctx;
-		// Acting for another user is bounded by that user's grants, not by a token's
-		// or a callable's caps, so a request either narrows never takes that step.
+		if (isVenuePrincipal(userDID) || isPublicPrincipal(userDID)) {
+			throw new AuthException(SUDO_NOT_A_USER.formatted(userDID));
+		}
+		// Acting as another user takes that user's whole authority, which no
+		// token's or callable's caps bound, so a request either narrows never enters
+		if (ctx.isNarrowed()) throw new AuthException(SUDO_NARROWED);
+		if (!crossUserAllows(ctx, userDID, Abilities.ADMIN_SUDO)) {
+			throw new AuthException(SUDO_DENIED.formatted(userDID));
+		}
+		return context(userDID).calledFrom(ctx);
+	}
+
+	/**
+	 * Work an {@code admin/sudo} delegate left before {@code admin/sudo} was a
+	 * call into the user, whose records name the delegate: the delegate in the
+	 * user's namespace, bounded by the grants it presents, as that work ran
+	 * then, its grant checked again each time it acts. It never takes the
+	 * user's whole authority ({@link #sudoContext}); the venue's migration
+	 * settles such work.
+	 */
+	private RequestContext delegateWorkContext(RequestContext ctx, AString userDID) {
+		AString delegate = ctx.getCallerDID();
+		if (delegate == null || isPublicPrincipal(delegate)) throw new AuthException(SUDO_AUTH_REQUIRED);
+		requireNotSubPrincipal(userDID);
 		if (ctx.isNarrowed()) throw new AuthException(SUDO_NARROWED);
 		if (!crossUserAllows(ctx, userDID, Abilities.ADMIN_SUDO)) {
 			throw new AuthException(SUDO_DENIED.formatted(userDID));
@@ -4756,18 +4782,19 @@ public class Engine {
 	 * The context {@code principal} acts under now for {@code owner}, presenting
 	 * {@code proofs}, as a live request of its own would: the owner, one of its
 	 * agents or the public principal as {@link #context(AString, AString)}, and
-	 * any other principal only as a {@code admin/sudo} delegate whose proofs still
-	 * authorise it ({@link #sudoContext}). A recorded request, such as a
-	 * scheduled event, is rebuilt this way when it runs.
+	 * any other principal only as work an {@code admin/sudo} delegate left
+	 * whose proofs still authorise it ({@link #delegateWorkContext}). A recorded
+	 * request, such as a scheduled event, is rebuilt this way when it runs.
 	 *
-	 * @throws AuthException as {@link #context(AString, AString)} or {@link #sudoContext}
+	 * @throws AuthException as {@link #context(AString, AString)}, or when a
+	 *         delegate's proofs no longer authorise it
 	 */
 	public RequestContext context(AString owner, AString principal, AVector<ACell> proofs) {
 		boolean own = principal == null || principal.equals(owner) || isPublicPrincipal(principal)
 			|| agentIdIn(owner, principal) != null;
 		RequestContext ctx = own ? context(owner, principal) : context(principal);
 		if (proofs != null) ctx = ctx.withProofs(proofs);
-		return own ? ctx : sudoContext(ctx, owner);
+		return own ? ctx : delegateWorkContext(ctx, owner);
 	}
 
 	/**
@@ -4818,8 +4845,8 @@ public class Engine {
 	 * an agent; acting in a namespace that is root of it counts only with an
 	 * unrestricted scope. So a user holds its own and its agents' authority, an
 	 * agent its own, and a capped agent not its owner's or a sibling's. A
-	 * {@code admin/sudo} delegate, whose scope is its presented grants, holds no
-	 * other principal's.
+	 * delegate under {@code admin/sudo} acts as its target, so holds what the
+	 * target holds.
 	 *
 	 * <p>A request made as an agent holds that agent's authority, however it is
 	 * derived, and its owner's only when it acts with its own authority and
@@ -4906,7 +4933,7 @@ public class Engine {
 	 * {@link #holdsAuthorityOf(RequestContext, AString)}, setting the caps of
 	 * its token or callable aside. Such a request may hand that authority on
 	 * within what it may do itself ({@link #capsDenial}), as the issuer of a
-	 * token or callable; a {@code admin/sudo} delegate may not.
+	 * token or callable.
 	 */
 	public boolean actsWithAuthorityOf(RequestContext ctx, AString principal) {
 		if (ctx == null || principal == null) return false;
@@ -4931,8 +4958,9 @@ public class Engine {
 	 * creates or forks takes for its controller: an agent acting in its owner's
 	 * namespace, whatever its authority derives from, so that what it creates
 	 * stays within it; the authority's own principal when it acts in its own
-	 * namespace; and otherwise the namespace it acts for, as a {@code admin/sudo}
-	 * delegate acts for its target.
+	 * namespace; and otherwise the namespace it acts for, as in work an
+	 * {@code admin/sudo} delegate left before that was a call into the user
+	 * ({@link #delegateWorkContext}).
 	 */
 	public static AString actingPrincipal(RequestContext ctx) {
 		if (actsAsOwnAgent(ctx)) return ctx.getCallerDID();
@@ -5659,12 +5687,13 @@ public class Engine {
 	}
 
 	/** Whether {@code owner}'s store is the caller's own: the caller is the user
-	 *  or one of its agents. A delegate acting for the user ({@code admin/sudo})
-	 *  works in the user's namespace but is neither. The public principal's
-	 *  store is provisioned by the operator and nobody's own. */
+	 *  or one of its agents, a delegate acting as the user under
+	 *  {@code admin/sudo} included. Work such a delegate left before that was a
+	 *  call into the user is in the user's namespace but is neither. The public
+	 *  principal's store is provisioned by the operator and nobody's own. */
 	private boolean isOwnSecret(AString owner, RequestContext ctx) {
 		if (!owner.equals(ctx.getUserDID()) || isPublicPrincipal(owner)) return false;
-		// By the caller, not the namespace: a delegate's namespace is the user's too.
+		// By the caller, not the namespace: earlier delegate work is in the user's namespace too.
 		AString caller = ctx.getCallerDID();
 		return owner.equals(caller) || agentIdIn(owner, caller) != null;
 	}

@@ -95,8 +95,8 @@ public final class Abilities {
 	public static final AString ADMIN_USER_CREATE   = Strings.intern("admin/user/create");
 	public static final AString ADMIN_USER_DELETE   = Strings.intern("admin/user/delete");
 	public static final AString ADMIN_USER_READ     = Strings.intern("admin/user/read");
-	/** Authorise an explicit sudo request into a user's namespace. Scoped to the
-	 *  target user DID itself; grants no operation or action authority. */
+	/** Authorise acting as a user, with that user's whole authority
+	 *  ({@code user:sudo}). Scoped to the target user DID itself. */
 	public static final AString ADMIN_SUDO     = Strings.intern("admin/sudo");
 	/** Read out another user's whole stored state ({@code user:export}, the
 	 *  source of {@code user:clone}). */

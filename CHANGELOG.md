@@ -37,6 +37,9 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - A `venue:adapter/configure` change the adapter refuses with an error is reverted to its previous configuration.
 - A scheduled fire's job is recorded in the same commit as its claim, and a remote agent turn's backend job with the turn's link to it, so a restart never leaves a failed job for a fire that then runs again, nor a backend job its turn has no record of.
 - A P2P node that cannot launch, such as on a port in use, is unavailable rather than a configuration error.
+- `admin/sudo` (`user:sudo`) is a call into the user: the nested operation runs with the user's whole authority, what it does and makes, such as jobs, events and agents, is the user's, and the delegate's grants no longer bound it. Entering is checked once, whatever request makes it.
+- `user:sudo` refuses the venue's own DID and its public principal as targets.
+- Minting a user's identity token (`auth:identity-token`) needs the user in person, so neither a delegate under `admin/sudo` nor work carried on later can.
 - An agent's harness runs in its controller's frame: what it starts, such as its model calls and an external agent's backend job, records the controller as its caller in the controller's account, and names in the agent's configuration resolve in the controller's namespace; the agent's tool calls still run as the agent.
 
 - Adapters refuse settings with a configuration error, from the venue config and from `venue:adapter/configure` alike; anything else an adapter's `configure` throws, a module adapter's `IllegalArgumentException` included, is reported as that adapter's fault rather than as invalid input or the `venue` adapter's.

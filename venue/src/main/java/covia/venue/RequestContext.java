@@ -470,16 +470,17 @@ public class RequestContext {
 	/**
 	 * This frame, entered by a call from {@code invoker}: a callable's call
 	 * (CALLABLES.md), where this context is the callable's issuer narrowed by
-	 * the callable. It acts with this frame's authority alone, in this frame's
+	 * the callable, or {@code admin/sudo}, where it is the user's whole
+	 * authority. It acts with this frame's authority alone, in this frame's
 	 * namespace and execution scope, and its caller is the invoker's authority
 	 * ({@link #getCaller()}). It goes on with the invoker's job, as the parent
 	 * of what it starts, its cancellation and the principal the request
 	 * authenticated as ({@link #getAuthenticatedDID()}), so a call is never the
-	 * issuer in person unless the issuer made it. The call is still the
-	 * invoker's request, so it keeps the invoker's route. The invoker's
-	 * execution scope, transport grants, authentication record, agent cycle and
-	 * session delivery stay with the invoker. Only {@link Engine#callContext}
-	 * makes one.
+	 * frame's principal in person unless that principal made it. The call is
+	 * still the invoker's request, so it keeps the invoker's route. The
+	 * invoker's execution scope, transport grants, authentication record, agent
+	 * cycle and session delivery stay with the invoker. Only
+	 * {@link Engine#callContext} and {@link Engine#sudoContext} make one.
 	 */
 	RequestContext calledFrom(RequestContext invoker) {
 		return new RequestContext(authority, executionScope, null, null, invoker.cancellation, null, null,

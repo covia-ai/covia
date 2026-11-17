@@ -5,8 +5,9 @@ called into it. The model is Convex's `*address*` and `*caller*` (CAD005). A
 record of work, such as a job or a scheduled event, names the principal that
 called it. This is a design, implemented in part: a callable's call enters its
 issuer's frame and calls nest, an agent's harness runs in its controller's
-frame, state within one interaction belongs to the principal that opened it,
-and acts that need the user in person read how the request authenticated. What still works the old way is listed under
+frame, `admin/sudo` is a call into the user, state within one interaction
+belongs to the principal that opened it, and acts that need the user in
+person read how the request authenticated. What still works the old way is listed under
 [What it replaces](#what-it-replaces).
 
 ## The two fields
@@ -224,21 +225,20 @@ one through a token or within a callable's call.
 
 ## What it replaces
 
-- The request context's caller DID, which today names the authority in most
-  cases, but the delegate under `admin/sudo`.
+- The request context's caller DID as a value apart from its authority, which
+  differ today only for an agent whose controller is in another namespace.
 - The request context's namespace as a value apart from its authority, and a
   separate authority on a context.
 - The caller context a job keeps only when its adapter asks, in two shapes of
   kept authority, and a scheduled event's own shape of the same. A job's state
   is the context it runs in.
-- A record of work whose `caller` names whoever authenticated (a sudo
-  delegate) beside an `owner` naming the account,
+- A record of work whose `caller` names a sudo delegate, as work it left
+  before `admin/sudo` acted as the user does, beside an `owner` naming the account,
   from which the venue works out what kind of principal acted.
 - An `accepts` list that matches DIDs exactly, and a callers gate that admits
   a namespace it lists.
 - A scheduled event reached by identity, by its account's owner or the
   principal that scheduled it, since no capability names an event.
 - A configured Python function, which is not told who called it (#706).
-- `admin/sudo` as a switch of namespace bounded by the grants the delegate
-  presents ([ADMIN.md](ADMIN.md), [UCAN.md](UCAN.md)), and the check of the
-  delegate's grant again when work it left runs.
+- The check of an `admin/sudo` delegate's grant again when work it left
+  before `admin/sudo` was a call into the user runs, bounded by that grant.

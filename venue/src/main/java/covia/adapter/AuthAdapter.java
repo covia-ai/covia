@@ -26,6 +26,7 @@ import covia.grid.auth.VenueAuth;
 import covia.grid.auth.VenueChallenge;
 import covia.grid.auth.VenueDID;
 import covia.grid.client.VenueHTTP;
+import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.auth.AuthenticationMethods;
 import covia.venue.auth.AuthResult;
@@ -191,6 +192,13 @@ public class AuthAdapter extends AAdapter implements AuthenticationMethods, Venu
 		// authority has no scope.
 		if (ctx.getCaps() != null && !ctx.isSubPrincipal()) {
 			throw new AuthException(IDENTITY_DIRECT_ONLY);
+		}
+		// A user's token signs in as the user wherever it is presented, so only the
+		// user in person mints one: not a delegate acting as the user, nor work the
+		// venue carries on. An agent mints its own.
+		if (Engine.agentIdIn(ctx.getUserDID(), caller) == null) {
+			String denial = engine.inPersonDenial(ctx);
+			if (denial != null) throw new AuthException(denial);
 		}
 		AKeyPair signer = identitySigner(ctx, caller);
 		if (signer == null) throw new AuthException(IDENTITY_NOT_OWNED);

@@ -100,9 +100,9 @@ public class HITLAdapterTest {
 
 	// ========== The clean drive: request → respond → completion ==========
 
-	/** A delegate asking for the user it acts for is the request's caller, in that user's namespace. */
+	/** A delegate acting as the user asks as the user: the request and its job are the user's own. */
 	@Test
-	public void testADelegatesRequestNamesItsOwner() {
+	public void testADelegatesRequestIsTheUsers() {
 		AKeyPair ownerKey = AKeyPair.generate();
 		AString owner = UCAN.toDIDKey(ownerKey.getAccountKey());
 		engine.getVenueState().users().ensure(owner);
@@ -117,10 +117,9 @@ public class HITLAdapterTest {
 		assertEquals(Status.INPUT_REQUIRED, job.getStatus(), job.getErrorMessage());
 		AMap<AString, ACell> record = engine.getVenueState().users().user(owner).inbox()
 			.get(job.getID());
-		assertEquals(BOB_DID, record.get(Hitl.CALLER));
-		assertEquals(owner, record.get(Hitl.OWNER), "the delegate asked in the owner's namespace");
-		assertEquals(BOB_DID, job.getCaller());
-		assertEquals(owner, job.getOwner(), "and the request's job is the owner's");
+		assertEquals(owner, record.get(Hitl.CALLER), "the user asked");
+		assertEquals(owner, job.getCaller());
+		assertEquals(owner, job.getOwner(), "and the request's job is the user's");
 		job.cancel();
 	}
 

@@ -74,8 +74,8 @@ grants or a callable's gate ([CALLABLES.md](CALLABLES.md)), must also be
 covered by its tokens' caps.
 
 **Changing a token** needs a request that acts with its issuer's authority,
-however a token, callable or agent's caps narrow it (`Engine.actsWithAuthorityOf`,
-never a delegate under `admin/sudo`), and may itself do all that the token's
+however a token, callable or agent's caps narrow it (`Engine.actsWithAuthorityOf`;
+a delegate under `admin/sudo` acts as the user), and may itself do all that the token's
 caps allow, as they are and as they become. So a request through a token can
 change any of its issuer's tokens within its own caps, itself included, and
 none wider. Deleting a token only narrows, so it needs neither.
