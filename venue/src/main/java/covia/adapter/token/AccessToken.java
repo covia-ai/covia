@@ -15,6 +15,7 @@ import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
 import covia.api.Fields;
 import covia.lattice.Caps;
+import covia.lattice.Covia;
 
 /**
  * One access token's record (ACCESS_TOKENS.md). Its core is read by the
@@ -86,7 +87,7 @@ public final class AccessToken extends ALatticeComponent<AMap<AString, ACell>>
 
 	/** Its caps: missing is unrestricted, empty none. */
 	public Caps caps() {
-		return new Caps(cursor().path(Fields.CAPS));
+		return new Caps(Covia.entry(cursor(), Fields.CAPS));
 	}
 
 	/** When it expires, in milliseconds since the epoch; null for never. */

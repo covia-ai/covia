@@ -41,7 +41,7 @@ public class CapsTest {
 
 	@Test
 	public void aMissingEntryIsUnrestricted() {
-		Caps caps = new Caps(Cursors.create(Maps.empty()).path(s("caps")));
+		Caps caps = new Caps(Covia.entry(Cursors.create(Maps.empty()), s("caps")));
 		assertTrue(caps.isUnrestricted());
 	}
 
@@ -86,7 +86,7 @@ public class CapsTest {
 
 	@Test
 	public void changesThroughTheComponent() {
-		Caps caps = new Caps(Cursors.create(Maps.empty()).path(s("caps")));
+		Caps caps = new Caps(Covia.entry(Cursors.create(Maps.empty()), s("caps")));
 		caps.set(READ_NOTES);
 		assertEquals(READ_NOTES, caps.scope());
 		caps.clear();

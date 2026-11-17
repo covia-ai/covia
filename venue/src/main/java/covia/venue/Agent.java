@@ -28,6 +28,7 @@ import covia.lattice.Owner;
 import covia.lattice.ValuePath;
 import covia.lattice.Workspace;
 import covia.api.Fields;
+import covia.exception.NotFoundException;
 
 /**
  * Agent state with named atomic mutations and compound transactions.
@@ -61,6 +62,8 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 	public static final AString SUSPENSION_BY = Strings.intern("by");
 	public static final int MAX_SUSPEND_REASON_LENGTH = 512;
 	public static final String SUSPENDED_BY = "Suspended by %s";
+	/** Refusal of a change below an agent that does not exist; names the agent. */
+	public static final String MISSING = "Agent '%s' does not exist";
 	public static final String INVALID_SESSION_FRAMES = "Session frames must be a vector";
 
 	// Record field keys
@@ -373,12 +376,17 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 
 	/** The agent's queue of tasks, bound to this agent (including when this agent is a draft). */
 	public Tasks tasks() {
-		return new Tasks(cursor().path(K_TASKS));
+		return new Tasks(this.<Index<Blob, ACell>>inRecord(K_TASKS).withDefault(Index.none()));
 	}
 
 	/** The agent's sessions, bound to this agent (including when this agent is a draft). */
 	public Sessions sessions() {
-		return new Sessions(getContext(), cursor().path(K_SESSIONS), owner, agentId);
+		return new Sessions(getContext(), this.<Index<Blob, ACell>>inRecord(K_SESSIONS).withDefault(Index.none()), owner, agentId);
+	}
+
+	/** A field of the agent's record: a change creates it, and is refused ({@link #MISSING}) for a missing agent. */
+	private <T extends ACell> AForkableCursor<T> inRecord(AString key) {
+		return Covia.field(cursor(), key, () -> new NotFoundException(MISSING.formatted(agentId), String.valueOf(agentId)));
 	}
 
 	/** One of the agent's sessions, as {@link Sessions#session}: a missing
@@ -437,7 +445,7 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 		return Records.ifPresent(this, () -> transact(draft -> {
 			if (!draft.exists() || SUSPENDED.equals(draft.getStatus()) || TERMINATED.equals(draft.getStatus())) return null;
 			return draft.session(sid).saveSummary(expectedSession, instruction, summary);
-		}), false);
+		}), null);
 	}
 
 	/** Claim one external turn per session. A retained claim after restart prevents blind replay. */
@@ -447,7 +455,7 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 			if (!draft.exists() || TERMINATED.equals(draft.getStatus()) || SUSPENDED.equals(draft.getStatus())) return false;
 			if (create) draft.sessions().create(sid, caller, null);
 			return draft.session(sid).claimExternalTurn(jobId, content);
-		}), null);
+		}), false);
 	}
 
 	/**
@@ -576,7 +584,7 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 			AMap<AString, ACell> before = draft.getRecord();
 			if (before != null) draft.changeStatus(TERMINATED);
 			return before;
-		});
+		}), null);
 	}
 
 	/** Removes a task, queued or resolved. */
@@ -587,7 +595,7 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 				Index<Blob, ACell> resolved = extractResolved(r);
 				return resolved.containsKey(taskId) ? r.assoc(K_RESOLVED, resolved.dissoc(taskId)) : r;
 			});
-		}), null);
+		});
 	}
 
 	/**
@@ -864,7 +872,7 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 			if (r == null || TERMINATED.equals(r.get(K_STATUS))) return null;
 			draft.changeStatus(SUSPENDED);
 			return draft.update(u -> u.assoc(KEY_SUSPENSION, suspension).dissoc(K_ERROR));
-		});
+		}), null);
 	}
 
 	/** Sets a fault suspension without overwriting a deliberate stop racing the failure. */
@@ -874,7 +882,7 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 			if (r == null || r.containsKey(KEY_SUSPENSION) || TERMINATED.equals(r.get(K_STATUS))) return;
 			draft.changeStatus(SUSPENDED);
 			draft.update(u -> u.assoc(K_ERROR, error));
-		}), null);
+		});
 	}
 
 	/**

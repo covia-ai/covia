@@ -10,6 +10,7 @@ import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
 import covia.api.Fields;
 import covia.lattice.Caps;
+import covia.lattice.Covia;
 
 /**
  * One callable's record (CALLABLES.md): a function its owner publishes for
@@ -92,7 +93,7 @@ public final class Callable extends ALatticeComponent<AMap<AString, ACell>>
 
 	/** Its caps: missing is unrestricted, empty none. */
 	public Caps caps() {
-		return new Caps(cursor().path(Fields.CAPS));
+		return new Caps(Covia.entry(cursor(), Fields.CAPS));
 	}
 
 	/** How a call and the work it leaves running name it: {@code {owner, name, id}}. */

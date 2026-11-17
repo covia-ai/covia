@@ -16,8 +16,8 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.lattice.NoSuchPathException;
-import convex.lattice.PathWriteException;
 import covia.api.Fields;
+import covia.exception.NotFoundException;
 import covia.lattice.Namespace;
 
 /** An agent's sessions and the operations a session has of its own. */
@@ -75,7 +75,7 @@ public class SessionsTest {
 	@Test
 	public void testAMissingAgentTakesNoSession() {
 		AString missing = Strings.create("missing-agent");
-		assertThrows(PathWriteException.class, () -> user.agents().at(missing).sessions().create(SESSION, null, null));
+		assertThrows(NotFoundException.class, () -> user.agents().at(missing).sessions().create(SESSION, null, null));
 		assertNull(user.agent(missing), "creating a session brings no agent into being");
 	}
 

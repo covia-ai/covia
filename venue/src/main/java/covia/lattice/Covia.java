@@ -1,5 +1,7 @@
 package covia.lattice;
 
+import java.util.function.Supplier;
+
 import convex.core.data.ACell;
 import convex.core.data.AHashMap;
 import convex.core.data.AMap;
@@ -11,6 +13,7 @@ import convex.core.data.Index;
 import convex.lattice.ALattice;
 import convex.lattice.MapComponent;
 import convex.lattice.cursor.AForkableCursor;
+import convex.lattice.cursor.PathCursor;
 import convex.lattice.generic.LWWLattice;
 import covia.api.Fields;
 
@@ -147,6 +150,31 @@ public final class Covia {
 	@SuppressWarnings("unchecked")
 	public static <T extends ACell> AForkableCursor<T> entry(AForkableCursor<? extends ACell> map, AString key) {
 		return new MapComponent<AString, ACell>((AForkableCursor<AHashMap<AString, ACell>>) (AForkableCursor<?>) map).path(key);
+	}
+
+	/**
+	 * The field {@code key} of a record that must exist. A changed write creates
+	 * the field in the record; with no record it is refused with {@code missing},
+	 * and a record that cannot hold the field is refused as on any path.
+	 */
+	public static <T extends ACell> AForkableCursor<T> field(AForkableCursor<? extends ACell> record, AString key,
+			Supplier<? extends RuntimeException> missing) {
+		return new Field<>(record, key, missing);
+	}
+
+	private static final class Field<T extends ACell> extends PathCursor<T> {
+		private final Supplier<? extends RuntimeException> missing;
+
+		Field(AForkableCursor<? extends ACell> record, AString key, Supplier<? extends RuntimeException> missing) {
+			super(record, key);
+			this.missing = missing;
+		}
+
+		@Override
+		protected void requireWritable(ACell record) {
+			if (record == null) throw missing.get();
+			write(record, view(record));
+		}
 	}
 
 	/** Injects the write-clock timestamp (from the VenueContext) into the venue value's {@code :timestamp}. */

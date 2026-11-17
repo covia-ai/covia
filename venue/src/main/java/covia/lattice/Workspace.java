@@ -10,7 +10,6 @@ import convex.core.data.Path;
 import convex.lattice.ALatticeComponent;
 import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
-import convex.lattice.cursor.PathCursor;
 import covia.exception.InvalidInputException;
 
 /**
@@ -50,7 +49,8 @@ public final class Workspace extends ALatticeComponent<ACell>
 	 * @return The area
 	 */
 	public static Workspace inRecord(AForkableCursor<ACell> record, AString key) {
-		return new Workspace(new RecordArea(record, key).withDefault(Maps.empty()));
+		return new Workspace(Covia.<ACell>field(record, key, () -> new InvalidInputException(String.format(NO_RECORD, key)))
+			.withDefault(Maps.empty()));
 	}
 
 	@Override
@@ -133,22 +133,5 @@ public final class Workspace extends ALatticeComponent<ACell>
 	 */
 	public int createPath(Path path) {
 		return entry(path).createLevels(Math.toIntExact(path.count()));
-	}
-
-	/** The area at a key in a record; a change creates the area, and needs the record. */
-	private static final class RecordArea extends PathCursor<ACell> {
-		private final AString key;
-
-		RecordArea(AForkableCursor<ACell> record, AString key) {
-			super(record, key);
-			this.key = key;
-		}
-
-		/** Only a missing record refuses; a record that cannot hold the area refuses as on any path. */
-		@Override
-		protected void requireWritable(ACell record) {
-			if (record == null) throw new InvalidInputException(String.format(NO_RECORD, key));
-			write(record, view(record));
-		}
 	}
 }
