@@ -173,7 +173,7 @@ public class SchedulerTest {
 		RequestContext agent = agent("worker", caps);
 		Blob handle = sched.schedule(s("v/test/ops/capturectx"), Maps.empty(), agent, future());
 		TestAdapter.CAPTURED_CTX.remove(did);
-		sched.trigger(handle, agent).get(5, TimeUnit.SECONDS);
+		sched.trigger(handle, ctx).get(5, TimeUnit.SECONDS);
 		RequestContext fired = TestAdapter.CAPTURED_CTX.get(did);
 		assertNotNull(fired, "the fire ran in the owner's namespace");
 		assertEquals(agent.getAuthorityDID(), fired.getAuthorityDID());
@@ -510,9 +510,8 @@ public class SchedulerTest {
 	 * The owner's caps are captured at schedule time and re-enforced at fire
 	 * time: a deferred op the caps do not cover is denied — exactly as it would
 	 * be on the immediate {@code invokeOperation} path. Guards against the
-	 * scheduler firing under more authority than the owner held. A scoped
-	 * context manages only the events it made, so it is an agent, named as
-	 * the event's actor.
+	 * scheduler firing under more authority than the owner held. The owner
+	 * triggers it, and it fires as the agent that scheduled it.
 	 */
 	@Test
 	public void testCapsReplayDeniesUncoveredOp() {
@@ -526,7 +525,7 @@ public class SchedulerTest {
 			Maps.of(s("path"), s("w/forbidden/x")), capCtx, future());
 
 		ExecutionException ex = assertThrows(ExecutionException.class,
-			() -> sched.trigger(handle, capCtx).get(5, TimeUnit.SECONDS));
+			() -> sched.trigger(handle, ctx).get(5, TimeUnit.SECONDS));
 		assertFalse(ex.getCause().getMessage().isBlank(),
 			"captured caps must be enforced at fire time");
 	}
@@ -542,7 +541,7 @@ public class SchedulerTest {
 		Blob handle = sched.schedule(s("v/ops/covia/read"),
 			Maps.of(s("path"), s("w/allowed/nothing")), capCtx, future());
 
-		ACell result = sched.trigger(handle, capCtx).get(5, TimeUnit.SECONDS);
+		ACell result = sched.trigger(handle, ctx).get(5, TimeUnit.SECONDS);
 		assertTrue(result != null, "a caps-covered deferred op must run, not be denied");
 	}
 

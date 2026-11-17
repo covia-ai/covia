@@ -13,6 +13,7 @@ import java.util.function.Supplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import convex.auth.ucan.Capability;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
@@ -20,10 +21,12 @@ import convex.core.data.AVector;
 import convex.core.data.Blob;
 import convex.core.data.Index;
 import convex.core.data.Maps;
+import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
+import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.exception.NotFoundException;
@@ -101,11 +104,8 @@ public class Scheduler {
 	public static final int MAX_DESCRIPTION_CHARS = Schedule.MAX_DESCRIPTION_CHARS;
 	public static final String DESCRIPTION_NOT_STRING = Schedule.DESCRIPTION_NOT_STRING;
 	public static final String DESCRIPTION_TOO_LONG = Schedule.DESCRIPTION_TOO_LONG;
-	/** Refusal for a user reaching another user's scheduled event. */
-	public static final String NOT_OWNER = "Not the owner of this scheduled event";
-	/** Refusal for a capability-scoped agent reaching an event it did not schedule. */
-	public static final String EVENT_ACCESS_DENIED =
-		"A capability-scoped agent manages only the scheduled events it created";
+	/** Refusal for a request whose authority does not cover an ability on an event: the ability and the event's resource. */
+	public static final String EVENT_ACCESS_DENIED = "Not authorised for %s on scheduled event %s";
 	/** Why an event did not fire: the agent that scheduled it has been deleted, so it was dropped. */
 	public static final String AGENT_GONE = "%s no longer exists, so its scheduled event was dropped";
 	/** Refusal for work reaching a scheduler the venue has shut down. */
@@ -212,14 +212,14 @@ public class Scheduler {
 	}
 
 	/**
-	 * Cancel a scheduled event by handle. Owner-only; a capability-scoped agent
-	 * cancels only events it scheduled. Returns false if absent.
+	 * Cancel a scheduled event by handle, which needs
+	 * {@link Abilities#SCHEDULE_MANAGE} on it. Returns false if absent.
 	 */
 	public boolean cancel(Blob handle, RequestContext ctx) {
 		return locked(() -> {
 			Entry e = state().find(handle);
-			// An event keeps its caller and owner for life, so this check holds for the cancel.
-			if (e != null) requireAccess(e.rec(), ctx);
+			// An event keeps its caller and id for life, so this check holds for the cancel.
+			if (e != null) requireAccess(e, ctx, Abilities.SCHEDULE_MANAGE);
 			return state().cancel(handle);
 		});
 	}
@@ -241,8 +241,8 @@ public class Scheduler {
 	}
 
 	/**
-	 * Fire a scheduled event now, ahead of its time. Owner-only; a
-	 * capability-scoped agent triggers only events it scheduled. A one-shot
+	 * Fire a scheduled event now, ahead of its time, which needs
+	 * {@link Abilities#SCHEDULE_MANAGE} on it. A one-shot
 	 * event is consumed; a recurring one stays scheduled at its unchanged next
 	 * due time. Returns the invocation's result future (run as the event's caller
 	 * would invoke it now). It takes no place under
@@ -254,7 +254,7 @@ public class Scheduler {
 			c = locked(() -> {
 				Entry e = state().find(handle);
 				if (e == null) return null;
-				requireAccess(e.rec(), ctx);
+				requireAccess(e, ctx, Abilities.SCHEDULE_MANAGE);
 				return claim(e.key(), e.rec(), now(), false);
 			});
 		} catch (RuntimeException ex) {
@@ -268,9 +268,10 @@ public class Scheduler {
 	}
 
 	/**
-	 * The calling user's pending events, time-ordered — including those queued
-	 * by their agents; a capability-scoped agent sees only its own. Each is
-	 * {@code {handle, op, caller, time, track}} plus, when present,
+	 * The pending events of the request's account that its authority may read
+	 * ({@code crud/read} on each event's resource), time-ordered, including those
+	 * its agents queued. Each is
+	 * {@code {handle, id, op, caller, time, track}} plus, when present,
 	 * {@code owner}, {@code input}, {@code description}, {@code created},
 	 * {@code repeat}, {@code lastFired} and {@code lastJob}. {@code track} is
 	 * the effective tracking that the next fire will use; {@code input} is
@@ -280,6 +281,7 @@ public class Scheduler {
 	 */
 	public AVector<ACell> list(RequestContext ctx) {
 		AccessControl access = engine.getAccessControl();
+		AString account = ctx.getUserDID();
 		Index<Blob, ACell> idx = index();
 		AVector<ACell> out = Vectors.empty();
 		long cnt = idx.count();
@@ -288,9 +290,11 @@ public class Scheduler {
 			if (!(e.getValue() instanceof AMap)) continue;
 			@SuppressWarnings("unchecked")
 			AMap<AString, ACell> rec = (AMap<AString, ACell>) e.getValue();
-			if (!access.canAccessEvent(ctx, rec)) continue;
+			if (account == null || !account.equals(accountOf(rec))) continue;
+			if (!access.canAccessEvent(ctx, account, resource(account, e.getKey()), Capability.CRUD_READ)) continue;
 			AMap<AString, ACell> item = Maps.of(
 				K_HANDLE, e.getKey(),
+				Fields.ID, Schedule.idOf(e.getKey()),
 				K_OP, rec.get(K_OP),
 				K_TIME, rec.get(K_TIME),
 				K_TRACK, CVMBool.create(isTracked(rec)));
@@ -564,14 +568,27 @@ public class Scheduler {
 
 	// ------------------------------------------------------- bodies under the lock
 
-	/** Owner-only, and a capability-scoped agent only for an event it scheduled. */
-	private void requireAccess(AMap<AString, ACell> rec, RequestContext ctx) {
-		AString user = ctx.getUserDID();
-		if (user == null || !user.equals(Attribution.owner(rec))) throw new AuthException(NOT_OWNER);
-		if (!engine.getAccessControl().canAccessEvent(ctx, rec)) {
-			throw new AuthException(EVENT_ACCESS_DENIED);
+	/** Refuses unless the request may use {@code ability} on the event at {@code key}. */
+	private void requireAccess(Entry e, RequestContext ctx, AString ability) {
+		AString account = accountOf(e.rec());
+		AString resource = resource(account, e.key());
+		if (!engine.getAccessControl().canAccessEvent(ctx, account, resource, ability)) {
+			throw new AuthException(EVENT_ACCESS_DENIED.formatted(ability, resource));
 		}
 	}
+
+	/** The account an event belongs to and runs in. */
+	static AString accountOf(AMap<AString, ACell> rec) {
+		return Attribution.owner(rec);
+	}
+
+	/** The capability resource the event at {@code key} is: {@code <account>/x/schedule/<id>}. */
+	public static AString resource(AString account, Blob key) {
+		return Strings.create(account + "/" + RESOURCE_PATH + Schedule.idOf(key).toHexString());
+	}
+
+	/** Where an account's scheduled events are as capability resources. */
+	public static final String RESOURCE_PATH = "x/schedule/";
 
 	/**
 	 * Claim {@code rec} (at {@code key}) for a fire at {@code now}. The fire's

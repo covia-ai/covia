@@ -30,6 +30,7 @@ import covia.grid.Status;
 import covia.lattice.Caps;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
+import covia.venue.Scheduler;
 import covia.venue.TestEngine;
 
 /**
@@ -266,11 +267,10 @@ public class CallableAdapterTest {
 			"nor does it make its invoker act as itself");
 		assertNotNull(engine.stepContext(helper, Strings.create("helper")), "its own run makes it act");
 
-		// What a call's caller made in the owner's namespace is not the call's by attribution
-		AMap<AString, ACell> event = Maps.of(Fields.CALLER, bob, Fields.OWNER, alice);
-		assertFalse(engine.getAccessControl().canAccessEvent(narrow, event));
-		assertTrue(engine.getAccessControl().canAccessEvent(RequestContext.of(bob, alice, Vectors.empty()), event),
-			"a principal acting in the namespace reaches what it made there");
+		// A call reaches its issuer's scheduled events only as far as its caps cover them
+		AString event = Strings.create(alice + "/" + Scheduler.RESOURCE_PATH + "0123456789abcdef");
+		assertFalse(engine.getAccessControl().canAccessEvent(narrow, alice, event, Capability.CRUD_READ));
+		assertTrue(engine.getAccessControl().canAccessEvent(whole, alice, event, Capability.CRUD_READ));
 
 		// Its reach into another user's resources is within its caps too, whatever they admit
 		AString carol = TestEngine.uniqueDID("carol-" + info.getDisplayName());

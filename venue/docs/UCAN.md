@@ -189,6 +189,7 @@ Abilities follow UCAN's slash-delimited convention with no leading slash. `*` is
 | `admin/token/<access point>` | - | Work directly on access tokens that carry that access point, such as `admin/token/mcp`; a token carrying several needs each leaf, and fetching a kept bearer also needs the token's source authority |
 | `callable/call` | - | Call a callable without passing its gate (`<owner>/x/callable/<name>`; [CALLABLES.md](./CALLABLES.md)) |
 | `callable/manage` | - | Create, change or delete a callable (`<owner>/x/callable/<name>`); changing one also needs its source authority |
+| `schedule/manage` | - | Cancel or trigger a scheduled event (`<owner>/x/schedule/<id>`); `crud/read` on it lists it ([GRID_SCHEDULER.md](GRID_SCHEDULER.md) §5) |
 | `hitl/request` | - | Ask the owner a human-in-the-loop question |
 | `admin/user/create` | - | Create an account |
 | `admin/user/delete` | - | Delete an account |

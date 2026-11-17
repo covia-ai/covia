@@ -348,6 +348,15 @@ public final class Schedule extends ALatticeComponent<ACell>
 		return Blob.wrap(bs);
 	}
 
+	/**
+	 * An event's id: the part of its key that stays fixed as a recurring event
+	 * moves, which names it as a capability resource. A key of another length
+	 * is its own id.
+	 */
+	public static Blob idOf(Blob key) {
+		return (key.count() == KEY_LENGTH) ? key.slice(8, KEY_LENGTH).toFlatBlob() : key;
+	}
+
 	/** The same event id under a new wake time — how a recurring event moves. */
 	private static Blob rekey(Blob key, long wakeTime) {
 		byte[] bs = key.getBytes();

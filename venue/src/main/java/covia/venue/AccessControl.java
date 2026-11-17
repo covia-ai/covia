@@ -35,33 +35,32 @@ public class AccessControl {
 		// An incomplete record has no delegable resource; only its unscoped owner.
 		if (!(jobData.get(Fields.ID) instanceof Blob id))
 			return owner.equals(ctx.getUserDID()) && isOwnerOutright(ctx) && !ctx.isNarrowed();
-		AString resource = JobManager.resource(owner, id);
-		AString destination = Strings.create(engine.config().getBaseUrl());
-		RequestContext authority = engine.authorityFrame(ctx);
-		if (!owner.equals(authority.getUserDID()) && !owner.equals(authority.getAuthorityDID())
-				&& !engine.crossUserAllows(ctx, resource, ability, destination)) return false;
-		return engine.authorityCovers(ctx, resource, ability, destination);
+		return reaches(ctx, owner, JobManager.resource(owner, id), ability, Strings.create(engine.config().getBaseUrl()));
 	}
 
 	/**
-	 * Checks if the request can see or manage a scheduled event record.
-	 *
-	 * <p>Ownership first: the event's owner must be the request's user. Sharing the owner's namespace is proximity, not permission: a
-	 * context with a capability scope reaches only an event it scheduled itself as
-	 * a principal other than the owner, recorded as the event's {@code caller}.
-	 * Scheduled events are not a capability resource, so no caps extend that
-	 * reach.</p>
-	 *
-	 * @param ctx Request context with caller identity
-	 * @param event Scheduled event record
-	 * @return true if access is allowed
+	 * Whether the request may use {@code ability} on the scheduled event at
+	 * {@code resource} ({@code <account>/x/schedule/<id>}) in {@code account}:
+	 * {@code crud/read} inspects and lists it, {@link Abilities#SCHEDULE_MANAGE}
+	 * cancels or triggers it. Having scheduled an event grants nothing, as
+	 * having started a job does not.
 	 */
-	public boolean canAccessEvent(RequestContext ctx, AMap<AString, ACell> event) {
-		if (event == null) return false;
-		AString userDID = ctx.getUserDID();
-		if (userDID == null || !userDID.equals(Attribution.owner(event))) return false;
-		if (isOwnerOutright(ctx)) return true;
-		return madeItFor(ctx, event);
+	public boolean canAccessEvent(RequestContext ctx, AString account, AString resource, AString ability) {
+		if (ctx == null || account == null || ctx.getUserDID() == null) return false;
+		return reaches(ctx, account, resource, ability, null);
+	}
+
+	/**
+	 * Whether the request's authority covers {@code ability} on {@code resource}
+	 * in {@code account}, as for any resource: an account's whole authority
+	 * covers what it holds, the caps of a token, callable or agent decide within
+	 * it, and another account's resource needs a grant.
+	 */
+	private boolean reaches(RequestContext ctx, AString account, AString resource, AString ability, AString destination) {
+		RequestContext authority = engine.authorityFrame(ctx);
+		if (!account.equals(authority.getUserDID()) && !account.equals(authority.getAuthorityDID())
+				&& !engine.crossUserAllows(ctx, resource, ability, destination)) return false;
+		return engine.authorityCovers(ctx, resource, ability, destination);
 	}
 
 	/**
@@ -73,19 +72,6 @@ public class AccessControl {
 	private boolean isOwnerOutright(RequestContext ctx) {
 		RequestContext authority = engine.authorityFrame(ctx);
 		return authority.getCaps() == null && ctx.getUserDID().equals(authority.getUserDID());
-	}
-
-	/**
-	 * Whether {@code ctx}'s caller made {@code record} for the owner whose
-	 * namespace it acts in: a sub-principal (an agent or a delegate) named as the
-	 * record's caller. The owner itself under a scope is not such a caller, so its
-	 * scope alone decides, and nor is a request an access token narrows, whose
-	 * caller is the token's issuer: the token's caps decide. Nor is a callable's
-	 * call, whose caller is only its invoker.
-	 */
-	private static boolean madeItFor(RequestContext ctx, AMap<AString, ACell> record) {
-		AString caller = ctx.getAuthorityDID();
-		return !ctx.isNarrowed() && !caller.equals(ctx.getUserDID()) && caller.equals(Attribution.caller(record));
 	}
 
 }

@@ -245,11 +245,15 @@ at a time.
 
 Every event records its `caller` and its `owner` (the caller's own namespace
 unless it says otherwise), taken from the `RequestContext` at schedule time.
-`cancel`, `trigger`, `inspect`, and `list` are restricted to the owner
-(reusing the venue's access control). Sharing the owner's namespace is
-proximity, not permission: a capability-scoped agent or delegate reaches only
-the events it scheduled itself (its `caller`). Scheduled events are not a
-capability resource, so no caps extend that reach.
+
+An event is a capability resource, `<owner>/x/schedule/<id>`, where `<id>` is
+the event's `id`, the part of its handle that stays fixed as a recurring event
+moves. `crud/read` on it lists it, and `schedule/manage` cancels or triggers
+it. The account's whole authority covers all of its events, and the caps of a
+token, a callable or an agent decide as for any resource, so a capped agent
+needs these caps even for the events it scheduled: having scheduled one grants
+nothing, as having started a job does not. Another account's event needs a
+grant.
 
 A scheduled event is a *deferred* invocation by its caller: the owner, or the
 agent or delegate that scheduled it. The venue must **not** fire it under its
@@ -305,12 +309,13 @@ operations, described by intent:
   nor `after`, the first fire is one interval from now); optional `track`
   chooses durable or transient fires (§7); optional `description` (a string
   of at most 500 characters, refused otherwise) says what the event is for.
-- **cancel** — remove an event by handle.
+- **cancel** — remove an event by handle (`schedule/manage`).
 - **trigger** — fire an event now by handle, ahead of its time — the
-  early-execution / test hook. A one-shot event is consumed; a recurring event
-  stays scheduled at its unchanged next due time.
-- **list** — the caller's pending events, in time order: each
-  `{handle, op, caller, time, track}` plus `owner`, `input`, `description`,
+  early-execution / test hook (`schedule/manage`). A one-shot event is
+  consumed; a recurring event stays scheduled at its unchanged next due time.
+- **list** — the pending events of the caller's account that it may read
+  (`crud/read`), in time order: each
+  `{handle, id, op, caller, time, track}` plus `owner`, `input`, `description`,
   `created`, `repeat`, `lastFired` and `lastJob` where present. `track` is the effective
   tracking the next fire will use, after venue policy. `input` is shown as a
   job record would hold it: the fields the operation declares in
@@ -321,7 +326,7 @@ operations, described by intent:
   Events stored before `created` and `description` were recorded list without
   them.
 
-All operations are scoped to the caller's identity. Scheduling is itself an
+Scheduling is itself an
 operation, so an agent can schedule future work (including waking itself) as a
 normal tool call.
 
@@ -433,7 +438,7 @@ fired without expiring it, because the venue stopped, still expires (COG-16).
 across re-keying; **fires run as their caller at fire time, presenting their
 recorded proofs, no escalation (§5)**; transient or tracked fires per event and venue
 policy, with `lastJob` as the sole link to execution records (§7);
-owner-scoped access; firing by the application's update, at most
+access by capability on each event (`x/schedule/<id>`); firing by the application's update, at most
 `scheduler.maxConcurrency` starting at once (§4); boot catch-up (one fire per
 event, missed slots skipped); claim-then-invoke (at-most-once); a 1 s floor on
 `repeat.every`.
