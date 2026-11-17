@@ -118,7 +118,8 @@ disk on another. `VenueServer` starts both once its venue is running, every
 an Etch v2 store, the default, a process crash loses at most the last sync
 interval's writes and a machine crash the last flush interval's. An Etch v3 store
 (`etch.version: 3`, which encryption uses) recovers nothing written after its last
-completed flush, and one a crash left open refuses a normal open until it is
+completed flush. A flush marks it clean and its next write marks it open, so one
+that crashes with writes since its last flush refuses a normal open until it is
 repaired (`etch repair`) or restored from a backup (Convex `ETCHv3.md`). The
 engine runs no worker of its own. Each worker reports
 its first failure, which the venue logs at ERROR. Closing the host stops them,
