@@ -1072,6 +1072,29 @@ public class ContextAssemblerTest {
 		assertTrue(elements.get(1).startsWith("[From: " + TurnProvenance.Relationship.SELF.words + " "));
 	}
 
+	/**
+	 * The harness renders the conversation in its controller's frame, the
+	 * owner's here, yet the turns are told apart by the agent whose execution
+	 * it drives: the owner's message shows as the owner's, and the agent's own
+	 * as its own.
+	 */
+	@Test
+	public void testTheHarnessShowsTheOwnersMessageAsTheOwners() {
+		AString helper = Strings.create("helper");
+		engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, helper), ctx).awaitResult(5000);
+		ctx = engine.harnessContext(ALICE_DID, helper);
+		assertEquals(ALICE_DID, ctx.getCallerDID(), "the harness acts as the owner");
+		AString self = covia.grid.Principals.agentDID(ALICE_DID, helper);
+		AVector<ACell> inbox = Vectors.of(
+			(ACell) Maps.of(Fields.CALLER, ALICE_DID, Fields.MESSAGE, Strings.create("from the owner")),
+			(ACell) Maps.of(Fields.CALLER, self, Fields.MESSAGE, Strings.create("the agent's own")));
+		var elements = fromElements(ContextAssembler.assemble(spec(null, null, null, inbox, true)).messages());
+		assertEquals(java.util.List.of("[From: owner " + ALICE_DID + "]", "[From: "
+			+ TurnProvenance.Relationship.SELF.words + " " + self + "]"), elements);
+		assertEquals(TurnProvenance.Relationship.OWNER, TurnProvenance.relationship(engine, ctx, ALICE_DID));
+		assertEquals(TurnProvenance.Relationship.SELF, TurnProvenance.relationship(engine, ctx, self));
+	}
+
 	private static final AString LATE_CALL = Strings.create("toolu_late");
 
 	/** A tracked call's outcome, as the venue delivers it. */

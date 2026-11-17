@@ -310,6 +310,49 @@ class RemoteAgentAdapterTest {
 		} finally { second.close(); }
 	}
 
+	/**
+	 * An external agent of Alice's that Bob controls asks its backend in Bob's
+	 * frame: the backend job is Bob's, kept in his account, and names in the
+	 * agent's definition are his, so it reaches his helper. After a restart the
+	 * call finds that job again in Bob's account and finishes with its answer.
+	 */
+	@Test void anExternalAgentAnotherAccountControlsResumesAfterARestart() throws Exception {
+		TestEngine.Restartable venue = TestEngine.restartable(config(false));
+		AKeyPair aliceKP = AKeyPair.generate(), bobKP = AKeyPair.generate();
+		AString alice = UCAN.toDIDKey(aliceKP.getAccountKey()), bob = UCAN.toDIDKey(bobKP.getAccountKey());
+		RequestContext aliceCtx = RequestContext.of(alice), bobCtx = RequestContext.of(bob);
+		Job asked, backend;
+		Engine first = start(venue, false);
+		try {
+			agent(first, bobCtx, "helper", "v/test/ops/askhuman");
+			UCAN grant = UCAN.create(aliceKP, bobKP.getAccountKey(), first.currentTimestamp().longValue() / 1000 + 3600,
+				Vectors.of(Capability.create(Strings.create(alice + "/g/"), covia.api.Abilities.AGENT_CREATE)), Vectors.empty());
+			first.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, alice + "/g/front",
+				"agent", Maps.of(Fields.ADAPTER, "remoteagent", Fields.AGENT_ID, "helper"),
+				Fields.CONFIG, Maps.of(Config.CAPS, Config.UNRESTRICTED)), bobCtx.withProofs(Vectors.of(grant.toMap()))).awaitResult(5000);
+			assertEquals(bob, first.getVenueState().users().user(alice).agent("front").getController());
+			try (AgentWatch helper = AgentWatch.open(first, bob, "helper")) {
+				asked = first.jobs().invokeOperation("v/ops/agent/request", Maps.of(Fields.AGENT_ID, "front",
+					Fields.INPUT, Maps.of("ask", "decide")), aliceCtx);
+				helper.awaitRest(1);
+			}
+			ACell backendId = RT.getIn(first.jobs().adapterData(asked), covia.adapter.agent.ExternalAgents.CHILD);
+			backend = (backendId == null) ? null : first.jobs().getJob(Job.parseID(backendId));
+			assertNotNull(backend, "the backend job serves the call");
+			assertEquals(bob, backend.getCaller(), "asked in Bob's frame");
+			assertEquals(bob, backend.getOwner(), "and kept in his account");
+		} finally { first.close(); }
+
+		Engine second = start(venue, false);
+		try {
+			Job resumed = second.jobs().getJob(asked.getID(), aliceCtx);
+			assertFalse(resumed.isFinished(), () -> "the call finds its backend job again: " + resumed.getErrorMessage());
+			answer(second, bobCtx, "helper", "go ahead");
+			assertTrue(resumed.future().get(10, TimeUnit.SECONDS).toString().contains("go ahead"),
+				"the call finishes with its backend's answer: " + resumed.getOutput());
+		} finally { second.close(); }
+	}
+
 	/** A call that had not recorded its task when the venue stopped cannot be followed: it ends, and its task runs on. */
 	@Test void localCallWithNoRecordedTaskEndsAtRecovery(TestInfo info) throws Exception {
 		Engine engine = TestEngine.ENGINE;

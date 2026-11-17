@@ -34,9 +34,10 @@ import covia.lattice.CapabilityGate;
  * attribution), where names resolve (its namespace and execution scope), and
  * what it may do (its authority). Usually the authority is the caller's own,
  * in the namespace it acts in. A request can instead act with another
- * principal's authority ({@link #withAuthorityOf}), as an agent's harness acts
- * with its controller's: access checks then read that authority
- * ({@link #authorityContext}), on names resolved here ({@link #inNamespace}).</p>
+ * principal's authority ({@link #withAuthorityOf}), as an agent whose
+ * controller is in another namespace acts with that controller's: access
+ * checks then read that authority ({@link #authorityContext}), on names
+ * resolved here ({@link #inNamespace}).</p>
  */
 public class RequestContext {
 
@@ -312,6 +313,21 @@ public class RequestContext {
 	}
 
 	/**
+	 * This context driving {@code scope}, whose owner may be an account other
+	 * than this context's: an agent's harness acts in its controller's frame and
+	 * drives its agent's execution ({@link Engine#harnessContext}). The getters
+	 * of execution ids ({@link #getAgentId}, {@link #getSessionId},
+	 * {@link #getTaskId}, {@link #getClaim}) show a scope only in its owner's
+	 * account, so harness code reaches the agent's records through
+	 * {@link #getExecutionScope}. Setting one id ({@link #withSessionId} and the
+	 * rest) on a scope owned elsewhere starts a new execution in this account,
+	 * so the harness sets its scope whole here.
+	 */
+	public RequestContext inExecution(ExecutionScope scope) {
+		return withExecutionScope(java.util.Objects.requireNonNull(scope, "scope"));
+	}
+
+	/**
 	 * Creates a RequestContext for an external request with the given caller DID.
 	 * Returns ANONYMOUS if callerDID is null.
 	 *
@@ -435,8 +451,10 @@ public class RequestContext {
 	 * still who acted, but what it may do is decided by {@code source}: whose
 	 * own resources count as its own, its scope and the proofs it presents
 	 * ({@link #authorityContext}). This context's own authority is emptied, so a
-	 * check that reads it instead finds nothing granted. Only the venue sets one,
-	 * for an agent's harness under its controller.
+	 * check that reads it instead finds nothing granted. Only the venue sets one:
+	 * for an agent whose controller is in another namespace
+	 * ({@link Engine#context(AString, AString)}), and for work kept with one
+	 * ({@link Engine#keptAuthority}).
 	 */
 	RequestContext withAuthorityOf(RequestContext source) {
 		RequestContext held = (source.rights != null) ? source.rights : source;
@@ -609,15 +627,17 @@ public class RequestContext {
 	}
 
 	/**
-	 * This context with the authority it acts with narrowed to {@code caps},
-	 * whose bare paths name its namespace and whose {@code n/} its agent's notes;
-	 * null leaves it unchanged. A harness narrowed by its agent's caps sees what
-	 * the agent may.
+	 * This context with the authority it acts with narrowed to {@code caps}, an
+	 * agent's caps: their bare paths name the account of the execution it drives
+	 * and their {@code n/} that agent's notes ({@link #getExecutionScope}), which
+	 * for an agent's harness is the agent's, whatever account its controller's
+	 * frame is in. Null leaves it unchanged. A harness narrowed by its agent's
+	 * caps sees what the agent may.
 	 */
 	public RequestContext narrowedTo(AVector<ACell> caps) {
 		if (caps == null) return this;
-		AVector<ACell> own = CapabilityChecker.inAgent(caps, getAgentId());
-		return narrowedBy(resource -> own, getUserDID());
+		AVector<ACell> own = CapabilityChecker.inAgent(caps, executionScope.agentId());
+		return narrowedBy(resource -> own, executionScope.ownerDID());
 	}
 
 	/**

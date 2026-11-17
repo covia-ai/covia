@@ -1008,8 +1008,7 @@ who acted, its namespace is where its names resolve (with the agent, session
 and task its work belongs to), and its authority is what it may do. A request
 usually acts with its caller's own authority in the namespace it acts in. An
 agent acts with its controller's instead. Where that is a principal from
-another namespace, and always for the agent's harness, its owner's authority
-included, it is a separate authority
+another namespace, it is a separate authority
 (`RequestContext.withAuthorityOf`): access checks decide under it, on names
 resolved in the agent's namespace (`RequestContext.authorityContext`,
 `inNamespace`). A recorded job and a scheduled event
@@ -1019,11 +1018,9 @@ keep a separate authority with the work and act with it again.
 as that principal's own request would hold it (`Engine.context`), the owner's
 included: a user's is unrestricted in its namespace, and the public
 principal's is the public caps, none while public access is off. Its harness
-acts with that authority as it stands, and its tool calls with that
-authority narrowed by its `config.caps`. The harness does not hold the
-controller's authority for choosing a controller or configuring agents
-(`Engine.holdsAuthorityOf`), and does not reach what is held under the agent's
-own DID. Read as a delegation, the controller
+is that principal's frame as it stands, and its tool calls act as the agent
+with that authority narrowed by its `config.caps`. The harness does not reach
+what is held under the agent's own DID. Read as a delegation, the controller
 is the issuer, the agent the audience and the caps the capabilities, with
 `"unrestricted"` passing on all the controller has, so an agent never exceeds its
 controller, at any depth (`Engine.agentContext`). Each point of action reads
@@ -1099,11 +1096,16 @@ input names the secret or the operation it invokes does.
 
 **The transition operation is the harness.** Each cycle, the run loop invokes
 the agent's transition operation (`config.operation`) as a harness step, under
-the harness context (`Engine.harnessContext`): in the owner's namespace,
-attributed to the agent, and acting with its controller's authority as it
-stands that cycle. An agent controller's is read from its caps at each check,
-and is none once it is gone; a controller whose account is gone stops the
-run. The controller chose the operation when it configured the agent, so it
+the harness context (`Engine.harnessContext`): its controller's frame as it
+stands that cycle, driving the agent's execution (its session, task and
+claim) in the owner's account. So what the harness starts, such as its model
+calls, records the controller as its caller and is kept in the controller's
+account, names in the agent's configuration resolve in the controller's
+namespace, and a cycle has no caller. The agent's own places (`n/`, `c/` and
+`t/`) resolve there only when the controller is in the agent's account; a
+controller in another account names them in full. An agent controller's
+authority is read from its caps at each check, and is none once it is gone; a
+controller whose account is gone stops the run. The controller chose the operation when it configured the agent, so it
 needs no invocation grant in the agent's caps. These configured transition
 and model calls are bound framework calls; their resource checks use the
 controller's current authority. The transition operation defines where the agent acts: it
@@ -1122,14 +1124,16 @@ configured tools' definitions and keeping the session's frames. The switch takes
 agent from the step's input, never its authority, whoever invokes the runtime
 and whatever `config` its input carries. Only the agent's own run or its
 owner, with all of the owner's authority, may make an agent act, and only an
-agent that exists.
+agent that exists. The agent's own run is told by the execution a request
+drives, which the venue gives only to the agent's harness, its acts and the
+work they keep, never by who acts in it.
 
 An external agent (AGENT_LOOP.md §2.2.1) has no transition operation. Asking
 its backend (an A2A endpoint, a Claude Code project, another Covia agent) is
 its harness's work under the same context, since its definition, fixed when it
 was created, chose the backend, so its `config.caps` do not bound it. The
-backend job keeps that authority across a restart (JOBS.md, Kept caller
-context).
+backend job is the controller's, kept in its account, and keeps that authority
+across a restart (JOBS.md, Kept caller context).
 
 **Best for:** Pipeline agents, task workers, scoped automations — anything that
 operates within one user's namespace with restricted permissions.

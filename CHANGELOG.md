@@ -37,6 +37,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - A `venue:adapter/configure` change the adapter refuses with an error is reverted to its previous configuration.
 - A scheduled fire's job is recorded in the same commit as its claim, and a remote agent turn's backend job with the turn's link to it, so a restart never leaves a failed job for a fire that then runs again, nor a backend job its turn has no record of.
 - A P2P node that cannot launch, such as on a port in use, is unavailable rather than a configuration error.
+- An agent's harness runs in its controller's frame: what it starts, such as its model calls and an external agent's backend job, records the controller as its caller in the controller's account, and names in the agent's configuration resolve in the controller's namespace; the agent's tool calls still run as the agent.
 
 - Adapters refuse settings with a configuration error, from the venue config and from `venue:adapter/configure` alike; anything else an adapter's `configure` throws, a module adapter's `IllegalArgumentException` included, is reported as that adapter's fault rather than as invalid input or the `venue` adapter's.
 - A module's adapters take their settings from `adapters.<name>` like any other adapter: `modules` entries and `venue:module/load` no longer take `config`, so the Python module's settings move to `adapters.python`, which `adapters.python.enabled: false` switches off. Python without a usable CPython fails to start, so it is left failed with the reason, and its settings cannot change until the venue restarts.
@@ -56,7 +57,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Removed
 
-- Python instances (`python:instances/create`, `list`, `call`, `close` and the module's `instances` setting): configure each function under `operations` and offer it to others through a callable; a config naming `instances` is refused (#706).
+- Python instances (`python:instances/create`, `list`, `call`, `close` and `adapters.python.instances`): configure each function under `operations` and offer it to others through a callable; a config naming `instances` is refused (#706).
 
 ### Fixed
 

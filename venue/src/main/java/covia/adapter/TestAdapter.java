@@ -617,19 +617,22 @@ public class TestAdapter extends AAdapter implements covia.adapter.token.TokenAc
      * completes the task with that answer.
      */
     private ACell handleAskHuman(RequestContext ctx, ACell input) {
+        // The agent asks and completes its task itself, as a model's tool calls
+        // do: the harness is its controller's frame (Engine.stepContext)
+        RequestContext agent = engine.stepContext(ctx, RT.ensureString(RT.getIn(input, Fields.AGENT_ID)));
         AVector<ACell> inbox = RT.ensureVector(RT.getIn(input, Fields.SESSION, Agent.KEY_PENDING));
-        ACell answer = (ctx.getTaskRevision() > 0) ? RT.getIn(input, Fields.NEW_INPUT)
+        ACell answer = (agent.getTaskRevision() > 0) ? RT.getIn(input, Fields.NEW_INPUT)
             : (inbox != null && inbox.count() > 0) ? RT.getIn(inbox.get(inbox.count() - 1), Fields.MESSAGE) : null;
         if (answer != null) {
-            if (ctx.getTaskId() != null) {
+            if (agent.getTaskId() != null) {
                 engine.jobs().invokeInternal("v/ops/agent/complete-task",
-                    Maps.of(Fields.RESULT, answer), ctx).join();
+                    Maps.of(Fields.RESULT, answer), agent).join();
             }
             return Maps.of(Fields.RESPONSE, Strings.create("answered"));
         }
         engine.jobs().invokeOperation("v/ops/hitl/request", Maps.of(
             "title", "Need a decision",
-            "asks", Vectors.of(Maps.of("id", "next", "type", "text", "prompt", "What next?"))), ctx);
+            "asks", Vectors.of(Maps.of("id", "next", "type", "text", "prompt", "What next?"))), agent);
         return Maps.of(Fields.RESPONSE, Strings.create("asked"));
     }
 

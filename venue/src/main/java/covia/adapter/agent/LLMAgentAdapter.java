@@ -147,7 +147,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 			RT.getIn(config, Fields.LOADS), "config.loads");
 		AMap<AString, ACell> frameLoads = ContextChain.sessionRootLoads(in.session());
 
-		RequestContext capsCtx = capsContext(config, ctx);
+		RequestContext capsCtx = inspectedStepContext(config, ctx);
 		ModelProfile profile = model.profile();
 		boolean cachePrefix = promptCaching(profile, config);
 		AVector<ACell> sessionFrames = sessionFramesOf(in.session());
@@ -178,7 +178,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 			|| in.task() != null;
 		ContextAssembler.Spec spec = new ContextAssembler.Spec(
 			engine, ctx, capsCtx, config,
-			ContextAssembler.idText(ctx.getSessionId()), null,
+			ContextAssembler.idText(ctx.getExecutionScope().sessionId()), null,
 			profile.budget(), profile.labels(), profile.toolCalling(),
 			fixedTools, null, null,
 			previewFrames, in.pending(), null, hasInput, null, null,
@@ -369,7 +369,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 		// changes per inference — loads, this cycle's turns, the outstanding task.
 		ContextAssembler.Spec spec = new ContextAssembler.Spec(
 			engine, ctx, capsCtx, config,
-			ContextAssembler.idText(ctx.getSessionId()), null,
+			ContextAssembler.idText(ctx.getExecutionScope().sessionId()), null,
 			profile.budget(), profile.labels(), profile.toolCalling(),
 			fixedTools, null, null, sessionFrames, pending, null, hasInput, null, null,
 			fixed.unavailable(), null, null)

@@ -188,7 +188,26 @@ final class TurnProvenance {
 
 	/** The agent's own principal, which turns start from. */
 	static Key self(RequestContext ctx) {
-		return new Key(ctx == null ? null : ctx.getCallerDID(), List.of());
+		return new Key(agentOf(ctx), List.of());
+	}
+
+	/**
+	 * The agent whose turns {@code ctx} renders: the agent whose execution it
+	 * drives, since its harness acts as the agent's controller; outside an
+	 * agent's execution, its caller.
+	 */
+	private static AString agentOf(RequestContext ctx) {
+		if (ctx == null) return null;
+		RequestContext.ExecutionScope execution = ctx.getExecutionScope();
+		return (execution.agentId() == null) ? ctx.getCallerDID()
+			: Principals.agentDID(execution.ownerDID(), execution.agentId());
+	}
+
+	/** The account of the agent whose turns {@code ctx} renders ({@link #agentOf}). */
+	private static AString ownerOf(RequestContext ctx) {
+		if (ctx == null) return null;
+		RequestContext.ExecutionScope execution = ctx.getExecutionScope();
+		return (execution.agentId() == null) ? ctx.getUserDID() : execution.ownerDID();
 	}
 
 	/** A turn's key, or null for a turn stored without a caller. */
@@ -200,8 +219,8 @@ final class TurnProvenance {
 	/** How {@code caller} stands to the agent acting under {@code ctx}, from DIDs alone. */
 	static Relationship relationship(Engine engine, RequestContext ctx, AString caller) {
 		if (shownDid(caller) == null) return Relationship.UNKNOWN;
-		AString owner = (ctx != null) ? ctx.getUserDID() : null;
-		AString self = (ctx != null) ? ctx.getCallerDID() : null;
+		AString owner = ownerOf(ctx);
+		AString self = agentOf(ctx);
 		if (engine != null && engine.isVenuePrincipal(caller)) return Relationship.VENUE;
 		if (engine != null && engine.isPublicPrincipal(caller)) {
 			return caller.equals(owner) ? Relationship.ANONYMOUS_OWNER : Relationship.ANONYMOUS;
@@ -261,7 +280,7 @@ final class TurnProvenance {
 
 	/** The agent's owner as a step's owner shows, so its own tokens, bindings and callables go by name alone; null when unknown. */
 	private static String agentOwner(RequestContext ctx) {
-		AString owner = (ctx == null) ? null : ctx.getUserDID();
+		AString owner = ownerOf(ctx);
 		return (owner == null) ? null : shownDid(owner);
 	}
 

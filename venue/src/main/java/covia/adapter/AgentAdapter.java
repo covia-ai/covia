@@ -2392,13 +2392,14 @@ public class AgentAdapter extends AAdapter {
 			if (sid == null) { job.fail("Invalid sessionId format: " + given); return null; }
 			session = agent.session(sid).getRecord();
 			if (session == null) { job.fail(UNKNOWN_SESSION_CODE, CONTEXT_UNKNOWN_SESSION.formatted(sid)); return null; }
-			agentCtx = agentCtx.withSessionId(sid);
+			agentCtx = agentCtx.inExecution(new RequestContext.ExecutionScope(agentTarget.ownerDID(),
+				agentTarget.agentId(), null, sid, null, -1L, null));
 		}
 
 		// The hypothetical call: inbox message(s), pending results, a task.
 		// Inspection must resolve n/ paths and capability-scoped loads exactly as
-		// the live transition does. The caller identity remains the owner; the
-		// agent id selects the same private namespace/cursor view as execution.
+		// the live transition does: in the harness's context, the controller's
+		// frame driving the agent's execution, as a cycle's is.
 		ContextInspectable.Inspection inspection = new ContextInspectable.Inspection(
 			recordConfig, state, session, inboxOf(input),
 			RT.ensureVector(RT.getIn(input, Fields.PENDING)),
@@ -4113,18 +4114,17 @@ public class AgentAdapter extends AAdapter {
 			return installed;
 		}
 
-		// The run loop executes as the AGENT, within its OWNER's namespace — a
-		// fresh context carrying none of the waking caller's proofs, caps, job or
-		// session. Which caller won the launch CAS above must never leak into
-		// the agent's execution: every namespace-scoped access during the run
-		// (secrets /s/, workspace w/, job ownership, per-user cursors) resolves
-		// in the owner's namespace, deterministically (#91), while the caller
-		// identity is the agent's own sub-principal DID so what the agent did is
-		// attributable to the agent rather than to the human who owns it. It is
-		// the harness's context, acting with the agent's controller's authority:
-		// the transition operation runs under it and switches the agent's acts
-		// to its caps itself (Engine.harnessContext, Engine.stepContext, UCAN.md
-		// §5.4). A controller that could not act now fails the launch.
+		// The run loop executes as the agent's HARNESS — a fresh context
+		// carrying none of the waking caller's proofs, caps, job or session.
+		// Which caller won the launch CAS above must never leak into the
+		// agent's execution (#91). The harness is the agent's controller's frame
+		// driving the agent's execution: what it starts, such as model calls,
+		// records the controller, and names in the agent's config resolve in the
+		// controller's namespace. The transition operation runs under it and
+		// switches the agent's acts to the agent itself, under its caps, so what
+		// the agent did is attributed to the agent (Engine.harnessContext,
+		// Engine.stepContext, UCAN.md §5.4). A controller that could not act now
+		// fails the launch.
 		try {
 			engine.harnessContext(ownerDID, agentId);
 			if (!agent.tryRun()) {
@@ -4413,8 +4413,8 @@ public class AgentAdapter extends AAdapter {
 	@SuppressWarnings("unchecked")
 	private void executeRunLoop(AString agentId, AString ownerDID, CompletableFuture<ACell> completion) {
 		// Each cycle runs under the agent's harness context (Engine.harnessContext)
-		// — never a waking caller's: in ownerDID's namespace, attributed to the
-		// agent's own sub-principal DID, acting with its controller's authority.
+		// — never a waking caller's: its controller's frame, driving the agent's
+		// execution in ownerDID's account.
 		final AgentKey key = new AgentKey(ownerDID, agentId);
 		ACell lastResult = null;
 		int iteration = 0;
@@ -4562,17 +4562,16 @@ public class AgentAdapter extends AAdapter {
 				}
 
 				// Per-cycle ctx: the harness as the agent's controller stands now,
-				// read each cycle as its config is, scoped to the agent, picked
-				// task, and session so path resolvers (n/, t/, c/) can address the
-				// right slot, and agent:completeTask / agent:failTask can identify
-				// which agent + task they're acting on, under the cycle's claim.
+				// read each cycle as its config is, driving the agent's execution
+				// with the picked task and session and the cycle's claim, so its
+				// steps (Engine.stepContext) address the right slot (n/, t/, c/)
+				// and agent:completeTask / agent:failTask the right agent and task.
+				// The scope is the agent's whatever account the controller's frame
+				// is in, so it is set whole (RequestContext.inExecution).
 				RequestContext harness = engine.harnessContext(ownerDID, agentId);
-				RequestContext cycleCtx = harness.withAgentId(agentId).withClaim(claim);
-				if (pickedTask != null) {
-					cycleCtx = cycleCtx.withTaskId(pickedTask.getKey(),
-						Task.revision(pickedTask.getValue()));
-				}
-				if (pickedSession != null) cycleCtx = cycleCtx.withSessionId(pickedSession);
+				RequestContext cycleCtx = harness.inExecution(new RequestContext.ExecutionScope(ownerDID, agentId, null,
+					pickedSession, (pickedTask != null) ? pickedTask.getKey() : null,
+					(pickedTask != null) ? Task.revision(pickedTask.getValue()) : -1L, claim));
 
 				// PENDING means accepted and queued. STARTED begins when a cycle
 				// takes the work: a request when its task is picked, a chat when

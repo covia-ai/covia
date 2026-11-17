@@ -355,10 +355,11 @@ Claude Code session does, so does an agent request naming an `outputPath`,
 whose job completes by writing there as its caller (AGENT_TEMPLATES.md), and
 so does a `remoteagent` call to an agent on this venue, which follows the
 agent's task as its caller (ADAPTERS.md, External agent interactions), and so
-does every external agent's backend job, which the agent's harness starts
-(UCAN.md §5.4). The job's entry keeps the grant proofs the caller presented, in
+does every external agent's backend job, which the agent's harness starts in
+its controller's frame (UCAN.md §5.4). The job's entry keeps the grant proofs the caller presented, in
 the form checked on arrival, the separate authority the request acts with, if
-any (`Engine.keptAuthority`: an agent's harness acts with its controller's),
+any (`Engine.keptAuthority`: an agent whose controller is in another
+namespace acts with that controller's),
 and the request's execution scopes (agent, session, job and task), even when
 there are none, so that `JobManager.keepsCallerContext` tells such a job from
 one whose adapter never asked. `JobManager.callerContext` rebuilds the caller

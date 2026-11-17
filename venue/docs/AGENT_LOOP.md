@@ -171,10 +171,11 @@ Supported definitions:
 
 `agent:chat` and `agent:request` preserve their existing result envelopes.
 The common dispatcher checks normal agent admission. Asking the backend is the
-agent's harness at work, as calling the model is a native agent's: it acts as
-the agent with its controller's authority as it stands, which the agent's
-`config.caps` do not narrow (UCAN.md §5.4). The backend job keeps that
-authority, so work it carries on after a restart acts with it again. Requester
+agent's harness at work, as calling the model is a native agent's: it acts in
+its controller's frame as it stands, which the agent's `config.caps` do not
+narrow (UCAN.md §5.4). The backend job is the controller's, kept in its
+account, and keeps that authority, so work it carries on after a restart acts
+with it again. Requester
 credentials do not become the agent's authority. Provider-specific project,
 secret and destination checks apply under the controller's authority.
 See [AGENT_SESSIONS.md §2.2](./AGENT_SESSIONS.md#22-external-agent-sessions)
@@ -597,9 +598,9 @@ they write their turns into the session's frames live under the cycle's claim,
 and the run loop appends none of its own. Status, timeline, task settlement and
 scheduling remain framework-owned.
 
-**Authority.** The transition is a harness step, acting with the agent's
-controller's authority as it stands that cycle, and decides where the agent's
-caps apply; [UCAN.md §5.4](./UCAN.md) defines the boundary and where the LLM
+**Authority.** The transition is a harness step, in the agent's controller's
+frame as it stands that cycle, driving the agent's execution, and decides
+where the agent's caps apply; [UCAN.md §5.4](./UCAN.md) defines the boundary and where the LLM
 runtimes draw it.
 
 Pending outbound jobs are not declared in transition output. The field is a

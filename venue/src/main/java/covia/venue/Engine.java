@@ -4825,8 +4825,8 @@ public class Engine {
 	 * derived, and its owner's only when it acts with its own authority and
 	 * nothing narrows it. The authority of a controller it derives from is
 	 * narrowed by the agent's caps, so is not that controller's whole
-	 * authority, and its harness ({@link #harnessContext}) acts with its
-	 * controller's authority without holding it.</p>
+	 * authority. Its harness ({@link #harnessContext}) is its controller's
+	 * frame, so holds what the controller's own request would.</p>
 	 *
 	 * <p>A request an access token or a callable narrows holds it only when
 	 * their caps are unrestricted.</p>
@@ -4945,25 +4945,26 @@ public class Engine {
 
 	/**
 	 * Whether {@code ctx}'s caller is one of the agents of the namespace it acts
-	 * in, acting with authority it has as that agent: its own, or its
-	 * controller's through its harness. Never in a callable's call, whose
-	 * caller is only the invoker and whose authority is the callable's.
+	 * in, acting with authority it has as that agent, however derived. Never in
+	 * a callable's call, whose caller is only the invoker and whose authority is
+	 * the callable's.
 	 */
 	private static boolean actsAsOwnAgent(RequestContext ctx) {
 		return ctx.getCallable() == null && agentIdIn(ctx.getUserDID(), ctx.getCallerDID()) != null;
 	}
 
 	/**
-	 * The context agent {@code agentId}'s harness runs under: the agent in its
-	 * owner's namespace, attributed to the agent, acting with its controller's
-	 * authority as it stands now ({@link RequestContext#withAuthorityOf}), its
-	 * owner's included, as that principal's own request would hold it
-	 * ({@link #context(AString, AString)}). An agent controller's is read from
-	 * its caps at each check and is none once it is gone. Being a separate
-	 * authority, it is what a job the harness starts keeps
-	 * ({@link #keptAuthority}), so that job acts with it again after a restart.
-	 * What is held under the agent's own DID, such as its keyring, is the
-	 * agent's, not its controller's, so the harness does not reach it.
+	 * The context agent {@code agentId}'s harness runs under: its controller's
+	 * frame as that principal's own request would hold it now
+	 * ({@link #context(AString, AString)}), the owner's included, driving the
+	 * agent's execution ({@link RequestContext#inExecution}). So the jobs the
+	 * harness starts, such as its model calls, record the controller and are
+	 * kept in its account, and names in the agent's configuration resolve in
+	 * the controller's namespace. An agent controller's authority is narrowed
+	 * by its caps at each check and is none once it is gone. A cycle has no
+	 * caller. The agent's tool calls run as the agent ({@link #stepContext}),
+	 * and what is held under the agent's own DID, such as its keyring, is the
+	 * agent's, so the harness does not reach it.
 	 *
 	 * @throws AuthException when the controller could not act now
 	 */
@@ -4972,7 +4973,8 @@ public class Engine {
 		AString controller = (agent == null) ? owner : agent.getController();
 		AString controllerOwner = covia.grid.Principals.isAgentDID(controller)
 			? covia.grid.Principals.userOf(controller) : controller;
-		return RequestContext.ofAgent(owner, agentId).withAuthorityOf(context(controllerOwner, controller));
+		return context(controllerOwner, controller)
+			.inExecution(new RequestContext.ExecutionScope(owner, agentId, null, null, null, -1L, null));
 	}
 
 	/**
@@ -5112,20 +5114,24 @@ public class Engine {
 	 * The context agent {@code agentId}'s step runs under: the agent itself as it
 	 * stands now ({@link #context(AString, AString)}), carrying on {@code ctx}'s
 	 * execution. A step runs only for an agent that exists, and only the agent's
-	 * own run or its owner may make it act. A step's input never sets its
+	 * own run or its owner may make it act. The agent's own run is told by the
+	 * execution it drives, which only the venue gives a request for that agent
+	 * (its harness, its own acts and work they keep), never by who acts in it:
+	 * the harness acts as the agent's controller. A step's input never sets its
 	 * authority.
 	 *
 	 * @throws AuthException when the caller may not make that agent act, or it does not exist
 	 */
 	public RequestContext stepContext(RequestContext ctx, AString agentId) {
-		AString owner = ctx.getUserDID();
+		RequestContext.ExecutionScope execution = ctx.getExecutionScope();
+		// Its own run, or its owner with all of the owner's authority: a request a
+		// token narrows may not make an agent act with the agent's own authority,
+		// and a call is never the agent's own run, whatever frame it runs in
+		boolean ownRun = ctx.getCallable() == null && agentId != null && agentId.equals(execution.agentId());
+		AString owner = ownRun ? execution.ownerDID() : ctx.getUserDID();
 		AString caller = ctx.getCallerDID();
 		AString agentDID = (owner == null || agentId == null) ? null
 			: covia.grid.Principals.agentDID(owner, agentId);
-		// Its own run, or its owner with all of the owner's authority: a request a
-		// token narrows may not make an agent act with the agent's own authority,
-		// and a call's caller is only its invoker, never the agent's own run
-		boolean ownRun = ctx.getCallable() == null && agentDID != null && agentDID.equals(caller);
 		if (agentDID == null || !(ownRun || (owner.equals(caller) && holdsAuthorityOf(ctx, owner)))) {
 			throw new AuthException(NOT_AGENTS_STEP.formatted(caller, agentId));
 		}

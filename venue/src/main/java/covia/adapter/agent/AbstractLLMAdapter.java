@@ -224,6 +224,18 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	}
 
 	/**
+	 * The context an inspected cycle's steps act in: the agent itself, as a
+	 * live cycle's are ({@link Engine#stepContext}), when {@code ctx} drives an
+	 * agent's execution, since its harness is its controller's frame; for a
+	 * configuration inspected with no agent, {@code ctx} narrowed by its caps
+	 * ({@link #capsContext}).
+	 */
+	protected RequestContext inspectedStepContext(AMap<AString, ACell> config, RequestContext ctx) {
+		AString agentId = ctx.getExecutionScope().agentId();
+		return (agentId == null) ? capsContext(config, ctx) : engine.stepContext(ctx, agentId);
+	}
+
+	/**
 	 * What the model declares that assembly needs: its context budget in
 	 * bytes, its label dialect, whether it can call tools at all, whether
 	 * its provider should receive a persistent cache prefix, and how a late

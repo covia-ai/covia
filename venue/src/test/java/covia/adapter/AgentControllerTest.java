@@ -12,9 +12,11 @@ import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
+import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
+import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.api.Abilities;
 import covia.api.Fields;
@@ -120,8 +122,9 @@ public class AgentControllerTest {
 		assertNull(agent("own").getRecord().get(Agent.KEY_CONTROLLER));
 		assertEquals(alice, agent("own").getController());
 		RequestContext harness = engine.harnessContext(alice, Strings.create("own"));
-		assertEquals(agentDID("own"), harness.getCallerDID(), "its harness acts as the agent");
-		assertEquals(alice, harness.authorityContext().getCallerDID(), "with its owner's authority");
+		assertEquals(alice, harness.getCallerDID(), "its harness is its owner's frame");
+		assertNull(harness.getCaps(), "with its owner's whole authority");
+		assertEquals(Strings.create("own"), harness.getAgentId(), "driving the agent's execution");
 
 		Job info = run("v/ops/agent/info", Maps.of(Fields.AGENT_ID, "own"), ALICE);
 		assertComplete(info);
@@ -135,7 +138,8 @@ public class AgentControllerTest {
 		assertEquals(agentDID("parent"), agent("child").getController());
 
 		RequestContext harness = engine.harnessContext(alice, Strings.create("child"));
-		assertTrue(harness.hasSeparateAuthority());
+		assertEquals(agentDID("parent"), harness.getCallerDID(), "its harness is its controller's frame");
+		assertEquals(Strings.create("child"), harness.getAgentId(), "driving the child's execution");
 		assertTrue(engine.authorityCovers(harness, Strings.create("w/shared/doc"), READ));
 		assertFalse(engine.authorityCovers(harness, Strings.create("w/private"), READ),
 			"the uncapped child's harness is bound by its controller");
@@ -176,10 +180,11 @@ public class AgentControllerTest {
 	}
 
 	/**
-	 * A job an agent's harness starts keeps the authority the harness acts
-	 * with, and acts with it again when its context is rebuilt after a
-	 * restart, whoever controls the agent: its owner, another of her agents,
-	 * or another user. The agent's caps play no part.
+	 * A job an agent's harness starts records the agent's controller, in the
+	 * controller's account, and acts with the controller's authority again when
+	 * its context is rebuilt after a restart, whoever controls the agent: its
+	 * owner, another of her agents, or another user. The agent's caps play no
+	 * part.
 	 */
 	@Test
 	public void testAJobAHarnessStartsKeepsItsControllersAuthority() {
@@ -192,10 +197,12 @@ public class AgentControllerTest {
 			RequestContext harness = engine.harnessContext(alice, Strings.create(id));
 			Job job = engine.jobs().invokeOperation("v/test/ops/never", Maps.empty(), harness);
 			try {
+				AString controller = agent(id).getController();
+				assertEquals(controller, job.getCaller(), id + " records its controller");
+				assertEquals(controller.equals(bob) ? bob : alice, job.getOwner(), id + " in its controller's account");
 				engine.jobs().keepCallerContext(job, harness);
 				RequestContext rebuilt = engine.jobs().callerContext(job);
-				assertEquals(agentDID(id), rebuilt.getCallerDID(), id);
-				assertEquals(harness.authorityContext().getCallerDID(), rebuilt.authorityContext().getCallerDID(), id);
+				assertEquals(controller, rebuilt.getCallerDID(), id);
 				for (AString resource : resources) {
 					assertEquals(engine.authorityCovers(harness, resource, READ), engine.authorityCovers(rebuilt, resource, READ),
 						id + " on " + resource);
@@ -235,12 +242,39 @@ public class AgentControllerTest {
 		assertEquals(bob, agent("bobs").getController());
 
 		RequestContext harness = engine.harnessContext(alice, Strings.create("bobs"));
-		assertFalse(engine.authorityCovers(harness, Strings.create("w/notes"), READ), "Alice's data is not Bob's");
+		assertEquals(bob, harness.getCallerDID(), "its harness is Bob's frame");
+		assertFalse(engine.authorityCovers(harness, Strings.create(alice + "/w/notes"), READ), "Alice's data is not Bob's");
 		assertTrue(engine.authorityCovers(harness, Strings.create(bob + "/w/notes"), READ));
+		assertTrue(engine.authorityCovers(harness, Strings.create("w/notes"), READ), "names in it are Bob's");
+		assertNull(harness.getAgentId(), "an execution in Alice's account is not shown in Bob's");
+		assertEquals(new RequestContext.ExecutionScope(alice, Strings.create("bobs"), null, null, null, -1L, null),
+			harness.getExecutionScope(), "but it drives the agent's");
+		assertEquals(agentDID("bobs"), engine.stepContext(harness, Strings.create("bobs")).getCallerDID(),
+			"and its steps act as the agent");
 
 		assertRefused(update("bobs", ALICE), Engine.NOT_CONTROLLERS.formatted(address, bob));
 		assertComplete(update(address, bobWith(cap(address, Abilities.AGENT_WRITE))));
 		assertComplete(run("v/ops/agent/delete", Maps.of(Fields.AGENT_ID, "bobs"), ALICE));
+	}
+
+	/**
+	 * An agent of Alice's that Bob controls runs a whole cycle: its harness is
+	 * Bob's frame, yet it works on the agent's session in Alice's account, and
+	 * its tool call runs as the agent.
+	 */
+	@Test
+	public void testAnAgentAnotherAccountControlsRunsACycle() {
+		String address = alice + "/g/bobs";
+		assertComplete(run("v/ops/agent/create", Maps.of(Fields.AGENT_ID, address, Fields.CONFIG, config(null)),
+			bobWith(cap(alice + "/g/", Abilities.AGENT_CREATE))));
+		Job chat = run("v/ops/agent/chat", Maps.of(Fields.AGENT_ID, "bobs", Fields.MESSAGE, "use your tool"), ALICE);
+		assertComplete(chat);
+		assertTrue(RT.getIn(chat.getOutput(), Fields.RESPONSE).toString().startsWith("Tool returned:"),
+			"its tool call ran: " + chat.getOutput());
+		AMap<AString, ACell> session = agent("bobs").session(Blob.parse(RT.getIn(chat.getOutput(), Fields.SESSION_ID))).getRecord();
+		AVector<ACell> conversation = covia.adapter.agent.GoalTreeContext.activeConversation(
+			RT.ensureMap(RT.getIn(session, Fields.FRAMES, CVMLong.ZERO)));
+		assertTrue(conversation.toString().contains("Tool returned:"), "the cycle wrote the agent's session: " + conversation);
 	}
 
 	@Test

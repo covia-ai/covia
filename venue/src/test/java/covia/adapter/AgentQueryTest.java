@@ -29,7 +29,6 @@ import covia.api.Fields;
 import covia.exception.JobFailedException;
 import covia.exception.UnavailableException;
 import covia.grid.Job;
-import covia.grid.Principals;
 import covia.grid.Status;
 import covia.venue.Agent;
 import covia.venue.Engine;
@@ -266,8 +265,9 @@ public class AgentQueryTest {
 		engine.jobs().invokeOperation("v/ops/agent/query", input,
 			other.withSessionId(Blob.fromHex("abcd")).withTaskId(Blob.fromHex("5678")))
 			.awaitResult(5000);
-		assertEquals(Principals.agentDID(owner.getUserDID(), AGENT), model.seenContext.getCallerDID());
+		assertEquals(owner.getUserDID(), model.seenContext.getCallerDID(), "the model is called in the controller's frame");
 		assertEquals(owner.getUserDID(), model.seenContext.getUserDID());
+		assertEquals(AGENT, model.seenContext.getAgentId(), "driving the agent's execution, not the asker's");
 		assertNull(model.seenContext.getSessionId());
 		assertNull(model.seenContext.getTaskId());
 		assertNull(model.seenContext.getProofs());
