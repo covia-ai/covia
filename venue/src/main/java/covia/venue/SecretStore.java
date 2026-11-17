@@ -50,11 +50,6 @@ public class SecretStore extends MapComponent<AString, ACell> implements Transac
 		return new SecretStore(context, cursor);
 	}
 
-	@Override
-	public SecretStore withCursor(AForkableCursor<AHashMap<AString, ACell>> cursor) {
-		return rebind(cursor);
-	}
-
 	private final VenueContext context;
 
 	public VenueContext getContext() { return context; }

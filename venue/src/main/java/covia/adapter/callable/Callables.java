@@ -42,11 +42,6 @@ public final class Callables extends ALatticeComponent<ACell>
 		return new Callables(cursor);
 	}
 
-	@Override
-	public Callables withCursor(AForkableCursor<ACell> cursor) {
-		return rebind(cursor);
-	}
-
 	/** A new callable id. */
 	static AString newId() {
 		return Strings.create(Blobs.createRandom(RANDOM, 16).toHexString());

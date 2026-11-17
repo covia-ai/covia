@@ -42,11 +42,6 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 		return new Agent(context, cursor, owner, agentId);
 	}
 
-	@Override
-	public Agent withCursor(AForkableCursor<ACell> cursor) {
-		return rebind(cursor);
-	}
-
 	private final VenueContext context;
 	private final AForkableCursor<ACell> edits;
 

@@ -49,11 +49,6 @@ public final class AccessToken extends ALatticeComponent<AMap<AString, ACell>>
 		return new AccessToken(cursor, owner, name);
 	}
 
-	@Override
-	public AccessToken withCursor(AForkableCursor<AMap<AString, ACell>> cursor) {
-		return rebind(cursor);
-	}
-
 	/** The namespace it belongs to. */
 	public AString owner() {
 		return owner;

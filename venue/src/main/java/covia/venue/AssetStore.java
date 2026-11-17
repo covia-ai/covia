@@ -30,11 +30,6 @@ public class AssetStore extends IndexComponent<ABlob, AVector<ACell>> implements
 		return new AssetStore(cursor);
 	}
 
-	@Override
-	public AssetStore withCursor(AForkableCursor<Index<ABlob, AVector<ACell>>> cursor) {
-		return rebind(cursor);
-	}
-
 	/** An asset's hash and the positions below it name data in its record, read-only. */
 	@Override
 	public ALatticeComponent<?> resolve(AString[] segments, int start, int end) {

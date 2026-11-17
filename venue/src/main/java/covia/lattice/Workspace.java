@@ -56,11 +56,6 @@ public final class Workspace extends ALatticeComponent<ACell>
 		return new Workspace(cursor);
 	}
 
-	@Override
-	public Workspace withCursor(AForkableCursor<ACell> cursor) {
-		return rebind(cursor);
-	}
-
 	/**
 	 * The {@link Entry} segments {@code [start, end)} name in this area; the
 	 * area itself for none ({@link Entry#of} gives its root entry). The entry

@@ -40,11 +40,6 @@ public final class Callable extends ALatticeComponent<AMap<AString, ACell>>
 		return new Callable(cursor, owner, name);
 	}
 
-	@Override
-	public Callable withCursor(AForkableCursor<AMap<AString, ACell>> cursor) {
-		return rebind(cursor);
-	}
-
 	/** The namespace it belongs to. */
 	public AString owner() {
 		return owner;

@@ -59,11 +59,6 @@ public final class Caps extends ALatticeComponent<AVector<ACell>>
 		return new Caps(cursor);
 	}
 
-	@Override
-	public Caps withCursor(AForkableCursor<AVector<ACell>> cursor) {
-		return rebind(cursor);
-	}
-
 	/**
 	 * Caps as they arrive from outside (an operation's input, the venue's
 	 * config), in their stored form: {@code "unrestricted"} is null, and a list

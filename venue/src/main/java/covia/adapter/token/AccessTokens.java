@@ -56,11 +56,6 @@ public final class AccessTokens extends ALatticeComponent<ACell>
 		return new AccessTokens(cursor);
 	}
 
-	@Override
-	public AccessTokens withCursor(AForkableCursor<ACell> cursor) {
-		return rebind(cursor);
-	}
-
 	/** A new bearer: the prefix and 32 random bytes in base58. */
 	public static String newBearer() {
 		byte[] bytes = new byte[32];

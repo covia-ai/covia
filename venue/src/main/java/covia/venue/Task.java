@@ -58,11 +58,6 @@ public final class Task extends ALatticeComponent<ACell>
 		return new Task(cursor, id);
 	}
 
-	@Override
-	public Task withCursor(AForkableCursor<ACell> cursor) {
-		return rebind(cursor);
-	}
-
 	/** The fields below a task read as stored. */
 	@Override
 	public ALatticeComponent<?> resolve(AString[] segments, int start, int end) {

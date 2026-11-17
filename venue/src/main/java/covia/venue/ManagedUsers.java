@@ -46,11 +46,6 @@ public final class ManagedUsers extends MapComponent<AString, AMap<AString, ACel
 		return new ManagedUsers(context, cursor);
 	}
 
-	@Override
-	public ManagedUsers withCursor(AForkableCursor<AHashMap<AString, AMap<AString, ACell>>> cursor) {
-		return rebind(cursor);
-	}
-
 	private VenueContext getContext() { return context; }
 	public static final AString ACTIVE = Strings.intern("active");
 	public static final AString REVOKED = Strings.intern("revoked");

@@ -65,7 +65,7 @@ public final class AdapterView {
 		AForkableCursor<ACell> guarded = new ATransformCursor<ACell, ACell>(base) {
 			private void check() {
 				if (name != null && covia.engine.getAdapter(name) != adapter) throw new AuthException(UNAVAILABLE);
-				if (mutation) requireWritable(adapter, scoped, path);
+				if (mutation) AdapterView.requireWritable(adapter, scoped, path);
 			}
 			@Override protected ACell view(ACell value) { check(); return value; }
 			@Override protected ACell write(ACell current, ACell value) {

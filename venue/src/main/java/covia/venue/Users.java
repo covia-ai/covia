@@ -31,11 +31,6 @@ public class Users extends MapComponent<AString, ACell> implements Transactional
 		return new Users(context, cursor);
 	}
 
-	@Override
-	public Users withCursor(AForkableCursor<AHashMap<AString, ACell>> cursor) {
-		return rebind(cursor);
-	}
-
 	private final VenueContext context;
 
 	public VenueContext getContext() { return context; }

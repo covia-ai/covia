@@ -29,6 +29,7 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.store.AStore;
 import convex.core.store.MemoryStore;
+import convex.core.store.Persister;
 import convex.lattice.LatticeHost;
 import convex.lattice.ALatticeComponent;
 import convex.lattice.TransactionalComponent;
@@ -36,7 +37,6 @@ import convex.lattice.OwnedMap;
 import convex.lattice.Timestamped;
 import convex.lattice.cursor.AForkableCursor;
 import convex.lattice.cursor.Cursors;
-import convex.lattice.cursor.Persister;
 import covia.lattice.Covia;
 import covia.lattice.CoviaPath;
 import covia.api.Fields;
@@ -92,11 +92,6 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 		return new VenueState(cursor, ownerKey, context);
 	}
 
-	@Override
-	public VenueState withCursor(AForkableCursor<ACell> cursor) {
-		return rebind(cursor);
-	}
-
 	private final AccountKey ownerKey;
 	private final VenueContext context;
 	/** The venue value as one timestamped record: local edits stamp it, merges keep the newest. */
@@ -112,10 +107,11 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 		return record.merge(incoming);
 	}
 
-	@Override
-	protected ACell mergePublication(ACell own, ACell other) {
-		return record.getLattice().merge(own, other);
-	}
+	// OPEN (Convex 0.8.20 port): 0.8.19 merged a publication conflict by the record's
+	// whole-venue LWW (mergePublication) while transactions reran on conflict. Convex now
+	// commits transactions through the same reconcile, so an LWW override here would let a
+	// conflicting venue transaction drop the other's changes. Until that is decided this
+	// keeps the default: a change on both sides is a conflict, at commit and at sync.
 
 	/** Binds working storage and the policy its components share. */
 	private VenueState(AForkableCursor<ACell> cursor, AccountKey ownerKey, VenueContext context) {
@@ -127,7 +123,7 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 	 * ({@link #persist()}), or with its parent when {@code persister} is null.
 	 */
 	private VenueState(AForkableCursor<ACell> cursor, AccountKey ownerKey, VenueContext context,
-			Persister<ACell> persister) {
+			Persister persister) {
 		super(cursor, persister);
 		this.ownerKey = ownerKey;
 		this.context = context;
@@ -154,7 +150,7 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 	 * its cells softly.
 	 */
 	static VenueState draft(OwnedMap<ACell, ACell> venues, AccountKey ownerKey, VenueContext context,
-			Persister<ACell> persister) {
+			Persister persister) {
 		return new VenueState(venues.draft(ownerKey, context::sign).storage(), ownerKey, context,
 			Objects.requireNonNull(persister, "persister"));
 	}

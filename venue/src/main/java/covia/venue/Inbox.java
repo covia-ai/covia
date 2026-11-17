@@ -37,11 +37,6 @@ public final class Inbox extends IndexComponent<Blob, AMap<AString, ACell>>
 		return new Inbox(cursor);
 	}
 
-	@Override
-	public Inbox withCursor(AForkableCursor<Index<Blob, AMap<AString, ACell>>> cursor) {
-		return rebind(cursor);
-	}
-
 	/** A request id and the fields below it name data in a record, read-only. */
 	@Override
 	public ALatticeComponent<?> resolve(AString[] segments, int start, int end) {

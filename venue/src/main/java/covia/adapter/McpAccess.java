@@ -30,11 +30,6 @@ public final class McpAccess extends ALatticeComponent<AMap<AString, ACell>>
 		return new McpAccess(cursor);
 	}
 
-	@Override
-	public McpAccess withCursor(AForkableCursor<AMap<AString, ACell>> cursor) {
-		return rebind(cursor);
-	}
-
 	/** An entry offering {@code tools}. */
 	public static AMap<AString, ACell> entry(AVector<ACell> tools) {
 		return Maps.of(Fields.TOOLS, tools);

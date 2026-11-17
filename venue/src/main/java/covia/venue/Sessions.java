@@ -52,11 +52,6 @@ public final class Sessions extends IndexComponent<Blob, ACell>
 		return new Sessions(context, cursor, owner, agentId);
 	}
 
-	@Override
-	public Sessions withCursor(AForkableCursor<Index<Blob, ACell>> cursor) {
-		return rebind(cursor);
-	}
-
 	/** {@code <hex>} names a session, whether or not it exists; anything else names nothing. */
 	@Override
 	public ALatticeComponent<?> resolve(AString[] segments, int start, int end) {

@@ -48,11 +48,6 @@ public final class HitlRequest extends ALatticeComponent<AMap<AString, ACell>>
 		return new HitlRequest(cursor, id);
 	}
 
-	@Override
-	public HitlRequest withCursor(AForkableCursor<AMap<AString, ACell>> cursor) {
-		return rebind(cursor);
-	}
-
 	/** The request's id: the id of the job that carries it. */
 	public Blob getID() {
 		return id;

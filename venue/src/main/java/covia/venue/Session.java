@@ -58,8 +58,6 @@ public final class Session extends ALatticeComponent<ACell>
 		return new Session(context, cursor, owner, agentId, id);
 	}
 
-	@Override public Session withCursor(AForkableCursor<ACell> cursor) { return rebind(cursor); }
-
 	/**
 	 * The agent serving a session reaches its {@code c} of right; anything else
 	 * in the session needs authority over

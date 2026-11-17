@@ -51,11 +51,6 @@ public class User extends ALatticeComponent<ACell> implements TransactionalCompo
 		return new User(context, cursor, did);
 	}
 
-	@Override
-	public User withCursor(AForkableCursor<ACell> cursor) {
-		return rebind(cursor);
-	}
-
 	private final VenueContext context;
 	private final AForkableCursor<ACell> edits;
 

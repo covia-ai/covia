@@ -48,11 +48,6 @@ public final class Agents extends MapComponent<AString, ACell>
 		return new Agents(context, cursor, owner);
 	}
 
-	@Override
-	public Agents withCursor(AForkableCursor<AHashMap<AString, ACell>> cursor) {
-		return rebind(cursor);
-	}
-
 	/** Every agent's record by id, deleted agents included; empty when there are none. */
 	public AHashMap<AString, ACell> all() {
 		AHashMap<AString, ACell> agents = get();

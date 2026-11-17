@@ -69,11 +69,6 @@ public final class Cap extends ALatticeComponent<AMap<AString, ACell>>
 		return new Cap(cursor);
 	}
 
-	@Override
-	public Cap withCursor(AForkableCursor<AMap<AString, ACell>> cursor) {
-		return rebind(cursor);
-	}
-
 	/** A capability over {@code with} for {@code can}, with no caveats. */
 	public static AMap<AString, ACell> create(AString with, AString can) {
 		return Capability.create(with, can);
