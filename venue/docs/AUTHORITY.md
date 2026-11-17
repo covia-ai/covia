@@ -142,10 +142,12 @@ reaches that event; no grant extends that reach
 
 A record the venue keeps for itself, such as a job, a scheduled event, an
 approval request or a timeline entry, leaves out a principal that is the
-account it is kept in, since where it is kept says so. Whatever returns the
-record or carries it out of that account, such as an API response or an
-export, names the principal in full, so the record as a client sees it always
-names its caller. Data a user writes is stored as given: the venue neither
+account it is kept in, since where it is kept says so. A missing principal
+means that account wherever the record is read against the structure that
+holds it: a lattice read, a copy, an export or a clone carries it as stored, so
+a clone's records are the clone's. A response that hands a client one record
+on its own, such as a job's status, names the principal in full, since the
+client has no account to read it against. Data a user writes is stored as given: the venue neither
 leaves anything out of it nor fills anything in, since such data is more
 likely to be copied between places.
 
