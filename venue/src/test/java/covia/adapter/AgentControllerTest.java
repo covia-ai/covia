@@ -352,7 +352,8 @@ public class AgentControllerTest {
 		AVector<ACell> caps = Vectors.of(cap("w/notes/", READ));
 		assertComplete(create("own", caps, ALICE));
 		assertEquals(caps, as("own").getCaps());
-		assertFalse(as("own").hasSeparateAuthority());
+		RequestContext own = as("own");
+		assertSame(own, engine.authorityFrame(own), "its authority comes from its owner, in its account");
 		assertTrue(covers(as("own"), "w/notes/a", READ));
 
 		assertComplete(create("free", null, ALICE));
@@ -414,8 +415,8 @@ public class AgentControllerTest {
 			bobWith(cap(alice + "/g/", Abilities.AGENT_CREATE))));
 
 		RequestContext bobs = as("bobs");
-		assertTrue(bobs.hasSeparateAuthority());
-		assertEquals(agentDID("bobs"), bobs.getCallerDID(), "it is still the agent acting");
+		assertEquals(agentDID("bobs"), bobs.getAuthorityDID(), "the context names only the agent");
+		assertEquals(bob, engine.authorityFrame(bobs).getUserDID(), "its authority, worked out from its record, is Bob's");
 		assertTrue(covers(bobs, bob + "/w/notes/a", READ));
 		assertFalse(covers(bobs, bob + "/w/other", READ), "its caps narrow its controller's authority");
 		assertFalse(covers(bobs, "w/notes/a", READ), "Alice's data is not Bob's");

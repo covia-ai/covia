@@ -40,6 +40,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - `admin/sudo` (`user:sudo`) is a call into the user: the nested operation runs with the user's whole authority, what it does and makes, such as jobs, events and agents, is the user's, and the delegate's grants no longer bound it. Entering is checked once, whatever request makes it.
 - `user:sudo` refuses the venue's own DID and its public principal as targets.
 - Minting a user's identity token (`auth:identity-token`) needs the user in person, so neither a delegate under `admin/sudo` nor work carried on later can.
+- An agent whose controller is in another account is the principal its acts name: a callable it calls records it as the caller and a dictation it opens is its own, and work it leaves acts with its controller as it stands, not the one it started with. One whose controllers lead back to it through another account acts with no authority.
 - An agent's harness runs in its controller's frame: what it starts, such as its model calls and an external agent's backend job, records the controller as its caller in the controller's account, and names in the agent's configuration resolve in the controller's namespace; the agent's tool calls still run as the agent.
 
 - Adapters refuse settings with a configuration error, from the venue config and from `venue:adapter/configure` alike; anything else an adapter's `configure` throws, a module adapter's `IllegalArgumentException` included, is reported as that adapter's fault rather than as invalid input or the `venue` adapter's.

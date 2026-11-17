@@ -359,21 +359,19 @@ whose job completes by writing there as its caller (AGENT_TEMPLATES.md), and
 so does a `remoteagent` call to an agent on this venue, which follows the
 agent's task as its caller (ADAPTERS.md, External agent interactions), and so
 does every external agent's backend job, which the agent's harness starts in
-its controller's frame (UCAN.md §5.4). The job's entry keeps the grant proofs the caller presented, in
-the form checked on arrival, the separate authority the request acts with, if
-any (`Engine.keptAuthority`: an agent whose controller is in another
-namespace acts with that controller's),
-and the request's execution scopes (agent, session, job and task), even when
+its controller's frame (UCAN.md §5.4). The job's entry keeps the grant
+proofs the caller presented, in the form checked on arrival, what narrows the
+request (`Engine.keptAuthority`), and the request's execution scopes (agent,
+session, job and task), even when
 there are none, so that `JobManager.keepsCallerContext` tells such a job from
 one whose adapter never asked. `JobManager.callerContext` rebuilds the caller
 from them with `Engine.context(owner, caller, proofs, authority)`, checking
-what a live request would: the principal and the kept authority still exist,
-a delegate whose earlier work it is still holds its `admin/sudo` grant, which
-bounds it as it did then, an agent acts under its current
-`config.caps`, an agent controller under its own. The kept authority is the
-controller the work started with, as it acts now, and the access token
-narrowing the request, if any, which then narrows it as it stands and to
-nothing once it is gone (ACCESS_TOKENS.md). Work a callable's call left
+what a live request would: the principal still exists, a delegate whose
+earlier work it is still holds its `admin/sudo` grant, which bounds it as it
+did then, and an agent acts under its current `config.caps` and its
+controller as it stands, read from its record. What narrows the request is
+the access token it came through, if any, which then narrows it as it stands
+and to nothing once it is gone (ACCESS_TOKENS.md). Work a callable's call left
 running keeps the callable and the call's caller instead, and resumes in the
 call's frame: the issuer's authority as the callable stands, in its owner's
 namespace (CALLABLES.md). The record never holds them,

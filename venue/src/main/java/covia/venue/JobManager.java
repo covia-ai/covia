@@ -938,7 +938,7 @@ public class JobManager {
 	String evaluateGate(AString gateOp, AString opRef, ACell input, AString caller,
 			RequestContext authorityCtx) {
 		return runGate(gateOp, gateInput(opRef, input, caller, authorityCtx.getUserDID()),
-			authorityCtx.forGateEvaluation(gateOp));
+			engine.authorityFrame(authorityCtx).forGateEvaluation(gateOp));
 	}
 
 	/**

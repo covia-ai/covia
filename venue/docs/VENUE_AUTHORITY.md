@@ -63,10 +63,9 @@ For the division with capability enforcement and authentication, see
   instead. An agent's caps are not a grant: they narrow what it does in its
   owner's namespace (§5.4 there).
 - **Deferred work.** A recorded job (`JobManager.keepCallerContext`) and a
-  scheduled event (`Scheduler.schedule`) keep the grants presented to them, and
-  a separate authority the request acted with ([UCAN.md](./UCAN.md) §5.4), but
-  not the scope. Agents are unaffected, because their scope is read again from
-  their config.
+  scheduled event (`Scheduler.schedule`) keep the grants presented to them, but
+  not the scope. Agents are unaffected, because their scope and controller are
+  read again from their record ([UCAN.md](./UCAN.md) §5.4).
 - **In person.** A request carries the principal it authenticated as where it
   entered the venue: the caller the HTTP, MCP or A2A door authenticated, or
   the issuer of the access token it presented; or the principal an in-process

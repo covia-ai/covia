@@ -384,7 +384,7 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 		if (runners.containsKey(key)) throw new ConflictException(DUPLICATE_BOT.formatted(providerName(), name));
 		// The bot identifies its senders as exactly its creator: an agent as itself, never its owner.
 		// It then acts as that creator, so it cannot record one whose authority was another's.
-		if (ctx.hasSeparateAuthority()) throw new AuthException(SEPARATE_AUTHORITY_CREATOR);
+		if (engine.authorityFrame(ctx) != ctx) throw new AuthException(SEPARATE_AUTHORITY_CREATOR);
 		if (!ctx.getTokens().isEmpty()) throw new AuthException(TOKEN_CREATOR);
 		AString principal = ctx.getCallerDID();
 		if (!owner.equals(Principals.userOf(principal))) throw new AuthException(FOREIGN_PRINCIPAL.formatted(principal));

@@ -225,10 +225,9 @@ one through a token or within a callable's call.
 
 ## What it replaces
 
-- The request context's caller DID as a value apart from its authority, which
-  differ today only for an agent whose controller is in another namespace.
-- The request context's namespace as a value apart from its authority, and a
-  separate authority on a context.
+- The request context's caller DID beside its authority DID, two names for
+  the one principal it acts as.
+- The request context's namespace as a value apart from its authority.
 - The caller context a job keeps only when its adapter asks, in two shapes of
   kept authority, and a scheduled event's own shape of the same. A job's state
   is the context it runs in.

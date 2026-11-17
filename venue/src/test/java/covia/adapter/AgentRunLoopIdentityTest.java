@@ -105,7 +105,7 @@ public class AgentRunLoopIdentityTest {
 		assertNotNull(seen, "transition must have executed");
 		assertEquals(ALICE_DID, seen.getCallerDID(), "the harness is its controller's frame, here its owner's");
 		assertEquals(ALICE_DID, seen.getUserDID());
-		assertFalse(seen.hasSeparateAuthority());
+		assertSame(seen, engine.authorityFrame(seen), "with its own authority");
 		assertNull(seen.getCaller(), "a cycle has no caller");
 		assertNull(seen.getAuthenticatedDID(), "nobody is present in a cycle");
 		assertEquals(new RequestContext.ExecutionScope(ALICE_DID, agentId, null, seen.getSessionId(), null, -1L,

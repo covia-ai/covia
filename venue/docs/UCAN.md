@@ -1002,16 +1002,15 @@ That guard is pinned to identity. An unrestricted agent holds no scope, which
 the `authorityCovers` fast path passes; a scope-based defence would therefore
 be absent on exactly the agent that most needs bounding.
 
-**A request's caller, namespace and authority are separate.** Its caller is
-who acted, its namespace is where its names resolve (with the agent, session
-and task its work belongs to), and its authority is what it may do. A request
-usually acts with its caller's own authority in the namespace it acts in. An
-agent acts with its controller's instead. Where that is a principal from
-another namespace, it is a separate authority
-(`RequestContext.withAuthorityOf`): access checks decide under it, on names
-resolved in the agent's namespace (`RequestContext.authorityContext`,
-`inNamespace`). A recorded job and a scheduled event
-keep a separate authority with the work and act with it again.
+**A request names one acting principal.** It acts with that principal's
+authority, in the namespace its names resolve in (with the agent, session and
+task its work belongs to). An agent acts with its controller's authority,
+narrowed by its caps. Where its controllers lead out of its account, each
+check works out the first controller outside it from the agents' records, as
+it reads their caps, and decides under that controller's authority on names
+resolved in the agent's namespace (`Engine.authorityFrame`,
+`RequestContext.inNamespace`). A recorded job and a scheduled event keep only
+the agent, so work it leaves acts with its controller as it stands.
 
 **Each agent has a controller:** the principal whose authority it acts with,
 as that principal's own request would hold it (`Engine.context`), the owner's

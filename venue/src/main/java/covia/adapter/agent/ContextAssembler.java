@@ -722,7 +722,7 @@ public final class ContextAssembler {
 	private static AVector<ACell> disclosedCaps(Spec spec, AMap<AString, ACell> config) {
 		RequestContext agent = spec.capsCtx();
 		if (agent.getAgentId() == null) return RT.ensureVector(config != null ? config.get(K_CAPS) : null);
-		return agent.authorityContext().getCaps();
+		return agent.getCaps();
 	}
 
 	/**

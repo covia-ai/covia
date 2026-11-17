@@ -390,10 +390,11 @@ public class HITLAdapter extends AAdapter {
 	 *  checked against the caller's grant scope AND (cross-user) their presented
 	 *  proofs. Proximity relaxes friction here, not authorisation: a foreign
 	 *  target still needs a delegation. The family is that of the authority
-	 *  the request acts with, which for an agent's harness may be its
-	 *  controller's. */
+	 *  the request acts with, which for an agent whose controllers lead out of
+	 *  its account is the first controller outside it
+	 *  ({@link covia.venue.Engine#authorityFrame}). */
 	private void requireDeliverable(RequestContext ctx, AString caller, AString target) {
-		if (ctx.authorityContext().relationTo(target).isSameUser()) return;
+		if (engine.authorityFrame(ctx).relationTo(target).isSameUser()) return;
 		AString resource = Strings.create(target + "/h/");
 		// A foreign inbox is a local cross-user resource: enter the common gate
 		// once so public policy/proofs and any delegated caveats are evaluated

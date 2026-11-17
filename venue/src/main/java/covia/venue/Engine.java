@@ -3674,9 +3674,8 @@ public class Engine {
 	public boolean proofsCover(RequestContext ctx, AString resource, AString ability, long now,
 			AString destination) {
 		if (ctx == null) return false;
-		if (ctx.hasSeparateAuthority()) {
-			return proofsCover(ctx.authorityContext(), ctx.inNamespace(resource), ability, now, destination);
-		}
+		RequestContext frame = authorityFrame(ctx);
+		if (frame != ctx) return proofsCover(frame, ctx.inNamespace(resource), ability, now, destination);
 		return ctx.delegatedProofsCover(rootAuthorityPolicy(), resource, ability, now, destination);
 	}
 
@@ -3689,9 +3688,8 @@ public class Engine {
 	public boolean proofsStructurallyCover(RequestContext ctx, AString resource,
 			AString ability, long now) {
 		if (ctx == null) return false;
-		if (ctx.hasSeparateAuthority()) {
-			return proofsStructurallyCover(ctx.authorityContext(), ctx.inNamespace(resource), ability, now);
-		}
+		RequestContext frame = authorityFrame(ctx);
+		if (frame != ctx) return proofsStructurallyCover(frame, ctx.inNamespace(resource), ability, now);
 		return covia.lattice.CapabilityChecker.proofsStructurallyCover(
 			ctx.getProofs(), ctx.getCallerDID(), rootAuthorityPolicy(),
 			resource, ability, now);
@@ -4174,9 +4172,8 @@ public class Engine {
 	 *  {@code nb.url} caveat, in the public scope or a presented proof, must cover it. */
 	public boolean crossUserAllows(RequestContext ctx, AString resource, AString ability, AString destination) {
 		if (ctx == null || resource == null || ability == null) return false;
-		if (ctx.hasSeparateAuthority()) {
-			return crossUserAllows(ctx.authorityContext(), ctx.inNamespace(resource), ability, destination);
-		}
+		RequestContext frame = authorityFrame(ctx);
+		if (frame != ctx) return crossUserAllows(frame, ctx.inNamespace(resource), ability, destination);
 		// The venue's explicitly addressed asset catalog is public. This is NOT
 		// true of another user's /a/: knowing a hash is not authorisation to read
 		// someone else's asset. On user-facing APIs a bare hash names the caller's
@@ -4345,9 +4342,10 @@ public class Engine {
 	 *  (a secret into an outbound request): a grant's {@code nb.url} caveat must
 	 *  cover it. */
 	public AString requireLocalAccess(RequestContext ctx, AString resource, AString ability, AString destination) {
-		if (ctx != null && ctx.hasSeparateAuthority()) {
+		RequestContext frame = authorityFrame(ctx);
+		if (frame != ctx) {
 			requireStanding(ctx);
-			return requireLocalAccess(ctx.authorityContext(), ctx.inNamespace(resource), ability, destination);
+			return requireLocalAccess(frame, ctx.inNamespace(resource), ability, destination);
 		}
 		if (ownedByCaller(ctx, resource) || (ctx != null && controlsAgentAt(ctx, resource))) {
 			requireAuthority(ctx, resource, ability, destination);   // own namespace → scope seam
@@ -4420,8 +4418,9 @@ public class Engine {
 	 */
 	public void requireGrantable(RequestContext ctx, AString namespace, AString resource, AString can,
 			Long exp, AString destination) {
-		if (ctx.hasSeparateAuthority()) {
-			requireGrantable(ctx.authorityContext(), namespace, ctx.inNamespace(resource), can, exp, destination);
+		RequestContext frame = authorityFrame(ctx);
+		if (frame != ctx) {
+			requireGrantable(frame, namespace, ctx.inNamespace(resource), can, exp, destination);
 			return;
 		}
 		AString grant = Strings.create("grant/" + can);
@@ -4663,9 +4662,10 @@ public class Engine {
 	 * the owner's included: unrestricted in its namespace for a user, the
 	 * public caps for the public principal. Its owner's agents narrow one
 	 * scope along the chain of controllers, read at each point of action. A
-	 * controller from another namespace is a separate authority
-	 * ({@link RequestContext#withAuthorityOf}), since it holds nothing of the
-	 * owner's own. A chain of controllers that loops has no authority at its
+	 * controller from another account holds nothing of the owner's own, so the
+	 * context holds the caps along the chain within the account and each check
+	 * works out that controller's authority ({@link #authorityFrame}). A chain
+	 * of controllers that loops within the account has no authority at its
 	 * root, so grants nothing.
 	 *
 	 * <p>What control gives is not narrowed by the controller's own caps
@@ -4692,12 +4692,68 @@ public class Engine {
 		RequestContext bound = (controllerAgent != null)
 			? agentContext(controllerOwner, controllerAgent, chain)
 			: context(controllerOwner, controller);
-		if (controllerOwner.equals(owner) && !bound.hasSeparateAuthority()) {
+		if (controllerOwner.equals(owner)) {
 			return agent.readingScope(resource -> withControl(
 				CapabilityChecker.intersect(agentScope(owner, agentId), owner, bound.scopeFor(resource), owner),
 				self, resource, owner));
 		}
-		return agent.withAuthorityOf(bound.narrowedBy(caps, owner));
+		// Checked above that it can act now; its authority is worked out at each check
+		return agent.readingScope(caps);
+	}
+
+	/** Why an agent whose controllers leave its account and lead back acts with no authority; the agent follows. */
+	public static final String CONTROLLERS_LOOP = "Agent %s acts with no authority: its controllers lead back to it";
+
+	/**
+	 * The frame whose authority decides what {@code ctx} may do. For an agent
+	 * whose controllers lead out of its account, that is the first controller
+	 * outside it, as it acts now, narrowed by the caps of the agents on the way
+	 * and by what narrows {@code ctx} ({@link #agentContext}). It is worked out
+	 * from the agents' records at each check, as their caps are, and holds the
+	 * request's invocation, since capability gates rule on it. For any other
+	 * request it is {@code ctx} itself. Checks run against it on resources
+	 * resolved in {@code ctx}'s namespace ({@link RequestContext#inNamespace}).
+	 *
+	 * @throws AuthException when a controller on the chain could not act now,
+	 *         or the chain leaves the account and leads back to it
+	 */
+	public RequestContext authorityFrame(RequestContext ctx) {
+		if (ctx == null) return null;
+		AString owner = ctx.getUserDID();
+		AString agentId = agentIdIn(owner, ctx.getCallerDID());
+		if (agentId == null) return ctx;
+		RequestContext outside = outsideController(owner, agentId, new HashSet<>(), false);
+		return (outside == null) ? ctx : ctx.actingAs(outside.narrowedAs(ctx));
+	}
+
+	/**
+	 * The first controller outside {@code owner}'s account on agent
+	 * {@code agentId}'s chain, as it acts now and as one frame, or null when the
+	 * chain stays in the account. A controller that is itself an agent acts as
+	 * {@link #authorityFrame} has it.
+	 *
+	 * @param seen the agents already on this chain
+	 * @param entered whether {@code owner}'s account was entered from another's
+	 */
+	private RequestContext outsideController(AString owner, AString agentId, Set<AString> seen, boolean entered) {
+		AString self = covia.grid.Principals.agentDID(owner, agentId);
+		if (!seen.add(self)) {
+			// Within one account its context grants nothing; a chain that left it has no frame to act with
+			if (entered) throw new AuthException(CONTROLLERS_LOOP.formatted(self));
+			return null;
+		}
+		Agent state = getAgent(owner, agentId);
+		AString controller = (state == null) ? owner : state.getController();
+		AString controllerOwner = covia.grid.Principals.isAgentDID(controller)
+			? covia.grid.Principals.userOf(controller) : controller;
+		AString controllerAgent = agentIdIn(controllerOwner, controller);
+		if (controllerOwner.equals(owner)) {
+			return (controllerAgent == null) ? null : outsideController(owner, controllerAgent, seen, false);
+		}
+		if (controllerAgent == null) return context(controllerOwner, controller);
+		RequestContext agent = agentContext(controllerOwner, controllerAgent, seen);
+		RequestContext further = outsideController(controllerOwner, controllerAgent, seen, true);
+		return (further == null) ? agent : further.narrowedAs(agent);
 	}
 
 	/**
@@ -4800,14 +4856,13 @@ public class Engine {
 	/**
 	 * What a stored context keeps of the authority {@code ctx} acts with,
 	 * beside its caller, owner and proofs, so that work continuing later acts
-	 * with the same authority: a separate authority
-	 * ({@link RequestContext#withAuthorityOf}) as its principal
-	 * ({@link Fields#CALLER}), namespace ({@link Fields#OWNER}) and presented
-	 * {@link Fields#PROOFS}, and the access token narrowing it as
+	 * with the same authority: the access token narrowing it as
 	 * {@link Fields#TOKEN}; or, for a callable's call, that callable as
 	 * {@link Fields#CALLABLE} and the frame's caller
 	 * ({@link RequestContext#getCaller()}) as {@link Fields#CALLER}. Null when
-	 * it acts with its caller's own, unnarrowed.
+	 * it acts with its caller's own, unnarrowed. An agent's authority is worked
+	 * out from its record each time it acts ({@link #authorityFrame}), so
+	 * nothing of its controller is kept.
 	 *
 	 * <p>Job entries and scheduled events store these keys, so renaming one
 	 * needs a migration: work stored under the old key would resume without
@@ -4823,12 +4878,7 @@ public class Engine {
 			return (ctx.getCaller() == null) ? kept : kept.assoc(Fields.CALLER, ctx.getCaller());
 		}
 		AMap<AString, ACell> token = presentedToken(ctx);
-		if (!ctx.hasSeparateAuthority()) return (token == null) ? null : Maps.of(Fields.TOKEN, token);
-		RequestContext authority = ctx.authorityContext();
-		AMap<AString, ACell> kept = Attribution.attribute(Maps.empty(), authority.getCallerDID(), authority.getUserDID());
-		AVector<ACell> proofs = authority.getProofs();
-		if (proofs != null && !proofs.isEmpty()) kept = kept.assoc(Fields.PROOFS, proofs);
-		return (token == null) ? kept : kept.assoc(Fields.TOKEN, token);
+		return (token == null) ? null : Maps.of(Fields.TOKEN, token);
 	}
 
 	/** Why a request may not change an agent another principal controls; the agent and its controller follow. */
@@ -4840,7 +4890,7 @@ public class Engine {
 	/**
 	 * Whether {@code ctx} acts with {@code principal}'s whole authority, as
 	 * making it an agent's controller, or changing an agent it controls, needs.
-	 * The authority the request acts with ({@link RequestContext#authorityContext})
+	 * The authority the request acts with ({@link #authorityFrame})
 	 * must be that principal, an identity it signs in as, or its owner if it is
 	 * an agent; acting in a namespace that is root of it counts only with an
 	 * unrestricted scope. So a user holds its own and its agents' authority, an
@@ -4882,7 +4932,7 @@ public class Engine {
 	 * the request, so each cap must lie within what the request may do itself:
 	 * the authority it acts with as its token, its callable or its agent's caps
 	 * narrow it, never widened by grants it presents
-	 * ({@link RequestContext#authorityContext}). A request nothing narrows may
+	 * ({@link #authorityFrame}). A request nothing narrows may
 	 * give any caps. A caveated cap the request holds counts for nothing here,
 	 * since no gate can be evaluated, so caps it covers are refused rather than
 	 * stored.
@@ -4890,7 +4940,7 @@ public class Engine {
 	 * @param caps the caps as {@link covia.lattice.Caps#parse} reads them; null for unrestricted
 	 */
 	public String capsDenial(RequestContext ctx, AVector<ACell> caps) {
-		RequestContext holder = ctx.authorityContext();
+		RequestContext holder = authorityFrame(ctx);
 		if (holder.scopeFor(null) == null) return null;
 		if (caps == null) return CAPS_BEYOND_GIVER + Caps.UNRESTRICTED;
 		AString namespace = ctx.getUserDID();
@@ -4938,11 +4988,11 @@ public class Engine {
 	public boolean actsWithAuthorityOf(RequestContext ctx, AString principal) {
 		if (ctx == null || principal == null) return false;
 		AString caller = ctx.getCallerDID();
+		RequestContext authority = authorityFrame(ctx);
 		if (actsAsOwnAgent(ctx)) {
 			if (isRootOf(caller, principal)) return true;
-			return !ctx.hasSeparateAuthority() && ctx.getCaps() == null && isRootOf(ctx.getUserDID(), principal);
+			return authority == ctx && ctx.getCaps() == null && isRootOf(ctx.getUserDID(), principal);
 		}
-		RequestContext authority = ctx.authorityContext();
 		if (isRootOf(authority.getCallerDID(), principal)) return true;
 		return authority.getCaps() == null && isRootOf(authority.getUserDID(), principal);
 	}
@@ -4964,9 +5014,8 @@ public class Engine {
 	 */
 	public static AString actingPrincipal(RequestContext ctx) {
 		if (actsAsOwnAgent(ctx)) return ctx.getCallerDID();
-		RequestContext authority = ctx.authorityContext();
-		AString caller = authority.getCallerDID();
-		AString user = authority.getUserDID();
+		AString caller = ctx.getCallerDID();
+		AString user = ctx.getUserDID();
 		if (caller == null || caller.equals(user) || agentIdIn(user, caller) != null) return caller;
 		return user;
 	}
@@ -5006,9 +5055,11 @@ public class Engine {
 	}
 
 	/**
-	 * As {@link #context(AString, AString, AVector)}, acting with the authority
-	 * {@link #keptAuthority} kept, if any, rebuilt as it would act now: an
-	 * authority that could not act now fails as its own request would. Work
+	 * As {@link #context(AString, AString, AVector)}, with what
+	 * {@link #keptAuthority} kept, if any, as it stands now: narrowed by the
+	 * access token, or in the call of the callable, that it names. A kept
+	 * controller from before an agent's authority was worked out from its
+	 * record is not read: the agent acts with its controller as it stands. Work
 	 * that goes on this way is never anyone in person, so the context names no
 	 * authenticated principal ({@link #inPersonDenial}).
 	 *
@@ -5027,11 +5078,7 @@ public class Engine {
 		if (callable != null) return callFrame(callable).calledBy(RT.ensureString(authority.get(Fields.CALLER)));
 		RequestContext ctx = context(owner, principal, proofs);
 		if (authority == null) return ctx;
-		AMap<AString, ACell> token = RT.ensureMap(authority.get(Fields.TOKEN));
-		if (Attribution.caller(authority) == null) return narrowedByToken(ctx, token);
-		RequestContext held = context(Attribution.owner(authority), Attribution.caller(authority),
-			RT.ensureVector(authority.get(Fields.PROOFS)));
-		return ctx.withAuthorityOf(narrowedByToken(held, token));
+		return narrowedByToken(ctx, RT.ensureMap(authority.get(Fields.TOKEN)));
 	}
 
 	// ========== Access tokens (ACCESS_TOKENS.md) ==========
@@ -5123,7 +5170,8 @@ public class Engine {
 	 */
 	public boolean narrowingsCover(RequestContext ctx, AString resource, AString ability) {
 		if (ctx == null) return false;
-		if (ctx.hasSeparateAuthority()) return narrowingsCover(ctx.authorityContext(), ctx.inNamespace(resource), ability);
+		RequestContext frame = authorityFrame(ctx);
+		if (frame != ctx) return narrowingsCover(frame, ctx.inNamespace(resource), ability);
 		return narrowingsCover(ctx, resource, ability, null);
 	}
 
@@ -5260,9 +5308,8 @@ public class Engine {
 	 *  {@code nb.url} caveat must cover it. */
 	public boolean authorityCovers(RequestContext ctx, AString resource, AString ability, AString destination) {
 		if (ctx == null) return false;
-		if (ctx.hasSeparateAuthority()) {
-			return authorityCovers(ctx.authorityContext(), ctx.inNamespace(resource), ability, destination);
-		}
+		RequestContext frame = authorityFrame(ctx);
+		if (frame != ctx) return authorityCovers(frame, ctx.inNamespace(resource), ability, destination);
 		if (isAnothers(ctx, resource)) return crossUserAllows(ctx, resource, ability, destination) && narrowingsCover(ctx, resource, ability, destination);
 		return scopeOrHeldCovers(ctx, resource, ability, destination);
 	}
@@ -5313,8 +5360,9 @@ public class Engine {
 	/** As above for a use that sends a value to {@code destination}. */
 	public void requireAuthority(RequestContext ctx, AString resource, AString ability, AString destination) {
 		requireStanding(ctx);
-		if (ctx != null && ctx.hasSeparateAuthority()) {
-			requireAuthority(ctx.authorityContext(), ctx.inNamespace(resource), ability, destination);
+		RequestContext frame = authorityFrame(ctx);
+		if (frame != ctx) {
+			requireAuthority(frame, ctx.inNamespace(resource), ability, destination);
 			return;
 		}
 		if (authorityCovers(ctx, resource, ability, destination)) return;
@@ -5346,9 +5394,10 @@ public class Engine {
 	 */
 	public void requireInvoke(RequestContext ctx, AString operation) {
 		requireStanding(ctx);
-		if (ctx != null && ctx.hasSeparateAuthority()) {
+		RequestContext frame = authorityFrame(ctx);
+		if (frame != ctx) {
 			// A reference, checked as given against the authority's scope.
-			requireInvoke(ctx.authorityContext(), operation);
+			requireInvoke(frame, operation);
 			return;
 		}
 		if (ctx != null && scopeOrHeldCovers(ctx, operation, Abilities.INVOKE, null)) return;
@@ -5376,10 +5425,9 @@ public class Engine {
 	public void requireStanding(RequestContext ctx) {
 		if (ctx != null && ctx.getJob() instanceof VenueJob job) job.requireAccount();
 		if (ctx != null) venueState.users().requireNotDeleted(ctx.getUserDID());
-		// A separate authority acts only while its own account stands too.
-		if (ctx != null && ctx.hasSeparateAuthority()) {
-			venueState.users().requireNotDeleted(ctx.authorityContext().getUserDID());
-		}
+		// An authority from another account acts only while that account stands too.
+		RequestContext frame = authorityFrame(ctx);
+		if (frame != ctx) venueState.users().requireNotDeleted(frame.getUserDID());
 	}
 
 	/**
@@ -5662,7 +5710,7 @@ public class Engine {
 	public boolean isOwnSecretRef(String secretRef, RequestContext ctx) {
 		if (secretRef == null || ctx == null || ctx.getUserDID() == null) return false;
 		AString owner = secretOwner(secretRef, ctx.getUserDID());
-		return owner != null && isOwnSecret(owner, ctx.authorityContext());
+		return owner != null && isOwnSecret(owner, authorityFrame(ctx));
 	}
 
 	/**

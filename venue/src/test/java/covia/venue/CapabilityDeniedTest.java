@@ -56,11 +56,14 @@ class CapabilityDeniedTest {
 			() -> engine.requireAuthority(RequestContext.of(alice), bobs, READ));
 	}
 
-	@Test void aSeparateAuthorityIsTheOneRefused() {
+	/** An agent whose controller is in another account acts with that controller's authority, which is what is refused. */
+	@Test void anAgentsControllerElsewhereIsTheOneRefused() {
 		AString alice = TestEngine.uniqueDID("DeniedOwner");
 		AString bob = TestEngine.uniqueDID("DeniedController");
-		engine.getVenueState().users().ensure(alice);
-		RequestContext ctx = RequestContext.ofAgent(alice, Strings.intern("helper")).withAuthorityOf(RequestContext.of(bob));
+		engine.getVenueState().users().ensure(bob);
+		AString helper = Strings.intern("helper");
+		engine.getVenueState().users().ensure(alice).agents().create(helper, null, null, null, bob);
+		RequestContext ctx = engine.context(alice, covia.grid.Principals.agentDID(alice, helper));
 		assertDenied(path(alice + "/w/notes"), READ, bob,
 			() -> engine.requireAuthority(ctx, path("w/notes"), READ));
 	}
