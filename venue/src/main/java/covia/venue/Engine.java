@@ -4909,7 +4909,15 @@ public class Engine {
 	 * their caps are unrestricted.</p>
 	 */
 	public boolean holdsAuthorityOf(RequestContext ctx, AString principal) {
-		if (!actsWithAuthorityOf(ctx, principal)) return false;
+		return actsWithAuthorityOf(ctx, principal) && narrowingsUnrestricted(ctx);
+	}
+
+	/**
+	 * Whether what narrows {@code ctx}, every access token on it and the
+	 * callable whose call it is, leaves it all of the authority it acts with:
+	 * each stands and its caps are unrestricted. True when nothing narrows it.
+	 */
+	private boolean narrowingsUnrestricted(RequestContext ctx) {
 		AMap<AString, ACell> called = ctx.getCallable();
 		if (called != null) {
 			Callable callable = resolveCallable(called);
@@ -5189,30 +5197,35 @@ public class Engine {
 	/**
 	 * The context agent {@code agentId}'s step runs under: the agent itself as it
 	 * stands now ({@link #context(AString, AString)}), carrying on {@code ctx}'s
-	 * execution. A step runs only for an agent that exists, and only the agent's
-	 * own run or its owner may make it act. The agent's own run is told by the
-	 * execution it drives, which only the venue gives a request for that agent
-	 * (its harness, its own acts and work they keep), never by who acts in it:
-	 * the harness acts as the agent's controller. A step's input never sets its
-	 * authority.
+	 * execution, still narrowed by the access tokens that narrow {@code ctx},
+	 * so one that stops standing stops the step. A step runs only for an agent
+	 * that exists, and only the agent's own run or its owner may make it act,
+	 * with all of the authority it acts with: a request a restricted access
+	 * token or callable narrows makes no agent act. The agent's own run is told
+	 * by the execution it drives, which only the venue gives a request for that
+	 * agent (its harness, its own acts, a request through its token and work
+	 * they keep), never by who acts in it: the harness acts as the agent's
+	 * controller. A call is never the agent's own run. A step's input never
+	 * sets its authority.
 	 *
 	 * @throws AuthException when the caller may not make that agent act, or it does not exist
 	 */
 	public RequestContext stepContext(RequestContext ctx, AString agentId) {
 		RequestContext.ExecutionScope execution = ctx.getExecutionScope();
-		// Its own run, or its owner with all of the owner's authority: a request a
-		// token narrows may not make an agent act with the agent's own authority,
-		// and a call is never the agent's own run, whatever frame it runs in
+		// A call is never the agent's own run, whatever frame it runs in
 		boolean ownRun = ctx.getCallable() == null && agentId != null && agentId.equals(execution.agentId());
 		AString owner = ownRun ? execution.ownerDID() : ctx.getUserDID();
 		AString caller = ctx.getAuthorityDID();
 		AString agentDID = (owner == null || agentId == null) ? null
 			: covia.grid.Principals.agentDID(owner, agentId);
-		if (agentDID == null || !(ownRun || (owner.equals(caller) && holdsAuthorityOf(ctx, owner)))) {
+		if (agentDID == null || !(ownRun || (owner.equals(caller) && actsWithAuthorityOf(ctx, owner)))) {
 			throw new AuthException(NOT_AGENTS_STEP.formatted(caller, agentId));
 		}
+		if (!narrowingsUnrestricted(ctx)) throw new AuthException(STEP_NARROWED.formatted(caller, agentId));
 		if (getAgent(owner, agentId) == null) throw new AuthException(NO_SUCH_AGENT.formatted(agentDID));
-		return ctx.actingAs(context(owner, agentDID)).withAgentId(agentId);
+		RequestContext agent = context(owner, agentDID);
+		for (ACell token : ctx.getTokens()) agent = narrowedByToken(agent, RT.ensureMap(token));
+		return ctx.actingAs(agent).withAgentId(agentId);
 	}
 
 	/**
@@ -5255,6 +5268,10 @@ public class Engine {
 
 	/** Why a step did not run: only the agent's own run, or its owner, may make an agent act. */
 	public static final String NOT_AGENTS_STEP = "%s cannot run a step of agent %s: only the agent's own run or its owner can make it act";
+
+	/** Why a step did not run: an access token or callable that is restricted, or no longer stands, narrows the request. */
+	public static final String STEP_NARROWED = "%s cannot run a step of agent %s: an access token or callable narrows the request, "
+		+ "and only a request with all of the authority it acts with can make an agent act";
 
 	/** Why a step did not run: it names no agent that exists here. */
 	public static final String NO_SUCH_AGENT = "%s is not an agent here";

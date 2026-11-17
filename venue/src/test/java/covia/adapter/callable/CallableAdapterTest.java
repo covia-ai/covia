@@ -216,6 +216,9 @@ public class CallableAdapterTest {
 		assertFalse(engine.holdsAuthorityOf(whole, bob), "never the invoker's");
 		assertEquals(alice, whole.getAuthorityDID(), "a call has its issuer's authority, so reaches state that is the issuer's");
 		assertEquals(Engine.SUDO_NARROWED, assertThrows(covia.exception.AuthException.class, () -> engine.sudoContext(whole, bob)).getMessage());
+		agent(alice, "worker", Caps.UNRESTRICTED);
+		assertEquals(Engine.STEP_NARROWED.formatted(alice, "worker"), assertThrows(covia.exception.AuthException.class,
+			() -> engine.stepContext(narrow, Strings.create("worker"))).getMessage(), "a narrower call makes none of the issuer's agents act");
 
 		// An agent of the owner calling one another agent issued acts with the issuer's authority, never its own
 		ACell invoke = cap("v/ops/", Abilities.INVOKE);
