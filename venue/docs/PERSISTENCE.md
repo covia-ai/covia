@@ -114,9 +114,13 @@ Whoever opens the host decides when state is published and saved, and runs the
 host's workers for it: `host.autoSync(interval, application::publish)` publishes the
 application on an interval, and `host.autoFlush(interval)` forces the store to
 disk on another. `VenueServer` starts both once its venue is running, every
-`VenueServer.SYNC_INTERVAL` (100 ms) and `VenueServer.FLUSH_INTERVAL` (10 s), so
-a process crash loses at most the last interval's writes and a machine crash the
-last flush interval's. The engine runs no worker of its own. Each worker reports
+`VenueServer.SYNC_INTERVAL` (100 ms) and `VenueServer.FLUSH_INTERVAL` (10 s). On
+an Etch v2 store, the default, a process crash loses at most the last sync
+interval's writes and a machine crash the last flush interval's. An Etch v3 store
+(`etch.version: 3`, which encryption uses) recovers nothing written after its last
+completed flush, and one a crash left open refuses a normal open until it is
+repaired (`etch repair`) or restored from a backup (Convex `ETCHv3.md`). The
+engine runs no worker of its own. Each worker reports
 its first failure, which the venue logs at ERROR. Closing the host stops them,
 then syncs the application and checkpoints once more.
 

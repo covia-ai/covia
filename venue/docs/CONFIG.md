@@ -129,7 +129,9 @@ the venue's store — including **encrypted Etch v3**:
 
 - `version` / `mapping` / `buildChains` / `publicKeyHint` / `cipher`
   (`none`, `aes-256-ctr`, `chacha20`) / `encryptIndex` pass through to
-  Convex's `EtchConfig` unchanged.
+  Convex's `EtchConfig` unchanged. A v3 store keeps only what its last flush
+  wrote, and after a crash needs repair before it opens
+  ([PERSISTENCE.md](PERSISTENCE.md)).
 - `key` is Covia-side: the 32-byte store encryption key as hex, sourced from
   `{"env": "VAR"}`, `{"file": "path"}` (operator-secured file), or an inline
   hex string (dev/test only — never commit key material).
