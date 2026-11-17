@@ -187,7 +187,7 @@ class AdapterStateMigrationTest {
 			Versioned fresh = new Versioned(NAME, 2);
 			engine.registerAdapter(fresh);
 			assertEquals(0, fresh.steps.get(), "no state, so no step");
-			assertNull(venue.adapterState(NAME).get());
+			assertEquals(Maps.empty(), venue.adapterState(NAME).get(), "absent state reads as an empty map");
 			assertEquals(2, venue.adapterVersion(NAME));
 
 			engine.registerAdapter(new Versioned("unversioned", 0));

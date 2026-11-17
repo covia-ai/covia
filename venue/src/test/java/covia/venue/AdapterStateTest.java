@@ -106,7 +106,7 @@ class AdapterStateTest {
 		assertNull(legacy(venue, "one"));
 		assertNotNull(legacy(venue, "unloaded"), "no eager sweep of unrelated adapters");
 		state.set(null);
-		assertNull(venue.adapterState("one").get());
+		assertEquals(Maps.empty(), venue.adapterState("one").get(), "absent state reads as an empty map");
 		assertNull(legacy(venue, "one"));
 	}
 
@@ -206,7 +206,7 @@ class AdapterStateTest {
 			assertInstanceOf(AuthException.class, assertThrows(java.util.concurrent.ExecutionException.class,
 				() -> write.get(5, TimeUnit.SECONDS)).getCause());
 			assertEquals(CVMLong.ONE, venue.adapterState("worker").get());
-			assertNull(venue.adapterState("other").get(), "the whole delivery draft must roll back");
+			assertEquals(Maps.empty(), venue.adapterState("other").get(), "the whole delivery draft must roll back");
 			assertThrows(AuthException.class, () -> venue.execute(draft -> worker.inVenue(draft).set(CVMLong.ZERO)));
 			assertThrows(AuthException.class, () -> worker.cursor().set(CVMLong.ZERO));
 		} finally { release.countDown(); }
