@@ -195,7 +195,7 @@ public class McpTokenAuthorityTest {
 		assertTrue(mayWrite(throughChild, alice, "w/shared/x"));
 		assertFalse(mayWrite(throughChild, alice, "w/private/x"));
 
-		// It may change a token within itself, never beyond it
+		// It may change a token within itself, itself included, never beyond it
 		assertTrue(refusal(tool(narrow, "v/ops/mcp/update-token", Maps.of(Fields.NAME, "child",
 			Fields.CAPS, Vectors.of(cap("w/", Capability.CRUD))))).startsWith(Engine.CAPS_BEYOND_GIVER));
 		done(tool(narrow, "v/ops/mcp/update-token", Maps.of(Fields.NAME, "child",
@@ -205,6 +205,7 @@ public class McpTokenAuthorityTest {
 		issue(RequestContext.of(alice), "whole", Vectors.of("v/ops/covia/write"), Caps.UNRESTRICTED);
 		assertEquals(TokenAdapter.TOKEN_NOT_COVERED.formatted("whole"), refusal(tool(narrow, "v/ops/mcp/update-token",
 			Maps.of(Fields.NAME, "whole", Fields.ROTATE, true))));
+		done(tool(narrow, "v/ops/mcp/update-token", Maps.of(Fields.NAME, "narrow", Fields.ROTATE, true)));
 
 		// What it made keeps its own caps once it is gone
 		deleteToken(alice, "narrow");
