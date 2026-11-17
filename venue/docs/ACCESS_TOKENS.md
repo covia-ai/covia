@@ -30,7 +30,8 @@ there, so it serves only to exercise the rules with a second access point.
   all of its issuer's authority, and one with no caps has none.
 - **Work it starts keeps the token.** Jobs a request through a token starts
   and events it schedules act later with the same authority, the token read
-  at the time of action (the kept caller context, [JOBS.md](JOBS.md)).
+  at the time of action (the kept caller context, [JOBS.md](JOBS.md)). A step
+  it makes an agent take goes on narrowed by the token too.
 - **What it creates stands on its own.** Tokens and callables a request
   through a token creates are its issuer's, with caps within what the request
   may do itself (`Engine.capsDenial`), and keep those caps once the token is
@@ -62,7 +63,8 @@ unrestricted. A restricted token's request therefore cannot:
 - read or manage its user's account (`user:info` of itself, authentication
   keys, export and import);
 - answer HITL asks (`hitl:respond`);
-- make an agent act (`llmagent:chat` or `goaltree:chat` invoked directly).
+- make an agent act (`llmagent:chat` or `goaltree:chat` invoked directly),
+  whether its issuer is the agent's owner or the agent itself.
 
 Whatever its caps, a request through a token never acts for another user
 (`admin/sudo`), never counts as the venue, and cannot create a messaging bot,

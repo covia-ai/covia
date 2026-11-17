@@ -243,8 +243,37 @@ public class McpTokenAuthorityTest {
 		// Acting for another user, or as an agent, starts from the user's own authority
 		assertEquals(Engine.SUDO_NARROWED, assertThrows(AuthException.class, () -> engine.sudoContext(whole, bob)).getMessage());
 		agent(alice, "helper", Caps.UNRESTRICTED);
-		assertThrows(AuthException.class, () -> engine.stepContext(narrowed, Strings.create("helper")));
+		assertEquals(Engine.STEP_NARROWED.formatted(alice, "helper"),
+			assertThrows(AuthException.class, () -> engine.stepContext(narrowed, Strings.create("helper"))).getMessage());
 		assertNotNull(engine.stepContext(whole, Strings.create("helper")), "all of the owner's authority makes it act");
+	}
+
+	@Test
+	public void aTokenAnAgentIssuedMakesItActOnlyWithItsWholeAuthority(TestInfo info) {
+		AString alice = TestEngine.uniqueDID(info);
+		AString bob = TestEngine.uniqueDID("bob-" + info.getDisplayName());
+		engine.getVenueState().users().ensure(bob);
+		AString helperId = Strings.create("helper");
+		RequestContext helper = agent(alice, "helper", Caps.UNRESTRICTED);
+		AVector<ACell> tools = Vectors.of("v/ops/llmagent/chat");
+		Issued restricted = issue(helper, "restricted", tools,
+			Vectors.of(cap("v/ops/", Abilities.INVOKE), cap("w/shared/", Capability.CRUD)));
+		Issued unrestricted = issue(helper, "unrestricted", tools, Caps.UNRESTRICTED);
+
+		// A request through the agent's token drives the agent's execution, as its own run does
+		RequestContext narrowed = engine.tokenContext(restricted.ref());
+		assertEquals(helperId, narrowed.getAgentId());
+		assertEquals(Engine.STEP_NARROWED.formatted(helper.getAuthorityDID(), "helper"),
+			assertThrows(AuthException.class, () -> engine.stepContext(narrowed, helperId)).getMessage(),
+			"a restricted token does not make its agent act");
+
+		// An unrestricted one does, and the step goes on carrying it
+		RequestContext step = engine.stepContext(engine.tokenContext(unrestricted.ref()), helperId);
+		assertEquals(Vectors.of(unrestricted.ref()), step.getTokens());
+		assertEquals(Engine.SUDO_NARROWED, assertThrows(AuthException.class, () -> engine.sudoContext(step, bob)).getMessage());
+		assertTrue(mayWrite(step, alice, "w/private/x"));
+		complete(run("v/ops/mcp/delete-token", Maps.of(Fields.NAME, "unrestricted"), helper));
+		assertFalse(mayWrite(step, alice, "w/private/x"), "a step stops with the token that started it");
 	}
 
 	@Test
