@@ -81,7 +81,7 @@ public abstract class AWebhookMessagingAdapter<S extends WebhookBotSpec>
 		throw new UnsupportedOperationException(MessagingMedia.NOT_FETCHED);
 	}
 
-	@Override public final synchronized boolean configure(AMap<AString, ACell> settings, boolean strict) {
+	@Override public final synchronized void configure(AMap<AString, ACell> settings, boolean strict) {
 		if (settings == null) settings = Maps.empty();
 		if (settings.containsKey(MessagingSettings.key("statePath"))) throw new ConfigurationException(MessagingSettings.UNKNOWN.formatted("statePath"));
 		String endpoint;
@@ -101,7 +101,6 @@ public abstract class AWebhookMessagingAdapter<S extends WebhookBotSpec>
 		}
 		apiUrl = endpoint;
 		configureBots(parsed);
-		return true;
 	}
 	public final String apiUrl() { return apiUrl == null ? defaultApiUrl() : apiUrl; }
 	@Override public final AMap<AString, ACell> publicConfig() { return Maps.empty(); }

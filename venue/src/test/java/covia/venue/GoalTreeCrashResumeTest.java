@@ -145,7 +145,7 @@ public class GoalTreeCrashResumeTest {
 		AMap<AString, ACell> session = initial.session(sid).getRecord().assoc(Fields.FRAMES, Vectors.of(legacy));
 		AMap<AString, ACell> meta = RT.ensureMap(session.get(Strings.intern("meta")));
 		session = session.assoc(Strings.intern("meta"), meta.assoc(Strings.intern("turns"), CVMLong.create(4)));
-		initial.putRecord(initial.getRecord().assoc(Agent.KEY_SESSIONS, initial.getSessions().assoc(sid, session)));
+		initial.cursor().set(initial.getRecord().assoc(Agent.KEY_SESSIONS, initial.getSessions().assoc(sid, session)));
 		first.flush();
 		closeActivePhase();
 		store.close();

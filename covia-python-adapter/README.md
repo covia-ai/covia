@@ -1,16 +1,18 @@
 # Covia Python adapter module
 
 This optional venue module wraps `covia-python` and exposes operator-configured
-scripts as ordinary Covia operations. It is not included in `covia.jar`.
+scripts as ordinary Covia operations. It is not included in `covia.jar`. Its
+design, and the redesign proposed for it, are in
+[venue/docs/adapters/PYTHON.md](../venue/docs/adapters/PYTHON.md).
 
-Build the reactor on Java 22+ to include the native FFM backend, then configure
-the shaded module jar:
+Build the reactor on Java 22+ to include the native FFM backend, then list the
+shaded module jar and configure the `python` adapter it provides:
 
 ```json
 {
-  "modules": [{
-    "path": "modules/covia-python-adapter-<version>-module.jar",
-    "config": {
+  "modules": ["modules/covia-python-adapter-<version>-module.jar"],
+  "adapters": {
+    "python": {
       "library": "/usr/lib/libpython3.13.so",
       "operations": {
         "health/score": {
@@ -21,14 +23,17 @@ the shaded module jar:
         }
       }
     }
-  }]
+  }
 }
 ```
 
-`enabled` defaults to true. When Java FFM, native access, or CPython is absent,
-the module loads but the adapter remains inactive and venue startup continues.
-Native integration tests skip under the same conditions. Malformed known
-configuration still fails fast.
+`adapters.python.enabled: false` switches the adapter off. When Java FFM, native
+access, or CPython is absent, the module loads but the adapter fails to start:
+it stays enabled but failed, with the reason, and the venue starts without it. Native integration tests
+skip under the same conditions. A malformed setting, or a script path that names
+no readable file, is refused the same way. The operations are published from
+these settings as the adapter installs, so they cannot change while it runs:
+change them in the venue config and restart.
 
 ## Running and offering functions
 

@@ -212,12 +212,11 @@ public class P2PAdapter extends AAdapter implements AutoCloseable {
 	 * @throws UnavailableException if the node cannot launch with them
 	 */
 	@Override
-	public synchronized boolean configure(AMap<AString, ACell> config, boolean strict) {
+	public synchronized void configure(AMap<AString, ACell> config, boolean strict) {
 		Settings next = parse(config, strict);
 		settings = next;
 		if (running != null) halt();
 		if (started && next.join()) launch(next);
-		return true;
 	}
 
 	/**

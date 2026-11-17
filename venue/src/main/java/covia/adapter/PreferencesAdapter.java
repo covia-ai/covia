@@ -85,12 +85,12 @@ public class PreferencesAdapter extends AAdapter {
 	}
 
 	@Override
-	public boolean configure(AMap<AString, ACell> config, boolean strict) {
-		if (config == null) return true;
+	public void configure(AMap<AString, ACell> config, boolean strict) {
+		if (config == null) return;
 		if (strict) rejectUnknown(config, SETTINGS, "adapters.preferences");
 		checkLimit(config.get(K_MAX_BYTES), "adapters.preferences.maxBytes");
 		ACell users = config.get(K_USERS);
-		if (users == null) return true;
+		if (users == null) return;
 		if (!(users instanceof AMap<?, ?> byUser)) throw new ConfigurationException(BAD_USERS);
 		for (long i = 0; i < byUser.count(); i++) {
 			var entry = byUser.entryAt(i);
@@ -104,7 +104,6 @@ public class PreferencesAdapter extends AAdapter {
 			if (strict) rejectUnknown(own, USER_SETTINGS, at);
 			checkLimit(own.get(K_MAX_BYTES), at + ".maxBytes");
 		}
-		return true;
 	}
 
 	private static void rejectUnknown(AMap<AString, ACell> config, Set<AString> known, String at) {

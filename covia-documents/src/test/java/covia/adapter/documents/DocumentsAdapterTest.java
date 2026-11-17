@@ -150,13 +150,13 @@ public class DocumentsAdapterTest {
 	@Test
 	public void testConfigureCap() {
 		assertEquals(DocumentsAdapter.DEFAULT_MAX_CHARS, adapter.getMaxChars());
-		assertTrue(adapter.configure(Maps.of("maxChars", 500), false));
+		adapter.configure(Maps.of("maxChars", 500), false);
 		assertEquals(500, adapter.getMaxChars());
 		assertEquals(DocumentsAdapter.BAD_MAX_CHARS.formatted(0), assertThrows(ConfigurationException.class,
 			() -> adapter.configure(Maps.of("maxChars", 0), false)).getMessage());
 		assertEquals(DocumentsAdapter.BAD_MAX_CHARS.formatted("lots"), assertThrows(ConfigurationException.class,
 			() -> adapter.configure(Maps.of("maxChars", "lots"), false)).getMessage());
-		assertTrue(adapter.configure(Maps.empty(), false));
+		adapter.configure(Maps.empty(), false);
 		assertEquals(DocumentsAdapter.DEFAULT_MAX_CHARS, adapter.getMaxChars());
 		assertNotNull(RT.getIn(adapter.info(), "supported"));
 	}

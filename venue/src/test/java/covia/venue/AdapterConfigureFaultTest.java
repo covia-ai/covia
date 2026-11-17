@@ -35,9 +35,8 @@ public class AdapterConfigureFaultTest {
 		FaultyAdapter(String name) { this.name = name; }
 		@Override public String getName() { return name; }
 		@Override public String getDescription() { return "test"; }
-		@Override public boolean configure(AMap<AString, ACell> config, boolean strict) {
+		@Override public void configure(AMap<AString, ACell> config, boolean strict) {
 			if (config.containsKey(BAD)) throw new IllegalArgumentException("bad is not a setting");
-			return true;
 		}
 		@Override public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
 			return CompletableFuture.completedFuture(input);

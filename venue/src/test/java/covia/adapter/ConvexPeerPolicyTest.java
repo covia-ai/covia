@@ -1,5 +1,6 @@
 package covia.adapter;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
@@ -222,10 +223,10 @@ class ConvexPeerPolicyTest {
 				() -> adapter.configure(Maps.of("timeoutMillis", timeout), false), "timeoutMillis " + timeout);
 			assertTrue(badTimeout.getMessage().startsWith(ConvexAdapter.TIMEOUT_NOT_POSITIVE), badTimeout.getMessage());
 		}
-		assertTrue(adapter.configure(Maps.of("timeoutMillis", 5000L), true));
+		assertDoesNotThrow(() -> adapter.configure(Maps.of("timeoutMillis", 5000L), true));
 		ConfigurationException badPeer = assertThrows(ConfigurationException.class,
 			() -> adapter.configure(Maps.of("peer", "https://peer.example"), false));
 		assertTrue(badPeer.getMessage().contains(ConvexAdapter.NOT_A_PEER), badPeer.getMessage());
-		assertTrue(adapter.configure(Maps.of("peer", "peer.example:18888", "anyPeer", CVMBool.FALSE), true));
+		assertDoesNotThrow(() -> adapter.configure(Maps.of("peer", "peer.example:18888", "anyPeer", CVMBool.FALSE), true));
 	}
 }

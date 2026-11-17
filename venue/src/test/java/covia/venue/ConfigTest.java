@@ -206,17 +206,18 @@ public class ConfigTest {
 	}
 
 	@Test
-	public void testModuleConfigIsOpaqueButMustBeAnObject() {
+	public void testModuleEntryNamesOnlyTheJar() {
 		Config config = new Config(Maps.of(
 			Config.STRICT_CONFIG, true,
 			Config.MODULES, Vectors.of(Maps.of(
-				"path", "modules/example.jar",
-				"config", Maps.of("vendorOption", "ok")))));
+				"path", "modules/example.jar", "sha256", "00".repeat(32)))));
 		assertTrue(config.isStrictConfig());
 
+		// Its adapters take their settings from adapters.<name>
 		assertThrows(ConfigurationException.class, () -> new Config(Maps.of(
+			Config.STRICT_CONFIG, true,
 			Config.MODULES, Vectors.of(Maps.of(
-				"path", "modules/example.jar", "config", "bad")))));
+				"path", "modules/example.jar", "config", Maps.of("vendorOption", "ok"))))));
 	}
 
 	@Test

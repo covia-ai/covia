@@ -303,10 +303,28 @@ application that keeps the key itself signs with `VenueAuth.namedKeyPair`. See
 AUTH.md, "Nested installation identities below a did:key" and "Minting an
 identity token through an operation", and HELD_KEYS.md.
 
+## Upgrading from 0.11.0
+
+| 0.11.0 | Current |
+|--------|---------|
+| `User`'s `agentAt`, `createAgent`, `forkAgent`, `removeAgent`, `getAgents` and `ensureAgent` | The user's agents, `user.agents()`: `at`, `create`, `createFork`, `remove` and `all` (empty, not null, when there are none); for `ensureAgent`, `create` then `agent`. `user.agent(id)` stays, and still finds a deleted agent: `agent.isTerminated()` says whether it is one |
+| `Agent`'s `initialise`, `initialiseFromFork` and `putRecord` | `user.agents().create` and `createFork`; a test seeding a raw record writes it through `agent.cursor()` |
+| `agent.updateConfigAndState(config, state)` and the static `Agent.applyStateChange` | `agent.update(null, null, config, state)`; `mergeRunResult` applies a transition's state change |
+| `agent.setError` and `clearError` | `agent.suspend(error)`, which records a fault and suspends the agent; `tryResume` clears it |
+| `agent.getSession(sid)` and `Agent`'s other session shortcuts (`getSessionPending`, `getSessionCycleEpoch`, `ensureSession`, `removeSession`, `hasSessionPending`, `oldestSessionWithPending`) | The session itself, `agent.session(sid)` (`getRecord()`, `pending()`, `cycleEpoch()`), and the agent's sessions, `agent.sessions()` (`create`, `remove`, `hasPending`, `oldestWithPending`) |
+| A job, task or session id read as hex text (`RT.ensureString`): in an agent's records (a task's or timeline entry's `sessionId`, a turn's or queued envelope's `jobId`, a timeline entry's `taskResults` keys), in a job's record (`sessionId`, `mirrorOf`), in an operation's result (`sessionId`, a task operation's `taskId`, an `agent:request` snapshot's `id`, a `job:message` delivery's `id`, a run's `taskResults` keys) or in a live event (`sessionId`, `jobId`, `cycle:start`'s `jobs`) | A Blob: `HexId.parse(cell)` reads one given as a Blob or as text, so it works with an older venue too; in the venue, `Task.sessionId(row)`, `Session.chatJob(envelope)` or `Ids.stored(cell)` |
+| `engine.agentEvents().subscribe(owner, agent, sessionId, listener)` and `Event.concerns(sessionId)` taking the session as text | The session as a Blob |
+| A messaging adapter's `ConversationSessions.get` and `put`, `RequestContext.SessionDelivery.accept` and `WebhookInbox.deliver` with sessions and job ids as text | Blobs; a `ConversationSessions` legacy reader gives a Blob |
+| `user.inbox()` keyed by request id in hex (`request`, `get`, `getAll`), `HitlRequest.getID()` and `record` with the id as text, and a record's `id` and `sessionId` as text | Keyed and named by the request's job id as a Blob; `getAll()` is an `Index` |
+| `AgentAdapter.deliverSessionMessage` and `appendSessionMessage` taking the chat's job id as text | The job id as a Blob |
+| `boolean AAdapter.configure(config, strict)`, returning `false` to decline | `void configure(config, strict)`: return to accept, throw `ConfigurationException` to refuse ([ADAPTERS.md](ADAPTERS.md)) |
+| `AAdapter.configureModule` and a module's `modules[].config` | Removed: a module adapter takes `adapters.<name>` through `configure`, and one that cannot run on the host fails its `start()` with `UnavailableException` |
+| `Modules.load(engine, path, sha256, config)` | `Modules.load(engine, path, sha256)` |
+
 ## Upgrading from 0.10.0
 
-| 0.10.0 | Current |
-|--------|---------|
+| 0.10.0 | 0.11.0 |
+|--------|--------|
 | `user.workspaceRoot()` with keys from `WorkspaceRoot.parseStringPath("w/...")` | `user.workspace()` with a path inside `w` from `CoviaPath.parse` (see User data) |
 | `workspaceRoot().write` creating missing levels | `createPath` for them first, in the same transaction |
 | `VenueState.migrate(adapters)`, `migrate()` | `migrate(SecretStore.keys(venueKeyPair), adapters)`, `migrate(keys)` |
@@ -317,13 +335,6 @@ identity token through an operation", and HELD_KEYS.md.
 | Several engines in turn over one application | Close (or `unmount`) the venue's engine, then mount it again |
 | Closing the engine, then the host | Close the application (or the engine), then the host |
 | `AuthMiddleware.withTransportGrants(ctx, ucans[, verifier])` | `engine.withTransportGrants(ctx, ucans)`, which verifies with the venue's DID verifier and clock |
-| `User`'s `agentAt`, `createAgent`, `forkAgent`, `removeAgent`, `getAgents` and `ensureAgent` | The user's agents, `user.agents()`: `at`, `create`, `fork`, `remove` and `all` (empty, not null, when there are none); for `ensureAgent`, `create` then `agent`. `user.agent(id)` stays, and still finds a deleted agent: `agent.isTerminated()` says whether it is one |
-| `agent.getSession(sid)` and `Agent`'s other session shortcuts (`getSessionPending`, `getSessionCycleEpoch`, `ensureSession`, `removeSession`, `hasSessionPending`, `oldestSessionWithPending`) | The session itself, `agent.session(sid)` (`getRecord()`, `pending()`, `cycleEpoch()`), and the agent's sessions, `agent.sessions()` (`create`, `remove`, `hasPending`, `oldestWithPending`) |
-| A job, task or session id read as hex text (`RT.ensureString`): in an agent's records (a task's or timeline entry's `sessionId`, a turn's or queued envelope's `jobId`, a timeline entry's `taskResults` keys), in a job's record (`sessionId`, `mirrorOf`), in an operation's result (`sessionId`, a task operation's `taskId`, an `agent:request` snapshot's `id`, a `job:message` delivery's `id`, a run's `taskResults` keys) or in a live event (`sessionId`, `jobId`, `cycle:start`'s `jobs`) | A Blob: `HexId.parse(cell)` reads one given as a Blob or as text, so it works with an older venue too; in the venue, `Task.sessionId(row)`, `Session.chatJob(envelope)` or `Ids.stored(cell)` |
-| `engine.agentEvents().subscribe(owner, agent, sessionId, listener)` and `Event.concerns(sessionId)` taking the session as text | The session as a Blob |
-| A messaging adapter's `ConversationSessions.get` and `put`, `RequestContext.SessionDelivery.accept` and `WebhookInbox.deliver` with sessions and job ids as text | Blobs; a `ConversationSessions` legacy reader gives a Blob |
-| `user.inbox()` keyed by request id in hex (`request`, `get`, `getAll`), `HitlRequest.getID()` and `record` with the id as text, and a record's `id` and `sessionId` as text | Keyed and named by the request's job id as a Blob; `getAll()` is an `Index` |
-| `AgentAdapter.deliverSessionMessage` and `appendSessionMessage` taking the chat's job id as text | The job id as a Blob |
 
 ## Upgrading from 0.9.x
 

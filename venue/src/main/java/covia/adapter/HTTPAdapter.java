@@ -135,7 +135,7 @@ public class HTTPAdapter extends AAdapter {
 	// ========== Configuration ==========
 
 	@Override
-	public boolean configure(AMap<AString, ACell> config, boolean strict) {
+	public void configure(AMap<AString, ACell> config, boolean strict) {
 		String agent = defaultUserAgent();
 		Set<String> allow = Set.of();
 		Set<String> block = Set.of();
@@ -166,7 +166,6 @@ public class HTTPAdapter extends AAdapter {
 		allow.forEach(GuardedResolver::release);
 		configuredBlock = block;
 		maxRedirects = hops;
-		return true;
 	}
 
 	private static Set<String> hosts(ACell raw, AString key) {

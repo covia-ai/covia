@@ -97,7 +97,7 @@ public class AgentConcurrencyTest {
 		User user = engine.getVenueState().users().ensure(ALICE_DID);
 		AString id = Strings.create("exclusive-fork");
 		java.util.function.Function<String, Agent> fork = marker ->
-			user.agents().fork(id,
+			user.agents().createFork(id,
 				Maps.of("marker", marker),
 				Maps.of("stateMarker", marker),
 				Vectors.of(Maps.of("timelineMarker", marker)), null);

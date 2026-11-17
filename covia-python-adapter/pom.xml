@@ -23,6 +23,13 @@
 			<version>${project.version}</version>
 			<scope>provided</scope>
 		</dependency>
+		<dependency>
+			<groupId>ai.covia</groupId>
+			<artifactId>venue</artifactId>
+			<version>${project.version}</version>
+			<type>test-jar</type>
+			<scope>test</scope>
+		</dependency>
 		<!-- The dependency-light runtime is bundled into the module jar. -->
 		<dependency>
 			<groupId>ai.covia</groupId>

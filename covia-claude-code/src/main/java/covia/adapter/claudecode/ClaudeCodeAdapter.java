@@ -200,7 +200,7 @@ public class ClaudeCodeAdapter extends ARemoteAgentAdapter<RemoteInteraction> im
 	// ------------------------------------------------------------ configuration
 
 	@Override
-	public boolean configure(AMap<AString, ACell> config, boolean strict) {
+	public void configure(AMap<AString, ACell> config, boolean strict) {
 		if (config == null) config = Maps.empty();
 		if (strict) {
 			for (long i = 0; i < config.count(); i++) {
@@ -243,7 +243,6 @@ public class ClaudeCodeAdapter extends ARemoteAgentAdapter<RemoteInteraction> im
 		this.idleSeconds = idle;
 		this.configProjects = Map.copyOf(parsed);
 		if (engine != null) reconcile();
-		return true;
 	}
 
 	private static List<String> parseCommand(ACell cell) {

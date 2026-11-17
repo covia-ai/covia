@@ -161,7 +161,7 @@ class DomainTransactionTest {
 		var seen = new CopyOnWriteArrayList<ACell>();
 		AMap<AString, ACell> committed;
 		try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
-			var pending = executor.submit(() -> agent.updateConfigAndState(config -> {
+			var pending = executor.submit(() -> agent.update(null, null, config -> {
 				seen.add(config.get(caps));
 				entered.countDown();
 				await(resume);
@@ -169,7 +169,7 @@ class DomainTransactionTest {
 			}, null));
 			try {
 				assertTrue(entered.await(10, TimeUnit.SECONDS));
-				agent.updateConfigAndState(config -> config.assoc(caps, Strings.create("narrow")), null);
+				agent.update(null, null, config -> config.assoc(caps, Strings.create("narrow")), null);
 			} finally { resume.countDown(); }
 			committed = pending.get(10, TimeUnit.SECONDS);
 		}
@@ -329,7 +329,7 @@ class DomainTransactionTest {
 			return CVMLong.create(ticks.get());
 		});
 		var agent = new Agent(context, Cursors.root(null), null, Strings.create("assistant"));
-		agent.initialise(Maps.empty(), null);
+		agent.initialiseIfAbsent(Maps.empty(), null, null, null, null);
 		assertEquals(1, clockReads.getAndSet(0));
 		ticks.set(200);
 		agent.setStatus(Agent.SUSPENDED);
@@ -340,9 +340,10 @@ class DomainTransactionTest {
 		agent.setStatus(Agent.SUSPENDED);
 		assertEquals(before, agent.getRecord(), "no-op must not change the version");
 		ticks.set(50);
-		agent.putRecord(Maps.of(Agent.KEY_STATUS, Agent.SLEEPING));
+		agent.setStatus(Agent.SLEEPING);
+		assertEquals(Agent.SLEEPING, agent.getStatus());
 		assertEquals(CVMLong.create(200), agent.getRecord().get(Agent.K_TURN_TS),
-			"replacement must preserve the previous version floor when the clock regresses");
+			"an edit must keep the previous version floor when the clock regresses");
 	}
 
 	@Test

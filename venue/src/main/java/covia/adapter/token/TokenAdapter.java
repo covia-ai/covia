@@ -136,12 +136,11 @@ public class TokenAdapter extends AAdapter {
 	}
 
 	@Override
-	public boolean configure(AMap<AString, ACell> config, boolean strict) {
+	public void configure(AMap<AString, ACell> config, boolean strict) {
 		ACell keep = (config == null) ? null : config.get(KEEP_RAW_TOKENS);
 		if (keep != null && !(keep instanceof CVMBool)) throw new ConfigurationException(KEEP_RAW_NOT_BOOLEAN);
 		// Reconfigured to stop keeping tokens: the kept ones go now (at boot, start does it)
 		if (engine != null && !CVMBool.TRUE.equals(keep)) tokens().dropKept();
-		return true;
 	}
 
 	@Override

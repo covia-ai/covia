@@ -209,7 +209,7 @@ public class SpeechAdapter extends AAdapter implements AutoCloseable {
 		installSkill("adapters/speech", "/adapters/speech/skill.json");
 	}
 
-	@Override public boolean configure(AMap<AString, ACell> config, boolean strict) {
+	@Override public void configure(AMap<AString, ACell> config, boolean strict) {
 		if (config == null) config = Maps.empty();
 		if (strict) {
 			for (var entry : config.entrySet()) {
@@ -223,7 +223,6 @@ public class SpeechAdapter extends AAdapter implements AutoCloseable {
 		endDictations();
 		if (previous.local() != null) previous.local().close();
 		if (started) prefetch();
-		return true;
 	}
 
 	/** Whether this adapter is started: only then does a change of settings fetch anything. */

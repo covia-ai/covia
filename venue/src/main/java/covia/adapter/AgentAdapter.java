@@ -1595,7 +1595,7 @@ public class AgentAdapter extends AAdapter {
 			return;
 		}
 
-		Agent target = targetUser.agents().fork(agentId, forkConfig, sourceState, sourceTimeline,
+		Agent target = targetUser.agents().createFork(agentId, forkConfig, sourceState, sourceTimeline,
 			newController(ctx, input));
 		if (target == null) {
 			job.fail("Target agent already exists: " + agentId

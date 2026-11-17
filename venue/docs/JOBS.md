@@ -547,7 +547,7 @@ returns is the durable truth, and anything still non-terminal is restored
 live. Each job is recovered once per venue run: enabling or restarting its
 adapter later does not recover it again. For ordinary jobs, the default
 also applies when no installed adapter owns the job (its module is not
-loaded, or its adapter declined or refused its settings). A job that
+loaded, or its adapter refused its settings). A job that
 delegates its work to a remote venue or agent behaves as described under
 [Remote delegation](#remote-delegation).
 

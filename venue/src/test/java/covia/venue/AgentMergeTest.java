@@ -71,7 +71,7 @@ public class AgentMergeTest {
 		ACell snapshot = agent.getState();               // what the transition fired with
 
 		// agent:update lands while the transition runs
-		agent.updateConfigAndState(null, Maps.of("b", 2, "external", 7));
+		agent.update(null, null, null, Maps.of("b", 2, "external", 7));
 
 		// the transition returns its own view: a changed, b as it saw it
 		agent.mergeRunResult(snapshot, Maps.of("a", 9, "b", 1), null,

@@ -199,13 +199,6 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 		return (v instanceof AMap) ? (AMap<AString, ACell>) v : null;
 	}
 
-	/** Replaces the entire record. Use for initialisation only. */
-	public void putRecord(AMap<AString, ACell> record) {
-		// Preserve the previous version floor when replacing the whole record;
-		// the editing cursor alone supplies the new write timestamp.
-		cursor().updateAndGet(current -> record.assoc(K_TS, RT.getIn(current, K_TS)));
-	}
-
 	/**
 	 * Clock for event provenance. Record version stamps belong to the editing cursor.
 	 */
@@ -231,63 +224,20 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 
 	// ========== Initialisation ==========
 
-	public void initialise(AMap<AString, ACell> config, ACell initialState) {
-		initialiseIfAbsent(config, initialState);
-	}
-
-	/** Atomically initialises this record, returning false if it already exists. */
-	boolean initialiseIfAbsent(AMap<AString, ACell> config, ACell initialState) {
-		return initialiseIfAbsent(config, initialState, null);
-	}
-
-	boolean initialiseIfAbsent(AMap<AString, ACell> config, ACell initialState, AMap<AString, ACell> definition) {
-		return initialiseIfAbsent(config, initialState, definition, null);
-	}
-
 	/**
-	 * Atomically initialises this record under {@code controller} (null, or
-	 * the owner, for its owner), returning false if it already exists.
+	 * Atomically initialises this record, SLEEPING with no tasks, sessions or
+	 * outbound waits, under {@code controller} (null, or the owner, for its
+	 * owner). {@link Agents#create} and {@link Agents#createFork} make agents
+	 * this way.
+	 *
+	 * @param config Framework configuration, or null for none
+	 * @param state Initial state for the transition function, or null for none
+	 * @param definition The definition an external agent is created with, or null
+	 * @param timeline A fork's copied timeline, or null for an empty one
+	 * @param controller The principal whose authority the harness runs under
+	 * @return false, changing nothing, when the record already exists
 	 */
-	boolean initialiseIfAbsent(AMap<AString, ACell> config, ACell initialState, AMap<AString, ACell> definition,
-			AString controller) {
-		AMap<AString, ACell> record = Maps.of(
-			K_STATUS, SLEEPING,
-			K_TASKS, Index.none(),
-			K_SESSIONS, Index.none(),
-			K_PENDING, Index.none(),
-			K_TIMELINE, Vectors.empty());
-		if (config != null) record = record.assoc(K_CONFIG, config);
-		if (initialState != null) record = record.assoc(K_STATE, initialState);
-		if (definition != null) record = record.assoc(KEY_AGENT, definition);
-		record = withController(record, controller);
-		AMap<AString, ACell> initial = record;
-		return cursor().getAndUpdate(current -> (current == null) ? initial : current) == null;
-	}
-
-	/** {@code record} with {@code controller}, stored only when it is not the owner. */
-	private AMap<AString, ACell> withController(AMap<AString, ACell> record, AString controller) {
-		return (controller == null || controller.equals(owner)) ? record.dissoc(KEY_CONTROLLER)
-			: record.assoc(KEY_CONTROLLER, controller);
-	}
-
-	/**
-	 * Initialises an agent record as a fork of another agent. Copies config
-	 * and state, optionally copies timeline. Tasks, sessions, and pending
-	 * are fresh; status is SLEEPING. Does nothing if this agent already
-	 * exists.
-	 */
-	public void initialiseFromFork(AMap<AString, ACell> config, ACell state, AVector<ACell> timeline) {
-		initialiseFromForkIfAbsent(config, state, timeline);
-	}
-
-	/** Atomically initialises a fork record, returning false if it already exists. */
-	boolean initialiseFromForkIfAbsent(AMap<AString, ACell> config, ACell state,
-			AVector<ACell> timeline) {
-		return initialiseFromForkIfAbsent(config, state, timeline, null);
-	}
-
-	/** As above, under {@code controller} (null, or the owner, for its owner). */
-	boolean initialiseFromForkIfAbsent(AMap<AString, ACell> config, ACell state,
+	boolean initialiseIfAbsent(AMap<AString, ACell> config, ACell state, AMap<AString, ACell> definition,
 			AVector<ACell> timeline, AString controller) {
 		AMap<AString, ACell> record = Maps.of(
 			K_STATUS, SLEEPING,
@@ -297,9 +247,15 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 			K_TIMELINE, (timeline != null) ? timeline : Vectors.empty());
 		if (config != null) record = record.assoc(K_CONFIG, config);
 		if (state != null) record = record.assoc(K_STATE, state);
-		record = withController(record, controller);
-		AMap<AString, ACell> initial = record;
+		if (definition != null) record = record.assoc(KEY_AGENT, definition);
+		AMap<AString, ACell> initial = withController(record, controller);
 		return cursor().getAndUpdate(current -> (current == null) ? initial : current) == null;
+	}
+
+	/** {@code record} with {@code controller}, stored only when it is not the owner. */
+	private AMap<AString, ACell> withController(AMap<AString, ACell> record, AString controller) {
+		return (controller == null || controller.equals(owner)) ? record.dissoc(KEY_CONTROLLER)
+			: record.assoc(KEY_CONTROLLER, controller);
 	}
 
 	// ========== Read accessors ==========
@@ -382,12 +338,9 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 		return (v instanceof AVector) ? (AVector<ACell>) v : null;
 	}
 
-	@SuppressWarnings("unchecked")
+	/** Every queued task's row, by id ({@link Tasks#all}). */
 	public Index<Blob, ACell> getTasks() {
-		AMap<AString, ACell> r = getRecord();
-		if (r == null) return Index.none();
-		ACell v = r.get(K_TASKS);
-		return (v instanceof Index) ? (Index<Blob, ACell>) v : Index.none();
+		return tasks().all();
 	}
 
 	/**
@@ -400,15 +353,9 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 		return (r == null) ? Index.none() : extractResolved(r);
 	}
 
-	/**
-	 * Returns the agent's sessions Index (sid → session record).
-	 */
-	@SuppressWarnings("unchecked")
+	/** Every session's record, by id ({@link Sessions#all}). */
 	public Index<Blob, ACell> getSessions() {
-		AMap<AString, ACell> r = getRecord();
-		if (r == null) return Index.none();
-		ACell v = r.get(K_SESSIONS);
-		return (v instanceof Index) ? (Index<Blob, ACell>) v : Index.none();
+		return sessions().all();
 	}
 
 	/** The agent's queue of tasks, bound to this agent (including when this agent is a draft). */
@@ -617,14 +564,6 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 			if (before != null) draft.changeStatus(TERMINATED);
 			return before;
 		});
-	}
-
-	public void setError(AString error) {
-		update(r -> r.assoc(K_ERROR, error));
-	}
-
-	public void clearError() {
-		update(r -> r.dissoc(K_ERROR));
 	}
 
 	/** Removes a task, queued or resolved. */
@@ -955,8 +894,9 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 	}
 
 	/**
-	 * Changes the agent's config and merges state fields into the record, in
-	 * one atomic update.
+	 * Changes the agent's config and merges state fields into the record,
+	 * checked against the controller the record holds and, with
+	 * {@code controller}, handing the agent to it, all in one atomic update.
 	 *
 	 * <p>{@code config} receives the config the record holds (null when it has
 	 * none) and returns its replacement, so anything the new config depends on
@@ -968,22 +908,14 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 	 * updating a single field does not wipe its siblings: top-level keys in the
 	 * incoming map override the existing ones, and the rest are preserved.</p>
 	 *
-	 * @return The config the record holds after the update, or null when the
-	 *         record does not exist
-	 */
-	public AMap<AString, ACell> updateConfigAndState(UnaryOperator<AMap<AString, ACell>> config, ACell state) {
-		return update(null, null, config, state);
-	}
-
-	/**
-	 * As {@link #updateConfigAndState}, checked against the controller the
-	 * record holds and, with {@code controller}, handing the agent to it, all
-	 * in one atomic update. {@code check} receives the current controller
+	 * <p>{@code check} receives the current controller
 	 * ({@link #getController()}) and refuses by throwing, leaving the
-	 * record unchanged; like {@code config}, it may run again on a retry.
+	 * record unchanged; like {@code config}, it may run again on a retry.</p>
 	 *
 	 * @param check refuses an update its caller may not make, or null for none
 	 * @param controller the new controller, or null to keep the current one
+	 * @return The config the record holds after the update, or null when the
+	 *         record does not exist
 	 */
 	@SuppressWarnings("unchecked")
 	public AMap<AString, ACell> update(java.util.function.Consumer<AString> check, AString controller,
@@ -1031,7 +963,7 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 	 * result replaces the state wholesale.
 	 */
 	@SuppressWarnings("unchecked")
-	public static ACell applyStateChange(ACell current, ACell snapshot, ACell returned) {
+	static ACell applyStateChange(ACell current, ACell snapshot, ACell returned) {
 		if (returned == null) return current;
 		if (!(returned instanceof AMap) || !(snapshot instanceof AMap) || !(current instanceof AMap)) {
 			return returned;
