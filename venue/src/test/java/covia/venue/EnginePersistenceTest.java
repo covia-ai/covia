@@ -119,7 +119,7 @@ public class EnginePersistenceTest {
 
 		server = VenueServer.launch(config);
 		try {
-			assertEquals(Maps.empty(), server.getEngine().adapterState("unloaded-test").get(), "deleted state cannot resurrect from the old location");
+			assertNull(server.getEngine().adapterState("unloaded-test").get(), "deleted state cannot resurrect from the old location");
 		} finally { server.close(); }
 	}
 

@@ -111,7 +111,12 @@ public class CallableAdapter extends AAdapter {
 
 	/** The venue's callables. */
 	public Callables callables() {
-		return new Callables(adapterState().cursor());
+		return callables(adapterState());
+	}
+
+	/** The callables in {@code state}, a map read as empty while nothing is stored. */
+	private static Callables callables(AdapterState state) {
+		return new Callables(state.withDefault(Maps.empty()).cursor());
 	}
 
 	/**
@@ -131,12 +136,12 @@ public class CallableAdapter extends AAdapter {
 
 	@Override
 	public void deleteUserState(AString did, AdapterState state) {
-		new Callables(state.cursor()).deleteOwner(did);
+		callables(state).deleteOwner(did);
 	}
 
 	@Override
 	public void deleteAgentState(AString agentDID, AdapterState state) {
-		new Callables(state.cursor()).deleteIssuer(covia.grid.Principals.userOf(agentDID), agentDID);
+		callables(state).deleteIssuer(covia.grid.Principals.userOf(agentDID), agentDID);
 	}
 
 	// ========== Resources ==========

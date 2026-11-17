@@ -132,7 +132,12 @@ public class TokenAdapter extends AAdapter {
 
 	/** The venue's access tokens. */
 	public AccessTokens tokens() {
-		return new AccessTokens(adapterState().cursor());
+		return tokens(adapterState());
+	}
+
+	/** The access tokens in {@code state}, a map read as empty while nothing is stored. */
+	private static AccessTokens tokens(AdapterState state) {
+		return new AccessTokens(state.withDefault(Maps.empty()).cursor());
 	}
 
 	@Override
@@ -171,12 +176,12 @@ public class TokenAdapter extends AAdapter {
 
 	@Override
 	public void deleteUserState(AString did, AdapterState state) {
-		new AccessTokens(state.cursor()).deleteOwner(did);
+		tokens(state).deleteOwner(did);
 	}
 
 	@Override
 	public void deleteAgentState(AString agentDID, AdapterState state) {
-		new AccessTokens(state.cursor()).deleteIssuer(covia.grid.Principals.userOf(agentDID), agentDID);
+		tokens(state).deleteIssuer(covia.grid.Principals.userOf(agentDID), agentDID);
 	}
 
 	// ========== Gates ==========

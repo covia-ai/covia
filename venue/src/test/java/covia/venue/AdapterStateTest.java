@@ -20,6 +20,7 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
+import convex.lattice.cursor.MissingValueException;
 import covia.exception.AuthException;
 import covia.lattice.Covia;
 import covia.lattice.CoviaPath;
@@ -96,6 +97,20 @@ class AdapterStateTest {
 		assertEquals(before, venue.get());
 	}
 
+	/** Absent state is absent; a transaction on it starts from the empty value the adapter gives. */
+	@Test void aTransactionOnNewStateStartsFromTheAdaptersEmptyValue() {
+		VenueState venue = venue();
+		AdapterState state = venue.adapterState("fresh");
+		assertNull(state.get());
+		assertThrows(MissingValueException.class, () -> state.execute(draft -> draft.write("a", CVMLong.ONE)));
+		state.withDefault(Maps.empty()).execute(draft -> draft.write("a", CVMLong.ONE));
+		assertEquals(CVMLong.ONE, state.read("a"));
+
+		AdapterState untouched = venue.adapterState("untouched");
+		untouched.withDefault(Maps.empty()).execute(draft -> draft.read("a"));
+		assertNull(untouched.get(), "a transaction that leaves the empty value stores nothing");
+	}
+
 	@Test void migrationMovesOneExactValueAndNeverCopiesDeletedDataBack() {
 		VenueState venue = venue();
 		ACell value = Maps.of("unknown", Vectors.of(1L, null, "future"), "empty", Maps.empty());
@@ -106,7 +121,7 @@ class AdapterStateTest {
 		assertNull(legacy(venue, "one"));
 		assertNotNull(legacy(venue, "unloaded"), "no eager sweep of unrelated adapters");
 		state.set(null);
-		assertEquals(Maps.empty(), venue.adapterState("one").get(), "absent state reads as an empty map");
+		assertNull(venue.adapterState("one").get());
 		assertNull(legacy(venue, "one"));
 	}
 
@@ -206,7 +221,7 @@ class AdapterStateTest {
 			assertInstanceOf(AuthException.class, assertThrows(java.util.concurrent.ExecutionException.class,
 				() -> write.get(5, TimeUnit.SECONDS)).getCause());
 			assertEquals(CVMLong.ONE, venue.adapterState("worker").get());
-			assertEquals(Maps.empty(), venue.adapterState("other").get(), "the whole delivery draft must roll back");
+			assertNull(venue.adapterState("other").get(), "the whole delivery draft must roll back");
 			assertThrows(AuthException.class, () -> venue.execute(draft -> worker.inVenue(draft).set(CVMLong.ZERO)));
 			assertThrows(AuthException.class, () -> worker.cursor().set(CVMLong.ZERO));
 		} finally { release.countDown(); }

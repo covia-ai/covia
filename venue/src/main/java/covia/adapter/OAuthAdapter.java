@@ -958,12 +958,13 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 
 	/**
 	 * The connections of one user, fenced to their account, after moving any
-	 * grants an earlier venue kept in their secret store.
+	 * grants an earlier venue kept in their secret store. The state is a map,
+	 * read as empty while nothing is stored.
 	 */
 	private AdapterState connections(AString userDID) {
 		AdapterState state = adapterState(userDID);
 		moveLegacyGrants(userDID, state);
-		return state;
+		return state.withDefault(Maps.empty());
 	}
 
 	/**
@@ -1090,7 +1091,7 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 	@Override
 	public void onUserDeleted(AString did, AMap<AString, ACell> previousUser) {
 		if (engine == null) return;
-		AMap<AString, ACell> taken = adapterState().transact(draft -> {
+		AMap<AString, ACell> taken = adapterState().withDefault(Maps.empty()).transact(draft -> {
 			AMap<AString, ACell> all = RT.ensureMap(draft.read(REVOCATIONS));
 			AMap<AString, ACell> grants = (all != null) ? RT.ensureMap(all.get(did)) : null;
 			if (grants == null) return null;

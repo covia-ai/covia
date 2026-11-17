@@ -557,12 +557,16 @@ may wrap the component's cursor in its own typed domain components. For simple
 map/vector records, `read`, `write` and `delete` offer type-aware relative paths;
 `get`, `set`, `update`, `execute` and `transact` operate on the complete value;
 `transact` returns what its callback returned in the run that committed.
-Absent state reads as an empty map, so a transaction on new state starts from
-one; a stored value of any type reads as itself, and setting null removes it.
-`rootPath` and `path` are diagnostic locations, not workspace API addresses.
+Absent state reads as null, and setting null removes it. A transaction needs a
+value to start from, so one on state that may be new throws
+`MissingValueException` unless the adapter first gives its empty value:
+`withDefault(Maps.empty())` reads as that while nothing is stored, and a
+transaction that leaves it unchanged stores nothing. `read`, `write`, `delete`,
+`set` and `update` need no empty value. `rootPath` and `path` are diagnostic
+locations, not workspace API addresses.
 
 ```java
-AdapterState state = adapterState();
+AdapterState state = adapterState().withDefault(Maps.empty());
 state.execute(draft -> {
     draft.write("settings/theme", Strings.create("dark"));
     draft.write("settings/version", CVMLong.ONE);

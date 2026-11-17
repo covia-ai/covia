@@ -622,14 +622,13 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 		long supported = migration.supported();
 		long version = adapterVersion(name);
 		if (version == supported) return;
-		moveLegacyAdapterState(name);
-		// Stored state only: the adapter's component reads absent state as an empty map
-		ACell value = RT.getIn(get(), Covia.ADAPTERS, Strings.create(name));
+		AdapterState state = adapterState(name);
+		ACell value = state.get();
 		if (value != null) {
 			requireAdapterVersion(name, supported);
 			ACell migrated = value;
 			for (long v = version; v < supported; v++) migrated = migration.step().apply(v, migrated);
-			if (migrated != value) adapterState(name).set(migrated);
+			if (migrated != value) state.set(migrated);
 		}
 		setAdapterVersion(name, supported);
 	}

@@ -191,7 +191,7 @@ public class PreferencesAdapter extends AAdapter {
 		engine.requireLocalAccess(ctx,
 			Strings.create(user + "/" + VIEW_PATH + (path.isEmpty() ? "" : "/" + path)), Capability.CRUD_WRITE);
 		long limit = limitFor(user);
-		boolean changed = adapterState(user).transact(draft -> {
+		boolean changed = adapterState(user).withDefault(Maps.empty()).transact(draft -> {
 			AForkableCursor<ACell> preferences = userCursor(draft, user);
 			ACell current = preferences.getOrDefault(null);
 			ACell root = (current != null) ? current : Maps.empty();

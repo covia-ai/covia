@@ -327,7 +327,7 @@ identity token through an operation", and HELD_KEYS.md.
 | Convex 0.8.19 | Convex 0.8.20: recompile adapters and modules |
 | A raw `cursor().path(key).set(...)` creating a missing `key`, including after `withDefault` | Refused: write through a component's operations, or an entry view that creates the key (`Covia.entry`, a `MapComponent`'s or `IndexComponent`'s `path`) |
 | A transaction on a missing record starting from null | It throws `MissingValueException` before the callback runs, and when a concurrent deletion makes it run again; the domain operations (an agent's, session's, task's, job's or HITL request's) still answer "absent" |
-| `adapterState().get()` null while no state is stored | An empty map, so a transaction on new state starts from one |
+| `adapterState().transact` or `execute` on state with nothing stored, starting from null | It throws `MissingValueException`: give the adapter's empty value first, `adapterState().withDefault(Maps.empty())`. `get()` is still null while nothing is stored |
 | `Users.getAll()` null when there are no users | An empty map |
 | An override of `withCursor` or `mergePublication` on a component | `rebind`, and `reconcile(own, other)`, which serves transaction commits as well as sync |
 

@@ -74,10 +74,18 @@ public final class AdapterState extends ALatticeComponent<ACell>
 			};
 			base.getOrDefault(null); // reject a tombstoned owner before handing out the view
 		}
-		// Absent state reads as an empty map, so a transaction on new state starts from one
-		AForkableCursor<ACell> state = Covia.<ACell>entry(VenueState.level(base, Covia.ADAPTERS), Strings.create(name))
-			.withDefault(Maps.empty());
+		AForkableCursor<ACell> state = Covia.entry(VenueState.level(base, Covia.ADAPTERS), Strings.create(name));
 		return new AdapterState(venue.getContext(), state, name, owner, generation);
+	}
+
+	/**
+	 * This state as it reads with {@code empty} in place of nothing stored. A
+	 * transaction needs a value to start from, so an adapter gives its empty
+	 * state this way to transact on state that may be new; writing back
+	 * {@code empty} unchanged stores nothing.
+	 */
+	public AdapterState withDefault(ACell empty) {
+		return rebind(cursor().withDefault(empty));
 	}
 
 	public VenueContext getContext() { return context; }

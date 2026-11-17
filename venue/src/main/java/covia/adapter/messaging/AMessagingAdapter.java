@@ -294,8 +294,10 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 		return Engine.isSecretRef(value);
 	}
 
-	public final AdapterState state() { return adapterState(); }
-	public final AdapterState state(AString owner) { return adapterState(owner); }
+	/** This adapter's state, a map ({@code users/<did>}, {@code config/<name>}), read as empty while nothing is stored. */
+	public final AdapterState state() { return adapterState().withDefault(Maps.empty()); }
+	/** As {@link #state()}, fenced to {@code owner}'s account. */
+	public final AdapterState state(AString owner) { return adapterState(owner).withDefault(Maps.empty()); }
 	public final String userStatePath(AString owner, String relative) { return state().userPath(owner, relative); }
 	public final synchronized R runner(String name) { return runners.get(name); }
 	public final synchronized R runner(AString owner, String name) { return runners.get(runtimeKey(owner, name)); }

@@ -140,7 +140,8 @@ public final class MessageRelay {
 	 * @param replyWindowMs how long a reply may follow its message, the provider's rule
 	 */
 	public MessageRelay(AdapterState state, String root, int holdSeconds, long replyWindowMs, LongSupplier clock) {
-		this.state = Objects.requireNonNull(state);
+		// The relay keeps its links at paths in the state, a map it starts empty
+		this.state = Objects.requireNonNull(state).withDefault(Maps.empty());
 		this.root = Objects.requireNonNull(root);
 		state.path(root + "/links");   // validates the root
 		if (holdSeconds < 0) throw new IllegalArgumentException("holdSeconds must not be negative");
