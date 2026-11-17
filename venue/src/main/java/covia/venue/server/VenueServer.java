@@ -121,7 +121,8 @@ public class VenueServer {
 
 	/**
 	 * How often the host's sync worker publishes the application, which bounds
-	 * what a process crash loses. The venue opened the host, so it runs the worker.
+	 * what a process crash loses on an Etch v2 store (PERSISTENCE.md says what v3
+	 * keeps). The venue opened the host, so it runs the worker.
 	 */
 	public static final Duration SYNC_INTERVAL = Duration.ofMillis(100);
 

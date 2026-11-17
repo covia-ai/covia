@@ -143,7 +143,8 @@ public class UserMemoryAdapter extends AAdapter {
 		// position). A map's values are gated to active/surfaceable entries and
 		// sorted for a stable, readable order — this lets recall point straight at
 		// a rich slug-keyed store (e.g. a clinical problem list) with no separate
-		// copy. Either source empty → null (the context entry is skipped).
+		// copy. Either source empty → null: a dynamic load skips the entry, and
+		// pinned context shows the absence diagnostic (AGENT_CONTEXT.md §6.3).
 		List<String> lines = new ArrayList<>();
 		if (value instanceof AVector<?> vec) {
 			for (long i = 0; i < vec.count(); i++) {

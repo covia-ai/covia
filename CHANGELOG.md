@@ -81,6 +81,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 - Grid operations honour explicit remote result wait timeouts, submit asynchronously without background polling, and reject non-string venue targets instead of executing locally.
 - `user:delete` no longer leaves cleanup pending for an adapter registered while it runs.
+- Fetching one speech model file, voice or library pack twice at once no longer fails one of the fetches (#647).
 - Stopping or reconfiguring a Telegram bot just as it polls no longer leaves that poll running for up to 30 seconds or holds up the change for 5.
 - Deleting, reconfiguring or disabling a Telegram or Discord bot that is still connecting no longer waits for the connection (for Discord, without limit), and one bot's slow connection attempt no longer holds up the others' retries.
 - Deleting, reconfiguring or disabling a Telegram bot no longer waits up to 5 seconds while it handles an update it has received or waits to retry a failed poll.

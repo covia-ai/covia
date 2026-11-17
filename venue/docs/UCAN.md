@@ -1429,8 +1429,8 @@ the design supports, in increasing flexibility:
 These are layered, not exclusive: an allowlist can ship first, an org root
 added later, without changing the verification core — which only needs
 "resolve authority A's key; is A trusted for this owner?" The policy is the
-*only* federation-specific surface; the chain-walking, attenuation, temporal,
-and revocation checks are identical to the single-venue path.
+*only* federation-specific surface; the chain-walking, attenuation and temporal
+checks are identical to the single-venue path.
 
 #### Forwarding authority across venues
 
@@ -1610,7 +1610,7 @@ land together, in order of dependency:
   attestation, re-audienced to B.
 
 This is the only federation-specific surface; everything else (chain walk,
-attenuation, temporal, revocation) is shared with the single-venue path.
+attenuation, temporal) is shared with the single-venue path.
 
 ---
 
@@ -1625,7 +1625,7 @@ attenuation, temporal, revocation) is shared with the single-venue path.
 | Storage | Application-specific | Lattice `/a/` namespace (content-addressable, replicated) |
 | Key types | Ed25519, P-256, secp256k1 | Ed25519 (Convex native) |
 | DID methods | Any | Built in: `did:key`, `did:web`; method resolvers are extensible (for example future `did:convex`) |
-| Revocation | Application-specific | Lattice-native signed records |
+| Revocation | Application-specific | Not implemented ([§4.6](#46-revocation)) |
 | Merge semantics | None (tokens are immutable) | CAS lattice merge (immutable, union) |
 
 The conceptual model — issuer, audience, attenuated capabilities, delegation chains, cryptographic verification — is identical. Only the encoding layer differs.

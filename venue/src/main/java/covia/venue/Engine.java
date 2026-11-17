@@ -862,7 +862,7 @@ public class Engine {
 	 * runs its sync and flush workers ({@code VenueServer} every
 	 * {@link covia.venue.server.VenueServer#SYNC_INTERVAL} and
 	 * {@link covia.venue.server.VenueServer#FLUSH_INTERVAL}), which bound what a
-	 * process crash and a machine crash lose.
+	 * process crash and a machine crash lose (on Etch v3, see PERSISTENCE.md).
 	 * Commit state in transactions; call {@code flush()} where Covia promises
 	 * durability to someone outside: before acknowledging (an accepted job
 	 * handle, a webhook receipt, a login) and before an external effect that
