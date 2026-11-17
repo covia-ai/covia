@@ -300,8 +300,8 @@ identity token through an operation", and HELD_KEYS.md.
 
 | 0.11.0 | Current |
 |--------|---------|
-| `User`'s `agentAt`, `createAgent`, `forkAgent`, `removeAgent`, `getAgents` and `ensureAgent` | The user's agents, `user.agents()`: `at`, `create`, `fork`, `remove` and `all` (empty, not null, when there are none); for `ensureAgent`, `create` then `agent`. `user.agent(id)` stays, and still finds a deleted agent: `agent.isTerminated()` says whether it is one |
-| `Agent`'s `initialise`, `initialiseFromFork` and `putRecord` | `user.agents().create` and `fork`; a test seeding a raw record writes it through `agent.cursor()` |
+| `User`'s `agentAt`, `createAgent`, `forkAgent`, `removeAgent`, `getAgents` and `ensureAgent` | The user's agents, `user.agents()`: `at`, `create`, `createFork`, `remove` and `all` (empty, not null, when there are none); for `ensureAgent`, `create` then `agent`. `user.agent(id)` stays, and still finds a deleted agent: `agent.isTerminated()` says whether it is one |
+| `Agent`'s `initialise`, `initialiseFromFork` and `putRecord` | `user.agents().create` and `createFork`; a test seeding a raw record writes it through `agent.cursor()` |
 | `agent.updateConfigAndState(config, state)` and the static `Agent.applyStateChange` | `agent.update(null, null, config, state)`; `mergeRunResult` applies a transition's state change |
 | `agent.setError` and `clearError` | `agent.suspend(error)`, which records a fault and suspends the agent; `tryResume` clears it |
 | `agent.getSession(sid)` and `Agent`'s other session shortcuts (`getSessionPending`, `getSessionCycleEpoch`, `ensureSession`, `removeSession`, `hasSessionPending`, `oldestSessionWithPending`) | The session itself, `agent.session(sid)` (`getRecord()`, `pending()`, `cycleEpoch()`), and the agent's sessions, `agent.sessions()` (`create`, `remove`, `hasPending`, `oldestWithPending`) |

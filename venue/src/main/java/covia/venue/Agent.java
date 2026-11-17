@@ -229,7 +229,7 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 	/**
 	 * Atomically initialises this record, SLEEPING with no tasks, sessions or
 	 * outbound waits, under {@code controller} (null, or the owner with no
-	 * token, for its owner). {@link Agents#create} and {@link Agents#fork}
+	 * token, for its owner). {@link Agents#create} and {@link Agents#createFork}
 	 * make agents this way.
 	 *
 	 * @param config Framework configuration, or null for none

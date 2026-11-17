@@ -85,13 +85,13 @@ public class AgentsTest {
 		agents.create(AGENT, CONFIG, null, null, null);
 		var timeline = Vectors.<ACell>of(Maps.of("turn", 1));
 
-		Agent fork = agents.fork(FORK, CONFIG, Strings.create("copied"), timeline, null);
+		Agent fork = agents.createFork(FORK, CONFIG, Strings.create("copied"), timeline, null);
 		assertNotNull(fork);
 		assertEquals(CONFIG, fork.getConfig());
 		assertEquals(Strings.create("copied"), fork.getState());
 		assertEquals(timeline, fork.getTimeline());
 		assertEquals(Agent.SLEEPING, fork.getStatus());
 
-		assertNull(agents.fork(AGENT, CONFIG, null, null, null), "a fork cannot take an id in use");
+		assertNull(agents.createFork(AGENT, CONFIG, null, null, null), "a fork cannot take an id in use");
 	}
 }

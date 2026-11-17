@@ -21,7 +21,7 @@ import convex.lattice.cursor.AForkableCursor;
  *
  * <p>The collection has no policy of its own: the user's covers it. Only venue
  * code writes {@code g}. An agent is made with {@link #create} or
- * {@link #fork}: a {@code put} of a raw record bypasses the agent's own
+ * {@link #createFork}: a {@code put} of a raw record bypasses the agent's own
  * initialisation.</p>
  *
  * <p>A removal is durable: the venue merge is whole-value LWW, so the
@@ -101,7 +101,7 @@ public final class Agents extends MapComponent<AString, ACell>
 	 * @param controller As for {@link #create}
 	 * @return the new agent, or null when {@code id} is taken, by a deleted agent too
 	 */
-	public Agent fork(AString id, AMap<AString, ACell> config, ACell state,
+	public Agent createFork(AString id, AMap<AString, ACell> config, ACell state,
 			AVector<ACell> timeline, Engine.Source controller) {
 		Agent fork = at(id);
 		return fork.initialiseIfAbsent(config, state, null, timeline, controller) ? fork : null;
