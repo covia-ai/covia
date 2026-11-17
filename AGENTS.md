@@ -154,11 +154,26 @@ and `.claude/settings.json` are tracked; local overrides go in
 ## Java code intelligence
 
 `.claude/settings.json` enables Anthropic's `jdtls-lsp` plugin, which gives
-Claude Code definitions, references and diagnostics from Eclipse JDT LS. It
-needs a `jdtls` command on PATH: the Homebrew and AUR packages provide one,
-and on Windows a `jdtls.cmd` containing
-`python <jdtls>\bin\jdtls --jvm-arg=-Xmx2G %*` works. Each session starts its
-own server, which grows past 3 GB without a heap cap. The server compiles
+Claude Code definitions, references, call hierarchy and diagnostics from
+Eclipse JDT LS. It needs a `jdtls` command on PATH: the Homebrew and AUR
+packages provide one, and on Windows a `jdtls.cmd` containing
+`python <jdtls>\bin\jdtls --jvm-arg=-Xmx2G %*` works. Definitions inside
+dependency jars come back empty, and workspace symbol search finds types, not
+methods.
+
+Each session starts its own server the first time it edits a Java file or
+queries the LSP, and keeps it until the session ends. With that heap cap it
+settles at about 1.6 GB; without one it grows past 3 GB. The server compiles
 into the modules' `target/` folders as Eclipse does and Maven reuses those
 classes, so a test failing with `Unresolved compilation problem` means a
 source does not compile; `mvn clean` clears it.
+
+jdtls keeps its workspace in a folder named after the launch folder's name
+(`jdtls-<sha1 of the name>` under `%APPDATA%\jdtls`, `~/.cache/jdtls` or
+`~/Library/Caches/jdtls`). Every session launched from one checkout shares it,
+including a session that then enters a worktree; a session started in its own
+worktree gets its own. Sharing breaks it in two ways: a worktree's modules
+imported there replace the checkout's, whose files then report as a
+"non-project file" with no definitions or references; and two servers on it
+at once can leave it unloadable, so the LSP tool times out during
+initialisation. Deleting the folder while no server uses it clears both.
