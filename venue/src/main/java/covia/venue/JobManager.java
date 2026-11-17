@@ -1401,7 +1401,7 @@ public class JobManager {
 	/** What a mirror copies from its call when it is made. */
 	private static final AString[] MIRRORED_FIELDS = {
 		Fields.OP, Fields.INPUT, Fields.NAME, Fields.ADAPTER,
-		Fields.CALLER, Fields.OWNER, Fields.PARENT, Fields.CREATED };
+		Fields.CALLER, Fields.PARENT, Fields.CREATED };
 
 	/** What a mirror copies from its call when the call ends. */
 	private static final AString[] OUTCOME_FIELDS = { Fields.OUTPUT, Fields.ERROR, Fields.ERROR_CODE };
@@ -1410,7 +1410,7 @@ public class JobManager {
 	 * A recorded job for a call that has none, so a caller who stops waiting
 	 * can be pointed at a job to look up, one that outlasts a restart. The
 	 * mirror looks like the call: its operation, input (secrets hidden), name,
-	 * adapter, caller, owner, parent and creation time, and it names the call
+	 * adapter, caller, parent and creation time, kept in the call's account, and it names the call
 	 * in {@link #MIRROR_OF}. It stays STARTED until the call ends, then takes
 	 * the call's status, output and error; cancelling it cancels the call.
 	 * No adapter runs it: it holds no admission permit, takes no messages,

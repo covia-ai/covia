@@ -97,6 +97,17 @@ public class SchedulerTest {
 
 	// ----------------------------------------------------------- fire via trigger
 
+	/** An event belongs to its caller's account, read from its DID, so a principal acting in another account cannot schedule. */
+	@Test
+	public void testAPrincipalActingOutsideItsDIDsAccountCannotSchedule() {
+		AString agentShaped = s(did + ":g:not-an-agent");
+		RequestContext bearer = engine.context(agentShaped);
+		assertEquals(agentShaped, bearer.getUserDID(), "an agent-shaped DID a bearer names is its own namespace");
+		AuthException refused = assertThrows(AuthException.class,
+			() -> sched.schedule(s("v/test/ops/echo"), s("x"), bearer, future()));
+		assertEquals(Scheduler.NOT_ITS_ACCOUNT.formatted(agentShaped, agentShaped), refused.getMessage());
+	}
+
 	@Test
 	@SuppressWarnings("unchecked")
 	public void testScheduleRetainsExtensibleRecordShape() {

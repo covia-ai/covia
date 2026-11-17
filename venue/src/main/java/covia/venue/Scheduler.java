@@ -106,6 +106,12 @@ public class Scheduler {
 	public static final String DESCRIPTION_TOO_LONG = Schedule.DESCRIPTION_TOO_LONG;
 	/** Refusal for a request whose authority does not cover an ability on an event: the ability and the event's resource. */
 	public static final String EVENT_ACCESS_DENIED = "Not authorised for %s on scheduled event %s";
+	/**
+	 * Refusal to schedule for a principal acting in another account than its DID
+	 * names, such as an agent-shaped DID a bearer authenticates as, which is its
+	 * own namespace: an event belongs to its caller's account, read from the DID.
+	 */
+	public static final String NOT_ITS_ACCOUNT = "%s acts in %s, not the account its DID names, so it cannot schedule";
 	/** Why an event did not fire: the agent that scheduled it has been deleted, so it was dropped. */
 	public static final String AGENT_GONE = "%s no longer exists, so its scheduled event was dropped";
 	/** Refusal for work reaching a scheduler the venue has shut down. */
@@ -202,6 +208,7 @@ public class Scheduler {
 		// Fired as whoever scheduled it, in that principal's account, so an agent's
 		// queued work stays visible to the account it runs in.
 		AString owner = Principals.userOf(caller);
+		if (!owner.equals(ctx.getUserDID())) throw new AuthException(NOT_ITS_ACCOUNT.formatted(caller, ctx.getUserDID()));
 		AVector<ACell> proofs = ctx.getProofs();
 		AMap<AString, ACell> authority = Engine.keptAuthority(ctx);
 		return locked(() -> {
