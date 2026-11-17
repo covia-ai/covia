@@ -158,15 +158,16 @@ Claude Code definitions, references, call hierarchy and diagnostics from
 Eclipse JDT LS. It needs a `jdtls` command on PATH: the Homebrew and AUR
 packages provide one, and on Windows a `jdtls.cmd` containing
 `python <jdtls>\bin\jdtls --jvm-arg=-Xmx2G %*` works. Definitions inside
-dependency jars come back empty, and workspace symbol search finds types, not
-methods.
+dependency jars come back empty, and workspace symbol search finds a class by
+name but not a method.
 
 Each session starts its own server the first time it edits a Java file or
-queries the LSP, and keeps it until the session ends. With that heap cap it
-settles at about 1.6 GB; without one it grows past 3 GB. The server compiles
-into the modules' `target/` folders as Eclipse does and Maven reuses those
-classes, so a test failing with `Unresolved compilation problem` means a
-source does not compile; `mvn clean` clears it.
+queries the LSP, and keeps it until the session ends. With that heap cap a
+server that has run for a while holds about 2.2 GB of private memory, even
+when Windows pages it out while idle; without one it grows past 3 GB. The
+server compiles into the modules' `target/` folders as Eclipse does and Maven
+reuses those classes, so a test failing with `Unresolved compilation problem`
+means a source does not compile; `mvn clean` clears it.
 
 jdtls keeps its workspace in a folder named after the launch folder's name
 (`jdtls-<sha1 of the name>` under `%APPDATA%\jdtls`, `~/.cache/jdtls` or
