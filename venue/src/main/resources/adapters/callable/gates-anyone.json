@@ -10,8 +10,7 @@
 			"properties": {
 				"operation": { "type": "string", "description": "The callable being called, <ownerDID>/x/callable/<name>" },
 				"input": { "description": "The call's input" },
-				"caller": { "type": "string", "description": "The caller's DID" },
-				"owner": { "type": "string", "description": "The namespace the caller acts in, when it differs from caller" }
+				"caller": { "type": "string", "description": "The caller's DID" }
 			}
 		},
 		"output": { "type": "boolean" }

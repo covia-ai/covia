@@ -4213,9 +4213,17 @@ public class Engine {
 	 * the caller's chain.
 	 */
 	private boolean admissionAllows(RequestContext ctx, AString resource, AString ability) {
-		if (!isTalkAbility(ability)) return false;
-		AString caller = ctx.getAuthorityDID();
-		if (caller == null) return false;
+		return isTalkAbility(ability) && acceptsAdmit(ctx, resource) && narrowingAllows(ctx, resource, ability);
+	}
+
+	/**
+	 * Whether the admission policy of the agent at {@code resource} admits what
+	 * {@code ctx}'s caller acts for, before what narrows the caller is
+	 * considered. False when {@code resource} is not an agent record here.
+	 */
+	private boolean acceptsAdmit(RequestContext ctx, AString resource) {
+		AString caller = (ctx == null) ? null : ctx.getAuthorityDID();
+		if (caller == null || resource == null) return false;
 		AString owner = ownerOf(resource);
 		if (owner == null) return false;
 		String rest = resource.toString().substring(owner.toString().length());
@@ -4228,9 +4236,8 @@ public class Engine {
 		AString account = ctx.getUserDID();
 		AString web = config.getWebDID();
 		boolean actsForVenue = actsFor(account, caller, getDIDString()) || (web != null && actsFor(account, caller, web));
-		if (!Admission.admits(Admission.policy(agent.getConfig()), named -> actsFor(account, caller, named),
-				actsForVenue, isPublicPrincipal(caller))) return false;
-		return narrowingAllows(ctx, resource, ability);
+		return Admission.admits(Admission.policy(agent.getConfig()), named -> actsFor(account, caller, named),
+			actsForVenue, isPublicPrincipal(caller));
 	}
 
 	/**
@@ -5451,15 +5458,21 @@ public class Engine {
 		throw scopeDenial(ctx, resource, ability, destination);
 	}
 
+	/** Why an agent's admission policy did not let a request ask it: the policy admits nothing the caller acts for. */
+	public static final String ACCEPTS_NOT_ADMITTED = "the target's accepts policy does not admit this caller";
+
+	/** Why an agent's admission policy did not let a request ask it: the policy admits the caller, but what narrows it does not cover asking. */
+	public static final String ACCEPTS_BEYOND_CAPS = "the target's accepts policy admits this caller, but the caps narrowing it do not cover asking";
+
 	/** The refusal of another principal's resource the request holds no rights to. */
-	private static covia.exception.AuthException anothersDenial(RequestContext ctx, AString resource, AString ability) {
+	private covia.exception.AuthException anothersDenial(RequestContext ctx, AString resource, AString ability) {
 		AVector<ACell> proofs = (ctx != null) ? ctx.getProofs() : null;
 		return RequestContext.denied(ctx, "Access denied: " + ability + " on " + resource
 			+ " — accessing another user's resource requires " + ability + " rights"
 			+ ((proofs == null || proofs.isEmpty())
 				? " (no proof presented)" : " (the presented proofs do not cover it)")
 			+ (isTalkAbility(ability)
-				? "; the target's accepts policy does not admit this caller" : ""),
+				? "; " + (acceptsAdmit(ctx, resource) ? ACCEPTS_BEYOND_CAPS : ACCEPTS_NOT_ADMITTED) : ""),
 			resource, ability);
 	}
 

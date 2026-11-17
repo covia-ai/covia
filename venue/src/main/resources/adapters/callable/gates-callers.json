@@ -1,6 +1,6 @@
 {
 	"name": "Callable Gate: Callers",
-	"description": "A callable gate that admits a caller listed in callers, or one acting in a listed namespace, such as a listed user's agents. Give it callers as an operation default: store an operation {adapter: \"callable:gates/callers\", default: {callers: [...]}} and name that as the gate, by a/<hash> to keep the list fixed.",
+	"description": "A callable gate that admits a caller acting for a principal listed in callers: that principal, or an agent acting for it up its chain of controllers, such as a listed user's agents. A caller it admits calls only as far as its caps, and those of the agents controlling it, cover callable/call on the callable. Give it callers as an operation default: store an operation {adapter: \"callable:gates/callers\", default: {callers: [...]}} and name that as the gate, by a/<hash> to keep the list fixed.",
 	"dateCreated": "2026-11-13T00:00:00Z",
 	"operation": {
 		"adapter": "callable:gates/callers",
@@ -8,11 +8,10 @@
 		"input": {
 			"type": "object",
 			"properties": {
-				"callers": { "type": "array", "items": { "type": "string" }, "description": "The DIDs it admits, as callers or as the namespaces they act in" },
+				"callers": { "type": "array", "items": { "type": "string" }, "description": "The principals it admits, by DID, with whatever acts for each" },
 				"operation": { "type": "string", "description": "The callable being called, <ownerDID>/x/callable/<name>" },
 				"input": { "description": "The call's input" },
-				"caller": { "type": "string", "description": "The caller's DID" },
-				"owner": { "type": "string", "description": "The namespace the caller acts in, when it differs from caller" }
+				"caller": { "type": "string", "description": "The caller's DID" }
 			}
 		},
 		"output": { "type": "boolean" }

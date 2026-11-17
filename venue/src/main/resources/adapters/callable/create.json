@@ -25,7 +25,7 @@
 						{ "type": "string", "enum": ["unrestricted"] }
 					]
 				},
-				"gate": { "type": "string", "description": "An operation deciding who else may call it, given {operation, input, caller, owner?} and run with the callable's authority; the call proceeds only if it succeeds. Standard gates: v/ops/callable/gates/anyone and v/ops/callable/gates/callers." },
+				"gate": { "type": "string", "description": "An operation deciding who else may call it, given {operation, input, caller} and run with the callable's authority; the call proceeds only if it succeeds. Standard gates: v/ops/callable/gates/anyone and v/ops/callable/gates/callers." },
 				"description": { "type": "string", "description": "What it does, for its callers" }
 			},
 			"required": ["name", "operation"]

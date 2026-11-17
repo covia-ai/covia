@@ -67,9 +67,17 @@ class AdmissionAuthorityTest {
 		assertTrue(mayAsk(RequestContext.of(bob), desk));
 		assertTrue(mayAsk(agent(bob, "free", bob, null), desk), "an agent with no caps acts with all of Bob's authority");
 		assertTrue(mayAsk(agent(bob, "talker", bob, Vectors.of(cap(desk.toString(), REQUEST))), desk));
-		assertFalse(mayAsk(agent(bob, "narrow", bob, Vectors.of(cap("w/", Capability.CRUD))), desk),
-			"its caps do not cover asking Carol's agent");
-		assertFalse(mayAsk(RequestContext.of(TestEngine.uniqueDID("AdmitUserDan")), desk));
+		RequestContext narrow = agent(bob, "narrow", bob, Vectors.of(cap("w/", Capability.CRUD)));
+		assertFalse(mayAsk(narrow, desk), "its caps do not cover asking Carol's agent");
+		assertTrue(refusal(narrow, desk).contains(Engine.ACCEPTS_BEYOND_CAPS), "and it is told so");
+		RequestContext dan = RequestContext.of(TestEngine.uniqueDID("AdmitUserDan"));
+		assertFalse(mayAsk(dan, desk));
+		assertTrue(refusal(dan, desk).contains(Engine.ACCEPTS_NOT_ADMITTED));
+	}
+
+	/** Why {@code ctx} may not ask the agent at {@code desk}, as it is told. */
+	private static String refusal(RequestContext ctx, AString desk) {
+		return assertThrows(covia.exception.AuthException.class, () -> engine.requireAuthority(ctx, desk, REQUEST)).getMessage();
 	}
 
 	@Test void anAgentOnTheChainBoundsItToo() {
