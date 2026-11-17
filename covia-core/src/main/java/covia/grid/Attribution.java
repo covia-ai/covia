@@ -8,9 +8,10 @@ import covia.api.Fields;
 
 /**
  * Who made a call and whose namespace it belongs to, as a record names them
- * (COG-8). {@link Fields#CALLER} is the principal that made the call: a user,
- * one of a user's agents ({@code <owner>:g:<agent>}) or a {@code admin/sudo}
- * delegate. {@link Fields#OWNER} is the namespace the record belongs to,
+ * (COG-8). {@link Fields#CALLER} is the principal that made the call: a user
+ * or one of a user's agents ({@code <owner>:g:<agent>}), or a
+ * {@code admin/sudo} delegate on a record made before that acted as the user.
+ * {@link Fields#OWNER} is the namespace the record belongs to,
  * written only when it differs from the caller. These two methods hold that
  * rule, so every record applies it alike.
  *

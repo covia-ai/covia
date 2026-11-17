@@ -100,9 +100,9 @@ public class HITLAdapterTest {
 
 	// ========== The clean drive: request → respond → completion ==========
 
-	/** A delegate asking for the user it acts for is the request's caller, in that user's namespace. */
+	/** A delegate acting as the user asks as the user: the request and its job are the user's own. */
 	@Test
-	public void testADelegatesRequestNamesItsOwner() {
+	public void testADelegatesRequestIsTheUsers() {
 		AKeyPair ownerKey = AKeyPair.generate();
 		AString owner = UCAN.toDIDKey(ownerKey.getAccountKey());
 		engine.getVenueState().users().ensure(owner);
@@ -117,11 +117,37 @@ public class HITLAdapterTest {
 		assertEquals(Status.INPUT_REQUIRED, job.getStatus(), job.getErrorMessage());
 		AMap<AString, ACell> record = engine.getVenueState().users().user(owner).inbox()
 			.get(job.getID());
-		assertEquals(BOB_DID, record.get(Hitl.CALLER));
-		assertEquals(owner, record.get(Hitl.OWNER), "the delegate asked in the owner's namespace");
-		assertEquals(BOB_DID, job.getCaller());
-		assertEquals(owner, job.getOwner(), "and the request's job is the owner's");
+		assertEquals(owner, record.get(Hitl.CALLER), "the user asked");
+		assertEquals(owner, job.getCaller());
+		assertEquals(owner, job.getOwner(), "and the request's job is the user's");
 		job.cancel();
+	}
+
+	/**
+	 * A request records the route that carried it beside its caller, as an
+	 * agent's turn does, so a request through a token or a callable is not taken
+	 * for its caller's own. The route is venue-internal (AGENT_LOOP.md §6.3).
+	 */
+	@Test
+	public void testARequestRecordsTheRouteThatCarriedIt() {
+		Job direct = request(ALICE, Hitl.request("Direct").ask(Hitl.approval("ok", "OK?").required()).build());
+		assertEquals(Status.INPUT_REQUIRED, direct.getStatus(), direct.getErrorMessage());
+		assertNull(readRecord(ALICE, direct.getID().toHexString()).get(Fields.ROUTE), "nothing carried a direct request");
+
+		String bearer = RT.getIn(engine.jobs().invokeOperation("v/ops/token/create", Maps.of(
+			Fields.NAME, "outside-bot", Fields.ACCESS, Maps.of("test", Maps.empty()),
+			Fields.CAPS, Vectors.of(Capability.create(Strings.create("v/ops/hitl/request"), Abilities.INVOKE))),
+			ALICE).awaitResult(5000), Fields.TOKEN).toString();
+		RequestContext viaToken = engine.tokenContext(engine.tokens().lookup(bearer));
+		assertNotNull(viaToken.getRoute());
+		Job carried = request(viaToken, Hitl.request("Through the token").ask(Hitl.approval("ok", "OK?").required()).build());
+		assertEquals(Status.INPUT_REQUIRED, carried.getStatus(), carried.getErrorMessage());
+		AMap<AString, ACell> record = readRecord(ALICE, carried.getID().toHexString());
+		assertEquals(ALICE_DID, record.get(Hitl.CALLER), "a request through a token is its issuer's");
+		assertEquals(viaToken.getRoute(), record.get(Fields.ROUTE), "and its route says the token carried it");
+		assertFalse(record.toString().contains(bearer), "the bearer is never recorded");
+		direct.cancel();
+		carried.cancel();
 	}
 
 	@Test
@@ -794,7 +820,7 @@ public class HITLAdapterTest {
 
 	private static RequestContext asking(Engine venue, AString owner, AString agentId, AString target) {
 		RequestContext caller = (agentId == null) ? RequestContext.of(owner) : RequestContext.ofAgent(owner, agentId);
-		String delegation = UcanTokens.grant(venue.getKeyPair(), caller.getCallerDID().toString(),
+		String delegation = UcanTokens.grant(venue.getKeyPair(), caller.getAuthorityDID().toString(),
 			target + "/h/", HITLAdapter.ABILITY_HITL_REQUEST.toString(), HOUR);
 		return caller.withProofs(Vectors.of(UCAN.fromJWT(Strings.create(delegation)).toMap()));
 	}

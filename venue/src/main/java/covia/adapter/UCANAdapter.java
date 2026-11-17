@@ -79,7 +79,7 @@ public class UCANAdapter extends AAdapter {
 
 	@Override
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
-		if (ctx.getCallerDID() == null) {
+		if (ctx.getAuthorityDID() == null) {
 			return CompletableFuture.failedFuture(new AuthException("Authentication required"));
 		}
 		try {
@@ -163,7 +163,7 @@ public class UCANAdapter extends AAdapter {
 		}
 		if (prf != null && prf.isEmpty()) prf = null;
 		if (prf != null && !engine.isDirectVenue(ctx)) {
-			throw new AuthException(PRF_VENUE_ONLY + ", not " + ctx.getCallerDID());
+			throw new AuthException(PRF_VENUE_ONLY + ", not " + ctx.getAuthorityDID());
 		}
 
 		// A held key signs the grant as itself: its did:key is the issuer and the
@@ -279,7 +279,7 @@ public class UCANAdapter extends AAdapter {
 			UCAN.ATT, att,
 			UCAN.PRF, (prf != null) ? prf : Vectors.empty());
 		claims = claims.assoc(UCAN.EXP, (exp == null) ? null : CVMLong.create(exp));
-		return new Grant(JWT.signPublic(claims, signer), issuer, ctx.getCallerDID(), audDID, exp);
+		return new Grant(JWT.signPublic(claims, signer), issuer, ctx.getAuthorityDID(), audDID, exp);
 	}
 
 	/**
@@ -459,7 +459,7 @@ public class UCANAdapter extends AAdapter {
 		AString reqCan = RT.ensureString(RT.getIn(input, Capability.CAN));
 		if (reqWith != null && reqCan != null) {
 			AString audience = RT.ensureString(RT.getIn(input, UCAN.AUD));
-			if (audience == null) audience = ctx.getCallerDID();
+			if (audience == null) audience = ctx.getAuthorityDID();
 			// Canonicalise a bare queried resource against the audience — the
 			// same rule enforcement applies to a caller's bare paths. No concrete
 			// invocation/gate evaluator exists in this diagnostic, so a caveated

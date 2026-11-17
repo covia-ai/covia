@@ -565,7 +565,7 @@ public class JobManager {
 		// must not open a job store of its own (its jobs would vanish from the
 		// owner's listing) nor a second admission bucket (it would multiply the
 		// owner's concurrency cap). Who *acted* stays on the context —
-		// ctx.getCallerDID() / ctx.getAgentId().
+		// ctx.getAuthorityDID() / ctx.getAgentId().
 		AString ownerDID = ctx.getUserDID();
 
 		// Admission control: bound concurrent top-level jobs per user. Blocks up
@@ -938,7 +938,7 @@ public class JobManager {
 	String evaluateGate(AString gateOp, AString opRef, ACell input, AString caller,
 			RequestContext authorityCtx) {
 		return runGate(gateOp, gateInput(opRef, input, caller, authorityCtx.getUserDID()),
-			authorityCtx.forGateEvaluation(gateOp));
+			engine.authorityFrame(authorityCtx).forGateEvaluation(gateOp));
 	}
 
 	/**
@@ -953,7 +953,7 @@ public class JobManager {
 	 */
 	public String evaluateCallableGate(AString gateOp, AString callable, ACell input, RequestContext invoker,
 			RequestContext call) {
-		return runGate(gateOp, gateInput(callable, input, invoker.getCallerDID(), invoker.getUserDID()),
+		return runGate(gateOp, gateInput(callable, input, invoker.getAuthorityDID(), invoker.getUserDID()),
 			call.asGateEvaluation(gateOp));
 	}
 
@@ -1020,7 +1020,7 @@ public class JobManager {
 	private AAdapter prepareInvocation(AMap<AString, ACell> meta, ACell input, RequestContext ctx) {
 		if (ctx.getJob() instanceof VenueJob parent) parent.requireAccount();
 		if (meta == null) throw new IllegalArgumentException("Metadata must be specified");
-		AString callerDID = ctx.getCallerDID();
+		AString callerDID = ctx.getAuthorityDID();
 		if (callerDID == null) throw new AuthException("Authentication required");
 		// Authentication establishes who the caller is; admission establishes
 		// whether that DID has an account at this venue. Keep this in the shared
@@ -1087,7 +1087,7 @@ public class JobManager {
 	private Admission jobAdmission(long ts, AString opID, AMap<AString, ACell> meta, ACell input, AString ownerDID,
 			RequestContext ctx, Blob parentID, boolean memoryOnly, boolean resultOriented, boolean directRun,
 			AAdapter adapter, boolean permit) {
-		AString callerDID = ctx.getCallerDID();
+		AString callerDID = ctx.getAuthorityDID();
 		if (ownerDID == null || callerDID == null) throw new AuthException("Authentication required");
 
 		OutputRules rules = OutputRules.of(meta);
@@ -1786,7 +1786,7 @@ public class JobManager {
 		if (data == null) throw jobNotFound(jobID);
 		Job job = liveJob(jobID);
 		if (job == null) throw notLive(jobID, data);
-		deliverMessage(job, message, ctx.getCallerDID());
+		deliverMessage(job, message, ctx.getAuthorityDID());
 	}
 
 	private void deliverMessage(Job job, AMap<AString, ACell> message, AString source) {

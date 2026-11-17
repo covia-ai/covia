@@ -71,11 +71,9 @@ public class RequestContextRouteTest {
 		assertEquals(route, carried.withCaps(Vectors.empty()).getRoute());
 		assertEquals(route, carried.withProofs(Vectors.empty()).getRoute());
 		assertEquals(route, carried.withAuthentication(Maps.empty()).getRoute(), "a record and a route travel together");
-		assertEquals(route, carried.withAuthorityOf(RequestContext.of(ALICE)).getRoute());
-		assertEquals(route, carried.callingIn(ALICE, RequestContext.of(ALICE)).getRoute(), "a call is still the request");
-		assertNull(carried.callingIn(ALICE, RequestContext.of(ALICE)).getAuthentication());
+		RequestContext call = RequestContext.of(ALICE).calledFrom(carried.withAuthentication(Maps.empty()));
+		assertEquals(route, call.getRoute(), "a call carries the request on");
+		assertNull(call.getAuthentication(), "the invoker's authentication record stays with the invoker");
 		assertNull(carried.actingAs(RequestContext.of(ALICE)).getRoute(), "a principal handed the run acts as itself");
-		assertNull(carried.withAuthorityOf(RequestContext.of(ALICE)).authorityContext().getRoute(),
-			"the separate authority a check reads carries none");
 	}
 }

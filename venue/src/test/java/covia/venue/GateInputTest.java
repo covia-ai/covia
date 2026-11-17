@@ -76,7 +76,7 @@ class GateInputTest {
 
 		AMap<AString, ACell> check = checkOf(recorder, marker);
 		assertEquals(Strings.create(ECHO), check.get(Fields.OPERATION));
-		assertEquals(agent.getCallerDID(), check.get(Fields.CALLER), "the gate is told who acted");
+		assertEquals(agent.getAuthorityDID(), check.get(Fields.CALLER), "the gate is told who acted");
 		assertEquals(owner, check.get(Fields.OWNER), "and whose namespace it acted in");
 	}
 

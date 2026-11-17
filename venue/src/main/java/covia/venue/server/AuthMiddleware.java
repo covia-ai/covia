@@ -390,7 +390,7 @@ public class AuthMiddleware {
 		Engine engine = VenueAuthenticator.engineOf(ctx);
 		if (engine == null) throw new ConfigurationException(NO_VENUE);
 		AMap<AString, ACell> token = getToken(ctx);
-		return (token != null) ? engine.tokenContext(token) : engine.context(caller);
+		return engine.requestContext(caller, token);
 	}
 
 	/** Why a request's caller has no context: no venue's middleware or authenticator bound it. */

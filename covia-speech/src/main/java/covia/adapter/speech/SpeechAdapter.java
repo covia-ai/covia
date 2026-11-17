@@ -71,8 +71,9 @@ import covia.venue.storage.ContentProvider;
  *       raw PCM and returns {@code {settled, partial, text, quiet?}}: the words up to the
  *       last pause, which stay, those still being spoken, which may change, and the
  *       seconds since speech was last heard, so an app can end on a long pause. With
- *       {@code end} the rest settles and the dictation closes. Only its caller may feed
- *       it, and one left unfed for two minutes is dropped.</li>
+ *       {@code end} the rest settles and the dictation closes. It belongs to the
+ *       principal that opened it, and only a request with that principal's authority
+ *       feeds it; one left unfed for two minutes is dropped.</li>
  * </ul>
  *
  * <p>Each direction has its engine, a {@link SpeechEngine}: {@code engine} transcribes
@@ -616,9 +617,12 @@ public class SpeechAdapter extends AAdapter implements AutoCloseable {
 	// ---- live dictation ----
 
 	ACell listen(RequestContext ctx, Settings s, AMap<AString, ACell> in) {
-		requireNamespaceAuthority(ctx);
 		if (!(s.transcriber() instanceof LocalSpeechEngine local)) throw new JobFailedException(LIVE_UNAVAILABLE);
-		int rate = sampleRate(in, null);
+		return listen(ctx, local, sampleRate(in, null));
+	}
+
+	/** A new dictation on {@code local} of audio at {@code rate}, belonging to {@code ctx}'s authority. */
+	ACell listen(RequestContext ctx, LocalSpeechEngine local, int rate) {
 		for (var entry : dictations.entrySet()) {
 			if (entry.getValue().dictation().idle() > DICTATION_IDLE_NANOS && dictations.remove(entry.getKey(), entry.getValue())) {
 				entry.getValue().dictation().discard();
@@ -626,23 +630,17 @@ public class SpeechAdapter extends AAdapter implements AutoCloseable {
 		}
 		local.prepare();
 		String id = UUID.randomUUID().toString();
-		dictations.put(id, new Listening(ctx.getUserDID(), local.dictate(), rate));
+		// The dictation belongs to the principal that opened it: no capability names it
+		dictations.put(id, new Listening(ctx.getAuthorityDID(), local.dictate(), rate));
 		return Maps.of("id", id);
 	}
 
-	/** A dictation is its namespace's, reached only with that namespace's authority. */
-	private static void requireNamespaceAuthority(RequestContext ctx) {
-		if (!ctx.actsWithNamespaceAuthority()) {
-			throw new covia.exception.AuthException(RequestContext.NOT_NAMESPACE_AUTHORITY + ctx.getUserDID());
-		}
-	}
-
 	ACell hear(RequestContext ctx, AMap<AString, ACell> in) {
-		requireNamespaceAuthority(ctx);
 		String id = string(in, "id");
 		if (id == null) throw new InvalidInputException(ID_REQUIRED);
 		Listening l = dictations.get(id);
-		if (l == null || !java.util.Objects.equals(l.owner(), ctx.getUserDID())) throw new NotFoundException(NO_DICTATION.formatted(id), id);
+		// Only a request with the authority of the principal that opened it reaches it
+		if (l == null || l.owner() == null || !l.owner().equals(ctx.getAuthorityDID())) throw new NotFoundException(NO_DICTATION.formatted(id), id);
 		ACell endCell = in.get(Strings.intern("end"));
 		if (endCell != null && !(endCell instanceof CVMBool)) throw new InvalidInputException(INVALID_END);
 		boolean end = CVMBool.TRUE.equals(endCell);

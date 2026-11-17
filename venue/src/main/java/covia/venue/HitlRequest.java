@@ -109,6 +109,8 @@ public final class HitlRequest extends ALatticeComponent<AMap<AString, ACell>>
 	 * @param owner Whose request it is, recorded only when not the caller
 	 * @param agentId The asking agent, or null
 	 * @param sessionId The asking agent's session, or null
+	 * @param route What carried the request, or null when nothing did: venue-internal, as an agent turn's
+	 *        route is ({@link covia.venue.RequestContext#getRoute})
 	 * @param title What is asked, in a line
 	 * @param description More about it, or null
 	 * @param asks The validated asks
@@ -116,7 +118,8 @@ public final class HitlRequest extends ALatticeComponent<AMap<AString, ACell>>
 	 * @param expires When it expires, in ms, or null for never
 	 */
 	public static AMap<AString, ACell> record(Blob id, AString caller, AString owner, AString agentId,
-			Blob sessionId, AString title, AString description, AVector<ACell> asks, long created, Long expires) {
+			Blob sessionId, AVector<ACell> route, AString title, AString description, AVector<ACell> asks, long created,
+			Long expires) {
 		AMap<AString, ACell> record = Attribution.attribute(Maps.of(
 			Hitl.ID, id,
 			Hitl.TITLE, title,
@@ -124,6 +127,7 @@ public final class HitlRequest extends ALatticeComponent<AMap<AString, ACell>>
 			Hitl.STATUS, Hitl.OPEN,
 			Hitl.CREATED, CVMLong.create(created)), caller, owner);
 		if (description != null) record = record.assoc(Hitl.DESCRIPTION, description);
+		if (route != null) record = record.assoc(Fields.ROUTE, route);
 		if (agentId != null) {
 			record = record.assoc(Hitl.AGENT, agentId);
 			if (sessionId != null) record = record.assoc(Fields.SESSION_ID, sessionId);

@@ -83,7 +83,7 @@ public final class Agents extends MapComponent<AString, ACell>
 	 * @return the new agent, or null when {@code id} is taken, by a deleted agent too
 	 */
 	public Agent create(AString id, AMap<AString, ACell> config, ACell state,
-			AMap<AString, ACell> definition, Engine.Source controller) {
+			AMap<AString, ACell> definition, AString controller) {
 		Agent agent = at(id);
 		return agent.initialiseIfAbsent(config, state, definition, null, controller) ? agent : null;
 	}
@@ -97,7 +97,7 @@ public final class Agents extends MapComponent<AString, ACell>
 	 * @return the new agent, or null when {@code id} is taken, by a deleted agent too
 	 */
 	public Agent createFork(AString id, AMap<AString, ACell> config, ACell state,
-			AVector<ACell> timeline, Engine.Source controller) {
+			AVector<ACell> timeline, AString controller) {
 		Agent fork = at(id);
 		return fork.initialiseIfAbsent(config, state, null, timeline, controller) ? fork : null;
 	}

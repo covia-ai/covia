@@ -84,7 +84,7 @@ class JobCapabilityTest {
 		RequestContext creator = RequestContext.ofAgent(alice, Strings.create("worker")).withCaps(Vectors.empty());
 		Job job = engine.jobs().invokeOperation("v/test/ops/never", Maps.empty(), owner);
 		try {
-			AMap<AString, ACell> attributed = job.getData().assoc(Fields.CALLER, creator.getCallerDID()).assoc(Fields.OWNER, alice);
+			AMap<AString, ACell> attributed = job.getData().assoc(Fields.CALLER, creator.getAuthorityDID()).assoc(Fields.OWNER, alice);
 			assertFalse(engine.getAccessControl().canAccessJob(creator, attributed));
 			for (AString ability : new AString[]{Capability.CRUD_READ, Capability.CRUD_WRITE, Capability.CRUD_DELETE}) {
 				RequestContext raw = grant(job, ability);
@@ -122,14 +122,19 @@ class JobCapabilityTest {
 		assertEquals(Strings.create("private result"), job.getOutput());
 	}
 
-	@Test void separateAuthorityDeterminesJobRights() {
+	/** An agent whose controller is in another account has that controller's job rights, not its own account's. */
+	@Test void anAgentsControllerDeterminesItsJobRights() {
 		Job job = engine.jobs().invokeOperation("v/test/ops/echo", Maps.empty(), owner);
 		job.awaitResult(5000);
-		assertNotNull(engine.jobs().getJobData(job.getID(), bob.withAuthorityOf(owner), alice));
-		assertThrows(AuthException.class,
-			() -> engine.jobs().getJobData(job.getID(), owner.withAuthorityOf(bob)));
-		assertNotNull(engine.jobs().getJobData(job.getID(), owner.withAuthorityOf(grant(job, Abilities.JOB_READ))));
-		assertThrows(AuthException.class,
-			() -> engine.jobs().cancelJob(job.getID(), owner.withAuthorityOf(grant(job, Abilities.JOB_READ))));
+		AString bobDID = bob.getAuthorityDID();
+		AString alices = Strings.create("alices");
+		AString bobs = Strings.create("bobs");
+		engine.getVenueState().users().ensure(bobDID).agents().create(alices, null, null, null, alice);
+		engine.getVenueState().users().ensure(alice).agents().create(bobs, null, null, null, bobDID);
+		RequestContext alicesInBobs = engine.context(bobDID, covia.grid.Principals.agentDID(bobDID, alices));
+		RequestContext bobsInAlices = engine.context(alice, covia.grid.Principals.agentDID(alice, bobs));
+		assertNotNull(engine.jobs().getJobData(job.getID(), alicesInBobs, alice), "Bob's agent acts with Alice's authority");
+		assertThrows(AuthException.class, () -> engine.jobs().getJobData(job.getID(), bobsInAlices),
+			"Alice's agent acts with Bob's, which holds nothing of hers");
 	}
 }

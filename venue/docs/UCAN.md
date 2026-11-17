@@ -193,7 +193,7 @@ Abilities follow UCAN's slash-delimited convention with no leading slash. `*` is
 | `admin/user/create` | - | Create an account |
 | `admin/user/delete` | - | Delete an account |
 | `admin/user/read` | - | Read account information |
-| `admin/sudo` | - | Explicitly act in a user namespace; grants no action authority |
+| `admin/sudo` | - | Act as the user, with the user's whole authority (`user:sudo`) |
 | `admin/user/export` | - | Export a user's stored state |
 | `admin/user/import` | - | Import stored state into an empty account |
 | `admin/user/authentication-manage` | - | Manage account authentication |
@@ -526,11 +526,11 @@ value hashes as the native content-addressing scheme.
    credentials follow the same separation.
 
 **Explicit sudo.** `user:sudo {did, operation, input}` is the instruction to
-execute one nested operation in another user's namespace. It requires a
-presented `{with: <did>, can: "admin/sudo"}` grant, plus the nested operation's
-`invoke` and point-of-action grants. The authenticated caller remains the actor;
-only the effective user namespace changes, and the nested context has no ambient
-caller capabilities. A `admin/sudo` grant on an ordinary invocation is inert.
+run one nested operation as another user. It requires a presented
+`{with: <did>, can: "admin/sudo"}` grant, checked once as the call is made, and
+the nested operation then runs with the user's whole authority, the delegate
+its caller (`Engine.sudoContext`, [ADMIN.md](ADMIN.md)). A `admin/sudo` grant
+on an ordinary invocation is inert.
 
 **MCP**: Same separation. Tool call parameters may include grant `ucans`, and
 the enclosing HTTP request carries its authentication credential in
@@ -685,10 +685,9 @@ with reduced authority:
   caller's whole authority.
 
 The explicit `user:sudo` operation is the deliberate boundary: a delegate does
-not carry its own ambient authority into another user's namespace. Its
-authority there is exactly the target user's presented proof chain, while its
-authenticated actor identity remains unchanged for attribution and audience
-checks.
+not carry its own authority, nor the grants it presents, into the call. Within
+it the request is the target user's, and only how it authenticated still
+names the delegate, so acts that need the user in person refuse it.
 
 ### 5.2 Cross-User Access
 
@@ -897,11 +896,11 @@ Two questions must not be conflated, and the context answers them separately:
 
 | Question | Accessor | Used for |
 |---|---|---|
-| **Who acted?** | `ctx.getCallerDID()` | attribution (`caller` on records of calls), delegation audience, granting authority |
+| **Who acted?** | `ctx.getAuthorityDID()` | attribution (`caller` on records of calls), delegation audience, granting authority |
 | **Whose namespace?** | `ctx.getUserDID()` | bare path resolution, workspace, secrets, jobs, inbox, quota |
 
 For every ordinary principal the two are equal, so this is a no-op outside
-agent execution and delegation (`admin/sudo`). For an agent, `w/foo` still means the **owner's** workspace —
+agent execution (a request under `admin/sudo` is the user's own). For an agent, `w/foo` still means the **owner's** workspace —
 that is the namespace it lives and works in — while the agent remains a
 distinct principal. `RequestContext.grantsDenial` canonicalises bare paths
 against `getUserDID()`, applying the same DID to the request resource and to
@@ -919,8 +918,8 @@ anyone else, presents a grant.
 The namespace is never parsed from a name: `Authority.of(did)` makes every DID
 its own namespace, agent-shaped or not. Only the venue puts a principal in
 another namespace, from a relationship it holds — running its own agent
-(`Authority.ofAgent`) or acting on a delegation (`onBehalfOf`, as `admin/sudo`
-does). Whatever records a call records the namespace beside the caller, as
+(`Authority.ofAgent`) or rebuilding work an `admin/sudo` delegate left before
+`admin/sudo` acted as the user (`onBehalfOf`). Whatever records a call records the namespace beside the caller, as
 COG-8 names them: `caller` is the principal that made the call, and `owner`
 the namespace, written only when it differs (`covia.grid.Attribution`). Jobs,
 scheduled events and HITL requests all do, and the
@@ -937,9 +936,9 @@ public principal; the owner comes
 from the record, never from the principal's name. An agent's context carries
 the agent, not a copy of its caps: every point of action reads `config.caps`
 as they stand then, and none once the agent is gone or terminated. `context(owner, principal,
-proofs)` adds proofs it presented, and takes any other principal as a delegate
-of the owner, under the same `admin/sudo` check as a live request; a scheduled
-event fires through it. Every inbound request starts from `context(caller)`
+proofs)` adds proofs it presented, and takes any other principal as a
+delegate whose earlier work it rebuilds, its `admin/sudo` grant checked again
+and bounding it as it did then; a scheduled event fires through it. Every inbound request starts from `context(caller)`
 (`AuthMiddleware.callerContext`), and an agent's step runs as that agent
 (`Engine.stepContext`, §5.4).
 
@@ -994,35 +993,32 @@ context outright, because answering an ask mints a grant *as the inbox owner*:
 an agent reaching it would approve its own request with authority it may not
 have. An agent that needs more asks its human, and only the human can answer.
 A request through an access token answers only with all of the inbox owner's
-authority ([ACCESS_TOKENS.md](ACCESS_TOKENS.md)).
+authority ([ACCESS_TOKENS.md](ACCESS_TOKENS.md)), and only the owner in person
+answers: never a callable's call, a delegate acting as the owner, an
+operation a bot runs, or work a job or scheduled event carries on later
+([VENUE_AUTHORITY.md](VENUE_AUTHORITY.md#how-it-works-today), "In person").
 
 That guard is pinned to identity. An unrestricted agent holds no scope, which
 the `authorityCovers` fast path passes; a scope-based defence would therefore
 be absent on exactly the agent that most needs bounding.
 
-**A request's caller, namespace and authority are separate.** Its caller is
-who acted, its namespace is where its names resolve (with the agent, session
-and task its work belongs to), and its authority is what it may do. A request
-usually acts with its caller's own authority in the namespace it acts in. An
-agent acts with its controller's instead. Where that is a principal from
-another namespace, and always for the agent's harness, its owner's authority
-included, it is a separate authority
-(`RequestContext.withAuthorityOf`): access checks decide under it, on names
-resolved in the agent's namespace (`RequestContext.authorityContext`,
-`inNamespace`). State a namespace keeps with no capability of its own, such as
-its Python instances, dictations and bot list, is reachable only by a request
-acting with that namespace's authority. A recorded job and a scheduled event
-keep a separate authority with the work and act with it again.
+**A request names one acting principal.** It acts with that principal's
+authority, in the namespace its names resolve in (with the agent, session and
+task its work belongs to). An agent acts with its controller's authority,
+narrowed by its caps. Where its controllers lead out of its account, each
+check works out the first controller outside it from the agents' records, as
+it reads their caps, and decides under that controller's authority on names
+resolved in the agent's namespace (`Engine.authorityFrame`,
+`RequestContext.inNamespace`). A recorded job and a scheduled event keep only
+the agent, so work it leaves acts with its controller as it stands.
 
 **Each agent has a controller:** the principal whose authority it acts with,
 as that principal's own request would hold it (`Engine.context`), the owner's
 included: a user's is unrestricted in its namespace, and the public
 principal's is the public caps, none while public access is off. Its harness
-acts with that authority as it stands, and its tool calls with that
-authority narrowed by its `config.caps`. The harness does not hold the
-controller's authority for choosing a controller or configuring agents
-(`Engine.holdsAuthorityOf`), and does not reach what is held under the agent's
-own DID. Read as a delegation, the controller
+is that principal's frame as it stands, and its tool calls act as the agent
+with that authority narrowed by its `config.caps`. The harness does not reach
+what is held under the agent's own DID. Read as a delegation, the controller
 is the issuer, the agent the audience and the caps the capabilities, with
 `"unrestricted"` passing on all the controller has, so an agent never exceeds its
 controller, at any depth (`Engine.agentContext`). Each point of action reads
@@ -1045,28 +1041,26 @@ such as its keyring, stays the agent's.
 It is the agent's owner unless the record stores another (`controller`, shown
 by `agent:info` and `agent:list`). Whoever creates or forks an agent controls
 it, meaning the principal whose authority the request acts with
-(`Engine.actingPrincipal`): a user, an agent itself, or for a `admin/sudo`
-delegate the user it acts for. An input's `controller` names another, whose
+(`Engine.actingPrincipal`): a user, an agent itself, or under `admin/sudo`
+the user the delegate acts as. An input's `controller` names another, whose
 authority the request must hold (`Engine.holdsAuthorityOf`): it is that
 principal or an identity it signs in as, is its owner if it is an agent, or
 acts unscoped in a namespace that is root of it. So a user may name itself or
 its agents, and a capped agent only itself. A request made as an agent holds
 that agent's authority however it is derived, and not the whole authority of a
-controller its caps narrow. A `admin/sudo` delegate, whose scope is its
-presented grants, holds no other principal's authority. An agent such a
-delegate creates is controlled by its target, so grant `agent/create` beside
-`admin/sudo` as you would that user's own authority.
+controller its caps narrow. A delegate under `admin/sudo` acts as its target,
+so holds what the target holds, and an agent it creates is the target's.
 
 **An access token narrows the authority a request acts with.** A request through
 an access token is its issuer's, acting with the issuer's authority narrowed by
-the caps of the token and of each token whose request created it, read at
-each point of action as an agent's caps narrow its controller's
-(`Engine.tokenContext`). It holds the issuer's whole authority only when every
-token on that chain is unrestricted. What it creates keeps the token: an agent
-records it beside its controller (`controllerToken`), whose authority it then
-narrows, and a job or scheduled event keeps it with its authority. A token
-that no longer stands narrows all of these to nothing. Changing a token needs
-the authority it was created with, so a token never widens itself.
+the token's caps, read at each point of action as an agent's caps narrow its
+controller's (`Engine.tokenContext`). It holds the issuer's whole authority
+only when the token is unrestricted. A job or scheduled event it starts keeps
+the token with its authority, and a token that no longer stands narrows that
+work to nothing. Tokens and callables it creates have caps within its own and
+stand without it; only an unrestricted token's request creates an agent.
+Changing a token needs authority covering its caps, so a token never widens
+itself.
 [ACCESS_TOKENS.md](ACCESS_TOKENS.md) is the contract.
 
 **Configuring an agent acts with its controller's authority.** The config
@@ -1080,8 +1074,7 @@ controls, its own included. Changing only the state of an agent its owner contro
 it, and managing its sessions need `agent/write` alone, and its owner may
 always delete it.
 `user:import` and `user:clone` keep a stored controller only when it is the
-target user or one of its agents; any other agent returns to its owner, and
-drops its `controllerToken` with it.
+target user or one of its agents; any other agent returns to its owner.
 
 The config's `caps` and `accepts` take no check of their own. `caps` narrow
 what the agent does and cannot exceed its controller: a list of capabilities
@@ -1099,11 +1092,16 @@ input names the secret or the operation it invokes does.
 
 **The transition operation is the harness.** Each cycle, the run loop invokes
 the agent's transition operation (`config.operation`) as a harness step, under
-the harness context (`Engine.harnessContext`): in the owner's namespace,
-attributed to the agent, and acting with its controller's authority as it
-stands that cycle. An agent controller's is read from its caps at each check,
-and is none once it is gone; a controller whose account is gone stops the
-run. The controller chose the operation when it configured the agent, so it
+the harness context (`Engine.harnessContext`): its controller's frame as it
+stands that cycle, driving the agent's execution (its session, task and
+claim) in the owner's account. So what the harness starts, such as its model
+calls, records the controller as its caller and is kept in the controller's
+account, names in the agent's configuration resolve in the controller's
+namespace, and a cycle has no caller. The agent's own places (`n/`, `c/` and
+`t/`) resolve there only when the controller is in the agent's account; a
+controller in another account names them in full. An agent controller's
+authority is read from its caps at each check, and is none once it is gone; a
+controller whose account is gone stops the run. The controller chose the operation when it configured the agent, so it
 needs no invocation grant in the agent's caps. These configured transition
 and model calls are bound framework calls; their resource checks use the
 controller's current authority. The transition operation defines where the agent acts: it
@@ -1122,14 +1120,16 @@ configured tools' definitions and keeping the session's frames. The switch takes
 agent from the step's input, never its authority, whoever invokes the runtime
 and whatever `config` its input carries. Only the agent's own run or its
 owner, with all of the owner's authority, may make an agent act, and only an
-agent that exists.
+agent that exists. The agent's own run is told by the execution a request
+drives, which the venue gives only to the agent's harness, its acts and the
+work they keep, never by who acts in it.
 
 An external agent (AGENT_LOOP.md §2.2.1) has no transition operation. Asking
 its backend (an A2A endpoint, a Claude Code project, another Covia agent) is
 its harness's work under the same context, since its definition, fixed when it
 was created, chose the backend, so its `config.caps` do not bound it. The
-backend job keeps that authority across a restart (JOBS.md, Kept caller
-context).
+backend job is the controller's, kept in its account, and keeps that authority
+across a restart (JOBS.md, Kept caller context).
 
 **Best for:** Pipeline agents, task workers, scoped automations — anything that
 operates within one user's namespace with restricted permissions.

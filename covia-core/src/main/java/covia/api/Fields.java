@@ -297,8 +297,9 @@ public class Fields {
 
 	// Identity / authorization
 	/** On a record of a call (a job, a scheduled event, a HITL request): the
-	 *  principal that made the call — a user, one of a user's agents
-	 *  ({@code <owner>:g:<id>}) or a {@code admin/sudo} delegate. Written with
+	 *  principal that made the call — a user or one of a user's agents
+	 *  ({@code <owner>:g:<id>}), or a {@code admin/sudo} delegate on a record
+	 *  made before that acted as the user. Written with
 	 *  {@link covia.grid.Attribution}. */
 	public static final StringShort CALLER = Strings.intern("caller");
 	/** On a record of a call: the namespace it belongs to, present only when that
@@ -380,9 +381,6 @@ public class Fields {
 	public static final StringShort ISSUER = Strings.intern("issuer");
 	/** On an access token update: issue a new bearer, so the old one stops working. */
 	public static final StringShort ROTATE = Strings.intern("rotate");
-	/** On an agent created by a request an access token narrowed: that token, which
-	 *  narrows its controller's authority. */
-	public static final StringShort CONTROLLER_TOKEN = Strings.intern("controllerToken");
 
 	// Callables (venue/docs/CALLABLES.md)
 	/** A callable, by reference; in kept authority, the callable whose call left the work running. */

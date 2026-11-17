@@ -284,6 +284,13 @@ so the application decides who reaches them.
 
 ## Identity
 
+`engine.context(did)` is the venue acting for a principal, which never makes
+that principal present. Acts only a user may do in person (answering approval
+requests, `secret:extract`, `user:export`, minting the user's identity token
+or an access token, and the user's own account and sign-in keys) refuse it. For a user the application has authenticated itself,
+use `engine.requestContext(did, null)` or `RequestContext.of(did)`
+([VENUE_AUTHORITY.md](VENUE_AUTHORITY.md#how-it-works-today), "In person").
+
 A `did:key` installation can sign for identities nested below it, such as
 `<did:key>:u:<name>`. To keep its private key inside the venue, store the seed
 as one of the installation's secrets, run `crypto:add-key {"seed":"s/<name>"}`
@@ -304,8 +311,8 @@ identity token through an operation", and HELD_KEYS.md.
 | `Agent`'s `initialise`, `initialiseFromFork` and `putRecord` | `user.agents().create` and `createFork`; a test seeding a raw record writes it through `agent.cursor()` |
 | `agent.updateConfigAndState(config, state)` and the static `Agent.applyStateChange` | `agent.update(null, null, config, state)`; `mergeRunResult` applies a transition's state change |
 | `agent.setError` and `clearError` | `agent.suspend(error)`, which records a fault and suspends the agent; `tryResume` clears it |
-| `agent.getSession(sid)` and `Agent`'s other session shortcuts (`getSessionPending`, `getSessionCycleEpoch`, `ensureSession`, `removeSession`, `hasSessionPending`, `oldestSessionWithPending`) | The session itself, `agent.session(sid)` (`getRecord()`, `pending()`, `cycleEpoch()`), and the agent's sessions, `agent.sessions()` (`create`, `remove`, `hasPending`, `oldestWithPending`) |
-| A job, task or session id read as hex text (`RT.ensureString`): in an agent's records (a task's or timeline entry's `sessionId`, a turn's or queued envelope's `jobId`, a timeline entry's `taskResults` keys), in a job's record (`sessionId`, `mirrorOf`), in an operation's result (`sessionId`, a task operation's `taskId`, an `agent:request` snapshot's `id`, a `job:message` delivery's `id`, a run's `taskResults` keys) or in a live event (`sessionId`, `jobId`, `cycle:start`'s `jobs`) | A Blob: `HexId.parse(cell)` reads one given as a Blob or as text, so it works with an older venue too; in the venue, `Task.sessionId(row)`, `Session.chatJob(envelope)` or `Ids.stored(cell)` |
+| `agent.getSession(sid)` and `Agent`'s other session shortcuts (`getSessionPending`, `getSessionCycleEpoch`, `ensureSession`, `removeSession`, `hasSessionPending`, `oldestSessionWithPending`) | The session itself, `agent.session(sid)` (`getRecord()`, `pending()`, `cycleEpoch()`), and the agent's sessions, `agent.sessions()` (`create`, `remove`, `hasPending`, `oldestWithPending`). `agent.session(sid)` is never null, even for a missing session, so `getSession(sid) != null` becomes `agent.session(sid).getRecord() != null` |
+| A job, task or session id read as hex text (`RT.ensureString`): in an agent's records (a task's or timeline entry's `sessionId`, a turn's or queued envelope's `jobId`, a timeline entry's `taskResults` keys), in a job's record (`sessionId`, `mirrorOf`), in an operation's result (`sessionId`, a task operation's `taskId`, an `agent:request` snapshot's `id`, a `job:message` delivery's `id`, a run's `taskResults` keys) or in a live event (`sessionId`, `jobId`, `cycle:start`'s `jobs`) | A Blob: `HexId.parse(cell)` reads one given as a Blob or as text, so it works with an older venue too. Pass it an `ACell` variable, not a generic call: given `RT.getIn(...)` directly, Java picks `parse(AString)`, which throws `ClassCastException` on a Blob. In the venue, `Task.sessionId(row)`, `Session.chatJob(envelope)` or `Ids.stored(cell)` |
 | `engine.agentEvents().subscribe(owner, agent, sessionId, listener)` and `Event.concerns(sessionId)` taking the session as text | The session as a Blob |
 | A messaging adapter's `ConversationSessions.get` and `put`, `RequestContext.SessionDelivery.accept` and `WebhookInbox.deliver` with sessions and job ids as text | Blobs; a `ConversationSessions` legacy reader gives a Blob |
 | `user.inbox()` keyed by request id in hex (`request`, `get`, `getAll`), `HitlRequest.getID()` and `record` with the id as text, and a record's `id` and `sessionId` as text | Keyed and named by the request's job id as a Blob; `getAll()` is an `Index` |
@@ -313,6 +320,10 @@ identity token through an operation", and HELD_KEYS.md.
 | `boolean AAdapter.configure(config, strict)`, returning `false` to decline | `void configure(config, strict)`: return to accept, throw `ConfigurationException` to refuse ([ADAPTERS.md](ADAPTERS.md)) |
 | `AAdapter.configureModule` and a module's `modules[].config` | Removed: a module adapter takes `adapters.<name>` through `configure`, and one that cannot run on the host fails its `start()` with `UnavailableException` |
 | `Modules.load(engine, path, sha256, config)` | `Modules.load(engine, path, sha256)` |
+| `RequestContext.getCallerDID()` | `getAuthorityDID()`, the one principal a request acts as |
+| `RequestContext.hasSeparateAuthority()` and `authorityContext()` | Removed: a request names one principal, and `engine.authorityFrame(ctx)` gives the frame an agent whose controller is in another account acts with |
+| `RequestContext.onBehalfOf` and `Authority.onBehalfOf` | Removed: acting for another user is `admin/sudo`, a call into that user (`engine.sudoContext`) |
+| `AAdapter.latticeView(ctx)` and `latticeWriteDenial(ctx, path)` | `latticeView(owner, ctx)` and `latticeWriteDenial(owner, ctx, path)`: the view is `owner`'s, and `ctx` is the request's own ([ADAPTERS.md](ADAPTERS.md)) |
 
 ## Upgrading from 0.10.0
 

@@ -120,8 +120,12 @@ class AdminCapabilitiesTest {
 		assertFalse(engine.hasVenueAuthority(mcp, "adapters", Abilities.ADMIN_ADAPTER_MANAGE));
 	}
 
+	/**
+	 * Entering a user under admin/sudo needs that ability on the user, and the
+	 * call then holds the user's whole authority, the delegate its caller.
+	 */
 	@Test
-	void sudoNeedsItsOwnAdminAbilityAndKeepsTargetAndActorSeparate() {
+	void sudoNeedsItsOwnAdminAbilityAndActsAsTheUserWhole() {
 		AKeyPair ownerKey = AKeyPair.generate();
 		AString owner = UCAN.toDIDKey(ownerKey.getAccountKey());
 		AString other = UCAN.toDIDKey(AKeyPair.generate().getAccountKey());
@@ -135,11 +139,23 @@ class AdminCapabilitiesTest {
 			RequestContext ctx = grant(ownerKey, owner.toString(), allowed);
 			RequestContext sudo = engine.sudoContext(ctx, owner);
 			assertEquals(owner, sudo.getUserDID());
-			assertEquals(delegate, sudo.getCallerDID());
-			assertEquals(Vectors.empty(), sudo.getCaps());
+			assertEquals(owner, sudo.getAuthorityDID(), "the user acts");
+			assertEquals(delegate, sudo.getCaller(), "called by the delegate");
+			assertEquals(delegate, sudo.getAuthenticatedDID(), "who is still the one present");
+			assertNull(sudo.getCaps(), "with the user's whole authority");
+			assertNull(sudo.getProofs(), "which the delegate's grants neither bound nor add to");
 			assertThrows(AuthException.class, () -> engine.sudoContext(ctx, other));
-			assertThrows(AuthException.class,
-				() -> engine.requireAuthority(sudo, "w/private", "crud/read"));
+			engine.requireAuthority(sudo, Strings.create("w/private"), Strings.create("crud/read"));
+		}
+	}
+
+	/** Nobody acts as the venue or its public principal through admin/sudo, whatever it holds. */
+	@Test
+	void sudoNeverEntersTheVenueOrThePublicPrincipal() {
+		for (AString target : new AString[] {engine.getDIDString(), engine.publicPrincipal()}) {
+			RequestContext ctx = grant(engine.getKeyPair(), target.toString(), "admin/sudo");
+			assertEquals(Engine.SUDO_NOT_A_USER.formatted(target),
+				assertThrows(AuthException.class, () -> engine.sudoContext(ctx, target)).getMessage());
 		}
 	}
 }

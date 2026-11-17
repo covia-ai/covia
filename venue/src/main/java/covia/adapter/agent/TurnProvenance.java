@@ -97,7 +97,7 @@ final class TurnProvenance {
 		return sb.toString();
 	}
 
-	/** A step's owner that is named but cannot be shown. */
+	/** A step's owner or caller that is named but cannot be shown. */
 	private static final String UNREADABLE_OWNER = "unknown";
 
 	/**
@@ -105,14 +105,16 @@ final class TurnProvenance {
 	 * values that passed their checks; a run of steps folded out of a long
 	 * route; or an entry that could not be read. A step's {@code owner} is whose
 	 * token, binding or callable it is, as shown, {@link #UNREADABLE_OWNER} when
-	 * it names one that cannot be shown, or null when it names none.
+	 * it names one that cannot be shown, or null when it names none. Its
+	 * {@code caller} is whom a callable carried the request for, shown the same
+	 * way.
 	 */
-	record Segment(String adapter, String name, String owner, String sender, String handle, String chat, String kind,
-			String thread, String space, long folded) {
-		static final Segment UNREADABLE = new Segment(null, null, null, null, null, null, null, null, null, 0);
+	record Segment(String adapter, String name, String owner, String caller, String sender, String handle, String chat,
+			String kind, String thread, String space, long folded) {
+		static final Segment UNREADABLE = new Segment(null, null, null, null, null, null, null, null, null, null, 0);
 
 		static Segment folded(long count) {
-			return new Segment(null, null, null, null, null, null, null, null, null, count);
+			return new Segment(null, null, null, null, null, null, null, null, null, null, count);
 		}
 
 		/**
@@ -136,6 +138,7 @@ final class TurnProvenance {
 			List<String> child = new ArrayList<>(List.of("via", "adapter", adapter));
 			add(child, "name", name);
 			add(child, "owner", shownOwner(agentOwner));
+			add(child, "caller", caller);
 			add(child, "sender", sender);
 			add(child, "handle", handle);
 			add(child, "chat", chat);
@@ -160,6 +163,7 @@ final class TurnProvenance {
 			String shown = shownOwner(agentOwner);
 			if (shown != null) sb.append(" of ").append(UNREADABLE_OWNER.equals(shown) ? "unknown owner" : shown);
 			List<String> details = new ArrayList<>();
+			if (caller != null) details.add(UNREADABLE_OWNER.equals(caller) ? "unknown caller" : "caller " + caller);
 			if (sender != null) details.add("sender " + sender + ((handle != null) ? " @" + handle : ""));
 			else if (handle != null) details.add("@" + handle);
 			if (chat != null) details.add(((kind != null) ? kind + " " : "") + "chat " + chat);
@@ -184,7 +188,26 @@ final class TurnProvenance {
 
 	/** The agent's own principal, which turns start from. */
 	static Key self(RequestContext ctx) {
-		return new Key(ctx == null ? null : ctx.getCallerDID(), List.of());
+		return new Key(agentOf(ctx), List.of());
+	}
+
+	/**
+	 * The agent whose turns {@code ctx} renders: the agent whose execution it
+	 * drives, since its harness acts as the agent's controller; outside an
+	 * agent's execution, its caller.
+	 */
+	private static AString agentOf(RequestContext ctx) {
+		if (ctx == null) return null;
+		RequestContext.ExecutionScope execution = ctx.getExecutionScope();
+		return (execution.agentId() == null) ? ctx.getAuthorityDID()
+			: Principals.agentDID(execution.ownerDID(), execution.agentId());
+	}
+
+	/** The account of the agent whose turns {@code ctx} renders ({@link #agentOf}). */
+	private static AString ownerOf(RequestContext ctx) {
+		if (ctx == null) return null;
+		RequestContext.ExecutionScope execution = ctx.getExecutionScope();
+		return (execution.agentId() == null) ? ctx.getUserDID() : execution.ownerDID();
 	}
 
 	/** A turn's key, or null for a turn stored without a caller. */
@@ -196,8 +219,8 @@ final class TurnProvenance {
 	/** How {@code caller} stands to the agent acting under {@code ctx}, from DIDs alone. */
 	static Relationship relationship(Engine engine, RequestContext ctx, AString caller) {
 		if (shownDid(caller) == null) return Relationship.UNKNOWN;
-		AString owner = (ctx != null) ? ctx.getUserDID() : null;
-		AString self = (ctx != null) ? ctx.getCallerDID() : null;
+		AString owner = ownerOf(ctx);
+		AString self = agentOf(ctx);
 		if (engine != null && engine.isVenuePrincipal(caller)) return Relationship.VENUE;
 		if (engine != null && engine.isPublicPrincipal(caller)) {
 			return caller.equals(owner) ? Relationship.ANONYMOUS_OWNER : Relationship.ANONYMOUS;
@@ -257,7 +280,7 @@ final class TurnProvenance {
 
 	/** The agent's owner as a step's owner shows, so its own tokens, bindings and callables go by name alone; null when unknown. */
 	private static String agentOwner(RequestContext ctx) {
-		AString owner = (ctx == null) ? null : ctx.getUserDID();
+		AString owner = ownerOf(ctx);
 		return (owner == null) ? null : shownDid(owner);
 	}
 
@@ -305,23 +328,32 @@ final class TurnProvenance {
 	}
 
 	/**
-	 * Step {@code step} of adapter {@code adapter}: its name and owner, and a
-	 * channel's ids, handle and chat kind. Never other names.
+	 * Step {@code step} of adapter {@code adapter}: its name, owner and caller,
+	 * and a channel's ids, handle and chat kind. Never other names.
 	 */
 	private static Segment shown(String adapter, AMap<AString, ACell> step) {
 		AString kind = RT.ensureString(RT.getIn(step, ChannelAuthentication.K_CHAT, ChannelAuthentication.K_KIND));
 		boolean knownKind = ChannelAuthentication.DIRECT.equals(kind) || ChannelAuthentication.GROUP.equals(kind)
 			|| ChannelAuthentication.CHANNEL.equals(kind);
-		ACell ownerCell = step.get(Fields.OWNER);
-		String owner = (ownerCell == null) ? null
-			: (ownerCell instanceof AString did && shownDid(did) != null) ? shownDid(did) : UNREADABLE_OWNER;
-		return new Segment(adapter, identifier(step.get(Fields.NAME)), owner,
+		return new Segment(adapter, identifier(step.get(Fields.NAME)), principal(step, Fields.OWNER),
+			principal(step, Fields.CALLER),
 			identifier(RT.getIn(step, ChannelAuthentication.K_SENDER, ChannelAuthentication.K_ID)),
 			handle(RT.getIn(step, ChannelAuthentication.K_SENDER, ChannelAuthentication.K_HANDLE)),
 			identifier(RT.getIn(step, ChannelAuthentication.K_CHAT, ChannelAuthentication.K_ID)),
 			knownKind ? kind.toString() : null,
 			identifier(step.get(ChannelAuthentication.K_THREAD)),
 			identifier(RT.getIn(step, ChannelAuthentication.K_SPACE, ChannelAuthentication.K_ID)), 0);
+	}
+
+	/**
+	 * The principal {@code step} names as {@code key}, as shown: null when it
+	 * names none, {@link #UNREADABLE_OWNER} when it names one, null included,
+	 * that cannot be shown, so a recorded principal is never left out.
+	 */
+	private static String principal(AMap<AString, ACell> step, AString key) {
+		if (!step.containsKey(key)) return null;
+		String shown = (step.get(key) instanceof AString did) ? shownDid(did) : null;
+		return (shown != null) ? shown : UNREADABLE_OWNER;
 	}
 
 	private static String identifier(ACell value) {

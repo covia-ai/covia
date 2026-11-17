@@ -28,14 +28,15 @@ there, so it serves only to exercise the rules with a second access point.
   authority may change underneath it: narrowing an agent issuer narrows its
   tokens, and deleting it deletes them. A token with `"unrestricted"` caps has
   all of its issuer's authority, and one with no caps has none.
-- **Created work keeps the token.** What a request through a token creates
-  acts later with the same authority, the token read at the time of action:
-  - jobs it starts and events it schedules (the kept caller context,
-    [JOBS.md](JOBS.md));
-  - agents it creates or forks, whose controller's authority is narrowed by
-    the token (`controllerToken`, shown by `agent:info` and `agent:list`);
-  - tokens it creates, whose `source` is that token, so each token on the
-    chain narrows them.
+- **Work it starts keeps the token.** Jobs a request through a token starts
+  and events it schedules act later with the same authority, the token read
+  at the time of action (the kept caller context, [JOBS.md](JOBS.md)).
+- **What it creates stands on its own.** Tokens and callables a request
+  through a token creates are its issuer's, with caps within what the request
+  may do itself (`Engine.capsDenial`), and keep those caps once the token is
+  gone. An agent's harness acts with all of its controller's authority, which
+  no caps bound, so only an unrestricted token's request creates or forks an
+  agent, and that agent is its issuer's.
 - **What an agent is told.** A request through a token is carried by it: the
   token is a step of the request's route, so a message or task it sends an
   agent records that beside its caller, and the agent's `From` line names the
@@ -46,42 +47,59 @@ there, so it serves only to exercise the rules with a second access point.
 - **Revocation.** Setting a token's caps to `[]`, emptying what an access
   point offers through it, deleting it or letting it expire takes effect at
   the next check, on work it already started too. A token that no longer
-  stands narrows everything it created to nothing. A new token of the same
-  name is another token.
+  stands narrows that work to nothing. A new token of the same name is another
+  token.
 
 ### Acting with a principal's whole authority
 
 Some checks ask whether a request acts with all of a principal's authority
 (`Engine.holdsAuthorityOf`, [UCAN.md](UCAN.md) §5.4). A request through a
-token holds its issuer's whole authority only when every token on its chain
-is unrestricted. A restricted token's request therefore cannot:
+token holds its issuer's whole authority only when the token is
+unrestricted. A restricted token's request therefore cannot:
 
-- name a controller for an agent, or change an agent's config or controller;
+- create or fork an agent, name a controller for one, or change an agent's
+  config or controller;
 - read or manage its user's account (`user:info` of itself, authentication
   keys, export and import);
 - answer HITL asks (`hitl:respond`);
 - make an agent act (`llmagent:chat` or `goaltree:chat` invoked directly).
 
 Whatever its caps, a request through a token never acts for another user
-(`admin/sudo`), never counts as the venue, never reaches state a namespace keeps
-with no capability of its own (such as Python instances and bot lists), and
-cannot create a messaging bot, which acts with its creator's whole authority.
+(`admin/sudo`), never counts as the venue, and cannot create a messaging bot,
+which acts with its creator's whole authority. It reaches what belongs to its
+issuer without a capability, such as the issuer's live dictations, because it
+has the issuer's authority.
 Its reach into another identity's resources, through admissions, presented
 grants or a callable's gate ([CALLABLES.md](CALLABLES.md)), must also be
 covered by its tokens' caps.
 
-**Changing a token** needs its source authority: its issuer's whole authority
-and the chain of tokens that created it. So a request through a token can
-change the tokens it created but not itself, nor a token its issuer created
-directly. Deleting a token only narrows, so it needs no source authority.
+**Changing a token** needs a request that acts with its issuer's authority,
+however a token, callable or agent's caps narrow it (`Engine.actsWithAuthorityOf`;
+a delegate under `admin/sudo` acts as the user), and may itself do all that the token's
+caps allow, as they are and as they become. So a request through a token can
+change any of its issuer's tokens within its own caps, itself included, and
+none wider. Deleting a token only narrows, so it needs neither.
+
+**Handing out a user's bearer needs the user in person.** A request through a
+token a user issued is that user in person
+([VENUE_AUTHORITY.md](VENUE_AUTHORITY.md#how-it-works-today)), so its bearer
+stands for the user's identity. Making such a token, rotating it and reading
+its bearer again each need the user in person: a delegate acting as the user
+under `admin/sudo`, a callable's call and work the venue carries on cannot
+(`Engine.inPersonDenial`). A request through one of the user's tokens is the
+user in person, so it may. An agent's token is never in person, so whatever
+manages it may.
 
 ### What revocation cannot take back
 
 A credential minted while a token was in force outlives it, as it outlives an
-issuer's change of mind: a UCAN issued through `ucan:issue` (bounded by the
-token's caps, which need `grant/<can>`), an identity bearer from
-`auth:identity-token` (which only an unrestricted token can mint), and a grant
-minted by answering a HITL ask.
+issuer's change of mind: a token or callable created through it (within its
+caps), a UCAN issued through `ucan:issue` (bounded by the token's caps, which
+need `grant/<can>`), an identity bearer from `auth:identity-token` (which only
+an unrestricted token can mint), and a grant minted by answering a HITL ask.
+So whoever issues a token decides whether it may create: creating needs a
+token ability (`admin/token/<p>`, `mcp/token`) or `callable/manage` in its
+caps.
 
 ## Capabilities
 
@@ -102,17 +120,17 @@ operation reaches it.
 - **An access point's own operations** reach only tokens accepted at that
   access point alone, so they never touch a token they could not have made.
   A token with any other entry is refused there.
-- **Fetching a kept bearer** also needs the token's source authority.
+- **Fetching a kept bearer** also needs what changing the token needs.
 
 ## Operations
 
 | Operation | Input | Result | Needs |
 |-----------|-------|--------|-------|
 | `v/ops/token/create` | `name`, `access`, `caps?`, `expires?` | the token, with `token` the bearer | `admin/token/<p>` for each access point named |
-| `v/ops/token/update` | `name`, `access?`, `caps?`, `expires?`, `rotate?` | the token; `token` only on rotate | `admin/token/<p>` for each access point before and after, and the token's source authority |
+| `v/ops/token/update` | `name`, `access?`, `caps?`, `expires?`, `rotate?` | the token; `token` only on rotate | `admin/token/<p>` for each access point before and after, and what changing a token needs |
 | `v/ops/token/delete` | `name` | `{name, deleted}` | `admin/token/<p>` for each access point it carries |
 | `v/ops/token/list` | none | `{tokens, total}`, never a bearer | `crud/read` on `x/token` |
-| `v/ops/token/get` | `name` | `{name, token}` | `admin/token/<p>` for each access point and the token's source authority; only while bearers are kept |
+| `v/ops/token/get` | `name` | `{name, token}` | `admin/token/<p>` for each access point and what changing a token needs; only while bearers are kept |
 
 - **Name:** `[a-z0-9-]{1,64}`, unique within a namespace, which a user shares
   with its agents.
@@ -148,7 +166,7 @@ The token adapter's state at `:adapters/token`, which no path reaches:
 tokens:  { <ownerDID>: { <name>: record } }
 bearers: { <SHA3-256 of the bearer, hex>: [<ownerDID>, <name>] }
 
-record: id, issuer, source?, caps?, expires?, created, hash, sealed?,
+record: id, issuer, caps?, expires?, created, hash, sealed?,
         access: { <access point>: entry }
 ```
 
@@ -199,10 +217,10 @@ These keep MCP's own arguments and reach only tokens accepted at MCP alone.
 | Operation | Input | Result | Needs |
 |-----------|-------|--------|-------|
 | `v/ops/mcp/create-token` | `name`, `tools`, `caps?`, `expires?` | the token, with `token` the bearer | `mcp/token` on `x/token/<name>` |
-| `v/ops/mcp/update-token` | `name`, `tools?`, `caps?`, `expires?`, `rotate?` | the token; `token` only on rotate | `mcp/token` and the token's source authority |
+| `v/ops/mcp/update-token` | `name`, `tools?`, `caps?`, `expires?`, `rotate?` | the token; `token` only on rotate | `mcp/token` and what changing a token needs |
 | `v/ops/mcp/delete-token` | `name` | `{name, deleted}` | `mcp/token` on `x/token/<name>` |
 | `v/ops/mcp/list-tokens` | none | `{tokens, total}` of MCP tokens, never a bearer | `crud/read` on `x/token` |
-| `v/ops/mcp/get-token` | `name` | `{name, token}` | `admin/token/mcp` on `x/token/<name>` and the token's source authority; only while bearers are kept |
+| `v/ops/mcp/get-token` | `name` | `{name, token}` | `admin/token/mcp` on `x/token/<name>` and what changing a token needs; only while bearers are kept |
 
 ### `/mcp` with a token
 

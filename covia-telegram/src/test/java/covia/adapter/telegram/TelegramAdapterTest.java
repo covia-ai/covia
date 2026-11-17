@@ -10,6 +10,7 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -993,11 +994,11 @@ public class TelegramAdapterTest {
 
 		run(RequestContext.ofAgent(owner, Strings.create("maker")), "v/ops/telegram/create",
 			Maps.of("name", "made", "token", "s/TG_AGENT", "agent", AGENT));
-		assertEquals(maker, adapter.runner(owner, "made").context().getCallerDID(),
+		assertEquals(maker, adapter.runner(owner, "made").context().getAuthorityDID(),
 			"the bot identifies its senders as the agent, never its owner");
 		adapter.forgetForTest(owner, "made");
 		adapter.rearmForTest();
-		assertEquals(maker, adapter.runner(owner, "made").context().getCallerDID(), "and still after a restart");
+		assertEquals(maker, adapter.runner(owner, "made").context().getAuthorityDID(), "and still after a restart");
 		run(RequestContext.of(owner), "v/ops/telegram/delete", Maps.of("name", "made"));
 	}
 
@@ -1450,6 +1451,25 @@ public class TelegramAdapterTest {
 
 	// ------------------------------------------------------------------ status
 
+	/** The bots {@code ctx} is listed, by name. */
+	private List<AString> listedBots(RequestContext ctx) {
+		AVector<ACell> bots = RT.ensureVector(RT.getIn(run(ctx, "v/ops/telegram/bots", Maps.empty()), TelegramAdapter.K_BOTS));
+		List<AString> names = new ArrayList<>();
+		for (long i = 0; i < bots.count(); i++) names.add(RT.ensureString(RT.getIn(bots.get(i), Fields.NAME)));
+		return names;
+	}
+
+	@Test
+	public void testBotsListsTheBotsTheCallerMayManage() throws Exception {
+		startEcho();
+		AMap<AString, ACell> invoke = convex.auth.ucan.Capability.create(Strings.create("v/ops/"), Strings.create("invoke"));
+		RequestContext blind = RequestContext.ofAgent(owner, Strings.create("blind")).withCaps(Vectors.of(invoke));
+		assertFalse(listedBots(blind).contains(Strings.create(echo)), "an agent its caps keep from managing them sees none of its owner's bots");
+		RequestContext manager = RequestContext.ofAgent(owner, Strings.create("manager")).withCaps(Vectors.of(invoke,
+			convex.auth.ucan.Capability.create(Strings.create("telegram/"), TelegramAdapter.ABILITY_MANAGE)));
+		assertTrue(listedBots(manager).contains(Strings.create(echo)), "one whose caps let it manage them sees them");
+	}
+
 	@Test
 	public void testBotsListsOnlyTheCallersBots() throws Exception {
 		startEcho();
@@ -1469,9 +1489,9 @@ public class TelegramAdapterTest {
 		}
 		assertTrue(found, "owner sees their bot: " + mine);
 
-		ACell theirs = run(RequestContext.of(other), "v/ops/telegram/bots", Maps.empty());
-		assertEquals(0L, RT.ensureVector(RT.getIn(theirs, TelegramAdapter.K_BOTS)).count(),
-			"another user sees no bots they don't own");
+		// Bots declared for the venue's public principal are listed to whoever the public scope lets manage them
+		assertFalse(listedBots(RequestContext.of(other)).contains(Strings.create(echo)),
+			"another user sees no bot of the owner's it may not manage");
 
 		ACell all = run(engine.venueContext(), "v/ops/telegram/bots", Maps.empty());
 		assertTrue(RT.ensureVector(RT.getIn(all, TelegramAdapter.K_BOTS)).count() >= 1, "the venue sees every bot");

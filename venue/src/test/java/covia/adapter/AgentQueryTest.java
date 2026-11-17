@@ -29,7 +29,6 @@ import covia.api.Fields;
 import covia.exception.JobFailedException;
 import covia.exception.UnavailableException;
 import covia.grid.Job;
-import covia.grid.Principals;
 import covia.grid.Status;
 import covia.venue.Agent;
 import covia.venue.Engine;
@@ -124,7 +123,7 @@ public class AgentQueryTest {
 
 	private Agent createSummarisable(String runtime) {
 		Agent agent = create(runtime, Maps.empty());
-		agent.sessions().create(SUMMARY_SESSION, owner.getCallerDID(), null);
+		agent.sessions().create(SUMMARY_SESSION, owner.getAuthorityDID(), null);
 		addSummaryTurn(agent, "initial discussion");
 		return agent;
 	}
@@ -191,7 +190,7 @@ public class AgentQueryTest {
 	private void sessionQuerySnapshotsRootHistoryAndLeavesLiveWorkAlone(String runtime) {
 		Agent agent = create(runtime, Maps.empty());
 		Blob sid = Blob.fromHex("0123456789abcdef");
-		agent.sessions().create(sid, owner.getCallerDID(),
+		agent.sessions().create(sid, owner.getAuthorityDID(),
 			Maps.of("note", Maps.of("text", "session-only context")));
 		AMap<AString, ACell> session = agent.session(sid).getRecord();
 		AMap<AString, ACell> root = GoalTreeContext.createFrame("root question");
@@ -206,7 +205,7 @@ public class AgentQueryTest {
 		session = session.assoc(Fields.FRAMES, Vectors.of(root, child));
 		agent.cursor().set(agent.getRecord().assoc(Agent.KEY_SESSIONS,
 			agent.getSessions().assoc(sid, session)));
-		agent.appendSessionPending(sid, owner.getCallerDID(), null,
+		agent.appendSessionPending(sid, owner.getAuthorityDID(), null,
 			Maps.of(Fields.MESSAGE, "queued live message"), false);
 		assertTrue(agent.session(sid).beginCycle(Blob.fromHex("1234"), null, 0));
 		ACell before = agent.getRecord();
@@ -261,13 +260,14 @@ public class AgentQueryTest {
 		assertThrows(JobFailedException.class, () -> denied.awaitResult(5000));
 		assertNull(model.seenInput, "denial precedes the model call");
 		agent.cursor().set(agent.getRecord().assoc(Agent.KEY_CONFIG,
-			agent.getConfig().assoc(Fields.ACCEPTS, Vectors.of(other.getCallerDID()))));
+			agent.getConfig().assoc(Fields.ACCEPTS, Vectors.of(other.getAuthorityDID()))));
 		ACell before = agent.getRecord();
 		engine.jobs().invokeOperation("v/ops/agent/query", input,
 			other.withSessionId(Blob.fromHex("abcd")).withTaskId(Blob.fromHex("5678")))
 			.awaitResult(5000);
-		assertEquals(Principals.agentDID(owner.getUserDID(), AGENT), model.seenContext.getCallerDID());
+		assertEquals(owner.getUserDID(), model.seenContext.getAuthorityDID(), "the model is called in the controller's frame");
 		assertEquals(owner.getUserDID(), model.seenContext.getUserDID());
+		assertEquals(AGENT, model.seenContext.getAgentId(), "driving the agent's execution, not the asker's");
 		assertNull(model.seenContext.getSessionId());
 		assertNull(model.seenContext.getTaskId());
 		assertNull(model.seenContext.getProofs());
@@ -350,14 +350,14 @@ public class AgentQueryTest {
 	public void concurrentSessionChangesSurviveQueryCompletion() throws Exception {
 		Agent agent = create("llmagent", Maps.empty());
 		Blob sid = Blob.fromHex("12345678");
-		agent.sessions().create(sid, owner.getCallerDID(), null);
+		agent.sessions().create(sid, owner.getAuthorityDID(), null);
 		CompletableFuture<ACell> held = new CompletableFuture<>();
 		model.reply = input -> held;
 		Job job = engine.jobs().invokeOperation("v/ops/agent/query",
 			Maps.of(Fields.AGENT_ID, AGENT, Fields.MESSAGE, "query question",
 				Fields.SESSION_ID, sid.toHexString()), owner);
 		assertTrue(model.entered.await(5, TimeUnit.SECONDS));
-		agent.appendSessionPending(sid, owner.getCallerDID(), null,
+		agent.appendSessionPending(sid, owner.getAuthorityDID(), null,
 			Maps.of(Fields.MESSAGE, "arrived during query"), false);
 		ACell afterConcurrentWrite = agent.getRecord();
 		held.complete(Maps.of("role", "assistant", "content", "answer"));
@@ -471,7 +471,7 @@ public class AgentQueryTest {
 			"requesting steps cannot reconstruct an unsaved trace or change the cached result");
 		assertEquals(1, model.invocations.get(), "cache hits do not invoke the model");
 		assertEquals(afterFirst, agent.getRecord(), "cache hits do not update any timestamp");
-		agent.sessions().create(Blob.fromHex("9876"), owner.getCallerDID(), null);
+		agent.sessions().create(Blob.fromHex("9876"), owner.getAuthorityDID(), null);
 		ACell withOtherSession = agent.getRecord();
 		assertEquals(first, summarise(false).awaitResult(5000));
 		assertEquals(1, model.invocations.get(), "unrelated sessions do not invalidate the summary");
@@ -572,7 +572,7 @@ public class AgentQueryTest {
 		model.reply = input -> { started.complete(input); return held; };
 		Job job = summarise(false);
 		started.get(5, TimeUnit.SECONDS);
-		agent.appendSessionPending(SUMMARY_SESSION, owner.getCallerDID(), null,
+		agent.appendSessionPending(SUMMARY_SESSION, owner.getAuthorityDID(), null,
 			Maps.of(Fields.MESSAGE, "arrived during summarisation"), false);
 		addSummaryTurn(agent, "new conversation during summarisation");
 		ACell afterConcurrentWrite = agent.session(SUMMARY_SESSION).getRecord().dissoc(Agent.KEY_SUMMARIES);

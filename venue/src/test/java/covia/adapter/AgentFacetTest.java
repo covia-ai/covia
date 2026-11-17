@@ -184,7 +184,7 @@ class AgentFacetTest {
             Principals.agentDID(ctx.getUserDID(), Strings.create("creator")));
         engine.jobs().invokeOperation("v/ops/agent/create",
             Maps.of(Fields.AGENT_ID, "managed", Agent.KEY_AGENT, facet()), creator).awaitResult(5000);
-        assertEquals(creator.getCallerDID(), agent("managed").getController());
+        assertEquals(creator.getAuthorityDID(), agent("managed").getController());
         Job denied = invoke("chat", Maps.of(Fields.AGENT_ID, "managed", Fields.MESSAGE, Strings.create("hello")));
         assertEquals(Status.FAILED, denied.getStatus());
         assertEquals(1, probe.starts.get());

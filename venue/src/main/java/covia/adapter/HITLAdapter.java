@@ -194,7 +194,7 @@ public class HITLAdapter extends AAdapter {
 	// ========== hitl:request — validate, authorise, deliver, park ==========
 
 	private void handleRequest(Job job, RequestContext ctx, ACell input) {
-		AString caller = ctx.getCallerDID();
+		AString caller = ctx.getAuthorityDID();
 		if (caller == null) throw new AuthException("Authentication required for HITL requests");
 
 		AString target = RT.ensureString(RT.getIn(input, Hitl.USER));
@@ -216,7 +216,7 @@ public class HITLAdapter extends AAdapter {
 		long nowMs = engine.currentTimestamp().longValue();
 		Blob id = job.getID();
 		AMap<AString, ACell> record = HitlRequest.record(id, caller, ctx.getUserDID(), ctx.getAgentId(),
-			ctx.getSessionId(), title, RT.ensureString(RT.getIn(input, Hitl.DESCRIPTION)), asks, nowMs,
+			ctx.getSessionId(), ctx.getRoute(), title, RT.ensureString(RT.getIn(input, Hitl.DESCRIPTION)), asks, nowMs,
 			(timeoutSecs == null) ? null : nowMs + timeoutSecs * 1000);
 
 		final AString targetDID = target;
@@ -390,10 +390,11 @@ public class HITLAdapter extends AAdapter {
 	 *  checked against the caller's grant scope AND (cross-user) their presented
 	 *  proofs. Proximity relaxes friction here, not authorisation: a foreign
 	 *  target still needs a delegation. The family is that of the authority
-	 *  the request acts with, which for an agent's harness may be its
-	 *  controller's. */
+	 *  the request acts with, which for an agent whose controllers lead out of
+	 *  its account is the first controller outside it
+	 *  ({@link covia.venue.Engine#authorityFrame}). */
 	private void requireDeliverable(RequestContext ctx, AString caller, AString target) {
-		if (ctx.authorityContext().relationTo(target).isSameUser()) return;
+		if (engine.authorityFrame(ctx).relationTo(target).isSameUser()) return;
 		AString resource = Strings.create(target + "/h/");
 		// A foreign inbox is a local cross-user resource: enter the common gate
 		// once so public policy/proofs and any delegated caveats are evaluated
@@ -424,7 +425,7 @@ public class HITLAdapter extends AAdapter {
 		// agent's scope. So the gate is on identity, not on scope.
 		if (ctx.isSubPrincipal()) {
 			throw new AuthException("Agents cannot answer HITL requests: "
-				+ ctx.getCallerDID() + " would be responding on behalf of "
+				+ ctx.getAuthorityDID() + " would be responding on behalf of "
 				+ ctx.getUserDID() + ", and an approved ask issues a capability grant. "
 				+ "Only the human who owns the inbox can answer.");
 		}
@@ -435,6 +436,10 @@ public class HITLAdapter extends AAdapter {
 		// For the same reason, only a request with all of that user's authority
 		// answers: not one an access token narrows to less.
 		if (!engine.holdsAuthorityOf(ctx, caller)) throw new AuthException(ANSWER_NEEDS_WHOLE_AUTHORITY);
+		// And only the human in person: not a callable's call, a delegate acting
+		// for the user, or work the venue carries on later
+		String notInPerson = engine.inPersonDenial(ctx);
+		if (notInPerson != null) throw new AuthException(notInPerson);
 		ACell given = RT.getIn(input, Hitl.ID);
 		if (given == null) throw new InvalidInputException("id is required");
 		// A request's id is its job's: as a Blob, or in hex with or without 0x

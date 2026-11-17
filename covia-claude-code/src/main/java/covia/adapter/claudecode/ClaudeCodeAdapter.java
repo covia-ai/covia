@@ -702,7 +702,7 @@ public class ClaudeCodeAdapter extends ARemoteAgentAdapter<RemoteInteraction> im
 				s = null;
 			}
 			if (s == null) {
-				s = new ClaudeSession(this, plan.project(), plan.options(), plan.resumeId(), ctx.getCallerDID());
+				s = new ClaudeSession(this, plan.project(), plan.options(), plan.resumeId(), ctx.getAuthorityDID());
 				register(s);
 			}
 		}
@@ -994,7 +994,7 @@ public class ClaudeCodeAdapter extends ARemoteAgentAdapter<RemoteInteraction> im
 		if (p == null) throw new NotFoundException("Unknown session: " + id, id);
 		requireProjectAccess(ctx, p);
 		boolean wasLive = s.isLive();
-		s.stop("requested by " + ctx.getCallerDID());
+		s.stop("requested by " + ctx.getAuthorityDID());
 		return s.status().assoc(K_STOPPED, CVMBool.create(wasLive));
 	}
 
@@ -1047,7 +1047,7 @@ public class ClaudeCodeAdapter extends ARemoteAgentAdapter<RemoteInteraction> im
 			writePath(REGISTRY_PATH + "/" + name, spec.record());
 			runtimeProjects.put(name, spec);
 		}
-		log.info("Claude Code project '{}' created by {} at {}", name, ctx.getCallerDID(), spec.path());
+		log.info("Claude Code project '{}' created by {} at {}", name, ctx.getAuthorityDID(), spec.path());
 		return spec.describe(engine);
 	}
 
@@ -1072,7 +1072,7 @@ public class ClaudeCodeAdapter extends ARemoteAgentAdapter<RemoteInteraction> im
 			byId.values().removeAll(victims);
 		}
 		for (ClaudeSession s : victims) s.stop("project deleted");
-		log.info("Claude Code project '{}' deleted by {}", name, ctx.getCallerDID());
+		log.info("Claude Code project '{}' deleted by {}", name, ctx.getAuthorityDID());
 		return Maps.of(Fields.NAME, Strings.create(name), K_DELETED, CVMBool.TRUE);
 	}
 

@@ -62,13 +62,13 @@ class HeldKeySigningTest {
 		AMap<AString, ACell> claims = identityToken(root);
 		AString token = Strings.create(engine.resolveSecret("s/id", root));
 		assertNotNull(JWT.verifyPublic(token, identity.getAccountKey()));
-		assertEquals(root.getCallerDID(), claims.get(JWT.SUB));
+		assertEquals(root.getAuthorityDID(), claims.get(JWT.SUB));
 		// An identity nested below the root needs no key ability for its own token.
 		RequestContext nested = RequestContext.of(Strings.create(root.getUserDID() + ":u:alice"));
 		engine.getVenueState().users().ensure(nested.getUserDID());
 		claims = identityToken(nested);
 		assertNotNull(JWT.verifyPublic(Strings.create(engine.resolveSecret("s/id", nested)), identity.getAccountKey()));
-		assertEquals(nested.getCallerDID(), claims.get(JWT.SUB));
+		assertEquals(nested.getAuthorityDID(), claims.get(JWT.SUB));
 	}
 
 	@Test void aGrantSignedWithAHeldKeyIsRootedInThatKey() {

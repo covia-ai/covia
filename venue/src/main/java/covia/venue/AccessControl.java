@@ -37,8 +37,8 @@ public class AccessControl {
 			return owner.equals(ctx.getUserDID()) && isOwnerOutright(ctx) && !ctx.isNarrowed();
 		AString resource = JobManager.resource(owner, id);
 		AString destination = Strings.create(engine.config().getBaseUrl());
-		RequestContext authority = ctx.authorityContext();
-		if (!owner.equals(authority.getUserDID()) && !owner.equals(authority.getCallerDID())
+		RequestContext authority = engine.authorityFrame(ctx);
+		if (!owner.equals(authority.getUserDID()) && !owner.equals(authority.getAuthorityDID())
 				&& !engine.crossUserAllows(ctx, resource, ability, destination)) return false;
 		return engine.authorityCovers(ctx, resource, ability, destination);
 	}
@@ -66,12 +66,12 @@ public class AccessControl {
 
 	/**
 	 * Whether the request acts with its namespace owner's whole authority: the
-	 * authority it acts with ({@link RequestContext#authorityContext}) is that
-	 * owner's, unscoped. A request acting with a separate authority is the owner
-	 * outright only when that authority is.
+	 * authority it acts with ({@link Engine#authorityFrame}) is that owner's,
+	 * unscoped. An agent whose authority comes from another account is never
+	 * its owner outright.
 	 */
-	private static boolean isOwnerOutright(RequestContext ctx) {
-		RequestContext authority = ctx.authorityContext();
+	private boolean isOwnerOutright(RequestContext ctx) {
+		RequestContext authority = engine.authorityFrame(ctx);
 		return authority.getCaps() == null && ctx.getUserDID().equals(authority.getUserDID());
 	}
 
@@ -84,7 +84,7 @@ public class AccessControl {
 	 * call, whose caller is only its invoker.
 	 */
 	private static boolean madeItFor(RequestContext ctx, AMap<AString, ACell> record) {
-		AString caller = ctx.getCallerDID();
+		AString caller = ctx.getAuthorityDID();
 		return !ctx.isNarrowed() && !caller.equals(ctx.getUserDID()) && caller.equals(Attribution.caller(record));
 	}
 

@@ -803,16 +803,6 @@ code execution. Its design, and the redesign proposed for it, are in
           "input": { "type": "object" },
           "output": { "type": "object" }
         }
-      },
-      "instances": {
-        "maxPerUser": 8,
-        "maxTotal": 128,
-        "templates": {
-          "health-session": {
-            "script": "/opt/getmine/python/health_session.py",
-            "functions": ["add_reading", "summary", "reset"]
-          }
-        }
       }
     }
   }
@@ -832,41 +822,21 @@ settings as the adapter installs, so `adapter/configure` refuses any change to
 them while it is installed: change them here and restart the venue.
 
 Running Python is the operator's, since the code runs in the venue process
-with the venue's power. Each configured function, and creating or calling an
-instance, needs `admin/execute/python` on the venue resource that names the
-code: `<venueDID>/python/operations/<id>` for a configured function and
-`<venueDID>/python/templates/<template>` for a template's instances. The venue
-and its unrestricted agents hold it. The operator lets a user run one
-function, one template or all of the venue's Python (`<venueDID>/python`) with
-a UCAN the venue issues to that user, which the user presents with its
-requests ([ADMIN.md](ADMIN.md#current-venue-level-admin-functions)). Listing
-and closing one's own instances need no grant.
+with the venue's power. Each configured function needs `admin/execute/python`
+on the venue resource that names it, `<venueDID>/python/operations/<id>`. The
+venue and its unrestricted agents hold it. The operator lets a user run one
+function or all of the venue's Python (`<venueDID>/python`) with a UCAN the
+venue issues to that user, which the user presents with its requests
+([ADMIN.md](ADMIN.md#current-venue-level-admin-functions)). To offer a
+function to others without a grant, the venue publishes it as a callable,
+which decides who may call it and with what caps
+([CALLABLES.md](CALLABLES.md)).
 
-The optional `instances` object separately opts the operator into stateful,
-caller-managed Python namespaces. It installs `create`, `list`, `call`, and
-`close` operations under `v/ops/python/instances/`. `create` accepts a configured
-template name; `call` accepts an instance `id`, an allowlisted `function`, and an
-optional `args` vector of positional Convex values. The create operation's JSON
-Schema advertises the configured template names, so MCP clients can discover
-them without a separate host-filesystem API. Create and list results include the
-instance's allowed `functions`, making the subsequent call surface discoverable.
-
-Instance ownership follows the effective venue user (`RequestContext.getUserDID`),
-while `createdBy` records the authenticated caller DID. This means an agent
-sub-principal and its owner share the owner's instance namespace without losing
-attribution. Other users receive the same not-found result whether an ID is
-absent or belongs to someone else. The venue's synthetic public principal is a
-shared authorization namespace, not an authenticated identity, and is always
-rejected for instance management even if public invocation is configured.
-Instances are process-local, disappear on restart, and are closed automatically
-during venue shutdown. `maxPerUser` (default 8) and `maxTotal` (default 128)
-bound retained native state.
-
-Callers never provide source, script paths, or unrestricted global names. The
-operator configures each template and must explicitly list its callable
-functions. Generic invocation of these management operations additionally
-checks `invoke` on the operation reference; bound calls retain their action checks. Omit `instances` entirely to expose none
-of this management surface.
+Callers never provide source, script paths or global names: the operator
+configures each function. A config that still names `instances`, which earlier
+releases used for per-user copies of a template, is refused with a message
+saying what replaces it: configure each function under `operations`, and offer
+it to others through a callable.
 
 Python is a separate loadable module and is not present in `covia.jar` or the
 standard Docker image. Listing the module enables it;
@@ -1735,9 +1705,9 @@ key there whose private half nobody ever sees. Name a held key by its
 `did:key`, multibase key or `0x` account key, as in
 `sign {"key":"did:key:z6Mk…","data":"0x…"}`, or another holder's as
 `<did>/x/crypto/keys/<key>`. Each use needs its `key/…` ability on the key by the
-standard capability rules: your own authority covers your keyring, and caps,
-`admin/sudo` and grants work as for any resource, so a grant of `*` over a
-namespace includes its keys. An agent has a keyring of its own, under its own
+standard capability rules: your own authority covers your keyring, a
+delegate acting as you under `admin/sudo` included, and caps and grants work
+as for any resource, so a grant of `*` over a namespace includes its keys. An agent has a keyring of its own, under its own
 DID, which goes when the agent is deleted. A phrase kept with
 `generate-mnemonic {"keyring":true}` derives keys only into its holder's
 keyring. A did:key that holds its own key signs `auth:identity-token` for
@@ -2499,9 +2469,11 @@ Operations:
   once and kept, then those still being spoken, decoded again as they grow,
   and the seconds since speech was last heard, for an app that ends on a long
   pause. With `end` the rest settles, a short last word such as a lone "go"
-  heard together with the stretch before it, and the dictation closes. Only its
-  caller may feed it, one left unfed for two minutes is dropped, and nothing is
-  stored.
+  heard together with the stretch before it, and the dictation closes. It
+  belongs to the principal that opened it: only a request with that
+  principal's authority feeds it, its access tokens included, but not its
+  agents or another user. One left unfed for two minutes is dropped, and
+  nothing is stored.
 
 A transcript lives in the operation's Job like any other result. Provider
 failures fail the Job; nothing is retried.
@@ -2976,7 +2948,10 @@ never an operation parameter or public setting. `bots` returns the exact
 callback path, or the connection state for a Socket Mode binding; config
 bindings use `c-<name>`, runtime bindings an opaque owner-specific name. Runtime creation infers the owner from the caller and
 requires `<provider>/manage`; sends require `<provider>/send` on the binding,
-and WhatsApp downloads `whatsapp/download`.
+and WhatsApp downloads `whatsapp/download`. `bots` lists each binding the
+request may manage (`<provider>/manage` on `<owner>/<provider>/<name>`), by
+its own authority, its agent's or token's caps or a grant it presents, and
+every binding to the venue.
 
 Senders are identified as in
 [Who a chat message comes from](#who-a-chat-message-comes-from). Both fail
@@ -3424,8 +3399,8 @@ placeholder) or the operation it invokes (an operation's `secretKey` default,
 an MCP bridge's `auth`). A plain `s/NAME` is the caller's own secret. A user
 holds the ability over its own secrets and may send them anywhere the SSRF
 guard allows; an agent holds it as far as its caps reach, and its harness as
-far as its controller's authority does (UCAN.md §5.4); a delegate acting for
-the user (`admin/sudo`) needs a grant like anyone else. Another
+far as its controller's authority does (UCAN.md §5.4); a delegate acting as
+the user (`admin/sudo`) uses them as the user does. Another
 principal's secret is named as `<did>/s/NAME` and needs a `secret/use` grant
 from its owner, which may be bound to a destination: a UCAN whose capability
 carries `nb: {url: "https://api.example/"}` lets the holder use the secret

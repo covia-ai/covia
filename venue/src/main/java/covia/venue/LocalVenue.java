@@ -58,14 +58,14 @@ public class LocalVenue extends Venue {
 	 */
 	public void setRequestContext(RequestContext requestContext) {
 		this.requestContext = requestContext;
-		if (requestContext != null) setUser(requestContext.getCallerDID());
+		if (requestContext != null) setUser(requestContext.getAuthorityDID());
 	}
 
 	/** Builds the request context for this venue's user, carrying any authority. */
 	private RequestContext context() {
 		if (requestContext != null) return requestContext;
 		if (getUser() == null) return RequestContext.ANONYMOUS;
-		return engine.context(getUser()).withProofs(proofs);
+		return engine.requestContext(getUser(), null).withProofs(proofs);
 	}
 
 	@Override

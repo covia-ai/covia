@@ -300,7 +300,7 @@ public class A2A extends ACoviaAPI {
 
 	/** True for the venue's public (unauthenticated) caller identity, per AuthMiddleware. */
 	private boolean isAnonymousCaller(RequestContext rctx) {
-		AString caller = rctx.getCallerDID();
+		AString caller = rctx.getAuthorityDID();
 		return caller == null || engine().isPublicPrincipal(caller);
 	}
 
@@ -790,8 +790,9 @@ public class A2A extends ACoviaAPI {
 		}
 		if (ids == null || ids.isEmpty()) return List.of();
 
-		String ownerDid = rctx.getCallerDID().toString();
-		User user = engine().getVenueState().users().user(rctx.getCallerDID());
+		// The agents listed are those of the request's account
+		String ownerDid = rctx.getUserDID().toString();
+		User user = engine().getVenueState().users().user(rctx.getUserDID());
 		List<AgentSkill> skills = new ArrayList<>((int) ids.count());
 		for (long i = 0; i < ids.count(); i++) {
 			AString agentId = RT.ensureString(ids.get(i));

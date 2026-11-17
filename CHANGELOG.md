@@ -18,22 +18,32 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Universal Job tools (`job:status`, `result`, `cancel`, `pause`, `resume`, `message`) manage local and remote work independently of its execution adapter; agent skills use them and existing Grid Job tools remain compatible.
 
 - Access tokens: any user or agent can create a scoped bearer that acts with its issuer's authority within the token's caps and is accepted only at the access points it names; the `token` adapter keeps them (`token:create`, `update`, `delete`, `list`, `get`, needing `admin/token/<access point>` on `x/token/<name>`), and `adapters.token.keepRawTokens` keeps bearers to read again; a user sees its tokens, never their bearers, at `x/token`.
-- An agent is told what carried each message or task to it: the access token, messaging bot, callable or scheduler, each named in its `From` line with its owner when that is not the agent's owner, and an unreadable record never reads as direct (#709).
+- An agent is told what carried each message or task to it: the access token, messaging bot, callable or scheduler, each named in its `From` line with its owner when that is not the agent's owner and a callable with who called it, and an unreadable record never reads as direct; an approval request records the same route (#709).
 - New agent turns no longer show a bot message's `authentication` record in `agent:history` or the agent timeline; the `From` line still names the bot, sender and chat.
 - MCP tokens: access tokens accepted at the venue's `/mcp` alone, offering chosen operations as tools, made and managed with `mcp/token` (`mcp:create-token`, `update-token`, `delete-token`, `list-tokens`, `get-token`); emptying its caps, deleting it or its expiry revokes one.
-- Callables: a user, agent or the venue publishes an operation for others to call, run with the publisher's authority within fixed caps in the publisher's namespace (`callable:create`, `update`, `delete`, `list`, `call`, needing `callable/manage`); callers hold `callable/call` or pass a gate operation the publisher chooses, such as `v/ops/callable/gates/anyone` or `gates/callers`; a user sees its callables at `x/callable`.
+- Callables: a user, agent or the venue publishes an operation for others to call, run as the publisher within fixed caps in the publisher's namespace, so the jobs and events a call starts are the publisher's (`callable:create`, `update`, `delete`, `list`, `call`, needing `callable/manage`); callers hold `callable/call` or pass a gate operation the publisher chooses, such as `v/ops/callable/gates/anyone` or `gates/callers`; a call may call callables; a user sees its callables at `x/callable`.
+- Caps given to an access token or callable lie within what the request giving them may do itself, so a token's request or a call creates tokens and callables within its own caps, which keep them once it is gone; changing or reading one again needs authority covering its caps, and only an unrestricted token or call creates or forks an agent.
 - `adapters.convex.timeoutMillis` sets how long `convex:query` and `convex:transact` wait for the peer's result; the default is the Convex client's own, 20 seconds.
 - `venue:adapter/restart` stops an enabled adapter, offers it its configuration again and starts it; `venue:adapters` lists each adapter's `status` and a failed adapter's `reason`.
 
 ### Changed
 
-- Running Python is the operator's: each configured function, and creating or calling an instance, needs `admin/execute/python` on `<venue DID>/python/operations/<id>` or `<venue DID>/python/templates/<template>`, which the venue holds and can grant to a user.
+- Answering an approval request, `secret:extract`, `user:export`, `user:clone` from one's own account and reading or changing one's own sign-in keys need the user in person: work a job or scheduled event carries on later, and an operation a bot runs, can no longer do them.
+- A live dictation belongs to the principal that opened it: its access tokens feed it, its agents and other users do not. The messaging adapters' `bots` lists each bot the request may manage (`<adapter>/manage` on `<owner>/<adapter>/<name>`), so an agent sees its owner's bots only when its caps allow managing them.
+- Running Python is the operator's: each configured function needs `admin/execute/python` on `<venue DID>/python/operations/<id>`, which the venue holds and can grant to a user.
 - An adapter that fails to start, at launch, enable or restart, including one that refuses a setting in its `adapters.<name>` block or fails to install, no longer stops the venue: it stays enabled but failed and is treated as stopped, its operations refused as not running, until restarted.
 - A disabled adapter is offered its settings and installed at launch, so it recovers its own unfinished jobs: an agent's queued requests survive a launch with the agent adapter disabled, and enabling the agent adapter wakes agents with queued work. At shutdown a stopped adapter's jobs go to that adapter; pause and resume are refused for its jobs, as messages are.
 - Configuring and installing an adapter start nothing: Python scripts load, speech models are fetched on a settings change, and Claude Code's idle-session reaper runs only once the adapter has started, so a disabled adapter does none of these.
 - A `venue:adapter/configure` change the adapter refuses with an error is reverted to its previous configuration.
 - A scheduled fire's job is recorded in the same commit as its claim, and a remote agent turn's backend job with the turn's link to it, so a restart never leaves a failed job for a fire that then runs again, nor a backend job its turn has no record of.
 - A P2P node that cannot launch, such as on a port in use, is unavailable rather than a configuration error.
+- `admin/sudo` (`user:sudo`) is a call into the user: the nested operation runs with the user's whole authority, what it does and makes, such as jobs, events and agents, is the user's, and the delegate's grants no longer bound it. Entering is checked once, whatever request makes it.
+- `user:sudo` refuses the venue's own DID and its public principal as targets.
+- Minting a user's identity token (`auth:identity-token`) needs the user in person, so neither a delegate under `admin/sudo` nor work carried on later can.
+- Making, rotating or reading the bearer of an access token a user issues needs the user in person, since a request through it is the user in person: a delegate under `admin/sudo`, a callable's call and work carried on later cannot.
+- `auth:whoami` adds `authenticatedAs` where the request authenticated as another principal than its caller, such as a delegate under `admin/sudo`, and audit events add `authenticated` for the same.
+- An agent whose controller is in another account is the principal its acts name: a callable it calls records it as the caller and a dictation it opens is its own, and work it leaves acts with its controller as it stands, not the one it started with. One whose controllers lead back to it through another account acts with no authority.
+- An agent's harness runs in its controller's frame: what it starts, such as its model calls and an external agent's backend job, records the controller as its caller in the controller's account, and names in the agent's configuration resolve in the controller's namespace; the agent's tool calls still run as the agent.
 
 - Adapters refuse settings with a configuration error, from the venue config and from `venue:adapter/configure` alike; anything else an adapter's `configure` throws, a module adapter's `IllegalArgumentException` included, is reported as that adapter's fault rather than as invalid input or the `venue` adapter's.
 - A module's adapters take their settings from `adapters.<name>` like any other adapter: `modules` entries and `venue:module/load` no longer take `config`, so the Python module's settings move to `adapters.python`, which `adapters.python.enabled: false` switches off. Python without a usable CPython fails to start, so it is left failed with the reason, and its settings cannot change until the venue restarts.
@@ -50,6 +60,10 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - A messaging bot an agent created uses its credentials and runs its relay's `admit` and `charge` hooks with that agent's authority, not its user's: an agent with caps needs `secret/use` on each secret the bot names, and its caps must cover what the hooks do.
 - `mcp:tools-call` and `mcp:tools-list` hide `token` in their job records, both the bearer in the input and a top-level `token` in a tool's result; a caller waiting for the result still receives it.
 - `mcp:tools-call` and `mcp:tools-list` take `bearerSecret`, a secret holding the bearer, as an alternative to `token`.
+
+### Removed
+
+- Python instances (`python:instances/create`, `list`, `call`, `close` and `adapters.python.instances`): configure each function under `operations` and offer it to others through a callable; a config naming `instances` is refused (#706).
 
 ### Fixed
 

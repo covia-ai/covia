@@ -383,17 +383,20 @@ public class AgentAdapter extends AAdapter {
 	/**
 	 * The controller of an agent {@code ctx} creates or forks: the one the input
 	 * names, else the principal whose authority the request acts with
-	 * ({@link Engine#actingPrincipal}); either narrowed by the access token
-	 * narrowing the request, if any, so the agent never exceeds it.
+	 * ({@link Engine#actingPrincipal}). The agent's harness acts with all of
+	 * its controller's authority, which no caps bound, so a request an access
+	 * token or a callable narrows may make one only when it holds all of that
+	 * authority ({@link Engine#holdsAuthorityOf}).
 	 */
-	private Engine.Source newController(RequestContext ctx, ACell input) {
+	private AString newController(RequestContext ctx, ACell input) {
 		AString named = namedController(ctx, input);
-		Engine.Source acting = Engine.actingSource(ctx);
-		// A controller keeps no callable's caps, so a call hands on its issuer's authority only when it holds all of it
-		if (named == null && ctx.getCallable() != null && !engine.holdsAuthorityOf(ctx, acting)) {
-			throw new AuthException(Engine.CONTROLLER_NOT_HELD.formatted(acting.principal()));
+		if (named != null) return named;
+		AString acting = Engine.actingPrincipal(ctx);
+		boolean narrowed = ctx.getCallable() != null || !ctx.getTokens().isEmpty();
+		if (narrowed && !engine.holdsAuthorityOf(ctx, acting)) {
+			throw new AuthException(Engine.CONTROLLER_NOT_HELD.formatted(acting));
 		}
-		return (named != null) ? new Engine.Source(named, acting.token()) : acting;
+		return acting;
 	}
 
 	/**
@@ -406,12 +409,11 @@ public class AgentAdapter extends AAdapter {
 	 *
 	 * @param configuring whether the change sets the agent's config or controller
 	 */
-	private void requireController(RequestContext ctx, AgentTarget target, Engine.Source controller, boolean configuring) {
-		AString principal = (controller == null) ? null : controller.principal();
-		if (!configuring && (principal == null || principal.equals(target.ownerDID()))) return;
-		Engine.Source held = (principal != null) ? controller : new Engine.Source(target.ownerDID(), null);
+	private void requireController(RequestContext ctx, AgentTarget target, AString controller, boolean configuring) {
+		if (!configuring && (controller == null || controller.equals(target.ownerDID()))) return;
+		AString held = (controller != null) ? controller : target.ownerDID();
 		if (!engine.holdsAuthorityOf(ctx, held)) {
-			throw new AuthException(Engine.NOT_CONTROLLERS.formatted(target.address(), held.principal()));
+			throw new AuthException(Engine.NOT_CONTROLLERS.formatted(target.address(), held));
 		}
 	}
 
@@ -858,7 +860,7 @@ public class AgentAdapter extends AAdapter {
 
 	@Override
 	public void invoke(Job job, RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
-		if (ctx.getCallerDID() == null) {
+		if (ctx.getAuthorityDID() == null) {
 			job.fail("Agent operations require an authenticated caller");
 			return;
 		}
@@ -918,7 +920,7 @@ public class AgentAdapter extends AAdapter {
 				+ "; update it, or delete it with remove=true before creating it again");
 			return;
 		}
-		Engine.Source controller = newController(ctx, input);
+		AString controller = newController(ctx, input);
 
 		AMap<AString, ACell> supplied = RT.ensureMap(input);
 		ACell facet = supplied == null ? null : supplied.get(Agent.KEY_AGENT);
@@ -1617,7 +1619,7 @@ public class AgentAdapter extends AAdapter {
 	 * it.
 	 */
 	static AMap<AString, ACell> withProvenance(AMap<AString, ACell> record, RequestContext ctx) {
-		return withRoute(record.assoc(Fields.CALLER, ctx.getCallerDID()), ctx);
+		return withRoute(record.assoc(Fields.CALLER, ctx.getAuthorityDID()), ctx);
 	}
 
 	/** {@code record} with {@code ctx}'s route, when it has one. */
@@ -1712,7 +1714,7 @@ public class AgentAdapter extends AAdapter {
 			.assoc(Fields.OWNER, target.ownerDID())
 			.assoc(Fields.AGENT_ID, agentId));
 		Agent.SessionIntake intake = agent.addTaskInSession(sid,
-			ctx.getCallerDID(), session.loads(), taskId, taskData);
+			ctx.getAuthorityDID(), session.loads(), taskId, taskData);
 		if (intake == Agent.SessionIntake.LOADS_ON_EXISTING) {
 			job.fail("loads can only be passed when a session is created — this session already exists");
 			return;
@@ -1839,7 +1841,7 @@ public class AgentAdapter extends AAdapter {
 			}
 		} else {
 			Agent.SessionIntake intake = agent.appendSessionPending(sid,
-				ctx.getCallerDID(), session.loads(), queued(envelope), true);
+				ctx.getAuthorityDID(), session.loads(), queued(envelope), true);
 			if (intake == Agent.SessionIntake.LOADS_ON_EXISTING) {
 				job.fail("loads can only be passed when a session is created — this session already exists");
 				return;
@@ -1966,7 +1968,7 @@ public class AgentAdapter extends AAdapter {
 	private Agent.SessionIntake appendChatInput(Job job, Agent agent, AgentTarget target,
 			SessionSpec session, ACell envelope, RequestContext ctx) {
 		if (ctx.getSessionDelivery() == null) return agent.appendSessionPending(session.id(),
-			ctx.getCallerDID(), session.loads(), envelope, !session.supplied());
+			ctx.getAuthorityDID(), session.loads(), envelope, !session.supplied());
 		ChatIntake taken;
 		try {
 			taken = engine.getVenueState().transact(draft -> {
@@ -1975,7 +1977,7 @@ public class AgentAdapter extends AAdapter {
 				if (current == null || current.isStopped()) {
 					return new ChatIntake(Agent.SessionIntake.MISSING, null);
 				}
-				var intake = current.appendSessionPending(session.id(), ctx.getCallerDID(),
+				var intake = current.appendSessionPending(session.id(), ctx.getAuthorityDID(),
 					session.loads(), envelope, !session.supplied());
 				if (intake != Agent.SessionIntake.APPLIED) return new ChatIntake(intake, null);
 				if (!ctx.getSessionDelivery().accept(draft, session.id(), job.getID())) throw new DuplicateSessionDelivery();
@@ -2266,7 +2268,6 @@ public class AgentAdapter extends AAdapter {
 
 		ACell definition = Agent.definition(record);
 		if (definition != null) summary = summary.assoc(Agent.KEY_AGENT, definition);
-		if (agent.getControllerToken() != null) summary = summary.assoc(Fields.CONTROLLER_TOKEN, agent.getControllerToken());
 		if (timeline != null) summary = summary.assoc(Strings.intern("timelineLength"), CVMLong.create(timeline.count()));
 		if (tasks != null) summary = summary.assoc(Strings.intern("tasks"), CVMLong.create(tasks.count()));
 		AString error = Agent.error(record);
@@ -2391,13 +2392,14 @@ public class AgentAdapter extends AAdapter {
 			if (sid == null) { job.fail("Invalid sessionId format: " + given); return null; }
 			session = agent.session(sid).getRecord();
 			if (session == null) { job.fail(UNKNOWN_SESSION_CODE, CONTEXT_UNKNOWN_SESSION.formatted(sid)); return null; }
-			agentCtx = agentCtx.withSessionId(sid);
+			agentCtx = agentCtx.inExecution(new RequestContext.ExecutionScope(agentTarget.ownerDID(),
+				agentTarget.agentId(), null, sid, null, -1L, null));
 		}
 
 		// The hypothetical call: inbox message(s), pending results, a task.
 		// Inspection must resolve n/ paths and capability-scoped loads exactly as
-		// the live transition does. The caller identity remains the owner; the
-		// agent id selects the same private namespace/cursor view as execution.
+		// the live transition does: in the harness's context, the controller's
+		// frame driving the agent's execution, as a cycle's is.
 		ContextInspectable.Inspection inspection = new ContextInspectable.Inspection(
 			recordConfig, state, session, inboxOf(input),
 			RT.ensureVector(RT.getIn(input, Fields.PENDING)),
@@ -2472,7 +2474,6 @@ public class AgentAdapter extends AAdapter {
 						Fields.CONTROLLER, listed.getController(),
 						Fields.AWAITING, awaitingSummary(record),
 						Fields.TASKS, CVMLong.create(taskCount));
-					if (listed.getControllerToken() != null) summary = summary.assoc(Fields.CONTROLLER_TOKEN, listed.getControllerToken());
 					AString error = Agent.error(record);
 					if (error != null) summary = summary.assoc(Fields.ERROR, error);
 					AMap<AString, ACell> suspension = Agent.suspension(record);
@@ -2972,7 +2973,7 @@ public class AgentAdapter extends AAdapter {
 		if (reason != null && !(reason instanceof AString)) {
 			throw new InvalidInputException(SUSPEND_REASON_INVALID);
 		}
-		AMap<AString, ACell> stopped = agent.suspend(ctx.getCallerDID(), (AString) reason);
+		AMap<AString, ACell> stopped = agent.suspend(ctx.getAuthorityDID(), (AString) reason);
 		if (stopped == null) {
 			job.fail(SUSPEND_AGENT_GONE);
 			return;
@@ -3073,8 +3074,7 @@ public class AgentAdapter extends AAdapter {
 		// record holds then, so a concurrent change is never overwritten and a
 		// change of controller is never bypassed.
 		AMap<AString, ACell> changes = resolved;
-		AString named = namedController(ctx, input);
-		Engine.Source controller = (named == null) ? null : new Engine.Source(named, Engine.actingSource(ctx).token());
+		AString controller = namedController(ctx, input);
 		AMap<AString, ACell> newConfig;
 		try {
 			boolean configuring = (changes != null) || (controller != null);
@@ -3299,7 +3299,7 @@ public class AgentAdapter extends AAdapter {
 			new java.util.concurrent.atomic.AtomicLong(0);
 		AMap<AString, ACell> provenance = Maps.of(
 			K_CREATED, engine.currentTimestamp(),
-			Fields.CALLER, ctx.getCallerDID(),
+			Fields.CALLER, ctx.getAuthorityDID(),
 			Fields.JOB_ID, job.getID());
 		boolean applied = agent.session(sid).updateQuiescentFrames(frames -> {
 			if (frames.isEmpty()) return frames;
@@ -4114,18 +4114,17 @@ public class AgentAdapter extends AAdapter {
 			return installed;
 		}
 
-		// The run loop executes as the AGENT, within its OWNER's namespace — a
-		// fresh context carrying none of the waking caller's proofs, caps, job or
-		// session. Which caller won the launch CAS above must never leak into
-		// the agent's execution: every namespace-scoped access during the run
-		// (secrets /s/, workspace w/, job ownership, per-user cursors) resolves
-		// in the owner's namespace, deterministically (#91), while the caller
-		// identity is the agent's own sub-principal DID so what the agent did is
-		// attributable to the agent rather than to the human who owns it. It is
-		// the harness's context, acting with the agent's controller's authority:
-		// the transition operation runs under it and switches the agent's acts
-		// to its caps itself (Engine.harnessContext, Engine.stepContext, UCAN.md
-		// §5.4). A controller that could not act now fails the launch.
+		// The run loop executes as the agent's HARNESS — a fresh context
+		// carrying none of the waking caller's proofs, caps, job or session.
+		// Which caller won the launch CAS above must never leak into the
+		// agent's execution (#91). The harness is the agent's controller's frame
+		// driving the agent's execution: what it starts, such as model calls,
+		// records the controller, and names in the agent's config resolve in the
+		// controller's namespace. The transition operation runs under it and
+		// switches the agent's acts to the agent itself, under its caps, so what
+		// the agent did is attributed to the agent (Engine.harnessContext,
+		// Engine.stepContext, UCAN.md §5.4). A controller that could not act now
+		// fails the launch.
 		try {
 			engine.harnessContext(ownerDID, agentId);
 			if (!agent.tryRun()) {
@@ -4414,8 +4413,8 @@ public class AgentAdapter extends AAdapter {
 	@SuppressWarnings("unchecked")
 	private void executeRunLoop(AString agentId, AString ownerDID, CompletableFuture<ACell> completion) {
 		// Each cycle runs under the agent's harness context (Engine.harnessContext)
-		// — never a waking caller's: in ownerDID's namespace, attributed to the
-		// agent's own sub-principal DID, acting with its controller's authority.
+		// — never a waking caller's: its controller's frame, driving the agent's
+		// execution in ownerDID's account.
 		final AgentKey key = new AgentKey(ownerDID, agentId);
 		ACell lastResult = null;
 		int iteration = 0;
@@ -4563,17 +4562,16 @@ public class AgentAdapter extends AAdapter {
 				}
 
 				// Per-cycle ctx: the harness as the agent's controller stands now,
-				// read each cycle as its config is, scoped to the agent, picked
-				// task, and session so path resolvers (n/, t/, c/) can address the
-				// right slot, and agent:completeTask / agent:failTask can identify
-				// which agent + task they're acting on, under the cycle's claim.
+				// read each cycle as its config is, driving the agent's execution
+				// with the picked task and session and the cycle's claim, so its
+				// steps (Engine.stepContext) address the right slot (n/, t/, c/)
+				// and agent:completeTask / agent:failTask the right agent and task.
+				// The scope is the agent's whatever account the controller's frame
+				// is in, so it is set whole (RequestContext.inExecution).
 				RequestContext harness = engine.harnessContext(ownerDID, agentId);
-				RequestContext cycleCtx = harness.withAgentId(agentId).withClaim(claim);
-				if (pickedTask != null) {
-					cycleCtx = cycleCtx.withTaskId(pickedTask.getKey(),
-						Task.revision(pickedTask.getValue()));
-				}
-				if (pickedSession != null) cycleCtx = cycleCtx.withSessionId(pickedSession);
+				RequestContext cycleCtx = harness.inExecution(new RequestContext.ExecutionScope(ownerDID, agentId, null,
+					pickedSession, (pickedTask != null) ? pickedTask.getKey() : null,
+					(pickedTask != null) ? Task.revision(pickedTask.getValue()) : -1L, claim));
 
 				// PENDING means accepted and queued. STARTED begins when a cycle
 				// takes the work: a request when its task is picked, a chat when

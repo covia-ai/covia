@@ -127,15 +127,15 @@ public class TestAdapter extends AAdapter implements covia.adapter.token.TokenAc
 	}
 
 	/** A small connected view: diagnostics are computed, only scratch is persisted. */
-	@Override public AForkableCursor<ACell> latticeView(RequestContext ctx) {
+	@Override public AForkableCursor<ACell> latticeView(AString owner, RequestContext ctx) {
 		RequestContext.ExecutionScope scope = ctx.getExecutionScope();
 		AMap<AString, ACell> context = Maps.of(
-			Fields.CALLER, ctx.getCallerDID(), K_USER, ctx.getUserDID(), K_VENUE, engine.getDIDString(),
+			Fields.CALLER, ctx.getAuthorityDID(), K_USER, owner, K_VENUE, engine.getDIDString(),
 			K_EXECUTION, Maps.of("owner", scope.ownerDID(), Fields.AGENT_ID, scope.agentId(),
 				Fields.SESSION_ID, scope.sessionId(), Fields.JOB_ID, scope.jobId(), Fields.TASK_ID, scope.taskId()));
 		// The diagnostics are computed, so the view has a value before any scratch is stored.
-		AForkableCursor<ACell> scratch = Covia.<ACell>entry(Covia.entry(adapterState(ctx.getUserDID()).cursor(), K_USERS),
-			ctx.getUserDID()).withDefault(Maps.empty());
+		AForkableCursor<ACell> scratch = Covia.<ACell>entry(Covia.entry(adapterState(owner).cursor(), K_USERS), owner)
+			.withDefault(Maps.empty());
 		return new ATransformCursor<ACell, ACell>(scratch) {
 			@Override protected ACell view(ACell stored) {
 				AMap<AString, ACell> result = Maps.of(K_CONTEXT, context, K_SAMPLES, SAMPLES);
@@ -151,7 +151,7 @@ public class TestAdapter extends AAdapter implements covia.adapter.token.TokenAc
 		};
 	}
 
-	@Override public String latticeWriteDenial(RequestContext ctx, convex.core.data.Path path) {
+	@Override public String latticeWriteDenial(AString owner, RequestContext ctx, convex.core.data.Path path) {
 		// Replacing/deleting the view root could otherwise bypass read-only children.
 		return !path.isEmpty() && K_SCRATCH.equals(path.get(0)) ? null : SCRATCH_ONLY;
 	}
@@ -618,19 +618,22 @@ public class TestAdapter extends AAdapter implements covia.adapter.token.TokenAc
      * completes the task with that answer.
      */
     private ACell handleAskHuman(RequestContext ctx, ACell input) {
+        // The agent asks and completes its task itself, as a model's tool calls
+        // do: the harness is its controller's frame (Engine.stepContext)
+        RequestContext agent = engine.stepContext(ctx, RT.ensureString(RT.getIn(input, Fields.AGENT_ID)));
         AVector<ACell> inbox = RT.ensureVector(RT.getIn(input, Fields.SESSION, Agent.KEY_PENDING));
-        ACell answer = (ctx.getTaskRevision() > 0) ? RT.getIn(input, Fields.NEW_INPUT)
+        ACell answer = (agent.getTaskRevision() > 0) ? RT.getIn(input, Fields.NEW_INPUT)
             : (inbox != null && inbox.count() > 0) ? RT.getIn(inbox.get(inbox.count() - 1), Fields.MESSAGE) : null;
         if (answer != null) {
-            if (ctx.getTaskId() != null) {
+            if (agent.getTaskId() != null) {
                 engine.jobs().invokeInternal("v/ops/agent/complete-task",
-                    Maps.of(Fields.RESULT, answer), ctx).join();
+                    Maps.of(Fields.RESULT, answer), agent).join();
             }
             return Maps.of(Fields.RESPONSE, Strings.create("answered"));
         }
         engine.jobs().invokeOperation("v/ops/hitl/request", Maps.of(
             "title", "Need a decision",
-            "asks", Vectors.of(Maps.of("id", "next", "type", "text", "prompt", "What next?"))), ctx);
+            "asks", Vectors.of(Maps.of("id", "next", "type", "text", "prompt", "What next?"))), agent);
         return Maps.of(Fields.RESPONSE, Strings.create("asked"));
     }
 

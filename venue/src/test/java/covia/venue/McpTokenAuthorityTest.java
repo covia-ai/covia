@@ -20,6 +20,7 @@ import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import covia.adapter.HITLAdapter;
 import covia.adapter.token.AccessToken;
+import covia.adapter.token.TokenAdapter;
 import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.AuthException;
@@ -70,7 +71,8 @@ public class McpTokenAuthorityTest {
 		AccessToken standing = engine.resolveToken(token.ref());
 		Operation operation = engine.jobs().resolveOperation(Strings.create(ref),
 			engine.context(standing.owner(), standing.issuer()));
-		return engine.jobs().startToolOperation(Strings.create(ref), operation, input, engine.tokenContext(token.ref())).result();
+		return engine.jobs().startToolOperation(Strings.create(ref), operation, input,
+			engine.requestContext(standing.issuer(), token.ref())).result();
 	}
 
 	private static ACell done(CompletableFuture<ACell> result) {
@@ -100,14 +102,14 @@ public class McpTokenAuthorityTest {
 	}
 
 	@Test
-	public void whatATokenMadeHoldsNothingOnceTheTokenIsGone(TestInfo info) {
+	public void whatATokenMadeOutlivesItButWorkThroughItDoesNot(TestInfo info) {
 		AString alice = TestEngine.uniqueDID(info);
 		Issued maker = issue(RequestContext.of(alice), "maker", Vectors.of("v/ops/agent/create"), Caps.UNRESTRICTED);
 
-		// An agent the token's request creates acts with the token's authority, not Alice's own
+		// An agent an unrestricted token's request creates is its issuer's, as one she made herself
 		done(tool(maker, "v/ops/agent/create", Maps.of(Fields.AGENT_ID, "made",
 			Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/echo"))));
-		assertEquals(maker.ref(), engine.getAgent(alice, Strings.create("made")).getControllerToken());
+		assertEquals(alice, engine.getAgent(alice, Strings.create("made")).getController());
 		RequestContext harness = engine.harnessContext(alice, Strings.create("made"));
 		assertTrue(mayWrite(harness, alice, "w/private/x"), "an unrestricted token carries its issuer's authority");
 
@@ -118,17 +120,27 @@ public class McpTokenAuthorityTest {
 		assertTrue(mayWrite(resumed, alice, "w/private/x"));
 
 		deleteToken(alice, "maker");
-		assertFalse(mayWrite(harness, alice, "w/private/x"), "a context already built reads the token at each check");
-		assertFalse(mayWrite(engine.harnessContext(alice, Strings.create("made")), alice, "w/private/x"));
-		assertFalse(mayWrite(resumed, alice, "w/private/x"));
+		assertTrue(mayWrite(harness, alice, "w/private/x"), "what the token made stands without it");
+		assertTrue(mayWrite(engine.harnessContext(alice, Strings.create("made")), alice, "w/private/x"));
+		assertFalse(mayWrite(resumed, alice, "w/private/x"), "a context already built reads the token at each check");
 		assertFalse(mayWrite(engine.context(alice, alice, null, kept), alice, "w/private/x"));
 		assertThrows(AuthException.class, () -> engine.tokenContext(maker.ref()));
 
 		// A new token of the same name is another token
 		issue(RequestContext.of(alice), "maker", Vectors.of("v/ops/agent/create"), Caps.UNRESTRICTED);
-		assertFalse(mayWrite(engine.harnessContext(alice, Strings.create("made")), alice, "w/private/x"));
 		assertFalse(mayWrite(engine.context(alice, alice, null, kept), alice, "w/private/x"));
 		assertThrows(AuthException.class, () -> engine.tokenContext(maker.ref()));
+	}
+
+	@Test
+	public void aTokenItsCapsNarrowMakesNoAgent(TestInfo info) {
+		// The agent's harness would act with all of its controller's authority, which no caps bound
+		AString alice = TestEngine.uniqueDID(info);
+		Issued narrow = issue(RequestContext.of(alice), "narrow", Vectors.of("v/ops/agent/create"),
+			Vectors.of(cap("v/ops/", Abilities.INVOKE), cap("g/", Abilities.AGENT_CREATE), cap("w/", Capability.CRUD)));
+		assertEquals(Engine.CONTROLLER_NOT_HELD.formatted(alice), refusal(tool(narrow, "v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "made", Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/echo")))));
+		assertNull(engine.getAgent(alice, Strings.create("made")));
 	}
 
 	@Test
@@ -138,13 +150,14 @@ public class McpTokenAuthorityTest {
 		ACell tokens = cap("x/token/", Abilities.MCP_TOKEN);
 		RequestContext builder = agent(alice, "builder", Vectors.of(invoke, tokens,
 			cap("w/shared/", Capability.CRUD), cap("w/other/", Capability.CRUD)));
-		Issued wide = issue(builder, "wide", Vectors.of("v/ops/covia/write"), Caps.UNRESTRICTED);
+		Issued wide = issue(builder, "wide", Vectors.of("v/ops/covia/write"),
+			Vectors.of(cap("w/shared/", Capability.CRUD), cap("w/other/", Capability.CRUD)));
 
 		RequestContext through = engine.tokenContext(wide.ref());
-		assertEquals(builder.getCallerDID(), through.getCallerDID(), "a token's request is its issuer's");
+		assertEquals(builder.getAuthorityDID(), through.getAuthorityDID(), "a token's request is its issuer's");
 		assertTrue(mayWrite(through, alice, "w/shared/x"));
 		assertTrue(mayWrite(through, alice, "w/other/x"));
-		assertFalse(mayWrite(through, alice, "w/private/x"), "unrestricted caps are the issuer's own");
+		assertFalse(mayWrite(through, alice, "w/private/x"), "it reaches no further than its issuer");
 
 		// The issuer's authority changes underneath, and the token's with it
 		complete(run("v/ops/agent/update", Maps.of(Fields.AGENT_ID, "builder",
@@ -168,25 +181,36 @@ public class McpTokenAuthorityTest {
 		Issued narrow = issue(RequestContext.of(alice), "narrow", manage,
 			Vectors.of(cap("x/token/", Abilities.MCP_TOKEN), cap("w/shared/", Capability.CRUD)));
 
-		refused(tool(narrow, "v/ops/mcp/update-token", Maps.of(Fields.NAME, "narrow", Fields.CAPS, Caps.UNRESTRICTED)));
-		refused(tool(narrow, "v/ops/mcp/update-token", Maps.of(Fields.NAME, "narrow", Fields.ROTATE, true)));
+		assertTrue(refusal(tool(narrow, "v/ops/mcp/update-token", Maps.of(Fields.NAME, "narrow", Fields.CAPS, Caps.UNRESTRICTED)))
+			.startsWith(Engine.CAPS_BEYOND_GIVER));
 
-		// A token it makes is narrowed by it too, whatever its own caps say
+		// A token it makes has caps within its own
+		assertTrue(refusal(tool(narrow, "v/ops/mcp/create-token", Maps.of(Fields.NAME, "wide",
+			Fields.TOOLS, Vectors.of("v/ops/covia/write"), Fields.CAPS, Caps.UNRESTRICTED))).startsWith(Engine.CAPS_BEYOND_GIVER));
 		String bearer = RT.getIn(done(tool(narrow, "v/ops/mcp/create-token", Maps.of(Fields.NAME, "child",
-			Fields.TOOLS, Vectors.of("v/ops/covia/write"), Fields.CAPS, Caps.UNRESTRICTED))), Fields.TOKEN).toString();
+			Fields.TOOLS, Vectors.of("v/ops/covia/write"), Fields.CAPS, Vectors.of(cap("w/shared/", Capability.CRUD))))),
+			Fields.TOKEN).toString();
 		Issued child = new Issued(bearer, engine.tokens().lookup(bearer));
 		RequestContext throughChild = engine.tokenContext(child.ref());
 		assertTrue(mayWrite(throughChild, alice, "w/shared/x"));
 		assertFalse(mayWrite(throughChild, alice, "w/private/x"));
 
-		// It may change what it made, never beyond itself
-		done(tool(narrow, "v/ops/mcp/update-token", Maps.of(Fields.NAME, "child", Fields.CAPS, Vectors.of(cap("w/", Capability.CRUD)))));
-		assertFalse(mayWrite(engine.tokenContext(child.ref()), alice, "w/private/x"));
-
-		// And what it made dies with it
-		deleteToken(alice, "narrow");
-		assertFalse(mayWrite(throughChild, alice, "w/shared/x"));
+		// It may change a token within itself, itself included, never beyond it
+		assertTrue(refusal(tool(narrow, "v/ops/mcp/update-token", Maps.of(Fields.NAME, "child",
+			Fields.CAPS, Vectors.of(cap("w/", Capability.CRUD))))).startsWith(Engine.CAPS_BEYOND_GIVER));
+		done(tool(narrow, "v/ops/mcp/update-token", Maps.of(Fields.NAME, "child",
+			Fields.CAPS, Vectors.of(cap("w/shared/notes", Capability.CRUD)))));
 		assertFalse(mayWrite(engine.tokenContext(child.ref()), alice, "w/shared/x"));
+		assertTrue(mayWrite(engine.tokenContext(child.ref()), alice, "w/shared/notes"));
+		issue(RequestContext.of(alice), "whole", Vectors.of("v/ops/covia/write"), Caps.UNRESTRICTED);
+		assertEquals(TokenAdapter.TOKEN_NOT_COVERED.formatted("whole"), refusal(tool(narrow, "v/ops/mcp/update-token",
+			Maps.of(Fields.NAME, "whole", Fields.ROTATE, true))));
+		done(tool(narrow, "v/ops/mcp/update-token", Maps.of(Fields.NAME, "narrow", Fields.ROTATE, true)));
+
+		// What it made keeps its own caps once it is gone
+		deleteToken(alice, "narrow");
+		assertTrue(mayWrite(throughChild, alice, "w/shared/notes"));
+		assertFalse(mayWrite(throughChild, alice, "w/private/x"));
 	}
 
 	@Test
@@ -202,8 +226,8 @@ public class McpTokenAuthorityTest {
 
 		assertFalse(engine.holdsAuthorityOf(narrowed, alice));
 		assertTrue(engine.holdsAuthorityOf(whole, alice), "an unrestricted token is its issuer's authority");
-		assertFalse(narrowed.actsWithNamespaceAuthority());
-		assertFalse(whole.actsWithNamespaceAuthority(), "state held for a namespace is never a token's");
+		assertEquals(alice, narrowed.getAuthorityDID(), "a token's request has its issuer's authority");
+		assertEquals(alice, whole.getAuthorityDID());
 
 		// Reading or managing the user itself needs all of the user's authority
 		for (String op : new String[] {"v/ops/user/info", "v/ops/user/authentication-list"}) {

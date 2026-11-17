@@ -3,7 +3,14 @@
 Every request names two principals by DID: whose authority applies, and who
 called into it. The model is Convex's `*address*` and `*caller*` (CAD005). A
 record of work, such as a job or a scheduled event, names the principal that
-called it. This is a design; none of it is implemented yet.
+called it. This is a design, implemented in part: a callable's call enters its
+issuer's frame and calls nest, an agent's harness runs in its controller's
+frame, `admin/sudo` is a call into the user, a request names one acting
+principal, whose authority an agent's record decides at each check, state
+within one interaction
+belongs to the principal that opened it, and acts that need the user in
+person read how the request authenticated. What still works the old way is listed under
+[What it replaces](#what-it-replaces).
 
 ## The two fields
 
@@ -21,9 +28,9 @@ called it. This is a design; none of it is implemented yet.
 - A token or a callable narrows the `authority` a request runs under
   ([Tokens and callables](#tokens-and-callables)), and grants a request
   presents add to it ([VENUE_AUTHORITY.md](VENUE_AUTHORITY.md)). Both are
-  carried beside these fields. Work that continues the request keeps both, and
-  what the request creates keeps the narrowing but never the grants, so it
-  holds no more than the request did.
+  carried beside these fields. Work that continues the request keeps both;
+  what the request creates is bounded by the narrowing when it is made, never
+  by the grants ([What a request creates](#what-a-request-creates)).
 
 ## Where names resolve
 
@@ -77,14 +84,25 @@ quotas as any work does.
 ## What a request creates
 
 Whatever a request creates, an agent, a token or a callable, acts for the
-request's `authority`, narrowed as the request is by a token or a callable, so
-it never holds more than its creator: an agent another agent makes, and that
-agent's harness, stay within its creator's caps, and what a request through a
-token creates stays within the token and loses what the token gave once it is
-gone. The caps it is given must lie within what the request may do, presented
-grants aside. That is checked when they are set and whenever they change, as
-`ucan:issue` checks each capability against a grant it holds, and caps the
-creator could not grant are refused rather than stored.
+request's acting principal, narrowed by its own caps, and records only that
+principal and those caps, never the token or callable the request came
+through. So it never holds more than its creator:
+
+- **A token or a callable** is given caps within what the request may do
+  itself: its principal's authority as its token's, callable's or agent's caps
+  narrow it, never widened by grants it presents. A request nothing narrows
+  may give any caps. Each check reads them within the issuer's authority as it
+  stands then. What a request through a token or a callable creates keeps its
+  caps once that token or callable is gone.
+- **An agent** acts with its controller's authority narrowed by its caps,
+  read at each check, so an agent another agent makes stays within its
+  creator, including whatever the creator is given later. Its harness acts
+  with all of its controller's authority, which no caps bound, so a request a
+  token or a callable narrows creates an agent only when their caps are
+  unrestricted.
+
+Changing a token or a callable needs a request acting with its issuer's
+authority that covers its caps as they are and as they become.
 
 ## Admission
 
@@ -120,17 +138,19 @@ counts against that account's quota. This is COG-8's `caller`, and COG-8's
 `owner` goes.
 
 A job is reached by capability on its record ([JOBS.md](JOBS.md#job-capabilities)).
-A scheduled event is reached by its account's whole authority, which reaches
-all of the account's events, and by the principal that scheduled it, which
-reaches that event; no grant extends that reach
-([GRID_SCHEDULER.md](GRID_SCHEDULER.md)).
+A scheduled event is reached by capability on `<account>/x/schedule/<id>`:
+`crud/read` inspects and lists it, and `schedule/manage` cancels or triggers
+it ([GRID_SCHEDULER.md](GRID_SCHEDULER.md)). Having scheduled an event grants
+nothing, as having started a job does not.
 
 A record the venue keeps for itself, such as a job, a scheduled event, an
 approval request or a timeline entry, leaves out a principal that is the
-account it is kept in, since where it is kept says so. Whatever returns the
-record or carries it out of that account, such as an API response or an
-export, names the principal in full, so the record as a client sees it always
-names its caller. Data a user writes is stored as given: the venue neither
+account it is kept in, since where it is kept says so. A missing principal
+means that account wherever the record is read against the structure that
+holds it: a lattice read, a copy, an export or a clone carries it as stored, so
+a clone's records are the clone's. A response that hands a client one record
+on its own, such as a job's status, names the principal in full, since the
+client has no account to read it against. Data a user writes is stored as given: the venue neither
 leaves anything out of it nor fills anything in, since such data is more
 likely to be copied between places.
 
@@ -187,9 +207,10 @@ chose it:
 - **The model's choices**: each tool call runs as the agent, bounded by its
   caps.
 
-Its controller is the `authority` of the request that created it, narrowed as
-that request was, so an agent made by another agent, through a token or within
-a callable's call runs within what made it, never its owner's whole authority.
+Its controller is the acting principal of the request that created it, so an
+agent made by another agent runs within that agent, never its owner's whole
+authority, and only a request holding its controller's whole authority makes
+one through a token or within a callable's call.
 
 ## Cases
 
@@ -206,29 +227,17 @@ a callable's call runs within what made it, never its owner's whole authority.
 
 ## What it replaces
 
-- The request context's caller DID, which today names the authority in most
-  cases, but the agent for its harness, the delegate under `admin/sudo`, and
-  the invoker within a callable's call.
-- The request context's namespace as a value apart from its authority, and a
-  separate authority on a context.
+- The request context's namespace as a value apart from its authority.
 - The caller context a job keeps only when its adapter asks, in two shapes of
   kept authority, and a scheduled event's own shape of the same. A job's state
   is the context it runs in.
-- A record of work whose `caller` names whoever authenticated (a sudo
-  delegate, an agent for its harness, a callable's invoker) beside an `owner`
-  naming the account, from which the venue works out what kind of principal
-  acted.
+- A record of work whose `caller` names a sudo delegate, as work it left
+  before `admin/sudo` acted as the user does, beside an `owner` naming the account,
+  from which the venue works out what kind of principal acted.
 - An `accepts` list that matches DIDs exactly, and a callers gate that admits
   a namespace it lists.
-- A callable's call refused when it calls a callable.
-- Reaching state by acting in its namespace, which any of the owner's agents
-  does whatever its caps, and a request through a token never does:
-  - Python instances that users create from the operator's templates. The
-    operator's Python is offered to others through callables, and a function
-    is told who called it (#706).
-  - A live dictation, which belongs to the principal that opened it.
-  - A namespace's list of messaging bots, which shows each bot whose resource
-    (`<user>/<adapter>/<name>`) the request may manage (`<adapter>/manage`).
-- `admin/sudo` as a switch of namespace bounded by the grants the delegate
-  presents ([ADMIN.md](ADMIN.md), [UCAN.md](UCAN.md)), and the check of the
-  delegate's grant again when work it left runs.
+- A scheduled event reached by identity, by its account's owner or the
+  principal that scheduled it, since no capability names an event.
+- A configured Python function, which is not told who called it (#706).
+- The check of an `admin/sudo` delegate's grant again when work it left
+  before `admin/sudo` was a call into the user runs, bounded by that grant.

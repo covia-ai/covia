@@ -92,7 +92,6 @@ The agent's value is a plain map. Every write replaces the entire map atomically
 | `status` | string | `"SLEEPING"` \| `"RUNNING"` \| `"SUSPENDED"` \| `"TERMINATED"`. `RUNNING` is a persisted execution marker, validated against the live executor by the hosting venue. |
 | `agent` | map? | Optional external implementation selector; absent for the native Covia runtime. See §2.2.1. |
 | `controller` | string? | DID of the principal whose authority the agent acts with, and whose authority configuring the agent needs; absent for its owner ([UCAN.md §5.4](./UCAN.md)). |
-| `controllerToken` | map? | The access token `{owner, name, id}` that narrows the controller's authority, when a request through that token created, forked or last set the controller of the agent ([ACCESS_TOKENS.md](./ACCESS_TOKENS.md)). |
 | `config` | map | Framework-level configuration. Includes `operation` (default transition op) and `caps`, the agent's capability scope ([UCAN.md §5.4](./UCAN.md): Model A, user-scoped). The record stores `caps` only when they bound the agent: an unrestricted agent's record has none, which `agent:info` shows as `"unrestricted"`, and one given no authority stores `[]`. |
 | `state` | any | User-defined state. Opaque to the framework. Passed to and returned from the transition function. Transition-function configuration (LLM operation, model, system prompt, tools, caps) lives in `config`, not here (#144). Set at creation via optional initial state. Conversation content lives on the session record (`session.frames[0].conversation`), not here. |
 | `tasks` | index | `Index<Blob, ACell>` of inbound request Job IDs. Persistent until resolved. Ordered by Job ID. |
@@ -172,10 +171,11 @@ Supported definitions:
 
 `agent:chat` and `agent:request` preserve their existing result envelopes.
 The common dispatcher checks normal agent admission. Asking the backend is the
-agent's harness at work, as calling the model is a native agent's: it acts as
-the agent with its controller's authority as it stands, which the agent's
-`config.caps` do not narrow (UCAN.md §5.4). The backend job keeps that
-authority, so work it carries on after a restart acts with it again. Requester
+agent's harness at work, as calling the model is a native agent's: it acts in
+its controller's frame as it stands, which the agent's `config.caps` do not
+narrow (UCAN.md §5.4). The backend job is the controller's, kept in its
+account, and keeps that authority, so work it carries on after a restart acts
+with it again. Requester
 credentials do not become the agent's authority. Provider-specific project,
 secret and destination checks apply under the controller's authority.
 See [AGENT_SESSIONS.md §2.2](./AGENT_SESSIONS.md#22-external-agent-sessions)
@@ -598,9 +598,9 @@ they write their turns into the session's frames live under the cycle's claim,
 and the run loop appends none of its own. Status, timeline, task settlement and
 scheduling remain framework-owned.
 
-**Authority.** The transition is a harness step, acting with the agent's
-controller's authority as it stands that cycle, and decides where the agent's
-caps apply; [UCAN.md §5.4](./UCAN.md) defines the boundary and where the LLM
+**Authority.** The transition is a harness step, in the agent's controller's
+frame as it stands that cycle, driving the agent's execution, and decides
+where the agent's caps apply; [UCAN.md §5.4](./UCAN.md) defines the boundary and where the LLM
 runtimes draw it.
 
 Pending outbound jobs are not declared in transition output. The field is a
@@ -1195,8 +1195,9 @@ Clients distinguish a deliberate stop by that field, never by error wording.
 Legacy records without it remain unclassified. New requests/chats to a
 suspended agent fail with `errorCode: "agent:suspended"`; their message names
 the stop and advises asking the stopping caller, or retains fault-recovery
-advice for an ordinary failure. `by` is `ctx.getCallerDID()`, including through
-sudo; an intermediary is not relabelled as the agent on whose behalf it acted.
+advice for an ordinary failure. `by` is `ctx.getAuthorityDID()`, the user a
+delegate acts as under `admin/sudo`; an intermediary is not relabelled as the
+agent on whose behalf it acted.
 
 **All mutations are atomic.** Each operation is a single compare-and-swap
 on the agent's lattice cell, so concurrent operations against the same
@@ -1414,7 +1415,11 @@ adds complexity that is not needed for the initial LLM agent.
 When an agent needs human input, `hitl:request` creates a durable Job and record
 in the target user's **request queue** at `/h/<job-id>`. From a sessioned agent
 tool call it returns `{id, status: INPUT_REQUIRED, title}` immediately. The
-record stores the verified requester, agent and session. When the human answers,
+record stores the verified requester, agent and session and, when something
+carried the request (an access token, a callable's call, a binding), its
+route, so a request through a token or a callable is not taken for its
+caller's own. The route is the one an agent's turn records, venue-internal and
+not part of COG-16 ([AGENT_CONTEXT.md](AGENT_CONTEXT.md) §1.2). When the human answers,
 rejects, or the request expires, HITL resolves the Job, delivers the outcome
 with the responder's provenance, and wakes the agent. The outcome goes to the
 task whose cycle asked as its next input, so it runs that task and no other in

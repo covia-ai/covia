@@ -54,8 +54,6 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 	public static final AString KEY_AGENT = Strings.intern("agent");
 	/** The principal whose authority the agent's harness runs under, absent for its owner. */
 	public static final AString KEY_CONTROLLER = Fields.CONTROLLER;
-	/** The access token narrowing its controller's authority, when a request a token narrowed created it. */
-	public static final AString KEY_CONTROLLER_TOKEN = Fields.CONTROLLER_TOKEN;
 	public static final AString KEY_EXTERNAL = Strings.intern("external");
 	/** Present only for a deliberate stop; faults use {@link #KEY_ERROR}. */
 	public static final AString KEY_SUSPENSION = Strings.intern("suspension");
@@ -226,18 +224,19 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 
 	/**
 	 * Atomically initialises this record, SLEEPING with no tasks, sessions or
-	 * outbound waits, under {@code controller} (null, or the owner with no
-	 * token, for its owner). {@link Agents#create} and {@link Agents#createFork}
-	 * make agents this way.
+	 * outbound waits, under {@code controller} (null, or the owner, for its
+	 * owner). {@link Agents#create} and {@link Agents#createFork} make agents
+	 * this way.
 	 *
 	 * @param config Framework configuration, or null for none
 	 * @param state Initial state for the transition function, or null for none
 	 * @param definition The definition an external agent is created with, or null
 	 * @param timeline A fork's copied timeline, or null for an empty one
+	 * @param controller The principal whose authority the harness runs under
 	 * @return false, changing nothing, when the record already exists
 	 */
 	boolean initialiseIfAbsent(AMap<AString, ACell> config, ACell state, AMap<AString, ACell> definition,
-			AVector<ACell> timeline, Engine.Source controller) {
+			AVector<ACell> timeline, AString controller) {
 		AMap<AString, ACell> record = Maps.of(
 			K_STATUS, SLEEPING,
 			K_TASKS, Index.none(),
@@ -251,16 +250,10 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 		return cursor().getAndUpdate(current -> (current == null) ? initial : current) == null;
 	}
 
-	/**
-	 * {@code record} with {@code controller}: its principal, stored only when
-	 * it is not the owner, and the access token narrowing it, if any.
-	 */
-	private AMap<AString, ACell> withController(AMap<AString, ACell> record, Engine.Source controller) {
-		AString principal = (controller == null) ? null : controller.principal();
-		AMap<AString, ACell> token = (controller == null) ? null : controller.token();
-		record = (principal == null || principal.equals(owner)) ? record.dissoc(KEY_CONTROLLER)
-			: record.assoc(KEY_CONTROLLER, principal);
-		return (token == null) ? record.dissoc(KEY_CONTROLLER_TOKEN) : record.assoc(KEY_CONTROLLER_TOKEN, token);
+	/** {@code record} with {@code controller}, stored only when it is not the owner. */
+	private AMap<AString, ACell> withController(AMap<AString, ACell> record, AString controller) {
+		return (controller == null || controller.equals(owner)) ? record.dissoc(KEY_CONTROLLER)
+			: record.assoc(KEY_CONTROLLER, controller);
 	}
 
 	// ========== Read accessors ==========
@@ -270,17 +263,6 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 		AMap<AString, ACell> r = getRecord();
 		AString stored = (r != null) ? RT.ensureString(r.get(KEY_CONTROLLER)) : null;
 		return (stored != null) ? stored : owner;
-	}
-
-	/** The access token narrowing its controller's authority, or null when none does. */
-	public AMap<AString, ACell> getControllerToken() {
-		AMap<AString, ACell> r = getRecord();
-		return (r != null) ? RT.ensureMap(r.get(KEY_CONTROLLER_TOKEN)) : null;
-	}
-
-	/** Its controller and the access token narrowing it, as one source of authority. */
-	public Engine.Source getControllerSource() {
-		return new Engine.Source(getController(), getControllerToken());
 	}
 
 	public AString getStatus() { return status(getRecord()); }
@@ -389,8 +371,9 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 		return Covia.field(cursor(), key, () -> new NotFoundException(MISSING.formatted(agentId), String.valueOf(agentId)));
 	}
 
-	/** One of the agent's sessions, as {@link Sessions#session}: a missing
-	 * session reads as null, and its operations never create or resurrect it. */
+	/** One of the agent's sessions, as {@link Sessions#session}. It is never
+	 * null: a missing session's record reads as null ({@link Session#getRecord}),
+	 * and its operations never create or resurrect it. */
 	public Session session(Blob sid) {
 		return sessions().session(sid);
 	}
@@ -930,7 +913,7 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 	 * incoming map override the existing ones, and the rest are preserved.</p>
 	 *
 	 * <p>{@code check} receives the current controller
-	 * ({@link #getControllerSource()}) and refuses by throwing, leaving the
+	 * ({@link #getController()}) and refuses by throwing, leaving the
 	 * record unchanged; like {@code config}, it may run again on a retry.</p>
 	 *
 	 * @param check refuses an update its caller may not make, or null for none
@@ -939,13 +922,12 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 	 *         record does not exist
 	 */
 	@SuppressWarnings("unchecked")
-	public AMap<AString, ACell> update(java.util.function.Consumer<Engine.Source> check, Engine.Source controller,
+	public AMap<AString, ACell> update(java.util.function.Consumer<AString> check, AString controller,
 			UnaryOperator<AMap<AString, ACell>> config, ACell state) {
 		AMap<AString, ACell> record = update(r -> {
 			if (check != null) {
 				AString current = RT.ensureString(r.get(KEY_CONTROLLER));
-				check.accept(new Engine.Source((current != null) ? current : owner,
-					RT.ensureMap(r.get(KEY_CONTROLLER_TOKEN))));
+				check.accept((current != null) ? current : owner);
 			}
 			AMap<AString, ACell> u = (controller == null) ? r : withController(r, controller);
 			if (config != null) {

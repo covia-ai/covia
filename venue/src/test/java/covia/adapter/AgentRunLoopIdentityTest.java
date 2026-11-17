@@ -35,18 +35,19 @@ import covia.venue.User;
  * Regression for #91 and the related cross-user run-loop keying, plus the
  * agent sub-principal split.
  *
- * <p>An agent's run loop executes <b>as the agent, within its owner's
- * namespace</b> — both derived from the agent's address ({@code ownerDID} +
- * {@code agentId}), never from the caller that woke it.
+ * <p>An agent's run loop executes as its <b>harness</b>: its controller's
+ * frame, driving the agent's execution in its owner's account, and its steps
+ * act as the agent — all derived from the agent's address ({@code ownerDID} +
+ * {@code agentId}) and record, never from the caller that woke it.
  * {@link AgentAdapter#wakeAgent} is a pure mechanism keyed on that address —
  * there is no caller parameter for an identity to leak through — and the
  * in-memory run-loop registries key on the full address, so two users' agents
  * that share a name do not collide.</p>
  *
- * <p>Each test pins <em>both</em> halves of the split: {@code getCallerDID()}
- * is the agent's own sub-principal DID (who acted), while {@code getUserDID()}
- * is the owner (whose namespace it acted in, and therefore whose secrets and
- * workspace resolve).</p>
+ * <p>Each test pins both halves: the harness acts as the agent's controller
+ * (here its owner, whose secrets and workspace resolve), driving the agent's
+ * execution, and a step of that run acts as the agent's own sub-principal DID
+ * ({@link Engine#stepContext}).</p>
  *
  * <p>Deterministic — each test drives wakes and waits on the run-loop
  * completion futures; no timing assumptions.</p>
@@ -102,16 +103,22 @@ public class AgentRunLoopIdentityTest {
 
 		RequestContext seen = TestAdapter.CAPTURED_CTX.get(ALICE_DID);
 		assertNotNull(seen, "transition must have executed");
-		assertEquals(Principals.agentDID(ALICE_DID, agentId), seen.getCallerDID(),
-			"run loop must act as the agent's own sub-principal DID");
-		assertEquals(ALICE_DID, seen.getUserDID(),
-			"run loop must execute within the agent owner's namespace");
-		assertTrue(seen.isSubPrincipal(), "an agent run is a sub-principal context");
+		assertEquals(ALICE_DID, seen.getAuthorityDID(), "the harness is its controller's frame, here its owner's");
+		assertEquals(ALICE_DID, seen.getUserDID());
+		assertSame(seen, engine.authorityFrame(seen), "with its own authority");
+		assertNull(seen.getCaller(), "a cycle has no caller");
+		assertNull(seen.getAuthenticatedDID(), "nobody is present in a cycle");
+		assertEquals(new RequestContext.ExecutionScope(ALICE_DID, agentId, null, seen.getSessionId(), null, -1L,
+			seen.getClaim()), seen.getExecutionScope(), "driving the agent's execution");
 		assertNull(seen.getProofs(), "run context must carry no proofs");
-		assertEquals(ALICE_DID, seen.authorityContext().getCallerDID(), "run context acts with its owner's authority");
-		assertNull(seen.authorityContext().getCaps(), "its owner's whole authority");
+		assertNull(seen.getCaps(), "its owner's whole authority");
 		assertEquals("alice-secret", engine.resolveSecret("RUNLOOP_KEY", seen),
 			"owner-scoped secret must resolve under the run-loop context");
+		RequestContext step = engine.stepContext(seen, agentId);
+		assertEquals(Principals.agentDID(ALICE_DID, agentId), step.getAuthorityDID(),
+			"its steps act as the agent's own sub-principal DID");
+		assertEquals(ALICE_DID, step.getUserDID());
+		assertTrue(step.isSubPrincipal(), "an agent's step is a sub-principal context");
 	}
 
 	/**
@@ -120,9 +127,9 @@ public class AgentRunLoopIdentityTest {
 	 * own context ({@link Engine#stepContext}, UCAN.md §5.4).
 	 */
 	/**
-	 * An agent a capped agent created runs its transition with that controller's
-	 * authority: in its owner's namespace and attributed to itself, but bound by
-	 * the controller's caps (UCAN.md §5.4).
+	 * An agent a capped agent created runs its transition in that controller's
+	 * frame, bound by the controller's caps, driving its own execution; its
+	 * steps act as itself (UCAN.md §5.4).
 	 */
 	@Test
 	public void testATransitionActsWithItsControllersAuthority() {
@@ -141,12 +148,15 @@ public class AgentRunLoopIdentityTest {
 
 		RequestContext harness = TestAdapter.CAPTURED_CTX.get(ALICE_DID);
 		assertNotNull(harness, "transition must have executed");
-		assertEquals(Principals.agentDID(ALICE_DID, Strings.create("controlled")), harness.getCallerDID());
+		assertEquals(Principals.agentDID(ALICE_DID, Strings.create("controller")), harness.getAuthorityDID(),
+			"its controller's frame");
 		assertEquals(ALICE_DID, harness.getUserDID());
-		assertTrue(harness.hasSeparateAuthority());
+		assertEquals(Strings.create("controlled"), harness.getExecutionScope().agentId(), "driving its own execution");
 		assertTrue(engine.authorityCovers(harness, Strings.create("w/shared/doc"), Capability.CRUD_READ));
 		assertFalse(engine.authorityCovers(harness, Strings.create("w/private"), Capability.CRUD_READ),
 			"bound by its controller's caps");
+		assertEquals(Principals.agentDID(ALICE_DID, Strings.create("controlled")),
+			engine.stepContext(harness, Strings.create("controlled")).getAuthorityDID(), "its steps act as itself");
 	}
 
 	@Test
@@ -323,8 +333,9 @@ public class AgentRunLoopIdentityTest {
 	public void testAgentRelationsAreRecognised() {
 		AString agentId = prepareAgent(ALICE_DID, "rel-ident", "REL_KEY", "alice-secret");
 		adapter().wakeAgent(ALICE_DID, agentId, true).join();
-		RequestContext seen = TestAdapter.CAPTURED_CTX.get(ALICE_DID);
-		assertNotNull(seen, "transition must have executed");
+		RequestContext harness = TestAdapter.CAPTURED_CTX.get(ALICE_DID);
+		assertNotNull(harness, "transition must have executed");
+		RequestContext seen = engine.stepContext(harness, agentId);
 
 		AString self    = Principals.agentDID(ALICE_DID, agentId);
 		AString sibling = Principals.agentDID(ALICE_DID, Strings.create("other"));
@@ -353,10 +364,10 @@ public class AgentRunLoopIdentityTest {
 
 		RequestContext seen = TestAdapter.CAPTURED_CTX.get(BOB_DID);
 		assertNotNull(seen, "transition must have executed");
-		assertEquals(Principals.agentDID(BOB_DID, agentId), seen.getCallerDID(),
-			"run loop must act as BOB's agent, not BOB");
-		assertEquals(BOB_DID, seen.getUserDID(),
-			"run loop must execute in the owner's (BOB's) namespace");
+		assertEquals(BOB_DID, seen.getAuthorityDID(), "the harness is BOB's frame, as the agent's controller");
+		assertEquals(BOB_DID, seen.getExecutionScope().ownerDID(), "driving BOB's agent");
+		assertEquals(Principals.agentDID(BOB_DID, agentId), engine.stepContext(seen, agentId).getAuthorityDID(),
+			"its steps act as BOB's agent, not BOB");
 		assertEquals("bob-secret", engine.resolveSecret("BOB_KEY", seen),
 			"BOB's owner-scoped secret must resolve under the run-loop context");
 		assertNull(engine.resolveSecret("BOB_KEY", RequestContext.of(ALICE_DID)),
@@ -388,9 +399,11 @@ public class AgentRunLoopIdentityTest {
 		assertEquals(ALICE_DID, aSeen.getUserDID());
 		assertEquals(BOB_DID, bSeen.getUserDID());
 		// Same agent id, different owners — so distinct sub-principals.
-		assertEquals(Principals.agentDID(ALICE_DID, agentId), aSeen.getCallerDID());
-		assertEquals(Principals.agentDID(BOB_DID, agentId), bSeen.getCallerDID());
-		assertNotEquals(aSeen.getCallerDID(), bSeen.getCallerDID());
+		AString aAgent = engine.stepContext(aSeen, agentId).getAuthorityDID();
+		AString bAgent = engine.stepContext(bSeen, agentId).getAuthorityDID();
+		assertEquals(Principals.agentDID(ALICE_DID, agentId), aAgent);
+		assertEquals(Principals.agentDID(BOB_DID, agentId), bAgent);
+		assertNotEquals(aAgent, bAgent);
 		assertEquals("alice-secret", engine.resolveSecret("K", aSeen),
 			"Alice's loop resolves Alice's secret");
 		assertEquals("bob-secret", engine.resolveSecret("K", bSeen),

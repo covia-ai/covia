@@ -138,14 +138,14 @@ public class UserAdapter extends AAdapter {
 			Object target = RT.getIn(input, "clone".equals(subOperation) ? Fields.TO : Fields.DID);
 			Object key = RT.getIn(input, Fields.KEY);
 			Object operation = "sudo".equals(subOperation) ? RT.getIn(input, Fields.OPERATION) : null;
-			result.whenComplete((r, t) -> engine.audit().event(event,
-				Audit.K_DID, ctx.getCallerDID(), Audit.K_TARGET, target, "key", key,
+			result.whenComplete((r, t) -> engine.audit().event(event, ctx,
+				Audit.K_TARGET, target, "key", key,
 				Audit.K_OPERATION, operation, Audit.K_OUTCOME, (t == null) ? Audit.OK : Audit.FAILED));
 		}
 		return result;
 	}
 
-	/** Explicitly execute one operation in another user's namespace. */
+	/** Run one operation as another user, with that user's whole authority ({@link covia.venue.Engine#sudoContext}). */
 	private CompletableFuture<ACell> sudo(RequestContext ctx, ACell input) {
 		try {
 			AString userDID = requireDID(RT.ensureString(RT.getIn(input, Fields.DID)));
@@ -188,7 +188,7 @@ public class UserAdapter extends AAdapter {
 		if (username != null) {
 			engine.getAuth().ensureManagedUser(username, did);
 			if (authenticationKeys != null && !engine.getAuth().installFirstAuthenticationKeys(
-					username, authenticationKeys, ctx.getCallerDID())) {
+					username, authenticationKeys, ctx.getAuthorityDID())) {
 				// Preserve create's idempotency: a repeated identical request
 				// is harmless, but rotation uses the explicit add operation.
 				for (long i = 0; i < authenticationKeys.count(); i++) {
@@ -213,7 +213,7 @@ public class UserAdapter extends AAdapter {
 	private ACell export(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
 		if (!(ctx.getJob() instanceof VenueJob job) || !job.isDirectRun()
 				|| ctx.getExecutionScope().agentId() != null || ctx.getExecutionScope().sessionId() != null || ctx.getExecutionScope().taskId() != null
-				|| !ctx.getCallerDID().equals(ctx.getUserDID())) throw new AuthException(EXPORT_DIRECT_ONLY);
+				|| engine.inPersonDenial(ctx) != null) throw new AuthException(EXPORT_DIRECT_ONLY);
 		// A caller-controlled output schema could put the state in validation logs.
 		if (!getOperations().get(EXPORT).get(Fields.OPERATION).equals(meta.get(Fields.OPERATION))) {
 			throw new AuthException(EXPORT_DEFINITION_REQUIRED);
@@ -274,12 +274,12 @@ public class UserAdapter extends AAdapter {
 	 *  their own entry sees no venue bookkeeping; an operator sees its {@code meta}. */
 	public ACell info(RequestContext ctx, ACell input) {
 		AString did = RT.ensureString(RT.getIn(input, Fields.DID));
-		if (did == null) did = ctx.getCallerDID();
+		if (did == null) did = ctx.getAuthorityDID();
 		if (did == null) throw new AuthException("Authentication required");
 		did = requireDID(did);
 		boolean operator = engine.hasVenueAuthority(ctx, USERS_RESOURCE, Abilities.ADMIN_USER_READ);
 		// The user itself with all of its authority, as for managing the user
-		if (!operator && !(did.equals(ctx.getCallerDID()) && engine.holdsAuthorityOf(ctx, did))) {
+		if (!operator && !(did.equals(ctx.getAuthorityDID()) && engine.holdsAuthorityOf(ctx, did))) {
 			requireVenueUserAuthority(ctx, Abilities.ADMIN_USER_READ);
 		}
 		User user = engine.getVenueState().users().user(did);
@@ -312,7 +312,7 @@ public class UserAdapter extends AAdapter {
 		AString label = RT.ensureString(RT.getIn(input, Fields.LABEL));
 		if (key == null) throw new InvalidInputException("key is required");
 		boolean added = engine.getAuth().addAuthenticationKey(
-			id, key, ctx.getCallerDID(), label);
+			id, key, ctx.getAuthorityDID(), label);
 		engine.flush();
 		return Maps.of(
 			Fields.DID, did,
@@ -326,7 +326,7 @@ public class UserAdapter extends AAdapter {
 		AString key = RT.ensureString(RT.getIn(input, Fields.KEY));
 		if (key == null) throw new InvalidInputException("key is required");
 		boolean revoked = engine.getAuth().revokeAuthenticationKey(
-			id, key, ctx.getCallerDID(), engine.isDirectVenue(ctx));
+			id, key, ctx.getAuthorityDID(), engine.isDirectVenue(ctx));
 		engine.flush();
 		return Maps.of(
 			Fields.DID, did,
@@ -374,14 +374,16 @@ public class UserAdapter extends AAdapter {
 	/** The addressed user DID, defaulting to the caller. */
 	private AString targetDID(RequestContext ctx, ACell input) {
 		AString did = RT.ensureString(RT.getIn(input, Fields.DID));
-		if (did == null) did = ctx.getCallerDID();
+		if (did == null) did = ctx.getAuthorityDID();
 		if (did == null) throw new AuthException("Authentication required");
 		return did;
 	}
 
 	private void requireSelfOrVenueUserAuthority(RequestContext ctx, AString did, AString ability) {
-		// The user itself, with all of its authority: not a request an access token narrows
-		if (did.equals(ctx.getCallerDID()) && ctx.getExecutionScope().agentId() == null && engine.holdsAuthorityOf(ctx, did)) return;
+		// The user itself in person, with all of its authority: not a request an
+		// access token narrows, nor one made for the user by another principal
+		if (did.equals(ctx.getAuthorityDID()) && engine.inPersonDenial(ctx) == null
+				&& ctx.getExecutionScope().agentId() == null && engine.holdsAuthorityOf(ctx, did)) return;
 		requireVenueUserAuthority(ctx, ability);
 	}
 

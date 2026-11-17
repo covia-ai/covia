@@ -26,7 +26,7 @@ import covia.lattice.Covia;
  * ({@link #access(AString, Function)}).
  *
  * <pre>
- *   id, issuer, source?, caps?, expires?, created, hash, sealed?,
+ *   id, issuer, caps?, expires?, created, hash, sealed?,
  *   access: { &lt;access point&gt;: entry }
  * </pre>
  */
@@ -80,10 +80,6 @@ public final class AccessToken extends ALatticeComponent<AMap<AString, ACell>>
 		return RT.ensureString(field(Fields.ISSUER));
 	}
 
-	/** The token whose request created it, which narrows it too; null when none did. */
-	public AMap<AString, ACell> source() {
-		return RT.ensureMap(field(Fields.SOURCE));
-	}
 
 	/** Its caps: missing is unrestricted, empty none. */
 	public Caps caps() {

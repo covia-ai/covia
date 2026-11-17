@@ -40,15 +40,17 @@ public abstract class AAdapter {
 	public static final String LATTICE_READ_ONLY = "Adapter lattice view is read-only";
 
 	/**
-	 * Opt-in, user-visible lattice at x/adapterName. Return a connected cursor or
-	 * a pure projected snapshot, or null to expose nothing. Resolution must be
-	 * local and side-effect-free; never return the entire private adapter state
-	 * unless every field is intentionally visible to this user. Use the supplied
-	 * context's user DID for ownership and retain account lifecycle guards.
+	 * Opt-in, user-visible lattice at x/adapterName: {@code owner}'s, for request
+	 * {@code ctx}, whose authority over it the router has checked. Return a
+	 * connected cursor or a pure projected snapshot, or null to expose nothing.
+	 * Resolution must be local and side-effect-free; never return the entire
+	 * private adapter state unless every field is intentionally visible to this
+	 * user. Select state by {@code owner}, never by the request's namespace or
+	 * execution, which are its own, and retain account lifecycle guards.
 	 * Views live for one operation/transaction and must not be cached.
 	 * The default is no route; exposed views are read-only unless opted in below.
 	 */
-	public AForkableCursor<ACell> latticeView(RequestContext ctx) {
+	public AForkableCursor<ACell> latticeView(AString owner, RequestContext ctx) {
 		return null;
 	}
 
@@ -60,8 +62,9 @@ public abstract class AAdapter {
 	 * to their authoritative lattice state, not to a disposable snapshot. Return
 	 * null to allow, or a refusal reason that reaches the caller unchanged. The
 	 * adapter also owns value validation in its cursor write transformation.
+	 * {@code owner} and {@code ctx} are as for {@link #latticeView}.
 	 */
-	public String latticeWriteDenial(RequestContext ctx, Path path) {
+	public String latticeWriteDenial(AString owner, RequestContext ctx, Path path) {
 		return LATTICE_READ_ONLY;
 	}
 
@@ -118,7 +121,7 @@ public abstract class AAdapter {
 	 * again after every {@link #configure} so it reflects the effective
 	 * configuration; keep it to facts that hold until the next reconfigure —
 	 * live state (counts, connections, sessions) belongs in an operation or
-	 * an explicit {@link #latticeView(RequestContext)}.
+	 * an explicit {@link #latticeView(AString, RequestContext)}.
 	 *
 	 * <p>The framework keys {@code name}, {@code description}, {@code kernel},
 	 * {@code module} and {@code operations} are reserved and win over anything

@@ -552,7 +552,7 @@ public class MCPAdapter extends AAdapter implements TokenAccessPoint {
 		writeLattice(writeCtx, registryPath(venueScope, name), Maps.of(
 			K_URL, url,
 			K_AUTH, storedAuth,
-			Fields.CALLER, ctx.getCallerDID(),
+			Fields.CALLER, ctx.getAuthorityDID(),
 			Strings.intern("added"), engine.currentTimestamp(),
 			Fields.TOTAL, AInteger.create(toolNames.count())));
 

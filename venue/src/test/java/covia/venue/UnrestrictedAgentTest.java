@@ -219,7 +219,7 @@ public class UnrestrictedAgentTest {
 	private boolean administers(RequestContext agent, String resource, AString ability) {
 		if (engine.hasVenueAuthority(agent, resource, ability)) return true;
 		Job issued = run("v/ops/ucan/issue", Maps.of(
-			UCAN.AUD, agent.getCallerDID(),
+			UCAN.AUD, agent.getAuthorityDID(),
 			UCAN.ATT, Vectors.of(Maps.of(Capability.WITH, engine.getDIDString() + "/" + resource, Capability.CAN, ability)),
 			UCAN.EXP, CVMLong.create(engine.currentTimestamp().longValue() / 1000 + 3600)), agent);
 		AString token = (issued.getStatus() == Status.COMPLETE) ? RT.ensureString(RT.getIn(issued.getOutput(), "token")) : null;
@@ -259,8 +259,8 @@ public class UnrestrictedAgentTest {
 				RequestContext.of(TestEngine.uniqueManagedDID("admin-check")),
 				RequestContext.of(engine.publicPrincipal()),   // no scope: unrestricted public access
 				RequestContext.ofAgent(TestEngine.uniqueDID(info), Strings.create("helper"))}) {
-			assertFalse(engine.hasVenueAuthority(caller, "users", Abilities.ADMIN_USER_CREATE), caller.getCallerDID().toString());
-			assertFalse(engine.hasVenueAuthority(caller, Engine.OUTBOUND, Abilities.OUTBOUND_ANY), caller.getCallerDID().toString());
+			assertFalse(engine.hasVenueAuthority(caller, "users", Abilities.ADMIN_USER_CREATE), caller.getAuthorityDID().toString());
+			assertFalse(engine.hasVenueAuthority(caller, Engine.OUTBOUND, Abilities.OUTBOUND_ANY), caller.getAuthorityDID().toString());
 		}
 	}
 

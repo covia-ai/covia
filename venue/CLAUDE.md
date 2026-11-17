@@ -55,11 +55,12 @@ venue/
   point-of-action enforcement primitive; `Engine.crossUserAllows` is the
   single cross-user gate (public-user parity + target-side admission
   `config.accepts` for talking to an agent, #447 + delegation proofs).
-  **Two identities, never conflated**: `getCallerDID()` is *who acted*
-  (attribution, delegation audience, granting authority); `getUserDID()` is
-  *whose namespace* (bare paths, workspace, secrets, jobs, inbox, quota). They
-  differ only for an agent sub-principal, `<ownerDID>:g:<agentId>`, and a
-  delegate acting for another user (`admin/sudo`) — see `docs/UCAN.md` §5.4.
+  **Two identities, never conflated**: `getAuthorityDID()` is *who acts*, the
+  one principal a request acts as (attribution, delegation audience, granting
+  authority); `getUserDID()` is *whose namespace*, that principal's account
+  (bare paths, workspace, secrets, jobs, inbox, quota). They differ only for
+  an agent, `<ownerDID>:g:<agentId>`, whose account is its owner's; a delegate
+  under `admin/sudo` acts as the user — see `docs/UCAN.md` §5.4.
 - **Lattice** — CRDT-based persistent state. Structure defined in
   `covia.lattice.Covia`; design in `docs/GRID_LATTICE_DESIGN.md`.
 
@@ -121,7 +122,7 @@ Module adapters (shaded module jars, not in covia.jar — `docs/CONFIG.md` "Venu
 | Adapter | Module | Purpose | Operations |
 |---------|--------|---------|------------|
 | `sql` | covia-sql | Venue-local convex-db and operator-registered JDBC databases | `query`, `execute` |
-| `python` | covia-python-adapter | Operator-configured Python operations and stateful instances | configured ops, `instances/*` |
+| `python` | covia-python-adapter | Operator-configured Python operations, offered to others through callables | configured ops |
 | `telegram` | covia-telegram | Telegram bots (operator-declared or user-created) routing chats and media to agents or handing Updates to operations; Bot API access in Telegram's own shapes | `send`, `call`, `download`, `create`, `delete`, `bots`, `format` |
 | `discord` | covia-discord | Discord bots (operator-declared or user-created) routing DMs and mentioned guild messages to agents or operations; Discord REST API access | `send`, `call`, `create`, `delete`, `bots` |
 | `whatsapp` | covia-whatsapp | WhatsApp Cloud API phone bindings with signed callbacks, durable intake and text replies; voice notes, photos and files reach agents as attachments (shared `MessagingMedia`, optional `mediaOperation`) and operations as raw messages for `download`; `relay` bindings serve many principals at `/relay/whatsapp/<binding>` | `send`, `download`, `create`, `delete`, `bots` |

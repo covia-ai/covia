@@ -107,7 +107,7 @@ public class UCANTest {
 
 		RequestContext ctx = engine.withTransportGrants(
 			BOB, Vectors.of(delegation));
-		assertEquals(BOB_DID, ctx.getCallerDID());
+		assertEquals(BOB_DID, ctx.getAuthorityDID());
 		assertEquals(BOB_DID, ctx.getUserDID(),
 			"a grant cannot instruct the venue to enter its issuer's namespace");
 		assertNull(ctx.getCaps(), "a grant does not attenuate the authenticated caller");
@@ -126,7 +126,7 @@ public class UCANTest {
 
 		RequestContext ctx = engine.withTransportGrants(
 			RequestContext.ANONYMOUS, Vectors.of(identity, wrongAudience));
-		assertNull(ctx.getCallerDID(),
+		assertNull(ctx.getAuthorityDID(),
 			"proof-channel tokens cannot establish authentication");
 		assertEquals(1, ctx.getProofs().count(),
 			"only the capability-bearing token enters proof evaluation");

@@ -146,6 +146,28 @@ public class AuditLogTest {
 		return sb.toString();
 	}
 
+	/** An event of a request under admin/sudo names the user it acts as, and the delegate who is present. */
+	@Test
+	public void aRequestUnderSudoNamesTheDelegateToo() {
+		String venue = "audit-sudo.example";
+		Audit audit = new Audit(true, venue);
+		AKeyPair aliceKey = AKeyPair.generate(), bobKey = AKeyPair.generate();
+		AString alice = UCAN.toDIDKey(aliceKey.getAccountKey()), bob = UCAN.toDIDKey(bobKey.getAccountKey());
+		UCAN sudo = UCAN.create(aliceKey, bobKey.getAccountKey(), System.currentTimeMillis() / 1000 + 300,
+			convex.core.data.Vectors.of(convex.auth.ucan.Capability.create(alice, covia.api.Abilities.ADMIN_SUDO)),
+			convex.core.data.Vectors.empty());
+		RequestContext delegate = TestEngine.ENGINE.sudoContext(
+			RequestContext.of(bob).withProofs(convex.core.data.Vectors.of(sudo.toMap())), alice);
+
+		audit.event(Audit.SECRET_WRITE, delegate, Audit.K_NAME, "KEY");
+		audit.event(Audit.SECRET_WRITE, RequestContext.of(alice), Audit.K_NAME, "KEY");
+		List<Map<String, String>> events = events(Audit.LOGGER, venue);
+		assertEquals(alice.toString(), events.get(0).get(Audit.K_DID));
+		assertEquals(bob.toString(), events.get(0).get(Audit.K_AUTHENTICATED));
+		assertEquals(alice.toString(), events.get(1).get(Audit.K_DID));
+		assertFalse(events.get(1).containsKey(Audit.K_AUTHENTICATED), "the user in person needs no second name");
+	}
+
 	@Test
 	public void offByDefaultButEveryRequestGetsAnId() throws Exception {
 		String venue = "audit-off.example";

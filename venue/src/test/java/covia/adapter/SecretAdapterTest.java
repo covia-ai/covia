@@ -193,18 +193,34 @@ class SecretAdapterTest {
 		AString did = UCAN.toDIDKey(other.getAccountKey());
 		engine.getVenueState().users().ensure(did);
 		UCAN proof = UCAN.create(identity, other.getAccountKey(), System.currentTimeMillis() / 1000 + 300,
-			Vectors.of(Capability.create(Strings.create(owner.getUserDID() + "/s/KEY"), Abilities.SECRET_EXTRACT)), Vectors.empty());
-		RequestContext delegated = RequestContext.of(did).withProofs(Vectors.of(proof.toMap())).onBehalfOf(owner.getUserDID());
+			Vectors.of(Capability.create(owner.getUserDID(), Abilities.ADMIN_SUDO),
+				Capability.create(Strings.create(owner.getUserDID() + "/s/KEY"), Abilities.SECRET_EXTRACT)), Vectors.empty());
+		// Work a delegate left in the owner's namespace, bounded by its grants, as it is rebuilt
+		RequestContext delegated = engine.context(owner.getUserDID(), did, Vectors.of(proof.toMap()));
 		// Establish that the capability is valid; the additional owner-only boundary must still refuse.
 		assertDoesNotThrow(() -> engine.requireResourceAccess(delegated, Strings.create("s/KEY"), Abilities.SECRET_EXTRACT));
 		assertEquals(SecretAdapter.EXTRACT_DIRECT_ONLY, failure(engine.jobs().runOperation(
 			meta("extract"), Maps.of("name", "KEY"), delegated)).getMessage());
 	}
 
+	/** A delegate acting as the user under admin/sudo holds the user's whole authority, but is not the user in person. */
+	@Test void aSudoDelegateNeverExtracts() {
+		AKeyPair other = AKeyPair.generate();
+		AString did = UCAN.toDIDKey(other.getAccountKey());
+		engine.getVenueState().users().ensure(did);
+		UCAN sudo = UCAN.create(identity, other.getAccountKey(), System.currentTimeMillis() / 1000 + 300,
+			Vectors.of(Capability.create(owner.getUserDID(), Abilities.ADMIN_SUDO)), Vectors.empty());
+		RequestContext delegate = engine.sudoContext(RequestContext.of(did).withProofs(Vectors.of(sudo.toMap())), owner.getUserDID());
+		assertDoesNotThrow(() -> engine.requireResourceAccess(delegate, Strings.create("s/KEY"), Abilities.SECRET_EXTRACT),
+			"its authority covers the secret; only the in-person boundary refuses");
+		assertEquals(SecretAdapter.EXTRACT_DIRECT_ONLY, failure(engine.jobs().runOperation(
+			meta("extract"), Maps.of("name", "KEY"), delegate)).getMessage());
+	}
+
 	@Test void extractionRefusesAgentsSessionsTasksAndMcpTools() {
 		RequestContext agent = RequestContext.ofAgent(owner.getUserDID(), Strings.create("mina"));
 		for (RequestContext ctx : new RequestContext[] { agent,
-			RequestContext.of(agent.getCallerDID(), owner.getUserDID(), null),
+			RequestContext.of(agent.getAuthorityDID(), owner.getUserDID(), null),
 			agent.withCaps(Vectors.of(Capability.create(null, Strings.create("*")))),
 			owner.withSessionId(Blob.fromHex("01")), owner.withTaskId(Blob.fromHex("02")) }) {
 			assertEquals(SecretAdapter.EXTRACT_DIRECT_ONLY, failure(run("extract", Maps.of("name", "KEY"), ctx)).getMessage());

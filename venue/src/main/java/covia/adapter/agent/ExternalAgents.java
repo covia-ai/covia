@@ -35,6 +35,13 @@ public final class ExternalAgents {
 	public static final AString KIND = Strings.intern("agentInteraction");
 	/** In the adapter's data: the DID of the user whose agent it is. */
 	public static final AString OWNER = Strings.intern("agentOwner");
+	/**
+	 * In the adapter's data: the account the backend job is kept in, that of
+	 * the agent's controller when the job started, since the harness starts it
+	 * in its controller's frame ({@link Engine#harnessContext}). Absent from a
+	 * job started before harness work was its controller's: the agent's owner.
+	 */
+	public static final AString CHILD_ACCOUNT = Strings.intern("agentBackendAccount");
 	private final Engine engine;
 	/** The backend job serving each running external turn, by the job asking: what {@link #stop} cancels. */
 	private final ConcurrentHashMap<Blob, Job> children;
@@ -102,7 +109,7 @@ public final class ExternalAgents {
 		job.update(d -> d.assoc(Fields.AGENT_ID, id).assoc(Fields.ADDRESS, address)
 			.assoc(Fields.SESSION_ID, sid));
 		if (job.isFinished()) return;
-		if (!agent.claimExternalTurn(sid, job.getID(), caller.getCallerDID(), content, !supplied))
+		if (!agent.claimExternalTurn(sid, job.getID(), caller.getAuthorityDID(), content, !supplied))
 			throw new ConflictException(SESSION_BUSY);
 		if (job.isFinished()) { agent.session(sid).finishExternalTurn(job.getID(), null, null); return; }
 		try {
@@ -120,7 +127,8 @@ public final class ExternalAgents {
 			try {
 				engine.getVenueState().execute(draft -> {
 					Blob childId = prepared.record(draft);
-					engine.jobs().updateAdapterData(draft, job, d -> d.assoc(CHILD, childId));
+					engine.jobs().updateAdapterData(draft, job,
+						d -> d.assoc(CHILD, childId).assoc(CHILD_ACCOUNT, execution.getUserDID()));
 				});
 			} catch (RuntimeException | Error e) {
 				prepared.abandon();
@@ -187,7 +195,9 @@ public final class ExternalAgents {
 		User user = owner == null ? null : engine.getVenueState().users().user(owner);
 		Agent agent = user == null ? null : user.agent(RT.ensureString(job.getData().get(Fields.AGENT_ID)));
 		ACell childId = kept(job, CHILD);
-		Job child = childId == null ? null : engine.jobs().getJob(Job.parseID(childId), engine.context(owner));
+		AString account = RT.ensureString(kept(job, CHILD_ACCOUNT));
+		Job child = childId == null ? null
+			: engine.jobs().getJob(Job.parseID(childId), engine.context((account != null) ? account : owner));
 		Blob sid = Ids.stored(job.getData().get(Fields.SESSION_ID));
 		if (agent == null || child == null) {
 			job.fail(MISSING_CHILD);

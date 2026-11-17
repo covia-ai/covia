@@ -329,14 +329,29 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 
 	private AString resource(AString owner, String name) { return Strings.create(owner + "/" + getName() + "/" + name); }
 
+	/**
+	 * The bots the request may manage: each whose resource
+	 * ({@code <owner>/<adapter>/<name>}) its authority covers for
+	 * {@link #manageAbility()}, by its own scope, its agent's or token's caps,
+	 * or a grant it presents; every bot, to the venue.
+	 */
 	protected final ACell handleBots(RequestContext ctx) {
-		// The namespace's own bots, to a request acting with that namespace's
-		// authority; every bot, to the venue.
-		AString user = ctx.actsWithNamespaceAuthority() ? ctx.getUserDID() : null;
-		boolean venue = engine.getDIDString().equals(ctx.authorityContext().getCallerDID());
+		boolean venue = engine.getDIDString().equals(ctx.getAuthorityDID());
 		AVector<ACell> result = Vectors.empty();
-		for (R runner : runnerList()) if (venue || (user != null && user.equals(runner.spec().userDID(engine)))) result = result.conj(runner.status());
+		for (R runner : runnerList()) {
+			if (venue || engine.authorityCovers(ctx, resource(runner.spec().userDID(engine), runner.spec().name()), manageAbility())) {
+				result = result.conj(runner.status());
+			}
+		}
 		return Maps.of(K_BOTS, result);
+	}
+
+	private AString manageAbility;
+
+	/** {@code <adapter>/manage}: creating, deleting and listing this adapter's bots. */
+	protected final AString manageAbility() {
+		if (manageAbility == null) manageAbility = Strings.intern(getName() + "/manage");
+		return manageAbility;
 	}
 
 	/** Override to require every provider-specific credential to be a secret reference. */
@@ -364,14 +379,14 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 		} catch (IllegalArgumentException e) {
 			throw new InvalidInputException(e.getMessage(), e);
 		}
-		engine.requireAuthority(ctx, resource(owner, name), Strings.intern(getName() + "/manage"));
+		engine.requireAuthority(ctx, resource(owner, name), manageAbility());
 		String key = runtimeKey(owner, name);
 		if (runners.containsKey(key)) throw new ConflictException(DUPLICATE_BOT.formatted(providerName(), name));
 		// The bot identifies its senders as exactly its creator: an agent as itself, never its owner.
 		// It then acts as that creator, so it cannot record one whose authority was another's.
-		if (ctx.hasSeparateAuthority()) throw new AuthException(SEPARATE_AUTHORITY_CREATOR);
+		if (engine.authorityFrame(ctx) != ctx) throw new AuthException(SEPARATE_AUTHORITY_CREATOR);
 		if (!ctx.getTokens().isEmpty()) throw new AuthException(TOKEN_CREATOR);
-		AString principal = ctx.getCallerDID();
+		AString principal = ctx.getAuthorityDID();
 		if (!owner.equals(Principals.userOf(principal))) throw new AuthException(FOREIGN_PRINCIPAL.formatted(principal));
 		boolean own = owner.equals(principal);
 		if (own) principals.remove(key); else principals.put(key, principal);
@@ -416,7 +431,7 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 		AString nameCell = RT.ensureString(RT.getIn(input, Fields.NAME));
 		if (nameCell == null || nameCell.isEmpty()) throw new InvalidInputException(NAME_REQUIRED);
 		String name = nameCell.toString();
-		engine.requireAuthority(ctx, resource(owner, name), Strings.intern(getName() + "/manage"));
+		engine.requireAuthority(ctx, resource(owner, name), manageAbility());
 		R runner = runners.remove(runtimeKey(owner, name));
 		if (runner == null) {
 			R config = runners.get(name);

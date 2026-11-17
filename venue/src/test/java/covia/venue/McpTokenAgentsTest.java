@@ -130,7 +130,7 @@ public class McpTokenAgentsTest {
 		AMap<AString, ACell> result = RT.ensureMap(complete(created));
 		String token = RT.getIn(result, Fields.TOKEN).toString();
 		assertTrue(AccessTokens.isBearer(token), token);
-		assertEquals(builder.getCallerDID(), RT.getIn(result, Fields.ISSUER));
+		assertEquals(builder.getAuthorityDID(), RT.getIn(result, Fields.ISSUER));
 		assertEquals(Fields.HIDDEN, RT.getIn(engine.jobs().getJobData(created.getID(), builder), Fields.OUTPUT, Fields.TOKEN),
 			"the job record never keeps the bearer");
 
@@ -148,8 +148,12 @@ public class McpTokenAgentsTest {
 		failed(call(worker, token, "covia_write", write("w/private/x", 1)));
 		failed(call(worker, token, "covia_delete", read("w/shared/report")));
 
-		// A token never exceeds its creator: unrestricted caps are the builder's own
-		String wide = createToken(builder, "wide", Vectors.of("v/ops/covia/write"), Caps.UNRESTRICTED);
+		// A token never exceeds its creator: it may not have unrestricted caps
+		Job unrestricted = run("v/ops/mcp/create-token", Maps.of(Fields.NAME, "unrestricted",
+			Fields.TOOLS, Vectors.of("v/ops/covia/write"), Fields.CAPS, Caps.UNRESTRICTED), builder);
+		failed(unrestricted);
+		assertTrue(unrestricted.getErrorMessage().startsWith(Engine.CAPS_BEYOND_GIVER), unrestricted::getErrorMessage);
+		String wide = createToken(builder, "wide", Vectors.of("v/ops/covia/write"), Vectors.of(cap("w/shared/", Capability.CRUD)));
 		assertEquals(Set.of("covia_write"), toolNames(worker, wide), "each bearer offers its own tools");
 		failed(call(worker, wide, "covia_read", read("w/shared/report")));
 		failed(call(worker, wide, "covia_write", write("w/private/x", 1)));

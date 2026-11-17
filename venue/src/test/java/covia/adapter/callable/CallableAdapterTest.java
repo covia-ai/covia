@@ -192,24 +192,27 @@ public class CallableAdapterTest {
 		RequestContext narrow = engine.callContext(RequestContext.of(bob), reference(alice, "narrow"));
 		RequestContext whole = engine.callContext(RequestContext.of(bob), reference(alice, "whole"));
 
-		assertEquals(bob, narrow.getCallerDID());
+		assertEquals(alice, narrow.getAuthorityDID(), "a call is its issuer's frame");
+		assertEquals(alice, narrow.getAuthorityDID());
+		assertEquals(bob, narrow.getCaller(), "called by its invoker");
 		assertEquals(alice, narrow.getUserDID());
 		assertFalse(engine.holdsAuthorityOf(narrow, alice));
 		assertTrue(engine.holdsAuthorityOf(whole, alice), "unrestricted caps are the issuer's whole authority");
 		assertFalse(engine.holdsAuthorityOf(whole, bob), "never the invoker's");
-		assertFalse(whole.actsWithNamespaceAuthority(), "state held for a namespace is never a call's");
+		assertEquals(alice, whole.getAuthorityDID(), "a call has its issuer's authority, so reaches state that is the issuer's");
 		assertEquals(Engine.SUDO_NARROWED, assertThrows(covia.exception.AuthException.class, () -> engine.sudoContext(whole, bob)).getMessage());
 
 		// An agent of the owner calling one another agent issued acts with the issuer's authority, never its own
 		ACell invoke = cap("v/ops/", Abilities.INVOKE);
 		RequestContext maker = agent(alice, "maker", Vectors.of(invoke, cap("x/callable/", Abilities.CALLABLE_MANAGE)));
-		complete(create(maker, "made", "v/ops/covia/read", Caps.UNRESTRICTED, null));
+		complete(create(maker, "made", "v/ops/covia/read", Vectors.of(invoke), null));
 		RequestContext helper = agent(alice, "helper", Vectors.of(invoke));
 		RequestContext byHelper = engine.callContext(helper, reference(alice, "made"));
-		assertEquals(maker.getCallerDID(), Engine.actingPrincipal(byHelper));
-		assertTrue(engine.holdsAuthorityOf(byHelper, maker.getCallerDID()), "unrestricted, it is all of its issuer's");
-		assertFalse(engine.holdsAuthorityOf(byHelper, helper.getCallerDID()));
-		assertTrue(engine.holdsAuthorityOf(helper, helper.getCallerDID()), "the agent holds its own outside a call");
+		assertEquals(maker.getAuthorityDID(), Engine.actingPrincipal(byHelper));
+		assertTrue(engine.actsWithAuthorityOf(byHelper, maker.getAuthorityDID()), "it acts with its issuer's authority");
+		assertFalse(engine.holdsAuthorityOf(byHelper, maker.getAuthorityDID()), "narrowed, not all of it");
+		assertFalse(engine.actsWithAuthorityOf(byHelper, helper.getAuthorityDID()));
+		assertTrue(engine.holdsAuthorityOf(helper, helper.getAuthorityDID()), "the agent holds its own outside a call");
 		assertThrows(covia.exception.AuthException.class, () -> engine.stepContext(byHelper, Strings.create("helper")),
 			"nor does it make its invoker act as itself");
 		assertNotNull(engine.stepContext(helper, Strings.create("helper")), "its own run makes it act");
@@ -251,9 +254,11 @@ public class CallableAdapterTest {
 		AMap<AString, ACell> ref = reference(alice, "guestbook");
 
 		AMap<AString, ACell> kept = Engine.keptAuthority(engine.callContext(RequestContext.of(bob), ref));
-		assertEquals(Maps.of(Fields.CALLABLE, ref), kept);
-		RequestContext resumed = engine.context(alice, bob, null, kept);
-		assertEquals(bob, resumed.getCallerDID(), "it resumes with the invoker as its caller");
+		assertEquals(Maps.of(Fields.CALLABLE, ref, Fields.CALLER, bob), kept);
+		RequestContext resumed = engine.context(alice, alice, null, kept);
+		assertEquals(alice, resumed.getAuthorityDID(), "it resumes in the issuer's frame");
+		assertEquals(bob, resumed.getCaller(), "called by the invoker");
+		assertNull(resumed.getAuthenticatedDID(), "with nobody present");
 		assertTrue(mayWrite(resumed, alice, "w/guestbook"));
 		assertFalse(mayWrite(resumed, alice, "w/private"));
 
@@ -268,7 +273,7 @@ public class CallableAdapterTest {
 		assertFalse(mayWrite(resumed, alice, "w/guestbook"));
 		complete(create(owner, "guestbook", "v/ops/covia/append", Caps.UNRESTRICTED, null));
 		assertFalse(mayWrite(resumed, alice, "w/guestbook"));
-		assertFalse(mayWrite(engine.context(alice, bob, null, kept), alice, "w/guestbook"));
+		assertFalse(mayWrite(engine.context(alice, alice, null, kept), alice, "w/guestbook"));
 	}
 
 	@Test
@@ -285,10 +290,11 @@ public class CallableAdapterTest {
 		ACell beyond = schedule(bob, later, append("w/private", "x"));
 		ACell second = schedule(bob, later, append("w/guestbook", "After deletion"));
 
-		// The events are Alice's, made by Bob
+		// The events are Alice's work, made in her callable's call: Bob reaches none of them
 		AVector<ACell> events = RT.ensureVector(RT.getIn(complete(run("v/ops/scheduler/list", Maps.empty(), owner)), "events"));
 		assertEquals(3, events.count());
-		for (ACell event : events) assertEquals(bob, RT.getIn(event, Fields.CALLER));
+		for (ACell event : events) assertEquals(alice, RT.getIn(event, Fields.CALLER));
+		failure(run("v/ops/scheduler/cancel", Maps.of("handle", first), RequestContext.of(bob)));
 
 		// Each fires with the callable's authority as it stands then
 		complete(run("v/ops/scheduler/trigger", Maps.of("handle", first), owner));
@@ -300,7 +306,7 @@ public class CallableAdapterTest {
 	}
 
 	@Test
-	public void aCallableATokenMadeIsNarrowedByThatToken(TestInfo info) throws Exception {
+	public void aCallableATokenMadeKeepsItsOwnCaps(TestInfo info) throws Exception {
 		AString alice = TestEngine.uniqueDID(info);
 		AString bob = TestEngine.uniqueDID("bob-" + info.getDisplayName());
 		RequestContext owner = RequestContext.of(alice);
@@ -311,25 +317,33 @@ public class CallableAdapterTest {
 			Maps.of(Fields.NAME, "maker", Fields.TOOLS, tools, Fields.CAPS, tokenCaps), owner)), Fields.TOKEN).toString();
 		AMap<AString, ACell> token = engine.tokens().lookup(bearer);
 
-		// An unrestricted callable the token's request makes is still narrowed by the token
+		// The token's request gives no caps beyond the token's own
+		ExecutionException beyond = assertThrows(ExecutionException.class, () -> throughToken(token, "v/ops/callable/create",
+			Maps.of(Fields.NAME, "made", Fields.OPERATION, "v/ops/covia/append", Fields.CAPS, Caps.UNRESTRICTED,
+				Fields.GATE, "v/ops/callable/gates/anyone")).get(10, TimeUnit.SECONDS));
+		assertTrue(beyond.getCause().getMessage().startsWith(Engine.CAPS_BEYOND_GIVER), beyond.getCause()::getMessage);
+
+		// A callable it makes within them acts within its own caps
 		throughToken(token, "v/ops/callable/create", Maps.of(Fields.NAME, "made", Fields.OPERATION, "v/ops/covia/append",
-			Fields.CAPS, Caps.UNRESTRICTED, Fields.GATE, "v/ops/callable/gates/anyone")).get(10, TimeUnit.SECONDS);
+			Fields.CAPS, Vectors.of(cap("w/guestbook", Capability.CRUD_WRITE)), Fields.GATE, "v/ops/callable/gates/anyone"))
+			.get(10, TimeUnit.SECONDS);
 		String made = alice + "/x/callable/made";
 		complete(call(RequestContext.of(bob), made, append("w/guestbook", "through the token")));
 		failure(call(RequestContext.of(bob), made, append("w/private", "x")));
 
-		// The token changes what it made, never what Alice made directly
+		// The token changes a callable within its caps, never a wider one
 		complete(create(owner, "direct", "v/ops/covia/append", Caps.UNRESTRICTED, null));
 		ExecutionException refused = assertThrows(ExecutionException.class, () -> throughToken(token, "v/ops/callable/update",
 			Maps.of(Fields.NAME, "direct", Fields.CAPS, Vectors.empty())).get(10, TimeUnit.SECONDS));
-		assertEquals(CallableAdapter.SOURCE_NOT_HELD.formatted("direct"), refused.getCause().getMessage());
+		assertEquals(CallableAdapter.CALLABLE_NOT_COVERED.formatted("direct"), refused.getCause().getMessage());
 		throughToken(token, "v/ops/callable/update", Maps.of(Fields.NAME, "made", Fields.DESCRIPTION, "Sign here"))
 			.get(10, TimeUnit.SECONDS);
 
-		// Deleted, the token narrows what it made to nothing
+		// What the token made stands once it is gone, within its own caps
 		complete(run("v/ops/mcp/delete-token", Maps.of(Fields.NAME, "maker"), owner));
-		failure(call(RequestContext.of(bob), made, append("w/guestbook", "after the token")));
-		assertEquals(Vectors.of("through the token"), held(alice, "w/guestbook"));
+		complete(call(RequestContext.of(bob), made, append("w/guestbook", "after the token")));
+		failure(call(RequestContext.of(bob), made, append("w/private", "x")));
+		assertEquals(Vectors.of("through the token", "after the token"), held(alice, "w/guestbook"));
 	}
 
 	/** {@code caller} has callable {@code callable} schedule an append of {@code append} an hour from now, and gets its handle. */
@@ -346,16 +360,73 @@ public class CallableAdapterTest {
 	}
 
 	@Test
-	public void aCallCannotCallACallable(TestInfo info) {
+	public void whatACallStartsIsItsIssuersWork(TestInfo info) {
 		AString alice = TestEngine.uniqueDID(info);
+		AString bob = TestEngine.uniqueDID("bob-" + info.getDisplayName());
+		RequestContext owner = RequestContext.of(alice);
+		complete(create(owner, "hold", "v/test/ops/never", Caps.UNRESTRICTED, null));
+		RequestContext call = engine.callContext(RequestContext.of(bob), reference(alice, "hold"));
+		Job started = engine.jobs().invokeOperation("v/test/ops/never", Maps.empty(), call);
+		try {
+			assertEquals(alice, started.getData().get(Fields.CALLER), "the issuer's, not the invoker's");
+			assertNull(started.getData().get(Fields.OWNER), "kept in the issuer's own account");
+			assertNotNull(engine.jobs().getJobData(started.getID(), owner), "the issuer reaches it");
+			assertThrows(covia.exception.AuthException.class,
+				() -> engine.jobs().getJobData(started.getID(), RequestContext.of(bob)), "the invoker does not");
+		} finally {
+			started.cancel();
+		}
+	}
+
+	@Test
+	public void callsNestEachInItsIssuersFrame(TestInfo info) {
+		AString alice = TestEngine.uniqueDID(info);
+		AString bob = TestEngine.uniqueDID("bob-" + info.getDisplayName());
+		AString carol = TestEngine.uniqueDID("carol-" + info.getDisplayName());
 		RequestContext owner = RequestContext.of(alice);
 		openGuestbook(alice);
-		complete(create(owner, "inner", "v/ops/covia/append", GUESTBOOK_CAPS, null));
-		complete(create(owner, "outer", "v/ops/callable/call", Caps.UNRESTRICTED, null));
+		complete(create(owner, "inner", "v/ops/covia/append", GUESTBOOK_CAPS, "v/ops/callable/gates/anyone"));
+		complete(create(owner, "outer", "v/ops/callable/call", Caps.UNRESTRICTED, "v/ops/callable/gates/anyone"));
+		String innerPath = alice + "/x/callable/inner";
+		AMap<AString, ACell> inner = Maps.of(Fields.CALLABLE, innerPath, Fields.INPUT, append("w/guestbook", "nested"));
 
-		AMap<AString, ACell> inner = Maps.of(Fields.CALLABLE, "inner", Fields.INPUT, append("w/guestbook", "x"));
-		assertEquals(CallableAdapter.CALL_WITHIN_CALL, failure(call(owner, "outer", inner)));
-		complete(run("v/ops/callable/call", inner, owner));
+		// A call calls a callable
+		complete(call(RequestContext.of(carol), alice + "/x/callable/outer", inner));
+		assertEquals(Vectors.of("nested"), held(alice, "w/guestbook"));
+
+		// Each call's caller is the authority that made it, and only its own callable narrows it
+		RequestContext outerFrame = engine.callContext(RequestContext.of(carol), reference(alice, "outer"));
+		RequestContext innerFrame = engine.callContext(outerFrame, reference(alice, "inner"));
+		assertEquals(carol, outerFrame.getCaller());
+		assertEquals(alice, innerFrame.getCaller());
+		assertEquals(reference(alice, "inner"), innerFrame.getCallable());
+		assertEquals(carol, innerFrame.getAuthenticatedDID(), "who is present goes on through both");
+		// An agent's tool call acts as the agent (Engine.stepContext), so the agent is the call's caller
+		AString bobsAgent = covia.grid.Principals.agentDID(bob, Strings.create("helper"));
+		assertEquals(bobsAgent, engine.callContext(engine.context(bob, bobsAgent), reference(alice, "outer")).getCaller());
+
+		// The inner callable's caps bound the inner call, however wide the outer's
+		failure(call(RequestContext.of(carol), alice + "/x/callable/outer",
+			Maps.of(Fields.CALLABLE, innerPath, Fields.INPUT, append("w/private", "x"))));
+		assertNull(held(alice, "w/private"));
+
+		// Bob's callable calls Alice's only as far as its caps cover calling it, and is not shown it otherwise
+		RequestContext bobs = RequestContext.of(bob);
+		complete(create(bobs, "relay", "v/ops/callable/call", Vectors.of(cap("w/", Capability.CRUD)), "v/ops/callable/gates/anyone"));
+		String relay = bob + "/x/callable/relay";
+		assertEquals(CallableAdapter.NOT_CALLABLE.formatted(innerPath), failure(call(RequestContext.of(carol), relay, inner)));
+		complete(run("v/ops/callable/update", Maps.of(Fields.NAME, "relay",
+			Fields.CAPS, Vectors.of(cap(innerPath, Abilities.CALLABLE_CALL))), bobs));
+		complete(call(RequestContext.of(carol), relay, inner));
+		assertEquals(Vectors.of("nested", "nested"), held(alice, "w/guestbook"));
+
+		// The inner call holds none of Bob's authority, nor Carol's
+		failure(call(RequestContext.of(carol), relay,
+			Maps.of(Fields.CALLABLE, innerPath, Fields.INPUT, append(bob + "/w/guestbook", "x"))));
+		failure(call(RequestContext.of(carol), relay,
+			Maps.of(Fields.CALLABLE, innerPath, Fields.INPUT, append(carol + "/w/guestbook", "x"))));
+		assertNull(held(bob, "w/guestbook"));
+		assertNull(held(carol, "w/guestbook"));
 	}
 
 	@Test
@@ -382,10 +453,12 @@ public class CallableAdapterTest {
 		complete(run("v/ops/callable/list", Maps.empty(), agent(alice, "sighted", Vectors.of(invoke, cap("x/callable", Capability.CRUD_READ)))));
 		RequestContext manager = agent(alice, "manager", Vectors.of(invoke, cap("x/callable/", Abilities.CALLABLE_MANAGE), cap("w/", Capability.CRUD)));
 		failure(create(agent(alice, "unmanaging", Vectors.of(invoke)), "other", "v/ops/covia/append", GUESTBOOK_CAPS, null));
-		complete(create(manager, "managed", "v/ops/covia/append", Caps.UNRESTRICTED, null));
+		assertTrue(failure(create(manager, "unbounded", "v/ops/covia/append", Caps.UNRESTRICTED, null))
+			.startsWith(Engine.CAPS_BEYOND_GIVER), "it gives no caps beyond its own");
+		complete(create(manager, "managed", "v/ops/covia/append", GUESTBOOK_CAPS, null));
 
-		// Changing a callable needs the authority it was created with; deleting one does not
-		assertEquals(CallableAdapter.SOURCE_NOT_HELD.formatted("guestbook"),
+		// Changing a callable needs its issuer's authority covering its caps; deleting one does not
+		assertEquals(CallableAdapter.CALLABLE_NOT_COVERED.formatted("guestbook"),
 			failure(run("v/ops/callable/update", Maps.of(Fields.NAME, "guestbook", Fields.CAPS, Caps.UNRESTRICTED), manager)));
 		complete(run("v/ops/callable/update", Maps.of(Fields.NAME, "managed", Fields.CAPS, Vectors.empty()), manager));
 		complete(run("v/ops/callable/update", Maps.of(Fields.NAME, "guestbook", Fields.DESCRIPTION, "Sign here"), owner));

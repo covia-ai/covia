@@ -147,7 +147,7 @@ class AuthResultTest {
 			assertEquals(user, auth.authenticate(ctx, token));
 			assertEquals(did, auth.authenticatedIdentity(ctx));
 			assertEquals(user, auth.authenticatedUser(ctx));
-			assertEquals(user, AuthMiddleware.callerContext(ctx).getCallerDID());
+			assertEquals(user, AuthMiddleware.callerContext(ctx).getAuthorityDID());
 			assertEquals(user, AuthMiddleware.callerContext(ctx).getUserDID());
 			assertNull(engine.getVenueState().users().user(user), "authentication does not admit users");
 		}
@@ -184,7 +184,7 @@ class AuthResultTest {
 			assertEquals(subject, auth.authenticate(ctx, token));
 			assertEquals(subject, auth.authenticatedUser(ctx));
 			assertEquals(did, auth.authenticatedIdentity(ctx));
-			assertEquals(subject, AuthMiddleware.callerContext(ctx).getCallerDID());
+			assertEquals(subject, AuthMiddleware.callerContext(ctx).getAuthorityDID());
 			assertNull(engine.getVenueState().users().user(subject));
 			assertUnknownEvidence(auth.authenticationResult(ctx));
 			assertKeyRejected(JWT.signPublic(claims().assoc(Fields.SUB, subject), AKeyPair.generate()),
@@ -200,7 +200,7 @@ class AuthResultTest {
 			Context ctx = context();
 			auth.authenticate(ctx, JWT.signPublic(claims().assoc(Fields.SUB, agent), key));
 			RequestContext caller = AuthMiddleware.callerContext(ctx);
-			assertEquals(agent, caller.getCallerDID());
+			assertEquals(agent, caller.getAuthorityDID());
 			assertEquals(agent, caller.getUserDID(), "a bearer cannot claim a local owner's namespace");
 			assertEquals(Vectors.empty(), caller.getCaps(), "authentication supplies no agent capabilities");
 			AString owner = Strings.create(agent.toString().substring(0, agent.toString().lastIndexOf(":g:")));

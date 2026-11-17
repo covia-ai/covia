@@ -1,6 +1,6 @@
 {
 	"name": "Telegram bots",
-	"description": "Lists the Telegram bots the caller may use — those configured to act as the caller's identity (all bots for the venue identity) — with their routing target, state (STARTING, PENDING, RUNNING, STOPPED), Telegram username once validated, last error when pending, and message counters. Bot tokens are never returned.",
+	"description": "Lists the Telegram bots the caller may manage (telegram/manage on <owner>/telegram/<name>; all bots for the venue identity) with their routing target, state (STARTING, PENDING, RUNNING, STOPPED), Telegram username once validated, last error when pending, and message counters. Bot tokens are never returned.",
 	"operation": {
 		"adapter": "telegram:bots",
 		"readOnly": true,

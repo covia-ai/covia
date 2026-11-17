@@ -195,8 +195,8 @@ public class VenueAdapter extends AAdapter {
 			ACell input, CompletableFuture<ACell> result) {
 		if (!engine.audit().enabled()) return result;
 		Object target = RT.getIn(input, Fields.NAME);
-		return result.whenComplete((r, t) -> engine.audit().event(event,
-			Audit.K_DID, ctx.getCallerDID(), Audit.K_OPERATION, subOperation, Audit.K_TARGET, target,
+		return result.whenComplete((r, t) -> engine.audit().event(event, ctx,
+			Audit.K_OPERATION, subOperation, Audit.K_TARGET, target,
 			Audit.K_OUTCOME, (t == null) ? Audit.OK : Audit.FAILED));
 	}
 

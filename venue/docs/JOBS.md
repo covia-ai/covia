@@ -286,10 +286,13 @@ remains the application's choice.
 
 ## Record fields: `caller`, `owner`, `op`, `adapter` and `parent`
 
-- **`caller`** is the principal that made the call: a user, one of a user's
-  agents (`<owner>:g:<agent>`) or a `admin/sudo` delegate (COG-8).
+- **`caller`** is the principal that made the call: a user, or one of a
+  user's agents (`<owner>:g:<agent>`) (COG-8). A job made under `admin/sudo`
+  names the user; one an `admin/sudo` delegate made before `admin/sudo` acted
+  as the user names the delegate.
 - **`owner`** is the namespace the job belongs to, written only when it
-  differs from `caller`: an agent's owner, or the user a delegate acts for.
+  differs from `caller`: an agent's owner, or for that earlier delegate's
+  work the user it acted for.
   The job is stored in that user's `j/`, and ownership, access control and the
   admission quota key on it (`Job.getOwner`, `owner` else `caller`). The owner
   is never derived from a DID; `covia.grid.Attribution` writes and reads both
@@ -355,23 +358,23 @@ Claude Code session does, so does an agent request naming an `outputPath`,
 whose job completes by writing there as its caller (AGENT_TEMPLATES.md), and
 so does a `remoteagent` call to an agent on this venue, which follows the
 agent's task as its caller (ADAPTERS.md, External agent interactions), and so
-does every external agent's backend job, which the agent's harness starts
-(UCAN.md §5.4). The job's entry keeps the grant proofs the caller presented, in
-the form checked on arrival, the separate authority the request acts with, if
-any (`Engine.keptAuthority`: an agent's harness acts with its controller's),
-and the request's execution scopes (agent, session, job and task), even when
+does every external agent's backend job, which the agent's harness starts in
+its controller's frame (UCAN.md §5.4). The job's entry keeps the grant
+proofs the caller presented, in the form checked on arrival, what narrows the
+request (`Engine.keptAuthority`), and the request's execution scopes (agent,
+session, job and task), even when
 there are none, so that `JobManager.keepsCallerContext` tells such a job from
 one whose adapter never asked. `JobManager.callerContext` rebuilds the caller
 from them with `Engine.context(owner, caller, proofs, authority)`, checking
-what a live request would: the principal and the kept authority still exist,
-a delegate still holds its `admin/sudo` grant, an agent acts under its current
-`config.caps`, an agent controller under its own. The kept authority is the
-controller the work started with, as it acts now, and the access token
-narrowing the request, if any, which then narrows it as it stands and to
-nothing once it is gone (ACCESS_TOKENS.md). Work a callable's call left
-running keeps the callable instead, and resumes in its owner's namespace with
-the invoker as caller and the callable's authority as it stands
-(CALLABLES.md). The record never holds them,
+what a live request would: the principal still exists, a delegate whose
+earlier work it is still holds its `admin/sudo` grant, which bounds it as it
+did then, and an agent acts under its current `config.caps` and its
+controller as it stands, read from its record. What narrows the request is
+the access token it came through, if any, which then narrows it as it stands
+and to nothing once it is gone (ACCESS_TOKENS.md). Work a callable's call left
+running keeps the callable and the call's caller instead, and resumes in the
+call's frame: the issuer's authority as the callable stands, in its owner's
+namespace (CALLABLES.md). The record never holds them,
 and they go with the entry when the job ends (UCAN.md §4.3).
 
 ## The update path — CAS-committed, terminal-sticky

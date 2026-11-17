@@ -59,7 +59,7 @@ class MessagingBindingAuthorityTest {
 		adapter.handleCreate(engine.context(owner, maker), Maps.of(Fields.NAME, "made", Fields.TOKEN, "s/token"));
 		TestMessagingAdapter.Bot made = adapter.runner(owner, "made");
 		RequestContext acting = adapter.bindingContext(made);
-		assertEquals(maker, acting.getCallerDID());
+		assertEquals(maker, acting.getAuthorityDID());
 		assertFalse(engine.authorityCovers(acting, Strings.create(owner + "/w/x"), Capability.CRUD_WRITE),
 			"the bot holds the agent's authority, not its user's");
 		assertThrows(AuthException.class, () -> adapter.resolveCredential("s/token", made));
@@ -71,5 +71,34 @@ class MessagingBindingAuthorityTest {
 		adapter.handleCreate(engine.context(owner, Principals.agentDID(owner, Strings.create("trusted"))),
 			Maps.of(Fields.NAME, "trusted", Fields.TOKEN, "s/token"));
 		assertEquals("bot-credential", adapter.resolveCredential("s/token", adapter.runner(owner, "trusted")));
+	}
+
+	/** A bot runs its operation for whoever its channel lets through, so with
+	 * all of its user's authority it is still not the user in person. */
+	@Test void aBotIsNeverItsUserInPerson(TestInfo info) {
+		AString owner = TestEngine.uniqueDID(info);
+		engine.getVenueState().users().ensure(owner).secrets().store("token", "bot-credential", SecretStore.keys(engine.getKeyPair()));
+		TestMessagingAdapter adapter = new TestMessagingAdapter("binding-in-person", owner);
+		engine.registerAdapter(adapter);
+		adapter.create(owner);
+		RequestContext acting = adapter.bindingContext(adapter.runner(owner, "runtime"));
+		assertTrue(engine.holdsAuthorityOf(acting, owner), "the bot holds all of its user's authority");
+		assertNull(acting.getAuthenticatedDID(), "but nobody authenticated as the user");
+		assertEquals(Engine.NOT_IN_PERSON, engine.inPersonDenial(acting));
+
+		Job asked = engine.jobs().invokeOperation("v/ops/hitl/request",
+			covia.grid.hitl.Hitl.request("Pay invoice").ask(covia.grid.hitl.Hitl.approval("pay", "Approve payment?").required()).build(),
+			RequestContext.of(owner));
+		assertEquals(Status.INPUT_REQUIRED, asked.getStatus(), asked::getErrorMessage);
+		try {
+			Job answer = engine.jobs().invokeOperation("v/ops/hitl/respond",
+				covia.grid.hitl.Hitl.answer(asked.getID().toHexString()).answer("pay", true).build(), acting);
+			TestEngine.awaitJob(answer, Job::isFinished, 10000, () -> "hitl:respond never finished");
+			assertEquals(Status.FAILED, answer.getStatus(), "a bot may not answer its user's approval requests");
+			assertEquals(Engine.NOT_IN_PERSON, answer.getErrorMessage());
+			assertEquals(Status.INPUT_REQUIRED, asked.getStatus(), "the request stays open");
+		} finally {
+			asked.cancel();
+		}
 	}
 }

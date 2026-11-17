@@ -235,19 +235,20 @@ class HeldKeysTest {
 		assertTrue(failure("sign", Maps.of("key", key, "data", "0x00")).contains(CryptoAdapter.KEY_NOT_HELD));
 	}
 
-	/** A request under admin/sudo is bounded by the grants it presents: it
-	 *  reaches the target's key by naming it, and a bare key is the delegate's
-	 *  own, as for any principal that acts. */
-	@Test void underSudoATargetsKeyIsNamedAndGranted() {
+	/** A request under admin/sudo acts as the target, so the target's keyring is
+	 *  its own: a bare key names the target's, and it signs with it whatever
+	 *  else its grants say. */
+	@Test void underSudoTheTargetsKeyringIsTheRequestsOwn() {
 		String did = heldKey();
 		String key = resource(did);
 		AString target = ctx.getUserDID();
-		RequestContext sudo = grantee(AKeyPair.generate(),
-			Vectors.of(Capability.create(Strings.create(target + "/"), Strings.create("*")))).onBehalfOf(target);
+		RequestContext sudo = engine.sudoContext(grantee(AKeyPair.generate(),
+			Vectors.of(Capability.create(target, Abilities.ADMIN_SUDO))), target);
 		CryptoAdapter crypto = CryptoAdapter.of(engine);
-		assertEquals(UCAN.fromDIDKey(Strings.create(did)),
-			crypto.heldKeyPair(sudo, Strings.create(key), Abilities.KEY_SIGN_RAW).getAccountKey());
-		assertThrows(AuthException.class, () -> crypto.heldKeyPair(sudo, Strings.create(did), Abilities.KEY_SIGN_RAW));
+		for (String named : new String[] {did, key}) {
+			assertEquals(UCAN.fromDIDKey(Strings.create(did)),
+				crypto.heldKeyPair(sudo, Strings.create(named), Abilities.KEY_SIGN_RAW).getAccountKey(), named);
+		}
 	}
 
 	@Test void pagingCountsKeysThenPhrases() {

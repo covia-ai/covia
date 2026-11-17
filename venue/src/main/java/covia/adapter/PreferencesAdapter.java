@@ -132,8 +132,8 @@ public class PreferencesAdapter extends AAdapter {
 
 	/** The addressed user's preferences, read-only: edits go through the tool. */
 	@Override
-	public AForkableCursor<ACell> latticeView(RequestContext ctx) {
-		return userCursor(ctx.getUserDID());
+	public AForkableCursor<ACell> latticeView(AString owner, RequestContext ctx) {
+		return userCursor(owner);
 	}
 
 	@Override
@@ -169,7 +169,7 @@ public class PreferencesAdapter extends AAdapter {
 
 	private ACell edit(RequestContext ctx, ACell input) {
 		AString user = ctx.getUserDID();
-		if (ctx.getCallerDID() == null || user == null) throw new AuthException(AUTHENTICATION_REQUIRED);
+		if (ctx.getAuthorityDID() == null || user == null) throw new AuthException(AUTHENTICATION_REQUIRED);
 		AString commandCell = RT.ensureString(RT.getIn(input, K_COMMAND));
 		String command = (commandCell != null) ? commandCell.toString() : null;
 		if (command == null || !COMMANDS.contains(command)) throw new InvalidInputException(UNKNOWN_COMMAND);

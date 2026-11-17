@@ -201,7 +201,7 @@ public class Scheduler {
 		AString desc = validateDescription(description);
 		// Owned by the user, fired as whoever scheduled it — so an agent's queued
 		// work stays visible to (and cancellable by) the account it runs in.
-		AString caller = ctx.getCallerDID();
+		AString caller = ctx.getAuthorityDID();
 		AVector<ACell> proofs = ctx.getProofs();
 		AMap<AString, ACell> authority = Engine.keptAuthority(ctx);
 		return locked(() -> {
