@@ -286,8 +286,8 @@ so the application decides who reaches them.
 
 `engine.context(did)` is the venue acting for a principal, which never makes
 that principal present. Acts only a user may do in person (answering approval
-requests, `secret:extract`, `user:export`, and the user's own account and
-sign-in keys) refuse it. For a user the application has authenticated itself,
+requests, `secret:extract`, `user:export`, minting the user's identity token,
+and the user's own account and sign-in keys) refuse it. For a user the application has authenticated itself,
 use `engine.requestContext(did, null)` or `RequestContext.of(did)`
 ([VENUE_AUTHORITY.md](VENUE_AUTHORITY.md#how-it-works-today), "In person").
 

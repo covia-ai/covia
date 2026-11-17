@@ -214,6 +214,40 @@ public class SchedulerTest {
 		assertEquals(owner, TestAdapter.CAPTURED_CTX.get(owner).getCallerDID(), "scheduled under sudo, it is the user's");
 	}
 
+	/**
+	 * An event that calls user:sudo enters it when it fires, its grant checked
+	 * then as any request's would be: with admin/sudo on the user it runs as
+	 * the user, called by the delegate; without one it is refused.
+	 */
+	@Test
+	public void testAnEventEntersSudoWhenItFires() throws Exception {
+		AKeyPair ownerKey = AKeyPair.generate();
+		AKeyPair delegateKey = AKeyPair.generate();
+		AString owner = UCAN.toDIDKey(ownerKey.getAccountKey());
+		AString delegate = UCAN.toDIDKey(delegateKey.getAccountKey());
+		engine.getVenueState().users().create(owner);
+		engine.getVenueState().users().create(delegate);
+		AString grant = UCAN.create(ownerKey, delegateKey.getAccountKey(),
+			(System.currentTimeMillis() / 1000) + 3600,
+			Vectors.of(Capability.create(owner, Abilities.ADMIN_SUDO)), Vectors.empty()).toJWT(ownerKey);
+		RequestContext delegateCtx = engine.withTransportGrants(RequestContext.of(delegate), Vectors.of(grant));
+		AMap<AString, ACell> asOwner = Maps.of(Fields.DID, owner, Fields.OPERATION, "v/test/ops/capturectx");
+
+		Blob granted = sched.schedule(s("v/ops/user/sudo"), asOwner, delegateCtx, future());
+		TestAdapter.CAPTURED_CTX.remove(owner);
+		sched.trigger(granted, delegateCtx).get(5, TimeUnit.SECONDS);
+		RequestContext fired = TestAdapter.CAPTURED_CTX.get(owner);
+		assertNotNull(fired, "it ran as the user");
+		assertEquals(owner, fired.getCallerDID());
+		assertEquals(delegate, fired.getCaller(), "called by the delegate");
+
+		RequestContext ungrantedCtx = RequestContext.of(delegate);
+		Blob ungranted = sched.schedule(s("v/ops/user/sudo"), asOwner, ungrantedCtx, future());
+		TestAdapter.CAPTURED_CTX.remove(owner);
+		assertThrows(ExecutionException.class, () -> sched.trigger(ungranted, ungrantedCtx).get(5, TimeUnit.SECONDS));
+		assertNull(TestAdapter.CAPTURED_CTX.get(owner), "without admin/sudo it never ran as the user");
+	}
+
 	/** An agent's step acts as the agent, so what it schedules fires as the agent. */
 	@Test
 	public void testAStepSchedulesAsItsAgent() {

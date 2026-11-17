@@ -80,8 +80,9 @@ For the division with capability enforcement and authentication, see
   that needs the user present passes only when the principal whose authority
   applies is a user in its own account and the request authenticated as that
   user (`Engine.inPersonDenial`): answering approval requests, `secret:extract`,
-  `user:export` and `user:clone` from one's own account, and reading or
-  changing one's own sign-in keys.
+  `user:export` and `user:clone` from one's own account, minting one's own
+  identity token (`auth:identity-token`), and reading or changing one's own
+  sign-in keys.
 - **Revocation.** Nothing revokes a grant; only sign-in keys can be revoked
   (`ManagedUsers`).
 

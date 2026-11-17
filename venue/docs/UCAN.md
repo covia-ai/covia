@@ -994,7 +994,7 @@ an agent reaching it would approve its own request with authority it may not
 have. An agent that needs more asks its human, and only the human can answer.
 A request through an access token answers only with all of the inbox owner's
 authority ([ACCESS_TOKENS.md](ACCESS_TOKENS.md)), and only the owner in person
-answers: never a callable's call, a delegate acting for the owner, an
+answers: never a callable's call, a delegate acting as the owner, an
 operation a bot runs, or work a job or scheduled event carries on later
 ([VENUE_AUTHORITY.md](VENUE_AUTHORITY.md#how-it-works-today), "In person").
 
