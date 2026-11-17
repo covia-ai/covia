@@ -1,5 +1,7 @@
 package covia.venue;
 
+import java.util.function.Predicate;
+
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
@@ -20,24 +22,27 @@ import covia.api.Fields;
  * (REST, MCP, A2A) the request came through.</p>
  *
  * <p>This is the pure evaluation of a {@code config.accepts} value. Looking the
- * record up, and deciding to consult it at all, is {@link Engine#crossUserAllows}'s
- * business — the single cross-user gate. The policy is one of:</p>
+ * record up, deciding to consult it at all, and bounding what it admits a
+ * caller to by the caller's narrowing are {@link Engine#crossUserAllows}'s
+ * business — the single cross-user gate. A named principal admits whatever acts
+ * for it ({@link Engine#actsFor}): itself, and the agents acting for it up
+ * their chain of controllers, each only as far as its caps cover asking. The
+ * policy is one of:</p>
  * <ul>
  *   <li>{@link #OWNER} (or absent) — nobody is admitted; a cross-user caller
  *       needs a presented proof, exactly as before.</li>
- *   <li>{@link #VENUE} — the venue operator: principals whose <em>user</em> is
- *       the venue's own DID, i.e. the venue acting directly and agents it owns.
- *       This is distinct from "everyone hosted on this venue", which is
- *       deliberately not a class: it would usually be too broad, and the
- *       operator must stay clearly distinguishable from every other user.</li>
+ *   <li>{@link #VENUE} — the venue operator: the venue's own DID and whatever
+ *       acts for it. This is distinct from "everyone hosted on this venue",
+ *       which is deliberately not a class: it would usually be too broad, and
+ *       the operator must stay clearly distinguishable from every other user.</li>
  *   <li>{@link #ANYONE} — every caller, including an anonymous one (the venue's
  *       public principal). Whether anonymous callers reach the venue at all,
  *       and may invoke the operations that ask, is the operator's
  *       {@code auth.public} policy.</li>
- *   <li>An array — an allowlist matched <b>exactly</b> against the caller's
- *       DID: a user DID admits that user only, {@code <userDID>:g:<agentId>}
- *       admits that one agent only. No prefixes, no families. The
- *       {@code "venue"} keyword may appear as an entry.</li>
+ *   <li>An array of principal DIDs, each admitting what acts for that
+ *       principal: a user DID admits that user and its agents,
+ *       {@code <userDID>:g:<agentId>} that agent and the agents under it. No
+ *       prefixes. The {@code "venue"} keyword may appear as an entry.</li>
  * </ul>
  *
  * <p>Anything else fails closed: a malformed policy admits nobody, and
@@ -120,7 +125,26 @@ public final class Admission {
 	 */
 	public static boolean admits(ACell accepts, AString callerDID, boolean callerIsVenue,
 			boolean callerIsPublic) {
-		if (accepts == null || callerDID == null) return false;
+		if (callerDID == null) return false;
+		return admits(accepts, callerDID::equals, callerIsVenue, callerIsPublic);
+	}
+
+	/**
+	 * Whether {@code accepts} admits a caller that acts for each principal
+	 * {@code actsFor} accepts: an entry admits the caller when it acts for the
+	 * principal the entry names ({@link Engine#actsFor}). A policy with a
+	 * {@link #problem} admits nobody, and only {@link #ANYONE} admits the public
+	 * principal. Whether the caller may use what it is admitted to is the
+	 * caller's narrowing's to say, not this policy's.
+	 *
+	 * @param accepts        the agent's admission {@link #policy} (may be null)
+	 * @param actsFor        whether the caller acts for a named principal
+	 * @param callerIsVenue  whether the caller acts for the venue operator
+	 * @param callerIsPublic whether the caller is the venue's public principal
+	 */
+	public static boolean admits(ACell accepts, Predicate<AString> actsFor, boolean callerIsVenue,
+			boolean callerIsPublic) {
+		if (accepts == null) return false;
 		if (problem(accepts) != null) return false;
 		if (ANYONE.equals(accepts)) return true;
 		if (callerIsPublic) return false;
@@ -133,7 +157,7 @@ public final class Admission {
 			AString entry = (AString) entries.get(i);
 			if (VENUE.equals(entry)) {
 				if (callerIsVenue) return true;
-			} else if (entry.equals(callerDID)) {
+			} else if (actsFor.test(entry)) {
 				return true;
 			}
 		}

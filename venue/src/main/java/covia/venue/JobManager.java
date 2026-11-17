@@ -917,9 +917,9 @@ public class JobManager {
 
 	/**
 	 * Evaluates a capability gate (#216): invokes the grant's {@code nb.gate}
-	 * operation with {@code {operation, input, caller, owner?}} describing the
-	 * invocation being authorised: {@code caller} is the principal that acted
-	 * and {@code owner} the namespace it acted in, present when that differs. The capability applies iff the gate op
+	 * operation with {@code {operation, input, caller}} describing the
+	 * invocation being authorised: {@code caller} is the principal whose
+	 * authority the check runs on. The capability applies iff the gate op
 	 * succeeds; any failure — the op fails, doesn't resolve, or times out —
 	 * denies with the reason (fail-closed, never fail-open).
 	 *
@@ -937,7 +937,7 @@ public class JobManager {
 	 */
 	String evaluateGate(AString gateOp, AString opRef, ACell input, AString caller,
 			RequestContext authorityCtx) {
-		return runGate(gateOp, gateInput(opRef, input, caller, authorityCtx.getUserDID()),
+		return runGate(gateOp, gateInput(opRef, input, caller),
 			engine.authorityFrame(authorityCtx).forGateEvaluation(gateOp));
 	}
 
@@ -953,13 +953,14 @@ public class JobManager {
 	 */
 	public String evaluateCallableGate(AString gateOp, AString callable, ACell input, RequestContext invoker,
 			RequestContext call) {
-		return runGate(gateOp, gateInput(callable, input, invoker.getAuthorityDID(), invoker.getUserDID()),
+		return runGate(gateOp, gateInput(callable, input, invoker.getAuthorityDID()),
 			call.asGateEvaluation(gateOp));
 	}
 
-	/** A gate's input: the operation being authorised, its input, who acted and, when it differs, the namespace it acted in. */
-	private static AMap<AString, ACell> gateInput(AString operation, ACell input, AString caller, AString owner) {
-		return Attribution.attribute(Maps.of(Fields.OPERATION, operation, Fields.INPUT, input), caller, owner);
+	/** A gate's input: the operation being authorised, its input and the principal that acted. */
+	private static AMap<AString, ACell> gateInput(AString operation, ACell input, AString caller) {
+		AMap<AString, ACell> gateInput = Maps.of(Fields.OPERATION, operation, Fields.INPUT, input);
+		return (caller == null) ? gateInput : gateInput.assoc(Fields.CALLER, caller);
 	}
 
 	/** Runs gate {@code gateOp} on {@code gateInput} under {@code gateCtx}: null when it succeeds, else why not. */

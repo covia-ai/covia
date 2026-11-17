@@ -4157,8 +4157,9 @@ public class Engine {
 	 *   <li><b>Target-side admission</b> (covia#447) — an agent record's
 	 *       {@code config.accepts}: the owner's standing policy for who may
 	 *       talk to that agent ({@code agent/request}, {@code agent/message})
-	 *       without a delegation — the venue operator, exact principal DIDs,
-	 *       or anyone. Consulted for that one resource shape and those
+	 *       without a delegation — the venue operator, principals and what
+	 *       acts for them, or anyone — used only where the caller's narrowing
+	 *       covers it. Consulted for that one resource shape and those
 	 *       abilities only. See {@link Admission}.</li>
 	 *   <li><b>Presented UCAN proofs</b> — the pure fail-closed delegation
 	 *       check ({@link covia.lattice.CapabilityChecker#proofsCover}).</li>
@@ -4205,8 +4206,11 @@ public class Engine {
 	/**
 	 * Target-side admission (covia#447): the resource owner's own standing policy
 	 * for who may talk to their agent, consulted for exactly one resource shape —
-	 * an agent record {@code <owner>/g/<id>} — and the two talk abilities. The
-	 * policy algebra is {@link Admission}; this method only locates the record.
+	 * an agent record {@code <owner>/g/<id>} — and the two talk abilities. A
+	 * principal it names admits whatever acts for it ({@link #actsFor}), each
+	 * only where its narrowing covers the act ({@link #admissionCovers}). The
+	 * policy algebra is {@link Admission}; this method locates the record and
+	 * the caller's chain.
 	 */
 	private boolean admissionAllows(RequestContext ctx, AString resource, AString ability) {
 		if (!isTalkAbility(ability)) return false;
@@ -4221,8 +4225,68 @@ public class Engine {
 		User user = venueState.users().user(owner);
 		Agent agent = (user != null) ? user.agent(agentId) : null;
 		if (agent == null) return false;
-		return Admission.admits(Admission.policy(agent.getConfig()), caller,
-			isVenuePrincipal(ctx.getUserDID()), isPublicPrincipal(caller));
+		AString account = ctx.getUserDID();
+		AString web = config.getWebDID();
+		boolean actsForVenue = actsFor(account, caller, getDIDString()) || (web != null && actsFor(account, caller, web));
+		if (!Admission.admits(Admission.policy(agent.getConfig()), named -> actsFor(account, caller, named),
+				actsForVenue, isPublicPrincipal(caller))) return false;
+		return narrowingAllows(ctx, resource, ability);
+	}
+
+	/**
+	 * Whether what narrows the authority {@code ctx} acts with covers
+	 * {@code (resource, ability)}, so that it may use what an admission gives
+	 * it there: an {@code accepts} or a gate (AUTHORITY.md, Admission). Being
+	 * admitted is part of the named principal's authority, which a request holds
+	 * only as narrowed: by the caps of every agent on its chain of controllers,
+	 * and by its access tokens and callable. The venue's public principal has no
+	 * caps; its public scope is its whole authority, not a narrowing.
+	 */
+	public boolean admissionCovers(RequestContext ctx, AString resource, AString ability) {
+		if (ctx == null) return false;
+		RequestContext frame = authorityFrame(ctx);
+		if (frame != ctx) return admissionCovers(frame, ctx.inNamespace(resource), ability);
+		return narrowingAllows(ctx, resource, ability);
+	}
+
+	/** As {@link #admissionCovers}, on a context acting with its own authority. */
+	private boolean narrowingAllows(RequestContext ctx, AString resource, AString ability) {
+		if (!narrowingsCover(ctx, resource, ability, null)) return false;
+		if (isPublicPrincipal(ctx.getAuthorityDID())) return true;
+		AVector<ACell> scope = ctx.scopeFor(resource);
+		return scope == null || ctx.denialUnder(scope, resource, ability, ctx.getUserDID(), null) == null;
+	}
+
+	/**
+	 * Whether {@code principal} acts with {@code named}'s authority: it is that
+	 * principal, or an agent whose controller does, up its chain of controllers
+	 * as their records name them (AUTHORITY.md, Admission). An agent-shaped DID
+	 * counts only as the agent a record of that exact form names, and a chain
+	 * that loops or meets an agent with no record acts for no one beyond it.
+	 */
+	public boolean actsFor(AString principal, AString named) {
+		if (principal == null || named == null) return false;
+		return actsFor(accountOf(principal), principal, named);
+	}
+
+	/** As {@link #actsFor(AString, AString)}, for {@code principal} in {@code owner}'s account as a context or record names it. */
+	private boolean actsFor(AString owner, AString principal, AString named) {
+		Set<AString> seen = new HashSet<>();
+		while (principal != null) {
+			if (principal.equals(named)) return true;
+			AString agentId = agentIdIn(owner, principal);
+			if (agentId == null || !seen.add(principal)) return false;
+			Agent agent = getAgent(owner, agentId);
+			if (agent == null) return false;
+			principal = agent.getController();
+			owner = accountOf(principal);
+		}
+		return false;
+	}
+
+	/** The account a principal a record names belongs to: its owner's for an agent, its own otherwise. */
+	private static AString accountOf(AString principal) {
+		return covia.grid.Principals.isAgentDID(principal) ? covia.grid.Principals.userOf(principal) : principal;
 	}
 
 	/**

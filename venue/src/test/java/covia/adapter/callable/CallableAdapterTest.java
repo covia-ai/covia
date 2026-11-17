@@ -169,7 +169,8 @@ public class CallableAdapterTest {
 				Fields.DEFAULT, Maps.of(Fields.CALLERS, Vectors.of(bob))))), owner));
 		complete(run("v/ops/callable/update", Maps.of(Fields.NAME, "private", Fields.GATE, "o/team-gate"), owner));
 		complete(call(RequestContext.of(bob), callable, append("w/guestbook", "from Bob")));
-		complete(call(agent(bob, "helper", Vectors.of(cap("v/ops/", Abilities.INVOKE))), callable, append("w/guestbook", "from Bob's agent")));
+		complete(call(agent(bob, "helper", Vectors.of(cap("v/ops/", Abilities.INVOKE), cap(callable, Abilities.CALLABLE_CALL))),
+			callable, append("w/guestbook", "from Bob's agent")));
 		complete(call(engine.harnessContext(bob, Strings.create("helper")), callable, append("w/guestbook", "from its harness")));
 		String refused = failure(call(RequestContext.of(carol), callable, append("w/guestbook", "from Carol")));
 		assertTrue(refused.contains(CallableAdapter.NOT_A_CALLER.formatted(carol)), refused);
@@ -180,6 +181,51 @@ public class CallableAdapterTest {
 		failure(call(RequestContext.of(bob), callable, append("w/guestbook", "x")));
 		complete(run("v/ops/callable/update", Maps.of(Fields.NAME, "private", Fields.GATE, null), owner));
 		assertEquals(CallableAdapter.NOT_CALLABLE.formatted(callable), failure(call(RequestContext.of(bob), callable, append("w/guestbook", "x"))));
+	}
+
+	/** {@code owner}'s agent {@code id} under {@code controller}, which may be in another account, with {@code caps}. */
+	private RequestContext controlled(AString owner, String id, AString controller, AVector<ACell> caps) {
+		engine.getVenueState().users().ensure(controller);
+		engine.getVenueState().users().ensure(owner).agents().create(Strings.create(id), Maps.of(covia.venue.Config.CAPS, caps),
+			null, null, controller);
+		return engine.context(owner, Principals.agentDID(owner, Strings.create(id)));
+	}
+
+	@Test
+	public void aGateAdmitsWhatActsForWhomItListsWithinItsCaps(TestInfo info) {
+		AString alice = TestEngine.uniqueDID(info);
+		AString bob = TestEngine.uniqueDID("bob-" + info.getDisplayName());
+		AString carol = TestEngine.uniqueDID("carol-" + info.getDisplayName());
+		AString dan = TestEngine.uniqueDID("dan-" + info.getDisplayName());
+		RequestContext owner = RequestContext.of(alice);
+		openGuestbook(alice);
+		complete(run("v/ops/covia/write", Maps.of(Fields.PATH, "o/team-gate", Fields.VALUE, Maps.of(
+			Fields.NAME, "Team gate",
+			Fields.OPERATION, Maps.of(Fields.ADAPTER, "callable:gates/callers",
+				Fields.DEFAULT, Maps.of(Fields.CALLERS, Vectors.of(bob))))), owner));
+		complete(create(owner, "team", "v/ops/covia/append", GUESTBOOK_CAPS, "o/team-gate"));
+		complete(create(owner, "open", "v/ops/covia/append", GUESTBOOK_CAPS, "v/ops/callable/gates/anyone"));
+		String team = alice + "/x/callable/team";
+		String open = alice + "/x/callable/open";
+		ACell invoke = cap("v/ops/", Abilities.INVOKE);
+
+		// Listing Bob admits his agents, each as far as its caps cover calling
+		complete(call(controlled(bob, "free", bob, null), team, append("w/guestbook", "free")));
+		assertEquals(CallableAdapter.NOT_CALLABLE.formatted(team),
+			failure(call(controlled(bob, "narrow", bob, Vectors.of(invoke)), team, append("w/guestbook", "narrow"))));
+		complete(call(controlled(bob, "member", bob, Vectors.of(invoke, cap(team, Abilities.CALLABLE_CALL))), team, append("w/guestbook", "member")));
+
+		// It admits an agent elsewhere that Bob controls, never one in Bob's account that Carol controls
+		complete(call(controlled(dan, "lent", bob, Vectors.of(invoke, cap(team, Abilities.CALLABLE_CALL))), team, append("w/guestbook", "lent")));
+		String refused = failure(call(controlled(bob, "carols", carol, Vectors.of(invoke, cap(team, Abilities.CALLABLE_CALL))), team,
+			append("w/guestbook", "carols")));
+		assertTrue(refused.contains(CallableAdapter.NOT_A_CALLER.formatted(Principals.agentDID(bob, Strings.create("carols")))), refused);
+
+		// A gate that admits anyone admits a capped agent only as far as its caps
+		assertEquals(CallableAdapter.NOT_CALLABLE.formatted(open),
+			failure(call(controlled(bob, "narrow2", bob, Vectors.of(invoke)), open, append("w/guestbook", "narrow2"))));
+		complete(call(controlled(bob, "member2", bob, Vectors.of(invoke, cap(open, Abilities.CALLABLE_CALL))), open, append("w/guestbook", "member2")));
+		assertEquals(Vectors.of("free", "member", "lent", "member2"), held(alice, "w/guestbook"));
 	}
 
 	@Test

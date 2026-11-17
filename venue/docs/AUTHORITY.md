@@ -107,11 +107,17 @@ authority that covers its caps as they are and as they become.
 ## Admission
 
 An `accepts` list or a callers gate that names a principal admits whatever
-acts with that principal's authority, directly or through others: its agents,
-and requests through its tokens or calls of its callables, each within its own
-caps. Being admitted is part of the named principal's authority, which each of
-these holds only as narrowed, so it uses an admission only where its caps cover
-the act.
+acts with that principal's authority, directly or through others: the
+principal itself, the agents acting for it up their chain of controllers, and
+requests through its tokens or calls of its callables (`Engine.actsFor`).
+`"venue"` names the venue's own DID in the same way. Being admitted is part of
+the named principal's authority, which each of these holds only as narrowed,
+so a request uses an admission only where its narrowing covers the act: the
+caps of every agent on its chain of controllers, whichever principal is
+named, and the caps of its tokens and callable (`Engine.admissionCovers`). The
+same bound holds for `"anyone"` and for every gate, checked before the gate
+runs, since what a gate admits on is its own. The venue's public principal has
+no caps, so nothing narrows what `"anyone"` admits it to.
 
 ## State within one interaction
 
@@ -234,8 +240,6 @@ one through a token or within a callable's call.
 - A record of work whose `caller` names a sudo delegate, as work it left
   before `admin/sudo` acted as the user does, beside an `owner` naming the account,
   from which the venue works out what kind of principal acted.
-- An `accepts` list that matches DIDs exactly, and a callers gate that admits
-  a namespace it lists.
 - A scheduled event reached by identity, by its account's owner or the
   principal that scheduled it, since no capability names an event.
 - A configured Python function, which is not told who called it (#706).
