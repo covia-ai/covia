@@ -9,7 +9,8 @@ host setup and store backups.
 - JDK 21+; CI and releases use JDK 25, and source targets Java 21.
   **Never test on JDK 25 before 25.0.3:** JDK-8370887 delays timeouts.
   CI and release builds reject affected versions with `-Dcovia.jdk.check=ERROR`.
-- Maven 3.7+ and Git. Maven Central publication requires Maven 3.9.
+- Maven 3.7+ and Git. Publishing to Maven Central needs Maven 3.9 or 3.10: the
+  Central plugin does not yet work with Maven 4.
 - Dependencies come from Maven Central; versions are pinned in the root POM.
 
 The optional CPython bridge needs Java 22+ for its FFM implementation. Java 21
@@ -348,14 +349,21 @@ Maven Central publishes are irreversible.
 mvn clean deploy    # -SNAPSHOT version → routes to the Central snapshot repo
 ```
 
+**Check the release bundle** on the tagged version, which builds and signs it
+without uploading anything:
+```bash
+mvn clean deploy -Prelease -DskipUpload=true
+```
+`target/central-publishing/central-bundle.zip` should hold, for each published
+module, its jar, sources, javadoc and POM with their signatures and checksums,
+and nothing else (`unzip -l`).
+
 **Publish a release** — only after the GitHub Release for the tag is live:
 ```bash
 mvn clean deploy -Prelease
 ```
-Run it with Maven 3.9 and without `-B`. Under Maven 3.10 the Central plugin
-bundles Maven's `.locks/` and `maven-metadata-local.xml` files, which Central
-rejects. In batch mode the gpg plugin passes `--pinentry-mode error`, so gpg
-cannot ask for the key's passphrase.
+Run both without `-B`: in batch mode the gpg plugin passes
+`--pinentry-mode error`, so gpg cannot ask for the key's passphrase.
 
 `-Prelease` GPG-signs every artifact; the Central plugin bundles the published
 modules (main + sources + javadoc + pom + signatures) and, with
