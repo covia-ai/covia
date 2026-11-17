@@ -132,6 +132,11 @@ public class User extends ALatticeComponent<ACell> implements TransactionalCompo
 		return Covia.entry(cursor(), namespace);
 	}
 
+	/** A namespace that holds a collection: absent, it reads as {@code empty}, so a transaction on it starts from that. */
+	private <T extends ACell> AForkableCursor<T> collection(AString namespace, T empty) {
+		return this.<T>namespace(namespace).withDefault(empty);
+	}
+
 	/** The data of a namespace held in an {@code {updated, data}} record, which a change stamps. */
 	private <T extends ACell> AForkableCursor<T> wrapped(AString namespace) {
 		AForkableCursor<ACell> record = StampedCursor.create(namespace(namespace),
@@ -141,7 +146,7 @@ public class User extends ALatticeComponent<ACell> implements TransactionalCompo
 
 	/** This user's agents ({@code g}), a map the first agent creates. */
 	public Agents agents() {
-		return new Agents(context, namespace(Namespace.G), did);
+		return new Agents(context, collection(Namespace.G, Maps.empty()), did);
 	}
 
 	/** Gets the user's DID string. */
@@ -156,7 +161,7 @@ public class User extends ALatticeComponent<ACell> implements TransactionalCompo
 	 */
 	@SuppressWarnings("unchecked")
 	public AssetStore assets() {
-		return new AssetStore(namespace(Namespace.A));
+		return new AssetStore(collection(Namespace.A, Index.none()));
 	}
 
 	/**
@@ -165,7 +170,7 @@ public class User extends ALatticeComponent<ACell> implements TransactionalCompo
 	 * @return SecretStore wrapping the user's "s" cursor
 	 */
 	public SecretStore secrets() {
-		return new SecretStore(context, namespace(Namespace.S));
+		return new SecretStore(context, collection(Namespace.S, Maps.empty()));
 	}
 
 	/** The agent {@code agentId}, deleted or not, or null when it has no record ({@link Agents#agent}). */
@@ -194,7 +199,7 @@ public class User extends ALatticeComponent<ACell> implements TransactionalCompo
 
 	/** This user's jobs ({@code j/}), bound to this user or transaction draft. */
 	public Jobs jobs() {
-		return new Jobs(context, namespace(Namespace.J), did);
+		return new Jobs(context, collection(Namespace.J, Index.none()), did);
 	}
 
 	/** Whoever holds authority over {@code <did>/<path>}; none outside any user. */

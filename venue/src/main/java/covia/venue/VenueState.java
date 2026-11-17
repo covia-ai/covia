@@ -256,7 +256,7 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 	 * @return AssetStore cursor wrapper
 	 */
 	public AssetStore assets() {
-		return new AssetStore(level(Covia.ASSETS));
+		return new AssetStore(collection(Covia.ASSETS, Index.none()));
 	}
 
 	/** One level of the venue record; a change creates the level, and the record, when absent. */
@@ -271,6 +271,11 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 			(AForkableCursor<Index<Keyword, ACell>>) (AForkableCursor<?>) venue).path(key);
 	}
 
+	/** A level that holds a collection: absent, it reads as {@code empty}, so a transaction on it starts from that. */
+	private <T extends ACell> AForkableCursor<T> collection(Keyword key, T empty) {
+		return this.<T>level(key).withDefault(empty);
+	}
+
 	/** A string-keyed level of the venue record; a put creates the level when absent. */
 	private MapComponent<AString, ACell> mapLevel(Keyword key) {
 		return new MapComponent<>(level(key));
@@ -282,7 +287,7 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 	 * @return Users cursor wrapper
 	 */
 	public Users users() {
-		return new Users(context, level(Covia.USER_DATA));
+		return new Users(context, collection(Covia.USER_DATA, Maps.empty()));
 	}
 
 	/**
@@ -486,25 +491,22 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 
 	/** The users whose name and sign-in keys this venue manages; provider/runtime policy belongs to Auth. */
 	public ManagedUsers managedUsers() {
-		return new ManagedUsers(context, level(Covia.USERS));
+		return new ManagedUsers(context, collection(Covia.USERS, Maps.empty()));
 	}
 
 	/** The entries of unfinished jobs; the jobs themselves belong to JobManager. */
 	public JobIndex jobIndex() {
-		return new JobIndex(level(Covia.JOBS));
+		return new JobIndex(collection(Covia.JOBS, Index.none()));
 	}
 
-	/**
-	 * Stored schedule, read as empty while absent so a transaction on it starts
-	 * from empty; timer and execution lifecycle belong to Scheduler.
-	 */
+	/** Stored schedule; timer and execution lifecycle belong to Scheduler. */
 	public Schedule schedule() {
-		return new Schedule(context, this.<ACell>level(Covia.SCHEDULE).withDefault(Maps.empty()));
+		return new Schedule(context, collection(Covia.SCHEDULE, Maps.empty()));
 	}
 
 	/** The venue's content, by SHA-256 ({@code :storage}). */
 	public ContentStore contents() {
-		return new ContentStore(level(Covia.STORAGE));
+		return new ContentStore(collection(Covia.STORAGE, Index.none()));
 	}
 
 	/**
@@ -627,7 +629,7 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 			requireAdapterVersion(name, supported);
 			ACell migrated = value;
 			for (long v = version; v < supported; v++) migrated = migration.step().apply(v, migrated);
-			if (migrated != value) state.set(migrated);
+			if (migrated != value) adapterState(name).set(migrated);
 		}
 		setAdapterVersion(name, supported);
 	}

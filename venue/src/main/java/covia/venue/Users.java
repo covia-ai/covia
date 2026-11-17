@@ -220,11 +220,10 @@ public class Users extends MapComponent<AString, ACell> implements Transactional
 	 * Every live account's record, for iteration (e.g. job recovery); deleted
 	 * accounts' tombstones are left out.
 	 *
-	 * @return Map of DID string to user state, or null if none
+	 * @return Map of DID string to user state, empty when there are none
 	 */
 	public AMap<AString, ACell> getAll() {
 		AMap<AString, ACell> all = get();
-		if (all == null) return null;
 		for (var entry : all.entrySet()) {
 			if (RT.getIn(entry.getValue(), Covia.K_DELETED) != null) all = all.dissoc(entry.getKey());
 		}
