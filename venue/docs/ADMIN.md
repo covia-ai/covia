@@ -185,9 +185,10 @@ acts with that user's whole authority, the delegate its caller, and what it
 does and makes is the user's ([AUTHORITY.md](AUTHORITY.md#acting-for-another-user)).
 The grants the delegate presents neither bound nor add to it. Entry is checked
 once, when the call is made, whatever request makes it: an agent's tool call
-or a scheduled event included. Acts that need the user in person refuse it:
-answering the user's approval requests, `secret:extract`, `user:export` and
-minting the user's identity token. Requests through access tokens and
+or a scheduled event included. Acts that need the user in person refuse it
+([VENUE_AUTHORITY.md](VENUE_AUTHORITY.md#how-it-works-today), "In person"),
+among them answering the user's approval requests, `secret:extract`,
+`user:export` and minting the user's identity token. Requests through access tokens and
 callables cannot enter it, and nobody enters the venue's own DID or its public
 principal. A narrower delegation is a plain grant, under which the delegate
 acts as itself.

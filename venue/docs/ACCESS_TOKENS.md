@@ -80,6 +80,16 @@ caps allow, as they are and as they become. So a request through a token can
 change any of its issuer's tokens within its own caps, itself included, and
 none wider. Deleting a token only narrows, so it needs neither.
 
+**Handing out a user's bearer needs the user in person.** A request through a
+token a user issued is that user in person
+([VENUE_AUTHORITY.md](VENUE_AUTHORITY.md#how-it-works-today)), so its bearer
+stands for the user's identity. Making such a token, rotating it and reading
+its bearer again each need the user in person: a delegate acting as the user
+under `admin/sudo`, a callable's call and work the venue carries on cannot
+(`Engine.inPersonDenial`). A request through one of the user's tokens is the
+user in person, so it may. An agent's token is never in person, so whatever
+manages it may.
+
 ### What revocation cannot take back
 
 A credential minted while a token was in force outlives it, as it outlives an

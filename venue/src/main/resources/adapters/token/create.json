@@ -1,6 +1,6 @@
 {
 	"name": "Token Create",
-	"description": "Creates an access token in your namespace: a scoped bearer that acts with your own authority narrowed by its caps, read at the time of each action, and is accepted only at the access points named in access, each entry read by that access point (mcp: {tools} for the venue's MCP endpoint). Returns the bearer once, in this result (wait for the result: the job record keeps it hidden). Token administration: needs admin/token/<access point> on x/token/<name> for every access point named. For a token accepted at MCP alone, v/ops/mcp/create-token needs only mcp/token.",
+	"description": "Creates an access token in your namespace: a scoped bearer that acts with your own authority narrowed by its caps, read at the time of each action, and is accepted only at the access points named in access, each entry read by that access point (mcp: {tools} for the venue's MCP endpoint). Returns the bearer once, in this result (wait for the result: the job record keeps it hidden). Token administration: needs admin/token/<access point> on x/token/<name> for every access point named, and for a token you issue as a user, you in person (a request through it is you in person). For a token accepted at MCP alone, v/ops/mcp/create-token needs only mcp/token.",
 	"dateCreated": "2026-11-12T00:00:00Z",
 	"operation": {
 		"adapter": "token:create",

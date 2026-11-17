@@ -91,7 +91,8 @@ public class McpTokenVenueTest {
 		AMap<AString, ACell> reference = engine.tokens().lookup(bearer);
 		AccessToken token = engine.resolveToken(reference);
 		Operation operation = engine.jobs().resolveOperation(Strings.create(ref), engine.context(token.owner(), token.issuer()));
-		Job job = engine.jobs().startToolOperation(Strings.create(ref), operation, input, engine.tokenContext(reference)).job();
+		// As the /mcp door makes it: the token's request, authenticated as its issuer
+		Job job = engine.jobs().startToolOperation(Strings.create(ref), operation, input, engine.requestContext(null, reference)).job();
 		TestEngine.awaitJob(job, Job::isFinished, 10000, () -> ref + " never finished");
 		return job;
 	}

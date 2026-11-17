@@ -80,8 +80,9 @@ For the division with capability enforcement and authentication, see
   applies is a user in its own account and the request authenticated as that
   user (`Engine.inPersonDenial`): answering approval requests, `secret:extract`,
   `user:export` and `user:clone` from one's own account, minting one's own
-  identity token (`auth:identity-token`), and reading or changing one's own
-  sign-in keys.
+  identity token (`auth:identity-token`), making, rotating or reading the
+  bearer of an access token one issues ([ACCESS_TOKENS.md](ACCESS_TOKENS.md)),
+  and reading or changing one's own sign-in keys.
 - **Revocation.** Nothing revokes a grant; only sign-in keys can be revoked
   (`ManagedUsers`).
 

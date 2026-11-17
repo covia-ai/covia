@@ -228,7 +228,8 @@ public class TokenAdapter extends AAdapter {
 	 * Creates a token in the caller's namespace, issued by the principal whose
 	 * authority the request acts with ({@link Engine#actingPrincipal}), with a
 	 * new bearer, handed out this once. Its caps lie within what the request
-	 * may do itself ({@link Engine#capsDenial}).
+	 * may do itself ({@link Engine#capsDenial}), and a token a user issues
+	 * needs that user in person ({@link #requireInPersonFor}).
 	 *
 	 * @param access what the caller asks of each access point, by name
 	 * @param caps {@code "unrestricted"}, a list of capabilities, or null for none
@@ -242,8 +243,8 @@ public class TokenAdapter extends AAdapter {
 		}
 		AMap<AString, ACell> asked = askedAccess(access);
 		gate.check(ctx, name, Set.of(), AccessToken.accessPoints(asked));
-		// A delegate acting for another user holds none of that user's own authority to hand on.
 		if (!engine.actsWithAuthorityOf(ctx, principal)) throw new AuthException(ISSUER_MAY_NOT_CREATE.formatted(principal));
+		requireInPersonFor(ctx, owner, principal);
 		AMap<AString, ACell> entries = entries(ctx, asked);
 		AVector<ACell> stored = (caps == null) ? Vectors.empty() : Caps.parse(caps);
 		requireGivable(ctx, stored);
@@ -278,6 +279,7 @@ public class TokenAdapter extends AAdapter {
 		AString id = token.id();
 		if (id == null) throw new NotFoundException(TOKEN_NOT_FOUND.formatted(name), name.toString());
 		requireCovers(ctx, token);
+		if (rotate) requireInPersonFor(ctx, owner, token.issuer());
 		AMap<AString, ACell> entries = (asked == null) ? null : entries(ctx, asked);
 		AVector<ACell> stored = (caps == null) ? null : Caps.parse(caps);
 		if (caps != null) requireGivable(ctx, stored);
@@ -297,6 +299,20 @@ public class TokenAdapter extends AAdapter {
 		});
 		if (!same.get()) throw new ConflictException(TOKEN_CHANGED.formatted(name));
 		return new Issued(tokens().token(owner, name), bearer);
+	}
+
+	/**
+	 * Refuses handing out a bearer of a token that user {@code issuer} issued
+	 * in {@code owner}'s account, by making, rotating or reading it, unless the
+	 * request is that user in person ({@link Engine#inPersonDenial}): a request
+	 * through the token is its issuer in person, so its bearer stands for the
+	 * user's identity. An agent's token is never in person, so its bearer needs
+	 * only the authority to manage it.
+	 */
+	private void requireInPersonFor(RequestContext ctx, AString owner, AString issuer) {
+		if (Engine.agentIdIn(owner, issuer) != null) return;
+		String denial = engine.inPersonDenial(ctx);
+		if (denial != null) throw new AuthException(denial);
 	}
 
 	/** Refuses caps beyond what {@code ctx} may do itself ({@link Engine#capsDenial}); null is unrestricted. */
@@ -343,6 +359,7 @@ public class TokenAdapter extends AAdapter {
 		if (!keepRawTokens()) throw new NotSupportedException(RAW_NOT_KEPT);
 		if (token.record() == null) throw new NotFoundException(TOKEN_NOT_FOUND.formatted(name), name.toString());
 		requireCovers(ctx, token);
+		requireInPersonFor(ctx, owner, token.issuer());
 		ACell sealed = token.sealedBearer();
 		if (sealed == null) throw new NotSupportedException(RAW_NOT_HELD.formatted(name));
 		return SecretStore.unseal(sealed, sealingKeys());

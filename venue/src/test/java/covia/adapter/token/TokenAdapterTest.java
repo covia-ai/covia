@@ -87,6 +87,33 @@ public class TokenAdapterTest {
 		return run(op, Maps.of(Fields.NAME, name), ctx);
 	}
 
+	/**
+	 * A request through a user's token is that user in person, so only the user
+	 * in person makes or rotates one: not a delegate acting as the user under
+	 * admin/sudo, nor work the venue carries on for the user. An agent's token
+	 * is never in person, so an agent makes its own.
+	 */
+	@Test
+	public void onlyTheUserInPersonMakesOrRotatesTheirToken() {
+		AKeyPair aliceKey = AKeyPair.generate(), bobKey = AKeyPair.generate();
+		AString alice = UCAN.toDIDKey(aliceKey.getAccountKey()), bob = UCAN.toDIDKey(bobKey.getAccountKey());
+		engine.getVenueState().users().ensure(alice);
+		engine.getVenueState().users().ensure(bob);
+		UCAN sudo = UCAN.create(aliceKey, bobKey.getAccountKey(), System.currentTimeMillis() / 1000 + 300,
+			Vectors.of(Capability.create(alice, Abilities.ADMIN_SUDO)), Vectors.empty());
+		RequestContext delegate = engine.sudoContext(RequestContext.of(bob).withProofs(Vectors.of(sudo.toMap())), alice);
+
+		complete(create(RequestContext.of(alice), "mine", MCP));
+		assertEquals(Engine.NOT_IN_PERSON, failure(create(delegate, "theirs", MCP)), "a delegate acts as her, but is not her");
+		assertEquals(Engine.NOT_IN_PERSON, failure(create(engine.context(alice), "later", MCP)), "nor is work carried on for her");
+		assertEquals(Engine.NOT_IN_PERSON, failure(run("v/ops/token/update",
+			Maps.of(Fields.NAME, "mine", Fields.ROTATE, true), delegate)));
+		complete(run("v/ops/token/update", Maps.of(Fields.NAME, "mine", Fields.ROTATE, true), RequestContext.of(alice)));
+
+		complete(create(agent(alice, "minter", Vectors.of(cap("v/ops/", Abilities.INVOKE),
+			cap("x/token/", Abilities.ADMIN_TOKEN_MCP))), "agents", MCP));
+	}
+
 	private static Set<String> names(ACell listed) {
 		Set<String> names = new HashSet<>();
 		for (ACell token : RT.ensureVector(RT.getIn(listed, "tokens"))) names.add(RT.getIn(token, Fields.NAME).toString());
