@@ -118,7 +118,7 @@ public class SQLAdapter extends AAdapter {
 	/** A statement Calcite cannot parse or validate, before its message. */
 	static final String STATEMENT_INVALID = "cannot run the statement";
 
-	/** A statement convex-db could not evaluate; its message may quote stored values. */
+	/** A statement convex-db failed with no SQLState; its message may quote stored values. */
 	static final String STATEMENT_FAILED = "could not evaluate the statement";
 
 	/** A statement the database refused, before its SQLState and vendor code. */
@@ -279,7 +279,7 @@ public class SQLAdapter extends AAdapter {
 			case "28" -> new ConfigurationException(prefix + CREDENTIALS_REFUSED + codes, e);
 			case "40", "53", "57", "58" -> new UnavailableException(prefix + BUSY + codes, e);
 			case "0A" -> new NotSupportedException(prefix + STATEMENT_NOT_SUPPORTED + codes);
-			// convex-db sets no SQLState: what it cannot run is the statement's failure
+			// convex-db gives what it reports a SQLState; anything else it cannot run is still the statement's failure
 			case "" -> target.isConvexDb() ? new InvalidInputException(prefix + STATEMENT_FAILED, e)
 				: new ResponseException(prefix + STATEMENT_REFUSED + codes, e);
 			default -> new InvalidInputException(prefix + STATEMENT_REFUSED + codes, e);
