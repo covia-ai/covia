@@ -37,6 +37,32 @@ public class VenueStateTest {
 	/** The venue's secret store keys: these venues keep no secret a migration step carries over. */
 	private static final SecretStore.Keys NO_SECRETS = SecretStore.keys(AKeyPair.generate());
 
+	// ========== Fork Sync ==========
+
+	/**
+	 * A copy that has not changed takes its destination's change at sync; one
+	 * that changed too fails with a merge conflict, publishes nothing and keeps
+	 * its edits, at every sync until something resolves it.
+	 */
+	@Test
+	public void aCopyThatChangedWithItsDestinationFailsToSyncAndKeepsItsEdits() {
+		VenueState venue = VenueState.create(AKeyPair.generate());
+		venue.users().ensure(Strings.create("did:test:first"));
+		VenueState copy = venue.fork();
+
+		venue.users().ensure(Strings.create("did:test:incoming"));
+		copy.sync();
+		assertNotNull(copy.users().user(Strings.create("did:test:incoming")), "an unchanged copy takes the change");
+
+		venue.users().ensure(Strings.create("did:test:destination"));
+		copy.users().ensure(Strings.create("did:test:copy"));
+		ACell destination = venue.get();
+		assertThrows(convex.lattice.MergeConflictException.class, copy::sync);
+		assertThrows(convex.lattice.MergeConflictException.class, copy::sync);
+		assertSame(destination, venue.get(), "nothing is published");
+		assertNotNull(copy.users().user(Strings.create("did:test:copy")), "the copy keeps its edits");
+	}
+
 	// ========== Factory Methods ==========
 
 	@Test

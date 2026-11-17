@@ -56,6 +56,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Automated venue deployments use the tested build's image digest; manual redeploys select a successful image-publishing run.
 - LangChain4j 1.23.0, A2A 1.5.1.Final, Nimbus OAuth/OIDC SDK 11.39, CommonMark 0.32.0; the Documents module uses Apache POI 6.0.0.
 - Requires Convex 0.8.20. Rebuild adapter modules with the venue.
+- A convex-db statement that fails while running, such as a failed cast, is refused with its SQLState, as other databases' statements are.
 - Disabling a messaging adapter (Telegram, Discord, Slack, WhatsApp) stops its bots at once, closing their polls and connections, and enabling it starts them again; a replaced one's bots stop before its replacement's start.
 - The `:latest` Docker image and the `latest-snapshot` release follow the `qa` branch, published only after the integration tests pass, rather than every push to `develop`.
 - A messaging bot an agent created uses its credentials and runs its relay's `admit` and `charge` hooks with that agent's authority, not its user's: an agent with caps needs `secret/use` on each secret the bot names, and its caps must cover what the hooks do.

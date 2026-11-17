@@ -324,6 +324,12 @@ identity token through an operation", and HELD_KEYS.md.
 | `RequestContext.hasSeparateAuthority()` and `authorityContext()` | Removed: a request names one principal, and `engine.authorityFrame(ctx)` gives the frame an agent whose controller is in another account acts with |
 | `RequestContext.onBehalfOf` and `Authority.onBehalfOf` | Removed: acting for another user is `admin/sudo`, a call into that user (`engine.sudoContext`) |
 | `AAdapter.latticeView(ctx)` and `latticeWriteDenial(ctx, path)` | `latticeView(owner, ctx)` and `latticeWriteDenial(owner, ctx, path)`: the view is `owner`'s, and `ctx` is the request's own ([ADAPTERS.md](ADAPTERS.md)) |
+| Convex 0.8.19 | Convex 0.8.20: recompile adapters and modules |
+| A raw `cursor().path(key).set(...)` creating a missing `key`, including after `withDefault` | Refused: write through a component's operations, or an entry view that creates the key (`Covia.entry`, a `MapComponent`'s or `IndexComponent`'s `path`) |
+| A transaction on a missing record starting from null | It throws `MissingValueException` before the callback runs, and when a concurrent deletion makes it run again; the domain operations (an agent's, session's, task's, job's or HITL request's) still answer "absent" |
+| `adapterState().get()` null while no state is stored | An empty map, so a transaction on new state starts from one |
+| `Users.getAll()` null when there are no users | An empty map |
+| An override of `withCursor` or `mergePublication` on a component | `rebind`, and `reconcile(own, other)`, which serves transaction commits as well as sync |
 
 ## Upgrading from 0.10.0
 

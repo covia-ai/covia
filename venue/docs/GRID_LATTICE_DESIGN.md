@@ -689,7 +689,8 @@ high-assurance uses, and registers agents that take part in the economy.
 The engine holds one lattice cursor at its own venue's root. A cursor offers
 `get()`, `set(value)`, `updateAndGet(fn)` (atomic read-modify-write), `fork()`
 (an isolated working copy) and `sync()` (merging the copy back). A sub-cursor
-such as `venueCursor.path(Covia.ASSETS)` writes through to the root atomically.
+such as `venueCursor.path(Covia.ASSETS)` writes through to the root atomically,
+through containers that exist: it refuses to write an entry that is missing.
 The venue reaches the global lattice only to sync with other venues.
 
 Writes go through the component accessors — `VenueState`, `Users`, `User`, the
@@ -843,10 +844,10 @@ The signed record is what the store and other nodes receive;
 durability barrier. Incoming venue state delivered through the application
 lands in the record by whole-venue LWW, and an unchanged copy takes it at its
 next sync. A copy that changed too does not: the sync fails with a merge
-conflict, publishes nothing and keeps the copy, as every later sync will. A
-transaction meeting a concurrent change instead runs again under its claim.
-Nothing in the venue delivers state for a mounted venue, which one running
-instance owns; an embedder merges a snapshot into a venue that is not mounted.
+conflict, publishes nothing and keeps the copy, as every later sync does, so
+the venue's edits are no longer published. A transaction meeting a concurrent
+change instead runs again under its claim. Nothing in the venue delivers state
+for a mounted venue, which one running instance owns (A.2).
 
 On receiving foreign state (disk recovery, replication, federation),
 `SignedLattice.merge()` verifies the signature, merges if valid, re-signs a
