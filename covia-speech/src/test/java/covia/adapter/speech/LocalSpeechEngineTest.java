@@ -435,7 +435,9 @@ class LocalSpeechEngineTest {
 		try {
 			JobFailedException e = assertThrows(JobFailedException.class, refused::prepare);
 			assertFalse(e.getMessage().isBlank());
-			assertFalse(Files.exists(temp.resolve("other-cache/native/" + NativeLibraries.VERSION + "/" + platform + ".jar.part")), "nothing half-fetched stays");
+			try (var files = Files.list(temp.resolve("other-cache/native/" + NativeLibraries.VERSION))) {
+				assertTrue(files.noneMatch(f -> f.getFileName().toString().endsWith(".part")), "nothing half-fetched stays");
+			}
 		} finally {
 			refused.close();
 		}
