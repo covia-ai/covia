@@ -2701,6 +2701,7 @@ public class CoviaAdapterTest {
 		Job job = engine.jobs().invokeOperation("v/ops/covia/write",
 			Maps.of(Fields.PATH, "c/x", Fields.VALUE, Strings.create("nope")), ctx);
 		assertThrows(Exception.class, () -> job.awaitResult(5000));
+		assertEquals(String.format(Workspace.NO_RECORD, "c"), job.getErrorMessage(), "refused as the session's area, not a fault");
 
 		User user = engine.getVenueState().users().user(ALICE.getUserDID());
 		assertNull(user.agent("no-such-agent"), "no phantom agent or session may be created");

@@ -155,7 +155,9 @@ public final class Covia {
 	/**
 	 * The field {@code key} of a record that must exist. A changed write creates
 	 * the field in the record; with no record it is refused with {@code missing},
-	 * and a record that cannot hold the field is refused as on any path.
+	 * and a record that cannot hold the field is refused as on any path. A write
+	 * that changes nothing is never refused, so a transaction that only reads a
+	 * missing record's field succeeds.
 	 */
 	public static <T extends ACell> AForkableCursor<T> field(AForkableCursor<? extends ACell> record, AString key,
 			Supplier<? extends RuntimeException> missing) {
@@ -170,10 +172,16 @@ public final class Covia {
 			this.missing = missing;
 		}
 
+		/** Only a record that cannot hold the field refuses here; a missing one refuses a change in {@link #write}. */
 		@Override
 		protected void requireWritable(ACell record) {
+			if (record != null) super.write(record, view(record));
+		}
+
+		@Override
+		protected ACell write(ACell record, T value) {
 			if (record == null) throw missing.get();
-			write(record, view(record));
+			return super.write(record, value);
 		}
 	}
 

@@ -119,6 +119,21 @@ public class CallableAdapterTest {
 	}
 
 	@Test
+	public void aCallablesCapsAreAFieldOfItsRecord() {
+		Callables callables = new Callables(convex.lattice.cursor.Cursors.create(Maps.empty()));
+		AString owner = Strings.create("did:test:caps-owner");
+		AString name = Strings.create("fn");
+		assertTrue(callables.create(owner, name, Maps.of(Fields.ISSUER, owner)));
+		Caps caps = callables.callable(owner, name).caps();
+		assertTrue(caps.isUnrestricted(), "no caps field is unrestricted");
+		caps.clear();
+		assertFalse(callables.callable(owner, name).caps().isUnrestricted(), "a change creates the field");
+		AString missing = Strings.create("missing");
+		assertThrows(convex.lattice.PathWriteException.class, () -> callables.callable(owner, missing).caps().clear());
+		assertFalse(callables.list(owner).containsKey(missing), "no record is created for a missing callable");
+	}
+
+	@Test
 	public void aCallActsWithTheCallablesAuthorityInItsOwnersNamespace(TestInfo info) {
 		AString alice = TestEngine.uniqueDID(info);
 		AString bob = TestEngine.uniqueDID("bob-" + info.getDisplayName());

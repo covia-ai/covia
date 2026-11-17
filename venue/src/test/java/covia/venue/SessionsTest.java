@@ -77,6 +77,7 @@ public class SessionsTest {
 		AString missing = Strings.create("missing-agent");
 		assertThrows(NotFoundException.class, () -> user.agents().at(missing).sessions().create(SESSION, null, null));
 		assertNull(user.agent(missing), "creating a session brings no agent into being");
+		assertTrue(user.agents().at(missing).sessions().transact(Sessions::all).isEmpty(), "a transaction that only reads is not refused");
 	}
 
 	@Test
