@@ -278,7 +278,7 @@ public class CoviaAdapterConsistencyTest {
 	public void testCrossDIDCallsExplainTheApparentWobble() {
 		RequestContext ALICE_PRE = ALICE;
 		RequestContext ALICE_POST = RequestContext.of(
-			Strings.create(ALICE.getCallerDID().toString() + "-post-restart"));
+			Strings.create(ALICE.getAuthorityDID().toString() + "-post-restart"));
 
 		// "Before restart" — Alice writes 43 letters.
 		for (int i = 0; i < 43; i++) {

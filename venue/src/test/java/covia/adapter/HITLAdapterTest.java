@@ -820,7 +820,7 @@ public class HITLAdapterTest {
 
 	private static RequestContext asking(Engine venue, AString owner, AString agentId, AString target) {
 		RequestContext caller = (agentId == null) ? RequestContext.of(owner) : RequestContext.ofAgent(owner, agentId);
-		String delegation = UcanTokens.grant(venue.getKeyPair(), caller.getCallerDID().toString(),
+		String delegation = UcanTokens.grant(venue.getKeyPair(), caller.getAuthorityDID().toString(),
 			target + "/h/", HITLAdapter.ABILITY_HITL_REQUEST.toString(), HOUR);
 		return caller.withProofs(Vectors.of(UCAN.fromJWT(Strings.create(delegation)).toMap()));
 	}

@@ -69,10 +69,9 @@ public final class Authority {
 	 *
 	 * <p>The DID is <b>its own namespace</b>, whatever its name looks like: an
 	 * agent-shaped DID names no owner relationship by itself. Only the venue puts
-	 * a principal in another namespace, from a relationship it holds — running
-	 * its own agent ({@link #ofAgent}) or acting on a delegation
-	 * ({@link #onBehalfOf}). Whatever stores an authority stores that namespace
-	 * beside the DID and rebuilds from both
+	 * a principal in another namespace, from a relationship it holds, such as
+	 * running its own agent ({@link #ofAgent}). Whatever stores an authority
+	 * stores that namespace beside the DID and rebuilds from both
 	 * ({@link #of(AString, AString, AVector)}).</p>
 	 *
 	 * @param did Caller DID, or null for anonymous
@@ -127,25 +126,6 @@ public final class Authority {
 		return (did == null) ? ANONYMOUS : new Authority(did, userDID, grants, null);
 	}
 
-	/**
-	 * Returns this actor executing on behalf of {@code userDID} under its
-	 * presented delegation proofs.
-	 *
-	 * <p>The actor identity is preserved for attribution and proof-audience
-	 * checks, while bare paths and per-user state resolve in the delegating
-	 * user's namespace. The held scope is deliberately empty: authority over
-	 * that namespace must come from the signed proofs, never from the actor's
-	 * otherwise-unrestricted authority over its own account.</p>
-	 *
-	 * @param userDID the delegating user whose namespace the actor works in
-	 * @return a proof-bounded delegated authority, or this authority when the
-	 *         user is null or already the actor's user
-	 */
-	public Authority onBehalfOf(AString userDID) {
-		if (userDID == null || userDID.equals(getUserDID())) return this;
-		return new Authority(did, userDID, Vectors.empty(), proofs);
-	}
-
 	/** The caller identity, or null if anonymous. */
 	public AString getDID() {
 		return did;
@@ -153,7 +133,8 @@ public final class Authority {
 
 	/**
 	 * The user whose namespace this authority acts within — the owner for an agent
-	 * sub-principal, the delegating user for a delegate ({@link #onBehalfOf}),
+	 * sub-principal, the namespace a stored context names
+	 * ({@link #of(AString, AString, AVector)}),
 	 * and {@link #getDID()} for every other principal.
 	 *
 	 * <p>This is the DID that resolves bare lattice paths and per-user state

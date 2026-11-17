@@ -956,7 +956,7 @@ public class EngineTest {
 
 		// For its owner, the owner's agent acts as itself in the owner's namespace, under its own caps.
 		RequestContext agent = venue.context(owner, worker);
-		assertEquals(worker, agent.getCallerDID());
+		assertEquals(worker, agent.getAuthorityDID());
 		assertEquals(owner, agent.getUserDID());
 		assertEquals(caps, agent.getCaps());
 		assertNull(venue.context(owner, owner).getCaps());

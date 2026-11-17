@@ -173,7 +173,7 @@ public class AgentConfigAuthorityTest {
 			Fields.MESSAGES, Vectors.of(Maps.of("role", "user", "content", "issue-334-read"))), sibling);
 		assertEquals(Status.FAILED, borrowed.getStatus());
 		assertTrue(borrowed.getErrorMessage().contains(
-			Engine.NOT_AGENTS_STEP.formatted(sibling.getCallerDID(), "wide")), borrowed.getErrorMessage());
+			Engine.NOT_AGENTS_STEP.formatted(sibling.getAuthorityDID(), "wide")), borrowed.getErrorMessage());
 	}
 
 	/**

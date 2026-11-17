@@ -492,7 +492,7 @@ public class AgentCycleTest {
 			Agent agent = stepAgent(owner, "stopped");
 			Job task = request(owner, "stopped", "hold:" + gateName + " complete");
 			awaitGate(gate);
-			assertNotNull(agent.suspend(owner.getCallerDID(), Strings.create("stop")));
+			assertNotNull(agent.suspend(owner.getAuthorityDID(), Strings.create("stop")));
 			gate.release();
 
 			assertEquals(Agent.SUSPENDED, awaitRest(agent, owner));
@@ -517,7 +517,7 @@ public class AgentCycleTest {
 			Job task = request(owner, "resumed", "hold:" + gateName + " complete");
 			awaitGate(gate);
 			Blob sid = sessionOf(task);
-			assertNotNull(agent.suspend(owner.getCallerDID(), Strings.create("stop")));
+			assertNotNull(agent.suspend(owner.getAuthorityDID(), Strings.create("stop")));
 			assertNull(agent.session(sid).cycleEpoch(), "the stop released the session");
 			assertTrue(agent.tryResume());
 			gate.release();

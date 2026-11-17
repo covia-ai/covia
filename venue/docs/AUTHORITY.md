@@ -5,7 +5,9 @@ called into it. The model is Convex's `*address*` and `*caller*` (CAD005). A
 record of work, such as a job or a scheduled event, names the principal that
 called it. This is a design, implemented in part: a callable's call enters its
 issuer's frame and calls nest, an agent's harness runs in its controller's
-frame, `admin/sudo` is a call into the user, state within one interaction
+frame, `admin/sudo` is a call into the user, a request names one acting
+principal, whose authority an agent's record decides at each check, state
+within one interaction
 belongs to the principal that opened it, and acts that need the user in
 person read how the request authenticated. What still works the old way is listed under
 [What it replaces](#what-it-replaces).
@@ -225,8 +227,6 @@ one through a token or within a callable's call.
 
 ## What it replaces
 
-- The request context's caller DID beside its authority DID, two names for
-  the one principal it acts as.
 - The request context's namespace as a value apart from its authority.
 - The caller context a job keeps only when its adapter asks, in two shapes of
   kept authority, and a scheduled event's own shape of the same. A job's state

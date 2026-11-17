@@ -193,7 +193,7 @@ public class CallableAdapterTest {
 		RequestContext whole = engine.callContext(RequestContext.of(bob), reference(alice, "whole"));
 
 		assertEquals(alice, narrow.getAuthorityDID(), "a call is its issuer's frame");
-		assertEquals(alice, narrow.getCallerDID());
+		assertEquals(alice, narrow.getAuthorityDID());
 		assertEquals(bob, narrow.getCaller(), "called by its invoker");
 		assertEquals(alice, narrow.getUserDID());
 		assertFalse(engine.holdsAuthorityOf(narrow, alice));
@@ -208,11 +208,11 @@ public class CallableAdapterTest {
 		complete(create(maker, "made", "v/ops/covia/read", Vectors.of(invoke), null));
 		RequestContext helper = agent(alice, "helper", Vectors.of(invoke));
 		RequestContext byHelper = engine.callContext(helper, reference(alice, "made"));
-		assertEquals(maker.getCallerDID(), Engine.actingPrincipal(byHelper));
-		assertTrue(engine.actsWithAuthorityOf(byHelper, maker.getCallerDID()), "it acts with its issuer's authority");
-		assertFalse(engine.holdsAuthorityOf(byHelper, maker.getCallerDID()), "narrowed, not all of it");
-		assertFalse(engine.actsWithAuthorityOf(byHelper, helper.getCallerDID()));
-		assertTrue(engine.holdsAuthorityOf(helper, helper.getCallerDID()), "the agent holds its own outside a call");
+		assertEquals(maker.getAuthorityDID(), Engine.actingPrincipal(byHelper));
+		assertTrue(engine.actsWithAuthorityOf(byHelper, maker.getAuthorityDID()), "it acts with its issuer's authority");
+		assertFalse(engine.holdsAuthorityOf(byHelper, maker.getAuthorityDID()), "narrowed, not all of it");
+		assertFalse(engine.actsWithAuthorityOf(byHelper, helper.getAuthorityDID()));
+		assertTrue(engine.holdsAuthorityOf(helper, helper.getAuthorityDID()), "the agent holds its own outside a call");
 		assertThrows(covia.exception.AuthException.class, () -> engine.stepContext(byHelper, Strings.create("helper")),
 			"nor does it make its invoker act as itself");
 		assertNotNull(engine.stepContext(helper, Strings.create("helper")), "its own run makes it act");

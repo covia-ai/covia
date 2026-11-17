@@ -380,7 +380,7 @@ class ConversationRouterTest {
 			// A sender the binding lists comes from its principal, carrying the record
 			// of how the binding authenticated them.
 			var listed = router.context(LISTED);
-			assertEquals(owner, listed.getCallerDID());
+			assertEquals(owner, listed.getAuthorityDID());
 			assertEquals(Strings.create("test:listed"), listed.getAuthentication().get(covia.venue.auth.AuthResult.AUTHENTICATED_IDENTITY));
 			assertEquals(Strings.create(owner + "/test/bot"),
 				RT.getIn(listed.getAuthentication(), covia.venue.auth.AuthResult.AUTHENTICATION, covia.venue.auth.AuthResult.BINDING));
@@ -390,7 +390,7 @@ class ConversationRouterTest {
 				listed.getRoute());
 			// An event with no sender is anonymous, but still carried by the binding, never direct
 			var senderless = router.context(null);
-			assertEquals(engine.publicPrincipal(), senderless.getCallerDID());
+			assertEquals(engine.publicPrincipal(), senderless.getAuthorityDID());
 			assertNull(senderless.getAuthentication());
 			assertEquals(convex.core.data.Vectors.of(Maps.of(Fields.ADAPTER, "messaging-test", Fields.NAME, "bot",
 				Fields.OWNER, owner)), senderless.getRoute());
@@ -408,7 +408,7 @@ class ConversationRouterTest {
 			assertEquals(Strings.create("owner only"), RT.getIn(fromStranger.awaitResult(5000), Fields.RESPONSE, "completed"),
 				"the agent serves the stranger as itself");
 			var anonymous = engine.context(engine.publicPrincipal());
-			assertEquals(anonymous.getCallerDID(),
+			assertEquals(anonymous.getAuthorityDID(),
 				engine.jobs().getJobData(fromStranger.getID(), anonymous).get(Fields.CALLER),
 				"the stranger's turn is the anonymous principal's, not the owner's");
 			assertEquals(Strings.create("test:stranger"),
@@ -452,7 +452,7 @@ class ConversationRouterTest {
 		var router = new ConversationRouter(engine, new Spec("bot", owner.toString(), "keeper", null, null), keeper,
 			new ConversationSessions(engine.adapterState(stateName(info)), "keeper/sessions"));
 		var context = router.context();
-		assertEquals(keeper, context.getCallerDID(), "the agent, never its owner");
+		assertEquals(keeper, context.getAuthorityDID(), "the agent, never its owner");
 		assertEquals(caps, context.getCaps(), "bounded by the agent's own caps");
 
 		engine.jobs().invokeOperation("v/ops/agent/delete", Maps.of(Fields.AGENT_ID, "keeper"), ownerContext).awaitResult(5000);
@@ -478,22 +478,22 @@ class ConversationRouterTest {
 		// The owner's own bot works for its agent as that agent, within its caps.
 		var own = new ConversationRouter(engine, new Spec("bot", owner.toString(), "helper", null, null),
 			new ConversationSessions(state, "work/own"));
-		assertEquals(helper, own.agentContext().getCallerDID());
+		assertEquals(helper, own.agentContext().getAuthorityDID());
 		assertEquals(caps, own.agentContext().getCaps());
 		var byDid = new ConversationRouter(engine, new Spec("bot", owner.toString(), helper.toString(), null, null),
 			new ConversationSessions(state, "work/did"));
-		assertEquals(helper, byDid.agentContext().getCallerDID(), "naming the agent by its DID is the same");
+		assertEquals(helper, byDid.agentContext().getAuthorityDID(), "naming the agent by its DID is the same");
 		assertEquals(caps, byDid.agentContext().getCaps());
 
 		// Nobody else can make the agent act: another user's bot, or a sibling agent's, works as itself.
 		for (String agent : new String[] {owner + "/g/helper", helper.toString()}) {
 			var foreign = new ConversationRouter(engine, new Spec("bot", stranger.toString(), agent, null, null),
 				new ConversationSessions(state, "work/foreign"));
-			assertEquals(stranger, foreign.agentContext().getCallerDID(), agent);
+			assertEquals(stranger, foreign.agentContext().getAuthorityDID(), agent);
 		}
 		var sibling = new ConversationRouter(engine, new Spec("bot", owner.toString(), "sibling", null, null), helper,
 			new ConversationSessions(state, "work/sibling"));
-		assertEquals(helper, sibling.agentContext().getCallerDID(), "the helper's bot, not the sibling it talks to");
+		assertEquals(helper, sibling.agentContext().getAuthorityDID(), "the helper's bot, not the sibling it talks to");
 	}
 
 	@Test void anonymousSendersNeedPublicAccess() {

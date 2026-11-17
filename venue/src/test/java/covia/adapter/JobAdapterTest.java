@@ -117,7 +117,7 @@ class JobAdapterTest {
 					target(job).assoc(Fields.MESSAGE, Maps.of(Fields.CONTENT, "done")), reader).awaitResult(5000));
 				assertEquals(Status.STARTED, job.getStatus());
 			}
-			RequestContext other = RequestContext.of(Strings.create(ctx.getCallerDID() + ":other"));
+			RequestContext other = RequestContext.of(Strings.create(ctx.getAuthorityDID() + ":other"));
 			assertThrows(Exception.class, () -> engine.jobs().invokeOperation("v/ops/job/status", target(job), other).awaitResult(5000));
 		} finally { job.cancel(); }
 	}

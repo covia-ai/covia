@@ -159,8 +159,7 @@ public class TokenAdapter extends AAdapter {
 	 * a bearer, its hash or the token's id. A snapshot, so read-only.
 	 */
 	@Override
-	public AForkableCursor<ACell> latticeView(RequestContext ctx) {
-		AString owner = ctx.getUserDID();
+	public AForkableCursor<ACell> latticeView(AString owner, RequestContext ctx) {
 		if (owner == null) return null;
 		AMap<AString, ACell> shown = Maps.empty();
 		for (var entry : tokens().list(owner).entrySet()) {

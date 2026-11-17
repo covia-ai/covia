@@ -70,7 +70,7 @@ class KeptCallerContextTest {
 			assertNull(RT.getIn(read("j/" + id, own), Fields.VALUE, Fields.PROOFS));
 
 			RequestContext resumed = engine.jobs().callerContext(job);
-			assertEquals(alice, resumed.getCallerDID());
+			assertEquals(alice, resumed.getAuthorityDID());
 			assertEquals(proofs, resumed.getProofs(), "work that continues presents them again");
 			assertEquals(session, resumed.getSessionId(), "in the scopes it was started in");
 			assertEquals(task, resumed.getTaskId());
@@ -156,7 +156,7 @@ class KeptCallerContextTest {
 			assertEquals(delegate, kept.getCaller());
 			assertEquals(owner, kept.getOwner());
 			RequestContext resumed = engine.jobs().callerContext(kept);
-			assertEquals(delegate, resumed.getCallerDID());
+			assertEquals(delegate, resumed.getAuthorityDID());
 			assertEquals(owner, resumed.getUserDID(), "in the owner's namespace, as the grant allows");
 			assertEquals(sudo.getExecutionScope(), resumed.getExecutionScope());
 			assertTrue(engine.authorityCovers(resumed, Strings.create("w/output"), Capability.CRUD_WRITE));
@@ -193,7 +193,7 @@ class KeptCallerContextTest {
 			assertEquals(owner, kept.getCaller(), "the user acted");
 			assertEquals(owner, kept.getOwner(), "in the user's own account");
 			RequestContext resumed = engine.jobs().callerContext(kept);
-			assertEquals(owner, resumed.getCallerDID());
+			assertEquals(owner, resumed.getAuthorityDID());
 			assertNull(resumed.getAuthenticatedDID(), "nobody is present in work carried on");
 			assertTrue(engine.authorityCovers(resumed, Strings.create("w/other"), Capability.CRUD_WRITE),
 				"with the user's whole authority");
@@ -244,7 +244,7 @@ class KeptCallerContextTest {
 		engine.jobs().keepCallerContext(job, agent);
 		try {
 			RequestContext resumed = engine.jobs().callerContext(job);
-			assertEquals(agent.getCallerDID(), resumed.getCallerDID());
+			assertEquals(agent.getAuthorityDID(), resumed.getAuthorityDID());
 			assertEquals(owner, resumed.getUserDID());
 			assertEquals(agent.getExecutionScope(), resumed.getExecutionScope());
 			assertEquals(caps, resumed.getCaps());

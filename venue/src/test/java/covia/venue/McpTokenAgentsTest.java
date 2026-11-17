@@ -130,7 +130,7 @@ public class McpTokenAgentsTest {
 		AMap<AString, ACell> result = RT.ensureMap(complete(created));
 		String token = RT.getIn(result, Fields.TOKEN).toString();
 		assertTrue(AccessTokens.isBearer(token), token);
-		assertEquals(builder.getCallerDID(), RT.getIn(result, Fields.ISSUER));
+		assertEquals(builder.getAuthorityDID(), RT.getIn(result, Fields.ISSUER));
 		assertEquals(Fields.HIDDEN, RT.getIn(engine.jobs().getJobData(created.getID(), builder), Fields.OUTPUT, Fields.TOKEN),
 			"the job record never keeps the bearer");
 

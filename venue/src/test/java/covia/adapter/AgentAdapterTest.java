@@ -401,7 +401,7 @@ public class AgentAdapterTest {
 			new AuthResult.Authentication(Strings.create("test"), Strings.create(ALICE_DID + "/test/bot"), null,
 				Sets.empty(), details), null, null);
 		RequestContext viaChannel = engine.channelContext(ALICE_DID, result);
-		assertEquals(ALICE_DID, viaChannel.getCallerDID());
+		assertEquals(ALICE_DID, viaChannel.getAuthorityDID());
 		assertEquals(result.toData().dissoc(AuthResult.USER_DID), viaChannel.getAuthentication());
 		assertEquals(Vectors.of(Maps.of(Fields.ADAPTER, "test", Fields.NAME, "bot", Fields.OWNER, ALICE_DID,
 			"sender", Maps.of("id", "sender-1"))), viaChannel.getRoute(), "the binding carried it");

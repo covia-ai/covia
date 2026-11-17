@@ -369,6 +369,6 @@ public class ResourceNamesTest {
 			"caps", Vectors.of(cap("/w/x/", Capability.CRUD_READ), cap("w/y/", Capability.CRUD_READ)))), ALICE);
 		AMap<AString, ACell> config = engine.getAgent(alice, id).getConfig();
 		assertEquals(Vectors.of(cap("w/x/", Capability.CRUD_READ), cap("w/y/", Capability.CRUD_READ)), RT.getIn(config, "caps"));
-		assertEquals(Principals.agentDID(alice, id), engine.context(alice, Principals.agentDID(alice, id)).getCallerDID());
+		assertEquals(Principals.agentDID(alice, id), engine.context(alice, Principals.agentDID(alice, id)).getAuthorityDID());
 	}
 }

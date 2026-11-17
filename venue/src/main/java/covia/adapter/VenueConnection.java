@@ -168,11 +168,11 @@ public record VenueConnection(Venue venue, AMap<AString, ACell> credentials) {
 			}
 			case "caller" -> {
 				targetDID = targetVenueDID(engine, venueSpec, unrestricted);
-				String credential = identityCredential(engine, ctx, tokens, ctx.getCallerDID(),
+				String credential = identityCredential(engine, ctx, tokens, ctx.getAuthorityDID(),
 					Strings.create(targetDID));
 				if (credential == null) throw new AuthException(NO_CALLER_CREDENTIAL + targetDID);
 				auth = VenueAuth.bearer(credential);
-				principal = ctx.getCallerDID();
+				principal = ctx.getAuthorityDID();
 			}
 			case "venue" -> {
 				if (!engine.isDirectVenue(ctx)) throw new AuthException(VENUE_MODE_DENIED);
@@ -215,7 +215,7 @@ public record VenueConnection(Venue venue, AMap<AString, ACell> credentials) {
 		AString owner = jobOwner(input);
 		if (owner == null) {
 			AString mode = RT.ensureString(RT.getIn(input, AUTHENTICATE_AS));
-			if (CALLER.equals(mode)) owner = ctx.getCallerDID();
+			if (CALLER.equals(mode)) owner = ctx.getAuthorityDID();
 			else if (Fields.VENUE.equals(mode)) owner = engine.getDIDString();
 			else {
 				try {

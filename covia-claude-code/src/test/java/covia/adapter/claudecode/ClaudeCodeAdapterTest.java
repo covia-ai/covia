@@ -739,7 +739,7 @@ public class ClaudeCodeAdapterTest {
 		RequestContext agent = agentWith("session-restorer", caps);
 		Job job = engine.jobs().invokeOperation("v/ops/claudecode/session", Maps.of("project", "alpha", "prompt", "count"), agent);
 		await(() -> Status.INPUT_REQUIRED.equals(job.getStatus()), 30_000);
-		assertEquals(agent.getCallerDID(), job.getCaller());
+		assertEquals(agent.getAuthorityDID(), job.getCaller());
 		assertEquals(OWNER, job.getOwner());
 		String session = str(output(job), "session");
 

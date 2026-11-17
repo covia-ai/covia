@@ -426,7 +426,7 @@ public class CoviaAPI extends ACoviaAPI {
 	 *  the asset:list read exposed job-free (#382). */
 	protected void getOwnAssets(Context ctx) {
 		RequestContext rctx = AuthMiddleware.callerContext(ctx);
-		if (rctx.getCallerDID() == null) {
+		if (rctx.getAuthorityDID() == null) {
 			buildError(ctx, 401, "Authentication required");
 			return;
 		}
@@ -2027,7 +2027,7 @@ public class CoviaAPI extends ACoviaAPI {
 			})
 	protected void getAgents(Context ctx) {
 		RequestContext rctx = AuthMiddleware.callerContext(ctx);
-		if (rctx.getCallerDID() == null) {
+		if (rctx.getAuthorityDID() == null) {
 			buildError(ctx, 401, "Authentication required");
 			return;
 		}
@@ -2056,7 +2056,7 @@ public class CoviaAPI extends ACoviaAPI {
 			operationId = "getSchedules")
 	protected void getSchedules(Context ctx) {
 		RequestContext rctx = AuthMiddleware.callerContext(ctx);
-		if (rctx.getCallerDID() == null) {
+		if (rctx.getAuthorityDID() == null) {
 			buildError(ctx, 401, "Authentication required");
 			return;
 		}
@@ -2072,7 +2072,7 @@ public class CoviaAPI extends ACoviaAPI {
 			pathParams = { @OpenApiParam(name = "id", description = "Agent id") })
 	protected void getAgentInfo(Context ctx) {
 		RequestContext rctx = AuthMiddleware.callerContext(ctx);
-		if (rctx.getCallerDID() == null) {
+		if (rctx.getAuthorityDID() == null) {
 			buildError(ctx, 401, "Authentication required");
 			return;
 		}
@@ -2104,7 +2104,7 @@ public class CoviaAPI extends ACoviaAPI {
 	protected void getUsers(Context ctx) {
 		RequestContext rctx = engine().withTransportGrants(AuthMiddleware.callerContext(ctx),
 			AuthMiddleware.headerUcans(ctx));
-		if (rctx.getCallerDID() == null) {
+		if (rctx.getAuthorityDID() == null) {
 			buildError(ctx, 401, "Authentication required");
 			return;
 		}
@@ -2128,7 +2128,7 @@ public class CoviaAPI extends ACoviaAPI {
 	protected void getUserInfo(Context ctx) {
 		RequestContext rctx = engine().withTransportGrants(AuthMiddleware.callerContext(ctx),
 			AuthMiddleware.headerUcans(ctx));
-		if (rctx.getCallerDID() == null) {
+		if (rctx.getAuthorityDID() == null) {
 			buildError(ctx, 401, "Authentication required");
 			return;
 		}
@@ -2179,7 +2179,7 @@ public class CoviaAPI extends ACoviaAPI {
 	protected void getUserAuthentications(Context ctx) {
 		RequestContext rctx = engine().withTransportGrants(AuthMiddleware.callerContext(ctx),
 			AuthMiddleware.headerUcans(ctx));
-		if (rctx.getCallerDID() == null) {
+		if (rctx.getAuthorityDID() == null) {
 			buildError(ctx, 401, "Authentication required");
 			return;
 		}
@@ -2205,7 +2205,7 @@ public class CoviaAPI extends ACoviaAPI {
 			operationId = "getDlfsDrives")
 	protected void getDlfsDrives(Context ctx) {
 		RequestContext rctx = AuthMiddleware.callerContext(ctx);
-		if (rctx.getCallerDID() == null) {
+		if (rctx.getAuthorityDID() == null) {
 			buildError(ctx, 401, "Authentication required");
 			return;
 		}
@@ -2234,7 +2234,7 @@ public class CoviaAPI extends ACoviaAPI {
 			})
 	protected void getDlfsList(Context ctx) {
 		RequestContext rctx = AuthMiddleware.callerContext(ctx);
-		if (rctx.getCallerDID() == null) {
+		if (rctx.getAuthorityDID() == null) {
 			buildError(ctx, 401, "Authentication required");
 			return;
 		}
@@ -2279,7 +2279,7 @@ public class CoviaAPI extends ACoviaAPI {
 			operationId = "agentSse")
 	protected void agentSse(Context ctx) {
 		RequestContext rctx = AuthMiddleware.callerContext(ctx);
-		if (rctx.getCallerDID() == null) {
+		if (rctx.getAuthorityDID() == null) {
 			buildError(ctx, 401, "Authentication required");
 			return;
 		}
@@ -2341,7 +2341,7 @@ public class CoviaAPI extends ACoviaAPI {
 			operationId = "listSecrets")
 	protected void listSecrets(Context ctx) {
 		RequestContext rctx = AuthMiddleware.callerContext(ctx);
-		if (rctx.getCallerDID() == null) {
+		if (rctx.getAuthorityDID() == null) {
 			buildError(ctx, 401, "Authentication required");
 			return;
 		}
@@ -2384,7 +2384,7 @@ public class CoviaAPI extends ACoviaAPI {
 					content= @OpenApiContent(type = "application/json", from = Object.class)))
 	protected void putSecret(Context ctx) {
 		RequestContext rctx = AuthMiddleware.callerContext(ctx);
-		if (rctx.getCallerDID() == null) {
+		if (rctx.getAuthorityDID() == null) {
 			buildError(ctx, 401, "Authentication required");
 			return;
 		}
@@ -2429,7 +2429,7 @@ public class CoviaAPI extends ACoviaAPI {
 							type = String.class) })
 	protected void deleteSecret(Context ctx) {
 		RequestContext rctx = AuthMiddleware.callerContext(ctx);
-		if (rctx.getCallerDID() == null) {
+		if (rctx.getAuthorityDID() == null) {
 			buildError(ctx, 401, "Authentication required");
 			return;
 		}

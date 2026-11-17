@@ -58,20 +58,22 @@ class ExtensionRouteTest {
 		boolean writable = true;
 		boolean projection;
 		int resolutions;
+		AString owner;
 		RequestContext received;
 		@Override public String getName() { return "extension-test"; }
 		@Override public String getDescription() { return "Extension route test"; }
 		@Override public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
 			return CompletableFuture.completedFuture(input);
 		}
-		@Override public AForkableCursor<ACell> latticeView(RequestContext ctx) {
+		@Override public AForkableCursor<ACell> latticeView(AString owner, RequestContext ctx) {
 			resolutions++;
+			this.owner = owner;
 			received = ctx;
-			if (projection) return Cursors.root(Vectors.of(ctx.getUserDID(), "projected"));
-			return adapterState(ctx.getUserDID()).cursor().withDefault(Maps.empty())
-				.path(Strings.create("accounts")).withDefault(Maps.empty()).path(ctx.getUserDID());
+			if (projection) return Cursors.root(Vectors.of(owner, "projected"));
+			return adapterState(owner).cursor().withDefault(Maps.empty())
+				.path(Strings.create("accounts")).withDefault(Maps.empty()).path(owner);
 		}
-		@Override public String latticeWriteDenial(RequestContext ctx, Path path) {
+		@Override public String latticeWriteDenial(AString owner, RequestContext ctx, Path path) {
 			return writable && !projection && (path.isEmpty() || !Strings.create("fixed").equals(path.get(0))) ? null : LATTICE_READ_ONLY;
 		}
 	}
@@ -176,11 +178,10 @@ class ExtensionRouteTest {
 		RequestContext delegated = bob.withAgentId(Strings.create("demo"))
 			.withSessionId(Blob.fromHex("1234")).withProofs(Vectors.of(grant.toMap()));
 		assertEquals(Strings.create("alice"), read(resource + "/label", delegated));
-		assertEquals(aliceDID, probe.received.getUserDID());
-		assertEquals(bobDID, probe.received.getCallerDID());
+		assertEquals(aliceDID, probe.owner, "the view is the owner's its path names");
+		assertEquals(bobDID, probe.received.getAuthorityDID(), "for the request as it is");
+		assertEquals(bobDID, probe.received.getUserDID(), "whose namespace stays its own");
 		assertSame(delegated.getExecutionScope(), probe.received.getExecutionScope());
-		assertNull(probe.received.getAgentId());
-		assertNull(probe.received.getSessionId());
 		write("/" + resource + "/label", Strings.create("slashed"), delegated);
 		assertEquals(Strings.create("slashed"), read(resource + "/label", delegated), "a leading slash changes nothing");
 		write(resource + "/label", Strings.create("delegated"), delegated);
@@ -192,11 +193,10 @@ class ExtensionRouteTest {
 		assertNotNull(run("inspect", Maps.of("paths", Vectors.of(resource + "/items")), delegated));
 	}
 
-	@Test void delegatedExecutionCannotAliasAnotherUsersAgentSessionOrJob() {
-		RequestContext local = bob.withAgentId(Strings.create("demo"))
-			.withSessionId(Blob.fromHex("1234")).withJobId(Blob.fromHex("5678"))
-			.withTaskId(Blob.fromHex("9abc"));
-		RequestContext delegated = local.onBehalfOf(aliceDID);
+	/** A frame driving another account's execution, as a controller's harness drives its agent's, does not resolve that execution's names in its own namespace. */
+	@Test void anotherAccountsExecutionCannotAliasItsAgentSessionOrJob() {
+		RequestContext delegated = alice.inExecution(new RequestContext.ExecutionScope(bobDID,
+			Strings.create("demo"), Blob.fromHex("5678"), Blob.fromHex("1234"), Blob.fromHex("9abc"), -1L, null));
 		// Resolve directly: authority checks are separate, and even an authorised
 		// caller must not resolve these IDs under the other user.
 		assertThrows(covia.exception.WrongScopeException.class, () -> covia.resolve(

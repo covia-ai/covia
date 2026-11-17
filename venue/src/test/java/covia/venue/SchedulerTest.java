@@ -143,11 +143,11 @@ public class SchedulerTest {
 		Schedule state = engine.getVenueState().schedule();
 
 		RequestContext fired = sched.fireContext(state.find(own).rec());
-		assertEquals(did, fired.getCallerDID());
+		assertEquals(did, fired.getAuthorityDID());
 		assertNull(fired.getCaps());
 
 		fired = sched.fireContext(state.find(agents).rec());
-		assertEquals(worker.getCallerDID(), fired.getCallerDID());
+		assertEquals(worker.getAuthorityDID(), fired.getAuthorityDID());
 		assertEquals(did, fired.getUserDID());
 		assertEquals(invoke, fired.getCaps());
 
@@ -176,7 +176,7 @@ public class SchedulerTest {
 		sched.trigger(handle, agent).get(5, TimeUnit.SECONDS);
 		RequestContext fired = TestAdapter.CAPTURED_CTX.get(did);
 		assertNotNull(fired, "the fire ran in the owner's namespace");
-		assertEquals(agent.getCallerDID(), fired.getCallerDID());
+		assertEquals(agent.getAuthorityDID(), fired.getAuthorityDID());
 		assertEquals(caps, fired.getCaps());
 	}
 
@@ -206,12 +206,12 @@ public class SchedulerTest {
 		sched.trigger(handle, RequestContext.of(owner)).get(5, TimeUnit.SECONDS);
 		RequestContext fired = TestAdapter.CAPTURED_CTX.get(owner);
 		assertNotNull(fired, "the fire ran in the owner's namespace");
-		assertEquals(delegate, fired.getCallerDID());
+		assertEquals(delegate, fired.getAuthorityDID());
 
 		Blob asUser = sched.schedule(s("v/test/ops/capturectx"), Maps.empty(), engine.sudoContext(delegateCtx, owner), future());
 		TestAdapter.CAPTURED_CTX.remove(owner);
 		sched.trigger(asUser, RequestContext.of(owner)).get(5, TimeUnit.SECONDS);
-		assertEquals(owner, TestAdapter.CAPTURED_CTX.get(owner).getCallerDID(), "scheduled under sudo, it is the user's");
+		assertEquals(owner, TestAdapter.CAPTURED_CTX.get(owner).getAuthorityDID(), "scheduled under sudo, it is the user's");
 	}
 
 	/**
@@ -238,7 +238,7 @@ public class SchedulerTest {
 		sched.trigger(granted, delegateCtx).get(5, TimeUnit.SECONDS);
 		RequestContext fired = TestAdapter.CAPTURED_CTX.get(owner);
 		assertNotNull(fired, "it ran as the user");
-		assertEquals(owner, fired.getCallerDID());
+		assertEquals(owner, fired.getAuthorityDID());
 		assertEquals(delegate, fired.getCaller(), "called by the delegate");
 
 		RequestContext ungrantedCtx = RequestContext.of(delegate);
@@ -254,13 +254,13 @@ public class SchedulerTest {
 		AVector<ACell> caps = Vectors.of(Maps.of(Capability.CAN, s("invoke")));
 		RequestContext worker = agent("stepper", caps);
 		RequestContext step = engine.stepContext(ctx, s("stepper"));
-		assertEquals(worker.getCallerDID(), step.getCallerDID());
+		assertEquals(worker.getAuthorityDID(), step.getAuthorityDID());
 		assertEquals(did, step.getUserDID());
 		assertEquals(caps, step.getCaps());
 
 		Blob handle = sched.schedule(s("v/test/ops/echo"), s("x"), step, future());
 		RequestContext fired = sched.fireContext(engine.getVenueState().schedule().find(handle).rec());
-		assertEquals(worker.getCallerDID(), fired.getCallerDID());
+		assertEquals(worker.getAuthorityDID(), fired.getAuthorityDID());
 		assertEquals(caps, fired.getCaps());
 		assertTrue(sched.cancel(handle, ctx));
 	}
@@ -272,12 +272,12 @@ public class SchedulerTest {
 		Blob hourly = sched.schedule(s("v/test/ops/echo"), s("hourly"), agent, future(), everyHour(), null);
 		Blob mine = sched.schedule(s("v/test/ops/echo"), s("mine"), ctx, future());
 		Schedule state = engine.getVenueState().schedule();
-		assertEquals(convex.core.data.Sets.of(once, hourly), state.scheduledBy(agent.getCallerDID()));
+		assertEquals(convex.core.data.Sets.of(once, hourly), state.scheduledBy(agent.getAuthorityDID()));
 
 		deleteAgent("leaver");
 		assertNull(state.find(once));
 		assertNull(state.find(hourly));
-		assertTrue(state.scheduledBy(agent.getCallerDID()).isEmpty());
+		assertTrue(state.scheduledBy(agent.getAuthorityDID()).isEmpty());
 		assertNotNull(state.find(mine), "the owner's own events stay");
 		assertTrue(sched.cancel(mine, ctx));
 	}
@@ -290,10 +290,10 @@ public class SchedulerTest {
 		state.recordFire(state.find(handle), System.currentTimeMillis(), true, null);
 		Blob moved = state.find(handle).key();
 		assertNotEquals(handle, moved, "a recurring fire re-keys the event at its next slot");
-		assertEquals(convex.core.data.Sets.of(moved), state.scheduledBy(agent.getCallerDID()));
+		assertEquals(convex.core.data.Sets.of(moved), state.scheduledBy(agent.getAuthorityDID()));
 
 		assertTrue(sched.cancel(handle, ctx));
-		assertTrue(state.scheduledBy(agent.getCallerDID()).isEmpty());
+		assertTrue(state.scheduledBy(agent.getAuthorityDID()).isEmpty());
 	}
 
 	@Test
@@ -304,10 +304,10 @@ public class SchedulerTest {
 		ExecutionException ex = assertThrows(ExecutionException.class,
 			() -> sched.trigger(handle, ctx).get(5, TimeUnit.SECONDS));
 		assertInstanceOf(NotFoundException.class, ex.getCause());
-		assertEquals(Scheduler.AGENT_GONE.formatted(ghost.getCallerDID()), ex.getCause().getMessage());
+		assertEquals(Scheduler.AGENT_GONE.formatted(ghost.getAuthorityDID()), ex.getCause().getMessage());
 		Schedule state = engine.getVenueState().schedule();
 		assertNull(state.find(handle), "a recurring event is dropped, not rescheduled");
-		assertTrue(state.scheduledBy(ghost.getCallerDID()).isEmpty());
+		assertTrue(state.scheduledBy(ghost.getAuthorityDID()).isEmpty());
 	}
 
 	@Test
@@ -384,7 +384,7 @@ public class SchedulerTest {
 		RequestContext agent = RequestContext.ofAgent(did, s("helper"));
 		Blob queued = sched.schedule(s("v/test/ops/echo"), s("theirs"), agent, future());
 		rec = only(sched.list(ctx));
-		assertEquals(agent.getCallerDID(), rec.get(Schedule.K_CALLER), "an agent's event names the agent");
+		assertEquals(agent.getAuthorityDID(), rec.get(Schedule.K_CALLER), "an agent's event names the agent");
 		assertEquals(did, rec.get(Schedule.K_OWNER), "and the owner it belongs to");
 		assertEquals(did, stored(queued).get(Schedule.K_OWNER), "the owner still owns it");
 		assertTrue(sched.cancel(queued, ctx));

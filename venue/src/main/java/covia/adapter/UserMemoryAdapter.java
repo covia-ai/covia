@@ -108,7 +108,7 @@ public class UserMemoryAdapter extends AAdapter {
 	@Override
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
 		// Authentication required: memory is always scoped to a calling identity.
-		if (ctx.getCallerDID() == null) {
+		if (ctx.getAuthorityDID() == null) {
 			return CompletableFuture.failedFuture(new AuthException("Authentication required"));
 		}
 		// The context-only operation fixes recall at the metadata boundary. The

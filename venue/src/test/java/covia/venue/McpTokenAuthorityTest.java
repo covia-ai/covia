@@ -154,7 +154,7 @@ public class McpTokenAuthorityTest {
 			Vectors.of(cap("w/shared/", Capability.CRUD), cap("w/other/", Capability.CRUD)));
 
 		RequestContext through = engine.tokenContext(wide.ref());
-		assertEquals(builder.getCallerDID(), through.getCallerDID(), "a token's request is its issuer's");
+		assertEquals(builder.getAuthorityDID(), through.getAuthorityDID(), "a token's request is its issuer's");
 		assertTrue(mayWrite(through, alice, "w/shared/x"));
 		assertTrue(mayWrite(through, alice, "w/other/x"));
 		assertFalse(mayWrite(through, alice, "w/private/x"), "it reaches no further than its issuer");

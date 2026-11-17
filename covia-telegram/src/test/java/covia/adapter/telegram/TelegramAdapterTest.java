@@ -994,11 +994,11 @@ public class TelegramAdapterTest {
 
 		run(RequestContext.ofAgent(owner, Strings.create("maker")), "v/ops/telegram/create",
 			Maps.of("name", "made", "token", "s/TG_AGENT", "agent", AGENT));
-		assertEquals(maker, adapter.runner(owner, "made").context().getCallerDID(),
+		assertEquals(maker, adapter.runner(owner, "made").context().getAuthorityDID(),
 			"the bot identifies its senders as the agent, never its owner");
 		adapter.forgetForTest(owner, "made");
 		adapter.rearmForTest();
-		assertEquals(maker, adapter.runner(owner, "made").context().getCallerDID(), "and still after a restart");
+		assertEquals(maker, adapter.runner(owner, "made").context().getAuthorityDID(), "and still after a restart");
 		run(RequestContext.of(owner), "v/ops/telegram/delete", Maps.of("name", "made"));
 	}
 

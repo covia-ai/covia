@@ -139,7 +139,7 @@ class AdminCapabilitiesTest {
 			RequestContext ctx = grant(ownerKey, owner.toString(), allowed);
 			RequestContext sudo = engine.sudoContext(ctx, owner);
 			assertEquals(owner, sudo.getUserDID());
-			assertEquals(owner, sudo.getCallerDID(), "the user acts");
+			assertEquals(owner, sudo.getAuthorityDID(), "the user acts");
 			assertEquals(delegate, sudo.getCaller(), "called by the delegate");
 			assertEquals(delegate, sudo.getAuthenticatedDID(), "who is still the one present");
 			assertNull(sudo.getCaps(), "with the user's whole authority");

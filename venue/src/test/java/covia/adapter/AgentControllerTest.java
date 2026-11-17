@@ -122,7 +122,7 @@ public class AgentControllerTest {
 		assertNull(agent("own").getRecord().get(Agent.KEY_CONTROLLER));
 		assertEquals(alice, agent("own").getController());
 		RequestContext harness = engine.harnessContext(alice, Strings.create("own"));
-		assertEquals(alice, harness.getCallerDID(), "its harness is its owner's frame");
+		assertEquals(alice, harness.getAuthorityDID(), "its harness is its owner's frame");
 		assertNull(harness.getCaps(), "with its owner's whole authority");
 		assertEquals(Strings.create("own"), harness.getAgentId(), "driving the agent's execution");
 
@@ -138,7 +138,7 @@ public class AgentControllerTest {
 		assertEquals(agentDID("parent"), agent("child").getController());
 
 		RequestContext harness = engine.harnessContext(alice, Strings.create("child"));
-		assertEquals(agentDID("parent"), harness.getCallerDID(), "its harness is its controller's frame");
+		assertEquals(agentDID("parent"), harness.getAuthorityDID(), "its harness is its controller's frame");
 		assertEquals(Strings.create("child"), harness.getAgentId(), "driving the child's execution");
 		assertTrue(engine.authorityCovers(harness, Strings.create("w/shared/doc"), READ));
 		assertFalse(engine.authorityCovers(harness, Strings.create("w/private"), READ),
@@ -202,7 +202,7 @@ public class AgentControllerTest {
 				assertEquals(controller.equals(bob) ? bob : alice, job.getOwner(), id + " in its controller's account");
 				engine.jobs().keepCallerContext(job, harness);
 				RequestContext rebuilt = engine.jobs().callerContext(job);
-				assertEquals(controller, rebuilt.getCallerDID(), id);
+				assertEquals(controller, rebuilt.getAuthorityDID(), id);
 				for (AString resource : resources) {
 					assertEquals(engine.authorityCovers(harness, resource, READ), engine.authorityCovers(rebuilt, resource, READ),
 						id + " on " + resource);
@@ -242,14 +242,14 @@ public class AgentControllerTest {
 		assertEquals(bob, agent("bobs").getController());
 
 		RequestContext harness = engine.harnessContext(alice, Strings.create("bobs"));
-		assertEquals(bob, harness.getCallerDID(), "its harness is Bob's frame");
+		assertEquals(bob, harness.getAuthorityDID(), "its harness is Bob's frame");
 		assertFalse(engine.authorityCovers(harness, Strings.create(alice + "/w/notes"), READ), "Alice's data is not Bob's");
 		assertTrue(engine.authorityCovers(harness, Strings.create(bob + "/w/notes"), READ));
 		assertTrue(engine.authorityCovers(harness, Strings.create("w/notes"), READ), "names in it are Bob's");
 		assertNull(harness.getAgentId(), "an execution in Alice's account is not shown in Bob's");
 		assertEquals(new RequestContext.ExecutionScope(alice, Strings.create("bobs"), null, null, null, -1L, null),
 			harness.getExecutionScope(), "but it drives the agent's");
-		assertEquals(agentDID("bobs"), engine.stepContext(harness, Strings.create("bobs")).getCallerDID(),
+		assertEquals(agentDID("bobs"), engine.stepContext(harness, Strings.create("bobs")).getAuthorityDID(),
 			"and its steps act as the agent");
 
 		assertRefused(update("bobs", ALICE), Engine.NOT_CONTROLLERS.formatted(address, bob));

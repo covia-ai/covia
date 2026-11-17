@@ -440,7 +440,7 @@ public class SkillsAdapter extends AAdapter {
 	/** {@code {did, agentId?}}: the calling principal, plus the agent when the call came from an agent run. */
 	static AMap<AString, ACell> createdBy(RequestContext ctx) {
 		AMap<AString, ACell> by = Maps.empty();
-		if (ctx.getCallerDID() != null) by = by.assoc(Fields.DID, ctx.getCallerDID());
+		if (ctx.getAuthorityDID() != null) by = by.assoc(Fields.DID, ctx.getAuthorityDID());
 		if (ctx.getAgentId() != null) by = by.assoc(Fields.AGENT_ID, ctx.getAgentId());
 		return by;
 	}

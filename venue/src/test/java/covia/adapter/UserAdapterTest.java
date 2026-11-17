@@ -352,7 +352,7 @@ class UserAdapterTest {
 		assertEquals(Strings.create("sudo"), RT.getIn(result, "mode"));
 		RequestContext captured = TestAdapter.CAPTURED_CTX.get(owner);
 		assertNotNull(captured);
-		assertEquals(owner, captured.getCallerDID(), "the user acts");
+		assertEquals(owner, captured.getAuthorityDID(), "the user acts");
 		assertEquals(owner, captured.getUserDID());
 		assertEquals(delegate, captured.getCaller(), "called by the delegate");
 		assertEquals(delegate, captured.getAuthenticatedDID(), "who is still the one present");

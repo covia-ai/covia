@@ -413,7 +413,7 @@ Every lattice component:
 Every adapter:
 
 1. **Receives** `RequestContext`, resolved metadata, input.
-2. **Resolves the calling user** via `engine.getVenueState().users().user(ctx.getCallerDID())`.
+2. **Resolves the calling user** via `engine.getVenueState().users().user(ctx.getUserDID())`.
 3. **Calls component methods only.** No `cursor.set`, no `cursor.updateAndGet`, no `cursor.path(…).set(…)`, no `engine.syncState()`.
 4. **Returns a result.** That's it.
 

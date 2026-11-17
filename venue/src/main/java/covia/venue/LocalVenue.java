@@ -58,7 +58,7 @@ public class LocalVenue extends Venue {
 	 */
 	public void setRequestContext(RequestContext requestContext) {
 		this.requestContext = requestContext;
-		if (requestContext != null) setUser(requestContext.getCallerDID());
+		if (requestContext != null) setUser(requestContext.getAuthorityDID());
 	}
 
 	/** Builds the request context for this venue's user, carrying any authority. */

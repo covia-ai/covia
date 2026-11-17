@@ -860,7 +860,7 @@ public class AgentAdapter extends AAdapter {
 
 	@Override
 	public void invoke(Job job, RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
-		if (ctx.getCallerDID() == null) {
+		if (ctx.getAuthorityDID() == null) {
 			job.fail("Agent operations require an authenticated caller");
 			return;
 		}
@@ -1619,7 +1619,7 @@ public class AgentAdapter extends AAdapter {
 	 * it.
 	 */
 	static AMap<AString, ACell> withProvenance(AMap<AString, ACell> record, RequestContext ctx) {
-		return withRoute(record.assoc(Fields.CALLER, ctx.getCallerDID()), ctx);
+		return withRoute(record.assoc(Fields.CALLER, ctx.getAuthorityDID()), ctx);
 	}
 
 	/** {@code record} with {@code ctx}'s route, when it has one. */
@@ -1714,7 +1714,7 @@ public class AgentAdapter extends AAdapter {
 			.assoc(Fields.OWNER, target.ownerDID())
 			.assoc(Fields.AGENT_ID, agentId));
 		Agent.SessionIntake intake = agent.addTaskInSession(sid,
-			ctx.getCallerDID(), session.loads(), taskId, taskData);
+			ctx.getAuthorityDID(), session.loads(), taskId, taskData);
 		if (intake == Agent.SessionIntake.LOADS_ON_EXISTING) {
 			job.fail("loads can only be passed when a session is created — this session already exists");
 			return;
@@ -1841,7 +1841,7 @@ public class AgentAdapter extends AAdapter {
 			}
 		} else {
 			Agent.SessionIntake intake = agent.appendSessionPending(sid,
-				ctx.getCallerDID(), session.loads(), queued(envelope), true);
+				ctx.getAuthorityDID(), session.loads(), queued(envelope), true);
 			if (intake == Agent.SessionIntake.LOADS_ON_EXISTING) {
 				job.fail("loads can only be passed when a session is created — this session already exists");
 				return;
@@ -1968,7 +1968,7 @@ public class AgentAdapter extends AAdapter {
 	private Agent.SessionIntake appendChatInput(Job job, Agent agent, AgentTarget target,
 			SessionSpec session, ACell envelope, RequestContext ctx) {
 		if (ctx.getSessionDelivery() == null) return agent.appendSessionPending(session.id(),
-			ctx.getCallerDID(), session.loads(), envelope, !session.supplied());
+			ctx.getAuthorityDID(), session.loads(), envelope, !session.supplied());
 		ChatIntake taken;
 		try {
 			taken = engine.getVenueState().transact(draft -> {
@@ -1977,7 +1977,7 @@ public class AgentAdapter extends AAdapter {
 				if (current == null || current.isStopped()) {
 					return new ChatIntake(Agent.SessionIntake.MISSING, null);
 				}
-				var intake = current.appendSessionPending(session.id(), ctx.getCallerDID(),
+				var intake = current.appendSessionPending(session.id(), ctx.getAuthorityDID(),
 					session.loads(), envelope, !session.supplied());
 				if (intake != Agent.SessionIntake.APPLIED) return new ChatIntake(intake, null);
 				if (!ctx.getSessionDelivery().accept(draft, session.id(), job.getID())) throw new DuplicateSessionDelivery();
@@ -2973,7 +2973,7 @@ public class AgentAdapter extends AAdapter {
 		if (reason != null && !(reason instanceof AString)) {
 			throw new InvalidInputException(SUSPEND_REASON_INVALID);
 		}
-		AMap<AString, ACell> stopped = agent.suspend(ctx.getCallerDID(), (AString) reason);
+		AMap<AString, ACell> stopped = agent.suspend(ctx.getAuthorityDID(), (AString) reason);
 		if (stopped == null) {
 			job.fail(SUSPEND_AGENT_GONE);
 			return;
@@ -3299,7 +3299,7 @@ public class AgentAdapter extends AAdapter {
 			new java.util.concurrent.atomic.AtomicLong(0);
 		AMap<AString, ACell> provenance = Maps.of(
 			K_CREATED, engine.currentTimestamp(),
-			Fields.CALLER, ctx.getCallerDID(),
+			Fields.CALLER, ctx.getAuthorityDID(),
 			Fields.JOB_ID, job.getID());
 		boolean applied = agent.session(sid).updateQuiescentFrames(frames -> {
 			if (frames.isEmpty()) return frames;

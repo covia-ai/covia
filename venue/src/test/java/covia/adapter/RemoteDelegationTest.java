@@ -359,7 +359,7 @@ class RemoteDelegationTest {
 		AString ownerDID = Strings.create(covia.grid.auth.UcanTokens.did(ownerKey));
 		AString granted = Strings.create(ownerDID + "/s/SHARED");
 		RequestContext grantee = user.withProofs(Vectors.of(convex.auth.ucan.UCAN.create(ownerKey,
-			convex.auth.ucan.UCAN.fromDIDKey(user.getCallerDID()), System.currentTimeMillis() / 1000 + 3600,
+			convex.auth.ucan.UCAN.fromDIDKey(user.getAuthorityDID()), System.currentTimeMillis() / 1000 + 3600,
 			Vectors.of(convex.auth.ucan.Capability.create(granted, covia.api.Abilities.SECRET_USE,
 				Maps.of(Strings.create("url"), Strings.create(url)))),
 			Vectors.empty()).toMap()));

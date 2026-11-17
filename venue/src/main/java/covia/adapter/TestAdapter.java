@@ -126,15 +126,15 @@ public class TestAdapter extends AAdapter implements covia.adapter.token.TokenAc
 	}
 
 	/** A small connected view: diagnostics are computed, only scratch is persisted. */
-	@Override public AForkableCursor<ACell> latticeView(RequestContext ctx) {
+	@Override public AForkableCursor<ACell> latticeView(AString owner, RequestContext ctx) {
 		RequestContext.ExecutionScope scope = ctx.getExecutionScope();
 		AMap<AString, ACell> context = Maps.of(
-			Fields.CALLER, ctx.getCallerDID(), K_USER, ctx.getUserDID(), K_VENUE, engine.getDIDString(),
+			Fields.CALLER, ctx.getAuthorityDID(), K_USER, owner, K_VENUE, engine.getDIDString(),
 			K_EXECUTION, Maps.of("owner", scope.ownerDID(), Fields.AGENT_ID, scope.agentId(),
 				Fields.SESSION_ID, scope.sessionId(), Fields.JOB_ID, scope.jobId(), Fields.TASK_ID, scope.taskId()));
 		// The diagnostics are computed, so the view has a value before any scratch is stored.
-		AForkableCursor<ACell> scratch = adapterState(ctx.getUserDID()).cursor().withDefault(Maps.empty())
-			.path(K_USERS).withDefault(Maps.empty()).path(ctx.getUserDID()).withDefault(Maps.empty());
+		AForkableCursor<ACell> scratch = adapterState(owner).cursor().withDefault(Maps.empty())
+			.path(K_USERS).withDefault(Maps.empty()).path(owner).withDefault(Maps.empty());
 		return new ATransformCursor<ACell, ACell>(scratch) {
 			@Override protected ACell view(ACell stored) {
 				AMap<AString, ACell> result = Maps.of(K_CONTEXT, context, K_SAMPLES, SAMPLES);
@@ -150,7 +150,7 @@ public class TestAdapter extends AAdapter implements covia.adapter.token.TokenAc
 		};
 	}
 
-	@Override public String latticeWriteDenial(RequestContext ctx, convex.core.data.Path path) {
+	@Override public String latticeWriteDenial(AString owner, RequestContext ctx, convex.core.data.Path path) {
 		// Replacing/deleting the view root could otherwise bypass read-only children.
 		return !path.isEmpty() && K_SCRATCH.equals(path.get(0)) ? null : SCRATCH_ONLY;
 	}

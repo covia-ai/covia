@@ -140,7 +140,7 @@ public class AccessControlTest {
 		AMap<AString, ACell> launched = Maps.of(
 			Fields.ID, Blob.fromHex("00112233445566778899aabbccddeeff"),
 			Fields.STATUS, Status.PENDING,
-			Fields.CALLER, dispatch.getCallerDID(),
+			Fields.CALLER, dispatch.getAuthorityDID(),
 			Fields.OWNER, ALICE_LITERAL,
 			Fields.UPDATED, CVMLong.create(1000L));
 		assertFalse(ac.canAccessJob(dispatch, launched), "creating a Job grants no continuing access");
@@ -168,7 +168,7 @@ public class AccessControlTest {
 		RequestContext venueCtx = engine.venueContext();
 		assertTrue(venueCtx.isAuthenticated());
 		assertFalse(venueCtx.isAnonymous());
-		assertEquals(engine.getDIDString(), venueCtx.getCallerDID());
+		assertEquals(engine.getDIDString(), venueCtx.getAuthorityDID());
 
 		assertSame(RequestContext.ANONYMOUS, RequestContext.of(null));
 	}

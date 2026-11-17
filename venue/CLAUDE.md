@@ -55,11 +55,12 @@ venue/
   point-of-action enforcement primitive; `Engine.crossUserAllows` is the
   single cross-user gate (public-user parity + target-side admission
   `config.accepts` for talking to an agent, #447 + delegation proofs).
-  **Two identities, never conflated**: `getCallerDID()` is *who acted*
-  (attribution, delegation audience, granting authority); `getUserDID()` is
-  *whose namespace* (bare paths, workspace, secrets, jobs, inbox, quota). They
-  differ only for an agent sub-principal, `<ownerDID>:g:<agentId>`; a
-  delegate under `admin/sudo` acts as the user — see `docs/UCAN.md` §5.4.
+  **Two identities, never conflated**: `getAuthorityDID()` is *who acts*, the
+  one principal a request acts as (attribution, delegation audience, granting
+  authority); `getUserDID()` is *whose namespace*, that principal's account
+  (bare paths, workspace, secrets, jobs, inbox, quota). They differ only for
+  an agent, `<ownerDID>:g:<agentId>`, whose account is its owner's; a delegate
+  under `admin/sudo` acts as the user — see `docs/UCAN.md` §5.4.
 - **Lattice** — CRDT-based persistent state. Structure defined in
   `covia.lattice.Covia`; design in `docs/GRID_LATTICE_DESIGN.md`.
 

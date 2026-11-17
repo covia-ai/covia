@@ -386,7 +386,7 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 		// It then acts as that creator, so it cannot record one whose authority was another's.
 		if (engine.authorityFrame(ctx) != ctx) throw new AuthException(SEPARATE_AUTHORITY_CREATOR);
 		if (!ctx.getTokens().isEmpty()) throw new AuthException(TOKEN_CREATOR);
-		AString principal = ctx.getCallerDID();
+		AString principal = ctx.getAuthorityDID();
 		if (!owner.equals(Principals.userOf(principal))) throw new AuthException(FOREIGN_PRINCIPAL.formatted(principal));
 		boolean own = owner.equals(principal);
 		if (own) principals.remove(key); else principals.put(key, principal);

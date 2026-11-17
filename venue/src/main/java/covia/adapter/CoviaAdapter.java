@@ -224,7 +224,7 @@ public class CoviaAdapter extends AAdapter {
 		// Authentication required: every covia:* op runs in a user namespace.
 		// Engine-startup code that needs venue-authority writes uses
 		// engine.venueContext() which has the venue's own DID as caller.
-		if (ctx.getCallerDID() == null) {
+		if (ctx.getAuthorityDID() == null) {
 			return CompletableFuture.failedFuture(new AuthException("Authentication required"));
 		}
 		try {
@@ -754,7 +754,7 @@ public class CoviaAdapter extends AAdapter {
 			boolean deleted = secret.delete();
 			if (deleted) {
 				// The name only, never the value — the same trail as secret:set.
-				engine.audit().event(covia.venue.Audit.SECRET_DELETE, covia.venue.Audit.K_DID, ctx.getCallerDID(),
+				engine.audit().event(covia.venue.Audit.SECRET_DELETE, ctx,
 					covia.venue.Audit.K_NAME, name, covia.venue.Audit.K_TARGET, ctx.getUserDID());
 			}
 			return Maps.of(Fields.DELETED, CVMBool.of(deleted));

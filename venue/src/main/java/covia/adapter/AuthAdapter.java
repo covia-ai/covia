@@ -106,6 +106,7 @@ public class AuthAdapter extends AAdapter implements AuthenticationMethods, Venu
 
 	private static final AString K_AUTHENTICATED = Strings.intern("authenticated");
 	private static final AString K_INTERNAL = Strings.intern("internal");
+	private static final AString K_AUTHENTICATED_AS = Strings.intern("authenticatedAs");
 
 	@Override
 	public String getName() {
@@ -141,7 +142,7 @@ public class AuthAdapter extends AAdapter implements AuthenticationMethods, Venu
 			}
 		}
 		if ("whoami".equals(op)) {
-			AString caller = (ctx != null) ? ctx.getCallerDID() : null;
+			AString caller = (ctx != null) ? ctx.getAuthorityDID() : null;
 			// "internal" in the response is now a derived flag: caller IS
 			// the venue itself. Engine-side trust paths (venueContext) show
 			// up here; UCAN-authenticated callers don't.
@@ -151,6 +152,9 @@ public class AuthAdapter extends AAdapter implements AuthenticationMethods, Venu
 				K_AUTHENTICATED, caller != null,
 				K_INTERNAL, internal
 			);
+			// Who is present, where that is not the caller: a delegate under admin/sudo, or a callable's invoker
+			AString present = (ctx != null) ? ctx.getAuthenticatedDID() : null;
+			if (present != null && !present.equals(caller)) out = out.assoc(K_AUTHENTICATED_AS, present);
 			return CompletableFuture.completedFuture(out);
 		}
 		return CompletableFuture.failedFuture(
@@ -180,7 +184,7 @@ public class AuthAdapter extends AAdapter implements AuthenticationMethods, Venu
 	private static final String DID_KEY = "did:key:";
 
 	private ACell identityToken(RequestContext ctx, ACell input) {
-		AString caller = ctx == null ? null : ctx.getCallerDID();
+		AString caller = ctx == null ? null : ctx.getAuthorityDID();
 		if (caller == null || engine.isPublicPrincipal(caller) || engine.isPublicPrincipal(ctx.getUserDID())) {
 			throw new AuthException(IDENTITY_AUTH_REQUIRED);
 		}

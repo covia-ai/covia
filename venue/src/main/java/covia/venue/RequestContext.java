@@ -402,15 +402,15 @@ public class RequestContext {
 	}
 
 	/**
-	 * Returns a context in which the authenticated actor executes on behalf of a
-	 * delegating user. Actor identity and execution scopes are preserved; bare
-	 * paths and per-user state resolve under {@code userDID}, and every action is
-	 * bounded by the attached delegation proofs. Execution references keep their
-	 * original owner; local ID getters return null outside that owner's namespace.
+	 * This principal in {@code userDID}'s namespace, bounded by the proofs it
+	 * presents and nothing else: work an {@code admin/sudo} delegate left
+	 * before that was a call into the user, as it ran then
+	 * ({@link Engine#context(AString, AString, AVector)}). Its execution scopes
+	 * keep their owner; local ID getters return null outside it.
 	 */
-	public RequestContext onBehalfOf(AString userDID) {
-		Authority delegated = authority.onBehalfOf(userDID);
-		if (delegated == authority) return this;
+	RequestContext onBehalfOf(AString userDID) {
+		if (userDID == null || userDID.equals(getUserDID())) return this;
+		Authority delegated = Authority.of(authority.getDID(), userDID, Vectors.empty()).withProofs(authority.getProofs());
 		return new RequestContext(delegated, executionScope, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, cycle, sessionDelivery, carried, authenticated, caller, null);
 	}
 
@@ -789,7 +789,7 @@ public class RequestContext {
 	/**
 	 * The caller's {@link Authority} — identity plus the grants it holds — as a
 	 * single immutable value. This context <em>wraps</em> it; the credential
-	 * getters below ({@link #getCallerDID()}, {@link #getCaps()},
+	 * getters below ({@link #getAuthorityDID()}, {@link #getCaps()},
 	 * {@link #getProofs()}) read through to it.
 	 */
 	public Authority getAuthority() {
@@ -806,32 +806,26 @@ public class RequestContext {
 	}
 
 	/**
-	 * Gets the caller's DID, or null if anonymous.
-	 */
-	public AString getCallerDID() {
-		return authority.getDID();
-	}
-
-	/**
-	 * The principal whose authority applies to this request: the principal it
-	 * acts as. Null if anonymous.
+	 * The principal this request acts as, whose authority applies to it: who
+	 * acted, for attribution, who a delegation is audienced to and who holds
+	 * granting authority. Null if anonymous.
 	 */
 	public AString getAuthorityDID() {
 		return authority.getDID();
 	}
 
 	/**
-	 * The user whose namespace this request acts within: the owning user for an
-	 * agent or delegated sub-principal, and {@link #getCallerDID()} for everyone
-	 * else.
+	 * The account of the principal this request acts as: a user's own, or an
+	 * agent's owner's.
 	 *
 	 * <p><b>Use this for namespace questions</b> — which per-user lattice record,
 	 * whose secret store, whose workspace a bare {@code w/foo} names. <b>Use
-	 * {@link #getCallerDID()} for identity questions</b> — who acted (attribution),
-	 * who a delegation is audienced to, and who holds granting authority. An
-	 * agent works inside its owner's namespace but is not its owner; conflating
-	 * the two is how a caller's identity leaks into state it should not reach
-	 * (#91), and how an agent would silently acquire its owner's granting reach.</p>
+	 * {@link #getAuthorityDID()} for identity questions</b> — who acted
+	 * (attribution), who a delegation is audienced to, and who holds granting
+	 * authority. An agent works inside its owner's namespace but is not its
+	 * owner; conflating the two is how a caller's identity leaks into state it
+	 * should not reach (#91), and how an agent would silently acquire its
+	 * owner's granting reach.</p>
 	 */
 	public AString getUserDID() {
 		return authority.getUserDID();
@@ -854,7 +848,7 @@ public class RequestContext {
 	 * substitute for a capability check.</p>
 	 */
 	public Principals.Relation relationTo(AString targetDID) {
-		return Principals.relate(getCallerDID(), getUserDID(), targetDID);
+		return Principals.relate(getAuthorityDID(), getUserDID(), targetDID);
 	}
 
 	/**
@@ -979,7 +973,7 @@ public class RequestContext {
 	 */
 	static CapabilityDeniedException denied(RequestContext ctx, String reason, AString resource, AString ability) {
 		if (ctx == null) return new CapabilityDeniedException(reason, resource, ability, null);
-		return new CapabilityDeniedException(reason, ctx.inNamespace(resource), ability, ctx.getCallerDID());
+		return new CapabilityDeniedException(reason, ctx.inNamespace(resource), ability, ctx.getAuthorityDID());
 	}
 
 	/**

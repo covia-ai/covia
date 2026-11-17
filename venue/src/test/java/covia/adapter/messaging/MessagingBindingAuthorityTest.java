@@ -59,7 +59,7 @@ class MessagingBindingAuthorityTest {
 		adapter.handleCreate(engine.context(owner, maker), Maps.of(Fields.NAME, "made", Fields.TOKEN, "s/token"));
 		TestMessagingAdapter.Bot made = adapter.runner(owner, "made");
 		RequestContext acting = adapter.bindingContext(made);
-		assertEquals(maker, acting.getCallerDID());
+		assertEquals(maker, acting.getAuthorityDID());
 		assertFalse(engine.authorityCovers(acting, Strings.create(owner + "/w/x"), Capability.CRUD_WRITE),
 			"the bot holds the agent's authority, not its user's");
 		assertThrows(AuthException.class, () -> adapter.resolveCredential("s/token", made));

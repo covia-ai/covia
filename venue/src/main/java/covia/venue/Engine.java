@@ -3691,7 +3691,7 @@ public class Engine {
 		RequestContext frame = authorityFrame(ctx);
 		if (frame != ctx) return proofsStructurallyCover(frame, ctx.inNamespace(resource), ability, now);
 		return covia.lattice.CapabilityChecker.proofsStructurallyCover(
-			ctx.getProofs(), ctx.getCallerDID(), rootAuthorityPolicy(),
+			ctx.getProofs(), ctx.getAuthorityDID(), rootAuthorityPolicy(),
 			resource, ability, now);
 	}
 
@@ -3743,7 +3743,7 @@ public class Engine {
 		}
 		java.util.Map<String, java.util.function.Consumer<AdapterState>> cleanups = new java.util.LinkedHashMap<>();
 		registered.forEach((name, adapter) -> cleanups.put(name, state -> adapter.deleteUserState(did, state)));
-		VenueState.DeletedUser deleted = venueState.beginUserDeletion(did, ctx.getCallerDID(), cleanups);
+		VenueState.DeletedUser deleted = venueState.beginUserDeletion(did, ctx.getAuthorityDID(), cleanups);
 		// Persist revocation and retry evidence before invoking external effects.
 		flush();
 		RuntimeException failure = null;
@@ -3784,7 +3784,7 @@ public class Engine {
 		if (venueState.users().isDeleting(did)) {
 			throw new UnavailableException(USER_DELETION_PENDING);
 		}
-		log.info("user.delete did={} by={}", did, ctx.getCallerDID());
+		log.info("user.delete did={} by={}", did, ctx.getAuthorityDID());
 		return deleted.tombstone();
 	}
 
@@ -4210,7 +4210,7 @@ public class Engine {
 	 */
 	private boolean admissionAllows(RequestContext ctx, AString resource, AString ability) {
 		if (!isTalkAbility(ability)) return false;
-		AString caller = ctx.getCallerDID();
+		AString caller = ctx.getAuthorityDID();
 		if (caller == null) return false;
 		AString owner = ownerOf(resource);
 		if (owner == null) return false;
@@ -4261,7 +4261,7 @@ public class Engine {
 	 * A request already in the user's account is returned as it is.
 	 */
 	public RequestContext sudoContext(RequestContext ctx, AString userDID) {
-		AString delegate = (ctx == null) ? null : ctx.getCallerDID();
+		AString delegate = (ctx == null) ? null : ctx.getAuthorityDID();
 		if (delegate == null || isPublicPrincipal(delegate)) throw new AuthException(SUDO_AUTH_REQUIRED);
 		if (userDID == null) throw new InvalidInputException("Target user DID is required");
 		requireNotSubPrincipal(userDID);
@@ -4287,7 +4287,7 @@ public class Engine {
 	 * settles such work.
 	 */
 	private RequestContext delegateWorkContext(RequestContext ctx, AString userDID) {
-		AString delegate = ctx.getCallerDID();
+		AString delegate = ctx.getAuthorityDID();
 		if (delegate == null || isPublicPrincipal(delegate)) throw new AuthException(SUDO_AUTH_REQUIRED);
 		requireNotSubPrincipal(userDID);
 		if (ctx.isNarrowed()) throw new AuthException(SUDO_NARROWED);
@@ -4427,7 +4427,7 @@ public class Engine {
 		AString owner = isHosted(resource) ? ownerOf(resource) : namespace;
 		// Presented grants are checked against the whole namespace for a match-any resource.
 		AString target = (resource != null) ? resource : namespace;
-		boolean root = isRootOf(ctx.getCallerDID(), owner) || isRootOf(ctx.getUserDID(), owner);
+		boolean root = isRootOf(ctx.getAuthorityDID(), owner) || isRootOf(ctx.getUserDID(), owner);
 		if (root) {
 			AVector<ACell> scope = ctx.getCaps();
 			if (scope == null || ctx.denialUnder(scope, resource, grant, ctx.getUserDID(), destination) == null) return;
@@ -4720,7 +4720,7 @@ public class Engine {
 	public RequestContext authorityFrame(RequestContext ctx) {
 		if (ctx == null) return null;
 		AString owner = ctx.getUserDID();
-		AString agentId = agentIdIn(owner, ctx.getCallerDID());
+		AString agentId = agentIdIn(owner, ctx.getAuthorityDID());
 		if (agentId == null) return ctx;
 		RequestContext outside = outsideController(owner, agentId, new HashSet<>(), false);
 		return (outside == null) ? ctx : ctx.actingAs(outside.narrowedAs(ctx));
@@ -4831,7 +4831,7 @@ public class Engine {
 	/** Whether the request's caller or namespace controls the agent {@code resource} belongs to. */
 	private boolean controlsAgentAt(RequestContext ctx, AString resource) {
 		AgentPlace place = AgentPlace.of(resource, ctx.getUserDID());
-		return place != null && (controls(ctx.getCallerDID(), place) || controls(ctx.getUserDID(), place));
+		return place != null && (controls(ctx.getAuthorityDID(), place) || controls(ctx.getUserDID(), place));
 	}
 
 	/**
@@ -4987,13 +4987,13 @@ public class Engine {
 	 */
 	public boolean actsWithAuthorityOf(RequestContext ctx, AString principal) {
 		if (ctx == null || principal == null) return false;
-		AString caller = ctx.getCallerDID();
+		AString caller = ctx.getAuthorityDID();
 		RequestContext authority = authorityFrame(ctx);
 		if (actsAsOwnAgent(ctx)) {
 			if (isRootOf(caller, principal)) return true;
 			return authority == ctx && ctx.getCaps() == null && isRootOf(ctx.getUserDID(), principal);
 		}
-		if (isRootOf(authority.getCallerDID(), principal)) return true;
+		if (isRootOf(authority.getAuthorityDID(), principal)) return true;
 		return authority.getCaps() == null && isRootOf(authority.getUserDID(), principal);
 	}
 
@@ -5013,8 +5013,8 @@ public class Engine {
 	 * ({@link #delegateWorkContext}).
 	 */
 	public static AString actingPrincipal(RequestContext ctx) {
-		if (actsAsOwnAgent(ctx)) return ctx.getCallerDID();
-		AString caller = ctx.getCallerDID();
+		if (actsAsOwnAgent(ctx)) return ctx.getAuthorityDID();
+		AString caller = ctx.getAuthorityDID();
 		AString user = ctx.getUserDID();
 		if (caller == null || caller.equals(user) || agentIdIn(user, caller) != null) return caller;
 		return user;
@@ -5027,7 +5027,7 @@ public class Engine {
 	 * the callable's.
 	 */
 	private static boolean actsAsOwnAgent(RequestContext ctx) {
-		return ctx.getCallable() == null && agentIdIn(ctx.getUserDID(), ctx.getCallerDID()) != null;
+		return ctx.getCallable() == null && agentIdIn(ctx.getUserDID(), ctx.getAuthorityDID()) != null;
 	}
 
 	/**
@@ -5205,7 +5205,7 @@ public class Engine {
 		// and a call is never the agent's own run, whatever frame it runs in
 		boolean ownRun = ctx.getCallable() == null && agentId != null && agentId.equals(execution.agentId());
 		AString owner = ownRun ? execution.ownerDID() : ctx.getUserDID();
-		AString caller = ctx.getCallerDID();
+		AString caller = ctx.getAuthorityDID();
 		AString agentDID = (owner == null || agentId == null) ? null
 			: covia.grid.Principals.agentDID(owner, agentId);
 		if (agentDID == null || !(ownRun || (owner.equals(caller) && holdsAuthorityOf(ctx, owner)))) {
@@ -5269,7 +5269,7 @@ public class Engine {
 		if (resource == null || ctx == null) return true;
 		AString owner = ownerOf(resource);
 		if (owner == null) return true;
-		return owner.equals(ctx.getUserDID()) || owner.equals(ctx.getCallerDID());
+		return owner.equals(ctx.getUserDID()) || owner.equals(ctx.getAuthorityDID());
 	}
 
 	/** The owner DID of a {@code did:<owner>/…} resource (prefix before the first
@@ -5411,7 +5411,7 @@ public class Engine {
 		return RequestContext.denied(ctx, denial != null ? denial
 			: "Capability denied: requires " + (ability != null ? ability : "(any ability)")
 				+ " on " + (resource != null ? resource : "(any)")
-				+ (ctx == null || ctx.getCallerDID() == null ? " (authenticate to act as an identity)" : ""),
+				+ (ctx == null || ctx.getAuthorityDID() == null ? " (authenticate to act as an identity)" : ""),
 			resource, ability);
 	}
 
@@ -5436,7 +5436,7 @@ public class Engine {
 	 * delegation makes another caller this.
 	 */
 	public boolean isDirectVenue(RequestContext ctx) {
-		return ctx != null && getDIDString().equals(ctx.getCallerDID())
+		return ctx != null && getDIDString().equals(ctx.getAuthorityDID())
 			&& ctx.getExecutionScope().agentId() == null && !ctx.isNarrowed();
 	}
 
@@ -5742,7 +5742,7 @@ public class Engine {
 	private boolean isOwnSecret(AString owner, RequestContext ctx) {
 		if (!owner.equals(ctx.getUserDID()) || isPublicPrincipal(owner)) return false;
 		// By the caller, not the namespace: earlier delegate work is in the user's namespace too.
-		AString caller = ctx.getCallerDID();
+		AString caller = ctx.getAuthorityDID();
 		return owner.equals(caller) || agentIdIn(owner, caller) != null;
 	}
 

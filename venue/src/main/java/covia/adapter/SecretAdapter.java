@@ -79,7 +79,7 @@ public class SecretAdapter extends AAdapter {
 
 	@Override
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
-		AString callerDID = ctx.getCallerDID();
+		AString callerDID = ctx.getAuthorityDID();
 		if (callerDID == null) {
 			return CompletableFuture.failedFuture(
 				new AuthException(AUTH_REQUIRED));
@@ -165,7 +165,7 @@ public class SecretAdapter extends AAdapter {
 		engine.requireResourceAccess(ctx, resource(name), Capability.CRUD_DELETE);
 		User user = engine.getVenueState().users().user(ctx.getUserDID());
 		boolean deleted = user != null && user.secrets().deleteIfPresent(name);
-		if (deleted) engine.audit().event(Audit.SECRET_DELETE, Audit.K_DID, ctx.getCallerDID(),
+		if (deleted) engine.audit().event(Audit.SECRET_DELETE, ctx,
 			Audit.K_NAME, name, Audit.K_TARGET, ctx.getUserDID());
 		return Maps.of(Fields.NAME, name, Fields.DELETED, CVMBool.create(deleted));
 	}
@@ -192,10 +192,10 @@ public class SecretAdapter extends AAdapter {
 				value = user == null ? null : user.secrets().decrypt(name, SecretStore.keys(engine.getKeyPair()));
 			} catch (RuntimeException e) { throw new NotSupportedException(SECRET_DECRYPT_FAILED, e); }
 			if (value == null) throw new NotFoundException(SECRET_UNAVAILABLE, name.toString());
-			engine.audit().event(Audit.SECRET_EXTRACT, Audit.K_DID, ctx.getCallerDID(), Audit.K_NAME, name, Audit.K_OUTCOME, Audit.OK);
+			engine.audit().event(Audit.SECRET_EXTRACT, ctx, Audit.K_NAME, name, Audit.K_OUTCOME, Audit.OK);
 			return Maps.of(Fields.NAME, name, Fields.VALUE, value);
 		} catch (RuntimeException e) {
-			engine.audit().event(Audit.SECRET_EXTRACT, Audit.K_DID, ctx.getCallerDID(), Audit.K_NAME, name, Audit.K_OUTCOME, Audit.FAILED);
+			engine.audit().event(Audit.SECRET_EXTRACT, ctx, Audit.K_NAME, name, Audit.K_OUTCOME, Audit.FAILED);
 			throw e;
 		}
 	}
@@ -220,7 +220,7 @@ public class SecretAdapter extends AAdapter {
 	 * collision rule therefore cannot drift from {@code secret:set}. */
 	static void storeSecret(Engine engine, RequestContext ctx, AString name,
 			AString value, boolean overwrite) {
-		if (ctx.getCallerDID() == null) {
+		if (ctx.getAuthorityDID() == null) {
 			throw new AuthException(AUTH_REQUIRED);
 		}
 		validateName(name);
@@ -240,7 +240,7 @@ public class SecretAdapter extends AAdapter {
 			throw new ConflictException(SECRET_EXISTS);
 		}
 		// The name only, never the value.
-		engine.audit().event(covia.venue.Audit.SECRET_WRITE, covia.venue.Audit.K_DID, ctx.getCallerDID(),
+		engine.audit().event(covia.venue.Audit.SECRET_WRITE, ctx,
 			covia.venue.Audit.K_NAME, name, covia.venue.Audit.K_TARGET, ctx.getUserDID());
 	}
 }

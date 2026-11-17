@@ -1083,7 +1083,7 @@ public class ContextAssemblerTest {
 		AString helper = Strings.create("helper");
 		engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, helper), ctx).awaitResult(5000);
 		ctx = engine.harnessContext(ALICE_DID, helper);
-		assertEquals(ALICE_DID, ctx.getCallerDID(), "the harness acts as the owner");
+		assertEquals(ALICE_DID, ctx.getAuthorityDID(), "the harness acts as the owner");
 		AString self = covia.grid.Principals.agentDID(ALICE_DID, helper);
 		AVector<ACell> inbox = Vectors.of(
 			(ACell) Maps.of(Fields.CALLER, ALICE_DID, Fields.MESSAGE, Strings.create("from the owner")),
@@ -1113,7 +1113,7 @@ public class ContextAssemblerTest {
 
 	/** The outcome of a call the agent made, as the venue delivers it. */
 	private AMap<AString, ACell> outcomeEnvelope() {
-		return Maps.of(Fields.CALLER, ctx.getCallerDID(), Fields.MESSAGE, lateOutcome(),
+		return Maps.of(Fields.CALLER, ctx.getAuthorityDID(), Fields.MESSAGE, lateOutcome(),
 			Agent.K_SOURCE, Agent.SOURCE_TOOL_OUTCOME);
 	}
 
@@ -1868,7 +1868,7 @@ public class ContextAssemblerTest {
 			Vectors.of((ACell) Maps.of(Strings.intern("with"), Strings.create("w/"), Strings.intern("can"), Strings.create("crud/read"))));
 		RequestContext capped = AbstractLLMAdapter.capsContext(config, ctx);
 		assertNotNull(capped.getCaps());
-		assertEquals(ctx.getCallerDID(), capped.getCallerDID());
+		assertEquals(ctx.getAuthorityDID(), capped.getAuthorityDID());
 		assertSame(ctx, AbstractLLMAdapter.capsContext(null, ctx), "no caps → unchanged");
 	}
 

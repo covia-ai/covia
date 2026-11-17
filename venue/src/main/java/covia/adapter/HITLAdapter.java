@@ -194,7 +194,7 @@ public class HITLAdapter extends AAdapter {
 	// ========== hitl:request — validate, authorise, deliver, park ==========
 
 	private void handleRequest(Job job, RequestContext ctx, ACell input) {
-		AString caller = ctx.getCallerDID();
+		AString caller = ctx.getAuthorityDID();
 		if (caller == null) throw new AuthException("Authentication required for HITL requests");
 
 		AString target = RT.ensureString(RT.getIn(input, Hitl.USER));
@@ -425,7 +425,7 @@ public class HITLAdapter extends AAdapter {
 		// agent's scope. So the gate is on identity, not on scope.
 		if (ctx.isSubPrincipal()) {
 			throw new AuthException("Agents cannot answer HITL requests: "
-				+ ctx.getCallerDID() + " would be responding on behalf of "
+				+ ctx.getAuthorityDID() + " would be responding on behalf of "
 				+ ctx.getUserDID() + ", and an approved ask issues a capability grant. "
 				+ "Only the human who owns the inbox can answer.");
 		}

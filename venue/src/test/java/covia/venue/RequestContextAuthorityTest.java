@@ -39,7 +39,7 @@ public class RequestContextAuthorityTest {
 		assertEquals(1, a.getProofs().count());
 		assertNull(a.getGrants());   // no explicit scope = unrestricted
 		// the credential getters read through to the wrapped Authority
-		assertEquals(ALICE, ctx.getCallerDID());
+		assertEquals(ALICE, ctx.getAuthorityDID());
 		assertEquals(1, ctx.getProofs().count());
 		assertNull(ctx.getCaps());
 	}
@@ -49,7 +49,7 @@ public class RequestContextAuthorityTest {
 		// A scoped Authority (CAP in its grant scope) survives the wrap intact.
 		Authority a = Authority.of(ALICE, Vectors.of(CAP));
 		RequestContext ctx = RequestContext.ofAuthority(a);
-		assertEquals(ALICE, ctx.getCallerDID());
+		assertEquals(ALICE, ctx.getAuthorityDID());
 		assertSame(a, ctx.getAuthority());
 		assertEquals(1, ctx.getCaps().count());   // getCaps reads the scope
 	}
@@ -82,7 +82,7 @@ public class RequestContextAuthorityTest {
 			.withProofs(Vectors.of(PROOF));
 		RequestContext delegated = original.onBehalfOf(ALICE);
 
-		assertEquals(DELEGATE, delegated.getCallerDID(), "the delegate remains the actor");
+		assertEquals(DELEGATE, delegated.getAuthorityDID(), "the delegate remains the actor");
 		assertEquals(ALICE, delegated.getUserDID(), "bare paths use the delegating user's namespace");
 		assertTrue(delegated.isSubPrincipal());
 		assertEquals(Vectors.of(PROOF), delegated.getProofs());

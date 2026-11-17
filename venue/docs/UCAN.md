@@ -896,7 +896,7 @@ Two questions must not be conflated, and the context answers them separately:
 
 | Question | Accessor | Used for |
 |---|---|---|
-| **Who acted?** | `ctx.getCallerDID()` | attribution (`caller` on records of calls), delegation audience, granting authority |
+| **Who acted?** | `ctx.getAuthorityDID()` | attribution (`caller` on records of calls), delegation audience, granting authority |
 | **Whose namespace?** | `ctx.getUserDID()` | bare path resolution, workspace, secrets, jobs, inbox, quota |
 
 For every ordinary principal the two are equal, so this is a no-op outside

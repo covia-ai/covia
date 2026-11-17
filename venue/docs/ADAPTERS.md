@@ -83,8 +83,8 @@ it runs as a Job. A generic invocation surface additionally checks `invoke`
 on the operation reference its caller asks it to look up. REST reference
 submission is checked by JobManager; a direct grid tool still invokes its
 target and must respect the target's invocation scope. Do
-not infer authority from an operation name or confuse `ctx.getCallerDID()`
-(who acted) with `ctx.getUserDID()` (whose namespace the action uses). See
+not infer authority from an operation name or confuse `ctx.getAuthorityDID()`
+(who acts) with `ctx.getUserDID()` (whose namespace the action uses). See
 [UCAN.md](UCAN.md) for the authority model.
 
 `engine.venueContext()` is the operator's authority. Act under it only on what
@@ -682,32 +682,35 @@ view for the addressed user. It does not expose `:adapters/<name>` automatically
 or create an `x` field in user storage. Adapters own the shape of the view:
 maps, vectors, scalars and pure projections are all supported.
 
-Override `latticeView(ctx)` to return a Convex `AForkableCursor<ACell>`, or null
-for no view (the default). For example, an adapter whose private schema stores
-public account data under `accounts/<did>` can expose just that subtree:
+Override `latticeView(owner, ctx)` to return a Convex `AForkableCursor<ACell>`,
+or null for no view (the default). `owner` is the account the path addresses,
+which the router has checked the request may reach. For example, an adapter
+whose private schema stores public account data under `accounts/<did>` can
+expose just that subtree:
 
 ```java
-@Override public AForkableCursor<ACell> latticeView(RequestContext ctx) {
-    return adapterState(ctx.getUserDID()).cursor().withDefault(Maps.empty())
+@Override public AForkableCursor<ACell> latticeView(AString owner, RequestContext ctx) {
+    return adapterState(owner).cursor().withDefault(Maps.empty())
         .path(Strings.intern("accounts")).withDefault(Maps.empty())
-        .path(ctx.getUserDID());
+        .path(owner);
 }
 ```
 
-Use `ctx.getUserDID()` for the addressed owner; `ctx.getCallerDID()` still
-identifies the actor. The owner-bound component retains account deletion and
+Select state by `owner`; `ctx` is the request as it is, its namespace and
+execution its own. The owner-bound component retains account deletion and
 recreation guards. Keep credentials and internal records outside the exposed
 subtree: reading a parent returns its entire value, including descendants.
 
 Execution references live together in `ctx.getExecutionScope()`, qualified by
-its `ownerDID`. Delegating the addressed namespace never changes that owner.
-The local `getAgentId()/getSessionId()/getJobId()/getTaskId()` helpers return null
-when the execution belongs to a different user, so `n/`, `c/` and `t/` cannot
-silently target identically named records under the addressed owner. Use the
+its `ownerDID`, which a frame driving another account's execution, such as a
+controller's harness, never changes. The local
+`getAgentId()/getSessionId()/getJobId()/getTaskId()` helpers return null when
+the execution belongs to a different user, so `n/`, `c/` and `t/` cannot
+silently target identically named records in the request's own namespace. Use the
 qualified scope for attribution. Explicitly binding a new local execution ID
 under a different user starts a fresh scope without inheriting the old IDs.
 
-Views are read-only by default. Override `latticeWriteDenial(ctx, path)` for
+Views are read-only by default. Override `latticeWriteDenial(owner, ctx, path)` for
 write, append, copy-to and delete at selected paths relative to the view root.
 Return `null` to allow, or a refusal reason; the router returns that reason
 unchanged. Adapters own value validation in their cursor write transformations.

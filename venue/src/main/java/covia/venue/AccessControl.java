@@ -38,7 +38,7 @@ public class AccessControl {
 		AString resource = JobManager.resource(owner, id);
 		AString destination = Strings.create(engine.config().getBaseUrl());
 		RequestContext authority = engine.authorityFrame(ctx);
-		if (!owner.equals(authority.getUserDID()) && !owner.equals(authority.getCallerDID())
+		if (!owner.equals(authority.getUserDID()) && !owner.equals(authority.getAuthorityDID())
 				&& !engine.crossUserAllows(ctx, resource, ability, destination)) return false;
 		return engine.authorityCovers(ctx, resource, ability, destination);
 	}
@@ -84,7 +84,7 @@ public class AccessControl {
 	 * call, whose caller is only its invoker.
 	 */
 	private static boolean madeItFor(RequestContext ctx, AMap<AString, ACell> record) {
-		AString caller = ctx.getCallerDID();
+		AString caller = ctx.getAuthorityDID();
 		return !ctx.isNarrowed() && !caller.equals(ctx.getUserDID()) && caller.equals(Attribution.caller(record));
 	}
 

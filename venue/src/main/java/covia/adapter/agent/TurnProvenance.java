@@ -199,7 +199,7 @@ final class TurnProvenance {
 	private static AString agentOf(RequestContext ctx) {
 		if (ctx == null) return null;
 		RequestContext.ExecutionScope execution = ctx.getExecutionScope();
-		return (execution.agentId() == null) ? ctx.getCallerDID()
+		return (execution.agentId() == null) ? ctx.getAuthorityDID()
 			: Principals.agentDID(execution.ownerDID(), execution.agentId());
 	}
 
