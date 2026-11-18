@@ -19,7 +19,7 @@ person read the request's origin. What still works the old way is listed under
 |-------|---------|---------|
 | `authority` | The principal whose authority applies. Only this decides access. | When a call enters another principal's authority: a callable's call, or `admin/sudo` |
 | `caller` | The `authority` of the frame that called into this one; absent at the top level | On that call: the previous `authority` becomes `caller` |
-| `origin` | The principal the request authenticated as where it entered the venue; absent from work the venue starts itself | Never: every context made for the request keeps it, a call included, and nothing a job or event keeps carries it |
+| `origin` | The principal the request authenticated as where it entered the venue; absent from work the venue starts itself | Never: every context made for the request keeps it, a call included, and nothing a job or event keeps carries it, though a job's route still names where its request started |
 
 - Ordinary composition keeps all three: orchestration steps, sub-operations
   and tool calls run in the frame that started them.
@@ -178,15 +178,16 @@ likely to be copied between places.
 ## A job's state
 
 A job runs in a context: its frame, whose `authority` is the job's caller, the
-token or callable narrowing it, the grants its request presented, and its
-execution scopes (agent, session, job and task). That context is the job's
+token or callable narrowing it, the grants its request presented, its request's
+route, and its execution scopes (agent, session, job and task). That context is the job's
 state, which the venue keeps beside the job while it is unfinished, with what
 its operation keeps to carry it to its end
 ([JOBS.md](JOBS.md#the-venues-job-entries)). No route reads it. It is one
 state, whether the job runs on from its request or resumes after a pause or a
 restart: the context the job runs in is the one kept. A scheduled event keeps
-the context of the request that scheduled it in the same form, and each fire
-runs in it.
+the context of the request that scheduled it in the same form, but for the
+route, and each fire runs in it: a fire is a request of its own, whose route
+starts at the scheduler ([AGENT_CONTEXT.md](AGENT_CONTEXT.md) §1.2).
 
 The state holds principals, what narrows them and grants, never the authority
 worked out from them. Each time the job acts, its authority is worked out from

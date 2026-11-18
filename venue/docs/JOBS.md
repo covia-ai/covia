@@ -366,15 +366,17 @@ agent's task as its caller (ADAPTERS.md, External agent interactions), and so
 does every external agent's backend job, which the agent's harness starts in
 its controller's frame (UCAN.md §5.4). The job's entry keeps the grant
 proofs the caller presented, in the form checked on arrival, what narrows the
-request (`Engine.keptAuthority`), and the request's execution scopes (agent,
-session, job and task), even when
+request (`Engine.keptAuthority`), the request's route (AGENT_CONTEXT.md §1.2),
+and its execution scopes (agent, session, job and task), even when
 there are none, so that `JobManager.keepsCallerContext` tells such a job from
 one whose adapter never asked. `JobManager.callerContext` rebuilds the caller
 from them with `Engine.context(owner, caller, proofs, authority)`, checking
 what a live request would: the principal still exists and acts in the
 account the job is kept in (`Engine.NOT_IN_ACCOUNT` otherwise), and an agent
 acts under its current `config.caps` and its controller as it stands, read
-from its record. What narrows the request is
+from its record. The rebuilt context carries the kept route, since the work is
+the same request carried on, and has no `origin`, since nobody is present in
+it (AUTHORITY.md). What narrows the request is
 the access token it came through, if any, which then narrows it as it stands
 and to nothing once it is gone (ACCESS_TOKENS.md). Work a callable's call left
 running keeps the callable and the call's caller instead, and resumes in the

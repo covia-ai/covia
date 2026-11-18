@@ -1285,8 +1285,10 @@ public class JobManager {
 	 * work that continues for the caller after this request, such as a session
 	 * that resumes after a restart ({@link #callerContext}): the verified UCAN
 	 * proofs it presents, in the form checked on arrival, the separate
-	 * authority it acts with if it has one ({@link Engine#keptAuthority}), and
-	 * its execution scopes (agent, session, job, task). They are kept in the job's entry
+	 * authority it acts with if it has one ({@link Engine#keptAuthority}), its
+	 * route ({@link RequestContext#getRoute}), since the work is the same
+	 * request carried on, and its execution scopes (agent, session, job,
+	 * task). They are kept in the job's entry
 	 * ({@link JobIndex}), which no route reads, and go with it when the job
 	 * ends. A job keeps a context even when its caller presented nothing
 	 * beyond itself, so {@link #keepsCallerContext} tells it from one whose
@@ -1306,6 +1308,8 @@ public class JobManager {
 		if (proofs != null && !proofs.isEmpty()) kept = kept.assoc(Fields.PROOFS, proofs);
 		AMap<AString, ACell> authority = Engine.keptAuthority(ctx);
 		if (authority != null) kept = kept.assoc(Fields.AUTHORITY, authority);
+		AVector<ACell> route = ctx.getRoute();
+		if (route != null && !route.isEmpty()) kept = kept.assoc(Fields.ROUTE, route);
 		if (ctx.getAgentId() != null) kept = kept.assoc(Fields.AGENT_ID, ctx.getAgentId());
 		if (ctx.getSessionId() != null) kept = kept.assoc(Fields.SESSION_ID, ctx.getSessionId());
 		if (ctx.getJobId() != null) kept = kept.assoc(Fields.JOB_ID, ctx.getJobId());
@@ -1329,8 +1333,10 @@ public class JobManager {
 	 * what a live request of the caller's would hold on arrival
 	 * ({@link Engine#context(AString, AString, AVector, AMap)}), presenting again
 	 * the proofs the job keeps and acting with the separate authority it keeps,
-	 * with the execution scopes it keeps ({@link #keepCallerContext}). This is
-	 * how work that continues after a restart regains its authority.
+	 * on the route and with the execution scopes it keeps
+	 * ({@link #keepCallerContext}). This is how work that continues after a
+	 * restart regains its authority. Nobody is present in it, so it has no
+	 * origin, though its route still names where the request started.
 	 *
 	 * @throws AuthException when the job names no caller, or its caller could not act now
 	 */
@@ -1341,6 +1347,8 @@ public class JobManager {
 		RequestContext ctx = engine.context(accountOf(job), caller, RT.ensureVector(RT.getIn(kept, Fields.PROOFS)),
 			RT.ensureMap(RT.getIn(kept, Fields.AUTHORITY)));
 		if (kept == null) return ctx;
+		AVector<ACell> route = RT.ensureVector(kept.get(Fields.ROUTE));
+		if (route != null) ctx = ctx.withRoute(route);
 		AString agentId = RT.ensureString(kept.get(Fields.AGENT_ID));
 		if (agentId != null) ctx = ctx.withAgentId(agentId);
 		if (kept.get(Fields.SESSION_ID) instanceof Blob sessionId) ctx = ctx.withSessionId(sessionId);

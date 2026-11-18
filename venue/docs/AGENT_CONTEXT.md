@@ -301,7 +301,10 @@ find its information again, and the text it writes for the agent
 Later records are handovers: `callable`, a callable's call into its issuer's
 authority, and `user`, a call into a user under `admin/sudo`.
 
-The route belongs to its request. A scheduled event is something a request
+The route belongs to its request. Work that carries a request on after a
+pause or a restart is the same request, so it keeps the route with the rest
+of its job's state, adding no record for the resumption (JOBS.md, Kept caller
+context). A scheduled event is something a request
 creates, so each fire is a new request whose first record is the
 scheduler's, and how the event was scheduled is not part of it. Contexts the
 venue makes for its own work carry none. The agent's ingress records the
