@@ -23,7 +23,7 @@ import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.adapter.agent.AbstractLLMAdapter;
 import covia.exception.InvalidInputException;
-import covia.exception.NotSupportedException;
+import covia.exception.UnsupportedException;
 import covia.venue.TestEngine;
 import dev.langchain4j.agent.tool.ToolSpecification;
 import dev.langchain4j.data.message.ToolExecutionResultMessage;
@@ -43,7 +43,7 @@ class ModelCallOptionsTest {
 		assertTrue(options.automaticCaching());
 		assertEquals("1h", options.cacheTtl());
 		for (String feature : List.of("compaction", "preserveThinking", "inlineToolChanges")) {
-			var error = assertThrows(NotSupportedException.class, () -> ModelCallOptions.resolve(
+			var error = assertThrows(UnsupportedException.class, () -> ModelCallOptions.resolve(
 				Maps.empty(), Maps.of("modelOptions", Maps.of(feature, true))));
 			assertEquals(feature + ModelCallOptions.UPSTREAM_REQUIRED, error.getMessage());
 		}
@@ -58,7 +58,7 @@ class ModelCallOptionsTest {
 				"{\"context_management\":{\"edits\":[{\"type\":\"compact_20260112\"}]}}")) {
 			var tuning = LangChainAdapter.extractTuning(Maps.of("maxTokens", 100,
 				"providerOptions", JSON.parse(raw)));
-			var error = assertThrows(NotSupportedException.class, () -> LangChainAdapter.buildAnthropicModel(
+			var error = assertThrows(UnsupportedException.class, () -> LangChainAdapter.buildAnthropicModel(
 				"key", "https://api.anthropic.com/v1/", "model", Duration.ofSeconds(5), tuning));
 			assertEquals("compaction" + ModelCallOptions.UPSTREAM_REQUIRED, error.getMessage());
 		}

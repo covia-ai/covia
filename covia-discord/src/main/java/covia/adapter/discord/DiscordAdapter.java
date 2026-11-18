@@ -18,7 +18,7 @@ import covia.adapter.messaging.ConversationRouter;
 import covia.exception.ConfigurationException;
 import covia.exception.InvalidDefinitionException;
 import covia.exception.InvalidInputException;
-import covia.exception.NotSupportedException;
+import covia.exception.UnsupportedException;
 import covia.venue.RequestContext;
 
 /** Discord bots as a venue front door and as an outbound messaging adapter. */
@@ -82,7 +82,7 @@ public class DiscordAdapter extends AMessagingAdapter<BotSpec, BotRunner> {
 
 	@Override public CompletableFuture<ACell> invokeFuture(RequestContext ctx,AMap<AString,ACell> meta,ACell input){
 		String op=getSubOperation(meta);if(op==null)throw new InvalidDefinitionException("Insufficient specification for discord operation");
-		return CompletableFuture.supplyAsync(()->switch(op){case "send"->send(ctx,input);case "call"->call(ctx,input);case "create"->handleCreate(ctx,input);case "delete"->handleDelete(ctx,input);case "bots"->handleBots(ctx);default->throw new NotSupportedException("Unsupported discord operation: "+op);},VIRTUAL_EXECUTOR);
+		return CompletableFuture.supplyAsync(()->switch(op){case "send"->send(ctx,input);case "call"->call(ctx,input);case "create"->handleCreate(ctx,input);case "delete"->handleDelete(ctx,input);case "bots"->handleBots(ctx);default->throw new UnsupportedException("Unsupported discord operation: "+op);},VIRTUAL_EXECUTOR);
 	}
 	private ACell send(RequestContext ctx,ACell input){
 		AMap<AString,ACell> in=RT.castMap(input);if(in==null)throw new InvalidInputException("send expects an object");BotRunner r=selectBot(ctx,RT.ensureString(in.get(K_BOT)));requireBotAccess(ctx,r,ABILITY_SEND);

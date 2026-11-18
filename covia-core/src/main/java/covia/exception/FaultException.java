@@ -40,8 +40,9 @@ public class FaultException extends CoviaException {
 	/**
 	 * What a scope reports of a failure that escaped its code. A Covia
 	 * exception with a reason is already written for the caller and passes as
-	 * it is. Anything else is this scope's fault: it is logged here at ERROR
-	 * with its stack, once, and reported as {@link #FAILED}.
+	 * it is; an {@link IntegrityException} among them is logged here at ERROR
+	 * unless it was logged already. Anything else is this scope's fault: it is
+	 * logged here at ERROR with its stack, once, and reported as {@link #FAILED}.
 	 *
 	 * @param what what failed, as its caller knows it, such as "Operation crown:query"
 	 * @param owner whose code it was, such as {@code ADAPTER.formatted("crown")} or {@link #VENUE}
@@ -49,6 +50,7 @@ public class FaultException extends CoviaException {
 	 */
 	public static CoviaException within(String what, String owner, Throwable failure) {
 		Throwable cause = unwrap(failure);
+		if (cause instanceof IntegrityException integrity) integrity.logOnce(what);
 		if (cause instanceof CoviaException reported && reasonOf(reported) != null) return reported;
 		String message = FAILED.formatted(what, cause.getClass().getSimpleName(), owner);
 		log.error(message, cause);
@@ -58,13 +60,15 @@ public class FaultException extends CoviaException {
 	/**
 	 * The cause of a failure as a scope states it after its own words for what
 	 * failed: a Covia exception's reason, or {@link #UNEXPECTED} for anything
-	 * else, logged here at ERROR with its stack.
+	 * else, logged here at ERROR with its stack. An {@link IntegrityException}
+	 * is logged here too, unless it was logged already.
 	 *
 	 * @param owner whose code it was
 	 * @param failure what escaped, looked through for async wrappers
 	 */
 	public static String cause(String owner, Throwable failure) {
 		Throwable cause = unwrap(failure);
+		if (cause instanceof IntegrityException integrity) integrity.logOnce(owner);
 		String detail = describe(owner, cause);
 		if (reasonOf(cause) == null) log.error(detail, cause);
 		return detail;

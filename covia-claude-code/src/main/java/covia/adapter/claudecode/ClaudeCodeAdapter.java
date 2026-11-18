@@ -33,10 +33,11 @@ import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.exception.ConfigurationException;
 import covia.exception.ConflictException;
+import covia.exception.ForbiddenException;
 import covia.exception.InvalidDefinitionException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
-import covia.exception.NotSupportedException;
+import covia.exception.UnsupportedException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.Engine;
@@ -583,7 +584,7 @@ public class ClaudeCodeAdapter extends ARemoteAgentAdapter<RemoteInteraction> im
 			case "projects" -> CompletableFuture.supplyAsync(() -> handleProjects(ctx), VIRTUAL_EXECUTOR);
 			case "create" -> CompletableFuture.supplyAsync(() -> handleCreate(ctx, input), VIRTUAL_EXECUTOR);
 			case "delete" -> CompletableFuture.supplyAsync(() -> handleDelete(ctx, input), VIRTUAL_EXECUTOR);
-			default -> throw new NotSupportedException("Unsupported claudecode operation: " + subOp);
+			default -> throw new UnsupportedException("Unsupported claudecode operation: " + subOp);
 		};
 	}
 
@@ -1057,7 +1058,7 @@ public class ClaudeCodeAdapter extends ARemoteAgentAdapter<RemoteInteraction> im
 		String name = nameCell.toString();
 		synchronized (this) {
 			if (configProjects.containsKey(name)) {
-				throw new NotSupportedException("Project '" + name + "' is declared in the venue config; "
+				throw new ForbiddenException("Project '" + name + "' is declared in the venue config; "
 					+ "remove it there (or with v/ops/venue/adapter/configure), not with delete");
 			}
 			if (runtimeProjects.remove(name) == null) throw new NotFoundException("Unknown project: " + name, name);

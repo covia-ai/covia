@@ -34,9 +34,10 @@ import covia.adapter.TestAdapter;
 import covia.exception.AuthException;
 import covia.exception.CoviaException;
 import covia.exception.InvalidInputException;
+import covia.exception.InvalidStateException;
 import covia.exception.NotFoundException;
-import covia.exception.NotSupportedException;
 import covia.exception.UnavailableException;
+import covia.exception.UnsupportedException;
 import covia.grid.Asset;
 import covia.grid.Job;
 import covia.grid.Status;
@@ -1023,7 +1024,7 @@ public class JobManagerTest {
 		assertNull(engine.jobs().getJobData(job.getID()), "gone from the active cache");
 		assertNotNull(engine.jobs().getJobData(job.getID(), ctx), "still readable from the lattice");
 
-		NotSupportedException ex = assertThrows(NotSupportedException.class, () ->
+		InvalidStateException ex = assertThrows(InvalidStateException.class, () ->
 			engine.jobs().deliverMessage(job.getID(),
 				Maps.of(Strings.create("content"), Strings.create("more")), ctx));
 		assertTrue(ex.getMessage().startsWith(JobManager.JOB_TERMINAL), ex.getMessage());
@@ -1045,10 +1046,10 @@ public class JobManagerTest {
 		assertEquals(JobManager.acknowledgement(job.getID()), cancelled);
 		assertEquals(Status.COMPLETE, job.getStatus());
 
-		NotSupportedException pause = assertThrows(NotSupportedException.class,
+		InvalidStateException pause = assertThrows(InvalidStateException.class,
 			() -> engine.jobs().pauseJob(job.getID(), ctx));
 		assertTrue(pause.getMessage().startsWith(JobManager.JOB_TERMINAL), pause.getMessage());
-		NotSupportedException resume = assertThrows(NotSupportedException.class,
+		InvalidStateException resume = assertThrows(InvalidStateException.class,
 			() -> engine.jobs().resumeJob(job.getID(), ctx));
 		assertTrue(resume.getMessage().startsWith(JobManager.JOB_TERMINAL), resume.getMessage());
 	}
@@ -1068,7 +1069,7 @@ public class JobManagerTest {
 		Job job = engine.jobs().invokeOperation(meta, null, ctx);
 		try {
 			assertFalse(job.isFinished());
-			NotSupportedException ex = assertThrows(NotSupportedException.class, () ->
+			UnsupportedException ex = assertThrows(UnsupportedException.class, () ->
 				engine.jobs().deliverMessage(job.getID(),
 					Maps.of(Strings.create("content"), Strings.create("more")), ctx),
 				"a message the job's operation cannot take is refused, not dropped");

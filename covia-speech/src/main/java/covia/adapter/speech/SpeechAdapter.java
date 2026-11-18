@@ -31,8 +31,8 @@ import covia.exception.ConfigurationException;
 import covia.exception.InvalidInputException;
 import covia.exception.JobFailedException;
 import covia.exception.NotFoundException;
-import covia.exception.NotSupportedException;
 import covia.exception.UnavailableException;
+import covia.exception.UnsupportedException;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.storage.ContentProvider;
@@ -387,7 +387,7 @@ public class SpeechAdapter extends AAdapter implements AutoCloseable {
 			case "prepare" -> prepare(ctx, current, in);
 			case "listen" -> listen(ctx, current, in);
 			case "hear" -> hear(ctx, in);
-			default -> throw new NotSupportedException(UNSUPPORTED.formatted(op));
+			default -> throw new UnsupportedException(UNSUPPORTED.formatted(op));
 		}, VIRTUAL_EXECUTOR);
 	}
 

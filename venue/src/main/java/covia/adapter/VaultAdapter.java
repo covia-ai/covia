@@ -12,7 +12,7 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
 import covia.exception.ConfigurationException;
-import covia.exception.NotSupportedException;
+import covia.exception.InvalidDefinitionException;
 import covia.exception.UnavailableException;
 import covia.venue.RequestContext;
 
@@ -100,7 +100,7 @@ public class VaultAdapter extends AAdapter {
 		// Map vault:X → dlfs:X with drive injected
 		String subOp = getSubOperation(meta);
 		if (subOp == null) {
-			return CompletableFuture.failedFuture(new NotSupportedException("No vault operation specified"));
+			return CompletableFuture.failedFuture(new InvalidDefinitionException("No vault operation specified"));
 		}
 
 		// Inject drive name into input

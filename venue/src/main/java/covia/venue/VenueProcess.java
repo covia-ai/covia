@@ -17,8 +17,9 @@ import org.slf4j.LoggerFactory;
 
 import convex.core.crypto.Hashing;
 import covia.exception.InvalidInputException;
-import covia.exception.NotSupportedException;
+import covia.exception.InvalidStateException;
 import covia.exception.StillStartingException;
+import covia.exception.UnsupportedException;
 import covia.grid.Job;
 import covia.venue.server.VenueServer;
 
@@ -104,7 +105,7 @@ public final class VenueProcess {
 			long startupTimeoutMillis, Job job) {
 		if (!armed.get()) throw new StillStartingException("Venue process startup is not complete");
 		if (currentJar == null) {
-			throw new NotSupportedException(
+			throw new UnsupportedException(
 				"Process restart requires MainVenue to be running from an executable jar");
 		}
 		if (job == null) throw new IllegalStateException("Process restart requires a Job context");
@@ -131,7 +132,7 @@ public final class VenueProcess {
 		}
 		String fallbackDigest = target.equals(currentJar) ? targetDigest : sha256(currentJar);
 		if (!restartRequested.compareAndSet(false, true)) {
-			throw new NotSupportedException("A venue process restart is already pending");
+			throw new InvalidStateException("A venue process restart is already pending");
 		}
 
 		RestartPlan plan = new RestartPlan(target, currentJar, startupTimeoutMillis,

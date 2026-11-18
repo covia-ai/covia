@@ -32,9 +32,9 @@ import covia.exception.ConfigurationException;
 import covia.exception.CoviaException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
-import covia.exception.NotSupportedException;
 import covia.exception.ResponseException;
 import covia.exception.UnavailableException;
+import covia.exception.UnsupportedException;
 import covia.grid.Asset;
 import covia.grid.Status;
 import covia.venue.Engine;
@@ -669,7 +669,7 @@ public class LangChainAdapter extends AAdapter {
 	 * that cannot be reached or keeps failing after langchain4j's retries is
 	 * {@code UnavailableException}; anything about this request's content is
 	 * {@code InvalidInputException}, {@code ResponseException} or
-	 * {@code NotSupportedException}. The agent harness relies on this split
+	 * {@code UnsupportedException}. The agent harness relies on this split
 	 * (AGENT_LOOP.md §3.4).</p>
 	 *
 	 * @param operatorKey whether the API key sent is the venue's own, which
@@ -700,7 +700,7 @@ public class LangChainAdapter extends AAdapter {
 		} else if (e instanceof dev.langchain4j.exception.ModelNotFoundException) {
 			failure = new ConfigurationException(MODEL_NOT_FOUND.formatted(provider, model, note));
 		} else if (e instanceof dev.langchain4j.exception.UnsupportedFeatureException) {
-			failure = new NotSupportedException(FEATURE_NOT_SUPPORTED.formatted(provider, model));
+			failure = new UnsupportedException(FEATURE_NOT_SUPPORTED.formatted(provider, model));
 		} else if (e instanceof dev.langchain4j.exception.ContentFilteredException) {
 			failure = new ResponseException(CONTENT_FILTERED.formatted(provider, model));
 		} else if (e instanceof dev.langchain4j.exception.InvalidRequestException) {
@@ -871,7 +871,7 @@ public class LangChainAdapter extends AAdapter {
 	static ChatModel buildOllamaModel(String baseUrl, String model, Duration timeout, ModelTuning tuning) {
 		Map<String, Object> providerOptions = tuning.nativeOptions();
 		if (providerOptions != null) {
-			throw new NotSupportedException("providerOptions are not supported by the Ollama client");
+			throw new UnsupportedException("providerOptions are not supported by the Ollama client");
 		}
 		var builder = OllamaChatModel.builder()
 			.baseUrl(baseUrl)
@@ -929,7 +929,7 @@ public class LangChainAdapter extends AAdapter {
 		Map<String, Object> providerOptions = tuning.nativeOptions();
 		if (providerOptions != null && (providerOptions.containsKey("compaction")
 				|| String.valueOf(providerOptions.get("context_management")).contains("compact_20260112"))) {
-			throw new NotSupportedException("compaction" + ModelCallOptions.UPSTREAM_REQUIRED);
+			throw new UnsupportedException("compaction" + ModelCallOptions.UPSTREAM_REQUIRED);
 		}
 		// Thinking blocks are bound only under adaptive thinking: Anthropic refuses
 		// block_binding beside any other type (Sonnet 5.5's between_tools, Haiku

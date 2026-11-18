@@ -31,8 +31,9 @@ import covia.exception.AuthException;
 import covia.exception.ConfigurationException;
 import covia.exception.ConflictException;
 import covia.exception.InvalidInputException;
+import covia.exception.InvalidStateException;
 import covia.exception.NotFoundException;
-import covia.exception.NotSupportedException;
+import covia.exception.UnsupportedException;
 import covia.lattice.Caps;
 import covia.venue.AdapterState;
 import covia.venue.Engine;
@@ -124,7 +125,7 @@ public class TokenAdapter extends AAdapter {
 			case "delete" -> deleted(delete(ctx, requireName(input), administration()));
 			case "list" -> listed(list(ctx, token -> true), TokenAdapter::summary);
 			case "get" -> Maps.of(Fields.NAME, requireName(input), Fields.TOKEN, bearer(ctx, requireName(input), administration()));
-			default -> throw new NotSupportedException("Unsupported token operation: " + op);
+			default -> throw new UnsupportedException("Unsupported token operation: " + op);
 		}, VIRTUAL_EXECUTOR);
 	}
 
@@ -361,12 +362,12 @@ public class TokenAdapter extends AAdapter {
 		AccessToken token = tokens().token(owner, name);
 		Set<AString> points = token.accessPoints();
 		gate.check(ctx, name, points, points);
-		if (!keepRawTokens()) throw new NotSupportedException(RAW_NOT_KEPT);
+		if (!keepRawTokens()) throw new UnsupportedException(RAW_NOT_KEPT);
 		if (token.record() == null) throw new NotFoundException(TOKEN_NOT_FOUND.formatted(name), name.toString());
 		requireCovers(ctx, token);
 		requireInPersonFor(ctx, owner, token.issuer());
 		ACell sealed = token.sealedBearer();
-		if (sealed == null) throw new NotSupportedException(RAW_NOT_HELD.formatted(name));
+		if (sealed == null) throw new InvalidStateException(RAW_NOT_HELD.formatted(name));
 		return SecretStore.unseal(sealed, sealingKeys());
 	}
 

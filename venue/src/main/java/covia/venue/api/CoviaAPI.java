@@ -38,15 +38,15 @@ import convex.core.util.JSON;
 import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.AuthException;
-import covia.exception.ConflictException;
 import covia.exception.CoviaException;
 import covia.exception.FaultException;
 import covia.exception.InvalidDefinitionException;
 import covia.exception.InvalidInputException;
+import covia.exception.InvalidStateException;
 import covia.exception.NotFoundException;
-import covia.exception.NotSupportedException;
 import covia.exception.ShuttingDownException;
 import covia.exception.UnavailableException;
+import covia.exception.UnsupportedException;
 import covia.grid.AContent;
 import covia.grid.Asset;
 import covia.grid.Attribution;
@@ -975,10 +975,11 @@ public class CoviaAPI extends ACoviaAPI {
 			Throwable cause = (e.getCause() != null) ? e.getCause() : e;
 			if (run.job() != null) {
 				// The venue accepted the run; the operation then failed. However
-				// it failed, that is the job's outcome, not an HTTP refusal: a
-				// fault, which the job reported, or the operation's stated reason.
+				// it failed, that is the job's outcome, not an HTTP refusal: the
+				// venue's own failure (a fault the job reported, or its data
+				// failing an integrity check), or the operation's stated reason.
 				CoviaException reported = run.job().report(cause);
-				if (FaultException.isFault(reported)) {
+				if (CoviaException.isVenueFailure(reported)) {
 					buildError(ctx, 500, reported.getMessage());
 				} else {
 					buildError(ctx, 400, "Error running operation: " + reported.getMessage());
@@ -1294,7 +1295,7 @@ public class CoviaAPI extends ACoviaAPI {
 			buildError(ctx, 403, e.getMessage());
 		} catch (NotFoundException e) {
 			buildError(ctx, 404, e.getMessage());
-		} catch (ConflictException | NotSupportedException e) {
+		} catch (InvalidStateException | UnsupportedException e) {
 			buildError(ctx, 409, e.getMessage());
 		} catch (covia.exception.ResponseException e) {
 			buildError(ctx, 502, e.getMessage());
@@ -1352,7 +1353,7 @@ public class CoviaAPI extends ACoviaAPI {
 			}
 		} catch (AuthException e) {
 			buildError(ctx, 403, e.getMessage());
-		} catch (ConflictException | NotSupportedException e) {
+		} catch (InvalidStateException | UnsupportedException e) {
 			buildError(ctx, 409, e.getMessage());
 		}
 	}
@@ -1388,7 +1389,7 @@ public class CoviaAPI extends ACoviaAPI {
 			}
 		} catch (AuthException e) {
 			buildError(ctx, 403, e.getMessage());
-		} catch (ConflictException | NotSupportedException e) {
+		} catch (InvalidStateException | UnsupportedException e) {
 			buildError(ctx, 409, e.getMessage());
 		}
 	}
@@ -1424,7 +1425,7 @@ public class CoviaAPI extends ACoviaAPI {
 			}
 		} catch (AuthException e) {
 			buildError(ctx, 403, e.getMessage());
-		} catch (ConflictException | NotSupportedException e) {
+		} catch (InvalidStateException | UnsupportedException e) {
 			buildError(ctx, 409, e.getMessage());
 		}
 	}

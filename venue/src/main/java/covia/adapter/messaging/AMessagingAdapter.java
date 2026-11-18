@@ -26,9 +26,9 @@ import covia.adapter.messaging.MessagingBot.Managed;
 import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.exception.ConflictException;
+import covia.exception.ForbiddenException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
-import covia.exception.NotSupportedException;
 import covia.exception.UnavailableException;
 import covia.grid.Principals;
 import covia.venue.AdapterState;
@@ -437,7 +437,7 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 		R runner = runners.remove(runtimeKey(owner, name));
 		if (runner == null) {
 			R config = runners.get(name);
-			if (config != null && owner.equals(config.spec().userDID(engine))) throw new NotSupportedException(CONFIG_BOT.formatted(name));
+			if (config != null && owner.equals(config.spec().userDID(engine))) throw new ForbiddenException(CONFIG_BOT.formatted(name));
 			throw new NotFoundException(MISSING_BOT.formatted(providerName(), name), name);
 		}
 		runner.stop();

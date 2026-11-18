@@ -51,10 +51,11 @@ import covia.exception.AuthException;
 import covia.exception.ConflictException;
 import covia.exception.CoviaException;
 import covia.exception.InvalidInputException;
+import covia.exception.InvalidStateException;
 import covia.exception.JobFailedException;
 import covia.exception.NotFoundException;
-import covia.exception.NotSupportedException;
 import covia.exception.UnavailableException;
+import covia.exception.UnsupportedException;
 import covia.adapter.agent.ExternalAgents;
 import covia.grid.HexId;
 import covia.grid.Job;
@@ -118,7 +119,7 @@ public class AgentAdapter extends AAdapter {
 
 	private void requireNative(Agent agent, String operation) {
 		if (externalAgents().isExternal(agent))
-			throw new NotSupportedException(ExternalAgents.UNSUPPORTED + operation);
+			throw new UnsupportedException(ExternalAgents.UNSUPPORTED + operation);
 	}
 
 	private boolean externalTurn(Job job, RequestContext ctx, AgentTarget target,
@@ -1811,7 +1812,7 @@ public class AgentAdapter extends AAdapter {
 				Job parent = engine.jobs().getJob(taskId);
 				if (parent != null) sid = Ids.stored(parent.getData().get(Fields.SESSION_ID));
 			}
-			if (sid == null) throw new NotSupportedException(ExternalAgents.NO_ACTIVE_TURN);
+			if (sid == null) throw new InvalidStateException(ExternalAgents.NO_ACTIVE_TURN);
 			externalAgents().deliver(agent, taskId, sid, messageContent);
 			job.setStatus(Status.STARTED);
 			job.completeWith(identify(target, Maps.of(Fields.SESSION_ID, sid,
@@ -1992,7 +1993,7 @@ public class AgentAdapter extends AAdapter {
 				Runnable changed = ((covia.venue.VenueJob) job).updateIn(draft, data ->
 					data.assoc(Fields.AGENT_ID, target.agentId()).assoc(Fields.ADDRESS, target.address())
 						.assoc(Fields.SESSION_ID, session.id()));
-				if (changed == null) throw new NotSupportedException(DELIVERY_JOB_UNAVAILABLE);
+				if (changed == null) throw new InvalidStateException(DELIVERY_JOB_UNAVAILABLE);
 				return new ChatIntake(intake, changed);
 			});
 		} catch (DuplicateSessionDelivery duplicate) {
@@ -3573,7 +3574,7 @@ public class AgentAdapter extends AAdapter {
 		}
 		refuseIfStopped(agent, taskId, ctx);
 		Scheduler scheduler = engine.gridScheduler();
-		if (scheduler == null) throw new NotSupportedException(PARK_UNAVAILABLE);
+		if (scheduler == null) throw new UnsupportedException(PARK_UNAVAILABLE);
 		long wakeTime = engine.currentTimestamp().longValue() + delay.longValue();
 		scheduler.setThreadWakeTime(ctx.getUserDID(), agent, Agent.ThreadKind.TASK, taskId, wakeTime);
 		AString reason = RT.ensureString(RT.getIn(input, Fields.REASON));
@@ -3592,7 +3593,7 @@ public class AgentAdapter extends AAdapter {
 	/** Refuses a task resolution the cycle could not make because it was stopped (AGENT_LOOP.md §2.5.1). */
 	private static void refuseIfStopped(Agent agent, Blob taskId, RequestContext ctx) {
 		if (ctx.getClaim() != null && !agent.holdsClaim(ctx.getClaim())) {
-			throw new covia.exception.NotSupportedException(CYCLE_STOPPED.formatted(taskId));
+			throw new InvalidStateException(CYCLE_STOPPED.formatted(taskId));
 		}
 	}
 
@@ -3885,7 +3886,7 @@ public class AgentAdapter extends AAdapter {
 	@Override public void handleMessage(Job job, AMap<AString, ACell> messageRecord) {
 		if (!externalAgents().owns(job)) { super.handleMessage(job, messageRecord); return; }
 		Job child = externalAgents().child(job);
-		if (child == null) throw new NotSupportedException(ExternalAgents.MISSING_CHILD);
+		if (child == null) throw new InvalidStateException(ExternalAgents.MISSING_CHILD);
 		AString owner = externalAgents().owner(job);
 		Agent agent = engine.getAgent(owner, RT.ensureString(job.getData().get(Fields.AGENT_ID)));
 		externalAgents().backend(externalAgents().stored(agent)).handleMessage(child, messageRecord);
@@ -5060,9 +5061,9 @@ public class AgentAdapter extends AAdapter {
 	/**
 	 * Whether a transition's failure means the agent cannot continue, rather
 	 * than that the work it took failed: the transition said so
-	 * ({@link CannotContinueException}), or the failure is a fault, reported
-	 * and logged where it happened, which would meet every unit of work the
-	 * same way (AGENT_LOOP.md §3.4).
+	 * ({@link CannotContinueException}), or the failure is the venue's own (a
+	 * fault, or an integrity failure), logged where it happened, which would
+	 * meet every unit of work the same way (AGENT_LOOP.md §3.4).
 	 */
 	private static boolean agentCannotContinue(Throwable failure) {
 		return CannotContinueException.find(failure) != null || !isExpectedFailure(failure);

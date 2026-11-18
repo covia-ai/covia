@@ -17,9 +17,9 @@ import covia.api.Fields;
 import covia.exception.InvalidDefinitionException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
-import covia.exception.NotSupportedException;
 import covia.exception.ResponseException;
 import covia.exception.UnavailableException;
+import covia.exception.UnsupportedException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.grid.Venue;
@@ -78,7 +78,7 @@ public class JobAdapter extends AAdapter {
 					engine.jobs().deliverMessage(id, message, ctx, owner);
 					yield CompletableFuture.completedFuture(delivered(id));
 				}
-				default -> throw new NotSupportedException(UNKNOWN_OPERATION + op);
+				default -> throw new UnsupportedException(UNKNOWN_OPERATION + op);
 			};
 		}
 		// Connection setup and synchronous SDK controls may perform network I/O.
@@ -94,7 +94,7 @@ public class JobAdapter extends AAdapter {
 					venue.sendMessage(id.toHexString(), message);
 					yield CompletableFuture.<ACell>completedFuture(delivered(id));
 				}
-				default -> throw new NotSupportedException(UNKNOWN_OPERATION + op);
+				default -> throw new UnsupportedException(UNKNOWN_OPERATION + op);
 			};
 		}, VIRTUAL_EXECUTOR).thenCompose(future -> future);
 	}
@@ -178,7 +178,7 @@ public class JobAdapter extends AAdapter {
 	private static void validateOperation(String op) {
 		if (op == null || !("status".equals(op) || "result".equals(op) || "cancel".equals(op)
 			|| "pause".equals(op) || "resume".equals(op) || "message".equals(op)))
-			throw new NotSupportedException(UNKNOWN_OPERATION + op);
+			throw new UnsupportedException(UNKNOWN_OPERATION + op);
 	}
 
 	private static Blob id(ACell input) {

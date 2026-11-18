@@ -21,8 +21,8 @@ import covia.adapter.webhook.WebhookRequest;
 import covia.adapter.webhook.WebhookResponse;
 import covia.exception.ConfigurationException;
 import covia.exception.InvalidInputException;
-import covia.exception.NotSupportedException;
 import covia.exception.UnavailableException;
+import covia.exception.UnsupportedException;
 import covia.venue.AdapterState;
 import covia.venue.RequestContext;
 
@@ -139,10 +139,10 @@ public abstract class AWebhookMessagingAdapter<S extends WebhookBotSpec>
 			case "bots" -> handleBots(ctx);
 			case "send" -> callerInput(() -> handleSend(ctx, MessagingSettings.object(input)));
 			case "download" -> {
-				if (!offersDownload()) throw new NotSupportedException(UNSUPPORTED.formatted(op));
+				if (!offersDownload()) throw new UnsupportedException(UNSUPPORTED.formatted(op));
 				yield callerInput(() -> handleDownload(ctx, MessagingSettings.object(input)));
 			}
-			default -> throw new NotSupportedException(UNSUPPORTED.formatted(op));
+			default -> throw new UnsupportedException(UNSUPPORTED.formatted(op));
 		}, VIRTUAL_EXECUTOR);
 	}
 	/**

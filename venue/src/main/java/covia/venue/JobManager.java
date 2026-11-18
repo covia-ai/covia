@@ -37,11 +37,12 @@ import covia.exception.AuthException;
 import covia.exception.CoviaException;
 import covia.exception.FaultException;
 import covia.exception.InvalidInputException;
+import covia.exception.InvalidStateException;
 import covia.exception.NotFoundException;
-import covia.exception.NotSupportedException;
 import covia.exception.RateLimitException;
 import covia.exception.ShuttingDownException;
 import covia.exception.UnavailableException;
+import covia.exception.UnsupportedException;
 import covia.grid.Asset;
 import covia.grid.Attribution;
 import covia.grid.Job;
@@ -740,7 +741,7 @@ public class JobManager {
 			ACell input, RequestContext ctx, boolean privateJob, Invocation invocation) {
 		try {
 			if (privateJob && !engine.config().isPrivateJobsEnabled()) {
-				return Run.failed(new NotSupportedException(PRIVATE_RUNS_DISABLED));
+				return Run.failed(new UnsupportedException(PRIVATE_RUNS_DISABLED));
 			}
 			boolean memoryOnly = privateJob || (isReadOnly(meta)
 				&& allowsInternal(meta)
@@ -1033,7 +1034,7 @@ public class JobManager {
 	 * @throws InvalidInputException invalid meta or schema violation
 	 * @throws AuthException caller not authenticated
 	 * @throws RuntimeException capability denied
-	 * @throws NotSupportedException adapter not registered
+	 * @throws UnsupportedException adapter not registered
 	 */
 	private AAdapter prepareInvocation(AMap<AString, ACell> meta, ACell input, RequestContext ctx) {
 		if (ctx.getJob() instanceof VenueJob parent) parent.requireAccount();
@@ -1062,7 +1063,7 @@ public class JobManager {
 
 		requireRunning(adapterName);
 		AAdapter adapter = engine.getAdapter(adapterName);
-		if (adapter == null) throw new NotSupportedException(ADAPTER_NOT_AVAILABLE + adapterName);
+		if (adapter == null) throw new UnsupportedException(ADAPTER_NOT_AVAILABLE + adapterName);
 		return adapter;
 	}
 
@@ -1741,8 +1742,8 @@ public class JobManager {
 	 * Refusal for a recorded job with no live handle to act on: it has finished,
 	 * or it is not running on this venue now.
 	 */
-	private static NotSupportedException notLive(Blob id, AMap<AString, ACell> data) {
-		return new NotSupportedException((Job.isFinished(data) ? JOB_TERMINAL : JOB_NOT_ACTIVE) + id);
+	private static InvalidStateException notLive(Blob id, AMap<AString, ACell> data) {
+		return new InvalidStateException((Job.isFinished(data) ? JOB_TERMINAL : JOB_NOT_ACTIVE) + id);
 	}
 
 	/**
@@ -1795,11 +1796,11 @@ public class JobManager {
 
 	private void deliverMessage(Job job, AMap<AString, ACell> message, AString source) {
 		Blob jobID = job.getID();
-		if (job.isFinished()) throw new NotSupportedException(JOB_TERMINAL + jobID);
+		if (job.isFinished()) throw new InvalidStateException(JOB_TERMINAL + jobID);
 		// Only a multi-turn adapter takes messages; any other job would drop it
 		AAdapter adapter = resolveJobAdapter(job);
 		if (adapter == null || !adapter.supportsMultiTurn()) {
-			throw new NotSupportedException(JOB_NO_MESSAGES + jobID);
+			throw new UnsupportedException(JOB_NO_MESSAGES + jobID);
 		}
 
 		long ts = engine.currentTimestamp().longValue();

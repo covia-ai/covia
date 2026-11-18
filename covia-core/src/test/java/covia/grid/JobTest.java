@@ -23,9 +23,10 @@ import convex.core.data.Strings;
 import covia.api.Fields;
 import covia.exception.FaultException;
 import covia.exception.InvalidInputException;
+import covia.exception.InvalidStateException;
 import covia.exception.JobFailedException;
 import covia.exception.JobPollingFailedException;
-import covia.exception.NotSupportedException;
+import covia.exception.UnsupportedException;
 
 /** Isolated because a fault case silences the global fault logger. */
 @org.junit.jupiter.api.parallel.Isolated
@@ -252,7 +253,7 @@ public class JobTest {
 			}
 		};
 		job.setPreserveFailureCause(true);
-		var winner = new NotSupportedException("winner");
+		var winner = new InvalidStateException("winner");
 		var update = CompletableFuture.runAsync(() -> job.fail(winner));
 		try {
 			assertTrue(committed.await(5, TimeUnit.SECONDS));
@@ -472,14 +473,14 @@ public class JobTest {
 	@Test
 	public void testPauseAndResumeErrorsExplainExpectedStateOrAction() {
 		Job pending = Job.create(Maps.of(Fields.ID, "pending", Fields.STATUS, Status.PENDING));
-		NotSupportedException pendingPause = assertThrows(NotSupportedException.class, pending::pause);
+		InvalidStateException pendingPause = assertThrows(InvalidStateException.class, pending::pause);
 		assertFalse(pendingPause.getMessage().isBlank());
 
 		Job running = Job.create(Maps.of(Fields.ID, "running", Fields.STATUS, Status.STARTED));
-		NotSupportedException unsupportedPause = assertThrows(NotSupportedException.class, running::pause);
+		UnsupportedException unsupportedPause = assertThrows(UnsupportedException.class, running::pause);
 		assertFalse(unsupportedPause.getMessage().isBlank());
 
-		NotSupportedException runningResume = assertThrows(NotSupportedException.class, running::resume);
+		InvalidStateException runningResume = assertThrows(InvalidStateException.class, running::resume);
 		assertFalse(runningResume.getMessage().isBlank());
 	}
 

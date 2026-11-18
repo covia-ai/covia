@@ -12,7 +12,7 @@ import convex.core.data.prim.CVMBool;
 import convex.core.json.schema.JsonSchema;
 import convex.core.lang.RT;
 import covia.exception.InvalidInputException;
-import covia.exception.NotSupportedException;
+import covia.exception.UnsupportedException;
 import covia.venue.RequestContext;
 
 /**
@@ -61,7 +61,7 @@ public class SchemaAdapter extends AAdapter {
 				case "coerce" -> CompletableFuture.completedFuture(handleCoerce(input));
 				case "check" -> CompletableFuture.completedFuture(handleCheck(input));
 				default -> CompletableFuture.failedFuture(
-					new NotSupportedException("Unknown schema operation: " + op));
+					new UnsupportedException("Unknown schema operation: " + op));
 			};
 		} catch (Exception e) {
 			return CompletableFuture.failedFuture(e);

@@ -23,8 +23,9 @@ import covia.api.Fields;
 import covia.exception.CoviaException;
 import covia.exception.FaultException;
 import covia.exception.JobFailedException;
+import covia.exception.InvalidStateException;
 import covia.exception.JobPollingFailedException;
-import covia.exception.NotSupportedException;
+import covia.exception.UnsupportedException;
 
 /**
  * Class representing a Covia Job.
@@ -635,38 +636,38 @@ public class Job {
 	/**
 	 * Pause this Job. Commits STARTED &rarr; PAUSED, then suspends its work
 	 * ({@link #onPaused}). Failing to suspend it fails the Job.
-	 * @throws NotSupportedException if the job is finished, not STARTED, or its
-	 *         work cannot be suspended (unsupported pause surfaces as HTTP 409).
+	 * @throws InvalidStateException if the job is finished or not STARTED
+	 * @throws UnsupportedException if its operation cannot suspend its work
 	 */
 	public void pause() {
 		boolean changed = commitUpdate(job -> {
 			if (!Status.STARTED.equals(job.get(Fields.STATUS))) {
-				throw new NotSupportedException("Cannot pause job: expected STARTED");
+				throw new InvalidStateException("Cannot pause job: expected STARTED");
 			}
-			if (!supportsPause()) throw new NotSupportedException(
+			if (!supportsPause()) throw new UnsupportedException(
 				"Cannot pause job: its operation does not support pausing; cancel it if appropriate");
 			return job.assoc(Fields.STATUS, Status.PAUSED);
 		}, null, () -> runContinuation(this::onPaused));
-		if (!changed) throw new NotSupportedException("Cannot pause job: status is terminal (" + getStatus() + ")");
+		if (!changed) throw new InvalidStateException("Cannot pause job: status is terminal (" + getStatus() + ")");
 	}
 
 	/**
 	 * Atomically resumes a paused Job, then restarts its work ({@link #onResumed}).
-	 * @throws NotSupportedException if the job is not paused or waiting, or its
-	 *         work cannot be restarted this way
+	 * @throws InvalidStateException if the job is not paused or waiting
+	 * @throws UnsupportedException if its operation cannot restart its work this way
 	 */
 	public void resume() {
 		boolean changed = commitUpdate(job -> {
 			ACell status = job.get(Fields.STATUS);
 			if (!Status.PAUSED.equals(status) && !Status.INPUT_REQUIRED.equals(status)
 					&& !Status.AUTH_REQUIRED.equals(status)) {
-				throw new NotSupportedException("Cannot resume job: expected PAUSED, INPUT_REQUIRED, or AUTH_REQUIRED");
+				throw new InvalidStateException("Cannot resume job: expected PAUSED, INPUT_REQUIRED, or AUTH_REQUIRED");
 			}
-			if (!supportsResume()) throw new NotSupportedException(
+			if (!supportsResume()) throw new UnsupportedException(
 				"Cannot resume job: its operation does not provide a resume action");
 			return job.assoc(Fields.STATUS, Status.STARTED);
 		}, null, () -> runContinuation(this::onResumed));
-		if (!changed) throw new NotSupportedException("Cannot resume job: status is terminal (" + getStatus() + ")");
+		if (!changed) throw new InvalidStateException("Cannot resume job: status is terminal (" + getStatus() + ")");
 	}
 
 	/**

@@ -28,8 +28,9 @@ import covia.exception.AuthException;
 import covia.exception.ConfigurationException;
 import covia.exception.ConflictException;
 import covia.exception.InvalidInputException;
+import covia.exception.InvalidStateException;
 import covia.exception.NotFoundException;
-import covia.exception.NotSupportedException;
+import covia.exception.UnsupportedException;
 import covia.grid.Attribution;
 import covia.grid.HexId;
 import covia.grid.Job;
@@ -176,11 +177,11 @@ public class HITLAdapter extends AAdapter {
 					return CompletableFuture.supplyAsync(() -> handleExpire(ctx, in), VIRTUAL_EXECUTOR);
 				}
 				case "request":
-					return CompletableFuture.failedFuture(new NotSupportedException(
+					return CompletableFuture.failedFuture(new UnsupportedException(
 						"hitl:request is Job-carried — invoke it as an operation, not internally"));
 				default:
 					return CompletableFuture.failedFuture(
-						new NotSupportedException("Unknown hitl operation: " + subOp));
+						new UnsupportedException("Unknown hitl operation: " + subOp));
 			}
 		} catch (RuntimeException e) {
 			return CompletableFuture.failedFuture(e);
@@ -496,14 +497,14 @@ public class HITLAdapter extends AAdapter {
 			throw new NotFoundException("No HITL request " + given + " in your inbox", given.toString());
 		}
 		if (!request.isOpen()) {
-			throw new NotSupportedException("HITL request " + given + " is not open (status: "
+			throw new InvalidStateException("HITL request " + given + " is not open (status: "
 				+ request.status() + ")");
 		}
 		// Lazy expiry: an expiry event not yet fired (the venue has not been
 		// updated past its time) must not let an expired request be answered.
 		if (request.isExpired(engine.currentTimestamp().longValue())) {
 			expireRequest(caller, id);
-			throw new NotSupportedException("HITL request " + given + " has expired");
+			throw new InvalidStateException("HITL request " + given + " has expired");
 		}
 
 		AString outcome = RT.ensureString(RT.getIn(input, Hitl.OUTCOME));

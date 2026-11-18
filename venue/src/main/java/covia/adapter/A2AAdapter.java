@@ -37,10 +37,11 @@ import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.exception.InvalidDefinitionException;
 import covia.exception.InvalidInputException;
+import covia.exception.InvalidStateException;
 import covia.exception.NotFoundException;
-import covia.exception.NotSupportedException;
 import covia.exception.ResponseException;
 import covia.exception.UnavailableException;
+import covia.exception.UnsupportedException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.Engine;
@@ -114,7 +115,7 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 	 * send the request again. Formatted with the remote task's ID and the
 	 * agent's address, where the caller can follow it.
 	 */
-	public static final String SECRET_UNREADABLE =
+	public static final String SECRET_NOT_USABLE =
 		"This venue restarted and its caller can no longer use the secret this job signs in with, "
 		+ "so it no longer follows remote task %s; follow it at %s";
 
@@ -200,7 +201,7 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 		String subOp = getSubOperation(meta);
 		if (subOp == null) {
 			return CompletableFuture.failedFuture(
-					new NotSupportedException("No sub-operation in a2a adapter metadata"));
+					new InvalidDefinitionException("No sub-operation in a2a adapter metadata"));
 		}
 		return switch (subOp) {
 			case "importAgent"  -> importAgent(input, ctx);
@@ -220,7 +221,7 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 				yield job.future().thenApply(x -> x);
 			}
 			default -> CompletableFuture.failedFuture(
-					new NotSupportedException("Unknown a2a sub-operation: " + subOp));
+					new UnsupportedException("Unknown a2a sub-operation: " + subOp));
 		};
 	}
 
@@ -388,7 +389,7 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 			throw new InvalidInputException("auth must specify exactly one of 'kind' or 'scheme'");
 		}
 		if (kind != null && !"bearer".equalsIgnoreCase(kind.toString())) {
-			throw new NotSupportedException("Unsupported direct auth kind '" + kind + "'; supported: bearer");
+			throw new UnsupportedException("Unsupported direct auth kind '" + kind + "'; supported: bearer");
 		}
 		return auth;
 	}
@@ -504,7 +505,7 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 		if (httpScheme != null && "bearer".equalsIgnoreCase(httpScheme.toString())) {
 			return RequestAuth.bearer(secret, ref);
 		}
-		throw new NotSupportedException("Unsupported Agent Card security scheme '" + schemeName
+		throw new UnsupportedException("Unsupported Agent Card security scheme '" + schemeName
 			+ "'; supported: API key and HTTP Bearer");
 	}
 
@@ -924,7 +925,7 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 		int code = resp.statusCode();
 		if (code >= 500 || code == 408) throw unacknowledged(null);
 		if (code < 200 || code >= 300) {
-			throw new NotSupportedException("Remote agent rejected the message: HTTP " + code);
+			throw new InvalidStateException("Remote agent rejected the message: HTTP " + code);
 		}
 		AMap<AString, ACell> reply;
 		try {
@@ -934,7 +935,7 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 		}
 		ACell error = reply == null ? null : reply.get(Fields.ERROR);
 		if (error != null) {
-			throw new NotSupportedException("Remote agent rejected the message: "
+			throw new InvalidStateException("Remote agent rejected the message: "
 				+ conciseDetail(JSON.print(error), 512));
 		}
 		AMap<AString, ACell> result = reply == null ? null : RT.ensureMap(reply.get(Fields.RESULT));
@@ -969,7 +970,7 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 				auth = restoreAuth(job, saved, target);
 			} catch (AuthException | NotFoundException unusable) {
 				// A secret the job's caller cannot use now ends it
-				engine.remoteJobs().end(job, SECRET_UNREADABLE.formatted(id, target));
+				engine.remoteJobs().end(job, SECRET_NOT_USABLE.formatted(id, target));
 				return;
 			}
 			bind(job, target, id.toString(), auth);

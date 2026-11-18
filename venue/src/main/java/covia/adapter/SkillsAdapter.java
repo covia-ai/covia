@@ -23,8 +23,8 @@ import covia.api.Fields;
 import covia.exception.ConfigurationException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
-import covia.exception.NotSupportedException;
 import covia.exception.UnavailableException;
+import covia.exception.UnsupportedException;
 import covia.venue.RequestContext;
 import covia.venue.storage.ContentProvider;
 
@@ -233,7 +233,7 @@ public class SkillsAdapter extends AAdapter {
 				case "read" -> CompletableFuture.completedFuture(handleRead(ctx, input));
 				case "parse" -> CompletableFuture.completedFuture(handleParse(ctx, input));
 				case "import" -> CompletableFuture.completedFuture(handleImport(ctx, input));
-				default -> CompletableFuture.failedFuture(new NotSupportedException(
+				default -> CompletableFuture.failedFuture(new UnsupportedException(
 					"Unknown skills operation: " + getSubOperation(meta)));
 			};
 		} catch (Exception e) {

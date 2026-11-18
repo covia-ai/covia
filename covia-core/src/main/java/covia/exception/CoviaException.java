@@ -31,6 +31,16 @@ public class CoviaException extends RuntimeException {
 		return (message == null || message.isBlank()) ? null : message;
 	}
 
+	/**
+	 * Whether a failure is the venue's own, which every surface answers as a
+	 * server failure: a fault some scope has reported, or the venue's own data
+	 * failing its integrity check. Looks through async wrappers.
+	 */
+	public static boolean isVenueFailure(Throwable t) {
+		Throwable cause = unwrap(t);
+		return (cause instanceof FaultException) || (cause instanceof IntegrityException);
+	}
+
 	/** Looks through {@code CompletionException} and {@code ExecutionException} wrappers to the failure itself. */
 	static Throwable unwrap(Throwable t) {
 		Throwable cause = t;

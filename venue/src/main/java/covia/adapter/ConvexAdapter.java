@@ -44,8 +44,8 @@ import covia.api.Fields;
 import covia.exception.ConfigurationException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
-import covia.exception.NotSupportedException;
 import covia.exception.UnavailableException;
+import covia.exception.UnsupportedException;
 import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -199,7 +199,7 @@ public class ConvexAdapter extends AAdapter {
 			case "encode-cad3" -> CompletableFuture.supplyAsync(
 				() -> encodeCAD3(input), VIRTUAL_EXECUTOR);
 			default -> CompletableFuture.failedFuture(
-				new NotSupportedException(UNSUPPORTED_OPERATION + op));
+				new UnsupportedException(UNSUPPORTED_OPERATION + op));
 		};
 	}
 

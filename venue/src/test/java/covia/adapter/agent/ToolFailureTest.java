@@ -26,7 +26,7 @@ import convex.core.data.prim.CVMLong;
 import covia.exception.AuthException;
 import covia.exception.FaultException;
 import covia.exception.InvalidInputException;
-import covia.exception.NotSupportedException;
+import covia.exception.UnsupportedException;
 import covia.venue.TestLogs;
 
 /**
@@ -67,7 +67,7 @@ public class ToolFailureTest {
 		}
 		assertEquals(reason, AbstractLLMAdapter.toolFailure(wrapped, "op", OWNER));
 		assertEquals(reason, AbstractLLMAdapter.toolFailure(
-			new CompletionException(new ExecutionException(new NotSupportedException(reason))), "op", OWNER));
+			new CompletionException(new ExecutionException(new UnsupportedException(reason))), "op", OWNER));
 		assertTrue(covia.adapter.AAdapter.isExpectedFailure(new CompletionException(new AuthException(reason))));
 		assertFalse(covia.adapter.AAdapter.isExpectedFailure(new CompletionException(new NullPointerException(reason))));
 	}

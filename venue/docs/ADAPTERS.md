@@ -283,7 +283,8 @@ at launch, enable or restart, or it could not take back its settings after
 refusing a change. The engine calls `stop()` to end whatever a failed
 `start()` began and reports the failure as the adapter's
 ([ERRORS.md](ERRORS.md)): a Covia exception with a reason as it is, logged at
-WARN, anything else as the adapter's fault.
+WARN, or once at ERROR for an integrity failure; anything else as the
+adapter's fault.
 
 A failed adapter is treated as a stopped one, as if disabled, except that it
 stays enabled. Its `v/info/adapters/<name>` record is withdrawn (the catalog

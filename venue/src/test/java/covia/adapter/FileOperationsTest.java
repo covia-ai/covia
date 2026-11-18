@@ -23,7 +23,7 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
 import covia.api.Fields;
-import covia.exception.NotSupportedException;
+import covia.exception.UnsupportedException;
 
 class FileOperationsTest {
 
@@ -101,7 +101,7 @@ class FileOperationsTest {
 	void extractModeWithoutTheDocumentsModuleNamesIt() throws Exception {
 		Path pdf = tempDir.resolve("report.pdf");
 		Files.write(pdf, "%PDF-1.4 fake".getBytes(java.nio.charset.StandardCharsets.UTF_8));
-		NotSupportedException ex = assertThrows(NotSupportedException.class,
+		UnsupportedException ex = assertThrows(UnsupportedException.class,
 			() -> FileOperations.read(pdf, "extract", null, null, null));
 		assertTrue(ex.getMessage().contains("covia-documents"), ex.getMessage());
 	}

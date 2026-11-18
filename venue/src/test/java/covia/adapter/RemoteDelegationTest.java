@@ -402,7 +402,7 @@ class RemoteDelegationTest {
 			assertEquals(RemoteJobs.CREDENTIAL_NOT_KEPT.formatted("literal-task", url + "/a2a"), ended.getErrorMessage());
 			Job deleted = second.jobs().getJob(fromDeleted.getID(), user);
 			assertEquals(Status.FAILED, deleted.getStatus());
-			assertEquals(A2AAdapter.SECRET_UNREADABLE.formatted("deleted-task", url + "/a2a"), deleted.getErrorMessage());
+			assertEquals(A2AAdapter.SECRET_NOT_USABLE.formatted("deleted-task", url + "/a2a"), deleted.getErrorMessage());
 			received.await("polls carrying the rotated secret and the granted one",
 				() -> authorizations.contains("Bearer second-token") && authorizations.contains("Bearer granted-token"));
 			assertFalse(second.jobs().getJob(fromSecret.getID(), user).isFinished());

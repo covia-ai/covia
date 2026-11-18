@@ -87,13 +87,16 @@ import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.exception.ConfigurationException;
+import covia.exception.CoviaException;
 import covia.exception.FaultException;
+import covia.exception.IntegrityException;
 import covia.exception.InvalidInputException;
+import covia.exception.InvalidStateException;
 import covia.exception.NotFoundException;
-import covia.exception.NotSupportedException;
 import covia.exception.RemoteFetchException;
 import covia.exception.StillStartingException;
 import covia.exception.UnavailableException;
+import covia.exception.UnsupportedException;
 import covia.exception.WrongScopeException;
 import covia.grid.AContent;
 import covia.grid.Asset;
@@ -1028,7 +1031,7 @@ public class Engine {
 			String sha256, long startupTimeoutMillis, covia.grid.Job job) {
 		VenueProcess control = processControl;
 		if (control == null) {
-			throw new NotSupportedException(
+			throw new UnsupportedException(
 				"Process restart is unavailable: this venue is not managed by MainVenue");
 		}
 		return control.requestRestart(successor, sha256, startupTimeoutMillis, job);
@@ -1050,12 +1053,12 @@ public class Engine {
 	/**
 	 * The host's store maintenance seam, for venue-owned operations.
 	 *
-	 * @throws NotSupportedException when the host installed none
+	 * @throws UnsupportedException when the host installed none
 	 */
 	public StoreControl storeControl() {
 		StoreControl control = storeControl;
 		if (control == null) {
-			throw new NotSupportedException(
+			throw new UnsupportedException(
 				"Store maintenance is unavailable: this venue's host installed no store control");
 		}
 		return control;
@@ -1693,7 +1696,8 @@ public class Engine {
 	/**
 	 * A failure in an adapter's own lifecycle step, as the venue reports it: a
 	 * Covia exception with a reason as it is, logged at WARN with that reason;
-	 * anything else as the adapter's fault, logged once at ERROR.
+	 * anything else as the adapter's fault, logged once at ERROR, as an
+	 * integrity failure is.
 	 */
 	private static RuntimeException adapterFailed(String what, AAdapter adapter, Throwable failure) {
 		String step = what.formatted(adapter.getName());
@@ -1702,9 +1706,13 @@ public class Engine {
 		return reported;
 	}
 
-	/** Logs a failure already reported: a fault was logged at ERROR where it was reported, anything else at WARN. */
+	/**
+	 * Logs a failure already reported: the venue's own failure (a fault or an
+	 * integrity failure) was logged at ERROR where it was reported, anything
+	 * else at WARN.
+	 */
 	private static void logFailed(String step, RuntimeException reported) {
-		if (!(reported instanceof FaultException)) log.warn("{} failed: {}", step, reported.getMessage());
+		if (!CoviaException.isVenueFailure(reported)) log.warn("{} failed: {}", step, reported.getMessage());
 	}
 
 	/**
@@ -1716,7 +1724,7 @@ public class Engine {
 	 *
 	 * @param name Adapter name
 	 * @throws NotFoundException if the adapter is unknown
-	 * @throws NotSupportedException if the adapter is disabled
+	 * @throws InvalidStateException if the adapter is disabled
 	 * @throws StillStartingException before the venue has started
 	 * @throws covia.exception.CoviaException the failure of the step that failed: a Covia
 	 *         exception with a reason as the adapter raised it, or a
@@ -1728,7 +1736,7 @@ public class Engine {
 		if (!live) {
 			adapter = disabledAdapters.get(name);
 			if (adapter == null) throw unknownAdapter(name);
-			if (!adapterFailures.containsKey(name)) throw new NotSupportedException(ADAPTER_IS_DISABLED.formatted(name));
+			if (!adapterFailures.containsKey(name)) throw new InvalidStateException(ADAPTER_IS_DISABLED.formatted(name));
 		}
 		if (!isStarted()) throw new StillStartingException(RESTART_BEFORE_START);
 		// Stopping is idempotent, so a failed adapter is stopped again: a stop
@@ -5909,8 +5917,8 @@ public class Engine {
 	 * @param ctx Request context (identity and authority)
 	 * @return Decrypted plaintext, or null when the store holds no such secret
 	 * @throws covia.exception.AuthException when the caller's authority does not cover the use
-	 * @throws NotSupportedException with {@link #SECRET_UNREADABLE} when the store holds the secret
-	 * but cannot decrypt it, with the failure as its cause
+	 * @throws IntegrityException with {@link #SECRET_INTEGRITY} when the store holds the secret
+	 * but it failed its integrity check, with the store's report as its cause
 	 */
 	public String resolveSecret(String secretRef, RequestContext ctx) {
 		return resolveSecret(secretRef, ctx, null);
@@ -5984,9 +5992,9 @@ public class Engine {
 		return owner.equals(caller) || agentIdIn(owner, caller) != null;
 	}
 
-	/** Refusal for a stored secret the venue cannot decrypt; the secret's name follows. */
-	public static final String SECRET_UNREADABLE = "Secret cannot be decrypted: it is damaged or was sealed under a key "
-		+ "this venue no longer holds. Its owner can set it again with secret:set: ";
+	/** Refusal for a stored secret that failed its integrity check; the secret's name follows. */
+	public static final String SECRET_INTEGRITY = "Secret failed its integrity check, so it cannot be used. The venue "
+		+ "operator has been told; its owner can set it again with secret:set: ";
 
 	/** One user's secret of one name, decrypted; null when the user or the secret
 	 *  is absent. The venue's own secrets also come from its process environment. */
@@ -5996,14 +6004,12 @@ public class Engine {
 		AString value;
 		try {
 			value = user.secrets().decrypt(Strings.create(name), SecretStore.keys(keyPair));
-		} catch (RuntimeException e) {
-			// A decrypt/key failure is NOT the same as "secret not set". Collapsing
-			// both to null masked #91-class identity/key misconfigurations as
-			// absence. The operator is told too, as a lost venue key is theirs to
-			// restore. Values are never logged. Why it failed is the cause, for the
-			// caller to use as it sees fit.
-			log.warn("Secret '{}' of {} cannot be decrypted: {}", name, userDID, e.toString());
-			throw new NotSupportedException(SECRET_UNREADABLE + name, e);
+		} catch (IntegrityException e) {
+			// A secret that fails its integrity check is NOT the same as "secret not
+			// set". Collapsing both to null masked #91-class identity/key
+			// misconfigurations as absence. Logged here for the operator, as a
+			// misconfigured venue key is theirs to fix; values are never logged.
+			throw IntegrityException.found(SECRET_INTEGRITY + name, userDID, e);
 		}
 		if (value != null) return value.toString();
 		return isVenuePrincipal(userDID) ? environmentSecret(name) : null;   // null == genuinely absent

@@ -16,6 +16,7 @@ import java.util.concurrent.CompletionException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
+import org.junit.jupiter.api.parallel.Isolated;
 
 import convex.core.crypto.AKeyPair;
 import convex.core.data.ABlob;
@@ -35,6 +36,7 @@ import convex.core.lang.RT;
 import covia.adapter.UserAdapter;
 import covia.api.Fields;
 import covia.exception.AuthException;
+import covia.exception.IntegrityException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.grid.hitl.Hitl;
@@ -43,6 +45,7 @@ import covia.lattice.Namespace;
 import covia.lattice.CoviaPath;
 
 /** Export, import and clone of a user's whole stored state, through the user operations. */
+@Isolated("quiets the integrity failure logger process-wide")
 class UserExportsTest {
 
 	private static final Engine engine = TestEngine.ENGINE;
@@ -181,7 +184,7 @@ class UserExportsTest {
 	}
 
 	@Test
-	void secretsAreSealedOrLeftOutNeverDropped() {
+	void secretsAreSealedOrLeftOutNeverDropped() throws Exception {
 		fill(source);
 		assertEquals(UserExports.SECRETS_NEED_KEY, failure(start("export", Maps.of(Fields.DID, source), venue)));
 		ABlob blob = export(source, SECRETS, CVMBool.FALSE);
@@ -189,12 +192,16 @@ class UserExportsTest {
 		assertTrue(engine.getVenueState().users().user(target).secrets().list().isEmpty());
 		assertNotNull(engine.getVenueState().users().content(target).get(Namespace.W));
 
-		// One the venue cannot decrypt refuses the export, carrying why.
+		// One that fails its integrity check refuses the export as the venue's failure, carrying why;
+		// the failure is logged at ERROR, which a passing build does not print.
 		users().user(source).secrets().store("FOREIGN", SECRET, SecretStore.keys(AKeyPair.generate()));
-		Throwable refused = assertThrows(CompletionException.class, () -> run("export",
-			Maps.of(Fields.DID, source, ACCOUNT_KEY, AKeyPair.generate().getAccountKey()), venue)).getCause();
-		assertEquals(UserExports.SECRET_UNREADABLE, refused.getMessage());
-		assertNotNull(refused.getCause());
+		Throwable[] refused = new Throwable[1];
+		TestLogs.quiet(IntegrityException.class, () -> refused[0] = assertThrows(CompletionException.class,
+			() -> run("export", Maps.of(Fields.DID, source, ACCOUNT_KEY, AKeyPair.generate().getAccountKey()), venue))
+			.getCause());
+		assertInstanceOf(IntegrityException.class, refused[0]);
+		assertEquals(UserExports.SECRET_INTEGRITY, refused[0].getMessage());
+		assertNotNull(refused[0].getCause());
 	}
 
 	@Test

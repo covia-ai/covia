@@ -13,7 +13,7 @@ import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.api.Fields;
-import covia.exception.NotSupportedException;
+import covia.exception.UnsupportedException;
 import covia.venue.RequestContext;
 
 /**
@@ -63,7 +63,7 @@ public class JVMAdapter extends AAdapter {
 				return handleUrlDecode(input);
 			default:
 				return CompletableFuture.failedFuture(
-					new NotSupportedException("Unknown JVM operation: " + jvmOp)
+					new UnsupportedException("Unknown JVM operation: " + jvmOp)
 				);
 		}
 	}

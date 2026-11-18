@@ -21,7 +21,7 @@ import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.exception.InvalidInputException;
-import covia.exception.NotSupportedException;
+import covia.exception.UnsupportedException;
 import covia.lattice.CapabilityChecker;
 import covia.venue.Audit;
 import covia.venue.Engine;
@@ -87,7 +87,7 @@ public class UCANAdapter extends AAdapter {
 				case "issue"  -> CompletableFuture.completedFuture(handleIssue(ctx, input));
 				case "verify" -> CompletableFuture.completedFuture(handleVerify(ctx, input));
 				default -> CompletableFuture.failedFuture(
-					new NotSupportedException("Unknown ucan operation: " + getSubOperation(meta)));
+					new UnsupportedException("Unknown ucan operation: " + getSubOperation(meta)));
 			};
 		} catch (Exception e) {
 			return CompletableFuture.failedFuture(e);

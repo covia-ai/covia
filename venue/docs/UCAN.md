@@ -733,9 +733,10 @@ can extract it. `crypto:jwt-decode` never returns a stored token's signature,
 which is its bearer credential.
 
 After authorization, a missing secret fails with `SecretAdapter.SECRET_UNAVAILABLE`;
-an unreadable key version, corrupt ciphertext or malformed record fails with
-`SecretAdapter.SECRET_DECRYPT_FAILED`. Decryption failures expose no underlying
-exception or secret value. `secret:set` uses the atomic store-if-absent operation
+an unknown key version, ciphertext that does not decrypt or a malformed record
+fails its integrity check, an `IntegrityException` with
+`SecretAdapter.SECRET_INTEGRITY` ([ERRORS.md](ERRORS.md)). Neither exposes an
+underlying exception or secret value. `secret:set` uses the atomic store-if-absent operation
 and refuses collisions with `SecretAdapter.SECRET_EXISTS` unless `overwrite:true`
 is supplied. Java callers can compare against these constants without embedding
 message wording or listing names before attempting a write.

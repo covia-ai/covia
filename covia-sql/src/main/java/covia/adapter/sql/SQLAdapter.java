@@ -38,9 +38,9 @@ import covia.exception.AuthException;
 import covia.exception.ConfigurationException;
 import covia.exception.InvalidDefinitionException;
 import covia.exception.InvalidInputException;
-import covia.exception.NotSupportedException;
 import covia.exception.ResponseException;
 import covia.exception.UnavailableException;
+import covia.exception.UnsupportedException;
 import covia.venue.Config;
 import covia.venue.RequestContext;
 
@@ -193,7 +193,7 @@ public class SQLAdapter extends AAdapter {
 		return switch (subOp) {
 			case "query" -> CompletableFuture.supplyAsync(() -> handleQuery(ctx, input), VIRTUAL_EXECUTOR);
 			case "execute" -> CompletableFuture.supplyAsync(() -> handleExecute(ctx, input), VIRTUAL_EXECUTOR);
-			default -> throw new NotSupportedException("Unsupported SQL operation: " + subOp);
+			default -> throw new UnsupportedException("Unsupported SQL operation: " + subOp);
 		};
 	}
 
@@ -278,7 +278,7 @@ public class SQLAdapter extends AAdapter {
 			case "08" -> new UnavailableException(prefix + UNREACHABLE + codes, e);
 			case "28" -> new ConfigurationException(prefix + CREDENTIALS_REFUSED + codes, e);
 			case "40", "53", "57", "58" -> new UnavailableException(prefix + BUSY + codes, e);
-			case "0A" -> new NotSupportedException(prefix + STATEMENT_NOT_SUPPORTED + codes);
+			case "0A" -> new UnsupportedException(prefix + STATEMENT_NOT_SUPPORTED + codes);
 			// convex-db gives what it reports a SQLState; anything else it cannot run is still the statement's failure
 			case "" -> target.isConvexDb() ? new InvalidInputException(prefix + STATEMENT_FAILED, e)
 				: new ResponseException(prefix + STATEMENT_REFUSED + codes, e);
@@ -314,7 +314,7 @@ public class SQLAdapter extends AAdapter {
 	private void requireWritable(String db) {
 		ACell registered = RT.getIn(engine.adapterConfig("sql"), "databases", db);
 		if (registered != null && RT.bool(RT.getIn(registered, Config.READ_ONLY))) {
-			throw new NotSupportedException("SQL database '" + db + "' " + READ_ONLY_DATABASE);
+			throw new UnsupportedException("SQL database '" + db + "' " + READ_ONLY_DATABASE);
 		}
 	}
 
@@ -446,7 +446,7 @@ public class SQLAdapter extends AAdapter {
 			+ " — or register '" + db + "' under adapters.sql.databases in venue config");
 		if (engine.isPublicPrincipal(user)) throw new AuthException(PUBLIC_HAS_NO_DATABASES);
 		String name = localName(user, db);
-		if (name == null) throw new NotSupportedException(user + " " + UNNAMEABLE_OWNER);
+		if (name == null) throw new UnsupportedException(user + " " + UNNAMEABLE_OWNER);
 		// ONE convex-db instance for all venue-local databases, with per-user
 		// isolation by database name inside it: one instance = one store, so a
 		// venue's local SQL state lives in a single Etch file. The name goes as

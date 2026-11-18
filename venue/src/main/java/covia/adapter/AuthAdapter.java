@@ -20,7 +20,7 @@ import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.exception.ConfigurationException;
 import covia.exception.InvalidInputException;
-import covia.exception.NotSupportedException;
+import covia.exception.UnsupportedException;
 import covia.grid.Venue;
 import covia.grid.auth.VenueAuth;
 import covia.grid.auth.VenueChallenge;
@@ -161,7 +161,7 @@ public class AuthAdapter extends AAdapter implements AuthenticationMethods, Venu
 			return CompletableFuture.completedFuture(out);
 		}
 		return CompletableFuture.failedFuture(
-			new NotSupportedException("Unknown auth operation: " + op));
+			new UnsupportedException("Unknown auth operation: " + op));
 	}
 
 	/** Issue identity evidence only; never accept caller-supplied claims or keys. */

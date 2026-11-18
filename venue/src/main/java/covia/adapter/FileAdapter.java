@@ -26,10 +26,11 @@ import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.exception.ConfigurationException;
+import covia.exception.InvalidDefinitionException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
-import covia.exception.NotSupportedException;
 import covia.exception.UnavailableException;
+import covia.exception.UnsupportedException;
 import covia.utils.MimeUtils;
 import covia.venue.Config;
 import covia.venue.Engine;
@@ -639,7 +640,7 @@ public class FileAdapter extends AAdapter implements covia.venue.storage.Content
 		String subOp = getSubOperation(meta);
 		if (subOp == null) {
 			return CompletableFuture.failedFuture(
-				new NotSupportedException("No file sub-operation specified"));
+				new InvalidDefinitionException("No file sub-operation specified"));
 		}
 
 		return CompletableFuture.supplyAsync(() -> {
@@ -673,7 +674,7 @@ public class FileAdapter extends AAdapter implements covia.venue.storage.Content
 			case "mkdir"  -> handleMkdir(ctx, input);
 			case "stat"   -> handleStat(ctx, input);
 			case "setMetadata" -> handleSetMetadata(ctx, input);
-			default       -> throw new NotSupportedException("Unknown file operation: " + subOp);
+			default       -> throw new UnsupportedException("Unknown file operation: " + subOp);
 		};
 	}
 

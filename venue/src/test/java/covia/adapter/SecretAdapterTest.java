@@ -14,6 +14,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.parallel.Execution;
 import org.junit.jupiter.api.parallel.ExecutionMode;
+import org.junit.jupiter.api.parallel.Isolated;
 
 import convex.auth.ucan.Capability;
 import convex.auth.ucan.UCAN;
@@ -33,15 +34,18 @@ import convex.core.lang.RT;
 import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.AuthException;
+import covia.exception.IntegrityException;
 import covia.grid.Job;
 import covia.lattice.Namespace;
 import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.SecretStore;
+import covia.venue.TestLogs;
 
 /** Real dispatch and adversarial metadata tests for the secret disclosure boundary. */
 @Execution(ExecutionMode.SAME_THREAD)
+@Isolated("quiets the integrity failure logger process-wide")
 class SecretAdapterTest {
 
 	private static final String VALUE = "test-only-plaintext-never-in-history";
@@ -272,21 +276,28 @@ class SecretAdapterTest {
 		assertEquals(VALUE, engine.resolveSecret("s/RACE", owner));
 	}
 
-	@Test void missingAndUnreadableSecretsHaveDistinctSanitizedFailures() {
+	@Test void missingAndFailedSecretsHaveDistinctSanitizedFailures() throws Exception {
 		var user = engine.getVenueState().users().user(owner.getUserDID());
 		user.secrets().store("CORRUPT", VALUE, SecretStore.keys(AKeyPair.generate()));
 		put("UNKNOWN_VERSION", VALUE);
 		user.cursor().path(Namespace.S, Strings.create("UNKNOWN_VERSION"), Strings.create("keyVersion")).set(CVMLong.create(7));
 		user.secrets().path(Strings.create("MALFORMED")).set(Maps.empty());
-		for (String name : new String[] { "MISSING", "CORRUPT", "UNKNOWN_VERSION", "MALFORMED" }) {
-			Throwable error = failure(run("extract", Maps.of("name", name), owner));
-			boolean missing = "MISSING".equals(name);
-			assertEquals(missing ? SecretAdapter.SECRET_UNAVAILABLE : SecretAdapter.SECRET_DECRYPT_FAILED,
-				error.getMessage());
-			// An unreadable secret's refusal carries why, outside its message.
-			if (!missing) assertNotNull(error.getCause(), name);
-			denied(run("extract", Maps.of("name", name), scope("s/", Capability.CRUD_READ)));
-		}
+		// Each failed integrity check is logged at ERROR, which a passing build does not print
+		TestLogs.quiet(IntegrityException.class, () -> {
+			for (String name : new String[] { "MISSING", "CORRUPT", "UNKNOWN_VERSION", "MALFORMED" }) {
+				Throwable error = failure(run("extract", Maps.of("name", name), owner));
+				boolean missing = "MISSING".equals(name);
+				assertEquals(missing ? SecretAdapter.SECRET_UNAVAILABLE : SecretAdapter.SECRET_INTEGRITY,
+					error.getMessage());
+				// A secret that failed its integrity check is the venue's failure, and carries why outside its message.
+				if (!missing) {
+					assertInstanceOf(IntegrityException.class, error, name);
+					assertNotNull(error.getCause(), name);
+				}
+				// Lacking the grant is refused as that before the secret is opened
+				denied(run("extract", Maps.of("name", name), scope("s/", Capability.CRUD_READ)));
+			}
+		});
 	}
 
 	@Test void recordingPolicyFailsClosed() {

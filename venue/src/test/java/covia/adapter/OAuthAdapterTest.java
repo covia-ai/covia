@@ -33,6 +33,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.parallel.Isolated;
 
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
@@ -50,13 +51,14 @@ import convex.core.lang.RT;
 import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.ConfigurationException;
-import covia.exception.NotSupportedException;
+import covia.exception.IntegrityException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.SecretStore;
+import covia.venue.TestLogs;
 import covia.venue.TestServer;
 import covia.venue.User;
 import covia.venue.server.VenueServer;
@@ -69,6 +71,7 @@ import covia.venue.server.VenueServer;
  * "oauth/<provider>"} to a token the model never sees, refresh on expiry,
  * and disconnect with revocation — plus every way the flow is refused.
  */
+@Isolated("quiets the integrity failure logger process-wide")
 public class OAuthAdapterTest {
 
 	/** A provider that speaks just enough OAuth 2.0 for the flow and records what it saw. */
@@ -634,11 +637,13 @@ public class OAuthAdapterTest {
 				assertNotEquals("Bearer legacy-access", bobToken);
 				assertFalse(engine.getVenueState().users().user(bobDID).secrets().exists(OAuthAdapter.LEGACY_GRANT_PREFIX + "fake"));
 
-				// A grant that cannot be read is refused with a reason, and left where it was.
+				// A grant that fails its integrity check is refused with a reason, and left where it was;
+				// the failure is logged at ERROR, which a passing build does not print.
 				AString carolDID = Strings.create("did:test:oauth:carol");
 				storeLegacyGrant(engine, carolDID, "fake", "not a grant");
-				assertTrue(failed(run(engine, "v/ops/oauth/status", Maps.empty(), RequestContext.of(carolDID)))
-					.contains(OAuthAdapter.UNREADABLE_LEGACY_GRANT));
+				TestLogs.quiet(IntegrityException.class, () -> assertTrue(
+					failed(run(engine, "v/ops/oauth/status", Maps.empty(), RequestContext.of(carolDID)))
+						.contains(OAuthAdapter.LEGACY_GRANT_INTEGRITY)));
 				assertTrue(engine.getVenueState().users().user(carolDID).secrets().exists(OAuthAdapter.LEGACY_GRANT_PREFIX + "fake"));
 			} finally {
 				engine.close();
@@ -668,11 +673,11 @@ public class OAuthAdapterTest {
 		assertSame(moved.secrets(), again.secrets());
 		assertSame(moved.connections(), again.connections());
 
-		// A shape it does not recognise is refused.
-		NotSupportedException refused = assertThrows(NotSupportedException.class, () -> OAuthAdapter.moveLegacyGrants(
+		// A shape it does not recognise fails its integrity check.
+		IntegrityException refused = assertThrows(IntegrityException.class, () -> OAuthAdapter.moveLegacyGrants(
 			other.assoc(fake, SecretStore.seal(Strings.create("not a grant"), keys)), none, keys));
-		assertTrue(refused.getMessage().startsWith(OAuthAdapter.UNREADABLE_LEGACY_GRANT), refused.getMessage());
-		assertNotNull(refused.getCause(), "the refusal carries why the grant could not be read");
+		assertTrue(refused.getMessage().startsWith(OAuthAdapter.LEGACY_GRANT_INTEGRITY), refused.getMessage());
+		assertNotNull(refused.getCause(), "the refusal carries what failed the check");
 	}
 
 	@Test
@@ -740,23 +745,26 @@ public class OAuthAdapterTest {
 						SecretStore.keys(convex.core.crypto.AKeyPair.generate())));
 				state.write(path, lost);
 
-				// Using it is refused with a reason, which carries why as its cause
-				NotSupportedException refused = assertThrows(NotSupportedException.class,
-					() -> engine.findAdapter(OAuthAdapter.class).accessToken(alice, "fake", null));
-				assertEquals(OAuthAdapter.UNREADABLE_CONNECTION + "fake", refused.getMessage());
-				assertNotNull(refused.getCause());
-				assertEquals(OAuthAdapter.UNREADABLE_CONNECTION + "fake", failed(run(engine, "v/ops/http/get", me, alice)));
+				// Each failed integrity check is logged at ERROR, which a passing build does not print
+				TestLogs.quiet(IntegrityException.class, () -> {
+					// Using it is refused as the venue's failure, with a reason, which carries why as its cause
+					IntegrityException refused = assertThrows(IntegrityException.class,
+						() -> engine.findAdapter(OAuthAdapter.class).accessToken(alice, "fake", null));
+					assertEquals(OAuthAdapter.CONNECTION_INTEGRITY + "fake", refused.getMessage());
+					assertNotNull(refused.getCause());
+					assertEquals(OAuthAdapter.CONNECTION_INTEGRITY + "fake", failed(run(engine, "v/ops/http/get", me, alice)));
 
-				// Connecting again replaces it
-				connectFake(engine, fake, alice);
-				assertEquals("Bearer access-" + fake.issued.get(), RT.getIn(ok(run(engine, "v/ops/http/get", me, alice)), "body").toString());
+					// Connecting again replaces it
+					connectFake(engine, fake, alice);
+					assertEquals("Bearer access-" + fake.issued.get(), RT.getIn(ok(run(engine, "v/ops/http/get", me, alice)), "body").toString());
 
-				// Disconnecting one forgets it, with nothing it could revoke
-				state.write(path, lost);
-				ACell gone = ok(run(engine, "v/ops/oauth/disconnect", Maps.of("provider", "fake"), alice));
-				assertEquals(CVMBool.FALSE, RT.getIn(gone, "revoked"));
-				assertTrue(fake.revokedTokens.isEmpty(), fake.revokedTokens.toString());
-				assertEquals(0, connections(engine, alice).count());
+					// Disconnecting one forgets it, with nothing it could revoke
+					state.write(path, lost);
+					ACell gone = ok(run(engine, "v/ops/oauth/disconnect", Maps.of("provider", "fake"), alice));
+					assertEquals(CVMBool.FALSE, RT.getIn(gone, "revoked"));
+					assertTrue(fake.revokedTokens.isEmpty(), fake.revokedTokens.toString());
+					assertEquals(0, connections(engine, alice).count());
+				});
 			} finally {
 				engine.close();
 			}

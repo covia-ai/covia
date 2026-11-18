@@ -19,7 +19,7 @@ import convex.core.lang.RT;
 import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.InvalidInputException;
-import covia.exception.NotSupportedException;
+import covia.exception.UnsupportedException;
 import covia.venue.Audit;
 import covia.venue.Config;
 import covia.venue.Modules;
@@ -211,7 +211,7 @@ public class VenueAdapter extends AAdapter {
 			case "module-load" -> moduleLoad(input);
 			case "module-unload" -> moduleUnload(input);
 			case "restart" -> restart(ctx, input);
-			default -> throw new NotSupportedException(
+			default -> throw new UnsupportedException(
 				"Unknown venue operation: " + getSubOperation(meta));
 		});
 	}
@@ -406,7 +406,7 @@ public class VenueAdapter extends AAdapter {
 	ACell moduleUnload(ACell input) {
 		String name = requireName(input, "name");
 		if (!engine.config().isDynamicModulesEnabled()) {
-			throw new NotSupportedException(
+			throw new UnsupportedException(
 				"Dynamic module loading is disabled on this venue (set dynamicModules.enabled)");
 		}
 		Modules.LoadedModule module = Modules.unload(engine, name);
@@ -450,7 +450,7 @@ public class VenueAdapter extends AAdapter {
 		if (restart) {
 			engine.requireVenueAuthority(ctx, PROCESS_RESOURCE, Abilities.ADMIN_VENUE_RESTART);
 			if (!engine.hasProcessControl()) {
-				throw new NotSupportedException(
+				throw new UnsupportedException(
 					"Process restart is unavailable: this venue is not managed by MainVenue");
 			}
 			ACell timeoutCell = RT.getIn(input, K_STARTUP_TIMEOUT);

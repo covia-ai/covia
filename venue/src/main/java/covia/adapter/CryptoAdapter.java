@@ -44,8 +44,8 @@ import covia.exception.AuthException;
 import covia.exception.ConflictException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
-import covia.exception.NotSupportedException;
 import covia.exception.UnavailableException;
+import covia.exception.UnsupportedException;
 import covia.venue.AdapterState;
 import covia.venue.Audit;
 import covia.venue.SecretStore;
@@ -200,7 +200,7 @@ public class CryptoAdapter extends AAdapter {
 				case "jwt-sign" -> jwtSign(ctx, input);
 				case "jwt-verify" -> jwtVerify(ctx, input);
 				case "jwt-decode" -> jwtDecode(ctx, input);
-				default -> throw new NotSupportedException(UNKNOWN_OPERATION);
+				default -> throw new UnsupportedException(UNKNOWN_OPERATION);
 			};
 		}, VIRTUAL_EXECUTOR);
 	}

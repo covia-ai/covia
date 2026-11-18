@@ -15,8 +15,8 @@ import covia.adapter.remote.VenueRemoteAgent;
 import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.exception.InvalidInputException;
-import covia.exception.NotSupportedException;
 import covia.exception.ResponseException;
+import covia.exception.UnsupportedException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.grid.Venue;
@@ -53,7 +53,7 @@ public class RemoteAgentAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 	}
 	@Override protected boolean isInteractionOperation(String operation) { return "request".equals(operation) || "chat".equals(operation); }
 	@Override public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
-		if (!isInteractionOperation(getSubOperation(meta))) throw new NotSupportedException(UNKNOWN_OPERATION);
+		if (!isInteractionOperation(getSubOperation(meta))) throw new UnsupportedException(UNKNOWN_OPERATION);
 		return engine.jobs().invokeInternal(meta, input, ctx);
 	}
 

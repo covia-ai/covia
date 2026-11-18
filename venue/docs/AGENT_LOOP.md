@@ -630,7 +630,9 @@ What happens next depends on what failed:
   failing after the provider library's own retries), or returns a failure
   value, which a level-3 operation returns only for a setup problem. A fault,
   reported and logged at ERROR where it happened
-  ([ERRORS.md](ERRORS.md#scopes)), counts the same. The agent is suspended
+  ([ERRORS.md](ERRORS.md#scopes)), counts the same, as does an integrity
+  failure that escapes the transition, such as the model's key failing its
+  integrity check ([ERRORS.md](ERRORS.md)). The agent is suspended
   with the reason or report as its `error` (#88: an agent whose key is missing
   stops after one cycle).
 
@@ -848,9 +850,9 @@ loop thread with no hop.
 
 Every failed call returns an `"Error: …"` result the model can act on
 (`AbstractLLMAdapter.toolFailure`). A failure already reported is given as it
-is: an expected failure's reason, or the fault an operation reported, such as
-`Operation crown:query failed: unexpected IllegalArgumentException in adapter
-crown`. Anything else is a fault in the code handling the call: it is logged at
+is: an expected failure's reason, an integrity failure's message, or the fault
+an operation reported, such as `Operation crown:query failed: unexpected
+IllegalArgumentException in adapter crown`. Anything else is a fault in the code handling the call: it is logged at
 ERROR with its stack, and the result is `Tool <name> failed: unexpected
 <ClassName> in the venue` ([ERRORS.md](ERRORS.md#scopes)). Timeouts and
 interruptions have their own results.

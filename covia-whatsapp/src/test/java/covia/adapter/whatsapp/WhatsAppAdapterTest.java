@@ -24,7 +24,7 @@ import covia.adapter.AgentAdapter;
 import covia.adapter.webhook.*;
 import covia.api.Fields;
 import covia.exception.ConfigurationException;
-import covia.exception.NotSupportedException;
+import covia.exception.InvalidStateException;
 import covia.exception.ResponseException;
 import covia.venue.*;
 import covia.venue.server.VenueServer;
@@ -359,7 +359,7 @@ class WhatsAppAdapterTest {
 			f.adapter.sendReply(f.bot(), event, "still in window"); f.api.take();
 			for (long age : new long[] {86400, 86401}) {
 				clock.set((timestamp + age) * 1000);
-				assertEquals(WhatsAppAdapter.WINDOW_EXPIRED, assertThrows(NotSupportedException.class,
+				assertEquals(WhatsAppAdapter.WINDOW_EXPIRED, assertThrows(InvalidStateException.class,
 					() -> f.adapter.sendReply(f.bot(), event, "expired")).getMessage());
 			}
 			assertTrue(f.api.sends.isEmpty());

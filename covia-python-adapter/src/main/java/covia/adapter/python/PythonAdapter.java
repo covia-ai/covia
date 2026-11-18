@@ -24,9 +24,9 @@ import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.adapter.AAdapter;
 import covia.exception.ConfigurationException;
-import covia.exception.NotSupportedException;
 import covia.exception.ResponseException;
 import covia.exception.UnavailableException;
+import covia.exception.UnsupportedException;
 import covia.python.PythonException;
 import covia.python.PythonRuntime;
 import covia.python.PythonScript;
@@ -324,7 +324,7 @@ public final class PythonAdapter extends AAdapter implements AutoCloseable {
 		}
 		if (operation == null) {
 			return CompletableFuture.failedFuture(
-				new NotSupportedException("Unknown configured Python operation: " + id));
+				new UnsupportedException("Unknown configured Python operation: " + id));
 		}
 		return CompletableFuture.supplyAsync(() -> {
 			lifecycle.readLock().lock();
