@@ -318,7 +318,7 @@ identity token through an operation", and HELD_KEYS.md.
 | A messaging adapter's `ConversationSessions.get` and `put`, `RequestContext.SessionDelivery.accept` and `WebhookInbox.deliver` with sessions and job ids as text | Blobs; a `ConversationSessions` legacy reader gives a Blob |
 | `user.inbox()` keyed by request id in hex (`request`, `get`, `getAll`), `HitlRequest.getID()` and `record` with the id as text, and a record's `id` and `sessionId` as text | Keyed and named by the request's job id as a Blob; `getAll()` is an `Index` |
 | `AgentAdapter.deliverSessionMessage` and `appendSessionMessage` taking the chat's job id as text | The job id as a Blob |
-| `boolean AAdapter.configure(config, strict)`, returning `false` to decline | `void configure(config, strict)`: return to accept, throw `ConfigurationException` to refuse ([ADAPTERS.md](ADAPTERS.md)) |
+| `boolean AAdapter.configure(config, strict)`, returning `false` to decline, an `IllegalArgumentException` from it answering as invalid input | `void configure(config, strict)`: return to accept, throw `ConfigurationException` to refuse; anything else it throws that is not a Covia exception, `IllegalArgumentException` included, is the adapter's fault ([ADAPTERS.md](ADAPTERS.md)) |
 | `AAdapter.configureModule` and a module's `modules[].config` | Removed: a module adapter takes `adapters.<name>` through `configure`, and one that cannot run on the host fails its `start()` with `UnavailableException` |
 | `Modules.load(engine, path, sha256, config)` | `Modules.load(engine, path, sha256)` |
 | `RequestContext.getCallerDID()` | `getAuthorityDID()`, the one principal a request acts as |
@@ -347,6 +347,7 @@ identity token through an operation", and HELD_KEYS.md.
 | Several engines in turn over one application | Close (or `unmount`) the venue's engine, then mount it again |
 | Closing the engine, then the host | Close the application (or the engine), then the host |
 | `AuthMiddleware.withTransportGrants(ctx, ucans[, verifier])` | `engine.withTransportGrants(ctx, ucans)`, which verifies with the venue's DID verifier and clock |
+| An operation refusing with a JDK exception (`IllegalArgumentException`, `IllegalStateException`, `UnsupportedOperationException` or a plain `RuntimeException`), whose message reached the caller | Only a `CoviaException`'s message reaches the caller: anything else escaping an adapter is that adapter's fault, reported by its type without its text. Refuse with a `CoviaException` subtype, such as `InvalidInputException` ([ERRORS.md](ERRORS.md)) |
 
 ## Upgrading from 0.9.x
 
