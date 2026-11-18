@@ -63,7 +63,7 @@ class KeptCallerContextTest {
 		String id = job.getID().toHexString();
 		JobIndex index = engine.getVenueState().jobIndex();
 		try {
-			assertEquals(Maps.of(Fields.PROOFS, proofs, Fields.SESSION_ID, session, Fields.TASK_ID, task),
+			assertEquals(Maps.of(Fields.PROOFS, proofs, Fields.ROUTE, presenting.getRoute(), Fields.SESSION_ID, session, Fields.TASK_ID, task),
 				index.entry(job.getID()).get(JobIndex.CONTEXT), "the job's entry keeps them while its work can continue");
 			ACell stored = RT.getIn(engine.getVenueState().users().user(alice).cursor().path(Namespace.J).get(), job.getID());
 			assertFalse(RT.ensureMap(stored).containsKey(Fields.PROOFS), "the record never holds them");
@@ -74,6 +74,8 @@ class KeptCallerContextTest {
 			assertEquals(proofs, resumed.getProofs(), "work that continues presents them again");
 			assertEquals(session, resumed.getSessionId(), "in the scopes it was started in");
 			assertEquals(task, resumed.getTaskId());
+			assertEquals(presenting.getRoute(), resumed.getRoute(), "as the same request, on the route it came by");
+			assertNull(resumed.getOrigin(), "with nobody present in it");
 		} finally {
 			job.cancel();
 		}
@@ -83,9 +85,13 @@ class KeptCallerContextTest {
 		assertTrue(after == null || after.isEmpty(), "a finished job presents nothing again");
 	}
 
-	/** A job that asked keeps a context even when its caller presented nothing beyond itself, unlike one that never asked. */
+	/**
+	 * A job that asked keeps a context even when its caller presented nothing
+	 * beyond itself, as work the venue starts for a principal does, unlike one
+	 * that never asked.
+	 */
 	@Test void aJobThatAskedKeepsAContextWhenItsCallerPresentedNothingMore() {
-		RequestContext own = RequestContext.of(TestEngine.uniqueDID("KeptContextBare"));
+		RequestContext own = engine.context(TestEngine.uniqueDID("KeptContextBare"));
 		Job asked = engine.jobs().invokeOperation("v/test/ops/never", Maps.empty(), own);
 		Job never = engine.jobs().invokeOperation("v/test/ops/never", Maps.empty(), own);
 		engine.jobs().keepCallerContext(asked, own);
@@ -166,6 +172,8 @@ class KeptCallerContextTest {
 			RequestContext resumed = engine.jobs().callerContext(kept);
 			assertEquals(owner, resumed.getAuthorityDID());
 			assertNull(resumed.getOrigin(), "nobody is present in work carried on");
+			assertNotNull(sudo.getRoute());
+			assertEquals(sudo.getRoute(), resumed.getRoute(), "which still names the delegate and the handover to the user");
 			assertTrue(engine.authorityCovers(resumed, Strings.create("w/other"), Capability.CRUD_WRITE),
 				"with the user's whole authority");
 		} finally {

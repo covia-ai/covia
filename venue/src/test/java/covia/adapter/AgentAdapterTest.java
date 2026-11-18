@@ -410,10 +410,17 @@ public class AgentAdapterTest {
 		RequestContext viaChannel = engine.channelContext(ALICE_DID, result);
 		assertEquals(ALICE_DID, viaChannel.getAuthorityDID());
 		assertEquals(result.toData().dissoc(AuthResult.USER_DID), viaChannel.getAuthentication());
-		assertEquals(Vectors.of(Maps.of(Fields.ADAPTER, "test", Fields.NAME, "bot", Fields.OWNER, ALICE_DID,
-			"sender", Maps.of("id", "sender-1"))), viaChannel.getRoute(), "the binding carried it");
+		AVector<ACell> channelRoute = viaChannel.getRoute();
+		assertEquals(1, channelRoute.count(), "the request started at the binding: " + channelRoute);
+		AMap<AString, ACell> bindingRecord = RT.ensureMap(channelRoute.get(0));
+		assertEquals(Strings.create("test"), bindingRecord.get(Fields.VIA));
+		assertEquals(ALICE_DID, bindingRecord.get(Fields.PRINCIPAL), "vouching for the principal it identified");
+		assertEquals(Strings.create("bot"), bindingRecord.get(Fields.NAME));
+		assertEquals(ALICE_DID, bindingRecord.get(Fields.OWNER));
+		assertEquals(Maps.of("id", "sender-1"), bindingRecord.get(Strings.create("sender")));
 		assertNull(alice.getAuthentication(), "only a channel context carries a record");
-		assertNull(alice.getRoute(), "a request nothing carried has no route");
+		assertEquals(Strings.create("auth"), RT.getIn(alice.getRoute(), 0, Fields.VIA), "a request made for Alice starts where she signed in");
+		assertEquals(ALICE_DID, RT.getIn(alice.getRoute(), 0, Fields.PRINCIPAL));
 
 		Agent agent = engine.getVenueState().users().user(ALICE_DID).agent("provenance-ingress");
 		Blob plainSid = Blob.fromHex("33333333333333333333333333333333");
@@ -428,7 +435,7 @@ public class AgentAdapterTest {
 
 		AMap<AString, ACell> plainTurn = firstTurn(agent, plainSid);
 		assertEquals(ALICE_DID, plainTurn.get(Fields.CALLER));
-		assertNull(plainTurn.get(Fields.ROUTE), "a route inside the content is content");
+		assertEquals(alice.getRoute(), plainTurn.get(Fields.ROUTE), "a route inside the content is content: the turn's is the request's");
 		assertNull(plainTurn.get(Fields.AUTHENTICATION), "a record inside the content is content");
 		AMap<AString, ACell> channelTurn = firstTurn(agent, channelSid);
 		assertEquals(ALICE_DID, channelTurn.get(Fields.CALLER));
@@ -460,8 +467,8 @@ public class AgentAdapterTest {
 		// An agent is told when a request came through one of its owner's access
 		// tokens rather than from the owner, and through which callable: ingress
 		// records the request's route beside the caller, from its context alone.
-		// The route is the request's own: work rebuilt later and agents acting
-		// as themselves start without one (ACCESS_TOKENS.md, CALLABLES.md).
+		// The route is the request's own: work rebuilt from what it kept has none
+		// of its own (ACCESS_TOKENS.md, CALLABLES.md).
 		RequestContext alice = RequestContext.of(ALICE_DID);
 		AString address = createAgentAs(alice, "token-provenance", null);
 		String bearer = RT.getIn(engine.jobs().invokeOperation("v/ops/token/create", Maps.of(
@@ -474,10 +481,13 @@ public class AgentAdapterTest {
 			alice).awaitResult(5000), Fields.TOKEN).toString();
 		AMap<AString, ACell> reference = engine.tokens().lookup(bearer);
 		RequestContext viaToken = engine.tokenContext(reference);
-		AMap<AString, ACell> tokenStep = reference.assoc(Fields.ADAPTER, Strings.create("token"));
-		assertEquals(Vectors.of(tokenStep), viaToken.getRoute(), "the token carried it, named by its reference");
+		assertEquals(1, viaToken.getRoute().count(), "the request started with the token");
+		AMap<AString, ACell> tokenStep = RT.ensureMap(viaToken.getRoute().get(0));
+		assertEquals(Strings.create("token"), tokenStep.get(Fields.VIA));
+		assertEquals(ALICE_DID, tokenStep.get(Fields.PRINCIPAL), "vouching for its issuer");
+		assertEquals(reference, tokenStep.dissoc(Fields.VIA).dissoc(Fields.PRINCIPAL).dissoc(Fields.TEXT), "named by its reference");
 		RequestContext keptWork = engine.context(ALICE_DID, ALICE_DID, null, Engine.keptAuthority(viaToken));
-		assertNull(keptWork.getRoute(), "work rebuilt later is not the request");
+		assertNull(keptWork.getRoute(), "work rebuilt from its kept authority alone is not the request");
 		assertFalse(keptWork.getTokens().isEmpty(), "but the token still narrows it");
 
 		Agent agent = engine.getVenueState().users().user(ALICE_DID).agent("token-provenance");
@@ -506,27 +516,31 @@ public class AgentAdapterTest {
 		callAskHelper(viaToken, address, tokenCallSid);
 		awaitFinished(agent);
 
-		assertNull(firstTurn(agent, directSid).get(Fields.ROUTE), "a route inside the content is content");
+		assertEquals(alice.getRoute(), firstTurn(agent, directSid).get(Fields.ROUTE), "a route inside the content is content");
 		AMap<AString, ACell> tokenTurn = firstTurn(agent, tokenSid);
 		assertEquals(Vectors.of(tokenStep), tokenTurn.get(Fields.ROUTE));
 		assertEquals(ALICE_DID, tokenTurn.get(Fields.CALLER), "the request is still its issuer's");
-		assertNull(firstTurn(agent, keptSid).get(Fields.ROUTE), "work rebuilt later came by no route");
-		AMap<AString, ACell> callableStep = RT.ensureMap(RT.getIn(firstTurn(agent, callSid), Fields.ROUTE, 0));
-		assertEquals(Strings.create("callable"), callableStep.get(Fields.ADAPTER));
+		assertEquals(Vectors.empty(), firstTurn(agent, keptSid).get(Fields.ROUTE),
+			"work rebuilt with no route of its own records an empty one, never none");
+		AVector<ACell> bobsRoute = RT.ensureVector(firstTurn(agent, callSid).get(Fields.ROUTE));
+		assertEquals(2, bobsRoute.count(), "Bob signed in, then the callable handed his request to Alice: " + bobsRoute);
+		assertEquals(Strings.create("auth"), RT.getIn(bobsRoute, 0, Fields.VIA));
+		assertEquals(BOB_DID, RT.getIn(bobsRoute, 0, Fields.PRINCIPAL), "the request started with Bob");
+		AMap<AString, ACell> callableStep = RT.ensureMap(bobsRoute.get(1));
+		assertEquals(Strings.create("callable"), callableStep.get(Fields.VIA));
 		assertEquals(Strings.create("ask-helper"), callableStep.get(Fields.NAME));
-		assertEquals(BOB_DID, callableStep.get(Fields.CALLER), "the callable's step names whom it carried the request for");
-		assertEquals(Vectors.of(callableStep), firstTurn(agent, callSid).get(Fields.ROUTE), "Bob's call came by the callable alone");
+		assertEquals(ALICE_DID, callableStep.get(Fields.PRINCIPAL), "the callable's record vouches for its issuer");
 		assertEquals(ALICE_DID, firstTurn(agent, callSid).get(Fields.CALLER),
 			"the call is its issuer's work: its route, not its caller, says Bob called it through the callable");
-		assertEquals(Vectors.of(tokenStep, callableStep.assoc(Fields.CALLER, ALICE_DID)),
-			firstTurn(agent, tokenCallSid).get(Fields.ROUTE),
+		assertEquals(Vectors.of(tokenStep, callableStep), firstTurn(agent, tokenCallSid).get(Fields.ROUTE),
 			"a call keeps the route of the request that made it, and a token's request is its issuer's");
 		for (Blob sid : List.of(directSid, tokenSid, keptSid, callSid, tokenCallSid)) {
 			assertFalse(agent.session(sid).getRecord().toString().contains(bearer), "the bearer is never recorded");
 		}
 
 		// Work a call left, rebuilt from its kept authority, is not the call
-		assertNull(engine.context(ALICE_DID, BOB_DID, null, Maps.of(Fields.CALLABLE, callableStep.dissoc(Fields.ADAPTER).dissoc(Fields.CALLER))).getRoute());
+		assertNull(engine.context(ALICE_DID, BOB_DID, null, Maps.of(Fields.CALLABLE,
+			callableStep.dissoc(Fields.VIA).dissoc(Fields.PRINCIPAL).dissoc(Fields.TEXT))).getRoute());
 
 		// Neither an agent nor its harness is a request through anything
 		assertNull(engine.harnessContext(ALICE_DID, Strings.create("token-provenance")).getRoute());
@@ -536,8 +550,8 @@ public class AgentAdapterTest {
 	@Test
 	public void testANestedCallNamesTheCallerOfEachCallable() {
 		// Carol calls Bob's relay, which calls Alice's ask-helper. The request is
-		// Alice's work when it reaches her agent, and each callable's step names
-		// whom it carried the request for, so the agent can tell how it came
+		// Alice's work when it reaches her agent, and its route starts with Carol
+		// and records each callable vouching for its issuer, so the agent can tell how it came
 		RequestContext alice = RequestContext.of(ALICE_DID);
 		AString carol = Strings.create(ALICE_DID + "-carol");
 		AString address = createAgentAs(alice, "nested-provenance", null);
@@ -563,12 +577,14 @@ public class AgentAdapterTest {
 		AMap<AString, ACell> turn = firstTurn(agent, sid);
 		assertEquals(ALICE_DID, turn.get(Fields.CALLER), "the innermost call is its issuer's work");
 		AVector<ACell> route = RT.ensureVector(turn.get(Fields.ROUTE));
-		assertEquals(2, route.count(), String.valueOf(route));
-		assertEquals(Strings.create("relay"), RT.getIn(route, 0, Fields.NAME));
-		assertEquals(BOB_DID, RT.getIn(route, 0, Fields.OWNER));
-		assertEquals(carol, RT.getIn(route, 0, Fields.CALLER), "Bob's relay carried Carol's request");
-		assertEquals(Strings.create("ask-helper"), RT.getIn(route, 1, Fields.NAME));
-		assertEquals(BOB_DID, RT.getIn(route, 1, Fields.CALLER), "Alice's callable carried the request of Bob's relay");
+		assertEquals(3, route.count(), String.valueOf(route));
+		assertEquals(Strings.create("auth"), RT.getIn(route, 0, Fields.VIA));
+		assertEquals(carol, RT.getIn(route, 0, Fields.PRINCIPAL), "the request started with Carol");
+		assertEquals(Strings.create("relay"), RT.getIn(route, 1, Fields.NAME));
+		assertEquals(BOB_DID, RT.getIn(route, 1, Fields.OWNER));
+		assertEquals(BOB_DID, RT.getIn(route, 1, Fields.PRINCIPAL), "Bob's relay handed Carol's request to Bob");
+		assertEquals(Strings.create("ask-helper"), RT.getIn(route, 2, Fields.NAME));
+		assertEquals(ALICE_DID, RT.getIn(route, 2, Fields.PRINCIPAL), "and Alice's callable handed it to Alice");
 	}
 
 	@Test
@@ -597,9 +613,11 @@ public class AgentAdapterTest {
 		AMap<AString, ACell> turn = firstTurn(agent, firedSid);
 		assertEquals(ALICE_DID, turn.get(Fields.CALLER), "the user who scheduled it asked");
 		AVector<ACell> route = RT.ensureVector(turn.get(Fields.ROUTE));
-		assertEquals(1, route.count(), "carried by the scheduler alone: " + route);
-		assertEquals(Strings.create("scheduler"), RT.getIn(route, 0, Fields.ADAPTER));
+		assertEquals(1, route.count(), "started by the scheduler alone: " + route);
+		assertEquals(Strings.create("scheduler"), RT.getIn(route, 0, Fields.VIA));
+		assertEquals(ALICE_DID, RT.getIn(route, 0, Fields.PRINCIPAL), "vouching for the event's caller");
 		assertNotNull(RT.getIn(route, 0, "handle"), "naming the event it fired");
+		assertNotNull(RT.getIn(route, 0, Fields.DUE), "and when it was due");
 
 		engine.jobs().invokeOperation("v/ops/token/delete", Maps.of(Fields.NAME, "planner-bot"), alice).awaitResult(5000);
 		Job refusedFire = engine.jobs().invokeOperation("v/ops/scheduler/trigger", Maps.of("handle", refused), alice);
@@ -612,10 +630,11 @@ public class AgentAdapterTest {
 	}
 
 	@Test
-	public void testAnAgentActingAsItselfCarriesNoRoute() {
+	public void testAnAgentActingAsItselfStartsWithItsOwnRecord() {
 		// Whatever carried the request that set an agent working, the agent's own
 		// tool calls are its own requests: a second agent it asks is told who
-		// asked, the first agent, and nothing of how the first was reached.
+		// asked, the first agent, and its route starts with the first agent's own
+		// record, with nothing of how the first was reached.
 		RequestContext alice = RequestContext.of(ALICE_DID);
 		AString target = createAgentAs(alice, "route-target", null);
 		engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "route-relay",
@@ -639,9 +658,14 @@ public class AgentAdapterTest {
 		awaitFinished(targetAgent);
 
 		AMap<AString, ACell> turn = firstTurn(targetAgent, targetSid);
-		assertEquals(covia.grid.Principals.agentDID(ALICE_DID, Strings.create("route-relay")), turn.get(Fields.CALLER),
-			"the relay asked as itself");
-		assertNull(turn.get(Fields.ROUTE), "and carried nothing of how it was reached");
+		AString relayDID = covia.grid.Principals.agentDID(ALICE_DID, Strings.create("route-relay"));
+		assertEquals(relayDID, turn.get(Fields.CALLER), "the relay asked as itself");
+		assertEquals(Vectors.of(Maps.of(Fields.VIA, "agent", Fields.PRINCIPAL, relayDID)), turn.get(Fields.ROUTE),
+			"its route is the relay's own record alone");
+		RequestContext ownRun = engine.stepContext(engine.harnessContext(ALICE_DID, Strings.create("route-relay")),
+			Strings.create("route-relay"));
+		assertEquals(Vectors.of(Maps.of(Fields.VIA, "agent", Fields.PRINCIPAL, relayDID)), ownRun.getRoute(),
+			"as any step of the agent's own run starts");
 	}
 
 	private ACell scheduleRequest(RequestContext ctx, AString address, Blob sid) {
@@ -7061,7 +7085,8 @@ public class AgentAdapterTest {
 			Maps.of(Fields.AGENT_ID, "compact-session-agent", Fields.SESSION_ID, sidHex),
 			alice).awaitResult(5000);
 		AVector<ACell> kept = entries(afterCompaction);
-		assertEquals(before, kept.slice(0, 4), "the replaced turns stay readable, exactly");
+		assertEquals(AgentAdapter.withoutRoutes(before), kept.slice(0, 4),
+			"the replaced turns stay readable, exactly, less the routes only the agent is shown");
 		assertEquals(archive, kept.get(4), "followed by their summary");
 
 		engine.jobs().invokeOperation("v/ops/agent/chat",

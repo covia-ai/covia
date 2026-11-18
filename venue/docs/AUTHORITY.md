@@ -19,7 +19,7 @@ person read the request's origin. What still works the old way is listed under
 |-------|---------|---------|
 | `authority` | The principal whose authority applies. Only this decides access. | When a call enters another principal's authority: a callable's call, or `admin/sudo` |
 | `caller` | The `authority` of the frame that called into this one; absent at the top level | On that call: the previous `authority` becomes `caller` |
-| `origin` | The principal the request authenticated as where it entered the venue; absent from work the venue starts itself | Never: every context made for the request keeps it, a call included, and nothing a job or event keeps carries it |
+| `origin` | The principal the request authenticated as where it entered the venue; absent from work the venue starts itself | Never: every context made for the request keeps it, a call included, and nothing a job or event keeps carries it, though a job's route still names where its request started |
 
 - Ordinary composition keeps all three: orchestration steps, sub-operations
   and tool calls run in the frame that started them.
@@ -154,7 +154,9 @@ beside its caller: the account is the caller's, and the caller's DID names it,
 as an agent's `<ownerDID>:g:<id>` does, so a reader can find the record. It
 counts against that account's quota. This is COG-8's `caller`; a record names
 no `owner`, and none names the request's `origin`: the audit log does, where
-it is not the `authority`.
+it is not the `authority`, and so does the route an agent's turn or an
+approval request keeps, whose first record is where the request started
+([AGENT_CONTEXT.md](AGENT_CONTEXT.md) §1.2).
 
 A job is reached by capability on its record ([JOBS.md](JOBS.md#job-capabilities)).
 A scheduled event is reached by capability on `<account>/x/schedule/<id>`:
@@ -162,29 +164,35 @@ A scheduled event is reached by capability on `<account>/x/schedule/<id>`:
 it ([GRID_SCHEDULER.md](GRID_SCHEDULER.md)). Having scheduled an event grants
 nothing, as having started a job does not.
 
-A record the venue keeps for itself, such as a job, a scheduled event, an
-approval request or a timeline entry, leaves out a principal that is the
-account it is kept in, since where it is kept says so. A missing principal
+A record of a call the venue keeps in an account, a job, its mirror or an
+approval request, leaves out a principal that is the account it is kept in,
+since where it is kept says so. A missing principal
 means that account wherever the record is read against the structure that
 holds it: a lattice read, a copy, an export or a clone carries it as stored, so
 a clone's records are the clone's. A response that hands a client one record
 on its own, such as a job's status, names the principal in full, since the
-client has no account to read it against. Data a user writes is stored as given: the venue neither
+client has no account to read it against. A scheduled event, kept
+venue-wide, names its caller. An agent's own records, its task rows, session
+turns and timeline entries, always name their caller: there a missing caller
+means a turn recorded before callers were kept, and `agent:fork` copies an
+agent's history into another account, where a caller left out would read as
+the new owner. Data a user writes is stored as given: the venue neither
 leaves anything out of it nor fills anything in, since such data is more
 likely to be copied between places.
 
 ## A job's state
 
 A job runs in a context: its frame, whose `authority` is the job's caller, the
-token or callable narrowing it, the grants its request presented, and its
-execution scopes (agent, session, job and task). That context is the job's
+token or callable narrowing it, the grants its request presented, its request's
+route, and its execution scopes (agent, session, job and task). That context is the job's
 state, which the venue keeps beside the job while it is unfinished, with what
 its operation keeps to carry it to its end
 ([JOBS.md](JOBS.md#the-venues-job-entries)). No route reads it. It is one
 state, whether the job runs on from its request or resumes after a pause or a
 restart: the context the job runs in is the one kept. A scheduled event keeps
-the context of the request that scheduled it in the same form, and each fire
-runs in it.
+the context of the request that scheduled it in the same form, but for the
+route, and each fire runs in it: a fire is a request of its own, whose route
+starts at the scheduler ([AGENT_CONTEXT.md](AGENT_CONTEXT.md) §1.2).
 
 The state holds principals, what narrows them and grants, never the authority
 worked out from them. Each time the job acts, its authority is worked out from
@@ -204,7 +212,9 @@ itself and what it creates is its own.
 So the user controls what a request creates under `admin/sudo`, and work it
 leaves runs as the user while the user stands, whatever becomes of the
 delegate's grant, as a cron entry made under `sudo -u` runs as its owner.
-Authority does not tell a request under `admin/sudo` from the user's own. An
+Authority does not tell a request under `admin/sudo` from the user's own; the
+request's route does, so an agent the request reaches is told who acted as the
+user ([AGENT_CONTEXT.md](AGENT_CONTEXT.md) §1.2). An
 action that needs the user in person, such as answering the user's approval
 requests, decides that itself from the request's `origin`
 ([VENUE_AUTHORITY.md](VENUE_AUTHORITY.md#how-it-works-today), "In person"), as

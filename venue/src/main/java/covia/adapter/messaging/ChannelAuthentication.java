@@ -172,10 +172,40 @@ public final class ChannelAuthentication {
 
 	/**
 	 * The route step binding {@code spec} of adapter {@code method} adds for an
-	 * event with no sender to authenticate (a poll, say): the binding alone.
+	 * event with no sender to authenticate (a poll, say), or for its own work:
+	 * the binding alone.
 	 */
 	public static AMap<AString, ACell> step(Engine engine, MessagingBotSpec spec, AString method) {
 		return bindingStep(binding(engine, spec, method));
+	}
+
+	/**
+	 * What a binding's route record tells an agent ({@link covia.venue.RouteText}),
+	 * from its step ({@link #step}): whose binding it is and its name, the
+	 * sender's id and handle, the chat's kind and id, the thread and the space.
+	 * Names stay out (§7), and each value shows only in its checked shape.
+	 */
+	public static covia.venue.RouteText text(AMap<AString, ACell> step) {
+		covia.venue.RouteText.Builder text = covia.venue.RouteText.builder();
+		AString owner = RT.ensureString(step.get(Fields.OWNER));
+		if (owner != null) text.whose(owner).text(" ");
+		text.text("binding");
+		if (step.get(K_NAME) != null) text.text(" ").name(step.get(K_NAME));
+		AMap<AString, ACell> sender = RT.ensureMap(step.get(K_SENDER));
+		if (sender != null) {
+			text.text(", sender ").id(sender.get(K_ID));
+			if (sender.get(K_HANDLE) != null) text.text(" ").handle(sender.get(K_HANDLE));
+		}
+		AMap<AString, ACell> chat = RT.ensureMap(step.get(K_CHAT));
+		if (chat != null) {
+			AString kind = RT.ensureString(chat.get(K_KIND));
+			boolean known = DIRECT.equals(kind) || GROUP.equals(kind) || CHANNEL.equals(kind);
+			text.text(known ? ", " + kind + " chat " : ", chat ").id(chat.get(K_ID));
+		}
+		if (step.get(K_THREAD) != null) text.text(", thread ").id(step.get(K_THREAD));
+		AMap<AString, ACell> space = RT.ensureMap(step.get(K_SPACE));
+		if (space != null) text.text(", space ").id(space.get(K_ID));
+		return text.build();
 	}
 
 	/**

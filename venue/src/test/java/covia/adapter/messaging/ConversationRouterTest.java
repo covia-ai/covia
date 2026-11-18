@@ -384,16 +384,21 @@ class ConversationRouterTest {
 			assertEquals(Strings.create("test:listed"), listed.getAuthentication().get(covia.venue.auth.AuthResult.AUTHENTICATED_IDENTITY));
 			assertEquals(Strings.create(owner + "/test/bot"),
 				RT.getIn(listed.getAuthentication(), covia.venue.auth.AuthResult.AUTHENTICATION, covia.venue.auth.AuthResult.BINDING));
-			// The binding carried it: its step names the binding, the sender and the chat, never their names
-			assertEquals(convex.core.data.Vectors.of(Maps.of(Fields.ADAPTER, "test", Fields.NAME, "bot",
-				Fields.OWNER, owner, "sender", Maps.of("id", "listed"), "chat", Maps.of("id", "chat-1", "kind", "direct"))),
-				listed.getRoute());
-			// An event with no sender is anonymous, but still carried by the binding, never direct
+			// The request started at the binding: its record names the binding, the sender
+			// and the chat, never their names, and vouches for the principal it identified
+			assertEquals(1, listed.getRoute().count());
+			assertEquals(Maps.of(Fields.VIA, "test", Fields.PRINCIPAL, owner, Fields.NAME, "bot", Fields.OWNER, owner,
+				"sender", Maps.of("id", "listed"), "chat", Maps.of("id", "chat-1", "kind", "direct")),
+				RT.ensureMap(listed.getRoute().get(0)).dissoc(Fields.TEXT));
+			// An event with no sender is anonymous, but still started at the binding, never direct
 			var senderless = router.context(null);
 			assertEquals(engine.publicPrincipal(), senderless.getAuthorityDID());
 			assertNull(senderless.getAuthentication());
-			assertEquals(convex.core.data.Vectors.of(Maps.of(Fields.ADAPTER, "messaging-test", Fields.NAME, "bot",
-				Fields.OWNER, owner)), senderless.getRoute());
+			assertEquals(1, senderless.getRoute().count());
+			assertEquals(Maps.of(Fields.VIA, "messaging-test", Fields.PRINCIPAL, engine.publicPrincipal(), Fields.NAME, "bot",
+				Fields.OWNER, owner), RT.ensureMap(senderless.getRoute().get(0)).dissoc(Fields.TEXT));
+			assertEquals(Strings.create("messaging-test"), RT.getIn(router.context().getRoute(), 0, Fields.VIA),
+				"the binding's own work starts at the binding too");
 			Job fromFriend = router.deliver("friend", Strings.create("hello"), LISTED, (draft, sid, jid) -> true);
 			assertEquals(Strings.create("owner only"), RT.getIn(fromFriend.awaitResult(5000), Fields.RESPONSE, "completed"));
 			assertEquals(owner, engine.jobs().getJobData(fromFriend.getID(), ownerView).get(Fields.CALLER));
@@ -421,7 +426,7 @@ class ConversationRouterTest {
 			for (long i = 0; i < sessions.count(); i++) {
 				var frames = RT.ensureVector(RT.getIn(sessions.entryAt(i).getValue(), Fields.FRAMES));
 				var turn = covia.adapter.agent.GoalTreeContext.activeConversation(RT.ensureMap(frames.get(0))).get(0);
-				assertNotNull(RT.getIn(turn, Fields.ROUTE, 0, Fields.ADAPTER), "every bot turn names the bot that carried it");
+				assertNotNull(RT.getIn(turn, Fields.ROUTE, 0, Fields.VIA), "every bot turn names the bot it started at");
 				assertNull(RT.getIn(turn, Fields.AUTHENTICATION), "the route stands in for the record");
 			}
 		} finally { engine.close(); }

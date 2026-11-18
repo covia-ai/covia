@@ -312,9 +312,11 @@ class WhatsAppAdapterTest {
 						"message", "first"))),
 				agent.authentication, "a listed sender is authenticated through the binding, in the standard channel shape");
 			// Built from the channel stored with the inbox event, as after a restart
-			assertEquals(Vectors.of(Maps.of("adapter", "whatsapp", "name", "main", "owner", OWNER,
+			assertEquals(1, agent.route.count(), "the request started at the binding: " + agent.route);
+			assertEquals(Maps.of("via", "whatsapp", "principal", OWNER, "name", "main", "owner", OWNER,
 				"sender", Maps.of("id", "441234567890"), "chat", Maps.of("id", "441234567890", "kind", "direct"),
-				"space", Maps.of("id", "12345"))), agent.route, "the binding carried it");
+				"space", Maps.of("id", "12345")), RT.ensureMap(agent.route.get(0)).dissoc(Fields.TEXT),
+				"its record names the binding, vouching for the principal it identified");
 			assertEquals(OWNER, agent.owner);
 			assertNull(agentTurn(f, f.adapter, agent, "main", "12345", "441234567891", "other-sender").get(Fields.SESSION_ID));
 			assertNull(agentTurn(f, f.adapter, agent, "second", "54321", "441234567890", "other-phone").get(Fields.SESSION_ID));

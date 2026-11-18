@@ -264,7 +264,8 @@ The label renderer therefore handles only blocks that genuinely travel as instru
 | Compacted conversation segment (assistant memory): the first and last turn it stands for, by position in the frame's history, so `agent:history` can read exactly those back | `[Compacted: turns <from>–<to>] <summary>` | `<compacted from="…" to="…">` | `## Compacted: turns <from>–<to>` |
 | Ancestor context (goal tree) | `[Ancestor Context]` | `<ancestors>` | `## Ancestor context` |
 | Tool-failure diagnostic | `[Tool failure: <name>] <reason>` | `<tool-failure name="…">` | `## Tool failure: <name>` |
-| Who a turn comes from (COG-20 §4): before a user turn whose caller or route differs from the turn before it, rendered from the stored turn alone; one segment per step of the route | `[From: <relationship> <principal> — <adapter> <name> of <owner>: caller <did>, sender <id> @<handle>, <kind> chat <id>, thread <id>, space <id> — …]` | `<from principal="…" relationship="…"><via adapter="…" name="…" owner="…" caller="…" sender="…" handle="…" chat="…" chat-kind="…" thread="…" space="…"/>…</from>` | `## From: …` |
+| Who a turn comes from (COG-20 §4): before a user turn whose source differs from the turn before it, rendered from the stored turn alone; one sentence naming each record of its route | `[From (venue-verified): <who> via <adapter> (<text>); acting as <who> via <adapter> (<text>) …]` | `<from verified="venue">…</from>` | `## From (venue-verified): …` |
+| The same, for a turn recorded before routes named where they started | `[From: <relationship> <principal> — <adapter> <name> of <owner>: caller <did>, sender <id> @<handle>, <kind> chat <id>, thread <id>, space <id> — …]` | `<from principal="…" relationship="…"><via adapter="…" name="…" owner="…" caller="…" sender="…" handle="…" chat="…" chat-kind="…" thread="…" space="…"/>…</from>` | `## From: …` |
 | Outstanding task | `[Tasks assigned to you]` | `<tasks>` | `## Tasks assigned to you` |
 | Empty-state signal | `[No pending tasks, messages, or job results. …]` | `<no-input>` | `## No input` |
 | Budget warning | `[Context budget] <pct>% …` | `<context-budget>` | `## Context budget` |
@@ -273,39 +274,89 @@ The label renderer therefore handles only blocks that genuinely travel as instru
 
 A block is its label followed by its body; in `xml` the body is followed by the closing tag. A one-line element — the date — is a line in every dialect. Fields interpolated into an instruction label come only from operator configuration or validated runtime metadata and are escaped for the chosen dialect. Labels on untrusted declarations remain data fields in tool results.
 
-**The `From` element's route.** A request's route is what carried it to the
-agent, one step per carrier in the order they carried it: the access token it
-presented (`token`), the binding that received it (`telegram`, `slack`, …),
-the callable it called (`callable`), the scheduler that fired it
-(`scheduler`). Each carrier adds its step where the request reaches it
-(`RequestContext.via`), from its own reference. A request nothing carried has
-no route and reads as direct. The route belongs to the request alone:
-contexts the venue starts for an agent's own work and work rebuilt after a
-restart carry none, and a scheduled fire's route is the scheduler's step,
-whatever carried the request that scheduled it. The agent's ingress records
-the route beside the caller (AGENT_SESSIONS.md), as it does for a human's
-answer to the agent's question and for `agent:query`, and `hitl:request`
-records it in the approval request it opens (AGENT_LOOP.md §6.3); a tool
-call's late outcome is the agent's own and has none.
+**The `From` element's route.** A request's route says where it started and
+each handover that carried it to the agent, one record per adapter, each
+written where the request reaches that adapter (`RequestContext.via`). A
+record names the adapter that wrote it (`via`) and the principal it vouches
+for (`principal`), which holds the request after it; the venue stamps both.
+Anything more is the adapter's choice: the fields it records, just enough to
+find its information again, and the text it writes for the agent
+(`RouteText`). The first record says where the request started:
 
-A step shows its adapter, its name (the token's, binding's or callable's own,
-set by whoever owns it), for a callable the caller it carried the request for,
-and, for a binding, the sender's id and handle, the chat's id and kind, a
-thread and a space id; the names of people, chats and spaces never show
-(COG-3 §7), nor anything else a step holds. A call is its callable's issuer's
-work, so the turn's caller is the issuer, and the callable's step is what
-tells the owner's own call through it (`— callable ask-helper: caller
-did:key:…owner`) from anyone else's. A name alone is
-always the agent's owner's own: a token, binding or callable of anyone else
-shows whose it is (`— callable ask-helper of did:key:…`), and one whose owner
-cannot be shown is `of unknown owner`, as a caller that cannot be shown is
-`unknown caller`. Values show
-only in conservative shapes, and the caller only as a DID in printable ASCII,
-otherwise as `unreadable sender`. A route that cannot be read shows as an
-`unreadable route step`, never as no route, so a request something carried
-never looks direct; a long one shows its first two steps, how many it folds,
-and its latest. A turn stored before routes carries its channel's
-`authentication` record instead, and renders as that binding's step would.
+- `auth`: a door authenticated the principal, or an in-process caller made
+  the request for it, so the principal is the request's origin. An anonymous
+  caller is the venue's public principal, "not signed in".
+- `token`: an access token, vouching for its issuer, the origin. The venue
+  never knows who holds a token, and the record says so.
+- a binding (`telegram`, `slack`, `discord`, `whatsapp`): the principal the
+  binding identified, or the public principal; also the binding's own work.
+- `scheduler`: a fire of a scheduled event, vouching for the event's caller,
+  with when it was due.
+- `agent`: an agent's step, vouching for the agent. Its record follows the
+  route of the request that drives the step, so the agent's own run, which
+  nothing carried, starts with it, and a request through the agent's own
+  token keeps the token's record first.
+- `hitl`: the venue's answer to an approval request that expired.
+
+Later records are handovers: `callable`, a callable's call into its issuer's
+authority, and `user`, a call into a user under `admin/sudo`.
+
+The route belongs to its request. Work that carries a request on after a
+pause or a restart is the same request, so it keeps the route with the rest
+of its job's state, adding no record for the resumption (JOBS.md, Kept caller
+context). A scheduled event is something a request
+creates, so each fire is a new request whose first record is the
+scheduler's, and how the event was scheduled is not part of it. Contexts the
+venue makes for its own work carry none. The agent's ingress records the
+route beside the caller (AGENT_SESSIONS.md), as it does for a human's answer
+to the agent's question and for `agent:query`, and `hitl:request` records it
+in the approval request it opens (AGENT_LOOP.md §6.3); a tracked call's late
+outcome carries the agent's record, vouching for whoever made the call. Every
+record written now carries a route, so a turn without one was recorded
+before; a context no adapter stamped records an empty route, which shows as
+unreadable.
+
+**What the agent sees.** The element is one sentence, rendered from the
+stored turn and the agent's identity alone, so a turn reads the same every
+time. Each record shows in order, the first as whoever the request started
+with and each later one as whom it then acted as:
+
+```
+[From (venue-verified): did:key:…bob, not your owner, via auth (signed in); acting as your owner via user (admin/sudo)]
+```
+
+The venue writes each principal: `your owner` or `you`, without their DID as
+above, or who it is and `not your owner` (an agent of the owner or of another
+user, the venue, an anonymous caller, or another principal by its DID). A principal shows as an agent only
+where the venue recorded it, never from the shape of a DID a door
+authenticated, and the public principal is never the owner. Then `via` and
+the adapter's name, then the adapter's text in brackets: each part shows only
+in its checked shape (a quoted one-word name, an identifier, a handle, a time
+in UTC, a principal as above), and plain wording is cleaned of brackets,
+semicolons, arrows and line breaks when it is stored and again when it is
+shown. A record with no text shows its name, quoted. A route that cannot be
+read, or that does not end at the turn's caller, shows as unreadable, never as
+the owner; a long one shows its first two records, how many it folds, and its
+latest. How far to trust each source is for the agent's instructions to say,
+not the element (#405); the standard templates' instructions say it
+(AGENT_TEMPLATES.md §6).
+
+**When it appears.** An element precedes a user turn whose source, its caller
+and route records, differs from the turn before. The owner chatting directly
+(one `auth` record vouching for the owner) takes none after the start or
+another such turn, nor does the agent's own turn after the start, so the
+common case carries no attribution; returning to the owner after another
+source takes one.
+
+**Turns recorded before.** A turn whose route does not name where it started
+renders as it always has, so no stored context is shown differently: its
+caller's relationship and DID, then one segment per step, with the step's
+adapter, its name, whose it is when not the owner's, a callable's caller, and
+a binding's sender id and handle, chat, thread and space. A turn stored before
+routes carries its channel's `authentication` record, and renders as that
+binding's step would; a route that cannot be read shows as an `unreadable
+route step`.
+
 The route's stored shape is venue-internal, not a contract, and may change:
 operations that hand turns out leave it out (`agent:history`, the timeline),
 this element is an agent's one view of it, and an approval request holds it

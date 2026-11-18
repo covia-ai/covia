@@ -69,9 +69,12 @@ public class UserAdapter extends AAdapter {
 	public static final String SEED_REF_REQUIRED = "seed must be a secret reference (s/NAME or <did>/s/NAME), never a raw seed";
 	public static final String INVALID_SEED = "seed must name a secret holding a 32-byte hexadecimal Ed25519 seed";
 
+	/** The adapter's name, which also names the route record of a call into a user under {@code admin/sudo} ({@link covia.venue.Engine#sudoContext}). */
+	public static final String NAME = "user";
+
 	@Override
 	public String getName() {
-		return "user";
+		return NAME;
 	}
 
 	@Override

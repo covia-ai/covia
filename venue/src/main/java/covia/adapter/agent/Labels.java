@@ -52,7 +52,9 @@ public final class Labels {
 		BUDGET("Context budget", "context-budget", true),
 		UNAVAILABLE_TOOLS("Unavailable tools", "unavailable-tools", false),
 		/** Who the following turn came from ({@link TurnProvenance}); attributes vary by turn. */
-		FROM("From: %s", "from", true);
+		FROM("From: %s", "from", true),
+		/** Who the following turn came from, for a turn whose route names where its request started: one sentence ({@link TurnProvenance}). */
+		FROM_VENUE("From (venue-verified): %s", "from", true);
 
 		final String pattern;
 		final String tag;
@@ -113,6 +115,21 @@ public final class Labels {
 			return sb.append("</").append(kind.tag).append('>').toString();
 		}
 		String label = String.format(kind.pattern, summary);
+		return HEADER.equals(dialect) ? "## " + label : "[" + label + "]";
+	}
+
+	/**
+	 * A label-only element that is one venue-written sentence: the bracket and
+	 * header label is {@code kind}'s pattern filled with it; xml carries it as
+	 * the element's escaped text, marked as the venue's. Brackets and line
+	 * breaks never reach the label, so the sentence cannot close it.
+	 */
+	public static String renderSentence(AString dialect, Kind kind, String sentence) {
+		String line = sentence.replace('[', '(').replace(']', ')').replace('\n', ' ').replace('\r', ' ');
+		if (XML.equals(dialect)) {
+			return "<" + kind.tag + " verified=\"venue\">" + attr(line).replace(">", "&gt;") + "</" + kind.tag + ">";
+		}
+		String label = String.format(kind.pattern, line);
 		return HEADER.equals(dialect) ? "## " + label : "[" + label + "]";
 	}
 

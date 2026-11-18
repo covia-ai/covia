@@ -77,8 +77,8 @@ refuse that config (`Admission.configProblem`).
   (UCAN.md §5.4). An external agent's backend is its harness's work, so
   whoever the agent admits reaches that backend.
 - **The agent knows who asked, and how.** The task records the asker as its
-  caller, and the request's route: what carried it, such as one of the
-  asker's access tokens, a channel binding or a callable
+  caller, and the request's route: where it started and each handover, such
+  as a sign-in, one of the asker's access tokens, a channel binding or a callable
   ([AGENT_CONTEXT.md](./AGENT_CONTEXT.md) §1.2). Both are taken from the
   request context, beside the request and never from it, so nothing a caller
   sends can pose as either.

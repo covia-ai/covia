@@ -4336,7 +4336,8 @@ public class Engine {
 	 * user, whatever request it is (deferred work and an agent's tool call
 	 * included). The venue's own DID and its public principal are no user to
 	 * enter. The call keeps the delegate's job, cancellation and origin,
-	 * so acts that need the user in person refuse it ({@link #inPersonDenial}).
+	 * so acts that need the user in person refuse it ({@link #inPersonDenial}),
+	 * and its route gains the user adapter's record vouching for the user.
 	 * A request already in the user's account is returned as it is.
 	 */
 	public RequestContext sudoContext(RequestContext ctx, AString userDID) {
@@ -4354,8 +4355,15 @@ public class Engine {
 		if (!crossUserAllows(ctx, userDID, Abilities.ADMIN_SUDO)) {
 			throw new AuthException(SUDO_DENIED.formatted(userDID));
 		}
-		return context(userDID).calledFrom(ctx);
+		// The request is handed to the user, which its route records, so whoever
+		// it reaches sees who acted as the user
+		return context(userDID).calledFrom(ctx).via(SUDO_ADAPTER, Maps.of(Fields.OPERATION, SUDO_OPERATION),
+			covia.venue.RouteText.of(Abilities.ADMIN_SUDO.toString()));
 	}
+
+	private static final AString SUDO_ADAPTER = Strings.intern(covia.adapter.UserAdapter.NAME);
+	/** The user adapter's operation that hands a request to a user ({@code user:sudo}). */
+	private static final AString SUDO_OPERATION = Strings.intern("sudo");
 
 	/** A read of the venue's explicitly addressed content catalog
 	 *  ({@code <venueDID>/a/…}). It is public only for reads and only for the
@@ -4665,12 +4673,12 @@ public class Engine {
 		if (isPublicPrincipal(principal)) {
 			if (!auth.isPublicAccessEnabled()) throw new AuthException(PUBLIC_ACCESS_OFF);
 			AString publicDID = publicPrincipal();
-			return RequestContext.of(publicDID, null, auth.getPublicScope(publicDID)).withoutOrigin();
+			return RequestContext.unattended(publicDID, null, auth.getPublicScope(publicDID));
 		}
 		if (covia.grid.Principals.isAgentDID(principal)) {
-			return RequestContext.of(principal, null, Vectors.empty()).withoutOrigin();
+			return RequestContext.unattended(principal, null, Vectors.empty());
 		}
-		return RequestContext.of(principal).withoutOrigin();
+		return RequestContext.unattended(principal, null, null);
 	}
 
 	/**
@@ -4680,14 +4688,20 @@ public class Engine {
 	 * principal that acts in it as its origin, the token's issuer for a token
 	 * ({@link RequestContext#getOrigin()}). Only a door that
 	 * authenticated the request makes one, so that only such a request can be
-	 * the user in person ({@link #inPersonDenial}).
+	 * the user in person ({@link #inPersonDenial}). Its route starts where it
+	 * entered: the token's record, or a sign-in vouching for the principal, which
+	 * says so of an anonymous caller ({@link RequestContext#getRoute}).
 	 *
 	 * @param principal the authenticated caller, or null for anonymous
 	 * @param token the access token's reference the request presented, or null
 	 * @throws AuthException as {@link #context(AString)} or {@link #tokenContext}
 	 */
 	public RequestContext requestContext(AString principal, AMap<AString, ACell> token) {
-		return ((token != null) ? tokenContext(token) : context(principal)).asOrigin();
+		if (token != null) return tokenContext(token).asOrigin();
+		RequestContext ctx = context(principal).asOrigin();
+		if (ctx.getOrigin() == null) return ctx;
+		return ctx.via(RequestContext.SIGN_IN, Maps.empty(),
+			isPublicPrincipal(ctx.getOrigin()) ? RequestContext.NOT_SIGNED_IN : RequestContext.SIGNED_IN);
 	}
 
 	/**
@@ -5175,15 +5189,18 @@ public class Engine {
 	 * now: its issuer as that principal acts in the token's namespace
 	 * ({@link #context(AString, AString)}), narrowed by the token's caps, read
 	 * at each point of action. A token that later stops standing narrows to
-	 * nothing. The token carried the
-	 * request, so its reference is the request's route step.
+	 * nothing. The request starts with the token, so its route's first record is
+	 * the token's reference, vouching for its issuer; the venue never knows who
+	 * holds a token, and the record says so.
 	 *
 	 * @throws AuthException when the token does not stand now, or its issuer could not act
 	 */
 	public RequestContext tokenContext(AMap<AString, ACell> reference) {
 		AccessToken token = resolveToken(reference);
 		if (token == null) throw new AuthException(TOKEN_NOT_STANDING + RT.getIn(reference, Fields.NAME));
-		return narrowedByToken(context(token.owner(), token.issuer()), reference).via(TOKEN_ADAPTER, reference);
+		return narrowedByToken(context(token.owner(), token.issuer()), reference).via(TOKEN_ADAPTER, reference,
+			covia.venue.RouteText.builder().text("access token ").name(reference.get(Fields.NAME))
+				.text(", held by someone the venue does not know").build());
 	}
 
 	private static final AString TOKEN_ADAPTER = Strings.intern(TokenAdapter.NAME);
@@ -5226,7 +5243,7 @@ public class Engine {
 	private RequestContext callFrame(AMap<AString, ACell> reference) {
 		AString owner = RT.ensureString(reference.get(Fields.OWNER));
 		Callable callable = resolveCallable(reference);
-		RequestContext issuer = (callable == null) ? RequestContext.of(owner, owner, Vectors.empty())
+		RequestContext issuer = (callable == null) ? RequestContext.unattended(owner, owner, Vectors.empty())
 			: context(owner, callable.issuer());
 		return issuer.withCallable(reference, resource -> {
 			Callable current = resolveCallable(reference);
@@ -5271,7 +5288,8 @@ public class Engine {
 	 * agent (its harness, its own acts, a request through its token and work
 	 * they keep), never by who acts in it: the harness acts as the agent's
 	 * controller. A call is never the agent's own run. A step's input never
-	 * sets its authority.
+	 * sets its authority. Its route is the driving request's with the agent's
+	 * record added ({@link RequestContext#getRoute}).
 	 *
 	 * @throws AuthException when the caller may not make that agent act, or it does not exist
 	 */
@@ -5290,8 +5308,12 @@ public class Engine {
 		if (getAgent(owner, agentId) == null) throw new AuthException(NO_SUCH_AGENT.formatted(agentDID));
 		RequestContext agent = context(owner, agentDID);
 		for (ACell token : ctx.getTokens()) agent = narrowedByToken(agent, RT.ensureMap(token));
-		return ctx.actingAs(agent).withAgentId(agentId);
+		// The step goes on with the request that drives it, handed to the agent: the
+		// agent's own run starts with it, and the owner's request hands over to it
+		return ctx.actingAs(agent).withAgentId(agentId).withRoute(ctx.getRoute()).via(AGENT_ADAPTER, Maps.empty());
 	}
+
+	private static final AString AGENT_ADAPTER = Strings.intern(covia.adapter.AgentAdapter.NAME);
 
 	/**
 	 * The id of {@code principal} as one of {@code owner}'s agents, or null when
@@ -5310,8 +5332,9 @@ public class Engine {
 	 * The context a request authenticated through {@code owner}'s channel
 	 * binding runs under (COG-3 §7): its identified principal as it acts now
 	 * ({@link #context(AString, AString)}), carrying the result's record without
-	 * its {@code userDID}, and carried by the binding: its route step is the
-	 * binding's ({@link covia.adapter.messaging.ChannelAuthentication#step}). The
+	 * its {@code userDID}, and started at the binding: its route's first record
+	 * is the binding's ({@link covia.adapter.messaging.ChannelAuthentication#step}),
+	 * vouching for the principal the binding identified. The
 	 * one place a request context gains an authentication record. That record
 	 * is attribution, not evidence, so the context has no origin: a message a
 	 * bot brings, and an operation the bot runs for it,
@@ -5321,8 +5344,9 @@ public class Engine {
 	 */
 	public RequestContext channelContext(AString owner, covia.venue.auth.AuthResult result) {
 		AMap<AString, ACell> record = result.toData().dissoc(covia.venue.auth.AuthResult.USER_DID);
+		AMap<AString, ACell> step = covia.adapter.messaging.ChannelAuthentication.step(record);
 		return context(owner, result.userDID()).withAuthentication(record)
-			.via(result.authentication().method(), covia.adapter.messaging.ChannelAuthentication.step(record));
+			.via(result.authentication().method(), step, covia.adapter.messaging.ChannelAuthentication.text(step));
 	}
 
 	/** Why the public principal cannot act: the operator has public access off. */

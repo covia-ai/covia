@@ -29,6 +29,7 @@ import covia.lattice.Caps;
 import covia.venue.AdapterState;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
+import covia.venue.RouteText;
 
 /**
  * Callables (CALLABLES.md): functions a principal publishes for others to
@@ -283,11 +284,11 @@ public class CallableAdapter extends AAdapter {
 		Callable callable = named(ctx, named);
 		AString resource = resource(callable.owner(), callable.name());
 		ACell targetInput = RT.getIn(input, Fields.INPUT);
-		// The callable carries the caller's request on: its step is its reference and
-		// whom it carried the request for, the call's caller, as a binding's step
-		// names its sender. It is added here, never when work the call left is rebuilt
+		// The callable hands the caller's request to its issuer: its record is its
+		// reference, vouching for the issuer, after the record of whoever called
 		RequestContext frame = engine.callContext(ctx, callable.reference());
-		RequestContext call = frame.via(ADAPTER, step(callable, frame.getCaller()));
+		RequestContext call = frame.via(ADAPTER, callable.reference(),
+			RouteText.builder().name(callable.reference().get(Fields.NAME)).build());
 		if (!engine.authorityCovers(ctx, resource, Abilities.CALLABLE_CALL)) {
 			AString gate = callable.gate();
 			// The gate admits the caller only as far as what narrows its request reaches, as any admission does
@@ -300,16 +301,6 @@ public class CallableAdapter extends AAdapter {
 		AString target = callable.operation();
 		Operation operation = engine.jobs().resolveOperation(target, engine.context(callable.owner(), callable.issuer()));
 		return engine.jobs().invokeInternal(target, operation, targetInput, call, null);
-	}
-
-	/**
-	 * A call's route step: the callable's reference and the call's caller, the
-	 * authority that called it, so whoever the call reaches can tell whose
-	 * request the callable carried (AGENT_CONTEXT.md §1.2). The caller is
-	 * recorded even when it is null, so the step never reads as naming none.
-	 */
-	private static AMap<AString, ACell> step(Callable callable, AString caller) {
-		return callable.reference().assoc(Fields.CALLER, caller);
 	}
 
 	/**

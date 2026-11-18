@@ -327,10 +327,16 @@ public class Fields {
 	 *  too. */
 	public static final StringShort AUTHENTICATION = Strings.intern("authentication");
 	/** Beside a request or message an agent receives, and on its history turn:
-	 *  what carried the request to the agent (an access token, a binding, a
-	 *  callable, the scheduler), one step per carrier. Venue-internal: its shape
-	 *  is not a contract, and only the agent's {@code From} element shows it. */
+	 *  where the request started and each handover that carried it to the
+	 *  agent, one record per adapter. Venue-internal: its shape is not a
+	 *  contract, and only the agent's {@code From} element shows it. */
 	public static final StringShort ROUTE = Strings.intern("route");
+	/** On a route record: the name of the adapter that wrote it. */
+	public static final StringShort VIA = Strings.intern("via");
+	/** On a route record: the principal it vouches for, which holds the request after it. */
+	public static final StringShort PRINCIPAL = Strings.intern("principal");
+	/** On the scheduler's route record: when the event that fired was due, in milliseconds since the epoch. */
+	public static final StringShort DUE = Strings.intern("due");
 	/** On a job record: the id of the nearest <em>recorded</em> job inside whose
 	 *  execution this job was dispatched. Absent on top-level jobs. Only the
 	 *  up-link is stored; a client reconstructs a job tree by tracing parents. */

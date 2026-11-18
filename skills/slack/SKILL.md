@@ -38,7 +38,7 @@ Walk the user through these steps; each is idempotent.
 
 5. **Load the module.** Build once (`mvn -pl covia-slack -am package -DskipTests` produces `covia-slack/target/covia-slack-<ver>-module.jar`), then declare it in the venue config (`"modules": ["modules/covia-slack-<ver>-module.jar"]`) or load it at runtime with `v/ops/venue/module/load` (see `/adapters load`). Verify: `covia_read path=v/info/adapters/slack`.
 
-6. **Create the agent** (skip for an operation handler) from the module's template — it knows the venue's `[From: …]` element, per-DM and per-thread sessions, plain-text replies, memory and `slack:send`:
+6. **Create the agent** (skip for an operation handler) from the module's template — it knows the venue's `[From (venue-verified): …]` element, per-DM and per-thread sessions, plain-text replies, memory and `slack:send`:
    ```
    agent_create  agentId="SlackAssistant"  config=["v/agents/templates/slack", {"llmOperation": "v/ops/langchain/anthropic", "model": "claude-sonnet-5-5", "caps": "unrestricted"}]
    ```

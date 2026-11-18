@@ -47,7 +47,7 @@ Walk the user through these steps; each is idempotent. Steps 1–3 are common; s
    ```
    - `user` (config only) is who the bot's allow-listed senders come from — the **owner of the agent**. `"public"` is right for a local dev venue whose agents were created over MCP; on a real venue name the owner's DID. Those senders have that user's full authority, so choose deliberately. A created bot's senders come from its creator.
    - **Pick the inbound handler** (ask the user which they want; exactly one). Every inbound message runs as a Job of the principal it comes from (the bot user for an allow-listed sender, the anonymous principal for any other) — that is the record of the interaction; a private durable inbox tracks update intake and delivery:
-     - `"agent": "<agentId>"` — each Telegram chat or forum topic is one `agent:chat` conversation with that agent. Always replies. **Create the agent from the module's template** — it already knows the phone-chat register, the venue's `[From: …]` element, per-chat sessions, memory (pinned into context) and the telegram/venue/covia skills:
+     - `"agent": "<agentId>"` — each Telegram chat or forum topic is one `agent:chat` conversation with that agent. Always replies. **Create the agent from the module's template** — it already knows the phone-chat register, the venue's `[From (venue-verified): …]` element, per-chat sessions, memory (pinned into context) and the telegram/venue/covia skills:
        ```
        agent_create  agentId="Assistant"  config=["v/agents/templates/telegram", {"llmOperation": "v/ops/langchain/anthropic", "model": "claude-sonnet-5-5", "caps": "unrestricted"}]
        ```

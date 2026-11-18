@@ -108,9 +108,12 @@ public class AuthAdapter extends AAdapter implements AuthenticationMethods, Venu
 	private static final AString K_INTERNAL = Strings.intern("internal");
 	private static final AString K_ORIGIN = Strings.intern("origin");
 
+	/** The adapter's name, which also names a request's first route record where a door authenticated it ({@link covia.venue.RequestContext#via}). */
+	public static final String NAME = "auth";
+
 	@Override
 	public String getName() {
-		return "auth";
+		return NAME;
 	}
 
 	@Override
