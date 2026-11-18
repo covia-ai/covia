@@ -19,6 +19,7 @@ import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.adapter.agent.AbstractLLMAdapter;
@@ -98,6 +99,73 @@ class ModelCallOptionsTest {
 		var error = assertThrows(InvalidInputException.class,
 			() -> LangChainAdapter.normaliseNativeSystemMessages(messages.subVector(0, 4), Set.of()));
 		assertEquals(ModelCallOptions.INVALID_SYSTEM_POSITION, error.getMessage());
+	}
+
+	/** A turn after a refusal that said nothing: the refusal is never sent, so the
+	 *  instructions placed before it must land where the API takes a system message. */
+	@Test
+	void lateSystemsBeforeASilentRefusalLandWhereTheProviderTakesThem() throws Exception {
+		AtomicReference<ACell> request = new AtomicReference<>();
+		HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+		server.createContext("/v1/messages", exchange -> {
+			request.set(JSON.parse(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8)));
+			byte[] response = """
+				{"id":"msg","type":"message","role":"assistant","model":"claude-sonnet-5-5",
+				 "content":[{"type":"text","text":"ok"}],
+				 "stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":2}}
+				""".getBytes(StandardCharsets.UTF_8);
+			exchange.getResponseHeaders().set("content-type", "application/json");
+			exchange.sendResponseHeaders(200, response.length);
+			try (var out = exchange.getResponseBody()) { out.write(response); }
+		});
+		server.start();
+		try {
+			// As an agent's session holds it: a skill loaded, its instructions and the
+			// tool change as system events, then a refusal with no text and no tool call.
+			AVector<ACell> messages = RT.ensureVector(JSON.parse("""
+				[{"role":"system","content":"head"},
+				 {"role":"user","content":"first"},
+				 {"role":"assistant","toolCalls":[{"id":"toolu_load","name":"skill_load","arguments":{"name":"alpha"}}]},
+				 {"role":"tool","id":"toolu_load","name":"skill_load","content":"loaded"},
+				 {"role":"system","content":"skill instructions"},
+				 {"role":"system","content":"tool change"},
+				 {"role":"assistant","finishReason":"other"},
+				 {"role":"user","content":"second"}]
+				"""));
+			ACell input = Maps.of("url", "http://127.0.0.1:" + server.getAddress().getPort() + "/v1/",
+				"apiKey", "scripted", "model", "claude-sonnet-5-5", "maxTokens", 256,
+				"modelOptions", Maps.of("nativeSystemMessages", true), "messages", messages);
+			TestEngine.ENGINE.jobs().invokeOperation("v/ops/langchain/anthropic", input,
+				TestEngine.ENGINE.venueContext()).awaitResult(10_000);
+
+			AVector<ACell> wire = RT.ensureVector(RT.getIn(request.get(), "messages"));
+			List<String> sent = new java.util.ArrayList<>();
+			for (long i = 0; i < wire.count(); i++) {
+				String role = RT.getIn(wire.get(i), "role").toString();
+				sent.add(RT.getIn(wire.get(i), "content", 0L, "text") + "");
+				assertNotEquals(0L, RT.count(RT.getIn(wire.get(i), "content")), "an empty message was sent: " + wire);
+				if (!"system".equals(role)) continue;
+				long next = i + 1;
+				while (next < wire.count() && "system".equals(RT.getIn(wire.get(next), "role").toString())) next++;
+				assertTrue(next == wire.count() || "assistant".equals(RT.getIn(wire.get(next), "role").toString()),
+					"a system message must precede an assistant message or end the array: " + wire);
+			}
+			assertTrue(sent.containsAll(List.of("skill instructions", "tool change", "second")),
+				"nothing said is dropped: " + wire);
+		} finally {
+			server.stop(0);
+		}
+	}
+
+	/** A cache mark on a turn that is not sent ends the same prefix one message earlier. */
+	@Test
+	void aMarkOnATurnNotSentMovesToTheMessageBefore() {
+		AVector<ACell> messages = RT.ensureVector(JSON.parse("""
+			[{"role":"user","content":"first"},{"role":"assistant","content":""},{"role":"user","content":"second"}]
+			"""));
+		var sent = LangChainAdapter.withoutSilentTurns(messages, Set.of(1L, 2L));
+		assertEquals(Vectors.of(messages.get(0), messages.get(2)), sent.messages());
+		assertEquals(Set.of(0L, 1L), sent.cacheMarks());
 	}
 
 	@Test

@@ -773,7 +773,7 @@ Where a `system` message that follows conversation actually lands is provider- a
 So the **edge normalises, where the provider requires it** (§3.5), driven by the model's declared `systemMessages`:
 
 - `"multiple"` — nothing to do. System messages reach the model where they were placed.
-- `"midConversation"` — the leading run becomes the provider's system parameter and later system events become its native mid-conversation system blocks, in place.
+- Native mid-conversation blocks — on an Anthropic model whose `modelOptions.nativeSystemMessages` is true, the leading run becomes the provider's system parameter and later system events become its native mid-conversation system blocks. The API takes one only before an assistant turn or at the end, so each goes after the user and tool-result turns that follow it, before the next assistant turn that is sent; a turn that says nothing is never sent ([AGENT_SESSIONS.md](./AGENT_SESSIONS.md)).
 - `"single"` — the **leading run** of system messages coalesces into the provider's system parameter, as a list of blocks where the API takes them. Any **later** system message becomes a `user` message with its content wrapped `[system: …]` (§1.2), in place: the model still sees who is speaking, and the message stays exactly where it was put.
 - `"none"` — as `"single"`, with the leading run folded into the first user message.
 
@@ -923,7 +923,7 @@ The assembler's output is provider-neutral. The level-3 adapter, reading the mod
 | Declared | The edge |
 |----------|----------|
 | `systemMessages: "multiple"` | passes system messages through where they are placed |
-| `systemMessages: "midConversation"` | delivers the leading run through the provider's system parameter and maps later system events to native mid-conversation blocks in place |
+| `modelOptions.nativeSystemMessages` (Anthropic) | delivers the leading run through the provider's system parameter and later system events as native mid-conversation blocks, each before the next assistant turn that is sent or at the end (§3.2.1) |
 | `systemMessages: "single"` | delivers the leading system run as the provider's system parameter — a list of blocks where the API takes them, one joined text where it does not — and converts every later system message to a `[system: …]` user message in place (§3.2.1) |
 | `systemMessages: "none"` | as `"single"`, with the leading run folded into the first user message |
 | `labels` | nothing at the edge beyond the wrapper above — the dialect is applied by the one renderer (§1.2), which the edge also uses for that wrapper |

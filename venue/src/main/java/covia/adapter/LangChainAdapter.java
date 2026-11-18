@@ -495,14 +495,15 @@ public class LangChainAdapter extends AAdapter {
 		// The canonical agent messages retain their exact structuredContent for
 		// session persistence; this narrow conversion also avoids #334's hang
 		// when nested Convex collections reached the Anthropic worker unchanged.
-		// The same copy applies the role rule for the declared provider
-		// (AGENT_CONTEXT.md §3.5): a system message after the conversation has
-		// begun must not be hoisted into the cached head.
-		final Set<Long> canonicalCacheMarks = cacheMarksOf(input, tuning);
+		// The same copy leaves out turns that say nothing, then applies the role
+		// rule for the declared provider (AGENT_CONTEXT.md §3.5): a system message
+		// after the conversation has begun must not be hoisted into the cached
+		// head, and is placed against the turns the provider is actually sent.
+		final NormalisedMessages sent = withoutSilentTurns(
+			serialiseToolResultsForProvider(messages), cacheMarksOf(input, tuning));
 		final NormalisedMessages normalised = "anthropic".equals(provider) && tuning.options().nativeSystemMessages()
-			? normaliseNativeSystemMessages(serialiseToolResultsForProvider(messages), canonicalCacheMarks)
-			: normaliseSystemMessages(
-			serialiseToolResultsForProvider(messages), canonicalCacheMarks,
+			? normaliseNativeSystemMessages(sent.messages(), sent.cacheMarks())
+			: normaliseSystemMessages(sent.messages(), sent.cacheMarks(),
 			AbstractLLMAdapter.modelOptionText(resolvedModel.executionProfile(), OPT_SYSTEM_MESSAGES),
 			AbstractLLMAdapter.labelDialect(resolvedModel.executionProfile()));
 		final AVector<ACell> providerMessages = normalised.messages();
@@ -1547,6 +1548,41 @@ public class LangChainAdapter extends AAdapter {
 		return result;
 	}
 
+	/**
+	 * Whether an assistant turn says nothing: no text and no tool calls, as when
+	 * a provider refuses with an empty reply. The turn stays in the conversation
+	 * as the agent's (AGENT_SESSIONS.md), but providers reject an empty
+	 * assistant message, so it is never sent.
+	 */
+	static boolean saysNothing(ACell message) {
+		if (!ROLE_ASSISTANT.equals(RT.getIn(message, K_ROLE))) return false;
+		if (RT.getIn(message, K_TOOL_CALLS) instanceof AVector<?> calls && calls.count() > 0) return false;
+		AString content = RT.ensureString(RT.getIn(message, K_CONTENT));
+		return content == null || content.toString().isBlank();
+	}
+
+	/**
+	 * The messages a provider is sent: every turn but those that say nothing
+	 * ({@link #saysNothing}). A cache mark on a left-out turn moves to the
+	 * message before it, which ends the same prefix. System placement runs on
+	 * the result, so a late system message is placed against a turn that is sent.
+	 */
+	static NormalisedMessages withoutSilentTurns(AVector<ACell> messages, Set<Long> cacheMarks) {
+		AVector<ACell> out = Vectors.empty();
+		Set<Long> marks = new java.util.LinkedHashSet<>();
+		for (long i = 0; i < messages.count(); i++) {
+			ACell message = messages.get(i);
+			boolean marked = cacheMarks.contains(i);
+			if (saysNothing(message)) {
+				if (marked && !out.isEmpty()) marks.add(out.count() - 1);
+				continue;
+			}
+			if (marked) marks.add(out.count());
+			out = out.conj(message);
+		}
+		return new NormalisedMessages(out, marks);
+	}
+
 	/** The {@code model.options.systemMessages} key: how the provider takes system content. */
 	static final AString OPT_SYSTEM_MESSAGES = Strings.intern("systemMessages");
 	static final AString SYSTEM_MESSAGES_SINGLE = Strings.intern("single");
@@ -1913,6 +1949,7 @@ public class LangChainAdapter extends AAdapter {
 					break;
 				}
 				case "assistant": {
+					if (saysNothing(entry)) break;
 					AString content = RT.ensureString(RT.getIn(entry, K_CONTENT));
 					ACell tcCell = RT.getIn(entry, K_TOOL_CALLS);
 					AiMessage ai;
@@ -1937,12 +1974,8 @@ public class LangChainAdapter extends AAdapter {
 						}
 						String text = (content != null) ? content.toString() : null;
 						ai = new AiMessage(text, reqs);
-					} else if (content != null && !content.toString().isBlank()) {
-						ai = AiMessage.from(content.toString());
 					} else {
-						// A turn that ended without a reply: nothing was said, so
-						// nothing goes back — providers reject an empty assistant message.
-						break;
+						ai = AiMessage.from(content.toString());
 					}
 					ai = ProviderState.restore(provider, modelName,
 						RT.getIn(entry, Fields.PROVIDER_STATE), ai);
