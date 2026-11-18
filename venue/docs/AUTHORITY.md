@@ -154,7 +154,9 @@ beside its caller: the account is the caller's, and the caller's DID names it,
 as an agent's `<ownerDID>:g:<id>` does, so a reader can find the record. It
 counts against that account's quota. This is COG-8's `caller`; a record names
 no `owner`, and none names the request's `origin`: the audit log does, where
-it is not the `authority`.
+it is not the `authority`, and so does the route an agent's turn or an
+approval request keeps, whose first record is where the request started
+([AGENT_CONTEXT.md](AGENT_CONTEXT.md) §1.2).
 
 A job is reached by capability on its record ([JOBS.md](JOBS.md#job-capabilities)).
 A scheduled event is reached by capability on `<account>/x/schedule/<id>`:
@@ -204,7 +206,9 @@ itself and what it creates is its own.
 So the user controls what a request creates under `admin/sudo`, and work it
 leaves runs as the user while the user stands, whatever becomes of the
 delegate's grant, as a cron entry made under `sudo -u` runs as its owner.
-Authority does not tell a request under `admin/sudo` from the user's own. An
+Authority does not tell a request under `admin/sudo` from the user's own; the
+request's route does, so an agent the request reaches is told who acted as the
+user ([AGENT_CONTEXT.md](AGENT_CONTEXT.md) §1.2). An
 action that needs the user in person, such as answering the user's approval
 requests, decides that itself from the request's `origin`
 ([VENUE_AUTHORITY.md](VENUE_AUTHORITY.md#how-it-works-today), "In person"), as

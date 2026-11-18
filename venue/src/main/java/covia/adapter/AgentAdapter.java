@@ -605,7 +605,11 @@ public class AgentAdapter extends AAdapter {
 	/** Counter for session ID generation */
 	private long sessionIdCounter = 0;
 
-	@Override public String getName() { return "agent"; }
+	/** The adapter's name, which also names the route record of an agent's step ({@link covia.venue.Engine#stepContext}). */
+	public static final String NAME = "agent";
+	private static final AString ADAPTER_NAME = Strings.intern(NAME);
+
+	@Override public String getName() { return NAME; }
 
 	/** Public settings: sessionDelete — plain operating parameters, nothing an operator would keep private. */
 	@Override
@@ -1622,10 +1626,15 @@ public class AgentAdapter extends AAdapter {
 		return withRoute(record.assoc(Fields.CALLER, ctx.getAuthorityDID()), ctx);
 	}
 
-	/** {@code record} with {@code ctx}'s route, when it has one. */
+	/**
+	 * {@code record} with {@code ctx}'s route. Every record written now carries
+	 * one, so a record without a route is one recorded before routes named
+	 * where their request started; a context no adapter stamped gives an empty
+	 * route, which shows as unreadable, never as direct.
+	 */
 	private static AMap<AString, ACell> withRoute(AMap<AString, ACell> record, RequestContext ctx) {
 		AVector<ACell> route = (ctx == null) ? null : ctx.getRoute();
-		return (route == null) ? record : record.assoc(Fields.ROUTE, route);
+		return record.assoc(Fields.ROUTE, (route == null) ? Vectors.empty() : route);
 	}
 
 	/**
@@ -4192,13 +4201,16 @@ public class AgentAdapter extends AAdapter {
 			AMap<AString, ACell> envelope = carried(Maps.of(Fields.CALLER, caller, Fields.MESSAGE, message), route, source);
 			if (agent.appendTaskContinuation(taskId, sessionId, envelope, messageId)) return true;
 		}
-		if (route == null && source == null) return appendSessionMessage(users, ownerDID, agentId, sessionId, caller, null, message);
-		return appendSessionEnvelope(agent, sessionId, caller, carried(sessionEnvelope(caller, null, message), route, source));
+		return appendSessionMessage(users, ownerDID, agentId, sessionId, caller, null, message, route, source);
 	}
 
-	/** {@code envelope} with the route its message came by and the source its turn records, each when there is one. */
+	/**
+	 * {@code envelope} with the route its message came by, empty when none was
+	 * given ({@link #withRoute}), and the source its turn records when there is
+	 * one.
+	 */
 	private static AMap<AString, ACell> carried(AMap<AString, ACell> envelope, AVector<ACell> route, AString source) {
-		if (route != null) envelope = envelope.assoc(Fields.ROUTE, route);
+		envelope = envelope.assoc(Fields.ROUTE, (route == null) ? Vectors.empty() : route);
 		return (source == null) ? envelope : envelope.assoc(Agent.K_SOURCE, source);
 	}
 
@@ -4206,10 +4218,21 @@ public class AgentAdapter extends AAdapter {
 	 * transaction draft. The caller owns authorization and flush/wake after commit. */
 	public boolean appendSessionMessage(covia.venue.Users users, AString ownerDID, AString agentId, Blob sessionId,
 			AString caller, Blob jobId, ACell message) {
+		return appendSessionMessage(users, ownerDID, agentId, sessionId, caller, jobId, message, null, null);
+	}
+
+	/**
+	 * As {@link #appendSessionMessage(covia.venue.Users, AString, AString, Blob, AString, Blob, ACell)},
+	 * the envelope carrying the route its message came by, empty when none is
+	 * given ({@link #withRoute}), and the source its turn records when there is
+	 * one.
+	 */
+	public boolean appendSessionMessage(covia.venue.Users users, AString ownerDID, AString agentId, Blob sessionId,
+			AString caller, Blob jobId, ACell message, AVector<ACell> route, AString source) {
 		var owner = users.user(ownerDID);
 		Agent agent = owner == null ? null : owner.agent(agentId);
 		if (agent == null || externalAgents().isExternal(agent)) return false;
-		return appendSessionEnvelope(agent, sessionId, caller, sessionEnvelope(caller, jobId, message));
+		return appendSessionEnvelope(agent, sessionId, caller, carried(sessionEnvelope(caller, jobId, message), route, source));
 	}
 
 	/** The envelope a venue-delivered session message travels in: a chat when it names a {@code jobId}, else a message, stamped where it stands in the queue. */
@@ -4312,8 +4335,10 @@ public class AgentAdapter extends AAdapter {
 			if (sid == null) return null;
 			Blob taskId = Ids.stored(RT.getIn(entry, Fields.TASK_ID));
 			agent.removePending(jobId);
-			// The agent's own call: its outcome came by no route
-			boolean delivered = deliverToWaiter(draft, ownerDID, agentId, sid, taskId, callMadeBy(record, ownerDID), null,
+			// The call's own outcome: the venue hands it back as the agent step's, vouching for whoever made the call
+			AString madeBy = callMadeBy(record, ownerDID);
+			AVector<ACell> route = Vectors.of(RequestContext.routeRecord(ADAPTER_NAME, madeBy, Maps.empty(), null));
+			boolean delivered = deliverToWaiter(draft, ownerDID, agentId, sid, taskId, madeBy, route,
 				Strings.create(jobId.toHexString()), callOutcome(jobId, record, entry),
 				Agent.SOURCE_TOOL_OUTCOME);
 			return new CallDelivery(delivered, taskId);

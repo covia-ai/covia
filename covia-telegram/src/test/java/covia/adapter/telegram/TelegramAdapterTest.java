@@ -245,7 +245,8 @@ public class TelegramAdapterTest {
 		AMap<AString, ACell> turn = firstTurn(sid);
 		assertEquals(owner, turn.get(Fields.CALLER), "an allow-listed sender comes from the bot's principal");
 		AMap<AString, ACell> step = RT.ensureMap(RT.getIn(turn, Fields.ROUTE, 0));
-		assertEquals(Strings.create("telegram"), step.get(Fields.ADAPTER));
+		assertEquals(Strings.create("telegram"), step.get(Fields.VIA));
+		assertEquals(owner, step.get(Fields.PRINCIPAL), "vouching for the principal the bot identified");
 		assertEquals(Strings.create(Long.toString(ALLOWED_ID)), RT.getIn(step, "sender", "id"));
 		assertEquals(Strings.create("alice"), RT.getIn(step, "sender", "handle"));
 		assertEquals(Strings.create(Long.toString(chat)), RT.getIn(step, "chat", "id"));

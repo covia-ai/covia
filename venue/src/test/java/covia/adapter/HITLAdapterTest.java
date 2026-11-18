@@ -132,7 +132,8 @@ public class HITLAdapterTest {
 	public void testARequestRecordsTheRouteThatCarriedIt() {
 		Job direct = request(ALICE, Hitl.request("Direct").ask(Hitl.approval("ok", "OK?").required()).build());
 		assertEquals(Status.INPUT_REQUIRED, direct.getStatus(), direct.getErrorMessage());
-		assertNull(readRecord(ALICE, direct.getID().toHexString()).get(Fields.ROUTE), "nothing carried a direct request");
+		assertEquals(ALICE.getRoute(), readRecord(ALICE, direct.getID().toHexString()).get(Fields.ROUTE),
+			"a direct request's route is where it signed in");
 
 		String bearer = RT.getIn(engine.jobs().invokeOperation("v/ops/token/create", Maps.of(
 			Fields.NAME, "outside-bot", Fields.ACCESS, Maps.of("test", Maps.empty()),
@@ -279,7 +280,7 @@ public class HITLAdapterTest {
 			e.getVenueState().users().ensure(owner);
 			e.registerAdapter(new AgentAdapter() {
 				@Override public boolean appendSessionMessage(covia.venue.Users draft, AString user, AString agent, Blob session,
-						AString caller, Blob job, ACell message) {
+						AString caller, Blob job, ACell message, AVector<ACell> route, AString source) {
 					assertEquals(Status.COMPLETE, draft.user(owner).jobs().getRecord(requestId.get()).get(Fields.STATUS),
 						"the final Job result must be part of the same draft as the inbox and session");
 					if (failAppend.get()) {
@@ -287,7 +288,7 @@ public class HITLAdapterTest {
 						assertEquals(Hitl.OPEN, e.getVenueState().users().user(owner).inbox().get(requestId.get()).get(Hitl.STATUS));
 						assertTrue(e.getVenueState().users().user(owner).agent("asker").session(sid).pending().isEmpty());
 					}
-					boolean appended = super.appendSessionMessage(draft,user,agent,session,caller,job,message);
+					boolean appended = super.appendSessionMessage(draft,user,agent,session,caller,job,message,route,source);
 					assertFalse(draft.user(owner).agent("asker").getPending().containsKey(requestId.get()),
 						"the draft must clear the completed wait before post-commit notifications");
 					if (failAppend.get()) throw new IllegalStateException("injected delivery failure");

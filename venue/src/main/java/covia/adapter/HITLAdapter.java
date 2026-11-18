@@ -127,9 +127,12 @@ public class HITLAdapter extends AAdapter {
 	/** Optional adapter-config ceiling. Absent/null means no venue maximum. */
 	static final AString CONFIG_MAX_GRANT_LIFETIME_SECS = Strings.intern("maxGrantLifetimeSecs");
 
+	/** The adapter's name, which also names the route record of the venue's answer to an expired request. */
+	public static final String NAME = "hitl";
+
 	@Override
 	public String getName() {
-		return "hitl";
+		return NAME;
 	}
 
 	/** Public settings: maxGrantLifetimeSecs — plain operating parameters, nothing an operator would keep private. */
@@ -820,10 +823,16 @@ public class HITLAdapter extends AAdapter {
 	/** Expires an open request: record → expired, job → FAILED. Terminal-state
 	 *  stickiness makes the race against a response commit exactly one winner. */
 	private void expireRequest(AString targetDID, Blob id) {
-		if (resolveRequest(targetDID, id, Hitl.EXPIRED, null, engine.getDIDString(), null, Maps.of(
+		// The venue answers for the request: its answer starts with this adapter's record, vouching for the venue
+		AVector<ACell> route = engine.venueContext().via(ADAPTER, Maps.empty(), EXPIRED_TEXT).getRoute();
+		if (resolveRequest(targetDID, id, Hitl.EXPIRED, null, engine.getDIDString(), route, Maps.of(
 				Hitl.ID, id, Hitl.STATUS, Hitl.EXPIRED, Fields.ERROR, REQUEST_EXPIRED),
 				engine.jobs().getJob(id), null)) log.info("HITL request {} expired", id);
 	}
+
+	private static final AString ADAPTER = Strings.intern(NAME);
+	/** What the venue's answer to an expired request tells the asking agent of how it came. */
+	private static final covia.venue.RouteText EXPIRED_TEXT = covia.venue.RouteText.of("approval request expired");
 
 	private record SessionWake(AString owner, AString agent) { }
 

@@ -625,9 +625,9 @@ public class Scheduler {
 		boolean tracked = isTracked(rec);
 		try {
 			engine.getVenueState().users().requireNotDeleted(accountOf(rec));
-			// The fire is a request of its own, carried by the scheduler alone: how
-			// the event was scheduled is not part of its route
-			RequestContext fire = fireContext(rec).via(SCHEDULER, Maps.of(K_HANDLE, key));
+			// The fire is a request of its own, started by the scheduler for the event's
+			// caller: how the event was scheduled is not part of its route
+			RequestContext fire = fireContext(rec).via(SCHEDULER, fireRecord(key, rec), fireText(rec));
 			prepared = tracked ? engine.jobs().prepareTracked(RT.ensureString(rec.get(K_OP)), rec.get(K_INPUT), fire)
 				: engine.jobs().prepareUntracked(RT.ensureString(rec.get(K_OP)), rec.get(K_INPUT), fire);
 		} catch (RuntimeException e) {
@@ -710,6 +710,19 @@ public class Scheduler {
 	RequestContext fireContext(AMap<AString, ACell> rec) {
 		return engine.context(accountOf(rec), RT.ensureString(rec.get(K_CALLER)), asVector(rec.get(K_PROOFS)),
 			RT.ensureMap(rec.get(Fields.AUTHORITY)));
+	}
+
+	/** The scheduler's route record for a fire of event {@code key}: its handle, and when it was due. */
+	private static AMap<AString, ACell> fireRecord(Blob key, AMap<AString, ACell> rec) {
+		AMap<AString, ACell> record = Maps.of(K_HANDLE, key);
+		return (rec.get(K_TIME) instanceof CVMLong due) ? record.assoc(Fields.DUE, due) : record;
+	}
+
+	/** What the scheduler's record of a fire tells an agent: when the event was due. */
+	private static RouteText fireText(AMap<AString, ACell> rec) {
+		return (rec.get(K_TIME) instanceof CVMLong due)
+			? RouteText.builder().text("event due ").time(due.longValue()).build()
+			: RouteText.of("scheduled event");
 	}
 
 	/**

@@ -15,12 +15,14 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
+import convex.core.lang.RT;
 import covia.api.Fields;
 
 /**
- * A request's route (RequestContext#getRoute): the steps that carried it,
- * each stamped with its adapter, bounded in length, and kept by the contexts
- * derived within the request but not by a principal acting as itself.
+ * A request's route (RequestContext#getRoute): where it started and each
+ * handover, each record stamped with the adapter that wrote it and the
+ * principal it vouches for, bounded in length, and kept by the contexts derived
+ * within the request but not by a principal acting as itself.
  */
 public class RequestContextRouteTest {
 
@@ -31,34 +33,50 @@ public class RequestContextRouteTest {
 		return Maps.of(Fields.NAME, Strings.create("bot-" + i));
 	}
 
-	@Test
-	public void aStepNamesTheAdapterThatAddedIt() {
-		RequestContext direct = RequestContext.of(ALICE);
-		assertNull(direct.getRoute(), "nothing carried a direct request");
-		// The adapter's own claim to a name is replaced by the adapter that added the step
-		RequestContext carried = direct.via(TOKEN, step(0).assoc(Fields.ADAPTER, Strings.create("forged")));
-		assertEquals(Vectors.of(step(0).assoc(Fields.ADAPTER, TOKEN)), carried.getRoute());
-		assertNull(direct.getRoute(), "a context is a value: adding a step makes a new one");
-		assertEquals(2, carried.via(Strings.create("callable"), step(1)).getRoute().count());
-		assertThrows(NullPointerException.class, () -> direct.via(null, step(0)));
-		assertThrows(NullPointerException.class, () -> direct.via(TOKEN, null));
+	/** {@code step} as the token adapter's record vouching for {@code principal}. */
+	private static AMap<AString, ACell> stamped(AMap<AString, ACell> step, AString principal) {
+		return step.assoc(Fields.VIA, TOKEN).assoc(Fields.PRINCIPAL, principal);
 	}
 
 	@Test
-	public void aLongRouteKeepsWhereItEnteredAndItsLatestSteps() {
-		RequestContext ctx = RequestContext.of(ALICE);
+	public void aRequestStartsWhereItSignedIn() {
+		assertEquals(Vectors.of(Maps.of(Fields.VIA, RequestContext.SIGN_IN, Fields.PRINCIPAL, ALICE,
+			Fields.TEXT, RequestContext.SIGNED_IN.parts())), RequestContext.of(ALICE).getRoute(),
+			"a request an in-process caller makes starts where it signed in");
+		assertNull(TestEngine.ENGINE.context(ALICE).getRoute(), "a context the venue makes for its own work has none");
+	}
+
+	@Test
+	public void aRecordNamesTheAdapterThatAddedItAndWhomItVouchesFor() {
+		RequestContext unstamped = TestEngine.ENGINE.context(ALICE);
+		// The adapter's own claim to a name or a principal is replaced by the venue's stamp
+		RequestContext carried = unstamped.via(TOKEN, step(0).assoc(Fields.VIA, Strings.create("forged"))
+			.assoc(Fields.PRINCIPAL, Strings.create("did:key:zMallory")).assoc(Fields.ADAPTER, Strings.create("forged")));
+		assertEquals(Vectors.of(stamped(step(0), ALICE)), carried.getRoute());
+		assertNull(unstamped.getRoute(), "a context is a value: adding a record makes a new one");
+		assertEquals(2, carried.via(Strings.create("callable"), step(1)).getRoute().count());
+		RouteText text = RouteText.of("hello");
+		assertEquals(text.parts(), RT.getIn(unstamped.via(TOKEN, step(0), text).getRoute(), 0, Fields.TEXT),
+			"with the adapter's own text");
+		assertThrows(NullPointerException.class, () -> unstamped.via(null, step(0)));
+		assertThrows(NullPointerException.class, () -> unstamped.via(TOKEN, null));
+	}
+
+	@Test
+	public void aLongRouteKeepsWhereItStartedAndItsLatestRecords() {
+		RequestContext ctx = TestEngine.ENGINE.context(ALICE);
 		for (int i = 0; i < RequestContext.ROUTE_MAX; i++) ctx = ctx.via(TOKEN, step(i));
-		assertEquals(RequestContext.ROUTE_MAX, ctx.getRoute().count(), "up to the bound, every step is kept");
+		assertEquals(RequestContext.ROUTE_MAX, ctx.getRoute().count(), "up to the bound, every record is kept");
 		for (int i = RequestContext.ROUTE_MAX; i < 13; i++) ctx = ctx.via(TOKEN, step(i));
 		AVector<ACell> route = ctx.getRoute();
 		assertEquals(RequestContext.ROUTE_MAX, route.count());
-		assertEquals(step(0).assoc(Fields.ADAPTER, TOKEN), route.get(0));
-		assertEquals(step(1).assoc(Fields.ADAPTER, TOKEN), route.get(1));
+		assertEquals(stamped(step(0), ALICE), route.get(0));
+		assertEquals(stamped(step(1), ALICE), route.get(1));
 		long latest = RequestContext.ROUTE_MAX - RequestContext.ROUTE_HEAD - 1;
 		assertEquals(Maps.of(RequestContext.ROUTE_ELIDED, CVMLong.create(13 - RequestContext.ROUTE_HEAD - latest)),
-			route.get(RequestContext.ROUTE_HEAD), "the steps between fold into a count");
-		assertEquals(step(12).assoc(Fields.ADAPTER, TOKEN), route.get(route.count() - 1));
-		assertEquals(step(8).assoc(Fields.ADAPTER, TOKEN), route.get(RequestContext.ROUTE_HEAD + 1));
+			route.get(RequestContext.ROUTE_HEAD), "the records between fold into a count");
+		assertEquals(stamped(step(12), ALICE), route.get(route.count() - 1));
+		assertEquals(stamped(step(8), ALICE), route.get(RequestContext.ROUTE_HEAD + 1));
 	}
 
 	@Test

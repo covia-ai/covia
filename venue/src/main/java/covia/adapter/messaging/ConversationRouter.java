@@ -203,7 +203,14 @@ public final class ConversationRouter {
 	 * own work, come from. */
 	public RequestContext context() {
 		sessions.requireCurrentUser();
-		return engine.context(spec.userDID(engine), principal());
+		return carried(engine.context(spec.userDID(engine), principal()));
+	}
+
+	/** {@code ctx} started at this binding: its route's first record is the binding's, vouching for {@code ctx}'s principal. */
+	private RequestContext carried(RequestContext ctx) {
+		AString method = Strings.create(sessions.adapterName());
+		AMap<AString, ACell> step = ChannelAuthentication.step(engine, spec, method);
+		return ctx.via(method, step, ChannelAuthentication.text(step));
 	}
 
 	private AString principal() {
@@ -227,8 +234,7 @@ public final class ConversationRouter {
 		sessions.requireCurrentUser();
 		if (channel == null) {
 			if (!spec.open()) throw new AuthException(ChannelAuthentication.NOT_ADMITTED);
-			AString method = Strings.create(sessions.adapterName());
-			return engine.context(engine.publicPrincipal()).via(method, ChannelAuthentication.step(engine, spec, method));
+			return carried(engine.context(engine.publicPrincipal()));
 		}
 		return engine.channelContext(spec.userDID(engine), ChannelAuthentication.authenticate(engine, spec, principal(),
 			lists.test(channel.sender()), channel));
@@ -257,7 +263,7 @@ public final class ConversationRouter {
 		AString self = principal();
 		if (!self.equals(agent.owner()) && !self.equals(agent.did())) return context();
 		sessions.requireCurrentUser();
-		return engine.context(agent.owner(), agent.did());
+		return carried(engine.context(agent.owner(), agent.did()));
 	}
 
 	/** Run an operation as the binding's own work. */

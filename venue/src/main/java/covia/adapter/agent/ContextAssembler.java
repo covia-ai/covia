@@ -1210,7 +1210,10 @@ public final class ContextAssembler {
 	 * Venue-authored provenance between turns (COG-20 §4). A {@code From} element
 	 * ({@link TurnProvenance}) precedes a user turn whose provenance key — its
 	 * caller and channel identity — differs from the last one rendered, starting
-	 * from the agent's own principal. A turn stored without a caller renders none.
+	 * from the agent's own principal. A turn of the owner chatting directly, or
+	 * the agent's own, whose route names where it started, takes none after the
+	 * start or another such turn ({@link TurnProvenance#continues}), so the
+	 * common case carries no attribution. A turn stored without a caller renders none.
 	 * The element names who asked without telling the model to trust, obey or
 	 * reject the content: authority remains a property of the configured
 	 * capabilities (#405). Nothing is ever written into the user's own text, so
@@ -1245,7 +1248,10 @@ public final class ContextAssembler {
 				}
 				TurnProvenance.Key key = TurnProvenance.key(turn);
 				if (key != null && !key.equals(last)) {
-					out = out.conj(system(TurnProvenance.element(dialect, engine, ctx, turn)));
+					// The owner chatting directly, and the agent's own turns, need no element of their own
+					if (!TurnProvenance.continues(engine, ctx, last, key)) {
+						out = out.conj(system(TurnProvenance.element(dialect, engine, ctx, turn)));
+					}
 					last = key;
 				}
 			}

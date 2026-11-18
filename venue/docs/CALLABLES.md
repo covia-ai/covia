@@ -212,16 +212,16 @@ what the target reaches by name is the owner's, within the callable's caps:
   call's frame as it stands then, so the caps must cover `invoke` on the
   operation the event runs;
 - a human it asks (`hitl:request`) is asked by the issuer, through the
-  owner's `h/`, and the request records the call's route, which names who
+  owner's `h/`, and the request records the call's route, which says who
   called through which callable;
 - a secret it uses is the owner's, as `secret/use` in its caps allows;
 - an agent it asks is asked by the issuer, and told who called through which
   callable: the call carries the invoker's request on, so its route is the
-  invoker's with the callable's step added, and that step names the callable
-  and the call's caller, the authority that called it: an agent's tool call
-  names the agent ([AGENT_CONTEXT.md](./AGENT_CONTEXT.md) §1.2). A call within a call adds a
-  step of its own, whose caller is the outer callable's issuer. Work the call
-  leaves running and rebuilds later is not the call, and has none.
+  invoker's with the callable's record added, naming the callable and
+  vouching for its issuer, after the record of whoever called: an agent's
+  tool call starts with the agent's ([AGENT_CONTEXT.md](./AGENT_CONTEXT.md) §1.2). A call within a call adds a
+  record of its own, after the outer callable's. Work the call leaves running
+  and rebuilds from its kept authority alone is not the call, and has none.
 
 ## What a call never holds
 

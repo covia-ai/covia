@@ -1415,10 +1415,10 @@ adds complexity that is not needed for the initial LLM agent.
 When an agent needs human input, `hitl:request` creates a durable Job and record
 in the target user's **request queue** at `/h/<job-id>`. From a sessioned agent
 tool call it returns `{id, status: INPUT_REQUIRED, title}` immediately. The
-record stores the verified requester, agent and session and, when something
-carried the request (an access token, a callable's call, a binding), its
-route, so a request through a token or a callable is not taken for its
-caller's own. The route is the one an agent's turn records, venue-internal and
+record stores the verified requester, agent and session and the request's
+route, where it started and each handover (an access token, a callable's
+call, a binding), so a request through a token or a callable is not taken for
+its caller's own. The route is the one an agent's turn records, venue-internal and
 not part of COG-16 ([AGENT_CONTEXT.md](AGENT_CONTEXT.md) §1.2). When the human answers,
 rejects, or the request expires, HITL resolves the Job, delivers the outcome
 with the responder's provenance, and wakes the agent. The outcome goes to the

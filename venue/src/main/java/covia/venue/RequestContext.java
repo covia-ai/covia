@@ -105,7 +105,7 @@ public class RequestContext {
 	 * What a request carries for attribution, never for authority: how a channel
 	 * binding authenticated its caller ({@link #getAuthentication}) and its route
 	 * ({@link #getRoute}). Assurance policy and access checks never read it, and
-	 * contexts the venue starts for an agent's own work carry none.
+	 * contexts the venue makes for its own work carry none.
 	 */
 	private record Carried(AMap<AString, ACell> authentication, AVector<ACell> route) {
 		/** The pair, or null when it holds nothing. */
@@ -133,27 +133,61 @@ public class RequestContext {
 	public static final AString ROUTE_ELIDED = Strings.intern("elided");
 
 	/**
-	 * What carried this request to here, one step per carrier in the order they
-	 * carried it, or null when nothing did: the request came direct. A step is
-	 * the carrying adapter's own record, naming that adapter as {@code adapter}.
+	 * Where this request started and each handover that carried it here, one
+	 * record per adapter in order, or null for a context no adapter has
+	 * stamped: one the venue makes for its own work. Each record names the
+	 * adapter that wrote it ({@code via}) and the principal it vouches for
+	 * ({@code principal}), with the adapter's own fields and text. The first
+	 * record of a request a door authenticated names its origin.
 	 * Attribution only; its shape is venue-internal (AGENT_CONTEXT.md §1.2).
 	 */
 	public AVector<ACell> getRoute() { return (carried == null) ? null : carried.route(); }
 
 	/**
-	 * This request carried one step further, by adapter {@code adapter}:
-	 * {@code step} is the adapter's own record of how it carried the request,
-	 * just enough to find its information again, never a copy of it, with whom
-	 * it carried the request for where the adapter knows (a binding's sender, a
-	 * callable's caller), and is stamped with the adapter's name. A carrier adds its step where the request
-	 * reaches it, never when work it left is rebuilt later. A route longer than
-	 * {@link #ROUTE_MAX} keeps its first {@link #ROUTE_HEAD} steps and its latest,
-	 * folding those between into one {@link #ROUTE_ELIDED} entry.
+	 * This request carried one record further, by adapter {@code adapter}: as
+	 * {@link #via(AString, AMap, RouteText)} with no text of the adapter's own.
 	 */
-	public RequestContext via(AString adapter, AMap<AString, ACell> step) {
+	public RequestContext via(AString adapter, AMap<AString, ACell> fields) {
+		return via(adapter, fields, null);
+	}
+
+	/**
+	 * This request carried one record further, by adapter {@code adapter}: the
+	 * request starts here, or is handed over to this context's principal. The
+	 * record is {@code fields}, the adapter's own record of how it carried the
+	 * request, just enough to find its information again, never a copy of it,
+	 * and {@code text}, what the agent is told of it beyond the adapter's name
+	 * and the principal ({@link RouteText}); the venue stamps it with the
+	 * adapter's name as {@code via} and this context's principal as
+	 * {@code principal}, whom the record vouches for. What the adapter records
+	 * and says is its own choice. An adapter adds its record where the request
+	 * reaches it. A route longer than {@link #ROUTE_MAX} keeps its first
+	 * {@link #ROUTE_HEAD} records and its latest, folding those between into one
+	 * {@link #ROUTE_ELIDED} entry.
+	 */
+	public RequestContext via(AString adapter, AMap<AString, ACell> fields, RouteText text) {
+		AVector<ACell> route = appended(getRoute(), routeRecord(adapter, getAuthorityDID(), fields, text));
+		return withRoute(route);
+	}
+
+	/**
+	 * The route record adapter {@code adapter} writes vouching for
+	 * {@code principal} ({@link #via}): {@code fields} stamped with the adapter's
+	 * name and the principal, and {@code text} when there is one. The venue
+	 * writes a record this way where it hands an agent a message no request
+	 * carried, such as a tracked call's outcome.
+	 */
+	public static AMap<AString, ACell> routeRecord(AString adapter, AString principal, AMap<AString, ACell> fields,
+			RouteText text) {
 		java.util.Objects.requireNonNull(adapter, "adapter");
-		java.util.Objects.requireNonNull(step, "step");
-		AVector<ACell> route = appended(getRoute(), step.assoc(covia.api.Fields.ADAPTER, adapter));
+		java.util.Objects.requireNonNull(fields, "fields");
+		AMap<AString, ACell> record = fields.dissoc(covia.api.Fields.ADAPTER).dissoc(covia.api.Fields.TEXT)
+			.assoc(covia.api.Fields.VIA, adapter).assoc(covia.api.Fields.PRINCIPAL, principal);
+		return (text == null) ? record : record.assoc(covia.api.Fields.TEXT, text.parts());
+	}
+
+	/** This context with {@code route} as its route, or none for null: work that carries a request on keeps its route. */
+	RequestContext withRoute(AVector<ACell> route) {
 		return new RequestContext(authority, executionScope, rawUcans, op, cancellation,
 			invocationInput, gate, gateEvaluation, job, cycle, sessionDelivery, Carried.of(getAuthentication(), route), origin, caller, scopeSource);
 	}
@@ -254,9 +288,35 @@ public class RequestContext {
 	public static final RequestContext ANONYMOUS =
 		new RequestContext(Authority.ANONYMOUS, null);
 
+	/**
+	 * A context for {@code authority} with {@code origin}: a request an
+	 * in-process caller makes for that principal starts where it signed in, so
+	 * its route's first record is a sign-in vouching for the origin
+	 * ({@link #getRoute}). One with no origin, which the venue makes for its own
+	 * work, has no route.
+	 */
 	private RequestContext(Authority authority, AString origin) {
 		this(authority, new ExecutionScope(authority.getUserDID(), null, null, null, null, -1L, null),
-			null, null, null, null, null, false, null, null, null, null, origin, null, null);
+			null, null, null, null, null, false, null, null, null,
+			(origin == null) ? null : Carried.of(null, Vectors.of(routeRecord(SIGN_IN, origin, convex.core.data.Maps.empty(), SIGNED_IN))),
+			origin, null, null);
+	}
+
+	/** The adapter whose record starts a request a door, or an in-process caller, authenticated. */
+	static final AString SIGN_IN = Strings.intern(covia.adapter.AuthAdapter.NAME);
+	/** What a sign-in's record says of a principal that signed in. */
+	static final RouteText SIGNED_IN = RouteText.of("signed in");
+	/** What a sign-in's record says of the venue's public principal: an anonymous caller. */
+	static final RouteText NOT_SIGNED_IN = RouteText.of("not signed in");
+
+	/**
+	 * A context the venue makes for {@code callerDID} itself, in the namespace
+	 * of {@code userDID} under {@code caps}: no origin, since nobody is present,
+	 * and no route ({@link Engine#context(AString)}).
+	 */
+	static RequestContext unattended(AString callerDID, AString userDID, AVector<ACell> caps) {
+		if (callerDID == null) return ANONYMOUS;
+		return new RequestContext(Authority.of(callerDID, userDID, caps), null);
 	}
 
 	private RequestContext(Authority authority, ExecutionScope executionScope,
@@ -331,7 +391,8 @@ public class RequestContext {
 	 * enforce whatever scope the context carries.</p>
 	 *
 	 * <p>The host making it vouches that {@code callerDID} is present: it is
-	 * the context's origin ({@link #getOrigin()}).</p>
+	 * the context's origin ({@link #getOrigin()}), and its route starts with a
+	 * sign-in vouching for it ({@link #getRoute()}).</p>
 	 */
 	public static RequestContext of(AString callerDID) {
 		if (callerDID == null) return ANONYMOUS;

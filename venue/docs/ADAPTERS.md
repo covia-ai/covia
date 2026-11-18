@@ -1230,6 +1230,17 @@ are bounded and in memory, so a restart loses only messages not yet collected.
 9. Add unit/functional tests and, for a module, a load/unload integration test
    against the packaged module jar.
 
+An adapter that starts a request or hands one to another principal, as a
+binding, an access token or a callable does, records that on the request's
+route with `RequestContext.via(name, fields, text)`. The venue stamps the
+record with the adapter's name and the principal it vouches for, the
+context's own; `fields` is the adapter's record of how it carried the request,
+just enough to find its information again, and `text` (`RouteText`) is what an
+agent the request reaches is told of it beyond that, built from fixed wording
+and parts whose shape the venue checks when it shows them. What to record and
+say is the adapter's choice; who the principal is, and whether it is the
+agent's owner, is the venue's ([AGENT_CONTEXT.md](AGENT_CONTEXT.md) §1.2).
+
 Operation metadata should describe inputs and outputs precisely enough for
 schema validation and agent tool use:
 

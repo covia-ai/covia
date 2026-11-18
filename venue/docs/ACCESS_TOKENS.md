@@ -38,10 +38,11 @@ there, so it serves only to exercise the rules with a second access point.
   gone. An agent's harness acts with all of its controller's authority, which
   no caps bound, so only an unrestricted token's request creates or forks an
   agent, and that agent is its issuer's.
-- **What an agent is told.** A request through a token is carried by it: the
-  token is a step of the request's route, so a message or task it sends an
-  agent records that beside its caller, and the agent's `From` line names the
-  token ([AGENT_CONTEXT.md](./AGENT_CONTEXT.md) §1.2). Work the token started
+- **What an agent is told.** A request through a token starts with it: the
+  token's record is the first of the request's route, vouching for its
+  issuer, so a message or task it sends an agent records that beside its
+  caller, and the agent's `From` line names the token and says the venue does
+  not know who holds it ([AGENT_CONTEXT.md](./AGENT_CONTEXT.md) §1.2). Work the token started
   that runs later, such as a scheduled fire, is a request of its own and does
   not name it, though the token still narrows it. The bearer is never
   recorded.
