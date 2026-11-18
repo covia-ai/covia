@@ -140,7 +140,9 @@ invoker's and takes the target's input directly, and the target runs beneath
 it in the issuer's frame. As an operation it is named after the callable,
 which is also its tool name, carries the callable's description or else the
 target's, and declares the target's input and output schemas and the fields
-its job records hide (`secretFields`).
+its job records hide (`secretFields`). Its adapter is `callable:invoke`, which
+calls the callable whose path is its `operation.callable`, admitting each call
+as `callable:call` does, however the definition was reached.
 
 - **Invoking it** needs `invoke` on the path, as invoking any operation by
   its path does; a tool an agent or MCP token offers needs none, as for any

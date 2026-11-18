@@ -558,7 +558,7 @@ public class CallableAdapterTest {
 	}
 
 	@Test
-	public void aCallableIsInvokedAsAnOperationByItsPath(TestInfo info) {
+	public void aCallableIsInvokedAsAnOperationByItsPath(TestInfo info) throws Exception {
 		AString alice = TestEngine.uniqueDID(info);
 		AString bob = TestEngine.uniqueDID("bob-" + info.getDisplayName());
 		AString carol = TestEngine.uniqueDID("carol-" + info.getDisplayName());
@@ -586,9 +586,13 @@ public class CallableAdapterTest {
 		String refused = failure(run(guestbook, append("w/guestbook", "from Carol"), RequestContext.of(carol)));
 		assertTrue(refused.contains(CallableAdapter.NOT_A_CALLER.formatted(carol)), refused);
 
-		// Wherever an operation is named: grid:run, an orchestration's step, strict or not
+		// Wherever an operation is named: grid:run, a run, a scheduled event, an orchestration's step, strict or not
 		complete(run("v/ops/grid/run", Maps.of(Fields.OPERATION, guestbook, Fields.INPUT,
 			append("w/guestbook", "through grid:run")), bobs));
+		engine.jobs().runOperation(Strings.create(guestbook), append("w/guestbook", "through a run"), bobs).get(10, TimeUnit.SECONDS);
+		ACell handle = RT.getIn(complete(run("v/ops/scheduler/schedule", Maps.of(Fields.OPERATION, guestbook,
+			Fields.INPUT, append("w/guestbook", "when scheduled"), "after", 3_600_000L), bobs)), "handle");
+		complete(run("v/ops/scheduler/trigger", Maps.of("handle", handle), bobs));
 		for (boolean strict : new boolean[] {false, true}) {
 			AMap<AString, ACell> step = Maps.of("op", guestbook, Fields.INPUT, Maps.of(
 				Fields.PATH, Vectors.of("const", "w/guestbook"), Fields.VALUE, Vectors.of("const", "from a step")));
@@ -601,7 +605,8 @@ public class CallableAdapterTest {
 
 		// The owner invokes its own by the bare path, which resolves in its namespace
 		complete(run("x/callable/guestbook", append("w/guestbook", "from Alice"), owner));
-		assertEquals(Vectors.of("by path", "through grid:run", "from a step", "from a step", "from Alice"), held(alice, "w/guestbook"));
+		assertEquals(Vectors.of("by path", "through grid:run", "through a run", "when scheduled", "from a step", "from a step",
+			"from Alice"), held(alice, "w/guestbook"));
 
 		// Reading the path is unchanged: the owner's view of the callable
 		assertEquals(Strings.create("v/ops/covia/append"), RT.getIn(complete(run("v/ops/covia/read",
