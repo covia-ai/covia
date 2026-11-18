@@ -869,8 +869,8 @@ agent would see:
 
 | Dialect | Alice, after another source | Open-bot sender |
 |---------|-----------------------------|-----------------|
-| `bracket` | `[From (venue-verified): your owner did:key:z6MkAlice via auth (signed in)]` | `[From (venue-verified): an anonymous caller, not your owner, via telegram (your owner's binding "helper", sender 5551 @sam, direct chat 5551)]` |
-| `xml` | `<from verified="venue">your owner did:key:z6MkAlice via auth (signed in)</from>` | `<from verified="venue">an anonymous caller, not your owner, via telegram (your owner's binding "helper", sender 5551 @sam, direct chat 5551)</from>` |
+| `bracket` | `[From (venue-verified): your owner via auth (signed in)]` | `[From (venue-verified): an anonymous caller, not your owner, via telegram (your owner's binding "helper", sender 5551 @sam, direct chat 5551)]` |
+| `xml` | `<from verified="venue">your owner via auth (signed in)</from>` | `<from verified="venue">an anonymous caller, not your owner, via telegram (your owner's binding "helper", sender 5551 @sam, direct chat 5551)</from>` |
 
 The outstanding-task message renders its requester the same way.
 

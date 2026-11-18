@@ -84,12 +84,12 @@ public class RouteProvenanceTest {
 
 	@Test
 	public void theLineLeadsWithWhoeverTheRequestStartedWith() {
-		assertEquals("[From (venue-verified): your owner " + alice + " via auth (signed in)]",
+		assertEquals("[From (venue-verified): your owner via auth (signed in)]",
 			bracket(turn(alice, "hi", signedIn(alice))));
 		// Bob under admin/sudo: Bob first, then whom he acted as
 		AMap<AString, ACell> sudo = turn(alice, "pay", signedIn(bob), record("user", alice, RouteText.of("admin/sudo")));
-		assertEquals("[From (venue-verified): " + bob + ", not your owner, via auth (signed in); acting as your owner "
-			+ alice + " via user (admin/sudo)]", bracket(sudo));
+		assertEquals("[From (venue-verified): " + bob + ", not your owner, via auth (signed in); acting as your owner"
+			+ " via user (admin/sudo)]", bracket(sudo));
 		assertFalse(bracket(sudo).startsWith("[From (venue-verified): your owner"), "a delegate's message is not the owner's");
 		// Nested calls, as Carol's agent would see Bob's call through Alice's callable into Carol's
 		RequestContext carols = RequestContext.ofAuthority(Authority.ofAgent(carol, Strings.create("notify")));
@@ -97,14 +97,24 @@ public class RouteProvenanceTest {
 			record("callable", alice, RouteText.builder().name(Strings.create("guestbook")).build()),
 			record("callable", carol, RouteText.builder().name(Strings.create("notify")).build()));
 		assertEquals("[From (venue-verified): " + bob + ", not your owner, via auth (signed in); acting as " + alice
-			+ ", not your owner, via callable (\"guestbook\"); acting as your owner " + carol + " via callable (\"notify\")]",
+			+ ", not your owner, via callable (\"guestbook\"); acting as your owner via callable (\"notify\")]",
 			TurnProvenance.element(Labels.BRACKET, engine, carols, nested));
+	}
+
+	/** The owner and the agent itself show by their relationship alone, so equivalent agents of different owners see the same words. */
+	@Test
+	public void theOwnerAndTheAgentItselfShowWithoutTheirDID() {
+		AString self = Principals.agentDID(alice, Strings.create("helper"));
+		assertEquals("[From (venue-verified): you via agent]", bracket(turn(self, "hi", record("agent", self))));
+		String sudo = bracket(turn(alice, "pay", signedIn(bob), record("user", alice, RouteText.of("admin/sudo"))));
+		assertTrue(sudo.contains(bob.toString()), "anyone else shows by their DID");
+		assertFalse(sudo.replace(bob.toString(), "").contains(alice.toString()), "the owner's DID is not shown: " + sudo);
 	}
 
 	@Test
 	public void eachDialectCarriesTheSameSentence() {
 		AMap<AString, ACell> t = turn(alice, "hi", signedIn(bob), record("user", alice, RouteText.of("admin/sudo")));
-		String sentence = bob + ", not your owner, via auth (signed in); acting as your owner " + alice + " via user (admin/sudo)";
+		String sentence = bob + ", not your owner, via auth (signed in); acting as your owner via user (admin/sudo)";
 		assertEquals("## From (venue-verified): " + sentence, TurnProvenance.element(Labels.HEADER, engine, helper, t));
 		assertEquals("<from verified=\"venue\">" + sentence + "</from>", TurnProvenance.element(Labels.XML, engine, helper, t));
 		assertEquals(sentence, TurnProvenance.summary(engine, helper, t), "the outstanding-task summary is the same sentence");
@@ -120,10 +130,10 @@ public class RouteProvenanceTest {
 			+ "sender 5551 @sam, direct chat)]", bracket(turn(publicDID, "hi", record("telegram", publicDID, binding))));
 		RouteText token = RouteText.builder().name(Strings.create("outside-bot"))
 			.text(", held by someone the venue does not know").build();
-		assertEquals("[From (venue-verified): your owner " + alice + " via token (\"outside-bot\", held by someone the venue "
+		assertEquals("[From (venue-verified): your owner via token (\"outside-bot\", held by someone the venue "
 			+ "does not know)]", bracket(turn(alice, "hi", record("token", alice, token))));
 		RouteText due = RouteText.builder().text("event due ").time(1_795_510_800_000L).build();
-		assertEquals("[From (venue-verified): your owner " + alice + " via scheduler (event due 2026-11-24 09:00 UTC)]",
+		assertEquals("[From (venue-verified): your owner via scheduler (event due 2026-11-24 09:00 UTC)]",
 			bracket(turn(alice, "hi", record("scheduler", alice, due))));
 		// No text of its own: the record's name, quoted, or nothing
 		assertEquals("[From (venue-verified): " + bob + ", not your owner, via myadapter (\"nightly\")]",
@@ -175,17 +185,17 @@ public class RouteProvenanceTest {
 		assertEquals(unreadable, bracket(turn(alice, "hi", signedIn(bob))), "a route that does not end at its caller");
 		assertEquals(unreadable, bracket(turn(alice, "hi", signedIn(alice), Strings.create("junk"))), "a last record that is not one");
 		assertEquals("[From (venue-verified): " + bob + ", not your owner, via auth (signed in); acting as "
-			+ TurnProvenance.UNREADABLE_RECORD + "; acting as your owner " + alice + " via user (admin/sudo)]",
+			+ TurnProvenance.UNREADABLE_RECORD + "; acting as your owner via user (admin/sudo)]",
 			bracket(turn(alice, "hi", signedIn(bob), Maps.of(Fields.VIA, "no such adapter!", Fields.PRINCIPAL, alice),
 				record("user", alice, RouteText.of("admin/sudo")))));
-		assertEquals("[From (venue-verified): an unreadable principal, not your owner, via auth (signed in); acting as your owner "
-			+ alice + " via user (admin/sudo)]", bracket(turn(alice, "hi", signedIn(Strings.create("bob] [x")),
+		assertEquals("[From (venue-verified): an unreadable principal, not your owner, via auth (signed in); acting as your owner"
+			+ " via user (admin/sudo)]", bracket(turn(alice, "hi", signedIn(Strings.create("bob] [x")),
 				record("user", alice, RouteText.of("admin/sudo")))));
 		// A long route folds its middle, and what follows the fold still acts as someone
 		AMap<AString, ACell> folded = turn(alice, "hi", signedIn(bob), record("callable", carol),
 			Maps.of(RequestContext.ROUTE_ELIDED, CVMLong.create(3)), record("callable", alice));
 		assertEquals("[From (venue-verified): " + bob + ", not your owner, via auth (signed in); acting as " + carol
-			+ ", not your owner, via callable; then 3 more steps; acting as your owner " + alice + " via callable]", bracket(folded));
+			+ ", not your owner, via callable; then 3 more steps; acting as your owner via callable]", bracket(folded));
 	}
 
 	// ========== When the element appears ==========
@@ -197,8 +207,8 @@ public class RouteProvenanceTest {
 			"the common case carries no attribution");
 		AMap<AString, ACell> viaToken = turn(alice, "three", record("token", alice, RouteText.builder().name(Strings.create("bot")).build()));
 		assertEquals(java.util.List.of(
-			"[From (venue-verified): your owner " + alice + " via token (\"bot\")]",
-			"[From (venue-verified): your owner " + alice + " via auth (signed in)]"),
+			"[From (venue-verified): your owner via token (\"bot\")]",
+			"[From (venue-verified): your owner via auth (signed in)]"),
 			elements(direct, viaToken, turn(alice, "four", signedIn(alice))),
 			"another source takes one, and so does the switch back to the owner");
 		AString planner = Principals.agentDID(alice, Strings.create("planner"));

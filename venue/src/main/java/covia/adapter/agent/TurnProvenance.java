@@ -491,7 +491,9 @@ final class TurnProvenance {
 	 * {@code principal} as a sentence names it: the agent's owner, the agent
 	 * itself, an agent of the owner or of another, the venue, an anonymous
 	 * caller or another principal, each but the owner marked as not the owner.
-	 * The venue's public principal is never the owner. A principal a door
+	 * The venue's public principal is never the owner. The owner and the agent
+	 * itself show without their DID, as the older element shows them, so
+	 * equivalent agents of different owners see the same words. A principal a door
 	 * authenticated ({@code signedIn}) is named by its DID alone, since a DID's
 	 * shape says nothing of whose agent it is; elsewhere the venue recorded the
 	 * principal itself.
@@ -501,8 +503,8 @@ final class TurnProvenance {
 		if (did == null) return "an unreadable principal, " + NOT_OWNER;
 		if (engine != null && engine.isPublicPrincipal(principal)) return "an anonymous caller, " + NOT_OWNER;
 		AString owner = ownerOf(ctx);
-		if (principal.equals(agentOf(ctx)) && !principal.equals(owner)) return "you (" + did + ")";
-		if (principal.equals(owner)) return "your owner " + did;
+		if (principal.equals(agentOf(ctx)) && !principal.equals(owner)) return "you";
+		if (principal.equals(owner)) return "your owner";
 		if (engine != null && engine.isVenuePrincipal(principal)) return "the venue " + did + ", " + NOT_OWNER;
 		AString agentId = signedIn ? null : Principals.agentIdOf(principal);
 		String shownId = (agentId == null) ? null : encoded(agentId.toString());

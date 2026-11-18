@@ -322,12 +322,12 @@ time. Each record shows in order, the first as whoever the request started
 with and each later one as whom it then acted as:
 
 ```
-[From (venue-verified): did:key:…bob, not your owner, via auth (signed in); acting as your owner did:key:…alice via user (admin/sudo)]
+[From (venue-verified): did:key:…bob, not your owner, via auth (signed in); acting as your owner via user (admin/sudo)]
 ```
 
-The venue writes each principal: `your owner`, or who it is and `not your
-owner` (an agent of the owner or of another user, the venue, an anonymous
-caller, or another principal by its DID). A principal shows as an agent only
+The venue writes each principal: `your owner` or `you`, without their DID as
+above, or who it is and `not your owner` (an agent of the owner or of another
+user, the venue, an anonymous caller, or another principal by its DID). A principal shows as an agent only
 where the venue recorded it, never from the shape of a DID a door
 authenticated, and the public principal is never the owner. Then `via` and
 the adapter's name, then the adapter's text in brackets: each part shows only
