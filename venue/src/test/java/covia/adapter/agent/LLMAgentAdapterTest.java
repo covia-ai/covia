@@ -767,7 +767,7 @@ public class LLMAgentAdapterTest {
 
 	@Test
 	public void testACycleIsToldItsSession() {
-		// The report-back handle: a sessioned cycle's system prompt names its
+		// The report-back handle: a sessioned cycle's tail names its
 		// session id, so the agent can schedule agent:request {sessionId}
 		// back into this conversation. A live cycle and an inspection of the
 		// session's context both take it from the context they run under.
@@ -782,6 +782,9 @@ public class LLMAgentAdapterTest {
 			ACell chat = engine.jobs().invokeOperation("v/ops/agent/chat",
 				Maps.of(Fields.AGENT_ID, agentId, Fields.MESSAGE, "hello"), alice).awaitResult(15000);
 			String line = "Session: " + RT.getIn(chat, Fields.SESSION_ID);
+			assertFalse(String.valueOf(RT.getIn(TestAdapter.CAPTURED_LLM_INPUT.get(agentId),
+				Fields.MESSAGES, 0L, Fields.CONTENT)).contains(line),
+				runtime + ": the session handle must not enter the shared head");
 
 			assertTrue(String.valueOf(TestAdapter.CAPTURED_LLM_INPUT.get(agentId)).contains(line),
 				runtime + ": a live cycle is told its session");

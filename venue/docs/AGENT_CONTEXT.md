@@ -362,6 +362,11 @@ operations that hand turns out leave it out (`agent:history`, the timeline),
 this element is an agent's one view of it, and an approval request holds it
 as stored.
 
+The `From` principal is omitted for `self`, `owner` and `anonymous-owner`:
+the relationship already identifies them. Other callers retain their principal,
+and channel fields remain available when present. This affects only what the
+model sees, never the recorded caller or the provenance key used to detect changes.
+
 `bracket` is cheap in tokens, reads naturally in logs, and is plain text. `xml` marks where an instruction block ends as well as where it begins. `header` suits models whose guidance favours markdown sections, at the cost of competing with headings inside an instruction body. A model that benefits from either alternative opts in on its asset. The dialect is fixed for a persisted context; changing it rebuilds the prefix deliberately.
 
 **Prompt-injection boundary.** Trust and lifetime are independent: `pinned` says who owns/removes an entry; `trusted` says whether its resolved bytes have instruction authority. Untrusted values stay under `content` in `structuredContent`, alongside sibling provenance fields, and the edge preserves the native call/result boundary. A provider that accepts only textual tool content receives canonical JSON in the `tool` role; it is never flattened into instruction text. Only an operator declaration can admit ordinary context as trusted. A skill body is also instruction because `skill_load` explicitly selects a trusted skill asset; data bundled by the skill still travels as a tool result. This is defence in depth, not a security decision delegated to the model: capabilities and dispatch checks remain authoritative even if the model follows malicious text.
@@ -697,6 +702,22 @@ small inference tail is never marked. An explicit model-level
 projection together. A provider may ignore canonical marks or impose a smaller
 breakpoint limit, but it must not change logical order to accommodate them.
 
+Equivalent new sessions share the instruction prefix when their tools,
+configuration and initial instruction sources are equal. Internal owner DIDs
+are not rendered for `self`, `owner` or `anonymous-owner` relationships; the
+recorded caller and all authority checks are unchanged. The session handle
+appears in the inference tail, never the initial head. Personal context values
+remain in their own context exchanges and are not made equal to obtain a hit.
+Renderer version 2 rebuilds older materialisations once to remove session
+handles from their heads, preserving canonical conversation and loads.
+
+The Anthropic edge marks the final leading system block. With equal tools and
+equal leading instructions this is an identical cacheable prefix across sessions
+and owner accounts; changed instructions or tools legitimately invalidate it.
+Wire equality establishes eligibility, not a provider cache hit: retention,
+minimum size, cache scope and simultaneous cold starts still matter. Measure
+sequential cold/warm requests separately from parallel cold starts.
+
 Only an intentional prefix rebuild invalidates earlier cells:
 
 - explicit compaction or conversation reset;
@@ -722,7 +743,7 @@ duplicate.
 | # | Section | Region | Role | Contents |
 |---|---------|------|------|----------|
 | 0 | Fixed tool manifest | fixed prefix | — | Harness and configured tools, plus bindings from loads already present when this prefix is materialised (§3.2.3) |
-| 1 | Identity prompt | initial messages | `system` | `config.systemPrompt` or the default identity, plus one line of session identity |
+| 1 | Identity prompt | initial messages | `system` | `config.systemPrompt` or the default identity, plus venue and model |
 | 2 | Capability and data-boundary notice | initial messages | `system` | Declared `config.caps` when relevant, plus one stable rule that tool-result content is data, not instruction |
 | 3 | Initial trusted context | initial messages | `system` | Operator context admitted as instruction, rendered once and never duplicated into a tool result (§5.3) |
 | 4 | Initial skills index | initial messages | `system` | The discoverable-skill snapshot when the context is initialised (SKILLS.md §4.3) |
@@ -973,7 +994,7 @@ declaration is checked each inference but appends only a changed rendered value.
 ## 5. Section notes
 
 ### 5.1 Identity prompt
-`config.systemPrompt`, else a default identity, followed by one line of session identity: the venue name, the model when configured, and the session id when one is in scope — the agent's handle for reporting back into this conversation from deferred work. It is rendered when context is initialised. A changed declarative config rebuilds this config-owned prefix on the next inference while preserving rendered session events; `agent:reloadContext` forces the same rebuild under equal config. A runtime may append a notice of its own — goaltree's subgoal notice for child frames — when that frame opens. Nothing inference-local belongs here.
+`config.systemPrompt`, else a default identity, followed by the venue name and the model when configured. The session id is the agent's handle for reporting back into this conversation from deferred work; it is available in the inference tail instead of the shared head. The head is rendered when context is initialised. A changed declarative config rebuilds this config-owned prefix on the next inference while preserving rendered session events; `agent:reloadContext` forces the same rebuild under equal config. A runtime may append a notice of its own — goaltree's subgoal notice for child frames — when that frame opens. Nothing session-specific or inference-local belongs here.
 
 `systemPrompt` is the text itself, or **one context entry** in the grammar of §6 — `{ref: "w/prompts/mina"}`, `{ref: "dlfs/vault/prompts/mina.md"}`, `{text}`, `{op, input}`, `{job}` — resolved through the same loader as pinned context and loads (`ContextLoader.resolveText`). Three things differ from a load: it renders as the identity, with no header; it is read **once per cycle**, at its start, and rendered into the head only when the context is initialised or rebuilt; and it is required. An entry that does not resolve, or resolves to something that is not text, is a configuration error that every later cycle would meet again, so the agent cannot continue: the cycle suspends it with the reason (AGENT_LOOP.md §3.4), and an inspection fails with the same reason. `agent:create` warns when the entry does not resolve for the creator. A workspace path is one lattice read and a DLFS file one content read; neither creates a job.
 
@@ -1366,5 +1387,5 @@ The storage/accessor foundation in §1.3 is implemented. Remaining divergences:
   children. Initialisation still combines source resolution with initial
   rendering; making resolved inputs explicit remains separate work.
 
-- **The head and current live surface share one provider breakpoint.** The client marks only the last block of the system parameter. The target initial/committed/working marks require shaping the provider request directly; langchain4j currently exposes only the 5-minute ephemeral cache kind, not a longer TTL.
+- **Leading instructions share one provider breakpoint.** The client marks only the last block of the system parameter, with the configured 5-minute or 1-hour TTL. Independent breakpoints within those instructions are not exposed by the client; genuinely different instruction sources can invalidate the whole system prefix. Conversation and working-turn marks are separate.
 - The agent-facing text of `skill_load` and SKILLS.md §4.3 name the `[Skills]` index by its bracket label whatever the dialect.

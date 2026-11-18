@@ -80,6 +80,9 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - `archive:list` and `archive:extract` read a zip stored in a DLFS drive instead of failing as a venue fault.
 - `archive:extract` checks each file it writes against its root as `file:write` does, following links.
 - A write to a symbolic link in a host root fails as bad input rather than as a venue fault.
+
+- Equivalent agent sessions reuse the same instruction prefix: internal owner identifiers are omitted from model-facing attribution, and the session handle stays available outside the cached head (#715).
+
 - LLM tools preserve capability-array unions and arbitrary JSON values instead of advertising them as objects, enabling agents to create scoped MCP tokens.
 - Generic MCP tool calls declare their required tool name and arguments for agent discovery.
 - MCP token schemas describe each capability's resource and single ability, including optional caveats.

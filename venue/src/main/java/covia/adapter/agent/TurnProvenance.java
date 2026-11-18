@@ -62,6 +62,12 @@ final class TurnProvenance {
 		boolean namesAgent() {
 			return this == SIBLING_AGENT || this == VENUE_AGENT || this == OTHER_AGENT;
 		}
+
+		/** The relationship already identifies self and the agent's own user.
+		 * Their internal principal stays in the recorded turn, not the prompt. */
+		boolean namesPrincipal() {
+			return this != SELF && this != OWNER && this != ANONYMOUS_OWNER && this != UNKNOWN;
+		}
 	}
 
 	/** Ids, names of what carried a request, and adapter names render only in this shape; anything else is left out. */
@@ -314,7 +320,7 @@ final class TurnProvenance {
 		Relationship relationship = relationship(engine, ctx, caller);
 		AString agentId = relationship.namesAgent() ? Principals.agentIdOf(caller) : null;
 		List<String> attributes = new ArrayList<>();
-		if (relationship != Relationship.UNKNOWN) attributes.addAll(List.of("principal", shownDid(caller)));
+		if (relationship.namesPrincipal()) attributes.addAll(List.of("principal", shownDid(caller)));
 		attributes.addAll(List.of("relationship", relationship.token));
 		if (agentId != null) attributes.addAll(List.of("agent", encoded(agentId.toString())));
 		List<Segment> route = route(turn);
@@ -341,7 +347,7 @@ final class TurnProvenance {
 		StringBuilder sb = new StringBuilder(relationship.words);
 		if (relationship != Relationship.UNKNOWN) {
 			if (agentId != null) sb.append(' ').append(encoded(agentId.toString()));
-			sb.append(' ').append(shownDid(caller));
+			if (relationship.namesPrincipal()) sb.append(' ').append(shownDid(caller));
 		}
 		for (Segment segment : route) segment.describe(sb, agentOwner);
 		return sb.toString();
