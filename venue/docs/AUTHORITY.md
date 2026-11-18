@@ -164,14 +164,19 @@ A scheduled event is reached by capability on `<account>/x/schedule/<id>`:
 it ([GRID_SCHEDULER.md](GRID_SCHEDULER.md)). Having scheduled an event grants
 nothing, as having started a job does not.
 
-A record the venue keeps for itself, such as a job, a scheduled event, an
-approval request or a timeline entry, leaves out a principal that is the
-account it is kept in, since where it is kept says so. A missing principal
+A record of a call the venue keeps in an account, a job, its mirror or an
+approval request, leaves out a principal that is the account it is kept in,
+since where it is kept says so. A missing principal
 means that account wherever the record is read against the structure that
 holds it: a lattice read, a copy, an export or a clone carries it as stored, so
 a clone's records are the clone's. A response that hands a client one record
 on its own, such as a job's status, names the principal in full, since the
-client has no account to read it against. Data a user writes is stored as given: the venue neither
+client has no account to read it against. A scheduled event, kept
+venue-wide, names its caller. An agent's own records, its task rows, session
+turns and timeline entries, always name their caller: there a missing caller
+means a turn recorded before callers were kept, and `agent:fork` copies an
+agent's history into another account, where a caller left out would read as
+the new owner. Data a user writes is stored as given: the venue neither
 leaves anything out of it nor fills anything in, since such data is more
 likely to be copied between places.
 
