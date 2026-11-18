@@ -147,7 +147,9 @@ All fields are optional. Missing fields get platform defaults.
 > description, and input schema. A definition that is missing or unreadable is
 > omitted from the provider palette and reported in `agent:create` warnings
 > and the model's assembled context. Shared
-> `v/ops/...` catalog metadata remains publicly discoverable.
+> `v/ops/...` catalog metadata remains publicly discoverable. A callable's
+> path is not read: it is offered while the agent may call the callable
+> ([CALLABLES.md](CALLABLES.md#invoking-a-callable-by-its-path)).
 
 > **Tools on another venue depend on that venue.** A tool may name another
 > venue's operation by DID URL (`did:web:other.host/v/ops/...`, or

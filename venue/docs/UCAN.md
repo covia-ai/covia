@@ -1335,8 +1335,10 @@ subtree, such as `o/reports` or `did:web:publisher.example/o/reports`.
 Reading a private definition is a separate check. A binding in `config.tools`
 must be readable so the runtime can obtain its metadata; an invocation grant
 alone does not make that metadata readable. Venue catalog definitions under
-`v/ops` are public. Hash references are checked in the form supplied: a grant
-on `o/reports` does not follow a hash or another alias to the same definition.
+`v/ops` are public. A callable's path is not read but called
+([CALLABLES.md](CALLABLES.md#invoking-a-callable-by-its-path)). Hash
+references are checked in the form supplied: a grant on `o/reports` does not
+follow a hash or another alias to the same definition.
 An internal call already bound to a definition does not gain arbitrary lookup
 authority from that definition or from its recorded `op` field.
 

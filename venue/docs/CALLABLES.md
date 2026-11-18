@@ -129,6 +129,34 @@ from the owner.
   `x/callable/<name>`, or `<ownerDID>/x/callable/<name>`. **`input`** is the
   target's input.
 
+### Invoking a callable by its path
+
+A callable's path, `<ownerDID>/x/callable/<name>`, or `x/callable/<name>` for
+one in the namespace of the request's authority, is an operation reference
+wherever one is accepted: `/invoke` and `/run`, `grid:run`, an orchestration's
+steps, an agent's tools, an MCP token's tools and a scheduled event's
+operation. Invoking it runs its call as `callable:call` does: the job is the
+invoker's and takes the target's input directly, and the target runs beneath
+it in the issuer's frame. As an operation it is named after the callable,
+which is also its tool name, carries the callable's description or else the
+target's, and declares the target's input and output schemas and the fields
+its job records hide (`secretFields`).
+
+- **Invoking it** needs `invoke` on the path, as invoking any operation by
+  its path does; a tool an agent or MCP token offers needs none, as for any
+  tool.
+- **The call** is admitted as `callable:call` admits it (decision 5).
+  Resolving the path admits as much as is known before the input: a caller
+  that does not hold `callable/call` on the callable and may not pass its
+  gate finds no operation there, and is refused as for any reference that
+  resolves to nothing, so a private callable is not revealed. The gate runs on
+  the call's input once its job starts.
+- **Reading the path** (`covia:read`) still reads the callable's view: only
+  resolving an operation reference resolves it as an operation.
+- **A callable whose target is another callable's path** declares that
+  callable's target's schemas. Callables whose targets lead back to one of
+  them resolve to no operation.
+
 ### The view
 
 `x/callable` is the adapter's read-only view for a user
@@ -259,9 +287,11 @@ it (decision 5). Nothing yet bounds how deep calls nest
 
 ## How a call runs
 
-1. **Resolve** `callable` to its record. A callable that does not exist, and
-   one with no gate whose `callable/call` the caller does not hold, are refused
-   alike, so a private callable is not revealed.
+1. **Resolve** the callable, named by `callable:call`'s `callable` or by the
+   path invoked, to its record. A callable that does not exist, and one whose
+   `callable/call` the caller does not hold and whose gate it may not pass, are
+   refused alike, so a private callable is not revealed: as a missing callable
+   by `callable:call`, and as a missing operation by its path.
 2. **Admit** the caller: its authority covers `callable/call` on the
    callable's resource, or its narrowing covers that and the gate, run with
    the callable's authority, succeeds. A gate's refusal is returned with its
@@ -285,9 +315,10 @@ callable:create {
   caps: [{with: "<venueDID>/python/operations/health/score", can: "admin/execute/python"}],
   gate: "v/ops/callable/gates/anyone"
 }
-
-callable:call { callable: "<venueDID>/x/callable/health-score", input: {...} }
 ```
+
+Anyone then invokes `<venueDID>/x/callable/health-score` with the function's
+input, as any operation is invoked.
 
 **A user's guestbook.** Alice lets her friends append to one list and nothing
 else:
@@ -306,19 +337,18 @@ callable:call { callable: "<aliceDID>/x/callable/guestbook",
 
 The path resolves in Alice's namespace, and the caps refuse any other.
 
-**A callable as a tool.** A callable is not an operation reference, so an MCP
-token or an agent offers `v/ops/callable/call` as the tool, and the client
-names the callable. Bob offers Alice's guestbook to a client of his:
+**A callable as a tool.** An MCP token or an agent offers a callable's path
+as a tool, named after the callable and taking its target's input. Bob offers
+Alice's guestbook to a client of his:
 
 ```
 mcp:create-token {
   name: "guestbook",
-  tools: [{operation: "v/ops/callable/call", name: "guestbook"}],
+  tools: ["<aliceDID>/x/callable/guestbook"],
   caps: [{with: "<aliceDID>/x/callable/guestbook", can: "callable/call"}]
 }
 
-tools/call guestbook { callable: "<aliceDID>/x/callable/guestbook",
-                       input: {path: "w/guestbook", value: "Hello from Bob"} }
+tools/call guestbook { path: "w/guestbook", value: "Hello from Bob" }
 ```
 
 The token's caps let it reach the guestbook's gate and no other callable's.
@@ -337,9 +367,6 @@ The token's caps let it reach the guestbook's gate and no other callable's.
 
 - **Whose quota.** Jobs the target records count against the owner's quota,
   as work in the owner's namespace, not the invoker's.
-- **A callable as an operation reference.** Accepting
-  `<ownerDID>/x/callable/<name>` wherever an operation reference goes, so a
-  tool takes the target's input and schema directly.
 - **Calls across venues.** Calling a callable another venue hosts, through
   `grid:run`.
 - **A provider's record of calls.** Whether calls are recorded where the
