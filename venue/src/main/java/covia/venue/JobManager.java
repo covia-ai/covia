@@ -273,11 +273,16 @@ public class JobManager {
 	 * the input being sent. The executing venue applies its defaults and checks
 	 * its own invocation and resource authority independently, using the
 	 * explicitly selected remote credentials, not the source's local scope.
+	 *
+	 * @return the reference as checked, which the caller sends: a short form
+	 *         names a user of this venue, so it goes expanded
+	 *         ({@link Engine#expandPath})
 	 */
-	public void requireRemoteInvoke(AString ref, ACell input, RequestContext ctx) {
+	public AString requireRemoteInvoke(AString ref, ACell input, RequestContext ctx) {
 		if (ref == null) throw operationRequired();
 		RequestContext invoking = invoking(ctx, ref);
 		engine.requireInvoke(invocationContext(invoking, input), invoking.getOp());
+		return invoking.getOp();
 	}
 
 	/**

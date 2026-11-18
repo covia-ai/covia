@@ -62,7 +62,8 @@ holder or job owner an operation or REST route names, a binding's configured
 references, and a capability's `with` in an agent's config, a token, a
 callable, an approval request or a grant). It is expanded once, where it
 arrives (`Engine.expandPrincipal`, `Engine.expandPath`), and the venue's
-records hold and compare only the full DID. Data a user writes, such as a
+records hold and compare only the full DID, as does an operation reference or
+job owner sent on to another venue. Data a user writes, such as a
 callers gate's list in an operation's defaults, is kept as written and
 expanded when it is read. A venue with no public hostname names no such users
 and refuses the form. A name still in short form where nothing expands it is

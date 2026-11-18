@@ -202,8 +202,9 @@ public record VenueConnection(Venue venue, AMap<AString, ACell> credentials) {
 
 	/**
 	 * Validate a lookup namespace without replacing the caller's identity. A
-	 * principal in short form is passed on as given, for the venue holding the
-	 * job to expand.
+	 * principal in short form names a user of this venue: a local lookup
+	 * expands it ({@link Engine#expandPrincipal}), and {@link #job} sends it
+	 * expanded.
 	 */
 	public static AString jobOwner(ACell input) {
 		ACell value = RT.getIn(input, Fields.OWNER);
@@ -218,7 +219,7 @@ public record VenueConnection(Venue venue, AMap<AString, ACell> credentials) {
 			ACell input) {
 		VenueConnection connection = connect(engine, ctx, target, input);
 		Venue venue = connection.venue();
-		AString owner = jobOwner(input);
+		AString owner = engine.expandPrincipal(jobOwner(input));
 		if (owner == null) {
 			AString mode = RT.ensureString(RT.getIn(input, AUTHENTICATE_AS));
 			if (CALLER.equals(mode)) owner = ctx.getAuthorityDID();

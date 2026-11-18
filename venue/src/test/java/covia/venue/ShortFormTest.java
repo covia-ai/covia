@@ -23,6 +23,7 @@ import convex.core.data.AString;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
+import convex.core.data.prim.CVMBool;
 import convex.core.json.schema.JsonSchema;
 import convex.core.lang.RT;
 import covia.adapter.messaging.MessagingBotSpec;
@@ -32,6 +33,7 @@ import covia.exception.InvalidInputException;
 import covia.grid.Job;
 import covia.grid.Principals;
 import covia.grid.Status;
+import covia.grid.auth.UcanTokens;
 import covia.grid.auth.VenueAuth;
 import covia.grid.client.VenueHTTP;
 
@@ -165,6 +167,8 @@ public class ShortFormTest {
 		Job echoed = run(bob.shortForm() + "/o/echo", Maps.of(Fields.VALUE, "hi"), bob.ctx());
 		complete(echoed);
 		assertEquals(s(bob.did() + "/o/echo"), echoed.getData().get(Fields.OP), "the job names the operation in full");
+		assertEquals(s(bob.did() + "/o/echo"), engine.jobs().requireRemoteInvoke(s(bob.shortForm() + "/o/echo"),
+			Maps.of(Fields.VALUE, "hi"), bob.ctx()), "another venue is sent the operation in full");
 	}
 
 	@Test
@@ -205,6 +209,28 @@ public class ShortFormTest {
 			bob.withProofs(Vectors.of(grant(bobKey, carol.did() + "/w/elsewhere", exp)))));
 		assertEquals(uncovered, failure(run("v/ops/covia/read", read,
 			bob.withProofs(Vectors.of(grant(bobKey, carol.shortForm() + "/w/x", exp))))));
+	}
+
+	@Test
+	void aGrantIssuedWithShortFormsNamesThemInFull() {
+		User carol = user("sf-issuer");
+		User alice = user("sf-audience");
+		ACell issued = complete(run("v/ops/ucan/issue", Maps.of(UCAN.AUD, alice.shortForm(),
+			UCAN.ATT, Vectors.of(Capability.create(s(carol.shortForm() + "/w/"), Capability.CRUD_READ)),
+			UCAN.EXP, System.currentTimeMillis() / 1000 + 3600), carol.ctx()));
+		UCAN token = UCAN.fromJWT(RT.ensureString(RT.getIn(issued, "token")));
+		assertEquals(alice.did(), token.getAudience(), "the signed audience is in full");
+		assertEquals(s(carol.did() + "/w/"), RT.getIn(token.getCapabilities().get(0), Capability.WITH),
+			"the signed resource is in full");
+	}
+
+	@Test
+	void aSignedGrantNamingAShortFormVerifiesWithNoRoot(TestInfo info) {
+		String jwt = UcanTokens.grant(AKeyPair.generate(),
+			UCAN.toDIDKey(AKeyPair.generate().getAccountKey()).toString(), "u:bob/w/", "crud/read", 3600);
+		ACell verified = complete(run("v/ops/ucan/verify", Maps.of("token", jwt), RequestContext.of(TestEngine.uniqueDID(info))));
+		assertEquals(CVMBool.TRUE, RT.getIn(verified, "valid"));
+		assertEquals(s("refused"), RT.getIn(RT.ensureVector(RT.getIn(verified, "att")).get(0), "rootAuthority"));
 	}
 
 	/** A grant the venue signs to {@code audience} over {@code with}, as presented. */

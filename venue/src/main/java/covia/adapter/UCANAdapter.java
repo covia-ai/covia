@@ -431,8 +431,10 @@ public class UCANAdapter extends AAdapter {
 				AString with = (cap != null) ? RT.ensureString(cap.get(Capability.WITH)) : null;
 				// owner: an identity root, the owner or one that signs in as it;
 				// venue: this venue's root over what it hosts (Engine.rootAuthorityPolicy).
+				// A short form in a signed grant names no place, so no root covers it.
 				String verdict;
-				if (self.acceptsRoot(rootIssuer, with)
+				if (with != null && CapabilityChecker.isShortForm(with.toString())) verdict = "refused";
+				else if (self.acceptsRoot(rootIssuer, with)
 					|| VenueAuthenticator.signsInAs(rootIssuer, Engine.ownerOf(with))) verdict = "owner";
 				else if (venuePolicy.acceptsRoot(rootIssuer, with)) verdict = "venue";
 				else verdict = "refused";
