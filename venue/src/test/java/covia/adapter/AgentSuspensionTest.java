@@ -24,12 +24,13 @@ import covia.venue.TestLogs;
 
 /**
  * An agent is suspended only when it cannot continue: its model setup is
- * wrong, its provider cannot be reached, or the venue fails unexpectedly. It
+ * wrong, its provider cannot be reached, or the venue itself fails (a fault,
+ * or data failing its integrity check). It
  * keeps its queue while suspended, and every other failure fails only the work
  * it was on (AGENT_LOOP.md §3.4). Each case runs the real run loop over
  * {@code v/test/ops/failllm}, which fails the way its model names.
  *
- * <p>Isolated because the venue-fault case silences an ERROR log, and that
+ * <p>Isolated because the venue-failure cases silence an ERROR log, and that
  * level change is global.</p>
  */
 @Isolated
@@ -133,6 +134,22 @@ public class AgentSuspensionTest {
 		TestLogs.quiet(covia.exception.FaultException.class, () -> {
 			Job waiting = request(owner, "venue-fault", "go");
 			assertEquals(Agent.SUSPENDED, awaitRest(agent, owner));
+			assertFalse(waiting.isFinished(), "a suspended agent keeps its queue");
+			assertEquals(suspendedNote(agent), progress(waiting));
+		});
+	}
+
+	@Test
+	public void anIntegrityFailureSuspendsTheAgent(TestInfo info) throws Exception {
+		RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));
+		Agent agent = create(owner, "integrity", "integrity");
+		// The venue's own failure, as a fault is: logged at ERROR once, by the
+		// Job that reports it.
+		TestLogs.quiet(covia.exception.IntegrityException.class, () -> {
+			Job waiting = request(owner, "integrity", "go");
+			assertEquals(Agent.SUSPENDED, awaitRest(agent, owner));
+			assertTrue(agent.getError().toString().contains(TestAdapter.FAILLLM_REASON.formatted("integrity")),
+				"the suspension names its cause: " + agent.getError());
 			assertFalse(waiting.isFinished(), "a suspended agent keeps its queue");
 			assertEquals(suspendedNote(agent), progress(waiting));
 		});

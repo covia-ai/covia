@@ -28,8 +28,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Changed
 
-- A stored secret or connected account that fails its integrity check, because it was altered or damaged or the venue key is misconfigured, is the venue's own failure: REST answers it as a server failure, A2A as `INTERNAL`, an agent that meets it is suspended, and the venue logs it once at ERROR naming whose it is; the message still names the record and how to replace it (#668).
-- Writing to a framework-managed namespace, deleting a messaging bot declared in the venue config, and cross-user DLFS access an operation does not permit are refused as authority failures (#668).
+- A stored secret or connected account that fails its integrity check, because it was altered or damaged or the venue key is misconfigured, is the venue's own failure: REST answers it as a server failure, A2A as `INTERNAL`, an agent whose step it stops is suspended, and the venue logs it once at ERROR naming whose it is; the message still names the record and how to replace it (#668).
 - Answering an approval request, `secret:extract`, `user:export`, `user:clone` from one's own account and reading or changing one's own sign-in keys need the user in person: work a job or scheduled event carries on later, and an operation a bot runs, can no longer do them.
 - A live dictation belongs to the principal that opened it: its access tokens feed it, its agents and other users do not. The messaging adapters' `bots` lists each bot the request may manage (`<adapter>/manage` on `<owner>/<adapter>/<name>`), so an agent sees its owner's bots only when its caps allow managing them.
 - Running Python is the operator's: each configured function needs `admin/execute/python` on `<venue DID>/python/operations/<id>`, which the venue holds and can grant to a user.

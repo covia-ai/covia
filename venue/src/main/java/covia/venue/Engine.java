@@ -87,6 +87,7 @@ import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.exception.ConfigurationException;
+import covia.exception.CoviaException;
 import covia.exception.FaultException;
 import covia.exception.IntegrityException;
 import covia.exception.InvalidInputException;
@@ -1695,7 +1696,8 @@ public class Engine {
 	/**
 	 * A failure in an adapter's own lifecycle step, as the venue reports it: a
 	 * Covia exception with a reason as it is, logged at WARN with that reason;
-	 * anything else as the adapter's fault, logged once at ERROR.
+	 * anything else as the adapter's fault, logged once at ERROR, as an
+	 * integrity failure is.
 	 */
 	private static RuntimeException adapterFailed(String what, AAdapter adapter, Throwable failure) {
 		String step = what.formatted(adapter.getName());
@@ -1704,9 +1706,13 @@ public class Engine {
 		return reported;
 	}
 
-	/** Logs a failure already reported: a fault was logged at ERROR where it was reported, anything else at WARN. */
+	/**
+	 * Logs a failure already reported: the venue's own failure (a fault or an
+	 * integrity failure) was logged at ERROR where it was reported, anything
+	 * else at WARN.
+	 */
 	private static void logFailed(String step, RuntimeException reported) {
-		if (!(reported instanceof FaultException)) log.warn("{} failed: {}", step, reported.getMessage());
+		if (!CoviaException.isVenueFailure(reported)) log.warn("{} failed: {}", step, reported.getMessage());
 	}
 
 	/**

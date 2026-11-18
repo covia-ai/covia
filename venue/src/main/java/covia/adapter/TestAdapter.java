@@ -1846,7 +1846,8 @@ public class TestAdapter extends AAdapter implements covia.adapter.token.TokenAc
      * agent run loop's failure rules (AGENT_LOOP.md §3.4): {@code setup}
      * ({@code ConfigurationException}), {@code unavailable}, {@code value} (a
      * failure value), {@code content} ({@code InvalidInputException}),
-     * {@code bug} ({@code IllegalStateException}) or {@code long-setup} (as
+     * {@code bug} ({@code IllegalStateException}), {@code integrity} (an
+     * {@code IntegrityException} not yet logged) or {@code long-setup} (as
      * {@code setup}, saying {@link #FAILLLM_LONG}). A {@code :<gate>} suffix
      * waits at that {@link TestGate} first, so a test can queue more work
      * while the cycle is held. Any other model replies with text.
@@ -1867,6 +1868,7 @@ public class TestAdapter extends AAdapter implements covia.adapter.token.TokenAc
                 case "value" -> Status.failure(reason);
                 case "content" -> throw new InvalidInputException(reason);
                 case "bug" -> throw new IllegalStateException(reason);
+                case "integrity" -> throw new covia.exception.IntegrityException(reason);
                 case "long-setup" -> throw new covia.exception.ConfigurationException(FAILLLM_LONG);
                 default -> Maps.of("role", Strings.create("assistant"), "content", Strings.create("ok"));
             };
