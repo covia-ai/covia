@@ -5037,9 +5037,9 @@ public class AgentAdapter extends AAdapter {
 	/**
 	 * Whether a transition's failure means the agent cannot continue, rather
 	 * than that the work it took failed: the transition said so
-	 * ({@link CannotContinueException}), or the failure is a fault, reported
-	 * and logged where it happened, which would meet every unit of work the
-	 * same way (AGENT_LOOP.md §3.4).
+	 * ({@link CannotContinueException}), or the failure is the venue's own (a
+	 * fault, or an integrity failure), logged where it happened, which would
+	 * meet every unit of work the same way (AGENT_LOOP.md §3.4).
 	 */
 	private static boolean agentCannotContinue(Throwable failure) {
 		return CannotContinueException.find(failure) != null || !isExpectedFailure(failure);
