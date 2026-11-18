@@ -26,8 +26,8 @@ import covia.exception.InvalidDefinitionException;
 import covia.exception.InvalidInputException;
 import covia.exception.JobFailedException;
 import covia.exception.NotFoundException;
-import covia.exception.NotSupportedException;
 import covia.exception.UnavailableException;
+import covia.exception.UnsupportedException;
 import covia.adapter.token.AccessToken;
 import covia.adapter.token.TokenAccessPoint;
 import covia.adapter.token.TokenAdapter;
@@ -168,7 +168,7 @@ public class MCPAdapter extends AAdapter implements TokenAccessPoint {
 					return listMCPTools(serverUrl, inputBearer(ctx, input, serverUrl));
 				}, VIRTUAL_EXECUTOR);
 			} else {
-				throw new NotSupportedException("Unsupported tools function: " + function);
+				throw new UnsupportedException("Unsupported tools function: " + function);
 			}
 		} else if (feature.equals("server")) {
 			// Server bridging (#80): register / refresh / remove external MCP
@@ -181,7 +181,7 @@ public class MCPAdapter extends AAdapter implements TokenAccessPoint {
 				case "add" -> handleAddServer(ctx, input);
 				case "remove" -> handleRemoveServer(ctx, input);
 				case "refresh" -> handleRefresh(ctx, input);
-				default -> throw new NotSupportedException(
+				default -> throw new UnsupportedException(
 					"Unsupported server function: " + function);
 			}, VIRTUAL_EXECUTOR);
 		} else if (feature.equals("tool")) {
@@ -194,7 +194,7 @@ public class MCPAdapter extends AAdapter implements TokenAccessPoint {
 			String function = subParts[1];
 			return CompletableFuture.supplyAsync(() -> switch (function) {
 				case "add" -> handleAddTool(ctx, input);
-				default -> throw new NotSupportedException(
+				default -> throw new UnsupportedException(
 					"Unsupported tool function: " + function);
 			}, VIRTUAL_EXECUTOR);
 		} else if (feature.equals("token")) {
@@ -209,11 +209,11 @@ public class MCPAdapter extends AAdapter implements TokenAccessPoint {
 				case "delete" -> handleDeleteToken(ctx, input);
 				case "list" -> handleListTokens(ctx);
 				case "get" -> handleGetToken(ctx, input);
-				default -> throw new NotSupportedException(
+				default -> throw new UnsupportedException(
 					"Unsupported token function: " + function);
 			}, VIRTUAL_EXECUTOR);
 		} else {
-			throw new NotSupportedException("Unsupported MCP feature: " + feature);
+			throw new UnsupportedException("Unsupported MCP feature: " + feature);
 		}
 	}
 

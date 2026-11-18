@@ -23,7 +23,7 @@ import covia.exception.AuthException;
 import covia.exception.ConflictException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
-import covia.exception.NotSupportedException;
+import covia.exception.UnsupportedException;
 import covia.grid.Operation;
 import covia.lattice.Caps;
 import covia.venue.AdapterState;
@@ -102,7 +102,7 @@ public class CallableAdapter extends AAdapter {
 			case "list" -> list(ctx);
 			case "gates/anyone" -> CVMBool.TRUE;
 			case "gates/callers" -> callers(input);
-			default -> throw new NotSupportedException("Unsupported callable operation: " + op);
+			default -> throw new UnsupportedException("Unsupported callable operation: " + op);
 		}, VIRTUAL_EXECUTOR);
 	}
 

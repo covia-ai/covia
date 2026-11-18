@@ -19,7 +19,7 @@ import covia.exception.CoviaException;
 import covia.exception.FaultException;
 import covia.exception.InvalidInputException;
 import covia.exception.JobFailedException;
-import covia.exception.NotSupportedException;
+import covia.exception.UnsupportedException;
 import covia.venue.RequestContext;
 import covia.venue.TestLogs;
 
@@ -46,7 +46,7 @@ public class DescribeFailureTest {
 	public void testExpectedFailuresAreTheirReason() {
 		assertEquals("no such db", CROWN.describeFailure(new JobFailedException("no such db")));
 		assertEquals("chat_id is required", CROWN.describeFailure(new InvalidInputException("chat_id is required")));
-		assertEquals("wrapped", CROWN.describeFailure(new CompletionException(new NotSupportedException("wrapped"))));
+		assertEquals("wrapped", CROWN.describeFailure(new CompletionException(new UnsupportedException("wrapped"))));
 		InvalidInputException refused = new InvalidInputException("bad");
 		assertSame(refused, FaultException.within("Operation x", OWNER, new CompletionException(refused)),
 			"a reported failure passes as it is");

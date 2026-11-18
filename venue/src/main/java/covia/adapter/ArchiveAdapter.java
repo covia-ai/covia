@@ -34,10 +34,11 @@ import convex.core.util.JSON;
 import convex.auth.ucan.Capability;
 import covia.api.Abilities;
 import covia.api.Fields;
+import covia.exception.InvalidDefinitionException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
-import covia.exception.NotSupportedException;
 import covia.exception.UnavailableException;
+import covia.exception.UnsupportedException;
 import covia.venue.RequestContext;
 
 /**
@@ -109,7 +110,7 @@ public class ArchiveAdapter extends AAdapter {
 		String subOp = getSubOperation(meta);
 		if (subOp == null) {
 			return CompletableFuture.failedFuture(
-				new NotSupportedException("No archive sub-operation specified"));
+				new InvalidDefinitionException("No archive sub-operation specified"));
 		}
 		return CompletableFuture.supplyAsync(() -> {
 			try {
@@ -119,7 +120,7 @@ public class ArchiveAdapter extends AAdapter {
 					case "list"    -> handleList(ctx, in);
 					case "extract" -> handleExtract(ctx, in);
 					case "zip"     -> handleZip(ctx, in);
-					default -> throw new NotSupportedException("Unknown archive operation: " + subOp);
+					default -> throw new UnsupportedException("Unknown archive operation: " + subOp);
 				};
 			} catch (IOException e) {
 				throw FileOperations.failure(e);

@@ -24,7 +24,7 @@ import covia.exception.ConfigurationException;
 import covia.exception.CoviaException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
-import covia.exception.NotSupportedException;
+import covia.exception.UnsupportedException;
 
 /**
  * Loading and unloading of venue modules — adapters packaged as external
@@ -358,12 +358,12 @@ public class Modules {
 	 * @param config Venue config
 	 * @param ref Caller-supplied module reference (file name or path)
 	 * @return The resolved jar path
-	 * @throws NotSupportedException when dynamic loading is disabled
+	 * @throws UnsupportedException when dynamic loading is disabled
 	 * @throws InvalidInputException when the reference violates the policy
 	 */
 	public static Path resolveDynamicPath(Config config, String ref) {
 		if (!config.isDynamicModulesEnabled()) {
-			throw new NotSupportedException(
+			throw new UnsupportedException(
 				"Dynamic module loading is disabled on this venue (set dynamicModules.enabled)");
 		}
 		if (ref == null || ref.isBlank()) throw new InvalidInputException("module is required");

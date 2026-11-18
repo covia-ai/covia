@@ -40,7 +40,7 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import covia.api.Fields;
 import covia.exception.ConfigurationException;
-import covia.exception.NotSupportedException;
+import covia.exception.IntegrityException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.grid.auth.VenueAuth;
@@ -305,11 +305,13 @@ public class AuditLogTest {
 		assertEquals(v2Value, engine.resolveSecret("MIGRATING", ctx));
 
 		user.secrets().store("FOREIGN", v2Value, SecretStore.keys(AKeyPair.generate()));
-		NotSupportedException unreadable = assertThrows(NotSupportedException.class, () -> engine.resolveSecret("FOREIGN", ctx));
-		assertEquals(Engine.SECRET_UNREADABLE + "FOREIGN", unreadable.getMessage());
-		assertNotNull(unreadable.getCause(), "the refusal carries why the secret could not be read");
-		assertTrue(List.copyOf(captured.list).stream().anyMatch(e -> e.getLevel() == Level.WARN
-			&& Engine.class.getName().equals(e.getLoggerName())), "the failed resolution is logged");
+		IntegrityException failed = assertThrows(IntegrityException.class, () -> engine.resolveSecret("FOREIGN", ctx));
+		assertEquals(Engine.SECRET_INTEGRITY + "FOREIGN", failed.getMessage());
+		assertNotNull(failed.getCause(), "the refusal carries what failed the check");
+		assertEquals(1, List.copyOf(captured.list).stream().filter(e -> e.getLevel() == Level.ERROR
+			&& IntegrityException.class.getName().equals(e.getLoggerName())
+			&& e.getFormattedMessage().contains(ctx.getUserDID().toString())).count(),
+			"the integrity failure is logged once, naming whose secret it is");
 
 		String everything = allLogText();
 		assertFalse(everything.contains(v1Value), "no version 1 value in any log line");

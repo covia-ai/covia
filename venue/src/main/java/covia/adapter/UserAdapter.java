@@ -25,7 +25,7 @@ import covia.exception.AuthException;
 import covia.exception.ConflictException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
-import covia.exception.NotSupportedException;
+import covia.exception.UnsupportedException;
 import covia.lattice.Covia;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -127,7 +127,7 @@ public class UserAdapter extends AAdapter {
 				case "authentication-add" -> authenticationAdd(ctx, input);
 				case "authentication-revoke" -> authenticationRevoke(ctx, input);
 				case "authentication-list" -> authenticationList(ctx, input);
-				default -> throw new NotSupportedException(
+				default -> throw new UnsupportedException(
 					"Unknown user operation: " + subOperation);
 			});
 		} catch (Exception e) {
@@ -364,7 +364,7 @@ public class UserAdapter extends AAdapter {
 	private AString targetManagedUser(RequestContext ctx, ACell input, AString ability) {
 		AString did = targetDID(ctx, input);
 		if (engine.managedUserName(did) == null) {
-			throw new NotSupportedException(
+			throw new UnsupportedException(
 				"Authentication keys belong only to venue-managed named users");
 		}
 		requireSelfOrVenueUserAuthority(ctx, did, ability);

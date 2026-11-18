@@ -24,7 +24,7 @@ import covia.adapter.AAdapter;
 import covia.exception.ConfigurationException;
 import covia.exception.InvalidInputException;
 import covia.exception.JobFailedException;
-import covia.exception.NotSupportedException;
+import covia.exception.UnsupportedException;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 
@@ -136,7 +136,7 @@ public class SonnyLabsAdapter extends AAdapter {
 			AMap<AString, ACell> meta, ACell input) {
 		String subOp = getSubOperation(meta);
 		if (!"scan".equals(subOp)) {
-			throw new NotSupportedException("Unsupported SonnyLabs operation: " + subOp);
+			throw new UnsupportedException("Unsupported SonnyLabs operation: " + subOp);
 		}
 		return CompletableFuture.supplyAsync(() -> scan(ctx, input), VIRTUAL_EXECUTOR);
 	}

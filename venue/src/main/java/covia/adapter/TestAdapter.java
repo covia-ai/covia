@@ -33,8 +33,8 @@ import covia.exception.AuthException;
 import covia.exception.InvalidInputException;
 import covia.exception.JobFailedException;
 import covia.exception.NotFoundException;
-import covia.exception.NotSupportedException;
 import covia.exception.UnavailableException;
+import covia.exception.UnsupportedException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.Agent;
@@ -336,7 +336,7 @@ public class TestAdapter extends AAdapter implements covia.adapter.token.TokenAc
                     );
                 default:
                     return CompletableFuture.failedFuture(
-                        new NotSupportedException("Unknown test operation: " + testOp)
+                        new UnsupportedException("Unknown test operation: " + testOp)
                     );
             }
         } catch (Exception e) {

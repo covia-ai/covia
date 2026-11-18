@@ -16,7 +16,7 @@ import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
-import covia.exception.NotSupportedException;
+import covia.exception.UnsupportedException;
 import covia.grid.Asset;
 import covia.venue.RequestContext;
 import covia.venue.User;
@@ -119,7 +119,7 @@ public class ConnectionsAdapter extends AAdapter {
 			return switch (getSubOperation(meta)) {
 				case "list" -> CompletableFuture.completedFuture(handleList(ctx));
 				case "status" -> CompletableFuture.completedFuture(handleStatus(ctx, input));
-				default -> CompletableFuture.failedFuture(new NotSupportedException(
+				default -> CompletableFuture.failedFuture(new UnsupportedException(
 					"Unknown connections operation: " + getSubOperation(meta)));
 			};
 		} catch (Exception e) {

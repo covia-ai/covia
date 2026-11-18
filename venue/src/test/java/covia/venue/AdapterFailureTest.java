@@ -24,8 +24,8 @@ import covia.adapter.AAdapter;
 import covia.adapter.VenueAdapter;
 import covia.api.Fields;
 import covia.exception.ConfigurationException;
+import covia.exception.InvalidStateException;
 import covia.exception.NotFoundException;
-import covia.exception.NotSupportedException;
 import covia.exception.StillStartingException;
 import covia.exception.UnavailableException;
 import covia.grid.Job;
@@ -328,7 +328,7 @@ public class AdapterFailureTest {
 			engine.registerAdapter(flaky);
 			engine.disableAdapter(NAME);
 			assertEquals(Engine.ADAPTER_IS_DISABLED.formatted(NAME),
-				assertThrows(NotSupportedException.class, () -> engine.restartAdapter(NAME)).getMessage());
+				assertThrows(InvalidStateException.class, () -> engine.restartAdapter(NAME)).getMessage());
 			assertThrows(NotFoundException.class, () -> engine.restartAdapter("no-such-adapter"));
 
 			flaky.failStart = true;

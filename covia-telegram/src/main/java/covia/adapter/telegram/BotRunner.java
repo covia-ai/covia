@@ -69,7 +69,6 @@ import covia.exception.FaultException;
 import covia.exception.InvalidDefinitionException;
 import covia.exception.InvalidInputException;
 import covia.exception.JobFailedException;
-import covia.exception.NotSupportedException;
 import covia.exception.ResponseException;
 import covia.exception.StillStartingException;
 import covia.exception.UnavailableException;
@@ -585,8 +584,11 @@ final class BotRunner implements MessagingBot<BotSpec> {
 	private void deliverTurn(String id, Update update) {
 		Message m = update.message();
 		try {
-			String refusal = admitted(update) ? conversations.deliveryRefusal(channel(update.message())) : NOT_ADMITTED;
-			if (refusal != null) throw new NotSupportedException(refusal);
+			if (!admitted(update)) throw new AuthException(NOT_ADMITTED);
+			// The check gives only a reason, which may be the sender's or the
+			// agent's authority, or the agent's state; it is recorded by its message
+			String refusal = conversations.deliveryRefusal(channel(update.message()));
+			if (refusal != null) throw new CoviaException(refusal);
 			respondAgent(id, m, messageText(m), true);
 		} catch (RuntimeException failure) {
 			String detail = concise(failure);
@@ -629,7 +631,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 		User from = senderOf(update);
 		Long fromId = from == null ? null : from.id();
 		String fromName = from == null ? null : from.username();
-		if (!admitted(update)) throw new NotSupportedException(NOT_ADMITTED);
+		if (!admitted(update)) throw new AuthException(NOT_ADMITTED);
 		String text = messageText(m);
 		if (!text.isEmpty()) {
 			if (addressedToAnotherBot(text)) return;   // /cmd@otherbot in a group

@@ -20,6 +20,7 @@ import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.api.Fields;
+import covia.exception.IntegrityException;
 import covia.lattice.Namespace;
 
 /**
@@ -83,11 +84,15 @@ public class SecretStoreTest {
 		assertEquals(CVMLong.create(SecretStore.CURRENT_KEY_VERSION), sealed.get(KEY_VERSION));
 		assertEquals(SECRET_VALUE, SecretStore.unseal(sealed, keys).toString());
 		assertNull(SecretStore.unseal(null, keys));
-		assertThrows(RuntimeException.class, () -> SecretStore.unseal(sealed, SecretStore.keys(AKeyPair.generate())),
-			"another venue's keys open nothing");
-		IllegalStateException notSealed = assertThrows(IllegalStateException.class,
+		IntegrityException foreign = assertThrows(IntegrityException.class,
+			() -> SecretStore.unseal(sealed, SecretStore.keys(AKeyPair.generate())), "another venue's keys open nothing");
+		assertEquals(SecretStore.INTEGRITY_FAILED.formatted(SecretStore.SEALED_VALUE, SecretStore.DOES_NOT_DECRYPT),
+			foreign.getMessage());
+		assertNotNull(foreign.getCause(), "the decryption failure is the cause");
+		IntegrityException notSealed = assertThrows(IntegrityException.class,
 			() -> SecretStore.unseal(Strings.create(SECRET_VALUE), keys));
-		assertEquals(SecretStore.INVALID_RECORD, notSealed.getMessage());
+		assertEquals(SecretStore.INTEGRITY_FAILED.formatted(SecretStore.SEALED_VALUE, SecretStore.INVALID_RECORD),
+			notSealed.getMessage());
 	}
 
 	// ========== Multiple Secrets ==========
@@ -255,9 +260,10 @@ public class SecretStoreTest {
 		var records = user.secrets().cursor();
 		for (ACell malformed : new ACell[] { null, Strings.create("invalid"), Maps.empty(), Maps.of(ENCRYPTED, "invalid") }) {
 			records.set(Maps.of(SECRET_NAME, malformed));
-			assertEquals(SecretStore.INVALID_RECORD, assertThrows(IllegalStateException.class,
+			String failed = SecretStore.INTEGRITY_FAILED.formatted(SECRET_NAME, SecretStore.INVALID_RECORD);
+			assertEquals(failed, assertThrows(IntegrityException.class,
 				() -> user.secrets().decrypt(SECRET_NAME, SecretStore.keys(kp))).getMessage());
-			assertEquals(SecretStore.INVALID_RECORD, assertThrows(IllegalStateException.class,
+			assertEquals(failed, assertThrows(IntegrityException.class,
 				() -> user.secrets().decrypt(SECRET_NAME, SecretStore.deriveKey(kp))).getMessage());
 		}
 	}
@@ -522,9 +528,9 @@ public class SecretStoreTest {
 		user.secrets().store(SECRET_NAME, SECRET_VALUE, keys);
 		user.cursor().path(Namespace.S, Strings.create(SECRET_NAME), KEY_VERSION).set(CVMLong.create(7));
 
-		IllegalStateException e = assertThrows(IllegalStateException.class,
+		IntegrityException e = assertThrows(IntegrityException.class,
 			() -> user.secrets().decrypt(SECRET_NAME, keys));
-		assertEquals(SecretStore.UNKNOWN_KEY_VERSION, e.getMessage());
+		assertEquals(SecretStore.INTEGRITY_FAILED.formatted(SECRET_NAME, SecretStore.UNKNOWN_KEY_VERSION), e.getMessage());
 	}
 
 	@SuppressWarnings("deprecation")

@@ -33,7 +33,7 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.adapter.TestAdapter;
 import covia.api.Fields;
-import covia.exception.NotSupportedException;
+import covia.exception.UnsupportedException;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.TestEngine;
@@ -294,7 +294,7 @@ public class ToolCycleEngineTest {
 		// order is kept.
 		ToolCycleEngine.Registry<Object> registry = new ToolCycleEngine.Registry<Object>()
 			.fallback((c, ctx) -> switch (c.id().toString()) {
-				case "throws" -> throw new NotSupportedException("boom");
+				case "throws" -> throw new UnsupportedException("boom");
 				case "nothing" -> null;
 				default -> ok("ran " + c.id());
 			});

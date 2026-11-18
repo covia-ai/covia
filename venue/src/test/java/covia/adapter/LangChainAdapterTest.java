@@ -67,9 +67,9 @@ import covia.api.Fields;
 import covia.exception.ConfigurationException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
-import covia.exception.NotSupportedException;
 import covia.exception.ResponseException;
 import covia.exception.UnavailableException;
+import covia.exception.UnsupportedException;
 import covia.grid.Asset;
 import covia.grid.Job;
 import covia.grid.Status;
@@ -1648,7 +1648,7 @@ public class LangChainAdapterTest {
 			java.time.Duration.ofSeconds(5), LangChainAdapter.ModelTuning.NONE);
 		assertNull(plain.defaultRequestParameters().temperature());
 		assertNull(plain.defaultRequestParameters().topP());
-		assertThrows(NotSupportedException.class,
+		assertThrows(UnsupportedException.class,
 			() -> LangChainAdapter.buildOllamaModel("http://localhost:11434", "qwen",
 				java.time.Duration.ofSeconds(5), nativeTuning),
 			"an unsupported providerOptions map must fail rather than disappear silently");
@@ -1888,7 +1888,7 @@ public class LangChainAdapterTest {
 
 		assertPassesOn(ConfigurationException.class, LangChainAdapter.MODEL_NOT_FOUND, 404,
 			new dev.langchain4j.exception.ModelNotFoundException(http(404, "no such model")));
-		assertMapped(NotSupportedException.class,
+		assertMapped(UnsupportedException.class,
 			LangChainAdapter.FEATURE_NOT_SUPPORTED.formatted("anthropic", "claude-x"),
 			new dev.langchain4j.exception.UnsupportedFeatureException("topK " + PROVIDER_TEXT), false);
 

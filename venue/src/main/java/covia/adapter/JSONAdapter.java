@@ -11,7 +11,7 @@ import convex.core.data.Strings;
 import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
 import covia.exception.InvalidInputException;
-import covia.exception.NotSupportedException;
+import covia.exception.UnsupportedException;
 import covia.venue.RequestContext;
 
 /**
@@ -79,7 +79,7 @@ public class JSONAdapter extends AAdapter {
 				case "assoc"  -> CompletableFuture.completedFuture(handleAssoc(input));
 				case "select" -> CompletableFuture.completedFuture(handleSelect(input));
 				default -> CompletableFuture.failedFuture(
-					new NotSupportedException("Unknown json operation: " + op));
+					new UnsupportedException("Unknown json operation: " + op));
 			};
 		} catch (Exception e) {
 			return CompletableFuture.failedFuture(e);

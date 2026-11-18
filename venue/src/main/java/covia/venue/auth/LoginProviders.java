@@ -38,7 +38,6 @@ import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.exception.ConfigurationException;
 import covia.exception.ConflictException;
-import covia.exception.NotSupportedException;
 import covia.venue.Auth;
 import covia.venue.Config;
 import covia.venue.Engine;
@@ -322,7 +321,7 @@ public class LoginProviders {
 					if ((Strings.create(provider).equals(record.get(Fields.PROVIDER))
 							&& Strings.create(identity.sub()).equals(record.get(Fields.PROVIDER_SUB)))
 							|| (identity.email() != null && Strings.create(identity.email()).equals(record.get(Fields.EMAIL)))) {
-						throw new NotSupportedException(LEGACY_IDENTITY);
+						throw new AuthException(LEGACY_IDENTITY);
 					}
 				}
 			}

@@ -46,8 +46,8 @@ import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.ConfigurationException;
 import covia.exception.InvalidInputException;
-import covia.exception.NotSupportedException;
 import covia.exception.UnavailableException;
+import covia.exception.UnsupportedException;
 import covia.venue.Config;
 import covia.venue.RequestContext;
 
@@ -268,7 +268,7 @@ public class P2PAdapter extends AAdapter implements AutoCloseable {
 					engine.requireVenueAuthority(ctx, RESOURCE, Abilities.P2P_MANAGE);
 					return connect(input);
 				default:
-					throw new NotSupportedException("Unknown p2p operation: " + sub);
+					throw new UnsupportedException("Unknown p2p operation: " + sub);
 			}
 		} catch (Exception e) {
 			return CompletableFuture.failedFuture(e);
@@ -287,7 +287,7 @@ public class P2PAdapter extends AAdapter implements AutoCloseable {
 
 	private CompletableFuture<ACell> connect(ACell input) {
 		Running r = running;
-		if (r == null) return CompletableFuture.failedFuture(new NotSupportedException(NOT_JOINED));
+		if (r == null) return CompletableFuture.failedFuture(new UnsupportedException(NOT_JOINED));
 		Peer peer;
 		try {
 			peer = peer(input, "input");

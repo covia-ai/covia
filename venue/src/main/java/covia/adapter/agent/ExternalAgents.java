@@ -11,9 +11,10 @@ import covia.api.Fields;
 import covia.exception.ConflictException;
 import covia.exception.InvalidDefinitionException;
 import covia.exception.InvalidInputException;
+import covia.exception.InvalidStateException;
 import covia.exception.NotFoundException;
-import covia.exception.NotSupportedException;
 import covia.exception.UnavailableException;
+import covia.exception.UnsupportedException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.*;
@@ -101,7 +102,7 @@ public final class ExternalAgents {
 		AMap<AString, ACell> definition = stored(agent);
 		ARemoteAgentAdapter<?> adapter = backend(definition);
 		for (String option : new String[]{"loads", "outputPath", "responseSchema", "strict"}) {
-			if (RT.getIn(input, option) != null) throw new NotSupportedException(UNSUPPORTED + option);
+			if (RT.getIn(input, option) != null) throw new UnsupportedException(UNSUPPORTED + option);
 		}
 		if (supplied && agent.session(sid).getRecord() == null) throw new NotFoundException(UNKNOWN_SESSION, sid.toHexString());
 		ACell content = RT.getIn(input, "chat".equals(operation) ? Fields.MESSAGE : Fields.INPUT);
@@ -246,9 +247,9 @@ public final class ExternalAgents {
 		ACell id = taskId != null ? taskId : turn;
 		Job parent = id == null ? null : engine.jobs().getJob(Job.parseID(id));
 		if (parent == null || !owns(parent) || parent.isFinished() || !parent.getID().equals(turn))
-			throw new NotSupportedException(NO_ACTIVE_TURN);
+			throw new InvalidStateException(NO_ACTIVE_TURN);
 		Job child = child(parent);
-		if (child == null) throw new NotSupportedException(MISSING_CHILD);
+		if (child == null) throw new InvalidStateException(MISSING_CHILD);
 		backend(stored(agent)).handleMessage(child, Maps.of(Fields.MESSAGE, content));
 	}
 }

@@ -32,7 +32,7 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import covia.api.Fields;
 import covia.exception.AuthException;
-import covia.exception.NotSupportedException;
+import covia.exception.UnsupportedException;
 import covia.grid.auth.VenueAuth;
 import covia.venue.server.AuthMiddleware;
 import covia.venue.server.RequestLog;
@@ -357,7 +357,7 @@ class EmbedderRoutePolicyTest {
 			throw new IllegalStateException("extension <failed> & diagnostic");
 		});
 		routes.get(REFUSAL, ctx -> {
-			throw new NotSupportedException("<refused> by the extension");
+			throw new UnsupportedException("<refused> by the extension");
 		});
 		routes.get(BAD_REQUEST, ctx -> {
 			throw new BadRequestResponse("bad extension <input>",

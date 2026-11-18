@@ -18,10 +18,11 @@ import convex.core.data.prim.CVMLong;
 import convex.core.exceptions.BadFormatException;
 import convex.core.lang.RT;
 import covia.api.Fields;
+import covia.exception.IntegrityException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
-import covia.exception.NotSupportedException;
 import covia.exception.UnavailableException;
+import covia.exception.UnsupportedException;
 import covia.grid.Job;
 import covia.lattice.Namespace;
 import covia.venue.migration.BlobIds;
@@ -82,8 +83,9 @@ public final class UserExports {
 	public static final String PROTECTED = "The venue and public principals cannot be exported, imported or cloned";
 	public static final String BUSY = "The user has unfinished work: a job not yet finished or an agent task outstanding. Retry once it has finished";
 	public static final String SECRETS_NEED_KEY = "The user has secrets: supply accountKey to seal them, or secrets: false to leave them out";
-	public static final String SECRET_UNREADABLE = "A secret could not be decrypted, so the export would be incomplete: "
-		+ "set it again with secret:set or delete it, or export with secrets: false";
+	public static final String SECRET_INTEGRITY = "A secret failed its integrity check, so the export would be "
+		+ "incomplete. The venue operator has been told; set it again with secret:set or delete it, or export with "
+		+ "secrets: false";
 	public static final String NOT_AN_EXPORT = "Not a Covia user export";
 	public static final String NEWER_VERSION = "The export was written by a newer Covia than this venue reads";
 	public static final String SEED_REQUIRED = "The export holds sealed secrets: supply the seed they were sealed to";
@@ -133,10 +135,9 @@ public final class UserExports {
 			AMap<AString, ACell> plain;
 			try {
 				plain = SecretStore.plaintexts(secrets, SecretStore.keys(engine.getKeyPair()));
-			} catch (RuntimeException e) {
-				// The message carries neither the provider's exception nor any decrypted
-				// material; why it failed is the cause, for the caller to use as it sees fit.
-				throw new NotSupportedException(SECRET_UNREADABLE, e);
+			} catch (IntegrityException e) {
+				// The store's report, naming the secret, is the cause; no decrypted material is in either.
+				throw IntegrityException.found(SECRET_INTEGRITY, did, e);
 			}
 			export = export.assoc(K_SECRETS, ECIES.encrypt(recipient, Format.encodeMultiCell(plain, true)));
 		}
@@ -160,7 +161,7 @@ public final class UserExports {
 		AMap<AString, ACell> state = RT.ensureMap(value.get(K_USER));
 		state = migrate(state.dissoc(Namespace.S).dissoc(Namespace.J), RT.ensureLong(value.get(Fields.VERSION)).longValue(), did);
 		String busy = unfinishedWork(state);
-		if (busy != null) throw new NotSupportedException(busy);
+		if (busy != null) throw new InvalidInputException(busy);
 
 		ACell sealed = value.get(K_SECRETS);
 		if (sealed != null) {
@@ -270,7 +271,7 @@ public final class UserExports {
 				|| !(value.get(K_USER) instanceof AMap<?, ?>)) {
 			throw new InvalidInputException(NOT_AN_EXPORT);
 		}
-		if (version.longValue() > VERSION) throw new NotSupportedException(NEWER_VERSION);
+		if (version.longValue() > VERSION) throw new UnsupportedException(NEWER_VERSION);
 		return value;
 	}
 

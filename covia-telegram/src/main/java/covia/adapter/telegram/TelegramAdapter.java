@@ -21,11 +21,12 @@ import covia.adapter.messaging.MessagingBot.Managed;
 import covia.adapter.messaging.ConversationRouter;
 import covia.api.Fields;
 import covia.exception.ConfigurationException;
+import covia.exception.ForbiddenException;
 import covia.exception.InvalidDefinitionException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
-import covia.exception.NotSupportedException;
 import covia.exception.UnavailableException;
+import covia.exception.UnsupportedException;
 import covia.venue.AdapterState;
 import covia.venue.RequestContext;
 
@@ -278,7 +279,7 @@ public class TelegramAdapter extends AMessagingAdapter<BotSpec, BotRunner> {
 			case "delete" -> CompletableFuture.supplyAsync(() -> handleDelete(ctx, input), VIRTUAL_EXECUTOR);
 			case "bots" -> CompletableFuture.supplyAsync(() -> handleBots(ctx), VIRTUAL_EXECUTOR);
 			case "format" -> CompletableFuture.supplyAsync(() -> handleFormat(input), VIRTUAL_EXECUTOR);
-			default -> throw new NotSupportedException("Unsupported telegram operation: " + subOp);
+			default -> throw new UnsupportedException("Unsupported telegram operation: " + subOp);
 		};
 	}
 
@@ -352,7 +353,7 @@ public class TelegramAdapter extends AMessagingAdapter<BotSpec, BotRunner> {
 		String method = methodCell.toString();
 		if (!method.matches("[A-Za-z]+")) throw new InvalidInputException("method must be a Bot API method name: " + method);
 		if (MANAGED_METHODS.contains(method)) {
-			throw new NotSupportedException("Bot API method " + method + " is managed by the venue's own "
+			throw new ForbiddenException("Bot API method " + method + " is managed by the venue's own "
 				+ "update loop for this bot and cannot be called");
 		}
 		ACell paramsCell = RT.getIn(input, K_PARAMS);

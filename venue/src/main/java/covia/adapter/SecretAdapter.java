@@ -16,9 +16,10 @@ import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.exception.ConflictException;
+import covia.exception.IntegrityException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
-import covia.exception.NotSupportedException;
+import covia.exception.UnsupportedException;
 import covia.api.Abilities;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -53,8 +54,8 @@ public class SecretAdapter extends AAdapter {
 	public static final String EXTRACT_NOT_PUBLIC = "The public principal's secrets are provisioned by the operator: they can be used under a grant, never extracted";
 	public static final String SECRET_EXISTS = "Secret already exists; pass overwrite:true to replace it";
 	public static final String SECRET_UNAVAILABLE = "Secret does not exist";
-	public static final String SECRET_DECRYPT_FAILED = "Secret cannot be decrypted: it is damaged or was sealed "
-		+ "under a key this venue no longer holds. Set it again with secret:set";
+	public static final String SECRET_INTEGRITY = "Secret failed its integrity check, so it cannot be extracted. The "
+		+ "venue operator has been told; set it again with secret:set";
 
 	@Override
 	public String getName() {
@@ -101,7 +102,7 @@ public class SecretAdapter extends AAdapter {
 					return CompletableFuture.completedFuture(handleDelete(ctx, input));
 				default:
 					return CompletableFuture.failedFuture(
-						new NotSupportedException(UNKNOWN_OPERATION + op));
+						new UnsupportedException(UNKNOWN_OPERATION + op));
 			}
 		} catch (Exception e) {
 			return CompletableFuture.failedFuture(e);
@@ -190,7 +191,7 @@ public class SecretAdapter extends AAdapter {
 			AString value;
 			try {
 				value = user == null ? null : user.secrets().decrypt(name, SecretStore.keys(engine.getKeyPair()));
-			} catch (RuntimeException e) { throw new NotSupportedException(SECRET_DECRYPT_FAILED, e); }
+			} catch (IntegrityException e) { throw IntegrityException.found(SECRET_INTEGRITY, ctx.getUserDID(), e); }
 			if (value == null) throw new NotFoundException(SECRET_UNAVAILABLE, name.toString());
 			engine.audit().event(Audit.SECRET_EXTRACT, ctx, Audit.K_NAME, name, Audit.K_OUTCOME, Audit.OK);
 			return Maps.of(Fields.NAME, name, Fields.VALUE, value);

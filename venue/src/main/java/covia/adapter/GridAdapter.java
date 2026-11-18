@@ -17,9 +17,9 @@ import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.exception.InvalidDefinitionException;
 import covia.exception.InvalidInputException;
-import covia.exception.NotSupportedException;
 import covia.exception.ResponseException;
 import covia.exception.UnavailableException;
+import covia.exception.UnsupportedException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.grid.Venue;
@@ -83,7 +83,7 @@ public class GridAdapter extends AAdapter {
 			case "invoke"    -> invokeAsync(ctx, meta, input);
 			case "jobStatus" -> invokeJobStatus(ctx, meta, input);
 			case "jobResult" -> invokeJobResult(ctx, meta, input);
-			default          -> CompletableFuture.failedFuture(new NotSupportedException("Unrecognised grid operation: " + gridOp));
+			default          -> CompletableFuture.failedFuture(new UnsupportedException("Unrecognised grid operation: " + gridOp));
 		};
 	}
 

@@ -25,10 +25,11 @@ import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.api.Fields;
 import covia.exception.AuthException;
+import covia.exception.ForbiddenException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
-import covia.exception.NotSupportedException;
 import covia.exception.UnavailableException;
+import covia.exception.UnsupportedException;
 import covia.exception.WrongScopeException;
 import covia.grid.HexId;
 import convex.lattice.ALatticeComponent;
@@ -239,7 +240,7 @@ public class CoviaAdapter extends AAdapter {
 				case "inspect" -> CompletableFuture.completedFuture(handleInspect(ctx, input));
 				case "aggregate" -> CompletableFuture.completedFuture(handleAggregate(ctx, input));
 				default -> CompletableFuture.failedFuture(
-					new NotSupportedException("Unknown covia operation: " + getSubOperation(meta)));
+					new UnsupportedException("Unknown covia operation: " + getSubOperation(meta)));
 			};
 		} catch (Exception e) {
 			return CompletableFuture.failedFuture(e);
@@ -848,7 +849,7 @@ public class CoviaAdapter extends AAdapter {
 	 * never meaningful.
 	 *
 	 * @throws InvalidInputException for a path without a key, or part of a secret
-	 * @throws NotSupportedException for a framework-managed namespace
+	 * @throws ForbiddenException for a framework-managed namespace
 	 */
 	private static void requireChangeable(Path path, boolean delete) {
 		AString namespace = path.isEmpty() ? null : path.get(0);
@@ -859,7 +860,7 @@ public class CoviaAdapter extends AAdapter {
 		}
 		if (path.count() < 2) throw new InvalidInputException(NAMESPACE_AND_KEY);
 		if (!WRITABLE_NAMESPACES.contains(namespace.toString())) {
-			throw new NotSupportedException(String.format(NOT_WRITABLE, namespace));
+			throw new ForbiddenException(String.format(NOT_WRITABLE, namespace));
 		}
 	}
 

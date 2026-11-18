@@ -44,9 +44,9 @@ import covia.exception.AuthException;
 import covia.exception.CapabilityDeniedException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
-import covia.exception.NotSupportedException;
 import covia.exception.ResponseException;
 import covia.exception.UnavailableException;
+import covia.exception.UnsupportedException;
 import covia.utils.HTTPURLs;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -747,7 +747,7 @@ public class HTTPAdapter extends AAdapter {
 	private String connectionToken(RequestContext ctx, String provider, String destination) {
 		TokenSource source = (engine != null) ? engine.findAdapter(TokenSource.class) : null;
 		if (source == null) {
-			throw new NotSupportedException("bearerSecret \"oauth/" + provider
+			throw new UnsupportedException("bearerSecret \"oauth/" + provider
 				+ "\" needs the oauth adapter, which is not registered on this venue");
 		}
 		try {

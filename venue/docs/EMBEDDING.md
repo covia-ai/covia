@@ -332,6 +332,8 @@ identity token through an operation", and HELD_KEYS.md.
 | `adapterState().transact` or `execute` on state with nothing stored, starting from null | It throws `MissingValueException`: give the adapter's empty value first, `adapterState().withDefault(Maps.empty())`. `get()` is still null while nothing is stored |
 | `Users.getAll()` null when there are no users | An empty map |
 | An override of `withCursor` or `mergePublication` on a component | `rebind`, and `reconcile(own, other)`, which serves transaction commits as well as sync |
+| `NotSupportedException` | Removed. By meaning: `UnsupportedException` (never possible here), `InvalidStateException` (the target's state does not allow it; `ConflictException` now extends it), `ForbiddenException` (an `AuthException`: a rule forbids it whatever the caller holds), `NotFoundException`, or `IntegrityException` ([ERRORS.md](ERRORS.md#types)) |
+| A secret or connected account that does not open refused with `NotSupportedException`, and `SecretStore.decrypt` throwing `IllegalStateException` or a decryption exception | `IntegrityException`, the venue's own failure, which `AAdapter.isExpectedFailure` no longer counts as expected. `SecretStore` throws it unlogged; report one with `IntegrityException.found(message, owner, cause)`, which logs it once at ERROR. The refusal constants are renamed: `Engine.SECRET_INTEGRITY`, `SecretAdapter.SECRET_INTEGRITY`, `UserExports.SECRET_INTEGRITY`, `OAuthAdapter.CONNECTION_INTEGRITY` and `LEGACY_GRANT_INTEGRITY`; `A2AAdapter.SECRET_UNREADABLE`, an authority or absence failure, is `SECRET_NOT_USABLE` |
 
 ## Upgrading from 0.10.0
 

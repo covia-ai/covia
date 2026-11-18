@@ -28,8 +28,8 @@ import covia.api.Fields;
 import covia.exception.InvalidDefinitionException;
 import covia.exception.JobFailedException;
 import covia.exception.NotFoundException;
-import covia.exception.NotSupportedException;
 import covia.exception.UnavailableException;
+import covia.exception.UnsupportedException;
 import covia.grid.Asset;
 import covia.grid.Job;
 import covia.grid.Status;
@@ -509,7 +509,7 @@ public class Orchestrator extends AAdapter {
 					int configuredMax=configuredForeachLimit(
 						Fields.MAX_CONCURRENCY,DEFAULT_FOREACH_MAX_CONCURRENCY);
 					if (requested.longValue() > configuredMax) {
-						throw new NotSupportedException(
+						throw new UnsupportedException(
 							"Orchestration step " + i + " foreach.maxConcurrency "
 								+ requested.longValue() + " exceeds the venue limit " + configuredMax);
 					}
@@ -567,7 +567,7 @@ public class Orchestrator extends AAdapter {
 				Long maxItems=configuredForeachMaxItems();
 				long count=data.count();
 				if (maxItems != null && count > maxItems) {
-					throw new NotSupportedException(
+					throw new UnsupportedException(
 						"foreach.in contains " + count + " items; venue limit is " + maxItems);
 				}
 				int itemCount=Utils.checkedInt(count);

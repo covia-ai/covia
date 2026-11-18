@@ -55,8 +55,9 @@ import covia.exception.ConflictException;
 import covia.exception.CoviaException;
 import covia.exception.FaultException;
 import covia.exception.InvalidInputException;
-import covia.exception.NotSupportedException;
+import covia.exception.InvalidStateException;
 import covia.exception.UnavailableException;
+import covia.exception.UnsupportedException;
 import covia.lattice.Covia;
 import covia.venue.Config;
 import covia.venue.CoviaApplication;
@@ -1212,15 +1213,16 @@ public class VenueServer {
 		routes.exception(Exception.class, (e, ctx) -> {
 			// A route answers the outcomes it defines. An expected failure that
 			// escapes it is a refusal in a situation it does not list, a 400 with
-			// its reason. A fault is a 500 with its report: one reported where it
-			// happened, or anything else, which is the venue's own fault in
-			// handling the request, logged here and named only by its type; the
-			// report names the request's id, which the log line carries too
+			// its reason. The venue's own failure is a 500: a fault with its report,
+			// one reported where it happened, or anything else, which is the
+			// venue's own fault in handling the request, logged here and named only
+			// by its type, the report naming the request's id, which the log line
+			// carries too; or its data failing an integrity check, with its message
 			// (COG-21, ERRORS.md). The same holds on every route.
 			String requestId = RequestLog.id(ctx);
 			CoviaException reported = FaultException.within(
 				REQUEST.formatted(ctx.method(), ctx.path(), requestId), FaultException.VENUE, e);
-			boolean fault = FaultException.isFault(reported);
+			boolean fault = CoviaException.isVenueFailure(reported);
 			if (VenueRouteFeature.isRestApi(ctx.routeRoles())) {
 				ApiErrors.write(ctx, fault ? 500 : 400, reported.getMessage());
 				return;
@@ -1620,7 +1622,7 @@ public class VenueServer {
 
 		private EtchStore etchStore() {
 			if (!(store instanceof EtchStore etch) || !config.isPersistentFileStore()) {
-				throw new NotSupportedException("Store garbage collection needs a persistent file store;"
+				throw new UnsupportedException("Store garbage collection needs a persistent file store;"
 					+ " this venue's store is '" + config.getStore() + "'");
 			}
 			return etch;
@@ -1661,7 +1663,7 @@ public class VenueServer {
 			File backup = requested == null ? null : etch.validateGCBackup(requested);
 			synchronized (cycleLock) {
 				if (collectedStore != null) {
-					throw new NotSupportedException("The store was already collected in this process;"
+					throw new InvalidStateException("The store was already collected in this process;"
 						+ " restart the venue to collect again (the collected file is adopted on the next start)");
 				}
 				if (collecting || etch.isGCInProgress()) {

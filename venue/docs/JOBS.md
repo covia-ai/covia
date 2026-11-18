@@ -476,9 +476,10 @@ for days, weeks, or months (workflows, HITL, agents). Consequences:
   adapter opts in by answering `canPause(job)` / `canResume(job)`, and after
   the change commits the job calls its `pause(job)` / `resume(job)`, which
   actually suspend or restart the work.
-- A job whose adapter **cannot rejects** pause/resume (`NotSupportedException`
+- A job whose adapter **cannot** rejects pause/resume (`UnsupportedException`
   → HTTP 409): changing only the status while work continues underneath is not
-  a pause.
+  a pause. A job not in a state that allows it is refused with
+  `InvalidStateException`, also 409.
 - `Job.pause()` is `STARTED`-only; `resume()` accepts the whole paused family.
 - While the job's adapter is not running, pause and resume are refused with
   `UnavailableException`, as messages to the job are, and the job is
@@ -710,7 +711,7 @@ external agent's backend job keeps its harness's authority
 ([Kept caller context](#kept-caller-context)). When its caller can no longer use the
 secret (it was deleted, the caller cannot act now, or it is another user's,
 used under a grant the request presented), the job fails, naming the remote
-task and the agent's address (`A2AAdapter.SECRET_UNREADABLE`). Recovery does not resolve a changed catalog binding or
+task and the agent's address (`A2AAdapter.SECRET_NOT_USABLE`). Recovery does not resolve a changed catalog binding or
 silently elevate the original authority. Missing authority, an unreachable
 remote job or an unavailable adapter leave the remote outcome unresolved: the
 job stays non-terminal and the venue stops following it

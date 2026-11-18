@@ -484,7 +484,7 @@ public class AdapterLifecycleTest {
 				"disabled adapters remain in the admin listing");
 
 			// Catalog metadata remains; dispatch fails because the adapter is gone.
-			covia.exception.NotSupportedException stale = assertThrows(covia.exception.NotSupportedException.class,
+			covia.exception.UnsupportedException stale = assertThrows(covia.exception.UnsupportedException.class,
 				() -> engine.jobs().invokeOperation("v/test/ops/echo",
 					Maps.of(Strings.create("value"), Strings.create("x")), ctx));
 			assertTrue(stale.getMessage().startsWith(JobManager.ADAPTER_NOT_AVAILABLE), stale.getMessage());
@@ -493,7 +493,7 @@ public class AdapterLifecycleTest {
 				Strings.create("operation"), Maps.of(Strings.create("adapter"), Strings.create("test:echo")));
 			ExecutionException gone = assertThrows(ExecutionException.class,
 				() -> engine.jobs().invokeInternal(echoMeta, Maps.empty(), ctx).get(10, TimeUnit.SECONDS));
-			assertInstanceOf(covia.exception.NotSupportedException.class, gone.getCause());
+			assertInstanceOf(covia.exception.UnsupportedException.class, gone.getCause());
 
 			ACell enabled = asVenue(engine, "v/ops/venue/adapter/enable",
 				Maps.of(Strings.create("name"), Strings.create("test")));

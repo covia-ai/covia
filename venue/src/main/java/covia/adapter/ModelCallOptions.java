@@ -11,7 +11,7 @@ import convex.core.data.Strings;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.exception.InvalidInputException;
-import covia.exception.NotSupportedException;
+import covia.exception.UnsupportedException;
 
 /** Provider-independent inference options. Model definitions supply defaults;
 * a call (including an agent's config.modelOptions) can override each key. */
@@ -44,7 +44,7 @@ record ModelCallOptions(boolean nativeSystemMessages, boolean automaticCaching,
 		String ttl = choice(values, "cacheTtl", "5m", Set.of("5m", "1h"));
 		boolean nativeSystem = flag(values, "nativeSystemMessages", false);
 		for (String feature : Set.of("preserveThinking", "inlineToolChanges", "compaction")) {
-			if (flag(values, feature, false)) throw new NotSupportedException(feature + UPSTREAM_REQUIRED);
+			if (flag(values, feature, false)) throw new UnsupportedException(feature + UPSTREAM_REQUIRED);
 		}
 		return new ModelCallOptions(nativeSystem, flag(values, "automaticCaching", false), mismatch, ttl);
 	}

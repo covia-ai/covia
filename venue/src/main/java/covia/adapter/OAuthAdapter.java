@@ -41,11 +41,12 @@ import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.exception.ConfigurationException;
 import covia.exception.FaultException;
+import covia.exception.IntegrityException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
-import covia.exception.NotSupportedException;
 import covia.exception.ResponseException;
 import covia.exception.UnavailableException;
+import covia.exception.UnsupportedException;
 import covia.lattice.Namespace;
 import covia.venue.AdapterState;
 import covia.venue.Engine;
@@ -144,9 +145,9 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 	/** Opening of the refusal for a provider the user has no connection to. */
 	public static final String NOT_CONNECTED = "Not connected to ";
 
-	/** Refusal for a connection whose tokens the venue cannot read; its provider follows. */
-	public static final String UNREADABLE_CONNECTION = "A connected account cannot be read: it is damaged or was "
-		+ "sealed under a key this venue no longer holds. Its owner can connect it again with oauth:connect: ";
+	/** Refusal for a connection whose sealed tokens failed their integrity check; its provider follows. */
+	public static final String CONNECTION_INTEGRITY = "A connected account failed its integrity check, so it cannot be "
+		+ "used. The venue operator has been told; its owner can connect it again with oauth:connect: ";
 
 	static final long DEFAULT_PENDING_TTL_MILLIS = 10 * 60_000;
 	static final int MAX_PENDING = 10_000;
@@ -428,7 +429,7 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 				case "complete" -> handleComplete(ctx, input);
 				case "status" -> handleStatus(ctx, input);
 				case "disconnect" -> handleDisconnect(ctx, input);
-				default -> throw new NotSupportedException("Unknown oauth operation: " + subOp);
+				default -> throw new UnsupportedException("Unknown oauth operation: " + subOp);
 			};
 			return CompletableFuture.completedFuture(result);
 		} catch (IOException e) {
@@ -840,9 +841,10 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 		if (p == null || p.revocationEndpoint() == null) return false;
 		AMap<AString, ACell> tokens;
 		try {
-			tokens = opened(sealed, provider);
-		} catch (NotSupportedException e) {
-			log.warn("Could not revoke the {} connection of {}: {}", provider, userDID, e.getCause().toString());
+			tokens = opened(sealed, provider, userDID);
+		} catch (IntegrityException e) {
+			log.warn("Could not revoke the {} connection of {}: its tokens failed their integrity check, so the grant "
+				+ "stays live at the provider", provider, userDID);
 			return false;
 		}
 		return revokeGrant(p, str(tokens, G_REFRESH_TOKEN), str(tokens, G_ACCESS_TOKEN));
@@ -897,38 +899,37 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 			.assoc(C_TOKENS, SecretStore.seal(Strings.create(JSON.toString(tokens)), keys));
 	}
 
-	/** A stored connection's tokens, opened for use; the operator is told of tokens that cannot be read, as
-	 *  the venue's key may be lost. */
+	/** A stored connection's tokens, opened for use. */
 	private AMap<AString, ACell> tokens(AString userDID, String provider, AMap<AString, ACell> connection) {
-		try {
-			return opened(connection.get(C_TOKENS), provider);
-		} catch (NotSupportedException e) {
-			log.warn("Connected account '{}' of {} cannot be read: {}", provider, userDID, e.getCause().toString());
-			throw e;
-		}
+		return opened(connection.get(C_TOKENS), provider, userDID);
 	}
 
 	/**
-	 * Tokens {@link #withTokens} sealed, opened.
+	 * Tokens {@link #withTokens} sealed, opened. The operator is told of tokens
+	 * that do not open, as only a bug, damage, tampering or a misconfigured
+	 * venue key explains them.
 	 *
-	 * @throws NotSupportedException with {@link #UNREADABLE_CONNECTION} when they cannot be, why being its cause
+	 * @throws IntegrityException with {@link #CONNECTION_INTEGRITY} when they do not open, logged once at ERROR
 	 */
-	private AMap<AString, ACell> opened(ACell sealed, String provider) {
+	private AMap<AString, ACell> opened(ACell sealed, String provider, AString userDID) {
+		AMap<AString, ACell> tokens;
 		try {
-			AMap<AString, ACell> tokens = sealedJson(sealed, keys());
-			if (tokens == null || str(tokens, G_ACCESS_TOKEN) == null) throw new IllegalStateException(SecretStore.INVALID_RECORD);
-			return tokens;
-		} catch (RuntimeException e) {
-			throw new NotSupportedException(UNREADABLE_CONNECTION + provider, e);
+			tokens = sealedJson(sealed, keys());
+		} catch (IntegrityException e) {
+			throw IntegrityException.found(CONNECTION_INTEGRITY + provider, userDID, e);
 		}
+		if (tokens == null || str(tokens, G_ACCESS_TOKEN) == null) {
+			throw IntegrityException.found(CONNECTION_INTEGRITY + provider, userDID, null);
+		}
+		return tokens;
 	}
 
 	/**
 	 * The JSON a value holds sealed, as a map; null when nothing is sealed there or it is JSON of another kind.
 	 *
-	 * @throws IllegalStateException with {@link SecretStore#INVALID_RECORD} for plaintext that is not JSON: a
-	 * parser's exception can quote its input, so it is never passed on
-	 * @throws RuntimeException when the value cannot be unsealed
+	 * @throws IntegrityException when the value does not open, or holds plaintext that is not JSON
+	 * ({@link SecretStore#INVALID_RECORD}): a parser's exception can quote its input, so it is never passed
+	 * on. Not logged: whoever reports it knows whose value it is
 	 */
 	private static AMap<AString, ACell> sealedJson(ACell sealed, SecretStore.Keys keys) {
 		AString raw = SecretStore.unseal(sealed, keys);
@@ -937,7 +938,7 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 		try {
 			parsed = JSON.parse(raw.toString());
 		} catch (RuntimeException e) {
-			throw new IllegalStateException(SecretStore.INVALID_RECORD);
+			throw new IntegrityException(SecretStore.INVALID_RECORD);
 		}
 		return RT.ensureMap(parsed);
 	}
@@ -987,10 +988,9 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 			LegacyMove move;
 			try {
 				move = moveLegacyGrants(secrets, connections, keys);
-			} catch (NotSupportedException e) {
+			} catch (IntegrityException e) {
 				// Only the operator can fix it, so the operator is told as well as the caller
-				log.warn("Connected accounts of {} cannot be used: {}", userDID, e.getMessage());
-				throw e;
+				throw IntegrityException.found(e.getMessage(), userDID, e.getCause());
 			}
 			if (move.secrets() == secrets) return;
 			owner.secrets().cursor().set(move.secrets());
@@ -1001,10 +1001,10 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 	/** A user's secret records and connections after {@link #moveLegacyGrants(AMap, AMap, SecretStore.Keys)}. */
 	record LegacyMove(AMap<AString, ACell> secrets, AMap<AString, ACell> connections) {}
 
-	/** Refusal for a grant an earlier venue kept that cannot be read as one; only the operator can reach it. */
-	public static final String UNREADABLE_LEGACY_GRANT =
-		"A connected account kept by an earlier venue cannot be read: it is damaged or was sealed under a key "
-		+ "this venue no longer holds. The venue operator can restore that key or remove the record: ";
+	/** Refusal for a grant an earlier venue kept that failed its integrity check; only the operator can reach it. */
+	public static final String LEGACY_GRANT_INTEGRITY =
+		"A connected account kept by an earlier venue failed its integrity check. The venue operator has been told, "
+		+ "and can restore the key that sealed it or remove the record: ";
 
 	/**
 	 * Moves the grants an earlier venue kept among a user's secret records, as
@@ -1012,8 +1012,9 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 	 * is kept over the older grant. Pure: the venue's keys are passed in, and
 	 * with no such grant both maps come back as the same cells.
 	 *
-	 * @throws NotSupportedException with {@link #UNREADABLE_LEGACY_GRANT} for a
-	 * record that is not a readable grant, leaving every record as it was
+	 * @throws IntegrityException with {@link #LEGACY_GRANT_INTEGRITY} for a
+	 * record that does not open as a grant, leaving every record as it was; not
+	 * logged, for the caller knows whose records they are
 	 */
 	static LegacyMove moveLegacyGrants(AMap<AString, ACell> secrets, AMap<AString, ACell> connections,
 			SecretStore.Keys keys) {
@@ -1027,11 +1028,11 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 			AMap<AString, ACell> grant;
 			try {
 				grant = legacyGrant(entry.getValue(), keys);
-			} catch (RuntimeException e) {
-				throw new NotSupportedException(UNREADABLE_LEGACY_GRANT + name, e);
+			} catch (IntegrityException e) {
+				throw new IntegrityException(LEGACY_GRANT_INTEGRITY + name, e);
 			}
 			if (grant == null || !PROVIDER_NAME.matcher(provider).matches()) {
-				throw new NotSupportedException(UNREADABLE_LEGACY_GRANT + name);
+				throw new IntegrityException(LEGACY_GRANT_INTEGRITY + name);
 			}
 			AString key = Strings.create(provider);
 			if (moved.get(key) == null) moved = moved.assoc(key, connection(grant, keys));

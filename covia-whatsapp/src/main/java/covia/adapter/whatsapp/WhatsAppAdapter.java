@@ -26,7 +26,7 @@ import covia.adapter.webhook.WebhookRequest;
 import covia.adapter.webhook.WebhookResponse;
 import covia.adapter.webhook.WebhookSignatures;
 import covia.exception.AuthException;
-import covia.exception.NotSupportedException;
+import covia.exception.InvalidStateException;
 import covia.exception.ResponseException;
 
 /**
@@ -183,7 +183,7 @@ public final class WhatsAppAdapter extends AWebhookMessagingAdapter<BotSpec> {
 	}
 	private void requireWindow(AMap<AString, ACell> event) {
 		long timestamp = Long.parseLong(MessagingSettings.required(event, "timestamp"));
-		if (nowSeconds() - timestamp >= WINDOW_SECONDS) throw new NotSupportedException(WINDOW_EXPIRED);
+		if (nowSeconds() - timestamp >= WINDOW_SECONDS) throw new InvalidStateException(WINDOW_EXPIRED);
 	}
 	@Override protected int maxText() { return MAX_TEXT; }
 	@Override protected long relayReplyWindowMs() { return WINDOW_SECONDS * 1000; }

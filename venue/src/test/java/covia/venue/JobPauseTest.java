@@ -16,7 +16,7 @@ import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
 import covia.adapter.AAdapter;
 import covia.api.Fields;
-import covia.exception.NotSupportedException;
+import covia.exception.UnsupportedException;
 import covia.grid.Job;
 import covia.grid.Status;
 
@@ -81,7 +81,7 @@ public class JobPauseTest {
 		Job job = started(Maps.of(RESTARTS, true));
 		assertFalse(job.isPausable());
 
-		assertThrows(NotSupportedException.class, job::pause);
+		assertThrows(UnsupportedException.class, job::pause);
 
 		assertEquals(Status.STARTED, job.getStatus(), "a status flip while work continues is not a pause");
 		assertNull(PROBE.pausedAt.get(job.getID()));
@@ -93,7 +93,7 @@ public class JobPauseTest {
 		Job job = started(Maps.of(SUSPENDS, true));
 		job.pause();
 
-		assertThrows(NotSupportedException.class, job::resume);
+		assertThrows(UnsupportedException.class, job::resume);
 
 		assertEquals(Status.PAUSED, job.getStatus());
 		assertNull(PROBE.resumedAt.get(job.getID()));

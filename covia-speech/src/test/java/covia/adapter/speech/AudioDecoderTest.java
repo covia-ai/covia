@@ -15,7 +15,7 @@ import io.github.jaredmdobson.concentus.OpusApplication;
 import io.github.jaredmdobson.concentus.OpusEncoder;
 
 import covia.exception.InvalidInputException;
-import covia.exception.NotSupportedException;
+import covia.exception.UnsupportedException;
 
 /**
  * Audio reaches the local engine as 16 kHz mono: WAV at other rates and channel counts
@@ -69,9 +69,9 @@ class AudioDecoderTest {
 	}
 
 	@Test void otherFormatsTooLongAndDamagedAudioAreRefused() throws Exception {
-		assertEquals(AudioDecoder.UNSUPPORTED, assertThrows(NotSupportedException.class,
+		assertEquals(AudioDecoder.UNSUPPORTED, assertThrows(UnsupportedException.class,
 			() -> AudioDecoder.decode("ID3\u0003mp3-ish".getBytes(StandardCharsets.ISO_8859_1))).getMessage());
-		assertEquals(AudioDecoder.UNSUPPORTED, assertThrows(NotSupportedException.class,
+		assertEquals(AudioDecoder.UNSUPPORTED, assertThrows(UnsupportedException.class,
 			() -> AudioDecoder.decode(header(new byte[1600], 8_000, 1, 1, 8))).getMessage(), "8-bit WAV is not read");
 		byte[] long8k = new byte[(AudioDecoder.MAX_SECONDS + 1) * 8_000 * 2];
 		assertEquals(AudioDecoder.TOO_LONG, assertThrows(InvalidInputException.class,

@@ -47,7 +47,7 @@ import covia.exception.ConfigurationException;
 import covia.exception.ConflictException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
-import covia.exception.NotSupportedException;
+import covia.exception.UnsupportedException;
 import covia.utils.MimeUtils;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -332,12 +332,12 @@ final class FileOperations {
 			Engine engine, AMap<AString, ACell> input) throws IOException {
 		TextExtractor extractor = (engine != null) ? engine.findAdapter(TextExtractor.class) : null;
 		if (extractor == null) {
-			throw new NotSupportedException("mode 'extract' needs the documents module (covia-documents), "
+			throw new UnsupportedException("mode 'extract' needs the documents module (covia-documents), "
 				+ "which is not loaded on this venue — read the file with mode 'bytes', or ask the operator "
 				+ "to load the module");
 		}
 		if (!extractor.supports(mime, name)) {
-			throw new NotSupportedException("No text extractor for " + name + " (" + mime
+			throw new UnsupportedException("No text extractor for " + name + " (" + mime
 				+ "); supported: " + extractor.supported());
 		}
 		CVMLong max = (input != null) ? RT.ensureLong(input.get(TextExtractor.K_MAX_CHARS)) : null;

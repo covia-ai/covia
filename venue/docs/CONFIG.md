@@ -1791,9 +1791,10 @@ fresh access token — refreshed when expired — that never reaches a model or 
 job record. `oauth:status` lists connections without tokens;
 `oauth:disconnect` forgets the grant and revokes it where the provider
 supports it. A refresh in flight never brings back a disconnected grant or
-replaces a newer one. A connection whose tokens the venue cannot read, as
-after a lost venue key, is refused with a reason when used; connecting again
-replaces it, and disconnecting forgets it unrevoked. Deleting an account
+replaces a newer one. A connection whose tokens fail their integrity check,
+as after damage or a misconfigured venue key, is refused as the venue's own
+failure when used and logged for the operator; connecting again replaces it,
+and disconnecting forgets it unrevoked. Deleting an account
 (`user:delete`) deletes its connections and revokes their grants
 the same way, once: a provider that refuses or cannot be reached keeps a grant
 the venue no longer holds. Providers and default scopes are published at

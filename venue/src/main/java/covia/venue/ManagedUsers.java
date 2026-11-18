@@ -22,8 +22,8 @@ import convex.lattice.cursor.AForkableCursor;
 import covia.api.Fields;
 import covia.exception.ConflictException;
 import covia.exception.InvalidInputException;
+import covia.exception.InvalidStateException;
 import covia.exception.NotFoundException;
-import covia.exception.NotSupportedException;
 
 /**
  * The users whose name and sign-in keys this venue manages, by account id, which
@@ -171,7 +171,7 @@ public final class ManagedUsers extends MapComponent<AString, AMap<AString, ACel
 			requireKeyNotBoundElsewhere(id, keyDID);
 			AMap<AString, ACell> existing = RT.ensureMap(keys.get(keyDID));
 			if (existing != null && !ACTIVE.equals(existing.get(Fields.STATUS))) {
-				throw new NotSupportedException(
+				throw new ConflictException(
 					"Revoked authentication keys cannot be reactivated");
 			}
 		}
@@ -211,7 +211,7 @@ public final class ManagedUsers extends MapComponent<AString, AMap<AString, ACel
 			throw new IllegalStateException("Malformed authentication key status");
 		}
 		if (!allowLast && getActiveAuthenticationKeys(id).count() <= 1) {
-			throw new NotSupportedException(
+			throw new InvalidStateException(
 				CANNOT_REVOKE_FINAL_KEY);
 		}
 		AMap<AString, ACell> revoked = existing

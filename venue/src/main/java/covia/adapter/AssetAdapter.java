@@ -24,8 +24,8 @@ import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
-import covia.exception.NotSupportedException;
 import covia.exception.UnavailableException;
+import covia.exception.UnsupportedException;
 import covia.grid.Asset;
 import covia.grid.HexId;
 import covia.lattice.CapabilityChecker;
@@ -81,7 +81,7 @@ public class AssetAdapter extends AAdapter {
 				case "list"    -> CompletableFuture.completedFuture(handleList(input, ctx));
 				case "pin"     -> CompletableFuture.completedFuture(handlePin(input, ctx));
 				default -> CompletableFuture.failedFuture(
-					new NotSupportedException("Unknown asset operation: " + getSubOperation(meta)));
+					new UnsupportedException("Unknown asset operation: " + getSubOperation(meta)));
 			};
 		} catch (Exception e) {
 			return CompletableFuture.failedFuture(e);

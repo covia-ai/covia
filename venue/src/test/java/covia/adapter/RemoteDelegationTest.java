@@ -400,10 +400,10 @@ class RemoteDelegationTest {
 			assertEquals(RemoteJobs.CREDENTIAL_NOT_KEPT.formatted("literal-task", url + "/a2a"), ended.getErrorMessage());
 			Job ungranted = second.jobs().getJob(fromGrant.getID(), user);
 			assertEquals(Status.FAILED, ungranted.getStatus());
-			assertEquals(A2AAdapter.SECRET_UNREADABLE.formatted("granted-task", url + "/a2a"), ungranted.getErrorMessage());
+			assertEquals(A2AAdapter.SECRET_NOT_USABLE.formatted("granted-task", url + "/a2a"), ungranted.getErrorMessage());
 			Job deleted = second.jobs().getJob(fromDeleted.getID(), user);
 			assertEquals(Status.FAILED, deleted.getStatus());
-			assertEquals(A2AAdapter.SECRET_UNREADABLE.formatted("deleted-task", url + "/a2a"), deleted.getErrorMessage());
+			assertEquals(A2AAdapter.SECRET_NOT_USABLE.formatted("deleted-task", url + "/a2a"), deleted.getErrorMessage());
 			received.await("a poll carrying the rotated secret", () -> authorizations.contains("Bearer second-token"));
 			assertFalse(second.jobs().getJob(fromSecret.getID(), user).isFinished());
 		} finally { second.close(); peer.stop(0); }

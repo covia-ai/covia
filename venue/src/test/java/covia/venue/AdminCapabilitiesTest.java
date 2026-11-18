@@ -24,7 +24,7 @@ import convex.core.data.Vectors;
 import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.AuthException;
-import covia.exception.NotSupportedException;
+import covia.exception.UnsupportedException;
 
 /** The admin namespace changes delegation, not operation paths or resource ownership. */
 class AdminCapabilitiesTest {
@@ -95,7 +95,7 @@ class AdminCapabilitiesTest {
 		denied("v/ops/venue/restart", Maps.empty(), venueGrant("process", "venue/restart"));
 		ExecutionException failure = assertThrows(ExecutionException.class,
 			() -> run("v/ops/venue/restart", Maps.empty(), venueGrant("process", "admin/venue/restart")));
-		assertInstanceOf(NotSupportedException.class, failure.getCause());
+		assertInstanceOf(UnsupportedException.class, failure.getCause());
 	}
 
 	@Test
@@ -107,7 +107,7 @@ class AdminCapabilitiesTest {
 		for (String allowed : new String[] {"admin/venue/gc", "admin/venue", "admin"}) {
 			ExecutionException failure = assertThrows(ExecutionException.class,
 				() -> run("v/ops/venue/gc", input, venueGrant("store", allowed)));
-			assertInstanceOf(NotSupportedException.class, failure.getCause());
+			assertInstanceOf(UnsupportedException.class, failure.getCause());
 		}
 	}
 

@@ -17,7 +17,7 @@ import convex.core.lang.RT;
 import covia.adapter.AAdapter;
 import covia.adapter.TestAdapter;
 import covia.api.Fields;
-import covia.exception.NotSupportedException;
+import covia.exception.UnsupportedException;
 import covia.grid.Job;
 import covia.grid.Status;
 
@@ -179,10 +179,10 @@ public class JobMirrorTest {
 		String gateName = "mirror-verbs-" + ctx.getUserDID();
 		try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName)) {
 			Job mirror = engine.jobs().mirror(heldCall(engine, ctx, gate, Maps.of("gate", gateName)));
-			NotSupportedException message = assertThrows(NotSupportedException.class,
+			UnsupportedException message = assertThrows(UnsupportedException.class,
 				() -> engine.jobs().deliverMessage(mirror.getID(), Maps.of("text", "hello"), ctx));
 			assertTrue(message.getMessage().startsWith(JobManager.JOB_NO_MESSAGES), message.getMessage());
-			assertThrows(NotSupportedException.class, () -> engine.jobs().pauseJob(mirror.getID(), ctx));
+			assertThrows(UnsupportedException.class, () -> engine.jobs().pauseJob(mirror.getID(), ctx));
 		}
 	}
 

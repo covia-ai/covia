@@ -37,10 +37,12 @@ import convex.lattice.fs.DLPath;
 import convex.lattice.fs.impl.DLFSLocal;
 import covia.api.Fields;
 import covia.exception.AuthException;
+import covia.exception.ForbiddenException;
+import covia.exception.InvalidDefinitionException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
-import covia.exception.NotSupportedException;
 import covia.exception.UnavailableException;
+import covia.exception.UnsupportedException;
 import covia.lattice.CapabilityChecker;
 import covia.utils.MimeUtils;
 import covia.venue.Config;
@@ -412,7 +414,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
 		String subOp = getSubOperation(meta);
 		if (subOp == null) {
-			return CompletableFuture.failedFuture(new NotSupportedException("No DLFS sub-operation specified"));
+			return CompletableFuture.failedFuture(new InvalidDefinitionException("No DLFS sub-operation specified"));
 		}
 		return invokeOperation(ctx, subOp, RT.castMap(input), false);
 	}
@@ -789,7 +791,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 			AMap<AString, ACell> input) {
 		AString ability = abilityFor(subOp);
 		if (ability == null) {
-			throw new NotSupportedException(
+			throw new ForbiddenException(
 				"Cross-user DLFS access is not permitted for '" + subOp + "' on another user's drive");
 		}
 		AString pathCell = RT.ensureString(RT.getIn(input, FIELD_PATH));
@@ -884,7 +886,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 			case "delete" -> handleDelete(driveCtx, input);
 			case "stat" -> handleStat(driveCtx, input);
 			case "setMetadata" -> handleSetMetadata(driveCtx, input);
-			default -> throw new NotSupportedException("Unknown DLFS operation: " + subOp);
+			default -> throw new UnsupportedException("Unknown DLFS operation: " + subOp);
 		};
 	}
 
@@ -1076,11 +1078,11 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 	 * {@code dlfs:setMetadata} does, for {@code file:setMetadata}, which has
 	 * authorised the write.
 	 *
-	 * @throws NotSupportedException If {@code resource} is not in DLFS
+	 * @throws UnsupportedException If {@code resource} is not in DLFS
 	 */
 	void setMetadataAt(RequestContext ctx, String resource, ACell metadata) throws IOException {
 		DlfsFileRef fr = parseDlfsFileRef(resource);
-		if (fr == null) throw new NotSupportedException(NO_METADATA);
+		if (fr == null) throw new UnsupportedException(NO_METADATA);
 		RequestContext driveCtx = (fr.ownerDID() == null) ? ctx : RequestContext.of(fr.ownerDID());
 		setMetadata(driveCtx, fr.drive(), fr.path(), metadata);
 	}

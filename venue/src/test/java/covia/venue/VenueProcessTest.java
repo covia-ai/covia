@@ -24,7 +24,7 @@ import convex.core.crypto.Hashing;
 import convex.core.data.Maps;
 import covia.api.Fields;
 import covia.exception.InvalidInputException;
-import covia.exception.NotSupportedException;
+import covia.exception.InvalidStateException;
 import covia.grid.Job;
 import covia.grid.Status;
 
@@ -209,7 +209,7 @@ class VenueProcessTest {
 
 		process.requestRestart(null, null, 10_000,
 			new Job(Maps.of(Fields.STATUS, Status.PENDING)));
-		assertThrows(NotSupportedException.class, () -> process.requestRestart(
+		assertThrows(InvalidStateException.class, () -> process.requestRestart(
 			null, null, 10_000, new Job(Maps.of(Fields.STATUS, Status.PENDING))));
 	}
 

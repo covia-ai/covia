@@ -25,8 +25,8 @@ import covia.api.Fields;
 import covia.exception.InvalidDefinitionException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
-import covia.exception.NotSupportedException;
 import covia.exception.UnavailableException;
+import covia.exception.UnsupportedException;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 
@@ -561,7 +561,7 @@ public final class Skills {
 				ACell target = engine.resolvePathUnchecked(s, ctx);
 				if (target == null) throw new NotFoundException("skill reference does not resolve: " + str, str);
 				if (target instanceof AString) {
-					throw new NotSupportedException("skill reference chains are not followed: " + path + " → " + str);
+					throw new UnsupportedException("skill reference chains are not followed: " + path + " → " + str);
 				}
 				return resolveValue(engine, ctx, path, s, target, needBody);
 			}

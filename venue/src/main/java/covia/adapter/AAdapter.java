@@ -1278,11 +1278,13 @@ public abstract class AAdapter {
 
 	/**
 	 * Whether a failure is one its caller can cause or act on: a Covia
-	 * exception carrying its reason that is not a reported fault, looking
-	 * through async wrappers. A fault, or anything not yet reported, is not.
+	 * exception carrying its reason that is not the venue's own failure,
+	 * looking through async wrappers. A reported fault, the venue's data
+	 * failing its integrity check ({@link CoviaException#isVenueFailure}), or
+	 * anything not yet reported, is not.
 	 */
 	public static boolean isExpectedFailure(Throwable t) {
-		return CoviaException.reasonOf(t) != null && !FaultException.isFault(t);
+		return CoviaException.reasonOf(t) != null && !CoviaException.isVenueFailure(t);
 	}
 
 	/**

@@ -17,6 +17,14 @@ A **fault** is a failure in code the request ran that the caller cannot fix.
 It reaches the caller as a `FaultException`, a scope's report of the fault in
 its code, and every surface answers it as a server failure.
 
+An **integrity failure** is data the venue keeps for itself failing its
+integrity check, such as a secret it sealed that no longer opens. Only a bug,
+damage to the store, tampering or a misconfigured venue key explains it, so
+the caller did not cause it. It reaches the caller as an `IntegrityException`
+whose message says which data failed and how its owner can replace it, and
+every surface answers it as a server failure, as it does a fault
+(`CoviaException.isVenueFailure`).
+
 A `CoviaException`'s message is always written for the caller:
 `CoviaException.reasonOf` returns it, and anything else has no reason to give.
 
@@ -103,25 +111,38 @@ the rules above.
 
 | Type | Meaning |
 |---|---|
-| `InvalidInputException` | The caller's input is wrong; the message names the field or value and why |
-| `InvalidDefinitionException` | A definition the request uses (an operation, orchestration, agent or skill) is malformed; not the caller's direct input |
-| `NotFoundException` | A named thing does not exist; carries the reference |
-| `NotSupportedException` | This venue or adapter does not do this, or the target does not take the request in its current state |
-| `ConflictException` | Two values conflict and cannot both stand, such as a new value where one already exists |
-| `UnavailableException` | Something the request depends on failed or could not be reached; retrying later may succeed. `RemoteFetchException`, `ShuttingDownException` and `StillStartingException` refine it |
-| `ResponseException` | A remote service answered with an error or a malformed response |
-| `AuthException` | The caller is not authenticated or not authorised. `CapabilityDeniedException` refines it for a capability the request's authority lacks, and carries the resource, the ability and the authority refused |
-| `WrongScopeException` | A scope-bound namespace (`n/`, `c/`, `t/`) is used outside the scope it needs |
-| `ConfigurationException` | The setup a request runs under is wrong or incomplete: the operator's configuration, or the settings and credentials the caller supplied for a dependency (a refused key, a missing model). Every request made the same way fails until it is fixed |
-| `RateLimitException` | An admission or rate control refused the request; carries a retry hint |
-| `JobFailedException` | A job the caller awaited failed; carries the job |
-| `FaultException` | A fault in code the request ran, reported by the scope it happened in; names what failed and whose code it was. Not the caller's to fix |
+Every type extends `CoviaException`. Each means what one of COG-21's statuses
+means, so a route's status and the type agree, though the route still chooses
+the status by the situation it describes.
+
+| Type | Meaning | JDK counterpart |
+|---|---|---|
+| `InvalidInputException` | The caller's input is wrong; the message names the field or value and why | `IllegalArgumentException` |
+| `InvalidDefinitionException` | A definition the request uses (an operation, orchestration, agent or skill) is malformed; not the caller's direct input | |
+| `WrongScopeException` | A scope-bound namespace (`n/`, `c/`, `t/`) is used outside the scope it needs | |
+| `UnsupportedException` | What was asked is never possible here: no such facility, an option or format it does not offer, or a facility switched off on this venue | `UnsupportedOperationException` |
+| `InvalidStateException` | The request is valid, but the current state of what it addresses does not allow it, such as a message to a finished job; it will not succeed until that state changes. `ConflictException` refines it for a value that cannot stand beside one already there | `IllegalStateException` |
+| `NotFoundException` | A named thing does not exist; carries the reference | `NoSuchElementException` |
+| `AuthException` | The caller is not authenticated or not authorised. `CapabilityDeniedException` refines it for a capability the request's authority lacks, and carries the resource, the ability and the authority refused; `ForbiddenException` for a rule that forbids the request whatever the caller holds | `SecurityException` |
+| `RateLimitException` | An admission or rate control refused the request; carries a retry hint | |
+| `UnavailableException` | Something the request depends on failed or could not be reached; retrying later may succeed. `RemoteFetchException`, `ShuttingDownException` and `StillStartingException` refine it | |
+| `ResponseException` | A remote service answered with an error or a malformed response | |
+| `ConfigurationException` | The setup a request runs under is wrong or incomplete: the operator's configuration, or the settings and credentials the caller supplied for a dependency (a refused key, a missing model). Every request made the same way fails until it is fixed | |
+| `IntegrityException` | Data the venue keeps for itself failed its integrity check; the venue's own failure, logged once at ERROR | |
+| `JobFailedException` | A job the caller awaited failed; carries the job | |
+| `FaultException` | A fault in code the request ran, reported by the scope it happened in; names what failed and whose code it was. Not the caller's to fix | |
 
 Invalid input and invalid state are different. A bad value in the request is
 `InvalidInputException`. A request the target's current state does not allow,
-such as a message to a finished job or a resume of a job that cannot pause, is
-`NotSupportedException`, or `UnavailableException` when the situation can clear
-by itself. A request the state forbids is not a conflict.
+such as a message to a finished job or a resume of a job that is not paused,
+is `InvalidStateException`, or `UnavailableException` when the situation can
+clear by itself. A request no state of the target would allow, such as a
+pause of a job whose operation cannot pause, is `UnsupportedException`.
+
+A refusal for want of authority is always an `AuthException`, whatever was
+being attempted: reading data the caller may not see is an authority failure,
+never another type. An authority check comes before any work that could fail
+for another reason, so a caller without the right grant learns only that.
 
 ## Where a failure is typed
 
@@ -164,17 +185,20 @@ Claude Code project or a P2P peer address, throws `IllegalArgumentException`.
 IO and HTTP client failures are caught by the caller and rethrown as the type
 for what was being attempted, with the cause chained.
 
-**Stored data the venue cannot read is an expected failure.** A record that is
-damaged or was sealed under a key the venue no longer holds, such as a secret
-or a connected account, is refused with `NotSupportedException`. The message
-names the record, never its content, and says who can fix it and how: the
-owner by setting it again, or the operator by restoring the key or removing the
-record. The failure that stopped the venue reading it is chained as the cause,
-for the caller to inspect or log as it sees fit; like the message, it never
-quotes the record, and no surface reports it. When
-such a record is used, rather than read out by its owner, the
-venue also logs a warning naming the user and the record, so the operator learns
-of a lost key.
+**Sealed data that does not open is an integrity failure.** The venue seals
+secrets and connected accounts under its own key, and checks at mount that
+the key matches the store, so a record that does not open, is not a sealed
+record, or names a key version the venue cannot derive has been altered or
+damaged, or the venue key is misconfigured. It is an `IntegrityException`.
+The message names the record, never its content, and says who can replace it
+and how: the owner by setting it again, or the operator by restoring the key
+or removing the record. The failure that revealed it is chained as the cause;
+like the message, it never quotes the record. It is logged once at ERROR, so
+the operator learns of it. The secret store, which does not know whose
+secrets it holds, only detects it; the code that reports it, knowing whose
+data it is, raises it with `IntegrityException.found`, which logs it naming
+the owner. One that escapes unlogged is logged by the scope it escapes, as a
+fault is (`FaultException.within`).
 
 **Internal invariants stay JDK exceptions.** "Called before prepare", "already
 started" or an impossible state are bugs, and `IllegalStateException` reports
@@ -194,6 +218,9 @@ unchanged. A timeout becomes `UnavailableException`, and an interrupt a
 for the scope awaiting to report.
 
 ## Surfaces
+
+An integrity failure is answered as a fault is, with its message in place of
+a report.
 
 | Surface | Expected failure | Fault | Contract |
 |---|---|---|---|

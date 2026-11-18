@@ -27,7 +27,7 @@ import covia.adapter.TextExtractor.Extraction;
 import covia.adapter.TextExtractor.Request;
 import covia.exception.ConfigurationException;
 import covia.exception.InvalidInputException;
-import covia.exception.NotSupportedException;
+import covia.exception.UnsupportedException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.Config;
@@ -137,7 +137,7 @@ public class DocumentsAdapterTest {
 
 		assertFalse(adapter.supports("application/zip", "archive.zip"));
 		assertFalse(adapter.supports("image/heic", "photo.heic"));
-		NotSupportedException refused = assertThrows(NotSupportedException.class,
+		UnsupportedException refused = assertThrows(UnsupportedException.class,
 			() -> adapter.extract(request(new byte[] {0x50, 0x4b}, "archive.zip", 0, null, null)));
 		assertFalse(refused.getMessage().isBlank());
 
