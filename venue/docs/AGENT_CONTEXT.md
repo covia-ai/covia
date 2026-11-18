@@ -930,7 +930,8 @@ The assembler's output is provider-neutral. The level-3 adapter, reading the mod
 | `cachePrefix` | defaults to true; when enabled, retains `renderedContext` and turns the initial, committed-message and working-turn marks into provider cache controls; `false` makes the render ephemeral and omits the marks; provider normalization remaps canonical indices to wire indices, and a boundary ending in system content uses the nearest preceding cacheable message; call-level `cache: false` switches the same policy off |
 | dynamic-tool support | maps persisted tool-state events to native addition/removal blocks; without it, uses the fixed generic-tool strategy or requires an explicit rebuild (§3.2.3) |
 | always | maps the base tool manifest to the provider's schema, in the given order, and `tool` messages and `toolCalls` to its shapes, merging consecutive same-role messages where the API requires alternation |
-| always | **never reorders, never drops, never adds content** |
+| always | leaves out an assistant turn that says nothing, which providers reject, before placing system messages ([AGENT_SESSIONS.md](./AGENT_SESSIONS.md)) |
+| always | **never drops or adds content, and reorders only where the provider requires** (native system blocks above) |
 
 Nothing else about a provider needs handling: its context size is already in the budget.
 
