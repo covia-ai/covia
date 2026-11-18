@@ -1158,7 +1158,10 @@ public class TelegramAdapterTest {
 		assertEquals(template, engine.resolvePath(Strings.create("v/adapters/telegram/templates/telegram"), RequestContext.of(owner)),
 			"mirrored in the adapter's own subtree");
 		ACell cfg = RT.getIn(template, "agent", "config");
-		assertTrue(RT.getIn(cfg, "systemPrompt").toString().contains("[From:"), "the prompt teaches the From element");
+		String from = covia.adapter.agent.Labels.renderSentence(covia.adapter.agent.Labels.BRACKET,
+			covia.adapter.agent.Labels.Kind.FROM_VENUE, "");
+		assertTrue(RT.getIn(cfg, "systemPrompt").toString().contains(from.substring(0, from.indexOf(']'))),
+			"the prompt teaches the From element as the venue renders it");
 		assertEquals(Vectors.of((ACell) Strings.create("w/skills"), Strings.create("v/skills/root")),
 			RT.getIn(cfg, "skillsets"), "the template discovers personal and venue skillsets");
 		assertNull(RT.getIn(cfg, "skills"), "directories must not be declared as individual skills");

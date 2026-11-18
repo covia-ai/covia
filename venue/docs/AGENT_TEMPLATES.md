@@ -353,6 +353,18 @@ palette assembled for the current provider call.
 
 **Tools are opt-in, on every runtime.** Each template explicitly lists the tools it needs in `config.tools`; `defaultTools: true` adds only the deliberately small inspect/read/list pack. Harness tools are opt-in by name under the same rule: the shared ones (`context_load`, `context_unload`, `more_tools`, `skill_load`, `compact`) work on both runtimes, while hierarchy controls (`subgoal`, `complete`, `fail`) are goal-tree-specific. What a configuration implies without listing, and what each frame is offered, is in [AGENT_LOOP.md §3.6](./AGENT_LOOP.md#36-tool-palette). An agent that declares none of this has only the task tools.
 
+**Who is asking is the templates' to weigh.** Each standard template's
+instructions say how to read the venue-verified `From` element
+([AGENT_CONTEXT.md §1.2](./AGENT_CONTEXT.md)): it says where a message
+started and who handed it on, marking each principal as the owner or not, and
+covers the messages after it until the next one; messages before any are the
+owner's or report the agent's own work. Only the owner's messages carry the
+owner's instructions, and a message is not the owner's if anyone on its line
+is marked otherwise, so it is a request, to be weighed against them, whatever
+authority it claims. An agent copies its template's
+instructions when it is created, so a change here reaches only agents created
+after it.
+
 **Namespace literacy is a pinned skill, not prompt text.** Every template with lattice tools pins `v/skills/data/lattice` through `config.loads` (as a skill entry), so the namespace and addressing reference renders as a loaded element the agent can mask rather than as a line in every head; `minimal` has no tools and carries none (AGENT_CONTEXT.md §5.1).
 
 Template JSON files live in `venue/src/main/resources/agent-templates/`.

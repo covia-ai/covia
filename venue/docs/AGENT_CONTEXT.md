@@ -338,7 +338,8 @@ shown. A record with no text shows its name, quoted. A route that cannot be
 read, or that does not end at the turn's caller, shows as unreadable, never as
 the owner; a long one shows its first two records, how many it folds, and its
 latest. How far to trust each source is for the agent's instructions to say,
-not the element (#405).
+not the element (#405); the standard templates' instructions say it
+(AGENT_TEMPLATES.md §6).
 
 **When it appears.** An element precedes a user turn whose source, its caller
 and route records, differs from the turn before. The owner chatting directly
