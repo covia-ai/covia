@@ -10,9 +10,10 @@ an agent's harness runs in its controller's frame, `admin/sudo` is a call
 into the user, a request names one acting principal, whose authority an
 agent's record decides at each check, state within one interaction belongs
 to the principal that opened it, acts that need the user in person read the
-request's origin, a job and a scheduled event keep the state they run in,
-and a Python function can be told its frame's principals. What still works
-the old way is listed under [What it replaces](#what-it-replaces).
+request's origin, a job and a scheduled event keep the state they run in, a
+Python function can be told its frame's principals, and the venue's own users
+may be given in short form. What still works the old way is listed under
+[What it replaces](#what-it-replaces).
 
 ## The fields
 
