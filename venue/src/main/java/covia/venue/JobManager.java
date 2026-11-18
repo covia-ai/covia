@@ -111,7 +111,8 @@ public class JobManager {
 		return new InvalidInputException(OPERATION_REQUIRED);
 	}
 
-	private static NotFoundException unresolved(AString ref) {
+	/** The refusal of operation reference {@code ref}, which resolves to nothing. */
+	public static NotFoundException unresolved(AString ref) {
 		return new NotFoundException(CANNOT_RESOLVE_OPERATION + ref, ref.toString());
 	}
 

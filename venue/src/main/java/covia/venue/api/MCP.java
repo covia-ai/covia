@@ -1127,7 +1127,6 @@ public class MCP extends McpServer {
 
 	/** Keys to strip from schemas before exposing via MCP */
 	private static final AString SECRET_KEY = Strings.intern("secret");
-	private static final AString SECRET_FIELDS_KEY = Strings.intern("secretFields");
 
 	/** Prepare a declared schema for MCP exposure: strip covia-internal keys
 	 *  and warn on structurally invalid schemas. Never invents or rewrites
@@ -1144,7 +1143,7 @@ public class MCP extends McpServer {
 
 	@SuppressWarnings("unchecked")
 	private static AMap<AString, ACell> stripKeys(AMap<AString, ACell> schema) {
-		schema = schema.dissoc(SECRET_KEY).dissoc(SECRET_FIELDS_KEY);
+		schema = schema.dissoc(SECRET_KEY).dissoc(Fields.SECRET_FIELDS);
 		ACell propsCell = schema.get(Fields.PROPERTIES);
 		if (propsCell instanceof AMap<?,?> props) {
 			AMap<AString, ACell> cleanProps = (AMap<AString, ACell>) props;

@@ -4,15 +4,15 @@ Every request names up to three principals by DID: whose authority applies,
 who called into it, and who it authenticated as where it entered the venue.
 The model is Convex's `*address*`, `*caller*` (CAD005) and `*origin*`. A
 record of work, such as a job or a scheduled event, names the principal that
-called it. This is a design, implemented in part: a callable's call enters its
-issuer's frame and calls nest, an agent's harness runs in its controller's
-frame, `admin/sudo` is a call into the user, a request names one acting
-principal, whose authority an agent's record decides at each check, state
-within one interaction belongs to the principal that opened it, acts that
-need the user in person read the request's origin, a job and a scheduled
-event keep the state they run in, and a Python function can be told its
-frame's principals. What still works the old
-way is listed under [What it replaces](#what-it-replaces).
+called it. This is a design, implemented in part: a callable is invoked as
+an operation by its path, its call enters its issuer's frame and calls nest,
+an agent's harness runs in its controller's frame, `admin/sudo` is a call
+into the user, a request names one acting principal, whose authority an
+agent's record decides at each check, state within one interaction belongs
+to the principal that opened it, acts that need the user in person read the
+request's origin, a job and a scheduled event keep the state they run in,
+and a Python function can be told its frame's principals. What still works
+the old way is listed under [What it replaces](#what-it-replaces).
 
 ## The fields
 

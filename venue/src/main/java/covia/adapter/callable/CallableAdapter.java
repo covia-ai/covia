@@ -1,6 +1,9 @@
 package covia.adapter.callable;
 
+import java.util.HashSet;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Supplier;
 import java.util.regex.Pattern;
 
 import convex.auth.ucan.Capability;
@@ -9,6 +12,7 @@ import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Maps;
+import convex.core.data.Path;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.AInteger;
@@ -21,13 +25,19 @@ import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.exception.ConflictException;
+import covia.exception.CoviaException;
+import covia.exception.InvalidDefinitionException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
 import covia.exception.NotSupportedException;
+import covia.grid.Asset;
 import covia.grid.Operation;
+import covia.lattice.CapabilityChecker;
 import covia.lattice.Caps;
+import covia.lattice.CoviaPath;
 import covia.venue.AdapterState;
 import covia.venue.Engine;
+import covia.venue.JobManager;
 import covia.venue.RequestContext;
 import covia.venue.RouteText;
 
@@ -37,8 +47,9 @@ import covia.venue.RouteText;
  * issuer's authority narrowed by caps fixed on it, whoever calls it; the
  * caller is the invoker. A gate operation the provider chooses decides who
  * else may call it, as a Convex trust monitor guards a callable function.
- * This adapter keeps them, as its state ({@link Callables}), and offers the
- * {@code callable:} operations and two standard gates.
+ * This adapter keeps them, as its state ({@link Callables}), offers the
+ * {@code callable:} operations and two standard gates, and runs a callable
+ * whose path is invoked as an operation ({@link #operation}).
  */
 public class CallableAdapter extends AAdapter {
 
@@ -61,12 +72,22 @@ public class CallableAdapter extends AAdapter {
 	public static final String GATE_REFUSED = "The gate of %s refused this call: %s";
 	public static final String NOT_A_CALLER = "%s is not among this gate's callers";
 	public static final String NO_CALLERS = "This gate lists no callers: give it callers as an operation default";
+	public static final String CALLABLE_UNNAMED = "This operation names no callable: operation.callable must be <ownerDID>/x/callable/<name>";
 
 	/** The resource a namespace's callables are under, {@code x/callable}; one callable is {@link #resource}. */
 	public static final AString CALLABLES_RESOURCE = Strings.intern("x/callable");
 
 	/** A callable's resource as {@code x/callable/<name>} names it, after the prefix. */
 	private static final String CALLABLE_PATH = CALLABLES_RESOURCE + "/";
+
+	/** The first segment of a callable's path, the namespace of adapter views. */
+	private static final AString VIEWS = Strings.intern("x");
+
+	/** What runs a callable invoked by its path ({@link #operation}). */
+	private static final AString INVOKE = Strings.intern(NAME + ":invoke");
+
+	/** What a callable invoked by its path declares of its target's operation: its schema, and what its job records hide. */
+	private static final AString[] TARGET_DECLARES = {Fields.INPUT, Fields.OUTPUT, Fields.SECRET_FIELDS};
 
 	private static final Pattern CALLABLE_NAME = Pattern.compile("[a-z0-9-]{1,64}");
 
@@ -96,6 +117,7 @@ public class CallableAdapter extends AAdapter {
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
 		String op = getSubOperation(meta);
 		if ("call".equals(op)) return CompletableFuture.supplyAsync(() -> call(ctx, input), VIRTUAL_EXECUTOR).thenCompose(f -> f);
+		if ("invoke".equals(op)) return CompletableFuture.supplyAsync(() -> invoked(ctx, meta, input), VIRTUAL_EXECUTOR).thenCompose(f -> f);
 		return CompletableFuture.supplyAsync(() -> switch (op) {
 			case "create" -> view(create(ctx, input));
 			case "update" -> view(update(ctx, input));
@@ -282,25 +304,74 @@ public class CallableAdapter extends AAdapter {
 	private CompletableFuture<ACell> call(RequestContext ctx, ACell input) {
 		AString named = RT.ensureString(RT.getIn(input, Fields.CALLABLE));
 		Callable callable = named(ctx, named);
+		return run(ctx, callable, RT.getIn(input, Fields.INPUT),
+			() -> new NotFoundException(NOT_CALLABLE.formatted(named), named.toString()));
+	}
+
+	/**
+	 * Runs the call of the callable an operation names when its path was
+	 * invoked ({@link #operation}), with {@code input} as its target's input. A
+	 * caller that may not call it is refused as for an operation reference
+	 * that resolves to nothing, as resolving its path refuses one.
+	 *
+	 * @return the target's output, when it completes
+	 */
+	private CompletableFuture<ACell> invoked(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
+		AString path = RT.ensureString(RT.getIn(meta, Fields.OPERATION, Fields.CALLABLE));
+		if (path == null) throw new InvalidDefinitionException(CALLABLE_UNNAMED);
+		AString invoked = (ctx.getOp() != null) ? ctx.getOp() : path;
+		Supplier<CoviaException> hidden = () -> JobManager.unresolved(invoked);
+		Callable callable = atPath(path, ctx);
+		if (callable == null) throw hidden.get();
+		return run(ctx, callable, input, hidden);
+	}
+
+	/**
+	 * A call of {@code callable} with {@code input} as its target's input
+	 * (CALLABLES.md, How a call runs): admits the caller, enters the issuer's
+	 * frame and runs the target there. A caller that may not reach it is
+	 * refused with {@code hidden}, as a callable that does not exist is, so a
+	 * private callable is not revealed.
+	 *
+	 * @return the target's output, when it completes
+	 */
+	private CompletableFuture<ACell> run(RequestContext ctx, Callable callable, ACell input,
+			Supplier<CoviaException> hidden) {
 		AString resource = resource(callable.owner(), callable.name());
-		ACell targetInput = RT.getIn(input, Fields.INPUT);
 		// The callable hands the caller's request to its issuer: its record is its
 		// reference, vouching for the issuer, after the record of whoever called
 		RequestContext frame = engine.callContext(ctx, callable.reference());
 		RequestContext call = frame.via(ADAPTER, callable.reference(),
 			RouteText.builder().name(callable.reference().get(Fields.NAME)).build());
 		if (!engine.authorityCovers(ctx, resource, Abilities.CALLABLE_CALL)) {
-			AString gate = callable.gate();
-			// The gate admits the caller only as far as what narrows its request reaches, as any admission does
-			if (gate == null || !engine.admissionCovers(ctx, resource, Abilities.CALLABLE_CALL)) {
-				throw new NotFoundException(NOT_CALLABLE.formatted(named), named.toString());
-			}
-			String refused = engine.jobs().evaluateCallableGate(gate, resource, targetInput, ctx, call);
+			if (!gated(ctx, callable)) throw hidden.get();
+			String refused = engine.jobs().evaluateCallableGate(callable.gate(), resource, input, ctx, call);
 			if (refused != null) throw new AuthException(GATE_REFUSED.formatted(resource, refused));
 		}
 		AString target = callable.operation();
 		Operation operation = engine.jobs().resolveOperation(target, engine.context(callable.owner(), callable.issuer()));
-		return engine.jobs().invokeInternal(target, operation, targetInput, call, null);
+		return engine.jobs().invokeInternal(target, operation, input, call, null);
+	}
+
+	/**
+	 * Whether {@code ctx} may reach {@code callable}, as far as can be known
+	 * before its input: it holds {@code callable/call} on it, or may pass its
+	 * gate ({@link #gated}). A call it reaches through the gate is still refused
+	 * if the gate refuses that call.
+	 */
+	private boolean reaches(RequestContext ctx, Callable callable) {
+		return engine.authorityCovers(ctx, resource(callable.owner(), callable.name()), Abilities.CALLABLE_CALL)
+			|| gated(ctx, callable);
+	}
+
+	/**
+	 * Whether {@code callable}'s gate may admit {@code ctx}: it has one, and
+	 * the gate admits the caller only as far as what narrows its request
+	 * reaches, as any admission does ({@link Engine#admissionCovers}).
+	 */
+	private boolean gated(RequestContext ctx, Callable callable) {
+		return callable.gate() != null
+			&& engine.admissionCovers(ctx, resource(callable.owner(), callable.name()), Abilities.CALLABLE_CALL);
 	}
 
 	/**
@@ -312,21 +383,101 @@ public class CallableAdapter extends AAdapter {
 	 */
 	private Callable named(RequestContext ctx, AString named) {
 		if (named == null) throw new InvalidInputException(CALLABLE_INVALID);
-		String value = named.toString();
-		AString owner = ctx.getUserDID();
-		String name = value;
-		if (value.startsWith("did:")) {
-			int at = value.indexOf("/" + CALLABLE_PATH);
-			if (at < 0) throw new InvalidInputException(CALLABLE_INVALID);
-			owner = Strings.create(value.substring(0, at));
-			name = value.substring(at + 1 + CALLABLE_PATH.length());
-		} else if (value.startsWith(CALLABLE_PATH)) {
-			name = value.substring(CALLABLE_PATH.length());
-		}
-		if (!CALLABLE_NAME.matcher(name).matches()) throw new InvalidInputException(CALLABLE_INVALID);
-		Callable callable = (owner == null) ? null : callables().callable(owner, Strings.create(name));
-		if (callable == null || callable.id() == null) throw new NotFoundException(NOT_CALLABLE.formatted(named), value);
+		Named path = path(named, ctx.getUserDID());
+		// Anything else is a bare name for one of the caller's own
+		if (path == null) path = new Named(ctx.getUserDID(), named);
+		if (!CALLABLE_NAME.matcher(path.name().toString()).matches()) throw new InvalidInputException(CALLABLE_INVALID);
+		Callable callable = (path.owner() == null) ? null : callables().callable(path.owner(), path.name());
+		if (callable == null || callable.id() == null) throw new NotFoundException(NOT_CALLABLE.formatted(named), named.toString());
 		return callable;
+	}
+
+	// ========== A callable as an operation ==========
+
+	/** A callable as its path names it: its owner, null when the path names it in no namespace, and its name. */
+	private record Named(AString owner, AString name) {}
+
+	/**
+	 * The callable a callable's path names: {@code <ownerDID>/x/callable/<name>},
+	 * or {@code x/callable/<name>} for one in {@code namespace}, read as any
+	 * path is, so a leading slash changes nothing. Null when {@code ref} is no
+	 * callable's path; the name need not be one a callable can have.
+	 */
+	private static Named path(AString ref, AString namespace) {
+		if (ref == null) return null;
+		AString owner = Engine.ownerOf(ref);
+		String canonical = CapabilityChecker.canonicalResource(ref.toString(), null);
+		Path path = CoviaPath.parse((owner == null) ? canonical : canonical.substring(owner.toString().length()));
+		if (path.count() != 3 || !VIEWS.equals(path.get(0)) || !ADAPTER.equals(path.get(1))) return null;
+		return new Named((owner == null) ? namespace : owner, RT.ensureString(path.get(2)));
+	}
+
+	/**
+	 * Whether {@code ref} is a callable's path, which operation resolution
+	 * resolves through {@link #operation} alone.
+	 */
+	public static boolean isPath(AString ref) {
+		return path(ref, null) != null;
+	}
+
+	/** The callable at callable's path {@code ref}, read in {@code ctx}'s namespace; null when there is none. */
+	private Callable atPath(AString ref, RequestContext ctx) {
+		Named path = path(ref, ctx.getUserDID());
+		if (path == null || path.owner() == null || !CALLABLE_NAME.matcher(path.name().toString()).matches()) return null;
+		Callable callable = callables().callable(path.owner(), path.name());
+		return (callable.id() == null) ? null : callable;
+	}
+
+	/**
+	 * The operation a callable's path names (CALLABLES.md, Invoking a callable
+	 * by its path): it runs the callable's call, taking the target's input
+	 * directly, and declares the target's schema. It is admitted here as far
+	 * as can be known before the input ({@link #reaches}); otherwise there is
+	 * none, so a callable the request may not call reads as one that does not
+	 * exist. The target is resolved as the issuer would resolve it.
+	 *
+	 * @param ref a callable's path ({@link #isPath})
+	 * @param fetch whether a target another venue holds may be fetched from it
+	 * @return the operation, or null when {@code ref} names no callable
+	 *         {@code ctx} may reach, or one whose target is no operation
+	 */
+	public Asset operation(AString ref, RequestContext ctx, boolean fetch) {
+		return operation(ref, ctx, fetch, new HashSet<>());
+	}
+
+	/** As above, {@code seen} holding the callables whose targets led here. */
+	private Asset operation(AString ref, RequestContext ctx, boolean fetch, Set<AString> seen) {
+		Callable callable = atPath(ref, ctx);
+		if (callable == null || !reaches(ctx, callable)) return null;
+		// Callables whose targets lead back to one of them name no operation
+		if (!seen.add(resource(callable.owner(), callable.name()))) return null;
+		RequestContext issuer = engine.context(callable.owner(), callable.issuer());
+		AString target = callable.operation();
+		Asset resolved = isPath(target) ? operation(target, issuer, fetch, seen)
+			: fetch ? engine.resolveAsset(target, issuer) : engine.resolveLocalAsset(target, issuer);
+		Operation operation = Operation.from(resolved);
+		return (operation == null) ? null : Asset.fromMeta(definition(callable, operation.meta()));
+	}
+
+	/**
+	 * What invoking {@code callable} by its path is, as an operation: a call of
+	 * it, named after it, declaring what {@code target}, its operation's
+	 * definition, declares of its input and output. Its description is the
+	 * callable's, or else the target's.
+	 */
+	private static AMap<AString, ACell> definition(Callable callable, AMap<AString, ACell> target) {
+		AMap<AString, ACell> operation = Maps.of(
+			Fields.ADAPTER, INVOKE,
+			Fields.CALLABLE, resource(callable.owner(), callable.name()),
+			Fields.TOOL_NAME, callable.name());
+		for (AString declared : TARGET_DECLARES) {
+			ACell value = RT.getIn(target, Fields.OPERATION, declared);
+			if (value != null) operation = operation.assoc(declared, value);
+		}
+		AString description = (callable.description() != null) ? callable.description()
+			: RT.ensureString(RT.getIn(target, Fields.DESCRIPTION));
+		AMap<AString, ACell> definition = Maps.of(Fields.NAME, callable.name(), Fields.OPERATION, operation);
+		return (description == null) ? definition : definition.assoc(Fields.DESCRIPTION, description);
 	}
 
 	// ========== Standard gates ==========

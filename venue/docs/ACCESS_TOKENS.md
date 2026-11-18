@@ -207,8 +207,9 @@ An MCP token's entry is `access.mcp: {tools: [...]}`.
   or `{operation, name?, description?}`. A tool's MCP name is its `name`, else
   the operation's `toolName`, else its adapter string with `:` and `/` as `_`,
   and must match `[A-Za-z0-9_.-]{1,128}`. Two tools of one name are refused.
-  The issuer must be able to read each operation's definition, and a tool the
-  issuer can no longer read is left out of the list.
+  The issuer must be able to read each operation's definition, or call the
+  callable a callable's path names ([CALLABLES.md](CALLABLES.md#invoking-a-callable-by-its-path)),
+  and a tool the issuer no longer can is left out of the list.
 - **Bound tools.** The token's tools are its palette, as an agent's configured
   tools are: calling one needs no `invoke` grant, but what it does must fit
   the token's authority.

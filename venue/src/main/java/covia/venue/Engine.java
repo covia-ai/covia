@@ -2474,7 +2474,10 @@ public class Engine {
 	 * and degrade visibly.</p>
 	 *
 	 * <p>The read is checked as by {@link #resolvePath}: naming another user's
-	 * definition does not make it readable, nor invocable.</p>
+	 * definition does not make it readable, nor invocable. A callable's path
+	 * is not read: it resolves to the operation that calls the callable, for a
+	 * request that may call it, and to nothing otherwise
+	 * ({@link CallableAdapter#operation}).</p>
 	 *
 	 * @param ref Reference string
 	 * @param ctx Request context (caller identity for /o/ namespace scoping)
@@ -2509,6 +2512,14 @@ public class Engine {
 
 	private Asset resolveAsset(AString ref, RequestContext ctx, boolean checked, boolean fetch) {
 		if (ref == null) return null;
+
+		// A callable's path names the operation that calls it, which admits the
+		// request rather than reading data, and its answer is final: a callable
+		// the request may not call resolves as one that does not exist (CALLABLES.md)
+		if (checked && CallableAdapter.isPath(ref)) {
+			return (getAdapter(CallableAdapter.NAME) instanceof CallableAdapter callables)
+				? callables.operation(ref, ctx, fetch) : null;
+		}
 
 		// Remote DID URLs: fetch the content-addressed definition from the
 		// publishing venue (hash-verified). The returned Asset carries no

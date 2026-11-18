@@ -23,6 +23,7 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.ThreadUtils;
 import convex.core.util.Utils;
+import covia.adapter.callable.CallableAdapter;
 import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.InvalidDefinitionException;
@@ -707,8 +708,10 @@ public class Orchestrator extends AAdapter {
 			 * venue namespace as invocation: local engine when {@code venue} is
 			 * absent, the connected remote venue otherwise. Strict execution
 			 * therefore requires read authority over the operation definition, as
-			 * {@link Engine#requireMetadataRead} sets it; an unreadable or missing
-			 * definition fails closed instead of silently skipping validation.
+			 * {@link Engine#requireMetadataRead} sets it, or for a callable's path
+			 * what calling it needs ({@link CallableAdapter#operation}); an
+			 * unreadable or missing definition fails closed instead of silently
+			 * skipping validation.
 			 */
 			private Asset resolveValidationAsset(AString opId) {
 				if (!(strict || CVMBool.TRUE.equals(step.get(K_STRICT)))) return null;
@@ -719,7 +722,8 @@ public class Orchestrator extends AAdapter {
 				try {
 					Asset asset;
 					if (venue == null) {
-						engine.requireMetadataRead(ctx,opId);
+						// A callable's path is not read as data: resolving it admits the request
+						if (!CallableAdapter.isPath(opId)) engine.requireMetadataRead(ctx,opId);
 						asset=engine.resolveAsset(opId,ctx);
 					} else {
 						asset=venue.resolveAsset(opId.toString());

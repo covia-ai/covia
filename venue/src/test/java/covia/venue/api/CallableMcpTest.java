@@ -22,6 +22,7 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
+import covia.adapter.MCPAdapter;
 import covia.adapter.callable.CallableAdapter;
 import covia.api.Abilities;
 import covia.api.Fields;
@@ -29,6 +30,7 @@ import covia.grid.Job;
 import covia.grid.Status;
 import covia.lattice.Caps;
 import covia.venue.Engine;
+import covia.venue.JobManager;
 import covia.venue.RequestContext;
 import covia.venue.TestEngine;
 import covia.venue.TestHTTP;
@@ -40,7 +42,8 @@ import covia.venue.TestServer;
  * MCP token of his own, and a client holding his bearer calls it over the
  * venue's MCP endpoint. The call writes only what the callable's caps allow
  * in Alice's namespace, and only callers its gate admits, within their
- * tokens' caps, reach it.
+ * tokens' caps, reach it. A token offers it through {@code callable:call}, or
+ * by its path, as a tool taking the target's input.
  */
 public class CallableMcpTest {
 
@@ -65,6 +68,15 @@ public class CallableMcpTest {
 			RequestContext.of(owner)).getOutput(), Fields.TOKEN).toString();
 	}
 
+	/** Why {@code owner} may not make an MCP token offering {@code tool}. */
+	private String tokenRefused(AString owner, String tool) {
+		Job job = engine.jobs().invokeOperation("v/ops/mcp/create-token", Maps.of(Fields.NAME, "refused",
+			Fields.TOOLS, Vectors.of(tool), Fields.CAPS, Caps.UNRESTRICTED), RequestContext.of(owner));
+		TestEngine.awaitJob(job, Job::isFinished, 10000, () -> "mcp:create-token never finished");
+		assertEquals(Status.FAILED, job.getStatus(), () -> "expected a refusal, got " + job.getData());
+		return job.getErrorMessage();
+	}
+
 	/** The tool {@code name} calling callables, as a token offers it. */
 	private static AMap<AString, ACell> callTool(String name) {
 		return Maps.of(Fields.OPERATION, "v/ops/callable/call", Fields.NAME, name);
@@ -87,6 +99,21 @@ public class CallableMcpTest {
 		AMap<AString, ACell> result = RT.ensureMap(RT.getIn(JSON.parse(response.body()), "result"));
 		assertNotNull(result, response.body());
 		return result;
+	}
+
+	/** The tools {@code bearer} is offered over MCP, by name. */
+	private AMap<AString, ACell> listTools(String bearer) throws Exception {
+		String body = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\",\"params\":{}}";
+		HttpResponse<String> response = http.send(HttpRequest.newBuilder(URI.create(MCP_URL))
+			.header("Content-Type", "application/json").header("Accept", "application/json")
+			.header("Authorization", "Bearer " + bearer).timeout(Duration.ofSeconds(20))
+			.POST(HttpRequest.BodyPublishers.ofString(body)).build(), HttpResponse.BodyHandlers.ofString());
+		assertEquals(200, response.statusCode(), response.body());
+		AMap<AString, ACell> byName = Maps.empty();
+		for (ACell tool : RT.ensureVector(RT.getIn(JSON.parse(response.body()), "result", "tools"))) {
+			byName = byName.assoc(RT.ensureString(RT.getIn(tool, Fields.NAME)), tool);
+		}
+		return byName;
 	}
 
 	private static void succeeded(AMap<AString, ACell> result) {
@@ -163,6 +190,44 @@ public class CallableMcpTest {
 		run("v/ops/callable/delete", Maps.of(Fields.NAME, "guestbook"), owner);
 		refused(callTool(bobs, "guestbook", signing(guestbook, "w/guestbook", "deleted")));
 		assertEquals(Vectors.of("Hello from Bob", "Hello again"), held(alice, "w/guestbook"));
+	}
+
+	@Test
+	public void aTokenOffersACallablesPathAsAToolTakingItsTargetsInput(TestInfo info) throws Exception {
+		AString alice = TestEngine.uniqueDID(info);
+		AString bob = TestEngine.uniqueDID("bob-" + info.getDisplayName());
+		RequestContext owner = RequestContext.of(alice);
+		run("v/ops/covia/write", Maps.of(Fields.PATH, "w/guestbook", Fields.VALUE, Vectors.empty()), owner);
+		run("v/ops/callable/create", Maps.of(Fields.NAME, "guestbook", Fields.OPERATION, "v/ops/covia/append",
+			Fields.CAPS, Vectors.of(cap("w/guestbook", Capability.CRUD_WRITE)), Fields.GATE, "v/ops/callable/gates/anyone"), owner);
+		run("v/ops/callable/create", Maps.of(Fields.NAME, "private", Fields.OPERATION, "v/ops/covia/append",
+			Fields.CAPS, Vectors.of(cap("w/guestbook", Capability.CRUD_WRITE))), owner);
+		String guestbook = alice + "/x/callable/guestbook";
+		String hidden = alice + "/x/callable/private";
+		String missing = alice + "/x/callable/missing";
+		AMap<AString, ACell> signing = Maps.of(Fields.PATH, "w/guestbook", Fields.VALUE, "Hello from Bob");
+
+		// Bob's token lists the callable's path as a tool: named after the callable, with the target's schema
+		AVector<ACell> tools = Vectors.of(guestbook, "v/ops/covia/append");
+		String bobs = token(bob, "guestbook", tools, Vectors.of(cap(guestbook, Abilities.CALLABLE_CALL)));
+		AMap<AString, ACell> offered = listTools(bobs);
+		ACell tool = offered.get(Strings.create("guestbook"));
+		assertNotNull(tool, offered::toString);
+		AString schema = Strings.create("inputSchema");
+		assertEquals(RT.getIn(offered.get(Strings.create("covia_append")), schema), RT.getIn(tool, schema));
+
+		// A token may not list a callable Bob may not call, as it may not list a missing one
+		assertEquals(MCPAdapter.TOOL_NOT_HELD.formatted(0, hidden), tokenRefused(bob, hidden));
+		assertEquals(MCPAdapter.TOOL_NOT_HELD.formatted(0, missing), tokenRefused(bob, missing));
+
+		// The client calls it with the target's input directly
+		succeeded(callTool(bobs, "guestbook", signing));
+		assertEquals(Vectors.of("Hello from Bob"), held(alice, "w/guestbook"));
+
+		// A token whose caps do not cover calling it is refused as if there were no such operation
+		String bobsOther = token(bob, "workspace", Vectors.of(guestbook), Vectors.of(cap("w/", Capability.CRUD)));
+		assertTrue(refused(callTool(bobsOther, "guestbook", signing)).contains(JobManager.CANNOT_RESOLVE_OPERATION + guestbook));
+		assertEquals(Vectors.of("Hello from Bob"), held(alice, "w/guestbook"));
 	}
 
 	@Test
