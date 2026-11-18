@@ -8,10 +8,9 @@ called it. This is a design, implemented in part: a callable's call enters its
 issuer's frame and calls nest, an agent's harness runs in its controller's
 frame, `admin/sudo` is a call into the user, a request names one acting
 principal, whose authority an agent's record decides at each check, state
-within one interaction belongs to the principal that opened it, acts that
-need the user in person read the request's origin, and a configured Python
-function can be told its frame's `authority` and `caller`. What still works
-the old way is listed under [What it replaces](#what-it-replaces).
+within one interaction belongs to the principal that opened it, and acts that
+need the user in person read the request's origin. What still works the old
+way is listed under [What it replaces](#what-it-replaces).
 
 ## The fields
 
