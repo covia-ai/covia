@@ -338,7 +338,7 @@ java -jar target/covia.jar [config.json]
 - `docs/ADMIN.md` — venue-level privileged operations, admin abilities and resources, exceptions and migration; document responsibility map
 - `docs/AUTH.md` — authentication design (#297): method contract, central sessions, assurance policy
 - `docs/ADAPTERS.md` — canonical adapter system, state, lifecycle, authoring, and module contract
-- `docs/adapters/` — the design of single adapters: `PYTHON.md`, the Python adapter's three jobs and its proposed redesign around callables (#706)
+- `docs/adapters/` — the design of single adapters: `PYTHON.md`, the Python adapter's three jobs and its proposed redesign around callables (#716)
 - `docs/CONFIG.md` — operator configuration reference
 - `docs/EMBEDDING.md` — running a venue inside another application: lifecycle and close order, adapters, user data, upgrading from earlier releases
 - `docs/JOBS.md` — job implementation semantics (COG-8 companion)

@@ -8,7 +8,7 @@ for converting values. Its settings and what operators see are in
 and installing the module in its
 [README](../../../covia-python-adapter/README.md). This document is its
 design: what it does, where that design falls short, and the redesign
-proposed in [covia-ai/covia#706](https://github.com/covia-ai/covia/issues/706).
+proposed in [covia-ai/covia#716](https://github.com/covia-ai/covia/issues/716).
 
 ## What it does
 
