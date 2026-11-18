@@ -33,11 +33,15 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
+import convex.core.lang.RT;
 import covia.api.Abilities;
+import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.exception.ConfigurationException;
 import covia.exception.UnavailableException;
 import covia.grid.Asset;
+import covia.grid.Job;
+import covia.grid.Status;
 import covia.python.PythonRuntime;
 import covia.venue.Config;
 import covia.venue.Engine;
@@ -96,6 +100,11 @@ class PythonAdapterTest {
 			assertThrows(ConfigurationException.class,
 				() -> adapter.configure(pythonConfig(missing.toString(), null), false)).getMessage(),
 			"a script that is not there is refused before anything is published");
+		assertTrue(assertThrows(ConfigurationException.class,
+				() -> adapter.configure(Maps.of("operations", Maps.of("double",
+					Maps.of("script", "x.py", "principals", "yes"))), false)).getMessage()
+				.startsWith(PythonAdapter.MALFORMED.formatted("python.operations.double.principals", "")),
+			"whether a function is told its principals is true or false");
 	}
 
 	@Test
@@ -244,6 +253,75 @@ class PythonAdapterTest {
 		} finally {
 			engine.close();
 		}
+	}
+
+	/**
+	 * A function configured with {@code principals} is told the authority and
+	 * caller of the frame it runs in (AUTHORITY.md), so one the venue offers
+	 * through a callable keeps each caller's state apart: run directly it has
+	 * no caller, and through the callable its authority is the venue, the
+	 * callable's issuer, and its caller whoever called.
+	 */
+	@Test
+	@Tag("integration")
+	@EnabledIfSystemProperty(named = "covia.tests.integration", matches = "true",
+		disabledReason = "embeds native CPython; enable with -Dcovia.tests.integration=true")
+	void aFunctionIsToldWhoCalledIt() throws Exception {
+		Assumptions.assumeTrue(PythonRuntime.availability().available(),
+			PythonRuntime.availability().detail());
+		Path script = Files.writeString(temp.resolve("visits.py"), """
+			visits = {}
+			def main(value, principals):
+			    caller = principals.get("caller")
+			    visits[caller] = visits.get(caller, 0) + 1
+			    return {"principals": principals, "visits": visits[caller]}
+			""");
+		AMap<AString, ACell> python = Maps.of("operations", Maps.of("visits",
+			Maps.of("script", script.toString(), "principals", true)));
+		String library = System.getProperty("covia.python.library");
+		if (library != null) python = python.assoc(Strings.create("library"), Strings.create(library));
+
+		Engine engine = Engine.createTemp(Maps.of(Config.ADAPTERS, Maps.of("python", python),
+			Config.USERS, Maps.of(Config.AUTO_CREATE, true)));
+		try {
+			engine.registerAdapter(new PythonAdapter());
+			Engine.addDemoAssets(engine);
+			AString venue = engine.getDIDString();
+
+			// Run directly, at the top level, it has no caller
+			assertEquals(Maps.of(Fields.AUTHORITY, venue),
+				RT.getIn(complete(engine, "v/ops/python/visits", Maps.empty(), engine.venueContext()), "principals"));
+
+			// Offered through the venue's callable, it keeps each caller's visits apart
+			complete(engine, "v/ops/callable/create", Maps.of(Fields.NAME, "visits",
+				Fields.OPERATION, "v/ops/python/visits",
+				Fields.CAPS, Vectors.of(Capability.create(
+					Strings.create(venue + "/" + PythonAdapter.OPERATION_RESOURCE + "visits"),
+					PythonAdapter.ADMIN_EXECUTE_PYTHON)),
+				Fields.GATE, "v/ops/callable/gates/anyone"), engine.venueContext());
+			AString alice = UCAN.toDIDKey(AKeyPair.generate().getAccountKey());
+			AString bob = UCAN.toDIDKey(AKeyPair.generate().getAccountKey());
+			AMap<AString, ACell> call = Maps.of(Fields.CALLABLE, venue + "/x/callable/visits", Fields.INPUT, Maps.empty());
+			ACell first = complete(engine, "v/ops/callable/call", call, RequestContext.of(alice));
+			assertEquals(Maps.of(Fields.AUTHORITY, venue, Fields.CALLER, alice), RT.getIn(first, "principals"),
+				"the call is the venue's, called by Alice");
+			assertEquals(CVMLong.ONE, RT.getIn(first, "visits"));
+			assertEquals(CVMLong.create(2),
+				RT.getIn(complete(engine, "v/ops/callable/call", call, RequestContext.of(alice)), "visits"));
+			ACell bobs = complete(engine, "v/ops/callable/call", call, RequestContext.of(bob));
+			assertEquals(Maps.of(Fields.AUTHORITY, venue, Fields.CALLER, bob), RT.getIn(bobs, "principals"));
+			assertEquals(CVMLong.ONE, RT.getIn(bobs, "visits"), "Bob's visits are his own");
+		} finally {
+			engine.close();
+		}
+	}
+
+	/** Runs {@code operation} on {@code engine} as {@code context} and returns its output once it completes. */
+	private static ACell complete(Engine engine, String operation, ACell input, RequestContext context) {
+		Job job = engine.jobs().invokeOperation(operation, input, context);
+		TestEngine.awaitJob(job, Job::isFinished, 10000, () -> operation + " never finished");
+		assertEquals(Status.COMPLETE, job.getStatus(), job::getErrorMessage);
+		return job.getOutput();
 	}
 
 	private static AMap<convex.core.data.AString, ACell> pythonConfig(

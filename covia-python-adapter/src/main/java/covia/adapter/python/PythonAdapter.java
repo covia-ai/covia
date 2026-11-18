@@ -3,6 +3,7 @@ package covia.adapter.python;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
@@ -18,6 +19,7 @@ import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.adapter.AAdapter;
@@ -35,7 +37,9 @@ import covia.venue.RequestContext;
  * callable names come only from venue configuration; caller-supplied source
  * and host paths are never accepted. Each script is loaded once when the
  * adapter starts and keeps its globals between calls. An operator offers a
- * function to others through a callable (CALLABLES.md).
+ * function to others through a callable (CALLABLES.md), and a function
+ * configured with {@code principals} is told who called it
+ * ({@link #principals}), so it can keep each caller's state apart.
  *
  * <p>The code runs in the venue process with the venue's power, so running it
  * is the operator's: {@link #ADMIN_EXECUTE_PYTHON} on the venue resource that
@@ -57,6 +61,8 @@ public final class PythonAdapter extends AAdapter implements AutoCloseable {
 	private static final AString INSTANCES = Strings.intern("instances");
 	private static final AString SCRIPT = Strings.intern("script");
 	private static final AString FUNCTION = Strings.intern("function");
+	/** A function's setting that has it told the principals of the frame it runs in ({@link #principals}). */
+	private static final AString PRINCIPALS = Strings.intern("principals");
 	/** Refusal for a configured operation called before the adapter has started and loaded its script. */
 	public static final String NOT_LOADED = "Python operations are loaded when the python adapter starts";
 	/** A malformed setting: where in {@code adapters}, then what is wrong with it. */
@@ -69,9 +75,15 @@ public final class PythonAdapter extends AAdapter implements AutoCloseable {
 	public static final String SETTINGS_FIXED = "adapters.python cannot change once the adapter is installed, "
 		+ "since its operations are published from it: change it in the venue config and restart the venue";
 
-	private record Definition(String id, Path script, String function,
+	private record Definition(String id, Path script, String function, boolean principals,
 		String name, String description, ACell input, ACell output) {}
-	private record Operation(Definition definition, PythonScript script) {}
+	private record Operation(Definition definition, PythonScript script) {
+		/** Calls the function with {@code input}, then, if it is configured to take them, the principals of the frame {@code ctx} runs in. */
+		ACell call(RequestContext ctx, ACell input) {
+			if (!definition.principals()) return script.call(definition.function(), input);
+			return script.call(definition.function(), Arrays.asList(input, principals(ctx)));
+		}
+	}
 
 	/** The settings accepted, without the framework's {@code enabled}; null until configured. */
 	private AMap<AString, ACell> applied;
@@ -141,18 +153,19 @@ public final class PythonAdapter extends AAdapter implements AutoCloseable {
 			AMap<AString, ACell> definition = (AMap<AString, ACell>) entry.getValue();
 			String path = "python.operations." + id;
 			validateUnknownFields(definition,
-				Set.of("script", "function", "name", "description", "input", "output"),
+				Set.of("script", "function", "principals", "name", "description", "input", "output"),
 				path, strict);
 			String script = optionalString(definition, SCRIPT, path + ".script");
 			if (script == null) throw malformed(path + ".script", "is required");
 			String function = optionalString(definition, FUNCTION, path + ".function");
+			boolean principals = optionalBoolean(definition, PRINCIPALS, path + ".principals");
 			String name = optionalString(definition, Fields.NAME, path + ".name");
 			String description = optionalString(definition, Fields.DESCRIPTION,
 				path + ".description");
 			ACell input = optionalMap(definition, Fields.INPUT, path + ".input");
 			ACell output = optionalMap(definition, Fields.OUTPUT, path + ".output");
 			result.put(id, new Definition(id, Path.of(script).toAbsolutePath().normalize(),
-				function == null ? "main" : function,
+				function == null ? "main" : function, principals,
 				name == null ? "Python " + id : name,
 				description == null ? "Runs the configured Python operation " + id : description,
 				input, output));
@@ -176,6 +189,14 @@ public final class PythonAdapter extends AAdapter implements AutoCloseable {
 		if (value == null) return null;
 		if (!(value instanceof AString string)) throw malformed(path, "must be a string");
 		return string.toString();
+	}
+
+	private static boolean optionalBoolean(AMap<AString, ACell> map,
+			AString key, String path) {
+		ACell value = map.get(key);
+		if (value == null) return false;
+		if (!(value instanceof CVMBool flag)) throw malformed(path, "must be a boolean");
+		return flag.booleanValue();
 	}
 
 	private static AMap<?, ?> optionalMap(AMap<AString, ACell> map,
@@ -311,7 +332,7 @@ public final class PythonAdapter extends AAdapter implements AutoCloseable {
 				if (closed) throw new UnavailableException("Python adapter is closed");
 				requireExecute(ctx, OPERATION_RESOURCE + id);
 				try {
-					return operation.script().call(operation.definition().function(), input);
+					return operation.call(ctx, input);
 				} catch (PythonException e) {
 					throw pythonFailure(e);
 				}
@@ -319,6 +340,19 @@ public final class PythonAdapter extends AAdapter implements AutoCloseable {
 				lifecycle.readLock().unlock();
 			}
 		}, VIRTUAL_EXECUTOR);
+	}
+
+	/**
+	 * What a function configured with {@code principals} is told of the frame
+	 * it runs in (AUTHORITY.md): its {@link Fields#AUTHORITY}, the principal
+	 * whose authority applies, and its {@link Fields#CALLER}, the authority of
+	 * the frame that called into it, such as a callable's invoker, left out at
+	 * the top level.
+	 */
+	private static AMap<AString, ACell> principals(RequestContext ctx) {
+		AMap<AString, ACell> principals = Maps.of(Fields.AUTHORITY, ctx.getAuthorityDID());
+		AString caller = ctx.getCaller();
+		return (caller == null) ? principals : principals.assoc(Fields.CALLER, caller);
 	}
 
 	/**

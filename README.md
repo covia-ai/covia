@@ -259,7 +259,7 @@ java -jar venue/target/covia.jar
 |--------|---------|
 | `covia-core` | Grid client library and shared abstractions |
 | `covia-python` | Dependency-light CPython FFM bindings and Convex value conversion |
-| `covia-python-adapter` | Optional loadable venue module for configured Python operations and opt-in stateful instances |
+| `covia-python-adapter` | Optional loadable venue module for operator-configured Python operations |
 | `venue` | The venue server runtime (produces `covia.jar`) |
 | `workbench` | A minimal Swing REPL for demos and testing |
 | `covia-sql` | Optional loadable SQL adapter module |

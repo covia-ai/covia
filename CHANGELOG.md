@@ -27,6 +27,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Caps given to an access token or callable lie within what the request giving them may do itself, so a token's request or a call creates tokens and callables within its own caps, which keep them once it is gone; changing or reading one again needs authority covering its caps, and only an unrestricted token or call creates or forks an agent.
 - `adapters.convex.timeoutMillis` sets how long `convex:query` and `convex:transact` wait for the peer's result; the default is the Convex client's own, 20 seconds.
 - `venue:adapter/restart` stops an enabled adapter, offers it its configuration again and starts it; `venue:adapters` lists each adapter's `status` and a failed adapter's `reason`.
+- A configured Python function whose settings add `principals: true` is also passed its frame's `authority` and `caller`, so one offered through a callable can keep each caller's state apart (#706).
 
 ### Changed
 
