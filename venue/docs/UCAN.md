@@ -113,7 +113,7 @@ Resources are **DID URLs** — the DID identifies the authority (user/owner), th
 
 This aligns with `DIDURL` from convex-core — the DID is the authority, the path is the namespace scope.
 
-**Canonical vs. shorthand.** A canonical `with` is absolute (owner-named) as above. A **bare** lattice path is shorthand, resolved in a namespace the context supplies, as [GRID_LATTICE_DESIGN.md](GRID_LATTICE_DESIGN.md) §3.2 sets out for every name. That namespace is only where the name is resolved, and need not be the authority using it: an agent's `n/` is in the agent's own namespace, whatever its controller's authority. A leading slash changes nothing, and a capability is stored without one.
+**Canonical vs. shorthand.** A canonical `with` is absolute (owner-named) as above. A **bare** lattice path is shorthand, resolved in a namespace the context supplies, as [GRID_LATTICE_DESIGN.md](GRID_LATTICE_DESIGN.md) §3.2 sets out for every name. That namespace is only where the name is resolved, and need not be the authority using it: an agent's `n/` is in the agent's own namespace, whatever its controller's authority. A leading slash changes nothing, and a capability is stored without one. A `with` naming a user of this venue in short form (`u:bob/w/notes`) is expanded where the caps arrive, and a grant presented or stored with one covers nothing ([AUTHORITY.md](AUTHORITY.md#where-names-resolve)).
 
 - **Agent caps (config scopes)**: a bare `w/projects/foo` is in the namespace the request acts in, an agent's owner's; enforcement canonicalises it to `<ownerDID>/w/projects/foo` before matching, so bare and DID-URL grants compare identically. The same applies to bare `dlfs/<drive>/…` paths. A bare `n/…` names the agent's own notes, `<ownerDID>/g/<id>/n/…`, as `n/` does in any path it uses (`CapabilityChecker.inAgent`). An agent's own DID is named explicitly (`<ownerDID>:g:<id>/x/crypto/keys/`).
 - **Signed UCAN tokens**: a bare `with` means the **token issuer's own** namespace, resolved at evaluation against the token's signed `iss` (`CapabilityChecker.normaliseProofs`, applied inside `proofsCover` recursively per chain hop — a bare path in a re-delegation binds to the re-delegator). A self-sovereign owner can therefore sign bare paths naturally; they can never be reinterpreted against the presenter or the target.
@@ -828,7 +828,9 @@ admitted by the agent record's own `config.accepts`: `"owner"` (default:
 nobody without a delegation), `"venue"` (the venue operator — the venue
 principal and what acts for it, never every user hosted here), `"anyone"`
 (every caller, the anonymous public principal included), or an array of
-principal DIDs, each admitting what acts for that principal (a user DID admits
+principal DIDs (a user of this venue perhaps in short form,
+[AUTHORITY.md](AUTHORITY.md#where-names-resolve)), each admitting what acts
+for that principal (a user DID admits
 that user and its agents, `<userDID>:g:<agentId>` that agent and the agents
 under it; `"venue"` may appear as an entry). A caller uses an admission only
 where the caps of every agent on its chain of controllers, and of its tokens

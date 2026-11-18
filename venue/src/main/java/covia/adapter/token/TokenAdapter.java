@@ -251,7 +251,7 @@ public class TokenAdapter extends AAdapter {
 		if (!engine.actsWithAuthorityOf(ctx, principal)) throw new AuthException(ISSUER_MAY_NOT_CREATE.formatted(principal));
 		requireInPersonFor(ctx, owner, principal);
 		AMap<AString, ACell> entries = entries(ctx, asked);
-		AVector<ACell> stored = (caps == null) ? Vectors.empty() : Caps.parse(caps);
+		AVector<ACell> stored = (caps == null) ? Vectors.empty() : engine.expandCaps(Caps.parse(caps));
 		requireGivable(ctx, stored);
 		Long until = expiry(expires);
 
@@ -286,7 +286,7 @@ public class TokenAdapter extends AAdapter {
 		requireCovers(ctx, token);
 		if (rotate) requireInPersonFor(ctx, owner, token.issuer());
 		AMap<AString, ACell> entries = (asked == null) ? null : entries(ctx, asked);
-		AVector<ACell> stored = (caps == null) ? null : Caps.parse(caps);
+		AVector<ACell> stored = (caps == null) ? null : engine.expandCaps(Caps.parse(caps));
 		if (caps != null) requireGivable(ctx, stored);
 		Long until = expiry(expires);
 		String bearer = rotate ? AccessTokens.newBearer() : null;

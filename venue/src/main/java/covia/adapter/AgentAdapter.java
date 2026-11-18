@@ -370,7 +370,7 @@ public class AgentAdapter extends AAdapter {
 	private AString namedController(RequestContext ctx, ACell input) {
 		ACell named = RT.getIn(input, Fields.CONTROLLER);
 		if (named == null) return null;
-		AString controller = RT.ensureString(named);
+		AString controller = engine.expandPrincipal(RT.ensureString(named));
 		if (controller == null || !controller.toString().startsWith("did:")) {
 			throw new InvalidInputException(CONTROLLER_NOT_DID);
 		}
@@ -428,7 +428,7 @@ public class AgentAdapter extends AAdapter {
 			throw new InvalidInputException("agentId is required");
 		}
 		if (ctx.getUserDID() == null) throw new AuthException(Engine.USER_PATH_UNAUTHENTICATED);
-		AgentAddress agent = AgentAddress.parse(ctx.getUserDID(), ref);
+		AgentAddress agent = AgentAddress.parse(ctx.getUserDID(), engine.expandPath(ref));
 		AString address = agent.address();
 		engine.requireLocalAccess(ctx, address, ability);
 		Users users = engine.getVenueState().users();
@@ -5976,7 +5976,7 @@ public class AgentAdapter extends AAdapter {
 	 */
 	private AMap<AString, ACell> parseConfigArg(ACell configArg, RequestContext ctx) {
 		if (configArg == null) return null;
-		return canonicalCaps(resolveConfigValue(configArg, ctx, new ArrayList<>(), 0, "config"));
+		return expandedConfig(resolveConfigValue(configArg, ctx, new ArrayList<>(), 0, "config"));
 	}
 
 	/**
@@ -6004,10 +6004,20 @@ public class AgentAdapter extends AAdapter {
 		return shown.assoc(K_CAPS, covia.venue.Config.UNRESTRICTED);
 	}
 
-	/** {@code config} with each capability's {@code with} in the form it is stored in ({@link CapabilityChecker#canonicalResource}). */
-	private static AMap<AString, ACell> canonicalCaps(AMap<AString, ACell> config) {
-		AVector<ACell> caps = (config == null) ? null : RT.ensureVector(config.get(K_CAPS));
-		if (caps == null) return config;
+	/**
+	 * {@code config} with the principals it names expanded where it arrives
+	 * ({@link Engine#expandPrincipals}, {@link Engine#expandCaps}): its
+	 * {@code accepts} entries and each capability's {@code with}, which is
+	 * then in the form it is stored in ({@link CapabilityChecker#canonicalResource}).
+	 */
+	private AMap<AString, ACell> expandedConfig(AMap<AString, ACell> config) {
+		if (config == null) return null;
+		ACell accepts = config.get(Fields.ACCEPTS);
+		ACell expanded = engine.expandPrincipals(accepts);
+		if (expanded != accepts) config = config.assoc(Fields.ACCEPTS, expanded);
+		AVector<ACell> given = RT.ensureVector(config.get(K_CAPS));
+		if (given == null) return config;
+		AVector<ACell> caps = engine.expandCaps(given);
 		AVector<ACell> canonical = caps;
 		for (long i = 0; i < caps.count(); i++) {
 			AMap<AString, ACell> grant = RT.castMap(caps.get(i));
@@ -6016,7 +6026,7 @@ public class AgentAdapter extends AAdapter {
 			String stored = CapabilityChecker.canonicalResource(with.toString(), null);
 			if (!stored.equals(with.toString())) canonical = canonical.assoc(i, grant.assoc(Capability.WITH, Strings.create(stored)));
 		}
-		return (canonical == caps) ? config : config.assoc(K_CAPS, canonical);
+		return (canonical == given) ? config : config.assoc(K_CAPS, canonical);
 	}
 
 	/**

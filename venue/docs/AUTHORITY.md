@@ -51,11 +51,23 @@ agent belongs to, read from its record and never from the form of its DID.
 Every namespace is an account's, and every principal is an account or an agent
 acting for one, directly or through the agents it acts for.
 
-A principal the venue names under its own DID may be given in short form
-wherever a principal or a path arrives as input: `u:bob` for
-`<venueDID>:u:bob`, `u:bob:g:helper` for his agent, and `u:bob/w/notes` for
-his `w/notes`. It is expanded where it arrives, and records hold and compare
-only the full DID.
+A user the venue names, `<webDID>:u:<name>` under the `did:web` DID of its
+public hostname ([CONFIG.md](CONFIG.md#user-registration-users)), may be
+given in short form wherever a principal or a path arrives as input: `u:bob`
+for `<webDID>:u:bob`, `u:bob:g:helper` for his agent, and `u:bob/w/notes` for
+his `w/notes`. That covers principals (an `accepts` list, a callers gate's
+`callers`, an agent's `controller`, a grant's audience, the user, keyring
+holder or job owner an operation or REST route names, a binding's configured
+`user`) and paths (data, agent, callable, operation, asset, secret and DLFS
+references, and a capability's `with` in an agent's config, a token, a
+callable, an approval request or a grant). It is expanded once, where it
+arrives (`Engine.expandPrincipal`, `Engine.expandPath`), and the venue's
+records hold and compare only the full DID. Data a user writes, such as a
+callers gate's list in an operation's defaults, is kept as written and
+expanded when it is read. A venue with no public hostname names no such users
+and refuses the form. A name still in short form where nothing expands it is
+refused, never read as a path in the request's namespace, and a grant someone
+presents or stored that names one is left as written and covers nothing.
 
 ## Agents
 

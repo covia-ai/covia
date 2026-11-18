@@ -610,7 +610,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 	 */
 	AuthorisedPath resolveAuthorisedPath(RequestContext ctx, String ref, AString ability,
 			String componentRoot, boolean creates) throws IOException {
-		DlfsFileRef fr = parseDlfsFileRef(ref);
+		DlfsFileRef fr = (ref == null) ? null : parseDlfsFileRef(engine.expandPath(Strings.create(ref)).toString());
 		if (fr == null) return null;
 
 		RequestContext driveCtx = authorise(ctx, fr, ability);
@@ -736,8 +736,8 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 	 * component names the drive (the file path stays in {@code path}). Anything
 	 * else is the caller's own drive.
 	 */
-	private static DriveTarget parseDriveRef(RequestContext ctx, AMap<AString, ACell> input) {
-		AString driveCell = RT.ensureString(input.get(FIELD_DRIVE));
+	private DriveTarget parseDriveRef(RequestContext ctx, AMap<AString, ACell> input) {
+		AString driveCell = engine.expandPath(RT.ensureString(input.get(FIELD_DRIVE)));
 		if (driveCell == null) return new DriveTarget(null, null, false);
 		String s = driveCell.toString();
 		if (!s.startsWith("did:")) return new DriveTarget(null, s, false);

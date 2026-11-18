@@ -367,6 +367,8 @@ public class ContextLoader {
 	 */
 	public static boolean isAssetReference(String ref) {
 		if (ref == null || ref.isEmpty() || ref.contains(" ")) return false;
+		// A DID URL whose DID is in short form, which resolving it expands
+		if (CapabilityChecker.isShortForm(ref)) return true;
 		String s = CapabilityChecker.canonicalResource(ref, null);
 		if (s.startsWith("did:") || s.startsWith("file:/") || s.startsWith("dlfs/")) return true;
 		if (s.length() == 64 && s.matches("[0-9a-fA-F]+")) return true; // hex hash

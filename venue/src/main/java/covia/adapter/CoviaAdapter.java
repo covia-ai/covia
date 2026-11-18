@@ -228,6 +228,7 @@ public class CoviaAdapter extends AAdapter {
 			return CompletableFuture.failedFuture(new AuthException("Authentication required"));
 		}
 		try {
+			input = expandedPaths(input);
 			return switch (getSubOperation(meta)) {
 				case "read" -> CompletableFuture.completedFuture(handleRead(ctx, input));
 				case "write" -> CompletableFuture.completedFuture(handleWrite(ctx, input));
@@ -244,6 +245,44 @@ public class CoviaAdapter extends AAdapter {
 		} catch (Exception e) {
 			return CompletableFuture.failedFuture(e);
 		}
+	}
+
+	/**
+	 * {@code input} with each path it names expanded where it arrives
+	 * ({@link Engine#expandPath}): {@code path}, copy's {@code from} and
+	 * {@code to}, and each of inspect's {@code paths}.
+	 */
+	private ACell expandedPaths(ACell input) {
+		if (!(input instanceof AMap<?, ?> map)) return input;
+		@SuppressWarnings("unchecked")
+		AMap<AString, ACell> fields = (AMap<AString, ACell>) map;
+		for (AString field : new AString[] { Fields.PATH, Fields.FROM, Fields.TO }) {
+			ACell path = fields.get(field);
+			ACell full = expandedPath(path);
+			if (full != path) fields = fields.assoc(field, full);
+		}
+		if (fields.get(K_PATHS) instanceof AVector<?> paths) {
+			@SuppressWarnings("unchecked")
+			AVector<ACell> full = (AVector<ACell>) paths;
+			for (long i = 0; i < paths.count(); i++) {
+				ACell path = expandedPath(paths.get(i));
+				if (path != paths.get(i)) full = full.assoc(i, path);
+			}
+			if (full != paths) fields = fields.assoc(K_PATHS, full);
+		}
+		return fields;
+	}
+
+	/** A path as given, a string or its segments, with a leading principal in short form expanded. */
+	private ACell expandedPath(ACell path) {
+		if (path instanceof AString s) return engine.expandPath(s);
+		if (path instanceof AVector<?> segments && segments.count() > 0 && segments.get(0) instanceof AString first) {
+			AString full = engine.expandPrincipal(first);
+			@SuppressWarnings("unchecked")
+			AVector<ACell> given = (AVector<ACell>) segments;
+			if (full != first) return given.assoc(0, full);
+		}
+		return path;
 	}
 
 	/**

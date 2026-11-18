@@ -143,7 +143,7 @@ public class UCANAdapter extends AAdapter {
 	 * @param input As {@code ucan:issue} takes it
 	 */
 	public Grant mint(RequestContext ctx, ACell input) {
-		AString audDID = RT.ensureString(RT.getIn(input, UCAN.AUD));
+		AString audDID = engine.expandPrincipal(RT.ensureString(RT.getIn(input, UCAN.AUD)));
 		if (audDID == null) {
 			throw new InvalidInputException("aud (audience DID) is required");
 		}
@@ -203,7 +203,7 @@ public class UCANAdapter extends AAdapter {
 		AVector<ACell> canonAtt = Vectors.empty();
 		for (long i = 0; i < att.count(); i++) {
 			AMap<AString, ACell> cap = RT.castMap(att.get(i));
-			AString with = (cap != null) ? RT.ensureString(cap.get(Capability.WITH)) : null;
+			AString with = (cap != null) ? engine.expandPath(RT.ensureString(cap.get(Capability.WITH))) : null;
 			String w = (with != null) ? with.toString() : null;
 			if (cap == null || w == null || CapabilityChecker.isScheme(w)) {
 				throw new InvalidInputException("att[" + i + "].with must be a resource path — "
@@ -455,10 +455,10 @@ public class UCANAdapter extends AAdapter {
 
 		// Optional: would this token authorise (with, can) here, for the given
 		// audience (default the caller)? Uses the SAME gate enforcement uses.
-		AString reqWith = RT.ensureString(RT.getIn(input, Capability.WITH));
+		AString reqWith = engine.expandPath(RT.ensureString(RT.getIn(input, Capability.WITH)));
 		AString reqCan = RT.ensureString(RT.getIn(input, Capability.CAN));
 		if (reqWith != null && reqCan != null) {
-			AString audience = RT.ensureString(RT.getIn(input, UCAN.AUD));
+			AString audience = engine.expandPrincipal(RT.ensureString(RT.getIn(input, UCAN.AUD)));
 			if (audience == null) audience = ctx.getAuthorityDID();
 			// Canonicalise a bare queried resource against the audience — the
 			// same rule enforcement applies to a caller's bare paths. No concrete

@@ -22,6 +22,7 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.exception.ConfigurationException;
+import covia.venue.TestEngine;
 import covia.exception.InvalidDefinitionException;
 
 /**
@@ -91,6 +92,13 @@ class TelegramHelpersTest {
 		assertFalse(spec.allowsTarget("@channel") || spec.allowsTarget(null) || spec.allowsTarget("5x"));
 		BotSpec open = BotSpec.parse("x", Maps.of("token", "t", "user", "did:test:a", "agent", "a", "open", true), false);
 		assertTrue(open.allowsTarget(1L) && open.allowsTarget("@channel"), "an open bot may address anyone");
+	}
+
+	@Test
+	void aBotsUserMayBeAUserOfTheVenueInShortForm() {
+		BotSpec spec = BotSpec.parse("x", Maps.of("token", "t", "user", "u:bob", "agent", "a"), false);
+		assertEquals(TestEngine.ENGINE.managedUserDID(Strings.create("bob")), spec.userDID(TestEngine.ENGINE),
+			"the bot acts for the user in full");
 	}
 
 	@Test

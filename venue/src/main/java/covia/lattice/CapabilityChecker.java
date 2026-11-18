@@ -20,6 +20,7 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import covia.api.Abilities;
+import covia.exception.InvalidInputException;
 import covia.grid.HexId;
 
 /**
@@ -224,7 +225,7 @@ public class CapabilityChecker {
 	/** Whether a gate reference is a bare path whose meaning depends on its owner. */
 	static boolean isBareGate(AString gate) {
 		String g = CoviaPath.relative(gate.toString());
-		if (g.isEmpty() || g.startsWith("did:") || isScheme(g) || g.startsWith("v/")) return false;
+		if (g.isEmpty() || g.startsWith("did:") || isScheme(g) || isShortForm(g) || g.startsWith("v/")) return false;
 		return HexId.parseHash(Strings.create(g)) == null;
 	}
 
@@ -253,7 +254,7 @@ public class CapabilityChecker {
 				AString with = (cap != null) ? RT.ensureString(cap.get(Capability.WITH)) : null;
 				String w = (with != null) ? with.toString() : null;
 				if (w != null && !isScheme(w)) {
-					String bound = canonicalResource(w, iss);
+					String bound = grantResource(w, iss);
 					if (!bound.equals(w)) {
 						cap = cap.assoc(Capability.WITH, Strings.create(bound));
 						capCell = cap;
@@ -444,7 +445,7 @@ public class CapabilityChecker {
 			AMap<AString, ACell> grant = RT.castMap(caps.get(i));
 			AString with = (grant == null) ? null : RT.ensureString(grant.get(Capability.WITH));
 			if (with == null || with.count() == 0) continue;
-			String canonical = canonicalResource(with.toString(), namespace);
+			String canonical = grantResource(with.toString(), namespace);
 			if (!canonical.equals(with.toString())) {
 				named = named.assoc(i, grant.assoc(Capability.WITH, Strings.create(canonical)));
 			}
@@ -490,6 +491,10 @@ public class CapabilityChecker {
 	 * <p>The namespace is only where the name is resolved, not whose authority
 	 * uses it. Applied identically to an operation's resource and each grant's
 	 * {@code with}, so an absolute and a bare grant match alike.</p>
+	 *
+	 * @throws InvalidInputException with {@link #SHORT_FORM_NOT_EXPANDED} for a
+	 *         name starting with a principal in short form ({@link #isShortForm}),
+	 *         which the venue expands where it arrives
 	 */
 	public static String canonicalResource(String resource, AString namespace) {
 		if (resource == null || resource.isEmpty()) return resource;
@@ -504,8 +509,38 @@ public class CapabilityChecker {
 			name = "dlfs/" + name.substring("dlfs://".length());
 		} else if (isScheme(name)) {
 			return name;
+		} else if (name.startsWith(SHORT_FORM)) {
+			// Resolved here it would name a place in this namespace, not the user it names
+			throw new InvalidInputException(SHORT_FORM_NOT_EXPANDED + resource);
 		}
 		return (namespace == null) ? name : namespace + "/" + name;
+	}
+
+	/** How a principal in short form starts: {@code u:<user>}, one of the venue's own users. */
+	private static final String SHORT_FORM = "u:";
+
+	/** Refusal of a name starting with a principal in short form where none is expanded; the name follows. */
+	public static final String SHORT_FORM_NOT_EXPANDED = "A principal in short form (u:<user>) is not taken here; "
+		+ "give its full DID: ";
+
+	/**
+	 * Whether {@code name} starts with a principal in short form, once any
+	 * leading slashes are ignored: {@code u:bob}, {@code u:bob:g:helper} or
+	 * {@code u:bob/w/notes}. Only the venue knows the DID it stands for
+	 * ({@code Engine.expandPath}), so {@link #canonicalResource} refuses one.
+	 */
+	public static boolean isShortForm(String name) {
+		return name != null && CoviaPath.relative(name).startsWith(SHORT_FORM) && !isScheme(name);
+	}
+
+	/**
+	 * A grant's {@code with} named in {@code namespace} ({@link #canonicalResource}).
+	 * A grant is a statement someone signed or stored, not input the venue
+	 * expands, so one naming a principal in short form is left as written and
+	 * covers nothing.
+	 */
+	private static String grantResource(String with, AString namespace) {
+		return isShortForm(with) ? with : canonicalResource(with, namespace);
 	}
 
 	/** Whether {@code name} is a scheme reference ({@code scheme://…}), once any leading slashes are ignored. */
@@ -619,7 +654,7 @@ public class CapabilityChecker {
 	private static AString absoluteWith(AString with, AString owner) {
 		String value = CoviaPath.relative(with.toString());
 		if (value.equals("v") || value.startsWith("v/")) return with;
-		return Strings.create(canonicalResource(value, owner));
+		return Strings.create(grantResource(value, owner));
 	}
 
 	/** A grant's caveats as a map, its gate bound to its owner when the result will be read in another namespace. */

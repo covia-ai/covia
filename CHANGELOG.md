@@ -26,6 +26,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Caps given to an access token or callable lie within what the request giving them may do itself, so a token's request or a call creates tokens and callables within its own caps, which keep them once it is gone; changing or reading one again needs authority covering its caps, and only an unrestricted token or call creates or forks an agent.
 - `adapters.convex.timeoutMillis` sets how long `convex:query` and `convex:transact` wait for the peer's result; the default is the Convex client's own, 20 seconds.
 - `venue:adapter/restart` stops an enabled adapter, offers it its configuration again and starts it; `venue:adapters` lists each adapter's `status` and a failed adapter's `reason`.
+- A venue with a public hostname takes its users in short form wherever a principal or a path is given, in operations, REST routes and a messaging bot's `user`: `u:bob` for `did:web:<hostname>:u:bob`, `u:bob:g:helper` for his agent and `u:bob/w/notes` for his path; records hold the full DID.
 
 ### Changed
 

@@ -597,8 +597,9 @@ public class CoviaAPI extends ACoviaAPI {
 	 * @return the resolved Asset, or null if the reference resolves to nothing
 	 *         or to a non-asset value
 	 */
-	private Asset resolveAssetReference(String ref, RequestContext ctx) throws IOException {
-		AString refStr = Strings.create(ref);
+	private Asset resolveAssetReference(String given, RequestContext ctx) throws IOException {
+		AString refStr = engine().expandPath(Strings.create(given));
+		String ref = refStr.toString();
 		if (covia.adapter.AssetAdapter.parseAssetId(refStr) != null) {
 			engine().requireMetadataRead(ctx, refStr);
 		} else if (ref.startsWith("did:") && !engine().isLocalDIDResource(refStr)) {
@@ -1821,6 +1822,7 @@ public class CoviaAPI extends ACoviaAPI {
 
 		AMap<AString, ACell> input;
 		try {
+			path = engine().expandPath(Strings.create(path)).toString();
 			path = expandValueScope(ctx, rctx, path);
 			input = buildValueInput(ctx, path);
 		} catch (InvalidInputException e) {
@@ -1949,7 +1951,7 @@ public class CoviaAPI extends ACoviaAPI {
 	 * canonical resource that is ultimately read, preventing selector
 	 * substitution between sibling or foreign agents.</p>
 	 */
-	private static String expandValueScope(Context ctx, RequestContext rctx, String path) {
+	private String expandValueScope(Context ctx, RequestContext rctx, String path) {
 		String namespace = firstSegment(path);
 		boolean scopedPath = isExecutionScopedNamespace(path);
 		if (!scopedPath) {
@@ -1987,12 +1989,12 @@ public class CoviaAPI extends ACoviaAPI {
 	}
 
 	/** The agent an {@code agent} parameter names ({@link AgentAddress#parse}), relative to the caller's user. */
-	private static AgentAddress parseAgentScope(String ref, RequestContext rctx) {
+	private AgentAddress parseAgentScope(String ref, RequestContext rctx) {
 		if (ref == null || ref.isBlank()) {
 			throw new InvalidInputException(
 				"Missing 'agent' query parameter for execution-scoped path");
 		}
-		return AgentAddress.parse((rctx == null) ? null : rctx.getUserDID(), Strings.create(ref));
+		return AgentAddress.parse((rctx == null) ? null : rctx.getUserDID(), engine().expandPath(Strings.create(ref)));
 	}
 
 	private static Blob parseBlobParam(Context ctx, String name, String namespace) {

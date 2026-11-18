@@ -202,14 +202,14 @@ public class HITLAdapter extends AAdapter {
 		AString caller = ctx.getAuthorityDID();
 		if (caller == null) throw new AuthException("Authentication required for HITL requests");
 
-		AString target = RT.ensureString(RT.getIn(input, Hitl.USER));
+		AString target = engine.expandPrincipal(RT.ensureString(RT.getIn(input, Hitl.USER)));
 		// Default target is the calling USER — for an agent, its owner. "Ask my
 		// human" is the whole point of HITL, and an agent has no inbox of its own
 		// to deliver into.
 		if (target == null) target = ctx.getUserDID();
 		AString title = RT.ensureString(RT.getIn(input, Hitl.TITLE));
 		if (title == null) throw new InvalidInputException("title is required");
-		AVector<ACell> asks = HitlValidation.validateAsks(RT.getIn(input, Hitl.ASKS));
+		AVector<ACell> asks = expandedGrants(HitlValidation.validateAsks(RT.getIn(input, Hitl.ASKS)));
 		validateOfferedGrantExpiries(asks, engine.currentTimestamp().longValue() / 1000);
 		Long timeoutSecs = parseTimeout(RT.getIn(input, Hitl.TIMEOUT));
 
@@ -249,6 +249,43 @@ public class HITLAdapter extends AAdapter {
 		parked.run();
 		if (expires != null) engine.gridScheduler().scheduleChanged();
 		log.info("HITL request {} delivered to {} (from {})", id, targetDID, caller);
+	}
+
+	/**
+	 * {@code asks}, validated, with the {@code with} of each grant they offer
+	 * expanded where it arrives ({@link Engine#expandCaps}): an ask's and each
+	 * option's {@code grants}, and a token ask's {@code caps}.
+	 */
+	private AVector<ACell> expandedGrants(AVector<ACell> asks) {
+		AVector<ACell> expanded = asks;
+		for (long i = 0; i < asks.count(); i++) {
+			AMap<AString, ACell> ask = RT.castMap(asks.get(i));
+			AMap<AString, ACell> full = expandedIn(ask, Hitl.GRANTS);
+			AVector<ACell> options = RT.ensureVector(full.get(Hitl.OPTIONS));
+			if (options != null) {
+				AVector<ACell> fullOptions = options;
+				for (long j = 0; j < options.count(); j++) {
+					AMap<AString, ACell> option = RT.castMap(options.get(j));
+					AMap<AString, ACell> fullOption = expandedIn(option, Hitl.GRANTS);
+					if (fullOption != option) fullOptions = fullOptions.assoc(j, fullOption);
+				}
+				if (fullOptions != options) full = full.assoc(Hitl.OPTIONS, fullOptions);
+			}
+			AMap<AString, ACell> token = RT.ensureMap(full.get(Hitl.TOKEN));
+			if (token != null) {
+				AMap<AString, ACell> fullToken = expandedIn(token, Hitl.CAPS);
+				if (fullToken != token) full = full.assoc(Hitl.TOKEN, fullToken);
+			}
+			if (full != ask) expanded = expanded.assoc(i, full);
+		}
+		return expanded;
+	}
+
+	/** {@code map} with the capabilities under {@code field} expanded ({@link Engine#expandCaps}). */
+	private AMap<AString, ACell> expandedIn(AMap<AString, ACell> map, AString field) {
+		AVector<ACell> caps = RT.ensureVector(map.get(field));
+		AVector<ACell> full = engine.expandCaps(caps);
+		return (full == caps) ? map : map.assoc(field, full);
 	}
 
 	/**

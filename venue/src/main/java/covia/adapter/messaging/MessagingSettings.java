@@ -11,6 +11,7 @@ import convex.core.data.Strings;
 import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
 import covia.exception.InvalidInputException;
+import covia.lattice.CapabilityChecker;
 import covia.venue.AgentAddress;
 
 /** Small validation helpers shared by HTTP messaging providers. */
@@ -21,7 +22,7 @@ public final class MessagingSettings {
 	public static final String ARRAY = "%s must be an array of non-empty string IDs";
 	public static final String UNKNOWN = "Unknown setting: %s";
 	public static final String INVALID_NAME = "Bot name must match [A-Za-z0-9_-]+";
-	public static final String INVALID_USER = "user must be a bare DID or public";
+	public static final String INVALID_USER = "user must be a bare DID, u:<user> for a user of this venue, or public";
 	public static final String HANDLER = "Exactly one of agent, operation or relay is required";
 	public static final String REPLY = "reply must be boolean or string and only applies to operation handlers";
 	public static final String CREDENTIAL = "%s must be an s/NAME secret reference";
@@ -95,7 +96,7 @@ public final class MessagingSettings {
 		if (strict) known(map, fields);
 		if (map.containsKey(key("statePath"))) throw new IllegalArgumentException(UNKNOWN.formatted("statePath"));
 		String user = required(map, "user");
-		if (!user.equals("public") && (!user.startsWith("did:") || user.contains("/") || user.isBlank())) throw new IllegalArgumentException(INVALID_USER);
+		if (!user.equals("public") && (!(user.startsWith("did:") || CapabilityChecker.isShortForm(user)) || user.contains("/") || user.isBlank())) throw new IllegalArgumentException(INVALID_USER);
 		String agent = optional(map, "agent"), operation = optional(map, "operation");
 		ACell relay = map.get(key("relay"));
 		if ((agent != null ? 1 : 0) + (operation != null ? 1 : 0) + (relay != null ? 1 : 0) != 1) throw new IllegalArgumentException(HANDLER);
