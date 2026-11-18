@@ -206,7 +206,7 @@ class VenueMigrationEndToEndTest {
 			user.cursor().path(Namespace.J).updateAndGet(jobs -> ((Index<Blob, ACell>) jobs).assoc(DELEGATE_JOB, Maps.of(
 				Fields.ID, DELEGATE_JOB, Fields.STATUS, Status.STARTED, Fields.CALLER, USER, Strings.create("actor"), DELEGATE,
 				Fields.OP, "v/test/ops/never", Fields.ADAPTER, "test")));
-			seed.users().ensure(OTHER).cursor().path(Namespace.H).set(Maps.of(Covia.WORKSPACE_DATA, Maps.of(hex(DELEGATE_ASK), Maps.of(
+			Covia.entry(seed.users().ensure(OTHER).cursor(), Namespace.H).set(Maps.of(Covia.WORKSPACE_DATA, Maps.of(hex(DELEGATE_ASK), Maps.of(
 				Hitl.ID, hex(DELEGATE_ASK), Strings.create("from"), DELEGATE, Strings.create("requesterUser"), USER,
 				Hitl.STATUS, Hitl.OPEN, Hitl.TITLE, "Asked by the delegate", Hitl.ASKS, Vectors.empty()))));
 			AMap<AString, ACell> askJob = Maps.of(Fields.ID, ASK, Fields.STATUS, Status.INPUT_REQUIRED,
