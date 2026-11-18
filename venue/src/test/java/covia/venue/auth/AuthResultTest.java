@@ -204,7 +204,7 @@ class AuthResultTest {
 			assertEquals(agent, caller.getUserDID(), "a bearer cannot claim a local owner's namespace");
 			assertEquals(Vectors.empty(), caller.getCaps(), "authentication supplies no agent capabilities");
 			AString owner = Strings.create(agent.toString().substring(0, agent.toString().lastIndexOf(":g:")));
-			assertFalse(engine.getAccessControl().canAccessJob(caller, Maps.of(Fields.CALLER, owner)),
+			assertFalse(engine.getAccessControl().canAccessJob(caller, owner, Maps.of(Fields.CALLER, owner)),
 				"ownership-only checks must not grant access to the named owner's jobs");
 			assertThrows(AuthException.class, () -> engine.requireLocalAccess(caller,
 				Strings.create("w/private"), Capability.CRUD_READ));

@@ -149,7 +149,7 @@ class AuthAdapterTest {
 		assertEquals(alice, delegate.getAuthorityDID(), "the delegate acts as Alice");
 		AMap<AString, ACell> whoami = RT.ensureMap(engine.jobs().runOperation("v/ops/auth/whoami", Maps.empty(), delegate).join());
 		assertEquals(alice, whoami.get(Fields.CALLER));
-		assertEquals(bob, whoami.get(Strings.create("authenticatedAs")), "whoami shows who is present");
+		assertEquals(bob, whoami.get(Strings.create("origin")), "whoami shows who is present");
 		assertEquals(Engine.NOT_IN_PERSON, identityFailure(delegate, identityInput()).getErrorMessage());
 		assertEquals(Engine.NOT_IN_PERSON, identityFailure(engine.context(alice), identityInput()).getErrorMessage(),
 			"work the venue carries on for her is not her either");

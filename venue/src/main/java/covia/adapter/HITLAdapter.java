@@ -33,9 +33,11 @@ import covia.exception.NotSupportedException;
 import covia.grid.Attribution;
 import covia.grid.HexId;
 import covia.grid.Job;
+import covia.grid.Principals;
 import covia.venue.Agent;
 import covia.venue.Engine;
 import covia.venue.Ids;
+import covia.venue.JobManager;
 import covia.grid.Status;
 import covia.grid.hitl.Hitl;
 import covia.venue.RequestContext;
@@ -215,7 +217,7 @@ public class HITLAdapter extends AAdapter {
 		// so the request is open exactly when its Job waits for it.
 		long nowMs = engine.currentTimestamp().longValue();
 		Blob id = job.getID();
-		AMap<AString, ACell> record = HitlRequest.record(id, caller, ctx.getUserDID(), ctx.getAgentId(),
+		AMap<AString, ACell> record = HitlRequest.record(id, caller, target, ctx.getAgentId(),
 			ctx.getSessionId(), ctx.getRoute(), title, RT.ensureString(RT.getIn(input, Hitl.DESCRIPTION)), asks, nowMs,
 			(timeoutSecs == null) ? null : nowMs + timeoutSecs * 1000);
 
@@ -253,9 +255,9 @@ public class HITLAdapter extends AAdapter {
 	 * no task and keeps the entry already recorded. A pure edit of the draft.
 	 */
 	private static void addPending(VenueState venue, Job job, Blob taskId) {
-		AString agentId = Engine.agentIdIn(job.getOwner(), job.getCaller());
+		AString agentId = Engine.agentIdIn(JobManager.accountOf(job), job.getCaller());
 		if (agentId == null) return;
-		User owner = venue.users().user(job.getOwner());
+		User owner = venue.users().user(JobManager.accountOf(job));
 		Agent agent = owner == null ? null : owner.agent(agentId);
 		if (agent == null || agent.getRecord() == null) return;
 		if (taskId != null) {
@@ -267,9 +269,9 @@ public class HITLAdapter extends AAdapter {
 
 	/** Takes the asking agent's pending entry away with the job that ended. A pure edit of the draft. */
 	private static void removePending(VenueState venue, Job job) {
-		AString agentId = Engine.agentIdIn(job.getOwner(), job.getCaller());
+		AString agentId = Engine.agentIdIn(JobManager.accountOf(job), job.getCaller());
 		if (agentId == null) return;
-		User owner = venue.users().user(job.getOwner());
+		User owner = venue.users().user(JobManager.accountOf(job));
 		Agent agent = owner == null ? null : owner.agent(agentId);
 		if (agent != null && agent.getRecord() != null) agent.removePending(job.getID());
 	}
@@ -282,7 +284,7 @@ public class HITLAdapter extends AAdapter {
 		AString kept = (adapterData == null) ? null : RT.ensureString(adapterData.get(TARGET));
 		if (kept != null) return kept;
 		AString target = RT.ensureString(RT.getIn(job.getData(), Fields.INPUT, Hitl.USER));
-		return (target != null) ? target : job.getOwner();
+		return (target != null) ? target : JobManager.accountOf(job);
 	}
 
 	/** Cancelling a request job resolves its request as cancelled and ends the asking agent's wait. */
@@ -339,7 +341,7 @@ public class HITLAdapter extends AAdapter {
 			if (!Status.INPUT_REQUIRED.equals(job.getStatus())) continue;
 			AMap<AString, ACell> kept = engine.jobs().adapterData(job);
 			if (did.equals(askedBy(job, kept))) {
-				failForDeletedTarget(did, job, kept, engine.getVenueState().users().user(job.getOwner()));
+				failForDeletedTarget(did, job, kept, engine.getVenueState().users().user(job.accountDID()));
 			}
 		}
 	}
@@ -354,7 +356,7 @@ public class HITLAdapter extends AAdapter {
 	private void failForDeletedTarget(AString target, Job job, AMap<AString, ACell> kept, User ownerAccount) {
 		String error = String.format(TARGET_DELETED, target);
 		Blob id = job.getID();
-		AString owner = job.getOwner();
+		AString owner = JobManager.accountOf(job);
 		AString agentId = Engine.agentIdIn(owner, job.getCaller());
 		Blob session = (kept == null) ? null : Ids.stored(kept.get(Fields.SESSION_ID));
 		ACell result = Maps.of(Hitl.ID, id, Hitl.STATUS, Hitl.CANCELLED, Fields.ERROR, error);
@@ -500,7 +502,7 @@ public class HITLAdapter extends AAdapter {
 		AVector<ACell> triggered = HitlValidation.validateAnswers(asks, answers);
 		AVector<ACell> approved = HitlValidation.intersectEchoedGrants(RT.getIn(input, Hitl.GRANTS), triggered);
 		UCANAdapter.Grant grant = (approved.count() > 0)
-			? issueGrants(user.getDID(), Attribution.caller(record), approved)
+			? issueGrants(user.getDID(), Attribution.caller(record, user.getDID()), approved)
 			: null;
 
 		// Transported self-sovereign tokens (COG-19): a token ask's answer is a
@@ -509,7 +511,7 @@ public class HITLAdapter extends AAdapter {
 		// requester — never mint, never re-sign. The signed token is a secret, so
 		// it is REDACTED from the durable inbox record and delivered only on the
 		// requester's job output.
-		AString requester = Attribution.caller(record);
+		AString requester = Attribution.caller(record, user.getDID());
 		AMap<AString, ACell> transported = Maps.empty();
 		AMap<AString, ACell> recordedAnswers = answers;
 		long tnow = engine.currentTimestamp().longValue() / 1000;
@@ -731,7 +733,7 @@ public class HITLAdapter extends AAdapter {
 			if (filter != null && !filter.equals(rec.get(Hitl.STATUS))) continue;
 			AMap<AString, ACell> summary = Maps.of(
 				Hitl.ID, rec.get(Hitl.ID),
-				Hitl.CALLER, rec.get(Hitl.CALLER),
+				Hitl.CALLER, Attribution.caller(rec, caller),
 				Hitl.TITLE, rec.get(Hitl.TITLE),
 				Hitl.STATUS, rec.get(Hitl.STATUS),
 				Hitl.CREATED, rec.get(Hitl.CREATED));
@@ -754,7 +756,7 @@ public class HITLAdapter extends AAdapter {
 	 */
 	private Blob scheduleExpiry(VenueState venue, AString targetDID, Blob id, CVMLong expires) {
 		AString did = engine.getDIDString();
-		return venue.schedule().schedule(EXPIRE_OP, expiryInput(targetDID, id), did, did, null, null,
+		return venue.schedule().schedule(EXPIRE_OP, expiryInput(targetDID, id), did, null, null,
 			expires.longValue(), null, Boolean.FALSE, Strings.create("Expires HITL request " + id),
 			engine.currentTimestamp().longValue());
 	}
@@ -838,7 +840,7 @@ public class HITLAdapter extends AAdapter {
 	 * result carries is recorded once the resolution commits, and only then. */
 	private boolean resolveRequest(AString targetDID, Blob id, AString status,
 			AMap<AString, ACell> response, AString responder, AVector<ACell> route, ACell result, Job job, UCANAdapter.Grant grant) {
-		AString requester = job == null ? null : job.getOwner();
+		AString requester = job == null ? null : JobManager.accountOf(job);
 		User requesterAccount = requester == null ? null : engine.getVenueState().users().user(requester);
 		// Null when the request was not open to resolve
 		Resolution resolution = engine.getVenueState().transact(venue -> {
@@ -849,7 +851,7 @@ public class HITLAdapter extends AAdapter {
 			Resolution settled = settle(venue, job, data -> {
 				if (Hitl.ANSWERED.equals(status)) return data.assoc(Fields.STATUS, Status.COMPLETE).assoc(Fields.OUTPUT, result);
 				return failed(data, Hitl.REJECTED.equals(status) ? rejection(targetDID, RT.getIn(result, Hitl.COMMENT)) : REQUEST_EXPIRED);
-			}, Attribution.owner(record), RT.ensureString(record.get(Hitl.AGENT)),
+			}, Principals.userOf(Attribution.caller(record, targetDID)), RT.ensureString(record.get(Hitl.AGENT)),
 				Ids.stored(record.get(Fields.SESSION_ID)), responder, route, result);
 			if (settled == null) throw new ConflictException(REQUEST_ALREADY_RESOLVED);
 			return settled;
@@ -882,8 +884,8 @@ public class HITLAdapter extends AAdapter {
 			if (notification == null) return null;
 			cancelExpiry(venue, kept);
 			// Terminal jobs are skipped at restart, so the wait ends with the result
-			AString requestingAgent = Engine.agentIdIn(job.getOwner(), job.getCaller());
-			User owner = draft.user(job.getOwner());
+			AString requestingAgent = Engine.agentIdIn(JobManager.accountOf(job), job.getCaller());
+			User owner = draft.user(JobManager.accountOf(job));
 			Agent askingAgent = owner == null || requestingAgent == null ? null : owner.agent(requestingAgent);
 			if (askingAgent != null && askingAgent.getRecord() != null) {
 				waitingTask = Ids.stored(RT.getIn(askingAgent.getPending().get(job.getID()), Fields.TASK_ID));

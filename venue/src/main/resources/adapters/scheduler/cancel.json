@@ -1,6 +1,6 @@
 {
   "name": "Cancel Scheduled Event",
-  "description": "Cancel a scheduled event by its handle, removing it before it fires. Only the event's owner may cancel it.",
+  "description": "Cancel a scheduled event by its handle, removing it before it fires. It needs schedule/manage on the event (<account>/x/schedule/<id>).",
   "operation": {
     "adapter": "scheduler:cancel",
     "readOnly": false,

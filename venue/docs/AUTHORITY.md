@@ -1,7 +1,8 @@
 # Authority (design)
 
-Every request names two principals by DID: whose authority applies, and who
-called into it. The model is Convex's `*address*` and `*caller*` (CAD005). A
+Every request names up to three principals by DID: whose authority applies,
+who called into it, and who it authenticated as where it entered the venue.
+The model is Convex's `*address*`, `*caller*` (CAD005) and `*origin*`. A
 record of work, such as a job or a scheduled event, names the principal that
 called it. This is a design, implemented in part: a callable's call enters its
 issuer's frame and calls nest, an agent's harness runs in its controller's
@@ -9,22 +10,33 @@ frame, `admin/sudo` is a call into the user, a request names one acting
 principal, whose authority an agent's record decides at each check, state
 within one interaction
 belongs to the principal that opened it, and acts that need the user in
-person read how the request authenticated. What still works the old way is listed under
+person read the request's origin. What still works the old way is listed under
 [What it replaces](#what-it-replaces).
 
-## The two fields
+## The fields
 
 | Field | Meaning | Changes |
 |-------|---------|---------|
 | `authority` | The principal whose authority applies. Only this decides access. | When a call enters another principal's authority: a callable's call, or `admin/sudo` |
 | `caller` | The `authority` of the frame that called into this one; absent at the top level | On that call: the previous `authority` becomes `caller` |
+| `origin` | The principal the request authenticated as where it entered the venue; absent from work the venue starts itself | Never: every context made for the request keeps it, a call included, and nothing a job or event keeps carries it |
 
-- Ordinary composition keeps both: orchestration steps, sub-operations and
-  tool calls run in the frame that started them.
+- Ordinary composition keeps all three: orchestration steps, sub-operations
+  and tool calls run in the frame that started them.
 - Every authority check (`Engine.authorityCovers`, `holdsAuthorityOf`) reads
-  `authority` alone. `caller` grants and refuses nothing.
-- Who started a request is not a field: how the request authenticated is kept
-  with it ([AUTH.md](AUTH.md)).
+  `authority` alone. `caller` grants and refuses nothing, and `origin` decides
+  only whether a user is present in person
+  ([VENUE_AUTHORITY.md](VENUE_AUTHORITY.md#how-it-works-today), "In person").
+- `origin` is the principal an HTTP, MCP or A2A door authenticated, or the
+  issuer of the access token the request presented, since the venue never
+  knows who holds a token; or the principal in-process code made the request
+  for (`RequestContext.of`, `Engine.requestContext`). A context the venue
+  makes for a principal itself (`Engine.context`) has none: the venue's own
+  work, an agent's cycle, a message a bot brings, whose channel record is
+  attribution, not evidence ([AUTH.md](AUTH.md)), and work a job or a
+  scheduled event carries on later from what it kept. Neither does a gate's
+  evaluation. Unlike Convex's `*origin*`, it can be absent. How a session
+  signed in is its originating method ([AUTH.md](AUTH.md)).
 - A token or a callable narrows the `authority` a request runs under
   ([Tokens and callables](#tokens-and-callables)), and grants a request
   presents add to it ([VENUE_AUTHORITY.md](VENUE_AUTHORITY.md)). Both are
@@ -60,8 +72,8 @@ to the agent that stands under that id when it is used.
 
 Asking an agent sends it a message. The request that asks is the asker's own,
 and each of the agent's cycles is the agent's own top-level request, with no
-`caller`, whoever asked. Who asked is recorded on each message, so one cycle
-can serve several askers ([A2A_INTERACTION_AUTHORITY.md](A2A_INTERACTION_AUTHORITY.md)).
+`caller` and no `origin`, whoever asked. Who asked is recorded on each
+message, so one cycle can serve several askers ([A2A_INTERACTION_AUTHORITY.md](A2A_INTERACTION_AUTHORITY.md)).
 
 ## Tokens and callables
 
@@ -107,11 +119,17 @@ authority that covers its caps as they are and as they become.
 ## Admission
 
 An `accepts` list or a callers gate that names a principal admits whatever
-acts with that principal's authority, directly or through others: its agents,
-and requests through its tokens or calls of its callables, each within its own
-caps. Being admitted is part of the named principal's authority, which each of
-these holds only as narrowed, so it uses an admission only where its caps cover
-the act.
+acts with that principal's authority, directly or through others: the
+principal itself, the agents acting for it up their chain of controllers, and
+requests through its tokens or calls of its callables (`Engine.actsFor`).
+`"venue"` names the venue's own DID in the same way. Being admitted is part of
+the named principal's authority, which each of these holds only as narrowed,
+so a request uses an admission only where its narrowing covers the act: the
+caps of every agent on its chain of controllers, whichever principal is
+named, and the caps of its tokens and callable (`Engine.admissionCovers`). The
+same bound holds for `"anyone"` and for every gate, checked before the gate
+runs, since what a gate admits on is its own. The venue's public principal has
+no caps, so nothing narrows what `"anyone"` admits it to.
 
 ## State within one interaction
 
@@ -134,8 +152,9 @@ A record of work is kept in its caller's account, a job in that account's
 `j/`: a user's own, and for an agent the account it acts in. It names no owner
 beside its caller: the account is the caller's, and the caller's DID names it,
 as an agent's `<ownerDID>:g:<id>` does, so a reader can find the record. It
-counts against that account's quota. This is COG-8's `caller`, and COG-8's
-`owner` goes.
+counts against that account's quota. This is COG-8's `caller`; a record names
+no `owner`, and none names the request's `origin`: the audit log does, where
+it is not the `authority`.
 
 A job is reached by capability on its record ([JOBS.md](JOBS.md#job-capabilities)).
 A scheduled event is reached by capability on `<account>/x/schedule/<id>`:
@@ -178,8 +197,8 @@ right that let it in.
 ## Acting for another user
 
 `admin/sudo` on a user is the power to act as that user, as `sudo` is on
-Unix. It is a call into that user: `authority` is the user, whole, and
-`caller` is the delegate. The grants the delegate presents do not bound it. A narrower delegation is a plain grant, under which the delegate acts as
+Unix. It is a call into that user: `authority` is the user, whole, `caller`
+is the delegate, and `origin` is unchanged. The grants the delegate presents do not bound it. A narrower delegation is a plain grant, under which the delegate acts as
 itself and what it creates is its own.
 
 So the user controls what a request creates under `admin/sudo`, and work it
@@ -187,9 +206,9 @@ leaves runs as the user while the user stands, whatever becomes of the
 delegate's grant, as a cron entry made under `sudo -u` runs as its owner.
 Authority does not tell a request under `admin/sudo` from the user's own. An
 action that needs the user in person, such as answering the user's approval
-requests, decides that itself from how the request authenticated
-([AUTH.md](AUTH.md)), as `passwd` under `sudo -u` still asks for the user's own
-password.
+requests, decides that itself from the request's `origin`
+([VENUE_AUTHORITY.md](VENUE_AUTHORITY.md#how-it-works-today), "In person"), as
+`passwd` under `sudo -u` still asks for the user's own password.
 
 ## An agent's harness
 
@@ -214,16 +233,19 @@ one through a token or within a callable's call.
 
 ## Cases
 
-| Case | `authority` | `caller` |
-|------|-------------|----------|
-| Alice's own request | Alice | none |
-| Through Alice's token | Alice, narrowed by the token | none |
-| Alice's agent calling a tool | the agent | none |
-| That agent's harness, as configured | Alice, its controller | none |
-| Bob acting for Alice (`admin/sudo`) | Alice | Bob |
-| Bob with a grant from Alice | Bob, with the grant added | none |
-| Bob calls Alice's guestbook | Alice, narrowed by the guestbook | Bob |
-| The guestbook calls Carol's callable | Carol, narrowed by that callable | Alice |
+| Case | `authority` | `caller` | `origin` |
+|------|-------------|----------|----------|
+| Alice's own request | Alice | none | Alice |
+| Through Alice's token | Alice, narrowed by the token | none | Alice |
+| Alice's agent calling a tool | the agent | none | none |
+| That agent's harness, as configured | Alice, its controller | none | none |
+| Bob acting for Alice (`admin/sudo`) | Alice | Bob | Bob |
+| Bob with a grant from Alice | Bob, with the grant added | none | Bob |
+| Bob calls Alice's guestbook | Alice, narrowed by the guestbook | Bob | Bob |
+| The guestbook calls Carol's callable | Carol, narrowed by that callable | Alice | Bob |
+
+Alice's and Bob's requests here are ones they signed in to make; the agent's
+rows are its cycle, which the venue starts.
 
 ## What it replaces
 
@@ -231,13 +253,4 @@ one through a token or within a callable's call.
 - The caller context a job keeps only when its adapter asks, in two shapes of
   kept authority, and a scheduled event's own shape of the same. A job's state
   is the context it runs in.
-- A record of work whose `caller` names a sudo delegate, as work it left
-  before `admin/sudo` acted as the user does, beside an `owner` naming the account,
-  from which the venue works out what kind of principal acted.
-- An `accepts` list that matches DIDs exactly, and a callers gate that admits
-  a namespace it lists.
-- A scheduled event reached by identity, by its account's owner or the
-  principal that scheduled it, since no capability names an event.
 - A configured Python function, which is not told who called it (#706).
-- The check of an `admin/sudo` delegate's grant again when work it left
-  before `admin/sudo` was a call into the user runs, bounded by that grant.

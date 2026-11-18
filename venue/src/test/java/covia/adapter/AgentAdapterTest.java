@@ -272,7 +272,9 @@ public class AgentAdapterTest {
 	public void testAdmissionVenueAdmitsTheOperatorAndItsAgentsOnly() {
 		AString address = createAgentAs(RequestContext.of(ALICE_DID), "ops-agent", Admission.VENUE);
 		RequestContext operator = engine.venueContext();
-		RequestContext venueAgent = RequestContext.ofAgent(engine.getDIDString(), Strings.create("odin"));
+		AString odin = Strings.create("odin-" + BOB_DID.toString().hashCode());
+		engine.getVenueState().users().ensure(engine.getDIDString()).agents().create(odin, null, null, null, engine.getDIDString());
+		RequestContext venueAgent = engine.context(engine.getDIDString(), covia.grid.Principals.agentDID(engine.getDIDString(), odin));
 		RequestContext bob = RequestContext.of(BOB_DID);
 		RequestContext bobAgent = RequestContext.ofAgent(BOB_DID, Strings.create("helper"));
 
@@ -288,19 +290,24 @@ public class AgentAdapterTest {
 	}
 
 	@Test
-	public void testAdmissionAllowlistIsExactPerPrincipal() {
+	public void testAdmissionAllowlistAdmitsWhatActsForEachPrincipal() {
 		RequestContext bob = RequestContext.of(BOB_DID);
-		RequestContext bobAgent = RequestContext.ofAgent(BOB_DID, Strings.create("helper"));
+		AString helper = Strings.create("helper");
+		engine.getVenueState().users().ensure(BOB_DID).agents().create(helper, null, null, null, BOB_DID);
+		RequestContext bobAgent = engine.context(BOB_DID, covia.grid.Principals.agentDID(BOB_DID, helper));
+		RequestContext unrecorded = RequestContext.ofAgent(BOB_DID, Strings.create("unrecorded"));
 		RequestContext carol = RequestContext.of(Strings.create(ALICE_DID + "-carol"));
 
 		AString forBob = createAgentAs(RequestContext.of(ALICE_DID), "for-bob", Vectors.of(BOB_DID));
 		assertTrue(engine.crossUserAllows(bob, forBob, Abilities.AGENT_REQUEST));
-		assertFalse(engine.crossUserAllows(bobAgent, forBob, Abilities.AGENT_REQUEST),
-			"a user DID does not admit that user's agents");
+		assertTrue(engine.crossUserAllows(bobAgent, forBob, Abilities.AGENT_REQUEST),
+			"a user DID admits that user's agents");
+		assertFalse(engine.crossUserAllows(unrecorded, forBob, Abilities.AGENT_REQUEST),
+			"an agent-shaped DID with no record acts for no one");
 		assertFalse(engine.crossUserAllows(carol, forBob, Abilities.AGENT_REQUEST));
 		assertFalse(engine.crossUserAllows(engine.venueContext(), forBob, Abilities.AGENT_REQUEST));
 		assertNotNull(requestAs(bob, forBob));
-		assertRequestDenied(bobAgent, forBob);
+		assertNotNull(requestAs(bobAgent, forBob));
 
 		AString forHelper = createAgentAs(RequestContext.of(ALICE_DID), "for-helper",
 			Vectors.of(covia.grid.Principals.agentDID(BOB_DID, Strings.create("helper"))));

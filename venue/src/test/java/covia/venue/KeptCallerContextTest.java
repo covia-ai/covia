@@ -129,45 +129,16 @@ class KeptCallerContextTest {
 	}
 
 	/**
-	 * A job a delegate left before admin/sudo was a call into the user, which
-	 * names the delegate, regains its authority only through the grant it
-	 * presented, bounded by it as it was, never the user's whole authority.
+	 * Work acts again only as a principal of the account it is kept in: a
+	 * record there naming another, as one a delegate left before admin/sudo
+	 * acted as the user does, regains no authority.
 	 */
-	@Test void aDelegatesEarlierJobActsAgainOnlyThroughItsGrant() {
-		AKeyPair ownerKey = AKeyPair.generate();
-		AKeyPair delegateKey = AKeyPair.generate();
-		AString owner = UCAN.toDIDKey(ownerKey.getAccountKey());
-		AString delegate = UCAN.toDIDKey(delegateKey.getAccountKey());
-		engine.getVenueState().users().create(owner);
-		engine.getVenueState().users().create(delegate);
-		AString grant = UCAN.create(ownerKey, delegateKey.getAccountKey(), exp(),
-			Vectors.of(Capability.create(owner, Abilities.ADMIN_SUDO),
-				Capability.create(Strings.create(owner + "/v/test/ops/never"), Strings.create("invoke")),
-				Capability.create(Strings.create(owner + "/w/output"), Capability.CRUD_WRITE)),
-			Vectors.empty()).toJWT(ownerKey);
-		// The delegate in the owner's namespace, bounded by its grants, as such work was made then
-		RequestContext sudo = engine.withTransportGrants(RequestContext.of(delegate), Vectors.of(grant))
-			.onBehalfOf(owner).withAgentId(Strings.create("worker")).withSessionId(Blob.fromHex("1234"));
-
-		Job kept = engine.jobs().invokeOperation("v/test/ops/never", Maps.empty(), sudo);
-		Job unkept = engine.jobs().invokeOperation("v/test/ops/never", Maps.empty(), sudo);
-		engine.jobs().keepCallerContext(kept, sudo);
-		try {
-			assertEquals(delegate, kept.getCaller());
-			assertEquals(owner, kept.getOwner());
-			RequestContext resumed = engine.jobs().callerContext(kept);
-			assertEquals(delegate, resumed.getAuthorityDID());
-			assertEquals(owner, resumed.getUserDID(), "in the owner's namespace, as the grant allows");
-			assertEquals(sudo.getExecutionScope(), resumed.getExecutionScope());
-			assertTrue(engine.authorityCovers(resumed, Strings.create("w/output"), Capability.CRUD_WRITE));
-			assertFalse(engine.authorityCovers(resumed, Strings.create("w/other"), Capability.CRUD_WRITE),
-				"bounded by the grant, as it was");
-			assertThrows(AuthException.class, () -> engine.jobs().callerContext(unkept),
-				"without its grant a delegate cannot act for the owner again");
-		} finally {
-			kept.cancel();
-			unkept.cancel();
-		}
+	@Test void workKeptInAnotherAccountDoesNotActAsItsCaller() {
+		AString owner = TestEngine.uniqueDID("KeptOwner");
+		AString delegate = TestEngine.uniqueDID("KeptDelegate");
+		AuthException refused = assertThrows(AuthException.class, () -> engine.context(owner, delegate, Vectors.empty()));
+		assertEquals(Engine.NOT_IN_ACCOUNT.formatted(delegate, owner), refused.getMessage());
+		assertEquals(owner, engine.context(owner, owner, Vectors.empty()).getAuthorityDID(), "the account itself acts again");
 	}
 
 	/**
@@ -191,10 +162,10 @@ class KeptCallerContextTest {
 		engine.jobs().keepCallerContext(kept, sudo);
 		try {
 			assertEquals(owner, kept.getCaller(), "the user acted");
-			assertEquals(owner, kept.getOwner(), "in the user's own account");
+			assertEquals(owner, JobManager.accountOf(kept), "in the user's own account");
 			RequestContext resumed = engine.jobs().callerContext(kept);
 			assertEquals(owner, resumed.getAuthorityDID());
-			assertNull(resumed.getAuthenticatedDID(), "nobody is present in work carried on");
+			assertNull(resumed.getOrigin(), "nobody is present in work carried on");
 			assertTrue(engine.authorityCovers(resumed, Strings.create("w/other"), Capability.CRUD_WRITE),
 				"with the user's whole authority");
 		} finally {

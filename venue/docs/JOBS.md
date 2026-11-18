@@ -284,19 +284,24 @@ failures and must not guess from the message. Codes do not change status,
 authorise retries, or automatically propagate through wrapper jobs; recovery
 remains the application's choice.
 
-## Record fields: `caller`, `owner`, `op`, `adapter` and `parent`
+## Record fields: `caller`, `op`, `adapter` and `parent`
 
-- **`caller`** is the principal that made the call: a user, or one of a
-  user's agents (`<owner>:g:<agent>`) (COG-8). A job made under `admin/sudo`
-  names the user; one an `admin/sudo` delegate made before `admin/sudo` acted
-  as the user names the delegate.
-- **`owner`** is the namespace the job belongs to, written only when it
-  differs from `caller`: an agent's owner, or for that earlier delegate's
-  work the user it acted for.
-  The job is stored in that user's `j/`, and ownership, access control and the
-  admission quota key on it (`Job.getOwner`, `owner` else `caller`). The owner
-  is never derived from a DID; `covia.grid.Attribution` writes and reads both
-  fields. A scoped context needs explicit Job authority even for work it created.
+- **`caller`** is the principal that called the job: the `authority` of the
+  frame that made the call, a user or one of a user's agents
+  (`<owner>:g:<agent>`) (COG-8). A job made under `admin/sudo` names the
+  user. The job is kept in its caller's account, an agent's being its owner's,
+  in that account's `j/`, and access control and the admission quota key on
+  that account. The record leaves out a caller that is the account it is kept
+  in, since where it is kept says so: a missing caller means that account
+  wherever the record is read against it (`covia.grid.Attribution`,
+  `VenueJob.getCaller`). A response that hands a client one record on its
+  own names the caller in full (`Attribution.inFull`): `POST /invoke`,
+  `GET /jobs/{id}` and its SSE updates, and `job:status`. A listing of the
+  account's jobs, a lattice read, a copy, an export and a clone carry records
+  as stored, so a clone's records are the clone's. A finished record an
+  `admin/sudo` delegate left before `admin/sudo` acted as the user names the
+  delegate, though it is kept in the user's account. A scoped context needs
+  explicit Job authority even for work it created.
 - **`op`** is the reference that was invoked, verbatim: `v/ops/json/merge`,
   `o/my-tool`, a DID URL, or a bare hash when the caller pinned a definition
   explicitly (#499). Only an inline definition has no reference, in which
@@ -327,7 +332,7 @@ A job's record is what its caller sees. What the venue needs to carry an
 unfinished job to its end is its own, kept in the venue's `:jobs` region by
 job id (`JobIndex`), and no route reads it. Each entry holds:
 
-- **`owner`**: the user whose `j/` holds the record.
+- **`owner`**: the account whose `j/` holds the record.
 - **`rules`**: what the job's operation declared about its data when the job
   was admitted (`OutputRules`): its `secretFields`, hidden in the job's input
   and output on every write, and its output schema, checked when the job
@@ -366,10 +371,10 @@ session, job and task), even when
 there are none, so that `JobManager.keepsCallerContext` tells such a job from
 one whose adapter never asked. `JobManager.callerContext` rebuilds the caller
 from them with `Engine.context(owner, caller, proofs, authority)`, checking
-what a live request would: the principal still exists, a delegate whose
-earlier work it is still holds its `admin/sudo` grant, which bounds it as it
-did then, and an agent acts under its current `config.caps` and its
-controller as it stands, read from its record. What narrows the request is
+what a live request would: the principal still exists and acts in the
+account the job is kept in (`Engine.NOT_IN_ACCOUNT` otherwise), and an agent
+acts under its current `config.caps` and its controller as it stands, read
+from its record. What narrows the request is
 the access token it came through, if any, which then narrows it as it stands
 and to nothing once it is gone (ACCESS_TOKENS.md). Work a callable's call left
 running keeps the callable and the call's caller instead, and resumes in the
@@ -808,8 +813,8 @@ and `grid_job_result` find, and that outlasts a restart. A call that is
 already recorded is its own job and needs none.
 
 - The mirror looks like the call. Its record copies `op`, `input` (secrets
-  hidden), `name`, `adapter`, `caller`, `owner`, `parent` and `created`, and
-  `mirrorOf` names the transient call.
+  hidden), `name`, `adapter`, `caller`, `parent` and `created`, and
+  `mirrorOf` names the transient call. It is kept in the call's account.
 - It is `STARTED` until the call ends, then takes the call's `status`,
   `output` and `error`. Cancelling the mirror cancels the call with the same
   reason, and cancelling the call settles the mirror.

@@ -31,10 +31,11 @@ their calls; `Engine.callContext` builds the authority a call acts with.
    ([OPERATIONS.md](OPERATIONS.md)), and the gate may inspect the input.
 5. **Who may call:** a request whose authority covers `callable/call` on the
    callable, or any caller its gate admits. Without a gate, only the first.
-   A gate is an admission, so it admits a request an access token narrows
-   only as far as its tokens' caps cover `callable/call` on the callable, as
-   for any admission into another identity's resources
-   ([ACCESS_TOKENS.md](ACCESS_TOKENS.md#acting-with-a-principals-whole-authority)).
+   A gate is an admission, so it admits a request only as far as its
+   narrowing covers `callable/call` on the callable: the caps of every agent on
+   its chain of controllers and of its access tokens and callable, checked
+   before the gate runs, whatever the gate would decide
+   ([AUTHORITY.md](AUTHORITY.md#admission)).
 6. **The gate is a capability gate.** It has the input, outcome and limits of
    `nb.gate` ([UCAN.md](UCAN.md#capability-gates-nbgate--covia216)), so one
    gate serves grants and callables alike. It runs with the callable's
@@ -147,15 +148,13 @@ read at `<did>/x/callable` under the usual cross-user delegation rules.
 {
   operation: "<ownerDID>/x/callable/<name>",  // the callable being called
   input:     <the call's input>,
-  caller:    <the invoker's DID>,
-  owner?:    <the namespace the invoker acts in, when it differs from caller>
+  caller:    <the invoker's DID>
 }
 ```
 
 This is a capability gate's input. `operation` names the callable, so one gate
-can serve several. For a call made within another call, `caller` is the outer
-callable's issuer. `owner` keeps its meaning there, the invoker's namespace;
-the callable's owner is in `operation`. The call is admitted only if the gate
+can serve several, and the callable's owner is in it. For a call made within
+another call, `caller` is the outer callable's issuer. The call is admitted only if the gate
 succeeds. A gate that fails, cannot be resolved or runs past a capability
 gate's time limit refuses the call, and its reason is returned.
 
@@ -164,7 +163,7 @@ gate's time limit refuses the call, and its reason is returned.
 | Gate | Admits |
 |------|--------|
 | `v/ops/callable/gates/anyone` | Every caller, the public principal included |
-| `v/ops/callable/gates/callers` | A caller listed in its `callers`, or acting in a listed namespace |
+| `v/ops/callable/gates/callers` | A caller acting for a principal its `callers` lists: that principal, or an agent acting for it up its chain of controllers (`Engine.actsFor`) |
 
 A gate takes parameters from an operation default. A provider stores an
 operation that adds them (`asset:store`) and names it as the gate by its
@@ -264,8 +263,9 @@ it (decision 5). Nothing yet bounds how deep calls nest
    one with no gate whose `callable/call` the caller does not hold, are refused
    alike, so a private callable is not revealed.
 2. **Admit** the caller: its authority covers `callable/call` on the
-   callable's resource, or the gate, run with the callable's authority,
-   succeeds. A gate's refusal is returned with its reason.
+   callable's resource, or its narrowing covers that and the gate, run with
+   the callable's authority, succeeds. A gate's refusal is returned with its
+   reason.
 3. **Enter** the issuer's frame: the issuer's authority narrowed by `caps`
    decides every check, the owner's namespace is where names
    resolve, and the invoker's authority is the frame's caller.
@@ -340,9 +340,6 @@ The token's caps let it reach the guestbook's gate and no other callable's.
 - **A callable as an operation reference.** Accepting
   `<ownerDID>/x/callable/<name>` wherever an operation reference goes, so a
   tool takes the target's input and schema directly.
-- **The `callers` gate and agents.** Listing a user admits that user's agents,
-  whatever their caps. A provider who wants exact principals writes its own
-  gate.
 - **Calls across venues.** Calling a callable another venue hosts, through
   `grid:run`.
 - **A provider's record of calls.** Whether calls are recorded where the

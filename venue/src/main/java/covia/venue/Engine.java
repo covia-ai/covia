@@ -4157,8 +4157,9 @@ public class Engine {
 	 *   <li><b>Target-side admission</b> (covia#447) — an agent record's
 	 *       {@code config.accepts}: the owner's standing policy for who may
 	 *       talk to that agent ({@code agent/request}, {@code agent/message})
-	 *       without a delegation — the venue operator, exact principal DIDs,
-	 *       or anyone. Consulted for that one resource shape and those
+	 *       without a delegation — the venue operator, principals and what
+	 *       acts for them, or anyone — used only where the caller's narrowing
+	 *       covers it. Consulted for that one resource shape and those
 	 *       abilities only. See {@link Admission}.</li>
 	 *   <li><b>Presented UCAN proofs</b> — the pure fail-closed delegation
 	 *       check ({@link covia.lattice.CapabilityChecker#proofsCover}).</li>
@@ -4205,13 +4206,24 @@ public class Engine {
 	/**
 	 * Target-side admission (covia#447): the resource owner's own standing policy
 	 * for who may talk to their agent, consulted for exactly one resource shape —
-	 * an agent record {@code <owner>/g/<id>} — and the two talk abilities. The
-	 * policy algebra is {@link Admission}; this method only locates the record.
+	 * an agent record {@code <owner>/g/<id>} — and the two talk abilities. A
+	 * principal it names admits whatever acts for it ({@link #actsFor}), each
+	 * only where its narrowing covers the act ({@link #admissionCovers}). The
+	 * policy algebra is {@link Admission}; this method locates the record and
+	 * the caller's chain.
 	 */
 	private boolean admissionAllows(RequestContext ctx, AString resource, AString ability) {
-		if (!isTalkAbility(ability)) return false;
-		AString caller = ctx.getAuthorityDID();
-		if (caller == null) return false;
+		return isTalkAbility(ability) && acceptsAdmit(ctx, resource) && narrowingAllows(ctx, resource, ability);
+	}
+
+	/**
+	 * Whether the admission policy of the agent at {@code resource} admits what
+	 * {@code ctx}'s caller acts for, before what narrows the caller is
+	 * considered. False when {@code resource} is not an agent record here.
+	 */
+	private boolean acceptsAdmit(RequestContext ctx, AString resource) {
+		AString caller = (ctx == null) ? null : ctx.getAuthorityDID();
+		if (caller == null || resource == null) return false;
 		AString owner = ownerOf(resource);
 		if (owner == null) return false;
 		String rest = resource.toString().substring(owner.toString().length());
@@ -4221,8 +4233,67 @@ public class Engine {
 		User user = venueState.users().user(owner);
 		Agent agent = (user != null) ? user.agent(agentId) : null;
 		if (agent == null) return false;
-		return Admission.admits(Admission.policy(agent.getConfig()), caller,
-			isVenuePrincipal(ctx.getUserDID()), isPublicPrincipal(caller));
+		AString account = ctx.getUserDID();
+		AString web = config.getWebDID();
+		boolean actsForVenue = actsFor(account, caller, getDIDString()) || (web != null && actsFor(account, caller, web));
+		return Admission.admits(Admission.policy(agent.getConfig()), named -> actsFor(account, caller, named),
+			actsForVenue, isPublicPrincipal(caller));
+	}
+
+	/**
+	 * Whether what narrows the authority {@code ctx} acts with covers
+	 * {@code (resource, ability)}, so that it may use what an admission gives
+	 * it there: an {@code accepts} or a gate (AUTHORITY.md, Admission). Being
+	 * admitted is part of the named principal's authority, which a request holds
+	 * only as narrowed: by the caps of every agent on its chain of controllers,
+	 * and by its access tokens and callable. The venue's public principal has no
+	 * caps; its public scope is its whole authority, not a narrowing.
+	 */
+	public boolean admissionCovers(RequestContext ctx, AString resource, AString ability) {
+		if (ctx == null) return false;
+		RequestContext frame = authorityFrame(ctx);
+		if (frame != ctx) return admissionCovers(frame, ctx.inNamespace(resource), ability);
+		return narrowingAllows(ctx, resource, ability);
+	}
+
+	/** As {@link #admissionCovers}, on a context acting with its own authority. */
+	private boolean narrowingAllows(RequestContext ctx, AString resource, AString ability) {
+		if (!narrowingsCover(ctx, resource, ability, null)) return false;
+		if (isPublicPrincipal(ctx.getAuthorityDID())) return true;
+		AVector<ACell> scope = ctx.scopeFor(resource);
+		return scope == null || ctx.denialUnder(scope, resource, ability, ctx.getUserDID(), null) == null;
+	}
+
+	/**
+	 * Whether {@code principal} acts with {@code named}'s authority: it is that
+	 * principal, or an agent whose controller does, up its chain of controllers
+	 * as their records name them (AUTHORITY.md, Admission). An agent-shaped DID
+	 * counts only as the agent a record of that exact form names, and a chain
+	 * that loops or meets an agent with no record acts for no one beyond it.
+	 */
+	public boolean actsFor(AString principal, AString named) {
+		if (principal == null || named == null) return false;
+		return actsFor(accountOf(principal), principal, named);
+	}
+
+	/** As {@link #actsFor(AString, AString)}, for {@code principal} in {@code owner}'s account as a context or record names it. */
+	private boolean actsFor(AString owner, AString principal, AString named) {
+		Set<AString> seen = new HashSet<>();
+		while (principal != null) {
+			if (principal.equals(named)) return true;
+			AString agentId = agentIdIn(owner, principal);
+			if (agentId == null || !seen.add(principal)) return false;
+			Agent agent = getAgent(owner, agentId);
+			if (agent == null) return false;
+			principal = agent.getController();
+			owner = accountOf(principal);
+		}
+		return false;
+	}
+
+	/** The account a principal a record names belongs to: its owner's for an agent, its own otherwise. */
+	private static AString accountOf(AString principal) {
+		return covia.grid.Principals.isAgentDID(principal) ? covia.grid.Principals.userOf(principal) : principal;
 	}
 
 	/**
@@ -4256,7 +4327,7 @@ public class Engine {
 	 * access token or callable narrows it, and it holds {@code admin/sudo} on the
 	 * user, whatever request it is (deferred work and an agent's tool call
 	 * included). The venue's own DID and its public principal are no user to
-	 * enter. The call keeps the delegate's job, cancellation and authentication,
+	 * enter. The call keeps the delegate's job, cancellation and origin,
 	 * so acts that need the user in person refuse it ({@link #inPersonDenial}).
 	 * A request already in the user's account is returned as it is.
 	 */
@@ -4276,25 +4347,6 @@ public class Engine {
 			throw new AuthException(SUDO_DENIED.formatted(userDID));
 		}
 		return context(userDID).calledFrom(ctx);
-	}
-
-	/**
-	 * Work an {@code admin/sudo} delegate left before {@code admin/sudo} was a
-	 * call into the user, whose records name the delegate: the delegate in the
-	 * user's namespace, bounded by the grants it presents, as that work ran
-	 * then, its grant checked again each time it acts. It never takes the
-	 * user's whole authority ({@link #sudoContext}); the venue's migration
-	 * settles such work.
-	 */
-	private RequestContext delegateWorkContext(RequestContext ctx, AString userDID) {
-		AString delegate = ctx.getAuthorityDID();
-		if (delegate == null || isPublicPrincipal(delegate)) throw new AuthException(SUDO_AUTH_REQUIRED);
-		requireNotSubPrincipal(userDID);
-		if (ctx.isNarrowed()) throw new AuthException(SUDO_NARROWED);
-		if (!crossUserAllows(ctx, userDID, Abilities.ADMIN_SUDO)) {
-			throw new AuthException(SUDO_DENIED.formatted(userDID));
-		}
-		return ctx.onBehalfOf(userDID);
 	}
 
 	/** A read of the venue's explicitly addressed content catalog
@@ -4592,9 +4644,9 @@ public class Engine {
 	 *       namespace.</li>
 	 * </ul>
 	 *
-	 * <p>It names no authenticated principal: the venue making a context for a
-	 * principal, for a bot's listed senders or for work it carries on, does not
-	 * make that principal present. A request that authenticated is
+	 * <p>It has no origin: the venue making a context for a principal, for a
+	 * bot's listed senders or for work it carries on, does not make that
+	 * principal present. A request that authenticated is
 	 * {@link #requestContext}.</p>
 	 *
 	 * @param principal the acting DID, or null for anonymous
@@ -4605,20 +4657,20 @@ public class Engine {
 		if (isPublicPrincipal(principal)) {
 			if (!auth.isPublicAccessEnabled()) throw new AuthException(PUBLIC_ACCESS_OFF);
 			AString publicDID = publicPrincipal();
-			return RequestContext.of(publicDID, null, auth.getPublicScope(publicDID)).unauthenticated();
+			return RequestContext.of(publicDID, null, auth.getPublicScope(publicDID)).withoutOrigin();
 		}
 		if (covia.grid.Principals.isAgentDID(principal)) {
-			return RequestContext.of(principal, null, Vectors.empty()).unauthenticated();
+			return RequestContext.of(principal, null, Vectors.empty()).withoutOrigin();
 		}
-		return RequestContext.of(principal).unauthenticated();
+		return RequestContext.of(principal).withoutOrigin();
 	}
 
 	/**
 	 * The context of a request a door of the venue authenticated as
 	 * {@code principal}, or presenting access token {@code token}: as it acts
-	 * now ({@link #context(AString)}, {@link #tokenContext}), and authenticated
-	 * as the principal that acts in it, the token's issuer for a token
-	 * ({@link RequestContext#getAuthenticatedDID()}). Only a door that
+	 * now ({@link #context(AString)}, {@link #tokenContext}), with the
+	 * principal that acts in it as its origin, the token's issuer for a token
+	 * ({@link RequestContext#getOrigin()}). Only a door that
 	 * authenticated the request makes one, so that only such a request can be
 	 * the user in person ({@link #inPersonDenial}).
 	 *
@@ -4627,7 +4679,7 @@ public class Engine {
 	 * @throws AuthException as {@link #context(AString)} or {@link #tokenContext}
 	 */
 	public RequestContext requestContext(AString principal, AMap<AString, ACell> token) {
-		return ((token != null) ? tokenContext(token) : context(principal)).authenticated();
+		return ((token != null) ? tokenContext(token) : context(principal)).asOrigin();
 	}
 
 	/**
@@ -4835,23 +4887,30 @@ public class Engine {
 	}
 
 	/**
-	 * The context {@code principal} acts under now for {@code owner}, presenting
-	 * {@code proofs}, as a live request of its own would: the owner, one of its
-	 * agents or the public principal as {@link #context(AString, AString)}, and
-	 * any other principal only as work an {@code admin/sudo} delegate left
-	 * whose proofs still authorise it ({@link #delegateWorkContext}). A recorded
-	 * request, such as a scheduled event, is rebuilt this way when it runs.
+	 * The context {@code principal} acts under now in {@code owner}'s account,
+	 * presenting {@code proofs}, as a live request of its own would: the
+	 * owner, one of its agents or the public principal as
+	 * {@link #context(AString, AString)}. A recorded request, such as a
+	 * scheduled event, is rebuilt this way when it runs.
 	 *
-	 * @throws AuthException as {@link #context(AString, AString)}, or when a
-	 *         delegate's proofs no longer authorise it
+	 * @throws AuthException as {@link #context(AString, AString)}, or when
+	 *         {@code principal} does not act in that account
+	 *         ({@link #NOT_IN_ACCOUNT})
 	 */
 	public RequestContext context(AString owner, AString principal, AVector<ACell> proofs) {
 		boolean own = principal == null || principal.equals(owner) || isPublicPrincipal(principal)
 			|| agentIdIn(owner, principal) != null;
-		RequestContext ctx = own ? context(owner, principal) : context(principal);
-		if (proofs != null) ctx = ctx.withProofs(proofs);
-		return own ? ctx : delegateWorkContext(ctx, owner);
+		if (!own) throw new AuthException(NOT_IN_ACCOUNT.formatted(principal, owner));
+		RequestContext ctx = context(owner, principal);
+		return (proofs == null) ? ctx : ctx.withProofs(proofs);
 	}
+
+	/**
+	 * Refusal of work recorded in an account its principal does not act in, as
+	 * work an {@code admin/sudo} delegate left before that acted as the user
+	 * is: the principal and the account.
+	 */
+	public static final String NOT_IN_ACCOUNT = "%s does not act in the account of %s, so work kept there cannot act as it";
 
 	/**
 	 * What a stored context keeps of the authority {@code ctx} acts with,
@@ -4970,8 +5029,8 @@ public class Engine {
 	/**
 	 * Why {@code ctx} is not the user in person, or null when it is: the
 	 * principal whose authority applies is a user acting in its own account,
-	 * and the request authenticated as that user
-	 * ({@link RequestContext#getAuthenticatedDID()}). So an agent, the public
+	 * and that user is the request's origin
+	 * ({@link RequestContext#getOrigin()}). So an agent, the public
 	 * principal, a callable's call, a delegate under {@code admin/sudo} and
 	 * work resumed from what a job or event kept are each refused. An act that
 	 * needs the user present, such as answering their approval requests, asks
@@ -4981,7 +5040,7 @@ public class Engine {
 		AString authority = (ctx == null) ? null : ctx.getAuthorityDID();
 		if (authority == null || isPublicPrincipal(authority)) return NOT_IN_PERSON;
 		if (!authority.equals(ctx.getUserDID())) return NOT_IN_PERSON;
-		if (!authority.equals(ctx.getAuthenticatedDID())) return NOT_IN_PERSON;
+		if (!authority.equals(ctx.getOrigin())) return NOT_IN_PERSON;
 		return null;
 	}
 
@@ -5016,9 +5075,7 @@ public class Engine {
 	 * creates or forks takes for its controller: an agent acting in its owner's
 	 * namespace, whatever its authority derives from, so that what it creates
 	 * stays within it; the authority's own principal when it acts in its own
-	 * namespace; and otherwise the namespace it acts for, as in work an
-	 * {@code admin/sudo} delegate left before that was a call into the user
-	 * ({@link #delegateWorkContext}).
+	 * namespace; and otherwise the namespace it acts in.
 	 */
 	public static AString actingPrincipal(RequestContext ctx) {
 		if (actsAsOwnAgent(ctx)) return ctx.getAuthorityDID();
@@ -5068,15 +5125,15 @@ public class Engine {
 	 * access token, or in the call of the callable, that it names. A kept
 	 * controller from before an agent's authority was worked out from its
 	 * record is not read: the agent acts with its controller as it stands. Work
-	 * that goes on this way is never anyone in person, so the context names no
-	 * authenticated principal ({@link #inPersonDenial}).
+	 * that goes on this way is never anyone in person, so the context has no
+	 * origin ({@link #inPersonDenial}).
 	 *
 	 * @throws AuthException as {@link #context(AString, AString, AVector)}, for
 	 *         the caller or the kept authority
 	 */
 	public RequestContext context(AString owner, AString principal, AVector<ACell> proofs,
 			AMap<AString, ACell> authority) {
-		return keptContext(owner, principal, proofs, authority).unauthenticated();
+		return keptContext(owner, principal, proofs, authority).withoutOrigin();
 	}
 
 	private RequestContext keptContext(AString owner, AString principal, AVector<ACell> proofs,
@@ -5147,7 +5204,7 @@ public class Engine {
 	 * point of action, so a
 	 * callable that no longer stands narrows it to nothing. {@code invoker}'s
 	 * authority is the frame's caller and plays no other part; the call goes on
-	 * with the invoker's job, cancellation and authentication
+	 * with the invoker's job, cancellation and origin
 	 * ({@link RequestContext#calledFrom}). What the call does is the issuer's:
 	 * the jobs it starts record the issuer as their caller.
 	 *
@@ -5248,8 +5305,8 @@ public class Engine {
 	 * its {@code userDID}, and carried by the binding: its route step is the
 	 * binding's ({@link covia.adapter.messaging.ChannelAuthentication#step}). The
 	 * one place a request context gains an authentication record. That record
-	 * is attribution, not evidence, so the context names no authenticated
-	 * principal: a message a bot brings, and an operation the bot runs for it,
+	 * is attribution, not evidence, so the context has no origin: a message a
+	 * bot brings, and an operation the bot runs for it,
 	 * are never the user in person ({@link #inPersonDenial}).
 	 *
 	 * @throws AuthException as {@link #context(AString, AString)}
@@ -5387,15 +5444,21 @@ public class Engine {
 		throw scopeDenial(ctx, resource, ability, destination);
 	}
 
+	/** Why an agent's admission policy did not let a request ask it: the policy admits nothing the caller acts for. */
+	public static final String ACCEPTS_NOT_ADMITTED = "the target's accepts policy does not admit this caller";
+
+	/** Why an agent's admission policy did not let a request ask it: the policy admits the caller, but what narrows it does not cover asking. */
+	public static final String ACCEPTS_BEYOND_CAPS = "the target's accepts policy admits this caller, but the caps narrowing it do not cover asking";
+
 	/** The refusal of another principal's resource the request holds no rights to. */
-	private static covia.exception.AuthException anothersDenial(RequestContext ctx, AString resource, AString ability) {
+	private covia.exception.AuthException anothersDenial(RequestContext ctx, AString resource, AString ability) {
 		AVector<ACell> proofs = (ctx != null) ? ctx.getProofs() : null;
 		return RequestContext.denied(ctx, "Access denied: " + ability + " on " + resource
 			+ " — accessing another user's resource requires " + ability + " rights"
 			+ ((proofs == null || proofs.isEmpty())
 				? " (no proof presented)" : " (the presented proofs do not cover it)")
 			+ (isTalkAbility(ability)
-				? "; the target's accepts policy does not admit this caller" : ""),
+				? "; " + (acceptsAdmit(ctx, resource) ? ACCEPTS_BEYOND_CAPS : ACCEPTS_NOT_ADMITTED) : ""),
 			resource, ability);
 	}
 

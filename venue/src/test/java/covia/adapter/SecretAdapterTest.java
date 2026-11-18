@@ -188,21 +188,6 @@ class SecretAdapterTest {
 			failure(run("extract", Maps.of("name", "SHARED_KEY"), anonymous)).getMessage());
 	}
 
-	@Test void extractionCannotBeDelegatedEvenWithAValidOwnerGrant() {
-		AKeyPair other = AKeyPair.generate();
-		AString did = UCAN.toDIDKey(other.getAccountKey());
-		engine.getVenueState().users().ensure(did);
-		UCAN proof = UCAN.create(identity, other.getAccountKey(), System.currentTimeMillis() / 1000 + 300,
-			Vectors.of(Capability.create(owner.getUserDID(), Abilities.ADMIN_SUDO),
-				Capability.create(Strings.create(owner.getUserDID() + "/s/KEY"), Abilities.SECRET_EXTRACT)), Vectors.empty());
-		// Work a delegate left in the owner's namespace, bounded by its grants, as it is rebuilt
-		RequestContext delegated = engine.context(owner.getUserDID(), did, Vectors.of(proof.toMap()));
-		// Establish that the capability is valid; the additional owner-only boundary must still refuse.
-		assertDoesNotThrow(() -> engine.requireResourceAccess(delegated, Strings.create("s/KEY"), Abilities.SECRET_EXTRACT));
-		assertEquals(SecretAdapter.EXTRACT_DIRECT_ONLY, failure(engine.jobs().runOperation(
-			meta("extract"), Maps.of("name", "KEY"), delegated)).getMessage());
-	}
-
 	/** A delegate acting as the user under admin/sudo holds the user's whole authority, but is not the user in person. */
 	@Test void aSudoDelegateNeverExtracts() {
 		AKeyPair other = AKeyPair.generate();

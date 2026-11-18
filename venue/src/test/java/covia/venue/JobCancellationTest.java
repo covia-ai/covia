@@ -500,7 +500,7 @@ public class JobCancellationTest {
 		// The trigger is the only new job for this caller after the snapshot.
 		CompletableFuture<Blob> submitted = new CompletableFuture<>();
 		java.util.function.Consumer<Job> onJob = j -> {
-			if (!before.contains(j.getID()) && ALICE_DID.equals(j.getData().get(Fields.CALLER))) {
+			if (!before.contains(j.getID()) && ALICE_DID.equals(j.getCaller())) {
 				submitted.complete(j.getID());
 			}
 		};

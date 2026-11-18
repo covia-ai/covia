@@ -189,6 +189,7 @@ Abilities follow UCAN's slash-delimited convention with no leading slash. `*` is
 | `admin/token/<access point>` | - | Work directly on access tokens that carry that access point, such as `admin/token/mcp`; a token carrying several needs each leaf, and fetching a kept bearer also needs the token's source authority |
 | `callable/call` | - | Call a callable without passing its gate (`<owner>/x/callable/<name>`; [CALLABLES.md](./CALLABLES.md)) |
 | `callable/manage` | - | Create, change or delete a callable (`<owner>/x/callable/<name>`); changing one also needs its source authority |
+| `schedule/manage` | - | Cancel or trigger a scheduled event (`<owner>/x/schedule/<id>`); `crud/read` on it lists it ([GRID_SCHEDULER.md](GRID_SCHEDULER.md) §5) |
 | `hitl/request` | - | Ask the owner a human-in-the-loop question |
 | `admin/user/create` | - | Create an account |
 | `admin/user/delete` | - | Delete an account |
@@ -686,8 +687,9 @@ with reduced authority:
 
 The explicit `user:sudo` operation is the deliberate boundary: a delegate does
 not carry its own authority, nor the grants it presents, into the call. Within
-it the request is the target user's, and only how it authenticated still
-names the delegate, so acts that need the user in person refuse it.
+it the request is the target user's: its `caller` is the delegate and its
+`origin` is unchanged ([AUTHORITY.md](AUTHORITY.md#the-fields)), so acts that
+need the user in person refuse it.
 
 ### 5.2 Cross-User Access
 
@@ -824,11 +826,14 @@ rows — `agent/request` (`agent:request`, `agent:trigger`) and `agent/message`
 (`agent:message`, `agent:chat`, `agent:query`) on `<ownerDID>/g/<id>` — may be
 admitted by the agent record's own `config.accepts`: `"owner"` (default:
 nobody without a delegation), `"venue"` (the venue operator — the venue
-principal and the agents it owns, never every user hosted here), `"anyone"`
+principal and what acts for it, never every user hosted here), `"anyone"`
 (every caller, the anonymous public principal included), or an array of
-principal DIDs matched exactly (a user DID admits that user only,
-`<userDID>:g:<agentId>` admits that one agent only; `"venue"` may appear as an
-entry). Admission is the owner's standing statement, evaluated inside the same
+principal DIDs, each admitting what acts for that principal (a user DID admits
+that user and its agents, `<userDID>:g:<agentId>` that agent and the agents
+under it; `"venue"` may appear as an entry). A caller uses an admission only
+where the caps of every agent on its chain of controllers, and of its tokens
+and callable, cover asking ([AUTHORITY.md](AUTHORITY.md#admission)).
+Admission is the owner's standing statement, evaluated inside the same
 single cross-user gate as proofs (`Engine.crossUserAllows`, see `Admission`),
 for every way of asking, A2A included. It covers talking only: `crud/read`,
 `agent/write` and `agent/fork` still need a delegation. An admitted request is
@@ -917,14 +922,14 @@ anyone else, presents a grant.
 
 The namespace is never parsed from a name: `Authority.of(did)` makes every DID
 its own namespace, agent-shaped or not. Only the venue puts a principal in
-another namespace, from a relationship it holds — running its own agent
-(`Authority.ofAgent`) or rebuilding work an `admin/sudo` delegate left before
-`admin/sudo` acted as the user (`onBehalfOf`). Whatever records a call records the namespace beside the caller, as
-COG-8 names them: `caller` is the principal that made the call, and `owner`
-the namespace, written only when it differs (`covia.grid.Attribution`). Jobs,
-scheduled events and HITL requests all do, and the
-policy-gate input is `{operation, input, caller, owner?}` on both the held
-grant and the proof path.
+another namespace, from a relationship it holds: running its own agent
+(`Authority.ofAgent`). Whatever records a call names its `caller`, the
+principal that made the call (COG-8), and is kept in that caller's account,
+an agent's being its owner's; a record the venue keeps in an account leaves
+out a caller that is that account (`covia.grid.Attribution`). Jobs,
+scheduled events and HITL requests all do. A gate's input is
+`{operation, input, caller}` on both the held grant and the proof path: it
+rules on who acted, not where.
 
 What a principal may do *now* is decided in one place, `Engine.context`.
 `context(principal)` is a principal in its own namespace: the public principal
@@ -936,9 +941,9 @@ public principal; the owner comes
 from the record, never from the principal's name. An agent's context carries
 the agent, not a copy of its caps: every point of action reads `config.caps`
 as they stand then, and none once the agent is gone or terminated. `context(owner, principal,
-proofs)` adds proofs it presented, and takes any other principal as a
-delegate whose earlier work it rebuilds, its `admin/sudo` grant checked again
-and bounding it as it did then; a scheduled event fires through it. Every inbound request starts from `context(caller)`
+proofs)` adds proofs it presented, and refuses a principal that does not act
+in `owner`'s account (`Engine.NOT_IN_ACCOUNT`); a scheduled event fires
+through it. Every inbound request starts from `context(caller)`
 (`AuthMiddleware.callerContext`), and an agent's step runs as that agent
 (`Engine.stepContext`, §5.4).
 

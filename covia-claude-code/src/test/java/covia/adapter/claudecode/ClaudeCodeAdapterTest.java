@@ -740,7 +740,7 @@ public class ClaudeCodeAdapterTest {
 		Job job = engine.jobs().invokeOperation("v/ops/claudecode/session", Maps.of("project", "alpha", "prompt", "count"), agent);
 		await(() -> Status.INPUT_REQUIRED.equals(job.getStatus()), 30_000);
 		assertEquals(agent.getAuthorityDID(), job.getCaller());
-		assertEquals(OWNER, job.getOwner());
+		assertEquals(OWNER, covia.venue.JobManager.accountOf(job));
 		String session = str(output(job), "session");
 
 		// After a restart the session resumes as the agent stands then, not as its owner.

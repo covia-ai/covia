@@ -24,7 +24,6 @@ import covia.exception.ConflictException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
 import covia.exception.NotSupportedException;
-import covia.grid.Attribution;
 import covia.grid.Operation;
 import covia.lattice.Caps;
 import covia.venue.AdapterState;
@@ -292,7 +291,7 @@ public class CallableAdapter extends AAdapter {
 		if (!engine.authorityCovers(ctx, resource, Abilities.CALLABLE_CALL)) {
 			AString gate = callable.gate();
 			// The gate admits the caller only as far as what narrows its request reaches, as any admission does
-			if (gate == null || !engine.narrowingsCover(ctx, resource, Abilities.CALLABLE_CALL)) {
+			if (gate == null || !engine.admissionCovers(ctx, resource, Abilities.CALLABLE_CALL)) {
 				throw new NotFoundException(NOT_CALLABLE.formatted(named), named.toString());
 			}
 			String refused = engine.jobs().evaluateCallableGate(gate, resource, targetInput, ctx, call);
@@ -342,20 +341,22 @@ public class CallableAdapter extends AAdapter {
 	// ========== Standard gates ==========
 
 	/**
-	 * The callers gate: admits a caller its {@code callers} lists, or one acting
-	 * in a namespace it lists, read from the gate's input, which the evaluator
-	 * builds from the call ({@link covia.venue.JobManager#evaluateCallableGate}).
+	 * The callers gate: admits a caller that acts for a principal its
+	 * {@code callers} lists ({@link Engine#actsFor}): that principal, or an
+	 * agent acting for it up its chain of controllers. The caller is read from
+	 * the gate's input, which the evaluator builds from the call
+	 * ({@link covia.venue.JobManager#evaluateCallableGate}); how far a caller
+	 * it admits may use that is bounded before any gate runs
+	 * ({@link Engine#admissionCovers}).
 	 */
-	private static ACell callers(ACell input) {
+	private ACell callers(ACell input) {
 		AVector<ACell> callers = RT.ensureVector(RT.getIn(input, Fields.CALLERS));
 		if (callers == null || callers.isEmpty()) throw new InvalidInputException(NO_CALLERS);
-		AMap<AString, ACell> call = RT.ensureMap(input);
-		AString caller = Attribution.caller(call);
-		AString namespace = Attribution.owner(call);
-		if (caller == null || !(callers.contains(caller) || callers.contains(namespace))) {
-			throw new AuthException(NOT_A_CALLER.formatted(caller));
+		AString caller = RT.ensureString(RT.getIn(input, Fields.CALLER));
+		for (ACell listed : callers) {
+			if (engine.actsFor(caller, RT.ensureString(listed))) return CVMBool.TRUE;
 		}
-		return CVMBool.TRUE;
+		throw new AuthException(NOT_A_CALLER.formatted(caller));
 	}
 
 	// ========== What the operations take and return ==========

@@ -107,7 +107,7 @@ public class AgentRunLoopIdentityTest {
 		assertEquals(ALICE_DID, seen.getUserDID());
 		assertSame(seen, engine.authorityFrame(seen), "with its own authority");
 		assertNull(seen.getCaller(), "a cycle has no caller");
-		assertNull(seen.getAuthenticatedDID(), "nobody is present in a cycle");
+		assertNull(seen.getOrigin(), "nobody is present in a cycle");
 		assertEquals(new RequestContext.ExecutionScope(ALICE_DID, agentId, null, seen.getSessionId(), null, -1L,
 			seen.getClaim()), seen.getExecutionScope(), "driving the agent's execution");
 		assertNull(seen.getProofs(), "run context must carry no proofs");
@@ -205,25 +205,22 @@ public class AgentRunLoopIdentityTest {
 
 		AMap<AString, ACell> data = engine.jobs()
 			.getJobData(jobId, RequestContext.of(ALICE_DID));
-		assertNotNull(data, "the owner must be able to read a job their agent caused");
-		assertEquals(ALICE_DID, data.get(Fields.OWNER),
-			"ownership stays with the user — listing and access control key on it");
+		assertNotNull(data, "the owner must be able to read a job their agent caused, kept in the owner's account");
+		assertNull(data.get(Fields.OWNER), "the record names no owner");
 		assertEquals(Principals.agentDID(ALICE_DID, agentId), data.get(Fields.CALLER),
 			"the acting agent must be named on the record");
 	}
 
 	@Test
-	public void testDirectUserJobsCarryNoOwner() {
-		// The owner is written only when it differs from the caller, so a job
-		// the user made itself names only its caller.
-		engine.jobs().invokeOperation("v/test/ops/echo", Maps.of(),
-			RequestContext.of(ALICE_DID)).awaitResult(5000);
-		for (var e : engine.jobs().getJobs(RequestContext.of(ALICE_DID)).entrySet()) {
-			AMap<AString, ACell> data = (AMap<AString, ACell>) e.getValue();
-			if (ALICE_DID.equals(data.get(Fields.CALLER))
-					&& data.get(Fields.OWNER) == null) return;
-		}
-		fail("a job invoked directly by the user must carry no owner");
+	public void testDirectUserJobsNameNoCaller() {
+		// A job is kept in its caller's account, so a job the user made itself
+		// leaves its caller out, and names no owner.
+		covia.grid.Job job = engine.jobs().invokeOperation("v/test/ops/echo", Maps.of(), RequestContext.of(ALICE_DID));
+		job.awaitResult(5000);
+		AMap<AString, ACell> data = (AMap<AString, ACell>) engine.jobs().getJobs(RequestContext.of(ALICE_DID)).get(job.getID());
+		assertNull(data.get(Fields.CALLER), "a caller that is the account is left out");
+		assertNull(data.get(Fields.OWNER));
+		assertEquals(ALICE_DID, job.getCaller());
 	}
 
 	/**

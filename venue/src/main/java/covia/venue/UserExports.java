@@ -25,6 +25,7 @@ import covia.exception.UnavailableException;
 import covia.grid.Job;
 import covia.lattice.Namespace;
 import covia.venue.migration.BlobIds;
+import covia.venue.migration.OneCaller;
 import covia.venue.migration.CallerAndOwner;
 
 /**
@@ -157,7 +158,7 @@ public final class UserExports {
 		AMap<AString, ACell> value = decode(export);
 		// Secrets arrive only sealed: stored records were encrypted under the source venue's key.
 		AMap<AString, ACell> state = RT.ensureMap(value.get(K_USER));
-		state = migrate(state.dissoc(Namespace.S).dissoc(Namespace.J), RT.ensureLong(value.get(Fields.VERSION)).longValue());
+		state = migrate(state.dissoc(Namespace.S).dissoc(Namespace.J), RT.ensureLong(value.get(Fields.VERSION)).longValue(), did);
 		String busy = unfinishedWork(state);
 		if (busy != null) throw new NotSupportedException(busy);
 
@@ -275,11 +276,11 @@ public final class UserExports {
 
 	/**
 	 * Brings the shapes an export at {@code version} holds to their current
-	 * form. A record that names only its caller takes the namespace it would
-	 * have on this venue.
+	 * form, as {@code account}'s. A record that names only its caller takes the
+	 * namespace it would have on this venue.
 	 */
 	@SuppressWarnings("unchecked")
-	private AMap<AString, ACell> migrate(AMap<AString, ACell> state, long version) {
+	private AMap<AString, ACell> migrate(AMap<AString, ACell> state, long version, AString account) {
 		if (version < CALLER_AND_OWNER) {
 			ACell venue = engine.getVenueState().get();
 			state = (AMap<AString, ACell>) CallerAndOwner.userState(state,
@@ -288,6 +289,7 @@ public final class UserExports {
 		if (version < BLOB_IDS) {
 			try {
 				state = (AMap<AString, ACell>) BlobIds.userState(state);
+				state = (AMap<AString, ACell>) OneCaller.userState(state, account);
 			} catch (IllegalStateException refused) {
 				throw new InvalidInputException(NOT_AN_EXPORT, refused);
 			}

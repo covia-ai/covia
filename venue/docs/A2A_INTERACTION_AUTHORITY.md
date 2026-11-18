@@ -31,8 +31,10 @@ bindings. It is the single cross-user gate, `Engine.crossUserAllows`, for
 
 - the **owner**, always;
 - a caller the agent's **admission policy**, `config.accepts`, admits:
-  `"venue"` (the operator and its agents), exact principal DIDs, or
-  `"anyone"`, which includes anonymous callers (`Admission`);
+  `"venue"` (the operator and what acts for it), principal DIDs, each
+  admitting what acts for that principal, or `"anyone"`, which includes
+  anonymous callers (`Admission`), each as far as the caller's narrowing, such
+  as an agent's caps, covers asking ([AUTHORITY.md](./AUTHORITY.md#admission));
 - a caller presenting a **UCAN** granting `agent/request` or `agent/message` on
   the agent (over A2A, in `X-Covia-Ucans`).
 

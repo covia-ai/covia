@@ -141,7 +141,7 @@ class AdminCapabilitiesTest {
 			assertEquals(owner, sudo.getUserDID());
 			assertEquals(owner, sudo.getAuthorityDID(), "the user acts");
 			assertEquals(delegate, sudo.getCaller(), "called by the delegate");
-			assertEquals(delegate, sudo.getAuthenticatedDID(), "who is still the one present");
+			assertEquals(delegate, sudo.getOrigin(), "who is still the one present");
 			assertNull(sudo.getCaps(), "with the user's whole authority");
 			assertNull(sudo.getProofs(), "which the delegate's grants neither bound nor add to");
 			assertThrows(AuthException.class, () -> engine.sudoContext(ctx, other));

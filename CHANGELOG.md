@@ -41,9 +41,12 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - `user:sudo` refuses the venue's own DID and its public principal as targets.
 - Minting a user's identity token (`auth:identity-token`) needs the user in person, so neither a delegate under `admin/sudo` nor work carried on later can.
 - Making, rotating or reading the bearer of an access token a user issues needs the user in person, since a request through it is the user in person: a delegate under `admin/sudo`, a callable's call and work carried on later cannot.
+- An agent's `accepts` (`"venue"` included) and the `callers` gate admit what acts for a principal they name, such as `accepts: [bob]` admitting Bob's agents, and every admission and gate reaches a caller only as far as its agents' caps and its tokens' and callable's caps cover the act, so a capped agent loses what `"anyone"` and `gates/anyone` gave it beyond its caps.
 - A request through an access token makes an agent act (`llmagent:chat` or `goaltree:chat` invoked directly) only when the token is unrestricted, whether the token's issuer is the agent's owner or the agent itself, and the step stays narrowed by the token, so revoking it stops the step.
-- `auth:whoami` adds `authenticatedAs` where the request authenticated as another principal than its caller, such as a delegate under `admin/sudo`, and audit events add `authenticated` for the same.
+- `auth:whoami` adds `origin`, the principal the request authenticated as, where that is not its caller, such as a delegate under `admin/sudo`, and audit events add `origin` for the same.
 - An agent whose controller is in another account is the principal its acts name: a callable it calls records it as the caller and a dictation it opens is its own, and work it leaves acts with its controller as it stands, not the one it started with. One whose controllers lead back to it through another account acts with no authority.
+- A scheduled event is a capability resource, `<account>/x/schedule/<id>`: `crud/read` lists it and the new `schedule/manage` cancels or triggers it, so a capped agent or token needs these caps even for the events it scheduled; `scheduler:list` adds each event's `id`.
+- A job, approval request and scheduled event name one `caller`, the principal that called, and no `owner` (COG-8): a job or request leaves out a caller that is the account keeping it, which listings, lattice reads, copies, exports and clones carry as stored, while `POST /invoke`, `GET /jobs/{id}` and its SSE updates, `job:status` and `hitl:list` name it in full; `scheduler:list` no longer gives `owner`. Venue version 3 converts stored records and ends work an `admin/sudo` delegate left before `admin/sudo` acted as the user: unfinished jobs fail saying why, open approval requests are cancelled and scheduled events are removed, while finished records keep naming the delegate.
 - An agent's harness runs in its controller's frame: what it starts, such as its model calls and an external agent's backend job, records the controller as its caller in the controller's account, and names in the agent's configuration resolve in the controller's namespace; the agent's tool calls still run as the agent.
 
 - Adapters refuse settings with a configuration error, from the venue config and from `venue:adapter/configure` alike; anything else an adapter's `configure` throws, a module adapter's `IllegalArgumentException` included, is reported as that adapter's fault rather than as invalid input or the `venue` adapter's.
@@ -66,6 +69,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Removed
 
+- A gate's input no longer carries `owner`: a capability gate or callable gate is told `{operation, input, caller}`.
 - Python instances (`python:instances/create`, `list`, `call`, `close` and `adapters.python.instances`): configure each function under `operations` and offer it to others through a callable; a config naming `instances` is refused (#706).
 - Maven Central no longer receives `covia-python`, `covia-python-adapter`, `covia-whatsapp`, `covia-slack`, `covia-sonnylabs` or `covia-documents`; their module jars stay on GitHub Releases (#681).
 

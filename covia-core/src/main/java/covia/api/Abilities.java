@@ -80,6 +80,8 @@ public final class Abilities {
 	public static final AString CALLABLE_CALL   = Strings.intern("callable/call");
 	/** Create, change or delete a callable ({@code <did>/x/callable/<name>}). */
 	public static final AString CALLABLE_MANAGE = Strings.intern("callable/manage");
+	/** Cancel or trigger a scheduled event ({@code <account>/x/schedule/<id>}). */
+	public static final AString SCHEDULE_MANAGE = Strings.intern("schedule/manage");
 	public static final AString HITL_REQUEST  = Strings.intern("hitl/request");
 	public static final AString AGENT_CREATE  = Strings.intern("agent/create");
 	public static final AString AGENT_REQUEST = Strings.intern("agent/request");

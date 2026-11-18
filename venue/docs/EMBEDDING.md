@@ -284,8 +284,9 @@ so the application decides who reaches them.
 
 ## Identity
 
-`engine.context(did)` is the venue acting for a principal, which never makes
-that principal present. Acts only a user may do in person (answering approval
+`engine.context(did)` is the venue acting for a principal: the request has no
+`origin` ([AUTHORITY.md](AUTHORITY.md#the-fields)), so that principal is never
+present. Acts only a user may do in person (answering approval
 requests, `secret:extract`, `user:export`, minting the user's identity token
 or an access token, and the user's own account and sign-in keys) refuse it. For a user the application has authenticated itself,
 use `engine.requestContext(did, null)` or `RequestContext.of(did)`
@@ -323,6 +324,7 @@ identity token through an operation", and HELD_KEYS.md.
 | `RequestContext.getCallerDID()` | `getAuthorityDID()`, the one principal a request acts as |
 | `RequestContext.hasSeparateAuthority()` and `authorityContext()` | Removed: a request names one principal, and `engine.authorityFrame(ctx)` gives the frame an agent whose controller is in another account acts with |
 | `RequestContext.onBehalfOf` and `Authority.onBehalfOf` | Removed: acting for another user is `admin/sudo`, a call into that user (`engine.sudoContext`) |
+| `Job.getOwner()`, `Attribution.owner(record)` and `Attribution.caller(record)`, and a record's `owner` | A record names one `caller` and is kept in its caller's account, leaving out a caller that is that account: `Attribution.caller(record, account)` reads it, `Attribution.inFull(record, account)` names it in full, and `JobManager.accountOf(job)` gives a job's account. `AccessControl.canAccessJob`, `Schedule.schedule` and `HitlRequest.record` take the account in place of reading or writing an owner |
 | `AAdapter.latticeView(ctx)` and `latticeWriteDenial(ctx, path)` | `latticeView(owner, ctx)` and `latticeWriteDenial(owner, ctx, path)`: the view is `owner`'s, and `ctx` is the request's own ([ADAPTERS.md](ADAPTERS.md)) |
 | Convex 0.8.19 | Convex 0.8.20: recompile adapters and modules |
 | A raw `cursor().path(key).set(...)` creating a missing `key`, including after `withDefault` | Refused: write through a component's operations, or an entry view that creates the key (`Covia.entry`, a `MapComponent`'s or `IndexComponent`'s `path`) |

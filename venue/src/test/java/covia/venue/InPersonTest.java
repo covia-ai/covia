@@ -76,7 +76,7 @@ class InPersonTest {
 		assertNull(engine.inPersonDenial(RequestContext.of(alice)));
 		assertNull(engine.inPersonDenial(engine.requestContext(alice, null)));
 		RequestContext carried = engine.requestContext(alice, null).withOp(Strings.create("v/ops/covia/read")).withProofs(Vectors.empty());
-		assertEquals(alice, carried.getAuthenticatedDID(), "every context made for the request keeps who it authenticated as");
+		assertEquals(alice, carried.getOrigin(), "every context made for the request keeps who it authenticated as");
 		assertNull(engine.inPersonDenial(carried));
 	}
 
@@ -85,7 +85,7 @@ class InPersonTest {
 		for (RequestContext made : new RequestContext[] {
 				engine.context(alice), engine.context(alice, alice), engine.context(alice, alice, Vectors.empty()) }) {
 			assertTrue(engine.holdsAuthorityOf(made, alice), "it has all of the user's authority");
-			assertNull(made.getAuthenticatedDID(), "but nobody authenticated as the user");
+			assertNull(made.getOrigin(), "but nobody authenticated as the user");
 			assertEquals(Engine.NOT_IN_PERSON, engine.inPersonDenial(made));
 		}
 		assertEquals(Engine.NOT_IN_PERSON, engine.inPersonDenial(engine.venueContext()),
@@ -104,7 +104,7 @@ class InPersonTest {
 		RequestContext message = engine.channelContext(alice, listed);
 		assertTrue(engine.holdsAuthorityOf(message, alice), "it acts with all of the user's authority");
 		assertNotNull(message.getAuthentication(), "and carries the channel's record");
-		assertNull(message.getAuthenticatedDID(), "but nobody authenticated as the user");
+		assertNull(message.getOrigin(), "but nobody authenticated as the user");
 		assertEquals(Engine.NOT_IN_PERSON, engine.inPersonDenial(message));
 
 		Job asked = ask(alice);
@@ -125,7 +125,7 @@ class InPersonTest {
 		try {
 			RequestContext restricted = engine.requestContext(alice, token(own, "in-person-restricted",
 				Vectors.of(Capability.create(Strings.create("v/ops/hitl/respond"), Abilities.INVOKE))));
-			assertEquals(alice, restricted.getAuthenticatedDID());
+			assertEquals(alice, restricted.getOrigin());
 			Job refused = await(engine.jobs().invokeOperation("v/ops/hitl/respond", approval(asked), restricted));
 			assertEquals(Status.FAILED, refused.getStatus(), "a restricted token lacks the user's whole authority");
 			assertEquals(covia.adapter.HITLAdapter.ANSWER_NEEDS_WHOLE_AUTHORITY, refused.getErrorMessage());
@@ -152,7 +152,7 @@ class InPersonTest {
 	@Test void anAgentIsNot() {
 		AString alice = Keyed.generate().did();
 		RequestContext agent = RequestContext.ofAgent(alice, Strings.create("helper"));
-		assertNull(agent.getAuthenticatedDID(), "an agent's own work authenticated as no one");
+		assertNull(agent.getOrigin(), "an agent's own work authenticated as no one");
 		assertEquals(Engine.NOT_IN_PERSON, engine.inPersonDenial(agent));
 	}
 
@@ -164,7 +164,7 @@ class InPersonTest {
 		Keyed alice = Keyed.generate();
 		Keyed bob = Keyed.generate();
 		RequestContext delegate = sudo(alice, bob, "v/ops/hitl/respond");
-		assertEquals(bob.did(), delegate.getAuthenticatedDID(), "the delegate is who is present");
+		assertEquals(bob.did(), delegate.getOrigin(), "the delegate is who is present");
 		assertEquals(Engine.NOT_IN_PERSON, engine.inPersonDenial(delegate));
 	}
 
@@ -176,7 +176,7 @@ class InPersonTest {
 		try {
 			RequestContext resumed = engine.jobs().callerContext(job);
 			assertEquals(alice, resumed.getAuthorityDID(), "it acts with the user's authority");
-			assertNull(resumed.getAuthenticatedDID(), "but nobody is present");
+			assertNull(resumed.getOrigin(), "but nobody is present");
 			assertEquals(Engine.NOT_IN_PERSON, engine.inPersonDenial(resumed));
 		} finally {
 			job.cancel();

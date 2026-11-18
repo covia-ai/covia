@@ -35,7 +35,6 @@ import convex.core.lang.RT;
 import covia.adapter.UserAdapter;
 import covia.api.Fields;
 import covia.exception.AuthException;
-import covia.grid.Attribution;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.grid.hitl.Hitl;
@@ -269,7 +268,7 @@ class UserExportsTest {
 		run("import", Maps.of(Fields.DID, target, EXPORT, older), venue);
 
 		User imported = users().user(target);
-		assertEquals(Maps.of(Hitl.ID, agentAsk, Hitl.STATUS, Hitl.OPEN, Hitl.CALLER, asker, Hitl.OWNER, source,
+		assertEquals(Maps.of(Hitl.ID, agentAsk, Hitl.STATUS, Hitl.OPEN, Hitl.CALLER, asker,
 				Fields.SESSION_ID, session),
 			imported.inbox().get(agentAsk), "keyed by its id, which it names as a Blob, as its session");
 		assertEquals(Maps.of(Hitl.ID, userAsk, Hitl.STATUS, Hitl.OPEN, Hitl.CALLER, stranger),
@@ -334,7 +333,7 @@ class UserExportsTest {
 		assertNotNull(cloneWake);
 		assertNotEquals(sourceWake, cloneWake);
 		Schedule schedule = engine.getVenueState().schedule();
-		assertEquals(target, Attribution.owner(schedule.find(cloneWake).rec()));
+		assertEquals(target, Schedule.accountOf(schedule.find(cloneWake).rec()));
 		assertNotNull(schedule.find(sourceWake), "the source keeps its own wake");
 
 		assertEquals(UserExports.SAME_USER, failure(start("clone", Maps.of(Fields.FROM, source, Fields.TO, source), venue)));

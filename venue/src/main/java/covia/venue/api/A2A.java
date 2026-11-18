@@ -44,13 +44,13 @@ import covia.exception.CoviaException;
 import covia.exception.FaultException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
-import covia.grid.Attribution;
 import covia.grid.HexId;
 import covia.grid.Job;
 import covia.grid.Venue;
 import covia.venue.Agent;
 import covia.venue.Engine;
 import covia.venue.Ids;
+import covia.venue.JobManager;
 import covia.venue.RequestContext;
 import covia.venue.User;
 import covia.venue.server.AuthMiddleware;
@@ -475,7 +475,7 @@ public class A2A extends ACoviaAPI {
 			writeError(ctx, id, A2AErrorCodes.UNSUPPORTED_OPERATION, reason(e));
 			return;
 		}
-		engine().jobs().appendToHistory(taskId, Attribution.owner(taskData), record);
+		engine().jobs().appendToHistory(taskId, JobManager.accountOf(taskData), record);
 
 		AMap<AString, ACell> after = engine().jobs().getJobData(taskId, rctx);
 		writeResult(ctx, id, A2ACodec.toTask(after != null ? after : taskData));
@@ -628,7 +628,7 @@ public class A2A extends ACoviaAPI {
 		// The operation took the message as its input; recording it gives the
 		// Task its history without delivering it a second time.
 		Blob taskId = job.getID();
-		recordFirstMessage(taskId, () -> engine().jobs().appendToHistory(taskId, job.getOwner(), record));
+		recordFirstMessage(taskId, () -> engine().jobs().appendToHistory(taskId, JobManager.accountOf(job), record));
 		return job;
 	}
 
@@ -658,7 +658,7 @@ public class A2A extends ACoviaAPI {
 			AMap<AString, ACell> data = engine().jobs().getJobData(taskId, rctx, CoviaAPI.jobOwner(ctx));
 			if (data == null) throw new NotFoundException(NO_SUCH_TASK + taskIdHex, taskIdHex);
 			engine().jobs().deliverMessage(taskId, record, rctx, CoviaAPI.jobOwner(ctx));
-			engine().jobs().appendToHistory(taskId, Attribution.owner(data), record);
+			engine().jobs().appendToHistory(taskId, JobManager.accountOf(data), record);
 		} catch (NotFoundException | AuthException e) {
 			// A job the caller may not write is not found: its existence is not disclosed
 			writeError(ctx, id, A2AErrorCodes.TASK_NOT_FOUND, NO_SUCH_TASK + taskIdHex);
@@ -749,13 +749,13 @@ public class A2A extends ACoviaAPI {
 			return;
 		}
 		try {
-			engine().jobs().cancelJob(task.id(), rctx, null, Attribution.owner(task.data()));
+			engine().jobs().cancelJob(task.id(), rctx, null, JobManager.accountOf(task.data()));
 		} catch (CoviaException e) {
 			// The venue would not cancel it: not live here, or not the caller's to cancel
 			writeError(ctx, id, A2AErrorCodes.TASK_NOT_CANCELABLE, reason(e));
 			return;
 		}
-		AMap<AString, ACell> after = engine().jobs().getJobData(task.id(), rctx, Attribution.owner(task.data()));
+		AMap<AString, ACell> after = engine().jobs().getJobData(task.id(), rctx, JobManager.accountOf(task.data()));
 		writeResult(ctx, id, A2ACodec.toTask(after != null ? after : task.data()));
 	}
 
