@@ -142,6 +142,17 @@ public class ResourceNamesTest {
 	}
 
 	@Test
+	void aPrincipalIsWrittenAsADIDOrAShortForm() {
+		for (String value : new String[] {"did:key:zOther", "u:bob", "u:bob:g:helper"}) {
+			assertTrue(CapabilityChecker.namesPrincipal(value), value);
+		}
+		for (String value : new String[] {"bob", "public", "w/u:bob", "u://host/x", ""}) {
+			assertFalse(CapabilityChecker.namesPrincipal(value), value);
+		}
+		assertFalse(CapabilityChecker.namesPrincipal(null));
+	}
+
+	@Test
 	void aHeldGrantNamingAShortFormCoversNothing() {
 		AVector<ACell> held = Vectors.of(Capability.create(s("u:bob/w/"), Capability.CRUD_READ));
 		assertNotNull(CapabilityChecker.allows(held, s(OWNER + "/w/x"), Capability.CRUD_READ, NAMESPACE));

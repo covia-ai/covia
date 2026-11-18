@@ -69,7 +69,7 @@ public record BotSpec(String name, String tokenRef, String userRef, String agent
 			throw new IllegalArgumentException(where+": unknown setting "+k); }
 		String token=str(m,K_TOKEN,where), user=str(m,K_USER,where), agent=str(m,K_AGENT,where), op=str(m,K_OPERATION,where);
 		if(token==null||token.isBlank()) throw new IllegalArgumentException(where+".token is required (prefer s/NAME)");
-		if(user==null||user.isBlank()||(!PUBLIC_USER.equals(user)&&!user.startsWith("did:")&&!CapabilityChecker.isShortForm(user)))
+		if(user==null||user.isBlank()||(!PUBLIC_USER.equals(user)&&!CapabilityChecker.namesPrincipal(user)))
 			throw new IllegalArgumentException(where+".user must be a DID, u:<user> for a user of this venue, or public");
 		if((agent==null)==(op==null)) throw new IllegalArgumentException(where+": exactly one of agent or operation is required");
 		if(agent!=null&&agent.isBlank()||op!=null&&op.isBlank()) throw new IllegalArgumentException(where+": handler must not be blank");

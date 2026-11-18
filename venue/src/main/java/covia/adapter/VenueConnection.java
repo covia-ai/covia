@@ -209,8 +209,7 @@ public record VenueConnection(Venue venue, AMap<AString, ACell> credentials) {
 	public static AString jobOwner(ACell input) {
 		ACell value = RT.getIn(input, Fields.OWNER);
 		if (value == null) return null;
-		if (value instanceof AString owner && (owner.toString().startsWith("did:")
-				|| CapabilityChecker.isShortForm(owner.toString()))) return owner;
+		if (value instanceof AString owner && CapabilityChecker.namesPrincipal(owner.toString())) return owner;
 		throw new InvalidInputException(INVALID_JOB_OWNER);
 	}
 

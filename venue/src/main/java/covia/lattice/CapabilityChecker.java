@@ -534,6 +534,15 @@ public class CapabilityChecker {
 	}
 
 	/**
+	 * Whether {@code value} is written as a principal: a DID, or a user of this
+	 * venue in short form ({@link #isShortForm}), which the venue expands where
+	 * it is used ({@code Engine.expandPrincipal}). It checks the form only.
+	 */
+	public static boolean namesPrincipal(String value) {
+		return value != null && (value.startsWith("did:") || isShortForm(value));
+	}
+
+	/**
 	 * A grant's {@code with} named in {@code namespace} ({@link #canonicalResource}).
 	 * A grant is a statement someone signed or stored, not input the venue
 	 * expands, so one naming a principal in short form is left as written and

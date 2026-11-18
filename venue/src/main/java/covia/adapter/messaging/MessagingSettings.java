@@ -96,7 +96,7 @@ public final class MessagingSettings {
 		if (strict) known(map, fields);
 		if (map.containsKey(key("statePath"))) throw new IllegalArgumentException(UNKNOWN.formatted("statePath"));
 		String user = required(map, "user");
-		if (!user.equals("public") && (!(user.startsWith("did:") || CapabilityChecker.isShortForm(user)) || user.contains("/") || user.isBlank())) throw new IllegalArgumentException(INVALID_USER);
+		if (!user.equals("public") && (!CapabilityChecker.namesPrincipal(user) || user.contains("/") || user.isBlank())) throw new IllegalArgumentException(INVALID_USER);
 		String agent = optional(map, "agent"), operation = optional(map, "operation");
 		ACell relay = map.get(key("relay"));
 		if ((agent != null ? 1 : 0) + (operation != null ? 1 : 0) + (relay != null ? 1 : 0) != 1) throw new IllegalArgumentException(HANDLER);

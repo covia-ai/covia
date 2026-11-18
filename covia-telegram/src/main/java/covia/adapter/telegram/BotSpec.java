@@ -183,7 +183,7 @@ public record BotSpec(
 			throw new IllegalArgumentException(where + ".user is required: the DID the bot acts as "
 				+ "(the owner of the agent it routes to), or \"public\" for the venue's public principal");
 		}
-		if (!PUBLIC_USER.equals(userStr) && !userStr.startsWith("did:") && !CapabilityChecker.isShortForm(userStr)) {
+		if (!PUBLIC_USER.equals(userStr) && !CapabilityChecker.namesPrincipal(userStr)) {
 			throw new IllegalArgumentException(where + ".user must be a DID, u:<user> for a user of this venue, or \"public\": " + userStr);
 		}
 

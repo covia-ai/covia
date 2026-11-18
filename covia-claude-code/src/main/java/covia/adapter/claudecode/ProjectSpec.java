@@ -125,8 +125,7 @@ public record ProjectSpec(
 		}
 		String user = optString(m, K_USER, where);
 		if (user == null || user.isBlank()) user = defaultUser;
-		if (!PUBLIC_USER.equals(user) && !VENUE_USER.equals(user) && !user.startsWith("did:")
-				&& !CapabilityChecker.isShortForm(user)) {
+		if (!PUBLIC_USER.equals(user) && !VENUE_USER.equals(user) && !CapabilityChecker.namesPrincipal(user)) {
 			throw new IllegalArgumentException(where + ".user must be a DID, u:<user> for a user of this venue, "
 				+ "\"public\" or \"venue\": " + user);
 		}
