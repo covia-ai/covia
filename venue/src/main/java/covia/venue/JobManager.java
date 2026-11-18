@@ -254,7 +254,7 @@ public class JobManager {
 
 	/** Generic invocation of the definition the framework already resolved for {@code ref}. */
 	public Job invokeOperation(AString ref, Operation operation, ACell input, RequestContext ctx) {
-		return dispatchOperation(operation.meta(), input, ctx.withOp(ref), false, Invocation.INVOKE);
+		return dispatchOperation(operation.meta(), input, invoking(ctx, ref), false, Invocation.INVOKE);
 	}
 
 	/**
@@ -266,7 +266,7 @@ public class JobManager {
 	public Job callOperation(String ref, ACell input, RequestContext ctx) {
 		AString operation = Strings.create(ref);
 		return dispatchOperation(resolveOperation(operation, ctx).meta(), input,
-			ctx.withOp(operation), false, Invocation.CALL);
+			invoking(ctx, operation), false, Invocation.CALL);
 	}
 
 	/**
@@ -274,10 +274,25 @@ public class JobManager {
 	 * the input being sent. The executing venue applies its defaults and checks
 	 * its own invocation and resource authority independently, using the
 	 * explicitly selected remote credentials, not the source's local scope.
+	 *
+	 * @return the reference as checked, which the caller sends: a short form
+	 *         names a user of this venue, so it goes expanded
+	 *         ({@link Engine#expandPath})
 	 */
-	public void requireRemoteInvoke(AString ref, ACell input, RequestContext ctx) {
+	public AString requireRemoteInvoke(AString ref, ACell input, RequestContext ctx) {
 		if (ref == null) throw operationRequired();
-		engine.requireInvoke(invocationContext(ctx.withOp(ref), input), ref);
+		RequestContext invoking = invoking(ctx, ref);
+		engine.requireInvoke(invocationContext(invoking, input), invoking.getOp());
+		return invoking.getOp();
+	}
+
+	/**
+	 * {@code ctx} invoking {@code ref}, the operation reference as given, with
+	 * a principal in short form expanded ({@link Engine#expandPath}): the Job
+	 * records it and invoke is checked on it.
+	 */
+	private RequestContext invoking(RequestContext ctx, AString ref) {
+		return ctx.withOp(engine.expandPath(ref));
 	}
 
 	private RequestContext invocationContext(RequestContext ctx, ACell input) {
@@ -289,7 +304,7 @@ public class JobManager {
 
 	/** HTTP submission: acknowledge a durable handle independently of adapter execution. */
 	public Job submitOperation(AString ref, ACell input, RequestContext ctx) {
-		Prepared prepared = prepareOperation(resolveOperation(ref, ctx).meta(), input, ctx.withOp(ref),
+		Prepared prepared = prepareOperation(resolveOperation(ref, ctx).meta(), input, invoking(ctx, ref),
 			false, Invocation.INVOKE);
 		prepared.commit();
 		Job job = prepared.accept();
@@ -325,7 +340,7 @@ public class JobManager {
 	 * @return the prepared Job, not yet recorded
 	 */
 	Prepared prepareTracked(AString ref, ACell input, RequestContext ctx) {
-		return prepareOperation(resolveOperation(ref, ctx).meta(), input, ctx.withOp(ref),
+		return prepareOperation(resolveOperation(ref, ctx).meta(), input, invoking(ctx, ref),
 			false, Invocation.SCHEDULED);
 	}
 
@@ -341,7 +356,7 @@ public class JobManager {
 
 	/** Prepare an untracked scheduled fire, bound to its account when it is recorded with its claim. */
 	Prepared prepareUntracked(AString ref, ACell input, RequestContext ctx) {
-		return prepareOperation(resolveOperation(ref, ctx).meta(), input, ctx.withOp(ref),
+		return prepareOperation(resolveOperation(ref, ctx).meta(), input, invoking(ctx, ref),
 			true, Invocation.SCHEDULED_TRANSIENT);
 	}
 
@@ -684,7 +699,7 @@ public class JobManager {
 	 * reads, while the call acts with the token's authority.
 	 */
 	public Run startToolOperation(AString ref, Operation operation, ACell input, RequestContext ctx) {
-		return startOperation(operation.meta(), input, ctx.withOp(ref), false, Invocation.TOOL);
+		return startOperation(operation.meta(), input, invoking(ctx, ref), false, Invocation.TOOL);
 	}
 
 	private CompletableFuture<ACell> runOperation(AString ref, ACell input,
@@ -700,7 +715,7 @@ public class JobManager {
 			if (asset == null) return Run.failed(unresolved(ref));
 			Operation op = Operation.from(asset);
 			if (op == null) return Run.failed(notAnOperation(asset));
-			return startOperation(op.meta(), input, ctx.withOp(ref), privateJob, invocation);
+			return startOperation(op.meta(), input, invoking(ctx, ref), privateJob, invocation);
 		} catch (Exception e) {
 			return Run.failed(e);
 		}
@@ -822,7 +837,7 @@ public class JobManager {
 		// Always local — see invokeOperation(AString,...): resolution
 		// returns definitions, never remote execution handles.
 		// Retain the bound reference for attribution and resource caveats.
-		return invokeInternal(op.meta(), input, ctx.withOp(ref), watch, record);
+		return invokeInternal(op.meta(), input, invoking(ctx, ref), watch, record);
 	}
 
 	/**
@@ -834,7 +849,7 @@ public class JobManager {
 	 */
 	public CompletableFuture<ACell> invokeReference(AString ref, Operation op, ACell input,
 			RequestContext ctx, Consumer<Job> watch, boolean record) {
-		return executeInternal(op.meta(), input, ctx.withOp(ref), watch, record, Invocation.INTERNAL_INVOKE);
+		return executeInternal(op.meta(), input, invoking(ctx, ref), watch, record, Invocation.INTERNAL_INVOKE);
 	}
 
 	public CompletableFuture<ACell> invokeInternal(AMap<AString, ACell> meta, ACell input, RequestContext ctx) {
@@ -1510,7 +1525,9 @@ public class JobManager {
 	 * the active set, and the second lookup would find only the record read
 	 * before it finished, a handle that never finishes.
 	 */
-	private Authorized authorized(Blob id, RequestContext ctx, AString owner, AString ability) {
+	private Authorized authorized(Blob id, RequestContext ctx, AString named, AString ability) {
+		// The lookup owner as the caller named it, a short form expanded where the job is held
+		AString owner = engine.expandPrincipal(named);
 		Job live = liveJob(id);
 		AMap<AString, ACell> data;
 		AString account;

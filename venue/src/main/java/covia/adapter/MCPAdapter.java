@@ -256,7 +256,8 @@ public class MCPAdapter extends AAdapter implements TokenAccessPoint {
 	/** Refusal: a tools call or list given both forms of the bearer. */
 	public static final String BEARER_BOTH = "Give the bearer as token or as bearerSecret, not both";
 	/** Refusal: a {@code bearerSecret} that is not a secret reference. */
-	public static final String BEARER_SECRET_INVALID = "bearerSecret must be a secret reference: s/NAME, or did:.../s/NAME under a secret/use grant";
+	public static final String BEARER_SECRET_INVALID = "bearerSecret must be a secret reference: s/NAME, or did:.../s/NAME "
+		+ "(u:<user>/s/NAME for a user of this venue) under a secret/use grant";
 	/** Refusal: a {@code bearerSecret} naming no stored secret. */
 	public static final String BEARER_SECRET_NOT_FOUND = "No secret %s to send as the bearer";
 

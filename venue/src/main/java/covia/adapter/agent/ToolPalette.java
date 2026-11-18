@@ -316,6 +316,13 @@ public final class ToolPalette {
 			if (parsed == null) continue;
 			AString operation = parsed[0];
 			if (skipName.test(operation.toString())) continue;
+			try {
+				operation = engine.expandPath(operation);
+			} catch (covia.exception.InvalidInputException e) {
+				if (unavailable == null) throw e;
+				record(unavailable, operation, "operation reference is not valid: " + safeMessage(e));
+				continue;
+			}
 
 			if (engine.isRemoteDefinition(operation)) {
 				// Another venue's definition is fetched only when the agent calls

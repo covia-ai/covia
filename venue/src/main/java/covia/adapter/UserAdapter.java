@@ -103,6 +103,11 @@ public class UserAdapter extends AAdapter {
 	@Override
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx,
 			AMap<AString, ACell> meta, ACell input) {
+		try {
+			input = expandedUsers(input);
+		} catch (InvalidInputException e) {
+			return CompletableFuture.failedFuture(e);
+		}
 		String subOperation = getSubOperation(meta);
 		String event = switch (subOperation) {
 			case "create" -> Audit.USER_CREATE;
@@ -146,6 +151,23 @@ public class UserAdapter extends AAdapter {
 				Audit.K_OPERATION, operation, Audit.K_OUTCOME, (t == null) ? Audit.OK : Audit.FAILED));
 		}
 		return result;
+	}
+
+	/**
+	 * {@code input} with the users it names, {@code did} and clone's
+	 * {@code from} and {@code to}, expanded where they arrive
+	 * ({@link Engine#expandPrincipal}).
+	 */
+	private ACell expandedUsers(ACell input) {
+		if (!(input instanceof AMap<?, ?> map)) return input;
+		@SuppressWarnings("unchecked")
+		AMap<AString, ACell> fields = (AMap<AString, ACell>) map;
+		for (AString field : new AString[] { Fields.DID, Fields.FROM, Fields.TO }) {
+			if (!(fields.get(field) instanceof AString given)) continue;
+			AString full = engine.expandPrincipal(given);
+			if (full != given) fields = fields.assoc(field, full);
+		}
+		return fields;
 	}
 
 	/** Run one operation as another user, with that user's whole authority ({@link covia.venue.Engine#sudoContext}). */
@@ -276,7 +298,7 @@ public class UserAdapter extends AAdapter {
 	 *  capability checks as the {@code user:info} operation. A user reading
 	 *  their own entry sees no venue bookkeeping; an operator sees its {@code meta}. */
 	public ACell info(RequestContext ctx, ACell input) {
-		AString did = RT.ensureString(RT.getIn(input, Fields.DID));
+		AString did = RT.ensureString(RT.getIn(expandedUsers(input), Fields.DID));
 		if (did == null) did = ctx.getAuthorityDID();
 		if (did == null) throw new AuthException("Authentication required");
 		did = requireDID(did);
@@ -340,7 +362,7 @@ public class UserAdapter extends AAdapter {
 	/** Job-free REST reads (#255) call this directly, reusing the same
 	 *  capability checks as the {@code user:authentication-list} operation. */
 	public ACell authenticationList(RequestContext ctx, ACell input) {
-		AString did = requireDID(targetDID(ctx, input));
+		AString did = requireDID(targetDID(ctx, expandedUsers(input)));
 		requireSelfOrVenueUserAuthority(ctx, did, Abilities.ADMIN_USER_READ);
 		AString id = engine.managedUserName(did);
 		if (id != null) {

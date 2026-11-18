@@ -14,6 +14,7 @@ import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.exception.ConfigurationException;
+import covia.lattice.CapabilityChecker;
 import covia.venue.Engine;
 import covia.adapter.messaging.ChannelAuthentication;
 import covia.adapter.messaging.MessagingBotSpec;
@@ -36,8 +37,9 @@ public record BotSpec(String name, String tokenRef, String userRef, String agent
 		allowIds=Collections.unmodifiableSet(new LinkedHashSet<>(allowIds));
 		allowNames=Collections.unmodifiableSet(new LinkedHashSet<>(allowNames));
 	}
+	/** The DID the bot acts as: {@code "public"} and a short form ({@link Engine#expandPrincipal}) resolve against the venue. */
 	public AString userDID(Engine engine) {
-		if (!PUBLIC_USER.equals(userRef)) return Strings.create(userRef);
+		if (!PUBLIC_USER.equals(userRef)) return engine.expandPrincipal(Strings.create(userRef));
 		if (engine==null || !engine.config().isPublicAccess()) throw new ConfigurationException(
 			"bot '"+name+"' acts as public but public access is disabled");
 		return Strings.create(engine.getDIDString()+":public");
@@ -67,8 +69,8 @@ public record BotSpec(String name, String tokenRef, String userRef, String agent
 			throw new IllegalArgumentException(where+": unknown setting "+k); }
 		String token=str(m,K_TOKEN,where), user=str(m,K_USER,where), agent=str(m,K_AGENT,where), op=str(m,K_OPERATION,where);
 		if(token==null||token.isBlank()) throw new IllegalArgumentException(where+".token is required (prefer s/NAME)");
-		if(user==null||user.isBlank()||(!PUBLIC_USER.equals(user)&&!user.startsWith("did:")))
-			throw new IllegalArgumentException(where+".user must be a DID or public");
+		if(user==null||user.isBlank()||(!PUBLIC_USER.equals(user)&&!user.startsWith("did:")&&!CapabilityChecker.isShortForm(user)))
+			throw new IllegalArgumentException(where+".user must be a DID, u:<user> for a user of this venue, or public");
 		if((agent==null)==(op==null)) throw new IllegalArgumentException(where+": exactly one of agent or operation is required");
 		if(agent!=null&&agent.isBlank()||op!=null&&op.isBlank()) throw new IllegalArgumentException(where+": handler must not be blank");
 		MessagingSettings.agent(where+".agent",user,agent);

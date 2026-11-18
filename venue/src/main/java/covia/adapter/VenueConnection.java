@@ -21,6 +21,7 @@ import covia.exception.UnavailableException;
 import covia.grid.Venue;
 import covia.grid.auth.VenueAuth;
 import covia.grid.auth.VenueDID;
+import covia.lattice.CapabilityChecker;
 import covia.venue.Engine;
 import covia.venue.RemoteJobs;
 import covia.venue.RequestContext;
@@ -199,11 +200,17 @@ public record VenueConnection(Venue venue, AMap<AString, ACell> credentials) {
 	public static final String JOB_OWNER_UNAVAILABLE = "The remote Job owner could not be established; supply owner explicitly";
 	public static final String INVALID_JOB_OWNER = "'owner' must be a DID string when provided";
 
-	/** Validate a lookup namespace without replacing the caller's identity. */
+	/**
+	 * Validate a lookup namespace without replacing the caller's identity. A
+	 * principal in short form names a user of this venue: a local lookup
+	 * expands it ({@link Engine#expandPrincipal}), and {@link #job} sends it
+	 * expanded.
+	 */
 	public static AString jobOwner(ACell input) {
 		ACell value = RT.getIn(input, Fields.OWNER);
 		if (value == null) return null;
-		if (value instanceof AString owner && owner.toString().startsWith("did:")) return owner;
+		if (value instanceof AString owner && (owner.toString().startsWith("did:")
+				|| CapabilityChecker.isShortForm(owner.toString()))) return owner;
 		throw new InvalidInputException(INVALID_JOB_OWNER);
 	}
 
@@ -212,7 +219,7 @@ public record VenueConnection(Venue venue, AMap<AString, ACell> credentials) {
 			ACell input) {
 		VenueConnection connection = connect(engine, ctx, target, input);
 		Venue venue = connection.venue();
-		AString owner = jobOwner(input);
+		AString owner = engine.expandPrincipal(jobOwner(input));
 		if (owner == null) {
 			AString mode = RT.ensureString(RT.getIn(input, AUTHENTICATE_AS));
 			if (CALLER.equals(mode)) owner = ctx.getAuthorityDID();

@@ -685,8 +685,8 @@ public class Orchestrator extends AAdapter {
 			private Job invokeChild(AString opId, ACell childInput) {
 				Venue venue=targetVenue();
 				if (venue != null) {
-					engine.jobs().requireRemoteInvoke(opId, childInput, ctx);
-					return venue.invoke(opId.toString(),childInput).join();
+					AString sent = engine.jobs().requireRemoteInvoke(opId, childInput, ctx);
+					return venue.invoke(sent.toString(),childInput).join();
 				}
 				// Deliberately use JobManager for every item. This preserves job
 				// tracking and runs the common point-of-action authorization gate
@@ -721,12 +721,14 @@ public class Orchestrator extends AAdapter {
 					: "venue " + RT.ensureString(step.get(Fields.VENUE));
 				try {
 					Asset asset;
+					// A short form names a user of this venue, here and to another venue alike
+					AString ref=engine.expandPath(opId);
 					if (venue == null) {
 						// A callable's path is not read as data: resolving it admits the request
-						if (!CallableAdapter.isPath(opId)) engine.requireMetadataRead(ctx,opId);
-						asset=engine.resolveAsset(opId,ctx);
+						if (!CallableAdapter.isPath(ref)) engine.requireMetadataRead(ctx,ref);
+						asset=engine.resolveAsset(ref,ctx);
 					} else {
-						asset=venue.resolveAsset(opId.toString());
+						asset=venue.resolveAsset(ref.toString());
 					}
 					if (asset == null) {
 						throw new NotFoundException(

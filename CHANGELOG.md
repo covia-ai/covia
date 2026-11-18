@@ -29,6 +29,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - `adapters.convex.timeoutMillis` sets how long `convex:query` and `convex:transact` wait for the peer's result; the default is the Convex client's own, 20 seconds.
 - `venue:adapter/restart` stops an enabled adapter, offers it its configuration again and starts it; `venue:adapters` lists each adapter's `status` and a failed adapter's `reason`.
 - A configured Python function whose settings add `principals: true` is also passed its frame's `authority` and `caller`, so one offered through a callable can keep each caller's state apart (#706).
+- A venue with a public hostname takes its users in short form wherever a principal or a path is given, in operations, REST routes and a messaging bot's `user`: `u:bob` for `did:web:<hostname>:u:bob`, `u:bob:g:helper` for his agent and `u:bob/w/notes` for his path; records hold the full DID.
 
 ### Changed
 

@@ -615,6 +615,35 @@ public class CallableAdapterTest {
 	}
 
 	@Test
+	public void aCallablesPathMayNameItsOwnerInShortForm(TestInfo info) {
+		AString alice = TestEngine.uniqueManagedDID("short-form-owner");
+		RequestContext bobs = RequestContext.of(TestEngine.uniqueDID("bob-" + info.getDisplayName()));
+		openGuestbook(alice);
+		complete(create(RequestContext.of(alice), "guestbook", "v/ops/covia/append", GUESTBOOK_CAPS,
+			"v/ops/callable/gates/anyone"));
+		String shortPath = "u:" + engine.managedUserName(alice) + "/x/callable/guestbook";
+
+		// Invoked by its path, the job records the path in full
+		Job job = run(shortPath, append("w/guestbook", "by path"), bobs);
+		complete(job);
+		assertEquals(Strings.create(alice + "/x/callable/guestbook"), job.getData().get(Fields.OP));
+
+		// From an orchestration's step, strict or not, and through callable:call
+		for (boolean strict : new boolean[] {false, true}) {
+			AMap<AString, ACell> step = Maps.of("op", shortPath, Fields.INPUT, Maps.of(
+				Fields.PATH, Vectors.of("const", "w/guestbook"), Fields.VALUE, Vectors.of("const", "from a step")));
+			complete(run("v/ops/covia/write", Maps.of(Fields.PATH, "o/sign", Fields.VALUE, Maps.of(
+				Fields.NAME, "Sign", Fields.OPERATION, Maps.of(Fields.ADAPTER, "orchestrator",
+					"steps", Vectors.of(strict ? step.assoc(Strings.create("strict"), CVMBool.TRUE) : step),
+					"result", Vectors.of(0L)))), bobs));
+			complete(run("o/sign", Maps.empty(), bobs));
+		}
+		complete(run("v/ops/callable/call", Maps.of(Fields.CALLABLE, shortPath,
+			Fields.INPUT, append("w/guestbook", "through call")), bobs));
+		assertEquals(Vectors.of("by path", "from a step", "from a step", "through call"), held(alice, "w/guestbook"));
+	}
+
+	@Test
 	public void aCallerNotAdmittedIsRefusedAsIfTheCallableDidNotExist(TestInfo info) {
 		AString alice = TestEngine.uniqueDID(info);
 		AString bob = TestEngine.uniqueDID("bob-" + info.getDisplayName());

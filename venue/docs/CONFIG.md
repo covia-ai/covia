@@ -1246,7 +1246,9 @@ A runtime user ID is always a DID and may use any DID method. `user:create`
 accepts a full DID directly (for example a self-sovereign `did:key`) or a
 venue-managed `username`. A username requires a public `hostname` and derives
 `did:web:<hostname>:u:<username>` — for example
-`did:web:venue.example.com:u:alice`. `user:create` and `user:list` are
+`did:web:venue.example.com:u:alice`, which input and configuration may write
+in short form, `u:alice` ([AUTHORITY.md](AUTHORITY.md#where-names-resolve)).
+`user:create` and `user:list` are
 venue-administrative operations: invoke directly as the venue, or present a
 venue-issued UCAN covering `<venueDID>/users` with `admin/user/create` or
 `admin/user/read`. Operator code can use `engine.venueContext()` to invoke the
@@ -2658,8 +2660,10 @@ Per bot:
   up without a restart.
 - `user` — the principal the bot's allow-listed senders come from
   ([Who a chat message comes from](#who-a-chat-message-comes-from)), with its
-  full authority, so it should be the owner of the agent it routes to.
-  `"public"` names the venue's public principal (the same identity as an
+  full authority, so it should be the owner of the agent it routes to: a DID,
+  or `u:<name>` for a user of this venue
+  ([AUTHORITY.md](AUTHORITY.md#where-names-resolve)), expanded when the bot
+  starts. `"public"` names the venue's public principal (the same identity as an
   anonymous MCP client on a public venue), which is what a local dev venue's
   agents are owned by.
 - `agent` **or** `operation` — the **inbound handler**. `agent` is an agent

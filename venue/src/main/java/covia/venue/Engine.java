@@ -2322,8 +2322,9 @@ public class Engine {
 	 * @throws covia.exception.AuthException when the caller may not read {@code ref}
 	 */
 	public ACell resolvePath(AString ref, RequestContext ctx) {
-		requireReadable(ctx, ref);
-		return resolvePathUnchecked(ref, ctx);
+		AString path = expandPath(ref);
+		requireReadable(ctx, path);
+		return resolvePathUnchecked(path, ctx);
 	}
 
 	/**
@@ -2334,7 +2335,8 @@ public class Engine {
 	 *
 	 * @throws covia.exception.AuthException when the caller may not read {@code ref}
 	 */
-	public void requireReadable(RequestContext ctx, AString ref) {
+	public void requireReadable(RequestContext ctx, AString given) {
+		AString ref = expandPath(given);
 		if (ref == null) return;
 		if (ownerOf(ref) != null && !isLocalDIDResource(ref)) return;
 		try {
@@ -2356,7 +2358,8 @@ public class Engine {
 	 *
 	 * @throws covia.exception.AuthException when the caller may not read {@code path}
 	 */
-	public void requirePathRead(RequestContext ctx, AString path) {
+	public void requirePathRead(RequestContext ctx, AString given) {
+		AString path = expandPath(given);
 		if (path == null) return;
 		if (!(getAdapter("covia") instanceof CoviaAdapter covia)
 				|| (ownerOf(path) != null && !isLocalDIDResource(path))) {
@@ -2393,6 +2396,9 @@ public class Engine {
 	 *       ({@link CoviaAdapter#resolve})</li>
 	 * </ul>
 	 *
+	 * <p>A principal in short form is expanded first ({@link #expandPath}), as
+	 * by every reader of a reference here.</p>
+	 *
 	 * <p>Returns null for unresolvable refs, remote DID URLs, paths that name no
 	 * place data could be, paths whose scope the request does not have, and
 	 * refs that resolve to nothing. Remote DID URLs are handled by
@@ -2403,7 +2409,8 @@ public class Engine {
 	 * @param ctx Request context: whose namespace a bare path means, not authority
 	 * @return Literal value at the resolved location, or null
 	 */
-	public ACell resolvePathUnchecked(AString ref, RequestContext ctx) {
+	public ACell resolvePathUnchecked(AString given, RequestContext ctx) {
+		AString ref = expandPath(given);
 		if (ref == null) return null;
 
 		if (ownerOf(ref) != null) {
@@ -2510,7 +2517,8 @@ public class Engine {
 		return resolveAsset(ref, ctx, checked, true);
 	}
 
-	private Asset resolveAsset(AString ref, RequestContext ctx, boolean checked, boolean fetch) {
+	private Asset resolveAsset(AString given, RequestContext ctx, boolean checked, boolean fetch) {
+		AString ref = expandPath(given);
 		if (ref == null) return null;
 
 		// A callable's path names the operation that calls it, which admits the
@@ -3034,7 +3042,8 @@ public class Engine {
 	}
 
 	private covia.venue.storage.ContentProvider.Resolved resolveContent(
-			AString ref, RequestContext ctx, Set<String> resolving) throws IOException {
+			AString given, RequestContext ctx, Set<String> resolving) throws IOException {
+		AString ref = expandPath(given);
 		if (ref == null) return null;
 		String refString = ref.toString();
 		if (resolving.size() >= 32) {
@@ -3580,7 +3589,7 @@ public class Engine {
 		if (username == null || username.isEmpty()) {
 			throw new InvalidInputException("username is required");
 		}
-		if (!username.toString().matches("[A-Za-z0-9._-]+")) {
+		if (!username.toString().matches(USERNAME)) {
 			throw new InvalidInputException(
 				"username may contain only letters, numbers, '.', '_' and '-'");
 		}
@@ -3590,6 +3599,98 @@ public class Engine {
 				+ "so they can use did:web; pass a full user DID instead");
 		}
 		return Strings.create(base + ":u:" + username);
+	}
+
+	/** A venue-managed username, the {@code <name>} of {@code <webDID>:u:<name>}. */
+	private static final String USERNAME = "[A-Za-z0-9._-]+";
+
+	/** A principal in short form: a managed user, {@code u:<name>}, or that user's agent, {@code u:<name>:g:<agentId>}. */
+	private static final java.util.regex.Pattern SHORT_FORM = java.util.regex.Pattern.compile(
+		"u:" + USERNAME + "(" + java.util.regex.Pattern.quote(covia.grid.Principals.AGENT_SEP) + "[^:/]+)?");
+
+	/** Refusal of a principal in short form on a venue with no public hostname, which names no users under it; the value follows. */
+	public static final String NO_SHORT_FORM = "This venue has no public hostname, so no user is named u:<user> "
+		+ "here; give the full DID instead of: ";
+
+	/** Refusal of a value that starts as a principal in short form but is not one; the value follows. */
+	public static final String NOT_A_SHORT_FORM = "A principal in short form is u:<user> or u:<user>:g:<agentId>, not: ";
+
+	/**
+	 * A principal as given, with a short form expanded: {@code u:bob} is
+	 * {@code <webDID>:u:bob}, the DID {@link #managedUserDID} gives user
+	 * {@code bob}, and {@code u:bob:g:helper} is his agent's DID. Anything else,
+	 * a full DID or a keyword such as {@code "venue"}, is returned as it is.
+	 * Expansion only names: it checks neither existence nor access. It is
+	 * applied once, where a principal arrives as input; records hold the full
+	 * DID (AUTHORITY.md, "Where names resolve").
+	 *
+	 * @throws InvalidInputException with {@link #NOT_A_SHORT_FORM} for a value
+	 *         that starts {@code u:} but is no short form, or with
+	 *         {@link #NO_SHORT_FORM} on a venue with no public hostname
+	 */
+	public AString expandPrincipal(AString principal) {
+		if (principal == null || !CapabilityChecker.isShortForm(principal.toString())) return principal;
+		if (!SHORT_FORM.matcher(principal.toString()).matches()) {
+			throw new InvalidInputException(NOT_A_SHORT_FORM + principal);
+		}
+		AString base = config.getWebDID();
+		if (base == null) throw new InvalidInputException(NO_SHORT_FORM + principal);
+		return Strings.create(base + ":" + principal);
+	}
+
+	/**
+	 * A path or resource as given, with a leading principal in short form
+	 * expanded ({@link #expandPrincipal}): {@code u:bob/w/notes} is
+	 * {@code <webDID>:u:bob/w/notes}, and {@code u:bob} alone is his DID, as a
+	 * capability's {@code with} may name it. Leading slashes change nothing, as
+	 * on any path. Any other value is returned as it is.
+	 *
+	 * @throws InvalidInputException as {@link #expandPrincipal} does
+	 */
+	public AString expandPath(AString path) {
+		if (path == null || !CapabilityChecker.isShortForm(path.toString())) return path;
+		String value = CoviaPath.relative(path.toString());
+		int slash = value.indexOf('/');
+		AString principal = expandPrincipal(Strings.create((slash < 0) ? value : value.substring(0, slash)));
+		return (slash < 0) ? principal : Strings.create(principal + value.substring(slash));
+	}
+
+	/**
+	 * {@code principals} with each entry of a list expanded ({@link #expandPrincipal}),
+	 * as an {@code accepts} list or a callers gate's {@code callers} takes them.
+	 * Keywords and anything not a list are returned as they are, for the
+	 * value's own check.
+	 */
+	public ACell expandPrincipals(ACell principals) {
+		if (!(principals instanceof AVector<?> list)) return principals;
+		@SuppressWarnings("unchecked")
+		AVector<ACell> expanded = (AVector<ACell>) list;
+		for (long i = 0; i < list.count(); i++) {
+			if (!(list.get(i) instanceof AString entry)) continue;
+			AString full = expandPrincipal(entry);
+			if (full != entry) expanded = expanded.assoc(i, full);
+		}
+		return expanded;
+	}
+
+	/**
+	 * {@code caps} with each capability's {@code with} expanded
+	 * ({@link #expandPath}), as caps given to an agent, a token, a callable or
+	 * an approval request are. Anything malformed is returned as it is, for
+	 * the caps' own check.
+	 */
+	public AVector<ACell> expandCaps(AVector<ACell> caps) {
+		if (caps == null) return null;
+		AVector<ACell> expanded = caps;
+		for (long i = 0; i < caps.count(); i++) {
+			if (!(caps.get(i) instanceof AMap<?, ?> map)) continue;
+			@SuppressWarnings("unchecked")
+			AMap<AString, ACell> grant = (AMap<AString, ACell>) map;
+			AString with = RT.ensureString(grant.get(Capability.WITH));
+			AString full = expandPath(with);
+			if (full != with) expanded = expanded.assoc(i, grant.assoc(Capability.WITH, full));
+		}
+		return expanded;
 	}
 
 	/**
@@ -3622,7 +3723,7 @@ public class Engine {
 		String value = did.toString();
 		if (!value.startsWith(prefix)) return null;
 		String username = value.substring(prefix.length());
-		if (username.isEmpty() || !username.matches("[A-Za-z0-9._-]+")) return null;
+		if (username.isEmpty() || !username.matches(USERNAME)) return null;
 		return Strings.create(username);
 	}
 
@@ -4005,7 +4106,7 @@ public class Engine {
 	 * @throws InvalidInputException if {@code ref} names no agent
 	 */
 	public Agent getAgent(RequestContext ctx, AString ref) {
-		AgentAddress agent = AgentAddress.parse(ctx.getUserDID(), ref);
+		AgentAddress agent = AgentAddress.parse(ctx.getUserDID(), expandPath(ref));
 		return getAgent(agent.owner(), agent.agentId());
 	}
 
@@ -5770,9 +5871,11 @@ public class Engine {
 
 	/** Whether a value is a reference into a secret store rather than a literal:
 	 *  {@code s/NAME} or {@code /s/NAME} (the caller's own), or {@code <did>/s/NAME}
-	 *  (another principal's, usable under a {@code secret/use} grant). */
+	 *  (another principal's, usable under a {@code secret/use} grant), its DID
+	 *  perhaps in short form ({@code u:bob/s/NAME}), which resolving it expands. */
 	public static boolean isSecretRef(String value) {
 		if (value == null) return false;
+		if (CapabilityChecker.isShortForm(value)) return value.contains("/s/");
 		String name = CapabilityChecker.canonicalResource(value, null);
 		return name.startsWith("s/") || (name.startsWith("did:") && name.contains("/s/"));
 	}
@@ -5819,8 +5922,9 @@ public class Engine {
 	 * vouch for: a {@code secret/use} grant bound to a url prefix covers the use
 	 * only when the destination falls under it.
 	 */
-	public String resolveSecret(String secretRef, RequestContext ctx, String destination) {
-		if (secretRef == null || ctx == null || ctx.getUserDID() == null) return null;
+	public String resolveSecret(String given, RequestContext ctx, String destination) {
+		if (given == null || ctx == null || ctx.getUserDID() == null) return null;
+		String secretRef = expandPath(Strings.create(given)).toString();
 		AString owner = secretOwner(secretRef, ctx.getUserDID());
 		if (owner == null) return null;
 		AString named = ownerOf(Strings.create(secretRef));
@@ -5843,7 +5947,7 @@ public class Engine {
 	 */
 	public boolean isOwnSecretRef(String secretRef, RequestContext ctx) {
 		if (secretRef == null || ctx == null || ctx.getUserDID() == null) return false;
-		AString owner = secretOwner(secretRef, ctx.getUserDID());
+		AString owner = secretOwner(expandPath(Strings.create(secretRef)).toString(), ctx.getUserDID());
 		return owner != null && isOwnSecret(owner, authorityFrame(ctx));
 	}
 
@@ -5855,7 +5959,7 @@ public class Engine {
 	 */
 	public boolean isOperatorSecretRef(String secretRef, RequestContext ctx) {
 		if (secretRef == null || ctx == null || ctx.getUserDID() == null) return false;
-		AString owner = secretOwner(secretRef, ctx.getUserDID());
+		AString owner = secretOwner(expandPath(Strings.create(secretRef)).toString(), ctx.getUserDID());
 		return owner != null && (isVenuePrincipal(owner) || isPublicPrincipal(owner));
 	}
 

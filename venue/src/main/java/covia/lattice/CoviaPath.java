@@ -48,7 +48,7 @@ public final class CoviaPath {
 	// ========== Making paths ==========
 
 	/** {@code path} without its leading slashes, which change nothing about what it names. */
-	static String relative(String path) {
+	public static String relative(String path) {
 		int start = 0;
 		while (start < path.length() && path.charAt(start) == '/') start++;
 		return path.substring(start);

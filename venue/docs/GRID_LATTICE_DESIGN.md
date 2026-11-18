@@ -70,7 +70,10 @@ them.
   `s`, `h`, `a`, and `x/<adapter>`, the adapter's view for that principal.
   The DID is everything up to the first `/`, exactly as written, so a
   `did:web` DID keeps its colons and `%3A`, and another spelling of a DID is
-  another DID.
+  another DID. A user of this venue may be written in short form, `u:bob` for
+  `<webDID>:u:bob`, which is expanded where the path arrives and is never a
+  namespace of the request's root
+  ([AUTHORITY.md](AUTHORITY.md#where-names-resolve)).
 - **Any other path starts at the request's root:** the request's user's
   namespaces, plus the context-rooted namespaces `n`, `c`, `t` and `v`, whose
   root the request's context supplies (§4.5).

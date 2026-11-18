@@ -201,7 +201,7 @@ public class CallableAdapter extends AAdapter {
 		AString gate = reference(input, Fields.GATE);
 		if (gate != null) requireResolves(ctx, gate);
 		ACell caps = RT.getIn(input, Fields.CAPS);
-		AVector<ACell> stored = (caps == null) ? Vectors.empty() : Caps.parse(caps);
+		AVector<ACell> stored = (caps == null) ? Vectors.empty() : engine.expandCaps(Caps.parse(caps));
 		requireGivable(ctx, stored);
 		AString description = description(input);
 
@@ -240,7 +240,7 @@ public class CallableAdapter extends AAdapter {
 		AString gate = reference(input, Fields.GATE);
 		if (gate != null) requireResolves(ctx, gate);
 		ACell caps = RT.getIn(input, Fields.CAPS);
-		AVector<ACell> stored = (caps == null) ? null : Caps.parse(caps);
+		AVector<ACell> stored = (caps == null) ? null : engine.expandCaps(Caps.parse(caps));
 		if (caps != null) requireGivable(ctx, stored);
 		AString description = description(input);
 
@@ -383,12 +383,13 @@ public class CallableAdapter extends AAdapter {
 	 */
 	private Callable named(RequestContext ctx, AString named) {
 		if (named == null) throw new InvalidInputException(CALLABLE_INVALID);
-		Named path = path(named, ctx.getUserDID());
+		AString value = engine.expandPath(named);
+		Named path = path(value, ctx.getUserDID());
 		// Anything else is a bare name for one of the caller's own
-		if (path == null) path = new Named(ctx.getUserDID(), named);
+		if (path == null) path = new Named(ctx.getUserDID(), value);
 		if (!CALLABLE_NAME.matcher(path.name().toString()).matches()) throw new InvalidInputException(CALLABLE_INVALID);
 		Callable callable = (path.owner() == null) ? null : callables().callable(path.owner(), path.name());
-		if (callable == null || callable.id() == null) throw new NotFoundException(NOT_CALLABLE.formatted(named), named.toString());
+		if (callable == null || callable.id() == null) throw new NotFoundException(NOT_CALLABLE.formatted(named), value.toString());
 		return callable;
 	}
 
@@ -496,7 +497,7 @@ public class CallableAdapter extends AAdapter {
 		if (callers == null || callers.isEmpty()) throw new InvalidInputException(NO_CALLERS);
 		AString caller = RT.ensureString(RT.getIn(input, Fields.CALLER));
 		for (ACell listed : callers) {
-			if (engine.actsFor(caller, RT.ensureString(listed))) return CVMBool.TRUE;
+			if (engine.actsFor(caller, engine.expandPrincipal(RT.ensureString(listed)))) return CVMBool.TRUE;
 		}
 		throw new AuthException(NOT_A_CALLER.formatted(caller));
 	}
@@ -532,13 +533,13 @@ public class CallableAdapter extends AAdapter {
 	}
 
 	/** An operation reference from {@code input}'s {@code field}, or null when it gives none. */
-	private static AString reference(ACell input, AString field) {
+	private AString reference(ACell input, AString field) {
 		ACell value = RT.getIn(input, field);
 		if (value == null) return null;
 		if (!(value instanceof AString reference) || reference.count() == 0) {
 			throw new InvalidInputException(REFERENCE_INVALID.formatted(field));
 		}
-		return reference;
+		return engine.expandPath(reference);
 	}
 
 	/** The description in {@code input}, or null when it gives none. */

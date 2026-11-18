@@ -510,7 +510,8 @@ public class CryptoAdapter extends AAdapter {
 	}
 
 	private ACell listKeys(RequestContext ctx, ACell input) {
-		ACell did = RT.getIn(input, Fields.DID);
+		ACell given = RT.getIn(input, Fields.DID);
+		ACell did = (given instanceof AString s) ? engine.expandPrincipal(s) : given;
 		if (did != null && !(did instanceof AString s && s.toString().startsWith("did:") && s.toString().indexOf('/') < 0)) {
 			throw new InvalidInputException(Fields.DID + REQUIRED_STRING);
 		}

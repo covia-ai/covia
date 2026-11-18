@@ -212,7 +212,8 @@ public class AssetAdapter extends AAdapter {
 	private static final long DEFAULT_MAX_SIZE = 1_000_000;
 
 	/** Canonical operation input is ref; older field names remain aliases. */
-	private static AString referenceArg(ACell input, AString... aliases) {
+	/** The reference an input names, as {@code ref} or a legacy alias, a principal in short form expanded ({@link Engine#expandPath}). */
+	private AString referenceArg(ACell input, AString... aliases) {
 		AString ref = RT.ensureString(RT.getIn(input, Fields.REF));
 		for (AString alias : aliases) {
 			AString value = RT.ensureString(RT.getIn(input, alias));
@@ -223,7 +224,7 @@ public class AssetAdapter extends AAdapter {
 			ref = value;
 		}
 		if (ref == null) throw new InvalidInputException("ref is required");
-		return ref;
+		return engine.expandPath(ref);
 	}
 
 	private static AMap<AString, ACell> withContentType(

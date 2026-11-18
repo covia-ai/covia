@@ -14,6 +14,7 @@ import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.exception.ConfigurationException;
+import covia.lattice.CapabilityChecker;
 import covia.venue.Engine;
 import covia.adapter.messaging.MessagingBotSpec;
 import covia.adapter.messaging.MessagingSettings;
@@ -29,8 +30,9 @@ import covia.adapter.messaging.MessagingSettings;
  *
  * @param name       Bot name (the config key); {@code [A-Za-z0-9_-]+}
  * @param tokenRef   Bot token: an {@code s/NAME} secret reference or a literal
- * @param userRef    DID the bot acts as (its owner's namespace), or
- *                   {@code "public"} for the venue's public principal
+ * @param userRef    DID the bot acts as (its owner's namespace), perhaps in
+ *                   short form ({@code u:bob}), or {@code "public"} for the
+ *                   venue's public principal
  * @param agent      Agent id routed to via {@code agent:chat}, or null
  * @param operation  Operation reference invoked per message, or null
  * @param reply      For an operation handler: null = default (the result
@@ -91,15 +93,15 @@ public record BotSpec(
 	}
 
 	/**
-	 * The DID the bot acts as. {@code "public"} resolves against the venue at
-	 * call time, because the public principal's DID is only known once the
-	 * adapter is installed.
+	 * The DID the bot acts as. {@code "public"} and a short form
+	 * ({@link Engine#expandPrincipal}) resolve against the venue at call time,
+	 * because the venue's DIDs are only known once the adapter is installed.
 	 *
 	 * @throws ConfigurationException when the spec names the public principal
 	 *         but the venue has public access disabled
 	 */
 	public AString userDID(Engine engine) {
-		if (!PUBLIC_USER.equals(userRef)) return Strings.create(userRef);
+		if (!PUBLIC_USER.equals(userRef)) return engine.expandPrincipal(Strings.create(userRef));
 		if (engine == null || !engine.config().isPublicAccess()) {
 			throw new ConfigurationException("bot '" + name + "' acts as \"public\" but public access "
 				+ "is disabled on this venue (auth.public.enabled) — name an explicit DID");
@@ -180,8 +182,8 @@ public record BotSpec(
 			throw new IllegalArgumentException(where + ".user is required: the DID the bot acts as "
 				+ "(the owner of the agent it routes to), or \"public\" for the venue's public principal");
 		}
-		if (!PUBLIC_USER.equals(userStr) && !userStr.startsWith("did:")) {
-			throw new IllegalArgumentException(where + ".user must be a DID or \"public\": " + userStr);
+		if (!PUBLIC_USER.equals(userStr) && !userStr.startsWith("did:") && !CapabilityChecker.isShortForm(userStr)) {
+			throw new IllegalArgumentException(where + ".user must be a DID, u:<user> for a user of this venue, or \"public\": " + userStr);
 		}
 
 		// Handler: exactly one of agent (conversation) or operation (any op fed the
