@@ -8,10 +8,10 @@ called it. This is a design, implemented in part: a callable's call enters its
 issuer's frame and calls nest, an agent's harness runs in its controller's
 frame, `admin/sudo` is a call into the user, a request names one acting
 principal, whose authority an agent's record decides at each check, state
-within one interaction
-belongs to the principal that opened it, and acts that need the user in
-person read the request's origin. What still works the old way is listed under
-[What it replaces](#what-it-replaces).
+within one interaction belongs to the principal that opened it, acts that
+need the user in person read the request's origin, and a configured Python
+function can be told its frame's `authority` and `caller`. What still works
+the old way is listed under [What it replaces](#what-it-replaces).
 
 ## The fields
 
@@ -27,6 +27,10 @@ person read the request's origin. What still works the old way is listed under
   `authority` alone. `caller` grants and refuses nothing, and `origin` decides
   only whether a user is present in person
   ([VENUE_AUTHORITY.md](VENUE_AUTHORITY.md#how-it-works-today), "In person").
+- A configured Python function whose settings ask is told its frame's
+  `authority` and `caller`, so one offered through a callable can keep each
+  caller's state apart, as a Convex actor keys state by `*caller*`
+  ([CONFIG.md](CONFIG.md#python-operations)).
 - `origin` is the principal an HTTP, MCP or A2A door authenticated, or the
   issuer of the access token the request presented, since the venue never
   knows who holds a token; or the principal in-process code made the request
@@ -263,4 +267,3 @@ rows are its cycle, which the venue starts.
 - The caller context a job keeps only when its adapter asks, in two shapes of
   kept authority, and a scheduled event's own shape of the same. A job's state
   is the context it runs in.
-- A configured Python function, which is not told who called it (#706).

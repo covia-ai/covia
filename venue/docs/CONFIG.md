@@ -811,8 +811,24 @@ code execution. Its design, and the redesign proposed for it, are in
 
 This installs `v/ops/python/health/score`. Each function receives one Python
 value converted from the Covia input and its return value is converted back to
-a Convex value. Script globals persist for the venue lifetime and are released
-on shutdown. Script paths may be absolute or relative to the venue process.
+a Convex value. A function whose settings add `"principals": true` receives a
+second value, a dict of the principals of the frame it runs in
+([AUTHORITY.md](AUTHORITY.md#the-fields)): `authority`, the principal whose
+authority it runs with, and `caller`, the authority that called into that
+frame, left out at the top level. Run through a callable, `authority` is the
+callable's issuer and `caller` whoever called it, so a script can keep state
+for each caller apart, keyed by the caller:
+
+```python
+visits = {}
+
+def main(value, principals):
+    caller = principals.get("caller")
+    visits[caller] = visits.get(caller, 0) + 1
+    return {"visits": visits[caller]}
+```
+
+Script globals persist for the venue lifetime and are released on shutdown. Script paths may be absolute or relative to the venue process.
 Scripts are loaded, running their top-level code, once, when the adapter first
 starts; a disabled adapter runs none. A script that is not a readable file is
 refused with the rest of the settings, and one CPython cannot load fails the

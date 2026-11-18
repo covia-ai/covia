@@ -22,7 +22,10 @@ The adapter does three jobs, and today its one feature, configured functions
    [CONFIG.md](../CONFIG.md#python-operations).
 2. **It keeps Python state.** A configured function's script is loaded once as
    the adapter starts, and its globals last until the adapter closes, shared by
-   every caller.
+   every caller. A function configured to take its principals is told the
+   authority it runs with and who called it, so a script that keeps state for
+   each caller keys it by the caller, as a Convex actor keys state by
+   `*caller*` ([CONFIG.md](../CONFIG.md#python-operations)).
 3. **It publishes an interface for calling Python.** Each configured function
    becomes an operation, `v/ops/python/<id>`, whose name and schemas come
    from its settings.
@@ -52,9 +55,6 @@ Each job is done once, by the part of the venue whose job it is.
   authority narrowed by caps fixed on it, and a gate decides who may call it.
   Offering a Python function is a callable whose caps cover running that code
   and function. Python publishes no operation per function.
-- **A function knows its caller.** The function is told the principal that
-  called it, so a script that keeps state for each caller keys it by that
-  principal, as a Convex actor keys state by `*caller*` (#706).
 - **Settings shrink to the runtime.** With nothing published from them,
   `adapters.python` names only the CPython `library`, and a change applies
   without a restart.
@@ -66,7 +66,8 @@ Open questions:
   loaded for each call.
 - **Input.** How a caller's input reaches the function when an operation
   asset's defaults name the code and function, since a caller's input is
-  merged over the defaults ([OPERATIONS.md](../OPERATIONS.md)).
+  merged over the defaults ([OPERATIONS.md](../OPERATIONS.md)), and how a
+  function asks to be told its principals once no setting names it.
 - **Moving over.** How operators replace configured functions with stored
   code and callables.
 - **A wrong `library`.** It can be a path or a name the system's loader

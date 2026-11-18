@@ -43,7 +43,10 @@ host paths or global names: the operator configures every function. Running
 one needs the operator's grant of `admin/execute/python` (the venue's
 `docs/CONFIG.md`, Python operations). To offer a function to other principals
 without a grant, the venue publishes it as a callable, which decides who may
-call it and with what caps (the venue's `docs/CALLABLES.md`). A config that
+call it and with what caps (the venue's `docs/CALLABLES.md`). A function
+configured with `"principals": true` is also told the authority it runs with
+and who called it, so one offered through a callable can keep each caller's
+state apart (the venue's `docs/CONFIG.md`, Python operations). A config that
 names `instances`, which earlier releases used for per-user copies of a
 template, is refused with a message saying so.
 
