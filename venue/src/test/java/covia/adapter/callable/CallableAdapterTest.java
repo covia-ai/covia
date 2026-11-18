@@ -29,6 +29,7 @@ import covia.grid.Job;
 import covia.grid.Operation;
 import covia.grid.Principals;
 import covia.grid.Status;
+import covia.lattice.Cap;
 import covia.lattice.Caps;
 import covia.venue.Engine;
 import covia.venue.JobManager;
@@ -612,6 +613,35 @@ public class CallableAdapterTest {
 		// Reading the path is unchanged: the owner's view of the callable
 		assertEquals(Strings.create("v/ops/covia/append"), RT.getIn(complete(run("v/ops/covia/read",
 			Maps.of(Fields.PATH, "x/callable/guestbook"), owner)), Fields.VALUE, Fields.OPERATION));
+	}
+
+	/** {@code audience} holding {@code callable/call} on {@code callable} by {@code issuer}'s grant, which {@code gate} rules on. */
+	private RequestContext gatedGrantee(Keyed issuer, String callable, String gate) {
+		Keyed audience = Keyed.generate();
+		AMap<AString, ACell> gated = Maps.of(Capability.WITH, callable, Capability.CAN, Abilities.CALLABLE_CALL,
+			Capability.NB, Maps.of(Cap.GATE, gate));
+		UCAN grant = UCAN.create(issuer.keys(), UCAN.fromDIDKey(audience.did()),
+			engine.currentTimestamp().longValue() / 1000 + 3600, Vectors.of(gated), Vectors.empty());
+		return RequestContext.of(audience.did()).withProofs(Vectors.of(grant.toMap()));
+	}
+
+	@Test
+	public void aGrantWhoseGateHasYetToRuleReachesACallablesPath() {
+		Keyed alice = Keyed.generate();
+		openGuestbook(alice.did());
+		complete(create(RequestContext.of(alice.did()), "private", "v/ops/covia/append", GUESTBOOK_CAPS, null));
+		String callable = alice.did() + "/x/callable/private";
+
+		// The path resolves for a grant whose gate cannot rule before the input, and the gate rules on the call
+		RequestContext allowed = gatedGrantee(alice, callable, "v/test/ops/allowgate");
+		complete(run(callable, append("w/guestbook", "by path"), allowed));
+		complete(call(allowed, callable, append("w/guestbook", "through call")));
+
+		// A gate that refuses the call leaves it refused as a callable the caller may not call is
+		RequestContext denied = gatedGrantee(alice, callable, "v/test/ops/denygate");
+		assertEquals(JobManager.CANNOT_RESOLVE_OPERATION + callable, failure(run(callable, append("w/guestbook", "x"), denied)));
+		assertEquals(CallableAdapter.NOT_CALLABLE.formatted(callable), failure(call(denied, callable, append("w/guestbook", "x"))));
+		assertEquals(Vectors.of("by path", "through call"), held(alice.did(), "w/guestbook"));
 	}
 
 	@Test

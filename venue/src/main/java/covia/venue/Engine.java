@@ -5541,6 +5541,18 @@ public class Engine {
 		return authorityCovers(ctx, resource, ability, null);
 	}
 
+	/**
+	 * Whether the request's authority may cover {@code (resource, ability)}:
+	 * as {@link #authorityCovers}, with each {@code nb.gate} caveat on the
+	 * grants it relies on counted as passing. It answers a question asked before
+	 * the invocation's input exists, which no gate can rule on yet, such as
+	 * whether a reference resolves for this request; the use itself is checked
+	 * with its gates run.
+	 */
+	public boolean authorityMayCover(RequestContext ctx, AString resource, AString ability) {
+		return ctx != null && authorityCovers(ctx.withGatesPending(), resource, ability);
+	}
+
 	/** As above for a use that sends a value to {@code destination}: a grant's
 	 *  {@code nb.url} caveat must cover it. */
 	public boolean authorityCovers(RequestContext ctx, AString resource, AString ability, AString destination) {

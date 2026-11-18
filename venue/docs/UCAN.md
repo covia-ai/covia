@@ -270,7 +270,10 @@ Semantics (see `CapabilityChecker.allows` and `JobManager.evaluateGate`):
   works for a presenter who cannot read it.
 - **Fail-closed, always**: gate op fails → denied with the gate's reason;
   gate unresolvable, times out (30s), no evaluator in scope, or an unknown /
-  malformed constraint → denied. Never fail-open.
+  malformed constraint → denied. Never fail-open. The one question asked
+  before an invocation's input exists, whether a callable's path resolves for
+  a request, counts a gated grant as covering; the call itself runs the gate
+  ([CALLABLES.md](CALLABLES.md#invoking-a-callable-by-its-path)).
 - **Execution authority**: the gate runs under a constrained derivative of
   the caller: the caller's ordinary ungated scope plus a synthetic right to
   invoke the gate itself, but no presented UCAN proofs. Nested gated grants

@@ -762,6 +762,20 @@ public class RequestContext {
 		return new RequestContext(authority, executionScope, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, cycle, sessionDelivery, carried, origin, caller, scopeSource);
 	}
 
+	/** A gate evaluator that runs no gate and counts each as passing ({@link #withGatesPending}). */
+	private static final CapabilityGate GATES_PENDING = (gateOp, opRef, input, caller) -> null;
+
+	/**
+	 * This context with every {@code nb.gate} caveat counted as passing, for a
+	 * check asked before the invocation's input exists, which no gate can rule
+	 * on yet ({@link Engine#authorityMayCover}). Within a gate's own evaluation
+	 * it is this context unchanged, so gated grants stay fail-closed there.
+	 */
+	RequestContext withGatesPending() {
+		if (gateEvaluation) return this;
+		return new RequestContext(authority, executionScope, rawUcans, op, cancellation, invocationInput, GATES_PENDING, gateEvaluation, job, cycle, sessionDelivery, carried, origin, caller, scopeSource);
+	}
+
 	/**
 	 * Builds the constrained context used to execute an {@code nb.gate}
 	 * operation. The gate may invoke its own definition and use the caller's

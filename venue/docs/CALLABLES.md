@@ -148,11 +148,13 @@ as `callable:call` does, however the definition was reached.
   its path does; a tool an agent or MCP token offers needs none, as for any
   tool.
 - **The call** is admitted as `callable:call` admits it (decision 5).
-  Resolving the path admits as much as is known before the input: a caller
-  that does not hold `callable/call` on the callable and may not pass its
-  gate finds no operation there, and is refused as for any reference that
-  resolves to nothing, so a private callable is not revealed. The gate runs on
-  the call's input once its job starts.
+  Resolving the path admits as much as is known before the input: the caller
+  finds an operation there if it holds `callable/call` on the callable,
+  counting a grant whose `nb.gate` has yet to rule, or may pass the
+  callable's gate. Any other caller finds none, and is refused as for any
+  reference that resolves to nothing, so a private callable is not revealed.
+  Each gate rules on the call once its job starts; a grant's gate sees the
+  invocation as made, the path with the target's input.
 - **Reading the path** (`covia:read`) still reads the callable's view: only
   resolving an operation reference resolves it as an operation.
 - **A callable whose target is another callable's path** declares that
@@ -293,7 +295,8 @@ it (decision 5). Nothing yet bounds how deep calls nest
    path invoked, to its record. A callable that does not exist, and one whose
    `callable/call` the caller does not hold and whose gate it may not pass, are
    refused alike, so a private callable is not revealed: as a missing callable
-   by `callable:call`, and as a missing operation by its path.
+   by `callable:call`, and as a missing operation by its path. A grant whose
+   gate refuses the call counts as not held.
 2. **Admit** the caller: its authority covers `callable/call` on the
    callable's resource, or its narrowing covers that and the gate, run with
    the callable's authority, succeeds. A gate's refusal is returned with its

@@ -355,12 +355,13 @@ public class CallableAdapter extends AAdapter {
 
 	/**
 	 * Whether {@code ctx} may reach {@code callable}, as far as can be known
-	 * before its input: it holds {@code callable/call} on it, or may pass its
-	 * gate ({@link #gated}). A call it reaches through the gate is still refused
-	 * if the gate refuses that call.
+	 * before its input: it holds {@code callable/call} on it, perhaps under a
+	 * grant whose gate has yet to rule ({@link Engine#authorityMayCover}), or
+	 * may pass the callable's own gate ({@link #gated}). A call it reaches
+	 * through a gate is still refused if that gate refuses the call.
 	 */
 	private boolean reaches(RequestContext ctx, Callable callable) {
-		return engine.authorityCovers(ctx, resource(callable.owner(), callable.name()), Abilities.CALLABLE_CALL)
+		return engine.authorityMayCover(ctx, resource(callable.owner(), callable.name()), Abilities.CALLABLE_CALL)
 			|| gated(ctx, callable);
 	}
 
