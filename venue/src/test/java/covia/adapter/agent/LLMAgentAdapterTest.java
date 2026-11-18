@@ -3082,6 +3082,19 @@ public class LLMAgentAdapterTest {
 			call(llmagent, "no_such_tool_xyz", Maps.empty()));
 	}
 
+	/**
+	 * A tool refused by a rule, whatever the caller holds (a
+	 * {@code ForbiddenException}, which is an {@code AuthException}), is an
+	 * ordinary tool failure: the model is given the refusal's reason, as for
+	 * any other refusal (ERRORS.md, AGENT_LOOP.md).
+	 */
+	@Test
+	public void testToolRefusedByARuleGivesTheModelItsReason() throws Exception {
+		FrameTools llmagent = frameTools(RequestContext.of(ALICE_DID));
+		assertEquals(Strings.create("Error: " + String.format(covia.adapter.CoviaAdapter.NOT_WRITABLE, "g")),
+			call(llmagent, "v/ops/covia/write", Maps.of("path", "g/probe", "value", 1)));
+	}
+
 	// ========== agent:context includes loads-derived exchanges (#418) ==========
 
 	@Test
