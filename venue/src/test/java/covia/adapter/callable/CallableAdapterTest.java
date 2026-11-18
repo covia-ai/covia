@@ -19,16 +19,19 @@ import convex.core.data.AVector;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
+import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
 import covia.adapter.token.AccessToken;
 import covia.api.Abilities;
 import covia.api.Fields;
+import covia.exception.NotFoundException;
 import covia.grid.Job;
 import covia.grid.Operation;
 import covia.grid.Principals;
 import covia.grid.Status;
 import covia.lattice.Caps;
 import covia.venue.Engine;
+import covia.venue.JobManager;
 import covia.venue.RequestContext;
 import covia.venue.Scheduler;
 import covia.venue.TestEngine;
@@ -534,6 +537,164 @@ public class CallableAdapterTest {
 		// An agent's callables go with it
 		complete(run("v/ops/agent/delete", Maps.of(Fields.AGENT_ID, "manager", Fields.REMOVE, true), owner));
 		assertNull(callables().callable(alice, Strings.create("managed")).record());
+	}
+
+	/** {@code owner}'s gate at {@code o/team-gate}, admitting {@code callers} and the agents acting for them. */
+	private void teamGate(AString owner, AString... callers) {
+		complete(run("v/ops/covia/write", Maps.of(Fields.PATH, "o/team-gate", Fields.VALUE, Maps.of(
+			Fields.NAME, "Team gate",
+			Fields.OPERATION, Maps.of(Fields.ADAPTER, "callable:gates/callers",
+				Fields.DEFAULT, Maps.of(Fields.CALLERS, Vectors.of((Object[]) callers))))), RequestContext.of(owner)));
+	}
+
+	/** Invoking {@code ref} as {@code ctx}, refused before any job is made. */
+	private NotFoundException unresolved(String ref, ACell input, RequestContext ctx) {
+		return assertThrows(NotFoundException.class, () -> engine.jobs().invokeOperation(ref, input, ctx));
+	}
+
+	/** The input schema operation {@code ref} declares, as {@code ctx} resolves it. */
+	private ACell inputSchema(String ref, RequestContext ctx) {
+		return RT.getIn(engine.jobs().resolveOperation(Strings.create(ref), ctx).meta(), Fields.OPERATION, Fields.INPUT);
+	}
+
+	@Test
+	public void aCallableIsInvokedAsAnOperationByItsPath(TestInfo info) {
+		AString alice = TestEngine.uniqueDID(info);
+		AString bob = TestEngine.uniqueDID("bob-" + info.getDisplayName());
+		AString carol = TestEngine.uniqueDID("carol-" + info.getDisplayName());
+		RequestContext owner = RequestContext.of(alice);
+		RequestContext bobs = RequestContext.of(bob);
+		openGuestbook(alice);
+		teamGate(alice, bob);
+		complete(create(owner, "guestbook", "v/ops/covia/append", GUESTBOOK_CAPS, "o/team-gate"));
+		String guestbook = alice + "/x/callable/guestbook";
+
+		// The job is Bob's and takes the target's input; the target writes in Alice's namespace
+		Job job = run(guestbook, append("w/guestbook", "by path"), bobs);
+		complete(job);
+		assertEquals(bob, job.getCaller());
+		assertEquals(bob, JobManager.accountOf(job), "in the invoker's account");
+		assertEquals(Strings.create(guestbook), job.getData().get(Fields.OP));
+		assertEquals(append("w/guestbook", "by path"), job.getData().get(Fields.INPUT), "the target's input, not wrapped");
+		assertEquals(Vectors.of("by path"), held(alice, "w/guestbook"));
+		assertNull(held(bob, "w/guestbook"));
+		assertEquals(inputSchema("v/ops/covia/append", bobs), inputSchema(guestbook, bobs), "its schema is the target's");
+
+		// The callable's caps bound it, and its gate decides on the call's input
+		failure(run(guestbook, append("w/private", "x"), bobs));
+		assertNull(held(alice, "w/private"));
+		String refused = failure(run(guestbook, append("w/guestbook", "from Carol"), RequestContext.of(carol)));
+		assertTrue(refused.contains(CallableAdapter.NOT_A_CALLER.formatted(carol)), refused);
+
+		// Wherever an operation is named: grid:run, an orchestration's step, strict or not
+		complete(run("v/ops/grid/run", Maps.of(Fields.OPERATION, guestbook, Fields.INPUT,
+			append("w/guestbook", "through grid:run")), bobs));
+		for (boolean strict : new boolean[] {false, true}) {
+			AMap<AString, ACell> step = Maps.of("op", guestbook, Fields.INPUT, Maps.of(
+				Fields.PATH, Vectors.of("const", "w/guestbook"), Fields.VALUE, Vectors.of("const", "from a step")));
+			complete(run("v/ops/covia/write", Maps.of(Fields.PATH, "o/sign", Fields.VALUE, Maps.of(
+				Fields.NAME, "Sign", Fields.OPERATION, Maps.of(Fields.ADAPTER, "orchestrator",
+					"steps", Vectors.of(strict ? step.assoc(Strings.create("strict"), CVMBool.TRUE) : step),
+					"result", Vectors.of(0L)))), bobs));
+			complete(run("o/sign", Maps.empty(), bobs));
+		}
+
+		// The owner invokes its own by the bare path, which resolves in its namespace
+		complete(run("x/callable/guestbook", append("w/guestbook", "from Alice"), owner));
+		assertEquals(Vectors.of("by path", "through grid:run", "from a step", "from a step", "from Alice"), held(alice, "w/guestbook"));
+
+		// Reading the path is unchanged: the owner's view of the callable
+		assertEquals(Strings.create("v/ops/covia/append"), RT.getIn(complete(run("v/ops/covia/read",
+			Maps.of(Fields.PATH, "x/callable/guestbook"), owner)), Fields.VALUE, Fields.OPERATION));
+	}
+
+	@Test
+	public void aCallerNotAdmittedIsRefusedAsIfTheCallableDidNotExist(TestInfo info) {
+		AString alice = TestEngine.uniqueDID(info);
+		AString bob = TestEngine.uniqueDID("bob-" + info.getDisplayName());
+		RequestContext owner = RequestContext.of(alice);
+		RequestContext bobs = RequestContext.of(bob);
+		openGuestbook(alice);
+		complete(create(owner, "private", "v/ops/covia/append", GUESTBOOK_CAPS, null));
+		complete(create(owner, "open", "v/ops/covia/append", GUESTBOOK_CAPS, "v/ops/callable/gates/anyone"));
+		String hidden = alice + "/x/callable/private";
+		String missing = alice + "/x/callable/missing";
+		String open = alice + "/x/callable/open";
+		ACell signing = append("w/guestbook", "x");
+
+		// A callable without a gate that the caller may not call is refused as a missing operation is
+		assertEquals(JobManager.CANNOT_RESOLVE_OPERATION + hidden, unresolved(hidden, signing, bobs).getMessage());
+		assertEquals(JobManager.CANNOT_RESOLVE_OPERATION + missing, unresolved(missing, signing, bobs).getMessage());
+		assertEquals(JobManager.CANNOT_RESOLVE_OPERATION + "x/callable/private",
+			unresolved("x/callable/private", signing, bobs).getMessage(), "the bare path is in the caller's namespace");
+		complete(run(hidden, append("w/guestbook", "from Alice"), owner));
+
+		// A gate admits a capped agent only as far as its caps cover calling: otherwise there is no such operation
+		ACell invoke = cap("v/ops/", Abilities.INVOKE);
+		RequestContext narrow = controlled(bob, "narrow", bob, Vectors.of(invoke, cap(open, Abilities.INVOKE)));
+		assertEquals(JobManager.CANNOT_RESOLVE_OPERATION + open, unresolved(open, signing, narrow).getMessage());
+
+		// Invoking the path needs invoke on it, as invoking any operation by its path does
+		RequestContext caller = controlled(bob, "caller", bob, Vectors.of(invoke, cap(open, Abilities.CALLABLE_CALL)));
+		failure(run(open, append("w/guestbook", "without invoke"), caller));
+		RequestContext invoker = controlled(bob, "invoker", bob,
+			Vectors.of(invoke, cap(open, Abilities.CALLABLE_CALL), cap(open, Abilities.INVOKE)));
+		complete(run(open, append("w/guestbook", "from Bob's agent"), invoker));
+		assertEquals(Vectors.of("from Alice", "from Bob's agent"), held(alice, "w/guestbook"));
+	}
+
+	@Test
+	public void aCallablesPathMayNameAnotherAndCallablesThatLeadBackNameNoOperation(TestInfo info) {
+		AString alice = TestEngine.uniqueDID(info);
+		AString bob = TestEngine.uniqueDID("bob-" + info.getDisplayName());
+		RequestContext owner = RequestContext.of(alice);
+		openGuestbook(alice);
+		complete(create(owner, "guestbook", "v/ops/covia/append", GUESTBOOK_CAPS, null));
+		complete(create(owner, "front", "x/callable/guestbook", Vectors.of(cap("x/callable/guestbook", Abilities.CALLABLE_CALL)),
+			"v/ops/callable/gates/anyone"));
+		String front = alice + "/x/callable/front";
+
+		// One callable's path names another, whose call runs within the outer one, with the inner target's schema
+		complete(run(front, append("w/guestbook", "through the front"), RequestContext.of(bob)));
+		assertEquals(Vectors.of("through the front"), held(alice, "w/guestbook"));
+		assertEquals(inputSchema("v/ops/covia/append", owner), inputSchema(front, RequestContext.of(bob)));
+
+		// A callable whose target leads back to it names no operation, and is refused as one that does not resolve
+		complete(run("v/ops/callable/update", Maps.of(Fields.NAME, "guestbook", Fields.OPERATION, "x/callable/front"), owner));
+		assertEquals(JobManager.CANNOT_RESOLVE_OPERATION + front, unresolved(front, append("w/guestbook", "x"), RequestContext.of(bob)).getMessage());
+		assertEquals(Vectors.of("through the front"), held(alice, "w/guestbook"));
+	}
+
+	@Test
+	public void anAgentCallsACallableByItsPathAsATool(TestInfo info) {
+		AString alice = TestEngine.uniqueDID(info);
+		AString bob = TestEngine.uniqueDID("bob-" + info.getDisplayName());
+		RequestContext bobs = RequestContext.of(bob);
+		openGuestbook(alice);
+		teamGate(alice, bob);
+		complete(create(RequestContext.of(alice), "guestbook", "v/ops/covia/append", GUESTBOOK_CAPS, "o/team-gate"));
+		String guestbook = alice + "/x/callable/guestbook";
+
+		// Bob's agent is offered the callable as a tool named after it, taking the target's input
+		AMap<AString, ACell> config = Maps.of(Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/test/ops/llm",
+			Fields.TOOLS, Vectors.of(guestbook));
+		complete(run("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "signer", Fields.CONFIG, TestEngine.unrestricted(config)), bobs));
+		ACell session = RT.getIn(complete(run("v/ops/agent/chat", Maps.of(Fields.AGENT_ID, "signer", Fields.MESSAGE, "hello"), bobs)),
+			Fields.SESSION_ID);
+		AMap<AString, ACell> toolCall = Maps.of("id", "sign", "name", "guestbook",
+			"arguments", append("w/guestbook", "from Bob's agent"));
+		AMap<AString, ACell> step = RT.ensureMap(complete(run("v/ops/agent/step", Maps.of(Fields.AGENT_ID, "signer",
+			Fields.SESSION_ID, session, "assistant", Maps.of("toolCalls", Vectors.of(toolCall))), bobs)));
+
+		ACell call = RT.ensureVector(step.get(Fields.CALLS)).get(0);
+		assertFalse(String.valueOf(RT.getIn(call, Fields.RESULT)).startsWith("Error"), call::toString);
+		assertEquals(Vectors.of("from Bob's agent"), held(alice, "w/guestbook"));
+		ACell offered = null;
+		for (ACell tool : RT.ensureVector(RT.getIn(step, covia.adapter.agent.AbstractLLMAdapter.K_NEXT, Fields.TOOLS))) {
+			if ("guestbook".equals(String.valueOf(RT.getIn(tool, Fields.NAME)))) offered = tool;
+		}
+		assertNotNull(offered, step::toString);
+		assertEquals(inputSchema("v/ops/covia/append", bobs), RT.getIn(offered, covia.adapter.agent.AbstractLLMAdapter.K_PARAMETERS));
 	}
 
 	private static String unique(String prefix, TestInfo info) {

@@ -332,7 +332,8 @@ public final class ToolPalette {
 
 			Asset asset;
 			try {
-				requireToolMetadataRead(engine, ctx, operation);
+				// Checked as invoking it reads it: a definition the agent must be
+				// able to read, or a callable it must be able to call
 				asset = engine.resolveAsset(operation, ctx);
 			} catch (covia.exception.RemoteFetchException e) {
 				log.warn("Config tool: skipping '{}' — remote fetch failed: {}", operation, e.getMessage());
@@ -383,7 +384,6 @@ public final class ToolPalette {
 	public static String localToolName(Engine engine, RequestContext ctx, ACell entry) {
 		AString[] parsed = parseConfigToolEntry(entry);
 		if (parsed == null) return null;
-		requireToolMetadataRead(engine, ctx, parsed[0]);
 		Asset asset = engine.resolveLocalAsset(parsed[0], ctx);
 		return (asset != null) ? boundName(parsed, asset) : null;
 	}
@@ -507,15 +507,6 @@ public final class ToolPalette {
 			if (operation.equals(u.get(Fields.OPERATION))) return;
 		}
 		unavailable.add(Maps.of(Fields.OPERATION, operation, Fields.REASON, Strings.create(reason)));
-	}
-
-	/** Private user-scoped operation definitions are data: the agent must be
-	 *  able to read their metadata as well as invoke them, as
-	 *  {@link Engine#resolvePath} reads them. Venue catalog entries are read by
-	 *  every principal; remote DID references apply the publishing venue's
-	 *  policy during fetch. */
-	private static void requireToolMetadataRead(Engine engine, RequestContext ctx, AString operation) {
-		engine.requireReadable(ctx, operation);
 	}
 
 	private static String safeMessage(Throwable error) {

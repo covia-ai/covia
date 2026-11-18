@@ -36,6 +36,8 @@ public class Fields {
 	/** Whether an operation may use internal/result-only execution. An explicit
 	 * false forces a durable Job even when the caller uses run/invokeInternal. */
 	public static final StringShort INTERNAL = Strings.intern("internal");
+	/** The fields of an operation's input and output that its job records hide. */
+	public static final StringShort SECRET_FIELDS = Strings.intern("secretFields");
 	public static final StringShort DEFAULT = Strings.intern("default");
 	public static final StringShort MESSAGE = Strings.intern("message");
 	/** What a running Job's work is doing now: {@code {message, data?}} (see {@code Job.progress}). */
