@@ -344,7 +344,7 @@ class LocalSpeechEngineTest {
 					RequestContext.ofAgent(alice, Strings.create("helper")))) {
 				assertThrows(NotFoundException.class, () -> adapter.hear(other, hear), "another principal finds none");
 			}
-			assertNotNull(adapter.hear(RequestContext.of(alice, alice, Vectors.empty()), hear),
+			assertNotNull(adapter.hear(RequestContext.of(alice).withCaps(Vectors.empty()), hear),
 				"a request with the opener's authority reaches it, narrowed to nothing as a token's may be");
 			adapter.hear(RequestContext.of(alice), Maps.of("id", id, "end", CVMBool.TRUE));
 			assertThrows(NotFoundException.class, () -> adapter.hear(RequestContext.of(alice), hear), "an ended dictation is gone");

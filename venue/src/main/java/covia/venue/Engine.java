@@ -4804,12 +4804,12 @@ public class Engine {
 		if (isPublicPrincipal(principal)) {
 			if (!auth.isPublicAccessEnabled()) throw new AuthException(PUBLIC_ACCESS_OFF);
 			AString publicDID = publicPrincipal();
-			return RequestContext.unattended(publicDID, null, auth.getPublicScope(publicDID));
+			return RequestContext.unattended(publicDID, auth.getPublicScope(publicDID));
 		}
 		if (covia.grid.Principals.isAgentDID(principal)) {
-			return RequestContext.unattended(principal, null, Vectors.empty());
+			return RequestContext.unattended(principal, Vectors.empty());
 		}
-		return RequestContext.unattended(principal, null, null);
+		return RequestContext.unattended(principal, null);
 	}
 
 	/**
@@ -5393,7 +5393,7 @@ public class Engine {
 	private RequestContext callFrame(AMap<AString, ACell> reference) {
 		AString owner = RT.ensureString(reference.get(Fields.OWNER));
 		Callable callable = resolveCallable(reference);
-		RequestContext issuer = (callable == null) ? RequestContext.unattended(owner, owner, Vectors.empty())
+		RequestContext issuer = (callable == null) ? RequestContext.unattended(owner, Vectors.empty())
 			: context(owner, callable.issuer());
 		return issuer.withCallable(reference, resource -> {
 			Callable current = resolveCallable(reference);

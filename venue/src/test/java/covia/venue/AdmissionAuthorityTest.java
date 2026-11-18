@@ -134,7 +134,7 @@ class AdmissionAuthorityTest {
 
 		// The public principal's scope is its whole authority, not caps that narrow it
 		AString anonymous = engine.publicPrincipal();
-		RequestContext readOnly = RequestContext.of(anonymous, null, Vectors.of(cap(anonymous + "/", Capability.CRUD_READ)));
+		RequestContext readOnly = RequestContext.of(anonymous).withCaps(Vectors.of(cap(anonymous + "/", Capability.CRUD_READ)));
 		assertTrue(engine.crossUserAllows(readOnly, desk, REQUEST), "anonymous callers keep what anyone admits them to");
 	}
 

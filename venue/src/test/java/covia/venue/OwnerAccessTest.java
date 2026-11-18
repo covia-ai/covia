@@ -58,7 +58,7 @@ public class OwnerAccessTest {
 		bob = UCAN.toDIDKey(bobKP.getAccountKey());
 		ALICE = RequestContext.of(alice);
 		BOB = RequestContext.of(bob);
-		PUBLIC = RequestContext.of(Strings.create(engine.getDIDString() + ":public"), null, Vectors.empty());
+		PUBLIC = RequestContext.of(Strings.create(engine.getDIDString() + ":public")).withCaps(Vectors.empty());
 
 		User user = engine.getVenueState().users().ensure(alice);
 		user.workspace().createPath(CoviaPath.parse("shared"));

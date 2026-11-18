@@ -86,7 +86,7 @@ public class RequestContextAuthorityTest {
 		Blob claim = Blob.fromHex("def0");
 		RequestContext original = RequestContext.ofAgent(DELEGATE, agent)
 			.withSessionId(session).withJobId(job).withTaskId(task, 7L).withClaim(claim);
-		RequestContext delegated = original.actingAs(RequestContext.of(DELEGATE, ALICE, Vectors.empty()));
+		RequestContext delegated = original.actingAs(RequestContext.of(ALICE).withCaps(Vectors.empty()));
 		assertSame(original.getExecutionScope(), delegated.getExecutionScope());
 		assertEquals(new RequestContext.ExecutionScope(DELEGATE, agent, job, session, task, 7L, claim),
 			delegated.getExecutionScope());

@@ -147,9 +147,9 @@ public class PrincipalsTest {
 		assertFalse(named.isSubPrincipal());
 		assertNotEquals(Authority.ofAgent(ALICE_WEB, CAROL), named);
 		assertEquals(agent, Authority.of(agent, convex.core.data.Vectors.empty()).getUserDID());
-		// The relationship is stated, never parsed.
-		assertEquals(Authority.ofAgent(ALICE_WEB, CAROL), Authority.of(agent, ALICE_WEB, null));
-		assertEquals(named, Authority.of(agent, agent, null));
+		// The relationship is stated by the venue that runs the agent, never parsed.
+		assertEquals(ALICE_WEB, Authority.ofAgent(ALICE_WEB, CAROL).getUserDID());
+		assertEquals(agent, Authority.ofAgent(ALICE_WEB, CAROL).getDID());
 	}
 
 	@Test

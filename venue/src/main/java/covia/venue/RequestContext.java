@@ -310,13 +310,13 @@ public class RequestContext {
 	static final RouteText NOT_SIGNED_IN = RouteText.of("not signed in");
 
 	/**
-	 * A context the venue makes for {@code callerDID} itself, in the namespace
-	 * of {@code userDID} under {@code caps}: no origin, since nobody is present,
-	 * and no route ({@link Engine#context(AString)}).
+	 * A context the venue makes for {@code callerDID} itself, in its own
+	 * namespace under {@code caps}: no origin, since nobody is present, and no
+	 * route ({@link Engine#context(AString)}).
 	 */
-	static RequestContext unattended(AString callerDID, AString userDID, AVector<ACell> caps) {
+	static RequestContext unattended(AString callerDID, AVector<ACell> caps) {
 		if (callerDID == null) return ANONYMOUS;
-		return new RequestContext(Authority.of(callerDID, userDID, caps), null);
+		return new RequestContext(Authority.of(callerDID, caps), null);
 	}
 
 	private RequestContext(Authority authority, ExecutionScope executionScope,
@@ -397,24 +397,6 @@ public class RequestContext {
 	public static RequestContext of(AString callerDID) {
 		if (callerDID == null) return ANONYMOUS;
 		return new RequestContext(Authority.of(callerDID), callerDID);
-	}
-
-	/**
-	 * Creates a RequestContext for {@code callerDID} acting in the namespace of
-	 * {@code userDID} under the given capability scope
-	 * ({@link Authority#of(AString, AString, AVector)}). This rebuilds a stored
-	 * context: one that persists records both DIDs, since neither can be
-	 * recovered from the other. Deciding what a principal may do now is
-	 * {@link covia.venue.Engine#context(AString, AString)}.
-	 *
-	 * @param callerDID who acted, or null for anonymous; it is the context's
-	 *        origin, as in {@link #of(AString)}
-	 * @param userDID the namespace it acted in; null or {@code callerDID} for its own
-	 * @param caps the scope, or null for unrestricted
-	 */
-	public static RequestContext of(AString callerDID, AString userDID, AVector<ACell> caps) {
-		if (callerDID == null) return ANONYMOUS;
-		return new RequestContext(Authority.of(callerDID, userDID, caps), callerDID);
 	}
 
 	/**
