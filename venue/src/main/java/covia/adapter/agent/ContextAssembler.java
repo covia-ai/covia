@@ -135,7 +135,8 @@ public final class ContextAssembler {
 	private static final AString K_RENDERED_TOOL_INDEX = Strings.intern("toolIndex");
 	private static final AString K_RENDERED_BASE_START = Strings.intern("baseToolStart");
 	private static final AString K_RENDERED_BASE_END = Strings.intern("baseToolEnd");
-	private static final long RENDER_VERSION = 1L;
+	// Version 2 moves the session handle out of previously retained heads.
+	private static final long RENDER_VERSION = 2L;
 
 	/** Canonical watched-context candidate fields. The active frame persists
 	 * the same value under {@code observations}; see {@link GoalTreeContext}. */
@@ -695,12 +696,11 @@ public final class ContextAssembler {
 		AString identity = configValue(config, K_SYSTEM_PROMPT);
 		StringBuilder sb = new StringBuilder(identity != null ? identity.toString() : DEFAULT_IDENTITY_PROMPT);
 
-		// Stable identifiers only: the head is the cached prefix, so nothing
-		// that changes within a session belongs here.
+		// Shared across equivalent sessions: session handles belong in the tail,
+		// otherwise every new conversation invalidates the instruction prefix.
 		sb.append("\n\nVenue: ").append(spec.engine().getName());
 		AString model = configValue(config, K_MODEL);
 		if (model != null) sb.append(". Model: ").append(model);
-		if (spec.sessionId() != null) sb.append(". Session: ").append(spec.sessionId());
 		sb.append('.');
 
 		// Capabilities bound what the agent can DO; with no tools there is
@@ -1169,7 +1169,7 @@ public final class ContextAssembler {
 
 	/**
 	 * The tail's notices as one system message: the budget warning (only under
-	 * pressure), a runtime notice, the date, and the configured tools that did
+	 * pressure), a runtime notice, the session handle, the date, and the configured tools that did
 	 * not resolve. Re-rendered every inference, so it busts only itself.
 	 */
 	static AMap<AString, ACell> notices(Spec spec, long used) {
@@ -1186,6 +1186,7 @@ public final class ContextAssembler {
 			parts.add(Labels.render(spec.labels(), Labels.Kind.BUDGET, text));
 		}
 		if (spec.notice() != null) parts.add(spec.notice());
+		if (spec.sessionId() != null) parts.add("Session: " + spec.sessionId() + ".");
 		if (spec.task() == null && ToolPalette.names(spec.tools()).stream().anyMatch(TaskTools.NAMES::contains)) {
 			parts.add(NO_TASK_NOTICE);
 		}
