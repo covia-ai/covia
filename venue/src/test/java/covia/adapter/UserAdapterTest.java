@@ -355,7 +355,7 @@ class UserAdapterTest {
 		assertEquals(owner, captured.getAuthorityDID(), "the user acts");
 		assertEquals(owner, captured.getUserDID());
 		assertEquals(delegate, captured.getCaller(), "called by the delegate");
-		assertEquals(delegate, captured.getAuthenticatedDID(), "who is still the one present");
+		assertEquals(delegate, captured.getOrigin(), "who is still the one present");
 		assertNull(captured.getCaps(), "with the user's whole authority");
 		assertNull(captured.getProofs(), "which the delegate's grants neither bound nor add to");
 	}

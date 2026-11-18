@@ -163,9 +163,9 @@ public class AuditLogTest {
 		audit.event(Audit.SECRET_WRITE, RequestContext.of(alice), Audit.K_NAME, "KEY");
 		List<Map<String, String>> events = events(Audit.LOGGER, venue);
 		assertEquals(alice.toString(), events.get(0).get(Audit.K_DID));
-		assertEquals(bob.toString(), events.get(0).get(Audit.K_AUTHENTICATED));
+		assertEquals(bob.toString(), events.get(0).get(Audit.K_ORIGIN));
 		assertEquals(alice.toString(), events.get(1).get(Audit.K_DID));
-		assertFalse(events.get(1).containsKey(Audit.K_AUTHENTICATED), "the user in person needs no second name");
+		assertFalse(events.get(1).containsKey(Audit.K_ORIGIN), "the user in person needs no second name");
 	}
 
 	@Test

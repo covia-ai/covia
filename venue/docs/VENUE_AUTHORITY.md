@@ -66,20 +66,14 @@ For the division with capability enforcement and authentication, see
   scheduled event (`Scheduler.schedule`) keep the grants presented to them, but
   not the scope. Agents are unaffected, because their scope and controller are
   read again from their record ([UCAN.md](./UCAN.md) §5.4).
-- **In person.** A request carries the principal it authenticated as where it
-  entered the venue: the caller the HTTP, MCP or A2A door authenticated, or
-  the issuer of the access token it presented; or the principal an in-process
-  caller made its context for (`RequestContext.of`, `Engine.requestContext`).
-  Every context made for the request keeps it, a callable's call and
-  `admin/sudo` included. A context the venue makes for a principal itself
-  (`Engine.context`) carries none: a message a bot brings and what the bot
-  runs for it, whose channel record is attribution, not evidence
-  ([AUTH.md](AUTH.md)); the venue's own work; and work a job or a scheduled
-  event carries on later. Neither does a gate's evaluation. An act
-  that needs the user present passes only when the principal whose authority
-  applies is a user in its own account and the request authenticated as that
-  user (`Engine.inPersonDenial`): answering approval requests, `secret:extract`,
-  `user:export` and `user:clone` from one's own account, minting one's own
+- **In person.** An act that needs the user present passes only when the
+  principal whose authority applies is a user in its own account and that
+  user is the request's `origin`, the principal it authenticated as where it
+  entered the venue ([AUTHORITY.md](AUTHORITY.md#the-fields))
+  (`Engine.inPersonDenial`). So an agent, the public principal, a callable's
+  call, a delegate under `admin/sudo`, a message a bot brings and work carried
+  on from what a job or an event kept are each refused. The acts: answering
+  approval requests, `secret:extract`, `user:export` and `user:clone` from one's own account, minting one's own
   identity token (`auth:identity-token`), making, rotating or reading the
   bearer of an access token one issues ([ACCESS_TOKENS.md](ACCESS_TOKENS.md)),
   and reading or changing one's own sign-in keys.

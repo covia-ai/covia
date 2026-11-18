@@ -165,7 +165,7 @@ class KeptCallerContextTest {
 			assertEquals(owner, JobManager.accountOf(kept), "in the user's own account");
 			RequestContext resumed = engine.jobs().callerContext(kept);
 			assertEquals(owner, resumed.getAuthorityDID());
-			assertNull(resumed.getAuthenticatedDID(), "nobody is present in work carried on");
+			assertNull(resumed.getOrigin(), "nobody is present in work carried on");
 			assertTrue(engine.authorityCovers(resumed, Strings.create("w/other"), Capability.CRUD_WRITE),
 				"with the user's whole authority");
 		} finally {

@@ -60,7 +60,7 @@ public final class Audit {
 	public static final String K_VENUE = "venue";
 	public static final String K_DID = "did";
 	/** The principal a request authenticated as, where it is not {@link #K_DID}: a delegate under admin/sudo. */
-	public static final String K_AUTHENTICATED = "authenticated";
+	public static final String K_ORIGIN = "origin";
 	public static final String K_IDENTITY = "identity";
 	public static final String K_IP = "ip";
 	public static final String K_REASON = "reason";
@@ -102,20 +102,19 @@ public final class Audit {
 
 	/**
 	 * Record one event of request {@code ctx}: the principal it acts as
-	 * ({@link #K_DID}) and, where that is not who it authenticated as, the
-	 * principal that did ({@link #K_AUTHENTICATED}), so a delegate acting as a
-	 * user stays visible. {@code keyValues} as for {@link #event(String, Object...)}.
+	 * ({@link #K_DID}) and, where that is not the request's origin, the origin
+	 * ({@link #K_ORIGIN}), so a delegate acting as a user stays visible. {@code keyValues} as for {@link #event(String, Object...)}.
 	 */
 	public void event(String event, RequestContext ctx, Object... keyValues) {
 		if (!enabled) return;
 		AString did = (ctx == null) ? null : ctx.getAuthorityDID();
-		AString authenticated = (ctx == null) ? null : ctx.getAuthenticatedDID();
-		if (authenticated != null && authenticated.equals(did)) authenticated = null;
+		AString origin = (ctx == null) ? null : ctx.getOrigin();
+		if (origin != null && origin.equals(did)) origin = null;
 		Object[] all = new Object[keyValues.length + 4];
 		all[0] = K_DID;
 		all[1] = did;
-		all[2] = K_AUTHENTICATED;
-		all[3] = authenticated;
+		all[2] = K_ORIGIN;
+		all[3] = origin;
 		System.arraycopy(keyValues, 0, all, 4, keyValues.length);
 		event(event, all);
 	}

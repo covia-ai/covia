@@ -687,8 +687,9 @@ with reduced authority:
 
 The explicit `user:sudo` operation is the deliberate boundary: a delegate does
 not carry its own authority, nor the grants it presents, into the call. Within
-it the request is the target user's, and only how it authenticated still
-names the delegate, so acts that need the user in person refuse it.
+it the request is the target user's: its `caller` is the delegate and its
+`origin` is unchanged ([AUTHORITY.md](AUTHORITY.md#the-fields)), so acts that
+need the user in person refuse it.
 
 ### 5.2 Cross-User Access
 

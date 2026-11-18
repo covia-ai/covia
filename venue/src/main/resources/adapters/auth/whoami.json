@@ -23,9 +23,9 @@
           "type": "boolean",
           "description": "True if the request is from an internal venue caller (bypasses auth)"
         },
-        "authenticatedAs": {
+        "origin": {
           "type": "string",
-          "description": "The DID the request authenticated as, when it is not the caller: a delegate acting as the caller under admin/sudo, or who called a callable"
+          "description": "The DID the request authenticated as where it entered the venue, when it is not the caller: a delegate acting as the caller under admin/sudo, or who called a callable"
         }
       }
     }

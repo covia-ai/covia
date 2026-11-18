@@ -307,7 +307,7 @@ public class CallableAdapterTest {
 		RequestContext resumed = engine.context(alice, alice, null, kept);
 		assertEquals(alice, resumed.getAuthorityDID(), "it resumes in the issuer's frame");
 		assertEquals(bob, resumed.getCaller(), "called by the invoker");
-		assertNull(resumed.getAuthenticatedDID(), "with nobody present");
+		assertNull(resumed.getOrigin(), "with nobody present");
 		assertTrue(mayWrite(resumed, alice, "w/guestbook"));
 		assertFalse(mayWrite(resumed, alice, "w/private"));
 
@@ -449,7 +449,7 @@ public class CallableAdapterTest {
 		assertEquals(carol, outerFrame.getCaller());
 		assertEquals(alice, innerFrame.getCaller());
 		assertEquals(reference(alice, "inner"), innerFrame.getCallable());
-		assertEquals(carol, innerFrame.getAuthenticatedDID(), "who is present goes on through both");
+		assertEquals(carol, innerFrame.getOrigin(), "who is present goes on through both");
 		// An agent's tool call acts as the agent (Engine.stepContext), so the agent is the call's caller
 		AString bobsAgent = covia.grid.Principals.agentDID(bob, Strings.create("helper"));
 		assertEquals(bobsAgent, engine.callContext(engine.context(bob, bobsAgent), reference(alice, "outer")).getCaller());

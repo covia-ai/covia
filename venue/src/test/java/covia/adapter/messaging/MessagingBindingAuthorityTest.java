@@ -83,7 +83,7 @@ class MessagingBindingAuthorityTest {
 		adapter.create(owner);
 		RequestContext acting = adapter.bindingContext(adapter.runner(owner, "runtime"));
 		assertTrue(engine.holdsAuthorityOf(acting, owner), "the bot holds all of its user's authority");
-		assertNull(acting.getAuthenticatedDID(), "but nobody authenticated as the user");
+		assertNull(acting.getOrigin(), "but nobody authenticated as the user");
 		assertEquals(Engine.NOT_IN_PERSON, engine.inPersonDenial(acting));
 
 		Job asked = engine.jobs().invokeOperation("v/ops/hitl/request",

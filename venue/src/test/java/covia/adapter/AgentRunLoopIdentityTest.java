@@ -107,7 +107,7 @@ public class AgentRunLoopIdentityTest {
 		assertEquals(ALICE_DID, seen.getUserDID());
 		assertSame(seen, engine.authorityFrame(seen), "with its own authority");
 		assertNull(seen.getCaller(), "a cycle has no caller");
-		assertNull(seen.getAuthenticatedDID(), "nobody is present in a cycle");
+		assertNull(seen.getOrigin(), "nobody is present in a cycle");
 		assertEquals(new RequestContext.ExecutionScope(ALICE_DID, agentId, null, seen.getSessionId(), null, -1L,
 			seen.getClaim()), seen.getExecutionScope(), "driving the agent's execution");
 		assertNull(seen.getProofs(), "run context must carry no proofs");

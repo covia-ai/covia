@@ -106,7 +106,7 @@ public class AuthAdapter extends AAdapter implements AuthenticationMethods, Venu
 
 	private static final AString K_AUTHENTICATED = Strings.intern("authenticated");
 	private static final AString K_INTERNAL = Strings.intern("internal");
-	private static final AString K_AUTHENTICATED_AS = Strings.intern("authenticatedAs");
+	private static final AString K_ORIGIN = Strings.intern("origin");
 
 	@Override
 	public String getName() {
@@ -153,8 +153,8 @@ public class AuthAdapter extends AAdapter implements AuthenticationMethods, Venu
 				K_INTERNAL, internal
 			);
 			// Who is present, where that is not the caller: a delegate under admin/sudo, or a callable's invoker
-			AString present = (ctx != null) ? ctx.getAuthenticatedDID() : null;
-			if (present != null && !present.equals(caller)) out = out.assoc(K_AUTHENTICATED_AS, present);
+			AString origin = (ctx != null) ? ctx.getOrigin() : null;
+			if (origin != null && !origin.equals(caller)) out = out.assoc(K_ORIGIN, origin);
 			return CompletableFuture.completedFuture(out);
 		}
 		return CompletableFuture.failedFuture(

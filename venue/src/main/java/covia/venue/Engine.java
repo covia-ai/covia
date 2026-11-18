@@ -4327,7 +4327,7 @@ public class Engine {
 	 * access token or callable narrows it, and it holds {@code admin/sudo} on the
 	 * user, whatever request it is (deferred work and an agent's tool call
 	 * included). The venue's own DID and its public principal are no user to
-	 * enter. The call keeps the delegate's job, cancellation and authentication,
+	 * enter. The call keeps the delegate's job, cancellation and origin,
 	 * so acts that need the user in person refuse it ({@link #inPersonDenial}).
 	 * A request already in the user's account is returned as it is.
 	 */
@@ -4644,9 +4644,9 @@ public class Engine {
 	 *       namespace.</li>
 	 * </ul>
 	 *
-	 * <p>It names no authenticated principal: the venue making a context for a
-	 * principal, for a bot's listed senders or for work it carries on, does not
-	 * make that principal present. A request that authenticated is
+	 * <p>It has no origin: the venue making a context for a principal, for a
+	 * bot's listed senders or for work it carries on, does not make that
+	 * principal present. A request that authenticated is
 	 * {@link #requestContext}.</p>
 	 *
 	 * @param principal the acting DID, or null for anonymous
@@ -4657,20 +4657,20 @@ public class Engine {
 		if (isPublicPrincipal(principal)) {
 			if (!auth.isPublicAccessEnabled()) throw new AuthException(PUBLIC_ACCESS_OFF);
 			AString publicDID = publicPrincipal();
-			return RequestContext.of(publicDID, null, auth.getPublicScope(publicDID)).unauthenticated();
+			return RequestContext.of(publicDID, null, auth.getPublicScope(publicDID)).withoutOrigin();
 		}
 		if (covia.grid.Principals.isAgentDID(principal)) {
-			return RequestContext.of(principal, null, Vectors.empty()).unauthenticated();
+			return RequestContext.of(principal, null, Vectors.empty()).withoutOrigin();
 		}
-		return RequestContext.of(principal).unauthenticated();
+		return RequestContext.of(principal).withoutOrigin();
 	}
 
 	/**
 	 * The context of a request a door of the venue authenticated as
 	 * {@code principal}, or presenting access token {@code token}: as it acts
-	 * now ({@link #context(AString)}, {@link #tokenContext}), and authenticated
-	 * as the principal that acts in it, the token's issuer for a token
-	 * ({@link RequestContext#getAuthenticatedDID()}). Only a door that
+	 * now ({@link #context(AString)}, {@link #tokenContext}), with the
+	 * principal that acts in it as its origin, the token's issuer for a token
+	 * ({@link RequestContext#getOrigin()}). Only a door that
 	 * authenticated the request makes one, so that only such a request can be
 	 * the user in person ({@link #inPersonDenial}).
 	 *
@@ -4679,7 +4679,7 @@ public class Engine {
 	 * @throws AuthException as {@link #context(AString)} or {@link #tokenContext}
 	 */
 	public RequestContext requestContext(AString principal, AMap<AString, ACell> token) {
-		return ((token != null) ? tokenContext(token) : context(principal)).authenticated();
+		return ((token != null) ? tokenContext(token) : context(principal)).asOrigin();
 	}
 
 	/**
@@ -5029,8 +5029,8 @@ public class Engine {
 	/**
 	 * Why {@code ctx} is not the user in person, or null when it is: the
 	 * principal whose authority applies is a user acting in its own account,
-	 * and the request authenticated as that user
-	 * ({@link RequestContext#getAuthenticatedDID()}). So an agent, the public
+	 * and that user is the request's origin
+	 * ({@link RequestContext#getOrigin()}). So an agent, the public
 	 * principal, a callable's call, a delegate under {@code admin/sudo} and
 	 * work resumed from what a job or event kept are each refused. An act that
 	 * needs the user present, such as answering their approval requests, asks
@@ -5040,7 +5040,7 @@ public class Engine {
 		AString authority = (ctx == null) ? null : ctx.getAuthorityDID();
 		if (authority == null || isPublicPrincipal(authority)) return NOT_IN_PERSON;
 		if (!authority.equals(ctx.getUserDID())) return NOT_IN_PERSON;
-		if (!authority.equals(ctx.getAuthenticatedDID())) return NOT_IN_PERSON;
+		if (!authority.equals(ctx.getOrigin())) return NOT_IN_PERSON;
 		return null;
 	}
 
@@ -5125,15 +5125,15 @@ public class Engine {
 	 * access token, or in the call of the callable, that it names. A kept
 	 * controller from before an agent's authority was worked out from its
 	 * record is not read: the agent acts with its controller as it stands. Work
-	 * that goes on this way is never anyone in person, so the context names no
-	 * authenticated principal ({@link #inPersonDenial}).
+	 * that goes on this way is never anyone in person, so the context has no
+	 * origin ({@link #inPersonDenial}).
 	 *
 	 * @throws AuthException as {@link #context(AString, AString, AVector)}, for
 	 *         the caller or the kept authority
 	 */
 	public RequestContext context(AString owner, AString principal, AVector<ACell> proofs,
 			AMap<AString, ACell> authority) {
-		return keptContext(owner, principal, proofs, authority).unauthenticated();
+		return keptContext(owner, principal, proofs, authority).withoutOrigin();
 	}
 
 	private RequestContext keptContext(AString owner, AString principal, AVector<ACell> proofs,
@@ -5204,7 +5204,7 @@ public class Engine {
 	 * point of action, so a
 	 * callable that no longer stands narrows it to nothing. {@code invoker}'s
 	 * authority is the frame's caller and plays no other part; the call goes on
-	 * with the invoker's job, cancellation and authentication
+	 * with the invoker's job, cancellation and origin
 	 * ({@link RequestContext#calledFrom}). What the call does is the issuer's:
 	 * the jobs it starts record the issuer as their caller.
 	 *
@@ -5305,8 +5305,8 @@ public class Engine {
 	 * its {@code userDID}, and carried by the binding: its route step is the
 	 * binding's ({@link covia.adapter.messaging.ChannelAuthentication#step}). The
 	 * one place a request context gains an authentication record. That record
-	 * is attribution, not evidence, so the context names no authenticated
-	 * principal: a message a bot brings, and an operation the bot runs for it,
+	 * is attribution, not evidence, so the context has no origin: a message a
+	 * bot brings, and an operation the bot runs for it,
 	 * are never the user in person ({@link #inPersonDenial}).
 	 *
 	 * @throws AuthException as {@link #context(AString, AString)}

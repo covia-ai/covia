@@ -284,8 +284,9 @@ so the application decides who reaches them.
 
 ## Identity
 
-`engine.context(did)` is the venue acting for a principal, which never makes
-that principal present. Acts only a user may do in person (answering approval
+`engine.context(did)` is the venue acting for a principal: the request has no
+`origin` ([AUTHORITY.md](AUTHORITY.md#the-fields)), so that principal is never
+present. Acts only a user may do in person (answering approval
 requests, `secret:extract`, `user:export`, minting the user's identity token
 or an access token, and the user's own account and sign-in keys) refuse it. For a user the application has authenticated itself,
 use `engine.requestContext(did, null)` or `RequestContext.of(did)`
