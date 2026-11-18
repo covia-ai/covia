@@ -890,7 +890,7 @@ How a job follows its task is kept in the job's entry (`RemoteJobs.kept`);
 its record shows the task's `delegation.remoteId` and `remoteStatus`, and
 `delegation.notFollowed` once the venue stops following it. Observation failure cannot manufacture execution failure or
 authorize replay. Claude may reconstruct an idle conversation through
-`restoreInteraction`, as the job's caller in the context the job kept
+`restoreInteraction`, as the job's caller in the state the job keeps
 (`JobManager.callerContext`); resuming a transcript does not recover an
 interrupted turn. There is no default resubmission, polling loop or lifetime timeout in
 the base. Cancellation is a request, not proof of remote cessation.
@@ -908,15 +908,14 @@ that task. The Job records `sessionId` separately from `delegation.remoteId`.
 Native remote connections share `VenueConnection` with Grid: anonymous by
 default, explicit target-bound caller identity, or an explicitly delegated
 venue relay. Omitting `venue` carries the complete current RequestContext to
-the local agent, and the job keeps its caller's context in its entry
-(JOBS.md, Kept caller context). After a restart such a local proxy follows
+the local agent, and the job keeps that state in its entry, as every recorded
+job does (JOBS.md, A job's state). After a restart such a local proxy follows
 the same task again exactly as it first did, as its caller acts now
 (`JobManager.callerContext`): its status, messages and cancellation reach
 that task, and it finishes with the task's outcome. It ends instead when it
-keeps no context or had not recorded the task
-(`RemoteAgentAdapter.LOCAL_INTERRUPTED`), or when its
-caller cannot act now (`RemoteAgentAdapter.CALLER_CANNOT_ACT`, naming the
-task). The task then runs on: the venue never acts on it without its
+had not recorded the task (`RemoteAgentAdapter.LOCAL_INTERRUPTED`), or when
+its caller cannot act now, as when it keeps no state
+(`RemoteAgentAdapter.CALLER_CANNOT_ACT`, naming the task). The task then runs on: the venue never acts on it without its
 caller's authority. A remote proxy reconnects as it first connected and
 observes the same task, except one that signed in as its caller: the venue
 keeps no such credential, so its recovery fails, naming the remote task and

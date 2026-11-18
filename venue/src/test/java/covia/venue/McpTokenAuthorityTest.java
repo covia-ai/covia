@@ -114,21 +114,21 @@ public class McpTokenAuthorityTest {
 		assertTrue(mayWrite(harness, alice, "w/private/x"), "an unrestricted token carries its issuer's authority");
 
 		// A job or schedule keeps the token, and acts with it again
-		AMap<AString, ACell> kept = Engine.keptAuthority(engine.tokenContext(maker.ref()));
+		AMap<AString, ACell> kept = Engine.stateOf(engine.tokenContext(maker.ref()));
 		assertEquals(maker.ref(), kept.get(Fields.TOKEN));
-		RequestContext resumed = engine.context(alice, alice, null, kept);
+		RequestContext resumed = engine.contextOf(alice, kept);
 		assertTrue(mayWrite(resumed, alice, "w/private/x"));
 
 		deleteToken(alice, "maker");
 		assertTrue(mayWrite(harness, alice, "w/private/x"), "what the token made stands without it");
 		assertTrue(mayWrite(engine.harnessContext(alice, Strings.create("made")), alice, "w/private/x"));
 		assertFalse(mayWrite(resumed, alice, "w/private/x"), "a context already built reads the token at each check");
-		assertFalse(mayWrite(engine.context(alice, alice, null, kept), alice, "w/private/x"));
+		assertFalse(mayWrite(engine.contextOf(alice, kept), alice, "w/private/x"));
 		assertThrows(AuthException.class, () -> engine.tokenContext(maker.ref()));
 
 		// A new token of the same name is another token
 		issue(RequestContext.of(alice), "maker", Vectors.of("v/ops/agent/create"), Caps.UNRESTRICTED);
-		assertFalse(mayWrite(engine.context(alice, alice, null, kept), alice, "w/private/x"));
+		assertFalse(mayWrite(engine.contextOf(alice, kept), alice, "w/private/x"));
 		assertThrows(AuthException.class, () -> engine.tokenContext(maker.ref()));
 	}
 

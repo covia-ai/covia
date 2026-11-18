@@ -1381,7 +1381,7 @@ envelope is still pending on its session, so the boot wake completes them. A
 task the agent resolved in a cycle the restart stopped before its merge is
 handed back at boot as the merge would have done (§4.4 step 6), with no
 timeline entry for that cycle. Its request's `outputPath` is written as its
-caller acts now (JOBS.md, Kept caller context); a write to another venue
+caller acts now (JOBS.md, A job's state); a write to another venue
 needs the caller's sign-in credential, which is never stored, so that
 request fails. Venue shutdown
 likewise leaves them as they are (`suspendJob`) and stops the run loop without

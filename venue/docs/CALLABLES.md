@@ -187,13 +187,13 @@ call and never sets `callers`, so a caller cannot change the list. The test adap
 ### Kept authority
 
 Work a call leaves running, such as a job the target starts or an event it
-schedules, keeps the callable's authority with it
-([JOBS.md](JOBS.md)). Its kept authority (`Engine.keptAuthority`) is the
-callable, since the record names the issuer and the caps, and the call's
-caller:
+schedules, keeps the callable's authority with it, in the state it keeps
+([JOBS.md](JOBS.md#a-jobs-state), `Engine.stateOf`): the call's frame, whole,
+and the callable, since the record names the issuer and the caps:
 
 ```
-authority: { callable: {owner, name, id}, caller: <the call's caller> }
+frame:    { authority: <the issuer>, caller: <the call's caller> },
+callable: { owner, name, id }
 ```
 
 Rebuilt, it is the call's frame as it stands now: the issuer's authority,

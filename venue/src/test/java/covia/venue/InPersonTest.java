@@ -172,7 +172,6 @@ class InPersonTest {
 		AString alice = Keyed.generate().did();
 		RequestContext own = RequestContext.of(alice);
 		Job job = engine.jobs().invokeOperation("v/test/ops/never", Maps.empty(), own);
-		engine.jobs().keepCallerContext(job, own);
 		try {
 			RequestContext resumed = engine.jobs().callerContext(job);
 			assertEquals(alice, resumed.getAuthorityDID(), "it acts with the user's authority");
@@ -188,7 +187,6 @@ class InPersonTest {
 		RequestContext own = RequestContext.of(alice);
 		Job asked = ask(alice);
 		Job held = engine.jobs().invokeOperation("v/test/ops/never", Maps.empty(), own);
-		engine.jobs().keepCallerContext(held, own);
 		try {
 			Job answer = await(engine.jobs().invokeOperation("v/ops/hitl/respond", approval(asked),
 				engine.jobs().callerContext(held)));

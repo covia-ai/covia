@@ -14,7 +14,7 @@ Agent wake is a consumer of this service — see §8, and
 ## 1. Entities
 
 - **Scheduled event** — a deferred invocation, one-shot or recurring:
-  `{ time, id, operation, input, caller, created, proofs, description?, repeat?, track?, lastFired?, lastJob? }`.
+  `{ time, id, operation, input, caller, created, context, description?, repeat?, track?, lastFired?, lastJob? }`.
   - `time` — absolute millis on the venue's clock at which the event is next due.
   - `operation` — a grid operation reference (asset id or operation path).
   - `input` — the cell passed to that operation when it fires.
@@ -27,8 +27,11 @@ Agent wake is a consumer of this service — see §8, and
   - `created` — millis on the venue's clock at which it was scheduled.
   - `description` — optional caller-written display text saying what the event
     is for, at most 500 characters. Never interpreted.
-  - `proofs` — the UCAN proof(s) the scheduler presented when scheduling,
-    presented again when it fires (§5).
+  - `context` — the state of the scheduling request's frame, which each fire
+    runs in (§5): the frame, whole, what narrows it (an access token or a
+    callable) and the UCAN proof(s) presented when scheduling
+    ([JOBS.md](./JOBS.md#a-jobs-state)). Unlike a job's, it keeps no route
+    or execution scopes: a fire is a request of its own.
   - `repeat` — optional recurrence spec; absent ⇒ one-shot. It is an object so
     richer forms can join later without renaming anything: today the only form
     is `{every: <millis>}`, a fixed interval (minimum 1 s). Calendar forms
@@ -69,7 +72,7 @@ The `:schedule` value is a single extensible `{ updated, events, byActor, ... }`
 
 ```
 events  = Index keyed by  time (8-byte big-endian unsigned millis) ‖ id (unique bytes)
-          value = { op, input, caller, time, created, description?, proofs?,
+          value = { op, input, caller, time, created, description?, context,
                     repeat?, track?, lastFired?, lastJob? }
 byActor = map from each agent that scheduled events to the set of their keys
 updated = the venue clock's stamp of the last mutation
@@ -188,8 +191,8 @@ nothing due holds no thread.
    `trigger` of the same event either already ran (the drain finds it gone)
    or runs after. This gives **at-most-once** firing.
 3. Starts each claimed event's Job (§7) on a fresh virtual thread,
-   **as the event's caller would invoke it now, presenting its `proofs`
-   again** (§5). Any error is logged. Its place frees **when the
+   **as the event's caller would invoke it now, in the state it keeps**
+   (§5). Any error is logged. Its place frees **when the
    operation's invocation returns** — the adapter has been called and has
    handed back its result — not when its Job finishes; the drain then claims
    the next due event. Adapters run blocking I/O off the invoking thread
@@ -258,9 +261,11 @@ own ambient authority, nor under anyone's but the caller's: either would let
 a caller schedule work that runs with more authority than they hold.
 
 **Invariant: a fire runs exactly as its caller would invoke the operation at
-fire time** (`Engine.context(owner, caller, proofs)`), in the owner's
-namespace, presenting again the UCAN proof(s) the caller presented when
-scheduling, which the event keeps in `proofs`. Consequences, all intended:
+fire time** (`Engine.contextOf`), in the owner's namespace, from the state
+the event keeps in `context`: presenting again the UCAN proof(s) the caller
+presented when scheduling, narrowed by the access token or callable the
+scheduling request was narrowed by, as it stands then. Consequences, all
+intended:
 
 - An owner's fire has the owner's authority; an agent's has the agent's
   `config.caps` as they are then, so narrowing an agent narrows its queued
@@ -318,7 +323,7 @@ operations, described by intent:
   `secretFields` are hidden, resolved as a job record's `op` is, and `input`
   is withheld when the operation no longer resolves, since its secret fields
   are then unknown. The stored input is untouched, because firing replays it.
-  Captured `proofs` are authority, not description, and are never listed.
+  Its `context` is authority, not description, and is never listed.
   Events stored before `created` and `description` were recorded list without
   them.
 
@@ -395,7 +400,7 @@ and how the run loop treats a fire, are in [AGENT_LOOP.md §4.6](./AGENT_LOOP.md
   it into a durable Job (only `forceTrackJobs` does, §7). Its handle is stored
   on the agent record (`wakeHandle`) so the next change can cancel-and-replace
   it — exactly one event per agent.
-- The event records the agent's owner as its `caller`, with no `proofs`, so it fires with the owner's own authority, exactly as the
+- The event records the agent's owner as its `caller`, and a state naming the owner alone, so it fires with the owner's own authority, exactly as the
   owner calling `agent:trigger` would (§5).
 - When it fires, `agent:trigger` (via the transient-Job `invokeFuture` path, so no
   session is minted and no durable Job is recorded) calls `wakeAgent(force:false)`. The run

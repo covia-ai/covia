@@ -476,14 +476,12 @@ request:
 
 - **A check that happens later needs its evidence kept.** Grant proofs are
   kept only for work that continues after the request: a scheduled event
-  keeps them with the event, and a job that can resume after a restart keeps
-  them in its entry, which no route reads (a Claude Code session, or an agent
-  request whose `outputPath` write is pending; `JobManager.keepCallerContext`,
-  JOBS.md, Kept caller context). They are kept in the form checked on
-  arrival, with no second signature check, since the store is the trust
-  boundary for the whole record. The work presents them again each time it
-  acts, through `Engine.context(owner, caller, proofs)`, which checks what a
-  live request would on arrival. They go when the work ends, and a job record
+  keeps them with the event, and a recorded job keeps them in its entry,
+  which no route reads, as part of its state (JOBS.md, A job's state). They
+  are kept in the form checked on arrival, with no second signature check,
+  since the store is the trust boundary for the whole record. The work
+  presents them again each time it acts, through `Engine.contextOf`, which
+  checks what a live request would on arrival. They go when the work ends, and a job record
   never holds them, so exports hold none. They never appear in API output,
   never serve another record's work and are never handed to an agent.
 - **Sign-in credentials prove presence and are never stored.** Deferred work
@@ -1136,7 +1134,7 @@ its backend (an A2A endpoint, a Claude Code project, another Covia agent) is
 its harness's work under the same context, since its definition, fixed when it
 was created, chose the backend, so its `config.caps` do not bound it. The
 backend job is the controller's, kept in its account, and keeps that authority
-across a restart (JOBS.md, Kept caller context).
+across a restart (JOBS.md, A job's state).
 
 **Best for:** Pipeline agents, task workers, scoped automations — anything that
 operates within one user's namespace with restricted permissions.

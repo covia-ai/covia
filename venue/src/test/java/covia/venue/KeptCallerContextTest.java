@@ -24,9 +24,10 @@ import covia.grid.Principals;
 import covia.lattice.Namespace;
 
 /**
- * A caller's context a job keeps for work that continues after the request:
- * its proofs, in the form checked on arrival, and its execution scopes, kept
- * in the job's entry, presented again when the work continues, never on the
+ * The state a recorded job keeps from admission until it finishes, for work
+ * that continues after the request: its frame, the grants it presented, in
+ * the form checked on arrival, its route and its execution scopes, kept in
+ * the job's entry, acted in again when the work continues, never on the
  * record, and gone when the job ends.
  */
 class KeptCallerContextTest {
@@ -59,11 +60,11 @@ class KeptCallerContextTest {
 		RequestContext own = RequestContext.of(alice);
 
 		Job job = engine.jobs().invokeOperation("v/test/ops/never", Maps.empty(), presenting);
-		engine.jobs().keepCallerContext(job, presenting);
 		String id = job.getID().toHexString();
 		JobIndex index = engine.getVenueState().jobIndex();
 		try {
-			assertEquals(Maps.of(Fields.PROOFS, proofs, Fields.ROUTE, presenting.getRoute(), Fields.SESSION_ID, session, Fields.TASK_ID, task),
+			assertEquals(Maps.of(Fields.FRAME, Maps.of(Fields.AUTHORITY, alice), Fields.PROOFS, proofs,
+				Fields.ROUTE, presenting.getRoute(), Fields.SESSION_ID, session, Fields.JOB_ID, job.getID(), Fields.TASK_ID, task),
 				index.entry(job.getID()).get(JobIndex.CONTEXT), "the job's entry keeps them while its work can continue");
 			ACell stored = RT.getIn(engine.getVenueState().users().user(alice).cursor().path(Namespace.J).get(), job.getID());
 			assertFalse(RT.ensureMap(stored).containsKey(Fields.PROOFS), "the record never holds them");
@@ -80,37 +81,35 @@ class KeptCallerContextTest {
 			job.cancel();
 		}
 		assertNull(index.entry(job.getID()), "gone when the job ends");
-		assertFalse(engine.jobs().keepsCallerContext(job));
-		AVector<ACell> after = engine.jobs().callerContext(job).getProofs();
-		assertTrue(after == null || after.isEmpty(), "a finished job presents nothing again");
+		AuthException ended = assertThrows(AuthException.class, () -> engine.jobs().callerContext(job),
+			"a finished job never acts again");
+		assertEquals(JobManager.NO_STATE + job.getID(), ended.getMessage());
 	}
 
 	/**
-	 * A job that asked keeps a context even when its caller presented nothing
-	 * beyond itself, as work the venue starts for a principal does, unlike one
-	 * that never asked.
+	 * Every recorded job keeps a state, whatever its operation, even when its
+	 * caller presented nothing beyond itself, as work the venue starts for a
+	 * principal does: its frame alone.
 	 */
-	@Test void aJobThatAskedKeepsAContextWhenItsCallerPresentedNothingMore() {
-		RequestContext own = engine.context(TestEngine.uniqueDID("KeptContextBare"));
-		Job asked = engine.jobs().invokeOperation("v/test/ops/never", Maps.empty(), own);
-		Job never = engine.jobs().invokeOperation("v/test/ops/never", Maps.empty(), own);
-		engine.jobs().keepCallerContext(asked, own);
+	@Test void everyRecordedJobKeepsAStateWhenItsCallerPresentedNothingMore() {
+		AString did = TestEngine.uniqueDID("KeptContextBare");
+		Job job = engine.jobs().invokeOperation("v/test/ops/never", Maps.empty(), engine.context(did));
 		try {
-			assertEquals(Maps.empty(), engine.getVenueState().jobIndex().entry(asked.getID()).get(JobIndex.CONTEXT));
-			assertTrue(engine.jobs().keepsCallerContext(asked));
-			assertFalse(engine.jobs().keepsCallerContext(never));
+			assertEquals(Maps.of(Fields.FRAME, Maps.of(Fields.AUTHORITY, did), Fields.JOB_ID, job.getID()),
+				engine.getVenueState().jobIndex().entry(job.getID()).get(JobIndex.CONTEXT));
+			assertEquals(did, engine.jobs().callerContext(job).getAuthorityDID());
 		} finally {
-			asked.cancel();
-			never.cancel();
+			job.cancel();
 		}
 	}
 
+
 	/**
-	 * A call to an agent on this venue that keeps no context, as one whose
-	 * entry was migrated from an older store, is not followed again after a
+	 * A call to an agent on this venue that keeps no state, as one whose
+	 * entry came from a store that kept none, is not followed again after a
 	 * restart: it ends, and the agent's task runs on.
 	 */
-	@Test void aLocalAgentCallThatKeptNoContextEndsAtRecovery() {
+	@Test void aLocalAgentCallThatKeptNoStateEndsAtRecovery() {
 		RequestContext own = RequestContext.of(TestEngine.uniqueDID("KeptContextLocalCall"));
 		engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "waiting",
 			Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/never")), own).awaitResult(10_000);
@@ -120,13 +119,15 @@ class KeptCallerContextTest {
 			10_000, () -> "the call did not see its task: " + call.getData());
 		Job task = engine.jobs().getJob(Job.parseID(RemoteJobs.descriptor(call).get(RemoteJobs.REMOTE_ID)), own);
 		try {
-			assertTrue(engine.jobs().keepsCallerContext(call), "a call to an agent here keeps its caller's context");
+			assertNotNull(engine.getVenueState().jobIndex().entry(call.getID()).get(JobIndex.CONTEXT),
+				"a call to an agent here keeps its state");
 			engine.getVenueState().jobIndex().update(call.getID(), entry -> entry.dissoc(JobIndex.CONTEXT));
 			covia.adapter.AAdapter adapter = engine.getAdapter("remoteagent");
 			adapter.suspendJob(call);
 			adapter.recoverJob(call);
 			assertEquals(covia.grid.Status.FAILED, call.getStatus());
-			assertEquals(covia.adapter.RemoteAgentAdapter.LOCAL_INTERRUPTED, call.getErrorMessage());
+			assertEquals(covia.adapter.RemoteAgentAdapter.CALLER_CANNOT_ACT.formatted(JobManager.NO_STATE + call.getID(),
+				task.getID()), call.getErrorMessage());
 			assertFalse(task.isFinished(), "the agent's task runs on");
 		} finally {
 			task.cancel();
@@ -165,7 +166,6 @@ class KeptCallerContextTest {
 			RequestContext.of(delegate), Vectors.of(grant)), owner);
 
 		Job kept = engine.jobs().invokeOperation("v/test/ops/never", Maps.empty(), sudo);
-		engine.jobs().keepCallerContext(kept, sudo);
 		try {
 			assertEquals(owner, kept.getCaller(), "the user acted");
 			assertEquals(owner, JobManager.accountOf(kept), "in the user's own account");
@@ -220,12 +220,12 @@ class KeptCallerContextTest {
 			.withAgentId(Strings.create("worker"));
 
 		Job job = engine.jobs().invokeOperation("v/test/ops/never", Maps.empty(), agent);
-		engine.jobs().keepCallerContext(job, agent);
 		try {
 			RequestContext resumed = engine.jobs().callerContext(job);
 			assertEquals(agent.getAuthorityDID(), resumed.getAuthorityDID());
 			assertEquals(owner, resumed.getUserDID());
-			assertEquals(agent.getExecutionScope(), resumed.getExecutionScope());
+			assertEquals(agent.getAgentId(), resumed.getAgentId());
+			assertEquals(job.getID(), resumed.getJobId(), "in the job's own scope, as it ran");
 			assertEquals(caps, resumed.getCaps());
 
 			AVector<ACell> narrower = Vectors.of(Maps.of(Capability.CAN, Strings.create("crud/read")));

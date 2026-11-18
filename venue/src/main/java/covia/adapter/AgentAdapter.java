@@ -1714,9 +1714,8 @@ public class AgentAdapter extends AAdapter {
 			taskData = taskData.assoc(Fields.RESPONSE_SCHEMA, responseSchema);
 			if (strict) taskData = taskData.assoc(Fields.STRICT, CVMBool.TRUE);
 		}
-		// The request completes by writing to its outputPath as its caller: the
-		// request Job keeps the caller's context for that, not the worker's task
-		if (outputPath != null) engine.jobs().keepCallerContext(job, ctx);
+		// The request completes by writing to its outputPath as its caller, in the
+		// state the request Job keeps (JobManager.callerContext), not the worker's task
 		// Where the task is queued, for cancelIn: kept before the task exists, so
 		// no cancel can find a queued task and not know where it is
 		engine.jobs().updateAdapterData(job, kept -> kept

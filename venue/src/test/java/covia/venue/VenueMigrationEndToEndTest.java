@@ -286,7 +286,8 @@ class VenueMigrationEndToEndTest {
 			assertEquals(TURN_JOB, RT.getIn(rootFrame(migrated), Agent.KEY_CONVERSATION, 1, Fields.JOB_ID), "a turn names its job");
 			assertEquals(PARKED_SESSION, migrated.jobs().getRecord(PARKED_CHAT).get(Fields.SESSION_ID), "a chat's record names its session");
 			assertEquals(Maps.of(Fields.OP, "v/test/ops/echo", Fields.CALLER, agentDID,
-				Strings.create("time"), Long.MAX_VALUE), venue.schedule().events().get(EVENT), "an event names its caller alone");
+				Strings.create("time"), Long.MAX_VALUE, Fields.CONTEXT, Engine.stateOf(agentDID)),
+				venue.schedule().events().get(EVENT), "an event names its caller alone, and keeps the state it fires in");
 			assertEquals(Maps.of(JobIndex.OWNER, USER), venue.jobIndex().entry(RUNNING_JOB));
 			assertEquals(Maps.of(JobIndex.OWNER, USER, JobIndex.ADAPTER_DATA, Maps.of("authenticateAs", "caller",
 					RemoteJobs.PROTOCOL, "covia", RemoteJobs.TARGET, REMOTE_TARGET, RemoteJobs.OWNS_REMOTE, true)),
@@ -325,9 +326,9 @@ class VenueMigrationEndToEndTest {
 			assertEquals(Status.STARTED, lost.getStatus());
 			assertEquals(Strings.create(RemoteJobs.UNREACHABLE_BECAUSE.formatted("remote-3", REMOTE_TARGET, RemoteJobs.NO_CONNECTION)),
 				RT.getIn(lost.getData(), RemoteJobs.DELEGATION, RemoteJobs.NOT_FOLLOWED));
-			// A local call that kept no caller context is not followed again; its task is untouched
-			assertEquals(covia.adapter.RemoteAgentAdapter.LOCAL_INTERRUPTED,
-				engine.jobs().getJob(LOCAL_CALL, ctx).getErrorMessage());
+			// A local call that kept no caller context keeps no state, so is not followed again; its task is untouched
+			assertEquals(covia.adapter.RemoteAgentAdapter.CALLER_CANNOT_ACT.formatted(JobManager.NO_STATE + LOCAL_CALL,
+				Blob.fromHex(LOCAL_TASK)), engine.jobs().getJob(LOCAL_CALL, ctx).getErrorMessage());
 			// The queued chat is still waiting for the cycle that takes its message
 			assertEquals(Status.PENDING, engine.jobs().getJob(PARKED_CHAT, ctx).getStatus());
 			// The open request still waits, and its answer reaches the session that asked

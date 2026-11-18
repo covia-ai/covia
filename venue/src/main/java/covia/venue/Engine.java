@@ -4927,31 +4927,48 @@ public class Engine {
 	public static final String NOT_IN_ACCOUNT = "%s does not act in the account of %s, so work kept there cannot act as it";
 
 	/**
-	 * What a stored context keeps of the authority {@code ctx} acts with,
-	 * beside its caller, owner and proofs, so that work continuing later acts
-	 * with the same authority: the access token narrowing it as
-	 * {@link Fields#TOKEN}; or, for a callable's call, that callable as
-	 * {@link Fields#CALLABLE} and the frame's caller
-	 * ({@link RequestContext#getCaller()}) as {@link Fields#CALLER}. Null when
-	 * it acts with its caller's own, unnarrowed. An agent's authority is worked
+	 * The state of {@code principal} acting with its own authority,
+	 * unnarrowed and presenting nothing, as work the venue schedules for a
+	 * principal keeps ({@link #stateOf(RequestContext)}).
+	 */
+	public static AMap<AString, ACell> stateOf(AString principal) {
+		return Maps.of(Fields.FRAME, Maps.of(Fields.AUTHORITY, principal));
+	}
+
+	/**
+	 * The state that work continuing from {@code ctx} keeps, so that it acts
+	 * again with the same authority (AUTHORITY.md, A job's state): the frame
+	 * as {@link Fields#FRAME}, stored whole, its {@code authority} and its
+	 * {@code caller} if it has one, so that caller means only the frame's;
+	 * what narrows that authority, the access token as {@link Fields#TOKEN} or
+	 * the callable whose call it is as {@link Fields#CALLABLE}; and the grants
+	 * the request presented as {@link Fields#PROOFS}. It holds principals and
+	 * references, never authority worked out from them: an agent's is worked
 	 * out from its record each time it acts ({@link #authorityFrame}), so
-	 * nothing of its controller is kept.
+	 * nothing of its controller is kept. {@link #contextOf} rebuilds the
+	 * context.
 	 *
-	 * <p>Job entries and scheduled events store these keys, so renaming one
+	 * <p>Job entries and scheduled events store this shape, so renaming a key
 	 * needs a migration: work stored under the old key would resume without
 	 * the narrowing it records.</p>
+	 *
+	 * @return the state, or null when {@code ctx} acts as nobody
 	 */
-	public static AMap<AString, ACell> keptAuthority(RequestContext ctx) {
-		if (ctx == null) return null;
-		// A callable's call: its record says whose authority it is and what
-		// narrows it, beside the frame's caller
+	public static AMap<AString, ACell> stateOf(RequestContext ctx) {
+		if (ctx == null || ctx.getAuthorityDID() == null) return null;
+		AMap<AString, ACell> frame = Maps.of(Fields.AUTHORITY, ctx.getAuthorityDID());
+		if (ctx.getCaller() != null) frame = frame.assoc(Fields.CALLER, ctx.getCaller());
+		AMap<AString, ACell> state = Maps.of(Fields.FRAME, frame);
 		AMap<AString, ACell> callable = ctx.getCallable();
 		if (callable != null) {
-			AMap<AString, ACell> kept = Maps.of(Fields.CALLABLE, callable);
-			return (ctx.getCaller() == null) ? kept : kept.assoc(Fields.CALLER, ctx.getCaller());
+			state = state.assoc(Fields.CALLABLE, callable);
+		} else {
+			AMap<AString, ACell> token = presentedToken(ctx);
+			if (token != null) state = state.assoc(Fields.TOKEN, token);
 		}
-		AMap<AString, ACell> token = presentedToken(ctx);
-		return (token == null) ? null : Maps.of(Fields.TOKEN, token);
+		AVector<ACell> proofs = ctx.getProofs();
+		if (proofs != null && !proofs.isEmpty()) state = state.assoc(Fields.PROOFS, proofs);
+		return state;
 	}
 
 	/** Why a request may not change an agent another principal controls; the agent and its controller follow. */
@@ -5134,31 +5151,33 @@ public class Engine {
 	}
 
 	/**
-	 * As {@link #context(AString, AString, AVector)}, with what
-	 * {@link #keptAuthority} kept, if any, as it stands now: narrowed by the
-	 * access token, or in the call of the callable, that it names. A kept
-	 * controller from before an agent's authority was worked out from its
-	 * record is not read: the agent acts with its controller as it stands. Work
-	 * that goes on this way is never anyone in person, so the context has no
-	 * origin ({@link #inPersonDenial}).
+	 * The context work kept in {@code account} acts in again, from the state
+	 * it keeps ({@link #stateOf}), worked out as everything in it stands now:
+	 * the frame's authority as {@link #context(AString, AString, AVector)}
+	 * makes it, presenting the kept grants, narrowed by the access token it
+	 * names; or, for a callable's call, the call's frame as the callable
+	 * stands, called by the frame's caller. Nothing about how the frame was
+	 * entered is checked again. Work that goes on this way is never anyone in
+	 * person, so the context has no origin ({@link #inPersonDenial}).
 	 *
-	 * @throws AuthException as {@link #context(AString, AString, AVector)}, for
-	 *         the caller or the kept authority
+	 * @throws AuthException when the state names no frame ({@link #NO_FRAME}),
+	 *         or as {@link #context(AString, AString, AVector)} for its authority
 	 */
-	public RequestContext context(AString owner, AString principal, AVector<ACell> proofs,
-			AMap<AString, ACell> authority) {
-		return keptContext(owner, principal, proofs, authority).withoutOrigin();
+	public RequestContext contextOf(AString account, AMap<AString, ACell> state) {
+		AMap<AString, ACell> frame = (state == null) ? null : RT.ensureMap(state.get(Fields.FRAME));
+		AString authority = (frame == null) ? null : RT.ensureString(frame.get(Fields.AUTHORITY));
+		if (authority == null) throw new AuthException(NO_FRAME);
+		// Work a callable's call left running: the call's frame as it stands now, called by whoever called it
+		AMap<AString, ACell> callable = RT.ensureMap(state.get(Fields.CALLABLE));
+		if (callable != null) {
+			return callFrame(callable).calledBy(RT.ensureString(frame.get(Fields.CALLER))).withoutOrigin();
+		}
+		RequestContext ctx = context(account, authority, RT.ensureVector(state.get(Fields.PROOFS)));
+		return narrowedByToken(ctx, RT.ensureMap(state.get(Fields.TOKEN))).withoutOrigin();
 	}
 
-	private RequestContext keptContext(AString owner, AString principal, AVector<ACell> proofs,
-			AMap<AString, ACell> authority) {
-		// Work a callable's call left running: the call's frame as it stands now, called by whoever called it
-		AMap<AString, ACell> callable = (authority == null) ? null : RT.ensureMap(authority.get(Fields.CALLABLE));
-		if (callable != null) return callFrame(callable).calledBy(RT.ensureString(authority.get(Fields.CALLER)));
-		RequestContext ctx = context(owner, principal, proofs);
-		if (authority == null) return ctx;
-		return narrowedByToken(ctx, RT.ensureMap(authority.get(Fields.TOKEN)));
-	}
+	/** Refusal of work whose kept state names no frame to act in. */
+	public static final String NO_FRAME = "The work keeps no state naming whose authority it acts with, so it cannot act again";
 
 	// ========== Access tokens (ACCESS_TOKENS.md) ==========
 

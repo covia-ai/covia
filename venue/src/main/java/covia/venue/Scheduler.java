@@ -86,9 +86,10 @@ import static covia.venue.Schedule.*;
  * lock.</p>
  *
  * <p><b>No escalation.</b> An event records its caller, whose account it
- * belongs to, and the proofs presented at schedule time. A fire runs as that
- * caller would invoke the operation now ({@link Engine#context(AString, AString, AVector)}), presenting
- * those proofs again, via {@link JobManager#invokeInternal} /
+ * belongs to, and the state of the scheduling request's frame
+ * ({@link Engine#stateOf}). A fire runs as that caller would invoke the
+ * operation now ({@link Engine#contextOf}), presenting the kept proofs again
+ * and narrowed as the request was, via {@link JobManager#invokeInternal} /
  * {@link JobManager#prepareTracked} (§5 of the design), which enforce that scope
  * on dispatch. The scheduler never invents or keeps authority.</p>
  */
@@ -209,12 +210,10 @@ public class Scheduler {
 		// queued work stays visible to the account it runs in.
 		AString owner = Principals.userOf(caller);
 		if (!owner.equals(ctx.getUserDID())) throw new AuthException(NOT_ITS_ACCOUNT.formatted(caller, ctx.getUserDID()));
-		AVector<ACell> proofs = ctx.getProofs();
-		AMap<AString, ACell> authority = Engine.keptAuthority(ctx);
+		AMap<AString, ACell> state = Engine.stateOf(ctx);
 		return locked(() -> {
 			engine.getVenueState().users().requireNotDeleted(owner);
-			return state().schedule(opRef, input, caller, proofs, authority, wakeTime,
-				rep, track, desc, now());
+			return state().schedule(opRef, input, caller, state, wakeTime, rep, track, desc, now());
 		});
 	}
 
@@ -700,16 +699,16 @@ public class Scheduler {
 	}
 
 	/**
-	 * The context a fire runs under (design §5): its caller (the owner, one of
-	 * its agents or a delegate) as it would invoke the operation now, in the
-	 * owner's namespace, presenting again the proofs it presented when scheduling,
-	 * and with the separate authority it acted with, if it had one.
+	 * The context a fire runs under (design §5): the state the event keeps
+	 * ({@link Engine#stateOf}), worked out as it stands now in the event's
+	 * account ({@link Engine#contextOf}), so its caller acts as it would now,
+	 * presenting again the grants it presented when scheduling, narrowed as
+	 * that request was.
 	 *
-	 * @throws AuthException when the caller could not invoke it now
+	 * @throws AuthException when the caller could not invoke it now, or the event keeps no state
 	 */
 	RequestContext fireContext(AMap<AString, ACell> rec) {
-		return engine.context(accountOf(rec), RT.ensureString(rec.get(K_CALLER)), asVector(rec.get(K_PROOFS)),
-			RT.ensureMap(rec.get(Fields.AUTHORITY)));
+		return engine.contextOf(accountOf(rec), RT.ensureMap(rec.get(K_CONTEXT)));
 	}
 
 	/** The scheduler's route record for a fire of event {@code key}: its handle, and when it was due. */
@@ -747,11 +746,6 @@ public class Scheduler {
 	@SuppressWarnings("unchecked")
 	private static AMap<AString, ACell> asMap(ACell c) {
 		return (AMap<AString, ACell>) c;
-	}
-
-	@SuppressWarnings("unchecked")
-	private static AVector<ACell> asVector(ACell c) {
-		return (c instanceof AVector) ? (AVector<ACell>) c : null;
 	}
 
 	private static AMap<AString, ACell> copyIfPresent(AMap<AString, ACell> from,

@@ -41,11 +41,11 @@ public final class JobIndex extends IndexComponent<Blob, ACell>
 	public static final AString RULES = Strings.intern("rules");
 
 	/**
-	 * What the job's caller presented beyond its identity, kept for work that
-	 * continues for the caller ({@link JobManager#keepCallerContext}): its
-	 * verified {@code proofs} and its execution scopes {@code agentId},
-	 * {@code sessionId}, {@code jobId} and {@code taskId}. Present, if empty,
-	 * whenever the job's adapter asked for it.
+	 * The state the job runs in, kept from admission until it finishes so that
+	 * work it carries on acts with the same authority
+	 * ({@link JobManager#jobState}): its frame, what narrows it, the grants
+	 * presented, its route and its execution scopes. A mirror, which never
+	 * acts, keeps none.
 	 */
 	public static final AString CONTEXT = Strings.intern("context");
 

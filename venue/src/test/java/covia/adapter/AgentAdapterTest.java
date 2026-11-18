@@ -486,7 +486,7 @@ public class AgentAdapterTest {
 		assertEquals(Strings.create("token"), tokenStep.get(Fields.VIA));
 		assertEquals(ALICE_DID, tokenStep.get(Fields.PRINCIPAL), "vouching for its issuer");
 		assertEquals(reference, tokenStep.dissoc(Fields.VIA).dissoc(Fields.PRINCIPAL).dissoc(Fields.TEXT), "named by its reference");
-		RequestContext keptWork = engine.context(ALICE_DID, ALICE_DID, null, Engine.keptAuthority(viaToken));
+		RequestContext keptWork = engine.contextOf(ALICE_DID, Engine.stateOf(viaToken));
 		assertNull(keptWork.getRoute(), "work rebuilt from its kept authority alone is not the request");
 		assertFalse(keptWork.getTokens().isEmpty(), "but the token still narrows it");
 
@@ -539,8 +539,8 @@ public class AgentAdapterTest {
 		}
 
 		// Work a call left, rebuilt from its kept authority, is not the call
-		assertNull(engine.context(ALICE_DID, BOB_DID, null, Maps.of(Fields.CALLABLE,
-			callableStep.dissoc(Fields.VIA).dissoc(Fields.PRINCIPAL).dissoc(Fields.TEXT))).getRoute());
+		assertNull(engine.contextOf(ALICE_DID, Maps.of(Fields.FRAME, Maps.of(Fields.AUTHORITY, ALICE_DID, Fields.CALLER, BOB_DID),
+			Fields.CALLABLE, callableStep.dissoc(Fields.VIA).dissoc(Fields.PRINCIPAL).dissoc(Fields.TEXT))).getRoute());
 
 		// Neither an agent nor its harness is a request through anything
 		assertNull(engine.harnessContext(ALICE_DID, Strings.create("token-provenance")).getRoute());

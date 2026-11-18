@@ -260,7 +260,4 @@ rows are its cycle, which the venue starts.
 ## What it replaces
 
 - The request context's namespace as a value apart from its authority.
-- The caller context a job keeps only when its adapter asks, in two shapes of
-  kept authority, and a scheduled event's own shape of the same. A job's state
-  is the context it runs in.
 - A configured Python function, which is not told who called it (#706).

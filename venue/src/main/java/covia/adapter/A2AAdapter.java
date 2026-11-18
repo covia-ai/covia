@@ -979,10 +979,10 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 
 	/**
 	 * Reads a saved authentication's secret again, under the authority the
-	 * job's caller holds now, in the context its job kept if any
-	 * ({@link covia.venue.JobManager#callerContext}): a rotated secret is sent
-	 * as it now stands, and one the caller can no longer use is refused. A
-	 * direct send keeps no context, so not the grants its request presented.
+	 * job's caller holds now, in the state its job keeps
+	 * ({@link covia.venue.JobManager#callerContext}), presenting again the
+	 * grants its request presented: a rotated secret is sent as it now stands,
+	 * and one the caller can no longer use is refused.
 	 *
 	 * @throws AuthException when the caller cannot act now, or cannot use the secret without a grant
 	 * @throws NotFoundException when the secret no longer exists

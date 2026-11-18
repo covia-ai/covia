@@ -339,8 +339,7 @@ job id (`JobIndex`), and no route reads it. Each entry holds:
   completes if the operator turns `outputValidation` on. A catalog change
   while the job runs changes neither. Absent when the operation declares
   neither.
-- **`context`**: the caller's context, kept when the job's adapter asks
-  ([Kept caller context](#kept-caller-context)).
+- **`context`**: the state the job runs in ([A job's state](#a-jobs-state)).
 - **`adapterData`**: what the job's adapter keeps to carry it to its end
   (`JobManager.adapterData`), read only by that adapter: how a remote job is
   followed and reached again ([Remote delegation](#remote-delegation)), or
@@ -354,35 +353,46 @@ removes the entries of that user's jobs with the account. So an entry exists
 exactly while its record is unfinished, and nothing is left to sweep. A job
 held only in memory has neither.
 
-## Kept caller context
+## A job's state
 
-A job whose work continues for its caller after the request keeps that
-caller's context, so that it acts again with the authority it started with
-and no more. The adapter asks for it (`JobManager.keepCallerContext`): a
-Claude Code session does, so does an agent request naming an `outputPath`,
-whose job completes by writing there as its caller (AGENT_TEMPLATES.md), and
-so does a `remoteagent` call to an agent on this venue, which follows the
-agent's task as its caller (ADAPTERS.md, External agent interactions), and so
-does every external agent's backend job, which the agent's harness starts in
-its controller's frame (UCAN.md §5.4). The job's entry keeps the grant
-proofs the caller presented, in the form checked on arrival, what narrows the
-request (`Engine.keptAuthority`), the request's route (AGENT_CONTEXT.md §1.2),
-and its execution scopes (agent, session, job and task), even when
-there are none, so that `JobManager.keepsCallerContext` tells such a job from
-one whose adapter never asked. `JobManager.callerContext` rebuilds the caller
-from them with `Engine.context(owner, caller, proofs, authority)`, checking
-what a live request would: the principal still exists and acts in the
-account the job is kept in (`Engine.NOT_IN_ACCOUNT` otherwise), and an agent
-acts under its current `config.caps` and its controller as it stands, read
-from its record. The rebuilt context carries the kept route, since the work is
-the same request carried on, and has no `origin`, since nobody is present in
-it (AUTHORITY.md). What narrows the request is
-the access token it came through, if any, which then narrows it as it stands
-and to nothing once it is gone (ACCESS_TOKENS.md). Work a callable's call left
-running keeps the callable and the call's caller instead, and resumes in the
-call's frame: the issuer's authority as the callable stands, in its owner's
-namespace (CALLABLES.md). The record never holds them,
-and they go with the entry when the job ends (UCAN.md §4.3).
+Every recorded job keeps the state it runs in, from admission until it
+finishes, so that work it carries on for its caller after the request, or
+after a restart, acts again with the authority it started with and no more
+(AUTHORITY.md, A job's state). Among that work: a Claude Code session, an
+agent request naming an `outputPath`, which completes by writing there as its
+caller (AGENT_TEMPLATES.md), a `remoteagent` call to an agent on this venue,
+which follows the agent's task as its caller (ADAPTERS.md, External agent
+interactions), an external agent's backend job, which the agent's harness
+starts in its controller's frame (UCAN.md §5.4), and an A2A task reading its
+saved secret again. The entry keeps, as `context` (`JobManager.jobState`):
+
+```
+context: {
+  frame:  {authority, caller?},   // the frame the job runs in; authority is the job's caller
+  token? | callable?,             // the reference narrowing that authority
+  proofs?,                        // grants the request presented, in the form checked on arrival
+  route?,                         // where the request started and each handover (AGENT_CONTEXT.md §1.2)
+  agentId?, sessionId?, jobId?, taskId?
+}
+```
+
+The frame is stored whole, so its `caller` means only the frame's caller and
+is never read as the record's. A context with no job scope of its own takes
+the job's. A mirror ([Mirrors](#mirrors)), which never acts, keeps none.
+
+`JobManager.callerContext` acts in it again with `Engine.contextOf`, working
+out the authority from what it names as they stand then, and checking nothing
+about how the frame was entered: the principal still exists and acts in the
+account the job is kept in (`Engine.NOT_IN_ACCOUNT` otherwise); an agent acts
+under its current `config.caps` and its controller as it stands, read from
+its record; the access token narrows it as it stands, and to nothing once it
+is gone (ACCESS_TOKENS.md); and work a callable's call left running acts in
+the call's frame, the issuer's authority as the callable stands, called by the
+frame's caller (CALLABLES.md). The rebuilt context carries the kept route,
+since the work is the same request carried on, and has no `origin`, since
+nobody is present in it (AUTHORITY.md). A job that keeps no state, as one that
+has finished, cannot act again (`JobManager.NO_STATE`). The record never
+holds the state, and it goes with the entry when the job ends (UCAN.md §4.3).
 
 ## The update path — CAS-committed, terminal-sticky
 
@@ -706,10 +716,10 @@ presented (`authenticateAs: "caller"`, or an A2A `bearerToken`) is therefore
 not resumed: its recovered job fails, naming the remote job and its venue
 (`RemoteJobs.CREDENTIAL_NOT_KEPT`). A recovered A2A job reads its bearer again from
 its caller's secrets, under the context `JobManager.callerContext` rebuilds
-for the job, so a rotated secret is sent as it now stands. A direct A2A
-send keeps no context, so not the grants its request presented, while an
-external agent's backend job keeps its harness's authority
-([Kept caller context](#kept-caller-context)). When its caller can no longer use the
+from the state the job keeps ([A job's state](#a-jobs-state)): narrowed as its
+request was, presenting the grants it presented, and for an external agent's
+backend job with its harness's authority, so a rotated secret is sent as it
+now stands. When its caller can no longer use the
 secret (it was deleted, the caller cannot act now, or it is another user's,
 used under a grant the request presented), the job fails, naming the remote
 task and the agent's address (`A2AAdapter.SECRET_UNREADABLE`). Recovery does not resolve a changed catalog binding or

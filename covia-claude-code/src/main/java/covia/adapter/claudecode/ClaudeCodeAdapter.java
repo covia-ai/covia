@@ -724,8 +724,6 @@ public class ClaudeCodeAdapter extends ARemoteAgentAdapter<RemoteInteraction> im
 			if (plan.resumeId() != null) d = d.assoc(K_SESSION, Strings.create(plan.resumeId()));
 			return d;
 		});
-		// A session resumes after a restart as its caller, in the context it was started in.
-		if (multiTurn) engine.jobs().keepCallerContext(job, ctx);
 		if (job.isFinished()) return;
 		if (plan.prompt() == null) {
 			// A session opened without a first prompt waits for input. It claims

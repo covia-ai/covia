@@ -498,7 +498,7 @@ public class RequestContext {
 	}
 
 	/** This frame as entered by a call from {@code caller}, rebuilt from what work
-	 * in it kept ({@link Engine#keptAuthority}): nobody is present in it. */
+	 * in it kept ({@link Engine#stateOf(RequestContext)}): nobody is present in it. */
 	RequestContext calledBy(AString caller) {
 		return new RequestContext(authority, executionScope, rawUcans, op, cancellation, invocationInput, gate,
 			gateEvaluation, job, cycle, sessionDelivery, carried, null, caller, scopeSource);

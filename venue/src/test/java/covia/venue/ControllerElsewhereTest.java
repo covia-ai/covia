@@ -144,9 +144,9 @@ class ControllerElsewhereTest {
 		AString carol = TestEngine.uniqueDID("ElsewhereKeptCarol");
 		engine.getVenueState().users().ensure(carol);
 		RequestContext ctx = helper(alice, bob);
-		assertNull(Engine.keptAuthority(ctx), "nothing of its controller is kept");
+		assertEquals(Maps.of(Fields.FRAME, Maps.of(Fields.AUTHORITY, ctx.getAuthorityDID())), Engine.stateOf(ctx),
+			"nothing of its controller is kept");
 		Job job = engine.jobs().invokeOperation("v/test/ops/never", Maps.empty(), ctx);
-		engine.jobs().keepCallerContext(job, ctx);
 		try {
 			RequestContext resumed = engine.jobs().callerContext(job);
 			assertEquals(ctx.getAuthorityDID(), resumed.getAuthorityDID());

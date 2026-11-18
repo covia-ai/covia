@@ -7,7 +7,6 @@ import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.ASet;
 import convex.core.data.AString;
-import convex.core.data.AVector;
 import convex.core.data.Blob;
 import convex.core.data.Index;
 import convex.core.data.Maps;
@@ -107,20 +106,19 @@ public final class Schedule extends ALatticeComponent<ACell>
 	}
 
 	/**
-	 * Stores a new event. {@code authority} is the separate authority the
-	 * scheduling request acted with ({@link Engine#keptAuthority}), or null when
-	 * it acted with its caller's own; the event fires with it.
+	 * Stores a new event. {@code state} is the state of the scheduling
+	 * request's frame ({@link Engine#stateOf}), kept as {@link #K_CONTEXT}; each
+	 * fire runs in it.
 	 */
 	public Blob schedule(AString op, ACell input, AString caller,
-			AVector<ACell> proofs, AMap<AString, ACell> authority, long wakeTime,
+			AMap<AString, ACell> state, long wakeTime,
 			AMap<AString, ACell> repeat, Boolean track, AString description, long created) {
 		Blob key = mintKey(wakeTime);
 		AMap<AString, ACell> rec = Maps.of(K_OP, op, K_CALLER, caller,
 			K_TIME, CVMLong.create(wakeTime), K_CREATED, CVMLong.create(created));
 		if (description != null) rec = rec.assoc(K_DESCRIPTION, validateDescription(description));
 		if (input != null) rec = rec.assoc(K_INPUT, input);
-		if (proofs != null) rec = rec.assoc(K_PROOFS, proofs);
-		if (authority != null) rec = rec.assoc(Fields.AUTHORITY, authority);
+		if (state != null) rec = rec.assoc(K_CONTEXT, state);
 		if (repeat != null) rec = rec.assoc(K_REPEAT, validateRepeat(repeat));
 		if (track != null) rec = rec.assoc(K_TRACK, CVMBool.create(track));
 		var record = rec;
@@ -190,7 +188,7 @@ public final class Schedule extends ALatticeComponent<ACell>
 		}
 		return earliest <= 0 ? null : schedule(Agent.TRIGGER_OP,
 			Maps.of(Fields.AGENT_ID, agentId, Fields.FORCE, CVMBool.FALSE, Fields.WAIT, CVMBool.FALSE),
-			owner, null, null, earliest, null, false, null,
+			owner, Engine.stateOf(owner), earliest, null, false, null,
 			context.currentTimestamp().longValue());
 	}
 
@@ -209,8 +207,8 @@ public final class Schedule extends ALatticeComponent<ACell>
 	/** Event record field: wall-clock millis at which the event was scheduled
 	 *  (CVMLong). Absent on events stored before it was recorded. */
 	static final AString K_CREATED = Fields.CREATED;
-	/** Event record field: the UCAN proofs (AVector) the scheduler presented, presented again at fire time. */
-	static final AString K_PROOFS = Fields.PROOFS;
+	/** Event record field: the state of the scheduling request's frame (AMap, {@link Engine#stateOf}), which each fire runs in. */
+	static final AString K_CONTEXT = Fields.CONTEXT;
 	/** Event record field: absolute wake time in millis (CVMLong). */
 	static final AString K_TIME = Strings.intern("time");
 	/** Event record field: recurrence spec (AMap, see {@link #validateRepeat});

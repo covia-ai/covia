@@ -30,7 +30,7 @@ there, so it serves only to exercise the rules with a second access point.
   all of its issuer's authority, and one with no caps has none.
 - **Work it starts keeps the token.** Jobs a request through a token starts
   and events it schedules act later with the same authority, the token read
-  at the time of action (the kept caller context, [JOBS.md](JOBS.md)). A step
+  at the time of action ([JOBS.md](JOBS.md#a-jobs-state), A job's state). A step
   it makes an agent take goes on narrowed by the token too.
 - **What it creates stands on its own.** Tokens and callables a request
   through a token creates are its issuer's, with caps within what the request

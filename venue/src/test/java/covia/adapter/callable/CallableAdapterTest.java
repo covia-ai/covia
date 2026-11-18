@@ -317,9 +317,10 @@ public class CallableAdapterTest {
 		complete(create(owner, "guestbook", "v/ops/covia/append", GUESTBOOK_CAPS, null));
 		AMap<AString, ACell> ref = reference(alice, "guestbook");
 
-		AMap<AString, ACell> kept = Engine.keptAuthority(engine.callContext(RequestContext.of(bob), ref));
-		assertEquals(Maps.of(Fields.CALLABLE, ref, Fields.CALLER, bob), kept);
-		RequestContext resumed = engine.context(alice, alice, null, kept);
+		AMap<AString, ACell> kept = Engine.stateOf(engine.callContext(RequestContext.of(bob), ref));
+		assertEquals(Maps.of(Fields.FRAME, Maps.of(Fields.AUTHORITY, alice, Fields.CALLER, bob), Fields.CALLABLE, ref), kept,
+			"the frame is kept whole, with the callable narrowing it");
+		RequestContext resumed = engine.contextOf(alice, kept);
 		assertEquals(alice, resumed.getAuthorityDID(), "it resumes in the issuer's frame");
 		assertEquals(bob, resumed.getCaller(), "called by the invoker");
 		assertNull(resumed.getOrigin(), "with nobody present");
@@ -337,7 +338,7 @@ public class CallableAdapterTest {
 		assertFalse(mayWrite(resumed, alice, "w/guestbook"));
 		complete(create(owner, "guestbook", "v/ops/covia/append", Caps.UNRESTRICTED, null));
 		assertFalse(mayWrite(resumed, alice, "w/guestbook"));
-		assertFalse(mayWrite(engine.context(alice, alice, null, kept), alice, "w/guestbook"));
+		assertFalse(mayWrite(engine.contextOf(alice, kept), alice, "w/guestbook"));
 	}
 
 	@Test

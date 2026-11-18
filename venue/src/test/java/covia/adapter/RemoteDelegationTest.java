@@ -318,8 +318,9 @@ class RemoteDelegationTest {
 	 * secrets, so a secret rotated meanwhile is sent as it now stands. A job
 	 * whose token the caller passed literally ends instead, naming the remote
 	 * task: only the request presented that token. So does a job whose caller
-	 * can no longer use its secret: one deleted meanwhile, or another user's
-	 * used under a grant, which the job does not keep.
+	 * can no longer use its secret, as one deleted meanwhile. Another user's
+	 * secret used under a grant the request presented is read again under that
+	 * grant, which the job keeps in its state.
 	 */
 	@Test void a2aRecoveryReadsTheBearerAgainAndEndsAJobWhoseTokenWasNotKept() throws Exception {
 		// Each request's Authorization, as the peer received it
@@ -391,6 +392,7 @@ class RemoteDelegationTest {
 			setSecret(first, user, "second-token");
 			first.jobs().invokeOperation("v/ops/secret/delete", Maps.of(Fields.NAME, "DELETED"), user).awaitResult(5000);
 		} finally { first.close(); }
+		authorizations.clear();
 		Engine second = venue.start();
 		try {
 			Engine.addDemoAssets(second);
@@ -398,14 +400,13 @@ class RemoteDelegationTest {
 			Job ended = second.jobs().getJob(fromLiteral.getID(), user);
 			assertEquals(Status.FAILED, ended.getStatus());
 			assertEquals(RemoteJobs.CREDENTIAL_NOT_KEPT.formatted("literal-task", url + "/a2a"), ended.getErrorMessage());
-			Job ungranted = second.jobs().getJob(fromGrant.getID(), user);
-			assertEquals(Status.FAILED, ungranted.getStatus());
-			assertEquals(A2AAdapter.SECRET_UNREADABLE.formatted("granted-task", url + "/a2a"), ungranted.getErrorMessage());
 			Job deleted = second.jobs().getJob(fromDeleted.getID(), user);
 			assertEquals(Status.FAILED, deleted.getStatus());
 			assertEquals(A2AAdapter.SECRET_UNREADABLE.formatted("deleted-task", url + "/a2a"), deleted.getErrorMessage());
-			received.await("a poll carrying the rotated secret", () -> authorizations.contains("Bearer second-token"));
+			received.await("polls carrying the rotated secret and the granted one",
+				() -> authorizations.contains("Bearer second-token") && authorizations.contains("Bearer granted-token"));
 			assertFalse(second.jobs().getJob(fromSecret.getID(), user).isFinished());
+			assertFalse(second.jobs().getJob(fromGrant.getID(), user).isFinished(), "the grant it kept is presented again");
 		} finally { second.close(); peer.stop(0); }
 	}
 

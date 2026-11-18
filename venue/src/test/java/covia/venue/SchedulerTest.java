@@ -32,6 +32,7 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
+import convex.core.lang.RT;
 import convex.core.util.Utils;
 import covia.adapter.TestAdapter;
 import covia.api.Abilities;
@@ -384,11 +385,12 @@ public class SchedulerTest {
 	public void testListNeverShowsCapturedAuthority() {
 		AVector<ACell> proofs = Vectors.of(s("proof"));
 		Blob handle = sched.schedule(s("v/test/ops/echo"), s("x"), ctx.withProofs(proofs), future());
-		assertEquals(proofs, stored(handle).get(Schedule.K_PROOFS), "proofs are presented again when it fires");
+		assertEquals(proofs, RT.getIn(stored(handle), Schedule.K_CONTEXT, Fields.PROOFS), "proofs are presented again when it fires");
 		assertFalse(stored(handle).containsKey(s("caps")), "a fire takes its actor's caps as they are then");
 
 		AMap<AString, ACell> rec = only(sched.list(ctx));
-		assertFalse(rec.containsKey(Schedule.K_PROOFS), "proofs are authority, not description");
+		assertFalse(rec.containsKey(Schedule.K_CONTEXT), "its state is authority, not description");
+		assertFalse(rec.containsKey(Fields.PROOFS));
 		assertTrue(sched.cancel(handle, ctx));
 	}
 

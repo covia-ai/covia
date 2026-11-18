@@ -62,9 +62,9 @@ For the division with capability enforcement and authentication, see
   ([UCAN.md](./UCAN.md) §4.1). A caller with a held key signs as that key
   instead. An agent's caps are not a grant: they narrow what it does in its
   owner's namespace (§5.4 there).
-- **Deferred work.** A recorded job (`JobManager.keepCallerContext`) and a
-  scheduled event (`Scheduler.schedule`) keep the grants presented to them, but
-  not the scope. Agents are unaffected, because their scope and controller are
+- **Deferred work.** A recorded job and a scheduled event keep the state they
+  run in (`Engine.stateOf`, JOBS.md, A job's state): the grants presented to
+  them and what narrows them, but not the scope. Agents are unaffected, because their scope and controller are
   read again from their record ([UCAN.md](./UCAN.md) §5.4).
 - **In person.** An act that needs the user present passes only when the
   principal whose authority applies is a user in its own account and that

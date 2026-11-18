@@ -330,14 +330,12 @@ public class JobManager {
 
 	/**
 	 * Prepare a durable backend job for its parent to record with its own
-	 * record of it, in one venue transaction. The job keeps the context it runs
-	 * under ({@link #keepCallerContext}), so work it carries on after a restart
-	 * acts with the same authority ({@link #callerContext}).
+	 * record of it, in one venue transaction. Like every recorded job, it keeps
+	 * the state it runs in ({@link #jobState}), so work it carries on after a
+	 * restart acts with the same authority ({@link #callerContext}).
 	 */
 	public Prepared prepareAgentInteraction(AMap<AString, ACell> meta, ACell input, RequestContext ctx) {
-		Prepared prepared = prepareOperation(meta, input, ctx, false, Invocation.TRACKED);
-		prepared.admission.keptContext = keptContext(prepared.ctx);
-		return prepared;
+		return prepareOperation(meta, input, ctx, false, Invocation.TRACKED);
 	}
 
 	/** Prepare an untracked scheduled fire, bound to its account when it is recorded with its claim. */
@@ -587,6 +585,8 @@ public class JobManager {
 				parentID, memoryOnly, resultOriented,
 				(invocation == Invocation.RUN || invocation == Invocation.CALL_RUN) && ctx.getJob() == null && ctx.getJobId() == null,
 				adapter, permit);
+			// A recorded job keeps the state it runs in from admission until it finishes
+			admission.state = jobState(ctx);
 			return new Prepared(admission, adapter, ctx, meta, input, invocation.lookup);
 		} catch (RuntimeException | Error e) {
 			if (permit) releasePermit(ownerDID);
@@ -1154,8 +1154,8 @@ public class JobManager {
 		private final boolean permit;
 		private final boolean preserveFailureCause;
 		private final BiFunction<JobRecord, AMap<AString, ACell>, VenueJob> handle;
-		/** The caller's context the entry keeps ({@link #keepCallerContext}), or null. */
-		private AMap<AString, ACell> keptContext;
+		/** The state the entry keeps ({@link #jobState}), or null. */
+		private AMap<AString, ACell> state;
 		/** The id each run of the transaction took, in order. */
 		private final List<Blob> ids = new ArrayList<>();
 		/** The generation of the owner's account the Job was recorded in ({@link Users#requireCurrent}). */
@@ -1191,10 +1191,9 @@ public class JobManager {
 			AMap<AString, ACell> entry = Maps.of(JobIndex.OWNER, ownerDID);
 			AMap<AString, ACell> kept = rules.toCell();
 			if (kept != null) entry = entry.assoc(JobIndex.RULES, kept);
-			if (keptContext != null) {
+			if (state != null) {
 				// A context with no job scope of its own is the Job's
-				AMap<AString, ACell> context = keptContext.containsKey(Fields.JOB_ID) ? keptContext
-					: keptContext.assoc(Fields.JOB_ID, id);
+				AMap<AString, ACell> context = state.containsKey(Fields.JOB_ID) ? state : state.assoc(Fields.JOB_ID, id);
 				entry = entry.assoc(JobIndex.CONTEXT, context);
 			}
 			venue.jobIndex().put(id, entry);
@@ -1278,75 +1277,47 @@ public class JobManager {
 		}
 	}
 
-	// ========== Caller context kept for work that continues ==========
+	// ========== A job's state ==========
 
 	/**
-	 * Keeps what {@code ctx} carries beyond its caller with {@code job}, for
-	 * work that continues for the caller after this request, such as a session
-	 * that resumes after a restart ({@link #callerContext}): the verified UCAN
-	 * proofs it presents, in the form checked on arrival, the separate
-	 * authority it acts with if it has one ({@link Engine#keptAuthority}), its
-	 * route ({@link RequestContext#getRoute}), since the work is the same
-	 * request carried on, and its execution scopes (agent, session, job,
-	 * task). They are kept in the job's entry
-	 * ({@link JobIndex}), which no route reads, and go with it when the job
-	 * ends. A job keeps a context even when its caller presented nothing
-	 * beyond itself, so {@link #keepsCallerContext} tells it from one whose
-	 * adapter never asked. A job that is not recorded does not outlive the
-	 * request, so it keeps none.
+	 * The state a recorded job keeps from admission until it finishes
+	 * (AUTHORITY.md, A job's state), from the context it runs in: the frame,
+	 * what narrows it and the grants presented ({@link Engine#stateOf}); the
+	 * route ({@link RequestContext#getRoute}), since work it carries on is the
+	 * same request; and its execution scopes (agent, session, job and task),
+	 * where a context with no job scope of its own takes the job's
+	 * ({@link Admission#record}). It is kept in the job's entry
+	 * ({@link JobIndex}), which no route reads, and goes with it when the job
+	 * ends. A job that is not recorded does not outlive the request, so it
+	 * keeps none.
 	 */
-	public void keepCallerContext(Job job, RequestContext ctx) {
-		if (!job.isRecorded()) return;
-		AMap<AString, ACell> context = keptContext(ctx);
-		venue().jobIndex().update(job.getID(), entry -> entry.assoc(JobIndex.CONTEXT, context));
-	}
-
-	/** What {@link #keepCallerContext} keeps of {@code ctx}. */
-	private static AMap<AString, ACell> keptContext(RequestContext ctx) {
-		AMap<AString, ACell> kept = Maps.empty();
-		AVector<ACell> proofs = ctx.getProofs();
-		if (proofs != null && !proofs.isEmpty()) kept = kept.assoc(Fields.PROOFS, proofs);
-		AMap<AString, ACell> authority = Engine.keptAuthority(ctx);
-		if (authority != null) kept = kept.assoc(Fields.AUTHORITY, authority);
+	static AMap<AString, ACell> jobState(RequestContext ctx) {
+		AMap<AString, ACell> state = Engine.stateOf(ctx);
+		if (state == null) return null;
 		AVector<ACell> route = ctx.getRoute();
-		if (route != null && !route.isEmpty()) kept = kept.assoc(Fields.ROUTE, route);
-		if (ctx.getAgentId() != null) kept = kept.assoc(Fields.AGENT_ID, ctx.getAgentId());
-		if (ctx.getSessionId() != null) kept = kept.assoc(Fields.SESSION_ID, ctx.getSessionId());
-		if (ctx.getJobId() != null) kept = kept.assoc(Fields.JOB_ID, ctx.getJobId());
-		if (ctx.getTaskId() != null) kept = kept.assoc(Fields.TASK_ID, ctx.getTaskId());
-		return kept;
+		if (route != null && !route.isEmpty()) state = state.assoc(Fields.ROUTE, route);
+		if (ctx.getAgentId() != null) state = state.assoc(Fields.AGENT_ID, ctx.getAgentId());
+		if (ctx.getSessionId() != null) state = state.assoc(Fields.SESSION_ID, ctx.getSessionId());
+		if (ctx.getJobId() != null) state = state.assoc(Fields.JOB_ID, ctx.getJobId());
+		if (ctx.getTaskId() != null) state = state.assoc(Fields.TASK_ID, ctx.getTaskId());
+		return state;
 	}
 
 	/**
-	 * Whether {@code job} keeps its caller's context ({@link #keepCallerContext}),
-	 * so that {@link #callerContext} rebuilds the context it started in rather
-	 * than its caller alone.
+	 * The context a job acts in again, in its account, from the state it keeps
+	 * ({@link #jobState}): its frame as it stands now ({@link Engine#contextOf}),
+	 * on the route and with the execution scopes it keeps. This is how work
+	 * that continues after a restart regains its authority, and no more than
+	 * its request had. Nobody is present in it, so it has no origin, though
+	 * its route still names where the request started.
 	 *
-	 * @return false when its adapter never asked, or the job has finished
-	 */
-	public boolean keepsCallerContext(Job job) {
-		return RT.getIn(venue().jobIndex().entry(job.getID()), JobIndex.CONTEXT) != null;
-	}
-
-	/**
-	 * The context a job's caller acts under now, in the job's namespace:
-	 * what a live request of the caller's would hold on arrival
-	 * ({@link Engine#context(AString, AString, AVector, AMap)}), presenting again
-	 * the proofs the job keeps and acting with the separate authority it keeps,
-	 * on the route and with the execution scopes it keeps
-	 * ({@link #keepCallerContext}). This is how work that continues after a
-	 * restart regains its authority. Nobody is present in it, so it has no
-	 * origin, though its route still names where the request started.
-	 *
-	 * @throws AuthException when the job names no caller, or its caller could not act now
+	 * @throws AuthException when the job keeps no state ({@link #NO_STATE}),
+	 *         as one that has finished, or its frame could not act now
 	 */
 	public RequestContext callerContext(Job job) {
-		AString caller = job.getCaller();
-		if (caller == null) throw new AuthException(NO_CALLER + job.getID());
 		AMap<AString, ACell> kept = RT.ensureMap(RT.getIn(venue().jobIndex().entry(job.getID()), JobIndex.CONTEXT));
-		RequestContext ctx = engine.context(accountOf(job), caller, RT.ensureVector(RT.getIn(kept, Fields.PROOFS)),
-			RT.ensureMap(RT.getIn(kept, Fields.AUTHORITY)));
-		if (kept == null) return ctx;
+		if (kept == null) throw new AuthException(NO_STATE + job.getID());
+		RequestContext ctx = engine.contextOf(accountOf(job), kept);
 		AVector<ACell> route = RT.ensureVector(kept.get(Fields.ROUTE));
 		if (route != null) ctx = ctx.withRoute(route);
 		AString agentId = RT.ensureString(kept.get(Fields.AGENT_ID));
@@ -1395,8 +1366,8 @@ public class JobManager {
 		venue.jobIndex().updateAdapterData(job.getID(), change);
 	}
 
-	/** Why a job's work cannot regain authority: its record names no caller. */
-	public static final String NO_CALLER = "The job records no caller to act as: ";
+	/** Why a job's work cannot regain authority: it keeps no state, as a finished job does not; the job's id follows. */
+	public static final String NO_STATE = "The job keeps no state to act in again: ";
 
 	// ========== Mirrors ==========
 

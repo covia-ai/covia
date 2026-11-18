@@ -91,8 +91,6 @@ public class RemoteAgentAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 		if (target == null) {
 			venue = localVenue(ctx);
 			credentials = Maps.empty();
-			// The agent's task is followed as this caller after a restart too
-			engine.jobs().keepCallerContext(job, ctx);
 		} else {
 			engine.remoteJobs().requireNotClosing();
 			VenueConnection connection = VenueConnection.connect(engine, ctx, target, input);
@@ -213,13 +211,14 @@ public class RemoteAgentAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 
 	/**
 	 * Follows a call to an agent on this venue again, as its caller acts now
-	 * in the context the job kept, exactly as it first followed it. One that
-	 * kept no context, or recorded no task, cannot be followed; nor can one
-	 * whose caller cannot act now. Either way the agent's task runs on: the
-	 * venue never acts on it without its caller's authority.
+	 * in the state the job keeps ({@link covia.venue.JobManager#callerContext}),
+	 * exactly as it first followed it. One that recorded no task cannot be
+	 * followed; nor can one that keeps no state, or whose caller cannot act
+	 * now. Either way the agent's task runs on: the venue never acts on it
+	 * without its caller's authority.
 	 */
 	private void recoverLocal(Job job, Blob id) {
-		if (id == null || !engine.jobs().keepsCallerContext(job)) {
+		if (id == null) {
 			engine.remoteJobs().end(job, LOCAL_INTERRUPTED);
 			return;
 		}
