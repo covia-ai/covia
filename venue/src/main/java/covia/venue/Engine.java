@@ -3646,6 +3646,25 @@ public class Engine {
 		return Strings.create(base + ":" + principal);
 	}
 
+	/** Refusal of a principal the venue's configuration names that is no principal here; the setting and the reason follow. */
+	public static final String CONFIGURED_PRINCIPAL = "%s names no principal of this venue: %s";
+
+	/**
+	 * A principal the venue's configuration names at {@code setting}, with a
+	 * short form expanded ({@link #expandPrincipal}), as a binding's or a
+	 * project's {@code user} is when it is used.
+	 *
+	 * @throws ConfigurationException with {@link #CONFIGURED_PRINCIPAL} for a
+	 *         value that starts as a short form and names no principal here
+	 */
+	public AString configuredPrincipal(String setting, AString principal) {
+		try {
+			return expandPrincipal(principal);
+		} catch (InvalidInputException e) {
+			throw new ConfigurationException(CONFIGURED_PRINCIPAL.formatted(setting, e.getMessage()), e);
+		}
+	}
+
 	/**
 	 * A path or resource as given, with a leading principal in short form
 	 * expanded ({@link #expandPrincipal}): {@code u:bob/w/notes} is
@@ -6042,7 +6061,9 @@ public class Engine {
 	 * <ul>
 	 *   <li>{@code "venue"} — the venue's own DID (see {@link #getDIDString})</li>
 	 *   <li>{@code "public"} — {@code <venueDID>:public}, the anonymous user</li>
-	 *   <li>Anything else — used verbatim; expected to be a literal DID string</li>
+	 *   <li>Anything else — a DID, or a user of this venue in short form
+	 *   ({@link #expandPrincipal}); one that names no principal here is
+	 *   skipped with a warning</li>
 	 * </ul>
 	 *
 	 * <p>Each named secret overwrites any existing value under that name for
@@ -6074,16 +6095,13 @@ public class Engine {
 
 			AString targetDID;
 			String userKeyStr = userKey.toString();
-			if ("venue".equals(userKeyStr)) {
-				targetDID = venueDID;
-			} else if ("public".equals(userKeyStr)) {
-				targetDID = publicDID;
-			} else {
-				targetDID = userKey;
-			}
-
 			User user;
 			try {
+				targetDID = switch (userKeyStr) {
+					case "venue" -> venueDID;
+					case "public" -> publicDID;
+					default -> expandPrincipal(userKey);
+				};
 				user = venueState.users().ensure(targetDID);
 			} catch (Exception e) {
 				log.warn("Could not resolve user '{}' for configured secrets: {}",

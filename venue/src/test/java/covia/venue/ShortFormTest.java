@@ -29,6 +29,7 @@ import convex.core.lang.RT;
 import covia.adapter.messaging.MessagingBotSpec;
 import covia.adapter.messaging.MessagingSettings;
 import covia.api.Fields;
+import covia.exception.ConfigurationException;
 import covia.exception.InvalidInputException;
 import covia.grid.Job;
 import covia.grid.Principals;
@@ -280,6 +281,22 @@ public class ShortFormTest {
 			@Override public ACell reply() { return null; }
 		};
 		assertEquals(bob.did(), spec.userDID(engine), "the binding acts for the user in full");
+
+		// Configuration naming no principal here is a configuration error, on a venue with no hostname too
+		ConfigurationException refused = assertThrows(ConfigurationException.class, () -> spec.userDID(TestServer.ENGINE));
+		assertEquals(Engine.CONFIGURED_PRINCIPAL.formatted("bot 'main' user", Engine.NO_SHORT_FORM + bob.shortForm()),
+			refused.getMessage());
+	}
+
+	@Test
+	void configurationNamesAUserInShortForm() {
+		AString bob = engine.managedUserDID(s("bob"));
+		assertEquals(bob, engine.configuredPrincipal("setting", s("u:bob")));
+		AString other = s("did:key:z6MkOther");
+		assertSame(other, engine.configuredPrincipal("setting", other), "a full DID is kept as given");
+		ConfigurationException malformed = assertThrows(ConfigurationException.class,
+			() -> engine.configuredPrincipal("setting", s("u:b@d")));
+		assertEquals(Engine.CONFIGURED_PRINCIPAL.formatted("setting", Engine.NOT_A_SHORT_FORM + "u:b@d"), malformed.getMessage());
 	}
 
 	// ========== REST and MCP ==========

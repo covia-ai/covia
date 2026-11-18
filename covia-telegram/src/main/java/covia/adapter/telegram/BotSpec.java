@@ -94,14 +94,15 @@ public record BotSpec(
 
 	/**
 	 * The DID the bot acts as. {@code "public"} and a short form
-	 * ({@link Engine#expandPrincipal}) resolve against the venue at call time,
-	 * because the venue's DIDs are only known once the adapter is installed.
+	 * ({@link Engine#configuredPrincipal}) resolve against the venue at call
+	 * time, because the venue's DIDs are only known once the adapter is installed.
 	 *
 	 * @throws ConfigurationException when the spec names the public principal
-	 *         but the venue has public access disabled
+	 *         but the venue has public access disabled, or a short form that
+	 *         names no principal here
 	 */
 	public AString userDID(Engine engine) {
-		if (!PUBLIC_USER.equals(userRef)) return engine.expandPrincipal(Strings.create(userRef));
+		if (!PUBLIC_USER.equals(userRef)) return engine.configuredPrincipal("bot '" + name + "' user", Strings.create(userRef));
 		if (engine == null || !engine.config().isPublicAccess()) {
 			throw new ConfigurationException("bot '" + name + "' acts as \"public\" but public access "
 				+ "is disabled on this venue (auth.public.enabled) — name an explicit DID");

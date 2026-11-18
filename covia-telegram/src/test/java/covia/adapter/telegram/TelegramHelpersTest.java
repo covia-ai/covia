@@ -22,6 +22,7 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.exception.ConfigurationException;
+import covia.venue.Engine;
 import covia.venue.TestEngine;
 import covia.exception.InvalidDefinitionException;
 
@@ -99,6 +100,9 @@ class TelegramHelpersTest {
 		BotSpec spec = BotSpec.parse("x", Maps.of("token", "t", "user", "u:bob", "agent", "a"), false);
 		assertEquals(TestEngine.ENGINE.managedUserDID(Strings.create("bob")), spec.userDID(TestEngine.ENGINE),
 			"the bot acts for the user in full");
+		BotSpec malformed = BotSpec.parse("x", Maps.of("token", "t", "user", "u:b@d", "agent", "a"), false);
+		ConfigurationException refused = assertThrows(ConfigurationException.class, () -> malformed.userDID(TestEngine.ENGINE));
+		assertEquals(Engine.CONFIGURED_PRINCIPAL.formatted("bot 'x' user", Engine.NOT_A_SHORT_FORM + "u:b@d"), refused.getMessage());
 	}
 
 	@Test

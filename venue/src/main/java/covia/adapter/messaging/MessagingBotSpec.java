@@ -20,11 +20,11 @@ public interface MessagingBotSpec {
 
 	/**
 	 * The principal the binding acts for: its {@code user}, a short form
-	 * expanded ({@link Engine#expandPrincipal}), or for {@code "public"} the
+	 * expanded ({@link Engine#configuredPrincipal}), or for {@code "public"} the
 	 * venue's public principal, which needs public access on.
 	 */
 	default AString userDID(Engine engine) {
-		if (!"public".equals(userRef())) return engine.expandPrincipal(Strings.create(userRef()));
+		if (!"public".equals(userRef())) return engine.configuredPrincipal("bot '" + name() + "' user", Strings.create(userRef()));
 		if (engine == null || !engine.config().isPublicAccess()) {
 			throw new ConfigurationException("bot '" + name() + "'" + PUBLIC_ACCESS_DISABLED);
 		}

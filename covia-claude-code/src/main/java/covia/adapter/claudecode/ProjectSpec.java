@@ -13,6 +13,7 @@ import convex.core.data.Strings;
 import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.exception.ConfigurationException;
+import covia.lattice.CapabilityChecker;
 import covia.venue.Engine;
 
 /**
@@ -60,15 +61,17 @@ public record ProjectSpec(
 	private static final Set<AString> KNOWN_KEYS = Set.of(K_PATH, K_USER, K_DESCRIPTION, K_OPTIONS);
 
 	/**
-	 * The DID that owns the project. {@code "public"} and {@code "venue"}
+	 * The DID that owns the project. {@code "public"}, {@code "venue"} and a
+	 * user of this venue in short form ({@link Engine#configuredPrincipal})
 	 * resolve against the engine at call time.
 	 *
 	 * @throws ConfigurationException when the spec names the public principal
-	 *         but the venue has public access disabled
+	 *         but the venue has public access disabled, or a short form that
+	 *         names no principal here
 	 */
 	public AString userDID(Engine engine) {
 		if (VENUE_USER.equals(userRef)) return engine.getDIDString();
-		if (!PUBLIC_USER.equals(userRef)) return Strings.create(userRef);
+		if (!PUBLIC_USER.equals(userRef)) return engine.configuredPrincipal("project '" + name + "' user", Strings.create(userRef));
 		if (!engine.config().isPublicAccess()) {
 			throw new ConfigurationException("project '" + name + "' is owned by \"public\" but public access "
 				+ "is disabled on this venue (auth.public.enabled) — name an explicit DID");
@@ -122,8 +125,10 @@ public record ProjectSpec(
 		}
 		String user = optString(m, K_USER, where);
 		if (user == null || user.isBlank()) user = defaultUser;
-		if (!PUBLIC_USER.equals(user) && !VENUE_USER.equals(user) && !user.startsWith("did:")) {
-			throw new IllegalArgumentException(where + ".user must be a DID, \"public\" or \"venue\": " + user);
+		if (!PUBLIC_USER.equals(user) && !VENUE_USER.equals(user) && !user.startsWith("did:")
+				&& !CapabilityChecker.isShortForm(user)) {
+			throw new IllegalArgumentException(where + ".user must be a DID, u:<user> for a user of this venue, "
+				+ "\"public\" or \"venue\": " + user);
 		}
 		String description = optString(m, K_DESCRIPTION, where);
 		RunOptions options = RunOptions.parse(m.get(K_OPTIONS), RunOptions.ALL_KEYS, where + ".options", strict);

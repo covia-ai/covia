@@ -2664,7 +2664,8 @@ Per bot:
   full authority, so it should be the owner of the agent it routes to: a DID,
   or `u:<name>` for a user of this venue
   ([AUTHORITY.md](AUTHORITY.md#where-names-resolve)), expanded when the bot
-  starts. `"public"` names the venue's public principal (the same identity as an
+  starts, where one naming no principal here is a configuration error.
+  `"public"` names the venue's public principal (the same identity as an
   anonymous MCP client on a public venue), which is what a local dev venue's
   agents are owned by.
 - `agent` **or** `operation` — the **inbound handler**. `agent` is an agent
@@ -3048,7 +3049,10 @@ Per project:
 
 - `path` — an existing directory; Claude Code's working directory. A caller
   never chooses a directory, only a project name.
-- `user` — the DID that owns the project: that user and their agents may run
+- `user` — the principal that owns the project, a DID or `u:<name>` for a
+  user of this venue ([AUTHORITY.md](AUTHORITY.md#where-names-resolve)),
+  expanded when it is used, where one naming no principal here is a
+  configuration error: that user and their agents may run
   in it (`<owner>/claudecode/<project>` × `claudecode/run`), anyone else
   needs a delegation from them. `"public"` names the venue's public
   principal (a local dev venue's default identity); `"venue"` (the default)
@@ -3408,7 +3412,7 @@ Per-venue config can pre-populate the encrypted per-user secret stores at startu
 Top-level keys resolve as follows:
 - `"venue"` → the venue's own DID (used by venue-internal operations and self-issued requests)
 - `"public"` → `<venueDID>:public`, the default identity for unauthenticated callers
-- Anything else → used verbatim; expected to be a literal DID string
+- Anything else → a DID, or `u:<name>` for a user of this venue ([AUTHORITY.md](AUTHORITY.md#where-names-resolve)); a key naming no principal here is skipped with a warning
 
 Each named secret overwrites any existing value under that name for that user — config is the source of truth at launch. Names not listed are left untouched. Per-secret failures log a warning but do not fail startup. Values are never logged.
 

@@ -63,8 +63,8 @@ given in short form wherever a principal or a path arrives as input: `u:bob`
 for `<webDID>:u:bob`, `u:bob:g:helper` for his agent, and `u:bob/w/notes` for
 his `w/notes`. That covers principals (an `accepts` list, a callers gate's
 `callers`, an agent's `controller`, a grant's audience, the user, keyring
-holder or job owner an operation or REST route names, a binding's configured
-`user`) and paths (data, agent, callable, operation, asset, secret and DLFS
+holder or job owner an operation or REST route names, a binding's or Claude
+Code project's configured `user`, a key of the `secrets` bootstrap) and paths (data, agent, callable, operation, asset, secret and DLFS
 references, and a capability's `with` in an agent's config, a token, a
 callable, an approval request or a grant). It is expanded once, where it
 arrives (`Engine.expandPrincipal`, `Engine.expandPath`), and the venue's

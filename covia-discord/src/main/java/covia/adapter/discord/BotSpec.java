@@ -37,9 +37,9 @@ public record BotSpec(String name, String tokenRef, String userRef, String agent
 		allowIds=Collections.unmodifiableSet(new LinkedHashSet<>(allowIds));
 		allowNames=Collections.unmodifiableSet(new LinkedHashSet<>(allowNames));
 	}
-	/** The DID the bot acts as: {@code "public"} and a short form ({@link Engine#expandPrincipal}) resolve against the venue. */
+	/** The DID the bot acts as: {@code "public"} and a short form ({@link Engine#configuredPrincipal}) resolve against the venue. */
 	public AString userDID(Engine engine) {
-		if (!PUBLIC_USER.equals(userRef)) return engine.expandPrincipal(Strings.create(userRef));
+		if (!PUBLIC_USER.equals(userRef)) return engine.configuredPrincipal("bot '"+name+"' user", Strings.create(userRef));
 		if (engine==null || !engine.config().isPublicAccess()) throw new ConfigurationException(
 			"bot '"+name+"' acts as public but public access is disabled");
 		return Strings.create(engine.getDIDString()+":public");

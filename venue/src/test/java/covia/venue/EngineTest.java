@@ -692,6 +692,26 @@ public class EngineTest {
 	}
 
 	@Test
+	public void testProvisionConfiguredSecretsForAUserInShortForm() {
+		AMap<AString, ACell> cfg = Maps.of(Config.SECRETS, Maps.of(
+			Strings.create("u:alice"), Maps.of(Strings.create("FOO"), Strings.create("bar"))));
+		Engine e = Engine.createTemp(cfg.assoc(Config.HOSTNAME, Strings.create("secrets.test.covia.example")));
+		try {
+			assertEquals(1, e.provisionConfiguredSecrets());
+			assertEquals("bar", e.resolveSecret("FOO", RequestContext.of(e.managedUserDID(Strings.create("alice")))));
+		} finally {
+			e.close();
+		}
+		// A venue with no public hostname names no such user, and skips the entry
+		Engine plain = Engine.createTemp(cfg);
+		try {
+			assertEquals(0, plain.provisionConfiguredSecrets());
+		} finally {
+			plain.close();
+		}
+	}
+
+	@Test
 	public void testProvisionConfiguredSecretsAbsent() {
 		assertEquals(0, venue.provisionConfiguredSecrets(),
 			"No secrets configured → returns 0, no error");

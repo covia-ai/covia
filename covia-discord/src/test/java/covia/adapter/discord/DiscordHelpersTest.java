@@ -13,6 +13,8 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import covia.exception.ConfigurationException;
+import covia.venue.Engine;
+import covia.venue.TestEngine;
 
 /**
  * The Discord module's helpers, called directly. Bots running against a venue
@@ -42,5 +44,13 @@ class DiscordHelpersTest {
 			() -> fresh.configure(Maps.of("bots", Maps.of("main", Maps.empty())), false));
 		assertInstanceOf(IllegalArgumentException.class, badBot.getCause());
 		fresh.close();
+	}
+
+	@Test void aBotsUserMayBeAUserOfTheVenueInShortForm() {
+		BotSpec spec = BotSpec.parse("x", Maps.of("token", "t", "user", "u:bob", "agent", "a"), false);
+		assertEquals(TestEngine.ENGINE.managedUserDID(Strings.create("bob")), spec.userDID(TestEngine.ENGINE));
+		BotSpec malformed = BotSpec.parse("x", Maps.of("token", "t", "user", "u:b@d", "agent", "a"), false);
+		ConfigurationException refused = assertThrows(ConfigurationException.class, () -> malformed.userDID(TestEngine.ENGINE));
+		assertEquals(Engine.CONFIGURED_PRINCIPAL.formatted("bot 'x' user", Engine.NOT_A_SHORT_FORM + "u:b@d"), refused.getMessage());
 	}
 }
