@@ -175,6 +175,34 @@ public class McpTokenAuthorityTest {
 	}
 
 	@Test
+	public void presentedGrantingRightCannotEscapeTokenCaps(TestInfo info) {
+		AString alice = TestEngine.uniqueDID(info);
+		RequestContext owner = RequestContext.of(alice);
+		AString grantor = TestEngine.uniqueDID("token-granting-owner");
+		String operation = "v/ops/ucan/issue";
+		String resource = grantor + "/w/private/";
+		AString granting = Strings.create("grant/crud/read");
+		AString jwt = RT.ensureString(RT.getIn(complete(run(operation,
+			Maps.of("aud", alice, "att", Vectors.of(cap(resource, granting))),
+			RequestContext.of(grantor))), Fields.TOKEN));
+		AVector<ACell> proofs = Vectors.of(convex.auth.ucan.UCAN.fromJWT(jwt).toMap());
+		ACell input = Maps.of("aud", TestEngine.uniqueDID("grant-recipient"),
+			"att", Vectors.of(cap(resource, Capability.CRUD_READ)));
+
+		// The presented proof adds a granting right to the issuer, but cannot
+		// let an empty-scoped bearer mint authority outside that bearer's caps.
+		Issued narrow = issue(owner, "no-grants", Vectors.of(operation), Vectors.empty());
+		RequestContext narrowed = engine.tokenContext(narrow.ref()).withProofs(proofs);
+		refused(engine.jobs().runToolOperation(Strings.create(operation), input, narrowed));
+
+		// Explicitly permitting that granting right in the token restores it.
+		Issued allowed = issue(owner, "allow-grants", Vectors.of(operation),
+			Vectors.of(cap(resource, granting)));
+		assertNotNull(done(engine.jobs().runToolOperation(Strings.create(operation), input,
+			engine.tokenContext(allowed.ref()).withProofs(proofs))));
+	}
+
+	@Test
 	public void aTokenNeitherWidensItselfNorMakesAWiderOne(TestInfo info) {
 		AString alice = TestEngine.uniqueDID(info);
 		AVector<ACell> manage = Vectors.of("v/ops/mcp/create-token", "v/ops/mcp/update-token");

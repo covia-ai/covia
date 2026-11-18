@@ -278,8 +278,6 @@ public class SkillsLibraryTest {
 		String tasks = skillBody("tasks");
 		String models = skillBody("models");
 		String skills = skillBody("skills");
-		String capabilities = skillBody("capabilities");
-		String auth = skillBody("auth");
 		assertFalse(agents.contains("created: false"), agents);
 		assertFalse(agents.contains("wait?"), agents);
 		assertFalse(tasks.contains("wait?"), tasks);
@@ -293,11 +291,9 @@ public class SkillsLibraryTest {
 		assertTrue(models.contains("Templates are provider-neutral"), models);
 		assertFalse(models.contains("templates default to openai"), models);
 		assertTrue(skills.contains("Do not invent an undeclared tool name"), skills);
-		for (String guidance : new String[] {capabilities, auth}) {
-			assertTrue(guidance.contains("inherent capabilities are its `config.caps`"), guidance);
-			assertTrue(guidance.contains("OR semantics"), guidance);
-			assertFalse(guidance.contains("ceiling"), guidance);
-		}
+		// Authority composition is covered by the capability, token and callable
+		// tests. Do not require prose describing every grant as an unbounded OR:
+		// presented grants remain inside token/callable caps.
 
 		ACell secretsMeta = convex.core.util.JSON.parse(readResource("/skills/secrets.json"));
 		AVector<ACell> secretTools = RT.ensureVector(

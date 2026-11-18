@@ -87,6 +87,16 @@ not infer authority from an operation name or confuse `ctx.getAuthorityDID()`
 (who acts) with `ctx.getUserDID()` (whose namespace the action uses). See
 [UCAN.md](UCAN.md) for the authority model.
 
+When adding an action, document its exact resource, ability, any extra
+identity restrictions, and which checks apply to generic, bound-tool and
+deferred calls. Add standard abilities to `covia.api.Abilities`, UCAN.md §3.2
+and COG-13; module extensions belong in the module contract and UCAN.md's
+module inventory. Reuse Convex's CRUD constants and slash-boundary matching.
+Test that the required leaf works on the intended resource, a sibling or
+different resource fails, and direct binding does not skip resource checks.
+If a condition is meant to constrain every execution, it must be attached
+to an action check every execution crosses, not only to generic `invoke`.
+
 `engine.venueContext()` is the operator's authority. Act under it only on what
 the operator declared: venue configuration, or a record created under
 `requireVenueAuthority`. Never use it on a reference taken from operation

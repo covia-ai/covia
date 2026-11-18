@@ -4631,6 +4631,11 @@ public class Engine {
 			AVector<ACell> scope = ctx.getCaps();
 			if (scope == null || ctx.denialUnder(scope, resource, grant, ctx.getUserDID(), destination) == null) return;
 		}
+		// A presented granting right adds authority only within the token or
+		// callable through which this request acts, as for any other action.
+		if (!narrowingsCover(ctx, target, grant, destination)) {
+			throw new AuthException(GRANT_BEYOND_SCOPE + " " + can + " on " + target);
+		}
 		if (!proofsCover(ctx, target, grant, currentTimestamp().longValue() / 1000, destination)) {
 			throw new AuthException((root ? GRANT_BEYOND_SCOPE : NO_GRANTING_RIGHT) + " " + can + " on " + target);
 		}

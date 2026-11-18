@@ -315,8 +315,9 @@ default for assembly and inspection, so `agent:context` exposes the model that
 dispatch supplies later.
 
 Caller values always win. Capability gates run after defaults and therefore
-see the one effective input; a deployment that permits only particular model
-ids, endpoints or secret references expresses that rule in a gate. The
+see the one effective input. A restriction on model ids, endpoints or secret
+references can be expressed by a gate on a capability the call actually needs;
+the invocation route and authority matter as described below. The
 complete model operation snapshot carries `secretFields`, so an explicit
 credential is redacted from durable Job state exactly as it is for the
 provider operation.
@@ -327,7 +328,40 @@ generated model may layer a model-specific value over that (the long-running
 Fable preset uses 16000), and explicit call input wins over both. The adapter
 requires the resulting effective value instead of accepting LangChain4j's
 hidden 1024-token fallback. This remains a default, not a ceiling: deployments
-that need an upper bound enforce it with a capability gate.
+that need an upper bound must enforce it at a boundary every relevant call
+crosses, such as a required resource grant with a capability gate.
+
+#### Policy boundaries
+
+Model facets such as `toolCalling`, content support, `options` and `budget`
+describe model behavior and context assembly. They confer no access rights.
+Likewise, selecting a preset or setting `maxTokens` is not an enforced ceiling:
+the call's input overrides defaults.
+
+There is currently no dedicated `model/use` or `llm/invoke` action ability.
+Generic lookup (`/run`, `/invoke`, `grid:run`) needs `invoke` on its supplied
+reference. An `nb.gate` on that grant can inspect the effective `model`, `url`
+and other arguments. Bound tools and configured framework calls do not need
+this generic lookup permission, so an `invoke` gate does not constrain them.
+
+Configured agent model calls are harness work under the controller's current
+authority. `config.caps` narrows the agent's tool actions, not those model calls
+([UCAN.md](UCAN.md) §5.4). Changing model configuration therefore relies on
+the controller-authority check, not merely an `agent/write` grant.
+
+Every route still enforces applicable resource checks: reading attachments,
+using a stored API key (`secret/use`, optionally gated or destination-bound),
+and outbound target policy. A gate on a required secret grant can constrain
+calls using that secret, provided no unconditional authority already covers
+the use. It does not constrain calls using another permitted key, an inline
+credential, or a provider needing no key. `outbound/any` bypasses the venue's
+outbound guard; it is not ordinary permission to call a model.
+
+Consequently, an operator-wide model allowlist, spend limit or argument policy
+cannot be claimed from presets or an `invoke` grant alone. It needs a boundary
+every intended call crosses. Introducing a dedicated model action gate would
+be a separate authorization design change, with bound tools and harness calls
+included in its contract.
 
 ### 5.3 Inference options and upstream support
 
