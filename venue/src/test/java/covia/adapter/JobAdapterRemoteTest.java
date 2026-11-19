@@ -46,6 +46,10 @@ class JobAdapterRemoteTest {
 	private final Engine source = TwoVenueTestServer.ENGINE_A;
 	private final Engine destination = TwoVenueTestServer.ENGINE_B;
 
+	/** Sending HTTP to the destination venue, which a caller with narrowed caps needs (OUTBOUND.md). */
+	static final AMap<AString, ACell> TO_DESTINATION = Capability.create(Abilities.OUTBOUND, Abilities.OUTBOUND_HTTP,
+		Maps.of(Fields.URL, TwoVenueTestServer.BASE_URL_B));
+
 	private AMap<AString, ACell> target(Job job) {
 		return Maps.of(Fields.ID, job.getID().toHexString(), Fields.VENUE, TwoVenueTestServer.BASE_URL_B);
 	}
@@ -92,7 +96,7 @@ class JobAdapterRemoteTest {
 			assertFalse(target.future().isDone());
 
 			Job wait = invoke("result", target(target), ctx.withCaps(Vectors.of(
-				Capability.create(Strings.create("v/ops/job/result"), Abilities.INVOKE))));
+				Capability.create(Strings.create("v/ops/job/result"), Abilities.INVOKE), TO_DESTINATION)));
 			await(wait, j -> Status.STARTED.equals(RT.getIn(RemoteJobs.descriptor(j), RemoteJobs.REMOTE_STATUS)));
 			JobAdapter adapter = (JobAdapter) source.getAdapter("job");
 			adapter.suspendJob(wait);
@@ -147,7 +151,7 @@ class JobAdapterRemoteTest {
 		AString did = UCAN.toDIDKey(key.getAccountKey());
 		RequestContext owner = RequestContext.of(did);
 		String identity = UcanTokens.identityToken(key, TwoVenueTestServer.DID_B, 300);
-		RequestContext remoteOnly = owner.withCaps(Vectors.empty())
+		RequestContext remoteOnly = owner.withCaps(Vectors.of(TO_DESTINATION))
 			.withRawUcans(Vectors.of(Strings.create(identity)));
 		Job target = destination.jobs().invokeOperation("v/test/ops/chat", Maps.empty(), owner);
 		try {
@@ -165,7 +169,8 @@ class JobAdapterRemoteTest {
 
 		// Generic and dedicated controls use the same remote credential. Local
 		// invoke permission is still required for a dynamically selected operation.
-		RequestContext invokeOnly = remoteOnly.withCaps(Vectors.of(Capability.create(Strings.create("v/ops/"), Abilities.INVOKE)));
+		RequestContext invokeOnly = remoteOnly.withCaps(Vectors.of(
+			Capability.create(Strings.create("v/ops/"), Abilities.INVOKE), TO_DESTINATION));
 		for (String operation : new String[]{"run", "invoke", "cancel"}) {
 			Job running = destination.jobs().invokeOperation("v/test/ops/never", Maps.empty(), owner);
 			try {
@@ -198,7 +203,7 @@ class JobAdapterRemoteTest {
 				Vectors.of(Capability.create(JobManager.resource(owner, target.getID()), Abilities.JOB_READ)
 					.assoc(Capability.NB, Maps.of(Fields.URL, destination.config().getBaseUrl()))), Vectors.empty());
 			RequestContext delegated = RequestContext.of(UCAN.toDIDKey(bob.getAccountKey()))
-				.withCaps(Vectors.of(Capability.create(Strings.create("v/ops/"), Abilities.INVOKE)))
+				.withCaps(Vectors.of(Capability.create(Strings.create("v/ops/"), Abilities.INVOKE), TO_DESTINATION))
 				.withRawUcans(Vectors.of(Strings.create(UcanTokens.identityToken(bob, TwoVenueTestServer.DID_B, 300)), read));
 			AMap<AString, ACell> direct = target(target).assoc(Strings.create("authenticateAs"), Strings.create("caller")).assoc(Fields.OWNER, owner);
 			assertNotNull(source.jobs().runToolOperation(Strings.create("v/ops/job/status"), direct, delegated).get());
@@ -220,7 +225,7 @@ class JobAdapterRemoteTest {
 		AKeyPair key = AKeyPair.generate();
 		AString did = UCAN.toDIDKey(key.getAccountKey());
 		RequestContext submitter = RequestContext.of(did)
-			.withCaps(Vectors.of(Capability.create(Strings.create("v/test/ops/never"), Abilities.INVOKE)))
+			.withCaps(Vectors.of(Capability.create(Strings.create("v/test/ops/never"), Abilities.INVOKE), TO_DESTINATION))
 			.withRawUcans(Vectors.of(Strings.create(UcanTokens.identityToken(key, TwoVenueTestServer.DID_B, 300))));
 		Job proxy = source.jobs().startToolOperation(Strings.create("v/ops/grid/run"),
 			Maps.of(Fields.VENUE, TwoVenueTestServer.BASE_URL_B, Fields.OPERATION, "v/test/ops/never", "authenticateAs", "caller"), submitter).job();

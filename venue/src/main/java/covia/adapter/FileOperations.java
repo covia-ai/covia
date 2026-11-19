@@ -11,7 +11,6 @@ import java.nio.file.DirectoryNotEmptyException;
 import java.nio.file.DirectoryStream;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.FileSystem;
-import java.nio.file.FileSystemException;
 import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
 import java.nio.file.LinkOption;
@@ -493,8 +492,9 @@ final class FileOperations {
 			throws IOException {
 		try {
 			return Files.newOutputStream(target, options);
-		} catch (FileSystemException e) {
-			// A new file conflicts with a link as with any existing entry
+		} catch (IOException e) {
+			// Linux reports the link as a plain IOException, not a FileSystemException.
+			// A new file conflicts with a link as with any existing entry.
 			if (!(e instanceof FileAlreadyExistsException) && Files.isSymbolicLink(target)) {
 				throw new InvalidInputException(WRITE_TO_LINK + target.getFileName(), e);
 			}

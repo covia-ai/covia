@@ -168,10 +168,12 @@ public class GoalTreeCrashResumeTest {
 		second.jobs().invokeOperation("v/ops/agent/chat", Maps.of(Fields.AGENT_ID, agentId,
 			Fields.SESSION_ID, sid.toHexString(), Fields.MESSAGE, "after migration"), alice).awaitResult(5000);
 		await(second, agentId, () -> restored.session(sid).cycleEpoch() == null, "migrated chat committed");
+		long represented = GoalTreeContext.countTurns(RT.ensureMap(
+			RT.getIn(restored.session(sid).getRecord(), Fields.FRAMES, CVMLong.ZERO)));
 		second.jobs().invokeOperation("v/ops/agent/compact-session", Maps.of(Fields.AGENT_ID, agentId,
 			Fields.SESSION_ID, sid.toHexString(), "summary", "keep all completed exchanges"), alice).awaitResult(5000);
 		AMap<AString, ACell> compacted = RT.ensureMap(RT.getIn(restored.session(sid).getRecord(), Fields.FRAMES, CVMLong.ZERO));
-		assertEquals(6, GoalTreeContext.countTurns(compacted));
+		assertEquals(represented, GoalTreeContext.countTurns(compacted), "compaction represents every turn it replaced");
 		assertEquals(1, GoalTreeContext.activeConversation(compacted).count());
 		second.flush();
 		closeActivePhase();
@@ -187,11 +189,15 @@ public class GoalTreeCrashResumeTest {
 		AMap<AString, ACell> appended = RT.ensureMap(RT.getIn(reopened.session(sid).getRecord(), Fields.FRAMES, CVMLong.ZERO));
 		AVector<ACell> retained = GoalTreeContext.history(compacted);
 		assertEquals(retained, GoalTreeContext.history(appended).slice(0, retained.count()));
-		assertEquals(8, GoalTreeContext.countTurns(appended));
-		assertEquals(CVMLong.create(8), RT.getIn(reopened.session(sid).getRecord(), "meta", "turns"));
+		long added = GoalTreeContext.history(appended).count() - retained.count();
+		assertTrue(added > 0, "the chat after restart appended its turns");
+		assertEquals(represented + added, GoalTreeContext.countTurns(appended));
+		assertEquals(CVMLong.create(represented + added), RT.getIn(reopened.session(sid).getRecord(), "meta", "turns"));
 		ACell read = third.jobs().invokeOperation("v/ops/agent/history", Maps.of(Fields.AGENT_ID, agentId,
 			Fields.SESSION_ID, sid.toHexString(), Fields.LIMIT, 100L), alice).awaitResult(5000);
-		assertEquals(GoalTreeContext.history(appended), RT.getIn(read, "entries"));
+		AVector<ACell> shown = Vectors.empty();
+		for (ACell entry : GoalTreeContext.history(appended)) shown = shown.conj(RT.ensureMap(entry).dissoc(Fields.ROUTE));
+		assertEquals(shown, RT.getIn(read, "entries"), "the whole history, less the routes only the agent is shown");
 	}
 
 	@Test

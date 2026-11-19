@@ -52,7 +52,8 @@ class RemoteJobSecurityTest {
 	private RequestContext delegate(Job target, AString ability) {
 		AString grant = UCAN.createJWT(alice, bob.getAccountKey(), System.currentTimeMillis() / 1000 + 300,
 			Vectors.of(Capability.create(JobManager.resource(aliceDID, target.getID()), ability)), Vectors.empty());
-		return RequestContext.of(bobDID).withCaps(Vectors.of(Capability.create(Strings.create("v/ops/"), Abilities.INVOKE)))
+		return RequestContext.of(bobDID).withCaps(Vectors.of(Capability.create(Strings.create("v/ops/"), Abilities.INVOKE),
+				JobAdapterRemoteTest.TO_DESTINATION))
 			.withRawUcans(Vectors.of(Strings.create(identity), grant));
 	}
 
@@ -62,7 +63,9 @@ class RemoteJobSecurityTest {
 	}
 
 	private ACell call(String operation, ACell input, RequestContext ctx) {
-		return source.jobs().runToolOperation(Strings.create("v/ops/" + operation), input, ctx).join();
+		// Bounded, so a call that never completes fails here rather than stalling the suite.
+		return source.jobs().runToolOperation(Strings.create("v/ops/" + operation), input, ctx)
+			.orTimeout(10, TimeUnit.SECONDS).join();
 	}
 
 	private void forbidden(String operation, ACell input, RequestContext ctx) {
