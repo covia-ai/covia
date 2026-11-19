@@ -471,7 +471,9 @@ Two gaps in LangChain4j 1.23.0 affect how a response is read:
    exception an HTTP 5xx raises, and is not retried. A 5xx carries the HTTP
    answer behind it and this does not, so Covia reads one without an HTTP
    answer as a response that holds no answer, which fails the call, and a 5xx
-   as the provider failing.
+   as the provider failing. An error such a response holds reaches Covia only
+   in the exception's own text, which is never passed on, so the failure does
+   not say what the provider said.
 
 ## 6. Discovery
 
