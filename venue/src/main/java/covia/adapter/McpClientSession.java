@@ -148,8 +148,11 @@ public class McpClientSession implements AutoCloseable {
 
 	/**
 	 * Runs one request over this session, connecting first if need be. A
-	 * failure is reported as the Covia type for it ({@link #failure}) and
-	 * drops the connection, so the next request reconnects.
+	 * failure is reported as the Covia type for it ({@link #failure}). One
+	 * from the connection or the server drops the connection, so the next
+	 * request reconnects; the venue's own refusal of this caller, such as its
+	 * outbound check, sends nothing and leaves the connection to the other
+	 * callers sharing it, whose requests may be in flight.
 	 *
 	 * @param what the request, as a failure names it: {@link #TOOLS_LIST},
 	 *        {@link #TOOL_CALL} with the tool's name
@@ -159,7 +162,7 @@ public class McpClientSession implements AutoCloseable {
 		try {
 			return request.apply(connectedClient);
 		} catch (RuntimeException e) {
-			invalidate();
+			if (find(e, CoviaException.class) == null) invalidate();
 			throw failure(serverUrl, what, e);
 		}
 	}

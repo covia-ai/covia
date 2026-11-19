@@ -77,7 +77,8 @@ redirect before sending it.
 Transport connection pooling does not cache permission. Outbound scope, proof expiry,
 token restrictions and gate conditions are checked at each send. Long-lived
 streams do not get disconnected retroactively; a new HTTP request is checked
-again. A failed check sends nothing for that attempt. Refusals retain the missing
+again. A failed check sends nothing for that attempt and leaves a pooled
+connection open for the other callers sharing it. Refusals retain the missing
 capability and do not echo a resolved credential-bearing destination.
 
 Ordinary egress does not override `http.allowedHosts`, `http.blockedHosts` or

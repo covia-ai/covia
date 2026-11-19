@@ -4,6 +4,8 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.Test;
@@ -172,5 +174,26 @@ class OutboundAuthorityTest {
 		assertTrue(refused.getMessage().contains(Abilities.OUTBOUND_HTTP_POST.toString()), refused.getMessage());
 		// A subsequent authorized caller can still use the same transport pool.
 		assertNotNull(mcp.listMCPTools(owner, url, null));
+	}
+
+	@Test void aRefusedCallerLeavesAPooledConnectionToOthersInFlight(TestInfo info) throws Exception {
+		RequestContext owner = owner(info);
+		AString id = Strings.create("offline");
+		complete(run("v/ops/agent/create", Maps.of(Fields.AGENT_ID, id, Fields.CONFIG,
+			Maps.of(Config.CAPS, Vectors.empty())), owner));
+		RequestContext agent = engine.context(owner.getUserDID(), Principals.agentDID(owner.getUserDID(), id));
+		MCPAdapter mcp = (MCPAdapter) engine.getAdapter("mcp");
+		AString url = Strings.create(TestServer.BASE_URL + "/mcp");
+		String gateName = "pooled-mcp-" + owner.getUserDID();
+		try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName)) {
+			CompletableFuture<ACell> held = CompletableFuture.supplyAsync(() -> mcp.callMCPTool(owner, url,
+				"test_hold", Maps.of("gate", gateName, Fields.RESULT, "released"), null));
+			assertTrue(gate.awaitEntered(10, TimeUnit.SECONDS), "the owner's call is in flight");
+			assertThrows(AuthException.class, () -> mcp.listMCPTools(agent, url, null));
+			assertNotNull(mcp.listMCPTools(owner, url, null));
+			gate.release();
+			ACell result = held.get(10, TimeUnit.SECONDS);
+			assertTrue(String.valueOf(result).contains("released"), String.valueOf(result));
+		}
 	}
 }
