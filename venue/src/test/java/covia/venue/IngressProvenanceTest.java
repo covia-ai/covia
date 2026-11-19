@@ -124,7 +124,9 @@ public class IngressProvenanceTest {
 				else {
 					assertNotNull(from, mode);
 					assertTrue(from.contains("transport http"), from);
-					assertTrue(from.contains(named ? "credential accessToken" : "credential venueJwt"), from);
+					assertFalse(from.contains("credential"), from);
+					assertFalse(from.contains("venueJwt"), from);
+					assertFalse(from.contains("accessToken"), from);
 					if (named) assertTrue(from.contains("held by someone the venue does not know"), from);
 				}
 			} finally {

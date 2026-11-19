@@ -4879,7 +4879,6 @@ public class Engine {
 		}
 		if (credentialType != null) {
 			first = first.assoc(Fields.CREDENTIAL_TYPE, credentialType);
-			text.text(", credential ").id(credentialType);
 		}
 		AVector<ACell> previousText = RT.ensureVector(first.get(Fields.TEXT));
 		first = first.assoc(Fields.TEXT, previousText.concat(text.build().parts()));

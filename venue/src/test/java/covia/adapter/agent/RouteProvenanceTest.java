@@ -207,7 +207,7 @@ public class RouteProvenanceTest {
 		AMap<AString, ACell> incoming = Maps.of(Fields.CALLER, alice, Fields.ROUTE, http.getRoute(), Fields.MESSAGE, "hello");
 		assertFalse(TurnProvenance.ownerDirect(engine, helper, TurnProvenance.key(incoming)));
 		assertEquals(java.util.List.of(
-			"[From (venue-verified): your owner via auth (signed in, transport http, protocol mcp, credential venueJwt)]",
+			"[From (venue-verified): your owner via auth (signed in, transport http, protocol mcp)]",
 			"[From (venue-verified): your owner via auth (signed in)]"),
 			elements(incoming, incoming, turn(alice, "direct", signedIn(alice))),
 			"HTTP is labelled once, and returning to direct input is a source change");

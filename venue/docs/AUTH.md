@@ -639,7 +639,8 @@ or `token` route record. An anonymous public request retains HTTP provenance
 without claiming a credential. Identity-only host attribution also leaves
 the credential class unknown. These facts neither change authority nor add
 authentication assurance, and bearer possession does not establish personal
-approval of a message. The record and its model-facing label follow
+approval of a message. The model-facing hint shows transport and protocol,
+not the credential class. The record and its model-facing label follow
 [AGENT_CONTEXT.md §1.2](AGENT_CONTEXT.md#12-instruction-labels-and-data-boundaries).
 
 Embedded HTTP handlers obtain this provenance through

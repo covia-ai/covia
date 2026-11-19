@@ -312,7 +312,9 @@ When verified, `credentialType` names the credential class: `venueJwt`,
 `keyJwt`, `ucanBearer`, `providerToken`, or `accessToken` for a named access
 token. Trusted host verifiers may establish other credential classes;
 identity-only attribution and anonymous requests omit this field. The
-record's text names these facts too. No credential bytes are recorded.
+record's text names the transport and protocol, but omits the credential
+class: the model-facing label is a source hint, not a credential assessment.
+The credential class remains structured provenance only. No credential bytes are recorded.
 These facts preserve authenticated authority and do not establish that a
 human wrote or approved the message. Browser requests over HTTP carry them
 as well. In-process requests have no transport field.
