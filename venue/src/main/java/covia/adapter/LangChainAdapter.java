@@ -697,6 +697,10 @@ public class LangChainAdapter extends AAdapter {
 			// sent successfully that holds no answer: langchain4j raises an
 			// OpenAI-format response with no choices, or only an error, as a
 			// server error, once and without retrying it (MODELS.md §5.3).
+			// An error the response holds is only in the exception's text,
+			// which is never passed on. Once langchain4j reports this case
+			// distinctly, match on that and pass the provider's message on as
+			// providerNote does (#718).
 			failure = new ResponseException(ProviderStop.NO_ANSWER.formatted(provider, model, ""));
 		} else if (e instanceof dev.langchain4j.exception.InternalServerException) {
 			failure = new UnavailableException(PROVIDER_FAILED.formatted(provider, model, note));

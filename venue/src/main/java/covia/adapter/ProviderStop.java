@@ -79,6 +79,9 @@ final class ProviderStop {
 		AString value = null;
 		AString category = null;
 		if (response.metadata() instanceof AnthropicChatResponseMetadata anthropic) {
+			// langchain4j reads a refusal as OTHER and keeps neither the stop
+			// reason nor its details, so both come from the raw response
+			// until it exposes them (#718).
 			ACell raw = body(anthropic.rawHttpResponse());
 			value = RT.ensureString(RT.getIn(raw, "stop_reason"));
 			category = RT.ensureString(RT.getIn(raw, "stop_details", "category"));
