@@ -169,6 +169,9 @@ public class AcceptTasksTest {
 			AMap<AString, ACell> taskCycle = lastCycle(agent);
 			assertTrue(names(taskCycle.get(Fields.TOOLS)).containsAll(TaskTools.NAMES),
 				runtime + " did not offer the task tools to the task's cycle: " + taskCycle.get(Fields.TOOLS));
+			ACell resolved = RT.getIn(taskCycle, Fields.INFERENCES, 0, Fields.CALLS, 0);
+			assertEquals(TaskTools.COMPLETE, String.valueOf(RT.getIn(resolved, Fields.NAME)), runtime + ": " + resolved);
+			assertNull(RT.getIn(resolved, "isError"), runtime + " refused complete_task: " + resolved);
 			assertEquals(Status.COMPLETE, RT.getIn(taskCycle, Fields.TASK_RESULTS, taskId, Fields.STATUS),
 				runtime + ": " + taskCycle.get(Fields.TASK_RESULTS));
 			assertEquals(rendering, rendering(agent, sid), runtime + " changed the session's rendering for the task");
@@ -223,12 +226,12 @@ public class AcceptTasksTest {
 			}
 
 			try (AgentWatch watch = AgentWatch.open(engine, owner, id)) {
-				ACell triggered = engine.jobs().invokeOperation("v/ops/agent/trigger",
+				engine.jobs().invokeOperation("v/ops/agent/trigger",
 					Maps.of(Fields.AGENT_ID, id), ctx).awaitResult(5000);
-				assertNotNull(triggered, runtime);
-				watch.awaitRest(0);
+				watch.awaitRest(1);
 			}
-			assertEquals(Agent.SLEEPING, agent.getStatus(), runtime + " did not come to rest after the trigger");
+			assertEquals(2, agent.getTimeline().count(), runtime + " ran no cycle for the trigger");
+			assertEquals(Agent.SLEEPING, agent.getStatus(), runtime);
 			assertNull(Agent.error(agent.getRecord()), runtime);
 		}
 	}
