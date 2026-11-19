@@ -63,7 +63,8 @@ public final class ContextAssembler {
 	static final String BUDGET_PINNED_NOTE =
 		" The persistent material is pinned_context and cannot be unloaded by the agent.";
 	static final String BUDGET_COMPACT_NOTE =
-		" Use compact to summarise and reclaim conversation history before further work.";
+		" Use compact to summarise and reclaim conversation history before further work;"
+		+ " it keeps your most recent exchanges, this one included, word for word.";
 	static final String BUDGET_NO_COMPACT_NOTE =
 		" This agent has no compact tool; finish promptly or ask the operator to compact or reset the session.";
 

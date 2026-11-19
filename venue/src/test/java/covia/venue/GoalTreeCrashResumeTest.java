@@ -171,7 +171,7 @@ public class GoalTreeCrashResumeTest {
 		long represented = GoalTreeContext.countTurns(RT.ensureMap(
 			RT.getIn(restored.session(sid).getRecord(), Fields.FRAMES, CVMLong.ZERO)));
 		second.jobs().invokeOperation("v/ops/agent/compact-session", Maps.of(Fields.AGENT_ID, agentId,
-			Fields.SESSION_ID, sid.toHexString(), "summary", "keep all completed exchanges"), alice).awaitResult(5000);
+			Fields.SESSION_ID, sid.toHexString(), "summary", "keep all completed exchanges", "keep", 0L), alice).awaitResult(5000);
 		AMap<AString, ACell> compacted = RT.ensureMap(RT.getIn(restored.session(sid).getRecord(), Fields.FRAMES, CVMLong.ZERO));
 		assertEquals(represented, GoalTreeContext.countTurns(compacted), "compaction represents every turn it replaced");
 		assertEquals(1, GoalTreeContext.activeConversation(compacted).count());
