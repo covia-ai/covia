@@ -82,6 +82,7 @@ public class GoalTreeAdapterTest {
 				Fields.CONFIG, Maps.of(
 					Fields.OPERATION, "v/ops/goaltree/chat",
 					"llmOperation", "v/test/ops/llm",
+					"acceptTasks", true,
 					"caps", Vectors.of(Maps.of(
 						"with", Strings.create("w/allowed/"),
 						"can", Strings.create("crud/read"))))),
@@ -266,7 +267,8 @@ public class GoalTreeAdapterTest {
 			Maps.of(Fields.AGENT_ID, "task-tools-goal",
 				Fields.CONFIG, Maps.of(
 					Fields.OPERATION, "v/ops/goaltree/chat",
-					"llmOperation", "v/test/ops/taskllm")),
+					"llmOperation", "v/test/ops/taskllm",
+					"acceptTasks", true)),
 			ALICE).awaitResult(5000);
 
 		// The task renders last, with the task tools offered — as every runtime renders it.
@@ -403,13 +405,23 @@ public class GoalTreeAdapterTest {
 	/** An agent offered only subgoal: its child scripted by {@code model}.
 	 *  Returns a watch on it, opened before any work. */
 	private AgentWatch createSubgoalAgent(String agentId, AString model) {
+		return createSubgoalAgent(agentId, model, false);
+	}
+
+	/** As {@link #createSubgoalAgent}, for an agent that takes tasks. */
+	private AgentWatch createSubgoalTaskAgent(String agentId, AString model) {
+		return createSubgoalAgent(agentId, model, true);
+	}
+
+	private AgentWatch createSubgoalAgent(String agentId, AString model, boolean acceptTasks) {
 		engine.jobs().invokeOperation("v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, agentId,
 				Fields.CONFIG, Maps.of(
 					Fields.OPERATION, "v/ops/goaltree/chat",
 					"llmOperation", "v/test/ops/subgoalechollm",
 					"model", model,
-					Fields.TOOLS, Vectors.of(Strings.create("subgoal")))),
+					Fields.TOOLS, Vectors.of(Strings.create("subgoal")),
+					"acceptTasks", acceptTasks)),
 			ALICE).awaitResult(5000);
 		return AgentWatch.open(engine, ALICE_DID, agentId);
 	}
@@ -444,7 +456,7 @@ public class GoalTreeAdapterTest {
 	@Test
 	public void testAChildCannotResolveTheTask() {
 		AMap<AString, ACell> child;
-		try (AgentWatch watch = createSubgoalAgent("subgoal-task", TestAdapter.SUBGOAL_CHILD_RESOLVES_TASK)) {
+		try (AgentWatch watch = createSubgoalTaskAgent("subgoal-task", TestAdapter.SUBGOAL_CHILD_RESOLVES_TASK)) {
 			ACell result = engine.jobs().invokeOperation("v/ops/agent/request",
 				Maps.of(Fields.AGENT_ID, "subgoal-task", Fields.MESSAGE, "decompose this", "timeout", 15000L),
 				ALICE).awaitResult(20000);
@@ -847,7 +859,8 @@ public class GoalTreeAdapterTest {
 		AMap<AString, ACell> config = Maps.of(
 			Fields.OPERATION, "v/ops/goaltree/chat",
 			"llmOperation", "v/test/ops/llm",
-			"model", "strict-goal-schema-test");
+			"model", "strict-goal-schema-test",
+			"acceptTasks", true);
 		engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(
 			Fields.AGENT_ID, "strict-goal-schema-agent",
 			Fields.CONFIG, TestEngine.unrestricted(config)), ALICE).awaitResult(5000);
@@ -880,9 +893,10 @@ public class GoalTreeAdapterTest {
 			RT.getIn(root, GoalTreeContext.K_RENDERED_CONTEXT));
 		assertNotNull(rendered);
 		AVector<ACell> tools = rendered.tools();
-		assertTrue(hasNamedTool(tools, TaskTools.COMPLETE));
 		assertFalse(hasNamedTool(tools, "complete"),
 			"request schema must not specialise the persistent root palette");
+		assertTrue(RT.ensureVector(RT.getIn(agent.getTimeline().get(0), Fields.TOOLS))
+			.contains(Strings.create(TaskTools.COMPLETE)), "the task's cycle offered the task tools");
 	}
 
 	@Test

@@ -154,7 +154,7 @@ public class MCPTokenTest {
 		AString alice = TestEngine.uniqueDID(info);
 		RequestContext owner = RequestContext.of(alice);
 		run("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "helper",
-			Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")), owner);
+			Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete", "acceptTasks", true)), owner);
 		String bearer = RT.getIn(run("v/ops/mcp/create-token", Maps.of(Fields.NAME, "outside-bot",
 			Fields.TOOLS, Vectors.of("v/ops/agent/request"),
 			Fields.CAPS, Vectors.of(Capability.create(Strings.create("g/helper"), Abilities.AGENT_REQUEST))),

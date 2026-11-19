@@ -144,6 +144,8 @@ public class AgentAdapter extends AAdapter {
 	public static final String SUSPEND_REASON_INVALID = "Suspension reason must be a string";
 	public static final String SUSPEND_AGENT_GONE = "Agent was removed or terminated before suspension";
 	public static final String TRANSITION_CANCELLED = "Transition cancelled";
+	/** Why {@code agent:request} refused an agent that takes no tasks ({@link #acceptsTasks}): the agent named. */
+	public static final String TASKS_NOT_ACCEPTED = "Agent %s does not take tasks: its config does not set acceptTasks";
 	/** Why a task failed after a cycle that neither resolved it nor left anything to resume it. */
 	public static final String TASK_YIELDED_IDLE = "The agent ended its turn with no reply, without completing, "
 		+ "failing or parking the task, and nothing it waits on (a person's answer, a running call or a wake time) "
@@ -215,6 +217,7 @@ public class AgentAdapter extends AAdapter {
 	private static final AString DEFAULT_SKILLSET   = Strings.intern("w/skills");
 	private static final AString K_TOOLS            = Strings.intern("tools");
 	private static final AString K_DEFAULT_TOOLS    = Strings.intern("defaultTools");
+	private static final AString K_ACCEPT_TASKS     = Strings.intern("acceptTasks");
 	private static final AString K_CAPS             = Strings.intern("caps");
 	private static final AString K_CONTEXT          = Strings.intern("context");
 	private static final AString K_OUTPUTS          = Strings.intern("outputs");
@@ -1655,6 +1658,16 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	/**
+	 * Whether an agent with this config takes tasks: only when it sets
+	 * {@code acceptTasks: true} (AGENT_LOOP.md §2.3). An agent that does not is
+	 * refused {@code agent:request}, and its cycles offer no task tools unless
+	 * they carry a task it had queued before.
+	 */
+	public static boolean acceptsTasks(AMap<AString, ACell> config) {
+		return config != null && CVMBool.TRUE.equals(config.get(K_ACCEPT_TASKS));
+	}
+
+	/**
 	 * agent:request — submit a task to an agent.
 	 *
 	 * <p>The task is purely lattice data — no Job in JobManager. If {@code wait}
@@ -1677,6 +1690,10 @@ public class AgentAdapter extends AAdapter {
 		if (agent == null) return;
 		if (failIfSuspended(job, agent, agentId)) return;
 		if (externalTurn(job, ctx, target, agent, "request", input)) return;
+		// Refused before any session, task or adapter data exists for it.
+		if (!acceptsTasks(agent.getConfig())) {
+			throw new UnsupportedException(TASKS_NOT_ACCEPTED.formatted(agentId));
+		}
 
 		// Mint or reuse a session for this request. Stage 1 scaffold — the
 		// sid is recorded on the task row and returned in the response
@@ -6219,6 +6236,7 @@ public class AgentAdapter extends AAdapter {
 		requireConfigType(config, K_MODEL, AString.class, "a string model name");
 		requireConfigType(config, K_API_KEY, AString.class, "a string secret reference");
 		requireConfigType(config, K_DEFAULT_TOOLS, CVMBool.class, "a boolean");
+		requireConfigType(config, K_ACCEPT_TASKS, CVMBool.class, "a boolean");
 		requireConfigType(config, AbstractLLMAdapter.K_RECORD_TOOL_CALLS, CVMBool.class, "a boolean");
 		requireConfigType(config, K_CAPS, AVector.class, "an array of capability objects, or \"unrestricted\"");
 		// Admission is security configuration: a policy that would fail closed at

@@ -432,7 +432,7 @@ public class AgentToolboxTest {
 			AMap<AString, ACell> step = step(agent, "call a tool that does not exist",
 				assistantCall("call_unknown", "records_read", Maps.empty()), null);
 			assertEquals(Strings.create("Error: " + HarnessTools.noSuchTool("records_read",
-				Set.of(TaskTools.COMPLETE, TaskTools.FAIL, TaskTools.PARK, "test_echo"))),
+				Set.of("test_echo"))),
 				result(step, "call_unknown"), runtime.name());
 		}
 	}

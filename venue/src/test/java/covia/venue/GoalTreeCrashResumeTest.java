@@ -19,6 +19,7 @@ import convex.core.data.Keyword;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
+import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.etch.EtchStore;
@@ -94,14 +95,20 @@ public class GoalTreeCrashResumeTest {
 	}
 
 	private static void createGoalAgent(Engine engine, String agentId) {
+		createGoalAgent(engine, agentId, false);
+	}
+
+	/** @param acceptTasks whether the agent takes tasks */
+	private static void createGoalAgent(Engine engine, String agentId, boolean acceptTasks) {
+		AMap<AString, ACell> config = Maps.of(
+			Fields.OPERATION, Strings.create("v/ops/goaltree/chat"),
+			Strings.create("llmOperation"), Strings.create("v/test/ops/nevertoolllm"),
+			Strings.create("systemPrompt"), Strings.create("Test agent."),
+			Strings.create("caps"), Config.UNRESTRICTED,
+			Strings.create("toolCallTimeoutMs"), CVMLong.create(60_000));
+		if (acceptTasks) config = config.assoc(Strings.create("acceptTasks"), CVMBool.TRUE);
 		engine.jobs().invokeOperation("v/ops/agent/create",
-			Maps.of(Fields.AGENT_ID, agentId,
-				Fields.CONFIG, Maps.of(
-					Fields.OPERATION, Strings.create("v/ops/goaltree/chat"),
-					Strings.create("llmOperation"), Strings.create("v/test/ops/nevertoolllm"),
-					Strings.create("systemPrompt"), Strings.create("Test agent."),
-					Strings.create("caps"), Config.UNRESTRICTED,
-					Strings.create("toolCallTimeoutMs"), CVMLong.create(60_000))),
+			Maps.of(Fields.AGENT_ID, agentId, Fields.CONFIG, config),
 			RequestContext.of(ALICE)).awaitResult(5000);
 	}
 
@@ -206,7 +213,7 @@ public class GoalTreeCrashResumeTest {
 		Blob requestId;
 
 		Engine first = start(store, keyPair, config);
-		createGoalAgent(first, "request-agent");
+		createGoalAgent(first, "request-agent", true);
 		agent(first, "request-agent").sessions().create(sid, ALICE, null);
 		Job request = first.jobs().invokeOperation("v/ops/agent/request",
 			Maps.of(Fields.AGENT_ID, "request-agent",

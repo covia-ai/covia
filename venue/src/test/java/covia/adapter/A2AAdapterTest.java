@@ -121,6 +121,7 @@ class A2AAdapterTest {
 			Fields.CONFIG, Maps.of(
 				Fields.NAME, Strings.create("Remote imported agent"),
 				Fields.OPERATION, Strings.create("v/test/ops/echo"),
+				Strings.create("acceptTasks"), CVMBool.TRUE,
 				Fields.A2A, Maps.of(
 					Strings.create("public"), CVMBool.TRUE,
 					Strings.create("caps"), Strings.create("unrestricted")))));

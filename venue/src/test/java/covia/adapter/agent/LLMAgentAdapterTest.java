@@ -837,8 +837,8 @@ public class LLMAgentAdapterTest {
 
 		AMap<AString, ACell> palette = RT.ensureMap(l3.get(Strings.intern("palette")));
 		AVector<ACell> paletteEntries = RT.ensureVector(palette.get(Fields.TOOLS));
-		assertEquals(TaskTools.NAMES.size() + 2, paletteEntries.count(),
-			"stable task controls plus the two declared context tools");
+		assertEquals(2, paletteEntries.count(),
+			"the two declared context tools, and no task tools for an agent that takes no tasks");
 		for (long i = 0; i < paletteEntries.count(); i++) {
 			assertEquals("harness", RT.getIn(paletteEntries.get(i), Fields.SOURCE).toString());
 		}
@@ -1493,7 +1493,8 @@ public class LLMAgentAdapterTest {
 					Fields.AGENT_ID, "schema-request-agent",
 					Fields.CONFIG, Maps.of(
 						Fields.OPERATION, "v/test/ops/taskcomplete",
-						"testGate", gateName)
+						"testGate", gateName,
+						"acceptTasks", true)
 				),
 				RequestContext.of(ALICE_DID)).awaitResult(5000);
 
@@ -1526,7 +1527,8 @@ public class LLMAgentAdapterTest {
 				Fields.CONFIG, Maps.of(
 					Fields.OPERATION, "v/ops/llmagent/chat",
 					"llmOperation", "v/test/ops/taskllm",
-					"model", "no-complete-test")
+					"model", "no-complete-test",
+					"acceptTasks", true)
 			),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
@@ -1574,7 +1576,8 @@ public class LLMAgentAdapterTest {
 					Fields.OPERATION, "v/ops/llmagent/chat",
 					"llmOperation", "v/test/ops/taskllm",
 					"model", "parallel-task-complete-test",
-					"tools", Vectors.of(Strings.create("v/ops/covia/write")))),
+					"tools", Vectors.of(Strings.create("v/ops/covia/write")),
+					"acceptTasks", true)),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		Job taskJob = engine.jobs().invokeOperation(
@@ -1867,7 +1870,8 @@ public class LLMAgentAdapterTest {
 			Maps.of(Fields.AGENT_ID, "tokens-task-agent",
 				Fields.CONFIG, Maps.of(
 					Fields.OPERATION, "v/ops/llmagent/chat",
-					"llmOperation", "v/test/ops/taskllm")),
+					"llmOperation", "v/test/ops/taskllm",
+					"acceptTasks", true)),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		Job reqJob = engine.jobs().invokeOperation(
@@ -2027,7 +2031,8 @@ public class LLMAgentAdapterTest {
 				Fields.AGENT_ID, "stubborn-agent",
 				Fields.CONFIG, Maps.of(
 					Fields.OPERATION, "v/ops/llmagent/chat",
-					"llmOperation", "v/test/ops/stubbornllm")
+					"llmOperation", "v/test/ops/stubbornllm",
+					"acceptTasks", true)
 			),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
@@ -2162,7 +2167,8 @@ public class LLMAgentAdapterTest {
 				Fields.CONFIG, Maps.of(
 					Fields.OPERATION, "v/ops/llmagent/chat",
 					"llmOperation", "v/test/ops/loopllm",
-					"maxToolIterations", CVMLong.create(3))
+					"maxToolIterations", CVMLong.create(3),
+					"acceptTasks", true)
 			),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
@@ -2193,7 +2199,8 @@ public class LLMAgentAdapterTest {
 				Fields.AGENT_ID, "loop-agent",
 				Fields.CONFIG, Maps.of(
 					Fields.OPERATION, "v/ops/llmagent/chat",
-					"llmOperation", "v/test/ops/loopllm")
+					"llmOperation", "v/test/ops/loopllm",
+					"acceptTasks", true)
 			),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
@@ -2713,7 +2720,8 @@ public class LLMAgentAdapterTest {
 			Maps.of(Fields.JOB_ID, "bbb", Fields.INPUT, "pending-task"));
 		TaskTools.Tasks preview = previewTasks(null, tasks);
 		assertTrue(preview.outstanding());
-		assertEquals(TaskTools.NAMES.size(), preview.tools().count(), "task tools offered while a task is outstanding");
+		assertEquals(TaskTools.NAMES.size(), TaskTools.offered(null, tasks).count(),
+			"a cycle carrying tasks offers the task tools, even to an agent that takes none");
 		String all = RT.ensureString(preview.message().get(Strings.intern("content"))).toString();
 		assertTrue(all.contains("aaa") && all.contains("bbb") && all.contains("[Tasks assigned to you]"), all);
 
@@ -2728,10 +2736,10 @@ public class LLMAgentAdapterTest {
 		assertFalse(content.contains("aaa"), "Should not mention resolved task aaa");
 		assertTrue(content.contains("complete_task"), "Should instruct to use complete_task");
 
-		// All resolved: no task tail, but the immutable harness remains byte-stable.
+		// All resolved: no task tail, but the cycle's palette stays as it began.
 		preview.complete(completeCall("also done"), null);
 		assertNull(preview.message());
-		assertEquals(TaskTools.DEFINITIONS, preview.tools());
+		assertEquals(TaskTools.DEFINITIONS, TaskTools.offered(null, tasks));
 	}
 
 	@Test

@@ -618,7 +618,7 @@ public class AgentConcurrencyTest {
 		engine.jobs().invokeOperation(
 			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "conc-req",
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")),
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete", "acceptTasks", true)),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		// Submit two requests concurrently — both block via awaitResult

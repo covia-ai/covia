@@ -144,7 +144,7 @@ class JobAdapterTest {
 
 	@Test void cancellationReachesAnExternalAgentBackend() {
 		engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "worker",
-			Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/never")), ctx).awaitResult(5000);
+			Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/never", "acceptTasks", true)), ctx).awaitResult(5000);
 		engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "proxy",
 			"agent", Maps.of(Fields.ADAPTER, "remoteagent", Fields.AGENT_ID, "worker")), ctx).awaitResult(5000);
 		Job request = engine.jobs().invokeOperation("v/ops/agent/request", Maps.of(

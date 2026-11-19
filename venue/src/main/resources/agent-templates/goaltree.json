@@ -40,6 +40,7 @@
 				}
 			},
 			"defaultTools": false,
+			"acceptTasks": true,
 			"skillsets": [
 				"w/skills",
 				"v/skills/root"

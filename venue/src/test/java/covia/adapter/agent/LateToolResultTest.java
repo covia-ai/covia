@@ -252,7 +252,7 @@ public class LateToolResultTest {
 		RequestContext owner = RequestContext.of(RESTART_OWNER);
 		Engine first = venue.start();
 		Engine.addDemoAssets(first);
-		createAgent(first, owner, agentId, "v/test/ops/toolllm");
+		createAgent(first, owner, agentId, "v/test/ops/toolllm", Strings.intern("acceptTasks"), CVMBool.TRUE);
 		String gateName = agentId + "-" + System.identityHashCode(first);
 		try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName);
 				AgentWatch watch = AgentWatch.open(first, RESTART_OWNER, agentId)) {
@@ -324,7 +324,7 @@ public class LateToolResultTest {
 	public void aTaskWaitingOnACallWhoseSessionHasGoneFails(TestInfo info) throws Exception {
 		AString did = TestEngine.uniqueDID(info);
 		RequestContext owner = RequestContext.of(did);
-		createAgent(engine, owner, "late-orphan", "v/test/ops/toolllm");
+		createAgent(engine, owner, "late-orphan", "v/test/ops/toolllm", Strings.intern("acceptTasks"), CVMBool.TRUE);
 		Agent agent = engine.getVenueState().users().user(did).agent("late-orphan");
 		String gateName = "late-orphan-" + did;
 		Job job;
@@ -349,7 +349,7 @@ public class LateToolResultTest {
 	public void aTaskWaitsForItsLateCallAndRunsAgainOnItsOutcome(TestInfo info) throws Exception {
 		AString did = TestEngine.uniqueDID(info);
 		RequestContext owner = RequestContext.of(did);
-		createAgent(engine, owner, "late-task", "v/test/ops/toolllm");
+		createAgent(engine, owner, "late-task", "v/test/ops/toolllm", Strings.intern("acceptTasks"), CVMBool.TRUE);
 		Agent agent = engine.getVenueState().users().user(did).agent("late-task");
 
 		String gateName = "late-task-" + did;
@@ -412,7 +412,7 @@ public class LateToolResultTest {
 		AString did = TestEngine.uniqueDID(info);
 		RequestContext owner = RequestContext.of(did);
 		engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "late-pair",
-			Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/step")), owner).awaitResult(5000);
+			Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/step", "acceptTasks", true)), owner).awaitResult(5000);
 		Agent agent = engine.getVenueState().users().user(did).agent("late-pair");
 		String older = "late-older-" + did;
 		String newer = "late-newer-" + did;

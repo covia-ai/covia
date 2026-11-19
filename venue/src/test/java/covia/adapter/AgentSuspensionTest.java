@@ -43,9 +43,18 @@ public class AgentSuspensionTest {
 	}
 
 	private Agent create(RequestContext owner, String agentId, String model) {
+		return create(owner, agentId, model, false);
+	}
+
+	/** As {@link #create}, for an agent that takes tasks. */
+	private Agent createTaskAgent(RequestContext owner, String agentId, String model) {
+		return create(owner, agentId, model, true);
+	}
+
+	private Agent create(RequestContext owner, String agentId, String model, boolean acceptTasks) {
 		engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, agentId,
 			Fields.CONFIG, Maps.of(Fields.OPERATION, "v/ops/llmagent/chat",
-				"llmOperation", "v/test/ops/failllm", "model", model)), owner).awaitResult(5000);
+				"llmOperation", "v/test/ops/failllm", "model", model, "acceptTasks", acceptTasks)), owner).awaitResult(5000);
 		return engine.getVenueState().users().user(owner.getUserDID()).agent(agentId);
 	}
 
@@ -78,7 +87,7 @@ public class AgentSuspensionTest {
 		RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));
 		String gateName = "suspension-" + Long.toHexString(System.nanoTime());
 		try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName)) {
-			Agent agent = create(owner, "broken-setup", "setup:" + gateName);
+			Agent agent = createTaskAgent(owner, "broken-setup", "setup:" + gateName);
 
 			// Hold the first cycle in its model call so a second task queues behind it.
 			Job first = request(owner, "broken-setup", "first");
@@ -115,7 +124,7 @@ public class AgentSuspensionTest {
 	public void anUnreachableProviderOrAFailureValueSuspendsTheAgent(TestInfo info) throws Exception {
 		RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));
 		for (String model : new String[] {"unavailable", "value"}) {
-			Agent agent = create(owner, "cannot-continue-" + model, model);
+			Agent agent = createTaskAgent(owner, "cannot-continue-" + model, model);
 			Job waiting = request(owner, agent.getAgentId().toString(), "go");
 			assertEquals(Agent.SUSPENDED, awaitRest(agent, owner), model);
 			assertTrue(agent.getError().toString().contains(TestAdapter.FAILLLM_REASON.formatted(model)),
@@ -128,7 +137,7 @@ public class AgentSuspensionTest {
 	@Test
 	public void aVenueFaultSuspendsTheAgent(TestInfo info) throws Exception {
 		RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));
-		Agent agent = create(owner, "venue-fault", "bug");
+		Agent agent = createTaskAgent(owner, "venue-fault", "bug");
 		// The failed model call is logged at ERROR, as an unexpected failure
 		// must be, once, by the Job that reports it.
 		TestLogs.quiet(covia.exception.FaultException.class, () -> {
@@ -142,7 +151,7 @@ public class AgentSuspensionTest {
 	@Test
 	public void anIntegrityFailureSuspendsTheAgent(TestInfo info) throws Exception {
 		RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));
-		Agent agent = create(owner, "integrity", "integrity");
+		Agent agent = createTaskAgent(owner, "integrity", "integrity");
 		// The venue's own failure, as a fault is: logged at ERROR once, by the
 		// Job that reports it.
 		TestLogs.quiet(covia.exception.IntegrityException.class, () -> {
@@ -158,7 +167,7 @@ public class AgentSuspensionTest {
 	@Test
 	public void aFailureOfTheWorkFailsOnlyThatWork(TestInfo info) throws Exception {
 		RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));
-		Agent agent = create(owner, "bad-content", "content");
+		Agent agent = createTaskAgent(owner, "bad-content", "content");
 		String reason = TestAdapter.FAILLLM_REASON.formatted("content");
 
 		Job first = request(owner, "bad-content", "first");

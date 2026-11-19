@@ -375,7 +375,7 @@ public class AgentEventsTest {
 		// A broken model setup means the agent cannot continue (AGENT_LOOP.md §3.4).
 		String id = "failing";
 		createAgent(id, Maps.of(Fields.OPERATION, "v/ops/llmagent/chat",
-			"llmOperation", "v/test/ops/failllm", "model", "setup"));
+			"llmOperation", "v/test/ops/failllm", "model", "setup", "acceptTasks", true));
 		Capture c = new Capture();
 		try (AgentEvents.Subscription s = engine.agentEvents().subscribe(did, Strings.create(id), c)) {
 			engine.jobs().invokeOperation("v/ops/agent/request",
