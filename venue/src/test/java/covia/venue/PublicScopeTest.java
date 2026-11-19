@@ -127,11 +127,25 @@ public class PublicScopeTest {
 
 	// ===================== secure read-only default =====================
 
+	/**
+	 * The status of the Job an anonymous caller invokes on the secure venue, from
+	 * the record the invoke returns once the Job has finished. A denial fails the
+	 * Job, and the read-only scope does not let its caller poll it, so the invoke
+	 * waits for the outcome.
+	 */
+	private AString anonymousOutcome(AString op, convex.core.data.ACell input) throws Exception {
+		String body = convex.core.util.JSON.toString(Maps.of("operation", op, "input", input, "wait", true));
+		var response = TestHTTP.CLIENT.send(java.net.http.HttpRequest.newBuilder(URI.create(secureBase + "/api/v1/invoke"))
+				.header("Content-Type", "application/json")
+				.POST(java.net.http.HttpRequest.BodyPublishers.ofString(body)).build(),
+			java.net.http.HttpResponse.BodyHandlers.ofString());
+		return convex.core.lang.RT.ensureString(convex.core.lang.RT.getIn(
+			convex.core.util.JSON.parse(response.body()), covia.api.Fields.STATUS));
+	}
+
 	@Test
 	public void anonymousMutationDeniedByDefault() throws Exception {
-		VenueHTTP pub = anon(secureBase);
-		// Denial fails the Job at the adapter's enforcement point.
-		assertThrows(covia.exception.ResponseException.class, () -> pub.invokeAndWait(OP_WRITE, Maps.of(
+		assertEquals(Status.FAILED, anonymousOutcome(OP_WRITE, Maps.of(
 			Strings.create("path"), Strings.create("w/x"),
 			Strings.create("value"), Strings.create("nope"))));
 	}
@@ -140,22 +154,19 @@ public class PublicScopeTest {
 	public void anonymousInvokeDeniedByDefault() throws Exception {
 		// The read-only scope does not grant arbitrary-operation invocation,
 		// even for an otherwise-harmless echo.
-		VenueHTTP pub = anon(secureBase);
-		assertThrows(covia.exception.ResponseException.class, () -> pub.invokeAndWait(OP_ECHO, Maps.of(Strings.create("hi"), Strings.create("there"))));
+		assertEquals(Status.FAILED, anonymousOutcome(OP_ECHO, Maps.of(Strings.create("hi"), Strings.create("there"))));
 	}
 
 	@Test
 	public void anonymousReadAllowedByDefault() throws Exception {
-		VenueHTTP pub = anon(secureBase);
-		assertThrows(covia.exception.ResponseException.class, () -> pub.invokeAndWait(OP_READ, Maps.of(Strings.create("path"), Strings.create("w/x"))));
+		assertEquals(Status.FAILED, anonymousOutcome(OP_READ, Maps.of(Strings.create("path"), Strings.create("w/x"))));
 		assertEquals(200, get(secureBase + "/api/v1/values/read?path=w/x").statusCode(),
 			"the direct read endpoint needs only resource authority");
 	}
 
 	@Test
 	public void anonymousShowConfigAllowedByDefault() throws Exception {
-		VenueHTTP pub = anon(secureBase);
-		assertThrows(covia.exception.ResponseException.class, () -> pub.invokeAndWait(OP_SHOW_CONFIG, Maps.empty()));
+		assertEquals(Status.FAILED, anonymousOutcome(OP_SHOW_CONFIG, Maps.empty()));
 		Engine engine = secureServer.getEngine();
 		var result = engine.jobs().runToolOperation(OP_SHOW_CONFIG, Maps.empty(),
 			engine.context(Strings.create(engine.getDIDString() + ":public"))).join();
