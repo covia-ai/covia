@@ -344,6 +344,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 			offered, null, indexLoads,
 			rootFrames, null, null, true, null, taskTools.message(), fixed.unavailable(), null, null)
 			.withLoads(loads, offered)
+			.withNotice(replyNotice(true, taskTools.message(), typedTools))
 			.withSourceConfig(sourceConfig)
 			.withCachePrefix(cachePrefix)
 			.withLateToolResults(profile.lateToolResults());
@@ -1029,6 +1030,15 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 	 * agent's authority and atomically observed, the frame stack (ancestors compacted, the
 	 * active frame in full).
 	 */
+	/**
+	 * The notice that a turn is answered by its final message. The root of a
+	 * conversation is, as the flat runtime's is; a subgoal has its own notice, a
+	 * task its message, and typed outputs complete() as well.
+	 */
+	private static String replyNotice(boolean root, ACell task, AVector<ACell> typedRootTools) {
+		return (root && task == null && typedRootTools == null) ? ContextAssembler.REPLY_NOTICE : null;
+	}
+
 	@SuppressWarnings("unchecked")
 	private ContextAssembler.Spec inferenceSpec(FrameToolContext frameTools,
 			AVector<ACell> harnessForFrame, AMap<AString, ACell> frameL3Config, AVector<ACell> stack) {
@@ -1046,13 +1056,9 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 			.withFrames(stack);
 		if (frameTools.compacted) base = base.afterCompaction(stack);
 		ACell task = root ? frameTools.cycle.tasks().message() : null;
-		// The root of a conversation is answered by its final message, as the flat
-		// runtime is; a subgoal has its own notice, a task its message, and typed
-		// outputs complete() as well.
-		boolean replying = root && task == null && frameTools.cycle.typedRootHarnessTools() == null;
 		ContextAssembler.Spec inference = base
 			.withLoads(loads, concatTools(fixedTools, loads.tools()))
-			.withNotice(replying ? ContextAssembler.REPLY_NOTICE : null)
+			.withNotice(replyNotice(root, task, frameTools.cycle.typedRootHarnessTools()))
 			.withTask(task);
 		if (!frameTools.store.observe(frameTools.frameIndex,
 				ContextAssembler.observations(inference, loads),

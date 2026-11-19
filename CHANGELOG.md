@@ -93,6 +93,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Fixed
 
+- `agent:context` for a goal-tree agent includes the notice that its turn is answered by its final message, as the live call does.
 - An agent on an Anthropic model with native system messages answers the next turn after a reply with no text, instead of failing because the provider rejects the request's message order.
 - A model provider's refusal, content filter or `error` fails the model call with a reason naming the provider and its own value, instead of returning an empty or partial reply: the task or chat the agent was answering fails with that reason, which the Telegram and Discord bots show, and the agent carries on.
 - A response with no choices from OpenAI or a provider reached through its API (Gemini, xAI, DeepSeek, Mistral, OpenRouter) fails the model call as no answer, so the agent's task or chat fails and the agent carries on, instead of the agent being suspended as if the provider were down.

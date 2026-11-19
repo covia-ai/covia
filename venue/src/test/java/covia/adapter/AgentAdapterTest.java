@@ -1379,6 +1379,25 @@ public class AgentAdapterTest {
 		assertFalse(context.contains("Configured tools unavailable"), context);
 	}
 
+	/** A goal-tree agent's inspected context carries the reply notice its live call does. */
+	@Test
+	public void goalTreeInspectionIncludesTheLiveReplyNotice() {
+		RequestContext alice = RequestContext.of(ALICE_DID);
+		engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "tree-preview-agent",
+			Fields.CONFIG, Maps.of(Fields.OPERATION, "v/ops/goaltree/chat", "llmOperation", "v/test/ops/llm")),
+			alice).awaitResult(5000);
+		AMap<AString, ACell> inspected = RT.ensureMap(engine.jobs().invokeOperation("v/ops/agent/context",
+			Maps.of(Fields.AGENT_ID, "tree-preview-agent", Fields.MESSAGE, "Hello"), alice).awaitResult(5000));
+		AVector<ACell> messages = RT.ensureVector(inspected.get(Fields.MESSAGES));
+		String tail = RT.getIn(messages.get(messages.count() - 1), "content").toString();
+		assertTrue(tail.contains(covia.adapter.agent.ContextAssembler.REPLY_NOTICE), tail);
+
+		engine.jobs().invokeOperation("v/ops/agent/chat",
+			Maps.of(Fields.AGENT_ID, "tree-preview-agent", Fields.MESSAGE, "Hello"), alice).awaitResult(5000);
+		assertTrue(String.valueOf(TestAdapter.CAPTURED_LLM_INPUT.get(Strings.create("tree-preview-agent")))
+			.contains(covia.adapter.agent.ContextAssembler.REPLY_NOTICE), "as the live call is told");
+	}
+
 	/** agent:context simulates one call: the inbox, a task, or nothing at all. */
 	@Test
 	public void testContextSimulatesASpecificCall() {
