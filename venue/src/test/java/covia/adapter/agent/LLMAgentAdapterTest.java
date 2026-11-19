@@ -598,10 +598,12 @@ public class LLMAgentAdapterTest {
 		assertEquals("Provider state retained", RT.getIn(output, Fields.RESPONSE).toString(),
 			"the next inference must receive the opaque state with its assistant tool turn");
 		AVector<ACell> conversation = GoalTreeContext.activeConversation(RT.ensureMap(RT.getIn(output, Fields.FRAMES, CVMLong.ZERO)));
-		assertNotNull(RT.getIn(conversation.get(1), Fields.PROVIDER_STATE),
+		ACell signed = conversation.stream().filter(t -> RT.getIn(t, Fields.PROVIDER_STATE) != null)
+			.findFirst().orElseThrow();
+		assertNotNull(RT.getIn(signed, Fields.PROVIDER_STATE),
 			"the session frame is the durable source of continuation state");
-		assertNotNull(RT.getIn(conversation.get(1), "toolCalls"));
-		assertEquals("tool", RT.getIn(conversation.get(2), "role").toString());
+		assertNotNull(RT.getIn(signed, "toolCalls"));
+		assertTrue(conversation.stream().anyMatch(t -> "tool".equals(String.valueOf(RT.getIn(t, "role")))));
 	}
 
 	@Test
@@ -616,9 +618,10 @@ public class LLMAgentAdapterTest {
 		assertTrue(RT.getIn(output, Fields.RESPONSE).toString().contains("Compact verified"));
 		AVector<ACell> frames = RT.ensureVector(RT.getIn(output, Fields.FRAMES));
 		AVector<ACell> conversation = GoalTreeContext.activeConversation(RT.ensureMap(frames.get(0)));
-		assertEquals(2, conversation.count(), "compacted prefix + later assistant reply");
+		assertEquals(3, conversation.count(), "compacted prefix + retained guidance + later assistant reply");
 		assertTrue(GoalTreeContext.isSegment(conversation.get(0)));
-		assertEquals("assistant", RT.getIn(conversation.get(1), "role").toString());
+		assertEquals("system", RT.getIn(conversation.get(1), "role").toString());
+		assertEquals("assistant", RT.getIn(conversation.get(2), "role").toString());
 	}
 
 	@Test
@@ -700,7 +703,8 @@ public class LLMAgentAdapterTest {
 		AMap<AString, ACell> session = persistedAgent.session(sid).getRecord();
 		AVector<ACell> frames = RT.ensureVector(RT.getIn(session, Fields.FRAMES));
 		AVector<ACell> conversation = GoalTreeContext.activeConversation(RT.ensureMap(frames.get(0)));
-		ACell persistedToolTurn = conversation.get(2);
+		ACell persistedToolTurn = conversation.stream()
+			.filter(t -> "tool".equals(String.valueOf(RT.getIn(t, "role")))).findFirst().orElseThrow();
 		assertEquals("tool", RT.getIn(persistedToolTurn, "role").toString());
 		assertEquals(signals,
 			RT.getIn(persistedToolTurn, "structuredContent", Fields.VALUE));

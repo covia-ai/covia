@@ -93,6 +93,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - A model provider's refusal, content filter or `error` fails the model call with a reason naming the provider and its own value, instead of returning an empty or partial reply: the task or chat the agent was answering fails with that reason, which the Telegram and Discord bots show, and the agent carries on.
 - A response with no choices from OpenAI or a provider reached through its API (Gemini, xAI, DeepSeek, Mistral, OpenRouter) fails the model call as no answer, so the agent's task or chat fails and the agent carries on, instead of the agent being suspended as if the provider were down.
 - Updating an agent's config, even a field its prompt does not read such as a sampling field set to null, no longer moves skills its sessions have loaded into the start of their prompt, which stopped the provider's prompt cache applying.
+- Agent conversations retain runtime guidance before replayed thinking, and Anthropic continuation state survives final answers and empty signed replies.
+
 - Per-agent A2A task lookups stay in the asker's account, including live public tasks and requests with an `owner` hint.
 - An unanswered human ask made outside a task no longer faults the agent when it settles an unrelated task.
 - A DLFS file written by `create`, `write`, a content upload or `archive` changes in one update once all its content has arrived, so a write cut off part-way leaves the drive as it was; a write onto a directory fails as a conflict (#629).

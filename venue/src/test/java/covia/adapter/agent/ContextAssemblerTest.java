@@ -118,6 +118,34 @@ public class ContextAssemblerTest {
 	// ========== Sequence ==========
 
 	@Test
+	public void runtimeGuidanceRetainsTheWholePrefixAcrossRepliesAndChanges() {
+		AMap<AString, ACell> frame = GoalTreeContext.appendTurn(GoalTreeContext.createFrame(""),
+			Maps.of("role", "user", "content", "first question"));
+		Spec s = spec(Maps.of("systemPrompt", "Stable instructions"))
+			.withNotice("Reply with the result.").withFrames(Vectors.of(frame));
+		frame = GoalTreeContext.applyObservations(frame,
+			ContextAssembler.observations(s, Loads.Snapshot.EMPTY), 1L);
+		s = s.withFrames(Vectors.of(frame));
+		AVector<ACell> before = ContextAssembler.assemble(s).messages();
+		for (String text : java.util.List.of("tool reasoning", "final answer", "follow-up reasoning")) {
+			frame = GoalTreeContext.appendTurn(frame, Maps.of("role", "assistant", "content", text));
+			s = s.withFrames(Vectors.of(frame));
+			AMap<AString, ACell> observed = GoalTreeContext.applyObservations(frame,
+				ContextAssembler.observations(s, Loads.Snapshot.EMPTY), 2L);
+			assertSame(frame, observed, "unchanged guidance must append nothing");
+			AVector<ACell> after = ContextAssembler.assemble(s).messages();
+			assertEquals(before, after.slice(0, before.count()), "including the original notice");
+			before = after;
+		}
+		s = s.withNotice("New guidance applies from here.");
+		frame = GoalTreeContext.applyObservations(frame,
+			ContextAssembler.observations(s, Loads.Snapshot.EMPTY), 3L);
+		AVector<ACell> after = ContextAssembler.assemble(s.withFrames(Vectors.of(frame))).messages();
+		assertEquals(before, after.slice(0, before.count()));
+		assertTrue(content(after.get(after.count() - 1)).contains("New guidance applies from here."));
+	}
+
+	@Test
 	public void testSequenceHeadConversationTail() {
 		AVector<ACell> inbox = Vectors.of((ACell) Strings.create("Do something"));
 		Prompt p = ContextAssembler.assemble(spec(
@@ -1632,7 +1660,7 @@ public class ContextAssemblerTest {
 		Spec s = new Spec(engine, ctx, null, null, null, null, 0, null,
 			null, null, null, null, null, null, true, null, null, unavailable, null, null);
 		String t = tail(ContextAssembler.assemble(s));
-		assertTrue(t.startsWith("Current date:"), t);
+		assertTrue(t.contains("Current date:"), t);
 		assertTrue(t.contains("[Unavailable tools]"), t);
 		assertTrue(t.contains("Configured tools unavailable in this session"), t);
 		assertTrue(t.contains("- w/private/op: not readable"), t);
@@ -1641,7 +1669,7 @@ public class ContextAssemblerTest {
 	@Test
 	public void testRuntimeNoticeRidesTheTail() {
 		String t = tail(ContextAssembler.assemble(spec(null).withNotice(ContextAssembler.REPLY_NOTICE)));
-		assertTrue(t.startsWith(ContextAssembler.REPLY_NOTICE + "\n\nCurrent date:"), t);
+		assertTrue(t.contains(ContextAssembler.REPLY_NOTICE + "\n\nCurrent date:"), t);
 	}
 
 	// ========== Budget ==========

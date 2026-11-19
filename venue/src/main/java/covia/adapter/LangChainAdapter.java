@@ -496,7 +496,7 @@ public class LangChainAdapter extends AAdapter {
 		// after the conversation has begun must not be hoisted into the cached
 		// head, and is placed against the turns the provider is actually sent.
 		final NormalisedMessages sent = withoutSilentTurns(
-			serialiseToolResultsForProvider(messages), cacheMarksOf(input, tuning));
+			serialiseToolResultsForProvider(messages), cacheMarksOf(input, tuning), provider, finalModelName);
 		final NormalisedMessages normalised = "anthropic".equals(provider) && tuning.options().nativeSystemMessages()
 			? normaliseNativeSystemMessages(sent.messages(), sent.cacheMarks())
 			: normaliseSystemMessages(sent.messages(), sent.cacheMarks(),
@@ -1012,7 +1012,7 @@ public class LangChainAdapter extends AAdapter {
 			.cacheAutomatically(tuning.caching() && tuning.options().automaticCaching())
 			.midConversationSystemMessages(tuning.options().nativeSystemMessages())
 			// Thinking is provider continuation state, not assistant content.
-			// Ask LangChain4j to retain it so tool-use replies can persist and
+			// Ask LangChain4j to retain it so all assistant replies can persist and
 			// replay it; providers/models that return none add no state at all.
 			.returnThinking(true)
 			.sendThinking(true);
@@ -1453,7 +1453,7 @@ public class LangChainAdapter extends AAdapter {
 	}
 
 	/** Provider-aware form: attaches optional continuation state when the
-	 * matching provider returned state for a tool-use reply. */
+	 * matching provider returned continuation state for an assistant reply. */
 	static ACell toAssistantMessage(ChatResponse response, String provider, String modelName) {
 		return toAssistantMessage(response, provider, modelName, ProviderStop.of(response));
 	}
@@ -1607,20 +1607,29 @@ public class LangChainAdapter extends AAdapter {
 	}
 
 	/**
-	 * The messages a provider is sent: every turn but those that say nothing
-	 * ({@link #saysNothing}). A cache mark on a left-out turn moves to the
+	 * The messages a provider is sent: every turn with text, tools or supported
+	 * continuation state for the selected provider/model. A cache mark on a left-out turn moves to the
 	 * message before it, which ends the same prefix. System placement runs on
 	 * the result, so a late system message is placed against a turn that is sent.
 	 */
 	static NormalisedMessages withoutSilentTurns(AVector<ACell> messages, Set<Long> cacheMarks) {
+		return withoutSilentTurns(messages, cacheMarks, null, null);
+	}
+
+	static NormalisedMessages withoutSilentTurns(AVector<ACell> messages, Set<Long> cacheMarks,
+			String provider, String model) {
 		AVector<ACell> out = Vectors.empty();
 		Set<Long> marks = new java.util.LinkedHashSet<>();
 		for (long i = 0; i < messages.count(); i++) {
 			ACell message = messages.get(i);
 			boolean marked = cacheMarks.contains(i);
 			if (saysNothing(message)) {
-				if (marked && !out.isEmpty()) marks.add(out.count() - 1);
-				continue;
+				AiMessage empty = AiMessage.builder().build();
+				if (ProviderState.restore(provider, model,
+						RT.getIn(message, Fields.PROVIDER_STATE), empty) == empty) {
+					if (marked && !out.isEmpty()) marks.add(out.count() - 1);
+					continue;
+				}
 			}
 			if (marked) marks.add(out.count());
 			out = out.conj(message);
@@ -1994,7 +2003,6 @@ public class LangChainAdapter extends AAdapter {
 					break;
 				}
 				case "assistant": {
-					if (saysNothing(entry)) break;
 					AString content = RT.ensureString(RT.getIn(entry, K_CONTENT));
 					ACell tcCell = RT.getIn(entry, K_TOOL_CALLS);
 					AiMessage ai;
@@ -2019,8 +2027,13 @@ public class LangChainAdapter extends AAdapter {
 						}
 						String text = (content != null) ? content.toString() : null;
 						ai = new AiMessage(text, reqs);
-					} else {
+					} else if (content != null && !content.toString().isBlank()) {
 						ai = AiMessage.from(content.toString());
+					} else {
+						// A signed continuation can have neither visible text nor tools.
+						ai = ProviderState.restore(provider, modelName,
+							RT.getIn(entry, Fields.PROVIDER_STATE), AiMessage.builder().build());
+						if (ai.thinking() == null && ai.attributes().isEmpty()) break;
 					}
 					ai = ProviderState.restore(provider, modelName,
 						RT.getIn(entry, Fields.PROVIDER_STATE), ai);

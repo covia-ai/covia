@@ -1704,7 +1704,7 @@ public class AgentAdapterTest {
 			RequestContext.of(ALICE_DID)).awaitResult(5000));
 		assertEquals("complete", RT.getIn(completed, "terminal", "status").toString());
 		assertEquals(Strings.create("4"), RT.getIn(completed, "terminal", "value"));
-		assertFalse(RT.getIn(completed, "next").toString().contains("[Tasks assigned to you]"));
+		assertTrue(RT.getIn(completed, "next").toString().contains(ContextAssembler.NO_TASK_NOTICE));
 
 		// Text spelling a control tool is honoured exactly as the loop honours it (#215).
 		AMap<AString, ACell> textual = RT.ensureMap(engine.jobs().invokeOperation("v/ops/agent/step",
@@ -1795,7 +1795,7 @@ public class AgentAdapterTest {
 		AMap<AString, ACell> first = RT.ensureMap(inferences.get(0));
 		assertEquals(Strings.create("v/test/ops/toolllm"), first.get(Fields.OP));
 		assertNotNull(first.get(Fields.MS));
-		assertNotNull(first.get(Fields.SENT), "the first inference sends the tail");
+		assertNull(first.get(Fields.SENT), "runtime guidance is already recorded in the conversation");
 		assertNotNull(RT.getIn(first, Fields.REPLY, "toolCalls"), "the reply verbatim");
 		AVector<ACell> calls = RT.ensureVector(first.get(Fields.CALLS));
 		assertEquals(1, calls.count());
@@ -2792,15 +2792,15 @@ public class AgentAdapterTest {
 		AMap<AString, ACell> rootFrame = (AMap<AString, ACell>) frames.get(0);
 		AVector<ACell> history = GoalTreeContext.activeConversation(rootFrame);
 		assertNotNull(history, "Root frame must have a conversation vector");
-		assertEquals(2, history.count(),
-			"Chat cycle appends user turn (chat message) + assistant turn");
+		assertEquals(3, history.count(),
+			"Chat cycle appends user turn (chat message) + runtime guidance + assistant turn");
 
 		AMap<AString, ACell> userTurn = (AMap<AString, ACell>) history.get(0);
 		assertEquals(Agent.ROLE_USER, userTurn.get(Agent.K_ROLE));
 		assertEquals(Agent.SOURCE_CHAT, userTurn.get(Agent.K_SOURCE));
 		assertEquals(Strings.create("hello"), userTurn.get(Agent.K_CONTENT));
 
-		AMap<AString, ACell> assistantTurn = (AMap<AString, ACell>) history.get(1);
+		AMap<AString, ACell> assistantTurn = (AMap<AString, ACell>) history.get(2);
 		assertEquals(Agent.ROLE_ASSISTANT, assistantTurn.get(Agent.K_ROLE));
 		assertEquals(Agent.SOURCE_TRANSITION, assistantTurn.get(Agent.K_SOURCE));
 		assertNotNull(assistantTurn.get(Agent.K_CONTENT), "Turn must carry content");
@@ -2809,7 +2809,7 @@ public class AgentAdapterTest {
 
 		// meta.turns should be 2 (user + assistant)
 		AMap<AString, ACell> meta = (AMap<AString, ACell>) session.get(Strings.intern("meta"));
-		assertEquals(CVMLong.create(2), meta.get(Strings.intern("turns")),
+		assertEquals(CVMLong.create(3), meta.get(Strings.intern("turns")),
 			"meta.turns must reflect appended turn count");
 		assertEquals(assistantTurn.get(Agent.K_TURN_TS), meta.get(Fields.UPDATED),
 			"meta.updated must ratchet to the newest persisted turn timestamp");
@@ -2838,16 +2838,16 @@ public class AgentAdapterTest {
 		AMap<AString, ACell> session = agent.session(sid).getRecord();
 		AVector<ACell> frames = RT.ensureVector(session.get(Fields.FRAMES));
 		AVector<ACell> conversation = GoalTreeContext.activeConversation(RT.ensureMap(frames.get(0)));
-		assertEquals(4, conversation.count(),
-			"user + assistant(tool call) + tool result + final assistant: "
+		assertEquals(5, conversation.count(),
+			"user + runtime guidance + assistant(tool call) + tool result + final assistant: "
 				+ convex.core.util.JSON.toString(conversation));
 		assertEquals("user", RT.getIn(conversation.get(0), "role").toString());
-		assertEquals("assistant", RT.getIn(conversation.get(1), "role").toString());
-		assertNotNull(RT.getIn(conversation.get(1), "toolCalls"));
-		assertEquals("tool", RT.getIn(conversation.get(2), "role").toString());
-		assertEquals("assistant", RT.getIn(conversation.get(3), "role").toString());
-		assertNull(RT.getIn(conversation.get(3), "toolCalls"));
-		assertEquals(CVMLong.create(4), RT.getIn(session, "meta", "turns"));
+		assertEquals("assistant", RT.getIn(conversation.get(2), "role").toString());
+		assertNotNull(RT.getIn(conversation.get(2), "toolCalls"));
+		assertEquals("tool", RT.getIn(conversation.get(3), "role").toString());
+		assertEquals("assistant", RT.getIn(conversation.get(4), "role").toString());
+		assertNull(RT.getIn(conversation.get(4), "toolCalls"));
+		assertEquals(CVMLong.create(5), RT.getIn(session, "meta", "turns"));
 	}
 
 	/** Every user turn in history keeps its caller; the agent's own turns carry none. */
@@ -2973,8 +2973,8 @@ public class AgentAdapterTest {
 			AVector<ACell> frames = (AVector<ACell>) session.get(Agent.KEY_FRAMES);
 			AMap<AString, ACell> rootFrame = (AMap<AString, ACell>) frames.get(0);
 			AVector<ACell> history = GoalTreeContext.activeConversation(rootFrame);
-			assertEquals(1, history.count(),
-				"failed inference retains the presented input for audit");
+			assertEquals(2, history.count(),
+				"failed inference retains the presented input and guidance for audit");
 			assertEquals(Agent.ROLE_USER,
 				RT.getIn(history.get(0), Agent.K_ROLE));
 		}
@@ -3011,19 +3011,19 @@ public class AgentAdapterTest {
 		AVector<ACell> frames = (AVector<ACell>) session.get(Agent.KEY_FRAMES);
 		AMap<AString, ACell> rootFrame = (AMap<AString, ACell>) frames.get(0);
 		AVector<ACell> history = GoalTreeContext.activeConversation(rootFrame);
-		assertEquals(4, history.count(),
-			"Two chat cycles: each appends user+assistant = 4 turns total");
+		assertEquals(5, history.count(),
+			"Two chat cycles: each appends user+assistant = 4 turns plus retained runtime guidance");
 
-		// Turn order: [user1, assistant1, user2, assistant2]
+		// Turn order: [user1, guidance, assistant1, user2, assistant2]
 		assertEquals(Agent.ROLE_USER, RT.getIn(history.get(0), Agent.K_ROLE));
 		assertEquals(Strings.create("one"), RT.getIn(history.get(0), Agent.K_CONTENT));
-		assertEquals(Agent.ROLE_ASSISTANT, RT.getIn(history.get(1), Agent.K_ROLE));
-		assertEquals(Agent.ROLE_USER, RT.getIn(history.get(2), Agent.K_ROLE));
-		assertEquals(Strings.create("two"), RT.getIn(history.get(2), Agent.K_CONTENT));
-		assertEquals(Agent.ROLE_ASSISTANT, RT.getIn(history.get(3), Agent.K_ROLE));
+		assertEquals(Agent.ROLE_ASSISTANT, RT.getIn(history.get(2), Agent.K_ROLE));
+		assertEquals(Agent.ROLE_USER, RT.getIn(history.get(3), Agent.K_ROLE));
+		assertEquals(Strings.create("two"), RT.getIn(history.get(3), Agent.K_CONTENT));
+		assertEquals(Agent.ROLE_ASSISTANT, RT.getIn(history.get(4), Agent.K_ROLE));
 
 		AMap<AString, ACell> meta = (AMap<AString, ACell>) session.get(Strings.intern("meta"));
-		assertEquals(CVMLong.create(4), meta.get(Strings.intern("turns")));
+		assertEquals(CVMLong.create(5), meta.get(Strings.intern("turns")));
 
 		// Order preserved: ts of all turns must be non-decreasing
 		long prev = 0;
@@ -3091,15 +3091,15 @@ public class AgentAdapterTest {
 		AMap<AString, ACell> root = (AMap<AString, ACell>) frames.get(0);
 		AVector<ACell> conv = GoalTreeContext.activeConversation(root);
 
-		assertEquals(2, conv.count(),
-			"Chat cycle appends user turn + assistant turn to root frame conversation");
+		assertEquals(3, conv.count(),
+			"Chat cycle appends user turn + runtime guidance + assistant turn to root frame conversation");
 
 		AMap<AString, ACell> userTurn = (AMap<AString, ACell>) conv.get(0);
 		assertEquals(Agent.ROLE_USER, userTurn.get(Agent.K_ROLE));
 		assertEquals(Agent.SOURCE_CHAT, userTurn.get(Agent.K_SOURCE));
 		assertEquals(Strings.create("hi"), userTurn.get(Agent.K_CONTENT));
 
-		AMap<AString, ACell> assistantTurn = (AMap<AString, ACell>) conv.get(1);
+		AMap<AString, ACell> assistantTurn = (AMap<AString, ACell>) conv.get(2);
 		assertEquals(Agent.ROLE_ASSISTANT, assistantTurn.get(Agent.K_ROLE));
 		assertEquals(Agent.SOURCE_TRANSITION, assistantTurn.get(Agent.K_SOURCE));
 	}
@@ -3135,11 +3135,11 @@ public class AgentAdapterTest {
 		AMap<AString, ACell> root = (AMap<AString, ACell>) frames.get(0);
 		AVector<ACell> conv = GoalTreeContext.activeConversation(root);
 
-		assertEquals(4, conv.count(), "Two chat cycles append 4 turns total");
+		assertEquals(5, conv.count(), "Two chat cycles append 4 turns plus retained runtime guidance");
 		assertEquals(Strings.create("one"), RT.getIn(conv.get(0), Agent.K_CONTENT));
-		assertEquals(Agent.ROLE_ASSISTANT, RT.getIn(conv.get(1), Agent.K_ROLE));
-		assertEquals(Strings.create("two"), RT.getIn(conv.get(2), Agent.K_CONTENT));
-		assertEquals(Agent.ROLE_ASSISTANT, RT.getIn(conv.get(3), Agent.K_ROLE));
+		assertEquals(Agent.ROLE_ASSISTANT, RT.getIn(conv.get(2), Agent.K_ROLE));
+		assertEquals(Strings.create("two"), RT.getIn(conv.get(3), Agent.K_CONTENT));
+		assertEquals(Agent.ROLE_ASSISTANT, RT.getIn(conv.get(4), Agent.K_ROLE));
 	}
 
 	// ========== S3b — session map in transition input + dual-write ==========
@@ -7072,7 +7072,7 @@ public class AgentAdapterTest {
 		AMap<AString, ACell> beforeRoot = RT.ensureMap(
 			RT.getIn(agent.session(sid).getRecord(), Fields.FRAMES, CVMLong.ZERO));
 		AVector<ACell> before = GoalTreeContext.activeConversation(beforeRoot);
-		assertEquals(4, before.count());
+		assertEquals(5, before.count());
 		assertNotNull(beforeRoot.get(Strings.intern("renderedContext")));
 
 		Job compact = engine.jobs().invokeOperation("v/ops/agent/compact-session",
@@ -7080,7 +7080,7 @@ public class AgentAdapterTest {
 				"summary", "Remember both completed exchanges."), alice);
 		ACell result = compact.awaitResult(5000);
 		assertEquals(CVMBool.TRUE, RT.getIn(result, "compacted"));
-		assertEquals(CVMLong.create(4), RT.getIn(result, "archivedTurns"));
+		assertEquals(CVMLong.create(5), RT.getIn(result, "archivedTurns"));
 
 		AMap<AString, ACell> compactedRoot = RT.ensureMap(
 			RT.getIn(agent.session(sid).getRecord(), Fields.FRAMES, CVMLong.ZERO));
@@ -7099,15 +7099,15 @@ public class AgentAdapterTest {
 			Maps.of(Fields.AGENT_ID, "compact-session-agent", Fields.SESSION_ID, sidHex),
 			alice).awaitResult(5000);
 		AVector<ACell> kept = entries(afterCompaction);
-		assertEquals(AgentAdapter.withoutRoutes(before), kept.slice(0, 4),
+		assertEquals(AgentAdapter.withoutRoutes(before), kept.slice(0, 5),
 			"the replaced turns stay readable, exactly, less the routes only the agent is shown");
-		assertEquals(archive, kept.get(4), "followed by their summary");
+		assertEquals(archive, kept.get(5), "followed by their summary");
 
 		engine.jobs().invokeOperation("v/ops/agent/chat",
 			Maps.of(Fields.AGENT_ID, "compact-session-agent", Fields.SESSION_ID, sidHex,
 				Fields.MESSAGE, "third"), alice).awaitResult(5000);
 		AVector<ACell> appended = GoalTreeContext.activeConversation(RT.ensureMap(RT.getIn(agent.session(sid).getRecord(), Fields.FRAMES, CVMLong.ZERO)));
-		assertEquals(3, appended.count(), "archive + new user + new assistant");
+		assertEquals(4, appended.count(), "archive + new user + retained guidance + new assistant");
 		assertEquals(archive, appended.get(0), "future turns append after the sealed archive");
 	}
 

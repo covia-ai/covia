@@ -350,10 +350,10 @@ public class LangChainAdapterTest {
 
 		assertNull(RT.getIn(LangChainAdapter.toAssistantMessage(
 			toolReply, "openai", "gpt-5.6-terra"), Fields.PROVIDER_STATE));
-		assertNull(RT.getIn(LangChainAdapter.toAssistantMessage(
+		assertNotNull(RT.getIn(LangChainAdapter.toAssistantMessage(
 			AiMessage.builder().text("done").thinking("finished").build(),
 			"anthropic", "claude-sonnet-5"), Fields.PROVIDER_STATE),
-			"terminal replies do not need continuation state");
+			"final-answer thinking belongs to subsequent turns' prefix");
 
 		// Existing conversation entries have no providerState and remain valid.
 		AiMessage legacy = assertInstanceOf(AiMessage.class,
@@ -362,6 +362,40 @@ public class LangChainAdapterTest {
 				"anthropic", "claude-sonnet-5").get(0));
 		assertEquals("old record", legacy.text());
 		assertNull(legacy.thinking());
+	}
+
+	@Test
+	public void thinkingSurvivesFinalAnswersAndEmptyRepliesAcrossStoredTurns() throws Exception {
+		AVector<ACell> stored = Vectors.empty();
+		for (int turn = 0; turn < 3; turn++) {
+			AiMessage.Builder builder = AiMessage.builder().thinking("")
+				.attributes(Map.of(AnthropicMapper.THINKING_SIGNATURE_KEY, "signature-" + turn));
+			if (turn != 1) builder.toolExecutionRequests(List.of(ToolExecutionRequest.builder()
+				.id("call_" + turn).name("search").arguments("{}").build()));
+			else builder.text("Final answer");
+			stored = stored.conj(LangChainAdapter.toAssistantMessage(builder.build(), "anthropic", "test"));
+			if (turn == 1) stored = stored.conj(Maps.of("role", "user", "content", "Follow up"));
+		}
+		stored = stored.conj(LangChainAdapter.toAssistantMessage(AiMessage.builder()
+			.attributes(Map.of(AnthropicMapper.THINKING_SIGNATURE_KEY, "empty-final")).build(),
+			"anthropic", "test"));
+		// Exercise the same cell encoding used by durable conversation records.
+		AVector<ACell> reloaded = RT.ensureVector(convex.core.cvm.CVMEncoder.INSTANCE.decodeMultiCell(
+			convex.core.data.Format.encodeMultiCell(stored, true)));
+		AVector<ACell> sent = LangChainAdapter.withoutSilentTurns(reloaded, Set.of(), "anthropic", "test").messages();
+		assertEquals(5, sent.count(), "signed empty replies survive filtering before system-message placement");
+		assertEquals(4, LangChainAdapter.withoutSilentTurns(reloaded, Set.of(), "anthropic", "other").messages().count());
+		List<ChatMessage> replay = LangChainAdapter.toChatMessages(sent, Set.of(), "anthropic", "test");
+		assertEquals(5, replay.size());
+		List<AnthropicMessage> wire = AnthropicMapper.toAnthropicMessages(replay, true);
+		for (int i : new int[] {0, 1, 3, 4}) {
+			AnthropicThinkingContent thinking = assertInstanceOf(AnthropicThinkingContent.class,
+				wire.get(i).content.get(0));
+			assertEquals("", thinking.thinking);
+			assertEquals(i == 4 ? "empty-final" : "signature-" + (i == 3 ? 2 : i), thinking.signature);
+		}
+		assertEquals("Final answer", RT.getIn(stored.get(1), "content").toString());
+		assertNull(RT.getIn(stored.get(4), "content"));
 	}
 
 	@Test

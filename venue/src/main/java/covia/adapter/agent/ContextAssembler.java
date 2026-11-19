@@ -44,8 +44,8 @@ import covia.venue.RequestContext;
  * and bytes so far.</p>
  *
  * <p>The order is the cache structure: fixed head, live surface, append-only
- * conversation, then the small inference-local tail. Watched context values
- * are conversation observations, not disposable tail material.</p>
+ * conversation, including retained runtime guidance and watched context.
+ * Raw inspection specs can preview guidance without publishing it.</p>
  */
 public final class ContextAssembler {
 
@@ -269,9 +269,9 @@ public final class ContextAssembler {
 	 * @param input the inbox messages driving this cycle
 	 * @param hasInput false when there is nothing to act on — the empty-state signal takes the input slot
 	 * @param toolLoop the assistant/tool turns accumulated within this cycle
-	 * @param task the outstanding task as a user message, rendered last, or null
+	 * @param task the outstanding task as a user message for runtime observation, or null
 	 * @param unavailable configured tools that did not resolve, as {@code {operation, reason}}
-	 * @param notice a runtime notice for the tail, or null
+	 * @param notice a runtime notice to retain when changed, or null
 	 * @param now the current date; null takes it from the venue's clock, in the
 	 *        system time zone
 	 */
@@ -592,6 +592,17 @@ public final class ContextAssembler {
 
 	/** The sequence of AGENT_CONTEXT.md §3.2. */
 	public static Prompt assemble(Spec spec) {
+		Prompt p = assembleRetained(spec);
+		// Raw inspection specs have no observation state yet. Live runtimes
+		// persist these messages before invoking the provider.
+		if (!hasRuntimeObservation(spec)) {
+			p.add(notices(spec, p.used()));
+			p.add(spec.task());
+		}
+		return p;
+	}
+
+	private static Prompt assembleRetained(Spec spec) {
 		Prompt p = new Prompt(spec.budget(), spec.cachePrefix());
 
 		Rendered rendered = rendered(spec);
@@ -609,11 +620,16 @@ public final class ContextAssembler {
 		p.add(spec.toolLoop());
 		p.mark(Band.TOOL_LOOP);
 
-		// Inference-local tail. Watched context has already been compared and,
-		// when changed, atomically appended to the active frame's conversation.
-		p.add(notices(spec, p.used()));
-		p.add(spec.task());
 		return p;
+	}
+
+	private static final AString RUNTIME_OBSERVATION = Strings.intern("runtime.guidance");
+	private static final AString PENDING_OBSERVATION = Strings.intern("runtime.pending");
+	private static final String RUNTIME_STATE_NOTICE = "Current runtime state (supersedes earlier runtime state notices):";
+
+	private static boolean hasRuntimeObservation(Spec spec) {
+		return !spec.frames().isEmpty() && RT.getIn(spec.frames().get(spec.frames().count() - 1),
+			GoalTreeContext.K_OBSERVATIONS, RUNTIME_OBSERVATION) != null;
 	}
 
 	/** Renders the initial vectors. Cached callers persist the returned value
@@ -849,6 +865,16 @@ public final class ContextAssembler {
 	static AVector<ACell> observations(Spec spec, Loads.Snapshot loads) {
 		AVector<ACell> candidates = pinnedObservations(spec);
 		if (loads != null) candidates = (AVector<ACell>) candidates.concat(loads.observations());
+		// The full prefix before a provider response must survive replay. Runtime
+		// guidance follows the same append-on-change rule as watched context.
+		AVector<ACell> guidance = Vectors.empty();
+		candidates = candidates.conj(observation(PENDING_OBSERVATION, candidates.count(),
+			spec.pending().isEmpty() ? Vectors.empty() : pendingResults(spec)));
+		if (!spec.hasInput()) guidance = guidance.conj(
+			Labels.message(ROLE_USER, spec.labels(), Labels.Kind.NO_INPUT, EMPTY_STATE_SIGNAL));
+		guidance = guidance.conj(notices(spec, assembleRetained(spec).used()));
+		if (spec.task() != null) guidance = guidance.conj(spec.task());
+		candidates = candidates.conj(observation(RUNTIME_OBSERVATION, candidates.count(), guidance));
 		AVector<ACell> ordered = Vectors.empty();
 		for (long i = 0; i < candidates.count(); i++) {
 			AMap<AString, ACell> candidate = RT.ensureMap(candidates.get(i));
@@ -1120,11 +1146,11 @@ public final class ContextAssembler {
 				out = attribution.append(out, turns.get(i), null);
 			}
 		}
-		if (spec.pending().count() > 0) out = (AVector<ACell>) out.concat(pendingResults(spec));
+		if (!hasRuntimeObservation(spec) && spec.pending().count() > 0) out = (AVector<ACell>) out.concat(pendingResults(spec));
 		for (long i = 0; i < spec.input().count(); i++) {
 			out = attribution.append(out, spec.input().get(i), ROLE_USER);
 		}
-		if (!spec.hasInput()) {
+		if (!hasRuntimeObservation(spec) && !spec.hasInput()) {
 			out = out.conj(Labels.message(ROLE_USER, spec.labels(), Labels.Kind.NO_INPUT, EMPTY_STATE_SIGNAL));
 		}
 		return out;
@@ -1133,7 +1159,6 @@ public final class ContextAssembler {
 	/** The tool the venue fetches completed job results with. Not a callable tool. */
 	public static final String GET_JOB_RESULTS_TOOL = "get_job_results";
 	static final String JOB_RESULTS_REQUEST = "Get job results.";
-	private static final AString JOB_RESULTS_CALL_ID = Strings.intern("job-results");
 	/** Follows the status of a job that has not finished, such as an open HITL ask. */
 	static final String STILL_WAITING = " — still waiting, no result yet";
 
@@ -1148,6 +1173,7 @@ public final class ContextAssembler {
 	 * be repeated, and the listing is the natural answer to the plural request.
 	 */
 	static AVector<ACell> pendingResults(Spec spec) {
+		AString callId = ToolCallIds.synthetic("job-results", spec.pending());
 		ContextLoader loader = new ContextLoader(spec.engine());
 		loader.setCellExplorer(new CellExplorer((int) Math.max(MIN_ENTRY_BUDGET, spec.budget() / 20)));
 		StringBuilder sb = new StringBuilder();
@@ -1170,11 +1196,11 @@ public final class ContextAssembler {
 		AMap<AString, ACell> ask = Maps.of(
 			K_ROLE, AbstractLLMAdapter.ROLE_ASSISTANT,
 			AbstractLLMAdapter.K_TOOL_CALLS, Vectors.of(Maps.of(
-				AbstractLLMAdapter.K_ID, JOB_RESULTS_CALL_ID,
+				AbstractLLMAdapter.K_ID, callId,
 				AbstractLLMAdapter.K_NAME, Strings.create(GET_JOB_RESULTS_TOOL),
 				AbstractLLMAdapter.K_ARGUMENTS, Maps.empty())));
 		AMap<AString, ACell> result = AbstractLLMAdapter.toolResultMessage(
-			JOB_RESULTS_CALL_ID, GET_JOB_RESULTS_TOOL, Strings.create(sb.toString()));
+			callId, GET_JOB_RESULTS_TOOL, Strings.create(sb.toString()));
 		return Vectors.of(user(JOB_RESULTS_REQUEST), ask, result);
 	}
 
@@ -1208,12 +1234,13 @@ public final class ContextAssembler {
 	}
 
 	/**
-	 * The tail's notices as one system message: the budget warning (only under
+	 * Runtime notices as one system message: the budget warning (only under
 	 * pressure), a runtime notice, the session handle, the date, and the configured tools that did
-	 * not resolve. Re-rendered every inference, so it busts only itself.
+	 * not resolve. Compared before each inference and retained when changed.
 	 */
 	static AMap<AString, ACell> notices(Spec spec, long used) {
 		List<String> parts = new ArrayList<>();
+		parts.add(RUNTIME_STATE_NOTICE);
 		int pct = (spec.budget() > 0) ? (int) (100 * used / spec.budget()) : 0;
 		if (pct >= BUDGET_WARN_PCT) {
 			boolean unloadable = Loads.hasAgentManaged(spec.effectiveLoads());

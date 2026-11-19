@@ -456,12 +456,12 @@ public class LoadsTest {
 		assertEquals("hi", content(m.get(4)));
 		assertTrue(RT.getIn(m.get(6), "structuredContent", 0, "content").toString().contains("FRESH-RESULT"),
 			"watched exchange is durable conversation before the tool loop");
-		assertTrue(content(m.get(9)).contains("Current date:"), "notices still last");
+		assertTrue(content(m.get(7)).contains("Current date:"), "notices retained before later tool turns");
 		// A stable observation is now part of the append-only cache prefix.
 		assertEquals(4, p.marks().get(ContextAssembler.Band.LIVE));
-		assertEquals(7, p.marks().get(ContextAssembler.Band.CONVERSATION));
-		assertEquals(9, p.marks().get(ContextAssembler.Band.TOOL_LOOP));
-		assertEquals(Vectors.of(CVMLong.create(6), CVMLong.create(8)), p.cacheMarks());
+		assertEquals(8, p.marks().get(ContextAssembler.Band.CONVERSATION));
+		assertEquals(10, p.marks().get(ContextAssembler.Band.TOOL_LOOP));
+		assertEquals(Vectors.of(CVMLong.create(6), CVMLong.create(9)), p.cacheMarks());
 
 		AMap<AString, ACell> unchanged = GoalTreeContext.applyObservations(frame,
 			ContextAssembler.observations(s, resolve(loads)), 2L);

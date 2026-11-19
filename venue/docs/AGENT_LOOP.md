@@ -251,7 +251,7 @@ An inference record:
 |-------|-------------|
 | `ts`, `ms` | Call start (wall clock) and provider round-trip. |
 | `op`, `model?` | The level-3 operation and the model id it was asked for. |
-| `sent?` | Messages first sent in this inference. The first inference's are the tail (date notice, task message, budget warning); later ones hold only what is new — a changed notice, a load added mid-cycle. |
+| `sent?` | Messages first sent in this inference that are not already represented in its standing context or earlier inference records. Runtime guidance is retained in the conversation before the call; unchanged guidance is not repeated here. |
 | `tools?` | The tools offered, only when they differ from the previous inference. |
 | `reply` \| `error` | The model's reply verbatim (`{content?, toolCalls?, tokens?}`), or why the call failed. |
 | `calls?` | The tool batch the reply requested: `[{id, name, ms, result, isError?, frame?}]`. Arguments are in `reply.toolCalls`. |

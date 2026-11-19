@@ -41,12 +41,12 @@ frame's canonical append-only conversation plus, when caching is useful, an
 immutable rendered prefix. Cached inference reuses that prefix; uncached
 inference renders the current config-owned sources directly. Both
 deterministically project stored conversation and append the working turn. The
-remaining inference-local tail contains only small ambient notices and the
-outstanding task. Explicit loads are resolved when appended; volatile loads
+runtime also retains small ambient notices and the outstanding task as
+observations before submission. Explicit loads are resolved when appended; volatile loads
 use the observation protocol below.
 
 **Assembly never mutates state.** Before assembly, declarations marked
-`volatile` are resolved outside the lattice update and canonically rendered.
+`volatile` and runtime guidance are resolved outside the lattice update and canonically rendered.
 One pure atomic frame transform compares them with the frame's latest
 observations, appending only changed values (or removals). Assembly receives all
 state mutation as completed immutable cells; the clock is an explicit input and
@@ -150,7 +150,7 @@ maintained configuration state.
 workspace-backed `systemPrompt` may resolve to text and a model operation may
 supply a default model in the rendered output, but those resolved values are
 not copied into the stamp. Ambient workspace, registry or clock changes
-therefore do not reinterpret history. The clock belongs only to inference-local
+therefore do not reinterpret history. The clock belongs only to retained runtime
 notices and audit metadata. Inbox messages, tasks and their response schemas, pending results,
 conversation turns, tool results and load events likewise never enter the
 stamp; they use the append-only surfaces defined below.
@@ -203,8 +203,10 @@ records and replies that need no continuation. Agent/session code preserves it
 without interpretation. A provider edge may restore it only when both
 `provider` and `model` match the current inference; other providers, model
 changes, malformed state and unknown block types ignore it. It is currently
-used for Anthropic signed and redacted thinking blocks on assistant tool-use
-turns. It is not assistant content and is not duplicated in `renderedContext`;
+used for Anthropic signed and redacted thinking blocks on all assistant turns,
+including final answers and signed blocks with empty text. The current SDK
+represents one thinking block followed by redacted blocks; arbitrary original
+block ordering still requires upstream support (MODELS.md). It is not assistant content and is not duplicated in `renderedContext`;
 `agent:history` returns it with the rest of the stored entry and the legacy
 `agent:sessionRead` leaves it out. Compaction keeps it in
 the exact archived `items` but does not replay archived state through the
@@ -531,8 +533,8 @@ renderer. A source change affects rendering only through new explicit inputs.
 **Pure rendering and prefix stability.** For a fixed renderer/profile, equal
 selected history and equal resolved inputs produce exactly equal tool and
 message vectors. Rendering performs no source reads, state writes, clock reads
-or random ID generation. Working turns and inference-local notices are explicit
-inputs; their changing tail remains outside the reusable committed prefix.
+or random ID generation. Working turns and runtime notices are explicit
+inputs; changed notices extend the committed prefix instead of replacing its tail.
 `renderedContext` may memoise the result, but recomputing from the same inputs
 must give the same result. Disabling provider caching does not relax purity;
 resolving fresh sources produces new inputs rather than changing the rendering
@@ -728,7 +730,7 @@ Determinism applies when the venue renders a cell: tool and entry order comes fr
 **Cache boundaries** are indices into this representation. `cachePrefix`
 defaults to true. When enabled, the edge may mark the end of the initial head,
 `messages` as it stood when the cycle began, and `workingTurn` as it grows. The
-small inference tail is never marked. An explicit model-level
+runtime system notices use the preceding supported breakpoint until the SDK supports system-message markers. An explicit model-level
 `cachePrefix: false` or call-level `cache: false` omits the marks and the durable
 projection together. A provider may ignore canonical marks or impose a smaller
 breakpoint limit, but it must not change logical order to accommodate them.
@@ -737,7 +739,7 @@ Equivalent new sessions share the instruction prefix when their tools,
 configuration and initial instruction sources are equal. Internal owner DIDs
 are not rendered for `self`, `owner` or `anonymous-owner` relationships; the
 recorded caller and all authority checks are unchanged. The session handle
-appears in the inference tail, never the initial head. Personal context values
+appears in retained runtime guidance, never the initial head. Personal context values
 remain in their own context exchanges and are not made equal to obtain a hit.
 A materialisation from an older renderer version is rebuilt once, preserving
 canonical conversation and loads; the current version, 3, keeps session
@@ -785,16 +787,16 @@ duplicate.
 | 8 | Current input | working turn | `user` | The inbox message(s) driving this cycle; a late tool outcome renders as `assistant` / `tool` where the model's `lateToolResults` asks (§5.7) |
 | 9 | Tool-loop messages | working turn | `assistant` / `tool` | Assistant/tool turns and context events accumulated within this cycle |
 | 10 | Changed watched context | append-only conversation | `system` or `assistant` / `tool` | A new observation for a `volatile` declaration, emitted only when its canonical rendered value differs (§5.5) |
-| 11 | Budget warning | inference tail | `system` | **Only** when the budget is under pressure (§3.4) |
-| 12 | Runtime notice | inference tail | `system` | The runtime's word on this turn: on a conversational turn with tools (no task, not a subgoal, no typed outputs), how it is answered — the final message is the reply, so text beside a tool call reaches no one |
-| 13 | Current date | inference tail | `system` | One line; changes daily |
-| 14 | Unavailable tools | inference tail | `system` | Configured tools that did not resolve this cycle |
-| 15 | Outstanding task | inference tail | `user` | The task the agent must complete or fail — the last thing before the reply |
-| — | Empty-state signal | working turn | `user` | Replaces 7–8 when there is nothing to act on |
+| 11 | Budget warning | retained runtime observation | `system` | **Only** when the budget is under pressure (§3.4) |
+| 12 | Runtime notice | retained runtime observation | `system` | The runtime's word on this turn: on a conversational turn with tools (no task, not a subgoal, no typed outputs), how it is answered — the final message is the reply, so text beside a tool call reaches no one |
+| 13 | Current date | retained runtime observation | `system` | One line; changes daily |
+| 14 | Unavailable tools | retained runtime observation | `system` | Configured tools that did not resolve this cycle |
+| 15 | Outstanding task | retained runtime observation | `user` | The task the agent must complete or fail; retained when task state changes |
+| — | Empty-state signal | retained runtime observation | `user` | Replaces 7–8 when there is nothing to act on |
 
 How each kind of turn is answered is said where that turn is defined, beside it: a task by its message (row 15), a subgoal by the child-frame notice, a conversation by the runtime notice (row 12). The head never says it, being the same whatever the turn. A model trained on interfaces that show every text block otherwise writes its answer beside a tool call and closes with "as above"; the text stays in its context as written, and the notice says what reaches the reader.
 
-The *Role* column is the role a section emits — the role that is true of its content. The initial consecutive system sections coalesce when the persisted context is first rendered. Sections 11–14 are **one `system` message**, composed of whichever parts are present: the inference tail is re-rendered every inference, and one message is the cheapest shape for it. How a system message that follows conversation reaches a given provider is the edge's business (§3.2.1, §3.5), never a section's.
+The *Role* column is the role a section emits — the role that is true of its content. The initial consecutive system sections coalesce when the persisted context is first rendered. Sections 11–14 are **one `system` message**, composed of whichever parts are present: the runtime compares their canonical value before each inference and persists a new message only when that value changes. Earlier values remain at their original positions; the latest runtime-state notice supersedes earlier ones. How a system message that follows conversation reaches a given provider is the edge's business (§3.2.1, §3.5), never a section's.
 
 ### 3.2.1 The role rule
 
@@ -820,19 +822,24 @@ The initial config-owned vectors are **persisted as rendered** in
 ordinary ephemeral request values: resolved, rendered, sent and discarded.
 Pending results, input, tool-loop messages and context events are committed as
 canonical entries in `frame.conversation`; their provider projection preserves
-their provider fields while discarding audit-only metadata. The working turn is
-the only uncommitted conversation state. Two exceptions are deliberate: the
-empty-state signal occupies the input slot for its inference and is not
-committed; and a diagnostic the runtime must add — a tool failure it could not
-return as a tool result — is committed as a `system` event with its source
-recorded.
+their provider fields while discarding audit-only metadata. Runtime guidance, pending-result exchanges and empty-state signals are retained
+before the provider call, alongside watched context. Unchanged canonical values
+append nothing. Changes append new observations, leaving every instruction that
+preceded a provider response in its original position. The newest runtime-state
+notice explicitly supersedes earlier runtime-state notices. An outstanding task
+is retained with that notice; when it ends, a new notice says no task is assigned.
 
-The inference tail is **ephemeral**, but watched context is not part of it.
-Only notices and the outstanding task are rendered there. A volatile
-declaration opts into a pre-inference observation; its value becomes durable
-conversation only on a canonical change. Nothing else is made fresh implicitly.
+This applies to both flat and goal-tree runtimes, cached and uncached calls, and
+inspection previews. It preserves the entire conversation prefix before returned
+thinking. Compaction remains an explicit replacement boundary: archived thinking
+is kept for audit and is not replayed through the summary. Config/model changes
+can still invalidate prior thinking; retaining guidance does not make a changed
+system prompt compatible with old signatures.
 
-**Warnings are never conversation.** The budget warning, the reply notice, the date and the unavailable-tools notice describe the state of *this inference*. They belong in the tail, render once, and vanish when the condition does. A warning written into the conversation would be re-read on every later inference as though it were still true.
+This retention rule applies to new inferences. An upgrade cannot recover notices
+or final-answer thinking omitted from old records. An explicit session compaction
+starts a new provider-visible prefix when old continuation state needs replacing;
+the archived transcript remains available for audit.
 
 ### 3.2.3 Tool definitions
 
@@ -932,7 +939,7 @@ initialised `Rendered` is the runtime's separate atomic responsibility. For
 uncached assembly, the same value is only a local intermediate. `assemble`
 never writes either one.
 
-`p.remaining()` is passed explicitly when an entry is first appended, when compaction builds a replacement prefix, and when the tail renders. Already persisted entries are never re-truncated to fit a later request.
+`p.remaining()` is passed explicitly when an entry is first appended, when compaction builds a replacement prefix, and when runtime guidance is observed. Already persisted entries are never re-truncated to fit a later request.
 
 ### 3.4 The budget
 
@@ -943,7 +950,7 @@ How it is spent:
 - The **fixed tools and persisted messages** are what they are. Persistent content is never auto-evicted or silently re-rendered.
 - The **working turn** is committed to `frame.conversation`. Explicit compaction
   rebuilds the prefix when space must be reclaimed (§5.6).
-- The **tail** is small; it is charged like everything else and never cached.
+- **Runtime guidance** is charged like everything else and retained as conversation.
 - A **failed tool result** is stored whole in the history. The model is shown
   its first 1024 characters and how many more there are
   (`ConversationRenderer.renderFull`). The cut depends only on the entry, not on
@@ -954,7 +961,7 @@ What the budget does, and nothing else:
 | Position | Behaviour |
 |----------|-----------|
 | any | per-entry render sizing: a structured entry is capped at a twentieth of what remains when it renders (§5.3) |
-| ≥ 70% | the tail carries one line — `[Context budget]`; it names exact `loaded_context` keys only when agent-managed entries exist, otherwise says the persistent material is pinned |
+| ≥ 70% | a changed runtime observation carries one line — `[Context budget]`; it names exact `loaded_context` keys only when agent-managed entries exist, otherwise says the persistent material is pinned |
 | ≥ 90% | the line says compaction is required before further work: to use `compact` when the agent is offered it, otherwise that it has none |
 | over | the prompt is sent anyway; if the provider rejects it the cycle fails with the size and the remedy (`agent:context`, `context_unload`, `compact`) |
 
@@ -1022,7 +1029,7 @@ assemble(Spec)                                 →  Prompt
   retried safely by the lattice CAS.
 - **Assembly** obtains the applicable persisted prefix or initialises one
   ephemerally, then concatenates it with deterministic conversation projection,
-  the working turn and the small inference-local tail. It never mutates state.
+  the working turn and the retained runtime guidance. It never mutates state.
 
 A runtime that needs `capsCtx` calls `resolveAuthority`; it does not build a
 context to extract it. In cached mode, merely assembling another inference
@@ -1039,7 +1046,7 @@ declaration is checked each inference but appends only a changed rendered value.
 ## 5. Section notes
 
 ### 5.1 Identity prompt
-`config.systemPrompt`, else a default identity, followed by the venue name and the model when configured. The session id is the agent's handle for reporting back into this conversation from deferred work; it is available in the inference tail instead of the shared head. The head is rendered when context is initialised. A changed declarative config rebuilds this config-owned prefix on the next inference while preserving rendered session events, and `agent:reloadContext` rebuilds it under equal config (§3.1). A runtime may append a notice of its own — goaltree's subgoal notice for child frames — when that frame opens. Nothing session-specific or inference-local belongs here.
+`config.systemPrompt`, else a default identity, followed by the venue name and the model when configured. The session id is the agent's handle for reporting back into this conversation from deferred work; it is available in retained runtime guidance instead of the shared head. The head is rendered when context is initialised. A changed declarative config rebuilds this config-owned prefix on the next inference while preserving rendered session events, and `agent:reloadContext` rebuilds it under equal config (§3.1). A runtime may append a notice of its own — goaltree's subgoal notice for child frames — when that frame opens. Nothing session-specific or inference-local belongs here.
 
 `systemPrompt` is the text itself, or **one context entry** in the grammar of §6 — `{ref: "w/prompts/mina"}`, `{ref: "dlfs/vault/prompts/mina.md"}`, `{text}`, `{op, input}`, `{job}` — resolved through the same loader as pinned context and loads (`ContextLoader.resolveText`). Three things differ from a load: it renders as the identity, with no header; it is read **once per cycle**, at its start, and rendered into the head only when the context is initialised or rebuilt; and it is required. An entry that does not resolve, or resolves to something that is not text, is a configuration error that every later cycle would meet again, so the agent cannot continue: the cycle suspends it with the reason (AGENT_LOOP.md §3.4), and an inspection fails with the same reason. `agent:create` warns when the entry does not resolve for the creator. A workspace path is one lattice read and a DLFS file one content read; neither creates a job.
 
@@ -1187,13 +1194,13 @@ Assistant and tool messages accumulated *within* this cycle. These are conversat
 The line described in §3.4, present at ≥ 70%, escalating at ≥ 90%. Silence is the normal case, so it costs nothing until it means something.
 
 ### 5.11 Current date
-One line, changing daily, taken from the Spec's clock — never from the system clock inside a section, so assembly stays pure. Kept out of the head precisely so the cacheable prefix contains no changing value; in the tail it busts only itself.
+One line, changing daily, taken from the Spec's clock — never from the system clock inside a section, so assembly stays pure. Kept out of the head precisely so the cacheable prefix contains no changing value; a date change appends a new runtime-state notice, preserving the earlier dates in place.
 
 ### 5.12 Unavailable tools
 Tool resolution failures observed during initialisation or a current append — reported so the agent adapts rather than calling into a void. The adapter registry is not polled by assembly; a restored operation becomes available through an explicit tool-state event or prefix rebuild.
 
 ### 5.13 Outstanding task
-Present only when the agent has a task to settle. A `user` message rendered last on every inference — after the tool-loop messages and after the notices — so it is the thing nearest the reply, and never baked into history: the model sees only tasks still outstanding, and its closing line names the three task tools and says that a plain reply is the task's result ([AGENT_TASKS.md](./AGENT_TASKS.md) §5). The same on every runtime, and `agent:context`, `agent:step` and live inferences render the same task status. Which frames are offered `complete_task`, `fail_task` and `park_task`, and the no-task notice that goes with them, is §3.2.3; a frame with this message is always offered them. Their presence alone does not mean a task is assigned: a call with no task in scope is refused — the framework's task boundary (`TaskTools`). A goal-tree frame's *goal* is its opening turn, not this slot; see [GOAL_TREE.md](./GOAL_TREE.md), “Sessions and Frames”.
+Present only when the agent has a task to settle. A `user` message retained with the current runtime notice when the task state changes. Earlier task messages remain historical; the latest runtime notice states whether a task is still outstanding, and its closing line names the three task tools and says that a plain reply is the task's result ([AGENT_TASKS.md](./AGENT_TASKS.md) §5). The same on every runtime, and `agent:context`, `agent:step` and live inferences render the same task status. Which frames are offered `complete_task`, `fail_task` and `park_task`, and the no-task notice that goes with them, is §3.2.3; a frame with this message is always offered them. Their presence alone does not mean a task is assigned: a call with no task in scope is refused — the framework's task boundary (`TaskTools`). A goal-tree frame's *goal* is its opening turn, not this slot; see [GOAL_TREE.md](./GOAL_TREE.md), “Sessions and Frames”.
 
 ---
 
@@ -1363,7 +1370,7 @@ state.
 | `frames` | The durable frame stack defined in §1.1; the active frame always supplies conversation and may supply `renderedContext` |
 | `pending`, `input`, `hasInput` | Work presented for this cycle |
 | `toolLoop` | Assistant/tool messages accumulated during this cycle |
-| `task`, `unavailable`, `notice`, `now` | Per-inference tail inputs |
+| `task`, `unavailable`, `notice`, `now` | Inputs compared for retained runtime observations |
 
 Watched observation candidates are deliberately not hidden mutable fields on
 `Spec`: the shared resolver produces one immutable ordered vector next to the
@@ -1392,7 +1399,7 @@ Consumers compare the returned immutable `tools` and `messages` vectors directly
 
 `agent:step` takes the same inference plus the reply the model would give and runs one harness iteration on it: text-as-control recognised, tool calls dispatched through the runtime's registry with the same routes, capability checks and authority, their results appended to the working turn, and any context/tool-state event appended once. The agent is untouched: a terminal control tool is reported (`terminal`), never resolved; goaltree's `subgoal` is not run. It returns `assistant`, `turns`, `calls` (`id, name, arguments, result, isError?, ms`), `terminal?`, `done`, `response?` and `next?`.
 
-The same regions drive the timeline record (`AGENT_LOOP.md` §2.4): initial messages are recorded once, later events and changed observations once when appended, and the working turn as replies and calls append. Inference-local notices are recorded only for the inference in which they appeared. Recording never regenerates prompt content.
+The same regions drive the timeline record (`AGENT_LOOP.md` §2.4): initial messages are recorded once, later events and changed observations once when appended, and the working turn as replies and calls append. Runtime notices are recorded once when appended and retained for later replay. Recording never regenerates prompt content.
 
 ---
 

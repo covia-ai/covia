@@ -416,7 +416,7 @@ The binding policy uses LangChain4j's public beta-header and custom-parameter
 facilities. It merges `thinking.block_binding` with `providerOptions`, with the
 explicit model option taking precedence; existing effort settings remain intact.
 The adapter exposes `inputTransformations` from the SDK's raw response metadata
-for diagnostics. Required single-block tool-turn thinking continues to replay,
+for diagnostics. Supported single-block thinking replays on both tool-use and final-answer turns,
 including blocks with an empty thinking string and a nonempty signature.
 
 `thinkingPrefixMismatch` applies only with adaptive thinking. Explicit
@@ -435,16 +435,27 @@ mean unreported usage. The split is preserved in inference, cycle and session
 usage. LangChain4j currently exposes these counters through raw response metadata;
 Covia reads that report without changing the SDK transport or message codec.
 
-#### Upstream audit (2026-10-09)
+#### Upstream audit (2026-11-19)
 
 [LangChain4j 1.22.0](https://github.com/langchain4j/langchain4j/releases/tag/1.22.0)
 adds [automatic caching and TTL support](https://github.com/langchain4j/langchain4j/pull/6598).
 It also contains native mid-conversation system messages and the earlier
 [signature-only thinking fix](https://github.com/langchain4j/langchain4j/pull/6246).
-Inspection of the published `langchain4j-anthropic` source artifact found no
+Inspection of the 1.23.0 `langchain4j-anthropic` source artifact found no
 native compaction or inline tool-change content types. Its mapper still combines
 multiple thinking texts/signatures into one pair, so it cannot guarantee lossless
 replay of arbitrary signed block sequences.
+
+[Upstream fix #7187](https://github.com/langchain4j/langchain4j/pull/7187) proposes
+ordered assistant-block retention for synchronous, streaming and batch responses.
+Covia still uses the released SDK's supported single-thinking-block codec;
+the reserved `preserveThinking` option remains disabled pending upstream support.
+
+The SDK also ignores cache attributes on native mid-conversation system
+messages; [upstream fix #7186](https://github.com/langchain4j/langchain4j/pull/7186)
+has been submitted. Covia retains the existing earlier conversation breakpoint
+until this capability is available in a supported dependency. The five-minute
+default and production prefix-mismatch policy are unchanged.
 
 The remaining work belongs upstream, before enabling the reserved options:
 
