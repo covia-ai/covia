@@ -169,6 +169,9 @@ of these will bring it back:
 - a call from its cycle still running past its time limit;
 - input or session messages that arrived during the cycle.
 
+An open human ask made outside a task, or for a different task, does not keep
+this task open.
+
 The cycle's reply then goes to the session's conversation, not to the task,
 and becomes the task Job's progress: where the work stands, which its
 requester sees as the task's working state (an A2A client, as its status

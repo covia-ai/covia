@@ -315,6 +315,14 @@ identity token through an operation", and HELD_KEYS.md.
 
 ## Upgrading from 0.11.0
 
+Audit application-owned agent context when upgrading: `config.context` and
+non-skill `config.loads` default to `trusted: true`, so their resolved values
+become system instructions. Set `trusted: false` on mutable memory and other
+reference data; keep application-authored instructions trusted. This is an
+existing default, not a change in this release. The standard templates already
+mark memory as data; custom agent configurations need the same explicit choice.
+See [AGENT_CONTEXT.md §5.3](AGENT_CONTEXT.md#53-pinned-context) for the trust contract.
+
 | 0.11.0 | Current |
 |--------|---------|
 | `User`'s `agentAt`, `createAgent`, `forkAgent`, `removeAgent`, `getAgents` and `ensureAgent` | The user's agents, `user.agents()`: `at`, `create`, `createFork`, `remove` and `all` (empty, not null, when there are none); for `ensureAgent`, `create` then `agent`. `user.agent(id)` stays, and still finds a deleted agent: `agent.isTerminated()` says whether it is one |

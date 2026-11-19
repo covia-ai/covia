@@ -84,6 +84,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Fixed
 
+- An unanswered human ask made outside a task no longer faults the agent when it settles an unrelated task.
 - A DLFS file written by `create`, `write`, a content upload or `archive` changes in one update once all its content has arrived, so a write cut off part-way leaves the drive as it was; a write onto a directory fails as a conflict (#629).
 - `archive:list` and `archive:extract` read a zip stored in a DLFS drive instead of failing as a venue fault.
 - `archive:extract` checks each file it writes against its root as `file:write` does, following links.
