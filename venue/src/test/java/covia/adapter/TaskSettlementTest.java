@@ -72,7 +72,7 @@ public class TaskSettlementTest {
 
 	private static Agent stepAgent(RequestContext owner, String agentId) {
 		engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, agentId,
-			Fields.CONFIG, TestEngine.unrestricted(Maps.of(Fields.OPERATION, "v/test/ops/step"))), owner).awaitResult(5000);
+			Fields.CONFIG, TestEngine.unrestricted(Maps.of(Fields.OPERATION, "v/test/ops/step", "acceptTasks", true))), owner).awaitResult(5000);
 		return engine.getVenueState().users().user(owner.getUserDID()).agent(agentId);
 	}
 
@@ -237,7 +237,7 @@ public class TaskSettlementTest {
 			String agentId = runtime + "-parks";
 			engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, agentId,
 				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/ops/" + runtime + "/chat",
-					"llmOperation", "v/test/ops/taskllm", "model", "park-task-test")), owner).awaitResult(5000);
+					"llmOperation", "v/test/ops/taskllm", "model", "park-task-test", "acceptTasks", true)), owner).awaitResult(5000);
 			Agent agent = engine.getVenueState().users().user(owner.getUserDID()).agent(agentId);
 			try (AgentWatch watch = AgentWatch.open(engine, owner.getUserDID(), agentId)) {
 				long parkedAt = now();

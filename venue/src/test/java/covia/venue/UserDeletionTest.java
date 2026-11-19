@@ -170,7 +170,8 @@ class UserDeletionTest {
 		String agentId = "erased-agent";
 		try (var gate = covia.adapter.TestAdapter.createGate("delete-agent-gate")) {
 			engine.jobs().invokeInternal("v/ops/agent/create", Maps.of(Fields.AGENT_ID, agentId,
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete", "testGate", "delete-agent-gate")),
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete", "testGate", "delete-agent-gate",
+					"acceptTasks", true)),
 				ctx).get(5, TimeUnit.SECONDS);
 			Job request = engine.jobs().invokeOperation("v/ops/agent/request",
 				Maps.of(Fields.AGENT_ID, agentId, Fields.INPUT, "work"), ctx);

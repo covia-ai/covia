@@ -1,6 +1,6 @@
 {
 	"name": "Request Agent Task",
-	"description": "agent_request: Delegate a task to an agent. Wait up to timeout milliseconds (default 5000); return the structured response if it finishes, otherwise a snapshot containing the task Job id and sessionId. Use timeout=0 for immediate submission. Follow the returned task id with the advertised Job tools on this venue; do not submit the task again to check its outcome. Input must contain self-contained instructions. Use responseSchema for structured output and outputPath for a path-based result handoff.",
+	"description": "agent_request: Delegate a task to an agent. Only an agent whose config sets acceptTasks: true takes tasks; a request to any other is refused. Wait up to timeout milliseconds (default 5000); return the structured response if it finishes, otherwise a snapshot containing the task Job id and sessionId. Use timeout=0 for immediate submission. Follow the returned task id with the advertised Job tools on this venue; do not submit the task again to check its outcome. Input must contain self-contained instructions. Use responseSchema for structured output and outputPath for a path-based result handoff.",
 	"dateCreated": "2026-03-06T00:00:00Z",
 	"operation": {
 		"adapter": "agent:request",

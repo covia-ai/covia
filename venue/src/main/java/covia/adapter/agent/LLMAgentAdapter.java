@@ -154,16 +154,16 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 		if (sessionFrames != null && !sessionFrames.isEmpty()) {
 			sessionFrames = GoalTreeContext.withRootLoads(sessionFrames, frameLoads);
 		}
-		FixedPalette fixed = fixedPalette(sourceConfig, ctx,
-			sessionFrames, cachePrefix);
-		AVector<ACell> harness = fixed.harness();
-		AVector<ACell> fixedTools = fixed.tools();
-
 		// The task renders through the tool loop's own renderer — a preview
 		// job id stands in for the one a real task would carry.
 		AVector<ACell> tasks = (in.task() != null)
 			? Vectors.of((ACell) Maps.of(Fields.JOB_ID, TaskTools.PREVIEW_JOB_ID, Fields.INPUT, in.task()))
 			: null;
+		FixedPalette fixed = fixedPalette(sourceConfig, ctx,
+			sessionFrames, cachePrefix, TaskTools.offered(sourceConfig, tasks));
+		AVector<ACell> harness = fixed.harness();
+		AVector<ACell> fixedTools = fixed.tools();
+
 		AVector<ACell> previewFrames = (sessionFrames != null) ? sessionFrames : Vectors.empty();
 		if (previewFrames.isEmpty()) {
 			previewFrames = Vectors.of((ACell) GoalTreeContext.createFrame("", frameLoads));
@@ -205,7 +205,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 		spec = spec.withFrames(frameTools.reload());
 		AVector<ACell> entries = Vectors.empty();
 		if (profile.toolCalling()) {
-			entries = (AVector<ACell>) ToolPalette.provenance(TaskTools.DEFINITIONS, "harness")
+			entries = (AVector<ACell>) ToolPalette.provenance(fixed.taskTools(), "harness")
 				.concat(ToolPalette.provenance(harness, "harness"))
 				.concat(fixed.provenance())
 				.concat(loads.toolProvenance());
@@ -362,7 +362,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 		ModelProfile profile = model.profile();
 		boolean cachePrefix = promptCaching(profile, config);
 		FixedPalette fixed = fixedPalette(recordConfig, ctx,
-			sessionFrames, cachePrefix);
+			sessionFrames, cachePrefix, TaskTools.offered(recordConfig, tasks));
 		AVector<ACell> fixedTools = fixed.tools();
 
 		// Everything the assembler needs for this cycle; the loop supplies what
@@ -446,17 +446,19 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 		FrameTools frameTools = new FrameTools(this, spec,
 			new TaskTools.Tasks(engine, spec.capsCtx(), tasks, timeoutMs, preview),
 			fixed.toolIndex(), configLoads, timeoutMs, store, 0);
-		frameTools.baseToolStart = Math.toIntExact(TaskTools.DEFINITIONS.count() + fixed.harness().count());
+		// The fixed manifest holds no task tools, so the base tools start after the harness
+		frameTools.baseToolStart = Math.toIntExact(fixed.harness().count());
 		frameTools.baseToolEnd = Math.toIntExact(frameTools.baseToolStart + fixed.baseTools().count());
 		frameTools.offered = ToolPalette.names(fixed.tools());
 		return frameTools;
 	}
 
-	private record FixedPalette(AVector<ACell> baseTools, AVector<ACell> harness,
+	/** @param taskTools the cycle's task tools ({@link TaskTools#offered}) */
+	private record FixedPalette(AVector<ACell> taskTools, AVector<ACell> baseTools, AVector<ACell> harness,
 			AMap<AString, ACell> toolIndex, AVector<ACell> unavailable) {
 		@SuppressWarnings("unchecked")
 		AVector<ACell> tools() {
-			return (AVector<ACell>) TaskTools.DEFINITIONS.concat(harness).concat(baseTools);
+			return (AVector<ACell>) taskTools.concat(harness).concat(baseTools);
 		}
 
 		AVector<ACell> provenance() {
@@ -464,22 +466,23 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 		}
 	}
 
-	/** The immutable tools for a session: task controls, declared harness tools
-	 * and configured operations. Skill tools append only when their skill loads. */
+	/** The immutable tools for a session, with the cycle's task tools ahead of
+	 * them: declared harness tools and configured operations. Skill tools append
+	 * only when their skill loads. */
 	@SuppressWarnings("unchecked")
 	private FixedPalette fixedPalette(AMap<AString, ACell> config, RequestContext catalogCtx,
 			AVector<ACell> frames,
-			boolean cachePrefix) {
+			boolean cachePrefix, AVector<ACell> taskTools) {
 		AVector<ACell> harness = HarnessTools.offered(config, HarnessTools.SHARED);
 		ContextAssembler.Rendered rendered = ContextAssembler.rendered(
 			frames, config, cachePrefix);
 		if (rendered != null) {
-			return new FixedPalette(rendered.baseTools(), harness,
+			return new FixedPalette(taskTools, rendered.baseTools(), harness,
 				rendered.toolIndex(), Vectors.empty());
 		}
 		ToolPalette.Palette configured = ToolPalette.resolve(
 			engine, catalogCtx, config, HARNESS_TOOL_NAMES);
-		return new FixedPalette(configured.tools(), harness,
+		return new FixedPalette(taskTools, configured.tools(), harness,
 			configured.toolIndex(), configured.unavailable());
 	}
 

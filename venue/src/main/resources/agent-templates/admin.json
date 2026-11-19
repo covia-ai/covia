@@ -31,6 +31,7 @@
 				}
 			},
 			"defaultTools": false,
+			"acceptTasks": true,
 			"skillsets": [
 				"w/skills"
 			],

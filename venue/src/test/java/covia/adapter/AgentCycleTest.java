@@ -76,6 +76,11 @@ public class AgentCycleTest {
 		return create(owner, agentId, Maps.of(Fields.OPERATION, "v/test/ops/step"));
 	}
 
+	/** As {@link #stepAgent}, for an agent that takes tasks. */
+	private Agent stepTaskAgent(RequestContext owner, String agentId) {
+		return create(owner, agentId, Maps.of(Fields.OPERATION, "v/test/ops/step", "acceptTasks", true));
+	}
+
 	private Agent llmAgent(RequestContext owner, String agentId, String model) {
 		return create(owner, agentId, Maps.of(Fields.OPERATION, "v/ops/llmagent/chat",
 			"llmOperation", "v/test/ops/failllm", "model", model));
@@ -458,7 +463,7 @@ public class AgentCycleTest {
 		RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));
 		String gateName = gateName("stopped");
 		try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName)) {
-			Agent agent = stepAgent(owner, "stopped-task");
+			Agent agent = stepTaskAgent(owner, "stopped-task");
 			String script = "hold:" + gateName + " complete";
 			Job task = request(owner, "stopped-task", script);
 			awaitGate(gate);
@@ -489,7 +494,7 @@ public class AgentCycleTest {
 		RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));
 		String gateName = gateName("stopped");
 		try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName)) {
-			Agent agent = stepAgent(owner, "stopped");
+			Agent agent = stepTaskAgent(owner, "stopped");
 			Job task = request(owner, "stopped", "hold:" + gateName + " complete");
 			awaitGate(gate);
 			assertNotNull(agent.suspend(owner.getAuthorityDID(), Strings.create("stop")));
@@ -513,7 +518,7 @@ public class AgentCycleTest {
 		RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));
 		String gateName = gateName("resumed");
 		try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName)) {
-			Agent agent = stepAgent(owner, "resumed");
+			Agent agent = stepTaskAgent(owner, "resumed");
 			Job task = request(owner, "resumed", "hold:" + gateName + " complete");
 			awaitGate(gate);
 			Blob sid = sessionOf(task);
@@ -538,7 +543,7 @@ public class AgentCycleTest {
 		RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));
 		String gateName = gateName("continuation");
 		try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName)) {
-			Agent agent = stepAgent(owner, "continued-task");
+			Agent agent = stepTaskAgent(owner, "continued-task");
 			String script = "hold:" + gateName + " yield";
 			Job task = request(owner, "continued-task", script);
 			awaitGate(gate);
@@ -575,7 +580,7 @@ public class AgentCycleTest {
 		RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));
 		String gateName = gateName("prefixed-continuation");
 		try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName)) {
-			stepAgent(owner, "prefixed-task");
+			stepTaskAgent(owner, "prefixed-task");
 			Job task = request(owner, "prefixed-task", "hold:" + gateName + " yield");
 			awaitGate(gate);
 			message(owner, "prefixed-task", Maps.of(Fields.TASK_ID, Strings.create("0x" + task.getID().toHexString()),
@@ -592,7 +597,7 @@ public class AgentCycleTest {
 		RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));
 		String gateName = gateName("orphan");
 		try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName)) {
-			Agent agent = stepAgent(owner, "orphan-task");
+			Agent agent = stepTaskAgent(owner, "orphan-task");
 			Job first = request(owner, "orphan-task", "hold:" + gateName + " complete");
 			awaitGate(gate);
 			Job orphan = request(owner, "orphan-task", "complete");
@@ -658,7 +663,7 @@ public class AgentCycleTest {
 		RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));
 		String gateName = gateName("task-chat");
 		try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName)) {
-			Agent agent = stepAgent(owner, "task-chat");
+			Agent agent = stepTaskAgent(owner, "task-chat");
 			Job first = chat(owner, "task-chat", null, "hold:" + gateName + " reply");
 			awaitGate(gate);
 			Blob sid = sessionOf(first);
@@ -682,7 +687,7 @@ public class AgentCycleTest {
 	@Test
 	public void aChatInAParkedTasksSessionGetsItsOwnCycleAndAMessageBringsTheTaskBack(TestInfo info) throws Exception {
 		RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));
-		Agent agent = stepAgent(owner, "parked-chat");
+		Agent agent = stepTaskAgent(owner, "parked-chat");
 		Job task = request(owner, "parked-chat", "park:3600000");
 		assertEquals(Agent.SLEEPING, awaitRest(agent, owner));
 		assertTrue(Task.isParked(agent.getTasks().get(task.getID())));
@@ -715,7 +720,7 @@ public class AgentCycleTest {
 		String second = gateName("back-second");
 		try (TestAdapter.TestGate firstGate = TestAdapter.createGate(first);
 				TestAdapter.TestGate secondGate = TestAdapter.createGate(second)) {
-			Agent agent = stepAgent(owner, "back");
+			Agent agent = stepTaskAgent(owner, "back");
 			Job opening = chat(owner, "back", null, "hold:" + first + " reply");
 			awaitGate(firstGate);
 			// Queued behind the held cycle, in order: a task that parks, a chat
@@ -746,7 +751,7 @@ public class AgentCycleTest {
 		RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));
 		String gateName = gateName("fifo");
 		try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName)) {
-			Agent agent = stepAgent(owner, "fifo");
+			Agent agent = stepTaskAgent(owner, "fifo");
 			Job first = chat(owner, "fifo", null, "hold:" + gateName + " reply");
 			awaitGate(gate);
 			// Queued behind the held cycle, each in a session of its own

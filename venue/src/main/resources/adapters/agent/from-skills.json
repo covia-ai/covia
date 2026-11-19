@@ -41,7 +41,7 @@
         },
         "config": {
           "type": "object",
-          "description": "Optional base agent configuration, merged under the derived fields (systemPrompt, skillsets, operation/llmOperation/model). Use it to pass any other agent:create config such as tools, caps, or accepts."
+          "description": "Optional base agent configuration, merged under the derived fields (systemPrompt, skillsets, operation/llmOperation/model). Use it to pass any other agent:create config such as tools, caps, accepts, or acceptTasks: true for an agent that will take requests."
         }
       },
       "required": ["agentId"]

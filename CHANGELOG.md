@@ -33,6 +33,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Changed
 
+- An agent takes tasks only when its config sets `acceptTasks: true`, as the standard templates except `minimal` do; without it `agent:request` is refused and the agent's context carries no task tools or no-task notice.
 - A running venue whose record another writer with its key changed while the venue changed it too writes its own version over the other, logs the fork at ERROR naming both versions, and stops: a standalone venue process exits with status 70. Find the other writer, such as a second instance or state delivered from outside, before restarting it.
 - Capability documentation now inventories module abilities, resource scopes and model-call boundaries; UCAN issuance cannot use presented granting rights to escape access-token or callable caps.
 - A stored secret or connected account that fails its integrity check, because it was altered or damaged or the venue key is misconfigured, is the venue's own failure: REST answers it as a server failure, A2A as `INTERNAL`, an agent whose step it stops is suspended, and the venue logs it once at ERROR naming whose it is; the message still names the record and how to replace it (#668).

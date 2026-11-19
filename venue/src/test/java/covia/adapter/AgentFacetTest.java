@@ -75,7 +75,7 @@ class AgentFacetTest {
 
     @Test void absentFacetPreservesNativeRecordAndTaskContract() throws Exception {
         run("create", Maps.of(Fields.AGENT_ID, "legacy", Fields.CONFIG,
-            Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")));
+            Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete", "acceptTasks", true)));
         assertFalse(agent("legacy").getRecord().containsKey(Agent.KEY_AGENT));
         ACell result = run("request", Maps.of(Fields.AGENT_ID, "legacy", Fields.INPUT, Maps.of("task", "hello")));
         assertEquals(Strings.create("hello"), RT.getIn(result, Fields.OUTPUT, "completed", "task"));
@@ -257,7 +257,7 @@ class AgentFacetTest {
     }
 
     @Test void realNativeProxyUsesExistingAgentRequestSurface() throws Exception {
-        run("create", Maps.of(Fields.AGENT_ID, "native", Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")));
+        run("create", Maps.of(Fields.AGENT_ID, "native", Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete", "acceptTasks", true)));
         run("create", target().assoc(Agent.KEY_AGENT, Maps.of(Fields.ADAPTER, "remoteagent", Fields.AGENT_ID, "native")));
         ACell output = run("request", target().assoc(Fields.INPUT, Maps.of("task", "via proxy")));
         assertEquals(Strings.create("via proxy"), RT.getIn(output, Fields.OUTPUT, "completed", "task"));

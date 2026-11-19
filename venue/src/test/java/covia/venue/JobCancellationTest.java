@@ -312,7 +312,7 @@ public class JobCancellationTest {
 
 	@Test
 	public void testCancelRequestTakesItsTaskOutOfTheQueue() {
-		createNeverAgent("req-cancel-agent");
+		createNeverTaskAgent("req-cancel-agent");
 
 		Job reqJob;
 		try (AgentWatch watch = AgentWatch.open(engine, ALICE_DID, "req-cancel-agent")) {
@@ -338,7 +338,7 @@ public class JobCancellationTest {
 		// Hold the transition open so cancellation deterministically wins before
 		// the agent's completion/error path. A fast chat transition made this test
 		// race: it could legitimately fail before cancel() committed.
-		createNeverAgent("req-cancel-agent2");
+		createNeverTaskAgent("req-cancel-agent2");
 
 		Job reqJob;
 		try (AgentWatch watch = AgentWatch.open(engine, ALICE_DID, "req-cancel-agent2")) {
@@ -551,7 +551,7 @@ public class JobCancellationTest {
 
 	@Test
 	public void testSuspendCancelsActiveTransition() {
-		createNeverAgent("suspend-cancel-agent");
+		createNeverTaskAgent("suspend-cancel-agent");
 
 		// Submit a task to make the agent run, and wait for its transition to start
 		try (AgentWatch watch = AgentWatch.open(engine, ALICE_DID, "suspend-cancel-agent")) {
@@ -590,11 +590,20 @@ public class JobCancellationTest {
 	}
 
 	private void createNeverAgent(String agentId) {
+		createNeverAgent(agentId, false);
+	}
+
+	/** As {@link #createNeverAgent}, for an agent that takes tasks. */
+	private void createNeverTaskAgent(String agentId) {
+		createNeverAgent(agentId, true);
+	}
+
+	private void createNeverAgent(String agentId, boolean acceptTasks) {
 		engine.jobs().invokeOperation(
 			"v/ops/agent/create",
 			Maps.of(
 				Fields.AGENT_ID, agentId,
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/never")),
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/never", "acceptTasks", acceptTasks)),
 			ctx).awaitResult(5000);
 	}
 

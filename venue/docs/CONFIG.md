@@ -3265,7 +3265,7 @@ The agent-card GET is public and works regardless.
 
 **Per-agent endpoints (COG-14):** beyond the front door, every hosted agent is
 addressable at `POST /a2a/<ownerDID>/g/<agentId>` (JSON-RPC `SendMessage` →
-`agent:request` task Job = A2A Task; `GetTask`, `CancelTask`,
+`agent:request` task Job = A2A Task, which needs `acceptTasks: true` in the agent's config; `GetTask`, `CancelTask`,
 `SubscribeToTask`, `GetExtendedAgentCard`), with its card at the A2A well-known
 path below that base. Private by default: whoever may ask the agent may use
 the endpoint — the owner, a caller the agent's `config.accepts` admits, or one

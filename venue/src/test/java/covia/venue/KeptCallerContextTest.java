@@ -112,7 +112,7 @@ class KeptCallerContextTest {
 	@Test void aLocalAgentCallThatKeptNoStateEndsAtRecovery() {
 		RequestContext own = RequestContext.of(TestEngine.uniqueDID("KeptContextLocalCall"));
 		engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "waiting",
-			Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/never")), own).awaitResult(10_000);
+			Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/never", "acceptTasks", true)), own).awaitResult(10_000);
 		Job call = engine.jobs().invokeOperation("v/ops/remoteagent/request",
 			Maps.of(Fields.AGENT_ID, "waiting", Fields.INPUT, Maps.of("task", "wait")), own);
 		TestEngine.awaitJob(call, j -> RT.getIn(RemoteJobs.descriptor(j), RemoteJobs.REMOTE_STATUS) != null,
@@ -188,7 +188,7 @@ class KeptCallerContextTest {
 		AVector<ACell> proofs = grantTo(aliceKey);
 		RequestContext own = RequestContext.of(alice);
 		engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "writer",
-			Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/never")), own).awaitResult(10_000);
+			Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/never", "acceptTasks", true)), own).awaitResult(10_000);
 
 		Job request = engine.jobs().invokeOperation("v/ops/agent/request", Maps.of(Fields.AGENT_ID, "writer",
 			Fields.INPUT, Maps.of("q", "write"), Fields.OUTPUT_PATH, "w/out"), own.withProofs(proofs));

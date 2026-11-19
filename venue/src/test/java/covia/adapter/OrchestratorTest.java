@@ -281,7 +281,7 @@ public class OrchestratorTest {
 		for (String name : new String[]{"PipeA", "PipeB", "PipeC"}) {
 			engine.jobs().invokeOperation("v/ops/agent/create",
 				Maps.of(Fields.AGENT_ID, name,
-					Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")),
+					Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete", "acceptTasks", true)),
 				RequestContext.of(ALICE_DID)).awaitResult(5000);
 		}
 
@@ -341,7 +341,7 @@ public class OrchestratorTest {
 		for (String name : new String[]{"GridA", "GridB"}) {
 			engine.jobs().invokeOperation("v/ops/agent/create",
 				Maps.of(Fields.AGENT_ID, name,
-					Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")),
+					Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete", "acceptTasks", true)),
 				RequestContext.of(ALICE_DID)).awaitResult(5000);
 		}
 
@@ -428,7 +428,7 @@ public class OrchestratorTest {
 		for (String name : new String[]{"RtA", "RtB"}) {
 			engine.jobs().invokeOperation("v/ops/agent/create",
 				Maps.of(Fields.AGENT_ID, name,
-					Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")),
+					Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete", "acceptTasks", true)),
 				RequestContext.of(ALICE_DID)).awaitResult(5000);
 		}
 

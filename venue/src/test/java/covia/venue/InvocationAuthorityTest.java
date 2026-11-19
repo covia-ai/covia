@@ -127,7 +127,7 @@ public class InvocationAuthorityTest {
 
 	@Test void admittedCallerCanUseBoundAgentEndpointWithoutInvoke() {
 		engine.jobs().callOperation("v/ops/agent/create", Maps.of("agentId", "public-agent",
-			"config", Maps.of("operation", "v/test/ops/taskcomplete", "accepts", "anyone")), owner)
+			"config", Maps.of("operation", "v/test/ops/taskcomplete", "accepts", "anyone", "acceptTasks", true)), owner)
 			.awaitResult(5000);
 		// The asker may ask the agent but holds no invoke right
 		String agent = owner.getUserDID() + "/g/public-agent";

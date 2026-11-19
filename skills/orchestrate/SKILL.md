@@ -301,7 +301,7 @@ The result contains all three stages in one response with full provenance.
 - If any step fails, the entire orchestration fails — the job status shows which step caused it.
 - With strict validation enabled, unreadable operation metadata and output-schema violations fail the step before its output is released to dependants.
 - Step status is tracked in the job's `steps` array (inspect via `covia_read path=j/<job-id>/steps`).
-- Common failures: agent not found, operation timeout, LLM error.
+- Common failures: agent not found, an `agent:request` step to an agent whose config does not set `acceptTasks: true`, operation timeout, LLM error.
 
 ## Federation
 

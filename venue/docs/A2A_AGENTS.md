@@ -149,7 +149,9 @@ Concretely, a per-agent `SendMessage` (fresh) is submitted to the agent as an
 `agent:request` **task**, which mints the session and returns immediately with a
 non-terminal Task the client polls — `agent:request`'s own capability check is
 the ownership enforcement (facade over the capability layer), so no A2A-specific
-trust branch exists. The task Job records its session under `SESSION_ID` (which
+trust branch exists. Only an agent whose config sets `acceptTasks: true` takes
+the task; any other refuses the request ([AGENT_TASKS.md](AGENT_TASKS.md) §2),
+as a suspended agent does. The task Job records its session under `SESSION_ID` (which
 `Job.completeWith` preserves across completion), so `A2ACodec` surfaces
 `contextId = session` for the task's whole lifecycle — the same on `SendMessage`
 and on a later `GetTask`. The per-agent by-id methods — `GetTask`,

@@ -155,7 +155,7 @@ class BothClocksTest {
 			long later = now() + HOUR;
 			engine().jobs().invokeOperation("v/ops/agent/create", Maps.of(
 				Fields.AGENT_ID, "wake-yield",
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/wakeresponse"),
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/wakeresponse", "acceptTasks", true),
 				Agent.KEY_STATE, Maps.of(Fields.WAKE_TIME, CVMLong.create(later))), owner).awaitResult(5000);
 			Agent agent = engine().getVenueState().users().user(owner.getUserDID()).agent(Strings.create("wake-yield"));
 

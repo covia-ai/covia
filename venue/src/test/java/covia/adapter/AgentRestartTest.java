@@ -73,7 +73,7 @@ public class AgentRestartTest {
 					Fields.AGENT_ID, agentId,
 					Fields.CONFIG, Maps.of(
 						Fields.OPERATION, "v/test/ops/taskcomplete",
-						"testGate", gateName)), alice).awaitResult(5000);
+						"testGate", gateName, "acceptTasks", true)), alice).awaitResult(5000);
 				request = first.jobs().invokeOperation("v/ops/agent/request",
 					Maps.of(Fields.AGENT_ID, agentId,
 						Fields.INPUT, Maps.of("ask", "outlive the venue")), alice);
@@ -143,7 +143,7 @@ public class AgentRestartTest {
 					Fields.AGENT_ID, agentId,
 					Fields.CONFIG, Maps.of(
 						Fields.OPERATION, "v/test/ops/taskcomplete",
-						"testGate", gateName)), alice).awaitResult(5000);
+						"testGate", gateName, "acceptTasks", true)), alice).awaitResult(5000);
 				request = first.jobs().invokeOperation("v/ops/agent/request",
 					Maps.of(Fields.AGENT_ID, agentId,
 						Fields.INPUT, Maps.of("ask", "wait for the agent adapter")), alice);
@@ -196,7 +196,7 @@ public class AgentRestartTest {
 				Engine.addDemoAssets(first);
 				first.jobs().invokeOperation("v/ops/agent/create", Maps.of(
 					Fields.AGENT_ID, agentId,
-					Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/step")), alice).awaitResult(5000);
+					Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/step", "acceptTasks", true)), alice).awaitResult(5000);
 				request = first.jobs().invokeOperation("v/ops/agent/request",
 					Maps.of(Fields.AGENT_ID, agentId,
 						Fields.INPUT, Strings.create("complete hold:" + gateName),
@@ -256,7 +256,7 @@ public class AgentRestartTest {
 			for (String agentId : new String[] {"parked-waking", "parked-orphan"}) {
 				first.jobs().invokeOperation("v/ops/agent/create", Maps.of(
 					Fields.AGENT_ID, agentId,
-					Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/wakeresponse"),
+					Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/wakeresponse", "acceptTasks", true),
 					Agent.KEY_STATE, later), alice).awaitResult(5000);
 			}
 			try (AgentWatch wakingWatch = AgentWatch.open(first, ALICE, "parked-waking");
@@ -373,10 +373,10 @@ public class AgentRestartTest {
 				Engine.addDemoAssets(first);
 				first.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "worker",
 					Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete",
-						"testGate", gateName, Fields.DELAY, 0L)), alice).awaitResult(5000);
+						"testGate", gateName, Fields.DELAY, 0L, "acceptTasks", true)), alice).awaitResult(5000);
 				first.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "stray",
 					Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/never",
-						"tools", Vectors.of("v/ops/json/merge"))), alice).awaitResult(5000);
+						"tools", Vectors.of("v/ops/json/merge"), "acceptTasks", true)), alice).awaitResult(5000);
 				// A record no request could write: the public principal controls Alice's agent
 				Agent stray = first.getVenueState().users().user(ALICE).agent("stray");
 				stray.cursor().set(stray.getRecord().assoc(Agent.KEY_CONTROLLER, first.publicPrincipal()));
