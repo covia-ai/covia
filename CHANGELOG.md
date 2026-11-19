@@ -12,7 +12,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 - Asset creation consistently accepts `asset/store` on the owner's `a/` collection across adapters and REST registration; existing unscoped grants remain valid.
 
-- Outbound HTTP requests require method- and destination-scoped `outbound/http` authority; configured agent models use harness authority, and the address-policy bypass is now `admin/outbound/bypass`.
+- Outbound HTTP requests require method- and destination-scoped `outbound/http` authority; configured agent models use harness authority, and the address-policy bypass is now `admin/outbound/bypass`. The address policy now covers operator-configured endpoints too, so a provider or platform API on a loopback or private address, such as a local Ollama or Telegram Bot API server, needs its host in `http.allowedHosts`.
 
 - Agent operations' `agentId` accepts an agent's DID (`<ownerDID>:g:<id>`), the values API's `agent` selector accepts `g/<id>` and `<ownerDID>/g/<id>`, and a messaging binding's `agent` accepts all of these forms, each checked for access as the existing forms are; a binding whose `agent` names no agent is refused when it is created.
 - Job-specific `job/read`, `job/manage` and `job/message` grants replace CRUD permissions on Job APIs; lifecycle controls return acknowledgements.

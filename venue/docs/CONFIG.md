@@ -1436,8 +1436,10 @@ tools use the agent. This permission does not bypass the address rules below.
 See [OUTBOUND.md](OUTBOUND.md), including the breaking `outbound/any` rename.
 
 - `http.allowedHosts` / `http.blockedHosts` — host names exempted from, or
-  always refused by, the outbound (SSRF) guard. Every caller-chosen target
-  passes it: HTTP, MCP, A2A and model endpoint URLs, relayed Convex peers,
+  always refused by, the outbound (SSRF) guard. Every outbound target passes
+  it, whoever chose it: HTTP, MCP, A2A and model endpoint URLs (an
+  operator-configured one such as a local Ollama included), messaging platform
+  APIs, relayed Convex peers,
   `did:web` documents, and other venues — grid and remote-agent targets,
   orchestration steps' venues and the publishers of `did:web` asset
   references, whether named by URL or DID. Names match whatever their case and
@@ -1458,7 +1460,7 @@ See [OUTBOUND.md](OUTBOUND.md), including the breaking `outbound/any` rename.
   `InetAddressResolverProvider` found first), only allowed hosts pass. The
   guard belongs to the `http` adapter: with it disabled, every such target is
   refused. Both lists are published at `v/info/adapters/http`.
-  HTTP, MCP, A2A and caller-selected model URLs are normalised before checks
+  HTTP, MCP, A2A and model URLs are normalised before checks
   and sent in that form, including literal and encoded dot segments. Ambiguous
   encoded path separators or nested path encoding are refused. This also
   applies with `admin/outbound/bypass`. URL secret placeholders must occur in the path

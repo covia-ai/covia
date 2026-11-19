@@ -45,6 +45,7 @@ an independent unconditional covering grant can authorize the same use.
 | Work | Authority |
 |---|---|
 | An agent's configured model call | The harness's controller authority, as it stands now |
+| A context operation named in an agent's config (`systemPrompt` or `loads`) | The harness's controller authority, as for the model call |
 | An agent calling HTTP or a model as a tool | The agent's current bounded authority |
 | A direct user or access-token call | That request's authority, including token/callable restrictions |
 | MCP or native venue connection reused by another caller | The current invocation, never the caller that opened the connection |
@@ -72,7 +73,9 @@ adapter follows redirects explicitly: each new destination and its resulting
 method require authority. For example, a POST followed by a 303 requires GET
 permission for the next hop. Model, MCP, A2A and native venue clients do not
 silently follow redirects. Pinned installation downloads explicitly check each
-redirect before sending it.
+redirect before sending it. A venue whose DID resolves to a transport other
+than HTTP is refused for every caller, the venue itself and bypass holders
+included, since its requests cannot be checked.
 
 Transport connection pooling does not cache permission. Outbound scope, proof expiry,
 token restrictions and gate conditions are checked at each send. Long-lived
