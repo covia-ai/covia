@@ -846,15 +846,21 @@ The signed record is what the store and other nodes receive;
 `application.host().sync()` publishes the root and `engine.flush()` is the
 durability barrier.
 
-The copy and the record follow two rules. A transaction on the copy commits by
-the venue's default reconcile: one that meets a concurrent change runs again
-under its claim, so both changes are kept. Publishing the copy (`VenueState.sync`)
-is whole-venue LWW, as incoming state is (A.2): where only one side changed it
-wins, and where both did the newer `:timestamp` selects one complete version,
-a tie keeping the copy. Incoming venue state delivered through the application
-lands in the record, and the copy takes it at its next sync unless the copy has
-written since. Nothing in the venue delivers state for a mounted venue, which
-one running instance owns.
+The copy and the record follow Convex's default reconcile: where only one side
+changed, it wins. A transaction on the copy that meets a concurrent change runs
+again under its claim, so both changes are kept. Publishing the copy
+(`VenueState.sync`) puts the copy into the record where only the copy changed,
+and the record into the copy where only the record did. Only incoming state
+changes the record behind the copy: a snapshot signed with the venue's key and
+newer than the copy's last publication (A.2), from another writer such as an
+embedder delivering state through the application. The copy takes it at its
+next sync; later reads and work see it, while work already running keeps what
+it read. Where both changed, the sync fails with a merge conflict, publishes
+nothing and keeps the copy, as every later sync does: two writers' versions are
+neither combined nor one chosen over the other. A venue that writes between
+syncs therefore takes incoming state only while its copy is unchanged. Nothing
+in the venue delivers state for a mounted venue, which one running instance
+owns.
 
 On receiving foreign state (disk recovery, replication, federation),
 `SignedLattice.merge()` verifies the signature, merges if valid, re-signs a
