@@ -356,7 +356,7 @@ palette assembled for the current provider call.
 
 **Tools are opt-in, on every runtime.** Each template explicitly lists the tools it needs in `config.tools`; `defaultTools: true` adds only the deliberately small inspect/read/list pack. Harness tools are opt-in by name under the same rule: the shared ones (`context_load`, `context_unload`, `more_tools`, `skill_load`, `compact`) work on both runtimes, while hierarchy controls (`subgoal`, `complete`, `fail`) are goal-tree-specific. What a configuration implies without listing, and what each frame is offered, is in [AGENT_LOOP.md §3.6](./AGENT_LOOP.md#36-tool-palette). An agent that declares none of this has no tools, or only the task tools when it takes tasks.
 
-**Templates take tasks, except `minimal`.** Every standard template but `minimal`, the leanest chat-style start, sets `acceptTasks: true`, so an agent created from one, or with no config, takes `agent:request` ([AGENT_TASKS.md](./AGENT_TASKS.md) §2). The `manager` and `full` templates tell the agent to set it on agents it creates to send requests to.
+**Templates take tasks, except `minimal`.** Every standard template but `minimal`, the leanest chat-style start, sets `acceptTasks: true`, as do the messaging modules' `telegram`, `slack` and `discord` templates, whose agents schedule check-backs to themselves through `agent:request`. So an agent created from one, or with no config, takes `agent:request` ([AGENT_TASKS.md](./AGENT_TASKS.md) §2). The `manager` and `full` templates tell the agent to set it on agents it creates to send requests to.
 
 **Who is asking is the templates' to weigh.** Each standard template's
 instructions say how to read the venue-verified `From` element

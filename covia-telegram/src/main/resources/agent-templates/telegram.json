@@ -32,7 +32,8 @@
 				"w/skills",
 				"v/skills/root"
 			],
-			"defaultTools": false
+			"defaultTools": false,
+			"acceptTasks": true
 		}
 	}
 }
