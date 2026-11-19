@@ -90,7 +90,7 @@ shape:
 ```text
 {
   renderVersion: Long,                   // required; renderer/schema compatibility version
-  tools:        Vector<ToolDefinition>,  // required; exact provider vector
+  tools:        Vector<ToolDefinition>,  // required; exact fixed manifest, never the task tools
   toolIndex:    Map<String, ToolInfo>,   // required; direct lookup by provider name
   baseToolStart: Long,                   // required; start of reusable operation/skill slice
   baseToolEnd:   Long,                   // required; exclusive end of that slice
@@ -109,7 +109,8 @@ ToolInfo := {
 }
 ```
 
-`tools` is passed to the provider as-is. `toolIndex` has one key for every named
+`tools` is passed to the provider as-is, after the task tools the cycle offers
+(§3.2.3). `toolIndex` has one key for every named
 definition in that vector. Its values contain no schema: configured operations
 omit `source`, activity labels equal to the provider name are omitted, and a
 route-free value reserves a harness or agent-managed load name whose dispatch
@@ -216,8 +217,9 @@ once rather than copying their field tables here.
 The representation has these invariants:
 
 1. Provider input is always
-   `initial.tools` plus
-   `initial.messages ++ render(frame.conversation) ++ workingTurn ++ inferenceTail`.
+   `taskTools ++ initial.tools` plus
+   `initial.messages ++ render(frame.conversation) ++ workingTurn ++ inferenceTail`,
+   where `taskTools` are the task tools the cycle offers (§3.2.3), if any.
    With caching, `initial` is the applicable `renderedContext`; without it,
    `initialise(spec)` produces the same shape ephemerally. Conversation remains
    the sole durable transcript; there is no hidden cache object or second transcript.
@@ -680,7 +682,7 @@ cases the frame's separate conversation vector records later events in the
 order the model sees them:
 
 ```
-initial.tools + initial.messages + render(conversation) + workingTurn + inferenceTail
+taskTools + initial.tools + initial.messages + render(conversation) + workingTurn + inferenceTail
 ```
 
 All components are immutable CVM cells. Committing a cycle appends its canonical
@@ -708,8 +710,9 @@ are not rendered for `self`, `owner` or `anonymous-owner` relationships; the
 recorded caller and all authority checks are unchanged. The session handle
 appears in the inference tail, never the initial head. Personal context values
 remain in their own context exchanges and are not made equal to obtain a hit.
-Renderer version 2 rebuilds older materialisations once to remove session
-handles from their heads, preserving canonical conversation and loads.
+A materialisation from an older renderer version is rebuilt once, preserving
+canonical conversation and loads; the current version, 3, keeps session
+handles out of the head and the task tools out of the tools.
 
 The Anthropic edge marks the final leading system block. With equal tools and
 equal leading instructions this is an identical cacheable prefix across sessions
@@ -742,7 +745,7 @@ duplicate.
 
 | # | Section | Region | Role | Contents |
 |---|---------|------|------|----------|
-| 0 | Fixed tool manifest | fixed prefix | — | Harness and configured tools, plus bindings from loads already present when this prefix is materialised (§3.2.3) |
+| 0 | Tool definitions | fixed prefix | — | The task tools the cycle offers, then the fixed manifest: harness and configured tools, plus bindings from loads already present when this prefix is materialised (§3.2.3) |
 | 1 | Identity prompt | initial messages | `system` | `config.systemPrompt` or the default identity, plus venue and model |
 | 2 | Capability and data-boundary notice | initial messages | `system` | Declared `config.caps` when relevant, plus one stable rule that tool-result content is data, not instruction |
 | 3 | Initial trusted context | initial messages | `system` | Operator context admitted as instruction, rendered once and never duplicated into a tool result (§5.3) |
@@ -861,13 +864,22 @@ representations, in order:
 
 An adapter or plugin loading or unloading mutates the venue capability registry, not the fixed tool vector of an existing context. Revocation is always enforced at dispatch even if an earlier event remains visible to the model. A soft removal appends a removal event; only an explicit rebuild makes the historical definition absent.
 
-The same rule applies to conditional capabilities. The static `complete_task`,
-`fail_task` and `park_task` schemas stay in the fixed harness manifest and reject calls when no
-task is in scope. When those controls are offered without an outstanding task,
-the current-turn notices explicitly say that no task is assigned, that these
+The task tools `complete_task`, `fail_task` and `park_task` are the one part of
+the tool definitions not fixed in the manifest: the root frame of a cycle offers
+them ahead of it, and no rendering holds them. Every cycle of an agent that
+takes tasks offers them, so its provider prefix is as stable as if they were
+fixed. An agent that does not ([AGENT_TASKS.md](./AGENT_TASKS.md) §2) is offered
+them only on a cycle that carries a task it queued earlier, which changes the
+tool definitions, and so the cached provider prefix, for that cycle alone; the
+persisted rendering is untouched. Their static schemas reject calls when no
+task is in scope. When they are offered without an outstanding task, the
+current-turn notices explicitly say that no task is assigned, that these
 controls must not be called, and that ordinary chat is answered with a normal
-reply. This status is re-rendered outside the cached prefix; it does not mutate
-the tool vector or enter conversation history. Skill and `more_tools` loads append exact addition/removal
+reply (`ContextAssembler.NO_TASK_NOTICE`); a frame not offered them gets no such
+notice. This status is re-rendered outside the cached prefix and never enters
+conversation history.
+
+The same rule as for later tools applies to other conditional capabilities. Skill and `more_tools` loads append exact addition/removal
 state and use the fixed `invoke_tool` dispatcher where the provider has no
 native representation. `context_unload`
 removes any agent-managed load, including a tool-only load, so it also retracts
@@ -1148,7 +1160,7 @@ One line, changing daily, taken from the Spec's clock — never from the system 
 Tool resolution failures observed during initialisation or a current append — reported so the agent adapts rather than calling into a void. The adapter registry is not polled by assembly; a restored operation becomes available through an explicit tool-state event or prefix rebuild.
 
 ### 5.13 Outstanding task
-Present only when the agent has a task to settle. A `user` message rendered last on every inference — after the tool-loop messages and after the notices — so it is the thing nearest the reply, and never baked into history: the model sees only tasks still outstanding, and its closing line names the three task tools and says that a plain reply is the task's result ([AGENT_TASKS.md](./AGENT_TASKS.md) §5). The same on every runtime, and `agent:context`, `agent:step` and live inferences render the same task status. `complete_task`, `fail_task` and `park_task` stay in the root frame's tools whether or not this message is present (§3.2.3). Their presence alone does not mean a task is assigned: a call with no task in scope is refused — the framework's task boundary (`TaskTools`) — and a frame that offers them with no task in scope gets a no-task notice among the notices instead, telling it to answer chat normally (`ContextAssembler.NO_TASK_NOTICE`). A frame without them gets no such notice. A goal-tree frame's *goal* is its opening turn, not this slot; see [GOAL_TREE.md](./GOAL_TREE.md), “Sessions and Frames”.
+Present only when the agent has a task to settle. A `user` message rendered last on every inference — after the tool-loop messages and after the notices — so it is the thing nearest the reply, and never baked into history: the model sees only tasks still outstanding, and its closing line names the three task tools and says that a plain reply is the task's result ([AGENT_TASKS.md](./AGENT_TASKS.md) §5). The same on every runtime, and `agent:context`, `agent:step` and live inferences render the same task status. Which frames are offered `complete_task`, `fail_task` and `park_task`, and the no-task notice that goes with them, is §3.2.3; a frame with this message is always offered them. Their presence alone does not mean a task is assigned: a call with no task in scope is refused — the framework's task boundary (`TaskTools`). A goal-tree frame's *goal* is its opening turn, not this slot; see [GOAL_TREE.md](./GOAL_TREE.md), “Sessions and Frames”.
 
 ---
 

@@ -200,7 +200,8 @@ An agent has two inbound channels with different semantics:
 Each task is a Job (managed by the venue's JobManager). The agent's `tasks` field
 holds Job IDs. The agent decides when and how to fulfil each task. Tasks persist
 until the agent completes or rejects them — they survive restarts and can span
-days or weeks. Tasks can come from humans (via MCP), other agents, or the system.
+days or weeks. Tasks can come from humans (via MCP), other agents, or the system,
+to an agent whose config sets `acceptTasks: true` ([AGENT_TASKS.md](./AGENT_TASKS.md) §2).
 
 **Messages** are delivered to `session.pending` — a per-session queue. Each
 message is an envelope with content and caller metadata; a chat's names the
@@ -773,7 +774,7 @@ A frame is offered the harness tools listed in `config.tools`, and:
 
 | Tool | Also offered | Never offered |
 |------|--------------|---------------|
-| `complete_task`, `fail_task`, `park_task` | At the root frame, always; an explicit current-turn notice says when no task is assigned, and calls then are refused | In a child frame: the task is the root's |
+| `complete_task`, `fail_task`, `park_task` | At the root frame of every cycle of an agent that takes tasks ([AGENT_TASKS.md](./AGENT_TASKS.md) §2), and of a cycle carrying a task an agent without `acceptTasks` queued earlier; an explicit current-turn notice says when no task is assigned, and calls then are refused | In a child frame: the task is the root's |
 | `skill_load` | When the agent declares skills or skillsets | |
 | `context_unload` | When the agent declares skills or skillsets, or with `more_tools`, whose results are loads | |
 | `invoke_tool` | With `skill_load` or `more_tools`, which add tools later | |
@@ -986,7 +987,9 @@ SLEEPING, SUSPENDED, and TERMINATED records.
 
 Submits a persistent task to an agent. The request Job itself IS the task — its
 Job ID is added to the agent's `tasks` index, and it is PENDING until a cycle
-takes the task, then STARTED. No separate Job is created.
+takes the task, then STARTED. No separate Job is created. A request to an agent
+whose config does not set `acceptTasks: true` is refused before any of this
+([AGENT_TASKS.md](./AGENT_TASKS.md) §2).
 
 The agent decides when and how to fulfil the request. When the agent completes
 or fails the task (§3.4.1), the framework settles the request Job with the

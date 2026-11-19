@@ -1659,7 +1659,7 @@ public class AgentAdapter extends AAdapter {
 
 	/**
 	 * Whether an agent with this config takes tasks: only when it sets
-	 * {@code acceptTasks: true} (AGENT_LOOP.md §2.3). An agent that does not is
+	 * {@code acceptTasks: true} (AGENT_TASKS.md §2). An agent that does not is
 	 * refused {@code agent:request}, and its cycles offer no task tools unless
 	 * they carry a task it had queued before.
 	 */

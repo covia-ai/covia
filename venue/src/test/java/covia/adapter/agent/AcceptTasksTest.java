@@ -38,7 +38,7 @@ import covia.venue.TestEngine;
 
 /**
  * An agent takes tasks only when its config sets {@code acceptTasks: true}
- * (AGENT_LOOP.md §2.3). Without it {@code agent:request} is refused, and the
+ * (AGENT_TASKS.md §2). Without it {@code agent:request} is refused, and the
  * agent's cycles, {@code agent:context} and {@code agent:step} offer no task
  * tools and no no-task notice, on both runtimes, unless a cycle carries a task
  * the agent had queued before; chat and trigger work as they did.
