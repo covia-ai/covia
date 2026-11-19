@@ -303,6 +303,20 @@ find its information again, and the text it writes for the agent
 Later records are handovers: `callable`, a callable's call into its issuer's
 authority, and `user`, a call into a user under `admin/sudo`.
 
+HTTP ingress adds `transport: "http"` to that first record, including for
+signed owner logins, named access tokens and anonymous public requests.
+An MCP endpoint adds `protocol: "mcp"`; an A2A endpoint adds `protocol: "a2a"`.
+Other HTTP endpoints omit `protocol`. The endpoint supplies these facts,
+never request content, headers claiming a source, or a client-supplied URL.
+When verified, `credentialType` names the credential class: `venueJwt`,
+`keyJwt`, `ucanBearer`, `providerToken`, or `accessToken` for a named access
+token. Trusted host verifiers may establish other credential classes;
+identity-only attribution and anonymous requests omit this field. The
+record's text names these facts too. No credential bytes are recorded.
+These facts preserve authenticated authority and do not establish that a
+human wrote or approved the message. Browser requests over HTTP carry them
+as well. In-process requests have no transport field.
+
 The route belongs to its request. Work that carries a request on after a
 pause or a restart is the same request, so it keeps the route with the rest
 of its job's state, adding no record for the resumption (JOBS.md, A job's
@@ -343,12 +357,24 @@ latest. How far to trust each source is for the agent's instructions to say,
 not the element (#405); the standard templates' instructions say it
 (AGENT_TEMPLATES.md §6).
 
+A sibling is named `an agent belonging to your owner`, with its name and DID,
+and explicitly marked `not your owner`. This preserves the shared-owner
+relationship without presenting an agent's message as owner approval. A
+token's principal is its issuer, not the unknown holder presenting it.
+
 **When it appears.** An element precedes a user turn whose source, its caller
 and route records, differs from the turn before. The owner chatting directly
-(one `auth` record vouching for the owner) takes none after the start or
-another such turn, nor does the agent's own turn after the start, so the
+(one `auth` record vouching for the owner, with no `transport` field) takes
+none after the start or another such turn, nor does the agent's own turn after the start, so the
 common case carries no attribution; returning to the owner after another
 source takes one.
+
+An HTTP request, including a signed owner login over MCP, therefore takes a
+`From` element even as the first turn. Consecutive turns with the same source
+share that element. Returning to in-process owner input emits a new element.
+Resumption keeps the original route and adds no ingress record. Previously
+stored routes without transport metadata keep their existing treatment;
+absence in those records cannot establish that the original input was local.
 
 **Turns recorded before.** A turn whose route does not name where it started
 renders as it always has, so no stored context is shown differently: its

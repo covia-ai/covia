@@ -702,7 +702,7 @@ public class A2A extends ACoviaAPI {
 			A2ACodec.AgentRef ref, RequestContext asker) {
 		Blob taskId = parseTaskId(ctx, id, taskIdHex);
 		if (taskId == null) return null;
-		AMap<AString, ACell> data = readableJob(taskId, asker, CoviaAPI.jobOwner(ctx));
+		AMap<AString, ACell> data = readableJob(taskId, asker, asker.getUserDID());
 		if (data == null || !Strings.create(ref.gridAddress()).equals(data.get(Fields.ADDRESS))) {
 			writeError(ctx, id, A2AErrorCodes.TASK_NOT_FOUND, AGENT_TASK_NOT_FOUND);
 			return null;

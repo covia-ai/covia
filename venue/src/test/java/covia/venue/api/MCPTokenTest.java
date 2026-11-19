@@ -178,8 +178,12 @@ public class MCPTokenTest {
 		AMap<AString, ACell> tokenRecord = RT.ensureMap(route.get(0));
 		assertEquals(Strings.create("token"), tokenRecord.get(Fields.VIA), "and the agent is told it came through the token");
 		assertEquals(alice, tokenRecord.get(Fields.PRINCIPAL), "which vouches for its issuer");
-		assertEquals(engine.tokens().lookup(bearer), tokenRecord.dissoc(Fields.VIA).dissoc(Fields.PRINCIPAL).dissoc(Fields.TEXT),
-			"named by its reference");
+		assertEquals(engine.tokens().lookup(bearer)
+			.assoc(Fields.TRANSPORT, Strings.create("http"))
+			.assoc(Fields.PROTOCOL, Strings.create("mcp"))
+			.assoc(Fields.CREDENTIAL_TYPE, Strings.create("accessToken")),
+			tokenRecord.dissoc(Fields.VIA).dissoc(Fields.PRINCIPAL).dissoc(Fields.TEXT),
+			"named by its reference, with verified MCP ingress facts");
 		assertFalse(agent.session(sid).getRecord().toString().contains(bearer), "the bearer is never recorded");
 	}
 

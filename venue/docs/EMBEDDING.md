@@ -323,6 +323,15 @@ existing default, not a change in this release. The standard templates already
 mark memory as data; custom agent configurations need the same explicit choice.
 See [AGENT_CONTEXT.md §5.3](AGENT_CONTEXT.md#53-pinned-context) for the trust contract.
 
+HTTP requests, including browser chat and signed owner logins over MCP, now
+carry transport provenance in agent input. Use `AuthMiddleware.callerContext`
+in HTTP handlers to retain it. Custom agent instructions should distinguish
+an authenticated principal from evidence of personal owner approval: a
+sibling agent belongs to the owner but is not the owner, and an access token
+names its issuer, not its unknown holder. Updated standard templates explain
+these distinctions; existing agents keep the prompts they were created with.
+See [AGENT_CONTEXT.md §1.2](AGENT_CONTEXT.md#12-instruction-labels-and-data-boundaries).
+
 | 0.11.0 | Current |
 |--------|---------|
 | `User`'s `agentAt`, `createAgent`, `forkAgent`, `removeAgent`, `getAgents` and `ensureAgent` | The user's agents, `user.agents()`: `at`, `create`, `createFork`, `remove` and `all` (empty, not null, when there are none); for `ensureAgent`, `create` then `agent`. `user.agent(id)` stays, and still finds a deleted agent: `agent.isTerminated()` says whether it is one |

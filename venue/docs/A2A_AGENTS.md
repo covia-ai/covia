@@ -158,7 +158,10 @@ and on a later `GetTask`. The per-agent by-id methods — `GetTask`,
 `CancelTask`, `SubscribeToTask` and a `SendMessage` carrying a `taskId` —
 reach only the asker's own Jobs whose recorded agent address is this agent's;
 anything else is "not found", in one wording (`A2A.AGENT_TASK_NOT_FOUND`), so
-the endpoint discloses nothing about other jobs. The owner's other jobs are
+the endpoint discloses nothing about other jobs. This account boundary applies
+to live and retained Jobs alike; an `owner` lookup hint cannot widen it, even
+when the caller could read the other account's Job through the general Job API.
+The owner's other jobs are
 addressed on the front door. `SubscribeToTask`
 attaches SSE updates directly to that same Job. A fresh `SendMessage` returns
 immediately with its Task and session identifiers; it never imposes a

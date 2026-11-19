@@ -35,6 +35,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 - An agent takes tasks only when its config sets `acceptTasks: true`, as every template except `minimal` does, the messaging modules' included; without it `agent:request` is refused and the agent's context carries no task tools or no-task notice.
 - A running venue whose record another writer with its key changed while the venue changed it too writes its own version over the other, logs the fork at ERROR naming both versions, and stops: a standalone venue process exits with status 70. Find the other writer, such as a second instance or state delivered from outside, before restarting it.
+- HTTP, MCP and A2A agent input retains transport and verified credential-class provenance, including signed owner logins; sibling-agent labels and standard templates distinguish shared ownership and token issuance from owner approval.
 - Capability documentation now inventories module abilities, resource scopes and model-call boundaries; UCAN issuance cannot use presented granting rights to escape access-token or callable caps.
 - A stored secret or connected account that fails its integrity check, because it was altered or damaged or the venue key is misconfigured, is the venue's own failure: REST answers it as a server failure, A2A as `INTERNAL`, an agent whose step it stops is suspended, and the venue logs it once at ERROR naming whose it is; the message still names the record and how to replace it (#668).
 - Answering an approval request, `secret:extract`, `user:export`, `user:clone` from one's own account and reading or changing one's own sign-in keys need the user in person: work a job or scheduled event carries on later, and an operation a bot runs, can no longer do them.
@@ -84,6 +85,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Fixed
 
+- Per-agent A2A task lookups stay in the asker's account, including live public tasks and requests with an `owner` hint.
 - An unanswered human ask made outside a task no longer faults the agent when it settles an unrelated task.
 - A DLFS file written by `create`, `write`, a content upload or `archive` changes in one update once all its content has arrived, so a write cut off part-way leaves the drive as it was; a write onto a directory fails as a conflict (#629).
 - `archive:list` and `archive:extract` read a zip stored in a DLFS drive instead of failing as a venue fault.

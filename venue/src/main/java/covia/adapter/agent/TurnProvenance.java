@@ -258,13 +258,13 @@ final class TurnProvenance {
 
 	/**
 	 * Whether {@code key} is the agent's owner chatting directly: one {@code auth}
-	 * record vouching for the owner, who is the turn's caller and never the
-	 * venue's public principal. Read from the records' structure, never their
-	 * text.
+	 * record with no ingress transport, vouching for the owner, who is the
+	 * turn's caller and never the venue's public principal. Read from the
+	 * records' structure, never their text.
 	 */
 	static boolean ownerDirect(Engine engine, RequestContext ctx, Key key) {
 		AMap<AString, ACell> only = onlyRecord(key);
-		if (only == null || !AUTH.equals(only.get(Fields.VIA))) return false;
+		if (only == null || !AUTH.equals(only.get(Fields.VIA)) || only.containsKey(Fields.TRANSPORT)) return false;
 		AString owner = ownerOf(ctx);
 		AString principal = RT.ensureString(only.get(Fields.PRINCIPAL));
 		if (owner == null || !owner.equals(principal) || !owner.equals(key.caller())) return false;
@@ -510,7 +510,7 @@ final class TurnProvenance {
 		String shownId = (agentId == null) ? null : encoded(agentId.toString());
 		if (shownId != null) {
 			boolean owners = owner != null && principal.equals(Principals.agentDID(owner, agentId));
-			return owners ? "an agent of your owner (\"" + shownId + "\", " + did + ")"
+			return owners ? "an agent belonging to your owner (\"" + shownId + "\", " + did + "), " + NOT_OWNER
 				: "an agent of another user (\"" + shownId + "\", " + did + "), " + NOT_OWNER;
 		}
 		return did + ", " + NOT_OWNER;

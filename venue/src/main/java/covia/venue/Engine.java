@@ -4858,6 +4858,35 @@ public class Engine {
 	}
 
 	/**
+	 * An authenticated ingress request with transport provenance on its first
+	 * route record (AGENT_CONTEXT.md §1.2). Only trusted ingress code supplies
+	 * these facts; protocol and credential type are absent when unknown. This
+	 * changes neither authority nor authentication evidence. No credential bytes,
+	 * client-supplied labels or claims of human presence belong here.
+	 */
+	public RequestContext requestContext(AString principal, AMap<AString, ACell> token,
+			AString transport, AString protocol, AString credentialType) {
+		java.util.Objects.requireNonNull(transport, "transport");
+		RequestContext ctx = requestContext(principal, token);
+		AVector<ACell> route = ctx.getRoute();
+		if (route == null || route.isEmpty()) return ctx;
+		AMap<AString, ACell> first = RT.ensureMap(route.get(0));
+		first = first.assoc(Fields.TRANSPORT, transport);
+		RouteText.Builder text = RouteText.builder().text(", transport ").id(transport);
+		if (protocol != null) {
+			first = first.assoc(Fields.PROTOCOL, protocol);
+			text.text(", protocol ").id(protocol);
+		}
+		if (credentialType != null) {
+			first = first.assoc(Fields.CREDENTIAL_TYPE, credentialType);
+			text.text(", credential ").id(credentialType);
+		}
+		AVector<ACell> previousText = RT.ensureVector(first.get(Fields.TEXT));
+		first = first.assoc(Fields.TEXT, previousText.concat(text.build().parts()));
+		return ctx.withRoute(route.assoc(0, first));
+	}
+
+	/**
 	 * The context {@code principal} acts under now for {@code owner}, whose
 	 * record (a binding, say) names it: the owner itself; one of the owner's
 	 * agents, as itself in the owner's namespace; or the public principal, which
