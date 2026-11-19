@@ -157,6 +157,57 @@ public class GoalTreeAdapterTest {
 			"skill entry must persist on the frame tier: " + rootLoads);
 	}
 
+	/** A config change the prompt does not read rebuilds the cached prefix as it
+	 *  was, and inspection between the change and the next turn shows that
+	 *  prefix: a skill loaded since stays in the conversation. */
+	@Test
+	public void testConfigChangeOutsideThePromptRebuildsTheSamePrefix() {
+		writeAlphaSkill();
+		engine.jobs().invokeOperation("v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "skill-rebuild-goal",
+				Fields.CONFIG, Maps.of(
+					Fields.OPERATION, "v/ops/goaltree/chat",
+					"llmOperation", "v/test/ops/skillllm",
+					"caps", "unrestricted",
+					"skillsets", Vectors.of(Strings.create("w/skills")))),
+			ALICE).awaitResult(5000);
+		Agent agent = engine.getVenueState().users().user(ALICE_DID).agent("skill-rebuild-goal");
+		Blob sid = Blob.fromHex("44440003444400034444000344440003");
+		agent.sessions().create(sid, ALICE_DID, null);
+		agent.session(sid).appendPending(Maps.of(
+			Strings.intern("content"), Strings.create("use the alpha skill")));
+		engine.jobs().invokeOperation("v/ops/agent/trigger",
+			Maps.of(Fields.AGENT_ID, "skill-rebuild-goal"), ALICE).awaitResult(5000);
+		AgentWatch.awaitTimeline(engine, ALICE_DID, agent, 1);
+		ContextAssembler.Rendered before = ContextAssembler.Rendered.fromCell(RT.getIn(
+			agent.session(sid).getRecord(), Fields.FRAMES, CVMLong.ZERO, GoalTreeContext.K_RENDERED_CONTEXT));
+		assertNotNull(before);
+
+		engine.jobs().invokeOperation("v/ops/agent/update", Maps.of(
+			Fields.AGENT_ID, "skill-rebuild-goal",
+			Fields.CONFIG, Maps.of("temperature", null)), ALICE).awaitResult(5000);
+		AMap<AString, ACell> inspected = RT.ensureMap(engine.jobs().invokeOperation("v/ops/agent/context",
+			Maps.of(Fields.AGENT_ID, "skill-rebuild-goal", Fields.SESSION_ID, sid.toHexString()),
+			ALICE).awaitResult(5000));
+		assertEquals(before.tools(), inspected.get(Fields.TOOLS),
+			"inspection before the next turn shows the tools that turn sends");
+		agent.session(sid).appendPending(Maps.of(
+			Strings.intern("content"), Strings.create("carry on")));
+		engine.jobs().invokeOperation("v/ops/agent/trigger",
+			Maps.of(Fields.AGENT_ID, "skill-rebuild-goal"), ALICE).awaitResult(5000);
+		AgentWatch.awaitTimeline(engine, ALICE_DID, agent, 2);
+
+		agent = engine.getVenueState().users().user(ALICE_DID).agent("skill-rebuild-goal");
+		ContextAssembler.Rendered after = ContextAssembler.Rendered.fromCell(RT.getIn(
+			agent.session(sid).getRecord(), Fields.FRAMES, CVMLong.ZERO, GoalTreeContext.K_RENDERED_CONTEXT));
+		assertEquals(agent.getConfig(), after.sourceConfig(), "the prefix was rebuilt for the changed config");
+		assertEquals(before.tools(), after.tools(), "the fixed tools are as they were");
+		assertEquals(before.messages(), after.messages(), "the initial messages are as they were");
+		AString turn2 = RT.ensureString(RT.getIn(agent.getTimeline().get(1), Fields.RESULT));
+		assertTrue(turn2.toString().contains("SKILL_BODY_PRESENT") && turn2.toString().contains("SKILL_TOOLS_ACTIVE"),
+			"the skill stays in use from the conversation: " + turn2);
+	}
+
 	@Test
 	public void testSubgoalInheritsAndMasksSkillLoads() {
 		// Frame-tier scoping: a child frame inherits the parent's skill entry

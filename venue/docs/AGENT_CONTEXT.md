@@ -722,10 +722,10 @@ Only an intentional prefix rebuild invalidates earlier cells:
 
 - explicit compaction or conversation reset;
 - a hard security removal that must make old content absent rather than merely inactive;
-- any change to the composed declarative agent config. The rebuild renders from that config and the loads the conversation does not already hold (§3.2.3), so a change the prompt does not read, such as a sampling field, rebuilds an identical prefix and the provider's cache still applies;
+- any change to the composed declarative agent config. The rebuild renders from that config, its configured sources as they now read and the loads the conversation does not already hold (§3.2.3), so while those sources are unchanged a change the prompt does not read, such as a sampling field, rebuilds an identical prefix and the provider's cache still applies;
 - an explicitly requested renderer/schema migration.
 
-**Reloading a value is not rebuilding the prefix.** Reloading agent-managed context, a skill or an operation result appends another load event, even for the same key. The newer result is closer to the reply and becomes the current value; the older one remains honest stale history. This is how models already experience repeated tool reads, and it preserves the full cached prefix in the usual case. Source mutation alone does nothing to a non-volatile snapshot. A declarative config change makes the config-owned rendering inapplicable on the next inference. `agent:reloadContext` is deliberately different: it forces the same rebuild when config is equal, preserving conversation/loads exactly while refreshing current configured sources.
+**Reloading a value is not rebuilding the prefix.** Reloading agent-managed context, a skill or an operation result appends another load event, even for the same key. The newer result is closer to the reply and becomes the current value; the older one remains honest stale history. This is how models already experience repeated tool reads, and it preserves the full cached prefix in the usual case. Source mutation alone does nothing to a non-volatile snapshot. A declarative config change makes the config-owned rendering inapplicable on the next inference. `agent:reloadContext` is deliberately different: it clears the prefix when config is equal, and the next inference builds it as a frame's first build does, from current configured sources and every load, preserving conversation/loads exactly.
 
 **Test contract.** In cached mode, equal declarative config reuses the exact
 materialised tool/message cells despite ambient changes. In uncached mode no
@@ -851,8 +851,8 @@ agent-managed load's name has route-free ownership metadata in `toolIndex`
 because the active load owns dispatch; a pinned load's route is retained in the
 lookup. A load acquired later stays in the conversation: the fixed array remains
 unchanged and its addition is appended to `frame.conversation`, and a rebuild
-leaves both where they are, with the skills index marking and revealing only
-what the prefix holds. In uncached mode its durable binding is simply
+for a config change leaves both where they are, with the skills index marking
+and revealing only what the prefix holds. In uncached mode its durable binding is simply
 projected into each subsequent request's tool vector; there is no cache to
 invalidate. Unloading the same load appends the removal in either mode. The
 provider strategy for genuinely later cached definitions chooses one of three

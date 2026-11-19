@@ -351,6 +351,17 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		spec = spec.withFrames(rootFrames);
 		Cycle cycle = new Cycle(model, fixed.toolIndex(),
 			ctx, spec, typedTools, toolCallTimeoutMs, outerLoads, taskTools);
+		// A stale cached render is replaced as runFrame replaces it, in the
+		// preview's own store, so the inspected prefix is the one the call sends.
+		FrameToolContext frameTools = new FrameToolContext(null,
+			new FrameStore.LocalFrameStore(rootFrames), 0, baseTools, cycle);
+		frameTools.adoptLoadSnapshot(loads);
+		frameTools.baseToolStart = Math.toIntExact(TaskTools.DEFINITIONS.count() + harness.count());
+		frameTools.baseToolEnd = Math.toIntExact(frameTools.baseToolStart + baseTools.count());
+		frameTools.reload();
+		spec = prepareRendering(frameTools, spec);
+		if (spec == null) throw new IllegalStateException("Could not preview the cached context");
+		rootFrames = frameTools.store.frames();
 		AVector<ACell> entries = Vectors.empty();
 		if (profile.toolCalling()) {
 			entries = (AVector<ACell>) ToolPalette.provenance(TaskTools.DEFINITIONS, "harness")

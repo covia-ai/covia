@@ -202,7 +202,9 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 				engine.currentTimestamp().longValue())) {
 			throw new IllegalStateException("Could not preview watched context observations");
 		}
-		spec = spec.withFrames(frameTools.reload());
+		// A stale cached render is replaced as the tool loop replaces it, in the
+		// preview's own store, so the inspected prefix is the one the call sends.
+		spec = prepareRendering(spec.withFrames(frameTools.reload()), frameTools);
 		AVector<ACell> entries = Vectors.empty();
 		if (profile.toolCalling()) {
 			entries = (AVector<ACell>) ToolPalette.provenance(TaskTools.DEFINITIONS, "harness")

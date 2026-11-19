@@ -1291,6 +1291,11 @@ public class LLMAgentAdapterTest {
 		engine.jobs().invokeOperation("v/ops/agent/update", Maps.of(
 			Fields.AGENT_ID, "skill-rebuild-agent",
 			Fields.CONFIG, Maps.of("temperature", null)), RequestContext.of(ALICE_DID)).awaitResult(5000);
+		AMap<AString, ACell> inspected = RT.ensureMap(engine.jobs().invokeOperation("v/ops/agent/context",
+			Maps.of(Fields.AGENT_ID, "skill-rebuild-agent", Fields.SESSION_ID, sid.toHexString()),
+			RequestContext.of(ALICE_DID)).awaitResult(5000));
+		assertEquals(before.tools(), inspected.get(Fields.TOOLS),
+			"inspection before the next turn shows the tools that turn sends");
 		agent.session(sid).appendPending(Maps.of(
 			Strings.intern("content"), Strings.create("carry on")));
 		engine.jobs().invokeOperation("v/ops/agent/trigger",
