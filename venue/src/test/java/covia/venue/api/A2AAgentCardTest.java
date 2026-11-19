@@ -483,6 +483,12 @@ public class A2AAgentCardTest {
 			AString publicDid = Strings.create(TestServer.ENGINE.getDIDString() + ":public");
 			Agent Agent = TestServer.ENGINE.getVenueState().users().user(ownerDid).agent(agentId);
 			assertEquals(publicDid, RT.getIn(Agent.getTasks().get(Blob.fromHex(held.id())), Fields.CALLER));
+			// Keep the foreign public task live so the account boundary cannot
+			// accidentally depend on whether its handle has already been evicted.
+			assertAgentTaskRefused(post(endpoint, rpcEnvelope("oh-live", "GetTask",
+				new TaskQueryParams(held.id(), null)), jwt));
+			assertAgentTaskRefused(post(endpoint + "?owner=" + publicDid, rpcEnvelope("oh-hint", "GetTask",
+				new TaskQueryParams(held.id(), null)), jwt));
 
 			// Foreign to the public caller: the unrelated job, and the owner's own
 			// task on this very agent. Read, cancel and subscribe are all refused
