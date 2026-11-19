@@ -658,8 +658,9 @@ public class LangChainAdapter extends AAdapter {
 	 * The failure a provider call reports, typed for what went wrong
 	 * (ERRORS.md): a langchain4j or connection failure becomes the Covia type,
 	 * named by provider and model, with what the provider said where it
-	 * answered ({@link #providerNote}). Anything else, a cancellation
-	 * included, passes on unchanged.
+	 * answered ({@link #providerNote}). The venue's own refusal of the
+	 * request ({@link ModelHttpClientBuilder}) is reported as it is. Anything
+	 * else, a cancellation included, passes on unchanged.
 	 *
 	 * <p>The type says what failed. A refused key or a missing model is the
 	 * setup the call runs under, so {@code ConfigurationException}; a provider
@@ -676,6 +677,8 @@ public class LangChainAdapter extends AAdapter {
 	static RuntimeException providerFailure(String provider, String model, boolean operatorKey,
 			String ollamaUrl, RuntimeException e) {
 		if (e instanceof CoviaException || causedBy(e, InterruptedException.class)) return e;
+		if (e instanceof dev.langchain4j.exception.NonRetriableException
+				&& e.getCause() instanceof CoviaException refused) return refused;
 		Integer status = httpStatus(e);
 		String note = providerNote(status, e);
 		RuntimeException failure;

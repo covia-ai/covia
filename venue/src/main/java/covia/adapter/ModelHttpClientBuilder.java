@@ -3,8 +3,10 @@ package covia.adapter;
 import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
 
+import covia.exception.CoviaException;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
+import dev.langchain4j.exception.NonRetriableException;
 import dev.langchain4j.http.client.HttpClient;
 import dev.langchain4j.http.client.HttpClientBuilder;
 import dev.langchain4j.http.client.HttpRequest;
@@ -36,7 +38,13 @@ final class ModelHttpClientBuilder implements HttpClientBuilder {
 		HttpClient client = delegate.build();
 		return new HttpClient() {
 			private void require(HttpRequest request) {
-				engine.requireOutboundHttp(ctx, request.method().name(), request.url());
+				try {
+					engine.requireOutboundHttp(ctx, request.method().name(), request.url());
+				} catch (CoviaException refused) {
+					// The refusal is final: langchain4j retries anything not marked
+					// so. LangChainAdapter.providerFailure reports the refusal itself.
+					throw new NonRetriableException(refused);
+				}
 			}
 			@Override public SuccessfulHttpResponse execute(HttpRequest request) {
 				require(request);
