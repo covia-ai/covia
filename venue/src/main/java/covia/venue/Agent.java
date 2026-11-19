@@ -754,7 +754,7 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 	/** Whether an outbound wait recorded for this task, such as an unanswered HITL ask, is open. */
 	public boolean hasPendingFor(Blob taskId) {
 		for (var entry : getPending().entrySet()) {
-			if (taskId.equals(RT.getIn(entry.getValue(), Fields.TASK_ID))) return true;
+			if (Objects.equals(taskId, RT.getIn(entry.getValue(), Fields.TASK_ID))) return true;
 		}
 		return false;
 	}

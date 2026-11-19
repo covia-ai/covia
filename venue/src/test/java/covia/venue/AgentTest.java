@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
 
 import convex.core.data.AString;
+import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import covia.api.Fields;
@@ -24,6 +25,27 @@ public class AgentTest {
 		owner = TestEngine.uniqueDID(info);
 		agent = TestAgents.ensure(TestEngine.ENGINE.getVenueState().users().ensure(owner),
 			Strings.create("readers-agent"), Maps.of(Fields.OPERATION, OPERATION), null);
+	}
+
+	@Test
+	public void testOnlyPendingWorkForTheTaskKeepsItOpen() {
+		Blob taskId = Blob.fromHex("01");
+		Blob otherTaskId = Blob.fromHex("02");
+		Blob jobId = Blob.fromHex("03");
+		Blob sessionId = Blob.fromHex("04");
+		assertFalse(agent.hasPendingFor(taskId));
+
+		// HITL asks made outside a task have an empty pending snapshot.
+		agent.addPending(jobId, Maps.empty());
+		assertFalse(agent.hasPendingFor(taskId));
+		agent.addPending(jobId, Maps.of(Fields.SESSION_ID, sessionId));
+		assertFalse(agent.hasPendingFor(taskId));
+		agent.addPending(jobId, Maps.of(Fields.TASK_ID, otherTaskId));
+		assertFalse(agent.hasPendingFor(taskId));
+		agent.addPending(jobId, Maps.of(Fields.TASK_ID, taskId));
+		assertTrue(agent.hasPendingFor(taskId));
+		agent.removePending(jobId);
+		assertFalse(agent.hasPendingFor(taskId));
 	}
 
 	@Test
