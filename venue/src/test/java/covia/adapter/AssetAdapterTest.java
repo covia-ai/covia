@@ -17,6 +17,7 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
+import covia.api.Abilities;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
@@ -39,6 +40,26 @@ public class AssetAdapterTest {
 	}
 
 	// ========== asset:store ==========
+
+	@Test
+	public void testStoreUsesTheOwnersAssetCollection() {
+		String[] scopes = {"a/", ALICE_DID + "/a/", "", "a/existing-hash", "aa/", "did:example:other/a/"};
+		for (int i = 0; i < scopes.length; i++) {
+			ACell input = Maps.of(Fields.METADATA, Maps.of(Fields.NAME, "scope-" + i));
+			RequestContext scoped = RequestContext.of(ALICE_DID).withCaps(Vectors.of(
+				Capability.create(Strings.create(scopes[i]), Abilities.ASSET_STORE)));
+			Job job = engine.jobs().callOperation("v/ops/asset/store", input, scoped);
+			if (i < 3) {
+				assertTrue(RT.getIn(job.awaitResult(5000), Fields.REF).toString().startsWith(ALICE_DID + "/a/"));
+			} else {
+				assertThrows(Exception.class, () -> job.awaitResult(5000));
+				assertEquals(Status.FAILED, job.getStatus());
+				assertTrue(job.getErrorMessage().contains(Abilities.ASSET_STORE.toString()));
+			}
+		}
+		assertEquals(3, engine.getVenueState().users().user(ALICE_DID).assets().size(),
+			"refused stores must not create assets; legacy unscoped grants still work");
+	}
 
 	@Test
 	public void testStoreAsset() {

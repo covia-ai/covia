@@ -13,9 +13,11 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestInfo;
 
 import com.sun.net.httpserver.HttpServer;
 
+import convex.auth.ucan.Capability;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
@@ -25,6 +27,7 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
+import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.InvalidInputException;
 import covia.grid.Job;
@@ -78,6 +81,47 @@ class A2AAdapterTest {
 	}
 
 	// ==================== imported agent Assets ====================
+
+	@Test
+	void importNeedsAssetCollectionBindingAndOutboundAuthority(TestInfo info) throws Exception {
+		var engine = TestServer.ENGINE;
+		AString owner = TestEngine.uniqueDID(info);
+		engine.getVenueState().users().ensure(owner);
+		RequestContext ctx = engine.context(owner);
+		var requests = new java.util.concurrent.atomic.AtomicInteger();
+		HttpServer remote = HttpServer.create(new InetSocketAddress("localhost", 0), 0);
+		String base = "http://localhost:" + remote.getAddress().getPort();
+		remote.createContext("/.well-known/agent-card.json", exchange -> {
+			requests.incrementAndGet();
+			byte[] body = ("{\"name\":\"imported\",\"url\":\"" + base + "/a2a\"}").getBytes(StandardCharsets.UTF_8);
+			exchange.getResponseHeaders().set("Content-Type", "application/json");
+			exchange.sendResponseHeaders(200, body.length);
+			exchange.getResponseBody().write(body);
+			exchange.close();
+		});
+		remote.start();
+		try {
+			ACell store = Capability.create(Strings.create("a/"), Abilities.ASSET_STORE);
+			ACell write = Capability.create(Strings.create("w/"), Capability.CRUD_WRITE);
+			ACell outbound = Capability.create(Abilities.OUTBOUND, Abilities.OUTBOUND_HTTP_GET,
+				Maps.of("url", base));
+			ACell[] grants = {store, write, outbound};
+			ACell input = Maps.of(Fields.NAME, "imported", Fields.URL, base);
+			for (int omitted = 0; omitted < grants.length; omitted++) {
+				var caps = Vectors.of(grants[(omitted + 1) % 3], grants[(omitted + 2) % 3]);
+				Job denied = engine.jobs().callOperation("v/ops/a2a/import-agent", input, ctx.withCaps(caps));
+				assertThrows(Exception.class, () -> denied.awaitResult(5000));
+				assertEquals(Status.FAILED, denied.getStatus());
+				assertEquals(0, requests.get(), "missing local authority refuses before discovery");
+				assertEquals(0, engine.getVenueState().users().user(owner).assets().size());
+			}
+			Job imported = engine.jobs().callOperation("v/ops/a2a/import-agent", input,
+				ctx.withCaps(Vectors.of(store, write, outbound)));
+			assertNotNull(imported.awaitResult(5000));
+			assertEquals(1, requests.get());
+			assertEquals(1, engine.getVenueState().users().user(owner).assets().size());
+		} finally { remote.stop(0); }
+	}
 
 	@Test
 	void coviaAgentAsset_supportsLocalShorthand() throws Exception {

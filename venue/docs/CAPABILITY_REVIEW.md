@@ -59,15 +59,31 @@ The model/outbound decision below has now been implemented as ordinary
 SDKs and bound calls. Harness model calls use controller authority; selecting a
 model grants no outbound authority to its agent. The address-policy bypass is
 now `admin/outbound/bypass`. See [OUTBOUND.md](OUTBOUND.md) for the contract,
-coverage, migration and limits. The remaining findings are unchanged.
+coverage, migration and limits.
+
+## Release follow-up — 2026-11-19
+
+Asset creation now consistently checks the acting account's `a/` collection,
+including direct storage and REST registration. Existing unscoped grants
+remain valid. Regressions for those two paths failed before the correction;
+the collection, owner, source-read, binding-write and egress checks now pass
+across storage, pinning, archive output and A2A import.
+
+COG-13 and the public capability/authentication guides in the separate
+covia-docs checkout have been reconciled against the current runtime. COG-17
+now explicitly distinguishes its unimplemented draft requirements (notably
+signed-UCAN revocation and custodial attestation) from the shipped contract;
+this does not implement those facilities or claim complete draft conformance.
+The [release verification](CAPABILITY_RELEASE.md) records configuration
+coverage and deployment-specific acceptance work.
 
 ## Decisions and remaining reconciliation
 
 | Priority | Finding | Consequence and recommendation |
 |----------|---------|--------------------------------|
 | Resolved by outbound follow-up | HTTP action checks previously differed between generic lookup, bound tools and configured models. | Ordinary `outbound/http/<method>` now gates actual HTTP sends. Harness calls use controller authority; agent tools need their own grants. This does not make model presets into spend ceilings. See [OUTBOUND.md](OUTBOUND.md). |
-| Medium | Asset creation uses two resource scopes. `asset:store` and REST registration check an empty resource; pinning, archive asset output and A2A import check `a/`. | A scoped `asset/store` grant on `a/` succeeds through some paths and fails through others. Recommend one owner-scoped collection resource for asset creation, with explicit compatibility treatment for existing grants. This review documents the current scopes without changing authorization behavior. Evidence: `AssetAdapter.handleStore`, `handlePin`, `ArchiveAdapter`, `A2AAdapter`, `CoviaAPI`. |
-| High documentation priority | COG-13 in the local covia-docs checkout disagrees with current runtime contracts. | Reconcile it with the agreed authority model before calling the documentation fully consistent. Its catalog still names `x/mcp/tokens`, describes sudo as conferring no action authority, lacks callable/schedule entries and the `admin/execute` family, and its resource-extraction prose treats reference-free execution as requiring unscoped `invoke`. Current contracts are in [ACCESS_TOKENS.md](ACCESS_TOKENS.md), [AUTHORITY.md](AUTHORITY.md), [ADMIN.md](ADMIN.md) and UCAN.md. The separate covia-docs repository is unchanged by this review. |
+| Resolved by release follow-up | Asset creation previously used two resource scopes. | All five creation paths now require `asset/store` on `<ownerDID>/a/`. Broad local grants remain compatible; hash-only grants cannot create collection entries. |
+| Reconciled by release follow-up | COG-13 previously disagreed with current runtime contracts. | Updated token paths, sudo authority, callable/schedule and module inventories, bound invocation, harness authority, caveats and outbound rules. Public guides now distinguish capability proofs from authentication bearers. COG-17's remaining draft/runtime differences are explicitly marked. |
 
 ## Deliberate distinctions to preserve
 

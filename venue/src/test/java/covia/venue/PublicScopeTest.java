@@ -60,7 +60,7 @@ public class PublicScopeTest {
 	/** The shared TestServer runs unrestricted public — reuse it for the operator
 	 *  opt-out case rather than launching a second venue. */
 	private final String openBase = TestServer.BASE_URL;
-	/** A custom public scope naming one private target and granting no read of the public store. */
+	/** A custom public scope naming one private target and allowing only asset creation locally. */
 	private static final String PRIVATE_TARGET = "did:example:private-owner/w/internal-ledger";
 	private VenueServer customServer;
 	private String customBase;
@@ -76,7 +76,8 @@ public class PublicScopeTest {
 		secureBase = "http://localhost:" + secureServer.port();
 		customServer = VenueServer.launch(Maps.of(Config.PORT, 0, Config.STORE, "memory",
 			Config.AUTH, Maps.of(Config.PUBLIC, Maps.of(Config.ENABLED, true, "caps",
-				Vectors.of(Maps.of("with", PRIVATE_TARGET, "can", "data/read"))))));
+				Vectors.of(Maps.of("with", PRIVATE_TARGET, "can", "data/read"),
+					Maps.of("with", "a/", "can", "asset/store"))))));
 		customBase = "http://localhost:" + customServer.port();
 	}
 
@@ -269,5 +270,12 @@ public class PublicScopeTest {
 		Hash id = pub.addAsset(Maps.of(Strings.create("name"), Strings.create("probe")))
 			.get(5, TimeUnit.SECONDS);
 		assertNotNull(id, "auth.public.caps=unrestricted re-opens anonymous asset registration");
+	}
+
+	@Test
+	public void assetCollectionScopeAllowsRestRegistration() throws Exception {
+		Hash id = anon(customBase).addAsset(Maps.of("name", "collection-scoped registration"))
+			.get(5, TimeUnit.SECONDS);
+		assertNotNull(id, "REST registration accepts the same a/ grant as asset:store and asset:pin");
 	}
 }

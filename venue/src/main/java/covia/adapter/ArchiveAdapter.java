@@ -39,6 +39,7 @@ import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
 import covia.exception.UnavailableException;
 import covia.exception.UnsupportedException;
+import covia.lattice.Namespace;
 import covia.venue.RequestContext;
 
 /**
@@ -365,7 +366,7 @@ public class ArchiveAdapter extends AAdapter {
 				throw new java.nio.file.NoSuchFileException("Parent directory does not exist: " + parent);
 			}
 		} else {
-			engine.requireAuthority(ctx, Strings.create("a/"), Abilities.ASSET_STORE);
+			engine.requireAuthority(ctx, Namespace.A, Abilities.ASSET_STORE);
 		}
 
 		Path zipTmp = toFile ? null : Files.createTempFile("covia-zip-", ".zip");

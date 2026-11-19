@@ -52,6 +52,7 @@ import covia.grid.Asset;
 import covia.grid.Attribution;
 import covia.grid.Job;
 import covia.grid.Venue;
+import covia.lattice.Namespace;
 import covia.venue.api.model.ErrorResponse;
 import covia.venue.api.model.InvokeRequest;
 import covia.venue.api.model.InvokeResult;
@@ -473,7 +474,7 @@ public class CoviaAPI extends ACoviaAPI {
 			// operation, AssetAdapter.handleStore) — registering new metadata is a
 			// write and must not be reachable by the default read-only public scope.
 			RequestContext rctx = AuthMiddleware.callerContext(ctx);
-			engine().requireAuthority(rctx, Strings.create(""), Abilities.ASSET_STORE);
+			engine().requireAuthority(rctx, Namespace.A, Abilities.ASSET_STORE);
 
 			AString meta=Strings.fromStream(ctx.bodyInputStream());
 			// A caller-created asset belongs to that caller's /a namespace. Venue

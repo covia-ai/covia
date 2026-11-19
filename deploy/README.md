@@ -6,6 +6,31 @@ This guide is for Venue operators who want to deploy a minimal working venue for
 
 ## Server Setup
 
+### Capability migration
+
+Before upgrading, review bounded agent, access-token, callable and public
+caps used by integrations. Every HTTP send now needs `outbound/http/<method>`
+on the acting account's `outbound` resource, in addition to domain and credential
+rights. Restrict destinations with `nb.url`; include discovery, poll, download
+and redirect destinations as well as the initial call. Do not put resolved
+credentials into grants. Prefer an origin restriction for credential-bearing
+paths, combined with the appropriate domain and secret rights.
+
+Configured model calls run under harness/controller authority. Keep ordinary
+agent templates bounded; a working harness does not require giving its agent
+direct access to the model API. Messaging bindings use their current principal
+for background work; explicit send/download tools use the tool caller. Local
+providers need `adapters.http.allowedHosts` as well as ordinary egress rights.
+
+Reissue old `outbound/any` grants as `admin/outbound/bypass` only for callers
+that should bypass address policy. The bypass alone permits no HTTP requests.
+Asset creation now consistently accepts `asset/store` on `a/`; existing broad
+grants remain valid and can be narrowed.
+
+The [release capability verification](../venue/docs/CAPABILITY_RELEASE.md)
+records the shipped configuration review, local test coverage and the checks
+to perform against a specific deployment before promotion.
+
 ### Agent history format upgrade
 
 Release the history-aware SDK (1.24.1 or later) and update clients before deploying

@@ -3,6 +3,7 @@ package covia.adapter;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.ByteArrayOutputStream;
@@ -21,12 +22,14 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import convex.auth.ucan.Capability;
 import convex.core.data.ACell;
 import convex.core.data.AVector;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.lang.RT;
+import covia.api.Abilities;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.Engine;
@@ -99,6 +102,20 @@ public class ArchiveAdapterTest {
 	}
 
 	// =========================================================
+
+	@Test
+	public void zipToAssetNeedsCollectionAuthorityAndSourceRead() {
+		ACell input = Maps.of("root", "work", "path", "data/a.txt");
+		ACell read = Capability.create(Strings.create("file://work/data/a.txt"), Capability.CRUD_READ);
+		ACell store = Capability.create(Strings.create("a/"), Abilities.ASSET_STORE);
+		for (ACell cap : new ACell[] {read, store}) {
+			Job denied = engine.jobs().callOperation("v/ops/archive/zip", input, ctx().withCaps(Vectors.of(cap)));
+			assertThrows(Exception.class, () -> denied.awaitResult(5000));
+			assertEquals(Status.FAILED, denied.getStatus());
+		}
+		Job allowed = engine.jobs().callOperation("v/ops/archive/zip", input, ctx().withCaps(Vectors.of(read, store)));
+		assertTrue(RT.getIn(allowed.awaitResult(5000), "ref").toString().startsWith(DID + "/a/"));
+	}
 
 	@Test
 	public void testZipToFileThenList() {

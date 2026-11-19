@@ -195,7 +195,7 @@ Abilities follow UCAN's slash-delimited convention with no leading slash. `*` is
 | `skill/load` | — | Admit a skill outside an agent's advertised skill surface as trusted instructions |
 | `tool/load` | — | Add an operation outside an agent's declared/advertised tool surface |
 | `asset` | every `asset/*` | All asset operations |
-| `asset/store` | — | Store a new content-addressed asset |
+| `asset/store` | — | Create an asset in `<ownerDID>/a/`; requires the collection, not a particular hash |
 | `asset/read` | — | Get / list content-addressed assets |
 | `admin/venue/restart` | — | Restart a standalone venue process or hand off to a successor jar |
 | `admin/venue/gc` | — | Garbage-collect the venue's Etch store online (`<venueDID>/store`) |
@@ -909,7 +909,7 @@ record is an entry no grant of theirs covers.
 | `agent:update` / `agent:summarise` / suspend / resume / delete / task-session administration (cross-user) | `{ with: "<ownerDID>/g/<id>", can: "agent/write" }` |
 | `skill_load {ref}` outside the effective advertised index | `{ with: "<skill-ref>", can: "skill/load" }`, explicitly present even for an otherwise unrestricted agent; read authority remains separate |
 | `more_tools` outside config, active loads and effective advertised skills | `{ with: "<operation-ref>", can: "tool/load" }`, explicitly present even for an otherwise unrestricted agent; subsequent bound tool calls enforce action authority, generic lookup additionally enforces `invoke` |
-| `asset:store` / REST asset registration | `{ with: "", can: "asset/store" }` (unscoped in local caps) |
+| `asset:store` / REST asset registration | `asset/store` on `<ownerDID>/a/` (`a/` in local caps) |
 | `asset:get` | `{ with: "<ref>", can: "asset/read" }` or `crud/read` over the same hash; a path is read as data ([GRID_LATTICE_DESIGN.md](GRID_LATTICE_DESIGN.md) §4.6) |
 | `asset:list` | `{ with: "", can: "asset/read" }` (unscoped in local caps) |
 | `asset:pin`, archive output stored as an asset, A2A import asset | `asset/store` on `a/`, plus source reads and any binding write |
@@ -922,6 +922,13 @@ record is an entry no grant of theirs covers.
 | Token management | `admin/token/<access point>` or `mcp/token` on `<owner>/x/token/<name>`; listing uses `crud/read`, source authority and retained-bearer restrictions remain separate ([ACCESS_TOKENS.md](ACCESS_TOKENS.md)) |
 | Callable management / admission | `callable/manage` / `callable/call` on `<owner>/x/callable/<name>`; listing uses `crud/read`, a successful gate can also admit, and changing a callable needs source authority ([CALLABLES.md](CALLABLES.md)) |
 | Venue, users, MCP management, P2P and outbound bypass | The exact resource/ability pairs and additional restrictions in [ADMIN.md](ADMIN.md); ordinary signed-in ownership does not grant venue authority |
+
+**Asset creation scope.** Direct storage, REST metadata registration, pinning,
+archive asset output and A2A import all require `asset/store` on the acting
+account's `a/` collection. Source reads, binding writes and network requests
+retain their own checks. A grant on one existing hash does not authorise adding
+to the collection. Existing unscoped local `asset/store` grants still cover it;
+they may now be narrowed to `a/`. Signed grants name `<ownerDID>/a/`.
 
 **Target-side admission (#447).** Before proofs are consulted, the two "talk"
 rows — `agent/request` (`agent:request`, `agent:trigger`) and `agent/message`

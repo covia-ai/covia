@@ -90,7 +90,7 @@ public class AssetAdapter extends AAdapter {
 
 	@SuppressWarnings("unchecked")
 	private ACell handleStore(ACell input, RequestContext ctx) {
-		engine.requireAuthority(ctx,Strings.create(""), Abilities.ASSET_STORE);
+		engine.requireAuthority(ctx, Namespace.A, Abilities.ASSET_STORE);
 		ACell metaCell = RT.getIn(input, Fields.METADATA);
 		// Accept metadata as a JSON object or a JSON string (parsed on the fly).
 		// NB: instanceof check on the parsed value is required because RT.castMap(null)
@@ -477,7 +477,7 @@ public class AssetAdapter extends AAdapter {
 		} else {
 			engine.requirePathRead(ctx, pathStr);
 		}
-		engine.requireAuthority(ctx, Strings.create("a/"), Abilities.ASSET_STORE);
+		engine.requireAuthority(ctx, Namespace.A, Abilities.ASSET_STORE);
 
 		AString metaString;
 		ACell content = null;

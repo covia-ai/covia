@@ -44,6 +44,7 @@ import covia.exception.UnavailableException;
 import covia.exception.UnsupportedException;
 import covia.grid.Job;
 import covia.grid.Status;
+import covia.lattice.Namespace;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.RemoteJobs;
@@ -291,7 +292,7 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 
 		AMap<AString, ACell> storedAuth;
 		try {
-			engine.requireAuthority(ctx, Strings.create("a/"), Abilities.ASSET_STORE);
+			engine.requireAuthority(ctx, Namespace.A, Abilities.ASSET_STORE);
 			engine.requireResourceAccess(ctx, Strings.create(bindingPath),
 				convex.auth.ucan.Capability.CRUD_WRITE);
 			storedAuth = parseStoredAuth(input);
