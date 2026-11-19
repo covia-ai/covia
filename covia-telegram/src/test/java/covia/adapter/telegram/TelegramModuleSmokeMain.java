@@ -36,9 +36,8 @@ public final class TelegramModuleSmokeMain {
 				// Strangers on an open bot are anonymous: the operator lets them invoke the echo operation.
 				Config.AUTH, Maps.of(Config.PUBLIC, Maps.of(Config.CAPS, Vectors.of(
 					Capability.create(Strings.create("v/test/ops/echo"), Strings.create("invoke"))))),
+				// The fake Bot API is on loopback, which passes as the API the operator configured
 				Config.ADAPTERS, Maps.of(
-					// The fake Bot API is on loopback, which outbound HTTP refuses unless allowed
-					Strings.create("http"), Maps.of(Strings.create("allowedHosts"), Vectors.of(Strings.create("127.0.0.1"))),
 					Strings.create("telegram"), Maps.of(
 						Strings.create("apiUrl"), Strings.create(telegram.apiUrl()),
 						Strings.create("bots"), Maps.of(

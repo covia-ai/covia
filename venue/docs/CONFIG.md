@@ -1436,10 +1436,8 @@ tools use the agent. This permission does not bypass the address rules below.
 See [OUTBOUND.md](OUTBOUND.md), including the breaking `outbound/any` rename.
 
 - `http.allowedHosts` / `http.blockedHosts` — host names exempted from, or
-  always refused by, the outbound (SSRF) guard. Every outbound target passes
-  it, whoever chose it: HTTP, MCP, A2A and model endpoint URLs (an
-  operator-configured one such as a local Ollama included), messaging platform
-  APIs, relayed Convex peers,
+  always refused by, the outbound (SSRF) guard. Every caller-chosen target
+  passes it: HTTP, MCP, A2A and model endpoint URLs, relayed Convex peers,
   `did:web` documents, and other venues — grid and remote-agent targets,
   orchestration steps' venues and the publishers of `did:web` asset
   references, whether named by URL or DID. Names match whatever their case and

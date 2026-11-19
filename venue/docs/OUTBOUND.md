@@ -85,9 +85,16 @@ connection open for the other callers sharing it. Refusals retain the missing
 capability and do not echo a resolved credential-bearing destination.
 
 Ordinary egress does not override `http.allowedHosts`, `http.blockedHosts` or
-private-address protections. Operators must allow local provider hosts when
-ordinary users' harnesses or bindings need them. Credential uses still need
-`secret/use` or `oauth/use`; messaging and other domain checks remain required.
+private-address protections. An endpoint the operator configured is the
+operator's choice, so an adapter's own requests to it pass the address policy,
+as `convex.peer` does: the venue's Ollama URL (`adapters.langchain.ollamaUrl`,
+`OLLAMA_BASE_URL` or the localhost default), a messaging adapter's `apiUrl`,
+the speech adapter's service and SonnyLabs' `baseUrl`. They still need the
+caller's outbound authority. A request elsewhere, such as to a media link a
+platform returned, and the same address named by a caller, as a model `url` or
+through the HTTP adapter, pass the address policy like any other target.
+Credential uses still need `secret/use` or `oauth/use`; messaging and other
+domain checks remain required.
 
 `admin/outbound/bypass` on `<venueDID>/outbound` exempts a caller from the address
 guard. It does **not** grant ordinary HTTP authority, credential use or domain

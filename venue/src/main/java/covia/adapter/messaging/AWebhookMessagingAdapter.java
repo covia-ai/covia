@@ -103,6 +103,7 @@ public abstract class AWebhookMessagingAdapter<S extends WebhookBotSpec>
 		configureBots(parsed);
 	}
 	public final String apiUrl() { return apiUrl == null ? defaultApiUrl() : apiUrl; }
+	@Override protected final String apiEndpoint(MessagingBot<?> bot) { return apiUrl(); }
 	@Override public final AMap<AString, ACell> publicConfig() { return Maps.empty(); }
 	@Override protected final WebhookBot<S> newBot(S spec, Managed managed) { return new WebhookBot<>(this, spec, managed); }
 	@Override protected final boolean configurationMatches(WebhookBot<S> runner) { return true; }

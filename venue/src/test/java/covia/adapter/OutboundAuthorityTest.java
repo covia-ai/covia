@@ -196,4 +196,45 @@ class OutboundAuthorityTest {
 			assertTrue(String.valueOf(result).contains("released"), String.valueOf(result));
 		}
 	}
+
+	@Test void theOperatorsOllamaPassesTheAddressPolicyButACallersUrlDoesNot(TestInfo info) throws Exception {
+		AtomicInteger requests = new AtomicInteger();
+		HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+		server.createContext("/api/chat", exchange -> {
+			requests.incrementAndGet(); exchange.getRequestBody().readAllBytes();
+			byte[] response = """
+				{"model":"test-model","created_at":"2026-01-01T00:00:00Z","message":{"role":"assistant","content":"Hello"},
+				 "done":true,"done_reason":"stop","prompt_eval_count":1,"eval_count":1}
+				""".getBytes(StandardCharsets.UTF_8);
+			exchange.getResponseHeaders().set("Content-Type", "application/json");
+			exchange.sendResponseHeaders(200, response.length);
+			exchange.getResponseBody().write(response); exchange.close();
+		});
+		server.start();
+		String base = "http://127.0.0.1:" + server.getAddress().getPort();
+		// No http.allowedHosts, so loopback passes only as the operator's own Ollama
+		Engine venue = Engine.createTemp(Maps.of(Config.ADAPTERS, Maps.of("langchain", Maps.of("ollamaUrl", base))));
+		try {
+			Engine.addDemoAssets(venue);
+			AString did = TestEngine.uniqueDID(info);
+			venue.getVenueState().users().ensure(did);
+			RequestContext user = venue.context(did);
+			Job configured = venue.jobs().invokeOperation("v/ops/langchain/ollama",
+				Maps.of("model", "test-model", "prompt", "Hello"), user);
+			try { configured.awaitResult(10_000); } catch (Exception ignored) { }
+			complete(configured);
+			assertEquals(1, requests.get());
+			assertFalse(venue.outboundUnrestricted(user));
+			assertThrows(covia.exception.InvalidInputException.class,
+				() -> venue.requireOutboundHttp(user, "POST", base + "/api/chat"), "the address policy applies to a caller's URL");
+			Job named = venue.jobs().invokeOperation("v/ops/langchain/ollama",
+				Maps.of("model", "test-model", "prompt", "Hello", "url", base), user);
+			try { named.awaitResult(10_000); } catch (Exception expected) { }
+			assertEquals(1, requests.get(), "a caller naming the same address is checked as any other");
+			assertEquals(Status.FAILED, convex.core.lang.RT.getIn(named.getOutput(), Fields.STATUS), String.valueOf(named.getOutput()));
+		} finally {
+			venue.close();
+			server.stop(0);
+		}
+	}
 }

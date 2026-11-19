@@ -49,9 +49,8 @@ public final class SlackModuleSmokeMain {
 				"allow", Vectors.of("UALICE"), "allowChannels", Vectors.of("C123"));
 			AMap<AString, ACell> config = Maps.of(Config.STORE, "memory", Config.PORT, 0, Config.BIND_ADDRESS, "127.0.0.1",
 				Config.AUTH, Maps.of(Config.PUBLIC, Maps.of(Config.ENABLED, false)), Config.USERS, Maps.of(Config.AUTO_CREATE, true),
-				Config.MODULES, Vectors.of(Maps.of("path", args[0])), Config.ADAPTERS, Maps.of(
-					// The fake API is on loopback, which outbound HTTP refuses unless allowed
-					"http", Maps.of("allowedHosts", Vectors.of("127.0.0.1")), PROVIDER,
+				// The fake API is on loopback, which passes as the API the operator configured
+				Config.MODULES, Vectors.of(Maps.of("path", args[0])), Config.ADAPTERS, Maps.of(PROVIDER,
 					Maps.of("apiUrl", "http://127.0.0.1:" + api.getAddress().getPort(), "bots", Maps.of("main", spec))));
 			VenueServer server = VenueServer.launch(config);
 			try (HttpClient client = HttpClient.newHttpClient()) {

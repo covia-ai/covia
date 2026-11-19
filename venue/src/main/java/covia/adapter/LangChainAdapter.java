@@ -449,6 +449,8 @@ public class LangChainAdapter extends AAdapter {
 		// topology-agnostic; only the venue deployment knows where Ollama lives.
 		final String ollamaUrl = "ollama".equals(provider) ? resolveOllamaUrl(urlParam) : null;
 		final AString effectiveUrl = (ollamaUrl != null) ? Strings.create(ollamaUrl) : urlParam;
+		// The venue's Ollama URL is the operator's choice; one a caller named is not.
+		final String operatorUrl = (ollamaUrl != null && urlParam == null) ? ollamaUrl : null;
 
 		// Response format: "json", "text", or {name, schema} map
 		ACell responseFormatCell = RT.getIn(input, K_RESPONSE_FORMAT);
@@ -456,7 +458,7 @@ public class LangChainAdapter extends AAdapter {
 		// Build the ChatModel. The selected operation's data has already supplied
 		// any default, with caller input winning.
 		final String resolvedModelName = finalModelName;
-		final ChatModel chatModel = buildProviderModel(ctx, provider, finalModelName, apiKey, effectiveUrl, tuning,
+		final ChatModel chatModel = buildProviderModel(ctx, provider, finalModelName, apiKey, effectiveUrl, operatorUrl, tuning,
 			toResponseFormat(responseFormatCell));
 		if (chatModel == null) {
 			return CompletableFuture.completedFuture(
@@ -840,13 +842,16 @@ public class LangChainAdapter extends AAdapter {
 	 * (a refused connection returns immediately).</p>
 	 *
 	 * @param baseUrl Ollama base URL (e.g. {@code http://localhost:11434})
+	 * @param operatorUrl whether the venue chose {@code baseUrl} rather than a
+	 *        caller, so its requests pass the address policy
 	 * @param model   model name (e.g. {@code qwen2.5})
 	 * @return the advertised capabilities, or {@code null} if undeterminable
 	 */
-	public static java.util.List<String> ollamaModelCapabilities(Engine engine, RequestContext ctx, String baseUrl, String model) {
+	public static java.util.List<String> ollamaModelCapabilities(Engine engine, RequestContext ctx, String baseUrl,
+			boolean operatorUrl, String model) {
 		try {
 			OllamaModelCard card = OllamaModels.builder()
-				.httpClientBuilder(new ModelHttpClientBuilder(engine, ctx))
+				.httpClientBuilder(new ModelHttpClientBuilder(engine, ctx, operatorUrl ? baseUrl : null))
 				.baseUrl(baseUrl)
 				.timeout(Duration.ofSeconds(2))
 				.maxRetries(0)
@@ -860,18 +865,19 @@ public class LangChainAdapter extends AAdapter {
 		}
 	}
 
+	/** @param operatorUrl the provider URL when the operator configured it, else null (ModelHttpClientBuilder) */
 	private ChatModel buildProviderModel(RequestContext ctx, String provider, String modelName, String apiKey, AString urlParam,
-			ModelTuning tuning, ResponseFormat responseFormat) {
+			String operatorUrl, ModelTuning tuning, ResponseFormat responseFormat) {
 		String baseUrl = (urlParam != null) ? urlParam.toString() : defaultBaseUrl(provider);
 		if (baseUrl == null) return null;
 		return switch (provider) {
-			case "ollama" -> buildOllamaModel(baseUrl, modelName, IO_TIMEOUT, tuning, new ModelHttpClientBuilder(engine, ctx));
-			case "anthropic" -> buildAnthropicModel(apiKey, baseUrl, modelName, IO_TIMEOUT, tuning, responseFormat, new ModelHttpClientBuilder(engine, ctx));
+			case "ollama" -> buildOllamaModel(baseUrl, modelName, IO_TIMEOUT, tuning, new ModelHttpClientBuilder(engine, ctx, operatorUrl));
+			case "anthropic" -> buildAnthropicModel(apiKey, baseUrl, modelName, IO_TIMEOUT, tuning, responseFormat, new ModelHttpClientBuilder(engine, ctx, operatorUrl));
 			// OpenAI, and the OpenAI-compatible APIs: Gemini's compatibility
 			// endpoint, xAI, DeepSeek, Mistral and OpenRouter (which fronts many
 			// vendors; model ids are vendor-prefixed and openrouter/auto lets
 			// the router choose).
-			default -> buildOpenAiModel(apiKey, baseUrl, modelName, IO_TIMEOUT, tuning, new ModelHttpClientBuilder(engine, ctx));
+			default -> buildOpenAiModel(apiKey, baseUrl, modelName, IO_TIMEOUT, tuning, new ModelHttpClientBuilder(engine, ctx, operatorUrl));
 		};
 	}
 
@@ -1213,7 +1219,7 @@ public class LangChainAdapter extends AAdapter {
 			java.net.http.HttpRequest req = java.net.http.HttpRequest.newBuilder(
 					java.net.URI.create(url + "/api/tags"))
 				.timeout(java.time.Duration.ofSeconds(3)).GET().build();
-			engine.requireOutboundHttp(ctx, req.method(), req.uri().toString());
+			engine.requireOutboundHttp(ctx, req.method(), req.uri().toString(), url);
 			java.net.http.HttpResponse<String> resp = OLLAMA_PROBE.send(req,
 				java.net.http.HttpResponse.BodyHandlers.ofString());
 			if (resp.statusCode() == 200) {

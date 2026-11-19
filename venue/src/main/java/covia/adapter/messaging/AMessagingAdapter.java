@@ -423,10 +423,19 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 		finally { outboundCaller.remove(); }
 	}
 
-	/** Authorises an actual provider HTTP request, including background binding work. */
+	/** Authorises an actual provider HTTP request, including background binding work.
+	 * A request to the platform API the operator configured ({@link #apiEndpoint})
+	 * passes the address policy; one to any other URL, such as a media link the
+	 * platform returned, is checked in full. */
 	public final void requireOutboundHttp(MessagingBot<?> bot, String method, String url) {
 		RequestContext ctx = outboundCaller.get();
-		engine.requireOutboundHttp(ctx == null ? bindingContext(bot) : ctx, method, url);
+		engine.requireOutboundHttp(ctx == null ? bindingContext(bot) : ctx, method, url, apiEndpoint(bot));
+	}
+
+	/** The platform API URL {@code bot} talks to, as the operator configured it or
+	 * the adapter's default; null when the adapter has none. */
+	protected String apiEndpoint(MessagingBot<?> bot) {
+		return null;
 	}
 
 	/**

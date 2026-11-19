@@ -192,7 +192,7 @@ public class SonnyLabsAdapter extends AAdapter {
 		String version = apiVersion;
 		if (version != null) builder.header("Sonny-Api-Version", version);
 
-		engine.requireOutboundHttp(ctx, "POST", baseUrl + "/v1/scans");
+		engine.requireOutboundHttp(ctx, "POST", baseUrl + "/v1/scans", baseUrl);
 		try {
 			HttpResponse<String> response = http.send(builder.build(), HttpResponse.BodyHandlers.ofString());
 			if (response.statusCode() < 200 || response.statusCode() >= 300) {

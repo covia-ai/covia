@@ -19,8 +19,10 @@ paths, combined with the appropriate domain and secret rights.
 Configured model calls run under harness/controller authority. Keep ordinary
 agent templates bounded; a working harness does not require giving its agent
 direct access to the model API. Messaging bindings use their current principal
-for background work; explicit send/download tools use the tool caller. Local
-providers need `adapters.http.allowedHosts` as well as ordinary egress rights.
+for background work; explicit send/download tools use the tool caller. A local
+endpoint you configure, such as `adapters.langchain.ollamaUrl` or a messaging
+`apiUrl`, passes address policy; a local URL a caller names needs
+`adapters.http.allowedHosts` as well as ordinary egress rights.
 
 Reissue old `outbound/any` grants as `admin/outbound/bypass` only for callers
 that should bypass address policy. The bypass alone permits no HTTP requests.

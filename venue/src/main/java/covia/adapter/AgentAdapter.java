@@ -1361,9 +1361,16 @@ public class AgentAdapter extends AAdapter {
 		if (adapterOp == null || !adapterOp.startsWith("langchain:ollama")) return null;
 		String modelName = (model != null) ? model.toString() : "qwen";  // langchain Ollama default
 		AString urlCell = RT.ensureString(config.get(AbstractLLMAdapter.K_URL));
-		String baseUrl = (urlCell != null) ? urlCell.toString() : "http://localhost:11434";
+		String baseUrl;
+		if (urlCell != null) {
+			baseUrl = urlCell.toString();
+		} else if (engine.getAdapter("langchain") instanceof LangChainAdapter langchain) {
+			baseUrl = langchain.resolveOllamaUrl(null);  // the venue's Ollama, which its operator chose
+		} else {
+			return null;
+		}
 		return toolWarningFor(modelName, baseUrl,
-			LangChainAdapter.ollamaModelCapabilities(engine, ctx, baseUrl, modelName));
+			LangChainAdapter.ollamaModelCapabilities(engine, ctx, baseUrl, urlCell == null, modelName));
 	}
 
 	/** The declared-data half of {@link #toolCapabilityWarning}: a resolved

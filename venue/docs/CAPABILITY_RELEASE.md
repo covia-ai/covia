@@ -53,8 +53,9 @@ Before promoting a specific deployment:
    their intended work sends HTTP. Reissue signed legacy bypass grants;
    editing a configuration cannot alter an already signed token.
 2. Check the actual provider/API endpoints, including discovery, polling,
-   file downloads and redirects. Private/local providers need host policy
-   approval; grant scope does not override it.
+   file downloads and redirects. A private or local endpoint the operator
+   configured passes host policy; one a caller names needs host policy
+   approval, which grant scope does not override.
 3. Exercise a configured model through a bounded agent and confirm that a
    direct model tool call by that agent is refused without an explicit grant.
 4. Exercise MCP and federation with that deployment's bounded callers, then

@@ -5851,6 +5851,20 @@ public class Engine {
 	 * hops. Ordinary egress and venue address policy are independent checks.
 	 * Use the harness context for harness work, never the agent's tool context. */
 	public void requireOutboundHttp(RequestContext ctx, String method, String url) {
+		requireOutboundHttp(ctx, method, url, null);
+	}
+
+	/**
+	 * {@link #requireOutboundHttp(RequestContext, String, String)} for a send by
+	 * an adapter that talks to an endpoint its operator configured:
+	 * {@code configured} is that endpoint's URL, or null for none. A send to
+	 * that endpoint's origin needs the caller's outbound authority like any
+	 * other, but passes the address policy, since the operator chose the target,
+	 * as with {@code convex.peer}. A send anywhere else, such as to a media URL
+	 * a platform returned, is checked in full, and so is the same address named
+	 * by a caller, which never comes through here.
+	 */
+	public void requireOutboundHttp(RequestContext ctx, String method, String url, String configured) {
 		AString ability = switch (method) {
 			case "GET" -> Abilities.OUTBOUND_HTTP_GET;
 			case "POST" -> Abilities.OUTBOUND_HTTP_POST;
@@ -5878,7 +5892,18 @@ public class Engine {
 			}
 			throw new covia.exception.AuthException(reason);
 		}
-		if (!outboundUnrestricted(ctx)) requireSafeUrl(origin);
+		if (!outboundUnrestricted(ctx) && !origin.equals(configuredOrigin(configured))) requireSafeUrl(origin);
+	}
+
+	/** The origin of an operator-configured endpoint as the address policy compares it, or null for none or an unreadable URL, which is trusted for nothing. */
+	private static String configuredOrigin(String configured) {
+		if (configured == null) return null;
+		try {
+			java.net.URI endpoint = java.net.URI.create(configured);
+			return covia.utils.HTTPURLs.normalize(endpoint.getScheme() + "://" + endpoint.getRawAuthority() + "/").toString();
+		} catch (IllegalArgumentException | covia.exception.CoviaException e) {
+			return null;
+		}
 	}
 
 	public static final String OUTBOUND_DESTINATION = "the outbound destination";

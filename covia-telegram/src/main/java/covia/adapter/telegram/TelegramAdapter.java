@@ -239,6 +239,11 @@ public class TelegramAdapter extends AMessagingAdapter<BotSpec, BotRunner> {
 		return apiUrl.equals(runner.apiUrl);
 	}
 
+	@Override
+	protected String apiEndpoint(covia.adapter.messaging.MessagingBot<?> bot) {
+		return (bot instanceof BotRunner runner) ? runner.apiUrl : apiUrl;
+	}
+
 	/** Canonical records are loaded first; legacy records only fill missing bindings. */
 	@Override
 	protected void rearmLegacyBots() {

@@ -22,11 +22,19 @@ final class ModelHttpClientBuilder implements HttpClientBuilder {
 
 	private final Engine engine;
 	private final RequestContext ctx;
+	private final String configured;
 	private final HttpClientBuilder delegate = new JdkHttpClientBuilder();
 
-	ModelHttpClientBuilder(Engine engine, RequestContext ctx) {
+	/**
+	 * @param configured the provider URL when the operator configured it, such
+	 *        as the venue's Ollama URL, whose requests pass the address policy
+	 *        ({@link Engine#requireOutboundHttp(RequestContext, String, String, String)});
+	 *        null when a caller named it or it is a hosted provider's own
+	 */
+	ModelHttpClientBuilder(Engine engine, RequestContext ctx, String configured) {
 		this.engine = engine;
 		this.ctx = ctx;
+		this.configured = configured;
 	}
 
 	@Override public Duration connectTimeout() { return delegate.connectTimeout(); }
@@ -39,7 +47,7 @@ final class ModelHttpClientBuilder implements HttpClientBuilder {
 		return new HttpClient() {
 			private void require(HttpRequest request) {
 				try {
-					engine.requireOutboundHttp(ctx, request.method().name(), request.url());
+					engine.requireOutboundHttp(ctx, request.method().name(), request.url(), configured);
 				} catch (CoviaException refused) {
 					// The refusal is final: langchain4j retries anything not marked
 					// so. LangChainAdapter.providerFailure reports the refusal itself.
