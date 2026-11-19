@@ -10,6 +10,7 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.lang.RT;
+import covia.api.Fields;
 import covia.venue.RequestContext;
 
 /**
@@ -165,6 +166,7 @@ class FrameTools {
 	 */
 	ContextAssembler.Rendered rendering(ContextAssembler.Spec spec) {
 		if (!spec.cachePrefix()) return null;
+		spec = withoutConversationLoads(spec);
 		AMap<AString, ACell> fixedIndex = ToolPalette.mergeIndex(toolIndex, pinnedToolIndex);
 		fixedIndex = ToolPalette.mergeIndex(fixedIndex, ToolPalette.loadOwners(loadToolIndex));
 		AMap<AString, ACell> manifestIndex = new ToolPalette.Palette(
@@ -173,6 +175,27 @@ class FrameTools {
 		int baseEnd = spec.toolCalling() ? baseToolEnd : 0;
 		toolIndex = manifestIndex;
 		return ContextAssembler.initialise(spec).withToolIndex(manifestIndex, baseStart, baseEnd);
+	}
+
+	/**
+	 * The Spec a cached initial render is built from. A load already appended
+	 * to the conversation stays there — its instructions, its tool change and
+	 * its tools reached through {@code invoke_tool} — so the render leaves out
+	 * its tools and its effect on the skills index. Rebuilding for a config
+	 * change that renders the same then gives the prefix the conversation was
+	 * built on (AGENT_CONTEXT.md §3.1).
+	 */
+	private ContextAssembler.Spec withoutConversationLoads(ContextAssembler.Spec spec) {
+		AMap<AString, ACell> outside = Loads.outsideConversation(spec.effectiveLoads());
+		if (outside.count() == spec.effectiveLoads().count()) return spec;
+		AVector<ACell> tools = Vectors.empty();
+		for (long i = 0; i < spec.tools().count(); i++) {
+			ACell definition = spec.tools().get(i);
+			AString owner = RT.ensureString(RT.getIn(
+				loadToolIndex.get(RT.ensureString(RT.getIn(definition, Fields.NAME))), Fields.REF));
+			if (owner == null || outside.containsKey(owner)) tools = tools.conj(definition);
+		}
+		return spec.withLoadView(outside, tools);
 	}
 
 	/** Whether the frame holds a projection rendered from the agent's current

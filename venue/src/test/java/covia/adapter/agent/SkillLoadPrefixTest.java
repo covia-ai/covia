@@ -34,10 +34,11 @@ import covia.venue.TestEngine;
 
 /**
  * Loading a skill adds to what an agent's provider is sent; it never rewrites the
- * prefix (AGENT_CONTEXT.md §3.1, §3.2.3). Across the load and the turns after it,
- * the tools and the system parameter Anthropic is sent stay equal and earlier
- * messages stay a prefix of later ones, and a new session shares the same tools
- * and system parameter.
+ * prefix, and neither does a config change the prompt does not read
+ * (AGENT_CONTEXT.md §3.1, §3.2.3). Across the load, such a change and the turns
+ * after them, the tools and the system parameter Anthropic is sent stay equal
+ * and earlier messages stay a prefix of later ones, and a new session shares the
+ * same tools and system parameter.
  *
  * <p>The agent's model calls go to a local stand-in for Anthropic, which the
  * outbound guard allows only on a venue that lists the loopback host, so the class
@@ -113,6 +114,9 @@ public class SkillLoadPrefixTest {
 
 			ACell first = chat(ctx, null, "load the alpha skill");
 			Blob session = Ids.stored(RT.getIn(first, Fields.SESSION_ID));
+			// A config change the prompt does not read: a sampling field written as null
+			engine.jobs().invokeOperation("v/ops/agent/update", Maps.of(Fields.AGENT_ID, "helper",
+				Fields.CONFIG, Maps.of("temperature", null)), ctx).awaitResult(5000);
 			chat(ctx, session, "and now?");
 			chat(ctx, null, "a new conversation");
 			assertEquals(4, requests.size(), "load, reply, next turn, new session");

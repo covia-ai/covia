@@ -216,6 +216,24 @@ public final class Loads {
 		return m.get(K_TS) != null;
 	}
 
+	/**
+	 * The entries whose content is not already in the conversation: all but the
+	 * non-volatile entries appended there. A cached initial render holds only
+	 * these, so rebuilding it leaves what the conversation holds where it is
+	 * (AGENT_CONTEXT.md §3.1). The same map when none is appended.
+	 */
+	static AMap<AString, ACell> outsideConversation(AMap<AString, ACell> loads) {
+		if (loads == null) return Maps.empty();
+		AMap<AString, ACell> outside = loads;
+		for (var entry : loads.entrySet()) {
+			ACell meta = entry.getValue();
+			if (!isVolatile(meta) && meta instanceof AMap<?, ?> m && CVMBool.TRUE.equals(m.get(K_APPENDED))) {
+				outside = outside.dissoc(entry.getKey());
+			}
+		}
+		return outside;
+	}
+
 	/** True only when a trusted declaration boundary stamped this data load. */
 	static boolean isTrusted(ACell spec) {
 		return !isAgentManaged(spec)

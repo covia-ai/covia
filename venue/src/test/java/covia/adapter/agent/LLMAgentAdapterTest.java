@@ -1261,6 +1261,54 @@ public class LLMAgentAdapterTest {
 			"an equal config must not append ambient catalog state");
 	}
 
+	/** A config change the prompt does not read rebuilds the cached prefix as it
+	 *  was: a skill loaded since stays in the conversation rather than moving
+	 *  into the fixed tools and the skills index. */
+	@Test
+	public void testConfigChangeOutsideThePromptRebuildsTheSamePrefix() {
+		writeAlphaSkill();
+		engine.jobs().invokeOperation("v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "skill-rebuild-agent",
+				Fields.CONFIG, Maps.of(
+					Fields.OPERATION, "v/ops/llmagent/chat",
+					"llmOperation", "v/test/ops/skillllm",
+					"caps", "unrestricted",
+					"skillsets", Vectors.of(Strings.create("w/skills")))),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		User user = engine.getVenueState().users().user(ALICE_DID);
+		Agent agent = user.agent("skill-rebuild-agent");
+		Blob sid = Blob.fromHex("44440002444400024444000244440002");
+		agent.sessions().create(sid, ALICE_DID, null);
+		agent.session(sid).appendPending(Maps.of(
+			Strings.intern("content"), Strings.create("use the alpha skill")));
+		engine.jobs().invokeOperation("v/ops/agent/trigger",
+			Maps.of(Fields.AGENT_ID, "skill-rebuild-agent"), RequestContext.of(ALICE_DID)).awaitResult(5000);
+		AgentWatch.awaitTimeline(engine, ALICE_DID, agent, 1);
+		ContextAssembler.Rendered before = ContextAssembler.Rendered.fromCell(RT.getIn(
+			agent.session(sid).getRecord(), Fields.FRAMES, CVMLong.ZERO, GoalTreeContext.K_RENDERED_CONTEXT));
+		assertNotNull(before);
+
+		engine.jobs().invokeOperation("v/ops/agent/update", Maps.of(
+			Fields.AGENT_ID, "skill-rebuild-agent",
+			Fields.CONFIG, Maps.of("temperature", null)), RequestContext.of(ALICE_DID)).awaitResult(5000);
+		agent.session(sid).appendPending(Maps.of(
+			Strings.intern("content"), Strings.create("carry on")));
+		engine.jobs().invokeOperation("v/ops/agent/trigger",
+			Maps.of(Fields.AGENT_ID, "skill-rebuild-agent"), RequestContext.of(ALICE_DID)).awaitResult(5000);
+		AgentWatch.awaitTimeline(engine, ALICE_DID, agent, 2);
+
+		agent = user.agent("skill-rebuild-agent");
+		ContextAssembler.Rendered after = ContextAssembler.Rendered.fromCell(RT.getIn(
+			agent.session(sid).getRecord(), Fields.FRAMES, CVMLong.ZERO, GoalTreeContext.K_RENDERED_CONTEXT));
+		assertEquals(agent.getConfig(), after.sourceConfig(), "the prefix was rebuilt for the changed config");
+		assertNotEquals(before.sourceConfig(), after.sourceConfig());
+		assertEquals(before.tools(), after.tools(), "the fixed tools are as they were");
+		assertEquals(before.messages(), after.messages(), "the initial messages are as they were");
+		AString turn2 = RT.ensureString(RT.getIn(agent.getTimeline().get(1), Fields.RESULT));
+		assertTrue(turn2.toString().contains("SKILL_BODY_PRESENT") && turn2.toString().contains("SKILL_TOOLS_ACTIVE"),
+			"the skill stays in use from the conversation: " + turn2);
+	}
+
 	// ========== Response format ==========
 
 	@Test

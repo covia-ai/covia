@@ -385,6 +385,13 @@ public final class ContextAssembler {
 				toolLoop, task, unavailable, notice, now, sourceConfig);
 		}
 
+		/** The same Spec with another view of the effective loads and the tools that go with it. */
+		Spec withLoadView(AMap<AString, ACell> effectiveLoads, AVector<ACell> tools) {
+			return new Spec(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, toolCalling, cachePrefix, lateToolResults,
+				tools, loadElements, loadExchanges, effectiveLoads, frames, pending, input, hasInput,
+				toolLoop, task, unavailable, notice, now, sourceConfig);
+		}
+
 		public Spec withFrames(AVector<ACell> frames) {
 			return new Spec(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, toolCalling, cachePrefix, lateToolResults,
 				tools, loadElements, loadExchanges, effectiveLoads, frames, pending, input, hasInput,
