@@ -100,6 +100,7 @@ Create Eddie — capped to messaging only, no writes:
 ```
 agent_create  agentId=Eddie  ...
   caps: [agent/message on g/, agent/request on g/, crud/read on w/]
+  acceptTasks: true
 ```
 
 Send Eddie after a sanctioned vendor:

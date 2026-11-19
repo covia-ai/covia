@@ -5,6 +5,7 @@
     "llmOperation": "v/ops/langchain/openai",
     "model": "gpt-5.4-mini",
     "defaultTools": false,
+    "acceptTasks": true,
     "tools": [
       "v/ops/covia/read",
       "v/ops/covia/write",
