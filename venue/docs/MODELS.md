@@ -384,6 +384,15 @@ owns HTTP, retries, request serialization and response message conversion.
 | `inlineToolChanges` | Native tool-addition/removal content blocks | `false`; enabling requires upstream support |
 | `compaction` | Provider compaction with signed-block replay | `false`; enabling requires upstream support |
 
+Every provider also takes `emptyResponse`: how a response with no text and no
+tool calls after a normal stop is read. `stop`, the default, is a silent reply;
+`content_filter` fails the call as declined by the provider; `error` fails it
+as no answer. A provider that signals its refusals only by saying nothing gets
+`content_filter` on its serving operation's `model.options`, and a model asset
+or an agent's `modelOptions` can override it. A refusal or content filter the
+provider reports, and a provider `error`, fail the call whatever this option
+says.
+
 These defaults apply to Sonnet, Opus and Haiku 5.5 and Fable 5.1. Older and
 unknown models retain the portable system-message path and provider thinking
 policy. `cache:false` disables all cache breakpoints, including automatic

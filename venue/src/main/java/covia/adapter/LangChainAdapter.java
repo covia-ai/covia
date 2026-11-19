@@ -56,7 +56,6 @@ import dev.langchain4j.model.chat.request.ResponseFormat;
 import dev.langchain4j.model.chat.request.ResponseFormatType;
 import dev.langchain4j.model.chat.request.json.JsonSchema;
 import dev.langchain4j.model.chat.response.ChatResponse;
-import dev.langchain4j.model.output.FinishReason;
 import dev.langchain4j.model.anthropic.AnthropicTokenUsage;
 import dev.langchain4j.model.anthropic.AnthropicChatResponseMetadata;
 import dev.langchain4j.model.output.TokenUsage;
@@ -140,7 +139,6 @@ public class LangChainAdapter extends AAdapter {
 	static final AString K_INPUT          = Strings.intern("input");
 	static final AString K_OUTPUT         = Strings.intern("output");
 	static final AString K_TOTAL          = Strings.intern("total");
-	static final AString K_FINISH_REASON  = Strings.intern("finishReason");
 	static final AString K_PROVIDER       = Strings.intern("provider");
 	static final AString K_PROVIDERS      = Strings.intern("providers");
 	static final AString K_MODELS         = Strings.intern("models");
@@ -177,8 +175,6 @@ public class LangChainAdapter extends AAdapter {
 		"Model provider %s has no model %s%s, or the url names no model API; check the model id and the url";
 	public static final String FEATURE_NOT_SUPPORTED =
 		"Model provider %s does not support a feature this request uses for model %s";
-	public static final String CONTENT_FILTERED =
-		"Model provider %s declined the request for model %s: its content filter refused it";
 	public static final String REQUEST_REFUSED =
 		"Model provider %s refused the request for model %s%s";
 	public static final String MALFORMED_RESPONSE =
@@ -530,7 +526,7 @@ public class LangChainAdapter extends AAdapter {
 				ACell result;
 				try {
 					result = callModel(provider, resolvedModelName, chatModel, resolvedMessages, tools,
-						responseFormatCell, cacheMarks);
+						responseFormatCell, cacheMarks, tuning.options().emptyResponse());
 				} catch (RuntimeException e) {
 					throw providerFailure(provider, resolvedModelName, key.operators(), ollamaUrl, e);
 				}
@@ -703,7 +699,7 @@ public class LangChainAdapter extends AAdapter {
 		} else if (e instanceof dev.langchain4j.exception.UnsupportedFeatureException) {
 			failure = new UnsupportedException(FEATURE_NOT_SUPPORTED.formatted(provider, model));
 		} else if (e instanceof dev.langchain4j.exception.ContentFilteredException) {
-			failure = new ResponseException(CONTENT_FILTERED.formatted(provider, model));
+			failure = new ResponseException(ProviderStop.DECLINED.formatted(provider, model, ""));
 		} else if (e instanceof dev.langchain4j.exception.InvalidRequestException) {
 			failure = mentionsContextSize(e)
 				? new InvalidInputException(PROVIDER_CONTEXT_TOO_LARGE.formatted(provider, model, note))
@@ -1303,11 +1299,21 @@ public class LangChainAdapter extends AAdapter {
 	 * contract, different plumbing, so flipping providers is transparent to
 	 * agents and harnesses.</p>
 	 *
+	 * <p>A response that holds no answer fails the call ({@link ProviderStop}).</p>
+	 *
 	 * @param responseFormatCell Response format: null (default text), "json" or "text" string,
 	 *        or a map {@code {name: "...", schema: {type: "object", ...}}} for strict schema mode
+	 * @param emptyResponse How a response that says nothing after a normal stop is
+	 *        read: the model's {@code emptyResponse} option
 	 */
 	static ACell callModel(String provider, String modelName, ChatModel model, AVector<ACell> messages,
 			AVector<ACell> tools, ACell responseFormatCell, Set<Long> cacheMarks) {
+		return callModel(provider, modelName, model, messages, tools, responseFormatCell, cacheMarks,
+			ModelCallOptions.DEFAULT.emptyResponse());
+	}
+
+	static ACell callModel(String provider, String modelName, ChatModel model, AVector<ACell> messages,
+			AVector<ACell> tools, ACell responseFormatCell, Set<Long> cacheMarks, String emptyResponse) {
 		List<ChatMessage> chatMessages = toChatMessages(messages, cacheMarks, provider, modelName);
 		ResponseFormat responseFormat = toResponseFormat(responseFormatCell);
 
@@ -1362,7 +1368,11 @@ public class LangChainAdapter extends AAdapter {
 			response.aiMessage().hasToolExecutionRequests()
 				? response.aiMessage().toolExecutionRequests() : "none");
 
-		return toAssistantMessage(response, provider, modelName);
+		ProviderStop stop = ProviderStop.of(response);
+		ACell reply = toAssistantMessage(response, provider, modelName, stop);
+		ResponseException noAnswer = stop.noAnswer(provider, modelName, reply, emptyResponse);
+		if (noAnswer != null) throw noAnswer;
+		return reply;
 	}
 
 	// ========== Provider-aware structured output (#81) ==========
@@ -1399,20 +1409,25 @@ public class LangChainAdapter extends AAdapter {
 
 	/**
 	 * Builds an assistant message map from a full ChatResponse. Includes
-	 * {@code tokens: {input, output, total, cacheRead?, cacheWrite?}} and
-	 * {@code finishReason} when the provider reports them. The cache counts
-	 * are what prompt caching is costing and saving — present only when the
-	 * provider reports them (Anthropic).
+	 * {@code tokens: {input, output, total, cacheRead?, cacheWrite?}},
+	 * {@code finishReason} and {@code providerFinishReason} when the provider
+	 * reports them ({@link ProviderStop}). The cache counts are what prompt
+	 * caching is costing and saving — present only when the provider reports
+	 * them (Anthropic).
 	 */
-	@SuppressWarnings("unchecked")
 	static ACell toAssistantMessage(ChatResponse response) {
 		return toAssistantMessage(response, null, null);
 	}
 
 	/** Provider-aware form: attaches optional continuation state when the
 	 * matching provider returned state for a tool-use reply. */
-	@SuppressWarnings("unchecked")
 	static ACell toAssistantMessage(ChatResponse response, String provider, String modelName) {
+		return toAssistantMessage(response, provider, modelName, ProviderStop.of(response));
+	}
+
+	@SuppressWarnings("unchecked")
+	private static ACell toAssistantMessage(ChatResponse response, String provider, String modelName,
+			ProviderStop stop) {
 		AMap<AString, ACell> msg = (AMap<AString, ACell>)
 			toAssistantMessage(response.aiMessage(), provider, modelName);
 
@@ -1434,11 +1449,8 @@ public class LangChainAdapter extends AAdapter {
 			if (tokens.count() > 0) msg = msg.assoc(K_TOKENS, tokens);
 		}
 
-		FinishReason fr = response.finishReason();
-		if (fr != null) {
-			msg = msg.assoc(K_FINISH_REASON,
-				Strings.create(fr.name().toLowerCase()));
-		}
+		if (stop.finishReason != null) msg = msg.assoc(Fields.FINISH_REASON, stop.finishReason);
+		if (stop.providerValue != null) msg = msg.assoc(Fields.PROVIDER_FINISH_REASON, stop.providerValue);
 		// Diagnostic fields do not yet have typed SDK accessors. The SDK owns
 		// transport and all message parsing; read only this report from its public
 		// raw-response metadata so prefix-drop policies remain observable.

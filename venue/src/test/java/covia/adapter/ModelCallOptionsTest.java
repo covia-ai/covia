@@ -48,8 +48,9 @@ class ModelCallOptionsTest {
 				Maps.empty(), Maps.of("modelOptions", Maps.of(feature, true))));
 			assertEquals(feature + ModelCallOptions.UPSTREAM_REQUIRED, error.getMessage());
 		}
+		assertEquals("stop", options.emptyResponse(), "an empty response is a silent reply unless the model says otherwise");
 		for (String invalid : List.of("{\"cacheTtl\":\"2h\"}", "{\"automaticCaching\":\"true\"}",
-				"{\"thinkingPrefixMismatch\":\"ignore\"}")) {
+				"{\"thinkingPrefixMismatch\":\"ignore\"}", "{\"emptyResponse\":\"refused\"}")) {
 			assertThrows(InvalidInputException.class, () -> ModelCallOptions.resolve(
 				Maps.empty(), Maps.of("modelOptions", JSON.parse(invalid))));
 		}
@@ -101,10 +102,10 @@ class ModelCallOptionsTest {
 		assertEquals(ModelCallOptions.INVALID_SYSTEM_POSITION, error.getMessage());
 	}
 
-	/** A turn after a refusal that said nothing: the refusal is never sent, so the
+	/** A turn after a reply that said nothing: that reply is never sent, so the
 	 *  instructions placed before it must land where the API takes a system message. */
 	@Test
-	void lateSystemsBeforeASilentRefusalLandWhereTheProviderTakesThem() throws Exception {
+	void lateSystemsBeforeASilentReplyLandWhereTheProviderTakesThem() throws Exception {
 		AtomicReference<ACell> request = new AtomicReference<>();
 		HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
 		server.createContext("/v1/messages", exchange -> {
@@ -121,7 +122,7 @@ class ModelCallOptionsTest {
 		server.start();
 		try {
 			// As an agent's session holds it: a skill loaded, its instructions and the
-			// tool change as system events, then a refusal with no text and no tool call.
+			// tool change as system events, then a reply with no text and no tool call.
 			AVector<ACell> messages = RT.ensureVector(JSON.parse("""
 				[{"role":"system","content":"head"},
 				 {"role":"user","content":"first"},
@@ -129,7 +130,7 @@ class ModelCallOptionsTest {
 				 {"role":"tool","id":"toolu_load","name":"skill_load","content":"loaded"},
 				 {"role":"system","content":"skill instructions"},
 				 {"role":"system","content":"tool change"},
-				 {"role":"assistant","finishReason":"other"},
+				 {"role":"assistant","finishReason":"stop"},
 				 {"role":"user","content":"second"}]
 				"""));
 			ACell input = Maps.of("url", "http://127.0.0.1:" + server.getAddress().getPort() + "/v1/",

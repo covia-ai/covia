@@ -614,7 +614,7 @@ What happens next depends on what failed:
 - **The work.** An expected failure ([ERRORS.md](ERRORS.md)) belongs to the work
   the cycle took. The model gave up on the task (`fail_task`), reached the
   tool-call iteration limit, sent a conversation too big for the model or a
-  request the provider refused, or an LLM call outlasted `llmTimeoutMs`. The
+  request the provider refused or declined to answer, or an LLM call outlasted `llmTimeoutMs`. The
   cycle's picked task fails, or the chat it was answering. Work it never
   took stays queued, and the agent carries on with it. A task the agent already
   resolved keeps its own outcome.

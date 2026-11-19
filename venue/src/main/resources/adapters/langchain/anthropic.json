@@ -58,6 +58,7 @@
 						"automaticCaching": {"type": "boolean", "description": "Use the provider's moving conversation cache breakpoint instead of Covia's explicit conversation cacheMarks. System/tool caching remains enabled. Ignored when cache:false."},
 						"thinkingPrefixMismatch": {"type": "string", "enum": ["provider", "error", "drop"], "description": "Leave provider enforcement unchanged, explicitly reject edited thinking prefixes, or drop invalid thinking and report inputTransformations (beta)."},
 						"cacheTtl": {"type": "string", "enum": ["5m", "1h"], "description": "Duration of every enabled cache breakpoint. Defaults to 5m; cache:false disables all caching."},
+						"emptyResponse": {"type": "string", "enum": ["stop", "content_filter", "error"], "description": "How a response with no text and no tool calls after a normal stop is read: stop (default) is a silent reply; content_filter fails the call as declined; error fails it as no answer."},
 						"preserveThinking": {"type": "boolean", "const": false, "description": "Reserved for lossless cross-turn thinking preservation; disabled pending upstream support. Required single-block tool-turn state is already retained."},
 						"inlineToolChanges": {"type": "boolean", "const": false, "description": "Reserved; disabled pending LangChain4j support for native tool-addition/removal blocks."},
 						"compaction": {"type": "boolean", "const": false, "description": "Reserved; disabled pending LangChain4j support for signed and threshold compaction blocks."}
@@ -107,7 +108,12 @@
 				},
 				"finishReason": {
 					"type": "string",
-					"description": "Provider finish reason in lower case (for example stop, length, or tool_execution). A length response reached maxTokens and is incomplete."
+					"enum": ["stop", "length", "tool_call"],
+					"description": "Why the reply ended, in OpenTelemetry's GenAI finish-reason vocabulary. A length reply reached maxTokens and is incomplete. A provider that declined to answer, or ended without an answer, fails the call instead."
+				},
+				"providerFinishReason": {
+					"type": "string",
+					"description": "The provider's own value for why the reply ended, as it reported it (for example end_turn or tool_use)."
 				},
 				"inputTransformations": {
 					"type": "array",

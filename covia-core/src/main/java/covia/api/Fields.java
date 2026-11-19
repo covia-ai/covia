@@ -235,6 +235,11 @@ public class Fields {
 	 * assistant turn. Agent code preserves it verbatim; only the matching
 	 * provider/model adapter may interpret it on a later inference. */
 	public static final StringShort PROVIDER_STATE = Strings.intern("providerState");
+	/** Why a model's reply ended, in OpenTelemetry's GenAI finish-reason
+	 * vocabulary: {@code stop}, {@code length} or {@code tool_call}. */
+	public static final StringShort FINISH_REASON = Strings.intern("finishReason");
+	/** The provider's own value for why a model's reply ended, as it reported it. */
+	public static final StringShort PROVIDER_FINISH_REASON = Strings.intern("providerFinishReason");
 	public static final StringShort TOOL_CALLS = Strings.intern("toolCalls");
 	public static final StringShort BUDGET = Strings.intern("budget");
 	/** Job ids a cycle presented (chat envelopes drained this cycle). */

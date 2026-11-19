@@ -1893,7 +1893,7 @@ public class LangChainAdapterTest {
 			new dev.langchain4j.exception.UnsupportedFeatureException("topK " + PROVIDER_TEXT), false);
 
 		assertMapped(ResponseException.class,
-			LangChainAdapter.CONTENT_FILTERED.formatted("anthropic", "claude-x"),
+			ProviderStop.DECLINED.formatted("anthropic", "claude-x", ""),
 			new dev.langchain4j.exception.ContentFilteredException("I cannot " + PROVIDER_TEXT), false);
 		assertPassesOn(ResponseException.class, LangChainAdapter.REQUEST_REFUSED, 400,
 			new dev.langchain4j.exception.InvalidRequestException(http(400, "bad tool schema")));

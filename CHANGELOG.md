@@ -29,6 +29,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - `adapters.convex.timeoutMillis` sets how long `convex:query` and `convex:transact` wait for the peer's result; the default is the Convex client's own, 20 seconds.
 - `venue:adapter/restart` stops an enabled adapter, offers it its configuration again and starts it; `venue:adapters` lists each adapter's `status` and a failed adapter's `reason`.
 - A configured Python function whose settings add `principals: true` is also passed its frame's `authority` and `caller`, so one offered through a callable can keep each caller's state apart (#706).
+- The model option `emptyResponse` says how a response with no text and no tool calls is read: `stop`, a silent reply and the default; `content_filter`, the provider declined; or `error`, no answer. The last two fail the call.
 - A venue with a public hostname takes its users in short form wherever a principal or a path is given, in operations, REST routes and configuration (a messaging bot's or Claude Code project's `user`, the `secrets` bootstrap's keys): `u:bob` for `did:web:<hostname>:u:bob`, `u:bob:g:helper` for his agent and `u:bob/w/notes` for his path; records hold the full DID.
 
 ### Changed
@@ -73,6 +74,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - A messaging bot an agent created uses its credentials and runs its relay's `admit` and `charge` hooks with that agent's authority, not its user's: an agent with caps needs `secret/use` on each secret the bot names, and its caps must cover what the hooks do.
 - `mcp:tools-call` and `mcp:tools-list` hide `token` in their job records, both the bearer in the input and a top-level `token` in a tool's result; a caller waiting for the result still receives it.
 - `mcp:tools-call` and `mcp:tools-list` take `bearerSecret`, a secret holding the bearer, as an alternative to `token`.
+- A model reply's `finishReason` uses OpenTelemetry's GenAI values (`stop`, `length`, `tool_call`, where `tool_execution` was), and `providerFinishReason` gives the provider's own value.
 
 ### Removed
 
@@ -82,7 +84,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Fixed
 
-- An agent on an Anthropic model with native system messages answers the next turn after a refusal with no reply, instead of failing because the provider rejects the request's message order.
+- An agent on an Anthropic model with native system messages answers the next turn after a reply with no text, instead of failing because the provider rejects the request's message order.
+- A model provider's refusal, content filter or `error` fails the model call with a reason naming the provider and its own value, instead of returning an empty or partial reply: the task or chat the agent was answering fails with that reason, which the Telegram and Discord bots show, and the agent carries on.
 - Updating an agent's config, even a field its prompt does not read such as a sampling field set to null, no longer moves skills its sessions have loaded into the start of their prompt, which stopped the provider's prompt cache applying.
 - A DLFS file written by `create`, `write`, a content upload or `archive` changes in one update once all its content has arrived, so a write cut off part-way leaves the drive as it was; a write onto a directory fails as a conflict (#629).
 - `archive:list` and `archive:extract` read a zip stored in a DLFS drive instead of failing as a venue fault.
