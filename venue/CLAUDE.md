@@ -345,6 +345,7 @@ java -jar target/covia.jar [config.json]
 - `docs/JOB_EXECUTION.md` — what bounds job execution: scarce resources, not jobs or threads, and the per-user job cap's removal (design)
 - `docs/ERRORS.md` — how the venue raises, types and reports failures, and what each surface tells a caller
 - `docs/UCAN.md` — capabilities, granting surface, proof channels
+- `docs/CAPABILITY_REVIEW.md` — dated capability audit, corrected issuance bypass and remaining policy/documentation decisions; UCAN.md remains the maintained catalog
 - `docs/AUTHORITY.md` — whose authority applies to a request: `authority`, `caller` and `origin` as DIDs, names resolving in the authority's namespace, agents, tokens and callables as narrowing whose authority they act with, admission, what a job records and keeps, sudo and an agent's harness (design)
 - `docs/VENUE_AUTHORITY.md` — raising authority above a principal's base: allowances, activation, and the venue's power over the users it hosts (design)
 - `docs/HELD_KEYS.md` — keyrings of private keys the crypto adapter holds for the identities a venue hosts: store format, use and custody rules

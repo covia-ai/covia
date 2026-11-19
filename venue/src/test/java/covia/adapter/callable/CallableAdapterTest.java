@@ -95,6 +95,31 @@ public class CallableAdapterTest {
 		return run("v/ops/callable/call", Maps.of(Fields.CALLABLE, callable, Fields.INPUT, input), ctx);
 	}
 
+	@Test
+	public void presentedGrantingRightCannotEscapeCallableCaps(TestInfo info) {
+		AString alice = TestEngine.uniqueDID(info);
+		RequestContext owner = RequestContext.of(alice);
+		String operation = "v/ops/ucan/issue";
+		String resource = alice + "/w/private/";
+		AString granting = Strings.create("grant/crud/read");
+		AString jwt = RT.ensureString(RT.getIn(complete(run(operation,
+			Maps.of("aud", alice, "att", Vectors.of(cap(resource, granting))), owner)), Fields.TOKEN));
+		AVector<ACell> proofs = Vectors.of(UCAN.fromJWT(jwt).toMap());
+		ACell input = Maps.of("aud", TestEngine.uniqueDID("callable-grant-recipient"),
+			"att", Vectors.of(cap(resource, Capability.CRUD_READ)));
+
+		// A proof held inside a call must not evade its standing caps.
+		complete(create(owner, "no-grants", operation, Vectors.empty(), null));
+		RequestContext narrow = engine.callContext(owner, reference(alice, "no-grants")).withProofs(proofs);
+		Job denied = engine.jobs().callOperation(operation, input, narrow);
+		TestEngine.awaitJob(denied, Job::isFinished, 10000, () -> "issuance never finished");
+		assertTrue(failure(denied).startsWith(Engine.GRANT_BEYOND_SCOPE));
+
+		complete(create(owner, "allow-grants", operation, Vectors.of(cap(resource, granting)), null));
+		RequestContext allowed = engine.callContext(owner, reference(alice, "allow-grants")).withProofs(proofs);
+		assertNotNull(engine.jobs().callOperation(operation, input, allowed).awaitResult(5000));
+	}
+
 	/** {@code owner}'s guestbook, empty: a list its callable appends to, the parent of which the callable may not create. */
 	private void openGuestbook(AString owner) {
 		complete(run("v/ops/covia/write", Maps.of(Fields.PATH, "w/guestbook", Fields.VALUE, Vectors.empty()), RequestContext.of(owner)));
