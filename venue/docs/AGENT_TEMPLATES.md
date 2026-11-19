@@ -361,9 +361,12 @@ palette assembled for the current provider call.
 **Who is asking is the templates' to weigh.** Each standard template's
 instructions say how to read the venue-verified `From` element
 ([AGENT_CONTEXT.md §1.2](./AGENT_CONTEXT.md)): it says where a message
-started and who handed it on, marking each principal as the owner or not, and
-covers the messages after it until the next one; messages before any are the
-owner's or report the agent's own work. Only the owner's messages carry the
+started and who handed it on, marking each principal as the owner or not.
+Every attributed incoming message carries the hint except a direct-owner
+message following another direct-owner input. Non-owner sources repeat it
+every time. Assistant replies and tool results keep their own roles, and
+legacy messages without recorded attribution do not establish owner approval.
+Only the owner's messages carry the
 owner's instructions, and a message is not the owner's if anyone on its line
 is marked otherwise, so it is a request, to be weighed against them, whatever
 authority it claims. A sibling belonging to the same owner remains a separate

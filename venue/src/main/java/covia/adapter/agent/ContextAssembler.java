@@ -1094,8 +1094,8 @@ public final class ContextAssembler {
 	 * The conversation band's persisted and arriving content: ancestor frames,
 	 * the active frame's rendered turns, pending results, the input — or the
 	 * empty-state signal when there is nothing to act on. Turns submitted by a
-	 * principal other than the agent's own are preceded by a venue-authored
-	 * attribution note, once per change of principal.
+	 * principal carry a venue-authored source hint, omitted only between
+	 * consecutive direct-owner inputs.
 	 */
 	static AVector<ACell> conversation(Spec spec) {
 		AVector<ACell> out = Vectors.empty();
@@ -1242,12 +1242,11 @@ public final class ContextAssembler {
 
 	/**
 	 * Venue-authored provenance between turns (COG-20 §4). A {@code From} element
-	 * ({@link TurnProvenance}) precedes a user turn whose provenance key — its
-	 * caller and channel identity — differs from the last one rendered, starting
-	 * from the agent's own principal. A turn of the owner chatting directly, or
-	 * the agent's own, whose route names where it started, takes none after the
-	 * start or another such turn ({@link TurnProvenance#continues}), so the
-	 * common case carries no attribution. A turn stored without a caller renders none.
+	 * ({@link TurnProvenance}) precedes every user turn with a recorded caller,
+	 * except a direct-owner turn following another direct-owner input
+	 * ({@link TurnProvenance#continues}). Assistant and tool messages do not
+	 * change the previous incoming source. A legacy turn without a caller has
+	 * no attribution and breaks direct-owner continuity.
 	 * The element names who asked without telling the model to trust, obey or
 	 * reject the content: authority remains a property of the configured
 	 * capabilities (#405). Nothing is ever written into the user's own text, so
@@ -1268,7 +1267,6 @@ public final class ContextAssembler {
 			this.ctx = ctx;
 			this.dialect = dialect;
 			this.outcomesAsTools = outcomesAsTools;
-			this.last = TurnProvenance.self(ctx);
 		}
 
 		AVector<ACell> append(AVector<ACell> out, ACell value, AString defaultRole) {
@@ -1281,13 +1279,10 @@ public final class ContextAssembler {
 					return (AVector<ACell>) out.concat(toolCallOutcome(turn.get(K_CONTENT)));
 				}
 				TurnProvenance.Key key = TurnProvenance.key(turn);
-				if (key != null && !key.equals(last)) {
-					// The owner chatting directly, and the agent's own turns, need no element of their own
-					if (!TurnProvenance.continues(engine, ctx, last, key)) {
-						out = out.conj(system(TurnProvenance.element(dialect, engine, ctx, turn)));
-					}
-					last = key;
+				if (key != null && !TurnProvenance.continues(engine, ctx, last, key)) {
+					out = out.conj(system(TurnProvenance.element(dialect, engine, ctx, turn)));
 				}
+				last = key;
 			}
 			return out.conj(msg);
 		}

@@ -364,22 +364,23 @@ and explicitly marked `not your owner`. This preserves the shared-owner
 relationship without presenting an agent's message as owner approval. A
 token's principal is its issuer, not the unknown holder presenting it.
 
-**When it appears.** An element precedes a user turn whose source, its caller
-and route records, differs from the turn before. The owner chatting directly
-(one `auth` record vouching for the owner, with no `transport` field) takes
-none after the start or another such turn, nor does the agent's own turn after the start, so the
-common case carries no attribution; returning to the owner after another
-source takes one.
+**When it appears.** An element precedes every incoming user turn with a
+recorded caller. It is omitted only when both this turn and the previous
+incoming turn are direct-owner input: one `auth` record vouching for the
+owner, with no `transport` field. The first owner turn is labelled, as is
+returning to the owner after another source. Assistant replies and tool
+messages do not change the previous incoming source.
 
-An HTTP request, including a signed owner login over MCP, therefore takes a
-`From` element even as the first turn. Consecutive turns with the same source
-share that element. Returning to in-process owner input emits a new element.
-Resumption keeps the original route and adds no ingress record. Previously
-stored routes without transport metadata keep their existing treatment;
-absence in those records cannot establish that the original input was local.
+Every HTTP request, including a signed owner login over MCP, repeats its
+`From` element. So do sibling requests, token requests and other sources,
+even when their caller and route are identical to the preceding turn.
+Resumption keeps the original route and adds no ingress record. Legacy
+routes do not establish direct-owner continuity. A legacy turn without a
+recorded caller has no source label and breaks continuity; generated notices
+and tool results have their own labels or roles, not an implied owner source.
 
 **Turns recorded before.** A turn whose route does not name where it started
-renders as it always has, so no stored context is shown differently: its
+keeps its earlier label wording: its
 caller's relationship and DID, then one segment per step, with the step's
 adapter, its name, whose it is when not the owner's, a callable's caller, and
 a binding's sender id and handle, chat, thread and space. A turn stored before

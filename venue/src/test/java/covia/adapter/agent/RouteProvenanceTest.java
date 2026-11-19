@@ -208,9 +208,10 @@ public class RouteProvenanceTest {
 		assertFalse(TurnProvenance.ownerDirect(engine, helper, TurnProvenance.key(incoming)));
 		assertEquals(java.util.List.of(
 			"[From (venue-verified): your owner via auth (signed in, transport http, protocol mcp)]",
+			"[From (venue-verified): your owner via auth (signed in, transport http, protocol mcp)]",
 			"[From (venue-verified): your owner via auth (signed in)]"),
 			elements(incoming, incoming, turn(alice, "direct", signedIn(alice))),
-			"HTTP is labelled once, and returning to direct input is a source change");
+			"every HTTP input is labelled, as is returning to direct owner input");
 		AMap<AString, ACell> unreadableTransport = signedIn(alice).assoc(Fields.TRANSPORT, null);
 		assertFalse(TurnProvenance.ownerDirect(engine, helper,
 			TurnProvenance.key(turn(alice, "hello", unreadableTransport))),
@@ -218,28 +219,50 @@ public class RouteProvenanceTest {
 	}
 
 	@Test
-	public void theOwnerChattingDirectlyTakesNoElement() {
+	public void onlyConsecutiveDirectOwnerInputsOmitTheElement() {
 		AMap<AString, ACell> direct = turn(alice, "one", signedIn(alice));
-		assertEquals(java.util.List.of(), elements(direct, turn(alice, "two", signedIn(alice))),
-			"the common case carries no attribution");
+		String ownerLabel = "[From (venue-verified): your owner via auth (signed in)]";
+		assertEquals(java.util.List.of(ownerLabel), elements(direct, turn(alice, "two", signedIn(alice))),
+			"the first owner input is labelled; only the following owner input omits it");
 		AMap<AString, ACell> viaToken = turn(alice, "three", record("token", alice, RouteText.builder().name(Strings.create("bot")).build()));
 		assertEquals(java.util.List.of(
+			ownerLabel,
 			"[From (venue-verified): your owner via token (\"bot\")]",
 			"[From (venue-verified): your owner via auth (signed in)]"),
 			elements(direct, viaToken, turn(alice, "four", signedIn(alice))),
 			"another source takes one, and so does the switch back to the owner");
 		AString planner = Principals.agentDID(alice, Strings.create("planner"));
-		assertEquals(1, elements(turn(planner, "hi", record("agent", planner)), turn(planner, "again", record("agent", planner))).size(),
-			"one source, one element");
+		assertEquals(2, elements(turn(planner, "hi", record("agent", planner)), turn(planner, "again", record("agent", planner))).size(),
+			"every sibling input is labelled even when the source is unchanged");
+		assertEquals(java.util.List.of(ownerLabel), elements(direct,
+			Maps.of("role", "assistant", Fields.CONTENT, "reply"), direct),
+			"the previous incoming source remains the owner across an assistant reply");
+		assertEquals(java.util.List.of(ownerLabel, ownerLabel), elements(direct,
+			Maps.of(Fields.MESSAGE, "legacy input without a source"), direct),
+			"an input without attribution cannot establish owner continuity");
 	}
 
 	@Test
-	public void turnsRecordedBeforeKeepTheirElements() {
+	public void everyOtherSourceRepeatsItsHint() {
+		AString self = Principals.agentDID(alice, Strings.create("helper"));
+		for (AMap<AString, ACell> incoming : java.util.List.of(
+				turn(bob, "hi", signedIn(bob)),
+				turn(alice, "hi", record("token", alice)),
+				turn(alice, "hi", record("scheduler", alice)),
+				turn(self, "hi", record("agent", self)),
+				turn(alice, "hi", signedIn(bob), record("user", alice)),
+				turn(alice, "hi", record("broken route", alice)))) {
+			assertEquals(java.util.List.of(bracket(incoming), bracket(incoming)), elements(incoming, incoming));
+		}
+	}
+
+	@Test
+	public void turnsRecordedBeforeKeepTheirLabelWording() {
 		AMap<AString, ACell> before = Maps.of(Fields.CALLER, alice, Fields.MESSAGE, Strings.create("old"));
 		AMap<AString, ACell> direct = turn(alice, "new", signedIn(alice));
 		java.util.List<String> shown = elements(before, direct);
-		assertEquals(java.util.List.of(TurnProvenance.element(Labels.BRACKET, engine, helper, before)), shown,
-			"the earlier turn renders as it always has, and the owner's next direct turn is the same source");
+		assertEquals(java.util.List.of(TurnProvenance.element(Labels.BRACKET, engine, helper, before), bracket(direct)), shown,
+			"legacy wording stays, but a legacy route cannot establish direct-owner continuity");
 		assertTrue(shown.get(0).startsWith("[From: "), shown.get(0));
 		AMap<AString, ACell> oldToken = Maps.of(Fields.CALLER, alice, Fields.MESSAGE, Strings.create("old"),
 			Fields.ROUTE, Vectors.of(Maps.of(Fields.ADAPTER, "token", Fields.NAME, "bot")));

@@ -120,7 +120,7 @@ public class IngressProvenanceTest {
 					String content = String.valueOf(RT.getIn(message, Fields.CONTENT));
 					if (content.startsWith("[From")) from = content;
 				}
-				if (direct) assertNull(from);
+				if (direct) assertEquals("[From (venue-verified): your owner via auth (signed in)]", from);
 				else {
 					assertNotNull(from, mode);
 					assertTrue(from.contains("transport http"), from);
