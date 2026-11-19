@@ -1878,8 +1878,9 @@ public class LangChainAdapterTest {
 			new dev.langchain4j.exception.TimeoutException(http(408, "request timeout")));
 		assertPassesOn(UnavailableException.class, LangChainAdapter.PROVIDER_FAILED, 529,
 			new dev.langchain4j.exception.InternalServerException(http(529, "overloaded")));
-		assertMapped(UnavailableException.class,
-			LangChainAdapter.PROVIDER_FAILED.formatted("anthropic", "claude-x", ""),
+		// A server error with no HTTP answer behind it is a response that held no answer
+		assertMapped(ResponseException.class,
+			ProviderStop.NO_ANSWER.formatted("anthropic", "claude-x", ""),
 			new dev.langchain4j.exception.InternalServerException("no choices " + PROVIDER_TEXT), false);
 		assertMapped(UnavailableException.class,
 			LangChainAdapter.PROVIDER_UNREACHABLE.formatted("anthropic", "claude-x"),

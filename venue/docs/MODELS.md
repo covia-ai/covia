@@ -466,10 +466,12 @@ Two gaps in LangChain4j 1.23.0 affect how a response is read:
 1. Its Anthropic mapper reads stop reason `refusal` as `OTHER` and exposes
    neither the provider's stop reason nor its `stop_details`, so Covia reads
    both from the raw response metadata.
-2. An OpenAI-format response with no choices arrives as an
-   `InternalServerException`, the exception an HTTP 5xx raises, so Covia cannot
-   tell a response with no answer from a provider that keeps failing, and such a
-   response suspends the agent rather than failing only its work.
+2. An OpenAI-format response with no choices, which some compatible providers
+   send holding only an error, arrives as an `InternalServerException`, the
+   exception an HTTP 5xx raises, and is not retried. A 5xx carries the HTTP
+   answer behind it and this does not, so Covia reads one without an HTTP
+   answer as a response that holds no answer, which fails the call, and a 5xx
+   as the provider failing.
 
 ## 6. Discovery
 

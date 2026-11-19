@@ -2219,9 +2219,10 @@ provider's own value, when the provider reports them. A `length` reply is
 incomplete: both agent runtimes discard its partial content and tool calls,
 retry once with a concise-response diagnostic, and fail clearly if the retry
 is truncated again. A response that holds no answer is not a reply, and the
-model call fails with a reason naming the provider and its own value: one the
-provider declined to give (an Anthropic refusal, an OpenAI refusal or content
-filter), or one it ended without an answer (a provider `error`). The model's
+model call fails with a reason naming the provider, and its own value where it
+gave one: one the provider declined to give (an Anthropic refusal, an OpenAI
+refusal or content filter), or one it ended without an answer (a provider
+`error`, or an OpenAI-format response with no choices). The model's
 `emptyResponse` option says how a response with no text and no tool calls
 after a normal stop is read ([MODELS.md §5.3](MODELS.md#53-inference-options-and-upstream-support)).
 A failed model call fails the task or chat the agent was answering, and the

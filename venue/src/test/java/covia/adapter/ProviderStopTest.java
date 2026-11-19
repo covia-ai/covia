@@ -28,7 +28,8 @@ import covia.venue.TestEngine;
 /**
  * Why a provider's response ended, read at the provider edge: a reply carries
  * OpenTelemetry's finish reason and the provider's own value, and a response
- * that holds no answer fails the call (MODELS.md §5.3).
+ * that holds no answer fails the call as no answer, not as the provider
+ * failing (MODELS.md §5.3).
  */
 class ProviderStopTest {
 
@@ -138,6 +139,16 @@ class ProviderStopTest {
 			failure("openai", GPT, openAi("\"partial\"", "content_filter"), null));
 		assertEquals(ProviderStop.NO_ANSWER.formatted("openai", GPT, " (error)"),
 			failure("openai", GPT, openAi("null", "error"), null));
+	}
+
+	@Test
+	void aResponseWithNoChoicesHoldsNoAnswer() {
+		String noAnswer = ProviderStop.NO_ANSWER.formatted("openai", GPT, "");
+		assertEquals(noAnswer, failure("openai", GPT,
+			"{\"id\":\"c\",\"object\":\"chat.completion\",\"created\":1,\"model\":\"" + GPT + "\",\"choices\":[]}", null),
+			"not the provider failing, which would stop an agent");
+		assertEquals(noAnswer, failure("openai", GPT, "{\"error\":{\"message\":\"" + FREE_TEXT + "\",\"code\":502}}", null),
+			"a successful response holding only an error has no answer either");
 	}
 
 	@Test

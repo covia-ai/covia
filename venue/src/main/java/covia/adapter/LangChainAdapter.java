@@ -664,10 +664,10 @@ public class LangChainAdapter extends AAdapter {
 	 * <p>The type says what failed. A refused key or a missing model is the
 	 * setup the call runs under, so {@code ConfigurationException}; a provider
 	 * that cannot be reached or keeps failing after langchain4j's retries is
-	 * {@code UnavailableException}; anything about this request's content is
-	 * {@code InvalidInputException}, {@code ResponseException} or
-	 * {@code UnsupportedException}. The agent harness relies on this split
-	 * (AGENT_LOOP.md §3.4).</p>
+	 * {@code UnavailableException}; anything about this request's content,
+	 * or a response that holds no answer, is {@code InvalidInputException},
+	 * {@code ResponseException} or {@code UnsupportedException}. The agent
+	 * harness relies on this split (AGENT_LOOP.md §3.4).</p>
 	 *
 	 * @param operatorKey whether the API key sent is the venue's own, which
 	 *        says who can fix a refused key
@@ -692,6 +692,12 @@ public class LangChainAdapter extends AAdapter {
 			failure = new UnavailableException(PROVIDER_RATE_LIMITED.formatted(provider, model, note));
 		} else if (e instanceof dev.langchain4j.exception.TimeoutException) {
 			failure = new UnavailableException(PROVIDER_TIMED_OUT.formatted(provider, model, note));
+		} else if (e instanceof dev.langchain4j.exception.InternalServerException && status == null) {
+			// With no HTTP answer behind it, this is a response the provider
+			// sent successfully that holds no answer: langchain4j raises an
+			// OpenAI-format response with no choices, or only an error, as a
+			// server error, once and without retrying it (MODELS.md §5.3).
+			failure = new ResponseException(ProviderStop.NO_ANSWER.formatted(provider, model, ""));
 		} else if (e instanceof dev.langchain4j.exception.InternalServerException) {
 			failure = new UnavailableException(PROVIDER_FAILED.formatted(provider, model, note));
 		} else if (e instanceof dev.langchain4j.exception.ModelNotFoundException) {
