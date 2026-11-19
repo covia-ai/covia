@@ -31,6 +31,9 @@ public final class VenueProcess {
 	private static final long DEFAULT_ACK_DELAY_MILLIS = 500;
 	private static final long HELPER_READY_TIMEOUT_MILLIS = 5_000;
 
+	/** Exit status of a venue process that a venue's failure stopped (sysexits {@code EX_SOFTWARE}). */
+	public static final int EX_SOFTWARE = 70;
+
 	/** Accepted restart plan returned before the requesting Job completes. */
 	public record RestartPlan(Path successorJar, Path fallbackJar,
 			long startupTimeoutMillis, String successorSha256, String fallbackSha256) {}
@@ -56,6 +59,7 @@ public final class VenueProcess {
 	private final List<Runnable> closeActions = new CopyOnWriteArrayList<>();
 	private final AtomicBoolean armed = new AtomicBoolean(false);
 	private final AtomicBoolean restartRequested = new AtomicBoolean(false);
+	private final AtomicBoolean stoppingFatally = new AtomicBoolean(false);
 
 	VenueProcess(Path currentJar, Path javaExecutable, List<String> jvmArgs,
 			List<String> mainArgs, HelperLauncher helperLauncher,
@@ -95,6 +99,28 @@ public final class VenueProcess {
 	/** Enables restart requests after all venues in the process have launched. */
 	public void arm() {
 		armed.set(true);
+	}
+
+	/**
+	 * Stops the process after a venue's failure it cannot carry on from: closes
+	 * every venue it runs, then exits with {@code status}. Only the first call
+	 * acts.
+	 */
+	void exitFatally(int status) {
+		if (!stoppingFatally.compareAndSet(false, true)) return;
+		closeVenues("fatal stop");
+		exitHandler.exit(status);
+	}
+
+	/** Closes the process's venues in the reverse of the order they joined it, each whatever the others do. */
+	private void closeVenues(String during) {
+		for (int i = closeActions.size() - 1; i >= 0; i--) {
+			try {
+				closeActions.get(i).run();
+			} catch (Throwable t) {
+				log.warn("Venue close during {} failed", during, t);
+			}
+		}
 	}
 
 	/**
@@ -176,13 +202,7 @@ public final class VenueProcess {
 
 			log.info("Relaunch helper pid {} ready; closing {} venue(s)",
 				helper.pid(), closeActions.size());
-			for (int i = closeActions.size() - 1; i >= 0; i--) {
-				try {
-					closeActions.get(i).run();
-				} catch (Throwable t) {
-					log.warn("Venue close during process handoff failed", t);
-				}
-			}
+			closeVenues("process handoff");
 			exitHandler.exit(0);
 		} catch (InterruptedException e) {
 			Thread.currentThread().interrupt();

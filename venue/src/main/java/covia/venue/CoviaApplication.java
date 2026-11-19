@@ -217,10 +217,24 @@ public final class CoviaApplication
 		Objects.requireNonNull(config, "config");
 		AccountKey key = keyPair.getAccountKey();
 		if (mounted.containsKey(key)) throw new ConflictException(String.format(ALREADY_MOUNTED, key));
-		VenueState state = VenueState.draft(venues, key, venueContext.withSigner(keyPair), host::persist);
+		VenueState state = VenueState.draft(venues, key, venueContext.withSigner(keyPair), host::persist,
+			fork -> forked(key, fork));
 		Engine engine = factory.create(config, this, keyPair);
 		mounted.put(key, new Mounted(state, engine, mounts++));
 		return engine;
+	}
+
+	/**
+	 * A mounted venue's copy published over another writer's version of its
+	 * record ({@link VenueState.Fork}). The venue cannot tell what else writes
+	 * its record, so it is logged at ERROR and the venue stops
+	 * ({@link Engine#stopFatally()}) for its operator to find out.
+	 */
+	private void forked(AccountKey key, VenueState.Fork fork) {
+		String message = String.format(VenueState.FORKED, key, fork.replacedStamp(), fork.replaced(), fork.stamp());
+		log.error(fork.replacedNewer() ? message + VenueState.REPLACED_NEWER : message);
+		Mounted venue = mounted.get(key);
+		if (venue != null) venue.engine().stopFatally();
 	}
 
 	/**

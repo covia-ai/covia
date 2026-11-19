@@ -9,6 +9,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.TreeMap;
+import java.util.function.Consumer;
 import java.util.function.Function;
 
 import convex.core.crypto.AKeyPair;
@@ -17,6 +18,7 @@ import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Blob;
+import convex.core.data.Hash;
 import convex.core.data.Maps;
 import convex.core.data.AccountKey;
 import convex.core.data.Index;
@@ -26,10 +28,12 @@ import convex.core.data.Path;
 import convex.core.data.SignedData;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
+import convex.core.exceptions.StoreException;
 import convex.core.lang.RT;
 import convex.core.store.AStore;
 import convex.core.store.MemoryStore;
 import convex.core.store.Persister;
+import convex.core.util.Utils;
 import convex.lattice.LatticeHost;
 import convex.lattice.ALatticeComponent;
 import convex.lattice.IndexComponent;
@@ -78,11 +82,12 @@ import covia.venue.migration.VenueMigrations;
  * copy into the record, signed once, by the default reconcile: the record takes
  * the copy where only the copy changed, and the copy takes the record where
  * only the record did, which only a snapshot signed with the venue's key and
- * newer than the copy's last publication can change. Where both changed, the
- * sync fails with a merge conflict, publishes nothing and keeps the copy:
- * forked executions' state invariants and external effects cannot in general
- * be merged, nor one chosen over the other, so one authoritative running
- * instance owns a venue, and failover must fence the previous writer.
+ * newer than the copy's last publication can change. Where both changed, two
+ * writers' versions exist, and forked executions' state invariants and
+ * external effects cannot in general be merged: one authoritative running
+ * instance owns a venue, so its copy's version replaces the other, and the
+ * venue stops for its operator to find the other writer. Any other copy, such
+ * as a {@link #fork()}, fails that sync with a merge conflict instead.
  * {@link #merge} selects one complete snapshot by whole-venue LWW, for backup,
  * replication and recovery. Children have no independent publication or merge
  * boundary.</p>
@@ -105,6 +110,9 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 	private final VenueContext context;
 	/** The venue value as one timestamped record: local edits stamp it, merges keep the newest. */
 	private final Timestamped<ACell> record;
+	/** Told when a mounted venue's copy publishes over another writer's version; null for any other copy. */
+	private final Consumer<Fork> forked;
+
 	public VenueContext getContext() { return context; }
 
 	@Override
@@ -116,20 +124,89 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 		return record.merge(incoming);
 	}
 
+	/**
+	 * Another writer's version of the venue, which the mounted copy's publication
+	 * replaced because the copy had changed too.
+	 *
+	 * @param stamp The copy's {@code :timestamp}, which the record now carries
+	 * @param replacedStamp The replaced version's {@code :timestamp}
+	 * @param replaced The replaced version's hash, or null if there was none
+	 */
+	public record Fork(long stamp, long replacedStamp, Hash replaced) {
+		/** Whether the replaced version is the newer, so a whole-venue LWW elsewhere may still prefer it. */
+		public boolean replacedNewer() {
+			return replacedStamp > stamp;
+		}
+	}
+
+	/**
+	 * Logged when a mounted venue publishes over another writer's version: the
+	 * venue's key, the replaced version's stamp and hash, then the venue's own stamp.
+	 */
+	public static final String FORKED = "Venue %s was changed by another writer while it ran: its record held a "
+		+ "version stamped %d (%s) that this venue had not written. The venue has written its own version, stamped %d, "
+		+ "over it and is stopping. Find what else writes this venue, such as a second instance with its key or state "
+		+ "delivered from outside, before restarting it.";
+
+	/** Added to {@link #FORKED} when the replaced version is the newer. */
+	public static final String REPLACED_NEWER = " The replaced version is the newer, so a replica, or that version "
+		+ "delivered again, may still prefer it.";
+
+	/** Why publishing failed after the record took the copy: its working state could not be persisted. */
+	public static final String PERSIST_FAILED = "Unable to persist the venue's working state after publishing it";
+
+	/**
+	 * Publishes this copy into its record. A side that alone changed wins, by
+	 * Convex's default reconcile: the record takes the copy's changes, and an
+	 * unchanged copy takes the record's, which only a newer snapshot signed with
+	 * the venue's key can have changed. Where both changed, a mounted venue's copy
+	 * owns its record: its version, with its own {@code :timestamp}, replaces the
+	 * other writer's, and the venue is told of the {@link Fork}. Any other copy
+	 * keeps the default, and fails with a merge conflict. Transactions on the
+	 * copy are unaffected: one that meets a concurrent change runs again under
+	 * its claim.
+	 *
+	 * @return The published value
+	 */
+	@Override
+	public ACell sync() {
+		if (forked == null) return super.sync();
+		syncChildren();
+		Fork[] found = new Fork[1];
+		ACell published = storage().reconcile((base, own, other) -> {
+			// Run again whenever the record moves under it; only the last run counts
+			found[0] = null;
+			if (Utils.equals(own, base)) return other;
+			if (Utils.equals(other, base)) return own;
+			found[0] = new Fork(Covia.venueTimestamp(own), Covia.venueTimestamp(other),
+				(other == null) ? null : other.getHash());
+			return own;
+		});
+		try {
+			persist();
+		} catch (IOException e) {
+			throw new StoreException(PERSIST_FAILED, e);
+		}
+		if (found[0] != null) forked.accept(found[0]);
+		return published;
+	}
+
 	/** Binds working storage and the policy its components share. */
 	private VenueState(AForkableCursor<ACell> cursor, AccountKey ownerKey, VenueContext context) {
-		this(cursor, ownerKey, context, null);
+		this(cursor, ownerKey, context, null, null);
 	}
 
 	/**
 	 * Binds working storage of its own, persisted through {@code persister}
 	 * ({@link #persist()}), or with its parent when {@code persister} is null.
+	 * {@code forked} is given for a mounted venue's copy alone ({@link #sync()}).
 	 */
 	private VenueState(AForkableCursor<ACell> cursor, AccountKey ownerKey, VenueContext context,
-			Persister persister) {
+			Persister persister, Consumer<Fork> forked) {
 		super(cursor, persister);
 		this.ownerKey = ownerKey;
 		this.context = context;
+		this.forked = forked;
 		this.record = new Timestamped<>(cursor, Covia.VENUE, context::currentTimestamp, Covia::stampVenue);
 	}
 
@@ -148,14 +225,15 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 	}
 
 	/**
-	 * The application's copy of a venue, signing with the context's signer and
-	 * persisted through {@code persister}, the host's, so that once saved it holds
-	 * its cells softly.
+	 * The application's copy of a mounted venue, signing with the context's
+	 * signer and persisted through {@code persister}, the host's, so that once
+	 * saved it holds its cells softly. It owns its record: {@code forked} is told
+	 * when it publishes over another writer's version ({@link #sync()}).
 	 */
 	static VenueState draft(OwnedMap<ACell, ACell> venues, AccountKey ownerKey, VenueContext context,
-			Persister persister) {
+			Persister persister, Consumer<Fork> forked) {
 		return new VenueState(venues.draft(ownerKey, context::sign).storage(), ownerKey, context,
-			Objects.requireNonNull(persister, "persister"));
+			Objects.requireNonNull(persister, "persister"), Objects.requireNonNull(forked, "forked"));
 	}
 
 	/**

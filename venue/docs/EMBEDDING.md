@@ -66,6 +66,15 @@ venue's record; `application.host().sync()` then publishes the root. A running
 engine does both. Code that edits the venue with no engine running calls them
 itself.
 
+The mounted venue owns its record. Venue state merged into the application
+from outside reaches the copy only while the copy has not changed since its
+last sync. If both changed, the venue writes its own version over the other,
+logs the fork at ERROR and closes its engine, as a second writer it cannot
+identify is a fault in the deployment
+([GRID_LATTICE_DESIGN.md](GRID_LATTICE_DESIGN.md#a4-signing)). To bring in
+state from outside without that, unmount the venue, merge the state, then
+mount it again; the merge keeps the newer snapshot.
+
 **JVM shutdown.** Register your shutdown work with
 `Shutdown.addHook(Shutdown.SERVICE, task)` (`convex.core.util.Shutdown`). It
 runs before Convex closes its servers and Etch files. `MainVenue` registers

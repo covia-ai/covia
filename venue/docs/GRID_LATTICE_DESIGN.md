@@ -855,12 +855,19 @@ changes the record behind the copy: a snapshot signed with the venue's key and
 newer than the copy's last publication (A.2), from another writer such as an
 embedder delivering state through the application. The copy takes it at its
 next sync; later reads and work see it, while work already running keeps what
-it read. Where both changed, the sync fails with a merge conflict, publishes
-nothing and keeps the copy, as every later sync does: two writers' versions are
-neither combined nor one chosen over the other. A venue that writes between
-syncs therefore takes incoming state only while its copy is unchanged. Nothing
-in the venue delivers state for a mounted venue, which one running instance
-owns.
+it read. Where both changed, two writers' versions exist, and they cannot be
+combined. One running instance owns a mounted venue, so its copy owns the
+record: the copy's version, with its own `:timestamp`, is published over the
+other writer's, which is not lost where it came from. The venue then logs the
+fork once at ERROR, naming both versions' stamps and the replaced version's
+hash, and stops (`Engine.stopFatally`): a standalone process closes every venue
+it runs and exits with status 70, and otherwise the engine closes. Its operator
+finds the other writer, such as a second instance with its key or state
+delivered from outside, before restarting it. If the replaced version is the
+newer, the log says so, since a replica or that version delivered again may
+still prefer it by LWW. A venue that writes between syncs therefore takes
+incoming state only while its copy is unchanged. Nothing in the venue delivers
+state for a mounted venue.
 
 On receiving foreign state (disk recovery, replication, federation),
 `SignedLattice.merge()` verifies the signature, merges if valid, re-signs a

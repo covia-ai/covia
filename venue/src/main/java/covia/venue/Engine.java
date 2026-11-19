@@ -1018,6 +1018,23 @@ public class Engine {
 		return lifecycle.closing();
 	}
 
+	/**
+	 * Stops this venue after a failure it cannot carry on from, unless it is
+	 * already stopping. The standalone process that manages it closes every venue
+	 * it runs and exits with {@link VenueProcess#EX_SOFTWARE}; without one, the
+	 * engine closes, which unmounts the venue. Runs on a thread of its own, so a
+	 * caller in the host's sync worker is not held by the close, which publishes
+	 * and flushes.
+	 */
+	void stopFatally() {
+		if (lifecycle.closing()) return;
+		VenueProcess control = processControl;
+		Thread.ofVirtual().name("venue-fatal-stop").start(() -> {
+			if (control != null) control.exitFatally(VenueProcess.EX_SOFTWARE);
+			else close();
+		});
+	}
+
 	/** Installs process control before MainVenue publishes restart authority. */
 	void setProcessControl(VenueProcess processControl) {
 		if (this.processControl != null && this.processControl != processControl) {
