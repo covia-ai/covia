@@ -33,6 +33,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Changed
 
+- HTTP, MCP and A2A agent input retains transport and verified credential-class provenance, including signed owner logins; sibling-agent labels and standard templates distinguish shared ownership and token issuance from owner approval.
 - Capability documentation now inventories module abilities, resource scopes and model-call boundaries; UCAN issuance cannot use presented granting rights to escape access-token or callable caps.
 - A stored secret or connected account that fails its integrity check, because it was altered or damaged or the venue key is misconfigured, is the venue's own failure: REST answers it as a server failure, A2A as `INTERNAL`, an agent whose step it stops is suspended, and the venue logs it once at ERROR naming whose it is; the message still names the record and how to replace it (#668).
 - Answering an approval request, `secret:extract`, `user:export`, `user:clone` from one's own account and reading or changing one's own sign-in keys need the user in person: work a job or scheduled event carries on later, and an operation a bot runs, can no longer do them.

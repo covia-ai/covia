@@ -1,6 +1,7 @@
 package covia.venue;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
@@ -44,6 +45,27 @@ public class RequestContextRouteTest {
 			Fields.TEXT, RequestContext.SIGNED_IN.parts())), RequestContext.of(ALICE).getRoute(),
 			"a request an in-process caller makes starts where it signed in");
 		assertNull(TestEngine.ENGINE.context(ALICE).getRoute(), "a context the venue makes for its own work has none");
+	}
+
+	@Test
+	public void ingressFactsDoNotChangeAuthority() {
+		Engine engine = TestEngine.ENGINE;
+		RequestContext local = engine.requestContext(ALICE, null);
+		RequestContext ingress = engine.requestContext(ALICE, null, Strings.create("http"),
+			Strings.create("a2a"), Strings.create("venueJwt"));
+		assertEquals(local.getAuthorityDID(), ingress.getAuthorityDID());
+		assertEquals(local.getOrigin(), ingress.getOrigin());
+		assertEquals(local.getCaps(), ingress.getCaps());
+		assertEquals(local.getProofs(), ingress.getProofs());
+		assertEquals(1, ingress.getRoute().count());
+		assertEquals(Strings.create("http"), RT.getIn(ingress.getRoute(), 0, Fields.TRANSPORT));
+		assertEquals(Strings.create("a2a"), RT.getIn(ingress.getRoute(), 0, Fields.PROTOCOL));
+		assertEquals(Strings.create("venueJwt"), RT.getIn(ingress.getRoute(), 0, Fields.CREDENTIAL_TYPE));
+		RequestContext unknown = engine.requestContext(ALICE, null, Strings.create("http"), null, null);
+		AMap<AString, ACell> record = RT.ensureMap(unknown.getRoute().get(0));
+		assertFalse(record.containsKey(Fields.CREDENTIAL_TYPE));
+		assertFalse(record.containsKey(Fields.PROTOCOL));
+		assertNull(RT.getIn(local.getRoute(), 0, Fields.TRANSPORT));
 	}
 
 	@Test

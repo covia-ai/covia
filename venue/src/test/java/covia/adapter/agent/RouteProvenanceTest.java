@@ -145,7 +145,7 @@ public class RouteProvenanceTest {
 	@Test
 	public void agentsAreNamedAsSuchOnlyWhereTheVenueRanThem() {
 		AString planner = Principals.agentDID(alice, Strings.create("planner"));
-		assertEquals("[From (venue-verified): an agent of your owner (\"planner\", " + planner + ") via agent]",
+		assertEquals("[From (venue-verified): an agent belonging to your owner (\"planner\", " + planner + "), not your owner, via agent]",
 			bracket(turn(planner, "hi", record("agent", planner))));
 		AString ops = Principals.agentDID(bob, Strings.create("ops"));
 		assertEquals("[From (venue-verified): an agent of another user (\"ops\", " + ops + "), not your owner, via agent]",
@@ -199,6 +199,23 @@ public class RouteProvenanceTest {
 	}
 
 	// ========== When the element appears ==========
+
+	@Test
+	public void anHttpOwnerLoginIsLabelledEvenAtTheStart() {
+		RequestContext http = engine.requestContext(alice, null, Strings.create("http"),
+			Strings.create("mcp"), Strings.create("venueJwt"));
+		AMap<AString, ACell> incoming = Maps.of(Fields.CALLER, alice, Fields.ROUTE, http.getRoute(), Fields.MESSAGE, "hello");
+		assertFalse(TurnProvenance.ownerDirect(engine, helper, TurnProvenance.key(incoming)));
+		assertEquals(java.util.List.of(
+			"[From (venue-verified): your owner via auth (signed in, transport http, protocol mcp, credential venueJwt)]",
+			"[From (venue-verified): your owner via auth (signed in)]"),
+			elements(incoming, incoming, turn(alice, "direct", signedIn(alice))),
+			"HTTP is labelled once, and returning to direct input is a source change");
+		AMap<AString, ACell> unreadableTransport = signedIn(alice).assoc(Fields.TRANSPORT, null);
+		assertFalse(TurnProvenance.ownerDirect(engine, helper,
+			TurnProvenance.key(turn(alice, "hello", unreadableTransport))),
+			"a present but unreadable transport cannot be treated as direct input");
+	}
 
 	@Test
 	public void theOwnerChattingDirectlyTakesNoElement() {

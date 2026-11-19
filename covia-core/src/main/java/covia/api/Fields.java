@@ -335,6 +335,12 @@ public class Fields {
 	public static final StringShort ROUTE = Strings.intern("route");
 	/** On a route record: the name of the adapter that wrote it. */
 	public static final StringShort VIA = Strings.intern("via");
+	/** Verified ingress transport on a request's first route record. */
+	public static final StringShort TRANSPORT = Strings.intern("transport");
+	/** Application protocol known by the ingress endpoint, when any. */
+	public static final StringShort PROTOCOL = Strings.intern("protocol");
+	/** Credential class established by the verifier, never the bearer itself. */
+	public static final StringShort CREDENTIAL_TYPE = Strings.intern("credentialType");
 	/** On a route record: the principal it vouches for, which holds the request after it. */
 	public static final StringShort PRINCIPAL = Strings.intern("principal");
 	/** On the scheduler's route record: when the event that fired was due, in milliseconds since the epoch. */
