@@ -10,7 +10,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Added
 
-- Compaction keeps an agent's last exchanges word for word after its summary: the agent's `compactKeep` sets how many (default 5, 0 for none), `agent:compactSession` takes `keep` to override it and reports `keptExchanges`, and a conversation of no more exchanges than are kept is left unchanged.
+- Compaction keeps the messages and answers of an agent's last exchanges after its summary, their tool calls and results staying in history: the agent's `compactKeep` sets how many (default 5, 0 for none), `agent:compactSession` takes `keep` to override it and reports `keptExchanges`, and a conversation of no more exchanges than are kept is left unchanged.
 
 - Asset creation consistently accepts `asset/store` on the owner's `a/` collection across adapters and REST registration; existing unscoped grants remain valid.
 

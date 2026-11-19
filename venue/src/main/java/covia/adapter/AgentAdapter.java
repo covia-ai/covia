@@ -3310,7 +3310,7 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	/** Explicit owner-side compaction of an idle session, keeping its last
-	 * exchanges word for word (AGENT_CONTEXT.md §5.6). The replaced history stays
+	 * exchanges' messages and answers (AGENT_CONTEXT.md §5.6). The replaced history stays
 	 * where it is, covered by the summary; the Job returns bounded metadata
 	 * rather than copying that transcript again. */
 	private void handleCompactSession(Job job, ACell input, RequestContext ctx) {

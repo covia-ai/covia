@@ -105,7 +105,7 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	public static final AString K_CONTEXT         = Strings.intern("context");
 	public static final AString K_TOOL_CALL_TIMEOUT_MS = Strings.intern("toolCallTimeoutMs");
 	public static final AString K_MAX_TOOL_ITERATIONS  = Strings.intern("maxToolIterations");
-	/** Agent config: exchanges compaction keeps word for word. */
+	/** Agent config: exchanges compaction keeps after its summary. */
 	public static final AString K_COMPACT_KEEP         = Strings.intern("compactKeep");
 	public static final AString K_LLM_TIMEOUT_MS       = Strings.intern("llmTimeoutMs");
 	public static final AString K_RECORD_TOOL_CALLS    = Strings.intern("recordToolCalls");
@@ -1002,7 +1002,7 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	}
 
 	/**
-	 * Exchanges an agent's compaction keeps word for word: its
+	 * Exchanges an agent's compaction keeps after its summary: its
 	 * {@code config.compactKeep} ({@code >= 0}, validated when the config is
 	 * set), else {@link GoalTreeContext#DEFAULT_COMPACT_KEEP}.
 	 */

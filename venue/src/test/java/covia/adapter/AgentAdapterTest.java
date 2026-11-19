@@ -7171,7 +7171,7 @@ public class AgentAdapterTest {
 		AMap<AString, ACell> repeat = RT.ensureMap(active.get(1));
 		assertEquals(CVMLong.create(second), repeat.get(GoalTreeContext.K_REPEAT_OF));
 		assertEquals(before.get(second), repeat.dissoc(GoalTreeContext.K_REPEAT_OF),
-			"the kept exchange follows the summary word for word");
+			"the kept exchange's message follows the summary as it was");
 
 		AMap<AString, ACell> compacted = root.get();
 		ACell again = engine.jobs().invokeOperation("v/ops/agent/compact-session", compactSession, alice)

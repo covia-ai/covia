@@ -235,7 +235,7 @@ Protocol limitation: LLM tool call arguments must be JSON objects (OpenAI, Anthr
 ```json5
 {
   name: "compact",
-  description: "Archive the conversation so far under a summary you write; your most recent exchanges stay word for word.",
+  description: "Archive the conversation so far under a summary you write; your most recent exchanges stay as their messages and answers.",
   parameters: { summary: { type: "string" } }
 }
 ```
@@ -243,7 +243,7 @@ Protocol limitation: LLM tool call arguments must be JSON objects (OpenAI, Anthr
 When the agent calls `compact`:
 1. The visible conversation, all but its last `compactKeep` exchanges (default 5, the one in progress among them), is covered by a new segment
 2. The LLM's summary and recursive leaf-turn count become the segment's visible representation
-3. The conversation becomes that segment followed by the kept exchanges, word for word
+3. The conversation becomes that segment followed by the kept exchanges' incoming messages and answers; their tool calls and results stay in history
 4. The rendered prefix is rebuilt once; later turns append normally
 
 A conversation no longer than the exchanges kept is left as it is, and the tool says so. AGENT_CONTEXT.md §5.6 defines an exchange and the storage. Repeated compaction covers the earlier segment together with the newer turns. This bounds the provider-visible representation without changing or duplicating the audit history. The segment renders as an `assistant` message: an agent-written summary may describe untrusted tool data and must not acquire system authority merely because it was persisted.

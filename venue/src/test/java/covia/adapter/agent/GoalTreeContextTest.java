@@ -859,12 +859,14 @@ public class GoalTreeContextTest {
 		assertEquals(Vectors.of(CVMLong.ZERO, CVMLong.create(4)), summary.get(GoalTreeContext.K_HISTORY_RANGE),
 			"the summary covers only what it replaced");
 		AVector<ACell> kept = active.slice(1, active.count());
-		assertEquals(before.slice(4, before.count()), withoutRepeatMarks(kept), "the kept exchanges, word for word");
-		for (long i = 0; i < kept.count(); i++) {
-			assertEquals(CVMLong.create(4 + i), RT.getIn(kept.get(i), GoalTreeContext.K_REPEAT_OF),
+		long[] originals = {4, 6, 7, 8, 9, 10};
+		assertEquals(originals.length, kept.count(), "the kept messages and answers; an empty reply is neither");
+		for (int i = 0; i < originals.length; i++) {
+			assertEquals(CVMLong.create(originals[i]), RT.getIn(kept.get(i), GoalTreeContext.K_REPEAT_OF),
 				"each repeat names its original's position");
+			assertEquals(before.get(originals[i]), RT.ensureMap(kept.get(i)).dissoc(GoalTreeContext.K_REPEAT_OF));
 		}
-		assertEquals(before.count(), GoalTreeContext.countTurns(compacted), "every entry counted once");
+		assertEquals(4 + kept.count(), GoalTreeContext.countTurns(compacted), "the replaced entries and the repeats");
 		assertEquals(before.slice(0, 4), RT.getIn(GoalTreeContext.archivedConversation(compacted).get(0),
 			GoalTreeContext.K_ITEMS), "the summary's archive holds the replaced entries only");
 
@@ -875,25 +877,30 @@ public class GoalTreeContextTest {
 	}
 
 	@Test
-	public void compactionNeverPartsAToolCallFromItsResult() {
+	public void keptExchangesAreRepeatedWithoutTheirToolActivity() {
+		AMap<AString, ACell> answer = Maps.of("role", "assistant", "content", "a2",
+			Fields.PROVIDER_STATE, Maps.of("signature", "for the tool exchange"));
 		AMap<AString, ACell> frame = historyFrame(
 			userTurn("q1"), assistantText("a1"),
 			userTurn("q2"), toolCalls(call("c1", "one"), call("c2", "two")), result("c1", "r1"),
 			// Arrives while a call awaits its result: part of the exchange in progress.
-			userTurn("meanwhile"), result("c2", "r2"), assistantText("a2"));
-		AVector<ACell> kept = GoalTreeContext.activeConversation(
-			GoalTreeContext.compact(frame, "first", null, 1).frame());
-		assertEquals(Vectors.of(userTurn("q2"), toolCalls(call("c1", "one"), call("c2", "two")), result("c1", "r1"),
-			userTurn("meanwhile"), result("c2", "r2"), assistantText("a2")),
-			withoutRepeatMarks(kept.slice(1, kept.count())));
+			userTurn("meanwhile"), result("c2", "r2"), answer);
+		GoalTreeContext.Compaction compaction = GoalTreeContext.compact(frame, "first", null, 1);
+		assertEquals(2, compaction.replaced(), "the message during the calls did not start an exchange");
+		AVector<ACell> kept = GoalTreeContext.activeConversation(compaction.frame());
+		assertEquals(Vectors.of(userTurn("q2"), userTurn("meanwhile"), answer.dissoc(Fields.PROVIDER_STATE)),
+			withoutRepeatMarks(kept.slice(1, kept.count())),
+			"the messages and the answer, without the calls, their results or the answer's continuation data");
+		assertSame(compaction.frame(), GoalTreeContext.compact(compaction.frame(), "again", null, 1).frame(),
+			"the repeats still hold the one kept exchange");
 
 		AMap<AString, ACell> unfinished = historyFrame(
 			userTurn("q1"), assistantText("a1"), userTurn("q2"), toolCalls(call("c1", "one")));
-		GoalTreeContext.Compaction compaction = GoalTreeContext.compact(unfinished, "first", null, 1);
+		compaction = GoalTreeContext.compact(unfinished, "first", null, 1);
 		assertEquals(2, compaction.replaced(), "an unfinished exchange counts as one of those kept");
 		AVector<ACell> active = GoalTreeContext.activeConversation(compaction.frame());
-		assertEquals(Vectors.of(userTurn("q2"), toolCalls(call("c1", "one"))),
-			withoutRepeatMarks(active.slice(1, active.count())));
+		assertEquals(Vectors.of(userTurn("q2")), withoutRepeatMarks(active.slice(1, active.count())),
+			"the request in progress stays; its tool work so far is the summary's to cover");
 	}
 
 	@Test
@@ -905,13 +912,15 @@ public class GoalTreeContextTest {
 		frame = GoalTreeContext.appendTurns(frame, Vectors.of(
 			toolCalls(call("ctx-1", ContextAssembler.LOADED_CONTEXT_TOOL)),
 			Maps.of("role", "tool", "id", "ctx-1", "name", ContextAssembler.LOADED_CONTEXT_TOOL, "content", "loaded"),
+			Maps.of("role", "system", "content", "a skill body or a diagnostic"),
+			Maps.of("role", "user", "source", "toolOutcome", "content", "a late tool result"),
 			assistantText("a2")));
 		long q2 = 2;
 
 		AMap<AString, ACell> compacted = GoalTreeContext.compact(frame, "first", null, 1).frame();
 		AVector<ACell> active = GoalTreeContext.activeConversation(compacted);
 		assertEquals(Vectors.of(userTurn("q2"), assistantText("a2")), withoutRepeatMarks(active.slice(1, active.count())),
-			"the watched value in force and the venue's context exchange are rendered afresh, not repeated");
+			"watched values, loaded context, system entries and late tool results are not repeated");
 		assertEquals(CVMLong.create(q2), RT.getIn(active.get(1), GoalTreeContext.K_REPEAT_OF));
 		assertNull(compacted.get(GoalTreeContext.K_OBSERVATIONS));
 		assertEquals(GoalTreeContext.history(frame), GoalTreeContext.history(compacted).slice(0,

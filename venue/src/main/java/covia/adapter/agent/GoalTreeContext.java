@@ -691,8 +691,8 @@ public class GoalTreeContext {
 
 	// ========== Compaction ==========
 
-	/** Exchanges a compaction keeps word for word when the agent's config sets
-	 *  no {@code compactKeep}. */
+	/** Exchanges a compaction keeps after its summary when the agent's config
+	 *  sets no {@code compactKeep}. */
 	public static final int DEFAULT_COMPACT_KEEP = 5;
 
 	/** On an entry a compaction repeats after its summary: the history position
@@ -704,7 +704,7 @@ public class GoalTreeContext {
 	 *
 	 * @param frame the frame after it, the same frame when nothing was replaced
 	 * @param replaced live entries the summary replaced; 0 when nothing was
-	 * @param kept exchanges kept word for word after the summary
+	 * @param kept exchanges kept after the summary
 	 */
 	public record Compaction(AMap<AString, ACell> frame, long replaced, long kept) {
 		public boolean applied() { return replaced > 0; }
@@ -712,7 +712,7 @@ public class GoalTreeContext {
 
 	/**
 	 * Compacts the frame's whole visible conversation into one new segment,
-	 * keeping nothing word for word.
+	 * keeping no exchange.
 	 *
 	 * @param frame the frame to compact
 	 * @param summary LLM-provided summary of the compacted turns
@@ -729,9 +729,11 @@ public class GoalTreeContext {
 	 * compacting again straight after a compaction changes nothing.
 	 *
 	 * <p>History frames append a summary referencing the replaced range, then
-	 * repeat the kept entries ({@link #K_REPEAT_OF}), and start the context at
-	 * the summary. Legacy frames nest the replaced vector under items, followed
-	 * by the kept entries. Both retain every original cell for inspection.</p>
+	 * repeat the kept exchanges' messages and answers ({@link #K_REPEAT_OF}),
+	 * and start the context at the summary; the kept originals, tool activity
+	 * included, stay in history before it. Legacy frames, which the runtime
+	 * migrates before compacting, nest the replaced vector under items followed
+	 * by the kept entries as they are. Both retain every original cell.</p>
 	 *
 	 * @param provenance optional non-rendered fields for the summary
 	 */
@@ -851,10 +853,13 @@ public class GoalTreeContext {
 	}
 
 	/**
-	 * The entries a compaction keeps, repeated after its summary, each marked
-	 * with the history position of its original. Left out are the watched
-	 * values in force and the venue's own context exchanges, which compaction
-	 * renders afresh in the next context.
+	 * The kept exchanges as a compaction repeats them after its summary: their
+	 * incoming messages and their answers, each marked with the history position
+	 * of its original. Their tool calls and results, late tool outcomes,
+	 * diagnostics, loaded context and watched values stay only in history; the
+	 * next context renders loads and watched values afresh. An answer is
+	 * repeated without its provider continuation data, which belongs to the
+	 * tool exchange left out.
 	 */
 	@SuppressWarnings("unchecked")
 	private static AVector<ACell> repeats(AMap<AString, ACell> frame,
@@ -867,42 +872,21 @@ public class GoalTreeContext {
 				if (messages != null) for (ACell message : messages) observed.add(message);
 			}
 		}
-		java.util.Set<ACell> contextCalls = new java.util.HashSet<>();
 		AVector<ACell> out = Vectors.empty();
 		for (long i = cut; i < conversation.count(); i++) {
 			ACell entry = conversation.get(i);
-			if (observed.contains(entry)) continue;
-			if (!(entry instanceof AMap<?, ?> raw)) {
-				out = out.conj(entry);
-				continue;
-			}
+			if (observed.contains(entry) || !(entry instanceof AMap<?, ?> raw) || isSegment(raw)) continue;
 			AMap<AString, ACell> turn = (AMap<AString, ACell>) raw;
 			AString role = RT.ensureString(turn.get(K_ROLE));
-			if (ROLE_ASSISTANT.equals(role) && contextExchange(turn)) {
-				for (ACell call : RT.ensureVector(turn.get(K_TOOL_CALLS))) {
-					contextCalls.add(RT.getIn(call, AbstractLLMAdapter.K_ID));
-				}
-				continue;
-			}
-			if (ROLE_TOOL.equals(role) && contextCalls.contains(turn.get(AbstractLLMAdapter.K_ID))) continue;
-			out = out.conj(turn.assoc(K_REPEAT_OF, CVMLong.create(start + i)));
+			boolean message = ROLE_USER.equals(role)
+				&& !Agent.SOURCE_TOOL_OUTCOME.equals(turn.get(Agent.K_SOURCE));
+			AVector<ACell> calls = RT.ensureVector(turn.get(K_TOOL_CALLS));
+			boolean answer = ROLE_ASSISTANT.equals(role) && (calls == null || calls.isEmpty())
+				&& visibleText(turn.get(K_CONTENT));
+			if (answer) turn = turn.dissoc(covia.api.Fields.PROVIDER_STATE);
+			if (message || answer) out = out.conj(turn.assoc(K_REPEAT_OF, CVMLong.create(start + i)));
 		}
 		return out;
-	}
-
-	/** Whether an assistant message is the venue's call bringing context data
-	 *  in: every call is to {@code loaded_context} or {@code pinned_context}. */
-	private static boolean contextExchange(AMap<AString, ACell> turn) {
-		AVector<ACell> calls = RT.ensureVector(turn.get(K_TOOL_CALLS));
-		if (calls == null || calls.isEmpty()) return false;
-		for (ACell call : calls) {
-			ACell name = RT.getIn(call, AbstractLLMAdapter.K_NAME);
-			if (name == null) return false;
-			String n = name.toString();
-			if (!n.equals(ContextAssembler.LOADED_CONTEXT_TOOL)
-					&& !n.equals(ContextAssembler.PINNED_CONTEXT_TOOL)) return false;
-		}
-		return true;
 	}
 
 	/** Persists the exact initial vectors on a frame. */

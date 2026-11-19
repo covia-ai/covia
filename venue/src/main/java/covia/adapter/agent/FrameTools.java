@@ -27,10 +27,10 @@ class FrameTools {
 	static final String COMPACTED = "Compacted %d entries into an archived summary. Context freed.";
 	/** The reply to {@code compact} that keeps exchanges: entries archived, exchanges kept. */
 	static final String COMPACTED_KEEPING = "Compacted %d entries into an archived summary. Context freed;"
-		+ " the last %d exchanges, this one included, stay word for word.";
+		+ " the last %d exchanges, this one included, stay as their messages and answers, without tool calls.";
 	/** The reply to {@code compact} when the conversation is no longer than what it keeps. */
 	static final String NOT_COMPACTED = "Nothing compacted: the conversation since the last compaction"
-		+ " is %d exchanges or fewer, and that many stay word for word.";
+		+ " is %d exchanges or fewer, and that many are kept.";
 
 	final AbstractLLMAdapter runtime;
 	/** The agent's authority: every tool call, and every load the agent or a
@@ -42,7 +42,7 @@ class FrameTools {
 	final long toolCallTimeoutMs;
 	/** Whether the agent's tool calls are recorded from the start ({@code recordToolCalls}). */
 	final boolean recordToolCalls;
-	/** Exchanges compaction keeps word for word ({@code compactKeep}). */
+	/** Exchanges compaction keeps after its summary ({@code compactKeep}). */
 	final int compactKeep;
 	/** Effective loads of the agent tier ({@code config.loads}), read-only here. */
 	final AMap<AString, ACell> outerLoads;
