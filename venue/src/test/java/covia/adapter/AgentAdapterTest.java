@@ -7121,7 +7121,7 @@ public class AgentAdapterTest {
 				"llmOperation", "v/test/ops/llm",
 				"compactKeep", 1)), alice).awaitResult(5000);
 		ACell first = engine.jobs().invokeOperation("v/ops/agent/chat",
-			Maps.of(Fields.AGENT_ID, "compact-keep-agent", Fields.MESSAGE, "first"), alice).awaitResult(5000);
+			Maps.of(Fields.AGENT_ID, "compact-keep-agent", Fields.MESSAGE, "REPLACED_EXCHANGE"), alice).awaitResult(5000);
 		Blob sid = Ids.stored(RT.getIn(first, Fields.SESSION_ID));
 		Agent agent = engine.getVenueState().users().user(ALICE_DID).agent("compact-keep-agent");
 		java.util.function.Supplier<AMap<AString, ACell>> root = () -> RT.ensureMap(
@@ -7136,7 +7136,7 @@ public class AgentAdapterTest {
 		// The second exchange starts with its message, appended at the history's end.
 		long second = GoalTreeContext.history(root.get()).count();
 		engine.jobs().invokeOperation("v/ops/agent/chat",
-			Maps.of(Fields.AGENT_ID, "compact-keep-agent", Fields.SESSION_ID, sid, Fields.MESSAGE, "second"),
+			Maps.of(Fields.AGENT_ID, "compact-keep-agent", Fields.SESSION_ID, sid, Fields.MESSAGE, "KEPT_EXCHANGE"),
 			alice).awaitResult(5000);
 		AVector<ACell> before = GoalTreeContext.history(root.get());
 		assertEquals(Strings.create("user"), RT.getIn(before.get(second), "role"));
@@ -7159,6 +7159,20 @@ public class AgentAdapterTest {
 			.awaitResult(5000);
 		assertEquals(CVMBool.FALSE, RT.getIn(again, "compacted"));
 		assertEquals(compacted, root.get(), "compacting again changes nothing");
+
+		// The next inference sees the summary, then the kept exchange once, then the new message.
+		engine.jobs().invokeOperation("v/ops/agent/chat",
+			Maps.of(Fields.AGENT_ID, "compact-keep-agent", Fields.SESSION_ID, sid, Fields.MESSAGE, "NEXT_EXCHANGE"),
+			alice).awaitResult(5000);
+		String sent = String.valueOf(RT.getIn(TestAdapter.CAPTURED_LLM_INPUT.get(Strings.create("compact-keep-agent")),
+			"messages"));
+		assertTrue(sent.contains("Notes on the first exchange."), sent);
+		assertFalse(sent.contains("REPLACED_EXCHANGE"), sent);
+		int kept = sent.split("KEPT_EXCHANGE", -1).length - 1;
+		assertEquals(before.slice(second, before.count()).toString().split("KEPT_EXCHANGE", -1).length - 1, kept,
+			"the kept exchange appears as often as it did before, not twice over: " + sent);
+		assertTrue(sent.indexOf("Notes on the first exchange.") < sent.indexOf("KEPT_EXCHANGE")
+			&& sent.indexOf("KEPT_EXCHANGE") < sent.indexOf("NEXT_EXCHANGE"), sent);
 
 		Job refused = engine.jobs().invokeOperation("v/ops/agent/compact-session",
 			compactSession.assoc(Strings.intern("keep"), CVMLong.create(-1)), alice);
