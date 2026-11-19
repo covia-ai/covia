@@ -176,22 +176,29 @@ public final class Cap extends ALatticeComponent<AMap<AString, ACell>>
 	 * Whether a {@code nb.url} caveat covers a destination: the same scheme,
 	 * host and effective port, and a path equal to the caveat's or below it at
 	 * a {@code /} boundary. A caveat path ending in {@code /} covers everything
-	 * under it. Both URLs use the outbound normal form, defensively even for
-	 * non-HTTP adapters. Query and fragment never matter; ambiguous or invalid
-	 * input is not covered.
+	 * under it. Path-bound grants use the outbound normal form, defensively
+	 * even for non-HTTP adapters; ambiguous paths are not covered. Origin-only
+	 * grants accept protocol-generated encoded identifiers. Query and fragment
+	 * never matter, and invalid origins are never covered.
 	 */
 	public static boolean urlCovers(String prefix, String destination) {
+		if (prefix == null || destination == null) return false;
 		try {
 			java.net.URI p = covia.utils.HTTPURLs.normalize(prefix);
-			java.net.URI d = covia.utils.HTTPURLs.normalize(destination);
+			java.net.URI raw = java.net.URI.create(destination);
+			java.net.URI d = covia.utils.HTTPURLs.normalize(raw.getScheme() + "://" + raw.getRawAuthority() + "/");
 			if (p.getScheme() == null || p.getHost() == null || d.getScheme() == null || d.getHost() == null) return false;
 			if (!p.getScheme().equalsIgnoreCase(d.getScheme()) || !p.getHost().equalsIgnoreCase(d.getHost())) return false;
 			if (effectivePort(p) != effectivePort(d)) return false;
 			String pp = (p.getRawPath() == null || p.getRawPath().isEmpty()) ? "/" : p.getRawPath();
+			// An origin grant cannot be escaped by a path encoding. Protocol
+			// clients may encode slashes inside ids; path-bound grants remain strict.
+			if ("/".equals(pp)) return true;
+			d = covia.utils.HTTPURLs.normalize(raw);
 			String dp = (d.getRawPath() == null || d.getRawPath().isEmpty()) ? "/" : d.getRawPath();
 			if (pp.endsWith("/")) return dp.startsWith(pp) || (dp + "/").equals(pp);
 			return dp.equals(pp) || dp.startsWith(pp + "/");
-		} catch (covia.exception.InvalidInputException e) {
+		} catch (covia.exception.InvalidInputException | IllegalArgumentException e) {
 			return false;
 		}
 	}

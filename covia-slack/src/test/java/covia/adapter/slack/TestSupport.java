@@ -145,7 +145,7 @@ final class TestSupport {
   }
   static final class Fixture implements AutoCloseable {
     final FakeAPI api = new FakeAPI();
-    final Engine engine = Engine.createTemp(Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true)));
+    final Engine engine = Engine.createTemp(Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true), Config.ADAPTERS, Maps.of("http", Maps.of("allowedHosts", Vectors.of("127.0.0.1")))));
     final SlackAdapter adapter = new SlackAdapter();
     Fixture(AMap<AString,ACell> spec) throws Exception { this(spec, null); }
     /** socketUrl is what apps.connections.open returns from the first attempt. */

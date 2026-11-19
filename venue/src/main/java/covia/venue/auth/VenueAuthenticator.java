@@ -246,6 +246,11 @@ public final class VenueAuthenticator {
 
 	/** Returns request authentication evidence, or null when none is bound. */
 	public AuthResult authenticationResult(Context context) {
+		return resultOf(context);
+	}
+
+	/** Authentication evidence currently bound by trusted host code, or null when absent. */
+	public static AuthResult resultOf(Context context) {
 		return context.attribute(AUTH_RESULT_ATTR);
 	}
 

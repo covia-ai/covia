@@ -69,11 +69,26 @@ final class TaskTools {
 	private static final AMap<AString, ACell> DEF_PARK =
 		HarnessTools.definition(BASE + "parkTask.json", PARK);
 
-	/** The task tools. They remain in the immutable harness palette; without an
+	/** The task tools, as a cycle offers them ({@link #offered}); without an
 	 * outstanding task their handlers return a scoped error. */
 	static final AVector<ACell> DEFINITIONS = Vectors.of((ACell) DEF_COMPLETE, (ACell) DEF_FAIL, (ACell) DEF_PARK);
 
 	private TaskTools() {}
+
+	/**
+	 * The task tools a cycle's root frame offers: all of them when the agent
+	 * takes tasks ({@link AgentAdapter#acceptsTasks}) or the cycle carries a
+	 * task, which an agent that does not take them may have queued before it
+	 * stopped; none otherwise. They are never part of a persisted rendering
+	 * (AGENT_CONTEXT.md §3.2.3).
+	 *
+	 * @param config the agent's config as stored
+	 * @param tasks the cycle's tasks, or null
+	 */
+	static AVector<ACell> offered(AMap<AString, ACell> config, AVector<ACell> tasks) {
+		boolean carried = tasks != null && !tasks.isEmpty();
+		return (carried || AgentAdapter.acceptsTasks(config)) ? DEFINITIONS : Vectors.empty();
+	}
 
 	/**
 	 * One cycle's tasks and what has been resolved so far. In {@code preview}
@@ -112,11 +127,6 @@ final class TaskTools {
 		/** What was resolved this cycle: jobId → {status, output | error}; null when nothing. */
 		AMap<ACell, ACell> results() {
 			return results;
-		}
-
-		/** The stable task-tool definitions. */
-		AVector<ACell> tools() {
-			return DEFINITIONS;
 		}
 
 		/**

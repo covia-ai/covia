@@ -2725,6 +2725,7 @@ public class LangChainAdapterTest {
 
 			// Its caps may grant the use, bound to where the key may go...
 			RequestContext mayUse = RequestContext.ofAgent(callerDID, Strings.create("bot")).withCaps(Vectors.of(invokeAny,
+				convex.auth.ucan.Capability.create(covia.api.Abilities.OUTBOUND, covia.api.Abilities.OUTBOUND_HTTP),
 				convex.auth.ucan.Capability.create(Strings.create("s/MY_TOKEN"), covia.api.Abilities.SECRET_USE,
 					Maps.of(Strings.create("url"), Strings.create(proxyUrl)))));
 			adapter.invokeFuture(mayUse, meta, base.assoc(apiKey, Strings.create("s/MY_TOKEN"))).get(10, TimeUnit.SECONDS);

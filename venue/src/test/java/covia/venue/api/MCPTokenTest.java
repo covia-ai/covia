@@ -154,7 +154,7 @@ public class MCPTokenTest {
 		AString alice = TestEngine.uniqueDID(info);
 		RequestContext owner = RequestContext.of(alice);
 		run("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "helper",
-			Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")), owner);
+			Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete", "acceptTasks", true)), owner);
 		String bearer = RT.getIn(run("v/ops/mcp/create-token", Maps.of(Fields.NAME, "outside-bot",
 			Fields.TOOLS, Vectors.of("v/ops/agent/request"),
 			Fields.CAPS, Vectors.of(Capability.create(Strings.create("g/helper"), Abilities.AGENT_REQUEST))),
@@ -178,8 +178,12 @@ public class MCPTokenTest {
 		AMap<AString, ACell> tokenRecord = RT.ensureMap(route.get(0));
 		assertEquals(Strings.create("token"), tokenRecord.get(Fields.VIA), "and the agent is told it came through the token");
 		assertEquals(alice, tokenRecord.get(Fields.PRINCIPAL), "which vouches for its issuer");
-		assertEquals(engine.tokens().lookup(bearer), tokenRecord.dissoc(Fields.VIA).dissoc(Fields.PRINCIPAL).dissoc(Fields.TEXT),
-			"named by its reference");
+		assertEquals(engine.tokens().lookup(bearer)
+			.assoc(Fields.TRANSPORT, Strings.create("http"))
+			.assoc(Fields.PROTOCOL, Strings.create("mcp"))
+			.assoc(Fields.CREDENTIAL_TYPE, Strings.create("accessToken")),
+			tokenRecord.dissoc(Fields.VIA).dissoc(Fields.PRINCIPAL).dissoc(Fields.TEXT),
+			"named by its reference, with verified MCP ingress facts");
 		assertFalse(agent.session(sid).getRecord().toString().contains(bearer), "the bearer is never recorded");
 	}
 

@@ -108,9 +108,9 @@ public final class Covia {
 	/** Agent-record last-modified field. */
 	private static final AString K_AGENT_TS = Strings.intern("ts");
 
-	/** Extracts the {@code :timestamp} from the venue value for LWW merge. */
+	/** Extracts the {@code :timestamp} from the venue value for LWW merge, or 0 if it has none. */
 	@SuppressWarnings("unchecked")
-	private static long venueTimestamp(ACell v) {
+	public static long venueTimestamp(ACell v) {
 		if (v instanceof AMap<?,?>) {
 			ACell t = ((AMap<ACell, ACell>) v).get(K_TIMESTAMP);
 			if (t instanceof CVMLong l) return l.longValue();

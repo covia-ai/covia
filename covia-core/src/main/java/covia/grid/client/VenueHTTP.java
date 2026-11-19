@@ -87,6 +87,13 @@ public class VenueHTTP extends Venue {
 
 	private long timeout=DEFAULT_TIMEOUT;
 	private final HttpClient httpClient;
+	private java.util.function.Consumer<HttpRequest> requestAuthorizer = request -> {};
+
+	/** Installs the embedding runtime's per-send authorization, including retries.
+	 * Set before using this connection; pooling the transport does not pool rights. */
+	public void setRequestAuthorizer(java.util.function.Consumer<HttpRequest> authorizer) {
+		this.requestAuthorizer = java.util.Objects.requireNonNull(authorizer);
+	}
 	private final URI baseURI;
 	private final VenueAuth auth;
 	/** The DID this connection was opened for, or null when opened by URL alone. */
@@ -200,7 +207,7 @@ public class VenueHTTP extends Venue {
 	public String venueDID() {
 		String did = venueDID;
 		if (did == null) {
-			did = VenueDID.establish(baseURI, expectedDID);
+			did = VenueDID.establish(baseURI, expectedDID, requestAuthorizer);
 			venueDID = did;
 		}
 		return did;
@@ -325,6 +332,8 @@ public class VenueHTTP extends Venue {
 	 */
 	private <T> CompletableFuture<HttpResponse<T>> dispatchAttempt(
 			HttpRequest req, HttpResponse.BodyHandler<T> handler, int attempt, long deadline) {
+		try { requestAuthorizer.accept(req); }
+		catch (RuntimeException e) { return CompletableFuture.failedFuture(e); }
 		return httpClient.sendAsync(req, handler).exceptionallyCompose(ex -> {
 			Throwable cause = (ex instanceof java.util.concurrent.CompletionException && ex.getCause() != null)
 				? ex.getCause() : ex;
@@ -372,7 +381,10 @@ public class VenueHTTP extends Venue {
 		Semaphore p = requestPermits;
 		if (p != null) p.acquire();
 		try {
-			return retrying(() -> httpClient.send(req, HttpResponse.BodyHandlers.ofString()));
+			return retrying(() -> {
+				requestAuthorizer.accept(req);
+				return httpClient.send(req, HttpResponse.BodyHandlers.ofString());
+			});
 		} finally {
 			if (p != null) p.release();
 		}

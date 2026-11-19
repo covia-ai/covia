@@ -240,5 +240,6 @@ Adapt for other platforms (AWS ECS, Azure Container Instances, fly.io, etc.) as 
 | MCP tool name rejected | Colons in tool names | Rebuild venue (fix in MCP.java sanitises names) |
 | `Job not found` | Wrong job ID format | Use the ID from `agent_request` response |
 | Agent SLEEPING but not running | No pending tasks or messages | Use `agent_request` (not `agent_message`) to submit work |
+| `agent_request` refused: the agent does not take tasks | Its config does not set `acceptTasks` | `agent_update` its config with `acceptTasks: true`, or chat with it instead |
 | LLM call fails | Missing API key | Run `secret_set name=OPENAI_API_KEY value=<key>` |
 | Port in use | Another process on 8080 | Check with `netstat -lntup` or change port in config |

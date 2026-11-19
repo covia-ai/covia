@@ -10,6 +10,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Added
 
+- Outbound HTTP requests require method- and destination-scoped `outbound/http` authority; configured agent models use harness authority, and the address-policy bypass is now `admin/outbound/bypass`.
+
 - Agent operations' `agentId` accepts an agent's DID (`<ownerDID>:g:<id>`), the values API's `agent` selector accepts `g/<id>` and `<ownerDID>/g/<id>`, and a messaging binding's `agent` accepts all of these forms, each checked for access as the existing forms are; a binding whose `agent` names no agent is refused when it is created.
 - Job-specific `job/read`, `job/manage` and `job/message` grants replace CRUD permissions on Job APIs; lifecycle controls return acknowledgements.
 - Embedded simulations can discover the next queued scheduled timestamp across venues and advance directly to it (#683).
@@ -18,7 +20,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Universal Job tools (`job:status`, `result`, `cancel`, `pause`, `resume`, `message`) manage local and remote work independently of its execution adapter; agent skills use them and existing Grid Job tools remain compatible.
 
 - Access tokens: any user or agent can create a scoped bearer that acts with its issuer's authority within the token's caps and is accepted only at the access points it names; the `token` adapter keeps them (`token:create`, `update`, `delete`, `list`, `get`, needing `admin/token/<access point>` on `x/token/<name>`), and `adapters.token.keepRawTokens` keeps bearers to read again; a user sees its tokens, never their bearers, at `x/token`.
-- An agent is told where each message or task started and who handed it on: the sign-in, access token, messaging bot or scheduler it started at, then each callable or `admin/sudo` that handed it to another principal, in one `From (venue-verified)` sentence that marks every principal as the agent's owner or not; the owner chatting directly takes no `From` line, turns recorded before keep theirs, and an unreadable route never reads as the owner; an approval request records the same route, and work resumed after a pause or a restart keeps it (#709).
+- An agent is told where each message or task started and who handed it on: the sign-in, access token, messaging bot or scheduler it started at, then each callable or `admin/sudo` that handed it to another principal, in a `From (venue-verified)` hint on every attributed incoming message except consecutive direct-owner input; older turns keep their label wording, and an unreadable route never reads as the owner; an approval request records the same route, and work resumed after a pause or a restart keeps it (#709).
 - Every recorded job keeps the state it runs in from admission, and a scheduled event the same, so work carried on after a restart acts with exactly the narrowing and grants of the request that started it, whatever its operation.
 - The standard agent templates tell an agent how to read the `From` element: only its owner's messages carry its owner's instructions, and anyone else's are requests; agents created before keep the instructions they were created with.
 - New agent turns no longer show a bot message's `authentication` record in `agent:history` or the agent timeline; the `From` line still names the bot, sender and chat.
@@ -34,6 +36,9 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Changed
 
+- An agent takes tasks only when its config sets `acceptTasks: true`, as every template except `minimal` does, the messaging modules' included; without it `agent:request` is refused and the agent's context carries no task tools or no-task notice.
+- A running venue whose record another writer with its key changed while the venue changed it too writes its own version over the other, logs the fork at ERROR naming both versions, and stops: a standalone venue process exits with status 70. Find the other writer, such as a second instance or state delivered from outside, before restarting it.
+- HTTP, MCP and A2A agent input shows transport and protocol hints, including signed owner logins; credential classes stay in structured provenance only, and sibling-agent labels and standard templates distinguish shared ownership and token issuance from owner approval.
 - Capability documentation now inventories module abilities, resource scopes and model-call boundaries; UCAN issuance cannot use presented granting rights to escape access-token or callable caps.
 - A stored secret or connected account that fails its integrity check, because it was altered or damaged or the venue key is misconfigured, is the venue's own failure: REST answers it as a server failure, A2A as `INTERNAL`, an agent whose step it stops is suspended, and the venue logs it once at ERROR naming whose it is; the message still names the record and how to replace it (#668).
 - Answering an approval request, `secret:extract`, `user:export`, `user:clone` from one's own account and reading or changing one's own sign-in keys need the user in person: work a job or scheduled event carries on later, and an operation a bot runs, can no longer do them.
@@ -88,6 +93,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - A model provider's refusal, content filter or `error` fails the model call with a reason naming the provider and its own value, instead of returning an empty or partial reply: the task or chat the agent was answering fails with that reason, which the Telegram and Discord bots show, and the agent carries on.
 - A response with no choices from OpenAI or a provider reached through its API (Gemini, xAI, DeepSeek, Mistral, OpenRouter) fails the model call as no answer, so the agent's task or chat fails and the agent carries on, instead of the agent being suspended as if the provider were down.
 - Updating an agent's config, even a field its prompt does not read such as a sampling field set to null, no longer moves skills its sessions have loaded into the start of their prompt, which stopped the provider's prompt cache applying.
+- Per-agent A2A task lookups stay in the asker's account, including live public tasks and requests with an `owner` hint.
+- An unanswered human ask made outside a task no longer faults the agent when it settles an unrelated task.
 - A DLFS file written by `create`, `write`, a content upload or `archive` changes in one update once all its content has arrived, so a write cut off part-way leaves the drive as it was; a write onto a directory fails as a conflict (#629).
 - `archive:list` and `archive:extract` read a zip stored in a DLFS drive instead of failing as a venue fault.
 - `archive:extract` checks each file it writes against its root as `file:write` does, following links.

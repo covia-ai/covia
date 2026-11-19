@@ -456,7 +456,7 @@ public class LangChainAdapter extends AAdapter {
 		// Build the ChatModel. The selected operation's data has already supplied
 		// any default, with caller input winning.
 		final String resolvedModelName = finalModelName;
-		final ChatModel chatModel = buildProviderModel(provider, finalModelName, apiKey, effectiveUrl, tuning,
+		final ChatModel chatModel = buildProviderModel(ctx, provider, finalModelName, apiKey, effectiveUrl, tuning,
 			toResponseFormat(responseFormatCell));
 		if (chatModel == null) {
 			return CompletableFuture.completedFuture(
@@ -840,9 +840,10 @@ public class LangChainAdapter extends AAdapter {
 	 * @param model   model name (e.g. {@code qwen2.5})
 	 * @return the advertised capabilities, or {@code null} if undeterminable
 	 */
-	public static java.util.List<String> ollamaModelCapabilities(String baseUrl, String model) {
+	public static java.util.List<String> ollamaModelCapabilities(Engine engine, RequestContext ctx, String baseUrl, String model) {
 		try {
 			OllamaModelCard card = OllamaModels.builder()
+				.httpClientBuilder(new ModelHttpClientBuilder(engine, ctx))
 				.baseUrl(baseUrl)
 				.timeout(Duration.ofSeconds(2))
 				.maxRetries(0)
@@ -856,18 +857,18 @@ public class LangChainAdapter extends AAdapter {
 		}
 	}
 
-	private ChatModel buildProviderModel(String provider, String modelName, String apiKey, AString urlParam,
+	private ChatModel buildProviderModel(RequestContext ctx, String provider, String modelName, String apiKey, AString urlParam,
 			ModelTuning tuning, ResponseFormat responseFormat) {
 		String baseUrl = (urlParam != null) ? urlParam.toString() : defaultBaseUrl(provider);
 		if (baseUrl == null) return null;
 		return switch (provider) {
-			case "ollama" -> buildOllamaModel(baseUrl, modelName, IO_TIMEOUT, tuning);
-			case "anthropic" -> buildAnthropicModel(apiKey, baseUrl, modelName, IO_TIMEOUT, tuning, responseFormat);
+			case "ollama" -> buildOllamaModel(baseUrl, modelName, IO_TIMEOUT, tuning, new ModelHttpClientBuilder(engine, ctx));
+			case "anthropic" -> buildAnthropicModel(apiKey, baseUrl, modelName, IO_TIMEOUT, tuning, responseFormat, new ModelHttpClientBuilder(engine, ctx));
 			// OpenAI, and the OpenAI-compatible APIs: Gemini's compatibility
 			// endpoint, xAI, DeepSeek, Mistral and OpenRouter (which fronts many
 			// vendors; model ids are vendor-prefixed and openrouter/auto lets
 			// the router choose).
-			default -> buildOpenAiModel(apiKey, baseUrl, modelName, IO_TIMEOUT, tuning);
+			default -> buildOpenAiModel(apiKey, baseUrl, modelName, IO_TIMEOUT, tuning, new ModelHttpClientBuilder(engine, ctx));
 		};
 	}
 
@@ -876,11 +877,17 @@ public class LangChainAdapter extends AAdapter {
 	// to stdout if the langchain4j logger were ever bumped to DEBUG.
 
 	static ChatModel buildOllamaModel(String baseUrl, String model, Duration timeout, ModelTuning tuning) {
+		return buildOllamaModel(baseUrl, model, timeout, tuning, null);
+	}
+
+	private static ChatModel buildOllamaModel(String baseUrl, String model, Duration timeout, ModelTuning tuning,
+			dev.langchain4j.http.client.HttpClientBuilder http) {
 		Map<String, Object> providerOptions = tuning.nativeOptions();
 		if (providerOptions != null) {
 			throw new UnsupportedException("providerOptions are not supported by the Ollama client");
 		}
 		var builder = OllamaChatModel.builder()
+			.httpClientBuilder(http)
 			.baseUrl(baseUrl)
 			.logRequests(false)
 			.logResponses(false)
@@ -892,6 +899,11 @@ public class LangChainAdapter extends AAdapter {
 	}
 
 	static ChatModel buildOpenAiModel(String apiKey, String baseUrl, String model, Duration timeout, ModelTuning tuning) {
+		return buildOpenAiModel(apiKey, baseUrl, model, timeout, tuning, null);
+	}
+
+	private static ChatModel buildOpenAiModel(String apiKey, String baseUrl, String model, Duration timeout, ModelTuning tuning,
+			dev.langchain4j.http.client.HttpClientBuilder http) {
 		Map<String, Object> providerOptions = tuning.nativeOptions();
 		// strictJsonSchema(true) enables OpenAI structured outputs for the
 		// response_format path — server-enforced schema conformance on the
@@ -905,6 +917,7 @@ public class LangChainAdapter extends AAdapter {
 		// Tool argument validation still happens, just not as strict-mode
 		// pre-validation by OpenAI.
 		var builder = OpenAiChatModel.builder()
+			.httpClientBuilder(http)
 			.apiKey(apiKey)
 			.baseUrl(baseUrl)
 			.logRequests(false)
@@ -933,6 +946,12 @@ public class LangChainAdapter extends AAdapter {
 	 */
 	static ChatModel buildAnthropicModel(String apiKey, String baseUrl, String model, Duration timeout,
 			ModelTuning tuning, ResponseFormat responseFormat) {
+		return buildAnthropicModel(apiKey, baseUrl, model, timeout, tuning, responseFormat, null);
+	}
+
+	private static ChatModel buildAnthropicModel(String apiKey, String baseUrl, String model, Duration timeout,
+			ModelTuning tuning, ResponseFormat responseFormat,
+			dev.langchain4j.http.client.HttpClientBuilder http) {
 		Map<String, Object> providerOptions = tuning.nativeOptions();
 		if (providerOptions != null && (providerOptions.containsKey("compaction")
 				|| String.valueOf(providerOptions.get("context_management")).contains("compact_20260112"))) {
@@ -976,6 +995,7 @@ public class LangChainAdapter extends AAdapter {
 			responseFormat = null;
 		}
 		AnthropicChatModel.AnthropicChatModelBuilder builder = AnthropicChatModel.builder()
+			.httpClientBuilder(http)
 			.apiKey(apiKey)
 			.baseUrl(baseUrl)
 			.logRequests(false)
@@ -1155,7 +1175,7 @@ public class LangChainAdapter extends AAdapter {
 		}
 		AString adapter = RT.ensureString(RT.getIn(providerMeta, Fields.OPERATION, "adapter"));
 		if (adapter != null && "langchain:ollama".equals(adapter.toString())) {
-			for (var status : ollamaStatus().entrySet()) entry = entry.assoc(status.getKey(), status.getValue());
+			for (var status : ollamaStatus(ctx).entrySet()) entry = entry.assoc(status.getKey(), status.getValue());
 		}
 		return entry;
 	}
@@ -1180,7 +1200,7 @@ public class LangChainAdapter extends AAdapter {
 		.connectTimeout(java.time.Duration.ofSeconds(2)).build();
 
 	/** Live Ollama reachability and installed models; catalog definitions stay authoritative. */
-	private AMap<AString, ACell> ollamaStatus() {
+	private AMap<AString, ACell> ollamaStatus(RequestContext ctx) {
 		AMap<AString, ACell> adapterCfg = engine.adapterConfig("langchain");
 		String url = resolveOllamaUrl(null, adapterCfg, System.getenv("OLLAMA_BASE_URL"));
 		AVector<ACell> models = Vectors.empty();
@@ -1190,6 +1210,7 @@ public class LangChainAdapter extends AAdapter {
 			java.net.http.HttpRequest req = java.net.http.HttpRequest.newBuilder(
 					java.net.URI.create(url + "/api/tags"))
 				.timeout(java.time.Duration.ofSeconds(3)).GET().build();
+			engine.requireOutboundHttp(ctx, req.method(), req.uri().toString());
 			java.net.http.HttpResponse<String> resp = OLLAMA_PROBE.send(req,
 				java.net.http.HttpResponse.BodyHandlers.ofString());
 			if (resp.statusCode() == 200) {
@@ -1205,6 +1226,8 @@ public class LangChainAdapter extends AAdapter {
 			} else {
 				note = "HTTP " + resp.statusCode() + " from " + url;
 			}
+		} catch (AuthException e) {
+			note = e.getMessage();
 		} catch (Exception e) {
 			note = "unreachable at " + url + " — venue knob: adapters.langchain.ollamaUrl";
 		}

@@ -38,7 +38,7 @@ public class AgentOutputPathFederationTest {
 		TwoVenueTestServer.ENGINE_A.jobs().invokeOperation(
 			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, agentId,
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")),
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete", "acceptTasks", true)),
 			ctx).awaitResult(10_000);
 
 		AString remoteOwner = Strings.create(

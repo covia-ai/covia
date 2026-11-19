@@ -413,6 +413,22 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 		return principals.get(runtimeKey(spec.userDID(engine), spec.name()));
 	}
 
+	// Messaging calls here are synchronous; background transport work uses the
+	// binding's current authority. Never retain a tool caller on a pooled bot.
+	private final ThreadLocal<RequestContext> outboundCaller = new ThreadLocal<>();
+
+	protected final <T> T withOutboundCaller(RequestContext ctx, java.util.function.Supplier<T> action) {
+		outboundCaller.set(ctx);
+		try { return action.get(); }
+		finally { outboundCaller.remove(); }
+	}
+
+	/** Authorises an actual provider HTTP request, including background binding work. */
+	public final void requireOutboundHttp(MessagingBot<?> bot, String method, String url) {
+		RequestContext ctx = outboundCaller.get();
+		engine.requireOutboundHttp(ctx == null ? bindingContext(bot) : ctx, method, url);
+	}
+
 	/**
 	 * The context a bot acts in on its own account, such as using its
 	 * credentials or running a relay's hooks: its principal ({@link #principalOf})

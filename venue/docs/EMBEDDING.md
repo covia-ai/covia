@@ -66,6 +66,15 @@ venue's record; `application.host().sync()` then publishes the root. A running
 engine does both. Code that edits the venue with no engine running calls them
 itself.
 
+The mounted venue owns its record. Venue state merged into the application
+from outside reaches the copy only while the copy has not changed since its
+last sync. If both changed, the venue writes its own version over the other,
+logs the fork at ERROR and closes its engine, as a second writer it cannot
+identify is a fault in the deployment
+([GRID_LATTICE_DESIGN.md](GRID_LATTICE_DESIGN.md#a4-signing)). To bring in
+state from outside without that, unmount the venue, merge the state, then
+mount it again; the merge keeps the newer snapshot.
+
 **JVM shutdown.** Register your shutdown work with
 `Shutdown.addHook(Shutdown.SERVICE, task)` (`convex.core.util.Shutdown`). It
 runs before Convex closes its servers and Etch files. `MainVenue` registers
@@ -306,6 +315,23 @@ identity token through an operation", and HELD_KEYS.md.
 
 ## Upgrading from 0.11.0
 
+Audit application-owned agent context when upgrading: `config.context` and
+non-skill `config.loads` default to `trusted: true`, so their resolved values
+become system instructions. Set `trusted: false` on mutable memory and other
+reference data; keep application-authored instructions trusted. This is an
+existing default, not a change in this release. The standard templates already
+mark memory as data; custom agent configurations need the same explicit choice.
+See [AGENT_CONTEXT.md §5.3](AGENT_CONTEXT.md#53-pinned-context) for the trust contract.
+
+HTTP requests, including browser chat and signed owner logins over MCP, now
+carry transport provenance in agent input. Use `AuthMiddleware.callerContext`
+in HTTP handlers to retain it. Custom agent instructions should distinguish
+an authenticated principal from evidence of personal owner approval: a
+sibling agent belongs to the owner but is not the owner, and an access token
+names its issuer, not its unknown holder. Updated standard templates explain
+these distinctions; existing agents keep the prompts they were created with.
+See [AGENT_CONTEXT.md §1.2](AGENT_CONTEXT.md#12-instruction-labels-and-data-boundaries).
+
 | 0.11.0 | Current |
 |--------|---------|
 | `User`'s `agentAt`, `createAgent`, `forkAgent`, `removeAgent`, `getAgents` and `ensureAgent` | The user's agents, `user.agents()`: `at`, `create`, `createFork`, `remove` and `all` (empty, not null, when there are none); for `ensureAgent`, `create` then `agent`. `user.agent(id)` stays, and still finds a deleted agent: `agent.isTerminated()` says whether it is one |
@@ -335,6 +361,7 @@ identity token through an operation", and HELD_KEYS.md.
 | An override of `withCursor` or `mergePublication` on a component | `rebind`, and `reconcile(own, other)`, which serves transaction commits as well as sync |
 | `NotSupportedException` | Removed. By meaning: `UnsupportedException` (never possible here), `InvalidStateException` (the target's state does not allow it; `ConflictException` now extends it), `ForbiddenException` (an `AuthException`: a rule forbids it whatever the caller holds), `NotFoundException`, or `IntegrityException` ([ERRORS.md](ERRORS.md#types)) |
 | A secret or connected account that does not open refused with `NotSupportedException`, and `SecretStore.decrypt` throwing `IllegalStateException` or a decryption exception | `IntegrityException`, the venue's own failure, which `AAdapter.isExpectedFailure` no longer counts as expected. `SecretStore` throws it unlogged; report one with `IntegrityException.found(message, owner, cause)`, which logs it once at ERROR. The refusal constants are renamed: `Engine.SECRET_INTEGRITY`, `SecretAdapter.SECRET_INTEGRITY`, `UserExports.SECRET_INTEGRITY`, `OAuthAdapter.CONNECTION_INTEGRITY` and `LEGACY_GRANT_INTEGRITY`; `A2AAdapter.SECRET_UNREADABLE`, an authority or absence failure, is `SECRET_NOT_USABLE` |
+| Every native agent taking `agent:request` tasks and offering the task tools, whatever its config | Only an agent whose config sets `acceptTasks: true`, as the standard templates except `minimal` do; a request to any other is refused with `UnsupportedException` (`AgentAdapter.TASKS_NOT_ACCEPTED`), so an agent created with an inline config that receives requests adds the key ([AGENT_TASKS.md](AGENT_TASKS.md) §2) |
 
 ## Upgrading from 0.10.0
 

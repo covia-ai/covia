@@ -43,11 +43,22 @@ An agent can be asked in three ways:
 
 A request is refused if the asker may not ask the agent (`config.accepts`, or
 the `agent/request` ability in [UCAN.md](./UCAN.md)), if the agent does not
-exist, or if it is suspended. Otherwise it is accepted; nothing checks whether
-the agent can resolve a task (§5.2).
+exist, if it is suspended, or if it does not take tasks. Otherwise it is
+accepted; nothing checks whether the agent can resolve a task (§5.2).
+
+An agent takes tasks only when its config sets `acceptTasks: true`, a boolean
+that defaults to false and that most standard templates set
+([AGENT_TEMPLATES.md](./AGENT_TEMPLATES.md) §6). A request to any other agent
+is refused with `UnsupportedException` (`AgentAdapter.TASKS_NOT_ACCEPTED`)
+before any session, task or Job state exists for it, whoever sends it: a
+person, another agent, a schedule, an orchestration step or an A2A client.
+Chats, messages and `agent:trigger` are unaffected. Such an agent's cycles
+offer no task tools (§5.3), except a cycle that carries a task it had queued
+before it stopped taking them, which still runs and can be resolved.
 
 An external agent, such as one on `remoteagent`, handles the request through
-its own adapter, and the rest of this document does not apply to it.
+its own adapter, needing no `acceptTasks`, and the rest of this document does
+not apply to it.
 
 ## 3. Running
 
@@ -120,9 +131,10 @@ a custom transition that never calls them, completes a task by replying.
 Both runtimes wrap the operations as the harness tools `complete_task`,
 `fail_task` and `park_task` (§6).
 
-- **Offered** at the root frame on every inference, whether or not a task is
-  in play, because the tool list is the start of the cached prompt. Never in a
-  child frame. With no task in scope, a call is refused.
+- **Offered** at the root frame on every inference of an agent that takes
+  tasks (§2), whether or not a task is in play, and on a cycle that carries a
+  task; never in a child frame ([AGENT_LOOP.md](./AGENT_LOOP.md) §3.6). With
+  no task in scope, a call is refused.
 - **With tool calling off** for the model, no tools are presented.
 - **Written as text**, a call is honoured while a task is outstanding, when the
   text is the tool's name, alone or followed by a JSON object.
@@ -156,6 +168,9 @@ of these will bring it back:
 - an open human ask made for it;
 - a call from its cycle still running past its time limit;
 - input or session messages that arrived during the cycle.
+
+An open human ask made outside a task, or for a different task, does not keep
+this task open.
 
 The cycle's reply then goes to the session's conversation, not to the task,
 and becomes the task Job's progress: where the work stands, which its

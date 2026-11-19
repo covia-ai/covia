@@ -274,6 +274,7 @@ public class LoginProviders {
 		HttpRequest request = HttpRequest.newBuilder(URI.create(provider.tokenUrl))
 				.header("Content-Type", "application/x-www-form-urlencoded").header("Accept", "application/json")
 				.POST(HttpRequest.BodyPublishers.ofString(body)).timeout(Duration.ofSeconds(30)).build();
+		engine.requireOutboundHttp(engine.venueContext(), request.method(), request.uri().toString());
 		HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
 		if (response.statusCode() != 200) throw new AuthException(INVALID_LOGIN);
 		return (Map<String, Object>) JSON.jvm(response.body());
@@ -285,6 +286,7 @@ public class LoginProviders {
 		HttpRequest request = HttpRequest.newBuilder(URI.create(provider.userInfoUrl))
 				.header("Authorization", "Bearer " + token).header("Accept", "application/json")
 				.GET().timeout(Duration.ofSeconds(30)).build();
+		engine.requireOutboundHttp(engine.venueContext(), request.method(), request.uri().toString());
 		HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
 		if (response.statusCode() != 200) throw new AuthException(INVALID_LOGIN);
 		Map<String, Object> data = (Map<String, Object>) JSON.jvm(response.body());

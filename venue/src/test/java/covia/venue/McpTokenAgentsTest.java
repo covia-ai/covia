@@ -185,7 +185,7 @@ public class McpTokenAgentsTest {
 		// An agent uses the secret only within its caps
 		ACell invoke = cap("v/ops/", Abilities.INVOKE);
 		failed(listWith(agent(bob, "without", Vectors.of(invoke)), kept));
-		complete(listWith(agent(bob, "with", Vectors.of(invoke, cap("s/ALICE_TOOLS", Abilities.SECRET_USE))), kept));
+		complete(listWith(agent(bob, "with", Vectors.of(invoke, cap("outbound", Abilities.OUTBOUND_HTTP), cap("s/ALICE_TOOLS", Abilities.SECRET_USE))), kept));
 
 		// The bearer is given one way only, and a secret it names must exist
 		assertEquals(MCPAdapter.BEARER_BOTH, failure(listWith(holder, kept.assoc(Fields.TOKEN, Strings.create(token)))));

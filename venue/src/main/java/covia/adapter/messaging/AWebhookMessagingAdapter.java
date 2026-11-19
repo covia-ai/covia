@@ -161,7 +161,7 @@ public abstract class AWebhookMessagingAdapter<S extends WebhookBotSpec>
 		WebhookBot<S> bot = selectBot(ctx, RT.ensureString(in.get(MessagingSettings.key("bot"))));
 		requireBotAccess(ctx, bot, MessagingSettings.key(getName() + "/send"));
 		bot.requireReady();
-		return send(bot, in);
+		return withOutboundCaller(ctx, () -> send(bot, in));
 	}
 	private String downloadResource() { return "/adapters/" + getName() + "/download.json"; }
 	private boolean offersDownload() { return getClass().getResource(downloadResource()) != null; }
@@ -186,7 +186,7 @@ public abstract class AWebhookMessagingAdapter<S extends WebhookBotSpec>
 		if (fileName != null && !(fileName instanceof AString f && MessagingMedia.safeFileName(f.toString()))) {
 			throw new InvalidInputException(MessagingMedia.INVALID_FILE_NAME);
 		}
-		MessagingMedia.Fetched fetched = fetchMedia(bot, Maps.of("id", id));
+		MessagingMedia.Fetched fetched = withOutboundCaller(ctx, () -> fetchMedia(bot, Maps.of("id", id)));
 		AString owner = bot.spec().userDID(engine);
 		RequestContext writer = destination == null ? engine.context(owner) : ctx;
 		String directory = destination == null

@@ -631,6 +631,25 @@ authentication method: it proves no subject, carries no evidence, starts no
 session and never reaches `VenueAuthenticator`. A request presenting one is
 its issuer's, acting with the issuer's authority narrowed by the token.
 
+### 4.5 HTTP ingress provenance
+
+Requests admitted through HTTP retain their transport, the endpoint's known
+protocol (MCP or A2A), and the verified credential class on the first `auth`
+or `token` route record. An anonymous public request retains HTTP provenance
+without claiming a credential. Identity-only host attribution also leaves
+the credential class unknown. These facts neither change authority nor add
+authentication assurance, and bearer possession does not establish personal
+approval of a message. The model-facing hint shows transport and protocol,
+not the credential class. The record and its model-facing label follow
+[AGENT_CONTEXT.md §1.2](AGENT_CONTEXT.md#12-instruction-labels-and-data-boundaries).
+
+Embedded HTTP handlers obtain this provenance through
+`AuthMiddleware.callerContext(ctx)`. An embedded application making an
+in-process request uses `engine.requestContext(principal, token)`; a trusted
+non-HTTP ingress can supply known transport, protocol and credential-class
+facts through its five-argument overload. Those arguments are verified host
+facts, never copied from client-supplied labels.
+
 ## 5. Methods
 
 | `method` id | Credential | User mapping | Verified evidence | Session? | Issue |

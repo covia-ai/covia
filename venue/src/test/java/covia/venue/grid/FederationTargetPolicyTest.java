@@ -46,7 +46,7 @@ import covia.venue.TwoVenueTestServer;
  * agents, orchestration steps and the publishers of did:web asset references.
  * A loopback target is refused before any request reaches it unless the
  * operator allows its host, and the block list wins over the allow list. The
- * venue itself, and a holder of a venue-issued {@code outbound/any} grant,
+ * venue itself, and a holder of a venue-issued {@code admin/outbound/bypass} grant,
  * dial anywhere; an agent of the venue's whose caps grant no venue authority
  * is checked.
  */
@@ -181,7 +181,7 @@ public class FederationTargetPolicyTest {
 		UCAN grant = UCAN.create(ENGINE.getKeyPair(), holder.getAccountKey(),
 			System.currentTimeMillis() / 1000 + 3600,
 			Vectors.of(Capability.create(Strings.create(ENGINE.getDIDString() + "/" + Engine.OUTBOUND),
-				Abilities.OUTBOUND_ANY)),
+				Abilities.ADMIN_OUTBOUND_BYPASS)),
 			Vectors.empty());
 		RequestContext granted = RequestContext.of(UCAN.toDIDKey(holder.getAccountKey()))
 			.withProofs(Vectors.of(grant.toMap()));

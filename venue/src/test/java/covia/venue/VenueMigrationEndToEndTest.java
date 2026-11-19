@@ -324,7 +324,7 @@ class VenueMigrationEndToEndTest {
 			// A remote job with nothing kept to reach it is no longer followed, and says so
 			Job lost = engine.jobs().getJob(LOST_REMOTE_JOB, ctx);
 			assertEquals(Status.STARTED, lost.getStatus());
-			assertEquals(Strings.create(RemoteJobs.UNREACHABLE_BECAUSE.formatted("remote-3", REMOTE_TARGET, RemoteJobs.NO_CONNECTION)),
+			assertEquals(Strings.create(RemoteJobs.UNREACHABLE_BECAUSE.formatted("remote-3", REMOTE_TARGET, JobManager.NO_STATE + LOST_REMOTE_JOB)),
 				RT.getIn(lost.getData(), RemoteJobs.DELEGATION, RemoteJobs.NOT_FOLLOWED));
 			// A local call that kept no caller context keeps no state, so is not followed again; its task is untouched
 			assertEquals(covia.adapter.RemoteAgentAdapter.CALLER_CANNOT_ACT.formatted(JobManager.NO_STATE + LOCAL_CALL,

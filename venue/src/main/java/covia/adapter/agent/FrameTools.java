@@ -57,6 +57,8 @@ class FrameTools {
 	/** Text of the assistant message whose tool batch is running: the payload
 	 *  of an empty {@code complete_task} (the dual of #215). */
 	AString turnText;
+	/** Where the configured operation tools lie in the fixed manifest, which
+	 *  holds no task tools ({@link ContextAssembler#fixedManifest}). */
 	int baseToolStart;
 	int baseToolEnd;
 	/** Routes the effective loads contribute, from the latest snapshot. */
@@ -172,7 +174,7 @@ class FrameTools {
 		AMap<AString, ACell> fixedIndex = ToolPalette.mergeIndex(toolIndex, pinnedToolIndex);
 		fixedIndex = ToolPalette.mergeIndex(fixedIndex, ToolPalette.loadOwners(loadToolIndex));
 		AMap<AString, ACell> manifestIndex = new ToolPalette.Palette(
-			null, fixedIndex, null).forManifest(spec.tools()).toolIndex();
+			null, fixedIndex, null).forManifest(ContextAssembler.fixedManifest(spec.tools())).toolIndex();
 		int baseStart = spec.toolCalling() ? baseToolStart : 0;
 		int baseEnd = spec.toolCalling() ? baseToolEnd : 0;
 		toolIndex = manifestIndex;

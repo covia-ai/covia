@@ -107,6 +107,7 @@ public class TelegramAdapterTest {
 			Config.AUTH, Maps.of(Config.PUBLIC, Maps.of(Config.CAPS, Vectors.of(convex.auth.ucan.Capability.create(
 				Strings.create("v/test/ops/echo"), Strings.create("invoke"))))),
 			Config.ADAPTERS, Maps.of(
+				"http", Maps.of("allowedHosts", Vectors.of("127.0.0.1")),
 				Strings.create("telegram"), Maps.of(TelegramAdapter.K_API_URL, Strings.create(telegram.apiUrl()))));
 		engine = Engine.createTemp(config);
 		adapter = new TelegramAdapter();
@@ -204,7 +205,7 @@ public class TelegramAdapterTest {
 				Maps.of("startup", botConfig(FakeTelegramServer.TOKEN, owner.toString(),
 					"operation", "v/test/ops/echo", Vectors.of(CVMLong.create(ALLOWED_ID)))));
 			Engine prepared = covia.venue.TestEngine.application().mount(key,
-				Maps.of(Config.ADAPTERS, Maps.of("telegram", botSettings))).prepare();
+				Maps.of(Config.ADAPTERS, Maps.of("http", Maps.of("allowedHosts", Vectors.of("127.0.0.1")), "telegram", botSettings))).prepare();
 			try {
 				TelegramAdapter deferred = new TelegramAdapter();
 				prepared.registerAdapter(deferred);
@@ -786,6 +787,7 @@ public class TelegramAdapterTest {
 		run(ctx, "v/ops/file/mkdir", Maps.of("root", "tmp", "path", "telegram-scope"));
 		AString file = Strings.create("file://tmp/telegram-scope/telegram-download.ogg");
 		RequestContext scoped = ctx.withCaps(Vectors.of(
+			convex.auth.ucan.Capability.create(covia.api.Abilities.OUTBOUND, covia.api.Abilities.OUTBOUND_HTTP),
 			convex.auth.ucan.Capability.create(Strings.create("v/ops/telegram/download"), Strings.create("invoke")),
 			convex.auth.ucan.Capability.create(Strings.create(owner + "/telegram/" + echo), TelegramAdapter.ABILITY_CALL),
 			convex.auth.ucan.Capability.create(Strings.create("file://tmp/telegram-scope/"),
@@ -1011,6 +1013,7 @@ public class TelegramAdapterTest {
 		// Its own bot's senders come from the agent, so it needs the right to ask itself,
 		// and the bot uses its credential with the agent's authority, so the right to use it.
 		AVector<ACell> caps = Vectors.of(
+			convex.auth.ucan.Capability.create(covia.api.Abilities.OUTBOUND, covia.api.Abilities.OUTBOUND_HTTP),
 			convex.auth.ucan.Capability.create(Strings.create(owner + "/telegram"), Strings.create("telegram/manage")),
 			convex.auth.ucan.Capability.create(Strings.create(owner + "/s/TG_SELF"), Strings.create("secret/use")),
 			convex.auth.ucan.Capability.create(Strings.create("v/ops/telegram/create"), Strings.create("invoke")),

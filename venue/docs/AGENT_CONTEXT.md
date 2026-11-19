@@ -90,7 +90,7 @@ shape:
 ```text
 {
   renderVersion: Long,                   // required; renderer/schema compatibility version
-  tools:        Vector<ToolDefinition>,  // required; exact provider vector
+  tools:        Vector<ToolDefinition>,  // required; exact fixed manifest, never the task tools
   toolIndex:    Map<String, ToolInfo>,   // required; direct lookup by provider name
   baseToolStart: Long,                   // required; start of reusable operation/skill slice
   baseToolEnd:   Long,                   // required; exclusive end of that slice
@@ -109,7 +109,8 @@ ToolInfo := {
 }
 ```
 
-`tools` is passed to the provider as-is. `toolIndex` has one key for every named
+`tools` is passed to the provider as-is, after the task tools the cycle offers
+(§3.2.3). `toolIndex` has one key for every named
 definition in that vector. Its values contain no schema: configured operations
 omit `source`, activity labels equal to the provider name are omitted, and a
 route-free value reserves a harness or agent-managed load name whose dispatch
@@ -216,8 +217,9 @@ once rather than copying their field tables here.
 The representation has these invariants:
 
 1. Provider input is always
-   `initial.tools` plus
-   `initial.messages ++ render(frame.conversation) ++ workingTurn ++ inferenceTail`.
+   `taskTools ++ initial.tools` plus
+   `initial.messages ++ render(frame.conversation) ++ workingTurn ++ inferenceTail`,
+   where `taskTools` are the task tools the cycle offers (§3.2.3), if any.
    With caching, `initial` is the applicable `renderedContext`; without it,
    `initialise(spec)` produces the same shape ephemerally. Conversation remains
    the sole durable transcript; there is no hidden cache object or second transcript.
@@ -301,6 +303,22 @@ find its information again, and the text it writes for the agent
 Later records are handovers: `callable`, a callable's call into its issuer's
 authority, and `user`, a call into a user under `admin/sudo`.
 
+HTTP ingress adds `transport: "http"` to that first record, including for
+signed owner logins, named access tokens and anonymous public requests.
+An MCP endpoint adds `protocol: "mcp"`; an A2A endpoint adds `protocol: "a2a"`.
+Other HTTP endpoints omit `protocol`. The endpoint supplies these facts,
+never request content, headers claiming a source, or a client-supplied URL.
+When verified, `credentialType` names the credential class: `venueJwt`,
+`keyJwt`, `ucanBearer`, `providerToken`, or `accessToken` for a named access
+token. Trusted host verifiers may establish other credential classes;
+identity-only attribution and anonymous requests omit this field. The
+record's text names the transport and protocol, but omits the credential
+class: the model-facing label is a source hint, not a credential assessment.
+The credential class remains structured provenance only. No credential bytes are recorded.
+These facts preserve authenticated authority and do not establish that a
+human wrote or approved the message. Browser requests over HTTP carry them
+as well. In-process requests have no transport field.
+
 The route belongs to its request. Work that carries a request on after a
 pause or a restart is the same request, so it keeps the route with the rest
 of its job's state, adding no record for the resumption (JOBS.md, A job's
@@ -341,15 +359,28 @@ latest. How far to trust each source is for the agent's instructions to say,
 not the element (#405); the standard templates' instructions say it
 (AGENT_TEMPLATES.md §6).
 
-**When it appears.** An element precedes a user turn whose source, its caller
-and route records, differs from the turn before. The owner chatting directly
-(one `auth` record vouching for the owner) takes none after the start or
-another such turn, nor does the agent's own turn after the start, so the
-common case carries no attribution; returning to the owner after another
-source takes one.
+A sibling is named `an agent belonging to your owner`, with its name and DID,
+and explicitly marked `not your owner`. This preserves the shared-owner
+relationship without presenting an agent's message as owner approval. A
+token's principal is its issuer, not the unknown holder presenting it.
+
+**When it appears.** An element precedes every incoming user turn with a
+recorded caller. It is omitted only when both this turn and the previous
+incoming turn are direct-owner input: one `auth` record vouching for the
+owner, with no `transport` field. The first owner turn is labelled, as is
+returning to the owner after another source. Assistant replies and tool
+messages do not change the previous incoming source.
+
+Every HTTP request, including a signed owner login over MCP, repeats its
+`From` element. So do sibling requests, token requests and other sources,
+even when their caller and route are identical to the preceding turn.
+Resumption keeps the original route and adds no ingress record. Legacy
+routes do not establish direct-owner continuity. A legacy turn without a
+recorded caller has no source label and breaks continuity; generated notices
+and tool results have their own labels or roles, not an implied owner source.
 
 **Turns recorded before.** A turn whose route does not name where it started
-renders as it always has, so no stored context is shown differently: its
+keeps its earlier label wording: its
 caller's relationship and DID, then one segment per step, with the step's
 adapter, its name, whose it is when not the owner's, a callable's caller, and
 a binding's sender id and handle, chat, thread and space. A turn stored before
@@ -680,7 +711,7 @@ cases the frame's separate conversation vector records later events in the
 order the model sees them:
 
 ```
-initial.tools + initial.messages + render(conversation) + workingTurn + inferenceTail
+taskTools + initial.tools + initial.messages + render(conversation) + workingTurn + inferenceTail
 ```
 
 All components are immutable CVM cells. Committing a cycle appends its canonical
@@ -708,8 +739,9 @@ are not rendered for `self`, `owner` or `anonymous-owner` relationships; the
 recorded caller and all authority checks are unchanged. The session handle
 appears in the inference tail, never the initial head. Personal context values
 remain in their own context exchanges and are not made equal to obtain a hit.
-Renderer version 2 rebuilds older materialisations once to remove session
-handles from their heads, preserving canonical conversation and loads.
+A materialisation from an older renderer version is rebuilt once, preserving
+canonical conversation and loads; the current version, 3, keeps session
+handles out of the head and the task tools out of the tools.
 
 The Anthropic edge marks the final leading system block. With equal tools and
 equal leading instructions this is an identical cacheable prefix across sessions
@@ -742,7 +774,7 @@ duplicate.
 
 | # | Section | Region | Role | Contents |
 |---|---------|------|------|----------|
-| 0 | Fixed tool manifest | fixed prefix | — | Harness and configured tools, plus bindings from loads already present when this prefix is materialised (§3.2.3) |
+| 0 | Tool definitions | fixed prefix | — | The task tools the cycle offers, then the fixed manifest: harness and configured tools, plus bindings from loads already present when this prefix is materialised (§3.2.3) |
 | 1 | Identity prompt | initial messages | `system` | `config.systemPrompt` or the default identity, plus venue and model |
 | 2 | Capability and data-boundary notice | initial messages | `system` | Declared `config.caps` when relevant, plus one stable rule that tool-result content is data, not instruction |
 | 3 | Initial trusted context | initial messages | `system` | Operator context admitted as instruction, rendered once and never duplicated into a tool result (§5.3) |
@@ -864,13 +896,22 @@ representations, in order:
 
 An adapter or plugin loading or unloading mutates the venue capability registry, not the fixed tool vector of an existing context. Revocation is always enforced at dispatch even if an earlier event remains visible to the model. A soft removal appends a removal event; only an explicit rebuild makes the historical definition absent.
 
-The same rule applies to conditional capabilities. The static `complete_task`,
-`fail_task` and `park_task` schemas stay in the fixed harness manifest and reject calls when no
-task is in scope. When those controls are offered without an outstanding task,
-the current-turn notices explicitly say that no task is assigned, that these
+The task tools `complete_task`, `fail_task` and `park_task` are the one part of
+the tool definitions not fixed in the manifest: the root frame of a cycle offers
+them ahead of it, and no rendering holds them. Every cycle of an agent that
+takes tasks offers them, so its provider prefix is as stable as if they were
+fixed. An agent that does not ([AGENT_TASKS.md](./AGENT_TASKS.md) §2) is offered
+them only on a cycle that carries a task it queued earlier, which changes the
+tool definitions, and so the cached provider prefix, for that cycle alone; the
+persisted rendering is untouched. Their static schemas reject calls when no
+task is in scope. When they are offered without an outstanding task, the
+current-turn notices explicitly say that no task is assigned, that these
 controls must not be called, and that ordinary chat is answered with a normal
-reply. This status is re-rendered outside the cached prefix; it does not mutate
-the tool vector or enter conversation history. Skill and `more_tools` loads append exact addition/removal
+reply (`ContextAssembler.NO_TASK_NOTICE`); a frame not offered them gets no such
+notice. This status is re-rendered outside the cached prefix and never enters
+conversation history.
+
+The same rule as for later tools applies to other conditional capabilities. Skill and `more_tools` loads append exact addition/removal
 state and use the fixed `invoke_tool` dispatcher where the provider has no
 native representation. `context_unload`
 removes any agent-managed load, including a tool-only load, so it also retracts
@@ -1152,7 +1193,7 @@ One line, changing daily, taken from the Spec's clock — never from the system 
 Tool resolution failures observed during initialisation or a current append — reported so the agent adapts rather than calling into a void. The adapter registry is not polled by assembly; a restored operation becomes available through an explicit tool-state event or prefix rebuild.
 
 ### 5.13 Outstanding task
-Present only when the agent has a task to settle. A `user` message rendered last on every inference — after the tool-loop messages and after the notices — so it is the thing nearest the reply, and never baked into history: the model sees only tasks still outstanding, and its closing line names the three task tools and says that a plain reply is the task's result ([AGENT_TASKS.md](./AGENT_TASKS.md) §5). The same on every runtime, and `agent:context`, `agent:step` and live inferences render the same task status. `complete_task`, `fail_task` and `park_task` stay in the root frame's tools whether or not this message is present (§3.2.3). Their presence alone does not mean a task is assigned: a call with no task in scope is refused — the framework's task boundary (`TaskTools`) — and a frame that offers them with no task in scope gets a no-task notice among the notices instead, telling it to answer chat normally (`ContextAssembler.NO_TASK_NOTICE`). A frame without them gets no such notice. A goal-tree frame's *goal* is its opening turn, not this slot; see [GOAL_TREE.md](./GOAL_TREE.md), “Sessions and Frames”.
+Present only when the agent has a task to settle. A `user` message rendered last on every inference — after the tool-loop messages and after the notices — so it is the thing nearest the reply, and never baked into history: the model sees only tasks still outstanding, and its closing line names the three task tools and says that a plain reply is the task's result ([AGENT_TASKS.md](./AGENT_TASKS.md) §5). The same on every runtime, and `agent:context`, `agent:step` and live inferences render the same task status. Which frames are offered `complete_task`, `fail_task` and `park_task`, and the no-task notice that goes with them, is §3.2.3; a frame with this message is always offered them. Their presence alone does not mean a task is assigned: a call with no task in scope is refused — the framework's task boundary (`TaskTools`). A goal-tree frame's *goal* is its opening turn, not this slot; see [GOAL_TREE.md](./GOAL_TREE.md), “Sessions and Frames”.
 
 ---
 

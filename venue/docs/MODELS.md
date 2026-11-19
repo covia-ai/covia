@@ -349,19 +349,20 @@ authority. `config.caps` narrows the agent's tool actions, not those model calls
 ([UCAN.md](UCAN.md) §5.4). Changing model configuration therefore relies on
 the controller-authority check, not merely an `agent/write` grant.
 
-Every route still enforces applicable resource checks: reading attachments,
-using a stored API key (`secret/use`, optionally gated or destination-bound),
-and outbound target policy. A gate on a required secret grant can constrain
-calls using that secret, provided no unconditional authority already covers
-the use. It does not constrain calls using another permitted key, an inline
-credential, or a provider needing no key. `outbound/any` bypasses the venue's
-outbound guard; it is not ordinary permission to call a model.
+Every HTTP model request requires `outbound/http/post` on the acting principal's
+`outbound` resource, checked against the actual provider endpoint. This includes
+inline API keys, providers needing no key and bound tools. Stored credentials
+still require `secret/use`, and address policy still applies independently.
+`admin/outbound/bypass` bypasses address policy only.
 
-Consequently, an operator-wide model allowlist, spend limit or argument policy
-cannot be claimed from presets or an `invoke` grant alone. It needs a boundary
-every intended call crosses. Introducing a dedicated model action gate would
-be a separate authorization design change, with bound tools and harness calls
-included in its contract.
+An agent's configured model runs under harness authority; it adds no outbound
+grant to the agent's caps. An ordinary bounded agent therefore cannot call its
+own model as a tool unless explicitly granted that authority. Exact endpoint
+grants can restrict destinations, and `nb.gate` on the required outbound grant
+can inspect invocation arguments. Conditions on grants remain additive: another
+unconditional covering grant can authorize the use. Model presets, `maxTokens`
+and `invoke` grants alone are not operator-wide model allowlists or spend
+ceilings. See [OUTBOUND.md](OUTBOUND.md) for enforcement and migration.
 
 ### 5.3 Inference options and upstream support
 

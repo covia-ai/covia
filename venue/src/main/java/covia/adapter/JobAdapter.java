@@ -156,7 +156,7 @@ public class JobAdapter extends AAdapter {
 			if (remoteId == null) { engine.remoteJobs().submissionUnknown(job, null); return; }
 			AMap<AString, ACell> saved = engine.remoteJobs().connection(job);
 			if (!VenueConnection.resumable(saved)) { engine.remoteJobs().credentialNotKept(job); return; }
-			Venue venue = VenueConnection.restore(engine, RT.ensureString(kept.get(RemoteJobs.TARGET)), saved);
+			Venue venue = VenueConnection.restore(engine, engine.jobs().callerContext(job), RT.ensureString(kept.get(RemoteJobs.TARGET)), saved);
 			watch(job, venue, Job.parseID(remoteId));
 		} catch (RuntimeException e) { engine.remoteJobs().unavailable(job, e); }
 	}

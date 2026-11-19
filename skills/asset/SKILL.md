@@ -159,7 +159,8 @@ Agent definitions have an `agent` object:
       "model": "gpt-5.6-terra",
       "systemPrompt": "You are Alice...",
       "responseFormat": { "name": "InvoiceExtraction", "schema": { ... } },
-      "tools": ["v/ops/covia/read", "v/ops/covia/write"]
+      "tools": ["v/ops/covia/read", "v/ops/covia/write"],
+      "acceptTasks": true
     }
   }
 }

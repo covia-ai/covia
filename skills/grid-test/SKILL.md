@@ -47,7 +47,7 @@ Run all quick tests plus the tests below. **Requires one configured LLM provider
 
 5. **Agent lifecycle** — create, request, query, delete:
    ```
-   agent_create  agentId=_smoke_test  config={"operation": "v/test/ops/taskcomplete"}
+   agent_create  agentId=_smoke_test  config={"operation": "v/test/ops/taskcomplete", "acceptTasks": true}
    agent_request  agentId=_smoke_test  input={"test": true}  timeout=30000
    agent_info  agentId=_smoke_test
    agent_delete  agentId=_smoke_test  remove=true

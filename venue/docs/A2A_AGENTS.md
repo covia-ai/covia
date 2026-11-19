@@ -149,14 +149,19 @@ Concretely, a per-agent `SendMessage` (fresh) is submitted to the agent as an
 `agent:request` **task**, which mints the session and returns immediately with a
 non-terminal Task the client polls — `agent:request`'s own capability check is
 the ownership enforcement (facade over the capability layer), so no A2A-specific
-trust branch exists. The task Job records its session under `SESSION_ID` (which
+trust branch exists. Only an agent whose config sets `acceptTasks: true` takes
+the task; any other refuses the request ([AGENT_TASKS.md](AGENT_TASKS.md) §2),
+as a suspended agent does. The task Job records its session under `SESSION_ID` (which
 `Job.completeWith` preserves across completion), so `A2ACodec` surfaces
 `contextId = session` for the task's whole lifecycle — the same on `SendMessage`
 and on a later `GetTask`. The per-agent by-id methods — `GetTask`,
 `CancelTask`, `SubscribeToTask` and a `SendMessage` carrying a `taskId` —
 reach only the asker's own Jobs whose recorded agent address is this agent's;
 anything else is "not found", in one wording (`A2A.AGENT_TASK_NOT_FOUND`), so
-the endpoint discloses nothing about other jobs. The owner's other jobs are
+the endpoint discloses nothing about other jobs. This account boundary applies
+to live and retained Jobs alike; an `owner` lookup hint cannot widen it, even
+when the caller could read the other account's Job through the general Job API.
+The owner's other jobs are
 addressed on the front door. `SubscribeToTask`
 attaches SSE updates directly to that same Job. A fresh `SendMessage` returns
 immediately with its Task and session identifiers; it never imposes a

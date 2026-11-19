@@ -199,7 +199,9 @@ Abilities follow UCAN's slash-delimited convention with no leading slash. `*` is
 | `asset/read` | — | Get / list content-addressed assets |
 | `admin/venue/restart` | — | Restart a standalone venue process or hand off to a successor jar |
 | `admin/venue/gc` | — | Garbage-collect the venue's Etch store online (`<venueDID>/store`) |
-| `outbound/any` | — | Have the venue dial any HTTP, MCP, A2A, model, Convex peer or venue target, unchecked by its outbound guard (`<venueDID>/outbound`) |
+| `outbound` | every `outbound/*` | Ordinary outbound transports on `<ownerDID>/outbound`; currently HTTP |
+| `outbound/http` | every `outbound/http/*` | HTTP requests; method leaves `get`, `post`, `put`, `patch`, `delete`, `head`, `options`, with destination constraints in `nb.url` ([OUTBOUND.md](OUTBOUND.md)) |
+| `admin/outbound/bypass` | — | Have the venue dial any HTTP, MCP, A2A, model, Convex peer or venue target, unchecked by its outbound guard (`<venueDID>/outbound`); ordinary HTTP permission remains required |
 | `secret/use` | — | Use a secret's value in an operation without seeing it; bindable to a destination with `nb.url` |
 | `secret/extract` | — | Reveal an owned secret through a direct owner call |
 | `oauth` | every `oauth/*` | All connected-account operations |
@@ -376,7 +378,10 @@ The caveat prefix uses the same normal form. The matcher also normalises
 defensively for callers outside the HTTP API.
 
 The URL is supplied by the action being authorised, not inferred from `with`.
-Secret and OAuth uses supply their destination. Job API checks supply the
+Secret and OAuth uses supply their destination; outbound HTTP checks supply the
+actual transmitted URL and method ([OUTBOUND.md](OUTBOUND.md)). An origin-only
+caveat accepts protocol-generated encoded identifiers; path-bound caveats
+remain strict about ambiguous encodings. Job API checks supply the
 hosting venue's canonical base URL, allowing a Job grant to be host-bound
 ([JOBS.md](JOBS.md#remote-authority-and-host-binding)). An action that supplies
 no URL cannot use a URL-constrained grant; `nb.url` is not a universal venue
@@ -885,6 +890,7 @@ record is an entry no grant of theirs covers.
 | `GET /api/v1/jobs`, and the caller's job count in `/status` | `{ with: "j/", can: "job/read" }`; `/status` leaves out the count without it |
 | `secret:delete` | `{ with: "s/<name>", can: "crud/delete" }` |
 | `secret:extract` | `{ with: "s/<name>", can: "secret/extract" }`, plus the direct-owner restriction in *Secret extraction* above |
+| Any venue HTTP send, including model and bound-tool requests | `<ownerDID>/outbound` × `outbound/http/<method>`, checked at each send against the actual URL; [OUTBOUND.md](OUTBOUND.md) defines harness and infrastructure authority |
 | Any adapter sending a secret (`apiKey`, `bearerSecret`, `secretHeaders`, `{s/NAME}`, an operation's `secretKey`, MCP `auth`, A2A auth) | `{ with: "<ownerDID>/s/<name>", can: "secret/use" }`, its `nb.url` checked against the request's destination |
 | `http:*` with `bearerSecret: "oauth/<provider>"` | `{ with: "<ownerDID>/x/oauth/<provider>", can: "oauth/use" }`, its `nb.url` checked against the request's destination |
 | `oauth:status` | `{ with: "x/oauth/", can: "crud/read" }`, or `x/oauth/<provider>` for one provider |

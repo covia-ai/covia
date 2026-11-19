@@ -173,8 +173,9 @@ Covia exposes both the venue front door and individual hosted agents:
 | Hosted agent | `GET /a2a/<ownerDID>/g/<agentId>/.well-known/agent-card.json` | `POST /a2a/<ownerDID>/g/<agentId>` |
 
 The front door invokes `a2a.defaultChatOp` for a fresh `SendMessage`. A
-per-agent `SendMessage` invokes `agent:request`; the resulting Covia task Job
-is the A2A Task, and its session is the A2A `contextId`. `GetTask`,
+per-agent `SendMessage` invokes `agent:request`, which an agent takes only when
+its config sets `acceptTasks: true` (`docs/AGENT_TASKS.md` §2); the resulting
+Covia task Job is the A2A Task, and its session is the A2A `contextId`. `GetTask`,
 `CancelTask`, `SubscribeToTask` and a `taskId` continuation on the same
 per-agent endpoint reach only the asker's own tasks for that agent; anything
 else is refused alike (`A2A.AGENT_TASK_NOT_FOUND`).

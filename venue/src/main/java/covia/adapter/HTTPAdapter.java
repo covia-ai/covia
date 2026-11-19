@@ -647,6 +647,11 @@ public class HTTPAdapter extends AAdapter {
 	 */
 	private CompletableFuture<ACell> send(URI uri, Outbound request, boolean follow, int hopsLeft,
 			AVector<ACell> trail, Set<URI> visited, Map<String, String> redactions, boolean unrestricted, RequestContext ctx) {
+		try {
+			engine.requireOutboundHttp(ctx, request.method(), uri.toString());
+		} catch (AuthException e) {
+			throw redactDenial(e, redactions);
+		}
 		return httpClient.sendAsync(request.build(uri), HttpResponse.BodyHandlers.ofString())
 			.thenCompose(response -> {
 				int code = response.statusCode();

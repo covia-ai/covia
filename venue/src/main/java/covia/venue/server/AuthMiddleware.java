@@ -28,6 +28,7 @@ import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.api.ACoviaAPI;
 import covia.venue.api.ApiErrors;
+import covia.venue.auth.AuthResult;
 import covia.venue.auth.VenueAuthenticator;
 import io.javalin.config.RoutesConfig;
 import io.javalin.http.Context;
@@ -57,6 +58,10 @@ public class AuthMiddleware {
 	static final String CALLER_DID_ATTR = "callerDID";
 	/** The reference of the access token a request presented, when it presented one. */
 	static final String TOKEN_ATTR = "accessToken";
+	private static final AString HTTP = Strings.intern("http");
+	private static final AString MCP = Strings.intern("mcp");
+	private static final AString A2A = Strings.intern("a2a");
+	private static final AString ACCESS_TOKEN = Strings.intern("accessToken");
 
 	/** Why a presented access token is refused: unknown, deleted, expired or replaced alike. */
 	public static final String TOKEN_NOT_RECOGNISED = "Access token not recognised";
@@ -378,6 +383,9 @@ public class AuthMiddleware {
 	 * layered on after. Null-safe: a null Javalin context (e.g. an MCP call with
 	 * no HTTP context) or a request with no caller yields
 	 * {@link RequestContext#ANONYMOUS}.
+	 * The first route record retains HTTP transport, the endpoint's protocol
+	 * where known, and the verified credential class. These are provenance,
+	 * not additional authority or evidence of personal approval.
 	 *
 	 * @param ctx Javalin context, or null
 	 * @return the caller's request context with its grant scope applied
@@ -390,7 +398,13 @@ public class AuthMiddleware {
 		Engine engine = VenueAuthenticator.engineOf(ctx);
 		if (engine == null) throw new ConfigurationException(NO_VENUE);
 		AMap<AString, ACell> token = getToken(ctx);
-		return engine.requestContext(caller, token);
+		AuthResult result = VenueAuthenticator.resultOf(ctx);
+		AString credentialType = (token != null) ? ACCESS_TOKEN
+			: (result == null || result.credential() == null) ? null : result.credential().type();
+		Set<RouteRole> roles = ctx.routeRoles();
+		AString protocol = VenueRouteFeature.has(roles, VenueRouteFeature.COVIA_MCP) ? MCP
+			: VenueRouteFeature.has(roles, VenueRouteFeature.COVIA_A2A) ? A2A : null;
+		return engine.requestContext(caller, token, HTTP, protocol, credentialType);
 	}
 
 	/** Why a request's caller has no context: no venue's middleware or authenticator bound it. */

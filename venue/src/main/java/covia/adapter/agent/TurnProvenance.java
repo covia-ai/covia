@@ -188,16 +188,9 @@ final class TurnProvenance {
 	/**
 	 * The identity part of a turn's provenance: its caller and what its route
 	 * shows, or, for a turn whose route names where its request started
-	 * ({@link #namesStart}), its caller and route records as stored. A new
-	 * element appears only when it changes; per-message fields are never part
-	 * of it.
+	 * ({@link #namesStart}), its caller and route records as stored.
 	 */
 	record Key(AString caller, List<Segment> route, ACell records) {}
-
-	/** The agent's own principal, which turns start from. */
-	static Key self(RequestContext ctx) {
-		return new Key(agentOf(ctx), List.of(), null);
-	}
 
 	/**
 	 * Whether {@code turn}'s route names where its request started: each
@@ -239,44 +232,27 @@ final class TurnProvenance {
 	}
 
 	/**
-	 * Whether a turn keyed {@code key} goes on from {@code last} with no element
-	 * between: the agent's owner chatting directly, after the agent's own start,
-	 * after a turn of the owner's recorded before routes named where they
-	 * started, or after another direct one; or the agent's own turn after its
-	 * own start. Only turns whose route names where they started go on this
-	 * way, so turns recorded before render as they always have.
+	 * Only consecutive direct-owner input omits an element. Every other source
+	 * is labelled on every incoming turn, even when its route is unchanged.
+	 * An absent or legacy source does not establish direct-owner continuity.
 	 */
 	static boolean continues(Engine engine, RequestContext ctx, Key last, Key key) {
-		if (key.records() == null || last == null) return false;
-		Key start = self(ctx);
-		if (ownTurn(ctx, key)) return last.equals(start);
-		if (!ownerDirect(engine, ctx, key)) return false;
-		AString owner = ownerOf(ctx);
-		boolean ownerBefore = last.records() == null && last.route().isEmpty() && last.caller().equals(owner);
-		return last.equals(start) || ownerBefore || ownerDirect(engine, ctx, last);
+		return last != null && key != null && ownerDirect(engine, ctx, last) && ownerDirect(engine, ctx, key);
 	}
 
 	/**
 	 * Whether {@code key} is the agent's owner chatting directly: one {@code auth}
-	 * record vouching for the owner, who is the turn's caller and never the
-	 * venue's public principal. Read from the records' structure, never their
-	 * text.
+	 * record with no ingress transport, vouching for the owner, who is the
+	 * turn's caller and never the venue's public principal. Read from the
+	 * records' structure, never their text.
 	 */
 	static boolean ownerDirect(Engine engine, RequestContext ctx, Key key) {
 		AMap<AString, ACell> only = onlyRecord(key);
-		if (only == null || !AUTH.equals(only.get(Fields.VIA))) return false;
+		if (only == null || !AUTH.equals(only.get(Fields.VIA)) || only.containsKey(Fields.TRANSPORT)) return false;
 		AString owner = ownerOf(ctx);
 		AString principal = RT.ensureString(only.get(Fields.PRINCIPAL));
 		if (owner == null || !owner.equals(principal) || !owner.equals(key.caller())) return false;
 		return engine == null || !engine.isPublicPrincipal(owner);
-	}
-
-	/** Whether {@code key} is the agent's own turn: one {@code agent} record vouching for the agent itself. */
-	private static boolean ownTurn(RequestContext ctx, Key key) {
-		AMap<AString, ACell> only = onlyRecord(key);
-		AString self = agentOf(ctx);
-		return only != null && AGENT.equals(only.get(Fields.VIA)) && self != null
-			&& self.equals(only.get(Fields.PRINCIPAL)) && self.equals(key.caller());
 	}
 
 	/** The one record of {@code key}'s route, or null when it has another number or is not that form. */
@@ -285,9 +261,8 @@ final class TurnProvenance {
 		return RT.ensureMap(records.get(0));
 	}
 
-	/** The adapters whose records the venue reads by their structure: a sign-in, and an agent's own run. */
+	/** The adapter whose sign-in record can establish direct-owner input. */
 	private static final AString AUTH = convex.core.data.Strings.intern(covia.adapter.AuthAdapter.NAME);
-	private static final AString AGENT = convex.core.data.Strings.intern(covia.adapter.AgentAdapter.NAME);
 
 	/** How {@code caller} stands to the agent acting under {@code ctx}, from DIDs alone. */
 	static Relationship relationship(Engine engine, RequestContext ctx, AString caller) {
@@ -510,7 +485,7 @@ final class TurnProvenance {
 		String shownId = (agentId == null) ? null : encoded(agentId.toString());
 		if (shownId != null) {
 			boolean owners = owner != null && principal.equals(Principals.agentDID(owner, agentId));
-			return owners ? "an agent of your owner (\"" + shownId + "\", " + did + ")"
+			return owners ? "an agent belonging to your owner (\"" + shownId + "\", " + did + "), " + NOT_OWNER
 				: "an agent of another user (\"" + shownId + "\", " + did + "), " + NOT_OWNER;
 		}
 		return did + ", " + NOT_OWNER;

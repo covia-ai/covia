@@ -118,7 +118,7 @@ final class TestSupport {
     @Override public void close() { server.stop(0); }
   }
   static final class Fixture implements AutoCloseable {
-    private static final AMap<AString,ACell> CONFIG = Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true));
+    private static final AMap<AString,ACell> CONFIG = Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true), Config.ADAPTERS, Maps.of("http", Maps.of("allowedHosts", Vectors.of("127.0.0.1"))));
     final FakeAPI api = new FakeAPI();
     final Engine engine;
     final WhatsAppAdapter adapter;

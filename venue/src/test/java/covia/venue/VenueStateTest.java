@@ -40,12 +40,14 @@ public class VenueStateTest {
 	// ========== Publication and Transactions ==========
 
 	/**
-	 * Publishing a copy: an unchanged copy takes its destination's change, and
-	 * where both changed whole-venue LWW selects one complete version, here the
-	 * copy's later write, rather than combining them.
+	 * Publishing a copy: one that changed nothing takes its destination's
+	 * change, one that alone changed is published, and one that changed with
+	 * its destination fails with a merge conflict, publishes nothing and keeps
+	 * its edits, at every sync until something resolves it. Neither version is
+	 * chosen over the other, nor are they combined.
 	 */
 	@Test
-	public void publishingACopySelectsOneWholeVersionWhereBothChanged() {
+	public void aCopyThatChangedWithItsDestinationFailsToPublishAndKeepsItsEdits() {
 		VenueState venue = VenueState.create(AKeyPair.generate());
 		venue.users().ensure(Strings.create("did:test:first"));
 		VenueState copy = venue.fork();
@@ -54,19 +56,22 @@ public class VenueStateTest {
 		copy.sync();
 		assertNotNull(copy.users().user(Strings.create("did:test:incoming")), "an unchanged copy takes the change");
 
+		copy.users().ensure(Strings.create("did:test:published"));
+		assertEquals(copy.get(), copy.sync());
+		assertNotNull(venue.users().user(Strings.create("did:test:published")), "a copy that alone changed is published");
+
 		venue.users().ensure(Strings.create("did:test:destination"));
 		copy.users().ensure(Strings.create("did:test:copy"));
-		ACell published = copy.sync();
-		assertEquals(copy.get(), published);
-		assertEquals(published, venue.get(), "the destination holds what was published");
-		assertNotNull(venue.users().user(Strings.create("did:test:copy")), "the later write wins");
-		assertNull(venue.users().user(Strings.create("did:test:destination")), "the two versions are not combined");
-		assertEquals(published, copy.sync(), "publishing again changes nothing");
+		ACell destination = venue.get();
+		assertThrows(convex.lattice.MergeConflictException.class, copy::sync);
+		assertThrows(convex.lattice.MergeConflictException.class, copy::sync);
+		assertSame(destination, venue.get(), "nothing is published");
+		assertNotNull(copy.users().user(Strings.create("did:test:copy")), "the copy keeps its edits");
 	}
 
 	/**
-	 * Transactions on a venue commit by its own rule, not by LWW: one that meets
-	 * a concurrent change runs again under its claim, so both changes are kept.
+	 * Transactions on a venue commit by the same rule, but one that meets a
+	 * concurrent change runs again under its claim, so both changes are kept.
 	 */
 	@Test
 	public void overlappingVenueTransactionsBothKeepTheirChanges() throws Exception {

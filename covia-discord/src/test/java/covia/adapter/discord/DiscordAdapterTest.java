@@ -57,7 +57,7 @@ class DiscordAdapterTest {
 
 	@BeforeAll static void boot() throws Exception {
 		api=new FakeDiscordAPI();gateway=new FakeGatewayHub();
-		AMap<AString,ACell> config=Maps.of(Config.USERS,Maps.of(Config.AUTO_CREATE,true),Config.ADAPTERS,Maps.of("discord",Maps.of(
+		AMap<AString,ACell> config=Maps.of(Config.USERS,Maps.of(Config.AUTO_CREATE,true),Config.ADAPTERS,Maps.of("http",Maps.of("allowedHosts",Vectors.of("127.0.0.1")),"discord",Maps.of(
 			"apiUrl",api.url(),"bots",Maps.of("echo",Maps.of("token","literal-test-token","user",OWNER,"operation","v/test/ops/echo","allow",Vectors.of("alice"))))));
 		engine=Engine.createTemp(config);adapter=new DiscordAdapter();adapter.gatewayFactory=gateway;adapter.retryMillis=50;engine.registerAdapter(adapter);Engine.addDemoAssets(engine);
 		awaitRunning();
@@ -232,7 +232,7 @@ class DiscordAdapterTest {
 		final ConcurrentHashMap<String,Consumer<InboundMessage>> sinks=new ConcurrentHashMap<>();
 		/** Tokens whose connection never becomes ready, as when Discord is unreachable, until {@link #released}. */
 		final java.util.Set<String> held=ConcurrentHashMap.newKeySet();final BlockingQueue<String> holding=new LinkedBlockingQueue<>();final java.util.concurrent.CountDownLatch released=new java.util.concurrent.CountDownLatch(1);
-		@Override public DiscordGateway connect(String token,Consumer<InboundMessage> messages) throws InterruptedException {
+		@Override public DiscordGateway connect(String token,Consumer<InboundMessage> messages, java.util.function.BiConsumer<String, String> authorize) throws InterruptedException {
 			if(held.contains(token)){holding.add(token);released.await();throw new IllegalStateException("released");}
 			synchronized(this){sinks.put(token,messages);notifyAll();}
 			return new DiscordGateway(){public String botId(){return "999";}public String username(){return "covia-test";}public void close(){sinks.remove(token,messages);}};}

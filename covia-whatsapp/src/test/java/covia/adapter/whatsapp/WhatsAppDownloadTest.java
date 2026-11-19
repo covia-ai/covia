@@ -116,7 +116,7 @@ class WhatsAppDownloadTest {
 			assertTrue(denied.contains(ability), denied);
 			assertNull(f.api.gets.poll(100, TimeUnit.MILLISECONDS), "a refused caller fetches nothing");
 
-			RequestContext downloadOnly = RequestContext.of(OWNER).withCaps(Vectors.of(invoke, Capability.create(binding, WhatsAppAdapter.ABILITY_DOWNLOAD)));
+			RequestContext downloadOnly = RequestContext.of(OWNER).withCaps(Vectors.of(invoke, Capability.create(binding, WhatsAppAdapter.ABILITY_DOWNLOAD), Capability.create(covia.api.Abilities.OUTBOUND, covia.api.Abilities.OUTBOUND_HTTP_GET)));
 			ACell saved = f.engine.jobs().invokeOperation(OP, Maps.of("media_id", "91004"), downloadOnly).awaitResult(10_000);
 			assertArrayEquals(VOICE, content(f, saved));
 		}

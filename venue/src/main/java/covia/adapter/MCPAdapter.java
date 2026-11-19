@@ -35,7 +35,6 @@ import covia.api.Abilities;
 import covia.lattice.CoviaPath;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
-import io.modelcontextprotocol.client.McpSyncClient;
 import io.modelcontextprotocol.spec.McpSchema.CallToolRequest;
 import io.modelcontextprotocol.spec.McpSchema.CallToolResult;
 import io.modelcontextprotocol.spec.McpSchema.Tool;
@@ -151,7 +150,7 @@ public class MCPAdapter extends AAdapter implements TokenAccessPoint {
 							RT.getIn(meta, Fields.OPERATION, K_AUTH)), serverUrl);
 
 					// Make the MCP tool call
-					return callMCPTool(serverUrl, remoteToolName.toString(), toolArguments, accessToken);
+					return callMCPTool(ctx, serverUrl, remoteToolName.toString(), toolArguments, accessToken);
 				}, VIRTUAL_EXECUTOR);
 
 			} else if (function.equals("list")) {
@@ -165,7 +164,7 @@ public class MCPAdapter extends AAdapter implements TokenAccessPoint {
 					serverUrl = Strings.create(engine.outboundUrl(ctx, serverUrl.toString()));
 
 					// List the MCP tools, with the input's bearer if it names one
-					return listMCPTools(serverUrl, inputBearer(ctx, input, serverUrl));
+					return listMCPTools(ctx, serverUrl, inputBearer(ctx, input, serverUrl));
 				}, VIRTUAL_EXECUTOR);
 			} else {
 				throw new UnsupportedException("Unsupported tools function: " + function);
@@ -309,19 +308,7 @@ public class MCPAdapter extends AAdapter implements TokenAccessPoint {
 	private McpClientSession getOrConnect(String serverUrl, String accessToken) {
 		String endpointUrl = McpClientSession.endpointUrl(serverUrl);
 		String key = endpointUrl + "|" + (accessToken != null ? accessToken : "");
-		return clientSessions.computeIfAbsent(key, k -> new McpClientSession(endpointUrl, accessToken));
-	}
-
-	/**
-	 * Connect to an MCP server via a base URL. Returns a connected client
-	 * from the session pool.
-	 * @param baseURL Server base URL
-	 * @param accessToken Optional bearer token
-	 * @return McpSyncClient instance (session-managed)
-	 * @throws CoviaException if the session cannot be opened
-	 */
-	public McpSyncClient connect(String baseURL, String accessToken) {
-		return getOrConnect(baseURL, accessToken).getClient();
+		return clientSessions.computeIfAbsent(key, k -> new McpClientSession(endpointUrl, accessToken, engine));
 	}
 
 	/**
@@ -340,7 +327,7 @@ public class MCPAdapter extends AAdapter implements TokenAccessPoint {
 	 * @param input Tool arguments
 	 * @param accessToken Optional access token
 	 */
-	public ACell callMCPTool(AString serverUrl, String toolName, ACell input, String accessToken) {
+	public ACell callMCPTool(RequestContext ctx, AString serverUrl, String toolName, ACell input, String accessToken) {
 		McpClientSession session = getOrConnect(serverUrl.toString(), accessToken);
 
 		@SuppressWarnings("unchecked")
@@ -348,7 +335,7 @@ public class MCPAdapter extends AAdapter implements TokenAccessPoint {
 			.arguments((Map<String,Object>)JSON.json(RT.castMap(input)))
 			.build();
 
-		CallToolResult response = session.request(McpClientSession.TOOL_CALL.formatted(toolName),
+		CallToolResult response = session.request(ctx, McpClientSession.TOOL_CALL.formatted(toolName),
 			client -> client.callTool(request));
 
 		// Tool-level error: the session is healthy, the TOOL reported failure.
@@ -486,8 +473,8 @@ public class MCPAdapter extends AAdapter implements TokenAccessPoint {
 	 * @return ACell containing the list of tools
 	 * @throws CoviaException if the server cannot be reached or does not list its tools
 	 */
-	public ACell listMCPTools(AString serverUrl, String accessToken) {
-		List<Tool> tools = listRemoteTools(serverUrl, accessToken);
+	public ACell listMCPTools(RequestContext ctx, AString serverUrl, String accessToken) {
+		List<Tool> tools = listRemoteTools(ctx, serverUrl, accessToken);
 
 		AVector<AMap<AString, ACell>> toolsVector = Vectors.empty();
 		for (Tool tool : tools) {
@@ -540,7 +527,7 @@ public class MCPAdapter extends AAdapter implements TokenAccessPoint {
 
 		// Discover tools under the REGISTRAR's auth (resolved now, not stored raw)
 		String token = resolveAuthRef(ctx, auth, url);
-		List<Tool> tools = listRemoteTools(url, token);
+		List<Tool> tools = listRemoteTools(ctx, url, token);
 
 		// Normalise a bare secret ref to the registrar's DID-qualified form so
 		// the stored reference has one unambiguous owner (#80 ruling 3).
@@ -613,7 +600,7 @@ public class MCPAdapter extends AAdapter implements TokenAccessPoint {
 
 		AString auth = RT.ensureString(RT.getIn(input, K_AUTH));
 		String token = resolveAuthRef(ctx, auth, url);
-		List<Tool> tools = listRemoteTools(url, token);
+		List<Tool> tools = listRemoteTools(ctx, url, token);
 		Tool tool = null;
 		for (Tool t : tools) {
 			if (toolName.toString().equals(t.name())) { tool = t; break; }
@@ -736,7 +723,7 @@ public class MCPAdapter extends AAdapter implements TokenAccessPoint {
 		AString auth = RT.ensureString(RT.getIn(reg, K_AUTH));
 
 		String token = resolveAuthRef(ctx, auth, url);
-		List<Tool> tools = listRemoteTools(url, token);
+		List<Tool> tools = listRemoteTools(ctx, url, token);
 
 		// Reconcile: write the fresh set, delete entries no longer served.
 		String opsRoot = opsRoot(venueScope, name);
@@ -801,7 +788,7 @@ public class MCPAdapter extends AAdapter implements TokenAccessPoint {
 			java.util.Map<String, Tool> fresh = new java.util.HashMap<>();
 			try {
 				String token = resolveAuthRef(ctx, auth, url);
-				for (Tool t : listRemoteTools(url, token)) fresh.put(t.name(), t);
+				for (Tool t : listRemoteTools(ctx, url, token)) fresh.put(t.name(), t);
 			} catch (CoviaException e) {
 				errors = errors.conj(Maps.of(
 					Fields.SERVER, url,
@@ -990,9 +977,9 @@ public class MCPAdapter extends AAdapter implements TokenAccessPoint {
 	}
 
 	/** Lists a remote server's tools over a pooled session. */
-	private List<Tool> listRemoteTools(AString url, String token) {
+	private List<Tool> listRemoteTools(RequestContext ctx, AString url, String token) {
 		return getOrConnect(url.toString(), token)
-			.request(McpClientSession.TOOLS_LIST, client -> client.listTools().tools());
+			.request(ctx, McpClientSession.TOOLS_LIST, client -> client.listTools().tools());
 	}
 
 	// ---- scope / path / lattice helpers ----

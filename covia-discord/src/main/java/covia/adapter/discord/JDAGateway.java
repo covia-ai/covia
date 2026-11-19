@@ -24,7 +24,7 @@ import convex.core.data.prim.CVMLong;
 final class JDAGateway implements DiscordGateway {
 	private final JDA jda;
 	private JDAGateway(JDA jda){this.jda=jda;}
-	static DiscordGateway connect(String token, Consumer<InboundMessage> sink) throws Exception {
+	static DiscordGateway connect(String token, Consumer<InboundMessage> sink, java.util.function.BiConsumer<String, String> authorize) throws Exception {
 		ListenerAdapter listener=new ListenerAdapter(){
 			@Override public void onMessageReceived(MessageReceivedEvent e){
 				if(e.getAuthor().isBot()||e.getAuthor().equals(e.getJDA().getSelfUser())) return;
@@ -36,7 +36,12 @@ final class JDAGateway implements DiscordGateway {
 			}
 		};
 		JDA jda=JDABuilder.createLight(token, GatewayIntent.GUILD_MESSAGES, GatewayIntent.DIRECT_MESSAGES,
-			GatewayIntent.MESSAGE_CONTENT).addEventListeners(listener).build();
+			GatewayIntent.MESSAGE_CONTENT).addEventListeners(listener)
+			.setHttpClientBuilder(new okhttp3.OkHttpClient.Builder().followRedirects(false).followSslRedirects(false).retryOnConnectionFailure(false)
+				.addInterceptor(chain -> {
+					authorize.accept(chain.request().method(), chain.request().url().toString());
+					return chain.proceed(chain.request());
+				})).build();
 		// No time limit, since JDA keeps reconnecting: a stopping bot interrupts the wait instead.
 		try { jda.awaitReady(); return new JDAGateway(jda); }
 		catch(Exception e){jda.shutdownNow(); throw e;}

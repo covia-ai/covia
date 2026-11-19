@@ -18,7 +18,7 @@ agent that cannot do the intended work:
 
 1. **`config.operation` must be a plain string** — e.g. `"v/ops/llmagent/chat"`, never `{"name": "v/ops/llmagent/chat"}`. The agent runner calls `RT.ensureString()` on this field.
 
-2. **Use `agent_request` with `input` parameter** to submit work — not `task`, not `message`. Requests create trackable Jobs with immutable records.
+2. **Use `agent_request` with `input` parameter** to submit work — not `task`, not `message`. Requests create trackable Jobs with immutable records. Only an agent whose config sets `acceptTasks: true` takes them, as the standard templates other than `minimal` do; a request to any other agent is refused.
 
 3. **`config` is the single home for ALL agent settings (#144)** — `operation`, `llmOperation`, `model`, `systemPrompt`, `tools`, `caps` all live in the top-level `config` map. Passing a `config` key inside `state` is rejected with an error.
 
@@ -52,6 +52,12 @@ as a tool, an MCP or A2A credential, a secret-backed signing key) only with
 in its caps; leave out `nb` for a local use such as signing. Call `langchain_models` first when
 provider readiness matters; the template is provider-neutral and otherwise uses
 the venue default.
+
+An HTTP tool call, including a model called directly as a tool, also needs
+`{"with":"outbound","can":"outbound/http/post","nb":{"url":"<endpoint>"}}`
+(or the appropriate HTTP method). Configured model calls run under harness
+controller authority and do not grant the agent outbound permission. Host policy
+still applies; see [OUTBOUND.md](../../venue/docs/OUTBOUND.md).
 
 ### Create from a template
 

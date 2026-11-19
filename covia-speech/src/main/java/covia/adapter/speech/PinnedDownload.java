@@ -32,7 +32,30 @@ final class PinnedDownload {
 
 	/** Shared by every download: each HttpClient holds a selector thread for its lifetime. */
 	private static final HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(20))
-		.followRedirects(HttpClient.Redirect.NORMAL).executor(AAdapter.VIRTUAL_EXECUTOR).build();
+		.followRedirects(HttpClient.Redirect.NEVER).executor(AAdapter.VIRTUAL_EXECUTOR).build();
+
+	private final java.util.function.Consumer<HttpRequest> authorizer;
+
+	PinnedDownload() { this(request -> {}); }
+	PinnedDownload(java.util.function.Consumer<HttpRequest> authorizer) { this.authorizer = authorizer; }
+
+	/** Follow storage redirects explicitly so each hop is checked before sending. */
+	private HttpResponse<InputStream> send(URI uri) throws IOException, InterruptedException {
+		for (int hops = 0; hops <= 8; hops++) {
+			if (!"https".equals(uri.getScheme()) && !OpenAiSpeechEngine.loopback(uri.getHost())) {
+				throw new IOException(FAILED.formatted(uri.getHost(), "not HTTPS"));
+			}
+			HttpRequest request = HttpRequest.newBuilder(uri).timeout(TIMEOUT).GET().build();
+			authorizer.accept(request);
+			HttpResponse<InputStream> response = client.send(request, HttpResponse.BodyHandlers.ofInputStream());
+			int status = response.statusCode();
+			String location = response.headers().firstValue("Location").orElse(null);
+			if (location == null || !(status == 301 || status == 302 || status == 303 || status == 307 || status == 308)) return response;
+			response.body().close();
+			uri = uri.resolve(location);
+		}
+		throw new IOException(FAILED.formatted(uri.getHost(), "too many redirects"));
+	}
 
 	/**
 	 * @param progress incremented by the bytes received, and given back if the file fails
@@ -45,8 +68,7 @@ final class PinnedDownload {
 		Path part = Files.createTempFile(target.getParent(), target.getFileName() + ".", ".part");
 		long before = progress.get();
 		try {
-			HttpResponse<InputStream> response = client.send(HttpRequest.newBuilder(uri).timeout(TIMEOUT).GET().build(),
-				HttpResponse.BodyHandlers.ofInputStream());
+			HttpResponse<InputStream> response = send(uri);
 			URI landed = response.uri();
 			if (!"https".equals(landed.getScheme()) && !OpenAiSpeechEngine.loopback(landed.getHost())) {
 				response.body().close();

@@ -775,6 +775,7 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 			.build();
 		HttpResponse<String> response;
 		try {
+			engine.requireOutboundHttp(engine.venueContext(), request.method(), request.uri().toString());
 			response = http.send(request, HttpResponse.BodyHandlers.ofString());
 		} catch (InterruptedException e) {
 			Thread.currentThread().interrupt();
@@ -816,6 +817,7 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 				.header("Content-Type", "application/x-www-form-urlencoded")
 				.POST(HttpRequest.BodyPublishers.ofString(form.toString()))
 				.build();
+			engine.requireOutboundHttp(engine.venueContext(), request.method(), request.uri().toString());
 			HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString());
 			return response.statusCode() >= 200 && response.statusCode() < 300;
 		} catch (Exception e) {
