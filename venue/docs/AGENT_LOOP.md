@@ -765,7 +765,7 @@ describes goaltree's frame controls in use.
 | `skill_load` | both | Load a skill: its instructions and its tools |
 | `more_tools` | both | Add operations as tools, as a load |
 | `invoke_tool` | both | Call a tool a load added after the initial tool list |
-| `compact` | both | Archive the conversation into a summary the agent writes, freeing context space |
+| `compact` | both | Archive the conversation, all but its last `compactKeep` exchanges, into a summary the agent writes, freeing context space |
 | `subgoal` | goaltree | Delegate a sub-task to a child frame |
 | `complete` | goaltree | End the frame with a result |
 | `fail` | goaltree | End the frame with a structured error |

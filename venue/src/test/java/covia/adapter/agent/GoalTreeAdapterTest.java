@@ -1110,6 +1110,8 @@ public class GoalTreeAdapterTest {
 			Agent.KEY_CONFIG, Maps.of(
 				Strings.create("llmOperation"), Strings.create("v/test/ops/compactllm"),
 				Strings.create("systemPrompt"), Strings.create("You are a test agent."),
+				// Keep no exchange, so this one-exchange conversation compacts.
+				AbstractLLMAdapter.K_COMPACT_KEEP, CVMLong.ZERO,
 				Fields.TOOLS, Vectors.of(Strings.create(HarnessTools.COMPACT))),
 			Fields.MESSAGES, Vectors.of(
 				(ACell) Maps.of(Strings.create("content"), Strings.create("Test compact"))));

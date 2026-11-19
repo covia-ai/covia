@@ -146,6 +146,8 @@ public class AgentAdapter extends AAdapter {
 	public static final String TRANSITION_CANCELLED = "Transition cancelled";
 	/** Why {@code agent:request} refused an agent that takes no tasks ({@link #acceptsTasks}): the agent named. */
 	public static final String TASKS_NOT_ACCEPTED = "Agent %s does not take tasks: its config does not set acceptTasks";
+	/** Why an agent config or a compaction refused its number of exchanges to keep: the field, the value's type. */
+	public static final String COMPACT_KEEP_INVALID = "%s must be a whole number of exchanges, 0 or more; got %s";
 	/** Why a task failed after a cycle that neither resolved it nor left anything to resume it. */
 	public static final String TASK_YIELDED_IDLE = "The agent ended its turn with no reply, without completing, "
 		+ "failing or parking the task, and nothing it waits on (a person's answer, a running call or a wake time) "
@@ -228,6 +230,8 @@ public class AgentAdapter extends AAdapter {
 	private static final AString K_FOUND            = Strings.intern("found");
 	private static final AString K_COUNT            = Strings.intern("count");
 	private static final AString K_TURN_COUNT       = Strings.intern("turnCount");
+	private static final AString K_KEEP             = Strings.intern("keep");
+	private static final AString K_KEPT_EXCHANGES   = Strings.intern("keptExchanges");
 	private static final AString K_MAX_TURNS        = Strings.intern("maxTurns");
 	private static final AString K_MAX_CHARS        = Strings.intern("maxChars");
 	private static final AString K_ARCHIVE_DEPTH    = Strings.intern("archiveDepth");
@@ -3305,9 +3309,10 @@ public class AgentAdapter extends AAdapter {
 		job.completeWith(result);
 	}
 
-	/** Explicit owner-side compaction of an idle session. The exact replaced
-	 * conversation remains nested under the resulting archive record; the Job
-	 * returns bounded metadata rather than copying that transcript again. */
+	/** Explicit owner-side compaction of an idle session, keeping its last
+	 * exchanges word for word (AGENT_CONTEXT.md §5.6). The replaced history stays
+	 * where it is, covered by the summary; the Job returns bounded metadata
+	 * rather than copying that transcript again. */
 	private void handleCompactSession(Job job, ACell input, RequestContext ctx) {
 		AgentTarget target = resolveAgentTarget(ctx, input, Fields.AGENT_ID,
 			Abilities.AGENT_WRITE, false);
@@ -3318,6 +3323,11 @@ public class AgentAdapter extends AAdapter {
 			job.fail("summary is required");
 			return;
 		}
+		ACell keepGiven = RT.getIn(input, K_KEEP);
+		if (keepGiven != null && !(keepGiven instanceof CVMLong n && n.longValue() >= 0)) {
+			job.fail(COMPACT_KEEP_INVALID.formatted("keep", configValueType(keepGiven)));
+			return;
+		}
 
 		Agent agent = lookupAgent(job, target);
 		if (agent == null) return;
@@ -3325,9 +3335,12 @@ public class AgentAdapter extends AAdapter {
 		Blob sid = parseId(given);
 		if (sid == null) { job.fail("Invalid sessionId format: " + given); return; }
 		if (agent.session(sid).getRecord() == null) { job.fail(SESSION_NOT_FOUND + sid); return; }
+		int keep = (keepGiven instanceof CVMLong n)
+			? (int) Math.min(n.longValue(), Integer.MAX_VALUE)
+			: AbstractLLMAdapter.resolveCompactKeep(agent.getConfig());
 
-		java.util.concurrent.atomic.AtomicLong archived =
-			new java.util.concurrent.atomic.AtomicLong(0);
+		java.util.concurrent.atomic.AtomicReference<GoalTreeContext.Compaction> done =
+			new java.util.concurrent.atomic.AtomicReference<>();
 		java.util.concurrent.atomic.AtomicLong total =
 			new java.util.concurrent.atomic.AtomicLong(0);
 		AMap<AString, ACell> provenance = Maps.of(
@@ -3337,16 +3350,11 @@ public class AgentAdapter extends AAdapter {
 		boolean applied = agent.session(sid).updateQuiescentFrames(frames -> {
 			if (frames.isEmpty()) return frames;
 			AMap<AString, ACell> root = RT.ensureMap(frames.get(0));
-			long live = GoalTreeContext.countLiveTurns(root);
-			archived.set(live);
-			if (live == 0) {
-				total.set(GoalTreeContext.countTurns(root));
-				return frames;
-			}
-			AMap<AString, ACell> compacted = GoalTreeContext.compactFrame(
-				root, summary.toString(), provenance);
-			total.set(GoalTreeContext.countTurns(compacted));
-			return frames.assoc(0, compacted);
+			GoalTreeContext.Compaction compaction = GoalTreeContext.compact(
+				root, summary.toString(), provenance, keep);
+			done.set(compaction);
+			total.set(GoalTreeContext.countTurns(compaction.frame()));
+			return compaction.applied() ? frames.assoc(0, compaction.frame()) : frames;
 		});
 		if (!applied) {
 			if (agent.session(sid).cycleEpoch() != null) {
@@ -3357,11 +3365,15 @@ public class AgentAdapter extends AAdapter {
 			return;
 		}
 
+		GoalTreeContext.Compaction compaction = done.get();
+		long replaced = (compaction != null) ? compaction.replaced() : 0;
+		long kept = (compaction != null) ? compaction.kept() : 0;
 		job.setStatus(Status.STARTED);
 		job.completeWith(identify(target, Maps.of(
 			Fields.SESSION_ID, sid,
-			Strings.intern("compacted"), CVMBool.create(archived.get() > 0),
-			Strings.intern("archivedTurns"), CVMLong.create(archived.get()),
+			Strings.intern("compacted"), CVMBool.create(replaced > 0),
+			Strings.intern("archivedTurns"), CVMLong.create(replaced),
+			K_KEPT_EXCHANGES, CVMLong.create(kept),
 			K_TURN_COUNT, CVMLong.create(total.get()))));
 	}
 
@@ -6244,6 +6256,11 @@ public class AgentAdapter extends AAdapter {
 		requireConfigType(config, K_API_KEY, AString.class, "a string secret reference");
 		requireConfigType(config, K_DEFAULT_TOOLS, CVMBool.class, "a boolean");
 		requireConfigType(config, K_ACCEPT_TASKS, CVMBool.class, "a boolean");
+		ACell compactKeep = config.get(AbstractLLMAdapter.K_COMPACT_KEEP);
+		if (compactKeep != null && !(compactKeep instanceof CVMLong n && n.longValue() >= 0)) {
+			throw new InvalidInputException(COMPACT_KEEP_INVALID.formatted(
+				"config.compactKeep", configValueType(compactKeep)));
+		}
 		requireConfigType(config, AbstractLLMAdapter.K_RECORD_TOOL_CALLS, CVMBool.class, "a boolean");
 		requireConfigType(config, K_CAPS, AVector.class, "an array of capability objects, or \"unrestricted\"");
 		// Admission is security configuration: a policy that would fail closed at

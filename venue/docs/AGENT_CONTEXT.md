@@ -464,8 +464,9 @@ conversation. "Included" is a rendering selection, not execution status,
 relevance or user visibility. Completed tool exchanges can remain selected.
 The boundary must preserve valid native exchanges, including tool-call/result
 pairing. Selection validates numeric bounds. Compaction selects the summary
-appended after the complete previous selection; migration retains that exact
-selection, including native tool exchanges.
+appended after the previous selection, with the repeated kept exchanges that
+follow it; migration retains that exact selection, including native tool
+exchanges.
 
 The selection reader supports this shape and legacy `conversation` frames.
 `history` and `contextStart` must appear together and cannot coexist with a
@@ -568,18 +569,20 @@ belongs to the context's fixed rendering profile; completing a tool loop must
 not silently collapse or remove its earlier messages on the next inference.
 Any change to delivery instructions is separate from storage migration.
 
-**Compaction.** Append a summary referencing the covered history, then select
-that summary and subsequent entries for the active context. Original entries
-remain at their original positions, rather than moving into nested `items`.
-For example, compacting a frame's active selection:
+**Compaction.** Append a summary referencing the covered history, then repeat
+the kept exchanges after it (§5.6), and select that summary and subsequent
+entries for the active context. Original entries remain at their original
+positions, rather than moving into nested `items`; each repeat names its
+original's position (`repeatOf`). For example, compacting a frame's active
+selection of exchanges A, B, C and D while keeping one:
 
 ```text
 history before:  A B C D
 context before:  initial inputs + A B C D
-history after:   A B C D S       (S summarises A..D)
-context after:   initial inputs + S
-next append:     A B C D S E
-next context:    initial inputs + S E
+history after:   A B C D S D'    (S summarises A..C; D' repeats D)
+context after:   initial inputs + S D'
+next append:     A B C D S D' E
+next context:    initial inputs + S D' E
 ```
 
 The summary append and selection change are published atomically against the
@@ -1168,7 +1171,9 @@ immutable vector plus newly appended events and the working turn. Calls and
 results remain paired and byte-identical in durable state. No end-of-cycle
 scratch-elision pass rewrites the conversation.
 
-**Compaction changes the active selection.** The complete visible conversation vector collapses into one `[Compacted: N turns] summary` assistant-memory message whose summary the agent wrote, because only the agent knows what mattered. A version-1 frame appends a summary referencing the old selection and moves `contextStart` to it; every existing history cell stays unchanged. Legacy frames retain their nested `items` representation until migration. Archives are not copied into the Job result. The live observation index and the derived materialisation of active agent-managed loads are cleared, while their declarations and all pinned declarations remain. The next inference therefore looks just like the first inference of a conversation: the shared initial-load resolver reads current stable bodies, skill contributions and tool schemas/routes, and the shared observation pass reads current watched values. Those completed immutable results and the replacement prefix are installed through the normal atomic frame updates; compaction itself performs no source reads. A later compaction references the earlier summary together with all turns appended since it, keeping the provider-visible representation bounded without discarding the audit history. The shared `compact` tool works in both LLM runtimes, and `agent:compactSession` applies the same transform to an idle session for an authorised owner.
+**Compaction changes the active selection.** The visible conversation, all but its last exchanges, collapses into one `[Compacted: turns <from>–<to>] summary` assistant-memory message whose summary the agent wrote, because only the agent knows what mattered; the kept exchanges follow it word for word. An **exchange** is an incoming message with everything the agent did in reply, up to an answer: an assistant message with visible text and no tool calls. Several messages before one answer, or several answers after one message, make one exchange; a message arriving while tool calls await their results joins the exchange in progress, and an unfinished last exchange counts, so the cut never parts a call from its result. The agent's `compactKeep` sets how many exchanges are kept (default 5; 0 keeps none). A conversation of that many exchanges or fewer is left unchanged, so compacting again straight after a compaction does nothing.
+
+A version-1 frame appends the summary, covering the replaced range of the old selection, then repeats the kept entries, each marked `repeatOf` with its original's history position, and moves `contextStart` to the summary; every existing history cell stays unchanged, and a reader expanding the summary meets each entry once. Legacy frames nest the replaced entries under `items`, followed by the kept entries, until migration. Archives are not copied into the Job result. The live observation index and the derived materialisation of active agent-managed loads are cleared, while their declarations and all pinned declarations remain. The next inference therefore looks like the first inference of a conversation followed by the summary and the kept exchanges: the shared initial-load resolver reads current stable bodies, skill contributions and tool schemas/routes, and the shared observation pass reads current watched values. The repeats leave out what that renders afresh: the watched values in force and the venue's `loaded_context` and `pinned_context` exchanges. A skill body or trusted load text added during the kept exchanges is repeated with them, so it appears in both places. Those completed immutable results and the replacement prefix are installed through the normal atomic frame updates; compaction itself performs no source reads. A later compaction references the earlier summary together with all turns appended since it, keeping the provider-visible representation bounded without discarding the audit history. The shared `compact` tool works in both LLM runtimes, keeping the exchange in progress among the kept ones, and `agent:compactSession` applies the same transform to an idle session for an authorised owner, who may name the number of exchanges to keep (`keep`).
 
 Everything else is an append. Context state is obtained by folding its events in order; a repeated load makes its newest result current without pretending the model never saw the older one. That small amount of stale history is normal for an LLM conversation, while recency puts the relevant value nearest the reply. Compacted segments are `assistant` turns because their summaries are agent-authored and may describe untrusted tool data; persisting them never promotes them to operator instruction. Runtime diagnostics retain their own semantic role, and the edge keeps every event in place on every provider (§3.2.1).
 

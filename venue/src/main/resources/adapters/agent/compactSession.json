@@ -1,6 +1,6 @@
 {
 	"name": "Compact Agent Session",
-	"description": "Replaces an idle session's visible conversation with one assistant-memory summary while retaining the exact replaced history nested under the compaction record for audit. Future turns append normally. The result is bounded metadata; it does not duplicate the archived transcript.",
+	"description": "Replaces an idle session's visible conversation, all but its last exchanges, with one assistant-memory summary. An exchange is an incoming message with everything the agent did in reply, up to an answer with visible text and no tool calls. The kept exchanges stay word for word after the summary; a conversation of that many exchanges or fewer is left unchanged. The replaced history stays retrievable for audit. Future turns append normally. The result is bounded metadata; it does not duplicate the archived transcript.",
 	"dateCreated": "2026-08-29T00:00:00Z",
 	"operation": {
 		"adapter": "agent:compactSession",
@@ -12,7 +12,8 @@
 			"properties": {
 				"agentId": { "type": "string", "description": "Agent reference: a bare name for the caller's agent, g/<id>, /g/<id>, <ownerDID>/g/<id>, or the agent's DID <ownerDID>:g:<id>" },
 				"sessionId": { "type": "string", "description": "Hex ID of the idle session to compact, with or without a 0x prefix" },
-				"summary": { "type": "string", "minLength": 1, "description": "Summary future turns should retain. It is agent memory, not a privileged system instruction." }
+				"summary": { "type": "string", "minLength": 1, "description": "Summary of the replaced exchanges that future turns should retain. It is agent memory, not a privileged system instruction." },
+				"keep": { "type": "integer", "minimum": 0, "description": "Exchanges to keep word for word after the summary. Defaults to the agent's compactKeep, 5 if unset; 0 replaces the whole conversation." }
 			},
 			"required": ["agentId", "sessionId", "summary"]
 		},
@@ -22,9 +23,10 @@
 				"agentId": { "type": "string" },
 				"address": { "type": "string" },
 				"sessionId": { "type": "string" },
-				"compacted": { "type": "boolean" },
-				"archivedTurns": { "type": "integer", "description": "Live conversation entries folded by this compaction." },
-				"turnCount": { "type": "integer", "description": "Recursive leaf entries retained under the resulting segment." }
+				"compacted": { "type": "boolean", "description": "Whether the summary replaced anything." },
+				"archivedTurns": { "type": "integer", "description": "Live conversation entries the summary replaced." },
+				"keptExchanges": { "type": "integer", "description": "Exchanges kept word for word after the summary." },
+				"turnCount": { "type": "integer", "description": "Ordinary entries the session's context now stands for, summarised or kept, earlier summaries included." }
 			}
 		}
 	}

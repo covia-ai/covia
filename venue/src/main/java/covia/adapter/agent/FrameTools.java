@@ -23,8 +23,14 @@ import covia.venue.RequestContext;
  */
 class FrameTools {
 
-	/** The reply to {@code compact}: how many turns it archived. */
-	static final String COMPACTED = "Compacted %d turns into an archived summary. Context freed.";
+	/** The reply to {@code compact} that keeps nothing: how many entries it archived. */
+	static final String COMPACTED = "Compacted %d entries into an archived summary. Context freed.";
+	/** The reply to {@code compact} that keeps exchanges: entries archived, exchanges kept. */
+	static final String COMPACTED_KEEPING = "Compacted %d entries into an archived summary. Context freed;"
+		+ " the last %d exchanges, this one included, stay word for word.";
+	/** The reply to {@code compact} when the conversation is no longer than what it keeps. */
+	static final String NOT_COMPACTED = "Nothing compacted: the conversation since the last compaction"
+		+ " is %d exchanges or fewer, and that many stay word for word.";
 
 	final AbstractLLMAdapter runtime;
 	/** The agent's authority: every tool call, and every load the agent or a
@@ -36,6 +42,8 @@ class FrameTools {
 	final long toolCallTimeoutMs;
 	/** Whether the agent's tool calls are recorded from the start ({@code recordToolCalls}). */
 	final boolean recordToolCalls;
+	/** Exchanges compaction keeps word for word ({@code compactKeep}). */
+	final int compactKeep;
 	/** Effective loads of the agent tier ({@code config.loads}), read-only here. */
 	final AMap<AString, ACell> outerLoads;
 	/** The agent's config as stored: what its tools, skills and loads come from. */
@@ -83,6 +91,7 @@ class FrameTools {
 		this.toolCallTimeoutMs = toolCallTimeoutMs;
 		this.sourceConfig = cycleSpec.sourceConfig();
 		this.recordToolCalls = runtime.resolveRecordToolCalls(sourceConfig);
+		this.compactKeep = AbstractLLMAdapter.resolveCompactKeep(sourceConfig);
 		this.cachePrefix = cycleSpec.cachePrefix();
 		this.labels = cycleSpec.labels();
 		this.skillSources = Skills.sourcesOf(sourceConfig);
@@ -322,13 +331,26 @@ class FrameTools {
 		return ToolCycleEngine.ToolOutcome.result(dispatch(invocation.name(), invocation.input()));
 	}
 
-	/** {@code compact}: the runtime applies the summary before the next inference. */
+	/** {@code compact}: the runtime applies the summary before the next inference,
+	 *  unless the conversation holds no more than the exchanges it keeps. */
 	private ToolCycleEngine.ToolOutcome compact(ToolCycleEngine.ToolCall call) {
 		HarnessTools.Compaction compact = HarnessTools.compaction(call.input());
 		if (compact.error() != null) return ToolCycleEngine.ToolOutcome.result(compact.error());
-		long turns = (activeFrame != null) ? GoalTreeContext.countLiveTurns(activeFrame) : 0;
+		GoalTreeContext.Compaction preview = (activeFrame != null)
+			? GoalTreeContext.compact(activeFrame, compact.summary(), null, compactKeep) : null;
+		if (preview == null || !preview.applied()) {
+			return ToolCycleEngine.ToolOutcome.result(Strings.create(NOT_COMPACTED.formatted(compactKeep)));
+		}
 		pendingCompactSummary = compact.summary();
-		return ToolCycleEngine.ToolOutcome.result(Strings.create(COMPACTED.formatted(turns)));
+		String reply = (preview.kept() == 0) ? COMPACTED.formatted(preview.replaced())
+			: COMPACTED_KEEPING.formatted(preview.replaced(), preview.kept());
+		return ToolCycleEngine.ToolOutcome.result(Strings.create(reply));
+	}
+
+	/** Applies a summary {@code compact} asked for to a frame, keeping the agent's
+	 *  {@code compactKeep} exchanges. */
+	AMap<AString, ACell> applyCompaction(AMap<AString, ACell> frame, String summary) {
+		return GoalTreeContext.compact(frame, summary, null, compactKeep).frame();
 	}
 
 	private Loads.Snapshot loadSnapshot(AMap<AString, ACell> frameLoads) {

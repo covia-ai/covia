@@ -611,7 +611,8 @@ public class LLMAgentAdapterTest {
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 		ACell output = step(adapter,RequestContext.of(ALICE_DID), Maps.of(
 			Fields.AGENT_ID, "flat-compact-agent",
-			Agent.KEY_CONFIG, Maps.of("llmOperation", "v/test/ops/compactllm",
+			// Keep no exchange, so this one-exchange conversation compacts.
+			Agent.KEY_CONFIG, Maps.of("llmOperation", "v/test/ops/compactllm", "compactKeep", 0L,
 				Fields.TOOLS, Vectors.of(Strings.create(HarnessTools.COMPACT))),
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "compact this"))));
 

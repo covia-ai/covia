@@ -1,6 +1,6 @@
 {
     "name": "Compact Agent Context",
-    "description": "Archive the conversation so far under a summary you write, freeing context space for future turns while retaining the exact archived history for audit. Use after a significant chunk of work when you still have more to do. Capture key findings, decisions, active constraints and what remains.",
+    "description": "Archive the conversation so far under a summary you write, freeing context space for future turns while retaining the exact archived history for audit. Your most recent exchanges, this one included, stay word for word (five, unless your configuration sets another number), so summarise what came before them. Use after a significant chunk of work when you still have more to do. Capture key findings, decisions, active constraints and what remains.",
     "dateCreated": "2026-08-29T00:00:00Z",
     "operation": {
         "adapter": "harness:compact",

@@ -7077,10 +7077,11 @@ public class AgentAdapterTest {
 
 		Job compact = engine.jobs().invokeOperation("v/ops/agent/compact-session",
 			Maps.of(Fields.AGENT_ID, "compact-session-agent", Fields.SESSION_ID, sidHex,
-				"summary", "Remember both completed exchanges."), alice);
+				"summary", "Remember both completed exchanges.", "keep", 0), alice);
 		ACell result = compact.awaitResult(5000);
 		assertEquals(CVMBool.TRUE, RT.getIn(result, "compacted"));
 		assertEquals(CVMLong.create(5), RT.getIn(result, "archivedTurns"));
+		assertEquals(CVMLong.ZERO, RT.getIn(result, "keptExchanges"));
 
 		AMap<AString, ACell> compactedRoot = RT.ensureMap(
 			RT.getIn(agent.session(sid).getRecord(), Fields.FRAMES, CVMLong.ZERO));
@@ -7109,6 +7110,72 @@ public class AgentAdapterTest {
 		AVector<ACell> appended = GoalTreeContext.activeConversation(RT.ensureMap(RT.getIn(agent.session(sid).getRecord(), Fields.FRAMES, CVMLong.ZERO)));
 		assertEquals(4, appended.count(), "archive + new user + retained guidance + new assistant");
 		assertEquals(archive, appended.get(0), "future turns append after the sealed archive");
+	}
+
+	@Test
+	public void compactSessionKeepsTheAgentsLastExchanges() {
+		RequestContext alice = RequestContext.of(ALICE_DID);
+		engine.jobs().invokeOperation("v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "compact-keep-agent", Fields.CONFIG, Maps.of(
+				Fields.OPERATION, "v/ops/llmagent/chat",
+				"llmOperation", "v/test/ops/llm",
+				"compactKeep", 1)), alice).awaitResult(5000);
+		ACell first = engine.jobs().invokeOperation("v/ops/agent/chat",
+			Maps.of(Fields.AGENT_ID, "compact-keep-agent", Fields.MESSAGE, "first"), alice).awaitResult(5000);
+		Blob sid = Ids.stored(RT.getIn(first, Fields.SESSION_ID));
+		Agent agent = engine.getVenueState().users().user(ALICE_DID).agent("compact-keep-agent");
+		java.util.function.Supplier<AMap<AString, ACell>> root = () -> RT.ensureMap(
+			RT.getIn(agent.session(sid).getRecord(), Fields.FRAMES, CVMLong.ZERO));
+		AMap<AString, ACell> compactSession = Maps.of(Fields.AGENT_ID, "compact-keep-agent",
+			Fields.SESSION_ID, sid, "summary", "Notes on the first exchange.");
+
+		ACell untouched = engine.jobs().invokeOperation("v/ops/agent/compact-session", compactSession, alice)
+			.awaitResult(5000);
+		assertEquals(CVMBool.FALSE, RT.getIn(untouched, "compacted"), "one exchange is no more than the agent keeps");
+
+		// The second exchange starts with its message, appended at the history's end.
+		long second = GoalTreeContext.history(root.get()).count();
+		engine.jobs().invokeOperation("v/ops/agent/chat",
+			Maps.of(Fields.AGENT_ID, "compact-keep-agent", Fields.SESSION_ID, sid, Fields.MESSAGE, "second"),
+			alice).awaitResult(5000);
+		AVector<ACell> before = GoalTreeContext.history(root.get());
+		assertEquals(Strings.create("user"), RT.getIn(before.get(second), "role"));
+
+		ACell result = engine.jobs().invokeOperation("v/ops/agent/compact-session", compactSession, alice)
+			.awaitResult(5000);
+		assertEquals(CVMBool.TRUE, RT.getIn(result, "compacted"));
+		assertEquals(CVMLong.create(second), RT.getIn(result, "archivedTurns"), "the first exchange is replaced");
+		assertEquals(CVMLong.ONE, RT.getIn(result, "keptExchanges"));
+		AVector<ACell> active = GoalTreeContext.activeConversation(root.get());
+		assertEquals(Vectors.of(CVMLong.ZERO, CVMLong.create(second)),
+			RT.getIn(active.get(0), "historyRange"));
+		AMap<AString, ACell> repeat = RT.ensureMap(active.get(1));
+		assertEquals(CVMLong.create(second), repeat.get(GoalTreeContext.K_REPEAT_OF));
+		assertEquals(before.get(second), repeat.dissoc(GoalTreeContext.K_REPEAT_OF),
+			"the kept exchange follows the summary word for word");
+
+		AMap<AString, ACell> compacted = root.get();
+		ACell again = engine.jobs().invokeOperation("v/ops/agent/compact-session", compactSession, alice)
+			.awaitResult(5000);
+		assertEquals(CVMBool.FALSE, RT.getIn(again, "compacted"));
+		assertEquals(compacted, root.get(), "compacting again changes nothing");
+
+		Job refused = engine.jobs().invokeOperation("v/ops/agent/compact-session",
+			compactSession.assoc(Strings.intern("keep"), CVMLong.create(-1)), alice);
+		assertThrows(Exception.class, () -> refused.awaitResult(5000));
+		assertEquals(Status.FAILED, refused.getStatus());
+	}
+
+	@Test
+	public void compactKeepMustBeAWholeNumber() {
+		RequestContext alice = RequestContext.of(ALICE_DID);
+		for (ACell keep : new ACell[] { CVMLong.create(-1), Strings.create("five") }) {
+			Job create = engine.jobs().invokeOperation("v/ops/agent/create",
+				Maps.of(Fields.AGENT_ID, "bad-keep-agent", Fields.CONFIG, Maps.of(
+					Fields.OPERATION, "v/ops/llmagent/chat", "compactKeep", keep)), alice);
+			assertThrows(Exception.class, () -> create.awaitResult(5000));
+			assertEquals(Status.FAILED, create.getStatus(), "compactKeep " + keep + " is refused");
+		}
 	}
 
 	@Test

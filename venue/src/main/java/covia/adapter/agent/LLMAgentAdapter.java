@@ -257,7 +257,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 		ContextAssembler.Spec next;
 		boolean compacted = frameTools.pendingCompactSummary != null;
 		if (compacted) {
-			frameTools.activeFrame = GoalTreeContext.compactFrame(
+			frameTools.activeFrame = frameTools.applyCompaction(
 				frameTools.activeFrame, frameTools.pendingCompactSummary);
 			next = p.spec().afterCompaction(frameTools.store.frames().assoc(0, frameTools.activeFrame));
 		} else {
@@ -663,7 +663,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 			if (frames.isEmpty()) return frames;
 			AMap<AString, ACell> root = (AMap<AString, ACell>) frames.get(0);
 			if (!root.equals(expected)) return null;
-			return frames.assoc(0, GoalTreeContext.compactFrame(root, summary));
+			return frames.assoc(0, frameTools.applyCompaction(root, summary));
 		})) {
 			throw new JobFailedException(SESSION_SUPERSEDED.formatted("compacting conversation"));
 		}

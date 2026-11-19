@@ -124,6 +124,7 @@ top level of a legacy flat config map):
 | `responseFormat` | object | Structured output schema ({name, schema}) |
 | `defaultTools` | boolean | Whether to include the platform default tool pack on top of `tools` (default: false — strict allowlist) |
 | `acceptTasks` | boolean | Whether the agent takes tasks: `agent:request` and the task tools (default: false; [AGENT_TASKS.md](./AGENT_TASKS.md) §2) |
+| `compactKeep` | integer | Exchanges compaction keeps word for word after its summary, 0 or more (default: 5; [AGENT_CONTEXT.md](./AGENT_CONTEXT.md) §5.6) |
 | `state` | any | Initial state for the agent (optional) |
 
 All fields are optional. Missing fields get platform defaults.

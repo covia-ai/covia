@@ -105,6 +105,8 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	public static final AString K_CONTEXT         = Strings.intern("context");
 	public static final AString K_TOOL_CALL_TIMEOUT_MS = Strings.intern("toolCallTimeoutMs");
 	public static final AString K_MAX_TOOL_ITERATIONS  = Strings.intern("maxToolIterations");
+	/** Agent config: exchanges compaction keeps word for word. */
+	public static final AString K_COMPACT_KEEP         = Strings.intern("compactKeep");
 	public static final AString K_LLM_TIMEOUT_MS       = Strings.intern("llmTimeoutMs");
 	public static final AString K_RECORD_TOOL_CALLS    = Strings.intern("recordToolCalls");
 
@@ -997,6 +999,19 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 			return (int) Math.min(l.longValue(), Integer.MAX_VALUE);
 		}
 		return engine.config().getMaxToolIterations();
+	}
+
+	/**
+	 * Exchanges an agent's compaction keeps word for word: its
+	 * {@code config.compactKeep} ({@code >= 0}, validated when the config is
+	 * set), else {@link GoalTreeContext#DEFAULT_COMPACT_KEEP}.
+	 */
+	public static int resolveCompactKeep(AMap<AString, ACell> config) {
+		ACell v = (config != null) ? config.get(K_COMPACT_KEEP) : null;
+		if (v instanceof CVMLong l && l.longValue() >= 0) {
+			return (int) Math.min(l.longValue(), Integer.MAX_VALUE);
+		}
+		return GoalTreeContext.DEFAULT_COMPACT_KEEP;
 	}
 
 	/**

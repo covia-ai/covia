@@ -10,6 +10,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Added
 
+- Compaction keeps an agent's last exchanges word for word after its summary: the agent's `compactKeep` sets how many (default 5, 0 for none), `agent:compactSession` takes `keep` to override it and reports `keptExchanges`, and a conversation of no more exchanges than are kept is left unchanged.
+
 - Asset creation consistently accepts `asset/store` on the owner's `a/` collection across adapters and REST registration; existing unscoped grants remain valid.
 
 - Outbound HTTP requests require method- and destination-scoped `outbound/http` authority; configured agent models use harness authority, and the address-policy bypass is now `admin/outbound/bypass`. An endpoint the operator configured, such as the venue's Ollama URL or a messaging adapter's `apiUrl`, still passes the address policy without `http.allowedHosts`.

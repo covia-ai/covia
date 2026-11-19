@@ -483,7 +483,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		}
 		// The next iteration: a requested compact applied first, then the prompt rebuilt.
 		if (frameTools.pendingCompactSummary != null) {
-			frameTools.activeFrame = GoalTreeContext.compactFrame(
+			frameTools.activeFrame = frameTools.applyCompaction(
 				frameTools.activeFrame, frameTools.pendingCompactSummary);
 		}
 		frameTools.compacted = frameTools.pendingCompactSummary != null;
@@ -870,7 +870,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 			}
 			frameTools.activeFrame = (AMap<AString, ACell>) currentFrames.get(frameIndex);
 			if (frameTools.pendingCompactSummary != null) {
-				frameTools.activeFrame = GoalTreeContext.compactFrame(
+				frameTools.activeFrame = frameTools.applyCompaction(
 					frameTools.activeFrame, frameTools.pendingCompactSummary);
 				if (!persist(store, frameIndex, frameTools.activeFrame)) return abortedResult(store);
 				frameTools.pendingCompactSummary = null;
