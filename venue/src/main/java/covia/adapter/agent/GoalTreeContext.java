@@ -740,13 +740,11 @@ public class GoalTreeContext {
 			AMap<AString, ACell> provenance, int keep) {
 		Compaction none = new Compaction(frame, 0, 0);
 		AVector<ACell> conversation = activeConversation(frame);
-		if (conversation == null || conversation.isEmpty()) return none;
-		long cut = compactionCut(conversation, keep);
-		if (cut <= 0) return none;
-		AVector<ACell> replaced = conversation.slice(0, cut);
+		AVector<ACell> replaced = compactedPart(conversation, keep);
+		if (replaced.isEmpty()) return none;
+		long cut = replaced.count();
 		long live = 0;
 		for (ACell entry : replaced) if (!isSegment(entry)) live++;
-		if (live == 0) return none;
 
 		// The replaced vector itself is the archive. Convex cells are immutable,
 		// so this retains exact history through structural sharing, not copy.
@@ -782,6 +780,28 @@ public class GoalTreeContext {
 		AMap<AString, ACell> reloads = Loads.invalidateAgentMaterialisation(loads);
 		if (reloads != loads) compacted = withLoads(compacted, reloads);
 		return new Compaction(compacted, live, keep);
+	}
+
+	/**
+	 * What a compaction keeping the last {@code keep} exchanges would replace in
+	 * a conversation: the entries before those exchanges, which its summary
+	 * should cover. Empty when the conversation holds {@code keep} exchanges or
+	 * fewer, or nothing but summaries before them; compaction then changes
+	 * nothing. Exchanges are counted as {@link #compactionCut} does. The
+	 * conversation may be a frame's {@link #activeConversation} or its
+	 * {@link #archivedConversation}: they line up entry for entry, and summaries
+	 * count as no exchange in either form.
+	 *
+	 * @param keep exchanges to keep, as {@code agent:compactSession}'s {@code keep}
+	 * @return the replaced entries, never null
+	 */
+	public static AVector<ACell> compactedPart(AVector<ACell> conversation, int keep) {
+		if (conversation == null || conversation.isEmpty()) return Vectors.empty();
+		long cut = compactionCut(conversation, keep);
+		if (cut <= 0) return Vectors.empty();
+		AVector<ACell> replaced = conversation.slice(0, cut);
+		for (ACell entry : replaced) if (!isSegment(entry)) return replaced;
+		return Vectors.empty();
 	}
 
 	/**

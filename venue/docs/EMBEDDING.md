@@ -290,6 +290,11 @@ so the application decides who reaches them.
   `GoalTreeContext.archivedConversation(frame)`, never a frame field directly.
   It returns the same nested shape for legacy and versioned frames
   ([AGENT_SESSIONS.md §5.2.1](AGENT_SESSIONS.md#521-embedded-callers-and-storage-compatibility)).
+  To write the summary for `agent:compactSession` before calling it,
+  `GoalTreeContext.compactedPart(conversation, keep)` returns the entries a
+  compaction keeping `keep` exchanges would replace, counted as the venue
+  counts them, so the summary covers exactly those; an empty result means the
+  call would change nothing. Pass the same `keep` to the operation.
 
 ## Identity
 

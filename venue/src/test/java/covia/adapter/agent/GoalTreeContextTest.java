@@ -919,6 +919,27 @@ public class GoalTreeContextTest {
 	}
 
 	@Test
+	public void compactedPartIsWhatACompactionReplaces() {
+		AMap<AString, ACell> once = GoalTreeContext.compact(historyFrame(
+			userTurn("q1"), assistantText("a1"), userTurn("q2"), assistantText("a2")), "earlier", null, 1).frame();
+		assertTrue(GoalTreeContext.compactedPart(GoalTreeContext.activeConversation(once), 1).isEmpty(),
+			"a summary alone before the kept exchange leaves nothing to replace");
+
+		AMap<AString, ACell> frame = GoalTreeContext.appendTurns(once, Vectors.of(userTurn("q3"), assistantText("a3")));
+		AVector<ACell> active = GoalTreeContext.activeConversation(frame);
+		AVector<ACell> part = GoalTreeContext.compactedPart(active, 1);
+		assertEquals(active.slice(0, 3), part, "the earlier summary and the exchange before the kept one");
+		assertEquals(part.count(), GoalTreeContext.compactedPart(GoalTreeContext.archivedConversation(frame), 1).count(),
+			"the archived view, with its summary expanded, splits at the same entry");
+		assertTrue(GoalTreeContext.compactedPart(active, 2).isEmpty(), "two exchanges are no more than two kept");
+
+		long start = ((CVMLong) frame.get(GoalTreeContext.K_CONTEXT_START)).longValue();
+		AVector<ACell> after = GoalTreeContext.activeConversation(GoalTreeContext.compact(frame, "both", null, 1).frame());
+		assertEquals(Vectors.of(CVMLong.create(start), CVMLong.create(start + part.count())),
+			RT.getIn(after.get(0), GoalTreeContext.K_HISTORY_RANGE), "the compaction replaces exactly that part");
+	}
+
+	@Test
 	public void legacyCompactionNestsTheReplacedEntriesAndKeepsTheRest() {
 		AMap<AString, ACell> frame = withConversation(
 			userTurn("q1"), assistantText("a1"), userTurn("q2"), assistantText("a2"));
