@@ -120,7 +120,7 @@ final class LocalSpeechEngine implements SpeechEngine {
 	private final NativeLibraries natives;
 	private final Backends backends;
 	private final Speakers speakers;
-	private final PinnedDownload download = new PinnedDownload();
+	private final PinnedDownload download;
 	private final AtomicLong modelProgress = new AtomicLong();
 	private final AtomicLong voiceProgress = new AtomicLong();
 	private final AtomicLong nativeProgress = new AtomicLong();
@@ -158,6 +158,13 @@ final class LocalSpeechEngine implements SpeechEngine {
 	 */
 	LocalSpeechEngine(SpeechModels.Model model, SpeechModels.Model voice, Path nativePath, boolean fetchNatives,
 			Supplier<Path> cache, int threads, NativeLibraries natives, Backends backends, Speakers speakers) {
+		this(model, voice, nativePath, fetchNatives, cache, threads, natives, backends, speakers, request -> {});
+	}
+
+	LocalSpeechEngine(SpeechModels.Model model, SpeechModels.Model voice, Path nativePath, boolean fetchNatives,
+			Supplier<Path> cache, int threads, NativeLibraries natives, Backends backends, Speakers speakers,
+			java.util.function.Consumer<java.net.http.HttpRequest> authorizer) {
+		this.download = new PinnedDownload(authorizer);
 		this.model = model;
 		this.voice = voice;
 		this.nativePath = nativePath;

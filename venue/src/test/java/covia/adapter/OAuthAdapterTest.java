@@ -406,9 +406,9 @@ public class OAuthAdapterTest {
 
 	private static final AMap<AString, ACell> INVOKE_ANY = Maps.of(Capability.CAN, Strings.create("invoke"));
 
-	/** An agent of {@code owner}'s that may invoke anything and holds {@code grants} besides. */
+	/** An agent of {@code owner}'s that may invoke and send HTTP requests, and holds {@code grants} besides. */
 	private static RequestContext agent(AString owner, AMap<?, ?>... grants) {
-		AVector<ACell> caps = Vectors.of(INVOKE_ANY);
+		AVector<ACell> caps = Vectors.of(INVOKE_ANY, Capability.create(Abilities.OUTBOUND, Abilities.OUTBOUND_HTTP));
 		for (AMap<?, ?> grant : grants) caps = caps.conj(grant);
 		return RequestContext.ofAgent(owner, Strings.create("worker")).withCaps(caps);
 	}

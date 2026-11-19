@@ -85,7 +85,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 		DiscordGateway candidate;
 		// Published before checking stopped, so stop() either sees this attempt or the attempt sees it stopped.
 		starting=Thread.currentThread();
-		try{if(stopped)return;candidate=adapter.gatewayFactory.connect(tok,this::receive);}
+		try{if(stopped)return;candidate=adapter.gatewayFactory.connect(tok,this::receive,(method,url)->adapter.requireOutboundHttp(this,method,url));}
 		catch(Exception|LinkageError e){if(!stopped)pending("Discord Gateway connection failed: "+concise(e));return;}
 		finally{starting=null;}
 		if(stopped){candidate.close();return;}
@@ -161,7 +161,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 
 	ACell call(String method,String route,ACell body){HttpClient client=http;String tok=token;if(client==null||tok==null)throw notRunning();return execute(client,tok,method,route,body,true);}
 	private ACell execute(HttpClient client,String tok,String method,String route,ACell body,boolean retry429){
-		try{HttpRequest.Builder b=HttpRequest.newBuilder(URI.create(apiUrl+route)).timeout(Duration.ofSeconds(45)).header("Authorization","Bot "+tok).header("User-Agent","DiscordBot (https://covia.ai, "+Engine.jarVersion()+")");String json=body==null?"":JSON.print(body).toString();if(body!=null)b.header("Content-Type","application/json");b.method(method,body==null?HttpRequest.BodyPublishers.noBody():HttpRequest.BodyPublishers.ofString(json));HttpResponse<String> r=client.send(b.build(),HttpResponse.BodyHandlers.ofString());
+		try{HttpRequest.Builder b=HttpRequest.newBuilder(URI.create(apiUrl+route)).timeout(Duration.ofSeconds(45)).header("Authorization","Bot "+tok).header("User-Agent","DiscordBot (https://covia.ai, "+Engine.jarVersion()+")");String json=body==null?"":JSON.print(body).toString();if(body!=null)b.header("Content-Type","application/json");b.method(method,body==null?HttpRequest.BodyPublishers.noBody():HttpRequest.BodyPublishers.ofString(json));adapter.requireOutboundHttp(this,method,apiUrl+route);HttpResponse<String> r=client.send(b.build(),HttpResponse.BodyHandlers.ofString());
 			if(r.statusCode()==429&&retry429){long wait=1000;try{ACell parsed=JSON.parse(r.body());Object ra=JSON.json(RT.getIn(parsed,Strings.intern("retry_after")));if(ra instanceof Number n)wait=Math.min(30_000,Math.max(100,Math.round(n.doubleValue()*1000)));}catch(RuntimeException ignored){}Thread.sleep(wait);return execute(client,tok,method,route,body,false);}
 			if(r.statusCode()<200||r.statusCode()>=300){failed.incrementAndGet();throw new ResponseException("Discord "+method+" "+route+" failed: HTTP "+r.statusCode(),r);}
 			if(r.body()==null||r.body().isBlank())return CVMBool.TRUE;return JSON.parse(r.body());

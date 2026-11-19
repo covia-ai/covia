@@ -229,6 +229,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 			.writeTimeout(30, TimeUnit.SECONDS)
 			.addInterceptor(chain -> {
 				if (stopped) throw new java.io.IOException(CLIENT_RELEASED);
+				adapter.requireOutboundHttp(this, chain.request().method(), chain.request().url().toString());
 				return chain.proceed(chain.request());
 			})
 			.build();
@@ -1268,6 +1269,8 @@ final class BotRunner implements MessagingBot<BotSpec> {
 			String description = o.has("description") ? o.get("description").getAsString()
 				: (ok ? "" : "HTTP " + response.code());
 			return new ApiResponse(ok, code, description, o.get("result"));
+		} catch (covia.exception.CoviaException e) {
+			throw e;
 		} catch (java.io.IOException | RuntimeException e) {
 			throw new JobFailedException("Telegram " + method + " transport failed");
 		}

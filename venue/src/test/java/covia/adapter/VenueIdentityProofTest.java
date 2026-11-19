@@ -276,11 +276,11 @@ public class VenueIdentityProofTest {
 			AMap<AString, ACell> saved = Maps.of("authenticateAs", "venue", Fields.VENUE, UNPROVABLE_DID,
 				"outboundAny", CVMBool.TRUE);
 			AuthException refused = assertThrows(AuthException.class,
-				() -> VenueConnection.restore(ENGINE, Strings.create(peer.url()), saved));
+				() -> VenueConnection.restore(ENGINE, ENGINE.venueContext(), Strings.create(peer.url()), saved));
 			assertTrue(refused.getMessage().contains(VenueConnection.VENUE_UNPROVEN), refused.getMessage());
 			AMap<AString, ACell> unnamed = Maps.of("authenticateAs", "venue", "outboundAny", CVMBool.TRUE);
 			refused = assertThrows(AuthException.class,
-				() -> VenueConnection.restore(ENGINE, Strings.create(peer.url()), unnamed));
+				() -> VenueConnection.restore(ENGINE, ENGINE.venueContext(), Strings.create(peer.url()), unnamed));
 			assertTrue(refused.getMessage().startsWith(VenueConnection.NO_SAVED_DID), refused.getMessage());
 			assertEquals(0, peer.credentialed.get());
 		}

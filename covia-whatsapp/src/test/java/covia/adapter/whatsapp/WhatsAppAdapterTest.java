@@ -254,7 +254,7 @@ class WhatsAppAdapterTest {
 		try (FakeAPI api = new FakeAPI()) {
 			AMap<AString, ACell> config = Maps.of(Config.PORT, 0, Config.BIND_ADDRESS, "127.0.0.1", Config.STORE, TestTemp.etchFile("whatsapp-failed").toString(),
 				Config.SEED, AKeyPair.createSeeded(9133).getSeed().toHexString(), Config.USERS, Maps.of(Config.AUTO_CREATE, true),
-				Config.ADAPTERS, Maps.of(NAME, Maps.of("apiUrl", api.url(), "bots", Maps.of("main", agentSpec("durable-agent")))));
+				Config.ADAPTERS, Maps.of("http", Maps.of("allowedHosts", Vectors.of("127.0.0.1")), NAME, Maps.of("apiUrl", api.url(), "bots", Maps.of("main", agentSpec("durable-agent")))));
 			var firstAgents = new FlakyAgents(Integer.MAX_VALUE);
 			WhatsAppAdapter firstAdapter = quickScan(new WhatsAppAdapter());
 			VenueServer first = VenueServer.launch(config, List.of(), engine -> {
@@ -406,7 +406,7 @@ class WhatsAppAdapterTest {
 		try (FakeAPI api = new FakeAPI()) {
 			AMap<AString, ACell> config = Maps.of(Config.PORT, 0, Config.BIND_ADDRESS, "127.0.0.1", Config.STORE, TestTemp.etchFile("whatsapp-restart").toString(),
 				Config.SEED, AKeyPair.createSeeded(9131).getSeed().toHexString(), Config.USERS, Maps.of(Config.AUTO_CREATE, true),
-				Config.ADAPTERS, Maps.of(NAME, Maps.of("apiUrl", api.url(), "bots", Maps.of("main", spec()))));
+				Config.ADAPTERS, Maps.of("http", Maps.of("allowedHosts", Vectors.of("127.0.0.1")), NAME, Maps.of("apiUrl", api.url(), "bots", Maps.of("main", spec()))));
 			WhatsAppAdapter firstAdapter = new WhatsAppAdapter(); firstAdapter.retryMillis = 25;
 			VenueServer first = VenueServer.launch(config, List.of(), engine -> { engine.registerAdapter(firstAdapter); return CompletableFuture.completedFuture(null); });
 			try {

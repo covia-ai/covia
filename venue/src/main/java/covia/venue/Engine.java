@@ -5847,6 +5847,43 @@ public class Engine {
 		return normalized;
 	}
 
+	/** Authorises one actual HTTP send, including library requests and redirect
+	 * hops. Ordinary egress and venue address policy are independent checks.
+	 * Use the harness context for harness work, never the agent's tool context. */
+	public void requireOutboundHttp(RequestContext ctx, String method, String url) {
+		AString ability = switch (method) {
+			case "GET" -> Abilities.OUTBOUND_HTTP_GET;
+			case "POST" -> Abilities.OUTBOUND_HTTP_POST;
+			case "PUT" -> Abilities.OUTBOUND_HTTP_PUT;
+			case "PATCH" -> Abilities.OUTBOUND_HTTP_PATCH;
+			case "DELETE" -> Abilities.OUTBOUND_HTTP_DELETE;
+			case "HEAD" -> Abilities.OUTBOUND_HTTP_HEAD;
+			case "OPTIONS" -> Abilities.OUTBOUND_HTTP_OPTIONS;
+			default -> throw new covia.exception.UnsupportedException(OUTBOUND_METHOD_UNSUPPORTED + method);
+		};
+		// Protocol clients can legitimately encode separators in resource ids.
+		// Check the exact transmitted URL; address policy needs only its origin.
+		java.net.URI destination;
+		try { destination = java.net.URI.create(url); }
+		catch (IllegalArgumentException e) { throw new InvalidInputException(covia.utils.HTTPURLs.INVALID_URL); }
+		String origin = covia.utils.HTTPURLs.normalize(destination.getScheme() + "://" + destination.getRawAuthority() + "/").toString();
+		try {
+			requireAuthority(ctx, Abilities.OUTBOUND, ability, Strings.create(url));
+		} catch (covia.exception.AuthException e) {
+			// Transports may place resolved credentials in a path or query. Keep
+			// the missing capability, never echo the credential-bearing target.
+			String reason = e.getMessage().replace(url, OUTBOUND_DESTINATION);
+			if (e instanceof covia.exception.CapabilityDeniedException denied) {
+				throw new covia.exception.CapabilityDeniedException(reason, denied.getResource(), denied.getAbility(), denied.getAuthority());
+			}
+			throw new covia.exception.AuthException(reason);
+		}
+		if (!outboundUnrestricted(ctx)) requireSafeUrl(origin);
+	}
+
+	public static final String OUTBOUND_DESTINATION = "the outbound destination";
+	public static final String OUTBOUND_METHOD_UNSUPPORTED = "Unsupported outbound HTTP method: ";
+
 	/**
 	 * {@link #requireSafeUrl(RequestContext, String)} for a caller-chosen target
 	 * that is a host rather than a URL (a Convex peer): the same guard and lists,
@@ -5861,17 +5898,17 @@ public class Engine {
 		if (!outboundUnrestricted(ctx)) ssrfGuard().requireSafeHost(host);
 	}
 
-	/** Venue-relative resource on which {@link Abilities#OUTBOUND_ANY} is delegated. */
+	/** Venue-relative resource on which {@link Abilities#ADMIN_OUTBOUND_BYPASS} is delegated. */
 	public static final String OUTBOUND = "outbound";
 
 	/**
 	 * Whether the caller may have the venue dial any target, unchecked by the
 	 * outbound guard: whoever has venue authority for
-	 * {@link Abilities#OUTBOUND_ANY} on {@code <venue DID>/outbound}, which an
+	 * {@link Abilities#ADMIN_OUTBOUND_BYPASS} on {@code <venue DID>/outbound}, which an
 	 * unrestricted agent of the venue's has. Every other caller is checked.
 	 */
 	public boolean outboundUnrestricted(RequestContext ctx) {
-		return hasVenueAuthority(ctx, OUTBOUND, Abilities.OUTBOUND_ANY);
+		return hasVenueAuthority(ctx, OUTBOUND, Abilities.ADMIN_OUTBOUND_BYPASS);
 	}
 
 	/** Opening of the refusal for a venue reached by a transport the outbound guard cannot check. */
@@ -5882,9 +5919,8 @@ public class Engine {
 	 * remote-agent target, an orchestration step's venue, the publisher of a
 	 * remote asset reference. Whatever spelled the target (a URL or a DID), the
 	 * address the connection will dial passes {@link #requireSafeUrl(String)}
-	 * before any request is made, and a transport other than HTTP is refused,
-	 * unless the caller may have the venue dial anywhere
-	 * ({@link #outboundUnrestricted}).
+	 * before any request is made. Other transports are refused. Each actual
+	 * send checks ordinary outbound authority and current address policy.
 	 *
 	 * @param ctx The caller that chose the target
 	 * @param spec Venue URL or DID
@@ -5895,25 +5931,24 @@ public class Engine {
 	 * @throws ConfigurationException when the guard cannot be enforced
 	 */
 	public Venue connectVenue(RequestContext ctx, String spec, VenueAuth auth) {
-		return connectVenue(spec, null, auth, outboundUnrestricted(ctx));
+		return connectVenue(ctx, spec, null, auth);
 	}
 
 	/**
 	 * {@link #connectVenue(RequestContext, String, VenueAuth)} for a caller whose
-	 * standing was decided when the connection was first authorised, such as a
-	 * recovered job's, to a venue whose DID may already be known.
+	 * authority may have been reconstructed from a recovered job, to a venue
+	 * whose DID may already be known. Every send checks current authority.
 	 *
 	 * @param venueDID The target's DID, as the hop proved it; credentials the
 	 *        connection signs are audienced to it. Null when none is signed.
-	 * @param unrestricted Whether that caller could have the venue dial anywhere
 	 */
-	public Venue connectVenue(String spec, String venueDID, VenueAuth auth, boolean unrestricted) {
+	public Venue connectVenue(RequestContext ctx, String spec, String venueDID, VenueAuth auth) {
 		Venue venue = Grid.connect(spec, venueDID, auth);
-		if (unrestricted) return venue;
 		if (!(venue instanceof VenueHTTP http)) {
 			throw new InvalidInputException(UNGUARDED_VENUE_TRANSPORT + spec);
 		}
-		requireSafeUrl(http.getBaseURI().toString());
+		outboundUrl(ctx, http.getBaseURI().toString());
+		http.setRequestAuthorizer(request -> requireOutboundHttp(ctx, request.method(), request.uri().toString()));
 		return venue;
 	}
 
@@ -5934,19 +5969,8 @@ public class Engine {
 	 * @return null, or every mechanism's reason for not proving {@code did}
 	 */
 	public String venueProof(RequestContext ctx, String target, String did) {
-		return venueProof(target, did, outboundUnrestricted(ctx));
-	}
-
-	/**
-	 * {@link #venueProof(RequestContext, String, String)} for a caller whose
-	 * standing was decided when the connection was first authorised, such as
-	 * a recovered job's.
-	 *
-	 * @param unrestricted Whether that caller could have the venue dial anywhere
-	 */
-	public String venueProof(String target, String did, boolean unrestricted) {
 		if (!config().isRequireVenueProof()) return null;
-		return venueProofs.prove(target, did, () -> connectVenue(target, null, VenueAuth.none(), unrestricted));
+		return venueProofs.prove(target, did, () -> connectVenue(ctx, target, null, VenueAuth.none()));
 	}
 
 	private HTTPAdapter ssrfGuard() {

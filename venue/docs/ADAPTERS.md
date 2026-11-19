@@ -182,6 +182,15 @@ normalisation and authorization; relative DLFS paths retain their literal spelli
 
 ### Outbound URL handling
 
+Every actual HTTP send also calls `engine.requireOutboundHttp(ctx, method, url)`:
+`outbound/http/<method>` on the caller's `outbound` resource, with the transmitted
+URL supplied for `nb.url`. This applies inside provider SDKs, on retries and on
+redirect hops, not just to the initial adapter invocation. Pooled transports do
+not retain the previous caller's authority. Configured model calls use harness
+context; model calls made as tools use agent context. The complete contract and
+migration from `outbound/any` are in [OUTBOUND.md](OUTBOUND.md).
+
+
 An adapter that accepts an HTTP destination normalises it before host or
 capability checks, then uses exactly that URL for transport and credential
 resolution. `.` and `..` path segments, including percent-encoded spellings,
@@ -192,7 +201,7 @@ cannot send a credential to `/api/../admin`. The rule applies to redirect target
 as well as initial requests. The HTTP adapter rechecks authority for retained
 credential headers on every hop and refuses the redirect before sending when
 a grant no longer covers the destination. Requests with URL secret placeholders
-remain within those grants for their entire redirect chain. `outbound/any` exempts host restrictions, not URL
+remain within those grants for their entire redirect chain. `admin/outbound/bypass` exempts host restrictions, not URL
 syntax or normalisation.
 
 Use `engine.outboundUrl(ctx, url)` for caller-selected destinations: its return

@@ -91,13 +91,14 @@ public class DiscordAdapter extends AMessagingAdapter<BotSpec, BotRunner> {
 		AMap<AString,ACell> body=Maps.of(K_CONTENT,content);AString reply=RT.ensureString(in.get(K_REPLY_TO));if(reply!=null)body=body.assoc(Strings.intern("message_reference"),Maps.of(Strings.intern("message_id"),reply,Strings.intern("fail_if_not_exists"),CVMBool.FALSE));
 		if(CVMBool.TRUE.equals(in.get(K_SUPPRESS_EMBEDS)))body=body.assoc(Strings.intern("flags"),convex.core.data.prim.CVMLong.create(4));
 		for(long i=0;i<in.count();i++){var e=in.entryAt(i);ACell k=e.getKey();if(!K_BOT.equals(k)&&!K_CHANNEL_ID.equals(k)&&!K_REPLY_TO.equals(k)&&!K_SUPPRESS_EMBEDS.equals(k))body=body.assoc((AString)k,e.getValue());}
-		return r.sendMessage(channel.toString(),body);
+		AMap<AString,ACell> payload=body;
+		return withOutboundCaller(ctx, () -> r.sendMessage(channel.toString(),payload));
 	}
 	private ACell call(RequestContext ctx,ACell input){
 		BotRunner r=selectBot(ctx,RT.ensureString(RT.getIn(input,K_BOT)));requireBotAccess(ctx,r,ABILITY_CALL);
 		AString method=RT.ensureString(RT.getIn(input,K_METHOD)),route=RT.ensureString(RT.getIn(input,K_ROUTE));if(method==null||route==null)throw new InvalidInputException("method and route are required");
 		String m=method.toString().toUpperCase(),p=route.toString();if(!Set.of("GET","POST","PUT","PATCH","DELETE").contains(m))throw new InvalidInputException("method must be GET, POST, PUT, PATCH or DELETE");
 		if(!p.startsWith("/")||p.contains("://")||p.contains("..")||p.startsWith("/gateway")||p.startsWith("/oauth2"))throw new InvalidInputException("route must be a safe Discord API path; Gateway and OAuth routes are managed/refused");
-		return r.call(m,p,RT.getIn(input,K_BODY));
+		return withOutboundCaller(ctx, () -> r.call(m,p,RT.getIn(input,K_BODY)));
 	}
 }

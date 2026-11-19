@@ -52,11 +52,20 @@ scheduling skill now describes live authority at fire time instead of a
 snapshot of agent capabilities. Model documentation now identifies which
 call paths actually enforce an `invoke` gate.
 
+## Outbound follow-up — 2026-11-19
+
+The model/outbound decision below has now been implemented as ordinary
+`outbound/http/<method>` authority on `<ownerDID>/outbound`, including provider
+SDKs and bound calls. Harness model calls use controller authority; selecting a
+model grants no outbound authority to its agent. The address-policy bypass is
+now `admin/outbound/bypass`. See [OUTBOUND.md](OUTBOUND.md) for the contract,
+coverage, migration and limits. The remaining findings are unchanged.
+
 ## Decisions and remaining reconciliation
 
 | Priority | Finding | Consequence and recommendation |
 |----------|---------|--------------------------------|
-| High if uniform model policy is required | No model/HTTP action ability is checked on every call route. `invoke` controls generic lookup; configured model calls use controller authority and bound tools skip lookup permission. | A model preset or gated `invoke` grant cannot enforce an operator-wide model, endpoint or spend policy. A required `secret/use` grant can constrain that credential only. Decide whether Covia needs a dedicated model action boundary, then define its resource, controller/harness behavior and direct-tool semantics before implementing it. See [MODELS.md](MODELS.md#policy-boundaries). |
+| Resolved by outbound follow-up | HTTP action checks previously differed between generic lookup, bound tools and configured models. | Ordinary `outbound/http/<method>` now gates actual HTTP sends. Harness calls use controller authority; agent tools need their own grants. This does not make model presets into spend ceilings. See [OUTBOUND.md](OUTBOUND.md). |
 | Medium | Asset creation uses two resource scopes. `asset:store` and REST registration check an empty resource; pinning, archive asset output and A2A import check `a/`. | A scoped `asset/store` grant on `a/` succeeds through some paths and fails through others. Recommend one owner-scoped collection resource for asset creation, with explicit compatibility treatment for existing grants. This review documents the current scopes without changing authorization behavior. Evidence: `AssetAdapter.handleStore`, `handlePin`, `ArchiveAdapter`, `A2AAdapter`, `CoviaAPI`. |
 | High documentation priority | COG-13 in the local covia-docs checkout disagrees with current runtime contracts. | Reconcile it with the agreed authority model before calling the documentation fully consistent. Its catalog still names `x/mcp/tokens`, describes sudo as conferring no action authority, lacks callable/schedule entries and the `admin/execute` family, and its resource-extraction prose treats reference-free execution as requiring unscoped `invoke`. Current contracts are in [ACCESS_TOKENS.md](ACCESS_TOKENS.md), [AUTHORITY.md](AUTHORITY.md), [ADMIN.md](ADMIN.md) and UCAN.md. The separate covia-docs repository is unchanged by this review. |
 

@@ -79,6 +79,28 @@ class PinnedDownloadTest {
 		}
 	}
 
+	@Test void authorizesEveryRedirectBeforeSendingIt() throws Exception {
+		var reached = new java.util.concurrent.atomic.AtomicInteger();
+		server.createContext("/redirect", exchange -> {
+			exchange.getResponseHeaders().set("Location", "/blocked");
+			exchange.sendResponseHeaders(302, -1); exchange.close();
+		});
+		server.createContext("/blocked", exchange -> {
+			reached.incrementAndGet(); exchange.sendResponseHeaders(200, -1); exchange.close();
+		});
+		var checked = new java.util.ArrayList<String>();
+		PinnedDownload download = new PinnedDownload(request -> {
+			checked.add(request.uri().getPath());
+			if ("/blocked".equals(request.uri().getPath())) throw new covia.exception.AuthException("test refusal");
+		});
+		Path target = temp.resolve("refused.bin");
+		assertThrows(covia.exception.AuthException.class,
+			() -> download.fetch(url("/redirect"), 1, "unused", target, new AtomicLong()));
+		assertEquals(java.util.List.of("/redirect", "/blocked"), checked);
+		assertEquals(0, reached.get());
+		assertFalse(Files.exists(target));
+	}
+
 	private static void awaitTrue(BooleanSupplier condition) throws InterruptedException {
 		long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
 		while (!condition.getAsBoolean()) {

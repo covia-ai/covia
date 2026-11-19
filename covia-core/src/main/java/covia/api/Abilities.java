@@ -129,7 +129,17 @@ public final class Abilities {
 	public static final AString P2P_MANAGE = Strings.intern("p2p/manage");
 	/** Have the venue dial any outbound target, unchecked by its outbound
 	 *  guard — held by the venue itself, delegable on {@code <venue DID>/outbound}. */
-	public static final AString OUTBOUND_ANY = Strings.intern("outbound/any");
+	public static final AString ADMIN_OUTBOUND_BYPASS = Strings.intern("admin/outbound/bypass");
+	/** Ordinary egress authority, scoped to the caller's outbound resource. */
+	public static final AString OUTBOUND = Strings.intern("outbound");
+	public static final AString OUTBOUND_HTTP = Strings.intern("outbound/http");
+	public static final AString OUTBOUND_HTTP_GET = Strings.intern("outbound/http/get");
+	public static final AString OUTBOUND_HTTP_POST = Strings.intern("outbound/http/post");
+	public static final AString OUTBOUND_HTTP_PUT = Strings.intern("outbound/http/put");
+	public static final AString OUTBOUND_HTTP_PATCH = Strings.intern("outbound/http/patch");
+	public static final AString OUTBOUND_HTTP_DELETE = Strings.intern("outbound/http/delete");
+	public static final AString OUTBOUND_HTTP_HEAD = Strings.intern("outbound/http/head");
+	public static final AString OUTBOUND_HTTP_OPTIONS = Strings.intern("outbound/http/options");
 
 	/** The venue-relative MCP management resource guarded by {@link #MCP_MANAGE}:
 	 *  a delegation names it as {@code <venue DID>/v/mcp}. */

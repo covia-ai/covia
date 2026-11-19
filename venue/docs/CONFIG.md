@@ -1430,6 +1430,11 @@ Currently defined:
 - `http.userAgent` — the `User-Agent` sent by `http:*` when the caller supplies
   none (default `Covia/<version> (+https://covia.ai)`); an explicit caller
   header always wins. Public APIs such as Wikipedia refuse anonymous clients.
+HTTP sends also require ordinary `outbound/http/<method>` authority on the
+caller's `outbound` resource. Model harness calls use their controller; model
+tools use the agent. This permission does not bypass the address rules below.
+See [OUTBOUND.md](OUTBOUND.md), including the breaking `outbound/any` rename.
+
 - `http.allowedHosts` / `http.blockedHosts` — host names exempted from, or
   always refused by, the outbound (SSRF) guard. Every caller-chosen target
   passes it: HTTP, MCP, A2A and model endpoint URLs, relayed Convex peers,
@@ -1441,7 +1446,7 @@ Currently defined:
   IPv6 unique local addresses (`fc00::/7`) and IPv6 forms that carry one of
   these IPv4 addresses are refused unless their host is allowed here, so
   federating with a venue on the same machine or a private network needs its
-  host listed. The venue itself, and a holder of a venue-issued `outbound/any`
+  host listed. The venue itself, and a holder of a venue-issued `admin/outbound/bypass`
   grant on `<venueDID>/outbound`, may have HTTP, MCP, A2A, model, Convex peer
   and venue targets dialled unchecked, every redirect of an `http:*` request
   included; agents, the venue's own included, are checked unless granted it.
@@ -1456,7 +1461,7 @@ Currently defined:
   HTTP, MCP, A2A and caller-selected model URLs are normalised before checks
   and sent in that form, including literal and encoded dot segments. Ambiguous
   encoded path separators or nested path encoding are refused. This also
-  applies with `outbound/any`. URL secret placeholders must occur in the path
+  applies with `admin/outbound/bypass`. URL secret placeholders must occur in the path
   or query, and their values must survive normalisation unchanged so that
   reported URLs can still redact them.
 - `http.maxRedirects` — the longest redirect chain `http:*` follows (default

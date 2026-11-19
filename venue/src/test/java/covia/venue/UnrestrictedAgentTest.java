@@ -260,7 +260,7 @@ public class UnrestrictedAgentTest {
 				RequestContext.of(engine.publicPrincipal()),   // no scope: unrestricted public access
 				RequestContext.ofAgent(TestEngine.uniqueDID(info), Strings.create("helper"))}) {
 			assertFalse(engine.hasVenueAuthority(caller, "users", Abilities.ADMIN_USER_CREATE), caller.getAuthorityDID().toString());
-			assertFalse(engine.hasVenueAuthority(caller, Engine.OUTBOUND, Abilities.OUTBOUND_ANY), caller.getAuthorityDID().toString());
+			assertFalse(engine.hasVenueAuthority(caller, Engine.OUTBOUND, Abilities.ADMIN_OUTBOUND_BYPASS), caller.getAuthorityDID().toString());
 		}
 	}
 

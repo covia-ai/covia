@@ -10,6 +10,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Added
 
+- Outbound HTTP requests require method- and destination-scoped `outbound/http` authority; configured agent models use harness authority, and the address-policy bypass is now `admin/outbound/bypass`.
+
 - Agent operations' `agentId` accepts an agent's DID (`<ownerDID>:g:<id>`), the values API's `agent` selector accepts `g/<id>` and `<ownerDID>/g/<id>`, and a messaging binding's `agent` accepts all of these forms, each checked for access as the existing forms are; a binding whose `agent` names no agent is refused when it is created.
 - Job-specific `job/read`, `job/manage` and `job/message` grants replace CRUD permissions on Job APIs; lifecycle controls return acknowledgements.
 - Embedded simulations can discover the next queued scheduled timestamp across venues and advance directly to it (#683).

@@ -202,7 +202,7 @@ public class RemoteAgentAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 		try {
 			AMap<AString, ACell> saved = engine.remoteJobs().connection(job);
 			if (!VenueConnection.resumable(saved)) { engine.remoteJobs().credentialNotKept(job); return; }
-			Venue venue = VenueConnection.restore(engine, RT.ensureString(kept.get(RemoteJobs.TARGET)), saved);
+			Venue venue = VenueConnection.restore(engine, engine.jobs().callerContext(job), RT.ensureString(kept.get(RemoteJobs.TARGET)), saved);
 			VenueRemoteAgent proxy = new VenueRemoteAgent(venue, RT.ensureString(job.getData().get(AGENT)));
 			bind(job, proxy, id, false);
 			watch(job, proxy, id);

@@ -79,7 +79,12 @@ public final class VenueDID {
 	 * @throws RuntimeException if the venue's DID document cannot be fetched
 	 */
 	public static String establish(URI base, String expected) {
-		String presented = discover(origin(base));
+		return establish(base, expected, request -> {});
+	}
+
+	/** As above, with the embedding runtime's authorization for any discovery request. */
+	public static String establish(URI base, String expected, java.util.function.Consumer<HttpRequest> authorizer) {
+		String presented = discover(origin(base), authorizer);
 		String refusal = refusal(base, expected, presented);
 		if (refusal != null) throw new AuthException(refusal);
 		return presented;
@@ -162,22 +167,28 @@ public final class VenueDID {
 	 *         document that does not carry a well-formed DID {@code id}
 	 */
 	public static String discover(String baseUrl) {
+		return discover(baseUrl, request -> {});
+	}
+
+	/** Authorizes the actual discovery send; cached identities need no network request. */
+	public static String discover(String baseUrl, java.util.function.Consumer<HttpRequest> authorizer) {
 		if (baseUrl == null) throw new IllegalArgumentException("baseUrl is required");
 		String key = baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
 		String cached = CACHE.get(key);
 		if (cached != null) return cached;
 
-		String did = fetch(key);
+		String did = fetch(key, authorizer);
 		CACHE.put(key, did); // success only — failures threw above
 		return did;
 	}
 
-	private static String fetch(String base) {
+	private static String fetch(String base, java.util.function.Consumer<HttpRequest> authorizer) {
 		try {
 			HttpRequest req = HttpRequest.newBuilder(URI.create(base + "/.well-known/did.json"))
 				.timeout(Duration.ofSeconds(10))
 				.GET()
 				.build();
+			authorizer.accept(req);
 			HttpResponse<String> resp = HTTP_CLIENT.send(req, HttpResponse.BodyHandlers.ofString());
 			if (resp.statusCode() != 200) {
 				throw new ResponseException("Venue DID discovery failed: " + base

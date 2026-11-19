@@ -396,7 +396,7 @@ public class MCPBridgeTest {
 			assertNull(seen.get(), "the server received: " + seen.get());
 
 			// Granted for that server, the secret goes there.
-			RequestContext granted = RequestContext.ofAgent(ALICE_DID, Strings.create("worker")).withCaps(Vectors.of(invoke, ops,
+			RequestContext granted = RequestContext.ofAgent(ALICE_DID, Strings.create("worker")).withCaps(Vectors.of(invoke, ops, Capability.create(Abilities.OUTBOUND, Abilities.OUTBOUND_HTTP),
 				Capability.create(Strings.create("s/BANK_TOKEN"), Abilities.SECRET_USE, Maps.of("url", origin + "/"))));
 			Job sent = engine.jobs().invokeOperation("o/lookup", Maps.empty(), granted);
 			try { sent.awaitResult(15000); } catch (Exception ignored) { /* the server refuses the call */ }

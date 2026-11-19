@@ -1363,7 +1363,7 @@ public class AgentAdapter extends AAdapter {
 		AString urlCell = RT.ensureString(config.get(AbstractLLMAdapter.K_URL));
 		String baseUrl = (urlCell != null) ? urlCell.toString() : "http://localhost:11434";
 		return toolWarningFor(modelName, baseUrl,
-			LangChainAdapter.ollamaModelCapabilities(baseUrl, modelName));
+			LangChainAdapter.ollamaModelCapabilities(engine, ctx, baseUrl, modelName));
 	}
 
 	/** The declared-data half of {@link #toolCapabilityWarning}: a resolved

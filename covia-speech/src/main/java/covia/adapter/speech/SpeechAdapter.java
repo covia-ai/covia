@@ -354,7 +354,7 @@ public class SpeechAdapter extends AAdapter implements AutoCloseable {
 		}
 		return new LocalSpeechEngine(model, voice, nativeDir,
 			flag(local, K_FETCH_NATIVES), () -> cacheDirectory(cacheDir), (int) threads, natives, LocalSpeechEngine.Sherpa::new,
-			LocalSpeechEngine.SherpaVoice::new);
+			LocalSpeechEngine.SherpaVoice::new, request -> engine.requireOutboundHttp(engine.venueContext(), request.method(), request.uri().toString()));
 	}
 
 	private static boolean flag(AMap<AString, ACell> local, AString key) {
@@ -435,6 +435,7 @@ public class SpeechAdapter extends AAdapter implements AutoCloseable {
 		String extension = AUDIO_EXTENSIONS.getOrDefault(base, MessagingMedia.extension(mediaType));
 		long started = System.nanoTime();
 		String model = optional(in, "model", s.transcribeModel());
+		if (s.transcriber().endpoint() != null) engine.requireOutboundHttp(ctx, "POST", s.transcriber().endpoint() + "/audio/transcriptions");
 		SpeechEngine.Transcript transcript = s.transcriber().transcribe(new SpeechEngine.Audio(bytes, mediaType, "audio" + extension),
 			model, string(in, "language"), string(in, "prompt"), key(ctx, s, s.transcriber(), in));
 		AMap<AString, ACell> out = Maps.of("model", model, "engine", s.transcriber().name(),
@@ -562,6 +563,7 @@ public class SpeechAdapter extends AAdapter implements AutoCloseable {
 		}
 		String voice = optional(in, "voice", s.voice());
 		String model = optional(in, "model", s.speakModel());
+		if (s.speaker().endpoint() != null) engine.requireOutboundHttp(ctx, "POST", s.speaker().endpoint() + "/audio/speech");
 		SpeechEngine.Speech speech = s.speaker().speak(new SpeechEngine.SpeakRequest(text, model, voice, format, speed,
 			string(in, "instructions"), string(in, "language")), key(ctx, s, s.speaker(), in));
 		return new Synthesised(speech, mediaType, format, voice, model, s.speaker().name());

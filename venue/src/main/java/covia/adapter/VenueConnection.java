@@ -36,8 +36,6 @@ public record VenueConnection(Venue venue, AMap<AString, ACell> credentials) {
 	private static final AString AUTHENTICATE_AS = Strings.intern("authenticateAs");
 	private static final AString RESUMABLE = Strings.intern("resumable");
 	private static final AString CALLER = Strings.intern("caller");
-	/** Saved when the caller could have the venue dial anywhere, so recovery reconnects alike. */
-	private static final AString OUTBOUND_ANY = Strings.intern("outboundAny");
 
 	/**
 	 * Refusal of {@code authenticateAs=venue} for anyone but the venue itself.
@@ -155,20 +153,18 @@ public record VenueConnection(Venue venue, AMap<AString, ACell> credentials) {
 		List<UCAN> tokens = parsedRawUcans(engine, ctx);
 		AString modeCell = RT.ensureString(RT.getIn(input, AUTHENTICATE_AS));
 		String mode = (modeCell != null) ? modeCell.toString() : "anonymous";
-		boolean unrestricted = engine.outboundUnrestricted(ctx);
 
 		VenueAuth auth;
 		AString principal;
 		String targetDID = null;
 		AMap<AString, ACell> saved = Maps.of(AUTHENTICATE_AS, Strings.create(mode));
-		if (unrestricted) saved = saved.assoc(OUTBOUND_ANY, CVMBool.TRUE);
 		switch (mode) {
 			case "anonymous" -> {
 				auth = VenueAuth.none();
 				principal = null;
 			}
 			case "caller" -> {
-				targetDID = targetVenueDID(engine, venueSpec, unrestricted);
+				targetDID = targetVenueDID(engine, ctx, venueSpec);
 				String credential = identityCredential(engine, ctx, tokens, ctx.getAuthorityDID(),
 					Strings.create(targetDID));
 				if (credential == null) throw new AuthException(NO_CALLER_CREDENTIAL + targetDID);
@@ -177,7 +173,7 @@ public record VenueConnection(Venue venue, AMap<AString, ACell> credentials) {
 			}
 			case "venue" -> {
 				if (!engine.isDirectVenue(ctx)) throw new AuthException(VENUE_MODE_DENIED);
-				targetDID = targetVenueDID(engine, venueSpec, unrestricted);
+				targetDID = targetVenueDID(engine, ctx, venueSpec);
 				auth = VenueAuth.namedKeyPair(engine.getKeyPair(), venueDID.toString(),
 					() -> engine.currentTimestamp().longValue());
 				saved = saved.assoc(Fields.VENUE, Strings.create(targetDID));
@@ -187,7 +183,7 @@ public record VenueConnection(Venue venue, AMap<AString, ACell> credentials) {
 				"authenticateAs must be one of: anonymous, caller, venue");
 		}
 
-		Venue venue = engine.connectVenue(venueSpec.toString(), targetDID, auth, unrestricted);
+		Venue venue = engine.connectVenue(ctx, venueSpec.toString(), targetDID, auth);
 		List<String> grants = admissibleGrants(engine, ctx, tokens, principal);
 		venue.setUcans(grants);
 		// A hop that signed in as its caller is never resumed, so it keeps no grants either
@@ -245,7 +241,7 @@ public record VenueConnection(Venue venue, AMap<AString, ACell> credentials) {
 	/**
 	 * Rebuilds observation of a job {@link #connect} already authorised; grants
 	 * nothing new. The target passes the outbound guard again, as it stands now,
-	 * unless the original caller could have the venue dial anywhere, and the
+	 * alongside the original caller's current outbound authority, and the
 	 * venue signs in as itself again only once the target is proven again to
 	 * hold the DID saved with it. A connection that signed in as its caller is
 	 * not {@link #resumable}.
@@ -253,16 +249,15 @@ public record VenueConnection(Venue venue, AMap<AString, ACell> credentials) {
 	 * @throws AuthException if the target is not proven to hold the saved DID
 	 * @throws UnavailableException with {@link RemoteJobs#NO_CONNECTION} when {@code saved} keeps no connection
 	 */
-	public static Venue restore(Engine engine, AString target, AMap<AString, ACell> saved) {
+	public static Venue restore(Engine engine, RequestContext ctx, AString target, AMap<AString, ACell> saved) {
 		AString kept = RT.ensureString(saved.get(AUTHENTICATE_AS));
 		if (kept == null) throw new UnavailableException(RemoteJobs.NO_CONNECTION);
 		String mode = kept.toString();
-		boolean unrestricted = CVMBool.TRUE.equals(saved.get(OUTBOUND_ANY));
 		AString savedDID = RT.ensureString(saved.get(Fields.VENUE));
 		String targetDID = savedDID == null ? null : savedDID.toString();
 		if (!"anonymous".equals(mode)) {
 			if (targetDID == null) throw new AuthException(NO_SAVED_DID + target);
-			requireProven(engine, target.toString(), targetDID, unrestricted);
+			requireProven(engine, ctx, target.toString(), targetDID);
 		}
 		VenueAuth auth = switch (mode) {
 			case "anonymous" -> VenueAuth.none();
@@ -270,7 +265,7 @@ public record VenueConnection(Venue venue, AMap<AString, ACell> credentials) {
 				() -> engine.currentTimestamp().longValue());
 			default -> throw new IllegalArgumentException("Invalid saved remote authentication mode");
 		};
-		Venue venue = engine.connectVenue(target.toString(), targetDID, auth, unrestricted);
+		Venue venue = engine.connectVenue(ctx, target.toString(), targetDID, auth);
 		venue.setJobOwner(RT.ensureString(saved.get(Fields.OWNER)));
 		AVector<ACell> grants = RT.ensureVector(saved.get(Fields.UCANS));
 		if (grants != null) {
@@ -288,21 +283,20 @@ public record VenueConnection(Venue venue, AMap<AString, ACell> credentials) {
 	 * only to a venue proven to hold the DID it is audienced to
 	 * ({@link Engine#venueProof}).
 	 */
-	private static String targetVenueDID(Engine engine, AString venueSpec, boolean unrestricted) {
+	private static String targetVenueDID(Engine engine, RequestContext ctx, AString venueSpec) {
 		String target = venueSpec.toString();
 		String did;
 		if (target.startsWith("did:")) {
 			did = target;
 		} else {
-			if (!unrestricted) engine.requireSafeUrl(target);
-			did = VenueDID.discover(target);
+			did = VenueDID.discover(target, request -> engine.requireOutboundHttp(ctx, request.method(), request.uri().toString()));
 		}
-		requireProven(engine, target, did, unrestricted);
+		requireProven(engine, ctx, target, did);
 		return did;
 	}
 
-	private static void requireProven(Engine engine, String target, String did, boolean unrestricted) {
-		String reason = engine.venueProof(target, did, unrestricted);
+	private static void requireProven(Engine engine, RequestContext ctx, String target, String did) {
+		String reason = engine.venueProof(ctx, target, did);
 		if (reason != null) throw new AuthException(VENUE_UNPROVEN + did + " at " + target + ": " + reason);
 	}
 

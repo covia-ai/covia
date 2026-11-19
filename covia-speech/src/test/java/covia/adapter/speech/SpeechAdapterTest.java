@@ -52,7 +52,7 @@ class SpeechAdapterTest {
 
 	@BeforeAll static void start() throws Exception {
 		api = new FakeSpeechApi();
-		engine = Engine.createTemp(Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true)));
+		engine = Engine.createTemp(Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true), Config.ADAPTERS, Maps.of("http", Maps.of("allowedHosts", convex.core.data.Vectors.of("127.0.0.1")))));
 		Engine.addDemoAssets(engine);
 		adapter = new SpeechAdapter();
 		engine.registerAdapter(adapter);

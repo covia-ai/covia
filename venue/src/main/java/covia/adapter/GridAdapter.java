@@ -211,7 +211,7 @@ public class GridAdapter extends AAdapter {
 		try {
 			AMap<AString, ACell> saved = engine.remoteJobs().connection(job);
 			if (!VenueConnection.resumable(saved)) { engine.remoteJobs().credentialNotKept(job); return; }
-			Venue venue = restoreConnection(RT.ensureString(kept.get(RemoteJobs.TARGET)), saved);
+			Venue venue = restoreConnection(engine.jobs().callerContext(job), RT.ensureString(kept.get(RemoteJobs.TARGET)), saved);
 			if (convex.core.data.prim.CVMBool.TRUE.equals(kept.get(RemoteJobs.OWNS_REMOTE))) {
 				bindCancellation(job, venue, Job.parseID(id));
 			}
@@ -359,8 +359,8 @@ public class GridAdapter extends AAdapter {
 		return VenueConnection.connect(engine, ctx, venueSpec, input);
 	}
 
-	private Venue restoreConnection(AString target, AMap<AString, ACell> saved) {
-		return VenueConnection.restore(engine, target, saved);
+	private Venue restoreConnection(RequestContext ctx, AString target, AMap<AString, ACell> saved) {
+		return VenueConnection.restore(engine, ctx, target, saved);
 	}
 
 	/**

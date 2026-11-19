@@ -53,6 +53,12 @@ in its caps; leave out `nb` for a local use such as signing. Call `langchain_mod
 provider readiness matters; the template is provider-neutral and otherwise uses
 the venue default.
 
+An HTTP tool call, including a model called directly as a tool, also needs
+`{"with":"outbound","can":"outbound/http/post","nb":{"url":"<endpoint>"}}`
+(or the appropriate HTTP method). Configured model calls run under harness
+controller authority and do not grant the agent outbound permission. Host policy
+still applies; see [OUTBOUND.md](../../venue/docs/OUTBOUND.md).
+
 ### Create from a template
 
 Pre-built agent configs ship at **`v/agents/templates/<name>`** (browse with `covia_list path=v/agents/templates`). Pass the path as `config`:

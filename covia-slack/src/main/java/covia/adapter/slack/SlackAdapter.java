@@ -109,6 +109,7 @@ public final class SlackAdapter extends AWebhookMessagingAdapter<BotSpec> {
 	 */
 	@Override protected MessagingConnection openConnection(WebhookBot<BotSpec> bot) throws Exception {
 		return sockets.lease(bot, bot.credential(BotSpec.APP_TOKEN), (token, members) -> {
+			requireOutboundHttp(bot, "POST", apiUrl() + "/apps.connections.open");
 			ACell opened = MessagingHttp.post(apiUrl() + "/apps.connections.open", token, Maps.empty());
 			AString url = RT.ensureString(RT.getIn(opened, MessagingSettings.key("url")));
 			if (!CVMBool.TRUE.equals(RT.getIn(opened, MessagingSettings.key("ok"))) || url == null) throw new ResponseException(CONNECTION_REFUSED);
@@ -149,6 +150,7 @@ public final class SlackAdapter extends AWebhookMessagingAdapter<BotSpec> {
 			"unfurl_links", false, "unfurl_media", false);
 		if (thread != null) body = body.assoc(MessagingSettings.key("thread_ts"), convex.core.data.Strings.create(thread));
 		String url = apiUrl() + "/chat.postMessage";
+		requireOutboundHttp(bot, "POST", url);
 		ACell result = MessagingHttp.post(url, bot.credential("token", url), body);
 		if (!CVMBool.TRUE.equals(RT.getIn(result, MessagingSettings.key("ok")))) throw new ResponseException(API_ERROR);
 		if (RT.ensureString(RT.getIn(result, MessagingSettings.key("ts"))) == null) throw new ResponseException(INVALID_RESPONSE);

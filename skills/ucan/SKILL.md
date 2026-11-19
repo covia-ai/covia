@@ -31,6 +31,7 @@ Resources are DID URL paths into a user's namespace:
 | `did:key:z.../w/projects/foo` | Specific workspace key |
 | `did:key:z.../g/Alice` | Specific agent |
 | `did:key:z.../s/API_KEY` | Specific secret |
+| `did:key:z.../outbound` | Outbound requests; bind the destination with `nb.url` |
 | `did:key:z.../o/my-op` | Specific operation |
 
 ## Abilities (the `can` field)
@@ -43,6 +44,8 @@ Resources are DID URL paths into a user's namespace:
 | `crud/delete` | Delete data |
 | `invoke` | Look up and run an arbitrary operation at the granted location; resource authority remains separate |
 | `agent/message` | Send messages to an agent |
+| `outbound/http` | HTTP sends; narrow with method leaves such as `outbound/http/get` and `nb.url` |
+| `admin/outbound/bypass` | Bypass the address guard on `<venueDID>/outbound`; grants no ordinary HTTP authority |
 | `secret/use` | Use a secret in an operation without seeing it |
 | `secret/extract` | Reveal a secret value (direct owner call only) |
 

@@ -250,7 +250,7 @@ class SonnyLabsAdapterTest {
 		}
 		Engine engine = Engine.createTemp(Maps.of(
 			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
-			Config.ADAPTERS, Maps.of("sonnylabs", adapterConfig)));
+			Config.ADAPTERS, Maps.of("sonnylabs", adapterConfig, "http", Maps.of("allowedHosts", Vectors.of("localhost")))));
 		engine.registerAdapter(new SonnyLabsAdapter());
 		Engine.addDemoAssets(engine);
 		return engine;

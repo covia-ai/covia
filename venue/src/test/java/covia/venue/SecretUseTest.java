@@ -365,7 +365,7 @@ public class SecretUseTest {
 
 			engine.getVenueState().users().ensure(publicDID).secrets().store("URL_TOKEN", "inline-private-token", encKey);
 			RequestContext urlCaller = RequestContext.of(publicDID)
-				.withCaps(useOf(Strings.create("s/URL_TOKEN"), base + "/api"));
+				.withCaps(useOf(Strings.create("s/URL_TOKEN"), base + "/api").conj(Capability.create(Abilities.OUTBOUND, Abilities.OUTBOUND_HTTP)));
 			redirectTarget.set("/api/items?token=inline-private-token");
 			Job allowedUrl = engine.jobs().callOperation("v/ops/http/get",
 				Maps.of("url", base + "/api/redirect?token={s/URL_TOKEN}"), urlCaller);

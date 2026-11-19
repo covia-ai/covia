@@ -335,7 +335,7 @@ public class TelegramAdapter extends AMessagingAdapter<BotSpec, BotRunner> {
 		if (!params.containsKey(K_PARSE_MODE_PARAM) && runner.spec.parseMode() != null) {
 			params.put(K_PARSE_MODE_PARAM, runner.spec.parseMode());
 		}
-		return runner.sendMessage(params);
+		return withOutboundCaller(ctx, () -> runner.sendMessage(params));
 	}
 
 	/**
@@ -362,7 +362,7 @@ public class TelegramAdapter extends AMessagingAdapter<BotSpec, BotRunner> {
 		Map<String, Object> params = telegramParams(paramsMap);
 		runner.requireAllowedTarget(method, params);
 		ACell files = RT.getIn(input, "files");
-		if (files == null) return runner.call(method, params);
+		if (files == null) return withOutboundCaller(ctx, () -> runner.call(method, params));
 		if (!(files instanceof AMap<?, ?> map) || map.isEmpty()) throw new InvalidInputException("files must be a non-empty object");
 		if (map.count() > 10) throw new InvalidInputException("At most 10 file parts are supported");
 		long totalBytes = 0;
@@ -387,7 +387,7 @@ public class TelegramAdapter extends AMessagingAdapter<BotSpec, BotRunner> {
 				uploads.put(part, new BotRunner.Upload(name, content.contentType(), bytes));
 			} catch (java.io.IOException e) { throw new UnavailableException("Could not read upload content", e); }
 		}
-		return runner.call(method, params, uploads);
+		return withOutboundCaller(ctx, () -> runner.call(method, params, uploads));
 	}
 
 	ACell handleDownload(RequestContext ctx, ACell input) {
@@ -404,8 +404,8 @@ public class TelegramAdapter extends AMessagingAdapter<BotSpec, BotRunner> {
 			throw new InvalidInputException(TelegramMedia.INVALID_FILE_NAME);
 		}
 		try {
-			return runner.download(fileId.toString(), (AString) destination,
-				fileName == null ? null : fileName.toString(), destination == null ? runner.context() : ctx);
+			return withOutboundCaller(ctx, () -> runner.download(fileId.toString(), (AString) destination,
+				fileName == null ? null : fileName.toString(), destination == null ? runner.context() : ctx));
 		} catch (IllegalArgumentException e) {
 			// MessagingMedia.store refuses a destination no content provider takes.
 			throw new InvalidInputException(e.getMessage(), e);

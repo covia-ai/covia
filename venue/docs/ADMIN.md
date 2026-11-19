@@ -151,7 +151,7 @@ manage MCP without becoming a venue administrator. Also avoid making a broad
 |---------|-------------------------------|-------------------|
 | Venue-scoped MCP server/catalog management | `mcp/manage` on `V/v/mcp` | Keep separate |
 | `p2p:peers` / `p2p:connect` | `p2p/read` / `p2p/manage` on `V/p2p` | Retain; classify separately if a later change needs it |
-| Bypass of outbound target checks across adapters | `outbound/any` on `V/outbound` | Retain explicit bypass permission; outside the initial rename |
+| Bypass of outbound target checks across adapters | `admin/outbound/bypass` on `V/outbound` | Separate from ordinary `outbound/http`; see [OUTBOUND.md](OUTBOUND.md) |
 | Optional Claude Code module's project `create` / `delete` | `claudecode/manage` on `V/claudecode/projects` | Retain separate operator permission; outside the initial rename |
 
 Two user-resource actions are explicitly privileged: `admin/agent` permits

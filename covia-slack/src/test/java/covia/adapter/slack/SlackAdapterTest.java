@@ -165,6 +165,24 @@ class SlackAdapterTest {
 			assertNull(f.api.sends.poll(150, TimeUnit.MILLISECONDS));
 		}
 	}
+	@Test void messagingPermissionDoesNotGrantHttpAndPooledBotsDoNotLendAuthority() throws Exception {
+		try (Fixture f = new Fixture(spec())) {
+			var caps = Vectors.<ACell>of(Maps.of("can", "invoke"), Maps.of("with", "slack/main", "can", "slack/send"));
+			RequestContext caller = RequestContext.of(OWNER).withCaps(caps);
+			var input = Maps.of("bot", "main", "channel", "C123", "text", "test message");
+			var denied = f.engine.jobs().invokeOperation("v/ops/slack/send", input, caller);
+			assertThrows(Exception.class, () -> denied.awaitResult(5000));
+			assertTrue(denied.getErrorMessage().contains("outbound/http/post"), denied.getErrorMessage());
+			assertTrue(f.api.sends.isEmpty());
+			RequestContext permitted = caller.withCaps(caps.conj(Maps.of("with", "outbound", "can", "outbound/http/post",
+				"nb", Maps.of("url", f.api.url() + "/chat.postMessage"))));
+			f.engine.jobs().invokeOperation("v/ops/slack/send", input, permitted).awaitResult(5000);
+			f.api.take();
+			var deniedAgain = f.engine.jobs().invokeOperation("v/ops/slack/send", input, caller);
+			assertThrows(Exception.class, () -> deniedAgain.awaitResult(5000));
+			assertTrue(f.api.sends.isEmpty());
+		}
+	}
 	@Test void explicitSendsNeedOwnerAndChannelAuthorityAndCannotInjectMentions() throws Exception {
 		try (Fixture f = new Fixture(spec())) {
 			assertThrows(Exception.class, () -> run(f.engine, OTHER, "v/ops/slack/send", Maps.of("bot", "main", "channel", "C123", "text", "x")));
@@ -248,7 +266,7 @@ class SlackAdapterTest {
 		try (FakeAPI api = new FakeAPI()) {
 			AMap<AString, ACell> config = Maps.of(Config.PORT, 0, Config.BIND_ADDRESS, "127.0.0.1", Config.STORE, TestTemp.etchFile("slack-restart").toString(),
 				Config.SEED, AKeyPair.createSeeded(9132).getSeed().toHexString(), Config.USERS, Maps.of(Config.AUTO_CREATE, true),
-				Config.ADAPTERS, Maps.of(NAME, Maps.of("apiUrl", api.url(), "bots", Maps.of("main", spec()))));
+				Config.ADAPTERS, Maps.of("http", Maps.of("allowedHosts", Vectors.of("127.0.0.1")), NAME, Maps.of("apiUrl", api.url(), "bots", Maps.of("main", spec()))));
 			SlackAdapter firstAdapter = new SlackAdapter(); firstAdapter.retryMillis = 25;
 			VenueServer first = VenueServer.launch(config, List.of(), engine -> { engine.registerAdapter(firstAdapter); return CompletableFuture.completedFuture(null); });
 			try {
