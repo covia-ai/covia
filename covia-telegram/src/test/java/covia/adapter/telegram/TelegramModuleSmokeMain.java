@@ -37,6 +37,8 @@ public final class TelegramModuleSmokeMain {
 				Config.AUTH, Maps.of(Config.PUBLIC, Maps.of(Config.CAPS, Vectors.of(
 					Capability.create(Strings.create("v/test/ops/echo"), Strings.create("invoke"))))),
 				Config.ADAPTERS, Maps.of(
+					// The fake Bot API is on loopback, which outbound HTTP refuses unless allowed
+					Strings.create("http"), Maps.of(Strings.create("allowedHosts"), Vectors.of(Strings.create("127.0.0.1"))),
 					Strings.create("telegram"), Maps.of(
 						Strings.create("apiUrl"), Strings.create(telegram.apiUrl()),
 						Strings.create("bots"), Maps.of(
