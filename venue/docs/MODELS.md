@@ -461,6 +461,16 @@ through `providerOptions` are also rejected because receiving a successful
 response without preserving its compaction block would lose continuation state.
 Existing context-budget handling and text tool-change notices remain available.
 
+Two gaps in LangChain4j 1.23.0 affect how a response is read:
+
+1. Its Anthropic mapper reads stop reason `refusal` as `OTHER` and exposes
+   neither the provider's stop reason nor its `stop_details`, so Covia reads
+   both from the raw response metadata.
+2. An OpenAI-format response with no choices arrives as an
+   `InternalServerException`, the exception an HTTP 5xx raises, so Covia cannot
+   tell a response with no answer from a provider that keeps failing, and such a
+   response suspends the agent rather than failing only its work.
+
 ## 6. Discovery
 
 `llm:models` enumerates the catalog instead of a Java table. It accepts the

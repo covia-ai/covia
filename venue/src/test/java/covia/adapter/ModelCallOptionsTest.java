@@ -49,6 +49,11 @@ class ModelCallOptionsTest {
 			assertEquals(feature + ModelCallOptions.UPSTREAM_REQUIRED, error.getMessage());
 		}
 		assertEquals("stop", options.emptyResponse(), "an empty response is a silent reply unless the model says otherwise");
+		AMap<AString, ACell> declining = RT.ensureMap(JSON.parse("{\"options\":{\"emptyResponse\":\"content_filter\"}}"));
+		assertEquals("content_filter", ModelCallOptions.resolve(declining, Maps.empty()).emptyResponse(),
+			"a model's own default applies");
+		assertEquals("error", ModelCallOptions.resolve(declining,
+			Maps.of("modelOptions", Maps.of("emptyResponse", "error"))).emptyResponse(), "a call overrides it");
 		for (String invalid : List.of("{\"cacheTtl\":\"2h\"}", "{\"automaticCaching\":\"true\"}",
 				"{\"thinkingPrefixMismatch\":\"ignore\"}", "{\"emptyResponse\":\"refused\"}")) {
 			assertThrows(InvalidInputException.class, () -> ModelCallOptions.resolve(
