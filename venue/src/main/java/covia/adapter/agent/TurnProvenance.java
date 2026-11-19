@@ -231,13 +231,20 @@ final class TurnProvenance {
 		return namesStart(turn) ? new Key(caller, List.of(), turn.get(Fields.ROUTE)) : new Key(caller, route(turn), null);
 	}
 
+	/** Where a conversation's turns start from, before any incoming turn: no real turn's key, since every key names a caller. */
+	static final Key START = new Key(null, List.of(), null);
+
 	/**
-	 * Only consecutive direct-owner input omits an element. Every other source
-	 * is labelled on every incoming turn, even when its route is unchanged.
-	 * An absent or legacy source does not establish direct-owner continuity.
+	 * Whether a turn keyed {@code key} needs no element after {@code last}: it
+	 * is direct-owner input at the {@link #START} or after other direct-owner
+	 * input. Every other source is labelled on every incoming turn, even when
+	 * its route is unchanged, and so is the owner's switch back from another
+	 * source. An absent or legacy source does not establish direct-owner
+	 * continuity.
 	 */
 	static boolean continues(Engine engine, RequestContext ctx, Key last, Key key) {
-		return last != null && key != null && ownerDirect(engine, ctx, last) && ownerDirect(engine, ctx, key);
+		if (key == null || !ownerDirect(engine, ctx, key)) return false;
+		return last == START || (last != null && ownerDirect(engine, ctx, last));
 	}
 
 	/**

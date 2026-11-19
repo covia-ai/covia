@@ -1127,8 +1127,8 @@ public final class ContextAssembler {
 	 * The conversation band's persisted and arriving content: ancestor frames,
 	 * the active frame's rendered turns, pending results, the input — or the
 	 * empty-state signal when there is nothing to act on. Turns submitted by a
-	 * principal carry a venue-authored source hint, omitted only between
-	 * consecutive direct-owner inputs.
+	 * principal carry a venue-authored source hint, omitted only for the
+	 * owner's direct input at the start or after other direct-owner input.
 	 */
 	static AVector<ACell> conversation(Spec spec) {
 		AVector<ACell> out = Vectors.empty();
@@ -1277,8 +1277,8 @@ public final class ContextAssembler {
 	/**
 	 * Venue-authored provenance between turns (COG-20 §4). A {@code From} element
 	 * ({@link TurnProvenance}) precedes every user turn with a recorded caller,
-	 * except a direct-owner turn following another direct-owner input
-	 * ({@link TurnProvenance#continues}). Assistant and tool messages do not
+	 * except a direct-owner turn at the start or following another
+	 * direct-owner input ({@link TurnProvenance#continues}). Assistant and tool messages do not
 	 * change the previous incoming source. A legacy turn without a caller has
 	 * no attribution and breaks direct-owner continuity.
 	 * The element names who asked without telling the model to trust, obey or
@@ -1294,7 +1294,7 @@ public final class ContextAssembler {
 		private final RequestContext ctx;
 		private final AString dialect;
 		private final boolean outcomesAsTools;
-		private TurnProvenance.Key last;
+		private TurnProvenance.Key last = TurnProvenance.START;
 
 		Attribution(Engine engine, RequestContext ctx, AString dialect, boolean outcomesAsTools) {
 			this.engine = engine;

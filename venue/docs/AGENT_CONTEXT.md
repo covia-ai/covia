@@ -367,11 +367,11 @@ relationship without presenting an agent's message as owner approval. A
 token's principal is its issuer, not the unknown holder presenting it.
 
 **When it appears.** An element precedes every incoming user turn with a
-recorded caller. It is omitted only when both this turn and the previous
-incoming turn are direct-owner input: one `auth` record vouching for the
-owner, with no `transport` field. The first owner turn is labelled, as is
-returning to the owner after another source. Assistant replies and tool
-messages do not change the previous incoming source.
+recorded caller, except direct-owner input (one `auth` record vouching for
+the owner, with no `transport` field) at the start of the conversation or
+after other direct-owner input. So the owner chatting directly carries no
+element, and returning to the owner after another source does. Assistant
+replies and tool messages do not change the previous incoming source.
 
 Every HTTP request, including a signed owner login over MCP, repeats its
 `From` element. So do sibling requests, token requests and other sources,

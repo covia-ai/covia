@@ -219,14 +219,13 @@ public class RouteProvenanceTest {
 	}
 
 	@Test
-	public void onlyConsecutiveDirectOwnerInputsOmitTheElement() {
+	public void theOwnerChattingDirectlyIsLabelledOnlyAfterAnotherSource() {
 		AMap<AString, ACell> direct = turn(alice, "one", signedIn(alice));
 		String ownerLabel = "[From (venue-verified): your owner via auth (signed in)]";
-		assertEquals(java.util.List.of(ownerLabel), elements(direct, turn(alice, "two", signedIn(alice))),
-			"the first owner input is labelled; only the following owner input omits it");
+		assertEquals(java.util.List.of(), elements(direct, turn(alice, "two", signedIn(alice))),
+			"the owner's direct input takes no element, from the first message on");
 		AMap<AString, ACell> viaToken = turn(alice, "three", record("token", alice, RouteText.builder().name(Strings.create("bot")).build()));
 		assertEquals(java.util.List.of(
-			ownerLabel,
 			"[From (venue-verified): your owner via token (\"bot\")]",
 			"[From (venue-verified): your owner via auth (signed in)]"),
 			elements(direct, viaToken, turn(alice, "four", signedIn(alice))),
@@ -234,10 +233,10 @@ public class RouteProvenanceTest {
 		AString planner = Principals.agentDID(alice, Strings.create("planner"));
 		assertEquals(2, elements(turn(planner, "hi", record("agent", planner)), turn(planner, "again", record("agent", planner))).size(),
 			"every sibling input is labelled even when the source is unchanged");
-		assertEquals(java.util.List.of(ownerLabel), elements(direct,
+		assertEquals(java.util.List.of(), elements(direct,
 			Maps.of("role", "assistant", Fields.CONTENT, "reply"), direct),
 			"the previous incoming source remains the owner across an assistant reply");
-		assertEquals(java.util.List.of(ownerLabel, ownerLabel), elements(direct,
+		assertEquals(java.util.List.of(ownerLabel), elements(direct,
 			Maps.of(Fields.MESSAGE, "legacy input without a source"), direct),
 			"an input without attribution cannot establish owner continuity");
 	}
