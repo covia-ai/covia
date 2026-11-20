@@ -4,11 +4,16 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.BiPredicate;
+import java.util.function.Consumer;
+import java.util.function.Function;
+import java.util.function.Supplier;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -26,6 +31,8 @@ import convex.core.data.Keyword;
 import convex.core.data.SignedData;
 import convex.core.data.prim.CVMLong;
 import convex.core.store.AStore;
+import convex.core.util.Utils;
+import convex.dlfs.DLFSDrives;
 import convex.dlfs.DLFSRegion;
 import convex.lattice.ALatticeApplication;
 import convex.lattice.LatticeComponent;
@@ -33,6 +40,7 @@ import convex.lattice.LatticeHost;
 import convex.lattice.OwnedMap;
 import convex.lattice.Regions;
 import convex.lattice.cursor.AForkableCursor;
+import convex.lattice.cursor.Transactions;
 import convex.lattice.generic.CASLattice;
 import covia.exception.ConfigurationException;
 import covia.exception.ConflictException;
@@ -78,6 +86,17 @@ public final class CoviaApplication
 	/** Refusal to mount a venue already mounted here; the argument is the venue's key. */
 	public static final String ALREADY_MOUNTED = "Venue %s is already mounted in this application";
 
+	/** Refusal of a transaction started inside another transaction's callback on the same thread. */
+	public static final String NESTED_TRANSACTION =
+		"A transaction cannot start inside another transaction's callback: make the change through that callback's draft";
+
+	/** Refusal of a callback that changed a venue's working copy rather than the draft; the argument is the venue's key. */
+	public static final String CHANGED_OUTSIDE_DRAFT =
+		"Venue %s changed outside the transaction's draft while its callback ran: make every change through the draft";
+
+	/** Use of a draft after its transaction has finished. */
+	public static final String DRAFT_FINISHED = "This transaction has finished: its draft can no longer be used";
+
 	private static final Logger log = LoggerFactory.getLogger(CoviaApplication.class);
 
 	/** Builds a mounted venue's engine; tests in this package substitute their own. */
@@ -102,6 +121,8 @@ public final class CoviaApplication
 	private final LatticeHost<Index<Keyword, ACell>> host;
 	/** The application's policy, its clock: each mounted venue adds its own signer. */
 	private final VenueContext venueContext;
+	/** Set on the thread running a transaction's callback, to refuse a nested one. */
+	private final ThreadLocal<Boolean> transacting = new ThreadLocal<>();
 
 	/**
 	 * Builds the application on a host, on the system clock. Register it with
@@ -127,11 +148,19 @@ public final class CoviaApplication
 		this.venueContext = VenueContext.create(clock);
 		this.regions = new Regions(host.cursor());
 		this.venues = venueRecords(regions);
-		this.dlfs = regions.create(Covia.DLFS,
-			(AForkableCursor<AHashMap<ACell, SignedData<AHashMap<AString, AVector<ACell>>>>> cursor)
-				-> DLFSRegion.connect(cursor, host.store(), null, clock));
+		this.dlfs = dlfsRegion(regions, host.store(), clock);
 		this.timer = new AutoUpdate(this, clock);
 		timer.failure().thenAccept(e -> log.error("Venue scheduler: the application's update timer failed", e));
+	}
+
+	/**
+	 * Registers :dlfs under {@code regions}. The region holds no signer: a user's
+	 * drives are authored over its cursor with that user's key.
+	 */
+	private static DLFSRegion dlfsRegion(Regions regions, AStore store, Supplier<CVMLong> clock) {
+		return regions.create(Covia.DLFS,
+			(AForkableCursor<AHashMap<ACell, SignedData<AHashMap<AString, AVector<ACell>>>>> cursor)
+				-> DLFSRegion.connect(cursor, store, null, clock));
 	}
 
 	/** Registers :grid and its regions under {@code regions}, returning the venue records. */
@@ -189,6 +218,167 @@ public final class CoviaApplication
 			} catch (IOException e) {
 				throw new UncheckedIOException("Persisting a venue's copy failed", e);
 			}
+		}
+	}
+
+	/**
+	 * Changes the application's state in one transaction: every change the
+	 * callback makes through its {@link Draft}, to any mounted venue and to any
+	 * DLFS drive, reaches the host root in one update, or none of it does.
+	 *
+	 * <p>The callback runs once, while every other write to the application
+	 * waits: keep it short. Each mounted venue's working copy is claimed, in
+	 * mount order, and synced first, so the draft starts from everything the
+	 * venue holds; after the commit each copy syncs again and takes the result,
+	 * so it stays its record's only writer. The callback uses only the draft, does
+	 * no external I/O and does not wait for other threads. Its exception
+	 * propagates and nothing applies.</p>
+	 *
+	 * <p>A commit is in the host's memory: the host's next sync saves it, and its
+	 * flush makes it durable ({@link Engine#flush()}).</p>
+	 *
+	 * @param <R> The callback's result type
+	 * @param work The changes, made through the draft
+	 * @return The callback's result, once committed
+	 * @throws IllegalStateException if called inside another transaction's callback
+	 *         ({@link #NESTED_TRANSACTION}), or if the callback changed a venue's
+	 *         working copy rather than the draft ({@link #CHANGED_OUTSIDE_DRAFT})
+	 */
+	public <R> R transact(Function<? super Draft, ? extends R> work) {
+		List<Mounted> order = new ArrayList<>(mounted.values());
+		order.sort(Comparator.comparingLong(Mounted::order));
+		return transact(order, work);
+	}
+
+	/**
+	 * As {@link #transact}, with no result.
+	 *
+	 * @param work The changes, made through the draft
+	 */
+	public void execute(Consumer<? super Draft> work) {
+		Objects.requireNonNull(work, "work");
+		transact(draft -> {
+			work.accept(draft);
+			return null;
+		});
+	}
+
+	/**
+	 * As {@link #transact}, claiming one mounted venue only: the draft reaches no
+	 * other venue, and their writes do not wait for the venue syncs.
+	 *
+	 * @throws ConfigurationException if the venue is not mounted ({@link #NOT_MOUNTED})
+	 */
+	<R> R transact(AccountKey venueKey, Function<? super Draft, ? extends R> work) {
+		return transact(List.of(mounted(venueKey)), work);
+	}
+
+	private <R> R transact(List<Mounted> venues, Function<? super Draft, ? extends R> work) {
+		Objects.requireNonNull(work, "work");
+		if (transacting.get() != null) throw new IllegalStateException(NESTED_TRANSACTION);
+		transacting.set(Boolean.TRUE);
+		try {
+			return claimed(venues, 0, work);
+		} finally {
+			transacting.remove();
+		}
+	}
+
+	/**
+	 * Takes the claim of each venue's working copy from {@code next} on, then
+	 * runs the transaction holding them all. A copy's claim comes before the
+	 * root's, the order the copy's own sync takes them in.
+	 */
+	private <R> R claimed(List<Mounted> venues, int next, Function<? super Draft, ? extends R> work) {
+		if (next < venues.size()) {
+			return venues.get(next).state().exclusive().transact(held -> claimed(venues, next + 1, work));
+		}
+		Map<AccountKey, ACell> synced = new LinkedHashMap<>();
+		for (Mounted venue : venues) {
+			venue.state().sync();
+			synced.put(venue.state().getOwnerKey(), venue.state().storage().getOrDefault(null));
+		}
+		R result = Transactions.transactExclusively(storage(), root -> {
+			Draft draft = new Draft(this, root, venues);
+			try {
+				R r = work.apply(draft);
+				draft.signVenues();
+				for (Mounted venue : venues) {
+					AccountKey key = venue.state().getOwnerKey();
+					if (!Utils.equals(synced.get(key), venue.state().storage().getOrDefault(null))) {
+						throw new IllegalStateException(String.format(CHANGED_OUTSIDE_DRAFT, key));
+					}
+				}
+				return r;
+			} finally {
+				draft.finish();
+			}
+		});
+		for (Mounted venue : venues) venue.state().sync();
+		return result;
+	}
+
+	/**
+	 * The application's state inside one transaction ({@link CoviaApplication#transact}):
+	 * the venues it claimed and the DLFS drives, over the transaction's private
+	 * draft of the host root. Nothing reaches the application until the callback
+	 * returns and the transaction commits. Use it only inside the callback.
+	 */
+	public static final class Draft {
+		private final CoviaApplication application;
+		private final AForkableCursor<Index<Keyword, ACell>> root;
+		/** The claimed venues' policies, each with its venue's signer. */
+		private final Map<AccountKey, VenueContext> claimed = new LinkedHashMap<>();
+		/** Each venue's state in this draft, opened on first use. */
+		private final Map<AccountKey, VenueState> opened = new LinkedHashMap<>();
+		private final DLFSRegion dlfs;
+		private boolean finished = false;
+
+		private Draft(CoviaApplication application, AForkableCursor<Index<Keyword, ACell>> root, List<Mounted> venues) {
+			this.application = application;
+			this.root = root;
+			for (Mounted venue : venues) claimed.put(venue.state().getOwnerKey(), venue.state().getContext());
+			this.dlfs = dlfsRegion(new Regions(root), application.host.store(), application.venueContext::currentTimestamp);
+		}
+
+		/**
+		 * A claimed venue's state in this transaction, with the venue's own domain
+		 * operations. It signs once with the venue's key as the transaction commits.
+		 *
+		 * @param venueKey The venue's key
+		 * @return The venue's state, the same component on every call
+		 * @throws ConfigurationException if the venue is not mounted ({@link #NOT_MOUNTED})
+		 */
+		public VenueState venue(AccountKey venueKey) {
+			requireOpen();
+			VenueContext context = claimed.get(venueKey);
+			if (context == null) throw new ConfigurationException(String.format(NOT_MOUNTED, venueKey));
+			return opened.computeIfAbsent(venueKey, key -> VenueState.fromRoot(root, key, context::sign, context));
+		}
+
+		/**
+		 * An owner's DLFS drives in this transaction, authored with the owner's key.
+		 *
+		 * @param owner The drives' owner, whose key signs them
+		 * @return The owner's drives
+		 */
+		public DLFSDrives drives(AKeyPair owner) {
+			requireOpen();
+			return DLFSRegion.connect(dlfs.cursor(), application.host.store(), owner::signData,
+				application.venueContext::currentTimestamp).drives(owner.getAccountKey());
+		}
+
+		/** Signs each venue changed in this draft into the draft, once. */
+		private void signVenues() {
+			for (VenueState venue : opened.values()) venue.sync();
+		}
+
+		private void finish() {
+			finished = true;
+		}
+
+		private void requireOpen() {
+			if (finished) throw new IllegalStateException(DRAFT_FINISHED);
 		}
 	}
 
