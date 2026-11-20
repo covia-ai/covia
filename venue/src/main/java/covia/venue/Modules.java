@@ -1,15 +1,21 @@
 package covia.venue;
 
+import java.io.BufferedReader;
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStreamReader;
 import java.net.URL;
+import java.net.URLConnection;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.util.ArrayList;
+import java.util.Enumeration;
+import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.ServiceLoader;
+import java.util.Set;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -32,7 +38,9 @@ import covia.exception.UnsupportedException;
  *
  * <p>A module is a self-contained jar compiled against {@code covia-venue}
  * (provided scope) that declares its adapters via
- * {@code META-INF/services/covia.adapter.AAdapter}. Each module gets its own
+ * {@code META-INF/services/covia.adapter.AAdapter}. Its adapters are exactly
+ * those its own jar declares there: a service file elsewhere on the venue's
+ * classpath never makes an adapter a module's. Each module gets its own
  * {@link ModuleClassLoader} (split delegation — see there); its adapters are
  * ordinary adapters: catalog materialisation, {@code /v/info/adapters},
  * capabilities, gates and argument defaults all apply, and each takes its
@@ -225,15 +233,57 @@ public class Modules {
 		}
 
 		try {
-			List<AAdapter> adapters = new ArrayList<>();
-			for (AAdapter adapter : ServiceLoader.load(AAdapter.class, loader)) adapters.add(adapter);
+			List<AAdapter> adapters = declaredAdapters(loader);
 			if (adapters.isEmpty()) throw new IllegalStateException(
 				"Module declares no adapters (missing META-INF/services/covia.adapter.AAdapter?): " + jarPath);
 			return new Discovered(name, jarPath, sha256, loader, List.copyOf(adapters));
-		} catch (RuntimeException | Error e) {
+		} catch (IOException | ReflectiveOperationException | RuntimeException | Error e) {
 			closeQuietly(loader, e);
-			if (e instanceof IllegalStateException) throw (RuntimeException) e;
+			if (e instanceof IllegalStateException failure) throw failure;
 			throw new IllegalStateException("Failed to load module: " + jarPath, e);
+		}
+	}
+
+	/** The service file in which a module jar declares its adapters. */
+	private static final String ADAPTER_SERVICES = "META-INF/services/" + AAdapter.class.getName();
+
+	/**
+	 * New instances of the adapters the module jar itself declares, in the
+	 * order its service file lists them. Only the jar's own service file is
+	 * read: {@link java.util.ServiceLoader} would also read every one on the
+	 * venue's classpath, and so take the venue's or an embedder's adapters for
+	 * the module's. The file is read as {@code ServiceLoader} reads one (UTF-8,
+	 * one class name a line, {@code #} comments, duplicates ignored), and each
+	 * class loads through the module's loader and needs a public no-argument
+	 * constructor.
+	 */
+	private static List<AAdapter> declaredAdapters(ModuleClassLoader loader)
+			throws IOException, ReflectiveOperationException {
+		Set<String> classNames = new LinkedHashSet<>();
+		Enumeration<URL> files = loader.findResources(ADAPTER_SERVICES);
+		while (files.hasMoreElements()) readServiceFile(files.nextElement(), classNames);
+		List<AAdapter> adapters = new ArrayList<>();
+		for (String className : classNames) {
+			Class<? extends AAdapter> type = Class.forName(className, false, loader).asSubclass(AAdapter.class);
+			adapters.add(type.getConstructor().newInstance());
+		}
+		return adapters;
+	}
+
+	/** Adds the class names a service file lists to {@code classNames}. */
+	private static void readServiceFile(URL file, Set<String> classNames) throws IOException {
+		URLConnection connection = file.openConnection();
+		// An uncached read leaves no JarFile open once the module's loader closes
+		connection.setUseCaches(false);
+		try (BufferedReader reader = new BufferedReader(
+				new InputStreamReader(connection.getInputStream(), StandardCharsets.UTF_8))) {
+			String line;
+			while ((line = reader.readLine()) != null) {
+				int comment = line.indexOf('#');
+				if (comment >= 0) line = line.substring(0, comment);
+				line = line.strip();
+				if (!line.isEmpty()) classNames.add(line);
+			}
 		}
 	}
 

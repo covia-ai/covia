@@ -135,6 +135,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - A `convex:query` or `convex:transact` source that is empty or not one Convex Lisp form fails as invalid input with the reader's reason, instead of as a fault in the `convex` adapter.
 - `convex:query` refuses an `address` that is not a Convex account address, instead of running the query without one.
 - A `convex:query` or `convex:transact` that gets no result from its peer in time completes with Convex's `TIMEOUT` error code, after 20 seconds by default rather than 60, instead of failing as a fault in the `convex` adapter.
+- A module's adapters are only those its own jar declares: loading a module no longer registers again the adapters declared on the venue's classpath, such as an embedder's, lists them as the module's in `v/info/modules` and `v/info/adapters/<name>`, or removes them when the module unloads (#618).
 
 ## [0.11.0] - 2026-11-10
 

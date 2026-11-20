@@ -105,6 +105,8 @@ public class ModuleLoaderTest {
 			assertTrue(adapter.getClass().getClassLoader() instanceof ModuleClassLoader,
 				"module adapter must be defined by the module classloader, was: "
 					+ adapter.getClass().getClassLoader());
+			assertNull(engine.getRegisteredAdapter(modtest.ClasspathTestAdapter.NAME),
+				"an adapter the venue's classpath declares does not come in with the module");
 			assertTrue(adapter.getDescription().contains("configured"),
 				"its adapters.modtest settings reach it as it registers");
 
@@ -516,6 +518,42 @@ public class ModuleLoaderTest {
 			assertNotNull(engine.resolveAsset(Strings.create("v/ops/modtest/echo"), ctx),
 				"unloading leaves catalog metadata for possible later replacement");
 			assertTrue(engine.getModules().isEmpty());
+		} finally {
+			engine.close();
+		}
+	}
+
+	/**
+	 * An adapter the venue's own classpath declares as a service, as an
+	 * embedder's adapter jars do, is never a module's: loading a module at
+	 * runtime neither registers nor replaces it, the module's records name only
+	 * the adapters its jar declares, and unloading the module leaves it running.
+	 */
+	@Test
+	public void testModuleClaimsOnlyItsOwnAdapters(@TempDir Path dir) throws Exception {
+		Path jar = buildModuleJar(dir);
+		Engine engine = bootDynamic(dir, false);
+		try {
+			String embeddedName = modtest.ClasspathTestAdapter.NAME;
+			AAdapter embedded = new modtest.ClasspathTestAdapter();
+			engine.registerAdapter(embedded);
+
+			asVenue(engine, "v/ops/venue/module/load", Maps.of(
+				Strings.create("module"), Strings.create(jar.getFileName().toString())));
+			assertNotNull(engine.getAdapter("modtest"));
+			assertSame(embedded, engine.getAdapter(embeddedName), "loading the module leaves it as it was");
+			assertNull(engine.moduleOf(embeddedName));
+			assertEquals(java.util.List.of("modtest"), engine.getModule("modtest-module").adapterNames());
+			ACell modInfo = engine.resolvePath(Strings.create("v/info/modules/modtest-module"), engine.venueContext());
+			assertEquals(Vectors.of(Strings.create("modtest")), RT.getIn(modInfo, "adapters"));
+			ACell info = engine.resolvePath(Strings.create("v/info/adapters/" + embeddedName), engine.venueContext());
+			assertNotNull(info);
+			assertNull(RT.getIn(info, "module"), "no module owns it");
+
+			asVenue(engine, "v/ops/venue/module/unload",
+				Maps.of(Strings.create("name"), Strings.create("modtest-module")));
+			assertNull(engine.getAdapter("modtest"));
+			assertSame(embedded, engine.getAdapter(embeddedName), "unloading the module leaves it running");
 		} finally {
 			engine.close();
 		}

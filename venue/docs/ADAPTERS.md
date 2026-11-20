@@ -214,8 +214,9 @@ a transformed URL and then pass the original spelling to an HTTP library.
 
 The significant lifecycle is:
 
-1. A built-in adapter is constructed, or a module discovers one through
-   `ServiceLoader`. At launch a module's adapters are discovered before the
+1. A built-in adapter is constructed, or a module constructs one its jar
+   declares (see [Optional module packaging](#optional-module-packaging)).
+   At launch a module's adapters are discovered before the
    venue is prepared, so the venue can migrate their state with its own; the
    constructor may not use the engine.
 2. Registration offers the effective `adapters.<name>` configuration through
@@ -1331,7 +1332,11 @@ whether to install their dependency tree. A module:
   jars and the module jar could load as a Java module layer over the venue;
 - sets `covia.module.name` to `covia.<name>`, which the parent POM writes as
   the jar's `Automatic-Module-Name`;
-- declares every adapter in `META-INF/services/covia.adapter.AAdapter`;
+- declares every adapter in `META-INF/services/covia.adapter.AAdapter`, each
+  class with a public no-argument constructor. The venue reads only the
+  module jar's own file, so a module's adapters are exactly those it declares;
+  an adapter declared on the venue's classpath, such as one an embedder
+  ships, never belongs to a module;
 - uses the services resource transformer when shading;
 - includes its operation JSON, skills, and templates in its own resources,
   under classpath paths the venue jar does not use (for example
