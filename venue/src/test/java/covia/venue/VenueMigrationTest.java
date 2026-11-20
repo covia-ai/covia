@@ -22,6 +22,7 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMDouble;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
+import convex.lattice.generic.LWWLattice;
 import covia.api.Fields;
 import covia.grid.Principals;
 import covia.grid.Status;
@@ -101,7 +102,10 @@ class VenueMigrationTest {
 		ACell current = venue.get();
 		VenueState.level(venue.cursor(), Covia.VERSION).set(CVMLong.create(3));
 		venue.migrate(NO_SECRETS);
-		assertEquals(current, venue.get(), "a store already in the current shape comes through as it was");
+		// Each write stamps the store with the clock, so only its content is compared
+		assertEquals(RT.ensureMap(current).dissoc(LWWLattice.KEY_TIMESTAMP),
+			RT.ensureMap(venue.get()).dissoc(LWWLattice.KEY_TIMESTAMP),
+			"a store already in the current shape comes through as it was");
 	}
 
 	@Test void migrationConflictPreservesVersionAndBothCopies() {
