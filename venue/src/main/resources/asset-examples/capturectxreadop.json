@@ -1,0 +1,11 @@
+{
+	"name": "Capture Context Read Operation",
+	"description": "Test-only read-only op: records the RequestContext it ran under (keyed by the user DID whose namespace it ran in), as capturectx does, and echoes the input. Being read-only, a context load may call it.",
+	"dateCreated": "2026-11-20T00:00:00Z",
+	"operation": {
+		"adapter": "test:capturectxread",
+		"readOnly": true,
+		"input": { "type": "object" },
+		"output": {}
+	}
+}

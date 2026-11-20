@@ -187,6 +187,55 @@ public class AgentRunLoopIdentityTest {
 			"and nothing else");
 	}
 
+	/**
+	 * An op entry in an agent's {@code config.loads} is the harness's: its
+	 * operation is called as the agent's controller, and the execution scope
+	 * names the agent whose context it assembles (AGENT_CONTEXT.md §6.2).
+	 */
+	@Test
+	public void testAConfigLoadIsCalledAsTheControllerForItsAgent() {
+		RequestContext alice = RequestContext.of(ALICE_DID);
+		engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "loader",
+			Fields.CONFIG, Maps.of("caps", Vectors.of(
+				Capability.create(Strings.create("g/"), Abilities.AGENT_CREATE),
+				Maps.of("can", Abilities.INVOKE)))),
+			alice).awaitResult(5000);
+		AString loader = Principals.agentDID(ALICE_DID, Strings.create("loader"));
+		engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "loaded",
+			Fields.CONFIG, Maps.of(Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/test/ops/llm",
+				"loads", Maps.of("probe", Maps.of("op", "v/test/ops/capturectxread", "input", Maps.empty())))),
+			engine.context(ALICE_DID, loader)).awaitResult(5000);
+
+		engine.jobs().invokeOperation("v/ops/agent/chat", Maps.of(Fields.AGENT_ID, "loaded", Fields.MESSAGE, "hi"),
+			alice).awaitResult(10000);
+
+		RequestContext load = TestAdapter.CAPTURED_CTX.get(ALICE_DID);
+		assertNotNull(load, "the load must have run");
+		assertEquals(loader, load.getAuthorityDID(), "called as its controller");
+		assertEquals(ALICE_DID, load.getExecutionScope().ownerDID(), "in an execution of its owner's account");
+		assertEquals(Strings.create("loaded"), load.getExecutionScope().agentId(),
+			"naming the agent whose context it assembles");
+	}
+
+	/** An op entry a caller supplies when it starts a session is called as the agent itself. */
+	@Test
+	public void testASessionLoadIsCalledAsTheAgent() {
+		RequestContext alice = RequestContext.of(ALICE_DID);
+		engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "session-loaded",
+			Fields.CONFIG, Maps.of(Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/test/ops/llm",
+				"caps", "unrestricted")),
+			alice).awaitResult(5000);
+
+		engine.jobs().invokeOperation("v/ops/agent/chat", Maps.of(Fields.AGENT_ID, "session-loaded", Fields.MESSAGE, "hi",
+			"loads", Maps.of("probe", Maps.of("op", "v/test/ops/capturectxread", "input", Maps.empty()))),
+			alice).awaitResult(10000);
+
+		RequestContext load = TestAdapter.CAPTURED_CTX.get(ALICE_DID);
+		assertNotNull(load, "the load must have run");
+		assertEquals(Principals.agentDID(ALICE_DID, Strings.create("session-loaded")), load.getAuthorityDID(),
+			"called as the agent");
+	}
+
 	@Test
 	public void testJobRecordsAttributeTheActingAgent() {
 		// The point of giving an agent a DID: a job says who did it, not merely

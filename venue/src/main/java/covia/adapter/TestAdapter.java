@@ -166,7 +166,9 @@ public class TestAdapter extends AAdapter implements covia.adapter.token.TokenAc
      * ({@code ctx.getUserDID()}) — for an agent transition, its owner. Lets tests
      * assert deterministically which identity / namespace / proofs / caps a
      * transition actually ran with — including that two same-named agents owned
-     * by different users run under their own identities (see #91).
+     * by different users run under their own identities (see #91). The
+     * {@code capturectxread} op records the same way and is read-only, so a
+     * context load may call it.
      */
     public static final java.util.concurrent.ConcurrentHashMap<AString, RequestContext> CAPTURED_CTX
         = new java.util.concurrent.ConcurrentHashMap<>();
@@ -248,6 +250,7 @@ public class TestAdapter extends AAdapter implements covia.adapter.token.TokenAc
                 case "echo":
                     return CompletableFuture.completedFuture(handleEcho(input));
                 case "capturectx":
+                case "capturectxread":
                     return CompletableFuture.completedFuture(handleCaptureCtx(ctx, input));
                 case "taskcomplete":
                     return CompletableFuture.completedFuture(handleTaskComplete(ctx, input));
@@ -352,6 +355,7 @@ public class TestAdapter extends AAdapter implements covia.adapter.token.TokenAc
 			installTestAsset("random",       BASE+"randomop.json");
 			installTestAsset("echo",         BASE+"echoop.json");
 			installTestAsset("capturectx",   BASE+"capturectxop.json");
+			installTestAsset("capturectxread", BASE+"capturectxreadop.json");
 			installTestAsset("llm",          BASE+"testllm.json");
 			installTestAsset("toolllm",      BASE+"testtoolllm.json");
 			installTestAsset("skillllm",     BASE+"testskillllm.json");
