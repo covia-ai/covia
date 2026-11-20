@@ -110,7 +110,7 @@ public final class ExternalAgents {
 		job.update(d -> d.assoc(Fields.AGENT_ID, id).assoc(Fields.ADDRESS, address)
 			.assoc(Fields.SESSION_ID, sid));
 		if (job.isFinished()) return;
-		if (!agent.claimExternalTurn(sid, job.getID(), caller.getAuthorityDID(), content, !supplied))
+		if (!agent.claimExternalTurn(sid, job.getID(), caller.getAuthorityDID(), caller.getRoute(), content, !supplied))
 			throw new ConflictException(SESSION_BUSY);
 		if (job.isFinished()) { agent.session(sid).finishExternalTurn(job.getID(), null, null); return; }
 		try {

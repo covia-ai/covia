@@ -54,6 +54,10 @@ Covia `sessionId` on later calls to continue that conversation. A supplied unkno
 ID is rejected; omitting it starts a separate conversation. Provider IDs never
 replace this public Covia ID.
 
+Each turn sent to an external agent is recorded in its Covia session with its
+`caller` and the request's `route`, from the request context only, as a native
+agent's user turn is. The backend itself receives only the turn's content.
+
 | Implementation | Provider conversation identity |
 |---|---|
 | Claude Code | Claude session ID, passed to subsequent run turns for resumption |

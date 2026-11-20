@@ -431,13 +431,21 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 		}), null);
 	}
 
-	/** Claim one external turn per session. A retained claim after restart prevents blind replay. */
+	/**
+	 * Claim one external turn per session. A retained claim after restart
+	 * prevents blind replay. The turn records who sent it and the request's
+	 * route, as a native runtime's user turn does.
+	 *
+	 * @param route the request's route ({@code RequestContext.getRoute}); null
+	 *        for none, recorded as an empty route
+	 */
 	@SuppressWarnings("unchecked")
-	public boolean claimExternalTurn(Blob sid, Blob jobId, AString caller, ACell content, boolean create) {
+	public boolean claimExternalTurn(Blob sid, Blob jobId, AString caller, AVector<ACell> route,
+			ACell content, boolean create) {
 		return Records.ifPresent(this, () -> transact(draft -> {
 			if (!draft.exists() || TERMINATED.equals(draft.getStatus()) || SUSPENDED.equals(draft.getStatus())) return false;
 			if (create) draft.sessions().create(sid, caller, null);
-			return draft.session(sid).claimExternalTurn(jobId, content);
+			return draft.session(sid).claimExternalTurn(jobId, caller, route, content);
 		}), false);
 	}
 

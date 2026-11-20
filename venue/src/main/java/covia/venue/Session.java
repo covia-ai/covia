@@ -427,7 +427,7 @@ public final class Session extends ALatticeComponent<ACell>
 	}
 
 	/** Admission is composed with agent status and optional creation by Agent. */
-	boolean claimExternalTurn(Blob jobId, ACell content) {
+	boolean claimExternalTurn(Blob jobId, AString caller, AVector<ACell> route, ACell content) {
 		CVMLong timestamp = context.currentTimestamp();
 		return update(session -> {
 			AMap<AString, ACell> external = RT.ensureMap(session.get(KEY_EXTERNAL));
@@ -435,7 +435,8 @@ public final class Session extends ALatticeComponent<ACell>
 			ACell claimed = external.get(Fields.JOB_ID);
 			if (claimed != null) return jobId.equals(claimed) ? session : null;
 			session = appendTurnsToRoot(session, Vectors.of(Maps.of(K_ROLE, ROLE_USER,
-				K_CONTENT, content, K_SOURCE, SOURCE_CHAT, K_TURN_TS, timestamp)));
+				K_CONTENT, content, K_SOURCE, SOURCE_CHAT, K_TURN_TS, timestamp,
+				Fields.CALLER, caller, Fields.ROUTE, (route == null) ? Vectors.empty() : route)));
 			return session.assoc(KEY_EXTERNAL, external.assoc(Fields.JOB_ID, jobId));
 		});
 	}

@@ -104,10 +104,16 @@ public class AgentSessionCycleTest {
 	public void externalCompletionIsClaimedIdempotentAndComposable() {
 		Blob job = Blob.fromHex("01");
 		Blob other = Blob.fromHex("02");
-		assertTrue(agent.claimExternalTurn(sid, job, userDid, Strings.create("request"), false));
-		assertTrue(agent.claimExternalTurn(sid, job, userDid, Strings.create("repeated"), false));
-		assertFalse(agent.claimExternalTurn(sid, other, userDid, Strings.create("competing"), false));
+		AVector<ACell> route = Vectors.of(Maps.of(Fields.PRINCIPAL, Strings.create("did:test:bot")));
+		assertTrue(agent.claimExternalTurn(sid, job, userDid, route, Strings.create("request"), false));
+		assertTrue(agent.claimExternalTurn(sid, job, userDid, route, Strings.create("repeated"), false));
+		assertFalse(agent.claimExternalTurn(sid, other, userDid, route, Strings.create("competing"), false));
 		assertEquals(1, Session.sessionTurnCount(agent.session(sid).getRecord()));
+		// The turn records who sent it and what carried it, as a native runtime's does
+		AVector<ACell> conversation = rootConversation();
+		ACell sent = conversation.get(conversation.count() - 1);
+		assertEquals(userDid, RT.getIn(sent, Fields.CALLER));
+		assertEquals(route, RT.getIn(sent, Fields.ROUTE));
 		ACell claimed = agent.getRecord();
 		agent.session(sid).finishExternalTurn(other, null, Strings.create("wrong job"));
 		assertEquals(claimed, agent.getRecord());
