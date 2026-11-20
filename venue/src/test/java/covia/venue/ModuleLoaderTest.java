@@ -558,4 +558,36 @@ public class ModuleLoaderTest {
 			engine.close();
 		}
 	}
+
+	/**
+	 * A module owns an adapter it registered, not a name: one an embedder
+	 * registers in its place under the same name is not the module's, and
+	 * unloading the module leaves it running.
+	 */
+	@Test
+	public void testAdapterRegisteredOverAModulesIsNotTheModules(@TempDir Path dir) throws Exception {
+		Path jar = buildModuleJar(dir);
+		Engine engine = bootDynamic(dir, false);
+		try {
+			asVenue(engine, "v/ops/venue/module/load", Maps.of(
+				Strings.create("module"), Strings.create(jar.getFileName().toString())));
+			assertEquals("modtest-module", engine.moduleOf("modtest").name());
+
+			AAdapter embedded = new modtest.ClasspathTestAdapter() {
+				@Override public String getName() { return "modtest"; }
+			};
+			engine.registerAdapter(embedded);
+			assertSame(embedded, engine.getAdapter("modtest"));
+			assertNull(engine.moduleOf("modtest"));
+			ACell info = engine.resolvePath(Strings.create("v/info/adapters/modtest"), engine.venueContext());
+			assertNotNull(info);
+			assertNull(RT.getIn(info, "module"), "no module owns it");
+
+			asVenue(engine, "v/ops/venue/module/unload",
+				Maps.of(Strings.create("name"), Strings.create("modtest-module")));
+			assertSame(embedded, engine.getAdapter("modtest"), "unloading the module leaves it running");
+		} finally {
+			engine.close();
+		}
+	}
 }

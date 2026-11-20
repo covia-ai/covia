@@ -304,7 +304,8 @@ final class VenueBootstrapMaterializer {
 			.assoc(Fields.DESCRIPTION, Strings.create(adapter.getDescription()))
 			.assoc(K_OPERATIONS, operations)
 			.assoc(K_KERNEL, CVMBool.of(engine.isKernelAdapter(adapter.getName())));
-		Modules.LoadedModule module = engine.moduleOf(adapter.getName());
+		// By the instance: one being registered is published before it replaces the one under its name
+		Modules.LoadedModule module = engine.moduleOf(adapter);
 		if (module != null) summary = summary.assoc(K_MODULE, Strings.create(module.name()));
 		return summary;
 	}

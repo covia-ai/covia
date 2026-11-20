@@ -2062,12 +2062,21 @@ public class Engine {
 		return java.util.List.copyOf(modules.values());
 	}
 
-	/** The module that registered the named adapter, or null for a built-in. */
+	/**
+	 * The module that registered the adapter now registered under this name,
+	 * or null for a built-in or one registered apart from any module.
+	 */
 	public synchronized Modules.LoadedModule moduleOf(String adapterName) {
-		java.util.ArrayList<Modules.LoadedModule> loaded = new java.util.ArrayList<>(modules.values());
-		for (int i = loaded.size() - 1; i >= 0; i--) {
-			Modules.LoadedModule module = loaded.get(i);
-			if (module.adapterNames().contains(adapterName)) return module;
+		return moduleOf(getRegisteredAdapter(adapterName));
+	}
+
+	/**
+	 * The module that registered {@code adapter} ({@link Modules.LoadedModule#owns}),
+	 * or null for a built-in, an embedder's or a null adapter.
+	 */
+	public synchronized Modules.LoadedModule moduleOf(AAdapter adapter) {
+		for (Modules.LoadedModule module : modules.values()) {
+			if (module.owns(adapter)) return module;
 		}
 		return null;
 	}

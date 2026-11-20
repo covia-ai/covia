@@ -279,7 +279,11 @@ The significant lifecycle is:
    while the adapter is stopped is the adapter's own policy.
 8. Module unload deregisters its live adapters and closes `AutoCloseable`
    resources and the module classloader. In-flight jobs retain their adapter
-   instance and may finish.
+   instance and may finish. A module's adapters are the instances it
+   registered, not their names: one registered in place of a module's under
+   the same name, such as an embedder's, is not the module's, so unloading
+   or reloading the module leaves it, and `v/info/adapters/<name>` names no
+   module for it.
 9. At venue shutdown, in-flight Jobs get `shutdown.graceMs` to finish;
    `suspendJob(job)` is then called for each still in flight, whether or not
    its adapter is started. The default pauses a pausable Job and cancels the

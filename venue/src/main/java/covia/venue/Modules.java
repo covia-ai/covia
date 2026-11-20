@@ -89,7 +89,21 @@ public class Modules {
 	 * @param adapterNames Names of the adapters registered from this module
 	 */
 	public record LoadedModule(String name, Path jar, String sha256,
-			ModuleClassLoader loader, List<String> adapterNames) {}
+			ModuleClassLoader loader, List<String> adapterNames) {
+
+		/**
+		 * Whether this module registered {@code adapter}: its jar declares it and
+		 * its classloader defined it. One registered later under the same name,
+		 * such as an embedder's, is not the module's.
+		 *
+		 * @param adapter An adapter, or null
+		 * @return true if the adapter is this module's
+		 */
+		public boolean owns(AAdapter adapter) {
+			return adapter != null && adapterNames.contains(adapter.getName())
+				&& adapter.getClass().getClassLoader() == loader;
+		}
+	}
 
 	/**
 	 * A module jar opened, not yet registered: its classloader and the
@@ -320,10 +334,7 @@ public class Modules {
 			if (previous != null) {
 				for (String oldName : previous.adapterNames()) {
 					if (names.contains(oldName)) continue;
-					AAdapter old = engine.getRegisteredAdapter(oldName);
-					if (old != null && old.getClass().getClassLoader() == previous.loader()) {
-						engine.removeAdapter(oldName);
-					}
+					if (previous.owns(engine.getRegisteredAdapter(oldName))) engine.removeAdapter(oldName);
 				}
 				closeQuietly(previous.loader(), null);
 			}
@@ -347,8 +358,7 @@ public class Modules {
 			}
 			if (previous != null && module != null) {
 				for (String oldName : previous.adapterNames()) {
-					AAdapter old = engine.getRegisteredAdapter(oldName);
-					if (old != null && old.getClass().getClassLoader() == previous.loader()) {
+					if (previous.owns(engine.getRegisteredAdapter(oldName))) {
 						try {
 							engine.removeAdapter(oldName);
 						} catch (Exception suppressed) {
@@ -380,7 +390,7 @@ public class Modules {
 		LoadedModule module = engine.getModule(name);
 		if (module == null) throw new NotFoundException("Module not loaded: " + name, name);
 		for (String adapterName : module.adapterNames()) {
-			if (engine.moduleOf(adapterName) == module) engine.removeAdapter(adapterName);
+			if (module.owns(engine.getRegisteredAdapter(adapterName))) engine.removeAdapter(adapterName);
 		}
 		engine.dropModule(module);
 		try {
