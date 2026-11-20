@@ -31,6 +31,7 @@ import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.dlfs.DLFSDrive;
+import convex.dlfs.DLFSDrives;
 import convex.lattice.fs.DLFSNode;
 import convex.lattice.fs.DLFileSystem;
 import convex.lattice.fs.DLPath;
@@ -46,6 +47,7 @@ import covia.exception.UnsupportedException;
 import covia.lattice.CapabilityChecker;
 import covia.utils.MimeUtils;
 import covia.venue.Config;
+import covia.venue.CoviaApplication;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.SecretStore;
@@ -176,6 +178,35 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 	}
 
 	// ==================== Key Management ====================
+
+	/** Drives asked of a transaction for a user who has no DLFS key yet. */
+	public static final String NO_USER_KEY = "The user has no DLFS key: give them one with ensureUserKey before the transaction";
+
+	/**
+	 * Gives the context's user a DLFS key if they have none. Creating it writes
+	 * the venue and syncs it, so it runs before an application transaction
+	 * ({@link covia.venue.Engine#transact}), never inside one.
+	 *
+	 * @param ctx The request, whose user the key is for
+	 */
+	public void ensureUserKey(RequestContext ctx) {
+		ensureUserKeyPair(ctx);
+	}
+
+	/**
+	 * The context's user's drives in an application transaction, authored with
+	 * the user's DLFS key ({@link #ensureUserKey}).
+	 *
+	 * @param ctx The request, whose user owns the drives
+	 * @param draft The transaction's draft
+	 * @return The user's drives in the draft
+	 * @throws IllegalStateException if the user has no DLFS key ({@link #NO_USER_KEY})
+	 */
+	public DLFSDrives drives(RequestContext ctx, CoviaApplication.Draft draft) {
+		AKeyPair key = existingUserKeyPair(ctx);
+		if (key == null) throw new IllegalStateException(NO_USER_KEY);
+		return draft.drives(key);
+	}
 
 	/**
 	 * Gets the user's DLFS keypair from the secret store, generating it if the

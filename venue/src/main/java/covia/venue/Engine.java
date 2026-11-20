@@ -4199,6 +4199,75 @@ public class Engine {
 		return region.drives(ownerKey.getAccountKey());
 	}
 
+	/** Refusal of a user's transaction whose request context names no user. */
+	public static final String TRANSACTION_NEEDS_USER = "A transaction acts for a user, and the request context names none";
+
+	/** Refusal of a drive in a user's transaction at a venue that runs no DLFS adapter. */
+	public static final String NO_DLFS = "This venue runs no DLFS adapter, so a transaction here reaches no drives";
+
+	/**
+	 * Changes a user's workspace at this venue and their DLFS drives in one
+	 * transaction: everything the callback changes through its
+	 * {@link UserTransaction} commits together, or none of it does. The
+	 * transaction acts for the context's user, on their own workspace and drives.
+	 *
+	 * <p>Before the transaction starts, a user with no DLFS key is given one,
+	 * since creating it writes the venue. The callback then runs once on the
+	 * application's transaction for this venue ({@link CoviaApplication#transact}),
+	 * while every other write to the application waits: keep it short, use only
+	 * the transaction, do no external I/O and do not wait for other threads.</p>
+	 *
+	 * <p>A commit is in memory: the host's next sync saves it and {@link #flush()}
+	 * makes it durable, so flush before acknowledging the change elsewhere.</p>
+	 *
+	 * @param <R> The callback's result type
+	 * @param ctx The request, whose user the transaction acts for
+	 * @param work The changes
+	 * @return The callback's result, once committed
+	 * @throws IOException from the callback, which applies nothing
+	 * @throws AuthException if the context names no user ({@link #TRANSACTION_NEEDS_USER})
+	 * @throws NotFoundException if the user is not registered at this venue ({@link VenueState#UNKNOWN_USER})
+	 */
+	public <R> R transact(RequestContext ctx, UserTransaction.Work<R> work) throws IOException {
+		java.util.Objects.requireNonNull(ctx, "ctx");
+		java.util.Objects.requireNonNull(work, "work");
+		AString userDID = ctx.getUserDID();
+		if (userDID == null) throw new AuthException(TRANSACTION_NEEDS_USER);
+		if (getVenueState().users().user(userDID) == null) {
+			throw new NotFoundException(VenueState.UNKNOWN_USER, userDID.toString());
+		}
+		DLFSAdapter dlfs = (getAdapter("dlfs") instanceof DLFSAdapter running) ? running : null;
+		if (dlfs != null) dlfs.ensureUserKey(ctx);
+		try {
+			return application.transact(getAccountKey(), draft -> {
+				UserDraft tx = new UserDraft(ctx, getAccountKey(), draft, dlfs);
+				try {
+					return work.apply(tx);
+				} catch (IOException e) {
+					throw new WorkFailure(e);
+				} finally {
+					tx.finish();
+				}
+			});
+		} catch (WorkFailure e) {
+			throw e.getCause();
+		}
+	}
+
+	/** Carries a user transaction's IOException through the application's transaction. */
+	private static final class WorkFailure extends RuntimeException {
+		private static final long serialVersionUID = 1L;
+
+		WorkFailure(IOException cause) {
+			super(cause);
+		}
+
+		@Override
+		public synchronized IOException getCause() {
+			return (IOException) super.getCause();
+		}
+	}
+
 	public AString getName() {
 		return config.getName();
 	}
