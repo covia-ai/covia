@@ -144,6 +144,8 @@ public class AgentAdapter extends AAdapter {
 	public static final String SUSPEND_REASON_INVALID = "Suspension reason must be a string";
 	public static final String SUSPEND_AGENT_GONE = "Agent was removed or terminated before suspension";
 	public static final String TRANSITION_CANCELLED = "Transition cancelled";
+	/** Why an agent operation refused input missing a field it needs: the field named. */
+	public static final String REQUIRED_FIELD = "%s is required";
 	/** Why {@code agent:request} refused an agent that takes no tasks ({@link #acceptsTasks}): the agent named. */
 	public static final String TASKS_NOT_ACCEPTED = "Agent %s does not take tasks: its config does not set acceptTasks";
 	/** Why an agent config or a compaction refused its number of exchanges to keep: the field, the value's type. */
@@ -515,7 +517,7 @@ public class AgentAdapter extends AAdapter {
 	private AgentTarget resolveAgentTarget(RequestContext ctx, ACell input,
 			AString field, AString ability, boolean createOwner) {
 		AString ref = RT.ensureString(RT.getIn(input, field));
-		if (ref == null) throw new InvalidInputException(field + " is required");
+		if (ref == null) throw new InvalidInputException(REQUIRED_FIELD.formatted(field));
 		return resolveAgentTarget(ctx, ref, ability, createOwner);
 	}
 
@@ -1745,6 +1747,8 @@ public class AgentAdapter extends AAdapter {
 		// map is maintained.
 		Blob taskId = job.getID();
 		ACell taskInput = RT.getIn(input, Fields.INPUT);
+		// A task without instructions is refused here, before it is queued
+		if (taskInput == null) throw new InvalidInputException(REQUIRED_FIELD.formatted(Fields.INPUT));
 		ACell responseSchema = RT.getIn(input, Fields.RESPONSE_SCHEMA);
 		// strict is the requester's opt-in to completion-time schema
 		// enforcement (#376). Default (absent/false) keeps the schema
@@ -1847,7 +1851,7 @@ public class AgentAdapter extends AAdapter {
 		if (agent == null) return;
 
 		ACell messageContent = RT.getIn(input, Fields.MESSAGE);
-		if (messageContent == null) { job.fail("message is required"); return; }
+		if (messageContent == null) { job.fail(REQUIRED_FIELD.formatted(Fields.MESSAGE)); return; }
 		ACell taskValue = RT.getIn(input, Fields.TASK_ID);
 		Blob taskId = null;
 		if (taskValue != null) {
@@ -1952,7 +1956,7 @@ public class AgentAdapter extends AAdapter {
 		AString agentId = target.agentId();
 
 		ACell messageContent = RT.getIn(input, Fields.MESSAGE);
-		if (messageContent == null) { job.fail("message is required"); return; }
+		if (messageContent == null) { job.fail(REQUIRED_FIELD.formatted(Fields.MESSAGE)); return; }
 
 		Agent agent = lookupAgent(job, target);
 		if (agent == null) return;

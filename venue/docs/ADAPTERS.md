@@ -1228,7 +1228,11 @@ are bounded and in memory, so a restart loses only messages not yet collected.
    do not substitute an invocation check for the target's resource checks. Refuse what
    the caller can fix with the Covia type for it, such as
    `InvalidInputException` for bad input, whose message says what is wrong
-   ([ERRORS.md](ERRORS.md#types)); catch a library's exceptions where they are
+   ([ERRORS.md](ERRORS.md#types)). The venue checks input against the
+   operation's schema only when the operation sets `operation.strict: true`,
+   since many operations take dynamic input; otherwise the operation checks
+   each field it needs where it reads it, and refuses a missing one with
+   `InvalidInputException` naming the field. Catch a library's exceptions where they are
    called. Anything else that escapes the operation, `IllegalArgumentException`
    included, is the adapter's fault: its Job fails with `Operation <op> failed:
    unexpected <ClassName> in adapter <name>`, logged at ERROR, and the caller

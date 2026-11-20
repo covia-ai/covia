@@ -3937,6 +3937,27 @@ public class AgentAdapterTest {
 		}
 	}
 
+	/**
+	 * A request without instructions is refused when it is made, naming the
+	 * missing field, rather than queued as an empty task for the agent to fail.
+	 */
+	@Test
+	public void requestWithoutInputIsRefused() {
+		String agentId = "needs-input";
+		engine.jobs().invokeOperation("v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, agentId,
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/step", "acceptTasks", true)),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		Job request = engine.jobs().invokeOperation("v/ops/agent/request",
+			Maps.of(Fields.AGENT_ID, agentId, Fields.MESSAGE, "instructions under the wrong name"),
+			RequestContext.of(ALICE_DID));
+		assertThrows(Exception.class, () -> request.awaitResult(5000));
+		assertEquals(Status.FAILED, request.getStatus());
+		assertEquals(AgentAdapter.REQUIRED_FIELD.formatted(Fields.INPUT), request.getErrorMessage());
+		Agent agent = engine.getVenueState().users().user(ALICE_DID).agent(agentId);
+		assertTrue(agent.getTasks().isEmpty(), "no task is queued");
+	}
+
 	@Test
 	public void testRequestToTerminatedAgent() {
 		engine.jobs().invokeOperation(

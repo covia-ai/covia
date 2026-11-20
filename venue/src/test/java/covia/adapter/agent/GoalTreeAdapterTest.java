@@ -335,7 +335,7 @@ public class GoalTreeAdapterTest {
 		// job completes with the delivered result, the frame ends.
 		try (AgentWatch watch = AgentWatch.open(engine, ALICE_DID, "task-tools-goal")) {
 			ACell result = engine.jobs().invokeOperation("v/ops/agent/request",
-				Maps.of(Fields.AGENT_ID, "task-tools-goal", Fields.MESSAGE, "do the thing", "timeout", 15000L),
+				Maps.of(Fields.AGENT_ID, "task-tools-goal", Fields.INPUT, "do the thing", "timeout", 15000L),
 				ALICE).awaitResult(20000);
 			assertNotNull(result, "the task's result reaches the requester");
 			watch.awaitCycles(1);
@@ -509,7 +509,7 @@ public class GoalTreeAdapterTest {
 		AMap<AString, ACell> child;
 		try (AgentWatch watch = createSubgoalTaskAgent("subgoal-task", TestAdapter.SUBGOAL_CHILD_RESOLVES_TASK)) {
 			ACell result = engine.jobs().invokeOperation("v/ops/agent/request",
-				Maps.of(Fields.AGENT_ID, "subgoal-task", Fields.MESSAGE, "decompose this", "timeout", 15000L),
+				Maps.of(Fields.AGENT_ID, "subgoal-task", Fields.INPUT, "decompose this", "timeout", 15000L),
 				ALICE).awaitResult(20000);
 			assertEquals(Strings.create("root done"), RT.getIn(result, Fields.OUTPUT), String.valueOf(result));
 			child = RT.ensureMap(RT.getIn(rootSubgoalCall("subgoal-task", watch), Fields.FRAME));
