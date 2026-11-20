@@ -21,7 +21,7 @@ import covia.lattice.Covia;
 import covia.lattice.Namespace;
 import covia.venue.JobIndex;
 
-/** The {@link JobStates} part of venue step 2 → 3 as a function of the venue value, after {@link OneCaller}. */
+/** The {@link JobStates} part of venue step 3 → 4 as a function of the venue value, after {@link OneCaller}. */
 class JobStatesTest {
 	private static final AString ALICE = Strings.create("did:test:alice");
 	private static final AString CONTROLLER = Strings.create("did:test:carol-controller");
@@ -98,5 +98,38 @@ class JobStatesTest {
 	@Test void aCurrentVenueComesBackAsTheSameCell() {
 		ACell once = STEP.apply(legacy());
 		assertSame(once, new JobStates().apply(once));
+	}
+
+	/**
+	 * A store a snapshot took to version 3 kept, as the authority its work
+	 * acted with, the access token or callable that narrowed it.
+	 */
+	@Test void whatNarrowedSnapshotWorkStaysOnIt() {
+		Blob viaToken = Blob.fromHex("04".repeat(16)), viaCallable = Blob.fromHex("05".repeat(16));
+		Blob viaController = Blob.fromHex("06".repeat(16)), eventViaToken = Blob.fromHex("7f".repeat(8) + "23".repeat(8));
+		AMap<AString, ACell> token = Maps.of(Fields.OWNER, ALICE, Fields.NAME, "tool", Fields.ID, Blob.fromHex("aa".repeat(16)));
+		AMap<AString, ACell> callable = Maps.of(Fields.OWNER, ALICE, Fields.NAME, "shared");
+		AMap<AString, ACell> controllers = Maps.of(Fields.CALLER, CONTROLLER, Fields.TOKEN, token);
+		ACell snapshot = Index.<Keyword, ACell>none()
+			.assoc(Covia.USER_DATA, Maps.of(ALICE, Maps.of(Namespace.J, Index.<Blob, ACell>none()
+				.assoc(viaToken, started(ALICE)).assoc(viaCallable, started(WORKER).assoc(Fields.OWNER, ALICE))
+				.assoc(viaController, started(WORKER).assoc(Fields.OWNER, ALICE)))))
+			.assoc(Covia.JOBS, Index.<Blob, ACell>none()
+				.assoc(viaToken, Maps.of(JobIndex.OWNER, ALICE, JobIndex.CONTEXT, Maps.of(Fields.AUTHORITY, Maps.of(Fields.TOKEN, token))))
+				.assoc(viaCallable, Maps.of(JobIndex.OWNER, ALICE, JobIndex.CONTEXT, Maps.of(Fields.AUTHORITY, Maps.of(Fields.CALLABLE, callable))))
+				.assoc(viaController, Maps.of(JobIndex.OWNER, ALICE, JobIndex.CONTEXT, Maps.of(Fields.AUTHORITY, controllers))))
+			.assoc(Covia.SCHEDULE, Maps.of(JobStates.EVENTS, Index.<Blob, ACell>none().assoc(eventViaToken,
+				Maps.of(Fields.OP, "v/test/ops/echo", Fields.CALLER, ALICE, Fields.AUTHORITY, Maps.of(Fields.TOKEN, token)))));
+
+		ACell venue = STEP.apply(snapshot);
+		assertEquals(frame(ALICE).assoc(Fields.TOKEN, token), at(venue, Covia.JOBS, viaToken, JobIndex.CONTEXT),
+			"work a token narrowed keeps the token");
+		assertEquals(Maps.of(Fields.FRAME, Maps.of(Fields.AUTHORITY, WORKER, Fields.CALLER, WORKER), Fields.CALLABLE, callable),
+			at(venue, Covia.JOBS, viaCallable, JobIndex.CONTEXT), "a callable's call keeps the callable and its caller");
+		assertEquals(frame(WORKER), at(venue, Covia.JOBS, viaController, JobIndex.CONTEXT),
+			"a token on a controller goes with the controller");
+		assertEquals(frame(ALICE).assoc(Fields.TOKEN, token),
+			at(venue, Covia.SCHEDULE, JobStates.EVENTS, eventViaToken, Fields.CONTEXT), "so does an event's");
+		assertSame(venue, STEP.apply(venue));
 	}
 }

@@ -24,12 +24,12 @@ import covia.lattice.Namespace;
 import covia.venue.Agent;
 
 /**
- * Part of venue version 2 to 3: a record of a call names one principal, its
+ * Part of venue version 3 to 4: a record of a call names one principal, its
  * {@code caller}, and no {@code owner}. A record the venue keeps in an account
  * leaves out a caller that is that account; a scheduled event, kept venue-wide,
  * always names its caller, whose account it belongs to.
  *
- * <p>Version 2 wrote {@code owner} only when it differed from the caller: the
+ * <p>Versions 2 and 3 wrote {@code owner} only when it differed from the caller: the
  * caller was then one of the owner's agents, or an {@code admin/sudo}
  * delegate whose work acted for the owner. The agent's records keep the agent
  * as their caller. The delegate's work never passed {@code admin/sudo} as it
@@ -182,7 +182,7 @@ public final class OneCaller implements MigrationStep {
 	}
 
 	/**
-	 * Whether a version 2 record is work an {@code admin/sudo} delegate left:
+	 * Whether an older record is work an {@code admin/sudo} delegate left:
 	 * it names an {@code owner}, so its caller differed, and that caller is not
 	 * one of the owner's agents.
 	 */

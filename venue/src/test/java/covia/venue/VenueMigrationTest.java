@@ -12,6 +12,7 @@ import org.junit.jupiter.api.Test;
 import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
 import convex.core.data.AString;
+import convex.core.data.Blob;
 import convex.core.data.Index;
 import convex.core.data.Keyword;
 import convex.core.data.Maps;
@@ -21,8 +22,12 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMDouble;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
+import covia.api.Fields;
+import covia.grid.Principals;
+import covia.grid.Status;
 import covia.lattice.Covia;
 import covia.lattice.CoviaPath;
+import covia.lattice.Namespace;
 
 class VenueMigrationTest {
 	/** The venue's secret store keys: these venues keep no secret a migration step carries over. */
@@ -69,6 +74,34 @@ class VenueMigrationTest {
 		venue.migrate(NO_SECRETS);
 		assertEquals(VenueState.CURRENT_VERSION, venue.version());
 		assertEquals(PENDING, RT.getIn(venue.get(), Covia.USER_DELETIONS));
+	}
+
+	/** A store a snapshot took to version 3, before step 3 → 4's parts were in step 2 → 3, still receives them. */
+	@Test void aStoreAtVersionThreeTakesStepFourAndACurrentOneComesThroughAsItWas() {
+		AString alice = Strings.create("did:test:alice");
+		AString worker = Principals.agentDID(alice, Strings.create("worker"));
+		Blob own = Blob.fromHex("01".repeat(16)), agents = Blob.fromHex("02".repeat(16));
+		VenueState venue = VenueState.create(AKeyPair.generate());
+		venue.cursor().set(Index.<Keyword, ACell>none().assoc(Covia.DID, DID).assoc(Covia.VERSION, CVMLong.create(3))
+			.assoc(Covia.USER_DATA, Maps.of(alice, Maps.of(Namespace.J, Index.<Blob, ACell>none()
+				.assoc(own, Maps.of(Fields.STATUS, Status.STARTED, Fields.CALLER, alice))
+				.assoc(agents, Maps.of(Fields.STATUS, Status.STARTED, Fields.CALLER, worker, Fields.OWNER, alice)))))
+			.assoc(Covia.JOBS, Index.<Blob, ACell>none()
+				.assoc(own, Maps.of(JobIndex.OWNER, alice, JobIndex.CONTEXT, Maps.of(Fields.JOB_ID, own)))));
+
+		venue.migrate(NO_SECRETS);
+		assertEquals(VenueState.CURRENT_VERSION, venue.version());
+		assertEquals(Maps.of(Fields.STATUS, Status.STARTED), RT.getIn(venue.get(), Covia.USER_DATA, alice, Namespace.J, own),
+			"a record names one caller, left out where it is the account");
+		assertEquals(Maps.of(Fields.STATUS, Status.STARTED, Fields.CALLER, worker),
+			RT.getIn(venue.get(), Covia.USER_DATA, alice, Namespace.J, agents));
+		assertEquals(Maps.of(Fields.FRAME, Maps.of(Fields.AUTHORITY, alice), Fields.JOB_ID, own),
+			RT.getIn(venue.get(), Covia.JOBS, own, JobIndex.CONTEXT), "unfinished work keeps its state");
+
+		ACell current = venue.get();
+		VenueState.level(venue.cursor(), Covia.VERSION).set(CVMLong.create(3));
+		venue.migrate(NO_SECRETS);
+		assertEquals(current, venue.get(), "a store already in the current shape comes through as it was");
 	}
 
 	@Test void migrationConflictPreservesVersionAndBothCopies() {

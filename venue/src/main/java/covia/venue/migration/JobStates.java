@@ -18,7 +18,7 @@ import covia.lattice.Namespace;
 import covia.venue.JobIndex;
 
 /**
- * Part of venue version 2 to 3: work the venue carries on keeps one state,
+ * Part of venue version 3 to 4: work the venue carries on keeps one state,
  * the frame it acts in, stored whole, and the grants its request presented
  * (AUTHORITY.md, A job's state). It runs after {@link OneCaller}, so a job
  * record that names no caller is its account's.
@@ -26,7 +26,7 @@ import covia.venue.JobIndex;
  * <ul>
  *   <li><b>Unfinished job</b> ({@code :jobs}): its entry's {@code context}
  *       becomes its state. Its frame's authority is the job's caller, and its
- *       grants and execution scopes are those the version 2 context kept. A
+ *       grants and execution scopes are those the older context kept. A
  *       job whose adapter kept no context keeps none, so its work is never
  *       carried on as its caller after the upgrade, as it was not before.</li>
  *   <li><b>Scheduled event</b> ({@code :schedule}): its {@code proofs} and
@@ -34,16 +34,20 @@ import covia.venue.JobIndex;
  *       is the event's caller.</li>
  * </ul>
  *
- * <p>Version 2 also kept, as {@code authority}, the controller an agent's
- * work acted with before an agent's authority was worked out from its record.
- * Version 2 no longer read it, so it is not carried: the work acts as its
- * recorded caller, as it already did. Access tokens and callables did not
- * exist in a version 2 store.</p>
+ * <p>The older {@code authority} says what else the work acted with. A store
+ * a snapshot took to version 3 may name there the access token that narrowed
+ * it, or the callable whose call it is: the state keeps either as
+ * {@link Fields#TOKEN} or {@link Fields#CALLABLE}, so the work never goes on
+ * with more than it had, and a callable's frame names its caller, whom the
+ * call is rebuilt for. A separate controller kept there, which an agent's work
+ * acted with before an agent's authority was worked out from its record, is
+ * not carried, nor is a token that narrowed that controller: the work acts as
+ * its recorded caller, whose authority is now worked out from its record.</p>
  */
 public final class JobStates implements MigrationStep {
 
 	static final AString EVENTS = Strings.intern("events");
-	/** The execution scopes a version 2 context kept, which the state keeps as they were. */
+	/** The execution scopes an older context kept, which the state keeps as they were. */
 	static final AString[] SCOPES = {Fields.AGENT_ID, Fields.SESSION_ID, Fields.JOB_ID, Fields.TASK_ID};
 
 	@Override
@@ -70,7 +74,8 @@ public final class JobStates implements MigrationStep {
 				: RT.ensureMap(RT.getIn(users, account, Namespace.J, e.getKey()));
 			if (job == null) continue;
 			AString caller = RT.ensureString(job.get(Fields.CALLER));
-			AMap<AString, ACell> state = state((caller == null) ? account : caller, context.get(Fields.PROOFS));
+			AMap<AString, ACell> state = state((caller == null) ? account : caller, context.get(Fields.PROOFS),
+				context.get(Fields.AUTHORITY));
 			for (AString scope : SCOPES) {
 				ACell value = context.get(scope);
 				if (value != null) state = state.assoc(scope, value);
@@ -92,15 +97,26 @@ public final class JobStates implements MigrationStep {
 			AString caller = RT.ensureString(event.get(Fields.CALLER));
 			if (caller == null) continue;
 			AMap<AString, ACell> converted = event.dissoc(Fields.PROOFS).dissoc(Fields.AUTHORITY)
-				.assoc(Fields.CONTEXT, state(caller, event.get(Fields.PROOFS)));
+				.assoc(Fields.CONTEXT, state(caller, event.get(Fields.PROOFS), event.get(Fields.AUTHORITY)));
 			events = events.assoc(e.getKey(), converted);
 		}
 		return (events == index) ? schedule : assoc(schedule, EVENTS, events);
 	}
 
-	/** The state of {@code authority}'s own frame, presenting {@code proofs} when there are any. */
-	private static AMap<AString, ACell> state(AString authority, ACell proofs) {
-		AMap<AString, ACell> state = Maps.of(Fields.FRAME, Maps.of(Fields.AUTHORITY, authority));
+	/**
+	 * The state of {@code caller}'s own frame, presenting {@code proofs} when
+	 * there are any, narrowed as the older {@code kept} authority recorded: by
+	 * the callable whose call it is, or by the access token on the caller's
+	 * own request.
+	 */
+	private static AMap<AString, ACell> state(AString caller, ACell proofs, ACell kept) {
+		AMap<AString, ACell> frame = Maps.of(Fields.AUTHORITY, caller);
+		AMap<AString, ACell> callable = RT.ensureMap(RT.getIn(kept, Fields.CALLABLE));
+		AMap<AString, ACell> token = (callable != null || RT.getIn(kept, Fields.CALLER) != null) ? null
+			: RT.ensureMap(RT.getIn(kept, Fields.TOKEN));
+		AMap<AString, ACell> state = Maps.of(Fields.FRAME, (callable == null) ? frame : frame.assoc(Fields.CALLER, caller));
+		if (callable != null) state = state.assoc(Fields.CALLABLE, callable);
+		if (token != null) state = state.assoc(Fields.TOKEN, token);
 		return (proofs instanceof AVector<?> v && !v.isEmpty()) ? state.assoc(Fields.PROOFS, proofs) : state;
 	}
 

@@ -46,7 +46,7 @@ class VenueMigrationEndToEndTest {
 	 * The venue version this test seeds shapes for. A new venue version needs
 	 * the shapes its step converts seeded here, and fails until it has them.
 	 */
-	private static final long SEEDED_THROUGH = 3;
+	private static final long SEEDED_THROUGH = 4;
 
 	private static final AString USER = Strings.create("did:test:migration-e2e");
 	private static final Path OLD_DELETIONS =CoviaPath.parse("w/user-deletions");

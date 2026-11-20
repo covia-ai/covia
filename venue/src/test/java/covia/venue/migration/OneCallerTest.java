@@ -23,7 +23,7 @@ import covia.lattice.Namespace;
 import covia.venue.Agent;
 import covia.venue.JobIndex;
 
-/** The {@link OneCaller} part of venue step 2 → 3 as a function of the venue value. */
+/** The {@link OneCaller} part of venue step 3 → 4 as a function of the venue value. */
 class OneCallerTest {
 	private static final AString ALICE = Strings.create("did:test:alice");
 	private static final AString BOB = Strings.create("did:test:bob-delegate");
