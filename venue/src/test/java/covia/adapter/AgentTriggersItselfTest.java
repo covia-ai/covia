@@ -136,11 +136,14 @@ public class AgentTriggersItselfTest {
 				ACell status = asAgent("v/ops/job/status", Maps.of(Fields.ID, s(taskId.toHexString())));
 				assertFalse(Status.COMPLETE.equals(RT.getIn(status, Fields.STATUS)));
 			}
+			// Its live handle, taken while the held cycle keeps it waiting: once
+			// released, the next cycle may finish it, and a finished job leaves
+			// the live set, before this thread looks again
+			Job task = engine.jobs().getJob(taskId);
+			assertNotNull(task, "the waiting task should be live");
 
 			gate.release();
 			held.awaitResult(10_000);
-			Job task = engine.jobs().getJob(taskId);
-			assertNotNull(task);
 			task.awaitResult(10_000);
 			assertEquals(Status.COMPLETE, task.getStatus(), "the request runs once the cycle has ended");
 		}

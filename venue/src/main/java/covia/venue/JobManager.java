@@ -1507,8 +1507,9 @@ public class JobManager {
 	}
 
 	/**
-	 * Gets the live Job object for the given job ID.
-	 * Checks in-memory cache first, falls back to constructing a read-only Job from lattice.
+	 * The live Job for the given job ID, or null when it is not live: a job
+	 * leaves the live set once it finishes. {@link #getJob(Blob, RequestContext)}
+	 * also gives a finished job, from its stored record.
 	 */
 	public Job getJob(Blob jobID) {
 		Job job = activeJobs.get(jobID);
