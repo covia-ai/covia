@@ -24,7 +24,6 @@ record ModelCallOptions(boolean nativeSystemMessages, boolean automaticCaching,
 	static final String INVALID = "Invalid model option: ";
 	static final String UPSTREAM_REQUIRED = " requires lossless message-block support in LangChain4j; this feature is not enabled";
 	static final String BINDING_BETA = "thinking-binding-controls-2026-08-01";
-	static final String INVALID_SYSTEM_POSITION = "Native system messages require a preceding user or tool-result turn";
 	static final Set<String> KEYS = Set.of("preserveThinking", "nativeSystemMessages",
 		"automaticCaching", "inlineToolChanges", "thinkingPrefixMismatch", "cacheTtl", "compaction",
 		"emptyResponse");

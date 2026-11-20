@@ -95,6 +95,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Fixed
 
+- An agent on a Claude model whose `nativeSystemMessages` is on keeps running after it compacts: context it pins again after its summary, with no turn of the caller's to follow, reaches Anthropic as a `[system: …]` user message in place, instead of the venue refusing the call before it is sent.
 - An agent that triggers itself while it runs, by `agent:trigger` or by `scheduler:trigger` of a request to itself, gets its answer at once instead of being held until its tool-call limit; `scheduler:trigger` of a request returns its task once the request's own `timeout` passes (#714).
 - `agent:request` without `input` is refused when it is made, naming the field, instead of queuing a task with no instructions for the agent to fail.
 - The `agents` skill offers `agent:suspend`, `agent:resume` and `agent:delete`, which its guidance tells an agent to use (#707).

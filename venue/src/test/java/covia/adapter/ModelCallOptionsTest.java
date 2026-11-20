@@ -23,6 +23,7 @@ import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.adapter.agent.AbstractLLMAdapter;
+import covia.adapter.agent.Labels;
 import covia.exception.InvalidInputException;
 import covia.exception.UnsupportedException;
 import covia.venue.TestEngine;
@@ -97,20 +98,68 @@ class ModelCallOptionsTest {
 			 {"role":"assistant","content":"answer"},{"role":"system","content":"update"},
 			 {"role":"user","content":"second"}]
 			"""));
-		var nativeMessages = LangChainAdapter.normaliseNativeSystemMessages(messages, Set.of(1L, 4L));
+		var nativeMessages = LangChainAdapter.normaliseNativeSystemMessages(messages, Set.of(1L, 4L), Labels.BRACKET);
 		assertEquals("second", RT.getIn(nativeMessages.messages(), 3L, "content").toString());
 		assertEquals("system", RT.getIn(nativeMessages.messages(), 4L, "role").toString());
 		assertEquals(Set.of(1L, 3L), nativeMessages.cacheMarks());
 		assertEquals("update", RT.getIn(messages, 3L, "content").toString());
-		var error = assertThrows(InvalidInputException.class,
-			() -> LangChainAdapter.normaliseNativeSystemMessages(messages.subVector(0, 4), Set.of()));
-		assertEquals(ModelCallOptions.INVALID_SYSTEM_POSITION, error.getMessage());
+
+		// With no turn of the caller's after it, it takes the portable form in place
+		var lastAfterAnswer = LangChainAdapter.normaliseNativeSystemMessages(messages.subVector(0, 4), Set.of(), Labels.BRACKET)
+			.messages();
+		assertEquals(4, lastAfterAnswer.count());
+		assertEquals("user", RT.getIn(lastAfterAnswer, 3L, "role").toString());
+		assertEquals(Labels.wrapSystem(Labels.BRACKET, "update"), RT.getIn(lastAfterAnswer, 3L, "content").toString());
 	}
 
 	/** A turn after a reply that said nothing: that reply is never sent, so the
 	 *  instructions placed before it must land where the API takes a system message. */
 	@Test
 	void lateSystemsBeforeASilentReplyLandWhereTheProviderTakesThem() throws Exception {
+		// As an agent's session holds it: a skill loaded, its instructions and the
+		// tool change as system events, then a reply with no text and no tool call.
+		AVector<ACell> wire = sentNatively("""
+			[{"role":"system","content":"head"},
+			 {"role":"user","content":"first"},
+			 {"role":"assistant","toolCalls":[{"id":"toolu_load","name":"skill_load","arguments":{"name":"alpha"}}]},
+			 {"role":"tool","id":"toolu_load","name":"skill_load","content":"loaded"},
+			 {"role":"system","content":"skill instructions"},
+			 {"role":"system","content":"tool change"},
+			 {"role":"assistant","finishReason":"stop"},
+			 {"role":"user","content":"second"}]
+			""");
+		assertTrue(texts(wire).containsAll(List.of("skill instructions", "tool change", "second")),
+			"nothing said is dropped: " + wire);
+	}
+
+	/**
+	 * After an agent compacts, its summary is its own turn and the context it
+	 * pins comes back as system events after it, before its next turn: with no
+	 * turn of the caller's for them to follow, they reach Anthropic in the
+	 * portable form, in place, and the request is one it takes.
+	 */
+	@Test
+	void lateSystemsBetweenTwoAgentTurnsTakeThePortableForm() throws Exception {
+		AVector<ACell> wire = sentNatively("""
+			[{"role":"system","content":"head"},
+			 {"role":"user","content":"first"},
+			 {"role":"assistant","content":"[compacted turns 0-16] summary"},
+			 {"role":"system","content":"pinned one"},
+			 {"role":"system","content":"pinned two"},
+			 {"role":"assistant","toolCalls":[{"id":"toolu_read","name":"read","arguments":{}}]},
+			 {"role":"tool","id":"toolu_read","name":"read","content":"read result"}]
+			""");
+		String pinned = Labels.wrapSystem(Labels.BRACKET, "pinned one") + "\n\n" + Labels.wrapSystem(Labels.BRACKET, "pinned two");
+		assertTrue(texts(wire).contains(pinned), "the pinned context is sent in place, in the portable form: " + wire);
+	}
+
+	/**
+	 * Sends {@code json} messages to a stand-in Anthropic with native system
+	 * messages on, and returns the messages it received, checked against
+	 * Anthropic's rules: no empty message, and each run of system messages
+	 * after a user message and before an assistant message or the end.
+	 */
+	private static AVector<ACell> sentNatively(String json) throws Exception {
 		AtomicReference<ACell> request = new AtomicReference<>();
 		HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
 		server.createContext("/v1/messages", exchange -> {
@@ -126,41 +175,37 @@ class ModelCallOptionsTest {
 		});
 		server.start();
 		try {
-			// As an agent's session holds it: a skill loaded, its instructions and the
-			// tool change as system events, then a reply with no text and no tool call.
-			AVector<ACell> messages = RT.ensureVector(JSON.parse("""
-				[{"role":"system","content":"head"},
-				 {"role":"user","content":"first"},
-				 {"role":"assistant","toolCalls":[{"id":"toolu_load","name":"skill_load","arguments":{"name":"alpha"}}]},
-				 {"role":"tool","id":"toolu_load","name":"skill_load","content":"loaded"},
-				 {"role":"system","content":"skill instructions"},
-				 {"role":"system","content":"tool change"},
-				 {"role":"assistant","finishReason":"stop"},
-				 {"role":"user","content":"second"}]
-				"""));
 			ACell input = Maps.of("url", "http://127.0.0.1:" + server.getAddress().getPort() + "/v1/",
 				"apiKey", "scripted", "model", "claude-sonnet-5-5", "maxTokens", 256,
-				"modelOptions", Maps.of("nativeSystemMessages", true), "messages", messages);
+				"modelOptions", Maps.of("nativeSystemMessages", true), "messages", RT.ensureVector(JSON.parse(json)));
 			TestEngine.ENGINE.jobs().invokeOperation("v/ops/langchain/anthropic", input,
 				TestEngine.ENGINE.venueContext()).awaitResult(10_000);
-
-			AVector<ACell> wire = RT.ensureVector(RT.getIn(request.get(), "messages"));
-			List<String> sent = new java.util.ArrayList<>();
-			for (long i = 0; i < wire.count(); i++) {
-				String role = RT.getIn(wire.get(i), "role").toString();
-				sent.add(RT.getIn(wire.get(i), "content", 0L, "text") + "");
-				assertNotEquals(0L, RT.count(RT.getIn(wire.get(i), "content")), "an empty message was sent: " + wire);
-				if (!"system".equals(role)) continue;
-				long next = i + 1;
-				while (next < wire.count() && "system".equals(RT.getIn(wire.get(next), "role").toString())) next++;
-				assertTrue(next == wire.count() || "assistant".equals(RT.getIn(wire.get(next), "role").toString()),
-					"a system message must precede an assistant message or end the array: " + wire);
-			}
-			assertTrue(sent.containsAll(List.of("skill instructions", "tool change", "second")),
-				"nothing said is dropped: " + wire);
 		} finally {
 			server.stop(0);
 		}
+		AVector<ACell> wire = RT.ensureVector(RT.getIn(request.get(), "messages"));
+		for (long i = 0; i < wire.count(); i++) {
+			assertNotEquals(0L, RT.count(RT.getIn(wire.get(i), "content")), "an empty message was sent: " + wire);
+			if (!"system".equals(role(wire, i))) continue;
+			assertTrue(i > 0 && ("user".equals(role(wire, i - 1)) || "system".equals(role(wire, i - 1))),
+				"a system message must follow a user message: " + wire);
+			long next = i + 1;
+			while (next < wire.count() && "system".equals(role(wire, next))) next++;
+			assertTrue(next == wire.count() || "assistant".equals(role(wire, next)),
+				"a system message must precede an assistant message or end the array: " + wire);
+		}
+		return wire;
+	}
+
+	private static String role(AVector<ACell> wire, long i) {
+		return RT.getIn(wire.get(i), "role").toString();
+	}
+
+	/** The first text block of each message sent. */
+	private static List<String> texts(AVector<ACell> wire) {
+		List<String> texts = new java.util.ArrayList<>();
+		for (ACell message : wire) texts.add(String.valueOf((Object) RT.getIn(message, "content", 0L, "text")));
+		return texts;
 	}
 
 	/** A cache mark on a turn that is not sent ends the same prefix one message earlier. */

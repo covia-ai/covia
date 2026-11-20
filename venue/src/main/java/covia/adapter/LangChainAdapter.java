@@ -500,7 +500,8 @@ public class LangChainAdapter extends AAdapter {
 		final NormalisedMessages sent = withoutSilentTurns(
 			serialiseToolResultsForProvider(messages), cacheMarksOf(input, tuning), provider, finalModelName);
 		final NormalisedMessages normalised = "anthropic".equals(provider) && tuning.options().nativeSystemMessages()
-			? normaliseNativeSystemMessages(sent.messages(), sent.cacheMarks())
+			? normaliseNativeSystemMessages(sent.messages(), sent.cacheMarks(),
+				AbstractLLMAdapter.labelDialect(resolvedModel.executionProfile()))
 			: normaliseSystemMessages(sent.messages(), sent.cacheMarks(),
 			AbstractLLMAdapter.modelOptionText(resolvedModel.executionProfile(), OPT_SYSTEM_MESSAGES),
 			AbstractLLMAdapter.labelDialect(resolvedModel.executionProfile()));
@@ -1679,9 +1680,14 @@ public class LangChainAdapter extends AAdapter {
 	static record NormalisedMessages(AVector<ACell> messages, Set<Long> cacheMarks) {}
 
 	/** Retains the instruction role while placing each batch of late system
-	 * messages after its user/tool-result turn, as required by Anthropic. The
-	 * SDK handles the native wire representation. Canonical history is untouched. */
-	static NormalisedMessages normaliseNativeSystemMessages(AVector<ACell> messages, Set<Long> cacheMarks) {
+	 * messages after its user/tool-result turn, as required by Anthropic. A
+	 * batch with no such turn before the next assistant turn or the end, such
+	 * as context an agent pins again after its compaction summary, takes the
+	 * portable form in place: one user message of {@code [system: …]} elements
+	 * in {@code dialect}. The SDK handles the native wire representation.
+	 * Canonical history is untouched. */
+	static NormalisedMessages normaliseNativeSystemMessages(AVector<ACell> messages, Set<Long> cacheMarks,
+			AString dialect) {
 		AVector<ACell> out = Vectors.empty();
 		List<ACell> pending = new ArrayList<>();
 		Set<Long> marks = new java.util.LinkedHashSet<>();
@@ -1694,23 +1700,31 @@ public class LangChainAdapter extends AAdapter {
 				continue;
 			}
 			if (ROLE_ASSISTANT.equals(role) && !pending.isEmpty()) {
-				out = appendNativeSystem(out, pending);
+				out = appendNativeSystem(out, pending, dialect);
 			}
 			if (cacheMarks.contains(i) && !ROLE_SYSTEM.equals(role)) marks.add(out.count());
 			out = out.conj(message);
 			if (!ROLE_SYSTEM.equals(role)) started = true;
 		}
-		out = appendNativeSystem(out, pending);
+		out = appendNativeSystem(out, pending, dialect);
 		return new NormalisedMessages(out, marks);
 	}
 
-	private static AVector<ACell> appendNativeSystem(AVector<ACell> messages, List<ACell> pending) {
+	private static AVector<ACell> appendNativeSystem(AVector<ACell> messages, List<ACell> pending, AString dialect) {
 		if (pending.isEmpty()) return messages;
 		ACell preceding = messages.isEmpty() ? null : RT.getIn(messages.get(messages.count() - 1), K_ROLE);
-		if (!ROLE_USER.equals(preceding) && !ROLE_TOOL.equals(preceding)) {
-			throw new InvalidInputException(ModelCallOptions.INVALID_SYSTEM_POSITION);
+		if (ROLE_USER.equals(preceding) || ROLE_TOOL.equals(preceding)) {
+			for (ACell message : pending) messages = messages.conj(message);
+		} else {
+			// Anthropic takes a system message only after a user turn
+			StringBuilder portable = new StringBuilder();
+			for (ACell message : pending) {
+				AString content = RT.ensureString(RT.getIn(message, K_CONTENT));
+				if (portable.length() > 0) portable.append("\n\n");
+				portable.append(covia.adapter.agent.Labels.wrapSystem(dialect, content != null ? content.toString() : ""));
+			}
+			messages = messages.conj(Maps.of(K_ROLE, ROLE_USER, K_CONTENT, Strings.create(portable.toString())));
 		}
-		for (ACell message : pending) messages = messages.conj(message);
 		pending.clear();
 		return messages;
 	}
