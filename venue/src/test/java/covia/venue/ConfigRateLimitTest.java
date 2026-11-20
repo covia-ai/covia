@@ -10,7 +10,8 @@ import convex.core.data.Strings;
 /**
  * Deterministic tests for the rate-limit configuration logic — the enable
  * defaults (on for a LAN/public bind, off for loopback), explicit overrides,
- * and the numeric knob defaults. Pure config parsing, no server or timing.
+ * the numeric knob defaults, and the removed job cap's key. Pure config
+ * parsing, no server or timing.
  */
 public class ConfigRateLimitTest {
 
@@ -46,7 +47,6 @@ public class ConfigRateLimitTest {
 		Config c = new Config(Maps.empty());
 		assertEquals(100.0, c.getRateLimitRps());
 		assertEquals(300.0, c.getRateLimitBurst());
-		assertEquals(100, c.getMaxConcurrentJobsPerUser());
 		assertEquals(3000L, c.getRateLimitBlockMs());
 	}
 
@@ -55,11 +55,19 @@ public class ConfigRateLimitTest {
 		Config c = new Config(Maps.of(Config.RATE_LIMIT, Maps.of(
 			Strings.create("rps"), 5L,
 			Strings.create("burst"), 9L,
-			Strings.create("maxConcurrentJobsPerUser"), 3L,
 			Strings.create("blockMs"), 250L)));
 		assertEquals(5.0, c.getRateLimitRps());
 		assertEquals(9.0, c.getRateLimitBurst());
-		assertEquals(3, c.getMaxConcurrentJobsPerUser());
 		assertEquals(250L, c.getRateLimitBlockMs());
+	}
+
+	@Test
+	public void testRemovedJobCapIsAcceptedUnderStrictConfig() {
+		// Ignored whatever its value: NoJobCapTest shows it limits nothing
+		for (Object value : new Object[] {1L, 0L, "unlimited"}) {
+			assertDoesNotThrow(() -> new Config(Maps.of(
+				Config.STRICT_CONFIG, true,
+				Config.RATE_LIMIT, Maps.of(Config.MAX_CONCURRENT_JOBS_PER_USER, value))));
+		}
 	}
 }

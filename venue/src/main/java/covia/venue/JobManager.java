@@ -5,7 +5,6 @@ import java.util.List;
 import java.util.Random;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
@@ -39,7 +38,6 @@ import covia.exception.FaultException;
 import covia.exception.InvalidInputException;
 import covia.exception.InvalidStateException;
 import covia.exception.NotFoundException;
-import covia.exception.RateLimitException;
 import covia.exception.ShuttingDownException;
 import covia.exception.UnavailableException;
 import covia.exception.UnsupportedException;
@@ -135,26 +133,6 @@ public class JobManager {
 	/** Jobs being accepted, each completed once its handle is registered or its acceptance has failed ({@link #liveJob}). */
 	final ConcurrentHashMap<Blob, CompletableFuture<Void>> accepting = new ConcurrentHashMap<>();
 
-	/** Per-caller admission semaphores bounding concurrent top-level jobs. */
-	private final ConcurrentHashMap<AString, JobSemaphore> jobPermits = new ConcurrentHashMap<>();
-
-	/** Job IDs holding an admission permit → caller DID, for exactly-once release. */
-	private final ConcurrentHashMap<Blob, AString> permitHolders = new ConcurrentHashMap<>();
-
-	/** Semaphore with a recovery reservation hook. Negative permits are useful
-	 *  when a restart restores more active jobs than the current configured cap:
-	 *  new work remains blocked until enough restored jobs finish. */
-	private static final class JobSemaphore extends Semaphore {
-		private static final long serialVersionUID = 1L;
-		JobSemaphore(int permits) { super(permits); }
-		void reserveRecovered() { reducePermits(1); }
-	}
-
-	/** Concurrent-job cap settings, resolved once from venue config. */
-	private final boolean jobCapEnabled;
-	private final int maxConcurrentJobs;
-	private final long jobBlockMs;
-
 	/** Cross-cutting listeners notified on every Job in the venue (REST SSE,
 	 *  MCP notifications). Per-Job subscribers attach directly to the Job
 	 *  via {@link Job#subscribe(java.util.function.Consumer)}. */
@@ -181,48 +159,6 @@ public class JobManager {
 	 */
 	public JobManager(Engine engine) {
 		this.engine = engine;
-		Config cfg = engine.config();
-		this.maxConcurrentJobs = cfg.getMaxConcurrentJobsPerUser();
-		this.jobBlockMs = cfg.getRateLimitBlockMs();
-		this.jobCapEnabled = cfg.isRateLimitEnabled() && maxConcurrentJobs > 0;
-	}
-
-	/**
-	 * Admission control for a top-level invoke: bounds concurrent (non-terminal)
-	 * jobs per caller. Returns {@code true} if a permit was acquired (the caller
-	 * must release it on job terminal via {@link #releaseJobPermit}); returns
-	 * {@code false} when the cap does not apply — disabled, a sub-job (the context
-	 * carries a current Job or inherited {@code jobId}), or an internal /
-	 * unattributed caller. Blocks up to {@code jobBlockMs} to absorb bursts, then
-	 * sheds with {@link RateLimitException} (→ HTTP 429).
-	 */
-	private boolean acquireJobPermit(RequestContext ctx, AString callerDID) {
-		if (!jobCapEnabled) return false;
-		if (ctx.getJob() != null || ctx.getJobId() != null) return false;
-		if (callerDID == null) return false;       // internal / unattributed — exempt
-		JobSemaphore sem = jobPermits.computeIfAbsent(callerDID, k -> new JobSemaphore(maxConcurrentJobs));
-		try {
-			if (sem.tryAcquire(jobBlockMs, TimeUnit.MILLISECONDS)) return true;
-		} catch (InterruptedException e) {
-			Thread.currentThread().interrupt();
-			throw new RateLimitException("Interrupted while awaiting a job slot", 1);
-		}
-		throw new RateLimitException(
-			"Concurrent job limit (" + maxConcurrentJobs + ") reached for caller; retry shortly",
-			Math.max(1, jobBlockMs / 1000));
-	}
-
-	/** Releases the admission permit held by a job, if any. Idempotent — safe to
-	 *  call from both terminal eviction and explicit deletion. */
-	private void releaseJobPermit(Blob jobID) {
-		AString caller = permitHolders.remove(jobID);
-		if (caller != null) releasePermit(caller);
-	}
-
-	/** Releases one of {@code caller}'s admission permits. */
-	private void releasePermit(AString caller) {
-		JobSemaphore sem = jobPermits.get(caller);
-		if (sem != null) sem.release();
 	}
 
 	// ========== Job Invocation ==========
@@ -587,18 +523,11 @@ public class JobManager {
 		// Tool and framework bindings do not acquire lookup authority just by
 		// creating a Job. No metadata field can choose this dispatch intent.
 		AAdapter adapter = prepareInvocation(meta, input, ctx);
-		// Jobs are owned by, quota'd against, and persisted into the USER's
-		// namespace. An agent sub-principal runs inside its owner's account: it
-		// must not open a job store of its own (its jobs would vanish from the
-		// owner's listing) nor a second admission bucket (it would multiply the
-		// owner's concurrency cap). Who *acted* stays on the context —
-		// ctx.getAuthorityDID() / ctx.getAgentId().
+		// Jobs are owned by and persisted into the USER's namespace. An agent
+		// sub-principal runs inside its owner's account: it must not open a job
+		// store of its own (its jobs would vanish from the owner's listing).
+		// Who *acted* stays on the context — ctx.getAuthorityDID() / ctx.getAgentId().
 		AString ownerDID = ctx.getUserDID();
-
-		// Admission control: bound concurrent top-level jobs per user. Blocks up
-		// to jobBlockMs to absorb bursts, then sheds with RateLimitException (429).
-		// Sub-jobs (current Job or inherited jobId set) and internal callers are exempt.
-		boolean permit = applyAdmission && acquireJobPermit(ctx, ownerDID);
 
 		// The record's `op` is the reference that was actually invoked (e.g.
 		// v/ops/json/merge, or a bare hash when the caller pinned a definition
@@ -608,18 +537,13 @@ public class JobManager {
 		if (opID == null) opID = Strings.create(meta.getHash().toHexString());
 		Blob parentID = parentJobID(ctx);
 		long ts = engine.currentTimestamp().longValue();
-		try {
-			Admission admission = jobAdmission(ts, opID, meta, input, ownerDID, ctx,
-				parentID, memoryOnly, resultOriented,
-				(invocation == Invocation.RUN || invocation == Invocation.CALL_RUN) && ctx.getJob() == null && ctx.getJobId() == null,
-				adapter, permit);
-			// A recorded job keeps the state it runs in from admission until it finishes
-			admission.state = jobState(ctx);
-			return new Prepared(admission, adapter, ctx, meta, input, invocation.lookup);
-		} catch (RuntimeException | Error e) {
-			if (permit) releasePermit(ownerDID);
-			throw e;
-		}
+		Admission admission = jobAdmission(ts, opID, meta, input, ownerDID, ctx,
+			parentID, memoryOnly, resultOriented,
+			(invocation == Invocation.RUN || invocation == Invocation.CALL_RUN) && ctx.getJob() == null && ctx.getJobId() == null,
+			adapter);
+		// A recorded job keeps the state it runs in from admission until it finishes
+		admission.state = jobState(ctx);
+		return new Prepared(admission, adapter, ctx, meta, input, invocation.lookup);
 	}
 
 	/**
@@ -1104,7 +1028,7 @@ public class JobManager {
 	 * id, and how its live handle is made.
 	 *
 	 * @param ownerDID the account the job is kept in, and what access control
-	 *        and quota key on
+	 *        keys on
 	 * @param ctx the request, whose authority made the call: the record names
 	 *        it as its caller, left out when it is the account itself
 	 *        ({@link Attribution})
@@ -1115,7 +1039,7 @@ public class JobManager {
 	 */
 	private Admission jobAdmission(long ts, AString opID, AMap<AString, ACell> meta, ACell input, AString ownerDID,
 			RequestContext ctx, Blob parentID, boolean memoryOnly, boolean resultOriented, boolean directRun,
-			AAdapter adapter, boolean permit) {
+			AAdapter adapter) {
 		AString callerDID = ctx.getAuthorityDID();
 		if (ownerDID == null || callerDID == null) throw new AuthException("Authentication required");
 
@@ -1145,7 +1069,7 @@ public class JobManager {
 			status = status.assoc(Fields.ADAPTER, Strings.create(adapterName));
 		}
 
-		return new Admission(ts, status, rules, ownerDID, memoryOnly, permit, resultOriented,
+		return new Admission(ts, status, rules, ownerDID, memoryOnly, resultOriented,
 			(record, data) -> new VenueJob(record, data, rules, ownerDID, this, !memoryOnly, directRun, adapter));
 	}
 
@@ -1178,8 +1102,6 @@ public class JobManager {
 		private final OutputRules rules;
 		private final AString ownerDID;
 		private final boolean memoryOnly;
-		/** Whether the Job holds one of its owner's admission permits. */
-		private final boolean permit;
 		private final boolean preserveFailureCause;
 		private final BiFunction<JobRecord, AMap<AString, ACell>, VenueJob> handle;
 		/** The state the entry keeps ({@link #jobState}), or null. */
@@ -1190,14 +1112,13 @@ public class JobManager {
 		private ACell generation;
 
 		Admission(long ts, AMap<AString, ACell> status, OutputRules rules, AString ownerDID,
-				boolean memoryOnly, boolean permit, boolean preserveFailureCause,
+				boolean memoryOnly, boolean preserveFailureCause,
 				BiFunction<JobRecord, AMap<AString, ACell>, VenueJob> handle) {
 			this.ts = ts;
 			this.status = status;
 			this.rules = rules;
 			this.ownerDID = ownerDID;
 			this.memoryOnly = memoryOnly;
-			this.permit = permit;
 			this.preserveFailureCause = preserveFailureCause;
 			this.handle = handle;
 		}
@@ -1250,7 +1171,6 @@ public class JobManager {
 		VenueJob publish() {
 			if (ids.isEmpty()) throw new IllegalStateException(NOT_RECORDED + ownerDID);
 			Blob id = ids.get(ids.size() - 1);
-			boolean attached = false;
 			try {
 				for (Blob other : ids) if (!other.equals(id)) release(other);
 				requireAccount();
@@ -1261,11 +1181,6 @@ public class JobManager {
 				}
 				VenueJob job = handle.apply(record, status.assoc(Fields.ID, id));
 				job.setPreserveFailureCause(preserveFailureCause);
-				// Attached before the Job can be seen, so whatever ends it releases the permit
-				if (permit) {
-					permitHolders.put(id, ownerDID);
-					attached = true;
-				}
 				activeJobs.put(id, job);
 				try {
 					requireAccount();
@@ -1274,9 +1189,6 @@ public class JobManager {
 					throw deleted;
 				}
 				return job;
-			} catch (RuntimeException | Error e) {
-				if (permit && !attached) releasePermit(ownerDID);
-				throw e;
 			} finally {
 				release(id);
 			}
@@ -1286,7 +1198,6 @@ public class JobManager {
 		void abandon() {
 			for (Blob id : ids) release(id);
 			ids.clear();
-			if (permit) releasePermit(ownerDID);
 		}
 
 		/**
@@ -1420,8 +1331,8 @@ public class JobManager {
 	 * adapter, caller, parent and creation time, kept in the call's account, and it names the call
 	 * in {@link #MIRROR_OF}. It stays STARTED until the call ends, then takes
 	 * the call's status, output and error; cancelling it cancels the call.
-	 * No adapter runs it: it holds no admission permit, takes no messages,
-	 * and a restart fails it and shutdown cancels it by the default path
+	 * No adapter runs it: it takes no messages, and a restart fails it and
+	 * shutdown cancels it by the default path
 	 * ({@link AAdapter#defaultRecover}, {@link AAdapter#defaultSuspend}).
 	 *
 	 * @param call a Job this manager started, never a direct or private run
@@ -1446,7 +1357,7 @@ public class JobManager {
 			if (value != null) status = status.assoc(field, value);
 		}
 		AString owner = unrecorded.accountDID();
-		Admission admission = new Admission(ts, status, unrecorded.rules(), owner, false, false, false,
+		Admission admission = new Admission(ts, status, unrecorded.rules(), owner, false, false,
 			(record, mirrored) -> new MirrorJob(record, mirrored, unrecorded.rules(), owner, this, call));
 		admission.commit();
 		VenueJob mirror = admission.publish();
@@ -1782,9 +1693,7 @@ public class JobManager {
 	}
 
 	public boolean deleteJob(Blob id) {
-		boolean removed = activeJobs.remove(id) != null;
-		releaseJobPermit(id);
-		return removed;
+		return activeJobs.remove(id) != null;
 	}
 
 	// ========== Message Delivery ==========
@@ -1887,11 +1796,10 @@ public class JobManager {
 	 * framework rebuilds each Job from its record and entry, binds it to its
 	 * installed adapter, registers it, and calls the hook — whatever state the
 	 * Job is in afterwards is the durable truth. Jobs still non-terminal are
-	 * restored live and re-occupy their caller's concurrency permit. A Job
-	 * whose adapter is missing (module not loaded, or its adapter declined or
-	 * refused its settings and was never installed) gets the default: PENDING
-	 * and STARTED fail as interrupted and are never re-executed; the paused
-	 * family is restored.
+	 * restored live. A Job whose adapter is missing (module not loaded, or its
+	 * adapter declined or refused its settings and was never installed) gets
+	 * the default: PENDING and STARTED fail as interrupted and are never
+	 * re-executed; the paused family is restored.
 	 */
 	public void recoverJobs() {
 		Index<Blob, ACell> entries = venue().jobIndex().all();
@@ -1931,22 +1839,11 @@ public class JobManager {
 			if (job.isFinished()) {
 				stabilised++;
 			} else {
-				reserveRecoveredPermit(jobID, job.accountDID());
 				kept++;
 			}
 		}
 		if (stabilised > 0 || kept > 0) {
 			log.info("Job recovery: {} stabilised, {} restored live", stabilised, kept);
-		}
-	}
-
-	/** A restored non-terminal Job re-occupies its owner's concurrency permit. */
-	private void reserveRecoveredPermit(Blob jobID, AString ownerDID) {
-		if (jobCapEnabled && ownerDID != null) {
-			JobSemaphore sem = jobPermits.computeIfAbsent(ownerDID,
-				k -> new JobSemaphore(maxConcurrentJobs));
-			sem.reserveRecovered();
-			permitHolders.put(jobID, ownerDID);
 		}
 	}
 
@@ -2002,7 +1899,6 @@ public class JobManager {
 	 */
 	void evictActive(Blob jobID) {
 		activeJobs.remove(jobID);
-		releaseJobPermit(jobID);
 		synchronized (drain) {
 			drain.notifyAll();
 		}

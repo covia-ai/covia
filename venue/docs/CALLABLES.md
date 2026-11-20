@@ -233,16 +233,15 @@ narrowed by the callable's caps, and nothing once the callable is gone, with the
 
 ## What a call acts in
 
-The call itself is the invoker's: a job in the invoker's `j/`, counted against
-the invoker's job quota, which the invoker can watch and cancel. Inside it,
-the call is its issuer's work, and names resolve in the owner's namespace, so
-what the target reaches by name is the owner's, within the callable's caps:
+The call itself is the invoker's: a job in the invoker's `j/`, which the
+invoker can watch and cancel. Inside it, the call is its issuer's work, and
+names resolve in the owner's namespace, so what the target reaches by name is
+the owner's, within the callable's caps:
 
 - jobs it records and events it schedules are the issuer's, recording the
-  issuer as their caller, kept in the owner's account and counted against the
-  owner's quota, so the invoker does not reach them; an event fires in the
-  call's frame as it stands then, so the caps must cover `invoke` on the
-  operation the event runs;
+  issuer as their caller, kept in the owner's account, so the invoker does
+  not reach them; an event fires in the call's frame as it stands then, so
+  the caps must cover `invoke` on the operation the event runs;
 - a human it asks (`hitl:request`) is asked by the issuer, through the
   owner's `h/`, and the request records the call's route, which says who
   called through which callable;
@@ -370,8 +369,6 @@ The token's caps let it reach the guestbook's gate and no other callable's.
 
 ## Open questions
 
-- **Whose quota.** Jobs the target records count against the owner's quota,
-  as work in the owner's namespace, not the invoker's.
 - **Calls across venues.** Calling a callable another venue hosts, through
   `grid:run`.
 - **A provider's record of calls.** Whether calls are recorded where the

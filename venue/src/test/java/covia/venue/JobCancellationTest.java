@@ -464,7 +464,7 @@ public class JobCancellationTest {
 		AMap<AString, ACell> status = Maps.of(Fields.STATUS, Status.PENDING, Fields.CALLER, ALICE_DID);
 		AtomicReference<VenueJob> handle = new AtomicReference<>();
 		JobManager.Admission admission = engine.jobs().new Admission(engine.currentTimestamp().longValue(),
-			status, OutputRules.NONE, ALICE_DID, false, false, false, (record, data) -> {
+			status, OutputRules.NONE, ALICE_DID, false, false, (record, data) -> {
 				handle.set(new VenueJob(record, data, OutputRules.NONE, ALICE_DID, engine.jobs(), null));
 				engine.deleteUser(engine.venueContext(), ALICE_DID);
 				return handle.get();

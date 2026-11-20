@@ -85,10 +85,9 @@
             "rateLimitEnabled": { "type": "boolean" },
             "requestsPerSecond": { "type": "number" },
             "requestBurst": { "type": "number" },
-            "maxConcurrentJobsPerUser": { "type": "integer" },
             "admissionBlockMs": { "type": "integer" }
           },
-          "required": ["rateLimitEnabled", "requestsPerSecond", "requestBurst", "maxConcurrentJobsPerUser", "admissionBlockMs"]
+          "required": ["rateLimitEnabled", "requestsPerSecond", "requestBurst", "admissionBlockMs"]
         },
         "validation": {
           "type": "object",

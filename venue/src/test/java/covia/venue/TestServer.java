@@ -36,7 +36,7 @@ public class TestServer {
 				Config.WEBDAV,Maps.of(Config.ENABLED,true),
 				// Shared server for the functional suite: the parallel tests hit it
 				// rapidly as one (public) caller, so disable rate limiting here.
-				// Rate-limit behaviour is covered by RateLimiterTest + RateLimitIT.
+				// Rate-limit behaviour is covered by RateLimiterTest + VenueHTTPRateLimitIT.
 				Config.RATE_LIMIT,Maps.of(Config.ENABLED,false),
 				// Closed only at JVM exit, when nothing in flight is waited on.
 				Config.SHUTDOWN,Maps.of(Config.GRACE_MS,0),

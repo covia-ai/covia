@@ -129,9 +129,14 @@ public class Config {
 	/** Reverse proxies whose {@code X-Forwarded-For} names the client: IP literals, CIDR ranges, {@code "loopback"}. */
 	public static final AString TRUSTED_PROXIES = Strings.intern("trustedProxies");
 
-	/** Key for the request rate-limiting config block ({@code enabled}, {@code rps},
-	 *  {@code burst}, {@code maxConcurrentJobsPerUser}). */
+	/** Key for the rate-limiting config block ({@code enabled}, {@code rps},
+	 *  {@code burst}, {@code blockMs} and the authentication throttle's keys). */
 	public static final AString RATE_LIMIT = Strings.intern("rateLimit");
+	/** Removed option under {@code rateLimit}, recognised only to warn that it is ignored. */
+	public static final AString MAX_CONCURRENT_JOBS_PER_USER = Strings.intern("maxConcurrentJobsPerUser");
+	/** The warning logged when a config still sets {@code rateLimit.maxConcurrentJobsPerUser}. */
+	public static final String JOB_CAP_REMOVED =
+		"rateLimit.maxConcurrentJobsPerUser no longer has any effect and is ignored: the venue sets no limit on a user's jobs";
 
 	/** Key for the grid scheduler config block ({@code trackJobs},
 	 *  {@code forceTrackJobs}, {@code maxConcurrency}). See
@@ -631,15 +636,16 @@ public class Config {
 	private void validateRateLimit(boolean strict) {
 		AMap<AString, ACell> rate = optionalMap(config, RATE_LIMIT, "rateLimit");
 		if (rate == null) return;
+		// The removed job cap's key is known, so strict configuration accepts it
 		validateUnknownFields(rate,
-			Set.of("enabled", "rps", "burst", "maxConcurrentJobsPerUser", "blockMs",
-				"authFailuresPerMinute", "authFailureBurst", "authConcurrency"),
+			Set.of("enabled", "rps", "burst", "blockMs",
+				"authFailuresPerMinute", "authFailureBurst", "authConcurrency",
+				"maxConcurrentJobsPerUser"),
 			"rateLimit", strict);
+		if (rate.containsKey(MAX_CONCURRENT_JOBS_PER_USER)) log.warn(JOB_CAP_REMOVED);
 		optionalBoolean(rate, ENABLED, "rateLimit.enabled", false);
 		optionalLong(rate, Strings.intern("rps"), "rateLimit.rps", 1, Long.MAX_VALUE);
 		optionalLong(rate, Strings.intern("burst"), "rateLimit.burst", 1, Long.MAX_VALUE);
-		optionalLong(rate, Strings.intern("maxConcurrentJobsPerUser"),
-			"rateLimit.maxConcurrentJobsPerUser", 0, Integer.MAX_VALUE);
 		optionalLong(rate, Strings.intern("blockMs"), "rateLimit.blockMs", 0, Long.MAX_VALUE);
 		optionalLong(rate, Strings.intern("authFailuresPerMinute"), "rateLimit.authFailuresPerMinute", 1, Long.MAX_VALUE);
 		optionalLong(rate, Strings.intern("authFailureBurst"), "rateLimit.authFailureBurst", 1, Long.MAX_VALUE);
@@ -1247,8 +1253,8 @@ public class Config {
 	}
 
 	/** Sustained request rate per caller (tokens/second). Default 100 — a coarse
-	 *  flood backstop, deliberately high: the concurrent-job cap is the precise
-	 *  control, so the request rate should rarely bite a legitimate caller. */
+	 *  flood backstop, deliberately high, so it should rarely bite a legitimate
+	 *  caller. */
 	public double getRateLimitRps() {
 		return rateLimitLong("rps", 100);
 	}
@@ -1259,16 +1265,10 @@ public class Config {
 		return rateLimitLong("burst", 300);
 	}
 
-	/** Maximum concurrent (non-terminal) jobs a single caller may hold. Default
-	 *  100. Bounds accumulation of long-lived jobs. A top-level invoke over this
-	 *  limit blocks (see {@link #getRateLimitBlockMs}) then sheds with 429. */
-	public int getMaxConcurrentJobsPerUser() {
-		return (int) rateLimitLong("maxConcurrentJobsPerUser", 100);
-	}
-
-	/** Max time (ms) a top-level invoke blocks waiting for a concurrency permit
-	 *  before shedding with 429. Default 3000. Keep it under typical client read
-	 *  timeouts so a saturated caller gets a clean 429, not a socket timeout. */
+	/** Max time (ms) an authentication waits for the ones its address has in
+	 *  flight ({@link #getAuthConcurrency}) before shedding with 429. Default
+	 *  3000. Keep it under typical client read timeouts so a waiting caller gets
+	 *  a clean 429, not a socket timeout. */
 	public long getRateLimitBlockMs() {
 		return rateLimitLong("blockMs", 3000);
 	}

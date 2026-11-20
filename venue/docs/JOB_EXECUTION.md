@@ -1,6 +1,6 @@
 # Job execution — what bounds it
 
-**Status:** design, not yet built. What happens to an adapter's jobs whether
+**Status:** current. What happens to an adapter's jobs whether
 or not it is started is in [ADAPTERS.md](ADAPTERS.md#an-adapter-that-is-not-running)
 and [JOBS.md](JOBS.md#recovery-on-restart-214).
 
@@ -52,12 +52,13 @@ adapter's change.
 ## No limit on jobs or threads
 
 - **The venue counts neither jobs nor threads.** The carrier pool bounds
-  CPU, and a waiting job leaves it. A limit on jobs in flight deadlocks once
-  a job waits for a sub-job it started: the parent holds its place, and the
-  child needs one. The per-user cap avoids that only by exempting sub-jobs,
-  so a job can fan out without bound under it anyway. A count of running
-  tasks has the same flaw unless every wait above, and every blocking call
-  in module and embedder adapters, gives its place up.
+  CPU, and a waiting job leaves it. A count of unfinished jobs includes
+  waiting ones, so a user whose jobs wait on people could start nothing. A
+  limit on jobs in flight deadlocks once a job waits for a sub-job it
+  started: the parent holds its place, and the child needs one. Exempting
+  sub-jobs avoids that only by letting a job fan out without bound. A count
+  of running tasks has the same flaw unless every wait above, and every
+  blocking call in module and embedder adapters, gives its place up.
 - **Invoking is consuming.** An operator who lets a user invoke operations
   accepts that the user's work uses the venue's capacity. The request rate
   (`rps`, `burst`) is the venue-wide control on how fast a user asks.
@@ -66,14 +67,3 @@ adapter's change.
   use, as `RemoteJobs` holds its request permit for one request. The limits
   that exist stay (remote requests, Claude Code processes, scheduler fires,
   the local speech engine); a new one is its own change.
-
-## The per-user job cap goes
-
-`rateLimit.maxConcurrentJobsPerUser` (default 100) counts a user's
-unfinished top-level jobs, waiting ones included, so a user with 100 jobs
-waiting on people can start nothing. It is removed, with its permits, the
-wait at admission and the 429 it sheds with, and the permits restored jobs
-take back at boot. `rateLimit.blockMs` stays: the authentication in-flight
-limit uses it. A config that still sets `maxConcurrentJobsPerUser` is
-refused under strict configuration, which rejects unknown `rateLimit` keys;
-how existing configs are carried over is settled with the removal.

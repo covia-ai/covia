@@ -124,7 +124,7 @@ the status by the situation it describes.
 | `InvalidStateException` | The request is valid, but the current state of what it addresses does not allow it, such as a message to a finished job; it will not succeed until that state changes. `ConflictException` refines it for a value that cannot stand beside one already there | `IllegalStateException` |
 | `NotFoundException` | A named thing does not exist; carries the reference | `NoSuchElementException` |
 | `AuthException` | The caller is not authenticated or not authorised. `CapabilityDeniedException` refines it for a capability the request's authority lacks, and carries the resource, the ability and the authority refused; `ForbiddenException` for a rule that forbids the request whatever the caller holds | `SecurityException` |
-| `RateLimitException` | An admission or rate control refused the request; carries a retry hint | |
+| `RateLimitException` | A venue a client called kept answering 429 after the client's retries; carries the venue's retry hint | |
 | `UnavailableException` | Something the request depends on failed or could not be reached; retrying later may succeed. `RemoteFetchException`, `ShuttingDownException` and `StillStartingException` refine it | |
 | `ResponseException` | A remote service answered with an error or a malformed response | |
 | `ConfigurationException` | The setup a request runs under is wrong or incomplete: the operator's configuration, or the settings and credentials the caller supplied for a dependency (a refused key, a missing model). Every request made the same way fails until it is fixed | |

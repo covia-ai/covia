@@ -45,7 +45,7 @@ Recorded jobs now use `user.jobs().job(id)` (`JobRecord`) as their primary recor
 its hooks run after the lattice update. Admission creates the row explicitly,
 and updates cannot recreate it. History appends share one path for active and
 completed jobs, fixing both reproduced history-loss cases. `JobManager` retains
-execution, recovery, permits and dispatch. Futures, original outputs, typed
+execution, recovery and dispatch. Futures, original outputs, typed
 failures and subscriptions remain runtime state. Transient/client records stay
 local, and erased handles may finish detached without restoring storage.
 

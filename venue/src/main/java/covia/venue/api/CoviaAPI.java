@@ -997,9 +997,6 @@ public class CoviaAPI extends ACoviaAPI {
 				buildError(ctx, 503, cause.getMessage());
 			} else if (cause instanceof covia.exception.RemoteFetchException) {
 				buildError(ctx, 502, cause.getMessage());
-			} else if (cause instanceof covia.exception.RateLimitException rate) {
-				ctx.header("Retry-After", Long.toString(rate.getRetryAfterSeconds()));
-				buildError(ctx, 429, rate.getMessage());
 			} else if (AAdapter.isExpectedFailure(cause)) {
 				// The run was refused for its own stated reason.
 				buildError(ctx, 400, "Error running operation: " + cause.getMessage());
@@ -1123,12 +1120,6 @@ public class CoviaAPI extends ACoviaAPI {
 			// venue, and that upstream fetch failed — a gateway error, not "the
 			// operation does not exist" (#174). The message names the venue.
 			this.buildError(ctx, 502, e.getMessage());
-		} catch (covia.exception.RateLimitException e) {
-			// Caller is over an admission/rate limit (e.g. concurrent-job cap) and
-			// the bounded wait elapsed — standard backpressure: 429 + Retry-After.
-			ctx.header("Retry-After", Long.toString(e.getRetryAfterSeconds()));
-			this.buildError(ctx, 429, e.getMessage());
-			return;
 		} catch (FaultException e) {
 			// A fault, reported where it happened, is the server handler's to answer
 			throw e;

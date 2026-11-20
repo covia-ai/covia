@@ -100,8 +100,7 @@ issuer's authority: `authority` is the issuer and `caller` is whoever called.
 Either way the token or callable is carried beside the fields and narrows each
 check as it stands, allowing nothing once it is gone. Calls nest: each call's
 `caller` is the authority that made it. Nesting has no depth limit: work nested
-deeper than the venue can run fails its job, and the work done counts against
-quotas as any work does.
+deeper than the venue can run fails its job.
 
 ## What a request creates
 
@@ -161,9 +160,9 @@ issuer. A job made within another job names that job as its `parent`
 A record of work is kept in its caller's account, a job in that account's
 `j/`: a user's own, and for an agent the account it acts in. It names no owner
 beside its caller: the account is the caller's, and the caller's DID names it,
-as an agent's `<ownerDID>:g:<id>` does, so a reader can find the record. It
-counts against that account's quota. This is COG-8's `caller`; a record names
-no `owner`, and none names the request's `origin`: the audit log does, where
+as an agent's `<ownerDID>:g:<id>` does, so a reader can find the record. This
+is COG-8's `caller`; a record names no `owner`, and none names the request's
+`origin`: the audit log does, where
 it is not the `authority`, and so does the route an agent's turn or an
 approval request keeps, whose first record is where the request started
 ([AGENT_CONTEXT.md](AGENT_CONTEXT.md) §1.2).

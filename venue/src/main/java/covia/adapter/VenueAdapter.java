@@ -269,7 +269,6 @@ public class VenueAdapter extends AAdapter {
 			"rateLimitEnabled", config.isRateLimitEnabled(),
 			"requestsPerSecond", RT.cvm(config.getRateLimitRps()),
 			"requestBurst", RT.cvm(config.getRateLimitBurst()),
-			"maxConcurrentJobsPerUser", config.getMaxConcurrentJobsPerUser(),
 			"admissionBlockMs", config.getRateLimitBlockMs());
 
 		List<String> names = new ArrayList<>(engine.getAdapterNames());

@@ -1016,7 +1016,7 @@ Two questions must not be conflated, and the context answers them separately:
 | Question | Accessor | Used for |
 |---|---|---|
 | **Who acted?** | `ctx.getAuthorityDID()` | attribution (`caller` on records of calls), delegation audience, granting authority |
-| **Whose namespace?** | `ctx.getUserDID()` | bare path resolution, workspace, secrets, jobs, inbox, quota |
+| **Whose namespace?** | `ctx.getUserDID()` | bare path resolution, workspace, secrets, jobs, inbox |
 
 For every ordinary principal the two are equal, so this is a no-op outside
 agent execution (a request under `admin/sudo` is the user's own). For an agent, `w/foo` still means the **owner's** workspace —

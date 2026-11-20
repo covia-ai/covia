@@ -7,6 +7,7 @@ import java.util.concurrent.CompletionException;
 
 import org.junit.jupiter.api.Test;
 
+import convex.core.data.AString;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import covia.exception.RateLimitException;
@@ -16,13 +17,16 @@ import covia.venue.server.VenueServer;
 
 /**
  * Real-venue integration: a genuine 429 from the venue surfaces as a typed
- * {@link RateLimitException} through {@link VenueHTTP}. Deterministic — a
- * never-completing job holds the single job slot and the client is configured
- * with a no-retry policy, so the second invoke fails immediately with no
- * sleeping or timing dependence. It needs a venue of its own with limits on, so
- * it is a failsafe integration test.
+ * {@link RateLimitException} through {@link VenueHTTP}. The venue's request
+ * rate allows one request a second with a burst of one, so the first invoke
+ * spends the caller's only token and the second, sent at once, is refused;
+ * the client is configured with a no-retry policy, so it fails without
+ * sleeping. It needs a venue of its own with limits on, so it is a failsafe
+ * integration test.
  */
 public class VenueHTTPRateLimitIT {
+
+	private static final AString ECHO = Strings.create("v/test/ops/echo");
 
 	@Test
 	public void testInvokeGets429AsRateLimitException() throws Exception {
@@ -32,21 +36,19 @@ public class VenueHTTPRateLimitIT {
 				Config.ENABLED, true, Config.CAPS, Strings.create("unrestricted"))),
 			Config.RATE_LIMIT, Maps.of(
 				Config.ENABLED, true,
-				Strings.create("rps"), 100000L,      // request rate high — only the job cap trips
-				Strings.create("burst"), 100000L,
-				Strings.create("maxConcurrentJobsPerUser"), 1L,
-				Strings.create("blockMs"), 0L)));
+				Strings.create("rps"), 1L,
+				Strings.create("burst"), 1L)));
 		try {
 			VenueHTTP client = VenueHTTP.create(URI.create("http://127.0.0.1:" + server.port()));
 			client.setRetryPolicy(RetryPolicy.noRetry()); // fail fast, no retry sleeping
 
-			// Hold the only slot with a never-completing job.
-			Job never = client.startJobAsync(Strings.create("v/test/ops/never"), Maps.empty()).join();
-			assertNotNull(never);
+			// The first invoke spends the only token.
+			Job first = client.startJobAsync(ECHO, Maps.empty()).join();
+			assertNotNull(first);
 
-			// Second invoke: cap full → venue 429 → typed RateLimitException.
+			// Second invoke: no token left → venue 429 → typed RateLimitException.
 			CompletionException ce = assertThrows(CompletionException.class,
-				() -> client.startJobAsync(Strings.create("v/test/ops/never"), Maps.empty()).join());
+				() -> client.startJobAsync(ECHO, Maps.empty()).join());
 			assertInstanceOf(RateLimitException.class, ce.getCause(),
 				"a venue 429 must surface as RateLimitException, was: " + ce.getCause());
 		} finally {

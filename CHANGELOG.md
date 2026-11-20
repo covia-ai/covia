@@ -90,6 +90,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - A gate's input no longer carries `owner`: a capability gate or callable gate is told `{operation, input, caller}`.
 - Python instances (`python:instances/create`, `list`, `call`, `close` and `adapters.python.instances`): configure each function under `operations` and offer it to others through a callable; a config naming `instances` is refused (#706).
 - Maven Central no longer receives `covia-python`, `covia-python-adapter`, `covia-whatsapp`, `covia-slack`, `covia-sonnylabs` or `covia-documents`; their module jars stay on GitHub Releases (#681).
+- The per-user job cap: a user may have any number of jobs, `rateLimit.maxConcurrentJobsPerUser` is ignored with a warning at startup, and `venue:showConfig` no longer reports it (#710).
 
 ### Fixed
 

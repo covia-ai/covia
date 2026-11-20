@@ -310,8 +310,8 @@ public class Fields {
 	 *  {@link covia.grid.Attribution}. */
 	public static final StringShort CALLER = Strings.intern("caller");
 	/** On a record of a call: the namespace it belongs to, present only when that
-	 *  differs from {@link #CALLER}. Ownership, access control and quota key on
-	 *  it. Read and written with {@link covia.grid.Attribution}. */
+	 *  differs from {@link #CALLER}. Ownership and access control key on it.
+	 *  Read and written with {@link covia.grid.Attribution}. */
 	public static final StringShort OWNER = Strings.intern("owner");
 	/** A lifecycle control was accepted; does not assert remote cessation. */
 	public static final StringShort ACCEPTED = Strings.intern("accepted");

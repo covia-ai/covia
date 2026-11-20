@@ -58,7 +58,7 @@ venue/
   **Two identities, never conflated**: `getAuthorityDID()` is *who acts*, the
   one principal a request acts as (attribution, delegation audience, granting
   authority); `getUserDID()` is *whose namespace*, that principal's account
-  (bare paths, workspace, secrets, jobs, inbox, quota). They differ only for
+  (bare paths, workspace, secrets, jobs, inbox). They differ only for
   an agent, `<ownerDID>:g:<agentId>`, whose account is its owner's; a delegate
   under `admin/sudo` acts as the user — see `docs/UCAN.md` §5.4.
 - **Lattice** — CRDT-based persistent state. Structure defined in
@@ -307,8 +307,8 @@ Adapter-owned state uses `AdapterState`; see
   `@TempDir` or `EtchStore.createTemp` (`TestTemp` says why); a test server
   names its store, `"memory"` unless persistence is under test
 - Rate-limit wiring tests, which need a venue of their own with limits on,
-  are failsafe `*IT`s (`RateLimitIT`); the limiter itself is unit-tested on an
-  injected clock (`RateLimiterTest`)
+  are failsafe `*IT`s (`VenueHTTPRateLimitIT`); the limiter itself is
+  unit-tested on an injected clock (`RateLimiterTest`)
 - A test that opens a release-written store fixture (`src/test/resources/migrations`)
   is a failsafe `*IT`, run by `mvn verify`; migration unit tests build their
   older states in code (`docs/MIGRATE.md`, Testing), and a new venue version or
@@ -343,7 +343,7 @@ java -jar target/covia.jar [config.json]
 - `docs/CONFIG.md` — operator configuration reference
 - `docs/EMBEDDING.md` — running a venue inside another application: lifecycle and close order, adapters, user data, upgrading from earlier releases
 - `docs/JOBS.md` — job implementation semantics (COG-8 companion)
-- `docs/JOB_EXECUTION.md` — what bounds job execution: scarce resources, not jobs or threads, and the per-user job cap's removal (design)
+- `docs/JOB_EXECUTION.md` — what bounds job execution: scarce resources, not jobs or threads
 - `docs/ERRORS.md` — how the venue raises, types and reports failures, and what each surface tells a caller
 - `docs/UCAN.md` — capabilities, granting surface, proof channels
 - `docs/CAPABILITY_REVIEW.md` — dated capability audit, corrected issuance bypass and remaining policy/documentation decisions; UCAN.md remains the maintained catalog

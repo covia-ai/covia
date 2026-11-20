@@ -898,28 +898,18 @@ URL or handler.
   "rateLimit": {
     "enabled": true,
     "rps": 100,
-    "burst": 300,
-    "maxConcurrentJobsPerUser": 100,
-    "blockMs": 3000
+    "burst": 300
   }
 }
 ```
 
-Two independent backpressure controls, keyed per caller identity (all anonymous
-callers share the venue `:public` DID → one bucket).
-
-- **Request rate** (`rps`, `burst`) — a per-caller token bucket on native Covia
-  REST/MCP/A2A routes and contributed routes carrying `RATE_LIMITED`. A denied
-  request short-circuits with **429 + `Retry-After`** before any handler runs.
-  Deliberately coarse/high — it's a flood backstop, not a normal-traffic gate;
-  the job cap is the precise control.
-- **Concurrent jobs** (`maxConcurrentJobsPerUser`) — admission control on
-  top-level invokes: a caller at the cap **blocks** up to `blockMs` for a slot
-  to free (a job completing releases it), then sheds with **429 + `Retry-After`**.
-  Sub-jobs (orchestrator / agent fan-out, which carry a parent job id) are
-  **exempt**, so internal fan-out is never throttled. Set `blockMs` under typical
-  client read timeouts so a saturated caller gets a clean 429, not a socket
-  timeout. Set the cap to `0` to disable it.
+**Request rate** (`rps`, `burst`) — a token bucket per caller identity (all
+anonymous callers share the venue `:public` DID → one bucket) on native Covia
+REST/MCP/A2A routes and contributed routes carrying `RATE_LIMITED`. A denied
+request short-circuits with **429 + `Retry-After`** before any handler runs.
+Deliberately coarse/high — it's a flood backstop, not a normal-traffic gate.
+The venue sets no limit on how many jobs a caller has
+([JOB_EXECUTION.md](JOB_EXECUTION.md)).
 
 `enabled` defaults **on** for a LAN/public bind and **off** for a loopback bind
 (the embedded-venue case, where the only caller is a trusted local process); an
@@ -939,18 +929,20 @@ check or, for a `did:web` subject, an outbound fetch (#539).
   credential are never charged. One WARN is logged per address when it
   crosses the line.
 - **In-flight limit** (`authConcurrency`, default 1): further concurrent
-  authentications from one address wait up to `blockMs` for the one in
-  flight, then shed with 429, so an address cannot fan out outbound DID
-  resolution in parallel. Failed `did:web` resolutions are also remembered
-  for a minute, so a stream of bad tokens for one DID costs one fetch. The
-  document's host is the token's choice, so it passes the outbound guard (see
-  `http.allowedHosts`): a `did:web` whose name resolves to a private address is
-  never fetched unless its host is allowed, and with the `http` adapter
-  disabled no remote `did:web` identity resolves.
+  authentications from one address wait up to `blockMs` (default 3000) for
+  the one in flight, then shed with 429, so an address cannot fan out
+  outbound DID resolution in parallel. Keep `blockMs` under typical client
+  read timeouts so a waiting caller gets a clean 429, not a socket timeout.
+  Failed `did:web` resolutions are also remembered for a minute, so a stream
+  of bad tokens for one DID costs one fetch. The document's host is the
+  token's choice, so it passes the outbound guard (see `http.allowedHosts`):
+  a `did:web` whose name resolves to a private address is never fetched
+  unless its host is allowed, and with the `http` adapter disabled no remote
+  `did:web` identity resolves.
 
 ```json
 {
-  "rateLimit": { "authFailuresPerMinute": 20, "authFailureBurst": 40, "authConcurrency": 1 }
+  "rateLimit": { "authFailuresPerMinute": 20, "authFailureBurst": 40, "authConcurrency": 1, "blockMs": 3000 }
 }
 ```
 

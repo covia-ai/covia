@@ -180,7 +180,7 @@ public class JobTest {
 		};
 		var next = job.future().thenRun(() -> {
 			assertEquals(Status.COMPLETE, job.getStatus());
-			assertTrue(released.get(), "the next step must not compete with the completed job's permit");
+			assertTrue(released.get(), "the completed job's cleanup runs before the next step");
 		});
 		job.completeWith(null);
 		next.join();

@@ -290,9 +290,9 @@ remains the application's choice.
   frame that made the call, a user or one of a user's agents
   (`<owner>:g:<agent>`) (COG-8). A job made under `admin/sudo` names the
   user. The job is kept in its caller's account, an agent's being its owner's,
-  in that account's `j/`, and access control and the admission quota key on
-  that account. The record leaves out a caller that is the account it is kept
-  in, since where it is kept says so: a missing caller means that account
+  in that account's `j/`, and access control keys on that account. The
+  record leaves out a caller that is the account it is kept in, since where
+  it is kept says so: a missing caller means that account
   wherever the record is read against it (`covia.grid.Attribution`,
   `VenueJob.getCaller`). A response that hands a client one record on its
   own names the caller in full (`Attribution.inFull`): `POST /invoke`,
@@ -403,8 +403,8 @@ update. For recorded venue jobs this edits `JobRecord`, not an in-memory copy:
   `JobRecord` binds the standard `updated` timestamp policy; account guards and
   parent timestamp/signing policies apply through its cursor.
 - **Hooks run after the primary record commits**: `onUpdate` sends notifications;
-  terminal completion also evicts the runtime handle, releases its permit and
-  settles the result future. Hooks perform no persistence copy. A losing
+  terminal completion also evicts the runtime handle and settles the result
+  future. Hooks perform no persistence copy. A losing
   transition has no external effects.
 - **Terminal lifecycle states are sticky**. Completion, failure and cancellation
   race for one winner. History and cancellation diagnostics remain independently
@@ -588,11 +588,6 @@ the boot wake completes them; only a `trigger` wait takes the default. HITL
 restores the expiry event of an open request that has lost it
 (GRID_SCHEDULER.md §8).
 
-Restored non-terminal jobs **re-occupy their caller's concurrency-cap
-permit** (`JobSemaphore.reserveRecovered`, which may drive permits negative):
-after a restart the cap still holds, and new work admits only as restored
-jobs finish.
-
 After generic Job recovery, AgentAdapter reconciles its own queues, whether
 or not it is started: intake for terminal Jobs is removed, stale execution
 markers/fences are cleared, and only remaining durable queued work can start
@@ -639,8 +634,9 @@ carrying the suspended states.
 
 - **Shutdown gate**: admission closes first in the [shutdown
   sequence](#shutdown), before anything else is stopped.
-- **Per-caller concurrency cap**: see [CONFIG.md § Rate limiting](CONFIG.md#rate-limiting).
-  Sub-jobs (carrying a parent job id) are exempt.
+- **No limit on jobs**: admission counts no caller's jobs
+  ([JOB_EXECUTION.md](JOB_EXECUTION.md)); the request rate limits how fast a
+  caller asks ([CONFIG.md § Rate limiting](CONFIG.md#rate-limiting)).
 
 ## Remote delegation
 
@@ -831,10 +827,9 @@ already recorded is its own job and needs none.
 - It is `STARTED` until the call ends, then takes the call's `status`,
   `output` and `error`. Cancelling the mirror cancels the call with the same
   reason, and cancelling the call settles the mirror.
-- No adapter runs it. It holds no admission permit and takes no messages,
-  pause or resume. Shutdown cancels it, which cancels the call; a restart
-  fails it as interrupted (the default in the table above), since the call
-  ran only in memory.
+- No adapter runs it. It takes no messages, pause or resume. Shutdown
+  cancels it, which cancels the call; a restart fails it as interrupted (the
+  default in the table above), since the call ran only in memory.
 - Direct and private runs are never mirrored: their caller asked for no record.
 
 

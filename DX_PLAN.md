@@ -45,8 +45,8 @@ installation to a working operation, with dependable SDKs and useful diagnostics
   running process from a venue ready to serve work.
 - [ ] **Metrics.** Expose Prometheus-compatible operation, job, adapter and
   storage metrics.
-- [ ] **Per-operation limits.** Extend the existing per-caller request and
-  concurrent-job limits to individual operations.
+- [ ] **Per-operation limits.** Extend the existing per-caller request limit
+  to individual operations.
 - [ ] **Complete the production profile.** Document and enforce appropriate key
   handling, security logging, outbound access, WebDAV ([#673](https://github.com/covia-ai/covia/issues/673))
   and agent limits ([#667](https://github.com/covia-ai/covia/issues/667)); see

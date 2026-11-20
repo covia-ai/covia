@@ -203,8 +203,8 @@ concurrency globally and per peer, and use fair scheduling across Jobs.
 The alarm queue is disposable, rebuilt from non-terminal Job descriptors. Waiting
 for a retry occupies no thread. Follow the existing Scheduler's alarm/virtual-I/O
 pattern, but do not create an operation Job for every status poll. A circuit-open
-peer must not accumulate unbounded threads or duplicate timers. Keep the existing
-caller Job admission permit semantics; network attempt permits are separate.
+peer must not accumulate unbounded threads or duplicate timers. A network attempt
+permit is held for one request only.
 
 Process each response as a state-machine event:
 
