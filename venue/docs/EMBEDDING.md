@@ -311,8 +311,10 @@ A `did:key` installation can sign for identities nested below it, such as
 as one of the installation's secrets, run `crypto:add-key {"seed":"s/<name>"}`
 as the installation, then delete the secret. The venue then signs identity
 tokens for the installation and every identity nested below it. To get a
-user's token, invoke `auth:identity-token` as that user
-(`engine.context(userDID)`): the token names that user and is stored in their
+user's token, invoke `auth:identity-token` as that user in person, once the
+application has authenticated them (`engine.requestContext(userDID, null)`,
+not `engine.context(userDID)`, which it refuses): the token names that user
+and is stored in their
 secret store, where `secrets().decrypt` reads it (see Secrets above). An
 application that keeps the key itself signs with `VenueAuth.namedKeyPair`. See
 AUTH.md, "Nested installation identities below a did:key" and "Minting an
