@@ -3,6 +3,9 @@ package covia.grid.client;
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.net.URI;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 
 import org.junit.jupiter.api.Test;
@@ -18,15 +21,16 @@ import covia.venue.server.VenueServer;
 /**
  * Real-venue integration: a genuine 429 from the venue surfaces as a typed
  * {@link RateLimitException} through {@link VenueHTTP}. The venue's request
- * rate allows one request a second with a burst of one, so the first invoke
- * spends the caller's only token and the second, sent at once, is refused;
- * the client is configured with a no-retry policy, so it fails without
- * sleeping. It needs a venue of its own with limits on, so it is a failsafe
- * integration test.
+ * rate allows one request a second with a burst of one, and several invokes
+ * are sent at once, so however slowly the venue answers, they arrive within
+ * the second and all but the first are refused. The client is configured
+ * with a no-retry policy, so it fails without sleeping. It needs a venue of
+ * its own with limits on, so it is a failsafe integration test.
  */
 public class VenueHTTPRateLimitIT {
 
 	private static final AString ECHO = Strings.create("v/test/ops/echo");
+	private static final int SENT = 5;
 
 	@Test
 	public void testInvokeGets429AsRateLimitException() throws Exception {
@@ -42,15 +46,21 @@ public class VenueHTTPRateLimitIT {
 			VenueHTTP client = VenueHTTP.create(URI.create("http://127.0.0.1:" + server.port()));
 			client.setRetryPolicy(RetryPolicy.noRetry()); // fail fast, no retry sleeping
 
-			// The first invoke spends the only token.
-			Job first = client.startJobAsync(ECHO, Maps.empty()).join();
-			assertNotNull(first);
-
-			// Second invoke: no token left → venue 429 → typed RateLimitException.
-			CompletionException ce = assertThrows(CompletionException.class,
-				() -> client.startJobAsync(ECHO, Maps.empty()).join());
-			assertInstanceOf(RateLimitException.class, ce.getCause(),
-				"a venue 429 must surface as RateLimitException, was: " + ce.getCause());
+			List<CompletableFuture<Job>> sent = new ArrayList<>();
+			for (int i = 0; i < SENT; i++) sent.add(client.startJobAsync(ECHO, Maps.empty()));
+			List<Throwable> refused = new ArrayList<>();
+			for (CompletableFuture<Job> invoke : sent) {
+				try {
+					assertNotNull(invoke.join());
+				} catch (CompletionException e) {
+					refused.add(e.getCause());
+				}
+			}
+			assertFalse(refused.isEmpty(), "invokes beyond the caller's one token are refused");
+			for (Throwable cause : refused) {
+				assertInstanceOf(RateLimitException.class, cause,
+					"a venue 429 must surface as RateLimitException, was: " + cause);
+			}
 		} finally {
 			server.close();
 		}
