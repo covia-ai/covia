@@ -6,12 +6,14 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
 
+import convex.auth.ucan.Capability;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.adapter.AAdapter;
@@ -252,11 +254,26 @@ public final class ConversationRouter {
 	}
 
 	/**
-	 * The context the binding's work for its agent runs under — storing a
-	 * message's media, processing it, formatting the reply: the agent itself,
-	 * bounded by its caps, when the binding's principal controls it (is its owner,
-	 * or the agent); otherwise the binding's principal, since nobody else may make
-	 * an agent act.
+	 * The context the binding stores what a message brings under: its media, in
+	 * the binding's user's drive named for the adapter
+	 * ({@link MessagingMedia#ensureOwnerDirectory}). Storing what arrives is the
+	 * adapter's own work, not the agent's act, so it is the binding's user
+	 * narrowed to writing that one drive: the agent needs no grant on it, and the
+	 * write reaches nothing else.
+	 */
+	public RequestContext intakeContext() {
+		sessions.requireCurrentUser();
+		AString user = spec.userDID(engine);
+		return carried(engine.context(user, user)).narrowedTo(Vectors.of(Capability.create(
+			Strings.create("dlfs/" + sessions.adapterName()), Capability.CRUD_WRITE)));
+	}
+
+	/**
+	 * The context the binding's work for its agent runs under — processing a
+	 * message's media, formatting the reply: the agent itself, bounded by its
+	 * caps, when the binding's principal controls it (is its owner, or the
+	 * agent); otherwise the binding's principal, since nobody else may make an
+	 * agent act.
 	 */
 	public RequestContext agentContext() {
 		AgentAddress agent = agent();

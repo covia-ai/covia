@@ -943,12 +943,12 @@ final class BotRunner implements MessagingBot<BotSpec> {
 		return fileMetadataRoot + "/" + Strings.create(fileId).getHash().toHexString();
 	}
 
-	/** Automatic intake stores media as the bot's work for its agent. */
+	/** Automatic intake stores media as the bot's own work, writing only its media drive. */
 	AMap<AString, ACell> download(String fileId) {
-		return download(fileId, null, null, conversations.agentContext());
+		return download(fileId, null, null, conversations.intakeContext());
 	}
 
-	/** Explicit destinations use caller authority; automatic intake uses the bot's work for its agent. */
+	/** Explicit destinations use caller authority; automatic intake writes only the bot's media drive. */
 	AMap<AString, ACell> download(String fileId, AString destination, String fileName, RequestContext writeContext) {
 		ACell info = call("getFile", Map.of("file_id", fileId));
 		AString path = RT.ensureString(RT.getIn(info, "file_path"));

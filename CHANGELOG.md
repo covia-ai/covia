@@ -98,6 +98,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - The `agents` skill offers `agent:suspend`, `agent:resume` and `agent:delete`, which its guidance tells an agent to use (#707).
 - Venue and user DID documents name the context that defines their `Multikey` keys, and the venue's API service has an `id` (#657).
 - A turn sent to an external agent, such as one on Claude Code, records its caller and route in the agent's session, as a native agent's does (#713).
+- A capped agent behind a Telegram, WhatsApp or Slack bot receives media without a grant on the media drive: the bot stores what arrives itself, writing only that drive (#682).
 - `agent:context` for a goal-tree agent includes the notice that its turn is answered by its final message, as the live call does.
 - An agent on an Anthropic model with native system messages answers the next turn after a reply with no text, instead of failing because the provider rejects the request's message order.
 - A model provider's refusal, content filter or `error` fails the model call with a reason naming the provider and its own value, instead of returning an empty or partial reply: the task or chat the agent was answering fails with that reason, which the Telegram and Discord bots show, and the agent carries on.

@@ -501,6 +501,37 @@ class ConversationRouterTest {
 		assertEquals(helper, sibling.agentContext().getAuthorityDID(), "the helper's bot, not the sibling it talks to");
 	}
 
+	/**
+	 * Storing what a message brings is the binding's own work: a capped agent
+	 * with no grant on the media drive still has its media stored, the agent
+	 * itself still cannot write there, and the intake writes nothing else.
+	 */
+	@Test void mediaIntakeWritesOnlyTheMediaDriveAndNeedsNoGrantFromTheAgent(TestInfo info) throws Exception {
+		Engine engine = venue;
+		var owner = TestEngine.uniqueDID(info);
+		engine.getVenueState().users().ensure(owner);
+		var ownerContext = covia.venue.RequestContext.of(owner);
+		var caps = convex.core.data.Vectors.of(convex.auth.ucan.Capability.create(
+			Strings.create(owner + "/w/notes"), convex.auth.ucan.Capability.CRUD_WRITE));
+		engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "capped",
+			Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete", "caps", caps)), ownerContext).awaitResult(5000);
+		String drive = stateName(info);
+		var router = new ConversationRouter(engine, new Spec("bot", owner.toString(), "capped", null, null),
+			new ConversationSessions(engine.adapterState(drive), "intake/own"));
+		byte[] photo = "jpeg-photo-bytes".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+
+		String directory = MessagingMedia.ensureOwnerDirectory(engine, owner, drive, router.intakeContext());
+		AMap<AString, ACell> stored = MessagingMedia.store(engine, photo, "image/jpeg", directory, "photo.jpg",
+			router.intakeContext());
+		assertTrue(RT.getIn(stored, "ref").toString().startsWith(directory), String.valueOf(stored));
+
+		assertThrows(Exception.class, () -> MessagingMedia.store(engine, photo, "image/jpeg", directory, "by-agent.jpg",
+			router.agentContext()), "the agent itself holds no write on the media drive");
+		Job outside = engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/notes/intake", Fields.VALUE, "x"), router.intakeContext());
+		assertThrows(Exception.class, () -> outside.awaitResult(5000), "the intake writes only its media drive");
+	}
+
 	@Test void anonymousSendersNeedPublicAccess() {
 		Engine engine = Engine.createTemp(Maps.of(covia.venue.Config.AUTH, Maps.of(covia.venue.Config.PUBLIC,
 			Maps.of(covia.venue.Config.ENABLED, false))));

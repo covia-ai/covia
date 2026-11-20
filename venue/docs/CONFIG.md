@@ -2617,9 +2617,11 @@ comes from a principal, and the binding identifies which.
   or `{text, attachments, content?}` when it carries media.
 - **The agent acts as itself**, whoever asked: its tool calls under its own
   `config.caps`, its harness with its controller's authority (UCAN.md §5.4).
-  The binding's work for it — storing a message's media, `mediaOperation`,
-  `replyOperation` — runs as the agent when the binding's principal is the
-  agent or its owner, and otherwise as the binding's principal.
+  The binding's work for it — `mediaOperation`, `replyOperation` — runs as
+  the agent when the binding's principal is the agent or its owner, and
+  otherwise as the binding's principal. Storing a message's media is the
+  binding's own work: it runs as the binding's user, narrowed to writing the
+  media drive named for the adapter, so the agent needs no grant on it.
 
 A `user: "public"` binding's allow-listed senders are the public principal
 too, so they are bound by the public scope. A capped agent's own binding asks
@@ -2711,8 +2713,8 @@ Per bot:
   operation you own** (an orchestration, a pinned op…) that takes the Update
   and does the work. Agent bots also download photos, voice/audio, documents,
   video/video notes, animations and stickers into the owner's DLFS `telegram`
-  drive after admission, as the bot's work for its agent (a capped agent needs
-  write on that drive). Each turn retains its caption and `attachments`
+  drive after admission, as the bot's own work, which writes only that drive
+  (the agent needs no grant on it). Each turn retains its caption and `attachments`
   descriptors (`kind`, `file_id`, `ref`, `mediaType`, provider metadata).
   Images reach the LLM as asset-reference image blocks; the agent needs
   `crud/read` on the referenced DLFS files and a vision-capable model.

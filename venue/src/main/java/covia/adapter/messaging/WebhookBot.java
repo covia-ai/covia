@@ -294,7 +294,7 @@ public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<
 			if (type == null) type = fetched.contentType();
 			String name = MessagingSettings.optional(item, "fileName");
 			if (!MessagingMedia.safeFileName(name)) name = MessagingMedia.fallbackName(spec.name(), MessagingSettings.required(item, "id"), type);
-			RequestContext writer = router.agentContext();
+			RequestContext writer = router.intakeContext();
 			String directory = MessagingMedia.ensureOwnerDirectory(adapter.engine, spec.userDID(adapter.engine),
 				adapter.getName(), writer);
 			AMap<AString, ACell> attachment;
