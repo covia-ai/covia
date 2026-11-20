@@ -199,6 +199,7 @@ Abilities follow UCAN's slash-delimited convention with no leading slash. `*` is
 | `asset/read` | — | Get / list content-addressed assets |
 | `admin/venue/restart` | — | Restart a standalone venue process or hand off to a successor jar |
 | `admin/venue/gc` | — | Garbage-collect the venue's Etch store online (`<venueDID>/store`) |
+| `admin/venue/compact` | — | Reserved for compacting the venue's store (`<venueDID>/store`); no operation checks it yet |
 | `outbound` | every `outbound/*` | Ordinary outbound transports on `<ownerDID>/outbound`; currently HTTP |
 | `outbound/http` | every `outbound/http/*` | HTTP requests; method leaves `get`, `post`, `put`, `patch`, `delete`, `head`, `options`, with destination constraints in `nb.url` ([OUTBOUND.md](OUTBOUND.md)) |
 | `admin/outbound/bypass` | — | Have the venue dial any HTTP, MCP, A2A, model, Convex peer or venue target, unchecked by its outbound guard (`<venueDID>/outbound`); ordinary HTTP permission remains required |

@@ -126,6 +126,10 @@ public final class Abilities {
 	/** Online garbage collection of the venue's Etch store (covia#452) — guarded
 	 *  on {@code <venue DID>/store}. */
 	public static final AString ADMIN_VENUE_GC = Strings.intern("admin/venue/gc");
+	/** Compact the venue's store, apart from collecting it — reserved, guarded
+	 *  on {@code <venue DID>/store}. No operation of the venue checks it yet;
+	 *  an embedder that compacts the store guards that with it. */
+	public static final AString ADMIN_VENUE_COMPACT = Strings.intern("admin/venue/compact");
 	/** Run code in the venue process: the parent of each runtime's leaf, such as
 	 *  {@code admin/execute/python}, guarded on the venue resource that names the
 	 *  code. */

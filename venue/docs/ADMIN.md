@@ -110,6 +110,11 @@ Resource scopes are preserved; possible refinements are listed separately.
 | `user:sudo` as another user | `admin/sudo` on the target `U`, from a request no access token or callable narrows; never the venue's DID or its public principal |
 | A configured Python function (`python` module) | `admin/execute/python` on `V/python/operations/<id>` |
 
+`admin/venue/compact` on `V/store` is reserved for compacting the store, apart
+from `admin/venue/gc`. No operation of the venue checks it; an embedder that
+compacts its store guards that with it. What each of the two covers is not
+yet defined (see *Where finer control is needed*).
+
 Venue administration currently admits the venue itself, its agents within
 their effective authority, or callers presenting a suitable venue-rooted
 grant. An unrestricted venue agent therefore holds these privileges.
@@ -241,7 +246,9 @@ policy changes to agree before implementation:
    user-rooted `admin/sudo` resource. The exact child encoding is still open.
 2. **Separate observation from mutation.** GC status requires the same
    ability as collection. Add a read leaf if operators need observation-only
-   access, as `admin/adapter/read` gives for adapters.
+   access, as `admin/adapter/read` gives for adapters. Define, with it, what
+   `admin/venue/gc` and the reserved `admin/venue/compact` each cover, and
+   whether those names fit.
 3. **Separate maintenance from executable code changes.** Consider distinct
    rights for module load/unload and jar replacement instead of treating
    them as ordinary adapter management and restart.
