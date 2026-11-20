@@ -61,6 +61,39 @@ public class ConfigRateLimitTest {
 		assertEquals(250L, c.getRateLimitBlockMs());
 	}
 
+	/** A config that still sets the removed job cap's key says, once, that it is ignored. */
+	@Test
+	public void testRemovedJobCapIsReportedAsIgnored() {
+		ch.qos.logback.classic.Logger logger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(Config.class);
+		ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> captured =
+			new ch.qos.logback.core.read.ListAppender<>();
+		ch.qos.logback.classic.Level level = logger.getLevel();
+		boolean additive = logger.isAdditive();
+		captured.start();
+		logger.setLevel(ch.qos.logback.classic.Level.WARN);
+		logger.setAdditive(false);
+		logger.addAppender(captured);
+		try {
+			new Config(Maps.of(Config.RATE_LIMIT, Maps.of(Config.ENABLED, true)));
+			assertEquals(0, warningsHere(captured), "a config without the key says nothing of it");
+			new Config(Maps.of(Config.RATE_LIMIT, Maps.of(Config.MAX_CONCURRENT_JOBS_PER_USER, 10L)));
+			assertEquals(1, warningsHere(captured));
+		} finally {
+			logger.detachAppender(captured);
+			logger.setLevel(level);
+			logger.setAdditive(additive);
+			captured.stop();
+		}
+	}
+
+	/** The job cap warnings this test's thread logged, apart from any other test's. */
+	private static long warningsHere(ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> captured) {
+		String thread = Thread.currentThread().getName();
+		return java.util.List.copyOf(captured.list).stream()
+			.filter(e -> thread.equals(e.getThreadName()) && Config.JOB_CAP_REMOVED.equals(e.getFormattedMessage()))
+			.count();
+	}
+
 	@Test
 	public void testRemovedJobCapIsAcceptedUnderStrictConfig() {
 		// Ignored whatever its value: NoJobCapTest shows it limits nothing
