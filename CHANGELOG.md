@@ -41,7 +41,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Changed
 
-- An agent takes tasks only when its config sets `acceptTasks: true`, as every template except `minimal` does, the messaging modules' included; without it `agent:request` is refused and the agent's context carries no task tools or no-task notice.
+- An agent takes tasks only when its config sets `acceptTasks: true`, as every template except `minimal` does, the messaging modules' included; without it `agent:request` is refused and the agent's context carries no task tools or no-task notice. An agent created before this release does not set it, so it refuses requests, scheduled ones included, until `agent:update` sets it; the tasks it already holds still run.
 - A running venue whose record another writer with its key changed while the venue changed it too writes its own version over the other, logs the fork at ERROR naming both versions, and stops: a standalone venue process exits with status 70. Find the other writer, such as a second instance or state delivered from outside, before restarting it.
 - HTTP, MCP and A2A agent input shows transport and protocol hints, including signed owner logins; credential classes stay in structured provenance only, and sibling-agent labels and standard templates distinguish shared ownership and token issuance from owner approval.
 - Capability documentation now inventories module abilities, resource scopes and model-call boundaries; UCAN issuance cannot use presented granting rights to escape access-token or callable caps.

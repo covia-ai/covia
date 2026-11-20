@@ -33,6 +33,19 @@ The [release capability verification](../venue/docs/CAPABILITY_RELEASE.md)
 records the shipped configuration review, local test coverage and the checks
 to perform against a specific deployment before promotion.
 
+### Agents that take tasks
+
+An agent takes requests only when its config sets `acceptTasks: true`. An
+agent created by an earlier release does not set it, so after the upgrade it
+refuses `agent:request` from anyone, a schedule included; chats, messages and
+`agent:trigger` still reach it, and the tasks it already holds still run. To
+keep such an agent taking requests, set the flag with `agent:update`, whose
+config merges over the agent's existing config:
+
+```json
+{ "agentId": "<agent>", "config": { "acceptTasks": true } }
+```
+
 ### Agent history format upgrade
 
 Release the history-aware SDK (1.24.1 or later) and update clients before deploying
