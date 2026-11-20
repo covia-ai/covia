@@ -284,6 +284,34 @@ so the application decides who reaches them.
   });
   ```
   Keep I/O out of the body: it may run more than once.
+- **Workspace and drives together.** `engine.transact(ctx, work)` changes the
+  context's user's workspace at the venue and their DLFS drives in one
+  transaction: everything the body changes through its `UserTransaction`
+  commits together, or none of it does, and no save of the venue's state holds
+  part of it. `tx.workspace()` is the user's workspace, `tx.drive(name)` the
+  drive (created if absent) and `tx.existingDrive(name)` the drive or null.
+  Files are created, written, moved and deleted through the drive's file
+  system, and an entry's metadata through its nodes:
+  ```java
+  engine.transact(RequestContext.of(userDID), tx -> {
+      DLFileSystem files = tx.drive("documents").fileSystem();
+      Files.write(files.getPath("/letter.pdf"), bytes);
+      tx.workspace().write(CoviaPath.parse("letter"), record);
+      return null;
+  });
+  engine.flush();
+  ```
+  The body runs once, while every other write to the application waits, so
+  keep it short: an import is one transaction per file. It uses only the
+  transaction, does no other I/O and does not wait for other threads; a
+  transaction started inside it is refused. An exception from the body,
+  `IOException` included, propagates and nothing applies. The transaction and
+  its drives cannot be used after the body returns. A user with no DLFS key is
+  given one first, and a context with no user or a user the venue does not know
+  is refused. A commit is in memory until the host's next sync saves it; call
+  `engine.flush()` before acknowledging it elsewhere. `CoviaApplication.transact`
+  is the same transaction over every mounted venue and any owner's drives
+  ([PERSISTENCE.md](PERSISTENCE.md#50-the-venues-working-copy-forks-are-transactions)).
 - **Secrets.** Use `user.secrets().store(name, value, keys)` and
   `decrypt(name, keys)`, with `keys = SecretStore.keys(engine.getKeyPair())`.
 - **Agent conversations.** Read a session frame through

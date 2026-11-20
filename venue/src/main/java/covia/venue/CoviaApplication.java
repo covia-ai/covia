@@ -69,7 +69,8 @@ import covia.lattice.Covia;
  * {@link DrivenClock} nothing wakes it: whoever moves the clock calls
  * {@link #update()} to start what is due.
  * Edits to a copy are unsigned; {@link #sync()} signs each venue's record once
- * and then publishes the regions. Unmounting a venue signs its copy and closes
+ * and then publishes the regions. {@link #transact} changes mounted venues and
+ * DLFS drives in one update of the root. Unmounting a venue signs its copy and closes
  * its engine; its records stay. Whole-venue LWW selects recovery/replication
  * snapshots; it cannot reconcile the state or external effects of independently
  * running forks.</p>

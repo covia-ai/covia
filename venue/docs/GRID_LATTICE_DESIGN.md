@@ -825,8 +825,9 @@ components, adapters included, have no publication policy of their own.
 
 ### A.4 Signing
 
-The venue's Ed25519 key signs the venue's record when the application syncs.
-Edits and transactions sign nothing. `CoviaApplication.sync()` syncs each
+The venue's Ed25519 key signs the venue's record when the application syncs,
+or once as an application transaction commits. Edits and transactions on the
+copy sign nothing. `CoviaApplication.sync()` syncs each
 venue's copy, which reconciles it with the record and signs the result once,
 then publishes the regions; an unchanged venue does not sign. A signing failure
 publishes nothing and keeps the copy, edits included, for the next sync. The
@@ -850,8 +851,13 @@ The copy and the record follow Convex's default reconcile: where only one side
 changed, it wins. A transaction on the copy that meets a concurrent change runs
 again under its claim, so both changes are kept. Publishing the copy
 (`VenueState.sync`) puts the copy into the record where only the copy changed,
-and the record into the copy where only the record did. Only incoming state
-changes the record behind the copy: a snapshot signed with the venue's key and
+and the record into the copy where only the record did. An application
+transaction (`CoviaApplication.transact`) changes the record without becoming
+a second writer: it holds the copy's claim, syncs the copy so the transaction
+starts from everything it holds, commits the venue's change in one update of
+the root with any other change, and syncs the copy again while still holding
+its claim, so the copy, unchanged meanwhile, takes the new record. Otherwise
+only incoming state changes the record behind the copy: a snapshot signed with the venue's key and
 newer than the copy's last publication (A.2), from another writer such as an
 embedder delivering state through the application. The copy takes it at its
 next sync; later reads and work see it, while work already running keeps what

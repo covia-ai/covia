@@ -461,6 +461,23 @@ Signing, publication and durability are separate operations:
 | `application.host().sync()` | publishes the hosted root through the host policy |
 | `application.publish()` | runs both of the above, then persists each copy through the host, so it holds what is saved softly |
 | `application.host().flush()` | invokes the store's physical durability barrier |
+| `application.transact(work)` | commits changes to mounted venues and DLFS drives in one update of the hosted root |
+
+`CoviaApplication.transact` and `execute` change the whole application in one
+transaction: the callback works on a `CoviaApplication.Draft` of the hosted
+root, reaching each mounted venue's state and any owner's DLFS drives, and the
+commit installs all of it in one update, so a save holds all of it or none.
+The callback runs once, under the root's claim, while every other write to the
+application waits. Each venue's working copy is claimed first, in mount order,
+and synced, so the draft starts from everything the copy holds; the venue's
+change is made on a draft of its record, which signs once as the transaction
+commits; after the commit the copy syncs again while still claimed and takes
+the new record, so it remains its record's only writer (GRID_LATTICE_DESIGN.md
+A.4). A callback that changes a copy outside the draft, or starts another
+transaction, is refused before anything commits. `Engine.transact` is the
+same transaction for one user at one venue, claiming only that venue
+([EMBEDDING.md](EMBEDDING.md#user-data)). A commit is in memory, as any other
+change is: the host's next sync saves it and `flush()` makes it durable.
 
 Local mutations do not compete through the LWW merge. The atomic update order
 of the copy decides the current value, including writes sharing a millisecond
