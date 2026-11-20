@@ -136,6 +136,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - `convex:query` refuses an `address` that is not a Convex account address, instead of running the query without one.
 - A `convex:query` or `convex:transact` that gets no result from its peer in time completes with Convex's `TIMEOUT` error code, after 20 seconds by default rather than 60, instead of failing as a fault in the `convex` adapter.
 - A module's adapters are only those its own jar declares: loading a module no longer registers again the adapters declared on the venue's classpath, such as an embedder's, lists them as the module's in `v/info/modules` and `v/info/adapters/<name>`, or removes them when the module unloads (#618).
+- A Claude Code turn on a session that has started a new process, such as one resumed just after it was stopped, gets that process's reply, instead of a late and possibly empty reply from the process before it (#649).
 
 ## [0.11.0] - 2026-11-10
 

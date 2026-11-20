@@ -49,6 +49,11 @@ import covia.exception.UnavailableException;
  * cap, explicit {@code claudecode:stop}) or by the process ending. A stopped
  * session is respawned transparently on its next turn.</p>
  *
+ * <p>Only the session's running process (see {@link #runs}) is written to and
+ * drives its turns: output still being read from a process it has stopped or
+ * replaced is ignored, so a turn completes only with the reply of the process
+ * it was written to.</p>
+ *
  * <p>Turns are strictly sequential per session: {@link #submit} queues a
  * prompt and returns a future for that turn's result; progress (tool calls,
  * latest text) is reported through the turn's callback as the stream arrives.
@@ -218,27 +223,27 @@ final class ClaudeSession {
 	/** Start the next queued turn if none is running. Caller holds the lock. */
 	private void pump() {
 		if (current != null) return;
+		// A stopped session's process may still be exiting: it is not warm
+		boolean warm = runs(process) && process.isAlive();
 		Turn next = queue.poll();
 		if (next == null) {
-			if (process != null && process.isAlive()) state = State.IDLE;
+			if (warm) state = State.IDLE;
 			return;
 		}
 		current = next;
 		state = State.BUSY;
-		boolean warm = (process != null && process.isAlive());
 		try {
 			if (!warm) spawn();
 			writeTurn(next);
 		} catch (Exception e) {
 			// A warm process can die or close its stdin between turns (a slow or
 			// loaded host may have reaped it, or it exited on its own). The
-			// conversation lives in Claude Code's on-disk session, so discard the
-			// dead process and respawn a fresh one for the same session, retrying
-			// the turn once — the caller never sees the blip.
+			// conversation lives in Claude Code's on-disk session, so respawn a
+			// fresh process for the same session in place of the dead one,
+			// retrying the turn once — the caller never sees the blip.
 			if (warm) {
 				log.debug("Claude Code warm process write failed ({}); respawning to resume", e.toString());
 				try {
-					discardProcess();
 					spawn();
 					writeTurn(next);
 					return;
@@ -266,6 +271,17 @@ final class ClaudeSession {
 		stdin.flush();
 	}
 
+	/**
+	 * Whether {@code p} is the session's running process: the last one it
+	 * started, and not being stopped. A stopped session keeps its exiting
+	 * process until the exit is handled, so that {@link #onExit} still cleans up
+	 * after it, but that process no longer runs the session. Caller holds the
+	 * lock.
+	 */
+	private boolean runs(Process p) {
+		return p != null && p == process && state != State.STOPPED;
+	}
+
 	/** Forcibly drop the current process for an immediate respawn — the session
 	 *  (its on-disk conversation) is untouched, so a resume continues it. */
 	private void discardProcess() {
@@ -285,8 +301,12 @@ final class ClaudeSession {
 
 	// ---------------------------------------------------------------- process
 
-	/** Spawn the CLI in the project directory. Caller holds the lock. */
+	/**
+	 * Spawn the CLI in the project directory, in place of any process the
+	 * session still has (dead, or exiting after a stop). Caller holds the lock.
+	 */
 	private void spawn() throws IOException {
+		discardProcess();
 		List<String> command = new ArrayList<>(adapter.command());
 		command.add("-p");
 		command.add("--verbose");
@@ -330,7 +350,7 @@ final class ClaudeSession {
 			while ((line = r.readLine()) != null) {
 				if (line.isBlank()) continue;
 				try {
-					onLine(line);
+					onLine(p, line);
 				} catch (RuntimeException e) {
 					log.debug("Claude Code stream line ignored: {}", e.toString());
 				}
@@ -362,8 +382,12 @@ final class ClaudeSession {
 		}
 	}
 
-	/** One stream-json event from the process. */
-	private void onLine(String line) {
+	/**
+	 * One stream-json event from process {@code p}. Each handler ignores it
+	 * unless {@code p} {@link #runs} the session, checked under the same lock
+	 * as the state it changes.
+	 */
+	private void onLine(Process p, String line) {
 		ACell parsed = JSON.parse(line);
 		AMap<AString, ACell> ev = RT.castMap(parsed);
 		if (ev == null) return;
@@ -371,26 +395,34 @@ final class ClaudeSession {
 		if (type == null) return;
 		switch (type) {
 			case "system" -> {
-				if ("init".equals(str(ev.get(J_SUBTYPE)))) {
-					String sid = str(ev.get(J_SESSION_ID));
-					if (sid != null) {
-						sessionId = sid;
-						announced = true;
-					}
-					String m = str(RT.getIn(ev, J_MODEL));
-					if (m != null) model = m;
-					adapter.onSessionAnnounced(this);
-				}
+				if ("init".equals(str(ev.get(J_SUBTYPE)))) onInit(p, ev);
 			}
-			case "assistant" -> onAssistant(ev);
-			case "result" -> onResult(ev);
+			case "assistant" -> onAssistant(p, ev);
+			case "result" -> onResult(p, ev);
 			default -> { /* user (tool results), rate_limit_event, thinking_tokens, … */ }
 		}
 	}
 
-	private void onAssistant(AMap<AString, ACell> ev) {
+	private void onInit(Process p, AMap<AString, ACell> ev) {
+		synchronized (this) {
+			if (!runs(p)) return;
+			String sid = str(ev.get(J_SESSION_ID));
+			if (sid != null) {
+				sessionId = sid;
+				announced = true;
+			}
+			String m = str(RT.getIn(ev, J_MODEL));
+			if (m != null) model = m;
+		}
+		adapter.onSessionAnnounced(this);
+	}
+
+	private void onAssistant(Process p, AMap<AString, ACell> ev) {
 		Turn t;
-		synchronized (this) { t = current; }
+		synchronized (this) {
+			if (!runs(p)) return;
+			t = current;
+		}
 		if (t == null) return;
 		String sid = str(ev.get(J_SESSION_ID));
 		if (sid != null && sessionId == null) sessionId = sid;
@@ -455,10 +487,12 @@ final class ClaudeSession {
 		return m;
 	}
 
-	private void onResult(AMap<AString, ACell> ev) {
+	private void onResult(Process p, AMap<AString, ACell> ev) {
 		Turn t;
 		boolean keep;
 		synchronized (this) {
+			// Another process's result answers a turn that failed when that process was stopped or replaced
+			if (!runs(p)) return;
 			t = current;
 			current = null;
 			completedTurns++;
@@ -579,6 +613,7 @@ final class ClaudeSession {
 			current = null;
 		}
 		failQueue("Claude Code session stopped: " + reason);
+		// The process stays the session's until its exit is handled, but no longer runs it
 		state = State.STOPPED;
 		closeStdin();
 		p.descendants().forEach(ProcessHandle::destroyForcibly);

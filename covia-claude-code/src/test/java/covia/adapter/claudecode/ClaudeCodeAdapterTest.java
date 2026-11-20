@@ -13,6 +13,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 
 import org.junit.jupiter.api.AfterAll;
@@ -311,6 +315,44 @@ public class ClaudeCodeAdapterTest {
 		assertEquals(Status.CANCELLED, job.getStatus());
 		ClaudeSession victim = busy;
 		await(() -> victim.state() == ClaudeSession.State.STOPPED, 5000);
+	}
+
+	/**
+	 * Output of a process the session has replaced completes no turn: the next
+	 * turn gets the reply of the process it was written to. A process's output
+	 * is read on a thread of its own, which also reports the turn's progress,
+	 * so holding that report keeps the rest of the output unread.
+	 */
+	@Test
+	public void testOutputOfAReplacedProcessCompletesNoTurn() throws Exception {
+		ProjectSpec alpha = adapter.project("alpha");
+		ClaudeSession session = new ClaudeSession(adapter, alpha, alpha.options(), null, OWNER);
+		CountDownLatch firstHeld = new CountDownLatch(1), firstGate = new CountDownLatch(1);
+		CountDownLatch secondHeld = new CountDownLatch(1), secondGate = new CountDownLatch(1);
+		AtomicReference<Thread> firstReader = new AtomicReference<>();
+		try {
+			CompletableFuture<AMap<AString, ACell>> first = session.submit("echo first", progress -> {
+				firstReader.set(Thread.currentThread());
+				hold(firstHeld, firstGate);
+			});
+			assertTrue(firstHeld.await(30, TimeUnit.SECONDS), "the first reply's text was read");
+			// The first process goes with its result still unread, and the next turn starts another
+			session.stop("test: stopped with its result unread");
+			assertTrue(first.isCompletedExceptionally(), "the stopped turn fails");
+			CompletableFuture<AMap<AString, ACell>> second = session.submit("echo second",
+				progress -> hold(secondHeld, secondGate));
+			assertTrue(secondHeld.await(30, TimeUnit.SECONDS), "the second turn runs on a new process");
+
+			// While the second turn runs, the first process's output is read to its end
+			firstGate.countDown();
+			firstReader.get().join();
+			secondGate.countDown();
+			assertEquals("echo: second", str(second.get(30, TimeUnit.SECONDS), "result"));
+		} finally {
+			firstGate.countDown();
+			secondGate.countDown();
+			session.stop("test done");
+		}
 	}
 
 	@Test
@@ -803,6 +845,16 @@ public class ClaudeCodeAdapterTest {
 		ACell result = job.awaitResult(30_000);
 		assertEquals(Status.COMPLETE, job.getStatus(), op + ": " + job.getErrorMessage());
 		return RT.castMap(result);
+	}
+
+	/** Signal {@code held}, then wait for {@code gate}: a progress report that holds its reader. */
+	private static void hold(CountDownLatch held, CountDownLatch gate) {
+		held.countDown();
+		try {
+			gate.await();
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+		}
 	}
 
 	private static AMap<AString, ACell> output(Job job) {
