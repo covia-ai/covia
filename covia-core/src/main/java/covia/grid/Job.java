@@ -166,8 +166,8 @@ public class Job {
 	/**
 	 * The time in milliseconds at the start of a job id a Covia venue gave
 	 * ({@code venue/docs/JOBS.md}, Job ids): the venue's clock when it created
-	 * the job, or a little later after a burst of jobs in one millisecond or a
-	 * step back of its clock.
+	 * the job, or a little later after a step back of its clock or a burst of
+	 * its sequence in one millisecond.
 	 *
 	 * @param id a job id from a Covia venue
 	 * @return its time in milliseconds since the epoch
