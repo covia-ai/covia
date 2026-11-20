@@ -95,6 +95,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 - An agent that triggers itself while it runs, by `agent:trigger` or by `scheduler:trigger` of a request to itself, gets its answer at once instead of being held until its tool-call limit; `scheduler:trigger` of a request returns its task once the request's own `timeout` passes (#714).
 - `agent:request` without `input` is refused when it is made, naming the field, instead of queuing a task with no instructions for the agent to fail.
+- The `agents` skill offers `agent:suspend`, `agent:resume` and `agent:delete`, which its guidance tells an agent to use (#707).
 - `agent:context` for a goal-tree agent includes the notice that its turn is answered by its final message, as the live call does.
 - An agent on an Anthropic model with native system messages answers the next turn after a reply with no text, instead of failing because the provider rejects the request's message order.
 - A model provider's refusal, content filter or `error` fails the model call with a reason naming the provider and its own value, instead of returning an empty or partial reply: the task or chat the agent was answering fails with that reason, which the Telegram and Discord bots show, and the agent carries on.

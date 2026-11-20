@@ -17,6 +17,9 @@
 			"v/ops/agent/message",
 			"v/ops/agent/list",
 			"v/ops/agent/info",
+			"v/ops/agent/suspend",
+			"v/ops/agent/resume",
+			"v/ops/agent/delete",
 			"v/ops/job/cancel",
 			"v/ops/job/status",
 			"v/ops/job/result"

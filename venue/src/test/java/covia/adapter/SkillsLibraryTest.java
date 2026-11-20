@@ -295,6 +295,14 @@ public class SkillsLibraryTest {
 		// tests. Do not require prose describing every grant as an unbounded OR:
 		// presented grants remain inside token/callable caps.
 
+		// The agents skill tells an agent to suspend an agent before replacing it
+		// and to delete it, so it offers those operations
+		ACell agentsMeta = convex.core.util.JSON.parse(readResource("/skills/agents.json"));
+		AVector<ACell> agentTools = RT.ensureVector(RT.getIn(agentsMeta, "skill", "tools"));
+		for (String op : new String[] {"v/ops/agent/suspend", "v/ops/agent/resume", "v/ops/agent/delete"}) {
+			assertTrue(agentTools.contains(Strings.create(op)), op);
+		}
+
 		ACell secretsMeta = convex.core.util.JSON.parse(readResource("/skills/secrets.json"));
 		AVector<ACell> secretTools = RT.ensureVector(
 			RT.getIn(secretsMeta, "skill", "tools"));
