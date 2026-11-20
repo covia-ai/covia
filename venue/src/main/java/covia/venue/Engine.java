@@ -4227,10 +4227,13 @@ public class Engine {
 	 * @throws IOException from the callback, which applies nothing
 	 * @throws AuthException if the context names no user ({@link #TRANSACTION_NEEDS_USER})
 	 * @throws NotFoundException if the user is not registered at this venue ({@link VenueState#UNKNOWN_USER})
+	 * @throws IllegalStateException if called inside a transaction's callback,
+	 *         before writing anything ({@link CoviaApplication#NESTED_TRANSACTION})
 	 */
 	public <R> R transact(RequestContext ctx, UserTransaction.Work<R> work) throws IOException {
 		java.util.Objects.requireNonNull(ctx, "ctx");
 		java.util.Objects.requireNonNull(work, "work");
+		application.requireOutsideTransaction();
 		AString userDID = ctx.getUserDID();
 		if (userDID == null) throw new AuthException(TRANSACTION_NEEDS_USER);
 		if (getVenueState().users().user(userDID) == null) {

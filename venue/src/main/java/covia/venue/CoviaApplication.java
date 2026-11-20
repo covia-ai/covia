@@ -274,9 +274,17 @@ public final class CoviaApplication
 		return transact(List.of(mounted(venueKey)), work);
 	}
 
+	/**
+	 * Refuses a caller inside a transaction's callback on this thread, before it
+	 * writes anything ({@link #NESTED_TRANSACTION}).
+	 */
+	void requireOutsideTransaction() {
+		if (transacting.get() != null) throw new IllegalStateException(NESTED_TRANSACTION);
+	}
+
 	private <R> R transact(List<Mounted> venues, Function<? super Draft, ? extends R> work) {
 		Objects.requireNonNull(work, "work");
-		if (transacting.get() != null) throw new IllegalStateException(NESTED_TRANSACTION);
+		requireOutsideTransaction();
 		transacting.set(Boolean.TRUE);
 		try {
 			return claimed(venues, 0, work);

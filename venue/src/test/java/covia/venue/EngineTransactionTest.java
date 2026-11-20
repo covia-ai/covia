@@ -131,6 +131,20 @@ class EngineTransactionTest {
 	}
 
 	@Test
+	void aTransactionInsideACallbackIsRefusedBeforeItWrites() throws IOException {
+		// A user with no DLFS key yet: giving them one would write the venue
+		RequestContext other = RequestContext.of(TestEngine.uniqueDID("engine-transaction-other"));
+		engine.getVenueState().users().ensure(other.getUserDID());
+		engine.transact(CTX, tx -> {
+			var refusal = assertThrows(IllegalStateException.class, () -> engine.transact(other, inner -> null));
+			assertEquals(CoviaApplication.NESTED_TRANSACTION, refusal.getMessage());
+			tx.workspace().write(RECORD, Strings.create("record"));
+			return null;
+		});
+		assertEquals(Strings.create("record"), workspaceValue(), "the outer transaction committed");
+	}
+
+	@Test
 	void aVenueWithNoDlfsStillChangesTheWorkspace() throws IOException {
 		CoviaApplication bare = TestEngine.application();
 		try {

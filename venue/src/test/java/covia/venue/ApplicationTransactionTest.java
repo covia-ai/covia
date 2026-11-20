@@ -377,6 +377,14 @@ class ApplicationTransactionTest {
 	}
 
 	@Test
+	void aMountedVenueWithNoStateYetTakesPart() {
+		application.mount(OTHER_VENUE, new Config(null));
+		application.execute(draft -> record(draft, RECORD, "record"));
+		assertEquals(Strings.create("record"), value(host.cursor().get(), RECORD));
+		assertNoOtherWriterReported();
+	}
+
+	@Test
 	void aVenueThatIsNotMountedIsRefused() {
 		AKeyPair absent = AKeyPair.createSeeded(65914);
 		var refusal = assertThrows(ConfigurationException.class,
