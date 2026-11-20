@@ -779,9 +779,24 @@ public class Engine {
 		// The Engine works on the application's copy of its venue: edits stay
 		// unsigned until publication signs the record (publishApplicationRoot).
 		VenueState connected = application.venue(getAccountKey());
+		boolean existing = connected.get() != null;
+		long venueBefore = connected.version();
+		java.util.Map<String, Long> adaptersBefore = connected.adapterVersions();
 		// Version validation and every start-up migration, the venue's and its
 		// adapters', precede every bootstrap write and worker, in one transaction.
-		connected.initialise(getDIDString(), SecretStore.keys(getKeyPair()), migrationsOf(adapters));
+		java.util.List<VenueState.AdapterMigration> migrations = migrationsOf(adapters);
+		connected.initialise(getDIDString(), SecretStore.keys(getKeyPair()), migrations);
+		// Say what the start moved, once it has committed: an existing store's
+		// version, and each adapter state brought to a newer one
+		if (existing) {
+			long venueAfter = connected.version();
+			if (venueAfter != venueBefore) log.info("Venue store migrated from version {} to {}", venueBefore, venueAfter);
+			for (VenueState.AdapterMigration migration : migrations) {
+				long before = adaptersBefore.getOrDefault(migration.name(), 0L);
+				long after = connected.adapterVersion(migration.name());
+				if (after != before) log.info("Adapter '{}' state migrated from version {} to {}", migration.name(), before, after);
+			}
+		}
 		migratedAtStart.addAll(adapters);
 		this.venueState = connected;
 
@@ -1474,7 +1489,7 @@ public class Engine {
 		long before = venueState.adapterVersion(migration.name());
 		venueState.migrateAdapter(migration);
 		if (before != migration.supported()) {
-			log.info("Adapter '{}' state now at version {}", migration.name(), migration.supported());
+			log.info("Adapter '{}' state migrated from version {} to {}", migration.name(), before, migration.supported());
 		}
 	}
 

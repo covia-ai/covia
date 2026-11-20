@@ -68,7 +68,9 @@ Each part of the schema has one owner, which defines its migrations.
   the venue's steps, then those of the built-in and configured module
   adapters, before any other write. A refusal or a failing step discards the
   whole transaction. An adapter registered later migrates in its own
-  transaction as it registers (`VenueState.migrateAdapter`).
+  transaction as it registers (`VenueState.migrateAdapter`). Once a migration
+  commits, the engine logs at INFO each version it moved an existing store
+  from and to, the venue's and each adapter's; a new store logs none.
 - **Migration is also a call.** `Engine.migrate()` migrates the venue and
   every installed adapter. `VenueState.migrate(keys, adapters)` does the same on a
   store before launch. `VenueState.peekVersions` reads the stored versions
