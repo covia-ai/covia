@@ -304,11 +304,14 @@ so the application decides who reaches them.
   The body runs once, while every other write to the application waits, so
   keep it short: an import is one transaction per file. It uses only the
   transaction, does no other I/O and does not wait for other threads; a
-  transaction started inside it is refused. An exception from the body,
-  `IOException` included, propagates and nothing applies. The transaction and
-  its drives cannot be used after the body returns. A user with no DLFS key is
-  given one first, and a context with no user or a user the venue does not know
-  is refused. A commit is in memory until the host's next sync saves it; call
+  transaction started inside it is refused. A change the body makes other
+  than through the transaction, such as a write to a drive from
+  `engine.getDLFSDrives`, is not part of it: that change stays, and the
+  transaction fails with none of its own changes applied. An exception from
+  the body, `IOException` included, propagates and nothing applies. The
+  transaction and its drives cannot be used after the body returns. A user
+  with no DLFS key is given one first, and a context with no user or a user
+  the venue does not know is refused. A commit is in memory until the host's next sync saves it; call
   `engine.flush()` before acknowledging it elsewhere. `CoviaApplication.transact`
   is the same transaction over every mounted venue and any owner's drives
   ([PERSISTENCE.md](PERSISTENCE.md#50-the-venues-working-copy-forks-are-transactions)).

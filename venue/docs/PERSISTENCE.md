@@ -473,10 +473,12 @@ and synced, so the draft starts from everything the copy holds; the venue's
 change is made on a draft of its record, which signs once as the transaction
 commits; after the commit the copy syncs again while still claimed and takes
 the new record, so it remains its record's only writer (GRID_LATTICE_DESIGN.md
-A.4). A callback that changes a copy outside the draft, or starts another
-transaction, is refused before anything commits. `Engine.transact` is the
-same transaction for one user at one venue, claiming only that venue
-([EMBEDDING.md](EMBEDDING.md#user-data)). A commit is in memory, as any other
+A.4). A callback that starts another transaction is refused. One that changes
+a copy or a DLFS drive other than through the draft fails with nothing from
+the draft applied, and the change it made outside the draft stays.
+`Engine.transact` is the same transaction for one user at one venue, claiming
+only that venue ([EMBEDDING.md](EMBEDDING.md#user-data)). A commit is in
+memory, as any other
 change is: the host's next sync saves it and `flush()` makes it durable.
 
 Local mutations do not compete through the LWW merge. The atomic update order
