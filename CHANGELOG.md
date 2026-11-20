@@ -8,21 +8,18 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-11-20
+
 ### Added
 
 - Compaction keeps the messages and answers of an agent's last exchanges after its summary, their tool calls and results staying in history: the agent's `compactKeep` sets how many (default 5, 0 for none), `agent:compactSession` takes `keep` to override it and reports `keptExchanges`, and a conversation of no more exchanges than are kept is left unchanged.
-
 - Asset creation consistently accepts `asset/store` on the owner's `a/` collection across adapters and REST registration; existing unscoped grants remain valid.
-
 - Outbound HTTP requests require method- and destination-scoped `outbound/http` authority; configured agent models use harness authority, and the address-policy bypass is now `admin/outbound/bypass`. An endpoint the operator configured, such as the venue's Ollama URL or a messaging adapter's `apiUrl`, still passes the address policy without `http.allowedHosts`.
-
 - Agent operations' `agentId` accepts an agent's DID (`<ownerDID>:g:<id>`), the values API's `agent` selector accepts `g/<id>` and `<ownerDID>/g/<id>`, and a messaging binding's `agent` accepts all of these forms, each checked for access as the existing forms are; a binding whose `agent` names no agent is refused when it is created.
 - Job-specific `job/read`, `job/manage` and `job/message` grants replace CRUD permissions on Job APIs; lifecycle controls return acknowledgements.
 - Embedded simulations can discover the next queued scheduled timestamp across venues and advance directly to it (#683).
 - DLFS entries carry application metadata: `dlfs:setMetadata`, `file:setMetadata` and `vault:setMetadata` set or clear it (`crud/write`), and `dlfs:stat` and `file:stat` return it; a move keeps it, replacing a file's content in place keeps it, and deleting the entry removes it (#659).
-
 - Universal Job tools (`job:status`, `result`, `cancel`, `pause`, `resume`, `message`) manage local and remote work independently of its execution adapter; agent skills use them and existing Grid Job tools remain compatible.
-
 - Access tokens: any user or agent can create a scoped bearer that acts with its issuer's authority within the token's caps and is accepted only at the access points it names; the `token` adapter keeps them (`token:create`, `update`, `delete`, `list`, `get`, needing `admin/token/<access point>` on `x/token/<name>`), and `adapters.token.keepRawTokens` keeps bearers to read again; a user sees its tokens, never their bearers, at `x/token`.
 - An agent is told where each message or task started and who handed it on: the sign-in, access token, messaging bot or scheduler it started at, then each callable or `admin/sudo` that handed it to another principal, in a `From (venue-verified)` hint on every attributed incoming message except the owner chatting directly, which carries one only when it follows another source; older turns keep their label wording, and an unreadable route never reads as the owner; an approval request records the same route, and work resumed after a pause or a restart keeps it (#709).
 - Every recorded job keeps the state it runs in from admission, and a scheduled event the same, so work carried on after a restart acts with exactly the narrowing and grants of the request that started it, whatever its operation.
@@ -66,14 +63,12 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - A scheduled event is a capability resource, `<account>/x/schedule/<id>`: `crud/read` lists it and the new `schedule/manage` cancels or triggers it, so a capped agent or token needs these caps even for the events it scheduled; `scheduler:list` adds each event's `id`.
 - A job, approval request and scheduled event name one `caller`, the principal that called, and no `owner` (COG-8): a job or request leaves out a caller that is the account keeping it, which listings, lattice reads, copies, exports and clones carry as stored, while `POST /invoke`, `GET /jobs/{id}` and its SSE updates, `job:status` and `hitl:list` name it in full; `scheduler:list` no longer gives `owner`. Venue version 4 converts stored records and ends work an `admin/sudo` delegate left before `admin/sudo` acted as the user: unfinished jobs fail saying why, open approval requests are cancelled and scheduled events are removed, while finished records keep naming the delegate.
 - An agent's harness runs in its controller's frame: what it starts, such as its model calls and an external agent's backend job, records the controller as its caller in the controller's account, and names in the agent's configuration resolve in the controller's namespace; the agent's tool calls still run as the agent.
-
 - Adapters refuse settings with a configuration error, from the venue config and from `venue:adapter/configure` alike; anything else an adapter's `configure` throws, a module adapter's `IllegalArgumentException` included, is reported as that adapter's fault rather than as invalid input or the `venue` adapter's.
 - A module's adapters take their settings from `adapters.<name>` like any other adapter: `modules` entries and `venue:module/load` no longer take `config`, so the Python module's settings move to `adapters.python`, which `adapters.python.enabled: false` switches off. Python without a usable CPython fails to start, so it is left failed with the reason, and its settings cannot change until the venue restarts.
 - MCP bearer retrieval uses `admin/token/mcp`; `admin/token` remains its parent for administration across token kinds.
 - Job, task and session ids are Blobs in agent records, job records, HITL requests, operation results, live events and messaging bots' conversations and receipts, so JSON shows them as `0x…` where results, events and HITL records gave bare hex, and error messages and the text an agent's model is shown write them as `0x…` too; inputs take either form, and an A2A `contextId` stays bare hex. Venue version 3 and messaging adapter state version 2 convert stored records, and user exports are version 3, which an older venue refuses.
 - Venue administration requires `admin/user/*`, `admin/adapter/*`, `admin/venue/*` and `admin/sudo` capabilities; the former user, adapter and venue abilities are no longer accepted for these actions. Listing adapters needs `admin/adapter/read` and changing them `admin/adapter/manage`; adding another user's sign-in key needs `admin/user/authentication-add` and revoking one `admin/user/authentication-revoke`; `admin/venue/compact` is reserved for compacting the store (#704).
 - Remote submissions and direct Job controls use explicitly selected remote credentials; local proxy cancellation controls only its bound execution.
-
 - Grid and Job tool descriptions distinguish submission, observation and compatibility entry points, with clearer handle, status and cancellation guidance and leaner workflow skills.
 - Automated venue deployments use the tested build's image digest; manual redeploys select a successful image-publishing run.
 - LangChain4j 1.23.0, A2A 1.5.1.Final, Nimbus OAuth/OIDC SDK 11.39, CommonMark 0.32.0; the Documents module uses Apache POI 6.0.0.
@@ -108,24 +103,19 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - A response with no choices from OpenAI or a provider reached through its API (Gemini, xAI, DeepSeek, Mistral, OpenRouter) fails the model call as no answer, so the agent's task or chat fails and the agent carries on, instead of the agent being suspended as if the provider were down.
 - Updating an agent's config, even a field its prompt does not read such as a sampling field set to null, no longer moves skills its sessions have loaded into the start of their prompt, which stopped the provider's prompt cache applying.
 - Agent conversations retain runtime guidance before replayed thinking, and Anthropic continuation state survives final answers and empty signed replies.
-
 - Per-agent A2A task lookups stay in the asker's account, including live public tasks and requests with an `owner` hint.
 - An unanswered human ask made outside a task no longer faults the agent when it settles an unrelated task.
 - A DLFS file written by `create`, `write`, a content upload or `archive` changes in one update once all its content has arrived, so a write cut off part-way leaves the drive as it was; a write onto a directory fails as a conflict (#629).
 - `archive:list` and `archive:extract` read a zip stored in a DLFS drive instead of failing as a venue fault.
 - `archive:extract` checks each file it writes against its root as `file:write` does, following links.
 - A write to a symbolic link in a host root fails as bad input rather than as a venue fault.
-
 - Equivalent agent sessions reuse the same instruction prefix: internal owner identifiers are omitted from model-facing attribution, and the session handle stays available outside the cached head (#715).
-
 - LLM tools preserve capability-array unions and arbitrary JSON values instead of advertising them as objects, enabling agents to create scoped MCP tokens.
 - Generic MCP tool calls declare their required tool name and arguments for agent discovery.
 - MCP token schemas describe each capability's resource and single ability, including optional caveats.
-
 - Account REST reads and deletion honour delegated administration grants in `X-Covia-Ucans`.
 - Job SSE subscriptions no longer miss completion while connecting or deliver initial state after a newer update.
 - An embedded venue on a persistent store closes itself on JVM shutdown, and the shutdown waits for a close already under way, so Etch no longer closes the store beneath the venue's final save (#699).
-
 - Grid operations honour explicit remote result wait timeouts, submit asynchronously without background polling, and reject non-string venue targets instead of executing locally.
 - `user:delete` no longer leaves cleanup pending for an adapter registered while it runs.
 - Fetching one speech model file, voice or library pack twice at once no longer fails one of the fetches (#647).
@@ -1131,7 +1121,8 @@ Initial public release: venue server with the adapter framework, lattice-backed
 content-addressed assets, the async job model with SSE, multi-protocol surface
 (REST / MCP / A2A / DID), and strategy-based authentication.
 
-[Unreleased]: https://github.com/covia-ai/covia/compare/0.11.0...HEAD
+[Unreleased]: https://github.com/covia-ai/covia/compare/0.12.0...HEAD
+[0.12.0]: https://github.com/covia-ai/covia/compare/0.11.0...0.12.0
 [0.11.0]: https://github.com/covia-ai/covia/compare/0.10.0...0.11.0
 [0.10.0]: https://github.com/covia-ai/covia/compare/0.9.11...0.10.0
 [0.9.11]: https://github.com/covia-ai/covia/compare/0.9.10...0.9.11
