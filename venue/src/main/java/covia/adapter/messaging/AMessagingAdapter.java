@@ -26,9 +26,10 @@ import covia.adapter.messaging.MessagingBot.Managed;
 import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.exception.ConflictException;
+import covia.exception.ForbiddenException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
-import covia.exception.NotSupportedException;
+import covia.exception.UnavailableException;
 import covia.grid.Principals;
 import covia.venue.AdapterState;
 import covia.venue.Engine;
@@ -39,7 +40,9 @@ import covia.venue.migration.MigrationStep;
  * Shared registration, ownership and lifecycle for messaging adapters.
  * Provider subclasses retain configuration parsing, credentials, admission,
  * transports and operation schemas. Installation is inert; {@link #start()}
- * activates workers only after the engine is ready.
+ * activates workers only after the engine is ready, and {@link #stop()}, when
+ * the adapter is disabled or replaced, stops every bot until {@link #start()}
+ * starts them again from configuration and the bot registry.
  */
 public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends MessagingBot<S>>
 		extends AAdapter implements AutoCloseable {
@@ -48,8 +51,8 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 	private static final AString K_USER = Strings.intern("user");
 	/** On a created bot's record: the principal that created it, when not its user (an agent of that user). */
 	private static final AString K_CALLER = Fields.CALLER;
-	/** The steps of the state every messaging adapter keeps ({@link BotCaller}). */
-	private static final List<MigrationStep> STATE_STEPS = List.of(new BotCaller());
+	/** The steps of the state every messaging adapter keeps ({@link BotCaller}, {@link BlobSessionIds}). */
+	private static final List<MigrationStep> STATE_STEPS = List.of(new BotCaller(), new BlobSessionIds());
 	private static final AString K_TOKEN = Strings.intern("token");
 	private static final AString K_DELETED = Strings.intern("deleted");
 
@@ -68,6 +71,10 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 	public static final String FOREIGN_PRINCIPAL = "a bot's principal must be its user or one of that user's agents, not %s";
 	public static final String SEPARATE_AUTHORITY_CREATOR = "a bot acts as its creator, so a request acting with "
 		+ "another principal's authority cannot create one";
+	public static final String TOKEN_CREATOR = "a bot acts as its creator with all of its authority, so a request "
+		+ "through an access token, which holds less, cannot create one";
+	/** Creating or deleting a bot while its adapter's bots are stopped; the provider follows. */
+	public static final String NOT_RUNNING = "The %s adapter is not running";
 
 	private volatile Map<String, S> specs = Map.of();
 	private final Map<String, R> runners = new LinkedHashMap<>();
@@ -79,12 +86,14 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 		return t;
 	});
 	private volatile boolean closed;
+	/** Whether bots run: set by {@link #start()}, cleared by {@link #stop()}; guarded by this. */
+	private boolean running;
 	/** Retry cadence for missing credentials or temporarily unavailable providers. */
 	public volatile long retryMillis = 30_000;
 
 	protected abstract S parseBot(String name, ACell settings, boolean strict);
 
-	/** Every messaging adapter's state migrates alike: its steps are those of the shared bot registry. */
+	/** Every messaging adapter's state migrates alike: its steps are those of the shared bot registry, conversations and receipts. */
 	@Override
 	public List<MigrationStep> stateSteps() {
 		return STATE_STEPS;
@@ -101,14 +110,38 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 	protected final synchronized void configureBots(Map<String, S> wanted) {
 		if (closed) throw new IllegalStateException(CLOSED);
 		specs = Map.copyOf(wanted);
-		if (engine != null && engine.isStarted()) reconcile();
+		// Stopped bots take the new settings when start() brings them back.
+		if (running) reconcile();
 	}
 
 	@Override
 	public synchronized void start() {
 		if (closed) return;
+		running = true;
 		reconcile();
 		rearmRuntimeBots();
+	}
+
+	/**
+	 * Stops every bot, closing its poll or connection and keeping its settings
+	 * and records, until {@link #start()} starts them again; no bot starts in
+	 * between, by configuration, re-arming or {@code create}.
+	 */
+	@Override
+	public synchronized void stop() {
+		running = false;
+		stopRunners();
+	}
+
+	private void stopRunners() {
+		try {
+			for (R runner : runners.values()) {
+				try { runner.stop(); }
+				catch (RuntimeException e) { log.warn("{}: failed to stop bot '{}'", getName(), runner.spec().name(), e); }
+			}
+		} finally {
+			runners.clear();
+		}
 	}
 
 	@Override
@@ -186,7 +219,7 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 	protected void rearmLegacyBots() { }
 
 	protected final synchronized void startRegistry(AString owner, AMap<AString, ACell> registry, boolean migrate) {
-		if (registry == null || closed || engine.getVenueState().users().isDeleted(owner)) return;
+		if (registry == null || closed || !running || engine.getVenueState().users().isDeleted(owner)) return;
 		for (var entry : registry.entrySet()) {
 			String name = String.valueOf(entry.getKey());
 			String key = runtimeKey(owner, name);
@@ -215,13 +248,10 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 	public synchronized void close() {
 		if (closed) return;
 		closed = true;
+		running = false;
 		try {
-			for (R runner : runners.values()) {
-				try { runner.stop(); }
-				catch (RuntimeException e) { log.warn("{}: failed to stop bot '{}'", getName(), runner.spec().name(), e); }
-			}
+			stopRunners();
 		} finally {
-			runners.clear();
 			retries.shutdownNow();
 		}
 	}
@@ -246,15 +276,16 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 	 * sent to {@code destination}: a {@code secret/use} grant bound to a url prefix
 	 * covers another principal's secret only there. Null when the use has no destination.
 	 *
-	 * <p>A reference resolves under the bot owner's authority, so another principal's
-	 * secret, the venue's included, needs a {@code secret/use} grant. Only an
+	 * <p>A reference resolves under the bot's own authority ({@link #bindingContext}),
+	 * so another principal's secret, the venue's included, needs a {@code secret/use}
+	 * grant, and a bot an agent created uses only what that agent may. Only an
 	 * operator-declared bot also looks in the venue's own store: the operator wrote
 	 * that reference, so the venue's authority stands behind it. A user-created bot's
 	 * reference is its creator's, and never resolves as the venue.</p>
 	 */
 	public final String resolveCredential(String reference, MessagingBot<?> bot, String destination) {
 		if (!isSecretReference(reference)) return reference;
-		String value = engine.resolveSecret(reference, engine.context(bot.spec().userDID(engine)), destination);
+		String value = engine.resolveSecret(reference, bindingContext(bot), destination);
 		if (value != null || bot.managed() != Managed.CONFIG) return value;
 		return engine.resolveSecret(reference, engine.venueContext(), destination);
 	}
@@ -263,8 +294,10 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 		return Engine.isSecretRef(value);
 	}
 
-	public final AdapterState state() { return adapterState(); }
-	public final AdapterState state(AString owner) { return adapterState(owner); }
+	/** This adapter's state, a map ({@code users/<did>}, {@code config/<name>}), read as empty while nothing is stored. */
+	public final AdapterState state() { return adapterState().withDefault(Maps.empty()); }
+	/** As {@link #state()}, fenced to {@code owner}'s account. */
+	public final AdapterState state(AString owner) { return adapterState(owner).withDefault(Maps.empty()); }
 	public final String userStatePath(AString owner, String relative) { return state().userPath(owner, relative); }
 	public final synchronized R runner(String name) { return runners.get(name); }
 	public final synchronized R runner(AString owner, String name) { return runners.get(runtimeKey(owner, name)); }
@@ -298,14 +331,29 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 
 	private AString resource(AString owner, String name) { return Strings.create(owner + "/" + getName() + "/" + name); }
 
+	/**
+	 * The bots the request may manage: each whose resource
+	 * ({@code <owner>/<adapter>/<name>}) its authority covers for
+	 * {@link #manageAbility()}, by its own scope, its agent's or token's caps,
+	 * or a grant it presents; every bot, to the venue.
+	 */
 	protected final ACell handleBots(RequestContext ctx) {
-		// The namespace's own bots, to a request acting with that namespace's
-		// authority; every bot, to the venue.
-		AString user = ctx.actsWithNamespaceAuthority() ? ctx.getUserDID() : null;
-		boolean venue = engine.getDIDString().equals(ctx.authorityContext().getCallerDID());
+		boolean venue = engine.getDIDString().equals(ctx.getAuthorityDID());
 		AVector<ACell> result = Vectors.empty();
-		for (R runner : runnerList()) if (venue || (user != null && user.equals(runner.spec().userDID(engine)))) result = result.conj(runner.status());
+		for (R runner : runnerList()) {
+			if (venue || engine.authorityCovers(ctx, resource(runner.spec().userDID(engine), runner.spec().name()), manageAbility())) {
+				result = result.conj(runner.status());
+			}
+		}
 		return Maps.of(K_BOTS, result);
+	}
+
+	private AString manageAbility;
+
+	/** {@code <adapter>/manage}: creating, deleting and listing this adapter's bots. */
+	protected final AString manageAbility() {
+		if (manageAbility == null) manageAbility = Strings.intern(getName() + "/manage");
+		return manageAbility;
 	}
 
 	/** Override to require every provider-specific credential to be a secret reference. */
@@ -316,6 +364,7 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 
 	protected final synchronized ACell handleCreate(RequestContext ctx, ACell input) {
 		if (closed) throw new IllegalStateException(CLOSED);
+		if (!running) throw new UnavailableException(NOT_RUNNING.formatted(providerName()));
 		AString owner = ctx.getUserDID();
 		if (owner == null) throw new AuthException(getName() + ":create" + AUTH_REQUIRED);
 		AMap<AString, ACell> in = RT.castMap(input);
@@ -332,13 +381,14 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 		} catch (IllegalArgumentException e) {
 			throw new InvalidInputException(e.getMessage(), e);
 		}
-		engine.requireAuthority(ctx, resource(owner, name), Strings.intern(getName() + "/manage"));
+		engine.requireAuthority(ctx, resource(owner, name), manageAbility());
 		String key = runtimeKey(owner, name);
 		if (runners.containsKey(key)) throw new ConflictException(DUPLICATE_BOT.formatted(providerName(), name));
 		// The bot identifies its senders as exactly its creator: an agent as itself, never its owner.
 		// It then acts as that creator, so it cannot record one whose authority was another's.
-		if (ctx.hasSeparateAuthority()) throw new AuthException(SEPARATE_AUTHORITY_CREATOR);
-		AString principal = ctx.getCallerDID();
+		if (engine.authorityFrame(ctx) != ctx) throw new AuthException(SEPARATE_AUTHORITY_CREATOR);
+		if (!ctx.getTokens().isEmpty()) throw new AuthException(TOKEN_CREATOR);
+		AString principal = ctx.getAuthorityDID();
 		if (!owner.equals(Principals.userOf(principal))) throw new AuthException(FOREIGN_PRINCIPAL.formatted(principal));
 		boolean own = owner.equals(principal);
 		if (own) principals.remove(key); else principals.put(key, principal);
@@ -355,21 +405,64 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 	 * created directly).
 	 */
 	public final AString principalOf(S spec, Managed managed) {
+		return creatorOf(spec, managed);
+	}
+
+	private AString creatorOf(MessagingBotSpec spec, Managed managed) {
 		if (managed != Managed.RUNTIME) return null;
 		return principals.get(runtimeKey(spec.userDID(engine), spec.name()));
 	}
 
+	// Messaging calls here are synchronous; background transport work uses the
+	// binding's current authority. Never retain a tool caller on a pooled bot.
+	private final ThreadLocal<RequestContext> outboundCaller = new ThreadLocal<>();
+
+	protected final <T> T withOutboundCaller(RequestContext ctx, java.util.function.Supplier<T> action) {
+		outboundCaller.set(ctx);
+		try { return action.get(); }
+		finally { outboundCaller.remove(); }
+	}
+
+	/** Authorises an actual provider HTTP request, including background binding work.
+	 * A request to the platform API the operator configured ({@link #apiEndpoint})
+	 * passes the address policy; one to any other URL, such as a media link the
+	 * platform returned, is checked in full. */
+	public final void requireOutboundHttp(MessagingBot<?> bot, String method, String url) {
+		RequestContext ctx = outboundCaller.get();
+		engine.requireOutboundHttp(ctx == null ? bindingContext(bot) : ctx, method, url, apiEndpoint(bot));
+	}
+
+	/** The platform API URL {@code bot} talks to, as the operator configured it or
+	 * the adapter's default; null when the adapter has none. */
+	protected String apiEndpoint(MessagingBot<?> bot) {
+		return null;
+	}
+
+	/**
+	 * The context a bot acts in on its own account, such as using its
+	 * credentials or running a relay's hooks: its principal ({@link #principalOf})
+	 * as that principal acts now for the bot's user, as its conversations do. A
+	 * bot an agent created is bounded by that agent's authority, never its user's.
+	 */
+	public final RequestContext bindingContext(MessagingBot<?> bot) {
+		AString owner = bot.spec().userDID(engine);
+		AString principal = creatorOf(bot.spec(), bot.managed());
+		return engine.context(owner, (principal == null) ? owner : principal);
+	}
+
 	protected final synchronized ACell handleDelete(RequestContext ctx, ACell input) {
+		// A stopped bot has no runner to stop, and its records go only with it.
+		if (!running) throw new UnavailableException(NOT_RUNNING.formatted(providerName()));
 		AString owner = ctx.getUserDID();
 		if (owner == null) throw new AuthException(getName() + ":delete" + AUTH_REQUIRED);
 		AString nameCell = RT.ensureString(RT.getIn(input, Fields.NAME));
 		if (nameCell == null || nameCell.isEmpty()) throw new InvalidInputException(NAME_REQUIRED);
 		String name = nameCell.toString();
-		engine.requireAuthority(ctx, resource(owner, name), Strings.intern(getName() + "/manage"));
+		engine.requireAuthority(ctx, resource(owner, name), manageAbility());
 		R runner = runners.remove(runtimeKey(owner, name));
 		if (runner == null) {
 			R config = runners.get(name);
-			if (config != null && owner.equals(config.spec().userDID(engine))) throw new NotSupportedException(CONFIG_BOT.formatted(name));
+			if (config != null && owner.equals(config.spec().userDID(engine))) throw new ForbiddenException(CONFIG_BOT.formatted(name));
 			throw new NotFoundException(MISSING_BOT.formatted(providerName(), name), name);
 		}
 		runner.stop();

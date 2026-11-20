@@ -23,6 +23,7 @@ import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
+import convex.core.data.Blob;
 import convex.core.data.Hash;
 import convex.core.data.Index;
 import convex.core.data.MapEntry;
@@ -72,7 +73,7 @@ import jakarta.servlet.http.HttpServletResponse;
  *       authenticated caller and {@code mcp.anonymousToolCallTimeout} (default
  *       two minutes) for an anonymous one. Past it the call ends with the id of
  *       a recorded job (the call's own, or a mirror of an unrecorded read-only
- *       call), so the result can still be collected with {@code grid_job_result};
+ *       call), so the result can still be collected through the Job tools;
  *       the job itself runs on.</li>
  *   <li>at most {@code mcp.maxConcurrentToolCalls} (default 16) calls in
  *       progress per caller.</li>
@@ -86,6 +87,11 @@ import jakarta.servlet.http.HttpServletResponse;
 public class MCP extends McpServer {
 
 	public static final Logger log = LoggerFactory.getLogger(MCP.class);
+	/** Guidance accompanying the local handle of a tool call still running. */
+	public static final String COLLECT_RUNNING_JOB =
+		"Use an advertised Job-result or Job-status tool with {\"id\": \"%s\"} on this venue (omit venue). "
+		+ "This is the local call's Job ID. Do not resubmit the original operation just because this wait ended.";
+	public static final String NO_COLLECTABLE_JOB = "It left no job to collect the result from.";
 
 	/** Tool metadata key for the operation reference used by this venue's dispatcher. */
 	public static final AString TOOL_OPERATION = Strings.intern("ai.covia/operation");
@@ -143,7 +149,7 @@ public class MCP extends McpServer {
 	 * an explicit list to override the default.</p>
 	 */
 	private static final java.util.Set<String> DEFAULT_INCLUDE_ADAPTERS =
-		java.util.Set.of("covia", "grid", "asset", "secret", "agent", "skills");
+		java.util.Set.of("covia", "grid", "job", "asset", "secret", "agent", "skills");
 
 	/** Wildcard token in {@code includeAdapters} meaning "expose all groups". */
 	private static final String INCLUDE_ALL = "*";
@@ -276,11 +282,9 @@ public class MCP extends McpServer {
 				String group = (slash >= 0) ? tail.substring(0, slash) : tail;
 				if (!includeAll && !includedAdapters.contains(group)) continue;
 
-				Hash hash = entry.getValue();
-				AString metaString = adapter.getInstalledAssets().get(hash);
-				if (metaString == null) continue;
+				AMap<AString, ACell> meta = adapter.installedMetadata(entry.getValue());
+				if (meta == null) continue;
 				try {
-					AMap<AString, ACell> meta = RT.ensureMap(JSON.parse(metaString));
 					AString toolName = mcpToolNameFor(meta);
 					if (toolName == null) continue;
 					if (reg.putIfAbsent(toolName, Strings.create(path)) != null) {
@@ -411,7 +415,7 @@ public class MCP extends McpServer {
 			"required", authRequired,
 			"scheme", "Bearer",
 			"bearer_token_profiles",
-				Vectors.of("ucan-jwt", "self-issued-did-jwt", "venue-session-jwt"),
+				Vectors.of("ucan-jwt", "self-issued-did-jwt", "venue-session-jwt", "mcp-token"),
 			"caller_identity", "DID",
 			"did_allowlist", !allowedDids.isEmpty(),
 			"protected_resource_metadata", protectedResourceMetadata(ctx)
@@ -432,6 +436,17 @@ public class MCP extends McpServer {
 	@Override
 	protected AMap<AString, ACell> listTools() {
 		AVector<AMap<AString, ACell>> toolsVector = Vectors.empty();
+		AMap<AString, ACell> token = AuthMiddleware.getToken(McpServer.getCurrentContext());
+		if (token != null) {
+			for (var entry : tokenTools(token).entrySet()) {
+				TokenTool tool = entry.getValue();
+				AMap<AString, ACell> built = buildToolEntry(entry.getKey(), tool.operation().meta());
+				if (built == null) continue;
+				if (tool.description() != null) built = built.assoc(Fields.DESCRIPTION, tool.description());
+				toolsVector = toolsVector.conj(built.assoc(K_META, Maps.of(TOOL_OPERATION, tool.opRef())));
+			}
+			return Maps.of("tools", toolsVector);
+		}
 		for (var entry : registry().entrySet()) {
 			AString toolName = entry.getKey();
 			AString opRef = entry.getValue();
@@ -448,6 +463,44 @@ public class MCP extends McpServer {
 		return Maps.of("tools", toolsVector);
 	}
 
+	/** Why a request through an MCP token may not present UCANs. */
+	public static final String UCANS_WITH_TOKEN = "A request through an MCP token presents no UCANs: the token's caps are all it acts with";
+
+	/**
+	 * A tool an MCP token offers: its operation reference, the definition the
+	 * token's issuer reads for it, and the description it is given, if any.
+	 */
+	private record TokenTool(AString opRef, covia.grid.Operation operation, AString description) {}
+
+	/**
+	 * The tools access token {@code reference} offers here, by MCP name, as an
+	 * agent's tool palette names them: those its MCP entry lists
+	 * ({@link covia.adapter.McpAccess}). Each definition is read with the
+	 * issuer's authority as it stands, as an agent's runtime reads its tools; a
+	 * tool the issuer can no longer read, or that no longer resolves, is left
+	 * out. The calls themselves act with the token's authority.
+	 */
+	private java.util.LinkedHashMap<AString, TokenTool> tokenTools(AMap<AString, ACell> reference) {
+		java.util.LinkedHashMap<AString, TokenTool> tools = new java.util.LinkedHashMap<>();
+		covia.adapter.token.AccessToken token = engine().resolveToken(reference);
+		covia.adapter.McpAccess access = (token == null) ? null
+			: token.access(covia.adapter.MCPAdapter.ACCESS_POINT, covia.adapter.McpAccess::new);
+		if (access == null) return tools;
+		RequestContext issuer = engine().context(token.owner(), token.issuer());
+		for (ACell entry : access.tools()) {
+			try {
+				AString[] parsed = covia.adapter.agent.ToolPalette.parseConfigToolEntry(entry);
+				String name = (parsed == null) ? null : covia.adapter.agent.ToolPalette.localToolName(engine(), issuer, entry);
+				if (name == null) continue;
+				covia.grid.Operation operation = engine().jobs().resolveOperation(parsed[0], issuer);
+				tools.putIfAbsent(Strings.create(name), new TokenTool(parsed[0], operation, parsed[2]));
+			} catch (RuntimeException e) {
+				log.debug("MCP token {} leaves out a tool it cannot offer now: {}", token.name(), e.getMessage());
+			}
+		}
+		return tools;
+	}
+
 	/**
 	 * Get MCP tools from a specific adapter's installed assets.
 	 */
@@ -458,9 +511,7 @@ public class MCP extends McpServer {
 			int n = installedAssets.size();
 			for (int i = 0; i < n; i++) {
 				try {
-					MapEntry<Hash, AString> me = installedAssets.entryAt(i);
-					AString metaString = me.getValue();
-					AMap<AString, ACell> meta = RT.ensureMap(JSON.parse(metaString));
+					AMap<AString, ACell> meta = adapter.installedMetadata(installedAssets.entryAt(i).getKey());
 					AMap<AString, ACell> mcpTool = checkTool(meta);
 					if (mcpTool != null) {
 						toolsVector = toolsVector.conj(mcpTool);
@@ -576,9 +627,10 @@ public class MCP extends McpServer {
 	}
 
 	/** The body if it is one JSON-RPC object; a batch, or anything unreadable, is left to the base. */
-	private static AMap<?, ?> singleRequest(Context ctx) {
+	private AMap<?, ?> singleRequest(Context ctx) {
 		try {
-			ACell body = JSONReader.read(RequestBody.boundedInputStream(ctx)); // the body is cached: the base reads it again
+			// Javalin keeps this copy, bounded by its maxRequestSize, and the base reads it again from there
+			ACell body = JSONReader.read(new java.io.ByteArrayInputStream(ctx.bodyAsBytes()));
 			return (body instanceof AMap<?, ?> map) ? map : null;
 		} catch (Exception e) {
 			return null;
@@ -624,8 +676,14 @@ public class MCP extends McpServer {
 		return ctx != null && AuthMiddleware.getAuthenticatedIdentity(ctx) != null;
 	}
 
-	/** The caller a request counts against: its DID if authenticated, else the one anonymous caller. */
+	/**
+	 * The caller a request counts against: the MCP token it presented, so two
+	 * tokens of one owner never share a limit or a session; else its DID if
+	 * authenticated; else the one anonymous caller.
+	 */
 	private static AString callerKey(Context ctx) {
+		AMap<AString, ACell> token = AuthMiddleware.getToken(ctx);
+		if (token != null) return Strings.create("mcp-token " + token.get(Fields.ID));
 		AString did = authenticated(ctx) ? AuthMiddleware.getCallerDID(ctx) : null;
 		return (did != null) ? did : ANONYMOUS;
 	}
@@ -646,7 +704,11 @@ public class MCP extends McpServer {
 
 		try {
 			AString toolName = RT.getIn(params, Fields.NAME);
-			AString opRef = (toolName != null) ? registry().get(sanitiseToolName(toolName)) : null;
+			// A request through an MCP token reaches only the tools that token offers
+			AMap<AString, ACell> token = AuthMiddleware.getToken(ctx);
+			TokenTool bound = (token == null || toolName == null) ? null : tokenTools(token).get(toolName);
+			AString opRef = (token != null) ? ((bound == null) ? null : bound.opRef())
+				: (toolName != null) ? registry().get(sanitiseToolName(toolName)) : null;
 			ACell arguments = RT.getIn(params, Fields.ARGUMENTS);
 			if (opRef != null) {
 				RequestContext rctx = AuthMiddleware.callerContext(ctx);
@@ -654,6 +716,7 @@ public class MCP extends McpServer {
 				// Authentication selected the caller before dispatch. The `ucans`
 				// argument carries additive grants only.
 				AVector<ACell> ucans = AuthMiddleware.bodyUcans(arguments);
+				if (token != null && ucans != null) return toolError(UCANS_WITH_TOKEN);
 				rctx = engine().withTransportGrants(rctx, ucans);
 				// `ucans` is transport authority, not operation input. Never let
 				// raw proof JWTs enter durable Job records, adapter logs, or agent
@@ -678,7 +741,9 @@ public class MCP extends McpServer {
 				String cancelKey = (requestId == null || ctx == null) ? null : cancelKey(caller, ctx, requestId);
 				JobManager.Run run = null;
 				try {
-					run = engine().jobs().startToolOperation(opRef, arguments, rctx);
+					run = (bound != null)
+						? engine().jobs().startToolOperation(opRef, bound.operation(), arguments, rctx)
+						: engine().jobs().startToolOperation(opRef, arguments, rctx);
 					if (cancelKey != null) cancellable.put(cancelKey, run.result());
 					return await(run, authenticated(ctx) ? toolCallTimeoutMs : anonymousToolCallTimeoutMs, stream);
 				} finally {
@@ -757,10 +822,9 @@ public class MCP extends McpServer {
 
 	/** A call that stopped waiting, with where its result will be. */
 	private static AMap<AString, ACell> stillRunning(Job job, String why) {
-		String id = (job == null) ? null : job.getID().toHexString();
+		Blob id = (job == null) ? null : job.getID();
 		String message = "Still running: " + why + ". " + ((id == null)
-			? "It left no job to collect the result from."
-			: "Collect the result with grid_job_result {\"id\": \"" + id + "\"}, or see how it is going with grid_job_status.");
+			? NO_COLLECTABLE_JOB : COLLECT_RUNNING_JOB.formatted(id));
 		return protocolResult(buildMcpResult(Maps.of("message", message, "status", "running", "id", id), true));
 	}
 
@@ -837,7 +901,7 @@ public class MCP extends McpServer {
 			sessions.put(session.id, session);
 			Context ctx = McpServer.getCurrentContext();
 			if (ctx != null) {
-				AString caller = AuthMiddleware.getCallerDID(ctx);
+				AString caller = sessionOwner(ctx);
 				if (caller != null) sessionOwners.put(session.id, caller);
 				ctx.header(HEADER_SESSION_ID, session.id);
 			}
@@ -982,12 +1046,18 @@ public class MCP extends McpServer {
 		ctx.status(200);
 	}
 
-	/** True only when the current authenticated/public principal owns a session. */
+	/** True only when the current authenticated/public principal, or MCP token, owns a session. */
 	private boolean sessionOwnedByCaller(Context ctx, String sessionId) {
 		if (sessionId == null) return false;
 		AString owner = sessionOwners.get(sessionId);
-		AString caller = AuthMiddleware.getCallerDID(ctx);
+		AString caller = sessionOwner(ctx);
 		return owner != null && owner.equals(caller);
+	}
+
+	/** Who owns the sessions a request opens: the MCP token it presented, else its caller. */
+	private static AString sessionOwner(Context ctx) {
+		AMap<AString, ACell> token = AuthMiddleware.getToken(ctx);
+		return (token != null) ? callerKey(ctx) : AuthMiddleware.getCallerDID(ctx);
 	}
 
 	// ==================== Tool metadata helpers ====================
@@ -1057,7 +1127,6 @@ public class MCP extends McpServer {
 
 	/** Keys to strip from schemas before exposing via MCP */
 	private static final AString SECRET_KEY = Strings.intern("secret");
-	private static final AString SECRET_FIELDS_KEY = Strings.intern("secretFields");
 
 	/** Prepare a declared schema for MCP exposure: strip covia-internal keys
 	 *  and warn on structurally invalid schemas. Never invents or rewrites
@@ -1074,7 +1143,7 @@ public class MCP extends McpServer {
 
 	@SuppressWarnings("unchecked")
 	private static AMap<AString, ACell> stripKeys(AMap<AString, ACell> schema) {
-		schema = schema.dissoc(SECRET_KEY).dissoc(SECRET_FIELDS_KEY);
+		schema = schema.dissoc(SECRET_KEY).dissoc(Fields.SECRET_FIELDS);
 		ACell propsCell = schema.get(Fields.PROPERTIES);
 		if (propsCell instanceof AMap<?,?> props) {
 			AMap<AString, ACell> cleanProps = (AMap<AString, ACell>) props;

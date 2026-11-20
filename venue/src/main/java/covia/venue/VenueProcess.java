@@ -17,8 +17,9 @@ import org.slf4j.LoggerFactory;
 
 import convex.core.crypto.Hashing;
 import covia.exception.InvalidInputException;
-import covia.exception.NotSupportedException;
+import covia.exception.InvalidStateException;
 import covia.exception.StillStartingException;
+import covia.exception.UnsupportedException;
 import covia.grid.Job;
 import covia.venue.server.VenueServer;
 
@@ -29,6 +30,9 @@ public final class VenueProcess {
 	private static final String MAIN_CLASS = MainVenue.class.getName();
 	private static final long DEFAULT_ACK_DELAY_MILLIS = 500;
 	private static final long HELPER_READY_TIMEOUT_MILLIS = 5_000;
+
+	/** Exit status of a venue process that a venue's failure stopped (sysexits {@code EX_SOFTWARE}). */
+	public static final int EX_SOFTWARE = 70;
 
 	/** Accepted restart plan returned before the requesting Job completes. */
 	public record RestartPlan(Path successorJar, Path fallbackJar,
@@ -55,6 +59,7 @@ public final class VenueProcess {
 	private final List<Runnable> closeActions = new CopyOnWriteArrayList<>();
 	private final AtomicBoolean armed = new AtomicBoolean(false);
 	private final AtomicBoolean restartRequested = new AtomicBoolean(false);
+	private final AtomicBoolean stoppingFatally = new AtomicBoolean(false);
 
 	VenueProcess(Path currentJar, Path javaExecutable, List<String> jvmArgs,
 			List<String> mainArgs, HelperLauncher helperLauncher,
@@ -97,6 +102,28 @@ public final class VenueProcess {
 	}
 
 	/**
+	 * Stops the process after a venue's failure it cannot carry on from: closes
+	 * every venue it runs, then exits with {@code status}. Only the first call
+	 * acts.
+	 */
+	void exitFatally(int status) {
+		if (!stoppingFatally.compareAndSet(false, true)) return;
+		closeVenues("fatal stop");
+		exitHandler.exit(status);
+	}
+
+	/** Closes the process's venues in the reverse of the order they joined it, each whatever the others do. */
+	private void closeVenues(String during) {
+		for (int i = closeActions.size() - 1; i >= 0; i--) {
+			try {
+				closeActions.get(i).run();
+			} catch (Throwable t) {
+				log.warn("Venue close during {} failed", during, t);
+			}
+		}
+	}
+
+	/**
 	 * Validates and schedules a restart after the requesting Job has committed
 	 * its successful result. Only one process restart may be pending.
 	 */
@@ -104,7 +131,7 @@ public final class VenueProcess {
 			long startupTimeoutMillis, Job job) {
 		if (!armed.get()) throw new StillStartingException("Venue process startup is not complete");
 		if (currentJar == null) {
-			throw new NotSupportedException(
+			throw new UnsupportedException(
 				"Process restart requires MainVenue to be running from an executable jar");
 		}
 		if (job == null) throw new IllegalStateException("Process restart requires a Job context");
@@ -131,7 +158,7 @@ public final class VenueProcess {
 		}
 		String fallbackDigest = target.equals(currentJar) ? targetDigest : sha256(currentJar);
 		if (!restartRequested.compareAndSet(false, true)) {
-			throw new NotSupportedException("A venue process restart is already pending");
+			throw new InvalidStateException("A venue process restart is already pending");
 		}
 
 		RestartPlan plan = new RestartPlan(target, currentJar, startupTimeoutMillis,
@@ -175,13 +202,7 @@ public final class VenueProcess {
 
 			log.info("Relaunch helper pid {} ready; closing {} venue(s)",
 				helper.pid(), closeActions.size());
-			for (int i = closeActions.size() - 1; i >= 0; i--) {
-				try {
-					closeActions.get(i).run();
-				} catch (Throwable t) {
-					log.warn("Venue close during process handoff failed", t);
-				}
-			}
+			closeVenues("process handoff");
 			exitHandler.exit(0);
 		} catch (InterruptedException e) {
 			Thread.currentThread().interrupt();

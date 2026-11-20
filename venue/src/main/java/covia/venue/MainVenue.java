@@ -95,7 +95,7 @@ public class MainVenue {
 				log.error("Venue '{}' failed to start: {}",
 					RT.getIn(venueConfig, Fields.NAME), describeStartupFailure(e), e);
 				closeAll(servers);
-				System.exit(70); // EX_SOFTWARE
+				System.exit(VenueProcess.EX_SOFTWARE);
 				return;
 			}
 			process.manage(server);

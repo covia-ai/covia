@@ -22,6 +22,10 @@ import java.util.UUID;
  * {@code --resume} on a fresh process continues counting — which is what
  * makes resume-after-stop testable.</p>
  *
+ * <p>A text reply's {@code assistant} and {@code result} events go out in one
+ * write: once the adapter has read the reply's text, its result is waiting to
+ * be read, even if the process has since been stopped.</p>
+ *
  * <p>Behaviour is chosen by the prompt's first word:</p>
  * <ul>
  *   <li>{@code echo …} (default) — replies {@code echo: <prompt>}</li>
@@ -111,8 +115,11 @@ public final class FakeClaude {
 				case "echo" -> reply = "echo: " + (words.length > 1 ? words[1] + (words.length > 2 ? " " + words[2] : "") : "");
 				default -> reply = "echo: " + prompt;
 			}
-			out.println(assistant(sessionId, model, "{\"type\":\"text\",\"text\":" + q(reply) + "}"));
-			out.println(result(sessionId, false, "success", reply, null, turns, t0));
+			// One write, so a reader that has the reply's text has its result too
+			byte[] lines = (assistant(sessionId, model, "{\"type\":\"text\",\"text\":" + q(reply) + "}") + "\n"
+				+ result(sessionId, false, "success", reply, null, turns, t0) + "\n").getBytes(StandardCharsets.UTF_8);
+			out.write(lines, 0, lines.length);
+			out.flush();
 		}
 		System.exit(0);
 	}

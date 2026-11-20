@@ -3,9 +3,10 @@ package covia.adapter;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardOpenOption;
+import java.nio.file.StandardCopyOption;
 import java.util.Base64;
 import java.util.Enumeration;
 import java.util.concurrent.CompletableFuture;
@@ -33,10 +34,12 @@ import convex.core.util.JSON;
 import convex.auth.ucan.Capability;
 import covia.api.Abilities;
 import covia.api.Fields;
+import covia.exception.InvalidDefinitionException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
-import covia.exception.NotSupportedException;
 import covia.exception.UnavailableException;
+import covia.exception.UnsupportedException;
+import covia.lattice.Namespace;
 import covia.venue.RequestContext;
 
 /**
@@ -108,7 +111,7 @@ public class ArchiveAdapter extends AAdapter {
 		String subOp = getSubOperation(meta);
 		if (subOp == null) {
 			return CompletableFuture.failedFuture(
-				new NotSupportedException("No archive sub-operation specified"));
+				new InvalidDefinitionException("No archive sub-operation specified"));
 		}
 		return CompletableFuture.supplyAsync(() -> {
 			try {
@@ -118,7 +121,7 @@ public class ArchiveAdapter extends AAdapter {
 					case "list"    -> handleList(ctx, in);
 					case "extract" -> handleExtract(ctx, in);
 					case "zip"     -> handleZip(ctx, in);
-					default -> throw new NotSupportedException("Unknown archive operation: " + subOp);
+					default -> throw new UnsupportedException("Unknown archive operation: " + subOp);
 				};
 			} catch (IOException e) {
 				throw FileOperations.failure(e);
@@ -150,8 +153,9 @@ public class ArchiveAdapter extends AAdapter {
 	/**
 	 * Resolves the archive source — exactly one of {@code root}+{@code path} (a
 	 * jailed file, read-checked), {@code contentRef} (any resolvable content), or
-	 * {@code bytes} (inline base64). Reference/bytes sources are spooled to a temp file so every op
-	 * reads via {@link ZipFile} (existing-only — a source is never created here).
+	 * {@code bytes} (inline base64). Every source but a host file, a file in a
+	 * DLFS drive included, is spooled to a temp file so every op reads via
+	 * {@link ZipFile} (existing-only — a source is never created here).
 	 */
 	private Source resolveSource(RequestContext ctx, AMap<AString, ACell> input) throws IOException {
 		AString root = RT.ensureString(input.get(FIELD_ROOT));
@@ -175,18 +179,21 @@ public class ArchiveAdapter extends AAdapter {
 				"Provide only one archive source: 'root'+'path', 'contentRef', or 'bytes'");
 		}
 
+		Path file = null;
 		if (root != null && path != null) {
-			Path file = files().target(ctx, root.toString(), path.toString(),
+			file = files().target(ctx, root.toString(), path.toString(),
 				Capability.CRUD_READ, true).path();
 			if (!Files.isRegularFile(file)) {
 				throw new InvalidInputException("Archive is not a regular file: " + path);
 			}
-			return new Source(file, false);
+			if (file.getFileSystem() == FileSystems.getDefault()) return new Source(file, false);
 		}
 
 		Path tmp = Files.createTempFile("covia-archive-", ".zip");
 		try {
-			if (contentRef != null) {
+			if (file != null) {
+				Files.copy(file, tmp, StandardCopyOption.REPLACE_EXISTING);
+			} else if (contentRef != null) {
 				// resolveContent spans every storage mechanism (CAS record, DLFS,
 				// provider) under the caller's authority — unlike getContentStream,
 				// which only serves metadata-declared content.
@@ -250,7 +257,7 @@ public class ArchiveAdapter extends AAdapter {
 		// Entries go inside destDir, which the write is authorised over
 		if (dest.mayCreate()) Files.createDirectories(destDir);
 		else if (!Files.isDirectory(destDir)) throw new java.nio.file.NotDirectoryException(destDir.toString());
-		Path destReal = destDir.toRealPath();
+		String destLabel = (destPath == null) ? destRoot.toString() : destRoot + "/" + destPath;
 
 		long entries = 0;
 		long totalBytes = 0;
@@ -263,25 +270,22 @@ public class ArchiveAdapter extends AAdapter {
 				if (++entries > MAX_ENTRIES) {
 					throw new InvalidInputException("Archive exceeds the entry cap (" + MAX_ENTRIES + ")");
 				}
-				// Zip-slip: resolve the entry inside the destination and verify it
-				// cannot escape (normalize collapses any '..'), before touching disk.
-				Path target = destReal.resolve(ze.getName()).normalize();
-				if (!target.startsWith(destReal)) {
-					throw new InvalidInputException("Archive entry escapes destination: " + ze.getName());
-				}
+				// Each entry is checked as a write to its path is, links followed,
+				// before anything is written: it must stay inside the destination
+				Path target = FileOperations.resolve(destDir, ze.getName(), destLabel, false);
 				if (ze.isDirectory()) {
 					Files.createDirectories(target);
 					continue;
 				}
 				Path parent = target.getParent();
 				if (parent != null) Files.createDirectories(parent);
-				try (InputStream is = zip.getInputStream(ze);
-				     OutputStream os = Files.newOutputStream(target,
-						StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE)) {
-					totalBytes += copyCapped(is, os, MAX_TOTAL_BYTES - totalBytes);
+				long remaining = MAX_TOTAL_BYTES - totalBytes;
+				try (InputStream is = zip.getInputStream(ze)) {
+					totalBytes += FileOperations.writeFile(target, true, true,
+						os -> copyCapped(is, os, remaining));
 				}
 				if (files.count() < MAX_LISTED) {
-					files = files.conj(Strings.create(destReal.relativize(target).toString().replace('\\', '/')));
+					files = files.conj(Strings.create(destDir.relativize(target).toString().replace('\\', '/')));
 				}
 			}
 		}
@@ -362,19 +366,21 @@ public class ArchiveAdapter extends AAdapter {
 				throw new java.nio.file.NoSuchFileException("Parent directory does not exist: " + parent);
 			}
 		} else {
-			engine.requireAuthority(ctx, Strings.create("a/"), Abilities.ASSET_STORE);
+			engine.requireAuthority(ctx, Namespace.A, Abilities.ASSET_STORE);
 		}
 
 		Path zipTmp = toFile ? null : Files.createTempFile("covia-zip-", ".zip");
 		long[] entryCount = {0};
 		try {
 			Path out = toFile ? destFile : zipTmp;
-			try (ZipOutputStream zos = new ZipOutputStream(Files.newOutputStream(out,
-					FileOperations.writeOptions(out, StandardOpenOption.TRUNCATE_EXISTING, destCreate)))) {
-				for (int i = 0; i < srcFiles.size(); i++) {
-					addToZip(zos, srcFiles.get(i), srcEntryBases.get(i), entryCount);
+			FileOperations.writeFile(out, destCreate, true, os -> {
+				try (ZipOutputStream zos = new ZipOutputStream(os)) {
+					for (int i = 0; i < srcFiles.size(); i++) {
+						addToZip(zos, srcFiles.get(i), srcEntryBases.get(i), entryCount);
+					}
 				}
-			}
+				return 0;
+			});
 
 			long size = Files.size(out);
 			if (toFile) {

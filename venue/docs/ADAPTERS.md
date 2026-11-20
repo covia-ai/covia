@@ -83,9 +83,19 @@ it runs as a Job. A generic invocation surface additionally checks `invoke`
 on the operation reference its caller asks it to look up. REST reference
 submission is checked by JobManager; a direct grid tool still invokes its
 target and must respect the target's invocation scope. Do
-not infer authority from an operation name or confuse `ctx.getCallerDID()`
-(who acted) with `ctx.getUserDID()` (whose namespace the action uses). See
+not infer authority from an operation name or confuse `ctx.getAuthorityDID()`
+(who acts) with `ctx.getUserDID()` (whose namespace the action uses). See
 [UCAN.md](UCAN.md) for the authority model.
+
+When adding an action, document its exact resource, ability, any extra
+identity restrictions, and which checks apply to generic, bound-tool and
+deferred calls. Add standard abilities to `covia.api.Abilities`, UCAN.md §3.2
+and COG-13; module extensions belong in the module contract and UCAN.md's
+module inventory. Reuse Convex's CRUD constants and slash-boundary matching.
+Test that the required leaf works on the intended resource, a sibling or
+different resource fails, and direct binding does not skip resource checks.
+If a condition is meant to constrain every execution, it must be attached
+to an action check every execution crosses, not only to generic `invoke`.
 
 `engine.venueContext()` is the operator's authority. Act under it only on what
 the operator declared: venue configuration, or a record created under
@@ -172,6 +182,15 @@ normalisation and authorization; relative DLFS paths retain their literal spelli
 
 ### Outbound URL handling
 
+Every actual HTTP send also calls `engine.requireOutboundHttp(ctx, method, url)`:
+`outbound/http/<method>` on the caller's `outbound` resource, with the transmitted
+URL supplied for `nb.url`. This applies inside provider SDKs, on retries and on
+redirect hops, not just to the initial adapter invocation. Pooled transports do
+not retain the previous caller's authority. Configured model calls use harness
+context; model calls made as tools use agent context. The complete contract and
+migration from `outbound/any` are in [OUTBOUND.md](OUTBOUND.md).
+
+
 An adapter that accepts an HTTP destination normalises it before host or
 capability checks, then uses exactly that URL for transport and credential
 resolution. `.` and `..` path segments, including percent-encoded spellings,
@@ -182,7 +201,7 @@ cannot send a credential to `/api/../admin`. The rule applies to redirect target
 as well as initial requests. The HTTP adapter rechecks authority for retained
 credential headers on every hop and refuses the redirect before sending when
 a grant no longer covers the destination. Requests with URL secret placeholders
-remain within those grants for their entire redirect chain. `outbound/any` exempts host restrictions, not URL
+remain within those grants for their entire redirect chain. `admin/outbound/bypass` exempts host restrictions, not URL
 syntax or normalisation.
 
 Use `engine.outboundUrl(ctx, url)` for caller-selected destinations: its return
@@ -195,38 +214,151 @@ a transformed URL and then pass the original spelling to an HTTP library.
 
 The significant lifecycle is:
 
-1. A built-in adapter is constructed, or a module discovers one through
-   `ServiceLoader`.
-2. A module adapter receives `configureModule(modules[].config, strict)` once.
-   It may return `false` when optional runtime prerequisites are unavailable.
-   At launch this happens before the venue is prepared, so the venue can
-   migrate module adapters' state with its own; neither it nor the constructor
-   may use the engine.
-3. Registration applies the effective `adapters.<name>` configuration through
-   `configure(config, strict)`.
-4. Unless boot-disabled or declined, `install(engine)` binds the engine and
-   private `AdapterState`, then `installAssets()` declares its catalog.
-   Installation must not start inbound workers or other autonomous work.
-5. Before the venue serves requests, `recoverJob(job)` is called once per
-   non-terminal durable Job the adapter's operations own. The default
-   stabilises and never re-executes; override to re-attach or retry
-   (see [JOBS.md § Recovery](JOBS.md#recovery-on-restart-214)).
-6. `start()` activates adapter-owned workers after assembly, catalogue
-   publication, secret provisioning and recovery. It must be idempotent:
-   runtime registration and enable also call it after publishing the adapter
-   on an already-live engine. A prepared engine defers it until activation.
-7. Runtime `adapter/configure` calls `configure` again and republishes public
-   configuration and information if accepted.
-8. Disable removes live dispatch and public introspection but retains the
-   instance and durable catalog metadata. Enable restores it.
-9. Module unload deregisters its live adapters and closes `AutoCloseable`
+1. A built-in adapter is constructed, or a module constructs one its jar
+   declares (see [Optional module packaging](#optional-module-packaging)).
+   At launch a module's adapters are discovered before the
+   venue is prepared, so the venue can migrate their state with its own; the
+   constructor may not use the engine.
+2. Registration offers the effective `adapters.<name>` configuration through
+   `configure(config, strict)`, for a module's adapter as for a built-in,
+   whether or not the adapter is enabled. At launch, a configuration an
+   enabled adapter refuses leaves it failed (below), and a disabled adapter's
+   refusal is logged; the launch goes on.
+3. An adapter that accepted its configuration is installed, enabled or not:
+   `install(engine)` binds the engine and private `AdapterState`, then
+   `installAssets()` declares its catalog. **Installed and started are
+   separate phases**: an installed adapter owns its jobs whether or not it
+   is started. **Configuration and installation are inert**: they start no
+   thread, process, network activity or operator code, so an adapter that
+   never starts does nothing but recover its jobs (step 4). Live work, such
+   as loading operator scripts, fetching models or scheduling a sweep,
+   belongs in `start()`. A `configure` call may end work its new settings no
+   longer allow, but starts work only while the adapter is started, which it
+   knows from its own state (set by `start()`, cleared by `stop()`), not from
+   having an engine. An adapter that refused its configuration is
+   not installed until enable or restart offers it again and it accepts; an
+   enabled adapter whose installation fails is failed (below).
+4. Before the venue serves requests, `recoverJob(job)` is called once per
+   non-terminal durable Job the adapter's operations own, whether or not
+   the adapter will start. The default stabilises and never re-executes;
+   override to re-attach or retry
+   (see [JOBS.md § Recovery](JOBS.md#recovery-on-restart-214)). An
+   adapter's jobs are recovered once per venue run: enable and restart do
+   not recover them again.
+5. `start()` is the second phase: only an enabled adapter is started, and
+   starting makes it live, the venue sending it work and publishing its
+   `v/info/adapters/<name>` record. It activates adapter-owned workers after
+   assembly, catalogue publication, secret provisioning and recovery, and
+   takes up whatever the adapter left until it runs. It must be idempotent:
+   runtime registration, enable and restart also call it after publishing
+   the adapter on an already-live engine. A prepared engine defers it until
+   activation. If it fails, the adapter is left failed (below).
+6. Runtime `adapter/configure` calls `configure` again and republishes public
+   configuration and information if accepted, whether or not the adapter is
+   enabled. `configure` is a notification: the adapter decides what the
+   change means for its work, whether to keep it for the next `start()`,
+   apply it in place or restart its own work. A change it refuses by throwing
+   is reverted: the venue offers it the settings it had. If it refuses those
+   too, it is unconfigured: an enabled adapter is stopped and left failed,
+   and enabling or restarting it offers it its effective configuration before
+   it starts.
+7. Disable removes live dispatch and public introspection, then calls
+   `stop()`, but retains the instance and durable catalog metadata. Enable
+   restores it and calls `start()` again. `stop()` ends the workers `start()`
+   started and keeps the instance's resources; nothing, `configure` included,
+   starts them again before `start()`. It must be idempotent: the venue stops
+   a failed adapter again on restart and disable. The default does nothing; a
+   messaging adapter stops every bot, closing its poll or connection.
+   Replacing an active instance stops it before the new one starts. If the new
+   one fails to start, it is closed and the old one is restored and started
+   again, unless it had failed; otherwise the old one is closed.
+   Restart (`venue:adapter/restart`) calls `stop()`, offers the adapter its
+   effective configuration again and calls `start()`.
+   Stopping does nothing to the adapter's jobs: work in flight runs on, on
+   the stopped instance, and what it does when it finishes or tries to act
+   while the adapter is stopped is the adapter's own policy.
+8. Module unload deregisters its live adapters and closes `AutoCloseable`
    resources and the module classloader. In-flight jobs retain their adapter
-   instance and may finish.
-10. At venue shutdown, in-flight Jobs get `shutdown.graceMs` to finish;
-   `suspendJob(job)` is then called for each still in flight. The default
-   pauses a pausable Job and cancels the rest; override to record a
-   durable wait and let the thread go
+   instance and may finish. A module's adapters are the instances it
+   registered, not their names: one registered in place of a module's under
+   the same name, such as an embedder's, is not the module's, so unloading
+   or reloading the module leaves it, and `v/info/adapters/<name>` names no
+   module for it.
+9. At venue shutdown, in-flight Jobs get `shutdown.graceMs` to finish;
+   `suspendJob(job)` is then called for each still in flight, whether or not
+   its adapter is started. The default pauses a pausable Job and cancels the
+   rest; override to record a durable wait and let the thread go
    (see [JOBS.md § Shutdown](JOBS.md#shutdown)).
+
+`start()` and `stop()` are effects on the running venue, so the engine calls
+them under its monitor after the registry change they announce, never from a
+lattice transaction (which may run its callback again) or on a fork of the
+venue's state. An adapter that implements `stop()` never runs workers beside
+its predecessor or replacement. When
+`stop()` returns, the adapter starts no new autonomous work, and work already
+under way neither commits nor acts outside the venue: a messaging bot's writes
+and sends check that it is still running.
+
+### An adapter that is not running
+
+An enabled adapter that fails to start is failed: its `start()` failed at
+launch, enable or restart, it refused its configuration or failed to install
+at launch, enable or restart, or it could not take back its settings after
+refusing a change. The engine calls `stop()` to end whatever a failed
+`start()` began and reports the failure as the adapter's
+([ERRORS.md](ERRORS.md)): a Covia exception with a reason as it is, logged at
+WARN, or once at ERROR for an integrity failure; anything else as the
+adapter's fault.
+
+A failed adapter is treated as a stopped one, as if disabled, except that it
+stays enabled. Its `v/info/adapters/<name>` record is withdrawn (the catalog
+metadata remains), and `Engine.getAdapter`, `getAdapterNames` and
+`hasAdapter` (and so `findAdapter`) leave it out. Every part of the venue
+that uses adapters directly therefore sees it as absent and treats it as it
+treats a disabled one: the outbound guard refuses rather than check without
+the `http` adapter's settings, and a login method it provides is
+unavailable. An adapter that `auth.methods` or `auth.venueProof` names
+therefore still stops the launch if it fails, as a disabled one does. The
+venue sends a stopped adapter, failed or disabled, no new work: its
+operations, internal calls to them, and messages, pause and resume for its
+live jobs are refused with `UnavailableException`
+(`Engine.ADAPTER_NOT_RUNNING` for a failed one). The venue runs without it:
+one adapter that cannot start costs only what it provides.
+
+**A stopped adapter's jobs are its own.** Whether an adapter is started
+decides only whether the venue sends it new work; what happens to its jobs
+is its policy either way. Stopping or starting it at runtime does nothing to
+them, and at launch an installed adapter recovers its jobs whether or not it
+will start, so booting with a stopped adapter is the same case as stopping
+one with jobs in flight. Cancelling a stopped adapter's job runs its
+`cancelIn` and `stop(job)`; at shutdown its jobs go to its `suspendJob`. An
+adapter whose policy depends on whether it runs tracks its own `start()` and
+`stop()`, as the messaging adapters do, and takes up in `start()` what it
+left until then: the agent adapter wakes agents with queued work whenever it
+starts. An adapter that refused its configuration or failed to
+install is not installed, owns no jobs, and its unfinished jobs are
+recovered as a missing adapter's are, not by its own `recoverJob`.
+
+The reason is for operators: `venue:adapters` lists the adapter as enabled
+with `status: failed` and the `reason`, and embedders read it from
+`Engine.adapterFailure(name)`. `venue:adapter/restart` (or enable) brings it
+back once the cause is fixed: it offers the adapter its configuration,
+installs it if it never was, publishes it and starts it. Disabling it forgets
+the failure.
+
+`start()` therefore throws a Covia exception whose reason an operator can act
+on: `UnavailableException` for a port in use or a service out of reach, the
+P2P node's launch failure being one. Recovery runs before `start()`, so an
+adapter that then fails to start has already recovered its jobs, and a
+restart does not call `recoverJob` again.
+
+Two failures still stop the launch: an adapter's stored state recorded at a
+newer version than it supports (`UnsupportedVersionException`), and an
+adapter that `auth.methods` or `auth.venueProof` names being unavailable. Runtime registration differs
+too, because module loading undoes what it registered when a registration
+throws: a new instance registered on a started engine (`registerAdapter`,
+`venue:module/load`) that refuses its configuration or fails to start is
+rolled back and the failure thrown.
 
 The venue config is authoritative again after restart; runtime enable,
 disable, configure, load, and unload changes are not persisted. Full operator
@@ -268,22 +400,30 @@ An adapter whose work can be suspended answers `canPause(job)` and implements
 refusing, and the job refuses with them. `pause` and `resume` run after the
 change commits, so each sees the new status.
 
-There are two distinct configuration hooks:
-
-- `configureModule` receives module bootstrap configuration exactly once and
-  answers whether that module adapter can run in this JVM.
-- `configure` receives the effective adapter configuration: static
-  `adapters.<name>` overlaid by runtime reconfiguration. Adapters that read
-  `engine.adapterConfig(getName())` lazily need not override it.
+`configure` receives the effective adapter configuration: static
+`adapters.<name>` overlaid by runtime reconfiguration. It is the one
+configuration hook, for a module's adapters as for built-ins. Adapters that
+read `engine.adapterConfig(getName())` lazily need not override it. An adapter
+that cannot run on this host, such as one whose native runtime is missing,
+fails its `start()` with `UnavailableException`, which leaves it failed.
 
 An override of `configure` should validate the whole proposed configuration
-before changing live fields, throw `IllegalArgumentException` with an
-actionable message for malformed known settings, and reject unknown settings
-when `strict` is true. The Engine reports it as the failure of whoever supplied
-the settings ([ERRORS.md](ERRORS.md)). Security boundaries and reserved settings must remain
-enforced even in lenient mode. Return `false` only to decline a valid but
-unavailable configuration. The reserved `enabled` key is owned by the
-framework.
+before changing live fields, and reject unknown settings when `strict` is
+true. It accepts a configuration by returning and refuses it by throwing. A
+setting it refuses, whether malformed or unusable on this venue, throws
+`ConfigurationException` with an actionable message built from a
+constant on the adapter. Work that fails as valid settings are applied, such
+as a listener on a port in use, throws `UnavailableException`: the settings may
+be right, and a retry may succeed. Either reaches whoever supplied the
+settings unchanged: the operator at start-up, enable or module load, or the
+caller of `venue:adapter/configure`, whose change is then reverted (Lifecycle,
+item 7). A parser that also reads an operation's
+input throws `IllegalArgumentException`, and `configure` rethrows it as
+`ConfigurationException` with the cause chained; any other exception
+escaping `configure` that is not a Covia exception is the adapter's fault
+([ERRORS.md](ERRORS.md)). Security
+boundaries and reserved settings must remain enforced even in lenient mode.
+The reserved `enabled` key is owned by the framework.
 
 Never publish an effective config object wholesale. `publicConfig()` is an
 explicit allow-list and defaults to publishing nothing; the helper
@@ -442,10 +582,16 @@ may wrap the component's cursor in its own typed domain components. For simple
 map/vector records, `read`, `write` and `delete` offer type-aware relative paths;
 `get`, `set`, `update`, `execute` and `transact` operate on the complete value;
 `transact` returns what its callback returned in the run that committed.
-`rootPath` and `path` are diagnostic locations, not workspace API addresses.
+Absent state reads as null, and setting null removes it. A transaction needs a
+value to start from, so one on state that may be new throws
+`MissingValueException` unless the adapter first gives its empty value:
+`withDefault(Maps.empty())` reads as that while nothing is stored, and a
+transaction that leaves it unchanged stores nothing. `read`, `write`, `delete`,
+`set` and `update` need no empty value. `rootPath` and `path` are diagnostic
+locations, not workspace API addresses.
 
 ```java
-AdapterState state = adapterState();
+AdapterState state = adapterState().withDefault(Maps.empty());
 state.execute(draft -> {
     draft.write("settings/theme", Strings.create("dark"));
     draft.write("settings/version", CVMLong.ONE);
@@ -550,7 +696,8 @@ static final class BotsUnderKey implements MigrationStep {
   disabled adapter, so the start or registration fails. To run an older build without
   restoring the state from before the upgrade, remove the adapter from the
   configuration; disabling it is not enough.
-- A replaced instance keeps running until its replacement has registered. When
+- Registration migrates the replacement's state first, while the instance it
+  replaces is still live; that one stops only when the replacement starts. When
   loading a module at runtime that raises its state version, disable the old
   instance first.
 - The built-in test adapter is at version 3, so every venue, both release
@@ -566,32 +713,36 @@ view for the addressed user. It does not expose `:adapters/<name>` automatically
 or create an `x` field in user storage. Adapters own the shape of the view:
 maps, vectors, scalars and pure projections are all supported.
 
-Override `latticeView(ctx)` to return a Convex `AForkableCursor<ACell>`, or null
-for no view (the default). For example, an adapter whose private schema stores
-public account data under `accounts/<did>` can expose just that subtree:
+Override `latticeView(owner, ctx)` to return a Convex `AForkableCursor<ACell>`,
+or null for no view (the default). `owner` is the account the path addresses,
+which the router has checked the request may reach. For example, an adapter
+whose private schema stores public account data under `accounts/<did>` can
+expose just that subtree:
 
 ```java
-@Override public AForkableCursor<ACell> latticeView(RequestContext ctx) {
-    return adapterState(ctx.getUserDID()).cursor().withDefault(Maps.empty())
-        .path(Strings.intern("accounts")).withDefault(Maps.empty())
-        .path(ctx.getUserDID());
+private static final AString ACCOUNTS = Strings.intern("accounts");
+
+@Override public AForkableCursor<ACell> latticeView(AString owner, RequestContext ctx) {
+    // Entry views: a write creates the map and the entry, and an absent entry reads as absent
+    return Covia.entry(Covia.entry(adapterState(owner).cursor(), ACCOUNTS), owner);
 }
 ```
 
-Use `ctx.getUserDID()` for the addressed owner; `ctx.getCallerDID()` still
-identifies the actor. The owner-bound component retains account deletion and
+Select state by `owner`; `ctx` is the request as it is, its namespace and
+execution its own. The owner-bound component retains account deletion and
 recreation guards. Keep credentials and internal records outside the exposed
 subtree: reading a parent returns its entire value, including descendants.
 
 Execution references live together in `ctx.getExecutionScope()`, qualified by
-its `ownerDID`. Delegating the addressed namespace never changes that owner.
-The local `getAgentId()/getSessionId()/getJobId()/getTaskId()` helpers return null
-when the execution belongs to a different user, so `n/`, `c/` and `t/` cannot
-silently target identically named records under the addressed owner. Use the
+its `ownerDID`, which a frame driving another account's execution, such as a
+controller's harness, never changes. The local
+`getAgentId()/getSessionId()/getJobId()/getTaskId()` helpers return null when
+the execution belongs to a different user, so `n/`, `c/` and `t/` cannot
+silently target identically named records in the request's own namespace. Use the
 qualified scope for attribution. Explicitly binding a new local execution ID
 under a different user starts a fresh scope without inheriting the old IDs.
 
-Views are read-only by default. Override `latticeWriteDenial(ctx, path)` for
+Views are read-only by default. Override `latticeWriteDenial(owner, ctx, path)` for
 write, append, copy-to and delete at selected paths relative to the view root.
 Return `null` to allow, or a refusal reason; the router returns that reason
 unchanged. Adapters own value validation in their cursor write transformations.
@@ -663,7 +814,8 @@ disposable test data, not included in user exports.
   workers and release external resources here. It must be idempotent, including
   when runs overlap, and throw on incomplete cleanup so the venue can retry. The previous user record is
   available only on initial deletion, never retained for recovery. Tolerate null
-  on retry and an instance that was boot-disabled and never installed.
+  on retry and an instance that was never installed, having refused its
+  configuration.
 
 An adapter needing durable external cleanup identifiers must maintain its own
 cleanup records outside the data it erases and consume them idempotently in the runtime
@@ -763,7 +915,7 @@ How a job follows its task is kept in the job's entry (`RemoteJobs.kept`);
 its record shows the task's `delegation.remoteId` and `remoteStatus`, and
 `delegation.notFollowed` once the venue stops following it. Observation failure cannot manufacture execution failure or
 authorize replay. Claude may reconstruct an idle conversation through
-`restoreInteraction`, as the job's caller in the context the job kept
+`restoreInteraction`, as the job's caller in the state the job keeps
 (`JobManager.callerContext`); resuming a transcript does not recover an
 interrupted turn. There is no default resubmission, polling loop or lifetime timeout in
 the base. Cancellation is a request, not proof of remote cessation.
@@ -781,15 +933,14 @@ that task. The Job records `sessionId` separately from `delegation.remoteId`.
 Native remote connections share `VenueConnection` with Grid: anonymous by
 default, explicit target-bound caller identity, or an explicitly delegated
 venue relay. Omitting `venue` carries the complete current RequestContext to
-the local agent, and the job keeps its caller's context in its entry
-(JOBS.md, Kept caller context). After a restart such a local proxy follows
+the local agent, and the job keeps that state in its entry, as every recorded
+job does (JOBS.md, A job's state). After a restart such a local proxy follows
 the same task again exactly as it first did, as its caller acts now
 (`JobManager.callerContext`): its status, messages and cancellation reach
 that task, and it finishes with the task's outcome. It ends instead when it
-keeps no context or had not recorded the task
-(`RemoteAgentAdapter.LOCAL_INTERRUPTED`), or when its
-caller cannot act now (`RemoteAgentAdapter.CALLER_CANNOT_ACT`, naming the
-task). The task then runs on: the venue never acts on it without its
+had not recorded the task (`RemoteAgentAdapter.LOCAL_INTERRUPTED`), or when
+its caller cannot act now, as when it keeps no state
+(`RemoteAgentAdapter.CALLER_CANNOT_ACT`, naming the task). The task then runs on: the venue never acts on it without its
 caller's authority. A remote proxy reconnects as it first connected and
 observes the same task, except one that signed in as its caller: the venue
 keeps no such credential, so its recovery fails, naming the remote task and
@@ -827,7 +978,8 @@ them with `provided` scope and do not bundle their own copies.
   and applies the result/silent/fixed reply policy. It imposes no Job timeout.
   Its queue is in memory and is **not durable acceptance**.
 - `ConversationSessions` stores mappings under the existing private
-  `config/<bot>/sessions` or `users/<did>/sessions/<bot>` roots. Numeric Telegram
+  `config/<bot>/sessions` or `users/<did>/sessions/<bot>` roots, each
+  conversation to the id of its agent session, a Blob. Numeric Telegram
   and Discord keys retain their paths. Other keys are encoded as single safe
   path segments; `ConversationRouter.key(installation, channel, thread)` builds
   an unambiguous compound key. Optional legacy callbacks support migration.
@@ -867,7 +1019,9 @@ and socket transports. Give each installation/binding a private root such as
 `config/<binding>/inbox` or `users/<did>/inbox/<binding>` and a provider event ID.
 IDs are hashed into path segments; the original ID remains in the record.
 Records contain `id`, `input`, `status`, `receivedAt` and, on completion,
-`completedAt`; FAILED adds `reason`, `lastError` and `failedAt`. Input must contain the event needed for processing, **not**
+`completedAt`, with the agent session and chat job (`sessionId`, `jobId`,
+Blobs) when a local session delivery completed it; FAILED adds `reason`,
+`lastError` and `failedAt`. Input must contain the event needed for processing, **not**
 access tokens, signing secrets or credential-bearing HTTP headers.
 
 1. Authenticate/admit the event, then `accept(id, input)`. This writes PENDING
@@ -1053,7 +1207,9 @@ provider cannot relay (a location, say) is told so. The hub's own replies are `n
 `unlinked`, `notLinked`, `codeUnknown`, `notOpen`, `held`, `textOnly`,
 `notAvailable`), each overridable. A relay binding admits every sender unless
 `open: false` narrows it to `allow`, and its owner must be a DID, since both hooks run
-as that user without a Job record: `admit` receives `{principal}` before linking,
+for that user without a Job record, with the binding's own authority: its creator's,
+as for its credentials (`AMessagingAdapter.bindingContext`), and the user's for an
+operator-declared binding. `admit` receives `{principal}` before linking,
 polling and each delivery and answers `{allowed: true}` or `{allowed: false, code?,
 notice?}`; `charge` receives `{principal, parts, message_id}` after a reply is sent.
 
@@ -1077,7 +1233,11 @@ are bounded and in memory, so a restart loses only messages not yet collected.
    do not substitute an invocation check for the target's resource checks. Refuse what
    the caller can fix with the Covia type for it, such as
    `InvalidInputException` for bad input, whose message says what is wrong
-   ([ERRORS.md](ERRORS.md#types)); catch a library's exceptions where they are
+   ([ERRORS.md](ERRORS.md#types)). The venue checks input against the
+   operation's schema only when the operation sets `operation.strict: true`,
+   since many operations take dynamic input; otherwise the operation checks
+   each field it needs where it reads it, and refuses a missing one with
+   `InvalidInputException` naming the field. Catch a library's exceptions where they are
    called. Anything else that escapes the operation, `IllegalArgumentException`
    included, is the adapter's fault: its Job fails with `Operation <op> failed:
    unexpected <ClassName> in adapter <name>`, logged at ERROR, and the caller
@@ -1097,6 +1257,17 @@ are bounded and in memory, so a restart loses only messages not yet collected.
    optional module.
 9. Add unit/functional tests and, for a module, a load/unload integration test
    against the packaged module jar.
+
+An adapter that starts a request or hands one to another principal, as a
+binding, an access token or a callable does, records that on the request's
+route with `RequestContext.via(name, fields, text)`. The venue stamps the
+record with the adapter's name and the principal it vouches for, the
+context's own; `fields` is the adapter's record of how it carried the request,
+just enough to find its information again, and `text` (`RouteText`) is what an
+agent the request reaches is told of it beyond that, built from fixed wording
+and parts whose shape the venue checks when it shows them. What to record and
+say is the adapter's choice; who the principal is, and whether it is the
+agent's owner, is the venue's ([AGENT_CONTEXT.md](AGENT_CONTEXT.md) §1.2).
 
 Operation metadata should describe inputs and outputs precisely enough for
 schema validation and agent tool use:
@@ -1165,7 +1336,11 @@ whether to install their dependency tree. A module:
   jars and the module jar could load as a Java module layer over the venue;
 - sets `covia.module.name` to `covia.<name>`, which the parent POM writes as
   the jar's `Automatic-Module-Name`;
-- declares every adapter in `META-INF/services/covia.adapter.AAdapter`;
+- declares every adapter in `META-INF/services/covia.adapter.AAdapter`, each
+  class with a public no-argument constructor. The venue reads only the
+  module jar's own file, so a module's adapters are exactly those it declares;
+  an adapter declared on the venue's classpath, such as one an embedder
+  ships, never belongs to a module;
 - uses the services resource transformer when shading;
 - includes its operation JSON, skills, and templates in its own resources,
   under classpath paths the venue jar does not use (for example
@@ -1175,8 +1350,9 @@ whether to install their dependency tree. A module:
   catalog appears and retracts correctly, that the jar names its module, and
   that it carries no package `covia.jar` ships.
 
-Boot modules are configured with `modules`; runtime loading is additionally
-gated by `dynamicModules` and venue authority. See
+Boot modules are listed in `modules`, which names only the jar; each adapter
+a module declares takes its settings from `adapters.<name>`. Runtime loading is
+additionally gated by `dynamicModules` and venue authority. See
 [CONFIG.md, “Venue modules”](CONFIG.md#venue-modules) for operator settings and
 [BUILD.md](../../BUILD.md) for reactor and release packaging. Existing
 `covia-telegram`, `covia-discord`, `covia-sonnylabs`, `covia-speech`, and
@@ -1204,7 +1380,10 @@ Run the owning module tests during development and `mvn clean install` before
 release so the full reactor, javadocs, shaded jars, and module integration
 tests are verified.
 
-The messaging suites run locally without provider credentials. WhatsApp and
+The messaging adapters' tests run their bots against a venue and a loopback
+fake of the provider, so they are integration tests
+(`-Dcovia.tests.integration=true`, `BUILD.md`); the default suite keeps the
+helpers they call directly. They need no provider credentials. WhatsApp and
 Slack module integration tests boot a private venue with the packaged module,
 post signed HTTP callbacks, and capture outgoing requests at a loopback fake API.
 They cover verification challenges, rejected signatures, duplicate delivery,
@@ -1216,7 +1395,7 @@ redirects, provider errors, and deadlines before headers and during body reads.
 Run the focused messaging tests and packaged-module checks from the root:
 
 ```bash
-mvn -pl covia-whatsapp,covia-slack,covia-telegram -am verify -Dtest=MessagingHttpTest,WhatsAppAdapterTest,SlackAdapterTest,TelegramAdapterTest,ConversationRouterTest,WebhookInboxTest,WebhookRoutesTest -Dsurefire.failIfNoSpecifiedTests=false
+mvn -pl covia-whatsapp,covia-slack,covia-telegram -am verify -Dcovia.tests.integration=true -Dtest=MessagingHttpTest,WhatsAppAdapterTest,SlackAdapterTest,TelegramAdapterTest,ConversationRouterTest,WebhookInboxTest,WebhookRoutesTest -Dsurefire.failIfNoSpecifiedTests=false
 ```
 
 These are local contract tests; they do not validate live provider credentials,

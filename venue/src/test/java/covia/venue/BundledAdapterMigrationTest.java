@@ -167,10 +167,11 @@ class BundledAdapterMigrationTest {
 		try {
 			IllegalStateException error = assertThrows(IllegalStateException.class, unrecognised::prepareLaunch);
 			assertEquals(TestAdapter.UNRECOGNISED_STATE.formatted(1), error.getMessage());
+			// Before close, whose sync has the working copy adopt the record's equal cells
+			assertSame(mislabelled, venue.get(), "the refused start wrote nothing");
 		} finally {
 			unrecognised.close();
 		}
-		assertSame(mislabelled, venue.get(), "the refused start wrote nothing");
 
 		// A start refuses stored state newer than the adapter, writing nothing.
 		Engine refused = application.mount(key, Maps.empty());
@@ -182,10 +183,10 @@ class BundledAdapterMigrationTest {
 			assertEquals("test", error.adapter());
 			assertEquals(supported + 1, error.stored());
 			assertEquals(supported, error.supported());
+			assertSame(before, venue.get(), "the refused start wrote nothing");
 		} finally {
 			refused.close();
 		}
-		assertSame(before, venue.get(), "the refused start wrote nothing");
 
 		// With no stored state there is nothing to misread: the adapter's own version takes over.
 		Engine taken = application.mount(key, Maps.empty());

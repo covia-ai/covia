@@ -12,7 +12,9 @@ import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
@@ -24,10 +26,20 @@ import org.junit.jupiter.api.io.TempDir;
 
 import com.sun.net.httpserver.HttpServer;
 
+import convex.core.data.ACell;
+import convex.core.data.AMap;
+import convex.core.data.AString;
+import convex.core.data.Maps;
+import convex.core.data.Strings;
+import convex.core.data.Vectors;
+import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
 import covia.exception.InvalidInputException;
+import covia.exception.InvalidStateException;
 import covia.exception.JobFailedException;
-import covia.exception.NotSupportedException;
+import covia.exception.NotFoundException;
+import covia.exception.UnsupportedException;
+import covia.venue.RequestContext;
 
 /**
  * The local engine without sherpa-onnx's natives: a long note is split on its pauses
@@ -220,7 +232,7 @@ class LocalSpeechEngineTest {
 			assertEquals(List.of("API"), speech.spelled(), "and what was spelled is said to have been");
 			assertEquals(Lexicon.UNSAYABLE.formatted("東京"), assertThrows(JobFailedException.class,
 				() -> engine.speak(wavOf("The meeting is at 東京", null, null, null), null)).getMessage(), "fails loudly");
-			assertEquals(LocalSpeechEngine.ENGLISH_ONLY.formatted("test-lexicon"), assertThrows(NotSupportedException.class,
+			assertEquals(LocalSpeechEngine.ENGLISH_ONLY.formatted("test-lexicon"), assertThrows(UnsupportedException.class,
 				() -> engine.speak(wavOf("the", null, null, "fr"), null)).getMessage());
 			assertEquals(1, speaker.asked.size(), "nothing it could not say reached the voice");
 		} finally {
@@ -232,9 +244,9 @@ class LocalSpeechEngineTest {
 		Saying speaker = new Saying();
 		LocalSpeechEngine engine = speaking(voice("v".getBytes(StandardCharsets.UTF_8)), speaker);
 		try {
-			assertEquals(LocalSpeechEngine.WAV_ONLY, assertThrows(NotSupportedException.class,
+			assertEquals(LocalSpeechEngine.WAV_ONLY, assertThrows(UnsupportedException.class,
 				() -> engine.speak(new SpeechEngine.SpeakRequest("hi", null, null, "opus", null, null, null), null)).getMessage());
-			assertEquals(LocalSpeechEngine.OTHER_MODEL.formatted("test-voice"), assertThrows(NotSupportedException.class,
+			assertEquals(LocalSpeechEngine.OTHER_MODEL.formatted("test-voice"), assertThrows(UnsupportedException.class,
 				() -> engine.speak(new SpeechEngine.SpeakRequest("hi", "supertonic-3", null, "wav", null, null, null), null)).getMessage(),
 				"a caller cannot make the venue fetch another voice");
 			assertEquals(LocalSpeechEngine.VOICE_NUMBER, assertThrows(InvalidInputException.class,
@@ -275,6 +287,28 @@ class LocalSpeechEngineTest {
 		}
 	}
 
+	@Test void aNoteUnderWayWhenTheEngineClosesIsStillHeard() throws Exception {
+		CountDownLatch opening = new CountDownLatch(1);
+		CountDownLatch open = new CountDownLatch(1);
+		Counting backend = new Counting();
+		LocalSpeechEngine engine = new LocalSpeechEngine(model("tokens".getBytes(StandardCharsets.UTF_8)), installedLibraries(), false,
+			() -> temp.resolve("cache"), 2, new NativeLibraries(NativeLibraries.PACKS, loaded::add), (m, d, t) -> {
+				opening.countDown();
+				try {
+					open.await();
+				} catch (InterruptedException e) {
+					throw new IllegalStateException(e);
+				}
+				return backend;
+			});
+		CompletableFuture<SpeechEngine.Transcript> note = CompletableFuture.supplyAsync(
+			() -> engine.transcribe(wav(1), "test-model", null, null, null));
+		opening.await();
+		engine.close();
+		open.countDown();
+		assertEquals("heard1", note.join().text(), "the model it opened is released after it, not under it");
+	}
+
 	@Test void aLongNoteIsSplitOnItsPausesIntoPiecesOfAtMostThirtySeconds() throws Exception {
 		Counting backend = new Counting();
 		LocalSpeechEngine engine = engine(model("tokens".getBytes(StandardCharsets.UTF_8)), installedLibraries(), false, NativeLibraries.PACKS, backend);
@@ -288,6 +322,32 @@ class LocalSpeechEngineTest {
 			assertEquals("heard30 heard30 heard15", long75.text());
 			assertEquals(75.0, long75.seconds(), 0.01);
 			assertNull(long75.language());
+		} finally {
+			engine.close();
+		}
+	}
+
+	/**
+	 * A live dictation belongs to the authority of the request that opened it
+	 * ({@link SpeechAdapter}): a request with that authority hears and ends it,
+	 * however narrowed, and any other principal, the opener's own agent
+	 * included, finds no such dictation.
+	 */
+	@Test void aDictationIsReachedOnlyWithTheAuthorityThatOpenedIt() throws Exception {
+		LocalSpeechEngine engine = engine(model("tokens".getBytes(StandardCharsets.UTF_8)), installedLibraries(), false, NativeLibraries.PACKS, new Counting());
+		SpeechAdapter adapter = new SpeechAdapter();
+		AString alice = Strings.create("did:key:z6MkDictationOpener");
+		try {
+			String id = RT.getIn(adapter.listen(RequestContext.of(alice), engine, AudioDecoder.RATE), "id").toString();
+			AMap<AString, ACell> hear = Maps.of("id", id);
+			for (RequestContext other : List.of(RequestContext.of(Strings.create("did:key:z6MkSomeoneElse")),
+					RequestContext.ofAgent(alice, Strings.create("helper")))) {
+				assertThrows(NotFoundException.class, () -> adapter.hear(other, hear), "another principal finds none");
+			}
+			assertNotNull(adapter.hear(RequestContext.of(alice).withCaps(Vectors.empty()), hear),
+				"a request with the opener's authority reaches it, narrowed to nothing as a token's may be");
+			adapter.hear(RequestContext.of(alice), Maps.of("id", id, "end", CVMBool.TRUE));
+			assertThrows(NotFoundException.class, () -> adapter.hear(RequestContext.of(alice), hear), "an ended dictation is gone");
 		} finally {
 			engine.close();
 		}
@@ -313,7 +373,7 @@ class LocalSpeechEngineTest {
 			assertEquals(new LocalSpeechEngine.Heard("heard2 heard0", "", 0), ended, "at the end the rest settles");
 			assertEquals(1, backend.decoded.size(), "the stretch under way is decoded once more, and nothing else");
 			assertTrue(backend.pausesReleased, "and the pause finder is let go");
-			assertEquals(LocalSpeechEngine.DICTATION_CLOSED, assertThrows(NotSupportedException.class,
+			assertEquals(LocalSpeechEngine.DICTATION_CLOSED, assertThrows(InvalidStateException.class,
 				() -> dictation.hear(seconds(1), false), "an ended dictation hears no more").getMessage());
 		} finally {
 			engine.close();
@@ -411,7 +471,9 @@ class LocalSpeechEngineTest {
 		try {
 			JobFailedException e = assertThrows(JobFailedException.class, refused::prepare);
 			assertFalse(e.getMessage().isBlank());
-			assertFalse(Files.exists(temp.resolve("other-cache/native/" + NativeLibraries.VERSION + "/" + platform + ".jar.part")), "nothing half-fetched stays");
+			try (var files = Files.list(temp.resolve("other-cache/native/" + NativeLibraries.VERSION))) {
+				assertTrue(files.noneMatch(f -> f.getFileName().toString().endsWith(".part")), "nothing half-fetched stays");
+			}
 		} finally {
 			refused.close();
 		}
@@ -424,7 +486,7 @@ class LocalSpeechEngineTest {
 			JobFailedException missing = assertThrows(JobFailedException.class, () -> engine.transcribe(wav(1), "test-model", null, null, null));
 			assertEquals(LocalSpeechEngine.NOT_READY.formatted(NativeLibraries.NOT_INSTALLED), missing.getMessage());
 			assertEquals(NativeLibraries.NOT_INSTALLED, RT.getIn(engine.status(), "reason").toString());
-			assertEquals(LocalSpeechEngine.OTHER_MODEL.formatted("test-model"), assertThrows(NotSupportedException.class,
+			assertEquals(LocalSpeechEngine.OTHER_MODEL.formatted("test-model"), assertThrows(UnsupportedException.class,
 				() -> engine.transcribe(wav(1), "parakeet-tdt-v3", null, null, null)).getMessage());
 			assertEquals(LocalSpeechEngine.SPEAK_UNAVAILABLE, assertThrows(JobFailedException.class,
 				() -> engine.speak(new SpeechEngine.SpeakRequest("hi", null, null, "wav", null, null, null), null)).getMessage(),

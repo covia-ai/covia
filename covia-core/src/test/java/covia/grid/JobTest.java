@@ -23,9 +23,10 @@ import convex.core.data.Strings;
 import covia.api.Fields;
 import covia.exception.FaultException;
 import covia.exception.InvalidInputException;
+import covia.exception.InvalidStateException;
 import covia.exception.JobFailedException;
 import covia.exception.JobPollingFailedException;
-import covia.exception.NotSupportedException;
+import covia.exception.UnsupportedException;
 
 /** Isolated because a fault case silences the global fault logger. */
 @org.junit.jupiter.api.parallel.Isolated
@@ -179,7 +180,7 @@ public class JobTest {
 		};
 		var next = job.future().thenRun(() -> {
 			assertEquals(Status.COMPLETE, job.getStatus());
-			assertTrue(released.get(), "the next step must not compete with the completed job's permit");
+			assertTrue(released.get(), "the completed job's cleanup runs before the next step");
 		});
 		job.completeWith(null);
 		next.join();
@@ -252,7 +253,7 @@ public class JobTest {
 			}
 		};
 		job.setPreserveFailureCause(true);
-		var winner = new NotSupportedException("winner");
+		var winner = new InvalidStateException("winner");
 		var update = CompletableFuture.runAsync(() -> job.fail(winner));
 		try {
 			assertTrue(committed.await(5, TimeUnit.SECONDS));
@@ -437,7 +438,27 @@ public class JobTest {
 		assertEquals(Blob.parse("0x1234"),Job.parseID("0x1234"));
 		assertEquals(Blob.parse("0x1234"),Job.parseID(Strings.create("0x1234")));
 	}
-	
+
+	/**
+	 * A job id starts with a time in milliseconds, and the lowest id at a time
+	 * bounds every id with that time or a later one (JOBS.md, Job ids).
+	 */
+	@Test public void testIDTimeAndSeekBound() {
+		long t = 1_763_600_000_123L;
+		Blob bound = Job.lowestIDAt(t);
+		assertEquals(t, Job.idTime(bound));
+
+		// An id as a venue gives it at t: time, counter, random half
+		Blob id = Blob.parse("0x" + String.format("%012x", t) + "ffff" + "ffffffffffffffff");
+		assertEquals(t, Job.idTime(id));
+		assertTrue(bound.compareTo(id) <= 0, "the bound is at or below every id with its time");
+		assertTrue(id.compareTo(Job.lowestIDAt(t + 1)) < 0, "and below the bound of the next millisecond");
+		assertTrue(Job.lowestIDAt(t - 1).compareTo(bound) < 0);
+
+		assertTrue(Job.lowestIDAt(-5).compareTo(Job.lowestIDAt(0)) == 0, "a time before the epoch bounds every id");
+		assertThrows(IllegalArgumentException.class, () -> Job.idTime(Blob.parse("0x1234")));
+	}
+
 	@Test public void testBuild() {
 		AMap<AString,ACell> data = Maps.of(
 			Fields.ID,"123456",
@@ -472,14 +493,14 @@ public class JobTest {
 	@Test
 	public void testPauseAndResumeErrorsExplainExpectedStateOrAction() {
 		Job pending = Job.create(Maps.of(Fields.ID, "pending", Fields.STATUS, Status.PENDING));
-		NotSupportedException pendingPause = assertThrows(NotSupportedException.class, pending::pause);
+		InvalidStateException pendingPause = assertThrows(InvalidStateException.class, pending::pause);
 		assertFalse(pendingPause.getMessage().isBlank());
 
 		Job running = Job.create(Maps.of(Fields.ID, "running", Fields.STATUS, Status.STARTED));
-		NotSupportedException unsupportedPause = assertThrows(NotSupportedException.class, running::pause);
+		UnsupportedException unsupportedPause = assertThrows(UnsupportedException.class, running::pause);
 		assertFalse(unsupportedPause.getMessage().isBlank());
 
-		NotSupportedException runningResume = assertThrows(NotSupportedException.class, running::resume);
+		InvalidStateException runningResume = assertThrows(InvalidStateException.class, running::resume);
 		assertFalse(runningResume.getMessage().isBlank());
 	}
 

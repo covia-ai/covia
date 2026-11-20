@@ -1,0 +1,281 @@
+package covia.adapter.token;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+import java.util.HashSet;
+import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestInfo;
+
+import convex.auth.ucan.Capability;
+import convex.auth.ucan.UCAN;
+import convex.core.crypto.AKeyPair;
+import convex.core.data.ACell;
+import convex.core.data.AMap;
+import convex.core.data.AString;
+import convex.core.data.Maps;
+import convex.core.data.Strings;
+import convex.core.data.Vectors;
+import convex.core.lang.RT;
+import covia.adapter.AAdapter;
+import covia.adapter.MCPAdapter;
+import covia.adapter.TestAdapter;
+import covia.api.Abilities;
+import covia.api.Fields;
+import covia.exception.ConfigurationException;
+import covia.grid.Job;
+import covia.grid.Principals;
+import covia.grid.Status;
+import covia.venue.Config;
+import covia.venue.Engine;
+import covia.venue.RequestContext;
+import covia.venue.TestEngine;
+
+/**
+ * The capabilities on access tokens (ACCESS_TOKENS.md), with the test
+ * adapter as a second access point beside MCP: working on a token directly
+ * needs {@code admin/token/<p>} for every access point it carries, and the MCP
+ * token operations reach only tokens accepted at MCP alone. Each refusal has
+ * a control that differs from it in one thing and succeeds.
+ */
+public class TokenAdapterTest {
+
+	private final Engine engine = TestEngine.ENGINE;
+
+	private static final AString TEST = Strings.intern("test");
+	private static final AMap<AString, ACell> MCP = Maps.of(MCPAdapter.ACCESS_POINT, Maps.of(Fields.TOOLS, Vectors.of("v/ops/covia/read")));
+	private static final AMap<AString, ACell> BOTH = MCP.assoc(TEST, Maps.empty());
+
+	private Job run(String op, ACell input, RequestContext ctx) {
+		return run(engine, op, input, ctx);
+	}
+
+	private static Job run(Engine on, String op, ACell input, RequestContext ctx) {
+		Job job = on.jobs().invokeOperation(op, input, ctx);
+		TestEngine.awaitJob(job, Job::isFinished, 10000, () -> op + " never finished");
+		return job;
+	}
+
+	private static ACell complete(Job job) {
+		assertEquals(Status.COMPLETE, job.getStatus(), job::getErrorMessage);
+		return job.getOutput();
+	}
+
+	private static String failure(Job job) {
+		assertEquals(Status.FAILED, job.getStatus(), () -> "expected a refusal, got " + job.getData());
+		return job.getErrorMessage();
+	}
+
+	private static ACell cap(String with, AString can) {
+		return Capability.create(Strings.create(with), can);
+	}
+
+	/** Creates agent {@code id} of {@code owner} with {@code caps}, and returns the context it acts in. */
+	private RequestContext agent(AString owner, String id, ACell caps) {
+		complete(run("v/ops/agent/create", Maps.of(Fields.AGENT_ID, id,
+			Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/echo", Fields.CAPS, caps)), RequestContext.of(owner)));
+		return engine.context(owner, Principals.agentDID(owner, Strings.create(id)));
+	}
+
+	private Job create(RequestContext ctx, String name, AMap<AString, ACell> access) {
+		return run("v/ops/token/create", Maps.of(Fields.NAME, name, Fields.ACCESS, access), ctx);
+	}
+
+	private Job named(String op, RequestContext ctx, String name) {
+		return run(op, Maps.of(Fields.NAME, name), ctx);
+	}
+
+	/**
+	 * A request through a user's token is that user in person, so only the user
+	 * in person makes or rotates one: not a delegate acting as the user under
+	 * admin/sudo, nor work the venue carries on for the user. An agent's token
+	 * is never in person, so an agent makes its own.
+	 */
+	@Test
+	public void onlyTheUserInPersonMakesOrRotatesTheirToken() {
+		AKeyPair aliceKey = AKeyPair.generate(), bobKey = AKeyPair.generate();
+		AString alice = UCAN.toDIDKey(aliceKey.getAccountKey()), bob = UCAN.toDIDKey(bobKey.getAccountKey());
+		engine.getVenueState().users().ensure(alice);
+		engine.getVenueState().users().ensure(bob);
+		UCAN sudo = UCAN.create(aliceKey, bobKey.getAccountKey(), System.currentTimeMillis() / 1000 + 300,
+			Vectors.of(Capability.create(alice, Abilities.ADMIN_SUDO)), Vectors.empty());
+		RequestContext delegate = engine.sudoContext(RequestContext.of(bob).withProofs(Vectors.of(sudo.toMap())), alice);
+
+		complete(create(RequestContext.of(alice), "mine", MCP));
+		assertEquals(Engine.NOT_IN_PERSON, failure(create(delegate, "theirs", MCP)), "a delegate acts as her, but is not her");
+		assertEquals(Engine.NOT_IN_PERSON, failure(create(engine.context(alice), "later", MCP)), "nor is work carried on for her");
+		assertEquals(Engine.NOT_IN_PERSON, failure(run("v/ops/token/update",
+			Maps.of(Fields.NAME, "mine", Fields.ROTATE, true), delegate)));
+		complete(run("v/ops/token/update", Maps.of(Fields.NAME, "mine", Fields.ROTATE, true), RequestContext.of(alice)));
+
+		complete(create(agent(alice, "minter", Vectors.of(cap("v/ops/", Abilities.INVOKE),
+			cap("x/token/", Abilities.ADMIN_TOKEN_MCP))), "agents", MCP));
+	}
+
+	private static Set<String> names(ACell listed) {
+		Set<String> names = new HashSet<>();
+		for (ACell token : RT.ensureVector(RT.getIn(listed, "tokens"))) names.add(RT.getIn(token, Fields.NAME).toString());
+		return names;
+	}
+
+	@Test
+	public void directTokenWorkNeedsTheAdminLeafOfEveryAccessPointCarried(TestInfo info) {
+		AString alice = TestEngine.uniqueDID(info);
+		RequestContext owner = RequestContext.of(alice);
+		ACell invoke = cap("v/ops/", Abilities.INVOKE);
+		ACell mcpLeaf = cap("x/token/", Abilities.ADMIN_TOKEN_MCP);
+		ACell testLeaf = cap("x/token/", TokenAdapter.administers(TEST));
+
+		// An owner holds every leaf in its own namespace
+		complete(create(owner, "owned", BOTH));
+
+		// Making a token needs the leaf of each access point it names, or their parent
+		RequestContext mcpAdmin = agent(alice, "mcp-admin", Vectors.of(invoke, mcpLeaf));
+		failure(create(mcpAdmin, "wider", BOTH));
+		complete(create(mcpAdmin, "narrow", MCP));
+		complete(create(agent(alice, "both-admin", Vectors.of(invoke, mcpLeaf, testLeaf)), "both", BOTH));
+		complete(create(agent(alice, "parent", Vectors.of(invoke, cap("x/token/", Abilities.ADMIN_TOKEN))), "parented", BOTH));
+
+		// Changing one needs the leaves of what it carries before and after
+		failure(run("v/ops/token/update", Maps.of(Fields.NAME, "narrow", Fields.ACCESS, BOTH), mcpAdmin));
+		complete(run("v/ops/token/update", Maps.of(Fields.NAME, "narrow", Fields.CAPS, Vectors.empty()), mcpAdmin));
+
+		// Reading its bearer again: past the gate, this venue keeps none
+		failure(named("v/ops/token/get", mcpAdmin, "owned"));
+		assertEquals(TokenAdapter.RAW_NOT_KEPT, failure(named("v/ops/token/get", mcpAdmin, "narrow")));
+
+		// Deleting one needs the leaves of what it carries
+		failure(named("v/ops/token/delete", mcpAdmin, "owned"));
+		complete(named("v/ops/token/delete", mcpAdmin, "narrow"));
+		assertNull(engine.tokens().token(alice, Strings.create("narrow")).record());
+		assertNotNull(engine.tokens().token(alice, Strings.create("owned")).record());
+	}
+
+	@Test
+	public void theMcpTokenOperationsReachOnlyTokensAcceptedAtMcpAlone(TestInfo info) {
+		AString alice = TestEngine.uniqueDID(info);
+		RequestContext owner = RequestContext.of(alice);
+		complete(create(owner, "both", BOTH));
+		complete(run("v/ops/mcp/create-token", Maps.of(Fields.NAME, "plain", Fields.TOOLS, Vectors.of("v/ops/covia/read")), owner));
+
+		String beyond = TokenAdapter.NOT_ONLY_AT.formatted("both", MCPAdapter.ACCESS_POINT);
+		assertEquals(beyond, failure(run("v/ops/mcp/update-token", Maps.of(Fields.NAME, "both", Fields.CAPS, Vectors.empty()), owner)));
+		assertEquals(beyond, failure(named("v/ops/mcp/delete-token", owner, "both")));
+		assertEquals(beyond, failure(named("v/ops/mcp/get-token", owner, "both")));
+		complete(run("v/ops/mcp/update-token", Maps.of(Fields.NAME, "plain", Fields.CAPS, Vectors.empty()), owner));
+
+		assertEquals(Set.of("plain"), names(complete(run("v/ops/mcp/list-tokens", Maps.empty(), owner))));
+		assertEquals(Set.of("both", "plain"), names(complete(run("v/ops/token/list", Maps.empty(), owner))));
+
+		// Taking an MCP token beyond MCP takes it out of the MCP operations' reach
+		complete(run("v/ops/token/update", Maps.of(Fields.NAME, "plain", Fields.ACCESS, BOTH), owner));
+		assertEquals(TokenAdapter.NOT_ONLY_AT.formatted("plain", MCPAdapter.ACCESS_POINT),
+			failure(named("v/ops/mcp/delete-token", owner, "plain")));
+		complete(named("v/ops/token/delete", owner, "plain"));
+	}
+
+	private Job read(RequestContext ctx, String path) {
+		return run("v/ops/covia/read", Maps.of(Fields.PATH, path), ctx);
+	}
+
+	@Test
+	public void aUserSeesItsTokensAtXTokenWithoutWhatProvesThem(TestInfo info) {
+		AString alice = TestEngine.uniqueDID(info);
+		RequestContext owner = RequestContext.of(alice);
+		String bearer = RT.getIn(complete(create(owner, "seen", MCP)), Fields.TOKEN).toString();
+		AccessToken token = engine.tokens().token(alice, Strings.create("seen"));
+
+		AMap<AString, ACell> view = RT.ensureMap(RT.getIn(complete(read(owner, "x/token")), Fields.VALUE));
+		AMap<AString, ACell> seen = RT.ensureMap(view.get(Strings.create("seen")));
+		assertEquals(MCP, seen.get(Fields.ACCESS));
+		assertEquals(alice, seen.get(Fields.ISSUER));
+		String shown = view.toString();
+		assertFalse(shown.contains(bearer), "never the bearer");
+		assertFalse(shown.contains(token.hash().toString()), "nor its hash");
+		assertFalse(shown.contains(token.id().toString()), "nor the token's id");
+		assertEquals(MCP, RT.getIn(complete(read(owner, "x/token/seen")), Fields.VALUE, Fields.ACCESS), "one token by name");
+		failure(run("v/ops/covia/write", Maps.of(Fields.PATH, "x/token/seen", Fields.VALUE, 1), owner));
+
+		// An agent sees it with crud/read on x/token
+		ACell invoke = cap("v/ops/", Abilities.INVOKE);
+		failure(read(agent(alice, "blind", Vectors.of(invoke)), "x/token"));
+		assertEquals(view, RT.getIn(complete(read(agent(alice, "sighted", Vectors.of(invoke, cap("x/token", Capability.CRUD_READ))), "x/token")), Fields.VALUE));
+	}
+
+	@Test
+	public void anotherUserSeesATokenOnlyThroughTheOwnersGrant() {
+		AKeyPair aliceKeys = AKeyPair.generate();
+		AString alice = UCAN.toDIDKey(aliceKeys.getAccountKey());
+		AString bob = UCAN.toDIDKey(AKeyPair.generate().getAccountKey());
+		complete(create(RequestContext.of(alice), "shared", MCP));
+		String one = alice + "/x/token/shared";
+
+		failure(read(RequestContext.of(bob), one));
+		long expiry = engine.currentTimestamp().longValue() / 1000 + 3600;
+		UCAN grant = UCAN.create(aliceKeys, UCAN.fromDIDKey(bob), expiry,
+			Vectors.of(Capability.create(Strings.create(one), Capability.CRUD_READ)), Vectors.empty());
+		RequestContext granted = RequestContext.of(bob).withProofs(Vectors.of(grant.toMap()));
+		assertEquals(MCP, RT.getIn(complete(read(granted, one)), Fields.VALUE, Fields.ACCESS), "the owner's token, not the reader's");
+		failure(read(granted, alice + "/x/token"));
+	}
+
+	/** An access point whose settings can be refused, so that a restart leaves it enabled but failed. */
+	private static final class FailingAccessPoint extends AAdapter implements TokenAccessPoint {
+		static final String NAME = "failing";
+		static final String REFUSED = "failing refuses its settings";
+		volatile boolean refuse;
+
+		@Override public String getName() { return NAME; }
+		@Override public String getDescription() { return "An access point that fails on demand"; }
+		@Override public void configure(AMap<AString, ACell> config, boolean strict) {
+			if (refuse) throw new ConfigurationException(REFUSED);
+		}
+		@Override public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
+			return CompletableFuture.completedFuture(input);
+		}
+		@Override public AMap<AString, ACell> tokenEntry(RequestContext ctx, ACell requested) {
+			return Maps.empty();
+		}
+	}
+
+	@Test
+	public void aFailedAdapterIsNoAccessPoint(TestInfo info) {
+		Engine own = Engine.createTemp(Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true)));
+		try {
+			Engine.addDemoAssets(own);
+			FailingAccessPoint failing = new FailingAccessPoint();
+			own.registerAdapter(failing);
+			AString point = Strings.create(FailingAccessPoint.NAME);
+			RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));
+			AMap<AString, ACell> access = Maps.of(point, Maps.empty());
+			complete(run(own, "v/ops/token/create", Maps.of(Fields.NAME, "running", Fields.ACCESS, access), owner));
+			assertSame(failing, TokenAdapter.accessPoint(own, point));
+
+			failing.refuse = true;
+			assertEquals(FailingAccessPoint.REFUSED,
+				assertThrows(ConfigurationException.class, () -> own.restartAdapter(FailingAccessPoint.NAME)).getMessage());
+			assertNull(TokenAdapter.accessPoint(own, point), "a failed adapter accepts no tokens");
+			assertEquals(TokenAdapter.ACCESS_POINT_UNKNOWN.formatted(point),
+				failure(run(own, "v/ops/token/create", Maps.of(Fields.NAME, "failed", Fields.ACCESS, access), owner)));
+		} finally {
+			own.close();
+		}
+	}
+
+	@Test
+	public void aTokensAccessNamesRunningAccessPointsWithEntriesTheyAccept(TestInfo info) {
+		RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));
+		assertEquals(TokenAdapter.ACCESS_INVALID, failure(create(owner, "none", Maps.empty())));
+		assertEquals(TokenAdapter.ACCESS_POINT_UNKNOWN.formatted("nowhere"),
+			failure(create(owner, "nowhere", Maps.of("nowhere", Maps.empty()))));
+		assertEquals(TokenAdapter.ACCESS_POINT_UNKNOWN.formatted("secret"),
+			failure(create(owner, "not-one", Maps.of("secret", Maps.empty()))), "a running adapter that accepts no tokens");
+		assertEquals(TestAdapter.TOKEN_ENTRY_INVALID, failure(create(owner, "bad", Maps.of(TEST, "x"))));
+		assertEquals(MCPAdapter.TOOLS_INVALID, failure(create(owner, "no-tools", Maps.of(MCPAdapter.ACCESS_POINT, Maps.empty()))));
+		AMap<AString, ACell> made = RT.ensureMap(complete(create(owner, "fine", Maps.of(TEST, Maps.of("x", 1)))));
+		assertEquals(Maps.of(TEST, Maps.of("x", 1)), made.get(Fields.ACCESS), "an access point keeps the entry it accepted");
+		assertTrue(AccessTokens.isBearer(RT.getIn(made, Fields.TOKEN).toString()));
+	}
+}

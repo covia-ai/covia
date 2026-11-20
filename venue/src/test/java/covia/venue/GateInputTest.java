@@ -21,9 +21,8 @@ import covia.api.Fields;
 
 /**
  * What a capability gate is told about the invocation it rules on:
- * {@code {operation, input, caller, owner?}}, where {@code caller} is the
- * principal that acted and {@code owner} the namespace it acted in, present
- * only when that differs.
+ * {@code {operation, input, caller}}, where {@code caller} is the principal
+ * that acted.
  */
 class GateInputTest {
 
@@ -67,7 +66,7 @@ class GateInputTest {
 			Maps.of("gate", Strings.create(GATE)))));
 	}
 
-	@Test void anAgentIsTheCallerInItsOwnersNamespace(TestInfo info) {
+	@Test void anAgentIsTheCaller(TestInfo info) {
 		Recorder recorder = recorder();
 		AString owner = TestEngine.uniqueDID(info);
 		RequestContext agent = gated(RequestContext.ofAgent(owner, Strings.create("gated")));
@@ -76,11 +75,11 @@ class GateInputTest {
 
 		AMap<AString, ACell> check = checkOf(recorder, marker);
 		assertEquals(Strings.create(ECHO), check.get(Fields.OPERATION));
-		assertEquals(agent.getCallerDID(), check.get(Fields.CALLER), "the gate is told who acted");
-		assertEquals(owner, check.get(Fields.OWNER), "and whose namespace it acted in");
+		assertEquals(agent.getAuthorityDID(), check.get(Fields.CALLER), "the gate is told who acted");
+		assertFalse(check.containsKey(Fields.OWNER), "and nothing beside it");
 	}
 
-	@Test void aUserActingInItsOwnNamespaceNamesNoOwner(TestInfo info) {
+	@Test void aUserIsTheCaller(TestInfo info) {
 		Recorder recorder = recorder();
 		AString user = TestEngine.uniqueDID(info);
 		AString marker = Strings.create("user " + user);

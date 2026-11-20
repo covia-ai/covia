@@ -79,8 +79,14 @@ public class ModuleLoaderTest {
 	}
 
 	private static Engine bootWith(ACell modulesEntry) throws Exception {
+		return bootWith(modulesEntry, Maps.empty());
+	}
+
+	/** A venue with one module and the given {@code adapters.modtest} settings. */
+	private static Engine bootWith(ACell modulesEntry, AMap<AString, ACell> modtest) throws Exception {
 		AMap<AString, ACell> config = Maps.of(
 			Config.MODULES, Vectors.of(modulesEntry),
+			Config.ADAPTERS, Maps.of(Strings.create("modtest"), modtest),
 			Config.USERS, Maps.of(Config.AUTO_CREATE, true));
 		Engine engine = Engine.createTemp(config);
 		Engine.addDemoAssets(engine);
@@ -90,9 +96,7 @@ public class ModuleLoaderTest {
 	@Test
 	public void testModuleLoadsAndServes(@TempDir Path dir) throws Exception {
 		Path jar = buildModuleJar(dir);
-		Engine engine = bootWith(Maps.of(
-			"path", jar.toString(),
-			"config", Maps.of("label", "configured")));
+		Engine engine = bootWith(Strings.create(jar.toString()), Maps.of("label", "configured"));
 		try {
 			// Registered, and defined by the module loader (child-first for
 			// the non-shared modtest.* package)
@@ -101,8 +105,10 @@ public class ModuleLoaderTest {
 			assertTrue(adapter.getClass().getClassLoader() instanceof ModuleClassLoader,
 				"module adapter must be defined by the module classloader, was: "
 					+ adapter.getClass().getClassLoader());
+			assertNull(engine.getRegisteredAdapter(modtest.ClasspathTestAdapter.NAME),
+				"an adapter the venue's classpath declares does not come in with the module");
 			assertTrue(adapter.getDescription().contains("configured"),
-				"module-local config must be supplied before registration");
+				"its adapters.modtest settings reach it as it registers");
 
 			// Catalog materialised from a resource that exists ONLY in the jar
 			RequestContext ctx = RequestContext.of(Strings.create("did:test:moduleloader"));
@@ -121,13 +127,13 @@ public class ModuleLoaderTest {
 	}
 
 	@Test
-	public void testModuleAdapterMayRemainInactive(@TempDir Path dir) throws Exception {
+	public void testModuleAdapterCanBeSwitchedOff(@TempDir Path dir) throws Exception {
 		Path jar = buildModuleJar(dir);
-		Engine engine = bootWith(Maps.of(
-			"path", jar.toString(),
-			"config", Maps.of("enabled", false)));
+		Engine engine = bootWith(Strings.create(jar.toString()), Maps.of(Config.ENABLED, false));
 		try {
 			assertNull(engine.getAdapter("modtest"));
+			assertTrue(engine.getDisabledAdapterNames().contains("modtest"), "disabled, like any adapter");
+			assertTrue(engine.getModule("modtest-module").adapterNames().contains("modtest"));
 		} finally {
 			engine.close();
 		}
@@ -178,15 +184,16 @@ public class ModuleLoaderTest {
 	}
 
 	@Test
-	public void testRefusedModuleSettingFailsBoot(@TempDir Path dir) throws Exception {
-		AMap<AString, ACell> config = Maps.of(Config.MODULES, Vectors.of(Maps.of(
-			"path", buildModuleJar(dir).toString(), "config", Maps.of("label", 42))));
-		Engine engine = Engine.createTemp(config);
+	public void testRefusedModuleAdapterSettingLeavesItFailed(@TempDir Path dir) throws Exception {
+		Engine engine = TestEngine.application().mount(AKeyPair.generate(), new Config(Maps.of(
+			Config.MODULES, Vectors.of(Strings.create(buildModuleJar(dir).toString())),
+			Config.ADAPTERS, Maps.of(Strings.create("modtest"), Maps.of("label", 42)))));
 		try {
-			ConfigurationException e = assertThrows(ConfigurationException.class,
-				() -> Engine.addDemoAssets(engine), "a setting in the venue config is the operator's");
-			assertInstanceOf(IllegalArgumentException.class, e.getCause(), "the module's own refusal is kept");
-			assertEquals(e.getCause().getMessage(), e.getMessage());
+			engine.launch();
+			assertTrue(engine.isStarted(), "the venue starts without it, as without any adapter");
+			assertNull(engine.getAdapter("modtest"));
+			assertEquals(modtest.ModuleTestAdapter.LABEL_NOT_STRING, engine.adapterFailure("modtest"),
+				"enabled but failed, with the adapter's own reason");
 		} finally {
 			engine.close();
 		}
@@ -275,14 +282,27 @@ public class ModuleLoaderTest {
 	// ========== Runtime module lifecycle (v/ops/venue/module/*) ==========
 
 	private static Engine bootDynamic(Path dir, boolean anyPath) {
+		return bootDynamic(dir, anyPath, Maps.empty());
+	}
+
+	/** A venue that loads modules at runtime, with the given {@code adapters.modtest} settings. */
+	private static Engine bootDynamic(Path dir, boolean anyPath, AMap<AString, ACell> modtest) {
 		AMap<AString, ACell> dyn = Maps.of(
 			Config.ENABLED, true,
 			Strings.create("dir"), Strings.create(dir.toString()));
 		if (anyPath) dyn = dyn.assoc(Strings.create("anyPath"), CVMBool.TRUE);
 		Engine engine = Engine.createTemp(Maps.of(Config.DYNAMIC_MODULES, dyn,
+			Config.ADAPTERS, Maps.of(Strings.create("modtest"), modtest),
 			Config.USERS, Maps.of(Config.AUTO_CREATE, true)));
 		Engine.addDemoAssets(engine);
 		return engine;
+	}
+
+	/** Sets {@code adapters.modtest.label} on the running venue. */
+	private static void configure(Engine engine, String label) throws Exception {
+		asVenue(engine, "v/ops/venue/adapter/configure", Maps.of(
+			Strings.create("name"), Strings.create("modtest"),
+			Strings.create("config"), Maps.of("label", label)));
 	}
 
 	private static ACell asVenue(Engine engine, String op, AMap<AString, ACell> input) throws Exception {
@@ -301,7 +321,7 @@ public class ModuleLoaderTest {
 		Path jar = buildModuleJar(dir);
 		Path overrideJar = dir.resolve("override-module.jar");
 		Files.copy(jar, overrideJar);
-		Engine engine = bootDynamic(dir, false);
+		Engine engine = bootDynamic(dir, false, Maps.of("label", "runtime"));
 		try {
 			RequestContext ctx = RequestContext.of(Strings.create("did:test:runtimeload"));
 			assertNull(engine.getAdapter("modtest"));
@@ -309,12 +329,11 @@ public class ModuleLoaderTest {
 
 			// Load by jar NAME inside the staging directory
 			ACell loaded = asVenue(engine, "v/ops/venue/module/load", Maps.of(
-				Strings.create("module"), Strings.create(jar.getFileName().toString()),
-				Strings.create("config"), Maps.of("label", "runtime")));
+				Strings.create("module"), Strings.create(jar.getFileName().toString())));
 			assertEquals(Strings.create("modtest-module"), RT.getIn(loaded, "name"));
 			AAdapter adapter = engine.getAdapter("modtest");
 			assertNotNull(adapter, "module adapter must register at runtime");
-			assertTrue(adapter.getDescription().contains("runtime"), "module config reaches the adapter");
+			assertTrue(adapter.getDescription().contains("runtime"), "adapters.modtest reaches the adapter");
 			assertNotNull(engine.getModule("modtest-module"));
 			assertEquals("modtest-module", engine.moduleOf("modtest").name());
 
@@ -332,18 +351,19 @@ public class ModuleLoaderTest {
 				Maps.of(Strings.create("value"), Strings.create("hot")), ctx);
 			assertEquals(Strings.create("hot"), RT.getIn(job.awaitResult(15000), "value"));
 
-			// Loading the same module again is an operator-directed replacement.
+			// Loading the same module again is an operator-directed replacement,
+			// which takes the adapter's settings as they stand.
+			configure(engine, "replacement");
 			asVenue(engine, "v/ops/venue/module/load", Maps.of(
-				Strings.create("module"), Strings.create(jar.getFileName().toString()),
-				Strings.create("config"), Maps.of("label", "replacement")));
+				Strings.create("module"), Strings.create(jar.getFileName().toString())));
 			AAdapter replacement = engine.getAdapter("modtest");
 			assertNotSame(adapter, replacement);
 			assertTrue(replacement.getDescription().contains("replacement"));
 
 			// A differently named module may overwrite the same adapter name too.
+			configure(engine, "override");
 			asVenue(engine, "v/ops/venue/module/load", Maps.of(
-				Strings.create("module"), Strings.create(overrideJar.getFileName().toString()),
-				Strings.create("config"), Maps.of("label", "override")));
+				Strings.create("module"), Strings.create(overrideJar.getFileName().toString())));
 			AAdapter override = engine.getAdapter("modtest");
 			assertNotSame(replacement, override);
 			assertTrue(override.getDescription().contains("override"));
@@ -444,22 +464,30 @@ public class ModuleLoaderTest {
 			assertNull(engine.getAdapter("modtest"));
 			assertNull(engine.getModule("modtest-module"));
 
-			// A setting the module refuses is the caller's too
-			e = assertThrows(ExecutionException.class,
-				() -> asVenue(engine, "v/ops/venue/module/load", Maps.of(
-					Strings.create("module"), Strings.create(jar.getFileName().toString()),
-					Strings.create("config"), Maps.of("label", 42))));
-			assertInstanceOf(InvalidInputException.class, rootCause(e), String.valueOf(rootCause(e)));
-			assertInstanceOf(IllegalArgumentException.class, rootCause(e).getCause(), "the module's own refusal is kept");
-			assertEquals(rootCause(e).getCause().getMessage(), rootCause(e).getMessage());
-			assertNull(engine.getAdapter("modtest"));
-
 			String goodHash = Blob.wrap(MessageDigest.getInstance("SHA-256")
 				.digest(Files.readAllBytes(jar))).toHexString();
 			ACell loaded = asVenue(engine, "v/ops/venue/module/load", Maps.of(
 				Strings.create("module"), Strings.create(jar.getFileName().toString()),
 				Strings.create("sha256"), Strings.create(goodHash)));
 			assertEquals(Strings.create(goodHash), RT.getIn(loaded, "sha256"));
+		} finally {
+			engine.close();
+		}
+	}
+
+	@Test
+	public void testRuntimeLoadRefusedSettingIsAConfigurationError(@TempDir Path dir) throws Exception {
+		Path jar = buildModuleJar(dir);
+		Engine engine = bootDynamic(dir, false, Maps.of("label", 42));
+		try {
+			ExecutionException e = assertThrows(ExecutionException.class,
+				() -> asVenue(engine, "v/ops/venue/module/load", Maps.of(
+					Strings.create("module"), Strings.create(jar.getFileName().toString()))));
+			assertInstanceOf(ConfigurationException.class, rootCause(e), String.valueOf(rootCause(e)));
+			assertEquals(modtest.ModuleTestAdapter.LABEL_NOT_STRING, rootCause(e).getMessage(),
+				"the adapter's own refusal reaches the caller unchanged");
+			assertNull(engine.getAdapter("modtest"));
+			assertNull(engine.getModule("modtest-module"), "nothing of the module is left loaded");
 		} finally {
 			engine.close();
 		}
@@ -490,6 +518,74 @@ public class ModuleLoaderTest {
 			assertNotNull(engine.resolveAsset(Strings.create("v/ops/modtest/echo"), ctx),
 				"unloading leaves catalog metadata for possible later replacement");
 			assertTrue(engine.getModules().isEmpty());
+		} finally {
+			engine.close();
+		}
+	}
+
+	/**
+	 * An adapter the venue's own classpath declares as a service, as an
+	 * embedder's adapter jars do, is never a module's: loading a module at
+	 * runtime neither registers nor replaces it, the module's records name only
+	 * the adapters its jar declares, and unloading the module leaves it running.
+	 */
+	@Test
+	public void testModuleClaimsOnlyItsOwnAdapters(@TempDir Path dir) throws Exception {
+		Path jar = buildModuleJar(dir);
+		Engine engine = bootDynamic(dir, false);
+		try {
+			String embeddedName = modtest.ClasspathTestAdapter.NAME;
+			AAdapter embedded = new modtest.ClasspathTestAdapter();
+			engine.registerAdapter(embedded);
+
+			asVenue(engine, "v/ops/venue/module/load", Maps.of(
+				Strings.create("module"), Strings.create(jar.getFileName().toString())));
+			assertNotNull(engine.getAdapter("modtest"));
+			assertSame(embedded, engine.getAdapter(embeddedName), "loading the module leaves it as it was");
+			assertNull(engine.moduleOf(embeddedName));
+			assertEquals(java.util.List.of("modtest"), engine.getModule("modtest-module").adapterNames());
+			ACell modInfo = engine.resolvePath(Strings.create("v/info/modules/modtest-module"), engine.venueContext());
+			assertEquals(Vectors.of(Strings.create("modtest")), RT.getIn(modInfo, "adapters"));
+			ACell info = engine.resolvePath(Strings.create("v/info/adapters/" + embeddedName), engine.venueContext());
+			assertNotNull(info);
+			assertNull(RT.getIn(info, "module"), "no module owns it");
+
+			asVenue(engine, "v/ops/venue/module/unload",
+				Maps.of(Strings.create("name"), Strings.create("modtest-module")));
+			assertNull(engine.getAdapter("modtest"));
+			assertSame(embedded, engine.getAdapter(embeddedName), "unloading the module leaves it running");
+		} finally {
+			engine.close();
+		}
+	}
+
+	/**
+	 * A module owns an adapter it registered, not a name: one an embedder
+	 * registers in its place under the same name is not the module's, and
+	 * unloading the module leaves it running.
+	 */
+	@Test
+	public void testAdapterRegisteredOverAModulesIsNotTheModules(@TempDir Path dir) throws Exception {
+		Path jar = buildModuleJar(dir);
+		Engine engine = bootDynamic(dir, false);
+		try {
+			asVenue(engine, "v/ops/venue/module/load", Maps.of(
+				Strings.create("module"), Strings.create(jar.getFileName().toString())));
+			assertEquals("modtest-module", engine.moduleOf("modtest").name());
+
+			AAdapter embedded = new modtest.ClasspathTestAdapter() {
+				@Override public String getName() { return "modtest"; }
+			};
+			engine.registerAdapter(embedded);
+			assertSame(embedded, engine.getAdapter("modtest"));
+			assertNull(engine.moduleOf("modtest"));
+			ACell info = engine.resolvePath(Strings.create("v/info/adapters/modtest"), engine.venueContext());
+			assertNotNull(info);
+			assertNull(RT.getIn(info, "module"), "no module owns it");
+
+			asVenue(engine, "v/ops/venue/module/unload",
+				Maps.of(Strings.create("name"), Strings.create("modtest-module")));
+			assertSame(embedded, engine.getAdapter("modtest"), "unloading the module leaves it running");
 		} finally {
 			engine.close();
 		}

@@ -70,6 +70,11 @@ import covia.adapter.JVMAdapter;
 import covia.adapter.SchemaAdapter;
 import covia.adapter.LangChainAdapter;
 import covia.adapter.MCPAdapter;
+import covia.adapter.callable.Callable;
+import covia.adapter.callable.CallableAdapter;
+import covia.adapter.token.AccessToken;
+import covia.adapter.token.AccessTokens;
+import covia.adapter.token.TokenAdapter;
 import covia.adapter.Orchestrator;
 import covia.adapter.SecretAdapter;
 import covia.adapter.DLFSAdapter;
@@ -82,11 +87,16 @@ import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.exception.ConfigurationException;
+import covia.exception.CoviaException;
+import covia.exception.FaultException;
+import covia.exception.IntegrityException;
 import covia.exception.InvalidInputException;
+import covia.exception.InvalidStateException;
 import covia.exception.NotFoundException;
-import covia.exception.NotSupportedException;
 import covia.exception.RemoteFetchException;
+import covia.exception.StillStartingException;
 import covia.exception.UnavailableException;
+import covia.exception.UnsupportedException;
 import covia.exception.WrongScopeException;
 import covia.grid.AContent;
 import covia.grid.Asset;
@@ -98,7 +108,9 @@ import covia.grid.Operation;
 import covia.grid.Venue;
 import covia.grid.auth.VenueAuth;
 import covia.grid.client.VenueHTTP;
+import covia.lattice.Cap;
 import covia.lattice.CapabilityChecker;
+import covia.lattice.Caps;
 import covia.lattice.Covia;
 import covia.lattice.Namespace;
 import covia.venue.api.CoviaAPI;
@@ -173,9 +185,9 @@ public class Engine {
 
 	/**
 	 * Adapters that are registered but <em>disabled</em> — parked at boot by
-	 * {@code adapters.<name>.enabled: false} (or by declining
-	 * {@link AAdapter#configure}), or retracted at runtime via
-	 * {@link #disableAdapter}. Not dispatchable and absent from
+	 * {@code adapters.<name>.enabled: false}, parked failed when they refuse
+	 * their settings or cannot install ({@link #adapterFailure}), or retracted
+	 * at runtime via {@link #disableAdapter}. Not dispatchable and absent from
 	 * {@code v/info/adapters}; durable catalog metadata may remain and is
 	 * overwritten on a later registration.
 	 */
@@ -221,7 +233,18 @@ public class Engine {
 		"covia", "agent", "dlfs", "hitl", "http", "file", "grid", "venue");
 
 	/** Explicit lifecycle: construction is inert; start/close own active resources. */
-	private enum Lifecycle { NEW, STARTING, PREPARED, STARTED, FAILED, CLOSING, CLOSED }
+	private enum Lifecycle {
+		NEW, STARTING, PREPARED, STARTED, FAILED, CLOSING, CLOSED;
+
+		/** Close began or startup failed: the venue takes on no more work. */
+		boolean closing() {
+			return this == CLOSING || this == CLOSED || this == FAILED;
+		}
+	}
+	/**
+	 * Read once per decision: a failed engine passes through CLOSING again when
+	 * it is closed, so separate reads can each see a different state.
+	 */
 	private volatile Lifecycle lifecycle = Lifecycle.NEW;
 	private boolean launchClaimed;
 	private boolean launchInProgress;
@@ -255,7 +278,9 @@ public class Engine {
 	 * <p>Construction is deliberately inert so callers retain an Engine
 	 * reference before any storage or threads are started. Startup is
 	 * all-or-nothing: a failure closes every resource acquired so far in the
-	 * reverse of startup order, then rethrows the original failure.</p>
+	 * reverse of startup order, then rethrows the original failure. An
+	 * adapter whose start fails is not a startup failure: it stays enabled but
+	 * failed ({@link #adapterFailure}) and the venue runs without it.</p>
 	 *
 	 * @return this engine
 	 * @throws IOException if content storage cannot be initialised
@@ -277,9 +302,11 @@ public class Engine {
 			// Reconcile wake handles before the scheduler takes part in updates. Hosts
 			// prepare the catalog and recover Jobs before activating this engine.
 			rebuildSchedulerFromLattice();
+			// An adapter that fails to start stays enabled but failed; the
+			// venue runs without it (docs/ADAPTERS.md, Lifecycle).
 			for (String name : getAdapterNamesInRegistrationOrder()) {
 				AAdapter adapter = adapters.get(name);
-				if (adapter != null) adapter.start();
+				if (adapter != null) startAdapter(adapter);
 			}
 			gridScheduler.start();
 			lifecycle = Lifecycle.STARTED;
@@ -456,7 +483,11 @@ public class Engine {
 			new covia.venue.auth.AuthMethods(this).validate();
 			venueProofs.validate();
 			jobs().recoverJobs();
-			if (getAdapter("agent") instanceof AgentAdapter agents) agents.wakeAgentsWithWork();
+			// The agent adapter recovers its agents whether or not it starts; a started one wakes them
+			if (getInstalledAdapter("agent") instanceof AgentAdapter agents) {
+				if (hasAdapter("agent")) agents.wakeAgentsWithWork();
+				else agents.recoverAgents();
+			}
 			checkLaunchCancellation();
 			return activate();
 		} catch (IOException | RuntimeException | Error failure) {
@@ -464,7 +495,7 @@ public class Engine {
 			try {
 				boolean cleanup;
 				synchronized (this) {
-					cleanup = lifecycle != Lifecycle.FAILED && lifecycle != Lifecycle.CLOSED && lifecycle != Lifecycle.CLOSING;
+					cleanup = !lifecycle.closing();
 					if (cleanup) lifecycle = Lifecycle.CLOSING;
 				}
 				if (cleanup) {
@@ -748,9 +779,24 @@ public class Engine {
 		// The Engine works on the application's copy of its venue: edits stay
 		// unsigned until publication signs the record (publishApplicationRoot).
 		VenueState connected = application.venue(getAccountKey());
+		boolean existing = connected.get() != null;
+		long venueBefore = connected.version();
+		java.util.Map<String, Long> adaptersBefore = connected.adapterVersions();
 		// Version validation and every start-up migration, the venue's and its
 		// adapters', precede every bootstrap write and worker, in one transaction.
-		connected.initialise(getDIDString(), SecretStore.keys(getKeyPair()), migrationsOf(adapters));
+		java.util.List<VenueState.AdapterMigration> migrations = migrationsOf(adapters);
+		connected.initialise(getDIDString(), SecretStore.keys(getKeyPair()), migrations);
+		// Say what the start moved, once it has committed: an existing store's
+		// version, and each adapter state brought to a newer one
+		if (existing) {
+			long venueAfter = connected.version();
+			if (venueAfter != venueBefore) log.info("Venue store migrated from version {} to {}", venueBefore, venueAfter);
+			for (VenueState.AdapterMigration migration : migrations) {
+				long before = adaptersBefore.getOrDefault(migration.name(), 0L);
+				long after = connected.adapterVersion(migration.name());
+				if (after != before) log.info("Adapter '{}' state migrated from version {} to {}", migration.name(), before, after);
+			}
+		}
 		migratedAtStart.addAll(adapters);
 		this.venueState = connected;
 
@@ -803,10 +849,11 @@ public class Engine {
 	 * flush worker run by whoever opened the host.</p>
 	 */
 	public void syncState() {
-		if (lifecycle == Lifecycle.CLOSING || lifecycle == Lifecycle.CLOSED || lifecycle == Lifecycle.FAILED) {
+		Lifecycle state = lifecycle;
+		if (state.closing()) {
 			// A request unwinding across shutdown must not write to a closing store;
 			// close() has taken (or will take) the final flush.
-			log.debug("syncState skipped: engine is {}", lifecycle);
+			log.debug("syncState skipped: engine is {}", state);
 			return;
 		}
 		publishApplicationRoot();
@@ -833,7 +880,7 @@ public class Engine {
 	 * runs its sync and flush workers ({@code VenueServer} every
 	 * {@link covia.venue.server.VenueServer#SYNC_INTERVAL} and
 	 * {@link covia.venue.server.VenueServer#FLUSH_INTERVAL}), which bound what a
-	 * process crash and a machine crash lose.
+	 * process crash and a machine crash lose (on Etch v3, see PERSISTENCE.md).
 	 * Commit state in transactions; call {@code flush()} where Covia promises
 	 * durability to someone outside: before acknowledging (an accepted job
 	 * handle, a webhook receipt, a login) and before an external effect that
@@ -983,7 +1030,24 @@ public class Engine {
 
 	/** True once close began or startup failed: the venue must not take on work. */
 	public boolean isClosing() {
-		return lifecycle == Lifecycle.CLOSING || lifecycle == Lifecycle.CLOSED || lifecycle == Lifecycle.FAILED;
+		return lifecycle.closing();
+	}
+
+	/**
+	 * Stops this venue after a failure it cannot carry on from, unless it is
+	 * already stopping. The standalone process that manages it closes every venue
+	 * it runs and exits with {@link VenueProcess#EX_SOFTWARE}; without one, the
+	 * engine closes, which unmounts the venue. Runs on a thread of its own, so a
+	 * caller in the host's sync worker is not held by the close, which publishes
+	 * and flushes.
+	 */
+	void stopFatally() {
+		if (lifecycle.closing()) return;
+		VenueProcess control = processControl;
+		Thread.ofVirtual().name("venue-fatal-stop").start(() -> {
+			if (control != null) control.exitFatally(VenueProcess.EX_SOFTWARE);
+			else close();
+		});
 	}
 
 	/** Installs process control before MainVenue publishes restart authority. */
@@ -999,7 +1063,7 @@ public class Engine {
 			String sha256, long startupTimeoutMillis, covia.grid.Job job) {
 		VenueProcess control = processControl;
 		if (control == null) {
-			throw new NotSupportedException(
+			throw new UnsupportedException(
 				"Process restart is unavailable: this venue is not managed by MainVenue");
 		}
 		return control.requestRestart(successor, sha256, startupTimeoutMillis, job);
@@ -1021,12 +1085,12 @@ public class Engine {
 	/**
 	 * The host's store maintenance seam, for venue-owned operations.
 	 *
-	 * @throws NotSupportedException when the host installed none
+	 * @throws UnsupportedException when the host installed none
 	 */
 	public StoreControl storeControl() {
 		StoreControl control = storeControl;
 		if (control == null) {
-			throw new NotSupportedException(
+			throw new UnsupportedException(
 				"Store maintenance is unavailable: this venue's host installed no store control");
 		}
 		return control;
@@ -1084,6 +1148,8 @@ public class Engine {
 			new SchemaAdapter(),
 			new JSONAdapter(),
 			new Orchestrator(),
+			new TokenAdapter(),
+			new CallableAdapter(),
 			new MCPAdapter(),
 			new LangChainAdapter(),
 			new CoviaAdapter(),
@@ -1092,6 +1158,7 @@ public class Engine {
 			new covia.adapter.SkillsAdapter(),
 			new AssetAdapter(),
 			new GridAdapter(),
+			new covia.adapter.JobAdapter(),
 			new covia.adapter.A2AAdapter(),
 			new covia.adapter.RemoteAgentAdapter(),
 			new covia.adapter.P2PAdapter(),
@@ -1233,23 +1300,33 @@ public class Engine {
 	// is one lattice transaction via the materialiser.
 
 	/**
-	 * Register an adapter: applies its effective configuration
-	 * ({@link #adapterConfig}), installs it and makes it active. A non-kernel
-	 * adapter whose config says {@code enabled: false}, or whose
-	 * {@link AAdapter#configure} declines, is parked as disabled instead
-	 * (installed lazily on {@link #enableAdapter}). After the bootstrap
-	 * catalog has been published, an active registration is materialised
-	 * immediately.
+	 * Register an adapter: offers it its effective configuration
+	 * ({@link #adapterConfig}) and installs it, enabled or not, then makes an
+	 * enabled one active. An adapter is installed once it accepts its
+	 * configuration, so it owns its jobs whether or not it is started
+	 * (docs/ADAPTERS.md, Lifecycle). A non-kernel adapter whose config says
+	 * {@code enabled: false} is parked as disabled, installed but not started.
+	 * After the bootstrap catalog has been published, an active registration
+	 * is materialised immediately.
 	 *
 	 * <p>First, enabled or not, the adapter's state is migrated to its
 	 * {@link AAdapter#stateVersion()}, unless the venue's start-up transaction
 	 * already migrated it. Requires a prepared engine.</p>
 	 *
+	 * <p>Before the venue has started, an enabled adapter that refuses its
+	 * configuration, or fails to install, has failed to start: it is
+	 * registered enabled but failed ({@link #adapterFailure}), uninstalled,
+	 * and the launch goes on without it. On a started venue the failure is
+	 * thrown and nothing is registered. A disabled adapter that refuses or
+	 * fails is parked uninstalled, and its failure only logged.</p>
+	 *
 	 * @param adapter The adapter instance to register
 	 * @throws UnsupportedVersionException if the adapter's state is recorded at
 	 *         a newer version than it supports; nothing is registered or written
-	 * @throws ConfigurationException if the adapter refuses a setting in its
-	 *         venue configuration
+	 * @throws ConfigurationException on a started venue, if an enabled adapter
+	 *         refuses a setting in its venue configuration
+	 * @throws FaultException on a started venue, if an enabled adapter fails
+	 *         unexpectedly while being configured or installed
 	 */
 	public synchronized void registerAdapter(AAdapter adapter) {
 		if (venueState == null) throw new IllegalStateException(ADAPTER_BEFORE_PREPARE);
@@ -1260,31 +1337,101 @@ public class Engine {
 		if (previous == null) previous = disabledAdapters.get(name);
 		AMap<AString, ACell> cfg = adapterConfig(name);
 		boolean disabled = CVMBool.FALSE.equals(cfg.get(Config.ENABLED));
-		if (disabled || !configureStatic(adapter, cfg)) {
-			retractAdapter(name);
-			disabledAdapters.put(name, adapter);
-			if (previous != null) adapterRegistryVersion.incrementAndGet();
-			closeReplacedAdapter(previous);
-			log.info("Adapter '{}' disabled: {}", name, disabled ? "configuration" : "configuration declined");
+		RuntimeException refused = null;
+		try {
+			offerConfiguration(adapter, cfg);
+		} catch (RuntimeException failure) {
+			// On a started venue whoever registered undoes it, as module
+			// loading does. Before then a refused setting is a failure to
+			// start: the venue launches without the adapter.
+			if (isStarted() && !disabled) throw failure;
+			refused = failure;
+			logFailed(CONFIGURING_ADAPTER.formatted(name), failure);
+		}
+		RuntimeException notInstalled = (refused == null) ? installAdapter(adapter) : null;
+		if (notInstalled != null && isStarted() && !disabled) throw notInstalled;
+		if (disabled || refused != null || notInstalled != null) {
+			park(adapter, previous);
+			if (refused != null) unconfiguredAdapters.add(name);
+			RuntimeException failure = (refused != null) ? refused : notInstalled;
+			if (failure != null && !disabled) adapterFailures.put(name, failure);
+			if (failure == null) log.info("Adapter '{}' disabled by configuration", name);
 			return;
 		}
-		activate(adapter, previous);
+		activate(adapter, previous, true);
+		unconfiguredAdapters.remove(name);
+	}
+
+	/**
+	 * Installs an adapter once ({@link AAdapter#install}): binds it to this
+	 * engine and its state and declares its catalog, starting nothing. A
+	 * failure is reported as the adapter's ({@link #adapterFailed}) and leaves
+	 * it uninstalled. Caller holds the engine monitor.
+	 *
+	 * @return null if the adapter is installed, else its failure as reported
+	 */
+	private RuntimeException installAdapter(AAdapter adapter) {
+		if (installedAdapters.contains(adapter)) return null;
+		try {
+			adapter.install(this);
+		} catch (RuntimeException | Error failure) {
+			return adapterFailed(INSTALLING_ADAPTER, adapter, failure);
+		}
+		installedAdapters.add(adapter);
+		return null;
+	}
+
+	/** What failed when an adapter's {@code install} fails; the adapter's name follows. */
+	public static final String INSTALLING_ADAPTER = "Installing adapter %s";
+
+	/**
+	 * Adapters whose {@link AAdapter#install} has completed, by identity: each
+	 * owns its jobs whether or not it is started. Guarded by the engine monitor.
+	 */
+	private final java.util.Set<AAdapter> installedAdapters =
+		java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+
+	/**
+	 * The installed adapter registered under a name, started or not: the one
+	 * that owns the jobs dispatched to that name. Null if no adapter by that
+	 * name is registered, or it never installed.
+	 */
+	synchronized AAdapter getInstalledAdapter(String name) {
+		AAdapter adapter = getRegisteredAdapter(name);
+		return (adapter != null && installedAdapters.contains(adapter)) ? adapter : null;
+	}
+
+	/** Parks a registering adapter with the disabled ones in place of {@code previous}. Caller holds the engine monitor. */
+	private void park(AAdapter adapter, AAdapter previous) {
+		String name = adapter.getName();
+		retractAdapter(name);
+		adapterFailures.remove(name);
+		unconfiguredAdapters.remove(name);
+		disabledAdapters.put(name, adapter);
+		if (previous != null) adapterRegistryVersion.incrementAndGet();
+		closeReplacedAdapter(previous);
 	}
 
 	public static final String ADAPTER_BEFORE_PREPARE = "Adapters are registered once the engine is prepared";
 
 	/**
-	 * Offers an adapter its effective configuration from the venue config. An
-	 * adapter refuses a malformed setting with {@link IllegalArgumentException}
-	 * (docs/ADAPTERS.md); in static configuration that is the operator's setup.
+	 * Offers an adapter a configuration, from the venue config or a runtime
+	 * reconfiguration. A setting the adapter refuses is its
+	 * {@link ConfigurationException}, which reaches whoever supplied the
+	 * settings as it is, like any Covia exception with a reason; any other
+	 * exception escaping {@link AAdapter#configure} is the adapter's fault
+	 * (docs/ERRORS.md). Returning means the adapter accepted the configuration.
 	 */
-	private boolean configureStatic(AAdapter adapter, AMap<AString, ACell> cfg) {
+	private void offerConfiguration(AAdapter adapter, AMap<AString, ACell> cfg) {
 		try {
-			return adapter.configure(cfg, config.isStrictConfig());
-		} catch (IllegalArgumentException e) {
-			throw new ConfigurationException(e.getMessage(), e);
+			adapter.configure(cfg, config.isStrictConfig());
+		} catch (RuntimeException | Error failure) {
+			throw FaultException.within(CONFIGURING_ADAPTER.formatted(adapter.getName()), adapter.faultOwner(), failure);
 		}
 	}
+
+	/** What failed when an adapter's {@code configure} fails unexpectedly; the adapter's name follows. */
+	public static final String CONFIGURING_ADAPTER = "Configuring adapter %s";
 
 	/** Start-up adapters whose state the venue's start-up transaction migrated, until they register. */
 	private final java.util.Set<AAdapter> migratedAtStart =
@@ -1342,7 +1489,7 @@ public class Engine {
 		long before = venueState.adapterVersion(migration.name());
 		venueState.migrateAdapter(migration);
 		if (before != migration.supported()) {
-			log.info("Adapter '{}' state now at version {}", migration.name(), migration.supported());
+			log.info("Adapter '{}' state migrated from version {} to {}", migration.name(), before, migration.supported());
 		}
 	}
 
@@ -1356,12 +1503,22 @@ public class Engine {
 		return adapter;
 	}
 
-	/** Install (once) and publish an adapter. Caller holds the engine monitor. */
-	private void activate(AAdapter adapter, AAdapter previous) {
+	/**
+	 * Install (once) and publish an adapter, replacing {@code previous}.
+	 * With {@code start}, a started engine also starts it, and a failed start
+	 * rolls the registration back and throws; without, the caller starts it.
+	 * A live adapter has no failure. Caller holds the engine monitor.
+	 */
+	private void activate(AAdapter adapter, AAdapter previous, boolean start) {
 		String name = adapter.getName();
 		boolean previousActive = previous != null && adapters.get(name) == previous;
+		// An instance being enabled or restarted goes back among the parked ones,
+		// not closed, if this fails; a parked one restored keeps its failure.
+		boolean parked = disabledAdapters.get(name) == adapter;
+		RuntimeException parkedFailure = adapterFailures.get(name);
 		java.util.List<String> previousOrder = java.util.List.copyOf(adapterRegistrationOrder);
-		if (adapter.engine == null) adapter.install(this);
+		RuntimeException notInstalled = installAdapter(adapter);
+		if (notInstalled != null) throw notInstalled;
 		new covia.venue.auth.AuthMethods(this).validateAdapter(adapter);
 		covia.venue.auth.VenueProofs.validateAdapter(adapter);
 		if (catalogPublished) {
@@ -1373,12 +1530,17 @@ public class Engine {
 		}
 		adapters.put(name, adapter);
 		disabledAdapters.remove(name);
+		adapterFailures.remove(name);
 		adapterRegistrationOrder.remove(name);
 		adapterRegistrationOrder.add(name);
 		adapterRegistryVersion.incrementAndGet();
+		// The instance this one replaces stops before this one starts, so their
+		// workers never run together; a failed start restarts it below.
+		boolean replacing = previousActive && previous != adapter && isStarted();
 		try {
+			if (replacing) previous.stop();
 			resumeAdapterUserDeletions(adapter);
-			if (isStarted()) adapter.start();
+			if (start && isStarted()) adapter.start();
 		} catch (RuntimeException | Error failure) {
 			// A failed worker start must not leave a dispatchable partial adapter,
 			// including when module loading has not yet recorded its registration.
@@ -1390,6 +1552,8 @@ public class Engine {
 			if (!previousActive && previous != null && previous != adapter) {
 				disabledAdapters.put(name, previous);
 			}
+			if (parked) disabledAdapters.put(name, adapter);
+			if (parkedFailure != null && disabledAdapters.containsKey(name)) adapterFailures.put(name, parkedFailure);
 			try {
 				if (catalogPublished) {
 					if (previousActive && previous != adapter) {
@@ -1401,9 +1565,16 @@ public class Engine {
 			} catch (RuntimeException | Error rollbackFailure) {
 				failure.addSuppressed(rollbackFailure);
 			}
-			if (adapter instanceof AutoCloseable closeable) {
+			if (!parked) installedAdapters.remove(adapter);
+			if (!parked && adapter instanceof AutoCloseable closeable) {
 				try { closeable.close(); }
 				catch (Exception closeFailure) { failure.addSuppressed(closeFailure); }
+			}
+			// Live again, and only now the failed replacement is closed. If it
+			// cannot start again, it is left failed.
+			if (replacing) {
+				RuntimeException restartFailure = startAdapter(previous);
+				if (restartFailure != null) failure.addSuppressed(restartFailure);
 			}
 			adapterRegistryVersion.incrementAndGet();
 			throw failure;
@@ -1415,6 +1586,7 @@ public class Engine {
 
 	private void closeReplacedAdapter(AAdapter previous) {
 		if (previous == null) return;
+		installedAdapters.remove(previous);
 		if (!(previous instanceof AutoCloseable closeable)) return;
 		try {
 			closeable.close();
@@ -1434,51 +1606,256 @@ public class Engine {
 
 	/** An adapter name this venue has not registered; the name follows. */
 	public static final String UNKNOWN_ADAPTER = "Unknown adapter: ";
-	/** The venue's own configuration, refused by the adapter it is for. */
-	public static final String ADAPTER_DECLINED_CONFIG = "Adapter '%s' declined its configuration";
-	/** A configuration supplied for an adapter, refused by it. */
-	public static final String ADAPTER_REJECTED_CONFIG = "Adapter '%s' rejected the configuration";
+	/** Why an operation of a failed adapter is refused; the adapter's name follows. */
+	public static final String ADAPTER_NOT_RUNNING = "Adapter %s is not running";
+	/** Why a disabled adapter is not restarted; the adapter's name follows. */
+	public static final String ADAPTER_IS_DISABLED = "Adapter %s is disabled; enable it instead";
+	/** Why an adapter is not restarted before the venue has started. */
+	public static final String RESTART_BEFORE_START = "Adapters are restarted once the venue has started";
+	/** What failed when an adapter's {@code start} fails; the adapter's name follows. */
+	public static final String STARTING_ADAPTER = "Starting adapter %s";
+	/** What failed when an adapter's {@code stop} fails; the adapter's name follows. */
+	public static final String STOPPING_ADAPTER = "Stopping adapter %s";
 
 	private static NotFoundException unknownAdapter(String name) {
 		return new NotFoundException(UNKNOWN_ADAPTER + name, name);
 	}
 
 	/**
-	 * Disable an active adapter: retract its {@code v/info/adapters/<name>}
-	 * record and stop dispatching to it. Durable catalog metadata remains. The instance
-	 * is retained (not closed) so {@link #enableAdapter} restores it exactly.
-	 * In-flight jobs keep their adapter reference and finish; anything that
-	 * re-resolves the adapter by name (multi-turn messages, recovery) fails at
-	 * that point of use.
+	 * Enabled adapters that are not running, by name, each with the failure
+	 * that left it so: it could not start, or could not take back its settings
+	 * after refusing a change (docs/ADAPTERS.md, Lifecycle). Each is parked
+	 * with the disabled adapters, so it is treated as a stopped one: nothing
+	 * reaches it through {@link #getAdapter} and its live introspection is
+	 * retracted. Cleared when it starts, is disabled, replaced or removed.
+	 */
+	private final ConcurrentHashMap<String, RuntimeException> adapterFailures = new ConcurrentHashMap<>();
+
+	/**
+	 * Why an enabled adapter is not running, or null when it is running, is
+	 * disabled or is unknown. A failed adapter is treated as a stopped one:
+	 * its operations are refused ({@link #ADAPTER_NOT_RUNNING}), and
+	 * {@link #getAdapter} does not return it, so nothing else in the venue
+	 * uses it either. {@link #restartAdapter} tries it again.
 	 *
 	 * @param name Adapter name
-	 * @return true if the adapter was active and is now disabled; false if it
-	 *         was already disabled
+	 * @return the reason, or null
+	 */
+	public String adapterFailure(String name) {
+		RuntimeException failure = adapterFailures.get(name);
+		return (failure == null) ? null : failure.getMessage();
+	}
+
+	/**
+	 * Starts a live adapter's workers. Its failure is the adapter's alone: the
+	 * failure is reported as the adapter's (docs/ERRORS.md) and the adapter
+	 * is taken out of service ({@link #failAdapter}). Caller holds the engine
+	 * monitor.
+	 *
+	 * @return null when the adapter started, else its failure as reported
+	 */
+	private RuntimeException startAdapter(AAdapter adapter) {
+		try {
+			adapter.start();
+			return null;
+		} catch (RuntimeException | Error failure) {
+			RuntimeException reported = adapterFailed(STARTING_ADAPTER, adapter, failure);
+			failAdapter(adapter, reported, true);
+			return reported;
+		}
+	}
+
+	/**
+	 * Takes an enabled adapter out of service, as a disable would but leaving
+	 * it enabled: a live one is withdrawn from dispatch and live
+	 * introspection and parked; with {@code stop}, whatever it runs is
+	 * stopped, a failure to stop kept on the reason; and the reason is
+	 * recorded. Caller holds the engine monitor.
+	 */
+	private void failAdapter(AAdapter adapter, RuntimeException reason, boolean stop) {
+		String name = adapter.getName();
+		if (adapters.get(name) == adapter) {
+			retractAdapter(name);
+			disabledAdapters.put(name, adapter);
+			adapterRegistryVersion.incrementAndGet();
+		}
+		if (stop) {
+			try {
+				adapter.stop();
+			} catch (RuntimeException | Error stopFailure) {
+				reason.addSuppressed(stopFailure);
+			}
+		}
+		adapterFailures.put(name, reason);
+	}
+
+	/**
+	 * Adapters, by name, whose settings may differ from their effective
+	 * configuration: they refused it, and could not take back the settings
+	 * they had. Enabling or restarting one offers it its effective
+	 * configuration first. Cleared when it accepts a configuration, or is
+	 * replaced or removed.
+	 */
+	private final java.util.Set<String> unconfiguredAdapters = ConcurrentHashMap.newKeySet();
+
+	/**
+	 * After an adapter refused a change by throwing, offers it the settings it
+	 * had, so it carries on as before. If it cannot take them back either, it
+	 * is unconfigured: an enabled adapter is taken out of service, failed with
+	 * that failure as its reason, and enabling or restarting it offers it its
+	 * effective configuration again. That failure is kept on the refusal.
+	 * Caller holds the engine monitor.
+	 */
+	private void restoreConfiguration(AAdapter adapter, AMap<AString, ACell> previous, RuntimeException refused) {
+		String name = adapter.getName();
+		RuntimeException unrestored;
+		try {
+			offerConfiguration(adapter, previous);
+			return;
+		} catch (RuntimeException failure) {
+			unrestored = failure;
+		}
+		refused.addSuppressed(unrestored);
+		unconfiguredAdapters.add(name);
+		log.warn(SETTINGS_NOT_RESTORED.formatted(name, unrestored.getMessage()));
+		// Workers run only on a started engine.
+		if (adapters.get(name) == adapter) failAdapter(adapter, unrestored, isStarted());
+	}
+
+	/** Logged when an adapter cannot take back its settings after refusing a change; its name and why follow. */
+	public static final String SETTINGS_NOT_RESTORED = "Adapter %s refused a change and could not take back its settings: %s";
+
+	/**
+	 * A failure in an adapter's own lifecycle step, as the venue reports it: a
+	 * Covia exception with a reason as it is, logged at WARN with that reason;
+	 * anything else as the adapter's fault, logged once at ERROR, as an
+	 * integrity failure is.
+	 */
+	private static RuntimeException adapterFailed(String what, AAdapter adapter, Throwable failure) {
+		String step = what.formatted(adapter.getName());
+		RuntimeException reported = FaultException.within(step, adapter.faultOwner(), failure);
+		logFailed(step, reported);
+		return reported;
+	}
+
+	/**
+	 * Logs a failure already reported: the venue's own failure (a fault or an
+	 * integrity failure) was logged at ERROR where it was reported, anything
+	 * else at WARN.
+	 */
+	private static void logFailed(String step, RuntimeException reported) {
+		if (!CoviaException.isVenueFailure(reported)) log.warn("{} failed: {}", step, reported.getMessage());
+	}
+
+	/**
+	 * Restarts an enabled adapter, running or failed: stops its workers, offers
+	 * it its effective configuration ({@link #adapterConfig}) again, publishes
+	 * a failed one again and starts it, so it never starts on settings it has
+	 * not accepted. If any step fails, the adapter is left failed, with that
+	 * failure as its reason, and the failure is thrown.
+	 *
+	 * @param name Adapter name
+	 * @throws NotFoundException if the adapter is unknown
+	 * @throws InvalidStateException if the adapter is disabled
+	 * @throws StillStartingException before the venue has started
+	 * @throws covia.exception.CoviaException the failure of the step that failed: a Covia
+	 *         exception with a reason as the adapter raised it, or a
+	 *         {@link FaultException} for anything else
+	 */
+	public synchronized void restartAdapter(String name) {
+		AAdapter adapter = adapters.get(name);
+		boolean live = adapter != null;
+		if (!live) {
+			adapter = disabledAdapters.get(name);
+			if (adapter == null) throw unknownAdapter(name);
+			if (!adapterFailures.containsKey(name)) throw new InvalidStateException(ADAPTER_IS_DISABLED.formatted(name));
+		}
+		if (!isStarted()) throw new StillStartingException(RESTART_BEFORE_START);
+		// Stopping is idempotent, so a failed adapter is stopped again: a stop
+		// that failed before is tried again. One never installed never ran.
+		if (installedAdapters.contains(adapter)) {
+			try {
+				adapter.stop();
+			} catch (RuntimeException | Error failure) {
+				RuntimeException reported = adapterFailed(STOPPING_ADAPTER, adapter, failure);
+				failAdapter(adapter, reported, false);
+				throw reported;
+			}
+		}
+		RuntimeException refused = null;
+		try {
+			offerConfiguration(adapter, adapterConfig(name));
+		} catch (RuntimeException failure) {
+			refused = failure;
+		}
+		if (refused != null) {
+			unconfiguredAdapters.add(name);
+			failAdapter(adapter, refused, false);
+			throw refused;
+		}
+		unconfiguredAdapters.remove(name);
+		// A failed adapter keeps its failure if publishing it fails.
+		if (!live) activate(adapter, null, false);
+		RuntimeException failed = startAdapter(adapter);
+		if (failed != null) throw failed;
+		log.info("Restarted adapter: {}", name);
+	}
+
+	/**
+	 * Disable an active adapter: retract its {@code v/info/adapters/<name>}
+	 * record, stop dispatching to it, then {@linkplain AAdapter#stop() stop} its
+	 * workers. Durable catalog metadata remains. The instance
+	 * is retained (not closed) so {@link #enableAdapter} restores it exactly.
+	 * Its jobs stay its own: work in flight runs on, as the adapter's policy
+	 * decides, and new work for them (messages, pause, resume) is refused.
+	 *
+	 * A failed adapter is disabled by forgetting its failure and stopping it
+	 * again, which tries again a stop that failed.
+	 *
+	 * @param name Adapter name
+	 * @return true if the adapter was enabled, running or failed, and is now
+	 *         disabled; false if it was already disabled
 	 * @throws NotFoundException if the adapter is unknown
 	 */
 	public synchronized boolean disableAdapter(String name) {
 		AAdapter adapter = adapters.get(name);
 		if (adapter == null) {
-			if (disabledAdapters.containsKey(name)) return false;
-			throw unknownAdapter(name);
+			AAdapter parked = disabledAdapters.get(name);
+			if (parked == null) throw unknownAdapter(name);
+			if (adapterFailures.remove(name) == null) return false;
+			log.info("Disabled adapter: {}", name);
+			// Stopping is idempotent: a stop that failed before is tried again.
+			if (isStarted() && installedAdapters.contains(parked)) parked.stop();
+			return true;
 		}
 		retractAdapter(name);
 		disabledAdapters.put(name, adapter);
 		adapterRegistryVersion.incrementAndGet();
 		log.info("Disabled adapter: {}", name);
+		if (isStarted()) adapter.stop();
 		return true;
 	}
 
 	/**
-	 * Enable a disabled adapter: install it if it never was, overwrite its
-	 * catalog paths, publish {@code v/info/adapters/<name>}, and resume dispatch.
+	 * Enable a disabled or failed adapter: install it if it never was,
+	 * overwrite its catalog paths, publish {@code v/info/adapters/<name>},
+	 * resume dispatch and, once the venue has started, start it. One that was
+	 * never installed, or could not take back its settings after refusing a
+	 * change, is offered its effective configuration first. If it refuses a
+	 * setting or fails to start, it is left enabled but failed (see
+	 * {@link #adapterFailure}) and the failure is thrown;
+	 * {@link #restartAdapter} tries it again.
 	 *
 	 * @param name Adapter name
-	 * @return true if the adapter was disabled and is now active; false if it
-	 *         was already active
+	 * @return true if the adapter was disabled or failed and is now active;
+	 *         false if it was already active
 	 * @throws NotFoundException if the adapter is unknown
-	 * @throws ConfigurationException if the adapter declines the venue's configuration
-	 *         for it or refuses a setting in it
+	 * @throws ConfigurationException if the adapter refuses a setting in the
+	 *         venue's configuration for it
+	 * @throws covia.exception.CoviaException the failure of its start: a Covia exception with
+	 *         a reason as the adapter raised it, or a {@link FaultException}
+	 *         for anything else, including an unexpected failure while it is
+	 *         configured
 	 */
 	public synchronized boolean enableAdapter(String name) {
 		AAdapter adapter = disabledAdapters.get(name);
@@ -1486,10 +1863,23 @@ public class Engine {
 			if (adapters.containsKey(name)) return false;
 			throw unknownAdapter(name);
 		}
-		if (adapter.engine == null && !configureStatic(adapter, adapterConfig(name))) {
-			throw new ConfigurationException(String.format(ADAPTER_DECLINED_CONFIG, name));
+		if (!installedAdapters.contains(adapter) || unconfiguredAdapters.contains(name)) {
+			try {
+				offerConfiguration(adapter, adapterConfig(name));
+			} catch (RuntimeException refused) {
+				// A refused setting is a failure to start: enabled, but failed.
+				unconfiguredAdapters.add(name);
+				adapterFailures.put(name, refused);
+				logFailed(CONFIGURING_ADAPTER.formatted(name), refused);
+				throw refused;
+			}
 		}
-		activate(adapter, null);
+		unconfiguredAdapters.remove(name);
+		activate(adapter, null, false);
+		if (isStarted()) {
+			RuntimeException failed = startAdapter(adapter);
+			if (failed != null) throw failed;
+		}
 		return true;
 	}
 
@@ -1497,29 +1887,35 @@ public class Engine {
 	 * Apply a new effective configuration to a registered adapter (active or
 	 * disabled) and record it as the runtime override returned by
 	 * {@link #adapterConfig}. The adapter sees the change through
-	 * {@link AAdapter#configure}; if it declines, nothing changes.
+	 * {@link AAdapter#configure} and decides what it means for its work. If it
+	 * throws, the change is refused and the
+	 * adapter is offered its previous configuration again; should it refuse
+	 * that too, it is stopped and left failed (see {@link #adapterFailure}),
+	 * and enabling or restarting it offers it its configuration again.
 	 *
 	 * @param name Adapter name
 	 * @param cfg The complete new effective configuration
 	 * @throws NotFoundException if the adapter is unknown
-	 * @throws InvalidInputException if the adapter rejects the configuration or
-	 *         a setting in it
+	 * @throws ConfigurationException if the adapter refuses a setting in the
+	 *         configuration
+	 * @throws covia.exception.CoviaException whatever else the adapter raised
+	 *         as it refused the change: a Covia exception with a reason as it
+	 *         is, such as an {@link UnavailableException} for work it could not
+	 *         restart, or a {@link FaultException} for anything unexpected
 	 */
 	public synchronized void configureAdapter(String name, AMap<AString, ACell> cfg) {
 		AAdapter adapter = adapters.get(name);
 		if (adapter == null) adapter = disabledAdapters.get(name);
 		if (adapter == null) throw unknownAdapter(name);
 		if (cfg == null) cfg = Maps.empty();
-		boolean accepted;
+		AMap<AString, ACell> previous = adapterConfig(name);
 		try {
-			accepted = adapter.configure(cfg, config.isStrictConfig());
-		} catch (IllegalArgumentException e) {
-			// A malformed setting in the operator's request (docs/ADAPTERS.md)
-			throw new InvalidInputException(e.getMessage(), e);
+			offerConfiguration(adapter, cfg);
+		} catch (RuntimeException refused) {
+			restoreConfiguration(adapter, previous, refused);
+			throw refused;
 		}
-		if (!accepted) {
-			throw new InvalidInputException(String.format(ADAPTER_REJECTED_CONFIG, name));
-		}
+		unconfiguredAdapters.remove(name);
 		runtimeAdapterConfig.put(name, cfg);
 		// Authentication finishing under the previous configuration must retry.
 		adapterRegistryVersion.incrementAndGet();
@@ -1548,9 +1944,9 @@ public class Engine {
 	}
 
 	/**
-	 * Get an active adapter by name
+	 * Get an active adapter by name: one that is enabled and has not failed.
 	 * @param name The name of the adapter to retrieve
-	 * @return The adapter instance, or null if not found or disabled
+	 * @return The adapter instance, or null if not found, disabled or failed
 	 */
 	public AAdapter getAdapter(String name) {
 		return adapters.get(name);
@@ -1565,7 +1961,7 @@ public class Engine {
 	/**
 	 * Check if an active adapter with the given name exists
 	 * @param name The name of the adapter to check
-	 * @return true if the adapter exists and is enabled, false otherwise
+	 * @return true if the adapter exists, is enabled and has not failed
 	 */
 	public boolean hasAdapter(String name) {
 		return adapters.containsKey(name);
@@ -1588,7 +1984,10 @@ public class Engine {
 			removed = disabledAdapters.remove(name);
 		}
 		if (removed == null) return null;
+		installedAdapters.remove(removed);
 		runtimeAdapterConfig.remove(name);
+		adapterFailures.remove(name);
+		unconfiguredAdapters.remove(name);
 		if (removed instanceof AutoCloseable closeable) {
 			try {
 				closeable.close();
@@ -1617,7 +2016,7 @@ public class Engine {
 
 	/**
 	 * Get all active adapter names
-	 * @return Set of all registered, enabled adapter names
+	 * @return Set of all registered adapter names that are enabled and have not failed
 	 */
 	public java.util.Set<String> getAdapterNames() {
 		return adapters.keySet();
@@ -1629,8 +2028,9 @@ public class Engine {
 	}
 
 	/**
-	 * Get the names of registered adapters that are currently disabled.
-	 * @return Set of disabled adapter names
+	 * Get the names of registered adapters that are not active: disabled, or
+	 * enabled but failed ({@link #adapterFailure}).
+	 * @return Set of disabled and failed adapter names
 	 */
 	public java.util.Set<String> getDisabledAdapterNames() {
 		return disabledAdapters.keySet();
@@ -1662,12 +2062,21 @@ public class Engine {
 		return java.util.List.copyOf(modules.values());
 	}
 
-	/** The module that registered the named adapter, or null for a built-in. */
+	/**
+	 * The module that registered the adapter now registered under this name,
+	 * or null for a built-in or one registered apart from any module.
+	 */
 	public synchronized Modules.LoadedModule moduleOf(String adapterName) {
-		java.util.ArrayList<Modules.LoadedModule> loaded = new java.util.ArrayList<>(modules.values());
-		for (int i = loaded.size() - 1; i >= 0; i--) {
-			Modules.LoadedModule module = loaded.get(i);
-			if (module.adapterNames().contains(adapterName)) return module;
+		return moduleOf(getRegisteredAdapter(adapterName));
+	}
+
+	/**
+	 * The module that registered {@code adapter} ({@link Modules.LoadedModule#owns}),
+	 * or null for a built-in, an embedder's or a null adapter.
+	 */
+	public synchronized Modules.LoadedModule moduleOf(AAdapter adapter) {
+		for (Modules.LoadedModule module : modules.values()) {
+			if (module.owns(adapter)) return module;
 		}
 		return null;
 	}
@@ -1676,8 +2085,24 @@ public class Engine {
 	 * Stores an asset in the venue-level CAS (used by adapter registration).
 	 */
 	public Hash storeAsset(AString meta, ACell content) {
-		Hash id = venueState.assets().store(meta, content);
-		log.debug("Stored asset {} : {}", id, RT.getIn(JSON.parse(meta), Fields.NAME));
+		return storeAsset(meta, RT.ensureMap(JSON.parse(meta)), content);
+	}
+
+	/**
+	 * Stores an asset in the venue-level CAS from its metadata text and that
+	 * text's parse, for a caller that has already parsed it (adapter
+	 * installation parses each built-in text once per JVM). The two must match:
+	 * the text is stored as given, and the map's hash is the asset's id.
+	 *
+	 * @param meta JSON metadata text
+	 * @param metaMap The parse of {@code meta}, or null if it is not a JSON object
+	 * @param content Content, or null
+	 * @return The asset's id
+	 * @throws IllegalArgumentException if metaMap is null
+	 */
+	public Hash storeAsset(AString meta, AMap<AString, ACell> metaMap, ACell content) {
+		Hash id = venueState.assets().store(meta, metaMap, content);
+		log.debug("Stored asset {} : {}", id, metaMap.get(Fields.NAME));
 		return id;
 	}
 
@@ -1690,8 +2115,9 @@ public class Engine {
 		AString callerDID = ctx.getUserDID();
 		if (callerDID == null) throw new AuthException(STORE_UNAUTHENTICATED);
 		User user = getVenueState().users().ensure(callerDID);
-		Hash id = user.assets().store(meta, content);
-		log.info("Stored user asset {} : {} (user: {})", id, RT.getIn(JSON.parse(meta), Fields.NAME), callerDID);
+		AMap<AString, ACell> metaMap = RT.ensureMap(JSON.parse(meta));
+		Hash id = user.assets().store(meta, metaMap, content);
+		log.info("Stored user asset {} : {} (user: {})", id, metaMap.get(Fields.NAME), callerDID);
 		return id;
 	}
 
@@ -1945,8 +2371,9 @@ public class Engine {
 	 * @throws covia.exception.AuthException when the caller may not read {@code ref}
 	 */
 	public ACell resolvePath(AString ref, RequestContext ctx) {
-		requireReadable(ctx, ref);
-		return resolvePathUnchecked(ref, ctx);
+		AString path = expandPath(ref);
+		requireReadable(ctx, path);
+		return resolvePathUnchecked(path, ctx);
 	}
 
 	/**
@@ -1957,7 +2384,8 @@ public class Engine {
 	 *
 	 * @throws covia.exception.AuthException when the caller may not read {@code ref}
 	 */
-	public void requireReadable(RequestContext ctx, AString ref) {
+	public void requireReadable(RequestContext ctx, AString given) {
+		AString ref = expandPath(given);
 		if (ref == null) return;
 		if (ownerOf(ref) != null && !isLocalDIDResource(ref)) return;
 		try {
@@ -1979,7 +2407,8 @@ public class Engine {
 	 *
 	 * @throws covia.exception.AuthException when the caller may not read {@code path}
 	 */
-	public void requirePathRead(RequestContext ctx, AString path) {
+	public void requirePathRead(RequestContext ctx, AString given) {
+		AString path = expandPath(given);
 		if (path == null) return;
 		if (!(getAdapter("covia") instanceof CoviaAdapter covia)
 				|| (ownerOf(path) != null && !isLocalDIDResource(path))) {
@@ -2016,6 +2445,9 @@ public class Engine {
 	 *       ({@link CoviaAdapter#resolve})</li>
 	 * </ul>
 	 *
+	 * <p>A principal in short form is expanded first ({@link #expandPath}), as
+	 * by every reader of a reference here.</p>
+	 *
 	 * <p>Returns null for unresolvable refs, remote DID URLs, paths that name no
 	 * place data could be, paths whose scope the request does not have, and
 	 * refs that resolve to nothing. Remote DID URLs are handled by
@@ -2026,7 +2458,8 @@ public class Engine {
 	 * @param ctx Request context: whose namespace a bare path means, not authority
 	 * @return Literal value at the resolved location, or null
 	 */
-	public ACell resolvePathUnchecked(AString ref, RequestContext ctx) {
+	public ACell resolvePathUnchecked(AString given, RequestContext ctx) {
+		AString ref = expandPath(given);
 		if (ref == null) return null;
 
 		if (ownerOf(ref) != null) {
@@ -2097,7 +2530,10 @@ public class Engine {
 	 * and degrade visibly.</p>
 	 *
 	 * <p>The read is checked as by {@link #resolvePath}: naming another user's
-	 * definition does not make it readable, nor invocable.</p>
+	 * definition does not make it readable, nor invocable. A callable's path
+	 * is not read: it resolves to the operation that calls the callable, for a
+	 * request that may call it, and to nothing otherwise
+	 * ({@link CallableAdapter#operation}).</p>
 	 *
 	 * @param ref Reference string
 	 * @param ctx Request context (caller identity for /o/ namespace scoping)
@@ -2130,8 +2566,17 @@ public class Engine {
 		return resolveAsset(ref, ctx, checked, true);
 	}
 
-	private Asset resolveAsset(AString ref, RequestContext ctx, boolean checked, boolean fetch) {
+	private Asset resolveAsset(AString given, RequestContext ctx, boolean checked, boolean fetch) {
+		AString ref = expandPath(given);
 		if (ref == null) return null;
+
+		// A callable's path names the operation that calls it, which admits the
+		// request rather than reading data, and its answer is final: a callable
+		// the request may not call resolves as one that does not exist (CALLABLES.md)
+		if (checked && CallableAdapter.isPath(ref)) {
+			return (getAdapter(CallableAdapter.NAME) instanceof CallableAdapter callables)
+				? callables.operation(ref, ctx, fetch) : null;
+		}
 
 		// Remote DID URLs: fetch the content-addressed definition from the
 		// publishing venue (hash-verified). The returned Asset carries no
@@ -2646,7 +3091,8 @@ public class Engine {
 	}
 
 	private covia.venue.storage.ContentProvider.Resolved resolveContent(
-			AString ref, RequestContext ctx, Set<String> resolving) throws IOException {
+			AString given, RequestContext ctx, Set<String> resolving) throws IOException {
+		AString ref = expandPath(given);
 		if (ref == null) return null;
 		String refString = ref.toString();
 		if (resolving.size() >= 32) {
@@ -3192,7 +3638,7 @@ public class Engine {
 		if (username == null || username.isEmpty()) {
 			throw new InvalidInputException("username is required");
 		}
-		if (!username.toString().matches("[A-Za-z0-9._-]+")) {
+		if (!username.toString().matches(USERNAME)) {
 			throw new InvalidInputException(
 				"username may contain only letters, numbers, '.', '_' and '-'");
 		}
@@ -3202,6 +3648,117 @@ public class Engine {
 				+ "so they can use did:web; pass a full user DID instead");
 		}
 		return Strings.create(base + ":u:" + username);
+	}
+
+	/** A venue-managed username, the {@code <name>} of {@code <webDID>:u:<name>}. */
+	private static final String USERNAME = "[A-Za-z0-9._-]+";
+
+	/** A principal in short form: a managed user, {@code u:<name>}, or that user's agent, {@code u:<name>:g:<agentId>}. */
+	private static final java.util.regex.Pattern SHORT_FORM = java.util.regex.Pattern.compile(
+		"u:" + USERNAME + "(" + java.util.regex.Pattern.quote(covia.grid.Principals.AGENT_SEP) + "[^:/]+)?");
+
+	/** Refusal of a principal in short form on a venue with no public hostname, which names no users under it; the value follows. */
+	public static final String NO_SHORT_FORM = "This venue has no public hostname, so no user is named u:<user> "
+		+ "here; give the full DID instead of: ";
+
+	/** Refusal of a value that starts as a principal in short form but is not one; the value follows. */
+	public static final String NOT_A_SHORT_FORM = "A principal in short form is u:<user> or u:<user>:g:<agentId>, not: ";
+
+	/**
+	 * A principal as given, with a short form expanded: {@code u:bob} is
+	 * {@code <webDID>:u:bob}, the DID {@link #managedUserDID} gives user
+	 * {@code bob}, and {@code u:bob:g:helper} is his agent's DID. Anything else,
+	 * a full DID or a keyword such as {@code "venue"}, is returned as it is.
+	 * Expansion only names: it checks neither existence nor access. It is
+	 * applied once, where a principal arrives as input; records hold the full
+	 * DID (AUTHORITY.md, "Where names resolve").
+	 *
+	 * @throws InvalidInputException with {@link #NOT_A_SHORT_FORM} for a value
+	 *         that starts {@code u:} but is no short form, or with
+	 *         {@link #NO_SHORT_FORM} on a venue with no public hostname
+	 */
+	public AString expandPrincipal(AString principal) {
+		if (principal == null || !CapabilityChecker.isShortForm(principal.toString())) return principal;
+		if (!SHORT_FORM.matcher(principal.toString()).matches()) {
+			throw new InvalidInputException(NOT_A_SHORT_FORM + principal);
+		}
+		AString base = config.getWebDID();
+		if (base == null) throw new InvalidInputException(NO_SHORT_FORM + principal);
+		return Strings.create(base + ":" + principal);
+	}
+
+	/** Refusal of a principal the venue's configuration names that is no principal here; the setting and the reason follow. */
+	public static final String CONFIGURED_PRINCIPAL = "%s names no principal of this venue: %s";
+
+	/**
+	 * A principal the venue's configuration names at {@code setting}, with a
+	 * short form expanded ({@link #expandPrincipal}), as a binding's or a
+	 * project's {@code user} is when it is used.
+	 *
+	 * @throws ConfigurationException with {@link #CONFIGURED_PRINCIPAL} for a
+	 *         value that starts as a short form and names no principal here
+	 */
+	public AString configuredPrincipal(String setting, AString principal) {
+		try {
+			return expandPrincipal(principal);
+		} catch (InvalidInputException e) {
+			throw new ConfigurationException(CONFIGURED_PRINCIPAL.formatted(setting, e.getMessage()), e);
+		}
+	}
+
+	/**
+	 * A path or resource as given, with a leading principal in short form
+	 * expanded ({@link #expandPrincipal}): {@code u:bob/w/notes} is
+	 * {@code <webDID>:u:bob/w/notes}, and {@code u:bob} alone is his DID, as a
+	 * capability's {@code with} may name it. Leading slashes change nothing, as
+	 * on any path. Any other value is returned as it is.
+	 *
+	 * @throws InvalidInputException as {@link #expandPrincipal} does
+	 */
+	public AString expandPath(AString path) {
+		if (path == null || !CapabilityChecker.isShortForm(path.toString())) return path;
+		String value = CoviaPath.relative(path.toString());
+		int slash = value.indexOf('/');
+		AString principal = expandPrincipal(Strings.create((slash < 0) ? value : value.substring(0, slash)));
+		return (slash < 0) ? principal : Strings.create(principal + value.substring(slash));
+	}
+
+	/**
+	 * {@code principals} with each entry of a list expanded ({@link #expandPrincipal}),
+	 * as an {@code accepts} list or a callers gate's {@code callers} takes them.
+	 * Keywords and anything not a list are returned as they are, for the
+	 * value's own check.
+	 */
+	public ACell expandPrincipals(ACell principals) {
+		if (!(principals instanceof AVector<?> list)) return principals;
+		@SuppressWarnings("unchecked")
+		AVector<ACell> expanded = (AVector<ACell>) list;
+		for (long i = 0; i < list.count(); i++) {
+			if (!(list.get(i) instanceof AString entry)) continue;
+			AString full = expandPrincipal(entry);
+			if (full != entry) expanded = expanded.assoc(i, full);
+		}
+		return expanded;
+	}
+
+	/**
+	 * {@code caps} with each capability's {@code with} expanded
+	 * ({@link #expandPath}), as caps given to an agent, a token, a callable or
+	 * an approval request are. Anything malformed is returned as it is, for
+	 * the caps' own check.
+	 */
+	public AVector<ACell> expandCaps(AVector<ACell> caps) {
+		if (caps == null) return null;
+		AVector<ACell> expanded = caps;
+		for (long i = 0; i < caps.count(); i++) {
+			if (!(caps.get(i) instanceof AMap<?, ?> map)) continue;
+			@SuppressWarnings("unchecked")
+			AMap<AString, ACell> grant = (AMap<AString, ACell>) map;
+			AString with = RT.ensureString(grant.get(Capability.WITH));
+			AString full = expandPath(with);
+			if (full != with) expanded = expanded.assoc(i, grant.assoc(Capability.WITH, full));
+		}
+		return expanded;
 	}
 
 	/**
@@ -3234,7 +3791,7 @@ public class Engine {
 		String value = did.toString();
 		if (!value.startsWith(prefix)) return null;
 		String username = value.substring(prefix.length());
-		if (username.isEmpty() || !username.matches("[A-Za-z0-9._-]+")) return null;
+		if (username.isEmpty() || !username.matches(USERNAME)) return null;
 		return Strings.create(username);
 	}
 
@@ -3297,9 +3854,8 @@ public class Engine {
 	public boolean proofsCover(RequestContext ctx, AString resource, AString ability, long now,
 			AString destination) {
 		if (ctx == null) return false;
-		if (ctx.hasSeparateAuthority()) {
-			return proofsCover(ctx.authorityContext(), ctx.inNamespace(resource), ability, now, destination);
-		}
+		RequestContext frame = authorityFrame(ctx);
+		if (frame != ctx) return proofsCover(frame, ctx.inNamespace(resource), ability, now, destination);
 		return ctx.delegatedProofsCover(rootAuthorityPolicy(), resource, ability, now, destination);
 	}
 
@@ -3312,11 +3868,10 @@ public class Engine {
 	public boolean proofsStructurallyCover(RequestContext ctx, AString resource,
 			AString ability, long now) {
 		if (ctx == null) return false;
-		if (ctx.hasSeparateAuthority()) {
-			return proofsStructurallyCover(ctx.authorityContext(), ctx.inNamespace(resource), ability, now);
-		}
+		RequestContext frame = authorityFrame(ctx);
+		if (frame != ctx) return proofsStructurallyCover(frame, ctx.inNamespace(resource), ability, now);
 		return covia.lattice.CapabilityChecker.proofsStructurallyCover(
-			ctx.getProofs(), ctx.getCallerDID(), rootAuthorityPolicy(),
+			ctx.getProofs(), ctx.getAuthorityDID(), rootAuthorityPolicy(),
 			resource, ability, now);
 	}
 
@@ -3352,7 +3907,7 @@ public class Engine {
 	 * activation.
 	 */
 	public ACell deleteUser(RequestContext ctx, AString did) {
-		requireVenueAuthority(ctx, "users", Abilities.USER_DELETE);
+		requireVenueAuthority(ctx, "users", Abilities.ADMIN_USER_DELETE);
 		requireNotSubPrincipal(did);
 		if (isVenuePrincipal(did) || Strings.create(getDIDString() + ":public").equals(did)) {
 			throw new InvalidInputException(PROTECTED_USER);
@@ -3368,7 +3923,7 @@ public class Engine {
 		}
 		java.util.Map<String, java.util.function.Consumer<AdapterState>> cleanups = new java.util.LinkedHashMap<>();
 		registered.forEach((name, adapter) -> cleanups.put(name, state -> adapter.deleteUserState(did, state)));
-		VenueState.DeletedUser deleted = venueState.beginUserDeletion(did, ctx.getCallerDID(), cleanups);
+		VenueState.DeletedUser deleted = venueState.beginUserDeletion(did, ctx.getAuthorityDID(), cleanups);
 		// Persist revocation and retry evidence before invoking external effects.
 		flush();
 		RuntimeException failure = null;
@@ -3384,12 +3939,32 @@ public class Engine {
 				if (failure == null) failure = e; else failure.addSuppressed(e);
 			}
 		}
+		// An adapter registered since the list above was taken has state, so
+		// the deletion marked it too, but its own retry at registration ran
+		// before that mark. Retry for it now. A registration holds the engine
+		// monitor throughout, so this list includes every one begun before the mark.
+		java.util.List<AAdapter> joined = new java.util.ArrayList<>();
+		synchronized (this) {
+			for (AAdapter adapter : adapters.values()) {
+				if (registered.get(adapter.getName()) != adapter) joined.add(adapter);
+			}
+			for (AAdapter adapter : disabledAdapters.values()) {
+				if (registered.get(adapter.getName()) != adapter) joined.add(adapter);
+			}
+		}
+		for (AAdapter adapter : joined) {
+			try {
+				resumeAdapterUserDeletions(adapter);
+			} catch (RuntimeException e) {
+				if (failure == null) failure = e; else failure.addSuppressed(e);
+			}
+		}
 		flush();
 		if (failure != null) throw failure;
 		if (venueState.users().isDeleting(did)) {
 			throw new UnavailableException(USER_DELETION_PENDING);
 		}
-		log.info("user.delete did={} by={}", did, ctx.getCallerDID());
+		log.info("user.delete did={} by={}", did, ctx.getAuthorityDID());
 		return deleted.tombstone();
 	}
 
@@ -3507,7 +4082,7 @@ public class Engine {
 
 		AMap<AString,ACell> ddo=Maps.of(
 			"id", docID,
-			"@context", "https://www.w3.org/ns/did/v1",
+			"@context", CoviaAPI.MULTIKEY_DID_CONTEXT,
 			"verificationMethod",Vectors.of(Maps.of(
 						"id",keyID,
 						"type","Multikey",
@@ -3520,6 +4095,7 @@ public class Engine {
 			"capabilityInvocation",keyVector,
 			"service",Vectors.of(
 					Maps.of(
+							"id",Strings.create(docID+CoviaAPI.SERVICE_FRAGMENT),
 							"type",CoviaAPI.SERVICE_TYPE,
 							"serviceEndpoint",endpoint
 					))
@@ -3566,26 +4142,41 @@ public class Engine {
 	}
 
 	/**
-	 * Looks up an agent's lattice state by owner DID and agent ID.
+	 * The agent {@code agentId} of {@code owner}, or null when that user or
+	 * agent does not exist or the agent is deleted ({@link Agent#isTerminated}):
+	 * an agent that can act. It only resolves: whether a caller may use the
+	 * agent is checked where it is used. {@link Agents#agent} also finds a
+	 * deleted agent.
 	 *
-	 * <p>Returns null if the user doesn't exist, the agent isn't initialised,
-	 * or the agent is {@link Agent#TERMINATED}. Used by the harness to
-	 * read agent record fields (config, tasks, pending, sessions) directly
-	 * from the lattice instead of plumbing them through the step input.</p>
-	 *
-	 * @param callerDID Agent owner's DID (never null)
-	 * @param agentId   Agent identifier (never null)
-	 * @return Agent wrapper, or null if not found / terminated
+	 * @param owner The owning user's DID, may be null
+	 * @param agentId The agent's id, may be null
 	 */
-	public Agent getAgent(AString callerDID, AString agentId) {
-		if (callerDID == null || agentId == null) return null;
-		Users users = venueState.users();
-		User user = users.user(callerDID);
-		if (user == null) return null;
-		Agent agent = user.agent(agentId);
-		if (agent == null) return null;
-		if (Agent.TERMINATED.equals(agent.getStatus())) return null;
-		return agent;
+	public Agent getAgent(AString owner, AString agentId) {
+		if (owner == null || agentId == null) return null;
+		User user = venueState.users().user(owner);
+		Agent agent = (user == null) ? null : user.agents().agent(agentId);
+		return (agent == null || agent.isTerminated()) ? null : agent;
+	}
+
+	/**
+	 * As {@link #getAgent(AString, AString)}, for the agent an agent DID
+	 * ({@code <owner>:g:<agentId>}) names; null for a DID that names no agent.
+	 */
+	public Agent getAgent(AString agentDID) {
+		AString agentId = covia.grid.Principals.agentIdOf(agentDID);
+		return (agentId == null) ? null : getAgent(covia.grid.Principals.userOf(agentDID), agentId);
+	}
+
+	/**
+	 * As {@link #getAgent(AString, AString)}, for the agent {@code ref} names
+	 * as {@code ctx}'s caller writes it ({@link AgentAddress#parse}): a relative
+	 * reference names an agent of the user {@code ctx} acts for.
+	 *
+	 * @throws InvalidInputException if {@code ref} names no agent
+	 */
+	public Agent getAgent(RequestContext ctx, AString ref) {
+		AgentAddress agent = AgentAddress.parse(ctx.getUserDID(), expandPath(ref));
+		return getAgent(agent.owner(), agent.agentId());
 	}
 
 	/** Gets the live root cursor for top-level lattice regions. */
@@ -3606,6 +4197,78 @@ public class Engine {
 			application.hostStore(), ownerKey::signData,
 			application.venueContext()::currentTimestamp);
 		return region.drives(ownerKey.getAccountKey());
+	}
+
+	/** Refusal of a user's transaction whose request context names no user. */
+	public static final String TRANSACTION_NEEDS_USER = "A transaction acts for a user, and the request context names none";
+
+	/** Refusal of a drive in a user's transaction at a venue that runs no DLFS adapter. */
+	public static final String NO_DLFS = "This venue runs no DLFS adapter, so a transaction here reaches no drives";
+
+	/**
+	 * Changes a user's workspace at this venue and their DLFS drives in one
+	 * transaction: everything the callback changes through its
+	 * {@link UserTransaction} commits together, or none of it does. The
+	 * transaction acts for the context's user, on their own workspace and drives.
+	 *
+	 * <p>Before the transaction starts, a user with no DLFS key is given one,
+	 * since creating it writes the venue. The callback then runs once on the
+	 * application's transaction for this venue ({@link CoviaApplication#transact}),
+	 * while every other write to the application waits: keep it short, use only
+	 * the transaction, do no external I/O and do not wait for other threads.</p>
+	 *
+	 * <p>A commit is in memory: the host's next sync saves it and {@link #flush()}
+	 * makes it durable, so flush before acknowledging the change elsewhere.</p>
+	 *
+	 * @param <R> The callback's result type
+	 * @param ctx The request, whose user the transaction acts for
+	 * @param work The changes
+	 * @return The callback's result, once committed
+	 * @throws IOException from the callback, which applies nothing
+	 * @throws AuthException if the context names no user ({@link #TRANSACTION_NEEDS_USER})
+	 * @throws NotFoundException if the user is not registered at this venue ({@link VenueState#UNKNOWN_USER})
+	 * @throws IllegalStateException if called inside a transaction's callback,
+	 *         before writing anything ({@link CoviaApplication#NESTED_TRANSACTION})
+	 */
+	public <R> R transact(RequestContext ctx, UserTransaction.Work<R> work) throws IOException {
+		java.util.Objects.requireNonNull(ctx, "ctx");
+		java.util.Objects.requireNonNull(work, "work");
+		application.requireOutsideTransaction();
+		AString userDID = ctx.getUserDID();
+		if (userDID == null) throw new AuthException(TRANSACTION_NEEDS_USER);
+		if (getVenueState().users().user(userDID) == null) {
+			throw new NotFoundException(VenueState.UNKNOWN_USER, userDID.toString());
+		}
+		DLFSAdapter dlfs = (getAdapter("dlfs") instanceof DLFSAdapter running) ? running : null;
+		if (dlfs != null) dlfs.ensureUserKey(ctx);
+		try {
+			return application.transact(getAccountKey(), draft -> {
+				UserDraft tx = new UserDraft(ctx, getAccountKey(), draft, dlfs);
+				try {
+					return work.apply(tx);
+				} catch (IOException e) {
+					throw new WorkFailure(e);
+				} finally {
+					tx.finish();
+				}
+			});
+		} catch (WorkFailure e) {
+			throw e.getCause();
+		}
+	}
+
+	/** Carries a user transaction's IOException through the application's transaction. */
+	private static final class WorkFailure extends RuntimeException {
+		private static final long serialVersionUID = 1L;
+
+		WorkFailure(IOException cause) {
+			super(cause);
+		}
+
+		@Override
+		public synchronized IOException getCause() {
+			return (IOException) super.getCause();
+		}
 	}
 
 	public AString getName() {
@@ -3669,11 +4332,11 @@ public class Engine {
 	}
 
 	/**
-	 * When this venue next needs an update ({@link Scheduler#nextDue}), or
+	 * When this venue next needs an update ({@link Scheduler#nextUpdateTime}), or
 	 * {@link Long#MAX_VALUE} for none.
 	 */
-	long nextDue() {
-		return gridScheduler.nextDue();
+	long nextUpdateTime() {
+		return gridScheduler.nextUpdateTime();
 	}
 
 	/** The application this venue is mounted in. */
@@ -3717,9 +4380,7 @@ public class Engine {
 			AString userDid = (AString) userEntry.getKey();
 			User user = venueState.users().user(userDid);
 			if (user == null) continue;
-			AMap<AString, ACell> agents = user.getAgents();
-			if (agents == null || agents.isEmpty()) continue;
-			for (var agentEntry : agents.entrySet()) {
+			for (var agentEntry : user.agents().all().entrySet()) {
 				AString agentId = (AString) agentEntry.getKey();
 				if (!(agentEntry.getValue() instanceof AMap)) continue;
 				Agent agent = user.agent(agentId);
@@ -3749,8 +4410,9 @@ public class Engine {
 	 *   <li><b>Target-side admission</b> (covia#447) — an agent record's
 	 *       {@code config.accepts}: the owner's standing policy for who may
 	 *       talk to that agent ({@code agent/request}, {@code agent/message})
-	 *       without a delegation — the venue operator, exact principal DIDs,
-	 *       or anyone. Consulted for that one resource shape and those
+	 *       without a delegation — the venue operator, principals and what
+	 *       acts for them, or anyone — used only where the caller's narrowing
+	 *       covers it. Consulted for that one resource shape and those
 	 *       abilities only. See {@link Admission}.</li>
 	 *   <li><b>Presented UCAN proofs</b> — the pure fail-closed delegation
 	 *       check ({@link covia.lattice.CapabilityChecker#proofsCover}).</li>
@@ -3764,9 +4426,8 @@ public class Engine {
 	 *  {@code nb.url} caveat, in the public scope or a presented proof, must cover it. */
 	public boolean crossUserAllows(RequestContext ctx, AString resource, AString ability, AString destination) {
 		if (ctx == null || resource == null || ability == null) return false;
-		if (ctx.hasSeparateAuthority()) {
-			return crossUserAllows(ctx.authorityContext(), ctx.inNamespace(resource), ability, destination);
-		}
+		RequestContext frame = authorityFrame(ctx);
+		if (frame != ctx) return crossUserAllows(frame, ctx.inNamespace(resource), ability, destination);
 		// The venue's explicitly addressed asset catalog is public. This is NOT
 		// true of another user's /a/: knowing a hash is not authorisation to read
 		// someone else's asset. On user-facing APIs a bare hash names the caller's
@@ -3798,13 +4459,24 @@ public class Engine {
 	/**
 	 * Target-side admission (covia#447): the resource owner's own standing policy
 	 * for who may talk to their agent, consulted for exactly one resource shape —
-	 * an agent record {@code <owner>/g/<id>} — and the two talk abilities. The
-	 * policy algebra is {@link Admission}; this method only locates the record.
+	 * an agent record {@code <owner>/g/<id>} — and the two talk abilities. A
+	 * principal it names admits whatever acts for it ({@link #actsFor}), each
+	 * only where its narrowing covers the act ({@link #admissionCovers}). The
+	 * policy algebra is {@link Admission}; this method locates the record and
+	 * the caller's chain.
 	 */
 	private boolean admissionAllows(RequestContext ctx, AString resource, AString ability) {
-		if (!isTalkAbility(ability)) return false;
-		AString caller = ctx.getCallerDID();
-		if (caller == null) return false;
+		return isTalkAbility(ability) && acceptsAdmit(ctx, resource) && narrowingAllows(ctx, resource, ability);
+	}
+
+	/**
+	 * Whether the admission policy of the agent at {@code resource} admits what
+	 * {@code ctx}'s caller acts for, before what narrows the caller is
+	 * considered. False when {@code resource} is not an agent record here.
+	 */
+	private boolean acceptsAdmit(RequestContext ctx, AString resource) {
+		AString caller = (ctx == null) ? null : ctx.getAuthorityDID();
+		if (caller == null || resource == null) return false;
 		AString owner = ownerOf(resource);
 		if (owner == null) return false;
 		String rest = resource.toString().substring(owner.toString().length());
@@ -3814,8 +4486,67 @@ public class Engine {
 		User user = venueState.users().user(owner);
 		Agent agent = (user != null) ? user.agent(agentId) : null;
 		if (agent == null) return false;
-		return Admission.admits(Admission.policy(agent.getConfig()), caller,
-			isVenuePrincipal(ctx.getUserDID()), isPublicPrincipal(caller));
+		AString account = ctx.getUserDID();
+		AString web = config.getWebDID();
+		boolean actsForVenue = actsFor(account, caller, getDIDString()) || (web != null && actsFor(account, caller, web));
+		return Admission.admits(Admission.policy(agent.getConfig()), named -> actsFor(account, caller, named),
+			actsForVenue, isPublicPrincipal(caller));
+	}
+
+	/**
+	 * Whether what narrows the authority {@code ctx} acts with covers
+	 * {@code (resource, ability)}, so that it may use what an admission gives
+	 * it there: an {@code accepts} or a gate (AUTHORITY.md, Admission). Being
+	 * admitted is part of the named principal's authority, which a request holds
+	 * only as narrowed: by the caps of every agent on its chain of controllers,
+	 * and by its access tokens and callable. The venue's public principal has no
+	 * caps; its public scope is its whole authority, not a narrowing.
+	 */
+	public boolean admissionCovers(RequestContext ctx, AString resource, AString ability) {
+		if (ctx == null) return false;
+		RequestContext frame = authorityFrame(ctx);
+		if (frame != ctx) return admissionCovers(frame, ctx.inNamespace(resource), ability);
+		return narrowingAllows(ctx, resource, ability);
+	}
+
+	/** As {@link #admissionCovers}, on a context acting with its own authority. */
+	private boolean narrowingAllows(RequestContext ctx, AString resource, AString ability) {
+		if (!narrowingsCover(ctx, resource, ability, null)) return false;
+		if (isPublicPrincipal(ctx.getAuthorityDID())) return true;
+		AVector<ACell> scope = ctx.scopeFor(resource);
+		return scope == null || ctx.denialUnder(scope, resource, ability, ctx.getUserDID(), null) == null;
+	}
+
+	/**
+	 * Whether {@code principal} acts with {@code named}'s authority: it is that
+	 * principal, or an agent whose controller does, up its chain of controllers
+	 * as their records name them (AUTHORITY.md, Admission). An agent-shaped DID
+	 * counts only as the agent a record of that exact form names, and a chain
+	 * that loops or meets an agent with no record acts for no one beyond it.
+	 */
+	public boolean actsFor(AString principal, AString named) {
+		if (principal == null || named == null) return false;
+		return actsFor(accountOf(principal), principal, named);
+	}
+
+	/** As {@link #actsFor(AString, AString)}, for {@code principal} in {@code owner}'s account as a context or record names it. */
+	private boolean actsFor(AString owner, AString principal, AString named) {
+		Set<AString> seen = new HashSet<>();
+		while (principal != null) {
+			if (principal.equals(named)) return true;
+			AString agentId = agentIdIn(owner, principal);
+			if (agentId == null || !seen.add(principal)) return false;
+			Agent agent = getAgent(owner, agentId);
+			if (agent == null) return false;
+			principal = agent.getController();
+			owner = accountOf(principal);
+		}
+		return false;
+	}
+
+	/** The account a principal a record names belongs to: its owner's for an agent, its own otherwise. */
+	private static AString accountOf(AString principal) {
+		return covia.grid.Principals.isAgentDID(principal) ? covia.grid.Principals.userOf(principal) : principal;
 	}
 
 	/**
@@ -3831,30 +4562,53 @@ public class Engine {
 		return web != null && principal.equals(web);
 	}
 
+	/** Refusals of acting as another user. */
+	public static final String SUDO_AUTH_REQUIRED = "Authentication required for " + Abilities.ADMIN_SUDO;
+	public static final String SUDO_DENIED = "Sudo denied: requires " + Abilities.ADMIN_SUDO + " on %s from that user";
+	/** Why a request an access token or a callable narrows may not act for another user. */
+	public static final String SUDO_NARROWED = "A request through an access token or a callable cannot act for another user (admin/sudo)";
+	/** Why nobody acts as the venue or its public principal through {@code admin/sudo}; the target follows. */
+	public static final String SUDO_NOT_A_USER = "Nobody acts as the venue or its public principal through admin/sudo: %s";
+
 	/**
-	 * Authorises an explicit request to execute within another user's namespace.
-	 * The request itself is the instruction; the {@code user/sudo} capability is
-	 * only the permission check. Authentication and actor attribution are retained.
-	 *
-	 * <p>The returned context is proof-bounded so the actor's ambient authority
-	 * over its own account cannot leak into the target account. The sudo grant
-	 * selects only the namespace: the invoked operation and every point of action
-	 * must still be covered independently.</p>
+	 * A call from {@code ctx} into {@code userDID} under {@code admin/sudo}, as
+	 * {@code sudo} on Unix is: the user's whole authority, as the user's own
+	 * request would hold it ({@link #context(AString)}), with the delegate's
+	 * authority as the frame's caller ({@link RequestContext#calledFrom}). The
+	 * grants the delegate presents do not bound it, so what it does and makes is
+	 * the user's. Entry is checked once, here: the request names a principal, no
+	 * access token or callable narrows it, and it holds {@code admin/sudo} on the
+	 * user, whatever request it is (deferred work and an agent's tool call
+	 * included). The venue's own DID and its public principal are no user to
+	 * enter. The call keeps the delegate's job, cancellation and origin,
+	 * so acts that need the user in person refuse it ({@link #inPersonDenial}),
+	 * and its route gains the user adapter's record vouching for the user.
+	 * A request already in the user's account is returned as it is.
 	 */
 	public RequestContext sudoContext(RequestContext ctx, AString userDID) {
-		if (ctx == null || ctx.getCallerDID() == null
-				|| isPublicPrincipal(ctx.getCallerDID())) {
-			throw new AuthException("Authentication required for user/sudo");
-		}
+		AString delegate = (ctx == null) ? null : ctx.getAuthorityDID();
+		if (delegate == null || isPublicPrincipal(delegate)) throw new AuthException(SUDO_AUTH_REQUIRED);
 		if (userDID == null) throw new InvalidInputException("Target user DID is required");
 		requireNotSubPrincipal(userDID);
 		if (userDID.equals(ctx.getUserDID())) return ctx;
-		if (!crossUserAllows(ctx, userDID, Abilities.USER_SUDO)) {
-			throw new AuthException("Sudo denied: requires user/sudo on " + userDID
-				+ " from that user");
+		if (isVenuePrincipal(userDID) || isPublicPrincipal(userDID)) {
+			throw new AuthException(SUDO_NOT_A_USER.formatted(userDID));
 		}
-		return ctx.onBehalfOf(userDID);
+		// Acting as another user takes that user's whole authority, which no
+		// token's or callable's caps bound, so a request either narrows never enters
+		if (ctx.isNarrowed()) throw new AuthException(SUDO_NARROWED);
+		if (!crossUserAllows(ctx, userDID, Abilities.ADMIN_SUDO)) {
+			throw new AuthException(SUDO_DENIED.formatted(userDID));
+		}
+		// The request is handed to the user, which its route records, so whoever
+		// it reaches sees who acted as the user
+		return context(userDID).calledFrom(ctx).via(SUDO_ADAPTER, Maps.of(Fields.OPERATION, SUDO_OPERATION),
+			covia.venue.RouteText.of(Abilities.ADMIN_SUDO.toString()));
 	}
+
+	private static final AString SUDO_ADAPTER = Strings.intern(covia.adapter.UserAdapter.NAME);
+	/** The user adapter's operation that hands a request to a user ({@code user:sudo}). */
+	private static final AString SUDO_OPERATION = Strings.intern("sudo");
 
 	/** A read of the venue's explicitly addressed content catalog
 	 *  ({@code <venueDID>/a/…}). It is public only for reads and only for the
@@ -3901,9 +4655,10 @@ public class Engine {
 	 *  (a secret into an outbound request): a grant's {@code nb.url} caveat must
 	 *  cover it. */
 	public AString requireLocalAccess(RequestContext ctx, AString resource, AString ability, AString destination) {
-		if (ctx != null && ctx.hasSeparateAuthority()) {
+		RequestContext frame = authorityFrame(ctx);
+		if (frame != ctx) {
 			requireStanding(ctx);
-			return requireLocalAccess(ctx.authorityContext(), ctx.inNamespace(resource), ability, destination);
+			return requireLocalAccess(frame, ctx.inNamespace(resource), ability, destination);
 		}
 		if (ownedByCaller(ctx, resource) || (ctx != null && controlsAgentAt(ctx, resource))) {
 			requireAuthority(ctx, resource, ability, destination);   // own namespace → scope seam
@@ -3956,7 +4711,7 @@ public class Engine {
 	 * <ul>
 	 * <li>A principal is root of its own resources, of an identity's it signs in
 	 * as, and of its agents' (UCAN.md, "Roots"), and so is anything acting with
-	 * its authority: an agent with its owner's, a request under {@code user/sudo}
+	 * its authority: an agent with its owner's, a request under {@code admin/sudo}
 	 * with the target's. That is the authority it has of its own, never what
 	 * others have granted it. Its scope must include {@code grant/<can>} there,
 	 * as having no scope does.</li>
@@ -3976,18 +4731,24 @@ public class Engine {
 	 */
 	public void requireGrantable(RequestContext ctx, AString namespace, AString resource, AString can,
 			Long exp, AString destination) {
-		if (ctx.hasSeparateAuthority()) {
-			requireGrantable(ctx.authorityContext(), namespace, ctx.inNamespace(resource), can, exp, destination);
+		RequestContext frame = authorityFrame(ctx);
+		if (frame != ctx) {
+			requireGrantable(frame, namespace, ctx.inNamespace(resource), can, exp, destination);
 			return;
 		}
 		AString grant = Strings.create("grant/" + can);
 		AString owner = isHosted(resource) ? ownerOf(resource) : namespace;
 		// Presented grants are checked against the whole namespace for a match-any resource.
 		AString target = (resource != null) ? resource : namespace;
-		boolean root = isRootOf(ctx.getCallerDID(), owner) || isRootOf(ctx.getUserDID(), owner);
+		boolean root = isRootOf(ctx.getAuthorityDID(), owner) || isRootOf(ctx.getUserDID(), owner);
 		if (root) {
 			AVector<ACell> scope = ctx.getCaps();
 			if (scope == null || ctx.denialUnder(scope, resource, grant, ctx.getUserDID(), destination) == null) return;
+		}
+		// A presented granting right adds authority only within the token or
+		// callable through which this request acts, as for any other action.
+		if (!narrowingsCover(ctx, target, grant, destination)) {
+			throw new AuthException(GRANT_BEYOND_SCOPE + " " + can + " on " + target);
 		}
 		if (!proofsCover(ctx, target, grant, currentTimestamp().longValue() / 1000, destination)) {
 			throw new AuthException((root ? GRANT_BEYOND_SCOPE : NO_GRANTING_RIGHT) + " " + can + " on " + target);
@@ -4149,6 +4910,11 @@ public class Engine {
 	 *       namespace.</li>
 	 * </ul>
 	 *
+	 * <p>It has no origin: the venue making a context for a principal, for a
+	 * bot's listed senders or for work it carries on, does not make that
+	 * principal present. A request that authenticated is
+	 * {@link #requestContext}.</p>
+	 *
 	 * @param principal the acting DID, or null for anonymous
 	 * @throws AuthException for the public principal while public access is off
 	 */
@@ -4157,12 +4923,63 @@ public class Engine {
 		if (isPublicPrincipal(principal)) {
 			if (!auth.isPublicAccessEnabled()) throw new AuthException(PUBLIC_ACCESS_OFF);
 			AString publicDID = publicPrincipal();
-			return RequestContext.of(publicDID, null, auth.getPublicScope(publicDID));
+			return RequestContext.unattended(publicDID, auth.getPublicScope(publicDID));
 		}
 		if (covia.grid.Principals.isAgentDID(principal)) {
-			return RequestContext.of(principal, null, Vectors.empty());
+			return RequestContext.unattended(principal, Vectors.empty());
 		}
-		return RequestContext.of(principal);
+		return RequestContext.unattended(principal, null);
+	}
+
+	/**
+	 * The context of a request a door of the venue authenticated as
+	 * {@code principal}, or presenting access token {@code token}: as it acts
+	 * now ({@link #context(AString)}, {@link #tokenContext}), with the
+	 * principal that acts in it as its origin, the token's issuer for a token
+	 * ({@link RequestContext#getOrigin()}). Only a door that
+	 * authenticated the request makes one, so that only such a request can be
+	 * the user in person ({@link #inPersonDenial}). Its route starts where it
+	 * entered: the token's record, or a sign-in vouching for the principal, which
+	 * says so of an anonymous caller ({@link RequestContext#getRoute}).
+	 *
+	 * @param principal the authenticated caller, or null for anonymous
+	 * @param token the access token's reference the request presented, or null
+	 * @throws AuthException as {@link #context(AString)} or {@link #tokenContext}
+	 */
+	public RequestContext requestContext(AString principal, AMap<AString, ACell> token) {
+		if (token != null) return tokenContext(token).asOrigin();
+		RequestContext ctx = context(principal).asOrigin();
+		if (ctx.getOrigin() == null) return ctx;
+		return ctx.via(RequestContext.SIGN_IN, Maps.empty(),
+			isPublicPrincipal(ctx.getOrigin()) ? RequestContext.NOT_SIGNED_IN : RequestContext.SIGNED_IN);
+	}
+
+	/**
+	 * An authenticated ingress request with transport provenance on its first
+	 * route record (AGENT_CONTEXT.md §1.2). Only trusted ingress code supplies
+	 * these facts; protocol and credential type are absent when unknown. This
+	 * changes neither authority nor authentication evidence. No credential bytes,
+	 * client-supplied labels or claims of human presence belong here.
+	 */
+	public RequestContext requestContext(AString principal, AMap<AString, ACell> token,
+			AString transport, AString protocol, AString credentialType) {
+		java.util.Objects.requireNonNull(transport, "transport");
+		RequestContext ctx = requestContext(principal, token);
+		AVector<ACell> route = ctx.getRoute();
+		if (route == null || route.isEmpty()) return ctx;
+		AMap<AString, ACell> first = RT.ensureMap(route.get(0));
+		first = first.assoc(Fields.TRANSPORT, transport);
+		RouteText.Builder text = RouteText.builder().text(", transport ").id(transport);
+		if (protocol != null) {
+			first = first.assoc(Fields.PROTOCOL, protocol);
+			text.text(", protocol ").id(protocol);
+		}
+		if (credentialType != null) {
+			first = first.assoc(Fields.CREDENTIAL_TYPE, credentialType);
+		}
+		AVector<ACell> previousText = RT.ensureVector(first.get(Fields.TEXT));
+		first = first.assoc(Fields.TEXT, previousText.concat(text.build().parts()));
+		return ctx.withRoute(route.assoc(0, first));
 	}
 
 	/**
@@ -4197,9 +5014,10 @@ public class Engine {
 	 * the owner's included: unrestricted in its namespace for a user, the
 	 * public caps for the public principal. Its owner's agents narrow one
 	 * scope along the chain of controllers, read at each point of action. A
-	 * controller from another namespace is a separate authority
-	 * ({@link RequestContext#withAuthorityOf}), since it holds nothing of the
-	 * owner's own. A chain of controllers that loops has no authority at its
+	 * controller from another account holds nothing of the owner's own, so the
+	 * context holds the caps along the chain within the account and each check
+	 * works out that controller's authority ({@link #authorityFrame}). A chain
+	 * of controllers that loops within the account has no authority at its
 	 * root, so grants nothing.
 	 *
 	 * <p>What control gives is not narrowed by the controller's own caps
@@ -4226,12 +5044,68 @@ public class Engine {
 		RequestContext bound = (controllerAgent != null)
 			? agentContext(controllerOwner, controllerAgent, chain)
 			: context(controllerOwner, controller);
-		if (controllerOwner.equals(owner) && !bound.hasSeparateAuthority()) {
+		if (controllerOwner.equals(owner)) {
 			return agent.readingScope(resource -> withControl(
 				CapabilityChecker.intersect(agentScope(owner, agentId), owner, bound.scopeFor(resource), owner),
 				self, resource, owner));
 		}
-		return agent.withAuthorityOf(bound.narrowedBy(caps, owner));
+		// Checked above that it can act now; its authority is worked out at each check
+		return agent.readingScope(caps);
+	}
+
+	/** Why an agent whose controllers leave its account and lead back acts with no authority; the agent follows. */
+	public static final String CONTROLLERS_LOOP = "Agent %s acts with no authority: its controllers lead back to it";
+
+	/**
+	 * The frame whose authority decides what {@code ctx} may do. For an agent
+	 * whose controllers lead out of its account, that is the first controller
+	 * outside it, as it acts now, narrowed by the caps of the agents on the way
+	 * and by what narrows {@code ctx} ({@link #agentContext}). It is worked out
+	 * from the agents' records at each check, as their caps are, and holds the
+	 * request's invocation, since capability gates rule on it. For any other
+	 * request it is {@code ctx} itself. Checks run against it on resources
+	 * resolved in {@code ctx}'s namespace ({@link RequestContext#inNamespace}).
+	 *
+	 * @throws AuthException when a controller on the chain could not act now,
+	 *         or the chain leaves the account and leads back to it
+	 */
+	public RequestContext authorityFrame(RequestContext ctx) {
+		if (ctx == null) return null;
+		AString owner = ctx.getUserDID();
+		AString agentId = agentIdIn(owner, ctx.getAuthorityDID());
+		if (agentId == null) return ctx;
+		RequestContext outside = outsideController(owner, agentId, new HashSet<>(), false);
+		return (outside == null) ? ctx : ctx.actingAs(outside.narrowedAs(ctx));
+	}
+
+	/**
+	 * The first controller outside {@code owner}'s account on agent
+	 * {@code agentId}'s chain, as it acts now and as one frame, or null when the
+	 * chain stays in the account. A controller that is itself an agent acts as
+	 * {@link #authorityFrame} has it.
+	 *
+	 * @param seen the agents already on this chain
+	 * @param entered whether {@code owner}'s account was entered from another's
+	 */
+	private RequestContext outsideController(AString owner, AString agentId, Set<AString> seen, boolean entered) {
+		AString self = covia.grid.Principals.agentDID(owner, agentId);
+		if (!seen.add(self)) {
+			// Within one account its context grants nothing; a chain that left it has no frame to act with
+			if (entered) throw new AuthException(CONTROLLERS_LOOP.formatted(self));
+			return null;
+		}
+		Agent state = getAgent(owner, agentId);
+		AString controller = (state == null) ? owner : state.getController();
+		AString controllerOwner = covia.grid.Principals.isAgentDID(controller)
+			? covia.grid.Principals.userOf(controller) : controller;
+		AString controllerAgent = agentIdIn(controllerOwner, controller);
+		if (controllerOwner.equals(owner)) {
+			return (controllerAgent == null) ? null : outsideController(owner, controllerAgent, seen, false);
+		}
+		if (controllerAgent == null) return context(controllerOwner, controller);
+		RequestContext agent = agentContext(controllerOwner, controllerAgent, seen);
+		RequestContext further = outsideController(controllerOwner, controllerAgent, seen, true);
+		return (further == null) ? agent : further.narrowedAs(agent);
 	}
 
 	/**
@@ -4309,40 +5183,78 @@ public class Engine {
 	/** Whether the request's caller or namespace controls the agent {@code resource} belongs to. */
 	private boolean controlsAgentAt(RequestContext ctx, AString resource) {
 		AgentPlace place = AgentPlace.of(resource, ctx.getUserDID());
-		return place != null && (controls(ctx.getCallerDID(), place) || controls(ctx.getUserDID(), place));
+		return place != null && (controls(ctx.getAuthorityDID(), place) || controls(ctx.getUserDID(), place));
 	}
 
 	/**
-	 * The context {@code principal} acts under now for {@code owner}, presenting
-	 * {@code proofs}, as a live request of its own would: the owner, one of its
-	 * agents or the public principal as {@link #context(AString, AString)}, and
-	 * any other principal only as a {@code user/sudo} delegate whose proofs still
-	 * authorise it ({@link #sudoContext}). A recorded request, such as a
+	 * The context {@code principal} acts under now in {@code owner}'s account,
+	 * presenting {@code proofs}, as a live request of its own would: the
+	 * owner, one of its agents or the public principal as
+	 * {@link #context(AString, AString)}. A recorded request, such as a
 	 * scheduled event, is rebuilt this way when it runs.
 	 *
-	 * @throws AuthException as {@link #context(AString, AString)} or {@link #sudoContext}
+	 * @throws AuthException as {@link #context(AString, AString)}, or when
+	 *         {@code principal} does not act in that account
+	 *         ({@link #NOT_IN_ACCOUNT})
 	 */
 	public RequestContext context(AString owner, AString principal, AVector<ACell> proofs) {
 		boolean own = principal == null || principal.equals(owner) || isPublicPrincipal(principal)
 			|| agentIdIn(owner, principal) != null;
-		RequestContext ctx = own ? context(owner, principal) : context(principal);
-		if (proofs != null) ctx = ctx.withProofs(proofs);
-		return own ? ctx : sudoContext(ctx, owner);
+		if (!own) throw new AuthException(NOT_IN_ACCOUNT.formatted(principal, owner));
+		RequestContext ctx = context(owner, principal);
+		return (proofs == null) ? ctx : ctx.withProofs(proofs);
 	}
 
 	/**
-	 * What a stored context keeps of {@code ctx}'s separate authority
-	 * ({@link RequestContext#withAuthorityOf}), beside its caller, owner and
-	 * proofs, so that work continuing later acts with the same authority: its
-	 * principal as {@link Fields#CALLER}, namespace as {@link Fields#OWNER} and
-	 * presented {@link Fields#PROOFS}. Null when it acts with its caller's own.
+	 * Refusal of work recorded in an account its principal does not act in, as
+	 * work an {@code admin/sudo} delegate left before that acted as the user
+	 * is: the principal and the account.
 	 */
-	public static AMap<AString, ACell> keptAuthority(RequestContext ctx) {
-		if (ctx == null || !ctx.hasSeparateAuthority()) return null;
-		RequestContext authority = ctx.authorityContext();
-		AMap<AString, ACell> kept = Attribution.attribute(Maps.empty(), authority.getCallerDID(), authority.getUserDID());
-		AVector<ACell> proofs = authority.getProofs();
-		return (proofs == null || proofs.isEmpty()) ? kept : kept.assoc(Fields.PROOFS, proofs);
+	public static final String NOT_IN_ACCOUNT = "%s does not act in the account of %s, so work kept there cannot act as it";
+
+	/**
+	 * The state of {@code principal} acting with its own authority,
+	 * unnarrowed and presenting nothing, as work the venue schedules for a
+	 * principal keeps ({@link #stateOf(RequestContext)}).
+	 */
+	public static AMap<AString, ACell> stateOf(AString principal) {
+		return Maps.of(Fields.FRAME, Maps.of(Fields.AUTHORITY, principal));
+	}
+
+	/**
+	 * The state that work continuing from {@code ctx} keeps, so that it acts
+	 * again with the same authority (AUTHORITY.md, A job's state): the frame
+	 * as {@link Fields#FRAME}, stored whole, its {@code authority} and its
+	 * {@code caller} if it has one, so that caller means only the frame's;
+	 * what narrows that authority, the access token as {@link Fields#TOKEN} or
+	 * the callable whose call it is as {@link Fields#CALLABLE}; and the grants
+	 * the request presented as {@link Fields#PROOFS}. It holds principals and
+	 * references, never authority worked out from them: an agent's is worked
+	 * out from its record each time it acts ({@link #authorityFrame}), so
+	 * nothing of its controller is kept. {@link #contextOf} rebuilds the
+	 * context.
+	 *
+	 * <p>Job entries and scheduled events store this shape, so renaming a key
+	 * needs a migration: work stored under the old key would resume without
+	 * the narrowing it records.</p>
+	 *
+	 * @return the state, or null when {@code ctx} acts as nobody
+	 */
+	public static AMap<AString, ACell> stateOf(RequestContext ctx) {
+		if (ctx == null || ctx.getAuthorityDID() == null) return null;
+		AMap<AString, ACell> frame = Maps.of(Fields.AUTHORITY, ctx.getAuthorityDID());
+		if (ctx.getCaller() != null) frame = frame.assoc(Fields.CALLER, ctx.getCaller());
+		AMap<AString, ACell> state = Maps.of(Fields.FRAME, frame);
+		AMap<AString, ACell> callable = ctx.getCallable();
+		if (callable != null) {
+			state = state.assoc(Fields.CALLABLE, callable);
+		} else {
+			AMap<AString, ACell> token = presentedToken(ctx);
+			if (token != null) state = state.assoc(Fields.TOKEN, token);
+		}
+		AVector<ACell> proofs = ctx.getProofs();
+		if (proofs != null && !proofs.isEmpty()) state = state.assoc(Fields.PROOFS, proofs);
+		return state;
 	}
 
 	/** Why a request may not change an agent another principal controls; the agent and its controller follow. */
@@ -4354,31 +5266,125 @@ public class Engine {
 	/**
 	 * Whether {@code ctx} acts with {@code principal}'s whole authority, as
 	 * making it an agent's controller, or changing an agent it controls, needs.
-	 * The authority the request acts with ({@link RequestContext#authorityContext})
+	 * The authority the request acts with ({@link #authorityFrame})
 	 * must be that principal, an identity it signs in as, or its owner if it is
 	 * an agent; acting in a namespace that is root of it counts only with an
 	 * unrestricted scope. So a user holds its own and its agents' authority, an
 	 * agent its own, and a capped agent not its owner's or a sibling's. A
-	 * {@code user/sudo} delegate, whose scope is its presented grants, holds no
-	 * other principal's.
+	 * delegate under {@code admin/sudo} acts as its target, so holds what the
+	 * target holds.
 	 *
 	 * <p>A request made as an agent holds that agent's authority, however it is
 	 * derived, and its owner's only when it acts with its own authority and
 	 * nothing narrows it. The authority of a controller it derives from is
 	 * narrowed by the agent's caps, so is not that controller's whole
-	 * authority, and its harness ({@link #harnessContext}) acts with its
-	 * controller's authority without holding it.</p>
+	 * authority. Its harness ({@link #harnessContext}) is its controller's
+	 * frame, so holds what the controller's own request would.</p>
+	 *
+	 * <p>A request an access token or a callable narrows holds it only when
+	 * their caps are unrestricted.</p>
 	 */
 	public boolean holdsAuthorityOf(RequestContext ctx, AString principal) {
-		if (ctx == null || principal == null) return false;
-		AString caller = ctx.getCallerDID();
-		if (agentIdIn(ctx.getUserDID(), caller) != null) {
-			if (isRootOf(caller, principal)) return true;
-			return !ctx.hasSeparateAuthority() && ctx.getCaps() == null && isRootOf(ctx.getUserDID(), principal);
+		return actsWithAuthorityOf(ctx, principal) && narrowingsUnrestricted(ctx);
+	}
+
+	/**
+	 * Whether what narrows {@code ctx}, every access token on it and the
+	 * callable whose call it is, leaves it all of the authority it acts with:
+	 * each stands and its caps are unrestricted. True when nothing narrows it.
+	 */
+	private boolean narrowingsUnrestricted(RequestContext ctx) {
+		AMap<AString, ACell> called = ctx.getCallable();
+		if (called != null) {
+			Callable callable = resolveCallable(called);
+			if (callable == null || !callable.caps().isUnrestricted()) return false;
 		}
-		RequestContext authority = ctx.authorityContext();
-		if (isRootOf(authority.getCallerDID(), principal)) return true;
+		for (ACell held : ctx.getTokens()) {
+			AccessToken token = resolveToken(RT.ensureMap(held));
+			if (token == null || !token.caps().isUnrestricted()) return false;
+		}
+		return true;
+	}
+
+	/** Refusal of caps beyond what the request giving them may do itself; the first such cap follows. */
+	public static final String CAPS_BEYOND_GIVER = "Caps may give no more than the request giving them may do itself, "
+		+ "and this request may not do: ";
+
+	/**
+	 * Why {@code ctx} may not give {@code caps} to an access token or callable
+	 * it creates or changes, or null when it may. What it makes has no link to
+	 * the request, so each cap must lie within what the request may do itself:
+	 * the authority it acts with as its token, its callable or its agent's caps
+	 * narrow it, never widened by grants it presents
+	 * ({@link #authorityFrame}). A request nothing narrows may
+	 * give any caps. A caveated cap the request holds counts for nothing here,
+	 * since no gate can be evaluated, so caps it covers are refused rather than
+	 * stored.
+	 *
+	 * @param caps the caps as {@link covia.lattice.Caps#parse} reads them; null for unrestricted
+	 */
+	public String capsDenial(RequestContext ctx, AVector<ACell> caps) {
+		RequestContext holder = authorityFrame(ctx);
+		if (holder.scopeFor(null) == null) return null;
+		if (caps == null) return CAPS_BEYOND_GIVER + Caps.UNRESTRICTED;
+		AString namespace = ctx.getUserDID();
+		for (long i = 0; i < caps.count(); i++) {
+			Cap cap = Cap.of(RT.ensureMap(caps.get(i)));
+			String with = CapabilityChecker.canonicalResource((cap.with() == null) ? "" : cap.with().toString(), namespace);
+			AString resource = Strings.create(with);
+			if (CapabilityChecker.allows(holder.scopeFor(resource), resource, cap.can(), holder.getUserDID()) != null) {
+				return CAPS_BEYOND_GIVER + caps.get(i);
+			}
+		}
+		return null;
+	}
+
+	/** Refusal of an act only the user may do in person. */
+	public static final String NOT_IN_PERSON = "Only the user in person may do this: not an agent, not another "
+		+ "principal acting for the user, and not work the venue carries on later";
+
+	/**
+	 * Why {@code ctx} is not the user in person, or null when it is: the
+	 * principal whose authority applies is a user acting in its own account,
+	 * and that user is the request's origin
+	 * ({@link RequestContext#getOrigin()}). So an agent, the public
+	 * principal, a callable's call, a delegate under {@code admin/sudo} and
+	 * work resumed from what a job or event kept are each refused. An act that
+	 * needs the user present, such as answering their approval requests, asks
+	 * this beside its authority check.
+	 */
+	public String inPersonDenial(RequestContext ctx) {
+		AString authority = (ctx == null) ? null : ctx.getAuthorityDID();
+		if (authority == null || isPublicPrincipal(authority)) return NOT_IN_PERSON;
+		if (!authority.equals(ctx.getUserDID())) return NOT_IN_PERSON;
+		if (!authority.equals(ctx.getOrigin())) return NOT_IN_PERSON;
+		return null;
+	}
+
+	/**
+	 * Whether {@code ctx} acts with {@code principal}'s authority, however an
+	 * access token, a callable or an agent's caps narrow it: as
+	 * {@link #holdsAuthorityOf(RequestContext, AString)}, setting the caps of
+	 * its token or callable aside. Such a request may hand that authority on
+	 * within what it may do itself ({@link #capsDenial}), as the issuer of a
+	 * token or callable.
+	 */
+	public boolean actsWithAuthorityOf(RequestContext ctx, AString principal) {
+		if (ctx == null || principal == null) return false;
+		AString caller = ctx.getAuthorityDID();
+		RequestContext authority = authorityFrame(ctx);
+		if (actsAsOwnAgent(ctx)) {
+			if (isRootOf(caller, principal)) return true;
+			return authority == ctx && ctx.getCaps() == null && isRootOf(ctx.getUserDID(), principal);
+		}
+		if (isRootOf(authority.getAuthorityDID(), principal)) return true;
 		return authority.getCaps() == null && isRootOf(authority.getUserDID(), principal);
+	}
+
+	/** The access token that carried {@code ctx}, which narrows it, or null when none did. */
+	private static AMap<AString, ACell> presentedToken(RequestContext ctx) {
+		AVector<ACell> tokens = ctx.getTokens();
+		return tokens.isEmpty() ? null : RT.ensureMap(tokens.get(tokens.count() - 1));
 	}
 
 	/**
@@ -4386,29 +5392,38 @@ public class Engine {
 	 * creates or forks takes for its controller: an agent acting in its owner's
 	 * namespace, whatever its authority derives from, so that what it creates
 	 * stays within it; the authority's own principal when it acts in its own
-	 * namespace; and otherwise the namespace it acts for, as a {@code user/sudo}
-	 * delegate acts for its target.
+	 * namespace; and otherwise the namespace it acts in.
 	 */
 	public static AString actingPrincipal(RequestContext ctx) {
-		if (agentIdIn(ctx.getUserDID(), ctx.getCallerDID()) != null) return ctx.getCallerDID();
-		RequestContext authority = ctx.authorityContext();
-		AString caller = authority.getCallerDID();
-		AString user = authority.getUserDID();
+		if (actsAsOwnAgent(ctx)) return ctx.getAuthorityDID();
+		AString caller = ctx.getAuthorityDID();
+		AString user = ctx.getUserDID();
 		if (caller == null || caller.equals(user) || agentIdIn(user, caller) != null) return caller;
 		return user;
 	}
 
 	/**
-	 * The context agent {@code agentId}'s harness runs under: the agent in its
-	 * owner's namespace, attributed to the agent, acting with its controller's
-	 * authority as it stands now ({@link RequestContext#withAuthorityOf}), its
-	 * owner's included, as that principal's own request would hold it
-	 * ({@link #context(AString, AString)}). An agent controller's is read from
-	 * its caps at each check and is none once it is gone. Being a separate
-	 * authority, it is what a job the harness starts keeps
-	 * ({@link #keptAuthority}), so that job acts with it again after a restart.
-	 * What is held under the agent's own DID, such as its keyring, is the
-	 * agent's, not its controller's, so the harness does not reach it.
+	 * Whether {@code ctx}'s caller is one of the agents of the namespace it acts
+	 * in, acting with authority it has as that agent, however derived. Never in
+	 * a callable's call, whose caller is only the invoker and whose authority is
+	 * the callable's.
+	 */
+	private static boolean actsAsOwnAgent(RequestContext ctx) {
+		return ctx.getCallable() == null && agentIdIn(ctx.getUserDID(), ctx.getAuthorityDID()) != null;
+	}
+
+	/**
+	 * The context agent {@code agentId}'s harness runs under: its controller's
+	 * frame as that principal's own request would hold it now
+	 * ({@link #context(AString, AString)}), the owner's included, driving the
+	 * agent's execution ({@link RequestContext#inExecution}). So the jobs the
+	 * harness starts, such as its model calls, record the controller and are
+	 * kept in its account, and names in the agent's configuration resolve in
+	 * the controller's namespace. An agent controller's authority is narrowed
+	 * by its caps at each check and is none once it is gone. A cycle has no
+	 * caller. The agent's tool calls run as the agent ({@link #stepContext}),
+	 * and what is held under the agent's own DID, such as its keyring, is the
+	 * agent's, so the harness does not reach it.
 	 *
 	 * @throws AuthException when the controller could not act now
 	 */
@@ -4417,46 +5432,185 @@ public class Engine {
 		AString controller = (agent == null) ? owner : agent.getController();
 		AString controllerOwner = covia.grid.Principals.isAgentDID(controller)
 			? covia.grid.Principals.userOf(controller) : controller;
-		return RequestContext.ofAgent(owner, agentId).withAuthorityOf(context(controllerOwner, controller));
+		return context(controllerOwner, controller)
+			.inExecution(new RequestContext.ExecutionScope(owner, agentId, null, null, null, -1L, null));
 	}
 
 	/**
-	 * As {@link #context(AString, AString, AVector)}, acting with the authority
-	 * {@link #keptAuthority} kept, if any, rebuilt as it would act now: an
-	 * authority that could not act now fails as its own request would.
+	 * The context work kept in {@code account} acts in again, from the state
+	 * it keeps ({@link #stateOf}), worked out as everything in it stands now:
+	 * the frame's authority as {@link #context(AString, AString, AVector)}
+	 * makes it, presenting the kept grants, narrowed by the access token it
+	 * names; or, for a callable's call, the call's frame as the callable
+	 * stands, called by the frame's caller. Nothing about how the frame was
+	 * entered is checked again. Work that goes on this way is never anyone in
+	 * person, so the context has no origin ({@link #inPersonDenial}).
 	 *
-	 * @throws AuthException as {@link #context(AString, AString, AVector)}, for
-	 *         the caller or the kept authority
+	 * @throws AuthException when the state names no frame ({@link #NO_FRAME}),
+	 *         or as {@link #context(AString, AString, AVector)} for its authority
 	 */
-	public RequestContext context(AString owner, AString principal, AVector<ACell> proofs,
-			AMap<AString, ACell> authority) {
-		RequestContext ctx = context(owner, principal, proofs);
-		if (authority == null) return ctx;
-		RequestContext held = context(Attribution.owner(authority), Attribution.caller(authority),
-			RT.ensureVector(authority.get(Fields.PROOFS)));
-		return ctx.withAuthorityOf(held);
+	public RequestContext contextOf(AString account, AMap<AString, ACell> state) {
+		AMap<AString, ACell> frame = (state == null) ? null : RT.ensureMap(state.get(Fields.FRAME));
+		AString authority = (frame == null) ? null : RT.ensureString(frame.get(Fields.AUTHORITY));
+		if (authority == null) throw new AuthException(NO_FRAME);
+		// Work a callable's call left running: the call's frame as it stands now, called by whoever called it
+		AMap<AString, ACell> callable = RT.ensureMap(state.get(Fields.CALLABLE));
+		if (callable != null) {
+			return callFrame(callable).calledBy(RT.ensureString(frame.get(Fields.CALLER))).withoutOrigin();
+		}
+		RequestContext ctx = context(account, authority, RT.ensureVector(state.get(Fields.PROOFS)));
+		return narrowedByToken(ctx, RT.ensureMap(state.get(Fields.TOKEN))).withoutOrigin();
+	}
+
+	/** Refusal of work whose kept state names no frame to act in. */
+	public static final String NO_FRAME = "The work keeps no state naming whose authority it acts with, so it cannot act again";
+
+	// ========== Access tokens (ACCESS_TOKENS.md) ==========
+
+	/** Why a request an access token narrowed may not go on; the token's name follows. */
+	public static final String TOKEN_NOT_STANDING = "The access token no longer stands (deleted, expired or replaced): ";
+
+	/** The venue's access tokens, or null while the token adapter is not running. */
+	public AccessTokens tokens() {
+		return (getAdapter(TokenAdapter.NAME) instanceof TokenAdapter adapter) ? adapter.tokens() : null;
+	}
+
+	/** The token {@code reference} names, while it stands; otherwise null. */
+	public AccessToken resolveToken(AMap<AString, ACell> reference) {
+		AccessTokens tokens = tokens();
+		return (tokens == null || reference == null) ? null : tokens.resolve(reference, currentTimestamp().longValue());
+	}
+
+	/**
+	 * The context a request presenting access token {@code reference} acts under
+	 * now: its issuer as that principal acts in the token's namespace
+	 * ({@link #context(AString, AString)}), narrowed by the token's caps, read
+	 * at each point of action. A token that later stops standing narrows to
+	 * nothing. The request starts with the token, so its route's first record is
+	 * the token's reference, vouching for its issuer; the venue never knows who
+	 * holds a token, and the record says so.
+	 *
+	 * @throws AuthException when the token does not stand now, or its issuer could not act
+	 */
+	public RequestContext tokenContext(AMap<AString, ACell> reference) {
+		AccessToken token = resolveToken(reference);
+		if (token == null) throw new AuthException(TOKEN_NOT_STANDING + RT.getIn(reference, Fields.NAME));
+		return narrowedByToken(context(token.owner(), token.issuer()), reference).via(TOKEN_ADAPTER, reference,
+			covia.venue.RouteText.builder().text("access token ").name(reference.get(Fields.NAME))
+				.text(", held by someone the venue does not know").build());
+	}
+
+	private static final AString TOKEN_ADAPTER = Strings.intern(TokenAdapter.NAME);
+
+	/** {@code ctx} narrowed by the caps of {@code token}, read at each point of action; unchanged when there is no token. */
+	private RequestContext narrowedByToken(RequestContext ctx, AMap<AString, ACell> token) {
+		if (token == null) return ctx;
+		return ctx.withToken(token, resource -> {
+			AccessToken current = resolveToken(token);
+			return (current == null) ? Vectors.empty() : current.caps().scope();
+		}, RT.ensureString(token.get(Fields.OWNER)));
+	}
+
+	// ========== Callables (CALLABLES.md) ==========
+
+	/** The callable {@code reference} names, while it stands; otherwise null, as while the callable adapter is not running. */
+	public Callable resolveCallable(AMap<AString, ACell> reference) {
+		return (reference != null && getAdapter(CallableAdapter.NAME) instanceof CallableAdapter adapter)
+			? adapter.callables().resolve(reference) : null;
+	}
+
+	/**
+	 * The context a call of callable {@code reference} acts in: the frame of
+	 * its issuer as that principal acts in the callable's namespace
+	 * ({@link #context(AString, AString)}), narrowed by its caps, read at each
+	 * point of action, so a
+	 * callable that no longer stands narrows it to nothing. {@code invoker}'s
+	 * authority is the frame's caller and plays no other part; the call goes on
+	 * with the invoker's job, cancellation and origin
+	 * ({@link RequestContext#calledFrom}). What the call does is the issuer's:
+	 * the jobs it starts record the issuer as their caller.
+	 *
+	 * @throws AuthException when the issuer could not act now
+	 */
+	public RequestContext callContext(RequestContext invoker, AMap<AString, ACell> reference) {
+		return callFrame(reference).calledFrom(invoker);
+	}
+
+	/** The frame a call of callable {@code reference} runs in, as {@link #callContext} describes, before anyone enters it. */
+	private RequestContext callFrame(AMap<AString, ACell> reference) {
+		AString owner = RT.ensureString(reference.get(Fields.OWNER));
+		Callable callable = resolveCallable(reference);
+		RequestContext issuer = (callable == null) ? RequestContext.unattended(owner, Vectors.empty())
+			: context(owner, callable.issuer());
+		return issuer.withCallable(reference, resource -> {
+			Callable current = resolveCallable(reference);
+			return (current == null) ? Vectors.empty() : current.caps().scope();
+		}, owner);
+	}
+
+	/**
+	 * Whether what narrows the authority {@code ctx} acts with covers
+	 * {@code (resource, ability)}: every access token on it, and the callable
+	 * whose call it is, by their caps as they stand. What a request holds
+	 * beyond its scope (a proof, an admission, the public scope, a callable's
+	 * gate) reaches only that far. True when nothing narrows it.
+	 */
+	public boolean narrowingsCover(RequestContext ctx, AString resource, AString ability) {
+		if (ctx == null) return false;
+		RequestContext frame = authorityFrame(ctx);
+		if (frame != ctx) return narrowingsCover(frame, ctx.inNamespace(resource), ability);
+		return narrowingsCover(ctx, resource, ability, null);
+	}
+
+	/** As above for a use that sends a value to {@code destination}, on a context acting with its own authority. */
+	private boolean narrowingsCover(RequestContext ctx, AString resource, AString ability, AString destination) {
+		if (!tokensCover(ctx, resource, ability, destination)) return false;
+		AMap<AString, ACell> called = ctx.getCallable();
+		if (called == null) return true;
+		Callable callable = resolveCallable(called);
+		if (callable == null) return false;
+		AVector<ACell> caps = callable.caps().scope();
+		return caps == null || ctx.denialUnder(caps, resource, ability, callable.owner(), destination) == null;
 	}
 
 	/**
 	 * The context agent {@code agentId}'s step runs under: the agent itself as it
 	 * stands now ({@link #context(AString, AString)}), carrying on {@code ctx}'s
-	 * execution. A step runs only for an agent that exists, and only the agent's
-	 * own run or its owner may make it act. A step's input never sets its
-	 * authority.
+	 * execution, still narrowed by the access tokens that narrow {@code ctx},
+	 * so one that stops standing stops the step. A step runs only for an agent
+	 * that exists, and only the agent's own run or its owner may make it act,
+	 * with all of the authority it acts with: a request a restricted access
+	 * token or callable narrows makes no agent act. The agent's own run is told
+	 * by the execution it drives, which only the venue gives a request for that
+	 * agent (its harness, its own acts, a request through its token and work
+	 * they keep), never by who acts in it: the harness acts as the agent's
+	 * controller. A call is never the agent's own run. A step's input never
+	 * sets its authority. Its route is the driving request's with the agent's
+	 * record added ({@link RequestContext#getRoute}).
 	 *
 	 * @throws AuthException when the caller may not make that agent act, or it does not exist
 	 */
 	public RequestContext stepContext(RequestContext ctx, AString agentId) {
-		AString owner = ctx.getUserDID();
-		AString caller = ctx.getCallerDID();
+		RequestContext.ExecutionScope execution = ctx.getExecutionScope();
+		// A call is never the agent's own run, whatever frame it runs in
+		boolean ownRun = ctx.getCallable() == null && agentId != null && agentId.equals(execution.agentId());
+		AString owner = ownRun ? execution.ownerDID() : ctx.getUserDID();
+		AString caller = ctx.getAuthorityDID();
 		AString agentDID = (owner == null || agentId == null) ? null
 			: covia.grid.Principals.agentDID(owner, agentId);
-		if (agentDID == null || !(agentDID.equals(caller) || owner.equals(caller))) {
+		if (agentDID == null || !(ownRun || (owner.equals(caller) && actsWithAuthorityOf(ctx, owner)))) {
 			throw new AuthException(NOT_AGENTS_STEP.formatted(caller, agentId));
 		}
+		if (!narrowingsUnrestricted(ctx)) throw new AuthException(STEP_NARROWED.formatted(caller, agentId));
 		if (getAgent(owner, agentId) == null) throw new AuthException(NO_SUCH_AGENT.formatted(agentDID));
-		return ctx.actingAs(context(owner, agentDID)).withAgentId(agentId);
+		RequestContext agent = context(owner, agentDID);
+		for (ACell token : ctx.getTokens()) agent = narrowedByToken(agent, RT.ensureMap(token));
+		// The step goes on with the request that drives it, handed to the agent: the
+		// agent's own run starts with it, and the owner's request hands over to it
+		return ctx.actingAs(agent).withAgentId(agentId).withRoute(ctx.getRoute()).via(AGENT_ADAPTER, Maps.empty());
 	}
+
+	private static final AString AGENT_ADAPTER = Strings.intern(covia.adapter.AgentAdapter.NAME);
 
 	/**
 	 * The id of {@code principal} as one of {@code owner}'s agents, or null when
@@ -4475,14 +5629,21 @@ public class Engine {
 	 * The context a request authenticated through {@code owner}'s channel
 	 * binding runs under (COG-3 §7): its identified principal as it acts now
 	 * ({@link #context(AString, AString)}), carrying the result's record without
-	 * its {@code userDID}. The one place a request context gains an
-	 * authentication record.
+	 * its {@code userDID}, and started at the binding: its route's first record
+	 * is the binding's ({@link covia.adapter.messaging.ChannelAuthentication#step}),
+	 * vouching for the principal the binding identified. The
+	 * one place a request context gains an authentication record. That record
+	 * is attribution, not evidence, so the context has no origin: a message a
+	 * bot brings, and an operation the bot runs for it,
+	 * are never the user in person ({@link #inPersonDenial}).
 	 *
 	 * @throws AuthException as {@link #context(AString, AString)}
 	 */
 	public RequestContext channelContext(AString owner, covia.venue.auth.AuthResult result) {
-		return context(owner, result.userDID())
-			.withAuthentication(result.toData().dissoc(covia.venue.auth.AuthResult.USER_DID));
+		AMap<AString, ACell> record = result.toData().dissoc(covia.venue.auth.AuthResult.USER_DID);
+		AMap<AString, ACell> step = covia.adapter.messaging.ChannelAuthentication.step(record);
+		return context(owner, result.userDID()).withAuthentication(record)
+			.via(result.authentication().method(), step, covia.adapter.messaging.ChannelAuthentication.text(step));
 	}
 
 	/** Why the public principal cannot act: the operator has public access off. */
@@ -4493,6 +5654,10 @@ public class Engine {
 
 	/** Why a step did not run: only the agent's own run, or its owner, may make an agent act. */
 	public static final String NOT_AGENTS_STEP = "%s cannot run a step of agent %s: only the agent's own run or its owner can make it act";
+
+	/** Why a step did not run: an access token or callable that is restricted, or no longer stands, narrows the request. */
+	public static final String STEP_NARROWED = "%s cannot run a step of agent %s: an access token or callable narrows the request, "
+		+ "and only a request with all of the authority it acts with can make an agent act";
 
 	/** Why a step did not run: it names no agent that exists here. */
 	public static final String NO_SUCH_AGENT = "%s is not an agent here";
@@ -4507,7 +5672,7 @@ public class Engine {
 		if (resource == null || ctx == null) return true;
 		AString owner = ownerOf(resource);
 		if (owner == null) return true;
-		return owner.equals(ctx.getUserDID()) || owner.equals(ctx.getCallerDID());
+		return owner.equals(ctx.getUserDID()) || owner.equals(ctx.getAuthorityDID());
 	}
 
 	/** The owner DID of a {@code did:<owner>/…} resource (prefix before the first
@@ -4542,15 +5707,42 @@ public class Engine {
 		return authorityCovers(ctx, resource, ability, null);
 	}
 
+	/**
+	 * Whether the request's authority may cover {@code (resource, ability)}:
+	 * as {@link #authorityCovers}, with each {@code nb.gate} caveat on the
+	 * grants it relies on counted as passing. It answers a question asked before
+	 * the invocation's input exists, which no gate can rule on yet, such as
+	 * whether a reference resolves for this request; the use itself is checked
+	 * with its gates run.
+	 */
+	public boolean authorityMayCover(RequestContext ctx, AString resource, AString ability) {
+		return ctx != null && authorityCovers(ctx.withGatesPending(), resource, ability);
+	}
+
 	/** As above for a use that sends a value to {@code destination}: a grant's
 	 *  {@code nb.url} caveat must cover it. */
 	public boolean authorityCovers(RequestContext ctx, AString resource, AString ability, AString destination) {
 		if (ctx == null) return false;
-		if (ctx.hasSeparateAuthority()) {
-			return authorityCovers(ctx.authorityContext(), ctx.inNamespace(resource), ability, destination);
-		}
-		if (isAnothers(ctx, resource)) return crossUserAllows(ctx, resource, ability, destination);
+		RequestContext frame = authorityFrame(ctx);
+		if (frame != ctx) return authorityCovers(frame, ctx.inNamespace(resource), ability, destination);
+		if (isAnothers(ctx, resource)) return crossUserAllows(ctx, resource, ability, destination) && narrowingsCover(ctx, resource, ability, destination);
 		return scopeOrHeldCovers(ctx, resource, ability, destination);
+	}
+
+	/**
+	 * Whether every access token narrowing the request covers
+	 * {@code (resource, ability)}: what it holds beyond its scope (a proof, an
+	 * admission, the public scope) reaches only as far as its tokens' caps do.
+	 * True when no token narrows it.
+	 */
+	private boolean tokensCover(RequestContext ctx, AString resource, AString ability, AString destination) {
+		for (ACell link : ctx.getTokens()) {
+			AccessToken token = resolveToken(RT.ensureMap(link));
+			if (token == null) return false;
+			AVector<ACell> caps = token.caps().scope();
+			if (caps != null && ctx.denialUnder(caps, resource, ability, token.owner(), destination) != null) return false;
+		}
+		return true;
 	}
 
 	/** Whether {@code resource} is another identity's that this venue hosts, and not in the namespace of an agent the request controls. */
@@ -4567,7 +5759,7 @@ public class Engine {
 	private boolean scopeOrHeldCovers(RequestContext ctx, AString resource, AString ability, AString destination) {
 		AVector<ACell> scope = ctx.scopeFor(resource);
 		if (scope == null) return true;
-		if (crossUserAllows(ctx, resource, ability, destination)) return true;
+		if (crossUserAllows(ctx, resource, ability, destination) && narrowingsCover(ctx, resource, ability, destination)) return true;
 		return ctx.denialUnder(scope, resource, ability, ctx.getUserDID(), destination) == null;
 	}
 
@@ -4583,8 +5775,9 @@ public class Engine {
 	/** As above for a use that sends a value to {@code destination}. */
 	public void requireAuthority(RequestContext ctx, AString resource, AString ability, AString destination) {
 		requireStanding(ctx);
-		if (ctx != null && ctx.hasSeparateAuthority()) {
-			requireAuthority(ctx.authorityContext(), ctx.inNamespace(resource), ability, destination);
+		RequestContext frame = authorityFrame(ctx);
+		if (frame != ctx) {
+			requireAuthority(frame, ctx.inNamespace(resource), ability, destination);
 			return;
 		}
 		if (authorityCovers(ctx, resource, ability, destination)) return;
@@ -4592,15 +5785,21 @@ public class Engine {
 		throw scopeDenial(ctx, resource, ability, destination);
 	}
 
+	/** Why an agent's admission policy did not let a request ask it: the policy admits nothing the caller acts for. */
+	public static final String ACCEPTS_NOT_ADMITTED = "the target's accepts policy does not admit this caller";
+
+	/** Why an agent's admission policy did not let a request ask it: the policy admits the caller, but what narrows it does not cover asking. */
+	public static final String ACCEPTS_BEYOND_CAPS = "the target's accepts policy admits this caller, but the caps narrowing it do not cover asking";
+
 	/** The refusal of another principal's resource the request holds no rights to. */
-	private static covia.exception.AuthException anothersDenial(RequestContext ctx, AString resource, AString ability) {
+	private covia.exception.AuthException anothersDenial(RequestContext ctx, AString resource, AString ability) {
 		AVector<ACell> proofs = (ctx != null) ? ctx.getProofs() : null;
 		return RequestContext.denied(ctx, "Access denied: " + ability + " on " + resource
 			+ " — accessing another user's resource requires " + ability + " rights"
 			+ ((proofs == null || proofs.isEmpty())
 				? " (no proof presented)" : " (the presented proofs do not cover it)")
 			+ (isTalkAbility(ability)
-				? "; the target's accepts policy does not admit this caller" : ""),
+				? "; " + (acceptsAdmit(ctx, resource) ? ACCEPTS_BEYOND_CAPS : ACCEPTS_NOT_ADMITTED) : ""),
 			resource, ability);
 	}
 
@@ -4616,9 +5815,10 @@ public class Engine {
 	 */
 	public void requireInvoke(RequestContext ctx, AString operation) {
 		requireStanding(ctx);
-		if (ctx != null && ctx.hasSeparateAuthority()) {
+		RequestContext frame = authorityFrame(ctx);
+		if (frame != ctx) {
 			// A reference, checked as given against the authority's scope.
-			requireInvoke(ctx.authorityContext(), operation);
+			requireInvoke(frame, operation);
 			return;
 		}
 		if (ctx != null && scopeOrHeldCovers(ctx, operation, Abilities.INVOKE, null)) return;
@@ -4632,7 +5832,7 @@ public class Engine {
 		return RequestContext.denied(ctx, denial != null ? denial
 			: "Capability denied: requires " + (ability != null ? ability : "(any ability)")
 				+ " on " + (resource != null ? resource : "(any)")
-				+ (ctx == null || ctx.getCallerDID() == null ? " (authenticate to act as an identity)" : ""),
+				+ (ctx == null || ctx.getAuthorityDID() == null ? " (authenticate to act as an identity)" : ""),
 			resource, ability);
 	}
 
@@ -4646,19 +5846,19 @@ public class Engine {
 	public void requireStanding(RequestContext ctx) {
 		if (ctx != null && ctx.getJob() instanceof VenueJob job) job.requireAccount();
 		if (ctx != null) venueState.users().requireNotDeleted(ctx.getUserDID());
-		// A separate authority acts only while its own account stands too.
-		if (ctx != null && ctx.hasSeparateAuthority()) {
-			venueState.users().requireNotDeleted(ctx.authorityContext().getUserDID());
-		}
+		// An authority from another account acts only while that account stands too.
+		RequestContext frame = authorityFrame(ctx);
+		if (frame != ctx) venueState.users().requireNotDeleted(frame.getUserDID());
 	}
 
 	/**
 	 * Whether the request is the venue acting directly as itself: the venue's
-	 * own DID, not one of its agents. No delegation makes another caller this.
+	 * own DID, not one of its agents, and not narrowed by an access token. No
+	 * delegation makes another caller this.
 	 */
 	public boolean isDirectVenue(RequestContext ctx) {
-		return ctx != null && getDIDString().equals(ctx.getCallerDID())
-			&& ctx.getExecutionScope().agentId() == null;
+		return ctx != null && getDIDString().equals(ctx.getAuthorityDID())
+			&& ctx.getExecutionScope().agentId() == null && !ctx.isNarrowed();
 	}
 
 	/** Opening of every {@link #requireVenueAuthority} denial. */
@@ -4744,6 +5944,68 @@ public class Engine {
 		return normalized;
 	}
 
+	/** Authorises one actual HTTP send, including library requests and redirect
+	 * hops. Ordinary egress and venue address policy are independent checks.
+	 * Use the harness context for harness work, never the agent's tool context. */
+	public void requireOutboundHttp(RequestContext ctx, String method, String url) {
+		requireOutboundHttp(ctx, method, url, null);
+	}
+
+	/**
+	 * {@link #requireOutboundHttp(RequestContext, String, String)} for a send by
+	 * an adapter that talks to an endpoint its operator configured:
+	 * {@code configured} is that endpoint's URL, or null for none. A send to
+	 * that endpoint's origin needs the caller's outbound authority like any
+	 * other, but passes the address policy, since the operator chose the target,
+	 * as with {@code convex.peer}. A send anywhere else, such as to a media URL
+	 * a platform returned, is checked in full, and so is the same address named
+	 * by a caller, which never comes through here.
+	 */
+	public void requireOutboundHttp(RequestContext ctx, String method, String url, String configured) {
+		AString ability = switch (method) {
+			case "GET" -> Abilities.OUTBOUND_HTTP_GET;
+			case "POST" -> Abilities.OUTBOUND_HTTP_POST;
+			case "PUT" -> Abilities.OUTBOUND_HTTP_PUT;
+			case "PATCH" -> Abilities.OUTBOUND_HTTP_PATCH;
+			case "DELETE" -> Abilities.OUTBOUND_HTTP_DELETE;
+			case "HEAD" -> Abilities.OUTBOUND_HTTP_HEAD;
+			case "OPTIONS" -> Abilities.OUTBOUND_HTTP_OPTIONS;
+			default -> throw new covia.exception.UnsupportedException(OUTBOUND_METHOD_UNSUPPORTED + method);
+		};
+		// Protocol clients can legitimately encode separators in resource ids.
+		// Check the exact transmitted URL; address policy needs only its origin.
+		java.net.URI destination;
+		try { destination = java.net.URI.create(url); }
+		catch (IllegalArgumentException e) { throw new InvalidInputException(covia.utils.HTTPURLs.INVALID_URL); }
+		String origin = covia.utils.HTTPURLs.normalize(destination.getScheme() + "://" + destination.getRawAuthority() + "/").toString();
+		try {
+			requireAuthority(ctx, Abilities.OUTBOUND, ability, Strings.create(url));
+		} catch (covia.exception.AuthException e) {
+			// Transports may place resolved credentials in a path or query. Keep
+			// the missing capability, never echo the credential-bearing target.
+			String reason = e.getMessage().replace(url, OUTBOUND_DESTINATION);
+			if (e instanceof covia.exception.CapabilityDeniedException denied) {
+				throw new covia.exception.CapabilityDeniedException(reason, denied.getResource(), denied.getAbility(), denied.getAuthority());
+			}
+			throw new covia.exception.AuthException(reason);
+		}
+		if (!outboundUnrestricted(ctx) && !origin.equals(configuredOrigin(configured))) requireSafeUrl(origin);
+	}
+
+	/** The origin of an operator-configured endpoint as the address policy compares it, or null for none or an unreadable URL, which is trusted for nothing. */
+	private static String configuredOrigin(String configured) {
+		if (configured == null) return null;
+		try {
+			java.net.URI endpoint = java.net.URI.create(configured);
+			return covia.utils.HTTPURLs.normalize(endpoint.getScheme() + "://" + endpoint.getRawAuthority() + "/").toString();
+		} catch (IllegalArgumentException | covia.exception.CoviaException e) {
+			return null;
+		}
+	}
+
+	public static final String OUTBOUND_DESTINATION = "the outbound destination";
+	public static final String OUTBOUND_METHOD_UNSUPPORTED = "Unsupported outbound HTTP method: ";
+
 	/**
 	 * {@link #requireSafeUrl(RequestContext, String)} for a caller-chosen target
 	 * that is a host rather than a URL (a Convex peer): the same guard and lists,
@@ -4758,17 +6020,17 @@ public class Engine {
 		if (!outboundUnrestricted(ctx)) ssrfGuard().requireSafeHost(host);
 	}
 
-	/** Venue-relative resource on which {@link Abilities#OUTBOUND_ANY} is delegated. */
+	/** Venue-relative resource on which {@link Abilities#ADMIN_OUTBOUND_BYPASS} is delegated. */
 	public static final String OUTBOUND = "outbound";
 
 	/**
 	 * Whether the caller may have the venue dial any target, unchecked by the
 	 * outbound guard: whoever has venue authority for
-	 * {@link Abilities#OUTBOUND_ANY} on {@code <venue DID>/outbound}, which an
+	 * {@link Abilities#ADMIN_OUTBOUND_BYPASS} on {@code <venue DID>/outbound}, which an
 	 * unrestricted agent of the venue's has. Every other caller is checked.
 	 */
 	public boolean outboundUnrestricted(RequestContext ctx) {
-		return hasVenueAuthority(ctx, OUTBOUND, Abilities.OUTBOUND_ANY);
+		return hasVenueAuthority(ctx, OUTBOUND, Abilities.ADMIN_OUTBOUND_BYPASS);
 	}
 
 	/** Opening of the refusal for a venue reached by a transport the outbound guard cannot check. */
@@ -4779,9 +6041,8 @@ public class Engine {
 	 * remote-agent target, an orchestration step's venue, the publisher of a
 	 * remote asset reference. Whatever spelled the target (a URL or a DID), the
 	 * address the connection will dial passes {@link #requireSafeUrl(String)}
-	 * before any request is made, and a transport other than HTTP is refused,
-	 * unless the caller may have the venue dial anywhere
-	 * ({@link #outboundUnrestricted}).
+	 * before any request is made. Other transports are refused. Each actual
+	 * send checks ordinary outbound authority and current address policy.
 	 *
 	 * @param ctx The caller that chose the target
 	 * @param spec Venue URL or DID
@@ -4792,25 +6053,24 @@ public class Engine {
 	 * @throws ConfigurationException when the guard cannot be enforced
 	 */
 	public Venue connectVenue(RequestContext ctx, String spec, VenueAuth auth) {
-		return connectVenue(spec, null, auth, outboundUnrestricted(ctx));
+		return connectVenue(ctx, spec, null, auth);
 	}
 
 	/**
 	 * {@link #connectVenue(RequestContext, String, VenueAuth)} for a caller whose
-	 * standing was decided when the connection was first authorised, such as a
-	 * recovered job's, to a venue whose DID may already be known.
+	 * authority may have been reconstructed from a recovered job, to a venue
+	 * whose DID may already be known. Every send checks current authority.
 	 *
 	 * @param venueDID The target's DID, as the hop proved it; credentials the
 	 *        connection signs are audienced to it. Null when none is signed.
-	 * @param unrestricted Whether that caller could have the venue dial anywhere
 	 */
-	public Venue connectVenue(String spec, String venueDID, VenueAuth auth, boolean unrestricted) {
+	public Venue connectVenue(RequestContext ctx, String spec, String venueDID, VenueAuth auth) {
 		Venue venue = Grid.connect(spec, venueDID, auth);
-		if (unrestricted) return venue;
 		if (!(venue instanceof VenueHTTP http)) {
 			throw new InvalidInputException(UNGUARDED_VENUE_TRANSPORT + spec);
 		}
-		requireSafeUrl(http.getBaseURI().toString());
+		outboundUrl(ctx, http.getBaseURI().toString());
+		http.setRequestAuthorizer(request -> requireOutboundHttp(ctx, request.method(), request.uri().toString()));
 		return venue;
 	}
 
@@ -4831,19 +6091,8 @@ public class Engine {
 	 * @return null, or every mechanism's reason for not proving {@code did}
 	 */
 	public String venueProof(RequestContext ctx, String target, String did) {
-		return venueProof(target, did, outboundUnrestricted(ctx));
-	}
-
-	/**
-	 * {@link #venueProof(RequestContext, String, String)} for a caller whose
-	 * standing was decided when the connection was first authorised, such as
-	 * a recovered job's.
-	 *
-	 * @param unrestricted Whether that caller could have the venue dial anywhere
-	 */
-	public String venueProof(String target, String did, boolean unrestricted) {
 		if (!config().isRequireVenueProof()) return null;
-		return venueProofs.prove(target, did, () -> connectVenue(target, null, VenueAuth.none(), unrestricted));
+		return venueProofs.prove(target, did, () -> connectVenue(ctx, target, null, VenueAuth.none()));
 	}
 
 	private HTTPAdapter ssrfGuard() {
@@ -4857,9 +6106,11 @@ public class Engine {
 
 	/** Whether a value is a reference into a secret store rather than a literal:
 	 *  {@code s/NAME} or {@code /s/NAME} (the caller's own), or {@code <did>/s/NAME}
-	 *  (another principal's, usable under a {@code secret/use} grant). */
+	 *  (another principal's, usable under a {@code secret/use} grant), its DID
+	 *  perhaps in short form ({@code u:bob/s/NAME}), which resolving it expands. */
 	public static boolean isSecretRef(String value) {
 		if (value == null) return false;
+		if (CapabilityChecker.isShortForm(value)) return value.contains("/s/");
 		String name = CapabilityChecker.canonicalResource(value, null);
 		return name.startsWith("s/") || (name.startsWith("did:") && name.contains("/s/"));
 	}
@@ -4893,6 +6144,8 @@ public class Engine {
 	 * @param ctx Request context (identity and authority)
 	 * @return Decrypted plaintext, or null when the store holds no such secret
 	 * @throws covia.exception.AuthException when the caller's authority does not cover the use
+	 * @throws IntegrityException with {@link #SECRET_INTEGRITY} when the store holds the secret
+	 * but it failed its integrity check, with the store's report as its cause
 	 */
 	public String resolveSecret(String secretRef, RequestContext ctx) {
 		return resolveSecret(secretRef, ctx, null);
@@ -4904,8 +6157,9 @@ public class Engine {
 	 * vouch for: a {@code secret/use} grant bound to a url prefix covers the use
 	 * only when the destination falls under it.
 	 */
-	public String resolveSecret(String secretRef, RequestContext ctx, String destination) {
-		if (secretRef == null || ctx == null || ctx.getUserDID() == null) return null;
+	public String resolveSecret(String given, RequestContext ctx, String destination) {
+		if (given == null || ctx == null || ctx.getUserDID() == null) return null;
+		String secretRef = expandPath(Strings.create(given)).toString();
 		AString owner = secretOwner(secretRef, ctx.getUserDID());
 		if (owner == null) return null;
 		AString named = ownerOf(Strings.create(secretRef));
@@ -4928,8 +6182,8 @@ public class Engine {
 	 */
 	public boolean isOwnSecretRef(String secretRef, RequestContext ctx) {
 		if (secretRef == null || ctx == null || ctx.getUserDID() == null) return false;
-		AString owner = secretOwner(secretRef, ctx.getUserDID());
-		return owner != null && isOwnSecret(owner, ctx.authorityContext());
+		AString owner = secretOwner(expandPath(Strings.create(secretRef)).toString(), ctx.getUserDID());
+		return owner != null && isOwnSecret(owner, authorityFrame(ctx));
 	}
 
 	/**
@@ -4940,7 +6194,7 @@ public class Engine {
 	 */
 	public boolean isOperatorSecretRef(String secretRef, RequestContext ctx) {
 		if (secretRef == null || ctx == null || ctx.getUserDID() == null) return false;
-		AString owner = secretOwner(secretRef, ctx.getUserDID());
+		AString owner = secretOwner(expandPath(Strings.create(secretRef)).toString(), ctx.getUserDID());
 		return owner != null && (isVenuePrincipal(owner) || isPublicPrincipal(owner));
 	}
 
@@ -4954,19 +6208,20 @@ public class Engine {
 	}
 
 	/** Whether {@code owner}'s store is the caller's own: the caller is the user
-	 *  or one of its agents. A delegate acting for the user ({@code user/sudo})
-	 *  works in the user's namespace but is neither. The public principal's
-	 *  store is provisioned by the operator and nobody's own. */
+	 *  or one of its agents, a delegate acting as the user under
+	 *  {@code admin/sudo} included. Work such a delegate left before that was a
+	 *  call into the user is in the user's namespace but is neither. The public
+	 *  principal's store is provisioned by the operator and nobody's own. */
 	private boolean isOwnSecret(AString owner, RequestContext ctx) {
 		if (!owner.equals(ctx.getUserDID()) || isPublicPrincipal(owner)) return false;
-		// By the caller, not the namespace: a delegate's namespace is the user's too.
-		AString caller = ctx.getCallerDID();
+		// By the caller, not the namespace: earlier delegate work is in the user's namespace too.
+		AString caller = ctx.getAuthorityDID();
 		return owner.equals(caller) || agentIdIn(owner, caller) != null;
 	}
 
-	/** Refusal for a stored secret the venue cannot decrypt; the secret's name follows. */
-	public static final String SECRET_UNREADABLE = "Secret cannot be decrypted: it is damaged or was sealed under a key "
-		+ "this venue no longer holds. Its owner can set it again with secret:set: ";
+	/** Refusal for a stored secret that failed its integrity check; the secret's name follows. */
+	public static final String SECRET_INTEGRITY = "Secret failed its integrity check, so it cannot be used. The venue "
+		+ "operator has been told; its owner can set it again with secret:set: ";
 
 	/** One user's secret of one name, decrypted; null when the user or the secret
 	 *  is absent. The venue's own secrets also come from its process environment. */
@@ -4976,13 +6231,12 @@ public class Engine {
 		AString value;
 		try {
 			value = user.secrets().decrypt(Strings.create(name), SecretStore.keys(keyPair));
-		} catch (RuntimeException e) {
-			// A decrypt/key failure is NOT the same as "secret not set". Collapsing
-			// both to null masked #91-class identity/key misconfigurations as
-			// absence. The operator is told too, as a lost venue key is theirs to
-			// restore. Values are never logged.
-			log.warn("Secret '{}' of {} cannot be decrypted: {}", name, userDID, e.toString());
-			throw new NotSupportedException(SECRET_UNREADABLE + name);
+		} catch (IntegrityException e) {
+			// A secret that fails its integrity check is NOT the same as "secret not
+			// set". Collapsing both to null masked #91-class identity/key
+			// misconfigurations as absence. Logged here for the operator, as a
+			// misconfigured venue key is theirs to fix; values are never logged.
+			throw IntegrityException.found(SECRET_INTEGRITY + name, userDID, e);
 		}
 		if (value != null) return value.toString();
 		return isVenuePrincipal(userDID) ? environmentSecret(name) : null;   // null == genuinely absent
@@ -5003,7 +6257,9 @@ public class Engine {
 	 * <ul>
 	 *   <li>{@code "venue"} — the venue's own DID (see {@link #getDIDString})</li>
 	 *   <li>{@code "public"} — {@code <venueDID>:public}, the anonymous user</li>
-	 *   <li>Anything else — used verbatim; expected to be a literal DID string</li>
+	 *   <li>Anything else — a DID, or a user of this venue in short form
+	 *   ({@link #expandPrincipal}); one that names no principal here is
+	 *   skipped with a warning</li>
 	 * </ul>
 	 *
 	 * <p>Each named secret overwrites any existing value under that name for
@@ -5035,16 +6291,13 @@ public class Engine {
 
 			AString targetDID;
 			String userKeyStr = userKey.toString();
-			if ("venue".equals(userKeyStr)) {
-				targetDID = venueDID;
-			} else if ("public".equals(userKeyStr)) {
-				targetDID = publicDID;
-			} else {
-				targetDID = userKey;
-			}
-
 			User user;
 			try {
+				targetDID = switch (userKeyStr) {
+					case "venue" -> venueDID;
+					case "public" -> publicDID;
+					default -> expandPrincipal(userKey);
+				};
 				user = venueState.users().ensure(targetDID);
 			} catch (Exception e) {
 				log.warn("Could not resolve user '{}' for configured secrets: {}",

@@ -23,8 +23,8 @@ import covia.api.Fields;
 import covia.exception.ConfigurationException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
-import covia.exception.NotSupportedException;
 import covia.exception.UnavailableException;
+import covia.exception.UnsupportedException;
 import covia.venue.RequestContext;
 import covia.venue.storage.ContentProvider;
 
@@ -98,11 +98,10 @@ public class SkillsAdapter extends AAdapter {
 	 * an actionable message at the moment it is set.
 	 */
 	@Override
-	public boolean configure(AMap<AString, ACell> config, boolean strict) {
-		if (config == null) return true;
+	public void configure(AMap<AString, ACell> config, boolean strict) {
+		if (config == null) return;
 		validateRefs(config.get(K_DEFAULT_SKILLSETS), K_DEFAULT_SKILLSETS);
 		validateRefs(config.get(K_DEFAULT_SKILLS), K_DEFAULT_SKILLS);
-		return true;
 	}
 
 	private static void validateRefs(ACell raw, AString key) {
@@ -234,7 +233,7 @@ public class SkillsAdapter extends AAdapter {
 				case "read" -> CompletableFuture.completedFuture(handleRead(ctx, input));
 				case "parse" -> CompletableFuture.completedFuture(handleParse(ctx, input));
 				case "import" -> CompletableFuture.completedFuture(handleImport(ctx, input));
-				default -> CompletableFuture.failedFuture(new NotSupportedException(
+				default -> CompletableFuture.failedFuture(new UnsupportedException(
 					"Unknown skills operation: " + getSubOperation(meta)));
 			};
 		} catch (Exception e) {
@@ -441,7 +440,7 @@ public class SkillsAdapter extends AAdapter {
 	/** {@code {did, agentId?}}: the calling principal, plus the agent when the call came from an agent run. */
 	static AMap<AString, ACell> createdBy(RequestContext ctx) {
 		AMap<AString, ACell> by = Maps.empty();
-		if (ctx.getCallerDID() != null) by = by.assoc(Fields.DID, ctx.getCallerDID());
+		if (ctx.getAuthorityDID() != null) by = by.assoc(Fields.DID, ctx.getAuthorityDID());
 		if (ctx.getAgentId() != null) by = by.assoc(Fields.AGENT_ID, ctx.getAgentId());
 		return by;
 	}

@@ -3,10 +3,10 @@ package covia.venue;
 import convex.core.data.ACell;
 import convex.core.lang.RT;
 import convex.lattice.cursor.AForkableCursor;
-import convex.lattice.cursor.AUpdateCursor;
+import convex.lattice.cursor.ATransformCursor;
 
 /** A retained user/agent/workspace cursor belongs to exactly one account lifecycle. */
-final class AccountCursor extends AUpdateCursor<ACell, ACell> {
+final class AccountCursor extends ATransformCursor<ACell, ACell> {
 	private final ACell generation;
 
 	AccountCursor(AForkableCursor<ACell> base) {
@@ -23,7 +23,7 @@ final class AccountCursor extends AUpdateCursor<ACell, ACell> {
 	}
 
 	@Override
-	protected ACell prepareWrite(ACell value) {
+	protected ACell write(ACell current, ACell value) {
 		return value;
 	}
 

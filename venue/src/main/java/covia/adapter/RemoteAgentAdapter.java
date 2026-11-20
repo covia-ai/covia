@@ -15,8 +15,8 @@ import covia.adapter.remote.VenueRemoteAgent;
 import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.exception.InvalidInputException;
-import covia.exception.NotSupportedException;
 import covia.exception.ResponseException;
+import covia.exception.UnsupportedException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.grid.Venue;
@@ -53,7 +53,7 @@ public class RemoteAgentAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 	}
 	@Override protected boolean isInteractionOperation(String operation) { return "request".equals(operation) || "chat".equals(operation); }
 	@Override public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
-		if (!isInteractionOperation(getSubOperation(meta))) throw new NotSupportedException(UNKNOWN_OPERATION);
+		if (!isInteractionOperation(getSubOperation(meta))) throw new UnsupportedException(UNKNOWN_OPERATION);
 		return engine.jobs().invokeInternal(meta, input, ctx);
 	}
 
@@ -91,8 +91,6 @@ public class RemoteAgentAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 		if (target == null) {
 			venue = localVenue(ctx);
 			credentials = Maps.empty();
-			// The agent's task is followed as this caller after a restart too
-			engine.jobs().keepCallerContext(job, ctx);
 		} else {
 			engine.remoteJobs().requireNotClosing();
 			VenueConnection connection = VenueConnection.connect(engine, ctx, target, input);
@@ -204,7 +202,7 @@ public class RemoteAgentAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 		try {
 			AMap<AString, ACell> saved = engine.remoteJobs().connection(job);
 			if (!VenueConnection.resumable(saved)) { engine.remoteJobs().credentialNotKept(job); return; }
-			Venue venue = VenueConnection.restore(engine, RT.ensureString(kept.get(RemoteJobs.TARGET)), saved);
+			Venue venue = VenueConnection.restore(engine, engine.jobs().callerContext(job), RT.ensureString(kept.get(RemoteJobs.TARGET)), saved);
 			VenueRemoteAgent proxy = new VenueRemoteAgent(venue, RT.ensureString(job.getData().get(AGENT)));
 			bind(job, proxy, id, false);
 			watch(job, proxy, id);
@@ -213,13 +211,14 @@ public class RemoteAgentAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 
 	/**
 	 * Follows a call to an agent on this venue again, as its caller acts now
-	 * in the context the job kept, exactly as it first followed it. One that
-	 * kept no context, or recorded no task, cannot be followed; nor can one
-	 * whose caller cannot act now. Either way the agent's task runs on: the
-	 * venue never acts on it without its caller's authority.
+	 * in the state the job keeps ({@link covia.venue.JobManager#callerContext}),
+	 * exactly as it first followed it. One that recorded no task cannot be
+	 * followed; nor can one that keeps no state, or whose caller cannot act
+	 * now. Either way the agent's task runs on: the venue never acts on it
+	 * without its caller's authority.
 	 */
 	private void recoverLocal(Job job, Blob id) {
-		if (id == null || !engine.jobs().keepsCallerContext(job)) {
+		if (id == null) {
 			engine.remoteJobs().end(job, LOCAL_INTERRUPTED);
 			return;
 		}
@@ -227,7 +226,7 @@ public class RemoteAgentAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 		try {
 			caller = engine.jobs().callerContext(job);
 		} catch (AuthException cannot) {
-			engine.remoteJobs().end(job, CALLER_CANNOT_ACT.formatted(cannot.getMessage(), id.toHexString()));
+			engine.remoteJobs().end(job, CALLER_CANNOT_ACT.formatted(cannot.getMessage(), id));
 			return;
 		}
 		VenueRemoteAgent proxy = new VenueRemoteAgent(localVenue(caller), RT.ensureString(job.getData().get(AGENT)));

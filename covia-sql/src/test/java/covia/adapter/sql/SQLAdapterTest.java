@@ -527,7 +527,8 @@ public class SQLAdapterTest {
 		for (String statement : new String[] { "SELECT CAST(name AS INTEGER) FROM t", "SELECT 1/0" }) {
 			InvalidInputException failed = assertThrows(InvalidInputException.class,
 				() -> adapter.handleQuery(ctx, input("db7", statement)), statement);
-			assertEquals("SQL database 'db7' " + SQLAdapter.STATEMENT_FAILED, failed.getMessage(), statement);
+			assertTrue(failed.getMessage().startsWith("SQL database 'db7' " + SQLAdapter.STATEMENT_REFUSED), failed.getMessage());
+			assertFalse(failed.getMessage().contains("stored-value"), failed.getMessage());
 		}
 	}
 

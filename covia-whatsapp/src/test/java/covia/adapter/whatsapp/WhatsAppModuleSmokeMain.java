@@ -49,6 +49,7 @@ public final class WhatsAppModuleSmokeMain {
 				"businessAccountId", "67890", "apiVersion", "v25.0", "allow", Vectors.of("441234567890"));
 			AMap<AString, ACell> config = Maps.of(Config.STORE, "memory", Config.PORT, 0, Config.BIND_ADDRESS, "127.0.0.1",
 				Config.AUTH, Maps.of(Config.PUBLIC, Maps.of(Config.ENABLED, false)), Config.USERS, Maps.of(Config.AUTO_CREATE, true),
+				// The fake API is on loopback, which passes as the API the operator configured
 				Config.MODULES, Vectors.of(Maps.of("path", args[0])), Config.ADAPTERS, Maps.of(PROVIDER,
 					Maps.of("apiUrl", "http://127.0.0.1:" + api.getAddress().getPort(), "bots", Maps.of("main", spec))));
 			VenueServer server = VenueServer.launch(config);

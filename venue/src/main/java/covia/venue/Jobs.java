@@ -58,11 +58,6 @@ public final class Jobs extends IndexComponent<Blob, ACell>
 		return new Jobs(context, cursor, owner);
 	}
 
-	@Override
-	public Jobs withCursor(AForkableCursor<Index<Blob, ACell>> cursor) {
-		return rebind(cursor);
-	}
-
 	/** Every job's record, keyed by job id; empty when there are none. */
 	public Index<Blob, ACell> getAll() {
 		Index<Blob, ACell> jobs = get();

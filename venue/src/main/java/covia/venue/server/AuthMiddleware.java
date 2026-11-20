@@ -7,11 +7,16 @@ import java.util.Set;
 import java.util.concurrent.Semaphore;
 
 import convex.core.data.ACell;
+import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.lang.RT;
+import covia.adapter.MCPAdapter;
+import covia.adapter.token.AccessToken;
+import covia.adapter.token.AccessTokens;
+import covia.adapter.token.TokenAdapter;
 import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.exception.ConfigurationException;
@@ -23,6 +28,7 @@ import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.api.ACoviaAPI;
 import covia.venue.api.ApiErrors;
+import covia.venue.auth.AuthResult;
 import covia.venue.auth.VenueAuthenticator;
 import io.javalin.config.RoutesConfig;
 import io.javalin.http.Context;
@@ -50,6 +56,18 @@ public class AuthMiddleware {
 
 	static final String AUTHENTICATED_IDENTITY_ATTR = "authenticatedIdentity";
 	static final String CALLER_DID_ATTR = "callerDID";
+	/** The reference of the access token a request presented, when it presented one. */
+	static final String TOKEN_ATTR = "accessToken";
+	private static final AString HTTP = Strings.intern("http");
+	private static final AString MCP = Strings.intern("mcp");
+	private static final AString A2A = Strings.intern("a2a");
+	private static final AString ACCESS_TOKEN = Strings.intern("accessToken");
+
+	/** Why a presented access token is refused: unknown, deleted, expired or replaced alike. */
+	public static final String TOKEN_NOT_RECOGNISED = "Access token not recognised";
+
+	/** Why a standing access token is refused on a route: it has no entry for the access point there, or that is not running. */
+	public static final String TOKEN_NOT_ACCEPTED = "This access token is not accepted at %s";
 	// Per-instance state. Was static, which made running multiple VenueServers
 	// in the same JVM (production multi-tenant, parallel test classes) racy:
 	// every register() call would trample the previous instance's fields,
@@ -163,7 +181,7 @@ public class AuthMiddleware {
 		String resourceMetadata = ACoviaAPI.getExternalBaseUrl(ctx, null, engine.config().getTrustedProxies())
 			+ "/.well-known/oauth-protected-resource/mcp";
 		extractIdentity(ctx, !required && publicAccessEnabled, resourceMetadata,
-			true);
+			true, MCPAdapter.ACCESS_POINT);
 		AString venueUserDID = getVenueUserDID(ctx);
 		if (venueUserDID == null) return; // authentication already rejected the request
 		if (!allowedDids.isEmpty() && !allowedDids.contains(venueUserDID.toString())) {
@@ -193,6 +211,17 @@ public class AuthMiddleware {
 
 	private void extractIdentity(Context ctx, boolean allowPublic,
 			String resourceMetadata, boolean admitUser) {
+		extractIdentity(ctx, allowPublic, resourceMetadata, admitUser, null);
+	}
+
+	/**
+	 * As above; on a route that is access point {@code tokenAccess}, an access
+	 * token's bearer ({@link AccessTokens#isBearer}) is recognised by the
+	 * venue's token store instead of venue authentication
+	 * ({@link #authenticateToken}). Null for a route that accepts no tokens.
+	 */
+	private void extractIdentity(Context ctx, boolean allowPublic,
+			String resourceMetadata, boolean admitUser, AString tokenAccess) {
 		String auth = ctx.header("Authorization");
 		if (auth == null || !auth.startsWith("Bearer ")) {
 			if (!allowPublic) {
@@ -234,7 +263,9 @@ public class AuthMiddleware {
 			}
 		}
 		try {
-			AString venueUserDID = authenticator.authenticate(ctx, Strings.create(token));
+			AString venueUserDID = (tokenAccess != null && AccessTokens.isBearer(token))
+				? authenticateToken(ctx, token, tokenAccess)
+				: authenticator.authenticate(ctx, Strings.create(token));
 			audit.event(Audit.AUTH_SUCCESS, Audit.K_DID, venueUserDID,
 				Audit.K_IDENTITY, getAuthenticatedIdentity(ctx), Audit.K_IP, ip);
 			if (admitUser && !admitAuthenticated(ctx, venueUserDID)) return;
@@ -247,6 +278,35 @@ public class AuthMiddleware {
 		} finally {
 			if (slot != null) slot.release();
 		}
+	}
+
+	/**
+	 * Recognises an access token's bearer (ACCESS_TOKENS.md) on a route that is
+	 * access point {@code point}: the token must stand, so be neither deleted,
+	 * expired nor replaced, and be accepted there, with an entry for that
+	 * access point while it runs. The request's caller is the token's issuer
+	 * and its venue user the token's namespace; what it may do is the token's
+	 * context ({@link #callerContext}).
+	 *
+	 * @return the venue user, the token's namespace
+	 * @throws AuthException when no standing token has this bearer, or it is not accepted here
+	 */
+	private AString authenticateToken(Context ctx, String bearer, AString point) {
+		AccessTokens tokens = engine.tokens();
+		AMap<AString, ACell> reference = (tokens == null) ? null : tokens.lookup(bearer);
+		AccessToken token = engine.resolveToken(reference);
+		if (token == null) throw new AuthException(TOKEN_NOT_RECOGNISED);
+		if (!token.accepts(point) || TokenAdapter.accessPoint(engine, point) == null) {
+			throw new AuthException(TOKEN_NOT_ACCEPTED.formatted(point));
+		}
+		ctx.attribute(TOKEN_ATTR, reference);
+		setRequestIdentity(ctx, token.issuer(), token.owner());
+		return token.owner();
+	}
+
+	/** The reference of the access token the request presented, or null when it presented none. */
+	public static AMap<AString, ACell> getToken(Context ctx) {
+		return (ctx == null) ? null : ctx.attribute(TOKEN_ATTR);
 	}
 
 	private void rejectTooMany(Context ctx, long retryAfterSeconds, String message) {
@@ -323,6 +383,9 @@ public class AuthMiddleware {
 	 * layered on after. Null-safe: a null Javalin context (e.g. an MCP call with
 	 * no HTTP context) or a request with no caller yields
 	 * {@link RequestContext#ANONYMOUS}.
+	 * The first route record retains HTTP transport, the endpoint's protocol
+	 * where known, and the verified credential class. These are provenance,
+	 * not additional authority or evidence of personal approval.
 	 *
 	 * @param ctx Javalin context, or null
 	 * @return the caller's request context with its grant scope applied
@@ -334,7 +397,14 @@ public class AuthMiddleware {
 		if (caller == null) return RequestContext.ANONYMOUS;
 		Engine engine = VenueAuthenticator.engineOf(ctx);
 		if (engine == null) throw new ConfigurationException(NO_VENUE);
-		return engine.context(caller);
+		AMap<AString, ACell> token = getToken(ctx);
+		AuthResult result = VenueAuthenticator.resultOf(ctx);
+		AString credentialType = (token != null) ? ACCESS_TOKEN
+			: (result == null || result.credential() == null) ? null : result.credential().type();
+		Set<RouteRole> roles = ctx.routeRoles();
+		AString protocol = VenueRouteFeature.has(roles, VenueRouteFeature.COVIA_MCP) ? MCP
+			: VenueRouteFeature.has(roles, VenueRouteFeature.COVIA_A2A) ? A2A : null;
+		return engine.requestContext(caller, token, HTTP, protocol, credentialType);
 	}
 
 	/** Why a request's caller has no context: no venue's middleware or authenticator bound it. */

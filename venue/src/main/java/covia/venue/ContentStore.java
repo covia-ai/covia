@@ -48,11 +48,6 @@ public final class ContentStore extends IndexComponent<ABlob, ABlob>
 		return new ContentStore(cursor);
 	}
 
-	@Override
-	public ContentStore withCursor(AForkableCursor<Index<ABlob, ABlob>> cursor) {
-		return rebind(cursor);
-	}
-
 	/**
 	 * Stores {@code blob} under {@code sha256}.
 	 *

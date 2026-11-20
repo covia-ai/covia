@@ -73,7 +73,7 @@ public class AgentRestartTest {
 					Fields.AGENT_ID, agentId,
 					Fields.CONFIG, Maps.of(
 						Fields.OPERATION, "v/test/ops/taskcomplete",
-						"testGate", gateName)), alice).awaitResult(5000);
+						"testGate", gateName, "acceptTasks", true)), alice).awaitResult(5000);
 				request = first.jobs().invokeOperation("v/ops/agent/request",
 					Maps.of(Fields.AGENT_ID, agentId,
 						Fields.INPUT, Maps.of("ask", "outlive the venue")), alice);
@@ -123,6 +123,59 @@ public class AgentRestartTest {
 	}
 
 	/**
+	 * Booting with the agent adapter disabled, the adapter still recovers its
+	 * jobs: a queued request survives, and enabling the adapter wakes the agent
+	 * to complete it.
+	 */
+	@Test
+	public void requestSurvivesABootWithTheAgentAdapterDisabled() throws Exception {
+		TestEngine.Restartable venue = TestEngine.restartable(config());
+		RequestContext alice = RequestContext.of(ALICE);
+		String agentId = "dormant";
+		String gateName = "agent-disabled-restart-" + System.nanoTime();
+		Job request;
+
+		try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName)) {
+			Engine first = venue.start();
+			try {
+				Engine.addDemoAssets(first);
+				first.jobs().invokeOperation("v/ops/agent/create", Maps.of(
+					Fields.AGENT_ID, agentId,
+					Fields.CONFIG, Maps.of(
+						Fields.OPERATION, "v/test/ops/taskcomplete",
+						"testGate", gateName, "acceptTasks", true)), alice).awaitResult(5000);
+				request = first.jobs().invokeOperation("v/ops/agent/request",
+					Maps.of(Fields.AGENT_ID, agentId,
+						Fields.INPUT, Maps.of("ask", "wait for the agent adapter")), alice);
+				assertTrue(gate.awaitEntered(10, TimeUnit.SECONDS),
+					"the task transition never reached its test gate");
+				first.syncState();
+			} finally {
+				first.close();
+			}
+		}
+
+		try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName)) {
+			gate.release();
+			// Launched, so the venue recovers jobs and agents as it does at boot
+			Engine second = venue.mount(config().assoc(Config.ADAPTERS,
+				Maps.of("agent", Maps.of(Config.ENABLED, false)))).launch();
+			try {
+				assertNull(second.getAdapter("agent"), "the agent adapter is not started");
+				Job live = second.jobs().getJob(request.getID(), alice);
+				assertNotNull(live, "the agent adapter kept the queued request");
+				assertFalse(live.isFinished(), "kept, not failed: " + live.getStatus());
+
+				second.enableAdapter("agent");
+				live.awaitResult(10_000);
+				assertEquals(Status.COMPLETE, live.getStatus(), "starting the adapter woke the agent");
+			} finally {
+				second.close();
+			}
+		}
+	}
+
+	/**
 	 * A task its agent resolved, in a cycle a restart stopped before its merge,
 	 * is handed back at boot: its request completes, with its output written
 	 * at its {@code outputPath}, as the merge would have done.
@@ -143,7 +196,7 @@ public class AgentRestartTest {
 				Engine.addDemoAssets(first);
 				first.jobs().invokeOperation("v/ops/agent/create", Maps.of(
 					Fields.AGENT_ID, agentId,
-					Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/step")), alice).awaitResult(5000);
+					Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/step", "acceptTasks", true)), alice).awaitResult(5000);
 				request = first.jobs().invokeOperation("v/ops/agent/request",
 					Maps.of(Fields.AGENT_ID, agentId,
 						Fields.INPUT, Strings.create("complete hold:" + gateName),
@@ -203,7 +256,7 @@ public class AgentRestartTest {
 			for (String agentId : new String[] {"parked-waking", "parked-orphan"}) {
 				first.jobs().invokeOperation("v/ops/agent/create", Maps.of(
 					Fields.AGENT_ID, agentId,
-					Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/wakeresponse"),
+					Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/wakeresponse", "acceptTasks", true),
 					Agent.KEY_STATE, later), alice).awaitResult(5000);
 			}
 			try (AgentWatch wakingWatch = AgentWatch.open(first, ALICE, "parked-waking");
@@ -320,13 +373,13 @@ public class AgentRestartTest {
 				Engine.addDemoAssets(first);
 				first.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "worker",
 					Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete",
-						"testGate", gateName, Fields.DELAY, 0L)), alice).awaitResult(5000);
+						"testGate", gateName, Fields.DELAY, 0L, "acceptTasks", true)), alice).awaitResult(5000);
 				first.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "stray",
 					Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/never",
-						"tools", Vectors.of("v/ops/json/merge"))), alice).awaitResult(5000);
+						"tools", Vectors.of("v/ops/json/merge"), "acceptTasks", true)), alice).awaitResult(5000);
 				// A record no request could write: the public principal controls Alice's agent
 				Agent stray = first.getVenueState().users().user(ALICE).agent("stray");
-				stray.putRecord(stray.getRecord().assoc(Agent.KEY_CONTROLLER, first.publicPrincipal()));
+				stray.cursor().set(stray.getRecord().assoc(Agent.KEY_CONTROLLER, first.publicPrincipal()));
 				stranded = first.jobs().invokeOperation("v/ops/agent/request",
 					Maps.of(Fields.AGENT_ID, "stray", Fields.INPUT, Maps.of("ask", "wait")), alice);
 				request = first.jobs().invokeOperation("v/ops/agent/request",

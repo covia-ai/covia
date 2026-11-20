@@ -3,7 +3,9 @@ package covia.venue;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.Blob;
 import convex.core.data.Cells;
+import convex.core.data.Index;
 import convex.core.data.Maps;
 import convex.core.data.Path;
 import convex.core.data.Strings;
@@ -37,9 +39,9 @@ import convex.lattice.cursor.StampedCursor;
  *   <li>{@code "j"} — user's jobs ({@link Jobs})</li>
  *   <li>{@code "g"} — user's agents ({@link Agent})</li>
  *   <li>{@code "s"} — user's encrypted credentials</li>
- *   <li>{@code "w"} — user's workspace data ({@link Workspace}, in a {@link covia.lattice.Covia#WORKSPACE_RECORD})</li>
- *   <li>{@code "o"} — user's operations ({@link Workspace}, in a {@link covia.lattice.Covia#WORKSPACE_RECORD})</li>
- *   <li>{@code "h"} — HITL requests ({@link Inbox}, in a {@link covia.lattice.Covia#WORKSPACE_RECORD})</li>
+ *   <li>{@code "w"} — user's workspace data ({@link Workspace}, in a stamped {@code {updated, data}} record)</li>
+ *   <li>{@code "o"} — user's operations ({@link Workspace}, in a stamped {@code {updated, data}} record)</li>
+ *   <li>{@code "h"} — HITL requests ({@link Inbox}, in a stamped {@code {updated, data}} record)</li>
  *   <li>{@code "a"} — content-addressed assets</li>
  * </ul>
  * Merge is whole-value at the venue {@code :value}; these namespaces are
@@ -49,11 +51,6 @@ public class User extends ALatticeComponent<ACell> implements TransactionalCompo
 	@Override
 	public User rebind(AForkableCursor<ACell> cursor) {
 		return new User(context, cursor, did);
-	}
-
-	@Override
-	public User withCursor(AForkableCursor<ACell> cursor) {
-		return rebind(cursor);
 	}
 
 	private final VenueContext context;
@@ -100,7 +97,7 @@ public class User extends ALatticeComponent<ACell> implements TransactionalCompo
 
 	/** This user's workspace ({@code w}). */
 	public Workspace workspace() {
-		return new Workspace(wrapped(Namespace.W));
+		return new Workspace(this.<ACell>wrapped(Namespace.W).withDefault(Maps.empty()));
 	}
 
 	/**
@@ -113,12 +110,10 @@ public class User extends ALatticeComponent<ACell> implements TransactionalCompo
 	 */
 	public long workspaceSize() {
 		long size = storedSize(cursor().path(Namespace.W).getOrDefault(null));
-		AMap<AString, ACell> agents = getAgents();
-		if (agents != null) {
-			for (AString agentId : agents.keySet()) {
-				Agent agent = agent(agentId);
-				if (agent != null) size += storedSize(agent.workspace().cursor().getOrDefault(null));
-			}
+		Agents agents = agents();
+		for (AString agentId : agents.all().keySet()) {
+			Agent agent = agents.agent(agentId);
+			if (agent != null) size += storedSize(agent.workspace().cursor().getOrDefault(null));
 		}
 		return size;
 	}
@@ -129,29 +124,29 @@ public class User extends ALatticeComponent<ACell> implements TransactionalCompo
 
 	/** This user's operation definitions ({@code o}), held as a workspace. */
 	public Workspace operations() {
-		return new Workspace(wrapped(Namespace.O));
+		return new Workspace(this.<ACell>wrapped(Namespace.O).withDefault(Maps.empty()));
+	}
+
+	/** One namespace of this user's record; a change creates it, and the record, when absent. */
+	private <T extends ACell> AForkableCursor<T> namespace(AString namespace) {
+		return Covia.entry(cursor(), namespace);
+	}
+
+	/** A namespace that holds a collection: absent, it reads as {@code empty}, so a transaction on it starts from that. */
+	private <T extends ACell> AForkableCursor<T> collection(AString namespace, T empty) {
+		return this.<T>namespace(namespace).withDefault(empty);
 	}
 
 	/** The data of a namespace held in an {@code {updated, data}} record, which a change stamps. */
 	private <T extends ACell> AForkableCursor<T> wrapped(AString namespace) {
-		return StampedCursor.create(cursor().withDefault(Maps.empty()).path(namespace),
-				context::currentTimestamp, Covia::stampUpdated)
-			.withDefault(Maps.empty()).path(Covia.WORKSPACE_DATA);
+		AForkableCursor<ACell> record = StampedCursor.create(namespace(namespace),
+				context::currentTimestamp, Covia::stampUpdated);
+		return Covia.entry(record, Covia.WORKSPACE_DATA);
 	}
 
-	/**
-	 * The agent at {@code agentId}, whether or not its record exists, for a path
-	 * that names it: a missing agent reads as absent, and its workspaces refuse
-	 * changes. Domain callers use {@link #agent}, which is null for a missing
-	 * agent.
-	 */
-	public Agent agentAt(AString agentId) {
-		return new Agent(context, agentStorage(agentId), did, agentId);
-	}
-
-	/** An agent's record in {@code g}, a map the first agent creates. */
-	private AForkableCursor<ACell> agentStorage(ACell id) {
-		return cursor().withDefault(Maps.empty()).path(Namespace.G).withDefault(Maps.empty()).path(id);
+	/** This user's agents ({@code g}), a map the first agent creates. */
+	public Agents agents() {
+		return new Agents(context, collection(Namespace.G, Maps.empty()), did);
 	}
 
 	/** Gets the user's DID string. */
@@ -166,7 +161,7 @@ public class User extends ALatticeComponent<ACell> implements TransactionalCompo
 	 */
 	@SuppressWarnings("unchecked")
 	public AssetStore assets() {
-		return new AssetStore(cursor().path(Namespace.A));
+		return new AssetStore(collection(Namespace.A, Index.none()));
 	}
 
 	/**
@@ -175,122 +170,17 @@ public class User extends ALatticeComponent<ACell> implements TransactionalCompo
 	 * @return SecretStore wrapping the user's "s" cursor
 	 */
 	public SecretStore secrets() {
-		return new SecretStore(context, cursor().path(Namespace.S));
+		return new SecretStore(context, collection(Namespace.S, Maps.empty()));
 	}
 
-	/**
-	 * Gets a specific agent's state, or null if the agent doesn't exist.
-	 *
-	 * @param agentId Agent identifier
-	 * @return Agent wrapper, or null if not initialised
-	 */
+	/** The agent {@code agentId}, deleted or not, or null when it has no record ({@link Agents#agent}). */
 	public Agent agent(String agentId) {
 		return agent(Strings.create(agentId));
 	}
 
+	/** The agent {@code agentId}, deleted or not, or null when it has no record ({@link Agents#agent}). */
 	public Agent agent(AString agentId) {
-		AForkableCursor<ACell> c = agentStorage(agentId);
-		if (c.getOrDefault(null) == null) return null;
-		return new Agent(context, c, did, agentId);
-	}
-
-	/**
-	 * Gets a specific agent's state, creating and initialising it if needed.
-	 *
-	 * @param agentId Agent identifier
-	 * @param config Optional framework configuration map, may be null
-	 * @param initialState Optional initial state for the transition function, may be null
-	 * @return Agent wrapper (never null)
-	 */
-	public Agent ensureAgent(String agentId, AMap<AString, ACell> config, ACell initialState) {
-		return ensureAgent(Strings.create(agentId), config, initialState);
-	}
-
-	public Agent ensureAgent(AString agentId, AMap<AString, ACell> config, ACell initialState) {
-		AForkableCursor<ACell> c = agentStorage(agentId);
-		Agent state = new Agent(context, c, did, agentId);
-		state.initialiseIfAbsent(config, initialState);
-		return state;
-	}
-
-	/**
-	 * Exclusively creates an agent record in one atomic cursor update.
-	 *
-	 * @return the new agent, or null if the id already existed
-	 */
-	public Agent createAgent(AString agentId, AMap<AString, ACell> config,
-			ACell initialState) {
-		return createAgent(agentId, config, initialState, null);
-	}
-
-	public Agent createAgent(AString agentId, AMap<AString, ACell> config,
-			ACell initialState, AMap<AString, ACell> definition) {
-		return createAgent(agentId, config, initialState, definition, null);
-	}
-
-	/**
-	 * Creates an agent under {@code controller}, the principal whose authority
-	 * its harness runs under (null for this user).
-	 *
-	 * @return the new agent, or null if the id already existed
-	 */
-	public Agent createAgent(AString agentId, AMap<AString, ACell> config,
-			ACell initialState, AMap<AString, ACell> definition, AString controller) {
-		AForkableCursor<ACell> c = agentStorage(agentId);
-		Agent state = new Agent(context, c, did, agentId);
-		return state.initialiseIfAbsent(config, initialState, definition, controller) ? state : null;
-	}
-
-	/**
-	 * Creates a new agent as a fork of another. Copies config and state;
-	 * timeline is copied only if {@code timeline} is non-null. Tasks, pending,
-	 * and inbox are fresh; status is SLEEPING.
-	 *
-	 * @param agentId Agent identifier for the fork (must not already exist)
-	 * @param config Config map to use (typically merged source+override)
-	 * @param state Initial state (typically source state)
-	 * @param timeline Optional timeline to copy, or null for empty
-	 * @return the new Agent wrapper, or null if the id already existed
-	 */
-	public Agent forkAgent(AString agentId, AMap<AString, ACell> config,
-			ACell state, convex.core.data.AVector<ACell> timeline) {
-		return forkAgent(agentId, config, state, timeline, null);
-	}
-
-	/**
-	 * As above, under {@code controller}: the principal whose authority the
-	 * fork's harness runs under, or null for this user.
-	 */
-	public Agent forkAgent(AString agentId, AMap<AString, ACell> config,
-			ACell state, convex.core.data.AVector<ACell> timeline, AString controller) {
-		AForkableCursor<ACell> c = agentStorage(agentId);
-		Agent fork = new Agent(context, c, did, agentId);
-		return fork.initialiseFromForkIfAbsent(config, state, timeline, controller) ? fork : null;
-	}
-
-	/**
-	 * Removes an agent record entirely from the lattice.
-	 *
-	 * @param agentId Agent identifier to remove
-	 */
-	@SuppressWarnings("unchecked")
-	public void removeAgent(AString agentId) {
-		// Remove the key itself, as covia:delete does: writing null through the
-		// agent's own path would leave g/<id> listed, holding nothing.
-		cursor().path(Namespace.G).updateAndGet(agents -> (agents instanceof AMap<?, ?> map)
-			? ((AMap<AString, ACell>) map).dissoc(agentId)
-			: agents);
-	}
-
-	/**
-	 * Gets all agents as a map for iteration.
-	 *
-	 * @return Map of agent ID to agent state, or null if none
-	 */
-	@SuppressWarnings("unchecked")
-	public AMap<AString, ACell> getAgents() {
-		ACell value = cursor().path(Namespace.G).getOrDefault(null);
-		return (value instanceof AMap) ? (AMap<AString, ACell>) value : null;
+		return agents().agent(agentId);
 	}
 
 	/**
@@ -304,12 +194,12 @@ public class User extends ALatticeComponent<ACell> implements TransactionalCompo
 
 	/** This user's HITL inbox ({@code h/}). */
 	public Inbox inbox() {
-		return new Inbox(wrapped(Namespace.H));
+		return new Inbox(this.<Index<Blob, AMap<AString, ACell>>>wrapped(Namespace.H).withDefault(Index.none()));
 	}
 
 	/** This user's jobs ({@code j/}), bound to this user or transaction draft. */
 	public Jobs jobs() {
-		return new Jobs(context, cursor().withDefault(Maps.empty()).path(Namespace.J), did);
+		return new Jobs(context, collection(Namespace.J, Index.none()), did);
 	}
 
 	/** Whoever holds authority over {@code <did>/<path>}; none outside any user. */
@@ -324,7 +214,7 @@ public class User extends ALatticeComponent<ACell> implements TransactionalCompo
 		if (start == end) return null;
 		AString segment = segments[start];
 		if (Namespace.J.equals(segment)) return new Route(jobs(), 1);
-		if (Namespace.G.equals(segment) && end - start > 1) return new Route(agentAt(segments[start + 1]), 2);
+		if (Namespace.G.equals(segment) && end - start > 1) return new Route(agents().at(segments[start + 1]), 2);
 		return null;
 	}
 

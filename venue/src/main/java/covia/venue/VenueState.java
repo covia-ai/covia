@@ -9,6 +9,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.TreeMap;
+import java.util.function.Consumer;
 import java.util.function.Function;
 
 import convex.core.crypto.AKeyPair;
@@ -17,6 +18,7 @@ import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Blob;
+import convex.core.data.Hash;
 import convex.core.data.Maps;
 import convex.core.data.AccountKey;
 import convex.core.data.Index;
@@ -26,17 +28,21 @@ import convex.core.data.Path;
 import convex.core.data.SignedData;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
+import convex.core.exceptions.StoreException;
 import convex.core.lang.RT;
 import convex.core.store.AStore;
 import convex.core.store.MemoryStore;
+import convex.core.store.Persister;
+import convex.core.util.Utils;
 import convex.lattice.LatticeHost;
 import convex.lattice.ALatticeComponent;
+import convex.lattice.IndexComponent;
+import convex.lattice.MapComponent;
 import convex.lattice.TransactionalComponent;
 import convex.lattice.OwnedMap;
 import convex.lattice.Timestamped;
 import convex.lattice.cursor.AForkableCursor;
 import convex.lattice.cursor.Cursors;
-import convex.lattice.cursor.Persister;
 import covia.lattice.Covia;
 import covia.lattice.CoviaPath;
 import covia.api.Fields;
@@ -65,18 +71,26 @@ import covia.venue.migration.VenueMigrations;
  * <pre>{@code
  * venue.execute(draft -> {
  *     var user = draft.users().ensure(did);
- *     user.ensureAgent("assistant", config, null);
+ *     user.agents().create(Strings.create("assistant"), config, null, null, null);
  *     user.workspace().write(CoviaPath.parse("assistant/ready"), value);
  * });
  * }</pre>
  *
- * <p>Whole-venue LWW selects complete snapshots for backup, replication and
- * failover. It does not combine arbitrarily forked executions: their state
- * invariants and external effects cannot in general be merged. One authoritative
- * running instance owns a venue; failover must fence the previous writer.
- * {@link #fork()} creates an independent snapshot, and {@link #sync()} selects
- * a snapshot rather than replaying operations. Live work uses transactions.
- * Children have no independent publication or merge boundary.</p>
+ * <p>A mounted venue is a working copy of its signed record. Live work is
+ * transactions on the copy, which sign and persist nothing: one that meets a
+ * concurrent change runs again under its claim. {@link #sync()} publishes the
+ * copy into the record, signed once, by the default reconcile: the record takes
+ * the copy where only the copy changed, and the copy takes the record where
+ * only the record did, which only a snapshot signed with the venue's key and
+ * newer than the copy's last publication can change. Where both changed, two
+ * writers' versions exist, and forked executions' state invariants and
+ * external effects cannot in general be merged: one authoritative running
+ * instance owns a venue, so its copy's version replaces the other, and the
+ * venue stops for its operator to find the other writer. Any other copy, such
+ * as a {@link #fork()}, fails that sync with a merge conflict instead.
+ * {@link #merge} selects one complete snapshot by whole-venue LWW, for backup,
+ * replication and recovery. Children have no independent publication or merge
+ * boundary.</p>
  */
 public class VenueState extends ALatticeComponent<ACell> implements TransactionalComponent<ACell, VenueState> {
 	/** The venue schema version: the number of {@link VenueMigrations#steps}. */
@@ -92,45 +106,107 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 		return new VenueState(cursor, ownerKey, context);
 	}
 
-	@Override
-	public VenueState withCursor(AForkableCursor<ACell> cursor) {
-		return rebind(cursor);
-	}
-
 	private final AccountKey ownerKey;
 	private final VenueContext context;
 	/** The venue value as one timestamped record: local edits stamp it, merges keep the newest. */
 	private final Timestamped<ACell> record;
+	/** Told when a mounted venue's copy publishes over another writer's version; null for any other copy. */
+	private final Consumer<Fork> forked;
 
 	public VenueContext getContext() { return context; }
 
 	@Override
 	public AForkableCursor<ACell> cursor() { return record.cursor(); }
 
+	/** Merges an incoming snapshot by whole-venue LWW: the newer {@code :timestamp} wins, and a tie keeps this copy. */
 	@Override
 	public ACell merge(ACell incoming) {
 		return record.merge(incoming);
 	}
 
+	/**
+	 * Another writer's version of the venue, which the mounted copy's publication
+	 * replaced because the copy had changed too.
+	 *
+	 * @param stamp The copy's {@code :timestamp}, which the record now carries
+	 * @param replacedStamp The replaced version's {@code :timestamp}
+	 * @param replaced The replaced version's hash, or null if there was none
+	 */
+	public record Fork(long stamp, long replacedStamp, Hash replaced) {
+		/** Whether the replaced version is the newer, so a whole-venue LWW elsewhere may still prefer it. */
+		public boolean replacedNewer() {
+			return replacedStamp > stamp;
+		}
+	}
+
+	/**
+	 * Logged when a mounted venue publishes over another writer's version: the
+	 * venue's key, the replaced version's stamp and hash, then the venue's own stamp.
+	 */
+	public static final String FORKED = "Venue %s was changed by another writer while it ran: its record held a "
+		+ "version stamped %d (%s) that this venue had not written. The venue has written its own version, stamped %d, "
+		+ "over it and is stopping. Find what else writes this venue, such as a second instance with its key or state "
+		+ "delivered from outside, before restarting it.";
+
+	/** Added to {@link #FORKED} when the replaced version is the newer. */
+	public static final String REPLACED_NEWER = " The replaced version is the newer, so a replica, or that version "
+		+ "delivered again, may still prefer it.";
+
+	/** Why publishing failed after the record took the copy: its working state could not be persisted. */
+	public static final String PERSIST_FAILED = "Unable to persist the venue's working state after publishing it";
+
+	/**
+	 * Publishes this copy into its record. A side that alone changed wins, by
+	 * Convex's default reconcile: the record takes the copy's changes, and an
+	 * unchanged copy takes the record's, which only a newer snapshot signed with
+	 * the venue's key can have changed. Where both changed, a mounted venue's copy
+	 * owns its record: its version, with its own {@code :timestamp}, replaces the
+	 * other writer's, and the venue is told of the {@link Fork}. Any other copy
+	 * keeps the default, and fails with a merge conflict. Transactions on the
+	 * copy are unaffected: one that meets a concurrent change runs again under
+	 * its claim.
+	 *
+	 * @return The published value
+	 */
 	@Override
-	protected ACell mergePublication(ACell own, ACell other) {
-		return record.getLattice().merge(own, other);
+	public ACell sync() {
+		if (forked == null) return super.sync();
+		syncChildren();
+		Fork[] found = new Fork[1];
+		ACell published = storage().reconcile((base, own, other) -> {
+			// Run again whenever the record moves under it; only the last run counts
+			found[0] = null;
+			if (Utils.equals(own, base)) return other;
+			if (Utils.equals(other, base)) return own;
+			found[0] = new Fork(Covia.venueTimestamp(own), Covia.venueTimestamp(other),
+				(other == null) ? null : other.getHash());
+			return own;
+		});
+		try {
+			persist();
+		} catch (IOException e) {
+			throw new StoreException(PERSIST_FAILED, e);
+		}
+		if (found[0] != null) forked.accept(found[0]);
+		return published;
 	}
 
 	/** Binds working storage and the policy its components share. */
 	private VenueState(AForkableCursor<ACell> cursor, AccountKey ownerKey, VenueContext context) {
-		this(cursor, ownerKey, context, null);
+		this(cursor, ownerKey, context, null, null);
 	}
 
 	/**
 	 * Binds working storage of its own, persisted through {@code persister}
 	 * ({@link #persist()}), or with its parent when {@code persister} is null.
+	 * {@code forked} is given for a mounted venue's copy alone ({@link #sync()}).
 	 */
 	private VenueState(AForkableCursor<ACell> cursor, AccountKey ownerKey, VenueContext context,
-			Persister<ACell> persister) {
+			Persister persister, Consumer<Fork> forked) {
 		super(cursor, persister);
 		this.ownerKey = ownerKey;
 		this.context = context;
+		this.forked = forked;
 		this.record = new Timestamped<>(cursor, Covia.VENUE, context::currentTimestamp, Covia::stampVenue);
 	}
 
@@ -149,14 +225,15 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 	}
 
 	/**
-	 * The application's copy of a venue, signing with the context's signer and
-	 * persisted through {@code persister}, the host's, so that once saved it holds
-	 * its cells softly.
+	 * The application's copy of a mounted venue, signing with the context's
+	 * signer and persisted through {@code persister}, the host's, so that once
+	 * saved it holds its cells softly. It owns its record: {@code forked} is told
+	 * when it publishes over another writer's version ({@link #sync()}).
 	 */
 	static VenueState draft(OwnedMap<ACell, ACell> venues, AccountKey ownerKey, VenueContext context,
-			Persister<ACell> persister) {
+			Persister persister, Consumer<Fork> forked) {
 		return new VenueState(venues.draft(ownerKey, context::sign).storage(), ownerKey, context,
-			Objects.requireNonNull(persister, "persister"));
+			Objects.requireNonNull(persister, "persister"), Objects.requireNonNull(forked, "forked"));
 	}
 
 	/**
@@ -258,12 +335,29 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 	 * @return AssetStore cursor wrapper
 	 */
 	public AssetStore assets() {
-		return new AssetStore(level(Covia.ASSETS));
+		return new AssetStore(collection(Covia.ASSETS, Index.none()));
 	}
 
-	/** One level of the venue record; a change through an absent record creates it. */
+	/** One level of the venue record; a change creates the level, and the record, when absent. */
 	private <T extends ACell> AForkableCursor<T> level(Keyword key) {
-		return cursor().withDefault(Index.none()).path(key);
+		return level(cursor(), key);
+	}
+
+	/** Level {@code key} of the venue record at {@code venue}, as {@link #level(Keyword)}. */
+	@SuppressWarnings("unchecked")
+	static <T extends ACell> AForkableCursor<T> level(AForkableCursor<ACell> venue, Keyword key) {
+		return (AForkableCursor<T>) new IndexComponent<Keyword, ACell>(
+			(AForkableCursor<Index<Keyword, ACell>>) (AForkableCursor<?>) venue).path(key);
+	}
+
+	/** A level that holds a collection: absent, it reads as {@code empty}, so a transaction on it starts from that. */
+	private <T extends ACell> AForkableCursor<T> collection(Keyword key, T empty) {
+		return this.<T>level(key).withDefault(empty);
+	}
+
+	/** A string-keyed level of the venue record; a put creates the level when absent. */
+	private MapComponent<AString, ACell> mapLevel(Keyword key) {
+		return new MapComponent<>(level(key));
 	}
 
 	/**
@@ -272,7 +366,7 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 	 * @return Users cursor wrapper
 	 */
 	public Users users() {
-		return new Users(context, level(Covia.USER_DATA));
+		return new Users(context, collection(Covia.USER_DATA, Maps.empty()));
 	}
 
 	/**
@@ -416,7 +510,7 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 				// There is no generic merge for arbitrary adapter-owned values.
 				throw new IllegalStateException(LEGACY_STATE_CONFLICT + path);
 			}
-			if (!present) draft.cursor().path(Covia.ADAPTERS).withDefault(Maps.empty()).path(key).set(legacy);
+			if (!present) draft.mapLevel(Covia.ADAPTERS).put(key, legacy);
 			draft.venueUser().deleteInternalPath(CoviaPath.parse(path));
 		});
 	}
@@ -452,7 +546,7 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 
 	private void markUserDeletion(String name, AString did, ACell tombstone) {
 		AMap<AString, ACell> pending = pendingUserDeletions(name).assoc(did, tombstone);
-		cursor().path(Covia.USER_DELETIONS).withDefault(Maps.empty()).path(convex.core.data.Strings.create(name)).set(pending);
+		mapLevel(Covia.USER_DELETIONS).put(convex.core.data.Strings.create(name), pending);
 	}
 
 	/** Acknowledge exactly this deletion, opening recreation only when all work is done. */
@@ -464,7 +558,7 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 			AMap<AString, ACell> all = RT.ensureMap(RT.getIn(draft.get(), Covia.USER_DELETIONS));
 			AString adapter = convex.core.data.Strings.create(name);
 			all = pending.isEmpty() ? all.dissoc(adapter) : all.assoc(adapter, pending);
-			draft.cursor().path(Covia.USER_DELETIONS).set(all);
+			draft.level(Covia.USER_DELETIONS).set(all);
 			for (ACell value : all.values()) {
 				if (RT.getIn(value, did) != null) return;
 			}
@@ -476,22 +570,22 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 
 	/** The users whose name and sign-in keys this venue manages; provider/runtime policy belongs to Auth. */
 	public ManagedUsers managedUsers() {
-		return new ManagedUsers(context, level(Covia.USERS));
+		return new ManagedUsers(context, collection(Covia.USERS, Maps.empty()));
 	}
 
 	/** The entries of unfinished jobs; the jobs themselves belong to JobManager. */
 	public JobIndex jobIndex() {
-		return new JobIndex(level(Covia.JOBS));
+		return new JobIndex(collection(Covia.JOBS, Index.none()));
 	}
 
 	/** Stored schedule; timer and execution lifecycle belong to Scheduler. */
 	public Schedule schedule() {
-		return new Schedule(context, level(Covia.SCHEDULE));
+		return new Schedule(context, collection(Covia.SCHEDULE, Maps.empty()));
 	}
 
 	/** The venue's content, by SHA-256 ({@code :storage}). */
 	public ContentStore contents() {
-		return new ContentStore(level(Covia.STORAGE));
+		return new ContentStore(collection(Covia.STORAGE, Index.none()));
 	}
 
 	/**
@@ -563,8 +657,7 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 	/** Records the state version an adapter has reached. */
 	void setAdapterVersion(String name, long version) {
 		AdapterState.validateName(name);
-		cursor().withDefault(Index.none()).path(Covia.ADAPTER_VERSIONS).withDefault(Maps.empty())
-			.path(Strings.create(name)).set(CVMLong.create(version));
+		mapLevel(Covia.ADAPTER_VERSIONS).put(Strings.create(name), CVMLong.create(version));
 	}
 
 	/** One pure step of an adapter's state, from {@code version} to {@code version + 1}. */
@@ -671,7 +764,7 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 			ACell value = get();
 			ACell migrated = steps.get((int) version).apply(value);
 			if (migrated != value) cursor().set(migrated);
-			cursor().withDefault(Index.none()).path(Covia.VERSION).set(CVMLong.create(++version));
+			level(Covia.VERSION).set(CVMLong.create(++version));
 		}
 	}
 
@@ -715,8 +808,9 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 	}
 
 	/**
-	 * Creates independent working state. Its sync reconciles it with this copy,
-	 * unsigned, using whole-venue LWW, which may select one complete concurrent version.
+	 * Creates independent working state. Its sync publishes it into this copy,
+	 * unsigned, and fails with a merge conflict, keeping the fork, when both
+	 * changed ({@link #sync()}).
 	 * For compound local edits with conflict retry, use {@link #execute} or {@link #transact}.
 	 */
 	@Override

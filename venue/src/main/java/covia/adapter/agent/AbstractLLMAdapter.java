@@ -105,6 +105,8 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	public static final AString K_CONTEXT         = Strings.intern("context");
 	public static final AString K_TOOL_CALL_TIMEOUT_MS = Strings.intern("toolCallTimeoutMs");
 	public static final AString K_MAX_TOOL_ITERATIONS  = Strings.intern("maxToolIterations");
+	/** Agent config: exchanges compaction keeps after its summary. */
+	public static final AString K_COMPACT_KEEP         = Strings.intern("compactKeep");
 	public static final AString K_LLM_TIMEOUT_MS       = Strings.intern("llmTimeoutMs");
 	public static final AString K_RECORD_TOOL_CALLS    = Strings.intern("recordToolCalls");
 
@@ -221,6 +223,18 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	/** {@code ctx} narrowed by {@code config.caps}: for an agent's harness, what the agent itself may do. */
 	public static RequestContext capsContext(AMap<AString, ACell> config, RequestContext ctx) {
 		return ctx.narrowedTo(RT.ensureVector(config != null ? config.get(K_CAPS) : null));
+	}
+
+	/**
+	 * The context an inspected cycle's steps act in: the agent itself, as a
+	 * live cycle's are ({@link Engine#stepContext}), when {@code ctx} drives an
+	 * agent's execution, since its harness is its controller's frame; for a
+	 * configuration inspected with no agent, {@code ctx} narrowed by its caps
+	 * ({@link #capsContext}).
+	 */
+	protected RequestContext inspectedStepContext(AMap<AString, ACell> config, RequestContext ctx) {
+		AString agentId = ctx.getExecutionScope().agentId();
+		return (agentId == null) ? capsContext(config, ctx) : engine.stepContext(ctx, agentId);
 	}
 
 	/**
@@ -945,7 +959,7 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 				String error = job.getErrorMessage();
 				if (error != null) return Strings.create("Error: " + error);
 				AMap<AString, ACell> receipt = Maps.of(
-					Fields.ID, Strings.create(job.getID().toHexString()),
+					Fields.ID, job.getID(),
 					Fields.STATUS, job.getStatus());
 				AString title = RT.ensureString(RT.getIn(input, Fields.TITLE));
 				if (title != null) receipt = receipt.assoc(Fields.TITLE, title);
@@ -985,6 +999,19 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 			return (int) Math.min(l.longValue(), Integer.MAX_VALUE);
 		}
 		return engine.config().getMaxToolIterations();
+	}
+
+	/**
+	 * Exchanges an agent's compaction keeps after its summary: its
+	 * {@code config.compactKeep} ({@code >= 0}, validated when the config is
+	 * set), else {@link GoalTreeContext#DEFAULT_COMPACT_KEEP}.
+	 */
+	public static int resolveCompactKeep(AMap<AString, ACell> config) {
+		ACell v = (config != null) ? config.get(K_COMPACT_KEEP) : null;
+		if (v instanceof CVMLong l && l.longValue() >= 0) {
+			return (int) Math.min(l.longValue(), Integer.MAX_VALUE);
+		}
+		return GoalTreeContext.DEFAULT_COMPACT_KEEP;
 	}
 
 	/**
@@ -1054,12 +1081,12 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	/** The result of a sessioned tool call still running at its time limit (#607):
 	 *  the operation, the limit in milliseconds, then the job it runs as. */
 	public static final String TOOL_STILL_RUNNING = "Error: %s did not complete within %dms and is still running as job %s. "
-		+ "Its outcome will arrive later in this session, naming this call and that job; grid_job_status with that id shows how it is going. "
+		+ "Its outcome will arrive later in this session, naming this call and that job. To inspect progress, use an advertised Job-status tool with that local id and omit venue. "
 		+ "Do not call it again unless repeating it is safe.";
 
 	/** As {@link #TOOL_STILL_RUNNING}, for a call with no session to deliver its outcome to. */
 	public static final String TOOL_STILL_RUNNING_UNTRACKED = "Error: %s did not complete within %dms and is still running as job %s. "
-		+ "No message will follow; grid_job_status with that id gives its status and, once it has finished, its outcome. "
+		+ "No message will follow; use an advertised Job-status or Job-result tool with that local id and omit venue to collect its outcome. "
 		+ "Do not call it again unless repeating it is safe.";
 
 	/**
@@ -1084,7 +1111,7 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 			job = null;
 		}
 		if (job == null) return toolTimeout(timeoutMs);
-		String id = job.getID().toHexString();
+		Blob id = job.getID();
 		AString agentId = ctx.getAgentId();
 		Blob sessionId = ctx.getSessionId();
 		AgentAdapter agents = engine.getAdapter("agent") instanceof AgentAdapter a ? a : null;

@@ -15,9 +15,10 @@ import convex.core.lang.RT;
 import covia.adapter.messaging.AMessagingAdapter;
 import covia.adapter.messaging.MessagingBot.Managed;
 import covia.adapter.messaging.ConversationRouter;
+import covia.exception.ConfigurationException;
 import covia.exception.InvalidDefinitionException;
 import covia.exception.InvalidInputException;
-import covia.exception.NotSupportedException;
+import covia.exception.UnsupportedException;
 import covia.venue.RequestContext;
 
 /** Discord bots as a venue front door and as an outbound messaging adapter. */
@@ -34,6 +35,13 @@ public class DiscordAdapter extends AMessagingAdapter<BotSpec, BotRunner> {
 		ABILITY_CALL=Strings.intern("discord/call"), ABILITY_MANAGE=Strings.intern("discord/manage");
 	private static final Set<AString> KNOWN=Set.of(K_BOTS,K_API_URL,K_ENABLED);
 	private volatile String apiUrl=DEFAULT_API_URL;
+
+	/** Refusals of the {@code adapters.discord} settings. */
+	public static final String STATE_PATH_FIXED="adapters.discord.statePath is fixed at :adapters/discord";
+	public static final String UNKNOWN_SETTING="adapters.discord: unknown setting %s";
+	public static final String API_URL_NOT_STRING="adapters.discord.apiUrl must be a non-empty string";
+	public static final String API_URL_NOT_HTTP="adapters.discord.apiUrl must be an http(s) URL";
+	public static final String BOTS_NOT_OBJECT="adapters.discord.bots must be an object";
 	volatile DiscordGateway.Factory gatewayFactory=JDAGateway::connect;
 
 	@Override public String getName(){return NAME;}
@@ -51,19 +59,22 @@ public class DiscordAdapter extends AMessagingAdapter<BotSpec, BotRunner> {
 		installAgentTemplate("discord","/agent-templates/discord.json");
 	}
 
-	@Override public boolean configure(AMap<AString,ACell> config,boolean strict){
+	@Override public void configure(AMap<AString,ACell> config,boolean strict){
 		if(config==null)config=Maps.empty();
-		if(config.containsKey(K_STATE_PATH))throw new IllegalArgumentException("adapters.discord.statePath is fixed at :adapters/discord");
-		if(strict)for(long i=0;i<config.count();i++){ACell k=config.entryAt(i).getKey();if(!(k instanceof AString s)||!KNOWN.contains(s))throw new IllegalArgumentException("adapters.discord: unknown setting "+k);}
+		if(config.containsKey(K_STATE_PATH))throw new ConfigurationException(STATE_PATH_FIXED);
+		if(strict)for(long i=0;i<config.count();i++){ACell k=config.entryAt(i).getKey();if(!(k instanceof AString s)||!KNOWN.contains(s))throw new ConfigurationException(UNKNOWN_SETTING.formatted(k));}
 		String url=DEFAULT_API_URL; ACell u=config.get(K_API_URL);
-		if(u!=null){if(!(u instanceof AString s)||s.isEmpty())throw new IllegalArgumentException("adapters.discord.apiUrl must be a non-empty string");url=s.toString();if(!url.startsWith("http://")&&!url.startsWith("https://"))throw new IllegalArgumentException("adapters.discord.apiUrl must be an http(s) URL");url=url.replaceAll("/+$","");}
+		if(u!=null){if(!(u instanceof AString s)||s.isEmpty())throw new ConfigurationException(API_URL_NOT_STRING);url=s.toString();if(!url.startsWith("http://")&&!url.startsWith("https://"))throw new ConfigurationException(API_URL_NOT_HTTP);url=url.replaceAll("/+$","");}
 		Map<String,BotSpec> parsed=new LinkedHashMap<>(); ACell bc=config.get(K_BOTS);
-		if(bc!=null){AMap<AString,ACell> bots=RT.castMap(bc);if(bots==null)throw new IllegalArgumentException("adapters.discord.bots must be an object");for(long i=0;i<bots.count();i++){var e=bots.entryAt(i);String name=String.valueOf(e.getKey());parsed.put(name,BotSpec.parse(name,e.getValue(),strict));}}
-		apiUrl=url;configureBots(parsed);return true;
+		if(bc!=null){AMap<AString,ACell> bots=RT.castMap(bc);if(bots==null)throw new ConfigurationException(BOTS_NOT_OBJECT);for(long i=0;i<bots.count();i++){var e=bots.entryAt(i);String name=String.valueOf(e.getKey());
+			// The bot parser also reads a create call's input; here it read the settings
+			try{parsed.put(name,BotSpec.parse(name,e.getValue(),strict));}catch(IllegalArgumentException refused){throw new ConfigurationException(refused.getMessage(),refused);}}}
+		apiUrl=url;configureBots(parsed);
 	}
 	@Override protected BotSpec parseBot(String name,ACell settings,boolean strict){return BotSpec.parse(name,settings,strict);}
 	@Override protected BotRunner newBot(BotSpec spec,Managed managed){return new BotRunner(this,spec,apiUrl,managed);}
 	@Override protected boolean configurationMatches(BotRunner runner){return apiUrl.equals(runner.apiUrl);}
+	@Override protected String apiEndpoint(covia.adapter.messaging.MessagingBot<?> bot){return (bot instanceof BotRunner runner)?runner.apiUrl:apiUrl;}
 	String resolveToken(BotRunner runner){return resolveCredential(runner.spec().tokenRef(),runner);}
 	BotRunner runnerForTest(String name){return runner(name);}
 	BotRunner runnerForTest(AString owner,String name){return runner(owner,name);}
@@ -72,7 +83,7 @@ public class DiscordAdapter extends AMessagingAdapter<BotSpec, BotRunner> {
 
 	@Override public CompletableFuture<ACell> invokeFuture(RequestContext ctx,AMap<AString,ACell> meta,ACell input){
 		String op=getSubOperation(meta);if(op==null)throw new InvalidDefinitionException("Insufficient specification for discord operation");
-		return CompletableFuture.supplyAsync(()->switch(op){case "send"->send(ctx,input);case "call"->call(ctx,input);case "create"->handleCreate(ctx,input);case "delete"->handleDelete(ctx,input);case "bots"->handleBots(ctx);default->throw new NotSupportedException("Unsupported discord operation: "+op);},VIRTUAL_EXECUTOR);
+		return CompletableFuture.supplyAsync(()->switch(op){case "send"->send(ctx,input);case "call"->call(ctx,input);case "create"->handleCreate(ctx,input);case "delete"->handleDelete(ctx,input);case "bots"->handleBots(ctx);default->throw new UnsupportedException("Unsupported discord operation: "+op);},VIRTUAL_EXECUTOR);
 	}
 	private ACell send(RequestContext ctx,ACell input){
 		AMap<AString,ACell> in=RT.castMap(input);if(in==null)throw new InvalidInputException("send expects an object");BotRunner r=selectBot(ctx,RT.ensureString(in.get(K_BOT)));requireBotAccess(ctx,r,ABILITY_SEND);
@@ -81,13 +92,14 @@ public class DiscordAdapter extends AMessagingAdapter<BotSpec, BotRunner> {
 		AMap<AString,ACell> body=Maps.of(K_CONTENT,content);AString reply=RT.ensureString(in.get(K_REPLY_TO));if(reply!=null)body=body.assoc(Strings.intern("message_reference"),Maps.of(Strings.intern("message_id"),reply,Strings.intern("fail_if_not_exists"),CVMBool.FALSE));
 		if(CVMBool.TRUE.equals(in.get(K_SUPPRESS_EMBEDS)))body=body.assoc(Strings.intern("flags"),convex.core.data.prim.CVMLong.create(4));
 		for(long i=0;i<in.count();i++){var e=in.entryAt(i);ACell k=e.getKey();if(!K_BOT.equals(k)&&!K_CHANNEL_ID.equals(k)&&!K_REPLY_TO.equals(k)&&!K_SUPPRESS_EMBEDS.equals(k))body=body.assoc((AString)k,e.getValue());}
-		return r.sendMessage(channel.toString(),body);
+		AMap<AString,ACell> payload=body;
+		return withOutboundCaller(ctx, () -> r.sendMessage(channel.toString(),payload));
 	}
 	private ACell call(RequestContext ctx,ACell input){
 		BotRunner r=selectBot(ctx,RT.ensureString(RT.getIn(input,K_BOT)));requireBotAccess(ctx,r,ABILITY_CALL);
 		AString method=RT.ensureString(RT.getIn(input,K_METHOD)),route=RT.ensureString(RT.getIn(input,K_ROUTE));if(method==null||route==null)throw new InvalidInputException("method and route are required");
 		String m=method.toString().toUpperCase(),p=route.toString();if(!Set.of("GET","POST","PUT","PATCH","DELETE").contains(m))throw new InvalidInputException("method must be GET, POST, PUT, PATCH or DELETE");
 		if(!p.startsWith("/")||p.contains("://")||p.contains("..")||p.startsWith("/gateway")||p.startsWith("/oauth2"))throw new InvalidInputException("route must be a safe Discord API path; Gateway and OAuth routes are managed/refused");
-		return r.call(m,p,RT.getIn(input,K_BODY));
+		return withOutboundCaller(ctx, () -> r.call(m,p,RT.getIn(input,K_BODY)));
 	}
 }

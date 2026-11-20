@@ -19,10 +19,11 @@ import java.util.concurrent.atomic.AtomicLong;
 import covia.adapter.AAdapter;
 
 /**
- * A download that is the pinned file or nothing: fetched to a {@code .part} file,
- * checked against its size and sha256 as it arrives, and moved into place only when
- * both match. Redirects are followed (model hosts redirect to their storage), but only
- * over HTTPS, except to loopback.
+ * A download that is the pinned file or nothing: fetched to a {@code .part} file of its
+ * own, checked against its size and sha256 as it arrives, and moved into place only when
+ * both match, so fetches of one file at once do not disturb each other. Redirects are
+ * followed (model hosts redirect to their storage), but only over HTTPS, except to
+ * loopback.
  */
 final class PinnedDownload {
 	static final String NOT_PINNED = "%s is not the file that was pinned (%d bytes, sha256 %s)";
@@ -31,7 +32,30 @@ final class PinnedDownload {
 
 	/** Shared by every download: each HttpClient holds a selector thread for its lifetime. */
 	private static final HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(20))
-		.followRedirects(HttpClient.Redirect.NORMAL).executor(AAdapter.VIRTUAL_EXECUTOR).build();
+		.followRedirects(HttpClient.Redirect.NEVER).executor(AAdapter.VIRTUAL_EXECUTOR).build();
+
+	private final java.util.function.Consumer<HttpRequest> authorizer;
+
+	PinnedDownload() { this(request -> {}); }
+	PinnedDownload(java.util.function.Consumer<HttpRequest> authorizer) { this.authorizer = authorizer; }
+
+	/** Follow storage redirects explicitly so each hop is checked before sending. */
+	private HttpResponse<InputStream> send(URI uri) throws IOException, InterruptedException {
+		for (int hops = 0; hops <= 8; hops++) {
+			if (!"https".equals(uri.getScheme()) && !OpenAiSpeechEngine.loopback(uri.getHost())) {
+				throw new IOException(FAILED.formatted(uri.getHost(), "not HTTPS"));
+			}
+			HttpRequest request = HttpRequest.newBuilder(uri).timeout(TIMEOUT).GET().build();
+			authorizer.accept(request);
+			HttpResponse<InputStream> response = client.send(request, HttpResponse.BodyHandlers.ofInputStream());
+			int status = response.statusCode();
+			String location = response.headers().firstValue("Location").orElse(null);
+			if (location == null || !(status == 301 || status == 302 || status == 303 || status == 307 || status == 308)) return response;
+			response.body().close();
+			uri = uri.resolve(location);
+		}
+		throw new IOException(FAILED.formatted(uri.getHost(), "too many redirects"));
+	}
 
 	/**
 	 * @param progress incremented by the bytes received, and given back if the file fails
@@ -41,11 +65,10 @@ final class PinnedDownload {
 		URI uri = URI.create(url);
 		if (!"https".equals(uri.getScheme()) && !OpenAiSpeechEngine.loopback(uri.getHost())) throw new IOException(FAILED.formatted(url, "not HTTPS"));
 		Files.createDirectories(target.getParent());
-		Path part = target.resolveSibling(target.getFileName() + ".part");
+		Path part = Files.createTempFile(target.getParent(), target.getFileName() + ".", ".part");
 		long before = progress.get();
 		try {
-			HttpResponse<InputStream> response = client.send(HttpRequest.newBuilder(uri).timeout(TIMEOUT).GET().build(),
-				HttpResponse.BodyHandlers.ofInputStream());
+			HttpResponse<InputStream> response = send(uri);
 			URI landed = response.uri();
 			if (!"https".equals(landed.getScheme()) && !OpenAiSpeechEngine.loopback(landed.getHost())) {
 				response.body().close();
@@ -69,7 +92,12 @@ final class PinnedDownload {
 			}
 			String got = HexFormat.of().formatHex(sha.digest());
 			if (received != bytes || !got.equals(sha256)) throw new IOException(NOT_PINNED.formatted(url, received, got));
-			Files.move(part, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+			try {
+				Files.move(part, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+			} catch (IOException e) {
+				// Another fetch may have put the file in place and hold it open, as Windows refuses a replace then
+				if (!matches(target, bytes, sha256)) throw e;
+			}
 		} catch (InterruptedException e) {
 			Thread.currentThread().interrupt();
 			throw new IOException(FAILED.formatted(url, "interrupted"));

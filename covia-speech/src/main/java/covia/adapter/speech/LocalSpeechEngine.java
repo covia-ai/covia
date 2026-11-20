@@ -9,6 +9,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -26,8 +27,9 @@ import convex.core.data.Strings;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import covia.exception.InvalidInputException;
+import covia.exception.InvalidStateException;
 import covia.exception.JobFailedException;
-import covia.exception.NotSupportedException;
+import covia.exception.UnsupportedException;
 
 /**
  * Speech recognised and spoken inside the venue's JVM by sherpa-onnx: no audio or text
@@ -118,7 +120,7 @@ final class LocalSpeechEngine implements SpeechEngine {
 	private final NativeLibraries natives;
 	private final Backends backends;
 	private final Speakers speakers;
-	private final PinnedDownload download = new PinnedDownload();
+	private final PinnedDownload download;
 	private final AtomicLong modelProgress = new AtomicLong();
 	private final AtomicLong voiceProgress = new AtomicLong();
 	private final AtomicLong nativeProgress = new AtomicLong();
@@ -156,6 +158,13 @@ final class LocalSpeechEngine implements SpeechEngine {
 	 */
 	LocalSpeechEngine(SpeechModels.Model model, SpeechModels.Model voice, Path nativePath, boolean fetchNatives,
 			Supplier<Path> cache, int threads, NativeLibraries natives, Backends backends, Speakers speakers) {
+		this(model, voice, nativePath, fetchNatives, cache, threads, natives, backends, speakers, request -> {});
+	}
+
+	LocalSpeechEngine(SpeechModels.Model model, SpeechModels.Model voice, Path nativePath, boolean fetchNatives,
+			Supplier<Path> cache, int threads, NativeLibraries natives, Backends backends, Speakers speakers,
+			java.util.function.Consumer<java.net.http.HttpRequest> authorizer) {
+		this.download = new PinnedDownload(authorizer);
 		this.model = model;
 		this.voice = voice;
 		this.nativePath = nativePath;
@@ -165,7 +174,25 @@ final class LocalSpeechEngine implements SpeechEngine {
 		this.natives = natives;
 		this.backends = backends;
 		this.speakers = speakers;
-		idle.scheduleWithFixedDelay(this::releaseIfIdle, 60, 60, TimeUnit.SECONDS);
+	}
+
+	/** Whether the idle check is scheduled: once a model is loaded, there is something to release. */
+	private final AtomicBoolean idleScheduled = new AtomicBoolean();
+
+	/**
+	 * Schedules the idle check the first time a model loads, so an engine
+	 * that has only been configured runs no thread. A model can load after
+	 * {@link #close} has begun, for work queued before it; the close step
+	 * queued behind that work releases the model, so none is scheduled then.
+	 */
+	private void scheduleIdleRelease() {
+		if (idleScheduled.compareAndSet(false, true)) {
+			try {
+				idle.scheduleWithFixedDelay(this::releaseIfIdle, 60, 60, TimeUnit.SECONDS);
+			} catch (RejectedExecutionException closing) {
+				// Closing: the close step releases the model when this work is done
+			}
+		}
 	}
 
 	@Override public String name() { return NAME; }
@@ -179,7 +206,7 @@ final class LocalSpeechEngine implements SpeechEngine {
 	@Override
 	public Transcript transcribe(Audio audio, String modelId, String language, String prompt, String key) {
 		if (model == null) throw new JobFailedException(TRANSCRIBE_UNAVAILABLE);
-		if (!model.id().equals(modelId)) throw new NotSupportedException(OTHER_MODEL.formatted(model.id()));
+		if (!model.id().equals(modelId)) throw new UnsupportedException(OTHER_MODEL.formatted(model.id()));
 		float[] samples = AudioDecoder.decode(audio.bytes());
 		prepare();
 		Future<String> heard = worker.submit(() -> {
@@ -204,13 +231,13 @@ final class LocalSpeechEngine implements SpeechEngine {
 	@Override
 	public Speech speak(SpeakRequest request, String key) {
 		if (voice == null) throw new JobFailedException(SPEAK_UNAVAILABLE);
-		if (request.model() != null && !voice.id().equals(request.model())) throw new NotSupportedException(OTHER_MODEL.formatted(voice.id()));
-		if (!"wav".equals(request.format())) throw new NotSupportedException(WAV_ONLY);
+		if (request.model() != null && !voice.id().equals(request.model())) throw new UnsupportedException(OTHER_MODEL.formatted(voice.id()));
+		if (!"wav".equals(request.format())) throw new UnsupportedException(WAV_ONLY);
 		int sid = voiceNumber(request.voice());
 		float speed = request.speed() == null ? 1f : request.speed().floatValue();
 		String language = request.language() == null ? DEFAULT_LANGUAGE : request.language();
 		if (voice.kind() == SpeechModels.Kind.VITS && !DEFAULT_LANGUAGE.equals(language)) {
-			throw new NotSupportedException(ENGLISH_ONLY.formatted(voice.id()));
+			throw new UnsupportedException(ENGLISH_ONLY.formatted(voice.id()));
 		}
 		prepareVoice();
 		// A lexicon voice drops any word it lacks without a sound: make every word sayable first.
@@ -325,7 +352,7 @@ final class LocalSpeechEngine implements SpeechEngine {
 		}
 
 		private Heard step(float[] samples, boolean end) {
-			if (ended) throw new NotSupportedException(DICTATION_CLOSED);
+			if (ended) throw new InvalidStateException(DICTATION_CLOSED);
 			Backend b = backend();
 			if (pauses == null) pauses = b.pauses(DICTATION_STRETCH_SECONDS);
 			int n = Math.max(0, Math.min(AudioDecoder.MAX_SECONDS * AudioDecoder.RATE - received, samples.length));
@@ -485,6 +512,7 @@ final class LocalSpeechEngine implements SpeechEngine {
 			long started = System.nanoTime();
 			backend = backends.open(model, modelDirectory(cache.get(), model), threads);
 			log.info("speech: {} loaded in {} ms on {} threads", model.id(), (System.nanoTime() - started) / 1_000_000, threads);
+			scheduleIdleRelease();
 		}
 		return backend;
 	}
@@ -495,6 +523,7 @@ final class LocalSpeechEngine implements SpeechEngine {
 			long started = System.nanoTime();
 			speaker = speakers.open(voice, modelDirectory(cache.get(), voice), threads);
 			log.info("speech: {} loaded in {} ms on {} threads", voice.id(), (System.nanoTime() - started) / 1_000_000, threads);
+			scheduleIdleRelease();
 		}
 		return speaker;
 	}

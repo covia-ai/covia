@@ -24,9 +24,10 @@ import covia.grid.Principals;
 import covia.lattice.Namespace;
 
 /**
- * A caller's context a job keeps for work that continues after the request:
- * its proofs, in the form checked on arrival, and its execution scopes, kept
- * in the job's entry, presented again when the work continues, never on the
+ * The state a recorded job keeps from admission until it finishes, for work
+ * that continues after the request: its frame, the grants it presented, in
+ * the form checked on arrival, its route and its execution scopes, kept in
+ * the job's entry, acted in again when the work continues, never on the
  * record, and gone when the job ends.
  */
 class KeptCallerContextTest {
@@ -59,68 +60,74 @@ class KeptCallerContextTest {
 		RequestContext own = RequestContext.of(alice);
 
 		Job job = engine.jobs().invokeOperation("v/test/ops/never", Maps.empty(), presenting);
-		engine.jobs().keepCallerContext(job, presenting);
 		String id = job.getID().toHexString();
 		JobIndex index = engine.getVenueState().jobIndex();
 		try {
-			assertEquals(Maps.of(Fields.PROOFS, proofs, Fields.SESSION_ID, session, Fields.TASK_ID, task),
+			assertEquals(Maps.of(Fields.FRAME, Maps.of(Fields.AUTHORITY, alice), Fields.PROOFS, proofs,
+				Fields.ROUTE, presenting.getRoute(), Fields.SESSION_ID, session, Fields.JOB_ID, job.getID(), Fields.TASK_ID, task),
 				index.entry(job.getID()).get(JobIndex.CONTEXT), "the job's entry keeps them while its work can continue");
 			ACell stored = RT.getIn(engine.getVenueState().users().user(alice).cursor().path(Namespace.J).get(), job.getID());
 			assertFalse(RT.ensureMap(stored).containsKey(Fields.PROOFS), "the record never holds them");
 			assertNull(RT.getIn(read("j/" + id, own), Fields.VALUE, Fields.PROOFS));
 
 			RequestContext resumed = engine.jobs().callerContext(job);
-			assertEquals(alice, resumed.getCallerDID());
+			assertEquals(alice, resumed.getAuthorityDID());
 			assertEquals(proofs, resumed.getProofs(), "work that continues presents them again");
 			assertEquals(session, resumed.getSessionId(), "in the scopes it was started in");
 			assertEquals(task, resumed.getTaskId());
+			assertEquals(presenting.getRoute(), resumed.getRoute(), "as the same request, on the route it came by");
+			assertNull(resumed.getOrigin(), "with nobody present in it");
 		} finally {
 			job.cancel();
 		}
 		assertNull(index.entry(job.getID()), "gone when the job ends");
-		assertFalse(engine.jobs().keepsCallerContext(job));
-		AVector<ACell> after = engine.jobs().callerContext(job).getProofs();
-		assertTrue(after == null || after.isEmpty(), "a finished job presents nothing again");
-	}
-
-	/** A job that asked keeps a context even when its caller presented nothing beyond itself, unlike one that never asked. */
-	@Test void aJobThatAskedKeepsAContextWhenItsCallerPresentedNothingMore() {
-		RequestContext own = RequestContext.of(TestEngine.uniqueDID("KeptContextBare"));
-		Job asked = engine.jobs().invokeOperation("v/test/ops/never", Maps.empty(), own);
-		Job never = engine.jobs().invokeOperation("v/test/ops/never", Maps.empty(), own);
-		engine.jobs().keepCallerContext(asked, own);
-		try {
-			assertEquals(Maps.empty(), engine.getVenueState().jobIndex().entry(asked.getID()).get(JobIndex.CONTEXT));
-			assertTrue(engine.jobs().keepsCallerContext(asked));
-			assertFalse(engine.jobs().keepsCallerContext(never));
-		} finally {
-			asked.cancel();
-			never.cancel();
-		}
+		AuthException ended = assertThrows(AuthException.class, () -> engine.jobs().callerContext(job),
+			"a finished job never acts again");
+		assertEquals(JobManager.NO_STATE + job.getID(), ended.getMessage());
 	}
 
 	/**
-	 * A call to an agent on this venue that keeps no context, as one whose
-	 * entry was migrated from an older store, is not followed again after a
+	 * Every recorded job keeps a state, whatever its operation, even when its
+	 * caller presented nothing beyond itself, as work the venue starts for a
+	 * principal does: its frame alone.
+	 */
+	@Test void everyRecordedJobKeepsAStateWhenItsCallerPresentedNothingMore() {
+		AString did = TestEngine.uniqueDID("KeptContextBare");
+		Job job = engine.jobs().invokeOperation("v/test/ops/never", Maps.empty(), engine.context(did));
+		try {
+			assertEquals(Maps.of(Fields.FRAME, Maps.of(Fields.AUTHORITY, did), Fields.JOB_ID, job.getID()),
+				engine.getVenueState().jobIndex().entry(job.getID()).get(JobIndex.CONTEXT));
+			assertEquals(did, engine.jobs().callerContext(job).getAuthorityDID());
+		} finally {
+			job.cancel();
+		}
+	}
+
+
+	/**
+	 * A call to an agent on this venue that keeps no state, as one whose
+	 * entry came from a store that kept none, is not followed again after a
 	 * restart: it ends, and the agent's task runs on.
 	 */
-	@Test void aLocalAgentCallThatKeptNoContextEndsAtRecovery() {
+	@Test void aLocalAgentCallThatKeptNoStateEndsAtRecovery() {
 		RequestContext own = RequestContext.of(TestEngine.uniqueDID("KeptContextLocalCall"));
 		engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "waiting",
-			Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/never")), own).awaitResult(10_000);
+			Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/never", "acceptTasks", true)), own).awaitResult(10_000);
 		Job call = engine.jobs().invokeOperation("v/ops/remoteagent/request",
 			Maps.of(Fields.AGENT_ID, "waiting", Fields.INPUT, Maps.of("task", "wait")), own);
 		TestEngine.awaitJob(call, j -> RT.getIn(RemoteJobs.descriptor(j), RemoteJobs.REMOTE_STATUS) != null,
 			10_000, () -> "the call did not see its task: " + call.getData());
 		Job task = engine.jobs().getJob(Job.parseID(RemoteJobs.descriptor(call).get(RemoteJobs.REMOTE_ID)), own);
 		try {
-			assertTrue(engine.jobs().keepsCallerContext(call), "a call to an agent here keeps its caller's context");
+			assertNotNull(engine.getVenueState().jobIndex().entry(call.getID()).get(JobIndex.CONTEXT),
+				"a call to an agent here keeps its state");
 			engine.getVenueState().jobIndex().update(call.getID(), entry -> entry.dissoc(JobIndex.CONTEXT));
 			covia.adapter.AAdapter adapter = engine.getAdapter("remoteagent");
 			adapter.suspendJob(call);
 			adapter.recoverJob(call);
 			assertEquals(covia.grid.Status.FAILED, call.getStatus());
-			assertEquals(covia.adapter.RemoteAgentAdapter.LOCAL_INTERRUPTED, call.getErrorMessage());
+			assertEquals(covia.adapter.RemoteAgentAdapter.CALLER_CANNOT_ACT.formatted(JobManager.NO_STATE + call.getID(),
+				task.getID()), call.getErrorMessage());
 			assertFalse(task.isFinished(), "the agent's task runs on");
 		} finally {
 			task.cancel();
@@ -128,8 +135,25 @@ class KeptCallerContextTest {
 		}
 	}
 
-	/** A delegate's job regains its authority only through the grant it presented, as a live request would. */
-	@Test void aDelegatesJobActsAgainOnlyThroughItsGrant() {
+	/**
+	 * Work acts again only as a principal of the account it is kept in: a
+	 * record there naming another, as one a delegate left before admin/sudo
+	 * acted as the user does, regains no authority.
+	 */
+	@Test void workKeptInAnotherAccountDoesNotActAsItsCaller() {
+		AString owner = TestEngine.uniqueDID("KeptOwner");
+		AString delegate = TestEngine.uniqueDID("KeptDelegate");
+		AuthException refused = assertThrows(AuthException.class, () -> engine.context(owner, delegate, Vectors.empty()));
+		assertEquals(Engine.NOT_IN_ACCOUNT.formatted(delegate, owner), refused.getMessage());
+		assertEquals(owner, engine.context(owner, owner, Vectors.empty()).getAuthorityDID(), "the account itself acts again");
+	}
+
+	/**
+	 * A job made under admin/sudo is the user's own: it records the user and
+	 * acts again with the user's whole authority, whatever becomes of the
+	 * delegate's grant.
+	 */
+	@Test void aJobMadeUnderSudoIsTheUsersOwn() {
 		AKeyPair ownerKey = AKeyPair.generate();
 		AKeyPair delegateKey = AKeyPair.generate();
 		AString owner = UCAN.toDIDKey(ownerKey.getAccountKey());
@@ -137,32 +161,23 @@ class KeptCallerContextTest {
 		engine.getVenueState().users().create(owner);
 		engine.getVenueState().users().create(delegate);
 		AString grant = UCAN.create(ownerKey, delegateKey.getAccountKey(), exp(),
-			Vectors.of(Capability.create(owner, Abilities.USER_SUDO),
-				Capability.create(Strings.create(owner + "/v/test/ops/never"), Strings.create("invoke")),
-				Capability.create(Strings.create(owner + "/w/output"), Capability.CRUD_WRITE)),
-			Vectors.empty()).toJWT(ownerKey);
+			Vectors.of(Capability.create(owner, Abilities.ADMIN_SUDO)), Vectors.empty()).toJWT(ownerKey);
 		RequestContext sudo = engine.sudoContext(engine.withTransportGrants(
-				RequestContext.of(delegate), Vectors.of(grant)), owner)
-			.withAgentId(Strings.create("worker")).withSessionId(Blob.fromHex("1234"));
+			RequestContext.of(delegate), Vectors.of(grant)), owner);
 
 		Job kept = engine.jobs().invokeOperation("v/test/ops/never", Maps.empty(), sudo);
-		Job unkept = engine.jobs().invokeOperation("v/test/ops/never", Maps.empty(), sudo);
-		engine.jobs().keepCallerContext(kept, sudo);
 		try {
-			assertEquals(delegate, kept.getCaller());
-			assertEquals(owner, kept.getOwner());
+			assertEquals(owner, kept.getCaller(), "the user acted");
+			assertEquals(owner, JobManager.accountOf(kept), "in the user's own account");
 			RequestContext resumed = engine.jobs().callerContext(kept);
-			assertEquals(delegate, resumed.getCallerDID());
-			assertEquals(owner, resumed.getUserDID(), "in the owner's namespace, as the grant allows");
-			assertEquals(sudo.getExecutionScope(), resumed.getExecutionScope());
-			assertTrue(engine.authorityCovers(resumed, Strings.create("w/output"), Capability.CRUD_WRITE));
-			assertFalse(engine.authorityCovers(resumed, Strings.create("w/other"), Capability.CRUD_WRITE),
-				"bounded by the grant, as it was");
-			assertThrows(AuthException.class, () -> engine.jobs().callerContext(unkept),
-				"without its grant a delegate cannot act for the owner again");
+			assertEquals(owner, resumed.getAuthorityDID());
+			assertNull(resumed.getOrigin(), "nobody is present in work carried on");
+			assertNotNull(sudo.getRoute());
+			assertEquals(sudo.getRoute(), resumed.getRoute(), "which still names the delegate and the handover to the user");
+			assertTrue(engine.authorityCovers(resumed, Strings.create("w/other"), Capability.CRUD_WRITE),
+				"with the user's whole authority");
 		} finally {
 			kept.cancel();
-			unkept.cancel();
 		}
 	}
 
@@ -173,7 +188,7 @@ class KeptCallerContextTest {
 		AVector<ACell> proofs = grantTo(aliceKey);
 		RequestContext own = RequestContext.of(alice);
 		engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "writer",
-			Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/never")), own).awaitResult(10_000);
+			Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/never", "acceptTasks", true)), own).awaitResult(10_000);
 
 		Job request = engine.jobs().invokeOperation("v/ops/agent/request", Maps.of(Fields.AGENT_ID, "writer",
 			Fields.INPUT, Maps.of("q", "write"), Fields.OUTPUT_PATH, "w/out"), own.withProofs(proofs));
@@ -205,12 +220,12 @@ class KeptCallerContextTest {
 			.withAgentId(Strings.create("worker"));
 
 		Job job = engine.jobs().invokeOperation("v/test/ops/never", Maps.empty(), agent);
-		engine.jobs().keepCallerContext(job, agent);
 		try {
 			RequestContext resumed = engine.jobs().callerContext(job);
-			assertEquals(agent.getCallerDID(), resumed.getCallerDID());
+			assertEquals(agent.getAuthorityDID(), resumed.getAuthorityDID());
 			assertEquals(owner, resumed.getUserDID());
-			assertEquals(agent.getExecutionScope(), resumed.getExecutionScope());
+			assertEquals(agent.getAgentId(), resumed.getAgentId());
+			assertEquals(job.getID(), resumed.getJobId(), "in the job's own scope, as it ran");
 			assertEquals(caps, resumed.getCaps());
 
 			AVector<ACell> narrower = Vectors.of(Maps.of(Capability.CAN, Strings.create("crud/read")));

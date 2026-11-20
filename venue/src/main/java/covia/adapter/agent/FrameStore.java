@@ -19,6 +19,7 @@ import covia.api.Fields;
 import covia.venue.Agent;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
+import covia.venue.Session;
 
 /**
  * Durable frame storage shared by the flat and goal-tree LLM runtimes. Every
@@ -51,11 +52,14 @@ interface FrameStore {
 	static Opened open(Engine engine, RequestContext ctx, AString agentId,
 			ACell input, AVector<ACell> messages, String rootDescription,
 			long cycleTs) {
-		Blob sid = ctx.getSessionId();
+		// The harness drives the agent's execution, in the agent's account
+		// whatever account its controller's frame is in
+		RequestContext.ExecutionScope execution = ctx.getExecutionScope();
+		Blob sid = execution.sessionId();
 		ACell claim = RT.getIn(input, Fields.SESSION, Agent.KEY_IN_CYCLE);
 		if (sid != null && claim != null) {
-			Agent agent = resolveAgentState(engine, ctx, agentId);
-			if (agent == null || agent.getSession(sid) == null) {
+			Agent agent = resolveAgentState(engine, execution.ownerDID(), agentId);
+			if (agent == null || agent.session(sid).getRecord() == null) {
 				return failed("Session vanished before cycle start: " + sid);
 			}
 			FrameStore store = new LatticeFrameStore(agent, sid, claim, ctx.getCancellation());
@@ -77,9 +81,9 @@ interface FrameStore {
 		return new Opened(null, false, convex.core.data.Strings.create(message));
 	}
 
-	private static Agent resolveAgentState(Engine engine, RequestContext ctx, AString agentId) {
-		if (agentId == null || ctx.getUserDID() == null) return null;
-		covia.venue.User user = engine.getVenueState().users().user(ctx.getUserDID());
+	private static Agent resolveAgentState(Engine engine, AString owner, AString agentId) {
+		if (agentId == null || owner == null) return null;
+		covia.venue.User user = engine.getVenueState().users().user(owner);
 		return (user != null) ? user.agent(agentId.toString()) : null;
 	}
 
@@ -171,10 +175,9 @@ interface FrameStore {
 
 		@Override
 		public AVector<ACell> frames() {
-			var session = agent.getSession(sid);
+			var session = agent.session(sid).getRecord();
 			if (session == null) { aborted = true; return Vectors.empty(); }
-			ACell fv = session.get(Agent.KEY_FRAMES);
-			return (fv instanceof AVector) ? (AVector<ACell>) fv : Vectors.empty();
+			return Session.frames(session);
 		}
 
 		@Override

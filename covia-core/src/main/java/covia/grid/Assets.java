@@ -51,10 +51,13 @@ public class Assets {
 	public static Hash calcID(AString meta) {
 		AMap<AString, ACell> metaMap = RT.ensureMap(JSON.parse(meta));
 		if (metaMap == null) {
-			throw new IllegalArgumentException("Metadata is not a valid JSON object");
+			throw new IllegalArgumentException(NOT_AN_OBJECT);
 		}
 		return calcID(metaMap);
 	}
+
+	/** Refusal of asset metadata whose JSON is not an object. */
+	public static final String NOT_AN_OBJECT = "Metadata is not a valid JSON object";
 
 	/**
 	 * Computes the asset ID from a JSON metadata string.

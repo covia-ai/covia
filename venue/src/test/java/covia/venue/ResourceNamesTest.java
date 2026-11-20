@@ -11,6 +11,7 @@ import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.AVector;
 import convex.core.data.Hash;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
@@ -20,6 +21,7 @@ import convex.core.lang.RT;
 import covia.adapter.AssetAdapter;
 import covia.api.Abilities;
 import covia.api.Fields;
+import covia.exception.InvalidInputException;
 import covia.grid.Job;
 import covia.grid.Principals;
 import covia.grid.Status;
@@ -123,6 +125,41 @@ public class ResourceNamesTest {
 		assertEquals("w/x/", stored("/w/x/"));
 		assertEquals("n/", stored("/n/"));
 		assertEquals("w/x", stored("w/x"));
+	}
+
+	@Test
+	void aShortFormIsNeverResolvedInANamespace() {
+		for (String name : new String[] {"u:bob", "u:bob/w/x", "/u:bob:g:helper/n/x", "u:"}) {
+			assertTrue(CapabilityChecker.isShortForm(name), name);
+			InvalidInputException refused = assertThrows(InvalidInputException.class, () -> resolved(name), name);
+			assertTrue(refused.getMessage().startsWith(CapabilityChecker.SHORT_FORM_NOT_EXPANDED), refused.getMessage());
+			assertThrows(InvalidInputException.class, () -> stored(name), name);
+		}
+		for (String name : new String[] {"w/u:bob", "did:key:zOther:u:bob/w/x", "u://host/x"}) {
+			assertFalse(CapabilityChecker.isShortForm(name), name);
+			assertDoesNotThrow(() -> resolved(name), name);
+		}
+	}
+
+	@Test
+	void aPrincipalIsWrittenAsADIDOrAShortForm() {
+		for (String value : new String[] {"did:key:zOther", "u:bob", "u:bob:g:helper"}) {
+			assertTrue(CapabilityChecker.namesPrincipal(value), value);
+		}
+		for (String value : new String[] {"bob", "public", "w/u:bob", "u://host/x", ""}) {
+			assertFalse(CapabilityChecker.namesPrincipal(value), value);
+		}
+		assertFalse(CapabilityChecker.namesPrincipal(null));
+	}
+
+	@Test
+	void aHeldGrantNamingAShortFormCoversNothing() {
+		AVector<ACell> held = Vectors.of(Capability.create(s("u:bob/w/"), Capability.CRUD_READ));
+		assertNotNull(CapabilityChecker.allows(held, s(OWNER + "/w/x"), Capability.CRUD_READ, NAMESPACE));
+		assertNotNull(CapabilityChecker.allows(held, s("w/x"), Capability.CRUD_READ, NAMESPACE));
+		AVector<ACell> narrowed = CapabilityChecker.intersect(held, NAMESPACE,
+			Vectors.of(Capability.create(s("w/"), Capability.CRUD)), s("did:key:zOther"));
+		assertTrue(narrowed.isEmpty(), "it shares nothing with any other grant: " + narrowed);
 	}
 
 	// ========== isScheme ==========
@@ -343,7 +380,7 @@ public class ResourceNamesTest {
 	@Test
 	void anAgentsOwnNamesResolveOnEveryRoute() {
 		AString id = s("notes-agent");
-		engine.getVenueState().users().ensure(alice).ensureAgent(id,
+		TestAgents.ensure(engine.getVenueState().users().ensure(alice), id,
 			Maps.of("caps", Vectors.of(cap("n/", Capability.TOP))), null);
 		RequestContext step = engine.stepContext(ALICE, id);
 		ACell held = Maps.of("k", "v");
@@ -369,6 +406,6 @@ public class ResourceNamesTest {
 			"caps", Vectors.of(cap("/w/x/", Capability.CRUD_READ), cap("w/y/", Capability.CRUD_READ)))), ALICE);
 		AMap<AString, ACell> config = engine.getAgent(alice, id).getConfig();
 		assertEquals(Vectors.of(cap("w/x/", Capability.CRUD_READ), cap("w/y/", Capability.CRUD_READ)), RT.getIn(config, "caps"));
-		assertEquals(Principals.agentDID(alice, id), engine.context(alice, Principals.agentDID(alice, id)).getCallerDID());
+		assertEquals(Principals.agentDID(alice, id), engine.context(alice, Principals.agentDID(alice, id)).getAuthorityDID());
 	}
 }

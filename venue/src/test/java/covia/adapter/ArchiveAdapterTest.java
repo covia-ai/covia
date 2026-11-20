@@ -3,6 +3,7 @@ package covia.adapter;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.ByteArrayOutputStream;
@@ -21,12 +22,14 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import convex.auth.ucan.Capability;
 import convex.core.data.ACell;
 import convex.core.data.AVector;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.lang.RT;
+import covia.api.Abilities;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.Engine;
@@ -49,7 +52,8 @@ public class ArchiveAdapterTest {
 				"work", workspace.toAbsolutePath().toString(),
 				"ro", Maps.of(
 					"path", readonly.toAbsolutePath().toString(),
-					"readOnly", true)
+					"readOnly", true),
+				"drive", Maps.of("dlfs", "archive-drive")
 			))
 		));
 		Engine.addDemoAssets(engine);
@@ -100,6 +104,20 @@ public class ArchiveAdapterTest {
 	// =========================================================
 
 	@Test
+	public void zipToAssetNeedsCollectionAuthorityAndSourceRead() {
+		ACell input = Maps.of("root", "work", "path", "data/a.txt");
+		ACell read = Capability.create(Strings.create("file://work/data/a.txt"), Capability.CRUD_READ);
+		ACell store = Capability.create(Strings.create("a/"), Abilities.ASSET_STORE);
+		for (ACell cap : new ACell[] {read, store}) {
+			Job denied = engine.jobs().callOperation("v/ops/archive/zip", input, ctx().withCaps(Vectors.of(cap)));
+			assertThrows(Exception.class, () -> denied.awaitResult(5000));
+			assertEquals(Status.FAILED, denied.getStatus());
+		}
+		Job allowed = engine.jobs().callOperation("v/ops/archive/zip", input, ctx().withCaps(Vectors.of(read, store)));
+		assertTrue(RT.getIn(allowed.awaitResult(5000), "ref").toString().startsWith(DID + "/a/"));
+	}
+
+	@Test
 	public void testZipToFileThenList() {
 		ACell zipped = run("v/ops/archive/zip", Maps.of(
 			"root", "work", "path", "data",
@@ -117,6 +135,19 @@ public class ArchiveAdapterTest {
 		}
 		assertTrue(hasA, "listing must contain data/a.txt");
 		assertTrue(hasB, "listing must contain data/sub/b.txt (recursive)");
+	}
+
+	@Test
+	public void testZipAndExtractInADrive() {
+		run("v/ops/archive/zip", Maps.of(
+			"root", "work", "path", "data",
+			"destRoot", "drive", "destPath", "out.zip"));
+		run("v/ops/archive/extract", Maps.of(
+			"root", "drive", "path", "out.zip",
+			"destRoot", "drive", "destPath", "restored"));
+		ACell read = run("v/ops/file/read",
+			Maps.of("root", "drive", "path", "restored/data/sub/b.txt"));
+		assertEquals("bravo", RT.getIn(read, "content").toString());
 	}
 
 	@Test
@@ -187,6 +218,45 @@ public class ArchiveAdapterTest {
 		// The escaping file must NOT have been written outside the sandbox.
 		assertFalse(Files.exists(workspace.resolve("escaped.txt")),
 			"zip-slip entry must never land outside the destination");
+	}
+
+	@Test
+	public void testExtractStaysInsideItsRootThroughALinkedFolder() throws IOException {
+		// A folder in the destination that is a link to somewhere outside the root
+		Path outside = Files.createTempDirectory("archive-outside-");
+		try {
+			Path dest = Files.createDirectories(workspace.resolve("linked-folder"));
+			FileAdapterTest.link(dest.resolve("data"), outside);
+			Map<String, byte[]> m = new LinkedHashMap<>();
+			m.put("data/x.txt", "x".getBytes(StandardCharsets.UTF_8));
+
+			Job job = runRaw("v/ops/archive/extract", Maps.of(
+				"bytes", Base64.getEncoder().encodeToString(makeZip(m)),
+				"destRoot", "work", "destPath", "linked-folder"));
+			assertEquals(Status.FAILED, job.getStatus());
+			assertFalse(job.getErrorMessage().isBlank());
+			assertFalse(Files.exists(outside.resolve("x.txt")), "nothing is written outside the root");
+		} finally {
+			Files.deleteIfExists(outside.resolve("x.txt"));
+			Files.deleteIfExists(outside);
+		}
+	}
+
+	@Test
+	public void testExtractDoesNotWriteThroughALink() throws IOException {
+		// A link inside the root, at the path of a file the archive holds
+		Path dest = Files.createDirectories(workspace.resolve("linked-file"));
+		Path real = Files.writeString(dest.resolve("real.txt"), "kept");
+		FileAdapterTest.link(dest.resolve("alias.txt"), real);
+		Map<String, byte[]> m = new LinkedHashMap<>();
+		m.put("alias.txt", "replaced".getBytes(StandardCharsets.UTF_8));
+
+		Job job = runRaw("v/ops/archive/extract", Maps.of(
+			"bytes", Base64.getEncoder().encodeToString(makeZip(m)),
+			"destRoot", "work", "destPath", "linked-file"));
+		assertEquals(Status.FAILED, job.getStatus());
+		assertTrue(job.getErrorMessage().contains(FileOperations.WRITE_TO_LINK), job.getErrorMessage());
+		assertEquals("kept", Files.readString(real));
 	}
 
 	@Test

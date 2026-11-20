@@ -23,7 +23,7 @@ import covia.adapter.messaging.ChannelAuthentication.Channel;
 import covia.adapter.webhook.WebhookInbox;
 import covia.api.Fields;
 import covia.exception.ConfigurationException;
-import covia.exception.NotSupportedException;
+import covia.exception.CoviaException;
 import covia.exception.UnavailableException;
 import covia.venue.RequestContext;
 
@@ -242,7 +242,10 @@ public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<
 			if (!claim(id)) return;
 			if (localSession) {
 				String refusal = router.deliveryRefusal(channel);
-				if (refusal != null) throw new NotSupportedException(refusal);
+				// The check gives only a reason, which may be the sender's or the
+				// agent's authority, or the agent's state; the handler records any
+				// Covia exception on the receipt by its message
+				if (refusal != null) throw new CoviaException(refusal);
 				deliverSession(id, event, channel, conversation);
 				return;
 			}
@@ -291,7 +294,7 @@ public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<
 			if (type == null) type = fetched.contentType();
 			String name = MessagingSettings.optional(item, "fileName");
 			if (!MessagingMedia.safeFileName(name)) name = MessagingMedia.fallbackName(spec.name(), MessagingSettings.required(item, "id"), type);
-			RequestContext writer = router.agentContext();
+			RequestContext writer = router.intakeContext();
 			String directory = MessagingMedia.ensureOwnerDirectory(adapter.engine, spec.userDID(adapter.engine),
 				adapter.getName(), writer);
 			AMap<AString, ACell> attachment;

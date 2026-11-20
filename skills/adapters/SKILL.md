@@ -71,23 +71,25 @@ The `venue` adapter changes the adapter set of a *running* venue, no restart:
 | Command | Operation | Input |
 |---------|-----------|-------|
 | `show-config` | `v/ops/venue/show-config` | `{}` — curated public effective settings for agents/clients; never raw operator config |
-| `status` | `v/ops/venue/adapters` | `{}` — every registered adapter, **active and disabled**, with `enabled`, `kernel`, `module`, effective `config`, `operations`; plus loaded `modules` |
+| `status` | `v/ops/venue/adapters` | `{}` — every registered adapter, **active and disabled**, with `enabled`, `status` (`running`, `failed`, `disabled`), a failed adapter's `reason`, `kernel`, `module`, effective `config`, `operations`; plus loaded `modules` |
 | `disable <name>` | `v/ops/venue/adapter/disable` | `{"name": "<adapter>"}` |
 | `enable <name>` | `v/ops/venue/adapter/enable` | `{"name": "<adapter>"}` |
 | `configure <name>` | `v/ops/venue/adapter/configure` | `{"name": "<adapter>", "config": {…}, "merge": false}` — `config` is the `adapters.<name>` shape; `merge: true` overlays the current effective config instead of replacing it |
-| `load <jar>` | `v/ops/venue/module/load` | `{"module": "<jar name>", "sha256": "<hex>", "config": {…}}` — `sha256` and `config` optional |
+| `restart-adapter <name>` | `v/ops/venue/adapter/restart` | `{"name": "<adapter>"}` — stops an enabled adapter, offers it its effective config again and starts it; the way back for a `failed` one once its cause is fixed |
+| `load <jar>` | `v/ops/venue/module/load` | `{"module": "<jar name>", "sha256": "<hex>"}` — `sha256` optional; its adapters take their settings from `adapters.<name>` |
 | `unload <name>` | `v/ops/venue/module/unload` | `{"name": "<jar name without .jar>"}` |
 | `restart [jar]` | `v/ops/venue/restart` | `{"jar": "<successor covia jar>", "sha256": "<hex>", "startupTimeout": 60000}` — all optional; omitting `jar` restarts the current version |
 | `gc` | `v/ops/venue/gc` | `{}` collects the Etch store while the venue keeps serving; `{"status": true}` reports state; `{"cancel": true}` rolls a running cycle back; `{"restart": true}` restarts after cutover so disk comes back now. One collection per process |
 
-All are invoked with `grid_run operation=v/ops/venue/... input=...`. `show-config` is read-only under the public `v/` scope and reports identity, agent/Job/storage/protocol/limit policy, active adapters, and only adapter settings explicitly allow-listed by `publicConfig()`. Enable/disable/configure return `{name, enabled, changed}` / `{name, config}` — `changed: false` means it was already in that state (idempotent). Load returns `{name, path, sha256, adapters}`; unload returns `{name, path, adapters, unloaded}`.
+All are invoked with `grid_run operation=v/ops/venue/... input=...`. `show-config` is read-only under the public `v/` scope and reports identity, agent/Job/storage/protocol/limit policy, active adapters, and only adapter settings explicitly allow-listed by `publicConfig()`. Enable/disable/configure return `{name, enabled, changed}` / `{name, config}` — `changed: false` means it was already in that state (idempotent); restart-adapter returns `{name, status: "running"}`. An adapter that cannot start (a port in use, a service out of reach, a setting it refuses) does not stop the venue: it shows `status: failed` with a `reason` and is treated as stopped, so calls to its operations fail with "Adapter <name> is not running" and nothing else uses it; an enable or restart that fails again fails with the reason. A `configure` the adapter refuses with an error is reverted to its previous config. Load returns `{name, path, sha256, adapters}`; unload returns `{name, path, adapters, unloaded}`.
 
 ### Authority — read this before trying
 
 The administrative commands below are **venue-owned**; `show-config` is the
-public read-only exception. Adapter/module lifecycle requires `adapter/manage`
-on `<venueDID>/adapters`; process restart instead requires `venue/restart` on
-`<venueDID>/process`, and store collection `venue/gc` on `<venueDID>/store`. A null (unrestricted) capability scope is deliberately
+public read-only exception. Listing adapters requires `admin/adapter/read` and
+adapter/module lifecycle `admin/adapter/manage`, both
+on `<venueDID>/adapters`; process restart instead requires `admin/venue/restart` on
+`<venueDID>/process`, and store collection `admin/venue/gc` on `<venueDID>/store`. A null (unrestricted) capability scope is deliberately
 *not* enough, so **the default local MCP connection — which acts as the venue's
 public user — is denied**. That is by design, not a misconfiguration. Do not
 loop retrying; explain and pick a route:
@@ -101,14 +103,14 @@ loop retrying; explain and pick a route:
    ```
    The same strategy's `mintToken(venueDID)` gives a bearer JWT for `curl … -H "Authorization: Bearer <jwt>" POST /api/v1/run` or an MCP client `headers` block. Never paste the seed into chat or commit it.
 2. **In-process operator code** — anything holding the `Engine` uses `engine.jobs().invokeOperation("v/ops/venue/...", input, engine.venueContext())`. This is how tests and embedded venues do it.
-3. **Venue-issued delegation** — for a standing admin identity, mint a UCAN *as the venue* (route 1 or 2, `v/ops/ucan/issue` with `att: [{"with": "<venueDID>/adapters", "can": "adapter/manage"}]`, `aud` = the admin's DID); the admin then presents it through the `ucans` grant channel. Authentication remains a separate bearer credential. Same model as `user:create`. See `/ucan`.
+3. **Venue-issued delegation** — for a standing admin identity, mint a UCAN *as the venue* (route 1 or 2, `v/ops/ucan/issue` with `att: [{"with": "<venueDID>/adapters", "can": "admin/adapter"}]`, which covers listing and lifecycle, or `admin/adapter/read` for an admin that only lists; `aud` = the admin's DID); the admin then presents it through the `ucans` grant channel. Authentication remains a separate bearer credential. Same model as `user:create`. See `/ucan`.
 
-`venue/restart` is deliberately separate process authority: it requires
-`venue/restart` on `<venueDID>/process`, plus invoke authority for the operation.
-`venue/gc` is likewise separate store authority (`venue/gc` on `<venueDID>/store`);
-with `restart: true` it needs both. Neither is held by the venue's own agents:
-an agent acting as the venue must present a venue-issued delegation.
-It is available only when running the executable `MainVenue` jar. The operation
+`admin/venue/restart` is deliberately separate process authority: it requires
+`admin/venue/restart` on `<venueDID>/process`, plus invoke authority for the operation.
+`admin/venue/gc` is likewise separate store authority (`admin/venue/gc` on `<venueDID>/store`);
+with `restart: true` it needs both. Venue agents hold these privileges within
+their effective caps; an unrestricted venue agent holds both. Process restart
+requires the executable `MainVenue` jar; collection requires host store control. The operation
 finishes its Job before closing all venues; a helper starts the successor and
 falls back to the current jar if startup does not reach readiness. Use immutable,
 versioned jar paths and leave the current jar available for rollback.
@@ -134,7 +136,7 @@ sha256sum modules/covia-sql-*-module.jar                # PowerShell: Get-FileHa
 ```
 then (with venue authority) `grid_run operation=v/ops/venue/module/load input={"module":"covia-sql-<ver>-module.jar","sha256":"<hex>"}` → `sql` adapter appears, `v/ops/sql/query` and `v/ops/sql/execute` are live, and its module-shipped agent skill materialises at `v/skills/data/sql`. Unload with `input={"name":"covia-sql-<ver>-module"}` (jar name without `.jar`, as listed by `status` / `v/info/modules`).
 
-A module jar is a shaded jar compiled against `venue` (provided scope) that declares its adapters in `META-INF/services/covia.adapter.AAdapter`; `config` on load is passed to every adapter in the module before registration (`modules[].config` shape).
+A module jar is a shaded jar compiled against `venue` (provided scope) that declares its adapters in `META-INF/services/covia.adapter.AAdapter`. Each of its adapters takes its settings from `adapters.<name>` as they stand when it loads, so `configure` an adapter before reloading its module to change them; a setting the adapter refuses fails the load and leaves nothing of the module loaded.
 
 ### Semantics to relay to the user
 
@@ -154,11 +156,12 @@ For changes that must survive restarts, edit the venue config instead (see `venu
     "test":         { "enabled": false },          // park an adapter (enable later at runtime)
     "orchestrator": { "maxItems": 50, "maxConcurrency": 8 },
     "vault":        { "drive": "vault" },
-    "agent":        { "sessionDelete": false }
+    "agent":        { "sessionDelete": false },
+    "python":       { "library": "/usr/lib/libpython3.13.so" }   // a module's adapter is configured here too
   },
   "modules": [
     "modules/covia-sql-<version>-module.jar",
-    { "path": "modules/covia-python-adapter-<version>-module.jar", "sha256": "…", "config": { "library": "/usr/lib/libpython3.13.so" } }
+    { "path": "modules/covia-python-adapter-<version>-module.jar", "sha256": "…" }
   ],
   "dynamicModules": { "enabled": true, "dir": "modules", "anyPath": false }
 }
@@ -176,7 +179,7 @@ Follow the canonical developer contract in `venue/docs/ADAPTERS.md`: it covers `
 
 | Symptom | Cause / fix |
 |---------|-------------|
-| `Venue administration denied: requires adapter/manage …` | Caller is not the venue and holds no venue-issued delegation — see Authority above. Expected for the public MCP user. |
+| `Venue administration denied: requires admin/adapter/read …` or `… admin/adapter/manage …` | Caller is not the venue and holds no venue-issued delegation — see Authority above. Expected for the public MCP user. |
 | Operation metadata resolves but invocation fails | Its adapter is disabled/unloaded. Reload a module to overwrite it, or delete the catalog path explicitly. |
 | `module/load` policy error | `dynamicModules.enabled` is off, the jar is outside `dynamicModules.dir`, the name has `..`/an absolute path without `anyPath`, or the `sha256` pin mismatched. |
 | Change vanished after restart | Runtime changes are not persisted — put it in `adapters.*` / `modules` in the config. |

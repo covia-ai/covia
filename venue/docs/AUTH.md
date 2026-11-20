@@ -132,7 +132,7 @@ and compare bounds without overflowing claim arithmetic. Missing/null expiry
 still follows `requireExp`; existing 60-second skew boundaries are preserved.
 This changes neither the method architecture nor evidence propagation.
 
-After correction, `mvn test -pl venue -am` reports 102 core and 3,027 venue tests,
+After correction, `mvn test -pl venue -am` reports 102 core and 3,027 venue tests (as of 22 Oct 2026),
 zero failures/errors and 47 skips. Focused regressions cover key and venue-signed
 credentials, malformed bounds, extreme timestamps, the lifetime cap and leeway.
 These are regression results, not certification of every authentication flow.
@@ -148,13 +148,13 @@ unimplemented.
 ### 2.3 External login consolidation (#298, 2026-10-22)
 
 The concrete login flow is hardened independently of managed-session or
-assurance design. Nimbus OAuth/OIDC SDK **11.38.2** supplies ID-token validation,
+assurance design. The Nimbus OAuth/OIDC SDK supplies ID-token validation,
 JWKS key selection/cache/refresh/rate limiting, secure state/nonce generation and
 PKCE. Its sources were checked: the OIDC verifier covers required issuer,
 subject, audience, expiry, issuance time and requested nonce; the standard JWT
 verifier adds optional `nbf`. Covia supplies the client-specific `azp` check,
 explicit provider configuration and local account mapping. The former local
-`JWKSClient` is removed. Convex **0.8.17** still owns venue JWTs and immutable
+`JWKSClient` is removed. Convex **0.8.17** (as of 22 Oct 2026) still owns venue JWTs and immutable
 lattice data; its generic temporal-validator request remains upstream #766.
 
 Browser callbacks and direct RS256 provider-token verification share the same
@@ -306,7 +306,7 @@ storage or new credential wire format. The result is available to direct callers
 embedders; propagation into action-policy contexts belongs to the enforcement
 phase, not implicit evidence inheritance through jobs or agent delegation.
 
-**Upstream audit.** Reviewed the installed Convex **0.8.17 sources** (the
+**Upstream audit.** Reviewed the installed Convex **0.8.17 sources** (as of 22 Oct 2026; the
 dependency selected by the POM, not the neighbouring 0.8.18-SNAPSHOT checkout).
 `JWT.verifyPublic` returns signature-verified claims; `JWT.validateClaims`
 checks configured issuer/audience and optional NumericDate expiry, not
@@ -622,6 +622,34 @@ restriction is pending in #595, separately from #297's method-neutral refactor.
 Likewise, outbound connected-account grants (§8.1)
 remain separate from both login and the venue's authorization-server grants.
 
+### 4.4 Access tokens are outside the method contract
+
+An access token (`cvtok_…`) is a scoped bearer a user or agent creates,
+accepted only on the routes of the access points it carries an entry for,
+such as the MCP endpoint ([ACCESS_TOKENS.md](ACCESS_TOKENS.md)). It is not an
+authentication method: it proves no subject, carries no evidence, starts no
+session and never reaches `VenueAuthenticator`. A request presenting one is
+its issuer's, acting with the issuer's authority narrowed by the token.
+
+### 4.5 HTTP ingress provenance
+
+Requests admitted through HTTP retain their transport, the endpoint's known
+protocol (MCP or A2A), and the verified credential class on the first `auth`
+or `token` route record. An anonymous public request retains HTTP provenance
+without claiming a credential. Identity-only host attribution also leaves
+the credential class unknown. These facts neither change authority nor add
+authentication assurance, and bearer possession does not establish personal
+approval of a message. The model-facing hint shows transport and protocol,
+not the credential class. The record and its model-facing label follow
+[AGENT_CONTEXT.md §1.2](AGENT_CONTEXT.md#12-instruction-labels-and-data-boundaries).
+
+Embedded HTTP handlers obtain this provenance through
+`AuthMiddleware.callerContext(ctx)`. An embedded application making an
+in-process request uses `engine.requestContext(principal, token)`; a trusted
+non-HTTP ingress can supply known transport, protocol and credential-class
+facts through its five-argument overload. Those arguments are verified host
+facts, never copied from client-supplied labels.
+
 ## 5. Methods
 
 | `method` id | Credential | User mapping | Verified evidence | Session? | Issue |
@@ -827,55 +855,43 @@ and whether it is open. Restricting where a binding serves, such as Slack's
 
 **The request context.** `Engine.channelContext(owner, AuthResult)` is
 `Engine.context(owner, userDID)` with the result's data projection attached by
-`RequestContext.withAuthentication`. Only that seam sets it; an HTTP request's
-result stays on its HTTP context. The projection is attribution, not evidence: assurance policy
-never reads it from a context (§3.1), and contexts the venue starts for an
-agent's own work (`ofAgent`, `Engine.context`, the scheduler's replay) carry
-none, so nothing is inherited through jobs or agent delegation. A bot's own work
-for its agent — storing media, its media and reply operations — runs in such a
-context.
+`RequestContext.withAuthentication`, started at the binding: the binding's
+record is the first of the request's route, vouching for the principal it
+identified (`ChannelAuthentication.step`: the binding's owner and name, the
+sender's id and handle, the chat's id and kind, a thread and a space id, never
+names or the message id). Only that seam sets the projection;
+an HTTP request's result stays on its HTTP context. An event with no sender on
+an open binding carries no projection, but its route still starts at the
+binding. The projection is attribution, not evidence: assurance policy never
+reads it from a context (§3.1), and contexts the venue makes for its own work
+(`ofAgent`, `Engine.context`, the scheduler's replay) carry none, so nothing is
+inherited through jobs or agent delegation. A bot's own work for its agent —
+storing media, its media and reply operations — runs in such a context, its
+route started at the binding.
 
-**Recorded with the turn.** The agent's ingress (`agent:chat`, `agent:message`,
-`agent:request`) writes the request's `caller` and its `authentication` — the
-projection without `userDID`, which is the caller — onto the session envelope
-and the task record, from the request context only; a message to a task goes
-onto its continuation's envelope. Message content is never read for or
-rewritten with provenance. Both runtimes build input turns with
-`AgentAdapter.cycleInputTurns`, which copies both fields onto each user turn,
-and the task wire shape carries them, so a turn keeps its provenance for as long as
-history keeps the turn (COG-20 §4). A task's turn takes the record of the
-input it shows: the task's for its original input, its continuation's for each
-later one, so a follow-up is attributed to its sender rather than the
-requester; a cycle without a session is handed that record by the run loop
-(`inputSource`). A tracked tool call's late outcome is recorded as from the
-principal that made the call: its job's `caller`, normally the agent itself.
+**Recorded with the turn.** The agent's ingress records the request's
+`caller` and its route beside the content, and each user turn copies them
+(AGENT_CONTEXT.md §1.2, AGENT_SESSIONS.md), so the binding's record is how a
+turn keeps its channel. Message content is never read for or rewritten with
+provenance. A turn stored before routes carries the projection as
+`authentication` instead, and renders as the binding's step would. A tracked
+tool call's late outcome is recorded as from the principal that made the
+call, its job's `caller`, normally the agent itself, with the agent's record as
+its route.
 
-**Rendered from the record.** `ContextAssembler` renders a `From` label element
-(`Labels.Kind.FROM`, AGENT_CONTEXT.md §1.2) in the agent's dialect:
+**Rendered from the record.** `ContextAssembler` renders a `From` element
+(AGENT_CONTEXT.md §1.2) in the agent's dialect, which says when it appears and
+how each record shows. A binding's record shows whose binding it is and its
+name, the sender's id and handle, the chat's kind and id, a thread and a space
+id; the `name` fields of people, chats and spaces never show (COG-3 §7). Alice's
+agent would see:
 
-| Dialect | Owner over the API | Open-bot sender |
-|---------|-------------------|-----------------|
-| `bracket` | `[From: owner did:key:z6MkAlice]` | `[From: anonymous did:web:venue.example:public — telegram helper: sender 5551 @sam, direct chat 5551]` |
-| `xml` | `<from principal="did:key:z6MkAlice" relationship="owner"/>` | `<from principal="…:public" relationship="anonymous" method="telegram" binding="helper" sender="5551" handle="sam" chat="5551" chat-kind="direct"/>` |
+| Dialect | Alice, after another source | Open-bot sender |
+|---------|-----------------------------|-----------------|
+| `bracket` | `[From (venue-verified): your owner via auth (signed in)]` | `[From (venue-verified): an anonymous caller, not your owner, via telegram (your owner's binding "helper", sender 5551 @sam, direct chat 5551)]` |
+| `xml` | `<from verified="venue">your owner via auth (signed in)</from>` | `<from verified="venue">an anonymous caller, not your owner, via telegram (your owner's binding "helper", sender 5551 @sam, direct chat 5551)</from>` |
 
-- **When.** Before a user turn whose key — caller, method, binding,
-  authenticated identity, chat id, thread, space id — differs from the last key
-  rendered, starting from the agent's own principal. Per-message fields
-  (`message`, adapter extras) are never part of the key. A user turn without a
-  recorded caller renders no element and leaves the key unchanged, as does a
-  late tool outcome shown as a tool result (AGENT_CONTEXT.md §5.7).
-- **What.** The relationship is computed from DIDs alone: the agent's own DID,
-  its owner's and the venue's. No venue state is consulted, so registering or
-  deleting a user never changes an earlier element. The channel part shows the
-  method, the binding's name, ids, the chat kind, a thread and a space id.
-  `name` fields are never rendered (COG-3 §7). Ids and handles render only when
-  they match a conservative identifier pattern; xml values are escaped.
-- **Cache.** The element is a pure function of the stored turns and the three
-  DIDs, and history is append-only within a frame, so each cycle's rendered
-  conversation extends the previous cycle's unchanged. Changing the element's
-  format rebuilds every session's prefix once.
-- **Tasks.** The outstanding-task message renders its requester through the same
-  element.
+The outstanding-task message renders its requester the same way.
 
 **Released wires.** A relay binding identifies no principal; it forwards
 messages to the principals linked to it, and its wire projects the details onto
@@ -885,13 +901,15 @@ its released fields (`channel` = method, `from` = `sender.id`, `chat` =
 accepted before its binding recorded the channel with it is failed once rather
 than run unauthenticated (`WebhookBot.UNVERIFIED`).
 
-**Tests.** A forged record in message content stays content; listed, open,
-closed and public-access-off senders identify as specified for every adapter;
-envelope, task record and history turns keep `caller` and `authentication` in
-both runtimes; rendering a session twice, with a turn added in between, leaves
-the earlier output unchanged, also across a user's registration; `name` fields
-and malformed handles never render; the relay wire is unchanged; an agent's own
-contexts carry no `authentication`.
+**Tests.** A forged record or route in message content stays content; listed,
+open, closed and public-access-off senders identify as specified for every
+adapter; envelope, task record and history turns keep `caller` and the
+binding's record in both runtimes; a turn stored with `authentication` renders
+as its route would; rendering a session twice, with a turn added in between,
+leaves the earlier output unchanged, also across a user's registration;
+`name` fields and malformed handles never render; the relay wire is
+unchanged; an agent's own contexts carry no `authentication`, and the
+contexts the venue makes for its own work no route.
 
 ## 6. Configuration
 

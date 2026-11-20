@@ -12,6 +12,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.TestInstance.Lifecycle;
 
+import convex.auth.ucan.Capability;
 import convex.auth.ucan.UCAN;
 import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
@@ -41,10 +42,11 @@ public class UserAdminApiTest {
 	private String jwt;
 	private String callerDID;
 	private VenueHTTP client;
+	private final AKeyPair callerKey = AKeyPair.generate();
 
 	@BeforeAll
 	public void setup() throws Exception {
-		AKeyPair kp = AKeyPair.generate();
+		AKeyPair kp = callerKey;
 		callerDID = UCAN.toDIDKey(kp.getAccountKey()).toString();
 		long exp = (System.currentTimeMillis() / 1000) + 3600;
 		UCAN token = UCAN.create(kp, TestServer.ENGINE.getAccountKey(), exp,
@@ -66,6 +68,46 @@ public class UserAdminApiTest {
 	private long jobCount() {
 		User u = TestServer.ENGINE.getVenueState().users().user(Strings.create(callerDID));
 		return (u == null) ? 0 : u.jobs().size();
+	}
+
+	@Test
+	public void accountDirectoryRequiresAdminReadGrant() throws Exception {
+		for (String ability : new String[] {"admin/user/read", "admin/user", "admin"}) checkDirectoryGrant(ability, 200);
+		for (String ability : new String[] {"user/read", "user", "admin/adapter"}) checkDirectoryGrant(ability, 403);
+	}
+
+	private void checkDirectoryGrant(String ability, int status) throws Exception {
+		String target = UCAN.toDIDKey(AKeyPair.generate().getAccountKey()).toString();
+		TestServer.ENGINE.getVenueState().users().create(Strings.create(target));
+		String proof = adminProof(ability);
+		for (String route : new String[] {"users", "users/" + target, "users/" + target + "/authentications"}) {
+			HttpRequest request = HttpRequest.newBuilder(URI.create(TestServer.BASE_URL + "/api/v1/" + route))
+				.header("Authorization", "Bearer " + jwt).header(VenueHTTP.UCANS_HEADER, proof).GET().build();
+			HttpResponse<String> response = covia.venue.TestHTTP.CLIENT.send(request, HttpResponse.BodyHandlers.ofString());
+			assertEquals(status, response.statusCode(), ability + " on " + route + ": " + response.body());
+		}
+	}
+
+	private String adminProof(String ability) {
+		AKeyPair venueKey = TestServer.ENGINE.getKeyPair();
+		return UCAN.create(venueKey, callerKey.getAccountKey(),
+			System.currentTimeMillis() / 1000 + 3600,
+			Vectors.of(Capability.create(Strings.create(TestServer.ENGINE.getDIDString() + "/users"),
+				Strings.create(ability))), Vectors.empty()).toJWT(venueKey).toString();
+	}
+
+	@Test
+	public void deletionAcceptsOnlyItsAdminGrantOverTheHeader() throws Exception {
+		var target = UCAN.toDIDKey(AKeyPair.generate().getAccountKey());
+		TestServer.ENGINE.getVenueState().users().create(target);
+		for (String ability : new String[] {"user/delete", "admin/user/read", "admin/user/delete"}) {
+			HttpRequest request = HttpRequest.newBuilder(URI.create(TestServer.BASE_URL + "/api/v1/users/" + target))
+				.header("Authorization", "Bearer " + jwt)
+				.header(VenueHTTP.UCANS_HEADER, adminProof(ability)).DELETE().build();
+			HttpResponse<String> response = covia.venue.TestHTTP.CLIENT.send(request, HttpResponse.BodyHandlers.ofString());
+			assertEquals("admin/user/delete".equals(ability) ? 200 : 403, response.statusCode(), response.body());
+		}
+		assertTrue(TestServer.ENGINE.getVenueState().users().isDeleted(target));
 	}
 
 	@Test

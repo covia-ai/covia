@@ -39,7 +39,7 @@ public class RequestContextAuthorityTest {
 		assertEquals(1, a.getProofs().count());
 		assertNull(a.getGrants());   // no explicit scope = unrestricted
 		// the credential getters read through to the wrapped Authority
-		assertEquals(ALICE, ctx.getCallerDID());
+		assertEquals(ALICE, ctx.getAuthorityDID());
 		assertEquals(1, ctx.getProofs().count());
 		assertNull(ctx.getCaps());
 	}
@@ -49,7 +49,7 @@ public class RequestContextAuthorityTest {
 		// A scoped Authority (CAP in its grant scope) survives the wrap intact.
 		Authority a = Authority.of(ALICE, Vectors.of(CAP));
 		RequestContext ctx = RequestContext.ofAuthority(a);
-		assertEquals(ALICE, ctx.getCallerDID());
+		assertEquals(ALICE, ctx.getAuthorityDID());
 		assertSame(a, ctx.getAuthority());
 		assertEquals(1, ctx.getCaps().count());   // getCaps reads the scope
 	}
@@ -76,24 +76,9 @@ public class RequestContextAuthorityTest {
 			Strings.create("w/skills/arbitrary"), Abilities.SKILL_LOAD);
 	}
 
+	/** An execution carried on with another principal's authority keeps its references, readable only by their owner. */
 	@Test
-	public void testDelegatedAuthoritySeparatesActorFromNamespaceAndIsProofBounded() {
-		RequestContext original = RequestContext.of(DELEGATE)
-			.withProofs(Vectors.of(PROOF));
-		RequestContext delegated = original.onBehalfOf(ALICE);
-
-		assertEquals(DELEGATE, delegated.getCallerDID(), "the delegate remains the actor");
-		assertEquals(ALICE, delegated.getUserDID(), "bare paths use the delegating user's namespace");
-		assertTrue(delegated.isSubPrincipal());
-		assertEquals(Vectors.of(PROOF), delegated.getProofs());
-		assertEquals(Vectors.empty(), delegated.getCaps(),
-			"delegated execution must not inherit the actor's unrestricted ambient scope");
-		assertSame(original, original.onBehalfOf(DELEGATE),
-			"acting in the existing namespace is a no-op");
-	}
-
-	@Test
-	public void testDelegationDoesNotRetargetExecutionReferences() {
+	public void testAnotherAuthorityDoesNotRetargetExecutionReferences() {
 		AString agent = Strings.create("assistant");
 		Blob session = Blob.fromHex("1234");
 		Blob job = Blob.fromHex("5678");
@@ -101,7 +86,7 @@ public class RequestContextAuthorityTest {
 		Blob claim = Blob.fromHex("def0");
 		RequestContext original = RequestContext.ofAgent(DELEGATE, agent)
 			.withSessionId(session).withJobId(job).withTaskId(task, 7L).withClaim(claim);
-		RequestContext delegated = original.onBehalfOf(ALICE);
+		RequestContext delegated = original.actingAs(RequestContext.of(ALICE).withCaps(Vectors.empty()));
 		assertSame(original.getExecutionScope(), delegated.getExecutionScope());
 		assertEquals(new RequestContext.ExecutionScope(DELEGATE, agent, job, session, task, 7L, claim),
 			delegated.getExecutionScope());
@@ -118,7 +103,7 @@ public class RequestContextAuthorityTest {
 			.withCancellation(new java.util.concurrent.atomic.AtomicBoolean()).withCycle(null)
 			.forGateEvaluation(Strings.create("test:gate"));
 		assertSame(original.getExecutionScope(), copied.getExecutionScope());
-		RequestContext returned = copied.onBehalfOf(DELEGATE);
+		RequestContext returned = copied.actingAs(RequestContext.of(DELEGATE));
 		assertEquals(agent, returned.getAgentId());
 		assertEquals(session, returned.getSessionId());
 		assertEquals(job, returned.getJobId());

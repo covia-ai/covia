@@ -46,8 +46,8 @@ import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.api.Fields;
+import covia.exception.AuthException;
 import covia.exception.ConflictException;
-import covia.exception.NotSupportedException;
 import covia.venue.Config;
 import covia.venue.Engine;
 import io.javalin.Javalin;
@@ -363,7 +363,7 @@ class LoginFlowTest {
 					Fields.PROVIDER, "test", Fields.PROVIDER_SUB, "subject"));
 			assertNull(LoginProviders.findIdentity(f.engine.getAuth(), "https://issuer", "subject"));
 			var identity = new LoginProviders.UserIdentity("https://issuer", "subject", "alice@example", "Alice");
-			assertEquals(LoginProviders.LEGACY_IDENTITY, assertThrows(NotSupportedException.class,
+			assertEquals(LoginProviders.LEGACY_IDENTITY, assertThrows(AuthException.class,
 					() -> f.login.provisionIdentity("test", identity)).getMessage());
 			assertNull(f.engine.getAuth().getUser(identity.toUserId()));
 		}

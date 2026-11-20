@@ -23,13 +23,14 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.ThreadUtils;
 import convex.core.util.Utils;
+import covia.adapter.callable.CallableAdapter;
 import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.InvalidDefinitionException;
 import covia.exception.JobFailedException;
 import covia.exception.NotFoundException;
-import covia.exception.NotSupportedException;
 import covia.exception.UnavailableException;
+import covia.exception.UnsupportedException;
 import covia.grid.Asset;
 import covia.grid.Job;
 import covia.grid.Status;
@@ -509,7 +510,7 @@ public class Orchestrator extends AAdapter {
 					int configuredMax=configuredForeachLimit(
 						Fields.MAX_CONCURRENCY,DEFAULT_FOREACH_MAX_CONCURRENCY);
 					if (requested.longValue() > configuredMax) {
-						throw new NotSupportedException(
+						throw new UnsupportedException(
 							"Orchestration step " + i + " foreach.maxConcurrency "
 								+ requested.longValue() + " exceeds the venue limit " + configuredMax);
 					}
@@ -567,7 +568,7 @@ public class Orchestrator extends AAdapter {
 				Long maxItems=configuredForeachMaxItems();
 				long count=data.count();
 				if (maxItems != null && count > maxItems) {
-					throw new NotSupportedException(
+					throw new UnsupportedException(
 						"foreach.in contains " + count + " items; venue limit is " + maxItems);
 				}
 				int itemCount=Utils.checkedInt(count);
@@ -683,7 +684,10 @@ public class Orchestrator extends AAdapter {
 
 			private Job invokeChild(AString opId, ACell childInput) {
 				Venue venue=targetVenue();
-				if (venue != null) return venue.invoke(opId.toString(),childInput).join();
+				if (venue != null) {
+					AString sent = engine.jobs().requireRemoteInvoke(opId, childInput, ctx);
+					return venue.invoke(sent.toString(),childInput).join();
+				}
 				// Deliberately use JobManager for every item. This preserves job
 				// tracking and runs the common point-of-action authorization gate
 				// against the actual per-item input.
@@ -704,8 +708,10 @@ public class Orchestrator extends AAdapter {
 			 * venue namespace as invocation: local engine when {@code venue} is
 			 * absent, the connected remote venue otherwise. Strict execution
 			 * therefore requires read authority over the operation definition, as
-			 * {@link Engine#requireMetadataRead} sets it; an unreadable or missing
-			 * definition fails closed instead of silently skipping validation.
+			 * {@link Engine#requireMetadataRead} sets it, or for a callable's path
+			 * what calling it needs ({@link CallableAdapter#operation}); an
+			 * unreadable or missing definition fails closed instead of silently
+			 * skipping validation.
 			 */
 			private Asset resolveValidationAsset(AString opId) {
 				if (!(strict || CVMBool.TRUE.equals(step.get(K_STRICT)))) return null;
@@ -715,11 +721,14 @@ public class Orchestrator extends AAdapter {
 					: "venue " + RT.ensureString(step.get(Fields.VENUE));
 				try {
 					Asset asset;
+					// A short form names a user of this venue, here and to another venue alike
+					AString ref=engine.expandPath(opId);
 					if (venue == null) {
-						engine.requireMetadataRead(ctx,opId);
-						asset=engine.resolveAsset(opId,ctx);
+						// A callable's path is not read as data: resolving it admits the request
+						if (!CallableAdapter.isPath(ref)) engine.requireMetadataRead(ctx,ref);
+						asset=engine.resolveAsset(ref,ctx);
 					} else {
-						asset=venue.resolveAsset(opId.toString());
+						asset=venue.resolveAsset(ref.toString());
 					}
 					if (asset == null) {
 						throw new NotFoundException(

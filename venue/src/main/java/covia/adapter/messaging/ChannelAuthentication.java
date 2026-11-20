@@ -9,6 +9,7 @@ import convex.core.data.Maps;
 import convex.core.data.Sets;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
+import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.venue.Engine;
 import covia.venue.auth.AuthResult;
@@ -146,6 +147,97 @@ public final class ChannelAuthentication {
 	}
 
 	/**
+	 * The route step a binding adds for a request it authenticated
+	 * (RequestContext.via), from the request's authentication record, the
+	 * {@code AuthResult} data without its {@code userDID}: the binding's owner
+	 * and name, which with the adapter name its resource
+	 * ({@code <owner>/<method>/<name>}), the sender's id and handle, the chat's
+	 * id and kind, the thread and the space's id. Names are the sender's text
+	 * (§7), and the message id and provider fields say nothing of the route, so
+	 * the step leaves them out. A stored record is read the same way, keeping
+	 * only values of the expected type, so a turn recorded before routes reads
+	 * as the step it would carry now.
+	 */
+	public static AMap<AString, ACell> step(ACell record) {
+		AMap<AString, ACell> authentication = RT.ensureMap(RT.getIn(record, AuthResult.AUTHENTICATION));
+		AMap<AString, ACell> details = RT.ensureMap(RT.getIn(authentication, AuthResult.DETAILS));
+		AString binding = RT.ensureString(RT.getIn(authentication, AuthResult.BINDING));
+		AMap<AString, ACell> step = (binding == null) ? Maps.empty() : bindingStep(binding);
+		step = withPart(step, K_SENDER, details, K_ID, K_HANDLE);
+		step = withPart(step, K_CHAT, details, K_ID, K_KIND);
+		AString thread = RT.ensureString(RT.getIn(details, K_THREAD));
+		if (thread != null) step = step.assoc(K_THREAD, thread);
+		return withPart(step, K_SPACE, details, K_ID);
+	}
+
+	/**
+	 * The route step binding {@code spec} of adapter {@code method} adds for an
+	 * event with no sender to authenticate (a poll, say), or for its own work:
+	 * the binding alone.
+	 */
+	public static AMap<AString, ACell> step(Engine engine, MessagingBotSpec spec, AString method) {
+		return bindingStep(binding(engine, spec, method));
+	}
+
+	/**
+	 * What a binding's route record tells an agent ({@link covia.venue.RouteText}),
+	 * from its step ({@link #step}): whose binding it is and its name, the
+	 * sender's id and handle, the chat's kind and id, the thread and the space.
+	 * Names stay out (§7), and each value shows only in its checked shape.
+	 */
+	public static covia.venue.RouteText text(AMap<AString, ACell> step) {
+		covia.venue.RouteText.Builder text = covia.venue.RouteText.builder();
+		AString owner = RT.ensureString(step.get(Fields.OWNER));
+		if (owner != null) text.whose(owner).text(" ");
+		text.text("binding");
+		if (step.get(K_NAME) != null) text.text(" ").name(step.get(K_NAME));
+		AMap<AString, ACell> sender = RT.ensureMap(step.get(K_SENDER));
+		if (sender != null) {
+			text.text(", sender ").id(sender.get(K_ID));
+			if (sender.get(K_HANDLE) != null) text.text(" ").handle(sender.get(K_HANDLE));
+		}
+		AMap<AString, ACell> chat = RT.ensureMap(step.get(K_CHAT));
+		if (chat != null) {
+			AString kind = RT.ensureString(chat.get(K_KIND));
+			boolean known = DIRECT.equals(kind) || GROUP.equals(kind) || CHANNEL.equals(kind);
+			text.text(known ? ", " + kind + " chat " : ", chat ").id(chat.get(K_ID));
+		}
+		if (step.get(K_THREAD) != null) text.text(", thread ").id(step.get(K_THREAD));
+		AMap<AString, ACell> space = RT.ensureMap(step.get(K_SPACE));
+		if (space != null) text.text(", space ").id(space.get(K_ID));
+		return text.build();
+	}
+
+	/**
+	 * A step naming the binding at resource {@code binding}: its owner, the
+	 * resource's first segment, and its name, the last. A resource without
+	 * both gives only what it holds.
+	 */
+	private static AMap<AString, ACell> bindingStep(AString binding) {
+		String resource = binding.toString();
+		int first = resource.indexOf('/');
+		int last = resource.lastIndexOf('/');
+		AMap<AString, ACell> step = Maps.of(K_NAME, Strings.create(resource.substring(last + 1)));
+		return (first > 0 && first < last) ? step.assoc(Fields.OWNER, Strings.create(resource.substring(0, first))) : step;
+	}
+
+	/** The resource of binding {@code spec} of adapter {@code method}: {@code <owner>/<method>/<name>}. */
+	private static AString binding(Engine engine, MessagingBotSpec spec, AString method) {
+		return Strings.create(spec.userDID(engine) + "/" + method + "/" + spec.name());
+	}
+
+	/** {@code step} with {@code details}' {@code part}, keeping only its string-valued {@code fields}. */
+	private static AMap<AString, ACell> withPart(AMap<AString, ACell> step, AString part, AMap<AString, ACell> details,
+			AString... fields) {
+		AMap<AString, ACell> kept = Maps.empty();
+		for (AString field : fields) {
+			AString value = RT.ensureString(RT.getIn(details, part, field));
+			if (value != null) kept = kept.assoc(field, value);
+		}
+		return kept.isEmpty() ? step : step.assoc(part, kept);
+	}
+
+	/**
 	 * Identifies who a verified message comes from and returns the method's
 	 * result: the binding's principal for a sender it lists, the venue's public
 	 * principal for any other sender on an open binding.
@@ -161,7 +253,7 @@ public final class ChannelAuthentication {
 		if (listed) user = principal;
 		else if (spec.open()) user = engine.publicPrincipal();
 		else throw new AuthException(NOT_ADMITTED);
-		AString binding = Strings.create(spec.userDID(engine) + "/" + channel.method() + "/" + spec.name());
+		AString binding = binding(engine, spec, channel.method());
 		return new AuthResult(user, channel.identity(), new AuthResult.Credential(channel.credential(), null, null),
 			new AuthResult.Authentication(channel.method(), binding, null, Sets.empty(), channel.details()), null, null);
 	}

@@ -24,19 +24,18 @@ public record OutputRules(AVector<ACell> secretFields, AMap<AString, ACell> outp
 	/** Rules of an operation that declares neither. */
 	public static final OutputRules NONE = new OutputRules(null, null);
 
-	static final AString SECRET_FIELDS = Strings.intern("secretFields");
 	static final AString OUTPUT_SCHEMA = Strings.intern("outputSchema");
 
 	/** The rules an operation's metadata declares; {@link #NONE} for null metadata. */
 	public static OutputRules of(AMap<AString, ACell> meta) {
-		AVector<ACell> secret = RT.ensureVector(RT.getIn(meta, Fields.OPERATION, SECRET_FIELDS));
+		AVector<ACell> secret = RT.ensureVector(RT.getIn(meta, Fields.OPERATION, Fields.SECRET_FIELDS));
 		AMap<AString, ACell> schema = RT.ensureMap(RT.getIn(meta, Fields.OPERATION, Fields.OUTPUT));
 		return create(secret, schema);
 	}
 
 	/** The rules a job's entry keeps ({@link #toCell}); {@link #NONE} for null. */
 	public static OutputRules fromCell(ACell cell) {
-		return create(RT.ensureVector(RT.getIn(cell, SECRET_FIELDS)), RT.ensureMap(RT.getIn(cell, OUTPUT_SCHEMA)));
+		return create(RT.ensureVector(RT.getIn(cell, Fields.SECRET_FIELDS)), RT.ensureMap(RT.getIn(cell, OUTPUT_SCHEMA)));
 	}
 
 	private static OutputRules create(AVector<ACell> secret, AMap<AString, ACell> schema) {
@@ -48,7 +47,7 @@ public record OutputRules(AVector<ACell> secretFields, AMap<AString, ACell> outp
 	/** The rules as an entry keeps them, or null when there are none. */
 	public AMap<AString, ACell> toCell() {
 		AMap<AString, ACell> cell = Maps.empty();
-		if (secretFields != null) cell = cell.assoc(SECRET_FIELDS, secretFields);
+		if (secretFields != null) cell = cell.assoc(Fields.SECRET_FIELDS, secretFields);
 		if (outputSchema != null) cell = cell.assoc(OUTPUT_SCHEMA, outputSchema);
 		return cell.isEmpty() ? null : cell;
 	}

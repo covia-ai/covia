@@ -6,6 +6,46 @@ This guide is for Venue operators who want to deploy a minimal working venue for
 
 ## Server Setup
 
+### Capability migration
+
+Before upgrading, review bounded agent, access-token, callable and public
+caps used by integrations. Every HTTP send now needs `outbound/http/<method>`
+on the acting account's `outbound` resource, in addition to domain and credential
+rights. Restrict destinations with `nb.url`; include discovery, poll, download
+and redirect destinations as well as the initial call. Do not put resolved
+credentials into grants. Prefer an origin restriction for credential-bearing
+paths, combined with the appropriate domain and secret rights.
+
+Configured model calls run under harness/controller authority. Keep ordinary
+agent templates bounded; a working harness does not require giving its agent
+direct access to the model API. Messaging bindings use their current principal
+for background work; explicit send/download tools use the tool caller. A local
+endpoint you configure, such as `adapters.langchain.ollamaUrl` or a messaging
+`apiUrl`, passes address policy; a local URL a caller names needs
+`adapters.http.allowedHosts` as well as ordinary egress rights.
+
+Reissue old `outbound/any` grants as `admin/outbound/bypass` only for callers
+that should bypass address policy. The bypass alone permits no HTTP requests.
+Asset creation now consistently accepts `asset/store` on `a/`; existing broad
+grants remain valid and can be narrowed.
+
+The [release capability verification](../venue/docs/CAPABILITY_RELEASE.md)
+records the shipped configuration review, local test coverage and the checks
+to perform against a specific deployment before promotion.
+
+### Agents that take tasks
+
+An agent takes requests only when its config sets `acceptTasks: true`. An
+agent created by an earlier release does not set it, so after the upgrade it
+refuses `agent:request` from anyone, a schedule included; chats, messages and
+`agent:trigger` still reach it, and the tasks it already holds still run. To
+keep such an agent taking requests, set the flag with `agent:update`, whose
+config merges over the agent's existing config:
+
+```json
+{ "agentId": "<agent>", "config": { "acceptTasks": true } }
+```
+
 ### Agent history format upgrade
 
 Release the history-aware SDK (1.24.1 or later) and update clients before deploying
@@ -28,7 +68,10 @@ taken. Prefer fixing forward when possible. See
 
 ### Host prerequisites
 
-Have a VM instance with a modern Linux Distro, e.g. Ubuntu 25
+Have a VM instance with a modern Linux distribution, such as Ubuntu 25, from any
+provider (an EC2 instance, an Azure VM or a DigitalOcean Droplet all work). To
+run the container image `ghcr.io/covia-ai/covia` instead, see the
+[GCP guide](gcp/README.md), whose `docker run` works on any host with Docker.
 
 ```
 sudo apt update
@@ -97,7 +140,7 @@ curl -fLo covia.jar https://github.com/covia-ai/covia/releases/download/${COVIA_
 # Latest stable release
 curl -fLo covia.jar https://github.com/covia-ai/covia/releases/download/latest/covia.jar
 
-# Or the latest develop snapshot
+# Or the latest snapshot (the build the dev venues run)
 curl -fLo covia.jar https://github.com/covia-ai/covia/releases/download/latest-snapshot/covia.jar
 ```
 
@@ -166,7 +209,7 @@ An operator-installed adapter can use the same call. Code given
 modules should receive it.
 
 A remote provisioning service does not need a separate administration API.
-Give it a venue-issued UCAN for `<venueDID>/users` with the `user/create`
+Give it a venue-issued UCAN for `<venueDID>/users` with the `admin/user/create`
 ability, then invoke `v/ops/user/create` through the normal REST, MCP, or client
 SDK surface. `UserAdapter` checks that delegation at the operation boundary.
 

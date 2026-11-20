@@ -1,0 +1,54 @@
+name: Resolve published deployment
+description: Read the source SHA and immutable image from a successful publishing run
+inputs:
+  run-id:
+    description: Publish Docker image workflow run ID
+    required: true
+  branch:
+    description: Required source branch (qa or master)
+    required: true
+outputs:
+  sha:
+    description: Original tested commit
+    value: ${{ steps.identity.outputs.sha }}
+  image:
+    description: Published image pinned by digest
+    value: ${{ steps.identity.outputs.image }}
+runs:
+  using: composite
+  steps:
+    - name: Verify publishing run
+      id: publish
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        RUN_ID: ${{ inputs.run-id }}
+      run: |
+        [[ "$RUN_ID" =~ ^[0-9]+$ ]]
+        run=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID")
+        jq -e '.path == ".github/workflows/publish-docker.yml" and .event == "workflow_run" and .conclusion == "success"' <<<"$run" > /dev/null
+        echo "attempt=$(jq -r .run_attempt <<<"$run")" >> "$GITHUB_OUTPUT"
+
+    - name: Download deployment identity
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      with:
+        name: deployment-${{ steps.publish.outputs.attempt }}
+        run-id: ${{ inputs.run-id }}
+        github-token: ${{ github.token }}
+        path: ${{ runner.temp }}/covia-deployment
+
+    - name: Validate deployment identity
+      id: identity
+      shell: bash
+      env:
+        EXPECTED_BRANCH: ${{ inputs.branch }}
+      run: |
+        file="$RUNNER_TEMP/covia-deployment/deployment.json"
+        jq -e --arg branch "$EXPECTED_BRANCH" '
+          .branch == $branch and
+          (.sha | test("^[0-9a-f]{40}$")) and
+          (.image | test("^ghcr.io/covia-ai/covia@sha256:[0-9a-f]{64}$"))
+        ' "$file" > /dev/null
+        echo "sha=$(jq -r .sha "$file")" >> "$GITHUB_OUTPUT"
+        echo "image=$(jq -r .image "$file")" >> "$GITHUB_OUTPUT"
+        jq -r '"Deploying \(.sha) from \(.branch): \(.image) (Test run \(.test_run_id))"' "$file" >> "$GITHUB_STEP_SUMMARY"

@@ -11,19 +11,22 @@ import convex.core.data.Strings;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.exception.InvalidInputException;
-import covia.exception.NotSupportedException;
+import covia.exception.UnsupportedException;
 
 /** Provider-independent inference options. Model definitions supply defaults;
-* a call (including an agent's config.modelOptions) can override each key. */
+* a call (including an agent's config.modelOptions) can override each key.
+* {@code emptyResponse} says how a response that says nothing after a normal
+* stop is read: {@code stop} (a reply that is silent), {@code content_filter}
+* (the provider declined) or {@code error} (no answer) ({@link ProviderStop}). */
 record ModelCallOptions(boolean nativeSystemMessages, boolean automaticCaching,
-		String thinkingPrefixMismatch, String cacheTtl) {
+		String thinkingPrefixMismatch, String cacheTtl, String emptyResponse) {
 	static final AString KEY = Strings.intern("modelOptions");
 	static final String INVALID = "Invalid model option: ";
 	static final String UPSTREAM_REQUIRED = " requires lossless message-block support in LangChain4j; this feature is not enabled";
 	static final String BINDING_BETA = "thinking-binding-controls-2026-08-01";
-	static final String INVALID_SYSTEM_POSITION = "Native system messages require a preceding user or tool-result turn";
 	static final Set<String> KEYS = Set.of("preserveThinking", "nativeSystemMessages",
-		"automaticCaching", "inlineToolChanges", "thinkingPrefixMismatch", "cacheTtl", "compaction");
+		"automaticCaching", "inlineToolChanges", "thinkingPrefixMismatch", "cacheTtl", "compaction",
+		"emptyResponse");
 
 	static final ModelCallOptions DEFAULT = resolve(Maps.empty(), Maps.empty());
 
@@ -42,11 +45,13 @@ record ModelCallOptions(boolean nativeSystemMessages, boolean automaticCaching,
 		Map<String, Object> values = JSON.jsonMap(merged);
 		String mismatch = choice(values, "thinkingPrefixMismatch", "provider", Set.of("provider", "error", "drop"));
 		String ttl = choice(values, "cacheTtl", "5m", Set.of("5m", "1h"));
+		String empty = choice(values, "emptyResponse", ProviderStop.STOP.toString(), Set.of(
+			ProviderStop.STOP.toString(), ProviderStop.CONTENT_FILTER.toString(), ProviderStop.ERROR.toString()));
 		boolean nativeSystem = flag(values, "nativeSystemMessages", false);
 		for (String feature : Set.of("preserveThinking", "inlineToolChanges", "compaction")) {
-			if (flag(values, feature, false)) throw new NotSupportedException(feature + UPSTREAM_REQUIRED);
+			if (flag(values, feature, false)) throw new UnsupportedException(feature + UPSTREAM_REQUIRED);
 		}
-		return new ModelCallOptions(nativeSystem, flag(values, "automaticCaching", false), mismatch, ttl);
+		return new ModelCallOptions(nativeSystem, flag(values, "automaticCaching", false), mismatch, ttl, empty);
 	}
 
 	private static boolean flag(Map<String, Object> values, String key, boolean fallback) {

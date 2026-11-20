@@ -20,6 +20,7 @@ import covia.api.Fields;
 import covia.exception.InvalidDefinitionException;
 import covia.venue.RequestContext;
 import covia.venue.TestEngine;
+import covia.test.IntegrationTest;
 
 /**
  * The attachment layer every messaging provider shares: names never become paths,
@@ -42,7 +43,7 @@ class MessagingMediaTest {
 		assertEquals("report(2).pdf", MessagingMedia.collisionName("report.pdf", 2));
 	}
 
-	@Test void storesNeverOverwrite(TestInfo info) throws Exception {
+	@IntegrationTest @Test void storesNeverOverwrite(TestInfo info) throws Exception {
 		AString owner = TestEngine.uniqueDID(info);
 		String directory = MessagingMedia.ensureOwnerDirectory(TestEngine.ENGINE, owner, "media-test", RequestContext.of(owner));
 		byte[] first = "first".getBytes(StandardCharsets.UTF_8), second = "second".getBytes(StandardCharsets.UTF_8);
@@ -56,7 +57,7 @@ class MessagingMediaTest {
 			() -> MessagingMedia.store(TestEngine.ENGINE, first, null, " ", "x.bin", RequestContext.of(owner))).getMessage());
 	}
 
-	@Test void theOwnersMediaDriveNeedsWriteOverTheDrive(TestInfo info) throws Exception {
+	@IntegrationTest @Test void theOwnersMediaDriveNeedsWriteOverTheDrive(TestInfo info) throws Exception {
 		// A provider creates the owner's media drive when its writer may write over
 		// that drive, dlfs/<drive>/; a grant over one file in it is not enough.
 		AString owner = TestEngine.uniqueDID(info);

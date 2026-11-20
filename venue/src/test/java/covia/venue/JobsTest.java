@@ -110,7 +110,7 @@ public class JobsTest {
 		AMap<AString, ACell> output = Maps.of(answer, 42L);
 		AMap<AString, ACell> record = Maps.of(Fields.ID, ID, Fields.STATUS, Status.COMPLETE,
 			Fields.OUTPUT, output);
-		user.cursor().path(Namespace.J).set(Index.<Blob, ACell>none().assoc(ID, record));
+		Covia.entry(user.cursor(), Namespace.J).set(Index.<Blob, ACell>none().assoc(ID, record));
 
 		assertEquals(record, user.jobs().getAll().get(ID));
 		assertEquals(user.jobs().getAll(), read(user.resolve(CoviaPath.segments(Namespace.J))));

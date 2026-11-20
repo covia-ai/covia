@@ -34,9 +34,10 @@ import covia.adapter.TestAdapter;
 import covia.exception.AuthException;
 import covia.exception.CoviaException;
 import covia.exception.InvalidInputException;
+import covia.exception.InvalidStateException;
 import covia.exception.NotFoundException;
-import covia.exception.NotSupportedException;
 import covia.exception.UnavailableException;
+import covia.exception.UnsupportedException;
 import covia.grid.Asset;
 import covia.grid.Job;
 import covia.grid.Status;
@@ -76,7 +77,7 @@ public class JobManagerTest {
 		AMap<AString, ACell> record = Maps.of(Fields.ID, id, Fields.CALLER, did,
 			Fields.STATUS, Status.COMPLETE, Fields.OUTPUT, output, Fields.UPDATED, 123L,
 			Fields.HISTORY, Vectors.of(Maps.of(Fields.MESSAGE_ID, "existing")));
-		user.cursor().path(covia.lattice.Namespace.J).set(convex.core.data.Index.<Blob, ACell>none().assoc(id, record));
+		covia.lattice.Covia.entry(user.cursor(), covia.lattice.Namespace.J).set(convex.core.data.Index.<Blob, ACell>none().assoc(id, record));
 		var storage = user.cursor().path(covia.lattice.Namespace.J, id);
 		ACell before = user.get();
 		String path = "j/" + id.toHexString();
@@ -124,7 +125,7 @@ public class JobManagerTest {
 			Blob started = Blob.fromHex("61136113611361136113611361136113");
 			Blob paused = Blob.fromHex("61146114611461146114611461146114");
 			AMap<AString, ACell> chain = Maps.of(Fields.STATUS, Status.PENDING);
-			application.venue(key.getAccountKey()).users().ensure(caller).cursor().path(covia.lattice.Namespace.J)
+			covia.lattice.Covia.entry(application.venue(key.getAccountKey()).users().ensure(caller).cursor(), covia.lattice.Namespace.J)
 				.set(convex.core.data.Index.<Blob, ACell>none()
 					.assoc(started, Maps.of(Fields.ID, started, Fields.CALLER, caller, Fields.STATUS, Status.STARTED, prev, chain))
 					.assoc(paused, Maps.of(Fields.ID, paused, Fields.CALLER, caller, Fields.STATUS, Status.PAUSED, prev, chain)));
@@ -291,6 +292,44 @@ public class JobManagerTest {
 	}
 
 	// ========== Persistence policy ==========
+
+	/**
+	 * A job's id starts with its creation time, ids increase, and the lowest id
+	 * at a time seeks the account's {@code j/} index to the jobs created since
+	 * then (JOBS.md, Job ids).
+	 */
+	@Test
+	public void testJobIdsSeekByCreationTime() throws Exception {
+		long start = 1_763_600_000_000L;
+		DrivenClock time = DrivenClock.at(java.time.Instant.ofEpochMilli(start));
+		Engine venue = TestEngine.application(time).mount(convex.core.crypto.AKeyPair.generate(), Maps.empty()).start();
+		try {
+			Engine.addDemoAssets(venue);
+			venue.getVenueState().users().ensure(did);
+			// Two jobs in one millisecond, then one five milliseconds later
+			long[] at = { start, start, start + 5 };
+			Blob[] ids = new Blob[at.length];
+			for (int i = 0; i < at.length; i++) {
+				time.set(at[i]);
+				Job job = venue.jobs().invokeOperation("v/test/ops/echo", Maps.of("n", i), ctx);
+				job.awaitResult(5000);
+				ids[i] = job.getID();
+				assertEquals(at[i], RT.ensureLong(job.getData().get(Fields.CREATED)).longValue());
+				assertEquals(at[i], Job.idTime(ids[i]), "an id starts with its job's creation time");
+			}
+
+			convex.core.data.Index<Blob, ACell> jobs = venue.jobs().getJobs(ctx);
+			assertEquals(at.length, jobs.count());
+			for (int i = 0; i < at.length; i++) assertEquals(ids[i], jobs.entryAt(i).getKey(), "oldest first");
+
+			assertEquals(0, jobs.seek(Job.lowestIDAt(start)));
+			assertEquals(2, jobs.seek(Job.lowestIDAt(start + 1)), "the jobs since a time are those from its seek position");
+			assertEquals(2, jobs.seek(Job.lowestIDAt(start + 5)));
+			assertEquals(3, jobs.seek(Job.lowestIDAt(start + 6)), "none were created since");
+		} finally {
+			venue.close();
+		}
+	}
 
 	/**
 	 * Default internal execution uses a Job wrapper but creates no durable record.
@@ -851,7 +890,8 @@ public class JobManagerTest {
 		AMap<AString, ACell> persisted = engine.jobs().getJobData(job.getID(), ctx);
 		assertEquals(Vectors.of(message), persisted.get(Fields.HISTORY));
 		assertEquals(Maps.of("backend", "stopped"), persisted.get(Fields.CANCELLATION));
-		assertEquals(persisted, job.getData(), "the live handle reads the same primary record");
+		assertEquals(persisted, covia.grid.Attribution.inFull(job.getData(), JobManager.accountOf(job)),
+			"the live handle reads the same primary record");
 	}
 
 	@Test
@@ -1022,7 +1062,7 @@ public class JobManagerTest {
 		assertNull(engine.jobs().getJobData(job.getID()), "gone from the active cache");
 		assertNotNull(engine.jobs().getJobData(job.getID(), ctx), "still readable from the lattice");
 
-		NotSupportedException ex = assertThrows(NotSupportedException.class, () ->
+		InvalidStateException ex = assertThrows(InvalidStateException.class, () ->
 			engine.jobs().deliverMessage(job.getID(),
 				Maps.of(Strings.create("content"), Strings.create("more")), ctx));
 		assertTrue(ex.getMessage().startsWith(JobManager.JOB_TERMINAL), ex.getMessage());
@@ -1041,12 +1081,13 @@ public class JobManagerTest {
 
 		AMap<AString, ACell> cancelled = engine.jobs().cancelJob(job.getID(), ctx);
 		assertNotNull(cancelled, "cancelling a finished job answers its record (COG-8)");
-		assertEquals(Status.COMPLETE, RT.ensureString(cancelled.get(Fields.STATUS)));
+		assertEquals(JobManager.acknowledgement(job.getID()), cancelled);
+		assertEquals(Status.COMPLETE, job.getStatus());
 
-		NotSupportedException pause = assertThrows(NotSupportedException.class,
+		InvalidStateException pause = assertThrows(InvalidStateException.class,
 			() -> engine.jobs().pauseJob(job.getID(), ctx));
 		assertTrue(pause.getMessage().startsWith(JobManager.JOB_TERMINAL), pause.getMessage());
-		NotSupportedException resume = assertThrows(NotSupportedException.class,
+		InvalidStateException resume = assertThrows(InvalidStateException.class,
 			() -> engine.jobs().resumeJob(job.getID(), ctx));
 		assertTrue(resume.getMessage().startsWith(JobManager.JOB_TERMINAL), resume.getMessage());
 	}
@@ -1066,7 +1107,7 @@ public class JobManagerTest {
 		Job job = engine.jobs().invokeOperation(meta, null, ctx);
 		try {
 			assertFalse(job.isFinished());
-			NotSupportedException ex = assertThrows(NotSupportedException.class, () ->
+			UnsupportedException ex = assertThrows(UnsupportedException.class, () ->
 				engine.jobs().deliverMessage(job.getID(),
 					Maps.of(Strings.create("content"), Strings.create("more")), ctx),
 				"a message the job's operation cannot take is refused, not dropped");

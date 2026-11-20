@@ -55,6 +55,7 @@ import covia.venue.User;
 import covia.adapter.GuardedResolver;
 import covia.adapter.HTTPAdapter;
 import covia.test.IntegrationTest;
+import covia.test.Reachable;
 
 public class HTTPTest {
 
@@ -437,7 +438,7 @@ public class HTTPTest {
 			() -> adapter.requireSafeUrl("http://Blocked.Example./x"));
 		assertTrue(dotted.getMessage().startsWith(HTTPAdapter.BLOCKED_HOST), dotted.getMessage());
 
-		assertTrue(adapter.configure(Maps.of("blockedHosts", Vectors.of("configured.example.")), false));
+		adapter.configure(Maps.of("blockedHosts", Vectors.of("configured.example.")), false);
 		InvalidInputException bare = assertThrows(InvalidInputException.class,
 			() -> adapter.requireSafeUrl("http://configured.example/"));
 		assertTrue(bare.getMessage().startsWith(HTTPAdapter.BLOCKED_HOST), bare.getMessage());
@@ -528,7 +529,7 @@ public class HTTPTest {
 
 		String configured = "configured-" + UUID.randomUUID() + ".test";
 		GuardedResolver.hold(configured);
-		assertTrue(adapter.configure(Maps.of("allowedHosts", Vectors.of(configured.toUpperCase(Locale.ROOT))), false));
+		adapter.configure(Maps.of("allowedHosts", Vectors.of(configured.toUpperCase(Locale.ROOT))), false);
 		assertFalse(GuardedResolver.isHeld(configured));
 	}
 
@@ -710,11 +711,15 @@ public class HTTPTest {
 	}
 
 	// ====================================================================
-	// External-dependent tests (retained from original, may be flaky)
+	// External-dependent tests: they reach Google, and skip when no
+	// connection to it opens
 	// ====================================================================
+
+	static final String GOOGLE = "www.google.com";
 
 	@IntegrationTest
 	@Test public void testGoogleSearch() throws InterruptedException, ExecutionException, TimeoutException {
+		Reachable.assume(GOOGLE, 443);
 		VenueHTTP covia=TestServer.COVIA;
 
 		// Test the Google search orchestration using the orchestrator adapter
@@ -759,6 +764,7 @@ public class HTTPTest {
 
 	@IntegrationTest
 	@Test public void testGoogleSearchWithFallback() throws InterruptedException, ExecutionException, TimeoutException {
+		Reachable.assume(GOOGLE, 443);
 		VenueHTTP covia=TestServer.COVIA;
 
 		// Test Google search orchestration with a different query
@@ -1114,11 +1120,11 @@ public class HTTPTest {
 		assertEquals(HTTPAdapter.defaultUserAgent(), adapter.getUserAgent());
 		assertEquals(HTTPAdapter.DEFAULT_MAX_REDIRECTS, adapter.getMaxRedirects());
 
-		assertTrue(adapter.configure(Maps.of(
+		adapter.configure(Maps.of(
 			"userAgent", "MyApp/1.0 (+https://example.com)",
 			"maxRedirects", 2,
 			"allowedHosts", Vectors.of("LOCALHOST"),
-			"blockedHosts", Vectors.of("blocked.example")), false));
+			"blockedHosts", Vectors.of("blocked.example")), false);
 		assertEquals("MyApp/1.0 (+https://example.com)", adapter.getUserAgent());
 		assertEquals(2, adapter.getMaxRedirects());
 		// Configured lists drive the guard: allowed skips the loopback refusal,
@@ -1140,7 +1146,7 @@ public class HTTPTest {
 			"a padded entry would silently block nothing");
 
 		// Reconfiguring with nothing restores the defaults.
-		assertTrue(adapter.configure(Maps.empty(), false));
+		adapter.configure(Maps.empty(), false);
 		assertEquals(HTTPAdapter.defaultUserAgent(), adapter.getUserAgent());
 		assertEquals(HTTPAdapter.DEFAULT_MAX_REDIRECTS, adapter.getMaxRedirects());
 		assertThrows(InvalidInputException.class, () -> adapter.requireSafeUrl("http://localhost:1/"));

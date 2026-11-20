@@ -49,6 +49,7 @@ import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.TestEngine;
 import covia.venue.server.AuthMiddleware;
+import covia.venue.server.VenueRouteFeature;
 import io.javalin.http.Context;
 
 /** Credential/evidence boundaries, without contacting an external identity provider. */
@@ -147,7 +148,7 @@ class AuthResultTest {
 			assertEquals(user, auth.authenticate(ctx, token));
 			assertEquals(did, auth.authenticatedIdentity(ctx));
 			assertEquals(user, auth.authenticatedUser(ctx));
-			assertEquals(user, AuthMiddleware.callerContext(ctx).getCallerDID());
+			assertEquals(user, AuthMiddleware.callerContext(ctx).getAuthorityDID());
 			assertEquals(user, AuthMiddleware.callerContext(ctx).getUserDID());
 			assertNull(engine.getVenueState().users().user(user), "authentication does not admit users");
 		}
@@ -184,7 +185,7 @@ class AuthResultTest {
 			assertEquals(subject, auth.authenticate(ctx, token));
 			assertEquals(subject, auth.authenticatedUser(ctx));
 			assertEquals(did, auth.authenticatedIdentity(ctx));
-			assertEquals(subject, AuthMiddleware.callerContext(ctx).getCallerDID());
+			assertEquals(subject, AuthMiddleware.callerContext(ctx).getAuthorityDID());
 			assertNull(engine.getVenueState().users().user(subject));
 			assertUnknownEvidence(auth.authenticationResult(ctx));
 			assertKeyRejected(JWT.signPublic(claims().assoc(Fields.SUB, subject), AKeyPair.generate()),
@@ -200,11 +201,11 @@ class AuthResultTest {
 			Context ctx = context();
 			auth.authenticate(ctx, JWT.signPublic(claims().assoc(Fields.SUB, agent), key));
 			RequestContext caller = AuthMiddleware.callerContext(ctx);
-			assertEquals(agent, caller.getCallerDID());
+			assertEquals(agent, caller.getAuthorityDID());
 			assertEquals(agent, caller.getUserDID(), "a bearer cannot claim a local owner's namespace");
 			assertEquals(Vectors.empty(), caller.getCaps(), "authentication supplies no agent capabilities");
 			AString owner = Strings.create(agent.toString().substring(0, agent.toString().lastIndexOf(":g:")));
-			assertFalse(engine.getAccessControl().canAccessJob(caller, Maps.of(Fields.CALLER, owner)),
+			assertFalse(engine.getAccessControl().canAccessJob(caller, owner, Maps.of(Fields.CALLER, owner)),
 				"ownership-only checks must not grant access to the named owner's jobs");
 			assertThrows(AuthException.class, () -> engine.requireLocalAccess(caller,
 				Strings.create("w/private"), Capability.CRUD_READ));
@@ -388,13 +389,42 @@ class AuthResultTest {
 	}
 
 	@Test
+	void ingressProtocolComesFromTheEndpointAndAnonymousRequestsKeepNoCredential() {
+		for (VenueRouteFeature role : new VenueRouteFeature[] {
+				VenueRouteFeature.COVIA_API, VenueRouteFeature.COVIA_MCP, VenueRouteFeature.COVIA_A2A}) {
+			Context ctx = context(role);
+			auth.authenticate(ctx, JWT.signPublic(claims(), key));
+			RequestContext request = AuthMiddleware.callerContext(ctx);
+			assertEquals(Strings.create("http"), RT.getIn(request.getRoute(), 0, Fields.TRANSPORT));
+			AString protocol = switch (role) {
+				case COVIA_MCP -> Strings.create("mcp");
+				case COVIA_A2A -> Strings.create("a2a");
+				default -> null;
+			};
+			assertEquals(protocol, RT.getIn(request.getRoute(), 0, Fields.PROTOCOL));
+			assertEquals(VenueAuthenticator.KEY_JWT, RT.getIn(request.getRoute(), 0, Fields.CREDENTIAL_TYPE));
+		}
+		Context anonymous = context(VenueRouteFeature.COVIA_API);
+		VenueAuthenticator.bindEngine(anonymous, engine);
+		anonymous.attribute("callerDID", engine.publicPrincipal());
+		RequestContext request = AuthMiddleware.callerContext(anonymous);
+		assertEquals(engine.publicPrincipal(), request.getAuthorityDID());
+		assertEquals(Strings.create("http"), RT.getIn(request.getRoute(), 0, Fields.TRANSPORT));
+		assertNull(RT.getIn(request.getRoute(), 0, Fields.CREDENTIAL_TYPE));
+	}
+
+	@Test
 	void identityOnlyRebindingDiscardsEarlierEvidence() {
 		Context ctx = context();
 		AString token = JWT.signPublic(claims(), key);
 		assertEquals(did, auth.authenticate(ctx, token));
 		assertEquals(auth.verify(token), auth.authenticationResult(ctx));
+		assertEquals(VenueAuthenticator.KEY_JWT,
+			RT.getIn(AuthMiddleware.callerContext(ctx).getRoute(), 0, Fields.CREDENTIAL_TYPE));
 		auth.bindIdentity(ctx, did, did);
 		assertEquals(AuthResult.identity(did, did), auth.authenticationResult(ctx));
+		assertNull(RT.getIn(AuthMiddleware.callerContext(ctx).getRoute(), 0, Fields.CREDENTIAL_TYPE),
+			"identity-only rebinding must not retain the earlier credential class");
 		auth.authenticate(ctx, token);
 		AuthMiddleware.setRequestIdentity(ctx, did, did);
 		assertEquals(AuthResult.identity(did, did), auth.authenticationResult(ctx));
@@ -553,11 +583,12 @@ class AuthResultTest {
 		return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
 	}
 
-	/** Only request attributes are involved in binding, not servlet behaviour. */
-	private static Context context() {
+	/** Binding and ingress attribution use attributes and the matched endpoint's roles. */
+	private static Context context(VenueRouteFeature... roles) {
 		Map<String, Object> attributes = new HashMap<>();
 		return (Context) Proxy.newProxyInstance(Context.class.getClassLoader(),
 			new Class<?>[] {Context.class}, (proxy, method, args) -> {
+				if (method.getName().equals("routeRoles")) return java.util.Set.of(roles);
 				if (!method.getName().equals("attribute")) throw new UnsupportedOperationException(method.getName());
 				if (args.length == 1) return attributes.get(args[0]);
 				attributes.put((String) args[0], args[1]);

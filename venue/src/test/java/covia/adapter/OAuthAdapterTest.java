@@ -33,6 +33,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.parallel.Isolated;
 
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
@@ -50,13 +51,14 @@ import convex.core.lang.RT;
 import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.ConfigurationException;
-import covia.exception.NotSupportedException;
+import covia.exception.IntegrityException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.SecretStore;
+import covia.venue.TestLogs;
 import covia.venue.TestServer;
 import covia.venue.User;
 import covia.venue.server.VenueServer;
@@ -69,6 +71,7 @@ import covia.venue.server.VenueServer;
  * "oauth/<provider>"} to a token the model never sees, refresh on expiry,
  * and disconnect with revocation — plus every way the flow is refused.
  */
+@Isolated("quiets the integrity failure logger process-wide")
 public class OAuthAdapterTest {
 
 	/** A provider that speaks just enough OAuth 2.0 for the flow and records what it saw. */
@@ -403,9 +406,9 @@ public class OAuthAdapterTest {
 
 	private static final AMap<AString, ACell> INVOKE_ANY = Maps.of(Capability.CAN, Strings.create("invoke"));
 
-	/** An agent of {@code owner}'s that may invoke anything and holds {@code grants} besides. */
+	/** An agent of {@code owner}'s that may invoke and send HTTP requests, and holds {@code grants} besides. */
 	private static RequestContext agent(AString owner, AMap<?, ?>... grants) {
-		AVector<ACell> caps = Vectors.of(INVOKE_ANY);
+		AVector<ACell> caps = Vectors.of(INVOKE_ANY, Capability.create(Abilities.OUTBOUND, Abilities.OUTBOUND_HTTP));
 		for (AMap<?, ?> grant : grants) caps = caps.conj(grant);
 		return RequestContext.ofAgent(owner, Strings.create("worker")).withCaps(caps);
 	}
@@ -634,11 +637,13 @@ public class OAuthAdapterTest {
 				assertNotEquals("Bearer legacy-access", bobToken);
 				assertFalse(engine.getVenueState().users().user(bobDID).secrets().exists(OAuthAdapter.LEGACY_GRANT_PREFIX + "fake"));
 
-				// A grant that cannot be read is refused with a reason, and left where it was.
+				// A grant that fails its integrity check is refused with a reason, and left where it was;
+				// the failure is logged at ERROR, which a passing build does not print.
 				AString carolDID = Strings.create("did:test:oauth:carol");
 				storeLegacyGrant(engine, carolDID, "fake", "not a grant");
-				assertTrue(failed(run(engine, "v/ops/oauth/status", Maps.empty(), RequestContext.of(carolDID)))
-					.contains(OAuthAdapter.UNREADABLE_LEGACY_GRANT));
+				TestLogs.quiet(IntegrityException.class, () -> assertTrue(
+					failed(run(engine, "v/ops/oauth/status", Maps.empty(), RequestContext.of(carolDID)))
+						.contains(OAuthAdapter.LEGACY_GRANT_INTEGRITY)));
 				assertTrue(engine.getVenueState().users().user(carolDID).secrets().exists(OAuthAdapter.LEGACY_GRANT_PREFIX + "fake"));
 			} finally {
 				engine.close();
@@ -668,10 +673,11 @@ public class OAuthAdapterTest {
 		assertSame(moved.secrets(), again.secrets());
 		assertSame(moved.connections(), again.connections());
 
-		// A shape it does not recognise is refused.
-		NotSupportedException refused = assertThrows(NotSupportedException.class, () -> OAuthAdapter.moveLegacyGrants(
+		// A shape it does not recognise fails its integrity check.
+		IntegrityException refused = assertThrows(IntegrityException.class, () -> OAuthAdapter.moveLegacyGrants(
 			other.assoc(fake, SecretStore.seal(Strings.create("not a grant"), keys)), none, keys));
-		assertTrue(refused.getMessage().startsWith(OAuthAdapter.UNREADABLE_LEGACY_GRANT), refused.getMessage());
+		assertTrue(refused.getMessage().startsWith(OAuthAdapter.LEGACY_GRANT_INTEGRITY), refused.getMessage());
+		assertNotNull(refused.getCause(), "the refusal carries what failed the check");
 	}
 
 	@Test
@@ -722,6 +728,50 @@ public class OAuthAdapterTest {
 	}
 
 	@Test
+	public void testAnUnreadableConnectionIsRefusedAndCanBeReplaced() throws Exception {
+		try (FakeProvider fake = new FakeProvider()) {
+			Engine engine = engine(fake);
+			try {
+				AString aliceDID = Strings.create("did:test:oauth:alice");
+				RequestContext alice = RequestContext.of(aliceDID);
+				AMap<AString, ACell> me = Maps.of("url", fake.base() + "/api/me", "bearerSecret", "oauth/fake");
+				var state = engine.adapterState("oauth");
+				String path = "users/" + aliceDID + "/fake";
+				// Its tokens sealed under a key this venue does not hold, as after a lost venue key
+				connectFake(engine, fake, alice);
+				AMap<AString, ACell> connected = RT.ensureMap(state.read(path));
+				AMap<AString, ACell> lost = connected.assoc(OAuthAdapter.C_TOKENS,
+					SecretStore.seal(Strings.create("{\"accessToken\":\"other\"}"),
+						SecretStore.keys(convex.core.crypto.AKeyPair.generate())));
+				state.write(path, lost);
+
+				// Each failed integrity check is logged at ERROR, which a passing build does not print
+				TestLogs.quiet(IntegrityException.class, () -> {
+					// Using it is refused as the venue's failure, with a reason, which carries why as its cause
+					IntegrityException refused = assertThrows(IntegrityException.class,
+						() -> engine.findAdapter(OAuthAdapter.class).accessToken(alice, "fake", null));
+					assertEquals(OAuthAdapter.CONNECTION_INTEGRITY + "fake", refused.getMessage());
+					assertNotNull(refused.getCause());
+					assertEquals(OAuthAdapter.CONNECTION_INTEGRITY + "fake", failed(run(engine, "v/ops/http/get", me, alice)));
+
+					// Connecting again replaces it
+					connectFake(engine, fake, alice);
+					assertEquals("Bearer access-" + fake.issued.get(), RT.getIn(ok(run(engine, "v/ops/http/get", me, alice)), "body").toString());
+
+					// Disconnecting one forgets it, with nothing it could revoke
+					state.write(path, lost);
+					ACell gone = ok(run(engine, "v/ops/oauth/disconnect", Maps.of("provider", "fake"), alice));
+					assertEquals(CVMBool.FALSE, RT.getIn(gone, "revoked"));
+					assertTrue(fake.revokedTokens.isEmpty(), fake.revokedTokens.toString());
+					assertEquals(0, connections(engine, alice).count());
+				});
+			} finally {
+				engine.close();
+			}
+		}
+	}
+
+	@Test
 	public void testCompletionForADeletedAccountStoresNothing() throws Exception {
 		try (FakeProvider fake = new FakeProvider()) {
 			Engine engine = engine(fake);
@@ -756,9 +806,11 @@ public class OAuthAdapterTest {
 				assertNull(engine.adapterState("oauth").read("users/" + aliceDID));
 				assertNull(engine.adapterState("oauth").read(OAuthAdapter.REVOCATIONS), "its tokens are not kept once revoked");
 
-				// A grant an earlier venue kept, never moved to the connections, is revoked too
+				// A grant an earlier venue kept, never moved to the connections, is revoked too, and one
+				// that cannot be read holds nothing to revoke and does not stop the deletion
 				AString carolDID = Strings.create("did:test:oauth:carol");
 				storeLegacyGrant(engine, carolDID, "fake", legacyGrant("legacy-access", "legacy-refresh"));
+				storeLegacyGrant(engine, carolDID, "broken", "not a grant");
 				engine.deleteUser(engine.venueContext(), carolDID);
 				assertEquals(List.of("refresh-1", "legacy-refresh"), fake.revokedTokens);
 			} finally {
@@ -872,7 +924,7 @@ public class OAuthAdapterTest {
 	@Test
 	public void testConfiguration() {
 		OAuthAdapter adapter = new OAuthAdapter();
-		assertTrue(adapter.configure(Maps.of("providers", Maps.of("google", Maps.of("clientId", "g-id"))), false));
+		adapter.configure(Maps.of("providers", Maps.of("google", Maps.of("clientId", "g-id"))), false);
 		OAuthAdapter.Provider google = adapter.providers().get("google");
 		assertEquals("https://oauth2.googleapis.com/token", google.tokenEndpoint());
 		assertEquals("offline", google.params().get("access_type"));
@@ -893,9 +945,9 @@ public class OAuthAdapterTest {
 			Maps.of("providers", Maps.of("Bad Name", Maps.of("clientId", "c"))), false));
 		assertThrows(ConfigurationException.class, () -> adapter.configure(Maps.of("pendingTtlSecs", 5), false));
 
-		assertTrue(adapter.configure(Maps.of("providers", Maps.of("custom", Maps.of("clientId", "c",
+		adapter.configure(Maps.of("providers", Maps.of("custom", Maps.of("clientId", "c",
 			"authorizationEndpoint", "https://idp.example/authorize", "tokenEndpoint", "https://idp.example/token",
-			"pkce", false, "params", Maps.of("audience", "api")))), false));
+			"pkce", false, "params", Maps.of("audience", "api")))), false);
 		OAuthAdapter.Provider custom = adapter.providers().get("custom");
 		assertFalse(custom.pkce());
 		String url = adapter.authorizationUrl(custom, "st", null, List.of());

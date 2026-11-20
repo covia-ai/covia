@@ -40,7 +40,7 @@ public final class Authority {
 	private final AString did;
 
 	/** The user whose namespace this authority acts within, when that differs
-	 *  from {@link #did} (an agent, or a delegate acting for that user).
+	 *  from {@link #did}: an agent's owner ({@link #ofAgent}).
 	 *  {@code null} = the principal is its own user. Read through
 	 *  {@link #getUserDID()}, never directly. */
 	private final AString user;
@@ -69,11 +69,8 @@ public final class Authority {
 	 *
 	 * <p>The DID is <b>its own namespace</b>, whatever its name looks like: an
 	 * agent-shaped DID names no owner relationship by itself. Only the venue puts
-	 * a principal in another namespace, from a relationship it holds — running
-	 * its own agent ({@link #ofAgent}) or acting on a delegation
-	 * ({@link #onBehalfOf}). Whatever stores an authority stores that namespace
-	 * beside the DID and rebuilds from both
-	 * ({@link #of(AString, AString, AVector)}).</p>
+	 * a principal in another namespace, from a relationship it holds: running
+	 * its own agent ({@link #ofAgent}).</p>
 	 *
 	 * @param did Caller DID, or null for anonymous
 	 */
@@ -110,40 +107,7 @@ public final class Authority {
 	 */
 	public static Authority ofAgent(AString userDID, AString agentId) {
 		if (userDID == null) return ANONYMOUS;
-		return of(Principals.agentDID(userDID, agentId), userDID, null);
-	}
-
-	/**
-	 * An authority for {@code did} acting in the namespace of {@code userDID}
-	 * under the given scope. This states a relationship rather than finding one,
-	 * so it is for one the venue holds or recorded: its own agent's, or a stored
-	 * context being rebuilt. Proofs, if any, are attached with {@link #withProofs}.
-	 *
-	 * @param did Caller DID, or null for anonymous
-	 * @param userDID the namespace it acts in; null or {@code did} for its own
-	 * @param grants the held capability scope, or null for unrestricted
-	 */
-	public static Authority of(AString did, AString userDID, AVector<ACell> grants) {
-		return (did == null) ? ANONYMOUS : new Authority(did, userDID, grants, null);
-	}
-
-	/**
-	 * Returns this actor executing on behalf of {@code userDID} under its
-	 * presented delegation proofs.
-	 *
-	 * <p>The actor identity is preserved for attribution and proof-audience
-	 * checks, while bare paths and per-user state resolve in the delegating
-	 * user's namespace. The held scope is deliberately empty: authority over
-	 * that namespace must come from the signed proofs, never from the actor's
-	 * otherwise-unrestricted authority over its own account.</p>
-	 *
-	 * @param userDID the delegating user whose namespace the actor works in
-	 * @return a proof-bounded delegated authority, or this authority when the
-	 *         user is null or already the actor's user
-	 */
-	public Authority onBehalfOf(AString userDID) {
-		if (userDID == null || userDID.equals(getUserDID())) return this;
-		return new Authority(did, userDID, Vectors.empty(), proofs);
+		return new Authority(Principals.agentDID(userDID, agentId), userDID, null, null);
 	}
 
 	/** The caller identity, or null if anonymous. */
@@ -153,8 +117,8 @@ public final class Authority {
 
 	/**
 	 * The user whose namespace this authority acts within — the owner for an agent
-	 * sub-principal, the delegating user for a delegate ({@link #onBehalfOf}),
-	 * and {@link #getDID()} for every other principal.
+	 * sub-principal ({@link #ofAgent}), and {@link #getDID()} for every other
+	 * principal.
 	 *
 	 * <p>This is the DID that resolves bare lattice paths and per-user state
 	 * (workspace, secrets, jobs, inbox). It is <b>not</b> an identity: use

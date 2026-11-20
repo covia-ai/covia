@@ -32,12 +32,12 @@ public class AgentTaskReadinessTest {
 	@BeforeEach
 	public void setup(TestInfo info) {
 		did = TestEngine.uniqueDID(info);
-		agent = TestEngine.ENGINE.getVenueState().users().ensure(did)
-			.ensureAgent("readiness", Maps.empty(), null);
-		agent.ensureSession(SID, did);
+		agent = TestAgents.ensure(TestEngine.ENGINE.getVenueState().users().ensure(did),
+			"readiness", Maps.empty(), null);
+		agent.sessions().create(SID, did, null);
 		agent.tasks().add(TASK, Maps.of(
 			Fields.INPUT, Maps.of("ask", "something"),
-			Fields.SESSION_ID, Strings.create(SID.toHexString()),
+			Fields.SESSION_ID, SID,
 			Fields.CREATED, CVMLong.create(1)));
 	}
 
@@ -84,7 +84,7 @@ public class AgentTaskReadinessTest {
 	@Test
 	public void aParkedTaskIsReadyWhenItsSessionHasAMessage() {
 		presentAndPark();
-		agent.appendSessionPending(SID, Maps.of(Fields.MESSAGE, "an answer"));
+		agent.session(SID).appendPending(Maps.of(Fields.MESSAGE, "an answer"));
 		assertTrue(agent.isTaskReady(row(), NOW), "a human's answer arrives in the task's session");
 	}
 
@@ -115,7 +115,7 @@ public class AgentTaskReadinessTest {
 	public void anOpenWaitIsMatchedToItsTask() {
 		Blob ask = Blob.fromHex("a5c0000000000000000000000000beef");
 		assertFalse(agent.hasPendingFor(TASK));
-		agent.addPending(ask, Maps.of(Fields.TASK_ID, Strings.create(TASK.toHexString())));
+		agent.addPending(ask, Maps.of(Fields.TASK_ID, TASK));
 		assertTrue(agent.hasPendingFor(TASK));
 		assertFalse(agent.hasPendingFor(Blob.fromHex("0000000000000000000000000000beef")));
 		agent.removePending(ask);

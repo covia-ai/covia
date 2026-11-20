@@ -26,6 +26,7 @@ import covia.adapter.messaging.MessagingSettings;
 import covia.adapter.webhook.WebhookInbox;
 import covia.api.Fields;
 import covia.venue.RequestContext;
+import covia.test.IntegrationTest;
 
 /**
  * WhatsApp media for agent bindings: a voice note is fetched with the binding's
@@ -35,6 +36,7 @@ import covia.venue.RequestContext;
  * an operation binding gets the raw message and saves its media with
  * {@code whatsapp:download}; {@code mediaOperation} belongs to agent bindings.
  */
+@IntegrationTest
 class WhatsAppMediaTest {
 
 	static final String FROM = "441234567890";

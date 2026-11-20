@@ -14,6 +14,7 @@ import java.util.Comparator;
 import java.util.stream.Stream;
 
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -695,6 +696,34 @@ public class FileAdapterTest {
 	}
 
 	@Test
+	public void testWritesDoNotFollowALink() throws IOException {
+		// A link inside the root, at the path a write names
+		Path real = Files.writeString(workspace.resolve("link-target.txt"), "kept");
+		Path alias = workspace.resolve("link-alias.txt");
+		try {
+			link(alias, real);
+			for (String op : new String[] {"v/ops/file/write", "v/ops/file/append"}) {
+				Job job = runRaw(op, Maps.of("root", "work", "path", "link-alias.txt", "content", "x"));
+				assertEquals(Status.FAILED, job.getStatus(), op);
+				assertTrue(job.getErrorMessage().contains(FileOperations.WRITE_TO_LINK), job.getErrorMessage());
+			}
+			assertEquals("kept", Files.readString(real));
+		} finally {
+			Files.deleteIfExists(alias);
+			Files.deleteIfExists(real);
+		}
+	}
+
+	/** Makes a symbolic link, or skips the test where the platform will not. */
+	static void link(Path link, Path target) throws IOException {
+		try {
+			Files.createSymbolicLink(link, target);
+		} catch (IOException | UnsupportedOperationException e) {
+			Assumptions.abort("Symbolic links are not available here: " + e.getMessage());
+		}
+	}
+
+	@Test
 	public void testReadOnlyAllowsReads() throws IOException {
 		// Drop a file directly into the read-only root, then verify we can read it.
 		Files.writeString(readonly.resolve("ok.txt"), "hi");
@@ -1140,6 +1169,30 @@ public class FileAdapterTest {
 			Maps.of("path", "dlfs/direct/../other.txt"), free);
 		assertThrows(Exception.class, () -> escaped.awaitResult(5000));
 		assertFalse(escaped.getErrorMessage().isBlank());
+	}
+
+	@Test
+	public void testDLFSBackedRootSetsMetadata() {
+		Engine eng = dlfsRoots;
+		RequestContext ctx = RequestContext.of(TestEngine.uniqueDID("FileAdapterTest-dlfs-metadata"));
+
+		// Setting metadata changes an entry that exists, so it brings no root into being
+		Job refused = eng.jobs().callOperation("v/ops/file/set-metadata",
+			Maps.of("root", "docs", "path", "a.txt", "metadata", "x"), ctx);
+		assertThrows(Exception.class, () -> refused.awaitResult(2000));
+		assertTrue(refused.getErrorMessage().contains(DLFSAdapter.DRIVE_NOT_FOUND), refused.getErrorMessage());
+		Job drives = eng.jobs().callOperation("v/ops/dlfs/list-drives", Maps.empty(), ctx);
+		assertEquals(0, RT.ensureVector(RT.getIn(drives.awaitResult(2000), "drives")).count());
+
+		eng.jobs().callOperation("v/ops/file/write",
+			Maps.of("root", "docs", "path", "a.txt", "content", "text"), ctx).awaitResult(2000);
+		Job set = eng.jobs().callOperation("v/ops/file/set-metadata",
+			Maps.of("root", "docs", "path", "a.txt", "metadata", Maps.of("kind", "note")), ctx);
+		set.awaitResult(2000);
+		assertEquals(Status.COMPLETE, set.getStatus());
+		Job stat = eng.jobs().callOperation("v/ops/file/stat",
+			Maps.of("root", "docs", "path", "a.txt"), ctx);
+		assertEquals(Maps.of("kind", "note"), RT.getIn(stat.awaitResult(2000), "metadata"));
 	}
 
 	@Test

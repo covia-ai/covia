@@ -547,9 +547,12 @@ public class A2ACodec {
 	private static String extractContextId(AMap<AString, ACell> jobData, String fallback) {
 		// A2A contextId = the agent session (COG-14). A per-agent task Job records
 		// its session under SESSION_ID; prefer that, then an explicit contextId,
-		// then fall back to the Job id (front-door tasks carry neither).
-		AString sid = RT.ensureString(jobData.get(Fields.SESSION_ID));
-		if (sid != null) return sid.toString();
+		// then fall back to the Job id (front-door tasks carry neither). A local
+		// agent's session is a Blob, shown in bare hex; a remote agent's is the
+		// text its venue gave.
+		ACell sid = jobData.get(Fields.SESSION_ID);
+		if (sid instanceof convex.core.data.ABlob b) return b.toHexString();
+		if (sid instanceof AString s) return s.toString();
 		AString ctx = RT.ensureString(jobData.get(CONTEXT_ID));
 		return ctx != null ? ctx.toString() : fallback;
 	}

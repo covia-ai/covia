@@ -32,7 +32,7 @@ class RemoteAgentAdapterTest {
 		Engine engine = TestEngine.ENGINE;
 		RequestContext ctx = RequestContext.of(Strings.create("did:test:remoteagent:" + System.nanoTime()));
 		engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "worker",
-			Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")), ctx).awaitResult(5000);
+			Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete", "acceptTasks", true)), ctx).awaitResult(5000);
 		AMap<AString, ACell> params = Maps.of(Fields.AGENT_ID, "g/worker", Fields.INPUT, Maps.of("task", "first"));
 		Job first = engine.jobs().invokeOperation(OP, params, ctx);
 		ACell result = first.future().get(10, TimeUnit.SECONDS);
@@ -53,7 +53,7 @@ class RemoteAgentAdapterTest {
 	@Test void proxyWorksAcrossTwoRealVenuesAndAsAJavaObject() throws Exception {
 		String agent = "Proxy" + Long.toUnsignedString(System.nanoTime(), 36);
 		Job created = TwoVenueTestServer.COVIA_B.invokeSync("v/ops/agent/create", Maps.of(Fields.AGENT_ID, agent,
-			Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")));
+			Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete", "acceptTasks", true)));
 		assertEquals(Status.COMPLETE, created.getStatus(), created.getErrorMessage());
 		AString address = Strings.create(TwoVenueTestServer.DID_B + ":public/g/" + agent);
 		Job mirror = TwoVenueTestServer.COVIA_A.invokeAndWait(Strings.create(OP), Maps.of(
@@ -79,7 +79,7 @@ class RemoteAgentAdapterTest {
 		RequestContext ctx = RequestContext.of(owner);
 		Engine destination = TwoVenueTestServer.ENGINE_B;
 		destination.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "private",
-			Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")), ctx).awaitResult(5000);
+			Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete", "acceptTasks", true)), ctx).awaitResult(5000);
 		AMap<AString, ACell> input = Maps.of(Fields.VENUE, TwoVenueTestServer.BASE_URL_B,
 			Fields.AGENT_ID, owner + "/g/private", Fields.INPUT, Maps.of("task", "private request"));
 		Job denied = TwoVenueTestServer.ENGINE_A.jobs().invokeOperation(OP, input, ctx);
@@ -305,8 +305,51 @@ class RemoteAgentAdapterTest {
 			AMap<AString, ACell> ended = second.getVenueState().users().user(second.publicPrincipal()).jobs().getRecord(anonymous.getID());
 			assertEquals(Status.FAILED, ended.get(Fields.STATUS));
 			assertEquals(Strings.create(RemoteAgentAdapter.CALLER_CANNOT_ACT.formatted(Engine.PUBLIC_ACCESS_OFF,
-				taskOf(anonymous).toHexString())), ended.get(Fields.ERROR));
+				taskOf(anonymous))), ended.get(Fields.ERROR));
 			assertFalse(second.jobs().getJob(taskOf(anonymous)).isFinished(), "a call that ended leaves its task as it is");
+		} finally { second.close(); }
+	}
+
+	/**
+	 * An external agent of Alice's that Bob controls asks its backend in Bob's
+	 * frame: the backend job is Bob's, kept in his account, and names in the
+	 * agent's definition are his, so it reaches his helper. After a restart the
+	 * call finds that job again in Bob's account and finishes with its answer.
+	 */
+	@Test void anExternalAgentAnotherAccountControlsResumesAfterARestart() throws Exception {
+		TestEngine.Restartable venue = TestEngine.restartable(config(false));
+		AKeyPair aliceKP = AKeyPair.generate(), bobKP = AKeyPair.generate();
+		AString alice = UCAN.toDIDKey(aliceKP.getAccountKey()), bob = UCAN.toDIDKey(bobKP.getAccountKey());
+		RequestContext aliceCtx = RequestContext.of(alice), bobCtx = RequestContext.of(bob);
+		Job asked, backend;
+		Engine first = start(venue, false);
+		try {
+			agent(first, bobCtx, "helper", "v/test/ops/askhuman");
+			UCAN grant = UCAN.create(aliceKP, bobKP.getAccountKey(), first.currentTimestamp().longValue() / 1000 + 3600,
+				Vectors.of(Capability.create(Strings.create(alice + "/g/"), covia.api.Abilities.AGENT_CREATE)), Vectors.empty());
+			first.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, alice + "/g/front",
+				"agent", Maps.of(Fields.ADAPTER, "remoteagent", Fields.AGENT_ID, "helper"),
+				Fields.CONFIG, Maps.of(Config.CAPS, Config.UNRESTRICTED)), bobCtx.withProofs(Vectors.of(grant.toMap()))).awaitResult(5000);
+			assertEquals(bob, first.getVenueState().users().user(alice).agent("front").getController());
+			try (AgentWatch helper = AgentWatch.open(first, bob, "helper")) {
+				asked = first.jobs().invokeOperation("v/ops/agent/request", Maps.of(Fields.AGENT_ID, "front",
+					Fields.INPUT, Maps.of("ask", "decide")), aliceCtx);
+				helper.awaitRest(1);
+			}
+			ACell backendId = RT.getIn(first.jobs().adapterData(asked), covia.adapter.agent.ExternalAgents.CHILD);
+			backend = (backendId == null) ? null : first.jobs().getJob(Job.parseID(backendId));
+			assertNotNull(backend, "the backend job serves the call");
+			assertEquals(bob, backend.getCaller(), "asked in Bob's frame");
+			assertEquals(bob, covia.venue.JobManager.accountOf(backend), "and kept in his account");
+		} finally { first.close(); }
+
+		Engine second = start(venue, false);
+		try {
+			Job resumed = second.jobs().getJob(asked.getID(), aliceCtx);
+			assertFalse(resumed.isFinished(), () -> "the call finds its backend job again: " + resumed.getErrorMessage());
+			answer(second, bobCtx, "helper", "go ahead");
+			assertTrue(resumed.future().get(10, TimeUnit.SECONDS).toString().contains("go ahead"),
+				"the call finishes with its backend's answer: " + resumed.getOutput());
 		} finally { second.close(); }
 	}
 
@@ -342,7 +385,7 @@ class RemoteAgentAdapterTest {
 
 	private static void agent(Engine engine, RequestContext ctx, String id, String operation) {
 		engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, id,
-			Fields.CONFIG, Maps.of(Fields.OPERATION, operation, Config.CAPS, Config.UNRESTRICTED)), ctx).awaitResult(5000);
+			Fields.CONFIG, Maps.of(Fields.OPERATION, operation, Config.CAPS, Config.UNRESTRICTED, "acceptTasks", true)), ctx).awaitResult(5000);
 	}
 
 	/** Answers the one open ask of {@code ctx}'s agent {@code id}. */
@@ -368,7 +411,7 @@ class RemoteAgentAdapterTest {
 		Engine engine = TestEngine.ENGINE;
 		RequestContext ctx = RequestContext.of(TestEngine.uniqueDID(info));
 		engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "waiting",
-			Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/never")), ctx).awaitResult(5000);
+			Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/never", "acceptTasks", true)), ctx).awaitResult(5000);
 		Job mirror = engine.jobs().invokeOperation(OP, Maps.of(Fields.AGENT_ID, "waiting", Fields.INPUT, Maps.of("task", "wait")), ctx);
 		await(mirror, j -> RemoteJobs.descriptor(j) != null && RemoteJobs.descriptor(j).get(RemoteJobs.REMOTE_STATUS) != null);
 		Job child = engine.jobs().getJob(Job.parseID(RemoteJobs.descriptor(mirror).get(RemoteJobs.REMOTE_ID)), ctx);

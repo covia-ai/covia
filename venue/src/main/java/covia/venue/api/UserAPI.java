@@ -141,7 +141,7 @@ public class UserAPI extends ACoviaAPI {
 		}
 
 		AMap<AString, ACell> ddo = Maps.of(
-			"@context", "https://www.w3.org/ns/did/v1",
+			"@context", CoviaAPI.MULTIKEY_DID_CONTEXT,
 			"id", did,
 			"controller", venueDID,
 			"verificationMethod", methods,

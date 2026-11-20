@@ -5,11 +5,11 @@ import java.util.function.UnaryOperator;
 
 import convex.core.data.ACell;
 import convex.core.data.AString;
+import convex.core.data.Maps;
 import convex.core.data.Path;
 import convex.lattice.ALatticeComponent;
 import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
-import convex.lattice.cursor.PathCursor;
 import covia.exception.InvalidInputException;
 
 /**
@@ -40,25 +40,22 @@ public final class Workspace extends ALatticeComponent<ACell>
 	}
 
 	/**
-	 * The area at {@code key} in a record. It reads as absent while the record is
-	 * missing, and a change to it is refused rather than creating the record.
+	 * The area at {@code key} in a record. It reads as empty while it is absent,
+	 * so a transaction on it starts from an empty map. A change creates it in the
+	 * record, and is refused rather than creating the record.
 	 *
 	 * @param record Cursor at the record
 	 * @param key The area's key in the record
 	 * @return The area
 	 */
 	public static Workspace inRecord(AForkableCursor<ACell> record, AString key) {
-		return new Workspace(new RecordArea(record, key));
+		return new Workspace(Covia.<ACell>field(record, key, () -> new InvalidInputException(String.format(NO_RECORD, key)))
+			.withDefault(Maps.empty()));
 	}
 
 	@Override
 	public Workspace rebind(AForkableCursor<ACell> cursor) {
 		return new Workspace(cursor);
-	}
-
-	@Override
-	public Workspace withCursor(AForkableCursor<ACell> cursor) {
-		return rebind(cursor);
 	}
 
 	/**
@@ -136,21 +133,5 @@ public final class Workspace extends ALatticeComponent<ACell>
 	 */
 	public int createPath(Path path) {
 		return entry(path).createLevels(Math.toIntExact(path.count()));
-	}
-
-	/** The area at a key in a record; a change needs the record. */
-	private static final class RecordArea extends PathCursor<ACell> {
-		private final AString key;
-
-		RecordArea(AForkableCursor<ACell> record, AString key) {
-			super(record, key);
-			this.key = key;
-		}
-
-		@Override
-		protected ACell write(ACell record, ACell area) {
-			if (record == null) throw new InvalidInputException(String.format(NO_RECORD, key));
-			return super.write(record, area);
-		}
 	}
 }

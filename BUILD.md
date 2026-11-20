@@ -1,21 +1,113 @@
 # Build Guide
 
-This document describes how to build the Covia project using Maven.
+Build, test, promote and release Covia. See [AGENTS.md](AGENTS.md) for the
+module layout and coding conventions, and [deploy/](deploy/README.md) for
+host setup and store backups.
 
 ## Prerequisites
 
-- **Java 21+**: The project compiles for Java 21 (`maven.compiler.release=21`); the published Docker image runs on a Java 25 JRE. This is deliberate policy: source targets Java 21 so client libraries stay broadly consumable, while container images ship the current Java LTS. JDK 25 before 25.0.3 has JDK-8370887, under which virtual-thread and CompletableFuture timeouts fire tens of seconds late: the build warns on one (maven-enforcer-plugin), and CI and release fail with `-Dcovia.jdk.check=ERROR`, so our own tests always run on a fixed JDK
-- **Maven 3.7+**: Minimum Maven version required (enforced by maven-enforcer-plugin)
-- **Git**: For cloning the repository
+- JDK 21+; CI and releases use JDK 25, and source targets Java 21.
+  **Never test on JDK 25 before 25.0.3:** JDK-8370887 delays timeouts.
+  CI and release builds reject affected versions with `-Dcovia.jdk.check=ERROR`.
+- Maven 3.7+ and Git. Publishing to Maven Central needs Maven 3.9 or 3.10: the
+  Central plugin does not yet work with Maven 4.
+- Dependencies come from Maven Central; versions are pinned in the root POM.
 
-Covia builds against the Convex release that `convex.version` in the root
-`pom.xml` names, from Maven Central. The upstream cursor/component/DLFS checks
-can be run in a Convex checkout of that release's tag (use `mvnw.cmd` on
-Windows) with:
+The optional CPython bridge needs Java 22+ for its FFM implementation. Java 21
+builds retain the facade, report Python unavailable and skip native tests.
+Release builds include the Python adapter's FFM backend; the standard venue
+depends on neither Python module.
+
+## Building the Project
+
+Run from the repository root:
+
+```bash
+mvn clean install                         # build all modules and run default tests
+mvn clean install -DskipTests              # build without tests
+mvn clean install -pl venue -am            # venue and its prerequisites
+mvn clean install -pl workbench -am        # workbench and its prerequisites
+mvn compile                               # compile only
+java -jar venue/target/covia.jar [config]   # optional JSON config
+```
+
+`install` assembles `covia.jar`; `package` and `verify` do not. The entry point
+is `covia.venue.MainVenue`. Omit the config for defaults, or pass `local-dev.json`
+for ephemeral venues on ports 8080 and 8081. Personal configs belong in `dev/`.
+
+In worktrees, include `-am` and avoid overwriting sibling SNAPSHOTs in `~/.m2`:
+
+```bash
+mvn -pl venue -am install -DskipTests -Dmaven.install.skip=true
+```
+
+### Build Artifacts
+
+`<version>` is the root POM version.
+
+| Output | Purpose |
+|--------|---------|
+| `venue/target/covia.jar` | Executable venue with dependencies |
+| `venue/target/venue-<version>.jar` | Venue library |
+| `venue/target/venue-<version>-tests.jar` | Shared test fixtures for modules |
+| `workbench/target/workbench-<version>.jar` | Shared Swing components and REPL demo |
+| `<module>/target/<module>-<version>-module.jar` | Optional loadable venue module |
+
+Workbench's venue and FlatLaf dependencies are optional: applications using only
+its shared components do not inherit them; the REPL demo needs them at runtime.
+See [ADAPTERS.md](venue/docs/ADAPTERS.md) for the module packaging contract.
+
+## Tests
+
+```bash
+mvn test                                  # default suite
+mvn test -pl venue                         # one module, after prerequisite build
+mvn verify                                # also run failsafe *IT tests
+mvn test -Dcovia.tests.durability=true      # crash/restart survival, forks JVMs
+mvn test -Dcovia.tests.integration=true     # component and external-service tests
+```
+
+The two heavy groups are off by default, including when selecting a single test.
+Integration tests cover components working together, background activity and
+external services; small synchronous helper tests stay in the default suite.
+Unreachable services cause a skip (`covia.test.Reachable`); failures after a
+connection opens count normally. See [venue testing rules](venue/CLAUDE.md#testing).
+
+Real speech-model tests have a separate opt-in. Normal tests, integration tests,
+QA and release builds do not download speech models. To run the model checks
+deliberately, after building prerequisites:
+
+```bash
+mvn test -pl covia-speech -Dtest=LocalSpeechRealModelTest -Dcovia.tests.speech.models=true
+```
+
+This downloads hundreds of MB of models and native libraries into
+`covia-speech/target/speech-cache`, retained until cleaned. The `speech-models`
+tests run serially against that shared cache; deterministic speech tests use
+local fixtures and fake engines.
+
+Never kill a running Maven test: it can orphan venue JVMs. Let it finish and
+stop a stray venue only by its `jps` PID.
+
+### Troubleshooting
+
+- Check `java -version` and `mvn -version` against the prerequisites.
+- Retry dependency resolution with `mvn clean install -U`.
+- For build memory pressure, increase `MAVEN_OPTS` (for example, `-Xmx2g`).
+- A local Convex install can replace released jars in `~/.m2`. If local results
+  differ from CI, compare checksums with Maven Central or build with a fresh
+  `-Dmaven.repo.local=<directory>`.
+
+### Upstream checks
+
+In a Convex checkout at the tag named by `convex.version`, run the cursor,
+component and DLFS regressions (`mvnw.cmd` on Windows):
 
 ```sh
 ./mvnw test -pl convex-core,convex-dlfs -am '-Dtest=*CursorTest,*ComponentTest,*ApplicationTest,*HostTest,DLFS*Test' '-Dsurefire.failIfNoSpecifiedTests=false'
 ```
+
+## Store Compatibility
 
 ### Upgrading from Convex 0.8.17
 
@@ -57,286 +149,76 @@ upgraded store, report and a loopback launch config for manual API testing.
 See the [fixture guide](venue/src/test/resources/migrations/README.md) for
 contents, provenance, candidate-jar checks and generation instructions.
 
-## Project Structure
-
-Covia is a multi-module Maven project with the following structure:
-
-```
-covia/
-├── pom.xml                 # Parent POM (aggregator)
-├── covia-core/             # Grid client library and shared abstractions
-│   ├── pom.xml            # Core module POM
-│   └── src/               # Client, auth strategies, core grid types
-├── covia-python/           # CPython FFM bridge (only runtime dep: Convex)
-│   ├── pom.xml            # Java 21 facade + Java 22+ FFM build profile
-│   └── src/               # Runtime, references, conversion, native bindings
-├── covia-python-adapter/   # Optional shaded venue module (not in covia.jar)
-│   ├── pom.xml            # Venue SPI provided; covia-python bundled
-│   └── src/               # Configured Python operation adapter
-├── venue/                  # Main application module
-│   ├── pom.xml            # Venue module POM
-│   └── src/
-│       ├── main/java/     # Main source code
-│       ├── main/resources/ # Resources and assets
-│       └── test/java/     # Test source code
-├── workbench/             # GUI workbench module
-│   ├── pom.xml            # Workbench module POM
-│   └── src/
-│       ├── main/java/     # GUI source code
-│       └── main/resources/ # GUI resources
-├── covia-sql/             # Optional loadable SQL adapter module
-│   ├── pom.xml            # Venue SPI provided; convex-db + Calcite shaded
-│   └── src/               # SQL operation adapter and tests
-├── covia-telegram/        # Optional loadable Telegram bot module
-│   ├── pom.xml            # Venue SPI provided; Telegram client shaded
-│   └── src/               # Telegram bot adapter and tests (fake Bot API)
-├── covia-discord/         # Optional loadable Discord bot module
-│   ├── pom.xml            # Venue SPI provided; JDA shaded
-│   └── src/               # Discord Gateway/REST adapter and deterministic tests
-├── covia-whatsapp/        # Optional WhatsApp Cloud API text/webhook module (JDK HTTP)
-├── covia-slack/           # Optional Slack Events API text/webhook module (JDK HTTP)
-├── covia-sonnylabs/       # Optional loadable SonnyLabs scanning module
-│   ├── pom.xml            # Venue SPI provided; JDK HTTP client only
-│   └── src/               # Prompt-injection scan adapter and local fake tests
-├── covia-documents/       # Optional loadable documents module (PDF/Office text extraction)
-├── covia-speech/          # Optional loadable speech module (transcription and speech; JDK HTTP)
-│   ├── pom.xml            # Venue SPI provided; PDFBox and POI shaded
-│   └── src/               # Documents extract adapter and tests
-└── covia-claude-code/     # Optional loadable Claude Code module
-    ├── pom.xml            # Venue SPI provided; no third-party deps
-    └── src/               # Claude Code CLI adapter and tests (fake CLI)
-```
-
-The standard venue does not depend on either Python module. A Java 21 reactor
-build deliberately omits the optional CPython FFM implementation because the
-stable Foreign Function & Memory API starts in Java 22; the public facade stays
-loadable, reports Python unavailable, and native tests skip. CI keeps a Java 21
-fallback job. Release builds use Java 25 and attach the independently loadable
-Python adapter module with its FFM backend.
-
-## Building the Project
-
-### Clean Build
-
-To perform a clean build of the entire project:
-
-```bash
-mvn clean install
-```
-
-This command will:
-1. Clean all previous build artifacts
-2. Compile all modules
-3. Run tests
-4. Package the modules
-5. Install artifacts to local Maven repository
-
-### Build Individual Modules
-
-To build only the venue module:
-
-```bash
-mvn clean install -pl venue
-```
-
-To build only the workbench module:
-
-```bash
-mvn clean install -pl workbench
-```
-
-### Skip Tests
-
-To build without running tests:
-
-```bash
-mvn clean install -DskipTests
-```
-
-### Compile Only
-
-To compile without packaging:
-
-```bash
-mvn clean compile
-```
-
-### Opt-in test groups
-
-Two heavy test groups are **off by default** and opt in via a flag — the gate
-is on the test (`@IntegrationTest` / `@DurabilityTest` in `covia.test`), so a
-default `mvn test` runs the fast suite and skips these with a reason:
-
-```bash
-mvn test -Dcovia.tests.durability=true    # crash/restart survival (forks JVMs); CI runs this on every push
-mvn test -Dcovia.tests.integration=true   # external services (real network, a local Ollama)
-```
-
-A single heavy test still needs its flag, e.g.
-`mvn test -pl venue -Dtest=HardKillPersistenceTest -Dcovia.tests.durability=true`.
-
-## Build Artifacts
-
-### Venue Module
-
-The venue module produces several artifacts (`<version>` is the current Maven version, from the root `pom.xml`):
-
-- **Standard JAR**: `venue/target/venue-<version>.jar`
-- **Executable JAR**: `venue/target/covia.jar` (with dependencies)
-- **Test JAR**: `venue/target/venue-<version>-tests.jar`
-
-The executable JAR (`covia.jar`) is created using the maven-assembly-plugin and includes all dependencies. It can be run directly with:
-
-```bash
-java -jar venue/target/covia.jar
-```
-
-### Workbench Module
-
-The workbench module produces:
-
-- **Standard JAR**: `workbench/target/workbench-<version>.jar`
-
-The library includes `covia.gui.markdown` (CommonMark to Swing styled text) and
-`covia.gui.components.TextComponents` (text sizing for application-owned layouts).
-Applications supply a `MarkdownStyle`, borders, backgrounds and link callbacks;
-the components do not install a theme, open URLs or fetch images. Swing updates
-and sizing run on the event thread. Code and table rows preserve their columns;
-hosts can wrap the pane in a horizontal `JScrollPane` when needed.
-
-The REPL's venue and FlatLaf dependencies are optional. A consumer of just the
-shared components receives CommonMark and its table/strikethrough extensions,
-without a transitive venue or look and feel. Running `Bench` still requires its
-demo dependencies. Install the module with `mvn -pl workbench install` after the
-normal prerequisite build; consumers depend on `ai.covia:workbench` at that version.
-
-
-## Build Configuration
-
-### Java Version
-
-The project is configured to use Java 21:
-
-```xml
-<maven.compiler.release>21</maven.compiler.release>
-<maven.compiler.source>21</maven.compiler.source>
-<maven.compiler.target>21</maven.compiler.target>
-```
-
-### Maven Enforcer Plugin
-
-The project enforces a minimum Maven version of 3.7:
-
-```xml
-<requireMavenVersion>
-    <version>3.7</version>
-</requireMavenVersion>
-```
-
-### Assembly Plugin Configuration
-
-The venue module uses the maven-assembly-plugin to create an executable JAR with all dependencies:
-
-- **Main Class**: `covia.venue.MainVenue`
-- **Output Name**: `covia.jar`
-- **Phase**: `install` (not attached to deployment)
-
-## Running the Application
-
-### From Source
-
-After building, you can run the venue application:
-
-```bash
-# Run from the venue directory
-cd venue
-java -jar target/covia.jar
-
-# Or run from the project root
-java -jar venue/target/covia.jar
-```
-
-### Development Mode
-
-For development, you can run the application directly from the compiled classes:
-
-```bash
-mvn clean compile
-cd venue
-java -cp "target/classes:target/dependency/*" covia.venue.MainVenue
-```
-
-## Troubleshooting
-
-### Common Issues
-
-1. **Java Version Mismatch**: Ensure you're using Java 21
-   ```bash
-   java -version
-   ```
-
-2. **Maven Version Too Old**: Update to Maven 3.7 or later
-   ```bash
-   mvn -version
-   ```
-
-3. **Dependency Resolution Issues**: Try cleaning and rebuilding
-   ```bash
-   mvn clean install -U
-   ```
-
-4. **Memory Issues**: Increase Maven memory if needed
-   ```bash
-   export MAVEN_OPTS="-Xmx2g"
-   mvn clean install
-   ```
-
-### Build Verification
-
-To verify the build was successful:
-
-```bash
-# Check that all modules built successfully
-mvn verify
-
-# Run tests only
-mvn test
-
-# Check for any dependency conflicts
-mvn dependency:analyze
-```
-
-## Continuous Integration
-
-For CI/CD pipelines, use:
-
-```bash
-mvn clean verify
-```
-
-This ensures all tests pass and the build is ready for deployment.
-
 ## Releases
 
-### Snapshot Releases
+### Development and QA
 
-Snapshot builds are automatically created after the full test workflow passes
-for a push to the `develop` branch. These are available at:
+| Branch/event | Validation | Publication and deployment |
+|--------------|------------|----------------------------|
+| `develop` pushes and PRs | Default tests, Java 21 fallback | None; direct pushes allowed |
+| `qa` pushes | Default, integration and durability tests, Java 21 fallback | `latest-snapshot`, Docker `:latest`, dev venues 3 and 4 |
+| PRs into `master` | Same as QA | None |
+| `master` pushes | Same as QA | Docker `:stable` (plus version tags for non-SNAPSHOT builds), stable venues test/1/2 |
+| Release tags | Default, integration and durability tests | Versioned GitHub release and `latest` |
 
-- [latest-snapshot](https://github.com/covia-ai/covia/releases/tag/latest-snapshot)
+QA holds selected development commits for testing, prereleases and release
+candidates. Fixes go through develop; QA has no independent commits. Promote
+without force, publishing develop first:
+
+```bash
+git push origin develop
+git push origin develop:qa
+```
+
+QA checks that its commit belongs to published develop. Accept a candidate after
+tests, both dev-venue deploys and relevant manual/API checks pass. Review skipped
+external-service tests and record the accepted SHA and publishing run. The release
+operator verifies acceptance; it is not an automated master merge prerequisite.
+
+`workflow_run` reads definitions from default branch develop. Land workflow
+changes there before promoting QA. If QA already names the candidate, rerun its
+push-triggered Test workflow. Manual Test dispatches validate only; publishers
+accept successful push runs and reject superseded candidates.
+
+### Deployment identity and redeploys
+
+Publishers reuse the Test run's jars; the snapshot tag names the tested SHA.
+Each Docker publishing attempt saves `deployment-<attempt>` for 90 days, recording
+the source `sha`, `branch`, image digest reference and `test_run_id`. Deploys use
+that digest; EC2/Azure also use the host script from the recorded SHA.
+
+For a manual deploy, run the host's Actions workflow from `develop` with
+`publish_run_id` set to a successful *Publish Docker image* run: QA for EC2/Azure,
+master for GCP. Its latest attempt must have succeeded and its record must still
+exist. An earlier run selects an older image; restoring incompatible stores also
+requires their matching backup and keys (see [deployment guide](deploy/README.md)).
+
+### Repository setup
+
+Configure GitHub separately from the workflows:
+
+- Keep develop open to direct iteration.
+- Disallow QA force pushes and deletion; allow fast-forward promotion.
+- Require `build-and-test` and `java21-fallback` for master release merges.
+
+Remaining rollout from the 2026-11-12 audit:
+
+- [ ] Apply the QA safeguards and add the Java 21 check on master. QA was
+  unprotected; master required only `build-and-test`, with admin bypass.
+- [ ] Publish the workflow changes to develop and verify a full QA promotion:
+  Test → snapshot/Docker publication → both dev-venue deployments.
 
 ### Stable Releases
 
-To create a stable release (the flow 0.9.8 used — a release branch, a pull
-request into `master` so the required `build-and-test` check runs before
-`master` moves, and a tag on the merge commit):
+Start from an accepted QA candidate, validate a release PR into `master`,
+then tag the merge commit:
 
-1. **Branch from develop** with everything the release should contain:
+1. **Branch from the accepted QA candidate** with everything the release should contain:
    ```bash
-   git checkout develop
-   git pull origin develop
-   git checkout -b release/1.0.0
+   git fetch origin
+   git checkout -b release/1.0.0 origin/qa
    ```
+   Confirm `origin/qa` is still the commit accepted above before branching.
 
 2. **Update the Maven version** in all pom.xml files and check no `-SNAPSHOT`
    remains (the Release workflow refuses one, including a snapshot Convex):
@@ -348,6 +230,7 @@ request into `master` so the required `build-and-test` check runs before
 
 3. **Complete the release notes**: rename `## [Unreleased]` in `CHANGELOG.md`
    to `## [1.0.0] - <date>` and add a fresh empty `[Unreleased]` above it.
+   Point the image tag in the README's Docker quickstart at the new version.
 
 4. **Commit and open a pull request** into `master`:
    ```bash
@@ -356,7 +239,8 @@ request into `master` so the required `build-and-test` check runs before
    git push -u origin release/1.0.0
    gh pr create --base master --title "Release 1.0.0"
    ```
-   Merge once `build-and-test` is green.
+   Merge once `build-and-test` and `java21-fallback` are green. The PR into
+   master reruns both heavy groups against the proposed merge.
 
 5. **Tag the merge commit** (the tag must match the Maven version and be
    reachable from `origin/master`):
@@ -371,16 +255,23 @@ request into `master` so the required `build-and-test` check runs before
    - Create a versioned release (e.g., `1.0.0`)
    - Update the `latest` release to point to this version
 
-7. **Prepare for next development cycle** (on develop):
+7. **Prepare for next development cycle** (on develop). Develop takes the
+   next minor version's snapshot; a fix to a released line is a patch release
+   from `master`:
    ```bash
    git checkout develop
    git merge origin/master
-   mvn versions:set -DnewVersion=1.0.1-SNAPSHOT
+   mvn versions:set -DnewVersion=1.1.0-SNAPSHOT
    mvn versions:commit
    git add -A
    git commit -m "Prepare for next development iteration"
    git push origin develop
    ```
+
+8. **Add the release line's migration fixture**, a store written by the
+   published `covia.jar`, as the
+   [fixture guide](venue/src/test/resources/migrations/README.md#provenance-and-regeneration)
+   describes.
 
 ### Publishing to Maven Central
 
@@ -388,28 +279,32 @@ The adapter/module implementation contract is documented in
 [`venue/docs/ADAPTERS.md`](venue/docs/ADAPTERS.md); this section covers release
 packaging and publication.
 
-The reactor modules are published to Maven Central under the `ai.covia`
-groupId. `ai.covia:covia-core`, `ai.covia:covia-python`, `ai.covia:venue`, and
-`ai.covia:workbench` are ordinary library artifacts (along with the
-`ai.covia:covia` parent POM). The venue also publishes its test jar
-(`venue-<version>-tests.jar`), which module tests take as a test-scoped
-dependency for shared test support such as `TestTemp`. The operator-facing
-`covia-python-adapter`, `covia-sql`, `covia-telegram`, `covia-discord`, `covia-whatsapp`, `covia-slack`,
-`covia-sonnylabs`, `covia-documents`, `covia-speech` and
-`covia-claude-code` artifacts are loadable venue modules rather than dependencies of
-the standard venue. Their slim jars are published so an embedding host can
-depend on a module through Maven; the shaded `-module.jar`s are GitHub Releases
-artifacts only and are never deployed to Central (the shade plugin writes them
-without attaching them, and leaves the slim jar's POM intact so the published
-POM carries the module's real dependencies). GitHub Releases remain the
-canonical operator download, pairing each module jar with a `sha256sum -c`
-compatible checksum file. The executable `covia.jar` is an unattached
-assembly and is **not** published to Central.
+Maven Central carries what an embedding host builds against, under the
+`ai.covia` groupId: the `ai.covia:covia` parent POM; `covia-core`, `venue` and
+`workbench` as libraries; and the slim jars of the venue modules `covia-sql`,
+`covia-telegram`, `covia-discord`, `covia-speech` and `covia-claude-code`, so a
+host can depend on one of them through Maven. The venue also publishes its test
+jar (`venue-<version>-tests.jar`), which module tests take as a test-scoped
+dependency for shared test support such as `TestTemp`: the Central plugin
+leaves out only whole artifacts. `covia-python`, `covia-python-adapter`,
+`covia-whatsapp`, `covia-slack`, `covia-sonnylabs` and `covia-documents` are
+not published; the root pom's `excludeArtifacts` lists them, and a module is
+published by taking it off that list.
+
+The venue modules are loadable modules rather than dependencies of the
+standard venue. Their shaded `-module.jar`s are GitHub Releases artifacts only
+and are never deployed to Central (the shade plugin writes them without
+attaching them, and leaves the slim jar's POM intact so the published POM
+carries the module's real dependencies). GitHub Releases remain the canonical
+operator download, pairing each module jar with a `sha256sum -c` compatible
+checksum file. The executable `covia.jar` is an unattached assembly and is
+**not** published to Central.
 
 Publishing uses the [Sonatype Central Publishing plugin](https://central.sonatype.org/publish/publish-portal-maven/)
 and mirrors the Convex setup: pom config lives in the root `pom.xml`
-(`distributionManagement`, `central-publishing-maven-plugin`, source/javadoc
-plugins, and a `release` profile that GPG-signs artifacts). The deploy itself is
+(`distributionManagement`, `central-publishing-maven-plugin`, and a `release`
+profile that attaches sources and javadoc jars and GPG-signs every artifact;
+other builds make neither jar). The deploy itself is
 a **local command**, run only after the GitHub Release is confirmed live —
 Maven Central publishes are irreversible.
 
@@ -455,44 +350,34 @@ Maven Central publishes are irreversible.
 mvn clean deploy    # -SNAPSHOT version → routes to the Central snapshot repo
 ```
 
+**Check the release bundle** on the tagged version, which builds and signs it
+without uploading anything:
+```bash
+mvn clean deploy -Prelease -DskipUpload=true
+```
+`target/central-publishing/central-bundle.zip` should hold, for each published
+module, its jar, sources, javadoc and POM with their signatures and checksums,
+and nothing else (`unzip -l`).
+
 **Publish a release** — only after the GitHub Release for the tag is live:
 ```bash
 mvn clean deploy -Prelease
 ```
-`-Prelease` GPG-signs every artifact; the Central plugin bundles all reactor
+Run both without `-B`: in batch mode the gpg plugin passes
+`--pinentry-mode error`, so gpg cannot ask for the key's passphrase.
+
+`-Prelease` GPG-signs every artifact; the Central plugin bundles the published
 modules (main + sources + javadoc + pom + signatures) and, with
 `autoPublish=true`, publishes them to Maven Central. Then verify at
 `https://central.sonatype.com/artifact/ai.covia/covia-core`.
 
 ### Release Artifacts
 
-Both snapshot and stable releases include:
+Snapshot and stable GitHub releases include `covia.jar`, each optional module's
+`<module>-<version>-module.jar`, and a matching `.sha256` file for every JAR.
+Verify beside the downloaded file with `sha256sum -c <jar>.sha256`.
+The [module list](AGENTS.md#layout) identifies the optional adapters.
 
-- `covia.jar` - The executable venue server JAR with all dependencies
-- `covia.jar.sha256` - SHA-256 checksum for the executable JAR
-- `covia-python-adapter-<version>-module.jar` - Optional Python venue module
-- `covia-python-adapter-<version>-module.jar.sha256` - SHA-256 checksum
-- `covia-sql-<version>-module.jar` - Optional SQL venue module
-- `covia-sql-<version>-module.jar.sha256` - SHA-256 checksum
-- `covia-telegram-<version>-module.jar` - Optional Telegram bot venue module
-- `covia-telegram-<version>-module.jar.sha256` - SHA-256 checksum
-- `covia-discord-<version>-module.jar` - Optional Discord bot venue module
-- `covia-discord-<version>-module.jar.sha256` - SHA-256 checksum
-- `covia-whatsapp-<version>-module.jar` - Optional WhatsApp Cloud API venue module
-- `covia-whatsapp-<version>-module.jar.sha256` - SHA-256 checksum
-- `covia-slack-<version>-module.jar` - Optional Slack Events API venue module
-- `covia-slack-<version>-module.jar.sha256` - SHA-256 checksum
-- `covia-sonnylabs-<version>-module.jar` - Optional SonnyLabs scanning venue module
-- `covia-sonnylabs-<version>-module.jar.sha256` - SHA-256 checksum
-- `covia-documents-<version>-module.jar` - Optional documents (PDF/Office text) venue module
-- `covia-documents-<version>-module.jar.sha256` - SHA-256 checksum
-- `covia-speech-<version>-module.jar` - Optional speech (transcription and text-to-speech) venue module
-- `covia-speech-<version>-module.jar.sha256` - SHA-256 checksum
-- `covia-claude-code-<version>-module.jar` - Optional Claude Code venue module
-- `covia-claude-code-<version>-module.jar.sha256` - SHA-256 checksum
-
-### Download Links
-
-- **Latest stable**: [latest](https://github.com/covia-ai/covia/releases/tag/latest)
-- **Latest snapshot**: [latest-snapshot](https://github.com/covia-ai/covia/releases/tag/latest-snapshot)
-- **Specific version**: `https://github.com/covia-ai/covia/releases/tag/<version>`
+- [Latest stable](https://github.com/covia-ai/covia/releases/tag/latest)
+- [Latest snapshot](https://github.com/covia-ai/covia/releases/tag/latest-snapshot)
+- Specific version: `https://github.com/covia-ai/covia/releases/tag/<version>`

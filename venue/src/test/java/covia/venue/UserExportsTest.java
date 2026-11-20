@@ -16,6 +16,7 @@ import java.util.concurrent.CompletionException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
+import org.junit.jupiter.api.parallel.Isolated;
 
 import convex.core.crypto.AKeyPair;
 import convex.core.data.ABlob;
@@ -35,7 +36,7 @@ import convex.core.lang.RT;
 import covia.adapter.UserAdapter;
 import covia.api.Fields;
 import covia.exception.AuthException;
-import covia.grid.Attribution;
+import covia.exception.IntegrityException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.grid.hitl.Hitl;
@@ -44,6 +45,7 @@ import covia.lattice.Namespace;
 import covia.lattice.CoviaPath;
 
 /** Export, import and clone of a user's whole stored state, through the user operations. */
+@Isolated("quiets the integrity failure logger process-wide")
 class UserExportsTest {
 
 	private static final Engine engine = TestEngine.ENGINE;
@@ -54,7 +56,8 @@ class UserExportsTest {
 	private static final AString ACCOUNT_KEY = Strings.create("accountKey");
 	private static final AString SECRETS = Strings.create("secrets");
 
-	private final RequestContext venue = engine.venueContext();
+	/** The operator's own request, authenticated as the venue, as exporting needs. */
+	private final RequestContext venue = engine.requestContext(engine.getDIDString(), null);
 	private AString source;
 	private AString target;
 	private String unique;
@@ -73,13 +76,14 @@ class UserExportsTest {
 		User user = users.ensure(did);
 		user.writeInternalPath(CoviaPath.parse("w/notes/today"), Strings.create("buy milk"));
 		user.writeInternalPath(CoviaPath.parse("o/greet"), Maps.of("adapter", "test:echo"));
-		user.inbox().put(Strings.create("req-1"), Maps.of(Fields.STATUS, "OPEN"));
+		Blob requestID = Blob.fromHex("0b".repeat(16));
+		user.inbox().put(requestID, Maps.of(Hitl.ID, requestID, Fields.STATUS, "OPEN"));
 		user.assets().store(Strings.create("{\"name\":\"note\"}"), Strings.create("asset content"));
 		user.secrets().store("API_KEY", SECRET, KEYS);
 		Blob jobID = Blob.fromHex("0a".repeat(16));
 		user.jobs().create(jobID, Maps.of(Fields.ID, jobID, Fields.STATUS, Status.COMPLETE, Fields.OUTPUT, "done"));
-		Agent agent = user.ensureAgent(HELPER, Maps.of("model", "test"), Strings.create("state"));
-		agent.ensureSession(Blob.fromHex("aa"), did);
+		Agent agent = TestAgents.ensure(user, HELPER, Maps.of("model", "test"), Strings.create("state"));
+		agent.sessions().create(Blob.fromHex("aa"), did, null);
 		return user;
 	}
 
@@ -180,13 +184,24 @@ class UserExportsTest {
 	}
 
 	@Test
-	void secretsAreSealedOrLeftOutNeverDropped() {
+	void secretsAreSealedOrLeftOutNeverDropped() throws Exception {
 		fill(source);
 		assertEquals(UserExports.SECRETS_NEED_KEY, failure(start("export", Maps.of(Fields.DID, source), venue)));
 		ABlob blob = export(source, SECRETS, CVMBool.FALSE);
 		run("import", Maps.of(Fields.DID, target, EXPORT, blob), venue);
 		assertTrue(engine.getVenueState().users().user(target).secrets().list().isEmpty());
 		assertNotNull(engine.getVenueState().users().content(target).get(Namespace.W));
+
+		// One that fails its integrity check refuses the export as the venue's failure, carrying why;
+		// the failure is logged at ERROR, which a passing build does not print.
+		users().user(source).secrets().store("FOREIGN", SECRET, SecretStore.keys(AKeyPair.generate()));
+		Throwable[] refused = new Throwable[1];
+		TestLogs.quiet(IntegrityException.class, () -> refused[0] = assertThrows(CompletionException.class,
+			() -> run("export", Maps.of(Fields.DID, source, ACCOUNT_KEY, AKeyPair.generate().getAccountKey()), venue))
+			.getCause());
+		assertInstanceOf(IntegrityException.class, refused[0]);
+		assertEquals(UserExports.SECRET_INTEGRITY, refused[0].getMessage());
+		assertNotNull(refused[0].getCause());
 	}
 
 	@Test
@@ -241,26 +256,30 @@ class UserExportsTest {
 	@Test
 	void importBringsOlderShapesToTheirCurrentForm() {
 		// A version 1 export: its HITL requests name the asker as from, with
-		// requesterUser for an agent's ask, and it holds the user's jobs.
+		// requesterUser for an agent's ask, are keyed by their ids in hex, and
+		// it holds the user's jobs.
 		Blob jobID = Blob.fromHex("0c".repeat(16));
+		Blob agentAsk = Blob.fromHex("0d".repeat(16)), userAsk = Blob.fromHex("0e".repeat(16));
+		Blob session = Blob.fromHex("0f".repeat(16));
 		AString asker = Strings.create(source + ":g:" + HELPER);
 		AString stranger = TestEngine.uniqueDID("import-stranger");
-		AMap<AString, ACell> fromAgent = Maps.of(Hitl.ID, "req-agent", Hitl.STATUS, Hitl.OPEN,
-			Strings.create("from"), asker, Strings.create("requesterUser"), source);
-		AMap<AString, ACell> fromUser = Maps.of(Hitl.ID, "req-user", Hitl.STATUS, Hitl.OPEN,
+		AMap<AString, ACell> fromAgent = Maps.of(Hitl.ID, agentAsk.toHexString(), Hitl.STATUS, Hitl.OPEN,
+			Strings.create("from"), asker, Strings.create("requesterUser"), source, Fields.SESSION_ID, session.toHexString());
+		AMap<AString, ACell> fromUser = Maps.of(Hitl.ID, userAsk.toHexString(), Hitl.STATUS, Hitl.OPEN,
 			Strings.create("from"), stranger);
 		ABlob older = Format.encodeMultiCell(Maps.of(UserExports.K_FORMAT, UserExports.FORMAT,
 			Fields.VERSION, 1, Fields.DID, source,
 			UserExports.K_USER, Maps.of(
 				Namespace.J, Index.of(jobID, Maps.of(Fields.ID, jobID, Fields.STATUS, Status.COMPLETE)),
-				Namespace.H, Maps.of(Covia.WORKSPACE_DATA, Maps.of("req-agent", fromAgent, "req-user", fromUser)))), true);
+				Namespace.H, Maps.of(Covia.WORKSPACE_DATA, Maps.of(agentAsk.toHexString(), fromAgent, userAsk.toHexString(), fromUser)))), true);
 		run("import", Maps.of(Fields.DID, target, EXPORT, older), venue);
 
 		User imported = users().user(target);
-		assertEquals(Maps.of(Hitl.ID, "req-agent", Hitl.STATUS, Hitl.OPEN, Hitl.CALLER, asker, Hitl.OWNER, source),
-			imported.inbox().get(Strings.create("req-agent")));
-		assertEquals(Maps.of(Hitl.ID, "req-user", Hitl.STATUS, Hitl.OPEN, Hitl.CALLER, stranger),
-			imported.inbox().get(Strings.create("req-user")));
+		assertEquals(Maps.of(Hitl.ID, agentAsk, Hitl.STATUS, Hitl.OPEN, Hitl.CALLER, asker,
+				Fields.SESSION_ID, session),
+			imported.inbox().get(agentAsk), "keyed by its id, which it names as a Blob, as its session");
+		assertEquals(Maps.of(Hitl.ID, userAsk, Hitl.STATUS, Hitl.OPEN, Hitl.CALLER, stranger),
+			imported.inbox().get(userAsk));
 		assertNull(imported.jobs().getRecord(jobID), "an import leaves out the calls");
 	}
 
@@ -315,13 +334,13 @@ class UserExportsTest {
 		User clone = users.user(target);
 		assertEquals(SECRET, clone.secrets().decrypt("API_KEY", KEYS).toString());
 		Agent agent = clone.agent(HELPER);
-		assertEquals(user.agent(HELPER).getSession(sid), agent.getSession(sid));
+		assertEquals(user.agent(HELPER).session(sid).getRecord(), agent.session(sid).getRecord());
 
 		Blob cloneWake = agent.wakeHandle();
 		assertNotNull(cloneWake);
 		assertNotEquals(sourceWake, cloneWake);
 		Schedule schedule = engine.getVenueState().schedule();
-		assertEquals(target, Attribution.owner(schedule.find(cloneWake).rec()));
+		assertEquals(target, Schedule.accountOf(schedule.find(cloneWake).rec()));
 		assertNotNull(schedule.find(sourceWake), "the source keeps its own wake");
 
 		assertEquals(UserExports.SAME_USER, failure(start("clone", Maps.of(Fields.FROM, source, Fields.TO, source), venue)));

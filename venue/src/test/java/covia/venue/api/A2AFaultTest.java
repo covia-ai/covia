@@ -132,7 +132,7 @@ public class A2AFaultTest {
 				assertEquals(A2AErrorCodes.INTERNAL.code(), ((Number) error.get("code")).intValue(), body);
 				// The adapter's handler failed: the report blames it, by type only
 				assertEquals(FaultException.FAILED.formatted(
-					JobManager.DELIVERING_MESSAGE.formatted(job.getID().toHexString()),
+					JobManager.DELIVERING_MESSAGE.formatted(job.getID()),
 					"IllegalStateException", FaultException.ADAPTER.formatted(PROBE)), error.get("message"));
 			}
 		} finally {

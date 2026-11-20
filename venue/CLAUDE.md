@@ -43,7 +43,8 @@ venue/
   with JSON Schema input/output. See `docs/OPERATIONS.md`.
 - **Job** — execution state for an invocation. No framework-level timeout;
   terminal states sticky; caller-side wait timeouts never mutate the job.
-  Full implementation semantics: `docs/JOBS.md`; protocol: COG-8.
+  Full implementation semantics: `docs/JOBS.md`; protocol: COG-8. Standard
+  capability catalog: `docs/UCAN.md` section 3.2 (`job/read`, `job/manage`, `job/message`).
 - **Adapter** — bridges operations to execution. Extends `AAdapter`; receives
   resolved metadata (never null) and a `RequestContext`; returns
   `CompletableFuture` (or overrides the job-aware `invoke` for direct job
@@ -54,11 +55,12 @@ venue/
   point-of-action enforcement primitive; `Engine.crossUserAllows` is the
   single cross-user gate (public-user parity + target-side admission
   `config.accepts` for talking to an agent, #447 + delegation proofs).
-  **Two identities, never conflated**: `getCallerDID()` is *who acted*
-  (attribution, delegation audience, granting authority); `getUserDID()` is
-  *whose namespace* (bare paths, workspace, secrets, jobs, inbox, quota). They
-  differ only for an agent sub-principal, `<ownerDID>:g:<agentId>`, and a
-  delegate acting for another user (`user/sudo`) — see `docs/UCAN.md` §5.4.
+  **Two identities, never conflated**: `getAuthorityDID()` is *who acts*, the
+  one principal a request acts as (attribution, delegation audience, granting
+  authority); `getUserDID()` is *whose namespace*, that principal's account
+  (bare paths, workspace, secrets, jobs, inbox). They differ only for
+  an agent, `<ownerDID>:g:<agentId>`, whose account is its owner's; a delegate
+  under `admin/sudo` acts as the user — see `docs/UCAN.md` §5.4.
 - **Lattice** — CRDT-based persistent state. Structure defined in
   `covia.lattice.Covia`; design in `docs/GRID_LATTICE_DESIGN.md`.
 
@@ -75,18 +77,21 @@ AUTH_REQUIRED).
 
 | Adapter | Purpose | Operations |
 |---------|---------|------------|
-| `grid` | Federated grid operations | `run`, `invoke`, `jobStatus`, `jobResult` |
+| `grid` | Invoke operations locally or across venues | `run`, `invoke`; compatibility queries `jobStatus`, `jobResult` (prefer `job`) |
+| `job` | Universal Job inspection and control, local or remote; Grid Job reads remain compatibility entry points | `status`, `result`, `cancel`, `pause`, `resume`, `message` |
 | `remoteagent` | Covia agent proxy on a local or remote venue; selected by `g/<id>/agent.adapter`, used through `agent:chat` / `agent:request` | internal transport |
 | `p2p` | The venue's Convex P2P node (`convex-p2p`), off unless `adapters.p2p.join`; peer list plus in-process change events, venue-owned (`docs/CONFIG.md#p2p-network-adaptersp2p`) | `peers`, `connect` |
 | `convex` | Convex blockchain, CAD3 conversion, and secret-backed Ed25519 keys | `query`, `transact`, `generate-key`, `sign`, `decode-cad3`, `encode-cad3` |
 | `crypto` | Local cryptography in Convex formats; secret-backed and held keys, JWTs and BIP39 phrases (see `docs/CONFIG.md#cryptography-crypto`) | `hash`, `generate-key`, `public-key`, `sign`, `verify`, `encrypt`, `decrypt`, `generate-mnemonic`, `validate-mnemonic`, `derive-key`, `jwt-sign`, `jwt-verify`, `jwt-decode`, `add-key`, `remove-key`, `list-keys` |
-| `mcp` | Model Context Protocol | `toolList`, `toolCall`, bridging ops |
+| `mcp` | Model Context Protocol client, bridging, and the MCP access point for access tokens, with MCP token operations (`docs/ACCESS_TOKENS.md`) | `tools-list`, `tools-call`, `add-server`, `add-tool`, `remove-server`, `refresh`, `create-token`, `update-token`, `delete-token`, `list-tokens`, `get-token` |
+| `token` | Access tokens: scoped bearers acting with their issuer's authority within caps, accepted at the access points they name; the store other adapters build on, with a read-only user view at `x/token` (`docs/ACCESS_TOKENS.md`) | `create`, `update`, `delete`, `list`, `get` |
+| `callable` | Callables: functions a principal publishes for others to call, running an operation with the issuer's authority within caps, admitted by `callable/call` or a gate operation; invoked as an operation by its path `<owner>/x/callable/<name>`; read-only user view at `x/callable` (`docs/CALLABLES.md`) | `create`, `update`, `delete`, `list`, `call`, `gates/anyone`, `gates/callers` |
 | `a2a` | Agent-to-Agent protocol client — remote agent cards, tasks and message relay | `send`, `get-task`, `cancel`, `agent-card`, `import-agent` |
 | `langchain` | AI/LLM models | `openai`, `ollama`, `anthropic`, `gemini`, `xai`, `deepseek`, `mistral`, `openrouter`, `models` |
 | `http` | HTTP requests (SSRF-protected, bounded validated redirects, default User-Agent; `adapters.http`) | `get`, `post` |
 | `connections` | Service connection catalog; owns provider skills and reports transport/credential presence without reading secrets | `list`, `status` |
 | `jvm` | JVM utilities | `stringConcat`, `urlEncode`, `urlDecode` |
-| `file` | Filesystem (root-jailed); reads see into archives via `x.zip!/entry` | `roots`, `list`, `tree`, `read`, `write`, `append`, `delete`, `mkdir`, `stat` |
+| `file` | Filesystem (root-jailed); reads see into archives via `x.zip!/entry` | `roots`, `list`, `tree`, `read`, `create`, `write`, `append`, `move`, `copy`, `delete`, `mkdir`, `stat`, `setMetadata` (DLFS targets) |
 | `archive` | Zip/jar archives over file roots (zip-slip + zip-bomb guarded) | `list`, `extract`, `zip` |
 | `schema` | JSON Schema | `validate`, `validateAll`, `infer`, `coerce`, `check` |
 | `json` | JSON value utilities | `merge`, `cond`, `assoc`, `select` |
@@ -98,8 +103,8 @@ AUTH_REQUIRED).
 | `goaltree` | Goal-tree agent planning | `chat` |
 | `hitl` | Human-in-the-Loop (COG-16) | `request`, `respond`, `list` over the per-user `h/` inbox; `expire` (venue-only, fired by a request's scheduled timeout) |
 | `project` | Projects as a work breakdown tree at `w/projects/<pid>` (`docs/PROJECT.md`); publishes the `projects` skill family | none yet — skills only |
-| `dlfs` | Decentralised file system | `listDrives`, `createDrive`, `deleteDrive`, `list`, `read`, `write`, `mkdir`, `delete` |
-| `vault` | Personal vault (configurable-drive DLFS wrapper) | `read`, `write`, `list`, `mkdir`, `delete` |
+| `dlfs` | Decentralised file system; entries carry application metadata (`docs/DLFS_ADAPTER.md`) | `listDrives`, `createDrive`, `deleteDrive`, `list`, `tree`, `read`, `create`, `write`, `append`, `mkdir`, `delete`, `stat`, `setMetadata` |
+| `vault` | Personal vault (configurable-drive DLFS wrapper) | `read`, `create`, `write`, `list`, `mkdir`, `delete`, `setMetadata` |
 | `secret` | Secret store | `set`, `list`, `delete`, `extract` (direct owner `/run` only, never the public principal) |
 | `memory` | Per-user agent memory (one vector at a path, default `w/memory`; each edit one atomic update) | `memory` (commands `recall`, `remember`, `update`, `forget`), `memory-recall` |
 | `preferences` | Per-user preferences: one map per user in adapter state, read-only at `x/preferences` (`docs/PREFERENCES.md`) | `preferences` (commands `set`, `remove`, `append`, `insert`, `merge`) |
@@ -109,15 +114,15 @@ AUTH_REQUIRED).
 | `auth` | Authentication and identity | `whoami`, `identity-token` (caller-only bearer saved as a secret) |
 | `oauth` | Connected accounts — OAuth 2.0 grants held for users; `http:*` attaches tokens via `bearerSecret: "oauth/<provider>"` | `connect`, `complete`, `status`, `disconnect` |
 | `user` | Explicit user registration, operator account deletion and discovery (arbitrary DIDs; venue-managed did:web usernames) | `create`, `delete`, `info`, `list` |
-| `venue` | Venue administration — runtime adapter/module lifecycle and process restart (venue-owned; `docs/CONFIG.md`) | `adapters`, `adapter/enable`, `adapter/disable`, `adapter/configure`, `module/load`, `module/unload`, `restart`, `gc` |
-| `test` | Testing | `echo`, `delay`, `fail`, `never`, `hold` (finishes when the test releases its gate), `holdstart` (as `hold`, inside its own invocation, so its start waits too), `random`, `chat`, `pause`, `taskComplete`, `failllm` (a model call that fails as the agent's `model` names: `setup`, `unavailable`, `value`, `content`, `bug`, `long-setup`), `step` (an agent transition scripted by its input: hold at a gate, complete, fail or park the task, fail the cycle, yield) |
+| `venue` | Venue administration — runtime adapter/module lifecycle and process restart (venue-owned; `docs/CONFIG.md`) | `adapters`, `adapter/enable`, `adapter/disable`, `adapter/configure`, `adapter/restart`, `module/load`, `module/unload`, `restart`, `gc` |
+| `test` | Testing; also a second access-token access point that no route serves (`docs/ACCESS_TOKENS.md`) | `echo`, `delay`, `fail`, `never`, `hold` (finishes when the test releases its gate), `holdstart` (as `hold`, inside its own invocation, so its start waits too), `random`, `chat`, `pause`, `taskComplete`, `failllm` (a model call that fails as the agent's `model` names: `setup`, `unavailable`, `value`, `content`, `bug`, `long-setup`), `step` (an agent transition scripted by its input: hold at a gate, complete, fail or park the task, fail the cycle, yield) |
 
 Module adapters (shaded module jars, not in covia.jar — `docs/CONFIG.md` "Venue modules"):
 
 | Adapter | Module | Purpose | Operations |
 |---------|--------|---------|------------|
 | `sql` | covia-sql | Venue-local convex-db and operator-registered JDBC databases | `query`, `execute` |
-| `python` | covia-python-adapter | Operator-configured Python operations and stateful instances | configured ops, `instances/*` |
+| `python` | covia-python-adapter | Operator-configured Python operations, offered to others through callables | configured ops |
 | `telegram` | covia-telegram | Telegram bots (operator-declared or user-created) routing chats and media to agents or handing Updates to operations; Bot API access in Telegram's own shapes | `send`, `call`, `download`, `create`, `delete`, `bots`, `format` |
 | `discord` | covia-discord | Discord bots (operator-declared or user-created) routing DMs and mentioned guild messages to agents or operations; Discord REST API access | `send`, `call`, `create`, `delete`, `bots` |
 | `whatsapp` | covia-whatsapp | WhatsApp Cloud API phone bindings with signed callbacks, durable intake and text replies; voice notes, photos and files reach agents as attachments (shared `MessagingMedia`, optional `mediaOperation`) and operations as raw messages for `download`; `relay` bindings serve many principals at `/relay/whatsapp/<binding>` | `send`, `download`, `create`, `delete`, `bots` |
@@ -149,14 +154,14 @@ Base path: `/api/v1/`
 | `/jobs` | GET | Caller's jobs as a paged `{items, total, offset, limit}` envelope (#229) |
 | `/jobs/{id}` | GET | Job status. Proofs ride the `X-Covia-Ucans` header on body-less reads (federated observation) |
 | `/jobs/{id}` | POST | Message delivery to a running job (202/403/404/409) |
-| `/jobs/{id}/{cancel,pause,resume,delete}` | PUT | Lifecycle control (pause/resume are adapter opt-in → 409 otherwise) |
+| `/jobs/{id}/{cancel,pause,resume,delete}` | PUT | Lifecycle control (pause/resume are adapter opt-in → 409 otherwise, and refused as unavailable while the job's adapter is not running) |
 | `/jobs/{id}/sse` | GET | Server-sent job updates (closes on terminal) |
 | `/.well-known/did.json` | GET | Venue DID document (#167) |
 | `/.well-known/oauth-authorization-server` | GET | OAuth 2.1 AS metadata (RFC 8414) when `auth.oauth.provider` is enabled |
 | `/oauth/{authorize,token,revoke}` | — | OAuth 2.1 authorization server: code+PKCE flow issuing venue bearers (`auth.oauth.provider`) |
 | `/auth/connect/{provider}/callback` | GET | OAuth connection callback — the provider redirects the user here after approval; it hands the browser a one-time completion code for `oauth:complete` (`adapters.oauth`; not `/api/v1`) |
 
-MCP endpoint at `/mcp`; A2A is opt-in with an `a2a` config block.
+MCP endpoint at `/mcp`, reached with a venue bearer or an access token with an MCP entry (`docs/ACCESS_TOKENS.md`); A2A is opt-in with an `a2a` config block.
 
 ### A2A surfaces
 
@@ -168,8 +173,9 @@ Covia exposes both the venue front door and individual hosted agents:
 | Hosted agent | `GET /a2a/<ownerDID>/g/<agentId>/.well-known/agent-card.json` | `POST /a2a/<ownerDID>/g/<agentId>` |
 
 The front door invokes `a2a.defaultChatOp` for a fresh `SendMessage`. A
-per-agent `SendMessage` invokes `agent:request`; the resulting Covia task Job
-is the A2A Task, and its session is the A2A `contextId`. `GetTask`,
+per-agent `SendMessage` invokes `agent:request`, which an agent takes only when
+its config sets `acceptTasks: true` (`docs/AGENT_TASKS.md` §2); the resulting
+Covia task Job is the A2A Task, and its session is the A2A `contextId`. `GetTask`,
 `CancelTask`, `SubscribeToTask` and a `taskId` continuation on the same
 per-agent endpoint reach only the asker's own tasks for that agent; anything
 else is refused alike (`A2A.AGENT_TASK_NOT_FOUND`).
@@ -246,6 +252,13 @@ Adapter-owned state uses `AdapterState`; see
 
 ### Testing
 
+- A test of components working together, or a long-running or
+  timing-dependent one, is an `@IntegrationTest`, off unless
+  `-Dcovia.tests.integration=true` (`BUILD.md`, Tests); a small
+  synchronous test of a helper API stays in the default suite
+- Tests downloading large models require a separate explicit opt-in, never
+  the general integration flag. Speech model tests use
+  `-Dcovia.tests.speech.models=true`; default and QA suites use local fixtures.
 - Use the shared `TestEngine.ENGINE` with per-test DIDs (`TestEngine.uniqueDID`,
   `TestEngine.uniqueManagedDID` for a user the venue hosts)
   — never a fresh Engine per test unless persistence/restart is under test. It
@@ -261,8 +274,11 @@ Adapter-owned state uses `AdapterState`; see
   run: it removes that state in `@AfterAll` or overwrites it
 - Cross-venue tests use the shared `TwoVenueTestServer` (static venues,
   per-test identities) — never spin venues per test
+- That the venue's state survives a restart is tested once, for the whole
+  state (`VenuePersistenceTest`, `docs/PERSISTENCE.md` §7): a feature's tests
+  never re-check it for their own state, and relaunch only to test what start-up does
 - Launching a venue is the expensive part: tell a feature's story as one
-  scenario on one store (a relaunch only when persistence is under test), and
+  scenario on one store, and
   run authority matrices and edge cases on `TestEngine.ENGINE` or a store from
   `TestTemp.etch`. A test class in the default suite takes a second or two at
   most. `TestEngine.ENGINE` is Etch-backed so store machinery such as online
@@ -290,6 +306,9 @@ Adapter-owned state uses `AdapterState`; see
   identity) gets it from `TestTemp.etch` or `TestTemp.etchFile`, never
   `@TempDir` or `EtchStore.createTemp` (`TestTemp` says why); a test server
   names its store, `"memory"` unless persistence is under test
+- Rate-limit wiring tests, which need a venue of their own with limits on,
+  are failsafe `*IT`s (`VenueHTTPRateLimitIT`); the limiter itself is
+  unit-tested on an injected clock (`RateLimiterTest`)
 - A test that opens a release-written store fixture (`src/test/resources/migrations`)
   is a failsafe `*IT`, run by `mvn verify`; migration unit tests build their
   older states in code (`docs/MIGRATE.md`, Testing), and a new venue version or
@@ -317,13 +336,18 @@ java -jar target/covia.jar [config.json]
 
 ## Related Documentation
 
+- `docs/ADMIN.md` — venue-level privileged operations, admin abilities and resources, exceptions and migration; document responsibility map
 - `docs/AUTH.md` — authentication design (#297): method contract, central sessions, assurance policy
 - `docs/ADAPTERS.md` — canonical adapter system, state, lifecycle, authoring, and module contract
+- `docs/adapters/` — the design of single adapters: `PYTHON.md`, the Python adapter's three jobs and its proposed redesign around callables (#716)
 - `docs/CONFIG.md` — operator configuration reference
-- `docs/EMBEDDING.md` — running a venue inside another application: lifecycle and close order, adapters, user data, upgrading from 0.9.x
+- `docs/EMBEDDING.md` — running a venue inside another application: lifecycle and close order, adapters, user data, upgrading from earlier releases
 - `docs/JOBS.md` — job implementation semantics (COG-8 companion)
+- `docs/JOB_EXECUTION.md` — what bounds job execution: scarce resources, not jobs or threads
 - `docs/ERRORS.md` — how the venue raises, types and reports failures, and what each surface tells a caller
 - `docs/UCAN.md` — capabilities, granting surface, proof channels
+- `docs/CAPABILITY_REVIEW.md` — dated capability audit, corrected issuance bypass and remaining policy/documentation decisions; UCAN.md remains the maintained catalog
+- `docs/AUTHORITY.md` — whose authority applies to a request: `authority`, `caller` and `origin` as DIDs, names resolving in the authority's namespace, agents, tokens and callables as narrowing whose authority they act with, admission, what a job records and keeps, sudo and an agent's harness (design)
 - `docs/VENUE_AUTHORITY.md` — raising authority above a principal's base: allowances, activation, and the venue's power over the users it hosts (design)
 - `docs/HELD_KEYS.md` — keyrings of private keys the crypto adapter holds for the identities a venue hosts: store format, use and custody rules
 - `docs/HITL_TOKEN_TRANSPORT.md` — COG-19 design (proposal): HITL transport of
@@ -331,6 +355,8 @@ java -jar target/covia.jar [config.json]
 - `docs/SKILLS.md` — agent skill system
 - `docs/OPERATIONS.md` — operation model, defaults, discovery
 - `docs/PREFERENCES.md` — per-user preferences: storage, the `x/preferences` view, the edit tool's commands and size limit
+- `docs/ACCESS_TOKENS.md` — access tokens: a token request's identity and authority, the capabilities, operations and store, access points, and `/mcp` with a token
+- `docs/CALLABLES.md` — callables: functions a principal publishes that run an operation with its issuer's authority narrowed by caps, admitted by a gate operation; the record, abilities, operations, view, gate input, kept authority, and what a call never holds
 - `docs/MODELS.md` — model definition assets (design): a model is an operation asset at `v/models/<provider>/<id>`
 - `docs/PROJECT.md` — projects (design): a work-breakdown tree at `w/projects/<pid>` where every node has a principal, an assignee, targets, tolerances and PRINCE2-style product descriptions, and the assignee of a node is the principal of its children; the `project` adapter builds, executes and rolls up the tree
 - `docs/GRID_LATTICE_DESIGN.md` — lattice design

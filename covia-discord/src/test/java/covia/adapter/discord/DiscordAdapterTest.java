@@ -43,7 +43,13 @@ import covia.venue.Agent;
 import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
+import covia.test.IntegrationTest;
 
+/**
+ * Discord bots against a venue engine, a fake Discord REST API and a fake
+ * gateway. The module's helpers, called directly, are in {@link DiscordHelpersTest}.
+ */
+@IntegrationTest
 @Execution(ExecutionMode.SAME_THREAD)
 class DiscordAdapterTest {
 	private static final AString OWNER=Strings.create("did:test:discord:owner"),OTHER=Strings.create("did:test:discord:other");
@@ -51,7 +57,7 @@ class DiscordAdapterTest {
 
 	@BeforeAll static void boot() throws Exception {
 		api=new FakeDiscordAPI();gateway=new FakeGatewayHub();
-		AMap<AString,ACell> config=Maps.of(Config.USERS,Maps.of(Config.AUTO_CREATE,true),Config.ADAPTERS,Maps.of("discord",Maps.of(
+		AMap<AString,ACell> config=Maps.of(Config.USERS,Maps.of(Config.AUTO_CREATE,true),Config.ADAPTERS,Maps.of("http",Maps.of("allowedHosts",Vectors.of("127.0.0.1")),"discord",Maps.of(
 			"apiUrl",api.url(),"bots",Maps.of("echo",Maps.of("token","literal-test-token","user",OWNER,"operation","v/test/ops/echo","allow",Vectors.of("alice"))))));
 		engine=Engine.createTemp(config);adapter=new DiscordAdapter();adapter.gatewayFactory=gateway;adapter.retryMillis=50;engine.registerAdapter(adapter);Engine.addDemoAssets(engine);
 		awaitRunning();
@@ -90,16 +96,6 @@ class DiscordAdapterTest {
 		} finally {
 			prepared.close();
 		}
-	}
-
-	@Test void validatesSpecsAndDoesNotLeakToken(){
-		assertThrows(IllegalArgumentException.class,()->BotSpec.parse("x",Maps.of("user",OWNER,"agent","a"),false));
-		assertThrows(IllegalArgumentException.class,()->BotSpec.parse("x",Maps.of("token","t","user",OWNER,"agent","a","operation","o"),false));
-		BotSpec s=BotSpec.parse("x",Maps.of("token","s/DISCORD","user",OWNER,"agent","a","allow",Vectors.of("123","@Alice")),true);
-		assertTrue(s.mentionOnly());assertTrue(s.allows("123",null));assertTrue(s.allows("9","ALICE"));assertFalse(s.allows("9","bob"));assertFalse(s.toString().contains("DISCORD"));
-		DiscordAdapter fresh=new DiscordAdapter();
-		assertThrows(IllegalArgumentException.class,()->fresh.configure(Maps.of("statePath","w/elsewhere"),false));
-		fresh.close();
 	}
 
 	@Test void inboundAccessAndGuildMentionsAreFailClosed() throws Exception {
@@ -142,8 +138,7 @@ class DiscordAdapterTest {
 		assertFailed(OWNER,"v/ops/discord/create",Maps.of("name","bad","token","literal","operation","v/test/ops/echo"));
 		run(OWNER,"v/ops/secret/set",Maps.of("name","DISCORD_CREATED","value","created-token"));
 		run(OWNER,"v/ops/discord/create",Maps.of("name","created","token","s/DISCORD_CREATED","operation","v/test/ops/echo","open",true));
-		for(int i=0;i<100&&!gateway.sinks.containsKey("created-token");i++)Thread.sleep(20);
-		assertTrue(gateway.sinks.containsKey("created-token"));
+		gateway.awaitConnected("created-token");
 		String recordPath=adapter.userStatePath(OWNER,"bots/created");
 		ACell record=adapter.state().read(recordPath);
 		assertNotNull(record);assertEquals(Strings.create("s/DISCORD_CREATED"),RT.getIn(record,"token"));assertEquals(null,RT.getIn(record,"user"));
@@ -153,6 +148,40 @@ class DiscordAdapterTest {
 		ACell deleted=run(OWNER,"v/ops/discord/delete",Maps.of("name","created"));assertEquals(CVMBool.TRUE,RT.getIn(deleted,"deleted"));
 		assertFalse(gateway.sinks.containsKey("created-token"));
 		assertEquals(null,adapter.state().read(recordPath));
+	}
+
+	@Test void disablingClosesEveryGatewayUntilEnabled() throws Exception {
+		run(OWNER,"v/ops/secret/set",Maps.of("name","DISCORD_PAUSED","value","paused-token"));
+		run(OWNER,"v/ops/discord/create",Maps.of("name","paused","token","s/DISCORD_PAUSED","operation","v/test/ops/echo","open",true));
+		gateway.awaitConnected("paused-token");
+		try {
+			engine.disableAdapter(DiscordAdapter.NAME);
+			assertFalse(gateway.sinks.containsKey("literal-test-token"),"the configured bot's gateway closes");
+			assertFalse(gateway.sinks.containsKey("paused-token"),"and so does a runtime bot's");
+			assertNull(adapter.runnerForTest("echo"));
+		} finally {
+			engine.enableAdapter(DiscordAdapter.NAME);
+			awaitRunning();
+		}
+		gateway.awaitConnected("paused-token");
+		gateway.emit(message("5","chan-dm","alice","back again",true,false));
+		assertTrue(take().body().contains("back again"));
+		run(OWNER,"v/ops/discord/delete",Maps.of("name","paused"));
+	}
+
+	@Test void stoppingABotWhileItConnectsDoesNotWaitForTheConnection() throws Exception {
+		gateway.held.add("held-token");
+		BotRunner connecting=new BotRunner(adapter,BotSpec.parse("held",Maps.of("token","held-token","user",OWNER,"operation","v/test/ops/echo","allow",Vectors.of("alice")),false),
+			api.url(),covia.adapter.messaging.MessagingBot.Managed.CONFIG);
+		try {
+			connecting.start();
+			assertEquals("held-token",gateway.holding.poll(10,TimeUnit.SECONDS),"the bot is connecting");
+			java.util.concurrent.CompletableFuture.runAsync(connecting::stop).get(5,TimeUnit.SECONDS);
+			assertTrue(connecting.status().toString().contains("STOPPED"));
+			assertFalse(gateway.sinks.containsKey("held-token"));
+		} finally {
+			gateway.released.countDown();
+		}
 	}
 
 	@Test void localAgentAcceptsAnotherMessageWhileThinking() throws Exception {
@@ -171,7 +200,7 @@ class DiscordAdapterTest {
 		run(OWNER,"v/ops/secret/set",Maps.of("name","DISCORD_AGENT","value","agent-token"));
 		try {
 			run(OWNER,"v/ops/discord/create",Maps.of("name","agent-bot","token","s/DISCORD_AGENT","agent","discord-agent","allow",Vectors.of("alice")));
-			for(int n=0;n<100&&!gateway.sinks.containsKey("agent-token");n++) Thread.sleep(20);
+			gateway.awaitConnected("agent-token");
 			var sink=gateway.sinks.get("agent-token"); assertNotNull(sink);
 			sink.accept(message("first","agent-channel","alice","first input",true,false));
 			assertTrue(entered.await(10,TimeUnit.SECONDS));
@@ -179,8 +208,8 @@ class DiscordAdapterTest {
 			var sid=agent.getSessions().entryAt(0).getKey();
 			sink.accept(message("second","agent-channel","alice","second input",true,false));
 			long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(8);
-			while(!agent.getSessionPending(sid).toString().contains("second input")&&System.nanoTime()<deadline) Thread.sleep(10);
-			assertTrue(agent.getSessionPending(sid).toString().contains("second input"));
+			while(!agent.session(sid).pending().toString().contains("second input")&&System.nanoTime()<deadline) Thread.sleep(10);
+			assertTrue(agent.session(sid).pending().toString().contains("second input"));
 			assertEquals(1,agent.getSessions().count());
 			assertFalse(response.isDone());
 			assertTrue(api.requests.isEmpty());
@@ -201,7 +230,16 @@ class DiscordAdapterTest {
 
 	private static final class FakeGatewayHub implements DiscordGateway.Factory {
 		final ConcurrentHashMap<String,Consumer<InboundMessage>> sinks=new ConcurrentHashMap<>();
-		@Override public DiscordGateway connect(String token,Consumer<InboundMessage> messages){sinks.put(token,messages);return new DiscordGateway(){public String botId(){return "999";}public String username(){return "covia-test";}public void close(){sinks.remove(token,messages);}};}
+		/** Tokens whose connection never becomes ready, as when Discord is unreachable, until {@link #released}. */
+		final java.util.Set<String> held=ConcurrentHashMap.newKeySet();final BlockingQueue<String> holding=new LinkedBlockingQueue<>();final java.util.concurrent.CountDownLatch released=new java.util.concurrent.CountDownLatch(1);
+		@Override public DiscordGateway connect(String token,Consumer<InboundMessage> messages, java.util.function.BiConsumer<String, String> authorize) throws InterruptedException {
+			if(held.contains(token)){holding.add(token);released.await();throw new IllegalStateException("released");}
+			synchronized(this){sinks.put(token,messages);notifyAll();}
+			return new DiscordGateway(){public String botId(){return "999";}public String username(){return "covia-test";}public void close(){sinks.remove(token,messages);}};}
+		synchronized void awaitConnected(String token) throws InterruptedException {
+			long end=System.nanoTime()+TimeUnit.SECONDS.toNanos(10);
+			while(!sinks.containsKey(token)){long left=end-System.nanoTime();if(left<=0)throw new AssertionError(token+" did not connect");TimeUnit.NANOSECONDS.timedWait(this,left);}
+		}
 		void emit(InboundMessage m){Consumer<InboundMessage> s=sinks.get("literal-test-token");if(s==null)throw new AssertionError("not connected");s.accept(m);}
 	}
 	private record Request(String method,String path,String authorization,String body){}

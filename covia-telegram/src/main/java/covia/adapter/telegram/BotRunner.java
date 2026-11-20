@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
@@ -44,6 +45,7 @@ import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
+import convex.core.data.Blob;
 import convex.core.data.Vectors;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
@@ -67,10 +69,10 @@ import covia.exception.FaultException;
 import covia.exception.InvalidDefinitionException;
 import covia.exception.InvalidInputException;
 import covia.exception.JobFailedException;
-import covia.exception.NotSupportedException;
 import covia.exception.ResponseException;
 import covia.exception.StillStartingException;
 import covia.exception.UnavailableException;
+import covia.grid.HexId;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.RequestContext;
@@ -84,9 +86,9 @@ import covia.venue.RequestContext;
  * a dedicated virtual thread. A missing secret or unreachable API parks the
  * runner as {@link State#PENDING} and retries on the adapter's retry
  * schedule, so a bot whose token is provisioned after boot comes up by
- * itself. While the adapter is disabled the loop stops fetching without
- * confirming, so Telegram redelivers on re-enable — the bot is simply
- * offline. {@link #stop()} cancels the in-flight poll and is final.</p>
+ * itself. {@link #stop()} cancels the in-flight {@code getMe} or poll and is final: disabling
+ * the adapter stops every bot, and enabling it starts new ones, to which
+ * Telegram redelivers whatever was left unconfirmed.</p>
  *
  * <p>Inbound messages are serialised per Telegram chat (an agent session
  * accepts one chat at a time) and processed on virtual threads, so a slow
@@ -129,6 +131,8 @@ final class BotRunner implements MessagingBot<BotSpec> {
 	static final String BOT_PENDING = "Telegram bot '%s' is not running (%s); it keeps retrying";
 	/** A Bot API call to a stopped bot; its name follows. */
 	static final String BOT_STOPPED = "Telegram bot '%s' is stopped";
+	/** A call made on a stopped bot's client. */
+	static final String CLIENT_RELEASED = "Telegram bot client released";
 
 	/** Why the bot cannot call the Bot API now. */
 	private UnavailableException notRunning() {
@@ -155,8 +159,10 @@ final class BotRunner implements MessagingBot<BotSpec> {
 	private volatile boolean stopped;
 	private volatile ScheduledFuture<?> retry;
 	private volatile Thread pollThread;
-	/** True once the poll loop has observed that its adapter is disabled. */
-	private volatile boolean offline;
+	/** The client of a start attempt while its {@code getMe} is in flight, for {@link #stop()} to cancel. */
+	private volatile OkHttpClient starting;
+	/** What the poll loop waits on, for a retry or once its adapter is no longer live; {@link #stop()} signals it. */
+	private final Object parked = new Object();
 
 	private final AtomicLong received = new AtomicLong();
 	private final AtomicLong sent = new AtomicLong();
@@ -213,20 +219,32 @@ final class BotRunner implements MessagingBot<BotSpec> {
 		}
 		// Our own client so stop() can cancel the in-flight long poll; the read
 		// timeout must outlast the poll wait or every idle poll is an error.
+		// Cancelling reaches only calls already made, so once stopped the client
+		// refuses new ones: a poll the loop makes just after stop() fails at once
+		// instead of waiting out the long poll.
 		OkHttpClient client = new OkHttpClient.Builder()
 			.followRedirects(false).followSslRedirects(false).retryOnConnectionFailure(false)
 			.connectTimeout(20, TimeUnit.SECONDS)
 			.readTimeout(POLL_TIMEOUT_SECS + 15, TimeUnit.SECONDS)
 			.writeTimeout(30, TimeUnit.SECONDS)
+			.addInterceptor(chain -> {
+				if (stopped) throw new java.io.IOException(CLIENT_RELEASED);
+				adapter.requireOutboundHttp(this, chain.request().method(), chain.request().url().toString());
+				return chain.proceed(chain.request());
+			})
 			.build();
 		TelegramBot candidate = new TelegramBot.Builder(token).apiUrl(apiUrl).okHttpClient(client).build();
 		GetMeResponse me;
+		// stop() cancels this getMe rather than waiting out its timeouts.
+		starting = client;
 		try {
 			me = candidate.execute(new GetMe());
 		} catch (RuntimeException e) {
 			release(candidate, client);
-			pending("Telegram API unreachable: " + concise(e));
+			if (!stopped) pending("Telegram API unreachable: " + concise(e));
 			return;
+		} finally {
+			starting = null;
 		}
 		if (me == null || !me.isOk() || me.user() == null) {
 			release(candidate, client);
@@ -269,7 +287,9 @@ final class BotRunner implements MessagingBot<BotSpec> {
 		} else {
 			log.debug("Telegram bot '{}' still pending: {} (will retry)", spec.name(), why);
 		}
-		retry = adapter.scheduleRetry(this::tryStart, delay);
+		// Each attempt blocks on the network, so it runs on a thread of its own;
+		// the adapter's one retry thread only schedules it.
+		retry = adapter.scheduleRetry(this::start, delay);
 	}
 
 	/** Warn once when an initial problem persists, and again only on a new outage or reason. */
@@ -278,28 +298,43 @@ final class BotRunner implements MessagingBot<BotSpec> {
 			|| !java.util.Objects.equals(previousError, why);
 	}
 
-	@Override public synchronized void stop() {
+	@Override public void stop() {
 		stopped = true;
-		ScheduledFuture<?> r = retry;
-		if (r != null) r.cancel(false);
-		TelegramBot b = bot;
-		OkHttpClient c = http;
-		bot = null;
-		http = null;
-		token = null;
-		if (b != null) release(b, c);
-		// Let the poll thread unwind its cancelled call before the caller (an
-		// unload) closes the module classloader under it.
-		Thread t = pollThread;
-		if (t != null && t != Thread.currentThread()) {
-			try {
-				t.join(5_000);
-			} catch (InterruptedException e) {
-				Thread.currentThread().interrupt();
-			}
+		// A start attempt holds the runner's lock through its getMe: cancel that
+		// call so the attempt ends now. One not yet made is refused, being stopped.
+		OkHttpClient attempt = starting;
+		if (attempt != null) attempt.dispatcher().cancelAll();
+		synchronized (parked) {
+			parked.notifyAll();
 		}
-		state = State.STOPPED;
+		synchronized (this) {
+			ScheduledFuture<?> r = retry;
+			if (r != null) r.cancel(false);
+			TelegramBot b = bot;
+			OkHttpClient c = http;
+			bot = null;
+			http = null;
+			token = null;
+			if (b != null) release(b, c);
+			// The poll thread is not waited for, as it may be held up behind the
+			// caller's own locks; its client refuses every call once stopped.
+			state = State.STOPPED;
+		}
 		log.info("Telegram bot '{}' stopped", spec.name());
+	}
+
+	/**
+	 * Waits up to {@code millis} for a stopped bot's poll thread to finish, so
+	 * an unload does not close the module's classloader under it.
+	 */
+	void awaitPollThread(long millis) {
+		Thread t = pollThread;
+		if (t == null || t == Thread.currentThread() || millis <= 0) return;
+		try {
+			t.join(millis);
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+		}
 	}
 
 	/** Cancel in-flight calls (unblocking the poll loop) and drop the client. */
@@ -358,9 +393,10 @@ final class BotRunner implements MessagingBot<BotSpec> {
 	/**
 	 * The long-poll loop: fetch, dispatch, confirm by advancing the offset.
 	 * Runs until {@link #stop()}. Errors back off (2s doubling to 60s) and are
-	 * logged once per outage. While the adapter is disabled nothing is fetched
-	 * and nothing is confirmed, so Telegram holds the backlog (24h) and
-	 * redelivers when the adapter is enabled again.
+	 * logged once per outage. Once the adapter is no longer live (disabled or
+	 * being replaced) nothing more is handled or confirmed, so Telegram keeps
+	 * the backlog (24h) for the bot that starts next; the engine stops this one
+	 * straight after, and the loop waits for that.
 	 */
 	private void pollLoop() {
 		boolean recover = true;
@@ -370,12 +406,9 @@ final class BotRunner implements MessagingBot<BotSpec> {
 			TelegramBot b = bot;
 			if (b == null) return;
 			if (!adapter.isActive()) {
-				offline = true;
-				recover = true;
-				sleep(1_000);
-				continue;
+				awaitStop();
+				return;
 			}
-			offline = false;
 			try {
 				if (recover) { recoverPending(); recover = false; }
 				if (System.currentTimeMillis() >= nextPrune) {
@@ -390,7 +423,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 				if (stopped) return;
 				if (r == null || !r.isOk()) {
 					pollError(describe(r));
-					sleep(backoff);
+					pause(backoff);
 					backoff = Math.min(backoff * 2, 60_000);
 					continue;
 				}
@@ -401,7 +434,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 				List<Update> updates = r.updates();
 				if (updates == null) continue;
 				for (Update u : updates) {
-					// Went offline mid-batch: leave the rest unconfirmed for redelivery.
+					// No longer live mid-batch: leave the rest unconfirmed for redelivery.
 					if (!adapter.isActive()) break;
 					handle(u); // A failed durable acceptance must leave this update unconfirmed.
 					if (u.updateId() != null) offset = u.updateId() + 1;
@@ -409,21 +442,31 @@ final class BotRunner implements MessagingBot<BotSpec> {
 			} catch (Throwable e) {
 				if (stopped) return;
 				pollError(concise(e));
-				sleep(backoff);
+				pause(backoff);
 				backoff = Math.min(backoff * 2, 60_000);
 			}
 		}
-		offline = false;
 	}
 
-	/** Whether the long-poll loop has parked after observing adapter disablement. */
-	boolean isOffline() {
-		return offline;
+	/** Waits until the bot is stopped; an interrupt ends the wait early. */
+	private void awaitStop() {
+		synchronized (parked) {
+			try {
+				while (!stopped) parked.wait();
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+			}
+		}
 	}
 
 	/** Whether queued intake for one chat has finished (replies may still be pending). */
 	boolean isChatIdle(long chatId) {
 		return conversations.isIdle(Long.toString(chatId));
+	}
+
+	/** Completes when the intake queued so far for one chat has finished (replies may still be pending). */
+	CompletableFuture<Void> whenChatIdle(long chatId) {
+		return conversations.whenIdle(Long.toString(chatId));
 	}
 
 	private void pollError(String why) {
@@ -435,11 +478,14 @@ final class BotRunner implements MessagingBot<BotSpec> {
 		}
 	}
 
-	private static void sleep(long millis) {
-		try {
-			Thread.sleep(millis);
-		} catch (InterruptedException e) {
-			Thread.currentThread().interrupt();
+	/** Waits {@code millis} before polling again, or until the bot is stopped. */
+	private void pause(long millis) {
+		synchronized (parked) {
+			try {
+				if (!stopped) parked.wait(millis);
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+			}
 		}
 	}
 
@@ -539,8 +585,11 @@ final class BotRunner implements MessagingBot<BotSpec> {
 	private void deliverTurn(String id, Update update) {
 		Message m = update.message();
 		try {
-			String refusal = admitted(update) ? conversations.deliveryRefusal(channel(update.message())) : NOT_ADMITTED;
-			if (refusal != null) throw new NotSupportedException(refusal);
+			if (!admitted(update)) throw new AuthException(NOT_ADMITTED);
+			// The check gives only a reason, which may be the sender's or the
+			// agent's authority, or the agent's state; it is recorded by its message
+			String refusal = conversations.deliveryRefusal(channel(update.message()));
+			if (refusal != null) throw new CoviaException(refusal);
 			respondAgent(id, m, messageText(m), true);
 		} catch (RuntimeException failure) {
 			String detail = concise(failure);
@@ -583,7 +632,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 		User from = senderOf(update);
 		Long fromId = from == null ? null : from.id();
 		String fromName = from == null ? null : from.username();
-		if (!admitted(update)) throw new NotSupportedException(NOT_ADMITTED);
+		if (!admitted(update)) throw new AuthException(NOT_ADMITTED);
 		String text = messageText(m);
 		if (!text.isEmpty()) {
 			if (addressedToAnotherBot(text)) return;   // /cmd@otherbot in a group
@@ -894,12 +943,12 @@ final class BotRunner implements MessagingBot<BotSpec> {
 		return fileMetadataRoot + "/" + Strings.create(fileId).getHash().toHexString();
 	}
 
-	/** Automatic intake stores media as the bot's work for its agent. */
+	/** Automatic intake stores media as the bot's own work, writing only its media drive. */
 	AMap<AString, ACell> download(String fileId) {
-		return download(fileId, null, null, conversations.agentContext());
+		return download(fileId, null, null, conversations.intakeContext());
 	}
 
-	/** Explicit destinations use caller authority; automatic intake uses the bot's work for its agent. */
+	/** Explicit destinations use caller authority; automatic intake writes only the bot's media drive. */
 	AMap<AString, ACell> download(String fileId, AString destination, String fileName, RequestContext writeContext) {
 		ACell info = call("getFile", Map.of("file_id", fileId));
 		AString path = RT.ensureString(RT.getIn(info, "file_path"));
@@ -959,12 +1008,13 @@ final class BotRunner implements MessagingBot<BotSpec> {
 			: adapter.userStatePath(spec.userDID(adapter.engine), "sessions/" + spec.name());
 	}
 
-	private String legacySession(String chatId) {
+	/** A session the owner's workspace kept before adapter state, in hex. */
+	private Blob legacySession(String chatId) {
 		if (managed != Managed.RUNTIME) return null;
 		try {
 			AString value = RT.ensureString(adapter.engine.resolvePath(
 				Strings.create(legacySessionsPath(spec.name()) + "/" + chatId), context()));
-			return value == null ? null : value.toString();
+			return HexId.parse(value);
 		} catch (RuntimeException e) {
 			log.debug("Telegram bot '{}': could not migrate persisted session for chat {}: {}", spec.name(), chatId, concise(e));
 			return null;
@@ -1219,6 +1269,8 @@ final class BotRunner implements MessagingBot<BotSpec> {
 			String description = o.has("description") ? o.get("description").getAsString()
 				: (ok ? "" : "HTTP " + response.code());
 			return new ApiResponse(ok, code, description, o.get("result"));
+		} catch (covia.exception.CoviaException e) {
+			throw e;
 		} catch (java.io.IOException | RuntimeException e) {
 			throw new JobFailedException("Telegram " + method + " transport failed");
 		}

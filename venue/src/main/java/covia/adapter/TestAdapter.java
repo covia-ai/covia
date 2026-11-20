@@ -28,12 +28,13 @@ import convex.lattice.cursor.AForkableCursor;
 import convex.lattice.cursor.ATransformCursor;
 import covia.adapter.agent.ContextAssembler;
 import covia.api.Fields;
+import covia.lattice.Covia;
 import covia.exception.AuthException;
 import covia.exception.InvalidInputException;
 import covia.exception.JobFailedException;
 import covia.exception.NotFoundException;
-import covia.exception.NotSupportedException;
 import covia.exception.UnavailableException;
+import covia.exception.UnsupportedException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.Agent;
@@ -42,9 +43,24 @@ import covia.venue.AdapterState;
 import covia.venue.api.A2ACodec;
 import covia.venue.migration.MigrationStep;
 
-public class TestAdapter extends AAdapter {
-	
+public class TestAdapter extends AAdapter implements covia.adapter.token.TokenAccessPoint {
+
 	public static final Logger log=LoggerFactory.getLogger(TestAdapter.class);
+
+	/** Why a token's {@code access.test} entry is refused: it is not an object. */
+	public static final String TOKEN_ENTRY_INVALID = "access.test must be an object";
+
+	/**
+	 * An access point for testing access tokens beside MCP: a token's
+	 * {@code access.test} entry is any object, kept as it is. No route accepts
+	 * tokens here, so it only shows how the token rules treat a second access point.
+	 */
+	@Override
+	public AMap<AString, ACell> tokenEntry(RequestContext ctx, ACell requested) {
+		AMap<AString, ACell> entry = RT.ensureMap(requested);
+		if (entry == null) throw new covia.exception.InvalidInputException(TOKEN_ENTRY_INVALID);
+		return entry;
+	}
 
 	/** Shared body used by the skill-adoption test fixture and its mock LLM. */
 	public static final String SKILL_LLM_BODY = "Use covia_read on w/probe.";
@@ -79,9 +95,9 @@ public class TestAdapter extends AAdapter {
 
 	/**
 	 * Version 1 is version 0's shape, {@code users/<did>/scratch}, unchanged.
-	 * Versions 2 and 3 are synthetic, so every venue and the release-written
-	 * fixtures run real steps in order at start-up. State first written at
-	 * version 3 has no log.
+	 * Versions 2 and 3 are synthetic, so venues and the release-written
+	 * fixtures from before version 3 run real steps in order at start-up.
+	 * State first written at version 3 has no log.
 	 */
 	private static final List<MigrationStep> STATE_STEPS = List.of(
 		state -> state,		// 0 → 1
@@ -111,15 +127,15 @@ public class TestAdapter extends AAdapter {
 	}
 
 	/** A small connected view: diagnostics are computed, only scratch is persisted. */
-	@Override public AForkableCursor<ACell> latticeView(RequestContext ctx) {
+	@Override public AForkableCursor<ACell> latticeView(AString owner, RequestContext ctx) {
 		RequestContext.ExecutionScope scope = ctx.getExecutionScope();
 		AMap<AString, ACell> context = Maps.of(
-			Fields.CALLER, ctx.getCallerDID(), K_USER, ctx.getUserDID(), K_VENUE, engine.getDIDString(),
+			Fields.CALLER, ctx.getAuthorityDID(), K_USER, owner, K_VENUE, engine.getDIDString(),
 			K_EXECUTION, Maps.of("owner", scope.ownerDID(), Fields.AGENT_ID, scope.agentId(),
 				Fields.SESSION_ID, scope.sessionId(), Fields.JOB_ID, scope.jobId(), Fields.TASK_ID, scope.taskId()));
 		// The diagnostics are computed, so the view has a value before any scratch is stored.
-		AForkableCursor<ACell> scratch = adapterState(ctx.getUserDID()).cursor().withDefault(Maps.empty())
-			.path(K_USERS).withDefault(Maps.empty()).path(ctx.getUserDID()).withDefault(Maps.empty());
+		AForkableCursor<ACell> scratch = Covia.<ACell>entry(Covia.entry(adapterState(owner).cursor(), K_USERS), owner)
+			.withDefault(Maps.empty());
 		return new ATransformCursor<ACell, ACell>(scratch) {
 			@Override protected ACell view(ACell stored) {
 				AMap<AString, ACell> result = Maps.of(K_CONTEXT, context, K_SAMPLES, SAMPLES);
@@ -135,7 +151,7 @@ public class TestAdapter extends AAdapter {
 		};
 	}
 
-	@Override public String latticeWriteDenial(RequestContext ctx, convex.core.data.Path path) {
+	@Override public String latticeWriteDenial(AString owner, RequestContext ctx, convex.core.data.Path path) {
 		// Replacing/deleting the view root could otherwise bypass read-only children.
 		return !path.isEmpty() && K_SCRATCH.equals(path.get(0)) ? null : SCRATCH_ONLY;
 	}
@@ -150,7 +166,9 @@ public class TestAdapter extends AAdapter {
      * ({@code ctx.getUserDID()}) — for an agent transition, its owner. Lets tests
      * assert deterministically which identity / namespace / proofs / caps a
      * transition actually ran with — including that two same-named agents owned
-     * by different users run under their own identities (see #91).
+     * by different users run under their own identities (see #91). The
+     * {@code capturectxread} op records the same way and is read-only, so a
+     * context load may call it.
      */
     public static final java.util.concurrent.ConcurrentHashMap<AString, RequestContext> CAPTURED_CTX
         = new java.util.concurrent.ConcurrentHashMap<>();
@@ -232,6 +250,7 @@ public class TestAdapter extends AAdapter {
                 case "echo":
                     return CompletableFuture.completedFuture(handleEcho(input));
                 case "capturectx":
+                case "capturectxread":
                     return CompletableFuture.completedFuture(handleCaptureCtx(ctx, input));
                 case "taskcomplete":
                     return CompletableFuture.completedFuture(handleTaskComplete(ctx, input));
@@ -320,7 +339,7 @@ public class TestAdapter extends AAdapter {
                     );
                 default:
                     return CompletableFuture.failedFuture(
-                        new NotSupportedException("Unknown test operation: " + testOp)
+                        new UnsupportedException("Unknown test operation: " + testOp)
                     );
             }
         } catch (Exception e) {
@@ -336,6 +355,7 @@ public class TestAdapter extends AAdapter {
 			installTestAsset("random",       BASE+"randomop.json");
 			installTestAsset("echo",         BASE+"echoop.json");
 			installTestAsset("capturectx",   BASE+"capturectxop.json");
+			installTestAsset("capturectxread", BASE+"capturectxreadop.json");
 			installTestAsset("llm",          BASE+"testllm.json");
 			installTestAsset("toolllm",      BASE+"testtoolllm.json");
 			installTestAsset("skillllm",     BASE+"testskillllm.json");
@@ -602,19 +622,22 @@ public class TestAdapter extends AAdapter {
      * completes the task with that answer.
      */
     private ACell handleAskHuman(RequestContext ctx, ACell input) {
+        // The agent asks and completes its task itself, as a model's tool calls
+        // do: the harness is its controller's frame (Engine.stepContext)
+        RequestContext agent = engine.stepContext(ctx, RT.ensureString(RT.getIn(input, Fields.AGENT_ID)));
         AVector<ACell> inbox = RT.ensureVector(RT.getIn(input, Fields.SESSION, Agent.KEY_PENDING));
-        ACell answer = (ctx.getTaskRevision() > 0) ? RT.getIn(input, Fields.NEW_INPUT)
+        ACell answer = (agent.getTaskRevision() > 0) ? RT.getIn(input, Fields.NEW_INPUT)
             : (inbox != null && inbox.count() > 0) ? RT.getIn(inbox.get(inbox.count() - 1), Fields.MESSAGE) : null;
         if (answer != null) {
-            if (ctx.getTaskId() != null) {
+            if (agent.getTaskId() != null) {
                 engine.jobs().invokeInternal("v/ops/agent/complete-task",
-                    Maps.of(Fields.RESULT, answer), ctx).join();
+                    Maps.of(Fields.RESULT, answer), agent).join();
             }
             return Maps.of(Fields.RESPONSE, Strings.create("answered"));
         }
         engine.jobs().invokeOperation("v/ops/hitl/request", Maps.of(
             "title", "Need a decision",
-            "asks", Vectors.of(Maps.of("id", "next", "type", "text", "prompt", "What next?"))), ctx);
+            "asks", Vectors.of(Maps.of("id", "next", "type", "text", "prompt", "What next?"))), agent);
         return Maps.of(Fields.RESPONSE, Strings.create("asked"));
     }
 
@@ -1827,7 +1850,8 @@ public class TestAdapter extends AAdapter {
      * agent run loop's failure rules (AGENT_LOOP.md §3.4): {@code setup}
      * ({@code ConfigurationException}), {@code unavailable}, {@code value} (a
      * failure value), {@code content} ({@code InvalidInputException}),
-     * {@code bug} ({@code IllegalStateException}) or {@code long-setup} (as
+     * {@code bug} ({@code IllegalStateException}), {@code integrity} (an
+     * {@code IntegrityException} not yet logged) or {@code long-setup} (as
      * {@code setup}, saying {@link #FAILLLM_LONG}). A {@code :<gate>} suffix
      * waits at that {@link TestGate} first, so a test can queue more work
      * while the cycle is held. Any other model replies with text.
@@ -1848,6 +1872,7 @@ public class TestAdapter extends AAdapter {
                 case "value" -> Status.failure(reason);
                 case "content" -> throw new InvalidInputException(reason);
                 case "bug" -> throw new IllegalStateException(reason);
+                case "integrity" -> throw new covia.exception.IntegrityException(reason);
                 case "long-setup" -> throw new covia.exception.ConfigurationException(FAILLLM_LONG);
                 default -> Maps.of("role", Strings.create("assistant"), "content", Strings.create("ok"));
             };

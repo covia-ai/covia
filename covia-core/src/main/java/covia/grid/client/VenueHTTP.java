@@ -35,8 +35,8 @@ import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.api.Fields;
+import covia.exception.InvalidStateException;
 import covia.exception.NotFoundException;
-import covia.exception.NotSupportedException;
 import covia.exception.RateLimitException;
 import covia.exception.ResponseException;
 import covia.grid.AContent;
@@ -87,6 +87,13 @@ public class VenueHTTP extends Venue {
 
 	private long timeout=DEFAULT_TIMEOUT;
 	private final HttpClient httpClient;
+	private java.util.function.Consumer<HttpRequest> requestAuthorizer = request -> {};
+
+	/** Installs the embedding runtime's per-send authorization, including retries.
+	 * Set before using this connection; pooling the transport does not pool rights. */
+	public void setRequestAuthorizer(java.util.function.Consumer<HttpRequest> authorizer) {
+		this.requestAuthorizer = java.util.Objects.requireNonNull(authorizer);
+	}
 	private final URI baseURI;
 	private final VenueAuth auth;
 	/** The DID this connection was opened for, or null when opened by URL alone. */
@@ -200,7 +207,7 @@ public class VenueHTTP extends Venue {
 	public String venueDID() {
 		String did = venueDID;
 		if (did == null) {
-			did = VenueDID.establish(baseURI, expectedDID);
+			did = VenueDID.establish(baseURI, expectedDID, requestAuthorizer);
 			venueDID = did;
 		}
 		return did;
@@ -227,6 +234,9 @@ public class VenueHTTP extends Venue {
 	 * inside a JWT, so the encoding is unambiguous.
 	 */
 	public static final String UCANS_HEADER = "X-Covia-Ucans";
+
+	/** A job the venue does not report: the job's id follows. */
+	public static final String JOB_NOT_FOUND = "Job not found: ";
 
 	private HttpRequest.Builder requestBuilder(URI uri) {
 		HttpRequest.Builder builder = HttpRequest.newBuilder().uri(uri);
@@ -260,6 +270,9 @@ public class VenueHTTP extends Venue {
 	 * @return Pre-authenticated request builder
 	 */
 	private HttpRequest.Builder requestBuilder(String path) {
+		if (path.startsWith("jobs/") && getJobOwner() != null)
+			path += (path.contains("?") ? "&" : "?") + "owner="
+				+ java.net.URLEncoder.encode(getJobOwner().toString(), java.nio.charset.StandardCharsets.UTF_8);
 		return requestBuilder(getBaseURI().resolve(path));
 	}
 
@@ -319,6 +332,8 @@ public class VenueHTTP extends Venue {
 	 */
 	private <T> CompletableFuture<HttpResponse<T>> dispatchAttempt(
 			HttpRequest req, HttpResponse.BodyHandler<T> handler, int attempt, long deadline) {
+		try { requestAuthorizer.accept(req); }
+		catch (RuntimeException e) { return CompletableFuture.failedFuture(e); }
 		return httpClient.sendAsync(req, handler).exceptionallyCompose(ex -> {
 			Throwable cause = (ex instanceof java.util.concurrent.CompletionException && ex.getCause() != null)
 				? ex.getCause() : ex;
@@ -366,7 +381,10 @@ public class VenueHTTP extends Venue {
 		Semaphore p = requestPermits;
 		if (p != null) p.acquire();
 		try {
-			return retrying(() -> httpClient.send(req, HttpResponse.BodyHandlers.ofString()));
+			return retrying(() -> {
+				requestAuthorizer.accept(req);
+				return httpClient.send(req, HttpResponse.BodyHandlers.ofString());
+			});
 		} finally {
 			if (p != null) p.release();
 		}
@@ -516,7 +534,7 @@ public class VenueHTTP extends Venue {
 	public CompletableFuture<Job> getJob(Blob jobId) {
 		return getJobData(jobId).thenApply(status -> {
 			if (status == null) {
-				throw new IllegalArgumentException("Job not found: " + jobId.toHexString());
+				throw new NotFoundException(JOB_NOT_FOUND + jobId, jobId.toHexString());
 			}
 			return Job.create(status);
 		});
@@ -526,7 +544,7 @@ public class VenueHTTP extends Venue {
 	public CompletableFuture<AMap<AString, ACell>> getJobStatus(Blob jobId) {
 		return getJobData(jobId).thenApply(status -> {
 			if (status == null) {
-				throw new IllegalArgumentException("Job not found: " + jobId.toHexString());
+				throw new NotFoundException(JOB_NOT_FOUND + jobId, jobId.toHexString());
 			}
 			return status;
 		});
@@ -1121,7 +1139,7 @@ public class VenueHTTP extends Venue {
 	/**
 	 * Pauses a running job on the connected venue
 	 * @param jobId The job ID to pause
-	 * @return Future containing the updated job status
+	 * @return Future containing the control acknowledgement
 	 */
 	public CompletableFuture<AMap<AString,ACell>> pauseJob(String jobId) {
 		HttpRequest req = requestBuilder("jobs/" + jobId + "/pause")
@@ -1143,7 +1161,7 @@ public class VenueHTTP extends Venue {
 	/**
 	 * Resumes a paused job on the connected venue
 	 * @param jobId The job ID to resume
-	 * @return Future containing the updated job status
+	 * @return Future containing the control acknowledgement
 	 */
 	public CompletableFuture<AMap<AString,ACell>> resumeJob(String jobId) {
 		HttpRequest req = requestBuilder("jobs/" + jobId + "/resume")
@@ -1421,9 +1439,9 @@ public class VenueHTTP extends Venue {
 			if (code == 404) {
 				throw new NotFoundException("Job not found: " + jobId, jobId);
 			} else if (code == 409) {
-				throw new NotSupportedException("Job is in terminal state: " + jobId);
+				throw new InvalidStateException("Job is in terminal state: " + jobId);
 			}
-			throw new ResponseException("Failed to send message: HTTP " + code);
+			throw new ResponseException("Failed to send message: HTTP " + code, response);
 		} catch (IOException | InterruptedException e) {
 			throw new ResponseException("Failed to send message to job " + jobId, e);
 		}

@@ -66,12 +66,12 @@ public class AgentMergeTest {
 	@Test
 	public void mergeRunResultAppliesTheChangeInsideTheRecordCas() {
 		AString did = TestEngine.uniqueDID("state-merge-seam");
-		Agent agent = TestEngine.ENGINE.getVenueState().users().ensure(did)
-			.ensureAgent(Strings.create("merge-seam"), Maps.empty(), Maps.of("a", 1, "b", 1));
+		Agent agent = TestAgents.ensure(TestEngine.ENGINE.getVenueState().users().ensure(did),
+			Strings.create("merge-seam"), Maps.empty(), Maps.of("a", 1, "b", 1));
 		ACell snapshot = agent.getState();               // what the transition fired with
 
 		// agent:update lands while the transition runs
-		agent.updateConfigAndState(null, Maps.of("b", 2, "external", 7));
+		agent.update(null, null, null, Maps.of("b", 2, "external", 7));
 
 		// the transition returns its own view: a changed, b as it saw it
 		agent.mergeRunResult(snapshot, Maps.of("a", 9, "b", 1), null,

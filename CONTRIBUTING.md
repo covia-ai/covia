@@ -18,7 +18,7 @@ We don't have a formal code of conduct. We expect **professional, good-faith beh
 
 ## Prerequisites
 
-- **Java 21+** (JDK)
+- **Java 21 to 24, or 25.0.3 and later**
 - **Maven 3.7+** (enforced by `maven-enforcer-plugin`)
 - **Git**
 - For the documentation sites: **Node.js 18+** and **pnpm**
@@ -93,6 +93,11 @@ Covia aims to be **LLM-friendly** — a contributor using Claude Code, Codex, or
 
 - **`AGENTS.md`** at the repo root is written for coding assistants and humans alike — point your tool at it.
 - **Skills** in `skills/` (`/venue-setup`, `/grid-test`, `/agent`, `/ap-demo`, …) automate common workflows. They're exposed to Claude Code via a `.claude/skills` junction you create once per checkout — see the *Skills* section of `AGENTS.md`.
+
+## Maintainer follow-up
+
+- [ ] Document maintainership and how project decisions are made.
+- [ ] Confirm `security@covia.ai` is monitored; GitHub private vulnerability reporting is enabled.
 
 ## Getting help
 

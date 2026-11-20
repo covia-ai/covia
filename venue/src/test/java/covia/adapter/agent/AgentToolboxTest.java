@@ -387,6 +387,7 @@ public class AgentToolboxTest {
 					Fields.OPERATION, runtime.operation(),
 					"caps", "unrestricted",
 					"llmOperation", "v/test/ops/compactllm",
+					COMPACT_KEEP, 0L,
 					Fields.TOOLS, Vectors.of(
 						Strings.create(HarnessTools.COMPACT), Strings.create("v/test/ops/echo")))),
 				user).awaitResult(5000);
@@ -398,9 +399,9 @@ public class AgentToolboxTest {
 
 			ACell chat = engine.jobs().invokeOperation("v/ops/agent/chat",
 				Maps.of(Fields.AGENT_ID, id, Fields.MESSAGE, "compact this"), user).awaitResult(10000);
-			Blob sid = Blob.fromHex(RT.getIn(chat, Fields.SESSION_ID).toString());
+			Blob sid = (Blob) RT.getIn(chat, Fields.SESSION_ID);
 			AMap<AString, ACell> root = RT.ensureMap(RT.getIn(engine.getVenueState().users().user(userDid)
-				.agent(id).getSession(sid), Fields.FRAMES, CVMLong.ZERO));
+				.agent(id).session(sid).getRecord(), Fields.FRAMES, CVMLong.ZERO));
 			ACell live = archivedToolResult(GoalTreeContext.archivedConversation(root), "call_c1");
 			assertNotNull(live, runtime.name() + " live cycle did not record compact: " + root);
 			assertEquals(live, result(stepped, "call_c1"), runtime.name());
@@ -432,7 +433,7 @@ public class AgentToolboxTest {
 			AMap<AString, ACell> step = step(agent, "call a tool that does not exist",
 				assistantCall("call_unknown", "records_read", Maps.empty()), null);
 			assertEquals(Strings.create("Error: " + HarnessTools.noSuchTool("records_read",
-				Set.of(TaskTools.COMPLETE, TaskTools.FAIL, TaskTools.PARK, "test_echo"))),
+				Set.of("test_echo"))),
 				result(step, "call_unknown"), runtime.name());
 		}
 	}
@@ -484,6 +485,7 @@ public class AgentToolboxTest {
 			"every goal-tree-specific harness tool needs a valid-reply behavioural case");
 	}
 
+	/** Compaction here keeps no exchange, so one exchange is enough to compact. */
 	private AMap<AString, ACell> sharedConfig(AgentRuntime runtime) {
 		return Maps.of(
 			Fields.OPERATION, runtime.operation(),
@@ -491,7 +493,40 @@ public class AgentToolboxTest {
 			Fields.TOOLS, sharedTools(),
 			"skillsets", Vectors.of(Strings.create(SKILLSET)),
 			Fields.LOADS, Maps.of(PINNED_PATH,
-				Maps.of("budget", 500L, "label", "Pinned toolbox context")));
+				Maps.of("budget", 500L, "label", "Pinned toolbox context")),
+			COMPACT_KEEP, 0L);
+	}
+
+	private static final AString COMPACT_KEEP = AbstractLLMAdapter.K_COMPACT_KEEP;
+
+	/** compact keeps the agent's last compactKeep exchanges, the one in progress
+	 *  among them, and compacts nothing while the conversation is no longer. */
+	@Test
+	public void compactKeepsTheExchangeInProgress() {
+		String replaced = "establish deterministic session";
+		for (AgentRuntime runtime : RUNTIMES) {
+			String where = runtime.name();
+			RunningAgent keepOne = start(runtime, where + "-keep-one",
+				sharedConfig(runtime).assoc(COMPACT_KEEP, CVMLong.ONE));
+			AMap<AString, ACell> stepped = step(keepOne, "KEEP_THIS_REQUEST",
+				assistantCall("call_keep", HarnessTools.COMPACT, Maps.of("summary", "KEEP_SUMMARY")), null);
+			String reply = String.valueOf(result(stepped, "call_keep"));
+			String[] expected = FrameTools.COMPACTED_KEEPING.split("%d");
+			assertTrue(reply.startsWith(expected[0]) && reply.endsWith(expected[2]), where + ": " + reply);
+			String next = messages(stepped).toString();
+			assertTrue(next.contains("KEEP_SUMMARY"), where + " summary missing: " + next);
+			assertTrue(next.contains("KEEP_THIS_REQUEST"), where + " lost the request in progress: " + next);
+			assertFalse(next.contains(replaced), where + " kept the replaced exchange: " + next);
+
+			RunningAgent byDefault = start(runtime, where + "-keep-default",
+				sharedConfig(runtime).dissoc(COMPACT_KEEP));
+			AMap<AString, ACell> untouched = step(byDefault, "second",
+				assistantCall("call_none", HarnessTools.COMPACT, Maps.of("summary", "UNUSED_SUMMARY")), null);
+			assertEquals(Strings.create(FrameTools.NOT_COMPACTED.formatted(GoalTreeContext.DEFAULT_COMPACT_KEEP)),
+				result(untouched, "call_none"), where);
+			String unchanged = messages(untouched).toString();
+			assertTrue(unchanged.contains(replaced), where + " compacted an exchange it keeps: " + unchanged);
+		}
 	}
 
 	private static AVector<ACell> sharedTools() {

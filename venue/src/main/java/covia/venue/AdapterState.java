@@ -13,7 +13,7 @@ import convex.core.lang.RT;
 import convex.lattice.ALatticeComponent;
 import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
-import convex.lattice.cursor.AUpdateCursor;
+import convex.lattice.cursor.ATransformCursor;
 import covia.lattice.Covia;
 import covia.lattice.CoviaPath;
 import covia.lattice.ValuePath;
@@ -45,8 +45,6 @@ public final class AdapterState extends ALatticeComponent<ACell>
 		return new AdapterState(context, cursor, name, owner, generation);
 	}
 
-	@Override public AdapterState withCursor(AForkableCursor<ACell> cursor) { return rebind(cursor); }
-
 	static void validateName(String name) {
 		if (name == null || !ADAPTER_NAME.matcher(name).matches()) {
 			throw new IllegalArgumentException("Adapter name must match [a-z][a-z0-9-]*: " + name);
@@ -67,17 +65,27 @@ public final class AdapterState extends ALatticeComponent<ACell>
 	private static AdapterState bind(VenueState venue, String name, AString owner, ACell generation) {
 		AForkableCursor<ACell> base = venue.cursor();
 		if (owner != null) {
-			base = new AUpdateCursor<ACell, ACell>(base) {
+			base = new ATransformCursor<ACell, ACell>(base) {
 				@Override protected ACell view(ACell value) {
 					Users.requireCurrent(RT.getIn(value, Covia.USER_DATA, owner), generation);
 					return value;
 				}
-				@Override protected ACell prepareWrite(ACell value) { return value; }
+				@Override protected ACell write(ACell current, ACell value) { return value; }
 			};
 			base.getOrDefault(null); // reject a tombstoned owner before handing out the view
 		}
-		return new AdapterState(venue.getContext(),
-			base.path(Covia.ADAPTERS).withDefault(Maps.empty()).path(Strings.create(name)), name, owner, generation);
+		AForkableCursor<ACell> state = Covia.entry(VenueState.level(base, Covia.ADAPTERS), Strings.create(name));
+		return new AdapterState(venue.getContext(), state, name, owner, generation);
+	}
+
+	/**
+	 * This state as it reads with {@code empty} in place of nothing stored. A
+	 * transaction needs a value to start from, so an adapter gives its empty
+	 * state this way to transact on state that may be new; writing back
+	 * {@code empty} unchanged stores nothing.
+	 */
+	public AdapterState withDefault(ACell empty) {
+		return rebind(cursor().withDefault(empty));
 	}
 
 	public VenueContext getContext() { return context; }

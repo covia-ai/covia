@@ -33,8 +33,9 @@ the component review below on the experimental lattice branch.
 
 ### Experimental component consolidation
 
-Session record operations now belong to `Session`: frames, pending input,
-summaries, external turns and cycle completion. `Agent` owns admission and
+Session record operations belong to `Session`: frames, pending input,
+summaries, external turns, wake time and cycle completion; creating, removing
+and finding sessions belong to `Sessions`. `Agent` owns admission and
 composes child edits with tasks, status and timeline through upstream transactions.
 Record formats remain unchanged. Tests cover failed-completion rollback, retained
 draft isolation, concurrent deletion and summary admission after a concurrent stop.
@@ -44,7 +45,7 @@ Recorded jobs now use `user.jobs().job(id)` (`JobRecord`) as their primary recor
 its hooks run after the lattice update. Admission creates the row explicitly,
 and updates cannot recreate it. History appends share one path for active and
 completed jobs, fixing both reproduced history-loss cases. `JobManager` retains
-execution, recovery, permits and dispatch. Futures, original outputs, typed
+execution, recovery and dispatch. Futures, original outputs, typed
 failures and subscriptions remain runtime state. Transient/client records stay
 local, and erased handles may finish detached without restoring storage.
 

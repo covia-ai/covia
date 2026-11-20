@@ -21,7 +21,7 @@ import covia.lattice.CoviaValue;
 
 /**
  * One HITL request in a user's {@link Inbox} (COG-16): what is asked, of whom,
- * and how it was resolved. Its id is the hex id of the job that carries it.
+ * and how it was resolved. Its id is the id of the job that carries it.
  *
  * <p>A request is open until it is resolved, once: answered, rejected, expired
  * or cancelled ({@link #resolve}). Its record reads as stored, and nothing
@@ -36,9 +36,9 @@ public final class HitlRequest extends ALatticeComponent<AMap<AString, ACell>>
 	private static final Set<AString> RESOLUTIONS =
 		Set.of(Hitl.ANSWERED, Hitl.REJECTED, Hitl.EXPIRED, Hitl.CANCELLED);
 
-	private final AString id;
+	private final Blob id;
 
-	HitlRequest(AForkableCursor<AMap<AString, ACell>> cursor, AString id) {
+	HitlRequest(AForkableCursor<AMap<AString, ACell>> cursor, Blob id) {
 		super(cursor);
 		this.id = id;
 	}
@@ -48,13 +48,8 @@ public final class HitlRequest extends ALatticeComponent<AMap<AString, ACell>>
 		return new HitlRequest(cursor, id);
 	}
 
-	@Override
-	public HitlRequest withCursor(AForkableCursor<AMap<AString, ACell>> cursor) {
-		return rebind(cursor);
-	}
-
-	/** The request's id: the hex id of the job that carries it. */
-	public AString getID() {
+	/** The request's id: the id of the job that carries it. */
+	public Blob getID() {
 		return id;
 	}
 
@@ -90,14 +85,14 @@ public final class HitlRequest extends ALatticeComponent<AMap<AString, ACell>>
 	 */
 	public boolean resolve(AString status, AMap<AString, ACell> response) {
 		if (!RESOLUTIONS.contains(status)) throw new IllegalArgumentException(NOT_A_RESOLUTION + status);
-		return transact(draft -> {
+		return Records.ifPresent(this, () -> transact(draft -> {
 			AMap<AString, ACell> record = draft.getRecord();
 			if (record == null || !Hitl.OPEN.equals(record.get(Hitl.STATUS))) return false;
 			AMap<AString, ACell> resolved = record.assoc(Hitl.STATUS, status);
 			if (response != null) resolved = resolved.assoc(Hitl.RESPONSE, response);
 			draft.cursor().set(resolved);
 			return true;
-		});
+		}), false);
 	}
 
 	/** The fields below the request read as stored. */
@@ -109,31 +104,33 @@ public final class HitlRequest extends ALatticeComponent<AMap<AString, ACell>>
 	/**
 	 * A new open request's record.
 	 *
-	 * @param id The id of the job that carries it, in hex
+	 * @param id The id of the job that carries it
 	 * @param caller Who asked: the verified acting principal
-	 * @param owner Whose request it is, recorded only when not the caller
+	 * @param target Whose inbox keeps the request: the caller is left out when it is the target
 	 * @param agentId The asking agent, or null
 	 * @param sessionId The asking agent's session, or null
+	 * @param route What carried the request, or null when nothing did: venue-internal, as an agent turn's
+	 *        route is ({@link covia.venue.RequestContext#getRoute})
 	 * @param title What is asked, in a line
 	 * @param description More about it, or null
 	 * @param asks The validated asks
 	 * @param created When it was made, in ms
 	 * @param expires When it expires, in ms, or null for never
 	 */
-	public static AMap<AString, ACell> record(AString id, AString caller, AString owner, AString agentId,
-			Blob sessionId, AString title, AString description, AVector<ACell> asks, long created, Long expires) {
+	public static AMap<AString, ACell> record(Blob id, AString caller, AString target, AString agentId,
+			Blob sessionId, AVector<ACell> route, AString title, AString description, AVector<ACell> asks, long created,
+			Long expires) {
 		AMap<AString, ACell> record = Attribution.attribute(Maps.of(
 			Hitl.ID, id,
 			Hitl.TITLE, title,
 			Hitl.ASKS, asks,
 			Hitl.STATUS, Hitl.OPEN,
-			Hitl.CREATED, CVMLong.create(created)), caller, owner);
+			Hitl.CREATED, CVMLong.create(created)), caller, target);
 		if (description != null) record = record.assoc(Hitl.DESCRIPTION, description);
+		if (route != null) record = record.assoc(Fields.ROUTE, route);
 		if (agentId != null) {
 			record = record.assoc(Hitl.AGENT, agentId);
-			if (sessionId != null) {
-				record = record.assoc(Fields.SESSION_ID, Strings.create(sessionId.toHexString()));
-			}
+			if (sessionId != null) record = record.assoc(Fields.SESSION_ID, sessionId);
 		}
 		if (expires != null) record = record.assoc(Hitl.EXPIRES, CVMLong.create(expires));
 		return record;

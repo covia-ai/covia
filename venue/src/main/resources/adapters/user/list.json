@@ -1,6 +1,6 @@
 {
   "name": "List users",
-  "description": "Lists users registered at this venue. Requires venue user-read authority.",
+  "description": "Lists users registered at this venue. Requires admin/user/read on <venueDID>/users.",
   "operation": {
     "adapter": "user:list",
     "readOnly": true,

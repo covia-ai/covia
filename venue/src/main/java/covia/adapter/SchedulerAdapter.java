@@ -14,7 +14,7 @@ import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.exception.InvalidInputException;
-import covia.exception.NotSupportedException;
+import covia.exception.UnsupportedException;
 import covia.venue.RequestContext;
 import covia.venue.Scheduler;
 
@@ -48,7 +48,7 @@ public class SchedulerAdapter extends AAdapter {
 
 	@Override
 	public String getName() {
-		return "scheduler";
+		return covia.venue.Scheduler.NAME;
 	}
 
 	@Override
@@ -71,7 +71,7 @@ public class SchedulerAdapter extends AAdapter {
 
 	@Override
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
-		if (ctx.getCallerDID() == null) {
+		if (ctx.getAuthorityDID() == null) {
 			return CompletableFuture.failedFuture(
 				new AuthException("Scheduler operations require an authenticated caller"));
 		}
@@ -88,7 +88,7 @@ public class SchedulerAdapter extends AAdapter {
 					return handleTrigger(ctx, input);
 				default:
 					return CompletableFuture.failedFuture(
-						new NotSupportedException("Unknown scheduler operation: " + op));
+						new UnsupportedException("Unknown scheduler operation: " + op));
 			}
 		} catch (Exception e) {
 			return CompletableFuture.failedFuture(e);

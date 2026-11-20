@@ -180,8 +180,7 @@ class DrivenClockTest {
 
 		Job asked = engine.jobs().invokeOperation("v/ops/hitl/request",
 			Hitl.request("check").ask(Hitl.text("a", "Anything?")).timeout(3600).build(), ctx);
-		AString id = Strings.create(asked.getID().toHexString());
-		AMap<AString, ACell> record = engine.getVenueState().users().user(ctx.getUserDID()).inbox().get(id);
+		AMap<AString, ACell> record = engine.getVenueState().users().user(ctx.getUserDID()).inbox().get(asked.getID());
 		assertEquals(now, time(record, Hitl.CREATED));
 		assertEquals(now + 3_600_000, time(record, Hitl.EXPIRES), "a request expires by the venue's clock");
 	}

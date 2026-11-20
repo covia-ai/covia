@@ -4,7 +4,7 @@
 	<modelVersion>4.0.0</modelVersion>
 	<groupId>ai.covia</groupId>
 	<artifactId>covia</artifactId>
-	<version>0.11.0</version>
+	<version>0.12.0</version>
 	<packaging>pom</packaging>
 
 	<name>Covia</name>
@@ -44,19 +44,19 @@
 		<maven.compiler.release>21</maven.compiler.release>
 		<maven.compiler.source>21</maven.compiler.source>
 		<junit.version>6.1.3</junit.version>
-		<convex.version>0.8.19</convex.version>
+		<convex.version>0.8.20</convex.version>
 		<maven.compiler.target>21</maven.compiler.target>
 		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 		
 		<logback.version>1.6.6</logback.version>
 		<slf4j.version>2.0.20</slf4j.version>
 		<javalin.version>7.2.4</javalin.version>
-		<langchain.version>1.22.0</langchain.version>
+		<langchain.version>1.23.0</langchain.version>
 		<mcp.version>2.1.0</mcp.version>
-		<a2a.version>1.4.0.Final</a2a.version>
+		<a2a.version>1.5.1.Final</a2a.version>
 		<!-- CommonMark: the workbench's Markdown renderer and the Telegram
 		     module's Markdown to Telegram HTML conversion. -->
-		<commonmark.version>0.30.1</commonmark.version>
+		<commonmark.version>0.32.0</commonmark.version>
 		<!-- Flags for every forked test JVM (surefire and failsafe; modules with
 		     their own argLine splice this in). JDK 24+ warns once per JVM when a
 		     library touches sun.misc.Unsafe memory access (JEP 471); protobuf-java
@@ -96,9 +96,31 @@
 				<plugin>
 					<groupId>org.apache.maven.plugins</groupId>
 					<artifactId>maven-failsafe-plugin</artifactId>
-					<version>3.6.0</version>
+					<version>3.6.1</version>
 					<configuration>
 						<argLine>${covia.test.jvmflags}</argLine>
+					</configuration>
+				</plugin>
+				<!-- Sources and javadoc jars are for Central only, so the release
+				     profile attaches them; their settings live here. -->
+				<plugin>
+					<groupId>org.apache.maven.plugins</groupId>
+					<artifactId>maven-source-plugin</artifactId>
+					<version>3.4.0</version>
+				</plugin>
+				<plugin>
+					<groupId>org.apache.maven.plugins</groupId>
+					<artifactId>maven-javadoc-plugin</artifactId>
+					<version>3.12.0</version>
+					<configuration>
+						<!-- Publish must not fail on Javadoc lint; generated sources and
+						     terse doc comments would otherwise block a release. -->
+						<doclint>none</doclint>
+						<failOnError>false</failOnError>
+						<!-- Document on the class path, as the code compiles. Without this
+						     the plugin sees each Automatic-Module-Name and switches to the
+						     module path, where convex.core hides packages the venue uses. -->
+						<legacyMode>true</legacyMode>
 					</configuration>
 				</plugin>
 			</plugins>
@@ -112,7 +134,7 @@
 			<plugin>
 				<groupId>org.apache.maven.plugins</groupId>
 				<artifactId>maven-surefire-plugin</artifactId>
-				<version>3.6.0</version>
+				<version>3.6.1</version>
 				<configuration>
 					<argLine>${covia.test.jvmflags}</argLine>
 					<forkCount>1</forkCount>
@@ -124,6 +146,7 @@
 							junit.jupiter.execution.parallel.mode.default = concurrent
 							junit.jupiter.execution.parallel.config.strategy = dynamic
 							junit.jupiter.execution.parallel.config.dynamic.factor = 0.5
+							junit.jupiter.execution.parallel.config.executor-service = FORK_JOIN_POOL
 						</configurationParameters>
 					</properties>
 				</configuration>
@@ -140,7 +163,7 @@
 			<plugin>
 				<groupId>org.apache.maven.plugins</groupId>
 				<artifactId>maven-enforcer-plugin</artifactId>
-				<version>3.6.3</version>
+				<version>3.7.0</version>
 				<executions>
 					<execution>
 						<id>enforce-maven</id>
@@ -183,7 +206,7 @@
 			<plugin>
 				<groupId>org.apache.maven.plugins</groupId>
 				<artifactId>maven-jar-plugin</artifactId>
-				<version>3.4.1</version>
+				<version>3.5.1</version>
 				<configuration>
 					<archive>
 						<manifestEntries>
@@ -193,62 +216,38 @@
 				</configuration>
 			</plugin>
 
-			<!-- Central requires a sources jar and a javadoc jar alongside every
-			     published artifact. Attach both for every module. -->
-			<plugin>
-				<groupId>org.apache.maven.plugins</groupId>
-				<artifactId>maven-source-plugin</artifactId>
-				<version>3.4.0</version>
-				<executions>
-					<execution>
-						<id>attach-sources</id>
-						<goals><goal>jar-no-fork</goal></goals>
-					</execution>
-				</executions>
-			</plugin>
-			<plugin>
-				<groupId>org.apache.maven.plugins</groupId>
-				<artifactId>maven-javadoc-plugin</artifactId>
-				<version>3.12.0</version>
-				<configuration>
-					<!-- Publish must not fail on Javadoc lint; generated sources and
-					     terse doc comments would otherwise block a release. -->
-					<doclint>none</doclint>
-					<failOnError>false</failOnError>
-					<!-- Document on the class path, as the code compiles. Without this
-					     the plugin sees each Automatic-Module-Name and switches to the
-					     module path, where convex.core hides packages the venue uses. -->
-					<legacyMode>true</legacyMode>
-				</configuration>
-				<executions>
-					<execution>
-						<id>attach-javadocs</id>
-						<goals><goal>jar</goal></goals>
-					</execution>
-				</executions>
-			</plugin>
-
-			<!-- Sonatype Central Publishing: bundles every module's artifacts and
-			     uploads them to Maven Central on `mvn deploy`. Credentials come from
-			     the `central` server entry in ~/.m2/settings.xml. -->
+			<!-- Sonatype Central Publishing: bundles the published modules'
+			     artifacts and uploads them to Maven Central on `mvn deploy`.
+			     Credentials come from the `central` server entry in
+			     ~/.m2/settings.xml. The modules no embedder builds against are left
+			     out (BUILD.md, Publishing to Maven Central). -->
 			<plugin>
 				<groupId>org.sonatype.central</groupId>
 				<artifactId>central-publishing-maven-plugin</artifactId>
-				<version>0.11.0</version>
+				<version>0.12.0</version>
 				<extensions>true</extensions>
 				<configuration>
 					<publishingServerId>central</publishingServerId>
 					<checksums>all</checksums>
 					<autoPublish>true</autoPublish>
+					<excludeArtifacts>
+						<excludeArtifact>covia-python</excludeArtifact>
+						<excludeArtifact>covia-python-adapter</excludeArtifact>
+						<excludeArtifact>covia-whatsapp</excludeArtifact>
+						<excludeArtifact>covia-slack</excludeArtifact>
+						<excludeArtifact>covia-sonnylabs</excludeArtifact>
+						<excludeArtifact>covia-documents</excludeArtifact>
+					</excludeArtifacts>
 				</configuration>
 			</plugin>
 		</plugins>
 	</build>
 
 	<profiles>
-		<!-- Release profile: GPG-signs all artifacts (Central requires signatures).
-		     Activate with `-Prelease` (BUILD.md) or by setting performRelease=true.
-		     Requires a GPG signing key configured locally. -->
+		<!-- Release profile: attaches a sources jar and a javadoc jar to every
+		     module and GPG-signs all artifacts, as Central requires. Activate with
+		     `-Prelease` (BUILD.md) or by setting performRelease=true. Requires a
+		     GPG signing key configured locally. -->
 		<profile>
 			<id>release</id>
 			<activation>
@@ -259,6 +258,26 @@
 			</activation>
 			<build>
 				<plugins>
+					<plugin>
+						<groupId>org.apache.maven.plugins</groupId>
+						<artifactId>maven-source-plugin</artifactId>
+						<executions>
+							<execution>
+								<id>attach-sources</id>
+								<goals><goal>jar-no-fork</goal></goals>
+							</execution>
+						</executions>
+					</plugin>
+					<plugin>
+						<groupId>org.apache.maven.plugins</groupId>
+						<artifactId>maven-javadoc-plugin</artifactId>
+						<executions>
+							<execution>
+								<id>attach-javadocs</id>
+								<goals><goal>jar</goal></goals>
+							</execution>
+						</executions>
+					</plugin>
 					<plugin>
 						<groupId>org.apache.maven.plugins</groupId>
 						<artifactId>maven-gpg-plugin</artifactId>

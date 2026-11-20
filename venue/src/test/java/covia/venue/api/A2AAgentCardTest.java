@@ -143,7 +143,8 @@ public class A2AAgentCardTest {
 				Strings.create("agentId"), Strings.create("Bob"),
 				Strings.create("config"), Maps.of(
 						Strings.create("name"), Strings.create("Bob Agent"),
-						Strings.create("operation"), Strings.create("v/test/ops/echo"))));
+						Strings.create("operation"), Strings.create("v/test/ops/echo"),
+						Strings.create("acceptTasks"), CVMBool.TRUE)));
 		assertEquals(Status.COMPLETE, created.getStatus(), "agent create: " + created.getErrorMessage());
 
 		String endpoint = "/a2a/" + ownerDid + "/g/Bob";
@@ -240,6 +241,7 @@ public class A2AAgentCardTest {
 				Strings.create("agentId"), Strings.create("PubChat"),
 				Strings.create("config"), Maps.of(
 						Strings.create("operation"), Strings.create("v/test/ops/echo"),
+						Strings.create("acceptTasks"), CVMBool.TRUE,
 						Fields.ACCEPTS, Admission.ANYONE,
 						Strings.create("a2a"), Maps.of(Strings.create("public"), CVMBool.TRUE))));
 		assertEquals(Status.COMPLETE, open.getStatus(), "create: " + open.getErrorMessage());
@@ -276,6 +278,7 @@ public class A2AAgentCardTest {
 				Strings.create("agentId"), Strings.create("PubLegacy"),
 				Strings.create("config"), Maps.of(
 						Strings.create("operation"), Strings.create("v/test/ops/echo"),
+						Strings.create("acceptTasks"), CVMBool.TRUE,
 						Strings.create("a2a"), Maps.of(
 								Strings.create("public"), CVMBool.TRUE,
 								Strings.create("caps"), Strings.create("unrestricted")))));
@@ -300,12 +303,12 @@ public class A2AAgentCardTest {
 		assertEquals(Status.COMPLETE, client.invokeAndWait(Strings.create("v/ops/agent/create"), Maps.of(
 				Fields.AGENT_ID, Strings.create("Replier"),
 				Fields.CONFIG, Maps.of(Fields.OPERATION, Strings.create("v/ops/llmagent/chat"),
-					"llmOperation", Strings.create("v/test/ops/stubbornllm")))).getStatus());
+					"llmOperation", Strings.create("v/test/ops/stubbornllm"), "acceptTasks", CVMBool.TRUE))).getStatus());
 		assertEquals(Status.COMPLETE, client.invokeAndWait(Strings.create("v/ops/agent/create"), Maps.of(
 				Fields.AGENT_ID, Strings.create("Parker"),
 				Fields.CONFIG, Maps.of(Fields.OPERATION, Strings.create("v/ops/llmagent/chat"),
 					"llmOperation", Strings.create("v/test/ops/taskllm"),
-					"model", Strings.create("park-task-test")))).getStatus());
+					"model", Strings.create("park-task-test"), "acceptTasks", CVMBool.TRUE))).getStatus());
 
 		String replier = "/a2a/" + ownerDid + "/g/Replier";
 		Task replied = extractTask(parse(post(replier, rpcEnvelope("reply", "SendMessage",
@@ -344,6 +347,7 @@ public class A2AAgentCardTest {
 				Fields.CONFIG, Maps.of(
 						Fields.OPERATION, Strings.create("v/test/ops/taskcomplete"),
 						"readPath", Strings.create("w/private-note"),
+						"acceptTasks", CVMBool.TRUE,
 						Fields.ACCEPTS, Admission.ANYONE)));
 		assertEquals(Status.COMPLETE, created.getStatus(), "create: " + created.getErrorMessage());
 
@@ -375,6 +379,7 @@ public class A2AAgentCardTest {
 				Fields.AGENT_ID, Strings.create("Desk"),
 				Fields.CONFIG, Maps.of(
 						Fields.OPERATION, Strings.create("v/test/ops/echo"),
+						"acceptTasks", CVMBool.TRUE,
 						Fields.ACCEPTS, Vectors.of(bobDid))));
 		assertEquals(Status.COMPLETE, created.getStatus(), "create: " + created.getErrorMessage());
 
@@ -409,7 +414,7 @@ public class A2AAgentCardTest {
 		client.setTimeout(5000);
 		Job created = client.invokeAndWait(Strings.create("v/ops/agent/create"), Maps.of(
 				Fields.AGENT_ID, Strings.create("Delegated"),
-				Fields.CONFIG, Maps.of(Fields.OPERATION, Strings.create("v/test/ops/echo"))));
+				Fields.CONFIG, Maps.of(Fields.OPERATION, Strings.create("v/test/ops/echo"), "acceptTasks", CVMBool.TRUE)));
 		assertEquals(Status.COMPLETE, created.getStatus(), "create: " + created.getErrorMessage());
 
 		String endpoint = "/a2a/" + ownerDid + "/g/Delegated";
@@ -461,6 +466,7 @@ public class A2AAgentCardTest {
 				Fields.CONFIG, Maps.of(
 					Fields.OPERATION, Strings.create("v/test/ops/taskcomplete"),
 					"testGate", Strings.create(agentId),
+					"acceptTasks", CVMBool.TRUE,
 					Fields.ACCEPTS, Admission.ANYONE)));
 			assertEquals(Status.COMPLETE, created.getStatus(), created.getErrorMessage());
 
@@ -483,6 +489,12 @@ public class A2AAgentCardTest {
 			AString publicDid = Strings.create(TestServer.ENGINE.getDIDString() + ":public");
 			Agent Agent = TestServer.ENGINE.getVenueState().users().user(ownerDid).agent(agentId);
 			assertEquals(publicDid, RT.getIn(Agent.getTasks().get(Blob.fromHex(held.id())), Fields.CALLER));
+			// Keep the foreign public task live so the account boundary cannot
+			// accidentally depend on whether its handle has already been evicted.
+			assertAgentTaskRefused(post(endpoint, rpcEnvelope("oh-live", "GetTask",
+				new TaskQueryParams(held.id(), null)), jwt));
+			assertAgentTaskRefused(post(endpoint + "?owner=" + publicDid, rpcEnvelope("oh-hint", "GetTask",
+				new TaskQueryParams(held.id(), null)), jwt));
 
 			// Foreign to the public caller: the unrelated job, and the owner's own
 			// task on this very agent. Read, cancel and subscribe are all refused
@@ -553,7 +565,7 @@ public class A2AAgentCardTest {
 				Fields.AGENT_ID, Strings.create("Continuer"),
 				Fields.CONFIG, Maps.of(
 					Fields.OPERATION, Strings.create("v/test/ops/taskcomplete"),
-					"testGate", Strings.create(gateName))));
+					"testGate", Strings.create(gateName), "acceptTasks", CVMBool.TRUE)));
 			assertEquals(Status.COMPLETE, created.getStatus(), created.getErrorMessage());
 
 			String endpoint = "/a2a/" + ownerDid + "/g/Continuer";
@@ -601,7 +613,7 @@ public class A2AAgentCardTest {
 				.agent("Continuer");
 			assertEquals(3, continued.getTimeline().count(),
 				"the stale cycle and both distinct continuations each run exactly once");
-			var session = continued.getSession(Blob.fromHex(initial.contextId()));
+			var session = continued.session(Blob.fromHex(initial.contextId())).getRecord();
 			var frames = (convex.core.data.AVector<?>) session.get(Agent.KEY_FRAMES);
 			var conversation = covia.adapter.agent.GoalTreeContext.activeConversation(convex.core.lang.RT.ensureMap(frames.get(0)));
 			assertEquals(6, conversation.count(),
@@ -669,7 +681,7 @@ public class A2AAgentCardTest {
 			Agent Agent = TestServer.ENGINE.getVenueState().users().user(ownerDid).agent("Continuer");
 			String queuedGateName = "queued-" + UUID.randomUUID();
 			try (TestAdapter.TestGate queuedGate = TestAdapter.createGate(queuedGateName)) {
-				Agent.updateConfigAndState(
+				Agent.update(null, null,
 					config -> config.assoc(Strings.intern("testGate"), Strings.create(queuedGateName)),
 					Agent.getState());
 				long cyclesBefore = Agent.getTimeline().count();
@@ -718,7 +730,7 @@ public class A2AAgentCardTest {
 				Fields.AGENT_ID, Strings.create(agentId),
 				Fields.CONFIG, Maps.of(
 					Fields.OPERATION, Strings.create("v/test/ops/taskcomplete"),
-					"testGate", Strings.create(agentId))));
+					"testGate", Strings.create(agentId), "acceptTasks", CVMBool.TRUE)));
 			assertEquals(Status.COMPLETE, created.getStatus(), created.getErrorMessage());
 
 			String endpoint = "/a2a/" + ownerDid + "/g/" + agentId;

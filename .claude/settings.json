@@ -5,5 +5,8 @@
       "mcp__covia-venue",
       "mcp__local-covia-venue"
     ]
+  },
+  "enabledPlugins": {
+    "jdtls-lsp@claude-plugins-official": true
   }
 }

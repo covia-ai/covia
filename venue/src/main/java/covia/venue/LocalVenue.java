@@ -58,14 +58,14 @@ public class LocalVenue extends Venue {
 	 */
 	public void setRequestContext(RequestContext requestContext) {
 		this.requestContext = requestContext;
-		if (requestContext != null) setUser(requestContext.getCallerDID());
+		if (requestContext != null) setUser(requestContext.getAuthorityDID());
 	}
 
 	/** Builds the request context for this venue's user, carrying any authority. */
 	private RequestContext context() {
 		if (requestContext != null) return requestContext;
 		if (getUser() == null) return RequestContext.ANONYMOUS;
-		return engine.context(getUser()).withProofs(proofs);
+		return engine.requestContext(getUser(), null).withProofs(proofs);
 	}
 
 	@Override
@@ -137,29 +137,25 @@ public class LocalVenue extends Venue {
 
 	@Override
 	public CompletableFuture<Job> getJob(Blob jobId) {
-		Job job = engine.jobs().getJob(jobId, context());
+		Job job = engine.jobs().getJob(jobId, context(), getJobOwner());
 		if (job == null) {
-			return CompletableFuture.failedFuture(new NotFoundException("Job not found: " + jobId.toHexString(), jobId.toHexString()));
+			return CompletableFuture.failedFuture(new NotFoundException(JobManager.JOB_NOT_FOUND + jobId, jobId.toHexString()));
 		}
 		return CompletableFuture.completedFuture(job);
 	}
 
 	@Override
 	public CompletableFuture<AMap<AString, ACell>> getJobStatus(Blob jobId) {
-		AMap<AString, ACell> status = engine.jobs().getJobData(jobId, context());
+		AMap<AString, ACell> status = engine.jobs().getJobData(jobId, context(), getJobOwner());
 		if (status == null) {
-			return CompletableFuture.failedFuture(new NotFoundException("Job not found: " + jobId.toHexString(), jobId.toHexString()));
+			return CompletableFuture.failedFuture(new NotFoundException(JobManager.JOB_NOT_FOUND + jobId, jobId.toHexString()));
 		}
 		return CompletableFuture.completedFuture(status);
 	}
 
 	@Override
 	public CompletableFuture<ACell> awaitJobResult(Blob jobId) {
-		Job job = engine.jobs().getJob(jobId, context());
-		if (job == null) {
-			return CompletableFuture.failedFuture(new NotFoundException("Job not found: " + jobId.toHexString(), jobId.toHexString()));
-		}
-		return job.future();
+		return engine.jobs().awaitResult(jobId, context(), getJobOwner());
 	}
 
 	@Override
@@ -237,22 +233,22 @@ public class LocalVenue extends Venue {
 
 	@Override
 	public AMap<AString, ACell> cancelJob(Blob jobId) {
-		return engine.jobs().cancelJob(jobId, context());
+		return engine.jobs().cancelJob(jobId, context(), null, getJobOwner());
 	}
 
 	@Override
 	public AMap<AString, ACell> pauseJob(Blob jobId) {
-		return engine.jobs().pauseJob(jobId, context());
+		return engine.jobs().pauseJob(jobId, context(), getJobOwner());
 	}
 
 	@Override
 	public AMap<AString, ACell> resumeJob(Blob jobId) {
-		return engine.jobs().resumeJob(jobId, context());
+		return engine.jobs().resumeJob(jobId, context(), getJobOwner());
 	}
 
 	@Override
 	public boolean deleteJob(Blob jobId) {
-		return engine.jobs().deleteJob(jobId, context());
+		return engine.jobs().deleteJob(jobId, context(), getJobOwner());
 	}
 
 	@Override
@@ -268,6 +264,6 @@ public class LocalVenue extends Venue {
 
 	@Override
 	public void sendMessage(String jobId, AMap<AString, ACell> message) {
-		engine.jobs().deliverMessage(Blob.parse(jobId), message, context());
+		engine.jobs().deliverMessage(Blob.parse(jobId), message, context(), getJobOwner());
 	}
 }

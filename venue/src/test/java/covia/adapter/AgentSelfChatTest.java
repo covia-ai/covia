@@ -56,8 +56,8 @@ public class AgentSelfChatTest {
 		Agent agent = engine.getVenueState().users().user(did)
 			.agent("selfchat-agent");
 		Blob sid = Blob.fromHex("abababababababababababababababab");
-		agent.ensureSession(sid, did);
-		agent.appendSessionPending(sid, Maps.of(
+		agent.sessions().create(sid, did, null);
+		agent.session(sid).appendPending(Maps.of(
 			Strings.intern("content"), Strings.create("START")));
 
 		try (AgentWatch watch = AgentWatch.open(engine, did, "selfchat-agent")) {

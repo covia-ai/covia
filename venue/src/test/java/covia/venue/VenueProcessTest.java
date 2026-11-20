@@ -24,7 +24,7 @@ import convex.core.crypto.Hashing;
 import convex.core.data.Maps;
 import covia.api.Fields;
 import covia.exception.InvalidInputException;
-import covia.exception.NotSupportedException;
+import covia.exception.InvalidStateException;
 import covia.grid.Job;
 import covia.grid.Status;
 
@@ -200,6 +200,23 @@ class VenueProcessTest {
 	}
 
 	@Test
+	void aFatalStopClosesEveryVenueThenExitsOnce() throws Exception {
+		List<String> events = java.util.Collections.synchronizedList(new ArrayList<>());
+		VenueProcess process = new VenueProcess(venueJar("current.jar"), Path.of("java"),
+			List.of(), List.of(), (java, jar, spec) -> new FakeChild(1, false),
+			status -> events.add("exit " + status), 0);
+		process.addCloseAction(() -> events.add("close first"));
+		process.addCloseAction(() -> { throw new IllegalStateException("a venue that fails to close"); });
+		process.addCloseAction(() -> events.add("close last"));
+		process.arm();
+
+		process.exitFatally(VenueProcess.EX_SOFTWARE);
+		process.exitFatally(VenueProcess.EX_SOFTWARE);
+		assertEquals(List.of("close last", "close first", "exit " + VenueProcess.EX_SOFTWARE), events,
+			"every venue closes, the last to join first, whatever one does, then the process exits once");
+	}
+
+	@Test
 	void onlyOneRestartMayBePending() throws Exception {
 		Path current = venueJar("current.jar");
 		VenueProcess process = new VenueProcess(current, Path.of("java"),
@@ -209,7 +226,7 @@ class VenueProcessTest {
 
 		process.requestRestart(null, null, 10_000,
 			new Job(Maps.of(Fields.STATUS, Status.PENDING)));
-		assertThrows(NotSupportedException.class, () -> process.requestRestart(
+		assertThrows(InvalidStateException.class, () -> process.requestRestart(
 			null, null, 10_000, new Job(Maps.of(Fields.STATUS, Status.PENDING))));
 	}
 

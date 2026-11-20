@@ -24,8 +24,8 @@ import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
-import covia.exception.NotSupportedException;
 import covia.exception.UnavailableException;
+import covia.exception.UnsupportedException;
 import covia.grid.Asset;
 import covia.grid.HexId;
 import covia.lattice.CapabilityChecker;
@@ -68,7 +68,7 @@ public class AssetAdapter extends AAdapter {
 
 	@Override
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
-		if (ctx.getCallerDID() == null) {
+		if (ctx.getAuthorityDID() == null) {
 			return CompletableFuture.failedFuture(
 				new AuthException("Asset operations require an authenticated caller"));
 		}
@@ -81,7 +81,7 @@ public class AssetAdapter extends AAdapter {
 				case "list"    -> CompletableFuture.completedFuture(handleList(input, ctx));
 				case "pin"     -> CompletableFuture.completedFuture(handlePin(input, ctx));
 				default -> CompletableFuture.failedFuture(
-					new NotSupportedException("Unknown asset operation: " + getSubOperation(meta)));
+					new UnsupportedException("Unknown asset operation: " + getSubOperation(meta)));
 			};
 		} catch (Exception e) {
 			return CompletableFuture.failedFuture(e);
@@ -90,7 +90,7 @@ public class AssetAdapter extends AAdapter {
 
 	@SuppressWarnings("unchecked")
 	private ACell handleStore(ACell input, RequestContext ctx) {
-		engine.requireAuthority(ctx,Strings.create(""), Abilities.ASSET_STORE);
+		engine.requireAuthority(ctx, Namespace.A, Abilities.ASSET_STORE);
 		ACell metaCell = RT.getIn(input, Fields.METADATA);
 		// Accept metadata as a JSON object or a JSON string (parsed on the fly).
 		// NB: instanceof check on the parsed value is required because RT.castMap(null)
@@ -212,7 +212,8 @@ public class AssetAdapter extends AAdapter {
 	private static final long DEFAULT_MAX_SIZE = 1_000_000;
 
 	/** Canonical operation input is ref; older field names remain aliases. */
-	private static AString referenceArg(ACell input, AString... aliases) {
+	/** The reference an input names, as {@code ref} or a legacy alias, a principal in short form expanded ({@link Engine#expandPath}). */
+	private AString referenceArg(ACell input, AString... aliases) {
 		AString ref = RT.ensureString(RT.getIn(input, Fields.REF));
 		for (AString alias : aliases) {
 			AString value = RT.ensureString(RT.getIn(input, alias));
@@ -223,7 +224,7 @@ public class AssetAdapter extends AAdapter {
 			ref = value;
 		}
 		if (ref == null) throw new InvalidInputException("ref is required");
-		return ref;
+		return engine.expandPath(ref);
 	}
 
 	private static AMap<AString, ACell> withContentType(
@@ -476,7 +477,7 @@ public class AssetAdapter extends AAdapter {
 		} else {
 			engine.requirePathRead(ctx, pathStr);
 		}
-		engine.requireAuthority(ctx, Strings.create("a/"), Abilities.ASSET_STORE);
+		engine.requireAuthority(ctx, Namespace.A, Abilities.ASSET_STORE);
 
 		AString metaString;
 		ACell content = null;

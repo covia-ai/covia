@@ -50,6 +50,16 @@ public class AdmissionTest {
 	}
 
 	@Test
+	public void testAnEntryAdmitsWhatActsForIt() {
+		java.util.function.Predicate<AString> helper = named -> named.equals(BOB_HELPER) || named.equals(BOB);
+		assertTrue(Admission.admits(Vectors.of(BOB), helper, false, false), "an agent acting for Bob");
+		assertTrue(Admission.admits(Vectors.of(BOB_HELPER), helper, false, false));
+		assertFalse(Admission.admits(Vectors.of(ALICE), helper, false, false));
+		assertFalse(Admission.admits(Vectors.of(BOB), helper, false, true), "only anyone admits the public principal");
+		assertFalse(Admission.admits(Strings.create("bogus"), helper, true, false), "a malformed policy admits nobody");
+	}
+
+	@Test
 	public void testVenueKeywordComposesInsideAnAllowlist() {
 		assertTrue(Admission.admits(Vectors.of(Admission.VENUE, BOB), ALICE, true));
 		assertTrue(Admission.admits(Vectors.of(Admission.VENUE, BOB), BOB, false));

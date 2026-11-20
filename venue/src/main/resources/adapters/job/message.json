@@ -1,0 +1,59 @@
+{
+	"name": "Job Message",
+	"description": "job_message: Deliver a structured message to an existing active Job that accepts messages, for example to answer INPUT_REQUIRED or AUTH_REQUIRED. Unsupported delivery and terminal Jobs fail explicitly. Acknowledgement means accepted delivery, not completion. Address the Job needing input, not a separate Job waiting for its result. For local Jobs, requires job/message; raw CRUD permissions and creator attribution do not grant it. Remote actions use the selected remote identity and grants, authorized at the hosting venue.",
+	"operation": {
+		"adapter": "job:message",
+		"toolName": "job_message",
+		"readOnly": false,
+		"input": {
+			"type": "object",
+			"properties": {
+				"id": {
+					"type": "string",
+					"description": "Exact Job ID on the selected hosting venue. A local wrapper and its destination are separate Jobs: use the ID of the one you intend to inspect or control. Agent, session and tool-call IDs are not Job IDs."
+				},
+				"venue": {
+					"type": "string",
+					"description": "Hosting venue HTTP(S) URL or routable DID. Omit for a local Job, including a local proxy. For a destination Job use its own ID and hosting venue. A definition may set a default venue; this input overrides it. Null is invalid."
+				},
+				"authenticateAs": {
+					"type": "string",
+					"enum": [
+						"anonymous",
+						"caller",
+						"venue"
+					],
+					"default": "anonymous",
+					"description": "Remote identity: anonymous (default) sends no identity or grants; caller requires your identity credential addressed to the target venue, with no capabilities, plus any separate grants; venue is only for the venue itself. Use the same mode and credentials when following the Job. Local calls retain your caller context."
+				},
+				"message": {
+					"type": "object",
+					"description": "Message in the receiving operation's format, such as {content: \"continue\"}. Forwarded unchanged."
+				},
+				"owner": {
+					"type": "string",
+					"description": "Job owner DID. Supply it for another owner, including retained Jobs. This selects a lookup namespace and grants no authority. With a remote venue, omission selects the authenticated principal, or the remote public principal in anonymous mode."
+				}
+			},
+			"required": [
+				"id",
+				"message"
+			]
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"id": {
+					"type": "string"
+				},
+				"delivered": {
+					"type": "boolean"
+				}
+			},
+			"required": [
+				"id",
+				"delivered"
+			]
+		}
+	}
+}

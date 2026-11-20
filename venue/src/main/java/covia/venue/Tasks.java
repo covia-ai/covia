@@ -32,11 +32,6 @@ public final class Tasks extends IndexComponent<Blob, ACell>
 		return new Tasks(cursor);
 	}
 
-	@Override
-	public Tasks withCursor(AForkableCursor<Index<Blob, ACell>> cursor) {
-		return rebind(cursor);
-	}
-
 	/** {@code <hex>} names a task; anything else names nothing. */
 	@Override
 	public ALatticeComponent<?> resolve(AString[] segments, int start, int end) {
@@ -83,7 +78,7 @@ public final class Tasks extends IndexComponent<Blob, ACell>
 		return transact(draft -> {
 			ACell row = draft.all().get(id);
 			if (row == null) return null;
-			if (expectedRevision >= 0 && (Task.revision(row) != expectedRevision || Task.hasUnshownInput(row))) return null;
+			if (Task.isStale(row, expectedRevision)) return null;
 			draft.remove(id);
 			return row;
 		});

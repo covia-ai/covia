@@ -1,6 +1,9 @@
 package covia.lattice;
 
+import java.util.function.Supplier;
+
 import convex.core.data.ACell;
+import convex.core.data.AHashMap;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Keyword;
@@ -8,6 +11,9 @@ import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
 import convex.core.data.Index;
 import convex.lattice.ALattice;
+import convex.lattice.MapComponent;
+import convex.lattice.cursor.AForkableCursor;
+import convex.lattice.cursor.PathCursor;
 import convex.lattice.generic.LWWLattice;
 import covia.api.Fields;
 
@@ -102,9 +108,9 @@ public final class Covia {
 	/** Agent-record last-modified field. */
 	private static final AString K_AGENT_TS = Strings.intern("ts");
 
-	/** Extracts the {@code :timestamp} from the venue value for LWW merge. */
+	/** Extracts the {@code :timestamp} from the venue value for LWW merge, or 0 if it has none. */
 	@SuppressWarnings("unchecked")
-	private static long venueTimestamp(ACell v) {
+	public static long venueTimestamp(ACell v) {
 		if (v instanceof AMap<?,?>) {
 			ACell t = ((AMap<ACell, ACell>) v).get(K_TIMESTAMP);
 			if (t instanceof CVMLong l) return l.longValue();
@@ -134,6 +140,49 @@ public final class Covia {
 	public static CVMLong ratchet(ACell existing, CVMLong ts) {
 		if (existing instanceof CVMLong prev && prev.longValue() > ts.longValue()) return prev;
 		return ts;
+	}
+
+	/**
+	 * The entry {@code key} of the string-keyed hash map at {@code map}, as
+	 * {@link MapComponent#path} gives it: a changed write creates the entry, and
+	 * the map when it is absent, while a read finds an absent entry absent.
+	 */
+	@SuppressWarnings("unchecked")
+	public static <T extends ACell> AForkableCursor<T> entry(AForkableCursor<? extends ACell> map, AString key) {
+		return new MapComponent<AString, ACell>((AForkableCursor<AHashMap<AString, ACell>>) (AForkableCursor<?>) map).path(key);
+	}
+
+	/**
+	 * The field {@code key} of a record that must exist. A changed write creates
+	 * the field in the record; with no record it is refused with {@code missing},
+	 * and a record that cannot hold the field is refused as on any path. A write
+	 * that changes nothing is never refused, so a transaction that only reads a
+	 * missing record's field succeeds.
+	 */
+	public static <T extends ACell> AForkableCursor<T> field(AForkableCursor<? extends ACell> record, AString key,
+			Supplier<? extends RuntimeException> missing) {
+		return new Field<>(record, key, missing);
+	}
+
+	private static final class Field<T extends ACell> extends PathCursor<T> {
+		private final Supplier<? extends RuntimeException> missing;
+
+		Field(AForkableCursor<? extends ACell> record, AString key, Supplier<? extends RuntimeException> missing) {
+			super(record, key);
+			this.missing = missing;
+		}
+
+		/** Only a record that cannot hold the field refuses here; a missing one refuses a change in {@link #write}. */
+		@Override
+		protected void requireWritable(ACell record) {
+			if (record != null) super.write(record, view(record));
+		}
+
+		@Override
+		protected ACell write(ACell record, T value) {
+			if (record == null) throw missing.get();
+			return super.write(record, value);
+		}
 	}
 
 	/** Injects the write-clock timestamp (from the VenueContext) into the venue value's {@code :timestamp}. */

@@ -167,14 +167,14 @@ public class MCPTest {
 		MCPAdapter mcpAdapter=(MCPAdapter) venue.getAdapter("mcp");
 		AMap<AString,ACell> input=Maps.of("foo",2);
 
-		ACell result=mcpAdapter.callMCPTool(Strings.create(BASE_URL), "test_echo",input,null);
+		ACell result=mcpAdapter.callMCPTool(venue.venueContext(), Strings.create(BASE_URL), "test_echo",input,null);
 		assertEquals(input,result);
 	}
 	
 	@Test public void testListMCPTools() throws Exception {
 		MCPAdapter mcpAdapter=(MCPAdapter) venue.getAdapter("mcp");
 		
-		ACell result=mcpAdapter.listMCPTools(Strings.create(BASE_URL), null);
+		ACell result=mcpAdapter.listMCPTools(venue.venueContext(), Strings.create(BASE_URL), null);
 		assertNotNull(result);
 		
 		// Verify the result is a map with tools and total fields

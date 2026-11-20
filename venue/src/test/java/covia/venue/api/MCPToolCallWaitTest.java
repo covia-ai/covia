@@ -72,6 +72,8 @@ public class MCPToolCallWaitTest {
 		server = VenueServer.launch(Maps.of(
 			Strings.create("port"), 0, Config.STORE, "memory",
 			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
+			// No shutdown grace: tool calls left running need not finish at close.
+			Config.SHUTDOWN, Maps.of(Config.GRACE_MS, 0),
 			Fields.MCP, Maps.of(
 				Strings.create("includePathPrefixes"), Vectors.of(Strings.create("v/ops/"), Strings.create("v/test/ops/")),
 				Strings.create("includeAdapters"), Vectors.of(Strings.create("*")),
@@ -131,7 +133,12 @@ public class MCPToolCallWaitTest {
 		assertEquals(CVMBool.TRUE, RT.getIn(result, "isError"), r.body());
 		assertEquals("running", RT.getIn(result, "structuredContent", "status").toString());
 		assertNotNull(RT.getIn(result, "structuredContent", "id"), "the job to collect: " + r.body());
-		assertTrue(RT.getIn(result, "structuredContent", "message").toString().contains("grid_job_result"), r.body());
+		String id = RT.getIn(result, "structuredContent", "id").toString();
+		assertTrue(RT.getIn(result, "structuredContent", "message").toString()
+			.contains(MCP.COLLECT_RUNNING_JOB.formatted(id)), r.body());
+		ACell record = callTool(101, "job_status", "{\"id\":\"" + id + "\"}");
+		assertEquals(Job.parseID(Strings.create(id)), Job.parseID(RT.getIn(record, Fields.ID)));
+		assertEquals(covia.grid.Status.STARTED, RT.getIn(record, Fields.STATUS));
 	}
 
 	/** A tools/call request's structured result. */
@@ -153,7 +160,7 @@ public class MCPToolCallWaitTest {
 			ACell ran = callTool(20, "test_holdread", "{\"gate\":\"" + gateName + "\",\"result\":\"read-late\"}");
 			assertEquals("running", RT.getIn(ran, "status").toString(), ran.toString());
 			String id = RT.getIn(ran, "id").toString();
-			job = server.getEngine().jobs().getJob(Blob.fromHex(id));
+			job = server.getEngine().jobs().getJob(Blob.parse(id));
 			assertNotNull(job, "the job named is live");
 			assertTrue(job.isRecorded(), "and recorded");
 			ACell status = callTool(21, "grid_job_status", "{\"id\":\"" + id + "\"}");

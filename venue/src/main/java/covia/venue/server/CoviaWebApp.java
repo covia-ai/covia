@@ -388,10 +388,7 @@ public class CoviaWebApp  {
 			for (int i = 0; i < n; i++) {
 				try {
 					convex.core.data.MapEntry<convex.core.data.Hash, AString> me = installedAssets.entryAt(i);
-					AString metaString = me.getValue();
-					
-					// Parse the metadata string to get the structured metadata
-					AMap<AString, ACell> meta = RT.castMap(convex.core.util.JSON.parse(metaString));
+					AMap<AString, ACell> meta = adapter.installedMetadata(me.getKey());
 					AMap<AString, ACell> operation = RT.ensureMap(meta.get(Fields.OPERATION));
 
 					if (operation != null) {

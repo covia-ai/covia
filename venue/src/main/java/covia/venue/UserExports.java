@@ -18,12 +18,15 @@ import convex.core.data.prim.CVMLong;
 import convex.core.exceptions.BadFormatException;
 import convex.core.lang.RT;
 import covia.api.Fields;
+import covia.exception.IntegrityException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
-import covia.exception.NotSupportedException;
 import covia.exception.UnavailableException;
+import covia.exception.UnsupportedException;
 import covia.grid.Job;
 import covia.lattice.Namespace;
+import covia.venue.migration.BlobIds;
+import covia.venue.migration.OneCaller;
 import covia.venue.migration.CallerAndOwner;
 
 /**
@@ -69,16 +72,20 @@ public final class UserExports {
 	 * older build cannot read, as the venue {@code :version} does, so an older
 	 * venue refuses the export with {@link #NEWER_VERSION}.
 	 */
-	public static final long VERSION = 2;
+	public static final long VERSION = 3;
 
 	/** The first export version whose records of calls name {@code caller} and {@code owner}. */
 	static final long CALLER_AND_OWNER = 2;
 
+	/** The first export version whose stored ids are Blobs. */
+	static final long BLOB_IDS = 3;
+
 	public static final String PROTECTED = "The venue and public principals cannot be exported, imported or cloned";
 	public static final String BUSY = "The user has unfinished work: a job not yet finished or an agent task outstanding. Retry once it has finished";
 	public static final String SECRETS_NEED_KEY = "The user has secrets: supply accountKey to seal them, or secrets: false to leave them out";
-	public static final String SECRET_UNREADABLE = "A secret could not be decrypted, so the export would be incomplete: "
-		+ "set it again with secret:set or delete it, or export with secrets: false";
+	public static final String SECRET_INTEGRITY = "A secret failed its integrity check, so the export would be "
+		+ "incomplete. The venue operator has been told; set it again with secret:set or delete it, or export with "
+		+ "secrets: false";
 	public static final String NOT_AN_EXPORT = "Not a Covia user export";
 	public static final String NEWER_VERSION = "The export was written by a newer Covia than this venue reads";
 	public static final String SEED_REQUIRED = "The export holds sealed secrets: supply the seed they were sealed to";
@@ -128,9 +135,9 @@ public final class UserExports {
 			AMap<AString, ACell> plain;
 			try {
 				plain = SecretStore.plaintexts(secrets, SecretStore.keys(engine.getKeyPair()));
-			} catch (RuntimeException e) {
-				// Neither the provider's exception nor any decrypted material is reported.
-				throw new NotSupportedException(SECRET_UNREADABLE);
+			} catch (IntegrityException e) {
+				// The store's report, naming the secret, is the cause; no decrypted material is in either.
+				throw IntegrityException.found(SECRET_INTEGRITY, did, e);
 			}
 			export = export.assoc(K_SECRETS, ECIES.encrypt(recipient, Format.encodeMultiCell(plain, true)));
 		}
@@ -152,9 +159,9 @@ public final class UserExports {
 		AMap<AString, ACell> value = decode(export);
 		// Secrets arrive only sealed: stored records were encrypted under the source venue's key.
 		AMap<AString, ACell> state = RT.ensureMap(value.get(K_USER));
-		state = migrate(state.dissoc(Namespace.S).dissoc(Namespace.J), RT.ensureLong(value.get(Fields.VERSION)).longValue());
+		state = migrate(state.dissoc(Namespace.S).dissoc(Namespace.J), RT.ensureLong(value.get(Fields.VERSION)).longValue(), did);
 		String busy = unfinishedWork(state);
-		if (busy != null) throw new NotSupportedException(busy);
+		if (busy != null) throw new InvalidInputException(busy);
 
 		ACell sealed = value.get(K_SECRETS);
 		if (sealed != null) {
@@ -203,7 +210,8 @@ public final class UserExports {
 	/**
 	 * {@code state} with each agent's controller kept only where it is
 	 * {@code did} itself or one of its agents. A controller anywhere else
-	 * authorised none of this copy, so the agent returns to its owner's control.
+	 * authorised none of this copy, so the agent returns to its owner's
+	 * control.
 	 */
 	@SuppressWarnings("unchecked")
 	private static AMap<AString, ACell> ownControllers(AString did, AMap<AString, ACell> state) {
@@ -212,10 +220,13 @@ public final class UserExports {
 		AMap<AString, ACell> kept = agents;
 		for (long i = 0; i < agents.count(); i++) {
 			var entry = agents.entryAt(i);
-			if (!(entry.getValue() instanceof AMap<?, ?> rec)) continue;
+			if (!(entry.getValue() instanceof AMap<?, ?> found2)) continue;
+			AMap<AString, ACell> rec = (AMap<AString, ACell>) found2;
+			AMap<AString, ACell> own = rec;
 			AString controller = RT.ensureString(rec.get(Agent.KEY_CONTROLLER));
-			if (controller == null || controller.equals(did) || Engine.agentIdIn(did, controller) != null) continue;
-			kept = kept.assoc(entry.getKey(), ((AMap<AString, ACell>) rec).dissoc(Agent.KEY_CONTROLLER));
+			boolean foreignController = controller != null && !controller.equals(did) && Engine.agentIdIn(did, controller) == null;
+			if (foreignController) own = own.dissoc(Agent.KEY_CONTROLLER);
+			if (own != rec) kept = kept.assoc(entry.getKey(), own);
 		}
 		return (kept == agents) ? state : state.assoc(Namespace.G, kept);
 	}
@@ -260,21 +271,31 @@ public final class UserExports {
 				|| !(value.get(K_USER) instanceof AMap<?, ?>)) {
 			throw new InvalidInputException(NOT_AN_EXPORT);
 		}
-		if (version.longValue() > VERSION) throw new NotSupportedException(NEWER_VERSION);
+		if (version.longValue() > VERSION) throw new UnsupportedException(NEWER_VERSION);
 		return value;
 	}
 
 	/**
 	 * Brings the shapes an export at {@code version} holds to their current
-	 * form. A record that names only its caller takes the namespace it would
-	 * have on this venue.
+	 * form, as {@code account}'s. A record that names only its caller takes the
+	 * namespace it would have on this venue.
 	 */
 	@SuppressWarnings("unchecked")
-	private AMap<AString, ACell> migrate(AMap<AString, ACell> state, long version) {
-		if (version >= CALLER_AND_OWNER) return state;
-		ACell venue = engine.getVenueState().get();
-		return (AMap<AString, ACell>) CallerAndOwner.userState(state,
-			caller -> CallerAndOwner.legacyNamespace(venue, caller));
+	private AMap<AString, ACell> migrate(AMap<AString, ACell> state, long version, AString account) {
+		if (version < CALLER_AND_OWNER) {
+			ACell venue = engine.getVenueState().get();
+			state = (AMap<AString, ACell>) CallerAndOwner.userState(state,
+				caller -> CallerAndOwner.legacyNamespace(venue, caller));
+		}
+		if (version < BLOB_IDS) {
+			try {
+				state = (AMap<AString, ACell>) BlobIds.userState(state);
+				state = (AMap<AString, ACell>) OneCaller.userState(state, account);
+			} catch (IllegalStateException refused) {
+				throw new InvalidInputException(NOT_AN_EXPORT, refused);
+			}
+		}
+		return state;
 	}
 
 	/** Null when the state is quiet; otherwise why it cannot be copied. */

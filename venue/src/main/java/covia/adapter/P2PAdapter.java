@@ -44,8 +44,10 @@ import convex.p2p.P2PNode;
 import convex.p2p.P2PUser;
 import covia.api.Abilities;
 import covia.api.Fields;
+import covia.exception.ConfigurationException;
 import covia.exception.InvalidInputException;
-import covia.exception.NotSupportedException;
+import covia.exception.UnavailableException;
+import covia.exception.UnsupportedException;
 import covia.venue.Config;
 import covia.venue.RequestContext;
 
@@ -76,8 +78,14 @@ import covia.venue.RequestContext;
  * {@link #subscribe subscribers} as soon as the lattice changes. Whether a
  * peer is connected is this node's own transient state: it is never
  * published, and since Convex announces connection changes no other way,
- * the adapter also rechecks it every {@code pollMs}. The same pass takes the
- * node offline once the adapter is disabled.</p>
+ * the adapter also rechecks it every {@code pollMs}.</p>
+ *
+ * <p>The node runs while the adapter is started and its settings join:
+ * {@code stop()}, on disable or replacement, takes it offline. A node that
+ * cannot launch, such as on a port in use, is unavailable rather than
+ * misconfigured: at start the adapter is left failed, the venue running
+ * without it, until {@code venue/adapter/restart}; on a runtime change the
+ * change is refused and the previous settings are offered again.</p>
  *
  * <p>This is network infrastructure only. Social follows are a social graph
  * between DIDs, application data for the social layer; they do not belong
@@ -101,6 +109,18 @@ public class P2PAdapter extends AAdapter implements AutoCloseable {
 	public static final String NOT_JOINED =
 		"This venue has not joined the P2P network (adapters.p2p.join is not true)";
 	public static final String SELF_CONNECT = "That is this venue's own node";
+
+	/** Refusals of the {@code adapters.p2p} settings. */
+	public static final String UNKNOWN_SETTING = "adapters.p2p: unknown setting '%s'";
+	public static final String BAD_PORT = "adapters.p2p.port must be 0 (any free port) to 65535, got: %s";
+	public static final String URL_NOT_STRING = "adapters.p2p.url must be a string";
+	public static final String URL_WITHOUT_PORT = "adapters.p2p.url advertises a listener; set adapters.p2p.port too";
+	public static final String BAD_URL = "adapters.p2p.url: %s";
+	public static final String BAD_POLL = "adapters.p2p.pollMs must be at least " + MIN_POLL_MS + ", got: %s";
+	public static final String PEERS_NOT_ARRAY = "adapters.p2p.peers must be an array of {did, address}";
+	public static final String NOT_BOOLEAN = "adapters.p2p.%s must be true or false";
+	/** The node could not launch with the settings; the reason follows. */
+	public static final String LAUNCH_FAILED = "P2P node failed to launch: %s";
 
 	static final AString K_JOIN = Strings.intern("join");
 	static final AString K_PEERS = Strings.intern("peers");
@@ -161,6 +181,8 @@ public class P2PAdapter extends AAdapter implements AutoCloseable {
 
 	private volatile Settings settings = parse(null, false);
 	private volatile Running running;
+	/** Between {@link #start()} and {@link #stop()}: the node runs while the settings join. Guarded by this. */
+	private boolean started;
 	private final List<Consumer<PeerEvent>> listeners = new CopyOnWriteArrayList<>();
 
 	@Override
@@ -181,29 +203,44 @@ public class P2PAdapter extends AAdapter implements AutoCloseable {
 		installAsset("p2p/connect", "/adapters/p2p/connect.json");
 	}
 
+	/**
+	 * Takes the settings and, while started, relaunches the node with them.
+	 * A node that cannot launch refuses the change, and the venue offers the
+	 * settings it had again.
+	 *
+	 * @throws ConfigurationException if a setting is invalid
+	 * @throws UnavailableException if the node cannot launch with them
+	 */
 	@Override
-	public synchronized boolean configure(AMap<AString, ACell> config, boolean strict) {
+	public synchronized void configure(AMap<AString, ACell> config, boolean strict) {
 		Settings next = parse(config, strict);
-		if (running != null) halt();
-		if (next.join() && isActive() && engine.isStarted()) {
-			try {
-				launch(next);
-			} catch (IllegalStateException e) {
-				throw new IllegalArgumentException(e.getMessage(), e);
-			}
-		}
 		settings = next;
-		return true;
+		if (running != null) halt();
+		if (started && next.join()) launch(next);
 	}
 
+	/**
+	 * Launches the node if the settings join the network.
+	 *
+	 * @throws UnavailableException if the node cannot launch, such as on a
+	 *         port in use; the venue keeps running without it until a restart
+	 */
 	@Override
 	public synchronized void start() {
+		started = true;
 		Settings s = settings;
 		if (running == null && s.join()) launch(s);
 	}
 
 	@Override
+	public synchronized void stop() {
+		started = false;
+		halt();
+	}
+
+	@Override
 	public synchronized void close() {
+		started = false;
 		halt();
 	}
 
@@ -231,7 +268,7 @@ public class P2PAdapter extends AAdapter implements AutoCloseable {
 					engine.requireVenueAuthority(ctx, RESOURCE, Abilities.P2P_MANAGE);
 					return connect(input);
 				default:
-					throw new NotSupportedException("Unknown p2p operation: " + sub);
+					throw new UnsupportedException("Unknown p2p operation: " + sub);
 			}
 		} catch (Exception e) {
 			return CompletableFuture.failedFuture(e);
@@ -250,7 +287,7 @@ public class P2PAdapter extends AAdapter implements AutoCloseable {
 
 	private CompletableFuture<ACell> connect(ACell input) {
 		Running r = running;
-		if (r == null) return CompletableFuture.failedFuture(new NotSupportedException(NOT_JOINED));
+		if (r == null) return CompletableFuture.failedFuture(new UnsupportedException(NOT_JOINED));
 		Peer peer;
 		try {
 			peer = peer(input, "input");
@@ -272,17 +309,18 @@ public class P2PAdapter extends AAdapter implements AutoCloseable {
 
 	// ========== Node lifecycle ==========
 
-	private boolean isActive() {
-		return engine != null && engine.getAdapter(getName()) == this;
-	}
-
 	/** Test hook: the running node, or null when the venue has not joined. */
 	P2PNode node() {
 		Running r = running;
 		return (r == null) ? null : r.node;
 	}
 
-	/** Launches a node for {@code s}; caller holds this adapter's lock. */
+	/**
+	 * Launches a node for {@code s}; caller holds this adapter's lock.
+	 *
+	 * @throws UnavailableException if the node cannot launch, such as on a
+	 *         port already in use
+	 */
 	private void launch(Settings s) {
 		P2PNode node = P2PNode.create(new MemoryStore(), s.node(), engine.getKeyPair(), P2PLattice.ROOT);
 		if (s.listens()) node.serveAllInbound();
@@ -291,7 +329,7 @@ public class P2PAdapter extends AAdapter implements AutoCloseable {
 			publishIdentity(node);
 		} catch (IOException e) {
 			closeQuietly(node);
-			throw new IllegalStateException("P2P node failed to launch: " + e.getMessage(), e);
+			throw new UnavailableException(LAUNCH_FAILED.formatted(e.getMessage()), e);
 		} catch (InterruptedException e) {
 			Thread.currentThread().interrupt();
 			closeQuietly(node);
@@ -347,14 +385,6 @@ public class P2PAdapter extends AAdapter implements AutoCloseable {
 		while (!r.closed) {
 			// Taken before the read, so a change during it ends the next wait
 			CompletableFuture<ACell> changed = propagator.nextAnnounce();
-			if (!isActive()) {
-				synchronized (this) {
-					if (running != r) return;
-					running = null;
-				}
-				shut(r);
-				return;
-			}
 			try {
 				report(r, list(r.node), false);
 			} catch (RuntimeException e) {
@@ -501,15 +531,15 @@ public class P2PAdapter extends AAdapter implements AutoCloseable {
 	 * Validates the whole configuration. {@code port}, {@code url} and
 	 * {@code allowPrivateURL} pass to Convex's {@link NodeConfig} as they are;
 	 * without {@code port} the node opens no listener and only dials out.
+	 *
+	 * @throws ConfigurationException for a setting it refuses
 	 */
 	static Settings parse(AMap<AString, ACell> config, boolean strict) {
 		if (config == null) config = Maps.empty();
 		if (strict) {
 			for (long i = 0; i < config.count(); i++) {
 				AString key = config.entryAt(i).getKey();
-				if (!SETTINGS.contains(key)) {
-					throw new IllegalArgumentException("adapters.p2p: unknown setting '" + key + "'");
-				}
+				if (!SETTINGS.contains(key)) throw new ConfigurationException(UNKNOWN_SETTING.formatted(key));
 			}
 		}
 		boolean join = bool(config, K_JOIN);
@@ -521,34 +551,39 @@ public class P2PAdapter extends AAdapter implements AutoCloseable {
 		if (listens) {
 			CVMLong port = RT.ensureLong(rawPort);
 			if (port == null || port.longValue() < 0 || port.longValue() > 65535) {
-				throw new IllegalArgumentException("adapters.p2p.port must be 0 (any free port) to 65535, got: " + rawPort);
+				throw new ConfigurationException(BAD_PORT.formatted(rawPort));
 			}
 			node = node.assoc(NodeConfig.PORT, port);
 		}
 		ACell rawUrl = config.get(NodeConfig.URL);
 		if (rawUrl != null) {
 			AString url = RT.ensureString(rawUrl);
-			if (url == null) throw new IllegalArgumentException("adapters.p2p.url must be a string");
-			if (!listens) throw new IllegalArgumentException("adapters.p2p.url advertises a listener; set adapters.p2p.port too");
+			if (url == null) throw new ConfigurationException(URL_NOT_STRING);
+			if (!listens) throw new ConfigurationException(URL_WITHOUT_PORT);
 			String reason = NodeConfig.validatePublicURL(url.toString(), allowPrivate);
-			if (reason != null) throw new IllegalArgumentException("adapters.p2p.url: " + reason);
+			if (reason != null) throw new ConfigurationException(BAD_URL.formatted(reason));
 			node = node.assoc(NodeConfig.URL, url);
 		}
 		long pollMs = DEFAULT_POLL_MS;
 		ACell rawPoll = config.get(K_POLL_MS);
 		if (rawPoll != null) {
 			CVMLong poll = RT.ensureLong(rawPoll);
-			if (poll == null || poll.longValue() < MIN_POLL_MS) {
-				throw new IllegalArgumentException("adapters.p2p.pollMs must be at least " + MIN_POLL_MS + ", got: " + rawPoll);
-			}
+			if (poll == null || poll.longValue() < MIN_POLL_MS) throw new ConfigurationException(BAD_POLL.formatted(rawPoll));
 			pollMs = poll.longValue();
 		}
 		List<Peer> peers = new ArrayList<>();
 		ACell rawPeers = config.get(K_PEERS);
 		if (rawPeers != null) {
 			AVector<ACell> entries = RT.ensureVector(rawPeers);
-			if (entries == null) throw new IllegalArgumentException("adapters.p2p.peers must be an array of {did, address}");
-			for (long i = 0; i < entries.count(); i++) peers.add(peer(entries.get(i), "adapters.p2p.peers[" + i + "]"));
+			if (entries == null) throw new ConfigurationException(PEERS_NOT_ARRAY);
+			for (long i = 0; i < entries.count(); i++) {
+				try {
+					peers.add(peer(entries.get(i), "adapters.p2p.peers[" + i + "]"));
+				} catch (IllegalArgumentException e) {
+					// The peer parser also reads a connect call's input; here it read the settings
+					throw new ConfigurationException(e.getMessage(), e);
+				}
+			}
 		}
 		return new Settings(join, listens, NodeConfig.create(node), List.copyOf(peers), pollMs);
 	}
@@ -556,7 +591,7 @@ public class P2PAdapter extends AAdapter implements AutoCloseable {
 	private static boolean bool(AMap<AString, ACell> config, AString key) {
 		ACell value = config.get(key);
 		if (value == null) return false;
-		if (!(value instanceof CVMBool b)) throw new IllegalArgumentException("adapters.p2p." + key + " must be true or false");
+		if (!(value instanceof CVMBool b)) throw new ConfigurationException(NOT_BOOLEAN.formatted(key));
 		return b.booleanValue();
 	}
 

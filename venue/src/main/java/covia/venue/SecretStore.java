@@ -6,6 +6,7 @@ import convex.core.crypto.AESGCM;
 import convex.core.crypto.AKeyPair;
 import convex.core.crypto.HKDF;
 import convex.core.crypto.Hashing;
+import convex.core.data.ABlob;
 import convex.core.data.ACell;
 import convex.core.data.AHashMap;
 import convex.core.data.AMap;
@@ -25,6 +26,7 @@ import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
 import convex.lattice.cursor.PathCursor;
 import covia.api.Fields;
+import covia.exception.IntegrityException;
 
 /**
  * Per-user encrypted secret storage.
@@ -47,11 +49,6 @@ public class SecretStore extends MapComponent<AString, ACell> implements Transac
 	@Override
 	public SecretStore rebind(AForkableCursor<AHashMap<AString, ACell>> cursor) {
 		return new SecretStore(context, cursor);
-	}
-
-	@Override
-	public SecretStore withCursor(AForkableCursor<AHashMap<AString, ACell>> cursor) {
-		return rebind(cursor);
 	}
 
 	private final VenueContext context;
@@ -107,9 +104,20 @@ public class SecretStore extends MapComponent<AString, ACell> implements Transac
 	/** HKDF info label of the version 2 key, separating it from every other use of the seed. */
 	public static final String KEY_INFO_V2 = "covia/secret-store/v2";
 
-	/** Refusal for a record whose key version this venue cannot derive. */
+	/** Why a secret failed its integrity check: its record names a key version this venue cannot derive. */
 	public static final String UNKNOWN_KEY_VERSION = "Secret is encrypted under an unknown key version";
+	/** Why a secret failed its integrity check: its record is not a sealed secret. */
 	public static final String INVALID_RECORD = "Secret store entry in wrong format";
+	/** Why a secret failed its integrity check: its ciphertext does not open under its key. */
+	public static final String DOES_NOT_DECRYPT = "Secret does not decrypt under its key";
+
+	/**
+	 * A secret that failed its integrity check: its name, then why. This venue
+	 * sealed it, so only damage, tampering, a bug or a misconfigured venue key
+	 * explains it.
+	 */
+	public static final String INTEGRITY_FAILED = "Secret '%s' failed its integrity check (%s): its stored record "
+		+ "was altered or damaged, or this venue's key is not the one that sealed it";
 
 	/** Refusal for the deprecated single-key API meeting a record it cannot read. */
 	public static final String LEGACY_KEY_READS_V1_ONLY =
@@ -271,15 +279,18 @@ public class SecretStore extends MapComponent<AString, ACell> implements Transac
 	 * @param sealed A sealed value, or null
 	 * @param keys The venue's secret store keys (from {@link #keys})
 	 * @return The plaintext, or null for null
-	 * @throws IllegalStateException with {@link #INVALID_RECORD} for a value that is
-	 * not sealed, or {@link #UNKNOWN_KEY_VERSION} for a key version this venue cannot derive
+	 * @throws IntegrityException with {@link #INTEGRITY_FAILED} when it does not
+	 * open, as {@link #decrypt(AString, Keys)} says; not logged
 	 */
 	@SuppressWarnings("unchecked")
 	public static AString unseal(ACell sealed, Keys keys) {
 		if (sealed == null) return null;
-		if (!(sealed instanceof AMap<?, ?> record)) throw new IllegalStateException(INVALID_RECORD);
-		return open((AMap<AString, ACell>) record, keys);
+		if (!(sealed instanceof AMap<?, ?> record)) throw integrityFailure(SEALED_VALUE, INVALID_RECORD, null);
+		return open(SEALED_VALUE, (AMap<AString, ACell>) record, keys);
 	}
+
+	/** What {@link #unseal} calls the value it opens in {@link #INTEGRITY_FAILED}, having no name for it. */
+	public static final String SEALED_VALUE = "sealed value";
 
 	private static Blob encrypt(AString plaintext, Keys keys) {
 		byte[] bytes = plaintext.toString().getBytes(StandardCharsets.UTF_8);
@@ -300,9 +311,11 @@ public class SecretStore extends MapComponent<AString, ACell> implements Transac
 	 * @param name Secret name
 	 * @param keys The venue's secret store keys (from {@link #keys})
 	 * @return Decrypted plaintext, or null if the secret does not exist
-	 * @throws IllegalStateException with {@link #UNKNOWN_KEY_VERSION} for a key
-	 * version this venue cannot derive
-	 * @throws RuntimeException if decryption fails (wrong key or corrupted data)
+	 * @throws IntegrityException with {@link #INTEGRITY_FAILED} when the stored
+	 * record does not open: it is not a sealed secret ({@link #INVALID_RECORD}),
+	 * names a key version this venue cannot derive ({@link #UNKNOWN_KEY_VERSION})
+	 * or does not decrypt ({@link #DOES_NOT_DECRYPT}); not logged, for whoever
+	 * reports it knows whose secret it is
 	 */
 	public AString decrypt(String name, Keys keys) {
 		return decrypt(Strings.create(name), keys);
@@ -310,16 +323,30 @@ public class SecretStore extends MapComponent<AString, ACell> implements Transac
 
 	public AString decrypt(AString name, Keys keys) {
 		// One read: the blob and its version must come from the same record.
-		return open(getRecord(name), keys);
+		return open(name, getRecord(name), keys);
 	}
 
 	/** Decrypts one stored record under the key of its version; null for no record. */
-	private static AString open(AMap<AString, ACell> record, Keys keys) {
-		Blob blob = encrypted(record);
+	private static AString open(Object name, AMap<AString, ACell> record, Keys keys) {
+		Blob blob = encrypted(name, record);
 		if (blob == null) return null;
 		byte[] key = keys.forVersion(keyVersion(record));
-		if (key == null) throw new IllegalStateException(UNKNOWN_KEY_VERSION);
-		return plaintext(AESGCM.decrypt(key, blob.getBytes()));
+		if (key == null) throw integrityFailure(name, UNKNOWN_KEY_VERSION, null);
+		byte[] decrypted;
+		try {
+			decrypted = AESGCM.decrypt(key, blob.getBytes());
+		} catch (RuntimeException e) {
+			throw integrityFailure(name, DOES_NOT_DECRYPT, e);
+		}
+		return plaintext(decrypted);
+	}
+
+	/**
+	 * A secret's integrity failure. Not logged here: the store does not know
+	 * whose secrets it holds, so whoever reports the failure logs it.
+	 */
+	private static IntegrityException integrityFailure(Object name, String why, Throwable cause) {
+		return new IntegrityException(INTEGRITY_FAILED.formatted(name, why), cause);
 	}
 
 	/**
@@ -327,16 +354,17 @@ public class SecretStore extends MapComponent<AString, ACell> implements Transac
 	 * {@code name → {value, updated}}. Package-private: a user export seals the
 	 * result to another key before it leaves the venue.
 	 *
-	 * @throws RuntimeException when any record cannot be decrypted
+	 * @throws IntegrityException with {@link #INTEGRITY_FAILED} when any record
+	 * does not open, as {@link #decrypt(AString, Keys)} says
 	 */
 	static AMap<AString, ACell> plaintexts(AMap<AString, ACell> records, Keys keys) {
 		AMap<AString, ACell> out = Maps.empty();
 		if (records == null) return out;
 		for (var entry : records.entrySet()) {
 			AMap<AString, ACell> record = RT.ensureMap(entry.getValue());
-			if (record == null) throw new IllegalStateException(INVALID_RECORD);
+			if (record == null) throw integrityFailure(entry.getKey(), INVALID_RECORD, null);
 			out = out.assoc(entry.getKey(), Maps.of(
-				Fields.VALUE, open(record, keys),
+				Fields.VALUE, open(entry.getKey(), record, keys),
 				UPDATED_KEY, record.get(UPDATED_KEY)));
 		}
 		return out;
@@ -378,7 +406,7 @@ public class SecretStore extends MapComponent<AString, ACell> implements Transac
 	@Deprecated(since = "0.10.0")
 	public AString decrypt(AString name, byte[] encryptionKey) {
 		AMap<AString, ACell> record = getRecord(name);
-		Blob blob = encrypted(record);
+		Blob blob = encrypted(name, record);
 		if (blob == null) return null;
 		if (keyVersion(record) != KEY_VERSION_1) {
 			throw new IllegalStateException(LEGACY_KEY_READS_V1_ONLY);
@@ -386,11 +414,17 @@ public class SecretStore extends MapComponent<AString, ACell> implements Transac
 		return plaintext(AESGCM.decrypt(encryptionKey, blob.getBytes()));
 	}
 
-	/** The ciphertext of a secret record, or null when there is none. */
-	private static Blob encrypted(AMap<AString, ACell> record) {
+	/**
+	 * The ciphertext of a secret record, or null when there is none. A store
+	 * decodes a ciphertext longer than one chunk as a tree of blobs, so any blob
+	 * form is the same ciphertext.
+	 *
+	 * @throws IntegrityException with {@link #INVALID_RECORD} for a record that is not a sealed secret
+	 */
+	private static Blob encrypted(Object name, AMap<AString, ACell> record) {
 		if (record == null) return null;
-		if (record.get(ENCRYPTED_KEY) instanceof Blob blob) return blob;
-		throw new IllegalStateException(INVALID_RECORD);
+		if (record.get(ENCRYPTED_KEY) instanceof ABlob blob) return blob.toFlatBlob();
+		throw integrityFailure(name, INVALID_RECORD, null);
 	}
 
 	/** A record's key version: absent predates versioning (version 1); malformed is -1, which no key matches. */
@@ -457,7 +491,7 @@ public class SecretStore extends MapComponent<AString, ACell> implements Transac
 		ACell value = all.get(name);
 		if (!(value instanceof AMap)) {
 			if (!all.containsKey(name)) return null;
-			throw new IllegalStateException(INVALID_RECORD);
+			throw integrityFailure(name, INVALID_RECORD, null);
 		}
 		return (AMap<AString, ACell>) value;
 	}

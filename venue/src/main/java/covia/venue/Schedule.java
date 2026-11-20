@@ -7,7 +7,6 @@ import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.ASet;
 import convex.core.data.AString;
-import convex.core.data.AVector;
 import convex.core.data.Blob;
 import convex.core.data.Index;
 import convex.core.data.Maps;
@@ -22,7 +21,7 @@ import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
 import convex.lattice.cursor.StampedCursor;
 import covia.api.Fields;
-import covia.grid.Attribution;
+import covia.grid.Principals;
 import covia.exception.InvalidInputException;
 import covia.lattice.Covia;
 
@@ -42,7 +41,6 @@ public final class Schedule extends ALatticeComponent<ACell>
 	@Override public Schedule rebind(AForkableCursor<ACell> cursor) {
 		return new Schedule(context, cursor);
 	}
-	@Override public Schedule withCursor(AForkableCursor<ACell> cursor) { return rebind(cursor); }
 
 	public record Entry(Blob key, AMap<AString, ACell> rec) {}
 
@@ -54,11 +52,11 @@ public final class Schedule extends ALatticeComponent<ACell>
 
 	@SuppressWarnings("unchecked")
 	private void updateEvents(UnaryOperator<Index<Blob, ACell>> update) {
-		cursor().withDefault(Maps.empty()).path(K_EVENTS).updateAndGet(value ->
+		Covia.entry(cursor(), K_EVENTS).updateAndGet(value ->
 			update.apply(value instanceof Index<?, ?> ? (Index<Blob, ACell>) value : Index.none()));
 	}
 
-	/** The keys of the events {@code caller} made for another namespace, from the reverse index. */
+	/** The keys of the events {@code caller}, an agent, scheduled, from the reverse index. */
 	@SuppressWarnings("unchecked")
 	public ASet<Blob> scheduledBy(AString caller) {
 		ACell keys = RT.getIn(cursor().path(K_BY_ACTOR).getOrDefault(null), caller);
@@ -67,7 +65,7 @@ public final class Schedule extends ALatticeComponent<ACell>
 
 	@SuppressWarnings("unchecked")
 	private void updateCaller(AString caller, UnaryOperator<ASet<Blob>> update) {
-		cursor().withDefault(Maps.empty()).path(K_BY_ACTOR).updateAndGet(value -> {
+		Covia.entry(cursor(), K_BY_ACTOR).updateAndGet(value -> {
 			AMap<AString, ACell> byCaller = (value instanceof AMap<?, ?>) ? asMap(value) : Maps.empty();
 			ACell held = byCaller.get(caller);
 			ASet<Blob> keys = update.apply((held instanceof ASet<?> s) ? (ASet<Blob>) s : Sets.empty());
@@ -75,11 +73,21 @@ public final class Schedule extends ALatticeComponent<ACell>
 		});
 	}
 
-	/** The caller an event is indexed under: its caller when it made the event for another namespace. */
+	/** The caller an event is indexed under: its caller when that is an agent, acting in its owner's account. */
 	private static AString indexedCaller(ACell rec) {
 		if (!(rec instanceof AMap<?, ?>)) return null;
-		AMap<AString, ACell> event = asMap(rec);
-		return event.containsKey(Fields.OWNER) ? Attribution.caller(event) : null;
+		AString caller = RT.ensureString(asMap(rec).get(K_CALLER));
+		return (caller != null && !caller.equals(Principals.userOf(caller))) ? caller : null;
+	}
+
+	/**
+	 * The account an event belongs to and runs in: its caller's, which for an
+	 * agent is its owner's, read from its DID. Every event names its caller,
+	 * since the schedule is kept venue-wide.
+	 */
+	public static AString accountOf(AMap<AString, ACell> rec) {
+		AString caller = RT.ensureString(rec.get(K_CALLER));
+		return (caller == null) ? null : Principals.userOf(caller);
 	}
 
 	/** Stores {@code rec} at {@code key} and indexes it under its caller. The caller commits. */
@@ -98,20 +106,19 @@ public final class Schedule extends ALatticeComponent<ACell>
 	}
 
 	/**
-	 * Stores a new event. {@code authority} is the separate authority the
-	 * scheduling request acted with ({@link Engine#keptAuthority}), or null when
-	 * it acted with its caller's own; the event fires with it.
+	 * Stores a new event. {@code state} is the state of the scheduling
+	 * request's frame ({@link Engine#stateOf}), kept as {@link #K_CONTEXT}; each
+	 * fire runs in it.
 	 */
-	public Blob schedule(AString op, ACell input, AString owner, AString caller,
-			AVector<ACell> proofs, AMap<AString, ACell> authority, long wakeTime,
+	public Blob schedule(AString op, ACell input, AString caller,
+			AMap<AString, ACell> state, long wakeTime,
 			AMap<AString, ACell> repeat, Boolean track, AString description, long created) {
 		Blob key = mintKey(wakeTime);
-		AMap<AString, ACell> rec = Attribution.attribute(Maps.of(K_OP, op,
-			K_TIME, CVMLong.create(wakeTime), K_CREATED, CVMLong.create(created)), caller, owner);
+		AMap<AString, ACell> rec = Maps.of(K_OP, op, K_CALLER, caller,
+			K_TIME, CVMLong.create(wakeTime), K_CREATED, CVMLong.create(created));
 		if (description != null) rec = rec.assoc(K_DESCRIPTION, validateDescription(description));
 		if (input != null) rec = rec.assoc(K_INPUT, input);
-		if (proofs != null) rec = rec.assoc(K_PROOFS, proofs);
-		if (authority != null) rec = rec.assoc(Fields.AUTHORITY, authority);
+		if (state != null) rec = rec.assoc(K_CONTEXT, state);
 		if (repeat != null) rec = rec.assoc(K_REPEAT, validateRepeat(repeat));
 		if (track != null) rec = rec.assoc(K_TRACK, CVMBool.create(track));
 		var record = rec;
@@ -134,14 +141,14 @@ public final class Schedule extends ALatticeComponent<ACell>
 	void cancelUser(AString owner) {
 		execute(draft -> {
 			for (var entry : draft.events().entrySet()) {
-				if (entry.getValue() instanceof AMap<?, ?> rec && owner.equals(Attribution.owner(asMap(rec)))) {
+				if (entry.getValue() instanceof AMap<?, ?> rec && owner.equals(accountOf(asMap(rec)))) {
 					draft.drop(entry.getKey());
 				}
 			}
 		});
 	}
 
-	/** Removes every event {@code caller} made for another namespace, through the reverse index. */
+	/** Removes every event {@code caller}, an agent, scheduled, through the reverse index. */
 	void cancelCaller(AString caller) {
 		execute(draft -> {
 			for (Blob key : draft.scheduledBy(caller)) draft.drop(key);
@@ -173,7 +180,7 @@ public final class Schedule extends ALatticeComponent<ACell>
 	Blob replaceAgentWake(AString owner, AString agentId, Blob oldHandle, long earliest) {
 		if (oldHandle != null) {
 			var old = find(oldHandle);
-			if (old != null && owner.equals(Attribution.owner(old.rec()))
+			if (old != null && owner.equals(accountOf(old.rec()))
 					&& Agent.TRIGGER_OP.equals(old.rec().get(K_OP))
 					&& agentId.equals(RT.getIn(old.rec(), K_INPUT, Fields.AGENT_ID))) {
 				drop(old.key());
@@ -181,7 +188,7 @@ public final class Schedule extends ALatticeComponent<ACell>
 		}
 		return earliest <= 0 ? null : schedule(Agent.TRIGGER_OP,
 			Maps.of(Fields.AGENT_ID, agentId, Fields.FORCE, CVMBool.FALSE, Fields.WAIT, CVMBool.FALSE),
-			owner, owner, null, null, earliest, null, false, null,
+			owner, Engine.stateOf(owner), earliest, null, false, null,
 			context.currentTimestamp().longValue());
 	}
 
@@ -189,22 +196,19 @@ public final class Schedule extends ALatticeComponent<ACell>
 	static final AString K_OP = Strings.intern("op");
 	/** Event record field: the input cell passed to the operation. */
 	static final AString K_INPUT = Strings.intern("input");
-	/** Event record field: the principal that scheduled the event (an owner, one
-	 *  of its agents or a delegate), which the event fires as. Its {@code owner}
-	 *  ({@link Fields#OWNER}), present when that differs, is the namespace it
-	 *  belongs to and runs in, so a user keeps sight of what their agents have
-	 *  queued. Both are written and read with {@link Attribution}. */
+	/** Event record field: the principal that scheduled the event (a user or
+	 *  one of its agents), which the event fires as. Its account
+	 *  ({@link #accountOf}) is the one the event belongs to and runs in, so a
+	 *  user keeps sight of what their agents have queued. */
 	static final AString K_CALLER = Fields.CALLER;
-	/** Event record field: the namespace the event belongs to, when it differs from its caller. */
-	static final AString K_OWNER = Fields.OWNER;
 	/** Event record field: caller-written display text saying what the event is
 	 *  for (AString, at most {@link #MAX_DESCRIPTION_CHARS}). Never interpreted. */
 	static final AString K_DESCRIPTION = Fields.DESCRIPTION;
 	/** Event record field: wall-clock millis at which the event was scheduled
 	 *  (CVMLong). Absent on events stored before it was recorded. */
 	static final AString K_CREATED = Fields.CREATED;
-	/** Event record field: the UCAN proofs (AVector) the scheduler presented, presented again at fire time. */
-	static final AString K_PROOFS = Fields.PROOFS;
+	/** Event record field: the state of the scheduling request's frame (AMap, {@link Engine#stateOf}), which each fire runs in. */
+	static final AString K_CONTEXT = Fields.CONTEXT;
 	/** Event record field: absolute wake time in millis (CVMLong). */
 	static final AString K_TIME = Strings.intern("time");
 	/** Event record field: recurrence spec (AMap, see {@link #validateRepeat});
@@ -346,6 +350,15 @@ public final class Schedule extends ALatticeComponent<ACell>
 		Utils.writeLong(bs, 0, wakeTime);
 		Utils.writeLong(bs, 8, ThreadLocalRandom.current().nextLong());
 		return Blob.wrap(bs);
+	}
+
+	/**
+	 * An event's id: the part of its key that stays fixed as a recurring event
+	 * moves, which names it as a capability resource. A key of another length
+	 * is its own id.
+	 */
+	public static Blob idOf(Blob key) {
+		return (key.count() == KEY_LENGTH) ? key.slice(8, KEY_LENGTH).toFlatBlob() : key;
 	}
 
 	/** The same event id under a new wake time — how a recurring event moves. */

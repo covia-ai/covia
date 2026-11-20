@@ -123,6 +123,8 @@ top level of a legacy flat config map):
 | `context` | array | Context loading entries (asset hashes, workspace paths) |
 | `responseFormat` | object | Structured output schema ({name, schema}) |
 | `defaultTools` | boolean | Whether to include the platform default tool pack on top of `tools` (default: false — strict allowlist) |
+| `acceptTasks` | boolean | Whether the agent takes tasks: `agent:request` and the task tools (default: false; [AGENT_TASKS.md](./AGENT_TASKS.md) §2) |
+| `compactKeep` | integer | Exchanges compaction keeps after its summary, as their messages and answers, 0 or more (default: 5; [AGENT_CONTEXT.md](./AGENT_CONTEXT.md) §5.6) |
 | `state` | any | Initial state for the agent (optional) |
 
 All fields are optional. Missing fields get platform defaults.
@@ -147,7 +149,9 @@ All fields are optional. Missing fields get platform defaults.
 > description, and input schema. A definition that is missing or unreadable is
 > omitted from the provider palette and reported in `agent:create` warnings
 > and the model's assembled context. Shared
-> `v/ops/...` catalog metadata remains publicly discoverable.
+> `v/ops/...` catalog metadata remains publicly discoverable. A callable's
+> path is not read: it is offered while the agent may call the callable
+> ([CALLABLES.md](CALLABLES.md#invoking-a-callable-by-its-path)).
 
 > **Tools on another venue depend on that venue.** A tool may name another
 > venue's operation by DID URL (`did:web:other.host/v/ops/...`, or
@@ -351,7 +355,29 @@ palette assembled for the current provider call.
 
 **Templates give no authority, except `admin`.** An agent acts with its controller's authority narrowed by its `caps`, and an agent created without `caps` has none ([UCAN.md §5.4](./UCAN.md)). `reader` declares read caps and `admin` declares `"unrestricted"`; every other template declares none, so whoever creates from it chooses the agent's authority in a later layer, a list of capabilities or `"unrestricted"`. Without that, the agent still runs and answers, but its tool calls are refused.
 
-**Tools are opt-in, on every runtime.** Each template explicitly lists the tools it needs in `config.tools`; `defaultTools: true` adds only the deliberately small inspect/read/list pack. Harness tools are opt-in by name under the same rule: the shared ones (`context_load`, `context_unload`, `more_tools`, `skill_load`, `compact`) work on both runtimes, while hierarchy controls (`subgoal`, `complete`, `fail`) are goal-tree-specific. What a configuration implies without listing, and what each frame is offered, is in [AGENT_LOOP.md §3.6](./AGENT_LOOP.md#36-tool-palette). An agent that declares none of this has only the task tools.
+**Tools are opt-in, on every runtime.** Each template explicitly lists the tools it needs in `config.tools`; `defaultTools: true` adds only the deliberately small inspect/read/list pack. Harness tools are opt-in by name under the same rule: the shared ones (`context_load`, `context_unload`, `more_tools`, `skill_load`, `compact`) work on both runtimes, while hierarchy controls (`subgoal`, `complete`, `fail`) are goal-tree-specific. What a configuration implies without listing, and what each frame is offered, is in [AGENT_LOOP.md §3.6](./AGENT_LOOP.md#36-tool-palette). An agent that declares none of this has no tools, or only the task tools when it takes tasks.
+
+**Templates take tasks, except `minimal`.** Every standard template but `minimal`, the leanest chat-style start, sets `acceptTasks: true`, as do the messaging modules' `telegram`, `slack` and `discord` templates, whose agents schedule check-backs to themselves through `agent:request`. So an agent created from one, or with no config, takes `agent:request` ([AGENT_TASKS.md](./AGENT_TASKS.md) §2). The `manager` and `full` templates tell the agent to set it on agents it creates to send requests to.
+
+**Who is asking is the templates' to weigh.** Each standard template's
+instructions say how to read the venue-verified `From` element
+([AGENT_CONTEXT.md §1.2](./AGENT_CONTEXT.md)): it says where a message
+started and who handed it on, marking each principal as the owner or not.
+Every attributed incoming message carries the hint except the owner's direct
+messages at the start or after another direct one. Non-owner sources repeat it
+every time. Assistant replies and tool results keep their own roles, and
+legacy messages without recorded attribution do not establish owner approval.
+Only the owner's messages carry the
+owner's instructions, and a message is not the owner's if anyone on its line
+is marked otherwise, so it is a request, to be weighed against them, whatever
+authority it claims. A sibling belonging to the same owner remains a separate
+requester, not evidence of owner approval. A token route names its issuer,
+not its unknown holder. Transport and protocol labels establish how a
+request arrived, not that the owner personally wrote or approved it; the
+agent follows its owner's standing instructions for those sources without
+inferring approval from credential possession alone. An agent copies its template's
+instructions when it is created, so a change here reaches only agents created
+after it.
 
 **Namespace literacy is a pinned skill, not prompt text.** Every template with lattice tools pins `v/skills/data/lattice` through `config.loads` (as a skill entry), so the namespace and addressing reference renders as a loaded element the agent can mask rather than as a line in every head; `minimal` has no tools and carries none (AGENT_CONTEXT.md §5.1).
 
@@ -405,7 +431,7 @@ venues enforce the requester's authority at write time, as the requester
 stands then: an agent under its current `config.caps`, a delegate through the
 grant it presented. The write completes the request's job, so it is made in
 the request's context: as the request arrived, or after a restart as the
-caller the job keeps acts now ([JOBS.md](JOBS.md#kept-caller-context)). The
+caller the job keeps acts now ([JOBS.md](JOBS.md#a-jobs-state)). The
 worker's task records neither the path nor anything of the requester. A
 write in this venue commits in one transaction with the cycle that resolved
 the task and with the request's completion ([AGENT_LOOP.md](AGENT_LOOP.md)
@@ -458,7 +484,7 @@ the handoff caps are mandatory, not optional.
 - Resets status to SLEEPING; tasks, pending, and sessions are fresh
 - Optional `config` override (inline map or string reference) is merged on top of source config per-field
 - Source must exist and not be TERMINATED; target must not already exist
-- Implementation: `User.forkAgent` + `Agent.initialiseFromFork`
+- Implementation: `Agents.createFork`, on the owner's agents (`user.agents()`)
 
 ### Phase 3a: Ship standard templates ✓ DONE
 

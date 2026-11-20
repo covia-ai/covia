@@ -1,6 +1,6 @@
 {
   "name": "List Scheduled Events",
-  "description": "List the caller's pending scheduled events, soonest first. Each entry carries its handle, operation reference, next fire time and effective tracking, plus who scheduled it, its input, its description and when it was scheduled, where recorded; a recurring event also carries its repeat spec, lastFired time and — when tracked — the lastJob ID of its most recent fire (read that Job for the outcome).",
+  "description": "List the pending scheduled events of the caller's account that it may read (crud/read on <account>/x/schedule/<id>), soonest first. Each entry carries its handle, its id, operation reference, next fire time and effective tracking, plus who scheduled it, its input, its description and when it was scheduled, where recorded; a recurring event also carries its repeat spec, lastFired time and — when tracked — the lastJob ID of its most recent fire (read that Job for the outcome).",
   "operation": {
     "adapter": "scheduler:list",
     "readOnly": true,
@@ -21,6 +21,10 @@
                 "type": "string",
                 "description": "Handle identifying the event, for trigger and cancel"
               },
+              "id": {
+                "type": "string",
+                "description": "The event's id, which names it as a capability resource, <account>/x/schedule/<id>; it stays the same as a recurring event moves"
+              },
               "op": {
                 "type": "string",
                 "description": "Reference of the operation invoked when due"
@@ -35,11 +39,7 @@
               },
               "caller": {
                 "type": "string",
-                "description": "DID of the principal that scheduled the event, which it fires as: the user's own, or that of the agent or delegate acting for them"
-              },
-              "owner": {
-                "type": "string",
-                "description": "DID of the user the event belongs to, when that is not its caller"
+                "description": "DID of the principal that scheduled the event, which it fires as: the user's own, or that of one of its agents"
               },
               "input": {
                 "description": "Input passed to the operation when it fires, with the operation's declared secret fields hidden as on job records. Absent when there is no input or the operation no longer resolves."
@@ -67,6 +67,7 @@
             },
             "required": [
               "handle",
+              "id",
               "op",
               "caller",
               "time",

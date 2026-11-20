@@ -10,7 +10,7 @@ import io.github.jaredmdobson.concentus.OpusDecoder;
 import io.github.jaredmdobson.concentus.OpusException;
 
 import covia.exception.InvalidInputException;
-import covia.exception.NotSupportedException;
+import covia.exception.UnsupportedException;
 
 /**
  * Audio as the local engine hears it: 16 kHz mono samples from -1 to 1. Reads WAV
@@ -33,7 +33,7 @@ final class AudioDecoder {
 	static float[] decode(byte[] audio) {
 		if (startsWith(audio, 0, "RIFF") && startsWith(audio, 8, "WAVE")) return wav(audio);
 		if (startsWith(audio, 0, "OggS")) return opus(audio);
-		throw new NotSupportedException(UNSUPPORTED);
+		throw new UnsupportedException(UNSUPPORTED);
 	}
 
 	// ---- WAV ----
@@ -65,7 +65,7 @@ final class AudioDecoder {
 			throw new InvalidInputException(MALFORMED, e);
 		}
 		boolean pcm16 = format == 1 && bits == 16, float32 = format == 3 && bits == 32;
-		if (dataAt < 0 || channels < 1 || rate < 8000 || rate > 192_000 || !(pcm16 || float32)) throw new NotSupportedException(UNSUPPORTED);
+		if (dataAt < 0 || channels < 1 || rate < 8000 || rate > 192_000 || !(pcm16 || float32)) throw new UnsupportedException(UNSUPPORTED);
 		int frameBytes = channels * bits / 8;
 		long frames = dataLength / frameBytes;
 		if (frames / rate > MAX_SECONDS) throw new InvalidInputException(TOO_LONG);
@@ -113,13 +113,13 @@ final class AudioDecoder {
 	private static float[] opus(byte[] audio) {
 		List<byte[]> packets = OggReader.packets(audio);
 		if (packets.size() < 2 || !startsWith(packets.get(0), 0, "OpusHead") || packets.get(0).length < 19) {
-			throw new NotSupportedException(UNSUPPORTED);
+			throw new UnsupportedException(UNSUPPORTED);
 		}
 		byte[] head = packets.get(0);
 		int channels = head[9] & 0xff;
 		int preSkip = ((head[10] & 0xff) | (head[11] & 0xff) << 8) * RATE / 48_000;
 		int mapping = head[18] & 0xff;
-		if (channels < 1 || channels > 2 || mapping != 0) throw new NotSupportedException(UNSUPPORTED);
+		if (channels < 1 || channels > 2 || mapping != 0) throw new UnsupportedException(UNSUPPORTED);
 		OpusDecoder decoder;
 		try { decoder = new OpusDecoder(RATE, channels); }
 		catch (OpusException e) { throw new InvalidInputException(MALFORMED, e); }

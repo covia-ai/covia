@@ -32,6 +32,7 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
+import convex.core.lang.RT;
 import convex.core.util.Utils;
 import covia.adapter.TestAdapter;
 import covia.api.Abilities;
@@ -97,6 +98,17 @@ public class SchedulerTest {
 
 	// ----------------------------------------------------------- fire via trigger
 
+	/** An event belongs to its caller's account, read from its DID, so a principal acting in another account cannot schedule. */
+	@Test
+	public void testAPrincipalActingOutsideItsDIDsAccountCannotSchedule() {
+		AString agentShaped = s(did + ":g:not-an-agent");
+		RequestContext bearer = engine.context(agentShaped);
+		assertEquals(agentShaped, bearer.getUserDID(), "an agent-shaped DID a bearer names is its own namespace");
+		AuthException refused = assertThrows(AuthException.class,
+			() -> sched.schedule(s("v/test/ops/echo"), s("x"), bearer, future()));
+		assertEquals(Scheduler.NOT_ITS_ACCOUNT.formatted(agentShaped, agentShaped), refused.getMessage());
+	}
+
 	@Test
 	@SuppressWarnings("unchecked")
 	public void testScheduleRetainsExtensibleRecordShape() {
@@ -143,11 +155,11 @@ public class SchedulerTest {
 		Schedule state = engine.getVenueState().schedule();
 
 		RequestContext fired = sched.fireContext(state.find(own).rec());
-		assertEquals(did, fired.getCallerDID());
+		assertEquals(did, fired.getAuthorityDID());
 		assertNull(fired.getCaps());
 
 		fired = sched.fireContext(state.find(agents).rec());
-		assertEquals(worker.getCallerDID(), fired.getCallerDID());
+		assertEquals(worker.getAuthorityDID(), fired.getAuthorityDID());
 		assertEquals(did, fired.getUserDID());
 		assertEquals(invoke, fired.getCaps());
 
@@ -157,14 +169,8 @@ public class SchedulerTest {
 			Fields.CONFIG, Maps.of(Config.CAPS, narrower)), ctx).awaitResult(5000);
 		assertEquals(narrower, sched.fireContext(state.find(agents).rec()).getCaps());
 
-		// A delegate fires only while a user/sudo delegation still authorises it.
-		RequestContext delegate = RequestContext.of(s(did + "-delegate")).onBehalfOf(did);
-		Blob delegated = sched.schedule(s("v/test/ops/echo"), s("x"), delegate, future());
-		assertThrows(AuthException.class, () -> sched.fireContext(state.find(delegated).rec()));
-
 		assertTrue(sched.cancel(own, ctx));
 		assertTrue(sched.cancel(agents, ctx));
-		assertTrue(sched.cancel(delegated, ctx));
 	}
 
 	@Test
@@ -173,16 +179,16 @@ public class SchedulerTest {
 		RequestContext agent = agent("worker", caps);
 		Blob handle = sched.schedule(s("v/test/ops/capturectx"), Maps.empty(), agent, future());
 		TestAdapter.CAPTURED_CTX.remove(did);
-		sched.trigger(handle, agent).get(5, TimeUnit.SECONDS);
+		sched.trigger(handle, ctx).get(5, TimeUnit.SECONDS);
 		RequestContext fired = TestAdapter.CAPTURED_CTX.get(did);
 		assertNotNull(fired, "the fire ran in the owner's namespace");
-		assertEquals(agent.getCallerDID(), fired.getCallerDID());
+		assertEquals(agent.getAuthorityDID(), fired.getAuthorityDID());
 		assertEquals(caps, fired.getCaps());
 	}
 
-	/** A delegate's event fires in the owner's namespace while its user/sudo grant authorises it. */
+	/** An event scheduled under admin/sudo is the user's own, and fires as the user. */
 	@Test
-	public void testADelegatedEventFiresUnderItsGrant() throws Exception {
+	public void testAnEventScheduledUnderSudoIsTheUsers() throws Exception {
 		AKeyPair ownerKey = AKeyPair.generate();
 		AKeyPair delegateKey = AKeyPair.generate();
 		AString owner = UCAN.toDIDKey(ownerKey.getAccountKey());
@@ -191,18 +197,46 @@ public class SchedulerTest {
 		engine.getVenueState().users().create(delegate);
 		AString grant = UCAN.create(ownerKey, delegateKey.getAccountKey(),
 			(System.currentTimeMillis() / 1000) + 3600,
-			Vectors.of(Capability.create(owner, Abilities.USER_SUDO),
-				Capability.create(s(owner + "/v/test/ops/capturectx"), s("invoke"))),
-			Vectors.empty()).toJWT(ownerKey);
-		RequestContext sudo = engine.sudoContext(engine.withTransportGrants(
-			RequestContext.of(delegate), Vectors.of(grant)), owner);
-
-		Blob handle = sched.schedule(s("v/test/ops/capturectx"), Maps.empty(), sudo, future());
+			Vectors.of(Capability.create(owner, Abilities.ADMIN_SUDO)), Vectors.empty()).toJWT(ownerKey);
+		RequestContext delegateCtx = engine.withTransportGrants(RequestContext.of(delegate), Vectors.of(grant));
+		Blob asUser = sched.schedule(s("v/test/ops/capturectx"), Maps.empty(), engine.sudoContext(delegateCtx, owner), future());
 		TestAdapter.CAPTURED_CTX.remove(owner);
-		sched.trigger(handle, RequestContext.of(owner)).get(5, TimeUnit.SECONDS);
+		sched.trigger(asUser, RequestContext.of(owner)).get(5, TimeUnit.SECONDS);
+		assertEquals(owner, TestAdapter.CAPTURED_CTX.get(owner).getAuthorityDID(), "scheduled under sudo, it is the user's");
+	}
+
+	/**
+	 * An event that calls user:sudo enters it when it fires, its grant checked
+	 * then as any request's would be: with admin/sudo on the user it runs as
+	 * the user, called by the delegate; without one it is refused.
+	 */
+	@Test
+	public void testAnEventEntersSudoWhenItFires() throws Exception {
+		AKeyPair ownerKey = AKeyPair.generate();
+		AKeyPair delegateKey = AKeyPair.generate();
+		AString owner = UCAN.toDIDKey(ownerKey.getAccountKey());
+		AString delegate = UCAN.toDIDKey(delegateKey.getAccountKey());
+		engine.getVenueState().users().create(owner);
+		engine.getVenueState().users().create(delegate);
+		AString grant = UCAN.create(ownerKey, delegateKey.getAccountKey(),
+			(System.currentTimeMillis() / 1000) + 3600,
+			Vectors.of(Capability.create(owner, Abilities.ADMIN_SUDO)), Vectors.empty()).toJWT(ownerKey);
+		RequestContext delegateCtx = engine.withTransportGrants(RequestContext.of(delegate), Vectors.of(grant));
+		AMap<AString, ACell> asOwner = Maps.of(Fields.DID, owner, Fields.OPERATION, "v/test/ops/capturectx");
+
+		Blob granted = sched.schedule(s("v/ops/user/sudo"), asOwner, delegateCtx, future());
+		TestAdapter.CAPTURED_CTX.remove(owner);
+		sched.trigger(granted, delegateCtx).get(5, TimeUnit.SECONDS);
 		RequestContext fired = TestAdapter.CAPTURED_CTX.get(owner);
-		assertNotNull(fired, "the fire ran in the owner's namespace");
-		assertEquals(delegate, fired.getCallerDID());
+		assertNotNull(fired, "it ran as the user");
+		assertEquals(owner, fired.getAuthorityDID());
+		assertEquals(delegate, fired.getCaller(), "called by the delegate");
+
+		RequestContext ungrantedCtx = RequestContext.of(delegate);
+		Blob ungranted = sched.schedule(s("v/ops/user/sudo"), asOwner, ungrantedCtx, future());
+		TestAdapter.CAPTURED_CTX.remove(owner);
+		assertThrows(ExecutionException.class, () -> sched.trigger(ungranted, ungrantedCtx).get(5, TimeUnit.SECONDS));
+		assertNull(TestAdapter.CAPTURED_CTX.get(owner), "without admin/sudo it never ran as the user");
 	}
 
 	/** An agent's step acts as the agent, so what it schedules fires as the agent. */
@@ -211,13 +245,13 @@ public class SchedulerTest {
 		AVector<ACell> caps = Vectors.of(Maps.of(Capability.CAN, s("invoke")));
 		RequestContext worker = agent("stepper", caps);
 		RequestContext step = engine.stepContext(ctx, s("stepper"));
-		assertEquals(worker.getCallerDID(), step.getCallerDID());
+		assertEquals(worker.getAuthorityDID(), step.getAuthorityDID());
 		assertEquals(did, step.getUserDID());
 		assertEquals(caps, step.getCaps());
 
 		Blob handle = sched.schedule(s("v/test/ops/echo"), s("x"), step, future());
 		RequestContext fired = sched.fireContext(engine.getVenueState().schedule().find(handle).rec());
-		assertEquals(worker.getCallerDID(), fired.getCallerDID());
+		assertEquals(worker.getAuthorityDID(), fired.getAuthorityDID());
 		assertEquals(caps, fired.getCaps());
 		assertTrue(sched.cancel(handle, ctx));
 	}
@@ -229,12 +263,12 @@ public class SchedulerTest {
 		Blob hourly = sched.schedule(s("v/test/ops/echo"), s("hourly"), agent, future(), everyHour(), null);
 		Blob mine = sched.schedule(s("v/test/ops/echo"), s("mine"), ctx, future());
 		Schedule state = engine.getVenueState().schedule();
-		assertEquals(convex.core.data.Sets.of(once, hourly), state.scheduledBy(agent.getCallerDID()));
+		assertEquals(convex.core.data.Sets.of(once, hourly), state.scheduledBy(agent.getAuthorityDID()));
 
 		deleteAgent("leaver");
 		assertNull(state.find(once));
 		assertNull(state.find(hourly));
-		assertTrue(state.scheduledBy(agent.getCallerDID()).isEmpty());
+		assertTrue(state.scheduledBy(agent.getAuthorityDID()).isEmpty());
 		assertNotNull(state.find(mine), "the owner's own events stay");
 		assertTrue(sched.cancel(mine, ctx));
 	}
@@ -247,10 +281,10 @@ public class SchedulerTest {
 		state.recordFire(state.find(handle), System.currentTimeMillis(), true, null);
 		Blob moved = state.find(handle).key();
 		assertNotEquals(handle, moved, "a recurring fire re-keys the event at its next slot");
-		assertEquals(convex.core.data.Sets.of(moved), state.scheduledBy(agent.getCallerDID()));
+		assertEquals(convex.core.data.Sets.of(moved), state.scheduledBy(agent.getAuthorityDID()));
 
 		assertTrue(sched.cancel(handle, ctx));
-		assertTrue(state.scheduledBy(agent.getCallerDID()).isEmpty());
+		assertTrue(state.scheduledBy(agent.getAuthorityDID()).isEmpty());
 	}
 
 	@Test
@@ -261,10 +295,10 @@ public class SchedulerTest {
 		ExecutionException ex = assertThrows(ExecutionException.class,
 			() -> sched.trigger(handle, ctx).get(5, TimeUnit.SECONDS));
 		assertInstanceOf(NotFoundException.class, ex.getCause());
-		assertEquals(Scheduler.AGENT_GONE.formatted(ghost.getCallerDID()), ex.getCause().getMessage());
+		assertEquals(Scheduler.AGENT_GONE.formatted(ghost.getAuthorityDID()), ex.getCause().getMessage());
 		Schedule state = engine.getVenueState().schedule();
 		assertNull(state.find(handle), "a recurring event is dropped, not rescheduled");
-		assertTrue(state.scheduledBy(ghost.getCallerDID()).isEmpty());
+		assertTrue(state.scheduledBy(ghost.getAuthorityDID()).isEmpty());
 	}
 
 	@Test
@@ -332,7 +366,7 @@ public class SchedulerTest {
 		long after = engine.currentTimestamp().longValue();
 		AMap<AString, ACell> rec = only(sched.list(ctx));
 		assertEquals(did, rec.get(Schedule.K_CALLER), "a user's own event names the user");
-		assertFalse(rec.containsKey(Schedule.K_OWNER), "and no other owner");
+		assertFalse(rec.containsKey(Fields.OWNER), "and no owner");
 		long created = ((CVMLong) rec.get(Schedule.K_CREATED)).longValue();
 		assertTrue(created >= before && created <= after, "created is the scheduling time");
 		assertTrue(sched.cancel(mine, ctx));
@@ -341,9 +375,9 @@ public class SchedulerTest {
 		RequestContext agent = RequestContext.ofAgent(did, s("helper"));
 		Blob queued = sched.schedule(s("v/test/ops/echo"), s("theirs"), agent, future());
 		rec = only(sched.list(ctx));
-		assertEquals(agent.getCallerDID(), rec.get(Schedule.K_CALLER), "an agent's event names the agent");
-		assertEquals(did, rec.get(Schedule.K_OWNER), "and the owner it belongs to");
-		assertEquals(did, stored(queued).get(Schedule.K_OWNER), "the owner still owns it");
+		assertEquals(agent.getAuthorityDID(), rec.get(Schedule.K_CALLER), "an agent's event names the agent");
+		assertFalse(stored(queued).containsKey(Fields.OWNER), "naming no owner");
+		assertEquals(did, Schedule.accountOf(stored(queued)), "it belongs to the agent's owner, read from its DID");
 		assertTrue(sched.cancel(queued, ctx));
 	}
 
@@ -351,11 +385,12 @@ public class SchedulerTest {
 	public void testListNeverShowsCapturedAuthority() {
 		AVector<ACell> proofs = Vectors.of(s("proof"));
 		Blob handle = sched.schedule(s("v/test/ops/echo"), s("x"), ctx.withProofs(proofs), future());
-		assertEquals(proofs, stored(handle).get(Schedule.K_PROOFS), "proofs are presented again when it fires");
+		assertEquals(proofs, RT.getIn(stored(handle), Schedule.K_CONTEXT, Fields.PROOFS), "proofs are presented again when it fires");
 		assertFalse(stored(handle).containsKey(s("caps")), "a fire takes its actor's caps as they are then");
 
 		AMap<AString, ACell> rec = only(sched.list(ctx));
-		assertFalse(rec.containsKey(Schedule.K_PROOFS), "proofs are authority, not description");
+		assertFalse(rec.containsKey(Schedule.K_CONTEXT), "its state is authority, not description");
+		assertFalse(rec.containsKey(Fields.PROOFS));
 		assertTrue(sched.cancel(handle, ctx));
 	}
 
@@ -467,9 +502,8 @@ public class SchedulerTest {
 	 * The owner's caps are captured at schedule time and re-enforced at fire
 	 * time: a deferred op the caps do not cover is denied — exactly as it would
 	 * be on the immediate {@code invokeOperation} path. Guards against the
-	 * scheduler firing under more authority than the owner held. A scoped
-	 * context manages only the events it made, so it is an agent, named as
-	 * the event's actor.
+	 * scheduler firing under more authority than the owner held. The owner
+	 * triggers it, and it fires as the agent that scheduled it.
 	 */
 	@Test
 	public void testCapsReplayDeniesUncoveredOp() {
@@ -483,7 +517,7 @@ public class SchedulerTest {
 			Maps.of(s("path"), s("w/forbidden/x")), capCtx, future());
 
 		ExecutionException ex = assertThrows(ExecutionException.class,
-			() -> sched.trigger(handle, capCtx).get(5, TimeUnit.SECONDS));
+			() -> sched.trigger(handle, ctx).get(5, TimeUnit.SECONDS));
 		assertFalse(ex.getCause().getMessage().isBlank(),
 			"captured caps must be enforced at fire time");
 	}
@@ -499,7 +533,7 @@ public class SchedulerTest {
 		Blob handle = sched.schedule(s("v/ops/covia/read"),
 			Maps.of(s("path"), s("w/allowed/nothing")), capCtx, future());
 
-		ACell result = sched.trigger(handle, capCtx).get(5, TimeUnit.SECONDS);
+		ACell result = sched.trigger(handle, ctx).get(5, TimeUnit.SECONDS);
 		assertTrue(result != null, "a caps-covered deferred op must run, not be denied");
 	}
 

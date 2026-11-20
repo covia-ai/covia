@@ -3,14 +3,14 @@
   <parent>
     <groupId>ai.covia</groupId>
     <artifactId>covia</artifactId>
-    <version>0.11.0</version>
+    <version>0.12.0</version>
   </parent>
   <artifactId>workbench</artifactId>
   <name>Covia Workbench</name>
   <description>Reusable Swing components and utilities, with a venue REPL demo.</description>
 
   <properties>
-    <flatlaf.version>3.7.2</flatlaf.version>
+    <flatlaf.version>3.8</flatlaf.version>
     <covia.module.name>covia.workbench</covia.module.name>
   </properties>
   

@@ -8,6 +8,129 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-11-20
+
+### Added
+
+- Compaction keeps the messages and answers of an agent's last exchanges after its summary, their tool calls and results staying in history: the agent's `compactKeep` sets how many (default 5, 0 for none), `agent:compactSession` takes `keep` to override it and reports `keptExchanges`, and a conversation of no more exchanges than are kept is left unchanged.
+- Asset creation consistently accepts `asset/store` on the owner's `a/` collection across adapters and REST registration; existing unscoped grants remain valid.
+- Outbound HTTP requests require method- and destination-scoped `outbound/http` authority; configured agent models use harness authority, and the address-policy bypass is now `admin/outbound/bypass`. An endpoint the operator configured, such as the venue's Ollama URL or a messaging adapter's `apiUrl`, still passes the address policy without `http.allowedHosts`.
+- Agent operations' `agentId` accepts an agent's DID (`<ownerDID>:g:<id>`), the values API's `agent` selector accepts `g/<id>` and `<ownerDID>/g/<id>`, and a messaging binding's `agent` accepts all of these forms, each checked for access as the existing forms are; a binding whose `agent` names no agent is refused when it is created.
+- Job-specific `job/read`, `job/manage` and `job/message` grants replace CRUD permissions on Job APIs; lifecycle controls return acknowledgements.
+- Embedded simulations can discover the next queued scheduled timestamp across venues and advance directly to it (#683).
+- DLFS entries carry application metadata: `dlfs:setMetadata`, `file:setMetadata` and `vault:setMetadata` set or clear it (`crud/write`), and `dlfs:stat` and `file:stat` return it; a move keeps it, replacing a file's content in place keeps it, and deleting the entry removes it (#659).
+- Universal Job tools (`job:status`, `result`, `cancel`, `pause`, `resume`, `message`) manage local and remote work independently of its execution adapter; agent skills use them and existing Grid Job tools remain compatible.
+- Access tokens: any user or agent can create a scoped bearer that acts with its issuer's authority within the token's caps and is accepted only at the access points it names; the `token` adapter keeps them (`token:create`, `update`, `delete`, `list`, `get`, needing `admin/token/<access point>` on `x/token/<name>`), and `adapters.token.keepRawTokens` keeps bearers to read again; a user sees its tokens, never their bearers, at `x/token`.
+- An agent is told where each message or task started and who handed it on: the sign-in, access token, messaging bot or scheduler it started at, then each callable or `admin/sudo` that handed it to another principal, in a `From (venue-verified)` hint on every attributed incoming message except the owner chatting directly, which carries one only when it follows another source; older turns keep their label wording, and an unreadable route never reads as the owner; an approval request records the same route, and work resumed after a pause or a restart keeps it (#709).
+- Every recorded job keeps the state it runs in from admission, and a scheduled event the same, so work carried on after a restart acts with exactly the narrowing and grants of the request that started it, whatever its operation.
+- The standard agent templates tell an agent how to read the `From` element: only its owner's messages carry its owner's instructions, and anyone else's are requests; agents created before keep the instructions they were created with.
+- New agent turns no longer show a bot message's `authentication` record in `agent:history` or the agent timeline; the `From` line still names the bot, sender and chat.
+- MCP tokens: access tokens accepted at the venue's `/mcp` alone, offering chosen operations as tools, made and managed with `mcp/token` (`mcp:create-token`, `update-token`, `delete-token`, `list-tokens`, `get-token`); emptying its caps, deleting it or its expiry revokes one.
+- Callables: a user, agent or the venue publishes an operation for others to call, run as the publisher within fixed caps in the publisher's namespace, so the jobs and events a call starts are the publisher's (`callable:create`, `update`, `delete`, `list`, `call`, needing `callable/manage`); callers hold `callable/call` or pass a gate operation the publisher chooses, such as `v/ops/callable/gates/anyone` or `gates/callers`; a call may call callables; a user sees its callables at `x/callable`.
+- A callable is invoked as an operation by its path, `<ownerDID>/x/callable/<name>` or `x/callable/<name>` for one's own, wherever an operation is named, such as `/invoke`, `grid:run`, orchestration steps and agent and MCP token tools: it takes the target's input and schema, invoking it needs `invoke` on the path, and a caller the callable does not admit is told the operation does not resolve.
+- Caps given to an access token or callable lie within what the request giving them may do itself, so a token's request or a call creates tokens and callables within its own caps, which keep them once it is gone; changing or reading one again needs authority covering its caps, and only an unrestricted token or call creates or forks an agent.
+- `adapters.convex.timeoutMillis` sets how long `convex:query` and `convex:transact` wait for the peer's result; the default is the Convex client's own, 20 seconds.
+- `venue:adapter/restart` stops an enabled adapter, offers it its configuration again and starts it; `venue:adapters` lists each adapter's `status` and a failed adapter's `reason`.
+- A configured Python function whose settings add `principals: true` is also passed its frame's `authority` and `caller`, so one offered through a callable can keep each caller's state apart (#706).
+- The model option `emptyResponse` says how a response with no text and no tool calls is read: `stop`, a silent reply and the default; `content_filter`, the provider declined; or `error`, no answer. The last two fail the call.
+- A venue with a public hostname takes its users in short form wherever a principal or a path is given, in operations, REST routes and configuration (a messaging bot's or Claude Code project's `user`, the `secrets` bootstrap's keys): `u:bob` for `did:web:<hostname>:u:bob`, `u:bob:g:helper` for his agent and `u:bob/w/notes` for his path; records hold the full DID.
+- Job ids are documented as time-ordered: each starts with its job's creation time in milliseconds, so a listing of an account's `j/` can seek to the jobs created since a given time (#700).
+
+### Changed
+
+- An agent takes tasks only when its config sets `acceptTasks: true`, as every template except `minimal` does, the messaging modules' included; without it `agent:request` is refused and the agent's context carries no task tools or no-task notice. An agent created before this release does not set it, so it refuses requests, scheduled ones included, until `agent:update` sets it; the tasks it already holds still run.
+- A running venue whose record another writer with its key changed while the venue changed it too writes its own version over the other, logs the fork at ERROR naming both versions, and stops: a standalone venue process exits with status 70. Find the other writer, such as a second instance or state delivered from outside, before restarting it.
+- HTTP, MCP and A2A agent input shows transport and protocol hints, including signed owner logins; credential classes stay in structured provenance only, and sibling-agent labels and standard templates distinguish shared ownership and token issuance from owner approval.
+- Capability documentation now inventories module abilities, resource scopes and model-call boundaries; UCAN issuance cannot use presented granting rights to escape access-token or callable caps.
+- A stored secret or connected account that fails its integrity check, because it was altered or damaged or the venue key is misconfigured, is the venue's own failure: REST answers it as a server failure, A2A as `INTERNAL`, an agent whose step it stops is suspended, and the venue logs it once at ERROR naming whose it is; the message still names the record and how to replace it (#668).
+- Answering an approval request, `secret:extract`, `user:export`, `user:clone` from one's own account and reading or changing one's own sign-in keys need the user in person: work a job or scheduled event carries on later, and an operation a bot runs, can no longer do them.
+- A live dictation belongs to the principal that opened it: its access tokens feed it, its agents and other users do not. The messaging adapters' `bots` lists each bot the request may manage (`<adapter>/manage` on `<owner>/<adapter>/<name>`), so an agent sees its owner's bots only when its caps allow managing them.
+- Running Python is the operator's: each configured function needs `admin/execute/python` on `<venue DID>/python/operations/<id>`, which the venue holds and can grant to a user.
+- An adapter that fails to start, at launch, enable or restart, including one that refuses a setting in its `adapters.<name>` block or fails to install, no longer stops the venue: it stays enabled but failed and is treated as stopped, its operations refused as not running, until restarted.
+- A disabled adapter is offered its settings and installed at launch, so it recovers its own unfinished jobs: an agent's queued requests survive a launch with the agent adapter disabled, and enabling the agent adapter wakes agents with queued work. At shutdown a stopped adapter's jobs go to that adapter; pause and resume are refused for its jobs, as messages are.
+- Configuring and installing an adapter start nothing: Python scripts load, speech models are fetched on a settings change, and Claude Code's idle-session reaper runs only once the adapter has started, so a disabled adapter does none of these.
+- A `venue:adapter/configure` change the adapter refuses with an error is reverted to its previous configuration.
+- A scheduled fire's job is recorded in the same commit as its claim, and a remote agent turn's backend job with the turn's link to it, so a restart never leaves a failed job for a fire that then runs again, nor a backend job its turn has no record of.
+- A P2P node that cannot launch, such as on a port in use, is unavailable rather than a configuration error.
+- `admin/sudo` (`user:sudo`) is a call into the user: the nested operation runs with the user's whole authority, what it does and makes, such as jobs, events and agents, is the user's, and the delegate's grants no longer bound it. Entering is checked once, whatever request makes it.
+- `user:sudo` refuses the venue's own DID and its public principal as targets.
+- Minting a user's identity token (`auth:identity-token`) needs the user in person, so neither a delegate under `admin/sudo` nor work carried on later can.
+- Making, rotating or reading the bearer of an access token a user issues needs the user in person, since a request through it is the user in person: a delegate under `admin/sudo`, a callable's call and work carried on later cannot.
+- An agent's `accepts` (`"venue"` included) and the `callers` gate admit what acts for a principal they name, such as `accepts: [bob]` admitting Bob's agents, and every admission and gate reaches a caller only as far as its agents' caps and its tokens' and callable's caps cover the act, so a capped agent loses what `"anyone"` and `gates/anyone` gave it beyond its caps.
+- A request through an access token makes an agent act (`llmagent:chat` or `goaltree:chat` invoked directly) only when the token is unrestricted, whether the token's issuer is the agent's owner or the agent itself, and the step stays narrowed by the token, so revoking it stops the step.
+- `auth:whoami` adds `origin`, the principal the request authenticated as, where that is not its caller, such as a delegate under `admin/sudo`, and audit events add `origin` for the same.
+- An agent whose controller is in another account is the principal its acts name: a callable it calls records it as the caller and a dictation it opens is its own, and work it leaves acts with its controller as it stands, not the one it started with. One whose controllers lead back to it through another account acts with no authority.
+- A scheduled event is a capability resource, `<account>/x/schedule/<id>`: `crud/read` lists it and the new `schedule/manage` cancels or triggers it, so a capped agent or token needs these caps even for the events it scheduled; `scheduler:list` adds each event's `id`.
+- A job, approval request and scheduled event name one `caller`, the principal that called, and no `owner` (COG-8): a job or request leaves out a caller that is the account keeping it, which listings, lattice reads, copies, exports and clones carry as stored, while `POST /invoke`, `GET /jobs/{id}` and its SSE updates, `job:status` and `hitl:list` name it in full; `scheduler:list` no longer gives `owner`. Venue version 4 converts stored records and ends work an `admin/sudo` delegate left before `admin/sudo` acted as the user: unfinished jobs fail saying why, open approval requests are cancelled and scheduled events are removed, while finished records keep naming the delegate.
+- An agent's harness runs in its controller's frame: what it starts, such as its model calls and an external agent's backend job, records the controller as its caller in the controller's account, and names in the agent's configuration resolve in the controller's namespace; the agent's tool calls still run as the agent.
+- Adapters refuse settings with a configuration error, from the venue config and from `venue:adapter/configure` alike; anything else an adapter's `configure` throws, a module adapter's `IllegalArgumentException` included, is reported as that adapter's fault rather than as invalid input or the `venue` adapter's.
+- A module's adapters take their settings from `adapters.<name>` like any other adapter: `modules` entries and `venue:module/load` no longer take `config`, so the Python module's settings move to `adapters.python`, which `adapters.python.enabled: false` switches off. Python without a usable CPython fails to start, so it is left failed with the reason, and its settings cannot change until the venue restarts.
+- MCP bearer retrieval uses `admin/token/mcp`; `admin/token` remains its parent for administration across token kinds.
+- Job, task and session ids are Blobs in agent records, job records, HITL requests, operation results, live events and messaging bots' conversations and receipts, so JSON shows them as `0x…` where results, events and HITL records gave bare hex, and error messages and the text an agent's model is shown write them as `0x…` too; inputs take either form, and an A2A `contextId` stays bare hex. Venue version 3 and messaging adapter state version 2 convert stored records, and user exports are version 3, which an older venue refuses.
+- Venue administration requires `admin/user/*`, `admin/adapter/*`, `admin/venue/*` and `admin/sudo` capabilities; the former user, adapter and venue abilities are no longer accepted for these actions. Listing adapters needs `admin/adapter/read` and changing them `admin/adapter/manage`; adding another user's sign-in key needs `admin/user/authentication-add` and revoking one `admin/user/authentication-revoke`; `admin/venue/compact` is reserved for compacting the store (#704).
+- Remote submissions and direct Job controls use explicitly selected remote credentials; local proxy cancellation controls only its bound execution.
+- Grid and Job tool descriptions distinguish submission, observation and compatibility entry points, with clearer handle, status and cancellation guidance and leaner workflow skills.
+- Automated venue deployments use the tested build's image digest; manual redeploys select a successful image-publishing run.
+- LangChain4j 1.23.0, A2A 1.5.1.Final, Nimbus OAuth/OIDC SDK 11.39, CommonMark 0.32.0; the Documents module uses Apache POI 6.0.0.
+- Requires Convex 0.8.20. Rebuild adapter modules with the venue.
+- A convex-db statement that fails while running, such as a failed cast, is refused with its SQLState, as other databases' statements are.
+- Disabling a messaging adapter (Telegram, Discord, Slack, WhatsApp) stops its bots at once, closing their polls and connections, and enabling it starts them again; a replaced one's bots stop before its replacement's start.
+- The `:latest` Docker image and the `latest-snapshot` release follow the `qa` branch, published only after the integration tests pass, rather than every push to `develop`.
+- A messaging bot an agent created uses its credentials and runs its relay's `admit` and `charge` hooks with that agent's authority, not its user's: an agent with caps needs `secret/use` on each secret the bot names, and its caps must cover what the hooks do.
+- `mcp:tools-call` and `mcp:tools-list` hide `token` in their job records, both the bearer in the input and a top-level `token` in a tool's result; a caller waiting for the result still receives it.
+- `mcp:tools-call` and `mcp:tools-list` take `bearerSecret`, a secret holding the bearer, as an alternative to `token`.
+- A model reply's `finishReason` uses OpenTelemetry's GenAI values (`stop`, `length`, `tool_call`, where `tool_execution` was), and `providerFinishReason` gives the provider's own value.
+
+### Removed
+
+- A gate's input no longer carries `owner`: a capability gate or callable gate is told `{operation, input, caller}`.
+- Python instances (`python:instances/create`, `list`, `call`, `close` and `adapters.python.instances`): configure each function under `operations` and offer it to others through a callable; a config naming `instances` is refused (#706).
+- Maven Central no longer receives `covia-python`, `covia-python-adapter`, `covia-whatsapp`, `covia-slack`, `covia-sonnylabs` or `covia-documents`; their module jars stay on GitHub Releases (#681).
+- The per-user job cap: a user may have any number of jobs, `rateLimit.maxConcurrentJobsPerUser` is ignored with a warning at startup, and `venue:showConfig` no longer reports it (#710).
+
+### Fixed
+
+- An agent on a Claude model whose `nativeSystemMessages` is on keeps running after it compacts: context it pins again after its summary, with no turn of the caller's to follow, reaches Anthropic as a `[system: …]` user message in place, instead of the venue refusing the call before it is sent.
+- An agent that triggers itself while it runs, by `agent:trigger` or by `scheduler:trigger` of a request to itself, gets its answer at once instead of being held until its tool-call limit; `scheduler:trigger` of a request returns its task once the request's own `timeout` passes (#714).
+- `agent:request` without `input` is refused when it is made, naming the field, instead of queuing a task with no instructions for the agent to fail.
+- The `agents` skill offers `agent:suspend`, `agent:resume` and `agent:delete`, which its guidance tells an agent to use (#707).
+- Venue and user DID documents name the context that defines their `Multikey` keys, and the venue's API service has an `id` (#657).
+- A turn sent to an external agent, such as one on Claude Code, records its caller and route in the agent's session, as a native agent's does (#713).
+- A capped agent behind a Telegram, WhatsApp or Slack bot receives media without a grant on the media drive: the bot stores what arrives itself, writing only that drive (#682).
+- `agent:context` for a goal-tree agent includes the notice that its turn is answered by its final message, as the live call does.
+- An agent on an Anthropic model with native system messages answers the next turn after a reply with no text, instead of failing because the provider rejects the request's message order.
+- A model provider's refusal, content filter or `error` fails the model call with a reason naming the provider and its own value, instead of returning an empty or partial reply: the task or chat the agent was answering fails with that reason, which the Telegram and Discord bots show, and the agent carries on.
+- A response with no choices from OpenAI or a provider reached through its API (Gemini, xAI, DeepSeek, Mistral, OpenRouter) fails the model call as no answer, so the agent's task or chat fails and the agent carries on, instead of the agent being suspended as if the provider were down.
+- Updating an agent's config, even a field its prompt does not read such as a sampling field set to null, no longer moves skills its sessions have loaded into the start of their prompt, which stopped the provider's prompt cache applying.
+- Agent conversations retain runtime guidance before replayed thinking, and Anthropic continuation state survives final answers and empty signed replies.
+- Per-agent A2A task lookups stay in the asker's account, including live public tasks and requests with an `owner` hint.
+- An unanswered human ask made outside a task no longer faults the agent when it settles an unrelated task.
+- A DLFS file written by `create`, `write`, a content upload or `archive` changes in one update once all its content has arrived, so a write cut off part-way leaves the drive as it was; a write onto a directory fails as a conflict (#629).
+- `archive:list` and `archive:extract` read a zip stored in a DLFS drive instead of failing as a venue fault.
+- `archive:extract` checks each file it writes against its root as `file:write` does, following links.
+- A write to a symbolic link in a host root fails as bad input rather than as a venue fault.
+- Equivalent agent sessions reuse the same instruction prefix: internal owner identifiers are omitted from model-facing attribution, and the session handle stays available outside the cached head (#715).
+- LLM tools preserve capability-array unions and arbitrary JSON values instead of advertising them as objects, enabling agents to create scoped MCP tokens.
+- Generic MCP tool calls declare their required tool name and arguments for agent discovery.
+- MCP token schemas describe each capability's resource and single ability, including optional caveats.
+- Account REST reads and deletion honour delegated administration grants in `X-Covia-Ucans`.
+- Job SSE subscriptions no longer miss completion while connecting or deliver initial state after a newer update.
+- An embedded venue on a persistent store closes itself on JVM shutdown, and the shutdown waits for a close already under way, so Etch no longer closes the store beneath the venue's final save (#699).
+- Grid operations honour explicit remote result wait timeouts, submit asynchronously without background polling, and reject non-string venue targets instead of executing locally.
+- `user:delete` no longer leaves cleanup pending for an adapter registered while it runs.
+- Fetching one speech model file, voice or library pack twice at once no longer fails one of the fetches (#647).
+- Stopping or reconfiguring a Telegram bot just as it polls no longer leaves that poll running for up to 30 seconds or holds up the change for 5.
+- Deleting, reconfiguring or disabling a Telegram or Discord bot that is still connecting no longer waits for the connection (for Discord, without limit), and one bot's slow connection attempt no longer holds up the others' retries.
+- Deleting, reconfiguring or disabling a Telegram bot no longer waits up to 5 seconds while it handles an update it has received or waits to retry a failed poll.
+- A secret longer than about 4 KB stays readable once the venue has saved it to its store, instead of being reported as damaged moments after it was set.
+- Using a connected account the venue cannot read is refused with a reason (connect it again with `oauth:connect`) instead of failing as an internal error, and `oauth:disconnect` removes one instead of failing.
+- `convex:query` and `convex:transact` accept a source of `nil` instead of refusing it as empty.
+- A `convex:query` or `convex:transact` source that is empty or not one Convex Lisp form fails as invalid input with the reader's reason, instead of as a fault in the `convex` adapter.
+- `convex:query` refuses an `address` that is not a Convex account address, instead of running the query without one.
+- A `convex:query` or `convex:transact` that gets no result from its peer in time completes with Convex's `TIMEOUT` error code, after 20 seconds by default rather than 60, instead of failing as a fault in the `convex` adapter.
+- A module's adapters are only those its own jar declares: loading a module no longer registers again the adapters declared on the venue's classpath, such as an embedder's, lists them as the module's in `v/info/modules` and `v/info/adapters/<name>`, or removes them when the module unloads (#618).
+- A Claude Code turn on a session that has started a new process, such as one resumed just after it was stopped, gets that process's reply, instead of a late and possibly empty reply from the process before it (#649).
+
 ## [0.11.0] - 2026-11-10
 
 ### Added
@@ -132,7 +255,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - A `claudecode:session` takes no pool slot until its first turn.
 - Connected accounts complete from the account that started the connect.
 - Every user turn in an agent's history keeps its caller; `config.recordCaller` is gone.
-- A DLFS drive is created before use; only `createDrive` and WebDAV `MKCOL` create one (#641).
+- A DLFS drive is created before use; only `createDrive`, WebDAV `MKCOL`, and built-in features that need their own drive (on their first write) create one (#641).
 - `dlfs:createDrive` and `deleteDrive` take the drive in `drive`; `name` stays an alias.
 - `file:move` needs `crud/read` and `crud/delete` on its source.
 - Creating a workspace key, file, directory or drive needs `crud/write` on what holds it.
@@ -998,7 +1121,8 @@ Initial public release: venue server with the adapter framework, lattice-backed
 content-addressed assets, the async job model with SSE, multi-protocol surface
 (REST / MCP / A2A / DID), and strategy-based authentication.
 
-[Unreleased]: https://github.com/covia-ai/covia/compare/0.11.0...HEAD
+[Unreleased]: https://github.com/covia-ai/covia/compare/0.12.0...HEAD
+[0.12.0]: https://github.com/covia-ai/covia/compare/0.11.0...0.12.0
 [0.11.0]: https://github.com/covia-ai/covia/compare/0.10.0...0.11.0
 [0.10.0]: https://github.com/covia-ai/covia/compare/0.9.11...0.10.0
 [0.9.11]: https://github.com/covia-ai/covia/compare/0.9.10...0.9.11

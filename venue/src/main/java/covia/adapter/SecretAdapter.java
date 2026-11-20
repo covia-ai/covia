@@ -16,9 +16,10 @@ import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.exception.ConflictException;
+import covia.exception.IntegrityException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
-import covia.exception.NotSupportedException;
+import covia.exception.UnsupportedException;
 import covia.api.Abilities;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -53,8 +54,8 @@ public class SecretAdapter extends AAdapter {
 	public static final String EXTRACT_NOT_PUBLIC = "The public principal's secrets are provisioned by the operator: they can be used under a grant, never extracted";
 	public static final String SECRET_EXISTS = "Secret already exists; pass overwrite:true to replace it";
 	public static final String SECRET_UNAVAILABLE = "Secret does not exist";
-	public static final String SECRET_DECRYPT_FAILED = "Secret cannot be decrypted: it is damaged or was sealed "
-		+ "under a key this venue no longer holds. Set it again with secret:set";
+	public static final String SECRET_INTEGRITY = "Secret failed its integrity check, so it cannot be extracted. The "
+		+ "venue operator has been told; set it again with secret:set";
 
 	@Override
 	public String getName() {
@@ -79,7 +80,7 @@ public class SecretAdapter extends AAdapter {
 
 	@Override
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
-		AString callerDID = ctx.getCallerDID();
+		AString callerDID = ctx.getAuthorityDID();
 		if (callerDID == null) {
 			return CompletableFuture.failedFuture(
 				new AuthException(AUTH_REQUIRED));
@@ -101,7 +102,7 @@ public class SecretAdapter extends AAdapter {
 					return CompletableFuture.completedFuture(handleDelete(ctx, input));
 				default:
 					return CompletableFuture.failedFuture(
-						new NotSupportedException(UNKNOWN_OPERATION + op));
+						new UnsupportedException(UNKNOWN_OPERATION + op));
 			}
 		} catch (Exception e) {
 			return CompletableFuture.failedFuture(e);
@@ -165,7 +166,7 @@ public class SecretAdapter extends AAdapter {
 		engine.requireResourceAccess(ctx, resource(name), Capability.CRUD_DELETE);
 		User user = engine.getVenueState().users().user(ctx.getUserDID());
 		boolean deleted = user != null && user.secrets().deleteIfPresent(name);
-		if (deleted) engine.audit().event(Audit.SECRET_DELETE, Audit.K_DID, ctx.getCallerDID(),
+		if (deleted) engine.audit().event(Audit.SECRET_DELETE, ctx,
 			Audit.K_NAME, name, Audit.K_TARGET, ctx.getUserDID());
 		return Maps.of(Fields.NAME, name, Fields.DELETED, CVMBool.create(deleted));
 	}
@@ -173,12 +174,13 @@ public class SecretAdapter extends AAdapter {
 	private ACell handleExtract(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
 		AString name = name(input);
 		try {
-			if (!(ctx.getJob() instanceof VenueJob job) || !job.isDirectRun()
-					|| ctx.getExecutionScope().agentId() != null || ctx.getExecutionScope().sessionId() != null || ctx.getExecutionScope().taskId() != null
-					|| !ctx.getCallerDID().equals(ctx.getUserDID())) throw new AuthException(EXTRACT_DIRECT_ONLY);
 			// Anonymous callers act as the public principal, whose store holds the
 			// operator's shared keys. Even unrestricted public access never reads them out.
 			if (engine.isPublicPrincipal(ctx.getUserDID())) throw new AuthException(EXTRACT_NOT_PUBLIC);
+			// Plaintext leaves only for the owner in person
+			if (!(ctx.getJob() instanceof VenueJob job) || !job.isDirectRun()
+					|| ctx.getExecutionScope().agentId() != null || ctx.getExecutionScope().sessionId() != null || ctx.getExecutionScope().taskId() != null
+					|| engine.inPersonDenial(ctx) != null) throw new AuthException(EXTRACT_DIRECT_ONLY);
 			engine.requireResourceAccess(ctx, resource(name), Abilities.SECRET_EXTRACT);
 			// A caller-controlled output schema could put plaintext in validation logs.
 			// Use the adapter-owned definition, including its safe output schema.
@@ -189,12 +191,12 @@ public class SecretAdapter extends AAdapter {
 			AString value;
 			try {
 				value = user == null ? null : user.secrets().decrypt(name, SecretStore.keys(engine.getKeyPair()));
-			} catch (RuntimeException e) { throw new NotSupportedException(SECRET_DECRYPT_FAILED); }
+			} catch (IntegrityException e) { throw IntegrityException.found(SECRET_INTEGRITY, ctx.getUserDID(), e); }
 			if (value == null) throw new NotFoundException(SECRET_UNAVAILABLE, name.toString());
-			engine.audit().event(Audit.SECRET_EXTRACT, Audit.K_DID, ctx.getCallerDID(), Audit.K_NAME, name, Audit.K_OUTCOME, Audit.OK);
+			engine.audit().event(Audit.SECRET_EXTRACT, ctx, Audit.K_NAME, name, Audit.K_OUTCOME, Audit.OK);
 			return Maps.of(Fields.NAME, name, Fields.VALUE, value);
 		} catch (RuntimeException e) {
-			engine.audit().event(Audit.SECRET_EXTRACT, Audit.K_DID, ctx.getCallerDID(), Audit.K_NAME, name, Audit.K_OUTCOME, Audit.FAILED);
+			engine.audit().event(Audit.SECRET_EXTRACT, ctx, Audit.K_NAME, name, Audit.K_OUTCOME, Audit.FAILED);
 			throw e;
 		}
 	}
@@ -219,7 +221,7 @@ public class SecretAdapter extends AAdapter {
 	 * collision rule therefore cannot drift from {@code secret:set}. */
 	static void storeSecret(Engine engine, RequestContext ctx, AString name,
 			AString value, boolean overwrite) {
-		if (ctx.getCallerDID() == null) {
+		if (ctx.getAuthorityDID() == null) {
 			throw new AuthException(AUTH_REQUIRED);
 		}
 		validateName(name);
@@ -239,7 +241,7 @@ public class SecretAdapter extends AAdapter {
 			throw new ConflictException(SECRET_EXISTS);
 		}
 		// The name only, never the value.
-		engine.audit().event(covia.venue.Audit.SECRET_WRITE, covia.venue.Audit.K_DID, ctx.getCallerDID(),
+		engine.audit().event(covia.venue.Audit.SECRET_WRITE, ctx,
 			covia.venue.Audit.K_NAME, name, covia.venue.Audit.K_TARGET, ctx.getUserDID());
 	}
 }

@@ -10,6 +10,7 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.lang.RT;
+import covia.api.Fields;
 import covia.venue.RequestContext;
 
 /**
@@ -22,8 +23,14 @@ import covia.venue.RequestContext;
  */
 class FrameTools {
 
-	/** The reply to {@code compact}: how many turns it archived. */
-	static final String COMPACTED = "Compacted %d turns into an archived summary. Context freed.";
+	/** The reply to {@code compact} that keeps nothing: how many entries it archived. */
+	static final String COMPACTED = "Compacted %d entries into an archived summary. Context freed.";
+	/** The reply to {@code compact} that keeps exchanges: entries archived, exchanges kept. */
+	static final String COMPACTED_KEEPING = "Compacted %d entries into an archived summary. Context freed;"
+		+ " the last %d exchanges, this one included, stay as their messages and answers, without tool calls.";
+	/** The reply to {@code compact} when the conversation is no longer than what it keeps. */
+	static final String NOT_COMPACTED = "Nothing compacted: the conversation since the last compaction"
+		+ " is %d exchanges or fewer, and that many are kept.";
 
 	final AbstractLLMAdapter runtime;
 	/** The agent's authority: every tool call, and every load the agent or a
@@ -35,6 +42,8 @@ class FrameTools {
 	final long toolCallTimeoutMs;
 	/** Whether the agent's tool calls are recorded from the start ({@code recordToolCalls}). */
 	final boolean recordToolCalls;
+	/** Exchanges compaction keeps after its summary ({@code compactKeep}). */
+	final int compactKeep;
 	/** Effective loads of the agent tier ({@code config.loads}), read-only here. */
 	final AMap<AString, ACell> outerLoads;
 	/** The agent's config as stored: what its tools, skills and loads come from. */
@@ -56,6 +65,8 @@ class FrameTools {
 	/** Text of the assistant message whose tool batch is running: the payload
 	 *  of an empty {@code complete_task} (the dual of #215). */
 	AString turnText;
+	/** Where the configured operation tools lie in the fixed manifest, which
+	 *  holds no task tools ({@link ContextAssembler#fixedManifest}). */
 	int baseToolStart;
 	int baseToolEnd;
 	/** Routes the effective loads contribute, from the latest snapshot. */
@@ -80,6 +91,7 @@ class FrameTools {
 		this.toolCallTimeoutMs = toolCallTimeoutMs;
 		this.sourceConfig = cycleSpec.sourceConfig();
 		this.recordToolCalls = runtime.resolveRecordToolCalls(sourceConfig);
+		this.compactKeep = AbstractLLMAdapter.resolveCompactKeep(sourceConfig);
 		this.cachePrefix = cycleSpec.cachePrefix();
 		this.labels = cycleSpec.labels();
 		this.skillSources = Skills.sourcesOf(sourceConfig);
@@ -165,14 +177,40 @@ class FrameTools {
 	 */
 	ContextAssembler.Rendered rendering(ContextAssembler.Spec spec) {
 		if (!spec.cachePrefix()) return null;
+		if (activeFrame != null && ContextAssembler.rendered(Vectors.of((ACell) activeFrame)) != null) {
+			spec = withoutConversationLoads(spec);
+		}
 		AMap<AString, ACell> fixedIndex = ToolPalette.mergeIndex(toolIndex, pinnedToolIndex);
 		fixedIndex = ToolPalette.mergeIndex(fixedIndex, ToolPalette.loadOwners(loadToolIndex));
 		AMap<AString, ACell> manifestIndex = new ToolPalette.Palette(
-			null, fixedIndex, null).forManifest(spec.tools()).toolIndex();
+			null, fixedIndex, null).forManifest(ContextAssembler.fixedManifest(spec.tools())).toolIndex();
 		int baseStart = spec.toolCalling() ? baseToolStart : 0;
 		int baseEnd = spec.toolCalling() ? baseToolEnd : 0;
 		toolIndex = manifestIndex;
 		return ContextAssembler.initialise(spec).withToolIndex(manifestIndex, baseStart, baseEnd);
+	}
+
+	/**
+	 * The Spec a cached render replacing an earlier one is built from. A load
+	 * appended to the conversation since stays there — its instructions, its
+	 * tool change and its tools reached through {@code invoke_tool} — so the
+	 * render leaves out its tools and its effect on the skills index.
+	 * Rebuilding for a config change that renders the same then gives the
+	 * prefix the conversation was built on (AGENT_CONTEXT.md §3.1). A frame's
+	 * first render is built from every load: a subgoal's inherited loads were
+	 * appended to its parent's conversation, not its own.
+	 */
+	private ContextAssembler.Spec withoutConversationLoads(ContextAssembler.Spec spec) {
+		AMap<AString, ACell> outside = Loads.outsideConversation(spec.effectiveLoads());
+		if (outside.count() == spec.effectiveLoads().count()) return spec;
+		AVector<ACell> tools = Vectors.empty();
+		for (long i = 0; i < spec.tools().count(); i++) {
+			ACell definition = spec.tools().get(i);
+			AString owner = RT.ensureString(RT.getIn(
+				loadToolIndex.get(RT.ensureString(RT.getIn(definition, Fields.NAME))), Fields.REF));
+			if (owner == null || outside.containsKey(owner)) tools = tools.conj(definition);
+		}
+		return spec.withLoadView(outside, tools);
 	}
 
 	/** Whether the frame holds a projection rendered from the agent's current
@@ -293,13 +331,26 @@ class FrameTools {
 		return ToolCycleEngine.ToolOutcome.result(dispatch(invocation.name(), invocation.input()));
 	}
 
-	/** {@code compact}: the runtime applies the summary before the next inference. */
+	/** {@code compact}: the runtime applies the summary before the next inference,
+	 *  unless the conversation holds no more than the exchanges it keeps. */
 	private ToolCycleEngine.ToolOutcome compact(ToolCycleEngine.ToolCall call) {
 		HarnessTools.Compaction compact = HarnessTools.compaction(call.input());
 		if (compact.error() != null) return ToolCycleEngine.ToolOutcome.result(compact.error());
-		long turns = (activeFrame != null) ? GoalTreeContext.countLiveTurns(activeFrame) : 0;
+		GoalTreeContext.Compaction preview = (activeFrame != null)
+			? GoalTreeContext.compact(activeFrame, compact.summary(), null, compactKeep) : null;
+		if (preview == null || !preview.applied()) {
+			return ToolCycleEngine.ToolOutcome.result(Strings.create(NOT_COMPACTED.formatted(compactKeep)));
+		}
 		pendingCompactSummary = compact.summary();
-		return ToolCycleEngine.ToolOutcome.result(Strings.create(COMPACTED.formatted(turns)));
+		String reply = (preview.kept() == 0) ? COMPACTED.formatted(preview.replaced())
+			: COMPACTED_KEEPING.formatted(preview.replaced(), preview.kept());
+		return ToolCycleEngine.ToolOutcome.result(Strings.create(reply));
+	}
+
+	/** Applies a summary {@code compact} asked for to a frame, keeping the agent's
+	 *  {@code compactKeep} exchanges. */
+	AMap<AString, ACell> applyCompaction(AMap<AString, ACell> frame, String summary) {
+		return GoalTreeContext.compact(frame, summary, null, compactKeep).frame();
 	}
 
 	private Loads.Snapshot loadSnapshot(AMap<AString, ACell> frameLoads) {

@@ -23,6 +23,7 @@ import convex.core.data.Index;
 import convex.core.data.Path;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
+import convex.core.util.SoftCache;
 import convex.lattice.cursor.AForkableCursor;
 import covia.api.Abilities;
 import covia.api.Fields;
@@ -39,15 +40,17 @@ public abstract class AAdapter {
 	public static final String LATTICE_READ_ONLY = "Adapter lattice view is read-only";
 
 	/**
-	 * Opt-in, user-visible lattice at x/adapterName. Return a connected cursor or
-	 * a pure projected snapshot, or null to expose nothing. Resolution must be
-	 * local and side-effect-free; never return the entire private adapter state
-	 * unless every field is intentionally visible to this user. Use the supplied
-	 * context's user DID for ownership and retain account lifecycle guards.
+	 * Opt-in, user-visible lattice at x/adapterName: {@code owner}'s, for request
+	 * {@code ctx}, whose authority over it the router has checked. Return a
+	 * connected cursor or a pure projected snapshot, or null to expose nothing.
+	 * Resolution must be local and side-effect-free; never return the entire
+	 * private adapter state unless every field is intentionally visible to this
+	 * user. Select state by {@code owner}, never by the request's namespace or
+	 * execution, which are its own, and retain account lifecycle guards.
 	 * Views live for one operation/transaction and must not be cached.
 	 * The default is no route; exposed views are read-only unless opted in below.
 	 */
-	public AForkableCursor<ACell> latticeView(RequestContext ctx) {
+	public AForkableCursor<ACell> latticeView(AString owner, RequestContext ctx) {
 		return null;
 	}
 
@@ -59,8 +62,9 @@ public abstract class AAdapter {
 	 * to their authoritative lattice state, not to a disposable snapshot. Return
 	 * null to allow, or a refusal reason that reaches the caller unchanged. The
 	 * adapter also owns value validation in its cursor write transformation.
+	 * {@code owner} and {@code ctx} are as for {@link #latticeView}.
 	 */
-	public String latticeWriteDenial(RequestContext ctx, Path path) {
+	public String latticeWriteDenial(AString owner, RequestContext ctx, Path path) {
 		return LATTICE_READ_ONLY;
 	}
 
@@ -82,25 +86,6 @@ public abstract class AAdapter {
 	public static final String DUPLICATE_OPERATION_NAME = "Conflicting operation declaration: ";
 
 	/**
-	 * Configures an adapter discovered from a venue module before it is
-	 * registered or installed.
-	 *
-	 * <p>The module loader passes the immutable {@code modules[].config} object
-	 * verbatim. Existing modules need not override this method. Optional modules
-	 * may return {@code false} when their runtime prerequisites are unavailable;
-	 * this skips registration without turning venue startup into a failure.
-	 * Malformed known settings should still throw. When {@code strict} is true,
-	 * implementations should also reject unknown settings.</p>
-	 *
-	 * @param config module-local configuration, empty when omitted
-	 * @param strict whether venue {@code strictConfig} is enabled
-	 * @return true to register this adapter; false to leave it inactive
-	 */
-	public boolean configureModule(AMap<AString, ACell> config, boolean strict) {
-		return true;
-	}
-
-	/**
 	 * Applies this adapter's <em>effective adapter configuration</em> — the
 	 * venue's {@code adapters.<name>} block, overlaid by any runtime
 	 * reconfiguration ({@code v/ops/venue/adapter/configure}). Called by
@@ -111,22 +96,20 @@ public abstract class AAdapter {
 	 * {@link Engine#adapterConfig(String)} at each call need not override this
 	 * — they see new settings automatically. Override to validate settings up
 	 * front or to rebuild cached derived state (clients, connection pools,
-	 * allow-lists). Return {@code false} to decline: at registration the
-	 * adapter is parked as disabled; at reconfiguration the new settings are
-	 * rejected and the previous configuration stays in force. Malformed known
-	 * settings should throw {@link IllegalArgumentException} with an
-	 * actionable message.</p>
-	 *
-	 * <p>Distinct from {@link #configureModule}: that receives the module-level
-	 * bootstrap settings ({@code modules[].config}) exactly once, before
-	 * registration, and answers "can this module run here at all?".</p>
+	 * allow-lists). Returning accepts the configuration. To object, throw: a
+	 * setting the adapter refuses is a
+	 * {@link covia.exception.ConfigurationException} with an actionable
+	 * message, whoever supplied the settings. A refused reconfiguration is
+	 * reverted to the previous settings; a refused configuration at
+	 * registration or enable leaves the adapter failed. Any other exception
+	 * that escapes and is not a Covia exception is this adapter's fault
+	 * (docs/ERRORS.md). An adapter from a venue module is configured the same
+	 * way.</p>
 	 *
 	 * @param config effective adapter configuration, empty when none
 	 * @param strict whether venue {@code strictConfig} is enabled
-	 * @return true to accept the configuration; false to decline it
 	 */
-	public boolean configure(AMap<AString, ACell> config, boolean strict) {
-		return true;
+	public void configure(AMap<AString, ACell> config, boolean strict) {
 	}
 
 	/**
@@ -138,7 +121,7 @@ public abstract class AAdapter {
 	 * again after every {@link #configure} so it reflects the effective
 	 * configuration; keep it to facts that hold until the next reconfigure —
 	 * live state (counts, connections, sessions) belongs in an operation or
-	 * an explicit {@link #latticeView(RequestContext)}.
+	 * an explicit {@link #latticeView(AString, RequestContext)}.
 	 *
 	 * <p>The framework keys {@code name}, {@code description}, {@code kernel},
 	 * {@code module} and {@code operations} are reserved and win over anything
@@ -165,22 +148,52 @@ public abstract class AAdapter {
 
 	/**
 	 * Starts adapter-owned inbound/background workers after venue assembly and
-	 * recovery. Installation must only bind state and declare assets; workers
-	 * that can invoke operations belong here. Runtime registration and enable
-	 * call this after publication on an already-started engine. Implementations
-	 * must be idempotent because enable may retain an installed instance.
+	 * recovery: the instance has become the venue's live one. Installation must
+	 * only bind state and declare assets; workers that can invoke operations
+	 * belong here. Runtime registration and enable call this after publication
+	 * on an already-started engine, and so do a restart and a failed
+	 * replacement that restores this instance. Implementations must be
+	 * idempotent because enable may retain an installed instance.
 	 *
-	 * <p>Constructors, configuration and {@link #install(Engine)} must not start
-	 * autonomous work. During {@link Engine#launch(java.util.function.Function)},
+	 * <p>A failure here is this adapter's alone: the engine calls {@link #stop()}
+	 * to end whatever it started, and the adapter stays enabled but not running,
+	 * its operations refused, until a restart starts it
+	 * ({@link Engine#restartAdapter}). Throw a {@link covia.exception.CoviaException}
+	 * with a reason an operator can act on, such as an
+	 * {@link covia.exception.UnavailableException} for a port in use or a
+	 * service out of reach; anything else is reported as a fault.</p>
+	 *
+	 * <p>Constructors, configuration and {@link #install(Engine)} are inert: they
+	 * start no thread, process, network activity or operator code, and a
+	 * {@code configure} call starts work only while this adapter is started, as
+	 * its own state records, not because it has an engine. During {@link Engine#launch(java.util.function.Function)},
 	 * this hook runs only after application setup, catalogue publication, secret
 	 * provisioning and recovery. Recovering a Job may itself execute work before
 	 * this hook, so recovery prerequisites must be established during installation
 	 * or the application's pre-start hook. Implement {@link AutoCloseable} to
-	 * release workers/resources on disable, replacement, shutdown or failed
-	 * startup; close must be idempotent and tolerate partial installation/activation. Do not block
-	 * here waiting for another adapter's workers or the HTTP listener.</p>
+	 * release workers/resources on replacement, unload, shutdown or failed
+	 * startup; close must be idempotent and tolerate partial installation/activation.
+	 * Do not block here waiting for another adapter's workers or the HTTP listener.</p>
+	 *
+	 * <p>The engine calls this and {@link #stop()} under its monitor, after the
+	 * registry change they announce, never from a lattice transaction or on a
+	 * fork of the venue's state.</p>
 	 */
 	public void start() {
+		// Most adapters have no autonomous workers.
+	}
+
+	/**
+	 * Stops the workers {@link #start()} started, keeping the instance and its
+	 * resources: it was disabled, is being replaced or restarted, or its start
+	 * failed. {@link #start()} follows when it is enabled again, restarted, or a
+	 * failed replacement restores it. Called only on a started engine. When it
+	 * returns the adapter starts no further autonomous work, and work in progress
+	 * neither commits nor acts outside the venue, so a replacement starts with no
+	 * predecessor running beside it. Implementations must be idempotent; closing
+	 * the adapter also ends its workers, with or without this.
+	 */
+	public void stop() {
 		// Most adapters have no autonomous workers.
 	}
 
@@ -240,7 +253,7 @@ public abstract class AAdapter {
 
 	/**
 	 * This adapter's state migration rules as plain data, for
-	 * {@link covia.venue.VenueState#migrate(java.util.List)}: an embedder that
+	 * {@link covia.venue.VenueState#migrate(covia.venue.SecretStore.Keys, java.util.List)}: an embedder that
 	 * migrates a venue itself passes its adapters' rules with it.
 	 */
 	public final covia.venue.VenueState.AdapterMigration stateMigration() {
@@ -595,7 +608,7 @@ public abstract class AAdapter {
 			warnIfInputIsNotAnObject(prefix + catalogPath, hash);
 			String name = catalogPath.startsWith(getName() + "/")
 				? catalogPath.substring(getName().length() + 1) : catalogPath;
-			AMap<AString, ACell> metadata = RT.ensureMap(JSON.parse(installedAssets.get(hash)));
+			AMap<AString, ACell> metadata = installedMetadata(hash);
 			// Legacy catalogue declarations are permissive and their adapter-owned
 			// mirror uses last-declaration precedence. Discovery must not turn a
 			// previously valid installation into a failure when local names collide.
@@ -618,14 +631,7 @@ public abstract class AAdapter {
 	 * advertises an unconstrained object, which such an operation accepts.
 	 */
 	private void warnIfInputIsNotAnObject(String path, Hash hash) {
-		AString metaString = installedAssets.get(hash);
-		if (metaString == null) return;
-		ACell type;
-		try {
-			type = RT.getIn(JSON.parse(metaString), Fields.OPERATION, Fields.INPUT, Fields.TYPE);
-		} catch (Exception e) {
-			return;   // unparseable metadata is reported by the store step, not here
-		}
+		ACell type = RT.getIn(installedMetadata(hash), Fields.OPERATION, Fields.INPUT, Fields.TYPE);
 		if (type == null) return;
 		boolean admitsObject = Fields.OBJECT.equals(type);
 		if (!admitsObject && type instanceof AVector<?> types) {
@@ -765,10 +771,39 @@ public abstract class AAdapter {
 	}
 
     protected Hash installAsset(AString metaString) {
-		Hash assetHash = engine.storeAsset(metaString, null);
+		Hash assetHash = engine.storeAsset(metaString, parseMetadata(metaString), null);
 		installedAssets = installedAssets.assoc(assetHash, metaString);
 		return assetHash;
     }
+
+	/**
+	 * Parsed installed metadata, keyed by the hash of its JSON text. Every
+	 * venue in a JVM installs the same built-in texts, so each is parsed once
+	 * per JVM rather than at every venue start. Values are soft: the GC
+	 * reclaims a parse no venue still holds, and the next use parses again.
+	 */
+	private static final SoftCache<Hash, AMap<AString, ACell>> PARSED_METADATA = new SoftCache<>();
+
+	/** The parse of installed metadata text, or null if it is not a JSON object. */
+	private static AMap<AString, ACell> parseMetadata(AString metaString) {
+		Hash key = metaString.getHash();
+		AMap<AString, ACell> meta = PARSED_METADATA.get(key);
+		if (meta == null) {
+			meta = RT.ensureMap(JSON.parse(metaString));
+			if (meta != null) PARSED_METADATA.put(key, meta);
+		}
+		return meta;
+	}
+
+	/**
+	 * The parsed metadata of an asset this adapter installed.
+	 * @param hash The asset's id
+	 * @return The metadata, or null if this adapter installed no such asset
+	 */
+	public AMap<AString, ACell> installedMetadata(Hash hash) {
+		AString metaString = installedAssets.get(hash);
+		return (metaString == null) ? null : parseMetadata(metaString);
+	}
 
 	    /**
      * Returns the name of this adapter.
@@ -1243,11 +1278,13 @@ public abstract class AAdapter {
 
 	/**
 	 * Whether a failure is one its caller can cause or act on: a Covia
-	 * exception carrying its reason that is not a reported fault, looking
-	 * through async wrappers. A fault, or anything not yet reported, is not.
+	 * exception carrying its reason that is not the venue's own failure,
+	 * looking through async wrappers. A reported fault, the venue's data
+	 * failing its integrity check ({@link CoviaException#isVenueFailure}), or
+	 * anything not yet reported, is not.
 	 */
 	public static boolean isExpectedFailure(Throwable t) {
-		return CoviaException.reasonOf(t) != null && !FaultException.isFault(t);
+		return CoviaException.reasonOf(t) != null && !CoviaException.isVenueFailure(t);
 	}
 
 	/**

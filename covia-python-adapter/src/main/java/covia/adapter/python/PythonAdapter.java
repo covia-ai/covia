@@ -3,13 +3,10 @@ package covia.adapter.python;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
-import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
@@ -20,22 +17,16 @@ import org.slf4j.LoggerFactory;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
-import convex.core.data.AVector;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
-import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
-import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.adapter.AAdapter;
-import covia.exception.AuthException;
 import covia.exception.ConfigurationException;
-import covia.exception.InvalidInputException;
-import covia.exception.NotFoundException;
-import covia.exception.NotSupportedException;
 import covia.exception.ResponseException;
 import covia.exception.UnavailableException;
+import covia.exception.UnsupportedException;
 import covia.python.PythonException;
 import covia.python.PythonRuntime;
 import covia.python.PythonScript;
@@ -43,144 +34,101 @@ import covia.venue.RequestContext;
 
 /**
  * Venue boundary for operator-configured Python operations. Script paths and
- * callable names come only from venue configuration. When explicitly enabled,
- * callers may also create stateful instances from operator-approved templates
- * and invoke only their allowlisted functions. Caller-supplied source and host
- * paths are never accepted.
+ * callable names come only from venue configuration; caller-supplied source
+ * and host paths are never accepted. Each script is loaded once when the
+ * adapter starts and keeps its globals between calls. An operator offers a
+ * function to others through a callable (CALLABLES.md), and a function
+ * configured with {@code principals} is told who called it
+ * ({@link #principals}), so it can keep each caller's state apart.
+ *
+ * <p>The code runs in the venue process with the venue's power, so running it
+ * is the operator's: {@link #ADMIN_EXECUTE_PYTHON} on the venue resource that
+ * names it, which the operator may grant (CONFIG.md, Python operations).</p>
  */
 public final class PythonAdapter extends AAdapter implements AutoCloseable {
 	private static final Logger log = LoggerFactory.getLogger(PythonAdapter.class);
+	/** Running the operator's Python code, below {@link covia.api.Abilities#ADMIN_EXECUTE}. */
+	public static final AString ADMIN_EXECUTE_PYTHON = Strings.intern("admin/execute/python");
+	/** The venue resource of a configured function, under the venue's DID; its id follows. */
+	public static final String OPERATION_RESOURCE = "python/operations/";
+	/** Why the module refuses the {@code instances} setting it once had. */
+	public static final String INSTANCES_REMOVED = "Malformed configuration at adapters.python.instances: Python "
+		+ "instances are no longer offered. Configure each function under adapters.python.operations, and offer it to other "
+		+ "principals through a callable (CONFIG.md, Python operations)";
 	private static final AString ENABLED = Strings.intern("enabled");
 	private static final AString LIBRARY = Strings.intern("library");
 	private static final AString OPERATIONS = Strings.intern("operations");
+	private static final AString INSTANCES = Strings.intern("instances");
 	private static final AString SCRIPT = Strings.intern("script");
 	private static final AString FUNCTION = Strings.intern("function");
-	private static final AString INSTANCES = Strings.intern("instances");
-	private static final AString TEMPLATES = Strings.intern("templates");
-	private static final AString FUNCTIONS = Strings.intern("functions");
-	private static final AString MAX_PER_USER = Strings.intern("maxPerUser");
-	private static final AString MAX_TOTAL = Strings.intern("maxTotal");
-	private static final AString TEMPLATE = Strings.intern("template");
-	private static final AString ID = Strings.intern("id");
-	private static final AString ARGS = Strings.intern("args");
-	private static final AString CREATED_AT = Strings.intern("createdAt");
-	private static final AString CREATED_BY = Strings.intern("createdBy");
-	private static final String INSTANCE_CREATE = "instances/create";
-	private static final String INSTANCE_LIST = "instances/list";
-	private static final String INSTANCE_CALL = "instances/call";
-	private static final String INSTANCE_CLOSE = "instances/close";
-	private static final Set<String> INSTANCE_OPERATIONS = Set.of(
-		INSTANCE_CREATE, INSTANCE_LIST, INSTANCE_CALL, INSTANCE_CLOSE);
+	/** A function's setting that has it told the principals of the frame it runs in ({@link #principals}). */
+	private static final AString PRINCIPALS = Strings.intern("principals");
+	/** Refusal for a configured operation called before the adapter has started and loaded its script. */
+	public static final String NOT_LOADED = "Python operations are loaded when the python adapter starts";
+	/** A malformed setting: where in {@code adapters}, then what is wrong with it. */
+	public static final String MALFORMED = "Malformed configuration at adapters.%s: %s";
+	/** A setting this adapter does not know, refused under strictConfig: where, then the key. */
+	public static final String UNKNOWN_SETTING = "Unknown configuration field adapters.%s.%s";
+	/** A script a setting names that is not a readable file: the setting, then the path. */
+	public static final String SCRIPT_NOT_FOUND = "adapters.python.%s names no readable file: %s";
+	/** A changed configuration offered once the adapter is installed. */
+	public static final String SETTINGS_FIXED = "adapters.python cannot change once the adapter is installed, "
+		+ "since its operations are published from it: change it in the venue config and restart the venue";
 
-	private record Definition(String id, Path script, String function,
+	private record Definition(String id, Path script, String function, boolean principals,
 		String name, String description, ACell input, ACell output) {}
-	private record Operation(Definition definition, PythonScript script) {}
-	private record TemplateDefinition(String id, Path script, Set<String> functions) {}
-	private record PreparedTemplate(TemplateDefinition definition, String source) {}
-	private record InstanceConfig(boolean enabled, int maxPerUser, int maxTotal,
-		Map<String, TemplateDefinition> templates) {
-		private static InstanceConfig disabled() {
-			return new InstanceConfig(false, 0, 0, Map.of());
-		}
-	}
-	private record InstanceKey(AString owner, String id) {}
-
-	private static final class Instance implements AutoCloseable {
-		private final String id;
-		private final AString createdBy;
-		private final String template;
-		private final long createdAt;
-		private final Set<String> functions;
-		private final PythonScript script;
-		private final ReentrantReadWriteLock lifecycle = new ReentrantReadWriteLock();
-		private boolean closed;
-
-		private Instance(String id, AString createdBy,
-				PreparedTemplate template, PythonScript script) {
-			this.id = id;
-			this.createdBy = createdBy;
-			this.template = template.definition().id();
-			this.createdAt = System.currentTimeMillis();
-			this.functions = template.definition().functions();
-			this.script = script;
-		}
-
-		private ACell call(String function, List<? extends ACell> arguments) {
-			if (!functions.contains(function)) {
-				throw new InvalidInputException("Function is not allowed by Python template "
-					+ template + ": " + function);
-			}
-			lifecycle.readLock().lock();
-			try {
-				if (closed) throw new NotSupportedException("Python instance is closed: " + id);
-				return script.call(function, arguments);
-			} catch (PythonException e) {
-				throw pythonFailure(e);
-			} finally {
-				lifecycle.readLock().unlock();
-			}
-		}
-
-		private AMap<AString, ACell> descriptor() {
-			List<ACell> callableNames = functions.stream().sorted()
-				.map(Strings::create).map(ACell.class::cast).toList();
-			return Maps.of(
-				ID, Strings.create(id),
-				TEMPLATE, Strings.create(template),
-				FUNCTIONS, Vectors.create(callableNames),
-				CREATED_AT, CVMLong.create(createdAt),
-				CREATED_BY, createdBy);
-		}
-
-		@Override
-		public void close() {
-			lifecycle.writeLock().lock();
-			try {
-				if (closed) return;
-				closed = true;
-				script.close();
-			} finally {
-				lifecycle.writeLock().unlock();
-			}
+	private record Operation(Definition definition, PythonScript script) {
+		/** Calls the function with {@code input}, then, if it is configured to take them, the principals of the frame {@code ctx} runs in. */
+		ACell call(RequestContext ctx, ACell input) {
+			if (!definition.principals()) return script.call(definition.function(), input);
+			return script.call(definition.function(), Arrays.asList(input, principals(ctx)));
 		}
 	}
 
+	/** The settings accepted, without the framework's {@code enabled}; null until configured. */
+	private AMap<AString, ACell> applied;
+	private String library;
 	private PythonRuntime runtime;
 	private Map<String, Definition> definitions = Map.of();
-	private InstanceConfig instanceConfig = InstanceConfig.disabled();
-	private Map<String, PreparedTemplate> templates = Map.of();
 	private final Map<String, Operation> operations = new ConcurrentHashMap<>();
-	private final Map<InstanceKey, Instance> instances = new ConcurrentHashMap<>();
 	private final ReentrantReadWriteLock lifecycle = new ReentrantReadWriteLock();
 	private boolean closed;
 
 	public PythonAdapter() {}
 
+	/**
+	 * Takes {@code adapters.python}: the CPython {@code library} and the
+	 * {@code operations} it publishes. Every script a setting names must be a
+	 * readable file; the {@code instances} it once allowed are refused under
+	 * strictConfig and warned of otherwise ({@link #INSTANCES_REMOVED}). Its operations are
+	 * published from these settings as it installs, so once installed it
+	 * refuses any change to them until the venue restarts.
+	 */
 	@Override
-	public boolean configureModule(AMap<AString, ACell> settings, boolean strict) {
-		validateUnknownFields(settings, Set.of("enabled", "library", "operations", "instances"),
-			"python module config", strict);
-		boolean enabled = optionalBoolean(settings, ENABLED, "python.enabled", true);
-		String library = optionalString(settings, LIBRARY, "python.library");
-		Map<String, Definition> parsed = parseDefinitions(settings, strict);
-		InstanceConfig parsedInstances = parseInstanceConfig(settings, strict);
-		if (parsedInstances.enabled()) {
-			for (String id : parsed.keySet()) {
-				if (INSTANCE_OPERATIONS.contains(id)) {
-					throw malformed("python.operations." + id,
-						"is reserved when Python instances are enabled");
-				}
-			}
+	public void configure(AMap<AString, ACell> config, boolean strict) {
+		AMap<AString, ACell> settings = config.dissoc(ENABLED);
+		if (engine != null) {
+			if (!settings.equals(applied)) throw new ConfigurationException(SETTINGS_FIXED);
+			return;
 		}
-		if (!enabled) return false;
-		try {
-			runtime = PythonRuntime.open(library);
-			definitions = parsed;
-			instanceConfig = parsedInstances;
-			return true;
-		} catch (PythonException e) {
-			log.warn("Python adapter disabled: {}", e.getMessage());
-			return false;
+		if (settings.containsKey(INSTANCES)) {
+			if (strict) throw new ConfigurationException(INSTANCES_REMOVED);
+			log.warn(INSTANCES_REMOVED);
+		}
+		validateUnknownFields(settings, Set.of("library", "operations", "instances"), "python", strict);
+		String parsedLibrary = optionalString(settings, LIBRARY, "python.library");
+		Map<String, Definition> parsed = parseDefinitions(settings, strict);
+		for (Definition definition : parsed.values()) {
+			requireReadable(definition.script(), "operations." + definition.id() + ".script");
+		}
+		library = parsedLibrary;
+		definitions = parsed;
+		applied = settings;
+	}
+
+	private static void requireReadable(Path script, String setting) {
+		if (!Files.isRegularFile(script) || !Files.isReadable(script)) {
+			throw new ConfigurationException(SCRIPT_NOT_FOUND.formatted(setting, script));
 		}
 	}
 
@@ -205,18 +153,19 @@ public final class PythonAdapter extends AAdapter implements AutoCloseable {
 			AMap<AString, ACell> definition = (AMap<AString, ACell>) entry.getValue();
 			String path = "python.operations." + id;
 			validateUnknownFields(definition,
-				Set.of("script", "function", "name", "description", "input", "output"),
+				Set.of("script", "function", "principals", "name", "description", "input", "output"),
 				path, strict);
 			String script = optionalString(definition, SCRIPT, path + ".script");
 			if (script == null) throw malformed(path + ".script", "is required");
 			String function = optionalString(definition, FUNCTION, path + ".function");
+			boolean principals = optionalBoolean(definition, PRINCIPALS, path + ".principals");
 			String name = optionalString(definition, Fields.NAME, path + ".name");
 			String description = optionalString(definition, Fields.DESCRIPTION,
 				path + ".description");
 			ACell input = optionalMap(definition, Fields.INPUT, path + ".input");
 			ACell output = optionalMap(definition, Fields.OUTPUT, path + ".output");
 			result.put(id, new Definition(id, Path.of(script).toAbsolutePath().normalize(),
-				function == null ? "main" : function,
+				function == null ? "main" : function, principals,
 				name == null ? "Python " + id : name,
 				description == null ? "Runs the configured Python operation " + id : description,
 				input, output));
@@ -224,84 +173,12 @@ public final class PythonAdapter extends AAdapter implements AutoCloseable {
 		return result;
 	}
 
-	@SuppressWarnings("unchecked")
-	private static InstanceConfig parseInstanceConfig(
-			AMap<AString, ACell> settings, boolean strict) {
-		ACell raw = settings.get(INSTANCES);
-		if (raw == null) return InstanceConfig.disabled();
-		if (!(raw instanceof AMap<?, ?>)) throw malformed("python.instances", "must be an object");
-		AMap<AString, ACell> configured = (AMap<AString, ACell>) raw;
-		validateUnknownFields(configured,
-			Set.of("enabled", "templates", "maxPerUser", "maxTotal"),
-			"python.instances", strict);
-		boolean enabled = optionalBoolean(configured, ENABLED,
-			"python.instances.enabled", true);
-		int maxPerUser = optionalPositiveInt(configured, MAX_PER_USER,
-			"python.instances.maxPerUser", 8);
-		int maxTotal = optionalPositiveInt(configured, MAX_TOTAL,
-			"python.instances.maxTotal", 128);
-		if (maxTotal < maxPerUser) {
-			throw malformed("python.instances.maxTotal", "must be at least maxPerUser");
-		}
-
-		Map<String, TemplateDefinition> templates = new LinkedHashMap<>();
-		ACell rawTemplates = configured.get(TEMPLATES);
-		if (rawTemplates != null) {
-			if (!(rawTemplates instanceof AMap<?, ?>)) {
-				throw malformed("python.instances.templates", "must be an object");
-			}
-			AMap<AString, ACell> templateMap = (AMap<AString, ACell>) rawTemplates;
-			for (long i = 0; i < templateMap.count(); i++) {
-				Map.Entry<AString, ACell> entry = templateMap.entryAt(i);
-				String id = entry.getKey().toString();
-				String path = "python.instances.templates." + id;
-				if (!id.matches("^[a-z][a-z0-9-]*$")) {
-					throw malformed(path, "name must be a lowercase catalog segment");
-				}
-				if (!(entry.getValue() instanceof AMap<?, ?>)) {
-					throw malformed(path, "must be an object");
-				}
-				AMap<AString, ACell> template = (AMap<AString, ACell>) entry.getValue();
-				validateUnknownFields(template, Set.of("script", "functions"), path, strict);
-				String script = optionalString(template, SCRIPT, path + ".script");
-				if (script == null) throw malformed(path + ".script", "is required");
-				Set<String> functions = requiredFunctions(template.get(FUNCTIONS),
-					path + ".functions");
-				templates.put(id, new TemplateDefinition(id,
-					Path.of(script).toAbsolutePath().normalize(), functions));
-			}
-		}
-		if (enabled && templates.isEmpty()) {
-			throw malformed("python.instances.templates",
-				"must define at least one template when instances are enabled");
-		}
-		return new InstanceConfig(enabled, maxPerUser, maxTotal, Map.copyOf(templates));
-	}
-
-	private static Set<String> requiredFunctions(ACell raw, String path) {
-		if (!(raw instanceof AVector<?> vector) || vector.isEmpty()) {
-			throw malformed(path, "must be a non-empty array of function names");
-		}
-		Set<String> result = new LinkedHashSet<>();
-		for (long i = 0; i < vector.count(); i++) {
-			ACell value = (ACell) vector.get(i);
-			if (!(value instanceof AString name)
-					|| !name.toString().matches("^[A-Za-z_][A-Za-z0-9_]*$")) {
-				throw malformed(path + "[" + i + "]", "must be a Python identifier");
-			}
-			if (!result.add(name.toString())) {
-				throw malformed(path + "[" + i + "]", "duplicates function " + name);
-			}
-		}
-		return Set.copyOf(result);
-	}
-
 	private static void validateUnknownFields(AMap<AString, ACell> map,
 			Set<String> known, String path, boolean strict) {
 		for (AString key : map.keySet()) {
 			if (known.contains(key.toString())) continue;
-			String message = "Unknown configuration field " + path + "." + key;
-			if (strict) throw new IllegalArgumentException(message);
+			String message = UNKNOWN_SETTING.formatted(path, key);
+			if (strict) throw new ConfigurationException(message);
 			log.warn(message);
 		}
 	}
@@ -315,23 +192,11 @@ public final class PythonAdapter extends AAdapter implements AutoCloseable {
 	}
 
 	private static boolean optionalBoolean(AMap<AString, ACell> map,
-			AString key, String path, boolean fallback) {
+			AString key, String path) {
 		ACell value = map.get(key);
-		if (value == null) return fallback;
-		Object jvm = RT.jvm(value);
-		if (!(jvm instanceof Boolean bool)) throw malformed(path, "must be a boolean");
-		return bool;
-	}
-
-	private static int optionalPositiveInt(AMap<AString, ACell> map,
-			AString key, String path, int fallback) {
-		ACell value = map.get(key);
-		if (value == null) return fallback;
-		Object jvm = RT.jvm(value);
-		if (!(jvm instanceof Long number) || number < 1 || number > Integer.MAX_VALUE) {
-			throw malformed(path, "must be a positive integer");
-		}
-		return number.intValue();
+		if (value == null) return false;
+		if (!(value instanceof CVMBool flag)) throw malformed(path, "must be a boolean");
+		return flag.booleanValue();
 	}
 
 	private static AMap<?, ?> optionalMap(AMap<AString, ACell> map,
@@ -342,8 +207,8 @@ public final class PythonAdapter extends AAdapter implements AutoCloseable {
 		return nested;
 	}
 
-	private static IllegalArgumentException malformed(String path, String detail) {
-		return new IllegalArgumentException("Malformed configuration at " + path + ": " + detail);
+	private static ConfigurationException malformed(String path, String detail) {
+		return new ConfigurationException(MALFORMED.formatted(path, detail));
 	}
 
 	@Override
@@ -357,42 +222,81 @@ public final class PythonAdapter extends AAdapter implements AutoCloseable {
 			+ "Convex maps, vectors, scalars and blobs are converted natively.";
 	}
 
+	/**
+	 * Declares the configured operations. Nothing is read or run: an installed
+	 * adapter that is not started runs no operator code ({@link #start}).
+	 */
 	@Override
 	protected void installAssets() {
+		for (Definition definition : definitions.values()) {
+			installAsset("python/" + definition.id(), metadata(definition));
+		}
+	}
+
+	/** Whether the configured scripts are loaded ({@link #start}); written under {@link #lifecycle}. */
+	private volatile boolean loaded;
+
+	/**
+	 * Opens CPython, then loads the configured scripts into it, which runs each
+	 * one's top-level code. Operator code runs only once the adapter is
+	 * started, never while it is just installed. The scripts load once; a later
+	 * start keeps them. If one cannot load, none is kept and the start fails
+	 * with the reason.
+	 *
+	 * @throws UnavailableException if this host has no usable CPython, such as
+	 *         when the configured {@code library} cannot load
+	 * @throws ConfigurationException if a script is missing, or cannot be read
+	 *         or loaded
+	 */
+	@Override
+	public void start() {
+		lifecycle.writeLock().lock();
 		try {
-			if (runtime == null) throw new IllegalStateException("Python module was not configured");
-			for (Definition definition : definitions.values()) {
-				if (!Files.isRegularFile(definition.script())) {
-					throw new ConfigurationException(
-						"Python script not found: " + definition.script());
+			if (closed) throw new UnavailableException("Python adapter is closed");
+			if (loaded) return;
+			if (runtime == null) {
+				try {
+					runtime = PythonRuntime.open(library);
+				} catch (PythonException e) {
+					throw new UnavailableException(e.getMessage(), e);
 				}
-				String source = Files.readString(definition.script());
-				PythonScript script = runtime.load(source, definition.script().toString());
-				operations.put(definition.id(), new Operation(definition, script));
-				installAsset("python/" + definition.id(), metadata(definition));
 			}
-			if (instanceConfig.enabled()) {
-				Map<String, PreparedTemplate> prepared = new LinkedHashMap<>();
-				for (TemplateDefinition definition : instanceConfig.templates().values()) {
+			Map<String, Operation> loading = new LinkedHashMap<>();
+			try {
+				for (Definition definition : definitions.values()) {
 					if (!Files.isRegularFile(definition.script())) {
 						throw new ConfigurationException(
-							"Python instance template not found: " + definition.script());
+							"Python script not found: " + definition.script());
 					}
-					prepared.put(definition.id(), new PreparedTemplate(definition,
-						Files.readString(definition.script())));
+					String source = Files.readString(definition.script());
+					PythonScript script = runtime.load(source, definition.script().toString());
+					loading.put(definition.id(), new Operation(definition, script));
 				}
-				templates = Map.copyOf(prepared);
-				installInstanceAssets();
+				operations.putAll(loading);
+				loaded = true;
+			} catch (IOException | PythonException | ConfigurationException | IllegalArgumentException e) {
+				release(loading.values());
+				throw new ConfigurationException("Failed to load Python operations", e);
+			} catch (RuntimeException e) {
+				release(loading.values());
+				throw e;
 			}
-		} catch (IOException | PythonException | ConfigurationException | IllegalArgumentException e) {
-			close();
-			throw new ConfigurationException("Failed to install Python operations", e);
-		} catch (RuntimeException e) {
-			close();
-			throw new IllegalStateException("Failed to install Python operations", e);
+		} finally {
+			lifecycle.writeLock().unlock();
 		}
-		log.info("Python runtime enabled: {} ({} configured operations, {} instance templates)",
-			runtime.description(), operations.size(), templates.size());
+		log.info("Python runtime enabled: {} ({} configured operations)",
+			runtime.description(), operations.size());
+	}
+
+	/** Releases loaded operations' scripts, logging any that cannot be. */
+	private static void release(Iterable<Operation> loaded) {
+		for (Operation operation : loaded) {
+			try {
+				operation.script().close();
+			} catch (RuntimeException e) {
+				log.warn("Failed to release Python operation {}", operation.definition().id(), e);
+			}
+		}
 	}
 
 	private static AMap<AString, ACell> metadata(Definition definition) {
@@ -410,97 +314,25 @@ public final class PythonAdapter extends AAdapter implements AutoCloseable {
 			Fields.OPERATION, operation);
 	}
 
-	private void installInstanceAssets() {
-		List<ACell> templateNames = templates.keySet().stream()
-			.sorted().map(Strings::create).map(ACell.class::cast).toList();
-		ACell templateSchema = Maps.of(
-			"type", "string",
-			"description", "Operator-approved Python template",
-			"enum", Vectors.create(templateNames));
-		installAsset("python/instances/create", instanceMetadata(INSTANCE_CREATE,
-			"Create Python instance",
-			"Creates an isolated, stateful Python namespace from an operator-approved template. "
-				+ "The instance is ephemeral and owned by the effective venue user.",
-			objectSchema(Maps.of("template", templateSchema), "template"),
-			instanceDescriptorSchema()));
-		installAsset("python/instances/list", instanceMetadata(INSTANCE_LIST,
-			"List Python instances",
-			"Lists the caller's active Python instances; instances owned by other users are hidden.",
-			objectSchema(Maps.empty()),
-			objectSchema(Maps.of("instances", Maps.of(
-				"type", "array", "items", instanceDescriptorSchema())))));
-		installAsset("python/instances/call", instanceMetadata(INSTANCE_CALL,
-			"Call Python instance",
-			"Calls an allowlisted synchronous function on a Python instance. Args are positional "
-				+ "and use the normal Convex/Python value conversion.",
-			objectSchema(Maps.of(
-				"id", Maps.of("type", "string", "description", "Instance identifier"),
-				"function", Maps.of("type", "string", "description", "Allowlisted function name"),
-				"args", Maps.of("type", "array", "description", "Zero or more positional arguments")),
-				"id", "function"),
-			Maps.empty()));
-		installAsset("python/instances/close", instanceMetadata(INSTANCE_CLOSE,
-			"Close Python instance",
-			"Closes one of the caller's Python instances and releases its native references.",
-			objectSchema(Maps.of(
-				"id", Maps.of("type", "string", "description", "Instance identifier")), "id"),
-			objectSchema(Maps.of(
-				"id", Maps.of("type", "string"),
-				"closed", Maps.of("type", "boolean")), "id", "closed")));
-	}
-
-	private static AMap<AString, ACell> instanceMetadata(String id, String name,
-			String description, ACell input, ACell output) {
-		return Maps.of(
-			Fields.NAME, Strings.create(name),
-			Fields.DESCRIPTION, Strings.create(description),
-			Fields.OPERATION, Maps.of(
-				Fields.ADAPTER, Strings.create("python:" + id),
-				Fields.TOOL_NAME, Strings.create("python_" + id.replace('/', '_')),
-				Fields.INPUT, input,
-				Fields.OUTPUT, output));
-	}
-
-	private static AMap<AString, ACell> objectSchema(AMap<?, ?> properties,
-			String... required) {
-		AMap<AString, ACell> schema = Maps.of(
-			Strings.intern("type"), Strings.create("object"),
-			Strings.intern("properties"), properties,
-			Strings.intern("additionalProperties"), CVMBool.FALSE);
-		if (required.length > 0) {
-			List<ACell> names = java.util.Arrays.stream(required)
-				.map(Strings::create).map(ACell.class::cast).toList();
-			schema = schema.assoc(Strings.intern("required"), Vectors.create(names));
-		}
-		return schema;
-	}
-
-	private static AMap<AString, ACell> instanceDescriptorSchema() {
-		return objectSchema(Maps.of(
-			"id", Maps.of("type", "string"),
-			"template", Maps.of("type", "string"),
-			"functions", Maps.of("type", "array", "items", Maps.of("type", "string")),
-			"createdAt", Maps.of("type", "integer"),
-			"createdBy", Maps.of("type", "string")),
-			"id", "template", "functions", "createdAt", "createdBy");
-	}
-
 	@Override
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx,
 			AMap<AString, ACell> meta, ACell input) {
 		String id = getSubOperation(meta);
 		Operation operation = operations.get(id);
-		if (operation == null && !(instanceConfig.enabled() && INSTANCE_OPERATIONS.contains(id))) {
+		if (!loaded && definitions.containsKey(id)) {
+			return CompletableFuture.failedFuture(new UnavailableException(NOT_LOADED));
+		}
+		if (operation == null) {
 			return CompletableFuture.failedFuture(
-				new NotSupportedException("Unknown configured Python operation: " + id));
+				new UnsupportedException("Unknown configured Python operation: " + id));
 		}
 		return CompletableFuture.supplyAsync(() -> {
 			lifecycle.readLock().lock();
 			try {
 				if (closed) throw new UnavailableException("Python adapter is closed");
-				if (operation == null) return invokeInstance(id, ctx, input);
+				requireExecute(ctx, OPERATION_RESOURCE + id);
 				try {
-					return operation.script().call(operation.definition().function(), input);
+					return operation.call(ctx, input);
 				} catch (PythonException e) {
 					throw pythonFailure(e);
 				}
@@ -510,128 +342,32 @@ public final class PythonAdapter extends AAdapter implements AutoCloseable {
 		}, VIRTUAL_EXECUTOR);
 	}
 
-	private ACell invokeInstance(String operation, RequestContext ctx, ACell input) {
-		AString owner = requireOwner(ctx);
-		AMap<AString, ACell> parameters = requireInputMap(input);
-		return switch (operation) {
-			case INSTANCE_CREATE -> createInstance(owner, ctx.getCallerDID(),
-				requiredString(parameters, TEMPLATE, "template"));
-			case INSTANCE_LIST -> listInstances(owner);
-			case INSTANCE_CALL -> callInstance(owner,
-				requiredString(parameters, ID, "id"),
-				requiredString(parameters, FUNCTION, "function"),
-				arguments(parameters.get(ARGS)));
-			case INSTANCE_CLOSE -> closeInstance(owner,
-				requiredString(parameters, ID, "id"));
-			default -> throw new NotSupportedException(
-				"Unknown Python instance operation: " + operation);
-		};
+	/**
+	 * What a function configured with {@code principals} is told of the frame
+	 * it runs in (AUTHORITY.md): its {@link Fields#AUTHORITY}, the principal
+	 * whose authority applies, and its {@link Fields#CALLER}, the authority of
+	 * the frame that called into it, such as a callable's invoker, left out at
+	 * the top level.
+	 */
+	private static AMap<AString, ACell> principals(RequestContext ctx) {
+		AMap<AString, ACell> principals = Maps.of(Fields.AUTHORITY, ctx.getAuthorityDID());
+		AString caller = ctx.getCaller();
+		return (caller == null) ? principals : principals.assoc(Fields.CALLER, caller);
 	}
 
-	private ACell createInstance(AString owner, AString createdBy, String templateId) {
-		PreparedTemplate template = templates.get(templateId);
-		if (template == null) {
-			throw new NotFoundException("Unknown Python instance template: " + templateId, templateId);
-		}
-		synchronized (instances) {
-			long owned = instances.keySet().stream()
-				.filter(key -> key.owner().equals(owner)).count();
-			if (owned >= instanceConfig.maxPerUser()) {
-				throw new UnavailableException("Python instance limit reached for user ("
-					+ instanceConfig.maxPerUser() + ")");
-			}
-			if (instances.size() >= instanceConfig.maxTotal()) {
-				throw new UnavailableException("Venue Python instance limit reached ("
-					+ instanceConfig.maxTotal() + ")");
-			}
-			String id = UUID.randomUUID().toString();
-			PythonScript script;
-			try {
-				script = runtime.load(template.source(),
-					template.definition().script() + "#instance-" + id);
-			} catch (PythonException e) {
-				throw pythonFailure(e);
-			}
-			Instance instance = new Instance(id, createdBy, template, script);
-			instances.put(new InstanceKey(owner, id), instance);
-			return instance.descriptor();
-		}
-	}
-
-	private ACell listInstances(AString owner) {
-		List<ACell> result;
-		synchronized (instances) {
-			result = instances.entrySet().stream()
-				.filter(entry -> entry.getKey().owner().equals(owner))
-				.map(Map.Entry::getValue)
-				.sorted(java.util.Comparator.comparingLong(instance -> instance.createdAt))
-				.map(Instance::descriptor)
-				.map(ACell.class::cast)
-				.toList();
-		}
-		return Maps.of(INSTANCES, Vectors.create(result));
-	}
-
-	private ACell callInstance(AString owner, String id, String function,
-			List<? extends ACell> arguments) {
-		Instance instance = instances.get(new InstanceKey(owner, id));
-		if (instance == null) throw instanceNotFound(id);
-		return instance.call(function, arguments);
-	}
-
-	private ACell closeInstance(AString owner, String id) {
-		Instance instance;
-		synchronized (instances) {
-			instance = instances.remove(new InstanceKey(owner, id));
-		}
-		if (instance == null) throw instanceNotFound(id);
-		instance.close();
-		return Maps.of(ID, Strings.create(id), Strings.intern("closed"), CVMBool.TRUE);
-	}
-
-	private static NotFoundException instanceNotFound(String id) {
-		return new NotFoundException("Python instance not found: " + id, id);
+	/**
+	 * Requires that the request may run the operator's Python code at
+	 * {@code resource}, a resource of the venue: the venue and its unrestricted
+	 * agents may, and anyone the operator granted {@link #ADMIN_EXECUTE_PYTHON}
+	 * there.
+	 */
+	private void requireExecute(RequestContext ctx, String resource) {
+		engine.requireVenueAuthority(ctx, resource, ADMIN_EXECUTE_PYTHON);
 	}
 
 	/** An error raised by the operator's Python code, which the caller is told in Python's words. */
 	private static ResponseException pythonFailure(PythonException e) {
 		return new ResponseException(e.getMessage(), e);
-	}
-
-	private AString requireOwner(RequestContext ctx) {
-		AString owner = ctx == null ? null : ctx.getUserDID();
-		if (owner == null || (engine != null && engine.isPublicPrincipal(owner))) {
-			throw new AuthException("Authenticated non-public identity required for Python instances");
-		}
-		if (!ctx.actsWithNamespaceAuthority()) throw new AuthException(RequestContext.NOT_NAMESPACE_AUTHORITY + owner);
-		return owner;
-	}
-
-	@SuppressWarnings("unchecked")
-	private static AMap<AString, ACell> requireInputMap(ACell input) {
-		if (!(input instanceof AMap<?, ?>)) {
-			throw new InvalidInputException("Python instance input must be an object");
-		}
-		return (AMap<AString, ACell>) input;
-	}
-
-	private static String requiredString(AMap<AString, ACell> input,
-			AString key, String label) {
-		ACell value = input.get(key);
-		if (!(value instanceof AString string) || string.isEmpty()) {
-			throw new InvalidInputException(label + " must be a non-empty string");
-		}
-		return string.toString();
-	}
-
-	private static List<ACell> arguments(ACell raw) {
-		if (raw == null) return List.of();
-		if (!(raw instanceof AVector<?> vector)) {
-			throw new InvalidInputException("args must be an array");
-		}
-		List<ACell> result = new ArrayList<>((int) vector.count());
-		for (long i = 0; i < vector.count(); i++) result.add((ACell) vector.get(i));
-		return result;
 	}
 
 	@Override
@@ -640,22 +376,7 @@ public final class PythonAdapter extends AAdapter implements AutoCloseable {
 		try {
 			if (closed) return;
 			closed = true;
-			for (Instance instance : instances.values()) {
-				try {
-					instance.close();
-				} catch (RuntimeException e) {
-					log.warn("Failed to release Python instance {}", instance.id, e);
-				}
-			}
-			instances.clear();
-			for (Operation operation : operations.values()) {
-				try {
-					operation.script().close();
-				} catch (RuntimeException e) {
-					log.warn("Failed to release Python operation {}",
-						operation.definition().id(), e);
-				}
-			}
+			release(operations.values());
 			operations.clear();
 		} finally {
 			lifecycle.writeLock().unlock();

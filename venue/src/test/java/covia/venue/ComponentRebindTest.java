@@ -25,7 +25,7 @@ public class ComponentRebindTest {
 
 	private final AtomicLong clock = new AtomicLong(1000);
 	private final User user = venue().users().ensure(DID);
-	private final Agent agent = user.ensureAgent("helper", null, null);
+	private final Agent agent = TestAgents.ensure(user, "helper", null, null);
 
 	private VenueState venue() {
 		AKeyPair kp = AKeyPair.generate();
@@ -52,7 +52,7 @@ public class ComponentRebindTest {
 
 	@Test void reboundUserMakesItsChildrenOnItsNewStorage() {
 		User rebound = user.rebind(Cursors.root(user.value()));
-		rebound.ensureAgent("other", null, null);
+		TestAgents.ensure(rebound, "other", null, null);
 		assertNotNull(rebound.agent("other"));
 		assertNull(user.agent("other"), "the original user has no such agent");
 	}

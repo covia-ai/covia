@@ -689,32 +689,68 @@ public class GoalTreeContext {
 			Strings.create(desc));
 	}
 
+	// ========== Compaction ==========
+
+	/** Exchanges a compaction keeps after its summary when the agent's config
+	 *  sets no {@code compactKeep}. */
+	public static final int DEFAULT_COMPACT_KEEP = 5;
+
+	/** On an entry a compaction repeats after its summary: the history position
+	 *  of the original. */
+	public static final AString K_REPEAT_OF = Strings.intern("repeatOf");
+
 	/**
-	 * Compacts the frame's complete visible conversation into one new segment.
-	 * History frames append a summary referencing the old selection and advance
-	 * contextStart. Legacy frames nest the selected vector under items. Both
-	 * keep model context bounded and retain every original cell for inspection.
+	 * What a compaction did.
+	 *
+	 * @param frame the frame after it, the same frame when nothing was replaced
+	 * @param replaced live entries the summary replaced; 0 when nothing was
+	 * @param kept exchanges kept after the summary
+	 */
+	public record Compaction(AMap<AString, ACell> frame, long replaced, long kept) {
+		public boolean applied() { return replaced > 0; }
+	}
+
+	/**
+	 * Compacts the frame's whole visible conversation into one new segment,
+	 * keeping no exchange.
 	 *
 	 * @param frame the frame to compact
 	 * @param summary LLM-provided summary of the compacted turns
 	 * @return new frame with compacted conversation
 	 */
 	public static AMap<AString, ACell> compactFrame(AMap<AString, ACell> frame, String summary) {
-		return compactFrame(frame, summary, null);
+		return compact(frame, summary, null, 0).frame();
 	}
 
-	/** Compacts with optional non-rendered provenance attached to the archive. */
+	/**
+	 * Replaces the frame's visible conversation, all but its last {@code keep}
+	 * exchanges ({@link #compactionCut}), with one summary segment. A
+	 * conversation of {@code keep} exchanges or fewer is left as it is, so
+	 * compacting again straight after a compaction changes nothing.
+	 *
+	 * <p>History frames append a summary referencing the replaced range, then
+	 * repeat the kept exchanges' messages and answers ({@link #K_REPEAT_OF}),
+	 * and start the context at the summary; the kept originals, tool activity
+	 * included, stay in history before it. Legacy frames, which the runtime
+	 * migrates before compacting, nest the replaced vector under items followed
+	 * by the kept entries as they are. Both retain every original cell.</p>
+	 *
+	 * @param provenance optional non-rendered fields for the summary
+	 */
 	@SuppressWarnings("unchecked")
-	public static AMap<AString, ACell> compactFrame(AMap<AString, ACell> frame,
-			String summary, AMap<AString, ACell> provenance) {
+	public static Compaction compact(AMap<AString, ACell> frame, String summary,
+			AMap<AString, ACell> provenance, int keep) {
+		Compaction none = new Compaction(frame, 0, 0);
 		AVector<ACell> conversation = activeConversation(frame);
-		if (conversation == null || conversation.count() == 0) return frame;
+		AVector<ACell> replaced = compactedPart(conversation, keep);
+		if (replaced.isEmpty()) return none;
+		long cut = replaced.count();
+		long live = 0;
+		for (ACell entry : replaced) if (!isSegment(entry)) live++;
 
-		if (countLiveTurns(frame) == 0) return frame;
-
-		// The old vector itself is the archive. Convex cells are immutable, so
-		// this retains exact history through structural sharing rather than copy.
-		AMap<AString, ACell> segment = createSegment(summary, conversation);
+		// The replaced vector itself is the archive. Convex cells are immutable,
+		// so this retains exact history through structural sharing, not copy.
+		AMap<AString, ACell> segment = createSegment(summary, replaced);
 		if (provenance != null) {
 			for (var entry : provenance.entrySet()) {
 				if (segment.get(entry.getKey()) == null) {
@@ -722,7 +758,6 @@ public class GoalTreeContext {
 				}
 			}
 		}
-		AVector<ACell> newConversation = Vectors.of((ACell) segment);
 		// Compaction starts a fresh provider-visible context around the summary.
 		// Keep the active load declarations, but invalidate their materialised
 		// bodies, contributions and tool schemas; watched values likewise get a
@@ -731,18 +766,127 @@ public class GoalTreeContext {
 		AMap<AString, ACell> compacted;
 		if (frame.containsKey(K_HISTORY)) {
 			AVector<ACell> retained = history(frame);
+			long start = ((CVMLong) frame.get(K_CONTEXT_START)).longValue();
 			segment = segment.dissoc(K_ITEMS).assoc(K_HISTORY_RANGE,
-				Vectors.of(frame.get(K_CONTEXT_START), CVMLong.create(retained.count())));
-			compacted = frame.assoc(K_HISTORY, retained.conj(segment))
+				Vectors.of(CVMLong.create(start), CVMLong.create(start + cut)));
+			compacted = frame.assoc(K_HISTORY, retained.conj(segment)
+					.concat(repeats(frame, conversation, cut, start)))
 				.assoc(K_CONTEXT_START, CVMLong.create(retained.count()));
 		} else {
-			compacted = frame.assoc(K_CONVERSATION, newConversation);
+			compacted = frame.assoc(K_CONVERSATION, Vectors.of((ACell) segment)
+				.concat(conversation.slice(cut, conversation.count())));
 		}
 		compacted = compacted.dissoc(K_RENDERED_CONTEXT)
 			.dissoc(K_OBSERVATIONS);
 		AMap<AString, ACell> loads = getLoads(compacted);
 		AMap<AString, ACell> reloads = Loads.invalidateAgentMaterialisation(loads);
-		return (reloads == loads) ? compacted : withLoads(compacted, reloads);
+		if (reloads != loads) compacted = withLoads(compacted, reloads);
+		return new Compaction(compacted, live, keep);
+	}
+
+	/**
+	 * What a compaction keeping the last {@code keep} exchanges would replace in
+	 * a conversation: the entries before those exchanges, which its summary
+	 * should cover. Empty when the conversation holds {@code keep} exchanges or
+	 * fewer, or nothing but summaries before them; compaction then changes
+	 * nothing. Exchanges are counted as {@link #compactionCut} does. The
+	 * conversation may be a frame's {@link #activeConversation} or its
+	 * {@link #archivedConversation}: they line up entry for entry, and summaries
+	 * count as no exchange in either form.
+	 *
+	 * @param keep exchanges to keep, as {@code agent:compactSession}'s {@code keep}
+	 * @return the replaced entries, never null
+	 */
+	public static AVector<ACell> compactedPart(AVector<ACell> conversation, int keep) {
+		if (conversation == null || conversation.isEmpty()) return Vectors.empty();
+		long cut = compactionCut(conversation, keep);
+		if (cut <= 0) return Vectors.empty();
+		AVector<ACell> replaced = conversation.slice(0, cut);
+		for (ACell entry : replaced) if (!isSegment(entry)) return replaced;
+		return Vectors.empty();
+	}
+
+	/**
+	 * Where a compaction keeping the last {@code keep} exchanges cuts a
+	 * conversation. An exchange is an incoming message with everything done in
+	 * reply, up to an answer: an assistant message with visible text and no
+	 * tool calls. Several messages before one answer, or several answers after
+	 * one message, are one exchange, and a message arriving while tool calls
+	 * await their results joins the exchange in progress. An unfinished last
+	 * exchange counts, so the cut never parts a tool call from its result.
+	 *
+	 * @return index of the first kept entry, the conversation's length when
+	 *         {@code keep} is 0, or -1 when the conversation holds {@code keep}
+	 *         exchanges or fewer
+	 */
+	static long compactionCut(AVector<ACell> conversation, int keep) {
+		if (keep < 0) throw new IllegalArgumentException("Compaction keeps a non-negative number of exchanges");
+		if (keep == 0) return conversation.count();
+		java.util.List<Long> starts = new java.util.ArrayList<>();
+		boolean open = false;
+		long awaiting = 0;
+		for (long i = 0; i < conversation.count(); i++) {
+			if (!(conversation.get(i) instanceof AMap<?, ?> raw) || isSegment(raw)) continue;
+			@SuppressWarnings("unchecked") AMap<AString, ACell> turn = (AMap<AString, ACell>) raw;
+			AString role = RT.ensureString(turn.get(K_ROLE));
+			if (ROLE_USER.equals(role)) {
+				if (!open && awaiting == 0) starts.add(i);
+				open = true;
+			} else if (ROLE_ASSISTANT.equals(role)) {
+				AVector<ACell> calls = RT.ensureVector(turn.get(K_TOOL_CALLS));
+				if (calls != null && !calls.isEmpty()) {
+					awaiting = calls.count();
+				} else if (visibleText(turn.get(K_CONTENT))) {
+					awaiting = 0;
+					open = false;
+				}
+			} else if (ROLE_TOOL.equals(role) && awaiting > 0) {
+				awaiting--;
+			}
+		}
+		return (starts.size() <= keep) ? -1 : starts.get(starts.size() - keep);
+	}
+
+	private static boolean visibleText(ACell content) {
+		if (content instanceof AString text) return !text.toString().isBlank();
+		return content instanceof AVector<?> blocks && !blocks.isEmpty();
+	}
+
+	/**
+	 * The kept exchanges as a compaction repeats them after its summary: their
+	 * incoming messages and their answers, each marked with the history position
+	 * of its original. Their tool calls and results, late tool outcomes,
+	 * diagnostics, loaded context and watched values stay only in history; the
+	 * next context renders loads and watched values afresh. An answer is
+	 * repeated without its provider continuation data, which belongs to the
+	 * tool exchange left out.
+	 */
+	@SuppressWarnings("unchecked")
+	private static AVector<ACell> repeats(AMap<AString, ACell> frame,
+			AVector<ACell> conversation, long cut, long start) {
+		java.util.Set<ACell> observed = new java.util.HashSet<>();
+		if (frame.get(K_OBSERVATIONS) instanceof AMap<?, ?> observations) {
+			for (var entry : ((AMap<AString, ACell>) observations).entrySet()) {
+				AVector<ACell> messages = RT.ensureVector(
+					RT.getIn(entry.getValue(), ContextAssembler.K_OBSERVATION_MESSAGES));
+				if (messages != null) for (ACell message : messages) observed.add(message);
+			}
+		}
+		AVector<ACell> out = Vectors.empty();
+		for (long i = cut; i < conversation.count(); i++) {
+			ACell entry = conversation.get(i);
+			if (observed.contains(entry) || !(entry instanceof AMap<?, ?> raw) || isSegment(raw)) continue;
+			AMap<AString, ACell> turn = (AMap<AString, ACell>) raw;
+			AString role = RT.ensureString(turn.get(K_ROLE));
+			boolean message = ROLE_USER.equals(role)
+				&& !Agent.SOURCE_TOOL_OUTCOME.equals(turn.get(Agent.K_SOURCE));
+			AVector<ACell> calls = RT.ensureVector(turn.get(K_TOOL_CALLS));
+			boolean answer = ROLE_ASSISTANT.equals(role) && (calls == null || calls.isEmpty())
+				&& visibleText(turn.get(K_CONTENT));
+			if (answer) turn = turn.dissoc(covia.api.Fields.PROVIDER_STATE);
+			if (message || answer) out = out.conj(turn.assoc(K_REPEAT_OF, CVMLong.create(start + i)));
+		}
+		return out;
 	}
 
 	/** Persists the exact initial vectors on a frame. */

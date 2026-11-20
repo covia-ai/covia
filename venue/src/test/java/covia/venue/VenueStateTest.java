@@ -37,6 +37,72 @@ public class VenueStateTest {
 	/** The venue's secret store keys: these venues keep no secret a migration step carries over. */
 	private static final SecretStore.Keys NO_SECRETS = SecretStore.keys(AKeyPair.generate());
 
+	// ========== Publication and Transactions ==========
+
+	/**
+	 * Publishing a copy: one that changed nothing takes its destination's
+	 * change, one that alone changed is published, and one that changed with
+	 * its destination fails with a merge conflict, publishes nothing and keeps
+	 * its edits, at every sync until something resolves it. Neither version is
+	 * chosen over the other, nor are they combined.
+	 */
+	@Test
+	public void aCopyThatChangedWithItsDestinationFailsToPublishAndKeepsItsEdits() {
+		VenueState venue = VenueState.create(AKeyPair.generate());
+		venue.users().ensure(Strings.create("did:test:first"));
+		VenueState copy = venue.fork();
+
+		venue.users().ensure(Strings.create("did:test:incoming"));
+		copy.sync();
+		assertNotNull(copy.users().user(Strings.create("did:test:incoming")), "an unchanged copy takes the change");
+
+		copy.users().ensure(Strings.create("did:test:published"));
+		assertEquals(copy.get(), copy.sync());
+		assertNotNull(venue.users().user(Strings.create("did:test:published")), "a copy that alone changed is published");
+
+		venue.users().ensure(Strings.create("did:test:destination"));
+		copy.users().ensure(Strings.create("did:test:copy"));
+		ACell destination = venue.get();
+		assertThrows(convex.lattice.MergeConflictException.class, copy::sync);
+		assertThrows(convex.lattice.MergeConflictException.class, copy::sync);
+		assertSame(destination, venue.get(), "nothing is published");
+		assertNotNull(copy.users().user(Strings.create("did:test:copy")), "the copy keeps its edits");
+	}
+
+	/**
+	 * Transactions on a venue commit by the same rule, but one that meets a
+	 * concurrent change runs again under its claim, so both changes are kept.
+	 */
+	@Test
+	public void overlappingVenueTransactionsBothKeepTheirChanges() throws Exception {
+		VenueState venue = VenueState.create(AKeyPair.generate());
+		AString first = Strings.create("did:test:first-writer");
+		AString second = Strings.create("did:test:second-writer");
+		java.util.concurrent.CountDownLatch entered = new java.util.concurrent.CountDownLatch(1);
+		java.util.concurrent.CountDownLatch resume = new java.util.concurrent.CountDownLatch(1);
+		java.util.concurrent.atomic.AtomicInteger runs = new java.util.concurrent.atomic.AtomicInteger();
+		try (var executor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
+			var pending = executor.submit(() -> venue.execute(draft -> {
+				draft.users().ensure(first);
+				if (runs.incrementAndGet() == 1) {
+					entered.countDown();
+					try {
+						assertTrue(resume.await(10, java.util.concurrent.TimeUnit.SECONDS));
+					} catch (InterruptedException e) {
+						throw new IllegalStateException(e);
+					}
+				}
+			}));
+			assertTrue(entered.await(10, java.util.concurrent.TimeUnit.SECONDS));
+			venue.execute(draft -> draft.users().ensure(second));
+			resume.countDown();
+			pending.get(10, java.util.concurrent.TimeUnit.SECONDS);
+		}
+		assertEquals(2, runs.get(), "the transaction that met the change ran again");
+		assertNotNull(venue.users().user(first));
+		assertNotNull(venue.users().user(second));
+	}
+
 	// ========== Factory Methods ==========
 
 	@Test
@@ -527,10 +593,10 @@ public class VenueStateTest {
 		assertNull(user.agent("agent-1"),
 			"User agent() should return null for non-existent agent");
 
-		// ensureAgent() creates and returns a non-null Agent
-		Agent agent = user.ensureAgent("agent-1", null, null);
-		assertNotNull(agent, "User ensureAgent() should return non-null Agent");
-		assertTrue(agent.exists(), "ensureAgent() should initialise the agent");
+		user.agents().create(Strings.create("agent-1"), null, null, null, null);
+		Agent agent = user.agent("agent-1");
+		assertNotNull(agent, "agent() finds an agent once it is created");
+		assertTrue(agent.exists());
 	}
 
 	// ========== Fork / Sync ==========

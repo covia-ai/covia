@@ -23,7 +23,6 @@ import convex.core.util.JSON;
 import covia.grid.Asset;
 import covia.grid.Attribution;
 import convex.core.data.AVector;
-import convex.core.data.ABlob;
 import convex.core.data.Blob;
 import convex.core.data.Cells;
 import convex.core.data.Index;
@@ -52,10 +51,11 @@ import covia.exception.AuthException;
 import covia.exception.ConflictException;
 import covia.exception.CoviaException;
 import covia.exception.InvalidInputException;
+import covia.exception.InvalidStateException;
 import covia.exception.JobFailedException;
 import covia.exception.NotFoundException;
-import covia.exception.NotSupportedException;
 import covia.exception.UnavailableException;
+import covia.exception.UnsupportedException;
 import covia.adapter.agent.ExternalAgents;
 import covia.grid.HexId;
 import covia.grid.Job;
@@ -64,11 +64,13 @@ import covia.grid.Status;
 import covia.lattice.CapabilityChecker;
 import covia.venue.Admission;
 import covia.venue.Agent;
+import covia.venue.AgentAddress;
 import covia.venue.Session;
 import covia.venue.Task;
 import covia.venue.AgentEvents;
 import covia.api.Abilities;
 import covia.venue.Engine;
+import covia.venue.Ids;
 import covia.venue.JobManager;
 import covia.venue.Models;
 import covia.venue.RequestContext;
@@ -117,7 +119,7 @@ public class AgentAdapter extends AAdapter {
 
 	private void requireNative(Agent agent, String operation) {
 		if (externalAgents().isExternal(agent))
-			throw new NotSupportedException(ExternalAgents.UNSUPPORTED + operation);
+			throw new UnsupportedException(ExternalAgents.UNSUPPORTED + operation);
 	}
 
 	private boolean externalTurn(Job job, RequestContext ctx, AgentTarget target,
@@ -142,6 +144,12 @@ public class AgentAdapter extends AAdapter {
 	public static final String SUSPEND_REASON_INVALID = "Suspension reason must be a string";
 	public static final String SUSPEND_AGENT_GONE = "Agent was removed or terminated before suspension";
 	public static final String TRANSITION_CANCELLED = "Transition cancelled";
+	/** Why an agent operation refused input missing a field it needs: the field named. */
+	public static final String REQUIRED_FIELD = "%s is required";
+	/** Why {@code agent:request} refused an agent that takes no tasks ({@link #acceptsTasks}): the agent named. */
+	public static final String TASKS_NOT_ACCEPTED = "Agent %s does not take tasks: its config does not set acceptTasks";
+	/** Why an agent config or a compaction refused its number of exchanges to keep: the field, the value's type. */
+	public static final String COMPACT_KEEP_INVALID = "%s must be a whole number of exchanges, 0 or more; got %s";
 	/** Why a task failed after a cycle that neither resolved it nor left anything to resume it. */
 	public static final String TASK_YIELDED_IDLE = "The agent ended its turn with no reply, without completing, "
 		+ "failing or parking the task, and nothing it waits on (a person's answer, a running call or a wake time) "
@@ -165,6 +173,14 @@ public class AgentAdapter extends AAdapter {
 	public static final String CYCLE_STOPPED = "Task %s was not resolved: the cycle working on it was stopped, and the task stays queued";
 	public static final String CHAT_UNKNOWN_SESSION = "Unknown sessionId: %s — omit sessionId to start a new session";
 	public static final String CONTEXT_UNKNOWN_SESSION = "Unknown session: %s";
+	/** A task the agent does not hold: the task id follows. */
+	public static final String TASK_NOT_FOUND = "Task not found: ";
+	/** A message to a task that has gone or takes no more messages: the task id follows. */
+	public static final String TASK_CLOSED = "Task not found or no longer accepts messages: ";
+	/** A session the agent does not hold: the session id follows. */
+	public static final String SESSION_NOT_FOUND = "Session not found: ";
+	/** A strict task with no schema to check its result against: the task id follows. */
+	public static final String STRICT_NO_SCHEMA = "Strict task has no response schema: ";
 	public static final String QUERY_NO_OPERATION = "Agent has no transition operation configured";
 	public static final String QUERY_NO_RESPONSE = "Agent query produced no response";
 	public static final String QUERY_PENDING_TOOL =
@@ -205,6 +221,7 @@ public class AgentAdapter extends AAdapter {
 	private static final AString DEFAULT_SKILLSET   = Strings.intern("w/skills");
 	private static final AString K_TOOLS            = Strings.intern("tools");
 	private static final AString K_DEFAULT_TOOLS    = Strings.intern("defaultTools");
+	private static final AString K_ACCEPT_TASKS     = Strings.intern("acceptTasks");
 	private static final AString K_CAPS             = Strings.intern("caps");
 	private static final AString K_CONTEXT          = Strings.intern("context");
 	private static final AString K_OUTPUTS          = Strings.intern("outputs");
@@ -215,6 +232,8 @@ public class AgentAdapter extends AAdapter {
 	private static final AString K_FOUND            = Strings.intern("found");
 	private static final AString K_COUNT            = Strings.intern("count");
 	private static final AString K_TURN_COUNT       = Strings.intern("turnCount");
+	private static final AString K_KEEP             = Strings.intern("keep");
+	private static final AString K_KEPT_EXCHANGES   = Strings.intern("keptExchanges");
 	private static final AString K_MAX_TURNS        = Strings.intern("maxTurns");
 	private static final AString K_MAX_CHARS        = Strings.intern("maxChars");
 	private static final AString K_ARCHIVE_DEPTH    = Strings.intern("archiveDepth");
@@ -227,7 +246,6 @@ public class AgentAdapter extends AAdapter {
 	private static final AString K_NEXT             = Strings.intern("next");
 	private static final AString K_ENTRIES          = Strings.intern("entries");
 	private static final AString K_META            = Strings.intern("meta");
-	private static final AString K_FRAMES           = Strings.intern("frames");
 	private static final AString K_TITLE            = Strings.intern("title");
 	private static final AString K_CREATED          = Strings.intern("created");
 	private static final AString K_RUNNING          = Strings.intern("running");
@@ -362,7 +380,7 @@ public class AgentAdapter extends AAdapter {
 	private AString namedController(RequestContext ctx, ACell input) {
 		ACell named = RT.getIn(input, Fields.CONTROLLER);
 		if (named == null) return null;
-		AString controller = RT.ensureString(named);
+		AString controller = engine.expandPrincipal(RT.ensureString(named));
 		if (controller == null || !controller.toString().startsWith("did:")) {
 			throw new InvalidInputException(CONTROLLER_NOT_DID);
 		}
@@ -375,11 +393,20 @@ public class AgentAdapter extends AAdapter {
 	/**
 	 * The controller of an agent {@code ctx} creates or forks: the one the input
 	 * names, else the principal whose authority the request acts with
-	 * ({@link Engine#actingPrincipal}).
+	 * ({@link Engine#actingPrincipal}). The agent's harness acts with all of
+	 * its controller's authority, which no caps bound, so a request an access
+	 * token or a callable narrows may make one only when it holds all of that
+	 * authority ({@link Engine#holdsAuthorityOf}).
 	 */
 	private AString newController(RequestContext ctx, ACell input) {
 		AString named = namedController(ctx, input);
-		return (named != null) ? named : Engine.actingPrincipal(ctx);
+		if (named != null) return named;
+		AString acting = Engine.actingPrincipal(ctx);
+		boolean narrowed = ctx.getCallable() != null || !ctx.getTokens().isEmpty();
+		if (narrowed && !engine.holdsAuthorityOf(ctx, acting)) {
+			throw new AuthException(Engine.CONTROLLER_NOT_HELD.formatted(acting));
+		}
+		return acting;
 	}
 
 	/**
@@ -401,33 +428,28 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	/**
-	 * Resolves a bare id or a normal grid path ({@code g/id}, {@code /g/id}, or
-	 * {@code <did>/g/id}) through Engine's shared user-path resolver.
+	 * Resolves an agent reference ({@link AgentAddress#parse}), relative to the
+	 * user {@code ctx} acts for, and requires {@code ability} over the agent it
+	 * names before creating its owner's namespace when {@code createOwner}.
 	 */
 	private AgentTarget resolveAgentTarget(RequestContext ctx, AString ref,
 			AString ability, boolean createOwner) {
 		if (ref == null || ref.isEmpty()) {
 			throw new InvalidInputException("agentId is required");
 		}
-		String value = CapabilityChecker.canonicalResource(ref.toString(), null);
-		AString path = (value.startsWith("did:") || value.startsWith("g/"))
-			? ref : Strings.create("g/" + value);
-		Engine.UserPathTarget resolved = engine.requireUserPath(ctx, path, ability, createOwner);
-		convex.core.data.Path agentPath = resolved.path();
-		if (agentPath.count() != 2 || !covia.lattice.Namespace.G.equals(agentPath.get(0))) {
-			throw new InvalidInputException("Agent reference must resolve to g/<agentId>: " + ref);
-		}
-		AString agentId = agentPath.get(1);
-		if (agentId.isEmpty() || agentId.toString().contains(":")) {
-			throw new InvalidInputException("agentId must be a non-empty path segment without ':'");
-		}
-		return new AgentTarget(resolved.ownerDID(), resolved.user(), agentId, resolved.resource());
+		if (ctx.getUserDID() == null) throw new AuthException(Engine.USER_PATH_UNAUTHENTICATED);
+		AgentAddress agent = AgentAddress.parse(ctx.getUserDID(), engine.expandPath(ref));
+		AString address = agent.address();
+		engine.requireLocalAccess(ctx, address, ability);
+		Users users = engine.getVenueState().users();
+		User user = createOwner ? users.ensure(agent.owner()) : users.user(agent.owner());
+		return new AgentTarget(agent.owner(), user, agent.agentId(), address);
 	}
 
 	/** Whether this recipient can join an atomic local session handoff. */
 	public boolean supportsSessionDelivery(RequestContext ctx, AString ref) {
 		AgentTarget target = resolveAgentTarget(ctx, ref, Abilities.AGENT_MESSAGE, false);
-		Agent agent = getAgent(target.ownerDID(), target.agentId());
+		Agent agent = engine.getAgent(target.ownerDID(), target.agentId());
 		return agent != null && !externalAgents().isExternal(agent);
 	}
 
@@ -444,7 +466,7 @@ public class AgentAdapter extends AAdapter {
 		} catch (covia.exception.AuthException | covia.exception.InvalidInputException refused) {
 			return describeFailure(refused);
 		}
-		Agent agent = getAgent(target.ownerDID(), target.agentId());
+		Agent agent = engine.getAgent(target.ownerDID(), target.agentId());
 		if (agent == null) return DELIVERY_AGENT_MISSING.formatted(target.agentId());
 		if (Agent.SUSPENDED.equals(agent.getStatus())) return DELIVERY_AGENT_SUSPENDED.formatted(target.agentId());
 		return null;
@@ -466,7 +488,7 @@ public class AgentAdapter extends AAdapter {
 		if (!delivery.taken && !delivery.duplicate) throw new JobFailedException(job);
 		engine.flush();
 		AgentTarget target = resolveAgentTarget(ctx, input, Fields.AGENT_ID, Abilities.AGENT_MESSAGE, false);
-		Agent agent = getAgent(target.ownerDID(), target.agentId());
+		Agent agent = engine.getAgent(target.ownerDID(), target.agentId());
 		if (agent != null && hasWork(agent)) wakeAgent(target.ownerDID(), target.agentId(), true);
 		return delivery.taken ? job : null;
 	}
@@ -487,7 +509,7 @@ public class AgentAdapter extends AAdapter {
 
 		Delivery(RequestContext.SessionDelivery participant) { this.participant = participant; }
 
-		@Override public boolean accept(covia.venue.VenueState draft, AString sessionId, AString jobId) {
+		@Override public boolean accept(covia.venue.VenueState draft, Blob sessionId, Blob jobId) {
 			return participant.accept(draft, sessionId, jobId);
 		}
 	}
@@ -495,7 +517,7 @@ public class AgentAdapter extends AAdapter {
 	private AgentTarget resolveAgentTarget(RequestContext ctx, ACell input,
 			AString field, AString ability, boolean createOwner) {
 		AString ref = RT.ensureString(RT.getIn(input, field));
-		if (ref == null) throw new InvalidInputException(field + " is required");
+		if (ref == null) throw new InvalidInputException(REQUIRED_FIELD.formatted(field));
 		return resolveAgentTarget(ctx, ref, ability, createOwner);
 	}
 
@@ -523,8 +545,7 @@ public class AgentAdapter extends AAdapter {
 		ConcurrentHashMap<Blob, Job> waiters = sessionChats(key, sid);
 		if (waiters == null) return;
 		for (long i = 0; i < taken.count(); i++) {
-			AString jobHex = RT.ensureString(RT.getIn(taken.get(i), Fields.JOB_ID));
-			Blob jobId = storedId(jobHex);
+			Blob jobId = Session.chatJob(taken.get(i));
 			Job chat = (jobId != null) ? waiters.get(jobId) : null;
 			if (chat != null && Status.PENDING.equals(chat.getStatus())) chat.setStatus(Status.STARTED);
 		}
@@ -570,10 +591,8 @@ public class AgentAdapter extends AAdapter {
 	 */
 	private AString observableStatus(AString ownerDID, AString agentId, Agent agent) {
 		if (agent == null) return Agent.TERMINATED;
-		AString stable = agent.getStatus();
-		if (Agent.SUSPENDED.equals(stable) || Agent.TERMINATED.equals(stable)) {
-			return stable;
-		}
+		AMap<AString, ACell> record = agent.getRecord();
+		if (Agent.isStopped(record)) return Agent.status(record);
 		return isRunning(new AgentKey(ownerDID, agentId))
 			? Agent.RUNNING : Agent.SLEEPING;
 	}
@@ -596,7 +615,11 @@ public class AgentAdapter extends AAdapter {
 	/** Counter for session ID generation */
 	private long sessionIdCounter = 0;
 
-	@Override public String getName() { return "agent"; }
+	/** The adapter's name, which also names the route record of an agent's step ({@link covia.venue.Engine#stepContext}). */
+	public static final String NAME = "agent";
+	private static final AString ADAPTER_NAME = Strings.intern(NAME);
+
+	@Override public String getName() { return NAME; }
 
 	/** Public settings: sessionDelete — plain operating parameters, nothing an operator would keep private. */
 	@Override
@@ -778,13 +801,10 @@ public class AgentAdapter extends AAdapter {
 
 	private CompletableFuture<ACell> requestResultFuture(Job taskJob, ACell input) {
 		long timeoutMs = parseRequestTimeoutMs(input);
-		AString suppliedSession = RT.ensureString(RT.getIn(input, Fields.SESSION_ID));
-		Blob parsedSession = parseSessionId(suppliedSession);
-		AString sessionId = (parsedSession != null)
-			? Strings.create(parsedSession.toHexString()) : suppliedSession;
+		Blob sessionId = parseId(RT.getIn(input, Fields.SESSION_ID));
 		AString agentId = RT.ensureString(RT.getIn(input, Fields.AGENT_ID));
 
-		if (timeoutMs <= 0) {
+		if (timeoutMs <= 0 || requestedOfItself(taskJob)) {
 			return CompletableFuture.completedFuture(buildRequestSnapshot(taskJob, agentId, sessionId));
 		}
 
@@ -801,6 +821,29 @@ public class AgentAdapter extends AAdapter {
 				});
 	}
 
+	/**
+	 * Whether a request's task was asked of its agent by that agent itself while
+	 * its loop runs. The task can start only after the cycle in progress, which
+	 * may be the one waiting, so the request returns its task at once.
+	 */
+	private boolean requestedOfItself(Job taskJob) {
+		AMap<AString, ACell> kept = engine.jobs().adapterData(taskJob);
+		return (kept != null) && isOwnLiveLoop(RT.ensureString(kept.get(Fields.OWNER)),
+			RT.ensureString(kept.get(Fields.AGENT_ID)), taskJob.getCaller());
+	}
+
+	/**
+	 * Whether {@code principal} is {@code owner}'s agent {@code agentId} while
+	 * that agent's run loop is live. What it does then may be done from its own
+	 * cycle, which holds the loop until it returns, so nothing waiting on the
+	 * loop, or on work only a later cycle takes, can finish before it does.
+	 */
+	private boolean isOwnLiveLoop(AString owner, AString agentId, AString principal) {
+		if (agentId == null || !agentId.equals(Engine.agentIdIn(owner, principal))) return false;
+		CompletableFuture<ACell> loop = runningLoops.get(new AgentKey(owner, agentId));
+		return loop != null && !loop.isDone();
+	}
+
 	private static final long DEFAULT_REQUEST_TIMEOUT_MS = 5000L;
 
 	private static long parseRequestTimeoutMs(ACell input) {
@@ -809,16 +852,16 @@ public class AgentAdapter extends AAdapter {
 		return DEFAULT_REQUEST_TIMEOUT_MS;
 	}
 
-	private static AMap<AString, ACell> buildRequestSnapshot(Job taskJob, AString agentId, AString sessionId) {
+	private static AMap<AString, ACell> buildRequestSnapshot(Job taskJob, AString agentId, Blob sessionId) {
 		AString resolvedId = RT.ensureString(RT.getIn(taskJob.getData(), Fields.AGENT_ID));
 		if (resolvedId != null) agentId = resolvedId;
 		AMap<AString, ACell> snap = Maps.of(
-			Fields.ID,       Strings.create(taskJob.getID().toHexString()),
+			Fields.ID,       taskJob.getID(),
 			Fields.STATUS,   taskJob.getStatus(),
 			Fields.AGENT_ID, agentId);
 		AString address = RT.ensureString(RT.getIn(taskJob.getData(), Fields.ADDRESS));
 		if (address != null) snap = snap.assoc(Fields.ADDRESS, address);
-		AString resolvedSession = RT.ensureString(RT.getIn(taskJob.getData(), Fields.SESSION_ID));
+		Blob resolvedSession = Ids.stored(RT.getIn(taskJob.getData(), Fields.SESSION_ID));
 		if (resolvedSession != null) sessionId = resolvedSession;
 		if (sessionId != null) snap = snap.assoc(Fields.SESSION_ID, sessionId);
 		return snap;
@@ -845,26 +888,21 @@ public class AgentAdapter extends AAdapter {
 	private ACell doKick(RequestContext ctx, ACell input) {
 		AgentTarget target = resolveAgentTarget(ctx, input, Fields.AGENT_ID,
 			Abilities.AGENT_REQUEST, false);
-		requireNative(getAgent(target.ownerDID(), target.agentId()), "trigger");
+		requireNative(engine.getAgent(target.ownerDID(), target.agentId()), "trigger");
 		wakeAgent(target.ownerDID(), target.agentId(), parseForce(input));
-		Agent agent = getAgent(target.ownerDID(), target.agentId());
+		Agent agent = engine.getAgent(target.ownerDID(), target.agentId());
 		return identify(target, Maps.of(
 			Fields.STATUS, observableStatus(target.ownerDID(), target.agentId(), agent)));
 	}
 
 	@Override
 	public void invoke(Job job, RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
-		if (ctx.getCallerDID() == null) {
+		if (ctx.getAuthorityDID() == null) {
 			job.fail("Agent operations require an authenticated caller");
 			return;
 		}
 		try {
 			String subOp = getSubOperation(meta);
-			// Keep the Job-aware path identical to invokeFuture: task completion
-			// is context-bound framework plumbing; every other user-facing
-			// operation requires invocation of its exact definition.
-			if (!"completeTask".equals(subOp) && !"failTask".equals(subOp)) {
-			}
 			switch (subOp) {
 				case "create"  -> handleCreate(job, input, ctx);
 				case "fromSkills" -> handleFromSkills(job, input, ctx);
@@ -940,7 +978,7 @@ public class AgentAdapter extends AAdapter {
 			AMap<AString, ACell> definition = externalAgents().validate(facet);
 			AMap<AString, ACell> config = storedCaps(parseConfigArg(RT.getIn(input, Fields.CONFIG), ctx), true);
 			validateComposedConfig(config);
-			Agent created = user.createAgent(agentId, config,
+			Agent created = user.agents().create(agentId, config,
 				RT.getIn(input, Agent.KEY_STATE), definition, controller);
 			if (created == null) throw new ConflictException("Agent already exists: " + agentId);
 			job.setStatus(Status.STARTED);
@@ -1060,7 +1098,7 @@ public class AgentAdapter extends AAdapter {
 			return;
 		}
 
-		Agent agent = user.createAgent(agentId, config, initialState, null, controller);
+		Agent agent = user.agents().create(agentId, config, initialState, null, controller);
 		if (agent == null) {
 			job.fail("Agent already exists: " + agentId
 				+ "; update it, or delete it with remove=true before creating it again");
@@ -1352,9 +1390,16 @@ public class AgentAdapter extends AAdapter {
 		if (adapterOp == null || !adapterOp.startsWith("langchain:ollama")) return null;
 		String modelName = (model != null) ? model.toString() : "qwen";  // langchain Ollama default
 		AString urlCell = RT.ensureString(config.get(AbstractLLMAdapter.K_URL));
-		String baseUrl = (urlCell != null) ? urlCell.toString() : "http://localhost:11434";
+		String baseUrl;
+		if (urlCell != null) {
+			baseUrl = urlCell.toString();
+		} else if (engine.getAdapter("langchain") instanceof LangChainAdapter langchain) {
+			baseUrl = langchain.resolveOllamaUrl(null);  // the venue's Ollama, which its operator chose
+		} else {
+			return null;
+		}
 		return toolWarningFor(modelName, baseUrl,
-			LangChainAdapter.ollamaModelCapabilities(baseUrl, modelName));
+			LangChainAdapter.ollamaModelCapabilities(engine, ctx, baseUrl, urlCell == null, modelName));
 	}
 
 	/** The declared-data half of {@link #toolCapabilityWarning}: a resolved
@@ -1543,7 +1588,7 @@ public class AgentAdapter extends AAdapter {
 		AgentTarget sourceTarget = resolveAgentTarget(ctx, input, K_SOURCE_ID,
 			Abilities.AGENT_FORK, false);
 		AString sourceId = sourceTarget.agentId();
-		requireNative(getAgent(sourceTarget.ownerDID(), sourceId), "fork");
+		requireNative(engine.getAgent(sourceTarget.ownerDID(), sourceId), "fork");
 
 		// Resolve source agent
 		User sourceUser = sourceTarget.user();
@@ -1552,7 +1597,7 @@ public class AgentAdapter extends AAdapter {
 		if (sourceRecord == null) {
 			job.fail("Source agent not found: " + sourceId); return;
 		}
-		if (Agent.TERMINATED.equals(sourceRecord.get(Agent.KEY_STATUS))) {
+		if (Agent.TERMINATED.equals(Agent.status(sourceRecord))) {
 			job.fail("Cannot fork TERMINATED agent: " + sourceId); return;
 		}
 		AgentTarget targetTarget = resolveAgentTarget(ctx, input, Fields.AGENT_ID,
@@ -1594,7 +1639,7 @@ public class AgentAdapter extends AAdapter {
 			return;
 		}
 
-		Agent target = targetUser.forkAgent(agentId, forkConfig, sourceState, sourceTimeline,
+		Agent target = targetUser.agents().createFork(agentId, forkConfig, sourceState, sourceTimeline,
 			newController(ctx, input));
 		if (target == null) {
 			job.fail("Target agent already exists: " + agentId
@@ -1612,14 +1657,50 @@ public class AgentAdapter extends AAdapter {
 
 	/**
 	 * A pending envelope or task record with the request's provenance beside its
-	 * content (COG-20 §4): the caller, and the authentication record when a
-	 * channel binding authenticated it — both from the request context only. The
-	 * content is never read for provenance or rewritten with it.
+	 * content (COG-20 §4): the caller, and the request's route when something
+	 * carried it ({@link RequestContext#getRoute}) — both from the request
+	 * context only. The content is never read for provenance or rewritten with
+	 * it.
 	 */
 	static AMap<AString, ACell> withProvenance(AMap<AString, ACell> record, RequestContext ctx) {
-		record = record.assoc(Fields.CALLER, ctx.getCallerDID());
-		AMap<AString, ACell> authentication = ctx.getAuthentication();
-		return (authentication == null) ? record : record.assoc(Fields.AUTHENTICATION, authentication);
+		return withRoute(record.assoc(Fields.CALLER, ctx.getAuthorityDID()), ctx);
+	}
+
+	/**
+	 * {@code record} with {@code ctx}'s route. Every record written now carries
+	 * one, so a record without a route is one recorded before routes named
+	 * where their request started; a context no adapter stamped gives an empty
+	 * route, which shows as unreadable, never as direct.
+	 */
+	private static AMap<AString, ACell> withRoute(AMap<AString, ACell> record, RequestContext ctx) {
+		AVector<ACell> route = (ctx == null) ? null : ctx.getRoute();
+		return record.assoc(Fields.ROUTE, (route == null) ? Vectors.empty() : route);
+	}
+
+	/**
+	 * {@code records} as a view outside the agent's own runtime shows them: each
+	 * without its route, which only the agent's {@code From} element shows
+	 * (AGENT_CONTEXT.md §1.2).
+	 */
+	static AVector<ACell> withoutRoutes(AVector<ACell> records) {
+		if (records == null) return null;
+		AVector<ACell> out = records;
+		for (long i = 0; i < records.count(); i++) {
+			if (records.get(i) instanceof AMap<?, ?> m && m.containsKey(Fields.ROUTE)) {
+				out = out.assoc(i, RT.ensureMap(m).dissoc(Fields.ROUTE));
+			}
+		}
+		return out;
+	}
+
+	/**
+	 * Whether an agent with this config takes tasks: only when it sets
+	 * {@code acceptTasks: true} (AGENT_TASKS.md §2). An agent that does not is
+	 * refused {@code agent:request}, and its cycles offer no task tools unless
+	 * they carry a task it had queued before.
+	 */
+	public static boolean acceptsTasks(AMap<AString, ACell> config) {
+		return config != null && CVMBool.TRUE.equals(config.get(K_ACCEPT_TASKS));
 	}
 
 	/**
@@ -1645,6 +1726,10 @@ public class AgentAdapter extends AAdapter {
 		if (agent == null) return;
 		if (failIfSuspended(job, agent, agentId)) return;
 		if (externalTurn(job, ctx, target, agent, "request", input)) return;
+		// Refused before any session, task or adapter data exists for it.
+		if (!acceptsTasks(agent.getConfig())) {
+			throw new UnsupportedException(TASKS_NOT_ACCEPTED.formatted(agentId));
+		}
 
 		// Mint or reuse a session for this request. Stage 1 scaffold — the
 		// sid is recorded on the task row and returned in the response
@@ -1662,6 +1747,8 @@ public class AgentAdapter extends AAdapter {
 		// map is maintained.
 		Blob taskId = job.getID();
 		ACell taskInput = RT.getIn(input, Fields.INPUT);
+		// A task without instructions is refused here, before it is queued
+		if (taskInput == null) throw new InvalidInputException(REQUIRED_FIELD.formatted(Fields.INPUT));
 		ACell responseSchema = RT.getIn(input, Fields.RESPONSE_SCHEMA);
 		// strict is the requester's opt-in to completion-time schema
 		// enforcement (#376). Default (absent/false) keeps the schema
@@ -1678,21 +1765,20 @@ public class AgentAdapter extends AAdapter {
 		AMap<AString, ACell> taskData = withProvenance(Maps.of(
 			Fields.INPUT,      taskInput,
 			Fields.CREATED,    engine.currentTimestamp(),
-			Fields.SESSION_ID, Strings.create(sid.toHexString())), ctx);
+			Fields.SESSION_ID, sid), ctx);
 		if (responseSchema instanceof AMap) {
 			taskData = taskData.assoc(Fields.RESPONSE_SCHEMA, responseSchema);
 			if (strict) taskData = taskData.assoc(Fields.STRICT, CVMBool.TRUE);
 		}
-		// The request completes by writing to its outputPath as its caller: the
-		// request Job keeps the caller's context for that, not the worker's task
-		if (outputPath != null) engine.jobs().keepCallerContext(job, ctx);
+		// The request completes by writing to its outputPath as its caller, in the
+		// state the request Job keeps (JobManager.callerContext), not the worker's task
 		// Where the task is queued, for cancelIn: kept before the task exists, so
 		// no cancel can find a queued task and not know where it is
 		engine.jobs().updateAdapterData(job, kept -> kept
 			.assoc(Fields.OWNER, target.ownerDID())
 			.assoc(Fields.AGENT_ID, agentId));
 		Agent.SessionIntake intake = agent.addTaskInSession(sid,
-			ctx.getCallerDID(), session.loads(), taskId, taskData);
+			ctx.getAuthorityDID(), session.loads(), taskId, taskData);
 		if (intake == Agent.SessionIntake.LOADS_ON_EXISTING) {
 			job.fail("loads can only be passed when a session is created — this session already exists");
 			return;
@@ -1714,7 +1800,7 @@ public class AgentAdapter extends AAdapter {
 		job.update(data -> data
 			.assoc(Fields.AGENT_ID, agentId)
 			.assoc(Fields.ADDRESS, target.address())
-			.assoc(Fields.SESSION_ID, Strings.create(sid.toHexString())));
+			.assoc(Fields.SESSION_ID, sid));
 
 		// Each accepted request guarantees a processing attempt, so bypass the
 		// optional-work launch gate.
@@ -1765,41 +1851,38 @@ public class AgentAdapter extends AAdapter {
 		if (agent == null) return;
 
 		ACell messageContent = RT.getIn(input, Fields.MESSAGE);
-		if (messageContent == null) { job.fail("message is required"); return; }
+		if (messageContent == null) { job.fail(REQUIRED_FIELD.formatted(Fields.MESSAGE)); return; }
+		ACell taskValue = RT.getIn(input, Fields.TASK_ID);
+		Blob taskId = null;
+		if (taskValue != null) {
+			taskId = parseId(taskValue);
+			if (taskId == null) throw new InvalidInputException(INVALID_TASK_ID + taskValue);
+			engine.jobs().requireAccess(taskId, ctx, null, Abilities.JOB_MESSAGE);
+		}
 
 		if (externalAgents().isExternal(agent)) {
 			if (failIfSuspended(job, agent, agentId)) return;
-			ACell task = RT.getIn(input, Fields.TASK_ID);
-			Blob taskId = (task instanceof ABlob b) ? b.toFlatBlob() : HexId.parse(RT.ensureString(task));
-			if (task != null && taskId == null) { job.fail(new InvalidInputException(INVALID_TASK_ID + task)); return; }
-			Blob sid = parseSessionId(RT.ensureString(RT.getIn(input, Fields.SESSION_ID)));
-			if (sid == null && task != null) {
+			Blob sid = parseId(RT.getIn(input, Fields.SESSION_ID));
+			if (sid == null && taskId != null) {
 				Job parent = engine.jobs().getJob(taskId);
-				if (parent != null) sid = storedId(RT.ensureString(parent.getData().get(Fields.SESSION_ID)));
+				if (parent != null) sid = Ids.stored(parent.getData().get(Fields.SESSION_ID));
 			}
-			if (sid == null) throw new NotSupportedException(ExternalAgents.NO_ACTIVE_TURN);
-			externalAgents().deliver(agent, task, sid, messageContent);
+			if (sid == null) throw new InvalidStateException(ExternalAgents.NO_ACTIVE_TURN);
+			externalAgents().deliver(agent, taskId, sid, messageContent);
 			job.setStatus(Status.STARTED);
-			job.completeWith(identify(target, Maps.of(Fields.SESSION_ID, Strings.create(sid.toHexString()),
+			job.completeWith(identify(target, Maps.of(Fields.SESSION_ID, sid,
 				Strings.intern("delivered"), CVMBool.TRUE)));
 			return;
 		}
 
-		AString taskIdHex = RT.ensureString(RT.getIn(input, Fields.TASK_ID));
-		Blob taskId = null;
 		SessionSpec session = null;
 		Blob sid;
-		if (taskIdHex != null) {
-			taskId = HexId.parse(taskIdHex);
-			if (taskId == null) { job.fail(new InvalidInputException(INVALID_TASK_ID + taskIdHex)); return; }
-			ACell taskData = agent.getTasks().get(taskId);
-			AString taskSid = (taskData instanceof AMap<?, ?> map)
-				? RT.ensureString(map.get(Fields.SESSION_ID)) : null;
-			sid = storedId(taskSid);
-			if (sid == null) { job.fail("Task not found: " + taskIdHex); return; }
-			AString suppliedSid = RT.ensureString(RT.getIn(input, Fields.SESSION_ID));
+		if (taskId != null) {
+			sid = Task.sessionId(agent.getTasks().get(taskId));
+			if (sid == null) { job.fail(TASK_NOT_FOUND + taskId); return; }
+			ACell suppliedSid = RT.getIn(input, Fields.SESSION_ID);
 			if (suppliedSid != null) {
-				Blob supplied = parseSessionId(suppliedSid);
+				Blob supplied = parseId(suppliedSid);
 				if (supplied == null) { job.fail("Invalid sessionId format: " + suppliedSid); return; }
 				if (!sid.equals(supplied)) {
 					job.fail("contextId does not match task session");
@@ -1812,21 +1895,17 @@ public class AgentAdapter extends AAdapter {
 			sid = session.id();
 		}
 
-		AString sidHex = Strings.create(sid.toHexString());
-		// Wrap message with caller provenance and the session it belongs to
-		AMap<AString, ACell> envelope = withProvenance(Maps.of(
-			Fields.SESSION_ID, sidHex,
-			Fields.MESSAGE,    messageContent), ctx);
+		// Wrap message with caller provenance; the task or session it queues on says where it belongs
+		AMap<AString, ACell> envelope = withProvenance(Maps.of(Fields.MESSAGE, messageContent), ctx);
 		if (taskId != null) {
-			envelope = envelope.assoc(Fields.TASK_ID, taskIdHex);
 			AString messageId = RT.ensureString(RT.getIn(messageContent, Fields.MESSAGE_ID));
 			if (!agent.appendTaskContinuation(taskId, sid, envelope, messageId)) {
-				job.fail("Task not found or no longer accepts messages: " + taskIdHex);
+				job.fail(TASK_CLOSED + taskId);
 				return;
 			}
 		} else {
 			Agent.SessionIntake intake = agent.appendSessionPending(sid,
-				ctx.getCallerDID(), session.loads(), queued(envelope), true);
+				ctx.getAuthorityDID(), session.loads(), queued(envelope), true);
 			if (intake == Agent.SessionIntake.LOADS_ON_EXISTING) {
 				job.fail("loads can only be passed when a session is created — this session already exists");
 				return;
@@ -1840,7 +1919,7 @@ public class AgentAdapter extends AAdapter {
 
 		job.setStatus(Status.STARTED);
 		job.completeWith(identify(target, Maps.of(
-			Fields.SESSION_ID, sidHex,
+			Fields.SESSION_ID, sid,
 			Fields.DELIVERED,  CVMBool.TRUE)));
 	}
 
@@ -1877,7 +1956,7 @@ public class AgentAdapter extends AAdapter {
 		AString agentId = target.agentId();
 
 		ACell messageContent = RT.getIn(input, Fields.MESSAGE);
-		if (messageContent == null) { job.fail("message is required"); return; }
+		if (messageContent == null) { job.fail(REQUIRED_FIELD.formatted(Fields.MESSAGE)); return; }
 
 		Agent agent = lookupAgent(job, target);
 		if (agent == null) return;
@@ -1891,7 +1970,6 @@ public class AgentAdapter extends AAdapter {
 		SessionSpec session = resolveSessionForChat(job, input);
 		if (session == null) return;
 		Blob sid = session.id();
-		AString sidHex = Strings.create(sid.toHexString());
 
 		// Chats are not serialised: register this one as a waiter on the session
 		// keyed by its own Job id, alongside any already awaiting. Its message
@@ -1909,17 +1987,15 @@ public class AgentAdapter extends AAdapter {
 
 		// The envelope carries the chat Job id for provenance — turns minted
 		// from it keep the id, tying conversation content back to the job.
-		AString jobIdHex = Strings.create(job.getID().toHexString());
 		ACell envelope = withProvenance(Maps.of(
-			Fields.SESSION_ID, sidHex,
 			Fields.MESSAGE,    messageContent,
-			Fields.JOB_ID,     jobIdHex), ctx);
+			Fields.JOB_ID,     job.getID()), ctx);
 		// Local delivery includes provenance in the admission transaction below.
 		if (ctx.getSessionDelivery() == null) job.update(data -> data.assoc(Fields.AGENT_ID, agentId)
-			.assoc(Fields.ADDRESS, target.address()).assoc(Fields.SESSION_ID, sidHex));
+			.assoc(Fields.ADDRESS, target.address()).assoc(Fields.SESSION_ID, sid));
 		Agent.SessionIntake intake;
 		try {
-			intake = appendChatInput(job, agent, target, session, envelope, ctx, sidHex, jobIdHex);
+			intake = appendChatInput(job, agent, target, session, envelope, ctx);
 		} catch (Throwable failure) {
 			agentChats.remove(job.getID(), job);
 			throw failure;
@@ -1927,7 +2003,7 @@ public class AgentAdapter extends AAdapter {
 		if (intake == null) {
 			// A duplicate delivery must neither append a second input nor await a reply.
 			agentChats.remove(job.getID(), job);
-			job.completeWith(Maps.of(Fields.SESSION_ID, sidHex));
+			job.completeWith(Maps.of(Fields.SESSION_ID, sid));
 			return;
 		}
 		if (intake != Agent.SessionIntake.APPLIED) {
@@ -1935,7 +2011,7 @@ public class AgentAdapter extends AAdapter {
 			if (intake == Agent.SessionIntake.LOADS_ON_EXISTING) {
 				job.fail("loads can only be passed when a session is created — this session already exists");
 			} else if (session.supplied()) {
-				job.fail(UNKNOWN_SESSION_CODE, CHAT_UNKNOWN_SESSION.formatted(sid.toHexString()));
+				job.fail(UNKNOWN_SESSION_CODE, CHAT_UNKNOWN_SESSION.formatted(sid));
 			} else {
 				job.fail("Agent no longer exists: " + agentId);
 			}
@@ -1954,26 +2030,25 @@ public class AgentAdapter extends AAdapter {
 	/** The common VenueState root contains the agent and adapter-owned receipts.
 	 * Native transactions publish the input, receipt and session mapping together. */
 	private Agent.SessionIntake appendChatInput(Job job, Agent agent, AgentTarget target,
-			SessionSpec session, ACell envelope, RequestContext ctx, AString sid, AString jobId) {
+			SessionSpec session, ACell envelope, RequestContext ctx) {
 		if (ctx.getSessionDelivery() == null) return agent.appendSessionPending(session.id(),
-			ctx.getCallerDID(), session.loads(), envelope, !session.supplied());
+			ctx.getAuthorityDID(), session.loads(), envelope, !session.supplied());
 		ChatIntake taken;
 		try {
 			taken = engine.getVenueState().transact(draft -> {
 				var owner = draft.users().user(target.ownerDID());
 				var current = owner == null ? null : owner.agent(target.agentId());
-				if (current == null || Agent.SUSPENDED.equals(current.getStatus())
-						|| Agent.TERMINATED.equals(current.getStatus())) {
+				if (current == null || current.isStopped()) {
 					return new ChatIntake(Agent.SessionIntake.MISSING, null);
 				}
-				var intake = current.appendSessionPending(session.id(), ctx.getCallerDID(),
+				var intake = current.appendSessionPending(session.id(), ctx.getAuthorityDID(),
 					session.loads(), envelope, !session.supplied());
 				if (intake != Agent.SessionIntake.APPLIED) return new ChatIntake(intake, null);
-				if (!ctx.getSessionDelivery().accept(draft, sid, jobId)) throw new DuplicateSessionDelivery();
+				if (!ctx.getSessionDelivery().accept(draft, session.id(), job.getID())) throw new DuplicateSessionDelivery();
 				Runnable changed = ((covia.venue.VenueJob) job).updateIn(draft, data ->
 					data.assoc(Fields.AGENT_ID, target.agentId()).assoc(Fields.ADDRESS, target.address())
-						.assoc(Fields.SESSION_ID, sid));
-				if (changed == null) throw new NotSupportedException(DELIVERY_JOB_UNAVAILABLE);
+						.assoc(Fields.SESSION_ID, session.id()));
+				if (changed == null) throw new InvalidStateException(DELIVERY_JOB_UNAVAILABLE);
 				return new ChatIntake(intake, changed);
 			});
 		} catch (DuplicateSessionDelivery duplicate) {
@@ -2059,14 +2134,14 @@ public class AgentAdapter extends AAdapter {
 		// One immutable record supplies config, state and session, even if the
 		// live agent is concurrently accepting work or advancing a conversation.
 		AMap<AString, ACell> record = agent.getRecord();
-		AString operation = RT.ensureString(RT.getIn(record, Agent.KEY_CONFIG, Fields.OPERATION));
+		AString operation = Agent.transitionOperation(record);
 		if (operation == null) { job.fail(QUERY_NO_OPERATION); return null; }
 		AMap<AString, ACell> session = Maps.empty();
 		ACell sessionId = RT.getIn(input, Fields.SESSION_ID);
 		Blob sid = null;
 		if (sessionRequired && sessionId == null) { job.fail(SUMMARISE_SESSION_REQUIRED); return null; }
 		if (sessionId != null) {
-			sid = parseSessionId(RT.ensureString(sessionId));
+			sid = parseId(sessionId);
 			if (sid == null) { job.fail(QUERY_INVALID_SESSION); return null; }
 			session = RT.ensureMap(RT.getIn(record, Agent.KEY_SESSIONS, sid));
 			if (session == null) { job.fail(UNKNOWN_SESSION_CODE, QUERY_UNKNOWN_SESSION); return null; }
@@ -2086,8 +2161,7 @@ public class AgentAdapter extends AAdapter {
 			frames = GoalTreeContext.repairDanglingToolCalls(frames.slice(0, 1),
 				Strings.create(QUERY_PENDING_TOOL));
 		}
-		AVector<ACell> messages = Vectors.of(Maps.of(
-			Fields.CALLER, ctx.getCallerDID(), Fields.MESSAGE, message));
+		AVector<ACell> messages = Vectors.of(withProvenance(Maps.of(Fields.MESSAGE, message), ctx));
 		// An ephemeral conversation tier lets tools load context locally even
 		// without a supplied session. Do not copy its id, pending inbox or tasks.
 		AMap<AString, ACell> snapshot = Maps.of(
@@ -2157,12 +2231,9 @@ public class AgentAdapter extends AAdapter {
 		Blob sid = null;
 		ACell sidCell = RT.getIn(input, Fields.SESSION_ID);
 		if (sidCell != null) {
-			AString s = RT.ensureString(sidCell);
-			if (s == null) { job.fail("sessionId must be a hex string"); return; }
-			sid = parseSessionId(s);
-			if (sid == null) { job.fail("Invalid sessionId format: " + s); return; }
+			sid = parseId(sidCell);
+			if (sid == null) { job.fail("Invalid sessionId format: " + sidCell); return; }
 		}
-		AString sidHex = (sid != null) ? Strings.create(sid.toHexString()) : null;
 
 		boolean force = parseForce(input);
 		CompletableFuture<ACell> completion = wakeAgent(target.ownerDID(), agentId, force);
@@ -2182,7 +2253,7 @@ public class AgentAdapter extends AAdapter {
 			// force=false: an idle agent with no work is not an error — return a snapshot.
 			AMap<AString, ACell> snap = identify(target, Maps.of(
 				Fields.STATUS, observableStatus(target.ownerDID(), agentId, agent)));
-			job.completeWith((sidHex != null) ? snap.assoc(Fields.SESSION_ID, sidHex) : snap);
+			job.completeWith((sid != null) ? snap.assoc(Fields.SESSION_ID, sid) : snap);
 			return;
 		}
 
@@ -2193,13 +2264,16 @@ public class AgentAdapter extends AAdapter {
 		// by agent:request / agent:chat.
 		long waitMs = parseWaitMs(input);
 		if (waitMs == 0 && RT.getIn(input, Fields.WAIT) == null) waitMs = -1;
+		// The agent triggering itself while its loop runs returns at once:
+		// its cycle may be the caller, and no wait on the loop ends before it does
+		if (isOwnLiveLoop(target.ownerDID(), agentId, ctx.getAuthorityDID())) waitMs = 0;
 
 		AMap<AString, ACell> running = identify(target, Maps.of(
 			Fields.STATUS, Agent.RUNNING));
-		if (sidHex != null) running = running.assoc(Fields.SESSION_ID, sidHex);
-		final AString fSidHex = sidHex;
+		if (sid != null) running = running.assoc(Fields.SESSION_ID, sid);
+		final Blob session = sid;
 		awaitRunCompletion(job, completion, waitMs, running,
-			result -> (fSidHex != null) ? annotateWithSession(result, fSidHex) : result);
+			result -> (session != null) ? annotateWithSession(result, session) : result);
 	}
 
 	/**
@@ -2207,11 +2281,11 @@ public class AgentAdapter extends AAdapter {
 	 * cell unchanged if it is not a map (e.g. null or unexpected shape).
 	 */
 	@SuppressWarnings("unchecked")
-	private static ACell annotateWithSession(ACell result, AString sidHex) {
+	private static ACell annotateWithSession(ACell result, Blob sessionId) {
 		if (!(result instanceof AMap)) return result;
 		AMap<AString, ACell> m = (AMap<AString, ACell>) result;
 		if (m.containsKey(Fields.SESSION_ID)) return m;
-		return m.assoc(Fields.SESSION_ID, sidHex);
+		return m.assoc(Fields.SESSION_ID, sessionId);
 	}
 
 	private void handleInfo(Job job, ACell input, RequestContext ctx) {
@@ -2259,12 +2333,13 @@ public class AgentAdapter extends AAdapter {
 			Fields.CONTROLLER, agent.getController(),
 			Fields.CONFIG, shownConfig(record.get(Agent.KEY_CONFIG))));
 
-		if (record.containsKey(Agent.KEY_AGENT)) summary = summary.assoc(Agent.KEY_AGENT, record.get(Agent.KEY_AGENT));
+		ACell definition = Agent.definition(record);
+		if (definition != null) summary = summary.assoc(Agent.KEY_AGENT, definition);
 		if (timeline != null) summary = summary.assoc(Strings.intern("timelineLength"), CVMLong.create(timeline.count()));
 		if (tasks != null) summary = summary.assoc(Strings.intern("tasks"), CVMLong.create(tasks.count()));
-		ACell error = record.get(Agent.KEY_ERROR);
+		AString error = Agent.error(record);
 		if (error != null) summary = summary.assoc(Agent.KEY_ERROR, error);
-		ACell suspension = record.get(Agent.KEY_SUSPENSION);
+		AMap<AString, ACell> suspension = Agent.suspension(record);
 		if (suspension != null) summary = summary.assoc(Agent.KEY_SUSPENSION, suspension);
 		return summary;
 	}
@@ -2355,9 +2430,7 @@ public class AgentAdapter extends AAdapter {
 			? (AMap<AString, ACell>) m : null;
 		ACell state = record.get(Agent.KEY_STATE);
 
-		AString operation = (recordConfig != null)
-			? RT.ensureString(recordConfig.get(Fields.OPERATION))
-			: null;
+		AString operation = Agent.transitionOperation(record);
 		if (operation == null) { job.fail("Agent has no transition operation configured"); return null; }
 
 		// Resolve the adapter that handles the agent's transition operation.
@@ -2380,19 +2453,20 @@ public class AgentAdapter extends AAdapter {
 		// diagnostics — exactly as a live transition would see it. Without one
 		// the render is the synthetic fresh-transition context, as before.
 		AMap<AString, ACell> session = null;
-		AString sidHex = RT.ensureString(RT.getIn(input, Fields.SESSION_ID));
-		if (sidHex != null) {
-			Blob sid = parseSessionId(sidHex);
-			if (sid == null) { job.fail("Invalid sessionId format: " + sidHex); return null; }
-			session = agent.getSession(sid);
-			if (session == null) { job.fail(UNKNOWN_SESSION_CODE, CONTEXT_UNKNOWN_SESSION.formatted(sidHex)); return null; }
-			agentCtx = agentCtx.withSessionId(sid);
+		ACell given = RT.getIn(input, Fields.SESSION_ID);
+		if (given != null) {
+			Blob sid = parseId(given);
+			if (sid == null) { job.fail("Invalid sessionId format: " + given); return null; }
+			session = agent.session(sid).getRecord();
+			if (session == null) { job.fail(UNKNOWN_SESSION_CODE, CONTEXT_UNKNOWN_SESSION.formatted(sid)); return null; }
+			agentCtx = agentCtx.inExecution(new RequestContext.ExecutionScope(agentTarget.ownerDID(),
+				agentTarget.agentId(), null, sid, null, -1L, null));
 		}
 
 		// The hypothetical call: inbox message(s), pending results, a task.
 		// Inspection must resolve n/ paths and capability-scoped loads exactly as
-		// the live transition does. The caller identity remains the owner; the
-		// agent id selects the same private namespace/cursor view as execution.
+		// the live transition does: in the harness's context, the controller's
+		// frame driving the agent's execution, as a cycle's is.
 		ContextInspectable.Inspection inspection = new ContextInspectable.Inspection(
 			recordConfig, state, session, inboxOf(input),
 			RT.ensureVector(RT.getIn(input, Fields.PENDING)),
@@ -2438,15 +2512,15 @@ public class AgentAdapter extends AAdapter {
 
 		AVector<ACell> agents = Vectors.empty();
 		if (user != null) {
-			AMap<AString, ACell> agentMap = user.getAgents();
-			if (agentMap != null) {
+			AMap<AString, ACell> agentMap = user.agents().all();
+			if (!agentMap.isEmpty()) {
 				for (var entry : agentMap.entrySet()) {
 					AString agentId = entry.getKey();
 					ACell value = entry.getValue();
 					if (!(value instanceof AMap)) continue;
 					AMap<AString, ACell> record = (AMap<AString, ACell>) value;
 
-					AString stableStatus = RT.ensureString(record.get(Agent.KEY_STATUS));
+					AString stableStatus = Agent.status(record);
 					if (!includeTerminated && Agent.TERMINATED.equals(stableStatus)) continue;
 
 					if (!annotated) {
@@ -2467,9 +2541,9 @@ public class AgentAdapter extends AAdapter {
 						Fields.CONTROLLER, listed.getController(),
 						Fields.AWAITING, awaitingSummary(record),
 						Fields.TASKS, CVMLong.create(taskCount));
-					ACell error = record.get(Agent.KEY_ERROR);
+					AString error = Agent.error(record);
 					if (error != null) summary = summary.assoc(Fields.ERROR, error);
-					ACell suspension = record.get(Agent.KEY_SUSPENSION);
+					AMap<AString, ACell> suspension = Agent.suspension(record);
 					if (suspension != null) summary = summary.assoc(Agent.KEY_SUSPENSION, suspension);
 					agents = agents.conj(summary);
 				}
@@ -2524,7 +2598,7 @@ public class AgentAdapter extends AAdapter {
 		for (int i = start; i < end; i++) {
 			SessionSummary summary = summaries.get(i);
 			AMap<AString, ACell> item = Maps.of(
-				Fields.SESSION_ID, Strings.create(summary.id().toHexString()),
+				Fields.SESSION_ID, summary.id(),
 				K_CREATED, CVMLong.create(summary.created()),
 				Fields.UPDATED, CVMLong.create(summary.updated()),
 				K_TURN_COUNT, CVMLong.create(summary.turnCount()));
@@ -2549,15 +2623,15 @@ public class AgentAdapter extends AAdapter {
 		if (start != null && end != null && end < start) throw new InvalidInputException(HISTORY_RANGE_INVALID);
 		int limit = boundedInt(input, Fields.LIMIT, DEFAULT_HISTORY_ENTRIES, 1, MAX_HISTORY_ENTRIES);
 
-		AString requested = RT.ensureString(RT.getIn(input, Fields.SESSION_ID));
+		ACell requested = RT.getIn(input, Fields.SESSION_ID);
 		Blob sid;
 		AMap<AString, ACell> session;
 		if (requested != null) {
 			sid = requiredSessionId(requested);
-			session = access.agent().getSession(sid);
+			session = access.agent().session(sid).getRecord();
 		} else if (access.excludedSession() != null) {
 			sid = access.excludedSession();
-			session = access.agent().getSession(sid);
+			session = access.agent().session(sid).getRecord();
 		} else {
 			List<SessionSummary> summaries = visibleSessionSummaries(ctx, access);
 			if (summaries.isEmpty()) return sessionNotFound();
@@ -2566,11 +2640,12 @@ public class AgentAdapter extends AAdapter {
 		}
 		if (session == null || !isVisibleToPolicies(ctx, access, sid, session)) return sessionNotFound();
 
-		ConversationHistory.Page page = readHistory(ConversationHistory.open(rootFrame(session)), start, end, limit);
+		ConversationHistory.Page page = readHistory(ConversationHistory.open(Session.rootFrame(session)), start, end, limit);
+		// Entries as stored, less the route, which only the From element shows
 		AMap<AString, ACell> result = Maps.of(
 			K_FOUND, CVMBool.TRUE,
-			Fields.SESSION_ID, Strings.create(sid.toHexString()),
-			K_ENTRIES, page.entries());
+			Fields.SESSION_ID, sid,
+			K_ENTRIES, withoutRoutes(page.entries()));
 		// A caller that passed start knows it; one that did not has no other way to learn it.
 		if (start == null) result = result.assoc(K_START, CVMLong.create(page.start()));
 		return page.hasMore() ? result.assoc(K_NEXT, CVMLong.create(page.next())) : result;
@@ -2616,7 +2691,7 @@ public class AgentAdapter extends AAdapter {
 		}
 		if (CVMBool.TRUE.equals(current)) return doCurrentSessionRead(ctx, access, input, maxTurns, maxChars, archiveDepth, skip);
 
-		AString requested = RT.ensureString(RT.getIn(input, Fields.SESSION_ID));
+		ACell requested = RT.getIn(input, Fields.SESSION_ID);
 		SessionSummary summary;
 		if (requested == null) {
 			List<SessionSummary> summaries = visibleSessionSummaries(ctx, access);
@@ -2624,16 +2699,16 @@ public class AgentAdapter extends AAdapter {
 			summary = summaries.get(0);
 		} else {
 			Blob sid = requiredSessionId(requested);
-			summary = summarizeSession(ctx, access, sid, access.agent().getSession(sid));
+			summary = summarizeSession(ctx, access, sid, access.agent().session(sid).getRecord());
 			if (summary == null) return sessionNotFound();
 		}
 
-		AMap<AString, ACell> frame = rootFrame(summary.session());
+		AMap<AString, ACell> frame = Session.rootFrame(summary.session());
 		ConversationRenderer.HistoricalView view = ConversationRenderer.historical(
 			frame, maxTurns, maxChars, archiveDepth, skip);
 		AMap<AString, ACell> result = Maps.of(
 			K_FOUND, CVMBool.TRUE,
-			Fields.SESSION_ID, Strings.create(summary.id().toHexString()),
+			Fields.SESSION_ID, summary.id(),
 			K_CREATED, CVMLong.create(summary.created()),
 			Fields.UPDATED, CVMLong.create(summary.updated()),
 			K_TURN_COUNT, CVMLong.create(summary.turnCount()),
@@ -2659,8 +2734,8 @@ public class AgentAdapter extends AAdapter {
 		if (sid == null || access.excludedSession() == null || !sid.equals(access.excludedSession())) {
 			throw new InvalidInputException("current is only for an agent reading the session it is in");
 		}
-		AMap<AString, ACell> session = access.agent().getSession(sid);
-		AMap<AString, ACell> frame = (session != null) ? rootFrame(session) : null;
+		AMap<AString, ACell> session = access.agent().session(sid).getRecord();
+		AMap<AString, ACell> frame = Session.rootFrame(session);
 		if (frame == null) return sessionNotFound();
 		ACell from = RT.getIn(input, K_FROM_TURN), to = RT.getIn(input, K_TO_TURN);
 		if ((from == null) != (to == null)) throw new InvalidInputException("from and to go together");
@@ -2674,7 +2749,7 @@ public class AgentAdapter extends AAdapter {
 		return Maps.of(
 			K_FOUND, CVMBool.TRUE,
 			K_CURRENT, CVMBool.TRUE,
-			Fields.SESSION_ID, Strings.create(sid.toHexString()),
+			Fields.SESSION_ID, sid,
 			K_TURN_COUNT, CVMLong.create(view.turnCount()),
 			Fields.MESSAGES, view.messages(),
 			K_TRUNCATED, CVMBool.create(view.truncated()),
@@ -2682,8 +2757,8 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	/** A session id the caller named, which must be well formed. */
-	private static Blob requiredSessionId(AString requested) {
-		Blob sid = parseSessionId(requested);
+	private static Blob requiredSessionId(ACell requested) {
+		Blob sid = parseId(requested);
 		if (sid == null || sid.count() != 16) {
 			throw new InvalidInputException("sessionId must be a 16-byte hex string");
 		}
@@ -2745,7 +2820,7 @@ public class AgentAdapter extends AAdapter {
 		Blob excluded = access.excludedSession();
 		if (session == null || (excluded != null && sid.equals(excluded))
 				|| !isVisibleToPolicies(ctx, access, sid, session)) return null;
-		ConversationRenderer.HistoricalView view = ConversationRenderer.historical(rootFrame(session), 0, 0);
+		ConversationRenderer.HistoricalView view = ConversationRenderer.historical(Session.rootFrame(session), 0, 0);
 		if (view.turnCount() == 0) return null;
 		AMap<AString, ACell> meta = RT.ensureMap(session.get(K_META));
 		long created = longValue((meta != null) ? meta.get(K_CREATED) : null, 0);
@@ -2773,14 +2848,6 @@ public class AgentAdapter extends AAdapter {
 		return true;
 	}
 
-	@SuppressWarnings("unchecked")
-	private static AMap<AString, ACell> rootFrame(AMap<AString, ACell> session) {
-		AVector<ACell> frames = RT.ensureVector(session.get(K_FRAMES));
-		if (frames == null || frames.isEmpty() || !(frames.get(0) instanceof AMap<?, ?> frame)) {
-			return null;
-		}
-		return (AMap<AString, ACell>) frame;
-	}
 
 	private static int boundedInt(ACell input, AString field, int defaultValue,
 			int min, int max) {
@@ -2920,7 +2987,7 @@ public class AgentAdapter extends AAdapter {
 	 * clear it, there being no agent to halt.
 	 */
 	private static boolean emptyEntry(User user, AString agentId) {
-		AMap<AString, ACell> agents = (user != null) ? user.getAgents() : null;
+		AMap<AString, ACell> agents = (user != null) ? user.agents().all() : null;
 		return agents != null && agents.containsKey(agentId) && agents.get(agentId) == null;
 	}
 
@@ -2933,7 +3000,7 @@ public class AgentAdapter extends AAdapter {
 		if (agent == null || !agent.exists()) {
 			if (remove && emptyEntry(user, agentId)) {
 				engine.deleteAgentState(Principals.agentDID(target.ownerDID(), agentId));
-				user.removeAgent(agentId);
+				user.agents().remove(agentId);
 				return identify(target, Maps.of(Fields.REMOVED, CVMBool.TRUE));
 			}
 			job.fail("Agent disappeared during deletion: " + agentId);
@@ -2955,7 +3022,7 @@ public class AgentAdapter extends AAdapter {
 		// Nor anything adapters hold for it, its keyring among them.
 		engine.deleteAgentState(agentDID);
 		if (remove) {
-			user.removeAgent(agentId);
+			user.agents().remove(agentId);
 			return identify(target, Maps.of(Fields.REMOVED, CVMBool.TRUE));
 		}
 		return identify(target, Maps.of(Fields.STATUS, Agent.TERMINATED));
@@ -2973,7 +3040,7 @@ public class AgentAdapter extends AAdapter {
 		if (reason != null && !(reason instanceof AString)) {
 			throw new InvalidInputException(SUSPEND_REASON_INVALID);
 		}
-		AMap<AString, ACell> stopped = agent.suspend(ctx.getCallerDID(), (AString) reason);
+		AMap<AString, ACell> stopped = agent.suspend(ctx.getAuthorityDID(), (AString) reason);
 		if (stopped == null) {
 			job.fail(SUSPEND_AGENT_GONE);
 			return;
@@ -2989,7 +3056,7 @@ public class AgentAdapter extends AAdapter {
 
 		job.setStatus(Status.STARTED);
 		job.completeWith(identify(target, Maps.of(Fields.STATUS, Agent.SUSPENDED,
-			Agent.KEY_SUSPENSION, stopped.get(Agent.KEY_SUSPENSION))));
+			Agent.KEY_SUSPENSION, Agent.suspension(stopped))));
 	}
 
 	private void handleResume(Job job, ACell input, RequestContext ctx) {
@@ -3112,16 +3179,16 @@ public class AgentAdapter extends AAdapter {
 			Abilities.AGENT_WRITE, false);
 		AString agentId = target.agentId();
 
-		AString taskIdHex = RT.ensureString(RT.getIn(input, Fields.TASK_ID));
-		if (taskIdHex == null) { job.fail("taskId is required"); return; }
+		ACell given = RT.getIn(input, Fields.TASK_ID);
+		if (given == null) { job.fail("taskId is required"); return; }
 
 		Agent agent = lookupAgent(job, target);
 		if (agent == null) return;
 		requireNative(agent, "cancelTask");
 
-		Blob taskId = HexId.parse(taskIdHex);
+		Blob taskId = parseId(given);
 		if (taskId == null) {
-			job.fail(new InvalidInputException(INVALID_TASK_ID + taskIdHex));
+			job.fail(new InvalidInputException(INVALID_TASK_ID + given));
 			return;
 		}
 
@@ -3131,6 +3198,7 @@ public class AgentAdapter extends AAdapter {
 		// race completion or another cancel, and a restart finds both or neither.
 		AString reasonCell = RT.ensureString(RT.getIn(input, Fields.REASON));
 		String reason = (reasonCell != null) ? reasonCell.toString() : null;
+		engine.jobs().requireAccess(taskId, ctx, null, Abilities.JOB_MANAGE);
 		Job pending = engine.jobs().getJob(taskId);
 		// The work to run after commit, or null when the task was not there to take
 		List<Runnable> after = engine.getVenueState().transact(draft -> {
@@ -3142,7 +3210,7 @@ public class AgentAdapter extends AAdapter {
 			return work;
 		});
 		if (after == null) {
-			job.fail("Task not found: " + taskIdHex);
+			job.fail(TASK_NOT_FOUND + taskId);
 			return;
 		}
 		outputContexts.remove(taskId);
@@ -3150,7 +3218,7 @@ public class AgentAdapter extends AAdapter {
 
 		job.setStatus(Status.STARTED);
 		job.completeWith(identify(target, Maps.of(
-			Fields.TASK_ID, taskIdHex,
+			Fields.TASK_ID, taskId,
 			Fields.CANCELLED, CVMBool.TRUE)));
 	}
 
@@ -3191,24 +3259,24 @@ public class AgentAdapter extends AAdapter {
 			Abilities.AGENT_WRITE, false);
 		AString agentId = target.agentId();
 
-		AString sidHex = RT.ensureString(RT.getIn(input, Fields.SESSION_ID));
-		if (sidHex == null) { job.fail("sessionId is required"); return; }
+		ACell given = RT.getIn(input, Fields.SESSION_ID);
+		if (given == null) { job.fail("sessionId is required"); return; }
 
 		Agent agent = lookupAgent(job, target);
 		if (agent == null) return;
 		requireNative(agent, "deleteSession");
 
-		Blob sid = parseSessionId(sidHex);
-		if (sid == null) { job.fail("Invalid sessionId format: " + sidHex); return; }
+		Blob sid = parseId(given);
+		if (sid == null) { job.fail("Invalid sessionId format: " + given); return; }
 
-		if (agent.getSession(sid) == null) {
-			job.fail("Session not found: " + sidHex);
+		if (agent.session(sid).getRecord() == null) {
+			job.fail(SESSION_NOT_FOUND + sid);
 			return;
 		}
 
 		// Remove the session first: a chat then either registered before the
 		// waiters are failed below, or finds no session for its message.
-		agent.removeSession(sid);
+		agent.sessions().remove(sid);
 
 		// Fail every chat awaiting on this session so each caller unblocks with
 		// a clean error (scoped analogue of failAllPendingForAgent).
@@ -3225,7 +3293,7 @@ public class AgentAdapter extends AAdapter {
 
 		job.setStatus(Status.STARTED);
 		job.completeWith(identify(target, Maps.of(
-			Fields.SESSION_ID, Strings.create(sid.toHexString()),
+			Fields.SESSION_ID, sid,
 			Fields.DELETED,    CVMBool.TRUE)));
 	}
 
@@ -3241,15 +3309,15 @@ public class AgentAdapter extends AAdapter {
 			Abilities.AGENT_WRITE, false);
 		AString agentId = target.agentId();
 
-		AString sidHex = RT.ensureString(RT.getIn(input, Fields.SESSION_ID));
-		if (sidHex == null) { job.fail("sessionId is required"); return; }
+		ACell given = RT.getIn(input, Fields.SESSION_ID);
+		if (given == null) { job.fail("sessionId is required"); return; }
 
 		Agent agent = lookupAgent(job, target);
 		if (agent == null) return;
 		requireNative(agent, "renameSession");
 
-		Blob sid = parseSessionId(sidHex);
-		if (sid == null) { job.fail("Invalid sessionId format: " + sidHex); return; }
+		Blob sid = parseId(given);
+		if (sid == null) { job.fail("Invalid sessionId format: " + given); return; }
 
 		ACell titleValue = RT.getIn(input, Fields.TITLE);
 		if (titleValue != null && !(titleValue instanceof AString)) {
@@ -3260,62 +3328,66 @@ public class AgentAdapter extends AAdapter {
 		if (title != null && title.toString().isBlank()) title = null;
 
 		if (!agent.session(sid).setTitle(title)) {
-			job.fail("Session not found: " + sidHex);
+			job.fail(SESSION_NOT_FOUND + sid);
 			return;
 		}
 
 		job.setStatus(Status.STARTED);
 		AMap<AString, ACell> result = identify(target, Maps.of(
-			Fields.SESSION_ID, Strings.create(sid.toHexString())));
+			Fields.SESSION_ID, sid));
 		if (title != null) result = result.assoc(Fields.TITLE, title);
 		job.completeWith(result);
 	}
 
-	/** Explicit owner-side compaction of an idle session. The exact replaced
-	 * conversation remains nested under the resulting archive record; the Job
-	 * returns bounded metadata rather than copying that transcript again. */
+	/** Explicit owner-side compaction of an idle session, keeping its last
+	 * exchanges' messages and answers (AGENT_CONTEXT.md §5.6). The replaced history stays
+	 * where it is, covered by the summary; the Job returns bounded metadata
+	 * rather than copying that transcript again. */
 	private void handleCompactSession(Job job, ACell input, RequestContext ctx) {
 		AgentTarget target = resolveAgentTarget(ctx, input, Fields.AGENT_ID,
 			Abilities.AGENT_WRITE, false);
-		AString sidHex = RT.ensureString(RT.getIn(input, Fields.SESSION_ID));
-		if (sidHex == null) { job.fail("sessionId is required"); return; }
+		ACell given = RT.getIn(input, Fields.SESSION_ID);
+		if (given == null) { job.fail("sessionId is required"); return; }
 		AString summary = RT.ensureString(RT.getIn(input, Strings.intern("summary")));
 		if (summary == null || summary.toString().isBlank()) {
 			job.fail("summary is required");
+			return;
+		}
+		ACell keepGiven = RT.getIn(input, K_KEEP);
+		if (keepGiven != null && !(keepGiven instanceof CVMLong n && n.longValue() >= 0)) {
+			job.fail(COMPACT_KEEP_INVALID.formatted("keep", configValueType(keepGiven)));
 			return;
 		}
 
 		Agent agent = lookupAgent(job, target);
 		if (agent == null) return;
 		requireNative(agent, "compactSession");
-		Blob sid = parseSessionId(sidHex);
-		if (sid == null) { job.fail("Invalid sessionId format: " + sidHex); return; }
-		if (agent.getSession(sid) == null) { job.fail("Session not found: " + sidHex); return; }
+		Blob sid = parseId(given);
+		if (sid == null) { job.fail("Invalid sessionId format: " + given); return; }
+		if (agent.session(sid).getRecord() == null) { job.fail(SESSION_NOT_FOUND + sid); return; }
+		int keep = (keepGiven instanceof CVMLong n)
+			? (int) Math.min(n.longValue(), Integer.MAX_VALUE)
+			: AbstractLLMAdapter.resolveCompactKeep(agent.getConfig());
 
-		java.util.concurrent.atomic.AtomicLong archived =
-			new java.util.concurrent.atomic.AtomicLong(0);
+		java.util.concurrent.atomic.AtomicReference<GoalTreeContext.Compaction> done =
+			new java.util.concurrent.atomic.AtomicReference<>();
 		java.util.concurrent.atomic.AtomicLong total =
 			new java.util.concurrent.atomic.AtomicLong(0);
 		AMap<AString, ACell> provenance = Maps.of(
 			K_CREATED, engine.currentTimestamp(),
-			Fields.CALLER, ctx.getCallerDID(),
-			Fields.JOB_ID, Strings.create(job.getID().toHexString()));
+			Fields.CALLER, ctx.getAuthorityDID(),
+			Fields.JOB_ID, job.getID());
 		boolean applied = agent.session(sid).updateQuiescentFrames(frames -> {
 			if (frames.isEmpty()) return frames;
 			AMap<AString, ACell> root = RT.ensureMap(frames.get(0));
-			long live = GoalTreeContext.countLiveTurns(root);
-			archived.set(live);
-			if (live == 0) {
-				total.set(GoalTreeContext.countTurns(root));
-				return frames;
-			}
-			AMap<AString, ACell> compacted = GoalTreeContext.compactFrame(
-				root, summary.toString(), provenance);
-			total.set(GoalTreeContext.countTurns(compacted));
-			return frames.assoc(0, compacted);
+			GoalTreeContext.Compaction compaction = GoalTreeContext.compact(
+				root, summary.toString(), provenance, keep);
+			done.set(compaction);
+			total.set(GoalTreeContext.countTurns(compaction.frame()));
+			return compaction.applied() ? frames.assoc(0, compaction.frame()) : frames;
 		});
 		if (!applied) {
-			if (agent.getSessionCycleEpoch(sid) != null) {
+			if (agent.session(sid).cycleEpoch() != null) {
 				job.fail("Session is active; retry compaction after the current cycle completes");
 			} else {
 				job.fail("Session changed or disappeared before compaction");
@@ -3323,11 +3395,15 @@ public class AgentAdapter extends AAdapter {
 			return;
 		}
 
+		GoalTreeContext.Compaction compaction = done.get();
+		long replaced = (compaction != null) ? compaction.replaced() : 0;
+		long kept = (compaction != null) ? compaction.kept() : 0;
 		job.setStatus(Status.STARTED);
 		job.completeWith(identify(target, Maps.of(
-			Fields.SESSION_ID, Strings.create(sid.toHexString()),
-			Strings.intern("compacted"), CVMBool.create(archived.get() > 0),
-			Strings.intern("archivedTurns"), CVMLong.create(archived.get()),
+			Fields.SESSION_ID, sid,
+			Strings.intern("compacted"), CVMBool.create(replaced > 0),
+			Strings.intern("archivedTurns"), CVMLong.create(replaced),
+			K_KEPT_EXCHANGES, CVMLong.create(kept),
 			K_TURN_COUNT, CVMLong.create(total.get()))));
 	}
 
@@ -3338,20 +3414,19 @@ public class AgentAdapter extends AAdapter {
 	private void handleReloadContext(Job job, ACell input, RequestContext ctx) {
 		AgentTarget target = resolveAgentTarget(ctx, input, Fields.AGENT_ID,
 			Abilities.AGENT_WRITE, false);
-		AString sidHex = RT.ensureString(RT.getIn(input, Fields.SESSION_ID));
-		if (sidHex == null) { job.fail("sessionId is required"); return; }
+		ACell given = RT.getIn(input, Fields.SESSION_ID);
+		if (given == null) { job.fail("sessionId is required"); return; }
 
 		Agent agent = lookupAgent(job, target);
 		if (agent == null) return;
 		requireNative(agent, "reloadContext");
-		Blob sid = parseSessionId(sidHex);
-		if (sid == null) { job.fail("Invalid sessionId format: " + sidHex); return; }
-		if (agent.getSession(sid) == null) { job.fail("Session not found: " + sidHex); return; }
+		Blob sid = parseId(given);
+		if (sid == null) { job.fail("Invalid sessionId format: " + given); return; }
+		if (agent.session(sid).getRecord() == null) { job.fail(SESSION_NOT_FOUND + sid); return; }
 
-		AVector<ACell> existingFrames = RT.ensureVector(
-			RT.getIn(agent.getSession(sid), Fields.FRAMES));
+		AVector<ACell> existingFrames = agent.session(sid).frames();
 		int clearable = 0;
-		for (long i = 0; existingFrames != null && i < existingFrames.count(); i++) {
+		for (long i = 0; i < existingFrames.count(); i++) {
 			AMap<AString, ACell> frame = RT.ensureMap(existingFrames.get(i));
 			if (frame != null && GoalTreeContext.reloadContext(frame) != frame) clearable++;
 		}
@@ -3366,7 +3441,7 @@ public class AgentAdapter extends AAdapter {
 			return updated;
 		});
 		if (!applied) {
-			if (agent.getSessionCycleEpoch(sid) != null) {
+			if (agent.session(sid).cycleEpoch() != null) {
 				job.fail("Session is active; retry context reload after the current cycle completes");
 			} else {
 				job.fail("Session changed or disappeared before context reload");
@@ -3376,7 +3451,7 @@ public class AgentAdapter extends AAdapter {
 
 		job.setStatus(Status.STARTED);
 		job.completeWith(identify(target, Maps.of(
-			Fields.SESSION_ID, Strings.create(sid.toHexString()),
+			Fields.SESSION_ID, sid,
 			Strings.intern("reloaded"), CVMBool.create(clearable > 0),
 			Strings.intern("frames"), CVMLong.create(clearable))));
 	}
@@ -3414,14 +3489,12 @@ public class AgentAdapter extends AAdapter {
 		long expectedRevision = ctx.getTaskRevision();
 		ACell currentTask = agent.getTasks().get(taskId);
 		if (currentTask == null) {
-			throw new NotFoundException("Task not found: " + taskId.toHexString(), taskId.toHexString());
+			throw new NotFoundException(TASK_NOT_FOUND + taskId, taskId.toHexString());
 		}
-		if (expectedRevision >= 0
-				&& (Task.revision(currentTask) != expectedRevision
-					|| Task.hasUnshownInput(currentTask))) {
+		if (Task.isStale(currentTask, expectedRevision)) {
 			return Maps.of(
 				Fields.AGENT_ID, agentId,
-				Fields.TASK_ID, taskIdHex(taskId),
+				Fields.TASK_ID, taskId,
 				Fields.STATUS, Status.STARTED,
 				Fields.REASON, Strings.create(
 					"Task received continuation input; process the updated task before completing"));
@@ -3434,21 +3507,19 @@ public class AgentAdapter extends AAdapter {
 		if (task == null) {
 			refuseIfStopped(agent, taskId, ctx);
 			ACell current = agent.getTasks().get(taskId);
-			if (current != null && expectedRevision >= 0
-					&& (Task.revision(current) != expectedRevision
-						|| Task.hasUnshownInput(current))) {
+			if (current != null && Task.isStale(current, expectedRevision)) {
 				return Maps.of(
 					Fields.AGENT_ID, agentId,
-					Fields.TASK_ID, taskIdHex(taskId),
+					Fields.TASK_ID, taskId,
 					Fields.STATUS, Status.STARTED,
 					Fields.REASON, Strings.create("Task received continuation input; process the updated task before completing"));
 			}
-			throw new NotFoundException("Task not found: " + taskId.toHexString(), taskId.toHexString());
+			throw new NotFoundException(TASK_NOT_FOUND + taskId, taskId.toHexString());
 		}
 
 		return Maps.of(
 			Fields.AGENT_ID, agentId,
-			Fields.TASK_ID,  taskIdHex(taskId),
+			Fields.TASK_ID,  taskId,
 			Fields.STATUS,   Status.COMPLETE);
 	}
 
@@ -3484,21 +3555,19 @@ public class AgentAdapter extends AAdapter {
 		if (task == null) {
 			refuseIfStopped(agent, taskId, ctx);
 			ACell current = agent.getTasks().get(taskId);
-			if (current != null && expectedRevision >= 0
-					&& (Task.revision(current) != expectedRevision
-						|| Task.hasUnshownInput(current))) {
+			if (current != null && Task.isStale(current, expectedRevision)) {
 					return Maps.of(
 						Fields.AGENT_ID, agentId,
-						Fields.TASK_ID, taskIdHex(taskId),
+						Fields.TASK_ID, taskId,
 						Fields.STATUS, Status.STARTED,
 						Fields.REASON, Strings.create("Task received continuation input; process the updated task before failing"));
 			}
-			throw new NotFoundException("Task not found: " + taskId.toHexString(), taskId.toHexString());
+			throw new NotFoundException(TASK_NOT_FOUND + taskId, taskId.toHexString());
 		}
 
 		return Maps.of(
 			Fields.AGENT_ID, agentId,
-			Fields.TASK_ID,  taskIdHex(taskId),
+			Fields.TASK_ID,  taskId,
 			Fields.STATUS,   Status.FAILED);
 	}
 
@@ -3518,7 +3587,7 @@ public class AgentAdapter extends AAdapter {
 		if (!CVMBool.TRUE.equals(RT.getIn(task, Fields.STRICT))) return result;
 		AMap<AString, ACell> schema = RT.ensureMap(RT.getIn(task, Fields.RESPONSE_SCHEMA));
 		if (schema == null) {
-			throw new InvalidInputException("Strict task has no response schema: " + taskId.toHexString());
+			throw new InvalidInputException(STRICT_NO_SCHEMA + taskId);
 		}
 		ACell candidate = result;
 		AString stringResult = RT.ensureString(result);
@@ -3567,11 +3636,11 @@ public class AgentAdapter extends AAdapter {
 		}
 		Agent agent = requireAgent(ctx.getUserDID(), agentId);
 		if (agent.getTasks().get(taskId) == null) {
-			throw new NotFoundException("Task not found: " + taskId.toHexString(), taskId.toHexString());
+			throw new NotFoundException(TASK_NOT_FOUND + taskId, taskId.toHexString());
 		}
 		refuseIfStopped(agent, taskId, ctx);
 		Scheduler scheduler = engine.gridScheduler();
-		if (scheduler == null) throw new NotSupportedException(PARK_UNAVAILABLE);
+		if (scheduler == null) throw new UnsupportedException(PARK_UNAVAILABLE);
 		long wakeTime = engine.currentTimestamp().longValue() + delay.longValue();
 		scheduler.setThreadWakeTime(ctx.getUserDID(), agent, Agent.ThreadKind.TASK, taskId, wakeTime);
 		AString reason = RT.ensureString(RT.getIn(input, Fields.REASON));
@@ -3579,7 +3648,7 @@ public class AgentAdapter extends AAdapter {
 		if (request != null && reason != null) request.progress(reason.toString(), null);
 		return Maps.of(
 			Fields.AGENT_ID,  agentId,
-			Fields.TASK_ID,   taskIdHex(taskId),
+			Fields.TASK_ID,   taskId,
 			Fields.STATUS,    Status.STARTED,
 			Fields.WAKE_TIME, CVMLong.create(wakeTime));
 	}
@@ -3590,7 +3659,7 @@ public class AgentAdapter extends AAdapter {
 	/** Refuses a task resolution the cycle could not make because it was stopped (AGENT_LOOP.md §2.5.1). */
 	private static void refuseIfStopped(Agent agent, Blob taskId, RequestContext ctx) {
 		if (ctx.getClaim() != null && !agent.holdsClaim(ctx.getClaim())) {
-			throw new covia.exception.NotSupportedException(CYCLE_STOPPED.formatted(taskIdHex(taskId)));
+			throw new InvalidStateException(CYCLE_STOPPED.formatted(taskId));
 		}
 	}
 
@@ -3650,7 +3719,7 @@ public class AgentAdapter extends AAdapter {
 	 * or a restart that came in between.
 	 */
 	private void handBackResolved(AString ownerDID, AString agentId) {
-		Agent agent = getAgent(ownerDID, agentId);
+		Agent agent = engine.getAgent(ownerDID, agentId);
 		if (agent == null || agent.getResolved().isEmpty()) return;
 		Map<Blob, WriteContext> writeContexts = new java.util.HashMap<>();
 		Handback handback = engine.getVenueState().transact(draft -> {
@@ -3718,7 +3787,7 @@ public class AgentAdapter extends AAdapter {
 		private final List<Runnable> after = new ArrayList<>();
 		private final List<Blob> settled = new ArrayList<>();
 		private final List<OutsideWrite> outside = new ArrayList<>();
-		private AMap<AString, ACell> results;
+		private Index<Blob, ACell> results;
 
 		/** @param writeContexts the write contexts, one map for every run of the body */
 		Handback(AString ownerDID, AString agentId, Map<Blob, WriteContext> writeContexts) {
@@ -3731,18 +3800,18 @@ public class AgentAdapter extends AAdapter {
 		 * What the draft's agent resolved, as a timeline entry's
 		 * {@code taskResults}, passing over writes in flight; null when nothing.
 		 */
-		AMap<AString, ACell> taskResults(Agent agent) {
-			AMap<AString, ACell> found = Maps.empty();
+		Index<Blob, ACell> taskResults(Agent agent) {
+			Index<Blob, ACell> found = Index.none();
 			for (var e : agent.getResolved().entrySet()) {
 				if (handbacksInFlight.contains(e.getKey())) continue;
-				found = found.assoc(taskIdHex(e.getKey()), taskResult(RT.ensureMap(e.getValue())));
+				found = found.assoc(e.getKey(), taskResult(RT.ensureMap(e.getValue())));
 			}
 			results = found.isEmpty() ? null : found;
 			return results;
 		}
 
 		/** The task results {@link #taskResults} last found, or null. */
-		AMap<AString, ACell> results() {
+		Index<Blob, ACell> results() {
 			return results;
 		}
 
@@ -3872,7 +3941,7 @@ public class AgentAdapter extends AAdapter {
 			Fields.STATUS, Status.COMPLETE,
 			Fields.OUTPUT_PATH, outputPath,
 			Fields.BYTES, CVMLong.create(Cells.storageSize(output)));
-		ACell sid = envelope.get(Fields.SESSION_ID);
+		Blob sid = Ids.stored(envelope.get(Fields.SESSION_ID));
 		return (sid != null) ? receipt.assoc(Fields.SESSION_ID, sid) : receipt;
 	}
 
@@ -3883,9 +3952,9 @@ public class AgentAdapter extends AAdapter {
 	@Override public void handleMessage(Job job, AMap<AString, ACell> messageRecord) {
 		if (!externalAgents().owns(job)) { super.handleMessage(job, messageRecord); return; }
 		Job child = externalAgents().child(job);
-		if (child == null) throw new NotSupportedException(ExternalAgents.MISSING_CHILD);
+		if (child == null) throw new InvalidStateException(ExternalAgents.MISSING_CHILD);
 		AString owner = externalAgents().owner(job);
-		Agent agent = getAgent(owner, RT.ensureString(job.getData().get(Fields.AGENT_ID)));
+		Agent agent = engine.getAgent(owner, RT.ensureString(job.getData().get(Fields.AGENT_ID)));
 		externalAgents().backend(externalAgents().stored(agent)).handleMessage(child, messageRecord);
 	}
 
@@ -3928,20 +3997,18 @@ public class AgentAdapter extends AAdapter {
 		int split = address.toString().lastIndexOf("/g/");
 		if (split < 0) return false;
 		AString ownerDID = Strings.create(address.toString().substring(0, split));
-		Agent agent = getAgent(ownerDID, agentId);
+		Agent agent = engine.getAgent(ownerDID, agentId);
 		if (agent == null) return false;
 		Blob jobId = job.getID();
 		Index<Blob, ACell> tasks = agent.getTasks();
 		if ((tasks != null && tasks.containsKey(jobId)) || agent.getResolved().containsKey(jobId)) {
 			return true;
 		}
-		Blob sid = storedId(RT.ensureString(data.get(Fields.SESSION_ID)));
+		Blob sid = Ids.stored(data.get(Fields.SESSION_ID));
 		if (sid == null) return false;
-		AVector<ACell> pending = agent.getSessionPending(sid);
-		if (pending == null) return false;
-		AString jobIdHex = Strings.create(jobId.toHexString());
+		AVector<ACell> pending = agent.session(sid).pending();
 		for (long i = 0; i < pending.count(); i++) {
-			if (!jobIdHex.equals(RT.getIn(pending.get(i), Fields.JOB_ID))) continue;
+			if (!java.util.Objects.equals(jobId, Session.chatJob(pending.get(i)))) continue;
 			if (reattach) {
 				activeChats
 					.computeIfAbsent(new AgentKey(ownerDID, agentId), k -> new ConcurrentHashMap<>())
@@ -4050,7 +4117,7 @@ public class AgentAdapter extends AAdapter {
 				// completed the future exceptionally. That is still a finish.
 			}
 		}
-		Agent agent = getAgent(ctx.getUserDID(), agentId);
+		Agent agent = engine.getAgent(ctx.getUserDID(), agentId);
 		return agent == null ? Agent.TERMINATED : agent.getStatus();
 	}
 
@@ -4084,7 +4151,7 @@ public class AgentAdapter extends AAdapter {
 	 *              it passes {@code force: false}, as scheduler wake fires do
 	 */
 	public CompletableFuture<ACell> wakeAgent(AString ownerDID, AString agentId, boolean force) {
-		Agent agent = getAgent(ownerDID, agentId);
+		Agent agent = engine.getAgent(ownerDID, agentId);
 		if (agent == null) return null;
 		if (externalAgents().isExternal(agent)) return null;
 		// Shutdown: no new loop. Queued work waits durably for the next boot.
@@ -4098,12 +4165,9 @@ public class AgentAdapter extends AAdapter {
 		CompletableFuture<ACell> existing = runningLoops.get(key);
 		if (existing != null && !existing.isDone()) return existing;
 
-		AString status = agent.getStatus();
-
-		// SLEEPING is normal. RUNNING without a live slot is a stale marker
-		// (normally cleared by startup) and must not lock the agent forever.
-		if (!Agent.SLEEPING.equals(status)
-				&& !Agent.RUNNING.equals(status)) return null;
+		// A stopped agent does not run. RUNNING without a live slot is a stale
+		// marker (normally cleared by startup) and must not lock the agent forever.
+		if (agent.isStopped()) return null;
 
 		// Gate: only start if there's work (or forced).
 		if (!force && !hasWork(agent)) return null;
@@ -4125,18 +4189,17 @@ public class AgentAdapter extends AAdapter {
 			return installed;
 		}
 
-		// The run loop executes as the AGENT, within its OWNER's namespace — a
-		// fresh context carrying none of the waking caller's proofs, caps, job or
-		// session. Which caller won the launch CAS above must never leak into
-		// the agent's execution: every namespace-scoped access during the run
-		// (secrets /s/, workspace w/, job ownership, per-user cursors) resolves
-		// in the owner's namespace, deterministically (#91), while the caller
-		// identity is the agent's own sub-principal DID so what the agent did is
-		// attributable to the agent rather than to the human who owns it. It is
-		// the harness's context, acting with the agent's controller's authority:
-		// the transition operation runs under it and switches the agent's acts
-		// to its caps itself (Engine.harnessContext, Engine.stepContext, UCAN.md
-		// §5.4). A controller that could not act now fails the launch.
+		// The run loop executes as the agent's HARNESS — a fresh context
+		// carrying none of the waking caller's proofs, caps, job or session.
+		// Which caller won the launch CAS above must never leak into the
+		// agent's execution (#91). The harness is the agent's controller's frame
+		// driving the agent's execution: what it starts, such as model calls,
+		// records the controller, and names in the agent's config resolve in the
+		// controller's namespace. The transition operation runs under it and
+		// switches the agent's acts to the agent itself, under its caps, so what
+		// the agent did is attributed to the agent (Engine.harnessContext,
+		// Engine.stepContext, UCAN.md §5.4). A controller that could not act now
+		// fails the launch.
 		try {
 			engine.harnessContext(ownerDID, agentId);
 			if (!agent.tryRun()) {
@@ -4163,7 +4226,7 @@ public class AgentAdapter extends AAdapter {
 
 	/** Venue-mediated delivery to an already authorized local session. */
 	public boolean deliverSessionMessage(AString ownerDID, AString agentId, Blob sessionId,
-			AString caller, AString jobId, ACell message) {
+			AString caller, Blob jobId, ACell message) {
 		if (!appendSessionMessage(engine.getVenueState().users(), ownerDID, agentId, sessionId, caller, jobId, message)) return false;
 		engine.flush();
 		wakeAgent(ownerDID, agentId, true);
@@ -4180,53 +4243,68 @@ public class AgentAdapter extends AAdapter {
 	 * flushes and wakes the agent after commit.
 	 *
 	 * @param taskId the task whose cycle waited, or null
+	 * @param caller who the message is from
+	 * @param route what carried the request that sent it ({@link RequestContext#getRoute}), or null
 	 * @param messageId identifies the message, so delivering it to the task again adds nothing
 	 * @return whether the message reached the task or the session
 	 */
 	public boolean deliverToWaiter(covia.venue.Users users, AString ownerDID, AString agentId, Blob sessionId,
-			Blob taskId, AString caller, AString messageId, ACell message) {
-		return deliverToWaiter(users, ownerDID, agentId, sessionId, taskId, caller, messageId, message, null);
+			Blob taskId, AString caller, AVector<ACell> route, AString messageId, ACell message) {
+		return deliverToWaiter(users, ownerDID, agentId, sessionId, taskId, caller, route, messageId, message, null);
 	}
 
 	/**
-	 * As {@link #deliverToWaiter(covia.venue.Users, AString, AString, Blob, Blob, AString, AString, ACell)},
+	 * As {@link #deliverToWaiter(covia.venue.Users, AString, AString, Blob, Blob, AString, AVector, AString, ACell)},
 	 * the envelope marked with the source its turn records when one is given
 	 * ({@link Agent#SOURCE_TOOL_OUTCOME}).
 	 */
 	private boolean deliverToWaiter(covia.venue.Users users, AString ownerDID, AString agentId, Blob sessionId,
-			Blob taskId, AString caller, AString messageId, ACell message, AString source) {
+			Blob taskId, AString caller, AVector<ACell> route, AString messageId, ACell message, AString source) {
 		var owner = users.user(ownerDID);
 		Agent agent = (owner == null) ? null : owner.agent(agentId);
 		if (agent == null || externalAgents().isExternal(agent)) return false;
 		if (taskId != null) {
-			AMap<AString, ACell> envelope = Maps.of(
-				Fields.CALLER, caller,
-				Fields.SESSION_ID, Strings.create(sessionId.toHexString()),
-				Fields.TASK_ID, Strings.create(taskId.toHexString()),
-				Fields.MESSAGE, message);
-			if (source != null) envelope = envelope.assoc(Agent.K_SOURCE, source);
+			AMap<AString, ACell> envelope = carried(Maps.of(Fields.CALLER, caller, Fields.MESSAGE, message), route, source);
 			if (agent.appendTaskContinuation(taskId, sessionId, envelope, messageId)) return true;
 		}
-		if (source == null) return appendSessionMessage(users, ownerDID, agentId, sessionId, caller, null, message);
-		return appendSessionEnvelope(agent, sessionId, caller,
-			sessionEnvelope(sessionId, caller, null, message).assoc(Agent.K_SOURCE, source));
+		return appendSessionMessage(users, ownerDID, agentId, sessionId, caller, null, message, route, source);
+	}
+
+	/**
+	 * {@code envelope} with the route its message came by, empty when none was
+	 * given ({@link #withRoute}), and the source its turn records when there is
+	 * one.
+	 */
+	private static AMap<AString, ACell> carried(AMap<AString, ACell> envelope, AVector<ACell> route, AString source) {
+		envelope = envelope.assoc(Fields.ROUTE, (route == null) ? Vectors.empty() : route);
+		return (source == null) ? envelope : envelope.assoc(Agent.K_SOURCE, source);
 	}
 
 	/** Append to a known local session using the supplied component, including a
 	 * transaction draft. The caller owns authorization and flush/wake after commit. */
 	public boolean appendSessionMessage(covia.venue.Users users, AString ownerDID, AString agentId, Blob sessionId,
-			AString caller, AString jobId, ACell message) {
+			AString caller, Blob jobId, ACell message) {
+		return appendSessionMessage(users, ownerDID, agentId, sessionId, caller, jobId, message, null, null);
+	}
+
+	/**
+	 * As {@link #appendSessionMessage(covia.venue.Users, AString, AString, Blob, AString, Blob, ACell)},
+	 * the envelope carrying the route its message came by, empty when none is
+	 * given ({@link #withRoute}), and the source its turn records when there is
+	 * one.
+	 */
+	public boolean appendSessionMessage(covia.venue.Users users, AString ownerDID, AString agentId, Blob sessionId,
+			AString caller, Blob jobId, ACell message, AVector<ACell> route, AString source) {
 		var owner = users.user(ownerDID);
 		Agent agent = owner == null ? null : owner.agent(agentId);
 		if (agent == null || externalAgents().isExternal(agent)) return false;
-		return appendSessionEnvelope(agent, sessionId, caller, sessionEnvelope(sessionId, caller, jobId, message));
+		return appendSessionEnvelope(agent, sessionId, caller, carried(sessionEnvelope(caller, jobId, message), route, source));
 	}
 
 	/** The envelope a venue-delivered session message travels in: a chat when it names a {@code jobId}, else a message, stamped where it stands in the queue. */
-	private AMap<AString, ACell> sessionEnvelope(Blob sessionId, AString caller, AString jobId, ACell message) {
+	private AMap<AString, ACell> sessionEnvelope(AString caller, Blob jobId, ACell message) {
 		AMap<AString, ACell> envelope = Maps.of(
 			Fields.CALLER, caller,
-			Fields.SESSION_ID, Strings.create(sessionId.toHexString()),
 			Fields.MESSAGE, message);
 		return (jobId != null) ? envelope.assoc(Fields.JOB_ID, jobId) : queued(envelope);
 	}
@@ -4263,10 +4341,10 @@ public class AgentAdapter extends AAdapter {
 	 */
 	public void trackCall(AString ownerDID, AString agentId, Blob sessionId, Blob taskId, Job job,
 			AMap<AString, ACell> call) {
-		Agent agent = getAgent(ownerDID, agentId);
+		Agent agent = engine.getAgent(ownerDID, agentId);
 		if (agent == null) return;
-		AMap<AString, ACell> entry = Maps.of(Fields.SESSION_ID, Strings.create(sessionId.toHexString()));
-		if (taskId != null) entry = entry.assoc(Fields.TASK_ID, Strings.create(taskId.toHexString()));
+		AMap<AString, ACell> entry = Maps.of(Fields.SESSION_ID, sessionId);
+		if (taskId != null) entry = entry.assoc(Fields.TASK_ID, taskId);
 		for (AString key : List.of(Fields.TOOL_CALL_ID, Fields.TOOL_NAME)) {
 			ACell value = RT.getIn(call, key);
 			if (value != null) entry = entry.assoc(key, value);
@@ -4319,30 +4397,32 @@ public class AgentAdapter extends AAdapter {
 			Agent agent = (owner == null) ? null : owner.agent(agentId);
 			if (agent == null || agent.getRecord() == null) return null;
 			ACell entry = agent.getPending().get(jobId);
-			AString sid = RT.ensureString(RT.getIn(entry, Fields.SESSION_ID));
+			Blob sid = Ids.stored(RT.getIn(entry, Fields.SESSION_ID));
 			if (sid == null) return null;
-			AString taskHex = RT.ensureString(RT.getIn(entry, Fields.TASK_ID));
+			Blob taskId = Ids.stored(RT.getIn(entry, Fields.TASK_ID));
 			agent.removePending(jobId);
-			boolean delivered = deliverToWaiter(draft, ownerDID, agentId, Blob.fromHex(sid.toString()),
-				(taskHex != null) ? Blob.fromHex(taskHex.toString()) : null, callMadeBy(record),
+			// The call's own outcome: the venue hands it back as the agent step's, vouching for whoever made the call
+			AString madeBy = callMadeBy(record, ownerDID);
+			AVector<ACell> route = Vectors.of(RequestContext.routeRecord(ADAPTER_NAME, madeBy, Maps.empty(), null));
+			boolean delivered = deliverToWaiter(draft, ownerDID, agentId, sid, taskId, madeBy, route,
 				Strings.create(jobId.toHexString()), callOutcome(jobId, record, entry),
 				Agent.SOURCE_TOOL_OUTCOME);
-			return new CallDelivery(delivered, taskHex);
+			return new CallDelivery(delivered, taskId);
 		});
 		if (delivery == null) return false;
 		if (!delivery.delivered()) {
 			log.info("Outcome of job {} not delivered: agent {} has no such session", jobId, agentId);
-			if (delivery.waitingTask() != null) failIfStranded(ownerDID, agentId, Blob.fromHex(delivery.waitingTask().toString()));
+			if (delivery.waitingTask() != null) failIfStranded(ownerDID, agentId, delivery.waitingTask());
 		}
 		return delivery.delivered();
 	}
 
 	/** Whether a tracked call's outcome reached its waiter, and the task that waited on it, or null. */
-	private record CallDelivery(boolean delivered, AString waitingTask) {}
+	private record CallDelivery(boolean delivered, Blob waitingTask) {}
 
 	/** Fails a parked task with nothing left to wait on or run on ({@link #yieldIsBacked}). */
 	private void failIfStranded(AString ownerDID, AString agentId, Blob taskId) {
-		Agent agent = getAgent(ownerDID, agentId);
+		Agent agent = engine.getAgent(ownerDID, agentId);
 		Index<Blob, ACell> tasks = (agent == null) ? null : agent.getTasks();
 		ACell row = (tasks == null) ? null : tasks.get(taskId);
 		if (Task.isParked(row) && !yieldIsBacked(agent, ownerDID, agentId, taskId, row)) {
@@ -4350,9 +4430,9 @@ public class AgentAdapter extends AAdapter {
 		}
 	}
 
-	/** The principal that made a tracked call: its job's {@code caller}. */
-	static AString callMadeBy(AMap<AString, ACell> record) {
-		return Attribution.caller(record);
+	/** The principal that made a tracked call: its job's {@code caller}, read against {@code account}, which keeps the job. */
+	static AString callMadeBy(AMap<AString, ACell> record, AString account) {
+		return Attribution.caller(record, account);
 	}
 
 	/**
@@ -4365,7 +4445,7 @@ public class AgentAdapter extends AAdapter {
 	 */
 	static AMap<AString, ACell> callOutcome(Blob jobId, AMap<AString, ACell> record, ACell entry) {
 		AString status = RT.ensureString(record.get(Fields.STATUS));
-		AMap<AString, ACell> outcome = Maps.of(Fields.JOB_ID, Strings.create(jobId.toHexString()));
+		AMap<AString, ACell> outcome = Maps.of(Fields.JOB_ID, jobId);
 		for (AString key : List.of(Fields.TOOL_CALL_ID, Fields.TOOL_NAME)) {
 			ACell value = RT.getIn(entry, key);
 			if (value != null) outcome = outcome.assoc(key, value);
@@ -4384,7 +4464,7 @@ public class AgentAdapter extends AAdapter {
 	/** Work is a session message waiting, or a task with something to run on
 	 *  ({@link Agent#isTaskReady}); a parked task is not work. */
 	private boolean hasWork(Agent agent) {
-		return agent.hasSessionPending() || agent.hasReadyTask(engine.currentTimestamp().longValue());
+		return agent.sessions().hasPending() || agent.hasReadyTask(engine.currentTimestamp().longValue());
 	}
 
 	// ========== Run loop ==========
@@ -4395,7 +4475,7 @@ public class AgentAdapter extends AAdapter {
 	 * {@code hasWork()} at the top of the next iteration, same criterion
 	 * used at launch time.
 	 */
-	private record IterResult(ACell lastResult, AMap<AString, ACell> allTaskResults) {}
+	private record IterResult(ACell lastResult, Index<Blob, ACell> allTaskResults) {}
 
 	/**
 	 * Runs an agent's cycle loop on a single virtual thread. Each iteration:
@@ -4424,12 +4504,12 @@ public class AgentAdapter extends AAdapter {
 	@SuppressWarnings("unchecked")
 	private void executeRunLoop(AString agentId, AString ownerDID, CompletableFuture<ACell> completion) {
 		// Each cycle runs under the agent's harness context (Engine.harnessContext)
-		// — never a waking caller's: in ownerDID's namespace, attributed to the
-		// agent's own sub-principal DID, acting with its controller's authority.
+		// — never a waking caller's: its controller's frame, driving the agent's
+		// execution in ownerDID's account.
 		final AgentKey key = new AgentKey(ownerDID, agentId);
 		ACell lastResult = null;
 		int iteration = 0;
-		AMap<AString, ACell> allTaskResults = Maps.empty();
+		Index<Blob, ACell> allTaskResults = Index.none();
 		boolean firstIteration = true;
 		// Stuck-task detection (#215): the oldest task is re-presented every
 		// cycle until it resolves, so the same task id recurring for the whole
@@ -4457,7 +4537,7 @@ public class AgentAdapter extends AAdapter {
 					break;
 				}
 
-				Agent agent = getAgent(ownerDID, agentId);
+				Agent agent = engine.getAgent(ownerDID, agentId);
 				if (agent == null) {
 					run.end(Agent.TERMINATED);
 					completion.completeExceptionally(
@@ -4473,11 +4553,7 @@ public class AgentAdapter extends AAdapter {
 				// handleSuspend) flipped our status while we were between
 				// iterations, exit promptly. The merge step preserves the
 				// status via the same rule, so we won't clobber it here.
-				AString curStatus = agent.getStatus();
-				if (Agent.SUSPENDED.equals(curStatus)
-						|| Agent.TERMINATED.equals(curStatus)) {
-					break;
-				}
+				if (agent.isStopped()) break;
 
 				// Shutdown: stop here. Tasks and chats stay queued durably; the
 				// next boot restores their Jobs and wakes the agent (recoverJob).
@@ -4537,12 +4613,11 @@ public class AgentAdapter extends AAdapter {
 				// presented. A session's cycle takes its first chat and the
 				// messages ahead of it; a task's cycle takes only those messages,
 				// since its reply is the task's (Session.taken).
-				AString pickedSession = pick.session();
-				Blob pickedSessionBlob = storedId(pickedSession);
+				Blob pickedSession = pick.session();
 				AMap<AString, ACell> pickedSessionRecord = null;
 				AVector<ACell> filteredInbox = Vectors.empty();
-				if (pickedSessionBlob != null) {
-					pickedSessionRecord = agent.getSession(pickedSessionBlob);
+				if (pickedSession != null) {
+					pickedSessionRecord = agent.session(pickedSession).getRecord();
 					if (pickedSessionRecord != null) {
 						filteredInbox = Session.taken(pickedSessionRecord, pickedTask == null);
 						pickedSessionRecord = pickedSessionRecord.assoc(Agent.KEY_PENDING, filteredInbox);
@@ -4560,12 +4635,12 @@ public class AgentAdapter extends AAdapter {
 				ACell claim = Blob.createRandom(new java.util.Random(), 8);
 				// A continuation keeps its own sender's provenance, not the requester's
 				AVector<ACell> inputTurns = cycleInputTurns(filteredInbox, pickedTaskInput,
-					(pickedTask != null) ? Strings.create(pickedTask.getKey().toHexString()) : null,
+					(pickedTask != null) ? pickedTask.getKey() : null,
 					(pickedTask != null) ? Task.nextInputSource(pickedTask.getValue()) : null, startTs);
 				Agent.CycleStart started = agent.beginCycle(
 					(pickedTask != null) ? pickedTask.getKey() : null,
 					(pickedTask != null) ? pickedTask.getValue() : null,
-					(pickedSessionRecord != null) ? pickedSessionBlob : null,
+					(pickedSessionRecord != null) ? pickedSession : null,
 					claim, inputTurns, filteredInbox.count());
 				// Stopped, the top of the loop exits. Moved, what was picked changed
 				// since and nothing was taken, so pick again.
@@ -4578,17 +4653,16 @@ public class AgentAdapter extends AAdapter {
 				}
 
 				// Per-cycle ctx: the harness as the agent's controller stands now,
-				// read each cycle as its config is, scoped to the agent, picked
-				// task, and session so path resolvers (n/, t/, c/) can address the
-				// right slot, and agent:completeTask / agent:failTask can identify
-				// which agent + task they're acting on, under the cycle's claim.
+				// read each cycle as its config is, driving the agent's execution
+				// with the picked task and session and the cycle's claim, so its
+				// steps (Engine.stepContext) address the right slot (n/, t/, c/)
+				// and agent:completeTask / agent:failTask the right agent and task.
+				// The scope is the agent's whatever account the controller's frame
+				// is in, so it is set whole (RequestContext.inExecution).
 				RequestContext harness = engine.harnessContext(ownerDID, agentId);
-				RequestContext cycleCtx = harness.withAgentId(agentId).withClaim(claim);
-				if (pickedTask != null) {
-					cycleCtx = cycleCtx.withTaskId(pickedTask.getKey(),
-						Task.revision(pickedTask.getValue()));
-				}
-				if (pickedSessionBlob != null) cycleCtx = cycleCtx.withSessionId(pickedSessionBlob);
+				RequestContext cycleCtx = harness.inExecution(new RequestContext.ExecutionScope(ownerDID, agentId, null,
+					pickedSession, (pickedTask != null) ? pickedTask.getKey() : null,
+					(pickedTask != null) ? Task.revision(pickedTask.getValue()) : -1L, claim));
 
 				// PENDING means accepted and queued. STARTED begins when a cycle
 				// takes the work: a request when its task is picked, a chat when
@@ -4599,7 +4673,7 @@ public class AgentAdapter extends AAdapter {
 						taskJob.setStatus(Status.STARTED);
 					}
 				}
-				if (pickedSessionRecord != null) startTakenChats(key, pickedSessionBlob, filteredInbox);
+				if (pickedSessionRecord != null) startTakenChats(key, pickedSession, filteredInbox);
 
 				AMap<AString, ACell> transitionInput = Maps.of(
 					Fields.AGENT_ID, agentId,
@@ -4613,10 +4687,7 @@ public class AgentAdapter extends AAdapter {
 					// The task is keyed by the delegating agent:request Job id; carry it
 					// so a frame-owning harness can tie the request turn back to the
 					// calling job, exactly as chat turns record their job id (#378).
-					if (pickedTask != null) {
-						transitionInput = transitionInput.assoc(Fields.JOB_ID,
-							Strings.create(pickedTask.getKey().toHexString()));
-					}
+					if (pickedTask != null) transitionInput = transitionInput.assoc(Fields.JOB_ID, pickedTask.getKey());
 				}
 				// The session as picked, its pending listing the messages this cycle
 				// took, and the cycle's claim on it: a runtime that keeps its frames
@@ -4651,7 +4722,7 @@ public class AgentAdapter extends AAdapter {
 				// The live tap (#394): announce the cycle with what it was given
 				// and hand the transition the handle it emits through.
 				AgentEvents.Cycle cycle = run.beginCycle(pickedSession,
-					(pickedTask != null) ? Strings.create(pickedTask.getKey().toHexString()) : null,
+					(pickedTask != null) ? pickedTask.getKey() : null,
 					cycleStartData(transitionOp, filteredInbox, formattedTasks, resolvedPending));
 				CompletableFuture<ACell> transitionFuture =
 					engine.jobs().invokeInternal(transitionOp, transitionInput,
@@ -4692,8 +4763,7 @@ public class AgentAdapter extends AAdapter {
 
 				IterResult merged = mergeAndPostProcess(
 					agent, agentId, ownerDID, transitionOp, framesOwned, transitionResult, currentState, pickedTask,
-					pickedTaskInput, formattedTasks, pickedSession,
-					pickedSessionBlob, filteredInbox, resolvedPending,
+					pickedTaskInput, formattedTasks, pickedSession, filteredInbox, resolvedPending,
 					startTs, allTaskResults, cannotContinue, claim, cycle);
 				// A stopped cycle merged nothing: the top of the loop exits, or
 				// carries on with the work of an agent resumed since
@@ -4705,7 +4775,7 @@ public class AgentAdapter extends AAdapter {
 
 			// Clean exit clears the persisted executor marker. The atomic sleep
 			// preserves an administrative stop/terminal state set while running.
-			Agent agent = getAgent(ownerDID, agentId);
+			Agent agent = engine.getAgent(ownerDID, agentId);
 			AString finalStatus = Agent.SLEEPING;
 			if (agent != null) {
 				agent.sleep();
@@ -4749,7 +4819,7 @@ public class AgentAdapter extends AAdapter {
 			// No re-check during shutdown: wakeAgent refuses new loops, and the
 			// store may already be closed.
 			if (!engine.isClosing()) {
-				Agent agent = getAgent(ownerDID, agentId);
+				Agent agent = engine.getAgent(ownerDID, agentId);
 				if (agent != null && Agent.SLEEPING.equals(agent.getStatus())
 						&& hasWork(agent)) {
 					wakeAgent(ownerDID, agentId, false);
@@ -4774,9 +4844,8 @@ public class AgentAdapter extends AAdapter {
 			AString transitionOp, boolean framesOwned,
 			ACell transitionResult, ACell snapshotState, Map.Entry<Blob, ACell> pickedTask,
 			ACell pickedTaskInput, AVector<ACell> formattedTasks,
-			AString pickedSession, Blob pickedSessionBlob,
-			AVector<ACell> filteredInbox, ACell pending,
-			long startTs, AMap<AString, ACell> allTaskResults, boolean cannotContinue,
+			Blob pickedSession, AVector<ACell> filteredInbox, ACell pending,
+			long startTs, Index<Blob, ACell> allTaskResults, boolean cannotContinue,
 			ACell claim, AgentEvents.Cycle tap) {
 		final AgentKey key = new AgentKey(callerDID, agentId);
 		long endTs = engine.currentTimestamp().longValue();
@@ -4808,12 +4877,13 @@ public class AgentAdapter extends AAdapter {
 			K_END, CVMLong.create(endTs),
 			Fields.OP, transitionOp,
 			Fields.RESULT, result);
-		// Only include non-empty collections to avoid bloat
+		// Only include non-empty collections to avoid bloat. The timeline is a
+		// view outside the runtime, so routes stay out of it
 		if (formattedTasks != null && formattedTasks.count() > 0) {
-			timelineEntry = timelineEntry.assoc(Fields.TASKS, formattedTasks);
+			timelineEntry = timelineEntry.assoc(Fields.TASKS, withoutRoutes(formattedTasks));
 		}
 		if (filteredInbox != null && filteredInbox.count() > 0) {
-			timelineEntry = timelineEntry.assoc(Fields.MESSAGES, filteredInbox);
+			timelineEntry = timelineEntry.assoc(Fields.MESSAGES, withoutRoutes(filteredInbox));
 		}
 
 		// The cycle's exchange with the model (#392): the root frame's standing
@@ -4852,7 +4922,7 @@ public class AgentAdapter extends AAdapter {
 		// input is already there, written when the cycle began; a runtime that
 		// keeps its frames live has written its turns itself.
 		AVector<ACell> turnsToAppend = Vectors.empty();
-		if (pickedSessionBlob != null && leanError == null && !framesOwned) {
+		if (pickedSession != null && leanError == null && !framesOwned) {
 			if (transitionTurns != null) {
 				for (long i = 0; i < transitionTurns.count(); i++) {
 					AMap<AString, ACell> turn = normaliseTransitionTurn(
@@ -4900,7 +4970,7 @@ public class AgentAdapter extends AAdapter {
 		long parkedAt = (pickedTask != null && leanError == null) ? engine.jobs().nextSequence() : 0L;
 		Merge merge = engine.getVenueState().transact(draft -> {
 			Handback run = new Handback(callerDID, agentId, writeContexts);
-			Agent current = draft.users().at(callerDID).agentAt(agentId);
+			Agent current = draft.users().at(callerDID).agents().at(agentId);
 			if (!current.holdsClaim(claim)) {
 				AMap<AString, ACell> record = (current.getRecord() == null) ? null : current.recordStoppedCycle(
 					cycleEntry.assoc(Fields.RESULT, Strings.create(TRANSITION_CANCELLED)).assoc(Fields.CANCELLED, CVMBool.TRUE));
@@ -4913,10 +4983,10 @@ public class AgentAdapter extends AAdapter {
 			} else if (pickedTask != null && leanError == null) {
 				parked = settleOpenTask(current, pickedTask, leanResponse, wakeRequested, startTs, parkedAt);
 			}
-			AMap<AString, ACell> results = run.taskResults(current);
+			Index<Blob, ACell> results = run.taskResults(current);
 			AMap<AString, ACell> record = current.mergeRunResult(snapshotState, newState, results,
 				(results == null) ? cycleEntry : cycleEntry.assoc(Fields.TASK_RESULTS, results),
-				pickedSessionBlob, cycleTurns, cycleTokens);
+				pickedSession, cycleTurns, cycleTokens);
 			run.settleAll(draft, current);
 			return new Merge(record, run, false, parked);
 		});
@@ -4926,14 +4996,14 @@ public class AgentAdapter extends AAdapter {
 			// carry the suspension, and its work waits for the resume
 			AString detail = Agent.suspensionDetail(merged);
 			if (detail == null) detail = Strings.create(TRANSITION_CANCELLED);
-			if (merged != null && Agent.SUSPENDED.equals(merged.get(Agent.KEY_STATUS))) {
+			if (Agent.SUSPENDED.equals(Agent.status(merged))) {
 				holdForResume(callerDID, agentId, detail.toString());
 			}
 			tap.end(Maps.of(Fields.ERROR, detail, Fields.CANCELLED, CVMBool.TRUE));
 			return null;
 		}
 		Handback handback = merge.handback();
-		AMap<AString, ACell> taskResults = handback.results();
+		Index<Blob, ACell> taskResults = handback.results();
 		// Accumulate task results across iterations
 		if (taskResults != null) {
 			for (var entry : taskResults.entrySet()) {
@@ -4962,29 +5032,26 @@ public class AgentAdapter extends AAdapter {
 		if (scheduler != null && leanError == null) {
 			Blob pickedThreadId = null;
 			Agent.ThreadKind pickedKind = null;
-			AMap<AString, ACell> pickedRecord = null;
-			ACell wakeAtPick = null;
+			long wakeAtPick = 0;
+			long wakeNow = 0;
 			if (pickedTask != null) {
 				pickedThreadId = pickedTask.getKey();
 				pickedKind = Agent.ThreadKind.TASK;
-				Index<Blob, ACell> currentTasks = agent.getTasks();
-				ACell tRec = (currentTasks != null) ? currentTasks.get(pickedThreadId) : null;
-				if (tRec instanceof AMap) pickedRecord = (AMap<AString, ACell>) tRec;
-				wakeAtPick = RT.getIn(pickedTask.getValue(), Fields.WAKE_TIME);
-			} else if (pickedSessionBlob != null) {
-				pickedThreadId = pickedSessionBlob;
+				wakeAtPick = Task.wakeTime(pickedTask.getValue());
+				wakeNow = Task.wakeTime(agent.getTasks().get(pickedThreadId));
+			} else if (pickedSession != null) {
+				pickedThreadId = pickedSession;
 				pickedKind = Agent.ThreadKind.SESSION;
-				pickedRecord = agent.getSession(pickedSessionBlob);
 				// Only a transition sets a session's wake, so whatever it holds is the one picked
-				wakeAtPick = (pickedRecord != null) ? pickedRecord.get(Fields.WAKE_TIME) : null;
+				wakeNow = agent.session(pickedSession).wakeTime();
+				wakeAtPick = wakeNow;
 			}
 			if (pickedThreadId != null) {
 				ACell wtCell = RT.getIn(transitionResult, Fields.WAKE_TIME);
 				long requestedWake = (wtCell instanceof CVMLong cl) ? cl.longValue() : 0L;
-				ACell wakeNow = (pickedRecord != null) ? pickedRecord.get(Fields.WAKE_TIME) : null;
 				boolean spent = (pickedKind == Agent.ThreadKind.TASK)
 					? spentWake(wakeNow, wakeAtPick, startTs)
-					: (wakeNow instanceof CVMLong && wakeNow.equals(wakeAtPick));
+					: wakeNow > 0;
 				if (requestedWake > 0 || spent) {
 					scheduler.setThreadWakeTime(callerDID, agent,
 						pickedKind, pickedThreadId, requestedWake);
@@ -5014,12 +5081,13 @@ public class AgentAdapter extends AAdapter {
 		// reply is its own. Same post-merge ordering as task completion. A
 		// cycle that ends without a reply has said nothing, which answers the
 		// chat with no response; a failed cycle fails it instead, below.
-		if (leanError == null && pickedSessionBlob != null) {
-			ConcurrentHashMap<Blob, Job> waiters = sessionChats(key, pickedSessionBlob);
+		if (leanError == null && pickedSession != null) {
+			ConcurrentHashMap<Blob, Job> waiters = sessionChats(key, pickedSession);
 			if (waiters != null) {
 				for (Job chatJob : removeTakenChats(waiters).values()) {
 					if (cycleTokens != null) attachTokens(chatJob, cycleTokens);
-					AMap<AString, ACell> answer = Maps.of(Fields.AGENT_ID, agentId, Fields.SESSION_ID, pickedSession);
+					AMap<AString, ACell> answer = Maps.of(Fields.AGENT_ID, agentId,
+						Fields.SESSION_ID, pickedSession);
 					chatJob.completeWith((leanResponse == null) ? answer : answer.assoc(Fields.RESPONSE, leanResponse));
 				}
 			}
@@ -5029,7 +5097,7 @@ public class AgentAdapter extends AAdapter {
 		// task above, and here the chats it was answering. Work it never took
 		// stays queued, and the agent carries on with it.
 		if (leanError != null && !cannotContinue) {
-			failTakenChats(key, pickedSessionBlob, leanError.toString(), cycleTokens);
+			failTakenChats(key, pickedSession, leanError.toString(), cycleTokens);
 		}
 
 		// An agent that cannot continue — its model setup is wrong, its
@@ -5049,7 +5117,7 @@ public class AgentAdapter extends AAdapter {
 		ACell lastResult = Maps.of(
 			Fields.AGENT_ID, agentId,
 			Fields.ADDRESS, Strings.create(callerDID + "/g/" + agentId),
-			Fields.STATUS, cannotContinue ? Agent.SUSPENDED : merged.get(Agent.KEY_STATUS),
+			Fields.STATUS, cannotContinue ? Agent.SUSPENDED : Agent.status(merged),
 			Fields.RESULT, result,
 			Fields.TASK_RESULTS, allTaskResults);
 
@@ -5059,9 +5127,9 @@ public class AgentAdapter extends AAdapter {
 	/**
 	 * Whether a transition's failure means the agent cannot continue, rather
 	 * than that the work it took failed: the transition said so
-	 * ({@link CannotContinueException}), or the failure is a fault, reported
-	 * and logged where it happened, which would meet every unit of work the
-	 * same way (AGENT_LOOP.md §3.4).
+	 * ({@link CannotContinueException}), or the failure is the venue's own (a
+	 * fault, or an integrity failure), logged where it happened, which would
+	 * meet every unit of work the same way (AGENT_LOOP.md §3.4).
 	 */
 	private static boolean agentCannotContinue(Throwable failure) {
 		return CannotContinueException.find(failure) != null || !isExpectedFailure(failure);
@@ -5092,7 +5160,7 @@ public class AgentAdapter extends AAdapter {
 	 */
 	private void holdForResume(AString ownerDID, AString agentId, String error) {
 		AgentKey key = new AgentKey(ownerDID, agentId);
-		Agent agent = getAgent(ownerDID, agentId);
+		Agent agent = engine.getAgent(ownerDID, agentId);
 		if (agent == null) return;
 		handBackResolved(ownerDID, agentId);
 		ConcurrentHashMap<Blob, ConcurrentHashMap<Blob, Job>> agentChats = activeChats.get(key);
@@ -5128,18 +5196,24 @@ public class AgentAdapter extends AAdapter {
 
 	/**
 	 * Stamps a user turn with the provenance its envelope or task record carries
-	 * (COG-20 §4): the caller, the authentication record when there is one, and
-	 * the venue's mark on a tracked call's outcome ({@link Agent#SOURCE_TOOL_OUTCOME}).
+	 * (COG-20 §4): the caller and the route when there are any, and the venue's
+	 * mark on a tracked call's outcome ({@link Agent#SOURCE_TOOL_OUTCOME}). A
+	 * record stored before routes carries its channel's authentication record
+	 * instead, which is copied as it is, so its turn renders as it always has.
 	 */
 	public static AMap<AString, ACell> withRecordedProvenance(AMap<AString, ACell> turn, ACell source) {
-		ACell caller = RT.getIn(source, Fields.CALLER);
-		if (caller != null) turn = turn.assoc(Fields.CALLER, caller);
+		for (AString key : RECORDED_PROVENANCE) {
+			ACell value = RT.getIn(source, key);
+			if (value != null) turn = turn.assoc(key, value);
+		}
 		if (Agent.SOURCE_TOOL_OUTCOME.equals(RT.getIn(source, Agent.K_SOURCE))) {
 			turn = turn.assoc(Agent.K_SOURCE, Agent.SOURCE_TOOL_OUTCOME);
 		}
-		ACell authentication = RT.getIn(source, Fields.AUTHENTICATION);
-		return (authentication == null) ? turn : turn.assoc(Fields.AUTHENTICATION, authentication);
+		return turn;
 	}
+
+	/** What a turn copies from its envelope or task record: who sent it and how it came. */
+	private static final AString[] RECORDED_PROVENANCE = {Fields.CALLER, Fields.ROUTE, Fields.AUTHENTICATION};
 
 	/**
 	 * The user turns for a cycle's input, in order: one per presented message,
@@ -5213,7 +5287,7 @@ public class AgentAdapter extends AAdapter {
 			AVector<ACell> tasks, AVector<ACell> pending) {
 		AVector<ACell> jobs = Vectors.empty();
 		for (long i = 0; inbox != null && i < inbox.count(); i++) {
-			ACell jobId = RT.getIn(inbox.get(i), Fields.JOB_ID);
+			Blob jobId = Session.chatJob(inbox.get(i));
 			if (jobId != null) jobs = jobs.conj(jobId);
 		}
 		AMap<AString, ACell> data = Maps.of(
@@ -5313,7 +5387,7 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	/** What a cycle works on: a task, in its session if it has one, or else a session's queued messages. */
-	private record Pick(Map.Entry<Blob, ACell> task, AString session) {}
+	private record Pick(Map.Entry<Blob, ACell> task, Blob session) {}
 
 	/**
 	 * Picks the oldest work in the agent's queue (AGENT_SESSIONS.md §5.5.2):
@@ -5335,15 +5409,15 @@ public class AgentAdapter extends AAdapter {
 				taskKey = key;
 			}
 		}
-		Blob sid = agent.oldestSessionWithPending();
+		Blob sid = agent.sessions().oldestWithPending();
 		if (sid != null && task != null) {
-			AVector<ACell> pending = Session.taken(agent.getSession(sid), true);
+			AVector<ACell> pending = Session.taken(agent.session(sid).getRecord(), true);
 			if (pending.count() == 0 || Session.queueKey(pending.get(0)) >= taskKey) sid = null;
 		}
 		if (task == null || sid != null) {
-			return new Pick(null, (sid == null) ? null : Strings.create(sid.toHexString()));
+			return new Pick(null, sid);
 		}
-		return new Pick(task, RT.ensureString(RT.getIn(task.getValue(), Fields.SESSION_ID)));
+		return new Pick(task, Task.sessionId(task.getValue()));
 	}
 
 	/**
@@ -5356,10 +5430,11 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	/**
-	 * Formats one canonical taskdata entry — {input, caller, authentication?,
+	 * Formats one canonical taskdata entry — {input, caller, route?,
 	 * created, responseSchema?, strict?, t, sessionId?, goals?} — into the
-	 * transition wire shape {jobId, input, caller?, authentication?,
-	 * responseSchema?, strict?}.
+	 * transition wire shape {jobId, input, caller?, route?,
+	 * responseSchema?, strict?}, which the agent's own runtime reads. A task
+	 * stored before routes carries {@code authentication} in their place.
 	 */
 	@SuppressWarnings("unchecked")
 	private static AMap<AString, ACell> formatTask(Blob jobId, ACell raw) {
@@ -5368,7 +5443,7 @@ public class AgentAdapter extends AAdapter {
 		ACell responseSchema = (taskMap != null) ? taskMap.get(Fields.RESPONSE_SCHEMA) : null;
 		ACell strict = (taskMap != null) ? taskMap.get(Fields.STRICT) : null;
 		AMap<AString, ACell> task = withRecordedProvenance(Maps.of(
-			Fields.JOB_ID, taskIdHex(jobId),
+			Fields.JOB_ID, jobId,
 			Fields.INPUT, taskInput), taskMap);
 		if (responseSchema != null) task = task.assoc(Fields.RESPONSE_SCHEMA, responseSchema);
 		if (strict != null) task = task.assoc(Fields.STRICT, strict);
@@ -5390,7 +5465,7 @@ public class AgentAdapter extends AAdapter {
 			AMap<AString, ACell> jobData = engine.jobs().getJobData(jobId);
 			ACell payload = (jobData != null) ? jobData.get(payloadField) : snapshot;
 			AMap<AString, ACell> info = Maps.of(
-				Fields.JOB_ID, taskIdHex(jobId),
+				Fields.JOB_ID, jobId,
 				Fields.STATUS, (jobData != null) ? jobData.get(Fields.STATUS) : null,
 				payloadField, payload);
 			// A job that did not complete says why: the reason is what the
@@ -5427,7 +5502,7 @@ public class AgentAdapter extends AAdapter {
 	 */
 	private boolean yieldIsBacked(Agent agent, AString ownerDID, AString agentId,
 			Blob taskId, ACell row) {
-		if (RT.getIn(row, Fields.WAKE_TIME) instanceof CVMLong) return true;
+		if (Task.wakeTime(row) > 0) return true;
 		if (agent.hasPendingFor(taskId)) return true;
 		return agent.hasNewWorkFor(row, engine.currentTimestamp().longValue());
 	}
@@ -5450,9 +5525,9 @@ public class AgentAdapter extends AAdapter {
 		Blob taskId = picked.getKey();
 		ACell row = agent.getTasks().get(taskId);
 		if (row == null || agent.getResolved().get(taskId) != null) return false;
+		long wake = Task.wakeTime(row);
 		boolean comesBack = wakeRequested
-			|| (RT.getIn(row, Fields.WAKE_TIME) instanceof CVMLong wake
-				&& !spentWake(wake, RT.getIn(picked.getValue(), Fields.WAKE_TIME), startTs))
+			|| (wake > 0 && !spentWake(wake, Task.wakeTime(picked.getValue()), startTs))
 			|| agent.hasPendingFor(taskId)
 			|| Task.hasUnshownInput(row)
 			|| agent.hasSessionWorkFor(row);
@@ -5462,8 +5537,8 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	/** Whether {@code wake} is the one that was due when the cycle starting at {@code startTs} took its thread: that cycle spent it. */
-	private static boolean spentWake(ACell wake, ACell wakeAtPick, long startTs) {
-		return wakeAtPick instanceof CVMLong picked && picked.longValue() <= startTs && picked.equals(wake);
+	private static boolean spentWake(long wake, long wakeAtPick, long startTs) {
+		return wakeAtPick > 0 && wakeAtPick <= startTs && wakeAtPick == wake;
 	}
 
 	/**
@@ -5548,7 +5623,7 @@ public class AgentAdapter extends AAdapter {
 	 * Each surviving Job is failed with {@code error}.
 	 */
 	private void failAllPendingForAgent(AString callerDID, AString agentId, String error) {
-		Agent agent = getAgent(callerDID, agentId);
+		Agent agent = engine.getAgent(callerDID, agentId);
 		failHeldWork(new AgentKey(callerDID, agentId), (agent == null) ? null : agent.getRecord(), error);
 	}
 
@@ -5598,7 +5673,7 @@ public class AgentAdapter extends AAdapter {
 
 	private void suspendOnError(AString callerDID, AString agentId, String failure) {
 		try {
-			Agent agent = getAgent(callerDID, agentId);
+			Agent agent = engine.getAgent(callerDID, agentId);
 			if (agent != null) {
 				AString error = Strings.create(failure);
 				agent.suspend(error);
@@ -5611,21 +5686,11 @@ public class AgentAdapter extends AAdapter {
 
 	// ========== Agent lookup ==========
 
-	private Agent getAgent(AString callerDID, AString agentId) {
-		Users users = engine.getVenueState().users();
-		User user = users.user(callerDID);
-		if (user == null) return null;
-		Agent agent = user.agent(agentId);
-		if (agent == null) return null;
-		if (Agent.TERMINATED.equals(agent.getStatus())) return null;
-		return agent;
-	}
-
 	/** Why an operation on an agent fails when it is absent or deleted; the agent's address fills it. */
 	public static final String AGENT_NOT_FOUND = "Agent '%s' was not found or is terminated; use agent:list or agent:create";
 
 	private Agent lookupAgent(Job job, AgentTarget target) {
-		Agent agent = getAgent(target.ownerDID(), target.agentId());
+		Agent agent = engine.getAgent(target.ownerDID(), target.agentId());
 		if (agent == null) job.fail(AGENT_NOT_FOUND.formatted(target.address()));
 		return agent;
 	}
@@ -5651,11 +5716,79 @@ public class AgentAdapter extends AAdapter {
 		}
 	}
 
+	/** Whether this instance has recovered its agents ({@link #recoverAgents}) in this process. */
+	private volatile boolean agentsRecovered;
+
 	/**
-	 * Boot scan: wakes every agent with durable queued work — pending session
-	 * envelopes or queued tasks. A stale {@code inCycle} claim is abandoned
-	 * executor state, not work and not a resume checkpoint. Called once after
-	 * {@code recoverJobs()} stabilises job records.
+	 * Takes up, when this adapter starts on a running venue (enable or
+	 * restart), the agents it left while stopped: each with work that is not
+	 * running is woken. Only once its agents are recovered: at launch the venue
+	 * recovers them, and wakes a started adapter's, after recovering jobs.
+	 */
+	@Override
+	public void start() {
+		if (engine.isStarted() && agentsRecovered) wakeIdleAgentsWithWork();
+	}
+
+	/**
+	 * Wakes each agent with work ({@link #hasWork}) that is not running, as
+	 * {@link #wakeAgent} does for one. Unlike {@link #recoverAgents} it
+	 * reconciles nothing: no executor has been lost since that ran.
+	 *
+	 * @return the number of agents woken
+	 */
+	private int wakeIdleAgentsWithWork() {
+		int woken = 0;
+		AMap<AString, ACell> all = engine.getVenueState().users().getAll();
+		if (all == null) return 0;
+		for (var userEntry : all.entrySet()) {
+			AString did = RT.ensureString(userEntry.getKey());
+			if (did == null) continue;
+			covia.venue.User user = engine.getVenueState().users().user(did);
+			if (user == null) continue;
+			AMap<AString, ACell> agents = user.agents().all();
+			for (AString agentId : agents.keySet()) {
+				try {
+					Agent agent = engine.getAgent(did, agentId);
+					if (agent == null || externalAgents().isExternal(agent)) continue;
+					if (isRunning(new AgentKey(did, agentId)) || !hasWork(agent)) continue;
+					wakeAgent(did, agentId, true);
+					woken++;
+				} catch (RuntimeException failure) {
+					reportAgentFailure(WAKING_AGENT, did, agentId, failure);
+				}
+			}
+		}
+		return woken;
+	}
+
+	/**
+	 * Boot scan: recovers every agent, then wakes each with durable queued
+	 * work — pending session envelopes or queued tasks. The venue runs it at
+	 * launch for a started adapter, once {@code recoverJobs()} has stabilised
+	 * job records; {@link #recoverAgents} is the same scan for one that is not
+	 * started.
+	 *
+	 * @return the number of agents woken
+	 */
+	public int wakeAgentsWithWork() {
+		return scanAgents(true);
+	}
+
+	/**
+	 * Boot scan without the wake, for an adapter that is installed but not
+	 * started: agents are recovered as {@link #wakeAgentsWithWork} recovers
+	 * them, and their queued work waits until this adapter {@linkplain #start
+	 * starts}.
+	 */
+	public void recoverAgents() {
+		scanAgents(false);
+	}
+
+	/**
+	 * Recovers every agent after a restart and, with {@code wake}, wakes each
+	 * with work. A stale {@code inCycle} claim is abandoned executor state,
+	 * not work and not a resume checkpoint.
 	 *
 	 * <p>Every agent's tracked calls are recovered before any agent is woken
 	 * ({@link #recoverTrackedCalls}), so a delivered outcome is work this scan
@@ -5668,7 +5801,8 @@ public class AgentAdapter extends AAdapter {
 	 *
 	 * @return the number of agents woken
 	 */
-	public int wakeAgentsWithWork() {
+	private int scanAgents(boolean wake) {
+		agentsRecovered = true;
 		int woken = 0;
 		int staleRuns = 0;
 		AMap<AString, ACell> all = engine.getVenueState().users().getAll();
@@ -5680,12 +5814,11 @@ public class AgentAdapter extends AAdapter {
 			if (did == null) continue;
 			covia.venue.User user = engine.getVenueState().users().user(did);
 			if (user == null) continue;
-			AMap<AString, ACell> agents = user.getAgents();
-			if (agents == null) continue;
+			AMap<AString, ACell> agents = user.agents().all();
 			for (var agentEntry : agents.entrySet()) {
 				AString agentId = agentEntry.getKey();
 				try {
-					Agent agent = getAgent(did, agentId);
+					Agent agent = engine.getAgent(did, agentId);
 					if (agent == null) continue;   // terminated / missing
 					if (externalAgents().isExternal(agent)) { externalAgents().reconcile(agent); continue; }
 					// This method is a startup hook, but keep it safe if an embedding
@@ -5723,7 +5856,7 @@ public class AgentAdapter extends AAdapter {
 					staleRuns++;
 				}
 				reconcileAgentAfterRestart(did, b.user(), agent);
-				if (hasWork(agent)) {
+				if (wake && hasWork(agent)) {
 					log.info("Waking agent {} — durable work found on boot", agentId);
 					wakeAgent(did, agentId, true);
 					woken++;
@@ -5750,7 +5883,19 @@ public class AgentAdapter extends AAdapter {
 	 * as the venue's.
 	 */
 	private static void notRecovered(AString ownerDID, AString agentId, RuntimeException failure) {
-		String what = NOT_RECOVERED.formatted(ownerDID + "/g/" + agentId);
+		reportAgentFailure(NOT_RECOVERED, ownerDID, agentId, failure);
+	}
+
+	/** What failed when an agent is not woken as this adapter starts; its address follows. */
+	public static final String WAKING_AGENT = "Waking agent %s";
+
+	/**
+	 * Reports that a step for agent {@code agentId} failed, which leaves the
+	 * agent as it is: an expected failure is logged with its reason; a fault,
+	 * once at ERROR with its stack, as the venue's.
+	 */
+	private static void reportAgentFailure(String step, AString ownerDID, AString agentId, RuntimeException failure) {
+		String what = step.formatted(ownerDID + "/g/" + agentId);
 		String reason = covia.exception.FaultException.describe(covia.exception.FaultException.VENUE, failure);
 		if (CoviaException.reasonOf(failure) != null) log.warn("{} failed: {}", what, reason);
 		else log.error(what + " failed: " + reason, failure);
@@ -5813,7 +5958,7 @@ public class AgentAdapter extends AAdapter {
 						&& Job.isFinished((AMap<AString, ACell>) map)) {
 					agent.removeTask(taskId);
 				} else if (Task.isParked(entry.getValue())
-						&& !(RT.getIn(entry.getValue(), Fields.WAKE_TIME) instanceof CVMLong)
+						&& Task.wakeTime(entry.getValue()) == 0
 						&& !agent.hasPendingFor(taskId)
 						&& !agent.hasNewWorkFor(entry.getValue(), engine.currentTimestamp().longValue())) {
 					failTask(ownerDID, agent.getAgentId(), taskId, TASK_WAIT_LOST);
@@ -5826,18 +5971,16 @@ public class AgentAdapter extends AAdapter {
 		Index<Blob, ACell> sessions = agent.getSessions();
 		if (sessions == null) return;
 		for (var entry : sessions.entrySet()) {
-			Blob sid = entry.getKey();
-			agent.clearSessionCycle(sid);
-			AVector<ACell> pending = agent.getSessionPending(sid);
-			if (pending == null) continue;
+			Session session = agent.session(entry.getKey());
+			session.clearCycle();
+			AVector<ACell> pending = session.pending();
 			for (long i = 0; i < pending.count(); i++) {
-				AString jobIdHex = RT.ensureString(RT.getIn(pending.get(i), Fields.JOB_ID));
-				Blob jobId = (jobIdHex != null) ? Blob.fromHex(jobIdHex.toString()) : null;
+				Blob jobId = Session.chatJob(pending.get(i));
 				if (jobId == null) continue; // fire-and-forget message, not a chat Job
 				ACell rawJob = user.jobs().getRecord(jobId);
 				if (!(rawJob instanceof AMap<?, ?> map)
 						|| Job.isFinished((AMap<AString, ACell>) map)) {
-					agent.session(sid).removePendingJob(jobId);
+					session.removePendingJob(jobId);
 				}
 			}
 		}
@@ -5861,7 +6004,7 @@ public class AgentAdapter extends AAdapter {
 	 */
 	private boolean failIfSuspended(Job job, Agent agent, AString agentId) {
 		AMap<AString, ACell> record = agent.getRecord();
-		if (record == null || !Agent.SUSPENDED.equals(record.get(Fields.STATUS))) return false;
+		if (!Agent.SUSPENDED.equals(Agent.status(record))) return false;
 		job.fail(SUSPENDED_CODE, SUSPENDED_REFUSAL.formatted(agentId, suspendedDetail(record),
 			Agent.suspensionDetail(record) != null ? SUSPENDED_ASK_ADVICE : SUSPENDED_RESUME_ADVICE));
 		return true;
@@ -5872,23 +6015,20 @@ public class AgentAdapter extends AAdapter {
 	private static String suspendedDetail(AMap<AString, ACell> record) {
 		if (record == null) return "";
 		AString stop = Agent.suspensionDetail(record);
-		ACell error = record.get(Agent.KEY_ERROR);
+		AString error = Agent.error(record);
 		return stop != null ? ": " + stop
 			: error != null ? ": " + error : "";
 	}
 
 	private Agent requireAgent(AString callerDID, AString agentId) {
-		Agent agent = getAgent(callerDID, agentId);
+		Agent agent = engine.getAgent(callerDID, agentId);
 		if (agent == null) throw new NotFoundException(AGENT_NOT_FOUND.formatted(agentId), agentId.toString());
 		return agent;
 	}
 
 	private AString resolveTransitionOp(AString callerDID, AString agentId) {
-		Agent agent = getAgent(callerDID, agentId);
-		if (agent == null) return null;
-		AMap<AString, ACell> config = agent.getConfig();
-		if (config == null) return null;
-		return RT.ensureString(config.get(Fields.OPERATION));
+		Agent agent = engine.getAgent(callerDID, agentId);
+		return (agent == null) ? null : agent.transitionOperation();
 	}
 
 	/**
@@ -5902,7 +6042,7 @@ public class AgentAdapter extends AAdapter {
 	 */
 	private AMap<AString, ACell> parseConfigArg(ACell configArg, RequestContext ctx) {
 		if (configArg == null) return null;
-		return canonicalCaps(resolveConfigValue(configArg, ctx, new ArrayList<>(), 0, "config"));
+		return expandedConfig(resolveConfigValue(configArg, ctx, new ArrayList<>(), 0, "config"));
 	}
 
 	/**
@@ -5930,10 +6070,20 @@ public class AgentAdapter extends AAdapter {
 		return shown.assoc(K_CAPS, covia.venue.Config.UNRESTRICTED);
 	}
 
-	/** {@code config} with each capability's {@code with} in the form it is stored in ({@link CapabilityChecker#canonicalResource}). */
-	private static AMap<AString, ACell> canonicalCaps(AMap<AString, ACell> config) {
-		AVector<ACell> caps = (config == null) ? null : RT.ensureVector(config.get(K_CAPS));
-		if (caps == null) return config;
+	/**
+	 * {@code config} with the principals it names expanded where it arrives
+	 * ({@link Engine#expandPrincipals}, {@link Engine#expandCaps}): its
+	 * {@code accepts} entries and each capability's {@code with}, which is
+	 * then in the form it is stored in ({@link CapabilityChecker#canonicalResource}).
+	 */
+	private AMap<AString, ACell> expandedConfig(AMap<AString, ACell> config) {
+		if (config == null) return null;
+		ACell accepts = config.get(Fields.ACCEPTS);
+		ACell expanded = engine.expandPrincipals(accepts);
+		if (expanded != accepts) config = config.assoc(Fields.ACCEPTS, expanded);
+		AVector<ACell> given = RT.ensureVector(config.get(K_CAPS));
+		if (given == null) return config;
+		AVector<ACell> caps = engine.expandCaps(given);
 		AVector<ACell> canonical = caps;
 		for (long i = 0; i < caps.count(); i++) {
 			AMap<AString, ACell> grant = RT.castMap(caps.get(i));
@@ -5942,7 +6092,7 @@ public class AgentAdapter extends AAdapter {
 			String stored = CapabilityChecker.canonicalResource(with.toString(), null);
 			if (!stored.equals(with.toString())) canonical = canonical.assoc(i, grant.assoc(Capability.WITH, Strings.create(stored)));
 		}
-		return (canonical == caps) ? config : config.assoc(K_CAPS, canonical);
+		return (canonical == given) ? config : config.assoc(K_CAPS, canonical);
 	}
 
 	/**
@@ -6135,6 +6285,12 @@ public class AgentAdapter extends AAdapter {
 		requireConfigType(config, K_MODEL, AString.class, "a string model name");
 		requireConfigType(config, K_API_KEY, AString.class, "a string secret reference");
 		requireConfigType(config, K_DEFAULT_TOOLS, CVMBool.class, "a boolean");
+		requireConfigType(config, K_ACCEPT_TASKS, CVMBool.class, "a boolean");
+		ACell compactKeep = config.get(AbstractLLMAdapter.K_COMPACT_KEEP);
+		if (compactKeep != null && !(compactKeep instanceof CVMLong n && n.longValue() >= 0)) {
+			throw new InvalidInputException(COMPACT_KEEP_INVALID.formatted(
+				"config.compactKeep", configValueType(compactKeep)));
+		}
 		requireConfigType(config, AbstractLLMAdapter.K_RECORD_TOOL_CALLS, CVMBool.class, "a boolean");
 		requireConfigType(config, K_CAPS, AVector.class, "an array of capability objects, or \"unrestricted\"");
 		// Admission is security configuration: a policy that would fail closed at
@@ -6228,25 +6384,14 @@ public class AgentAdapter extends AAdapter {
 		return Blob.wrap(bs);
 	}
 
-	private static AString taskIdHex(Blob id) {
-		return Strings.create(id.toHexString());
-	}
-
-	/** A session or job id the venue wrote, which is always bare hex; null for none. */
-	private static Blob storedId(AString hex) {
-		return (hex == null) ? null : Blob.fromHex(hex.toString());
-	}
-
-	/** Accepts canonical hex and the {@code 0x}-prefixed form emitted by CVM data. */
-	private static Blob parseSessionId(AString value) {
-		if (value == null) return null;
-		String hex = value.toString();
-		if (hex.startsWith("0x") || hex.startsWith("0X")) hex = hex.substring(2);
-		try {
-			return Blob.fromHex(hex);
-		} catch (RuntimeException e) {
-			return null;
-		}
+	/**
+	 * An id as an operation's input gives it: a Blob, or hex text with or
+	 * without {@code 0x}, as an id the venue returned may be echoed back.
+	 *
+	 * @return The id, or null when the value is none of these
+	 */
+	private static Blob parseId(ACell value) {
+		return HexId.parse(value);
 	}
 
 	/**
@@ -6272,11 +6417,9 @@ public class AgentAdapter extends AAdapter {
 		ACell sidCell = RT.getIn(input, Fields.SESSION_ID);
 		Blob sid;
 		if (sidCell != null) {
-			AString s = RT.ensureString(sidCell);
-			if (s == null) { job.fail("sessionId must be a hex string"); return null; }
-			sid = parseSessionId(s);
+			sid = parseId(sidCell);
 			if (sid == null) {
-				job.fail("Invalid sessionId format: " + s);
+				job.fail("Invalid sessionId format: " + sidCell);
 				return null;
 			}
 		} else {
@@ -6312,10 +6455,8 @@ public class AgentAdapter extends AAdapter {
 		}
 		ACell sidCell = RT.getIn(input, Fields.SESSION_ID);
 		if (sidCell != null) {
-			AString s = RT.ensureString(sidCell);
-			if (s == null) { job.fail("sessionId must be a hex string"); return null; }
-			Blob sid = parseSessionId(s);
-			if (sid == null) { job.fail("Invalid sessionId format: " + s); return null; }
+			Blob sid = parseId(sidCell);
+			if (sid == null) { job.fail("Invalid sessionId format: " + sidCell); return null; }
 			return new SessionSpec(sid, initialLoads, true);
 		}
 		Blob sid = generateSessionId();

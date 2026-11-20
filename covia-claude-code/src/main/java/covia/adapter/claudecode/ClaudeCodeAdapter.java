@@ -33,10 +33,11 @@ import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.exception.ConfigurationException;
 import covia.exception.ConflictException;
+import covia.exception.ForbiddenException;
 import covia.exception.InvalidDefinitionException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
-import covia.exception.NotSupportedException;
+import covia.exception.UnsupportedException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.Engine;
@@ -104,6 +105,16 @@ public class ClaudeCodeAdapter extends ARemoteAgentAdapter<RemoteInteraction> im
 	private static final AString K_ENABLED = Strings.intern("enabled");
 	private static final Set<AString> KNOWN_KEYS = Set.of(
 		K_COMMAND, K_ENV, K_DEFAULTS, K_PROJECTS, K_MAX_SESSIONS, K_IDLE_SECONDS, K_ENABLED);
+
+	/** Refusals of the {@code adapters.claudecode} settings. */
+	public static final String UNKNOWN_SETTING =
+		"adapters.claudecode: unknown setting %s (known: command, env, defaults, projects, maxSessions, idleSeconds, enabled)";
+	public static final String PROJECTS_NOT_OBJECT = "adapters.claudecode.projects must be an object of project name -> settings";
+	public static final String COMMAND_EMPTY = "adapters.claudecode.command must not be empty";
+	public static final String COMMAND_NOT_ARGV = "adapters.claudecode.command must be the claude executable (a string) or an argv array";
+	public static final String COMMAND_ENTRY_NOT_STRING = "adapters.claudecode.command entries must be strings";
+	/** A count below its minimum; the setting and the minimum follow. */
+	public static final String BAD_COUNT = "%s must be an integer >= %d";
 
 	static final AString K_PROJECT = ClaudeSession.K_PROJECT;
 	static final AString K_SESSION = ClaudeSession.K_SESSION;
@@ -190,34 +201,41 @@ public class ClaudeCodeAdapter extends ARemoteAgentAdapter<RemoteInteraction> im
 	// ------------------------------------------------------------ configuration
 
 	@Override
-	public boolean configure(AMap<AString, ACell> config, boolean strict) {
+	public void configure(AMap<AString, ACell> config, boolean strict) {
 		if (config == null) config = Maps.empty();
 		if (strict) {
 			for (long i = 0; i < config.count(); i++) {
 				ACell k = config.entryAt(i).getKey();
 				if (!(k instanceof AString ks) || !KNOWN_KEYS.contains(ks)) {
-					throw new IllegalArgumentException("adapters.claudecode: unknown setting " + k
-						+ " (known: command, env, defaults, projects, maxSessions, idleSeconds, enabled)");
+					throw new ConfigurationException(UNKNOWN_SETTING.formatted(k));
 				}
 			}
 		}
 		List<String> cmd = parseCommand(config.get(K_COMMAND));
-		Map<String, String> env = RunOptions.parse(
-			config.get(K_ENV) == null ? null : Maps.of(K_ENV, config.get(K_ENV)),
-			Set.of(K_ENV), "adapters.claudecode", true).env();
-		RunOptions dflt = RunOptions.parse(config.get(K_DEFAULTS), RunOptions.ALL_KEYS, "adapters.claudecode.defaults", strict);
 		int max = positiveInt(config.get(K_MAX_SESSIONS), DEFAULT_MAX_SESSIONS, "adapters.claudecode.maxSessions", 1);
 		long idle = positiveInt(config.get(K_IDLE_SECONDS), (int) DEFAULT_IDLE_SECONDS, "adapters.claudecode.idleSeconds", 0);
-		Map<String, ProjectSpec> parsed = new LinkedHashMap<>();
+		AMap<AString, ACell> projects = null;
 		ACell projectsCell = config.get(K_PROJECTS);
 		if (projectsCell != null) {
-			AMap<AString, ACell> projects = RT.castMap(projectsCell);
-			if (projects == null) throw new IllegalArgumentException("adapters.claudecode.projects must be an object of project name -> settings");
-			for (long i = 0; i < projects.count(); i++) {
+			projects = RT.castMap(projectsCell);
+			if (projects == null) throw new ConfigurationException(PROJECTS_NOT_OBJECT);
+		}
+		Map<String, String> env;
+		RunOptions dflt;
+		Map<String, ProjectSpec> parsed = new LinkedHashMap<>();
+		try {
+			env = RunOptions.parse(
+				config.get(K_ENV) == null ? null : Maps.of(K_ENV, config.get(K_ENV)),
+				Set.of(K_ENV), "adapters.claudecode", true).env();
+			dflt = RunOptions.parse(config.get(K_DEFAULTS), RunOptions.ALL_KEYS, "adapters.claudecode.defaults", strict);
+			if (projects != null) for (long i = 0; i < projects.count(); i++) {
 				var e = projects.entryAt(i);
 				String name = String.valueOf(e.getKey());
 				parsed.put(name, ProjectSpec.parse(name, e.getValue(), strict, ProjectSpec.Managed.CONFIG, ProjectSpec.VENUE_USER));
 			}
+		} catch (IllegalArgumentException e) {
+			// The options and project parsers also read a call's input; here they read the settings
+			throw new ConfigurationException(e.getMessage(), e);
 		}
 		this.command = cmd;
 		this.envRefs = env;
@@ -226,22 +244,19 @@ public class ClaudeCodeAdapter extends ARemoteAgentAdapter<RemoteInteraction> im
 		this.idleSeconds = idle;
 		this.configProjects = Map.copyOf(parsed);
 		if (engine != null) reconcile();
-		return true;
 	}
 
 	private static List<String> parseCommand(ACell cell) {
 		if (cell == null) return List.of("claude");
 		if (cell instanceof AString s) {
-			if (s.isEmpty()) throw new IllegalArgumentException("adapters.claudecode.command must not be empty");
+			if (s.isEmpty()) throw new ConfigurationException(COMMAND_EMPTY);
 			return List.of(s.toString());
 		}
 		AVector<ACell> v = RT.ensureVector(cell);
-		if (v == null || v.isEmpty()) {
-			throw new IllegalArgumentException("adapters.claudecode.command must be the claude executable (a string) or an argv array");
-		}
+		if (v == null || v.isEmpty()) throw new ConfigurationException(COMMAND_NOT_ARGV);
 		List<String> out = new ArrayList<>();
 		for (long i = 0; i < v.count(); i++) {
-			if (!(v.get(i) instanceof AString s)) throw new IllegalArgumentException("adapters.claudecode.command entries must be strings");
+			if (!(v.get(i) instanceof AString s)) throw new ConfigurationException(COMMAND_ENTRY_NOT_STRING);
 			out.add(s.toString());
 		}
 		return List.copyOf(out);
@@ -251,7 +266,7 @@ public class ClaudeCodeAdapter extends ARemoteAgentAdapter<RemoteInteraction> im
 		if (cell == null) return dflt;
 		CVMLong n = RT.ensureLong(cell);
 		if (n == null || n.longValue() < min || n.longValue() > Integer.MAX_VALUE) {
-			throw new IllegalArgumentException(where + " must be an integer >= " + min);
+			throw new ConfigurationException(BAD_COUNT.formatted(where, min));
 		}
 		return (int) n.longValue();
 	}
@@ -260,8 +275,19 @@ public class ClaudeCodeAdapter extends ARemoteAgentAdapter<RemoteInteraction> im
 	public void install(Engine engine) {
 		super.install(engine);
 		rearmRuntimeProjects();
-		reconcile();
-		reapTask = reaper.scheduleWithFixedDelay(this::reapIdle, reapPeriodMillis, reapPeriodMillis, TimeUnit.MILLISECONDS);
+	}
+
+	/**
+	 * Starts the reaper, once: installed but never started, the adapter runs
+	 * no thread. It reaps the idle sessions this adapter spawned, so it keeps
+	 * running after {@code stop()}, while sessions started before it may still
+	 * be warm, and ends with {@link #close}.
+	 */
+	@Override
+	public void start() {
+		if (reapTask == null) {
+			reapTask = reaper.scheduleWithFixedDelay(this::reapIdle, reapPeriodMillis, reapPeriodMillis, TimeUnit.MILLISECONDS);
+		}
 	}
 
 	/** After a (re)configuration: sessions whose project spec changed or vanished are stopped (they respawn against the current spec). */
@@ -558,7 +584,7 @@ public class ClaudeCodeAdapter extends ARemoteAgentAdapter<RemoteInteraction> im
 			case "projects" -> CompletableFuture.supplyAsync(() -> handleProjects(ctx), VIRTUAL_EXECUTOR);
 			case "create" -> CompletableFuture.supplyAsync(() -> handleCreate(ctx, input), VIRTUAL_EXECUTOR);
 			case "delete" -> CompletableFuture.supplyAsync(() -> handleDelete(ctx, input), VIRTUAL_EXECUTOR);
-			default -> throw new NotSupportedException("Unsupported claudecode operation: " + subOp);
+			default -> throw new UnsupportedException("Unsupported claudecode operation: " + subOp);
 		};
 	}
 
@@ -677,7 +703,7 @@ public class ClaudeCodeAdapter extends ARemoteAgentAdapter<RemoteInteraction> im
 				s = null;
 			}
 			if (s == null) {
-				s = new ClaudeSession(this, plan.project(), plan.options(), plan.resumeId(), ctx.getCallerDID());
+				s = new ClaudeSession(this, plan.project(), plan.options(), plan.resumeId(), ctx.getAuthorityDID());
 				register(s);
 			}
 		}
@@ -699,8 +725,6 @@ public class ClaudeCodeAdapter extends ARemoteAgentAdapter<RemoteInteraction> im
 			if (plan.resumeId() != null) d = d.assoc(K_SESSION, Strings.create(plan.resumeId()));
 			return d;
 		});
-		// A session resumes after a restart as its caller, in the context it was started in.
-		if (multiTurn) engine.jobs().keepCallerContext(job, ctx);
 		if (job.isFinished()) return;
 		if (plan.prompt() == null) {
 			// A session opened without a first prompt waits for input. It claims
@@ -969,7 +993,7 @@ public class ClaudeCodeAdapter extends ARemoteAgentAdapter<RemoteInteraction> im
 		if (p == null) throw new NotFoundException("Unknown session: " + id, id);
 		requireProjectAccess(ctx, p);
 		boolean wasLive = s.isLive();
-		s.stop("requested by " + ctx.getCallerDID());
+		s.stop("requested by " + ctx.getAuthorityDID());
 		return s.status().assoc(K_STOPPED, CVMBool.create(wasLive));
 	}
 
@@ -1022,7 +1046,7 @@ public class ClaudeCodeAdapter extends ARemoteAgentAdapter<RemoteInteraction> im
 			writePath(REGISTRY_PATH + "/" + name, spec.record());
 			runtimeProjects.put(name, spec);
 		}
-		log.info("Claude Code project '{}' created by {} at {}", name, ctx.getCallerDID(), spec.path());
+		log.info("Claude Code project '{}' created by {} at {}", name, ctx.getAuthorityDID(), spec.path());
 		return spec.describe(engine);
 	}
 
@@ -1034,7 +1058,7 @@ public class ClaudeCodeAdapter extends ARemoteAgentAdapter<RemoteInteraction> im
 		String name = nameCell.toString();
 		synchronized (this) {
 			if (configProjects.containsKey(name)) {
-				throw new NotSupportedException("Project '" + name + "' is declared in the venue config; "
+				throw new ForbiddenException("Project '" + name + "' is declared in the venue config; "
 					+ "remove it there (or with v/ops/venue/adapter/configure), not with delete");
 			}
 			if (runtimeProjects.remove(name) == null) throw new NotFoundException("Unknown project: " + name, name);
@@ -1047,7 +1071,7 @@ public class ClaudeCodeAdapter extends ARemoteAgentAdapter<RemoteInteraction> im
 			byId.values().removeAll(victims);
 		}
 		for (ClaudeSession s : victims) s.stop("project deleted");
-		log.info("Claude Code project '{}' deleted by {}", name, ctx.getCallerDID());
+		log.info("Claude Code project '{}' deleted by {}", name, ctx.getAuthorityDID());
 		return Maps.of(Fields.NAME, Strings.create(name), K_DELETED, CVMBool.TRUE);
 	}
 

@@ -1,0 +1,20 @@
+{
+	"name": "Callable Call",
+	"description": "Calls a callable: runs the operation its owner published with the callable's authority, in the owner's namespace, with you as the caller, and returns that operation's output. You may call it if you hold callable/call on it, or if its gate admits you. A callable you may not call is reported as missing.",
+	"dateCreated": "2026-11-13T00:00:00Z",
+	"operation": {
+		"adapter": "callable:call",
+		"readOnly": false,
+		"input": {
+			"type": "object",
+			"properties": {
+				"callable": { "type": "string", "description": "The callable: its name for one of your own, x/callable/<name>, or <ownerDID>/x/callable/<name>" },
+				"input": { "description": "The input of the operation it runs" }
+			},
+			"required": ["callable"]
+		},
+		"output": {
+			"description": "The output of the operation it runs"
+		}
+	}
+}

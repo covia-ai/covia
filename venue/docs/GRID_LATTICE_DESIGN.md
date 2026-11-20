@@ -70,7 +70,10 @@ them.
   `s`, `h`, `a`, and `x/<adapter>`, the adapter's view for that principal.
   The DID is everything up to the first `/`, exactly as written, so a
   `did:web` DID keeps its colons and `%3A`, and another spelling of a DID is
-  another DID.
+  another DID. A user of this venue may be written in short form, `u:bob` for
+  `<webDID>:u:bob`, which is expanded where the path arrives and is never a
+  namespace of the request's root
+  ([AUTHORITY.md](AUTHORITY.md#where-names-resolve)).
 - **Any other path starts at the request's root:** the request's user's
   namespaces, plus the context-rooted namespaces `n`, `c`, `t` and `v`, whose
   root the request's context supplies (§4.5).
@@ -412,17 +415,17 @@ a component that is not Covia's.
 
 **An entity is a collection and its entries.** A kind of domain entity is two
 components with different operations: the collection adds and finds entries
-(`Inbox.open`, `Tasks.add`, `Jobs.create`), and an entry changes itself
-(`HitlRequest.resolve`, `Task.park`). Each manages its own state as a lattice
-component.
+(`Inbox.open`, `Tasks.add`, `Sessions.create`, `Agents.create`, `Jobs.create`), and an entry
+changes itself (`HitlRequest.resolve`, `Task.park`, `Session.setWakeTime`).
+Each manages its own state as a lattice component.
 
 **Keyed collections are Convex's map components.** `Jobs`, `JobIndex`,
-`AssetStore`, `ContentStore` and `Tasks` extend Convex's `IndexComponent`, and
-`Users`, `ManagedUsers`, `SecretStore` and `Inbox` its `MapComponent`, so `get`,
+`AssetStore`, `ContentStore`, `Tasks`, `Sessions` and `Inbox` extend Convex's `IndexComponent`, and
+`Users`, `ManagedUsers`, `Agents` and `SecretStore` its `MapComponent`, so `get`,
 `put`, `remove` and `size` are Convex's and `get(key)` is the entry as stored. A collection binds a
 child component to one entry through `path(key)`, which reads a missing key as
-absent, under a name of its own (`Users.user`, `Jobs.job`). Its domain
-operations (`Users.create`, `Jobs.create`, `SecretStore.store`) keep the rules
+absent, under a name of its own (`Users.user`, `Agents.agent`, `Jobs.job`). Its domain
+operations (`Users.create`, `Agents.create`, `Jobs.create`, `SecretStore.store`) keep the rules
 that a `put` or `remove` of a raw entry bypasses, so only venue code that keeps
 those rules itself uses them.
 
@@ -441,8 +444,9 @@ operations that name it, not by its place in a larger value.
 | `Jobs` | a job id, in hex, to its `JobRecord` |
 | `JobRecord` | `temp` to the job's `Workspace`; the rest of the job is read-only |
 | `SecretStore` | a secret's name to its `SecretStore.Record`, which its store deletes |
-| `Agent` | `n` to the agent's `Workspace`; `sessions/<id>`, the id in hex, to its `Session`; `tasks` to `Tasks` |
+| `Agent` | `n` to the agent's `Workspace`; `sessions` to `Sessions`, and `sessions/<id>` to the session's `Session`; `tasks` to `Tasks` |
 | `Tasks` | a task's id, in hex, to its `Task`; the agent's access rule covers both |
+| `Sessions` | a session's id, in hex, to its `Session`; the agent's access rule covers the list |
 | `Session` | `c` to the session's `Workspace` |
 
 Segments below the last component a path reaches are read by the value they
@@ -688,7 +692,8 @@ high-assurance uses, and registers agents that take part in the economy.
 The engine holds one lattice cursor at its own venue's root. A cursor offers
 `get()`, `set(value)`, `updateAndGet(fn)` (atomic read-modify-write), `fork()`
 (an isolated working copy) and `sync()` (merging the copy back). A sub-cursor
-such as `venueCursor.path(Covia.ASSETS)` writes through to the root atomically.
+such as `venueCursor.path(Covia.ASSETS)` writes through to the root atomically,
+through containers that exist: it refuses to write an entry that is missing.
 The venue reaches the global lattice only to sync with other venues.
 
 Writes go through the component accessors — `VenueState`, `Users`, `User`, the
@@ -820,8 +825,9 @@ components, adapters included, have no publication policy of their own.
 
 ### A.4 Signing
 
-The venue's Ed25519 key signs the venue's record when the application syncs.
-Edits and transactions sign nothing. `CoviaApplication.sync()` syncs each
+The venue's Ed25519 key signs the venue's record when the application syncs,
+or once as an application transaction commits. Edits and transactions on the
+copy sign nothing. `CoviaApplication.sync()` syncs each
 venue's copy, which reconciles it with the record and signs the result once,
 then publishes the regions; an unchanged venue does not sign. A signing failure
 publishes nothing and keeps the copy, edits included, for the next sync. The
@@ -839,9 +845,35 @@ applied twice.
 
 The signed record is what the store and other nodes receive;
 `application.host().sync()` publishes the root and `engine.flush()` is the
-durability barrier. Incoming venue state delivered through the application
-lands in the record, and the copy takes it at its next sync: whole-venue LWW
-decides when both changed.
+durability barrier.
+
+The copy and the record follow Convex's default reconcile: where only one side
+changed, it wins. A transaction on the copy that meets a concurrent change runs
+again under its claim, so both changes are kept. Publishing the copy
+(`VenueState.sync`) puts the copy into the record where only the copy changed,
+and the record into the copy where only the record did. An application
+transaction (`CoviaApplication.transact`) changes the record without becoming
+a second writer: it holds the copy's claim, syncs the copy so the transaction
+starts from everything it holds, commits the venue's change in one update of
+the root with any other change, and syncs the copy again while still holding
+its claim, so the copy, unchanged meanwhile, takes the new record. Otherwise
+only incoming state changes the record behind the copy: a snapshot signed with the venue's key and
+newer than the copy's last publication (A.2), from another writer such as an
+embedder delivering state through the application. The copy takes it at its
+next sync; later reads and work see it, while work already running keeps what
+it read. Where both changed, two writers' versions exist, and they cannot be
+combined. One running instance owns a mounted venue, so its copy owns the
+record: the copy's version, with its own `:timestamp`, is published over the
+other writer's, which is not lost where it came from. The venue then logs the
+fork once at ERROR, naming both versions' stamps and the replaced version's
+hash, and stops (`Engine.stopFatally`): a standalone process closes every venue
+it runs and exits with status 70, and otherwise the engine closes. Its operator
+finds the other writer, such as a second instance with its key or state
+delivered from outside, before restarting it. If the replaced version is the
+newer, the log says so, since a replica or that version delivered again may
+still prefer it by LWW. A venue that writes between syncs therefore takes
+incoming state only while its copy is unchanged. Nothing in the venue delivers
+state for a mounted venue.
 
 On receiving foreign state (disk recovery, replication, federation),
 `SignedLattice.merge()` verifies the signature, merges if valid, re-signs a
@@ -909,7 +941,7 @@ accepts complete snapshots signed by the venue's key and keeps the newer
 | `CoviaValue` (Covia) | Convex's `ValueComponent` resolving segments by Covia's rules (`ValuePath.keys`); read-only where a path ends below any component but a workspace, which hands it the rest of the path with `CoviaValue.within` (§4.6) |
 | `Workspace` (Covia) | A flexible data area reached by path (`w`, `o`, `n`, `c`, a job's `temp`, `x/` views); its changes create no missing level except `createPath` (§4.6) |
 | `Entry` (Covia) | A value in a workspace, at keys fixed when its path was resolved; a path cursor under the workspace's cursor, changed at its key in the level above; no missing level is created except by `createLevels` (§4.6) |
-| `Inbox` (Covia) | A user's HITL requests at `h`, a `MapComponent` keyed by request id; only the venue writes them |
+| `Inbox` (Covia) | A user's HITL requests at `h`, an `IndexComponent` keyed by request id, its job's; only the venue writes them |
 | `Jobs` (Covia) | A user's jobs at `j`, an `IndexComponent` keyed by job id, each bound as its `JobRecord`; only the venue admits a job |
 | `ACursor<V>` | Mutable reference with atomic get/set/update/fork/sync |
 

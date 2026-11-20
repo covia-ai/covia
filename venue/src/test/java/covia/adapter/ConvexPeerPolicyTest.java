@@ -1,5 +1,6 @@
 package covia.adapter;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
@@ -26,6 +27,7 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
+import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.exception.ConfigurationException;
 import covia.grid.Job;
@@ -38,21 +40,24 @@ import covia.venue.TestEngine;
  * A Convex call goes to the operator's peer. Naming another peer asks the
  * venue to relay: off by default, and when the operator turns it on the peer
  * passes the venue's outbound address guard. Nothing here leaves the machine:
- * the peers that are dialled are local sockets that accept and never answer.
+ * the peers that are dialled are local sockets that accept and never answer,
+ * or a local port where nothing listens.
  */
 class ConvexPeerPolicyTest {
 
-	private static final String CONNECT_FAILURE = "Failed to connect to Convex peer";
 	private static final String QUERY = "v/ops/convex/query";
 
 	/** This venue's own Convex peer on {@link #relayOff}. */
 	private static ServerSocket ownPeer;
 	/** An allow-listed peer {@link #relayOn} may relay to. */
 	private static ServerSocket allowedPeer;
+	/** A peer whose connections are never accepted, so it never answers. */
+	private static ServerSocket silentPeer;
 	/** Relaying off, as by default; its peer is {@link #ownPeer}. */
 	private static Engine relayOff;
-	/** Relaying on; localhost is allow-listed and blocked.invalid is blocked. */
+	/** Relaying on; localhost is allow-listed and blocked.invalid is blocked. Waits {@link #RELAY_TIMEOUT_MILLIS} for a result. */
 	private static Engine relayOn;
+	private static final long RELAY_TIMEOUT_MILLIS = 100;
 
 	private RequestContext ctx;
 
@@ -62,10 +67,11 @@ class ConvexPeerPolicyTest {
 		InetAddress localhost = InetAddress.getByName("localhost");
 		ownPeer = listen(localhost);
 		allowedPeer = listen(localhost);
+		silentPeer = listen(localhost);
 		relayOff = engine(Maps.of(
 			"convex", Maps.of("peer", "localhost:" + ownPeer.getLocalPort())));
 		relayOn = engine(Maps.of(
-			"convex", Maps.of("anyPeer", CVMBool.TRUE),
+			"convex", Maps.of("anyPeer", CVMBool.TRUE, "timeoutMillis", RELAY_TIMEOUT_MILLIS),
 			"http", Maps.of(
 				"allowedHosts", Vectors.of("localhost"),
 				"blockedHosts", Vectors.of("blocked.invalid"))));
@@ -92,6 +98,7 @@ class ConvexPeerPolicyTest {
 		if (relayOn != null) relayOn.close();
 		if (ownPeer != null) ownPeer.close();
 		if (allowedPeer != null) allowedPeer.close();
+		if (silentPeer != null) silentPeer.close();
 	}
 
 	@BeforeEach
@@ -109,7 +116,7 @@ class ConvexPeerPolicyTest {
 	private static String refusal(Job job) {
 		assertThrows(Exception.class, () -> job.awaitResult(5000));
 		String message = job.getErrorMessage();
-		assertFalse(message.contains(CONNECT_FAILURE), "refused before any dial: " + message);
+		assertFalse(message.startsWith(ConvexAdapter.PEER_UNREACHABLE), "refused before any dial: " + message);
 		return message;
 	}
 
@@ -169,6 +176,22 @@ class ConvexPeerPolicyTest {
 	}
 
 	@Test
+	void unreachablePeerIsUnavailable() {
+		// Nothing listens on port 1, so the connection is refused
+		Job job = relayOn.jobs().invokeOperation(QUERY, query("localhost:1"), ctx);
+		assertThrows(Exception.class, () -> job.awaitResult(10_000));
+		assertEquals(ConvexAdapter.PEER_UNREACHABLE + "tcp://localhost:1", job.getErrorMessage());
+	}
+
+	@Test
+	void silentPeerGivesConvexTimeoutResult() {
+		// The connection opens in the socket's backlog; no answer comes within timeoutMillis
+		ACell result = relayOn.jobs().invokeOperation(QUERY,
+			query("localhost:" + silentPeer.getLocalPort()), ctx).awaitResult(10_000);
+		assertEquals("TIMEOUT", RT.getIn(result, "errorCode").toString());
+	}
+
+	@Test
 	void onlyPeerEndpointsAreDialled() {
 		for (String peer : new String[] {"http://example.com:80", "file:///etc/passwd", "tcp://example.com:1/path", "tcp://user@example.com:1"}) {
 			String message = refusal(relayOn.jobs().invokeOperation(QUERY, query(peer), ctx));
@@ -195,9 +218,15 @@ class ConvexPeerPolicyTest {
 			() -> adapter.configure(Maps.of("peers", "localhost:1"), true), "unknown setting under strict config");
 		assertThrows(ConfigurationException.class,
 			() -> adapter.configure(Maps.of("anyPeer", "yes"), false), "anyPeer is a boolean");
+		for (Object timeout : new Object[] {0L, -5L, 1.5, "20000"}) {
+			ConfigurationException badTimeout = assertThrows(ConfigurationException.class,
+				() -> adapter.configure(Maps.of("timeoutMillis", timeout), false), "timeoutMillis " + timeout);
+			assertTrue(badTimeout.getMessage().startsWith(ConvexAdapter.TIMEOUT_NOT_POSITIVE), badTimeout.getMessage());
+		}
+		assertDoesNotThrow(() -> adapter.configure(Maps.of("timeoutMillis", 5000L), true));
 		ConfigurationException badPeer = assertThrows(ConfigurationException.class,
 			() -> adapter.configure(Maps.of("peer", "https://peer.example"), false));
 		assertTrue(badPeer.getMessage().contains(ConvexAdapter.NOT_A_PEER), badPeer.getMessage());
-		assertTrue(adapter.configure(Maps.of("peer", "peer.example:18888", "anyPeer", CVMBool.FALSE), true));
+		assertDoesNotThrow(() -> adapter.configure(Maps.of("peer", "peer.example:18888", "anyPeer", CVMBool.FALSE), true));
 	}
 }

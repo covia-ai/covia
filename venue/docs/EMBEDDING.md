@@ -66,10 +66,26 @@ venue's record; `application.host().sync()` then publishes the root. A running
 engine does both. Code that edits the venue with no engine running calls them
 itself.
 
+The mounted venue owns its record. Venue state merged into the application
+from outside reaches the copy only while the copy has not changed since its
+last sync. If both changed, the venue writes its own version over the other,
+logs the fork at ERROR and closes its engine, as a second writer it cannot
+identify is a fault in the deployment
+([GRID_LATTICE_DESIGN.md](GRID_LATTICE_DESIGN.md#a4-signing)). To bring in
+state from outside without that, unmount the venue, merge the state, then
+mount it again; the merge keeps the newer snapshot.
+
 **JVM shutdown.** Register your shutdown work with
 `Shutdown.addHook(Shutdown.SERVICE, task)` (`convex.core.util.Shutdown`). It
 runs before Convex closes its servers and Etch files. `MainVenue` registers
 there.
+
+A `VenueServer` on an Etch store that outlives the process (a file path, or a
+store it adopted) registers its own `close()` there too, and withdraws it once
+it has closed. `close()` runs once and a later caller waits for it, so a JVM
+shutdown that begins while your own thread is closing the venue waits for the
+venue's final save before Etch closes the file. A venue on a `temp` or
+`memory` store registers nothing: it has nothing to keep.
 
 **Before starting.** `VenueState.peekVenueKeys(store)` reads the venue keys
 recorded in an open store, and `VenueState.peekVersions(store, venueKey)` its
@@ -163,6 +179,36 @@ List<Job> started = application.update().get(); // start what is due by then
 for (Job job : started) job.awaitResult();      // when the test needs them finished
 ```
 
+`application.nextDue()` returns the earliest queued scheduled timestamp as a
+`CVMLong`, in epoch milliseconds on the application's clock, or `null` when
+none is queued. It considers every started, non-closing mounted venue and
+includes scheduled operations, agent wakes and HITL timeouts. Dispatch capacity
+does not hide queued events. An overdue event retains its original timestamp;
+a claimed event is excluded, while a recurring event's next queued occurrence
+is included. The query only reads: it neither moves the clock nor starts work.
+
+The answer is an observation, not a reservation or an atomic snapshot across
+venues: concurrent scheduling, cancellation, dispatch and venue lifecycle
+changes can alter it. Re-query after each step. `null` does not establish that
+running jobs or agents are idle, and this query does not cover system-timer
+timeouts, retries or other elapsed-time activity.
+
+For a host driving time forward, the next step can jump straight to an event:
+
+```java
+CVMLong due = application.nextDue();
+if (due != null) {
+    clock.set(Math.max(clock.millis(), due.longValue())); // overdue: keep the current time
+    List<Job> started = application.update().get();
+    // Observe or await these Jobs as the simulation requires.
+}
+```
+
+Await an outstanding update before choosing the next step: it already waits
+for dispatch capacity to start the events due by its time. Its completion does
+not mean the returned Jobs have finished. Waiting for a Job's result is a
+separate choice; a Job may itself need a later scheduled event to finish.
+
 `Engine.createTemp(clock, config)` does this setup in one call: an in-memory
 venue on `clock`, updated with `engine.application().update()`.
 `Engine.createTemp(config)` is the same on a clock held at the current time, so
@@ -188,6 +234,15 @@ prepared engine, in the launch hook or later. An adapter keeps its private
 state in `engine.adapterState(name)`, and owns that state's schema
 ([ADAPTERS.md](ADAPTERS.md)): registering migrates it through the adapter's
 `stateSteps()`.
+
+**An adapter that cannot start does not stop the venue.** One registered
+before launch that refuses its configuration or whose `start()` fails is left
+failed and the launch goes on: `engine.adapterFailure(name)` says why,
+`engine.getAdapter(name)` returns null as for a disabled adapter, and
+`engine.restartAdapter(name)` tries again
+([ADAPTERS.md](ADAPTERS.md#an-adapter-that-is-not-running)). One registered on
+a started engine that refuses its configuration or fails to start is rolled
+back, and `registerAdapter` throws.
 
 **To switch an adapter off, disable it; don't remove it.**
 - `engine.disableAdapter(name)` stops dispatch, but the adapter still runs its
@@ -229,31 +284,127 @@ so the application decides who reaches them.
   });
   ```
   Keep I/O out of the body: it may run more than once.
+- **Workspace and drives together.** `engine.transact(ctx, work)` changes the
+  context's user's workspace at the venue and their DLFS drives in one
+  transaction: everything the body changes through its `UserTransaction`
+  commits together, or none of it does, and no save of the venue's state holds
+  part of it. `tx.workspace()` is the user's workspace, `tx.drive(name)` the
+  drive (created if absent) and `tx.existingDrive(name)` the drive or null.
+  Files are created, written, moved and deleted through the drive's file
+  system, and an entry's metadata through its nodes:
+  ```java
+  engine.transact(RequestContext.of(userDID), tx -> {
+      DLFileSystem files = tx.drive("documents").fileSystem();
+      Files.write(files.getPath("/letter.pdf"), bytes);
+      tx.workspace().write(CoviaPath.parse("letter"), record);
+      return null;
+  });
+  engine.flush();
+  ```
+  The body runs once, while every other write to the application waits, so
+  keep it short: an import is one transaction per file. It uses only the
+  transaction, does no other I/O and does not wait for other threads; a
+  transaction started inside it is refused. A change the body makes other
+  than through the transaction, such as a write to a drive from
+  `engine.getDLFSDrives`, is not part of it: that change stays, and the
+  transaction fails with none of its own changes applied. An exception from
+  the body, `IOException` included, propagates and nothing applies. The
+  transaction and its drives cannot be used after the body returns. A user
+  with no DLFS key is given one first, and a context with no user or a user
+  the venue does not know is refused. A commit is in memory until the host's next sync saves it; call
+  `engine.flush()` before acknowledging it elsewhere. `CoviaApplication.transact`
+  is the same transaction over every mounted venue and any owner's drives
+  ([PERSISTENCE.md](PERSISTENCE.md#50-the-venues-working-copy-forks-are-transactions)).
 - **Secrets.** Use `user.secrets().store(name, value, keys)` and
   `decrypt(name, keys)`, with `keys = SecretStore.keys(engine.getKeyPair())`.
 - **Agent conversations.** Read a session frame through
   `GoalTreeContext.archivedConversation(frame)`, never a frame field directly.
   It returns the same nested shape for legacy and versioned frames
   ([AGENT_SESSIONS.md §5.2.1](AGENT_SESSIONS.md#521-embedded-callers-and-storage-compatibility)).
+  To write the summary for `agent:compactSession` before calling it,
+  `GoalTreeContext.compactedPart(conversation, keep)` returns the entries a
+  compaction keeping `keep` exchanges would replace, counted as the venue
+  counts them, so the summary covers exactly those; an empty result means the
+  call would change nothing. Pass the same `keep` to the operation.
 
 ## Identity
+
+`engine.context(did)` is the venue acting for a principal: the request has no
+`origin` ([AUTHORITY.md](AUTHORITY.md#the-fields)), so that principal is never
+present. Acts only a user may do in person (answering approval
+requests, `secret:extract`, `user:export`, minting the user's identity token
+or an access token, and the user's own account and sign-in keys) refuse it. For a user the application has authenticated itself,
+use `engine.requestContext(did, null)` or `RequestContext.of(did)`
+([VENUE_AUTHORITY.md](VENUE_AUTHORITY.md#how-it-works-today), "In person").
 
 A `did:key` installation can sign for identities nested below it, such as
 `<did:key>:u:<name>`. To keep its private key inside the venue, store the seed
 as one of the installation's secrets, run `crypto:add-key {"seed":"s/<name>"}`
 as the installation, then delete the secret. The venue then signs identity
 tokens for the installation and every identity nested below it. To get a
-user's token, invoke `auth:identity-token` as that user
-(`engine.context(userDID)`): the token names that user and is stored in their
+user's token, invoke `auth:identity-token` as that user in person, once the
+application has authenticated them (`engine.requestContext(userDID, null)`,
+not `engine.context(userDID)`, which it refuses): the token names that user
+and is stored in their
 secret store, where `secrets().decrypt` reads it (see Secrets above). An
 application that keeps the key itself signs with `VenueAuth.namedKeyPair`. See
 AUTH.md, "Nested installation identities below a did:key" and "Minting an
 identity token through an operation", and HELD_KEYS.md.
 
+## Upgrading from 0.11.0
+
+Audit application-owned agent context when upgrading: `config.context` and
+non-skill `config.loads` default to `trusted: true`, so their resolved values
+become system instructions. Set `trusted: false` on mutable memory and other
+reference data; keep application-authored instructions trusted. This is an
+existing default, not a change in this release. The standard templates already
+mark memory as data; custom agent configurations need the same explicit choice.
+See [AGENT_CONTEXT.md §5.3](AGENT_CONTEXT.md#53-pinned-context) for the trust contract.
+
+HTTP requests, including browser chat and signed owner logins over MCP, now
+carry transport provenance in agent input. Use `AuthMiddleware.callerContext`
+in HTTP handlers to retain it. Custom agent instructions should distinguish
+an authenticated principal from evidence of personal owner approval: a
+sibling agent belongs to the owner but is not the owner, and an access token
+names its issuer, not its unknown holder. Updated standard templates explain
+these distinctions; existing agents keep the prompts they were created with.
+See [AGENT_CONTEXT.md §1.2](AGENT_CONTEXT.md#12-instruction-labels-and-data-boundaries).
+
+| 0.11.0 | Current |
+|--------|---------|
+| `User`'s `agentAt`, `createAgent`, `forkAgent`, `removeAgent`, `getAgents` and `ensureAgent` | The user's agents, `user.agents()`: `at`, `create`, `createFork`, `remove` and `all` (empty, not null, when there are none); for `ensureAgent`, `create` then `agent`. `user.agent(id)` stays, and still finds a deleted agent: `agent.isTerminated()` says whether it is one |
+| `Agent`'s `initialise`, `initialiseFromFork` and `putRecord` | `user.agents().create` and `createFork`; a test seeding a raw record writes it through `agent.cursor()` |
+| `agent.updateConfigAndState(config, state)` and the static `Agent.applyStateChange` | `agent.update(null, null, config, state)`; `mergeRunResult` applies a transition's state change |
+| `agent.setError` and `clearError` | `agent.suspend(error)`, which records a fault and suspends the agent; `tryResume` clears it |
+| `agent.getSession(sid)` and `Agent`'s other session shortcuts (`getSessionPending`, `getSessionCycleEpoch`, `ensureSession`, `removeSession`, `hasSessionPending`, `oldestSessionWithPending`) | The session itself, `agent.session(sid)` (`getRecord()`, `pending()`, `cycleEpoch()`), and the agent's sessions, `agent.sessions()` (`create`, `remove`, `hasPending`, `oldestWithPending`). `agent.session(sid)` is never null, even for a missing session, so `getSession(sid) != null` becomes `agent.session(sid).getRecord() != null` |
+| A job, task or session id read as hex text (`RT.ensureString`): in an agent's records (a task's or timeline entry's `sessionId`, a turn's or queued envelope's `jobId`, a timeline entry's `taskResults` keys), in a job's record (`sessionId`, `mirrorOf`), in an operation's result (`sessionId`, a task operation's `taskId`, an `agent:request` snapshot's `id`, a `job:message` delivery's `id`, a run's `taskResults` keys) or in a live event (`sessionId`, `jobId`, `cycle:start`'s `jobs`) | A Blob: `HexId.parse(cell)` reads one given as a Blob or as text, so it works with an older venue too. Pass it an `ACell` variable, not a generic call: given `RT.getIn(...)` directly, Java picks `parse(AString)`, which throws `ClassCastException` on a Blob. In the venue, `Task.sessionId(row)`, `Session.chatJob(envelope)` or `Ids.stored(cell)` |
+| `engine.agentEvents().subscribe(owner, agent, sessionId, listener)` and `Event.concerns(sessionId)` taking the session as text | The session as a Blob |
+| A messaging adapter's `ConversationSessions.get` and `put`, `RequestContext.SessionDelivery.accept` and `WebhookInbox.deliver` with sessions and job ids as text | Blobs; a `ConversationSessions` legacy reader gives a Blob |
+| `user.inbox()` keyed by request id in hex (`request`, `get`, `getAll`), `HitlRequest.getID()` and `record` with the id as text, and a record's `id` and `sessionId` as text | Keyed and named by the request's job id as a Blob; `getAll()` is an `Index` |
+| `AgentAdapter.deliverSessionMessage` and `appendSessionMessage` taking the chat's job id as text | The job id as a Blob |
+| `boolean AAdapter.configure(config, strict)`, returning `false` to decline, an `IllegalArgumentException` from it answering as invalid input | `void configure(config, strict)`: return to accept, throw `ConfigurationException` to refuse; anything else it throws that is not a Covia exception, `IllegalArgumentException` included, is the adapter's fault ([ADAPTERS.md](ADAPTERS.md)) |
+| `AAdapter.configureModule` and a module's `modules[].config` | Removed: a module adapter takes `adapters.<name>` through `configure`, and one that cannot run on the host fails its `start()` with `UnavailableException` |
+| `Modules.load(engine, path, sha256, config)` | `Modules.load(engine, path, sha256)` |
+| `RequestContext.getCallerDID()` | `getAuthorityDID()`, the one principal a request acts as |
+| `RequestContext.hasSeparateAuthority()` and `authorityContext()` | Removed: a request names one principal, and `engine.authorityFrame(ctx)` gives the frame an agent whose controller is in another account acts with |
+| `RequestContext.onBehalfOf` and `Authority.onBehalfOf` | Removed: acting for another user is `admin/sudo`, a call into that user (`engine.sudoContext`) |
+| `RequestContext.of(callerDID, userDID, caps)` and `Authority.of(did, userDID, grants)`, naming a namespace apart from the principal | Removed: a principal acts in its own namespace, and an agent in its owner's (`RequestContext.ofAgent`). For a principal's own, `RequestContext.of(did).withCaps(caps)` and `Authority.of(did, grants)`; for what a principal may do now, `engine.context(did)` |
+| `Job.getOwner()`, `Attribution.owner(record)` and `Attribution.caller(record)`, and a record's `owner` | A record names one `caller` and is kept in its caller's account, leaving out a caller that is that account: `Attribution.caller(record, account)` reads it, `Attribution.inFull(record, account)` names it in full, and `JobManager.accountOf(job)` gives a job's account. `AccessControl.canAccessJob`, `Schedule.schedule` and `HitlRequest.record` take the account in place of reading or writing an owner |
+| `AAdapter.latticeView(ctx)` and `latticeWriteDenial(ctx, path)` | `latticeView(owner, ctx)` and `latticeWriteDenial(owner, ctx, path)`: the view is `owner`'s, and `ctx` is the request's own ([ADAPTERS.md](ADAPTERS.md)) |
+| Convex 0.8.19 | Convex 0.8.20: recompile adapters and modules |
+| A raw `cursor().path(key).set(...)` creating a missing `key`, including after `withDefault` | Refused: write through a component's operations, or an entry view that creates the key (`Covia.entry`, a `MapComponent`'s or `IndexComponent`'s `path`) |
+| A transaction on a missing record starting from null | It throws `MissingValueException` before the callback runs, and when a concurrent deletion makes it run again; the domain operations (an agent's, session's, task's, job's or HITL request's) still answer "absent" |
+| `adapterState().transact` or `execute` on state with nothing stored, starting from null | It throws `MissingValueException`: give the adapter's empty value first, `adapterState().withDefault(Maps.empty())`. `get()` is still null while nothing is stored |
+| `Users.getAll()` null when there are no users | An empty map |
+| An override of `withCursor` or `mergePublication` on a component | `rebind`, and `reconcile(own, other)`, which serves transaction commits as well as sync |
+| `NotSupportedException` | Removed. By meaning: `UnsupportedException` (never possible here), `InvalidStateException` (the target's state does not allow it; `ConflictException` now extends it), `ForbiddenException` (an `AuthException`: a rule forbids it whatever the caller holds), `NotFoundException`, or `IntegrityException` ([ERRORS.md](ERRORS.md#types)) |
+| A secret or connected account that does not open refused with `NotSupportedException`, and `SecretStore.decrypt` throwing `IllegalStateException` or a decryption exception | `IntegrityException`, the venue's own failure, which `AAdapter.isExpectedFailure` no longer counts as expected. `SecretStore` throws it unlogged; report one with `IntegrityException.found(message, owner, cause)`, which logs it once at ERROR. The refusal constants are renamed: `Engine.SECRET_INTEGRITY`, `SecretAdapter.SECRET_INTEGRITY`, `UserExports.SECRET_INTEGRITY`, `OAuthAdapter.CONNECTION_INTEGRITY` and `LEGACY_GRANT_INTEGRITY`; `A2AAdapter.SECRET_UNREADABLE`, an authority or absence failure, is `SECRET_NOT_USABLE` |
+| Every native agent taking `agent:request` tasks and offering the task tools, whatever its config | Only an agent whose config sets `acceptTasks: true`, as the standard templates except `minimal` do; a request to any other is refused with `UnsupportedException` (`AgentAdapter.TASKS_NOT_ACCEPTED`), so an agent created with an inline config that receives requests adds the key ([AGENT_TASKS.md](AGENT_TASKS.md) §2) |
+
 ## Upgrading from 0.10.0
 
-| 0.10.0 | Current |
-|--------|---------|
+| 0.10.0 | 0.11.0 |
+|--------|--------|
 | `user.workspaceRoot()` with keys from `WorkspaceRoot.parseStringPath("w/...")` | `user.workspace()` with a path inside `w` from `CoviaPath.parse` (see User data) |
 | `workspaceRoot().write` creating missing levels | `createPath` for them first, in the same transaction |
 | `VenueState.migrate(adapters)`, `migrate()` | `migrate(SecretStore.keys(venueKeyPair), adapters)`, `migrate(keys)` |
@@ -264,6 +415,7 @@ identity token through an operation", and HELD_KEYS.md.
 | Several engines in turn over one application | Close (or `unmount`) the venue's engine, then mount it again |
 | Closing the engine, then the host | Close the application (or the engine), then the host |
 | `AuthMiddleware.withTransportGrants(ctx, ucans[, verifier])` | `engine.withTransportGrants(ctx, ucans)`, which verifies with the venue's DID verifier and clock |
+| An operation refusing with a JDK exception (`IllegalArgumentException`, `IllegalStateException`, `UnsupportedOperationException` or a plain `RuntimeException`), whose message reached the caller | Only a `CoviaException`'s message reaches the caller: anything else escaping an adapter is that adapter's fault, reported by its type without its text. Refuse with a `CoviaException` subtype, such as `InvalidInputException` ([ERRORS.md](ERRORS.md)) |
 
 ## Upgrading from 0.9.x
 

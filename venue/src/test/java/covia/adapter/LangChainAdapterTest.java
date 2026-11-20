@@ -67,9 +67,9 @@ import covia.api.Fields;
 import covia.exception.ConfigurationException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
-import covia.exception.NotSupportedException;
 import covia.exception.ResponseException;
 import covia.exception.UnavailableException;
+import covia.exception.UnsupportedException;
 import covia.grid.Asset;
 import covia.grid.Job;
 import covia.grid.Status;
@@ -350,10 +350,10 @@ public class LangChainAdapterTest {
 
 		assertNull(RT.getIn(LangChainAdapter.toAssistantMessage(
 			toolReply, "openai", "gpt-5.6-terra"), Fields.PROVIDER_STATE));
-		assertNull(RT.getIn(LangChainAdapter.toAssistantMessage(
+		assertNotNull(RT.getIn(LangChainAdapter.toAssistantMessage(
 			AiMessage.builder().text("done").thinking("finished").build(),
 			"anthropic", "claude-sonnet-5"), Fields.PROVIDER_STATE),
-			"terminal replies do not need continuation state");
+			"final-answer thinking belongs to subsequent turns' prefix");
 
 		// Existing conversation entries have no providerState and remain valid.
 		AiMessage legacy = assertInstanceOf(AiMessage.class,
@@ -362,6 +362,40 @@ public class LangChainAdapterTest {
 				"anthropic", "claude-sonnet-5").get(0));
 		assertEquals("old record", legacy.text());
 		assertNull(legacy.thinking());
+	}
+
+	@Test
+	public void thinkingSurvivesFinalAnswersAndEmptyRepliesAcrossStoredTurns() throws Exception {
+		AVector<ACell> stored = Vectors.empty();
+		for (int turn = 0; turn < 3; turn++) {
+			AiMessage.Builder builder = AiMessage.builder().thinking("")
+				.attributes(Map.of(AnthropicMapper.THINKING_SIGNATURE_KEY, "signature-" + turn));
+			if (turn != 1) builder.toolExecutionRequests(List.of(ToolExecutionRequest.builder()
+				.id("call_" + turn).name("search").arguments("{}").build()));
+			else builder.text("Final answer");
+			stored = stored.conj(LangChainAdapter.toAssistantMessage(builder.build(), "anthropic", "test"));
+			if (turn == 1) stored = stored.conj(Maps.of("role", "user", "content", "Follow up"));
+		}
+		stored = stored.conj(LangChainAdapter.toAssistantMessage(AiMessage.builder()
+			.attributes(Map.of(AnthropicMapper.THINKING_SIGNATURE_KEY, "empty-final")).build(),
+			"anthropic", "test"));
+		// Exercise the same cell encoding used by durable conversation records.
+		AVector<ACell> reloaded = RT.ensureVector(convex.core.cvm.CVMEncoder.INSTANCE.decodeMultiCell(
+			convex.core.data.Format.encodeMultiCell(stored, true)));
+		AVector<ACell> sent = LangChainAdapter.withoutSilentTurns(reloaded, Set.of(), "anthropic", "test").messages();
+		assertEquals(5, sent.count(), "signed empty replies survive filtering before system-message placement");
+		assertEquals(4, LangChainAdapter.withoutSilentTurns(reloaded, Set.of(), "anthropic", "other").messages().count());
+		List<ChatMessage> replay = LangChainAdapter.toChatMessages(sent, Set.of(), "anthropic", "test");
+		assertEquals(5, replay.size());
+		List<AnthropicMessage> wire = AnthropicMapper.toAnthropicMessages(replay, true);
+		for (int i : new int[] {0, 1, 3, 4}) {
+			AnthropicThinkingContent thinking = assertInstanceOf(AnthropicThinkingContent.class,
+				wire.get(i).content.get(0));
+			assertEquals("", thinking.thinking);
+			assertEquals(i == 4 ? "empty-final" : "signature-" + (i == 3 ? 2 : i), thinking.signature);
+		}
+		assertEquals("Final answer", RT.getIn(stored.get(1), "content").toString());
+		assertNull(RT.getIn(stored.get(4), "content"));
 	}
 
 	@Test
@@ -940,9 +974,7 @@ public class LangChainAdapterTest {
 	@Test
 	public void testToJsonObjectSchemaTypelessValueStaysStructured() {
 		// Mirrors covia/write's input schema: a typed `path` and a typeless `value`.
-		// Regression: the typeless `value` used to be advertised to the LLM as a
-		// string, so a structured object could not be passed and arrived null. It
-		// must now be an open object (additionalProperties allowed), while `path`
+		// Preserve all JSON values, including scalars and arrays, while `path`
 		// stays a string.
 		AMap<AString, ACell> schema = (AMap<AString, ACell>)(AMap) Maps.of(
 			"type", "object",
@@ -959,9 +991,8 @@ public class LangChainAdapterTest {
 		assertInstanceOf(JsonStringSchema.class, result.properties().get("path"));
 
 		JsonSchemaElement value = result.properties().get("value");
-		assertInstanceOf(JsonObjectSchema.class, value,
-			"Typeless `value` must be an open object, not a string");
-		assertEquals(Boolean.TRUE, ((JsonObjectSchema) value).additionalProperties());
+		var raw = assertInstanceOf(dev.langchain4j.model.chat.request.json.JsonRawSchema.class, value);
+		assertEquals(RT.getIn(schema, "properties", "value"), JSON.parse(raw.schema()));
 	}
 
 	// ========== toSchemaElement ==========
@@ -997,17 +1028,57 @@ public class LangChainAdapterTest {
 	}
 
 	@Test
-	public void testSchemaElementNoTypeIsOpenObject() {
-		// No declared type = "any JSON value". It must be an open object so the LLM
-		// can pass a structured value through. Regression: it used to coerce to a
-		// string, which dropped structured tool-call args (e.g. covia/write's value
-		// arrived null).
-		JsonSchemaElement el = LangChainAdapter.toSchemaElement(schemaMap("description", "no type"));
-		assertInstanceOf(JsonObjectSchema.class, el);
-		JsonObjectSchema obj = (JsonObjectSchema) el;
-		assertEquals(Boolean.TRUE, obj.additionalProperties(),
-			"Typeless param must allow additional properties so structured values pass through");
-		assertEquals("no type", obj.description());
+	public void testSchemaElementNoTypePreservesAnyJsonValue() {
+		var schema = schemaMap("description", "no type");
+		var raw = assertInstanceOf(dev.langchain4j.model.chat.request.json.JsonRawSchema.class,
+			LangChainAdapter.toSchemaElement(schema));
+		assertEquals(schema, JSON.parse(raw.schema()));
+	}
+
+	@Test
+	public void testMcpSchemasReachProvidersUnchanged() throws Exception {
+		ACell tokenDefinition;
+		try (var input = getClass().getResourceAsStream("/adapters/mcp/createToken.json")) {
+			tokenDefinition = JSON.parse(new String(input.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8));
+		}
+		ACell callDefinition;
+		try (var input = getClass().getResourceAsStream("/adapters/mcp/toolCall.json")) {
+			callDefinition = JSON.parse(new String(input.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8));
+		}
+		ACell parameters = RT.getIn(tokenDefinition, "operation", "input");
+		assertEquals(Strings.create("string"), RT.getIn(parameters, "properties", "caps", "oneOf", 0L, "items", "properties", "can", "type"));
+		var tools = Vectors.of((ACell) Maps.of("name", "mcp_token_create", "parameters", parameters),
+			(ACell) Maps.of("name", "mcp_tools_call", "parameters", RT.getIn(callDefinition, "operation", "input")));
+		AtomicReference<String> body = new AtomicReference<>();
+		HttpServer provider = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+		provider.createContext("/", exchange -> {
+			body.set(new String(exchange.getRequestBody().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8));
+			boolean anthropic = exchange.getRequestURI().getPath().endsWith("messages");
+			String reply = anthropic
+				? "{\"id\":\"msg\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"test\",\"content\":[{\"type\":\"text\",\"text\":\"ok\"}],\"stop_reason\":\"end_turn\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}"
+				: "{\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}";
+			byte[] bytes = reply.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+			exchange.getResponseHeaders().set("content-type", "application/json");
+			exchange.sendResponseHeaders(200, bytes.length);
+			try (var out = exchange.getResponseBody()) { out.write(bytes); }
+		});
+		provider.start();
+		try {
+			String url = "http://127.0.0.1:" + provider.getAddress().getPort() + "/v1/";
+			var messages = Vectors.of((ACell) Maps.of("role", "user", "content", "Create a scoped MCP token"));
+			for (String profile : new String[] {"xai", "anthropic"}) {
+				dev.langchain4j.model.chat.ChatModel model = profile.equals("anthropic")
+					? LangChainAdapter.buildAnthropicModel("key", url, "test", Duration.ofSeconds(5), LangChainAdapter.extractTuning(Maps.of("maxTokens", 256)))
+					: LangChainAdapter.buildOpenAiModel("key", url, "test", Duration.ofSeconds(5), LangChainAdapter.ModelTuning.NONE);
+				LangChainAdapter.callModel(profile, "test", model, messages, tools, null, java.util.Set.of());
+				ACell sentTool = RT.getIn(JSON.parse(body.get()), "tools", 0L);
+				ACell sentSchema = profile.equals("anthropic") ? RT.getIn(sentTool, "input_schema") : RT.getIn(sentTool, "function", "parameters");
+				assertEquals(RT.getIn(parameters, "properties", "caps"), RT.getIn(sentSchema, "properties", "caps"), profile);
+				ACell sentCall = RT.getIn(JSON.parse(body.get()), "tools", 1L);
+				ACell callSchema = profile.equals("anthropic") ? RT.getIn(sentCall, "input_schema") : RT.getIn(sentCall, "function", "parameters");
+				assertEquals(Vectors.of("server", "toolName", "arguments"), RT.getIn(callSchema, "required"), profile);
+			}
+		} finally { provider.stop(0); }
 	}
 
 	@Test
@@ -1611,7 +1682,7 @@ public class LangChainAdapterTest {
 			java.time.Duration.ofSeconds(5), LangChainAdapter.ModelTuning.NONE);
 		assertNull(plain.defaultRequestParameters().temperature());
 		assertNull(plain.defaultRequestParameters().topP());
-		assertThrows(NotSupportedException.class,
+		assertThrows(UnsupportedException.class,
 			() -> LangChainAdapter.buildOllamaModel("http://localhost:11434", "qwen",
 				java.time.Duration.ofSeconds(5), nativeTuning),
 			"an unsupported providerOptions map must fail rather than disappear silently");
@@ -1841,8 +1912,9 @@ public class LangChainAdapterTest {
 			new dev.langchain4j.exception.TimeoutException(http(408, "request timeout")));
 		assertPassesOn(UnavailableException.class, LangChainAdapter.PROVIDER_FAILED, 529,
 			new dev.langchain4j.exception.InternalServerException(http(529, "overloaded")));
-		assertMapped(UnavailableException.class,
-			LangChainAdapter.PROVIDER_FAILED.formatted("anthropic", "claude-x", ""),
+		// A server error with no HTTP answer behind it is a response that held no answer
+		assertMapped(ResponseException.class,
+			ProviderStop.NO_ANSWER.formatted("anthropic", "claude-x", ""),
 			new dev.langchain4j.exception.InternalServerException("no choices " + PROVIDER_TEXT), false);
 		assertMapped(UnavailableException.class,
 			LangChainAdapter.PROVIDER_UNREACHABLE.formatted("anthropic", "claude-x"),
@@ -1851,12 +1923,12 @@ public class LangChainAdapterTest {
 
 		assertPassesOn(ConfigurationException.class, LangChainAdapter.MODEL_NOT_FOUND, 404,
 			new dev.langchain4j.exception.ModelNotFoundException(http(404, "no such model")));
-		assertMapped(NotSupportedException.class,
+		assertMapped(UnsupportedException.class,
 			LangChainAdapter.FEATURE_NOT_SUPPORTED.formatted("anthropic", "claude-x"),
 			new dev.langchain4j.exception.UnsupportedFeatureException("topK " + PROVIDER_TEXT), false);
 
 		assertMapped(ResponseException.class,
-			LangChainAdapter.CONTENT_FILTERED.formatted("anthropic", "claude-x"),
+			ProviderStop.DECLINED.formatted("anthropic", "claude-x", ""),
 			new dev.langchain4j.exception.ContentFilteredException("I cannot " + PROVIDER_TEXT), false);
 		assertPassesOn(ResponseException.class, LangChainAdapter.REQUEST_REFUSED, 400,
 			new dev.langchain4j.exception.InvalidRequestException(http(400, "bad tool schema")));
@@ -2687,6 +2759,7 @@ public class LangChainAdapterTest {
 
 			// Its caps may grant the use, bound to where the key may go...
 			RequestContext mayUse = RequestContext.ofAgent(callerDID, Strings.create("bot")).withCaps(Vectors.of(invokeAny,
+				convex.auth.ucan.Capability.create(covia.api.Abilities.OUTBOUND, covia.api.Abilities.OUTBOUND_HTTP),
 				convex.auth.ucan.Capability.create(Strings.create("s/MY_TOKEN"), covia.api.Abilities.SECRET_USE,
 					Maps.of(Strings.create("url"), Strings.create(proxyUrl)))));
 			adapter.invokeFuture(mayUse, meta, base.assoc(apiKey, Strings.create("s/MY_TOKEN"))).get(10, TimeUnit.SECONDS);

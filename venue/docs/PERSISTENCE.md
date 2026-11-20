@@ -42,7 +42,7 @@ nodes in the root `:dlfs` region, outside the venue value: the Etch header does
 not show a change in them, so `:version` is the only thing a later build can
 check.
 
-A user export (`user/export`) carries its own format version,
+A user export (`user:export`) carries its own format version,
 `UserExports.VERSION`. It advances whenever the shape of a user's stored state
 changes in a way an older build cannot read, as `:version` does, so an older
 venue refuses the export rather than importing shapes it cannot read.
@@ -114,9 +114,14 @@ Whoever opens the host decides when state is published and saved, and runs the
 host's workers for it: `host.autoSync(interval, application::publish)` publishes the
 application on an interval, and `host.autoFlush(interval)` forces the store to
 disk on another. `VenueServer` starts both once its venue is running, every
-`VenueServer.SYNC_INTERVAL` (100 ms) and `VenueServer.FLUSH_INTERVAL` (10 s), so
-a process crash loses at most the last interval's writes and a machine crash the
-last flush interval's. The engine runs no worker of its own. Each worker reports
+`VenueServer.SYNC_INTERVAL` (100 ms) and `VenueServer.FLUSH_INTERVAL` (10 s). On
+an Etch v2 store, the default, a process crash loses at most the last sync
+interval's writes and a machine crash the last flush interval's. An Etch v3 store
+(`etch.version: 3`, which encryption uses) recovers nothing written after its last
+completed flush. A flush marks it clean and its next write marks it open, so one
+that crashes with writes since its last flush refuses a normal open until it is
+repaired (`etch repair`) or restored from a backup (Convex `ETCHv3.md`). The
+engine runs no worker of its own. Each worker reports
 its first failure, which the venue logs at ERROR. Closing the host stops them,
 then syncs the application and checkpoints once more.
 
@@ -126,7 +131,7 @@ application on their own `LatticeHost` and mount their venue; restart tests unmo
 new application over the same store, as production does
 ([EMBEDDING.md](EMBEDDING.md#starting-and-stopping)).
 
-`VenueState`, `Users`, `User`, `Agent`, `Session`, `Jobs`, `JobRecord`, `ManagedUsers`, `Schedule`, `AdapterState`, `AssetStore`, `SecretStore` and
+`VenueState`, `Users`, `User`, `Agent`, `Sessions`, `Session`, `Jobs`, `JobRecord`, `ManagedUsers`, `Schedule`, `AdapterState`, `AssetStore`, `SecretStore` and
 `Workspace` implement upstream `TransactionalComponent`. Ordinary domain
 mutations are atomic; `transact(draft -> ...)` groups several operations into one
 local commit. Choose the component containing all data the operation reads or
@@ -175,7 +180,7 @@ agent.execute(draft -> {
 ```java
 venue.execute(draft -> {
     var user = draft.users().ensure(did);
-    user.ensureAgent("assistant", config, null);
+    user.agents().create(Strings.create("assistant"), config, null, null, null);
     user.workspace().write(CoviaPath.parse("ready"), CVMBool.TRUE);
 });
 ```
@@ -413,7 +418,7 @@ Every lattice component:
 Every adapter:
 
 1. **Receives** `RequestContext`, resolved metadata, input.
-2. **Resolves the calling user** via `engine.getVenueState().users().user(ctx.getCallerDID())`.
+2. **Resolves the calling user** via `engine.getVenueState().users().user(ctx.getUserDID())`.
 3. **Calls component methods only.** No `cursor.set`, no `cursor.updateAndGet`, no `cursor.path(…).set(…)`, no `engine.syncState()`.
 4. **Returns a result.** That's it.
 
@@ -456,6 +461,25 @@ Signing, publication and durability are separate operations:
 | `application.host().sync()` | publishes the hosted root through the host policy |
 | `application.publish()` | runs both of the above, then persists each copy through the host, so it holds what is saved softly |
 | `application.host().flush()` | invokes the store's physical durability barrier |
+| `application.transact(work)` | commits changes to mounted venues and DLFS drives in one update of the hosted root |
+
+`CoviaApplication.transact` and `execute` change the whole application in one
+transaction: the callback works on a `CoviaApplication.Draft` of the hosted
+root, reaching each mounted venue's state and any owner's DLFS drives, and the
+commit installs all of it in one update, so a save holds all of it or none.
+The callback runs once, under the root's claim, while every other write to the
+application waits. Each venue's working copy is claimed first, in mount order,
+and synced, so the draft starts from everything the copy holds; the venue's
+change is made on a draft of its record, which signs once as the transaction
+commits; after the commit the copy syncs again while still claimed and takes
+the new record, so it remains its record's only writer (GRID_LATTICE_DESIGN.md
+A.4). A callback that starts another transaction is refused. One that changes
+a copy or a DLFS drive other than through the draft fails with nothing from
+the draft applied, and the change it made outside the draft stays.
+`Engine.transact` is the same transaction for one user at one venue, claiming
+only that venue ([EMBEDDING.md](EMBEDDING.md#user-data)). A commit is in
+memory, as any other
+change is: the host's next sync saves it and `flush()` makes it durable.
 
 Local mutations do not compete through the LWW merge. The atomic update order
 of the copy decides the current value, including writes sharing a millisecond
@@ -539,9 +563,12 @@ publishes nor flushes. Whoever opened the host closes it: a standalone
 the final checkpoint before the store closes. An Engine running on an
 embedder's host never closes it; its final flush is its last save.
 
-On JVM shutdown, `MainVenue` runs each venue's full `VenueServer.close()` from
-a hook at `Shutdown.SERVICE`, before Convex closes its servers and Etch files.
-The close runs once: a caller that finds it under way waits for it.
+On JVM shutdown, a venue on an Etch store that outlives the process runs its
+full `VenueServer.close()` from a hook at `Shutdown.SERVICE`, before Convex
+closes its servers and Etch files; `MainVenue` registers the same for each
+venue. The close runs once: a caller that finds it under way waits for it,
+the hook included, so the store stays open until the final save
+([EMBEDDING.md](EMBEDDING.md), "JVM shutdown").
 
 ### 5.4 Request-boundary publication
 
@@ -638,32 +665,22 @@ Phases 1–2 are the **functional fix**. Phase 3 is the **structural cleanup**.
 
 ---
 
-## 7. Test strategy
+## 7. Testing
 
-For each persistence path, one regression test that:
-1. Starts a venue with a temp etch store and a fixed seed.
-2. Writes via the path under test.
-3. **Hard-kills** the venue (`Runtime.halt(1)`, NOT `server.close()`).
-4. Restarts a new venue against the same etch.
-5. Reads back via a different path. Asserts the write survived.
+Persistence keeps the venue's whole state, so it is tested once, for the
+whole state, not once per feature or write path:
 
-Paths covered:
-
-| Path | Status today |
-|---|---|
-| REST `/api/v1/invoke` covia:write | ✅ works (because of after-hook) — must continue working after Phase 2 |
-| MCP `/mcp` tools/call covia:write | ❌ broken — must pass after Phase 2 |
-| DLFS WebDAV `/dlfs/<drive>/<path>` PUT | ❌ likely broken — must pass after Phase 2 |
-| Agent run loop `mergeRunResult` (background virtual thread) | ❌ broken — must pass after Phase 2 |
-| `JobManager.persistJobRecord` from Job completion callback | ❌ broken — must pass after Phase 2 |
-| OAuth `Auth.putUser` from `/auth/callback` | ❌ likely broken — must pass after Phase 2 |
-| `engine.flush()` synchronous barrier | new in Phase 1 |
-
-Plus:
-- **Race test**: 100 concurrent writes from different sources (REST + MCP + run loop), abrupt kill, restart, verify all 100 survive.
-- **Latency test**: measure end-to-end write→disk latency under default config. Target ≤ 250 ms (100 ms sync worker + 100 ms propagator persistInterval + Etch overhead).
-- **Idle cost test**: venue with no writes for 10 seconds — confirm the sync worker is performing no-op syncs (CPU stays effectively zero).
-- **Adapter compliance test**: a static check that asserts no adapter file contains `cursor.set` / `cursor.updateAndGet` / `engine.syncState`.
+- `VenuePersistenceTest` fills one venue with every kind of state, closes it
+  without an explicit flush, reopens the store and reads every cell back, then
+  launches the venue again on the same key, configuration and held clock. The
+  venue state must be exactly what it closed with: start-up on a held clock
+  changes nothing. A second cycle appends to the reopened store. A new kind of
+  state is added to this test.
+- `EngineFlushTest` covers the barrier and close's final flush,
+  `SoftKillPersistenceTest` a venue server's close, and
+  `HardKillPersistenceTest` (durability suite) a halted process and a JVM exit.
+- What a venue does at start with work pending (recovered jobs, waking
+  agents, re-armed expiries) is recovery, tested with the behaviour it belongs to.
 
 ---
 

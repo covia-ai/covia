@@ -61,6 +61,9 @@ public class McpClientSession implements AutoCloseable {
 		+ " response; check the url names the exact MCP endpoint (end it with / for a root endpoint)"
 		+ " and that the server speaks a supported protocol version";
 
+	private final covia.venue.Engine engine;
+	private final ThreadLocal<covia.venue.RequestContext> caller = new ThreadLocal<>();
+	private static final String CALLER_CONTEXT = "covia.caller";
 	private final String serverUrl;
 	private final String endpointUrl;
 	private final String accessToken;
@@ -71,6 +74,11 @@ public class McpClientSession implements AutoCloseable {
 	private volatile long lastActivity = System.currentTimeMillis();
 
 	public McpClientSession(String serverUrl, String accessToken) {
+		this(serverUrl, accessToken, null);
+	}
+
+	McpClientSession(String serverUrl, String accessToken, covia.venue.Engine engine) {
+		this.engine = engine;
 		this.serverUrl = serverUrl;
 		this.endpointUrl = endpointUrl(serverUrl);
 		this.accessToken = accessToken;
@@ -140,8 +148,11 @@ public class McpClientSession implements AutoCloseable {
 
 	/**
 	 * Runs one request over this session, connecting first if need be. A
-	 * failure is reported as the Covia type for it ({@link #failure}) and
-	 * drops the connection, so the next request reconnects.
+	 * failure is reported as the Covia type for it ({@link #failure}). One
+	 * from the connection or the server drops the connection, so the next
+	 * request reconnects; the venue's own refusal of this caller, such as its
+	 * outbound check, sends nothing and leaves the connection to the other
+	 * callers sharing it, whose requests may be in flight.
 	 *
 	 * @param what the request, as a failure names it: {@link #TOOLS_LIST},
 	 *        {@link #TOOL_CALL} with the tool's name
@@ -151,9 +162,17 @@ public class McpClientSession implements AutoCloseable {
 		try {
 			return request.apply(connectedClient);
 		} catch (RuntimeException e) {
-			invalidate();
+			if (find(e, CoviaException.class) == null) invalidate();
 			throw failure(serverUrl, what, e);
 		}
+	}
+
+	/** The SDK captures this caller in its transport context before dispatching
+	 * asynchronously. A pooled connection never supplies another caller's rights. */
+	public <T> T request(covia.venue.RequestContext ctx, String what, Function<McpSyncClient, T> request) {
+		caller.set(ctx);
+		try { return request(what, request); }
+		finally { caller.remove(); }
 	}
 
 	private McpSyncClient connected(String what) {
@@ -185,7 +204,8 @@ public class McpClientSession implements AutoCloseable {
 	 * @param what the request, as the reason names it
 	 */
 	static RuntimeException failure(String serverUrl, String what, RuntimeException e) {
-		if (e instanceof CoviaException expected) return expected;
+		CoviaException expected = find(e, CoviaException.class);
+		if (expected != null) return expected;
 		String origin = AAdapter.origin(serverUrl);
 		String at = (origin != null) ? origin : "(no host)";
 		McpError rpc = find(e, McpError.class);
@@ -245,9 +265,16 @@ public class McpClientSession implements AutoCloseable {
 
 	private McpSyncClient doConnect() {
 		McpClientTransport transport = HttpClientStreamableHttpTransport.builder(endpointUrl)
-				.httpRequestCustomizer(bearerAuthCustomizer(accessToken))
+				.httpRequestCustomizer((builder, method, endpoint, body, context) -> {
+					if (engine != null) engine.requireOutboundHttp(
+						(covia.venue.RequestContext) context.get(CALLER_CONTEXT), method, endpoint.toString());
+					bearerAuthCustomizer(accessToken).customize(builder, method, endpoint, body, context);
+				})
 				.build();
 		client = McpClient.sync(transport)
+				.transportContextProvider(() -> caller.get() == null
+					? io.modelcontextprotocol.common.McpTransportContext.EMPTY
+					: io.modelcontextprotocol.common.McpTransportContext.create(java.util.Map.of(CALLER_CONTEXT, caller.get())))
 				.requestTimeout(Duration.ofSeconds(10))
 				.build();
 		client.initialize();

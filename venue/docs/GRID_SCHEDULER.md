@@ -14,23 +14,24 @@ Agent wake is a consumer of this service — see §8, and
 ## 1. Entities
 
 - **Scheduled event** — a deferred invocation, one-shot or recurring:
-  `{ time, id, operation, input, caller, owner?, created, proofs, description?, repeat?, track?, lastFired?, lastJob? }`.
+  `{ time, id, operation, input, caller, created, context, description?, repeat?, track?, lastFired?, lastJob? }`.
   - `time` — absolute millis on the venue's clock at which the event is next due.
   - `operation` — a grid operation reference (asset id or operation path).
   - `input` — the cell passed to that operation when it fires.
-  - `caller` — the principal that scheduled it: the owner, or one of its
-    agents or a delegate acting for it. The event fires as its caller. An
+  - `caller` — the principal that scheduled it: a user or one of its agents.
+    The event fires as its caller, in its caller's account (an agent's being
+    its owner's, read from its DID), which it belongs to and runs in. The
+    schedule is kept venue-wide, so every event names its caller (COG-8). An
     agent's events go with it: deleting the agent removes them, and one that
     comes due after its agent is gone is dropped without firing.
-  - `owner` — the user it belongs to, when that differs from `caller`: the
-    namespace it runs in and the key for `list`, `cancel` and `trigger`. Absent
-    means the caller's own. Both fields follow COG-8 and are written and read
-    with `covia.grid.Attribution`.
   - `created` — millis on the venue's clock at which it was scheduled.
   - `description` — optional caller-written display text saying what the event
     is for, at most 500 characters. Never interpreted.
-  - `proofs` — the UCAN proof(s) the scheduler presented when scheduling,
-    presented again when it fires (§5).
+  - `context` — the state of the scheduling request's frame, which each fire
+    runs in (§5): the frame, whole, what narrows it (an access token or a
+    callable) and the UCAN proof(s) presented when scheduling
+    ([JOBS.md](./JOBS.md#a-jobs-state)). Unlike a job's, it keeps no route
+    or execution scopes: a fire is a request of its own.
   - `repeat` — optional recurrence spec; absent ⇒ one-shot. It is an object so
     richer forms can join later without renaming anything: today the only form
     is `{every: <millis>}`, a fixed interval (minimum 1 s). Calendar forms
@@ -71,10 +72,9 @@ The `:schedule` value is a single extensible `{ updated, events, byActor, ... }`
 
 ```
 events  = Index keyed by  time (8-byte big-endian unsigned millis) ‖ id (unique bytes)
-          value = { op, input, caller, owner?, time, created, description?, proofs?,
+          value = { op, input, caller, time, created, description?, context,
                     repeat?, track?, lastFired?, lastJob? }
-byActor = map from each caller that scheduled for another owner (an agent or a
-          delegate) to the set of keys of those events
+byActor = map from each agent that scheduled events to the set of their keys
 updated = the venue clock's stamp of the last mutation
 ```
 
@@ -84,8 +84,8 @@ updated = the venue clock's stamp of the last mutation
   `O(log n)` insert, remove, head-peek. The `id` suffix disambiguates events
   sharing a `time` and gives each a stable identity (minted at schedule time,
   same generator as Job IDs).
-- `byActor` is the reverse index from the `caller` of each event that names an
-  `owner`, written in the same transaction as every change to `events`
+- `byActor` is the reverse index from the `caller` of each event an agent
+  scheduled, written in the same transaction as every change to `events`
   (schedule, cancel, fire, re-key), so the two never disagree. Deleting an agent
   removes its events through it (`Scheduler.cancelCaller`) without scanning
   `events`. An event that comes due
@@ -155,7 +155,13 @@ each run on its caller's thread. There is no cross-thread race on the index and
 no claim flag: a claim reads the head and removes it under the lock. All
 ordering lives in the lattice index; nothing scans sleeping events.
 
-**Next due.** Once a change commits, the venue tells the application when its
+**Next due query.** `CoviaApplication.nextDue()` reports the earliest queued
+timestamp across started, non-closing mounted venues as a `CVMLong`, or `null`
+when none is queued, regardless of dispatch capacity. It is a read-only
+observation, not an idle signal. The caller-visible contract and driven-clock
+example are in [EMBEDDING.md, Time](./EMBEDDING.md#time).
+
+**Timer wake-up.** Once a change commits, the venue tells the application when its
 next event is due, after releasing its lock so that no venue's lock is ever
 held while another's is taken. That is the head event's `time`, which may
 already have passed (an event scheduled in the past is due at once). A venue
@@ -170,23 +176,23 @@ nothing due holds no thread.
    whose time is the latest asked for. A step that leaves the time unchanged
    still starts whatever is due, such as an event added since with a past time.
 2. While a place is free (`scheduler.maxConcurrency`, below), **claims** the
-   head event if its `time ≤ t` — **one** whole-value replace (§2) that covers
-   everything the fire changes about the schedule: a one-shot event is
-   **removed**; a recurring event is **re-inserted** under the same `id` at
-   its next due slot with `lastFired = t` and, for a tracked fire, `lastJob`.
-   The fire's Job is *prepared* first, under the lock: minted, PENDING and,
-   when tracked, persisted in the owner's history, which makes `lastJob` part
-   of that schedule write — the adapter is **not** started. Job preparation and the
-   schedule claim are two ordered lattice updates because they touch different
-   records. A crash between them can leave an unstarted PENDING Job while the
-   event remains; recovery fails that Job and a later fire prepares a new one.
-   There is still no state in which an event has been consumed but its Job is
-   unknown. Because the claim and every other mutation hold the lock, a
-   `trigger` of the same event either already ran (the drain finds it gone) or
-   runs after. This gives **at-most-once** firing.
-3. Starts each claimed event's prepared Job (§7) on a fresh virtual thread,
-   **as the event's caller would invoke it now, presenting its `proofs`
-   again** (§5). Any error is logged. Its place frees **when the
+   head event if its `time ≤ t`. The fire's Job is *prepared* first, under
+   the lock: its operation resolved and its caller checked. Then **one**
+   venue transaction commits everything the fire changes: the Job, PENDING,
+   under an id taken in that transaction, in the owner's history when
+   tracked; and the schedule's change, one whole-value replace (§2), in
+   which a one-shot event is **removed** and a recurring event is
+   **re-inserted** under the same `id` at its next due slot with
+   `lastFired = t` and, for a tracked fire, `lastJob`. The adapter is
+   **not** started yet. So an event is never consumed without its Job, nor a
+   Job recorded for an event left due. A crash after the commit leaves an
+   unstarted PENDING Job, which recovery fails as interrupted; the fire is
+   not repeated. Because the claim and every other mutation hold the lock, a
+   `trigger` of the same event either already ran (the drain finds it gone)
+   or runs after. This gives **at-most-once** firing.
+3. Starts each claimed event's Job (§7) on a fresh virtual thread,
+   **as the event's caller would invoke it now, in the state it keeps**
+   (§5). Any error is logged. Its place frees **when the
    operation's invocation returns** — the adapter has been called and has
    handed back its result — not when its Job finishes; the drain then claims
    the next due event. Adapters run blocking I/O off the invoking thread
@@ -210,9 +216,9 @@ launch has finished recovery, and from the moment close begins, it starts
 nothing, so events falling due then stay in the schedule for its next start.
 Its close fails any update still waiting on it with `ShuttingDownException`.
 
-If a Job cannot be prepared (unresolvable op, capability denied), the event is
-still claimed — the schedule advances, there is no Job and no `lastJob`, and
-the error is logged (or returned, for `trigger`).
+If a Job cannot be prepared or recorded (unresolvable op, capability denied,
+account deleted), the event is still claimed — the schedule advances, there is
+no Job and no `lastJob`, and the error is logged (or returned, for `trigger`).
 
 **Claim-then-invoke** is chosen over invoke-then-remove so a crash mid-fire can
 at worst *drop* an event, never double-run a user's operation. Schedules that
@@ -237,29 +243,36 @@ at a time.
 
 ## 5. Authority at fire time — no capability escalation
 
-Every event records its `caller` and its `owner` (the caller's own namespace
-unless it says otherwise), taken from the `RequestContext` at schedule time.
-`cancel`, `trigger`, `inspect`, and `list` are restricted to the owner
-(reusing the venue's access control). Sharing the owner's namespace is
-proximity, not permission: a capability-scoped agent or delegate reaches only
-the events it scheduled itself (its `caller`). Scheduled events are not a
-capability resource, so no caps extend that reach.
+Every event records its `caller`, the `authority` of the request that
+scheduled it, whose account it belongs to.
 
-A scheduled event is a *deferred* invocation by its caller: the owner, or the
-agent or delegate that scheduled it. The venue must **not** fire it under its
+An event is a capability resource, `<owner>/x/schedule/<id>`, where `<id>` is
+the event's `id`, the part of its handle that stays fixed as a recurring event
+moves. `crud/read` on it lists it, and `schedule/manage` cancels or triggers
+it. The account's whole authority covers all of its events, and the caps of a
+token, a callable or an agent decide as for any resource, so a capped agent
+needs these caps even for the events it scheduled: having scheduled one grants
+nothing, as having started a job does not. Another account's event needs a
+grant.
+
+A scheduled event is a *deferred* invocation by its caller: a user or the
+agent that scheduled it. The venue must **not** fire it under its
 own ambient authority, nor under anyone's but the caller's: either would let
 a caller schedule work that runs with more authority than they hold.
 
 **Invariant: a fire runs exactly as its caller would invoke the operation at
-fire time** (`Engine.context(owner, caller, proofs)`), in the owner's
-namespace, presenting again the UCAN proof(s) the caller presented when
-scheduling, which the event keeps in `proofs`. Consequences, all intended:
+fire time** (`Engine.contextOf`), in the owner's namespace, from the state
+the event keeps in `context`: presenting again the UCAN proof(s) the caller
+presented when scheduling, narrowed by the access token or callable the
+scheduling request was narrowed by, as it stands then. Consequences, all
+intended:
 
 - An owner's fire has the owner's authority; an agent's has the agent's
   `config.caps` as they are then, so narrowing an agent narrows its queued
   work, and a deleted agent's work does not fire.
-- A delegate's fire passes the same `user/sudo` check a live request would, so
-  a revoked or expired delegation stops it.
+- An event scheduled under `admin/sudo` is the user's own. One a delegate
+  scheduled before `admin/sudo` acted as the user was removed when the venue
+  was upgraded to version 3 ([MIGRATE.md](MIGRATE.md)).
 - The public principal's fire has `auth.public.caps` as they are then, and
   none while public access is off.
 - A proof's own bounds still apply: an expired, revoked or attenuated proof
@@ -269,6 +282,12 @@ scheduling, which the event keeps in `proofs`. Consequences, all intended:
 Every context that can schedule is a principal's own as it stands, so this
 loses nothing: an agent's step always runs as that agent, under its record's
 caps, whatever its input names (`Engine.stepContext`).
+
+A fire is a request of its own, which the scheduler carried: its route is the
+scheduler's step alone, naming the event's handle, whatever carried the
+request that scheduled it, so an agent it reaches is told the scheduler
+delivered it ([AGENT_CONTEXT.md](./AGENT_CONTEXT.md) §1.2). An access token
+the event was scheduled through still narrows the fire, as above.
 
 A fire presents no sign-in credential: only a live request carries one, and
 the venue keeps none. A grid hop with `authenticateAs: "caller"` therefore
@@ -291,23 +310,28 @@ operations, described by intent:
   nor `after`, the first fire is one interval from now); optional `track`
   chooses durable or transient fires (§7); optional `description` (a string
   of at most 500 characters, refused otherwise) says what the event is for.
-- **cancel** — remove an event by handle.
+- **cancel** — remove an event by handle (`schedule/manage`).
 - **trigger** — fire an event now by handle, ahead of its time — the
-  early-execution / test hook. A one-shot event is consumed; a recurring event
-  stays scheduled at its unchanged next due time.
-- **list** — the caller's pending events, in time order: each
-  `{handle, op, caller, time, track}` plus `owner`, `input`, `description`,
+  early-execution / test hook (`schedule/manage`). A one-shot event is
+  consumed; a recurring event stays scheduled at its unchanged next due time.
+  It returns the operation's result as a call to the operation would: an
+  `agent:request` gives its task if the agent has not answered within the
+  request's `timeout`, and at once when an agent triggers a request to itself
+  ([AGENT_TASKS.md](./AGENT_TASKS.md) §2).
+- **list** — the pending events of the caller's account that it may read
+  (`crud/read`), in time order: each
+  `{handle, id, op, caller, time, track}` plus `input`, `description`,
   `created`, `repeat`, `lastFired` and `lastJob` where present. `track` is the effective
   tracking the next fire will use, after venue policy. `input` is shown as a
   job record would hold it: the fields the operation declares in
   `secretFields` are hidden, resolved as a job record's `op` is, and `input`
   is withheld when the operation no longer resolves, since its secret fields
   are then unknown. The stored input is untouched, because firing replays it.
-  Captured `proofs` are authority, not description, and are never listed.
+  Its `context` is authority, not description, and is never listed.
   Events stored before `created` and `description` were recorded list without
   them.
 
-All operations are scoped to the caller's identity. Scheduling is itself an
+Scheduling is itself an
 operation, so an agent can schedule future work (including waking itself) as a
 normal tool call.
 
@@ -332,12 +356,12 @@ every other job uses.
   `operation.internal:false` still forces recording.
 - **tracked** — a durable Job in the owner's `j/` history, exempt from
   top-level admission like any internal dispatch, recorded regardless of
-  operation metadata. The Job is prepared before the claim so its ID is
-  written into the surviving recurring record as `lastJob` in the same
-  atomic replace that consumes the fire (§4); a tracked one-shot simply
-  appears in the owner's job list like any other job. On restart, a prepared
-  Job whose adapter never ran is failed as interrupted by job recovery — the
-  same rule as any other PENDING job — so the split can never double-run.
+  operation metadata. The Job is recorded in the transaction that consumes
+  the fire (§4), so its ID is written into the surviving recurring record as
+  `lastJob` in that same commit; a tracked one-shot simply appears in the
+  owner's job list like any other job. On restart, a recorded Job whose
+  adapter never ran is failed as interrupted by job recovery — the same rule
+  as any other PENDING job — so a fire never runs twice.
 
 **Which applies is resolved at fire time**, so an operator's policy covers
 events already queued:
@@ -380,11 +404,10 @@ and how the run loop treats a fire, are in [AGENT_LOOP.md §4.6](./AGENT_LOOP.md
   it into a durable Job (only `forceTrackJobs` does, §7). Its handle is stored
   on the agent record (`wakeHandle`) so the next change can cancel-and-replace
   it — exactly one event per agent.
-- The event records the agent's owner as its `caller`, with no other `owner`
-  and no `proofs`, so it fires with the owner's own authority, exactly as the
+- The event records the agent's owner as its `caller`, and a state naming the owner alone, so it fires with the owner's own authority, exactly as the
   owner calling `agent:trigger` would (§5).
-- When it fires, `agent:trigger` (via the transient-Job `invokeFuture` path, so no
-  session is minted and no durable Job is recorded) calls `wakeAgent(force:false)`. The run
+- When it fires, `agent:trigger` (a transient Job, so no session is minted and
+  no durable Job is recorded) calls `wakeAgent(force:false)`. The run
   loop runs iff there is work (a session message, or a ready task, which includes a
   parked task whose `wakeTime` has come: AGENT_LOOP.md §4.6); it processes what's
   due, and the post-cycle `setThreadWakeTime` schedules the next earliest or
@@ -419,7 +442,7 @@ fired without expiring it, because the venue stopped, still expires (COG-16).
 across re-keying; **fires run as their caller at fire time, presenting their
 recorded proofs, no escalation (§5)**; transient or tracked fires per event and venue
 policy, with `lastJob` as the sole link to execution records (§7);
-owner-scoped access; firing by the application's update, at most
+access by capability on each event (`x/schedule/<id>`); firing by the application's update, at most
 `scheduler.maxConcurrency` starting at once (§4); boot catch-up (one fire per
 event, missed slots skipped); claim-then-invoke (at-most-once); a 1 s floor on
 `repeat.every`.

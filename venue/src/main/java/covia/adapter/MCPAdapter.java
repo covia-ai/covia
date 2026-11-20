@@ -20,23 +20,26 @@ import convex.core.data.prim.AInteger;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.api.Fields;
+import covia.exception.ConfigurationException;
 import covia.exception.CoviaException;
 import covia.exception.InvalidDefinitionException;
 import covia.exception.InvalidInputException;
 import covia.exception.JobFailedException;
 import covia.exception.NotFoundException;
-import covia.exception.NotSupportedException;
 import covia.exception.UnavailableException;
+import covia.exception.UnsupportedException;
+import covia.adapter.token.AccessToken;
+import covia.adapter.token.TokenAccessPoint;
+import covia.adapter.token.TokenAdapter;
 import covia.api.Abilities;
 import covia.lattice.CoviaPath;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
-import io.modelcontextprotocol.client.McpSyncClient;
 import io.modelcontextprotocol.spec.McpSchema.CallToolRequest;
 import io.modelcontextprotocol.spec.McpSchema.CallToolResult;
 import io.modelcontextprotocol.spec.McpSchema.Tool;
 
-public class MCPAdapter extends AAdapter {
+public class MCPAdapter extends AAdapter implements TokenAccessPoint {
 
 	public static final Logger log=LoggerFactory.getLogger(MCPAdapter.class);
 
@@ -62,12 +65,18 @@ public class MCPAdapter extends AAdapter {
 	protected void installAssets() {
 		// The adapter's own skill: v/skills/mcp lives and dies with this adapter.
 		installSkill("ops-tools/mcp", "/skills/mcp.json");
+		installSkill("ops-tools/mcp-tokens", "/skills/mcp-tokens.json");
 		TOOL_CALL  = installAsset("mcp/tools-call", "/adapters/mcp/toolCall.json");
 		TOOLS_LIST = installAsset("mcp/tools-list", "/adapters/mcp/toolList.json");
 		installAsset("mcp/add-server",    "/adapters/mcp/addServer.json");
 		installAsset("mcp/add-tool",      "/adapters/mcp/addTool.json");
 		installAsset("mcp/remove-server", "/adapters/mcp/removeServer.json");
 		installAsset("mcp/refresh",       "/adapters/mcp/refresh.json");
+		installAsset("mcp/create-token",  "/adapters/mcp/createToken.json");
+		installAsset("mcp/update-token",  "/adapters/mcp/updateToken.json");
+		installAsset("mcp/delete-token",  "/adapters/mcp/deleteToken.json");
+		installAsset("mcp/list-tokens",   "/adapters/mcp/listTokens.json");
+		installAsset("mcp/get-token",     "/adapters/mcp/getToken.json");
 	}
 
 	@Override
@@ -131,17 +140,17 @@ public class MCPAdapter extends AAdapter {
 						throw new InvalidInputException("Tool call requires arguments as a JSON object");
 					}
 
-					// Access token: explicit input wins; else the operation
+					// Access token: the input's bearer wins; else the operation
 					// metadata's auth reference (secret ref, possibly
 					// DID-qualified) resolved at call time — never persisted
 					// as a raw value in the bridged asset.
-					AString token=RT.getIn(input, Fields.TOKEN);
-					String accessToken=(token!=null)?token.toString()
+					String bearer = inputBearer(ctx, input, serverUrl);
+					String accessToken = (bearer != null) ? bearer
 						: resolveAuthRef(ctx, RT.ensureString(
 							RT.getIn(meta, Fields.OPERATION, K_AUTH)), serverUrl);
 
 					// Make the MCP tool call
-					return callMCPTool(serverUrl, remoteToolName.toString(), toolArguments, accessToken);
+					return callMCPTool(ctx, serverUrl, remoteToolName.toString(), toolArguments, accessToken);
 				}, VIRTUAL_EXECUTOR);
 
 			} else if (function.equals("list")) {
@@ -154,15 +163,11 @@ public class MCPAdapter extends AAdapter {
 					}
 					serverUrl = Strings.create(engine.outboundUrl(ctx, serverUrl.toString()));
 
-					// Get API access token, if provided
-					AString token = RT.getIn(input, Fields.TOKEN);
-					String accessToken = (token == null) ? null : token.toString();
-
-					// List the MCP tools
-					return listMCPTools(serverUrl, accessToken);
+					// List the MCP tools, with the input's bearer if it names one
+					return listMCPTools(ctx, serverUrl, inputBearer(ctx, input, serverUrl));
 				}, VIRTUAL_EXECUTOR);
 			} else {
-				throw new NotSupportedException("Unsupported tools function: " + function);
+				throw new UnsupportedException("Unsupported tools function: " + function);
 			}
 		} else if (feature.equals("server")) {
 			// Server bridging (#80): register / refresh / remove external MCP
@@ -175,7 +180,7 @@ public class MCPAdapter extends AAdapter {
 				case "add" -> handleAddServer(ctx, input);
 				case "remove" -> handleRemoveServer(ctx, input);
 				case "refresh" -> handleRefresh(ctx, input);
-				default -> throw new NotSupportedException(
+				default -> throw new UnsupportedException(
 					"Unsupported server function: " + function);
 			}, VIRTUAL_EXECUTOR);
 		} else if (feature.equals("tool")) {
@@ -188,11 +193,26 @@ public class MCPAdapter extends AAdapter {
 			String function = subParts[1];
 			return CompletableFuture.supplyAsync(() -> switch (function) {
 				case "add" -> handleAddTool(ctx, input);
-				default -> throw new NotSupportedException(
+				default -> throw new UnsupportedException(
 					"Unsupported tool function: " + function);
 			}, VIRTUAL_EXECUTOR);
+		} else if (feature.equals("token")) {
+			// Access tokens accepted at the venue's own /mcp endpoint alone (ACCESS_TOKENS.md).
+			if (subParts.length < 2) {
+				throw new InvalidDefinitionException("MCP token operation requires function (create/update/delete/list/get)");
+			}
+			String function = subParts[1];
+			return CompletableFuture.supplyAsync(() -> switch (function) {
+				case "create" -> handleCreateToken(ctx, input);
+				case "update" -> handleUpdateToken(ctx, input);
+				case "delete" -> handleDeleteToken(ctx, input);
+				case "list" -> handleListTokens(ctx);
+				case "get" -> handleGetToken(ctx, input);
+				default -> throw new UnsupportedException(
+					"Unsupported token function: " + function);
+			}, VIRTUAL_EXECUTOR);
 		} else {
-			throw new NotSupportedException("Unsupported MCP feature: " + feature);
+			throw new UnsupportedException("Unsupported MCP feature: " + feature);
 		}
 	}
 
@@ -232,6 +252,32 @@ public class MCPAdapter extends AAdapter {
 		}
 	}
 
+	/** Refusal: a tools call or list given both forms of the bearer. */
+	public static final String BEARER_BOTH = "Give the bearer as token or as bearerSecret, not both";
+	/** Refusal: a {@code bearerSecret} that is not a secret reference. */
+	public static final String BEARER_SECRET_INVALID = "bearerSecret must be a secret reference: s/NAME, or did:.../s/NAME "
+		+ "(u:<user>/s/NAME for a user of this venue) under a secret/use grant";
+	/** Refusal: a {@code bearerSecret} naming no stored secret. */
+	public static final String BEARER_SECRET_NOT_FOUND = "No secret %s to send as the bearer";
+
+	/**
+	 * The bearer a tools call or list names in its input: {@code token}, the
+	 * bearer itself, or {@code bearerSecret}, a secret holding it, used with
+	 * the caller's authority for this call and sent only to {@code serverUrl}.
+	 * Null when the input names neither.
+	 */
+	private String inputBearer(RequestContext ctx, ACell input, AString serverUrl) {
+		AString token = RT.ensureString(RT.getIn(input, Fields.TOKEN));
+		AString secret = RT.ensureString(RT.getIn(input, Fields.BEARER_SECRET));
+		if (token != null && secret != null) throw new InvalidInputException(BEARER_BOTH);
+		if (secret == null) return (token == null) ? null : token.toString();
+		String ref = secret.toString();
+		if (!Engine.isSecretRef(ref)) throw new InvalidInputException(BEARER_SECRET_INVALID);
+		String value = engine.resolveSecret(ref, ctx, serverUrl.toString());
+		if (value == null) throw new NotFoundException(BEARER_SECRET_NOT_FOUND.formatted(ref), ref);
+		return value;
+	}
+
 	/**
 	 * Resolves an operation-metadata auth reference to an access token (#80).
 	 * Accepted forms:
@@ -262,19 +308,7 @@ public class MCPAdapter extends AAdapter {
 	private McpClientSession getOrConnect(String serverUrl, String accessToken) {
 		String endpointUrl = McpClientSession.endpointUrl(serverUrl);
 		String key = endpointUrl + "|" + (accessToken != null ? accessToken : "");
-		return clientSessions.computeIfAbsent(key, k -> new McpClientSession(endpointUrl, accessToken));
-	}
-
-	/**
-	 * Connect to an MCP server via a base URL. Returns a connected client
-	 * from the session pool.
-	 * @param baseURL Server base URL
-	 * @param accessToken Optional bearer token
-	 * @return McpSyncClient instance (session-managed)
-	 * @throws CoviaException if the session cannot be opened
-	 */
-	public McpSyncClient connect(String baseURL, String accessToken) {
-		return getOrConnect(baseURL, accessToken).getClient();
+		return clientSessions.computeIfAbsent(key, k -> new McpClientSession(endpointUrl, accessToken, engine));
 	}
 
 	/**
@@ -293,7 +327,7 @@ public class MCPAdapter extends AAdapter {
 	 * @param input Tool arguments
 	 * @param accessToken Optional access token
 	 */
-	public ACell callMCPTool(AString serverUrl, String toolName, ACell input, String accessToken) {
+	public ACell callMCPTool(RequestContext ctx, AString serverUrl, String toolName, ACell input, String accessToken) {
 		McpClientSession session = getOrConnect(serverUrl.toString(), accessToken);
 
 		@SuppressWarnings("unchecked")
@@ -301,7 +335,7 @@ public class MCPAdapter extends AAdapter {
 			.arguments((Map<String,Object>)JSON.json(RT.castMap(input)))
 			.build();
 
-		CallToolResult response = session.request(McpClientSession.TOOL_CALL.formatted(toolName),
+		CallToolResult response = session.request(ctx, McpClientSession.TOOL_CALL.formatted(toolName),
 			client -> client.callTool(request));
 
 		// Tool-level error: the session is healthy, the TOOL reported failure.
@@ -439,8 +473,8 @@ public class MCPAdapter extends AAdapter {
 	 * @return ACell containing the list of tools
 	 * @throws CoviaException if the server cannot be reached or does not list its tools
 	 */
-	public ACell listMCPTools(AString serverUrl, String accessToken) {
-		List<Tool> tools = listRemoteTools(serverUrl, accessToken);
+	public ACell listMCPTools(RequestContext ctx, AString serverUrl, String accessToken) {
+		List<Tool> tools = listRemoteTools(ctx, serverUrl, accessToken);
 
 		AVector<AMap<AString, ACell>> toolsVector = Vectors.empty();
 		for (Tool tool : tools) {
@@ -493,7 +527,7 @@ public class MCPAdapter extends AAdapter {
 
 		// Discover tools under the REGISTRAR's auth (resolved now, not stored raw)
 		String token = resolveAuthRef(ctx, auth, url);
-		List<Tool> tools = listRemoteTools(url, token);
+		List<Tool> tools = listRemoteTools(ctx, url, token);
 
 		// Normalise a bare secret ref to the registrar's DID-qualified form so
 		// the stored reference has one unambiguous owner (#80 ruling 3).
@@ -506,7 +540,7 @@ public class MCPAdapter extends AAdapter {
 		writeLattice(writeCtx, registryPath(venueScope, name), Maps.of(
 			K_URL, url,
 			K_AUTH, storedAuth,
-			Fields.CALLER, ctx.getCallerDID(),
+			Fields.CALLER, ctx.getAuthorityDID(),
 			Strings.intern("added"), engine.currentTimestamp(),
 			Fields.TOTAL, AInteger.create(toolNames.count())));
 
@@ -566,7 +600,7 @@ public class MCPAdapter extends AAdapter {
 
 		AString auth = RT.ensureString(RT.getIn(input, K_AUTH));
 		String token = resolveAuthRef(ctx, auth, url);
-		List<Tool> tools = listRemoteTools(url, token);
+		List<Tool> tools = listRemoteTools(ctx, url, token);
 		Tool tool = null;
 		for (Tool t : tools) {
 			if (toolName.toString().equals(t.name())) { tool = t; break; }
@@ -689,7 +723,7 @@ public class MCPAdapter extends AAdapter {
 		AString auth = RT.ensureString(RT.getIn(reg, K_AUTH));
 
 		String token = resolveAuthRef(ctx, auth, url);
-		List<Tool> tools = listRemoteTools(url, token);
+		List<Tool> tools = listRemoteTools(ctx, url, token);
 
 		// Reconcile: write the fresh set, delete entries no longer served.
 		String opsRoot = opsRoot(venueScope, name);
@@ -754,7 +788,7 @@ public class MCPAdapter extends AAdapter {
 			java.util.Map<String, Tool> fresh = new java.util.HashMap<>();
 			try {
 				String token = resolveAuthRef(ctx, auth, url);
-				for (Tool t : listRemoteTools(url, token)) fresh.put(t.name(), t);
+				for (Tool t : listRemoteTools(ctx, url, token)) fresh.put(t.name(), t);
 			} catch (CoviaException e) {
 				errors = errors.conj(Maps.of(
 					Fields.SERVER, url,
@@ -943,9 +977,9 @@ public class MCPAdapter extends AAdapter {
 	}
 
 	/** Lists a remote server's tools over a pooled session. */
-	private List<Tool> listRemoteTools(AString url, String token) {
+	private List<Tool> listRemoteTools(RequestContext ctx, AString url, String token) {
 		return getOrConnect(url.toString(), token)
-			.request(McpClientSession.TOOLS_LIST, client -> client.listTools().tools());
+			.request(ctx, McpClientSession.TOOLS_LIST, client -> client.listTools().tools());
 	}
 
 	// ---- scope / path / lattice helpers ----
@@ -1025,6 +1059,114 @@ public class MCPAdapter extends AAdapter {
 		} catch (Exception e) {
 			return null;
 		}
+	}
+
+	// ========== MCP tokens: the MCP access point (ACCESS_TOKENS.md) ==========
+
+	public static final String TOOLS_INVALID = "tools must be an array of operation references, or of objects {operation, name?, description?}";
+	public static final String TOOL_NOT_HELD = "tools[%d] names no operation this venue holds: %s";
+	public static final String TOOL_NAME_INVALID = "tools[%d] would be named %s, which is not an MCP tool name ([A-Za-z0-9_.-]{1,128}): give it a name";
+	public static final String TOOL_NAMES_CLASH = "Two tools would both be named %s: give one of them a name";
+	public static final String TOKENS_UNAVAILABLE = "MCP tokens are unavailable: the token adapter is not running";
+
+	/** This access point's name, the key of what an access token keeps for the venue's MCP endpoint. */
+	public static final AString ACCESS_POINT = Strings.intern("mcp");
+
+	private static final java.util.regex.Pattern MCP_TOOL_NAME = java.util.regex.Pattern.compile("[A-Za-z0-9_.-]{1,128}");
+
+	/** A token's {@code access.mcp} entry: the tools it offers, checked as {@link #requireTools} checks them. */
+	@Override
+	public AMap<AString, ACell> tokenEntry(RequestContext ctx, ACell requested) {
+		return McpAccess.entry(requireTools(ctx, RT.getIn(requested, Fields.TOOLS)));
+	}
+
+	/**
+	 * The tool entries a token offers, as an agent's {@code config.tools}: each
+	 * a local operation {@code ctx} may read, under an MCP tool name, no two
+	 * alike (ToolPalette's naming).
+	 */
+	private AVector<ACell> requireTools(RequestContext ctx, ACell requested) {
+		AVector<ACell> tools = RT.ensureVector(requested);
+		if (tools == null) throw new InvalidInputException(TOOLS_INVALID);
+		java.util.Set<String> names = new java.util.HashSet<>();
+		for (long i = 0; i < tools.count(); i++) {
+			ACell entry = tools.get(i);
+			AString[] parsed = covia.adapter.agent.ToolPalette.parseConfigToolEntry(entry);
+			if (parsed == null) throw new InvalidInputException(TOOLS_INVALID);
+			String name = covia.adapter.agent.ToolPalette.localToolName(engine, ctx, entry);
+			if (name == null) throw new InvalidInputException(TOOL_NOT_HELD.formatted(i, parsed[0]));
+			if (!MCP_TOOL_NAME.matcher(name).matches()) throw new InvalidInputException(TOOL_NAME_INVALID.formatted(i, name));
+			if (!names.add(name)) throw new InvalidInputException(TOOL_NAMES_CLASH.formatted(name));
+		}
+		return tools;
+	}
+
+	/** The token adapter, which keeps every access token; MCP tokens are those accepted at MCP alone. */
+	private TokenAdapter tokenAdapter() {
+		if (engine.getAdapter(TokenAdapter.NAME) instanceof TokenAdapter tokens) return tokens;
+		throw new UnavailableException(TOKENS_UNAVAILABLE);
+	}
+
+	/** The access an MCP token asks for: the MCP endpoint alone, offering {@code tools}. */
+	private static AMap<AString, ACell> mcpAccess(ACell tools) {
+		return Maps.of(ACCESS_POINT, Maps.of(Fields.TOOLS, tools));
+	}
+
+	/** Whether {@code token} is an MCP token: accepted at MCP alone. */
+	private static boolean isMcpToken(AccessToken token) {
+		return token.accessPoints().equals(java.util.Set.of(ACCESS_POINT));
+	}
+
+	/** What the MCP token operations show of a token, never its bearer. */
+	private static AMap<AString, ACell> mcpSummary(AccessToken token) {
+		McpAccess access = token.access(ACCESS_POINT, McpAccess::new);
+		AMap<AString, ACell> shown = Maps.of(
+			Fields.NAME, token.name(),
+			Fields.ISSUER, token.issuer(),
+			Fields.TOOLS, (access == null) ? Vectors.empty() : access.tools(),
+			Fields.CAPS, TokenAdapter.shownCaps(token),
+			Fields.CREATED, token.record().get(Fields.CREATED));
+		Long expires = token.expires();
+		return (expires == null) ? shown : shown.assoc(Fields.EXPIRES, convex.core.data.prim.CVMLong.create(expires));
+	}
+
+	private static AMap<AString, ACell> mcpResult(TokenAdapter.Issued issued) {
+		AMap<AString, ACell> shown = mcpSummary(issued.token());
+		return (issued.bearer() == null) ? shown : shown.assoc(Fields.TOKEN, Strings.create(issued.bearer()));
+	}
+
+	/** Creates an MCP token offering the input's tools, with {@code mcp/token} on it. */
+	ACell handleCreateToken(RequestContext ctx, ACell input) {
+		TokenAdapter tokens = tokenAdapter();
+		return mcpResult(tokens.create(ctx, TokenAdapter.requireName(input), mcpAccess(RT.getIn(input, Fields.TOOLS)),
+			RT.getIn(input, Fields.CAPS), RT.getIn(input, Fields.EXPIRES), tokens.onlyAt(ACCESS_POINT, Abilities.MCP_TOKEN)));
+	}
+
+	/** Changes an MCP token's tools, caps or expiry, or rotates it, with {@code mcp/token} on it. */
+	ACell handleUpdateToken(RequestContext ctx, ACell input) {
+		TokenAdapter tokens = tokenAdapter();
+		ACell tools = RT.getIn(input, Fields.TOOLS);
+		return mcpResult(tokens.update(ctx, TokenAdapter.requireName(input), (tools == null) ? null : mcpAccess(tools),
+			RT.getIn(input, Fields.CAPS), RT.getIn(input, Fields.EXPIRES),
+			convex.core.data.prim.CVMBool.TRUE.equals(RT.getIn(input, Fields.ROTATE)), tokens.onlyAt(ACCESS_POINT, Abilities.MCP_TOKEN)));
+	}
+
+	/** Deletes an MCP token, with {@code mcp/token} on it. */
+	ACell handleDeleteToken(RequestContext ctx, ACell input) {
+		TokenAdapter tokens = tokenAdapter();
+		return TokenAdapter.deleted(tokens.delete(ctx, TokenAdapter.requireName(input), tokens.onlyAt(ACCESS_POINT, Abilities.MCP_TOKEN)));
+	}
+
+	/** Lists the MCP tokens in the caller's namespace, never their bearers. */
+	ACell handleListTokens(RequestContext ctx) {
+		return TokenAdapter.listed(tokenAdapter().list(ctx, MCPAdapter::isMcpToken), MCPAdapter::mcpSummary);
+	}
+
+	/** An MCP token's bearer again, where the venue keeps it, with {@code admin/token/mcp} on it. */
+	ACell handleGetToken(RequestContext ctx, ACell input) {
+		TokenAdapter tokens = tokenAdapter();
+		AString name = TokenAdapter.requireName(input);
+		return Maps.of(Fields.NAME, name, Fields.TOKEN, tokens.bearer(ctx, name, tokens.onlyAt(ACCESS_POINT, Abilities.ADMIN_TOKEN_MCP)));
 	}
 
 	/**

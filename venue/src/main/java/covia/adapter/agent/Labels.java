@@ -1,5 +1,7 @@
 package covia.adapter.agent;
 
+import java.util.List;
+
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
@@ -50,7 +52,9 @@ public final class Labels {
 		BUDGET("Context budget", "context-budget", true),
 		UNAVAILABLE_TOOLS("Unavailable tools", "unavailable-tools", false),
 		/** Who the following turn came from ({@link TurnProvenance}); attributes vary by turn. */
-		FROM("From: %s", "from", true);
+		FROM("From: %s", "from", true),
+		/** Who the following turn came from, for a turn whose route names where its request started: one sentence ({@link TurnProvenance}). */
+		FROM_VENUE("From (venue-verified): %s", "from", true);
 
 		final String pattern;
 		final String tag;
@@ -86,15 +90,54 @@ public final class Labels {
 	 * {@code name, value} pair given, in order, escaped.
 	 */
 	public static String renderAttributed(AString dialect, Kind kind, String summary, String... namesAndValues) {
+		return renderAttributed(dialect, kind, summary, List.of(), namesAndValues);
+	}
+
+	/**
+	 * As {@link #renderAttributed(AString, Kind, String, String...)}, with child
+	 * elements in xml: each child is its tag followed by {@code name, value}
+	 * pairs, escaped, and the element closes after them. With no children it is
+	 * the label-only element. The bracket and header label is {@code summary}
+	 * alone, which must already say what the children do.
+	 */
+	public static String renderAttributed(AString dialect, Kind kind, String summary, List<String[]> children,
+			String... namesAndValues) {
 		if (XML.equals(dialect)) {
 			StringBuilder sb = new StringBuilder("<").append(kind.tag);
-			for (int i = 0; i + 1 < namesAndValues.length; i += 2) {
-				sb.append(' ').append(namesAndValues[i]).append("=\"").append(attr(namesAndValues[i + 1])).append('"');
+			appendAttributes(sb, namesAndValues, 0);
+			if (children.isEmpty()) return sb.append("/>").toString();
+			sb.append('>');
+			for (String[] child : children) {
+				sb.append('<').append(child[0]);
+				appendAttributes(sb, child, 1);
+				sb.append("/>");
 			}
-			return sb.append("/>").toString();
+			return sb.append("</").append(kind.tag).append('>').toString();
 		}
 		String label = String.format(kind.pattern, summary);
 		return HEADER.equals(dialect) ? "## " + label : "[" + label + "]";
+	}
+
+	/**
+	 * A label-only element that is one venue-written sentence: the bracket and
+	 * header label is {@code kind}'s pattern filled with it; xml carries it as
+	 * the element's escaped text, marked as the venue's. Brackets and line
+	 * breaks never reach the label, so the sentence cannot close it.
+	 */
+	public static String renderSentence(AString dialect, Kind kind, String sentence) {
+		String line = sentence.replace('[', '(').replace(']', ')').replace('\n', ' ').replace('\r', ' ');
+		if (XML.equals(dialect)) {
+			return "<" + kind.tag + " verified=\"venue\">" + attr(line).replace(">", "&gt;") + "</" + kind.tag + ">";
+		}
+		String label = String.format(kind.pattern, line);
+		return HEADER.equals(dialect) ? "## " + label : "[" + label + "]";
+	}
+
+	/** Each {@code name, value} pair of {@code pairs} from {@code from} on, as an escaped xml attribute. */
+	private static void appendAttributes(StringBuilder sb, String[] pairs, int from) {
+		for (int i = from; i + 1 < pairs.length; i += 2) {
+			sb.append(' ').append(pairs[i]).append("=\"").append(attr(pairs[i + 1])).append('"');
+		}
 	}
 
 	/** An element whose source failed: the label carries the reason, there is no body. */

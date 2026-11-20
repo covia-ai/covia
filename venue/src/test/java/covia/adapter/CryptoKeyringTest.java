@@ -16,6 +16,7 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
 import covia.adapter.CryptoKeyring.Kind;
+import covia.exception.IntegrityException;
 import covia.venue.AdapterState;
 import covia.venue.Engine;
 import covia.venue.SecretStore;
@@ -59,11 +60,12 @@ class CryptoKeyringTest {
 		SecretStore.Keys secrets = SecretStore.keys(venue);
 		SecretStore.Keys keyring = CryptoKeyring.keys(venue);
 		AMap<AString, ACell> sealed = SecretStore.seal(Strings.create("x"), secrets);
-		assertThrows(RuntimeException.class, () -> SecretStore.unseal(sealed, keyring));
+		assertThrows(IntegrityException.class, () -> SecretStore.unseal(sealed, keyring));
 		// Nor a record claiming the secret store's legacy version 1.
 		AMap<AString, ACell> legacy = sealed.assoc(Strings.create("keyVersion"), CVMLong.create(SecretStore.KEY_VERSION_1));
-		IllegalStateException e = assertThrows(IllegalStateException.class, () -> SecretStore.unseal(legacy, keyring));
-		assertEquals(SecretStore.UNKNOWN_KEY_VERSION, e.getMessage());
+		IntegrityException e = assertThrows(IntegrityException.class, () -> SecretStore.unseal(legacy, keyring));
+		assertEquals(SecretStore.INTEGRITY_FAILED.formatted(SecretStore.SEALED_VALUE, SecretStore.UNKNOWN_KEY_VERSION),
+			e.getMessage());
 		assertThrows(IllegalArgumentException.class, () -> SecretStore.sealingKeys(venue, SecretStore.KEY_INFO_V2));
 	}
 

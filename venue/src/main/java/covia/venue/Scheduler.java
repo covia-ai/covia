@@ -13,6 +13,7 @@ import java.util.function.Supplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import convex.auth.ucan.Capability;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
@@ -20,16 +21,19 @@ import convex.core.data.AVector;
 import convex.core.data.Blob;
 import convex.core.data.Index;
 import convex.core.data.Maps;
+import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
+import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
+import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.exception.NotFoundException;
 import covia.exception.ShuttingDownException;
 import covia.grid.Asset;
-import covia.grid.Attribution;
 import covia.grid.Job;
+import covia.grid.Principals;
 import covia.venue.Schedule.Entry;
 import static covia.venue.Schedule.*;
 
@@ -47,7 +51,7 @@ import static covia.venue.Schedule.*;
  * the venue value merges whole-value by its own timestamp. Nothing here keeps
  * time: the application's update fires what is due ({@link #update}), and the
  * scheduler tells the application when its next event is due
- * ({@link #nextDue}). See {@code venue/docs/GRID_SCHEDULER.md §8}.</p>
+ * ({@link #nextUpdateTime}). See {@code venue/docs/GRID_SCHEDULER.md §8}.</p>
  *
  * <p><b>Concurrency.</b> One lock covers every index mutation (schedule,
  * cancel, trigger, claims by an update, agent wakes, user and caller
@@ -76,16 +80,16 @@ import static covia.venue.Schedule.*;
  * Job in the owner's history, and the only thing the scheduler keeps of it is
  * its ID ({@code lastJob} on a recurring record). No outcome, status or error
  * is ever stored here — that is what the Job is for. The Job is
- * {@link JobManager#prepareTracked prepared} (minted, PENDING, persisted) under
- * the lock before the schedule is atomically claimed. For recurrence, that one
- * schedule update also records the prepared Job ID; only then does the
- * adapter start, off the lock. Job preparation and schedule claim are two
- * ordered record updates because they have different lattice owners.</p>
+ * {@link JobManager#prepareTracked prepared} under the lock, then recorded
+ * (PENDING) in the venue transaction that claims the event, which for
+ * recurrence also records its ID; only then does the adapter start, off the
+ * lock.</p>
  *
- * <p><b>No escalation.</b> An event records its caller, its owner when that
- * differs, and the proofs presented at schedule time. A fire runs as that
- * caller would invoke the operation now ({@link Engine#context(AString, AString, AVector)}), presenting
- * those proofs again, via {@link JobManager#invokeInternal} /
+ * <p><b>No escalation.</b> An event records its caller, whose account it
+ * belongs to, and the state of the scheduling request's frame
+ * ({@link Engine#stateOf}). A fire runs as that caller would invoke the
+ * operation now ({@link Engine#contextOf}), presenting the kept proofs again
+ * and narrowed as the request was, via {@link JobManager#invokeInternal} /
  * {@link JobManager#prepareTracked} (§5 of the design), which enforce that scope
  * on dispatch. The scheduler never invents or keeps authority.</p>
  */
@@ -93,15 +97,22 @@ public class Scheduler {
 
 	private static final Logger log = LoggerFactory.getLogger(Scheduler.class);
 
+	/** The scheduler adapter's name, which a fire's route step names. */
+	public static final String NAME = "scheduler";
+	private static final AString SCHEDULER = convex.core.data.Strings.intern(NAME);
+
 	public static final long MIN_REPEAT_MS = Schedule.MIN_REPEAT_MS;
 	public static final int MAX_DESCRIPTION_CHARS = Schedule.MAX_DESCRIPTION_CHARS;
 	public static final String DESCRIPTION_NOT_STRING = Schedule.DESCRIPTION_NOT_STRING;
 	public static final String DESCRIPTION_TOO_LONG = Schedule.DESCRIPTION_TOO_LONG;
-	/** Refusal for a user reaching another user's scheduled event. */
-	public static final String NOT_OWNER = "Not the owner of this scheduled event";
-	/** Refusal for a capability-scoped agent reaching an event it did not schedule. */
-	public static final String EVENT_ACCESS_DENIED =
-		"A capability-scoped agent manages only the scheduled events it created";
+	/** Refusal for a request whose authority does not cover an ability on an event: the ability and the event's resource. */
+	public static final String EVENT_ACCESS_DENIED = "Not authorised for %s on scheduled event %s";
+	/**
+	 * Refusal to schedule for a principal acting in another account than its DID
+	 * names, such as an agent-shaped DID a bearer authenticates as, which is its
+	 * own namespace: an event belongs to its caller's account, read from the DID.
+	 */
+	public static final String NOT_ITS_ACCOUNT = "%s acts in %s, not the account its DID names, so it cannot schedule";
 	/** Why an event did not fire: the agent that scheduled it has been deleted, so it was dropped. */
 	public static final String AGENT_GONE = "%s no longer exists, so its scheduled event was dropped";
 	/** Refusal for work reaching a scheduler the venue has shut down. */
@@ -124,9 +135,10 @@ public class Scheduler {
 	private record Waiter(long time, List<Job> jobs, CompletableFuture<List<Job>> done) {}
 
 	/**
-	 * A claimed fire: the event record as fired, and either the prepared Job
-	 * to start or the error that prevented preparing it. The event's own state
-	 * has already been committed.
+	 * A claimed fire: the event record as fired, and either its Job, recorded
+	 * with the claim and accepted, to start, or the error that prevented
+	 * preparing or recording it. The event's own state has already been
+	 * committed.
 	 */
 	private record Claimed(AMap<AString, ACell> rec, JobManager.Prepared job, RuntimeException error) {}
 
@@ -190,31 +202,30 @@ public class Scheduler {
 	 */
 	public Blob schedule(AString opRef, ACell input, RequestContext ctx, long wakeTime,
 			AMap<AString, ACell> repeat, Boolean track, AString description) {
-		AString owner = ctx.getUserDID();
-		if (owner == null) throw new AuthException("Scheduling requires an authenticated caller");
+		AString caller = ctx.getAuthorityDID();
+		if (caller == null || ctx.getUserDID() == null) throw new AuthException("Scheduling requires an authenticated caller");
 		AMap<AString, ACell> rep = (repeat == null) ? null : validateRepeat(repeat);
 		AString desc = validateDescription(description);
-		// Owned by the user, fired as whoever scheduled it — so an agent's queued
-		// work stays visible to (and cancellable by) the account it runs in.
-		AString caller = ctx.getCallerDID();
-		AVector<ACell> proofs = ctx.getProofs();
-		AMap<AString, ACell> authority = Engine.keptAuthority(ctx);
+		// Fired as whoever scheduled it, in that principal's account, so an agent's
+		// queued work stays visible to the account it runs in.
+		AString owner = Principals.userOf(caller);
+		if (!owner.equals(ctx.getUserDID())) throw new AuthException(NOT_ITS_ACCOUNT.formatted(caller, ctx.getUserDID()));
+		AMap<AString, ACell> state = Engine.stateOf(ctx);
 		return locked(() -> {
 			engine.getVenueState().users().requireNotDeleted(owner);
-			return state().schedule(opRef, input, owner, caller, proofs, authority, wakeTime,
-				rep, track, desc, now());
+			return state().schedule(opRef, input, caller, state, wakeTime, rep, track, desc, now());
 		});
 	}
 
 	/**
-	 * Cancel a scheduled event by handle. Owner-only; a capability-scoped agent
-	 * cancels only events it scheduled. Returns false if absent.
+	 * Cancel a scheduled event by handle, which needs
+	 * {@link Abilities#SCHEDULE_MANAGE} on it. Returns false if absent.
 	 */
 	public boolean cancel(Blob handle, RequestContext ctx) {
 		return locked(() -> {
 			Entry e = state().find(handle);
-			// An event keeps its caller and owner for life, so this check holds for the cancel.
-			if (e != null) requireAccess(e.rec(), ctx);
+			// An event keeps its caller and id for life, so this check holds for the cancel.
+			if (e != null) requireAccess(e, ctx, Abilities.SCHEDULE_MANAGE);
 			return state().cancel(handle);
 		});
 	}
@@ -236,12 +247,14 @@ public class Scheduler {
 	}
 
 	/**
-	 * Fire a scheduled event now, ahead of its time. Owner-only; a
-	 * capability-scoped agent triggers only events it scheduled. A one-shot
+	 * Fire a scheduled event now, ahead of its time, which needs
+	 * {@link Abilities#SCHEDULE_MANAGE} on it. A one-shot
 	 * event is consumed; a recurring one stays scheduled at its unchanged next
-	 * due time. Returns the invocation's result future (run as the event's caller
-	 * would invoke it now). It takes no place under
-	 * {@code scheduler.maxConcurrency}: the caller asked for this one.
+	 * due time. The operation runs as the event's caller would invoke it now,
+	 * and its result is returned as the operation gives it to a caller waiting
+	 * on it ({@link JobManager.Prepared#resultFuture}), so a request to an agent
+	 * returns its task once the request's own wait is over. It takes no place
+	 * under {@code scheduler.maxConcurrency}: the caller asked for this one.
 	 */
 	public CompletableFuture<ACell> trigger(Blob handle, RequestContext ctx) {
 		Claimed c;
@@ -249,7 +262,7 @@ public class Scheduler {
 			c = locked(() -> {
 				Entry e = state().find(handle);
 				if (e == null) return null;
-				requireAccess(e.rec(), ctx);
+				requireAccess(e, ctx, Abilities.SCHEDULE_MANAGE);
 				return claim(e.key(), e.rec(), now(), false);
 			});
 		} catch (RuntimeException ex) {
@@ -259,14 +272,21 @@ public class Scheduler {
 			return CompletableFuture.failedFuture(new NotFoundException("No scheduled event for handle",
 				(handle == null) ? null : handle.toHexString()));
 		}
-		return fire(c);
+		if (c.error() != null) return CompletableFuture.failedFuture(c.error());
+		try {
+			c.job().start();
+			return c.job().resultFuture();
+		} catch (RuntimeException e) {
+			return CompletableFuture.failedFuture(e);
+		}
 	}
 
 	/**
-	 * The calling user's pending events, time-ordered — including those queued
-	 * by their agents; a capability-scoped agent sees only its own. Each is
-	 * {@code {handle, op, caller, time, track}} plus, when present,
-	 * {@code owner}, {@code input}, {@code description}, {@code created},
+	 * The pending events of the request's account that its authority may read
+	 * ({@code crud/read} on each event's resource), time-ordered, including those
+	 * its agents queued. Each is
+	 * {@code {handle, id, op, caller, time, track}} plus, when present,
+	 * {@code input}, {@code description}, {@code created},
 	 * {@code repeat}, {@code lastFired} and {@code lastJob}. {@code track} is
 	 * the effective tracking that the next fire will use; {@code input} is
 	 * shown as the owner's job history would show it ({@link #listedInput}).
@@ -275,6 +295,7 @@ public class Scheduler {
 	 */
 	public AVector<ACell> list(RequestContext ctx) {
 		AccessControl access = engine.getAccessControl();
+		AString account = ctx.getUserDID();
 		Index<Blob, ACell> idx = index();
 		AVector<ACell> out = Vectors.empty();
 		long cnt = idx.count();
@@ -283,16 +304,18 @@ public class Scheduler {
 			if (!(e.getValue() instanceof AMap)) continue;
 			@SuppressWarnings("unchecked")
 			AMap<AString, ACell> rec = (AMap<AString, ACell>) e.getValue();
-			if (!access.canAccessEvent(ctx, rec)) continue;
+			if (account == null || !account.equals(accountOf(rec))) continue;
+			if (!access.canAccessEvent(ctx, account, resource(account, e.getKey()), Capability.CRUD_READ)) continue;
 			AMap<AString, ACell> item = Maps.of(
 				K_HANDLE, e.getKey(),
+				Fields.ID, Schedule.idOf(e.getKey()),
 				K_OP, rec.get(K_OP),
 				K_TIME, rec.get(K_TIME),
 				K_TRACK, CVMBool.create(isTracked(rec)));
 			ACell input = listedInput(rec);
 			if (input != null) item = item.assoc(K_INPUT, input);
 			out = out.conj(copyIfPresent(rec, item,
-				K_CALLER, K_OWNER, K_DESCRIPTION, K_CREATED, K_REPEAT, K_LAST_FIRED, K_LAST_JOB));
+				K_CALLER, K_DESCRIPTION, K_CREATED, K_REPEAT, K_LAST_FIRED, K_LAST_JOB));
 		}
 		return out;
 	}
@@ -309,8 +332,7 @@ public class Scheduler {
 	private ACell listedInput(AMap<AString, ACell> rec) {
 		ACell input = rec.get(K_INPUT);
 		if (input == null) return null;
-		Asset op = engine.jobs().resolveRecordedOp(RT.ensureString(rec.get(K_OP)),
-			Attribution.owner(rec));
+		Asset op = engine.jobs().resolveRecordedOp(RT.ensureString(rec.get(K_OP)), accountOf(rec));
 		return (op == null) ? null : OutputRules.of(op.meta()).redact(input);
 	}
 
@@ -380,7 +402,17 @@ public class Scheduler {
 	 * scheduled, every place is taken (the event that frees one reports the
 	 * next time), the scheduler is not started or the venue is closing.
 	 */
-	long nextDue() {
+	long nextUpdateTime() {
+		lock.lock();
+		try {
+			return nextUpdateTimeLocked();
+		} finally {
+			lock.unlock();
+		}
+	}
+
+	/** The next queued timestamp, independent of dispatch capacity; see {@link CoviaApplication#nextDue}. */
+	CVMLong nextDue() {
 		lock.lock();
 		try {
 			return nextDueLocked();
@@ -395,7 +427,7 @@ public class Scheduler {
 	 * once it has committed.
 	 */
 	public void scheduleChanged() {
-		reportDue(nextDue());
+		reportDue(nextUpdateTime());
 	}
 
 	/** Whether this scheduler starts events: from its start until the venue begins closing. */
@@ -403,14 +435,21 @@ public class Scheduler {
 		return started && !shutdown && !engine.isClosing();
 	}
 
-	private long nextDueLocked() {
-		if (!takingPart()) return Long.MAX_VALUE;
+	private long nextUpdateTimeLocked() {
 		if (starting >= engine.config().getSchedulerMaxConcurrency()) return Long.MAX_VALUE;
+		CVMLong due = nextDueLocked();
+		return due == null ? Long.MAX_VALUE : due.longValue();
+	}
+
+	private CVMLong nextDueLocked() {
+		if (!takingPart()) return null;
 		Index<Blob, ACell> idx = index();
-		if (idx.isEmpty()) return Long.MAX_VALUE;
+		if (idx.isEmpty()) return null;
 		ACell head = idx.entryAt(0).getValue();
 		// A malformed head is due now, so the drain drops it.
-		return (head instanceof AMap) ? timeOf(asMap(head)) : Long.MIN_VALUE;
+		if (!(head instanceof AMap)) return CVMLong.MIN_VALUE;
+		ACell time = asMap(head).get(K_TIME);
+		return time instanceof CVMLong due ? due : CVMLong.ZERO;
 	}
 
 	/**
@@ -443,14 +482,14 @@ public class Scheduler {
 				// Claim: a one-shot is removed; a recurring event moves to its next
 				// slot (strictly after the target, so this loop always advances).
 				Claimed claimed = claim(key, rec, target, true);
-				if (claimed.job() != null) addToWaiters(claimed.job().job(), time);
+				if (claimed.job() != null) addToWaiters(claimed.job().accept(), time);
 				batch.add(claimed);
 				times.add(time);
 				inFlight.merge(time, 1, Integer::sum);
 				starting++;
 			}
 			settleWaiters(completed);
-			due = nextDueLocked();
+			due = nextUpdateTimeLocked();
 		} finally {
 			lock.unlock();
 		}
@@ -542,36 +581,45 @@ public class Scheduler {
 
 	// ------------------------------------------------------- bodies under the lock
 
-	/** Owner-only, and a capability-scoped agent only for an event it scheduled. */
-	private void requireAccess(AMap<AString, ACell> rec, RequestContext ctx) {
-		AString user = ctx.getUserDID();
-		if (user == null || !user.equals(Attribution.owner(rec))) throw new AuthException(NOT_OWNER);
-		if (!engine.getAccessControl().canAccessEvent(ctx, rec)) {
-			throw new AuthException(EVENT_ACCESS_DENIED);
+	/** Refuses unless the request may use {@code ability} on the event at {@code key}. */
+	private void requireAccess(Entry e, RequestContext ctx, AString ability) {
+		AString account = accountOf(e.rec());
+		AString resource = resource(account, e.key());
+		if (!engine.getAccessControl().canAccessEvent(ctx, account, resource, ability)) {
+			throw new AuthException(EVENT_ACCESS_DENIED.formatted(ability, resource));
 		}
 	}
 
+	/** The capability resource the event at {@code key} is: {@code <account>/x/schedule/<id>}. */
+	public static AString resource(AString account, Blob key) {
+		return Strings.create(account + "/" + RESOURCE_PATH + Schedule.idOf(key).toHexString());
+	}
+
+	/** Where an account's scheduled events are as capability resources. */
+	public static final String RESOURCE_PATH = "x/schedule/";
+
 	/**
-	 * Claim {@code rec} (at {@code key}) for a fire at {@code now} — one atomic
-	 * lattice write covering everything the fire changes about the schedule:
+	 * Claim {@code rec} (at {@code key}) for a fire at {@code now}. The fire's
+	 * Job is prepared first (its operation resolved and its caller checked),
+	 * then one venue transaction commits everything the fire changes:
 	 * <ul>
-	 * <li>the fire's Job is prepared first (minted, PENDING and, when tracked,
-	 *     persisted — the adapter is not started), so its ID is known;</li>
+	 * <li>the Job, PENDING, in the owner's history when tracked, under an id
+	 *     taken in that transaction, and bound to the owner's account as it is
+	 *     then;</li>
 	 * <li>a one-shot event is removed;</li>
 	 * <li>a recurring event is re-inserted with {@code lastFired = now} and,
 	 *     when tracked, {@code lastJob} — re-keyed at its next due slot when
 	 *     {@code advance} (an update), or left at its current time when not
 	 *     (an early {@code trigger} does not disturb the schedule).</li>
 	 * </ul>
-	 * The prepared Job is persisted before this schedule update, so there is no
-	 * state in which the event has been consumed but its Job is unknown. A crash
-	 * between the two updates can leave a PENDING Job while retaining the event;
-	 * recovery fails that unstarted Job, and a later fire prepares a new one.
-	 * If the Job cannot be prepared (unresolvable op, capability
-	 * denied), the event is still claimed, and the error travels with the
-	 * claim for the caller to see.
-	 * An event whose scheduling agent no longer exists is removed, recurring or
-	 * not, and fails the same way: nothing fires as a deleted agent.
+	 * So an event is never consumed without its Job, nor a Job recorded for an
+	 * event left due. The Job's live handle is then published; its adapter
+	 * starts later, off the lock ({@link #fire}). If the Job cannot be prepared
+	 * or recorded (unresolvable op, capability denied, account deleted), the
+	 * event is still claimed, and the error travels with the claim for the
+	 * caller to see. An event whose scheduling agent no longer exists is
+	 * removed, recurring or not, and fails the same way: nothing fires as a
+	 * deleted agent.
 	 */
 	private Claimed claim(Blob key, AMap<AString, ACell> rec, long now, boolean advance) {
 		AString gone = goneAgent(rec);
@@ -579,29 +627,64 @@ public class Scheduler {
 			state().remove(key);
 			return new Claimed(rec, null, new NotFoundException(AGENT_GONE.formatted(gone), gone.toString()));
 		}
-		JobManager.Prepared job = null;
+		JobManager.Prepared prepared = null;
 		RuntimeException error = null;
 		boolean tracked = isTracked(rec);
 		try {
-			engine.getVenueState().users().requireNotDeleted(Attribution.owner(rec));
-			job = tracked ? engine.jobs().prepareTracked(
-				RT.ensureString(rec.get(K_OP)), rec.get(K_INPUT), fireContext(rec))
-				: engine.jobs().prepareUntracked(RT.ensureString(rec.get(K_OP)), rec.get(K_INPUT), fireContext(rec));
+			engine.getVenueState().users().requireNotDeleted(accountOf(rec));
+			// The fire is a request of its own, started by the scheduler for the event's
+			// caller: how the event was scheduled is not part of its route
+			RequestContext fire = fireContext(rec).via(SCHEDULER, fireRecord(key, rec), fireText(rec));
+			prepared = tracked ? engine.jobs().prepareTracked(RT.ensureString(rec.get(K_OP)), rec.get(K_INPUT), fire)
+				: engine.jobs().prepareUntracked(RT.ensureString(rec.get(K_OP)), rec.get(K_INPUT), fire);
 		} catch (RuntimeException e) {
 			error = e;
 		}
-		state().recordFire(new Entry(key, rec), now, advance, tracked && job != null ? job.job().getID() : null);
-		return new Claimed(rec, job, error);
+		JobManager.Prepared job = prepared;
+		Entry entry = new Entry(key, rec);
+		RuntimeException refused;
+		try {
+			refused = engine.getVenueState().transact(draft -> {
+				Blob id = null;
+				RuntimeException failure = null;
+				if (job != null) {
+					try {
+						id = job.record(draft);
+					} catch (RuntimeException e) {
+						// A deleted account is refused before the Job is written: the claim commits without it
+						failure = e;
+					}
+				}
+				draft.schedule().recordFire(entry, now, advance, tracked ? id : null);
+				return failure;
+			});
+		} catch (RuntimeException | Error e) {
+			if (job != null) job.abandon();
+			throw e;
+		}
+		if (job == null) return new Claimed(rec, null, error);
+		if (refused != null) {
+			job.abandon();
+			return new Claimed(rec, null, refused);
+		}
+		try {
+			job.accept();
+		} catch (RuntimeException e) {
+			return new Claimed(rec, null, e);
+		}
+		return new Claimed(rec, job, null);
 	}
 
 	// ------------------------------------------------------------------ firing
 
 	/**
-	 * Run a claimed fire: start the Job prepared at claim time, durable when
+	 * Run a claimed fire: start the Job recorded with its claim, durable when
 	 * tracked and transient otherwise (design §7). The dispatch runs as its
 	 * caller would invoke it now ({@link #fireContext}), which JobManager
 	 * enforces — so a fire never has authority its caller has since lost.
-	 * Returns once the operation's invocation has returned.
+	 * Returns once the operation's invocation has returned, with the Job's own
+	 * outcome, which a due fire only logs; {@link #trigger} returns the
+	 * operation's result instead.
 	 */
 	private CompletableFuture<ACell> fire(Claimed c) {
 		if (c.error() != null) return CompletableFuture.failedFuture(c.error());
@@ -619,23 +702,36 @@ public class Scheduler {
 	 * scheduled before the reverse index recorded them.
 	 */
 	private AString goneAgent(AMap<AString, ACell> rec) {
-		AString caller = Attribution.caller(rec);
-		AString owner = Attribution.owner(rec);
+		AString caller = RT.ensureString(rec.get(K_CALLER));
+		AString owner = accountOf(rec);
 		AString agentId = Engine.agentIdIn(owner, caller);
 		return (agentId != null && engine.getAgent(owner, agentId) == null) ? caller : null;
 	}
 
 	/**
-	 * The context a fire runs under (design §5): its caller (the owner, one of
-	 * its agents or a delegate) as it would invoke the operation now, in the
-	 * owner's namespace, presenting again the proofs it presented when scheduling,
-	 * and with the separate authority it acted with, if it had one.
+	 * The context a fire runs under (design §5): the state the event keeps
+	 * ({@link Engine#stateOf}), worked out as it stands now in the event's
+	 * account ({@link Engine#contextOf}), so its caller acts as it would now,
+	 * presenting again the grants it presented when scheduling, narrowed as
+	 * that request was.
 	 *
-	 * @throws AuthException when the caller could not invoke it now
+	 * @throws AuthException when the caller could not invoke it now, or the event keeps no state
 	 */
 	RequestContext fireContext(AMap<AString, ACell> rec) {
-		return engine.context(Attribution.owner(rec), Attribution.caller(rec), asVector(rec.get(K_PROOFS)),
-			RT.ensureMap(rec.get(Fields.AUTHORITY)));
+		return engine.contextOf(accountOf(rec), RT.ensureMap(rec.get(K_CONTEXT)));
+	}
+
+	/** The scheduler's route record for a fire of event {@code key}: its handle, and when it was due. */
+	private static AMap<AString, ACell> fireRecord(Blob key, AMap<AString, ACell> rec) {
+		AMap<AString, ACell> record = Maps.of(K_HANDLE, key);
+		return (rec.get(K_TIME) instanceof CVMLong due) ? record.assoc(Fields.DUE, due) : record;
+	}
+
+	/** What the scheduler's record of a fire tells an agent: when the event was due. */
+	private static RouteText fireText(AMap<AString, ACell> rec) {
+		return (rec.get(K_TIME) instanceof CVMLong due)
+			? RouteText.builder().text("event due ").time(due.longValue()).build()
+			: RouteText.of("scheduled event");
 	}
 
 	/**
@@ -662,11 +758,6 @@ public class Scheduler {
 		return (AMap<AString, ACell>) c;
 	}
 
-	@SuppressWarnings("unchecked")
-	private static AVector<ACell> asVector(ACell c) {
-		return (c instanceof AVector) ? (AVector<ACell>) c : null;
-	}
-
 	private static AMap<AString, ACell> copyIfPresent(AMap<AString, ACell> from,
 			AMap<AString, ACell> to, AString... keys) {
 		for (AString k : keys) {
@@ -688,7 +779,7 @@ public class Scheduler {
 		lock.lock();
 		try {
 			result = body.get();
-			due = nextDueLocked();
+			due = nextUpdateTimeLocked();
 		} finally {
 			lock.unlock();
 		}

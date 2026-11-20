@@ -20,6 +20,7 @@ import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.api.Fields;
+import covia.exception.IntegrityException;
 import covia.lattice.Namespace;
 
 /**
@@ -52,6 +53,25 @@ public class SecretStoreTest {
 			"Decrypted value should match original plaintext");
 	}
 
+	@Test
+	public void testLongSecretOpensAsAStoreDecodesIt() {
+		SecretStore.Keys keys = SecretStore.keys(AKeyPair.generate());
+		String longValue = "k".repeat(5000);
+		AMap<AString, ACell> sealed = SecretStore.seal(Strings.create(longValue), keys);
+
+		// Decoded from a store, a ciphertext over one chunk is a tree of blobs,
+		// not the flat blob first written. The tree equals the blob, so assoc
+		// would keep the blob: the record is built afresh, as decoding does.
+		ACell tree = ((Blob) sealed.get(ENCRYPTED)).toCanonical();
+		assertFalse(tree instanceof Blob, "the ciphertext spans more than one chunk");
+		AMap<AString, ACell> decoded = Maps.of(ENCRYPTED, tree);
+		for (var entry : sealed.entrySet()) {
+			if (!ENCRYPTED.equals(entry.getKey())) decoded = decoded.assoc(entry.getKey(), entry.getValue());
+		}
+
+		assertEquals(longValue, SecretStore.unseal(decoded, keys).toString());
+	}
+
 	// ========== Sealed values ==========
 
 	@Test
@@ -64,11 +84,15 @@ public class SecretStoreTest {
 		assertEquals(CVMLong.create(SecretStore.CURRENT_KEY_VERSION), sealed.get(KEY_VERSION));
 		assertEquals(SECRET_VALUE, SecretStore.unseal(sealed, keys).toString());
 		assertNull(SecretStore.unseal(null, keys));
-		assertThrows(RuntimeException.class, () -> SecretStore.unseal(sealed, SecretStore.keys(AKeyPair.generate())),
-			"another venue's keys open nothing");
-		IllegalStateException notSealed = assertThrows(IllegalStateException.class,
+		IntegrityException foreign = assertThrows(IntegrityException.class,
+			() -> SecretStore.unseal(sealed, SecretStore.keys(AKeyPair.generate())), "another venue's keys open nothing");
+		assertEquals(SecretStore.INTEGRITY_FAILED.formatted(SecretStore.SEALED_VALUE, SecretStore.DOES_NOT_DECRYPT),
+			foreign.getMessage());
+		assertNotNull(foreign.getCause(), "the decryption failure is the cause");
+		IntegrityException notSealed = assertThrows(IntegrityException.class,
 			() -> SecretStore.unseal(Strings.create(SECRET_VALUE), keys));
-		assertEquals(SecretStore.INVALID_RECORD, notSealed.getMessage());
+		assertEquals(SecretStore.INTEGRITY_FAILED.formatted(SecretStore.SEALED_VALUE, SecretStore.INVALID_RECORD),
+			notSealed.getMessage());
 	}
 
 	// ========== Multiple Secrets ==========
@@ -236,9 +260,10 @@ public class SecretStoreTest {
 		var records = user.secrets().cursor();
 		for (ACell malformed : new ACell[] { null, Strings.create("invalid"), Maps.empty(), Maps.of(ENCRYPTED, "invalid") }) {
 			records.set(Maps.of(SECRET_NAME, malformed));
-			assertEquals(SecretStore.INVALID_RECORD, assertThrows(IllegalStateException.class,
+			String failed = SecretStore.INTEGRITY_FAILED.formatted(SECRET_NAME, SecretStore.INVALID_RECORD);
+			assertEquals(failed, assertThrows(IntegrityException.class,
 				() -> user.secrets().decrypt(SECRET_NAME, SecretStore.keys(kp))).getMessage());
-			assertEquals(SecretStore.INVALID_RECORD, assertThrows(IllegalStateException.class,
+			assertEquals(failed, assertThrows(IntegrityException.class,
 				() -> user.secrets().decrypt(SECRET_NAME, SecretStore.deriveKey(kp))).getMessage());
 		}
 	}
@@ -318,18 +343,19 @@ public class SecretStoreTest {
 		assertNull(user.agent("my-agent"),
 			"Agent should be null before creation");
 
-		Agent agent = user.ensureAgent("my-agent", null, null);
-		assertNotNull(agent, "ensureAgent should return non-null Agent");
-		assertTrue(agent.exists(), "Agent should exist after ensureAgent");
+		user.agents().create(Strings.create("my-agent"), null, null, null, null);
+		Agent agent = user.agent("my-agent");
+		assertNotNull(agent, "Agent should be found once created");
+		assertTrue(agent.exists());
 	}
 
 	@Test
-	public void testGetAgentsInitiallyNull() {
+	public void testAgentsInitiallyEmpty() {
 		AKeyPair kp = AKeyPair.generate();
 		VenueState vs = VenueState.create(kp);
 
 		User user = vs.users().ensure("did:key:zAlice");
-		assertNull(user.getAgents(), "Agents should be null before any are created");
+		assertTrue(user.agents().all().isEmpty(), "Agents should be empty before any are created");
 	}
 
 	// ========== Backwards Compatibility ==========
@@ -419,7 +445,7 @@ public class SecretStoreTest {
 	static void storeVersion1(User user, String name, String plaintext, AKeyPair kp) {
 		byte[] v1 = Hashing.sha256(kp.getSeed().getBytes()).getBytes();
 		Blob encrypted = Blob.wrap(AESGCM.encrypt(v1, plaintext.getBytes(StandardCharsets.UTF_8)));
-		user.secrets().cursor().withDefault(Maps.empty()).path(Strings.create(name)).set(Maps.of(
+		user.secrets().path(Strings.create(name)).set(Maps.of(
 			ENCRYPTED, encrypted,
 			Fields.UPDATED, CVMLong.create(1000L)));
 	}
@@ -502,9 +528,9 @@ public class SecretStoreTest {
 		user.secrets().store(SECRET_NAME, SECRET_VALUE, keys);
 		user.cursor().path(Namespace.S, Strings.create(SECRET_NAME), KEY_VERSION).set(CVMLong.create(7));
 
-		IllegalStateException e = assertThrows(IllegalStateException.class,
+		IntegrityException e = assertThrows(IntegrityException.class,
 			() -> user.secrets().decrypt(SECRET_NAME, keys));
-		assertEquals(SecretStore.UNKNOWN_KEY_VERSION, e.getMessage());
+		assertEquals(SecretStore.INTEGRITY_FAILED.formatted(SECRET_NAME, SecretStore.UNKNOWN_KEY_VERSION), e.getMessage());
 	}
 
 	@SuppressWarnings("deprecation")

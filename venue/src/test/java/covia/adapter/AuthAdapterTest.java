@@ -31,6 +31,7 @@ import convex.core.json.schema.JsonSchema;
 import convex.core.util.JSON;
 import covia.grid.Job;
 import covia.api.Abilities;
+import covia.api.Fields;
 import covia.grid.Status;
 import covia.grid.auth.VenueAuth;
 import covia.grid.client.VenueHTTP;
@@ -74,14 +75,14 @@ class AuthAdapterTest {
 		AString token = Strings.create(engine.resolveSecret("s/IDENTITY", ctx));
 		assertNotNull(JWT.verifyPublic(token, engine.getKeyPair().getAccountKey()));
 		AMap<AString, ACell> claims = JWT.parse(token).getClaims();
-		assertEquals(ctx.getCallerDID(), claims.get(JWT.SUB));
-		assertEquals(ctx.getCallerDID(), claims.get(JWT.ISS));
+		assertEquals(ctx.getAuthorityDID(), claims.get(JWT.SUB));
+		assertEquals(ctx.getAuthorityDID(), claims.get(JWT.ISS));
 		assertEquals(engine.getDIDString(), claims.get(JWT.AUD));
 		assertEquals(AuthAdapter.DEFAULT_IDENTITY_LIFETIME,
 			RT.ensureLong(claims.get(JWT.EXP)).longValue() - RT.ensureLong(claims.get(JWT.IAT)).longValue());
 		assertNull(claims.get(Strings.create("att")));
 		assertNull(claims.get(Strings.create("prf")));
-		assertEquals(ctx.getCallerDID(), new VenueAuthenticator(engine).verify(token).userDID());
+		assertEquals(ctx.getAuthorityDID(), new VenueAuthenticator(engine).verify(token).userDID());
 		assertEquals(Strings.create("s/IDENTITY"), RT.getIn(result, "secret"));
 		assertEquals(claims.get(JWT.EXP), RT.getIn(result, "exp"));
 		assertFalse(job.getData().toString().contains(token.toString()));
@@ -104,9 +105,9 @@ class AuthAdapterTest {
 		RequestContext authorised = agent.withCaps(Vectors.of(invoke, write));
 		ACell result = identityJob(authorised, identityInput()).awaitResult(5000);
 		AString token = Strings.create(engine.resolveSecret("s/IDENTITY", owner));
-		assertEquals(agent.getCallerDID(), RT.getIn(result, "sub"));
-		assertEquals(agent.getCallerDID(), new VenueAuthenticator(engine).verify(token).userDID());
-		assertFalse(owner.getCallerDID().equals(JWT.parse(token).getClaims().get(JWT.SUB)));
+		assertEquals(agent.getAuthorityDID(), RT.getIn(result, "sub"));
+		assertEquals(agent.getAuthorityDID(), new VenueAuthenticator(engine).verify(token).userDID());
+		assertFalse(owner.getAuthorityDID().equals(JWT.parse(token).getClaims().get(JWT.SUB)));
 		identityFailure(authorised, identityInput().assoc(Strings.create("name"), Strings.create("OTHER")));
 		assertNull(engine.resolveSecret("s/OTHER", owner));
 	}
@@ -128,6 +129,31 @@ class AuthAdapterTest {
 			identityFailure(RequestContext.of(publicDID), identityInput()).getErrorMessage());
 		assertEquals(AuthAdapter.IDENTITY_AUTH_REQUIRED,
 			identityFailure(RequestContext.ofAgent(publicDID, Strings.create("worker")), identityInput()).getErrorMessage());
+	}
+
+	/**
+	 * A user's identity token signs in as the user, so only the user in person
+	 * mints one: not a delegate acting as the user under admin/sudo, nor work
+	 * the venue carries on for the user. The refusal comes before any key is
+	 * looked for.
+	 */
+	@Test void onlyTheUserInPersonMintsTheUsersIdentity() {
+		Engine engine = TestEngine.ENGINE;
+		AKeyPair aliceKey = AKeyPair.generate(), bobKey = AKeyPair.generate();
+		AString alice = UCAN.toDIDKey(aliceKey.getAccountKey()), bob = UCAN.toDIDKey(bobKey.getAccountKey());
+		engine.getVenueState().users().ensure(alice);
+		engine.getVenueState().users().ensure(bob);
+		UCAN sudoGrant = UCAN.create(aliceKey, bobKey.getAccountKey(), engine.currentTimestamp().longValue() / 1000 + 3600,
+			Vectors.of(Capability.create(alice, Abilities.ADMIN_SUDO)), Vectors.empty());
+		RequestContext delegate = engine.sudoContext(RequestContext.of(bob).withProofs(Vectors.of(sudoGrant.toMap())), alice);
+		assertEquals(alice, delegate.getAuthorityDID(), "the delegate acts as Alice");
+		AMap<AString, ACell> whoami = RT.ensureMap(engine.jobs().runOperation("v/ops/auth/whoami", Maps.empty(), delegate).join());
+		assertEquals(alice, whoami.get(Fields.CALLER));
+		assertEquals(bob, whoami.get(Strings.create("origin")), "whoami shows who is present");
+		assertEquals(Engine.NOT_IN_PERSON, identityFailure(delegate, identityInput()).getErrorMessage());
+		assertEquals(Engine.NOT_IN_PERSON, identityFailure(engine.context(alice), identityInput()).getErrorMessage(),
+			"work the venue carries on for her is not her either");
+		assertNull(engine.resolveSecret("s/IDENTITY", RequestContext.of(alice)));
 	}
 
 	@Test void identityTokenValidatesAudienceLifetimeAndStorageInput() {
@@ -215,11 +241,11 @@ class AuthAdapterTest {
 		assertEquals(AuthAdapter.IDENTITY_DIRECT_ONLY, identityFailure(scoped, identityInput()).getErrorMessage());
 		assertNull(TestEngine.ENGINE.resolveSecret("s/IDENTITY", owner));
 		// The owner's own unrestricted authority, and a scoped agent of the owner, still mint.
-		assertEquals(owner.getCallerDID(), RT.getIn(identityJob(owner, identityInput()).awaitResult(5000), "sub"));
+		assertEquals(owner.getAuthorityDID(), RT.getIn(identityJob(owner, identityInput()).awaitResult(5000), "sub"));
 		RequestContext agent = RequestContext.ofAgent(owner.getUserDID(), Strings.create("worker")).withCaps(Vectors.of(
 			Capability.create(IDENTITY_OP, AAdapter.INVOKE),
 			Capability.create(Strings.create("s/AGENT"), Abilities.SECRET_WRITE)));
-		assertEquals(agent.getCallerDID(), RT.getIn(identityJob(agent,
+		assertEquals(agent.getAuthorityDID(), RT.getIn(identityJob(agent,
 			identityInput().assoc(Strings.create("name"), Strings.create("AGENT"))).awaitResult(5000), "sub"));
 	}
 

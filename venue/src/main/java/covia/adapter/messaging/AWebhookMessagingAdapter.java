@@ -19,9 +19,10 @@ import covia.adapter.relay.RelayHandler;
 import covia.adapter.webhook.WebhookHandler;
 import covia.adapter.webhook.WebhookRequest;
 import covia.adapter.webhook.WebhookResponse;
+import covia.exception.ConfigurationException;
 import covia.exception.InvalidInputException;
-import covia.exception.NotSupportedException;
 import covia.exception.UnavailableException;
+import covia.exception.UnsupportedException;
 import covia.venue.AdapterState;
 import covia.venue.RequestContext;
 
@@ -80,23 +81,29 @@ public abstract class AWebhookMessagingAdapter<S extends WebhookBotSpec>
 		throw new UnsupportedOperationException(MessagingMedia.NOT_FETCHED);
 	}
 
-	@Override public final synchronized boolean configure(AMap<AString, ACell> settings, boolean strict) {
+	@Override public final synchronized void configure(AMap<AString, ACell> settings, boolean strict) {
 		if (settings == null) settings = Maps.empty();
-		if (settings.containsKey(MessagingSettings.key("statePath"))) throw new IllegalArgumentException(MessagingSettings.UNKNOWN.formatted("statePath"));
-		if (strict) MessagingSettings.known(settings, Set.of("bots", "apiUrl", "enabled"));
-		String endpoint = MessagingSettings.optional(settings, "apiUrl");
-		endpoint = MessagingHttp.endpoint(endpoint == null ? defaultApiUrl() : endpoint);
+		if (settings.containsKey(MessagingSettings.key("statePath"))) throw new ConfigurationException(MessagingSettings.UNKNOWN.formatted("statePath"));
+		String endpoint;
 		var parsed = new LinkedHashMap<String, S>();
-		ACell bots = settings.get(K_BOTS);
-		if (bots != null) for (var entry : MessagingSettings.object(bots).entrySet()) {
-			if (!(entry.getKey() instanceof AString name)) throw new IllegalArgumentException(MessagingSettings.INVALID_NAME);
-			parsed.put(name.toString(), parseBot(name.toString(), entry.getValue(), strict));
+		try {
+			if (strict) MessagingSettings.known(settings, Set.of("bots", "apiUrl", "enabled"));
+			endpoint = MessagingSettings.optional(settings, "apiUrl");
+			endpoint = MessagingHttp.endpoint(endpoint == null ? defaultApiUrl() : endpoint);
+			ACell bots = settings.get(K_BOTS);
+			if (bots != null) for (var entry : MessagingSettings.object(bots).entrySet()) {
+				if (!(entry.getKey() instanceof AString name)) throw new ConfigurationException(MessagingSettings.INVALID_NAME);
+				parsed.put(name.toString(), parseBot(name.toString(), entry.getValue(), strict));
+			}
+		} catch (IllegalArgumentException e) {
+			// The settings parsers also read a create call's input; here they read the settings
+			throw new ConfigurationException(e.getMessage(), e);
 		}
 		apiUrl = endpoint;
 		configureBots(parsed);
-		return true;
 	}
 	public final String apiUrl() { return apiUrl == null ? defaultApiUrl() : apiUrl; }
+	@Override protected final String apiEndpoint(MessagingBot<?> bot) { return apiUrl(); }
 	@Override public final AMap<AString, ACell> publicConfig() { return Maps.empty(); }
 	@Override protected final WebhookBot<S> newBot(S spec, Managed managed) { return new WebhookBot<>(this, spec, managed); }
 	@Override protected final boolean configurationMatches(WebhookBot<S> runner) { return true; }
@@ -133,10 +140,10 @@ public abstract class AWebhookMessagingAdapter<S extends WebhookBotSpec>
 			case "bots" -> handleBots(ctx);
 			case "send" -> callerInput(() -> handleSend(ctx, MessagingSettings.object(input)));
 			case "download" -> {
-				if (!offersDownload()) throw new NotSupportedException(UNSUPPORTED.formatted(op));
+				if (!offersDownload()) throw new UnsupportedException(UNSUPPORTED.formatted(op));
 				yield callerInput(() -> handleDownload(ctx, MessagingSettings.object(input)));
 			}
-			default -> throw new NotSupportedException(UNSUPPORTED.formatted(op));
+			default -> throw new UnsupportedException(UNSUPPORTED.formatted(op));
 		}, VIRTUAL_EXECUTOR);
 	}
 	/**
@@ -155,7 +162,7 @@ public abstract class AWebhookMessagingAdapter<S extends WebhookBotSpec>
 		WebhookBot<S> bot = selectBot(ctx, RT.ensureString(in.get(MessagingSettings.key("bot"))));
 		requireBotAccess(ctx, bot, MessagingSettings.key(getName() + "/send"));
 		bot.requireReady();
-		return send(bot, in);
+		return withOutboundCaller(ctx, () -> send(bot, in));
 	}
 	private String downloadResource() { return "/adapters/" + getName() + "/download.json"; }
 	private boolean offersDownload() { return getClass().getResource(downloadResource()) != null; }
@@ -180,7 +187,7 @@ public abstract class AWebhookMessagingAdapter<S extends WebhookBotSpec>
 		if (fileName != null && !(fileName instanceof AString f && MessagingMedia.safeFileName(f.toString()))) {
 			throw new InvalidInputException(MessagingMedia.INVALID_FILE_NAME);
 		}
-		MessagingMedia.Fetched fetched = fetchMedia(bot, Maps.of("id", id));
+		MessagingMedia.Fetched fetched = withOutboundCaller(ctx, () -> fetchMedia(bot, Maps.of("id", id)));
 		AString owner = bot.spec().userDID(engine);
 		RequestContext writer = destination == null ? engine.context(owner) : ctx;
 		String directory = destination == null

@@ -77,7 +77,7 @@ public class UserMetaStampTest {
 		// the stamping boundary. The first real write mints created == updated.
 		assertEquals(-1, metaField("created"), "an ensured-but-unused identity has no meta");
 
-		user.ensureAgent("first-activity-agent", Maps.empty(), null);
+		TestAgents.ensure(user, "first-activity-agent", Maps.empty(), null);
 		long created = metaField("created");
 		long updated = metaField("updated");
 		assertTrue(created > 0, "meta.created minted on first activity");
@@ -86,7 +86,7 @@ public class UserMetaStampTest {
 
 	@Test
 	public void testDeepAgentWriteBumpsUpdatedNotCreated() {
-		Agent agent = user.ensureAgent("meta-agent", Maps.empty(), null);
+		Agent agent = TestAgents.ensure(user, "meta-agent", Maps.empty(), null);
 		long created = metaField("created");
 		long before = metaField("updated");
 		assertTrue(created > 0);
@@ -104,8 +104,8 @@ public class UserMetaStampTest {
 
 	@Test
 	public void testDeepSessionFrameWriteBumps() {
-		user.ensureAgent("frame-agent", Maps.empty(), null).ensureSession(
-			Blob.fromHex("dd112233445566778899aabbccddee01"), ALICE_DID);
+		TestAgents.ensure(user, "frame-agent", Maps.empty(), null).sessions().create(
+			Blob.fromHex("dd112233445566778899aabbccddee01"), ALICE_DID, null);
 		Blob sid = Blob.fromHex("dd112233445566778899aabbccddee01");
 		long before = metaField("updated");
 		tick();
@@ -122,13 +122,13 @@ public class UserMetaStampTest {
 
 	@Test
 	public void testReadDoesNotBump() {
-		Agent agent = user.ensureAgent("read-agent", Maps.empty(), null);
+		Agent agent = TestAgents.ensure(user, "read-agent", Maps.empty(), null);
 		long before = metaField("updated");
 		tick();
 
 		agent.getRecord();
 		agent.getTasks();
-		user.getAgents();
+		user.agents().all();
 		engine.getVenueState().users().user(ALICE_DID).cursor().get();
 
 		assertEquals(before, metaField("updated"), "reads must not bump meta.updated");
@@ -136,7 +136,7 @@ public class UserMetaStampTest {
 
 	@Test
 	public void testUnchangedWriteDoesNotBump() {
-		Agent agent = user.ensureAgent("noop-agent", Maps.empty(), null);
+		Agent agent = TestAgents.ensure(user, "noop-agent", Maps.empty(), null);
 		agent.setStatus(Agent.SLEEPING);   // already SLEEPING at creation
 		long before = metaField("updated");
 		tick();
@@ -149,7 +149,7 @@ public class UserMetaStampTest {
 	@Test
 	@SuppressWarnings("unchecked")
 	public void testAgentTimestampNeverMovesBackward() {
-		Agent agent = user.ensureAgent("ratchet-agent", Maps.empty(), null);
+		Agent agent = TestAgents.ensure(user, "ratchet-agent", Maps.empty(), null);
 		AString ts = Strings.intern("ts");
 		CVMLong future = CVMLong.create(CLOCK.millis() + 60_000);
 		agent.cursor().updateAndGet(value ->
@@ -163,7 +163,7 @@ public class UserMetaStampTest {
 	@Test
 	public void testMetaIsNotUserData() {
 		// meta is the venue's bookkeeping: no path reaches it.
-		user.ensureAgent("readable-agent", Maps.empty(), null);
+		TestAgents.ensure(user, "readable-agent", Maps.empty(), null);
 		assertTrue(metaField("updated") > 0, "the record has its meta");
 		covia.grid.Job read = engine.jobs().invokeOperation("v/ops/covia/read",
 			Maps.of(Strings.create("path"), Strings.create("meta")),

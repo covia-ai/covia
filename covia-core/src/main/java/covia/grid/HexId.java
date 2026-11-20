@@ -1,14 +1,17 @@
 package covia.grid;
 
+import convex.core.data.ABlob;
+import convex.core.data.ACell;
 import convex.core.data.AString;
 import convex.core.data.Blob;
 import convex.core.data.Hash;
+import convex.core.lang.RT;
 
 /**
- * Reads an id that arrives as text from outside the venue, such as a task id in
- * an operation's input. Callers may paste an id in the {@code 0x} form that REST
+ * Reads an id that arrives from outside the venue, such as a task id in an
+ * operation's input. Callers may paste an id in the {@code 0x} form that REST
  * and lattice reads show, so the prefix is accepted here, at the edge, and goes
- * no further: what the venue writes and reads back is bare hex.
+ * no further: the venue keeps ids as {@link Blob}s.
  *
  * <p>Use this wherever the text does more than map to bytes, such as a path
  * segment or a reference that may be a hash or a path: there, text that is not
@@ -32,6 +35,22 @@ public final class HexId {
 		String s = text.toString();
 		String hex = s.startsWith(PREFIX) ? s.substring(PREFIX.length()) : s;
 		return hex.isEmpty() ? null : Blob.fromHex(hex);
+	}
+
+	/**
+	 * Reads an id given as a value, as an in-process caller may pass back an id
+	 * the venue returned: a blob as it is, text as {@link #parse(AString)} reads it.
+	 * Pass an {@code ACell} variable: with a generic call such as
+	 * {@code RT.getIn(...)} as the argument, Java picks {@link #parse(AString)},
+	 * which throws {@code ClassCastException} on a blob.
+	 *
+	 * @param value The id as given, may be null
+	 * @return The id, or null when the value is not an id
+	 */
+	public static Blob parse(ACell value) {
+		ABlob blob = RT.ensureBlob(value);
+		if (blob != null) return (blob.count() == 0) ? null : blob.toFlatBlob();
+		return parse(RT.ensureString(value));
 	}
 
 	/**

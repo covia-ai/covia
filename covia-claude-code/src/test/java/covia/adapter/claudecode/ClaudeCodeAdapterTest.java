@@ -1,7 +1,9 @@
 package covia.adapter.claudecode;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -11,6 +13,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 
 import org.junit.jupiter.api.AfterAll;
@@ -35,6 +41,7 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.exception.AuthException;
+import covia.exception.ConfigurationException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
 import covia.grid.Job;
@@ -127,7 +134,7 @@ public class ClaudeCodeAdapterTest {
 		assertEquals(sid, RT.getIn(next, Fields.SESSION_ID));
 		assertTrue(RT.getIn(next, Fields.RESPONSE).toString().contains("second facade turn"));
 		var state = engine.getVenueState().users().user(OWNER).agent(Strings.create("coding-facet"));
-		ACell providerId = RT.getIn(state.getSession(Job.parseID(sid)), "external", Fields.SESSION_ID);
+		ACell providerId = RT.getIn(state.session(Job.parseID(sid)).getRecord(), "external", Fields.SESSION_ID);
 		assertNotNull(providerId);
 		assertNotEquals(sid, providerId);
 	}
@@ -175,11 +182,19 @@ public class ClaudeCodeAdapterTest {
 	@Test
 	public void testAdapterConfigValidation() {
 		ClaudeCodeAdapter a = new ClaudeCodeAdapter();
-		assertThrows(IllegalArgumentException.class, () -> a.configure(Maps.of("maxSessions", 0), true));
-		assertThrows(IllegalArgumentException.class, () -> a.configure(Maps.of("command", Vectors.empty()), true));
-		assertThrows(IllegalArgumentException.class, () -> a.configure(Maps.of("bogus", 1), true));
-		assertTrue(a.configure(Maps.of("bogus", 1), false), "lenient mode ignores unknown keys");
-		assertTrue(a.configure(Maps.of("command", "claude", "defaults", Maps.of("model", "sonnet")), true));
+		assertEquals(ClaudeCodeAdapter.BAD_COUNT.formatted("adapters.claudecode.maxSessions", 1),
+			assertThrows(ConfigurationException.class, () -> a.configure(Maps.of("maxSessions", 0), true)).getMessage());
+		assertEquals(ClaudeCodeAdapter.COMMAND_NOT_ARGV,
+			assertThrows(ConfigurationException.class, () -> a.configure(Maps.of("command", Vectors.empty()), true)).getMessage());
+		assertEquals(ClaudeCodeAdapter.UNKNOWN_SETTING.formatted("bogus"),
+			assertThrows(ConfigurationException.class, () -> a.configure(Maps.of("bogus", 1), true)).getMessage());
+		// The project parser also reads create input, so its refusal is rethrown here as configuration:
+		// a well-formed path that is no directory on this venue is refused the same way
+		ConfigurationException noDir = assertThrows(ConfigurationException.class, () -> a.configure(
+			Maps.of("projects", Maps.of("p", Maps.of("path", root.resolve("no-such-dir").toString()))), true));
+		assertInstanceOf(IllegalArgumentException.class, noDir.getCause());
+		assertDoesNotThrow(() -> a.configure(Maps.of("bogus", 1), false), "lenient mode ignores unknown keys");
+		a.configure(Maps.of("command", "claude", "defaults", Maps.of("model", "sonnet")), true);
 		assertEquals(List.of("claude"), a.command());
 	}
 
@@ -302,6 +317,44 @@ public class ClaudeCodeAdapterTest {
 		await(() -> victim.state() == ClaudeSession.State.STOPPED, 5000);
 	}
 
+	/**
+	 * Output of a process the session has replaced completes no turn: the next
+	 * turn gets the reply of the process it was written to. A process's output
+	 * is read on a thread of its own, which also reports the turn's progress,
+	 * so holding that report keeps the rest of the output unread.
+	 */
+	@Test
+	public void testOutputOfAReplacedProcessCompletesNoTurn() throws Exception {
+		ProjectSpec alpha = adapter.project("alpha");
+		ClaudeSession session = new ClaudeSession(adapter, alpha, alpha.options(), null, OWNER);
+		CountDownLatch firstHeld = new CountDownLatch(1), firstGate = new CountDownLatch(1);
+		CountDownLatch secondHeld = new CountDownLatch(1), secondGate = new CountDownLatch(1);
+		AtomicReference<Thread> firstReader = new AtomicReference<>();
+		try {
+			CompletableFuture<AMap<AString, ACell>> first = session.submit("echo first", progress -> {
+				firstReader.set(Thread.currentThread());
+				hold(firstHeld, firstGate);
+			});
+			assertTrue(firstHeld.await(30, TimeUnit.SECONDS), "the first reply's text was read");
+			// The first process goes with its result still unread, and the next turn starts another
+			session.stop("test: stopped with its result unread");
+			assertTrue(first.isCompletedExceptionally(), "the stopped turn fails");
+			CompletableFuture<AMap<AString, ACell>> second = session.submit("echo second",
+				progress -> hold(secondHeld, secondGate));
+			assertTrue(secondHeld.await(30, TimeUnit.SECONDS), "the second turn runs on a new process");
+
+			// While the second turn runs, the first process's output is read to its end
+			firstGate.countDown();
+			firstReader.get().join();
+			secondGate.countDown();
+			assertEquals("echo: second", str(second.get(30, TimeUnit.SECONDS), "result"));
+		} finally {
+			firstGate.countDown();
+			secondGate.countDown();
+			session.stop("test done");
+		}
+	}
+
 	@Test
 	public void testErrorResultFailsJobWithResumableSession() {
 		Job job = engine.jobs().invokeOperation("v/ops/claudecode/run", Maps.of("project", "alpha", "prompt", "fail"), OWNER_CTX);
@@ -342,7 +395,7 @@ public class ClaudeCodeAdapterTest {
 	public void testLiveCapReapsIdleSessionsAndQueuesBusyOnes() throws Exception {
 		stopAll();
 		AMap<AString, ACell> tight = baseConfig.assoc(ClaudeCodeAdapter.K_MAX_SESSIONS, CVMLong.create(1));
-		assertTrue(adapter.configure(tight, true));
+		adapter.configure(tight, true);
 		try {
 			AMap<AString, ACell> a = run(OWNER_CTX, "v/ops/claudecode/run", Maps.of("project", "alpha", "prompt", "count"));
 			String sa = str(a, "session");
@@ -369,7 +422,7 @@ public class ClaudeCodeAdapterTest {
 			assertTrue(System.currentTimeMillis() - t0 >= 1000, "third waited for the busy slot");
 			assertTrue(liveTotal() <= 1);
 		} finally {
-			assertTrue(adapter.configure(baseConfig, true));
+			adapter.configure(baseConfig, true);
 		}
 	}
 
@@ -381,7 +434,7 @@ public class ClaudeCodeAdapterTest {
 		adapter.reapForTest();
 		assertTrue(RT.bool(sessionStatus(OWNER_CTX, session).get(ClaudeSession.K_LIVE)), "idleSeconds 0 = never reap");
 		AMap<AString, ACell> quick = baseConfig.assoc(ClaudeCodeAdapter.K_IDLE_SECONDS, CVMLong.create(1));
-		assertTrue(adapter.configure(quick, true));
+		adapter.configure(quick, true);
 		try {
 			Thread.sleep(1200);
 			adapter.reapForTest();
@@ -389,7 +442,7 @@ public class ClaudeCodeAdapterTest {
 			// …and it resumes transparently.
 			assertEquals("count: 2", str(run(OWNER_CTX, "v/ops/claudecode/run", Maps.of("session", session, "prompt", "count")), "result"));
 		} finally {
-			assertTrue(adapter.configure(baseConfig, true));
+			adapter.configure(baseConfig, true);
 		}
 	}
 
@@ -499,7 +552,7 @@ public class ClaudeCodeAdapterTest {
 	@Test
 	public void testCancelledWaitingResumeReleasesSessionAndSlot() throws Exception {
 		stopAll();
-		assertTrue(adapter.configure(baseConfig.assoc(ClaudeCodeAdapter.K_MAX_SESSIONS, CVMLong.create(1)), true));
+		adapter.configure(baseConfig.assoc(ClaudeCodeAdapter.K_MAX_SESSIONS, CVMLong.create(1)), true);
 		try {
 			Job busy = engine.jobs().invokeOperation("v/ops/claudecode/run", Maps.of("project", "alpha", "prompt", "sleep 20000"), OWNER_CTX);
 			await(() -> adapter.knownSessions().stream().anyMatch(s -> s.state() == ClaudeSession.State.BUSY), 10_000);
@@ -517,7 +570,7 @@ public class ClaudeCodeAdapterTest {
 			assertEquals("count: 2", str(run(OWNER_CTX, "v/ops/claudecode/run",
 				Maps.of("project", "alpha", "session", earlier, "prompt", "count")), "result"));
 		} finally {
-			assertTrue(adapter.configure(baseConfig, true));
+			adapter.configure(baseConfig, true);
 		}
 	}
 
@@ -728,8 +781,8 @@ public class ClaudeCodeAdapterTest {
 		RequestContext agent = agentWith("session-restorer", caps);
 		Job job = engine.jobs().invokeOperation("v/ops/claudecode/session", Maps.of("project", "alpha", "prompt", "count"), agent);
 		await(() -> Status.INPUT_REQUIRED.equals(job.getStatus()), 30_000);
-		assertEquals(agent.getCallerDID(), job.getCaller());
-		assertEquals(OWNER, job.getOwner());
+		assertEquals(agent.getAuthorityDID(), job.getCaller());
+		assertEquals(OWNER, covia.venue.JobManager.accountOf(job));
 		String session = str(output(job), "session");
 
 		// After a restart the session resumes as the agent stands then, not as its owner.
@@ -792,6 +845,16 @@ public class ClaudeCodeAdapterTest {
 		ACell result = job.awaitResult(30_000);
 		assertEquals(Status.COMPLETE, job.getStatus(), op + ": " + job.getErrorMessage());
 		return RT.castMap(result);
+	}
+
+	/** Signal {@code held}, then wait for {@code gate}: a progress report that holds its reader. */
+	private static void hold(CountDownLatch held, CountDownLatch gate) {
+		held.countDown();
+		try {
+			gate.await();
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+		}
 	}
 
 	private static AMap<AString, ACell> output(Job job) {

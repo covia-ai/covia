@@ -5,7 +5,7 @@
 	<parent>
 		<groupId>ai.covia</groupId>
 		<artifactId>covia</artifactId>
-		<version>0.11.0</version>
+		<version>0.12.0</version>
 	</parent>
 	<artifactId>covia-python-adapter</artifactId>
 	<name>Covia Python Adapter Module</name>
@@ -22,6 +22,13 @@
 			<artifactId>venue</artifactId>
 			<version>${project.version}</version>
 			<scope>provided</scope>
+		</dependency>
+		<dependency>
+			<groupId>ai.covia</groupId>
+			<artifactId>venue</artifactId>
+			<version>${project.version}</version>
+			<type>test-jar</type>
+			<scope>test</scope>
 		</dependency>
 		<!-- The dependency-light runtime is bundled into the module jar. -->
 		<dependency>

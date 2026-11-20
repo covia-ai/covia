@@ -5,7 +5,7 @@
 	<parent>
 		<groupId>ai.covia</groupId>
 		<artifactId>covia</artifactId>
-		<version>0.11.0</version>
+		<version>0.12.0</version>
 	</parent>
 	<artifactId>venue</artifactId>
 	<name>Covia Venue</name>
@@ -52,7 +52,8 @@
 				</executions>
 			</plugin>
 			<!-- *IT classes run in verify, not in test: the tests that open the
-			     release-written store fixtures, which are big. -->
+			     release-written store fixtures, which are big, and those that need
+			     a venue of their own with rate limits on. -->
 			<plugin>
 				<groupId>org.apache.maven.plugins</groupId>
 				<artifactId>maven-failsafe-plugin</artifactId>
@@ -111,7 +112,7 @@
 		<dependency>
 			<groupId>com.nimbusds</groupId>
 			<artifactId>oauth2-oidc-sdk</artifactId>
-			<version>11.38.2</version>
+			<version>11.39</version>
 			<exclusions>
 				<!-- json-smart's older ASM must not override Jetty's ASM family. -->
 				<exclusion>
@@ -219,6 +220,11 @@
 		<dependency>
     		<groupId>dev.langchain4j</groupId>
    			<artifactId>langchain4j</artifactId>
+			<version>${langchain.version}</version>
+		</dependency>
+		<dependency>
+			<groupId>dev.langchain4j</groupId>
+			<artifactId>langchain4j-http-client-jdk</artifactId>
 			<version>${langchain.version}</version>
 		</dependency>
 		<dependency>

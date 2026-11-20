@@ -98,8 +98,14 @@ public class InvocationAuthorityTest {
 
 	@Test void scheduledReferenceDoesNotBecomeABoundTool() {
 		RequestContext empty = owner.withCaps(Vectors.empty());
-		denied(engine.jobs().prepareTracked(ECHO, Maps.empty(), empty).start(), Abilities.INVOKE);
-		denied(engine.jobs().prepareUntracked(ECHO, Maps.empty(), empty).start(), Abilities.INVOKE);
+		denied(recordAndStart(engine.jobs().prepareTracked(ECHO, Maps.empty(), empty)), Abilities.INVOKE);
+		denied(recordAndStart(engine.jobs().prepareUntracked(ECHO, Maps.empty(), empty)), Abilities.INVOKE);
+	}
+
+	/** Records a prepared Job as a scheduled fire's claim does, then starts it. */
+	private Job recordAndStart(JobManager.Prepared prepared) {
+		engine.getVenueState().execute(prepared::record);
+		return prepared.start();
 	}
 
 	@Test void deferredArbitraryTargetStillRequiresInvoke() {
@@ -121,10 +127,13 @@ public class InvocationAuthorityTest {
 
 	@Test void admittedCallerCanUseBoundAgentEndpointWithoutInvoke() {
 		engine.jobs().callOperation("v/ops/agent/create", Maps.of("agentId", "public-agent",
-			"config", Maps.of("operation", "v/test/ops/taskcomplete", "accepts", "anyone")), owner)
+			"config", Maps.of("operation", "v/test/ops/taskcomplete", "accepts", "anyone", "acceptTasks", true)), owner)
 			.awaitResult(5000);
-		RequestContext asker = RequestContext.of(TestEngine.uniqueDID("admitted-asker")).withCaps(Vectors.empty());
-		var input = Maps.of("agentId", owner.getUserDID() + "/g/public-agent", "input", Maps.of("task", "hello"));
+		// The asker may ask the agent but holds no invoke right
+		String agent = owner.getUserDID() + "/g/public-agent";
+		RequestContext asker = RequestContext.of(TestEngine.uniqueDID("admitted-asker"))
+			.withCaps(Vectors.of(cap(agent, Abilities.AGENT_REQUEST)));
+		var input = Maps.of("agentId", agent, "input", Maps.of("task", "hello"));
 		denied(engine.jobs().invokeOperation("v/ops/agent/request", input, asker), Abilities.INVOKE);
 		assertNotNull(engine.jobs().callOperation("v/ops/agent/request", input, asker).awaitResult(5000));
 	}

@@ -15,6 +15,7 @@ import convex.core.data.Path;
 import convex.core.data.prim.CVMLong;
 import convex.lattice.ALatticeComponent;
 import convex.lattice.cursor.AForkableCursor;
+import convex.lattice.cursor.PathCursor;
 import covia.exception.AuthException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
@@ -55,7 +56,21 @@ public final class Entry extends ALatticeComponent<ACell> {
 		this.path = path;
 		this.resolved = resolved;
 		this.keys = resolved.keys();
-		this.above = keys.length == 0 ? null : area.cursor().path(Arrays.copyOf(keys, keys.length - 1));
+		this.above = keys.length == 0 ? null : new Level(area.cursor(), Arrays.copyOf(keys, keys.length - 1));
+	}
+
+	/**
+	 * The level above an entry. It leaves a missing level to the entry's own
+	 * change, which refuses it naming that level, and a change that leaves the
+	 * level as it is, such as deleting an absent value, writes nothing.
+	 */
+	private static final class Level extends PathCursor<ACell> {
+		Level(AForkableCursor<ACell> area, ACell[] keys) {
+			super(area, keys);
+		}
+
+		@Override
+		protected void requireWritable(ACell stored) {}
 	}
 
 	/**

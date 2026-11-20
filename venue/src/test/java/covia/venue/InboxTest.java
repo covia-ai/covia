@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Test;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
@@ -27,7 +28,7 @@ import covia.lattice.Namespace;
 public class InboxTest {
 
 	private static final CVMLong NOW = CVMLong.create(100);
-	private static final AString ID = Strings.create("0a0b");
+	private static final Blob ID = Blob.fromHex("0a0b");
 	private static final AString CALLER = Strings.create("did:key:asker");
 
 	private static User user() {
@@ -36,7 +37,7 @@ public class InboxTest {
 	}
 
 	private static AMap<AString, ACell> request(Long expires) {
-		return HitlRequest.record(ID, CALLER, null, null, null, Strings.create("Approve?"), null,
+		return HitlRequest.record(ID, CALLER, null, null, null, null, Strings.create("Approve?"), null,
 			Vectors.empty(), 50, expires);
 	}
 
@@ -125,6 +126,10 @@ public class InboxTest {
 		user.inbox().open(request(null));
 
 		assertEquals(user.inbox().getAll(), read(user.resolve(CoviaPath.segments(Namespace.H))));
-		assertEquals(Hitl.OPEN, RT.getIn(read(user.resolve(CoviaPath.segments(Namespace.H, ID))), Hitl.STATUS));
+		for (String id : new String[] {"0a0b", "0x0a0b"}) {
+			assertEquals(Hitl.OPEN, RT.getIn(read(user.resolve(CoviaPath.segments(Namespace.H, Strings.create(id)))), Hitl.STATUS),
+				"a path names a request by its id in hex: " + id);
+		}
+		assertEquals(ID, RT.getIn(user.inbox().getAll().get(ID), Hitl.ID), "the record's id is the request's");
 	}
 }

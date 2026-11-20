@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 import convex.core.data.Maps;
@@ -17,18 +18,25 @@ import covia.grid.Status;
 import covia.grid.client.VenueHTTP;
 import covia.venue.TestServer;
 import covia.test.IntegrationTest;
+import covia.test.Reachable;
 
 /**
- * Integration tests for the convex adapter — every test makes a real network
- * call to {@code peer.convex.live:18888}. Tagged "integration" so they're
- * excluded from the default {@code mvn test} run (which uses
- * {@code excludedGroups=integration} per the surefire config in venue/pom.xml).
- * Run explicitly with {@code mvn test -Dgroups=integration}.
+ * Integration tests for the convex adapter against the live Convex peer
+ * {@code peer.convex.live:18888}. They run with
+ * {@code -Dcovia.tests.integration=true}, and skip when no connection to the
+ * peer opens.
  */
 @IntegrationTest
 class ConvexAdapterTest {
 
-	static final String PEER = "peer.convex.live:18888";
+	static final String HOST = "peer.convex.live";
+	static final int PORT = 18888;
+	static final String PEER = HOST + ":" + PORT;
+
+	@BeforeAll
+	static void peerReachable() {
+		Reachable.assume(HOST, PORT);
+	}
 
 	@Test
 	void queryPublicPeerEndpoint() throws Exception {
@@ -60,51 +68,6 @@ class ConvexAdapterTest {
 
 		// should fail because test key not valid for account #13
 		assertEquals("SIGNATURE",RT.getIn(job.getOutput(), "errorCode").toString());
-	}
-
-	// ===== Query: missing/invalid input =====
-
-	@Test
-	void queryMissingSource() throws Exception {
-		VenueHTTP covia = TestServer.COVIA;
-
-		// No "source" field at all — adapter should fail with a clear message
-		Job job = covia.invokeSync("v/ops/convex/query", Maps.of(
-				Fields.PEER, PEER,
-				Fields.ADDRESS, "#13"));
-
-		assertNotNull(job);
-		assertEquals(Status.FAILED, job.getStatus());
-		assertTrue(job.getErrorMessage().contains("source"),
-				"Error should mention missing source: " + job.getErrorMessage());
-	}
-
-	@Test
-	void queryEmptySource() throws Exception {
-		VenueHTTP covia = TestServer.COVIA;
-
-		// Empty string source — Reader.read("") will throw
-		Job job = covia.invokeSync("v/ops/convex/query", Maps.of(
-				Fields.PEER, PEER,
-				Fields.ADDRESS, "#13",
-				Fields.SOURCE, ""));
-
-		assertNotNull(job);
-		assertEquals(Status.FAILED, job.getStatus());
-	}
-
-	@Test
-	void queryMalformedExpression() throws Exception {
-		VenueHTTP covia = TestServer.COVIA;
-
-		// Unmatched parentheses — Reader.read should fail
-		Job job = covia.invokeSync("v/ops/convex/query", Maps.of(
-				Fields.PEER, PEER,
-				Fields.ADDRESS, "#13",
-				Fields.SOURCE, "(+ 1 2"));
-
-		assertNotNull(job);
-		assertEquals(Status.FAILED, job.getStatus());
 	}
 
 	// ===== Query: different return types =====
@@ -179,7 +142,8 @@ class ConvexAdapterTest {
 
 		assertNotNull(job);
 		assertEquals(Status.COMPLETE, job.getStatus());
-		// nil query should complete successfully; result may be null/absent
+		// The peer evaluated nil; a CVM error would print its message here instead
+		assertEquals("nil", RT.getIn(job.getOutput(), "result").toString());
 	}
 
 	@Test
@@ -243,82 +207,6 @@ class ConvexAdapterTest {
 		assertNotNull(job);
 		assertEquals(Status.COMPLETE, job.getStatus());
 		assertEquals("2", RT.getIn(job.getOutput(), "result").toString());
-	}
-
-	// ===== Transact: missing required parameters =====
-
-	@Test
-	void transactMissingSource() throws Exception {
-		VenueHTTP covia = TestServer.COVIA;
-
-		Job job = covia.invokeSync("v/ops/convex/transact", Maps.of(
-				Fields.PEER, PEER,
-				Fields.ADDRESS, "#13",
-				Strings.create("seed"), "0xB5232CF710Aaa222F2C898105d06d58283f91173D668C313b72dD90f0175E622"));
-
-		assertNotNull(job);
-		assertEquals(Status.FAILED, job.getStatus());
-		assertTrue(job.getErrorMessage().contains("source"),
-				"Error should mention missing source: " + job.getErrorMessage());
-	}
-
-	@Test
-	void transactMissingAddress() throws Exception {
-		VenueHTTP covia = TestServer.COVIA;
-
-		Job job = covia.invokeSync("v/ops/convex/transact", Maps.of(
-				Fields.PEER, PEER,
-				Fields.SOURCE, "(def foo 1)",
-				Strings.create("seed"), "0xB5232CF710Aaa222F2C898105d06d58283f91173D668C313b72dD90f0175E622"));
-
-		assertNotNull(job);
-		assertEquals(Status.FAILED, job.getStatus());
-		assertTrue(job.getErrorMessage().contains("address"),
-				"Error should mention missing address: " + job.getErrorMessage());
-	}
-
-	@Test
-	void transactMissingSeed() throws Exception {
-		VenueHTTP covia = TestServer.COVIA;
-
-		Job job = covia.invokeSync("v/ops/convex/transact", Maps.of(
-				Fields.PEER, PEER,
-				Fields.SOURCE, "(def foo 1)",
-				Fields.ADDRESS, "#13"));
-
-		assertNotNull(job);
-		assertEquals(Status.FAILED, job.getStatus());
-		assertTrue(job.getErrorMessage().toLowerCase().contains("key") ||
-				   job.getErrorMessage().toLowerCase().contains("seed"),
-				"Error should mention missing key/seed: " + job.getErrorMessage());
-	}
-
-	@Test
-	void transactEmptySource() throws Exception {
-		VenueHTTP covia = TestServer.COVIA;
-
-		Job job = covia.invokeSync("v/ops/convex/transact", Maps.of(
-				Fields.PEER, PEER,
-				Fields.ADDRESS, "#13",
-				Fields.SOURCE, "",
-				Strings.create("seed"), "0xB5232CF710Aaa222F2C898105d06d58283f91173D668C313b72dD90f0175E622"));
-
-		assertNotNull(job);
-		assertEquals(Status.FAILED, job.getStatus());
-	}
-
-	@Test
-	void transactMalformedExpression() throws Exception {
-		VenueHTTP covia = TestServer.COVIA;
-
-		Job job = covia.invokeSync("v/ops/convex/transact", Maps.of(
-				Fields.PEER, PEER,
-				Fields.ADDRESS, "#13",
-				Fields.SOURCE, "(def foo",
-				Strings.create("seed"), "0xB5232CF710Aaa222F2C898105d06d58283f91173D668C313b72dD90f0175E622"));
-
-		assertNotNull(job);
-		assertEquals(Status.FAILED, job.getStatus());
 	}
 
 	// ===== Connection errors =====

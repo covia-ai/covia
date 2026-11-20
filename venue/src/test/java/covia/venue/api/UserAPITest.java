@@ -92,8 +92,8 @@ public class UserAPITest {
 		AString keyID = Strings.create(userDID + "#venue-key");
 		assertEquals(did, doc.get(Strings.create("id")));
 		assertEquals(venueDID, doc.get(Strings.create("controller")));
-		assertEquals(Strings.create("https://www.w3.org/ns/did/v1"),
-			doc.get(Strings.create("@context")));
+		assertEquals(CoviaAPI.MULTIKEY_DID_CONTEXT, doc.get(Strings.create("@context")),
+			"its Multikey methods come with the context that defines them");
 
 		AVector<ACell> methods = RT.ensureVector(doc.get(Strings.create("verificationMethod")));
 		assertEquals(2L, methods.count(),

@@ -62,11 +62,11 @@ public class AccessControlTest {
 			Fields.STATUS, Status.PENDING,
 			Fields.CALLER, engine.getDIDString(),
 			Fields.UPDATED, CVMLong.create(1000L));
-		assertTrue(ac.canAccessJob(venueCtx, venueJob));
+		assertTrue(ac.canAccessJob(venueCtx, engine.getDIDString(), venueJob));
 		// Venue does NOT magically own jobs created by other users —
 		// it's just another DID under the new model.
 		AMap<AString, ACell> aliceJob = venueJob.assoc(Fields.CALLER, ALICE_LITERAL);
-		assertFalse(ac.canAccessJob(venueCtx, aliceJob),
+		assertFalse(ac.canAccessJob(venueCtx, ALICE_LITERAL, aliceJob),
 			"venue ctx is not a wildcard owner — ownership is per-DID");
 	}
 
@@ -79,7 +79,7 @@ public class AccessControlTest {
 			Fields.CALLER, ALICE_LITERAL,
 			Fields.UPDATED, CVMLong.create(1000L));
 
-		assertTrue(ac.canAccessJob(RequestContext.of(ALICE_LITERAL), aliceJob),
+		assertTrue(ac.canAccessJob(RequestContext.of(ALICE_LITERAL), ALICE_LITERAL, aliceJob),
 			"Owner should be able to access their own job");
 	}
 
@@ -92,7 +92,7 @@ public class AccessControlTest {
 			Fields.CALLER, ALICE_LITERAL,
 			Fields.UPDATED, CVMLong.create(1000L));
 
-		assertFalse(ac.canAccessJob(RequestContext.of(BOB_LITERAL), aliceJob),
+		assertFalse(ac.canAccessJob(RequestContext.of(BOB_LITERAL), ALICE_LITERAL, aliceJob),
 			"Non-owner should be denied access");
 	}
 
@@ -105,7 +105,7 @@ public class AccessControlTest {
 			Fields.CALLER, ALICE_LITERAL,
 			Fields.UPDATED, CVMLong.create(1000L));
 
-		assertFalse(ac.canAccessJob(RequestContext.ANONYMOUS, aliceJob),
+		assertFalse(ac.canAccessJob(RequestContext.ANONYMOUS, ALICE_LITERAL, aliceJob),
 			"Anonymous should be denied access");
 	}
 
@@ -113,23 +113,23 @@ public class AccessControlTest {
 	public void testVenueInternalJobDenied() {
 		AccessControl ac = engine.getAccessControl();
 
-		// Job without :caller field (venue-internal)
+		// A record kept in no account (venue-internal)
 		AMap<AString, ACell> internalJob = Maps.of(
 			Fields.STATUS, Status.PENDING,
 			Fields.UPDATED, CVMLong.create(1000L));
 
-		assertFalse(ac.canAccessJob(RequestContext.of(ALICE_LITERAL), internalJob),
-			"Jobs without :caller (venue-internal) are not owned by anyone");
+		assertFalse(ac.canAccessJob(RequestContext.of(ALICE_LITERAL), null, internalJob),
+			"a job kept in no account is no one's");
 	}
 
 	@Test
 	public void testNullJobDataDenied() {
 		AccessControl ac = engine.getAccessControl();
-		assertFalse(ac.canAccessJob(RequestContext.of(ALICE_LITERAL), null));
+		assertFalse(ac.canAccessJob(RequestContext.of(ALICE_LITERAL), ALICE_LITERAL, null));
 	}
 
 	@Test
-	public void testScopedSubPrincipalReachesOnlyJobsItLaunched() {
+	public void testCreatorAttributionDoesNotGrantJobAuthority() {
 		AccessControl ac = engine.getAccessControl();
 		// An agent of Alice's under its own caps: a sub-principal in her namespace.
 		RequestContext dispatch = RequestContext.ofAgent(ALICE_LITERAL, Strings.create("helper"))
@@ -140,16 +140,15 @@ public class AccessControlTest {
 		AMap<AString, ACell> launched = Maps.of(
 			Fields.ID, Blob.fromHex("00112233445566778899aabbccddeeff"),
 			Fields.STATUS, Status.PENDING,
-			Fields.CALLER, dispatch.getCallerDID(),
-			Fields.OWNER, ALICE_LITERAL,
+			Fields.CALLER, dispatch.getAuthorityDID(),
 			Fields.UPDATED, CVMLong.create(1000L));
-		assertTrue(ac.canAccessJob(dispatch, launched), "reaches the job it launched (caller match)");
-		assertTrue(ac.canAccessJob(dispatch, launched, Capability.CRUD_WRITE));
-		AMap<AString, ACell> alicesOwn = launched.dissoc(Fields.OWNER).assoc(Fields.CALLER, ALICE_LITERAL);
-		assertFalse(ac.canAccessJob(dispatch, alicesOwn),
+		assertFalse(ac.canAccessJob(dispatch, ALICE_LITERAL, launched), "creating a Job grants no continuing access");
+		assertFalse(ac.canAccessJob(dispatch, ALICE_LITERAL, launched, Abilities.JOB_MANAGE));
+		AMap<AString, ACell> alicesOwn = launched.dissoc(Fields.CALLER);
+		assertFalse(ac.canAccessJob(dispatch, ALICE_LITERAL, alicesOwn),
 			"sharing Alice's namespace is proximity, not permission");
-		assertFalse(ac.canAccessJob(dispatch, alicesOwn, Capability.CRUD_WRITE));
-		assertTrue(ac.canAccessJob(RequestContext.of(ALICE_LITERAL), launched), "the owner reaches both");
+		assertFalse(ac.canAccessJob(dispatch, ALICE_LITERAL, alicesOwn, Capability.CRUD_WRITE));
+		assertTrue(ac.canAccessJob(RequestContext.of(ALICE_LITERAL), ALICE_LITERAL, launched), "the owner reaches both");
 	}
 
 	// ========== RequestContext Properties ==========
@@ -168,7 +167,7 @@ public class AccessControlTest {
 		RequestContext venueCtx = engine.venueContext();
 		assertTrue(venueCtx.isAuthenticated());
 		assertFalse(venueCtx.isAnonymous());
-		assertEquals(engine.getDIDString(), venueCtx.getCallerDID());
+		assertEquals(engine.getDIDString(), venueCtx.getAuthorityDID());
 
 		assertSame(RequestContext.ANONYMOUS, RequestContext.of(null));
 	}
@@ -182,12 +181,11 @@ public class AccessControlTest {
 			"v/test/ops/echo", Maps.of("message", "hello"), aliceCtx);
 		assertNotNull(job, "Should be able to invoke with authenticated context");
 
-		// Verify caller DID flows through to job record
-		@SuppressWarnings("unchecked")
-		AMap<AString, ACell> jobData = (AMap<AString, ACell>) job.getData();
-		ACell caller = jobData.get(Fields.CALLER);
-		assertNotNull(caller, "Job record should contain caller field");
-		assertEquals(alice, caller);
+		// The caller is the account the job is kept in, so the record leaves it out
+		assertNull(job.getData().get(Fields.CALLER), "a caller that is the account is left out");
+		assertEquals(alice, job.getCaller(), "and read as that account");
+		assertEquals(alice, engine.jobs().getJobData(job.getID(), aliceCtx).get(Fields.CALLER),
+			"a job's status, handed out on its own, names it in full");
 	}
 
 	@Test
@@ -234,7 +232,7 @@ public class AccessControlTest {
 		assertThrows(AuthException.class, () -> engine.jobs().countJobs(invokeOnly));
 
 		RequestContext readsJobs = aliceCtx.withCaps(Vectors.of(
-			Capability.create(Strings.create("j/"), Capability.CRUD_READ)));
+			Capability.create(Strings.create("j/"), Abilities.JOB_READ)));
 		assertNotNull(engine.jobs().getJobs(readsJobs).get(job.getID()));
 		assertEquals(1, engine.jobs().countJobs(readsJobs));
 	}
@@ -315,7 +313,7 @@ public class AccessControlTest {
 			RequestContext.of(pub));
 		RequestContext readOnly = RequestContext.of(pub).withCaps(CapabilityChecker.readOnlyScope(pub));
 		try {
-			assertNotNull(engine.jobs().getJobData(job.getID(), readOnly), "a read is within the scope");
+			assertThrows(AuthException.class, () -> engine.jobs().getJobData(job.getID(), readOnly), "raw CRUD read grants no Job API access");
 			assertThrows(AuthException.class, () -> engine.jobs().cancelJob(job.getID(), readOnly),
 				"a read-only public caller must not cancel another anonymous caller's job");
 		} finally {

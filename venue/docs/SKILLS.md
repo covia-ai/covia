@@ -267,7 +267,7 @@ skills. A loaded skill's header gives its exact removal key.
 [skills source w/other-skills — unavailable: timeout]
 ```
 
-- One line per skill: `- <name> — <description>`, with a `(loaded)` suffix when a skill-flagged loads entry for it is in effective context.
+- One line per skill: `- <name> — <description>`, with a `(loaded)` suffix when the prefix being built holds a skill-flagged loads entry for it ([AGENT_CONTEXT.md](./AGENT_CONTEXT.md) §3.2.3).
 - Later catalog changes do not rewrite it. An explicit load returns a refreshed index and revealed names in its appended tool exchange. A changed declarative config causes the config-owned prefix, including this index, to be rebuilt on the session's next inference; reapplying equal config does nothing. `agent:reloadContext` forces a same-config refresh from current sources. Compaction/reset also build a replacement initial snapshot.
 - Rendering delegates to the same function the `skills:list` op uses (§8), so the injected index and the op output can never drift.
 

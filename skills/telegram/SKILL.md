@@ -10,6 +10,17 @@ argument-hint: "<setup|create|delete|status|send|allow|test|teach> <bot-name>"
 
 A bot is either **created by its user** with `v/ops/telegram/create` (its allow-listed senders come from its creator — an agent as itself, never its owner — persisted in the venue-private adapter state under `users/<did>/bots/<name>`, survives restarts, removed with `v/ops/telegram/delete`) or **declared by the operator** in `adapters.telegram.bots.<name>` (needed when its senders must come from a different identity, e.g. `"user": "public"` on a shared dev venue). Full reference: `venue/docs/CONFIG.md` "Telegram bots". `/adapters` explains the module and runtime-lifecycle mechanics this skill relies on.
 
+## Bounded outbound callers
+
+Explicit sends need `telegram/send` on `telegram/<bot>`; raw calls and downloads
+need `telegram/call` there. Both additionally need ordinary
+`outbound/http/<method>` on the caller's `outbound` resource. Restrict `nb.url`
+to the actual API destination (for example `https://api.telegram.org`); include
+GET for media downloads. Stored credentials retain their own checks. Background binding
+work uses the binding's current principal, including a creator agent's caps.
+Giving the served agent a model does not grant it outbound access: configured
+model calls run under harness/controller authority.
+
 ## `setup <bot-name>` — Bring a bot up
 
 Walk the user through these steps; each is idempotent. Steps 1–3 are common; step 4 is the fork: `create` over MCP (default), or config declaration.
@@ -47,7 +58,7 @@ Walk the user through these steps; each is idempotent. Steps 1–3 are common; s
    ```
    - `user` (config only) is who the bot's allow-listed senders come from — the **owner of the agent**. `"public"` is right for a local dev venue whose agents were created over MCP; on a real venue name the owner's DID. Those senders have that user's full authority, so choose deliberately. A created bot's senders come from its creator.
    - **Pick the inbound handler** (ask the user which they want; exactly one). Every inbound message runs as a Job of the principal it comes from (the bot user for an allow-listed sender, the anonymous principal for any other) — that is the record of the interaction; a private durable inbox tracks update intake and delivery:
-     - `"agent": "<agentId>"` — each Telegram chat or forum topic is one `agent:chat` conversation with that agent. Always replies. **Create the agent from the module's template** — it already knows the phone-chat register, the venue's `[From: …]` element, per-chat sessions, memory (pinned into context) and the telegram/venue/covia skills:
+     - `"agent": "<agentId>"` — each Telegram chat or forum topic is one `agent:chat` conversation with that agent. Always replies. **Create the agent from the module's template** — it already knows the phone-chat register, the venue's `[From (venue-verified): …]` element, per-chat sessions, memory (pinned into context) and the telegram/venue/covia skills:
        ```
        agent_create  agentId="Assistant"  config=["v/agents/templates/telegram", {"llmOperation": "v/ops/langchain/anthropic", "model": "claude-sonnet-5-5", "caps": "unrestricted"}]
        ```
@@ -186,4 +197,4 @@ The module ships the `telegram` agent skill at `v/skills/adapters/telegram` (pre
 | `send` fails with *Access denied* | Caller is not the bot's user; use that identity or a `telegram/send` delegation. |
 | Replies stop after `adapter/disable` | By design — a disabled adapter is offline; Telegram redelivers the backlog on enable. |
 | Bot vanished after restart | A config bot added with `adapter/configure` is not persisted — put it in the venue config. Created bots do come back from the venue-private `:adapters/telegram` state; if one did not, the venue log says why it was skipped. |
-| `create` fails with *Capability denied* | Your scope lacks `telegram/manage` — on a public dev venue that means the public scope is read-only; use a config with `auth.public.caps: unrestricted` or authenticate. |
+| `create` fails with *Capability denied* | Check the named missing ability: management needs `telegram/manage`; polling/setup and explicit sends also need outbound grants for the acting principal. |

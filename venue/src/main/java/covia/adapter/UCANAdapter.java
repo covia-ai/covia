@@ -21,7 +21,7 @@ import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.exception.InvalidInputException;
-import covia.exception.NotSupportedException;
+import covia.exception.UnsupportedException;
 import covia.lattice.CapabilityChecker;
 import covia.venue.Audit;
 import covia.venue.Engine;
@@ -79,7 +79,7 @@ public class UCANAdapter extends AAdapter {
 
 	@Override
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
-		if (ctx.getCallerDID() == null) {
+		if (ctx.getAuthorityDID() == null) {
 			return CompletableFuture.failedFuture(new AuthException("Authentication required"));
 		}
 		try {
@@ -87,7 +87,7 @@ public class UCANAdapter extends AAdapter {
 				case "issue"  -> CompletableFuture.completedFuture(handleIssue(ctx, input));
 				case "verify" -> CompletableFuture.completedFuture(handleVerify(ctx, input));
 				default -> CompletableFuture.failedFuture(
-					new NotSupportedException("Unknown ucan operation: " + getSubOperation(meta)));
+					new UnsupportedException("Unknown ucan operation: " + getSubOperation(meta)));
 			};
 		} catch (Exception e) {
 			return CompletableFuture.failedFuture(e);
@@ -143,7 +143,7 @@ public class UCANAdapter extends AAdapter {
 	 * @param input As {@code ucan:issue} takes it
 	 */
 	public Grant mint(RequestContext ctx, ACell input) {
-		AString audDID = RT.ensureString(RT.getIn(input, UCAN.AUD));
+		AString audDID = engine.expandPrincipal(RT.ensureString(RT.getIn(input, UCAN.AUD)));
 		if (audDID == null) {
 			throw new InvalidInputException("aud (audience DID) is required");
 		}
@@ -163,7 +163,7 @@ public class UCANAdapter extends AAdapter {
 		}
 		if (prf != null && prf.isEmpty()) prf = null;
 		if (prf != null && !engine.isDirectVenue(ctx)) {
-			throw new AuthException(PRF_VENUE_ONLY + ", not " + ctx.getCallerDID());
+			throw new AuthException(PRF_VENUE_ONLY + ", not " + ctx.getAuthorityDID());
 		}
 
 		// A held key signs the grant as itself: its did:key is the issuer and the
@@ -203,7 +203,7 @@ public class UCANAdapter extends AAdapter {
 		AVector<ACell> canonAtt = Vectors.empty();
 		for (long i = 0; i < att.count(); i++) {
 			AMap<AString, ACell> cap = RT.castMap(att.get(i));
-			AString with = (cap != null) ? RT.ensureString(cap.get(Capability.WITH)) : null;
+			AString with = (cap != null) ? engine.expandPath(RT.ensureString(cap.get(Capability.WITH))) : null;
 			String w = (with != null) ? with.toString() : null;
 			if (cap == null || w == null || CapabilityChecker.isScheme(w)) {
 				throw new InvalidInputException("att[" + i + "].with must be a resource path — "
@@ -279,7 +279,7 @@ public class UCANAdapter extends AAdapter {
 			UCAN.ATT, att,
 			UCAN.PRF, (prf != null) ? prf : Vectors.empty());
 		claims = claims.assoc(UCAN.EXP, (exp == null) ? null : CVMLong.create(exp));
-		return new Grant(JWT.signPublic(claims, signer), issuer, ctx.getCallerDID(), audDID, exp);
+		return new Grant(JWT.signPublic(claims, signer), issuer, ctx.getAuthorityDID(), audDID, exp);
 	}
 
 	/**
@@ -431,8 +431,10 @@ public class UCANAdapter extends AAdapter {
 				AString with = (cap != null) ? RT.ensureString(cap.get(Capability.WITH)) : null;
 				// owner: an identity root, the owner or one that signs in as it;
 				// venue: this venue's root over what it hosts (Engine.rootAuthorityPolicy).
+				// A short form in a signed grant names no place, so no root covers it.
 				String verdict;
-				if (self.acceptsRoot(rootIssuer, with)
+				if (with != null && CapabilityChecker.isShortForm(with.toString())) verdict = "refused";
+				else if (self.acceptsRoot(rootIssuer, with)
 					|| VenueAuthenticator.signsInAs(rootIssuer, Engine.ownerOf(with))) verdict = "owner";
 				else if (venuePolicy.acceptsRoot(rootIssuer, with)) verdict = "venue";
 				else verdict = "refused";
@@ -455,11 +457,11 @@ public class UCANAdapter extends AAdapter {
 
 		// Optional: would this token authorise (with, can) here, for the given
 		// audience (default the caller)? Uses the SAME gate enforcement uses.
-		AString reqWith = RT.ensureString(RT.getIn(input, Capability.WITH));
+		AString reqWith = engine.expandPath(RT.ensureString(RT.getIn(input, Capability.WITH)));
 		AString reqCan = RT.ensureString(RT.getIn(input, Capability.CAN));
 		if (reqWith != null && reqCan != null) {
-			AString audience = RT.ensureString(RT.getIn(input, UCAN.AUD));
-			if (audience == null) audience = ctx.getCallerDID();
+			AString audience = engine.expandPrincipal(RT.ensureString(RT.getIn(input, UCAN.AUD)));
+			if (audience == null) audience = ctx.getAuthorityDID();
 			// Canonicalise a bare queried resource against the audience — the
 			// same rule enforcement applies to a caller's bare paths. No concrete
 			// invocation/gate evaluator exists in this diagnostic, so a caveated

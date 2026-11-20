@@ -184,6 +184,7 @@ public final class VenueDIDVerifier implements DIDVerifier {
 		try {
 			// The document host is the token's choice: it passes the venue's outbound guard
 			engine.requireSafeUrl(url);
+			engine.requireOutboundHttp(engine.venueContext(), "GET", url);
 		} catch (RuntimeException e) {
 			log.debug("did:web resolution refused for {}: {}", did, e.getMessage());
 			return unresolved(did, cached, now);

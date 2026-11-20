@@ -1,16 +1,18 @@
 package covia.venue.migration;
 
+import static covia.venue.migration.Records.assoc;
+import static covia.venue.migration.Records.indexValues;
+import static covia.venue.migration.Records.mapValues;
+
 import java.util.function.UnaryOperator;
 
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
-import convex.core.data.Blob;
 import convex.core.data.Index;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
 import covia.api.Fields;
-import covia.grid.Attribution;
 import covia.grid.Principals;
 import covia.lattice.Covia;
 import covia.lattice.Namespace;
@@ -19,7 +21,7 @@ import covia.venue.Agent;
 /**
  * Part of venue version 1 to 2: a record of a call names the principal that made it
  * as {@code caller} and the namespace it belongs to as {@code owner}, written
- * only when that differs ({@link Attribution}). Each older shape is told apart
+ * only when that differs ({@link #attribute}). Each older shape is told apart
  * from the current one by a field only it has:
  *
  * <ul>
@@ -108,7 +110,7 @@ public final class CallerAndOwner implements MigrationStep {
 		if (job == null || !job.containsKey(ACTOR)) return cell;
 		AString actor = RT.ensureString(job.get(ACTOR));
 		AString owner = RT.ensureString(job.get(Fields.CALLER));
-		return Attribution.attribute(job.dissoc(ACTOR).dissoc(Fields.CALLER), actor, owner);
+		return attribute(job.dissoc(ACTOR).dissoc(Fields.CALLER), actor, owner);
 	}
 
 	/** A scheduled event: no {@code caller} means it names its owner, and its actor when not the owner. */
@@ -118,7 +120,7 @@ public final class CallerAndOwner implements MigrationStep {
 		AString owner = RT.ensureString(event.get(Fields.OWNER));
 		AString actor = RT.ensureString(event.get(ACTOR));
 		AMap<AString, ACell> rest = event.dissoc(ACTOR).dissoc(BY).dissoc(Fields.OWNER);
-		return Attribution.attribute(rest, (actor != null) ? actor : owner, owner);
+		return attribute(rest, (actor != null) ? actor : owner, owner);
 	}
 
 	/** A HITL request: {@code from} present means it names its asker that way. */
@@ -128,7 +130,7 @@ public final class CallerAndOwner implements MigrationStep {
 		AString caller = RT.ensureString(item.get(FROM));
 		AString owner = RT.ensureString(item.get(REQUESTER_USER));
 		if (owner == null && caller != null) owner = legacy.apply(caller);
-		return Attribution.attribute(item.dissoc(FROM).dissoc(REQUESTER_USER), caller, owner);
+		return attribute(item.dissoc(FROM).dissoc(REQUESTER_USER), caller, owner);
 	}
 
 	/** An agent record with each task's output snapshot in the current shape. */
@@ -156,7 +158,7 @@ public final class CallerAndOwner implements MigrationStep {
 		AString caller = RT.ensureString(current.get(Fields.CALLER));
 		if (caller != null && !current.containsKey(Fields.OWNER)) {
 			AString owner = current.containsKey(USER) ? RT.ensureString(current.get(USER)) : legacy.apply(caller);
-			current = Attribution.attribute(current.dissoc(USER).dissoc(Fields.CALLER), caller, owner);
+			current = attribute(current.dissoc(USER).dissoc(Fields.CALLER), caller, owner);
 		}
 		return current.equals(snapshot) ? cell : current;
 	}
@@ -178,36 +180,20 @@ public final class CallerAndOwner implements MigrationStep {
 		return Agent.TERMINATED.equals(RT.getIn(agent, Agent.KEY_STATUS)) ? caller : owner;
 	}
 
+	/**
+	 * {@code record} naming {@code caller}, and {@code owner} when it differs:
+	 * the shape of venue version 2, which the next step reads to tell work a
+	 * delegate left from the rest. Version 3 names only a caller.
+	 */
+	static AMap<AString, ACell> attribute(AMap<AString, ACell> record, AString caller, AString owner) {
+		if (caller != null) record = record.assoc(Fields.CALLER, caller);
+		if (owner != null && !owner.equals(caller)) record = record.assoc(Fields.OWNER, owner);
+		return record;
+	}
+
 	@SuppressWarnings("unchecked")
 	private static AMap<AString, ACell> stringMap(ACell cell) {
 		return (cell instanceof AMap<?, ?> m) ? (AMap<AString, ACell>) m : null;
 	}
 
-	@SuppressWarnings("unchecked")
-	private static ACell assoc(ACell map, ACell key, ACell value) {
-		return ((AMap<ACell, ACell>) map).assoc(key, value);
-	}
-
-	/** {@code map} with each value converted; the same cell when none changes. */
-	@SuppressWarnings("unchecked")
-	private static ACell mapValues(AMap<?, ?> map, UnaryOperator<ACell> convert) {
-		AMap<ACell, ACell> result = (AMap<ACell, ACell>) map;
-		for (var entry : ((AMap<ACell, ACell>) map).entrySet()) {
-			ACell converted = convert.apply(entry.getValue());
-			if (converted != entry.getValue()) result = result.assoc(entry.getKey(), converted);
-		}
-		return result;
-	}
-
-	/** {@code index} with each value converted; the same cell when none changes. */
-	@SuppressWarnings("unchecked")
-	private static ACell indexValues(Index<?, ?> index, UnaryOperator<ACell> convert) {
-		Index<Blob, ACell> result = (Index<Blob, ACell>) index;
-		for (long i = 0, n = index.count(); i < n; i++) {
-			var entry = ((Index<Blob, ACell>) index).entryAt(i);
-			ACell converted = convert.apply(entry.getValue());
-			if (converted != entry.getValue()) result = result.assoc(entry.getKey(), converted);
-		}
-		return result;
-	}
 }

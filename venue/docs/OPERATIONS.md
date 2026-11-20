@@ -136,6 +136,7 @@ Any operation argument that accepts a lattice address — `path`, `from`, `ref`,
 | DID-qualified user path | `did:key:zAlice…/w/notes`, `did:key:zAlice…/g/Manager` | The named local user's physical lattice region, subject to capability checks |
 | Context-rooted prefix | `n/notes`, `t/draft`, `v/ops/json/merge` | Resolved from the component the request names (GRID_LATTICE_DESIGN §4.5, §4.6) |
 | Adapter view | `x/<adapter>/...`, `did:key:zAlice…/x/<adapter>/...` | The active adapter's view for the caller, or for the named principal |
+| Callable path | `x/callable/guestbook`, `did:key:zAlice…/x/callable/guestbook` | Read-side: the callable's entry in its owner's view. Invocation-side: the operation that calls the callable, for a request that may call it ([CALLABLES.md](CALLABLES.md#invoking-a-callable-by-its-path)) |
 | DID URL (hash) | `did:key:z6Mk…/a/<hash>`, `did:web:venue.host/a/<hash>` | Asset as published by a principal — self-verifying. Read-side: local copies only. Invocation-side: a local copy if held, else a hash-verified metadata fetch from the publishing venue (`did:web` only) |
 | DID URL (named) | `did:web:venue.host/v/ops/json/merge` | Catalog binding maintained by the publishing venue — mutable, trusted at fetch time. Invocation-side only: name → id resolved at the publisher, then the same hash-verified definition fetch. The job record carries the resolved hash |
 
@@ -147,8 +148,9 @@ A read-side argument never needs to know "is this a hash or a path or a DID?" �
 > with `{"operation":"test:echo"}` fails with *"Cannot resolve operation"*.
 > Reference an operation by one of the resolvable forms above: its hash, its
 > catalog path (`v/ops/<adapter>/<op>`, e.g. `v/ops/covia/write`), a pin
-> (`o/…`), or a DID URL. **Test operations live under `v/test/ops/`** — the
-> echo test op is `v/test/ops/echo`, not `v/ops/test/echo`.
+> (`o/…`), a callable's path, or a DID URL. **Test operations live under
+> `v/test/ops/`** — the echo test op is `v/test/ops/echo`, not
+> `v/ops/test/echo`.
 
 ### Argument classification
 
@@ -209,7 +211,7 @@ archive:list|extract          {contentRef} -> consume those bytes as an archive
 
 Content type is carried independently of the bytes. For assets, `metadata.content.contentType` is canonical, with the historical top-level `metadata.contentType` accepted as a fallback. File and DLFS providers infer a MIME type from the filename. The HTTP content API writes it to `Content-Type`; `asset:content` returns it as `contentType`. Unknown types remain valid binary content and use the HTTP fallback `application/octet-stream`.
 
-`Engine.resolveAsset(ref, ctx)` is a thin composition: `Asset.fromMeta(resolvePath(ref, ctx))`, plus one invocation-side addition: a remote DID URL reference whose definition is not held locally is **fetched** from the publishing venue — metadata only. A reference is remote when this venue does not host its owner (`Engine.isRemote`). One it hosts (its own `did:key` or `did:web`, a user it keeps a record for, or an agent of one) is looked up in this venue's state alone, found or not, and is never fetched (`Engine.isRemoteDefinition`). For a hash reference (`did:web:…/a/<hash>`) the fetch is verified to hash to the requested id; for a named catalog reference (`did:web:…/v/ops/…`) the name is first resolved to an id *at the publisher* (the one step taken on the namer's word — names are mutable bindings), then the definition travels over the same hash-verified path. It returns an `Asset` if the resolved value is a map with an `operation` field, and `null` otherwise. Op-invocation paths (`grid:run`, agent loop) call `resolveAsset` and expect a non-null result; if the resolved value isn't asset-shaped, the op fails explicitly with "operation not found".
+`Engine.resolveAsset(ref, ctx)` is a thin composition: `Asset.fromMeta(resolvePath(ref, ctx))`, plus two invocation-side additions. A callable's path is never read as data there: it resolves to the operation that calls the callable for a request that may call it, and to nothing for any other, which is then refused as any reference that resolves to nothing is ([CALLABLES.md](CALLABLES.md#invoking-a-callable-by-its-path)). And a remote DID URL reference whose definition is not held locally is **fetched** from the publishing venue — metadata only. A reference is remote when this venue does not host its owner (`Engine.isRemote`). One it hosts (its own `did:key` or `did:web`, a user it keeps a record for, or an agent of one) is looked up in this venue's state alone, found or not, and is never fetched (`Engine.isRemoteDefinition`). For a hash reference (`did:web:…/a/<hash>`) the fetch is verified to hash to the requested id; for a named catalog reference (`did:web:…/v/ops/…`) the name is first resolved to an id *at the publisher* (the one step taken on the namer's word — names are mutable bindings), then the definition travels over the same hash-verified path. It returns an `Asset` if the resolved value is a map with an `operation` field, and `null` otherwise. Op-invocation paths (`grid:run`, agent loop) call `resolveAsset` and expect a non-null result; if the resolved value isn't asset-shaped, the op fails explicitly with "operation not found".
 
 **References denote definitions, never execution sites.** A DID prefix says where a definition can be *fetched from*; whatever is invoked with it executes on the venue that accepted the invoke, as an ordinary local job with local adapters and context. Cross-venue *execution* is always explicit — `grid:run` / `grid:invoke` with a `venue` argument — and produces a job record on each venue: one on the delegating venue for the grid op it accepted, one on the executing venue for the invoke *it* accepted. A definition fetch is a read and creates no job anywhere. (Semantics pinned by `RemoteAssetFetchTest` and `RemoteOperationTest`.)
 
@@ -523,10 +525,32 @@ reference lookup, not whether execution creates a Job.
 
 | Op | Args | Returns | Purpose |
 |----|------|---------|---------|
-| `grid:run` | `operation`, `input`, `venue?` | Job result | Run an operation; wait for completion |
-| `grid:invoke` | `operation`, `input` | Job status | Submit and return immediately |
-| `grid:jobStatus` | `id` | Status | Poll a job by ID |
-| `grid:jobResult` | `id` | Output | Wait for a job by ID and return its output |
+| `grid:run` | `operation`, `input`, `venue?`, `authenticateAs?` | Job result | Run an operation; wait for completion |
+| `grid:invoke` | `operation`, `input`, `venue?`, `authenticateAs?` | Job status | Submit and return immediately |
+| `grid:jobStatus` | `id`, `venue?`, `authenticateAs?` | Job record | Compatibility entry point; prefer `job:status` |
+| `grid:jobResult` | `id`, `venue?`, `timeout?`, `authenticateAs?` | Output | Compatibility entry point; prefer `job:result` |
+
+All four operations select the execution or observation venue in the same way:
+an input `venue` overrides `operation.venue` in the operation definition; when
+both are absent, the target is local. A provided `venue` must be a string,
+including in the definition. Other types, including explicit null, are rejected
+instead of falling back to another target. Remote strings name an absolute
+HTTP(S) URL or a routable DID. Remote authentication is explicit, as described
+in [UCAN.md](UCAN.md#43-presentation).
+
+`grid:invoke` returns the invoked Job's snapshot on the execution venue,
+possibly already terminal. Its `id` is the destination Job's ID, not the ID of
+a grid wrapper on the submitting venue. Retain that ID, execution venue and
+authentication mode for subsequent Job operations. Remote submission starts no
+background observation. Submission success does not imply execution success;
+inspect the returned status. A Job's output can itself be another handle if
+that is what the invoked operation returns.
+
+Use `job:status` to inspect existing work and `job:result` to await its output;
+the complete surface, including controls and compatibility differences, is in
+[JOBS.md](JOBS.md#canonical-operation-and-tool-surface). Repeating either grid
+submission operation starts new work. A timeout waiting for an existing Job
+does not justify resubmitting it.
 
 Each op has a single purpose. None has a mode flag. Two-path operations (`covia:copy`) use `from` and `to` to make direction explicit; single-path operations use `path`. Every read-side argument accepts the universal resolution chain from §4.
 

@@ -39,11 +39,11 @@ final class ProviderState {
 	private ProviderState() {}
 
 	/**
-	 * Captures only state needed to continue an actual provider tool-use turn.
+	 * Captures supported continuation state on every assistant turn.
 	 * Text and tool calls stay in their canonical fields and are not duplicated.
 	 */
 	static AMap<AString, ACell> capture(String provider, String model, AiMessage message) {
-		if (!ANTHROPIC.equals(provider) || model == null || !message.hasToolExecutionRequests()) return null;
+		if (!ANTHROPIC.equals(provider) || model == null) return null;
 
 		AVector<ACell> blocks = Vectors.empty();
 		String thinking = message.thinking();
@@ -79,7 +79,7 @@ final class ProviderState {
 	 * Missing, legacy, malformed, future, or non-matching state is ignored.
 	 */
 	static AiMessage restore(String provider, String model, ACell state, AiMessage message) {
-		if (!ANTHROPIC.equals(provider) || model == null || !message.hasToolExecutionRequests()
+		if (!ANTHROPIC.equals(provider) || model == null
 				|| !(state instanceof AMap<?, ?>)) return message;
 		AString storedProvider = RT.ensureString(RT.getIn(state, Fields.PROVIDER));
 		AString storedModel = RT.ensureString(RT.getIn(state, Fields.MODEL));
@@ -97,7 +97,7 @@ final class ProviderState {
 			ACell block = blocks.get(i);
 			AString type = RT.ensureString(RT.getIn(block, Fields.TYPE));
 			if (V_THINKING.equals(type)) {
-				// LangChain4j 1.22 can faithfully send one signed thinking
+				// LangChain4j 1.23 can faithfully send one signed thinking
 				// block followed by redacted blocks. Refuse to reinterpret any wider
 				// provider shape; a later codec can add support without migrating state.
 				if (thinking != null || seenRedacted) return message;

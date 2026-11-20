@@ -281,7 +281,7 @@ public class OrchestratorTest {
 		for (String name : new String[]{"PipeA", "PipeB", "PipeC"}) {
 			engine.jobs().invokeOperation("v/ops/agent/create",
 				Maps.of(Fields.AGENT_ID, name,
-					Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")),
+					Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete", "acceptTasks", true)),
 				RequestContext.of(ALICE_DID)).awaitResult(5000);
 		}
 
@@ -341,7 +341,7 @@ public class OrchestratorTest {
 		for (String name : new String[]{"GridA", "GridB"}) {
 			engine.jobs().invokeOperation("v/ops/agent/create",
 				Maps.of(Fields.AGENT_ID, name,
-					Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")),
+					Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete", "acceptTasks", true)),
 				RequestContext.of(ALICE_DID)).awaitResult(5000);
 		}
 
@@ -428,7 +428,7 @@ public class OrchestratorTest {
 		for (String name : new String[]{"RtA", "RtB"}) {
 			engine.jobs().invokeOperation("v/ops/agent/create",
 				Maps.of(Fields.AGENT_ID, name,
-					Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")),
+					Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete", "acceptTasks", true)),
 				RequestContext.of(ALICE_DID)).awaitResult(5000);
 		}
 
@@ -843,7 +843,7 @@ public class OrchestratorTest {
 				Config.ENABLED, CVMBool.TRUE,
 				Config.CAPS, Vectors.of(
 					Capability.create(Strings.create("v/test/ops/echo"), Strings.create("invoke")),
-					Capability.create(Strings.create("j"), Capability.CRUD_READ))))));
+					Capability.create(Strings.create("j"), covia.api.Abilities.JOB_READ))))));
 		Engine local = loopback;
 		try {
 			String remoteUrl = "http://127.0.0.1:" + remote.port();

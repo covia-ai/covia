@@ -22,6 +22,7 @@ import covia.grid.hitl.Hitl;
 import covia.lattice.Covia;
 import covia.lattice.Namespace;
 import covia.venue.Agent;
+import covia.venue.TestAgents;
 import covia.venue.User;
 import covia.venue.VenueState;
 
@@ -58,23 +59,25 @@ class CallerAndOwnerTest {
 		VenueState venue = VenueState.create(AKeyPair.generate());
 		venue.cursor().set(Index.<Keyword, ACell>none().assoc(Covia.DID, VENUE).assoc(Covia.VERSION, CVMLong.ONE));
 		User alice = venue.users().ensure(ALICE);
-		alice.cursor().path(Namespace.J).set(Index.<Blob, ACell>none()
+		Covia.entry(alice.cursor(), Namespace.J).set(Index.<Blob, ACell>none()
 			.assoc(AGENT_JOB, Maps.of(Fields.ID, AGENT_JOB, Fields.STATUS, "COMPLETE", Fields.CALLER, ALICE, ACTOR, WORKER))
 			.assoc(OWN_JOB, Maps.of(Fields.ID, OWN_JOB, Fields.STATUS, "COMPLETE", Fields.CALLER, ALICE)));
 
-		alice.inbox().put(Strings.create("agent"), Maps.of(Hitl.ID, "agent", FROM, WORKER, REQUESTER_USER, ALICE));
-		alice.inbox().put(Strings.create("legacy-agent"), Maps.of(Hitl.ID, "legacy-agent", FROM, WORKER));
-		alice.inbox().put(Strings.create("legacy-retired"), Maps.of(Hitl.ID, "legacy-retired", FROM, RETIRED));
-		alice.inbox().put(Strings.create("legacy-ghost"), Maps.of(Hitl.ID, "legacy-ghost", FROM, GHOST));
-		alice.inbox().put(Strings.create("stranger"), Maps.of(Hitl.ID, "stranger", FROM, BOB));
+		// The inbox as version 1 kept it, keyed by request id as text
+		Covia.entry(alice.cursor(), Namespace.H).set(Maps.of(Covia.WORKSPACE_DATA, Maps.of(
+			"agent", Maps.of(Hitl.ID, "agent", FROM, WORKER, REQUESTER_USER, ALICE),
+			"legacy-agent", Maps.of(Hitl.ID, "legacy-agent", FROM, WORKER),
+			"legacy-retired", Maps.of(Hitl.ID, "legacy-retired", FROM, RETIRED),
+			"legacy-ghost", Maps.of(Hitl.ID, "legacy-ghost", FROM, GHOST),
+			"stranger", Maps.of(Hitl.ID, "stranger", FROM, BOB))));
 
-		Agent worker = alice.ensureAgent(Strings.create("worker"), Maps.empty(), null);
-		worker.putRecord(worker.getRecord().assoc(Agent.KEY_TASKS, Index.<Blob, ACell>none()
+		Agent worker = TestAgents.ensure(alice, Strings.create("worker"), Maps.empty(), null);
+		worker.cursor().set(worker.getRecord().assoc(Agent.KEY_TASKS, Index.<Blob, ACell>none()
 			.assoc(TASK, Maps.of(OUTPUT_CONTEXT, Maps.of(Fields.CALLER, WORKER, USER, ALICE, CAPS, Maps.empty())))
 			.assoc(OLD_TASK, Maps.of(OUTPUT_CONTEXT, Maps.of(Fields.CALLER, WORKER)))
 			.assoc(OWN_TASK, Maps.of(OUTPUT_CONTEXT, Maps.of(Fields.CALLER, BOB, USER, BOB)))));
-		Agent retired = alice.ensureAgent(Strings.create("retired"), Maps.empty(), null);
-		retired.putRecord(retired.getRecord().assoc(Agent.KEY_STATUS, Agent.TERMINATED));
+		Agent retired = TestAgents.ensure(alice, Strings.create("retired"), Maps.empty(), null);
+		retired.cursor().set(retired.getRecord().assoc(Agent.KEY_STATUS, Agent.TERMINATED));
 
 		AMap<AString, ACell> schedule = Maps.of(
 			EVENTS, Index.<Blob, ACell>none()
@@ -108,17 +111,20 @@ class CallerAndOwnerTest {
 	}
 
 	@Test void hitlRequestsNameTheirCallerAndOwner() {
-		User alice = read(STEP.apply(legacy())).users().user(ALICE);
-		assertEquals(Maps.of(Hitl.ID, "agent", Hitl.CALLER, WORKER, Hitl.OWNER, ALICE),
-			alice.inbox().get(Strings.create("agent")));
-		assertEquals(Maps.of(Hitl.ID, "legacy-agent", Hitl.CALLER, WORKER, Hitl.OWNER, ALICE),
-			alice.inbox().get(Strings.create("legacy-agent")),
+		ACell alice = read(STEP.apply(legacy())).users().user(ALICE).get();
+		assertEquals(Maps.of(Hitl.ID, "agent", Hitl.CALLER, WORKER, Hitl.OWNER, ALICE), request(alice, "agent"));
+		assertEquals(Maps.of(Hitl.ID, "legacy-agent", Hitl.CALLER, WORKER, Hitl.OWNER, ALICE), request(alice, "legacy-agent"),
 			"a request naming only an agent that exists belongs to that agent's owner");
-		assertEquals(Maps.of(Hitl.ID, "legacy-retired", Hitl.CALLER, RETIRED),
-			alice.inbox().get(Strings.create("legacy-retired")), "nor a terminated one");
-		assertEquals(Maps.of(Hitl.ID, "legacy-ghost", Hitl.CALLER, GHOST),
-			alice.inbox().get(Strings.create("legacy-ghost")), "a name alone puts no principal in another namespace");
-		assertEquals(Maps.of(Hitl.ID, "stranger", Hitl.CALLER, BOB), alice.inbox().get(Strings.create("stranger")));
+		assertEquals(Maps.of(Hitl.ID, "legacy-retired", Hitl.CALLER, RETIRED), request(alice, "legacy-retired"),
+			"nor a terminated one");
+		assertEquals(Maps.of(Hitl.ID, "legacy-ghost", Hitl.CALLER, GHOST), request(alice, "legacy-ghost"),
+			"a name alone puts no principal in another namespace");
+		assertEquals(Maps.of(Hitl.ID, "stranger", Hitl.CALLER, BOB), request(alice, "stranger"));
+	}
+
+	/** A request in a user's inbox as version 2 keeps it, by its id as text. */
+	private static ACell request(ACell user, String id) {
+		return RT.getIn(user, Namespace.H, Covia.WORKSPACE_DATA, id);
 	}
 
 	@Test void outputSnapshotsNameTheirOwner() {
@@ -141,7 +147,7 @@ class CallerAndOwnerTest {
 		assertSame(noUsers, STEP.apply(noUsers));
 		VenueState venue = VenueState.create(AKeyPair.generate());
 		venue.cursor().set(Index.<Keyword, ACell>none().assoc(Covia.DID, VENUE));
-		venue.users().ensure(ALICE).cursor().path(Namespace.J)
+		Covia.entry(venue.users().ensure(ALICE).cursor(), Namespace.J)
 			.set(Index.<Blob, ACell>none().assoc(OWN_JOB, Maps.of(Fields.ID, OWN_JOB, Fields.CALLER, ALICE)));
 		assertSame(venue.get(), STEP.apply(venue.get()));
 	}

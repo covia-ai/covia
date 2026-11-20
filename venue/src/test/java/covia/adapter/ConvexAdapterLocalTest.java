@@ -28,6 +28,7 @@ import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.grid.Job;
+import covia.grid.Status;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.TestEngine;
@@ -49,6 +50,71 @@ class ConvexAdapterLocalTest {
 		return engine.jobs().invokeOperation(operation, input, ctx).awaitResult(5000);
 	}
 
+	/** Why a call failed, asserting that it did. */
+	private String refusal(String operation, ACell input) {
+		Job job = engine.jobs().invokeOperation(operation, input, ctx);
+		assertThrows(Exception.class, () -> job.awaitResult(5000));
+		assertEquals(Status.FAILED, job.getStatus());
+		return job.getErrorMessage();
+	}
+
+	private static final String QUERY = "v/ops/convex/query";
+	private static final String TRANSACT = "v/ops/convex/transact";
+	/** A literal seed; these calls are refused before it is used. */
+	private static final String SEED = "0xB5232CF710Aaa222F2C898105d06d58283f91173D668C313b72dD90f0175E622";
+
+	// A refused source or address fails the call before any peer is dialled
+
+	@Test
+	void queryAndTransactRequireASource() {
+		assertEquals(ConvexAdapter.NO_SOURCE, refusal(QUERY, Maps.of(Fields.ADDRESS, "#13")));
+		assertEquals(ConvexAdapter.NO_SOURCE, refusal(QUERY, Maps.of(Fields.SOURCE, 42L)));
+		assertEquals(ConvexAdapter.NO_SOURCE, refusal(TRANSACT, Maps.of(
+			Fields.ADDRESS, "#13", Fields.SEED, SEED)));
+	}
+
+	@Test
+	void sourceThatIsNotOneFormIsInvalidInput() {
+		for (String source : new String[] {"", "  \n", ";; only a comment", "(+ 1 2", "1 2", ")"}) {
+			String query = refusal(QUERY, Maps.of(Fields.SOURCE, source));
+			assertTrue(query.startsWith(ConvexAdapter.UNREADABLE_SOURCE), source + ": " + query);
+			assertTrue(query.length() > ConvexAdapter.UNREADABLE_SOURCE.length(), "the reader's reason follows: " + query);
+
+			String transact = refusal(TRANSACT, Maps.of(
+				Fields.ADDRESS, "#13", Fields.SOURCE, source, Fields.SEED, SEED));
+			assertTrue(transact.startsWith(ConvexAdapter.UNREADABLE_SOURCE), source + ": " + transact);
+		}
+	}
+
+	@Test
+	void transactRequiresAnAddress() {
+		assertEquals(ConvexAdapter.NOT_AN_ADDRESS, refusal(TRANSACT, Maps.of(
+			Fields.SOURCE, "(def foo 1)", Fields.SEED, SEED)));
+	}
+
+	@Test
+	void anAddressThatNamesNoAccountIsRefused() {
+		for (String address : new String[] {"garbage", "#-5", "#", "", "#13.5"}) {
+			String query = refusal(QUERY, Maps.of(Fields.ADDRESS, address, Fields.SOURCE, "(+ 1 2)"));
+			assertTrue(query.startsWith(ConvexAdapter.NOT_AN_ADDRESS), address + ": " + query);
+
+			String transact = refusal(TRANSACT, Maps.of(
+				Fields.ADDRESS, address, Fields.SOURCE, "(def foo 1)", Fields.SEED, SEED));
+			assertTrue(transact.startsWith(ConvexAdapter.NOT_AN_ADDRESS), address + ": " + transact);
+		}
+	}
+
+	@Test
+	void transactRequiresASigner() {
+		assertEquals(ConvexAdapter.NO_SIGNER, refusal(TRANSACT, Maps.of(
+			Fields.ADDRESS, "#13", Fields.SOURCE, "(def foo 1)")));
+	}
+
+	@Test
+	void signRequiresASeed() {
+		assertEquals(ConvexAdapter.NO_SEED, refusal("v/ops/convex/sign", Maps.of(Fields.MESSAGE, "message")));
+	}
+
 	@Test
 	void generateKeyStoresSeedButReturnsOnlyPublicMaterial() {
 		ACell result = run("v/ops/convex/generate-key", Maps.of(Fields.NAME, "signer"));
@@ -68,10 +134,8 @@ class ConvexAdapterLocalTest {
 		ACell first = run("v/ops/convex/generate-key", Maps.of(Fields.NAME, "protected"));
 		String firstSeed = engine.resolveSecret("s/protected", ctx);
 
-		Job refused = engine.jobs().invokeOperation("v/ops/convex/generate-key",
-			Maps.of(Fields.NAME, "protected"), ctx);
-		assertThrows(Exception.class, () -> refused.awaitResult(5000));
-		assertTrue(refused.getErrorMessage().contains("overwrite:true"));
+		assertEquals(SecretAdapter.SECRET_EXISTS, refusal("v/ops/convex/generate-key",
+			Maps.of(Fields.NAME, "protected")));
 		assertEquals(firstSeed, engine.resolveSecret("s/protected", ctx));
 
 		ACell replacement = run("v/ops/convex/generate-key", Maps.of(
@@ -113,15 +177,11 @@ class ConvexAdapterLocalTest {
 	@Test
 	void signRejectsLiteralSeedsAndMissingSecrets() {
 		AKeyPair keyPair = AKeyPair.generate();
-		Job literal = engine.jobs().invokeOperation("v/ops/convex/sign", Maps.of(
-			Fields.SEED, keyPair.getSeed().toHexString(), Fields.MESSAGE, "message"), ctx);
-		assertThrows(Exception.class, () -> literal.awaitResult(5000));
-		assertFalse(literal.getErrorMessage().isBlank());
+		assertEquals(ConvexAdapter.SEED_REF_REQUIRED, refusal("v/ops/convex/sign", Maps.of(
+			Fields.SEED, keyPair.getSeed().toHexString(), Fields.MESSAGE, "message")));
 
-		Job missing = engine.jobs().invokeOperation("v/ops/convex/sign", Maps.of(
-			Fields.SEED, "s/missing", Fields.MESSAGE, "message"), ctx);
-		assertThrows(Exception.class, () -> missing.awaitResult(5000));
-		assertTrue(missing.getErrorMessage().contains("s/missing"));
+		assertEquals(ConvexAdapter.SEED_UNAVAILABLE + "s/missing", refusal("v/ops/convex/sign", Maps.of(
+			Fields.SEED, "s/missing", Fields.MESSAGE, "message")));
 	}
 
 	@Test
@@ -133,14 +193,12 @@ class ConvexAdapterLocalTest {
 		assertNotNull(secretFields);
 		assertTrue(secretFields.contains(Fields.SEED));
 
-		Job missing = engine.jobs().invokeOperation("v/ops/convex/transact", Maps.of(
+		// Secret resolution fails before the peer is even checked
+		assertEquals(ConvexAdapter.SEED_UNAVAILABLE + "s/missing", refusal(TRANSACT, Maps.of(
 			Fields.PEER, "localhost:1",
 			Fields.ADDRESS, "#13",
 			Fields.SOURCE, "(def foo 1)",
-			Fields.SEED, "s/missing"), ctx);
-		assertThrows(Exception.class, () -> missing.awaitResult(5000));
-		assertTrue(missing.getErrorMessage().contains("s/missing"),
-			"secret resolution must fail before attempting a peer connection");
+			Fields.SEED, "s/missing")));
 	}
 
 	@Test
@@ -173,25 +231,17 @@ class ConvexAdapterLocalTest {
 
 	@Test
 	void decodeCad3RejectsMalformedAndIncompleteMessages() {
-		Job malformed = engine.jobs().invokeOperation("v/ops/convex/decode-cad3",
-			Maps.of("encoding", "0xzz"), ctx);
-		assertThrows(Exception.class, () -> malformed.awaitResult(5000));
-		assertFalse(malformed.getErrorMessage().isBlank());
+		assertEquals(ConvexAdapter.NOT_CAD3, refusal("v/ops/convex/decode-cad3", Maps.of("encoding", "0xzz")));
 
 		ACell value = Maps.of("payload", Strings.create("abcdef".repeat(2_000)));
 		String topCellOnly = Cells.getEncoding(value).toString();
-		Job incomplete = engine.jobs().invokeOperation("v/ops/convex/decode-cad3",
-			Maps.of("encoding", topCellOnly), ctx);
-		assertThrows(Exception.class, () -> incomplete.awaitResult(5000));
-		assertFalse(incomplete.getErrorMessage().isBlank());
+		String incomplete = refusal("v/ops/convex/decode-cad3", Maps.of("encoding", topCellOnly));
+		assertTrue(incomplete.startsWith(ConvexAdapter.CAD3_INCOMPLETE), incomplete);
 	}
 
 	@Test
 	void encodeCad3DistinguishesMissingValueFromExplicitNull() {
-		Job missing = engine.jobs().invokeOperation("v/ops/convex/encode-cad3",
-			Maps.empty(), ctx);
-		assertThrows(Exception.class, () -> missing.awaitResult(5000));
-		assertFalse(missing.getErrorMessage().isBlank());
+		assertEquals(ConvexAdapter.NO_VALUE, refusal("v/ops/convex/encode-cad3", Maps.empty()));
 
 		ACell encodedNull = run("v/ops/convex/encode-cad3",
 			Maps.of(Fields.VALUE, null));

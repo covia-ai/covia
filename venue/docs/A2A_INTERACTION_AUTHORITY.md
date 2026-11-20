@@ -31,8 +31,10 @@ bindings. It is the single cross-user gate, `Engine.crossUserAllows`, for
 
 - the **owner**, always;
 - a caller the agent's **admission policy**, `config.accepts`, admits:
-  `"venue"` (the operator and its agents), exact principal DIDs, or
-  `"anyone"`, which includes anonymous callers (`Admission`);
+  `"venue"` (the operator and what acts for it), principal DIDs, each
+  admitting what acts for that principal, or `"anyone"`, which includes
+  anonymous callers (`Admission`), each as far as the caller's narrowing, such
+  as an agent's caps, covers asking ([AUTHORITY.md](./AUTHORITY.md#admission));
 - a caller presenting a **UCAN** granting `agent/request` or `agent/message` on
   the agent (over A2A, in `X-Covia-Ucans`).
 
@@ -75,16 +77,16 @@ refuse that config (`Admission.configProblem`).
   (UCAN.md §5.4). An external agent's backend is its harness's work, so
   whoever the agent admits reaches that backend.
 - **The agent knows who asked, and how.** The task records the asker as its
-  caller. When a channel binding authenticated the asker, the request context
-  carries the authentication record (AUTH.md §5.3), and the agent's ingress
-  records it beside the request, never in it, so nothing a caller sends can
-  pose as one.
+  caller, and the request's route: where it started and each handover, such
+  as a sign-in, one of the asker's access tokens, a channel binding or a callable
+  ([AGENT_CONTEXT.md](./AGENT_CONTEXT.md) §1.2). Both are taken from the
+  request context, beside the request and never from it, so nothing a caller
+  sends can pose as either.
+- **A session is open to whoever may ask.** A caller who may ask the agent and
+  knows a session's id can add to that session. Each turn records who sent it,
+  and the agent's context shows that whenever the sender changes
+  ([AGENT_SESSIONS.md](./AGENT_SESSIONS.md#2-core-abstraction-session)).
 
 Every anonymous caller is the one public principal, so they share its jobs:
 what any of them may do with an anonymous task is what the operator's public
 scope allows. A job id is not a credential.
-
-## Not yet on this model
-
-- **Sessions** do not check who joins: a caller who may ask and knows a
-  session id can add to that session.

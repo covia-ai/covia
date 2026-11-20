@@ -26,7 +26,7 @@ import covia.adapter.webhook.WebhookRequest;
 import covia.adapter.webhook.WebhookResponse;
 import covia.adapter.webhook.WebhookSignatures;
 import covia.exception.AuthException;
-import covia.exception.NotSupportedException;
+import covia.exception.InvalidStateException;
 import covia.exception.ResponseException;
 
 /**
@@ -147,6 +147,7 @@ public final class WhatsAppAdapter extends AWebhookMessagingAdapter<BotSpec> {
 	@Override protected MessagingMedia.Fetched fetchMedia(WebhookBot<BotSpec> bot, AMap<AString, ACell> item) {
 		bot.requireReady();
 		String lookup = apiUrl() + "/" + bot.spec().apiVersion() + "/" + MessagingSettings.id(item, "id", MEDIA_ID);
+		requireOutboundHttp(bot, "GET", lookup);
 		ACell info = MessagingHttp.get(lookup, bot.credential("token", lookup));
 		AString url = RT.ensureString(RT.getIn(info, MessagingSettings.key("url")));
 		if (url == null) throw new ResponseException(MEDIA_UNAVAILABLE);
@@ -155,6 +156,7 @@ public final class WhatsAppAdapter extends AWebhookMessagingAdapter<BotSpec> {
 		if (size != null && size.longValue() > MessagingMedia.MAX_BYTES) throw new ResponseException(MessagingMedia.TOO_LARGE);
 		URI download = MessagingHttp.download(url.toString());
 		// The link is on another host: a url-bound secret/use grant must cover it too.
+		requireOutboundHttp(bot, "GET", download.toString());
 		MessagingMedia.Fetched fetched = MessagingHttp.fetch(download, bot.credential("token", download.toString()), MessagingMedia.MAX_BYTES);
 		AString type = RT.ensureString(RT.getIn(info, MessagingSettings.key("mime_type")));
 		return type == null ? fetched : new MessagingMedia.Fetched(fetched.bytes(), type.toString());
@@ -183,7 +185,7 @@ public final class WhatsAppAdapter extends AWebhookMessagingAdapter<BotSpec> {
 	}
 	private void requireWindow(AMap<AString, ACell> event) {
 		long timestamp = Long.parseLong(MessagingSettings.required(event, "timestamp"));
-		if (nowSeconds() - timestamp >= WINDOW_SECONDS) throw new NotSupportedException(WINDOW_EXPIRED);
+		if (nowSeconds() - timestamp >= WINDOW_SECONDS) throw new InvalidStateException(WINDOW_EXPIRED);
 	}
 	@Override protected int maxText() { return MAX_TEXT; }
 	@Override protected long relayReplyWindowMs() { return WINDOW_SECONDS * 1000; }
@@ -202,6 +204,7 @@ public final class WhatsAppAdapter extends AWebhookMessagingAdapter<BotSpec> {
 			"type", "text", "text", Maps.of("body", text, "preview_url", false));
 		if (replyTo != null) body = body.assoc(MessagingSettings.key("context"), Maps.of("message_id", replyTo));
 		String url = apiUrl() + "/" + bot.spec().apiVersion() + "/" + bot.spec().phoneNumberId() + "/messages";
+		requireOutboundHttp(bot, "POST", url);
 		ACell response = MessagingHttp.post(url, bot.credential("token", url), body);
 		AVector<ACell> messages = RT.ensureVector(RT.getIn(response, MessagingSettings.key("messages")));
 		if (messages == null || messages.isEmpty() || RT.ensureString(RT.getIn(messages.get(0), MessagingSettings.key("id"))) == null) throw new ResponseException(INVALID_RESPONSE);

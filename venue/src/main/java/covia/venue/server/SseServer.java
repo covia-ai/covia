@@ -36,7 +36,7 @@ public class SseServer {
 	public static final String AGENT_NOT_FOUND = "Agent not found: ";
 
 	/** One job-stream client and the context its reads are made under. */
-	private record JobClient(SseClient client, RequestContext rctx) {}
+	private record JobClient(SseClient client, RequestContext rctx, AString owner) {}
 
 	/** Per-job client subscriptions, keyed by the job's CANONICAL bare hex id
 	 *  ({@code Blob.toHexString()}) — the same form {@link #broadcastJobUpdate}
@@ -73,28 +73,23 @@ public class SseServer {
 		client.keepAlive();
 
 		Blob jobId = Blob.parse(client.ctx().pathParam("id"));
-		String key = jobId.toHexString();
 
 		// Resolve the record under the CALLER's context — the stream carries
 		// exactly what GET /jobs/{id} would show this caller.
 		RequestContext rctx = engine.withTransportGrants(AuthMiddleware.callerContext(client.ctx()),
 			AuthMiddleware.headerUcans(client.ctx()));
-		AMap<AString, ACell> record = engine.jobs().getJobData(jobId, rctx);
-		if (record == null) {
-			// Vanished between the route check and here (e.g. deleted)
-			sendNotFound(client, key);
-			return;
-		}
-		if (Job.isFinished(record)) {
-			// Terminal already — deliver the final record and end the stream
-			client.sendEvent("job-update", JSON.toString(record));
-			client.close();
-			return;
-		}
-
-		registerClient(key, new JobClient(client, rctx));
-		client.sendEvent("job-update", JSON.toString(record));
+		AString owner = covia.venue.api.CoviaAPI.jobOwner(client.ctx());
+		subscribeJob(jobId, client, rctx, owner);
 	};
+
+	/** Register before reading; serialize the first frame with every later update. */
+	protected void subscribeJob(Blob jobId, SseClient client, RequestContext rctx, AString owner) {
+		JobClient jc = new JobClient(client, rctx, owner);
+		synchronized (jc) {
+			registerClient(jobId.toHexString(), jc);
+			sendJobUpdate(jobId, jc);
+		}
+	}
 
 	/**
 	 * Registers an SSE client to receive updates for a specific job.
@@ -102,12 +97,14 @@ public class SseServer {
 	 * @param jc SSE client and the context it reads under
 	 */
 	private void registerClient(String jobId, JobClient jc) {
-		Set<JobClient> clients = jobClients.computeIfAbsent(jobId,
-				k -> ConcurrentHashMap.newKeySet());
-		clients.add(jc);
-		jc.client().onClose(() -> {
-			unregisterClient(jobId, jc);
+		jc.client().onClose(() -> unregisterClient(jobId, jc));
+		jobClients.compute(jobId, (key, clients) -> {
+			if (clients == null) clients = ConcurrentHashMap.newKeySet();
+			clients.add(jc);
+			return clients;
 		});
+		// onClose may have run before registration finished.
+		if (jc.client().terminated()) unregisterClient(jobId, jc);
 		log.info("SSE client connected for job: {}", jobId);
 	}
 
@@ -117,13 +114,10 @@ public class SseServer {
 	 * @param jc SSE client
 	 */
 	private void unregisterClient(String jobId, JobClient jc) {
-		Set<JobClient> clients = jobClients.get(jobId);
-		if (clients != null) {
+		jobClients.computeIfPresent(jobId, (key, clients) -> {
 			clients.remove(jc);
-			if (clients.isEmpty()) {
-				jobClients.remove(jobId);
-			}
-		}
+			return clients.isEmpty() ? null : clients;
+		});
 		log.info("SSE client disconnected for job: {}", jobId);
 	}
 
@@ -145,30 +139,39 @@ public class SseServer {
 
 		for (JobClient jc : clients) {
 			try {
-				AMap<AString, ACell> record = readableRecord(job.getID(), jc.rctx());
-				if (record == null) {
-					sendNotFound(jc.client(), jobId);
-					continue;
-				}
-				jc.client().sendEvent("job-update", JSON.toString(record));
-				if (Job.isFinished(record)) jc.client().close(); // onClose unregisters
+				sendJobUpdate(job.getID(), jc);
 			} catch (Exception e) {
 				log.warn("Failed to send SSE event to client for job {}: {}", jobId, e.getMessage());
 			}
 		}
 	}
 
+	/** Read authorization and state together for this delivery, including the initial frame. */
+	private void sendJobUpdate(Blob jobId, JobClient jc) {
+		synchronized (jc) {
+			if (jc.client().terminated()) return;
+			AMap<AString, ACell> record = readableRecord(jobId, jc.rctx(), jc.owner());
+			if (jc.client().terminated()) return;
+			if (record == null) {
+				sendNotFound(jc.client(), jobId);
+				return;
+			}
+			jc.client().sendEvent("job-update", JSON.toString(record));
+			if (Job.isFinished(record)) jc.client().close();
+		}
+	}
+
 	/** The job record as {@code rctx} may read it now, or null when it may not. */
-	private AMap<AString, ACell> readableRecord(Blob jobId, RequestContext rctx) {
+	private AMap<AString, ACell> readableRecord(Blob jobId, RequestContext rctx, AString owner) {
 		try {
-			return engine.jobs().getJobData(jobId, rctx);
+			return engine.jobs().getJobData(jobId, rctx, owner);
 		} catch (AuthException e) {
 			return null;
 		}
 	}
 
 	/** Ends a stream whose job the caller cannot read, saying no more than a 404 would. */
-	private static void sendNotFound(SseClient client, String jobId) {
+	private static void sendNotFound(SseClient client, Blob jobId) {
 		client.sendEvent("error", ApiErrors.body(404, JOB_NOT_FOUND + jobId));
 		client.close();
 	}
@@ -176,7 +179,7 @@ public class SseServer {
 	// ========== Agent streams (#394) ==========
 
 	/** One agent-stream client and whether its frames carry {@code detail}. */
-	private record AgentClient(SseClient client, boolean detail, AString sessionId) {}
+	private record AgentClient(SseClient client, boolean detail, Blob sessionId) {}
 
 	/** Per-agent client subscriptions keyed by the agent's grid address
 	 *  ({@code <ownerDID>/g/<agentId>}) — the key every
@@ -216,7 +219,7 @@ public class SseServer {
 		AString agentId = RT.ensureString(info.get(Fields.AGENT_ID));
 		AString status = RT.ensureString(info.get(Fields.STATUS));
 		boolean detail = !"false".equalsIgnoreCase(client.ctx().queryParam("detail"));
-		AString sessionFilter = sessionFilter(client.ctx().queryParam("sessionId"));
+		Blob sessionFilter = sessionFilter(client.ctx().queryParam("sessionId"));
 		boolean terminated = Agent.TERMINATED.equals(status);
 
 		if (!terminated) registerAgentClient(address, new AgentClient(client, detail, sessionFilter));
@@ -250,15 +253,13 @@ public class SseServer {
 
 
 	/**
-	 * The session a stream is narrowed to, as the bare hex the events carry
-	 * (any parseable form is accepted, {@code 0x}-prefixed included); null
-	 * for the whole agent, or for an unparseable value — the route handler
-	 * rejects that with 400 before the stream is committed.
+	 * The session a stream is narrowed to, given in hex with or without
+	 * {@code 0x}; null for the whole agent, or for an unparseable value — the
+	 * route handler rejects that with 400 before the stream is committed.
 	 */
-	public static AString sessionFilter(String param) {
+	public static Blob sessionFilter(String param) {
 		if (param == null || param.isBlank()) return null;
-		Blob sid = Blob.parse(param.trim());
-		return (sid != null) ? Strings.create(sid.toHexString()) : null;
+		return Blob.parse(param.trim());
 	}
 	/**
 	 * Fans one live agent event out to that agent's stream clients: the

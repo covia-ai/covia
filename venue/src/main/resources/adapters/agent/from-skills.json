@@ -12,7 +12,7 @@
       "properties": {
         "agentId": {
           "type": "string",
-          "description": "Target agent reference: a bare human-readable name for the caller's namespace, g/<id>, /g/<id>, or <ownerDID>/g/<id>. Must be unused."
+          "description": "Target agent reference: a bare human-readable name for the caller's namespace, g/<id>, /g/<id>, <ownerDID>/g/<id>, or the agent's DID <ownerDID>:g:<id>. Must be unused."
         },
         "systemPrompt": {
           "type": "string",
@@ -41,7 +41,7 @@
         },
         "config": {
           "type": "object",
-          "description": "Optional base agent configuration, merged under the derived fields (systemPrompt, skillsets, operation/llmOperation/model). Use it to pass any other agent:create config such as tools, caps, or accepts."
+          "description": "Optional base agent configuration, merged under the derived fields (systemPrompt, skillsets, operation/llmOperation/model). Use it to pass any other agent:create config such as tools, caps, accepts, or acceptTasks: true for an agent that will take requests."
         }
       },
       "required": ["agentId"]

@@ -20,6 +20,7 @@ import convex.core.lang.RT;
 import convex.auth.ucan.UCAN;
 import covia.adapter.AAdapter;
 import covia.exception.AuthException;
+import covia.exception.ConfigurationException;
 import covia.grid.Authority;
 import covia.grid.Job;
 import covia.grid.Status;
@@ -114,10 +115,9 @@ public class AdapterLifecycleTest {
 		private volatile String colour = "unset";
 		@Override public String getName() { return "fact"; }
 		@Override public String getDescription() { return "publishes a configured fact"; }
-		@Override public boolean configure(AMap<AString, ACell> config, boolean strict) {
+		@Override public void configure(AMap<AString, ACell> config, boolean strict) {
 			AString c = RT.ensureString(config.get(Strings.create("colour")));
 			colour = (c == null) ? "unset" : c.toString();
-			return true;
 		}
 		@Override public AMap<AString, ACell> info() {
 			// The reserved framework key is ignored; the adapter's own fact is published.
@@ -318,22 +318,17 @@ public class AdapterLifecycleTest {
 		}
 	}
 
-	/**
-	 * Records every configure() call, declines configs with {@code reject: true}
-	 * and refuses any {@code malformed} setting as malformed.
-	 */
+	/** Records every configure() call and refuses any {@code malformed} setting. */
 	private static final class ConfigurableAdapter extends AAdapter {
 		static final String MALFORMED = "malformed is not a valid setting";
 		AMap<AString, ACell> seen;
 		int calls;
 		@Override public String getName() { return "configurable"; }
 		@Override public String getDescription() { return "test"; }
-		@Override public boolean configure(AMap<AString, ACell> config, boolean strict) {
+		@Override public void configure(AMap<AString, ACell> config, boolean strict) {
 			calls++;
-			if (config.containsKey(Strings.create("malformed"))) throw new IllegalArgumentException(MALFORMED);
-			if (RT.bool(config.get(Strings.create("reject")))) return false;
+			if (config.containsKey(Strings.create("malformed"))) throw new ConfigurationException(MALFORMED);
 			seen = config;
-			return true;
 		}
 		@Override public CompletableFuture<ACell> invokeFuture(RequestContext ctx,
 				AMap<AString, ACell> meta, ACell input) {
@@ -362,9 +357,9 @@ public class AdapterLifecycleTest {
 			assertEquals(staticCfg, engine.config().getAdapterConfig("configurable"),
 				"static config object is untouched");
 
-			// A declined configuration changes nothing
-			assertThrows(covia.exception.InvalidInputException.class, () -> engine.configureAdapter(
-				"configurable", Maps.of(Strings.create("reject"), CVMBool.TRUE)));
+			// A refused configuration changes nothing: the adapter takes back the settings it had
+			assertThrows(ConfigurationException.class, () -> engine.configureAdapter(
+				"configurable", Maps.of(Strings.create("malformed"), CVMBool.TRUE)));
 			assertEquals(runtime, engine.adapterConfig("configurable"));
 			assertEquals(runtime, adapter.seen);
 
@@ -382,33 +377,13 @@ public class AdapterLifecycleTest {
 	}
 
 	@Test
-	public void testDeclinedConfigurationParksAdapterAtRegistration() {
-		Engine engine = boot(Maps.of(Config.ADAPTERS, Maps.of(Strings.create("configurable"),
-			Maps.of(Strings.create("reject"), CVMBool.TRUE))));
-		try {
-			ConfigurableAdapter adapter = new ConfigurableAdapter();
-			engine.registerAdapter(adapter);
-			assertNull(engine.getAdapter("configurable"));
-			assertTrue(engine.getDisabledAdapterNames().contains("configurable"));
-			// Still declining → enable refuses; accept → enable installs and activates
-			assertThrows(covia.exception.ConfigurationException.class, () -> engine.enableAdapter("configurable"));
-			engine.configureAdapter("configurable", Maps.empty());
-			assertTrue(engine.enableAdapter("configurable"));
-			assertNotNull(engine.getAdapter("configurable"));
-		} finally {
-			engine.close();
-		}
-	}
-
-	@Test
-	public void testMalformedSettingIsTypedByItsSource() {
-		// In the venue config a malformed setting is the operator's setup; in a
-		// runtime reconfiguration it is the caller's input.
+	public void testRefusedSettingIsAConfigurationErrorFromEitherSource() {
+		// Whether the venue config or a runtime reconfiguration supplied it, a
+		// setting the adapter refuses reaches whoever supplied it unchanged.
 		AMap<AString, ACell> malformed = Maps.of(Strings.create("malformed"), CVMBool.TRUE);
 		Engine engine = boot(Maps.of(Config.ADAPTERS, Maps.of(Strings.create("configurable"), malformed)));
 		try {
-			covia.exception.ConfigurationException refused = assertThrows(
-				covia.exception.ConfigurationException.class,
+			ConfigurationException refused = assertThrows(ConfigurationException.class,
 				() -> engine.registerAdapter(new ConfigurableAdapter()));
 			assertEquals(ConfigurableAdapter.MALFORMED, refused.getMessage());
 			assertNull(engine.getAdapter("configurable"));
@@ -419,12 +394,18 @@ public class AdapterLifecycleTest {
 			malformed.assoc(Config.ENABLED, CVMBool.FALSE))));
 		try {
 			parked.registerAdapter(new ConfigurableAdapter());
-			assertThrows(covia.exception.ConfigurationException.class, () -> parked.enableAdapter("configurable"));
-			covia.exception.InvalidInputException rejected = assertThrows(
-				covia.exception.InvalidInputException.class,
-				() -> parked.configureAdapter("configurable", malformed));
-			assertEquals(ConfigurableAdapter.MALFORMED, rejected.getMessage());
+			assertEquals(ConfigurableAdapter.MALFORMED, assertThrows(ConfigurationException.class,
+				() -> parked.enableAdapter("configurable")).getMessage());
+			assertEquals(ConfigurableAdapter.MALFORMED, assertThrows(ConfigurationException.class,
+				() -> parked.configureAdapter("configurable", malformed)).getMessage());
+			ExecutionException viaOperation = assertThrows(ExecutionException.class,
+				() -> asVenue(parked, "v/ops/venue/adapter/configure",
+					Maps.of(Strings.create("name"), Strings.create("configurable"), Strings.create("config"), malformed)));
+			assertEquals(ConfigurableAdapter.MALFORMED,
+				assertInstanceOf(ConfigurationException.class, viaOperation.getCause()).getMessage());
 			assertNull(parked.getAdapter("configurable"));
+			assertEquals(malformed.assoc(Config.ENABLED, CVMBool.FALSE), parked.adapterConfig("configurable"),
+				"a refused configuration changes nothing");
 		} finally {
 			parked.close();
 		}
@@ -503,7 +484,7 @@ public class AdapterLifecycleTest {
 				"disabled adapters remain in the admin listing");
 
 			// Catalog metadata remains; dispatch fails because the adapter is gone.
-			covia.exception.NotSupportedException stale = assertThrows(covia.exception.NotSupportedException.class,
+			covia.exception.UnsupportedException stale = assertThrows(covia.exception.UnsupportedException.class,
 				() -> engine.jobs().invokeOperation("v/test/ops/echo",
 					Maps.of(Strings.create("value"), Strings.create("x")), ctx));
 			assertTrue(stale.getMessage().startsWith(JobManager.ADAPTER_NOT_AVAILABLE), stale.getMessage());
@@ -512,7 +493,7 @@ public class AdapterLifecycleTest {
 				Strings.create("operation"), Maps.of(Strings.create("adapter"), Strings.create("test:echo")));
 			ExecutionException gone = assertThrows(ExecutionException.class,
 				() -> engine.jobs().invokeInternal(echoMeta, Maps.empty(), ctx).get(10, TimeUnit.SECONDS));
-			assertInstanceOf(covia.exception.NotSupportedException.class, gone.getCause());
+			assertInstanceOf(covia.exception.UnsupportedException.class, gone.getCause());
 
 			ACell enabled = asVenue(engine, "v/ops/venue/adapter/enable",
 				Maps.of(Strings.create("name"), Strings.create("test")));
@@ -550,6 +531,7 @@ public class AdapterLifecycleTest {
 		engine.getVenueState().users().create(caller);
 		for (String op : new String[] {"v/ops/venue/adapters", "v/ops/venue/adapter/disable",
 				"v/ops/venue/adapter/enable", "v/ops/venue/adapter/configure",
+				"v/ops/venue/adapter/restart",
 				"v/ops/venue/module/load", "v/ops/venue/module/unload",
 				"v/ops/venue/restart", "v/ops/venue/gc"}) {
 			ExecutionException denied = assertThrows(ExecutionException.class,
@@ -560,14 +542,17 @@ public class AdapterLifecycleTest {
 					RequestContext.of(caller)).get(10, TimeUnit.SECONDS), op);
 			assertInstanceOf(AuthException.class, denied.getCause(), op);
 			assertFalse(denied.getCause().getMessage().isBlank(), op);
-			if (op.endsWith("/restart")) {
-				assertTrue(denied.getCause().getMessage().contains("venue/restart"), op);
+			if (op.equals("v/ops/venue/restart")) {
+				assertTrue(denied.getCause().getMessage().contains("admin/venue/restart"), op);
 				assertTrue(denied.getCause().getMessage().contains("/process"), op);
 			} else if (op.endsWith("/gc")) {
-				assertTrue(denied.getCause().getMessage().contains("venue/gc"), op);
+				assertTrue(denied.getCause().getMessage().contains("admin/venue/gc"), op);
 				assertTrue(denied.getCause().getMessage().contains("/store"), op);
+			} else if (op.endsWith("/adapters")) {
+				assertTrue(denied.getCause().getMessage().contains("admin/adapter/read"), op);
+				assertTrue(denied.getCause().getMessage().contains("/adapters"), op);
 			} else {
-				assertTrue(denied.getCause().getMessage().contains("adapter/manage"), op);
+				assertTrue(denied.getCause().getMessage().contains("admin/adapter/manage"), op);
 				assertTrue(denied.getCause().getMessage().contains("/adapters"), op);
 			}
 		}

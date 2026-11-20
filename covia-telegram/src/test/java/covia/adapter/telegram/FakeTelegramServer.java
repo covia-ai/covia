@@ -31,7 +31,9 @@ import convex.core.util.JSON;
  * form-encoded bodies. Any number of bots may be {@link #registerBot registered}
  * by token; an unknown token gets {@code 401 Unauthorized} exactly like
  * Telegram. Tests push inbound updates with {@link #push} and observe outbound
- * messages via {@link #awaitSent}.</p>
+ * messages via {@link #awaitSent}. Everything a bot sends, downloads and
+ * uploads is counted for its token alone, so tests running at once each use
+ * a bot of their own.</p>
  */
 final class FakeTelegramServer implements AutoCloseable {
 
@@ -52,17 +54,26 @@ final class FakeTelegramServer implements AutoCloseable {
 		final List<Map<String, Object>> updates = new ArrayList<>();
 		final BlockingQueue<Sent> sent = new LinkedBlockingQueue<>();
 		final AtomicInteger getMeCalls = new AtomicInteger();
+		/** While set, getMe answers only once this is released, counting {@code getMeArrived} down first. */
+		volatile java.util.concurrent.CountDownLatch getMeHeld, getMeArrived;
+		/** While set, a sendMessage to {@code sendHeldChat} answers only once released, counting {@code sendArrived} down first. */
+		volatile java.util.concurrent.CountDownLatch sendHeld, sendArrived;
+		volatile long sendHeldChat;
+		final AtomicInteger downloads = new AtomicInteger();
+		/** Chats whose sendMessage fails with a 503, and how many have failed. */
+		final java.util.Set<Long> failSendChats = ConcurrentHashMap.newKeySet();
+		final AtomicInteger failedSends = new AtomicInteger();
+		/** Each multipart upload's part headers, by part name. */
+		final Map<String, String> uploadTypes = new ConcurrentHashMap<>();
+		/** getUpdates requests so far; guarded by {@code updates}, whose waiters it wakes. */
+		int polls;
 		Bot(String username) { this.username = username; }
 	}
 
 	final Map<String, byte[]> files = new ConcurrentHashMap<>();
 	final java.util.Set<String> chunkedFiles = ConcurrentHashMap.newKeySet();
-	final AtomicInteger downloads = new AtomicInteger();
 	final Map<String, AtomicInteger> getFileCalls = new ConcurrentHashMap<>();
-	final java.util.Set<Long> failSendChats = ConcurrentHashMap.newKeySet();
-	final AtomicInteger failedSends = new AtomicInteger();
 	final Map<String, Long> declaredSizes = new ConcurrentHashMap<>();
-	final Map<String, String> uploadTypes = new ConcurrentHashMap<>();
 	final Map<String, String> lastFilters = new ConcurrentHashMap<>();
 	final Map<String, Integer> offsets = new ConcurrentHashMap<>();
 	private final HttpServer server;
@@ -97,6 +108,44 @@ final class FakeTelegramServer implements AutoCloseable {
 
 	int getMeCalls(String token) {
 		return bot(token).getMeCalls.get();
+	}
+
+	/**
+	 * Holds the bot's getMe calls, as an unresponsive API would, until the
+	 * returned latch is released; {@code arrived} counts down as each arrives.
+	 */
+	java.util.concurrent.CountDownLatch holdGetMe(String token, java.util.concurrent.CountDownLatch arrived) {
+		Bot b = bot(token);
+		b.getMeArrived = arrived;
+		return b.getMeHeld = new java.util.concurrent.CountDownLatch(1);
+	}
+
+	/** Holds the bot's sendMessage calls to {@code chatId} until the returned latch is released; {@code arrived} counts down as each arrives. */
+	java.util.concurrent.CountDownLatch holdSends(String token, long chatId, java.util.concurrent.CountDownLatch arrived) {
+		Bot b = bot(token);
+		b.sendHeldChat = chatId;
+		b.sendArrived = arrived;
+		return b.sendHeld = new java.util.concurrent.CountDownLatch(1);
+	}
+
+	/** Files the bot has downloaded. */
+	int downloads(String token) {
+		return bot(token).downloads.get();
+	}
+
+	/** Makes the bot's sendMessage to {@code chatId} fail with a 503. */
+	void failSends(String token, long chatId) {
+		bot(token).failSendChats.add(chatId);
+	}
+
+	/** The bot's sendMessage calls that failed because of {@link #failSends}. */
+	int failedSends(String token) {
+		return bot(token).failedSends.get();
+	}
+
+	/** The part headers of the bot's last multipart upload of {@code part}. */
+	String uploadType(String token, String part) {
+		return bot(token).uploadTypes.get(part);
 	}
 
 	/** Queue an inbound text message from a Telegram user in a private chat of the default bot. */
@@ -189,10 +238,35 @@ final class FakeTelegramServer implements AutoCloseable {
 		return bot(token).sent.poll(timeoutMs, TimeUnit.MILLISECONDS);
 	}
 
-	/** Drain any already-observed outbound messages of the default bot. */
-	List<Sent> drainSent() {
+	/** getUpdates requests the bot has made so far. */
+	int polls(String token) {
+		Bot b = bot(token);
+		synchronized (b.updates) {
+			return b.polls;
+		}
+	}
+
+	/**
+	 * Waits for the bot's next getUpdates request after the first {@code seen}.
+	 * A runner replays what it recovered before it first polls, so its first
+	 * request after a start means that replay has been queued.
+	 */
+	void awaitPoll(String token, int seen, long timeoutMs) throws InterruptedException {
+		Bot b = bot(token);
+		long deadline = System.currentTimeMillis() + timeoutMs;
+		synchronized (b.updates) {
+			while (b.polls <= seen) {
+				long left = deadline - System.currentTimeMillis();
+				if (left <= 0) throw new AssertionError("the bot did not poll");
+				b.updates.wait(left);
+			}
+		}
+	}
+
+	/** Drain any already-observed outbound messages of the bot. */
+	List<Sent> drainSent(String token) {
 		List<Sent> out = new ArrayList<>();
-		bot(TOKEN).sent.drainTo(out);
+		bot(token).sent.drainTo(out);
 		return out;
 	}
 
@@ -213,16 +287,17 @@ final class FakeTelegramServer implements AutoCloseable {
 	private void handle(HttpExchange ex) throws IOException {
 		try {
 			String path = ex.getRequestURI().getPath();          // /bot<token>/<method>
-			if (path.startsWith("/file/bot")) {
+			if (path.startsWith("/file/bot")) {                 // /file/bot<token>/<file path>
+				int slash = path.indexOf('/', 9);
+				Bot bot = (slash < 0) ? null : bots.get(path.substring(9, slash));
 				String fileId = path.substring(path.lastIndexOf('/') + 1).replaceFirst("\\.bin$", "");
 				byte[] bytes = files.get(fileId);
-				if (bytes == null) { reply(ex, 404, error(404, "No file")); return; }
-				downloads.incrementAndGet();
+				if (bot == null || bytes == null) { reply(ex, 404, error(404, "No file")); return; }
+				bot.downloads.incrementAndGet();
 				ex.sendResponseHeaders(200, chunkedFiles.contains(fileId) ? 0 : bytes.length);
 				try (var out = ex.getResponseBody()) { out.write(bytes); }
 				return;
 			}
-			Map<String, String> form = parseRequest(ex);
 			if (!path.startsWith("/bot")) {
 				reply(ex, 404, error(404, "Not Found"));
 				return;
@@ -235,9 +310,16 @@ final class FakeTelegramServer implements AutoCloseable {
 				reply(ex, 401, error(401, "Unauthorized"));
 				return;
 			}
+			Map<String, String> form = parseRequest(ex, bot);
 			switch (method) {
 				case "getMe" -> {
 					bot.getMeCalls.incrementAndGet();
+					var held = bot.getMeHeld;
+					if (held != null) {
+						bot.getMeArrived.countDown();
+						try { held.await(30, TimeUnit.SECONDS); }
+						catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+					}
 					Map<String, Object> me = new HashMap<>();
 					me.put("id", 42L);
 					me.put("is_bot", true);
@@ -264,6 +346,8 @@ final class FakeTelegramServer implements AutoCloseable {
 					long deadline = System.currentTimeMillis() + Math.min(timeoutSecs * 1000, 500);
 					List<Map<String, Object>> result = new ArrayList<>();
 					synchronized (bot.updates) {
+						bot.polls++;
+						bot.updates.notifyAll();
 						bot.updates.removeIf(u -> ((Integer) u.get("update_id")) < offset);
 						while (bot.updates.isEmpty()) {
 							long left = deadline - System.currentTimeMillis();
@@ -275,8 +359,14 @@ final class FakeTelegramServer implements AutoCloseable {
 					reply(ex, 200, ok(result));
 				}
 				case "sendMessage" -> {
-					if (failSendChats.contains(Long.parseLong(form.get("chat_id")))) {
-						failedSends.incrementAndGet();
+					var held = bot.sendHeld;
+					if (held != null && Long.parseLong(form.get("chat_id")) == bot.sendHeldChat) {
+						bot.sendArrived.countDown();
+						try { held.await(30, TimeUnit.SECONDS); }
+						catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+					}
+					if (bot.failSendChats.contains(Long.parseLong(form.get("chat_id")))) {
+						bot.failedSends.incrementAndGet();
 						reply(ex, 503, error(503, "Injected send failure"));
 						return;
 					}
@@ -335,7 +425,7 @@ final class FakeTelegramServer implements AutoCloseable {
 		}
 	}
 
-	private Map<String, String> parseRequest(HttpExchange ex) throws IOException {
+	private static Map<String, String> parseRequest(HttpExchange ex, Bot bot) throws IOException {
 		String type = ex.getRequestHeaders().getFirst("Content-Type");
 		if (type == null || !type.startsWith("multipart/")) return parseForm(ex.getRequestBody());
 		String boundary = type.substring(type.indexOf("boundary=") + 9);
@@ -349,7 +439,7 @@ final class FakeTelegramServer implements AutoCloseable {
 			if (!matcher.find()) continue;
 			String name = matcher.group(1);
 			form.put(name, part.substring(split + 4, part.length() - 2));
-			uploadTypes.put(name, headers);
+			bot.uploadTypes.put(name, headers);
 		}
 		return form;
 	}

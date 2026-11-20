@@ -315,8 +315,9 @@ default for assembly and inspection, so `agent:context` exposes the model that
 dispatch supplies later.
 
 Caller values always win. Capability gates run after defaults and therefore
-see the one effective input; a deployment that permits only particular model
-ids, endpoints or secret references expresses that rule in a gate. The
+see the one effective input. A restriction on model ids, endpoints or secret
+references can be expressed by a gate on a capability the call actually needs;
+the invocation route and authority matter as described below. The
 complete model operation snapshot carries `secretFields`, so an explicit
 credential is redacted from durable Job state exactly as it is for the
 provider operation.
@@ -327,7 +328,41 @@ generated model may layer a model-specific value over that (the long-running
 Fable preset uses 16000), and explicit call input wins over both. The adapter
 requires the resulting effective value instead of accepting LangChain4j's
 hidden 1024-token fallback. This remains a default, not a ceiling: deployments
-that need an upper bound enforce it with a capability gate.
+that need an upper bound must enforce it at a boundary every relevant call
+crosses, such as a required resource grant with a capability gate.
+
+#### Policy boundaries
+
+Model facets such as `toolCalling`, content support, `options` and `budget`
+describe model behavior and context assembly. They confer no access rights.
+Likewise, selecting a preset or setting `maxTokens` is not an enforced ceiling:
+the call's input overrides defaults.
+
+There is currently no dedicated `model/use` or `llm/invoke` action ability.
+Generic lookup (`/run`, `/invoke`, `grid:run`) needs `invoke` on its supplied
+reference. An `nb.gate` on that grant can inspect the effective `model`, `url`
+and other arguments. Bound tools and configured framework calls do not need
+this generic lookup permission, so an `invoke` gate does not constrain them.
+
+Configured agent model calls are harness work under the controller's current
+authority. `config.caps` narrows the agent's tool actions, not those model calls
+([UCAN.md](UCAN.md) §5.4). Changing model configuration therefore relies on
+the controller-authority check, not merely an `agent/write` grant.
+
+Every HTTP model request requires `outbound/http/post` on the acting principal's
+`outbound` resource, checked against the actual provider endpoint. This includes
+inline API keys, providers needing no key and bound tools. Stored credentials
+still require `secret/use`, and address policy still applies independently.
+`admin/outbound/bypass` bypasses address policy only.
+
+An agent's configured model runs under harness authority; it adds no outbound
+grant to the agent's caps. An ordinary bounded agent therefore cannot call its
+own model as a tool unless explicitly granted that authority. Exact endpoint
+grants can restrict destinations, and `nb.gate` on the required outbound grant
+can inspect invocation arguments. Conditions on grants remain additive: another
+unconditional covering grant can authorize the use. Model presets, `maxTokens`
+and `invoke` grants alone are not operator-wide model allowlists or spend
+ceilings. See [OUTBOUND.md](OUTBOUND.md) for enforcement and migration.
 
 ### 5.3 Inference options and upstream support
 
@@ -337,7 +372,7 @@ These are distinct from `config.modelProfile`, which controls context assembly.
 Catalog options are also published under the serving provider's `byModel`, so
 provider-plus-id calls and model overrides select the same defaults as presets.
 
-The Anthropic adapter maps these options onto LangChain4j 1.22.0. LangChain4j
+The Anthropic adapter maps these options onto LangChain4j. LangChain4j
 owns HTTP, retries, request serialization and response message conversion.
 
 | Option | Meaning | Current standard Claude defaults |
@@ -349,6 +384,15 @@ owns HTTP, retries, request serialization and response message conversion.
 | `preserveThinking` | Lossless thinking preservation across completed turns | `false`; enabling requires upstream support |
 | `inlineToolChanges` | Native tool-addition/removal content blocks | `false`; enabling requires upstream support |
 | `compaction` | Provider compaction with signed-block replay | `false`; enabling requires upstream support |
+
+Every provider also takes `emptyResponse`: how a response with no text and no
+tool calls after a normal stop is read. `stop`, the default, is a silent reply;
+`content_filter` fails the call as declined by the provider; `error` fails it
+as no answer. A provider that signals its refusals only by saying nothing gets
+`content_filter` on its serving operation's `model.options`, and a model asset
+or an agent's `modelOptions` can override it. A refusal or content filter the
+provider reports, and a provider `error`, fail the call whatever this option
+says.
 
 These defaults apply to Sonnet, Opus and Haiku 5.5 and Fable 5.1. Older and
 unknown models retain the portable system-message path and provider thinking
@@ -372,7 +416,7 @@ The binding policy uses LangChain4j's public beta-header and custom-parameter
 facilities. It merges `thinking.block_binding` with `providerOptions`, with the
 explicit model option taking precedence; existing effort settings remain intact.
 The adapter exposes `inputTransformations` from the SDK's raw response metadata
-for diagnostics. Required single-block tool-turn thinking continues to replay,
+for diagnostics. Supported single-block thinking replays on both tool-use and final-answer turns,
 including blocks with an empty thinking string and a nonempty signature.
 
 `thinkingPrefixMismatch` applies only with adaptive thinking. Explicit
@@ -391,16 +435,27 @@ mean unreported usage. The split is preserved in inference, cycle and session
 usage. LangChain4j currently exposes these counters through raw response metadata;
 Covia reads that report without changing the SDK transport or message codec.
 
-#### Upstream audit (2026-10-09)
+#### Upstream audit (2026-11-19)
 
 [LangChain4j 1.22.0](https://github.com/langchain4j/langchain4j/releases/tag/1.22.0)
 adds [automatic caching and TTL support](https://github.com/langchain4j/langchain4j/pull/6598).
 It also contains native mid-conversation system messages and the earlier
 [signature-only thinking fix](https://github.com/langchain4j/langchain4j/pull/6246).
-Inspection of the published `langchain4j-anthropic` source artifact found no
+Inspection of the 1.23.0 `langchain4j-anthropic` source artifact found no
 native compaction or inline tool-change content types. Its mapper still combines
 multiple thinking texts/signatures into one pair, so it cannot guarantee lossless
 replay of arbitrary signed block sequences.
+
+[Upstream fix #7187](https://github.com/langchain4j/langchain4j/pull/7187) proposes
+ordered assistant-block retention for synchronous, streaming and batch responses.
+Covia still uses the released SDK's supported single-thinking-block codec;
+the reserved `preserveThinking` option remains disabled pending upstream support.
+
+The SDK also ignores cache attributes on native mid-conversation system
+messages; [upstream fix #7186](https://github.com/langchain4j/langchain4j/pull/7186)
+has been submitted. Covia retains the existing earlier conversation breakpoint
+until this capability is available in a supported dependency. The five-minute
+default and production prefix-mismatch policy are unchanged.
 
 The remaining work belongs upstream, before enabling the reserved options:
 
@@ -417,6 +472,20 @@ Enabling reserved options currently fails explicitly. Raw compaction requests
 through `providerOptions` are also rejected because receiving a successful
 response without preserving its compaction block would lose continuation state.
 Existing context-budget handling and text tool-change notices remain available.
+
+Two gaps in LangChain4j 1.23.0 affect how a response is read:
+
+1. Its Anthropic mapper reads stop reason `refusal` as `OTHER` and exposes
+   neither the provider's stop reason nor its `stop_details`, so Covia reads
+   both from the raw response metadata.
+2. An OpenAI-format response with no choices, which some compatible providers
+   send holding only an error, arrives as an `InternalServerException`, the
+   exception an HTTP 5xx raises, and is not retried. A 5xx carries the HTTP
+   answer behind it and this does not, so Covia reads one without an HTTP
+   answer as a response that holds no answer, which fails the call, and a 5xx
+   as the provider failing. An error such a response holds reaches Covia only
+   in the exception's own text, which is never passed on, so the failure does
+   not say what the provider said.
 
 ## 6. Discovery
 

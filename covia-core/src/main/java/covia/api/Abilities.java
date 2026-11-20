@@ -22,6 +22,13 @@ public final class Abilities {
 	 *  bound tool needs its action authority, not arbitrary lookup permission. */
 	public static final AString INVOKE        = Strings.intern("invoke");
 
+	/** Read a Job's public record, result and updates. */
+	public static final AString JOB_READ      = Strings.intern("job/read");
+	/** Control a Job's lifecycle, including deleting its retained record. */
+	public static final AString JOB_MANAGE    = Strings.intern("job/manage");
+	/** Deliver input to an existing Job; grants no execution authority. */
+	public static final AString JOB_MESSAGE   = Strings.intern("job/message");
+
 	public static final AString ASSET_READ    = Strings.intern("asset/read");
 	public static final AString ASSET_STORE   = Strings.intern("asset/store");
 	public static final AString SECRET_WRITE  = Strings.intern("secret/write");
@@ -61,6 +68,20 @@ public final class Abilities {
 	/** Derive keys from a held mnemonic ({@code crypto:derive-key}). */
 	public static final AString KEY_DERIVE    = Strings.intern("key/derive");
 	public static final AString MCP_MANAGE    = Strings.intern("mcp/manage");
+	/** Create, change or delete an access token accepted at MCP alone, through the
+	 *  MCP token operations ({@code <did>/x/token/<name>}). */
+	public static final AString MCP_TOKEN     = Strings.intern("mcp/token");
+	/** Administer access tokens directly: its leaf {@code admin/token/<access point>}
+	 *  covers the tokens accepted there ({@code <did>/x/token/<name>}). */
+	public static final AString ADMIN_TOKEN   = Strings.intern("admin/token");
+	/** Administer access tokens accepted at MCP, such as fetching a bearer again. */
+	public static final AString ADMIN_TOKEN_MCP = Strings.intern("admin/token/mcp");
+	/** Call a callable without passing its gate ({@code <owner>/x/callable/<name>}). */
+	public static final AString CALLABLE_CALL   = Strings.intern("callable/call");
+	/** Create, change or delete a callable ({@code <did>/x/callable/<name>}). */
+	public static final AString CALLABLE_MANAGE = Strings.intern("callable/manage");
+	/** Cancel or trigger a scheduled event ({@code <account>/x/schedule/<id>}). */
+	public static final AString SCHEDULE_MANAGE = Strings.intern("schedule/manage");
 	public static final AString HITL_REQUEST  = Strings.intern("hitl/request");
 	public static final AString AGENT_CREATE  = Strings.intern("agent/create");
 	public static final AString AGENT_REQUEST = Strings.intern("agent/request");
@@ -73,29 +94,46 @@ public final class Abilities {
 	public static final AString SKILL_LOAD    = Strings.intern("skill/load");
 	/** Add an operation outside an agent's already declared tool surface. */
 	public static final AString TOOL_LOAD     = Strings.intern("tool/load");
-	public static final AString USER_CREATE   = Strings.intern("user/create");
-	public static final AString USER_DELETE   = Strings.intern("user/delete");
-	public static final AString USER_READ     = Strings.intern("user/read");
-	/** Authorise an explicit sudo request into a user's namespace. Scoped to the
-	 *  target user DID itself; grants no operation or action authority. */
-	public static final AString USER_SUDO     = Strings.intern("user/sudo");
+	public static final AString ADMIN_USER_CREATE   = Strings.intern("admin/user/create");
+	public static final AString ADMIN_USER_DELETE   = Strings.intern("admin/user/delete");
+	public static final AString ADMIN_USER_READ     = Strings.intern("admin/user/read");
+	/** Authorise acting as a user, with that user's whole authority
+	 *  ({@code user:sudo}). Scoped to the target user DID itself. */
+	public static final AString ADMIN_SUDO     = Strings.intern("admin/sudo");
 	/** Read out another user's whole stored state ({@code user:export}, the
 	 *  source of {@code user:clone}). */
-	public static final AString USER_EXPORT   = Strings.intern("user/export");
+	public static final AString ADMIN_USER_EXPORT   = Strings.intern("admin/user/export");
 	/** Fill an empty account from stored user state ({@code user:import}, the
 	 *  target of {@code user:clone}). */
-	public static final AString USER_IMPORT   = Strings.intern("user/import");
-	public static final AString USER_AUTH_MANAGE =
-		Strings.intern("user/authentication-manage");
+	public static final AString ADMIN_USER_IMPORT   = Strings.intern("admin/user/import");
+	/** Add a sign-in key to another user's account ({@code user:authentication-add}),
+	 *  which lets the key's holder sign in as that user. */
+	public static final AString ADMIN_USER_AUTH_ADD =
+		Strings.intern("admin/user/authentication-add");
+	/** Revoke a sign-in key of another user's account
+	 *  ({@code user:authentication-revoke}). */
+	public static final AString ADMIN_USER_AUTH_REVOKE =
+		Strings.intern("admin/user/authentication-revoke");
+	/** List the venue's adapters and modules ({@code venue:adapters}) — guarded
+	 *  on {@code <venue DID>/adapters}. */
+	public static final AString ADMIN_ADAPTER_READ = Strings.intern("admin/adapter/read");
 	/** Venue-owned adapter and module lifecycle (enable/disable/configure,
 	 *  module load/unload) — guarded on {@code <venue DID>/adapters}. */
-	public static final AString ADAPTER_MANAGE = Strings.intern("adapter/manage");
+	public static final AString ADMIN_ADAPTER_MANAGE = Strings.intern("admin/adapter/manage");
 	/** Process-level graceful restart and executable venue-jar handoff — guarded
 	 *  on {@code <venue DID>/process}. */
-	public static final AString VENUE_RESTART = Strings.intern("venue/restart");
+	public static final AString ADMIN_VENUE_RESTART = Strings.intern("admin/venue/restart");
 	/** Online garbage collection of the venue's Etch store (covia#452) — guarded
 	 *  on {@code <venue DID>/store}. */
-	public static final AString VENUE_GC = Strings.intern("venue/gc");
+	public static final AString ADMIN_VENUE_GC = Strings.intern("admin/venue/gc");
+	/** Compact the venue's store, apart from collecting it — reserved, guarded
+	 *  on {@code <venue DID>/store}. No operation of the venue checks it yet;
+	 *  an embedder that compacts the store guards that with it. */
+	public static final AString ADMIN_VENUE_COMPACT = Strings.intern("admin/venue/compact");
+	/** Run code in the venue process: the parent of each runtime's leaf, such as
+	 *  {@code admin/execute/python}, guarded on the venue resource that names the
+	 *  code. */
+	public static final AString ADMIN_EXECUTE = Strings.intern("admin/execute");
 	/** See the venue's P2P node and the peers it knows (covia#587) — guarded
 	 *  on {@code <venue DID>/p2p}. */
 	public static final AString P2P_READ = Strings.intern("p2p/read");
@@ -104,7 +142,17 @@ public final class Abilities {
 	public static final AString P2P_MANAGE = Strings.intern("p2p/manage");
 	/** Have the venue dial any outbound target, unchecked by its outbound
 	 *  guard — held by the venue itself, delegable on {@code <venue DID>/outbound}. */
-	public static final AString OUTBOUND_ANY = Strings.intern("outbound/any");
+	public static final AString ADMIN_OUTBOUND_BYPASS = Strings.intern("admin/outbound/bypass");
+	/** Ordinary egress authority, scoped to the caller's outbound resource. */
+	public static final AString OUTBOUND = Strings.intern("outbound");
+	public static final AString OUTBOUND_HTTP = Strings.intern("outbound/http");
+	public static final AString OUTBOUND_HTTP_GET = Strings.intern("outbound/http/get");
+	public static final AString OUTBOUND_HTTP_POST = Strings.intern("outbound/http/post");
+	public static final AString OUTBOUND_HTTP_PUT = Strings.intern("outbound/http/put");
+	public static final AString OUTBOUND_HTTP_PATCH = Strings.intern("outbound/http/patch");
+	public static final AString OUTBOUND_HTTP_DELETE = Strings.intern("outbound/http/delete");
+	public static final AString OUTBOUND_HTTP_HEAD = Strings.intern("outbound/http/head");
+	public static final AString OUTBOUND_HTTP_OPTIONS = Strings.intern("outbound/http/options");
 
 	/** The venue-relative MCP management resource guarded by {@link #MCP_MANAGE}:
 	 *  a delegation names it as {@code <venue DID>/v/mcp}. */

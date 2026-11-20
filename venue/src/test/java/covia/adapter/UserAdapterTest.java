@@ -35,6 +35,7 @@ import covia.lattice.Covia;
 import covia.lattice.CoviaPath;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
+import covia.venue.TestAgents;
 import covia.venue.TestEngine;
 import covia.venue.User;
 
@@ -218,7 +219,7 @@ class UserAdapterTest {
 		long withNotes = stored(self, "workspace");
 		assertTrue(withNotes >= empty + 10_000, "the workspace counts: " + withNotes);
 
-		user.ensureAgent("storage-agent", null, null);
+		TestAgents.ensure(user, "storage-agent", null, null);
 		user.agent("storage-agent").workspace().write(CoviaPath.parse("notes"), Strings.create("n".repeat(10_000)));
 		assertTrue(stored(self, "workspace") >= withNotes + 10_000, "an agent's workspace counts");
 
@@ -312,8 +313,13 @@ class UserAdapterTest {
 				Maps.of(Fields.DID, unregistered)));
 	}
 
+	/**
+	 * user:sudo is the explicit instruction to act as the user, and a call into
+	 * the user: what it runs is the user's own, with the user's whole
+	 * authority, and the delegate is its caller.
+	 */
 	@Test
-	void sudoIsExplicitProofBoundedAndPreservesActor() throws Exception {
+	void sudoIsExplicitAndActsAsTheUser() throws Exception {
 		AKeyPair ownerKey = AKeyPair.generate();
 		AKeyPair delegateKey = AKeyPair.generate();
 		AString owner = UCAN.toDIDKey(ownerKey.getAccountKey());
@@ -323,7 +329,7 @@ class UserAdapterTest {
 		long exp = (System.currentTimeMillis() / 1000) + 3600;
 		AString grant = UCAN.create(ownerKey, delegateKey.getAccountKey(), exp,
 			Vectors.of(
-				Capability.create(owner, Abilities.USER_SUDO),
+				Capability.create(owner, Abilities.ADMIN_SUDO),
 				Capability.create(Strings.create(owner + "/v/test/ops/capturectx"),
 					Strings.create("invoke"))),
 			Vectors.empty()).toJWT(ownerKey);
@@ -336,7 +342,7 @@ class UserAdapterTest {
 			delegateCtx).get(5, TimeUnit.SECONDS);
 		assertEquals(delegate, TestAdapter.CAPTURED_CTX.get(delegate).getUserDID());
 
-		// user/sudo is the explicit instruction; the grant only authorises it.
+		// user:sudo is the explicit instruction; the grant only authorises it.
 		TestAdapter.CAPTURED_CTX.remove(owner);
 		ACell result = engine.jobs().invokeInternal("v/ops/user/sudo", Maps.of(
 			Fields.DID, owner,
@@ -346,15 +352,17 @@ class UserAdapterTest {
 		assertEquals(Strings.create("sudo"), RT.getIn(result, "mode"));
 		RequestContext captured = TestAdapter.CAPTURED_CTX.get(owner);
 		assertNotNull(captured);
-		assertEquals(delegate, captured.getCallerDID(), "authentication and actor are unchanged");
-		assertEquals(owner, captured.getUserDID(), "only the explicit sudo call selects the namespace");
-		assertEquals(Vectors.empty(), captured.getCaps(),
-			"the delegate's ambient authority must not cross the sudo boundary");
-		assertEquals(1, captured.getProofs().count());
+		assertEquals(owner, captured.getAuthorityDID(), "the user acts");
+		assertEquals(owner, captured.getUserDID());
+		assertEquals(delegate, captured.getCaller(), "called by the delegate");
+		assertEquals(delegate, captured.getOrigin(), "who is still the one present");
+		assertNull(captured.getCaps(), "with the user's whole authority");
+		assertNull(captured.getProofs(), "which the delegate's grants neither bound nor add to");
 	}
 
+	/** Entering needs admin/sudo on the user, and then the user's own authority covers the operation. */
 	@Test
-	void sudoRequiresBothSudoAndNestedInvokeGrants() {
+	void sudoNeedsItsGrantAndNothingMore() throws Exception {
 		AKeyPair ownerKey = AKeyPair.generate();
 		AKeyPair delegateKey = AKeyPair.generate();
 		AString owner = UCAN.toDIDKey(ownerKey.getAccountKey());
@@ -369,14 +377,11 @@ class UserAdapterTest {
 		ExecutionException deniedSudo = assertThrows(ExecutionException.class,
 			() -> invokeSudo(owner, noSudo));
 		assertInstanceOf(AuthException.class, deniedSudo.getCause());
-		assertTrue(deniedSudo.getCause().getMessage().contains("user/sudo"));
+		assertTrue(deniedSudo.getCause().getMessage().contains("admin/sudo"));
 
-		RequestContext noInvoke = proofContext(ownerKey, delegateKey, delegate, exp,
-			Vectors.of(Capability.create(owner, Abilities.USER_SUDO)));
-		ExecutionException deniedInvoke = assertThrows(ExecutionException.class,
-			() -> invokeSudo(owner, noInvoke));
-		assertInstanceOf(AuthException.class, deniedInvoke.getCause());
-		assertTrue(deniedInvoke.getCause().getMessage().contains("invoke"));
+		RequestContext sudoOnly = proofContext(ownerKey, delegateKey, delegate, exp,
+			Vectors.of(Capability.create(owner, Abilities.ADMIN_SUDO)));
+		assertNotNull(invokeSudo(owner, sudoOnly), "no grant for the operation itself is needed");
 	}
 
 	@Test

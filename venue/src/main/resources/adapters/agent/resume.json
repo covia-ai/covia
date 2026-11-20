@@ -9,7 +9,7 @@
 		"input": {
 			"type": "object",
 			"properties": {
-				"agentId": { "type": "string", "description": "Agent reference: a bare name for the caller's agent, g/<id>, /g/<id>, or <ownerDID>/g/<id>" },
+				"agentId": { "type": "string", "description": "Agent reference: a bare name for the caller's agent, g/<id>, /g/<id>, <ownerDID>/g/<id>, or the agent's DID <ownerDID>:g:<id>" },
 				"autoWake": { "type": "boolean", "description": "If true (default), immediately start the agent if it has pending work or a wake was requested while suspended. Set to false to resume into SLEEPING without starting." }
 			},
 			"required": ["agentId"]

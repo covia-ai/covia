@@ -20,11 +20,13 @@ import covia.adapter.messaging.AMessagingAdapter;
 import covia.adapter.messaging.MessagingBot.Managed;
 import covia.adapter.messaging.ConversationRouter;
 import covia.api.Fields;
+import covia.exception.ConfigurationException;
+import covia.exception.ForbiddenException;
 import covia.exception.InvalidDefinitionException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
-import covia.exception.NotSupportedException;
 import covia.exception.UnavailableException;
+import covia.exception.UnsupportedException;
 import covia.venue.AdapterState;
 import covia.venue.RequestContext;
 
@@ -124,6 +126,13 @@ public class TelegramAdapter extends AMessagingAdapter<BotSpec, BotRunner> {
 	private static final Set<AString> KNOWN_KEYS = Set.of(K_BOTS, K_API_URL, K_ENABLED);
 	private volatile String apiUrl = DEFAULT_API_URL;
 
+	/** Refusals of the {@code adapters.telegram} settings. */
+	public static final String STATE_PATH_FIXED = "adapters.telegram.statePath is fixed at :adapters/telegram";
+	public static final String UNKNOWN_SETTING = "adapters.telegram: unknown setting %s (known: bots, apiUrl, enabled)";
+	public static final String API_URL_NOT_STRING = "adapters.telegram.apiUrl must be a non-empty string";
+	public static final String API_URL_NOT_HTTP = "adapters.telegram.apiUrl must be an http(s) URL: %s";
+	public static final String BOTS_NOT_OBJECT = "adapters.telegram.bots must be an object of bot name -> settings";
+
 	@Override
 	public String getName() {
 		return NAME;
@@ -163,45 +172,56 @@ public class TelegramAdapter extends AMessagingAdapter<BotSpec, BotRunner> {
 	// ------------------------------------------------------------ configuration
 
 	@Override
-	public boolean configure(AMap<AString, ACell> config, boolean strict) {
+	public void configure(AMap<AString, ACell> config, boolean strict) {
 		if (config == null) config = Maps.empty();
-		if (config.containsKey(K_STATE_PATH)) {
-			throw new IllegalArgumentException("adapters.telegram.statePath is fixed at :adapters/telegram");
-		}
+		if (config.containsKey(K_STATE_PATH)) throw new ConfigurationException(STATE_PATH_FIXED);
 		if (strict) {
 			for (long i = 0; i < config.count(); i++) {
 				ACell k = config.entryAt(i).getKey();
 				if (!(k instanceof AString ks) || !KNOWN_KEYS.contains(ks)) {
-					throw new IllegalArgumentException("adapters.telegram: unknown setting " + k
-						+ " (known: bots, apiUrl, enabled)");
+					throw new ConfigurationException(UNKNOWN_SETTING.formatted(k));
 				}
 			}
 		}
 		String url = DEFAULT_API_URL;
 		ACell urlCell = config.get(K_API_URL);
 		if (urlCell != null) {
-			if (!(urlCell instanceof AString s) || s.isEmpty()) {
-				throw new IllegalArgumentException("adapters.telegram.apiUrl must be a non-empty string");
-			}
+			if (!(urlCell instanceof AString s) || s.isEmpty()) throw new ConfigurationException(API_URL_NOT_STRING);
 			url = s.toString();
 			if (!url.startsWith("http://") && !url.startsWith("https://")) {
-				throw new IllegalArgumentException("adapters.telegram.apiUrl must be an http(s) URL: " + url);
+				throw new ConfigurationException(API_URL_NOT_HTTP.formatted(url));
 			}
 		}
 		Map<String, BotSpec> parsed = new LinkedHashMap<>();
 		ACell botsCell = config.get(K_BOTS);
 		if (botsCell != null) {
 			AMap<AString, ACell> bots = RT.castMap(botsCell);
-			if (bots == null) throw new IllegalArgumentException("adapters.telegram.bots must be an object of bot name -> settings");
+			if (bots == null) throw new ConfigurationException(BOTS_NOT_OBJECT);
 			for (long i = 0; i < bots.count(); i++) {
 				var e = bots.entryAt(i);
 				String name = String.valueOf(e.getKey());
-				parsed.put(name, BotSpec.parse(name, e.getValue(), strict));
+				try {
+					parsed.put(name, BotSpec.parse(name, e.getValue(), strict));
+				} catch (IllegalArgumentException refused) {
+					// The bot parser also reads a create call's input; here it read the settings
+					throw new ConfigurationException(refused.getMessage(), refused);
+				}
 			}
 		}
 		this.apiUrl = url;
 		configureBots(parsed);
-		return true;
+	}
+
+	/**
+	 * Stopping a bot does not wait for its poll thread, so closing, as an unload
+	 * does before it closes the module's classloader, waits briefly for them all.
+	 */
+	@Override
+	public synchronized void close() {
+		java.util.List<BotRunner> bots = runnerList();
+		super.close();
+		long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+		for (BotRunner bot : bots) bot.awaitPollThread(TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime()));
 	}
 
 	@Override
@@ -217,6 +237,11 @@ public class TelegramAdapter extends AMessagingAdapter<BotSpec, BotRunner> {
 	@Override
 	protected boolean configurationMatches(BotRunner runner) {
 		return apiUrl.equals(runner.apiUrl);
+	}
+
+	@Override
+	protected String apiEndpoint(covia.adapter.messaging.MessagingBot<?> bot) {
+		return (bot instanceof BotRunner runner) ? runner.apiUrl : apiUrl;
 	}
 
 	/** Canonical records are loaded first; legacy records only fill missing bindings. */
@@ -259,7 +284,7 @@ public class TelegramAdapter extends AMessagingAdapter<BotSpec, BotRunner> {
 			case "delete" -> CompletableFuture.supplyAsync(() -> handleDelete(ctx, input), VIRTUAL_EXECUTOR);
 			case "bots" -> CompletableFuture.supplyAsync(() -> handleBots(ctx), VIRTUAL_EXECUTOR);
 			case "format" -> CompletableFuture.supplyAsync(() -> handleFormat(input), VIRTUAL_EXECUTOR);
-			default -> throw new NotSupportedException("Unsupported telegram operation: " + subOp);
+			default -> throw new UnsupportedException("Unsupported telegram operation: " + subOp);
 		};
 	}
 
@@ -315,7 +340,7 @@ public class TelegramAdapter extends AMessagingAdapter<BotSpec, BotRunner> {
 		if (!params.containsKey(K_PARSE_MODE_PARAM) && runner.spec.parseMode() != null) {
 			params.put(K_PARSE_MODE_PARAM, runner.spec.parseMode());
 		}
-		return runner.sendMessage(params);
+		return withOutboundCaller(ctx, () -> runner.sendMessage(params));
 	}
 
 	/**
@@ -333,7 +358,7 @@ public class TelegramAdapter extends AMessagingAdapter<BotSpec, BotRunner> {
 		String method = methodCell.toString();
 		if (!method.matches("[A-Za-z]+")) throw new InvalidInputException("method must be a Bot API method name: " + method);
 		if (MANAGED_METHODS.contains(method)) {
-			throw new NotSupportedException("Bot API method " + method + " is managed by the venue's own "
+			throw new ForbiddenException("Bot API method " + method + " is managed by the venue's own "
 				+ "update loop for this bot and cannot be called");
 		}
 		ACell paramsCell = RT.getIn(input, K_PARAMS);
@@ -342,7 +367,7 @@ public class TelegramAdapter extends AMessagingAdapter<BotSpec, BotRunner> {
 		Map<String, Object> params = telegramParams(paramsMap);
 		runner.requireAllowedTarget(method, params);
 		ACell files = RT.getIn(input, "files");
-		if (files == null) return runner.call(method, params);
+		if (files == null) return withOutboundCaller(ctx, () -> runner.call(method, params));
 		if (!(files instanceof AMap<?, ?> map) || map.isEmpty()) throw new InvalidInputException("files must be a non-empty object");
 		if (map.count() > 10) throw new InvalidInputException("At most 10 file parts are supported");
 		long totalBytes = 0;
@@ -367,7 +392,7 @@ public class TelegramAdapter extends AMessagingAdapter<BotSpec, BotRunner> {
 				uploads.put(part, new BotRunner.Upload(name, content.contentType(), bytes));
 			} catch (java.io.IOException e) { throw new UnavailableException("Could not read upload content", e); }
 		}
-		return runner.call(method, params, uploads);
+		return withOutboundCaller(ctx, () -> runner.call(method, params, uploads));
 	}
 
 	ACell handleDownload(RequestContext ctx, ACell input) {
@@ -384,8 +409,8 @@ public class TelegramAdapter extends AMessagingAdapter<BotSpec, BotRunner> {
 			throw new InvalidInputException(TelegramMedia.INVALID_FILE_NAME);
 		}
 		try {
-			return runner.download(fileId.toString(), (AString) destination,
-				fileName == null ? null : fileName.toString(), destination == null ? runner.context() : ctx);
+			return withOutboundCaller(ctx, () -> runner.download(fileId.toString(), (AString) destination,
+				fileName == null ? null : fileName.toString(), destination == null ? runner.context() : ctx));
 		} catch (IllegalArgumentException e) {
 			// MessagingMedia.store refuses a destination no content provider takes.
 			throw new InvalidInputException(e.getMessage(), e);

@@ -32,9 +32,9 @@ import covia.exception.ConfigurationException;
 import covia.exception.CoviaException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
-import covia.exception.NotSupportedException;
 import covia.exception.ResponseException;
 import covia.exception.UnavailableException;
+import covia.exception.UnsupportedException;
 import covia.grid.Asset;
 import covia.grid.Status;
 import covia.venue.Engine;
@@ -56,7 +56,6 @@ import dev.langchain4j.model.chat.request.ResponseFormat;
 import dev.langchain4j.model.chat.request.ResponseFormatType;
 import dev.langchain4j.model.chat.request.json.JsonSchema;
 import dev.langchain4j.model.chat.response.ChatResponse;
-import dev.langchain4j.model.output.FinishReason;
 import dev.langchain4j.model.anthropic.AnthropicTokenUsage;
 import dev.langchain4j.model.anthropic.AnthropicChatResponseMetadata;
 import dev.langchain4j.model.output.TokenUsage;
@@ -66,6 +65,7 @@ import dev.langchain4j.model.chat.request.json.JsonEnumSchema;
 import dev.langchain4j.model.chat.request.json.JsonIntegerSchema;
 import dev.langchain4j.model.chat.request.json.JsonNumberSchema;
 import dev.langchain4j.model.chat.request.json.JsonObjectSchema;
+import dev.langchain4j.model.chat.request.json.JsonRawSchema;
 import dev.langchain4j.model.chat.request.json.JsonSchemaElement;
 import dev.langchain4j.model.chat.request.json.JsonStringSchema;
 import dev.langchain4j.model.anthropic.AnthropicChatModel;
@@ -129,6 +129,8 @@ public class LangChainAdapter extends AAdapter {
 	static final AString K_RESPONSE_FORMAT = Strings.intern("responseFormat");
 	static final AString K_SCHEMA      = Strings.intern("schema");
 	static final AString K_TYPE        = Strings.intern("type");
+	static final AString K_ONE_OF      = Strings.intern("oneOf");
+	static final AString K_ANY_OF      = Strings.intern("anyOf");
 	private static final AString K_CODE = Strings.intern("code");
 	static final AString K_DESCRIPTION = Strings.intern("description");
 	static final AString K_ENUM        = Strings.intern("enum");
@@ -137,7 +139,6 @@ public class LangChainAdapter extends AAdapter {
 	static final AString K_INPUT          = Strings.intern("input");
 	static final AString K_OUTPUT         = Strings.intern("output");
 	static final AString K_TOTAL          = Strings.intern("total");
-	static final AString K_FINISH_REASON  = Strings.intern("finishReason");
 	static final AString K_PROVIDER       = Strings.intern("provider");
 	static final AString K_PROVIDERS      = Strings.intern("providers");
 	static final AString K_MODELS         = Strings.intern("models");
@@ -174,8 +175,6 @@ public class LangChainAdapter extends AAdapter {
 		"Model provider %s has no model %s%s, or the url names no model API; check the model id and the url";
 	public static final String FEATURE_NOT_SUPPORTED =
 		"Model provider %s does not support a feature this request uses for model %s";
-	public static final String CONTENT_FILTERED =
-		"Model provider %s declined the request for model %s: its content filter refused it";
 	public static final String REQUEST_REFUSED =
 		"Model provider %s refused the request for model %s%s";
 	public static final String MALFORMED_RESPONSE =
@@ -450,6 +449,8 @@ public class LangChainAdapter extends AAdapter {
 		// topology-agnostic; only the venue deployment knows where Ollama lives.
 		final String ollamaUrl = "ollama".equals(provider) ? resolveOllamaUrl(urlParam) : null;
 		final AString effectiveUrl = (ollamaUrl != null) ? Strings.create(ollamaUrl) : urlParam;
+		// The venue's Ollama URL is the operator's choice; one a caller named is not.
+		final String operatorUrl = (ollamaUrl != null && urlParam == null) ? ollamaUrl : null;
 
 		// Response format: "json", "text", or {name, schema} map
 		ACell responseFormatCell = RT.getIn(input, K_RESPONSE_FORMAT);
@@ -457,7 +458,7 @@ public class LangChainAdapter extends AAdapter {
 		// Build the ChatModel. The selected operation's data has already supplied
 		// any default, with caller input winning.
 		final String resolvedModelName = finalModelName;
-		final ChatModel chatModel = buildProviderModel(provider, finalModelName, apiKey, effectiveUrl, tuning,
+		final ChatModel chatModel = buildProviderModel(ctx, provider, finalModelName, apiKey, effectiveUrl, operatorUrl, tuning,
 			toResponseFormat(responseFormatCell));
 		if (chatModel == null) {
 			return CompletableFuture.completedFuture(
@@ -492,14 +493,16 @@ public class LangChainAdapter extends AAdapter {
 		// The canonical agent messages retain their exact structuredContent for
 		// session persistence; this narrow conversion also avoids #334's hang
 		// when nested Convex collections reached the Anthropic worker unchanged.
-		// The same copy applies the role rule for the declared provider
-		// (AGENT_CONTEXT.md §3.5): a system message after the conversation has
-		// begun must not be hoisted into the cached head.
-		final Set<Long> canonicalCacheMarks = cacheMarksOf(input, tuning);
+		// The same copy leaves out turns that say nothing, then applies the role
+		// rule for the declared provider (AGENT_CONTEXT.md §3.5): a system message
+		// after the conversation has begun must not be hoisted into the cached
+		// head, and is placed against the turns the provider is actually sent.
+		final NormalisedMessages sent = withoutSilentTurns(
+			serialiseToolResultsForProvider(messages), cacheMarksOf(input, tuning), provider, finalModelName);
 		final NormalisedMessages normalised = "anthropic".equals(provider) && tuning.options().nativeSystemMessages()
-			? normaliseNativeSystemMessages(serialiseToolResultsForProvider(messages), canonicalCacheMarks)
-			: normaliseSystemMessages(
-			serialiseToolResultsForProvider(messages), canonicalCacheMarks,
+			? normaliseNativeSystemMessages(sent.messages(), sent.cacheMarks(),
+				AbstractLLMAdapter.labelDialect(resolvedModel.executionProfile()))
+			: normaliseSystemMessages(sent.messages(), sent.cacheMarks(),
 			AbstractLLMAdapter.modelOptionText(resolvedModel.executionProfile(), OPT_SYSTEM_MESSAGES),
 			AbstractLLMAdapter.labelDialect(resolvedModel.executionProfile()));
 		final AVector<ACell> providerMessages = normalised.messages();
@@ -526,7 +529,7 @@ public class LangChainAdapter extends AAdapter {
 				ACell result;
 				try {
 					result = callModel(provider, resolvedModelName, chatModel, resolvedMessages, tools,
-						responseFormatCell, cacheMarks);
+						responseFormatCell, cacheMarks, tuning.options().emptyResponse());
 				} catch (RuntimeException e) {
 					throw providerFailure(provider, resolvedModelName, key.operators(), ollamaUrl, e);
 				}
@@ -658,16 +661,17 @@ public class LangChainAdapter extends AAdapter {
 	 * The failure a provider call reports, typed for what went wrong
 	 * (ERRORS.md): a langchain4j or connection failure becomes the Covia type,
 	 * named by provider and model, with what the provider said where it
-	 * answered ({@link #providerNote}). Anything else, a cancellation
-	 * included, passes on unchanged.
+	 * answered ({@link #providerNote}). The venue's own refusal of the
+	 * request ({@link ModelHttpClientBuilder}) is reported as it is. Anything
+	 * else, a cancellation included, passes on unchanged.
 	 *
 	 * <p>The type says what failed. A refused key or a missing model is the
 	 * setup the call runs under, so {@code ConfigurationException}; a provider
 	 * that cannot be reached or keeps failing after langchain4j's retries is
-	 * {@code UnavailableException}; anything about this request's content is
-	 * {@code InvalidInputException}, {@code ResponseException} or
-	 * {@code NotSupportedException}. The agent harness relies on this split
-	 * (AGENT_LOOP.md §3.4).</p>
+	 * {@code UnavailableException}; anything about this request's content,
+	 * or a response that holds no answer, is {@code InvalidInputException},
+	 * {@code ResponseException} or {@code UnsupportedException}. The agent
+	 * harness relies on this split (AGENT_LOOP.md §3.4).</p>
 	 *
 	 * @param operatorKey whether the API key sent is the venue's own, which
 	 *        says who can fix a refused key
@@ -676,6 +680,8 @@ public class LangChainAdapter extends AAdapter {
 	static RuntimeException providerFailure(String provider, String model, boolean operatorKey,
 			String ollamaUrl, RuntimeException e) {
 		if (e instanceof CoviaException || causedBy(e, InterruptedException.class)) return e;
+		if (e instanceof dev.langchain4j.exception.NonRetriableException
+				&& e.getCause() instanceof CoviaException refused) return refused;
 		Integer status = httpStatus(e);
 		String note = providerNote(status, e);
 		RuntimeException failure;
@@ -692,14 +698,24 @@ public class LangChainAdapter extends AAdapter {
 			failure = new UnavailableException(PROVIDER_RATE_LIMITED.formatted(provider, model, note));
 		} else if (e instanceof dev.langchain4j.exception.TimeoutException) {
 			failure = new UnavailableException(PROVIDER_TIMED_OUT.formatted(provider, model, note));
+		} else if (e instanceof dev.langchain4j.exception.InternalServerException && status == null) {
+			// With no HTTP answer behind it, this is a response the provider
+			// sent successfully that holds no answer: langchain4j raises an
+			// OpenAI-format response with no choices, or only an error, as a
+			// server error, once and without retrying it (MODELS.md §5.3).
+			// An error the response holds is only in the exception's text,
+			// which is never passed on. Once langchain4j reports this case
+			// distinctly, match on that and pass the provider's message on as
+			// providerNote does (#718).
+			failure = new ResponseException(ProviderStop.NO_ANSWER.formatted(provider, model, ""));
 		} else if (e instanceof dev.langchain4j.exception.InternalServerException) {
 			failure = new UnavailableException(PROVIDER_FAILED.formatted(provider, model, note));
 		} else if (e instanceof dev.langchain4j.exception.ModelNotFoundException) {
 			failure = new ConfigurationException(MODEL_NOT_FOUND.formatted(provider, model, note));
 		} else if (e instanceof dev.langchain4j.exception.UnsupportedFeatureException) {
-			failure = new NotSupportedException(FEATURE_NOT_SUPPORTED.formatted(provider, model));
+			failure = new UnsupportedException(FEATURE_NOT_SUPPORTED.formatted(provider, model));
 		} else if (e instanceof dev.langchain4j.exception.ContentFilteredException) {
-			failure = new ResponseException(CONTENT_FILTERED.formatted(provider, model));
+			failure = new ResponseException(ProviderStop.DECLINED.formatted(provider, model, ""));
 		} else if (e instanceof dev.langchain4j.exception.InvalidRequestException) {
 			failure = mentionsContextSize(e)
 				? new InvalidInputException(PROVIDER_CONTEXT_TOO_LARGE.formatted(provider, model, note))
@@ -827,12 +843,16 @@ public class LangChainAdapter extends AAdapter {
 	 * (a refused connection returns immediately).</p>
 	 *
 	 * @param baseUrl Ollama base URL (e.g. {@code http://localhost:11434})
+	 * @param operatorUrl whether the venue chose {@code baseUrl} rather than a
+	 *        caller, so its requests pass the address policy
 	 * @param model   model name (e.g. {@code qwen2.5})
 	 * @return the advertised capabilities, or {@code null} if undeterminable
 	 */
-	public static java.util.List<String> ollamaModelCapabilities(String baseUrl, String model) {
+	public static java.util.List<String> ollamaModelCapabilities(Engine engine, RequestContext ctx, String baseUrl,
+			boolean operatorUrl, String model) {
 		try {
 			OllamaModelCard card = OllamaModels.builder()
+				.httpClientBuilder(new ModelHttpClientBuilder(engine, ctx, operatorUrl ? baseUrl : null))
 				.baseUrl(baseUrl)
 				.timeout(Duration.ofSeconds(2))
 				.maxRetries(0)
@@ -846,18 +866,19 @@ public class LangChainAdapter extends AAdapter {
 		}
 	}
 
-	private ChatModel buildProviderModel(String provider, String modelName, String apiKey, AString urlParam,
-			ModelTuning tuning, ResponseFormat responseFormat) {
+	/** @param operatorUrl the provider URL when the operator configured it, else null (ModelHttpClientBuilder) */
+	private ChatModel buildProviderModel(RequestContext ctx, String provider, String modelName, String apiKey, AString urlParam,
+			String operatorUrl, ModelTuning tuning, ResponseFormat responseFormat) {
 		String baseUrl = (urlParam != null) ? urlParam.toString() : defaultBaseUrl(provider);
 		if (baseUrl == null) return null;
 		return switch (provider) {
-			case "ollama" -> buildOllamaModel(baseUrl, modelName, IO_TIMEOUT, tuning);
-			case "anthropic" -> buildAnthropicModel(apiKey, baseUrl, modelName, IO_TIMEOUT, tuning, responseFormat);
+			case "ollama" -> buildOllamaModel(baseUrl, modelName, IO_TIMEOUT, tuning, new ModelHttpClientBuilder(engine, ctx, operatorUrl));
+			case "anthropic" -> buildAnthropicModel(apiKey, baseUrl, modelName, IO_TIMEOUT, tuning, responseFormat, new ModelHttpClientBuilder(engine, ctx, operatorUrl));
 			// OpenAI, and the OpenAI-compatible APIs: Gemini's compatibility
 			// endpoint, xAI, DeepSeek, Mistral and OpenRouter (which fronts many
 			// vendors; model ids are vendor-prefixed and openrouter/auto lets
 			// the router choose).
-			default -> buildOpenAiModel(apiKey, baseUrl, modelName, IO_TIMEOUT, tuning);
+			default -> buildOpenAiModel(apiKey, baseUrl, modelName, IO_TIMEOUT, tuning, new ModelHttpClientBuilder(engine, ctx, operatorUrl));
 		};
 	}
 
@@ -866,11 +887,17 @@ public class LangChainAdapter extends AAdapter {
 	// to stdout if the langchain4j logger were ever bumped to DEBUG.
 
 	static ChatModel buildOllamaModel(String baseUrl, String model, Duration timeout, ModelTuning tuning) {
+		return buildOllamaModel(baseUrl, model, timeout, tuning, null);
+	}
+
+	private static ChatModel buildOllamaModel(String baseUrl, String model, Duration timeout, ModelTuning tuning,
+			dev.langchain4j.http.client.HttpClientBuilder http) {
 		Map<String, Object> providerOptions = tuning.nativeOptions();
 		if (providerOptions != null) {
-			throw new NotSupportedException("providerOptions are not supported by the Ollama client");
+			throw new UnsupportedException("providerOptions are not supported by the Ollama client");
 		}
 		var builder = OllamaChatModel.builder()
+			.httpClientBuilder(http)
 			.baseUrl(baseUrl)
 			.logRequests(false)
 			.logResponses(false)
@@ -882,6 +909,11 @@ public class LangChainAdapter extends AAdapter {
 	}
 
 	static ChatModel buildOpenAiModel(String apiKey, String baseUrl, String model, Duration timeout, ModelTuning tuning) {
+		return buildOpenAiModel(apiKey, baseUrl, model, timeout, tuning, null);
+	}
+
+	private static ChatModel buildOpenAiModel(String apiKey, String baseUrl, String model, Duration timeout, ModelTuning tuning,
+			dev.langchain4j.http.client.HttpClientBuilder http) {
 		Map<String, Object> providerOptions = tuning.nativeOptions();
 		// strictJsonSchema(true) enables OpenAI structured outputs for the
 		// response_format path — server-enforced schema conformance on the
@@ -895,6 +927,7 @@ public class LangChainAdapter extends AAdapter {
 		// Tool argument validation still happens, just not as strict-mode
 		// pre-validation by OpenAI.
 		var builder = OpenAiChatModel.builder()
+			.httpClientBuilder(http)
 			.apiKey(apiKey)
 			.baseUrl(baseUrl)
 			.logRequests(false)
@@ -923,10 +956,16 @@ public class LangChainAdapter extends AAdapter {
 	 */
 	static ChatModel buildAnthropicModel(String apiKey, String baseUrl, String model, Duration timeout,
 			ModelTuning tuning, ResponseFormat responseFormat) {
+		return buildAnthropicModel(apiKey, baseUrl, model, timeout, tuning, responseFormat, null);
+	}
+
+	private static ChatModel buildAnthropicModel(String apiKey, String baseUrl, String model, Duration timeout,
+			ModelTuning tuning, ResponseFormat responseFormat,
+			dev.langchain4j.http.client.HttpClientBuilder http) {
 		Map<String, Object> providerOptions = tuning.nativeOptions();
 		if (providerOptions != null && (providerOptions.containsKey("compaction")
 				|| String.valueOf(providerOptions.get("context_management")).contains("compact_20260112"))) {
-			throw new NotSupportedException("compaction" + ModelCallOptions.UPSTREAM_REQUIRED);
+			throw new UnsupportedException("compaction" + ModelCallOptions.UPSTREAM_REQUIRED);
 		}
 		// Thinking blocks are bound only under adaptive thinking: Anthropic refuses
 		// block_binding beside any other type (Sonnet 5.5's between_tools, Haiku
@@ -966,6 +1005,7 @@ public class LangChainAdapter extends AAdapter {
 			responseFormat = null;
 		}
 		AnthropicChatModel.AnthropicChatModelBuilder builder = AnthropicChatModel.builder()
+			.httpClientBuilder(http)
 			.apiKey(apiKey)
 			.baseUrl(baseUrl)
 			.logRequests(false)
@@ -982,7 +1022,7 @@ public class LangChainAdapter extends AAdapter {
 			.cacheAutomatically(tuning.caching() && tuning.options().automaticCaching())
 			.midConversationSystemMessages(tuning.options().nativeSystemMessages())
 			// Thinking is provider continuation state, not assistant content.
-			// Ask LangChain4j to retain it so tool-use replies can persist and
+			// Ask LangChain4j to retain it so all assistant replies can persist and
 			// replay it; providers/models that return none add no state at all.
 			.returnThinking(true)
 			.sendThinking(true);
@@ -1145,7 +1185,7 @@ public class LangChainAdapter extends AAdapter {
 		}
 		AString adapter = RT.ensureString(RT.getIn(providerMeta, Fields.OPERATION, "adapter"));
 		if (adapter != null && "langchain:ollama".equals(adapter.toString())) {
-			for (var status : ollamaStatus().entrySet()) entry = entry.assoc(status.getKey(), status.getValue());
+			for (var status : ollamaStatus(ctx).entrySet()) entry = entry.assoc(status.getKey(), status.getValue());
 		}
 		return entry;
 	}
@@ -1170,7 +1210,7 @@ public class LangChainAdapter extends AAdapter {
 		.connectTimeout(java.time.Duration.ofSeconds(2)).build();
 
 	/** Live Ollama reachability and installed models; catalog definitions stay authoritative. */
-	private AMap<AString, ACell> ollamaStatus() {
+	private AMap<AString, ACell> ollamaStatus(RequestContext ctx) {
 		AMap<AString, ACell> adapterCfg = engine.adapterConfig("langchain");
 		String url = resolveOllamaUrl(null, adapterCfg, System.getenv("OLLAMA_BASE_URL"));
 		AVector<ACell> models = Vectors.empty();
@@ -1180,6 +1220,7 @@ public class LangChainAdapter extends AAdapter {
 			java.net.http.HttpRequest req = java.net.http.HttpRequest.newBuilder(
 					java.net.URI.create(url + "/api/tags"))
 				.timeout(java.time.Duration.ofSeconds(3)).GET().build();
+			engine.requireOutboundHttp(ctx, req.method(), req.uri().toString(), url);
 			java.net.http.HttpResponse<String> resp = OLLAMA_PROBE.send(req,
 				java.net.http.HttpResponse.BodyHandlers.ofString());
 			if (resp.statusCode() == 200) {
@@ -1195,6 +1236,8 @@ public class LangChainAdapter extends AAdapter {
 			} else {
 				note = "HTTP " + resp.statusCode() + " from " + url;
 			}
+		} catch (AuthException e) {
+			note = e.getMessage();
 		} catch (Exception e) {
 			note = "unreachable at " + url + " — venue knob: adapters.langchain.ollamaUrl";
 		}
@@ -1299,11 +1342,21 @@ public class LangChainAdapter extends AAdapter {
 	 * contract, different plumbing, so flipping providers is transparent to
 	 * agents and harnesses.</p>
 	 *
+	 * <p>A response that holds no answer fails the call ({@link ProviderStop}).</p>
+	 *
 	 * @param responseFormatCell Response format: null (default text), "json" or "text" string,
 	 *        or a map {@code {name: "...", schema: {type: "object", ...}}} for strict schema mode
+	 * @param emptyResponse How a response that says nothing after a normal stop is
+	 *        read: the model's {@code emptyResponse} option
 	 */
 	static ACell callModel(String provider, String modelName, ChatModel model, AVector<ACell> messages,
 			AVector<ACell> tools, ACell responseFormatCell, Set<Long> cacheMarks) {
+		return callModel(provider, modelName, model, messages, tools, responseFormatCell, cacheMarks,
+			ModelCallOptions.DEFAULT.emptyResponse());
+	}
+
+	static ACell callModel(String provider, String modelName, ChatModel model, AVector<ACell> messages,
+			AVector<ACell> tools, ACell responseFormatCell, Set<Long> cacheMarks, String emptyResponse) {
 		List<ChatMessage> chatMessages = toChatMessages(messages, cacheMarks, provider, modelName);
 		ResponseFormat responseFormat = toResponseFormat(responseFormatCell);
 
@@ -1358,7 +1411,11 @@ public class LangChainAdapter extends AAdapter {
 			response.aiMessage().hasToolExecutionRequests()
 				? response.aiMessage().toolExecutionRequests() : "none");
 
-		return toAssistantMessage(response, provider, modelName);
+		ProviderStop stop = ProviderStop.of(response);
+		ACell reply = toAssistantMessage(response, provider, modelName, stop);
+		ResponseException noAnswer = stop.noAnswer(provider, modelName, reply, emptyResponse);
+		if (noAnswer != null) throw noAnswer;
+		return reply;
 	}
 
 	// ========== Provider-aware structured output (#81) ==========
@@ -1395,20 +1452,25 @@ public class LangChainAdapter extends AAdapter {
 
 	/**
 	 * Builds an assistant message map from a full ChatResponse. Includes
-	 * {@code tokens: {input, output, total, cacheRead?, cacheWrite?}} and
-	 * {@code finishReason} when the provider reports them. The cache counts
-	 * are what prompt caching is costing and saving — present only when the
-	 * provider reports them (Anthropic).
+	 * {@code tokens: {input, output, total, cacheRead?, cacheWrite?}},
+	 * {@code finishReason} and {@code providerFinishReason} when the provider
+	 * reports them ({@link ProviderStop}). The cache counts are what prompt
+	 * caching is costing and saving — present only when the provider reports
+	 * them (Anthropic).
 	 */
-	@SuppressWarnings("unchecked")
 	static ACell toAssistantMessage(ChatResponse response) {
 		return toAssistantMessage(response, null, null);
 	}
 
 	/** Provider-aware form: attaches optional continuation state when the
-	 * matching provider returned state for a tool-use reply. */
-	@SuppressWarnings("unchecked")
+	 * matching provider returned continuation state for an assistant reply. */
 	static ACell toAssistantMessage(ChatResponse response, String provider, String modelName) {
+		return toAssistantMessage(response, provider, modelName, ProviderStop.of(response));
+	}
+
+	@SuppressWarnings("unchecked")
+	private static ACell toAssistantMessage(ChatResponse response, String provider, String modelName,
+			ProviderStop stop) {
 		AMap<AString, ACell> msg = (AMap<AString, ACell>)
 			toAssistantMessage(response.aiMessage(), provider, modelName);
 
@@ -1430,11 +1492,8 @@ public class LangChainAdapter extends AAdapter {
 			if (tokens.count() > 0) msg = msg.assoc(K_TOKENS, tokens);
 		}
 
-		FinishReason fr = response.finishReason();
-		if (fr != null) {
-			msg = msg.assoc(K_FINISH_REASON,
-				Strings.create(fr.name().toLowerCase()));
-		}
+		if (stop.finishReason != null) msg = msg.assoc(Fields.FINISH_REASON, stop.finishReason);
+		if (stop.providerValue != null) msg = msg.assoc(Fields.PROVIDER_FINISH_REASON, stop.providerValue);
 		// Diagnostic fields do not yet have typed SDK accessors. The SDK owns
 		// transport and all message parsing; read only this report from its public
 		// raw-response metadata so prefix-drop policies remain observable.
@@ -1544,6 +1603,50 @@ public class LangChainAdapter extends AAdapter {
 		return result;
 	}
 
+	/**
+	 * Whether an assistant turn says nothing: no text and no tool calls, as when
+	 * a provider refuses with an empty reply. The turn stays in the conversation
+	 * as the agent's (AGENT_SESSIONS.md), but providers reject an empty
+	 * assistant message, so it is never sent.
+	 */
+	static boolean saysNothing(ACell message) {
+		if (!ROLE_ASSISTANT.equals(RT.getIn(message, K_ROLE))) return false;
+		if (RT.getIn(message, K_TOOL_CALLS) instanceof AVector<?> calls && calls.count() > 0) return false;
+		AString content = RT.ensureString(RT.getIn(message, K_CONTENT));
+		return content == null || content.toString().isBlank();
+	}
+
+	/**
+	 * The messages a provider is sent: every turn with text, tools or supported
+	 * continuation state for the selected provider/model. A cache mark on a left-out turn moves to the
+	 * message before it, which ends the same prefix. System placement runs on
+	 * the result, so a late system message is placed against a turn that is sent.
+	 */
+	static NormalisedMessages withoutSilentTurns(AVector<ACell> messages, Set<Long> cacheMarks) {
+		return withoutSilentTurns(messages, cacheMarks, null, null);
+	}
+
+	static NormalisedMessages withoutSilentTurns(AVector<ACell> messages, Set<Long> cacheMarks,
+			String provider, String model) {
+		AVector<ACell> out = Vectors.empty();
+		Set<Long> marks = new java.util.LinkedHashSet<>();
+		for (long i = 0; i < messages.count(); i++) {
+			ACell message = messages.get(i);
+			boolean marked = cacheMarks.contains(i);
+			if (saysNothing(message)) {
+				AiMessage empty = AiMessage.builder().build();
+				if (ProviderState.restore(provider, model,
+						RT.getIn(message, Fields.PROVIDER_STATE), empty) == empty) {
+					if (marked && !out.isEmpty()) marks.add(out.count() - 1);
+					continue;
+				}
+			}
+			if (marked) marks.add(out.count());
+			out = out.conj(message);
+		}
+		return new NormalisedMessages(out, marks);
+	}
+
 	/** The {@code model.options.systemMessages} key: how the provider takes system content. */
 	static final AString OPT_SYSTEM_MESSAGES = Strings.intern("systemMessages");
 	static final AString SYSTEM_MESSAGES_SINGLE = Strings.intern("single");
@@ -1577,9 +1680,14 @@ public class LangChainAdapter extends AAdapter {
 	static record NormalisedMessages(AVector<ACell> messages, Set<Long> cacheMarks) {}
 
 	/** Retains the instruction role while placing each batch of late system
-	 * messages after its user/tool-result turn, as required by Anthropic. The
-	 * SDK handles the native wire representation. Canonical history is untouched. */
-	static NormalisedMessages normaliseNativeSystemMessages(AVector<ACell> messages, Set<Long> cacheMarks) {
+	 * messages after its user/tool-result turn, as required by Anthropic. A
+	 * batch with no such turn before the next assistant turn or the end, such
+	 * as context an agent pins again after its compaction summary, takes the
+	 * portable form in place: one user message of {@code [system: …]} elements
+	 * in {@code dialect}. The SDK handles the native wire representation.
+	 * Canonical history is untouched. */
+	static NormalisedMessages normaliseNativeSystemMessages(AVector<ACell> messages, Set<Long> cacheMarks,
+			AString dialect) {
 		AVector<ACell> out = Vectors.empty();
 		List<ACell> pending = new ArrayList<>();
 		Set<Long> marks = new java.util.LinkedHashSet<>();
@@ -1592,23 +1700,31 @@ public class LangChainAdapter extends AAdapter {
 				continue;
 			}
 			if (ROLE_ASSISTANT.equals(role) && !pending.isEmpty()) {
-				out = appendNativeSystem(out, pending);
+				out = appendNativeSystem(out, pending, dialect);
 			}
 			if (cacheMarks.contains(i) && !ROLE_SYSTEM.equals(role)) marks.add(out.count());
 			out = out.conj(message);
 			if (!ROLE_SYSTEM.equals(role)) started = true;
 		}
-		out = appendNativeSystem(out, pending);
+		out = appendNativeSystem(out, pending, dialect);
 		return new NormalisedMessages(out, marks);
 	}
 
-	private static AVector<ACell> appendNativeSystem(AVector<ACell> messages, List<ACell> pending) {
+	private static AVector<ACell> appendNativeSystem(AVector<ACell> messages, List<ACell> pending, AString dialect) {
 		if (pending.isEmpty()) return messages;
 		ACell preceding = messages.isEmpty() ? null : RT.getIn(messages.get(messages.count() - 1), K_ROLE);
-		if (!ROLE_USER.equals(preceding) && !ROLE_TOOL.equals(preceding)) {
-			throw new InvalidInputException(ModelCallOptions.INVALID_SYSTEM_POSITION);
+		if (ROLE_USER.equals(preceding) || ROLE_TOOL.equals(preceding)) {
+			for (ACell message : pending) messages = messages.conj(message);
+		} else {
+			// Anthropic takes a system message only after a user turn
+			StringBuilder portable = new StringBuilder();
+			for (ACell message : pending) {
+				AString content = RT.ensureString(RT.getIn(message, K_CONTENT));
+				if (portable.length() > 0) portable.append("\n\n");
+				portable.append(covia.adapter.agent.Labels.wrapSystem(dialect, content != null ? content.toString() : ""));
+			}
+			messages = messages.conj(Maps.of(K_ROLE, ROLE_USER, K_CONTENT, Strings.create(portable.toString())));
 		}
-		for (ACell message : pending) messages = messages.conj(message);
 		pending.clear();
 		return messages;
 	}
@@ -1937,9 +2053,10 @@ public class LangChainAdapter extends AAdapter {
 					} else if (content != null && !content.toString().isBlank()) {
 						ai = AiMessage.from(content.toString());
 					} else {
-						// A turn that ended without a reply: nothing was said, so
-						// nothing goes back — providers reject an empty assistant message.
-						break;
+						// A signed continuation can have neither visible text nor tools.
+						ai = ProviderState.restore(provider, modelName,
+							RT.getIn(entry, Fields.PROVIDER_STATE), AiMessage.builder().build());
+						if (ai.thinking() == null && ai.attributes().isEmpty()) break;
 					}
 					ai = ProviderState.restore(provider, modelName,
 						RT.getIn(entry, Fields.PROVIDER_STATE), ai);
@@ -2103,13 +2220,22 @@ public class LangChainAdapter extends AAdapter {
 	 * Converts a single JSON Schema property map to a JsonSchemaElement.
 	 *
 	 * <p>Supports: string, number, integer, boolean, array (with items), object (nested),
-	 * and enum (string type with {@code enum} array).</p>
+	 * enum (string type with {@code enum} array), and unchanged union or
+	 * unconstrained schemas through the upstream raw schema representation.</p>
 	 */
 	@SuppressWarnings("unchecked")
 	static JsonSchemaElement toSchemaElement(AMap<AString, ACell> prop) {
 		AString type = RT.ensureString(prop.get(K_TYPE));
 		AString desc = RT.ensureString(prop.get(K_DESCRIPTION));
 		String descStr = (desc != null) ? desc.toString() : null;
+
+		// Keep unions and unconstrained values in their declared form. In
+		// particular, MCP token caps accept an array or "unrestricted", never
+		// an object. The upstream raw schema also preserves scalar/array input
+		// for tools whose parameter accepts any JSON value.
+		if (type == null || prop.containsKey(K_ONE_OF) || prop.containsKey(K_ANY_OF)) {
+			return JsonRawSchema.from(JSON.toString(prop));
+		}
 
 		// Check for enum values — applies to string type
 		ACell enumCell = prop.get(K_ENUM);
@@ -2126,21 +2252,6 @@ public class LangChainAdapter extends AAdapter {
 					.enumValues(enumValues)
 					.build();
 			}
-		}
-
-		// A property with no declared "type" is an "any JSON value" parameter
-		// (e.g. covia:write's `value`, agent_request's `input`, grid_run's
-		// `input`). LangChain4j's typed schema model has no "any" element, so the
-		// old fallback silently coerced such params to a string — which made the
-		// LLM unable to pass a structured value through (it arrived null). Emit an
-		// open object (additionalProperties allowed) so providers accept it and
-		// the model can supply a structured object. Scalar/array values for a
-		// typeless param remain a known limitation; objects are the common case.
-		if (type == null) {
-			return JsonObjectSchema.builder()
-				.description(descStr)
-				.additionalProperties(true)
-				.build();
 		}
 
 		String typeStr = type.toString();

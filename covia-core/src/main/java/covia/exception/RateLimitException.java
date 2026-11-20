@@ -1,10 +1,8 @@
 package covia.exception;
 
 /**
- * Thrown when a request is refused by an admission / rate control — for example
- * a caller already holds the maximum number of concurrent jobs and the bounded
- * wait for a free slot elapsed. Maps to HTTP 429 (Too Many Requests) with a
- * {@code Retry-After} hint.
+ * Thrown by a client when a venue keeps answering HTTP 429 (Too Many Requests)
+ * after its retries are spent, carrying the venue's {@code Retry-After} hint.
  */
 public class RateLimitException extends CoviaException {
 

@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -26,6 +27,7 @@ import convex.core.data.Strings;
 import convex.core.data.SignedData;
 import convex.core.data.prim.CVMLong;
 import convex.lattice.cursor.Cursors;
+import convex.lattice.cursor.MissingValueException;
 import covia.exception.AuthException;
 import covia.exception.ConflictException;
 import covia.exception.InvalidInputException;
@@ -68,17 +70,17 @@ class DomainTransactionTest {
 		assertFalse(user.jobs().job(id).appendHistory(message));
 	}
 
+	/** A transaction on a job deleted while it runs fails as missing, and recreates nothing. */
 	@Test
-	void jobTransactionRetriesAgainstDeletionWithoutRecreatingTheRow() throws Exception {
+	void jobTransactionAgainstDeletionFailsWithoutRecreatingTheRow() throws Exception {
 		var user = VenueState.create(AKeyPair.generate()).users().ensure(DID);
 		var id = Blob.fromHex("01");
 		user.jobs().create(id, Maps.of(Fields.ID, id, Fields.STATUS, covia.grid.Status.STARTED));
 		var entered = new CountDownLatch(1);
 		var resume = new CountDownLatch(1);
-		var appended = new AtomicBoolean();
 		try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
 			var pending = executor.submit(() -> user.jobs().job(id).execute(draft -> {
-				appended.set(draft.appendHistory(Maps.of(Fields.MESSAGE_ID, "raced")));
+				draft.appendHistory(Maps.of(Fields.MESSAGE_ID, "raced"));
 				entered.countDown();
 				await(resume);
 			}));
@@ -86,9 +88,9 @@ class DomainTransactionTest {
 				assertTrue(entered.await(10, TimeUnit.SECONDS));
 				assertNotNull(user.jobs().remove(id));
 			} finally { resume.countDown(); }
-			pending.get(10, TimeUnit.SECONDS);
+			ExecutionException failed = assertThrows(ExecutionException.class, () -> pending.get(10, TimeUnit.SECONDS));
+			assertInstanceOf(MissingValueException.class, failed.getCause());
 		}
-		assertFalse(appended.get());
 		assertNull(user.jobs().job(id));
 		assertTrue(user.jobs().getAll().isEmpty());
 	}
@@ -96,9 +98,9 @@ class DomainTransactionTest {
 	@Test
 	void sessionChangesComposeWithAgentChangesAndRollback() {
 		var venue = VenueState.create(AKeyPair.generate());
-		var agent = venue.users().ensure(DID).ensureAgent("sessions", Maps.empty(), null);
+		var agent = TestAgents.ensure(venue.users().ensure(DID), "sessions", Maps.empty(), null);
 		var sid = Blob.fromHex("01");
-		agent.ensureSession(sid, DID);
+		agent.sessions().create(sid, DID, null);
 		var retained = new AtomicReference<Session>();
 		ACell before = venue.get();
 		assertThrows(IllegalStateException.class, () -> agent.execute(draft -> {
@@ -124,10 +126,11 @@ class DomainTransactionTest {
 
 	@Test
 	void summaryPublicationRetriesAgentAdmissionAfterConcurrentStop() throws Exception {
-		var agent = VenueState.create(AKeyPair.generate()).users().ensure(DID)
-			.ensureAgent("sessions", Maps.empty(), null);
+		var agent = TestAgents.ensure(VenueState.create(AKeyPair.generate()).users().ensure(DID),
+			"sessions", Maps.empty(), null);
 		var sid = Blob.fromHex("01");
-		var snapshot = agent.ensureSession(sid, DID);
+		agent.sessions().create(sid, DID, null);
+		var snapshot = agent.session(sid).getRecord();
 		var instruction = Strings.create("summarise");
 		var entered = new CountDownLatch(1);
 		var resume = new CountDownLatch(1);
@@ -145,7 +148,7 @@ class DomainTransactionTest {
 			pending.get(10, TimeUnit.SECONDS);
 		}
 		assertNull(published.get(), "the rejected retry must replace the first attempt's result");
-		assertNull(Session.sessionSummary(agent.getSession(sid), instruction));
+		assertNull(Session.sessionSummary(agent.session(sid).getRecord(), instruction));
 		assertEquals(Agent.SUSPENDED, agent.getStatus());
 	}
 
@@ -153,14 +156,14 @@ class DomainTransactionTest {
 	void configChangeRunsAgainstTheConfigItReplaces() throws Exception {
 		var caps = Strings.create("caps");
 		var model = Strings.create("model");
-		var agent = VenueState.create(AKeyPair.generate()).users().ensure(DID)
-			.ensureAgent("config", Maps.of(caps, "wide", model, "a"), null);
+		var agent = TestAgents.ensure(VenueState.create(AKeyPair.generate()).users().ensure(DID),
+			"config", Maps.of(caps, "wide", model, "a"), null);
 		var entered = new CountDownLatch(1);
 		var resume = new CountDownLatch(1);
 		var seen = new CopyOnWriteArrayList<ACell>();
 		AMap<AString, ACell> committed;
 		try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
-			var pending = executor.submit(() -> agent.updateConfigAndState(config -> {
+			var pending = executor.submit(() -> agent.update(null, null, config -> {
 				seen.add(config.get(caps));
 				entered.countDown();
 				await(resume);
@@ -168,7 +171,7 @@ class DomainTransactionTest {
 			}, null));
 			try {
 				assertTrue(entered.await(10, TimeUnit.SECONDS));
-				agent.updateConfigAndState(config -> config.assoc(caps, Strings.create("narrow")), null);
+				agent.update(null, null, config -> config.assoc(caps, Strings.create("narrow")), null);
 			} finally { resume.countDown(); }
 			committed = pending.get(10, TimeUnit.SECONDS);
 		}
@@ -179,39 +182,39 @@ class DomainTransactionTest {
 		assertEquals(committed, agent.getConfig());
 	}
 
+	/** A transaction on a session deleted while it runs fails as missing, and does not resurrect it. */
 	@Test
 	void sessionTransactionDoesNotResurrectConcurrentDeletion() throws Exception {
-		var agent = VenueState.create(AKeyPair.generate()).users().ensure(DID)
-			.ensureAgent("sessions", Maps.empty(), null);
+		var agent = TestAgents.ensure(VenueState.create(AKeyPair.generate()).users().ensure(DID),
+			"sessions", Maps.empty(), null);
 		var sid = Blob.fromHex("01");
-		agent.ensureSession(sid, DID);
+		agent.sessions().create(sid, DID, null);
 		var session = agent.session(sid);
 		var entered = new CountDownLatch(1);
 		var resume = new CountDownLatch(1);
-		var accepted = new AtomicBoolean();
 		try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
 			var pending = executor.submit(() -> session.execute(draft -> {
-				accepted.set(draft.setTitle(Strings.create("pending")));
+				draft.setTitle(Strings.create("pending"));
 				entered.countDown();
 				await(resume);
 			}));
 			try {
 				assertTrue(entered.await(10, TimeUnit.SECONDS));
-				agent.removeSession(sid);
+				agent.sessions().remove(sid);
 			} finally { resume.countDown(); }
-			pending.get(10, TimeUnit.SECONDS);
+			ExecutionException failed = assertThrows(ExecutionException.class, () -> pending.get(10, TimeUnit.SECONDS));
+			assertInstanceOf(MissingValueException.class, failed.getCause());
 		}
-		assertFalse(accepted.get());
-		assertNull(agent.getSession(sid));
+		assertNull(agent.session(sid).getRecord());
 		assertFalse(session.beginCycle(CVMLong.ONE, null, 0));
 	}
 
 	@Test
 	void sessionUpdateReportsDeletionOnRetryAndPreservesCycleFence() throws Exception {
-		var agent = VenueState.create(AKeyPair.generate()).users().ensure(DID)
-			.ensureAgent("sessions", Maps.empty(), null);
+		var agent = TestAgents.ensure(VenueState.create(AKeyPair.generate()).users().ensure(DID),
+			"sessions", Maps.empty(), null);
 		var sid = Blob.fromHex("01");
-		agent.ensureSession(sid, DID);
+		agent.sessions().create(sid, DID, null);
 		var session = agent.session(sid);
 		session.beginCycle(CVMLong.ONE, null, 0);
 		assertFalse(session.updateFrames(CVMLong.create(2), frames -> frames));
@@ -227,11 +230,11 @@ class DomainTransactionTest {
 			}));
 			try {
 				assertTrue(entered.await(10, TimeUnit.SECONDS));
-				agent.removeSession(sid);
+				agent.sessions().remove(sid);
 			} finally { resume.countDown(); }
 			assertFalse(pending.get(10, TimeUnit.SECONDS));
 		}
-		assertNull(agent.getSession(sid));
+		assertNull(agent.session(sid).getRecord());
 	}
 
 	@Test
@@ -245,8 +248,8 @@ class DomainTransactionTest {
 			authDraft.set(draft.managedUsers());
 			scheduleDraft.set(draft.schedule());
 			draft.managedUsers().ensureManagedUser(id, DID);
-			draft.schedule().schedule(Strings.create("v/test/ops/echo"), null, DID, DID,
-				null, null, 1000, null, false, null, 100);
+			draft.schedule().schedule(Strings.create("v/test/ops/echo"), null, DID,
+				Engine.stateOf(DID), 1000, null, false, null, 100);
 			assertNull(venue.managedUsers().get(id));
 			assertTrue(venue.schedule().events().isEmpty());
 			throw new IllegalStateException();
@@ -257,8 +260,8 @@ class DomainTransactionTest {
 		assertEquals(before, venue.get(), "retained children must not mutate the live venue");
 		venue.execute(draft -> {
 			draft.managedUsers().ensureManagedUser(id, DID);
-			draft.schedule().schedule(Strings.create("v/test/ops/echo"), null, DID, DID,
-				null, null, 1000, null, false, null, 100);
+			draft.schedule().schedule(Strings.create("v/test/ops/echo"), null, DID,
+				Engine.stateOf(DID), 1000, null, false, null, 100);
 		});
 		assertNotNull(venue.managedUsers().get(id));
 		assertEquals(1, venue.schedule().events().count());
@@ -328,7 +331,7 @@ class DomainTransactionTest {
 			return CVMLong.create(ticks.get());
 		});
 		var agent = new Agent(context, Cursors.root(null), null, Strings.create("assistant"));
-		agent.initialise(Maps.empty(), null);
+		agent.initialiseIfAbsent(Maps.empty(), null, null, null, null);
 		assertEquals(1, clockReads.getAndSet(0));
 		ticks.set(200);
 		agent.setStatus(Agent.SUSPENDED);
@@ -339,18 +342,19 @@ class DomainTransactionTest {
 		agent.setStatus(Agent.SUSPENDED);
 		assertEquals(before, agent.getRecord(), "no-op must not change the version");
 		ticks.set(50);
-		agent.putRecord(Maps.of(Agent.KEY_STATUS, Agent.SLEEPING));
+		agent.setStatus(Agent.SLEEPING);
+		assertEquals(Agent.SLEEPING, agent.getStatus());
 		assertEquals(CVMLong.create(200), agent.getRecord().get(Agent.K_TURN_TS),
-			"replacement must preserve the previous version floor when the clock regresses");
+			"an edit must keep the previous version floor when the clock regresses");
 	}
 
 	@Test
 	void wakeIntentEventAndHandleShareTheVenueTransaction() {
 		var venue = VenueState.create(AKeyPair.generate());
 		var agentId = Strings.create("assistant");
-		var agent = venue.users().ensure(DID).ensureAgent(agentId, Maps.empty(), null);
+		var agent = TestAgents.ensure(venue.users().ensure(DID), agentId, Maps.empty(), null);
 		var sid = Blob.fromHex("aa");
-		agent.ensureSession(sid, DID);
+		agent.sessions().create(sid, DID, null);
 		ACell before = venue.get();
 		assertThrows(IllegalStateException.class, () -> venue.execute(draft -> {
 			draft.setAgentThreadWakeTime(DID, agentId, Agent.ThreadKind.SESSION, sid, 1000);
@@ -362,11 +366,11 @@ class DomainTransactionTest {
 		venue.setAgentThreadWakeTime(DID, agentId, Agent.ThreadKind.SESSION, sid, 1000);
 		var events = (Index<?, ?>) venue.schedule().cursor().path(Schedule.K_EVENTS).get();
 		assertEquals(1, events.count());
-		assertEquals(CVMLong.create(1000), agent.getSession(sid).get(Fields.WAKE_TIME));
+		assertEquals(CVMLong.create(1000), agent.session(sid).getRecord().get(Fields.WAKE_TIME));
 		assertNotNull(events.get(agent.wakeHandle()));
 		venue.setAgentThreadWakeTime(DID, agentId, Agent.ThreadKind.SESSION, sid, 0);
 		assertNull(agent.wakeHandle());
-		assertNull(agent.getSession(sid).get(Fields.WAKE_TIME));
+		assertNull(agent.session(sid).getRecord().get(Fields.WAKE_TIME));
 		assertTrue(((Index<?, ?>) venue.schedule().cursor().path(Schedule.K_EVENTS).get()).isEmpty());
 	}
 
@@ -374,11 +378,11 @@ class DomainTransactionTest {
 	void concurrentWakeIntentRetriesWithoutOrphanEvents() throws Exception {
 		var venue = VenueState.create(AKeyPair.generate());
 		var agentId = Strings.create("assistant");
-		var agent = venue.users().ensure(DID).ensureAgent(agentId, Maps.empty(), null);
+		var agent = TestAgents.ensure(venue.users().ensure(DID), agentId, Maps.empty(), null);
 		var sid = Blob.fromHex("aa");
 		var other = Blob.fromHex("bb");
-		agent.ensureSession(sid, DID);
-		agent.ensureSession(other, DID);
+		agent.sessions().create(sid, DID, null);
+		agent.sessions().create(other, DID, null);
 		var entered = new CountDownLatch(1);
 		var resume = new CountDownLatch(1);
 		var attempts = new AtomicInteger();
@@ -394,8 +398,8 @@ class DomainTransactionTest {
 			pending.get(10, TimeUnit.SECONDS);
 		}
 		assertEquals(2, attempts.get());
-		assertEquals(CVMLong.create(2000), agent.getSession(sid).get(Fields.WAKE_TIME));
-		assertEquals(CVMLong.create(1000), agent.getSession(other).get(Fields.WAKE_TIME));
+		assertEquals(CVMLong.create(2000), agent.session(sid).getRecord().get(Fields.WAKE_TIME));
+		assertEquals(CVMLong.create(1000), agent.session(other).getRecord().get(Fields.WAKE_TIME));
 		var events = (Index<?, ?>) venue.schedule().cursor().path(Schedule.K_EVENTS).get();
 		assertEquals(1, events.count());
 		assertEquals(CVMLong.create(1000), convex.core.lang.RT.getIn(events.get(agent.wakeHandle()), Schedule.K_TIME));
@@ -437,7 +441,7 @@ class DomainTransactionTest {
 		var failure = new IllegalStateException("abort test transaction");
 		assertSame(failure, assertThrows(IllegalStateException.class, () -> venue.execute(draft -> {
 			var user = draft.users().ensure(DID);
-			user.ensureAgent("assistant", Maps.empty(), null);
+			TestAgents.ensure(user, "assistant", Maps.empty(), null);
 			user.secrets().store("token", "private", keys);
 			user.workspace().write(path("w/ready"), CVMLong.ONE);
 			draft.assets().store(Strings.create("{\"name\":\"private\"}"), null);
@@ -449,7 +453,7 @@ class DomainTransactionTest {
 
 		venue.execute(draft -> {
 			var user = draft.users().ensure(DID);
-			user.ensureAgent("assistant", Maps.empty(), null);
+			TestAgents.ensure(user, "assistant", Maps.empty(), null);
 			user.secrets().store("token", "committed", keys);
 			user.workspace().write(path("w/ready"), CVMLong.ONE);
 		});
@@ -468,7 +472,7 @@ class DomainTransactionTest {
 		var agentDraft = new AtomicReference<Agent>();
 		user.execute(draft -> {
 			retained.set(draft);
-			draft.ensureAgent("assistant", Maps.empty(), null).execute(agent -> {
+			TestAgents.ensure(draft, "assistant", Maps.empty(), null).execute(agent -> {
 				agentDraft.set(agent);
 				agent.setStatus(Strings.create("PAUSED"));
 				assertNull(user.agent("assistant"));
@@ -578,7 +582,7 @@ class DomainTransactionTest {
 		var venue = VenueState.fromRoot(Cursors.root(Index.none()), key.getAccountKey(), key::signData, context);
 		var staged = new AtomicReference<ACell>();
 		venue.execute(draft -> {
-			draft.users().ensure(DID).ensureAgent("assistant", Maps.empty(), null);
+			TestAgents.ensure(draft.users().ensure(DID), "assistant", Maps.empty(), null);
 			staged.set(draft.get());
 		});
 		assertEquals(staged.get(), venue.get());

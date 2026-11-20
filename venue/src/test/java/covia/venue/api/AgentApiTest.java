@@ -230,9 +230,12 @@ public class AgentApiTest {
 		assertEquals(before + 1, jobCount(), "agent:list via invoke persists exactly one job");
 	}
 
-	/** #406: grants are inert until the intermediary explicitly invokes user/sudo. */
+	/**
+	 * #406: grants are inert until the intermediary explicitly invokes
+	 * user:sudo, which then acts as the owner, with the owner's whole authority.
+	 */
 	@Test
-	public void testDelegatedCreateUsesIssuerNamespaceAndProofBounds() throws Exception {
+	public void testDelegatedCreateActsAsTheOwner() throws Exception {
 		AKeyPair ownerKey = AKeyPair.generate();
 		AKeyPair delegateKey = AKeyPair.generate();
 		AString owner = UCAN.toDIDKey(ownerKey.getAccountKey());
@@ -240,7 +243,7 @@ public class AgentApiTest {
 		// The delegate gives the agent caps, which last, so its right to grant them does too.
 		AString createGrant = UCAN.create(ownerKey, delegateKey.getAccountKey(), (Long) null,
 			Vectors.of(
-				Capability.create(owner, Abilities.USER_SUDO),
+				Capability.create(owner, Abilities.ADMIN_SUDO),
 				Capability.create(Strings.create(owner + "/v/ops/agent/create"), Strings.create("invoke")),
 				Capability.create(Strings.create(owner + "/g/"), Abilities.AGENT_CREATE),
 				Capability.create(Strings.create(owner + "/g/"), Strings.create("grant/" + Abilities.AGENT_CREATE))),
@@ -258,8 +261,7 @@ public class AgentApiTest {
 			RT.getIn(direct.getData(), Fields.OUTPUT, Fields.ADDRESS),
 			"presenting a sudo grant must not itself select the owner's namespace");
 
-		// The delegate confers only caps it may grant: an unrestricted agent in the
-		// owner's namespace would exceed its grant.
+		// Under sudo the agent is the owner's, created with the owner's authority
 		Job created = delegated.invokeAndWait(OP_SUDO, Maps.of(
 			Fields.DID, owner,
 			Fields.OPERATION, OP_CREATE,
@@ -271,29 +273,26 @@ public class AgentApiTest {
 		assertEquals(Strings.create(owner + "/g/delegated-agent"),
 			RT.getIn(created.getData(), Fields.OUTPUT, Fields.ADDRESS));
 		assertEquals(delegate, RT.getIn(created.getData(), Fields.CALLER),
-			"the explicit sudo wrapper remains the authenticated delegate's job");
+			"the explicit sudo wrapper is the delegate's own job");
 		assertNull(RT.getIn(created.getData(), Fields.OWNER),
-			"authentication is unchanged; the wrapper belongs to the delegate that made it");
+			"in the delegate's account");
 		assertNotNull(TestServer.ENGINE.getVenueState().users().user(owner).agent("delegated-agent"));
 		User delegateUser = TestServer.ENGINE.getVenueState().users().user(delegate);
 		assertTrue(delegateUser == null || delegateUser.agent("delegated-agent") == null,
 			"an implicit agent id must never land in the intermediary's namespace");
 
-		// Namespace selection cannot confer ambient owner authority: the token
-		// permits invocation but omits the action's agent/create capability.
+		// admin/sudo is a call into the owner, with the owner's whole authority:
+		// a grant naming nothing else still creates the owner's agent
 		long exp = (System.currentTimeMillis() / 1000) + 3600;
-		AString invokeOnly = UCAN.create(ownerKey, delegateKey.getAccountKey(), exp,
-			Vectors.of(Capability.create(owner, Abilities.USER_SUDO),
-				Capability.create(Strings.create(owner + "/v/ops/agent/create"), Strings.create("invoke"))),
-			Vectors.empty()).toJWT(ownerKey);
-		delegated.setUcans(java.util.List.of(invokeOnly.toString()));
-		Job denied = delegated.invokeAndWait(OP_SUDO, Maps.of(
+		AString sudoOnly = UCAN.create(ownerKey, delegateKey.getAccountKey(), exp,
+			Vectors.of(Capability.create(owner, Abilities.ADMIN_SUDO)), Vectors.empty()).toJWT(ownerKey);
+		delegated.setUcans(java.util.List.of(sudoOnly.toString()));
+		Job whole = delegated.invokeAndWait(OP_SUDO, Maps.of(
 			Fields.DID, owner,
 			Fields.OPERATION, OP_CREATE,
-			Fields.INPUT, Maps.of(Fields.AGENT_ID, "not-authorised")));
-		assertEquals(Status.FAILED, denied.getStatus());
-		assertTrue(denied.getErrorMessage().contains("agent/create"), denied.getErrorMessage());
-		assertNull(TestServer.ENGINE.getVenueState().users().user(owner).agent("not-authorised"),
-			"namespace selection must not bypass the signed capability limit");
+			Fields.INPUT, Maps.of(Fields.AGENT_ID, "as-the-owner")));
+		assertEquals(Status.COMPLETE, whole.getStatus(), whole.getErrorMessage());
+		assertEquals(owner, TestServer.ENGINE.getVenueState().users().user(owner).agent("as-the-owner").getController(),
+			"what it makes is the owner's");
 	}
 }

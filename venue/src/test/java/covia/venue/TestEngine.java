@@ -14,6 +14,7 @@ import convex.core.data.Maps;
 import convex.core.data.AString;
 import convex.core.store.AStore;
 import convex.core.store.MemoryStore;
+import convex.core.util.Shutdown;
 import convex.lattice.LatticeHost;
 import convex.lattice.cursor.Cursors;
 import convex.lattice.cursor.Root;
@@ -36,8 +37,8 @@ import convex.lattice.cursor.Root;
  * A restart in memory takes {@link #restartable}; a venue over a store or host
  * of the test's own takes an {@link #application}, which is the one place a
  * test's venue gets its clock. {@code VenueServer.launch} is for tests over HTTP.
- * Examples: {@link EnginePersistenceTest}, {@link VenueServerPersistenceTest},
- * {@link VenueRestartTest}, {@link DLFSPersistenceTest},
+ * Examples: {@link VenuePersistenceTest}, {@link EnginePersistenceTest},
+ * {@link VenueServerPersistenceTest},
 	 * {@link EngineSchedulerRebuildTest}. Tests that need bespoke engine
 	 * config (e.g. {@code FileAdapterTest} with custom {@code @TempDir}
 	 * jail roots, or {@code OAuthTest}'s inline {@code createTemp} for
@@ -92,9 +93,12 @@ public class TestEngine {
 			STORE = TestTemp.etch("covia-test");
 			convex.core.crypto.AKeyPair keyPair = convex.core.crypto.AKeyPair.generate();
 			application = application(STORE);
+			// Closed only at JVM exit, when nothing a test left running is
+			// waited on: no grace, so what is in flight is suspended at once.
 			ENGINE = application.mount(keyPair, new Config(Maps.of(
 				Config.HOSTNAME, Strings.create(HOSTNAME),
-				Config.USERS, Maps.of(Config.AUTO_CREATE, true)))).start();
+				Config.USERS, Maps.of(Config.AUTO_CREATE, true),
+				Config.SHUTDOWN, Maps.of(Config.GRACE_MS, 0)))).start();
 		} catch (java.io.IOException e) {
 			throw new ExceptionInInitializerError(e);
 		}
@@ -104,7 +108,12 @@ public class TestEngine {
 		var host = application.host();
 		host.autoSync(covia.venue.server.VenueServer.SYNC_INTERVAL, application::publish);
 		host.autoFlush(covia.venue.server.VenueServer.FLUSH_INTERVAL);
-		Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+		// Closed in Convex's shutdown sequence, as MainVenue closes its venues:
+		// before Convex closes the Etch stores and waits for its executor's
+		// threads. A JVM hook of its own would race the store's close, fail
+		// reading a job record, and leave agent run loops blocked on jobs that
+		// close never settled, which the executor then waits out.
+		Shutdown.addHook(Shutdown.SERVICE, () -> {
 			application.close();
 			try {
 				host.close();
@@ -114,7 +123,7 @@ public class TestEngine {
 			STORE.close();
 			convex.etch.EtchStore successor = collected;
 			if (successor != null) successor.close();
-		}, "test-engine-shutdown"));
+		});
 	}
 
 	/**

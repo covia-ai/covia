@@ -58,7 +58,7 @@ Chat sessions typically never `complete` the root frame — they run indefinitel
 
 ### Per-question bracketing
 
-"Thinking for a specific question" can be bracketed by `compact`. The agent calls `compact(summary)` at the end of its work, replacing the visible conversation with one assistant-memory segment whose `items` retains the exact old vector. No extra frame is needed; later turns append after the segment.
+"Thinking for a specific question" can be bracketed by `compact`. The agent calls `compact(summary)` at the end of its work, replacing the visible conversation, all but its last `compactKeep` exchanges, with one assistant-memory segment; the replaced entries stay in history for inspection. No extra frame is needed; later turns append after the kept exchanges.
 
 Subgoals remain available for intra-question decomposition (e.g. "analyse each vendor") and nest inside the session's root frame. A complex question might do: user turn → tool calls → subgoal(vendor-a) → subgoal(vendor-b) → subgoal(vendor-c) → assistant synthesis → compact.
 
@@ -118,7 +118,7 @@ context-state contract.
 
 **There is no separate archive.** Authorised operators can read the nested
 lattice value directly; `agent:history` reads any range of the history by
-position, exactly as stored.
+position (AGENT_SESSIONS.md §5.2).
 
 ## The Frame Stack
 
@@ -235,18 +235,18 @@ Protocol limitation: LLM tool call arguments must be JSON objects (OpenAI, Anthr
 ```json5
 {
   name: "compact",
-  description: "Archive your conversation so far into a summary you write. Frees context space.",
+  description: "Archive the conversation so far under a summary you write; your most recent exchanges stay as their messages and answers.",
   parameters: { summary: { type: "string" } }
 }
 ```
 
 When the agent calls `compact`:
-1. The complete visible conversation vector becomes the new segment's `items`
+1. The visible conversation, all but its last `compactKeep` exchanges (default 5, the one in progress among them), is covered by a new segment
 2. The LLM's summary and recursive leaf-turn count become the segment's visible representation
-3. The conversation becomes a one-element vector containing that segment
+3. The conversation becomes that segment followed by the kept exchanges' incoming messages and answers; their tool calls and results stay in history
 4. The rendered prefix is rebuilt once; later turns append normally
 
-Repeated compaction nests the earlier segment together with the newer turns. This bounds the provider-visible representation without changing or duplicating the audit history. The segment renders as an `assistant` message: an agent-written summary may describe untrusted tool data and must not acquire system authority merely because it was persisted.
+A conversation no longer than the exchanges kept is left as it is, and the tool says so. AGENT_CONTEXT.md §5.6 defines an exchange and the storage. Repeated compaction covers the earlier segment together with the newer turns. This bounds the provider-visible representation without changing or duplicating the audit history. The segment renders as an `assistant` message: an agent-written summary may describe untrusted tool data and must not acquire system authority merely because it was persisted.
 
 The `summary` parameter is required — only the LLM knows what matters in the work done so far. The harness prompts when compaction is needed but the agent writes the summary.
 

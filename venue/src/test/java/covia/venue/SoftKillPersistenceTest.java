@@ -6,7 +6,6 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -20,17 +19,15 @@ import convex.core.data.AString;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
-import convex.core.store.AStore;
-import convex.etch.EtchStore;
 import covia.api.Fields;
 import covia.venue.server.VenueServer;
 import covia.test.DurabilityTest;
 
 /**
- * Soft-kill resilience tests — the same write/restart matrix as
- * {@link HardKillPersistenceTest}, but using graceful in-JVM shutdown
- * ({@link VenueServer#close()}) instead of a child-process
- * {@link Runtime#halt(int)}.
+ * Soft-kill tests: a venue server closed gracefully in the JVM
+ * ({@link VenueServer#close()}), where {@link HardKillPersistenceTest}
+ * halts a child process. That the whole venue state survives a reopen is
+ * {@link VenuePersistenceTest}'s; these check the server's own path to it.
  *
  * <p>Where the hard-kill tests verify "did the data make it to disk
  * before HALT", these verify the well-behaved path:</p>
@@ -111,57 +108,7 @@ public class SoftKillPersistenceTest {
 	}
 
 	// ========================================================================
-	// Test 1 — Write + explicit flush + close, then restart in the same JVM.
-	// Verify: etch at configured path, non-empty, data reads back correctly.
-	// ========================================================================
-	@Test
-	public void testFlushedWriteSurvivesSoftClose() throws Exception {
-		Path etchPath = freshEtchPath("flushed");
-		String storePath = etchPath.toString().replace('\\', '/');
-		String seedHex = AKeyPair.createSeeded(6001).getSeed().toHexString();
-
-		// === Phase 1: write, flush, close ===
-		VenueServer server = VenueServer.launch(testConfig(storePath, seedHex));
-		try {
-			writeDLFS(server, "test-drive", "hello.txt", "soft-content");
-			server.getEngine().flush();
-
-			// Etch should already be on disk at the configured path
-			assertTrue(Files.exists(etchPath),
-				"etch file must exist at configured path after flush: " + etchPath);
-			assertTrue(Files.size(etchPath) > 0,
-				"etch file must be non-empty after a flushed write: " + etchPath);
-		} finally {
-			server.close();
-		}
-
-		// After close, the etch must still be at the configured path.
-		assertTrue(Files.exists(etchPath),
-			"etch file must still exist at configured path after server.close(): " + etchPath);
-		long sizeAfterClose = Files.size(etchPath);
-		assertTrue(sizeAfterClose > 0, "etch file must be non-empty after close");
-
-		// === Phase 2: relaunch against the same path, read back ===
-		VenueServer reader = VenueServer.launch(testConfig(storePath, seedHex));
-		try {
-			AStore store = reader.getStore();
-			assertTrue(store instanceof EtchStore,
-				"persistent file config should produce an EtchStore, got: " + store.getClass());
-			File readerEtch = ((EtchStore) store).getFile();
-			assertEquals(etchPath.toAbsolutePath().toFile().getCanonicalPath(),
-				readerEtch.getCanonicalPath(),
-				"reader's etch store path must match the configured store path");
-
-			String content = readDLFS(reader, "test-drive", "hello.txt");
-			assertEquals("soft-content", content,
-				"flushed write must round-trip exactly after soft-restart");
-		} finally {
-			reader.close();
-		}
-	}
-
-	// ========================================================================
-	// Test 2 — Write WITHOUT explicit flush, then close. The close-time final
+	// Write WITHOUT explicit flush, then close. The close-time final
 	// flush (Engine.close, PERSISTENCE.md §5.3) is the only thing that makes
 	// the write durable. After restart, the write must still be there.
 	// ========================================================================
@@ -229,44 +176,7 @@ public class SoftKillPersistenceTest {
 	}
 
 	// ========================================================================
-	// Test 3 — Burst of N writes through the venue in one session, then
-	// graceful close + restart. All N must survive at the correct path.
-	// ========================================================================
-	@Test
-	public void testBurstSurvivesSoftClose() throws Exception {
-		final int N = 30;
-		Path etchPath = freshEtchPath("burst");
-		String storePath = etchPath.toString().replace('\\', '/');
-		String seedHex = AKeyPair.createSeeded(6003).getSeed().toHexString();
-
-		VenueServer server = VenueServer.launch(testConfig(storePath, seedHex));
-		try {
-			for (int i = 0; i < N; i++) {
-				writeDLFS(server, "test-drive", "item-" + i + ".txt", "value-" + i);
-			}
-			server.getEngine().flush();
-		} finally {
-			server.close();
-		}
-
-		assertTrue(Files.exists(etchPath), "etch at configured path after burst+close");
-		long size = Files.size(etchPath);
-		assertTrue(size > 0, "etch should have content from " + N + " writes");
-
-		VenueServer reader = VenueServer.launch(testConfig(storePath, seedHex));
-		try {
-			for (int i = 0; i < N; i++) {
-				String content = readDLFS(reader, "test-drive", "item-" + i + ".txt");
-				assertEquals("value-" + i, content,
-					"burst entry #" + i + " must survive soft-restart");
-			}
-		} finally {
-			reader.close();
-		}
-	}
-
-	// ========================================================================
-	// Test 4 — Etch file location: when an explicit seed is in config, the
+	// Etch file location: when an explicit seed is in config, the
 	// only file in the temp directory after close should be the etch file
 	// itself. No venue.key sibling should be auto-created.
 	// ========================================================================
@@ -317,7 +227,7 @@ public class SoftKillPersistenceTest {
 	}
 
 	// ========================================================================
-	// Test 5 — Identity persistence via auto-generated key file. When no
+	// Identity persistence via auto-generated key file. When no
 	// seed is in config, VenueServer creates venue.key next to the store
 	// on first launch and re-reads it on restart, so the DID is stable.
 	// ========================================================================
@@ -355,58 +265,7 @@ public class SoftKillPersistenceTest {
 	}
 
 	// ========================================================================
-	// Test 6 — Multiple close/restart cycles accumulate state. After each
-	// cycle the etch grows or stays the same size (never shrinks below
-	// its content from the previous cycle), and every prior write remains
-	// readable.
-	// ========================================================================
-	@Test
-	public void testMultipleCloseRestartCyclesAccumulate() throws Exception {
-		Path etchPath = freshEtchPath("multi-cycle");
-		String storePath = etchPath.toString().replace('\\', '/');
-		String seedHex = AKeyPair.createSeeded(6006).getSeed().toHexString();
-
-		final int CYCLES = 3;
-		long previousSize = 0;
-
-		for (int cycle = 0; cycle < CYCLES; cycle++) {
-			VenueServer server = VenueServer.launch(testConfig(storePath, seedHex));
-			try {
-				// Every prior cycle's file must still be readable
-				for (int prior = 0; prior < cycle; prior++) {
-					assertEquals("cycle-" + prior,
-						readDLFS(server, "test-drive", "cycle-" + prior + ".txt"),
-						"writes from cycle " + prior + " must survive into cycle " + cycle);
-				}
-				// And this cycle adds its own
-				writeDLFS(server, "test-drive", "cycle-" + cycle + ".txt", "cycle-" + cycle);
-				server.getEngine().flush();
-			} finally {
-				server.close();
-			}
-
-			long currentSize = Files.size(etchPath);
-			assertTrue(currentSize >= previousSize,
-				"etch size must not shrink across cycles (cycle " + cycle
-					+ ": was " + previousSize + ", now " + currentSize + ")");
-			previousSize = currentSize;
-		}
-
-		// Final read-back: all CYCLES files present
-		VenueServer reader = VenueServer.launch(testConfig(storePath, seedHex));
-		try {
-			for (int cycle = 0; cycle < CYCLES; cycle++) {
-				assertEquals("cycle-" + cycle,
-					readDLFS(reader, "test-drive", "cycle-" + cycle + ".txt"),
-					"cycle " + cycle + " write missing after " + CYCLES + " restart cycles");
-			}
-		} finally {
-			reader.close();
-		}
-	}
-
-	// ========================================================================
-	// Test 7 — Read of a never-written DLFS path returns null content. This
+	// Read of a never-written DLFS path returns null content. This
 	// is the "no stale data" guard: a fresh etch must not leak state from
 	// an unrelated previous etch or from earlier tests, and a missing path
 	// must be reported as missing, not silently substituted from initial

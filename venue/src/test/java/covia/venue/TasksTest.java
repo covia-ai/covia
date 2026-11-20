@@ -21,7 +21,6 @@ public class TasksTest {
 	private static final Blob TASK = Blob.fromHex("aa01");
 	private static final Blob SESSION = Blob.fromHex("bb02");
 	private static final Blob OTHER_SESSION = Blob.fromHex("bb03");
-	private static final AString SESSION_HEX = Strings.create(SESSION.toHexString());
 	private static final AString MESSAGE_ID = Strings.create("message-1");
 
 	private Agent agent;
@@ -31,19 +30,40 @@ public class TasksTest {
 	@BeforeEach
 	public void setup(TestInfo info) {
 		AString owner = TestEngine.uniqueDID(info);
-		agent = TestEngine.ENGINE.getVenueState().users().ensure(owner)
-			.ensureAgent(Strings.create("tasks-agent"), Maps.empty(), null);
-		agent.ensureSession(SESSION, owner);
+		agent = TestAgents.ensure(TestEngine.ENGINE.getVenueState().users().ensure(owner),
+			Strings.create("tasks-agent"), Maps.empty(), null);
+		agent.sessions().create(SESSION, owner, null);
 		tasks = agent.tasks();
 		task = tasks.task(TASK);
 	}
 
 	private void queue() {
-		assertTrue(tasks.add(TASK, Maps.of(Fields.INPUT, "work", Fields.SESSION_ID, SESSION_HEX)));
+		assertTrue(tasks.add(TASK, Maps.of(Fields.INPUT, "work", Fields.SESSION_ID, SESSION)));
 	}
 
 	private static ACell envelope(String message) {
 		return Maps.of(Fields.MESSAGE, message);
+	}
+
+	@Test
+	public void testATaskKnowsItsSessionAndWakeTime() {
+		queue();
+		assertEquals(SESSION, task.sessionId());
+		assertEquals(0, task.wakeTime());
+		task.setWakeTime(500);
+		assertEquals(500, task.wakeTime());
+		assertNull(tasks.task(Blob.fromHex("aa02")).sessionId(), "a task that is not queued has none");
+	}
+
+	@Test
+	public void testAViewIsStaleOnceItsTaskMoves() {
+		queue();
+		assertTrue(Task.isStale(task.getRecord(), 0), "its input has not been shown");
+		task.present();
+		assertFalse(Task.isStale(task.getRecord(), 0));
+		task.appendContinuation(SESSION, envelope("m"), null);
+		assertTrue(Task.isStale(task.getRecord(), 0), "the revision moved");
+		assertFalse(Task.isStale(task.getRecord(), -1), "a negative revision takes it regardless");
 	}
 
 	@Test
@@ -170,7 +190,7 @@ public class TasksTest {
 
 	@Test
 	public void testAContinuationNeedsTheSessionToExist() {
-		assertTrue(tasks.add(TASK, Maps.of(Fields.INPUT, "work", Fields.SESSION_ID, Strings.create(OTHER_SESSION.toHexString()))));
+		assertTrue(tasks.add(TASK, Maps.of(Fields.INPUT, "work", Fields.SESSION_ID, OTHER_SESSION)));
 		assertFalse(agent.appendTaskContinuation(TASK, OTHER_SESSION, envelope("m"), null));
 		assertEquals(0, task.revision());
 	}

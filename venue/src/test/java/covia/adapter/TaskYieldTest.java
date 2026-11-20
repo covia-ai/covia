@@ -12,6 +12,7 @@ import convex.core.data.AVector;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
+import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import covia.api.Fields;
 import covia.grid.Job;
@@ -41,7 +42,8 @@ public class TaskYieldTest {
 
 	private Agent create(RequestContext owner, String agentId, AMap<AString, ACell> config,
 			AMap<AString, ACell> state) {
-		AMap<AString, ACell> input = Maps.of(Fields.AGENT_ID, agentId, Fields.CONFIG, TestEngine.unrestricted(config));
+		AMap<AString, ACell> input = Maps.of(Fields.AGENT_ID, agentId, Fields.CONFIG,
+			TestEngine.unrestricted(config).assoc(Strings.intern("acceptTasks"), CVMBool.TRUE));
 		if (state != null) input = input.assoc(Agent.KEY_STATE, state);
 		engine.jobs().invokeOperation("v/ops/agent/create", input, owner).awaitResult(5000);
 		return engine.getVenueState().users().user(owner.getUserDID()).agent(agentId);

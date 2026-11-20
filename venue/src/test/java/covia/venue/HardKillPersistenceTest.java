@@ -10,6 +10,8 @@ import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
 import java.io.PrintWriter;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
@@ -139,17 +141,15 @@ public class HardKillPersistenceTest {
 		}
 	}
 
-	private static Child spawn(String storePath, String seedHex) throws IOException {
+	private static Child spawn(String storePath, String seedHex, String... mode) throws IOException {
 		String javaHome = System.getProperty("java.home");
 		String javaBin = javaHome + File.separator + "bin" + File.separator + "java";
 		String classpath = System.getProperty("java.class.path");
 
-		ProcessBuilder pb = new ProcessBuilder(
-			javaBin,
-			"-cp", classpath,
-			HardKillTestChild.class.getName(),
-			storePath, seedHex
-		);
+		List<String> command = new ArrayList<>(List.of(javaBin, "-cp", classpath,
+			HardKillTestChild.class.getName(), storePath, seedHex));
+		command.addAll(List.of(mode));
+		ProcessBuilder pb = new ProcessBuilder(command);
 		// Separate stderr so logback output doesn't pollute the protocol channel.
 		pb.redirectErrorStream(false);
 		return new Child(pb.start());
@@ -208,19 +208,23 @@ public class HardKillPersistenceTest {
 		}
 	}
 
-	/** A JVM exit closes the venue through its shutdown hook, inside Convex's own shutdown. */
+	/**
+	 * A JVM exit keeps the venue's state, even when the exit begins while the
+	 * venue is still closing. The child is an embedder that registers no shutdown
+	 * hook of its own and closes the venue on a thread of its own; the venue's own
+	 * hook makes the exit wait for that close, so Etch does not close the store
+	 * beneath the venue's final save.
+	 */
 	@Test
-	public void testJvmExitClosesTheVenueAndKeepsItsState() throws Exception {
+	public void testJvmExitWaitsForTheVenuesCloseAndKeepsItsState() throws Exception {
 		String storePath = newTempEtch().getAbsolutePath().replace('\\', '/');
 		String seedHex = AKeyPair.createSeeded(5001).getSeed().toHexString();
 
-		try (Child child = spawn(storePath, seedHex)) {
+		try (Child child = spawn(storePath, seedHex, "embedded")) {
 			String ready = child.readProto();
 			assertTrue(ready.startsWith("READY "), "child should announce READY: got '" + ready + "'");
 			assertEquals("OK", child.send("WRITE_NOFLUSH test-drive exit.txt saved-at-exit"));
-
-			child.stdin.println("SYSTEM_EXIT");
-			child.stdin.flush();
+			assertEquals("CLOSED", child.send("CLOSE_DURING_EXIT"), "the exit waits for the close under way");
 			assertTrue(child.process.waitFor(30, TimeUnit.SECONDS), "child should finish closing and exit");
 			assertEquals(0, child.process.exitValue());
 		}

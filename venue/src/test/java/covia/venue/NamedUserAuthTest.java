@@ -1,6 +1,7 @@
 package covia.venue;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -56,6 +57,10 @@ public class NamedUserAuthTest {
 	private AString aliceDID;
 	private AString bobDID;
 	private AString rotationDID;
+	/** Two of the keys of {@code managed}, an account an administrator looks after. */
+	private AString managedKeyA;
+	private AString managedKeyB;
+	private AString managedDID;
 
 	@BeforeAll
 	void setup() {
@@ -65,6 +70,8 @@ public class NamedUserAuthTest {
 		aliceKeyDID = UCAN.toDIDKey(aliceKey.getAccountKey());
 		bobKeyDID = UCAN.toDIDKey(bobKey.getAccountKey());
 		rotationKeyDID = UCAN.toDIDKey(rotationKey.getAccountKey());
+		managedKeyA = UCAN.toDIDKey(AKeyPair.generate().getAccountKey());
+		managedKeyB = UCAN.toDIDKey(AKeyPair.generate().getAccountKey());
 		server = VenueServer.launch(Maps.of(
 			Config.PORT, 0, Config.STORE, "memory",
 			Config.HOSTNAME, "named-auth.example",
@@ -76,10 +83,62 @@ public class NamedUserAuthTest {
 					"alice", Maps.of(Fields.AUTHENTICATION_KEYS, Vectors.of(aliceKeyDID)),
 					"bob", Maps.of(Fields.AUTHENTICATION_KEYS, Vectors.of(bobKeyDID)),
 					"rotation", Maps.of(
-						Fields.AUTHENTICATION_KEYS, Vectors.of(rotationKeyDID))))));
+						Fields.AUTHENTICATION_KEYS, Vectors.of(rotationKeyDID)),
+					"managed", Maps.of(
+						Fields.AUTHENTICATION_KEYS, Vectors.of(managedKeyA, managedKeyB))))));
 		aliceDID = server.getEngine().managedUserDID(Strings.create("alice"));
 		bobDID = server.getEngine().managedUserDID(Strings.create("bob"));
 		rotationDID = server.getEngine().managedUserDID(Strings.create("rotation"));
+		managedDID = server.getEngine().managedUserDID(Strings.create("managed"));
+	}
+
+	/** An administrator holding a venue-issued grant of {@code ability} on the venue's users. */
+	private RequestContext administrator(String ability) {
+		Engine engine = server.getEngine();
+		AKeyPair key = AKeyPair.generate();
+		AString did = UCAN.toDIDKey(key.getAccountKey());
+		engine.getVenueState().users().create(did);
+		AString proof = UCAN.create(engine.getKeyPair(), key.getAccountKey(),
+			engine.currentTimestamp().longValue() / 1000 + 3600,
+			Vectors.of(convex.auth.ucan.Capability.create(
+				Strings.create(engine.getDIDString() + "/users"), Strings.create(ability))),
+			Vectors.empty()).toJWT(engine.getKeyPair());
+		return engine.withTransportGrants(RequestContext.of(did), Vectors.of(proof));
+	}
+
+	private void keyOp(String op, AString key, RequestContext ctx) throws Exception {
+		server.getEngine().jobs().invokeInternal(op, Maps.of(Fields.DID, managedDID, Fields.KEY, key), ctx)
+			.get(5, TimeUnit.SECONDS);
+	}
+
+	private void refused(String op, AString key, RequestContext ctx) {
+		ExecutionException denied = assertThrows(ExecutionException.class, () -> keyOp(op, key, ctx));
+		assertInstanceOf(AuthException.class, denied.getCause(), op);
+	}
+
+	/**
+	 * Revoking another account's sign-in key and adding one are separate rights:
+	 * revoking protects the account, while adding a key lets its holder sign in
+	 * as the account.
+	 */
+	@Test
+	void revokingAnotherAccountsKeyIsApartFromAddingOne() throws Exception {
+		Engine engine = server.getEngine();
+		AString added = UCAN.toDIDKey(AKeyPair.generate().getAccountKey());
+		RequestContext adder = administrator("admin/user/authentication-add");
+		refused("v/ops/user/authentication-revoke", managedKeyA, adder);
+		keyOp("v/ops/user/authentication-add", added, adder);
+		assertTrue(engine.getAuth().isAuthenticationKeyActive(Strings.create("managed"), added));
+
+		RequestContext revoker = administrator("admin/user/authentication-revoke");
+		refused("v/ops/user/authentication-add", UCAN.toDIDKey(AKeyPair.generate().getAccountKey()), revoker);
+		keyOp("v/ops/user/authentication-revoke", managedKeyA, revoker);
+		assertFalse(engine.getAuth().isAuthenticationKeyActive(Strings.create("managed"), managedKeyA));
+
+		// The former combined ability grants neither
+		RequestContext former = administrator("admin/user/authentication-manage");
+		refused("v/ops/user/authentication-add", UCAN.toDIDKey(AKeyPair.generate().getAccountKey()), former);
+		refused("v/ops/user/authentication-revoke", managedKeyB, former);
 	}
 
 	@AfterAll

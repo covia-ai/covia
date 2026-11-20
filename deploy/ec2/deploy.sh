@@ -5,9 +5,15 @@
 # Pulls the published image and (re)starts the container; exits non-zero if
 # the venue does not come up healthy behind nginx.
 
-# Pull latest image (public on GHCR: no login needed). Stop here if the pull
+set -euo pipefail
+if [[ ! "${DEPLOY_IMAGE:-}" =~ ^ghcr.io/covia-ai/covia@sha256:[0-9a-f]{64}$ ]]; then
+  echo "::error::DEPLOY_IMAGE must name the published image by digest"
+  exit 1
+fi
+
+# Pull the selected image (public on GHCR: no login needed). Stop here if the pull
 # fails, or the old image would be restarted behind a green deploy.
-if ! docker pull ghcr.io/covia-ai/covia:latest; then
+if ! docker pull "$DEPLOY_IMAGE"; then
   echo "::error::docker pull failed — deploy stopped, running container left as is"
   exit 1
 fi
@@ -41,7 +47,7 @@ fi
 # Ensure data directory exists with correct config (preserve existing etch store)
 mkdir -p /home/ec2-user/covia-data
 if [ ! -f /home/ec2-user/covia-data/config.json ]; then
-  printf '{"venues":[{"name":"Covia Venue (EC2)","hostname":"venue-3.covia.ai","port":8080,"store":"/data/venue.etch","trustedProxies":["loopback","172.16.0.0/12"],"mcp":{"enabled":true}}]}\n' \
+  printf '{"venues":[{"name":"Covia Venue 3 (Dev)","hostname":"venue-3.covia.ai","port":8080,"store":"/data/venue.etch","trustedProxies":["loopback","172.16.0.0/12"],"mcp":{"enabled":true}}]}\n' \
     > /home/ec2-user/covia-data/config.json
 fi
 # The venue sits behind nginx on this host and sees it through the
@@ -59,6 +65,12 @@ path = Path("/home/ec2-user/covia-data/config.json")
 config = json.loads(path.read_text(encoding="utf-8"))
 config.setdefault("operations", {}).setdefault("log-format", "json")
 for venue in config.get("venues", []):
+    # venue-3 and venue-4 are dev venues, not production (security#53,
+    # decision D3), so their status name gives their number and tier as
+    # venue-1 and venue-2 do. Only the old default is replaced: a name set
+    # by an operator is kept.
+    if venue.get("name") == "Covia Venue (EC2)":
+        venue["name"] = "Covia Venue 3 (Dev)"
     venue.setdefault("trustedProxies", ["loopback", "172.16.0.0/12"])
     logging = venue.setdefault("logging", {})
     logging.setdefault("audit", True)
@@ -97,7 +109,7 @@ docker run -d \
   --health-timeout=5s \
   --health-start-period=15s \
   --health-retries=3 \
-  ghcr.io/covia-ai/covia:latest \
+  "$DEPLOY_IMAGE" \
   /data/config.json
 
 # Wait for the health check to settle; fail the deploy rather than
@@ -110,7 +122,7 @@ for i in $(seq 1 25); do
   echo "Health status: $status"
   [ "$status" = "healthy" ] && break
   [ "$status" = "unhealthy" ] && break
-  [ "$i" -lt 25 ] && sleep 5
+  if [ "$i" -lt 25 ]; then sleep 5; fi
 done
 if [ "$status" != "healthy" ]; then
   echo "::error::covia-venue did not become healthy — deploy failed"

@@ -36,6 +36,8 @@ public class Fields {
 	/** Whether an operation may use internal/result-only execution. An explicit
 	 * false forces a durable Job even when the caller uses run/invokeInternal. */
 	public static final StringShort INTERNAL = Strings.intern("internal");
+	/** The fields of an operation's input and output that its job records hide. */
+	public static final StringShort SECRET_FIELDS = Strings.intern("secretFields");
 	public static final StringShort DEFAULT = Strings.intern("default");
 	public static final StringShort MESSAGE = Strings.intern("message");
 	/** What a running Job's work is doing now: {@code {message, data?}} (see {@code Job.progress}). */
@@ -233,6 +235,11 @@ public class Fields {
 	 * assistant turn. Agent code preserves it verbatim; only the matching
 	 * provider/model adapter may interpret it on a later inference. */
 	public static final StringShort PROVIDER_STATE = Strings.intern("providerState");
+	/** Why a model's reply ended, in OpenTelemetry's GenAI finish-reason
+	 * vocabulary: {@code stop}, {@code length} or {@code tool_call}. */
+	public static final StringShort FINISH_REASON = Strings.intern("finishReason");
+	/** The provider's own value for why a model's reply ended, as it reported it. */
+	public static final StringShort PROVIDER_FINISH_REASON = Strings.intern("providerFinishReason");
 	public static final StringShort TOOL_CALLS = Strings.intern("toolCalls");
 	public static final StringShort BUDGET = Strings.intern("budget");
 	/** Job ids a cycle presented (chat envelopes drained this cycle). */
@@ -297,14 +304,17 @@ public class Fields {
 
 	// Identity / authorization
 	/** On a record of a call (a job, a scheduled event, a HITL request): the
-	 *  principal that made the call — a user, one of a user's agents
-	 *  ({@code <owner>:g:<id>}) or a {@code user/sudo} delegate. Written with
+	 *  principal that made the call — a user or one of a user's agents
+	 *  ({@code <owner>:g:<id>}), or a {@code admin/sudo} delegate on a record
+	 *  made before that acted as the user. Written with
 	 *  {@link covia.grid.Attribution}. */
 	public static final StringShort CALLER = Strings.intern("caller");
 	/** On a record of a call: the namespace it belongs to, present only when that
-	 *  differs from {@link #CALLER}. Ownership, access control and quota key on
-	 *  it. Read and written with {@link covia.grid.Attribution}. */
+	 *  differs from {@link #CALLER}. Ownership and access control key on it.
+	 *  Read and written with {@link covia.grid.Attribution}. */
 	public static final StringShort OWNER = Strings.intern("owner");
+	/** A lifecycle control was accepted; does not assert remote cessation. */
+	public static final StringShort ACCEPTED = Strings.intern("accepted");
 	/** On an agent: the principal whose authority its harness runs under, and
 	 *  whose authority an update needs. Absent means the agent's owner. */
 	public static final StringShort CONTROLLER = Strings.intern("controller");
@@ -318,11 +328,28 @@ public class Fields {
 	 *  ({@link #CALLER}), namespace ({@link #OWNER}) and {@link #PROOFS}. Never
 	 *  shown to a caller. */
 	public static final StringShort AUTHORITY = Strings.intern("authority");
-	/** Beside a request or message an agent receives, and on its history turn:
-	 *  how the venue authenticated the caller through a channel binding (COG-3
-	 *  §7), written by the agent's ingress from the request context. Attribution
-	 *  only, never evidence. */
+	/** How the venue authenticated a caller through a channel binding (COG-3 §7),
+	 *  as a binding's media and reply operations receive it. Attribution only,
+	 *  never evidence. Agent turns stored before the route replaced it carry it
+	 *  too. */
 	public static final StringShort AUTHENTICATION = Strings.intern("authentication");
+	/** Beside a request or message an agent receives, and on its history turn:
+	 *  where the request started and each handover that carried it to the
+	 *  agent, one record per adapter. Venue-internal: its shape is not a
+	 *  contract, and only the agent's {@code From} element shows it. */
+	public static final StringShort ROUTE = Strings.intern("route");
+	/** On a route record: the name of the adapter that wrote it. */
+	public static final StringShort VIA = Strings.intern("via");
+	/** Verified ingress transport on a request's first route record. */
+	public static final StringShort TRANSPORT = Strings.intern("transport");
+	/** Application protocol known by the ingress endpoint, when any. */
+	public static final StringShort PROTOCOL = Strings.intern("protocol");
+	/** Credential class established by the verifier, never the bearer itself. */
+	public static final StringShort CREDENTIAL_TYPE = Strings.intern("credentialType");
+	/** On a route record: the principal it vouches for, which holds the request after it. */
+	public static final StringShort PRINCIPAL = Strings.intern("principal");
+	/** On the scheduler's route record: when the event that fired was due, in milliseconds since the epoch. */
+	public static final StringShort DUE = Strings.intern("due");
 	/** On a job record: the id of the nearest <em>recorded</em> job inside whose
 	 *  execution this job was dispatched. Absent on top-level jobs. Only the
 	 *  up-link is stored; a client reconstructs a job tree by tracing parents. */
@@ -363,5 +390,23 @@ public class Fields {
 	public static final StringShort SEED = Strings.intern("seed");
 	public static final StringShort VENUE = Strings.intern("venue");
 
+	// Access tokens (venue/docs/ACCESS_TOKENS.md)
+	/** A set of capabilities bounding what its holder may do: missing means
+	 *  unrestricted, empty means none (covia.lattice.Caps). */
+	public static final StringShort CAPS = Strings.intern("caps");
+	/** When something stops being valid, in milliseconds since the epoch. */
+	public static final StringShort EXPIRES = Strings.intern("expires");
+	/** On an access token: the identity that created it, whose authority it narrows. */
+	public static final StringShort ISSUER = Strings.intern("issuer");
+	/** On an access token update: issue a new bearer, so the old one stops working. */
+	public static final StringShort ROTATE = Strings.intern("rotate");
+
+	// Callables (venue/docs/CALLABLES.md)
+	/** A callable, by reference; in kept authority, the callable whose call left the work running. */
+	public static final StringShort CALLABLE = Strings.intern("callable");
+	/** On a callable: the operation that decides who may call it, beyond those holding {@code callable/call}. */
+	public static final StringShort GATE = Strings.intern("gate");
+	/** On the callers gate: the principals and namespaces it admits. */
+	public static final StringShort CALLERS = Strings.intern("callers");
 
 }

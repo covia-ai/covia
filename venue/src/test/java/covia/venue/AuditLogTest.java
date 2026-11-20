@@ -40,7 +40,7 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import covia.api.Fields;
 import covia.exception.ConfigurationException;
-import covia.exception.NotSupportedException;
+import covia.exception.IntegrityException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.grid.auth.VenueAuth;
@@ -144,6 +144,28 @@ public class AuditLogTest {
 			if (e.getThrowableProxy() != null) sb.append(e.getThrowableProxy().getMessage()).append('\n');
 		}
 		return sb.toString();
+	}
+
+	/** An event of a request under admin/sudo names the user it acts as, and the delegate who is present. */
+	@Test
+	public void aRequestUnderSudoNamesTheDelegateToo() {
+		String venue = "audit-sudo.example";
+		Audit audit = new Audit(true, venue);
+		AKeyPair aliceKey = AKeyPair.generate(), bobKey = AKeyPair.generate();
+		AString alice = UCAN.toDIDKey(aliceKey.getAccountKey()), bob = UCAN.toDIDKey(bobKey.getAccountKey());
+		UCAN sudo = UCAN.create(aliceKey, bobKey.getAccountKey(), System.currentTimeMillis() / 1000 + 300,
+			convex.core.data.Vectors.of(convex.auth.ucan.Capability.create(alice, covia.api.Abilities.ADMIN_SUDO)),
+			convex.core.data.Vectors.empty());
+		RequestContext delegate = TestEngine.ENGINE.sudoContext(
+			RequestContext.of(bob).withProofs(convex.core.data.Vectors.of(sudo.toMap())), alice);
+
+		audit.event(Audit.SECRET_WRITE, delegate, Audit.K_NAME, "KEY");
+		audit.event(Audit.SECRET_WRITE, RequestContext.of(alice), Audit.K_NAME, "KEY");
+		List<Map<String, String>> events = events(Audit.LOGGER, venue);
+		assertEquals(alice.toString(), events.get(0).get(Audit.K_DID));
+		assertEquals(bob.toString(), events.get(0).get(Audit.K_ORIGIN));
+		assertEquals(alice.toString(), events.get(1).get(Audit.K_DID));
+		assertFalse(events.get(1).containsKey(Audit.K_ORIGIN), "the user in person needs no second name");
 	}
 
 	@Test
@@ -273,7 +295,7 @@ public class AuditLogTest {
 		String v2Value = "sk-v2-" + System.nanoTime();
 
 		// Written as a venue did before key versions existed: no keyVersion.
-		user.secrets().cursor().withDefault(Maps.empty()).path(Strings.create("MIGRATING")).set(Maps.of(
+		user.secrets().path(Strings.create("MIGRATING")).set(Maps.of(
 			Strings.create("encrypted"), Blob.wrap(AESGCM.encrypt(keys.forVersion(SecretStore.KEY_VERSION_1),
 				v1Value.getBytes(StandardCharsets.UTF_8))),
 			Fields.UPDATED, CVMLong.create(1000L)));
@@ -283,10 +305,13 @@ public class AuditLogTest {
 		assertEquals(v2Value, engine.resolveSecret("MIGRATING", ctx));
 
 		user.secrets().store("FOREIGN", v2Value, SecretStore.keys(AKeyPair.generate()));
-		NotSupportedException unreadable = assertThrows(NotSupportedException.class, () -> engine.resolveSecret("FOREIGN", ctx));
-		assertEquals(Engine.SECRET_UNREADABLE + "FOREIGN", unreadable.getMessage());
-		assertTrue(List.copyOf(captured.list).stream().anyMatch(e -> e.getLevel() == Level.WARN
-			&& Engine.class.getName().equals(e.getLoggerName())), "the failed resolution is logged");
+		IntegrityException failed = assertThrows(IntegrityException.class, () -> engine.resolveSecret("FOREIGN", ctx));
+		assertEquals(Engine.SECRET_INTEGRITY + "FOREIGN", failed.getMessage());
+		assertNotNull(failed.getCause(), "the refusal carries what failed the check");
+		assertEquals(1, List.copyOf(captured.list).stream().filter(e -> e.getLevel() == Level.ERROR
+			&& IntegrityException.class.getName().equals(e.getLoggerName())
+			&& e.getFormattedMessage().contains(ctx.getUserDID().toString())).count(),
+			"the integrity failure is logged once, naming whose secret it is");
 
 		String everything = allLogText();
 		assertFalse(everything.contains(v1Value), "no version 1 value in any log line");

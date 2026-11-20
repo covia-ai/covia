@@ -17,6 +17,7 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import covia.adapter.AAdapter;
 import covia.exception.AuthException;
+import covia.exception.ConfigurationException;
 import covia.exception.UnavailableException;
 
 class AdapterUserDeletionTest {
@@ -24,6 +25,7 @@ class AdapterUserDeletionTest {
 	private static final AString OTHER = Strings.create("did:test:other-owner");
 	private static final AString VALUE = Strings.create("private-value");
 	private static final String NAME = "cleanup-test";
+	private static final String REFUSED = "cleanup-test refuses its settings";
 
 	static class Probe extends AAdapter {
 		Consumer<AdapterState> duringState = state -> { };
@@ -33,8 +35,13 @@ class AdapterUserDeletionTest {
 		boolean failStop;
 		boolean started;
 		boolean sawPreviousUser;
+		/** Refuses its configuration, so the venue never installs it. */
+		boolean refuses;
 		@Override public String getName() { return name; }
 		@Override public String getDescription() { return "Deletion hook test"; }
+		@Override public void configure(AMap<AString, ACell> config, boolean strict) {
+			if (refuses) throw new ConfigurationException(REFUSED);
+		}
 		@Override public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
 			return CompletableFuture.completedFuture(input);
 		}
@@ -112,20 +119,62 @@ class AdapterUserDeletionTest {
 		} finally { engine.close(); }
 	}
 
-	@Test void bootDisabledAdaptersDoNotNeedInstallationToDeleteState() {
+	/** An adapter that refused its configuration is never installed, yet deletes its users' state. */
+	@Test void uninstalledAdaptersDoNotNeedInstallationToDeleteState() {
 		Engine engine = Engine.createTemp(Maps.of("adapters", Maps.of(
 			NAME, Maps.of("enabled", false), "agent", Maps.of("enabled", false))));
 		try {
 			Probe adapter = new Probe();
+			adapter.refuses = true;
 			engine.registerAdapter(adapter);
 			assertNull(adapter.engine);
 			AdapterState state = seed(engine);
-			engine.getVenueState().users().user(OWNER).ensureAgent("old", Maps.empty(), VALUE);
+			TestAgents.ensure(engine.getVenueState().users().user(OWNER), "old", Maps.empty(), VALUE);
 			engine.deleteUser(engine.venueContext(), OWNER);
 			assertEquals(1, adapter.stopped);
 			assertNull(state.read("custom/" + OWNER));
 			assertTrue(engine.getVenueState().users().create(OWNER));
 		} finally { engine.close(); }
+	}
+
+	/**
+	 * An adapter that registers while a deletion is under way, after the
+	 * deletion listed the venue's adapters, is marked by the deletion but ran
+	 * its own retry at registration before that mark. The deletion finishes its
+	 * entry rather than leave it pending. The deletion is held inside its
+	 * transaction, so the registration's writes make that transaction run
+	 * again and see the new adapter.
+	 */
+	@Test void anAdapterRegisteredDuringADeletionIsCleanedUpByIt() throws Exception {
+		Engine engine = Engine.createTemp(Maps.empty());
+		CountDownLatch entered = new CountDownLatch(1), release = new CountDownLatch(1);
+		try {
+			Probe first = new Probe();
+			first.duringState = state -> {
+				if (entered.getCount() == 0) return;
+				entered.countDown();
+				try { assertTrue(release.await(5, TimeUnit.SECONDS)); }
+				catch (InterruptedException e) { throw new AssertionError(e); }
+			};
+			engine.registerAdapter(first);
+			seed(engine);
+			CompletableFuture<ACell> deletion = CompletableFuture.supplyAsync(
+				() -> engine.deleteUser(engine.venueContext(), OWNER));
+			assertTrue(entered.await(5, TimeUnit.SECONDS));
+			Probe late = new Probe();
+			late.name = "late-cleanup-test";
+			engine.registerAdapter(late);
+			AdapterState lateState = engine.adapterState(late.name);
+			lateState.write(lateState.userPath(OWNER, "bots/late"), VALUE);
+			release.countDown();
+			deletion.get(5, TimeUnit.SECONDS);
+			assertEquals(1, late.stopped);
+			assertNull(lateState.read(lateState.userPath(OWNER, "")));
+			assertTrue(engine.getVenueState().users().create(OWNER), "nothing is left pending");
+		} finally {
+			release.countDown();
+			engine.close();
+		}
 	}
 
 	@Test void unloadedAdapterCleanupRemainsPendingUntilReactivation() {

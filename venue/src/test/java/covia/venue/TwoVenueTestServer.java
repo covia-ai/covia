@@ -10,6 +10,7 @@ import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMBool;
+import convex.core.util.Shutdown;
 import covia.adapter.HTTPAdapter;
 import covia.api.Fields;
 import covia.grid.client.VenueHTTP;
@@ -26,8 +27,8 @@ import covia.venue.server.VenueServer;
  * tests that need auth-gated paths should construct their own
  * {@link VenueServer} via {@link VenueServer#launch}.</p>
  *
- * <p><b>Lifetime:</b> static-init lazy. Both servers close on JVM exit
- * via shutdown hook so Jetty/Javalin worker threads don't outlive the
+ * <p><b>Lifetime:</b> static-init lazy. Both servers close on JVM exit,
+ * in Convex's shutdown sequence, so Jetty/Javalin worker threads don't outlive the
  * test session.</p>
  *
  * <p>For single-venue tests, prefer {@link TestServer} (one shared
@@ -92,10 +93,12 @@ public class TwoVenueTestServer {
 		COVIA_A.setTimeout(5000);
 		COVIA_B.setTimeout(5000);
 
-		Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+		// In Convex's shutdown sequence, before it closes their stores
+		// (TestEngine says why that order matters).
+		Shutdown.addHook(Shutdown.SERVICE, () -> {
 			try { SERVER_A.close(); } catch (Exception ignored) {}
 			try { SERVER_B.close(); } catch (Exception ignored) {}
-		}, "two-venue-test-server-shutdown"));
+		});
 	}
 
 	private static VenueServer launchVenue(String seedHex, String hostname) {
@@ -107,6 +110,8 @@ public class TwoVenueTestServer {
 			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
 			Fields.MCP, Maps.of(),
 			Fields.A2A, Maps.of(),
+			// Closed only at JVM exit, when nothing in flight is waited on.
+			Config.SHUTDOWN, Maps.of(Config.GRACE_MS, 0),
 			Config.AUTH, Maps.of(
 				Config.PUBLIC, Maps.of(
 					Config.ENABLED, true,

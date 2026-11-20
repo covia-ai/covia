@@ -280,8 +280,8 @@ public class SkillsImportTest {
 		importSkill(Maps.of(K_SOURCE, Strings.create("file://tmp/SkillsImportTest/agent/SKILL.md"),
 			K_SKILLSET, Strings.create("w/authored")));
 		ACell theirs = engine.resolvePath(Strings.create("w/authored/agent"), ctx);
-		assertEquals(ctx.getCallerDID(), RT.getIn(theirs, Fields.CREATED_BY, Fields.DID));
-		assertTrue(ctx.getCallerDID().toString().endsWith(":g:author-bot"), "an agent acts as its own sub-principal");
+		assertEquals(ctx.getAuthorityDID(), RT.getIn(theirs, Fields.CREATED_BY, Fields.DID));
+		assertTrue(ctx.getAuthorityDID().toString().endsWith(":g:author-bot"), "an agent acts as its own sub-principal");
 		assertEquals(Strings.create("author-bot"), RT.getIn(theirs, Fields.CREATED_BY, Fields.AGENT_ID));
 
 		// parse stores nothing, so it stamps nothing.

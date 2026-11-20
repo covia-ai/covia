@@ -29,7 +29,9 @@ import covia.api.Fields;
 import covia.exception.ResponseException;
 import covia.venue.RequestContext;
 import io.javalin.websocket.WsContext;
+import covia.test.IntegrationTest;
 
+@IntegrationTest
 class SlackSocketModeTest {
 	static final AString APP = Strings.intern("appToken"), SIGNING = Strings.intern("signingSecret");
 	static AMap<AString, ACell> socketSpec() { return spec().dissoc(SIGNING).assoc(APP, Strings.create("s/APP")); }
@@ -117,6 +119,22 @@ class SlackSocketModeTest {
 		}
 	}
 
+	@Test void disablingClosesTheConnectionUntilEnabled() throws Exception {
+		try (FakeSocket socket = new FakeSocket(); Fixture f = new Fixture(socketSpec(), socket.url())) {
+			f.api.opened(); socket.connected();
+			awaitConnection(f.bot(), WebhookBot.CONNECTED);
+			f.engine.disableAdapter(NAME);
+			assertNull(f.bot(), "disabling stops the binding");
+			assertNotNull(socket.closes.poll(8, TimeUnit.SECONDS), "and closes its connection");
+			f.engine.enableAdapter(NAME);
+			f.api.opened(); WsContext ctx = socket.connected();
+			awaitConnection(f.bot(), WebhookBot.CONNECTED);
+			ctx.send(envelope("env-back", payload("back", event("1700000000.000002"))));
+			assertEquals(ack("env-back"), socket.ack());
+			assertEquals("/chat.postMessage", f.api.take().path());
+		}
+	}
+
 	@Test void aSilentConnectionIsReplaced() throws Exception {
 		try (SilentSocket silent = new SilentSocket(); Fixture f = new Fixture(socketSpec())) {
 			f.adapter.keepaliveMillis = 50;
@@ -140,7 +158,7 @@ class SlackSocketModeTest {
 			ctx.send(envelope("env-dm", payload("socket-turn", dm.assoc(Strings.intern("ts"), Strings.create("3.2")))));
 			assertEquals(ack("env-dm"), socket.ack());
 			f.api.take();
-			assertEquals(Strings.create("session-1"), agent.inputs.poll(5, TimeUnit.SECONDS).get(Fields.SESSION_ID));
+			assertEquals(SlackAdapterTest.FakeAgent.session(1), agent.inputs.poll(5, TimeUnit.SECONDS).get(Fields.SESSION_ID));
 			var status = f.bot().status();
 			assertNotNull(status.get(Strings.intern("webhookPath")));
 			assertEquals(Strings.create(WebhookBot.CONNECTED), status.get(Strings.intern("connection")));
@@ -249,7 +267,10 @@ class SlackSocketModeTest {
 		try (FakeSocket socket = new FakeSocket(); Fixture f = new Fixture(agentSpec, socket.url())) {
 			RequestContext owner = RequestContext.of(OWNER);
 			ACell cfg = RT.getIn(f.engine.resolvePath(Strings.create("v/agents/templates/slack"), owner), "agent", "config");
-			assertTrue(RT.getIn(cfg, "systemPrompt").toString().contains("[From:"), "the prompt teaches the From element");
+			String from = covia.adapter.agent.Labels.renderSentence(covia.adapter.agent.Labels.BRACKET,
+				covia.adapter.agent.Labels.Kind.FROM_VENUE, "");
+			assertTrue(RT.getIn(cfg, "systemPrompt").toString().contains(from.substring(0, from.indexOf(']'))),
+				"the prompt teaches the From element as the venue renders it");
 			assertTrue(RT.getIn(cfg, "systemPrompt").toString().contains("plain text"), "the prompt asks for plain text");
 			assertEquals(Vectors.of(Strings.create("w/skills"), Strings.create("v/skills/root")), RT.getIn(cfg, "skillsets"));
 			// Every tool and revealed skill in the template and the skill hierarchy resolves.

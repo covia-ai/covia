@@ -168,7 +168,7 @@ To test strict mode in orchestrations:
 
 **`agent:trigger`** — Run the agent's transition loop. Always runs, even with no pending work — the agent may act proactively. When no tasks/messages are pending, the LLM receives a clear signal: `[No pending tasks, messages, or job results. You may act proactively or report idle.]`
 
-**`agent:request`** — Send a specific task and wait up to `timeout` milliseconds for the result. Preferred for most interactions since it gives the agent concrete input. A timeout returns a STARTED Job snapshot; fetch that Job rather than submitting the task again.
+**`agent:request`** — Send a specific task and wait up to `timeout` milliseconds for the result. Preferred for most interactions since it gives the agent concrete input. A timeout returns a STARTED Job snapshot; fetch that Job rather than submitting the task again. The agent's config must set `acceptTasks: true`, as the standard templates other than `minimal` do; a request to any other agent is refused.
 
 **System prompt guidance:** Agent prompts should say what to do with no work:
 - Monitoring agent: "If no tasks are pending, check workspace for anomalies."

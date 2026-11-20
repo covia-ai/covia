@@ -19,7 +19,7 @@ import convex.core.lang.RT;
 import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.InvalidInputException;
-import covia.exception.NotSupportedException;
+import covia.exception.UnsupportedException;
 import covia.venue.Audit;
 import covia.venue.Config;
 import covia.venue.Modules;
@@ -33,9 +33,10 @@ import covia.venue.StoreControl;
  * <p>{@code venue/show-config} is the deliberately curated public exception:
  * it requires only read access to {@code v/config} and reports effective
  * operational settings without reflecting the raw operator document. Every
- * lifecycle operation is venue-owned. Adapter/module lifecycle requires a
- * venue-rooted delegation over {@code <venue DID>/adapters} with
- * {@code adapter/manage}; process restart requires {@code venue/restart} over
+ * lifecycle operation is venue-owned. Listing adapters requires a venue-rooted
+ * delegation over {@code <venue DID>/adapters} with {@code admin/adapter/read},
+ * and adapter/module lifecycle one with {@code admin/adapter/manage}; process
+ * restart requires {@code admin/venue/restart} over
  * {@code <venue DID>/process} ({@link covia.venue.Engine#requireVenueAuthority}).
  * Direct venue execution is allowed. A null capability scope is deliberately
  * not enough for an ordinary authenticated user.</p>
@@ -44,19 +45,23 @@ import covia.venue.StoreControl;
  *   <li>{@code venue/show-config} — curated public effective settings useful
  *       to agents and clients; never raw configuration.</li>
  *   <li>{@code venue/adapters} — full registry view: active and disabled
- *       adapters (kernel flag, owning module, operations) plus loaded modules.</li>
+ *       adapters (status, kernel flag, owning module, operations) plus loaded
+ *       modules; a failed adapter's entry says why it is not running.</li>
  *   <li>{@code venue/adapter/enable|disable} — retract or restore a non-kernel
  *       adapter's catalog, introspection and dispatch.</li>
  *   <li>{@code venue/adapter/configure} — apply a new effective configuration
  *       ({@link covia.venue.Engine#configureAdapter}).</li>
+ *   <li>{@code venue/adapter/restart} — stop an enabled adapter, offer it its
+ *       effective configuration again and start it, running or failed
+ *       ({@link covia.venue.Engine#restartAdapter}).</li>
  *   <li>{@code venue/module/load|unload} — runtime module lifecycle, subject
  *       to the operator's {@code dynamicModules} policy ({@link Modules}).</li>
  *   <li>{@code venue/restart} — process-wide graceful successor handoff,
- *       separately guarded by {@code venue/restart} on
+ *       separately guarded by {@code admin/venue/restart} on
  *       {@code <venue DID>/process}.</li>
  *   <li>{@code venue/gc} — online garbage collection of the Etch store
  *       while the venue keeps serving (covia#452), separately guarded by
- *       {@code venue/gc} on {@code <venue DID>/store}.</li>
+ *       {@code admin/venue/gc} on {@code <venue DID>/store}.</li>
  * </ul>
  *
  * <p>Changes are not persisted: after a restart the venue config is
@@ -120,6 +125,13 @@ public class VenueAdapter extends AAdapter {
 	private static final AString K_SWEEP_COMPLETE = Strings.intern("sweepComplete");
 	private static final AString K_COMPLETED = Strings.intern("completed");
 
+	/** An adapter's {@code status} in the listing: enabled and running. */
+	public static final AString ADAPTER_RUNNING = Strings.intern("running");
+	/** An adapter's {@code status} in the listing: enabled but not running, with a {@code reason}. */
+	public static final AString ADAPTER_FAILED = Strings.intern("failed");
+	/** An adapter's {@code status} in the listing: disabled. */
+	public static final AString ADAPTER_DISABLED = Strings.intern("disabled");
+
 	@Override
 	public String getName() {
 		return "venue";
@@ -127,8 +139,8 @@ public class VenueAdapter extends AAdapter {
 
 	@Override
 	public String getDescription() {
-		return "Public effective venue settings, plus venue-owned administration to enable, disable "
-			+ "and reconfigure adapters, load or unload modules, garbage-collect the store, "
+		return "Public effective venue settings, plus venue-owned administration to enable, disable, "
+			+ "reconfigure and restart adapters, load or unload modules, garbage-collect the store, "
 			+ "or restart the standalone process.";
 	}
 
@@ -139,6 +151,7 @@ public class VenueAdapter extends AAdapter {
 		installAsset("venue/adapter/enable", "/adapters/venue/adapterEnable.json");
 		installAsset("venue/adapter/disable", "/adapters/venue/adapterDisable.json");
 		installAsset("venue/adapter/configure", "/adapters/venue/adapterConfigure.json");
+		installAsset("venue/adapter/restart", "/adapters/venue/adapterRestart.json");
 		installAsset("venue/module/load", "/adapters/venue/moduleLoad.json");
 		installAsset("venue/module/unload", "/adapters/venue/moduleUnload.json");
 		installAsset("venue/restart", "/adapters/venue/restart.json");
@@ -156,15 +169,18 @@ public class VenueAdapter extends AAdapter {
 				return CompletableFuture.completedFuture(showConfig());
 			}
 			if ("gc".equals(subOperation)) {
-				engine.requireVenueAuthority(ctx, STORE_RESOURCE, Abilities.VENUE_GC);
+				engine.requireVenueAuthority(ctx, STORE_RESOURCE, Abilities.ADMIN_VENUE_GC);
 				return audited(Audit.VENUE_GC, ctx, subOperation, input, gc(ctx, input));
 			}
-			if ("restart".equals(subOperation)) {
-				engine.requireVenueAuthority(ctx, PROCESS_RESOURCE, Abilities.VENUE_RESTART);
-			} else {
-				engine.requireVenueAuthority(ctx, RESOURCE, Abilities.ADAPTER_MANAGE);
+			if ("adapters".equals(subOperation)) {
+				engine.requireVenueAuthority(ctx, RESOURCE, Abilities.ADMIN_ADAPTER_READ);
+				return CompletableFuture.completedFuture(adapters());
 			}
-			if ("adapters".equals(subOperation)) return CompletableFuture.completedFuture(adapters());
+			if ("restart".equals(subOperation)) {
+				engine.requireVenueAuthority(ctx, PROCESS_RESOURCE, Abilities.ADMIN_VENUE_RESTART);
+			} else {
+				engine.requireVenueAuthority(ctx, RESOURCE, Abilities.ADMIN_ADAPTER_MANAGE);
+			}
 			CompletableFuture<ACell> done;
 			try {
 				done = CompletableFuture.completedFuture(dispatchAdmin(ctx, subOperation, input, meta));
@@ -183,8 +199,8 @@ public class VenueAdapter extends AAdapter {
 			ACell input, CompletableFuture<ACell> result) {
 		if (!engine.audit().enabled()) return result;
 		Object target = RT.getIn(input, Fields.NAME);
-		return result.whenComplete((r, t) -> engine.audit().event(event,
-			Audit.K_DID, ctx.getCallerDID(), Audit.K_OPERATION, subOperation, Audit.K_TARGET, target,
+		return result.whenComplete((r, t) -> engine.audit().event(event, ctx,
+			Audit.K_OPERATION, subOperation, Audit.K_TARGET, target,
 			Audit.K_OUTCOME, (t == null) ? Audit.OK : Audit.FAILED));
 	}
 
@@ -195,10 +211,11 @@ public class VenueAdapter extends AAdapter {
 			case "adapter-enable" -> adapterEnable(input);
 			case "adapter-disable" -> adapterDisable(input);
 			case "adapter-configure" -> adapterConfigure(input);
+			case "adapter-restart" -> adapterRestart(input);
 			case "module-load" -> moduleLoad(input);
 			case "module-unload" -> moduleUnload(input);
 			case "restart" -> restart(ctx, input);
-			default -> throw new NotSupportedException(
+			default -> throw new UnsupportedException(
 				"Unknown venue operation: " + getSubOperation(meta));
 		});
 	}
@@ -252,7 +269,6 @@ public class VenueAdapter extends AAdapter {
 			"rateLimitEnabled", config.isRateLimitEnabled(),
 			"requestsPerSecond", RT.cvm(config.getRateLimitRps()),
 			"requestBurst", RT.cvm(config.getRateLimitBurst()),
-			"maxConcurrentJobsPerUser", config.getMaxConcurrentJobsPerUser(),
 			"admissionBlockMs", config.getRateLimitBlockMs());
 
 		List<String> names = new ArrayList<>(engine.getAdapterNames());
@@ -289,7 +305,8 @@ public class VenueAdapter extends AAdapter {
 		names.sort(String::compareTo);
 		AVector<ACell> adapters = Vectors.empty();
 		for (String name : names) {
-			boolean enabled = engine.hasAdapter(name);
+			// A failed adapter is enabled but, like a disabled one, not active.
+			boolean enabled = engine.hasAdapter(name) || engine.adapterFailure(name) != null;
 			AAdapter adapter = engine.getAdapter(name);
 			adapters = adapters.conj(adapterEntry(name, adapter, enabled));
 		}
@@ -301,11 +318,15 @@ public class VenueAdapter extends AAdapter {
 	}
 
 	private AMap<AString, ACell> adapterEntry(String name, AAdapter adapter, boolean enabled) {
+		String failure = enabled ? engine.adapterFailure(name) : null;
+		AString status = !enabled ? ADAPTER_DISABLED : (failure != null) ? ADAPTER_FAILED : ADAPTER_RUNNING;
 		AMap<AString, ACell> entry = Maps.of(
 			Fields.NAME, Strings.create(name),
 			K_ENABLED, CVMBool.of(enabled),
+			Fields.STATUS, status,
 			K_KERNEL, CVMBool.of(engine.isKernelAdapter(name)),
 			K_CONFIG, engine.adapterConfig(name));
+		if (failure != null) entry = entry.assoc(Fields.REASON, Strings.create(failure));
 		if (adapter != null) {
 			entry = entry.assoc(Fields.DESCRIPTION, Strings.create(adapter.getDescription()));
 			AVector<ACell> ops = Vectors.empty();
@@ -346,6 +367,12 @@ public class VenueAdapter extends AAdapter {
 			K_ENABLED, CVMBool.FALSE, K_CHANGED, CVMBool.of(changed));
 	}
 
+	ACell adapterRestart(ACell input) {
+		String name = requireName(input, "name");
+		engine.restartAdapter(name);
+		return Maps.of(Fields.NAME, Strings.create(name), Fields.STATUS, ADAPTER_RUNNING);
+	}
+
 	@SuppressWarnings("unchecked")
 	ACell adapterConfigure(ACell input) {
 		String name = requireName(input, "name");
@@ -363,19 +390,17 @@ public class VenueAdapter extends AAdapter {
 
 	// ========== module load / unload ==========
 
-	@SuppressWarnings("unchecked")
 	ACell moduleLoad(ACell input) {
 		String ref = requireName(input, "module");
 		Path jar = Modules.resolveDynamicPath(engine.config(), ref);
 		AString sha = RT.ensureString(RT.getIn(input, K_SHA256));
-		ACell cfgCell = RT.getIn(input, K_CONFIG);
-		AMap<AString, ACell> cfg = (cfgCell instanceof AMap) ? (AMap<AString, ACell>) cfgCell : Maps.empty();
 		Modules.LoadedModule module;
 		try {
-			module = Modules.load(engine, jar, (sha != null) ? sha.toString() : null, cfg);
-		} catch (IllegalStateException | IllegalArgumentException e) {
-			// The jar, its digest and its settings are the caller's: a jar that is
-			// missing, unverified or holds no adapters, or a setting it refuses
+			module = Modules.load(engine, jar, (sha != null) ? sha.toString() : null);
+		} catch (IllegalStateException e) {
+			// The jar and its digest are the caller's: a jar that is missing,
+			// unverified or holds no adapters. A setting an adapter refuses
+			// arrives as the configuration error it is.
 			throw new InvalidInputException(e.getMessage(), e);
 		}
 		return moduleEntry(module);
@@ -384,7 +409,7 @@ public class VenueAdapter extends AAdapter {
 	ACell moduleUnload(ACell input) {
 		String name = requireName(input, "name");
 		if (!engine.config().isDynamicModulesEnabled()) {
-			throw new NotSupportedException(
+			throw new UnsupportedException(
 				"Dynamic module loading is disabled on this venue (set dynamicModules.enabled)");
 		}
 		Modules.LoadedModule module = Modules.unload(engine, name);
@@ -394,7 +419,7 @@ public class VenueAdapter extends AAdapter {
 	// ========== store garbage collection ==========
 
 	/**
-	 * {@code venue/gc} (covia#452): {@code status}/{@code cancel} answer at
+	 * {@code venue:gc} (covia#452): {@code status}/{@code cancel} answer at
 	 * once; otherwise one online cycle runs on its own thread with the Job
 	 * {@code STARTED} throughout — cancelling the Job cancels the cycle, which
 	 * rolls the store back to its original file. With {@code restart}, both
@@ -426,9 +451,9 @@ public class VenueAdapter extends AAdapter {
 		boolean restart = CVMBool.TRUE.equals(RT.getIn(input, K_RESTART));
 		long startupTimeout = 60_000;
 		if (restart) {
-			engine.requireVenueAuthority(ctx, PROCESS_RESOURCE, Abilities.VENUE_RESTART);
+			engine.requireVenueAuthority(ctx, PROCESS_RESOURCE, Abilities.ADMIN_VENUE_RESTART);
 			if (!engine.hasProcessControl()) {
-				throw new NotSupportedException(
+				throw new UnsupportedException(
 					"Process restart is unavailable: this venue is not managed by MainVenue");
 			}
 			ACell timeoutCell = RT.getIn(input, K_STARTUP_TIMEOUT);
@@ -469,7 +494,7 @@ public class VenueAdapter extends AAdapter {
 				}
 				if (restart) {
 					// Registered before this Job completes: the handoff follows its
-					// successful, persisted result, exactly as venue/restart does
+					// successful, persisted result, exactly as venue:restart does
 					var plan = engine.requestProcessRestart(null, null, timeout, job);
 					if (r.backupFile() == null) out = out.assoc(K_RECLAIMED_AT, Strings.create("restart"));
 					out = out.assoc(K_RESTART, Maps.of(

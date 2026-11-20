@@ -1,0 +1,18 @@
+{
+	"name": "Callable Gate: Anyone",
+	"description": "A callable gate that admits every caller, the public principal included. Name it as a callable's gate to let anyone call it.",
+	"dateCreated": "2026-11-13T00:00:00Z",
+	"operation": {
+		"adapter": "callable:gates/anyone",
+		"readOnly": true,
+		"input": {
+			"type": "object",
+			"properties": {
+				"operation": { "type": "string", "description": "The callable being called, <ownerDID>/x/callable/<name>" },
+				"input": { "description": "The call's input" },
+				"caller": { "type": "string", "description": "The caller's DID" }
+			}
+		},
+		"output": { "type": "boolean" }
+	}
+}

@@ -67,9 +67,9 @@ final class ReleasedAgents {
 		User user = venue.users().ensure(owner);
 		Map<AString, ACell> records = new HashMap<>();
 		for (ACell agentCase : cases()) {
-			Agent agent = user.ensureAgent(id(agentCase), (AMap<AString, ACell>) RT.getIn(agentCase, Fields.CONFIG), null);
+			Agent agent = TestAgents.ensure(user, id(agentCase), (AMap<AString, ACell>) RT.getIn(agentCase, Fields.CONFIG), null);
 			AString status = RT.ensureString(RT.getIn(agentCase, Fields.STATUS));
-			if (status != null) agent.putRecord(agent.getRecord().assoc(Agent.KEY_STATUS, status));
+			if (status != null) agent.cursor().set(agent.getRecord().assoc(Agent.KEY_STATUS, status));
 			assertNull(agent.getRecord().get(Agent.KEY_CONTROLLER), "no release wrote a controller");
 			records.put(id(agentCase), agent.getRecord());
 		}

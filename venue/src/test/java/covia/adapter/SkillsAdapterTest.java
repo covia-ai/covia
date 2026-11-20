@@ -308,10 +308,10 @@ public class SkillsAdapterTest {
 			() -> adapter.configure(Maps.of(
 				SkillsAdapter.K_DEFAULT_SKILLS, Vectors.of(CVMLong.create(42))), true))
 			.getMessage().contains(SkillsAdapter.K_DEFAULT_SKILLS.toString()));
-		assertTrue(adapter.configure(Maps.of(
-			SkillsAdapter.K_DEFAULT_SKILLSETS, Vectors.of(Strings.create("v/skills/root"))), true));
-		assertTrue(adapter.configure(Maps.empty(), true));
-		assertTrue(adapter.configure(null, true));
+		adapter.configure(Maps.of(
+			SkillsAdapter.K_DEFAULT_SKILLSETS, Vectors.of(Strings.create("v/skills/root"))), true);
+		adapter.configure(Maps.empty(), true);
+		adapter.configure(null, true);
 	}
 
 	/**

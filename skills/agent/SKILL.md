@@ -18,7 +18,7 @@ agent that cannot do the intended work:
 
 1. **`config.operation` must be a plain string** — e.g. `"v/ops/llmagent/chat"`, never `{"name": "v/ops/llmagent/chat"}`. The agent runner calls `RT.ensureString()` on this field.
 
-2. **Use `agent_request` with `input` parameter** to submit work — not `task`, not `message`. Requests create trackable Jobs with immutable records.
+2. **Use `agent_request` with `input` parameter** to submit work — not `task`, not `message`. Requests create trackable Jobs with immutable records. Only an agent whose config sets `acceptTasks: true` takes them, as the standard templates other than `minimal` do; a request to any other agent is refused.
 
 3. **`config` is the single home for ALL agent settings (#144)** — `operation`, `llmOperation`, `model`, `systemPrompt`, `tools`, `caps` all live in the top-level `config` map. Passing a `config` key inside `state` is rejected with an error.
 
@@ -26,7 +26,7 @@ agent that cannot do the intended work:
 
 5. **Operation references are lattice paths, not adapter shorthand** — `config.operation`, `llmOperation`, and operation entries in `tools` must be resolvable paths such as `v/ops/covia/write`, never `covia:write`. Create returns warnings for unavailable configured tools, and for tools naming another venue's operation, which the agent can use only while that venue can be reached; prefer an operation on this venue. Harness tools (`subgoal`, `complete`, `fail`, `compact`, `context_load`, `context_unload`, `more_tools`, and `skill_load` when `config.skills` or `config.skillsets` is non-empty) are bare names. A custom read/write agent must declare those operations or start from `worker`.
 
-6. **Another user's agent needs admission or a delegation (#447)** — `agent_request` / `agent_message` on `<ownerDID>/g/<id>` is refused unless the target's `config.accepts` admits the caller (`"venue"` = the venue operator and its agents only; `"anyone"` = every caller, anonymous ones included; or an exact list of principal DIDs — `<userDID>:g:<agentId>` for one agent, a user DID for that user only, no prefixes) or the caller presents a UCAN for `agent/request`. Admission covers talking only; reads, updates and control still need a delegation. A malformed `accepts` is rejected at create/update.
+6. **Another user's agent needs admission or a delegation (#447)** — `agent_request` / `agent_message` on `<ownerDID>/g/<id>` is refused unless the target's `config.accepts` admits the caller (`"venue"` = the venue operator and what acts for it; `"anyone"` = every caller, anonymous ones included; or a list of principal DIDs, each admitting what acts for it — a user DID admits that user and its agents, `<userDID>:g:<agentId>` that agent and the agents under it, no prefixes), and only as far as the asking agent's caps cover `agent/request` or `agent/message` on the target, or the caller presents a UCAN for `agent/request`. Admission covers talking only; reads, updates and control still need a delegation. A malformed `accepts` is rejected at create/update.
 
 ## Commands
 
@@ -52,6 +52,12 @@ as a tool, an MCP or A2A credential, a secret-backed signing key) only with
 in its caps; leave out `nb` for a local use such as signing. Call `langchain_models` first when
 provider readiness matters; the template is provider-neutral and otherwise uses
 the venue default.
+
+An HTTP tool call, including a model called directly as a tool, also needs
+`{"with":"outbound","can":"outbound/http/post","nb":{"url":"<endpoint>"}}`
+(or the appropriate HTTP method). Configured model calls run under harness
+controller authority and do not grant the agent outbound permission. Host policy
+still applies; see [OUTBOUND.md](../../venue/docs/OUTBOUND.md).
 
 ### Create from a template
 

@@ -82,6 +82,7 @@ public class GoalTreeAdapterTest {
 				Fields.CONFIG, Maps.of(
 					Fields.OPERATION, "v/ops/goaltree/chat",
 					"llmOperation", "v/test/ops/llm",
+					"acceptTasks", true,
 					"caps", Vectors.of(Maps.of(
 						"with", Strings.create("w/allowed/"),
 						"can", Strings.create("crud/read"))))),
@@ -155,6 +156,57 @@ public class GoalTreeAdapterTest {
 			(AMap<AString, ACell>) frames.get(0));
 		assertTrue(Skills.isSkillEntry(rootLoads.get(Strings.create("w/skills/alpha"))),
 			"skill entry must persist on the frame tier: " + rootLoads);
+	}
+
+	/** A config change the prompt does not read rebuilds the cached prefix as it
+	 *  was, and inspection between the change and the next turn shows that
+	 *  prefix: a skill loaded since stays in the conversation. */
+	@Test
+	public void testConfigChangeOutsideThePromptRebuildsTheSamePrefix() {
+		writeAlphaSkill();
+		engine.jobs().invokeOperation("v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "skill-rebuild-goal",
+				Fields.CONFIG, Maps.of(
+					Fields.OPERATION, "v/ops/goaltree/chat",
+					"llmOperation", "v/test/ops/skillllm",
+					"caps", "unrestricted",
+					"skillsets", Vectors.of(Strings.create("w/skills")))),
+			ALICE).awaitResult(5000);
+		Agent agent = engine.getVenueState().users().user(ALICE_DID).agent("skill-rebuild-goal");
+		Blob sid = Blob.fromHex("44440003444400034444000344440003");
+		agent.sessions().create(sid, ALICE_DID, null);
+		agent.session(sid).appendPending(Maps.of(
+			Strings.intern("content"), Strings.create("use the alpha skill")));
+		engine.jobs().invokeOperation("v/ops/agent/trigger",
+			Maps.of(Fields.AGENT_ID, "skill-rebuild-goal"), ALICE).awaitResult(5000);
+		AgentWatch.awaitTimeline(engine, ALICE_DID, agent, 1);
+		ContextAssembler.Rendered before = ContextAssembler.Rendered.fromCell(RT.getIn(
+			agent.session(sid).getRecord(), Fields.FRAMES, CVMLong.ZERO, GoalTreeContext.K_RENDERED_CONTEXT));
+		assertNotNull(before);
+
+		engine.jobs().invokeOperation("v/ops/agent/update", Maps.of(
+			Fields.AGENT_ID, "skill-rebuild-goal",
+			Fields.CONFIG, Maps.of("temperature", null)), ALICE).awaitResult(5000);
+		AMap<AString, ACell> inspected = RT.ensureMap(engine.jobs().invokeOperation("v/ops/agent/context",
+			Maps.of(Fields.AGENT_ID, "skill-rebuild-goal", Fields.SESSION_ID, sid.toHexString()),
+			ALICE).awaitResult(5000));
+		assertEquals(before.tools(), inspected.get(Fields.TOOLS),
+			"inspection before the next turn shows the tools that turn sends");
+		agent.session(sid).appendPending(Maps.of(
+			Strings.intern("content"), Strings.create("carry on")));
+		engine.jobs().invokeOperation("v/ops/agent/trigger",
+			Maps.of(Fields.AGENT_ID, "skill-rebuild-goal"), ALICE).awaitResult(5000);
+		AgentWatch.awaitTimeline(engine, ALICE_DID, agent, 2);
+
+		agent = engine.getVenueState().users().user(ALICE_DID).agent("skill-rebuild-goal");
+		ContextAssembler.Rendered after = ContextAssembler.Rendered.fromCell(RT.getIn(
+			agent.session(sid).getRecord(), Fields.FRAMES, CVMLong.ZERO, GoalTreeContext.K_RENDERED_CONTEXT));
+		assertEquals(agent.getConfig(), after.sourceConfig(), "the prefix was rebuilt for the changed config");
+		assertEquals(before.tools(), after.tools(), "the fixed tools are as they were");
+		assertEquals(before.messages(), after.messages(), "the initial messages are as they were");
+		AString turn2 = RT.ensureString(RT.getIn(agent.getTimeline().get(1), Fields.RESULT));
+		assertTrue(turn2.toString().contains("SKILL_BODY_PRESENT") && turn2.toString().contains("SKILL_TOOLS_ACTIVE"),
+			"the skill stays in use from the conversation: " + turn2);
 	}
 
 	@Test
@@ -266,7 +318,8 @@ public class GoalTreeAdapterTest {
 			Maps.of(Fields.AGENT_ID, "task-tools-goal",
 				Fields.CONFIG, Maps.of(
 					Fields.OPERATION, "v/ops/goaltree/chat",
-					"llmOperation", "v/test/ops/taskllm")),
+					"llmOperation", "v/test/ops/taskllm",
+					"acceptTasks", true)),
 			ALICE).awaitResult(5000);
 
 		// The task renders last, with the task tools offered — as every runtime renders it.
@@ -282,7 +335,7 @@ public class GoalTreeAdapterTest {
 		// job completes with the delivered result, the frame ends.
 		try (AgentWatch watch = AgentWatch.open(engine, ALICE_DID, "task-tools-goal")) {
 			ACell result = engine.jobs().invokeOperation("v/ops/agent/request",
-				Maps.of(Fields.AGENT_ID, "task-tools-goal", Fields.MESSAGE, "do the thing", "timeout", 15000L),
+				Maps.of(Fields.AGENT_ID, "task-tools-goal", Fields.INPUT, "do the thing", "timeout", 15000L),
 				ALICE).awaitResult(20000);
 			assertNotNull(result, "the task's result reaches the requester");
 			watch.awaitCycles(1);
@@ -345,8 +398,8 @@ public class GoalTreeAdapterTest {
 		assertEquals("root done", RT.getIn(inferences.get(1), Fields.REPLY, "content").toString());
 
 		// The session keeps only the root: the child's history exists nowhere else.
-		AMap<AString, ACell> session = agent.getSession(
-			Blob.fromHex(RT.getIn(chat, Fields.SESSION_ID).toString()));
+		AMap<AString, ACell> session = agent.session(
+			(Blob) RT.getIn(chat, Fields.SESSION_ID)).getRecord();
 		assertEquals(1, RT.ensureVector(RT.getIn(session, Fields.FRAMES)).count());
 	}
 
@@ -403,13 +456,23 @@ public class GoalTreeAdapterTest {
 	/** An agent offered only subgoal: its child scripted by {@code model}.
 	 *  Returns a watch on it, opened before any work. */
 	private AgentWatch createSubgoalAgent(String agentId, AString model) {
+		return createSubgoalAgent(agentId, model, false);
+	}
+
+	/** As {@link #createSubgoalAgent}, for an agent that takes tasks. */
+	private AgentWatch createSubgoalTaskAgent(String agentId, AString model) {
+		return createSubgoalAgent(agentId, model, true);
+	}
+
+	private AgentWatch createSubgoalAgent(String agentId, AString model, boolean acceptTasks) {
 		engine.jobs().invokeOperation("v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, agentId,
 				Fields.CONFIG, Maps.of(
 					Fields.OPERATION, "v/ops/goaltree/chat",
 					"llmOperation", "v/test/ops/subgoalechollm",
 					"model", model,
-					Fields.TOOLS, Vectors.of(Strings.create("subgoal")))),
+					Fields.TOOLS, Vectors.of(Strings.create("subgoal")),
+					"acceptTasks", acceptTasks)),
 			ALICE).awaitResult(5000);
 		return AgentWatch.open(engine, ALICE_DID, agentId);
 	}
@@ -444,9 +507,9 @@ public class GoalTreeAdapterTest {
 	@Test
 	public void testAChildCannotResolveTheTask() {
 		AMap<AString, ACell> child;
-		try (AgentWatch watch = createSubgoalAgent("subgoal-task", TestAdapter.SUBGOAL_CHILD_RESOLVES_TASK)) {
+		try (AgentWatch watch = createSubgoalTaskAgent("subgoal-task", TestAdapter.SUBGOAL_CHILD_RESOLVES_TASK)) {
 			ACell result = engine.jobs().invokeOperation("v/ops/agent/request",
-				Maps.of(Fields.AGENT_ID, "subgoal-task", Fields.MESSAGE, "decompose this", "timeout", 15000L),
+				Maps.of(Fields.AGENT_ID, "subgoal-task", Fields.INPUT, "decompose this", "timeout", 15000L),
 				ALICE).awaitResult(20000);
 			assertEquals(Strings.create("root done"), RT.getIn(result, Fields.OUTPUT), String.valueOf(result));
 			child = RT.ensureMap(RT.getIn(rootSubgoalCall("subgoal-task", watch), Fields.FRAME));
@@ -479,8 +542,8 @@ public class GoalTreeAdapterTest {
 			watch.awaitCycles(1);
 		}
 		Agent agent = engine.getVenueState().users().user(ALICE_DID).agent("subgoal-fails");
-		AMap<AString, ACell> session = agent.getSession(
-			Blob.fromHex(RT.getIn(chat, Fields.SESSION_ID).toString()));
+		AMap<AString, ACell> session = agent.session(
+			(Blob) RT.getIn(chat, Fields.SESSION_ID)).getRecord();
 		assertEquals(1, RT.ensureVector(RT.getIn(session, Fields.FRAMES)).count(), "the failed child was popped");
 
 		AVector<ACell> inferences = RT.ensureVector(RT.ensureMap(agent.getTimeline().get(0)).get(Fields.INFERENCES));
@@ -847,7 +910,8 @@ public class GoalTreeAdapterTest {
 		AMap<AString, ACell> config = Maps.of(
 			Fields.OPERATION, "v/ops/goaltree/chat",
 			"llmOperation", "v/test/ops/llm",
-			"model", "strict-goal-schema-test");
+			"model", "strict-goal-schema-test",
+			"acceptTasks", true);
 		engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(
 			Fields.AGENT_ID, "strict-goal-schema-agent",
 			Fields.CONFIG, TestEngine.unrestricted(config)), ALICE).awaitResult(5000);
@@ -880,9 +944,10 @@ public class GoalTreeAdapterTest {
 			RT.getIn(root, GoalTreeContext.K_RENDERED_CONTEXT));
 		assertNotNull(rendered);
 		AVector<ACell> tools = rendered.tools();
-		assertTrue(hasNamedTool(tools, TaskTools.COMPLETE));
 		assertFalse(hasNamedTool(tools, "complete"),
 			"request schema must not specialise the persistent root palette");
+		assertTrue(RT.ensureVector(RT.getIn(agent.getTimeline().get(0), Fields.TOOLS))
+			.contains(Strings.create(TaskTools.COMPLETE)), "the task's cycle offered the task tools");
 	}
 
 	@Test
@@ -1045,6 +1110,8 @@ public class GoalTreeAdapterTest {
 			Agent.KEY_CONFIG, Maps.of(
 				Strings.create("llmOperation"), Strings.create("v/test/ops/compactllm"),
 				Strings.create("systemPrompt"), Strings.create("You are a test agent."),
+				// Keep no exchange, so this one-exchange conversation compacts.
+				AbstractLLMAdapter.K_COMPACT_KEEP, CVMLong.ZERO,
 				Fields.TOOLS, Vectors.of(Strings.create(HarnessTools.COMPACT))),
 			Fields.MESSAGES, Vectors.of(
 				(ACell) Maps.of(Strings.create("content"), Strings.create("Test compact"))));

@@ -10,6 +10,16 @@ argument-hint: "<setup|create|delete|status|send|allow|test|teach> <binding-name
 
 A binding connects one Slack app installation (app, workspace, bot user) to a handler. It is either **created by its user** with `v/ops/slack/create` (its allow-listed senders come from its creator — an agent as itself, never its owner — persisted in the venue-private adapter workspace, survives restarts, removed with `v/ops/slack/delete`) or **declared by the operator** in `adapters.slack.bots.<name>` (needed when its senders must come from another identity, e.g. `"user": "public"` on a local dev venue). Full reference: `covia-slack/README.md`.
 
+## Bounded outbound callers
+
+Explicit sends need `slack/send` on `slack/<binding>` and
+`outbound/http/post` on the caller's `outbound` resource. Restrict `nb.url`
+to the actual API destination (for example `https://slack.com/api`). Stored
+credentials retain their own checks. Background binding
+work uses the binding's current principal, including a creator agent's caps.
+Giving the served agent a model does not grant it outbound access: configured
+model calls run under harness/controller authority.
+
 ## `setup <binding-name>` — Bring a binding up
 
 Walk the user through these steps; each is idempotent.
@@ -38,7 +48,7 @@ Walk the user through these steps; each is idempotent.
 
 5. **Load the module.** Build once (`mvn -pl covia-slack -am package -DskipTests` produces `covia-slack/target/covia-slack-<ver>-module.jar`), then declare it in the venue config (`"modules": ["modules/covia-slack-<ver>-module.jar"]`) or load it at runtime with `v/ops/venue/module/load` (see `/adapters load`). Verify: `covia_read path=v/info/adapters/slack`.
 
-6. **Create the agent** (skip for an operation handler) from the module's template — it knows the venue's `[From: …]` element, per-DM and per-thread sessions, plain-text replies, memory and `slack:send`:
+6. **Create the agent** (skip for an operation handler) from the module's template — it knows the venue's `[From (venue-verified): …]` element, per-DM and per-thread sessions, plain-text replies, memory and `slack:send`:
    ```
    agent_create  agentId="SlackAssistant"  config=["v/agents/templates/slack", {"llmOperation": "v/ops/langchain/anthropic", "model": "claude-sonnet-5-5", "caps": "unrestricted"}]
    ```
@@ -102,4 +112,4 @@ The module ships the `slack` agent skill at `v/skills/adapters/slack` (send, sta
 | Replies show `**` or `<@…>` literally | Replies are plain text by design; the template asks agents to write plain text. |
 | Some events vanish with several Socket Mode bindings | Bindings of one app hold different app tokens; give them all the same token so they share one connection. |
 | Two replies to one message | Two bindings admit the same workspace and channel; split their `allowChannels` or senders. |
-| `create` fails with *Capability denied* | Caller lacks `slack/manage`; use a dev venue with unrestricted public caps or authenticate. |
+| `create` fails with *Capability denied* | Check the named missing ability: management needs `slack/manage`; HTTP setup/sends also need bounded outbound grants. |

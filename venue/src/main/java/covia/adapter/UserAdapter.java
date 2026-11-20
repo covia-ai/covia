@@ -25,7 +25,7 @@ import covia.exception.AuthException;
 import covia.exception.ConflictException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
-import covia.exception.NotSupportedException;
+import covia.exception.UnsupportedException;
 import covia.lattice.Covia;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -69,9 +69,12 @@ public class UserAdapter extends AAdapter {
 	public static final String SEED_REF_REQUIRED = "seed must be a secret reference (s/NAME or <did>/s/NAME), never a raw seed";
 	public static final String INVALID_SEED = "seed must name a secret holding a 32-byte hexadecimal Ed25519 seed";
 
+	/** The adapter's name, which also names the route record of a call into a user under {@code admin/sudo} ({@link covia.venue.Engine#sudoContext}). */
+	public static final String NAME = "user";
+
 	@Override
 	public String getName() {
-		return "user";
+		return NAME;
 	}
 
 	@Override
@@ -100,6 +103,11 @@ public class UserAdapter extends AAdapter {
 	@Override
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx,
 			AMap<AString, ACell> meta, ACell input) {
+		try {
+			input = expandedUsers(input);
+		} catch (InvalidInputException e) {
+			return CompletableFuture.failedFuture(e);
+		}
 		String subOperation = getSubOperation(meta);
 		String event = switch (subOperation) {
 			case "create" -> Audit.USER_CREATE;
@@ -127,7 +135,7 @@ public class UserAdapter extends AAdapter {
 				case "authentication-add" -> authenticationAdd(ctx, input);
 				case "authentication-revoke" -> authenticationRevoke(ctx, input);
 				case "authentication-list" -> authenticationList(ctx, input);
-				default -> throw new NotSupportedException(
+				default -> throw new UnsupportedException(
 					"Unknown user operation: " + subOperation);
 			});
 		} catch (Exception e) {
@@ -138,14 +146,31 @@ public class UserAdapter extends AAdapter {
 			Object target = RT.getIn(input, "clone".equals(subOperation) ? Fields.TO : Fields.DID);
 			Object key = RT.getIn(input, Fields.KEY);
 			Object operation = "sudo".equals(subOperation) ? RT.getIn(input, Fields.OPERATION) : null;
-			result.whenComplete((r, t) -> engine.audit().event(event,
-				Audit.K_DID, ctx.getCallerDID(), Audit.K_TARGET, target, "key", key,
+			result.whenComplete((r, t) -> engine.audit().event(event, ctx,
+				Audit.K_TARGET, target, "key", key,
 				Audit.K_OPERATION, operation, Audit.K_OUTCOME, (t == null) ? Audit.OK : Audit.FAILED));
 		}
 		return result;
 	}
 
-	/** Explicitly execute one operation in another user's namespace. */
+	/**
+	 * {@code input} with the users it names, {@code did} and clone's
+	 * {@code from} and {@code to}, expanded where they arrive
+	 * ({@link Engine#expandPrincipal}).
+	 */
+	private ACell expandedUsers(ACell input) {
+		if (!(input instanceof AMap<?, ?> map)) return input;
+		@SuppressWarnings("unchecked")
+		AMap<AString, ACell> fields = (AMap<AString, ACell>) map;
+		for (AString field : new AString[] { Fields.DID, Fields.FROM, Fields.TO }) {
+			if (!(fields.get(field) instanceof AString given)) continue;
+			AString full = engine.expandPrincipal(given);
+			if (full != given) fields = fields.assoc(field, full);
+		}
+		return fields;
+	}
+
+	/** Run one operation as another user, with that user's whole authority ({@link covia.venue.Engine#sudoContext}). */
 	private CompletableFuture<ACell> sudo(RequestContext ctx, ACell input) {
 		try {
 			AString userDID = requireDID(RT.ensureString(RT.getIn(input, Fields.DID)));
@@ -159,7 +184,7 @@ public class UserAdapter extends AAdapter {
 	}
 
 	private ACell create(RequestContext ctx, ACell input) {
-		requireVenueUserAuthority(ctx, Abilities.USER_CREATE);
+		requireVenueUserAuthority(ctx, Abilities.ADMIN_USER_CREATE);
 		AString suppliedDID = RT.ensureString(RT.getIn(input, Fields.DID));
 		AString username = RT.ensureString(RT.getIn(input, USERNAME));
 		AVector<ACell> authenticationKeys =
@@ -188,7 +213,7 @@ public class UserAdapter extends AAdapter {
 		if (username != null) {
 			engine.getAuth().ensureManagedUser(username, did);
 			if (authenticationKeys != null && !engine.getAuth().installFirstAuthenticationKeys(
-					username, authenticationKeys, ctx.getCallerDID())) {
+					username, authenticationKeys, ctx.getAuthorityDID())) {
 				// Preserve create's idempotency: a repeated identical request
 				// is harmless, but rotation uses the explicit add operation.
 				for (long i = 0; i < authenticationKeys.count(); i++) {
@@ -213,13 +238,13 @@ public class UserAdapter extends AAdapter {
 	private ACell export(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
 		if (!(ctx.getJob() instanceof VenueJob job) || !job.isDirectRun()
 				|| ctx.getExecutionScope().agentId() != null || ctx.getExecutionScope().sessionId() != null || ctx.getExecutionScope().taskId() != null
-				|| !ctx.getCallerDID().equals(ctx.getUserDID())) throw new AuthException(EXPORT_DIRECT_ONLY);
+				|| engine.inPersonDenial(ctx) != null) throw new AuthException(EXPORT_DIRECT_ONLY);
 		// A caller-controlled output schema could put the state in validation logs.
 		if (!getOperations().get(EXPORT).get(Fields.OPERATION).equals(meta.get(Fields.OPERATION))) {
 			throw new AuthException(EXPORT_DEFINITION_REQUIRED);
 		}
 		AString did = requireDID(targetDID(ctx, input));
-		requireSelfOrVenueUserAuthority(ctx, did, Abilities.USER_EXPORT);
+		requireSelfOrVenueUserAuthority(ctx, did, Abilities.ADMIN_USER_EXPORT);
 		ACell secrets = RT.getIn(input, SECRETS);
 		if (secrets != null && !(secrets instanceof CVMBool)) throw new InvalidInputException(INVALID_SECRETS);
 		AccountKey recipient = null;
@@ -241,7 +266,7 @@ public class UserAdapter extends AAdapter {
 	 */
 	private ACell importUser(RequestContext ctx, ACell input) {
 		AString did = requireDID(RT.ensureString(RT.getIn(input, Fields.DID)));
-		requireVenueUserAuthority(ctx, Abilities.USER_IMPORT);
+		requireVenueUserAuthority(ctx, Abilities.ADMIN_USER_IMPORT);
 		ABlob export = Blobs.parse(RT.getIn(input, EXPORT));
 		if (export == null) throw new InvalidInputException(UserExports.NOT_AN_EXPORT);
 		boolean created = new UserExports(engine).importUser(export, did, seed(ctx, input));
@@ -251,8 +276,8 @@ public class UserAdapter extends AAdapter {
 	private ACell cloneUser(RequestContext ctx, ACell input) {
 		AString from = requireDID(RT.ensureString(RT.getIn(input, Fields.FROM)));
 		AString to = requireDID(RT.ensureString(RT.getIn(input, Fields.TO)));
-		requireSelfOrVenueUserAuthority(ctx, from, Abilities.USER_EXPORT);
-		requireVenueUserAuthority(ctx, Abilities.USER_IMPORT);
+		requireSelfOrVenueUserAuthority(ctx, from, Abilities.ADMIN_USER_EXPORT);
+		requireVenueUserAuthority(ctx, Abilities.ADMIN_USER_IMPORT);
 		boolean created = new UserExports(engine).cloneUser(from, to);
 		return Maps.of(Fields.FROM, from, Fields.TO, to, CREATED, CVMBool.create(created));
 	}
@@ -273,13 +298,14 @@ public class UserAdapter extends AAdapter {
 	 *  capability checks as the {@code user:info} operation. A user reading
 	 *  their own entry sees no venue bookkeeping; an operator sees its {@code meta}. */
 	public ACell info(RequestContext ctx, ACell input) {
-		AString did = RT.ensureString(RT.getIn(input, Fields.DID));
-		if (did == null) did = ctx.getCallerDID();
+		AString did = RT.ensureString(RT.getIn(expandedUsers(input), Fields.DID));
+		if (did == null) did = ctx.getAuthorityDID();
 		if (did == null) throw new AuthException("Authentication required");
 		did = requireDID(did);
-		boolean operator = engine.hasVenueAuthority(ctx, USERS_RESOURCE, Abilities.USER_READ);
-		if (!operator && !did.equals(ctx.getCallerDID())) {
-			requireVenueUserAuthority(ctx, Abilities.USER_READ);
+		boolean operator = engine.hasVenueAuthority(ctx, USERS_RESOURCE, Abilities.ADMIN_USER_READ);
+		// The user itself with all of its authority, as for managing the user
+		if (!operator && !(did.equals(ctx.getAuthorityDID()) && engine.holdsAuthorityOf(ctx, did))) {
+			requireVenueUserAuthority(ctx, Abilities.ADMIN_USER_READ);
 		}
 		User user = engine.getVenueState().users().user(did);
 		if (user == null) {
@@ -291,7 +317,7 @@ public class UserAdapter extends AAdapter {
 	/** Job-free REST reads (#255) call this directly, reusing the same
 	 *  capability checks as the {@code user:list} operation. */
 	public ACell list(RequestContext ctx) {
-		requireVenueUserAuthority(ctx, Abilities.USER_READ);
+		requireVenueUserAuthority(ctx, Abilities.ADMIN_USER_READ);
 		Users store = engine.getVenueState().users();
 		AMap<AString, ACell> all = store.getAll();
 		AVector<ACell> result = Vectors.empty();
@@ -305,13 +331,13 @@ public class UserAdapter extends AAdapter {
 	}
 
 	private ACell authenticationAdd(RequestContext ctx, ACell input) {
-		AString did = targetManagedUser(ctx, input, Abilities.USER_AUTH_MANAGE);
+		AString did = targetManagedUser(ctx, input, Abilities.ADMIN_USER_AUTH_ADD);
 		AString id = engine.managedUserName(did);
 		AString key = RT.ensureString(RT.getIn(input, Fields.KEY));
 		AString label = RT.ensureString(RT.getIn(input, Fields.LABEL));
 		if (key == null) throw new InvalidInputException("key is required");
 		boolean added = engine.getAuth().addAuthenticationKey(
-			id, key, ctx.getCallerDID(), label);
+			id, key, ctx.getAuthorityDID(), label);
 		engine.flush();
 		return Maps.of(
 			Fields.DID, did,
@@ -320,12 +346,12 @@ public class UserAdapter extends AAdapter {
 	}
 
 	private ACell authenticationRevoke(RequestContext ctx, ACell input) {
-		AString did = targetManagedUser(ctx, input, Abilities.USER_AUTH_MANAGE);
+		AString did = targetManagedUser(ctx, input, Abilities.ADMIN_USER_AUTH_REVOKE);
 		AString id = engine.managedUserName(did);
 		AString key = RT.ensureString(RT.getIn(input, Fields.KEY));
 		if (key == null) throw new InvalidInputException("key is required");
 		boolean revoked = engine.getAuth().revokeAuthenticationKey(
-			id, key, ctx.getCallerDID(), engine.isDirectVenue(ctx));
+			id, key, ctx.getAuthorityDID(), engine.isDirectVenue(ctx));
 		engine.flush();
 		return Maps.of(
 			Fields.DID, did,
@@ -336,8 +362,8 @@ public class UserAdapter extends AAdapter {
 	/** Job-free REST reads (#255) call this directly, reusing the same
 	 *  capability checks as the {@code user:authentication-list} operation. */
 	public ACell authenticationList(RequestContext ctx, ACell input) {
-		AString did = requireDID(targetDID(ctx, input));
-		requireSelfOrVenueUserAuthority(ctx, did, Abilities.USER_READ);
+		AString did = requireDID(targetDID(ctx, expandedUsers(input)));
+		requireSelfOrVenueUserAuthority(ctx, did, Abilities.ADMIN_USER_READ);
 		AString id = engine.managedUserName(did);
 		if (id != null) {
 			return Maps.of(
@@ -363,7 +389,7 @@ public class UserAdapter extends AAdapter {
 	private AString targetManagedUser(RequestContext ctx, ACell input, AString ability) {
 		AString did = targetDID(ctx, input);
 		if (engine.managedUserName(did) == null) {
-			throw new NotSupportedException(
+			throw new UnsupportedException(
 				"Authentication keys belong only to venue-managed named users");
 		}
 		requireSelfOrVenueUserAuthority(ctx, did, ability);
@@ -373,13 +399,16 @@ public class UserAdapter extends AAdapter {
 	/** The addressed user DID, defaulting to the caller. */
 	private AString targetDID(RequestContext ctx, ACell input) {
 		AString did = RT.ensureString(RT.getIn(input, Fields.DID));
-		if (did == null) did = ctx.getCallerDID();
+		if (did == null) did = ctx.getAuthorityDID();
 		if (did == null) throw new AuthException("Authentication required");
 		return did;
 	}
 
 	private void requireSelfOrVenueUserAuthority(RequestContext ctx, AString did, AString ability) {
-		if (did.equals(ctx.getCallerDID()) && ctx.getExecutionScope().agentId() == null) return;
+		// The user itself in person, with all of its authority: not a request an
+		// access token narrows, nor one made for the user by another principal
+		if (did.equals(ctx.getAuthorityDID()) && engine.inPersonDenial(ctx) == null
+				&& ctx.getExecutionScope().agentId() == null && engine.holdsAuthorityOf(ctx, did)) return;
 		requireVenueUserAuthority(ctx, ability);
 	}
 

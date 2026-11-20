@@ -14,6 +14,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.parallel.Execution;
 import org.junit.jupiter.api.parallel.ExecutionMode;
+import org.junit.jupiter.api.parallel.Isolated;
 
 import convex.auth.ucan.Capability;
 import convex.auth.ucan.UCAN;
@@ -33,15 +34,18 @@ import convex.core.lang.RT;
 import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.AuthException;
+import covia.exception.IntegrityException;
 import covia.grid.Job;
 import covia.lattice.Namespace;
 import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.SecretStore;
+import covia.venue.TestLogs;
 
 /** Real dispatch and adversarial metadata tests for the secret disclosure boundary. */
 @Execution(ExecutionMode.SAME_THREAD)
+@Isolated("quiets the integrity failure logger process-wide")
 class SecretAdapterTest {
 
 	private static final String VALUE = "test-only-plaintext-never-in-history";
@@ -188,23 +192,23 @@ class SecretAdapterTest {
 			failure(run("extract", Maps.of("name", "SHARED_KEY"), anonymous)).getMessage());
 	}
 
-	@Test void extractionCannotBeDelegatedEvenWithAValidOwnerGrant() {
+	/** A delegate acting as the user under admin/sudo holds the user's whole authority, but is not the user in person. */
+	@Test void aSudoDelegateNeverExtracts() {
 		AKeyPair other = AKeyPair.generate();
 		AString did = UCAN.toDIDKey(other.getAccountKey());
 		engine.getVenueState().users().ensure(did);
-		UCAN proof = UCAN.create(identity, other.getAccountKey(), System.currentTimeMillis() / 1000 + 300,
-			Vectors.of(Capability.create(Strings.create(owner.getUserDID() + "/s/KEY"), Abilities.SECRET_EXTRACT)), Vectors.empty());
-		RequestContext delegated = RequestContext.of(did).withProofs(Vectors.of(proof.toMap())).onBehalfOf(owner.getUserDID());
-		// Establish that the capability is valid; the additional owner-only boundary must still refuse.
-		assertDoesNotThrow(() -> engine.requireResourceAccess(delegated, Strings.create("s/KEY"), Abilities.SECRET_EXTRACT));
+		UCAN sudo = UCAN.create(identity, other.getAccountKey(), System.currentTimeMillis() / 1000 + 300,
+			Vectors.of(Capability.create(owner.getUserDID(), Abilities.ADMIN_SUDO)), Vectors.empty());
+		RequestContext delegate = engine.sudoContext(RequestContext.of(did).withProofs(Vectors.of(sudo.toMap())), owner.getUserDID());
+		assertDoesNotThrow(() -> engine.requireResourceAccess(delegate, Strings.create("s/KEY"), Abilities.SECRET_EXTRACT),
+			"its authority covers the secret; only the in-person boundary refuses");
 		assertEquals(SecretAdapter.EXTRACT_DIRECT_ONLY, failure(engine.jobs().runOperation(
-			meta("extract"), Maps.of("name", "KEY"), delegated)).getMessage());
+			meta("extract"), Maps.of("name", "KEY"), delegate)).getMessage());
 	}
 
 	@Test void extractionRefusesAgentsSessionsTasksAndMcpTools() {
 		RequestContext agent = RequestContext.ofAgent(owner.getUserDID(), Strings.create("mina"));
 		for (RequestContext ctx : new RequestContext[] { agent,
-			RequestContext.of(agent.getCallerDID(), owner.getUserDID(), null),
 			agent.withCaps(Vectors.of(Capability.create(null, Strings.create("*")))),
 			owner.withSessionId(Blob.fromHex("01")), owner.withTaskId(Blob.fromHex("02")) }) {
 			assertEquals(SecretAdapter.EXTRACT_DIRECT_ONLY, failure(run("extract", Maps.of("name", "KEY"), ctx)).getMessage());
@@ -271,19 +275,28 @@ class SecretAdapterTest {
 		assertEquals(VALUE, engine.resolveSecret("s/RACE", owner));
 	}
 
-	@Test void missingAndUnreadableSecretsHaveDistinctSanitizedFailures() {
+	@Test void missingAndFailedSecretsHaveDistinctSanitizedFailures() throws Exception {
 		var user = engine.getVenueState().users().user(owner.getUserDID());
 		user.secrets().store("CORRUPT", VALUE, SecretStore.keys(AKeyPair.generate()));
 		put("UNKNOWN_VERSION", VALUE);
 		user.cursor().path(Namespace.S, Strings.create("UNKNOWN_VERSION"), Strings.create("keyVersion")).set(CVMLong.create(7));
-		user.cursor().path(Namespace.S, Strings.create("MALFORMED")).set(Maps.empty());
-		for (String name : new String[] { "MISSING", "CORRUPT", "UNKNOWN_VERSION", "MALFORMED" }) {
-			Throwable error = failure(run("extract", Maps.of("name", name), owner));
-			assertEquals("MISSING".equals(name) ? SecretAdapter.SECRET_UNAVAILABLE : SecretAdapter.SECRET_DECRYPT_FAILED,
-				error.getMessage());
-			assertNull(error.getCause());
-			denied(run("extract", Maps.of("name", name), scope("s/", Capability.CRUD_READ)));
-		}
+		user.secrets().path(Strings.create("MALFORMED")).set(Maps.empty());
+		// Each failed integrity check is logged at ERROR, which a passing build does not print
+		TestLogs.quiet(IntegrityException.class, () -> {
+			for (String name : new String[] { "MISSING", "CORRUPT", "UNKNOWN_VERSION", "MALFORMED" }) {
+				Throwable error = failure(run("extract", Maps.of("name", name), owner));
+				boolean missing = "MISSING".equals(name);
+				assertEquals(missing ? SecretAdapter.SECRET_UNAVAILABLE : SecretAdapter.SECRET_INTEGRITY,
+					error.getMessage());
+				// A secret that failed its integrity check is the venue's failure, and carries why outside its message.
+				if (!missing) {
+					assertInstanceOf(IntegrityException.class, error, name);
+					assertNotNull(error.getCause(), name);
+				}
+				// Lacking the grant is refused as that before the secret is opened
+				denied(run("extract", Maps.of("name", name), scope("s/", Capability.CRUD_READ)));
+			}
+		});
 	}
 
 	@Test void recordingPolicyFailsClosed() {

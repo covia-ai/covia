@@ -2,7 +2,7 @@ package covia.exception;
 
 /**
  * Thrown when an operation requires authentication or authorisation that
- * the caller has not provided. Distinct from {@link IllegalArgumentException}
+ * the caller has not provided. Distinct from {@link InvalidInputException}
  * (bad input) and {@link SecurityException} (JVM-level security).
  */
 @SuppressWarnings("serial")

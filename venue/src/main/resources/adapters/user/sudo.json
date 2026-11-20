@@ -1,6 +1,6 @@
 {
   "name": "User sudo",
-  "description": "Explicitly executes one operation in another user's namespace. Requires user/sudo on the target DID, plus the target operation's invoke and point-of-action capabilities. The authenticated caller remains the actor.",
+  "description": "Runs one operation as another user, with that user's whole authority: what it does and makes is the user's, and the caller is its caller. Requires admin/sudo on the target DID, from a request no access token or callable narrows; the venue's own DID and its public principal cannot be targets. Acts that need the user in person, such as answering their approval requests, extracting a secret or minting their identity token, refuse it.",
   "operation": {
     "adapter": "user:sudo",
     "readOnly": false,
@@ -9,7 +9,7 @@
       "properties": {
         "did": {
           "type": "string",
-          "description": "Target user DID whose namespace the nested operation executes in"
+          "description": "Target user DID the nested operation runs as"
         },
         "operation": {
           "type": "string",

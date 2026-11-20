@@ -44,8 +44,8 @@ import covia.exception.AuthException;
 import covia.exception.ConflictException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
-import covia.exception.NotSupportedException;
 import covia.exception.UnavailableException;
+import covia.exception.UnsupportedException;
 import covia.venue.AdapterState;
 import covia.venue.Audit;
 import covia.venue.SecretStore;
@@ -200,7 +200,7 @@ public class CryptoAdapter extends AAdapter {
 				case "jwt-sign" -> jwtSign(ctx, input);
 				case "jwt-verify" -> jwtVerify(ctx, input);
 				case "jwt-decode" -> jwtDecode(ctx, input);
-				default -> throw new NotSupportedException(UNKNOWN_OPERATION);
+				default -> throw new UnsupportedException(UNKNOWN_OPERATION);
 			};
 		}, VIRTUAL_EXECUTOR);
 	}
@@ -510,7 +510,8 @@ public class CryptoAdapter extends AAdapter {
 	}
 
 	private ACell listKeys(RequestContext ctx, ACell input) {
-		ACell did = RT.getIn(input, Fields.DID);
+		ACell given = RT.getIn(input, Fields.DID);
+		ACell did = (given instanceof AString s) ? engine.expandPrincipal(s) : given;
 		if (did != null && !(did instanceof AString s && s.toString().startsWith("did:") && s.toString().indexOf('/') < 0)) {
 			throw new InvalidInputException(Fields.DID + REQUIRED_STRING);
 		}
@@ -601,7 +602,7 @@ public class CryptoAdapter extends AAdapter {
 
 	/** The keyring of the principal that acts: a user's own, an agent's own (not its owner's). */
 	private AString ownHolder(RequestContext ctx) {
-		AString holder = (ctx == null) ? null : ctx.getCallerDID();
+		AString holder = (ctx == null) ? null : ctx.getAuthorityDID();
 		requireKeyring(holder);
 		return holder;
 	}
@@ -619,7 +620,7 @@ public class CryptoAdapter extends AAdapter {
 	}
 
 	private void audit(String event, RequestContext ctx, Held held, AString ability) {
-		engine.audit().event(event, Audit.K_DID, ctx == null ? null : ctx.getCallerDID(), Audit.K_HOLDER, held.holder(),
+		engine.audit().event(event, ctx, Audit.K_HOLDER, held.holder(),
 			Audit.K_KEY, CryptoKeyring.multibase(held.id()), Audit.K_ABILITY, ability);
 	}
 

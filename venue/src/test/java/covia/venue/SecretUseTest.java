@@ -24,6 +24,7 @@ import covia.adapter.HTTPAdapter;
 import covia.api.Abilities;
 import covia.exception.AuthException;
 import covia.grid.Job;
+import covia.lattice.Cap;
 import covia.lattice.CapabilityChecker;
 import covia.lattice.CapabilityGate;
 
@@ -63,30 +64,30 @@ public class SecretUseTest {
 
 	@Test
 	public void testUrlCaveatCoverage() {
-		assertTrue(CapabilityChecker.urlCovers("https://safe.com/api", "https://safe.com/api"));
-		assertTrue(CapabilityChecker.urlCovers("https://safe.com/api", "https://safe.com/api/v1/chat?x=1"));
-		assertTrue(CapabilityChecker.urlCovers("https://safe.com/api", "https://SAFE.com:443/api"));
-		assertTrue(CapabilityChecker.urlCovers("https://safe.com/", "https://safe.com/anything/at/all"));
-		assertTrue(CapabilityChecker.urlCovers("https://safe.com", "https://safe.com/anything"));
-		assertFalse(CapabilityChecker.urlCovers("https://safe.com/api", "https://safe.com/apix"));
-		assertFalse(CapabilityChecker.urlCovers("https://safe.com/api", "http://safe.com/api"));
-		assertFalse(CapabilityChecker.urlCovers("https://safe.com/api", "https://safe.com:8443/api"));
-		assertFalse(CapabilityChecker.urlCovers("https://safe.com/api", "https://evil.com/api"));
-		assertFalse(CapabilityChecker.urlCovers("https://safe.com/api", "https://safe.com.evil.com/api"));
-		assertFalse(CapabilityChecker.urlCovers("https://safe.com/api", "https://user@safe.com@evil.com/api"));
-		assertFalse(CapabilityChecker.urlCovers("https://safe.com/api", "not a url"));
-		assertFalse(CapabilityChecker.urlCovers("not a url", "https://safe.com/api"));
+		assertTrue(Cap.urlCovers("https://safe.com/api", "https://safe.com/api"));
+		assertTrue(Cap.urlCovers("https://safe.com/api", "https://safe.com/api/v1/chat?x=1"));
+		assertTrue(Cap.urlCovers("https://safe.com/api", "https://SAFE.com:443/api"));
+		assertTrue(Cap.urlCovers("https://safe.com/", "https://safe.com/anything/at/all"));
+		assertTrue(Cap.urlCovers("https://safe.com", "https://safe.com/anything"));
+		assertFalse(Cap.urlCovers("https://safe.com/api", "https://safe.com/apix"));
+		assertFalse(Cap.urlCovers("https://safe.com/api", "http://safe.com/api"));
+		assertFalse(Cap.urlCovers("https://safe.com/api", "https://safe.com:8443/api"));
+		assertFalse(Cap.urlCovers("https://safe.com/api", "https://evil.com/api"));
+		assertFalse(Cap.urlCovers("https://safe.com/api", "https://safe.com.evil.com/api"));
+		assertFalse(Cap.urlCovers("https://safe.com/api", "https://user@safe.com@evil.com/api"));
+		assertFalse(Cap.urlCovers("https://safe.com/api", "not a url"));
+		assertFalse(Cap.urlCovers("not a url", "https://safe.com/api"));
 		for (String path : new String[] {"/api/../admin", "/api/%2e%2E/admin", "/api/.%2e/admin",
 				"/api%2f..%2fadmin", "/api/%252e%252e/admin", "/api/%5c../admin", "/api/..;x/admin"}) {
-			assertFalse(CapabilityChecker.urlCovers("https://safe.com/api", "https://safe.com" + path), path);
+			assertFalse(Cap.urlCovers("https://safe.com/api", "https://safe.com" + path), path);
 		}
-		assertTrue(CapabilityChecker.urlCovers("https://safe.com/api", "https://safe.com/other/../%61pi/items"));
-		assertTrue(CapabilityChecker.urlCovers("https://safe.com/other/../api", "https://safe.com/api/items"));
+		assertTrue(Cap.urlCovers("https://safe.com/api", "https://safe.com/other/../%61pi/items"));
+		assertTrue(Cap.urlCovers("https://safe.com/other/../api", "https://safe.com/api/items"));
 
 		// A trailing slash means "everything under", the bare path included.
-		assertTrue(CapabilityChecker.urlCovers("https://safe.com/api/", "https://safe.com/api"));
-		assertTrue(CapabilityChecker.urlCovers("https://safe.com/api/", "https://safe.com/api/x"));
-		assertFalse(CapabilityChecker.urlCovers("https://safe.com/api/", "https://safe.com/apix"));
+		assertTrue(Cap.urlCovers("https://safe.com/api/", "https://safe.com/api"));
+		assertTrue(Cap.urlCovers("https://safe.com/api/", "https://safe.com/api/x"));
+		assertFalse(Cap.urlCovers("https://safe.com/api/", "https://safe.com/apix"));
 	}
 
 	@Test
@@ -171,11 +172,11 @@ public class SecretUseTest {
 		assertThrows(AuthException.class, () -> engine.resolveSecret(ref, carol, "https://evil.example/api"));
 	}
 
-	/** A delegate acting for a user ({@code user/sudo}) works in the user's
-	 *  namespace, but the user's secrets are not its own: it uses one only
-	 *  under a grant, and never as the possession an own secret gives. */
+	/** A delegate acting as a user ({@code admin/sudo}) has the user's whole
+	 *  authority, so the user's secrets are the request's own, as they are the
+	 *  user's and the user's agents'. */
 	@Test
-	public void testASudoDelegateUsesTheUsersSecretsOnlyUnderAGrant() {
+	public void testASudoDelegateUsesTheUsersSecretsAsTheUser() {
 		AKeyPair aliceKP = AKeyPair.generate();
 		AKeyPair bobKP = AKeyPair.generate();
 		AString aliceDID = UCAN.toDIDKey(aliceKP.getAccountKey());
@@ -184,22 +185,13 @@ public class SecretUseTest {
 		engine.getVenueState().users().ensure(bobDID);
 		long exp = now() + 3600;
 		UCAN sudo = UCAN.create(aliceKP, UCAN.fromDIDKey(bobDID), exp,
-			Vectors.of(Capability.create(aliceDID, Abilities.USER_SUDO)), Vectors.empty());
+			Vectors.of(Capability.create(aliceDID, Abilities.ADMIN_SUDO)), Vectors.empty());
 		RequestContext delegate = engine.sudoContext(
 			RequestContext.of(bobDID).withProofs(Vectors.of(sudo.toMap())), aliceDID);
 		assertEquals(aliceDID, delegate.getUserDID());
-		assertThrows(AuthException.class, () -> engine.resolveSecret("s/KEY", delegate));
-		assertThrows(AuthException.class, () -> engine.resolveSecret(aliceDID + "/s/KEY", delegate));
-		assertFalse(engine.isOwnSecretRef("s/KEY", delegate));
-
-		// With a use grant as well, the delegate uses it where the grant points.
-		UCAN use = UCAN.create(aliceKP, UCAN.fromDIDKey(bobDID), exp,
-			useOf(Strings.create(aliceDID + "/s/KEY"), "https://safe.com/api"), Vectors.empty());
-		RequestContext granted = engine.sudoContext(
-			RequestContext.of(bobDID).withProofs(Vectors.of(sudo.toMap(), use.toMap())), aliceDID);
-		assertEquals("alice-key", engine.resolveSecret("s/KEY", granted, "https://safe.com/api/v1"));
-		assertThrows(AuthException.class, () -> engine.resolveSecret("s/KEY", granted, "https://evil.example/"));
-		assertFalse(engine.isOwnSecretRef("s/KEY", granted));
+		assertEquals("alice-key", engine.resolveSecret("s/KEY", delegate, "https://anywhere.example/"));
+		assertEquals("alice-key", engine.resolveSecret(aliceDID + "/s/KEY", delegate));
+		assertTrue(engine.isOwnSecretRef("s/KEY", delegate));
 
 		// Alice and her agents use it as of right.
 		assertEquals("alice-key", engine.resolveSecret("s/KEY", RequestContext.of(aliceDID)));
@@ -373,7 +365,7 @@ public class SecretUseTest {
 
 			engine.getVenueState().users().ensure(publicDID).secrets().store("URL_TOKEN", "inline-private-token", encKey);
 			RequestContext urlCaller = RequestContext.of(publicDID)
-				.withCaps(useOf(Strings.create("s/URL_TOKEN"), base + "/api"));
+				.withCaps(useOf(Strings.create("s/URL_TOKEN"), base + "/api").conj(Capability.create(Abilities.OUTBOUND, Abilities.OUTBOUND_HTTP)));
 			redirectTarget.set("/api/items?token=inline-private-token");
 			Job allowedUrl = engine.jobs().callOperation("v/ops/http/get",
 				Maps.of("url", base + "/api/redirect?token={s/URL_TOKEN}"), urlCaller);

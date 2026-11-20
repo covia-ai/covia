@@ -13,6 +13,7 @@ import covia.exception.CoviaException;
 import covia.exception.FaultException;
 import covia.adapter.AAdapter;
 import covia.api.Fields;
+import covia.grid.Attribution;
 import covia.grid.Job;
 
 /**
@@ -77,6 +78,20 @@ public class VenueJob extends Job {
 	}
 
 	User account() { return account; }
+
+	/** The account this Job is kept in, which its record's left-out caller means. */
+	public AString accountDID() { return account.getDID(); }
+
+	/** The principal that made this Job's call, read against the account it is kept in. */
+	@Override
+	public AString getCaller() {
+		return Attribution.caller(getData(), accountDID());
+	}
+
+	/** This Job's record as a client is handed it on its own, naming its caller in full. */
+	public AMap<AString, ACell> getRecordInFull() {
+		return Attribution.inFull(getData(), accountDID());
+	}
 
 	/** Fence nested work from a deleted lifecycle even after the DID is recreated. */
 	void requireAccount() { account.get(); }

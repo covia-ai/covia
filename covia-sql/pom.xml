@@ -5,7 +5,7 @@
 	<parent>
 		<groupId>ai.covia</groupId>
 		<artifactId>covia</artifactId>
-		<version>0.11.0</version>
+		<version>0.12.0</version>
 	</parent>
 	<artifactId>covia-sql</artifactId>
 
@@ -70,7 +70,7 @@
 		<dependency>
 			<groupId>org.xerial</groupId>
 			<artifactId>sqlite-jdbc</artifactId>
-			<version>3.53.4.0</version>
+			<version>3.54.1.0</version>
 			<scope>test</scope>
 		</dependency>
 	</dependencies>

@@ -25,10 +25,11 @@ import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.api.Fields;
 import covia.exception.AuthException;
+import covia.exception.ForbiddenException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
-import covia.exception.NotSupportedException;
 import covia.exception.UnavailableException;
+import covia.exception.UnsupportedException;
 import covia.exception.WrongScopeException;
 import covia.grid.HexId;
 import convex.lattice.ALatticeComponent;
@@ -224,10 +225,11 @@ public class CoviaAdapter extends AAdapter {
 		// Authentication required: every covia:* op runs in a user namespace.
 		// Engine-startup code that needs venue-authority writes uses
 		// engine.venueContext() which has the venue's own DID as caller.
-		if (ctx.getCallerDID() == null) {
+		if (ctx.getAuthorityDID() == null) {
 			return CompletableFuture.failedFuture(new AuthException("Authentication required"));
 		}
 		try {
+			input = expandedPaths(input);
 			return switch (getSubOperation(meta)) {
 				case "read" -> CompletableFuture.completedFuture(handleRead(ctx, input));
 				case "write" -> CompletableFuture.completedFuture(handleWrite(ctx, input));
@@ -239,11 +241,49 @@ public class CoviaAdapter extends AAdapter {
 				case "inspect" -> CompletableFuture.completedFuture(handleInspect(ctx, input));
 				case "aggregate" -> CompletableFuture.completedFuture(handleAggregate(ctx, input));
 				default -> CompletableFuture.failedFuture(
-					new NotSupportedException("Unknown covia operation: " + getSubOperation(meta)));
+					new UnsupportedException("Unknown covia operation: " + getSubOperation(meta)));
 			};
 		} catch (Exception e) {
 			return CompletableFuture.failedFuture(e);
 		}
+	}
+
+	/**
+	 * {@code input} with each path it names expanded where it arrives
+	 * ({@link Engine#expandPath}): {@code path}, copy's {@code from} and
+	 * {@code to}, and each of inspect's {@code paths}.
+	 */
+	private ACell expandedPaths(ACell input) {
+		if (!(input instanceof AMap<?, ?> map)) return input;
+		@SuppressWarnings("unchecked")
+		AMap<AString, ACell> fields = (AMap<AString, ACell>) map;
+		for (AString field : new AString[] { Fields.PATH, Fields.FROM, Fields.TO }) {
+			ACell path = fields.get(field);
+			ACell full = expandedPath(path);
+			if (full != path) fields = fields.assoc(field, full);
+		}
+		if (fields.get(K_PATHS) instanceof AVector<?> paths) {
+			@SuppressWarnings("unchecked")
+			AVector<ACell> full = (AVector<ACell>) paths;
+			for (long i = 0; i < paths.count(); i++) {
+				ACell path = expandedPath(paths.get(i));
+				if (path != paths.get(i)) full = full.assoc(i, path);
+			}
+			if (full != paths) fields = fields.assoc(K_PATHS, full);
+		}
+		return fields;
+	}
+
+	/** A path as given, a string or its segments, with a leading principal in short form expanded. */
+	private ACell expandedPath(ACell path) {
+		if (path instanceof AString s) return engine.expandPath(s);
+		if (path instanceof AVector<?> segments && segments.count() > 0 && segments.get(0) instanceof AString first) {
+			AString full = engine.expandPrincipal(first);
+			@SuppressWarnings("unchecked")
+			AVector<ACell> given = (AVector<ACell>) segments;
+			if (full != first) return given.assoc(0, full);
+		}
+		return path;
 	}
 
 	/**
@@ -754,7 +794,7 @@ public class CoviaAdapter extends AAdapter {
 			boolean deleted = secret.delete();
 			if (deleted) {
 				// The name only, never the value — the same trail as secret:set.
-				engine.audit().event(covia.venue.Audit.SECRET_DELETE, covia.venue.Audit.K_DID, ctx.getCallerDID(),
+				engine.audit().event(covia.venue.Audit.SECRET_DELETE, ctx,
 					covia.venue.Audit.K_NAME, name, covia.venue.Audit.K_TARGET, ctx.getUserDID());
 			}
 			return Maps.of(Fields.DELETED, CVMBool.of(deleted));
@@ -848,7 +888,7 @@ public class CoviaAdapter extends AAdapter {
 	 * never meaningful.
 	 *
 	 * @throws InvalidInputException for a path without a key, or part of a secret
-	 * @throws NotSupportedException for a framework-managed namespace
+	 * @throws ForbiddenException for a framework-managed namespace
 	 */
 	private static void requireChangeable(Path path, boolean delete) {
 		AString namespace = path.isEmpty() ? null : path.get(0);
@@ -859,7 +899,7 @@ public class CoviaAdapter extends AAdapter {
 		}
 		if (path.count() < 2) throw new InvalidInputException(NAMESPACE_AND_KEY);
 		if (!WRITABLE_NAMESPACES.contains(namespace.toString())) {
-			throw new NotSupportedException(String.format(NOT_WRITABLE, namespace));
+			throw new ForbiddenException(String.format(NOT_WRITABLE, namespace));
 		}
 	}
 
@@ -1297,12 +1337,12 @@ public class CoviaAdapter extends AAdapter {
 		AString agentId = (ctx == null) ? null : ctx.getAgentId();
 		if (N.equals(namespace)) {
 			if (agentId == null) throw new WrongScopeException(NO_AGENT_SCOPE);
-			return Located.below(requestUser(state, ctx).agentAt(agentId), segments);
+			return Located.below(requestUser(state, ctx).agents().at(agentId), segments);
 		}
 		if (C.equals(namespace)) {
 			Blob sessionId = (ctx == null) ? null : ctx.getSessionId();
 			if (agentId == null || sessionId == null) throw new WrongScopeException(NO_SESSION_SCOPE);
-			return Located.below(requestUser(state, ctx).agentAt(agentId).session(sessionId), segments);
+			return Located.below(requestUser(state, ctx).agents().at(agentId).session(sessionId), segments);
 		}
 		if (T.equals(namespace)) {
 			JobRecord job = requestUser(state, ctx).jobs().at(scopedJob(ctx));

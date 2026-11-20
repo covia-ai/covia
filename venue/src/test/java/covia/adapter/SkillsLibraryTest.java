@@ -278,19 +278,29 @@ public class SkillsLibraryTest {
 		String tasks = skillBody("tasks");
 		String models = skillBody("models");
 		String skills = skillBody("skills");
-		String capabilities = skillBody("capabilities");
-		String auth = skillBody("auth");
 		assertFalse(agents.contains("created: false"), agents);
 		assertFalse(agents.contains("wait?"), agents);
 		assertFalse(tasks.contains("wait?"), tasks);
-		assertTrue(tasks.contains("timeout?"), tasks);
+		// The included tools supply calling contracts; workflow prose need not
+		// repeat their argument lists or provider-facing names.
+		ACell taskMeta = convex.core.util.JSON.parse(readResource("/skills/tasks.json"));
+		AVector<ACell> taskTools = RT.ensureVector(RT.getIn(taskMeta, "skill", "tools"));
+		assertTrue(taskTools.contains(Strings.create("v/ops/agent/request")));
+		assertTrue(taskTools.contains(Strings.create("v/ops/job/status")));
+		assertTrue(taskTools.contains(Strings.create("v/ops/job/result")));
 		assertTrue(models.contains("Templates are provider-neutral"), models);
 		assertFalse(models.contains("templates default to openai"), models);
 		assertTrue(skills.contains("Do not invent an undeclared tool name"), skills);
-		for (String guidance : new String[] {capabilities, auth}) {
-			assertTrue(guidance.contains("inherent capabilities are its `config.caps`"), guidance);
-			assertTrue(guidance.contains("OR semantics"), guidance);
-			assertFalse(guidance.contains("ceiling"), guidance);
+		// Authority composition is covered by the capability, token and callable
+		// tests. Do not require prose describing every grant as an unbounded OR:
+		// presented grants remain inside token/callable caps.
+
+		// The agents skill tells an agent to suspend an agent before replacing it
+		// and to delete it, so it offers those operations
+		ACell agentsMeta = convex.core.util.JSON.parse(readResource("/skills/agents.json"));
+		AVector<ACell> agentTools = RT.ensureVector(RT.getIn(agentsMeta, "skill", "tools"));
+		for (String op : new String[] {"v/ops/agent/suspend", "v/ops/agent/resume", "v/ops/agent/delete"}) {
+			assertTrue(agentTools.contains(Strings.create(op)), op);
 		}
 
 		ACell secretsMeta = convex.core.util.JSON.parse(readResource("/skills/secrets.json"));
@@ -428,9 +438,10 @@ public class SkillsLibraryTest {
 		ACell config = RT.getIn(asset, "agent", "config");
 		AVector<ACell> caps = RT.ensureVector(RT.getIn(config, "caps"));
 		assertNotNull(caps, "reader must pin a capability");
-		assertEquals(2, caps.count());
+		assertEquals(3, caps.count());
 		assertEquals("crud/read", RT.getIn(caps.get(0), "can").toString());
 		assertEquals("asset/read", RT.getIn(caps.get(1), "can").toString());
+		assertEquals("job/read", RT.getIn(caps.get(2), "can").toString());
 	}
 
 	@Test

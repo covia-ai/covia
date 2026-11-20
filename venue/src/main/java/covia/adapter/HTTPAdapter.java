@@ -44,9 +44,9 @@ import covia.exception.AuthException;
 import covia.exception.CapabilityDeniedException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
-import covia.exception.NotSupportedException;
 import covia.exception.ResponseException;
 import covia.exception.UnavailableException;
+import covia.exception.UnsupportedException;
 import covia.utils.HTTPURLs;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -135,7 +135,7 @@ public class HTTPAdapter extends AAdapter {
 	// ========== Configuration ==========
 
 	@Override
-	public boolean configure(AMap<AString, ACell> config, boolean strict) {
+	public void configure(AMap<AString, ACell> config, boolean strict) {
 		String agent = defaultUserAgent();
 		Set<String> allow = Set.of();
 		Set<String> block = Set.of();
@@ -166,7 +166,6 @@ public class HTTPAdapter extends AAdapter {
 		allow.forEach(GuardedResolver::release);
 		configuredBlock = block;
 		maxRedirects = hops;
-		return true;
 	}
 
 	private static Set<String> hosts(ACell raw, AString key) {
@@ -257,8 +256,7 @@ public class HTTPAdapter extends AAdapter {
 		+ GuardedResolver.class.getName() + " (is jdk.net.hosts.file set, or another InetAddressResolverProvider first on the class path?)";
 
 	@Override
-	public void install(Engine engine) {
-		super.install(engine);
+	public void start() {
 		if (!GuardedResolver.isActive()) log.error(RESOLVER_INACTIVE);
 	}
 
@@ -649,6 +647,11 @@ public class HTTPAdapter extends AAdapter {
 	 */
 	private CompletableFuture<ACell> send(URI uri, Outbound request, boolean follow, int hopsLeft,
 			AVector<ACell> trail, Set<URI> visited, Map<String, String> redactions, boolean unrestricted, RequestContext ctx) {
+		try {
+			engine.requireOutboundHttp(ctx, request.method(), uri.toString());
+		} catch (AuthException e) {
+			throw redactDenial(e, redactions);
+		}
 		return httpClient.sendAsync(request.build(uri), HttpResponse.BodyHandlers.ofString())
 			.thenCompose(response -> {
 				int code = response.statusCode();
@@ -749,7 +752,7 @@ public class HTTPAdapter extends AAdapter {
 	private String connectionToken(RequestContext ctx, String provider, String destination) {
 		TokenSource source = (engine != null) ? engine.findAdapter(TokenSource.class) : null;
 		if (source == null) {
-			throw new NotSupportedException("bearerSecret \"oauth/" + provider
+			throw new UnsupportedException("bearerSecret \"oauth/" + provider
 				+ "\" needs the oauth adapter, which is not registered on this venue");
 		}
 		try {

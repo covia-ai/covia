@@ -1,0 +1,65 @@
+{
+	"name": "Token Create",
+	"description": "Creates an access token in your namespace: a scoped bearer that acts with your own authority narrowed by its caps, read at the time of each action, and is accepted only at the access points named in access, each entry read by that access point (mcp: {tools} for the venue's MCP endpoint). Returns the bearer once, in this result (wait for the result: the job record keeps it hidden). Token administration: needs admin/token/<access point> on x/token/<name> for every access point named, and for a token you issue as a user, you in person (a request through it is you in person). For a token accepted at MCP alone, v/ops/mcp/create-token needs only mcp/token.",
+	"dateCreated": "2026-11-12T00:00:00Z",
+	"operation": {
+		"adapter": "token:create",
+		"readOnly": false,
+		"secretFields": ["token"],
+		"input": {
+			"type": "object",
+			"properties": {
+				"name": { "type": "string", "description": "The token's name, unique in your namespace: [a-z0-9-]{1,64}" },
+				"access": {
+					"type": "object",
+					"description": "The access points that accept the token, each with what it keeps for the token; at least one",
+					"properties": {
+						"mcp": {
+							"type": "object",
+							"description": "The venue's MCP endpoint: the tools the token offers there",
+							"properties": {
+								"tools": {
+									"type": "array",
+									"description": "Operations offered as MCP tools, as in an agent's config.tools: an operation reference such as v/ops/covia/read, or {operation, name?, description?}. Tool names must not clash.",
+									"items": {}
+								}
+							},
+							"required": ["tools"]
+						}
+					},
+					"additionalProperties": { "type": "object" },
+					"minProperties": 1
+				},
+				"caps": {
+					"description": "The capabilities bounding what the token may do, within your authority: an array of {with, can} capabilities (UCAN.md §3), or \"unrestricted\" for all of your authority. Left out, the token has none.",
+					"oneOf": [
+						{ "type": "array", "items": {
+							"type": "object",
+							"properties": {
+								"with": { "type": "string", "description": "Resource path or prefix, such as w/shared/" },
+								"can": { "type": "string", "description": "One ability, such as crud/read. To grant multiple abilities, use a separate capability entry for each." },
+								"nb": { "type": "object", "description": "Optional capability caveats" }
+							},
+							"required": ["with", "can"]
+						} },
+						{ "type": "string", "enum": ["unrestricted"] }
+					]
+				},
+				"expires": { "type": "integer", "description": "When the token stops working, in milliseconds since the epoch. Left out, it lasts until revoked." }
+			},
+			"required": ["name", "access"]
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"name": { "type": "string" },
+				"token": { "type": "string", "description": "The bearer. Shown only here." },
+				"issuer": { "type": "string" },
+				"access": { "type": "object" },
+				"caps": {},
+				"expires": { "type": "integer" },
+				"created": { "type": "integer" }
+			}
+		}
+	}
+}

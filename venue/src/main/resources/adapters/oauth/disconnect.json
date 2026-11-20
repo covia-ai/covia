@@ -16,7 +16,7 @@
       "properties": {
         "provider": { "type": "string" },
         "disconnected": { "type": "boolean" },
-        "revoked": { "type": "boolean", "description": "True when the provider confirmed revocation; false when it has no revocation endpoint or refused" }
+        "revoked": { "type": "boolean", "description": "True when the provider confirmed revocation; false when it has no revocation endpoint or refused, or the venue cannot read the grant's tokens" }
       }
     }
   }

@@ -39,6 +39,7 @@ public final class Task extends ALatticeComponent<ACell>
 	private static final AString K_CONTINUATION_IDS = Strings.intern("continuationIds");
 	/** Ordered continuation envelopes queued behind the original input. */
 	private static final AString K_CONTINUATIONS = Strings.intern("continuations");
+	public static final AString KEY_CONTINUATIONS = K_CONTINUATIONS;
 	/** Number of original and continuation inputs already shown to cycles. */
 	private static final AString K_PRESENTED_INPUTS = Strings.intern("presentedInputs");
 	/** Set when its cycle left the task open with something to bring it back:
@@ -57,11 +58,6 @@ public final class Task extends ALatticeComponent<ACell>
 		return new Task(cursor, id);
 	}
 
-	@Override
-	public Task withCursor(AForkableCursor<ACell> cursor) {
-		return rebind(cursor);
-	}
-
 	/** The fields below a task read as stored. */
 	@Override
 	public ALatticeComponent<?> resolve(AString[] segments, int start, int end) {
@@ -76,6 +72,8 @@ public final class Task extends ALatticeComponent<ACell>
 	// ========== Reading ==========
 
 	public long revision() { return revision(getRecord()); }
+	public Blob sessionId() { return sessionId(getRecord()); }
+	public long wakeTime() { return wakeTime(getRecord()); }
 	public boolean isParked() { return isParked(getRecord()); }
 	public boolean hasUnshownInput() { return hasUnshownInput(getRecord()); }
 	public ACell nextInput() { return nextInput(getRecord()); }
@@ -93,6 +91,25 @@ public final class Task extends ALatticeComponent<ACell>
 	public static long revision(ACell row) {
 		return (row instanceof AMap<?, ?> map && map.get(K_REVISION) instanceof CVMLong revision)
 			? revision.longValue() : 0L;
+	}
+
+	/** The session a row's task runs in, or null when it has none. */
+	public static Blob sessionId(ACell row) {
+		return Ids.stored(RT.getIn(row, Fields.SESSION_ID));
+	}
+
+	/** When a row's task next runs; zero when it has no wake time. */
+	public static long wakeTime(ACell row) {
+		return (RT.getIn(row, Fields.WAKE_TIME) instanceof CVMLong time) ? time.longValue() : 0L;
+	}
+
+	/**
+	 * Whether a caller that saw {@code expectedRevision} is out of date with a
+	 * row: its revision has moved, or it has an input not yet shown. A
+	 * negative revision, which takes the task regardless, is never stale.
+	 */
+	public static boolean isStale(ACell row, long expectedRevision) {
+		return expectedRevision >= 0 && (revision(row) != expectedRevision || hasUnshownInput(row));
 	}
 
 	/** Whether a row has been parked by a yield. */
@@ -136,7 +153,8 @@ public final class Task extends ALatticeComponent<ACell>
 	/** Whether a row has an unshown input, or a wake time that has come. */
 	static boolean hasOwnWork(ACell row, long now) {
 		if (hasUnshownInput(row)) return true;
-		return row instanceof AMap<?, ?> map && map.get(Fields.WAKE_TIME) instanceof CVMLong wake && wake.longValue() <= now;
+		long wake = wakeTime(row);
+		return wake > 0 && wake <= now;
 	}
 
 	private static long shown(AMap<?, ?> row) {
@@ -158,11 +176,10 @@ public final class Task extends ALatticeComponent<ACell>
 	 * @return whether the task holds the message: false when it is not queued or is in another session
 	 */
 	public boolean appendContinuation(Blob sid, ACell envelope, AString messageId) {
-		return transact(draft -> {
+		return Records.ifPresent(this, () -> transact(draft -> {
 			AMap<AString, ACell> task = draft.getRecord();
 			if (task == null) return false;
-			AString taskSid = RT.ensureString(task.get(Fields.SESSION_ID));
-			if (taskSid == null || !sid.toHexString().equals(taskSid.toString())) return false;
+			if (!java.util.Objects.equals(sid, sessionId(task))) return false;
 			AVector<ACell> ids = vector(task.get(K_CONTINUATION_IDS));
 			if (messageId != null) {
 				for (long i = 0; i < ids.count(); i++) {
@@ -174,7 +191,7 @@ public final class Task extends ALatticeComponent<ACell>
 			if (messageId != null) task = task.assoc(K_CONTINUATION_IDS, ids.conj(messageId));
 			draft.cursor().set(task);
 			return true;
-		});
+		}), false);
 	}
 
 	/**
@@ -189,12 +206,12 @@ public final class Task extends ALatticeComponent<ACell>
 	 *         revision moved, since a continuation arrived and the task is ready anyway
 	 */
 	public boolean park(long expectedRevision, long queued) {
-		return transact(draft -> {
+		return Records.ifPresent(this, () -> transact(draft -> {
 			AMap<AString, ACell> task = draft.getRecord();
 			if (task == null || revision(task) != expectedRevision) return false;
 			draft.cursor().set(task.assoc(K_PARKED, CVMBool.TRUE).assoc(Fields.QUEUED, CVMLong.create(queued)));
 			return true;
-		});
+		}), false);
 	}
 
 	/**
@@ -213,12 +230,12 @@ public final class Task extends ALatticeComponent<ACell>
 	 * @return whether the task is queued
 	 */
 	public boolean setWakeTime(long time) {
-		return transact(draft -> {
+		return Records.ifPresent(this, () -> transact(draft -> {
 			AMap<AString, ACell> task = draft.getRecord();
 			if (task == null) return false;
 			draft.cursor().set((time > 0) ? task.assoc(Fields.WAKE_TIME, CVMLong.create(time)) : task.dissoc(Fields.WAKE_TIME));
 			return true;
-		});
+		}), false);
 	}
 
 	/**
@@ -227,14 +244,14 @@ public final class Task extends ALatticeComponent<ACell>
 	 * @return whether the task is queued
 	 */
 	public boolean present() {
-		return transact(draft -> {
+		return Records.ifPresent(this, () -> transact(draft -> {
 			AMap<AString, ACell> task = draft.getRecord();
 			if (task == null) return false;
 			AMap<AString, ACell> running = task.dissoc(K_PARKED);
 			draft.cursor().set(hasUnshownInput(running)
 				? running.assoc(K_PRESENTED_INPUTS, CVMLong.create(shown(running) + 1)) : running);
 			return true;
-		});
+		}), false);
 	}
 
 	@SuppressWarnings("unchecked")

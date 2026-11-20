@@ -10,6 +10,14 @@ argument-hint: "<store|get|content|list|explain> <ref-or-file>"
 
 Assets are the fundamental resources of the Covia Grid ([COG-5](https://docs.covia.ai/protocol/cogs/COG-005)). Every asset is **immutable** and **content-addressed** — its ID is the SHA3-256 hash of its metadata. Storing the same metadata twice always returns the same ID.
 
+## Authority
+
+Storing, pinning, archive asset output and A2A import require `asset/store` on
+your `a/` collection: `{"with":"a/","can":"asset/store"}`. A signed grant
+uses `<ownerDID>/a/`. Pinning also needs source read authority; imports also
+need binding writes and outbound authority. Existing unscoped store grants
+still work; a grant on a single asset hash does not authorise new assets.
+
 ## Asset Types
 
 Assets are categorised by the presence of specific top-level objects:
@@ -159,7 +167,8 @@ Agent definitions have an `agent` object:
       "model": "gpt-5.6-terra",
       "systemPrompt": "You are Alice...",
       "responseFormat": { "name": "InvoiceExtraction", "schema": { ... } },
-      "tools": ["v/ops/covia/read", "v/ops/covia/write"]
+      "tools": ["v/ops/covia/read", "v/ops/covia/write"],
+      "acceptTasks": true
     }
   }
 }

@@ -20,12 +20,13 @@ import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.exception.ConfigurationException;
 import covia.exception.InvalidInputException;
-import covia.exception.NotSupportedException;
+import covia.exception.UnsupportedException;
 import covia.grid.Venue;
 import covia.grid.auth.VenueAuth;
 import covia.grid.auth.VenueChallenge;
 import covia.grid.auth.VenueDID;
 import covia.grid.client.VenueHTTP;
+import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.auth.AuthenticationMethods;
 import covia.venue.auth.AuthResult;
@@ -105,10 +106,14 @@ public class AuthAdapter extends AAdapter implements AuthenticationMethods, Venu
 
 	private static final AString K_AUTHENTICATED = Strings.intern("authenticated");
 	private static final AString K_INTERNAL = Strings.intern("internal");
+	private static final AString K_ORIGIN = Strings.intern("origin");
+
+	/** The adapter's name, which also names a request's first route record where a door authenticated it ({@link covia.venue.RequestContext#via}). */
+	public static final String NAME = "auth";
 
 	@Override
 	public String getName() {
-		return "auth";
+		return NAME;
 	}
 
 	@Override
@@ -140,7 +145,7 @@ public class AuthAdapter extends AAdapter implements AuthenticationMethods, Venu
 			}
 		}
 		if ("whoami".equals(op)) {
-			AString caller = (ctx != null) ? ctx.getCallerDID() : null;
+			AString caller = (ctx != null) ? ctx.getAuthorityDID() : null;
 			// "internal" in the response is now a derived flag: caller IS
 			// the venue itself. Engine-side trust paths (venueContext) show
 			// up here; UCAN-authenticated callers don't.
@@ -150,10 +155,13 @@ public class AuthAdapter extends AAdapter implements AuthenticationMethods, Venu
 				K_AUTHENTICATED, caller != null,
 				K_INTERNAL, internal
 			);
+			// Who is present, where that is not the caller: a delegate under admin/sudo, or a callable's invoker
+			AString origin = (ctx != null) ? ctx.getOrigin() : null;
+			if (origin != null && !origin.equals(caller)) out = out.assoc(K_ORIGIN, origin);
 			return CompletableFuture.completedFuture(out);
 		}
 		return CompletableFuture.failedFuture(
-			new NotSupportedException("Unknown auth operation: " + op));
+			new UnsupportedException("Unknown auth operation: " + op));
 	}
 
 	/** Issue identity evidence only; never accept caller-supplied claims or keys. */
@@ -179,7 +187,7 @@ public class AuthAdapter extends AAdapter implements AuthenticationMethods, Venu
 	private static final String DID_KEY = "did:key:";
 
 	private ACell identityToken(RequestContext ctx, ACell input) {
-		AString caller = ctx == null ? null : ctx.getCallerDID();
+		AString caller = ctx == null ? null : ctx.getAuthorityDID();
 		if (caller == null || engine.isPublicPrincipal(caller) || engine.isPublicPrincipal(ctx.getUserDID())) {
 			throw new AuthException(IDENTITY_AUTH_REQUIRED);
 		}
@@ -191,6 +199,13 @@ public class AuthAdapter extends AAdapter implements AuthenticationMethods, Venu
 		// authority has no scope.
 		if (ctx.getCaps() != null && !ctx.isSubPrincipal()) {
 			throw new AuthException(IDENTITY_DIRECT_ONLY);
+		}
+		// A user's token signs in as the user wherever it is presented, so only the
+		// user in person mints one: not a delegate acting as the user, nor work the
+		// venue carries on. An agent mints its own.
+		if (Engine.agentIdIn(ctx.getUserDID(), caller) == null) {
+			String denial = engine.inPersonDenial(ctx);
+			if (denial != null) throw new AuthException(denial);
 		}
 		AKeyPair signer = identitySigner(ctx, caller);
 		if (signer == null) throw new AuthException(IDENTITY_NOT_OWNED);

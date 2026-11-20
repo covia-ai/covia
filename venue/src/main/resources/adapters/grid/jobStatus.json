@@ -1,6 +1,6 @@
 {
 	"name": "Grid Job Status",
-	"description": "Fetch the current status of an EXISTING Covia Job. Call this operation directly with the exact id returned by a delegated request or asynchronous invocation; do not wrap it in the generic operation runner. This polls state without waiting for completion or starting new work.",
+	"description": "grid_job_status: Compatibility entry point for reading an existing Job's record. Prefer job_status when available. Uses the same Job ID and hosting venue; does not start or retry work. For local Jobs, requires job/read on the target Job. Remote access is authorized by the hosting venue using the selected remote identity and grants.",
 	"operation": {
 		"adapter": "grid:jobStatus",
 		"readOnly": true,
@@ -10,52 +10,126 @@
 			"properties": {
 				"id": {
 					"type": "string",
-					"description": "Job identifier returned from a previous grid invocation"
+					"description": "Exact Job ID on the selected hosting venue. A local wrapper and its destination are separate Jobs: use the ID of the one you intend to inspect or control. Agent, session and tool-call IDs are not Job IDs."
 				},
 				"venue": {
 					"type": "string",
-					"description": "Optional remote venue URL or DID to query"
+					"description": "Hosting venue HTTP(S) URL or routable DID. Omit for a local Job, including a local proxy. For a destination Job use its own ID and hosting venue. A definition may set a default venue; this input overrides it. Null is invalid."
 				},
 				"authenticateAs": {
 					"type": "string",
-					"enum": ["anonymous", "caller", "venue"],
+					"enum": [
+						"anonymous",
+						"caller",
+						"venue"
+					],
 					"default": "anonymous",
-					"description": "Explicit remote authentication mode; use the same mode and credentials as the invocation that created the job"
+					"description": "Remote identity: anonymous (default) sends no identity or grants; caller requires your identity credential addressed to the target venue, with no capabilities, plus any separate grants; venue is only for the venue itself. Use the same mode and credentials when following the Job. Local calls retain your caller context."
+				},
+				"owner": {
+					"type": "string",
+					"description": "Job owner DID for delegated lookup, including retained Jobs. This grants no authority."
 				}
 			},
-			"required": ["id"]
+			"required": [
+				"id"
+			]
 		},
 		"output": {
 			"type": "object",
-			"description": "Job status information returned by the venue",
+			"description": "Current Job record on the selected hosting venue. Optional fields are present only when reported; absence of remote evidence does not prove completion or cancellation.",
 			"properties": {
 				"id": {
 					"type": "string",
-					"description": "Remote job identifier"
+					"description": "Job ID on this record's hosting venue."
 				},
 				"status": {
 					"type": "string",
-					"description": "Current job status (e.g. PENDING, STARTED, COMPLETE, FAILED, CANCELLED)"
+					"enum": [
+						"PENDING",
+						"STARTED",
+						"PAUSED",
+						"INPUT_REQUIRED",
+						"AUTH_REQUIRED",
+						"COMPLETE",
+						"FAILED",
+						"CANCELLED",
+						"REJECTED"
+					],
+					"description": "PENDING is queued; STARTED is running. PAUSED may be resumed. INPUT_REQUIRED or AUTH_REQUIRED needs the requested input or credentials sent to this Job. COMPLETE has output; FAILED, CANCELLED and REJECTED are terminal. Inspect error and errorCode when present; do not automatically resubmit."
+				},
+				"output": {
+					"description": "The operation's output when COMPLETE; any JSON value, including null. The output can itself be a handle returned by that operation."
+				},
+				"error": {
+					"description": "Reported reason for failure, rejection or cancellation: a string when available, otherwise absent or null."
+				},
+				"errorCode": {
+					"description": "Optional operation-defined error code, a string or null; status alone does not identify the cause."
 				},
 				"created": {
 					"type": "integer",
-					"description": "Timestamp when the job was created (milliseconds since epoch)",
-					"format": "int64"
+					"description": "Creation time in milliseconds since the Unix epoch."
 				},
 				"updated": {
 					"type": "integer",
-					"description": "Timestamp when the job status was last updated (milliseconds since epoch)",
-					"format": "int64"
+					"description": "Last record update in milliseconds since the Unix epoch."
 				},
-				"output": {
-					"description": "Operation output, when available"
+				"progress": {
+					"description": "Latest progress, usually {message, data?}; may also be a string or operation-specific detail. Progress is not the final output."
 				},
-				"error": {
-					"type": "string",
-					"description": "Error message if the job failed"
+				"delegation": {
+					"type": "object",
+					"description": "Observations of remote work, when this Job delegates or waits on another Job.",
+					"properties": {
+						"remoteId": {
+							"type": "string",
+							"description": "Destination Job ID, not a local Job ID. Use only with its known hosting venue."
+						},
+						"remoteStatus": {
+							"type": "string",
+							"description": "Last observed destination state; may differ from this Job's status."
+						},
+						"notFollowed": {
+							"type": "string",
+							"description": "Why observation stopped and what the caller can do. Does not establish failure of the destination work."
+						}
+					}
+				},
+				"cancellation": {
+					"type": "object",
+					"description": "Evidence from an attempted backend cancellation; may arrive after local cancellation. Missing evidence does not prove remote work stopped.",
+					"properties": {
+						"remoteId": {
+							"type": "string"
+						},
+						"outcome": {
+							"type": "string",
+							"enum": [
+								"requested",
+								"acknowledged",
+								"finished",
+								"rejected",
+								"unknown"
+							],
+							"description": "requested: sent, no confirmation; acknowledged: peer reported cancellation; finished: peer reported another terminal outcome; rejected: peer refused; unknown: no conclusive answer. None undoes prior side effects."
+						},
+						"remoteStatus": {
+							"type": "string"
+						},
+						"httpStatus": {
+							"type": "integer"
+						},
+						"errorCode": {
+							"description": "Protocol error code, when supplied."
+						}
+					}
 				}
-			}
+			},
+			"required": [
+				"id",
+				"status"
+			]
 		}
 	}
 }
-

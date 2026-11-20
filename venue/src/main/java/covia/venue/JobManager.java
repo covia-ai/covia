@@ -1,12 +1,14 @@
 package covia.venue;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Random;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.BiFunction;
 import java.util.function.Consumer;
 import java.util.function.UnaryOperator;
 
@@ -21,7 +23,6 @@ import convex.core.data.Blob;
 import convex.core.data.Index;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
-import convex.auth.ucan.Capability;
 import covia.lattice.CapabilityChecker;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
@@ -30,19 +31,21 @@ import convex.core.data.prim.CVMBool;
 import convex.core.json.schema.JsonSchema;
 import covia.adapter.AAdapter;
 import covia.api.Fields;
+import covia.api.Abilities;
 import covia.exception.AuthException;
 import covia.exception.CoviaException;
 import covia.exception.FaultException;
 import covia.exception.InvalidInputException;
+import covia.exception.InvalidStateException;
 import covia.exception.NotFoundException;
-import covia.exception.NotSupportedException;
-import covia.exception.RateLimitException;
 import covia.exception.ShuttingDownException;
 import covia.exception.UnavailableException;
+import covia.exception.UnsupportedException;
 import covia.grid.Asset;
 import covia.grid.Attribution;
 import covia.grid.Job;
 import covia.grid.Operation;
+import covia.grid.Principals;
 import covia.grid.Status;
 
 /**
@@ -65,6 +68,10 @@ public class JobManager {
 
 	private static final Logger log = LoggerFactory.getLogger(JobManager.class);
 	private static final String JOB_ID_EXISTS = "Job ID already exists: ";
+	/** A prepared Job started a second time. */
+	private static final String ALREADY_STARTED = "Job already started: ";
+	/** A prepared Job published before a transaction recorded it. */
+	private static final String NOT_RECORDED = "Job has not been recorded: ";
 
 	/** An invocation that names no operation. */
 	public static final String OPERATION_REQUIRED = "Operation must be specified";
@@ -96,14 +103,15 @@ public class JobManager {
 	public static final String SHUTTING_DOWN = "Venue is shutting down; new operations are not accepted";
 
 	private static NotFoundException jobNotFound(Blob jobID) {
-		return new NotFoundException(JOB_NOT_FOUND + jobID.toHexString(), jobID.toHexString());
+		return new NotFoundException(JOB_NOT_FOUND + jobID, jobID.toHexString());
 	}
 
 	private static InvalidInputException operationRequired() {
 		return new InvalidInputException(OPERATION_REQUIRED);
 	}
 
-	private static NotFoundException unresolved(AString ref) {
+	/** The refusal of operation reference {@code ref}, which resolves to nothing. */
+	public static NotFoundException unresolved(AString ref) {
 		return new NotFoundException(CANNOT_RESOLVE_OPERATION + ref, ref.toString());
 	}
 
@@ -124,26 +132,6 @@ public class JobManager {
 
 	/** Jobs being accepted, each completed once its handle is registered or its acceptance has failed ({@link #liveJob}). */
 	final ConcurrentHashMap<Blob, CompletableFuture<Void>> accepting = new ConcurrentHashMap<>();
-
-	/** Per-caller admission semaphores bounding concurrent top-level jobs. */
-	private final ConcurrentHashMap<AString, JobSemaphore> jobPermits = new ConcurrentHashMap<>();
-
-	/** Job IDs holding an admission permit → caller DID, for exactly-once release. */
-	private final ConcurrentHashMap<Blob, AString> permitHolders = new ConcurrentHashMap<>();
-
-	/** Semaphore with a recovery reservation hook. Negative permits are useful
-	 *  when a restart restores more active jobs than the current configured cap:
-	 *  new work remains blocked until enough restored jobs finish. */
-	private static final class JobSemaphore extends Semaphore {
-		private static final long serialVersionUID = 1L;
-		JobSemaphore(int permits) { super(permits); }
-		void reserveRecovered() { reducePermits(1); }
-	}
-
-	/** Concurrent-job cap settings, resolved once from venue config. */
-	private final boolean jobCapEnabled;
-	private final int maxConcurrentJobs;
-	private final long jobBlockMs;
 
 	/** Cross-cutting listeners notified on every Job in the venue (REST SSE,
 	 *  MCP notifications). Per-Job subscribers attach directly to the Job
@@ -171,45 +159,6 @@ public class JobManager {
 	 */
 	public JobManager(Engine engine) {
 		this.engine = engine;
-		Config cfg = engine.config();
-		this.maxConcurrentJobs = cfg.getMaxConcurrentJobsPerUser();
-		this.jobBlockMs = cfg.getRateLimitBlockMs();
-		this.jobCapEnabled = cfg.isRateLimitEnabled() && maxConcurrentJobs > 0;
-	}
-
-	/**
-	 * Admission control for a top-level invoke: bounds concurrent (non-terminal)
-	 * jobs per caller. Returns {@code true} if a permit was acquired (the caller
-	 * must release it on job terminal via {@link #releaseJobPermit}); returns
-	 * {@code false} when the cap does not apply — disabled, a sub-job (the context
-	 * carries a current Job or inherited {@code jobId}), or an internal /
-	 * unattributed caller. Blocks up to {@code jobBlockMs} to absorb bursts, then
-	 * sheds with {@link RateLimitException} (→ HTTP 429).
-	 */
-	private boolean acquireJobPermit(RequestContext ctx, AString callerDID) {
-		if (!jobCapEnabled) return false;
-		if (ctx.getJob() != null || ctx.getJobId() != null) return false;
-		if (callerDID == null) return false;       // internal / unattributed — exempt
-		JobSemaphore sem = jobPermits.computeIfAbsent(callerDID, k -> new JobSemaphore(maxConcurrentJobs));
-		try {
-			if (sem.tryAcquire(jobBlockMs, TimeUnit.MILLISECONDS)) return true;
-		} catch (InterruptedException e) {
-			Thread.currentThread().interrupt();
-			throw new RateLimitException("Interrupted while awaiting a job slot", 1);
-		}
-		throw new RateLimitException(
-			"Concurrent job limit (" + maxConcurrentJobs + ") reached for caller; retry shortly",
-			Math.max(1, jobBlockMs / 1000));
-	}
-
-	/** Releases the admission permit held by a job, if any. Idempotent — safe to
-	 *  call from both terminal eviction and explicit deletion. */
-	private void releaseJobPermit(Blob jobID) {
-		AString caller = permitHolders.remove(jobID);
-		if (caller != null) {
-			JobSemaphore sem = jobPermits.get(caller);
-			if (sem != null) sem.release();
-		}
 	}
 
 	// ========== Job Invocation ==========
@@ -242,7 +191,7 @@ public class JobManager {
 
 	/** Generic invocation of the definition the framework already resolved for {@code ref}. */
 	public Job invokeOperation(AString ref, Operation operation, ACell input, RequestContext ctx) {
-		return dispatchOperation(operation.meta(), input, ctx.withOp(ref), false, Invocation.INVOKE);
+		return dispatchOperation(operation.meta(), input, invoking(ctx, ref), false, Invocation.INVOKE);
 	}
 
 	/**
@@ -254,17 +203,33 @@ public class JobManager {
 	public Job callOperation(String ref, ACell input, RequestContext ctx) {
 		AString operation = Strings.create(ref);
 		return dispatchOperation(resolveOperation(operation, ctx).meta(), input,
-			ctx.withOp(operation), false, Invocation.CALL);
+			invoking(ctx, operation), false, Invocation.CALL);
 	}
 
 	/**
 	 * Authorises an explicit remote invocation against the target reference and
 	 * the input being sent. The executing venue applies its defaults and checks
-	 * its own invocation and resource authority independently.
+	 * its own invocation and resource authority independently, using the
+	 * explicitly selected remote credentials, not the source's local scope.
+	 *
+	 * @return the reference as checked, which the caller sends: a short form
+	 *         names a user of this venue, so it goes expanded
+	 *         ({@link Engine#expandPath})
 	 */
-	public void requireRemoteInvoke(AString ref, ACell input, RequestContext ctx) {
+	public AString requireRemoteInvoke(AString ref, ACell input, RequestContext ctx) {
 		if (ref == null) throw operationRequired();
-		engine.requireInvoke(invocationContext(ctx.withOp(ref), input), ref);
+		RequestContext invoking = invoking(ctx, ref);
+		engine.requireInvoke(invocationContext(invoking, input), invoking.getOp());
+		return invoking.getOp();
+	}
+
+	/**
+	 * {@code ctx} invoking {@code ref}, the operation reference as given, with
+	 * a principal in short form expanded ({@link Engine#expandPath}): the Job
+	 * records it and invoke is checked on it.
+	 */
+	private RequestContext invoking(RequestContext ctx, AString ref) {
+		return ctx.withOp(engine.expandPath(ref));
 	}
 
 	private RequestContext invocationContext(RequestContext ctx, ACell input) {
@@ -276,107 +241,163 @@ public class JobManager {
 
 	/** HTTP submission: acknowledge a durable handle independently of adapter execution. */
 	public Job submitOperation(AString ref, ACell input, RequestContext ctx) {
-		Prepared prepared = prepareOperation(resolveOperation(ref, ctx).meta(), input, ctx.withOp(ref),
+		Prepared prepared = prepareOperation(resolveOperation(ref, ctx).meta(), input, invoking(ctx, ref),
 			false, Invocation.INVOKE);
+		prepared.commit();
+		Job job = prepared.accept();
 		try {
 			engine.flush();
 			AAdapter.VIRTUAL_EXECUTOR.execute(() -> {
 				try { prepared.start(); }
 				catch (RuntimeException | Error failure) {
 					// start() has already recorded the execution failure on the Job.
-					log.debug("Submitted job {} failed", prepared.job().getID(), failure);
+					log.debug("Submitted job {} failed", job.getID(), failure);
 				}
 			});
 		} catch (RuntimeException | Error failure) {
 			CoviaException reported = FaultException.within(STARTING_JOB, FaultException.VENUE, failure);
-			prepared.job().fail(reported);
+			job.fail(reported);
 			throw reported;
 		}
-		return prepared.job();
+		return job;
 	}
 
 	/**
-	 * Prepare a durable, tracked Job on behalf of a trusted in-process caller
-	 * without starting it — the scheduler's tracked fire path. Resolves and
-	 * scopes exactly like {@link #invokeOperation(AString, ACell, RequestContext)},
-	 * but is exempt from top-level admission like {@link #invokeInternal}: the
-	 * venue itself is dispatching, not a user request. The Job is recorded in
-	 * the owner's history (PENDING) regardless of operation metadata, so the
-	 * caller can persist the ID in its own state <i>before</i> any work begins,
-	 * then {@link Prepared#start()} the adapter.
+	 * Prepare a durable, tracked Job on behalf of a trusted in-process caller,
+	 * for it to record in its own venue transaction and then start — the
+	 * scheduler's tracked fire. Resolves and scopes exactly like
+	 * {@link #invokeOperation(AString, ACell, RequestContext)}, but is exempt
+	 * from top-level admission like {@link #invokeInternal}: the venue itself
+	 * is dispatching, not a user request. The Job is recorded in the owner's
+	 * history (PENDING) regardless of operation metadata.
 	 *
 	 * @param ref Operation reference (hex hash, DID URL, workspace path, etc.)
 	 * @param input Input parameters
 	 * @param ctx Request context (caller identity, caps, scope)
-	 * @return the prepared Job, not yet started
+	 * @return the prepared Job, not yet recorded
 	 */
 	Prepared prepareTracked(AString ref, ACell input, RequestContext ctx) {
-		return prepareOperation(resolveOperation(ref, ctx).meta(), input, ctx.withOp(ref),
+		return prepareOperation(resolveOperation(ref, ctx).meta(), input, invoking(ctx, ref),
 			false, Invocation.SCHEDULED);
 	}
 
 	/**
-	 * Prepare a durable backend job so its parent can checkpoint the handle
-	 * before submission. The job keeps the context it runs under
-	 * ({@link #keepCallerContext}), so work it carries on after a restart acts
-	 * with the same authority ({@link #callerContext}).
+	 * Prepare a durable backend job for its parent to record with its own
+	 * record of it, in one venue transaction. Like every recorded job, it keeps
+	 * the state it runs in ({@link #jobState}), so work it carries on after a
+	 * restart acts with the same authority ({@link #callerContext}).
 	 */
 	public Prepared prepareAgentInteraction(AMap<AString, ACell> meta, ACell input, RequestContext ctx) {
-		Prepared prepared = prepareOperation(meta, input, ctx, false, Invocation.TRACKED);
-		keepCallerContext(prepared.job, prepared.jobCtx);
-		return prepared;
+		return prepareOperation(meta, input, ctx, false, Invocation.TRACKED);
 	}
 
-	/** Bind even an untracked scheduled fire to the account lifecycle at claim time. */
+	/** Prepare an untracked scheduled fire, bound to its account when it is recorded with its claim. */
 	Prepared prepareUntracked(AString ref, ACell input, RequestContext ctx) {
-		return prepareOperation(resolveOperation(ref, ctx).meta(), input, ctx.withOp(ref),
+		return prepareOperation(resolveOperation(ref, ctx).meta(), input, invoking(ctx, ref),
 			true, Invocation.SCHEDULED_TRANSIENT);
 	}
 
 	/**
-	 * A Job that exists — PENDING, and persisted when durable — whose adapter
-	 * has not yet been invoked. Separating creation from start lets a caller
-	 * record the Job's ID in its next atomic state update and only then hand the
-	 * work to the adapter. {@link #start()} runs exactly once.
+	 * A Job checked and ready to record: its operation resolved, its adapter
+	 * found and the caller admitted, nothing written yet. Running it takes
+	 * three steps:
+	 * <ol>
+	 * <li>{@link #record} in a venue transaction, which takes the Job's id and
+	 *     writes it, PENDING, with whatever else that transaction commits;</li>
+	 * <li>once that transaction has committed, {@link #start}, which runs the
+	 *     adapter, or {@link #accept} first when the caller needs the live Job
+	 *     before it runs;</li>
+	 * <li>if the transaction failed instead, {@link #abandon}.</li>
+	 * </ol>
+	 * A Job that has been recorded is never left without an outcome by its
+	 * start: a failure there fails the Job, unless the Job went with its
+	 * account, which was deleted after the commit.
 	 */
 	public final class Prepared {
-		private final Job job;
+		private final Admission admission;
 		private final AAdapter adapter;
-		private final RequestContext jobCtx;
+		private final RequestContext ctx;
 		private final AMap<AString, ACell> meta;
 		private final ACell input;
 		private final boolean lookup;
-		private boolean started;
+		private final AtomicBoolean started = new AtomicBoolean();
+		private VenueJob job;
+		private RequestContext jobCtx;
 
-		Prepared(Job job, AAdapter adapter, RequestContext jobCtx,
+		Prepared(Admission admission, AAdapter adapter, RequestContext ctx,
 				AMap<AString, ACell> meta, ACell input, boolean lookup) {
-			this.job = job;
+			this.admission = admission;
 			this.adapter = adapter;
-			this.jobCtx = jobCtx;
+			this.ctx = ctx;
 			this.meta = meta;
 			this.input = input;
 			this.lookup = lookup;
 		}
 
-		/** The Job, already visible in the owner's history if durable. */
-		public Job job() {
+		/**
+		 * Records the Job in {@code venue}, the draft of a venue transaction,
+		 * taking its id there. A transaction body that runs again records it
+		 * again under a new id; the one that commits is the Job's.
+		 *
+		 * @return the Job's id in this run of the transaction
+		 * @throws AuthException if the owner's account has been deleted
+		 */
+		public Blob record(VenueState venue) {
+			return admission.record(venue);
+		}
+
+		/** Releases what recording took, after the transaction that recorded it failed. */
+		public void abandon() {
+			admission.abandon();
+		}
+
+		/** Records the Job in a venue transaction of its own. */
+		void commit() {
+			admission.commit();
+		}
+
+		/**
+		 * The live Job, once the transaction that recorded it has committed,
+		 * without running it yet.
+		 *
+		 * @throws AuthException if the owner's account has been deleted since,
+		 *         taking the Job with it
+		 */
+		public Job accept() {
+			if (job == null) {
+				job = admission.publish();
+				if (job.isRecorded()) log.info("Submitted job: {}", job.getID());
+				else log.debug("Started transient job: {}", job.getID());
+				// Every adapter sees the immediate Job wrapper, including a transient one.
+				// jobId is narrower: it names a durable t/ temp scope. Preserve an inherited
+				// parent scope for internal composition, and establish a new scope only for
+				// a recorded Job. Giving a transient wrapper a jobId would let a t/ write
+				// accidentally materialise a partial persistent Job record.
+				RequestContext withJob = ctx.withJob(job);
+				if (withJob.getJobId() == null && job.isRecorded()) withJob = withJob.withJobId(job.getID());
+				jobCtx = withJob;
+			}
 			return job;
 		}
 
 		/**
-		 * Invoke the adapter. A synchronous capability denial fails the Job (the
-		 * same surface async adapters produce); any other synchronous failure is
+		 * Invoke the adapter, once the transaction that recorded the Job has
+		 * committed. A synchronous capability denial fails the Job (the same
+		 * surface async adapters produce); any other synchronous failure is
 		 * recorded on the Job and the report rethrown, so a Job is never stranded
 		 * PENDING with no worker. A failure in the adapter is its operation's
 		 * fault ({@link Job#report}); one in the venue's own check before it is
 		 * the venue's.
+		 *
+		 * @throws AuthException if the owner's account has been deleted since
+		 *         the commit, taking the Job with it
 		 */
-		public synchronized Job start() {
-			if (started) throw new IllegalStateException("Job already started: " + job.getID());
-			started = true;
+		public Job start() {
+			accept();
+			if (!started.compareAndSet(false, true)) throw new IllegalStateException(ALREADY_STARTED + job.getID());
 			if (job.isFinished()) return job;
 			try {
-				if (job instanceof VenueJob venueJob) venueJob.requireAccount();
+				job.requireAccount();
 				// Only a generic reference invocation needs invoke. A bound tool
 				// calls its operation directly and retains every resource gate.
 				if (lookup) engine.requireInvoke(jobCtx, jobCtx.getOp());
@@ -396,6 +417,17 @@ public class JobManager {
 				throw failWith(job.report(e));
 			}
 			return job;
+		}
+
+		/**
+		 * The started Job's result as its operation gives it to a caller waiting
+		 * on it, as {@code run} and {@code invokeInternal} return it
+		 * ({@link AAdapter#resultFuture}): the Job's output for most operations;
+		 * for {@code agent:request}, the task's answer if it comes within the
+		 * request's wait, else the task.
+		 */
+		public CompletableFuture<ACell> resultFuture() {
+			return operationResultFuture(job, meta, input);
 		}
 
 		/** Records {@code reported} on the Job and returns it for the caller to throw. */
@@ -460,13 +492,15 @@ public class JobManager {
 	/** Executes an operation through the canonical Job machinery. */
 	private Job dispatchOperation(AMap<AString, ACell> meta, ACell input,
 			RequestContext ctx, boolean memoryOnly, Invocation invocation) {
-		return prepareOperation(meta, input, ctx, memoryOnly, invocation).start();
+		Prepared prepared = prepareOperation(meta, input, ctx, memoryOnly, invocation);
+		prepared.commit();
+		return prepared.start();
 	}
 
 	/**
-	 * Everything {@link #dispatchOperation} does short of invoking the adapter:
-	 * defaults, gates, adapter lookup, admission, Job creation and persistence.
-	 * The returned {@link Prepared} carries the Job (already PENDING) and what
+	 * Everything {@link #dispatchOperation} does before the Job is recorded:
+	 * defaults, gates, adapter lookup and admission. The returned
+	 * {@link Prepared} carries the Job's record, without its id, and what
 	 * {@link Prepared#start()} needs to run it.
 	 */
 	private Prepared prepareOperation(AMap<AString, ACell> meta, ACell input,
@@ -489,18 +523,11 @@ public class JobManager {
 		// Tool and framework bindings do not acquire lookup authority just by
 		// creating a Job. No metadata field can choose this dispatch intent.
 		AAdapter adapter = prepareInvocation(meta, input, ctx);
-		// Jobs are owned by, quota'd against, and persisted into the USER's
-		// namespace. An agent sub-principal runs inside its owner's account: it
-		// must not open a job store of its own (its jobs would vanish from the
-		// owner's listing) nor a second admission bucket (it would multiply the
-		// owner's concurrency cap). Who *acted* stays on the context —
-		// ctx.getCallerDID() / ctx.getAgentId().
+		// Jobs are owned by and persisted into the USER's namespace. An agent
+		// sub-principal runs inside its owner's account: it must not open a job
+		// store of its own (its jobs would vanish from the owner's listing).
+		// Who *acted* stays on the context — ctx.getAuthorityDID() / ctx.getAgentId().
 		AString ownerDID = ctx.getUserDID();
-
-		// Admission control: bound concurrent top-level jobs per user. Blocks up
-		// to jobBlockMs to absorb bursts, then sheds with RateLimitException (429).
-		// Sub-jobs (current Job or inherited jobId set) and internal callers are exempt.
-		boolean permit = applyAdmission && acquireJobPermit(ctx, ownerDID);
 
 		// The record's `op` is the reference that was actually invoked (e.g.
 		// v/ops/json/merge, or a bare hash when the caller pinned a definition
@@ -510,28 +537,13 @@ public class JobManager {
 		if (opID == null) opID = Strings.create(meta.getHash().toHexString());
 		Blob parentID = parentJobID(ctx);
 		long ts = engine.currentTimestamp().longValue();
-		Blob jobID = generateJobID(ts);
-		// Attached before the job can be seen, so whatever ends it releases the permit.
-		if (permit) permitHolders.put(jobID, ownerDID);
-		Job job;
-		try {
-			job = submitJob(jobID, ts, opID, meta, input, ownerDID, ctx.getCallerDID(),
-				parentID, memoryOnly, resultOriented,
-				(invocation == Invocation.RUN || invocation == Invocation.CALL_RUN) && ctx.getJob() == null && ctx.getJobId() == null, adapter);
-		} catch (RuntimeException e) {
-			releaseJobPermit(jobID);
-			throw e;
-		}
-		// Every adapter sees the immediate Job wrapper, including a transient one.
-		// jobId is narrower: it names a durable t/ temp scope. Preserve an inherited
-		// parent scope for internal composition, and establish a new scope only for
-		// a recorded Job. Giving a transient wrapper a jobId would let a t/ write
-		// accidentally materialise a partial persistent Job record.
-		RequestContext jobCtx = ctx.withJob(job);
-		if (jobCtx.getJobId() == null && job.isRecorded()) {
-			jobCtx = jobCtx.withJobId(job.getID());
-		}
-		return new Prepared(job, adapter, jobCtx, meta, input, invocation.lookup);
+		Admission admission = jobAdmission(ts, opID, meta, input, ownerDID, ctx,
+			parentID, memoryOnly, resultOriented,
+			(invocation == Invocation.RUN || invocation == Invocation.CALL_RUN) && ctx.getJob() == null && ctx.getJobId() == null,
+			adapter);
+		// A recorded job keeps the state it runs in from admission until it finishes
+		admission.state = jobState(ctx);
+		return new Prepared(admission, adapter, ctx, meta, input, invocation.lookup);
 	}
 
 	/**
@@ -617,6 +629,15 @@ public class JobManager {
 		return startOperation(ref, input, ctx, false, Invocation.TOOL);
 	}
 
+	/**
+	 * As above, for the definition the framework already resolved for
+	 * {@code ref}: a tool bound by an MCP token, whose definition its issuer
+	 * reads, while the call acts with the token's authority.
+	 */
+	public Run startToolOperation(AString ref, Operation operation, ACell input, RequestContext ctx) {
+		return startOperation(operation.meta(), input, invoking(ctx, ref), false, Invocation.TOOL);
+	}
+
 	private CompletableFuture<ACell> runOperation(AString ref, ACell input,
 			RequestContext ctx, boolean privateJob, Invocation invocation) {
 		return startOperation(ref, input, ctx, privateJob, invocation).result();
@@ -630,7 +651,7 @@ public class JobManager {
 			if (asset == null) return Run.failed(unresolved(ref));
 			Operation op = Operation.from(asset);
 			if (op == null) return Run.failed(notAnOperation(asset));
-			return startOperation(op.meta(), input, ctx.withOp(ref), privateJob, invocation);
+			return startOperation(op.meta(), input, invoking(ctx, ref), privateJob, invocation);
 		} catch (Exception e) {
 			return Run.failed(e);
 		}
@@ -655,7 +676,7 @@ public class JobManager {
 			ACell input, RequestContext ctx, boolean privateJob, Invocation invocation) {
 		try {
 			if (privateJob && !engine.config().isPrivateJobsEnabled()) {
-				return Run.failed(new NotSupportedException(PRIVATE_RUNS_DISABLED));
+				return Run.failed(new UnsupportedException(PRIVATE_RUNS_DISABLED));
 			}
 			boolean memoryOnly = privateJob || (isReadOnly(meta)
 				&& allowsInternal(meta)
@@ -752,7 +773,7 @@ public class JobManager {
 		// Always local — see invokeOperation(AString,...): resolution
 		// returns definitions, never remote execution handles.
 		// Retain the bound reference for attribution and resource caveats.
-		return invokeInternal(op.meta(), input, ctx.withOp(ref), watch, record);
+		return invokeInternal(op.meta(), input, invoking(ctx, ref), watch, record);
 	}
 
 	/**
@@ -764,7 +785,7 @@ public class JobManager {
 	 */
 	public CompletableFuture<ACell> invokeReference(AString ref, Operation op, ACell input,
 			RequestContext ctx, Consumer<Job> watch, boolean record) {
-		return executeInternal(op.meta(), input, ctx.withOp(ref), watch, record, Invocation.INTERNAL_INVOKE);
+		return executeInternal(op.meta(), input, invoking(ctx, ref), watch, record, Invocation.INTERNAL_INVOKE);
 	}
 
 	public CompletableFuture<ACell> invokeInternal(AMap<AString, ACell> meta, ACell input, RequestContext ctx) {
@@ -782,7 +803,8 @@ public class JobManager {
 			boolean memoryOnly = !record && allowsInternal(meta)
 				&& !(isReadOnly(meta) && engine.config().isRecordReadOnlyOperations());
 			Prepared prepared = prepareOperation(meta, input, ctx, memoryOnly, invocation);
-			if (watch != null) watch.accept(prepared.job());
+			prepared.commit();
+			if (watch != null) watch.accept(prepared.accept());
 			Job job = prepared.start();
 			return operationResultFuture(job, meta, input);
 		} catch (Exception e) {
@@ -848,9 +870,9 @@ public class JobManager {
 
 	/**
 	 * Evaluates a capability gate (#216): invokes the grant's {@code nb.gate}
-	 * operation with {@code {operation, input, caller, owner?}} describing the
-	 * invocation being authorised: {@code caller} is the principal that acted
-	 * and {@code owner} the namespace it acted in, present when that differs. The capability applies iff the gate op
+	 * operation with {@code {operation, input, caller}} describing the
+	 * invocation being authorised: {@code caller} is the principal whose
+	 * authority the check runs on. The capability applies iff the gate op
 	 * succeeds; any failure — the op fails, doesn't resolve, or times out —
 	 * denies with the reason (fail-closed, never fail-open).
 	 *
@@ -868,11 +890,35 @@ public class JobManager {
 	 */
 	String evaluateGate(AString gateOp, AString opRef, ACell input, AString caller,
 			RequestContext authorityCtx) {
+		return runGate(gateOp, gateInput(opRef, input, caller),
+			engine.authorityFrame(authorityCtx).forGateEvaluation(gateOp));
+	}
+
+	/**
+	 * Evaluates a callable's gate (CALLABLES.md): as a capability gate, with
+	 * the same input, outcome and limits, describing a call of the callable at
+	 * {@code callable} by {@code invoker}, but run with the call's own
+	 * authority ({@code call}, the callable's), as a Convex trust monitor runs
+	 * as its actor, so it can consult the provider's private records.
+	 *
+	 * @param callable the callable's resource, {@code <owner>/x/callable/<name>}
+	 * @return null when the gate admits the call, else why not
+	 */
+	public String evaluateCallableGate(AString gateOp, AString callable, ACell input, RequestContext invoker,
+			RequestContext call) {
+		return runGate(gateOp, gateInput(callable, input, invoker.getAuthorityDID()),
+			call.asGateEvaluation(gateOp));
+	}
+
+	/** A gate's input: the operation being authorised, its input and the principal that acted. */
+	private static AMap<AString, ACell> gateInput(AString operation, ACell input, AString caller) {
+		AMap<AString, ACell> gateInput = Maps.of(Fields.OPERATION, operation, Fields.INPUT, input);
+		return (caller == null) ? gateInput : gateInput.assoc(Fields.CALLER, caller);
+	}
+
+	/** Runs gate {@code gateOp} on {@code gateInput} under {@code gateCtx}: null when it succeeds, else why not. */
+	private String runGate(AString gateOp, AMap<AString, ACell> gateInput, RequestContext gateCtx) {
 		try {
-			AMap<AString, ACell> gateInput = Attribution.attribute(Maps.of(
-				Fields.OPERATION, opRef,
-				Fields.INPUT, input), caller, authorityCtx.getUserDID());
-			RequestContext gateCtx = authorityCtx.forGateEvaluation(gateOp);
 			Asset gate = engine.resolveAssetUnchecked(gateOp, gateCtx);
 			if (gate == null) return "gate " + gateOp + ": cannot resolve operation";
 			invokeInternal(gate.meta(), gateInput, gateCtx)
@@ -923,12 +969,12 @@ public class JobManager {
 	 * @throws InvalidInputException invalid meta or schema violation
 	 * @throws AuthException caller not authenticated
 	 * @throws RuntimeException capability denied
-	 * @throws NotSupportedException adapter not registered
+	 * @throws UnsupportedException adapter not registered
 	 */
 	private AAdapter prepareInvocation(AMap<AString, ACell> meta, ACell input, RequestContext ctx) {
 		if (ctx.getJob() instanceof VenueJob parent) parent.requireAccount();
 		if (meta == null) throw new IllegalArgumentException("Metadata must be specified");
-		AString callerDID = ctx.getCallerDID();
+		AString callerDID = ctx.getAuthorityDID();
 		if (callerDID == null) throw new AuthException("Authentication required");
 		// Authentication establishes who the caller is; admission establishes
 		// whether that DID has an account at this venue. Keep this in the shared
@@ -950,9 +996,22 @@ public class JobManager {
 			}
 		}
 
+		requireRunning(adapterName);
 		AAdapter adapter = engine.getAdapter(adapterName);
-		if (adapter == null) throw new NotSupportedException(ADAPTER_NOT_AVAILABLE + adapterName);
+		if (adapter == null) throw new UnsupportedException(ADAPTER_NOT_AVAILABLE + adapterName);
 		return adapter;
+	}
+
+	/**
+	 * Refuses work for an enabled adapter that is not running: its start
+	 * failed, or it could not take back its settings after a refused change.
+	 * Why is for operators ({@link Engine#adapterFailure}), not callers.
+	 * @throws UnavailableException if the adapter is not running
+	 */
+	private void requireRunning(String adapterName) {
+		if (engine.adapterFailure(adapterName) != null) {
+			throw new UnavailableException(Engine.ADAPTER_NOT_RUNNING.formatted(adapterName));
+		}
 	}
 
 	private static final AString K_STRICT = Strings.intern("strict");
@@ -965,28 +1024,28 @@ public class JobManager {
 	// ========== Job Submission ==========
 
 	/**
-	 * Submit a Job for an operation.
+	 * The admission of a Job for an operation: its record, still without its
+	 * id, and how its live handle is made.
 	 *
-	 * @param ownerDID the namespace the job is persisted into, and what
-	 *        ownership, access control and quota key on
-	 * @param callerDID the principal that made the call: the owner itself, one
-	 *        of its agents or a delegate. The record names both
-	 *        ({@link Attribution}), so it answers "who did this" as well as
-	 *        "whose account".
+	 * @param ownerDID the account the job is kept in, and what access control
+	 *        keys on
+	 * @param ctx the request, whose authority made the call: the record names
+	 *        it as its caller, left out when it is the account itself
+	 *        ({@link Attribution})
 	 * @param parentID nearest recorded enclosing job, or null for a top-level
 	 *        job. Stamped on transient wrappers too (in memory only) so a
 	 *        recorded grandchild dispatched through a transient layer still
 	 *        links to its nearest recorded ancestor.
 	 */
-	private Job submitJob(Blob jobID, long ts, AString opID, AMap<AString, ACell> meta, ACell input, AString ownerDID,
-			AString callerDID, Blob parentID, boolean memoryOnly, boolean resultOriented, boolean directRun,
+	private Admission jobAdmission(long ts, AString opID, AMap<AString, ACell> meta, ACell input, AString ownerDID,
+			RequestContext ctx, Blob parentID, boolean memoryOnly, boolean resultOriented, boolean directRun,
 			AAdapter adapter) {
+		AString callerDID = ctx.getAuthorityDID();
 		if (ownerDID == null || callerDID == null) throw new AuthException("Authentication required");
 
 		OutputRules rules = OutputRules.of(meta);
 
 		AMap<AString, ACell> status = Maps.of(
-				Fields.ID, jobID,
 				Fields.OP, opID,
 				Fields.STATUS, Status.PENDING,
 				Fields.UPDATED, CVMLong.create(ts),
@@ -1010,122 +1069,196 @@ public class JobManager {
 			status = status.assoc(Fields.ADAPTER, Strings.create(adapterName));
 		}
 
-		AMap<AString, ACell> admitted = status;
-		VenueJob job = admit(jobID, status, rules, ownerDID, memoryOnly, resultOriented,
-			record -> new VenueJob(record, admitted, rules, ownerDID, this, !memoryOnly, directRun, adapter));
-		if (memoryOnly) log.debug("Started transient job: {}", jobID);
-		else log.info("Submitted job: {}", jobID);
-		return job;
+		return new Admission(ts, status, rules, ownerDID, memoryOnly, resultOriented,
+			(record, data) -> new VenueJob(record, data, rules, ownerDID, this, !memoryOnly, directRun, adapter));
 	}
 
 	/**
-	 * Writes a job's row and its entry ({@link JobIndex}) in one transaction,
-	 * unless it is memory-only, and publishes its live handle.
+	 * A Job being admitted. Its id is taken, and its row and entry
+	 * ({@link JobIndex}) written, in a venue transaction: the Job's own, or a
+	 * caller's that commits its own record of the Job with it. Its live handle
+	 * is published once that transaction has committed. A transaction body
+	 * that runs again takes a new id, and the run that committed holds the
+	 * Job's. Each id is listed as accepting before its row is written, and
+	 * stays listed until the handle is published or the admission abandoned,
+	 * so a caller who reads the committed row first waits for the handle
+	 * ({@link #liveJob}).
 	 *
 	 * <p>The row comes first because a handle reads a missing row as an erased
-	 * account. The transaction refuses a deleted account; deletion can still
-	 * commit after it, and scan the active jobs before the handle is published,
-	 * so the account is checked again once the handle can be seen: either the
-	 * scan finds the handle or this check finds the deletion.</p>
+	 * account. The transaction refuses a deleted account and notes the
+	 * account's generation, and the handle is published only while the account
+	 * is that one. Deletion can commit after the transaction and scan the
+	 * active jobs before the handle is published, so the account is checked
+	 * again once the handle can be seen: either the scan finds the handle or
+	 * this check finds the deletion.</p>
 	 *
-	 * @throws AuthException if the owner's account has been deleted
+	 * <p>Recording runs on the thread making the transaction; publishing and
+	 * abandoning after it, on that thread or one it hands the Job to.</p>
 	 */
-	VenueJob admit(Blob jobID, AMap<AString, ACell> status, OutputRules rules,
-			AString ownerDID, boolean memoryOnly, boolean preserveFailureCause,
-			java.util.function.Function<JobRecord, VenueJob> handle) {
-		CompletableFuture<Void> acceptance = new CompletableFuture<>();
-		accepting.put(jobID, acceptance);
-		try {
-			engine.getVenueState().users().requireNotDeleted(ownerDID);
-			JobRecord record = null;
-			if (!memoryOnly) {
-				User account = account(ownerDID);
-				AMap<AString, ACell> entry = Maps.of(JobIndex.OWNER, ownerDID);
-				AMap<AString, ACell> kept = rules.toCell();
-				if (kept != null) entry = entry.assoc(JobIndex.RULES, kept);
-				AMap<AString, ACell> admitted = entry;
-				venue().execute(draft -> {
-					if (draft.users().ensure(ownerDID).jobs().create(jobID, status) == null) {
-						throw new IllegalStateException(JOB_ID_EXISTS + jobID);
-					}
-					draft.jobIndex().put(jobID, admitted);
-				});
-				record = account.jobs().at(jobID);
+	final class Admission {
+		private final long ts;
+		/** The Job's record without its id. */
+		private final AMap<AString, ACell> status;
+		private final OutputRules rules;
+		private final AString ownerDID;
+		private final boolean memoryOnly;
+		private final boolean preserveFailureCause;
+		private final BiFunction<JobRecord, AMap<AString, ACell>, VenueJob> handle;
+		/** The state the entry keeps ({@link #jobState}), or null. */
+		private AMap<AString, ACell> state;
+		/** The id each run of the transaction took, in order. */
+		private final List<Blob> ids = new ArrayList<>();
+		/** The generation of the owner's account the Job was recorded in ({@link Users#requireCurrent}). */
+		private ACell generation;
+
+		Admission(long ts, AMap<AString, ACell> status, OutputRules rules, AString ownerDID,
+				boolean memoryOnly, boolean preserveFailureCause,
+				BiFunction<JobRecord, AMap<AString, ACell>, VenueJob> handle) {
+			this.ts = ts;
+			this.status = status;
+			this.rules = rules;
+			this.ownerDID = ownerDID;
+			this.memoryOnly = memoryOnly;
+			this.preserveFailureCause = preserveFailureCause;
+			this.handle = handle;
+		}
+
+		/** Records the Job in {@code venue}, a venue transaction's draft, under a new id. */
+		Blob record(VenueState venue) {
+			Blob id = generateJobID(ts);
+			ids.add(id);
+			accepting.put(id, new CompletableFuture<>());
+			if (memoryOnly) {
+				venue.users().requireNotDeleted(ownerDID);
+				generation = RT.getIn(venue.users().get(ownerDID), Users.GENERATION);
+				return id;
 			}
-			VenueJob job = handle.apply(record);
-			job.setPreserveFailureCause(preserveFailureCause);
-			activeJobs.put(jobID, job);
+			User account = venue.users().ensure(ownerDID);
+			if (account.jobs().create(id, status.assoc(Fields.ID, id)) == null) {
+				throw new IllegalStateException(JOB_ID_EXISTS + id);
+			}
+			AMap<AString, ACell> entry = Maps.of(JobIndex.OWNER, ownerDID);
+			AMap<AString, ACell> kept = rules.toCell();
+			if (kept != null) entry = entry.assoc(JobIndex.RULES, kept);
+			if (state != null) {
+				// A context with no job scope of its own is the Job's
+				AMap<AString, ACell> context = state.containsKey(Fields.JOB_ID) ? state : state.assoc(Fields.JOB_ID, id);
+				entry = entry.assoc(JobIndex.CONTEXT, context);
+			}
+			venue.jobIndex().put(id, entry);
+			generation = RT.getIn(account.get(), Users.GENERATION);
+			return id;
+		}
+
+		/** Records the Job in a venue transaction of its own, which a memory-only Job does not need. */
+		void commit() {
 			try {
-				engine.getVenueState().users().requireNotDeleted(ownerDID);
-			} catch (AuthException deleted) {
-				job.cancel();
-				throw deleted;
+				if (memoryOnly) record(venue());
+				else venue().execute(this::record);
+			} catch (RuntimeException | Error e) {
+				abandon();
+				throw e;
 			}
-			return job;
-		} finally {
-			accepting.remove(jobID);
-			acceptance.complete(null);
+		}
+
+		/**
+		 * Publishes the live handle of the Job the committed transaction
+		 * recorded.
+		 *
+		 * @throws AuthException if the owner's account has been deleted since,
+		 *         taking the Job with it
+		 */
+		VenueJob publish() {
+			if (ids.isEmpty()) throw new IllegalStateException(NOT_RECORDED + ownerDID);
+			Blob id = ids.get(ids.size() - 1);
+			try {
+				for (Blob other : ids) if (!other.equals(id)) release(other);
+				requireAccount();
+				JobRecord record = null;
+				if (!memoryOnly) {
+					record = account(ownerDID).jobs().at(id);
+					if (record.getRecord() == null) throw new IllegalStateException(NOT_RECORDED + id);
+				}
+				VenueJob job = handle.apply(record, status.assoc(Fields.ID, id));
+				job.setPreserveFailureCause(preserveFailureCause);
+				activeJobs.put(id, job);
+				try {
+					requireAccount();
+				} catch (AuthException deleted) {
+					job.cancel();
+					throw deleted;
+				}
+				return job;
+			} finally {
+				release(id);
+			}
+		}
+
+		/** Releases what recording took, after the transaction that recorded the Job failed. */
+		void abandon() {
+			for (Blob id : ids) release(id);
+			ids.clear();
+		}
+
+		/**
+		 * Refuses once the owner's account is no longer the one the Job was
+		 * recorded in. An account never deleted has no generation, so null is
+		 * its first.
+		 */
+		private void requireAccount() {
+			Users.requireCurrent(venue().users().get(ownerDID), generation);
+		}
+
+		/** Ends the acceptance listed for {@code id}, letting go of anyone waiting on it. */
+		private void release(Blob id) {
+			CompletableFuture<Void> acceptance = accepting.remove(id);
+			if (acceptance != null) acceptance.complete(null);
 		}
 	}
 
-	// ========== Caller context kept for work that continues ==========
+	// ========== A job's state ==========
 
 	/**
-	 * Keeps what {@code ctx} carries beyond its caller with {@code job}, for
-	 * work that continues for the caller after this request, such as a session
-	 * that resumes after a restart ({@link #callerContext}): the verified UCAN
-	 * proofs it presents, in the form checked on arrival, the separate
-	 * authority it acts with if it has one ({@link Engine#keptAuthority}), and
-	 * its execution scopes (agent, session, job, task). They are kept in the job's entry
-	 * ({@link JobIndex}), which no route reads, and go with it when the job
-	 * ends. A job keeps a context even when its caller presented nothing
-	 * beyond itself, so {@link #keepsCallerContext} tells it from one whose
-	 * adapter never asked. A job that is not recorded does not outlive the
-	 * request, so it keeps none.
+	 * The state a recorded job keeps from admission until it finishes
+	 * (AUTHORITY.md, A job's state), from the context it runs in: the frame,
+	 * what narrows it and the grants presented ({@link Engine#stateOf}); the
+	 * route ({@link RequestContext#getRoute}), since work it carries on is the
+	 * same request; and its execution scopes (agent, session, job and task),
+	 * where a context with no job scope of its own takes the job's
+	 * ({@link Admission#record}). It is kept in the job's entry
+	 * ({@link JobIndex}), which no route reads, and goes with it when the job
+	 * ends. A job that is not recorded does not outlive the request, so it
+	 * keeps none.
 	 */
-	public void keepCallerContext(Job job, RequestContext ctx) {
-		if (!job.isRecorded()) return;
-		AMap<AString, ACell> kept = Maps.empty();
-		AVector<ACell> proofs = ctx.getProofs();
-		if (proofs != null && !proofs.isEmpty()) kept = kept.assoc(Fields.PROOFS, proofs);
-		AMap<AString, ACell> authority = Engine.keptAuthority(ctx);
-		if (authority != null) kept = kept.assoc(Fields.AUTHORITY, authority);
-		if (ctx.getAgentId() != null) kept = kept.assoc(Fields.AGENT_ID, ctx.getAgentId());
-		if (ctx.getSessionId() != null) kept = kept.assoc(Fields.SESSION_ID, ctx.getSessionId());
-		if (ctx.getJobId() != null) kept = kept.assoc(Fields.JOB_ID, ctx.getJobId());
-		if (ctx.getTaskId() != null) kept = kept.assoc(Fields.TASK_ID, ctx.getTaskId());
-		AMap<AString, ACell> context = kept;
-		venue().jobIndex().update(job.getID(), entry -> entry.assoc(JobIndex.CONTEXT, context));
+	static AMap<AString, ACell> jobState(RequestContext ctx) {
+		AMap<AString, ACell> state = Engine.stateOf(ctx);
+		if (state == null) return null;
+		AVector<ACell> route = ctx.getRoute();
+		if (route != null && !route.isEmpty()) state = state.assoc(Fields.ROUTE, route);
+		if (ctx.getAgentId() != null) state = state.assoc(Fields.AGENT_ID, ctx.getAgentId());
+		if (ctx.getSessionId() != null) state = state.assoc(Fields.SESSION_ID, ctx.getSessionId());
+		if (ctx.getJobId() != null) state = state.assoc(Fields.JOB_ID, ctx.getJobId());
+		if (ctx.getTaskId() != null) state = state.assoc(Fields.TASK_ID, ctx.getTaskId());
+		return state;
 	}
 
 	/**
-	 * Whether {@code job} keeps its caller's context ({@link #keepCallerContext}),
-	 * so that {@link #callerContext} rebuilds the context it started in rather
-	 * than its caller alone.
+	 * The context a job acts in again, in its account, from the state it keeps
+	 * ({@link #jobState}): its frame as it stands now ({@link Engine#contextOf}),
+	 * on the route and with the execution scopes it keeps. This is how work
+	 * that continues after a restart regains its authority, and no more than
+	 * its request had. Nobody is present in it, so it has no origin, though
+	 * its route still names where the request started.
 	 *
-	 * @return false when its adapter never asked, or the job has finished
-	 */
-	public boolean keepsCallerContext(Job job) {
-		return RT.getIn(venue().jobIndex().entry(job.getID()), JobIndex.CONTEXT) != null;
-	}
-
-	/**
-	 * The context a job's caller acts under now, in the job's namespace:
-	 * what a live request of the caller's would hold on arrival
-	 * ({@link Engine#context(AString, AString, AVector, AMap)}), presenting again
-	 * the proofs the job keeps and acting with the separate authority it keeps,
-	 * with the execution scopes it keeps ({@link #keepCallerContext}). This is
-	 * how work that continues after a restart regains its authority.
-	 *
-	 * @throws AuthException when the job names no caller, or its caller could not act now
+	 * @throws AuthException when the job keeps no state ({@link #NO_STATE}),
+	 *         as one that has finished, or its frame could not act now
 	 */
 	public RequestContext callerContext(Job job) {
-		AString caller = job.getCaller();
-		if (caller == null) throw new AuthException(NO_CALLER + job.getID().toHexString());
 		AMap<AString, ACell> kept = RT.ensureMap(RT.getIn(venue().jobIndex().entry(job.getID()), JobIndex.CONTEXT));
-		RequestContext ctx = engine.context(job.getOwner(), caller, RT.ensureVector(RT.getIn(kept, Fields.PROOFS)),
-			RT.ensureMap(RT.getIn(kept, Fields.AUTHORITY)));
-		if (kept == null) return ctx;
+		if (kept == null) throw new AuthException(NO_STATE + job.getID());
+		RequestContext ctx = engine.contextOf(accountOf(job), kept);
+		AVector<ACell> route = RT.ensureVector(kept.get(Fields.ROUTE));
+		if (route != null) ctx = ctx.withRoute(route);
 		AString agentId = RT.ensureString(kept.get(Fields.AGENT_ID));
 		if (agentId != null) ctx = ctx.withAgentId(agentId);
 		if (kept.get(Fields.SESSION_ID) instanceof Blob sessionId) ctx = ctx.withSessionId(sessionId);
@@ -1156,15 +1289,24 @@ public class JobManager {
 	 * @param change Pure edit of the data, empty when there is none; null removes it
 	 */
 	public void updateAdapterData(Job job, UnaryOperator<AMap<AString, ACell>> change) {
+		updateAdapterData(venue(), job, change);
+	}
+
+	/**
+	 * As {@link #updateAdapterData(Job, UnaryOperator)}, in {@code venue}, the
+	 * draft of a venue transaction, so the change commits with whatever else
+	 * that transaction writes. A Job held only in memory changes at once.
+	 */
+	public void updateAdapterData(VenueState venue, Job job, UnaryOperator<AMap<AString, ACell>> change) {
 		if (job instanceof VenueJob held && held.isMemoryOnly()) {
 			held.updateAdapterData(change);
 			return;
 		}
-		venue().jobIndex().updateAdapterData(job.getID(), change);
+		venue.jobIndex().updateAdapterData(job.getID(), change);
 	}
 
-	/** Why a job's work cannot regain authority: its record names no caller. */
-	public static final String NO_CALLER = "The job records no caller to act as: ";
+	/** Why a job's work cannot regain authority: it keeps no state, as a finished job does not; the job's id follows. */
+	public static final String NO_STATE = "The job keeps no state to act in again: ";
 
 	// ========== Mirrors ==========
 
@@ -1177,7 +1319,7 @@ public class JobManager {
 	/** What a mirror copies from its call when it is made. */
 	private static final AString[] MIRRORED_FIELDS = {
 		Fields.OP, Fields.INPUT, Fields.NAME, Fields.ADAPTER,
-		Fields.CALLER, Fields.OWNER, Fields.PARENT, Fields.CREATED };
+		Fields.CALLER, Fields.PARENT, Fields.CREATED };
 
 	/** What a mirror copies from its call when the call ends. */
 	private static final AString[] OUTCOME_FIELDS = { Fields.OUTPUT, Fields.ERROR, Fields.ERROR_CODE };
@@ -1186,11 +1328,11 @@ public class JobManager {
 	 * A recorded job for a call that has none, so a caller who stops waiting
 	 * can be pointed at a job to look up, one that outlasts a restart. The
 	 * mirror looks like the call: its operation, input (secrets hidden), name,
-	 * adapter, caller, owner, parent and creation time, and it names the call
+	 * adapter, caller, parent and creation time, kept in the call's account, and it names the call
 	 * in {@link #MIRROR_OF}. It stays STARTED until the call ends, then takes
 	 * the call's status, output and error; cancelling it cancels the call.
-	 * No adapter runs it: it holds no admission permit, takes no messages,
-	 * and a restart fails it and shutdown cancels it by the default path
+	 * No adapter runs it: it takes no messages, and a restart fails it and
+	 * shutdown cancels it by the default path
 	 * ({@link AAdapter#defaultRecover}, {@link AAdapter#defaultSuspend}).
 	 *
 	 * @param call a Job this manager started, never a direct or private run
@@ -1205,21 +1347,21 @@ public class JobManager {
 		requireAccepting(false);
 		AMap<AString, ACell> data = call.getData();
 		long ts = engine.currentTimestamp().longValue();
-		Blob jobID = generateJobID(ts);
 		AMap<AString, ACell> status = Maps.of(
-			Fields.ID, jobID,
 			Fields.STATUS, Status.STARTED,
 			Fields.CREATED, CVMLong.create(ts),
 			Fields.UPDATED, CVMLong.create(ts),
-			MIRROR_OF, Strings.create(call.getID().toHexString()));
+			MIRROR_OF, call.getID());
 		for (AString field : MIRRORED_FIELDS) {
 			ACell value = data.get(field);
 			if (value != null) status = status.assoc(field, value);
 		}
-		AMap<AString, ACell> mirrored = status;
-		AString owner = Attribution.owner(data);
-		VenueJob mirror = admit(jobID, status, unrecorded.rules(), owner, false, false,
-			record -> new MirrorJob(record, mirrored, unrecorded.rules(), owner, this, call));
+		AString owner = unrecorded.accountDID();
+		Admission admission = new Admission(ts, status, unrecorded.rules(), owner, false, false,
+			(record, mirrored) -> new MirrorJob(record, mirrored, unrecorded.rules(), owner, this, call));
+		admission.commit();
+		VenueJob mirror = admission.publish();
+		Blob jobID = mirror.getID();
 		whenFinished(call, () -> {
 			AMap<AString, ACell> outcome = call.getData();
 			try {
@@ -1269,69 +1411,88 @@ public class JobManager {
 
 	// ========== Job Queries ==========
 
-	/**
-	 * Gets a snapshot of the current job status data with request context.
-	 * Reads the primary lattice record, using a live handle's owner when available.
-	 * @throws AuthException if the caller does not own the job
-	 */
-	public AMap<AString, ACell> getJobData(Blob jobID, RequestContext ctx) {
-		// Transient results belong only to their awaiting caller, not job-query APIs.
-		// 1. Hot cache (active jobs)
-		Job job;
-		job = activeJobs.get(jobID);
-		if (job != null && !job.isRecorded()) return null;
-		if (job != null) {
-			AMap<AString, ACell> data = ((VenueJob) job).primaryRecord();
-			if (data == null) return null;
-			requireReadable(ctx, jobID, data);
-			return data;
-		}
-
-		// 2. User's lattice (authoritative). Scoped to the caller's own jobs;
-		// a delegated read of another user's *terminal* (evicted) job goes via
-		// the explicit DID-URL path (covia:read did:<owner>/j/<id>).
-		AString did = ctx.getUserDID();
-		if (did == null) return null;
-		User user = engine.getVenueState().users().user(did);
-		if (user == null) return null;
-		AMap<AString, ACell> record = user.jobs().getRecord(jobID);
-		if (record != null) requireReadable(ctx, jobID, record);
-		return record;
+	/** Canonical capability resource for a Job, independent of its execution adapter. */
+	public static AString resource(AString owner, Blob id) {
+		return owner.append("/j/" + id.toHexString());
 	}
 
 	/** Opening of every refusal of access to a job. */
 	public static final String JOB_ACCESS_DENIED = "Access denied to job: ";
 
-	private void requireReadable(RequestContext ctx, Blob jobID, AMap<AString, ACell> data) {
-		if (!canReadJob(ctx, jobID, data)) throw new AuthException(JOB_ACCESS_DENIED + jobID.toHexString());
+	/** Read a Job, defaulting the retained-record lookup to the caller's namespace. */
+	public AMap<AString, ACell> getJobData(Blob id, RequestContext ctx) {
+		return getJobData(id, ctx, null);
+	}
+
+	/** An explicit owner locates retained Jobs; it never changes the caller's authority. */
+	public AMap<AString, ACell> getJobData(Blob id, RequestContext ctx, AString owner) {
+		Authorized read = authorized(id, ctx, owner, Abilities.JOB_READ);
+		return (read == null) ? null : Attribution.inFull(read.data(), read.account());
+	}
+
+	private AMap<AString, ACell> authorizedRecord(Blob id, RequestContext ctx, AString owner, AString ability) {
+		Authorized read = authorized(id, ctx, owner, ability);
+		return (read == null) ? null : read.data();
 	}
 
 	/**
-	 * Read authorisation for a job: the owner, or a caller presenting a UCAN
-	 * proof granting {@code crud/read} on the job resource {@code <owner>/j/<id>}
-	 * — the same right as {@code covia:read did:<owner>/j/<id>} (covia#102), via
-	 * the shared {@link CapabilityChecker#proofsCover} check. Reads are
-	 * delegable like any other read; job *mutations* remain owner-only
-	 * ({@link #requireJobOwner}).
+	 * A job's record as it is kept, the account it is kept in, and the live
+	 * handle it was read from, or null for a stored record.
 	 */
-	private boolean canReadJob(RequestContext ctx, Blob jobID, AMap<AString, ACell> data) {
-		if (engine.getAccessControl().canAccessJob(ctx, data, Capability.CRUD_READ)) return true; // owner
-		AString owner = Attribution.owner(data);
-		if (owner == null) return false; // venue-internal job — owner/internal only
-		AString resource = owner.append("/j/" + jobID.toHexString());
-		return engine.crossUserAllows(ctx, resource, Capability.CRUD_READ);
-	}
+	private record Authorized(Job live, AString account, AMap<AString, ACell> data) {}
 
 	/**
-	 * Owner-only gate for job <em>mutations</em> (cancel/pause/resume/delete).
-	 * A {@code crud/read} delegation lets a caller read a job but not mutate it,
-	 * so mutations check ownership explicitly rather than relying on the
-	 * read-delegable {@link #getJobData(Blob, RequestContext)}.
+	 * Reads job {@code id} for a caller with {@code ability}, or null when there
+	 * is none it may know of. A caller that wants the job's handle takes it from
+	 * here, never from a second lookup: a job that finishes in between leaves
+	 * the active set, and the second lookup would find only the record read
+	 * before it finished, a handle that never finishes.
 	 */
-	private void requireJobOwner(RequestContext ctx, Blob jobID, AMap<AString, ACell> data) {
-		if (!engine.getAccessControl().canAccessJob(ctx, data, Capability.CRUD_WRITE)) {
-			throw new AuthException(JOB_ACCESS_DENIED + jobID.toHexString());
+	private Authorized authorized(Blob id, RequestContext ctx, AString named, AString ability) {
+		// The lookup owner as the caller named it, a short form expanded where the job is held
+		AString owner = engine.expandPrincipal(named);
+		Job live = liveJob(id);
+		AMap<AString, ACell> data;
+		AString account;
+		if (live != null) {
+			if (!live.isRecorded()) return null;
+			account = ((VenueJob) live).accountDID();
+			data = ((VenueJob) live).primaryRecord();
+			if (data == null || (owner != null && !owner.equals(account))) return null;
+		} else {
+			account = owner == null ? ctx.getUserDID() : owner;
+			User user = account == null ? null : engine.getVenueState().users().user(account);
+			data = user == null ? null : user.jobs().getRecord(id);
 		}
+		if (data == null) return null;
+		requireJobAbility(ctx, id, account, data, ability);
+		return new Authorized(live, account, data);
+	}
+
+	/** Authorize a task-specific control without exposing its record. */
+	public void requireAccess(Blob id, RequestContext ctx, AString owner, AString ability) {
+		if (authorizedRecord(id, ctx, owner, ability) == null) throw jobNotFound(id);
+	}
+
+	/** A result wait rechecks access at delivery, so an expired grant discloses no result. */
+	public CompletableFuture<ACell> awaitResult(Blob id, RequestContext ctx, AString owner) {
+		Job job = getJob(id, ctx, owner);
+		if (job == null) throw jobNotFound(id);
+		return job.future().handle((result, error) -> {
+			requireAccess(id, ctx, owner, Abilities.JOB_READ);
+			if (error != null) throw new java.util.concurrent.CompletionException(error);
+			return result;
+		});
+	}
+
+	private void requireJobAbility(RequestContext ctx, Blob id, AString account, AMap<AString, ACell> data, AString ability) {
+		if (!engine.getAccessControl().canAccessJob(ctx, account, data, ability))
+			throw new AuthException(JOB_ACCESS_DENIED + id + " (" + ability + ")");
+	}
+
+	/** Controls acknowledge acceptance without disclosing the Job's input, output or history. */
+	public static AMap<AString, ACell> acknowledgement(Blob id) {
+		return Maps.of(Fields.ID, id, Fields.ACCEPTED, CVMBool.TRUE);
 	}
 
 	/**
@@ -1346,8 +1507,9 @@ public class JobManager {
 	}
 
 	/**
-	 * Gets the live Job object for the given job ID.
-	 * Checks in-memory cache first, falls back to constructing a read-only Job from lattice.
+	 * The live Job for the given job ID, or null when it is not live: a job
+	 * leaves the live set once it finishes. {@link #getJob(Blob, RequestContext)}
+	 * also gives a finished job, from its stored record.
 	 */
 	public Job getJob(Blob jobID) {
 		Job job = activeJobs.get(jobID);
@@ -1375,37 +1537,31 @@ public class JobManager {
 	 * Gets the live Job object with lattice fallback using request context.
 	 */
 	public Job getJob(Blob jobID, RequestContext ctx) {
-		Job job = liveJob(jobID);
-		if (job != null) {
-			requireReadable(ctx, jobID, job.getData());
-			return job;
-		}
-
-		// Fall back to user's lattice
-		AString did = ctx.getUserDID();
-		if (did == null) return null;
-		User user = engine.getVenueState().users().user(did);
-		if (user == null) return null;
-		AMap<AString, ACell> record = user.jobs().getRecord(jobID);
-		if (record == null) return null;
-		requireReadable(ctx, jobID, record);
-		return new Job(record);
+		return getJob(jobID, ctx, null);
 	}
 
-	/** The collection the job listing reads: the caller's jobs. */
-	private static final AString JOB_RECORDS = Strings.intern("j/");
+	/**
+	 * The live handle of a job the caller may read, the one its record was read
+	 * from, or a Job of its stored record once it is no longer live.
+	 */
+	public Job getJob(Blob jobID, RequestContext ctx, AString owner) {
+		Authorized read = authorized(jobID, ctx, owner, Abilities.JOB_READ);
+		if (read == null) return null;
+		return (read.live() != null) ? read.live() : new Job(Attribution.inFull(read.data(), read.account()));
+	}
 
 	/**
 	 * Gets the jobs Index for the given request context.
 	 * Reads directly from the user's per-user lattice. Listing the jobs reads
-	 * their collection, so the caller needs {@code crud/read} on {@code j/}.
+	 * their collection, so the caller needs {@code job/read} on {@code j/}.
 	 *
 	 * @throws AuthException when the caller may not read {@code j/}
 	 */
 	public Index<Blob, ACell> getJobs(RequestContext ctx) {
 		AString did = ctx.getUserDID();
 		if (did == null) return Index.none();
-		engine.requireResourceAccess(ctx, JOB_RECORDS, Capability.CRUD_READ);
+		engine.requireAuthority(ctx, ctx.getUserDID().append("/j/"), Abilities.JOB_READ,
+			Strings.create(engine.config().getBaseUrl()));
 		User user = engine.getVenueState().users().user(did);
 		if (user == null) return Index.none();
 		return user.jobs().getAll();
@@ -1420,7 +1576,8 @@ public class JobManager {
 	public long countJobs(RequestContext ctx) {
 		AString did = ctx.getUserDID();
 		if (did == null) return 0;
-		engine.requireResourceAccess(ctx, JOB_RECORDS, Capability.CRUD_READ);
+		engine.requireAuthority(ctx, ctx.getUserDID().append("/j/"), Abilities.JOB_READ,
+			Strings.create(engine.config().getBaseUrl()));
 		User user = engine.getVenueState().users().user(did);
 		return user == null ? 0 : user.jobs().size();
 	}
@@ -1429,7 +1586,7 @@ public class JobManager {
 
 	/**
 	 * Cancels a Job with request context.
-	 * @throws AuthException if the caller does not own the job
+	 * @throws AuthException if the caller lacks the required Job ability
 	 */
 	public AMap<AString, ACell> cancelJob(Blob id, RequestContext ctx) {
 		return cancelJob(id, ctx, null);
@@ -1438,17 +1595,20 @@ public class JobManager {
 	/**
 	 * Cancels a Job with request context and an optional reason, which becomes
 	 * the job's {@code error} ({@link Job#cancel(String)}).
-	 * @throws AuthException if the caller does not own the job
+	 * @throws AuthException if the caller lacks the required Job ability
 	 */
 	public AMap<AString, ACell> cancelJob(Blob id, RequestContext ctx, String reason) {
-		AMap<AString, ACell> data = getJobData(id, ctx);
+		return cancelJob(id, ctx, reason, null);
+	}
+
+	public AMap<AString, ACell> cancelJob(Blob id, RequestContext ctx, String reason, AString owner) {
+		AMap<AString, ACell> data = authorizedRecord(id, ctx, owner, Abilities.JOB_MANAGE);
 		if (data == null) return null;
-		requireJobOwner(ctx, id, data); // mutation: owner-only, not read-delegable
 		AMap<AString, ACell> cancelled = cancelJob(id, reason);
-		if (cancelled != null) return cancelled;
-		// Cancelling a finished job changes nothing and answers its record (COG-8),
+		if (cancelled != null) return acknowledgement(id);
+		// Cancelling a finished job changes nothing and acknowledges acceptance,
 		// whether or not its live handle has been evicted
-		if (Job.isFinished(data)) return data;
+		if (Job.isFinished(data)) return acknowledgement(id);
 		throw notLive(id, data);
 	}
 
@@ -1465,51 +1625,63 @@ public class JobManager {
 
 	/**
 	 * Pauses a running Job with request context.
-	 * @throws AuthException if the caller does not own the job
+	 * @throws AuthException if the caller lacks the required Job ability
 	 */
 	public AMap<AString, ACell> pauseJob(Blob id, RequestContext ctx) {
-		AMap<AString, ACell> data = getJobData(id, ctx);
+		return pauseJob(id, ctx, null);
+	}
+
+	public AMap<AString, ACell> pauseJob(Blob id, RequestContext ctx, AString owner) {
+		AMap<AString, ACell> data = authorizedRecord(id, ctx, owner, Abilities.JOB_MANAGE);
 		if (data == null) return null;
-		requireJobOwner(ctx, id, data); // mutation: owner-only
 		Job job = liveJob(id);
 		if (job == null) throw notLive(id, data);
+		// A stopped adapter takes no new work for its jobs
+		resolveJobAdapter(job);
 		job.pause();
-		return job.getData();
+		return acknowledgement(id);
 	}
 
 	/**
 	 * Resumes a paused Job with request context.
-	 * @throws AuthException if the caller does not own the job
+	 * @throws AuthException if the caller lacks the required Job ability
 	 */
 	public AMap<AString, ACell> resumeJob(Blob id, RequestContext ctx) {
-		AMap<AString, ACell> data = getJobData(id, ctx);
+		return resumeJob(id, ctx, null);
+	}
+
+	public AMap<AString, ACell> resumeJob(Blob id, RequestContext ctx, AString owner) {
+		AMap<AString, ACell> data = authorizedRecord(id, ctx, owner, Abilities.JOB_MANAGE);
 		if (data == null) return null;
-		requireJobOwner(ctx, id, data); // mutation: owner-only
 		Job job = liveJob(id);
 		if (job == null) throw notLive(id, data);
+		// A stopped adapter takes no new work for its jobs
+		resolveJobAdapter(job);
 		job.resume();
-		return job.getData();
+		return acknowledgement(id);
 	}
 
 	/**
 	 * Refusal for a recorded job with no live handle to act on: it has finished,
 	 * or it is not running on this venue now.
 	 */
-	private static NotSupportedException notLive(Blob id, AMap<AString, ACell> data) {
-		return new NotSupportedException((Job.isFinished(data) ? JOB_TERMINAL : JOB_NOT_ACTIVE)
-			+ id.toHexString());
+	private static InvalidStateException notLive(Blob id, AMap<AString, ACell> data) {
+		return new InvalidStateException((Job.isFinished(data) ? JOB_TERMINAL : JOB_NOT_ACTIVE) + id);
 	}
 
 	/**
 	 * Deletes a job permanently with request context: removes the durable
 	 * record from the owning user's job index and evicts the active cache.
-	 * @throws AuthException if the caller does not own the job
+	 * @throws AuthException if the caller lacks the required Job ability
 	 */
 	public boolean deleteJob(Blob id, RequestContext ctx) {
-		AMap<AString, ACell> data = getJobData(id, ctx);
-		if (data == null) return false;
-		requireJobOwner(ctx, id, data); // mutation: owner-only
-		AString ownerDID = Attribution.owner(data);
+		return deleteJob(id, ctx, null);
+	}
+
+	public boolean deleteJob(Blob id, RequestContext ctx, AString owner) {
+		Authorized read = authorized(id, ctx, owner, Abilities.JOB_MANAGE);
+		if (read == null) return false;
+		AString ownerDID = read.account();
 		boolean removed = ownerDID != null && venue().transact(draft -> {
 			User user = draft.users().user(ownerDID);
 			if (user == null || user.jobs().remove(id) == null) return false;
@@ -1522,45 +1694,34 @@ public class JobManager {
 	}
 
 	public boolean deleteJob(Blob id) {
-		boolean removed = activeJobs.remove(id) != null;
-		releaseJobPermit(id);
-		return removed;
+		return activeJobs.remove(id) != null;
 	}
 
 	// ========== Message Delivery ==========
 
 	/**
 	 * Delivers a message to a job's message queue with request context.
-	 * @throws AuthException if the caller does not own the job
+	 * @throws AuthException if the caller lacks the required Job ability
 	 */
 	public void deliverMessage(Blob jobID, AMap<AString, ACell> message, RequestContext ctx) {
+		deliverMessage(jobID, message, ctx, null);
+	}
+
+	public void deliverMessage(Blob jobID, AMap<AString, ACell> message, RequestContext ctx, AString owner) {
+		AMap<AString, ACell> data = authorizedRecord(jobID, ctx, owner, Abilities.JOB_MESSAGE);
+		if (data == null) throw jobNotFound(jobID);
 		Job job = liveJob(jobID);
-		if (job == null) {
-			// Not active: consult the caller's lattice so a job that has completed
-			// and been evicted reports its terminal state rather than "not found"
-			// — the same fallback appendToHistory already uses (#506). A recorded
-			// but inactive job has no live handle to dispatch to, so that is an
-			// error too, just an honest one.
-			Job recorded = getJob(jobID, ctx);
-			if (recorded == null) throw jobNotFound(jobID);
-			if (!engine.getAccessControl().canAccessJob(ctx, recorded.getData(), Capability.CRUD_WRITE)) {
-				throw new AuthException(JOB_ACCESS_DENIED + jobID.toHexString());
-			}
-			throw notLive(jobID, recorded.getData());
-		}
-		if (!engine.getAccessControl().canAccessJob(ctx, job.getData(), Capability.CRUD_WRITE)) {
-			throw new AuthException(JOB_ACCESS_DENIED + jobID.toHexString());
-		}
-		deliverMessage(job, message, ctx.getCallerDID());
+		if (job == null) throw notLive(jobID, data);
+		deliverMessage(job, message, ctx.getAuthorityDID());
 	}
 
 	private void deliverMessage(Job job, AMap<AString, ACell> message, AString source) {
 		Blob jobID = job.getID();
-		if (job.isFinished()) throw new NotSupportedException(JOB_TERMINAL + jobID.toHexString());
+		if (job.isFinished()) throw new InvalidStateException(JOB_TERMINAL + jobID);
 		// Only a multi-turn adapter takes messages; any other job would drop it
 		AAdapter adapter = resolveJobAdapter(job);
 		if (adapter == null || !adapter.supportsMultiTurn()) {
-			throw new NotSupportedException(JOB_NO_MESSAGES + jobID.toHexString());
+			throw new UnsupportedException(JOB_NO_MESSAGES + jobID);
 		}
 
 		long ts = engine.currentTimestamp().longValue();
@@ -1578,7 +1739,7 @@ public class JobManager {
 			adapter.handleMessage(job, record);
 		} catch (RuntimeException | Error e) {
 			// The adapter taking the message: an unexpected exception is its fault
-			throw FaultException.within(DELIVERING_MESSAGE.formatted(jobID.toHexString()), adapter.faultOwner(), e);
+			throw FaultException.within(DELIVERING_MESSAGE.formatted(jobID), adapter.faultOwner(), e);
 		}
 	}
 
@@ -1602,13 +1763,12 @@ public class JobManager {
 	 * per-message maps. Caller-provided {@code messageId} / role / parts
 	 * fields are preserved.</p>
 	 *
-	 * @throws AuthException if the caller does not own the job
+	 * @throws AuthException if the caller lacks the required Job ability
 	 */
 	public void appendToHistory(Blob jobID, AMap<AString, ACell> record, RequestContext ctx) {
-		AMap<AString, ACell> current = getJobData(jobID, ctx);
+		Authorized current = authorized(jobID, ctx, null, Abilities.JOB_MESSAGE);
 		if (current == null) throw jobNotFound(jobID);
-		requireJobOwner(ctx, jobID, current);
-		appendToHistory(jobID, ctx.getUserDID(), record);
+		appendToHistory(jobID, current.account(), record);
 	}
 
 	/**
@@ -1633,12 +1793,13 @@ public class JobManager {
 	/**
 	 * Recovers durable Jobs after a restart, from the venue's entries of
 	 * unfinished jobs ({@link JobIndex}). The decision is the owning adapter's
-	 * ({@link AAdapter#recoverJob}): the framework rebuilds each Job from its
-	 * record and entry, registers it, and calls the hook — whatever state the
+	 * ({@link AAdapter#recoverJob}), whether or not it will start: the
+	 * framework rebuilds each Job from its record and entry, binds it to its
+	 * installed adapter, registers it, and calls the hook — whatever state the
 	 * Job is in afterwards is the durable truth. Jobs still non-terminal are
-	 * restored live and re-occupy their caller's concurrency permit. A Job
-	 * whose adapter is absent (module not loaded, boot-disabled) gets the
-	 * default: PENDING and STARTED fail as interrupted and are never
+	 * restored live. A Job whose adapter is missing (module not loaded, or its
+	 * adapter declined or refused its settings and was never installed) gets
+	 * the default: PENDING and STARTED fail as interrupted and are never
 	 * re-executed; the paused family is restored.
 	 */
 	public void recoverJobs() {
@@ -1656,7 +1817,7 @@ public class JobManager {
 			AMap<AString, ACell> record = (state == null) ? null : state.getRecord();
 			if (record == null || Job.isFinished(record)) continue;
 			OutputRules rules = OutputRules.fromCell(RT.getIn(entry, JobIndex.RULES));
-			VenueJob job = new VenueJob(state, record, rules, ownerDID, this, runningAdapter(record));
+			VenueJob job = new VenueJob(state, record, rules, ownerDID, this, owningAdapter(record, ownerDID));
 			activeJobs.put(jobID, job);
 			restored.add(job);
 		}
@@ -1665,7 +1826,7 @@ public class JobManager {
 		for (VenueJob job : restored) {
 			if (job.isFinished()) continue;
 			Blob jobID = job.getID();
-			AAdapter adapter = runningAdapter(job);
+			AAdapter adapter = job.adapter();
 			try {
 				if (adapter != null) adapter.recoverJob(job);
 				else if (engine.remoteJobs().kept(job) != null) engine.remoteJobs().adapterUnavailable(job);
@@ -1679,7 +1840,6 @@ public class JobManager {
 			if (job.isFinished()) {
 				stabilised++;
 			} else {
-				reserveRecoveredPermit(jobID, job.getOwner());
 				kept++;
 			}
 		}
@@ -1688,28 +1848,14 @@ public class JobManager {
 		}
 	}
 
-	/** A restored non-terminal Job re-occupies its owner's concurrency permit. */
-	private void reserveRecoveredPermit(Blob jobID, AString ownerDID) {
-		if (jobCapEnabled && ownerDID != null) {
-			JobSemaphore sem = jobPermits.computeIfAbsent(ownerDID,
-				k -> new JobSemaphore(maxConcurrentJobs));
-			sem.reserveRecovered();
-			permitHolders.put(jobID, ownerDID);
-		}
-	}
-
 	/**
-	 * The live adapter that runs a Job ({@link #adapterName}), or null for a
-	 * mirror, or when that adapter is absent or disabled.
+	 * The adapter that owns the Job whose record is {@code data}
+	 * ({@link #adapterName}), started or not: the installed one registered
+	 * under its name. Null for a mirror, or when that adapter is missing.
 	 */
-	private AAdapter runningAdapter(Job job) {
-		return runningAdapter(job.getData());
-	}
-
-	/** The live adapter that runs the Job whose record is {@code data}. */
-	private AAdapter runningAdapter(AMap<AString, ACell> data) {
-		String name = adapterName(data);
-		return (name == null) ? null : engine.getAdapter(name);
+	private AAdapter owningAdapter(AMap<AString, ACell> data, AString account) {
+		String name = adapterName(data, account);
+		return (name == null) ? null : engine.getInstalledAdapter(name);
 	}
 
 	// ========== Persistence ==========
@@ -1720,10 +1866,31 @@ public class JobManager {
 	/** The venue's state: job records with every other area it holds, one transaction for both. */
 	VenueState venue() { return engine.getVenueState(); }
 
+	/**
+	 * The account {@code job} is kept in: a venue handle's own, else the
+	 * account of the caller its record, handed out in full, names.
+	 */
+	public static AString accountOf(Job job) {
+		if (job instanceof VenueJob venueJob) return venueJob.accountDID();
+		return accountOf(job.getData());
+	}
+
+	/**
+	 * The account a job record handed out in full ({@link Attribution#inFull})
+	 * is kept in: its caller's, which for an agent is its owner's. A finished
+	 * record a delegate left before {@code admin/sudo} acted as the user names
+	 * the delegate, and is kept in the user's account, so this reads only
+	 * records of work their caller can still do.
+	 */
+	public static AString accountOf(AMap<AString, ACell> inFull) {
+		AString caller = (inFull == null) ? null : RT.ensureString(inFull.get(Fields.CALLER));
+		return (caller == null) ? null : Principals.userOf(caller);
+	}
+
 	/** Cancel all accepted work owned by a now-deleted account, including transient jobs. */
 	void cancelUserJobs(AString did, Job deletion) {
 		for (Job job : activeJobs.values()) {
-			if (job != deletion && did.equals(job.getOwner())) job.cancel();
+			if (job != deletion && did.equals(accountOf(job))) job.cancel();
 		}
 	}
 
@@ -1733,7 +1900,6 @@ public class JobManager {
 	 */
 	void evictActive(Blob jobID) {
 		activeJobs.remove(jobID);
-		releaseJobPermit(jobID);
 		synchronized (drain) {
 			drain.notifyAll();
 		}
@@ -1746,13 +1912,14 @@ public class JobManager {
 	 * in the job record.
 	 */
 	private AMap<AString, ACell> resolveJobMeta(Job job) {
-		return resolveJobMeta(job.getData());
+		return resolveJobMeta(job.getData(), accountOf(job));
 	}
 
-	private AMap<AString, ACell> resolveJobMeta(AMap<AString, ACell> data) {
+	/** The metadata of the operation {@code data}, a job record kept in {@code account}, names. */
+	private AMap<AString, ACell> resolveJobMeta(AMap<AString, ACell> data, AString account) {
 		AString opStr = RT.ensureString(data.get(Fields.OP));
 		if (opStr == null) return null;
-		Asset asset = resolveRecordedOp(opStr, Attribution.owner(data));
+		Asset asset = resolveRecordedOp(opStr, account);
 		return (asset != null) ? asset.meta() : null;
 	}
 
@@ -1783,11 +1950,13 @@ public class JobManager {
 	 * Resolves the adapter responsible for a job: the one its record says it
 	 * was dispatched to, else the one its operation names, else null. A
 	 * mirror names its call's adapter, but no adapter runs it.
-	 * @throws UnavailableException if that adapter is not enabled here now
+	 * @throws UnavailableException if that adapter is not enabled and
+	 *         running here now
 	 */
 	private AAdapter resolveJobAdapter(Job job) {
 		String adapterName = adapterName(job);
 		if (adapterName == null) return null;
+		requireRunning(adapterName);
 		AAdapter adapter = engine.getAdapter(adapterName);
 		if (adapter == null) throw new UnavailableException(ADAPTER_NOT_AVAILABLE + adapterName);
 		return adapter;
@@ -1799,14 +1968,14 @@ public class JobManager {
 	 * operation names; null for a mirror, which no adapter runs.
 	 */
 	private String adapterName(Job job) {
-		return adapterName(job.getData());
+		return adapterName(job.getData(), accountOf(job));
 	}
 
-	private String adapterName(AMap<AString, ACell> data) {
+	private String adapterName(AMap<AString, ACell> data, AString account) {
 		if (data.get(MIRROR_OF) != null) return null;
 		AString recorded = RT.ensureString(data.get(Fields.ADAPTER));
 		if (recorded != null) return recorded.toString();
-		AMap<AString, ACell> meta = resolveJobMeta(data);
+		AMap<AString, ACell> meta = resolveJobMeta(data, account);
 		return (meta != null) ? AAdapter.getAdapterName(meta) : null;
 	}
 
@@ -1816,6 +1985,8 @@ public class JobManager {
 	 * Generates a unique job ID.
 	 * Format: 6 bytes timestamp + 2 bytes counter + 8 bytes random.
 	 * Time-ordered, monotonic, unpredictable, collision-resistant, thread-safe.
+	 * The layout is a contract (JOBS.md, Job ids) that {@link Job#idTime} and
+	 * {@link Job#lowestIDAt} read.
 	 */
 	private Blob generateJobID(long ts) {
 		byte[] bs = new byte[16];
@@ -1891,8 +2062,8 @@ public class JobManager {
 	/**
 	 * Shutdown sequence for Jobs: close top-level admission, let in-flight
 	 * work finish for up to {@code graceMs} — returning as soon as nothing is
-	 * in flight — then ask each remaining Job's adapter to suspend it
-	 * ({@link AAdapter#suspendJob}): in-process work is bounded and is
+	 * in flight — then ask each remaining Job's adapter, started or not, to
+	 * suspend it ({@link AAdapter#suspendJob}): in-process work is bounded and is
 	 * cancelled, a durable wait is recorded and its thread let go. Finally
 	 * admission closes completely and every waiter still parked on a
 	 * surviving Job's in-memory future is released without touching the
@@ -1905,7 +2076,8 @@ public class JobManager {
 		awaitDrain(graceMs);
 		for (Job job : activeJobs.values()) {
 			if (job.isFinished()) continue;
-			AAdapter adapter = runningAdapter(job);
+			// The adapter that owns the job decides, started or not
+			AAdapter adapter = (job instanceof VenueJob owned) ? owned.adapter() : null;
 			try {
 				if (adapter != null) adapter.suspendJob(job);
 				else if (engine.remoteJobs().kept(job) != null) engine.remoteJobs().suspend(job);

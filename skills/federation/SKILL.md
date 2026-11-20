@@ -10,6 +10,16 @@ argument-hint: "<demo|invoke> <venue-url>"
 
 Demonstrate Covia's federated grid operations — invoking operations across venue boundaries.
 
+## Outbound authority
+
+A bounded caller needs `outbound/http` rights on its `outbound` resource for
+remote discovery, invocation and Job follow-ups, in addition to remote
+operation/resource permissions. Prefer method leaves and an `nb.url`
+restriction to the venue origin; generated paths can contain encoded IDs.
+Local grid calls need no outbound grant. Host policy still applies, including
+`localhost` in demos. Reused connections check each current invocation.
+See `venue/docs/OUTBOUND.md` for the complete contract.
+
 ## Concepts
 
 - **Grid** — the network of interconnected Covia venues

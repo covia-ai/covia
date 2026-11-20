@@ -48,9 +48,10 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.adapter.AAdapter;
 import covia.adapter.TextExtractor;
+import covia.exception.ConfigurationException;
 import covia.exception.CoviaException;
 import covia.exception.InvalidInputException;
-import covia.exception.NotSupportedException;
+import covia.exception.UnsupportedException;
 import covia.utils.MimeUtils;
 import covia.venue.RequestContext;
 
@@ -83,6 +84,9 @@ public class DocumentsAdapter extends AAdapter implements TextExtractor {
 	public static final int DEFAULT_MAX_CHARS = 16_000;
 	/** The most a caller may ask for, however the operator configures the default. */
 	public static final int MAX_CHARS_CEILING = 1_000_000;
+	/** Refusal of {@code adapters.documents.maxChars}; the value given follows. */
+	public static final String BAD_MAX_CHARS =
+		"adapters.documents.maxChars must be an integer from 1 to " + MAX_CHARS_CEILING + ", got: %s";
 	/** A paged document averaging fewer characters per page than this has no usable text layer. */
 	static final int SCANNED_CHARS_PER_PAGE = 20;
 
@@ -143,18 +147,16 @@ public class DocumentsAdapter extends AAdapter implements TextExtractor {
 	// ========== Configuration ==========
 
 	@Override
-	public boolean configure(AMap<AString, ACell> config, boolean strict) {
+	public void configure(AMap<AString, ACell> config, boolean strict) {
 		int cap = DEFAULT_MAX_CHARS;
 		if (config != null && config.get(K_MAX_CHARS_CONFIG) != null) {
 			CVMLong n = RT.ensureLong(config.get(K_MAX_CHARS_CONFIG));
 			if (n == null || n.longValue() < 1 || n.longValue() > MAX_CHARS_CEILING) {
-				throw new IllegalArgumentException("adapters.documents.maxChars must be an integer from 1 to "
-					+ MAX_CHARS_CEILING + ", got: " + config.get(K_MAX_CHARS_CONFIG));
+				throw new ConfigurationException(BAD_MAX_CHARS.formatted(config.get(K_MAX_CHARS_CONFIG)));
 			}
 			cap = (int) n.longValue();
 		}
 		maxChars = cap;
-		return true;
 	}
 
 	@Override
@@ -216,7 +218,7 @@ public class DocumentsAdapter extends AAdapter implements TextExtractor {
 	public Extraction extract(Request request) throws IOException {
 		Kind kind = kindOf(request.mime(), request.filename());
 		if (kind == null) {
-			throw new NotSupportedException("No text extractor for " + request.filename()
+			throw new UnsupportedException("No text extractor for " + request.filename()
 				+ " (" + request.mime() + "); supported: " + supported());
 		}
 		int cap = (request.maxChars() > 0) ? Math.min(request.maxChars(), MAX_CHARS_CEILING) : maxChars;
@@ -232,7 +234,7 @@ public class DocumentsAdapter extends AAdapter implements TextExtractor {
 				case TEXT -> text(request.bytes(), cap);
 			};
 		} catch (InvalidPasswordException e) {
-			throw new NotSupportedException(request.filename() + " is password-protected; it cannot be read");
+			throw new UnsupportedException(request.filename() + " is password-protected; it cannot be read");
 		} catch (IOException | RuntimeException e) {
 			if (e instanceof CoviaException refusal) throw refusal;
 			String detail = (e.getMessage() != null && !e.getMessage().isBlank())
@@ -442,7 +444,7 @@ public class DocumentsAdapter extends AAdapter implements TextExtractor {
 		String subOp = getSubOperation(meta);
 		if (!"extract".equals(subOp)) {
 			return CompletableFuture.failedFuture(
-				new NotSupportedException("Unknown documents operation: " + subOp));
+				new UnsupportedException("Unknown documents operation: " + subOp));
 		}
 		try {
 			return CompletableFuture.completedFuture(handleExtract(input));
@@ -473,7 +475,7 @@ public class DocumentsAdapter extends AAdapter implements TextExtractor {
 		AString mimeCell = RT.ensureString(RT.getIn(input, K_MIME));
 		String mime = (mimeCell != null) ? mimeCell.toString() : MimeUtils.guess(filename, bytes);
 		if (!supports(mime, filename)) {
-			throw new NotSupportedException("No text extractor for " + filename
+			throw new UnsupportedException("No text extractor for " + filename
 				+ " (" + mime + "); supported: " + supported());
 		}
 		CVMLong max = RT.ensureLong(RT.getIn(input, K_MAX_CHARS));

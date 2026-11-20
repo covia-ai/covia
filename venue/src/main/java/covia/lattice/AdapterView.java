@@ -39,7 +39,7 @@ public final class AdapterView {
 	 */
 	public static Workspace view(RequestContext ctx, CoviaAdapter covia,
 			AString owner, Path fullPath, AString ability) {
-		if (ctx == null || ctx.getCallerDID() == null || owner == null) throw new AuthException(AUTHENTICATION_REQUIRED);
+		if (ctx == null || ctx.getAuthorityDID() == null || owner == null) throw new AuthException(AUTHENTICATION_REQUIRED);
 		for (AString segment : fullPath) {
 			String s = segment.toString();
 			if (s.isEmpty() || s.contains("\\") || s.equals(".") || s.equals("..")
@@ -51,12 +51,11 @@ public final class AdapterView {
 		covia.engine.requireLocalAccess(ctx, resource, ability);
 		String name = fullPath.count() < 2 ? null : fullPath.get(1).toString();
 		AAdapter adapter = name == null ? null : covia.engine.getAdapter(name);
-		RequestContext scoped = owner.equals(ctx.getUserDID()) ? ctx : ctx.onBehalfOf(owner);
 		// The adapter's write policy takes the path inside its view, without x/<adapter>
 		Path path = inView(fullPath);
 		boolean mutation = Capability.CRUD_WRITE.equals(ability) || Capability.CRUD_DELETE.equals(ability);
-		if (mutation) requireWritable(adapter, scoped, path);
-		AForkableCursor<ACell> exposed = adapter == null ? null : adapter.latticeView(scoped);
+		if (mutation) requireWritable(adapter, owner, ctx, path);
+		AForkableCursor<ACell> exposed = adapter == null ? null : adapter.latticeView(owner, ctx);
 		if (mutation && exposed == null) throw new AuthException(READ_ONLY);
 		// An absent route is still resolved: never fall through to a physical user x slot.
 		AForkableCursor<ACell> base = exposed == null ? Cursors.root(null) : exposed;
@@ -65,7 +64,7 @@ public final class AdapterView {
 		AForkableCursor<ACell> guarded = new ATransformCursor<ACell, ACell>(base) {
 			private void check() {
 				if (name != null && covia.engine.getAdapter(name) != adapter) throw new AuthException(UNAVAILABLE);
-				if (mutation) requireWritable(adapter, scoped, path);
+				if (mutation) AdapterView.requireWritable(adapter, owner, ctx, path);
 			}
 			@Override protected ACell view(ACell value) { check(); return value; }
 			@Override protected ACell write(ACell current, ACell value) {
@@ -92,8 +91,8 @@ public final class AdapterView {
 		return new Owner.Ownership(AccessPolicy.principal(owner), fullPath);
 	}
 
-	private static void requireWritable(AAdapter adapter, RequestContext ctx, Path path) {
-		String denial = adapter == null ? READ_ONLY : adapter.latticeWriteDenial(ctx, path);
+	private static void requireWritable(AAdapter adapter, AString owner, RequestContext ctx, Path path) {
+		String denial = adapter == null ? READ_ONLY : adapter.latticeWriteDenial(owner, ctx, path);
 		if (denial != null) throw new AuthException(denial);
 	}
 }

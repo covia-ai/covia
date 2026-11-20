@@ -44,11 +44,13 @@ import covia.exception.CoviaException;
 import covia.exception.FaultException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
-import covia.grid.Attribution;
+import covia.grid.HexId;
 import covia.grid.Job;
 import covia.grid.Venue;
 import covia.venue.Agent;
 import covia.venue.Engine;
+import covia.venue.Ids;
+import covia.venue.JobManager;
 import covia.venue.RequestContext;
 import covia.venue.User;
 import covia.venue.server.AuthMiddleware;
@@ -298,7 +300,7 @@ public class A2A extends ACoviaAPI {
 
 	/** True for the venue's public (unauthenticated) caller identity, per AuthMiddleware. */
 	private boolean isAnonymousCaller(RequestContext rctx) {
-		AString caller = rctx.getCallerDID();
+		AString caller = rctx.getAuthorityDID();
 		return caller == null || engine().isPublicPrincipal(caller);
 	}
 
@@ -434,7 +436,7 @@ public class A2A extends ACoviaAPI {
 		Blob taskId = job.getID();
 		AString asker = rctx.getUserDID();
 		recordFirstMessage(taskId, () -> engine().jobs().appendToHistory(taskId, asker, record));
-		writeResult(ctx, id, A2ACodec.toTask(engine().jobs().getJobData(taskId, rctx)));
+		writeResult(ctx, id, A2ACodec.toTask(job.getData()));
 	}
 
 	/** Continue one exact non-terminal {@code agent:request} Job of this agent. */
@@ -444,13 +446,13 @@ public class A2A extends ACoviaAPI {
 		if (task == null) return;
 		Blob taskId = task.id();
 		AMap<AString, ACell> taskData = task.data();
-		AString taskSession = RT.ensureString(taskData.get(Fields.SESSION_ID));
+		Blob taskSession = Ids.stored(taskData.get(Fields.SESSION_ID));
 		if (taskSession == null) {
 			writeError(ctx, id, A2AErrorCodes.TASK_NOT_FOUND, NO_AGENT_SESSION);
 			return;
 		}
 		if (incoming.contextId() != null
-				&& !incoming.contextId().equals(taskSession.toString())) {
+				&& !java.util.Objects.equals(taskSession, HexId.parse(Strings.create(incoming.contextId())))) {
 			writeError(ctx, id, A2AErrorCodes.INVALID_PARAMS, CONTEXT_MISMATCH);
 			return;
 		}
@@ -463,7 +465,7 @@ public class A2A extends ACoviaAPI {
 		AMap<AString, ACell> record = A2ACodec.toMessageRecord(incoming, false);
 		ACell input = Maps.of(
 			Fields.AGENT_ID, Strings.create(ref.gridAddress()),
-			Fields.TASK_ID, Strings.create(taskId.toHexString()),
+			Fields.TASK_ID, taskId,
 			Fields.SESSION_ID, taskSession,
 			Fields.MESSAGE, record);
 		try {
@@ -473,7 +475,7 @@ public class A2A extends ACoviaAPI {
 			writeError(ctx, id, A2AErrorCodes.UNSUPPORTED_OPERATION, reason(e));
 			return;
 		}
-		engine().jobs().appendToHistory(taskId, Attribution.owner(taskData), record);
+		engine().jobs().appendToHistory(taskId, JobManager.accountOf(taskData), record);
 
 		AMap<AString, ACell> after = engine().jobs().getJobData(taskId, rctx);
 		writeResult(ctx, id, A2ACodec.toTask(after != null ? after : taskData));
@@ -501,11 +503,11 @@ public class A2A extends ACoviaAPI {
 				}
 				case A2AMethods.GET_TASK_METHOD -> {
 					TaskQueryParams params = parseParams(rpc, TaskQueryParams.class);
-					doGetTask(ctx, id, params, AuthMiddleware.callerContext(ctx));
+					doGetTask(ctx, id, params, askerContext(ctx));
 				}
 				case A2AMethods.CANCEL_TASK_METHOD -> {
 					CancelTaskParams params = parseParams(rpc, CancelTaskParams.class);
-					doCancelTask(ctx, id, params, AuthMiddleware.callerContext(ctx));
+					doCancelTask(ctx, id, params, askerContext(ctx));
 				}
 				case A2AMethods.SEND_STREAMING_MESSAGE_METHOD -> {
 					MessageSendParams params = parseParams(rpc, MessageSendParams.class);
@@ -594,20 +596,16 @@ public class A2A extends ACoviaAPI {
 			return;
 		}
 		Message incoming = params.message();
-		RequestContext rctx = AuthMiddleware.callerContext(ctx);
+		RequestContext rctx = askerContext(ctx);
 		AMap<AString, ACell> record = A2ACodec.toMessageRecord(incoming, false);
-
-		Blob taskId = (incoming.taskId() == null)
-			? startChatTask(ctx, id, record, rctx)
-			: deliverToTask(ctx, id, incoming.taskId(), record, rctx);
-		if (taskId == null) return;
-
-		AMap<AString, ACell> jobData = engine().jobs().getJobData(taskId, rctx);
-		if (jobData == null) {
-			writeError(ctx, id, A2AErrorCodes.TASK_NOT_FOUND, NO_SUCH_TASK + taskId.toHexString());
+		if (incoming.taskId() == null) {
+			Job started = startChatTask(ctx, id, record, rctx);
+			if (started != null) writeResult(ctx, id, A2ACodec.toTask(started.getData()));
 			return;
 		}
-		writeResult(ctx, id, A2ACodec.toTask(jobData));
+		Blob taskId = deliverToTask(ctx, id, incoming.taskId(), record, rctx);
+		if (taskId == null) return;
+		writeResult(ctx, id, A2ACodec.toTask(engine().jobs().getJobData(taskId, rctx, CoviaAPI.jobOwner(ctx))));
 	}
 
 	/**
@@ -615,7 +613,7 @@ public class A2A extends ACoviaAPI {
 	 * with the message. Returns the task's id, or null after writing the
 	 * refusal.
 	 */
-	private Blob startChatTask(Context ctx, Object id, AMap<AString, ACell> record, RequestContext rctx) {
+	private Job startChatTask(Context ctx, Object id, AMap<AString, ACell> record, RequestContext rctx) {
 		if (defaultChatOp == null) {
 			writeError(ctx, id, A2AErrorCodes.UNSUPPORTED_OPERATION, NO_CHAT_OP);
 			return null;
@@ -630,8 +628,8 @@ public class A2A extends ACoviaAPI {
 		// The operation took the message as its input; recording it gives the
 		// Task its history without delivering it a second time.
 		Blob taskId = job.getID();
-		recordFirstMessage(taskId, () -> engine().jobs().appendToHistory(taskId, record, rctx));
-		return taskId;
+		recordFirstMessage(taskId, () -> engine().jobs().appendToHistory(taskId, JobManager.accountOf(job), record));
+		return job;
 	}
 
 	/**
@@ -657,8 +655,10 @@ public class A2A extends ACoviaAPI {
 		Blob taskId = parseTaskId(ctx, id, taskIdHex);
 		if (taskId == null) return null;
 		try {
-			engine().jobs().appendToHistory(taskId, record, rctx);
-			engine().jobs().deliverMessage(taskId, record, rctx);
+			AMap<AString, ACell> data = engine().jobs().getJobData(taskId, rctx, CoviaAPI.jobOwner(ctx));
+			if (data == null) throw new NotFoundException(NO_SUCH_TASK + taskIdHex, taskIdHex);
+			engine().jobs().deliverMessage(taskId, record, rctx, CoviaAPI.jobOwner(ctx));
+			engine().jobs().appendToHistory(taskId, JobManager.accountOf(data), record);
 		} catch (NotFoundException | AuthException e) {
 			// A job the caller may not write is not found: its existence is not disclosed
 			writeError(ctx, id, A2AErrorCodes.TASK_NOT_FOUND, NO_SUCH_TASK + taskIdHex);
@@ -682,7 +682,7 @@ public class A2A extends ACoviaAPI {
 	private TaskRecord callerTask(Context ctx, Object id, String taskIdHex, RequestContext rctx) {
 		Blob taskId = parseTaskId(ctx, id, taskIdHex);
 		if (taskId == null) return null;
-		AMap<AString, ACell> data = readableJob(taskId, rctx);
+		AMap<AString, ACell> data = readableJob(taskId, rctx, CoviaAPI.jobOwner(ctx));
 		if (data == null) {
 			writeError(ctx, id, A2AErrorCodes.TASK_NOT_FOUND, NO_SUCH_TASK + taskIdHex);
 			return null;
@@ -702,7 +702,7 @@ public class A2A extends ACoviaAPI {
 			A2ACodec.AgentRef ref, RequestContext asker) {
 		Blob taskId = parseTaskId(ctx, id, taskIdHex);
 		if (taskId == null) return null;
-		AMap<AString, ACell> data = readableJob(taskId, asker);
+		AMap<AString, ACell> data = readableJob(taskId, asker, asker.getUserDID());
 		if (data == null || !Strings.create(ref.gridAddress()).equals(data.get(Fields.ADDRESS))) {
 			writeError(ctx, id, A2AErrorCodes.TASK_NOT_FOUND, AGENT_TASK_NOT_FOUND);
 			return null;
@@ -711,9 +711,9 @@ public class A2A extends ACoviaAPI {
 	}
 
 	/** A job's record when {@code rctx} may read it, else null. */
-	private AMap<AString, ACell> readableJob(Blob taskId, RequestContext rctx) {
+	private AMap<AString, ACell> readableJob(Blob taskId, RequestContext rctx, AString owner) {
 		try {
-			return engine().jobs().getJobData(taskId, rctx);
+			return engine().jobs().getJobData(taskId, rctx, owner);
 		} catch (AuthException e) {
 			return null;
 		}
@@ -749,13 +749,13 @@ public class A2A extends ACoviaAPI {
 			return;
 		}
 		try {
-			engine().jobs().cancelJob(task.id(), rctx);
+			engine().jobs().cancelJob(task.id(), rctx, null, JobManager.accountOf(task.data()));
 		} catch (CoviaException e) {
 			// The venue would not cancel it: not live here, or not the caller's to cancel
 			writeError(ctx, id, A2AErrorCodes.TASK_NOT_CANCELABLE, reason(e));
 			return;
 		}
-		AMap<AString, ACell> after = engine().jobs().getJobData(task.id(), rctx);
+		AMap<AString, ACell> after = engine().jobs().getJobData(task.id(), rctx, JobManager.accountOf(task.data()));
 		writeResult(ctx, id, A2ACodec.toTask(after != null ? after : task.data()));
 	}
 
@@ -790,8 +790,9 @@ public class A2A extends ACoviaAPI {
 		}
 		if (ids == null || ids.isEmpty()) return List.of();
 
-		String ownerDid = rctx.getCallerDID().toString();
-		User user = engine().getVenueState().users().user(rctx.getCallerDID());
+		// The agents listed are those of the request's account
+		String ownerDid = rctx.getUserDID().toString();
+		User user = engine().getVenueState().users().user(rctx.getUserDID());
 		List<AgentSkill> skills = new ArrayList<>((int) ids.count());
 		for (long i = 0; i < ids.count(); i++) {
 			AString agentId = RT.ensureString(ids.get(i));
@@ -814,20 +815,22 @@ public class A2A extends ACoviaAPI {
 			return;
 		}
 		Message incoming = params.message();
-		RequestContext rctx = AuthMiddleware.callerContext(ctx);
+		RequestContext rctx = askerContext(ctx);
 		AMap<AString, ACell> record = A2ACodec.toMessageRecord(incoming, false);
 
 		// Resolve the target Job ID before opening the SSE stream — the Job
 		// must exist (and be owned by caller) when A2ASseSession polls it.
-		Blob taskId = (incoming.taskId() == null)
-			? startChatTask(ctx, id, record, rctx)
-			: deliverToTask(ctx, id, incoming.taskId(), record, rctx);
+		Blob taskId;
+		if (incoming.taskId() == null) {
+			Job started = startChatTask(ctx, id, record, rctx);
+			taskId = started == null ? null : started.getID();
+		} else taskId = deliverToTask(ctx, id, incoming.taskId(), record, rctx);
 		if (taskId != null) openSseStream(ctx, id, taskId, rctx);
 	}
 
 	/** Front-door {@code SubscribeToTask}: one of the caller's own jobs. */
 	private void doSubscribeToTask(Context ctx, Object id, org.a2aproject.sdk.spec.TaskIdParams params) {
-		RequestContext rctx = AuthMiddleware.callerContext(ctx);
+		RequestContext rctx = askerContext(ctx);
 		TaskRecord task = callerTask(ctx, id, params == null ? null : params.id(), rctx);
 		if (task != null) subscribeTask(ctx, id, task, rctx);
 	}
@@ -854,7 +857,7 @@ public class A2A extends ACoviaAPI {
 	private void openSseStream(Context ctx, Object rpcId, Blob taskId, RequestContext rctx) {
 		Engine engine = engine();
 		new SseHandler(sseClient -> {
-			A2ASseSession session = new A2ASseSession(sseClient, engine, taskId, rpcId, rctx);
+			A2ASseSession session = new A2ASseSession(sseClient, engine, taskId, rpcId, rctx, CoviaAPI.jobOwner(ctx));
 			session.start();
 		}).handle(ctx);
 	}

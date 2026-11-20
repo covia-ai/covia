@@ -21,11 +21,13 @@ import covia.adapter.AAdapter;
 import covia.adapter.messaging.*;
 import covia.adapter.webhook.*;
 import covia.api.Fields;
-import covia.exception.InvalidInputException;
+import covia.exception.ConfigurationException;
 import covia.exception.ResponseException;
 import covia.venue.*;
 import covia.venue.server.VenueServer;
+import covia.test.IntegrationTest;
 
+@IntegrationTest
 class SlackAdapterTest {
 	static AMap<AString, ACell> spec() {
 		return Maps.of("token", "s/TOKEN", "signingSecret", "s/SIGNING", "user", OWNER, "appId", "A123", "teamId", "T123",
@@ -53,8 +55,10 @@ class SlackAdapterTest {
 			assertTrue(status.contains("/webhooks/slack/c-main"));
 			assertNotNull(f.engine.resolvePath(Strings.create("v/ops/slack/send"), f.engine.venueContext()));
 			assertNull(f.engine.resolvePath(Strings.create("v/ops/slack/download"), f.engine.venueContext()), "Slack ships no download operation");
-			assertThrows(InvalidInputException.class, () -> f.engine.configureAdapter(NAME, Maps.of("statePath", "w/other")));
-			assertThrows(InvalidInputException.class, () -> f.engine.configureAdapter(NAME, Maps.of("apiUrl", "http://remote.example")));
+			assertEquals(MessagingSettings.UNKNOWN.formatted("statePath"), assertThrows(ConfigurationException.class,
+				() -> f.engine.configureAdapter(NAME, Maps.of("statePath", "w/other"))).getMessage());
+			assertEquals(MessagingHttp.INVALID_URL, assertThrows(ConfigurationException.class,
+				() -> f.engine.configureAdapter(NAME, Maps.of("apiUrl", "http://remote.example"))).getMessage());
 		}
 	}
 	@Test void signedChallengeAndReplayWindowUseExactRawBytes() throws Exception {
@@ -128,11 +132,11 @@ class SlackAdapterTest {
 			var reply = Maps.of("type", "message", "channel_type", "channel", "channel", "C123", "user", "UALICE", "ts", "1.2", "thread_ts", "1.1", "text", "and then?");
 			assertEquals(200, f.webhook(payload("in-flight", reply)).status());
 			assertNotNull(f.bot().inbox().get("in-flight"));
-			agent.blocked.complete(Maps.of(Fields.SESSION_ID, "session-1", Fields.RESPONSE, "first"));
+			agent.blocked.complete(Maps.of(Fields.SESSION_ID, FakeAgent.session(1), Fields.RESPONSE, "first"));
 			f.api.take(); f.api.take();
 			awaitStatus(f.bot(), "in-flight", WebhookInbox.COMPLETE);
 			var continued = agent.inputs.poll(5, TimeUnit.SECONDS);
-			assertEquals(Strings.create("session-1"), continued.get(Fields.SESSION_ID));
+			assertEquals(FakeAgent.session(1), continued.get(Fields.SESSION_ID));
 			assertEquals(Strings.create("and then?"), continued.get(Fields.MESSAGE));
 			// With the session stored, later replies continue too, threaded under the root.
 			agent.blocked = null;
@@ -159,6 +163,24 @@ class SlackAdapterTest {
 			assertEquals(200, f.webhook(payload("reply", reply)).status());
 			assertNull(f.bot().inbox().get("reply"));
 			assertNull(f.api.sends.poll(150, TimeUnit.MILLISECONDS));
+		}
+	}
+	@Test void messagingPermissionDoesNotGrantHttpAndPooledBotsDoNotLendAuthority() throws Exception {
+		try (Fixture f = new Fixture(spec())) {
+			var caps = Vectors.<ACell>of(Maps.of("can", "invoke"), Maps.of("with", "slack/main", "can", "slack/send"));
+			RequestContext caller = RequestContext.of(OWNER).withCaps(caps);
+			var input = Maps.of("bot", "main", "channel", "C123", "text", "test message");
+			var denied = f.engine.jobs().invokeOperation("v/ops/slack/send", input, caller);
+			assertThrows(Exception.class, () -> denied.awaitResult(5000));
+			assertTrue(denied.getErrorMessage().contains("outbound/http/post"), denied.getErrorMessage());
+			assertTrue(f.api.sends.isEmpty());
+			RequestContext permitted = caller.withCaps(caps.conj(Maps.of("with", "outbound", "can", "outbound/http/post",
+				"nb", Maps.of("url", f.api.url() + "/chat.postMessage"))));
+			f.engine.jobs().invokeOperation("v/ops/slack/send", input, permitted).awaitResult(5000);
+			f.api.take();
+			var deniedAgain = f.engine.jobs().invokeOperation("v/ops/slack/send", input, caller);
+			assertThrows(Exception.class, () -> deniedAgain.awaitResult(5000));
+			assertTrue(f.api.sends.isEmpty());
 		}
 	}
 	@Test void explicitSendsNeedOwnerAndChannelAuthorityAndCannotInjectMentions() throws Exception {
@@ -227,15 +249,15 @@ class SlackAdapterTest {
 			String version = parsed.settings().getHash().toHexString();
 			String root = "config/main/sessions/" + identity + "/" + version;
 			String sessionPath = root + "/" + ConversationSessions.segment(ConversationRouter.key(parsed.installationKey(), "C123", "1.1"));
-			assertEquals(Strings.create("session-1"), f.adapter.state().read(sessionPath));
+			assertEquals(FakeAgent.session(1), f.adapter.state().read(sessionPath));
 			assertEquals(":adapters/slack/" + sessionPath, f.adapter.state().path(sessionPath));
-			assertEquals(Strings.create("session-1"), f.adapter.state().read(sessionPath));
+			assertEquals(FakeAgent.session(1), f.adapter.state().read(sessionPath));
 			assertNull(f.engine.resolvePath(Strings.create("w/adapters/slack/" + sessionPath), RequestContext.of(OWNER)));
 			assertNotNull(f.adapter.state().read("config/main/inbox/" + identity + "/" + Strings.create("first").getHash().toHexString()));
 			SlackAdapter restored = new SlackAdapter(); restored.retryMillis = 25; f.engine.registerAdapter(restored);
 			restored.handleWebhook("c-main", signed(payload("same-thread", event("1.2").assoc(Strings.intern("thread_ts"), Strings.create("1.1")))));
 			f.api.take(); awaitStatus(restored.runner("main"), "same-thread", WebhookInbox.COMPLETE);
-			assertEquals(Strings.create("session-1"), agent.inputs.poll(5, TimeUnit.SECONDS).get(Fields.SESSION_ID));
+			assertEquals(FakeAgent.session(1), agent.inputs.poll(5, TimeUnit.SECONDS).get(Fields.SESSION_ID));
 			restored.handleWebhook("c-main", signed(payload("other-thread", event("2.1")))); f.api.take();
 			assertNull(agent.inputs.poll(5, TimeUnit.SECONDS).get(Fields.SESSION_ID));
 		}
@@ -244,7 +266,7 @@ class SlackAdapterTest {
 		try (FakeAPI api = new FakeAPI()) {
 			AMap<AString, ACell> config = Maps.of(Config.PORT, 0, Config.BIND_ADDRESS, "127.0.0.1", Config.STORE, TestTemp.etchFile("slack-restart").toString(),
 				Config.SEED, AKeyPair.createSeeded(9132).getSeed().toHexString(), Config.USERS, Maps.of(Config.AUTO_CREATE, true),
-				Config.ADAPTERS, Maps.of(NAME, Maps.of("apiUrl", api.url(), "bots", Maps.of("main", spec()))));
+				Config.ADAPTERS, Maps.of("http", Maps.of("allowedHosts", Vectors.of("127.0.0.1")), NAME, Maps.of("apiUrl", api.url(), "bots", Maps.of("main", spec()))));
 			SlackAdapter firstAdapter = new SlackAdapter(); firstAdapter.retryMillis = 25;
 			VenueServer first = VenueServer.launch(config, List.of(), engine -> { engine.registerAdapter(firstAdapter); return CompletableFuture.completedFuture(null); });
 			try {
@@ -315,8 +337,13 @@ class SlackAdapterTest {
 			var in = MessagingSettings.object(input); owner = ctx.getUserDID(); authentication = ctx.getAuthentication(); inputs.add(in);
 			if (blocked != null) return blocked;
 			ACell sid = in.get(Fields.SESSION_ID);
-			if (sid == null) sid = Strings.create("session-" + sessions.incrementAndGet());
+			if (sid == null) sid = session(sessions.incrementAndGet());
 			return CompletableFuture.completedFuture(Maps.of(Fields.SESSION_ID, sid, Fields.RESPONSE, "agent reply"));
+		}
+
+		/** The {@code n}th session it mints, an id as an agent's are. */
+		static Blob session(int n) {
+			return Blob.fromHex(String.format("%032x", n));
 		}
 	}
 }

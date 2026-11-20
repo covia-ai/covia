@@ -447,6 +447,37 @@ public class DLFSCrossUserTest {
 	}
 
 	@Test
+	public void testCrossUserSetMetadataNeedsWriteOnTheEntry() {
+		// Through dlfs and file alike: a read grant sets nothing, and a write
+		// grant over one entry sets its metadata once it exists, with no write
+		// on its directory, since setting metadata creates nothing.
+		String path = "shared/photo.jpg";
+		String ref = ALICE_DID + "/dlfs/docs/" + path;
+		RequestContext reader = withProofs(BOB,
+			issueToken(BOB_DID, ALICE_DID, "/dlfs/docs/", "crud/read", 3600));
+		RequestContext writer = withProofs(BOB,
+			issueToken(BOB_DID, ALICE_DID, "/dlfs/docs/" + path, "crud/write", 3600));
+
+		failure("v/ops/dlfs/set-metadata",
+			Maps.of("drive", aliceDocs, "path", path, "metadata", "bob"), writer);
+		failure("v/ops/file/set-metadata", Maps.of("path", ref, "metadata", "bob"), writer);
+		run("v/ops/dlfs/write", Maps.of("drive", "docs", "path", path, "content", "jpeg"), ALICE);
+
+		failure("v/ops/dlfs/set-metadata",
+			Maps.of("drive", aliceDocs, "path", path, "metadata", "bob"), reader);
+		failure("v/ops/file/set-metadata", Maps.of("path", ref, "metadata", "bob"), reader);
+		assertNull(RT.getIn(run("v/ops/dlfs/stat", Maps.of("drive", "docs", "path", path), ALICE), "metadata"));
+
+		run("v/ops/dlfs/set-metadata",
+			Maps.of("drive", aliceDocs, "path", path, "metadata", "via dlfs"), writer);
+		assertEquals(Strings.create("via dlfs"),
+			RT.getIn(run("v/ops/dlfs/stat", Maps.of("drive", "docs", "path", path), ALICE), "metadata"));
+		run("v/ops/file/set-metadata", Maps.of("path", ref, "metadata", "via file"), writer);
+		assertEquals(Strings.create("via file"),
+			RT.getIn(run("v/ops/dlfs/stat", Maps.of("drive", "docs", "path", path), ALICE), "metadata"));
+	}
+
+	@Test
 	public void testCrossUserWriteDeniedWithReadGrant() {
 		// A read grant does not authorise a write.
 		AMap<AString, ACell> token = issueToken(BOB_DID, ALICE_DID, "/dlfs/docs/", "crud/read", 3600);

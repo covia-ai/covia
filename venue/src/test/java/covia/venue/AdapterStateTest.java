@@ -20,6 +20,7 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
+import convex.lattice.cursor.MissingValueException;
 import covia.exception.AuthException;
 import covia.lattice.Covia;
 import covia.lattice.CoviaPath;
@@ -94,6 +95,20 @@ class AdapterStateTest {
 			throw new IllegalStateException("test rollback");
 		}));
 		assertEquals(before, venue.get());
+	}
+
+	/** Absent state is absent; a transaction on it starts from the empty value the adapter gives. */
+	@Test void aTransactionOnNewStateStartsFromTheAdaptersEmptyValue() {
+		VenueState venue = venue();
+		AdapterState state = venue.adapterState("fresh");
+		assertNull(state.get());
+		assertThrows(MissingValueException.class, () -> state.execute(draft -> draft.write("a", CVMLong.ONE)));
+		state.withDefault(Maps.empty()).execute(draft -> draft.write("a", CVMLong.ONE));
+		assertEquals(CVMLong.ONE, state.read("a"));
+
+		AdapterState untouched = venue.adapterState("untouched");
+		untouched.withDefault(Maps.empty()).execute(draft -> draft.read("a"));
+		assertNull(untouched.get(), "a transaction that leaves the empty value stores nothing");
 	}
 
 	@Test void migrationMovesOneExactValueAndNeverCopiesDeletedDataBack() {

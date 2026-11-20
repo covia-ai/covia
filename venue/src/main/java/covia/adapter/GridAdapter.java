@@ -8,7 +8,6 @@ import convex.auth.ucan.Capability;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
-import convex.core.data.AVector;
 import convex.core.data.Blob;
 import convex.core.data.Hash;
 import convex.core.data.Maps;
@@ -18,9 +17,9 @@ import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.exception.InvalidDefinitionException;
 import covia.exception.InvalidInputException;
-import covia.exception.NotSupportedException;
 import covia.exception.ResponseException;
 import covia.exception.UnavailableException;
+import covia.exception.UnsupportedException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.grid.Venue;
@@ -34,6 +33,9 @@ import covia.grid.client.VenueHTTP;
  */
 public class GridAdapter extends AAdapter {
 	private static final AString AUTHENTICATE_AS = Strings.intern("authenticateAs");
+	public static final String INVALID_VENUE = "'venue' must be a string when provided; omit it for local execution";
+	public static final String INVALID_DEFAULT_VENUE = "Operation 'venue' must be a string when provided";
+	public static final String RESULT_TIMEOUT = "grid:jobResult timed out after %dms waiting for job %s";
 
     /** Asset hash for synchronous grid run operation. */
     public static Hash RUN_OPERATION;
@@ -51,9 +53,8 @@ public class GridAdapter extends AAdapter {
 	
 	@Override
 	public String getDescription() {
-		return "Enables distributed processing and resource sharing across the Covia network via grid operations. " +
-		   "Provides access to remote venues, distributed job execution, and collaborative computing capabilities. " +
-		   "Perfect for scaling computational tasks, leveraging distributed resources, and building resilient, distributed AI applications.";
+		return "Invoke operations by reference locally or on another venue. " +
+			"Use the job adapter to inspect, await and control existing work; legacy grid job queries remain available for compatibility.";
 	}
 
     @Override
@@ -82,7 +83,7 @@ public class GridAdapter extends AAdapter {
 			case "invoke"    -> invokeAsync(ctx, meta, input);
 			case "jobStatus" -> invokeJobStatus(ctx, meta, input);
 			case "jobResult" -> invokeJobResult(ctx, meta, input);
-			default          -> CompletableFuture.failedFuture(new NotSupportedException("Unrecognised grid operation: " + gridOp));
+			default          -> CompletableFuture.failedFuture(new UnsupportedException("Unrecognised grid operation: " + gridOp));
 		};
 	}
 
@@ -106,8 +107,10 @@ public class GridAdapter extends AAdapter {
 		// Observing an existing job only reads; submitting one sends
 		if (!existing) engine.remoteJobs().requireNotClosing();
 		AString target = resolveVenue(meta, input);
-		if (!existing) engine.jobs().requireRemoteInvoke(operation, RT.getIn(input, Fields.INPUT), ctx);
-		VenueConnection remote = remoteConnection(ctx, target, input);
+		if (!existing) operation = engine.jobs().requireRemoteInvoke(operation, RT.getIn(input, Fields.INPUT), ctx);
+		VenueConnection remote = existing
+			? VenueConnection.job(engine, ctx, target, input)
+			: remoteConnection(ctx, target, input);
 		RemoteJobs observer = engine.remoteJobs();
 		observer.prepare(job, "covia", target.toString(), remote.credentials(), !existing);
 		if (job.isFinished()) return;
@@ -208,7 +211,7 @@ public class GridAdapter extends AAdapter {
 		try {
 			AMap<AString, ACell> saved = engine.remoteJobs().connection(job);
 			if (!VenueConnection.resumable(saved)) { engine.remoteJobs().credentialNotKept(job); return; }
-			Venue venue = restoreConnection(RT.ensureString(kept.get(RemoteJobs.TARGET)), saved);
+			Venue venue = restoreConnection(engine.jobs().callerContext(job), RT.ensureString(kept.get(RemoteJobs.TARGET)), saved);
 			if (convex.core.data.prim.CVMBool.TRUE.equals(kept.get(RemoteJobs.OWNS_REMOTE))) {
 				bindCancellation(job, venue, Job.parseID(id));
 			}
@@ -234,7 +237,7 @@ public class GridAdapter extends AAdapter {
         ACell operationInput = RT.getIn(input, Fields.INPUT);
         AString venueSpec = resolveVenue(meta, input);
 
-        if (venueSpec != null) engine.jobs().requireRemoteInvoke(targetOperation, operationInput, ctx);
+        if (venueSpec != null) targetOperation = engine.jobs().requireRemoteInvoke(targetOperation, operationInput, ctx);
         Venue venue = selectVenue(ctx, venueSpec, input);
 
 		return venue.run(targetOperation.toString(), operationInput);
@@ -259,10 +262,13 @@ public class GridAdapter extends AAdapter {
         AString venueSpec = resolveVenue(meta, input);
         if (venueSpec != null) engine.remoteJobs().requireNotClosing();
 
-        if (venueSpec != null) engine.jobs().requireRemoteInvoke(targetOperation, operationInput, ctx);
+        if (venueSpec != null) targetOperation = engine.jobs().requireRemoteInvoke(targetOperation, operationInput, ctx);
         Venue venue = selectVenue(ctx, venueSpec, input);
 
-        CompletableFuture<Job> jobFuture = venue.invoke(targetOperation.toString(), operationInput);
+        // Only submission is requested here; nobody consumes the SDK Job's future.
+        CompletableFuture<Job> jobFuture = venue instanceof VenueHTTP http
+            ? http.startJobAsync(targetOperation, operationInput)
+            : venue.invoke(targetOperation.toString(), operationInput);
         return jobFuture.thenApply(Job::getData);
 	}
 
@@ -273,7 +279,9 @@ public class GridAdapter extends AAdapter {
 				"'id' is required; use the job ID returned by grid:invoke"));
 		}
 
-		Venue venue = selectVenue(ctx, resolveVenue(meta, input), input);
+		AString target = resolveVenue(meta, input);
+		Venue venue = target == null ? selectVenue(ctx, null, input)
+			: VenueConnection.job(engine, ctx, target, input).venue();
 		return venue.getJobStatus(jobId).thenApply(status -> status);
 	}
 
@@ -284,10 +292,15 @@ public class GridAdapter extends AAdapter {
 				"'id' is required; use the job ID returned by grid:invoke"));
 		}
 
-		Venue venue = selectVenue(ctx, resolveVenue(meta, input), input);
+		AString target = resolveVenue(meta, input);
+		Venue venue = target == null ? selectVenue(ctx, null, input)
+			: VenueConnection.job(engine, ctx, target, input).venue();
+		long timeoutMs = parseTimeoutMs(input);
+		// A remote bounded wait must use the caller's budget, not the SDK's
+		// shorter default. Unbounded remote waits use the durable observer above.
+		if (timeoutMs > 0 && venue instanceof VenueHTTP http) http.setTimeout(timeoutMs);
 		CompletableFuture<ACell> jobFuture = venue.awaitJobResult(jobId);
 
-		long timeoutMs = parseTimeoutMs(input);
 		if (timeoutMs <= 0) return jobFuture;
 
 		// Derive a new future so the timeout doesn't corrupt the underlying Job's future.
@@ -299,7 +312,7 @@ public class GridAdapter extends AAdapter {
 					if (ex instanceof TimeoutException || ex.getCause() instanceof TimeoutException) {
 						// The caller's wait ran out; the job itself may still finish
 						return CompletableFuture.failedFuture(
-							new UnavailableException("grid:jobResult timed out after " + timeoutMs + "ms waiting for job " + jobId.toHexString()));
+							new UnavailableException(RESULT_TIMEOUT.formatted(timeoutMs, jobId)));
 					}
 					return CompletableFuture.failedFuture(ex);
 				});
@@ -334,6 +347,7 @@ public class GridAdapter extends AAdapter {
 		// authority. Carry the complete immutable context so agent caps,
 		// sub-principal scope, proofs, cancellation and parent job scope survive.
 		lv.setRequestContext(ctx);
+		lv.setJobOwner(VenueConnection.jobOwner(input));
 		return lv;
 	}
 
@@ -345,8 +359,8 @@ public class GridAdapter extends AAdapter {
 		return VenueConnection.connect(engine, ctx, venueSpec, input);
 	}
 
-	private Venue restoreConnection(AString target, AMap<AString, ACell> saved) {
-		return VenueConnection.restore(engine, target, saved);
+	private Venue restoreConnection(RequestContext ctx, AString target, AMap<AString, ACell> saved) {
+		return VenueConnection.restore(engine, ctx, target, saved);
 	}
 
 	/**
@@ -390,10 +404,19 @@ public class GridAdapter extends AAdapter {
 	 * Finds the venue specification from input (or metadata) if provided.
 	 */
 	private AString resolveVenue(ACell meta, ACell input) {
-		AString venue = RT.ensureString(RT.getIn(input, Fields.VENUE));
-		if (venue != null) return venue;
-		venue = RT.ensureString(RT.getIn(meta, Fields.OPERATION, Fields.VENUE));
-		return venue;
+		AMap<?, ?> args = RT.ensureMap(input);
+		if (args != null && args.containsKey(Fields.VENUE)) {
+			ACell venue = args.get(Fields.VENUE);
+			if (venue instanceof AString target) return target;
+			throw new InvalidInputException(INVALID_VENUE);
+		}
+		AMap<?, ?> operation = RT.ensureMap(RT.getIn(meta, Fields.OPERATION));
+		if (operation != null && operation.containsKey(Fields.VENUE)) {
+			ACell venue = operation.get(Fields.VENUE);
+			if (venue instanceof AString target) return target;
+			throw new InvalidDefinitionException(INVALID_DEFAULT_VENUE);
+		}
+		return null;
 	}
 
 }

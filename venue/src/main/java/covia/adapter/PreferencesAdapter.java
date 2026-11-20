@@ -19,6 +19,7 @@ import convex.core.lang.RT;
 import convex.core.util.Utils;
 import convex.lattice.cursor.AForkableCursor;
 import covia.api.Fields;
+import covia.lattice.Covia;
 import covia.exception.AuthException;
 import covia.exception.ConfigurationException;
 import covia.exception.InvalidInputException;
@@ -85,12 +86,12 @@ public class PreferencesAdapter extends AAdapter {
 	}
 
 	@Override
-	public boolean configure(AMap<AString, ACell> config, boolean strict) {
-		if (config == null) return true;
+	public void configure(AMap<AString, ACell> config, boolean strict) {
+		if (config == null) return;
 		if (strict) rejectUnknown(config, SETTINGS, "adapters.preferences");
 		checkLimit(config.get(K_MAX_BYTES), "adapters.preferences.maxBytes");
 		ACell users = config.get(K_USERS);
-		if (users == null) return true;
+		if (users == null) return;
 		if (!(users instanceof AMap<?, ?> byUser)) throw new ConfigurationException(BAD_USERS);
 		for (long i = 0; i < byUser.count(); i++) {
 			var entry = byUser.entryAt(i);
@@ -104,7 +105,6 @@ public class PreferencesAdapter extends AAdapter {
 			if (strict) rejectUnknown(own, USER_SETTINGS, at);
 			checkLimit(own.get(K_MAX_BYTES), at + ".maxBytes");
 		}
-		return true;
 	}
 
 	private static void rejectUnknown(AMap<AString, ACell> config, Set<AString> known, String at) {
@@ -132,8 +132,8 @@ public class PreferencesAdapter extends AAdapter {
 
 	/** The addressed user's preferences, read-only: edits go through the tool. */
 	@Override
-	public AForkableCursor<ACell> latticeView(RequestContext ctx) {
-		return userCursor(ctx.getUserDID());
+	public AForkableCursor<ACell> latticeView(AString owner, RequestContext ctx) {
+		return userCursor(owner);
 	}
 
 	@Override
@@ -147,8 +147,7 @@ public class PreferencesAdapter extends AAdapter {
 
 	/** The user's preferences in {@code state}, live or a transaction's draft. */
 	private static AForkableCursor<ACell> userCursor(AdapterState state, AString did) {
-		return state.cursor().withDefault(Maps.empty())
-			.path(K_USERS).withDefault(Maps.empty()).path(did);
+		return Covia.entry(Covia.entry(state.cursor(), K_USERS), did);
 	}
 
 	/** The size limit for one user: their own setting, else the venue's, else {@link #DEFAULT_MAX_BYTES}. */
@@ -170,7 +169,7 @@ public class PreferencesAdapter extends AAdapter {
 
 	private ACell edit(RequestContext ctx, ACell input) {
 		AString user = ctx.getUserDID();
-		if (ctx.getCallerDID() == null || user == null) throw new AuthException(AUTHENTICATION_REQUIRED);
+		if (ctx.getAuthorityDID() == null || user == null) throw new AuthException(AUTHENTICATION_REQUIRED);
 		AString commandCell = RT.ensureString(RT.getIn(input, K_COMMAND));
 		String command = (commandCell != null) ? commandCell.toString() : null;
 		if (command == null || !COMMANDS.contains(command)) throw new InvalidInputException(UNKNOWN_COMMAND);
@@ -192,7 +191,7 @@ public class PreferencesAdapter extends AAdapter {
 		engine.requireLocalAccess(ctx,
 			Strings.create(user + "/" + VIEW_PATH + (path.isEmpty() ? "" : "/" + path)), Capability.CRUD_WRITE);
 		long limit = limitFor(user);
-		boolean changed = adapterState(user).transact(draft -> {
+		boolean changed = adapterState(user).withDefault(Maps.empty()).transact(draft -> {
 			AForkableCursor<ACell> preferences = userCursor(draft, user);
 			ACell current = preferences.getOrDefault(null);
 			ACell root = (current != null) ? current : Maps.empty();

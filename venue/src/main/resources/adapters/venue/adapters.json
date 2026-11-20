@@ -1,6 +1,6 @@
 {
   "name": "Venue adapters",
-  "description": "Lists every registered adapter on this venue — active and disabled — with its kernel flag, owning module, effective configuration and operations, plus the loaded modules. Venue-owned: requires adapter/manage on <venue DID>/adapters.",
+  "description": "Lists every registered adapter on this venue — active and disabled — with its status, kernel flag, owning module, effective configuration and operations, plus the loaded modules. An enabled adapter whose start failed has status 'failed' and a reason; its operations are refused until venue/adapter/restart starts it. Venue-owned: requires admin/adapter/read on <venue DID>/adapters.",
   "operation": {
     "adapter": "venue:adapters",
     "readOnly": true,
@@ -19,12 +19,14 @@
               "name": { "type": "string" },
               "description": { "type": "string" },
               "enabled": { "type": "boolean" },
+              "status": { "type": "string", "enum": ["running", "failed", "disabled"] },
+              "reason": { "type": "string", "description": "Why a failed adapter is not running" },
               "kernel": { "type": "boolean" },
               "module": { "type": "string" },
               "config": { "type": "object" },
               "operations": { "type": "array", "items": { "type": "string" } }
             },
-            "required": ["name", "enabled", "kernel"]
+            "required": ["name", "enabled", "status", "kernel"]
           }
         },
         "modules": {
