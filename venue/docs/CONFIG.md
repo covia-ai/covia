@@ -1315,8 +1315,9 @@ named DID for both `iss` and `sub`, the target venue DID as `aud`, and the
 registered multikey in `kid`. Active methods are published in
 `/u/<username>/did.json`. `user:authentication-add`,
 `user:authentication-revoke`, and `user:authentication-list` manage the
-bindings; self-management is allowed, while cross-user changes require
-`admin/user/authentication-manage` on `<venueDID>/users`. Revocation retains an
+bindings; self-management is allowed, while for another user adding a key
+requires `admin/user/authentication-add` and revoking one
+`admin/user/authentication-revoke`, on `<venueDID>/users`. Revocation retains an
 audit tombstone and takes effect on the next request.
 
 Java clients use the same key without hand-building JWTs:
@@ -3200,8 +3201,9 @@ above is intentionally outside this administrative group:
 | `v/ops/venue/module/unload {name}` | Remove a module's live adapters and introspection, close resources and its classloader; catalog metadata remains |
 
 **Authority.** All of these are venue administration: they need venue
-authority ([VENUE_AUTHORITY.md](./VENUE_AUTHORITY.md#how-it-works-today)) for
-`admin/adapter/manage` on `<venue DID>/adapters`, the same model as `user:create`.
+authority ([VENUE_AUTHORITY.md](./VENUE_AUTHORITY.md#how-it-works-today)) on
+`<venue DID>/adapters`, the same model as `user:create`: `admin/adapter/read`
+to list adapters and `admin/adapter/manage` for the rest.
 Ordinary authenticated users get `AuthException`.
 
 **Failed adapters.** An adapter that cannot start, at launch, enable or

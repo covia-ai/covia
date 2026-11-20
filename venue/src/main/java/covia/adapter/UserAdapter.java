@@ -331,7 +331,7 @@ public class UserAdapter extends AAdapter {
 	}
 
 	private ACell authenticationAdd(RequestContext ctx, ACell input) {
-		AString did = targetManagedUser(ctx, input, Abilities.ADMIN_USER_AUTH_MANAGE);
+		AString did = targetManagedUser(ctx, input, Abilities.ADMIN_USER_AUTH_ADD);
 		AString id = engine.managedUserName(did);
 		AString key = RT.ensureString(RT.getIn(input, Fields.KEY));
 		AString label = RT.ensureString(RT.getIn(input, Fields.LABEL));
@@ -346,7 +346,7 @@ public class UserAdapter extends AAdapter {
 	}
 
 	private ACell authenticationRevoke(RequestContext ctx, ACell input) {
-		AString did = targetManagedUser(ctx, input, Abilities.ADMIN_USER_AUTH_MANAGE);
+		AString did = targetManagedUser(ctx, input, Abilities.ADMIN_USER_AUTH_REVOKE);
 		AString id = engine.managedUserName(did);
 		AString key = RT.ensureString(RT.getIn(input, Fields.KEY));
 		if (key == null) throw new InvalidInputException("key is required");

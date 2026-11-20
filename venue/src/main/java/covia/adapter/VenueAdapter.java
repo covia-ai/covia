@@ -33,9 +33,10 @@ import covia.venue.StoreControl;
  * <p>{@code venue/show-config} is the deliberately curated public exception:
  * it requires only read access to {@code v/config} and reports effective
  * operational settings without reflecting the raw operator document. Every
- * lifecycle operation is venue-owned. Adapter/module lifecycle requires a
- * venue-rooted delegation over {@code <venue DID>/adapters} with
- * {@code admin/adapter/manage}; process restart requires {@code admin/venue/restart} over
+ * lifecycle operation is venue-owned. Listing adapters requires a venue-rooted
+ * delegation over {@code <venue DID>/adapters} with {@code admin/adapter/read},
+ * and adapter/module lifecycle one with {@code admin/adapter/manage}; process
+ * restart requires {@code admin/venue/restart} over
  * {@code <venue DID>/process} ({@link covia.venue.Engine#requireVenueAuthority}).
  * Direct venue execution is allowed. A null capability scope is deliberately
  * not enough for an ordinary authenticated user.</p>
@@ -171,12 +172,15 @@ public class VenueAdapter extends AAdapter {
 				engine.requireVenueAuthority(ctx, STORE_RESOURCE, Abilities.ADMIN_VENUE_GC);
 				return audited(Audit.VENUE_GC, ctx, subOperation, input, gc(ctx, input));
 			}
+			if ("adapters".equals(subOperation)) {
+				engine.requireVenueAuthority(ctx, RESOURCE, Abilities.ADMIN_ADAPTER_READ);
+				return CompletableFuture.completedFuture(adapters());
+			}
 			if ("restart".equals(subOperation)) {
 				engine.requireVenueAuthority(ctx, PROCESS_RESOURCE, Abilities.ADMIN_VENUE_RESTART);
 			} else {
 				engine.requireVenueAuthority(ctx, RESOURCE, Abilities.ADMIN_ADAPTER_MANAGE);
 			}
-			if ("adapters".equals(subOperation)) return CompletableFuture.completedFuture(adapters());
 			CompletableFuture<ACell> done;
 			try {
 				done = CompletableFuture.completedFuture(dispatchAdmin(ctx, subOperation, input, meta));

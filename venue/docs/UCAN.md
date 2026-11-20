@@ -232,7 +232,9 @@ Abilities follow UCAN's slash-delimited convention with no leading slash. `*` is
 | `admin/sudo` | - | Act as the user, with the user's whole authority (`user:sudo`) |
 | `admin/user/export` | - | Export a user's stored state |
 | `admin/user/import` | - | Import stored state into an empty account |
-| `admin/user/authentication-manage` | - | Manage account authentication |
+| `admin/user/authentication-add` | - | Add a sign-in key to another account, so its holder can sign in as that account |
+| `admin/user/authentication-revoke` | - | Revoke another account's sign-in key |
+| `admin/adapter/read` | - | List venue adapters and modules (`<venue>/adapters`) |
 | `admin/adapter/manage` | - | Manage venue adapters and modules (`<venue>/adapters`) |
 | `admin/execute` | Every `admin/execute/…` | Run code in the venue process; runtime-specific leaves and resources are defined by their modules |
 | `p2p/read` | - | Inspect the venue's P2P node (`<venue>/p2p`) |

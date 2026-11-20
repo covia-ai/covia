@@ -58,7 +58,14 @@ class AdminCapabilitiesTest {
 	@Test
 	void administrativeReadsRequireAdminAbilities() throws Exception {
 		checkRead("v/ops/user/list", "users", "admin/user/read", "user/read", "admin/user");
-		checkRead("v/ops/venue/adapters", "adapters", "admin/adapter/manage", "adapter/manage", "admin/adapter");
+		checkRead("v/ops/venue/adapters", "adapters", "admin/adapter/read", "adapter/manage", "admin/adapter");
+	}
+
+	/** Seeing adapters and changing them are separate rights: neither implies the other. */
+	@Test
+	void readingAdaptersIsApartFromManagingThem() {
+		denied("v/ops/venue/adapters", Maps.empty(), venueGrant("adapters", "admin/adapter/manage"));
+		denied("v/ops/venue/adapter/disable", Maps.of(Fields.NAME, "test"), venueGrant("adapters", "admin/adapter/read"));
 	}
 
 	private void checkRead(String operation, String resource,

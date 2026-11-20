@@ -98,11 +98,13 @@ Resource scopes are preserved; possible refinements are listed separately.
 | `user:create` | `admin/user/create` on `V/users` |
 | `user:delete` | `admin/user/delete` on `V/users` |
 | `user:list`; operator view of `user:info`; another user's `user:authentication-list` | `admin/user/read` on `V/users` |
-| `user:authentication-add`, `user:authentication-revoke` for another account | `admin/user/authentication-manage` on `V/users` |
+| `user:authentication-add` for another account | `admin/user/authentication-add` on `V/users` |
+| `user:authentication-revoke` for another account | `admin/user/authentication-revoke` on `V/users` |
 | `user:export` for another account | `admin/user/export` on `V/users` |
 | `user:import` | `admin/user/import` on `V/users` |
 | `user:clone` | Source export permission plus `admin/user/import` on `V/users` |
-| `venue:adapters`, `venue:adapter-enable`, `venue:adapter-disable`, `venue:adapter-configure`, `venue:adapter-restart`, `venue:module-load`, `venue:module-unload` | `admin/adapter/manage` on `V/adapters` |
+| `venue:adapters` | `admin/adapter/read` on `V/adapters` |
+| `venue:adapter-enable`, `venue:adapter-disable`, `venue:adapter-configure`, `venue:adapter-restart`, `venue:module-load`, `venue:module-unload` | `admin/adapter/manage` on `V/adapters` |
 | `venue:restart`, including executable jar handoff | `admin/venue/restart` on `V/process` |
 | `venue:gc`, including status, cancel and backup options | `admin/venue/gc` on `V/store`; also `admin/venue/restart` on `V/process` when restarting |
 | `user:sudo` as another user | `admin/sudo` on the target `U`, from a request no access token or callable narrows; never the venue's DID or its public principal |
@@ -135,7 +137,7 @@ Account operations have important exceptions:
 - Import requires venue authority even for the caller's own account and
   fills an empty account. Clone requires both sides' permission.
 - Only the direct venue can override the final-active-authentication-key
-  protection. An authentication-management delegation does not suffice.
+  protection. An `admin/user/authentication-revoke` delegation does not suffice.
 - `venue:show-config` reads the published effective view with `crud/read` on
   `v/config`; it is not a privileged read of private configuration.
 
@@ -237,9 +239,9 @@ policy changes to agree before implementation:
    a collection privilege; clone checks its source and destination. Keep the
    venue's directory record distinct from the user's own data and the
    user-rooted `admin/sudo` resource. The exact child encoding is still open.
-2. **Separate observation from mutation.** `venue:adapters` requires the same
-   ability as module loading; GC status requires the same ability as
-   collection. Add read leaves if operators need observation-only access.
+2. **Separate observation from mutation.** GC status requires the same
+   ability as collection. Add a read leaf if operators need observation-only
+   access, as `admin/adapter/read` gives for adapters.
 3. **Separate maintenance from executable code changes.** Consider distinct
    rights for module load/unload and jar replacement instead of treating
    them as ordinary adapter management and restart.
@@ -271,8 +273,9 @@ migration. Replace grants, configured caps and grant-issuing clients separately:
 
 | Former ability | Required ability |
 |----------------|------------------|
-| `user/create`, `user/delete`, `user/read`, `user/export`, `user/import`, `user/authentication-manage` | The same suffix under `admin/user/…` |
-| `adapter/manage` | `admin/adapter/manage` |
+| `user/create`, `user/delete`, `user/read`, `user/export`, `user/import` | The same suffix under `admin/user/…` |
+| `user/authentication-manage` | `admin/user/authentication-add` to add a key, `admin/user/authentication-revoke` to revoke one |
+| `adapter/manage` | `admin/adapter/read` to list adapters (`venue:adapters`), `admin/adapter/manage` for the rest |
 | `venue/restart`, `venue/gc` | The same suffix under `admin/venue/…` |
 | `user/sudo` | `admin/sudo` |
 

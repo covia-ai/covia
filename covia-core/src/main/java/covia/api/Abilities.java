@@ -106,8 +106,17 @@ public final class Abilities {
 	/** Fill an empty account from stored user state ({@code user:import}, the
 	 *  target of {@code user:clone}). */
 	public static final AString ADMIN_USER_IMPORT   = Strings.intern("admin/user/import");
-	public static final AString ADMIN_USER_AUTH_MANAGE =
-		Strings.intern("admin/user/authentication-manage");
+	/** Add a sign-in key to another user's account ({@code user:authentication-add}),
+	 *  which lets the key's holder sign in as that user. */
+	public static final AString ADMIN_USER_AUTH_ADD =
+		Strings.intern("admin/user/authentication-add");
+	/** Revoke a sign-in key of another user's account
+	 *  ({@code user:authentication-revoke}). */
+	public static final AString ADMIN_USER_AUTH_REVOKE =
+		Strings.intern("admin/user/authentication-revoke");
+	/** List the venue's adapters and modules ({@code venue:adapters}) — guarded
+	 *  on {@code <venue DID>/adapters}. */
+	public static final AString ADMIN_ADAPTER_READ = Strings.intern("admin/adapter/read");
 	/** Venue-owned adapter and module lifecycle (enable/disable/configure,
 	 *  module load/unload) — guarded on {@code <venue DID>/adapters}. */
 	public static final AString ADMIN_ADAPTER_MANAGE = Strings.intern("admin/adapter/manage");

@@ -548,6 +548,9 @@ public class AdapterLifecycleTest {
 			} else if (op.endsWith("/gc")) {
 				assertTrue(denied.getCause().getMessage().contains("admin/venue/gc"), op);
 				assertTrue(denied.getCause().getMessage().contains("/store"), op);
+			} else if (op.endsWith("/adapters")) {
+				assertTrue(denied.getCause().getMessage().contains("admin/adapter/read"), op);
+				assertTrue(denied.getCause().getMessage().contains("/adapters"), op);
 			} else {
 				assertTrue(denied.getCause().getMessage().contains("admin/adapter/manage"), op);
 				assertTrue(denied.getCause().getMessage().contains("/adapters"), op);
