@@ -30,6 +30,7 @@ import convex.core.util.JSON;
 import convex.etch.EtchStore;
 import covia.adapter.AAdapter;
 import covia.adapter.agent.GoalTreeContext;
+import covia.grid.HexId;
 import covia.lattice.Covia;
 import covia.lattice.CoviaPath;
 
@@ -69,7 +70,8 @@ class VenueUpgradeIT {
 	private static final Map<String, Map<String, Long>> RELEASE_ADAPTER_VERSIONS = Map.of(
 		"0.9.11", Map.of(),
 		"0.10.0", Map.of("test", 1L),
-		"0.11.0", Map.of("test", 3L, "crypto", 1L));
+		"0.11.0", Map.of("test", 3L, "crypto", 1L),
+		"0.12.0", Map.of("test", 3L, "crypto", 1L));
 
 	private static final Comparator<String> BY_RELEASE = Comparator.comparing(
 		fixture -> Arrays.stream(release(fixture).split("\\.")).mapToInt(Integer::parseInt).toArray(), Arrays::compare);
@@ -100,7 +102,7 @@ class VenueUpgradeIT {
 					"the venue is migrated before the embedder's hook runs");
 				for (ACell user : releaseUsers) {
 					AMap<AString, ACell> job = prepared.getVenueState().users().user(Strings.create(text(user, "did")))
-						.jobs().getRecord(Blob.fromHex(text(user, "jobId")));
+						.jobs().getRecord(id(user, "jobId"));
 					assertFalse(job.containsKey(K_PREV) || job.containsKey(K_ACTOR),
 						"a release job record is in the current shape when the hook runs: " + job.keySet());
 				}
@@ -158,7 +160,7 @@ class VenueUpgradeIT {
 		assertEquals(Strings.create(name), RT.getIn(user.readInternalPath(CoviaPath.parse("w/profile")), "name"));
 
 		// A job written with its prev chain reads as its current state.
-		AMap<AString, ACell> job = engine.jobs().getJobData(Blob.fromHex(text(entry, "jobId")), ctx);
+		AMap<AString, ACell> job = engine.jobs().getJobData(id(entry, "jobId"), ctx);
 		assertEquals(Strings.create("COMPLETE"), job.get(Strings.create("status")));
 		assertNull(job.get(Strings.create("prev")), name);
 
@@ -174,7 +176,7 @@ class VenueUpgradeIT {
 
 		// A conversation reads through the format-independent accessor, and the
 		// next cycle turns a legacy frame into versioned history.
-		Blob sid = Blob.fromHex(text(entry, "sessionId"));
+		Blob sid = id(entry, "sessionId");
 		String baseline = "baseline message for " + name;
 		assertTrue(conversation(user, sid).toString().contains(baseline), name);
 		ACell reply = engine.jobs().invokeOperation("v/ops/agent/chat", Maps.of("agentId", VenueStoreFixture.AGENT,
@@ -212,5 +214,10 @@ class VenueUpgradeIT {
 
 	private static String text(ACell record, String field) {
 		return VenueStoreFixture.text(RT.getIn(record, field));
+	}
+
+	/** An id a release recorded, as the venue returned it: 0.12.0 writes ids as {@code 0x…}, earlier releases as bare hex. */
+	private static Blob id(ACell record, String field) {
+		return HexId.parse(Strings.create(text(record, field)));
 	}
 }

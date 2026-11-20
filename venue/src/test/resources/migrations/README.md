@@ -14,6 +14,9 @@ inserted afterwards.
 - `covia-0.11.0.zip`, from <https://github.com/covia-ai/covia/releases/tag/0.11.0>
   - Published jar SHA-256: `d3ed087ab99391f1698fe6f6fba2dbe363548de4d3b2ad5a01edba8de027937d`
   - Original store SHA-256: `0671fbe759f62466cf4b3128c89f64f22a351789084eea04079bf0a505be6652`
+- `covia-0.12.0.zip`, from <https://github.com/covia-ai/covia/releases/tag/0.12.0>
+  - Published jar SHA-256: `f89084332043d2d198b86e11fbcf241ed3449ec2eedd745d768c993f2ad2eea3`
+  - Original store SHA-256: `d0409ae39c7d23c110690302405016763ca9a568a4d906fa33c55944880d0284`
 - Generator: `venue/src/test/java/covia/venue/VenueStoreFixture.java`
 - Tests: `VenueUpgradeIT` opens every archive in process, and
   `VenueStoreMigrationIT` adds HTTP use and restarts. Fixtures are big, so
@@ -31,9 +34,9 @@ mock-LLM agent with a completed, titled session. Both users deliberately have
 the same agent name. Alice also has a synthetic test-adapter scratch value,
 with no bot started: 0.9.11's is at the old `w/adapters/test` route, written by
 the venue user, exercising adapter-state migration; 0.10.0's is in the test
-adapter's own state, at version 1, and 0.11.0's at version 3. The first two
-then run the test adapter's later steps; 0.11.0's is already at the current
-version.
+adapter's own state, at version 1, and 0.11.0's and 0.12.0's at version 3. The
+first two then run the test adapter's later steps; the last two are already at
+the current version.
 
 ## Run
 
