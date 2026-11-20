@@ -287,22 +287,25 @@ remains the application's choice.
 ## Job ids
 
 A job id is 16 bytes: six bytes of time in milliseconds, a two-byte counter,
-and eight random bytes. The first eight bytes are the venue's clock at the
-job's creation shifted left 16 bits, or one more than the id before when that
-is higher (`JobManager.nextSequence`). So:
+and eight random bytes. The first eight bytes are the next value of the
+venue's sequence (`JobManager.nextSequence`), which also stamps message ids
+and the entries of agents' queues: the venue's clock at the job's creation
+shifted left 16 bits, or one more than the sequence's last value when that is
+higher. So:
 
 - each id a running venue gives is greater than the one before, and an
   account's `j/` index, keyed by id, lists its jobs oldest first. Across a
   restart this holds only if the venue's clock has not stepped back past the
   last id.
 - an id's first six bytes are its job's `created` time (`Job.idTime`). They
-  are later than it only after more than 65,536 jobs were created in one
-  millisecond, or after a step back of the clock.
+  run ahead of it only after a step back of the clock, or when the sequence
+  took more than 65,536 values in one millisecond, and are never behind it.
 - no job created at or after time `t` has an id below `Job.lowestIDAt(t)`.
-  `Index.seek(Job.lowestIDAt(t))` on an account's `j/` index is the position
-  of its first job created since `t`, and the jobs from there to the end are
-  the ones since `t`, so a listing can take them, or page back from the
-  newest, by position without reading every record.
+  The jobs before `Index.seek(Job.lowestIDAt(t))` on an account's `j/` index
+  were all created before `t`, and those from it to the end were created
+  since `t`, except rarely an earlier one whose id ran ahead. So a listing can
+  take the jobs since a time, or page back from the newest, by position
+  without reading every record.
 
 The random half is unpredictable: an id is not a credential, but one
 observed id does not reveal the next.

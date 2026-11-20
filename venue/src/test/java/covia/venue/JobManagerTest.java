@@ -299,24 +299,35 @@ public class JobManagerTest {
 	 * then (JOBS.md, Job ids).
 	 */
 	@Test
-	public void testJobIdsSeekByCreationTime() {
-		Blob[] ids = new Blob[3];
-		for (int i = 0; i < ids.length; i++) {
-			Job job = engine.jobs().invokeOperation("v/test/ops/echo", Maps.of("n", i), ctx);
-			job.awaitResult(5000);
-			ids[i] = job.getID();
-			assertEquals(RT.ensureLong(job.getData().get(Fields.CREATED)).longValue(), Job.idTime(ids[i]));
-		}
+	public void testJobIdsSeekByCreationTime() throws Exception {
+		long start = 1_763_600_000_000L;
+		DrivenClock time = DrivenClock.at(java.time.Instant.ofEpochMilli(start));
+		Engine venue = TestEngine.application(time).mount(convex.core.crypto.AKeyPair.generate(), Maps.empty()).start();
+		try {
+			Engine.addDemoAssets(venue);
+			venue.getVenueState().users().ensure(did);
+			// Two jobs in one millisecond, then one five milliseconds later
+			long[] at = { start, start, start + 5 };
+			Blob[] ids = new Blob[at.length];
+			for (int i = 0; i < at.length; i++) {
+				time.set(at[i]);
+				Job job = venue.jobs().invokeOperation("v/test/ops/echo", Maps.of("n", i), ctx);
+				job.awaitResult(5000);
+				ids[i] = job.getID();
+				assertEquals(at[i], RT.ensureLong(job.getData().get(Fields.CREATED)).longValue());
+				assertEquals(at[i], Job.idTime(ids[i]), "an id starts with its job's creation time");
+			}
 
-		convex.core.data.Index<Blob, ACell> jobs = engine.jobs().getJobs(ctx);
-		assertEquals(ids.length, jobs.count());
-		for (int i = 0; i < ids.length; i++) assertEquals(ids[i], jobs.entryAt(i).getKey(), "oldest first");
+			convex.core.data.Index<Blob, ACell> jobs = venue.jobs().getJobs(ctx);
+			assertEquals(at.length, jobs.count());
+			for (int i = 0; i < at.length; i++) assertEquals(ids[i], jobs.entryAt(i).getKey(), "oldest first");
 
-		long since = Job.idTime(ids[1]);
-		long position = jobs.seek(Job.lowestIDAt(since));
-		for (int i = 0; i < ids.length; i++) {
-			long created = RT.ensureLong(RT.getIn(jobs.entryAt(i).getValue(), Fields.CREATED)).longValue();
-			assertEquals(created >= since, i >= position, "the jobs from the seek position are those created since");
+			assertEquals(0, jobs.seek(Job.lowestIDAt(start)));
+			assertEquals(2, jobs.seek(Job.lowestIDAt(start + 1)), "the jobs since a time are those from its seek position");
+			assertEquals(2, jobs.seek(Job.lowestIDAt(start + 5)));
+			assertEquals(3, jobs.seek(Job.lowestIDAt(start + 6)), "none were created since");
+		} finally {
+			venue.close();
 		}
 	}
 
