@@ -19,7 +19,7 @@
 				},
 				"timeout": {
 					"type": "integer",
-					"description": "Milliseconds to wait for completion; default 5000. Use 0 for immediate submission. If the wait ends first, return the task Job snapshot for later observation. This differs from a result-wait timeout of 0, which waits indefinitely."
+					"description": "Milliseconds to wait for completion; default 5000. Use 0 for immediate submission. If the wait ends first, return the task Job snapshot for later observation. This differs from a result-wait timeout of 0, which waits indefinitely. An agent asking itself while it runs does not wait."
 				},
 				"outputPath": {
 					"type": "string",

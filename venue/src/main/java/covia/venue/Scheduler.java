@@ -250,9 +250,11 @@ public class Scheduler {
 	 * Fire a scheduled event now, ahead of its time, which needs
 	 * {@link Abilities#SCHEDULE_MANAGE} on it. A one-shot
 	 * event is consumed; a recurring one stays scheduled at its unchanged next
-	 * due time. Returns the invocation's result future (run as the event's caller
-	 * would invoke it now). It takes no place under
-	 * {@code scheduler.maxConcurrency}: the caller asked for this one.
+	 * due time. The operation runs as the event's caller would invoke it now,
+	 * and its result is returned as the operation gives it to a caller waiting
+	 * on it ({@link JobManager.Prepared#resultFuture}), so a request to an agent
+	 * returns its task once the request's own wait is over. It takes no place
+	 * under {@code scheduler.maxConcurrency}: the caller asked for this one.
 	 */
 	public CompletableFuture<ACell> trigger(Blob handle, RequestContext ctx) {
 		Claimed c;
@@ -270,7 +272,13 @@ public class Scheduler {
 			return CompletableFuture.failedFuture(new NotFoundException("No scheduled event for handle",
 				(handle == null) ? null : handle.toHexString()));
 		}
-		return fire(c);
+		if (c.error() != null) return CompletableFuture.failedFuture(c.error());
+		try {
+			c.job().start();
+			return c.job().resultFuture();
+		} catch (RuntimeException e) {
+			return CompletableFuture.failedFuture(e);
+		}
 	}
 
 	/**
@@ -674,7 +682,9 @@ public class Scheduler {
 	 * tracked and transient otherwise (design §7). The dispatch runs as its
 	 * caller would invoke it now ({@link #fireContext}), which JobManager
 	 * enforces — so a fire never has authority its caller has since lost.
-	 * Returns once the operation's invocation has returned.
+	 * Returns once the operation's invocation has returned, with the Job's own
+	 * outcome, which a due fire only logs; {@link #trigger} returns the
+	 * operation's result instead.
 	 */
 	private CompletableFuture<ACell> fire(Claimed c) {
 		if (c.error() != null) return CompletableFuture.failedFuture(c.error());

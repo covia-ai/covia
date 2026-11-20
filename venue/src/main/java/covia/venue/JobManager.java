@@ -483,6 +483,17 @@ public class JobManager {
 			return job;
 		}
 
+		/**
+		 * The started Job's result as its operation gives it to a caller waiting
+		 * on it, as {@code run} and {@code invokeInternal} return it
+		 * ({@link AAdapter#resultFuture}): the Job's output for most operations;
+		 * for {@code agent:request}, the task's answer if it comes within the
+		 * request's wait, else the task.
+		 */
+		public CompletableFuture<ACell> resultFuture() {
+			return operationResultFuture(job, meta, input);
+		}
+
 		/** Records {@code reported} on the Job and returns it for the caller to throw. */
 		private CoviaException failWith(CoviaException reported) {
 			try { job.fail(reported); }

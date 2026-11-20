@@ -802,7 +802,7 @@ public class AgentAdapter extends AAdapter {
 		Blob sessionId = parseId(RT.getIn(input, Fields.SESSION_ID));
 		AString agentId = RT.ensureString(RT.getIn(input, Fields.AGENT_ID));
 
-		if (timeoutMs <= 0) {
+		if (timeoutMs <= 0 || requestedOfItself(taskJob)) {
 			return CompletableFuture.completedFuture(buildRequestSnapshot(taskJob, agentId, sessionId));
 		}
 
@@ -817,6 +817,29 @@ public class AgentAdapter extends AAdapter {
 					}
 					throw (ex instanceof RuntimeException re) ? re : new java.util.concurrent.CompletionException(cause);
 				});
+	}
+
+	/**
+	 * Whether a request's task was asked of its agent by that agent itself while
+	 * its loop runs. The task can start only after the cycle in progress, which
+	 * may be the one waiting, so the request returns its task at once.
+	 */
+	private boolean requestedOfItself(Job taskJob) {
+		AMap<AString, ACell> kept = engine.jobs().adapterData(taskJob);
+		return (kept != null) && isOwnLiveLoop(RT.ensureString(kept.get(Fields.OWNER)),
+			RT.ensureString(kept.get(Fields.AGENT_ID)), taskJob.getCaller());
+	}
+
+	/**
+	 * Whether {@code principal} is {@code owner}'s agent {@code agentId} while
+	 * that agent's run loop is live. What it does then may be done from its own
+	 * cycle, which holds the loop until it returns, so nothing waiting on the
+	 * loop, or on work only a later cycle takes, can finish before it does.
+	 */
+	private boolean isOwnLiveLoop(AString owner, AString agentId, AString principal) {
+		if (agentId == null || !agentId.equals(Engine.agentIdIn(owner, principal))) return false;
+		CompletableFuture<ACell> loop = runningLoops.get(new AgentKey(owner, agentId));
+		return loop != null && !loop.isDone();
 	}
 
 	private static final long DEFAULT_REQUEST_TIMEOUT_MS = 5000L;
@@ -2237,6 +2260,9 @@ public class AgentAdapter extends AAdapter {
 		// by agent:request / agent:chat.
 		long waitMs = parseWaitMs(input);
 		if (waitMs == 0 && RT.getIn(input, Fields.WAIT) == null) waitMs = -1;
+		// The agent triggering itself while its loop runs returns at once:
+		// its cycle may be the caller, and no wait on the loop ends before it does
+		if (isOwnLiveLoop(target.ownerDID(), agentId, ctx.getAuthorityDID())) waitMs = 0;
 
 		AMap<AString, ACell> running = identify(target, Maps.of(
 			Fields.STATUS, Agent.RUNNING));

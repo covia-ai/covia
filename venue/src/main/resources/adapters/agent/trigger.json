@@ -1,6 +1,6 @@
 {
 	"name": "Trigger Agent",
-	"description": "Fallback kick that nudges the agent's run loop to execute a cycle. Not a result-getter — trigger carries no payload and makes no guarantee about what the agent produces. For results, await the relevant Job: submit work via agent:request (task Job) or agent:chat (chat Job) and wait on that. Use agent:trigger only when something outside the normal intake path needs a nudge — e.g. after a manual state edit, for diagnostics, or to resume a stuck agent. Creates no session. Defaults to blocking until the current cycle yields or finishes; set wait=false to return immediately, or wait=<ms> for a bounded wait.",
+	"description": "Fallback kick that nudges the agent's run loop to execute a cycle. Not a result-getter — trigger carries no payload and makes no guarantee about what the agent produces. For results, await the relevant Job: submit work via agent:request (task Job) or agent:chat (chat Job) and wait on that. Use agent:trigger only when something outside the normal intake path needs a nudge — e.g. after a manual state edit, for diagnostics, or to resume a stuck agent. Creates no session. Defaults to blocking until the current cycle yields or finishes; set wait=false to return immediately, or wait=<ms> for a bounded wait. An agent triggering itself while it runs returns at once.",
 	"dateCreated": "2026-03-06T00:00:00Z",
 	"operation": {
 		"adapter": "agent:trigger",

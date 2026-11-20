@@ -1051,7 +1051,9 @@ async op (LLM or HTTP) simply keeps its virtual thread blocked on `.join()` —
 there is no yield/resume handoff. Sessioned HITL requests return their durable
 handle immediately and re-enter through the asking task or session (§6.3). A `SLEEPING` return means
 the loop fully drained; a `RUNNING` snapshot from a bounded `wait` means
-the loop is still processing.
+the loop is still processing. An agent triggering itself while its loop runs
+returns `RUNNING` at once, whatever its `wait`: the cycle in progress may be
+the one calling, and holds the loop until the call returns.
 
 Cancelling the trigger Job ends its `wait` immediately: `job.cancel()`
 completes a per-caller signal raced against the loop's completion future,

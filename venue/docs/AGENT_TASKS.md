@@ -39,7 +39,7 @@ An agent can be asked in three ways:
 | `responseSchema` | The shape wanted for the result, shown to the agent |
 | `strict` | Enforce `responseSchema` when the task completes; requires one |
 | `outputPath` | Write the result here, as the asker. The Job then ends with a receipt `{status, outputPath, bytes}` instead of the result. A write that fails fails the task; a failed or cancelled task writes nothing |
-| `timeout` | How long a synchronous call waits for the result, in milliseconds (default 5000; 0 does not wait), before returning the Job's id and status. It does not affect the task: tasks have no deadline |
+| `timeout` | How long a synchronous call waits for the result, in milliseconds (default 5000; 0 does not wait), before returning the Job's id and status. It does not affect the task: tasks have no deadline. An agent asking itself while it runs does not wait, since its task waits for the cycle in progress |
 
 A request is refused if the asker may not ask the agent (`config.accepts`, or
 the `agent/request` ability in [UCAN.md](./UCAN.md)), if the agent does not
