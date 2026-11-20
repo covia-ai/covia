@@ -37,6 +37,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - A configured Python function whose settings add `principals: true` is also passed its frame's `authority` and `caller`, so one offered through a callable can keep each caller's state apart (#706).
 - The model option `emptyResponse` says how a response with no text and no tool calls is read: `stop`, a silent reply and the default; `content_filter`, the provider declined; or `error`, no answer. The last two fail the call.
 - A venue with a public hostname takes its users in short form wherever a principal or a path is given, in operations, REST routes and configuration (a messaging bot's or Claude Code project's `user`, the `secrets` bootstrap's keys): `u:bob` for `did:web:<hostname>:u:bob`, `u:bob:g:helper` for his agent and `u:bob/w/notes` for his path; records hold the full DID.
+- Job ids are documented as time-ordered: each starts with its job's creation time in milliseconds, so a listing of an account's `j/` can seek to the jobs created since a given time (#700).
 
 ### Changed
 

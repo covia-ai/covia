@@ -294,6 +294,33 @@ public class JobManagerTest {
 	// ========== Persistence policy ==========
 
 	/**
+	 * A job's id starts with its creation time, ids increase, and the lowest id
+	 * at a time seeks the account's {@code j/} index to the jobs created since
+	 * then (JOBS.md, Job ids).
+	 */
+	@Test
+	public void testJobIdsSeekByCreationTime() {
+		Blob[] ids = new Blob[3];
+		for (int i = 0; i < ids.length; i++) {
+			Job job = engine.jobs().invokeOperation("v/test/ops/echo", Maps.of("n", i), ctx);
+			job.awaitResult(5000);
+			ids[i] = job.getID();
+			assertEquals(RT.ensureLong(job.getData().get(Fields.CREATED)).longValue(), Job.idTime(ids[i]));
+		}
+
+		convex.core.data.Index<Blob, ACell> jobs = engine.jobs().getJobs(ctx);
+		assertEquals(ids.length, jobs.count());
+		for (int i = 0; i < ids.length; i++) assertEquals(ids[i], jobs.entryAt(i).getKey(), "oldest first");
+
+		long since = Job.idTime(ids[1]);
+		long position = jobs.seek(Job.lowestIDAt(since));
+		for (int i = 0; i < ids.length; i++) {
+			long created = RT.ensureLong(RT.getIn(jobs.entryAt(i).getValue(), Fields.CREATED)).longValue();
+			assertEquals(created >= since, i >= position, "the jobs from the seek position are those created since");
+		}
+	}
+
+	/**
 	 * Default internal execution uses a Job wrapper but creates no durable record.
 	 */
 	@Test

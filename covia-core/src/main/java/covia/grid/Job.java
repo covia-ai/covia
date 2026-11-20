@@ -135,13 +135,59 @@ public class Job {
 		throw new IllegalArgumentException("Unable to convert to Job ID: " + a);
 	}
 
+	/** Length in bytes of a job id a Covia venue gives. */
+	private static final int ID_LENGTH = 16;
+	/** Bytes at the start of a job id holding a time in milliseconds. */
+	private static final int ID_TIME_BYTES = 6;
+	/** Why {@link #idTime} refuses an id. */
+	public static final String NOT_A_VENUE_JOB_ID = "Not a job id a Covia venue gives: %s";
+
+	/**
+	 * The lowest id a Covia venue can give a job it creates at or after
+	 * {@code timeMillis}, for use as a seek bound on an account's job index
+	 * ({@code venue/docs/JOBS.md}, Job ids): the jobs from
+	 * {@code Index.seek(lowestIDAt(t))} to the end are the ones created since
+	 * {@code t}.
+	 *
+	 * @param timeMillis a time in milliseconds since the epoch; an earlier one
+	 *        bounds every id
+	 * @return a 16-byte id, its time {@code timeMillis} and the rest zero
+	 */
+	public static Blob lowestIDAt(long timeMillis) {
+		byte[] bs = new byte[ID_LENGTH];
+		long time = Math.max(0, timeMillis);
+		for (int i = ID_TIME_BYTES - 1; i >= 0; i--) {
+			bs[i] = (byte) time;
+			time >>>= 8;
+		}
+		return Blob.wrap(bs);
+	}
+
+	/**
+	 * The time in milliseconds at the start of a job id a Covia venue gave
+	 * ({@code venue/docs/JOBS.md}, Job ids): the venue's clock when it created
+	 * the job, or a little later after a burst of jobs in one millisecond or a
+	 * step back of its clock.
+	 *
+	 * @param id a job id from a Covia venue
+	 * @return its time in milliseconds since the epoch
+	 * @throws IllegalArgumentException if {@code id} is not 16 bytes
+	 */
+	public static long idTime(Blob id) {
+		if (id.count() != ID_LENGTH) throw new IllegalArgumentException(NOT_A_VENUE_JOB_ID.formatted(id));
+		long time = 0;
+		for (int i = 0; i < ID_TIME_BYTES; i++) time = (time << 8) | (id.byteAt(i) & 0xFF);
+		return time;
+	}
+
 	public static Job create(AMap<AString, ACell> status) {
 		return new Job(status);
 	}
 
 	/**
 	 * Gets the remote ID of the Job. Valid for the venue which is executing it.
-	 * A 16-byte Blob (6 bytes timestamp + 2 bytes counter + 8 bytes random).
+	 * On a Covia venue a 16-byte Blob that starts with the time the venue
+	 * created the job ({@link #idTime}).
 	 * @return Job ID as Blob
 	 */
 	public Blob getID() {

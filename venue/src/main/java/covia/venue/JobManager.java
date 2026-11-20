@@ -1984,6 +1984,8 @@ public class JobManager {
 	 * Generates a unique job ID.
 	 * Format: 6 bytes timestamp + 2 bytes counter + 8 bytes random.
 	 * Time-ordered, monotonic, unpredictable, collision-resistant, thread-safe.
+	 * The layout is a contract (JOBS.md, Job ids) that {@link Job#idTime} and
+	 * {@link Job#lowestIDAt} read.
 	 */
 	private Blob generateJobID(long ts) {
 		byte[] bs = new byte[16];

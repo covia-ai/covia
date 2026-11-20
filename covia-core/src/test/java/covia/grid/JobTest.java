@@ -438,7 +438,27 @@ public class JobTest {
 		assertEquals(Blob.parse("0x1234"),Job.parseID("0x1234"));
 		assertEquals(Blob.parse("0x1234"),Job.parseID(Strings.create("0x1234")));
 	}
-	
+
+	/**
+	 * A job id starts with a time in milliseconds, and the lowest id at a time
+	 * bounds every id with that time or a later one (JOBS.md, Job ids).
+	 */
+	@Test public void testIDTimeAndSeekBound() {
+		long t = 1_763_600_000_123L;
+		Blob bound = Job.lowestIDAt(t);
+		assertEquals(t, Job.idTime(bound));
+
+		// An id as a venue gives it at t: time, counter, random half
+		Blob id = Blob.parse("0x" + String.format("%012x", t) + "ffff" + "ffffffffffffffff");
+		assertEquals(t, Job.idTime(id));
+		assertTrue(bound.compareTo(id) <= 0, "the bound is at or below every id with its time");
+		assertTrue(id.compareTo(Job.lowestIDAt(t + 1)) < 0, "and below the bound of the next millisecond");
+		assertTrue(Job.lowestIDAt(t - 1).compareTo(bound) < 0);
+
+		assertTrue(Job.lowestIDAt(-5).compareTo(Job.lowestIDAt(0)) == 0, "a time before the epoch bounds every id");
+		assertThrows(IllegalArgumentException.class, () -> Job.idTime(Blob.parse("0x1234")));
+	}
+
 	@Test public void testBuild() {
 		AMap<AString,ACell> data = Maps.of(
 			Fields.ID,"123456",
