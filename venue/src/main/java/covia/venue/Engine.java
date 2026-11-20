@@ -4073,7 +4073,7 @@ public class Engine {
 
 		AMap<AString,ACell> ddo=Maps.of(
 			"id", docID,
-			"@context", "https://www.w3.org/ns/did/v1",
+			"@context", CoviaAPI.MULTIKEY_DID_CONTEXT,
 			"verificationMethod",Vectors.of(Maps.of(
 						"id",keyID,
 						"type","Multikey",
@@ -4086,6 +4086,7 @@ public class Engine {
 			"capabilityInvocation",keyVector,
 			"service",Vectors.of(
 					Maps.of(
+							"id",Strings.create(docID+CoviaAPI.SERVICE_FRAGMENT),
 							"type",CoviaAPI.SERVICE_TYPE,
 							"serviceEndpoint",endpoint
 					))

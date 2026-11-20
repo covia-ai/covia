@@ -23,6 +23,7 @@ import convex.core.data.Hash;
 import convex.core.data.Index;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.exceptions.ParseException;
@@ -102,7 +103,12 @@ public class CoviaAPI extends ACoviaAPI {
 
 	private static final String GET_JOB = "getJob";
 
-	public static final AString SERVICE_TYPE = Strings.intern("Covia.API.v1");	
+	public static final AString SERVICE_TYPE = Strings.intern("Covia.API.v1");
+	/** The fragment naming the venue's API service in its DID document: {@code <document id>#covia}. */
+	public static final String SERVICE_FRAGMENT = "#covia";
+	/** The DID context, then the context defining {@code Multikey} and {@code publicKeyMultibase}. */
+	public static final AVector<AString> MULTIKEY_DID_CONTEXT = Vectors.of(
+		Strings.intern("https://www.w3.org/ns/did/v1"), Strings.intern("https://w3id.org/security/multikey/v1"));
 	public static final AString STATS_FIELD = Strings.intern("stats");	
 	
 	private final SseServer sseServer;

@@ -17,6 +17,13 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.TestInstance.Lifecycle;
 
+import convex.core.data.ACell;
+import convex.core.data.AMap;
+import convex.core.data.AString;
+import convex.core.data.AVector;
+import convex.core.data.Strings;
+import convex.core.lang.RT;
+import convex.core.util.JSON;
 import covia.venue.TestServer;
 
 @TestInstance(Lifecycle.PER_CLASS)
@@ -78,9 +85,18 @@ public class DIDTest {
 		assertTrue(body.startsWith("{"), "Response should start with {");
 		assertTrue(body.endsWith("}"), "Response should end with }");
 		
-		// Check for required DID document fields
-		assertTrue(body.contains("\"@context\":\"https://www.w3.org/ns/did/v1\""), 
-			"Should contain correct @context");
+		// Multikey methods come with the context that defines them, and every
+		// service has an id, unique in the document (DID Core §5.4)
+		AMap<AString, ACell> doc = RT.ensureMap(JSON.parse(body));
+		assertEquals(CoviaAPI.MULTIKEY_DID_CONTEXT, doc.get(Strings.create("@context")));
+		AVector<ACell> services = RT.ensureVector(doc.get(Strings.create("service")));
+		java.util.Set<ACell> serviceIds = new java.util.HashSet<>();
+		for (long i = 0; i < services.count(); i++) {
+			ACell id = RT.getIn(services.get(i), "id");
+			assertNotNull(id, "every service has an id");
+			assertTrue(serviceIds.add(id), "service ids are unique");
+		}
+		assertEquals(1, serviceIds.size(), "the venue's API service");
 
 		// Verify DID format
 		assertTrue(body.contains("\"did:"), "Should contain did: format");
