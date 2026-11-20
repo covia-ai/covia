@@ -2,8 +2,16 @@ package covia.venue;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-import org.junit.jupiter.api.Test;
+import java.util.List;
 
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.parallel.Isolated;
+import org.slf4j.LoggerFactory;
+
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 
@@ -11,8 +19,10 @@ import convex.core.data.Strings;
  * Deterministic tests for the rate-limit configuration logic — the enable
  * defaults (on for a LAN/public bind, off for loopback), explicit overrides,
  * the numeric knob defaults, and the removed job cap's key. Pure config
- * parsing, no server or timing.
+ * parsing, no server or timing. Isolated because one test changes the
+ * {@link Config} logger's level, which is global.
  */
+@Isolated
 public class ConfigRateLimitTest {
 
 	@Test
@@ -61,36 +71,39 @@ public class ConfigRateLimitTest {
 		assertEquals(250L, c.getRateLimitBlockMs());
 	}
 
-	/** A config that still sets the removed job cap's key says, once, that it is ignored. */
+	/**
+	 * A config that still sets the removed job cap's key says, once, that it is
+	 * ignored. The warning is captured, never printed: the logger stops passing
+	 * events to the console before it lets warnings through, and takes them
+	 * back before it passes events on again.
+	 */
 	@Test
 	public void testRemovedJobCapIsReportedAsIgnored() {
-		ch.qos.logback.classic.Logger logger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(Config.class);
-		ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> captured =
-			new ch.qos.logback.core.read.ListAppender<>();
-		ch.qos.logback.classic.Level level = logger.getLevel();
+		Logger logger = (Logger) LoggerFactory.getLogger(Config.class);
+		ListAppender<ILoggingEvent> captured = new ListAppender<>();
+		captured.setContext(logger.getLoggerContext());
+		Level level = logger.getLevel();
 		boolean additive = logger.isAdditive();
 		captured.start();
-		logger.setLevel(ch.qos.logback.classic.Level.WARN);
-		logger.setAdditive(false);
 		logger.addAppender(captured);
+		logger.setAdditive(false);
+		logger.setLevel(Level.WARN);
 		try {
 			new Config(Maps.of(Config.RATE_LIMIT, Maps.of(Config.ENABLED, true)));
-			assertEquals(0, warningsHere(captured), "a config without the key says nothing of it");
+			assertEquals(0, jobCapWarnings(captured), "a config without the key says nothing of it");
 			new Config(Maps.of(Config.RATE_LIMIT, Maps.of(Config.MAX_CONCURRENT_JOBS_PER_USER, 10L)));
-			assertEquals(1, warningsHere(captured));
+			assertEquals(1, jobCapWarnings(captured));
 		} finally {
-			logger.detachAppender(captured);
 			logger.setLevel(level);
 			logger.setAdditive(additive);
+			logger.detachAppender(captured);
 			captured.stop();
 		}
 	}
 
-	/** The job cap warnings this test's thread logged, apart from any other test's. */
-	private static long warningsHere(ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> captured) {
-		String thread = Thread.currentThread().getName();
-		return java.util.List.copyOf(captured.list).stream()
-			.filter(e -> thread.equals(e.getThreadName()) && Config.JOB_CAP_REMOVED.equals(e.getFormattedMessage()))
+	private static long jobCapWarnings(ListAppender<ILoggingEvent> captured) {
+		return List.copyOf(captured.list).stream()
+			.filter(e -> Config.JOB_CAP_REMOVED.equals(e.getFormattedMessage()))
 			.count();
 	}
 
