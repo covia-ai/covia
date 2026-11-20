@@ -230,6 +230,7 @@ then tag the merge commit:
 
 3. **Complete the release notes**: rename `## [Unreleased]` in `CHANGELOG.md`
    to `## [1.0.0] - <date>` and add a fresh empty `[Unreleased]` above it.
+   Point the image tag in the README's Docker quickstart at the new version.
 
 4. **Commit and open a pull request** into `master`:
    ```bash
