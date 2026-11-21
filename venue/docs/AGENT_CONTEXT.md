@@ -268,7 +268,7 @@ The label renderer therefore handles only blocks that genuinely travel as instru
 | Compacted conversation segment (assistant memory): the first and last turn it stands for, by position in the frame's history, so `agent:history` can read exactly those back | `[Compacted: turns <from>–<to>] <summary>` | `<compacted from="…" to="…">` | `## Compacted: turns <from>–<to>` |
 | Ancestor context (goal tree) | `[Ancestor Context]` | `<ancestors>` | `## Ancestor context` |
 | Tool-failure diagnostic | `[Tool failure: <name>] <reason>` | `<tool-failure name="…">` | `## Tool failure: <name>` |
-| Who a turn comes from (COG-20 §4): before every incoming user turn with a recorded caller except direct-owner input that continues direct-owner input (When it appears, below); its provenance text, worded for the agent | `[From <who> via <adapter> (<text>); acting as <who> via <adapter> (<text>) …]` | `<from>…</from>` | `## From …` |
+| Who a turn comes from (COG-20 §4): before every incoming user turn with a recorded caller except the owner's when where it came from has not changed (When it appears, below); its provenance text, worded for the agent | `[From <who> via <adapter> (<text>); acting as <who> via <adapter> (<text>) …]` | `<from>…</from>` | `## From …` |
 | The same, for a turn recorded before routes named where they started | `[From: <relationship> <principal> — <adapter> <name> of <owner>: caller <did>, sender <id> @<handle>, <kind> chat <id>, thread <id>, space <id> — …]` | `<from principal="…" relationship="…"><via adapter="…" name="…" owner="…" caller="…" sender="…" handle="…" chat="…" chat-kind="…" thread="…" space="…"/>…</from>` | `## From: …` |
 | Outstanding task | `[Tasks assigned to you]` | `<tasks>` | `## Tasks assigned to you` |
 | Empty-state signal | `[No pending tasks, messages, or job results. …]` | `<no-input>` | `## No input` |
@@ -296,19 +296,25 @@ is not taken for owner approval, and a token's principal is its issuer, not
 the unknown holder presenting it.
 
 **When it appears.** An element precedes every incoming user turn with a
-recorded caller, except direct-owner input (a route that is one direct start
-vouching for the owner) at the start of the conversation or after other
-direct-owner input. So the owner chatting directly carries no
-element, and returning to the owner after another source does. Assistant
-replies and tool messages do not change the previous incoming source.
+recorded caller, except the owner's when where it came from has not changed:
+a turn whose route names the owner and no one else, and is the previous
+incoming turn's route or, at the start of the conversation, one direct start.
+So the owner chatting directly carries no element; a conversation the owner
+holds over one HTTP login or access token carries one, before its first
+message; and the owner's turn after any change of route carries one,
+returning after another source included. Assistant replies and tool messages
+do not change the previous incoming source.
 
-Every HTTP request, including a signed owner login over MCP, repeats its
-`From` element. So do sibling requests, token requests and other sources,
-even when their caller and route are identical to the preceding turn.
-Resumption keeps the original route and adds no ingress record. Legacy
-routes do not establish direct-owner continuity. A legacy turn without a
-recorded caller has no source label and breaks continuity; generated notices
-and tool results have their own labels or roles, not an implied owner source.
+Every other source repeats its element on every turn, even when its caller
+and route are identical to the preceding turn: sibling agents, other users,
+anonymous callers, a route that passed through anyone else on its way to the
+owner, such as `admin/sudo`, and the agent's own late results. Each fire of a
+scheduled event records when it was due, so no two share a route. Resumption
+keeps the original route and adds no ingress record. A route recorded before
+routes named where they started establishes no continuity. A legacy turn
+without a recorded caller has no source label and breaks continuity;
+generated notices and tool results have their own labels or roles, not an
+implied owner source.
 
 **Turns recorded before.** A turn whose route does not name where it started
 keeps its earlier label wording: its
@@ -322,7 +328,7 @@ route step`.
 The `From` principal is omitted for `self`, `owner` and `anonymous-owner`:
 the relationship already identifies them. Other callers retain their principal,
 and channel fields remain available when present. This affects only what the
-model sees, never the recorded caller or whether the turn continues direct-owner input.
+model sees, never the recorded caller or whether the element appears.
 
 `bracket` is cheap in tokens, reads naturally in logs, and is plain text. `xml` marks where an instruction block ends as well as where it begins. `header` suits models whose guidance favours markdown sections, at the cost of competing with headings inside an instruction body. A model that benefits from either alternative opts in on its asset. The dialect is fixed for a persisted context; changing it rebuilds the prefix deliberately.
 

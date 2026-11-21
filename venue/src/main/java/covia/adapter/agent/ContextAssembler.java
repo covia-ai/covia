@@ -1278,10 +1278,10 @@ public final class ContextAssembler {
 	/**
 	 * Venue-authored provenance between turns (COG-20 §4). A {@code From} element
 	 * ({@link TurnProvenance}) precedes every user turn with a recorded caller,
-	 * except a direct-owner turn at the start or following another
-	 * direct-owner input ({@link TurnProvenance#continues}). Assistant and tool messages do not
-	 * change the previous incoming source. A legacy turn without a caller has
-	 * no attribution and breaks direct-owner continuity.
+	 * except the owner's when its route is unchanged: the previous incoming
+	 * turn's, or a direct start at the beginning ({@link TurnProvenance#continues}).
+	 * Assistant and tool messages do not change the previous incoming source. A
+	 * legacy turn without a caller has no attribution and breaks continuity.
 	 * The element names who asked without telling the model to trust, obey or
 	 * reject the content: authority remains a property of the configured
 	 * capabilities (#405). Nothing is ever written into the user's own text, so

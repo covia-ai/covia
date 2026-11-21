@@ -104,6 +104,24 @@ public final class Provenance {
 	}
 
 	/**
+	 * The one principal its whole route names: its caller, when every record
+	 * vouches for the caller and each is a readable step, a direct start or one
+	 * naming the adapter that wrote it, with nothing folded out; otherwise null.
+	 * Read from the records' structure, never their text.
+	 */
+	public AString onlyPrincipal() {
+		if (!namesStart() || caller == null) return null;
+		AVector<?> records = (AVector<?>) route;
+		for (long i = 0; i < records.count(); i++) {
+			AMap<AString, ACell> record = RT.ensureMap(records.get(i));
+			if (record == null || !caller.equals(record.get(Fields.PRINCIPAL))) return null;
+			boolean readable = (i == 0 && isDirect(record)) || shownIdentifier(record.get(Fields.VIA)) != null;
+			if (!readable) return null;
+		}
+		return caller;
+	}
+
+	/**
 	 * Whether {@code record} is a direct start ({@link RequestContext#directRecord}),
 	 * which names no adapter. A route stored before in-process requests were
 	 * marked direct shows one as the sign-in it was written as then, with no

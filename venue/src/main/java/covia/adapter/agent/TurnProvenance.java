@@ -193,29 +193,43 @@ final class TurnProvenance {
 
 	/**
 	 * Whether a turn keyed {@code key} needs no element after {@code last}: it
-	 * is direct-owner input at the {@link #START} or after other direct-owner
-	 * input. Every other source is labelled on every incoming turn, even when
-	 * its route is unchanged, and so is the owner's switch back from another
-	 * source. An absent or legacy source does not establish direct-owner
-	 * continuity.
+	 * is the owner's ({@link #ownersAlone}) and nothing about where it came from
+	 * changed, so its route is the previous incoming turn's or, at the
+	 * {@link #START}, a direct start, where a conversation is taken to begin.
+	 * Every other source is labelled on every incoming turn, even when its
+	 * route is unchanged, and so is the owner's after any change of route. An
+	 * absent or legacy source establishes no continuity.
 	 */
 	static boolean continues(Engine engine, RequestContext ctx, Key last, Key key) {
-		if (key == null || !ownerDirect(engine, ctx, key)) return false;
-		return last == START || (last != null && ownerDirect(engine, ctx, last));
+		if (key == null || !ownersAlone(engine, ctx, key)) return false;
+		if (last == START) return direct(key) != null;
+		if (last == null) return false;
+		if (last.equals(key)) return true;
+		AString direct = direct(key);
+		return direct != null && direct.equals(direct(last));
 	}
 
 	/**
-	 * Whether {@code key} is the agent's owner making the request directly: a
-	 * route that is one direct start ({@link Provenance#direct}) vouching for
-	 * the owner, who is the turn's caller and never the venue's public
-	 * principal. Read from the records' structure, never their text.
+	 * Whether {@code key} is the agent's owner's alone: a route naming where it
+	 * started whose every record vouches for the owner
+	 * ({@link Provenance#onlyPrincipal}), the turn's caller and never the
+	 * venue's public principal. A route that passed through anyone else, even
+	 * ending at the owner, is not.
 	 */
-	static boolean ownerDirect(Engine engine, RequestContext ctx, Key key) {
+	static boolean ownersAlone(Engine engine, RequestContext ctx, Key key) {
 		if (key.records() == null) return false;
-		AString direct = Provenance.of(Maps.of(Fields.CALLER, key.caller(), Fields.ROUTE, key.records())).direct();
 		AString owner = ownerOf(ctx);
-		if (owner == null || !owner.equals(direct) || !owner.equals(key.caller())) return false;
+		if (owner == null || !owner.equals(provenance(key).onlyPrincipal())) return false;
 		return engine == null || !engine.isPublicPrincipal(owner);
+	}
+
+	/** The principal {@code key}'s route starts with directly, being its whole route ({@link Provenance#direct}); otherwise null. */
+	private static AString direct(Key key) {
+		return (key.records() == null) ? null : provenance(key).direct();
+	}
+
+	private static Provenance provenance(Key key) {
+		return Provenance.of(Maps.of(Fields.CALLER, key.caller(), Fields.ROUTE, key.records()));
 	}
 
 	/** How {@code caller} stands to the agent acting under {@code ctx}, from DIDs alone. */

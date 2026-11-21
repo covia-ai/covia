@@ -364,9 +364,10 @@ instructions say how to read the `From` element
 ([AGENT_CONTEXT.md §1.2](./AGENT_CONTEXT.md)): it says where a message
 started and who handed it on, naming each principal as the agent would refer
 to it ([AUTHORITY.md](./AUTHORITY.md#provenance-text)).
-Every attributed incoming message carries the hint except the owner's direct
-messages at the start or after another direct one. Non-owner sources repeat it
-every time. Assistant replies and tool results keep their own roles, and
+Every message from anyone but the owner carries the hint, every time; the
+owner's carry it whenever where they come from changes, so an unlabelled
+message is the owner's, arriving as the previous one did or directly at the
+start. Assistant replies and tool results keep their own roles, and
 legacy messages without recorded attribution do not establish owner approval.
 Only the owner's messages carry the
 owner's instructions, and a message is the owner's only when its line names

@@ -145,6 +145,6 @@ agent_info  agentId=Carol         → timeline shows every run with full context
 - **Orchestrations** — declarative pipelines, single job, full provenance
 - **Context loading** — shared documents, not duplicated prompts
 - **Capability enforcement** — agents can only access what they're allowed to
-- **Provenance** — every message and task shows who sent it
+- **Provenance** — every task, and every message from anyone but the owner, shows who sent it
 - **Adversarial resilience** — caps prevent data manipulation, provenance exposes social engineering
 - **All on Convex lattice** — immutable, content-addressed, CRDT-mergeable

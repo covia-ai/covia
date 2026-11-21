@@ -278,21 +278,41 @@ public class RouteProvenanceTest {
 	// ========== When the element appears ==========
 
 	@Test
-	public void anHttpOwnerLoginIsLabelledEvenAtTheStart() {
+	public void anHttpOwnerLoginIsLabelledAtTheStartAndWhenItChanges() {
 		RequestContext http = engine.requestContext(alice, null, Strings.create("http"),
 			Strings.create("mcp"), Strings.create("venueJwt"));
 		AMap<AString, ACell> incoming = Maps.of(Fields.CALLER, alice, Fields.ROUTE, http.getRoute(), Fields.MESSAGE, "hello");
-		assertFalse(TurnProvenance.ownerDirect(engine, helper, TurnProvenance.key(incoming)));
 		assertEquals(java.util.List.of(
-			"[From your owner via auth (signed in, transport http, protocol mcp)]",
 			"[From your owner via auth (signed in, transport http, protocol mcp)]",
 			"[From your owner directly]"),
 			elements(incoming, incoming, turn(alice, "direct", direct(alice))),
-			"every HTTP input is labelled, as is returning to direct owner input");
+			"HTTP input is labelled the first time, then again only when the route changes");
 		AMap<AString, ACell> unreadableTransport = before(alice).assoc(Fields.TRANSPORT, null);
-		assertFalse(TurnProvenance.ownerDirect(engine, helper,
+		assertFalse(TurnProvenance.continues(engine, helper, TurnProvenance.START,
 			TurnProvenance.key(turn(alice, "hello", unreadableTransport))),
 			"a present but unreadable transport cannot be treated as direct input");
+	}
+
+	@Test
+	public void theOwnerIsLabelledOnlyWhenTheRouteChanges() {
+		for (AMap<AString, ACell> incoming : java.util.List.of(
+				turn(alice, "hi", door(alice)),
+				turn(alice, "hi", record("token", alice)),
+				turn(alice, "hi", record("scheduler", alice)))) {
+			assertEquals(java.util.List.of(bracket(incoming)), elements(incoming, incoming),
+				"an unchanged route is labelled once");
+		}
+		AMap<AString, ACell> http = turn(alice, "hi", door(alice));
+		AMap<AString, ACell> token = turn(alice, "hi", record("token", alice));
+		assertEquals(java.util.List.of(bracket(http), bracket(token), bracket(http)), elements(http, token, http),
+			"each change of route is labelled, even for the owner");
+		AString planner = Principals.agentDID(alice, Strings.create("planner"));
+		AMap<AString, ACell> sibling = turn(planner, "hi", record("agent", planner));
+		assertEquals(java.util.List.of(bracket(http), bracket(sibling), bracket(http)), elements(http, sibling, http),
+			"and so is the owner's after another source, on the same route as before");
+		assertEquals(java.util.List.of(bracket(http)), elements(http,
+			Maps.of("role", "assistant", Fields.CONTENT, "reply"), http),
+			"an assistant reply changes nothing");
 	}
 
 	@Test
@@ -327,9 +347,6 @@ public class RouteProvenanceTest {
 		for (AMap<AString, ACell> incoming : java.util.List.of(
 				turn(bob, "hi", door(bob)),
 				turn(bob, "hi", direct(bob)),
-				turn(alice, "hi", door(alice)),
-				turn(alice, "hi", record("token", alice)),
-				turn(alice, "hi", record("scheduler", alice)),
 				turn(self, "hi", record("agent", self)),
 				turn(alice, "hi", door(bob), record("user", alice)),
 				turn(alice, "hi", record("broken route", alice)))) {
