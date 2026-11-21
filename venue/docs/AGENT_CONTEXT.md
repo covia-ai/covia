@@ -268,7 +268,7 @@ The label renderer therefore handles only blocks that genuinely travel as instru
 | Compacted conversation segment (assistant memory): the first and last turn it stands for, by position in the frame's history, so `agent:history` can read exactly those back | `[Compacted: turns <from>–<to>] <summary>` | `<compacted from="…" to="…">` | `## Compacted: turns <from>–<to>` |
 | Ancestor context (goal tree) | `[Ancestor Context]` | `<ancestors>` | `## Ancestor context` |
 | Tool-failure diagnostic | `[Tool failure: <name>] <reason>` | `<tool-failure name="…">` | `## Tool failure: <name>` |
-| Who a turn comes from (COG-20 §4): before a user turn whose source differs from the turn before it, rendered from the stored turn alone; one sentence naming each record of its route | `[From (venue-verified): <who> via <adapter> (<text>); acting as <who> via <adapter> (<text>) …]` | `<from verified="venue">…</from>` | `## From (venue-verified): …` |
+| Who a turn comes from (COG-20 §4): before every incoming user turn with a recorded caller except direct-owner input that continues direct-owner input (When it appears, below), rendered from the stored turn alone; one sentence naming each record of its route | `[From (venue-verified): <who> via <adapter> (<text>); acting as <who> via <adapter> (<text>) …]` | `<from verified="venue">…</from>` | `## From (venue-verified): …` |
 | The same, for a turn recorded before routes named where they started | `[From: <relationship> <principal> — <adapter> <name> of <owner>: caller <did>, sender <id> @<handle>, <kind> chat <id>, thread <id>, space <id> — …]` | `<from principal="…" relationship="…"><via adapter="…" name="…" owner="…" caller="…" sender="…" handle="…" chat="…" chat-kind="…" thread="…" space="…"/>…</from>` | `## From: …` |
 | Outstanding task | `[Tasks assigned to you]` | `<tasks>` | `## Tasks assigned to you` |
 | Empty-state signal | `[No pending tasks, messages, or job results. …]` | `<no-input>` | `## No input` |
@@ -398,7 +398,7 @@ as stored.
 The `From` principal is omitted for `self`, `owner` and `anonymous-owner`:
 the relationship already identifies them. Other callers retain their principal,
 and channel fields remain available when present. This affects only what the
-model sees, never the recorded caller or the provenance key used to detect changes.
+model sees, never the recorded caller or whether the turn continues direct-owner input.
 
 `bracket` is cheap in tokens, reads naturally in logs, and is plain text. `xml` marks where an instruction block ends as well as where it begins. `header` suits models whose guidance favours markdown sections, at the cost of competing with headings inside an instruction body. A model that benefits from either alternative opts in on its asset. The dialect is fixed for a persisted context; changing it rebuilds the prefix deliberately.
 
