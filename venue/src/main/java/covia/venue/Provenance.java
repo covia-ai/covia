@@ -15,7 +15,9 @@ import convex.core.data.AVector;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
+import covia.adapter.AAdapter;
 import covia.api.Fields;
+import covia.exception.FaultException;
 import covia.grid.Principals;
 
 /**
@@ -23,9 +25,12 @@ import covia.grid.Principals;
  * it (AUTHORITY.md, Provenance): read from a stored record's {@code caller}
  * and {@code route} ({@link RequestContext#getRoute}) and worded for a
  * {@link Reader}, an agent or a person. The venue names each principal as the
- * reader would refer to it and joins the records; each adapter's own text
- * ({@link RouteText}) says the rest, with its parts that depend on the reader
- * worded for that reader. No adapter's meaning is known here.
+ * reader would refer to it and joins the records; each adapter's own text says
+ * the rest: its wording for the reader ({@link AAdapter#routeText}), by default
+ * the text stored with the record ({@link RouteText}), whose parts that depend
+ * on the reader are worded for that reader. No adapter's meaning is known
+ * here. A record by which an adapter vouches for itself, or one of its
+ * sub-principals, names the adapter once: {@code adapter x/<name>/<path>}.
  *
  * <p>Nothing stored is trusted to be well formed. Only values in a checked
  * shape are shown, and a route that cannot be read shows as such, never as no
@@ -45,6 +50,8 @@ public final class Provenance {
 	public static final String ANONYMOUS = "an anonymous caller";
 	/** What the venue is named. */
 	public static final String VENUE = "the venue";
+	/** What an adapter's principal, or one of its sub-principals, is named: its path follows ({@link AAdapter#path}). */
+	public static final String ADAPTER = "adapter %s";
 	/** What the reader is named. */
 	public static final String YOU = "you";
 	/** What an agent reader's owner is named. */
@@ -171,19 +178,21 @@ public final class Provenance {
 				continue;
 			}
 			String text = text(reader, record);
+			String adapterPath = AAdapter.path(reader.engine, principal);
+			boolean own = adapterPath != null && (adapterPath.equals("x/" + via) || adapterPath.startsWith("x/" + via + "/"));
 			parts.add(prefix + reader.who(principal, RequestContext.SIGN_IN.equals(record.get(Fields.VIA)))
-				+ " via " + via + ((text == null) ? "" : " (" + text + ")"));
+				+ (own ? "" : " via " + via) + ((text == null) ? "" : " (" + text + ")"));
 		}
 		return String.join("; ", parts);
 	}
 
 	/**
-	 * A record's own text ({@link RouteText}), each part shown in its checked
+	 * A record's own text ({@link #wording}), each part shown in its checked
 	 * shape and worded for {@code reader}, or, with none, the record's name,
 	 * quoted. Null when it shows nothing.
 	 */
 	private static String text(Reader reader, AMap<AString, ACell> record) {
-		ACell stored = record.get(Fields.TEXT);
+		ACell stored = wording(reader, record);
 		if (stored == null) {
 			String name = shownIdentifier(record.get(Fields.NAME));
 			return (name == null) ? null : "\"" + name + "\"";
@@ -220,6 +229,26 @@ public final class Provenance {
 		String shown = sb.toString().replaceAll(" {2,}", " ").trim();
 		if (shown.length() > MAX_TEXT) shown = shown.substring(0, MAX_TEXT);
 		return shown.isEmpty() ? null : shown;
+	}
+
+	/**
+	 * The parts a record's text shows: the wording of the adapter that wrote it
+	 * for {@code reader} ({@link AAdapter#routeText}) while that adapter is
+	 * loaded and words it, otherwise the text stored with the record. A failure
+	 * of the adapter's wording is that adapter's fault, logged once here, and
+	 * the stored text shows.
+	 */
+	private static ACell wording(Reader reader, AMap<AString, ACell> record) {
+		ACell stored = record.get(Fields.TEXT);
+		AAdapter adapter = reader.adapter(record.get(Fields.VIA));
+		if (adapter == null) return stored;
+		try {
+			RouteText text = adapter.routeText(record, reader);
+			return (text == null) ? stored : text.parts();
+		} catch (RuntimeException e) {
+			FaultException.cause(FaultException.ADAPTER.formatted(adapter.getName()), e);
+			return stored;
+		}
 	}
 
 	/** Stored wording cleaned again as it is shown, keeping a space at either end where it had one. */
@@ -317,8 +346,20 @@ public final class Provenance {
 			return (agentId != null) ? agent(engine, user, agentId) : person(engine, user);
 		}
 
-		private boolean isAgent() {
+		/** Whether the reader is an agent, rather than a person. */
+		public boolean isAgent() {
 			return self != null && !self.equals(account);
+		}
+
+		/** {@code principal} as this reader refers to it, as the venue names principals in provenance text. */
+		public String name(AString principal) {
+			return who(principal, false);
+		}
+
+		/** The loaded adapter named {@code via}, or null. */
+		private AAdapter adapter(ACell via) {
+			String name = shownIdentifier(via);
+			return (engine == null || name == null) ? null : engine.getAdapter(name);
 		}
 
 		/**
@@ -334,6 +375,8 @@ public final class Provenance {
 			if (principal.equals(self)) return YOU;
 			if (principal.equals(account)) return YOUR_OWNER;
 			if (engine != null && engine.isVenuePrincipal(principal)) return VENUE;
+			String adapterPath = AAdapter.path(engine, principal);
+			if (adapterPath != null) return ADAPTER.formatted(adapterPath);
 			AString agentId = Principals.agentIdOf(principal);
 			if (agentId == null) return "user " + did;
 			if (signedIn) return did;

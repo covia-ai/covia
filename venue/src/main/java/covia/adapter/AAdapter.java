@@ -133,6 +133,114 @@ public abstract class AAdapter {
 		return null;
 	}
 
+	// ========== The adapter as a principal ==========
+
+	/** Separates the venue's DID from an adapter's name in the adapter's principal, as {@code x/} does in its path. */
+	public static final String PRINCIPAL_SEP = ":x:";
+	/** One segment of an adapter principal's path: one word a DID keeps as it is. */
+	private static final java.util.regex.Pattern SEGMENT = java.util.regex.Pattern.compile("[A-Za-z0-9._-]{1,64}");
+	/** The segment that would make a principal read as an agent's ({@link covia.grid.Principals#AGENT_SEP}). */
+	private static final String AGENT_SEGMENT = "g";
+	/** Why a sub-principal cannot be made: the path, then the adapter. */
+	public static final String INVALID_SUB_PRINCIPAL = "Sub-principal path '%s' of adapter %s must be one or more segments "
+		+ "of letters, digits, '.', '_' or '-', separated by '/', none of them 'g'";
+
+	/**
+	 * This adapter as a principal, {@code <venueDID>:x:<name>}, as
+	 * {@code x/<name>} is its path: who a message comes from when the adapter
+	 * itself is its source ({@link #sourceContext}). A reader is told it as
+	 * {@code adapter x/<name>} (AUTHORITY.md, Provenance). It holds no
+	 * authority ({@link Engine#context(AString)}): it says who a message is
+	 * from, nothing more.
+	 */
+	public final AString principal() {
+		return Strings.create(engine.getDIDString() + PRINCIPAL_SEP + getName());
+	}
+
+	/**
+	 * A sub-principal of this adapter at {@code path} below it, such as one
+	 * room of an adapter that keeps rooms: {@code <venueDID>:x:<name>:<segment>…},
+	 * told to a reader as {@code adapter x/<name>/<path>}. Each segment of
+	 * {@code path} is one word of letters, digits, {@code . _ -}, and segments
+	 * are separated by {@code /}. Like the adapter's own principal, it holds no
+	 * authority.
+	 *
+	 * @throws IllegalArgumentException with {@link #INVALID_SUB_PRINCIPAL} for a path in any other shape
+	 */
+	public final AString principal(String path) {
+		String[] segments = (path == null) ? new String[0] : path.split("/", -1);
+		if (segments.length == 0 || !segmentsValid(segments)) {
+			throw new IllegalArgumentException(INVALID_SUB_PRINCIPAL.formatted(path, getName()));
+		}
+		return Strings.create(principal() + ":" + String.join(":", segments));
+	}
+
+	/**
+	 * The path {@code principal} names when it is an adapter's principal, or
+	 * one of its sub-principals, of {@code engine}'s venue: {@code x/<name>} or
+	 * {@code x/<name>/<path>}; otherwise null. Read from the DID's shape alone,
+	 * so it names an adapter that is not loaded as well.
+	 */
+	public static String path(Engine engine, AString principal) {
+		if (engine == null || principal == null) return null;
+		String did = principal.toString();
+		for (int i = did.indexOf(PRINCIPAL_SEP); i > 0; i = did.indexOf(PRINCIPAL_SEP, i + 1)) {
+			if (!engine.isVenuePrincipal(Strings.create(did.substring(0, i)))) continue;
+			String[] segments = did.substring(i + PRINCIPAL_SEP.length()).split(":", -1);
+			return segmentsValid(segments) ? "x/" + String.join("/", segments) : null;
+		}
+		return null;
+	}
+
+	private static boolean segmentsValid(String[] segments) {
+		for (String segment : segments) {
+			if (!SEGMENT.matcher(segment).matches() || AGENT_SEGMENT.equals(segment)) return false;
+		}
+		return true;
+	}
+
+	/**
+	 * A context whose principal is this adapter, or its sub-principal at
+	 * {@code path} when that is not null: where a message the adapter itself
+	 * is the source of comes from, such as a notification it delivers to a
+	 * session that asked for it
+	 * ({@link AgentAdapter#deliverSessionMessage(RequestContext, AString, AString, convex.core.data.Blob, ACell)}).
+	 * Its route is one record by this adapter vouching for that principal,
+	 * with {@code fields} and {@code text} ({@link RequestContext#via}), and
+	 * reads as {@code adapter x/<name>/<path> (<text>)}. It holds no authority.
+	 *
+	 * @param path the sub-principal's path below this adapter, or null for the adapter itself
+	 * @param fields the adapter's record of the message's source, or null for none
+	 * @param text what a reader is told of it ({@link #routeText}), or null for nothing more
+	 * @throws IllegalArgumentException as {@link #principal(String)}
+	 */
+	public RequestContext sourceContext(String path, AMap<AString, ACell> fields, covia.venue.RouteText text) {
+		AString principal = (path == null) ? principal() : principal(path);
+		return engine.context(principal).via(Strings.create(getName()), (fields == null) ? Maps.empty() : fields, text);
+	}
+
+	/**
+	 * This adapter's wording for one of its route records, shown to
+	 * {@code reader} after the part the venue writes, which names the
+	 * principal the record vouches for and this adapter (AUTHORITY.md,
+	 * Provenance). The venue calls it each time it shows the record. The
+	 * default, null, shows the text stored with the record
+	 * ({@link RequestContext#via}). Override it to word a record for its
+	 * reader or its context: name a principal as the reader would with
+	 * {@link covia.venue.Provenance.Reader#name}, or with a {@code who} part,
+	 * and give values from the record as typed parts, whose shape the venue
+	 * checks as it shows them. The answer must depend on the record and the
+	 * reader alone, so a record reads the same every time. While this adapter
+	 * is not loaded, or when this throws, the stored text shows instead.
+	 *
+	 * @param record the stored route record, {@code via} naming this adapter
+	 * @param reader whom the text is for
+	 * @return the wording to show, or null for the stored text
+	 */
+	public covia.venue.RouteText routeText(AMap<AString, ACell> record, covia.venue.Provenance.Reader reader) {
+		return null;
+	}
+
 	/**
 	 * Index of assets installed by this adapter.
 	 * Maps asset Hash to asset metadata (AString).

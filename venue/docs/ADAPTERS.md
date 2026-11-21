@@ -1267,7 +1267,31 @@ just enough to find its information again, and `text` (`RouteText`) is what an
 agent the request reaches is told of it beyond that, built from fixed wording
 and parts whose shape the venue checks when it shows them. What to record and
 say is the adapter's choice; who the principal is, and whether it is the
-agent's owner, is the venue's ([AGENT_CONTEXT.md](AGENT_CONTEXT.md) §1.2).
+agent's owner, is the venue's ([AUTHORITY.md](AUTHORITY.md#provenance)).
+
+An adapter can also be a message's source itself, such as one telling a
+session that asked for them about posts in a room. Its principal is
+`principal()`, `<venueDID>:x:<name>`, as `x/<name>` is its path, and
+`principal(path)` is a sub-principal below it, such as one room, for a path of
+segments of letters, digits, `.`, `_` and `-`. Neither holds any authority:
+they say who a message is from. `sourceContext(path, fields, text)` is a
+context whose principal is the adapter, or its sub-principal at `path`, with a
+route of one record by the adapter vouching for it, and
+`AgentAdapter.deliverSessionMessage(from, owner, agentId, sessionId, message)`
+delivers a message from that context to a session the adapter has made sure
+may have it. An agent reads it as `adapter x/rooms/design-review (<text>)`,
+never as its owner's message, whoever the text names.
+
+The venue shows a record's text by asking the adapter that wrote it,
+`routeText(record, reader)`, each time it shows the record. The default
+returns null, which shows the text stored with the record. An adapter
+overrides it to word its records for the reader or their context:
+`Provenance.Reader` names a principal as the reader would (`name`) and says
+whether the reader is an agent (`isAgent`), and values from the record go in
+typed parts, whose shape the venue checks. The answer must depend on the
+record and the reader alone, so a record reads the same every time. While the
+adapter is not loaded, or when its wording throws, the stored text shows, and
+the failure is logged as the adapter's fault.
 
 Operation metadata should describe inputs and outputs precisely enough for
 schema validation and agent tool use:

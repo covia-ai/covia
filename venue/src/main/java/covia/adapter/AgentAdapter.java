@@ -4234,6 +4234,23 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	/**
+	 * Venue-mediated delivery to an already authorized local session of a
+	 * message from {@code from}: its principal is who the message is from and
+	 * its route how it came, such as an adapter's own message
+	 * ({@link AAdapter#sourceContext}). The caller owns authorization.
+	 *
+	 * @return whether the session took the message
+	 */
+	public boolean deliverSessionMessage(RequestContext from, AString ownerDID, AString agentId, Blob sessionId,
+			ACell message) {
+		if (!appendSessionMessage(engine.getVenueState().users(), ownerDID, agentId, sessionId,
+				from.getAuthorityDID(), null, message, from.getRoute(), null)) return false;
+		engine.flush();
+		wakeAgent(ownerDID, agentId, true);
+		return true;
+	}
+
+	/**
 	 * Delivers a message about something an agent waited on (a tracked call's
 	 * outcome, a HITL answer) inside a caller-owned users transaction. When the
 	 * wait came from a task's cycle and that task is still queued in the

@@ -404,6 +404,25 @@ public class AgentAdapterTest {
 	}
 
 	@Test
+	public void testAnAdaptersOwnMessageComesFromTheAdapter() {
+		// A session that asked an adapter for its messages gets them from the
+		// adapter, or one of its sub-principals, by the route the adapter wrote.
+		createTaskAgentAs(RequestContext.of(ALICE_DID), "adapter-source", null);
+		Agent agent = engine.getVenueState().users().user(ALICE_DID).agent("adapter-source");
+		Blob sid = Blob.fromHex("55555555555555555555555555555555");
+		agent.sessions().create(sid, ALICE_DID, null);
+		AAdapter rooms = engine.getAdapter("test");
+		RequestContext from = rooms.sourceContext("design-review", Maps.of("room", "design-review"),
+			covia.venue.RouteText.of("a post"));
+		assertTrue(((AgentAdapter) engine.getAdapter("agent")).deliverSessionMessage(from, ALICE_DID,
+			Strings.create("adapter-source"), sid, Strings.create("posted")));
+		awaitFinished(agent);
+		AMap<AString, ACell> turn = firstTurn(agent, sid);
+		assertEquals(rooms.principal("design-review"), turn.get(Fields.CALLER));
+		assertEquals(from.getRoute(), turn.get(Fields.ROUTE));
+	}
+
+	@Test
 	public void testProvenanceIsRecordedBesideTheRequestNeverInIt() {
 		// Only the venue says who asked and what carried the request: ingress
 		// records the caller and the context's route beside the content, which

@@ -217,6 +217,12 @@ for readers (`RouteText`). The first record says where the request started:
   nothing carried, starts with it, and a request through the agent's own
   token keeps the token's record first.
 - `hitl`: the venue's answer to an approval request that expired.
+- an adapter's own message: the adapter as its source, such as one telling a
+  session that asked for them about posts in a room
+  ([ADAPTERS.md](ADAPTERS.md#writing-an-adapter)). The record vouches for the
+  adapter's principal, `<venueDID>:x:<name>`, as `x/<name>` is its path, or
+  for a sub-principal below it, `<venueDID>:x:<name>:<segment>…`, such as one
+  room. Neither holds any authority: they say who a message is from.
 
 Later records are handovers: `callable`, a callable's call into its issuer's
 authority, and `user`, a call into a user under `admin/sudo`. A route longer
@@ -264,6 +270,7 @@ your owner directly
 user did:key:…bob via auth (signed in, transport http); acting as your owner via user (admin/sudo)
 an anonymous caller via telegram (your owner's binding "helper-bot", sender 7777 @sam, direct chat 7777)
 sibling agent g/planner via agent
+adapter x/rooms/design-review (posted by user did:key:…bob)
 ```
 
 The venue writes each principal, named as the reader would refer to it, with
@@ -277,14 +284,20 @@ a reference the reader can use:
 | Any other agent | agent `<ownerDID>/g/<id>` | agent `<ownerDID>/g/<id>` |
 | The venue's public principal | an anonymous caller | an anonymous caller |
 | The venue | the venue | the venue |
+| An adapter, or one of its sub-principals | adapter `x/<name>/<path>` | adapter `x/<name>/<path>` |
 | Any other principal | user `<did>` | user `<did>` |
 
 A principal a door authenticated is named by its DID alone when the DID is
 shaped as an agent's, since its shape says nothing of whose agent it is; the
 public principal is never the owner. A direct start reads `<principal>
-directly`; any other record reads `<principal> via <adapter>`, then the
-adapter's text in brackets, or its name quoted when it has none. A record's
-text shows each part only in its checked shape: the adapter's own fixed
+directly`; a record by which an adapter vouches for itself, or one of its
+sub-principals, names the adapter once, `adapter x/<name>/<path>`; any other
+record reads `<principal> via <adapter>`. The adapter's text follows in
+brackets, or its name quoted when it has none. That text is what the adapter
+that wrote the record says of it to the reader (`AAdapter.routeText`), asked
+each time the record is shown; by default, and while the adapter is not
+loaded or when its wording fails, it is the text stored with the record. A
+record's text shows each part only in its checked shape: the adapter's own fixed
 wording, cleaned of brackets, semicolons, arrows and line breaks when it is
 stored and again when it is shown; a quoted one-word name; an identifier; a
 handle after `@`; a time in UTC; a principal, named as above; whose something
@@ -295,9 +308,10 @@ namespace, shown as the path to a reader in that namespace and as
 record's caller, reads as `an unknown source: the venue cannot read this
 route`, never as the owner; so does a record that keeps only a binding's
 authentication record, or a route in an older form. A record with no route
-names its caller alone. The text depends on the stored record, the reader and
-the venue's own identities alone, so a record reads the same every time for
-the same reader.
+names its caller alone. The text depends on the stored record, the reader, the
+venue's own identities and the adapters' wording alone, which depends on the
+record and the reader, so a record reads the same every time for the same
+reader.
 
 ## A job's state
 

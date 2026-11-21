@@ -4906,6 +4906,9 @@ public class Engine {
 	 *   <li>An agent-shaped DID holds nothing: its name establishes no
 	 *       relationship with the owner it names, so its authority comes only
 	 *       from proofs it presents.</li>
+	 *   <li>An adapter's principal, or one of its sub-principals
+	 *       ({@link covia.adapter.AAdapter#principal()}), holds nothing: it
+	 *       says who a message is from.</li>
 	 *   <li>Any other principal, the venue included, is unrestricted in its own
 	 *       namespace.</li>
 	 * </ul>
@@ -4925,7 +4928,7 @@ public class Engine {
 			AString publicDID = publicPrincipal();
 			return RequestContext.unattended(publicDID, auth.getPublicScope(publicDID));
 		}
-		if (covia.grid.Principals.isAgentDID(principal)) {
+		if (covia.grid.Principals.isAgentDID(principal) || covia.adapter.AAdapter.path(this, principal) != null) {
 			return RequestContext.unattended(principal, Vectors.empty());
 		}
 		return RequestContext.unattended(principal, null);

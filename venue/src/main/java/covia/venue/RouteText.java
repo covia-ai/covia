@@ -13,7 +13,9 @@ import convex.core.data.prim.CVMLong;
  * (AUTHORITY.md, Provenance): written when the adapter stamps the record
  * ({@link RequestContext#via}), stored with it, and shown in brackets after
  * the part the venue writes, which names the adapter and the principal the
- * record vouches for. What the text says is the adapter's choice.
+ * record vouches for. What the text says is the adapter's choice, and the
+ * adapter may also word its record afresh for each reader as it is shown
+ * ({@link covia.adapter.AAdapter#routeText}), in place of the stored text.
  *
  * <p>Fixed wording is the adapter's own ({@link Builder#text}). A value that
  * came from outside reaches the text only through a part whose shape is
