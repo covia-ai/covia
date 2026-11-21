@@ -146,7 +146,7 @@ timestamp IDs remain strings throughout.
 
 Agents receive the sender's text. The binding authenticates the sender
 ([Who a chat message comes from](../venue/docs/CONFIG.md#who-a-chat-message-comes-from)),
-and the venue's `[From (venue-verified): …]` element in the agent's context names the principal
+and the venue's `[From …]` element in the agent's context names the principal
 the message comes from with the sender, conversation, thread and workspace.
 Replies in channels are visible to other channel members. With `operation` instead of
 `agent`, the input is `{event_id, team_id, api_app_id, event}`. Legacy Slack

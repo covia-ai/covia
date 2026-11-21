@@ -63,7 +63,7 @@ sender ID and permits outbound sends to any such ID. A listed sender comes
 from the binding's principal and any other is anonymous
 ([Who a chat message comes from](../venue/docs/CONFIG.md#who-a-chat-message-comes-from)). An allow-listed binding
 can send only to its listed IDs. An agent receives the sender's text, and the
-venue's `[From (venue-verified): …]` element in its context names the principal the message
+venue's `[From …]` element in its context names the principal the message
 comes from with the sender's WhatsApp ID and the phone binding.
 
 To route to a deterministic operation, replace `agent` with `operation`.

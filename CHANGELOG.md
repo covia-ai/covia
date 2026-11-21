@@ -8,6 +8,15 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- `hitl:list` items carry `from`: who asked and how the request reached the inbox, worded for the reader.
+
+### Changed
+
+- An agent's `[From …]` hint names each principal as the agent would refer to it (your owner, you, sibling agent `g/<id>`, user `<did>`, agent `<ownerDID>/g/<id>`, an anonymous caller, the venue) and access tokens and callables by their paths; it no longer says "venue-verified" or "not your owner", and the standard templates explain the new wording.
+- A request the venue's own code makes for a principal reads as that principal directly rather than as a sign-in.
+
 ## [0.12.0] - 2026-11-20
 
 ### Added

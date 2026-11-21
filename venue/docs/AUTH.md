@@ -640,7 +640,8 @@ without claiming a credential. Identity-only host attribution also leaves
 the credential class unknown. These facts neither change authority nor add
 authentication assurance, and bearer possession does not establish personal
 approval of a message. The model-facing hint shows transport and protocol,
-not the credential class. The record and its model-facing label follow
+not the credential class. The record follows
+[AUTHORITY.md](AUTHORITY.md#provenance) and its model-facing label
 [AGENT_CONTEXT.md §1.2](AGENT_CONTEXT.md#12-instruction-labels-and-data-boundaries).
 
 Embedded HTTP handlers obtain this provenance through
@@ -879,17 +880,17 @@ tool call's late outcome is recorded as from the principal that made the
 call, its job's `caller`, normally the agent itself, with the agent's record as
 its route.
 
-**Rendered from the record.** `ContextAssembler` renders a `From` element
-(AGENT_CONTEXT.md §1.2) in the agent's dialect, which says when it appears and
-how each record shows. A binding's record shows whose binding it is and its
+**Rendered from the record.** `ContextAssembler` renders a `From` element in
+the agent's dialect; AGENT_CONTEXT.md §1.2 says when it appears and
+[AUTHORITY.md](AUTHORITY.md#provenance-text) how each record shows. A binding's record shows whose binding it is and its
 name, the sender's id and handle, the chat's kind and id, a thread and a space
 id; the `name` fields of people, chats and spaces never show (COG-3 §7). Alice's
 agent would see:
 
 | Dialect | Alice, after another source | Open-bot sender |
 |---------|-----------------------------|-----------------|
-| `bracket` | `[From (venue-verified): your owner via auth (signed in)]` | `[From (venue-verified): an anonymous caller, not your owner, via telegram (your owner's binding "helper", sender 5551 @sam, direct chat 5551)]` |
-| `xml` | `<from verified="venue">your owner via auth (signed in)</from>` | `<from verified="venue">an anonymous caller, not your owner, via telegram (your owner's binding "helper", sender 5551 @sam, direct chat 5551)</from>` |
+| `bracket` | `[From your owner directly]` | `[From an anonymous caller via telegram (your owner's binding "helper", sender 5551 @sam, direct chat 5551)]` |
+| `xml` | `<from>your owner directly</from>` | `<from>an anonymous caller via telegram (your owner's binding "helper", sender 5551 @sam, direct chat 5551)</from>` |
 
 The outstanding-task message renders its requester the same way.
 

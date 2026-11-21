@@ -397,7 +397,7 @@ context: {
   frame:  {authority, caller?},   // the frame the job runs in; authority is the job's caller
   token? | callable?,             // the reference narrowing that authority
   proofs?,                        // grants the request presented, in the form checked on arrival
-  route?,                         // where the request started and each handover (AGENT_CONTEXT.md §1.2)
+  route?,                         // where the request started and each handover (AUTHORITY.md, Provenance)
   agentId?, sessionId?, jobId?, taskId?
 }
 ```

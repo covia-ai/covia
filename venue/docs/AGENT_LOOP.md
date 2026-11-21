@@ -1426,7 +1426,7 @@ record stores the verified requester, agent and session and the request's
 route, where it started and each handover (an access token, a callable's
 call, a binding), so a request through a token or a callable is not taken for
 its caller's own. The route is the one an agent's turn records, venue-internal and
-not part of COG-16 ([AGENT_CONTEXT.md](AGENT_CONTEXT.md) §1.2). When the human answers,
+not part of COG-16 ([AUTHORITY.md](AUTHORITY.md#provenance)). When the human answers,
 rejects, or the request expires, HITL resolves the Job, delivers the outcome
 with the responder's provenance, and wakes the agent. The outcome goes to the
 task whose cycle asked as its next input, so it runs that task and no other in
@@ -1443,7 +1443,9 @@ the asks and how they were resolved. MCP clients can list and respond to these
 requests.
 
 The MCP-facing operations are `hitl:list`, `hitl:respond`, and the ordinary Job
-read/status surfaces.
+read/status surfaces. `hitl:list` gives each request a `from`: its provenance
+text, worded for whoever lists the inbox ([AUTHORITY.md](AUTHORITY.md#provenance-text)),
+so a request through an access token or a callable says so.
 
 ### 6.4 MCP-facing agent operations
 

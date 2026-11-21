@@ -10,7 +10,7 @@ import convex.core.data.prim.CVMLong;
 
 /**
  * The text an adapter adds to its record of a request's route
- * (AGENT_CONTEXT.md §1.2): written when the adapter stamps the record
+ * (AUTHORITY.md, Provenance): written when the adapter stamps the record
  * ({@link RequestContext#via}), stored with it, and shown in brackets after
  * the part the venue writes, which names the adapter and the principal the
  * record vouches for. What the text says is the adapter's choice.

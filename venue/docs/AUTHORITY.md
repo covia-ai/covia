@@ -165,7 +165,7 @@ is COG-8's `caller`; a record names no `owner`, and none names the request's
 `origin`: the audit log does, where
 it is not the `authority`, and so does the route an agent's turn or an
 approval request keeps, whose first record is where the request started
-([AGENT_CONTEXT.md](AGENT_CONTEXT.md) §1.2).
+([Provenance](#provenance)).
 
 A job is reached by capability on its record ([JOBS.md](JOBS.md#job-capabilities)).
 A scheduled event is reached by capability on `<account>/x/schedule/<id>`:
@@ -188,6 +188,116 @@ agent's history into another account, where a caller left out would read as
 the new owner. Data a user writes is stored as given: the venue neither
 leaves anything out of it nor fills anything in, since such data is more
 likely to be copied between places.
+
+## Provenance
+
+A request's route says where it started and each handover that carried it,
+one record per step, each written where the request reaches that step
+(`RequestContext.via`). A record names the adapter that wrote it (`via`) and
+the principal it vouches for (`principal`), which holds the request after it;
+the venue stamps both. Anything more is the adapter's choice: the fields it
+records, just enough to find its information again, and the text it writes
+for readers (`RouteText`). The first record says where the request started:
+
+- a direct start: trusted code in process made the request as the principal,
+  acting in its own context (`RequestContext.of`, `Engine.requestContext`), so
+  no adapter carried it. The record names no adapter, only the principal and
+  `direct: true`. A route stored before direct starts were marked holds one as
+  a sign-in with no transport, which is read as a direct start.
+- `auth`: a door of the venue authenticated the principal, the request's
+  origin. An anonymous caller is the venue's public principal, "not signed in".
+- `token`: an access token, vouching for its issuer, the origin. The venue
+  never knows who holds a token, and the record says so.
+- a binding (`telegram`, `slack`, `discord`, `whatsapp`): the principal the
+  binding identified, or the public principal; also the binding's own work.
+- `scheduler`: a fire of a scheduled event, vouching for the event's caller,
+  with when it was due.
+- `agent`: an agent's step, vouching for the agent. Its record follows the
+  route of the request that drives the step, so the agent's own run, which
+  nothing carried, starts with it, and a request through the agent's own
+  token keeps the token's record first.
+- `hitl`: the venue's answer to an approval request that expired.
+
+Later records are handovers: `callable`, a callable's call into its issuer's
+authority, and `user`, a call into a user under `admin/sudo`. A route longer
+than eight records keeps its first two and its latest, folding those between
+into one `{elided: <count>}` entry.
+
+A door adds `transport: "http"` to the first record, including for signed
+owner logins, named access tokens and anonymous public requests; an MCP
+endpoint adds `protocol: "mcp"` and an A2A endpoint `protocol: "a2a"`. The
+endpoint supplies these facts, never request content, headers claiming a
+source, or a client-supplied URL. When verified, `credentialType` names the
+credential class: `venueJwt`, `keyJwt`, `ucanBearer`, `providerToken`, or
+`accessToken` for a named access token; identity-only attribution and
+anonymous requests omit it. The record's text names the transport and
+protocol but not the credential class, which stays structured provenance
+only. No credential bytes are recorded. These facts preserve authenticated
+authority and do not establish that a human wrote or approved the message.
+
+The route belongs to its request. Work that carries a request on after a
+pause or a restart is the same request, so it keeps the route with the rest
+of its job's state, adding no record for the resumption ([A job's
+state](#a-jobs-state)). A scheduled event is something a request creates, so
+each fire is a new request whose first record is the scheduler's. Contexts the
+venue makes for its own work carry none. An agent's ingress records the route
+beside the caller ([AGENT_SESSIONS.md](AGENT_SESSIONS.md)), as it does for a
+human's answer to the agent's question and for `agent:query`; `hitl:request`
+records it in the approval request it opens ([AGENT_LOOP.md](AGENT_LOOP.md)
+§6.3); and a tracked call's late outcome carries the agent's record, vouching
+for whoever made the call. A context no adapter stamped records an empty
+route, which reads as unreadable. The route's stored shape is venue-internal,
+not a contract: operations that hand turns out leave it out (`agent:history`,
+the timeline), and an approval request holds it as stored.
+
+### Provenance text
+
+`Provenance` words a stored record's caller and route for whoever reads it, a
+`Reader`: an agent or a person. An agent's `From` line
+([AGENT_CONTEXT.md](AGENT_CONTEXT.md) §1.2), the requester in its task list,
+and each request's `from` in `hitl:list` ([AGENT_LOOP.md](AGENT_LOOP.md)
+§6.3) are this text. Each record shows in order, the first as whoever the
+request started with and each later one as whom it then acted as:
+
+```
+your owner directly
+user did:key:…bob via auth (signed in, transport http); acting as your owner via user (admin/sudo)
+an anonymous caller via telegram (your owner's binding "helper-bot", sender 7777 @sam, direct chat 7777)
+sibling agent g/planner via agent
+```
+
+The venue writes each principal, named as the reader would refer to it, with
+a reference the reader can use:
+
+| Principal | To an agent | To a person |
+|-----------|-------------|-------------|
+| The reader | you | you |
+| The agent's owner | your owner | — |
+| Another agent of the reader's account | sibling agent `g/<id>` | your agent `g/<id>` |
+| Any other agent | agent `<ownerDID>/g/<id>` | agent `<ownerDID>/g/<id>` |
+| The venue's public principal | an anonymous caller | an anonymous caller |
+| The venue | the venue | the venue |
+| Any other principal | user `<did>` | user `<did>` |
+
+A principal a door authenticated is named by its DID alone when the DID is
+shaped as an agent's, since its shape says nothing of whose agent it is; the
+public principal is never the owner. A direct start reads `<principal>
+directly`; any other record reads `<principal> via <adapter>`, then the
+adapter's text in brackets, or its name quoted when it has none. A record's
+text shows each part only in its checked shape: the adapter's own fixed
+wording, cleaned of brackets, semicolons, arrows and line breaks when it is
+stored and again when it is shown; a quoted one-word name; an identifier; a
+handle after `@`; a time in UTC; a principal, named as above; whose something
+is (`your owner's`, `your` for the reader's own); and a path in someone's
+namespace, shown as the path to a reader in that namespace and as
+`<ownerDID>/<path>` to anyone else, such as a callable's
+`x/callable/<name>`. A route that cannot be read, or that does not end at the
+record's caller, reads as `an unknown source: the venue cannot read this
+route`, never as the owner; so does a record that keeps only a binding's
+authentication record, or a route in an older form. A record with no route
+names its caller alone. The text depends on the stored record, the reader and
+the venue's own identities alone, so a record reads the same every time for
+the same reader.
 
 ## A job's state
 

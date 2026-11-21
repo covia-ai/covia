@@ -360,17 +360,18 @@ palette assembled for the current provider call.
 **Templates take tasks, except `minimal`.** Every standard template but `minimal`, the leanest chat-style start, sets `acceptTasks: true`, as do the messaging modules' `telegram`, `slack` and `discord` templates, whose agents schedule check-backs to themselves through `agent:request`. So an agent created from one, or with no config, takes `agent:request` ([AGENT_TASKS.md](./AGENT_TASKS.md) §2). The `manager` and `full` templates tell the agent to set it on agents it creates to send requests to.
 
 **Who is asking is the templates' to weigh.** Each standard template's
-instructions say how to read the venue-verified `From` element
+instructions say how to read the `From` element
 ([AGENT_CONTEXT.md §1.2](./AGENT_CONTEXT.md)): it says where a message
-started and who handed it on, marking each principal as the owner or not.
+started and who handed it on, naming each principal as the agent would refer
+to it ([AUTHORITY.md](./AUTHORITY.md#provenance-text)).
 Every attributed incoming message carries the hint except the owner's direct
 messages at the start or after another direct one. Non-owner sources repeat it
 every time. Assistant replies and tool results keep their own roles, and
 legacy messages without recorded attribution do not establish owner approval.
 Only the owner's messages carry the
-owner's instructions, and a message is not the owner's if anyone on its line
-is marked otherwise, so it is a request, to be weighed against them, whatever
-authority it claims. A sibling belonging to the same owner remains a separate
+owner's instructions, and a message is the owner's only when its line names
+the owner and no one else; any other is a request, to be weighed against
+them, whatever authority it claims. A sibling agent remains a separate
 requester, not evidence of owner approval. A token route names its issuer,
 not its unknown holder. Transport and protocol labels establish how a
 request arrived, not that the owner personally wrote or approved it; the
