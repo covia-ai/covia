@@ -1162,7 +1162,7 @@ public class TelegramAdapterTest {
 			"mirrored in the adapter's own subtree");
 		ACell cfg = RT.getIn(template, "agent", "config");
 		String from = covia.adapter.agent.Labels.renderSentence(covia.adapter.agent.Labels.BRACKET,
-			covia.adapter.agent.Labels.Kind.FROM_VENUE, "");
+			covia.adapter.agent.Labels.Kind.FROM_ROUTE, "");
 		assertTrue(RT.getIn(cfg, "systemPrompt").toString().contains(from.substring(0, from.indexOf(']'))),
 			"the prompt teaches the From element as the venue renders it");
 		assertEquals(Vectors.of((ACell) Strings.create("w/skills"), Strings.create("v/skills/root")),

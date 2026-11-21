@@ -268,7 +268,7 @@ class SlackSocketModeTest {
 			RequestContext owner = RequestContext.of(OWNER);
 			ACell cfg = RT.getIn(f.engine.resolvePath(Strings.create("v/agents/templates/slack"), owner), "agent", "config");
 			String from = covia.adapter.agent.Labels.renderSentence(covia.adapter.agent.Labels.BRACKET,
-				covia.adapter.agent.Labels.Kind.FROM_VENUE, "");
+				covia.adapter.agent.Labels.Kind.FROM_ROUTE, "");
 			assertTrue(RT.getIn(cfg, "systemPrompt").toString().contains(from.substring(0, from.indexOf(']'))),
 				"the prompt teaches the From element as the venue renders it");
 			assertTrue(RT.getIn(cfg, "systemPrompt").toString().contains("plain text"), "the prompt asks for plain text");
