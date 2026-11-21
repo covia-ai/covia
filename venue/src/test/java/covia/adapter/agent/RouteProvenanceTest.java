@@ -6,17 +6,20 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
 
+import convex.auth.ucan.Capability;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Maps;
+import convex.core.data.Sets;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.adapter.agent.ContextAssembler.Spec;
+import covia.api.Abilities;
 import covia.api.Fields;
 import covia.grid.Authority;
 import covia.grid.Principals;
@@ -25,6 +28,7 @@ import covia.venue.Provenance;
 import covia.venue.RequestContext;
 import covia.venue.RouteText;
 import covia.venue.TestEngine;
+import covia.venue.auth.AuthResult;
 
 /**
  * Who a turn came from (AUTHORITY.md, Provenance; AGENT_CONTEXT.md §1.2): the
@@ -291,6 +295,42 @@ public class RouteProvenanceTest {
 		assertFalse(TurnProvenance.continues(engine, helper, TurnProvenance.START,
 			TurnProvenance.key(turn(alice, "hello", unreadableTransport))),
 			"a present but unreadable transport cannot be treated as direct input");
+	}
+
+	/** The turn a request in {@code ctx} records. */
+	private static AMap<AString, ACell> turn(RequestContext ctx) {
+		return Maps.of(Fields.CALLER, ctx.getAuthorityDID(), Fields.ROUTE, ctx.getRoute(), Fields.MESSAGE, Strings.create("hi"));
+	}
+
+	/** What Alice's Telegram binding reports for her message {@code message} in her direct chat. */
+	private AuthResult telegram(String message) {
+		return new AuthResult(alice, Strings.create("telegram:5551"),
+			new AuthResult.Credential(Strings.create("provider-session"), null, null),
+			new AuthResult.Authentication(Strings.create("telegram"), Strings.create(alice + "/telegram/helper-bot"), null,
+				Sets.empty(), Maps.of("sender", Maps.of("id", "5551", "handle", "alice_m"),
+					"chat", Maps.of("id", "5551", "kind", "direct"), "message", message)), null, null);
+	}
+
+	@Test
+	public void separateRequestsOnOneRouteRecordTheSameRoute() {
+		engine.getVenueState().users().ensure(alice);
+		AString http = Strings.create("http");
+		AString mcp = Strings.create("mcp");
+		String bearer = RT.getIn(engine.jobs().invokeOperation("v/ops/token/create", Maps.of(
+			Fields.NAME, "outside-bot", Fields.ACCESS, Maps.of("test", Maps.empty()),
+			Fields.CAPS, Vectors.of(Capability.create(Strings.create("g/helper"), Abilities.AGENT_MESSAGE))),
+			RequestContext.of(alice)).awaitResult(5000), Fields.TOKEN).toString();
+		java.util.List<RequestContext[]> pairs = java.util.List.of(
+			new RequestContext[] {engine.requestContext(alice, null, http, mcp, Strings.create("venueJwt")),
+				engine.requestContext(alice, null, http, mcp, Strings.create("venueJwt"))},
+			new RequestContext[] {engine.requestContext(null, engine.tokens().lookup(bearer), http, mcp, Strings.create("accessToken")),
+				engine.requestContext(null, engine.tokens().lookup(bearer), http, mcp, Strings.create("accessToken"))},
+			new RequestContext[] {engine.channelContext(alice, telegram("101")), engine.channelContext(alice, telegram("102"))});
+		for (RequestContext[] pair : pairs) {
+			AMap<AString, ACell> first = turn(pair[0]);
+			assertEquals(java.util.List.of(bracket(first)), elements(first, turn(pair[1])),
+				"the owner's second request on the same login, token or chat is not labelled again");
+		}
 	}
 
 	@Test

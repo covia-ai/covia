@@ -365,9 +365,8 @@ instructions say how to read the `From` element
 started and who handed it on, naming each principal as the agent would refer
 to it ([AUTHORITY.md](./AUTHORITY.md#provenance-text)).
 Every message from anyone but the owner carries the hint, every time; the
-owner's carry it whenever where they come from changes, so an unlabelled
-message is the owner's, arriving as the previous one did or directly at the
-start. Assistant replies and tool results keep their own roles, and
+owner's carry it whenever where they come from changes, and none when they
+arrive as the previous message did or directly at the start. Assistant replies and tool results keep their own roles, and
 legacy messages without recorded attribution do not establish owner approval.
 Only the owner's messages carry the
 owner's instructions, and a message is the owner's only when its line names
